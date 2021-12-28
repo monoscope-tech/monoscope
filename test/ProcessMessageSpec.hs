@@ -1,0 +1,131 @@
+{-# LANGUAGE OverloadedLists #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE QuasiQuotes #-}
+
+module ProcessMessageSpec where
+
+import qualified Config
+import Configuration.Dotenv as Dotenv
+import Control.Concurrent (forkIO)
+import Control.Exception (evaluate)
+import Control.Monad (void)
+import Control.Monad.IO.Class
+import Data.Aeson (Object, Value (Array, Bool, Null, Number, Object, String), decodeStrict, eitherDecode, eitherDecodeStrict)
+import Data.Aeson as AE
+import Data.Aeson.QQ
+import Data.Aeson.Types as AET
+import qualified Data.HashMap.Strict as HM
+import Data.Pool (createPool)
+import Data.Time.Clock
+import Data.Time.LocalTime as Time
+import Data.UUID as UUID
+import Data.UUID.V4 as UUIDV4
+import Database.PostgreSQL.Entity.DBT (QueryNature (..), queryOne, query_, withPool)
+import Database.PostgreSQL.Simple (Connection, Only (Only), close, connectPostgreSQL)
+import Database.PostgreSQL.Simple.Migration (MigrationCommand (MigrationDirectory), runMigration)
+import Database.PostgreSQL.Simple.Migration as Migrations
+import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Simple.Time (ZonedTimestamp)
+import Database.PostgreSQL.Transact (DBT)
+import Lib
+import ProcessMessage
+import Relude
+import Relude.Unsafe (fromJust)
+import System.Envy (decodeEnv, gFromEnvCustom, runEnv)
+import Test.Hspec
+import Test.Hspec.DB (TestDB, describeDB, itDB)
+import Types
+import Prelude (read)
+
+requestMsg :: RequestMessage
+requestMsg =
+  RequestMessage
+    { rmProjectId = UUID.nil,
+      rmTimestamp = read "2019-08-31 05:14:37.537084021 UTC",
+      rmHost = "127.0.0.1:51574",
+      rmMethod = "POST",
+      rmReferer = "",
+      rmUrlPath = "",
+      rmProtoMajor = 1,
+      rmProtoMinor = 1,
+      rmDurationMicroSecs = 27,
+      rmDuration = 27894,
+      rmRequestHeaders =
+        Object
+          ( HM.fromList
+              [ ("Accept-Encoding", Array [String "gzip"]),
+                ("Content-Length", Array [String "435"]),
+                ("Content-Type", Array [String "application/json"]),
+                ("User-Agent", Array [String "Go-http-client/1.1"]),
+                ("X-Api-Key", Array [String "past-3"])
+              ]
+          ),
+      rmResponseHeaders =
+        Object
+          ( HM.fromList
+              [ ("Content-Type", Array [String "application/json"]),
+                ("X-Api-Key", Array [String "applicationKey"])
+              ]
+          ),
+      rmRequestBody = "eyJzZW5kIjp7ImFjY291bnRfZGF0YSI6eyJhY2NvdW50X2JhbGFuY2UiOiIxMDAuMDAiLCJhY2NvdW50X2NyZWF0ZWRfYXQiOiIyMDIwLTAxLTAxVDAwOjAwOjAwWiIsImFjY291bnRfY3VycmVuY3kiOiJVU0QiLCJhY2NvdW50X2RlbGV0ZWRfYXQiOiIyMDIwLTAxLTAxVDAwOjAwOjAwWiIsImFjY291bnRfaWQiOiIxMjM0NTY3ODkiLCJhY2NvdW50X25hbWUiOiJ0ZXN0IGFjY291bnQiLCJhY2NvdW50X3N0YXR1cyI6ImFjdGl2ZSIsImFjY291bnRfdHlwZSI6InRlc3QiLCJhY2NvdW50X3VwZGF0ZWRfYXQiOiIyMDIwLTAxLTAxVDAwOjAwOjAwWiIsImJhdGNoX251bWJlciI6MTIzNDUsInBvc3NpYmxlX2FjY291bnRfdHlwZXMiOlsidGVzdCIsInN0YWdpbmciLCJwcm9kdWN0aW9uIl19LCJtZXNzYWdlIjoiaGVsbG8gd29ybGQifSwic3RhdHVzIjoicmVxdWVzdCJ9",
+      rmResponseBody = "eyJkYXRhIjp7ImFjY291bnRfZGF0YSI6eyJhY2NvdW50X2JhbGFuY2UiOiIxMDAuMDAiLCJhY2NvdW50X2NyZWF0ZWRfYXQiOiIyMDIwLTAxLTAxVDAwOjAwOjAwWiIsImFjY291bnRfY3VycmVuY3kiOiJVU0QiLCJhY2NvdW50X2RlbGV0ZWRfYXQiOiIyMDIwLTAxLTAxVDAwOjAwOjAwWiIsImFjY291bnRfaWQiOiIxMjM0NTY3ODkiLCJhY2NvdW50X25hbWUiOiJ0ZXN0IGFjY291bnQiLCJhY2NvdW50X3N0YXR1cyI6ImFjdGl2ZSIsImFjY291bnRfdHlwZSI6InRlc3QiLCJhY2NvdW50X3VwZGF0ZWRfYXQiOiIyMDIwLTAxLTAxVDAwOjAwOjAwWiIsImJhdGNoX251bWJlciI6MTIzNDUsInBvc3NpYmxlX2FjY291bnRfdHlwZXMiOlsidGVzdCIsInN0YWdpbmciLCJwcm9kdWN0aW9uIl19LCJtZXNzYWdlIjoiaGVsbG8gd29ybGQifSwic3RhdHVzIjoic3VjY2VzcyJ9",
+      rmStatusCode = 202
+    }
+
+migrate :: Connection -> IO ()
+migrate conn = do
+  initializationRes <- Migrations.runMigration conn Migrations.defaultOptions MigrationInitialization
+  putStrLn $ "migration initialized " <> show initializationRes
+  migRes <- Migrations.runMigration conn Migrations.defaultOptions $ MigrationDirectory "./static/migrations"
+  putStrLn $ "migration resp " <> show migRes
+
+spec :: Spec
+spec = do
+  unitSpec
+  describe "Entity DB " $
+    runIO $ do
+      Dotenv.loadFile Dotenv.defaultConfig
+      env <- decodeEnv :: IO (Either String Config.EnvConfig)
+      -- recId <- UUIDV4.nextRandom
+      -- timestamp <- Time.getZonedTime
+      -- let rd = fst (requestMsgToDumpAndEndpoint requestMsg timestamp recId)
+
+      case env of
+        Left err -> putStrLn $ show err
+        Right envConfig -> do
+          putStrLn $ "..." <> show envConfig
+          let conn = connectPostgreSQL $ encodeUtf8 (Config.databaseUrl envConfig)
+          con <- conn
+          migrate con
+          pool <- createPool conn close 1 100000000 50
+          processRequestMessage pool requestMsg
+
+unitSpec :: Spec
+unitSpec = do
+  describe "Process Messages" $ do
+    it "value to fields" $ do
+      let exJSON =
+            [aesonQQ| {
+            "menu": {
+              "id": "file",
+              "value": "File",
+              "popup": {
+                "menuitem": [
+                  {"value": "New", "onclick": "CreateNewDoc()"},
+                  {"value": "Open", "onclick": "OpenDoc()"},
+                  {"value": "Close", "onclick": "CloseDoc()"}
+                ]
+              }
+            }
+          }|]
+      let expectedResp =
+            [ (".menu.id", AE.String "file"),
+              (".menu.value", AE.String "File"),
+              (".menu.popup.menuitem.[].value", AE.String "Close"),
+              (".menu.popup.menuitem.[].onclick", AE.String "CloseDoc()"),
+              (".menu.popup.menuitem.[].value", AE.String "Open"),
+              (".menu.popup.menuitem.[].onclick", AE.String "OpenDoc()"),
+              (".menu.popup.menuitem.[].value", AE.String "New"),
+              (".menu.popup.menuitem.[].onclick", AE.String "CreateNewDoc()")
+            ]
+      valueToFields exJSON `shouldBe` expectedResp

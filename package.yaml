@@ -1,0 +1,88 @@
+name:                apitoolkit-server
+version:             0.1.0.0
+github:              "githubuser/apitoolkit-server"
+license:             BSD3
+author:              "Author name here"
+maintainer:          "example@example.com"
+copyright:           "2021 Author name here"
+
+default-extensions: NoImplicitPrelude
+
+extra-source-files:
+- README.md
+
+# Metadata used when publishing your package
+# synopsis:            Short description of your package
+# category:            Web
+
+# To avoid duplicated efforts in documentation and dealing with the
+# complications of embedding Haddock markup inside cabal files, it is
+# common to point users to the README.md file.
+description:         Please see the README on GitHub at <https://github.com/githubuser/apitoolkit-server#readme>
+
+dependencies:
+- aeson
+- aeson-qq
+- base >= 4.7 && < 5
+- base64
+- co-log
+- co-log-core
+- deriving-aeson
+- dotenv
+- envy
+- gogol
+- gogol-core
+- gogol-pubsub
+- hspec
+- lens 
+- optics-th
+- pg-entity
+- pg-transact  
+- postgresql-migration
+- postgresql-simple
+- postgresql-simple-named
+- relude
+- resource-pool
+- resource-pool
+- resourcet
+- servant-server
+- text
+- time
+- unordered-containers
+- uuid
+- vector
+- wai
+- warp
+
+library:
+  source-dirs: src
+
+executables:
+  apitoolkit-server-exe:
+    main:                Main.hs
+    source-dirs:         app
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - base
+    - apitoolkit-server
+
+tests:
+  apitoolkit-server-test:
+    main:                Spec.hs
+    source-dirs:         test
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - base
+    - apitoolkit-server
+    - hspec-expectations-lifted
+    - hspec-pg-transact
+    - pg-entity
+    - pg-transact
+    - postgresql-simple
+    - resource-pool

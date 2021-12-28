@@ -1,0 +1,15 @@
+version: '3'
+services:
+    apitoolkit-server:
+        build: .
+        image: apitoolkit-server
+        command: apitoolkit-server
+        expose:
+            - "1234"
+    nginx:
+        build: ./nginx
+        image: nginx
+        ports:
+            - "8080:80"
+        depends_on:
+            - apitoolkit-server

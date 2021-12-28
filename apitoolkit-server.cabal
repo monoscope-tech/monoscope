@@ -1,0 +1,161 @@
+cabal-version: 1.12
+
+-- This file has been generated from package.yaml by hpack version 0.34.4.
+--
+-- see: https://github.com/sol/hpack
+
+name:           apitoolkit-server
+version:        0.1.0.0
+description:    Please see the README on GitHub at <https://github.com/githubuser/apitoolkit-server#readme>
+homepage:       https://github.com/githubuser/apitoolkit-server#readme
+bug-reports:    https://github.com/githubuser/apitoolkit-server/issues
+author:         Author name here
+maintainer:     example@example.com
+copyright:      2021 Author name here
+license:        BSD3
+license-file:   LICENSE
+build-type:     Simple
+extra-source-files:
+    README.md
+
+source-repository head
+  type: git
+  location: https://github.com/githubuser/apitoolkit-server
+
+library
+  exposed-modules:
+      Config
+      Lib
+      ProcessMessage
+      Types
+  other-modules:
+      Paths_apitoolkit_server
+  hs-source-dirs:
+      src
+  default-extensions:
+      NoImplicitPrelude
+  build-depends:
+      aeson
+    , aeson-qq
+    , base >=4.7 && <5
+    , base64
+    , co-log
+    , co-log-core
+    , deriving-aeson
+    , dotenv
+    , envy
+    , gogol
+    , gogol-core
+    , gogol-pubsub
+    , hspec
+    , lens
+    , optics-th
+    , pg-entity
+    , pg-transact
+    , postgresql-migration
+    , postgresql-simple
+    , postgresql-simple-named
+    , relude
+    , resource-pool
+    , resourcet
+    , servant-server
+    , text
+    , time
+    , unordered-containers
+    , uuid
+    , vector
+    , wai
+    , warp
+  default-language: Haskell2010
+
+executable apitoolkit-server-exe
+  main-is: Main.hs
+  other-modules:
+      Paths_apitoolkit_server
+  hs-source-dirs:
+      app
+  default-extensions:
+      NoImplicitPrelude
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      aeson
+    , aeson-qq
+    , apitoolkit-server
+    , base
+    , base64
+    , co-log
+    , co-log-core
+    , deriving-aeson
+    , dotenv
+    , envy
+    , gogol
+    , gogol-core
+    , gogol-pubsub
+    , hspec
+    , lens
+    , optics-th
+    , pg-entity
+    , pg-transact
+    , postgresql-migration
+    , postgresql-simple
+    , postgresql-simple-named
+    , relude
+    , resource-pool
+    , resourcet
+    , servant-server
+    , text
+    , time
+    , unordered-containers
+    , uuid
+    , vector
+    , wai
+    , warp
+  default-language: Haskell2010
+
+test-suite apitoolkit-server-test
+  type: exitcode-stdio-1.0
+  main-is: Spec.hs
+  other-modules:
+      ProcessMessageSpec
+      Paths_apitoolkit_server
+  hs-source-dirs:
+      test
+  default-extensions:
+      NoImplicitPrelude
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      aeson
+    , aeson-qq
+    , apitoolkit-server
+    , base
+    , base64
+    , co-log
+    , co-log-core
+    , deriving-aeson
+    , dotenv
+    , envy
+    , gogol
+    , gogol-core
+    , gogol-pubsub
+    , hspec
+    , hspec-expectations-lifted
+    , hspec-pg-transact
+    , lens
+    , optics-th
+    , pg-entity
+    , pg-transact
+    , postgresql-migration
+    , postgresql-simple
+    , postgresql-simple-named
+    , relude
+    , resource-pool
+    , resourcet
+    , servant-server
+    , text
+    , time
+    , unordered-containers
+    , uuid
+    , vector
+    , wai
+    , warp
+  default-language: Haskell2010
