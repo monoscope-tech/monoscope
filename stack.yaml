@@ -50,6 +50,7 @@ extra-deps:
   - optics-th-0.4@sha256:7c838b5b1d6998133bf8f0641c36197ed6cb468dc69515e1952f33f0bbe8e11d,2009
   - hspec-pg-transact-0.1.0.3@sha256:5350b93a07ff1e728377b27d37b503165cd906d54618398142b2008fcc08257a,2250
   - postgresql-simple-named-0.0.2.0@sha256:e8756b2cc4618b959c4a2ef4f32436841cc2bd6ddfcafcdf3298990eca4c38b2,3290
+  - regex-tdfa-quasiquoter-0.2.1.0@sha256:964b2ef0d48a1b4caf3a45bedad01ed36fc1b1e4b4041421b4cd29c49d42633d,1207
   - git: https://github.com/brendanhay/gogol.git
     commit: 801f00b6e63c22522eb2b3e3e2fc77694730a70f
     subdirs:

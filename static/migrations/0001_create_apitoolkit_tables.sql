@@ -163,7 +163,7 @@ CREATE TABLE IF NOT EXISTS endpoints
 );
 SELECT manage_updated_at('endpoints');
 
-CREATE TYPE field_type AS ENUM ('unknown', 'keyword','text','numbers','boolean','date-time','object', 'list');
+CREATE TYPE field_type AS ENUM ('unknown','string','number','bool','object', 'list');
 CREATE TYPE field_category AS ENUM ('queryparam', 'request_header','response_headers', 'request_body', 'response_body');
 CREATE TABLE IF NOT EXISTS fields
 (

@@ -16,6 +16,8 @@ module ProcessMessage
     valueToFields,
     requestMsgToDumpAndEndpoint,
     processRequestMessage,
+    valueToFormatStr,
+    valueToFormatNum,
   )
 where
 
@@ -30,6 +32,9 @@ import Data.Aeson as AE
     eitherDecode,
     eitherDecodeStrict,
   )
+
+import Text.Regex.TDFA ((=~))
+import Text.RawString.QQ
 import Data.Aeson.QQ (aesonQQ)
 import Data.Aeson.Text (encodeToLazyText)
 import qualified Data.Aeson.Types as AET
@@ -58,6 +63,7 @@ import Database.PostgreSQL.Simple.Migration (MigrationCommand (MigrationDirector
 import Database.PostgreSQL.Simple.Migration as Migrations ()
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Time (ZonedTimestamp)
+import qualified Data.Scientific as Scientific
 import Database.PostgreSQL.Simple.TypeInfo.Static ()
 import qualified Database.PostgreSQL.Transact as PgT
 import Deriving.Aeson as DAE
@@ -108,7 +114,7 @@ processMessage logger envConfig conn msg = do
 valueToFields :: AE.Value -> [(Text, AE.Value)]
 valueToFields value = snd $ valueToFields' value ("", [])
   where
-    valueToFields' :: AE.Value -> (Text, [(Text, Value)]) -> (Text, [(Text, AE.Value)])
+    valueToFields' :: AE.Value -> (Text, [(Text, AE.Value)]) -> (Text, [(Text, AE.Value)])
     valueToFields' (AE.Object v) akk = HM.toList v & foldl' (\(akkT, akkL) (key, val) -> (akkT, snd $ valueToFields' val (akkT <> "." <> key, akkL))) akk
     valueToFields' (AE.Array v) akk = foldl' (\(akkT, akkL) val -> (akkT, snd $ valueToFields' val (akkT <> ".[]", akkL))) akk v
     valueToFields' v (akk, l) = (akk, (akk, v) : l)
@@ -116,18 +122,48 @@ valueToFields value = snd $ valueToFields' value ("", [])
 fieldsToHash :: [(Text, AE.Value)] -> Text
 fieldsToHash = foldl' (\akk tp -> akk <> "," <> fst tp) ""
 
+aeValueToText :: AE.Value -> Text
+aeValueToText (AET.String _) = "string"
+aeValueToText (AET.Number _) = "number"
+aeValueToText AET.Null = "null"
+aeValueToText (AET.Bool _) = "bool"
+aeValueToText (AET.Object _) = "object"
+aeValueToText (AET.Array _) = "array"
+
+valueToFormat :: AE.Value -> Text
+valueToFormat (AET.String val) = valueToFormatStr val
+valueToFormat (AET.Number val) = valueToFormatNum val
+valueToFormat AET.Null = "null"
+valueToFormat (AET.Object _) = "object"
+valueToFormat (AET.Array _) = "array"
+
+valueToFormatStr :: Text -> Text
+valueToFormatStr val
+  | val =~ ([r|^[0-9]+$|] :: Text) = "integer"
+  | val =~ ([r|^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)$|] :: Text) = "float" 
+  | val =~ ([r|^(0[1-9]|1[012])[- /.](0[1-9]|[12][0-9]|3[01])[- /.](19|20)\d\d$|] :: Text) = "mm/dd/yyyy"
+  | val =~ ([r|^(0[1-9]|1[012])[- -.](0[1-9]|[12][0-9]|3[01])[- -.](19|20)\d\d$|] :: Text) = "mm-dd-yyyy"
+  | val =~ ([r|^(0[1-9]|1[012])[- ..](0[1-9]|[12][0-9]|3[01])[- ..](19|20)\d\d$|] :: Text) = "mm.dd.yyyy"
+  | otherwise = "text"
+
+valueToFormatNum :: Scientific.Scientific -> Text
+valueToFormatNum val
+  | Scientific.isFloating val = "float"
+  | Scientific.isInteger val = "integer"
+  | otherwise = "unknown"
+
 fieldsToFieldDTO :: Text -> UUID -> (Text, AE.Value) -> (Field, [Text])
 fieldsToFieldDTO fieldCategory projectID (keyPath, val) =
   ( Field
       { fdCreatedAt = read "2019-08-31 05:14:37.537084021 UTC",
         fdUpdatedAt = read "2019-08-31 05:14:37.537084021 UTC",
         fdId = UUID.nil,
-        fdProjectId = projectID,
         fdEndpoint = UUID.nil,
+        fdProjectId = projectID,
         fdKey = snd $ T.breakOnEnd "." keyPath,
-        fdFieldType = "undefined",
+        fdFieldType = aeValueToText val,
         fdFieldTypeOverride = Just "",
-        fdFormat = "",
+        fdFormat = valueToFormat val,
         fdFormatOverride = Just "",
         fdDescription = "",
         fdKeyPath = fromList $ T.splitOn "," keyPath,
@@ -215,15 +251,15 @@ processRequestMessage pool requestMsg = do
         case enpResp of
           Nothing -> error "error"
           Just (enpID, _, _) -> do
-            upsertFields2 enpID fields
+            upsertFields enpID fields
             pure ()
 
-upsertFields :: UUID.UUID -> [(Field, [Text])] -> PgT.DBT IO Int64
-upsertFields endpoint fields = PgT.executeMany q options
+upsertFields :: UUID.UUID -> [(Field, [Text])] -> PgT.DBT IO [Maybe (Only Text)]
+upsertFields endpoint fields = options & mapM (\opt -> PgT.queryOne q opt)
   where
     q =
       [sql|
-        select create_field_and_formats(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        select create_field_and_formats(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)::text;
    |]
     options =
       fields
@@ -241,34 +277,7 @@ upsertFields endpoint fields = PgT.executeMany q options
                 fdKeyPathStr field,
                 fdFieldCategory field,
                 Vector.fromList examples,
-                5 :: Int64
-              )
-          )
-
-upsertFields2 :: UUID.UUID -> [(Field, [Text])] -> PgT.DBT IO [Maybe (Int64, Text)]
-upsertFields2 endpoint fields = options & mapM (\opt -> PgT.queryOne q opt)
-  where
-    q =
-      [sql|
-        select 1, create_field_and_formats(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)::text;
-   |]
-    options =
-      fields
-        & map
-          ( \(field, examples) ->
-              ( fdProjectId field,
-                endpoint,
-                fdKey field,
-                fdFieldType field,
-                fdFieldTypeOverride field,
-                fdFormat field,
-                fdFormatOverride field,
-                fdDescription field,
-                fdKeyPath field,
-                fdKeyPathStr field,
-                fdFieldCategory field,
-                Vector.fromList examples,
-                5 :: Int64
+                5 :: Int64 -- max examples size
               )
           )
 

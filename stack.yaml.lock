@@ -61,6 +61,13 @@ packages:
   original:
     hackage: postgresql-simple-named-0.0.2.0@sha256:e8756b2cc4618b959c4a2ef4f32436841cc2bd6ddfcafcdf3298990eca4c38b2,3290
 - completed:
+    hackage: regex-tdfa-quasiquoter-0.2.1.0@sha256:964b2ef0d48a1b4caf3a45bedad01ed36fc1b1e4b4041421b4cd29c49d42633d,1207
+    pantry-tree:
+      size: 317
+      sha256: 2ad36a0bd790c5ff6e2b922a3ae320ba7574911a6f710e3eedcbdddfeba1b0e6
+  original:
+    hackage: regex-tdfa-quasiquoter-0.2.1.0@sha256:964b2ef0d48a1b4caf3a45bedad01ed36fc1b1e4b4041421b4cd29c49d42633d,1207
+- completed:
     subdir: core
     name: gogol-core
     version: 0.5.0

@@ -86,10 +86,6 @@ spec = do
     runIO $ do
       Dotenv.loadFile Dotenv.defaultConfig
       env <- decodeEnv :: IO (Either String Config.EnvConfig)
-      -- recId <- UUIDV4.nextRandom
-      -- timestamp <- Time.getZonedTime
-      -- let rd = fst (requestMsgToDumpAndEndpoint requestMsg timestamp recId)
-
       case env of
         Left err -> putStrLn $ show err
         Right envConfig -> do
@@ -129,3 +125,7 @@ unitSpec = do
               (".menu.popup.menuitem.[].onclick", AE.String "CreateNewDoc()")
             ]
       valueToFields exJSON `shouldBe` expectedResp
+  describe "Regex Formats Gen" $ do
+    it "should get support string types"$ do
+      valueToFormatStr "123" `shouldBe` "numbers"
+      valueToFormatStr "123" `shouldBe` "numbers"

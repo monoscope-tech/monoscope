@@ -55,9 +55,13 @@ library
     , postgresql-migration
     , postgresql-simple
     , postgresql-simple-named
+    , raw-strings-qq
+    , regex-tdfa
+    , regex-tdfa-quasiquoter
     , relude
     , resource-pool
     , resourcet
+    , scientific
     , servant-server
     , text
     , time
@@ -99,9 +103,13 @@ executable apitoolkit-server-exe
     , postgresql-migration
     , postgresql-simple
     , postgresql-simple-named
+    , raw-strings-qq
+    , regex-tdfa
+    , regex-tdfa-quasiquoter
     , relude
     , resource-pool
     , resourcet
+    , scientific
     , servant-server
     , text
     , time
@@ -147,9 +155,13 @@ test-suite apitoolkit-server-test
     , postgresql-migration
     , postgresql-simple
     , postgresql-simple-named
+    , raw-strings-qq
+    , regex-tdfa
+    , regex-tdfa-quasiquoter
     , relude
     , resource-pool
     , resourcet
+    , scientific
     , servant-server
     , text
     , time

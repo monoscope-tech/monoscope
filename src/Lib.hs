@@ -47,9 +47,9 @@ import qualified Network.Google.Env as Env
 import qualified Network.Google.PubSub as PubSub
 import qualified Network.Google.Resource.PubSub.Projects.Subscriptions.Pull as PubSubPull
 import Network.Wai (Application)
-import Network.Wai.Handler.Warp ()
+import Network.Wai.Handler.Warp (run)
 import ProcessMessage
-import Relude (Applicative (pure), Either (Left, Right), Eq, IO, Int, Maybe, Monad (return), MonadIO (liftIO), Proxy (..), Semigroup ((<>)), Show, String, Text, Traversable (mapM), encodeUtf8, error, fromRight, fromStrict, print, show, stdout, traceM, ($), (&), (++), (.), (<&>), (=<<))
+import Relude
 import qualified Relude.Unsafe as Unsafe
 import Servant
   ( Get,
@@ -65,8 +65,6 @@ import Servant
   )
 import System.Envy (FromEnv, Option (Option), decodeEnv, gFromEnvCustom, runEnv)
 import System.IO (stdout)
-
--- deriving instance Show (Env.Env)
 
 -- {
 --     "message": {
@@ -128,7 +126,9 @@ startApp = do
       migrationRes <- Migrations.runMigration conn Migrations.defaultOptions $ MigrationDirectory (Config.migrationsDir envConfig)
       logger <& "migration result: " <> show migrationRes
       poolConn <- Pool.createPool (pure conn) close 1 100000000 50
-      pubsubService logger envConfig poolConn
+
+      forever $ pubsubService logger envConfig poolConn
+      run 8080 app
 
 -- pubsubService connects to the pubsub service and listens for  messages,
 -- then it calls the processMessage function to process the messages, and
@@ -146,8 +146,11 @@ pubsubService logger envConfig conn = do
     pullResp <- Google.send $ PubSub.projectsSubscriptionsPull pullReq subscription
     let messages = pullResp ^. PubSub.prReceivedMessages
     msgIds <- liftIO $ mapM (processMessage logger envConfig conn) messages
-    -- _ <- Google.send $ PubSub.projectsSubscriptionsAcknowledge (PubSub.acknowledgeRequest & PubSub.arAckIds .~ catMaybes msgIds) subscription
-    pure ()
+    case (null msgIds) of
+      False -> do
+        Google.send $ PubSub.projectsSubscriptionsAcknowledge (PubSub.acknowledgeRequest & PubSub.arAckIds .~ catMaybes msgIds) subscription
+        pure ()
+      True -> pure ()
 
 --
 --

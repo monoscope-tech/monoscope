@@ -53,6 +53,10 @@ dependencies:
 - vector
 - wai
 - warp
+- raw-strings-qq
+- regex-tdfa
+- regex-tdfa-quasiquoter
+- scientific
 
 library:
   source-dirs: src
