@@ -1,7 +1,7 @@
 module Main where
 
 import Relude
-import Lib
+import Start
 
 main :: IO ()
 main = startApp

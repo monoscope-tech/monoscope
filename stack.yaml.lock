@@ -68,6 +68,13 @@ packages:
   original:
     hackage: regex-tdfa-quasiquoter-0.2.1.0@sha256:964b2ef0d48a1b4caf3a45bedad01ed36fc1b1e4b4041421b4cd29c49d42633d,1207
 - completed:
+    hackage: servant-lucid-0.9.0.3@sha256:7408b9b7bdf63b37b0fc6565c8d076ab40b606d022ff3f3e493b6a59e9727193,1787
+    pantry-tree:
+      size: 392
+      sha256: dcf4c0f8f22bd92ba2e20ce7ab812d72850b380050a15097572d14756f8aa582
+  original:
+    hackage: servant-lucid-0.9.0.3@sha256:7408b9b7bdf63b37b0fc6565c8d076ab40b606d022ff3f3e493b6a59e9727193,1787
+- completed:
     subdir: core
     name: gogol-core
     version: 0.5.0

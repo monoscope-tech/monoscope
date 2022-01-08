@@ -1,14 +1,8 @@
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DeriveAnyClass #-}
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE TypeOperators #-}
 
-module Lib
+module Start
   ( startApp,
   )
 where
@@ -16,6 +10,7 @@ where
 import Colog.Core (LogAction (..), logStringStdout, (<&))
 import qualified Config
 import Configuration.Dotenv as Dotenv
+import Control.Concurrent.Async
 import Control.Lens ((&), (.~), (<&>), (?~), (^.), (^?), _Just)
 import Control.Monad (when)
 import Control.Monad.Trans.Resource (ResourceT, liftResourceT, runResourceT)
@@ -46,69 +41,13 @@ import qualified Network.Google as Google
 import qualified Network.Google.Env as Env
 import qualified Network.Google.PubSub as PubSub
 import qualified Network.Google.Resource.PubSub.Projects.Subscriptions.Pull as PubSubPull
-import Network.Wai (Application)
 import Network.Wai.Handler.Warp (run)
 import ProcessMessage
 import Relude
 import qualified Relude.Unsafe as Unsafe
-import Servant
-  ( Get,
-    Handler,
-    JSON,
-    NoContent (..),
-    Post,
-    ReqBody,
-    Server,
-    serve,
-    type (:<|>) (..),
-    type (:>),
-  )
+import qualified Server
 import System.Envy (FromEnv, Option (Option), decodeEnv, gFromEnvCustom, runEnv)
 import System.IO (stdout)
-
--- {
---     "message": {
---         "attributes": {
---             "key": "value"
---         },
---         "data": "SGVsbG8gQ2xvdWQgUHViL1N1YiEgSGVyZSBpcyBteSBtZXNzYWdlIQ==",
---         "messageId": "2070443601311540",
---         "message_id": "2070443601311540",
---         "publishTime": "2021-02-26T19:13:55.749Z",
---         "publish_time": "2021-02-26T19:13:55.749Z",
---     },
---    "subscription": "projects/myproject/subscriptions/mysubscription"
--- }
-data PubSubMessage = PubSubMessage
-  { pmMessageId :: String,
-    pmDataField :: String
-  }
-  deriving (Eq, Show, Generic)
-  deriving
-    (FromJSON, ToJSON)
-    via CustomJSON '[OmitNothingFields, FieldLabelModifier '[StripPrefix "pm", CamelToSnake]] PubSubMessage
-
-data PubsubMessageWrapper = PubsubMessageWrapper
-  { pmwMessage :: PubSubMessage,
-    pmwSubscription :: String
-  }
-  deriving (Eq, Show, Generic)
-  deriving
-    (FromJSON, ToJSON)
-    via CustomJSON '[OmitNothingFields, FieldLabelModifier '[StripPrefix "pmw", CamelToSnake]] PubsubMessageWrapper
-
-data User = User
-  { userId :: Int,
-    userFirstName :: String,
-    userLastName :: String
-  }
-  deriving (Eq, Show)
-
-$(deriveJSON Aeson.defaultOptions ''User)
-
-type API =
-  "users" :> Get '[JSON] [User]
-    :<|> "pubsub-endpoint" :> ReqBody '[JSON] PubsubMessageWrapper :> Post '[JSON] NoContent
 
 startApp :: IO ()
 startApp = do
@@ -127,8 +66,9 @@ startApp = do
       logger <& "migration result: " <> show migrationRes
       poolConn <- Pool.createPool (pure conn) close 1 100000000 50
 
-      forever $ pubsubService logger envConfig poolConn
-      run 8080 app
+      concurrently_
+        (pubsubService logger envConfig poolConn)
+        (run 8080 Server.app)
 
 -- pubsubService connects to the pubsub service and listens for  messages,
 -- then it calls the processMessage function to process the messages, and
@@ -142,38 +82,13 @@ pubsubService logger envConfig conn = do
         . (Google.envScopes .~ PubSub.pubSubScope)
   let pullReq = PubSub.pullRequest & PubSub.prMaxMessages ?~ 1
   let subscription = "projects/past-3/subscriptions/apitoolkit-go-client-sub"
-  runResourceT . Google.runGoogle env $ do
-    pullResp <- Google.send $ PubSub.projectsSubscriptionsPull pullReq subscription
-    let messages = pullResp ^. PubSub.prReceivedMessages
-    msgIds <- liftIO $ mapM (processMessage logger envConfig conn) messages
-    case (null msgIds) of
-      False -> do
-        Google.send $ PubSub.projectsSubscriptionsAcknowledge (PubSub.acknowledgeRequest & PubSub.arAckIds .~ catMaybes msgIds) subscription
-        pure ()
-      True -> pure ()
 
---
---
-app :: Application
-app = serve api server
-
-api :: Proxy API
-api = Proxy
-
-server :: Server API
-server =
-  return users
-    :<|> handlePubSubMessage
-
-handlePubSubMessage :: PubsubMessageWrapper -> Handler NoContent
-handlePubSubMessage PubsubMessageWrapper {pmwMessage = PubSubMessage {pmMessageId = messageId, pmDataField = dataField}} = do
-  let message = "Received message with id " <> messageId <> " and data " <> dataField
-  -- logStringStdout message
-  return NoContent
-
-users :: [User]
-users =
-  [ User 1 "Isaac" "Newton",
-    User 2 "Albert" "Einstein",
-    User 3 "Stephen" "Hawking"
-  ]
+  forever $
+    runResourceT . Google.runGoogle env $ do
+      pullResp <- Google.send $ PubSub.projectsSubscriptionsPull pullReq subscription
+      let messages = pullResp ^. PubSub.prReceivedMessages
+      msgIds <- liftIO $ mapM (processMessage logger envConfig conn) messages
+      let acknowlegReq = PubSub.acknowledgeRequest & PubSub.arAckIds .~ catMaybes msgIds
+      if null msgIds
+        then pure ()
+        else (PubSub.projectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send) >> pure ()

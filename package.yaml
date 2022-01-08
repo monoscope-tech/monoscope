@@ -57,6 +57,9 @@ dependencies:
 - regex-tdfa
 - regex-tdfa-quasiquoter
 - scientific
+- async
+- servant-lucid
+- lucid
 
 library:
   source-dirs: src
