@@ -52,6 +52,7 @@ extra-deps:
   - postgresql-simple-named-0.0.2.0@sha256:e8756b2cc4618b959c4a2ef4f32436841cc2bd6ddfcafcdf3298990eca4c38b2,3290
   - regex-tdfa-quasiquoter-0.2.1.0@sha256:964b2ef0d48a1b4caf3a45bedad01ed36fc1b1e4b4041421b4cd29c49d42633d,1207
   - servant-lucid-0.9.0.3@sha256:7408b9b7bdf63b37b0fc6565c8d076ab40b606d022ff3f3e493b6a59e9727193,1787
+  - lucid-htmx-0.1.0.3@sha256:54c40c2e02c82c34643d65b3ca3fcd12b7db81530879bb808a82703bf2447b7f,1521
   - git: https://github.com/brendanhay/gogol.git
     commit: 801f00b6e63c22522eb2b3e3e2fc77694730a70f
     subdirs:

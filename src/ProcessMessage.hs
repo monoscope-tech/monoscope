@@ -21,7 +21,7 @@ module ProcessMessage
   )
 where
 
-import Colog (LogAction)
+import Colog.Core (LogAction (..), logStringStdout, (<&))
 import qualified Config
 import Control.Lens ((^.), (^?), _Just)
 import Data.Aeson (Object, Value (Array, Bool, Null, Number, Object, String), decodeStrict, eitherDecode, eitherDecodeStrict)
@@ -32,9 +32,6 @@ import Data.Aeson as AE
     eitherDecode,
     eitherDecodeStrict,
   )
-
-import Text.Regex.TDFA ((=~))
-import Text.RawString.QQ
 import Data.Aeson.QQ (aesonQQ)
 import Data.Aeson.Text (encodeToLazyText)
 import qualified Data.Aeson.Types as AET
@@ -42,6 +39,7 @@ import qualified Data.ByteString.Base64 as B64
 import Data.Fixed (Pico)
 import qualified Data.HashMap.Strict as HM
 import Data.Pool (Pool, withResource)
+import qualified Data.Scientific as Scientific
 import qualified Data.Text as T
 import qualified Data.Text.Encoding.Base64 as B64T
 import Data.Time (CalendarDiffTime, UTCTime, ZonedTime)
@@ -63,7 +61,6 @@ import Database.PostgreSQL.Simple.Migration (MigrationCommand (MigrationDirector
 import Database.PostgreSQL.Simple.Migration as Migrations ()
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Time (ZonedTimestamp)
-import qualified Data.Scientific as Scientific
 import Database.PostgreSQL.Simple.TypeInfo.Static ()
 import qualified Database.PostgreSQL.Transact as PgT
 import Deriving.Aeson as DAE
@@ -90,6 +87,8 @@ import Servant
     type (:<|>) (..),
     type (:>),
   )
+import Text.RawString.QQ
+import Text.Regex.TDFA ((=~))
 import Types
 import Prelude (read)
 
@@ -99,13 +98,9 @@ processMessage logger envConfig conn msg = do
   let decodedMsg = B64.decodeBase64 $ Unsafe.fromJust rmMsg
   let jsonByteStr = fromRight "{}" decodedMsg
   let decodedMsg = eitherDecode (fromStrict jsonByteStr) :: Either String RequestMessage
-  traceM $ "Decoded message " ++ show decodedMsg
   case decodedMsg of
-    Left x -> print x
+    Left err -> logger <& "error decoding message" <> err
     Right recMsg -> processRequestMessage conn recMsg
-
-  -- i <- hello conn
-  -- traceM $ "Hello " ++ show i
   pure $ msg ^. PubSub.rmAckId
 
 -- | valueToFields takes an aeson object and converts it into a list of paths to
@@ -133,6 +128,7 @@ aeValueToText (AET.Array _) = "array"
 valueToFormat :: AE.Value -> Text
 valueToFormat (AET.String val) = valueToFormatStr val
 valueToFormat (AET.Number val) = valueToFormatNum val
+valueToFormat (AET.Bool _) = "bool"
 valueToFormat AET.Null = "null"
 valueToFormat (AET.Object _) = "object"
 valueToFormat (AET.Array _) = "array"
@@ -140,7 +136,7 @@ valueToFormat (AET.Array _) = "array"
 valueToFormatStr :: Text -> Text
 valueToFormatStr val
   | val =~ ([r|^[0-9]+$|] :: Text) = "integer"
-  | val =~ ([r|^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)$|] :: Text) = "float" 
+  | val =~ ([r|^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)$|] :: Text) = "float"
   | val =~ ([r|^(0[1-9]|1[012])[- /.](0[1-9]|[12][0-9]|3[01])[- /.](19|20)\d\d$|] :: Text) = "mm/dd/yyyy"
   | val =~ ([r|^(0[1-9]|1[012])[- -.](0[1-9]|[12][0-9]|3[01])[- -.](19|20)\d\d$|] :: Text) = "mm-dd-yyyy"
   | val =~ ([r|^(0[1-9]|1[012])[- ..](0[1-9]|[12][0-9]|3[01])[- ..](19|20)\d\d$|] :: Text) = "mm.dd.yyyy"
@@ -255,7 +251,7 @@ processRequestMessage pool requestMsg = do
             pure ()
 
 upsertFields :: UUID.UUID -> [(Field, [Text])] -> PgT.DBT IO [Maybe (Only Text)]
-upsertFields endpoint fields = options & mapM (\opt -> PgT.queryOne q opt)
+upsertFields endpoint fields = options & mapM (PgT.queryOne q)
   where
     q =
       [sql|

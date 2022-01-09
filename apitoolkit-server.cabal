@@ -53,6 +53,7 @@ library
     , hspec
     , lens
     , lucid
+    , lucid-htmx
     , optics-th
     , pg-entity
     , pg-transact
@@ -104,6 +105,7 @@ executable apitoolkit-server-exe
     , hspec
     , lens
     , lucid
+    , lucid-htmx
     , optics-th
     , pg-entity
     , pg-transact
@@ -159,6 +161,7 @@ test-suite apitoolkit-server-test
     , hspec-pg-transact
     , lens
     , lucid
+    , lucid-htmx
     , optics-th
     , pg-entity
     , pg-transact

@@ -75,6 +75,13 @@ packages:
   original:
     hackage: servant-lucid-0.9.0.3@sha256:7408b9b7bdf63b37b0fc6565c8d076ab40b606d022ff3f3e493b6a59e9727193,1787
 - completed:
+    hackage: lucid-htmx-0.1.0.3@sha256:54c40c2e02c82c34643d65b3ca3fcd12b7db81530879bb808a82703bf2447b7f,1521
+    pantry-tree:
+      size: 498
+      sha256: a0ae4c49b51975cad7126e0e65a69effe6e6b38a193c3c4b5df2ebce62674f99
+  original:
+    hackage: lucid-htmx-0.1.0.3@sha256:54c40c2e02c82c34643d65b3ca3fcd12b7db81530879bb808a82703bf2447b7f,1521
+- completed:
     subdir: core
     name: gogol-core
     version: 0.5.0
