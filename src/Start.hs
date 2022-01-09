@@ -68,7 +68,7 @@ startApp = do
 
       concurrently_
         (pubsubService logger envConfig poolConn)
-        (run 8080 Server.app)
+        (run (Config.port envConfig) Server.app)
 
 -- pubsubService connects to the pubsub service and listens for  messages,
 -- then it calls the processMessage function to process the messages, and

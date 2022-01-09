@@ -17,10 +17,12 @@ import Servant
     ReqBody,
     Server,
     serve,
+    Raw,
     type (:<|>) (..),
     type (:>),
   )
 import Servant.HTML.Lucid
+import Servant.Server.StaticFiles
 import qualified Pages.Projects.CreateProject as CreateProject
 
 --
@@ -28,6 +30,7 @@ import qualified Pages.Projects.CreateProject as CreateProject
 --
 type API =
   "projects" :> "new" :> Get '[HTML] (Html ())
+  :<|> "assets" :> Raw
 
 --
 --
@@ -40,3 +43,4 @@ api = Proxy
 server :: Server API
 server =
   pure CreateProject.createProject
+  :<|> serveDirectoryWebApp "./static/assets"
