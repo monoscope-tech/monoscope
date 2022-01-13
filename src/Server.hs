@@ -12,7 +12,8 @@ import qualified Pages.Endpoints.EndpointDetails as EndpointDetails
 import qualified Pages.Projects.CreateProject as CreateProject
 import Relude
 import Servant
-  ( Get,
+  ( Capture,
+    Get,
     Handler,
     JSON,
     NoContent (..),
@@ -29,10 +30,10 @@ import Servant.Server.StaticFiles
 
 --
 -- API Section
---
+-- Capture "uuid" UUID.UUID :>
 type API =
   "projects" :> "new" :> Get '[HTML] (Html ())
-    :<|> "endpoints" :> Capture "uuid" UUID.UUID :> "details" :> Get '[HTML] (Html ())
+    :<|> "endpoints" :> "details" :> Get '[HTML] (Html ())
     :<|> "assets" :> Raw
 
 --
@@ -46,5 +47,5 @@ api = Proxy
 server :: Server API
 server =
   pure CreateProject.createProject
-    :<|> EndpointDetails.endpointDetails
+    :<|> pure EndpointDetails.endpointDetails
     :<|> serveDirectoryWebApp "./static/assets"
