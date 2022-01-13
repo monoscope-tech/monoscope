@@ -5,8 +5,11 @@
 
 module Server (app) where
 
+import Data.UUID as UUID
 import Lucid
 import Network.Wai (Application)
+import qualified Pages.Endpoints.EndpointDetails as EndpointDetails
+import qualified Pages.Projects.CreateProject as CreateProject
 import Relude
 import Servant
   ( Get,
@@ -14,23 +17,23 @@ import Servant
     JSON,
     NoContent (..),
     Post,
+    Raw,
     ReqBody,
     Server,
     serve,
-    Raw,
     type (:<|>) (..),
     type (:>),
   )
 import Servant.HTML.Lucid
 import Servant.Server.StaticFiles
-import qualified Pages.Projects.CreateProject as CreateProject
 
 --
 -- API Section
 --
 type API =
   "projects" :> "new" :> Get '[HTML] (Html ())
-  :<|> "assets" :> Raw
+    :<|> "endpoints" :> Capture "uuid" UUID.UUID :> "details" :> Get '[HTML] (Html ())
+    :<|> "assets" :> Raw
 
 --
 --
@@ -43,4 +46,5 @@ api = Proxy
 server :: Server API
 server =
   pure CreateProject.createProject
-  :<|> serveDirectoryWebApp "./static/assets"
+    :<|> EndpointDetails.endpointDetails
+    :<|> serveDirectoryWebApp "./static/assets"

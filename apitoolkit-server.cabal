@@ -25,6 +25,8 @@ source-repository head
 library
   exposed-modules:
       Config
+      Pages.BodyWrapper
+      Pages.Endpoints.EndpointDetails
       Pages.Projects.CreateProject
       ProcessMessage
       Server
