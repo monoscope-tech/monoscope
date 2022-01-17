@@ -55,8 +55,14 @@ bodyWrapper title child = do
             projectsDropDown
           nav_ [class_ "mt-4"] $ do
             a_ [class_ "block flex gap-3 px-5 py-3 bg-gray-100 border-l-4 border-blue-700"] $ do
-              img_ [src_ "/assets/svgs/up_chevron.svg"]
+              img_ [src_ "/assets/svgs/dashboard.svg"]
               span_ [class_ "flex-grow"] "Dashboard"
+            a_ [class_ "block flex gap-3 px-5 py-3  "] $ do
+              img_ [src_ "/assets/svgs/mail.svg"]
+              span_ [class_ "flex-grow"] "Mail"
+            a_ [class_ "block flex gap-3 px-5 py-3  "] $ do
+              img_ [src_ "/assets/svgs/tasks.svg"]
+              span_ [class_ "flex-grow"] "Task"
 
         -- main body
         section_ [class_ "grow bg-gray-50"] $ do
