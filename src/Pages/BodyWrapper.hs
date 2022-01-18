@@ -45,7 +45,7 @@ bodyWrapper title child = do
                 |]
               ]
               $ do
-                div_ [class_ "space-2 grow"] $ do
+                div_ [class_ "space-2 grow "] $ do
                   strong_ [class_ "block"] "Flip productivity"
                   small_ [class_ "block"] "Development"
                 div_ $ do
@@ -81,7 +81,7 @@ projectsDropDown :: Html ()
 projectsDropDown =
   div_
     [ term "data-menu" "true",
-      class_ "hidden origin-top-right transition transform bg-white p-4 absolute w-[20rem] rounded-2xl shadow-2xl shadow-indigo-200",
+      class_ "hidden origin-top-right z-40 transition transform bg-white p-4 absolute w-[20rem] rounded-2xl shadow-2xl shadow-indigo-200",
       term
         "_"
         [r|
@@ -100,7 +100,7 @@ projectsDropDown =
           |]
     ]
     $ do
-      div_ [class_ "p-2 pb-4"] $ do
+      div_ [class_ "p-2 pb-4 "] $ do
         div_ [class_ "flex mt-2 mb-4"] $ do
           img_ [class_ "p-4", src_ "/assets/svgs/projects.svg"]
           div_ $ do
