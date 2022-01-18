@@ -16,6 +16,7 @@ module Types
     RequestDump (..),
     Endpoint (..),
     Field (..),
+    ProjectDummy (..),
   )
 where
 
@@ -29,6 +30,8 @@ import qualified Database.PostgreSQL.Entity.Types as PET
 import Database.PostgreSQL.Simple (Connection, FromRow, Only (Only), ToRow, query_)
 import qualified Deriving.Aeson as DAE
 import Relude
+
+import Data.Aeson
 
 -- RequestMessage represents a message for a single request pulled from pubsub.
 -- >>> show RequestMessage
@@ -135,3 +138,22 @@ data Format = Format
   deriving
     (PET.Entity)
     via (PET.GenericEntity '[PET.TableName "formats", PET.PrimaryKey "id", PET.FieldModifiers '[PET.StripPrefix "fm", PET.CamelToSnake]] Format)
+
+
+
+-- ProjectDummy simply represents what the create project data could look like
+data ProjectDummy = ProjectDummy
+  { projectID :: Vector Text
+  , projectOwner :: Text
+  , projectDescription :: Vector Text
+  , createdAt :: ZonedTime
+  , updatedAt :: ZonedTime
+  }
+  deriving (Show, Generic)
+  deriving anyclass (FromRow, ToRow)
+  deriving 
+    (PET.Entity)
+    via (PET.GenericEntity '[PET.TableName "project_dummy", PET.PrimaryKey "id", PET.FieldModifiers '[PET.StripPrefix "pd", PET.CamelToSnake]] Format)
+  
+instance ToJSON ProjectDummy
+
