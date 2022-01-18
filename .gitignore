@@ -2,3 +2,4 @@
 .vscode
 .env
 node_modules/
+static/assets/.DS_Store

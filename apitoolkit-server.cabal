@@ -27,6 +27,7 @@ library
       Config
       Pages.BodyWrapper
       Pages.Endpoints.EndpointDetails
+      Pages.Endpoints.EndpointList
       Pages.Projects.CreateProject
       ProcessMessage
       Server

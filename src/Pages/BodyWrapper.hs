@@ -45,7 +45,7 @@ bodyWrapper title child = do
                 |]
               ]
               $ do
-                div_ [class_ "space-2 grow"] $ do
+                div_ [class_ "space-2 grow "] $ do
                   strong_ [class_ "block"] "Flip productivity"
                   small_ [class_ "block"] "Development"
                 div_ $ do
@@ -55,8 +55,14 @@ bodyWrapper title child = do
             projectsDropDown
           nav_ [class_ "mt-4"] $ do
             a_ [class_ "block flex gap-3 px-5 py-3 bg-gray-100 border-l-4 border-blue-700"] $ do
-              img_ [src_ "/assets/svgs/up_chevron.svg"]
+              img_ [src_ "/assets/svgs/dashboard.svg"]
               span_ [class_ "flex-grow"] "Dashboard"
+            a_ [class_ "block flex gap-3 px-5 py-3  "] $ do
+              img_ [src_ "/assets/svgs/mail.svg"]
+              span_ [class_ "flex-grow"] "Mail"
+            a_ [class_ "block flex gap-3 px-5 py-3  "] $ do
+              img_ [src_ "/assets/svgs/tasks.svg"]
+              span_ [class_ "flex-grow"] "Task"
 
         -- main body
         section_ [class_ "grow bg-gray-50"] $ do
@@ -75,7 +81,7 @@ projectsDropDown :: Html ()
 projectsDropDown =
   div_
     [ term "data-menu" "true",
-      class_ "hidden origin-top-right transition transform bg-white p-4 absolute w-[20rem] rounded-2xl shadow-2xl shadow-indigo-200",
+      class_ "hidden origin-top-right z-40 transition transform bg-white p-4 absolute w-[20rem] rounded-2xl shadow-2xl shadow-indigo-200",
       term
         "_"
         [r|
@@ -94,7 +100,7 @@ projectsDropDown =
           |]
     ]
     $ do
-      div_ [class_ "p-2 pb-4"] $ do
+      div_ [class_ "p-2 pb-4 "] $ do
         div_ [class_ "flex mt-2 mb-4"] $ do
           img_ [class_ "p-4", src_ "/assets/svgs/projects.svg"]
           div_ $ do

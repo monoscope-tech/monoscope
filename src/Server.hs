@@ -9,6 +9,7 @@ import Data.UUID as UUID
 import Lucid
 import Network.Wai (Application)
 import qualified Pages.Endpoints.EndpointDetails as EndpointDetails
+import qualified Pages.Endpoints.EndpointList as EndpointList
 import qualified Pages.Projects.CreateProject as CreateProject
 import Relude
 import Servant
@@ -45,6 +46,7 @@ type ProjectCreated = Verb 'POST 201
 type API =
   "projects" :> "new" :> Get '[HTML] (Html ())
     :<|> "endpoints" :> "details" :> Get '[HTML] (Html ())
+    :<|> "endpoints" :> "list" :> Get '[HTML] (Html ())
     :<|> "assets" :> Raw
     <|> "projects" :> "create" :> ReqBody '[JSON] ProjectDummy :>  ProjectCreated '[JSON] UUID
     :<|> "projects" :> Capture "uuid" UUID :> Get '[JSON] ProjectDummy
@@ -66,6 +68,7 @@ server =
   -- server connString =
   pure CreateProject.createProject
     :<|> pure EndpointDetails.endpointDetails
+    :<|> pure EndpointList.endpointList
     :<|> serveDirectoryWebApp "./static/assets"
     :<|> (createProjectHandler connString) 
     :<|> (fetchProjectHandler connString) 
