@@ -9,6 +9,7 @@ import Data.UUID as UUID
 import Lucid
 import Network.Wai (Application)
 import qualified Pages.Endpoints.EndpointDetails as EndpointDetails
+import qualified Pages.Endpoints.EndpointList as EndpointList
 import qualified Pages.Projects.CreateProject as CreateProject
 import Relude
 import Servant
@@ -34,6 +35,7 @@ import Servant.Server.StaticFiles
 type API =
   "projects" :> "new" :> Get '[HTML] (Html ())
     :<|> "endpoints" :> "details" :> Get '[HTML] (Html ())
+    :<|> "endpoints" :> "list" :> Get '[HTML] (Html ())
     :<|> "assets" :> Raw
 
 --
@@ -48,4 +50,5 @@ server :: Server API
 server =
   pure CreateProject.createProject
     :<|> pure EndpointDetails.endpointDetails
+    :<|> pure EndpointList.endpointList
     :<|> serveDirectoryWebApp "./static/assets"
