@@ -76,7 +76,7 @@ data RequestDump = RequestDump
   deriving (ToRow, FromRow)
   deriving
     (PET.Entity)
-    via (PET.GenericEntity '[PET.TableName "requests_dump", PET.PrimaryKey "id", PET.FieldModifiers '[PET.StripPrefix "rd", PET.CamelToSnake]] RequestDump)
+    via (PET.GenericEntity '[PET.Schema "apis", PET.TableName "request_dumps", PET.PrimaryKey "id", PET.FieldModifiers '[PET.StripPrefix "rd", PET.CamelToSnake]] RequestDump)
 
 data Endpoint = Endpoint
   { enpCreatedAt :: ZonedTime,
@@ -95,7 +95,7 @@ data Endpoint = Endpoint
   deriving anyclass (FromRow, ToRow)
   deriving
     (PET.Entity)
-    via (PET.GenericEntity '[PET.TableName "endpoints", PET.PrimaryKey "id", PET.FieldModifiers '[PET.StripPrefix "enp", PET.CamelToSnake]] Endpoint)
+    via (PET.GenericEntity '[PET.Schema "apis", PET.TableName "endpoints", PET.PrimaryKey "id", PET.FieldModifiers '[PET.StripPrefix "enp", PET.CamelToSnake]] Endpoint)
 
 -- data FieldType = Unknown|Keyword|Text|Number|Boolean|DateTime
 
@@ -119,7 +119,7 @@ data Field = Field
   deriving anyclass (FromRow, ToRow)
   deriving
     (PET.Entity)
-    via (PET.GenericEntity '[PET.TableName "fields", PET.PrimaryKey "id", PET.FieldModifiers '[PET.StripPrefix "fd", PET.CamelToSnake]] Field)
+    via (PET.GenericEntity '[PET.Schema "apis", PET.TableName "fields", PET.PrimaryKey "id", PET.FieldModifiers '[PET.StripPrefix "fd", PET.CamelToSnake]] Field)
 
 data Format = Format
   { fmCreatedAt :: ZonedTime,
@@ -134,4 +134,4 @@ data Format = Format
   deriving anyclass (FromRow, ToRow)
   deriving
     (PET.Entity)
-    via (PET.GenericEntity '[PET.TableName "formats", PET.PrimaryKey "id", PET.FieldModifiers '[PET.StripPrefix "fm", PET.CamelToSnake]] Format)
+    via (PET.GenericEntity '[PET.Schema "apis", PET.TableName "formats", PET.PrimaryKey "id", PET.FieldModifiers '[PET.StripPrefix "fm", PET.CamelToSnake]] Format)

@@ -32,8 +32,12 @@ END;
 $$ LANGUAGE plpgsql;
 
 
-CREATE DOMAIN email AS citext
-CHECK ( value ~ '^[a-zA-Z0-9.!#$%&''*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$' );
+DO $$ BEGIN
+  CREATE DOMAIN email AS citext
+    CHECK ( value ~ '^[a-zA-Z0-9.!#$%&''*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$' );
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
 -- create user table
 CREATE TABLE IF NOT EXISTS users.users
@@ -48,7 +52,7 @@ CREATE TABLE IF NOT EXISTS users.users
   display_image_url TEXT NOT NULL DEFAULT '',
   email email NOT NULL UNIQUE
 );
-SELECT manage_updated_at('users');
+SELECT manage_updated_at('users.users');
 
 -- create user auth options table
 CREATE TABLE IF NOT EXISTS users.user_auth_options
@@ -114,14 +118,14 @@ CREATE TABLE IF NOT EXISTS projects.project_api_keys
 SELECT manage_updated_at('projects.project_api_keys');
 
 -- insert an initial user. User should be deleted from db when app is ready for prod
-INSERT INTO users(id, first_name, last_name, email)
+INSERT INTO users.users(id, first_name, last_name, email)
   VALUES ('00000000-0000-0000-0000-000000000000', 'test', 'user', 'test@user.com');
-INSERT INTO user_auth_options ( user_id, auth_id, auth_password)
+INSERT INTO users.user_auth_options ( user_id, auth_id, auth_password)
   VALUES ('00000000-0000-0000-0000-000000000000', 'test@user.com', crypt('password', gen_salt('bf')));
 -- insert an initial project.
-INSERT INTO projects (id, title, description)
+INSERT INTO projects.projects (id, title, description)
   VALUES ('00000000-0000-0000-0000-000000000000','test title', 'test desc');
-INSERT INTO project_members (project_id, user_id, permissions)
+INSERT INTO projects.project_members (project_id, user_id, permissions)
   VALUES ('00000000-0000-0000-0000-000000000000','00000000-0000-0000-0000-000000000000','view');
 
 ---
@@ -132,7 +136,7 @@ CREATE TABLE IF NOT EXISTS apis.request_dumps
     created_at timestamp with time zone NOT NULL DEFAULT now(),
     updated_at timestamp with time zone NOT NULL DEFAULT now(),
     id uuid NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
-    project_id uuid NOT NULL REFERENCES projects (id) ON DELETE CASCADE ON UPDATE CASCADE,
+    project_id uuid NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE ON UPDATE CASCADE,
     host text NOT NULL DEFAULT '',
     url_path text NOT NULL DEFAULT '',
     method text NOT NULL DEFAULT '',
@@ -165,8 +169,8 @@ CREATE TABLE IF NOT EXISTS apis.endpoints
 );
 SELECT manage_updated_at('apis.endpoints');
 
-CREATE TYPE field_type AS ENUM ('unknown','string','number','bool','object', 'list');
-CREATE TYPE field_category AS ENUM ('queryparam', 'request_header','response_headers', 'request_body', 'response_body');
+CREATE TYPE apis.field_type AS ENUM ('unknown','string','number','bool','object', 'list');
+CREATE TYPE apis.field_category AS ENUM ('queryparam', 'request_header','response_headers', 'request_body', 'response_body');
 CREATE TABLE IF NOT EXISTS apis.fields
 (
     created_at timestamp with time zone NOT NULL DEFAULT now(),
@@ -200,9 +204,9 @@ CREATE TABLE IF NOT EXISTS apis.formats
   examples text[] NOT NULL DEFAULT '{}'::text[],
   UNIQUE (project_id, field_id, field_format)
 );
-SELECT manage_updated_at('formats');
+SELECT manage_updated_at('apis.formats');
 
-CREATE OR REPLACE FUNCTION create_field_and_formats(
+CREATE OR REPLACE FUNCTION apis.create_field_and_formats(
   i_project_id UUID, i_endpoint UUID, i_key TEXT, i_field_type TEXT, i_field_type_override TEXT, 
   i_format TEXT, i_format_override TEXT, i_description TEXT, i_key_path TEXT[], i_key_path_str TEXT, 
   i_field_category TEXT, i_examples TEXT[], i_examples_max_count INT 

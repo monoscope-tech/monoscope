@@ -31,10 +31,6 @@ library
       Pages.Projects.CreateProject
       ProcessMessage
       Server
-      Server_BACKUP_87475
-      Server_BASE_87475
-      Server_LOCAL_87475
-      Server_REMOTE_87475
       Start
       Types
   other-modules:

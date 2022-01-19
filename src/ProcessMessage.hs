@@ -92,6 +92,7 @@ import Text.Regex.TDFA ((=~))
 import Types
 import Prelude (read)
 
+-- |
 processMessage :: LogAction IO String -> Config.EnvConfig -> Pool Connection -> PubSub.ReceivedMessage -> IO (Maybe Text)
 processMessage logger envConfig conn msg = do
   let rmMsg = msg ^? PubSub.rmMessage . _Just . PubSub.pmData . _Just
@@ -114,9 +115,11 @@ valueToFields value = snd $ valueToFields' value ("", [])
     valueToFields' (AE.Array v) akk = foldl' (\(akkT, akkL) val -> (akkT, snd $ valueToFields' val (akkT <> ".[]", akkL))) akk v
     valueToFields' v (akk, l) = (akk, (akk, v) : l)
 
+-- |
 fieldsToHash :: [(Text, AE.Value)] -> Text
 fieldsToHash = foldl' (\akk tp -> akk <> "," <> fst tp) ""
 
+-- |
 aeValueToText :: AE.Value -> Text
 aeValueToText (AET.String _) = "string"
 aeValueToText (AET.Number _) = "number"
@@ -125,6 +128,7 @@ aeValueToText (AET.Bool _) = "bool"
 aeValueToText (AET.Object _) = "object"
 aeValueToText (AET.Array _) = "array"
 
+-- |
 valueToFormat :: AE.Value -> Text
 valueToFormat (AET.String val) = valueToFormatStr val
 valueToFormat (AET.Number val) = valueToFormatNum val
@@ -133,6 +137,7 @@ valueToFormat AET.Null = "null"
 valueToFormat (AET.Object _) = "object"
 valueToFormat (AET.Array _) = "array"
 
+-- |
 valueToFormatStr :: Text -> Text
 valueToFormatStr val
   | val =~ ([r|^[0-9]+$|] :: Text) = "integer"
@@ -142,12 +147,14 @@ valueToFormatStr val
   | val =~ ([r|^(0[1-9]|1[012])[- ..](0[1-9]|[12][0-9]|3[01])[- ..](19|20)\d\d$|] :: Text) = "mm.dd.yyyy"
   | otherwise = "text"
 
+-- |
 valueToFormatNum :: Scientific.Scientific -> Text
 valueToFormatNum val
   | Scientific.isFloating val = "float"
   | Scientific.isInteger val = "integer"
   | otherwise = "unknown"
 
+-- |
 fieldsToFieldDTO :: Text -> UUID -> (Text, AE.Value) -> (Field, [Text])
 fieldsToFieldDTO fieldCategory projectID (keyPath, val) =
   ( Field
@@ -175,6 +182,7 @@ eitherStrToText :: Either String a -> Either Text a
 eitherStrToText (Left str) = Left $ toText str
 eitherStrToText (Right a) = Right a
 
+-- |
 requestMsgToDumpAndEndpoint :: RequestMessage -> ZonedTime -> UUID.UUID -> Either Text (RequestDump, Endpoint, [(Field, [Text])])
 requestMsgToDumpAndEndpoint rM now dumpID = do
   reqBodyB64 <- B64.decodeBase64 $ encodeUtf8 $ rmRequestBody rM
@@ -250,12 +258,13 @@ processRequestMessage pool requestMsg = do
             upsertFields enpID fields
             pure ()
 
+-- | upsertFields
 upsertFields :: UUID.UUID -> [(Field, [Text])] -> PgT.DBT IO [Maybe (Only Text)]
 upsertFields endpoint fields = options & mapM (PgT.queryOne q)
   where
     q =
       [sql|
-        select create_field_and_formats(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)::text;
+        select apis.create_field_and_formats(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)::text;
    |]
     options =
       fields
@@ -277,20 +286,21 @@ upsertFields endpoint fields = options & mapM (PgT.queryOne q)
               )
           )
 
+-- |
 upsertEndpoints :: Endpoint -> PgT.DBT IO (Maybe (UUID.UUID, Text, Text))
 upsertEndpoints endpoint = queryOne Insert q options
   where
     q =
       [sql|  
-        INSERT INTO endpoints (project_id, url_path, url_params, method, hosts, request_hashes, response_hashes, queryparam_hashes)
+        INSERT INTO apis.endpoints (project_id, url_path, url_params, method, hosts, request_hashes, response_hashes, queryparam_hashes)
         VALUES(?, ?, ?, ?, ?, ?, ?, ?) 
         ON CONFLICT (project_id, url_path, method) 
         DO 
            UPDATE SET 
-            hosts = ARRAY(SELECT DISTINCT e from unnest(endpoints.hosts, excluded.hosts) as e order by e),
-            request_hashes = ARRAY(SELECT DISTINCT e from unnest(endpoints.request_hashes, excluded.request_hashes) as e order by e),
-            response_hashes = ARRAY(SELECT DISTINCT e from unnest(endpoints.response_hashes, excluded.response_hashes) as e order by e),
-            queryparam_hashes = ARRAY(SELECT DISTINCT e from unnest(endpoints.queryparam_hashes, excluded.queryparam_hashes) as e order by e)
+            hosts = ARRAY(SELECT DISTINCT e from unnest(apis.endpoints.hosts, excluded.hosts) as e order by e),
+            request_hashes = ARRAY(SELECT DISTINCT e from unnest(apis.endpoints.request_hashes, excluded.request_hashes) as e order by e),
+            response_hashes = ARRAY(SELECT DISTINCT e from unnest(apis.endpoints.response_hashes, excluded.response_hashes) as e order by e),
+            queryparam_hashes = ARRAY(SELECT DISTINCT e from unnest(apis.endpoints.queryparam_hashes, excluded.queryparam_hashes) as e order by e)
         RETURNING id, method, url_path 
       |]
     options =
