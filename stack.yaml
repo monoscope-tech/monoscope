@@ -62,7 +62,7 @@ extra-deps:
       - gogol-pubsub
       - gogol-cloudtrace
   - git: https://github.com/tchoutri/pg-entity.git
-    commit: e468324975a7a12d75fd54881b701133b7d8d9ac
+    commit: 45abf171fb7c3e0a4ec1137f79364239f1d2f24d
     subdirs:
       - .
 

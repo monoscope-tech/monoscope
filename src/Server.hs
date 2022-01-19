@@ -34,8 +34,8 @@ import Servant.Server.StaticFiles
 -- Capture "uuid" UUID.UUID :>
 type API =
   "projects" :> "new" :> Get '[HTML] (Html ())
-    :<|> "endpoints" :> "details" :> Get '[HTML] (Html ())
     :<|> "endpoints" :> "list" :> Get '[HTML] (Html ())
+    :<|> "endpoints" :> Capture "uuid" UUID.UUID :> "details" :> Get '[HTML] (Html ())
     :<|> "assets" :> Raw
 
 --
@@ -49,6 +49,9 @@ api = Proxy
 server :: Server API
 server =
   pure CreateProject.createProject
-    :<|> pure EndpointDetails.endpointDetails
     :<|> pure EndpointList.endpointList
+    :<|> endpointDetailsH
     :<|> serveDirectoryWebApp "./static/assets"
+
+endpointDetailsH :: UUID.UUID -> Handler (Html ())
+endpointDetailsH uuid = pure EndpointDetails.endpointDetails

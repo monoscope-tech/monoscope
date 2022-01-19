@@ -10,6 +10,7 @@ import Lucid
 import Lucid.HTMX
 import Pages.BodyWrapper (bodyWrapper)
 import Relude
+import Servant
 import Servant.HTML.Lucid
 import Text.RawString.QQ
 
