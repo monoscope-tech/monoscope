@@ -34,8 +34,14 @@ import Servant.Server.StaticFiles
 -- Capture "uuid" UUID.UUID :>
 type API =
   "projects" :> "new" :> Get '[HTML] (Html ())
+<<<<<<< Updated upstream
     :<|> "endpoints" :> "list" :> Get '[HTML] (Html ())
     :<|> "endpoints" :> Capture "uuid" UUID.UUID :> "details" :> Get '[HTML] (Html ())
+||||||| constructed merge base
+    :<|> "endpoints" :> "details" :> Get '[HTML] (Html ())
+=======
+    :<|> "endpoints" :> Capture "uuid" UUID.UUID :> "details" :> Get '[HTML] (Html ())
+>>>>>>> Stashed changes
     :<|> "assets" :> Raw
 
 --
@@ -49,8 +55,14 @@ api = Proxy
 server :: Server API
 server =
   pure CreateProject.createProject
+<<<<<<< Updated upstream
     :<|> pure EndpointList.endpointList
     :<|> endpointDetailsH
+||||||| constructed merge base
+    :<|> pure EndpointDetails.endpointDetails
+=======
+    :<|> endpointDetailsH
+>>>>>>> Stashed changes
     :<|> serveDirectoryWebApp "./static/assets"
 
 endpointDetailsH :: UUID.UUID -> Handler (Html ())
