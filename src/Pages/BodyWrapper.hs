@@ -75,7 +75,7 @@ bodyWrapper title child = do
                 img_ [class_ "inline-block", src_ "/assets/svgs/avatar_man.svg"]
                 span_ [class_ "inline-block"] "John Doe"
                 img_ [class_ "inline-block", src_ "/assets/svgs/down_caret.svg"]
-          section_ [class_ "p-6"] child
+          section_ [class_ "p-6 "] child
 
 projectsDropDown :: Html ()
 projectsDropDown =
