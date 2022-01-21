@@ -10,13 +10,16 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
+{-# OPTIONS_GHC -fno-warn-unused-do-bind #-}
 
 module Types
   ( RequestMessage (..),
     RequestDump (..),
     Endpoint (..),
     Field (..),
-    ProjectDummy (..),
+    CreateProject (..),
+    Access,
+    Member
   )
 where
 
@@ -31,7 +34,6 @@ import Database.PostgreSQL.Simple (Connection, FromRow, Only (Only), ToRow, quer
 import qualified Deriving.Aeson as DAE
 import Relude
 
-import Data.Aeson
 
 -- RequestMessage represents a message for a single request pulled from pubsub.
 -- >>> show RequestMessage
@@ -140,20 +142,42 @@ data Format = Format
     via (PET.GenericEntity '[PET.TableName "formats", PET.PrimaryKey "id", PET.FieldModifiers '[PET.StripPrefix "fm", PET.CamelToSnake]] Format)
 
 
+-- CreateProject and Member models a one to many relational data type. For the created project and the members with varying access in the project
 
--- ProjectDummy simply represents what the create project data could look like
-data ProjectDummy = ProjectDummy
-  { projectID :: Vector Text
-  , projectOwner :: Text
-  , projectDescription :: Vector Text
-  , createdAt :: ZonedTime
-  , updatedAt :: ZonedTime
+-- I changed most of the types to Text because the form parser works only with text and the validate functions I designed to convert text to the appropriate types in createproject.hs were throwing errors
+
+data CreateProject = CreateProject
+  { cpProjectID :: Text
+  , cpTitle :: Text
+  , cpDescription :: Text
+  -- , cpProjectID :: UUID.UUID
+  , cpCreatedAt :: Text
+  , cpUpdatedAt :: Text
+  -- , cpCreatedAt :: ZonedTime
+  -- , cpUpdatedAt :: ZonedTime
+  -- , cpMember :: Member
+  , cpMember :: Text
   }
-  deriving (Show, Generic)
-  deriving anyclass (FromRow, ToRow)
+  deriving (Generic)
   deriving 
     (PET.Entity)
-    via (PET.GenericEntity '[PET.TableName "project_dummy", PET.PrimaryKey "id", PET.FieldModifiers '[PET.StripPrefix "pd", PET.CamelToSnake]] Format)
-  
-instance ToJSON ProjectDummy
+    via (PET.GenericEntity '[PET.TableName "create_project", PET.PrimaryKey "id", PET.FieldModifiers '[PET.StripPrefix "pj", PET.CamelToSnake]] CreateProject)
+
+
+data Access = Edit | View
+  deriving (Bounded, Enum, Show)
+
+data Member = Member
+  { mbMemberID :: UUID.UUID
+  , mbEmail :: Text
+  , mbAccess :: Access
+  -- , mbCreatedAt :: Text
+  -- , mbUpdatedAt :: Text
+  , mbCreatedAt :: ZonedTime
+  , mbUpdatedAt :: ZonedTime
+  }
+  deriving (Generic)
+  deriving
+    (PET.Entity)
+    via (PET.GenericEntity '[PET.TableName "project_member", PET.PrimaryKey "id", PET.FieldModifiers '[PET.StripPrefix "pm", PET.CamelToSnake]] Member)
 

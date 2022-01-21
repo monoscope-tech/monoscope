@@ -33,8 +33,8 @@ import Servant.Server.StaticFiles
 
 import Database.PostgreSQL.Simple (Connection)
 
-import Types (ProjectDummy)
-import Pages.Projects.CreateProject (connString, createProjectHandler, getProjectHandler)
+import Types (CreateProject)
+import Pages.Projects.CreateProject (createProjectHandler, createProjectForm, getProjectHandler)
 
 --
 -- API Section
@@ -48,9 +48,9 @@ type API =
     :<|> "endpoints" :> "details" :> Get '[HTML] (Html ())
     :<|> "endpoints" :> "list" :> Get '[HTML] (Html ())
     :<|> "assets" :> Raw
-    <|> "projects" :> "create" :> ReqBody '[JSON] ProjectDummy :>  ProjectCreated '[JSON] UUID
-    :<|> "projects" :> Capture "uuid" UUID :> Get '[JSON] ProjectDummy
-    -- <|> "projects" :> "list" :> Get '[JSON] [ProjectDummy]
+    <|> "projects" :> "create" :> ReqBody '[FormUrlEncoded] createProjectForm :>  ProjectCreated '[JSON] UUID
+    :<|> "projects" :> Capture "uuid" UUID :> Get '[JSON] CreateProject
+    <|> "projects" :> "list" :> Get '[JSON] [CreateProject]
 
 --
 --
@@ -60,16 +60,12 @@ app = serve api server
 api :: Proxy API
 api = Proxy
 
--- added Connection till I figure out how to implement a cleaner single point of connection with the database
-
 server :: Server API
--- server :: Connection -> Server API
 server =
-  -- server connString =
   pure CreateProject.createProject
     :<|> pure EndpointDetails.endpointDetails
     :<|> pure EndpointList.endpointList
     :<|> serveDirectoryWebApp "./static/assets"
-    :<|> (createProjectHandler connString) 
-    :<|> (fetchProjectHandler connString) 
-  
+    :<|> createProjectHandler
+    :<|> getProjectHandler
+    :<|> getAllProjectHandler

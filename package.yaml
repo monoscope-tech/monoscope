@@ -61,6 +61,7 @@ dependencies:
 - servant-lucid
 - lucid
 - lucid-htmx
+- digestive-functors (== 0.8.4.2)
 
 library:
   source-dirs: src

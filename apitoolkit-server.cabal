@@ -48,6 +48,7 @@ library
     , co-log
     , co-log-core
     , deriving-aeson
+    , digestive-functors (==0.8.4.2)
     , dotenv
     , envy
     , gogol
@@ -100,6 +101,7 @@ executable apitoolkit-server-exe
     , co-log
     , co-log-core
     , deriving-aeson
+    , digestive-functors (==0.8.4.2)
     , dotenv
     , envy
     , gogol
@@ -154,6 +156,7 @@ test-suite apitoolkit-server-test
     , co-log
     , co-log-core
     , deriving-aeson
+    , digestive-functors (==0.8.4.2)
     , dotenv
     , envy
     , gogol

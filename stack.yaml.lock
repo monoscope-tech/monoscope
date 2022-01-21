@@ -5,6 +5,13 @@
 
 packages:
 - completed:
+    hackage: digestive-functors-0.8.4.2@sha256:badff1797b6dcd860a48ed4558985b2f6bec501e1016fa5afd9d7d6b0d8e4c08,3364
+    pantry-tree:
+      size: 1682
+      sha256: 53ce82c7f0c60c10009b1b764b537117a4ab402bbe1a147fba5ad2263acb3025
+  original:
+    hackage: digestive-functors-0.8.4.2@sha256:badff1797b6dcd860a48ed4558985b2f6bec501e1016fa5afd9d7d6b0d8e4c08,3364
+- completed:
     hackage: co-log-0.4.0.1@sha256:3d4c17f37693c80d1aa2c41669bc3438fac3e89dc5f479e57d79bc3ddc4dfcc5,5087
     pantry-tree:
       size: 1126
