@@ -3,71 +3,59 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedLabels #-}
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeApplications #-}
-{-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
-{-# language OverloadedLabels #-}
 
-module Models.Formats
-  ( Format (..),
+module Models.Projects.ProjectMembers
+  ( ProjectMembers (..),
   )
 where
 
 import qualified Data.Aeson as AE
 import qualified Data.Aeson.Types as AET
 import Data.Default
+import Data.Default.Instances
 import Data.Time (CalendarDiffTime, UTCTime, ZonedTime)
 import Data.Time.Clock (DiffTime, NominalDiffTime)
 import qualified Data.UUID as UUID
 import qualified Data.Vector as Vector
-import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, queryOne, query_, withPool)
 import qualified Database.PostgreSQL.Entity.Types as PET
 import Database.PostgreSQL.Simple (Connection, FromRow, Only (Only), ToRow, query_)
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, queryOne, query_, withPool)
-import qualified Deriving.Aeson as DAE
+import Database.PostgreSQL.Simple.SqlQQ (sql)
 import qualified Database.PostgreSQL.Transact as PgT
-import Relude
+import qualified Deriving.Aeson as DAE
 import GHC.Generics (Generic)
-import Optics.TH
 import Optics.Operators
+import Optics.TH
+import Relude
 import qualified Relude.Unsafe as Unsafe
-import Database.PostgreSQL.Entity (Entity (fields, tableName), insert)
 
-
-instance Default ZonedTime where
-  def = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
-
-instance Default UUID.UUID where
-  def = UUID.nil
-
-instance Default AET.Value where
-  def = AET.emptyObject 
-
-
--- data FieldType = Unknown|Keyword|Text|Number|Boolean|DateTime
-
-data Format = Format
+data ProjectMembers = ProjectMembers
   { createdAt :: ZonedTime,
     updatedAt :: ZonedTime,
+    deletedAt :: ZonedTime,
+    active :: Bool,
     id :: UUID.UUID,
-    fieldId :: UUID.UUID,
-    fieldType :: Text,
-    fieldFormat :: Text,
-    examples :: Vector.Vector Text
+    title :: Text,
+    description :: Text,
+    hosts :: Vector.Vector Text
   }
   deriving (Show, Generic)
   deriving anyclass (FromRow, ToRow)
   deriving
     (PET.Entity)
-    via (PET.GenericEntity '[PET.Schema "apis", PET.TableName "formats", PET.PrimaryKey "id", PET.FieldModifiers '[ PET.CamelToSnake]] Format)
+    via (PET.GenericEntity '[PET.Schema "projects", PET.TableName "project_members", PET.PrimaryKey "id", PET.FieldModifiers '[PET.CamelToSnake]] ProjectMembers)
 
-makeFieldLabelsNoPrefix ''Format
+makeFieldLabelsNoPrefix ''ProjectMembers

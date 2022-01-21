@@ -42,9 +42,9 @@ END $$;
 -- create user table
 CREATE TABLE IF NOT EXISTS users.users
 (
-  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-  deleted BOOL NOT NULL DEFAULT 'f',
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+  deleted_at TIMESTAMP WITH TIME ZONE,
   active BOOL NOT NULL DEFAULT 't',
   id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
   first_name VARCHAR(100) NOT NULL DEFAULT '',
@@ -57,9 +57,9 @@ SELECT manage_updated_at('users.users');
 -- create user auth options table
 CREATE TABLE IF NOT EXISTS users.user_auth_options
 (
-  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-  deleted BOOL NOT NULL DEFAULT 'f',
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+  deleted_at TIMESTAMP WITH TIME ZONE,
   active BOOL NOT NULL DEFAULT 't',
   id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
   user_id UUID NOT NULL REFERENCES users.users ON DELETE CASCADE,
@@ -74,12 +74,11 @@ CREATE TABLE IF NOT EXISTS users.user_auth_options
 );
 SELECT manage_updated_at('users.user_auth_options');
 
--- create tasks table
 CREATE TABLE IF NOT EXISTS projects.projects
 (
-  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-  deleted BOOL NOT NULL DEFAULT 'f',
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+  deleted_at TIMESTAMP WITH TIME ZONE,
   active BOOL NOT NULL DEFAULT 't',
   id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
   title TEXT NOT NULL DEFAULT '',
@@ -91,9 +90,9 @@ SELECT manage_updated_at('projects.projects');
 CREATE TYPE projects.project_permissions AS ENUM ('admin', 'view', 'edit');
 CREATE TABLE IF NOT EXISTS projects.project_members
 (
-  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-  deleted BOOL NOT NULL DEFAULT 'f',
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+  deleted_at TIMESTAMP WITH TIME ZONE,
   active BOOL NOT NULL DEFAULT 't',
   id UUID NOT NULL DEFAULT gen_random_uuid(),
   project_id UUID NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE ON UPDATE CASCADE,
@@ -106,9 +105,9 @@ SELECT manage_updated_at('projects.project_members');
 
 CREATE TABLE IF NOT EXISTS projects.project_api_keys
 (
-  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-  deleted BOOL NOT NULL DEFAULT 'f',
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+  deleted_at TIMESTAMP WITH TIME ZONE,
   active BOOL NOT NULL DEFAULT 't',
   id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
   project_id UUID NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE ON UPDATE CASCADE,
@@ -133,8 +132,8 @@ INSERT INTO projects.project_members (project_id, user_id, permissions)
 ---
 CREATE TABLE IF NOT EXISTS apis.request_dumps
 (
-    created_at timestamp with time zone NOT NULL DEFAULT now(),
-    updated_at timestamp with time zone NOT NULL DEFAULT now(),
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
     id uuid NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
     project_id uuid NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE ON UPDATE CASCADE,
     host text NOT NULL DEFAULT '',
@@ -154,8 +153,8 @@ SELECT manage_updated_at('apis.request_dumps');
 
 CREATE TABLE IF NOT EXISTS apis.endpoints
 (
-    created_at timestamp with time zone NOT NULL DEFAULT now(),
-    updated_at timestamp with time zone NOT NULL DEFAULT now(),
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
     id uuid NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
     project_id uuid NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE ON UPDATE CASCADE,
     url_path text NOT NULL DEFAULT ''::text,
@@ -173,8 +172,8 @@ CREATE TYPE apis.field_type AS ENUM ('unknown','string','number','bool','object'
 CREATE TYPE apis.field_category AS ENUM ('queryparam', 'request_header','response_headers', 'request_body', 'response_body');
 CREATE TABLE IF NOT EXISTS apis.fields
 (
-    created_at timestamp with time zone NOT NULL DEFAULT now(),
-    updated_at timestamp with time zone NOT NULL DEFAULT now(),
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
     id uuid NOT NULL DEFAULT gen_random_uuid()  PRIMARY KEY,
     project_id uuid NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE ON UPDATE CASCADE,
     endpoint uuid NOT NULL,
@@ -194,11 +193,12 @@ SELECT manage_updated_at('apis.fields');
 
 CREATE TABLE IF NOT EXISTS apis.formats
 (
-  created_at timestamp with time zone NOT NULL DEFAULT now(),
-  updated_at timestamp with time zone NOT NULL DEFAULT now(),
-  project_id uuid NOT NULL REFERENCES projects (id) ON DELETE CASCADE ON UPDATE CASCADE,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+  deleted_at TIMESTAMP WITH TIME ZONE,
+  project_id uuid NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE ON UPDATE CASCADE,
   id uuid NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
-  field_id uuid NOT NULL REFERENCES fields (id) ON DELETE CASCADE ON UPDATE CASCADE,
+  field_id uuid NOT NULL REFERENCES apis.fields (id) ON DELETE CASCADE ON UPDATE CASCADE,
   field_type apis.field_type NOT NULL DEFAULT 'unknown'::apis.field_type,
   field_format text NOT NULL DEFAULT '',
   examples text[] NOT NULL DEFAULT '{}'::text[],
@@ -211,11 +211,11 @@ CREATE OR REPLACE FUNCTION apis.create_field_and_formats(
   i_format TEXT, i_format_override TEXT, i_description TEXT, i_key_path TEXT[], i_key_path_str TEXT, 
   i_field_category TEXT, i_examples TEXT[], i_examples_max_count INT 
 )
-RETURNS setof formats AS $$
+RETURNS setof apis.formats AS $$
 BEGIN
   return query
   with returned_fields AS (
-    INSERT INTO fields (project_id, endpoint, key, field_type, field_type_override, format, format_override, description, key_path, key_path_str, field_category)
+    INSERT INTO apis.fields (project_id, endpoint, key, field_type, field_type_override, format, format_override, description, key_path, key_path_str, field_category)
       VALUES(i_project_id, i_endpoint, i_key, i_field_type, i_field_type_override, i_format, i_format_override, i_description, i_key_path, i_key_path_str, i_field_category)
       ON CONFLICT (project_id, endpoint, key_path_str,format) DO NOTHING
     RETURNING project_id, id, field_type, format,i_examples
@@ -223,16 +223,16 @@ BEGIN
     SELECT * FROM returned_fields
       UNION ALL
 	SELECT project_id, id, field_type, format,i_examples
-     FROM fields
+     FROM apis.fields
      WHERE  project_id=i_project_id AND endpoint=i_endpoint AND key_path_str=i_key_path_str AND format=i_format -- only executed if no INSERT
     LIMIT  1
   )
- INSERT INTO formats (project_id, field_id, field_type, field_format, examples)
+ INSERT INTO apis.formats (project_id, field_id, field_type, field_format, examples)
   SELECT * from current_fields
 		ON CONFLICT (project_id, field_id, field_format)
 		DO
 			UPDATE SET 
-				examples = ARRAY(SELECT DISTINCT e from unnest(formats.examples || excluded.examples) as e order by e limit 5)
+				examples = ARRAY(SELECT DISTINCT e from unnest(apis.formats.examples || excluded.examples) as e order by e limit 5)
 	RETURNING *;
 
 END;

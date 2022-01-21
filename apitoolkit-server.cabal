@@ -25,10 +25,13 @@ source-repository head
 library
   exposed-modules:
       Config
-      Models.Endpoints
-      Models.Fields
-      Models.Formats
-      Models.RequestDumps
+      Data.Default.Instances
+      Models.Apis.Endpoints
+      Models.Apis.Fields
+      Models.Apis.Formats
+      Models.Apis.RequestDumps
+      Models.Projects.ProjectMembers
+      Models.Projects.Projects
       Pages.BodyWrapper
       Pages.Endpoints.EndpointDetails
       Pages.Endpoints.EndpointList
