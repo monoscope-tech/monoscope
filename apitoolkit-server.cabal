@@ -25,14 +25,18 @@ source-repository head
 library
   exposed-modules:
       Config
+      Models.Endpoints
+      Models.Fields
+      Models.Formats
+      Models.RequestDumps
       Pages.BodyWrapper
       Pages.Endpoints.EndpointDetails
       Pages.Endpoints.EndpointList
       Pages.Projects.CreateProject
       ProcessMessage
+      RequestMessages
       Server
       Start
-      Types
   other-modules:
       Paths_apitoolkit_server
   hs-source-dirs:
@@ -47,6 +51,7 @@ library
     , base64
     , co-log
     , co-log-core
+    , data-default-extra
     , deriving-aeson
     , dotenv
     , envy
@@ -57,6 +62,7 @@ library
     , lens
     , lucid
     , lucid-htmx
+    , optics-core
     , optics-th
     , pg-entity
     , pg-transact
@@ -99,6 +105,7 @@ executable apitoolkit-server-exe
     , base64
     , co-log
     , co-log-core
+    , data-default-extra
     , deriving-aeson
     , dotenv
     , envy
@@ -109,6 +116,7 @@ executable apitoolkit-server-exe
     , lens
     , lucid
     , lucid-htmx
+    , optics-core
     , optics-th
     , pg-entity
     , pg-transact
@@ -153,6 +161,7 @@ test-suite apitoolkit-server-test
     , base64
     , co-log
     , co-log-core
+    , data-default-extra
     , deriving-aeson
     , dotenv
     , envy
@@ -165,6 +174,7 @@ test-suite apitoolkit-server-test
     , lens
     , lucid
     , lucid-htmx
+    , optics-core
     , optics-th
     , pg-entity
     , pg-transact

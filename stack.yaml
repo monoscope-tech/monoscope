@@ -19,6 +19,8 @@
 # resolver: https://example.com/snapshots/2018-01-01.yaml
 resolver:
   url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/18/18.yaml
+# resolver: nightly-2021-12-07
+
 
 # User packages to be built.
 # Various formats can be used as shown in the example below.
@@ -53,6 +55,23 @@ extra-deps:
   - regex-tdfa-quasiquoter-0.2.1.0@sha256:964b2ef0d48a1b4caf3a45bedad01ed36fc1b1e4b4041421b4cd29c49d42633d,1207
   - servant-lucid-0.9.0.3@sha256:7408b9b7bdf63b37b0fc6565c8d076ab40b606d022ff3f3e493b6a59e9727193,1787
   - lucid-htmx-0.1.0.3@sha256:54c40c2e02c82c34643d65b3ca3fcd12b7db81530879bb808a82703bf2447b7f,1521
+  - chronos-1.1.3@sha256:6e817a0e265c9f7a4451404597e010ad7b4aebfe38762c6ab2cb514fb5b455d2,3933
+  - co-log-core-0.3.0.0@sha256:cd5fde04475ae6926bb3cdb071180b399652c30583263f823c41fb1f34b038ef,3520
+  - bytebuild-0.3.9.0@sha256:8639f2640dc5905d6d57d74d391cdff47b16218aa80420fa6ef35e344fe1b134,3196
+  - byteslice-0.2.6.0@sha256:ec2dab1d8730cea844d3b3fc6b890e038c32cac2595426904d93fad7c836f5c5,2482
+  - bytesmith-0.3.8.0@sha256:c17c0eb6702dfa209b2e5e7496d72f770d0b5dc2adf30da62f611966ebbb69f5,1863
+  - contiguous-0.6.1@sha256:8ee83eaf335466fb11e85531987af93c0f567b4d0b2e1e74f3dd3e86fe9ab852,1968
+  - run-st-0.1.1.0@sha256:a43245bb23984089016772481bf52bfe63eaff0c5040303f69c9b15e80872fdc,883
+  - natural-arithmetic-0.1.2.0@sha256:ac25a0561c8378530a62f02df83680afb193ed1059bb43e3130e0074b5b3f16b,3411
+  - primitive-offset-0.2.0.0@sha256:f8006927d5c0a3e83707610bbc5514aabe8f84a907ecb07edd2c815f58299dea,843
+  - tuples-0.1.0.0@sha256:7006c1cab721ad3e39cdbf1ccb07ec050b94d654cc6e39277d46241eee6ac7c9,1088
+  - data-default-extra-0.1.0@sha256:93923f4b1678ee70888eae2ba5fc89cfd9748a2a9d64923cc1f827415543435a,5395
+  - data-default-instances-bytestring-0.0.1@sha256:592075c7d9f5bde9fe98d31dd2b7412cdb4bb29158b49bee04379fe0895aed3e,2438
+  - data-default-instances-case-insensitive-0.0.1@sha256:45a89ccc5e4e6dbca37c7c0826c1f1c75d774d49afa9ce94f0412edee53f1371,1757
+  - data-default-instances-new-base-0.0.2@sha256:1f90fe762c978f9fd0fcbf6d4cb6cd191d261e25acf9308505b3444aef8c079f,3227
+  - data-default-instances-text-0.0.1@sha256:5a8acbe0d420430c2cc2dc7865fa69d179c9ad43dda47aefcc6560fed72e2204,2121
+  - data-default-instances-unordered-containers-0.0.1@sha256:fc2e79e605ef4fd67f222d11f43aaed40fbc08e3ca421cd29f5982a391f90ebe,1757
+  - data-default-instances-vector-0.0.1@sha256:8a78beb491235231802c98fb1a58fea519359be1c9374b9f08d37feed34a385e,1791
   - git: https://github.com/brendanhay/gogol.git
     commit: 801f00b6e63c22522eb2b3e3e2fc77694730a70f
     subdirs:

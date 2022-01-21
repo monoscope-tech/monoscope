@@ -10,11 +10,20 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE DisambiguateRecordFields #-}
+{-# language OverloadedLabels #-}
+{-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE UndecidableInstances #-}
+
 
 module ProcessMessage
   ( processMessage,
     valueToFields,
-    requestMsgToDumpAndEndpoint,
     processRequestMessage,
     valueToFormatStr,
     valueToFormatNum,
@@ -23,7 +32,8 @@ where
 
 import Colog.Core (LogAction (..), logStringStdout, (<&))
 import qualified Config
-import Control.Lens ((^.), (^?), _Just)
+import Control.Lens ((^?), _Just)
+import qualified Control.Lens as L
 import Data.Aeson (Object, Value (Array, Bool, Null, Number, Object, String), decodeStrict, eitherDecode, eitherDecodeStrict)
 import Data.Aeson as AE
   ( FromJSON,
@@ -89,8 +99,13 @@ import Servant
   )
 import Text.RawString.QQ
 import Text.Regex.TDFA ((=~))
-import Types
 import Prelude (read)
+import qualified Models.Endpoints as Endpoints
+import qualified Models.Fields as Fields
+import qualified Models.RequestDumps as RequestDumps
+import qualified Models.Formats as Format
+import qualified RequestMessages as RequestMessages
+import Optics.Operators ((^.))
 
 -- |
 processMessage :: LogAction IO String -> Config.EnvConfig -> Pool Connection -> PubSub.ReceivedMessage -> IO (Maybe Text)
@@ -98,11 +113,11 @@ processMessage logger envConfig conn msg = do
   let rmMsg = msg ^? PubSub.rmMessage . _Just . PubSub.pmData . _Just
   let decodedMsg = B64.decodeBase64 $ Unsafe.fromJust rmMsg
   let jsonByteStr = fromRight "{}" decodedMsg
-  let decodedMsg = eitherDecode (fromStrict jsonByteStr) :: Either String RequestMessage
+  let decodedMsg = eitherDecode (fromStrict jsonByteStr) :: Either String RequestMessages.RequestMessage
   case decodedMsg of
     Left err -> logger <& "error decoding message" <> err
     Right recMsg -> processRequestMessage conn recMsg
-  pure $ msg ^. PubSub.rmAckId
+  pure $ msg L.^. PubSub.rmAckId
 
 -- | valueToFields takes an aeson object and converts it into a list of paths to
 -- each primitive value in the json and the values.
@@ -155,23 +170,23 @@ valueToFormatNum val
   | otherwise = "unknown"
 
 -- |
-fieldsToFieldDTO :: Text -> UUID -> (Text, AE.Value) -> (Field, [Text])
+fieldsToFieldDTO :: Text -> UUID -> (Text, AE.Value) -> (Fields.Field, [Text])
 fieldsToFieldDTO fieldCategory projectID (keyPath, val) =
-  ( Field
-      { fdCreatedAt = read "2019-08-31 05:14:37.537084021 UTC",
-        fdUpdatedAt = read "2019-08-31 05:14:37.537084021 UTC",
-        fdId = UUID.nil,
-        fdEndpoint = UUID.nil,
-        fdProjectId = projectID,
-        fdKey = snd $ T.breakOnEnd "." keyPath,
-        fdFieldType = aeValueToText val,
-        fdFieldTypeOverride = Just "",
-        fdFormat = valueToFormat val,
-        fdFormatOverride = Just "",
-        fdDescription = "",
-        fdKeyPath = fromList $ T.splitOn "," keyPath,
-        fdKeyPathStr = keyPath,
-        fdFieldCategory = fieldCategory
+  ( Fields.Field
+      { createdAt = read "2019-08-31 05:14:37.537084021 UTC",
+        updatedAt = read "2019-08-31 05:14:37.537084021 UTC",
+        id = UUID.nil,
+        endpoint = UUID.nil,
+        projectId = projectID,
+        key = snd $ T.breakOnEnd "." keyPath,
+        fieldType = aeValueToText val,
+        fieldTypeOverride = Just "",
+        format = valueToFormat val,
+        formatOverride = Just "",
+        description = "",
+        keyPath = fromList $ T.splitOn "," keyPath,
+        keyPathStr = keyPath,
+        fieldCategory = fieldCategory
       },
     []
   )
@@ -182,134 +197,25 @@ eitherStrToText :: Either String a -> Either Text a
 eitherStrToText (Left str) = Left $ toText str
 eitherStrToText (Right a) = Right a
 
--- |
-requestMsgToDumpAndEndpoint :: RequestMessage -> ZonedTime -> UUID.UUID -> Either Text (RequestDump, Endpoint, [(Field, [Text])])
-requestMsgToDumpAndEndpoint rM now dumpID = do
-  reqBodyB64 <- B64.decodeBase64 $ encodeUtf8 $ rmRequestBody rM
-  reqBody <- eitherStrToText $ eitherDecodeStrict reqBodyB64 :: Either Text AE.Value
-  respBodyB64 <- B64.decodeBase64 $ encodeUtf8 $ rmResponseBody rM
-  respBody <- eitherStrToText $ eitherDecodeStrict respBodyB64 :: Either Text AE.Value
-
-  let reqBodyFields = valueToFields reqBody
-  let respBodyFields = valueToFields respBody
-
-  let reqBodyFieldHashes = fieldsToHash reqBodyFields
-  let respBodyFieldHashes = fieldsToHash respBodyFields
-
-  let reqBodyFieldsDTO = reqBodyFields & map (fieldsToFieldDTO "request_body" (rmProjectId rM))
-  let respBodyFieldsDTO = respBodyFields & map (fieldsToFieldDTO "response_body" (rmProjectId rM))
-
-  let fieldsDTO = reqBodyFieldsDTO <> respBodyFieldsDTO
-
-  let reqDump =
-        RequestDump
-          { rdCreatedAt = rmTimestamp rM,
-            rdUpdatedAt = now,
-            rdId = dumpID,
-            rdProjectId = rmProjectId rM,
-            rdHost = rmHost rM,
-            rdUrlPath = rmUrlPath rM,
-            rdMethod = rmMethod rM,
-            rdReferer = rmReferer rM,
-            rdProtoMajor = rmProtoMajor rM,
-            rdProtoMinor = rmProtoMinor rM,
-            rdDuration = calendarTimeTime $ secondsToNominalDiffTime $ fromIntegral $ rmDuration rM,
-            rdStatusCode = rmStatusCode rM,
-            rdRequestHeaders = AET.emptyArray,
-            rdResponseHeaders = AET.emptyArray,
-            rdRequestBody = reqBody,
-            rdResponseBody = respBody
-          }
-  let endpoint =
-        Endpoint
-          { enpCreatedAt = rmTimestamp rM,
-            enpUpdatedAt = now,
-            enpID = dumpID,
-            enpProjectId = rmProjectId rM,
-            enpUrlPath = rmUrlPath rM,
-            enpUrlParams = AET.emptyObject,
-            enpMethod = rmMethod rM,
-            enpHosts = [rmHost rM],
-            enpRequestHashes = [reqBodyFieldHashes],
-            enpResponseHashes = [respBodyFieldHashes],
-            enpQueryparamHashes = []
-          }
-  pure (reqDump, endpoint, fieldsDTO)
-
 -- | processRequestMessage would take a request message and
 -- process it into formats which can be persisited into the database.
 -- it processes the request message into the request dump,
 -- the endpoint struct and then the request fields.
-processRequestMessage :: Pool Connection -> RequestMessage -> IO ()
+processRequestMessage :: Pool Connection -> RequestMessages.RequestMessage -> IO ()
 processRequestMessage pool requestMsg = do
   recId <- UUIDV4.nextRandom
   timestamp <- Time.getZonedTime
-  let dumpAndEndpoint = requestMsgToDumpAndEndpoint requestMsg timestamp recId
+  let dumpAndEndpoint = RequestMessages.requestMsgToDumpAndEndpoint requestMsg timestamp recId
   case dumpAndEndpoint of
     Left err -> putTextLn err
     Right dAndE -> do
       let (reqDump, endpoint, fields) = dAndE
       withPool pool $ do
-        insert @RequestDump reqDump
-        enpResp <- upsertEndpoints endpoint
+        RequestDumps.insertRequestDump reqDump
+        enpResp <- Endpoints.upsertEndpoints endpoint
         case enpResp of
           Nothing -> error "error"
           Just (enpID, _, _) -> do
-            upsertFields enpID fields
+            Fields.upsertFields enpID fields
             pure ()
 
--- | upsertFields
-upsertFields :: UUID.UUID -> [(Field, [Text])] -> PgT.DBT IO [Maybe (Only Text)]
-upsertFields endpoint fields = options & mapM (PgT.queryOne q)
-  where
-    q =
-      [sql|
-        select apis.create_field_and_formats(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)::text;
-   |]
-    options =
-      fields
-        & map
-          ( \(field, examples) ->
-              ( fdProjectId field,
-                endpoint,
-                fdKey field,
-                fdFieldType field,
-                fdFieldTypeOverride field,
-                fdFormat field,
-                fdFormatOverride field,
-                fdDescription field,
-                fdKeyPath field,
-                fdKeyPathStr field,
-                fdFieldCategory field,
-                Vector.fromList examples,
-                5 :: Int64 -- max examples size
-              )
-          )
-
--- |
-upsertEndpoints :: Endpoint -> PgT.DBT IO (Maybe (UUID.UUID, Text, Text))
-upsertEndpoints endpoint = queryOne Insert q options
-  where
-    q =
-      [sql|  
-        INSERT INTO apis.endpoints (project_id, url_path, url_params, method, hosts, request_hashes, response_hashes, queryparam_hashes)
-        VALUES(?, ?, ?, ?, ?, ?, ?, ?) 
-        ON CONFLICT (project_id, url_path, method) 
-        DO 
-           UPDATE SET 
-            hosts = ARRAY(SELECT DISTINCT e from unnest(apis.endpoints.hosts, excluded.hosts) as e order by e),
-            request_hashes = ARRAY(SELECT DISTINCT e from unnest(apis.endpoints.request_hashes, excluded.request_hashes) as e order by e),
-            response_hashes = ARRAY(SELECT DISTINCT e from unnest(apis.endpoints.response_hashes, excluded.response_hashes) as e order by e),
-            queryparam_hashes = ARRAY(SELECT DISTINCT e from unnest(apis.endpoints.queryparam_hashes, excluded.queryparam_hashes) as e order by e)
-        RETURNING id, method, url_path 
-      |]
-    options =
-      ( enpProjectId endpoint,
-        enpUrlPath endpoint,
-        enpUrlParams endpoint,
-        enpMethod endpoint,
-        enpHosts endpoint,
-        enpRequestHashes endpoint,
-        enpResponseHashes endpoint,
-        enpQueryparamHashes endpoint
-      )
