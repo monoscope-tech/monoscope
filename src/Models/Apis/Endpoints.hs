@@ -3,54 +3,45 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedLabels #-}
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeApplications #-}
-{-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
-{-# language OverloadedLabels #-}
 
-module Models.Endpoints
+module Models.Apis.Endpoints
   ( Endpoint (..),
-  upsertEndpoints
+    upsertEndpoints,
   )
 where
 
 import qualified Data.Aeson as AE
 import qualified Data.Aeson.Types as AET
 import Data.Default
+import Data.Default.Instances
 import Data.Time (CalendarDiffTime, UTCTime, ZonedTime)
 import Data.Time.Clock (DiffTime, NominalDiffTime)
 import qualified Data.UUID as UUID
 import qualified Data.Vector as Vector
-import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, queryOne, query_, withPool)
 import qualified Database.PostgreSQL.Entity.Types as PET
 import Database.PostgreSQL.Simple (Connection, FromRow, Only (Only), ToRow, query_)
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, queryOne, query_, withPool)
-import qualified Deriving.Aeson as DAE
+import Database.PostgreSQL.Simple.SqlQQ (sql)
 import qualified Database.PostgreSQL.Transact as PgT
-import Relude
+import qualified Deriving.Aeson as DAE
 import GHC.Generics (Generic)
-import Optics.TH
 import Optics.Operators
+import Optics.TH
+import Relude
 import qualified Relude.Unsafe as Unsafe
-
-
-instance Default ZonedTime where
-  def = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
-
-instance Default UUID.UUID where
-  def = UUID.nil
-
-instance Default AET.Value where
-  def = AET.emptyObject 
 
 data Endpoint = Endpoint
   { createdAt :: ZonedTime,
@@ -91,12 +82,12 @@ upsertEndpoints endpoint = queryOne Insert q options
         RETURNING id, method, url_path 
       |]
     options =
-      ( endpoint ^. #projectId ,
-        endpoint ^. #urlPath ,
-        endpoint ^. #urlParams ,
-        endpoint ^. #method ,
-        endpoint ^. #hosts ,
-        endpoint ^. #requestHashes ,
-        endpoint ^. #responseHashes ,
-        endpoint ^. #queryparamHashes 
+      ( endpoint ^. #projectId,
+        endpoint ^. #urlPath,
+        endpoint ^. #urlParams,
+        endpoint ^. #method,
+        endpoint ^. #hosts,
+        endpoint ^. #requestHashes,
+        endpoint ^. #responseHashes,
+        endpoint ^. #queryparamHashes
       )
