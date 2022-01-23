@@ -20,6 +20,8 @@
 module RequestMessages
   ( RequestMessage (..),
     requestMsgToDumpAndEndpoint,
+    valueToFormatStr,
+    valueToFields,
   )
 where
 

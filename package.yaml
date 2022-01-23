@@ -63,6 +63,13 @@ dependencies:
 - lucid
 - lucid-htmx
 - data-default-extra
+- hspec-expectations-lifted
+- hspec-pg-transact
+- pg-entity
+- pg-transact
+- postgresql-simple
+- resource-pool
+- digestive-functors
 library:
   source-dirs: src
 
@@ -80,7 +87,7 @@ executables:
 
 tests:
   apitoolkit-server-test:
-    main:                Spec.hs
+    main:                Test.hs
     source-dirs:         test
     ghc-options:
     - -threaded

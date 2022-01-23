@@ -38,7 +38,9 @@ library
       Pages.Projects.CreateProject
       ProcessMessage
       RequestMessages
+      RequestMessagesSpec
       Server
+      Spec
       Start
   other-modules:
       Paths_apitoolkit_server
@@ -56,12 +58,15 @@ library
     , co-log-core
     , data-default-extra
     , deriving-aeson
+    , digestive-functors
     , dotenv
     , envy
     , gogol
     , gogol-core
     , gogol-pubsub
     , hspec
+    , hspec-expectations-lifted
+    , hspec-pg-transact
     , lens
     , lucid
     , lucid-htmx
@@ -110,12 +115,15 @@ executable apitoolkit-server-exe
     , co-log-core
     , data-default-extra
     , deriving-aeson
+    , digestive-functors
     , dotenv
     , envy
     , gogol
     , gogol-core
     , gogol-pubsub
     , hspec
+    , hspec-expectations-lifted
+    , hspec-pg-transact
     , lens
     , lucid
     , lucid-htmx
@@ -146,9 +154,8 @@ executable apitoolkit-server-exe
 
 test-suite apitoolkit-server-test
   type: exitcode-stdio-1.0
-  main-is: Spec.hs
+  main-is: Test.hs
   other-modules:
-      ProcessMessageSpec
       Paths_apitoolkit_server
   hs-source-dirs:
       test
@@ -166,6 +173,7 @@ test-suite apitoolkit-server-test
     , co-log-core
     , data-default-extra
     , deriving-aeson
+    , digestive-functors
     , dotenv
     , envy
     , gogol
