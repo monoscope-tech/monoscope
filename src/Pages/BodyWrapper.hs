@@ -14,6 +14,7 @@ bodyWrapper title child = do
     head_ $ do
       title_ $ toHtml title
       link_ [rel_ "stylesheet", type_ "text/css", href_ "/assets/css/tailwind.min.css"]
+      script_ [src_ "https://unpkg.com/htmx.org@1.6.1"] ("" :: Text)
       script_ [src_ "https://unpkg.com/hyperscript.org@0.9.3"] ("" :: Text)
     body_ [class_ "text-gray-700"] $ do
       section_ [class_ "flex flex-row"] $ do

@@ -19,6 +19,8 @@
 
 module Models.Projects.Projects
   ( Project (..),
+    CreateProject (..),
+    insertProject,
   )
 where
 
@@ -41,6 +43,7 @@ import Optics.Operators
 import Optics.TH
 import Relude
 import qualified Relude.Unsafe as Unsafe
+import Database.PostgreSQL.Entity
 
 data Project = Project
   { createdAt :: UTCTime,
@@ -58,4 +61,20 @@ data Project = Project
     (PET.Entity)
     via (PET.GenericEntity '[PET.Schema "projects", PET.TableName "projects", PET.PrimaryKey "id", PET.FieldModifiers '[PET.CamelToSnake]] Project)
 
+data CreateProject = CreateProject
+  { title :: Text,
+    description :: Text
+  }
+  deriving (Show, Generic)
+  deriving anyclass (FromRow, ToRow)
+  deriving
+    (PET.Entity)
+    via (PET.GenericEntity '[PET.Schema "projects", PET.TableName "projects", PET.PrimaryKey "id", PET.FieldModifiers '[PET.CamelToSnake]] Project)
+
+
+
 makeFieldLabelsNoPrefix ''Project
+
+
+insertProject :: CreateProject -> PgT.DBT IO ()
+insertProject = insert @CreateProject 

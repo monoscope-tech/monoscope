@@ -85,6 +85,10 @@ extra-deps:
     commit: 45abf171fb7c3e0a4ec1137f79364239f1d2f24d
     subdirs:
       - .
+  - git: https://github.com/mastarija/valor
+    commit: 0a5d0af518f5408ccf234bda7b414e037aca58dc
+    subdirs:
+      - .
 
 # Override default flag values for local packages and extra-deps
 # flags: {}

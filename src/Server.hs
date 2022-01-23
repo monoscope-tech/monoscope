@@ -23,6 +23,7 @@ import Servant
     ReqBody,
     Server,
     serve,
+    FormUrlEncoded,
     type (:<|>) (..),
     type (:>),
   )
@@ -31,8 +32,9 @@ import Servant.Server.StaticFiles
 
 --
 -- API Section
-type API =
-  "projects" :> "new" :> Get '[HTML] (Html ())
+type API 
+      = "projects" :> "new" :> Get '[HTML] (Html ())
+    :<|> "projects" :> "new" :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (Html ())
     :<|> "endpoints" :> "list" :> Get '[HTML] (Html ())
     :<|> "endpoints" :> Capture "uuid" UUID.UUID :> "details" :> Get '[HTML] (Html ())
     :<|> "assets" :> Raw
@@ -47,7 +49,8 @@ api = Proxy
 
 server :: Server API
 server =
-  CreateProject.createProjectH
+  CreateProject.createProjectGetH
+    :<|> CreateProject.createProjectPostH
     :<|> pure EndpointList.endpointList
     :<|> endpointDetailsH
     :<|> serveDirectoryWebApp "./static/assets"

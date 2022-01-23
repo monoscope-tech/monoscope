@@ -12,9 +12,10 @@ module Config
   ( EnvConfig (..),
   )
 where
-
 import Relude
+
 import System.Envy (FromEnv)
+import Servant.Server (Handler)
 
 data EnvConfig = EnvConfig
   { databaseUrl :: String, -- "DATABASE_URL"
@@ -23,3 +24,12 @@ data EnvConfig = EnvConfig
   }
   deriving (Show, Generic)
   deriving anyclass (FromEnv)
+
+
+data AuthContext = AuthedUser
+  { -- userInfo :: User
+  env :: EnvConfig 
+  } deriving stock (Show, Generic)
+
+
+type DashboardM = ReaderT AuthContext Handler

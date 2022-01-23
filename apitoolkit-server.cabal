@@ -58,7 +58,6 @@ library
     , co-log-core
     , data-default-extra
     , deriving-aeson
-    , digestive-functors
     , dotenv
     , envy
     , gogol
@@ -67,6 +66,7 @@ library
     , hspec
     , hspec-expectations-lifted
     , hspec-pg-transact
+    , http-api-data
     , lens
     , lucid
     , lucid-htmx
@@ -90,6 +90,7 @@ library
     , time
     , unordered-containers
     , uuid
+    , valor >=1.0.0.0
     , vector
     , wai
     , warp
@@ -115,7 +116,6 @@ executable apitoolkit-server-exe
     , co-log-core
     , data-default-extra
     , deriving-aeson
-    , digestive-functors
     , dotenv
     , envy
     , gogol
@@ -124,6 +124,7 @@ executable apitoolkit-server-exe
     , hspec
     , hspec-expectations-lifted
     , hspec-pg-transact
+    , http-api-data
     , lens
     , lucid
     , lucid-htmx
@@ -147,6 +148,7 @@ executable apitoolkit-server-exe
     , time
     , unordered-containers
     , uuid
+    , valor >=1.0.0.0
     , vector
     , wai
     , warp
@@ -173,7 +175,6 @@ test-suite apitoolkit-server-test
     , co-log-core
     , data-default-extra
     , deriving-aeson
-    , digestive-functors
     , dotenv
     , envy
     , gogol
@@ -182,6 +183,7 @@ test-suite apitoolkit-server-test
     , hspec
     , hspec-expectations-lifted
     , hspec-pg-transact
+    , http-api-data
     , lens
     , lucid
     , lucid-htmx
@@ -205,6 +207,7 @@ test-suite apitoolkit-server-test
     , time
     , unordered-containers
     , uuid
+    , valor >=1.0.0.0
     , vector
     , wai
     , warp

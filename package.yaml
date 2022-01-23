@@ -69,7 +69,8 @@ dependencies:
 - pg-transact
 - postgresql-simple
 - resource-pool
-- digestive-functors
+- http-api-data
+- valor >= 1.0.0.0
 library:
   source-dirs: src
 

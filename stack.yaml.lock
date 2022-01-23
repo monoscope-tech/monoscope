@@ -285,6 +285,19 @@ packages:
     subdir: .
     git: https://github.com/tchoutri/pg-entity.git
     commit: 45abf171fb7c3e0a4ec1137f79364239f1d2f24d
+- completed:
+    subdir: .
+    name: valor
+    version: 1.0.0.0
+    git: https://github.com/mastarija/valor
+    pantry-tree:
+      size: 741
+      sha256: e7a3a50c5d5b37b0a9fa16e114e6d8d2a0e23dd8fe3c2ccfd4d74b4e90cf6c4e
+    commit: 0a5d0af518f5408ccf234bda7b414e037aca58dc
+  original:
+    subdir: .
+    git: https://github.com/mastarija/valor
+    commit: 0a5d0af518f5408ccf234bda7b414e037aca58dc
 snapshots:
 - completed:
     size: 586296
