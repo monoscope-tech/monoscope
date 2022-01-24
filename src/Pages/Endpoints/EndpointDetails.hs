@@ -49,4 +49,8 @@ endpointDetails = bodyWrapper "Endpoint Details" $ do
           img_ [src_ "/assets/svgs/cheveron-right.svg", class_ " mr-4"] 
           p_ [href_ "", class_ "text-sm text-red-400 underline underline-offset-1 "] "access_code"
       a_ [class_ " mx-4 mt-5 absolute m-5 bottom-0 right-0  text-sm cursor-pointer text-slate-600" ] "Resolve"
+    a_ [href_ ""] $ do 
+      div_ [class_ "flex flex-row justify-between bg-white mt-5 rounded-xl p-4"] $ do 
+        h2_ [class_ "text-slate-700 text-lg"] "Request fields"
+        img_ [src_ "/assets/svgs/darkplus.svg", class_ "h-4 mt-1 w-4"] 
     
