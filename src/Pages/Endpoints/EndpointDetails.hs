@@ -42,22 +42,13 @@ endpointDetails = bodyWrapper "Endpoint Details" $ do
         div_ [class_ "flex flex-row "] $ do
           img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-4 mr-3 mt-4 w-4" ]
           div_ [class_ "bg-gray-100 px-10 rounded-xl w-full p-4 text-sm text-slate-600"] "REQUEST HEADERS"
-        div_ [class_ "grid justify-items-stretch"] $ do
-          div_ [class_ "border flex mb-5 flex-row border-gray-100 justify-self-end px-5 p-3 rounded-xl mt-2 "] $ do
-            input_ [type_ "checkbox" ,class_ " mr-8 m-1" ] 
-            span_ [class_ "grow text-sm text-slate-600"] "Authorization"
-            span_ [class_ "text-sm text-slate-500 mx-12"] "[] obj"
-            img_ [src_ "/assets/svgs/alert-red.svg", class_ " mx-10 "]
-            img_ [src_ "/assets/svgs/dots-vertical.svg", class_ "mx-5"]
+        div_ [class_ "border flex mb-5 flex-row border-gray-100 ml-20 px-5 p-3 rounded-xl mt-2 "] $ do
+          input_ [type_ "checkbox" ,class_ " mr-12 m-1" ] 
+          span_ [class_ "grow text-sm text-slate-600"] "Authorization"
+          span_ [class_ "text-sm text-slate-500 mx-12"] "[] obj"
+          img_ [src_ "/assets/svgs/alert-red.svg", class_ " mx-10 "]
+          img_ [src_ "/assets/svgs/dots-vertical.svg", class_ "mx-5"]
 
-        div_ [class_ "flex flex-row "] $ do
-          img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-4 mr-3 mt-4 w-4" ]
-          div_ [class_ "bg-gray-100 px-10 rounded-xl w-full p-4 text-sm text-slate-600"] "REQUEST HEADERS"
-        div_ [class_ "grid justify-items-stretch "] $ do
-          div_ [class_ "border flex flex-row mb-5 border-gray-100 justify-self-end px-5 p-3 rounded-xl mt-2 "] $ do
-            input_ [type_ "checkbox" ,class_ " mr-8 m-1" ] 
-            span_ [class_ "grow text-sm text-slate-600"] "Authorization"
-            span_ [class_ "text-sm text-slate-500 mx-12"] "[] obj"
-            img_ [src_ "/assets/svgs/dots-vertical.svg", class_ "mx-5"]
+        
 
     

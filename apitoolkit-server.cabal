@@ -36,6 +36,7 @@ library
       Pages.Endpoints.EndpointDetails
       Pages.Endpoints.EndpointList
       Pages.Projects.CreateProject
+      Pages.Projects.ProjectView
       ProcessMessage
       RequestMessages
       RequestMessagesSpec

@@ -1,11 +1,5 @@
 /*
-<<<<<<< HEAD
-! tailwindcss v3.0.16 | MIT License | https://tailwindcss.com
-||||||| parent of 5ee7162 (feat: fix for broken insert endpoint due to field types)
-! tailwindcss v3.0.15 | MIT License | https://tailwindcss.com
-=======
-! tailwindcss v3.0.12 | MIT License | https://tailwindcss.com
->>>>>>> 5ee7162 (feat: fix for broken insert endpoint due to field types)
+! tailwindcss v3.0.17 | MIT License | https://tailwindcss.com
 */
 
 /*
@@ -553,14 +547,10 @@ Ensure the default browser behavior of the `hidden` attribute.
   margin: 0.75rem;
 }
 
-.m-1 {
-  margin: 0.25rem;
-}
-
->>>>>>> 5ee7162 (feat: fix for broken insert endpoint due to field types)
 .m-5 {
   margin: 1.25rem;
 }
+
 .mx-2 {
   margin-left: 0.5rem;
   margin-right: 0.5rem;
@@ -584,28 +574,6 @@ Ensure the default browser behavior of the `hidden` attribute.
 .mx-5 {
   margin-left: 1.25rem;
   margin-right: 1.25rem;
-||||||| parent of 5ee7162 (feat: fix for broken insert endpoint due to field types)
-.m-1 {
-  margin: 0.25rem;
-=======
-.m-3 {
-  margin: 0.75rem;
-}
-
-.mx-2 {
-  margin-left: 0.5rem;
-  margin-right: 0.5rem;
-}
-
-.mx-6 {
-  margin-left: 1.5rem;
-  margin-right: 1.5rem;
-}
-
-.mx-4 {
-  margin-left: 1rem;
-  margin-right: 1rem;
->>>>>>> 5ee7162 (feat: fix for broken insert endpoint due to field types)
 }
 
 .mx-auto {
@@ -644,17 +612,6 @@ Ensure the default browser behavior of the `hidden` attribute.
   margin-bottom: 0.5rem;
 }
 
-<<<<<<< HEAD
-.mt-3 {
-  margin-top: 0.75rem;
-||||||| parent of 5ee7162 (feat: fix for broken insert endpoint due to field types)
-.mt-1 {
-  margin-top: 0.25rem;
-}
-
-.mt-3 {
-  margin-top: 0.75rem;
-=======
 .mt-3 {
   margin-top: 0.75rem;
 }
@@ -665,78 +622,32 @@ Ensure the default browser behavior of the `hidden` attribute.
 
 .ml-2 {
   margin-left: 0.5rem;
->>>>>>> 5ee7162 (feat: fix for broken insert endpoint due to field types)
-}
-
-<<<<<<< HEAD
-.mt-1 {
-  margin-top: 0.25rem;
-||||||| parent of 5ee7162 (feat: fix for broken insert endpoint due to field types)
-.mr-1 {
-  margin-right: 0.25rem;
-=======
-.-mt-8 {
-  margin-top: -2rem;
->>>>>>> 5ee7162 (feat: fix for broken insert endpoint due to field types)
-}
-
-<<<<<<< HEAD
-.ml-2 {
-  margin-left: 0.5rem;
-||||||| parent of 5ee7162 (feat: fix for broken insert endpoint due to field types)
-.mt-6 {
-  margin-top: 1.5rem;
-=======
-.mr-4 {
-  margin-right: 1rem;
->>>>>>> 5ee7162 (feat: fix for broken insert endpoint due to field types)
 }
 
 .mt-5 {
   margin-top: 1.25rem;
 }
 
-<<<<<<< HEAD
 .mr-3 {
   margin-right: 0.75rem;
-||||||| parent of 5ee7162 (feat: fix for broken insert endpoint due to field types)
-.-mr-1 {
-  margin-right: -0.25rem;
-}
-
-.-ml-1 {
-  margin-left: -0.25rem;
-=======
-.mr-1 {
-  margin-right: 0.25rem;
-}
-
-.mt-6 {
-  margin-top: 1.5rem;
-}
-
-.-mr-1 {
-  margin-right: -0.25rem;
-}
-
-.-ml-1 {
-  margin-left: -0.25rem;
->>>>>>> 5ee7162 (feat: fix for broken insert endpoint due to field types)
 }
 
 .mb-5 {
   margin-bottom: 1.25rem;
 }
 
-.mr-8 {
-  margin-right: 2rem;
+.ml-20 {
+  margin-left: 5rem;
+}
+
+.mr-12 {
+  margin-right: 3rem;
 }
 
 .mr-1 {
   margin-right: 0.25rem;
 }
 
-<<<<<<< HEAD
 .mt-6 {
   margin-top: 1.5rem;
 }
@@ -757,29 +668,6 @@ Ensure the default browser behavior of the `hidden` attribute.
   margin-left: 0.75rem;
 }
 
-||||||| parent of 5ee7162 (feat: fix for broken insert endpoint due to field types)
-.ml-2 {
-  margin-left: 0.5rem;
-}
-
-.-mt-3 {
-  margin-top: -0.75rem;
-}
-
-.-mt-10 {
-  margin-top: -2.5rem;
-}
-
-.-mt-8 {
-  margin-top: -2rem;
-}
-
-.mr-4 {
-  margin-right: 1rem;
-}
-
-=======
->>>>>>> 5ee7162 (feat: fix for broken insert endpoint due to field types)
 .block {
   display: block;
 }
@@ -856,22 +744,10 @@ Ensure the default browser behavior of the `hidden` attribute.
   width: 1.5rem;
 }
 
-<<<<<<< HEAD
 .w-2 {
   width: 0.5rem;
 }
 
-.w-5\/6 {
-  width: 83.333333%;
-}
-
-||||||| parent of 5ee7162 (feat: fix for broken insert endpoint due to field types)
-=======
-.w-2 {
-  width: 0.5rem;
-}
-
->>>>>>> 5ee7162 (feat: fix for broken insert endpoint due to field types)
 .w-3 {
   width: 0.75rem;
 }
@@ -964,22 +840,10 @@ Ensure the default browser behavior of the `hidden` attribute.
   justify-items: end;
 }
 
-.justify-items-stretch {
-  justify-items: stretch;
-}
-
-<<<<<<< HEAD
 .gap-3 {
   gap: 0.75rem;
 }
 
-||||||| parent of 5ee7162 (feat: fix for broken insert endpoint due to field types)
-.gap-4 {
-  gap: 1rem;
-}
-
-=======
->>>>>>> 5ee7162 (feat: fix for broken insert endpoint due to field types)
 .space-x-4 > :not([hidden]) ~ :not([hidden]) {
   --tw-space-x-reverse: 0;
   margin-right: calc(1rem * var(--tw-space-x-reverse));
@@ -1006,10 +870,6 @@ Ensure the default browser behavior of the `hidden` attribute.
 
 .self-end {
   align-self: flex-end;
-}
-
-.justify-self-end {
-  justify-self: end;
 }
 
 .overflow-x-auto {
@@ -1087,30 +947,6 @@ Ensure the default browser behavior of the `hidden` attribute.
   border-color: rgb(243 244 246 / var(--tw-border-opacity));
 }
 
-<<<<<<< HEAD
-||||||| parent of 5ee7162 (feat: fix for broken insert endpoint due to field types)
-.border-gray-400 {
-  --tw-border-opacity: 1;
-  border-color: rgb(156 163 175 / var(--tw-border-opacity));
-}
-
-.border-yellow-100 {
-  --tw-border-opacity: 1;
-  border-color: rgb(254 249 195 / var(--tw-border-opacity));
-}
-
-.border-yellow-400 {
-  --tw-border-opacity: 1;
-  border-color: rgb(250 204 21 / var(--tw-border-opacity));
-}
-
-=======
-.border-yellow-400 {
-  --tw-border-opacity: 1;
-  border-color: rgb(250 204 21 / var(--tw-border-opacity));
-}
-
->>>>>>> 5ee7162 (feat: fix for broken insert endpoint due to field types)
 .border-b-slate-300 {
   --tw-border-opacity: 1;
   border-bottom-color: rgb(203 213 225 / var(--tw-border-opacity));
@@ -1141,25 +977,11 @@ Ensure the default browser behavior of the `hidden` attribute.
   background-color: rgb(30 64 175 / var(--tw-bg-opacity));
 }
 
-<<<<<<< HEAD
 .bg-blue-900 {
   --tw-bg-opacity: 1;
   background-color: rgb(30 58 138 / var(--tw-bg-opacity));
 }
 
-||||||| parent of 5ee7162 (feat: fix for broken insert endpoint due to field types)
-=======
-.bg-blue-900 {
-  --tw-bg-opacity: 1;
-  background-color: rgb(30 58 138 / var(--tw-bg-opacity));
-}
-
-.bg-amber-100 {
-  --tw-bg-opacity: 1;
-  background-color: rgb(254 243 199 / var(--tw-bg-opacity));
-}
-
->>>>>>> 5ee7162 (feat: fix for broken insert endpoint due to field types)
 .bg-blue-700\/20 {
   background-color: rgb(29 78 216 / 0.2);
 }
@@ -1200,22 +1022,6 @@ Ensure the default browser behavior of the `hidden` attribute.
 
 .p-1 {
   padding: 0.25rem;
-}
-
-<<<<<<< HEAD
-.p-5 {
-  padding: 1.25rem;
-||||||| parent of 5ee7162 (feat: fix for broken insert endpoint due to field types)
-.p-10 {
-  padding: 2.5rem;
-}
-
-.p-8 {
-  padding: 2rem;
-=======
-.p-8 {
-  padding: 2rem;
->>>>>>> 5ee7162 (feat: fix for broken insert endpoint due to field types)
 }
 
 .p-5 {
@@ -1380,43 +1186,14 @@ Ensure the default browser behavior of the `hidden` attribute.
   color: rgb(51 65 85 / var(--tw-text-opacity));
 }
 
-<<<<<<< HEAD
 .text-slate-600 {
-||||||| parent of 5ee7162 (feat: fix for broken insert endpoint due to field types)
-.text-gray-400 {
-=======
-.text-black {
->>>>>>> 5ee7162 (feat: fix for broken insert endpoint due to field types)
   --tw-text-opacity: 1;
-<<<<<<< HEAD
   color: rgb(71 85 105 / var(--tw-text-opacity));
-||||||| parent of 5ee7162 (feat: fix for broken insert endpoint due to field types)
-  color: rgb(156 163 175 / var(--tw-text-opacity));
-=======
-  color: rgb(0 0 0 / var(--tw-text-opacity));
->>>>>>> 5ee7162 (feat: fix for broken insert endpoint due to field types)
 }
 
-<<<<<<< HEAD
 .text-slate-500 {
-||||||| parent of 5ee7162 (feat: fix for broken insert endpoint due to field types)
-.text-blue-600 {
-=======
-.text-neutral-800 {
->>>>>>> 5ee7162 (feat: fix for broken insert endpoint due to field types)
   --tw-text-opacity: 1;
-<<<<<<< HEAD
   color: rgb(100 116 139 / var(--tw-text-opacity));
-||||||| parent of 5ee7162 (feat: fix for broken insert endpoint due to field types)
-  color: rgb(37 99 235 / var(--tw-text-opacity));
-=======
-  color: rgb(38 38 38 / var(--tw-text-opacity));
-}
-
-.text-red-400 {
-  --tw-text-opacity: 1;
-  color: rgb(248 113 113 / var(--tw-text-opacity));
->>>>>>> 5ee7162 (feat: fix for broken insert endpoint due to field types)
 }
 
 .text-gray-400 {
@@ -1424,23 +1201,7 @@ Ensure the default browser behavior of the `hidden` attribute.
   color: rgb(156 163 175 / var(--tw-text-opacity));
 }
 
-<<<<<<< HEAD
 .text-blue-600 {
-||||||| parent of 5ee7162 (feat: fix for broken insert endpoint due to field types)
-.text-slate-500 {
-=======
-.text-gray-400 {
-  --tw-text-opacity: 1;
-  color: rgb(156 163 175 / var(--tw-text-opacity));
-}
-
-.text-blue-600 {
-  --tw-text-opacity: 1;
-  color: rgb(37 99 235 / var(--tw-text-opacity));
-}
-
-.text-slate-500 {
->>>>>>> 5ee7162 (feat: fix for broken insert endpoint due to field types)
   --tw-text-opacity: 1;
   color: rgb(37 99 235 / var(--tw-text-opacity));
 }
@@ -1453,6 +1214,11 @@ Ensure the default browser behavior of the `hidden` attribute.
 .text-gray-500 {
   --tw-text-opacity: 1;
   color: rgb(107 114 128 / var(--tw-text-opacity));
+}
+
+.text-black {
+  --tw-text-opacity: 1;
+  color: rgb(0 0 0 / var(--tw-text-opacity));
 }
 
 .text-zinc-500 {
@@ -1470,63 +1236,6 @@ Ensure the default browser behavior of the `hidden` attribute.
   color: rgb(255 255 255 / var(--tw-text-opacity));
 }
 
-<<<<<<< HEAD
-||||||| parent of 5ee7162 (feat: fix for broken insert endpoint due to field types)
-.text-slate-800 {
-  --tw-text-opacity: 1;
-  color: rgb(30 41 59 / var(--tw-text-opacity));
-}
-
-.text-slate-400 {
-  --tw-text-opacity: 1;
-  color: rgb(148 163 184 / var(--tw-text-opacity));
-}
-
-.text-gray-800 {
-  --tw-text-opacity: 1;
-  color: rgb(31 41 55 / var(--tw-text-opacity));
-}
-
-.text-neutral-800 {
-  --tw-text-opacity: 1;
-  color: rgb(38 38 38 / var(--tw-text-opacity));
-}
-
-.text-red-700 {
-  --tw-text-opacity: 1;
-  color: rgb(185 28 28 / var(--tw-text-opacity));
-}
-
-.text-red-500 {
-  --tw-text-opacity: 1;
-  color: rgb(239 68 68 / var(--tw-text-opacity));
-}
-
-.text-red-400 {
-  --tw-text-opacity: 1;
-  color: rgb(248 113 113 / var(--tw-text-opacity));
-}
-
-.underline {
-  -webkit-text-decoration-line: underline;
-          text-decoration-line: underline;
-}
-
-.underline-offset-1 {
-  text-underline-offset: 1px;
-}
-
-=======
-.underline {
-  -webkit-text-decoration-line: underline;
-          text-decoration-line: underline;
-}
-
-.underline-offset-1 {
-  text-underline-offset: 1px;
-}
-
->>>>>>> 5ee7162 (feat: fix for broken insert endpoint due to field types)
 .opacity-0 {
   opacity: 0;
 }
