@@ -9,7 +9,6 @@ import Data.UUID as UUID
 import Lucid
 import Network.Wai (Application)
 import qualified Pages.Endpoints.EndpointDetails as EndpointDetails
-import qualified Pages.Projects.ProjectView as ProjectView
 import qualified Pages.Endpoints.EndpointList as EndpointList
 import qualified Pages.Projects.CreateProject as CreateProject
 import Relude
@@ -44,7 +43,6 @@ type API
       = "projects" :> "new" :> Get '[HTML] (OurHeaders (Html ()))
     :<|> "projects" :> "new" :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (Html ())
     :<|> "endpoints" :> "list" :> Get '[HTML] (Html ())
-    :<|> "projects" :> "view" :> Get '[HTML] (Html ())
     :<|> "endpoints" :> Capture "uuid" UUID.UUID :> "details" :> Get '[HTML] (Html ())
     :<|> "assets" :> Raw
 
@@ -61,7 +59,6 @@ server =
   CreateProject.createProjectGetH
     :<|> CreateProject.createProjectPostH
     :<|> pure EndpointList.endpointList
-    :<|> pure ProjectView.projectView
     :<|> endpointDetailsH
     :<|> serveDirectoryWebApp "./static/assets"
 
