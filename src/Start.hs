@@ -1,6 +1,8 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE DisambiguateRecordFields #-}
+{-# LANGUAGE DuplicateRecordFields #-}
 
 module Start
   ( startApp,
@@ -65,10 +67,13 @@ startApp = do
       migrationRes <- Migrations.runMigration conn Migrations.defaultOptions $ MigrationDirectory (Config.migrationsDir envConfig)
       logger <& "migration result: " <> show migrationRes
       poolConn <- Pool.createPool (pure conn) close 1 100000000 50
+      let serverCtx = Config.AuthContext{ env=envConfig,
+                pool = poolConn
+                }
 
       concurrently_
         (pubsubService logger envConfig poolConn)
-        (run (Config.port envConfig) Server.app)
+        (run (Config.port envConfig) $ Server.app serverCtx)
 
 -- pubsubService connects to the pubsub service and listens for  messages,
 -- then it calls the processMessage function to process the messages, and

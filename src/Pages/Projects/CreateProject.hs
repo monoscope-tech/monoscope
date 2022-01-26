@@ -28,6 +28,7 @@ import Pages.BodyWrapper (bodyWrapper)
 import Control.Concurrent (forkIO)
 import Servant
   ( Handler,
+    addHeader,
   )
 import Web.FormUrlEncoded (FromForm) 
 import Data.Valor (Valor, Valid, check1, failIf, validateM)
@@ -36,6 +37,8 @@ import qualified Data.Text as T
 import Data.Default
 import qualified Models.Projects.Projects as Projects
 import qualified Data.Vector as Vector
+import Config
+import Database.PostgreSQL.Entity.DBT ( withPool)
 
 
 data CreateProjectForm = CreateProjectForm 
@@ -59,24 +62,28 @@ createProjectFormV = CreateProjectFormError
     <*> check1 description Valor.pass 
 
 
-createProjectGetH :: Handler (Html ())
+createProjectGetH :: DashboardM (OurHeaders (Html ()))
 createProjectGetH  = do
-  pure $ bodyWrapper "Create Project" $ createProjectBody (def @CreateProjectForm) (def @CreateProjectFormError) 
+   let respBody =  bodyWrapper "Create Project" $ createProjectBody (def @CreateProjectForm) (def @CreateProjectFormError) 
+   pure $ addHeader "HX-Redirect"$ addHeader "HX-Trigger" respBody
+   
 
 
-createProjectPostH :: CreateProjectForm -> Handler (Html ())
+
+createProjectPostH :: CreateProjectForm -> DashboardM(Html ())
 createProjectPostH createP = do
   validationRes <- validateM createProjectFormV createP  
-
-  traceShowM validationRes
-  traceShowM createP
-
   case validationRes of 
-    Left cp -> do
-      -- Projects.insertProject (createProjectFormToModel cp)
-      pure $ createProjectBody (Valor.unValid cp) (def @CreateProjectFormError) 
+    Left cpRaw -> do
+      let cp = Valor.unValid cpRaw
+      pool <- asks pool
+      _ <- liftIO $ withPool pool $  Projects.insertProject (createProjectFormToModel cp)
+
+      pure $ createProjectBody (cp) (def @CreateProjectFormError) 
     Right cpe -> pure $ createProjectBody createP cpe 
 
+----------------------------------------------------------------------------------------------------------
+-- html view
 createProjectBody :: CreateProjectForm -> CreateProjectFormError -> Html ()
 createProjectBody  cp cpe = do 
   section_ [id_ "main-content"] $ do

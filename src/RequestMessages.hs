@@ -144,13 +144,13 @@ fieldsToHash :: [(Text, AE.Value)] -> Text
 fieldsToHash = foldl' (\akk tp -> akk <> "," <> fst tp) ""
 
 -- |
-aeValueToText :: AE.Value -> Text
-aeValueToText (AET.String _) = "string"
-aeValueToText (AET.Number _) = "number"
-aeValueToText AET.Null = "null"
-aeValueToText (AET.Bool _) = "bool"
-aeValueToText (AET.Object _) = "object"
-aeValueToText (AET.Array _) = "array"
+aeValueToFieldType :: AE.Value -> Fields.FieldTypes 
+aeValueToFieldType (AET.String _) = Fields.FTString
+aeValueToFieldType (AET.Number _) = Fields.FTNumber
+aeValueToFieldType AET.Null = Fields.FTNull
+aeValueToFieldType (AET.Bool _) = Fields.FTBool
+aeValueToFieldType (AET.Object _) = Fields.FTObject
+aeValueToFieldType (AET.Array _) = Fields.FTList
 
 -- |
 valueToFormat :: AE.Value -> Text
@@ -188,7 +188,7 @@ fieldsToFieldDTO fieldCategory projectID (keyPath, val) =
         endpoint = UUID.nil,
         projectId = projectID,
         key = snd $ T.breakOnEnd "." keyPath,
-        fieldType = aeValueToText val,
+        fieldType = aeValueToFieldType val,
         fieldTypeOverride = Just "",
         format = valueToFormat val,
         formatOverride = Just "",

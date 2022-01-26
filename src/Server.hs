@@ -22,32 +22,39 @@ import Servant
     Raw,
     ReqBody,
     Server,
+    ServerT,
+    Headers,
+    Header,
     serve,
+    hoistServer,
     FormUrlEncoded,
     type (:<|>) (..),
     type (:>),
   )
 import Servant.HTML.Lucid
 import Servant.Server.StaticFiles
+import  Config   (ctxToHandler, DashboardM, AuthContext, OurHeaders)
+
+
 
 --
 -- API Section
 type API 
-      = "projects" :> "new" :> Get '[HTML] (Html ())
+      = "projects" :> "new" :> Get '[HTML] (OurHeaders (Html ()))
     :<|> "projects" :> "new" :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (Html ())
     :<|> "endpoints" :> "list" :> Get '[HTML] (Html ())
-    :<|> "endpoints" :> Capture "uuid" UUID.UUID :> "details" :> Get '[HTML] (Html ())
+    :<|> "endpoints" :> Capture "uuid" UUID.UUID :> "details" :> Get '[HTML] ( (Html ()))
     :<|> "assets" :> Raw
 
 --
 --
-app :: Application
-app = serve api server
+app :: AuthContext -> Application
+app ctx = serve api $ hoistServer api (ctxToHandler ctx) server
 
 api :: Proxy API
 api = Proxy
 
-server :: Server API
+server :: ServerT API DashboardM
 server =
   CreateProject.createProjectGetH
     :<|> CreateProject.createProjectPostH
@@ -55,5 +62,5 @@ server =
     :<|> endpointDetailsH
     :<|> serveDirectoryWebApp "./static/assets"
 
-endpointDetailsH :: UUID.UUID -> Handler (Html ())
+endpointDetailsH :: UUID.UUID -> DashboardM (Html ())
 endpointDetailsH uuid = pure EndpointDetails.endpointDetails

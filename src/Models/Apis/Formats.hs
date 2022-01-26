@@ -42,15 +42,14 @@ import Optics.Operators
 import Optics.TH
 import Relude
 import qualified Relude.Unsafe as Unsafe
-
--- data FieldType = Unknown|Keyword|Text|Number|Boolean|DateTime
+import qualified Models.Apis.Fields as Fields
 
 data Format = Format
   { createdAt :: ZonedTime,
     updatedAt :: ZonedTime,
     id :: UUID.UUID,
     fieldId :: UUID.UUID,
-    fieldType :: Text,
+    fieldType :: Fields.FieldTypes,
     fieldFormat :: Text,
     examples :: Vector.Vector Text
   }

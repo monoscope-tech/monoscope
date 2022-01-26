@@ -61,6 +61,8 @@ data Project = Project
     (PET.Entity)
     via (PET.GenericEntity '[PET.Schema "projects", PET.TableName "projects", PET.PrimaryKey "id", PET.FieldModifiers '[PET.CamelToSnake]] Project)
 
+makeFieldLabelsNoPrefix ''Project
+
 data CreateProject = CreateProject
   { title :: Text,
     description :: Text
@@ -69,12 +71,15 @@ data CreateProject = CreateProject
   deriving anyclass (FromRow, ToRow)
   deriving
     (PET.Entity)
-    via (PET.GenericEntity '[PET.Schema "projects", PET.TableName "projects", PET.PrimaryKey "id", PET.FieldModifiers '[PET.CamelToSnake]] Project)
+    via (PET.GenericEntity '[PET.Schema "projects", PET.TableName "projects", PET.PrimaryKey "id", PET.FieldModifiers '[PET.CamelToSnake]] CreateProject)
 
-
-
-makeFieldLabelsNoPrefix ''Project
+makeFieldLabelsNoPrefix ''CreateProject
 
 
 insertProject :: CreateProject -> PgT.DBT IO ()
-insertProject = insert @CreateProject 
+insertProject = insert @CreateProject
+
+-- insertProject :: CreateProject -> PgT.DBT IO Int64
+-- insertProject cp = execute Insert q (cp ^. #title, cp ^. #description )
+--   where 
+--     q = [sql| insert into projects.projects (title, description) values (?,?) |]

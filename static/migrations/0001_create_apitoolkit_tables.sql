@@ -168,7 +168,7 @@ CREATE TABLE IF NOT EXISTS apis.endpoints
 );
 SELECT manage_updated_at('apis.endpoints');
 
-CREATE TYPE apis.field_type AS ENUM ('unknown','string','number','bool','object', 'list');
+CREATE TYPE apis.field_type AS ENUM ('unknown','string','number','bool','object', 'list', 'null');
 CREATE TYPE apis.field_category AS ENUM ('queryparam', 'request_header','response_headers', 'request_body', 'response_body');
 CREATE TABLE IF NOT EXISTS apis.fields
 (
@@ -178,8 +178,7 @@ CREATE TABLE IF NOT EXISTS apis.fields
     project_id uuid NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE ON UPDATE CASCADE,
     endpoint uuid NOT NULL,
     key text  NOT NULL DEFAULT ''::text,
-    -- field_type field_type NOT NULL DEFAULT 'unknown'::field_type,
-    field_type text NOT NULL DEFAULT 'unknown',
+    field_type apis.field_type NOT NULL DEFAULT 'unknown'::apis.field_type,
     field_type_override text,
     format text NOT NULL DEFAULT 'none'::text,
     format_override text NOT NULL DEFAULT '',
@@ -207,7 +206,7 @@ CREATE TABLE IF NOT EXISTS apis.formats
 SELECT manage_updated_at('apis.formats');
 
 CREATE OR REPLACE FUNCTION apis.create_field_and_formats(
-  i_project_id UUID, i_endpoint UUID, i_key TEXT, i_field_type TEXT, i_field_type_override TEXT, 
+  i_project_id UUID, i_endpoint UUID, i_key TEXT, i_field_type apis.field_type, i_field_type_override TEXT, 
   i_format TEXT, i_format_override TEXT, i_description TEXT, i_key_path TEXT[], i_key_path_str TEXT, 
   i_field_category TEXT, i_examples TEXT[], i_examples_max_count INT 
 )
