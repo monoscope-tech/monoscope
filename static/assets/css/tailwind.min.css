@@ -1,17 +1,5 @@
 /*
-<<<<<<< HEAD
-! tailwindcss v3.0.17 | MIT License | https://tailwindcss.com
-||||||| parent of f5e1a26 (list projects from db)
-<<<<<<< HEAD
-! tailwindcss v3.0.16 | MIT License | https://tailwindcss.com
-||||||| parent of 5ee7162 (feat: fix for broken insert endpoint due to field types)
-! tailwindcss v3.0.15 | MIT License | https://tailwindcss.com
-=======
 ! tailwindcss v3.0.12 | MIT License | https://tailwindcss.com
->>>>>>> 5ee7162 (feat: fix for broken insert endpoint due to field types)
-=======
-! tailwindcss v3.0.12 | MIT License | https://tailwindcss.com
->>>>>>> f5e1a26 (list projects from db)
 */
 
 /*
@@ -608,11 +596,6 @@ Ensure the default browser behavior of the `hidden` attribute.
   margin-bottom: 0.5rem;
 }
 
-.my-4 {
-  margin-top: 1rem;
-  margin-bottom: 1rem;
-}
-
 .my-5 {
   margin-top: 1.25rem;
   margin-bottom: 1.25rem;
@@ -690,53 +673,14 @@ Ensure the default browser behavior of the `hidden` attribute.
   margin-left: 0.75rem;
 }
 
-<<<<<<< HEAD
-||||||| parent of f5e1a26 (list projects from db)
-||||||| parent of 5ee7162 (feat: fix for broken insert endpoint due to field types)
-.ml-2 {
-  margin-left: 0.5rem;
-}
-
-.-mt-3 {
-  margin-top: -0.75rem;
-}
-
-.-mt-10 {
-  margin-top: -2.5rem;
-}
-
-.-mt-8 {
-  margin-top: -2rem;
-}
-
-.mr-4 {
-  margin-right: 1rem;
-}
-
-=======
->>>>>>> 5ee7162 (feat: fix for broken insert endpoint due to field types)
-=======
-.ml-5 {
-  margin-left: 1.25rem;
-}
-
-.mb-20 {
-  margin-bottom: 5rem;
-}
-
-.mb-12 {
-  margin-bottom: 3rem;
-}
-
-.mb-8 {
-  margin-bottom: 2rem;
-}
-
 .mb-6 {
   margin-bottom: 1.5rem;
 }
 
->>>>>>> f5e1a26 (list projects from db)
+.ml-5 {
+  margin-left: 1.25rem;
+}
+
 .block {
   display: block;
 }
@@ -813,34 +757,10 @@ Ensure the default browser behavior of the `hidden` attribute.
   width: 1.5rem;
 }
 
-<<<<<<< HEAD
 .w-2 {
   width: 0.5rem;
 }
 
-||||||| parent of f5e1a26 (list projects from db)
-<<<<<<< HEAD
-.w-2 {
-  width: 0.5rem;
-}
-
-.w-5\/6 {
-  width: 83.333333%;
-}
-
-||||||| parent of 5ee7162 (feat: fix for broken insert endpoint due to field types)
-=======
-.w-2 {
-  width: 0.5rem;
-}
-
->>>>>>> 5ee7162 (feat: fix for broken insert endpoint due to field types)
-=======
-.w-2 {
-  width: 0.5rem;
-}
-
->>>>>>> f5e1a26 (list projects from db)
 .w-3 {
   width: 0.75rem;
 }
@@ -873,13 +793,10 @@ Ensure the default browser behavior of the `hidden` attribute.
   width: 33.333333%;
 }
 
-<<<<<<< HEAD
 .w-5 {
   width: 1.25rem;
 }
 
-||||||| parent of f5e1a26 (list projects from db)
-=======
 .min-w-0 {
   min-width: 0px;
 }
@@ -892,7 +809,6 @@ Ensure the default browser behavior of the `hidden` attribute.
   flex-shrink: 0;
 }
 
->>>>>>> f5e1a26 (list projects from db)
 .flex-grow {
   flex-grow: 1;
 }
@@ -953,19 +869,6 @@ Ensure the default browser behavior of the `hidden` attribute.
   justify-items: end;
 }
 
-<<<<<<< HEAD
-||||||| parent of f5e1a26 (list projects from db)
-.justify-items-stretch {
-  justify-items: stretch;
-}
-
-<<<<<<< HEAD
-=======
-.justify-items-stretch {
-  justify-items: stretch;
-}
-
->>>>>>> f5e1a26 (list projects from db)
 .gap-3 {
   gap: 0.75rem;
 }
@@ -1015,22 +918,10 @@ Ensure the default browser behavior of the `hidden` attribute.
   align-self: flex-end;
 }
 
-<<<<<<< HEAD
-||||||| parent of f5e1a26 (list projects from db)
-.justify-self-end {
-  justify-self: end;
-}
-
-=======
-.justify-self-end {
-  justify-self: end;
-}
-
 .overflow-hidden {
   overflow: hidden;
 }
 
->>>>>>> f5e1a26 (list projects from db)
 .overflow-x-auto {
   overflow-x: auto;
 }
@@ -1146,39 +1037,11 @@ Ensure the default browser behavior of the `hidden` attribute.
   background-color: rgb(30 64 175 / var(--tw-bg-opacity));
 }
 
-<<<<<<< HEAD
 .bg-blue-900 {
   --tw-bg-opacity: 1;
   background-color: rgb(30 58 138 / var(--tw-bg-opacity));
 }
 
-||||||| parent of f5e1a26 (list projects from db)
-<<<<<<< HEAD
-.bg-blue-900 {
-  --tw-bg-opacity: 1;
-  background-color: rgb(30 58 138 / var(--tw-bg-opacity));
-}
-
-||||||| parent of 5ee7162 (feat: fix for broken insert endpoint due to field types)
-=======
-.bg-blue-900 {
-  --tw-bg-opacity: 1;
-  background-color: rgb(30 58 138 / var(--tw-bg-opacity));
-}
-
-.bg-amber-100 {
-  --tw-bg-opacity: 1;
-  background-color: rgb(254 243 199 / var(--tw-bg-opacity));
-}
-
->>>>>>> 5ee7162 (feat: fix for broken insert endpoint due to field types)
-=======
-.bg-blue-900 {
-  --tw-bg-opacity: 1;
-  background-color: rgb(30 58 138 / var(--tw-bg-opacity));
-}
-
->>>>>>> f5e1a26 (list projects from db)
 .bg-blue-700\/20 {
   background-color: rgb(29 78 216 / 0.2);
 }
@@ -1295,16 +1158,6 @@ Ensure the default browser behavior of the `hidden` attribute.
   padding-bottom: 2.5rem;
 }
 
-.py-8 {
-  padding-top: 2rem;
-  padding-bottom: 2rem;
-}
-
-.px-8 {
-  padding-left: 2rem;
-  padding-right: 2rem;
-}
-
 .pr-5 {
   padding-right: 1.25rem;
 }
@@ -1413,41 +1266,11 @@ Ensure the default browser behavior of the `hidden` attribute.
   color: rgb(156 163 175 / var(--tw-text-opacity));
 }
 
-<<<<<<< HEAD
 .text-blue-600 {
   --tw-text-opacity: 1;
   color: rgb(37 99 235 / var(--tw-text-opacity));
 }
 
-||||||| parent of f5e1a26 (list projects from db)
-<<<<<<< HEAD
-.text-blue-600 {
-||||||| parent of 5ee7162 (feat: fix for broken insert endpoint due to field types)
-.text-slate-500 {
-=======
-.text-gray-400 {
-  --tw-text-opacity: 1;
-  color: rgb(156 163 175 / var(--tw-text-opacity));
-}
-
-.text-blue-600 {
-  --tw-text-opacity: 1;
-  color: rgb(37 99 235 / var(--tw-text-opacity));
-}
-
-.text-slate-500 {
->>>>>>> 5ee7162 (feat: fix for broken insert endpoint due to field types)
-  --tw-text-opacity: 1;
-  color: rgb(37 99 235 / var(--tw-text-opacity));
-}
-
-=======
-.text-blue-600 {
-  --tw-text-opacity: 1;
-  color: rgb(37 99 235 / var(--tw-text-opacity));
-}
-
->>>>>>> f5e1a26 (list projects from db)
 .text-gray-200 {
   --tw-text-opacity: 1;
   color: rgb(229 231 235 / var(--tw-text-opacity));
@@ -1478,72 +1301,11 @@ Ensure the default browser behavior of the `hidden` attribute.
   color: rgb(255 255 255 / var(--tw-text-opacity));
 }
 
-<<<<<<< HEAD
-||||||| parent of f5e1a26 (list projects from db)
-<<<<<<< HEAD
-||||||| parent of 5ee7162 (feat: fix for broken insert endpoint due to field types)
-.text-slate-800 {
-  --tw-text-opacity: 1;
-  color: rgb(30 41 59 / var(--tw-text-opacity));
-}
-
-.text-slate-400 {
-  --tw-text-opacity: 1;
-  color: rgb(148 163 184 / var(--tw-text-opacity));
-}
-
-.text-gray-800 {
-  --tw-text-opacity: 1;
-  color: rgb(31 41 55 / var(--tw-text-opacity));
-}
-
-.text-neutral-800 {
-  --tw-text-opacity: 1;
-  color: rgb(38 38 38 / var(--tw-text-opacity));
-}
-
-.text-red-700 {
-  --tw-text-opacity: 1;
-  color: rgb(185 28 28 / var(--tw-text-opacity));
-}
-
-.text-red-500 {
-  --tw-text-opacity: 1;
-  color: rgb(239 68 68 / var(--tw-text-opacity));
-}
-
-.text-red-400 {
-  --tw-text-opacity: 1;
-  color: rgb(248 113 113 / var(--tw-text-opacity));
-}
-
-.underline {
-  -webkit-text-decoration-line: underline;
-          text-decoration-line: underline;
-}
-
-.underline-offset-1 {
-  text-underline-offset: 1px;
-}
-
-=======
-.underline {
-  -webkit-text-decoration-line: underline;
-          text-decoration-line: underline;
-}
-
-.underline-offset-1 {
-  text-underline-offset: 1px;
-}
-
->>>>>>> 5ee7162 (feat: fix for broken insert endpoint due to field types)
-=======
 .text-indigo-600 {
   --tw-text-opacity: 1;
   color: rgb(79 70 229 / var(--tw-text-opacity));
 }
 
->>>>>>> f5e1a26 (list projects from db)
 .opacity-0 {
   opacity: 0;
 }
