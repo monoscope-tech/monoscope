@@ -36,7 +36,7 @@ import Servant.HTML.Lucid
 import Servant.Server.StaticFiles
 import  Config   (ctxToHandler, DashboardM, AuthContext, HeadersTriggerRedirect)
 
-
+import Pages.Endpoints.EndpointList
 
 --
 -- API Section
@@ -60,10 +60,16 @@ server :: ServerT API DashboardM
 server =
   CreateProject.createProjectGetH
     :<|> CreateProject.createProjectPostH
+<<<<<<< HEAD
     :<|> ListProjects.listProjectsGetH
     :<|> pure EndpointList.endpointList
+=======
+    -- :<|> pure EndpointList.endpointList
+    :<|> endpointList
+>>>>>>> server.hs is not compiling, so I cant confirm how endpointlist will render
     :<|> endpointDetailsH
     :<|> serveDirectoryWebApp "./static/assets"
 
 endpointDetailsH :: UUID.UUID -> DashboardM (Html ())
 endpointDetailsH uuid = pure EndpointDetails.endpointDetails
+

@@ -1,6 +1,9 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedLists #-}
+{-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE QuasiQuotes #-}
 
 module Pages.Endpoints.EndpointList (endpointList) where
@@ -13,8 +16,21 @@ import Relude
 import Servant.HTML.Lucid
 import Text.RawString.QQ
 
-endpointList :: Html ()
-endpointList = bodyWrapper "Endpoint List" $ do
+import Models.Apis.Endpoints
+import Data.Vector (Vector)
+import Database.PostgreSQL.Transact (DBT)
+import GHC.Generics ()
+import Database.PostgreSQL.Entity
+import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, queryOne,
+                                       query_)
+
+endPointHandler :: DBT IO (Vector Endpoint) 
+endPointHandler = do
+  maybeEndpoint <- query_ Select (_select @Endpoint)
+  return maybeEndpoint
+
+endpointList :: Maybe Endpoint -> Html ()
+endpointList endPointHandler = bodyWrapper "Endpoint List" $ do
   div_ [class_ "container mx-auto px-4"] $ do
     div_ [class_ "flex justify-between"] $ do
       h3_ [class_ "text-xl text-slate-700"] "w-bank Endpoints"
@@ -43,7 +59,7 @@ endpointList = bodyWrapper "Endpoint List" $ do
       --table head
       table_ [class_ "table-auto w-full  mt-6"] $ do
         thead_ $ do
-          tr_ [class_ "border-b border-b-slate-300 p-10ç "]$do
+          tr_ [class_ "border-b border-b-slate-300 p-10ç "]$ do
             th_ [class_ "text-left "] $ do
               input_ [type_ "checkbox"]
             th_ [class_ "text-left text-sm text-gray-400 font-normal "] "ENDPOINTS"
@@ -53,11 +69,12 @@ endpointList = bodyWrapper "Endpoint List" $ do
             th_ [class_ "text-left text-sm text-gray-400 font-normal"] "AVG LATENCY"
             th_ [class_ "text-left text-sm text-gray-400 font-normal"] "FLAG"
         tbody_ $ do
-          tr_ [class_ "border-b border-b-slate-300"] $do
+          tr_ [class_ "border-b border-b-slate-300"] $ do
             td_ [class_ "text-left pr-4 "] $ do
               input_ [type_ "checkbox"]
             td_ [class_ "flex flex-row"] $ do 
               div_ [class_ "w-25 rounded-lg text-center text-white bg-green-400 p-2 m-2"] "POST"
+            td_ [class_ " text-base text-slate-500 font-normal"] (show endPointHandler)
             td_ [class_ " text-base text-slate-500 font-normal"] "api/students/tests/scores"
             td_ [class_ " text-sm text-gray-400 font-normal"] "4500"
             td_ [class_ " text-sm text-slate-500 font-normal"] "200"
