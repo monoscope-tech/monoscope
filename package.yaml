@@ -6,7 +6,22 @@ author:              "Author name here"
 maintainer:          "example@example.com"
 copyright:           "2021 Author name here"
 
-default-extensions: NoImplicitPrelude
+default-extensions: 
+  - NoImplicitPrelude
+  - DerivingStrategies
+  - TypeApplications
+  - DataKinds
+  - DerivingVia
+  - DerivingStrategies
+  - DeriveAnyClass
+  - DeriveGeneric
+  - RecordWildCards
+  - QuasiQuotes
+  - OverloadedStrings
+  - OverloadedLists
+  - ExtendedDefaultRules
+  - OverloadedLabels
+
 
 extra-source-files:
 - README.md

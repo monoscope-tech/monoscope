@@ -1,5 +1,17 @@
 /*
+<<<<<<< HEAD
 ! tailwindcss v3.0.17 | MIT License | https://tailwindcss.com
+||||||| parent of f5e1a26 (list projects from db)
+<<<<<<< HEAD
+! tailwindcss v3.0.16 | MIT License | https://tailwindcss.com
+||||||| parent of 5ee7162 (feat: fix for broken insert endpoint due to field types)
+! tailwindcss v3.0.15 | MIT License | https://tailwindcss.com
+=======
+! tailwindcss v3.0.12 | MIT License | https://tailwindcss.com
+>>>>>>> 5ee7162 (feat: fix for broken insert endpoint due to field types)
+=======
+! tailwindcss v3.0.12 | MIT License | https://tailwindcss.com
+>>>>>>> f5e1a26 (list projects from db)
 */
 
 /*
@@ -678,6 +690,53 @@ Ensure the default browser behavior of the `hidden` attribute.
   margin-left: 0.75rem;
 }
 
+<<<<<<< HEAD
+||||||| parent of f5e1a26 (list projects from db)
+||||||| parent of 5ee7162 (feat: fix for broken insert endpoint due to field types)
+.ml-2 {
+  margin-left: 0.5rem;
+}
+
+.-mt-3 {
+  margin-top: -0.75rem;
+}
+
+.-mt-10 {
+  margin-top: -2.5rem;
+}
+
+.-mt-8 {
+  margin-top: -2rem;
+}
+
+.mr-4 {
+  margin-right: 1rem;
+}
+
+=======
+>>>>>>> 5ee7162 (feat: fix for broken insert endpoint due to field types)
+=======
+.ml-5 {
+  margin-left: 1.25rem;
+}
+
+.mb-20 {
+  margin-bottom: 5rem;
+}
+
+.mb-12 {
+  margin-bottom: 3rem;
+}
+
+.mb-8 {
+  margin-bottom: 2rem;
+}
+
+.mb-6 {
+  margin-bottom: 1.5rem;
+}
+
+>>>>>>> f5e1a26 (list projects from db)
 .block {
   display: block;
 }
@@ -754,10 +813,34 @@ Ensure the default browser behavior of the `hidden` attribute.
   width: 1.5rem;
 }
 
+<<<<<<< HEAD
 .w-2 {
   width: 0.5rem;
 }
 
+||||||| parent of f5e1a26 (list projects from db)
+<<<<<<< HEAD
+.w-2 {
+  width: 0.5rem;
+}
+
+.w-5\/6 {
+  width: 83.333333%;
+}
+
+||||||| parent of 5ee7162 (feat: fix for broken insert endpoint due to field types)
+=======
+.w-2 {
+  width: 0.5rem;
+}
+
+>>>>>>> 5ee7162 (feat: fix for broken insert endpoint due to field types)
+=======
+.w-2 {
+  width: 0.5rem;
+}
+
+>>>>>>> f5e1a26 (list projects from db)
 .w-3 {
   width: 0.75rem;
 }
@@ -790,10 +873,26 @@ Ensure the default browser behavior of the `hidden` attribute.
   width: 33.333333%;
 }
 
+<<<<<<< HEAD
 .w-5 {
   width: 1.25rem;
 }
 
+||||||| parent of f5e1a26 (list projects from db)
+=======
+.min-w-0 {
+  min-width: 0px;
+}
+
+.flex-1 {
+  flex: 1 1 0%;
+}
+
+.flex-shrink-0 {
+  flex-shrink: 0;
+}
+
+>>>>>>> f5e1a26 (list projects from db)
 .flex-grow {
   flex-grow: 1;
 }
@@ -854,6 +953,19 @@ Ensure the default browser behavior of the `hidden` attribute.
   justify-items: end;
 }
 
+<<<<<<< HEAD
+||||||| parent of f5e1a26 (list projects from db)
+.justify-items-stretch {
+  justify-items: stretch;
+}
+
+<<<<<<< HEAD
+=======
+.justify-items-stretch {
+  justify-items: stretch;
+}
+
+>>>>>>> f5e1a26 (list projects from db)
 .gap-3 {
   gap: 0.75rem;
 }
@@ -882,12 +994,51 @@ Ensure the default browser behavior of the `hidden` attribute.
   margin-left: calc(0.75rem * calc(1 - var(--tw-space-x-reverse)));
 }
 
+.-space-x-1 > :not([hidden]) ~ :not([hidden]) {
+  --tw-space-x-reverse: 0;
+  margin-right: calc(-0.25rem * var(--tw-space-x-reverse));
+  margin-left: calc(-0.25rem * calc(1 - var(--tw-space-x-reverse)));
+}
+
+.divide-y > :not([hidden]) ~ :not([hidden]) {
+  --tw-divide-y-reverse: 0;
+  border-top-width: calc(1px * calc(1 - var(--tw-divide-y-reverse)));
+  border-bottom-width: calc(1px * var(--tw-divide-y-reverse));
+}
+
+.divide-gray-200 > :not([hidden]) ~ :not([hidden]) {
+  --tw-divide-opacity: 1;
+  border-color: rgb(229 231 235 / var(--tw-divide-opacity));
+}
+
 .self-end {
   align-self: flex-end;
 }
 
+<<<<<<< HEAD
+||||||| parent of f5e1a26 (list projects from db)
+.justify-self-end {
+  justify-self: end;
+}
+
+=======
+.justify-self-end {
+  justify-self: end;
+}
+
+.overflow-hidden {
+  overflow: hidden;
+}
+
+>>>>>>> f5e1a26 (list projects from db)
 .overflow-x-auto {
   overflow-x: auto;
+}
+
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .rounded-md {
@@ -912,6 +1063,10 @@ Ensure the default browser behavior of the `hidden` attribute.
 
 .rounded-3xl {
   border-radius: 1.5rem;
+}
+
+.rounded-full {
+  border-radius: 9999px;
 }
 
 .border-0 {
@@ -991,11 +1146,39 @@ Ensure the default browser behavior of the `hidden` attribute.
   background-color: rgb(30 64 175 / var(--tw-bg-opacity));
 }
 
+<<<<<<< HEAD
 .bg-blue-900 {
   --tw-bg-opacity: 1;
   background-color: rgb(30 58 138 / var(--tw-bg-opacity));
 }
 
+||||||| parent of f5e1a26 (list projects from db)
+<<<<<<< HEAD
+.bg-blue-900 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(30 58 138 / var(--tw-bg-opacity));
+}
+
+||||||| parent of 5ee7162 (feat: fix for broken insert endpoint due to field types)
+=======
+.bg-blue-900 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(30 58 138 / var(--tw-bg-opacity));
+}
+
+.bg-amber-100 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(254 243 199 / var(--tw-bg-opacity));
+}
+
+>>>>>>> 5ee7162 (feat: fix for broken insert endpoint due to field types)
+=======
+.bg-blue-900 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(30 58 138 / var(--tw-bg-opacity));
+}
+
+>>>>>>> f5e1a26 (list projects from db)
 .bg-blue-700\/20 {
   background-color: rgb(29 78 216 / 0.2);
 }
@@ -1016,6 +1199,11 @@ Ensure the default browser behavior of the `hidden` attribute.
 
 .bg-\[\#304FFD\]\/20 {
   background-color: rgb(48 79 253 / 0.2);
+}
+
+.bg-blue-400 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(96 165 250 / var(--tw-bg-opacity));
 }
 
 .p-4 {
@@ -1225,11 +1413,41 @@ Ensure the default browser behavior of the `hidden` attribute.
   color: rgb(156 163 175 / var(--tw-text-opacity));
 }
 
+<<<<<<< HEAD
 .text-blue-600 {
   --tw-text-opacity: 1;
   color: rgb(37 99 235 / var(--tw-text-opacity));
 }
 
+||||||| parent of f5e1a26 (list projects from db)
+<<<<<<< HEAD
+.text-blue-600 {
+||||||| parent of 5ee7162 (feat: fix for broken insert endpoint due to field types)
+.text-slate-500 {
+=======
+.text-gray-400 {
+  --tw-text-opacity: 1;
+  color: rgb(156 163 175 / var(--tw-text-opacity));
+}
+
+.text-blue-600 {
+  --tw-text-opacity: 1;
+  color: rgb(37 99 235 / var(--tw-text-opacity));
+}
+
+.text-slate-500 {
+>>>>>>> 5ee7162 (feat: fix for broken insert endpoint due to field types)
+  --tw-text-opacity: 1;
+  color: rgb(37 99 235 / var(--tw-text-opacity));
+}
+
+=======
+.text-blue-600 {
+  --tw-text-opacity: 1;
+  color: rgb(37 99 235 / var(--tw-text-opacity));
+}
+
+>>>>>>> f5e1a26 (list projects from db)
 .text-gray-200 {
   --tw-text-opacity: 1;
   color: rgb(229 231 235 / var(--tw-text-opacity));
@@ -1260,6 +1478,72 @@ Ensure the default browser behavior of the `hidden` attribute.
   color: rgb(255 255 255 / var(--tw-text-opacity));
 }
 
+<<<<<<< HEAD
+||||||| parent of f5e1a26 (list projects from db)
+<<<<<<< HEAD
+||||||| parent of 5ee7162 (feat: fix for broken insert endpoint due to field types)
+.text-slate-800 {
+  --tw-text-opacity: 1;
+  color: rgb(30 41 59 / var(--tw-text-opacity));
+}
+
+.text-slate-400 {
+  --tw-text-opacity: 1;
+  color: rgb(148 163 184 / var(--tw-text-opacity));
+}
+
+.text-gray-800 {
+  --tw-text-opacity: 1;
+  color: rgb(31 41 55 / var(--tw-text-opacity));
+}
+
+.text-neutral-800 {
+  --tw-text-opacity: 1;
+  color: rgb(38 38 38 / var(--tw-text-opacity));
+}
+
+.text-red-700 {
+  --tw-text-opacity: 1;
+  color: rgb(185 28 28 / var(--tw-text-opacity));
+}
+
+.text-red-500 {
+  --tw-text-opacity: 1;
+  color: rgb(239 68 68 / var(--tw-text-opacity));
+}
+
+.text-red-400 {
+  --tw-text-opacity: 1;
+  color: rgb(248 113 113 / var(--tw-text-opacity));
+}
+
+.underline {
+  -webkit-text-decoration-line: underline;
+          text-decoration-line: underline;
+}
+
+.underline-offset-1 {
+  text-underline-offset: 1px;
+}
+
+=======
+.underline {
+  -webkit-text-decoration-line: underline;
+          text-decoration-line: underline;
+}
+
+.underline-offset-1 {
+  text-underline-offset: 1px;
+}
+
+>>>>>>> 5ee7162 (feat: fix for broken insert endpoint due to field types)
+=======
+.text-indigo-600 {
+  --tw-text-opacity: 1;
+  color: rgb(79 70 229 / var(--tw-text-opacity));
+}
+
+>>>>>>> f5e1a26 (list projects from db)
 .opacity-0 {
   opacity: 0;
 }
@@ -1274,9 +1558,26 @@ Ensure the default browser behavior of the `hidden` attribute.
   box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
 }
 
+.shadow {
+  --tw-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+  --tw-shadow-colored: 0 1px 3px 0 var(--tw-shadow-color), 0 1px 2px -1px var(--tw-shadow-color);
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+}
+
 .shadow-indigo-200 {
   --tw-shadow-color: #c7d2fe;
   --tw-shadow: var(--tw-shadow-colored);
+}
+
+.ring-2 {
+  --tw-ring-offset-shadow: var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);
+  --tw-ring-shadow: var(--tw-ring-inset) 0 0 0 calc(2px + var(--tw-ring-offset-width)) var(--tw-ring-color);
+  box-shadow: var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow, 0 0 #0000);
+}
+
+.ring-white {
+  --tw-ring-opacity: 1;
+  --tw-ring-color: rgb(255 255 255 / var(--tw-ring-opacity));
 }
 
 .transition {
@@ -1322,7 +1623,43 @@ body {
   background-color: rgb(243 244 246 / var(--tw-bg-opacity));
 }
 
+.hover\:bg-gray-50:hover {
+  --tw-bg-opacity: 1;
+  background-color: rgb(249 250 251 / var(--tw-bg-opacity));
+}
+
 .focus\:outline-none:focus {
   outline: 2px solid transparent;
   outline-offset: 2px;
+}
+
+@media (min-width: 640px) {
+  .sm\:mt-0 {
+    margin-top: 0px;
+  }
+
+  .sm\:ml-5 {
+    margin-left: 1.25rem;
+  }
+
+  .sm\:flex {
+    display: flex;
+  }
+
+  .sm\:items-center {
+    align-items: center;
+  }
+
+  .sm\:justify-between {
+    justify-content: space-between;
+  }
+
+  .sm\:rounded-md {
+    border-radius: 0.375rem;
+  }
+
+  .sm\:px-6 {
+    padding-left: 1.5rem;
+    padding-right: 1.5rem;
+  }
 }

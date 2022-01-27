@@ -32,10 +32,12 @@ library
       Models.Apis.RequestDumps
       Models.Projects.ProjectMembers
       Models.Projects.Projects
+      Models.Users.Users
       Pages.BodyWrapper
       Pages.Endpoints.EndpointDetails
       Pages.Endpoints.EndpointList
       Pages.Projects.CreateProject
+      Pages.Projects.ListProjects
       Pages.Projects.ProjectView
       ProcessMessage
       RequestMessages
@@ -49,6 +51,19 @@ library
       src
   default-extensions:
       NoImplicitPrelude
+      DerivingStrategies
+      TypeApplications
+      DataKinds
+      DerivingVia
+      DerivingStrategies
+      DeriveAnyClass
+      DeriveGeneric
+      RecordWildCards
+      QuasiQuotes
+      OverloadedStrings
+      OverloadedLists
+      ExtendedDefaultRules
+      OverloadedLabels
   build-depends:
       aeson
     , aeson-qq
@@ -105,6 +120,19 @@ executable apitoolkit-server-exe
       app
   default-extensions:
       NoImplicitPrelude
+      DerivingStrategies
+      TypeApplications
+      DataKinds
+      DerivingVia
+      DerivingStrategies
+      DeriveAnyClass
+      DeriveGeneric
+      RecordWildCards
+      QuasiQuotes
+      OverloadedStrings
+      OverloadedLists
+      ExtendedDefaultRules
+      OverloadedLabels
   ghc-options: -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       aeson
@@ -164,6 +192,19 @@ test-suite apitoolkit-server-test
       test
   default-extensions:
       NoImplicitPrelude
+      DerivingStrategies
+      TypeApplications
+      DataKinds
+      DerivingVia
+      DerivingStrategies
+      DeriveAnyClass
+      DeriveGeneric
+      RecordWildCards
+      QuasiQuotes
+      OverloadedStrings
+      OverloadedLists
+      ExtendedDefaultRules
+      OverloadedLabels
   ghc-options: -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       aeson

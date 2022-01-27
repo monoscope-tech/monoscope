@@ -1,17 +1,7 @@
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DerivingVia #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE QuasiQuotes #-}
-{-# LANGUAGE DeriveAnyClass #-}
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
-{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE NamedFieldPuns #-}
-
-
 
 
 module Pages.Projects.CreateProject (
@@ -29,6 +19,7 @@ import Control.Concurrent (forkIO)
 import Servant
   ( Handler,
     addHeader,
+    noHeader,
   )
 import Web.FormUrlEncoded (FromForm) 
 import Data.Valor (Valor, Valid, check1, failIf, validateM)
@@ -61,16 +52,16 @@ createProjectFormV = CreateProjectFormError
     <$> check1 title (failIf ["name can't be empty"] T.null)
     <*> check1 description Valor.pass 
 
-
-createProjectGetH :: DashboardM (OurHeaders (Html ()))
+----------------------------------------------------------------------------------------------------------
+-- createProjectGetH is the handler for the create projects page
+createProjectGetH :: DashboardM (Html ())
 createProjectGetH  = do
-   let respBody =  bodyWrapper "Create Project" $ createProjectBody (def @CreateProjectForm) (def @CreateProjectFormError) 
-   pure $ addHeader "HX-Redirect"$ addHeader "HX-Trigger" respBody
-   
+   pure $  bodyWrapper "Create Project" $ createProjectBody (def @CreateProjectForm) (def @CreateProjectFormError) 
 
-
-
-createProjectPostH :: CreateProjectForm -> DashboardM(Html ())
+----------------------------------------------------------------------------------------------------------
+-- createProjectPostH is the handler for the create projects page form handling. 
+-- It processes post requests and is expected to return a redirect header and a hyperscript event trigger header.
+createProjectPostH :: CreateProjectForm -> DashboardM (HeadersTriggerRedirect (Html ()))
 createProjectPostH createP = do
   validationRes <- validateM createProjectFormV createP  
   case validationRes of 
@@ -79,8 +70,8 @@ createProjectPostH createP = do
       pool <- asks pool
       _ <- liftIO $ withPool pool $  Projects.insertProject (createProjectFormToModel cp)
 
-      pure $ createProjectBody (cp) (def @CreateProjectFormError) 
-    Right cpe -> pure $ createProjectBody createP cpe 
+      pure $ addHeader "HX-Trigger" $ addHeader "/projects" $  createProjectBody (cp) (def @CreateProjectFormError) 
+    Right cpe -> pure $ noHeader $ noHeader $ createProjectBody createP cpe 
 
 ----------------------------------------------------------------------------------------------------------
 -- html view

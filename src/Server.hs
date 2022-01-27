@@ -11,6 +11,7 @@ import Network.Wai (Application)
 import qualified Pages.Endpoints.EndpointDetails as EndpointDetails
 import qualified Pages.Endpoints.EndpointList as EndpointList
 import qualified Pages.Projects.CreateProject as CreateProject
+import qualified Pages.Projects.ListProjects as ListProjects
 import Relude
 import Servant
   ( Capture,
@@ -33,15 +34,16 @@ import Servant
   )
 import Servant.HTML.Lucid
 import Servant.Server.StaticFiles
-import  Config   (ctxToHandler, DashboardM, AuthContext, OurHeaders)
+import  Config   (ctxToHandler, DashboardM, AuthContext, HeadersTriggerRedirect)
 
 
 
 --
 -- API Section
 type API 
-      = "projects" :> "new" :> Get '[HTML] (OurHeaders (Html ()))
-    :<|> "projects" :> "new" :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (Html ())
+      = "projects" :> "new" :> Get '[HTML] (Html ())
+    :<|> "projects" :> "new" :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (HeadersTriggerRedirect (Html ()))
+    :<|> "projects" :> Get '[HTML] (Html ())
     :<|> "endpoints" :> "list" :> Get '[HTML] (Html ())
     :<|> "endpoints" :> Capture "uuid" UUID.UUID :> "details" :> Get '[HTML] (Html ())
     :<|> "assets" :> Raw
@@ -58,6 +60,7 @@ server :: ServerT API DashboardM
 server =
   CreateProject.createProjectGetH
     :<|> CreateProject.createProjectPostH
+    :<|> ListProjects.listProjectsGetH
     :<|> pure EndpointList.endpointList
     :<|> endpointDetailsH
     :<|> serveDirectoryWebApp "./static/assets"

@@ -34,7 +34,10 @@ data AuthContext = AuthContext
 
 
 type DashboardM = ReaderT AuthContext Handler
-type OurHeaders = Headers '[Header "HX-Trigger" String, Header "HX-Redirect" String]
+
+-- | HeadersTriggerRedirect is a type alias for th hx-trigger header and the hx-redirect. 
+-- These headers will be primarily used on form submissions.
+type HeadersTriggerRedirect = Headers '[Header "HX-Trigger" String, Header "HX-Redirect" String]
 
 ctxToHandler :: AuthContext -> DashboardM a -> Handler a
 ctxToHandler s x = runReaderT x s

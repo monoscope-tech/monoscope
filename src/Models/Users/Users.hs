@@ -17,12 +17,9 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
 
-module Models.Projects.Projects
-  ( Project (..),
-  ProjectId (..),
-    CreateProject (..),
-    insertProject,
-    selectProjectsForUser,
+module Models.Users.Users
+  ( User (..),
+  UserId(..),
   )
 where
 
@@ -34,9 +31,9 @@ import Data.Time (CalendarDiffTime, UTCTime, ZonedTime)
 import Data.Time.Clock (DiffTime, NominalDiffTime)
 import qualified Data.UUID as UUID
 import qualified Data.Vector as Vector
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, query_, withPool)
+import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, queryOne, query_, withPool)
 import qualified Database.PostgreSQL.Entity.Types as PET
-import Database.PostgreSQL.Simple (Connection, FromRow, Only (Only), ToRow, query_ )
+import Database.PostgreSQL.Simple (Connection, FromRow, Only (Only), ToRow, query_)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -48,47 +45,29 @@ import Optics.TH
 import Relude
 import qualified Relude.Unsafe as Unsafe
 import Database.PostgreSQL.Entity
-import qualified Models.Users.Users as Users
 
-newtype ProjectId = ProjectId { getProjectId :: UUID.UUID }
+
+newtype UserId = UserId { getUserId :: UUID.UUID }
   deriving stock (Generic, Show)
   deriving (Eq, Ord, FromField, ToField)
     via UUID.UUID
+  deriving anyclass (FromRow, ToRow) 
 
-data Project = Project
-  { createdAt :: ZonedTime,
-    updatedAt :: ZonedTime,
-    deletedAt :: Maybe ZonedTime,
+data User = User 
+  { createdAt :: UTCTime,
+    updatedAt :: UTCTime,
+    deletedAt :: Maybe UTCTime,
     active :: Bool,
-    id :: ProjectId,
-    title :: Text,
-    description :: Text,
-    hosts :: Vector.Vector Text
+    id :: UserId,
+    first_name :: Text,
+    last_name :: Text,
+    display_image_url :: Text,
+    email :: Text
   }
   deriving (Show, Generic)
   deriving anyclass (FromRow, ToRow)
   deriving
     (PET.Entity)
-    via (PET.GenericEntity '[PET.Schema "projects", PET.TableName "projects", PET.PrimaryKey "id", PET.FieldModifiers '[PET.CamelToSnake]] Project)
+    via (PET.GenericEntity '[PET.Schema "projects", PET.TableName "projects", PET.PrimaryKey "id", PET.FieldModifiers '[PET.CamelToSnake]] User)
 
-makeFieldLabelsNoPrefix ''Project
-
-data CreateProject = CreateProject
-  { title :: Text,
-    description :: Text
-  }
-  deriving (Show, Generic)
-  deriving anyclass (FromRow, ToRow)
-  deriving
-    (PET.Entity)
-    via (PET.GenericEntity '[PET.Schema "projects", PET.TableName "projects", PET.PrimaryKey "id", PET.FieldModifiers '[PET.CamelToSnake]] CreateProject)
-
-makeFieldLabelsNoPrefix ''CreateProject
-
-
-insertProject :: CreateProject -> PgT.DBT IO ()
-insertProject = insert @CreateProject
-
-selectProjectsForUser :: Users.UserId -> PgT.DBT IO (Vector.Vector Project) 
-selectProjectsForUser uid = query Select q (uid)
-  where q = [sql| select pp.* from projects.projects as pp join projects.project_members as ppm on (pp.id=ppm.project_id) where ppm.user_id=? |]
+makeFieldLabelsNoPrefix ''User
