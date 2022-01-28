@@ -34,6 +34,7 @@ library
       Models.Projects.Projects
       Models.Users.Users
       Pages.BodyWrapper
+      Pages.Dashboard
       Pages.Endpoints.EndpointDetails
       Pages.Endpoints.EndpointList
       Pages.Projects.CreateProject

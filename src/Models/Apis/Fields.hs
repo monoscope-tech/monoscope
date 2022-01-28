@@ -88,7 +88,6 @@ data FieldCategoryEnum = FCQueryParams
                    | FCResponseBody deriving (Eq, Generic, Show)
 
 
-
 data Field = Field
   { createdAt :: ZonedTime,
     updatedAt :: ZonedTime,

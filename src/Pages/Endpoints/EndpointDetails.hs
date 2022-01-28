@@ -3,8 +3,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
 
-module Pages.Endpoints.EndpointDetails (endpointDetails) where
+module Pages.Endpoints.EndpointDetails (endpointDetailsH) where
 
+import Config
 import Data.UUID as UUID
 import Lucid
 import Lucid.HTMX
@@ -13,6 +14,10 @@ import Relude
 import Servant
 import Servant.HTML.Lucid
 import Text.RawString.QQ
+import qualified Models.Projects.Projects as Projects
+
+endpointDetailsH :: Projects.ProjectId -> UUID.UUID -> DashboardM (Html ())
+endpointDetailsH uuid sif = pure endpointDetails
 
 endpointDetails :: Html ()
 endpointDetails = bodyWrapper "Endpoint Details" $ do

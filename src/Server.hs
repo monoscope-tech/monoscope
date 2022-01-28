@@ -12,6 +12,7 @@ import qualified Pages.Endpoints.EndpointDetails as EndpointDetails
 import qualified Pages.Endpoints.EndpointList as EndpointList
 import qualified Pages.Projects.CreateProject as CreateProject
 import qualified Pages.Projects.ListProjects as ListProjects
+import qualified Pages.Dashboard as Dashboard
 import Relude
 import Servant
   ( Capture,
@@ -35,17 +36,18 @@ import Servant
 import Servant.HTML.Lucid
 import Servant.Server.StaticFiles
 import  Config   (ctxToHandler, DashboardM, AuthContext, HeadersTriggerRedirect)
+<<<<<<< HEAD
 
-import Pages.Endpoints.EndpointList
 
 --
 -- API Section
 type API 
-      = "projects" :> "new" :> Get '[HTML] (Html ())
+      =  "projects" :> "new" :> Get '[HTML] (Html ()) 
     :<|> "projects" :> "new" :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (HeadersTriggerRedirect (Html ()))
     :<|> "projects" :> Get '[HTML] (Html ())
-    :<|> "endpoints" :> "list" :> Get '[HTML] (Html ())
-    :<|> "endpoints" :> Capture "uuid" UUID.UUID :> "details" :> Get '[HTML] (Html ())
+    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "dashboard" :> Get '[HTML] (Html ())
+    :<|> "p" :> Capture "projectID"  Projects.ProjectId :> "endpoints" :> Get '[HTML] (Html ())
+    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "endpoints" :> Capture "uuid" UUID.UUID :> "details" :> Get '[HTML] (Html ())
     :<|> "assets" :> Raw
 
 --
@@ -62,14 +64,8 @@ server =
     :<|> CreateProject.createProjectPostH
 <<<<<<< HEAD
     :<|> ListProjects.listProjectsGetH
-    :<|> pure EndpointList.endpointList
-=======
-    -- :<|> pure EndpointList.endpointList
-    :<|> endpointList
->>>>>>> server.hs is not compiling, so I cant confirm how endpointlist will render
-    :<|> endpointDetailsH
+    :<|> Dashboard.dashboardGetH
+    :<|> EndpointList.endpointListH
+    :<|> EndpointDetails.endpointDetailsH
     :<|> serveDirectoryWebApp "./static/assets"
-
-endpointDetailsH :: UUID.UUID -> DashboardM (Html ())
-endpointDetailsH uuid = pure EndpointDetails.endpointDetails
 

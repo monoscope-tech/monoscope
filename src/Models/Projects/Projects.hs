@@ -49,10 +49,11 @@ import Relude
 import qualified Relude.Unsafe as Unsafe
 import Database.PostgreSQL.Entity
 import qualified Models.Users.Users as Users
+import Web.HttpApiData
 
 newtype ProjectId = ProjectId { getProjectId :: UUID.UUID }
   deriving stock (Generic, Show)
-  deriving (Eq, Ord, FromField, ToField)
+  deriving (Eq, Ord, FromField, ToField, FromHttpApiData)
     via UUID.UUID
 
 data Project = Project
@@ -74,7 +75,8 @@ data Project = Project
 makeFieldLabelsNoPrefix ''Project
 
 data CreateProject = CreateProject
-  { title :: Text,
+  { id :: ProjectId,
+    title :: Text,
     description :: Text
   }
   deriving (Show, Generic)
@@ -91,4 +93,4 @@ insertProject = insert @CreateProject
 
 selectProjectsForUser :: Users.UserId -> PgT.DBT IO (Vector.Vector Project) 
 selectProjectsForUser uid = query Select q (uid)
-  where q = [sql| select pp.* from projects.projects as pp join projects.project_members as ppm on (pp.id=ppm.project_id) where ppm.user_id=? |]
+  where q = [sql| select pp.* from projects.projects as pp join projects.project_members as ppm on (pp.id=ppm.project_id) where ppm.user_id=? order by updated_at desc|]

@@ -97,7 +97,7 @@ CREATE TABLE IF NOT EXISTS projects.project_members
   id UUID NOT NULL DEFAULT gen_random_uuid(),
   project_id UUID NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE ON UPDATE CASCADE,
   user_id UUID NOT NULL REFERENCES users.users (id) ON DELETE CASCADE ON UPDATE CASCADE,
-  permissions projects.project_permissions NOT NULL DEFAULT 'view',
+  permission projects.project_permissions NOT NULL DEFAULT 'view',
   PRIMARY KEY (project_id, user_id)
 );
 SELECT manage_updated_at('projects.project_members');
