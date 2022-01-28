@@ -31,8 +31,11 @@ endPointHandler = do
   maybeEndpoint <- query_ Select (_select @Endpoint)
   return maybeEndpoint
 
-endpointList :: Maybe Endpoint -> Html ()
-endpointList endPointHandler = bodyWrapper "Endpoint List" $ do
+endpointListH :: Projects.ProjectId -> DashboardM (Html ()) 
+endpointListH pid = pure $ bodyWrapper "Endpoint List" $ endpointList
+
+endpointList :: Html ()
+endpointList  =  do
   div_ [class_ "container mx-auto px-4"] $ do
     div_ [class_ "flex justify-between"] $ do
       h3_ [class_ "text-xl text-slate-700"] "Endpoints"
@@ -74,7 +77,7 @@ endpointList endPointHandler = bodyWrapper "Endpoint List" $ do
               input_ [type_ "checkbox"]
             td_ [class_ "flex flex-row"] $ do 
               div_ [class_ "w-25 rounded-lg text-center text-white bg-green-400 p-2 m-2"] "POST"
-            td_ [class_ " text-base text-slate-500 font-normal"] (show endPointHandler)
+            td_ [class_ " text-base text-slate-500 font-normal"] "xx"
             td_ [class_ " text-base text-slate-500 font-normal"] "api/students/tests/scores"
             td_ [class_ " text-sm text-gray-400 font-normal"] "4500"
             td_ [class_ " text-sm text-slate-500 font-normal"] "200"

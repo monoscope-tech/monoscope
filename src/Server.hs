@@ -36,7 +36,7 @@ import Servant
 import Servant.HTML.Lucid
 import Servant.Server.StaticFiles
 import  Config   (ctxToHandler, DashboardM, AuthContext, HeadersTriggerRedirect)
-<<<<<<< HEAD
+import qualified Models.Projects.Projects as Projects
 
 
 --
@@ -62,7 +62,6 @@ server :: ServerT API DashboardM
 server =
   CreateProject.createProjectGetH
     :<|> CreateProject.createProjectPostH
-<<<<<<< HEAD
     :<|> ListProjects.listProjectsGetH
     :<|> Dashboard.dashboardGetH
     :<|> EndpointList.endpointListH
