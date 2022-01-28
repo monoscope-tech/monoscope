@@ -42,9 +42,9 @@ import qualified Models.Projects.Projects as Projects
 --
 -- API Section
 type API 
-      =  "projects" :> "new" :> Get '[HTML] (Html ()) 
-    :<|> "projects" :> "new" :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (HeadersTriggerRedirect (Html ()))
-    :<|> "projects" :> Get '[HTML] (Html ())
+      =  "p" :> "new" :> Get '[HTML] (Html ()) -- p represents project 
+    :<|> "p" :> "new" :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (HeadersTriggerRedirect (Html ()))
+    :<|> "p" :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "dashboard" :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID"  Projects.ProjectId :> "endpoints" :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "endpoints" :> Capture "uuid" UUID.UUID :> "details" :> Get '[HTML] (Html ())

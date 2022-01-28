@@ -87,7 +87,7 @@ createProjectPostH createP = do
           ProjectMembers.insertProjectMembers projectMembers
           pure ()
 
-      pure $ addHeader "HX-Trigger" $ addHeader "/projects" $ createProjectBody cp (def @CreateProjectFormError)
+      pure $ addHeader "HX-Trigger" $ addHeader "/p" $ createProjectBody cp (def @CreateProjectFormError)
     Right cpe -> pure $ noHeader $ noHeader $ createProjectBody createP cpe
 
 ----------------------------------------------------------------------------------------------------------

@@ -39,7 +39,7 @@ listProjectsBody projects= do
   bodyWrapper "Projects" $ section_ [id_ "main-content"] $ do
     div_ [class_ "flex justify-between"] $ do
       h2_ [class_ "text-slate-700 text-2xl font-medium mb-6" ] "Projects"
-      a_ [class_ "px-2 py-3 bg-blue-400 white", href_ "/projects/new"] "Create Project"
+      a_ [class_ "px-2 py-3 bg-blue-400 white", href_ "/p/new"] "Create Project"
     section_ [] $ do
       div_ [class_ "bg-white shadow overflow-hidden sm:rounded-md"] $ do
         ul_ [role_ "list", class_ "divide-y divide-gray-200"] $ do
