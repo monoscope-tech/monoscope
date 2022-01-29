@@ -42,8 +42,9 @@ import Database.PostgreSQL.Simple (Connection, FromRow, Only (Only), ToRow, quer
 import qualified Deriving.Aeson as DAE
 import qualified Models.Apis.Endpoints as Endpoints
 import qualified Models.Apis.Fields as Fields
-import qualified Models.Apis.RequestDumps as RequestDumps
 import qualified Models.Apis.Formats as Format
+import qualified Models.Apis.RequestDumps as RequestDumps
+import qualified Models.Projects.Projects as Projects
 import Optics.Operators
 import Optics.TH
 import Relude
@@ -77,7 +78,6 @@ data RequestMessage = RequestMessage
 
 makeFieldLabelsNoPrefix ''RequestMessage
 
--- |
 requestMsgToDumpAndEndpoint :: RequestMessages.RequestMessage -> ZonedTime -> UUID.UUID -> Either Text (RequestDumps.RequestDump, Endpoints.Endpoint, [(Fields.Field, [Text])])
 requestMsgToDumpAndEndpoint rM now dumpID = do
   reqBodyB64 <- B64.decodeBase64 $ encodeUtf8 $ rM ^. #requestBody
@@ -116,8 +116,8 @@ requestMsgToDumpAndEndpoint rM now dumpID = do
         Endpoints.Endpoint
           { createdAt = rM ^. #timestamp,
             updatedAt = now,
-            id = dumpID,
-            projectId = rM ^. #projectId,
+            id = Endpoints.EndpointId $ dumpID,
+            projectId = Projects.ProjectId $ rM ^. #projectId,
             urlPath = rM ^. #urlPath,
             urlParams = AET.emptyObject,
             method = rM ^. #method,
@@ -139,12 +139,10 @@ valueToFields value = snd $ valueToFields' value ("", [])
     valueToFields' (AE.Array v) akk = foldl' (\(akkT, akkL) val -> (akkT, snd $ valueToFields' val (akkT <> ".[]", akkL))) akk v
     valueToFields' v (akk, l) = (akk, (akk, v) : l)
 
--- |
 fieldsToHash :: [(Text, AE.Value)] -> Text
 fieldsToHash = foldl' (\akk tp -> akk <> "," <> fst tp) ""
 
--- |
-aeValueToFieldType :: AE.Value -> Fields.FieldTypes 
+aeValueToFieldType :: AE.Value -> Fields.FieldTypes
 aeValueToFieldType (AET.String _) = Fields.FTString
 aeValueToFieldType (AET.Number _) = Fields.FTNumber
 aeValueToFieldType AET.Null = Fields.FTNull
@@ -152,7 +150,6 @@ aeValueToFieldType (AET.Bool _) = Fields.FTBool
 aeValueToFieldType (AET.Object _) = Fields.FTObject
 aeValueToFieldType (AET.Array _) = Fields.FTList
 
--- |
 valueToFormat :: AE.Value -> Text
 valueToFormat (AET.String val) = valueToFormatStr val
 valueToFormat (AET.Number val) = valueToFormatNum val
@@ -161,7 +158,6 @@ valueToFormat AET.Null = "null"
 valueToFormat (AET.Object _) = "object"
 valueToFormat (AET.Array _) = "array"
 
--- |
 valueToFormatStr :: Text -> Text
 valueToFormatStr val
   | val =~ ([r|^[0-9]+$|] :: Text) = "integer"
@@ -171,14 +167,12 @@ valueToFormatStr val
   | val =~ ([r|^(0[1-9]|1[012])[- ..](0[1-9]|[12][0-9]|3[01])[- ..](19|20)\d\d$|] :: Text) = "mm.dd.yyyy"
   | otherwise = "text"
 
--- |
 valueToFormatNum :: Scientific.Scientific -> Text
 valueToFormatNum val
   | Scientific.isFloating val = "float"
   | Scientific.isInteger val = "integer"
   | otherwise = "unknown"
 
--- |
 fieldsToFieldDTO :: Text -> UUID.UUID -> (Text, AE.Value) -> (Fields.Field, [Text])
 fieldsToFieldDTO fieldCategory projectID (keyPath, val) =
   ( Fields.Field

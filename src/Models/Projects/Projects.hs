@@ -19,7 +19,7 @@
 
 module Models.Projects.Projects
   ( Project (..),
-  ProjectId (..),
+    ProjectId (..),
     CreateProject (..),
     insertProject,
     selectProjectsForUser,
@@ -34,27 +34,29 @@ import Data.Time (CalendarDiffTime, UTCTime, ZonedTime)
 import Data.Time.Clock (DiffTime, NominalDiffTime)
 import qualified Data.UUID as UUID
 import qualified Data.Vector as Vector
+import Database.PostgreSQL.Entity
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, query_, withPool)
 import qualified Database.PostgreSQL.Entity.Types as PET
-import Database.PostgreSQL.Simple (Connection, FromRow, Only (Only), ToRow, query_ )
-import Database.PostgreSQL.Simple.ToField (ToField)
+import Database.PostgreSQL.Simple (Connection, FromRow, Only (Only), ToRow, query_)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Simple.ToField (ToField)
 import qualified Database.PostgreSQL.Transact as PgT
 import qualified Deriving.Aeson as DAE
 import GHC.Generics (Generic)
+import qualified Models.Users.Users as Users
 import Optics.Operators
 import Optics.TH
 import Relude
 import qualified Relude.Unsafe as Unsafe
-import Database.PostgreSQL.Entity
-import qualified Models.Users.Users as Users
 import Web.HttpApiData
 
-newtype ProjectId = ProjectId { getProjectId :: UUID.UUID }
+newtype ProjectId = ProjectId {unProjectId :: UUID.UUID}
   deriving stock (Generic, Show)
-  deriving (Eq, Ord, FromField, ToField, FromHttpApiData)
+  deriving
+    (Eq, Ord, FromField, ToField, FromHttpApiData, Default)
     via UUID.UUID
+  deriving anyclass (FromRow, ToRow)
 
 data Project = Project
   { createdAt :: ZonedTime,
@@ -87,10 +89,10 @@ data CreateProject = CreateProject
 
 makeFieldLabelsNoPrefix ''CreateProject
 
-
 insertProject :: CreateProject -> PgT.DBT IO ()
 insertProject = insert @CreateProject
 
-selectProjectsForUser :: Users.UserId -> PgT.DBT IO (Vector.Vector Project) 
+selectProjectsForUser :: Users.UserId -> PgT.DBT IO (Vector.Vector Project)
 selectProjectsForUser uid = query Select q (uid)
-  where q = [sql| select pp.* from projects.projects as pp join projects.project_members as ppm on (pp.id=ppm.project_id) where ppm.user_id=? order by updated_at desc|]
+  where
+    q = [sql| select pp.* from projects.projects as pp join projects.project_members as ppm on (pp.id=ppm.project_id) where ppm.user_id=? order by updated_at desc|]

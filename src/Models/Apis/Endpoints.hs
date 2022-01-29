@@ -19,7 +19,9 @@
 
 module Models.Apis.Endpoints
   ( Endpoint (..),
+    EndpointId (..),
     upsertEndpoints,
+    endpointsByProject,
   )
 where
 
@@ -31,23 +33,36 @@ import Data.Time (CalendarDiffTime, UTCTime, ZonedTime)
 import Data.Time.Clock (DiffTime, NominalDiffTime)
 import qualified Data.UUID as UUID
 import qualified Data.Vector as Vector
+import Database.PostgreSQL.Entity (selectManyByField)
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, queryOne, query_, withPool)
+import Database.PostgreSQL.Entity.Internal.QQ
 import qualified Database.PostgreSQL.Entity.Types as PET
 import Database.PostgreSQL.Simple (Connection, FromRow, Only (Only), ToRow, query_)
+import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Simple.ToField (ToField)
 import qualified Database.PostgreSQL.Transact as PgT
 import qualified Deriving.Aeson as DAE
 import GHC.Generics (Generic)
+import qualified Models.Projects.Projects as Projects
 import Optics.Operators
 import Optics.TH
 import Relude
 import qualified Relude.Unsafe as Unsafe
+import Web.HttpApiData
+
+newtype EndpointId = EndpointId {unEndpointId :: UUID.UUID}
+  deriving stock (Generic, Show)
+  deriving
+    (Eq, Ord, FromField, ToField, FromHttpApiData, Default)
+    via UUID.UUID
+  deriving anyclass (FromRow, ToRow)
 
 data Endpoint = Endpoint
   { createdAt :: ZonedTime,
     updatedAt :: ZonedTime,
-    id :: UUID.UUID,
-    projectId :: UUID.UUID,
+    id :: EndpointId,
+    projectId :: Projects.ProjectId,
     urlPath :: Text,
     urlParams :: AE.Value,
     method :: Text,
@@ -64,7 +79,6 @@ data Endpoint = Endpoint
 
 makeFieldLabelsNoPrefix ''Endpoint
 
--- |
 upsertEndpoints :: Endpoint -> PgT.DBT IO (Maybe (UUID.UUID, Text, Text))
 upsertEndpoints endpoint = queryOne Insert q options
   where
@@ -91,3 +105,6 @@ upsertEndpoints endpoint = queryOne Insert q options
         endpoint ^. #responseHashes,
         endpoint ^. #queryparamHashes
       )
+
+endpointsByProject :: Projects.ProjectId -> PgT.DBT IO (Vector.Vector Endpoint)
+endpointsByProject pid = selectManyByField @Endpoint [field| project_id |] pid

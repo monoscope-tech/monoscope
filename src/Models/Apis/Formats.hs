@@ -38,11 +38,11 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import qualified Database.PostgreSQL.Transact as PgT
 import qualified Deriving.Aeson as DAE
 import GHC.Generics (Generic)
+import qualified Models.Apis.Fields as Fields
 import Optics.Operators
 import Optics.TH
 import Relude
 import qualified Relude.Unsafe as Unsafe
-import qualified Models.Apis.Fields as Fields
 
 data Format = Format
   { createdAt :: ZonedTime,

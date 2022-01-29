@@ -1,19 +1,18 @@
+{-# LANGUAGE DisambiguateRecordFields #-}
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
-{-# LANGUAGE DisambiguateRecordFields #-}
 
 module RequestMessagesSpec where
 
-import qualified RequestMessages
 import Data.Aeson (Object, Value (Array, Bool, Null, Number, Object, String), decodeStrict, eitherDecode, eitherDecodeStrict)
 import Data.Aeson as AE
 import Data.Aeson.QQ
 import Data.Aeson.Types as AET
+import Relude
+import qualified RequestMessages
 import Test.Hspec
 import Test.Hspec.DB (TestDB, describeDB, itDB)
-import Relude
-
 
 spec :: Spec
 spec = do
@@ -46,6 +45,6 @@ spec = do
       RequestMessages.valueToFields exJSON `shouldBe` expectedResp
 
   describe "Regex Formats Gen" $ do
-    it "should get support string types"$ do
+    it "should get support string types" $ do
       RequestMessages.valueToFormatStr "123" `shouldBe` "integer"
       RequestMessages.valueToFormatStr "abc" `shouldBe` "text"

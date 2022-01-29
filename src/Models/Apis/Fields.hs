@@ -19,7 +19,7 @@
 
 module Models.Apis.Fields
   ( Field (..),
-  FieldTypes(..),
+    FieldTypes (..),
     upsertFields,
   )
 where
@@ -34,8 +34,10 @@ import qualified Data.UUID as UUID
 import qualified Data.Vector as Vector
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, queryOne, query_, withPool)
 import qualified Database.PostgreSQL.Entity.Types as PET
-import Database.PostgreSQL.Simple (Connection, FromRow, Only (Only), ToRow, query_,  ResultError(..))
+import Database.PostgreSQL.Simple (Connection, FromRow, Only (Only), ResultError (..), ToRow, query_)
+import Database.PostgreSQL.Simple.FromField (FromField, fromField, returnError)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
 import qualified Database.PostgreSQL.Transact as PgT
 import qualified Deriving.Aeson as DAE
 import GHC.Generics (Generic)
@@ -43,19 +45,19 @@ import Optics.Operators
 import Optics.TH
 import Relude
 import qualified Relude.Unsafe as Unsafe
-import Database.PostgreSQL.Simple.ToField (ToField,toField, Action(Escape))
-import Database.PostgreSQL.Simple.FromField (FromField, fromField, returnError)
 
-data FieldTypes = FTUnknown 
-               | FTString 
-               | FTNumber 
-               | FTBool 
-               | FTObject 
-               | FTList 
-               | FTNull deriving (Eq, Generic, Show)
+data FieldTypes
+  = FTUnknown
+  | FTString
+  | FTNumber
+  | FTBool
+  | FTObject
+  | FTList
+  | FTNull
+  deriving (Eq, Generic, Show)
 
 instance ToField FieldTypes where
-  toField FTString   = Escape "string"
+  toField FTString = Escape "string"
   toField FTNumber = Escape "number"
   toField FTBool = Escape "bool"
   toField FTObject = Escape "object"
@@ -63,14 +65,13 @@ instance ToField FieldTypes where
   toField FTNull = Escape "null"
 
 parseFieldTypes :: (Eq s, IsString s) => s -> Maybe FieldTypes
-parseFieldTypes "string"   = Just FTString 
-parseFieldTypes "number" = Just FTNumber 
+parseFieldTypes "string" = Just FTString
+parseFieldTypes "number" = Just FTNumber
 parseFieldTypes "bool" = Just FTBool
 parseFieldTypes "object" = Just FTObject
 parseFieldTypes "list" = Just FTList
 parseFieldTypes "null" = Just FTNull
-parseFieldTypes _        = Nothing
-
+parseFieldTypes _ = Nothing
 
 instance FromField FieldTypes where
   fromField f mdata =
@@ -78,15 +79,16 @@ instance FromField FieldTypes where
       Nothing -> returnError UnexpectedNull f ""
       Just bs ->
         case parseFieldTypes bs of
-          Just a  -> pure a
+          Just a -> pure a
           Nothing -> returnError ConversionFailed f $ "Conversion error: Expected 'field_type' enum, got " <> decodeUtf8 bs <> " instead."
 
-data FieldCategoryEnum = FCQueryParams 
-                   | FCRequestHeaders 
-                   | FCResponseHeaders
-                   | FCRequestBody
-                   | FCResponseBody deriving (Eq, Generic, Show)
-
+data FieldCategoryEnum
+  = FCQueryParams
+  | FCRequestHeaders
+  | FCResponseHeaders
+  | FCRequestBody
+  | FCResponseBody
+  deriving (Eq, Generic, Show)
 
 data Field = Field
   { createdAt :: ZonedTime,

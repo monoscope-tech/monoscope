@@ -5,19 +5,24 @@
 
 module Server (app) where
 
+import Config (AuthContext, DashboardM, HeadersTriggerRedirect, ctxToHandler)
 import Data.UUID as UUID
 import Lucid
+import qualified Models.Projects.Projects as Projects
 import Network.Wai (Application)
+import qualified Pages.Dashboard as Dashboard
 import qualified Pages.Endpoints.EndpointDetails as EndpointDetails
 import qualified Pages.Endpoints.EndpointList as EndpointList
 import qualified Pages.Projects.CreateProject as CreateProject
 import qualified Pages.Projects.ListProjects as ListProjects
-import qualified Pages.Dashboard as Dashboard
 import Relude
 import Servant
   ( Capture,
+    FormUrlEncoded,
     Get,
     Handler,
+    Header,
+    Headers,
     JSON,
     NoContent (..),
     Post,
@@ -25,28 +30,22 @@ import Servant
     ReqBody,
     Server,
     ServerT,
-    Headers,
-    Header,
-    serve,
     hoistServer,
-    FormUrlEncoded,
+    serve,
     type (:<|>) (..),
     type (:>),
   )
 import Servant.HTML.Lucid
 import Servant.Server.StaticFiles
-import  Config   (ctxToHandler, DashboardM, AuthContext, HeadersTriggerRedirect)
-import qualified Models.Projects.Projects as Projects
-
 
 --
 -- API Section
-type API 
-      =  "p" :> "new" :> Get '[HTML] (Html ()) -- p represents project 
+type API =
+  "p" :> "new" :> Get '[HTML] (Html ()) -- p represents project
     :<|> "p" :> "new" :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (HeadersTriggerRedirect (Html ()))
     :<|> "p" :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "dashboard" :> Get '[HTML] (Html ())
-    :<|> "p" :> Capture "projectID"  Projects.ProjectId :> "endpoints" :> Get '[HTML] (Html ())
+    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "endpoints" :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "endpoints" :> Capture "uuid" UUID.UUID :> "details" :> Get '[HTML] (Html ())
     :<|> "assets" :> Raw
 
@@ -67,4 +66,3 @@ server =
     :<|> EndpointList.endpointListH
     :<|> EndpointDetails.endpointDetailsH
     :<|> serveDirectoryWebApp "./static/assets"
-

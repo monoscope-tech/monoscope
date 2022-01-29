@@ -1,0 +1,13 @@
+cradle:
+  stack:
+    - path: "./src"
+      component: "apitoolkit-server:lib"
+
+    - path: "./app/Main.hs"
+      component: "apitoolkit-server:exe:apitoolkit-server-exe"
+
+    - path: "./app/Paths_apitoolkit_server.hs"
+      component: "apitoolkit-server:exe:apitoolkit-server-exe"
+
+    - path: "./test"
+      component: "apitoolkit-server:test:apitoolkit-server-test"

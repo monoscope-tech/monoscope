@@ -101,7 +101,6 @@ import Text.RawString.QQ
 import Text.Regex.TDFA ((=~))
 import Prelude (read)
 
--- |
 processMessage :: LogAction IO String -> Config.EnvConfig -> Pool Connection -> PubSub.ReceivedMessage -> IO (Maybe Text)
 processMessage logger envConfig conn msg = do
   let rmMsg = msg ^? PubSub.rmMessage . _Just . PubSub.pmData . _Just

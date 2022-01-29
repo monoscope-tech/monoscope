@@ -1,8 +1,8 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DerivingVia #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DisambiguateRecordFields #-}
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module Start
   ( startApp,
@@ -67,9 +67,11 @@ startApp = do
       migrationRes <- Migrations.runMigration conn Migrations.defaultOptions $ MigrationDirectory (Config.migrationsDir envConfig)
       logger <& "migration result: " <> show migrationRes
       poolConn <- Pool.createPool (pure conn) close 1 100000000 50
-      let serverCtx = Config.AuthContext{ env=envConfig,
+      let serverCtx =
+            Config.AuthContext
+              { env = envConfig,
                 pool = poolConn
-                }
+              }
 
       concurrently_
         (pubsubService logger envConfig poolConn)
