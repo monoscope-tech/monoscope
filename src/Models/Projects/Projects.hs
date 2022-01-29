@@ -93,6 +93,6 @@ insertProject :: CreateProject -> PgT.DBT IO ()
 insertProject = insert @CreateProject
 
 selectProjectsForUser :: Users.UserId -> PgT.DBT IO (Vector.Vector Project)
-selectProjectsForUser uid = query Select q (uid)
+selectProjectsForUser = query Select q
   where
     q = [sql| select pp.* from projects.projects as pp join projects.project_members as ppm on (pp.id=ppm.project_id) where ppm.user_id=? order by updated_at desc|]

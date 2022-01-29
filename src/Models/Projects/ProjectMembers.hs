@@ -105,7 +105,7 @@ data CreateProjectMembers = CreateProjectMembers
     via (PET.GenericEntity '[PET.Schema "projects", PET.TableName "project_members", PET.PrimaryKey "id", PET.FieldModifiers '[PET.CamelToSnake]] CreateProjectMembers)
 
 insertProjectMembers :: [CreateProjectMembers] -> PgT.DBT IO Int64
-insertProjectMembers pmembers = PgT.executeMany q pmembers
+insertProjectMembers = PgT.executeMany q
   where
     q =
       [sql|

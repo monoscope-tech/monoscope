@@ -116,7 +116,7 @@ requestMsgToDumpAndEndpoint rM now dumpID = do
         Endpoints.Endpoint
           { createdAt = rM ^. #timestamp,
             updatedAt = now,
-            id = Endpoints.EndpointId $ dumpID,
+            id = Endpoints.EndpointId dumpID,
             projectId = Projects.ProjectId $ rM ^. #projectId,
             urlPath = rM ^. #urlPath,
             urlParams = AET.emptyObject,
