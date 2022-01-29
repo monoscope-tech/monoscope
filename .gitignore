@@ -4,3 +4,4 @@ static/assets/.DS_Store
 static/assets/css/tailwind.min.css
 .hie
 dist-newstyle
+.env

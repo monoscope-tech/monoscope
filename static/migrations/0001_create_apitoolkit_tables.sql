@@ -124,7 +124,7 @@ INSERT INTO users.user_auth_options ( user_id, auth_id, auth_password)
 -- insert an initial project.
 INSERT INTO projects.projects (id, title, description)
   VALUES ('00000000-0000-0000-0000-000000000000','test title', 'test desc');
-INSERT INTO projects.project_members (project_id, user_id, permissions)
+INSERT INTO projects.project_members (project_id, user_id, permission)
   VALUES ('00000000-0000-0000-0000-000000000000','00000000-0000-0000-0000-000000000000','view');
 
 ---

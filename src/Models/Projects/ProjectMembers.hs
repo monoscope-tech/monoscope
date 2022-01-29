@@ -73,7 +73,7 @@ instance FromField Permissions where
       Just bs ->
         case parsePermissions bs of
           Just a -> pure a
-          Nothing -> returnError ConversionFailed f $ "Conversion error: Expected permissions enum, got " <> decodeUtf8 bs <> " instead."
+          Nothing -> returnError ConversionFailed f $ "Conversion error: Expected permission enum, got " <> decodeUtf8 bs <> " instead."
 
 data ProjectMembers = ProjectMembers
   { createdAt :: ZonedTime,
