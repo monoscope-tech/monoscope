@@ -28,7 +28,8 @@ go test -run=TestAPIToolkitWorkflow
 - install hlint for linting (brew install hlint)
 - `make fmt` will use ormolu to format the code 
 - `make lint` will run the linter and show you items to fix
-
+- it's recommended to compile haskell language server locally,else it crashes,  especially on mac
+  due to this issue: https://github.com/haskell/haskell-language-server/issues/2391
 
 
 ## Useful reading

@@ -79,6 +79,7 @@ dependencies:
 - data-default-extra
 - hspec-expectations-lifted
 - hspec-pg-transact
+- hspec-discover
 - pg-entity
 - pg-transact
 - postgresql-simple
@@ -101,6 +102,10 @@ executables:
     dependencies:
     - base
     - apitoolkit-server
+    - hspec-discover
+    when:        
+    - condition: false        
+      other-modules: Paths_apitoolkit_server
 
 tests:
   apitoolkit-server-test:
@@ -112,7 +117,6 @@ tests:
     - -with-rtsopts=-N
     - -fwrite-ide-info                   
     - -hiedir=.hie
-
     dependencies:
     - base
     - apitoolkit-server
@@ -122,3 +126,4 @@ tests:
     - pg-transact
     - postgresql-simple
     - resource-pool
+    - hspec-discover

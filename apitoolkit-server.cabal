@@ -81,6 +81,7 @@ library
     , gogol-core
     , gogol-pubsub
     , hspec
+    , hspec-discover
     , hspec-expectations-lifted
     , hspec-pg-transact
     , http-api-data
@@ -115,8 +116,6 @@ library
 
 executable apitoolkit-server-exe
   main-is: Main.hs
-  other-modules:
-      Paths_apitoolkit_server
   hs-source-dirs:
       app
   default-extensions:
@@ -152,6 +151,7 @@ executable apitoolkit-server-exe
     , gogol-core
     , gogol-pubsub
     , hspec
+    , hspec-discover
     , hspec-expectations-lifted
     , hspec-pg-transact
     , http-api-data
@@ -224,6 +224,7 @@ test-suite apitoolkit-server-test
     , gogol-core
     , gogol-pubsub
     , hspec
+    , hspec-discover
     , hspec-expectations-lifted
     , hspec-pg-transact
     , http-api-data

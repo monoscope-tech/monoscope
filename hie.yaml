@@ -11,3 +11,7 @@ cradle:
 
     - path: "./test"
       component: "apitoolkit-server:test:apitoolkit-server-test"
+
+
+dependencies:
+  - package.yaml
