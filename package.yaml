@@ -22,7 +22,6 @@ default-extensions:
   - ExtendedDefaultRules
   - OverloadedLabels
 
-
 extra-source-files:
 - README.md
 
@@ -97,6 +96,8 @@ executables:
     - -threaded
     - -rtsopts
     - -with-rtsopts=-N
+    - -fwrite-ide-info                   
+    - -hiedir=.hie
     dependencies:
     - base
     - apitoolkit-server
@@ -109,6 +110,9 @@ tests:
     - -threaded
     - -rtsopts
     - -with-rtsopts=-N
+    - -fwrite-ide-info                   
+    - -hiedir=.hie
+
     dependencies:
     - base
     - apitoolkit-server

@@ -23,6 +23,14 @@ brew install libpq
 go test -run=TestAPIToolkitWorkflow
 ```
 
+## Useful tools
+- install ormolu (brew install ormolu), for fmt 
+- install hlint for linting (brew install hlint)
+- `make fmt` will use ormolu to format the code 
+- `make lint` will run the linter and show you items to fix
+
+
+
 ## Useful reading
 - Build reload feedback cycle in haskell: https://functor.tokyo/blog/2019-04-07-ghcid-for-web-app-dev 
 

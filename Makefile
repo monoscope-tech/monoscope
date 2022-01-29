@@ -3,3 +3,9 @@ css-start:
 
 live-reload:
 	ghcid --command 'stack ghci' --test ':run Main.main' --warnings
+
+fmt:
+	ormolu --mode inplace $$(find . -name '*.hs')
+
+lint:
+	hlint src 

@@ -2,8 +2,6 @@
 {-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE QuasiQuotes #-}
-{-# LANGUAGE TypeApplications #-}
 
 module Pages.Endpoints.EndpointList (endpointListH) where
 
@@ -80,7 +78,7 @@ endpointList enps = do
                     td_ [class_ "text-left pr-4 "] $ do
                       input_ [type_ "checkbox"]
                     td_ [class_ "flex flex-row"] $ do
-                      a_ [href_ ("/p/" <> (UUID.toText $ Projects.unProjectId $ enp ^. #projectId) <> "/endpoints/" <> (UUID.toText $ Endpoints.unEndpointId $ enp ^. #id))] $ do
+                      a_ [href_ ("/p/" <> UUID.toText (Projects.unProjectId $ enp ^. #projectId) <> "/endpoints/" <> UUID.toText (Endpoints.unEndpointId $ enp ^. #id))] $ do
                         span_ [class_ "w-25 rounded-lg text-center text-white bg-green-400 p-2 m-2 inline-block"] $ toHtml $ enp ^. #method
                         span_ [class_ " text-base text-slate-500 font-normal"] $ toHtml $ enp ^. #urlPath
                     td_ [class_ " text-sm text-gray-400 font-normal"] "4500"

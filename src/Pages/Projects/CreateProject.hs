@@ -1,5 +1,4 @@
 {-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 
@@ -76,10 +75,10 @@ createProjectPostH createP = do
       let cp = Valor.unValid cpRaw
       pool <- asks pool
       let userID = Users.UserId UUID.nil
-      puid <- liftIO $ UUIDV4.nextRandom
+      puid <- liftIO UUIDV4.nextRandom
       let pid = Projects.ProjectId puid
       -- Temporary. They should come from the form
-      let projectMembers = [(ProjectMembers.CreateProjectMembers pid userID ProjectMembers.PAdmin)]
+      let projectMembers = [ProjectMembers.CreateProjectMembers pid userID ProjectMembers.PAdmin]
 
       _ <- liftIO $
         withPool pool $ do

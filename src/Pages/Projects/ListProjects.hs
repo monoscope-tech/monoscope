@@ -1,8 +1,6 @@
 {-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeApplications #-}
 
 module Pages.Projects.ListProjects
   ( listProjectsGetH,
@@ -47,7 +45,7 @@ listProjectsBody projects = do
               & mapM_
                 ( \project -> do
                     li_ $ do
-                      a_ [href_ ("/p/" <> (UUID.toText $ Projects.unProjectId $ project ^. #id) <> "/dashboard"), class_ "block hover:bg-gray-50"] $ do
+                      a_ [href_ ("/p/" <> UUID.toText (Projects.unProjectId $ project ^. #id) <> "/dashboard"), class_ "block hover:bg-gray-50"] $ do
                         div_ [class_ "px-4 py-4 flex items-center sm:px-6"] $ do
                           div_ [class_ "min-w-0 flex-1 sm:flex sm:items-center sm:justify-between"] $ do
                             div_ [class_ "truncate"] $ do

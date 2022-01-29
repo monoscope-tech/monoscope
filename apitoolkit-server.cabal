@@ -134,7 +134,7 @@ executable apitoolkit-server-exe
       OverloadedLists
       ExtendedDefaultRules
       OverloadedLabels
-  ghc-options: -threaded -rtsopts -with-rtsopts=-N
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
   build-depends:
       aeson
     , aeson-qq
@@ -206,7 +206,7 @@ test-suite apitoolkit-server-test
       OverloadedLists
       ExtendedDefaultRules
       OverloadedLabels
-  ghc-options: -threaded -rtsopts -with-rtsopts=-N
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
   build-depends:
       aeson
     , aeson-qq
