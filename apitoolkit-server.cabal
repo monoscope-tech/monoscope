@@ -32,6 +32,7 @@ library
       Models.Apis.RequestDumps
       Models.Projects.ProjectMembers
       Models.Projects.Projects
+      Models.Projects.ProjectSettings
       Models.Users.Users
       Pages.BodyWrapper
       Pages.Dashboard
