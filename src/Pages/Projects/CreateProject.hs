@@ -6,6 +6,9 @@ module Pages.Projects.CreateProject
   ( CreateProjectForm,
     createProjectGetH,
     createProjectPostH,
+    createProjectFormV,
+    createProjectFormToModel,
+    CreateProjectFormError,
   )
 where
 
