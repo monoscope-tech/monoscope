@@ -1,11 +1,15 @@
 module Models.Users.Sessions where
 
 import Control.Monad.IO.Class
+-- import Data.Text.Display
+
+-- import Env.Generic
+
+import Data.Default
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Pool
 import Data.Text
--- import Data.Text.Display
 import Data.Time
 import qualified Data.Time as Time
 import Data.UUID
@@ -18,33 +22,28 @@ import Database.PostgreSQL.Simple.FromField
 import Database.PostgreSQL.Simple.Newtypes
 import Database.PostgreSQL.Simple.ToField
 import Database.PostgreSQL.Transact
--- import Env.Generic
 import Models.Users.Users (UserId)
 import Optics.Core
 import Relude
 import Web.HttpApiData
-import Data.Default
 
 newtype PersistentSessionId = PersistentSessionId {getPersistentSessionId :: UUID}
   deriving
     (Show, Eq, FromField, ToField, FromHttpApiData, ToHttpApiData, Default)
     via UUID
 
--- deriving
---   (Display)
---   via ShowInstance UUID
-
 data PersistentSession = PersistentSession
-  { persistentSessionId :: PersistentSessionId,
+  { createdAt :: ZonedTime,
+    updatedAt :: ZonedTime,
+    id :: PersistentSessionId,
     userId :: UserId,
-    sessionData :: SessionData,
-    createdAt :: ZonedTime
+    sessionData :: SessionData
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, Default)
   deriving
     (Entity)
-    via (GenericEntity '[TableName "persistent_sessions"] PersistentSession)
+    via (GenericEntity '[Schema "users", TableName "persistent_sessions"] PersistentSession)
 
 newtype SessionData = SessionData {getSessionData :: Map Text Text}
   deriving stock (Show, Eq, Generic)
@@ -57,8 +56,9 @@ newPersistentSessionId :: IO PersistentSessionId
 newPersistentSessionId = PersistentSessionId <$> UUID.nextRandom
 
 newPersistentSession :: UserId -> PersistentSessionId -> IO PersistentSession
-newPersistentSession userId persistentSessionId = do
+newPersistentSession userId id = do
   createdAt <- Time.getZonedTime
+  let updatedAt = createdAt
   let sessionData = SessionData Map.empty
   pure PersistentSession {..}
 
@@ -71,7 +71,7 @@ persistSession ::
 persistSession pool persistentSessionId userId = do
   persistentSession <- liftIO $ newPersistentSession userId persistentSessionId
   liftIO $ withPool pool $ insertSession persistentSession
-  pure $ persistentSession ^. #persistentSessionId
+  pure $ persistentSession ^. #id
 
 insertSession :: PersistentSession -> DBT IO ()
 insertSession = insert @PersistentSession

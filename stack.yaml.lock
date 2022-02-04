@@ -208,6 +208,13 @@ packages:
   original:
     hackage: digestive-functors-0.8.4.2@sha256:badff1797b6dcd860a48ed4558985b2f6bec501e1016fa5afd9d7d6b0d8e4c08,3364
 - completed:
+    hackage: transformers-either-0.1.2@sha256:e2ba24af49df7fa09794dcff6cb203d086d5c18e35b3cf10a8ecf7eb465fdedf,1677
+    pantry-tree:
+      size: 270
+      sha256: 9c3388ec26e91b6f5115ddeafee991a3589b76b67ea15e333af5946706be374c
+  original:
+    hackage: transformers-either-0.1.2@sha256:e2ba24af49df7fa09794dcff6cb203d086d5c18e35b3cf10a8ecf7eb465fdedf,1677
+- completed:
     subdir: core
     name: gogol-core
     version: 0.5.0

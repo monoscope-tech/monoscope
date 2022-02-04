@@ -1,24 +1,31 @@
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DerivingVia #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
 
 module Server (app) where
 
-import Config (AuthContext, DashboardM, HeadersTriggerRedirect, authHandler, ctxToHandler)
-import Data.UUID as UUID
+import Config (AuthContext, DashboardM, EnvConfig, HeadersTriggerRedirect, authHandler, ctxToHandler, env, pool)
+import qualified Control.Lens as L
+import Control.Monad.Trans.Either
+import qualified Crypto.JOSE.Compact
+import qualified Crypto.JOSE.JWK
+import qualified Crypto.JWT
+import Data.Aeson.Lens (key, _String)
+import Data.Time.LocalTime (getZonedTime)
+import qualified Data.UUID as UUID
+import qualified Data.UUID.V4 as UUIDV4
+import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import qualified Models.Projects.Projects as Projects
 import qualified Models.Users.Sessions as Sessions
+import qualified Models.Users.Users as Users
 import Network.Wai (Application, Request)
+import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
+import Optics.Operators
 import qualified Pages.Dashboard as Dashboard
 import qualified Pages.Endpoints.EndpointDetails as EndpointDetails
 import qualified Pages.Endpoints.EndpointList as EndpointList
 import qualified Pages.Projects.CreateProject as CreateProject
 import qualified Pages.Projects.ListProjects as ListProjects
-import Relude
+import Relude hiding (hoistMaybe)
 import Servant
   ( AuthProtect,
     Capture,
@@ -31,20 +38,32 @@ import Servant
     JSON,
     NoContent (..),
     Post,
+    QueryParam,
     Raw,
     ReqBody,
-    Server,
+    ServerError (errHeaders),
     ServerT,
+    StdMethod (GET),
+    Verb,
+    addHeader,
+    err301,
     hoistServer,
     hoistServerWithContext,
+    noHeader,
     serve,
     serveWithContext,
+    throwError,
     type (:<|>) (..),
     type (:>),
   )
 import Servant.HTML.Lucid
 import Servant.Server.Experimental.Auth (AuthHandler, AuthServerData, mkAuthHandler)
 import Servant.Server.StaticFiles
+import SessionCookies (addCookie, craftSessionCookie)
+import Web.Auth
+import Web.Cookie (SetCookie)
+
+type GetRedirect = Verb 'GET 302
 
 --
 -- API Section
@@ -57,7 +76,10 @@ type ProtectedAPI =
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "endpoints" :> Capture "uuid" UUID.UUID :> Get '[HTML] (Html ())
 
 type PublicAPI =
-  "assets" :> Raw
+  "login" :> Get '[HTML] (Html ())
+    :<|> "logout" :> Get '[HTML] (Html ())
+    :<|> "auth_callback" :> QueryParam "code" Text :> QueryParam "state" Text :> GetRedirect '[HTML] (Headers '[Header "Location" String, Header "Set-Cookie" SetCookie] (Html ()))
+    :<|> "assets" :> Raw
 
 type API =
   AuthProtect "cookie-auth" :> ProtectedAPI
@@ -90,13 +112,11 @@ protectedServer _ =
     :<|> EndpointDetails.endpointDetailsH
 
 publicServer :: ServerT PublicAPI DashboardM
-publicServer = serveDirectoryWebApp "./static/assets"
+publicServer =
+  loginH
+    :<|> logoutH
+    :<|> authCallbackH
+    :<|> serveDirectoryWebApp "./static/assets"
 
 server :: ServerT API DashboardM
 server = protectedServer :<|> publicServer
-
--- | The context that will be made available to request handlers. We supply the
--- "cookie-auth"-tagged request handler defined above, so that the 'HasServer' instance
--- of 'AuthProtect' can extract the handler and run it on the request.
-genAuthServerContext :: Context (AuthHandler Request Sessions.PersistentSession ': '[])
-genAuthServerContext = authHandler :. EmptyContext

@@ -54,6 +54,15 @@ CREATE TABLE IF NOT EXISTS users.users
 );
 SELECT manage_updated_at('users.users');
 
+CREATE TABLE IF NOT EXISTS users.persistent_sessions
+(
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+  id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id  UUID NOT NULL REFERENCES users.users ON DELETE CASCADE,
+  session_data JSONB NOT NULL DEFAULT '{}' 
+);
+
 -- create user auth options table
 CREATE TABLE IF NOT EXISTS users.user_auth_options
 (

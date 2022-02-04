@@ -9,6 +9,9 @@ copyright:           "2021 Author name here"
 default-extensions: 
   - NoImplicitPrelude
   - DerivingStrategies
+  - DataKinds
+  - TypeFamilies
+  - TypeOperators
   - TypeApplications
   - DataKinds
   - DerivingVia
@@ -88,6 +91,13 @@ dependencies:
 - valor >= 1.0.0.0
 - containers
 - cookie
+- wreq
+- aeson-optics
+- lens-aeson
+- jose
+- errors
+- transformers-either
+- case-insensitive
 library:
   source-dirs: src
 
