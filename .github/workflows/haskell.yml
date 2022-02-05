@@ -7,34 +7,79 @@ on:
     branches: [ master ]
 
 jobs:
-  build:
-
-    runs-on: ubuntu-latest
+  btp:
+    name: Build-Tag-Push
+    runs-on: ubuntu-16.04
+    
+    strategy:
+      matrix:
+        stack: [2.1.3]
+    
+    env:
+      STACK_VERSON: ${{ matrix.stack }}
 
     steps:
     - uses: actions/checkout@v2
-    - uses: actions/setup-haskell@v1
       with:
-        ghc-version: '8.10.3'
-        cabal-version: '3.2'
-
-    - name: Cache
-      uses: actions/cache@v1
-      env:
-        cache-name: cache-cabal
-      with:
-        path: ~/.cabal
-        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('**/*.cabal') }}-${{ hashFiles('**/cabal.project') }}
-        restore-keys: |
-          ${{ runner.os }}-build-${{ env.cache-name }}-
-          ${{ runner.os }}-build-
-          ${{ runner.os }}-
-
-    - name: Install dependencies
+        fetch-depth: 0
+    
+    - name: Prepare ~/.local/bin
       run: |
-        cabal update
-        cabal build --only-dependencies --enable-tests --enable-benchmarks
-    - name: Build
-      run: cabal build --enable-tests --enable-benchmarks all
-    - name: Run tests
-      run: cabal test all
+        mkdir -p ~/.local/bin
+        export PATH=~/.local/bin:$PATH
+# (1) -> Setup cache
+    - name: Cache ~/.stack
+      id: cache-stack
+      uses: actions/cache@v1
+      with:
+        path: ~/.stack
+        key: stack-home-ubuntu16-test001-${{ hashFiles('**/*.yaml') }}
+        restore-keys: |
+          stack-home-ubuntu16-test001
+    
+    - name: Cache .stack-work
+      id: cache-stack-work
+      uses: actions/cache@v1
+      with:
+        path: .stack-work
+        key: stack-work-ubuntu16-test001-${{ github.sha }}
+        restore-keys: |
+          stack-work-ubuntu16-test001-${{ github.sha }}
+          stack-work-ubuntu16-test001
+    
+    - name: Cache Stack in ~/.local/bin
+      id: cache-stack-local-bin
+      uses: actions/cache@v1
+      with:
+        path: ~/.local/bin
+        key: stack-local-bin-ubuntu16-test001-${{ matrix.stack }}
+
+# (2) -> Prepare Stack   
+    - name: Setup stack
+      if: steps.cache-stack-local-bin.outputs.cache-hit != 'true'
+      run: |
+        curl -L https://github.com/commercialhaskell/stack/releases/download/v$STACK_VERSON/stack-$STACK_VERSON-linux-x86_64.tar.gz | tar xz --wildcards --strip-components=1 -C ~/.local/bin '*/stack';
+# (3) -> Build binary
+    - name: List recursively . (before timestamp change)
+      run: |
+        ls -la -R .
+    
+    - name: Update timestamps from git
+      run: | 
+        git ls-tree -r --name-only HEAD | while read filename; do
+          TS="$(git log -1 --format="%ct" -- ${filename})"
+          echo $TS
+          touch "${filename}" -mt "$(date --date="@$TS" "+%Y%m%d%H%M.%S")"
+          echo "touch \"${filename}\" -mt \"$(date --date="@$TS" "+%Y%m%d%H%M.%S")\""
+        done
+        
+    - name: List recursively . (before build)
+      run: |
+        ls -la -R .
+    - name: Build application
+      run: |
+        stack build -v --no-terminal --skip-ghc-check
+        
+    - name: List recursively . (after build)
+      run: |
+        ls -la -R .
