@@ -5,14 +5,11 @@
 
 @layer components {
 @font-face {
-  font-family: system;
-  font-style: normal;
-  font-weight: 300;
-  src: local(".SFNSText-Light"), local(".HelveticaNeueDeskInterface-Light"), local(".LucidaGrandeUI"), local("Ubuntu Light"), local("Segoe UI Light"), local("Roboto-Light"), local("DroidSans"), local("Tahoma");
+  font-family: 'Poppins', sans-serif;
 }
-
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500&display=swap');
 body {
-  font-family: "system";
+  font-family: 'Poppins', sans-serif;
 }
 
 

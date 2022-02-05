@@ -503,17 +503,13 @@ Ensure the default browser behavior of the `hidden` attribute.
 }
 
 @font-face {
-  font-family: system;
-
-  font-style: normal;
-
-  font-weight: 300;
-
-  src: local(".SFNSText-Light"), local(".HelveticaNeueDeskInterface-Light"), local(".LucidaGrandeUI"), local("Ubuntu Light"), local("Segoe UI Light"), local("Roboto-Light"), local("DroidSans"), local("Tahoma");
+  font-family: 'Poppins', sans-serif;
 }
 
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500&display=swap');
+
 body {
-  font-family: "system";
+  font-family: 'Poppins', sans-serif;
 }
 
 .btn-indigo {
@@ -767,6 +763,10 @@ body {
 
 .mb-6 {
   margin-bottom: 1.5rem;
+}
+
+.mt-8 {
+  margin-top: 2rem;
 }
 
 .block {
@@ -1360,6 +1360,11 @@ body {
   color: rgb(0 0 0 / var(--tw-text-opacity));
 }
 
+.text-\[white\] {
+  --tw-text-opacity: 1;
+  color: rgb(255 255 255 / var(--tw-text-opacity));
+}
+
 .text-zinc-500 {
   --tw-text-opacity: 1;
   color: rgb(113 113 122 / var(--tw-text-opacity));
@@ -1368,11 +1373,6 @@ body {
 .text-blue-700 {
   --tw-text-opacity: 1;
   color: rgb(29 78 216 / var(--tw-text-opacity));
-}
-
-.text-\[white\] {
-  --tw-text-opacity: 1;
-  color: rgb(255 255 255 / var(--tw-text-opacity));
 }
 
 .text-slate-600 {
@@ -1403,6 +1403,16 @@ body {
 .text-indigo-600 {
   --tw-text-opacity: 1;
   color: rgb(79 70 229 / var(--tw-text-opacity));
+}
+
+.text-gray-300 {
+  --tw-text-opacity: 1;
+  color: rgb(209 213 219 / var(--tw-text-opacity));
+}
+
+.text-slate-200 {
+  --tw-text-opacity: 1;
+  color: rgb(226 232 240 / var(--tw-text-opacity));
 }
 
 .opacity-0 {

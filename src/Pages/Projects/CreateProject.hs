@@ -100,15 +100,15 @@ createProjectBody cp cpe = do
     h2_ [class_ "text-slate-700 text-2xl font-medium mb-5"] "Create Project"
     form_ [class_ "relative px-10 border border-gray-200 py-10  bg-white w-1/2 rounded-3xl", hxPost_ "/p/new", hxTarget_ "#main-content"] $ do
       div_ $ do
-        label_ [class_ "text-gray-500 mx-2 font-light text-base"] "Title"
+        label_ [class_ "text-gray-400 mx-2 font-light text-sm"] "Title"
         input_
           [ class_ "h-10 px-5 my-2 w-full text-sm bg-white text-black border-solid border border-gray-200 rounded-2xl border-0 ",
             type_ "text",
             id_ "title",
             name_ "title"
           ]
-      div_ $ do
-        label_ [class_ "text-gray-500 mt-5 mx-2 font-light text-base"] "Description"
+      div_ [class_ "mt-5 "]$ do
+        label_ [class_ "text-gray-400 mx-2  font-light text-sm"] "Description"
         textarea_
           [ class_ " py-2 px-5 my-2 w-full text-sm bg-white text-black border-solid border border-gray-200 rounded-2xl border-0 ",
             rows_ "4",
@@ -117,12 +117,12 @@ createProjectBody cp cpe = do
             name_ "description"
           ]
           ""
-      div_ $ do
-        p_ [class_ "text-gray-500 mt-5 mx-2 font-light text-sm"] "Invite a project member"
+      div_ [class_ "mt-6"]$ do
+        p_ [class_ "text-gray-400 mx-2 font-light text-sm"] "Invite a project member"
         section_ [id_ "manage" ] $ do
           template_ [id_ "invite"] $ do
             div_ [class_ "flex flex-row space-x-2"] $ do
-              input_ [class_ "w-2/3 h-10 px-5 my-2 w-full text-sm bg-white text-slate-700 border-solid border border-gray-200 rounded-2xl border-0 ", placeholder_ "anthony@gmail.com"]
+              input_ [class_ "w-2/3 h-10 px-5 my-2 w-full text-sm bg-white text-slate-700 font-light border-solid border border-gray-200 rounded-2xl border-0 ", placeholder_ "anthony@gmail.com"]
               select_ [class_ "w-1/3 h-10 px-5  my-2 w-full text-sm bg-white text-zinc-500 border-solid border border-gray-200 rounded-2xl border-0"] $ do
                 option_ [class_ "text-gray-500"] "Can Edit"
                 option_ [class_ "text-gray-500"] "Can View"
@@ -141,6 +141,6 @@ createProjectBody cp cpe = do
                   end 
                 |]
             ] $ do
-          img_ [src_ "/assets/svgs/blue-plus.svg", class_ "mx-2"]
-          span_ [class_ "text-blue-700 font-medium text-base "] "Add member"
+          img_ [src_ "/assets/svgs/blue-plus.svg", class_ " mt-1 mx-2 w-3 h-3"]
+          span_ [class_ "text-blue-700 font-medium text-sm "] "Add member"
       button_ [class_ "py-2 px-5 bg-blue-700 absolute m-5 bottom-0 right-0 text-[white] text-sm rounded-xl cursor-pointer", type_ "submit"] "Next step"
