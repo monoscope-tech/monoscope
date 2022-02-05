@@ -27,39 +27,12 @@ jobs:
       run: |
         mkdir -p ~/.local/bin
         export PATH=~/.local/bin:$PATH
-# (1) -> Setup cache
-    - name: Cache ~/.stack
-      id: cache-stack
-      uses: actions/cache@v1
-      with:
-        path: ~/.stack
-        key: stack-home-ubuntu16-test001-${{ hashFiles('**/*.yaml') }}
-        restore-keys: |
-          stack-home-ubuntu16-test001
-    
-    - name: Cache .stack-work
-      id: cache-stack-work
-      uses: actions/cache@v1
-      with:
-        path: .stack-work
-        key: stack-work-ubuntu16-test001-${{ github.sha }}
-        restore-keys: |
-          stack-work-ubuntu16-test001-${{ github.sha }}
-          stack-work-ubuntu16-test001
-    
-    - name: Cache Stack in ~/.local/bin
-      id: cache-stack-local-bin
-      uses: actions/cache@v1
-      with:
-        path: ~/.local/bin
-        key: stack-local-bin-ubuntu16-test001-${{ matrix.stack }}
 
-# (2) -> Prepare Stack   
+# (1) -> Prepare Stack   
     - name: Setup stack
-      if: steps.cache-stack-local-bin.outputs.cache-hit != 'true'
       run: |
         curl -L https://github.com/commercialhaskell/stack/releases/download/v$STACK_VERSON/stack-$STACK_VERSON-linux-x86_64.tar.gz | tar xz --wildcards --strip-components=1 -C ~/.local/bin '*/stack';
-# (3) -> Build binary
+# (2) -> Build binary
     - name: List recursively . (before timestamp change)
       run: |
         ls -la -R .
