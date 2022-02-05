@@ -21,6 +21,8 @@ module Models.Users.Users where
 
 import qualified Data.Aeson as AE
 import qualified Data.Aeson.Types as AET
+import Data.CaseInsensitive (CI)
+import qualified Data.CaseInsensitive as CI
 import Data.Default
 import Data.Default.Instances
 import Data.Time (CalendarDiffTime, UTCTime, ZonedTime, getZonedTime)
@@ -43,8 +45,6 @@ import Optics.Operators
 import Optics.TH
 import Relude
 import qualified Relude.Unsafe as Unsafe
-import          Data.CaseInsensitive   ( CI )
-import qualified Data.CaseInsensitive as CI
 
 newtype UserId = UserId {getUserId :: UUID.UUID}
   deriving stock (Generic, Show)
@@ -97,3 +97,13 @@ insertUser = insert @User
 
 userByEmail :: Text -> PgT.DBT IO (Maybe User)
 userByEmail email = selectOneByField @User [field| email |] (Only email)
+
+-- addUserToAllProjects is a hack for development to add the user to all projects
+addUserToAllProjects :: Text -> PgT.DBT IO Int64
+addUserToAllProjects email = execute Insert q values
+  where
+    q =
+      [sql| insert into projects.project_members (active, project_id, permission, user_id)
+select true::Boolean, id, 'admin'::projects.project_permissions, (select id from users.users where email=?) from projects.projects
+on conflict do nothing; |]
+    values = Only email

@@ -1,31 +1,47 @@
 module Web.Auth where
 
+import Config (AuthContext, DashboardM, EnvConfig, HeadersTriggerRedirect, authHandler, ctxToHandler, env, pool)
+import qualified Control.Lens as L
+import Control.Monad.Trans.Either (hoistMaybe, runEitherT)
 import qualified Crypto.JOSE.Compact
 import qualified Crypto.JOSE.JWK
 import qualified Crypto.JWT
 import Data.Aeson.Lens (key, _String)
+import Data.Pool (Pool)
 import Data.Time.LocalTime (getZonedTime)
 import qualified Data.UUID as UUID
 import qualified Data.UUID.V4 as UUIDV4
-import qualified Control.Lens as L
-import Control.Monad.Trans.Either
-import SessionCookies (addCookie, craftSessionCookie)
-import Web.Cookie (SetCookie)
-import Network.Wai (Application, Request)
-import Relude hiding (hoistMaybe)
-import Servant.Server.Experimental.Auth (AuthHandler, AuthServerData, mkAuthHandler)
-import Config (AuthContext, DashboardM, EnvConfig, HeadersTriggerRedirect, authHandler, ctxToHandler, env, pool)
-import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
+import Database.PostgreSQL.Entity.DBT (withPool)
+import Database.PostgreSQL.Simple (Connection)
+import Lucid (Html, ToHtml (toHtml))
 import qualified Models.Projects.Projects as Projects
 import qualified Models.Users.Sessions as Sessions
 import qualified Models.Users.Users as Users
-import Database.PostgreSQL.Entity.DBT ( withPool)
-import Optics.Operators
-import Lucid
-import Servant.HTML.Lucid
+import Network.Wai (Application, Request)
+import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
+import Optics.Operators ((^.))
+import Relude
+  ( Applicative (pure),
+    Bool (False, True),
+    ByteString,
+    ConvertUtf8 (encodeUtf8),
+    Either (Left, Right),
+    Maybe (..),
+    Monad ((>>)),
+    MonadIO (liftIO),
+    Semigroup ((<>)),
+    String,
+    Text,
+    ToString (toString),
+    asks,
+    fromMaybe,
+    putStrLn,
+    ($),
+    (&),
+    (.),
+  )
 import Servant
-  ( AuthProtect,
-    Capture,
+  ( Capture,
     Context (EmptyContext, (:.)),
     FormUrlEncoded,
     Get,
@@ -53,13 +69,15 @@ import Servant
     type (:<|>) (..),
     type (:>),
   )
-
+import Servant.Server.Experimental.Auth (AuthHandler, AuthServerData, mkAuthHandler)
+import SessionCookies (addCookie, craftSessionCookie)
+import Web.Cookie (SetCookie)
 
 -- | The context that will be made available to request handlers. We supply the
 -- "cookie-auth"-tagged request handler defined above, so that the 'HasServer' instance
 -- of 'AuthProtect' can extract the handler and run it on the request.
-genAuthServerContext :: Context (AuthHandler Request Sessions.PersistentSession ': '[])
-genAuthServerContext = authHandler :. EmptyContext
+genAuthServerContext :: Pool Connection -> Context (AuthHandler Request Sessions.PersistentSession ': '[])
+genAuthServerContext dbConn = (authHandler dbConn) :. EmptyContext
 
 logoutH :: DashboardM (Html ())
 logoutH = do
@@ -111,17 +129,20 @@ authCallbackH codeM stateM = do
     let opts = defaults & header "Authorization" L..~ ["Bearer " <> encodeUtf8 @Text @ByteString accessToken]
     r <- liftIO $ getWith opts (toString $ envCfg ^. #auth0Domain <> "/userinfo")
     let email = fromMaybe "" $ r L.^? responseBody . key "email" . _String
-    let firstName = fromMaybe "" $ r L.^? responseBody . key "first_name" . _String
-    let lastName = fromMaybe "" $ r L.^? responseBody . key "last_name" . _String
+    let firstName = fromMaybe "" $ r L.^? responseBody . key "given_name" . _String
+    let lastName = fromMaybe "" $ r L.^? responseBody . key "family_name" . _String
+    -- TODO: For users with no profile photos or empty profile photos, use gravatars as their profile photo
+    -- https://en.gravatar.com/site/implement/images/
     let picture = fromMaybe "" $ r L.^? responseBody . key "picture" . _String
-
-    user <- liftIO $ Users.createUser firstName lastName picture email
 
     liftIO $
       withPool pool $ do
         userM <- Users.userByEmail email
         userId <- case userM of
-          Nothing -> Users.insertUser user >> pure (user ^. #id)
+          Nothing -> do
+            user <- liftIO $ Users.createUser firstName lastName picture email
+            Users.insertUser user
+            pure (user ^. #id)
           Just user -> pure $ user ^. #id
         persistentSessId <- liftIO Sessions.newPersistentSessionId
         newSession <- liftIO $ Sessions.newPersistentSession userId persistentSessId
@@ -129,5 +150,5 @@ authCallbackH codeM stateM = do
         pure persistentSessId
 
   case resp of
-    Left err -> (throwError $ err301 {errHeaders = [("Location", "/login")]}) >> pure (noHeader $ noHeader $ toHtml "")
-    Right persistentSessId -> pure $ addHeader "/" $ addCookie (craftSessionCookie persistentSessId False) $ toHtml ""
+    Left err -> putStrLn ("unable to process auth callback page " <> err) >> (throwError $ err301 {errHeaders = [("Location", "/login?auth0_callback_failure")]}) >> pure (noHeader $ noHeader $ toHtml "")
+    Right persistentSessId -> pure $ addHeader "/" $ addCookie (craftSessionCookie persistentSessId True) $ toHtml ""

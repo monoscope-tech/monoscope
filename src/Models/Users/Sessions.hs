@@ -1,10 +1,6 @@
 module Models.Users.Sessions where
 
 import Control.Monad.IO.Class
--- import Data.Text.Display
-
--- import Env.Generic
-
 import Data.Default
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -33,9 +29,9 @@ newtype PersistentSessionId = PersistentSessionId {getPersistentSessionId :: UUI
     via UUID
 
 data PersistentSession = PersistentSession
-  { createdAt :: ZonedTime,
+  { id :: PersistentSessionId,
+    createdAt :: ZonedTime,
     updatedAt :: ZonedTime,
-    id :: PersistentSessionId,
     userId :: UserId,
     sessionData :: SessionData
   }
@@ -43,7 +39,7 @@ data PersistentSession = PersistentSession
   deriving anyclass (FromRow, ToRow, Default)
   deriving
     (Entity)
-    via (GenericEntity '[Schema "users", TableName "persistent_sessions"] PersistentSession)
+    via (GenericEntity '[Schema "users", TableName "persistent_sessions", PrimaryKey "id"] PersistentSession)
 
 newtype SessionData = SessionData {getSessionData :: Map Text Text}
   deriving stock (Show, Eq, Generic)

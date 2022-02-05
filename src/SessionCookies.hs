@@ -36,7 +36,7 @@ addCookie ::
   SetCookie ->
   a ->
   Headers '[Header "Set-Cookie" SetCookie] a
-addCookie cookies continuation = addHeader cookies continuation
+addCookie = addHeader
 
 deleteCookie :: a -> Headers '[Header "Set-Cookie" SetCookie] a
-deleteCookie continuation = addHeader emptySessionCookie continuation
+deleteCookie = addHeader emptySessionCookie

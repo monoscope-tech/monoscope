@@ -27,6 +27,7 @@ import Data.Aeson.TH (deriveJSON)
 import Data.ByteString.Base64 as B64 (decodeBase64)
 import Data.Maybe (catMaybes)
 import Data.Pool as Pool
+import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (Connection, Only (Only), close, connectPostgreSQL, query_)
 import Database.PostgreSQL.Simple.Migration (MigrationCommand (MigrationDirectory), runMigration)
 import Database.PostgreSQL.Simple.Migration as Migrations
@@ -39,6 +40,7 @@ import Deriving.Aeson
     StripPrefix,
   )
 import GHC.Generics ()
+import qualified Models.Users.Users as Users
 import qualified Network.Google as Google
 import qualified Network.Google.Env as Env
 import qualified Network.Google.PubSub as PubSub
@@ -68,6 +70,10 @@ startApp = do
       migrationRes <- Migrations.runMigration conn Migrations.defaultOptions $ MigrationDirectory ((toString $ envConfig ^. #migrationsDir) :: FilePath)
       logger <& "migration result: " <> show migrationRes
       poolConn <- Pool.createPool (pure conn) close 1 100000000 50
+      case envConfig ^. #testEmail of
+        Just email -> withPool poolConn $ Users.addUserToAllProjects email
+        Nothing -> pure 0
+
       let serverCtx =
             Config.AuthContext
               { env = envConfig,
@@ -76,7 +82,7 @@ startApp = do
 
       concurrently_
         (pubsubService logger envConfig poolConn)
-        (run (Config.port envConfig) $ Server.app serverCtx)
+        (run (Config.port envConfig) $ Server.app poolConn serverCtx)
 
 -- pubsubService connects to the pubsub service and listens for  messages,
 -- then it calls the processMessage function to process the messages, and

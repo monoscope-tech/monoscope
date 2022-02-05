@@ -2,17 +2,19 @@
 
 module Server (app) where
 
-import Config (AuthContext, DashboardM, EnvConfig, HeadersTriggerRedirect, authHandler, ctxToHandler, env, pool)
+import Config (AuthContext, DashboardM, EnvConfig, HeadersTriggerRedirect, ctxToHandler, env, pool)
 import qualified Control.Lens as L
 import Control.Monad.Trans.Either
 import qualified Crypto.JOSE.Compact
 import qualified Crypto.JOSE.JWK
 import qualified Crypto.JWT
 import Data.Aeson.Lens (key, _String)
+import Data.Pool (Pool)
 import Data.Time.LocalTime (getZonedTime)
 import qualified Data.UUID as UUID
 import qualified Data.UUID.V4 as UUIDV4
 import Database.PostgreSQL.Entity.DBT (withPool)
+import Database.PostgreSQL.Simple (Connection)
 import Lucid
 import qualified Models.Projects.Projects as Projects
 import qualified Models.Users.Sessions as Sessions
@@ -68,10 +70,10 @@ type GetRedirect = Verb 'GET 302
 --
 -- API Section
 type ProtectedAPI =
-  "p" :> "new" :> Get '[HTML] (Html ()) -- p represents project
+  Get '[HTML] (Html ())
+    :<|> "p" :> "new" :> Get '[HTML] (Html ()) -- p represents project
     :<|> "p" :> "new" :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (HeadersTriggerRedirect (Html ()))
-    :<|> "p" :> Get '[HTML] (Html ())
-    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "dashboard" :> Get '[HTML] (Html ())
+    :<|> "p" :> Capture "projectID" Projects.ProjectId :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "endpoints" :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "endpoints" :> Capture "uuid" UUID.UUID :> Get '[HTML] (Html ())
 
@@ -89,8 +91,8 @@ type instance AuthServerData (AuthProtect "cookie-auth") = Sessions.PersistentSe
 
 --
 --
-app :: AuthContext -> Application
-app ctx = serveWithContext api genAuthServerContext $ hoistServerWithContext api ctxProxy (ctxToHandler ctx) server
+app :: Pool Connection -> AuthContext -> Application
+app dbConn ctx = serveWithContext api (genAuthServerContext dbConn) $ hoistServerWithContext api ctxProxy (ctxToHandler ctx) server
 
 api :: Proxy API
 api = Proxy
@@ -104,9 +106,9 @@ ctxProxy = Proxy
 -- that is taken care of by supplying context
 protectedServer :: Sessions.PersistentSession -> ServerT ProtectedAPI DashboardM
 protectedServer _ =
-  CreateProject.createProjectGetH
+  ListProjects.listProjectsGetH
+    :<|> CreateProject.createProjectGetH
     :<|> CreateProject.createProjectPostH
-    :<|> ListProjects.listProjectsGetH
     :<|> Dashboard.dashboardGetH
     :<|> EndpointList.endpointListH
     :<|> EndpointDetails.endpointDetailsH
