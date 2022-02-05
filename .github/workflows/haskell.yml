@@ -8,80 +8,57 @@ on:
 
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: false
       matrix:
-        plan:
-        - { ghc: "90" , stack: "stack --stack-yaml=stack.yaml" }
-        
+        ghc: ['8.8.3', '8.10.5']
+        cabal: ['2.4.1.0', '3.0.0.0']
+        os: [ubuntu-latest]
+        resolver: [lts-3.22 , lts-17, lts-18, lts]
+        exclude:
+          # GHC 8.8+ only works with cabal v3+
+          - ghc: 8.8.3
+            cabal: 2.4.1.0
+    name: ${{ matrix.resolver }} (${{ matrix.ghc }}/${{ matrix.cabal }})
     steps:
-    - name: Check out
-      uses: actions/checkout@v1
 
-    - name: Setup stack
-      uses: mstksg/setup-stack@v1
+      - name: Check out
+        uses: actions/checkout@v2
 
-    - name: Setup cabal-install
-      uses: actions/setup-haskell@v1
-      with:
-        ghc-version: ${{ matrix.plan.ghc }}
-        cabal-version: ${{ matrix.plan.cabal-install }}
-      if: matrix.plan.build == 'cabal'
+      - name: Setup Haskell
+        uses: haskell/actions/setup@v1
+        with:
+          ghc-version: ${{ matrix.ghc }}
+          cabal-version: ${{ matrix.cabal }}
+          enable-stack: true
 
-    - name: Install dependencies
-      run: |
-        set -ex
-        case "$BUILD" in
-          stack)
-            stack --no-terminal --install-ghc $ARGS test --bench --only-dependencies
-            ;;
-          cabal)
-            cabal --version
-            cabal update
-            PACKAGES=$(stack --install-ghc query locals | grep '^ *path' | sed 's@^ *path:@@')
-            cabal install --only-dependencies --enable-tests --enable-benchmarks --force-reinstalls --ghc-options=-O0 --reorder-goals --max-backjumps=-1 $CABALARGS $PACKAGES
-            ;;
-        esac
-        set +ex
-      env:
-        ARGS: ${{ matrix.plan.resolver }}
-        BUILD: ${{ matrix.plan.build }}
+      - name: Versions
+        run: |
+          stack --version
+          cabal --version
+          ghc --version
 
-    - name: Build
-      run: |
-        set -ex
-        case "$BUILD" in
-          stack)
-            stack --no-terminal $ARGS test --bench --no-run-benchmarks --haddock --no-haddock-deps
-            ;;
-          cabal)
-            PACKAGES=$(stack --install-ghc query locals | grep '^ *path' | sed 's@^ *path:@@')
-            cabal install --enable-tests --enable-benchmarks --force-reinstalls --ghc-options=-O0 --reorder-goals --max-backjumps=-1 $CABALARGS $PACKAGES
-            ORIGDIR=$(pwd)
-            for dir in $PACKAGES
-            do
-              cd $dir
-              cabal check || [ "$CABALVER" == "1.16" ]
-              cabal sdist
-              PKGVER=$(cabal info . | awk '{print $2;exit}')
-              SRC_TGZ=$PKGVER.tar.gz
-              cd dist
-              tar zxfv "$SRC_TGZ"
-              cd "$PKGVER"
-              cabal configure --enable-tests --ghc-options -O0
-              cabal build
-              if [ "$CABALVER" = "1.16" ] || [ "$CABALVER" = "1.18" ]; then
-                cabal test
-              else
-                cabal test --show-details=streaming --log=/dev/stdout
-              fi
-              cd $ORIGDIR
-            done
-            ;;
-        esac
-        set +ex
-      env:
-        ARGS: ${{ matrix.plan.resolver }}
-        BUILD: ${{ matrix.plan.build }}
+      - name: Initalize stack for LTS
+        run: |
+          stack update
+          stack init --resolver ${{ matrix.resolver }} --force
 
+      - name: Build package dependencies
+        run: |
+          stack --resolver ${{ matrix.resolver }} build --no-run-tests --no-run-benchmarks --only-dependencies
+
+      - name: Build package
+        run: |
+          stack --resolver ${{ matrix.resolver }} build --no-run-tests --no-run-benchmarks
+
+      - name: Build testing dependencies
+        run: |
+          stack --resolver ${{ matrix.resolver }} build --no-run-tests --no-run-benchmarks --test --bench
+
+      - name: Run tests
+        run: |
+          stack --resolver ${{ matrix.resolver }} build --test --no-run-benchmarks
+
+      - name: Package list
+        run: |
+          stack --resolver ${{ matrix.resolver }} exec ghc-pkg list || true
