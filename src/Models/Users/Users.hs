@@ -49,14 +49,14 @@ import qualified Relude.Unsafe as Unsafe
 newtype UserId = UserId {getUserId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving
-    (Eq, Ord, FromField, ToField)
+    (Eq, Ord, FromField, ToField, Default)
     via UUID.UUID
   deriving anyclass (FromRow, ToRow)
 
 data User = User
-  { createdAt :: UTCTime,
-    updatedAt :: UTCTime,
-    deletedAt :: Maybe UTCTime,
+  { createdAt :: ZonedTime,
+    updatedAt :: ZonedTime,
+    deletedAt :: Maybe ZonedTime,
     active :: Bool,
     id :: UserId,
     first_name :: Text,

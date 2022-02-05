@@ -86,6 +86,8 @@ dependencies:
 - resource-pool
 - http-api-data
 - valor >= 1.0.0.0
+- containers
+- cookie
 library:
   source-dirs: src
 

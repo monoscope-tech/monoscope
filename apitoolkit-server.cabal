@@ -32,7 +32,7 @@ library
       Models.Apis.RequestDumps
       Models.Projects.ProjectMembers
       Models.Projects.Projects
-      Models.Projects.ProjectSettings
+      Models.Users.Sessions
       Models.Users.Users
       Pages.BodyWrapper
       Pages.Dashboard
@@ -74,6 +74,8 @@ library
     , base64
     , co-log
     , co-log-core
+    , containers
+    , cookie
     , data-default-extra
     , deriving-aeson
     , dotenv
@@ -144,6 +146,8 @@ executable apitoolkit-server-exe
     , base64
     , co-log
     , co-log-core
+    , containers
+    , cookie
     , data-default-extra
     , deriving-aeson
     , dotenv
@@ -217,6 +221,8 @@ test-suite apitoolkit-server-test
     , base64
     , co-log
     , co-log-core
+    , containers
+    , cookie
     , data-default-extra
     , deriving-aeson
     , dotenv
