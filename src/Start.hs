@@ -13,6 +13,9 @@ import qualified Config
 import Configuration.Dotenv as Dotenv
 import Control.Concurrent.Async
 -- import Control.Lens ((&), (.~), (<&>), (?~), (^.), (^?), _Just)
+
+-- import Control.Lens ((&), (.~), (<&>), (?~), (^.), (^?), _Just)
+import Control.Exception (catch, try)
 import qualified Control.Lens as L
 import Control.Monad (when)
 import Control.Monad.Trans.Resource (ResourceT, liftResourceT, runResourceT)
@@ -64,15 +67,29 @@ startApp = do
     Left err -> logger <& "Error: " <> show err
     Right envConfig -> do
       logger <& "Starting server at port " <> show (envConfig ^. #port)
-      conn <- connectPostgreSQL $ encodeUtf8 (envConfig ^. #databaseUrl)
+      let createPgConnIO = connectPostgreSQL $ encodeUtf8 (envConfig ^. #databaseUrl)
+      conn <- createPgConnIO
       initializationRes <- Migrations.runMigration conn Migrations.defaultOptions MigrationInitialization
       logger <& "migration initialized " <> show initializationRes
       migrationRes <- Migrations.runMigration conn Migrations.defaultOptions $ MigrationDirectory ((toString $ envConfig ^. #migrationsDir) :: FilePath)
       logger <& "migration result: " <> show migrationRes
-      poolConn <- Pool.createPool (pure conn) close 1 100000000 50
+      poolConn <-
+        Pool.createPool
+          createPgConnIO
+          close
+          2 -- stripes
+          600 -- unused connections are kept open for 10 minutes (60*10)
+          50 -- max 50 connections open per stripe
+
+      -- If a test email is set, attempt to add that test email user to all projects in the database
+      -- We watch and catch thrown exceptions which would likely happen if the user does not yet exist in the db
       case envConfig ^. #testEmail of
-        Just email -> withPool poolConn $ Users.addUserToAllProjects email
-        Nothing -> pure 0
+        Just email -> do
+          err <- try (withPool poolConn (Users.addUserToAllProjects email)) :: IO (Either SomeException Int64)
+          case err of
+            Left err -> logger <& "unable to run addUserToAllProjects " <> show err
+            Right resp -> logger <& "addUserToAllProjects resp" <> show resp
+        Nothing -> pure ()
 
       let serverCtx =
             Config.AuthContext

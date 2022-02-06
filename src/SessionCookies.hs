@@ -19,7 +19,7 @@ craftSessionCookie (Sessions.PersistentSessionId content) rememberSession =
       setCookieName = "apitoolkit_session",
       setCookiePath = Just "/",
       setCookieHttpOnly = True,
-      setCookieSameSite = Just sameSiteStrict,
+      setCookieSameSite = Just sameSiteLax,
       setCookieMaxAge = if rememberSession then Just 604800 else Nothing,
       setCookieSecure = True
     }
@@ -31,12 +31,3 @@ emptySessionCookie =
       setCookieValue = "",
       setCookieMaxAge = Just 0
     }
-
-addCookie ::
-  SetCookie ->
-  a ->
-  Headers '[Header "Set-Cookie" SetCookie] a
-addCookie = addHeader
-
-deleteCookie :: a -> Headers '[Header "Set-Cookie" SetCookie] a
-deleteCookie = addHeader emptySessionCookie

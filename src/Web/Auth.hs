@@ -1,6 +1,8 @@
+{-# LANGUAGE FlexibleContexts #-}
+
 module Web.Auth where
 
-import Config (AuthContext, DashboardM, EnvConfig, HeadersTriggerRedirect, authHandler, ctxToHandler, env, pool)
+import Config (AuthContext, DashboardM, EnvConfig, HeadersTriggerRedirect, env, pool)
 import qualified Control.Lens as L
 import Control.Monad.Trans.Either (hoistMaybe, runEitherT)
 import qualified Crypto.JOSE.Compact
@@ -14,10 +16,11 @@ import qualified Data.UUID.V4 as UUIDV4
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (Connection)
 import Lucid (Html, ToHtml (toHtml))
+import Lucid.Html5
 import qualified Models.Projects.Projects as Projects
 import qualified Models.Users.Sessions as Sessions
 import qualified Models.Users.Users as Users
-import Network.Wai (Application, Request)
+import Network.Wai (Application, Request (requestHeaders))
 import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
 import Optics.Operators ((^.))
 import Relude
@@ -27,6 +30,7 @@ import Relude
     ConvertUtf8 (encodeUtf8),
     Either (Left, Right),
     Maybe (..),
+    MaybeT (runMaybeT),
     Monad ((>>)),
     MonadIO (liftIO),
     Semigroup ((<>)),
@@ -34,12 +38,18 @@ import Relude
     Text,
     ToString (toString),
     asks,
+    either,
+    error,
     fromMaybe,
+    maybe,
     putStrLn,
+    traceShowM,
     ($),
     (&),
     (.),
+    (<$>),
   )
+import Relude.String (show)
 import Servant
   ( Capture,
     Context (EmptyContext, (:.)),
@@ -59,7 +69,7 @@ import Servant
     StdMethod (GET),
     Verb,
     addHeader,
-    err301,
+    err302,
     hoistServer,
     hoistServerWithContext,
     noHeader,
@@ -70,30 +80,40 @@ import Servant
     type (:>),
   )
 import Servant.Server.Experimental.Auth (AuthHandler, AuthServerData, mkAuthHandler)
-import SessionCookies (addCookie, craftSessionCookie)
-import Web.Cookie (SetCookie)
+import SessionCookies (craftSessionCookie, emptySessionCookie)
+import Web.Cookie (SetCookie, parseCookies)
+import Prelude (lookup)
 
 -- | The context that will be made available to request handlers. We supply the
 -- "cookie-auth"-tagged request handler defined above, so that the 'HasServer' instance
 -- of 'AuthProtect' can extract the handler and run it on the request.
 genAuthServerContext :: Pool Connection -> Context (AuthHandler Request Sessions.PersistentSession ': '[])
-genAuthServerContext dbConn = (authHandler dbConn) :. EmptyContext
+genAuthServerContext dbConn = authHandler dbConn :. EmptyContext
 
-logoutH :: DashboardM (Html ())
+logoutH ::
+  DashboardM
+    ( Headers
+        '[Header "Location" Text, Header "Set-Cookie" SetCookie]
+        NoContent
+    )
 logoutH = do
   envCfg <- asks env
   let redirectTo = envCfg ^. #auth0Domain <> "/v2/logout?client_id=" <> envCfg ^. #auth0ClientId <> "&returnTo=" <> envCfg ^. #auth0LogoutRedirect
-  throwError $ err301 {errHeaders = [("Location", encodeUtf8 @Text @ByteString redirectTo)]}
-  pure $ toHtml ""
+  pure $ addHeader redirectTo $ addHeader emptySessionCookie NoContent
 
-loginH :: DashboardM (Html ())
+-- loginH
+loginH ::
+  DashboardM
+    ( Headers
+        '[Header "Location" Text, Header "Set-Cookie" SetCookie]
+        NoContent
+    )
 loginH = do
   envCfg <- asks env
-  newUID <- liftIO UUIDV4.nextRandom
-  let state = UUID.toText newUID
+  state <- liftIO $ UUID.toText <$> UUIDV4.nextRandom
   let redirectTo = envCfg ^. #auth0Domain <> "/authorize?response_type=code&client_id=" <> envCfg ^. #auth0ClientId <> "&redirect_uri=" <> envCfg ^. #auth0Callback <> "&state=" <> state <> "&scope=openid profile email"
-  throwError $ err301 {errHeaders = [("Location", encodeUtf8 @Text @ByteString redirectTo)]}
-  pure $ toHtml ""
+  traceShowM redirectTo
+  pure $ addHeader redirectTo $ addHeader emptySessionCookie NoContent
 
 -- authCallbackH will accept a request with code and state, and use that code to queery auth- for an auth token, and then for user info
 -- it then uses this user info to check if we already have that user in our db. And if we have that user in the db,
@@ -103,7 +123,7 @@ authCallbackH ::
   Maybe Text ->
   DashboardM
     ( Headers
-        '[Header "Location" String, Header "Set-Cookie" SetCookie]
+        '[Header "Location" Text, Header "Set-Cookie" SetCookie]
         (Html ())
     )
 authCallbackH codeM stateM = do
@@ -150,5 +170,39 @@ authCallbackH codeM stateM = do
         pure persistentSessId
 
   case resp of
-    Left err -> putStrLn ("unable to process auth callback page " <> err) >> (throwError $ err301 {errHeaders = [("Location", "/login?auth0_callback_failure")]}) >> pure (noHeader $ noHeader $ toHtml "")
-    Right persistentSessId -> pure $ addHeader "/" $ addCookie (craftSessionCookie persistentSessId True) $ toHtml ""
+    Left err -> putStrLn ("unable to process auth callback page " <> err) >> (throwError $ err302 {errHeaders = [("Location", "/login?auth0_callback_failure")]}) >> pure (noHeader $ noHeader $ toHtml "")
+    Right persistentSessId -> pure $
+      addHeader "/" $
+        addHeader (craftSessionCookie persistentSessId True) $ do
+          html_ $ do
+            head_ $ do
+              meta_ [httpEquiv_ "refresh", content_ "1;url=/"]
+            body_ $ do
+              a_ [href_ "/"] "Continue to APIToolkit"
+
+--- | The auth handler wraps a function from Request -> Handler Account.
+--- We look for a token in the request headers that we expect to be in the cookie.
+--- The token is then passed to our `lookupAccount` function.
+authHandler :: Pool Connection -> AuthHandler Request Sessions.PersistentSession
+authHandler conn = mkAuthHandler handler
+  where
+    maybeToEither e = maybe (Left e) Right
+    throw301 err = traceShowM err >> throwError $ err302 {errHeaders = [("Location", "/login")]}
+
+    handler :: Request -> Handler Sessions.PersistentSession
+    handler req = either throw301 (lookupAccount conn) $ do
+      cookie <- maybeToEither "Missing cookie header" $ lookup "cookie" $ requestHeaders req
+      maybeToEither "Missing token in cookie" $ lookup "apitoolkit_session" $ parseCookies cookie
+
+-- We need to handle errors for the persistent session better and redirect if there's an error
+lookupAccount :: Pool Connection -> ByteString -> Handler Sessions.PersistentSession
+lookupAccount conn key = do
+  resp <- runEitherT $ do
+    pid <- hoistMaybe "unable to convert cookie value to persistent session UUID" (Sessions.PersistentSessionId <$> UUID.fromASCIIBytes key)
+    presistentID <- liftIO $ withPool conn $ Sessions.getPersistentSession pid
+    hoistMaybe "lookupAccount: invalid persistentID " presistentID
+  case resp of
+    Left err -> do
+      traceShowM $ "Auth: Unable to unmarshal auth cookie value into PersistentSessionId. Value: " <> show key
+      throwError $ err302 {errHeaders = [("Location", "/login")]}
+    Right session -> pure session

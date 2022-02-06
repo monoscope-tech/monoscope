@@ -48,7 +48,6 @@ import Servant
     StdMethod (GET),
     Verb,
     addHeader,
-    err301,
     hoistServer,
     hoistServerWithContext,
     noHeader,
@@ -61,7 +60,7 @@ import Servant
 import Servant.HTML.Lucid
 import Servant.Server.Experimental.Auth (AuthHandler, AuthServerData, mkAuthHandler)
 import Servant.Server.StaticFiles
-import SessionCookies (addCookie, craftSessionCookie)
+import SessionCookies (craftSessionCookie)
 import Web.Auth
 import Web.Cookie (SetCookie)
 
@@ -78,16 +77,16 @@ type ProtectedAPI =
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "endpoints" :> Capture "uuid" UUID.UUID :> Get '[HTML] (Html ())
 
 type PublicAPI =
-  "login" :> Get '[HTML] (Html ())
-    :<|> "logout" :> Get '[HTML] (Html ())
-    :<|> "auth_callback" :> QueryParam "code" Text :> QueryParam "state" Text :> GetRedirect '[HTML] (Headers '[Header "Location" String, Header "Set-Cookie" SetCookie] (Html ()))
+  "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
+    :<|> "logout" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
+    :<|> "auth_callback" :> QueryParam "code" Text :> QueryParam "state" Text :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] (Html ()))
     :<|> "assets" :> Raw
 
 type API =
-  AuthProtect "cookie-auth" :> ProtectedAPI
+  AuthProtect "apitoolkit_session" :> ProtectedAPI
     :<|> PublicAPI
 
-type instance AuthServerData (AuthProtect "cookie-auth") = Sessions.PersistentSession
+type instance AuthServerData (AuthProtect "apitoolkit_session") = Sessions.PersistentSession
 
 --
 --
