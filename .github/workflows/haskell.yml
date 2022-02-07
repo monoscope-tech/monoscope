@@ -14,7 +14,7 @@ jobs:
         ghc: ['8.10.5']
         cabal: ['3.0.0.0']
         os: [ubuntu-latest]
-        resolver: [lts-3.22]
+        resolver: [lts-3.5]
         exclude:
           # GHC 8.8+ only works with cabal v3+
           - ghc: 8.8.3
