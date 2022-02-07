@@ -33,15 +33,6 @@ jobs:
           stack --version
           cabal --version
           ghc --version
-     
-  
-      - name: some 
-        uses: DamianReeves/write-file-action@v1.0
-        with:
-          path: "/home/runner/.stack/config.yaml"
-          contents: |
-            echo "   "
-          write-mode: append
       
       - name: Build package dependencies
         run: |
