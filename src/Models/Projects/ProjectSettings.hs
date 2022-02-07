@@ -1,61 +1,79 @@
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DeriveAnyClass #-}
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE OverloadedLabels #-}
-{-# LANGUAGE OverloadedLists #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE QuasiQuotes #-}
-{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE TypeApplications #-}
-{-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE UndecidableInstances #-}
 
-module Models.Projects.ProjectSettings ( 
-    
-     ) 
+module Models.Projects.ProjectSettings
+  (
+  )
 where
 
+import Config
+  ( AuthContext (pool),
+    DashboardM,
+    HeadersTriggerRedirect,
+  )
+import Data.Default (Default (def))
+import qualified Data.Text as T
 import qualified Data.UUID as UUID
-import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Data.Default
-import qualified Data.UUID as UUID
-import qualified Database.PostgreSQL.Entity.Types as PET
-import GHC.Generics (Generic)
-import qualified Models.Projects.Projects as Projects
-import qualified Database.PostgreSQL.Transact as PgT
-import Database.PostgreSQL.Entity
-import Relude
 import Data.Valor (Valid, Valor, check1, failIf, validateM)
 import qualified Data.Valor as Valor
 import qualified Data.Vector as Vector
-import Servant.HTML.Lucid
-import qualified Data.Text as T
-import Lucid
-import Optics.Operators
-import Optics.TH
-import Lucid.HTMX
-import Config
+import Database.PostgreSQL.Entity (delete)
+import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, queryOne, query_, withPool)
+import qualified Database.PostgreSQL.Entity.Types as PET
 import Database.PostgreSQL.Simple (Connection, FromRow, Only (Only), ToRow, query_)
-import Web.FormUrlEncoded (FromForm)
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, queryOne, query_, withPool, query)
+import Database.PostgreSQL.Simple.SqlQQ (sql)
+import qualified Database.PostgreSQL.Transact as PgT
+import GHC.Generics (Generic)
+import Lucid
+  ( Html,
+    button_,
+    class_,
+    div_,
+    form_,
+    h2_,
+    id_,
+    img_,
+    input_,
+    label_,
+    name_,
+    option_,
+    p_,
+    placeholder_,
+    rows_,
+    section_,
+    select_,
+    span_,
+    src_,
+    textarea_,
+    type_,
+  )
+import Lucid.HTMX (hxPost_, hxTarget_)
+import Models.Projects.ProjectMembers ()
+import Models.Projects.Projects (Project, ProjectId)
+import qualified Models.Projects.Projects as Projects
+import Optics.Operators ()
+import Optics.TH ()
+import Pages.Projects.CreateProject
+  ( CreateProjectForm,
+    CreateProjectFormError,
+    createProjectFormV,
+  )
+import Relude
+  ( Applicative (pure),
+    Either (Left, Right),
+    IO,
+    Int64,
+    MonadIO (liftIO),
+    asks,
+    ($),
+  )
 import Servant
   ( Handler,
     addHeader,
     noHeader,
   )
-
-
-import Pages.Projects.CreateProject
-import Models.Projects.Projects
-import Models.Projects.ProjectMembers
-
+import Servant.HTML.Lucid ()
+import Web.FormUrlEncoded (FromForm)
 
 editProjectBody :: CreateProjectForm -> CreateProjectFormError -> Html ()
 editProjectBody cp cpe = do
@@ -84,7 +102,7 @@ editProjectBody cp cpe = do
 
 editProjectMembersBody :: CreateProjectForm -> CreateProjectFormError -> Html ()
 editProjectMembersBody cp cpe = do
-  section_ [id_ "main-content"] $ do      
+  section_ [id_ "main-content"] $ do
     h2_ [class_ "text-slate-700 text-2xl font-medium mb-5"] "Edit Project Members"
     form_ [class_ "relative px-10 border border-gray-200 py-10  bg-white w-1/2 rounded-3xl", hxPost_ "/p/edit-members", hxTarget_ "#main-content"] $ do
       div_ $ do
@@ -115,42 +133,41 @@ editProjectMembersBody cp cpe = do
           span_ [class_ "text-blue-700 font-medium text-base "] "Add member"
       button_ [class_ "py-2 px-5 bg-blue-700 absolute m-5 bottom-0 right-0 text-[white] text-sm rounded-xl cursor-pointer", type_ "submit"] "Next step"
 
-
 editProjectMemberH :: ProjectId -> CreateProjectForm -> DashboardM (HeadersTriggerRedirect (Html ()))
 editProjectMemberH pid editP = do
-    validationRes <- validateM createProjectFormV editP
-    case validationRes of 
-        Left epRaw -> do
-            let ep = Valor.unValid epRaw
-            pool <- asks pool
-            _ <- liftIO $
-                withPool pool $ do
-                    -- updateProject (createProjectFormToModel pid ep)
-                    pure ()
+  validationRes <- validateM createProjectFormV editP
+  case validationRes of
+    Left epRaw -> do
+      let ep = Valor.unValid epRaw
+      pool <- asks pool
+      _ <- liftIO $
+        withPool pool $ do
+          -- updateProject (createProjectFormToModel pid ep)
+          pure ()
 
-            pure $ addHeader "HX-Trigger" $ addHeader "/p" $ editProjectMembersBody ep (def @CreateProjectFormError)
-        Right epe -> pure $ noHeader $ noHeader $ editProjectMembersBody editP epe
-
+      pure $ addHeader "HX-Trigger" $ addHeader "/p" $ editProjectMembersBody ep (def @CreateProjectFormError)
+    Right epe -> pure $ noHeader $ noHeader $ editProjectMembersBody editP epe
 
 editProjectPostH :: ProjectId -> CreateProjectForm -> DashboardM (HeadersTriggerRedirect (Html ()))
 editProjectPostH pid editP = do
-    validationRes <- validateM createProjectFormV editP
-    case validationRes of 
-        Left epRaw -> do
-            let ep = Valor.unValid epRaw
-            pool <- asks pool
-            _ <- liftIO $
-                withPool pool $ do
-                    -- updateProject (createProjectFormToModel pid ep)
-                    pure ()
+  validationRes <- validateM createProjectFormV editP
+  case validationRes of
+    Left epRaw -> do
+      let ep = Valor.unValid epRaw
+      pool <- asks pool
+      _ <- liftIO $
+        withPool pool $ do
+          -- updateProject (createProjectFormToModel pid ep)
+          pure ()
 
-            pure $ addHeader "HX-Trigger" $ addHeader "/p" $ editProjectBody ep (def @CreateProjectFormError)
-        Right epe -> pure $ noHeader $ noHeader $ editProjectBody editP epe
-    
+      pure $ addHeader "HX-Trigger" $ addHeader "/p" $ editProjectBody ep (def @CreateProjectFormError)
+    Right epe -> pure $ noHeader $ noHeader $ editProjectBody editP epe
 
 editProjectGetH :: ProjectId -> PgT.DBT IO (Vector.Vector Project)
 editProjectGetH pid = query Select q (Only pid)
-    where q = [sql|
+  where
+    q =
+      [sql|
         SELECT pp*, ppm* FROM projects.projects AS pp 
             INNER JOIN projects.project_members AS ppm
             ON pp.id = pid 
@@ -158,7 +175,9 @@ editProjectGetH pid = query Select q (Only pid)
 
 updateProject :: ProjectId -> PgT.DBT IO Int64
 updateProject pid = PgT.execute q (Only pid)
-    where q = [sql|
+  where
+    q =
+      [sql|
       UPDATE projects.projects(title, description) VALUES (?, ?)
       WHERE projects.projects.id = pid;|]
 
@@ -167,7 +186,9 @@ deleteProject pid = delete @Project (Only pid)
 
 updateMemberPermission :: UUID.UUID -> PgT.DBT IO Int64
 updateMemberPermission mid = PgT.execute q (Only mid)
-  where q = [sql|
+  where
+    q =
+      [sql|
     UPDATE projects.project_members (permission) VALUES (?)
     WHERE projects.project_members.id = mid;|]
 
