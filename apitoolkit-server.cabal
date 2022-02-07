@@ -72,6 +72,9 @@ library
       OverloadedLists
       ExtendedDefaultRules
       OverloadedLabels
+      FlexibleInstances
+      MultiParamTypeClasses
+      UndecidableInstances
   build-depends:
       aeson
     , aeson-optics
@@ -152,6 +155,9 @@ executable apitoolkit-server-exe
       OverloadedLists
       ExtendedDefaultRules
       OverloadedLabels
+      FlexibleInstances
+      MultiParamTypeClasses
+      UndecidableInstances
   ghc-options: -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
   build-depends:
       aeson
@@ -237,6 +243,9 @@ test-suite apitoolkit-server-test
       OverloadedLists
       ExtendedDefaultRules
       OverloadedLabels
+      FlexibleInstances
+      MultiParamTypeClasses
+      UndecidableInstances
   ghc-options: -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
   build-depends:
       aeson

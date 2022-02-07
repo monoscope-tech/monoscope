@@ -22,10 +22,13 @@ module Models.Projects.Projects
     ProjectId (..),
     CreateProject (..),
     insertProject,
+    projectIdText,
     selectProjectsForUser,
+    selectProjectForUser,
   )
 where
 
+import Data.Aeson (FromJSON, ToJSON)
 import qualified Data.Aeson as AE
 import qualified Data.Aeson.Types as AET
 import Data.Default
@@ -35,7 +38,7 @@ import Data.Time.Clock (DiffTime, NominalDiffTime)
 import qualified Data.UUID as UUID
 import qualified Data.Vector as Vector
 import Database.PostgreSQL.Entity
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, query_, withPool)
+import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, queryOne, query_, withPool)
 import qualified Database.PostgreSQL.Entity.Types as PET
 import Database.PostgreSQL.Simple (Connection, FromRow, Only (Only), ToRow, query_)
 import Database.PostgreSQL.Simple.FromField (FromField)
@@ -54,9 +57,12 @@ import Web.HttpApiData
 newtype ProjectId = ProjectId {unProjectId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving
-    (Eq, Ord, FromField, ToField, FromHttpApiData, Default)
+    (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default)
     via UUID.UUID
   deriving anyclass (FromRow, ToRow)
+
+projectIdText :: ProjectId -> Text
+projectIdText = UUID.toText . unProjectId
 
 data Project = Project
   { createdAt :: ZonedTime,
@@ -69,7 +75,10 @@ data Project = Project
     hosts :: Vector.Vector Text
   }
   deriving (Show, Generic)
-  deriving anyclass (FromRow, ToRow)
+  deriving anyclass (FromRow, ToRow, FromField, ToField)
+  deriving
+    (FromJSON, ToJSON)
+    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Project
   deriving
     (PET.Entity)
     via (PET.GenericEntity '[PET.Schema "projects", PET.TableName "projects", PET.PrimaryKey "id", PET.FieldModifiers '[PET.CamelToSnake]] Project)
@@ -96,3 +105,8 @@ selectProjectsForUser :: Users.UserId -> PgT.DBT IO (Vector.Vector Project)
 selectProjectsForUser = query Select q
   where
     q = [sql| select pp.* from projects.projects as pp join projects.project_members as ppm on (pp.id=ppm.project_id) where ppm.user_id=? order by updated_at desc|]
+
+selectProjectForUser :: (Users.UserId, ProjectId) -> PgT.DBT IO (Maybe Project)
+selectProjectForUser = queryOne Select q
+  where
+    q = [sql| select pp.* from projects.projects as pp join projects.project_members as ppm on (pp.id=ppm.project_id) where ppm.user_id=? and ppm.project_id=? order by updated_at desc|]

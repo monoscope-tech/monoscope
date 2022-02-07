@@ -24,6 +24,9 @@ default-extensions:
   - OverloadedLists
   - ExtendedDefaultRules
   - OverloadedLabels
+  - FlexibleInstances
+  - MultiParamTypeClasses
+  - UndecidableInstances
 
 extra-source-files:
 - README.md

@@ -19,20 +19,25 @@ import Database.PostgreSQL.Entity.DBT
 import Database.PostgreSQL.Transact (DBT)
 import Lucid
 import Lucid.HTMX
-import Models.Apis.Endpoints
 import qualified Models.Apis.Endpoints as Endpoints
 import qualified Models.Projects.Projects as Projects
+import qualified Models.Users.Sessions as Sessions
 import Optics.Operators
 import Pages.BodyWrapper (bodyWrapper)
 import Relude
 import Servant.HTML.Lucid
 import Text.RawString.QQ
 
-endpointListH :: Projects.ProjectId -> DashboardM (Html ())
-endpointListH pid = do
+endpointListH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
+endpointListH sess pid = do
   pool <- asks pool
-  endpoints <- liftIO $ withPool pool $ Endpoints.endpointsByProject pid
-  pure $ bodyWrapper "Endpoint List" $ endpointList endpoints
+  (project, endpoints) <- liftIO $
+    withPool pool $ do
+      endpoints <- Endpoints.endpointsByProject pid
+      project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+      pure (project, endpoints)
+
+  pure $ bodyWrapper (Just sess) project "Endpoints" $ endpointList endpoints
 
 endpointList :: Vector Endpoints.Endpoint -> Html ()
 endpointList enps = do

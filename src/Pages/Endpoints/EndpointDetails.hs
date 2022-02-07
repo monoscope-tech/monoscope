@@ -6,20 +6,25 @@ module Pages.Endpoints.EndpointDetails (endpointDetailsH) where
 
 import Config
 import Data.UUID as UUID
+import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import Lucid.HTMX
 import qualified Models.Projects.Projects as Projects
+import qualified Models.Users.Sessions as Sessions
 import Pages.BodyWrapper (bodyWrapper)
 import Relude
 import Servant
 import Servant.HTML.Lucid
 import Text.RawString.QQ
 
-endpointDetailsH :: Projects.ProjectId -> UUID.UUID -> DashboardM (Html ())
-endpointDetailsH uuid sif = pure endpointDetails
+endpointDetailsH :: Sessions.PersistentSession -> Projects.ProjectId -> UUID.UUID -> DashboardM (Html ())
+endpointDetailsH sess pid eid = do
+  pool <- asks pool
+  project <- liftIO $ withPool pool $ Projects.selectProjectForUser (Sessions.userId sess, pid)
+  pure $ bodyWrapper (Just sess) project "Endpoint Details" endpointDetails
 
 endpointDetails :: Html ()
-endpointDetails = bodyWrapper "Endpoint Details" $ do
+endpointDetails = do
   div_ [class_ "w-full flex flex-row"] $ do
     div_ [class_ "w-2/3"] $ do
       div_ [class_ "flex flex-row justify-between mb-10"] $ do
@@ -59,24 +64,24 @@ endpointDetails = bodyWrapper "Endpoint Details" $ do
     div_ [class_ "w-1/3 bg-white h-screen -mr-8 -mt-5 border border-gray-200 ml-3 p-5"] $ do
       img_ [src_ "/assets/svgs/ellipsis.svg", class_ "my-2 float-right"]
       h3_ [class_ "text-lg text-slate-700 mt-6"] "bank_name"
-      div_ [class_ "flex mt-5 flex-row"] $ do 
-        div_ [class_ ""] $ do 
+      div_ [class_ "flex mt-5 flex-row"] $ do
+        div_ [class_ ""] $ do
           h6_ [class_ "text-slate-600 text-xs"] "TYPE"
           h4_ [class_ "text-base text-slate-600"] "keyword"
-        div_ [class_ "mx-5"] $ do 
+        div_ [class_ "mx-5"] $ do
           h6_ [class_ "text-slate-600 text-xs"] "FORMAT"
           h4_ [class_ "text-base text-slate-600"] "keyword"
       h6_ [class_ "text-slate-600 mt-4 text-xs"] "EXAMPLE VALUES"
       ul_ [class_ "list-disc"] $ do
         li_ [class_ "ml-10 text-slate-600 text-sm"] "UBA"
         li_ [class_ "ml-10 text-slate-600 text-sm"] "ABC"
-      div_ [class_ "flex flex-row justify-between mt-10 "] $ do 
-        div_ [ class_ " "] $ do 
+      div_ [class_ "flex flex-row justify-between mt-10 "] $ do
+        div_ [class_ " "] $ do
           h4_ [class_ "text-sm text-slate-600 mb-2"] "CREATION DATE"
           div_ [class_ "flex border border-gray-200 m-1 rounded-xl p-2"] $ do
             img_ [src_ "/assets/svgs/calender.svg", class_ "h-4 mr-2 w-4"]
             span_ [class_ "text-xs"] "Jan 17, 2020, 10:50AM"
-        div_ [ class_ " "] $ do 
+        div_ [class_ " "] $ do
           h4_ [class_ "text-sm text-slate-600 mb-2"] "LAST CHANGE"
           div_ [class_ "flex border border-gray-200 m-1 justify-between rounded-xl p-2"] $ do
             img_ [src_ "/assets/svgs/calender.svg", class_ "h-4 mr-2 w-4"]

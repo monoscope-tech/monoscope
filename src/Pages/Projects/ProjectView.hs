@@ -14,7 +14,7 @@ import Servant.HTML.Lucid
 import Text.RawString.QQ
 
 projectView :: Html ()
-projectView = bodyWrapper "Project View" $ do
+projectView = bodyWrapper Nothing Nothing "Project View" $ do
   div_ [class_ "container"] $ do
     h2_ [class_ "text-slate-700 text-2xl font-medium mb-5"] "Projects"
     div_ [class_ "px-10 border border-gray-200 py-5  bg-white rounded-3xl"] $ do

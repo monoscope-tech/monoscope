@@ -26,6 +26,7 @@ import Lucid
 import Lucid.HTMX
 import qualified Models.Projects.ProjectMembers as ProjectMembers
 import qualified Models.Projects.Projects as Projects
+import qualified Models.Users.Sessions as Sessions
 import qualified Models.Users.Users as Users
 import Pages.BodyWrapper (bodyWrapper)
 import Relude
@@ -63,15 +64,15 @@ createProjectFormV =
 
 ----------------------------------------------------------------------------------------------------------
 -- createProjectGetH is the handler for the create projects page
-createProjectGetH :: DashboardM (Html ())
-createProjectGetH = do
-  pure $ bodyWrapper "Create Project" $ createProjectBody (def @CreateProjectForm) (def @CreateProjectFormError)
+createProjectGetH :: Sessions.PersistentSession -> DashboardM (Html ())
+createProjectGetH sess = do
+  pure $ bodyWrapper (Just sess) Nothing "Create Project" $ createProjectBody (def @CreateProjectForm) (def @CreateProjectFormError)
 
 ----------------------------------------------------------------------------------------------------------
 -- createProjectPostH is the handler for the create projects page form handling.
 -- It processes post requests and is expected to return a redirect header and a hyperscript event trigger header.
-createProjectPostH :: CreateProjectForm -> DashboardM (HeadersTriggerRedirect (Html ()))
-createProjectPostH createP = do
+createProjectPostH :: Sessions.PersistentSession -> CreateProjectForm -> DashboardM (HeadersTriggerRedirect (Html ()))
+createProjectPostH sess createP = do
   validationRes <- validateM createProjectFormV createP
   case validationRes of
     Left cpRaw -> do
@@ -107,7 +108,7 @@ createProjectBody cp cpe = do
             id_ "title",
             name_ "title"
           ]
-      div_ [class_ "mt-5 "]$ do
+      div_ [class_ "mt-5 "] $ do
         label_ [class_ "text-gray-400 mx-2  font-light text-sm"] "Description"
         textarea_
           [ class_ " py-2 px-5 my-2 w-full text-sm bg-white text-black border-solid border border-gray-200 rounded-2xl border-0 ",
@@ -117,30 +118,34 @@ createProjectBody cp cpe = do
             name_ "description"
           ]
           ""
-      div_ [class_ "mt-6"]$ do
+      div_ [class_ "mt-6"] $ do
         p_ [class_ "text-gray-400 mx-2 font-light text-sm"] "Invite a project member"
-        section_ [id_ "manage" ] $ do
+        section_ [id_ "manage"] $ do
           template_ [id_ "invite"] $ do
             div_ [class_ "flex flex-row space-x-2"] $ do
               input_ [class_ "w-2/3 h-10 px-5 my-2 w-full text-sm bg-white text-slate-700 font-light border-solid border border-gray-200 rounded-2xl border-0 ", placeholder_ "anthony@gmail.com"]
               select_ [class_ "w-1/3 h-10 px-5  my-2 w-full text-sm bg-white text-zinc-500 border-solid border border-gray-200 rounded-2xl border-0"] $ do
                 option_ [class_ "text-gray-500"] "Can Edit"
                 option_ [class_ "text-gray-500"] "Can View"
-              button_ [ class_ "",
-                term
-                  "_"
-                  [r| 
+              button_
+                [ class_ "",
+                  term
+                    "_"
+                    [r| 
                     remove my parent             
                   |]
-                ] $ do img_ [src_ "/assets/svgs/delete.svg", class_ "cursor-pointer"]
-        a_ [class_ "bg-transparent inline-flex cursor-pointer mt-2", 
-              term
-                "_"
-                [r| 
+                ]
+                $ do img_ [src_ "/assets/svgs/delete.svg", class_ "cursor-pointer"]
+        a_
+          [ class_ "bg-transparent inline-flex cursor-pointer mt-2",
+            term
+              "_"
+              [r| 
                   on click append #invite.innerHTML to #manage   
                   end 
                 |]
-            ] $ do
-          img_ [src_ "/assets/svgs/blue-plus.svg", class_ " mt-1 mx-2 w-3 h-3"]
-          span_ [class_ "text-blue-700 font-medium text-sm "] "Add member"
+          ]
+          $ do
+            img_ [src_ "/assets/svgs/blue-plus.svg", class_ " mt-1 mx-2 w-3 h-3"]
+            span_ [class_ "text-blue-700 font-medium text-sm "] "Add member"
       button_ [class_ "py-2 px-5 bg-blue-700 absolute m-5 bottom-0 right-0 text-[white] text-sm rounded-xl cursor-pointer", type_ "submit"] "Next step"

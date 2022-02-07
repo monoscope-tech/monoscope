@@ -9,6 +9,7 @@ import qualified Crypto.JOSE.Compact
 import qualified Crypto.JOSE.JWK
 import qualified Crypto.JWT
 import Data.Aeson.Lens (key, _String)
+import qualified Data.Map.Strict as Map
 import Data.Pool (Pool)
 import Data.Time.LocalTime (getZonedTime)
 import qualified Data.UUID as UUID
@@ -165,8 +166,7 @@ authCallbackH codeM stateM = do
             pure (user ^. #id)
           Just user -> pure $ user ^. #id
         persistentSessId <- liftIO Sessions.newPersistentSessionId
-        newSession <- liftIO $ Sessions.newPersistentSession userId persistentSessId
-        Sessions.insertSession newSession
+        Sessions.insertSession persistentSessId userId (Sessions.SessionData Map.empty)
         pure persistentSessId
 
   case resp of
@@ -199,8 +199,8 @@ lookupAccount :: Pool Connection -> ByteString -> Handler Sessions.PersistentSes
 lookupAccount conn key = do
   resp <- runEitherT $ do
     pid <- hoistMaybe "unable to convert cookie value to persistent session UUID" (Sessions.PersistentSessionId <$> UUID.fromASCIIBytes key)
-    presistentID <- liftIO $ withPool conn $ Sessions.getPersistentSession pid
-    hoistMaybe "lookupAccount: invalid persistentID " presistentID
+    presistentSess <- liftIO $ withPool conn $ Sessions.getPersistentSession pid
+    hoistMaybe "lookupAccount: invalid persistentID " presistentSess
   case resp of
     Left err -> do
       traceShowM $ "Auth: Unable to unmarshal auth cookie value into PersistentSessionId. Value: " <> show key

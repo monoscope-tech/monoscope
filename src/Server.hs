@@ -104,13 +104,13 @@ ctxProxy = Proxy
 -- argument. We don't worry about the authentication instrumentation here,
 -- that is taken care of by supplying context
 protectedServer :: Sessions.PersistentSession -> ServerT ProtectedAPI DashboardM
-protectedServer _ =
-  ListProjects.listProjectsGetH
-    :<|> CreateProject.createProjectGetH
-    :<|> CreateProject.createProjectPostH
-    :<|> Dashboard.dashboardGetH
-    :<|> EndpointList.endpointListH
-    :<|> EndpointDetails.endpointDetailsH
+protectedServer sess =
+  ListProjects.listProjectsGetH sess
+    :<|> CreateProject.createProjectGetH sess
+    :<|> CreateProject.createProjectPostH sess
+    :<|> Dashboard.dashboardGetH sess
+    :<|> EndpointList.endpointListH sess
+    :<|> EndpointDetails.endpointDetailsH sess
 
 publicServer :: ServerT PublicAPI DashboardM
 publicServer =
