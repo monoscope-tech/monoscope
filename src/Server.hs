@@ -19,6 +19,7 @@ import Lucid
 import qualified Models.Projects.Projects as Projects
 import qualified Models.Users.Sessions as Sessions
 import qualified Models.Users.Users as Users
+import qualified Models.Apis.Endpoints as Endpoints
 import Network.Wai (Application, Request)
 import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
 import Optics.Operators
@@ -74,7 +75,7 @@ type ProtectedAPI =
     :<|> "p" :> "new" :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (HeadersTriggerRedirect (Html ()))
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "endpoints" :> Get '[HTML] (Html ())
-    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "endpoints" :> Capture "uuid" UUID.UUID :> Get '[HTML] (Html ())
+    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "endpoints" :> Capture "endpoints_id" Endpoints.EndpointId :> Get '[HTML] (Html ())
 
 type PublicAPI =
   "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)

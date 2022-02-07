@@ -11,25 +11,34 @@ import Lucid
 import Lucid.HTMX
 import qualified Models.Projects.Projects as Projects
 import qualified Models.Users.Sessions as Sessions
+import qualified Models.Apis.Endpoints as Endpoints
 import Pages.BodyWrapper (bodyWrapper)
 import Relude
 import Servant
 import Servant.HTML.Lucid
 import Text.RawString.QQ
+import Models.Apis.Endpoints
+import Optics.Core ((^.))
 
-endpointDetailsH :: Sessions.PersistentSession -> Projects.ProjectId -> UUID.UUID -> DashboardM (Html ())
+endpointDetailsH :: Sessions.PersistentSession -> Projects.ProjectId -> Endpoints.EndpointId -> DashboardM (Html ())
 endpointDetailsH sess pid eid = do
   pool <- asks pool
+  endpointM <- liftIO $ withPool pool $ Endpoints.endpointById  eid 
+  traceShowM "Here"
+  traceShowM endpointM
   project <- liftIO $ withPool pool $ Projects.selectProjectForUser (Sessions.userId sess, pid)
-  pure $ bodyWrapper (Just sess) project "Endpoint Details" endpointDetails
+  case endpointM of
+    Nothing -> pure $ toHtml "to" 
+    Just endpoint -> pure $ bodyWrapper (Just sess) project "Endpoint Details" ( endpointDetails  endpoint)
+  
 
-endpointDetails :: Html ()
-endpointDetails = do
+endpointDetails :: Endpoint -> Html ()
+endpointDetails endpoint = do
   div_ [class_ "w-full flex flex-row"] $ do
     div_ [class_ "w-2/3"] $ do
       div_ [class_ "flex flex-row justify-between mb-10"] $ do
         div_ [class_ "flex flex-row"] $ do
-          h3_ [class_ "text-lg text-slate-700"] "GET /users/acc_details"
+          h3_ [class_ "text-lg text-slate-700"] $ toHtml $ (endpoint ^. #method) <> " " <> (endpoint ^. #urlPath)
           img_ [src_ "/assets/svgs/cheveron-down.svg", class_ " h-4 w-4 m-2"]
         div_ [class_ "flex flex-row"] $ do
           a_ [href_ ""] $ do
