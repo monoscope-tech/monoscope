@@ -20,6 +20,11 @@ jobs:
 
       - name: Check out
         uses: actions/checkout@v2
+      - name: copy file
+        uses: canastro/copy-file-action@master
+        with:
+          source: "stack.yaml"
+          target: "/home/runner/.stack/config.yaml"
 
       - name: Setup Haskell
         uses: haskell/actions/setup@v1
@@ -33,7 +38,17 @@ jobs:
           stack --version
           cabal --version
           ghc --version
-          
+     
+  
+      - name: some 
+        uses: DamianReeves/write-file-action@v1.0
+        with:
+          path: ${{ env.home}}/.bashrc
+          contents: |
+            echo "   "
+          write-mode: append
+      
+      
       - name: Build package
         run: |
           stack --resolver ${{ matrix.resolver }} build --no-run-tests --no-run-benchmarks     
