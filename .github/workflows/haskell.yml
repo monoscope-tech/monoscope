@@ -14,7 +14,7 @@ jobs:
         ghc: ['7.10.2']
         cabal: ['1.12']
         os: [ubuntu-latest]
-        resolver: [lts-3.5]
+        resolver: [https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/18/18.yaml]
     name: ${{ matrix.resolver }} (${{ matrix.ghc }}/${{ matrix.cabal }})
     steps:
 
