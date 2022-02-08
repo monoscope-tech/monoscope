@@ -9,28 +9,29 @@ import Data.UUID as UUID
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import Lucid.HTMX
+import Models.Apis.Endpoints
+import qualified Models.Apis.Endpoints as Endpoints
 import qualified Models.Projects.Projects as Projects
 import qualified Models.Users.Sessions as Sessions
-import qualified Models.Apis.Endpoints as Endpoints
+import Optics.Core ((^.))
 import Pages.BodyWrapper (bodyWrapper)
 import Relude
 import Servant
 import Servant.HTML.Lucid
 import Text.RawString.QQ
-import Models.Apis.Endpoints
-import Optics.Core ((^.))
 
 endpointDetailsH :: Sessions.PersistentSession -> Projects.ProjectId -> Endpoints.EndpointId -> DashboardM (Html ())
 endpointDetailsH sess pid eid = do
   pool <- asks pool
-  endpointM <- liftIO $ withPool pool $ Endpoints.endpointById  eid 
-  traceShowM "Here"
-  traceShowM endpointM
-  project <- liftIO $ withPool pool $ Projects.selectProjectForUser (Sessions.userId sess, pid)
+  (endpointM, project) <- liftIO $
+    withPool pool $ do
+      endpointM <- Endpoints.endpointById eid
+      project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+      pure (endpointM, project)
+
   case endpointM of
-    Nothing -> pure $ toHtml "to" 
-    Just endpoint -> pure $ bodyWrapper (Just sess) project "Endpoint Details" ( endpointDetails  endpoint)
-  
+    Nothing -> pure $ toHtml "to"
+    Just endpoint -> pure $ bodyWrapper (Just sess) project "Endpoint Details" (endpointDetails endpoint)
 
 endpointDetails :: Endpoint -> Html ()
 endpointDetails endpoint = do

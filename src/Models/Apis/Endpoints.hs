@@ -18,7 +18,7 @@ import Data.Time (CalendarDiffTime, UTCTime, ZonedTime)
 import Data.Time.Clock (DiffTime, NominalDiffTime)
 import qualified Data.UUID as UUID
 import qualified Data.Vector as Vector
-import Database.PostgreSQL.Entity (selectManyByField, selectById)
+import Database.PostgreSQL.Entity (selectById, selectManyByField)
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, queryOne, query_, withPool)
 import Database.PostgreSQL.Entity.Internal.QQ
 import qualified Database.PostgreSQL.Entity.Types as PET
@@ -94,5 +94,5 @@ upsertEndpoints endpoint = queryOne Insert q options
 endpointsByProject :: Projects.ProjectId -> PgT.DBT IO (Vector.Vector Endpoint)
 endpointsByProject pid = selectManyByField @Endpoint [field| project_id |] pid
 
-endpointById :: EndpointId -> PgT.DBT IO ( Maybe Endpoint  )
-endpointById pid = selectById @Endpoint pid 
+endpointById :: EndpointId -> PgT.DBT IO (Maybe Endpoint)
+endpointById = selectById @Endpoint
