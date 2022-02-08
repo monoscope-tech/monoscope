@@ -1,5 +1,4 @@
 {-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE TemplateHaskell #-}
 
 module Models.Projects.ProjectSettings
   (
@@ -59,14 +58,6 @@ import Pages.Projects.CreateProject
     createProjectFormV,
   )
 import Relude
-  ( Applicative (pure),
-    Either (Left, Right),
-    IO,
-    Int64,
-    MonadIO (liftIO),
-    asks,
-    ($),
-  )
 import Servant
   ( Handler,
     addHeader,
@@ -143,7 +134,7 @@ editProjectMemberH pid editP = do
       _ <- liftIO $
         withPool pool $ do
           -- updateProject (createProjectFormToModel pid ep)
-          pure ()
+          pass
 
       pure $ addHeader "HX-Trigger" $ addHeader "/p" $ editProjectMembersBody ep (def @CreateProjectFormError)
     Right epe -> pure $ noHeader $ noHeader $ editProjectMembersBody editP epe
@@ -158,7 +149,7 @@ editProjectPostH pid editP = do
       _ <- liftIO $
         withPool pool $ do
           -- updateProject (createProjectFormToModel pid ep)
-          pure ()
+          pass
 
       pure $ addHeader "HX-Trigger" $ addHeader "/p" $ editProjectBody ep (def @CreateProjectFormError)
     Right epe -> pure $ noHeader $ noHeader $ editProjectBody editP epe

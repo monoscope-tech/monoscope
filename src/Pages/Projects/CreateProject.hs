@@ -88,7 +88,7 @@ createProjectPostH sess createP = do
         withPool pool $ do
           Projects.insertProject (createProjectFormToModel pid cp)
           ProjectMembers.insertProjectMembers projectMembers
-          pure ()
+          pass
 
       pure $ addHeader "HX-Trigger" $ addHeader "/p" $ createProjectBody cp (def @CreateProjectFormError)
     Right cpe -> pure $ noHeader $ noHeader $ createProjectBody createP cpe

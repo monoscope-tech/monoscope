@@ -1,4 +1,4 @@
-{-# LANGUAGE TemplateHaskell #-}
+
 
 module Models.Users.Sessions where
 
@@ -84,7 +84,7 @@ persistSession pool persistentSessionId userId = do
   pure persistentSessionId
 
 insertSession :: PersistentSessionId -> UserId -> SessionData -> DBT IO ()
-insertSession id userId sessionData = execute Insert q (id, userId, sessionData) >> pure ()
+insertSession id userId sessionData = execute Insert q (id, userId, sessionData) >> pass
   where
     q = [sql| insert into users.persistent_sessions(id, user_id, session_data) VALUES (?, ?, ?) |]
 

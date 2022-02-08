@@ -12,9 +12,6 @@ import Colog.Core (LogAction (..), logStringStdout, (<&))
 import qualified Config
 import Configuration.Dotenv as Dotenv
 import Control.Concurrent.Async
--- import Control.Lens ((&), (.~), (<&>), (?~), (^.), (^?), _Just)
-
--- import Control.Lens ((&), (.~), (<&>), (?~), (^.), (^?), _Just)
 import Control.Exception (catch, try)
 import qualified Control.Lens as L
 import Control.Monad (when)
@@ -28,7 +25,6 @@ import Data.Aeson
 import Data.Aeson as Aeson
 import Data.Aeson.TH (deriveJSON)
 import Data.ByteString.Base64 as B64 (decodeBase64)
-import Data.Maybe (catMaybes)
 import Data.Pool as Pool
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (Connection, Only (Only), close, connectPostgreSQL, query_)
@@ -55,7 +51,6 @@ import Relude
 import qualified Relude.Unsafe as Unsafe
 import qualified Server
 import System.Envy (FromEnv, Option (Option), decodeEnv, gFromEnvCustom, runEnv)
-import System.IO (stdout)
 
 startApp :: IO ()
 startApp = do
@@ -89,7 +84,7 @@ startApp = do
           case err of
             Left err -> logger <& "unable to run addUserToAllProjects " <> show err
             Right resp -> logger <& "addUserToAllProjects resp" <> show resp
-        Nothing -> pure ()
+        Nothing -> pass
 
       let serverCtx =
             Config.AuthContext
@@ -121,5 +116,5 @@ pubsubService logger envConfig conn = do
       msgIds <- liftIO $ mapM (processMessage logger envConfig conn) messages
       let acknowlegReq = PubSub.acknowledgeRequest & PubSub.arAckIds L..~ catMaybes msgIds
       if null msgIds
-        then pure ()
-        else (PubSub.projectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send) >> pure ()
+        then pass
+        else (PubSub.projectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send) >> pass
