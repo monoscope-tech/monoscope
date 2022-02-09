@@ -36,6 +36,7 @@ jobs:
       
       - name: Initalize stack for LTS
         run: |
+          stack update
           stack init --resolver ${{ matrix.resolver }} --force
       
       - name: Build package dependencies
