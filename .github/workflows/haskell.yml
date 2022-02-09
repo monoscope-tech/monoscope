@@ -33,6 +33,10 @@ jobs:
           stack --version
           cabal --version
           ghc --version
+          
+      - name: Initalize
+        run: |
+          stack run   
       
       - name: Initalize stack for LTS
         run: |
