@@ -29,9 +29,8 @@ jobs:
       - name: Setup Haskell
         uses: haskell/actions/setup@v1
         with:
-          ghc-version: ${{ matrix.ghc }}
-          cabal-version: ${{ matrix.cabal }}
           enable-stack: true
+          stack-version: 'latest'
 
       - name: Versions
         run: |
