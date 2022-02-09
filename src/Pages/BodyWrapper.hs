@@ -42,7 +42,7 @@ bodyWrapper sessM currProject pageTitle child =
           section_ [class_ "flex flex-row"] $ do
             -- Side nav
             sideNav'
-            section_ [class_ "flex-grow"] $ do
+            section_ [class_ "grow"] $ do
               navbar currUser
               child
 
@@ -109,8 +109,8 @@ projectsDropDown currProject projects =
 
 sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Html ()
 sideNav sess project pageTitle = do
-  aside_ [class_ "w-96 sticky top-0 border-r-2 bg-white border-gray-200 h-screen"] $ do
-    div_ [class_ "p-4"] $ do
+  aside_ [class_ "shrink-0  w-72 sticky top-0 border-r-2 bg-white border-gray-200 h-screen"] $ do
+    a_ [href_ "/", class_ "inline-block p-4"] $ do
       img_ [src_ "/assets/svgs/logo.svg"]
     div_ [class_ "p-4"] $ do
       a_
@@ -149,7 +149,7 @@ sideNav sess project pageTitle = do
           ( \(mTitle, mUrl, mIcon) -> do
               a_ [href_ mUrl, class_ $ "block flex gap-3 px-5 py-3" <> (if pageTitle == mTitle then " bg-gray-100 border-l-4 border-blue-700" else "")] $ do
                 img_ [src_ mIcon]
-                span_ [class_ "flex-grow"] $ toHtml mTitle
+                span_ [class_ "grow"] $ toHtml mTitle
           )
 
 navbar :: Users.User -> Html ()

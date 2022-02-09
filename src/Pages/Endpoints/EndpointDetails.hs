@@ -30,7 +30,7 @@ endpointDetailsH sess pid eid = do
       pure (endpointM, project)
 
   case endpointM of
-    Nothing -> pure $ toHtml "to"
+    Nothing -> pure $ toHtml ""
     Just endpoint -> pure $ bodyWrapper (Just sess) project "Endpoint Details" (endpointDetails endpoint)
 
 endpointDetails :: Endpoint -> Html ()
