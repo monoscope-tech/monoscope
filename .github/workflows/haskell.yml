@@ -34,9 +34,9 @@ jobs:
           cabal --version
           ghc --version
       
-      - name: Test solver
+      - name: Initalize stack for LTS
         run: |
-          stack solver --update-config
+          stack init --resolver ${{ matrix.resolver }} --force
       
       - name: Build package dependencies
         run: |
@@ -45,11 +45,6 @@ jobs:
       - name: Build package
         run: |
           stack --resolver ${{ matrix.resolver }} build --no-run-tests --no-run-benchmarks     
-
-      - name: Initalize stack for LTS
-        run: |
-          stack update
-          stack init --resolver ${{ matrix.resolver }} --force
 
       - name: Build testing dependencies
         run: |
