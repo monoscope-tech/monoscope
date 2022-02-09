@@ -39,61 +39,111 @@ bodyWrapper sessM currProject title child =
             case currProject of
               Nothing -> toHtml ""
               Just project -> do
-                aside_ [class_ "w-72 border-r-2 border-gray-200 h-screen"] $ do
-                  div_ [class_ "p-4"] $ do
-                    img_ [src_ "/assets/svgs/logo.svg"]
-                  div_ [class_ "p-4"] $ do
-                    a_
-                      [ class_ "flex flex-row bg-gray-100 block p-6 rounded-md cursor-pointer",
-                        term
-                          "_"
-                          [r| 
-                            on click queue first
-                                if I do not match .active
-                                    add .active
-                                    send open to <[data-menu]/> 
-                                else 
-                                    remove .active
-                                    send close to <[data-menu]/> 
-                                end
-                            end
-                            on keyup[key is 'Escape'] from <body/>  
-                                if I match .active
-                                    remove .active
-                                    send close to <[data-menu]/> in me
-                                end
-                            end
-                        |]
-                      ]
-                      $ do
-                        div_ [class_ "space-2 grow "] $ do
-                          strong_ [class_ "block"] $ toHtml $ project ^. #title
-                          small_ [class_ "block"] "Development"
-                        div_ $ do
-                          img_ [src_ "/assets/svgs/up_chevron.svg"]
-                          img_ [src_ "/assets/svgs/down_chevron.svg"]
-                    projectsDropDown project (Sessions.getProjects $ Sessions.projects sess)
-                  nav_ [class_ "mt-4"] $ do
-                    menu (project ^. #id)
-                      & mapM_
-                        ( \(mTitle, mUrl, mIcon) -> do
-                            a_ [href_ mUrl, class_ $ "block flex gap-3 px-5 py-3" <> (if title == mTitle then " bg-gray-100 border-l-4 border-blue-700" else "")] $ do
-                              img_ [src_ mIcon]
-                              span_ [class_ "flex-grow"] $ toHtml mTitle
-                        )
+                div_ [class_ "flex flex-row"] $ do
+                  aside_ [class_ "w-1/4 border-r-2 bg-white border-gray-200 h-screen fixed"] $ do
+                    div_ [class_ "p-4"] $ do
+                      img_ [src_ "/assets/svgs/logo.svg"]
+                    div_ [class_ "p-4"] $ do
+                      a_
+                        [ class_ "flex flex-row bg-gray-100 block p-6 rounded-md cursor-pointer",
+                          term
+                            "_"
+                            [r| 
+                              on click queue first
+                                  if I do not match .active
+                                      add .active
+                                      send open to <[data-menu]/> 
+                                  else 
+                                      remove .active
+                                      send close to <[data-menu]/> 
+                                  end
+                              end
+                              on keyup[key is 'Escape'] from <body/>  
+                                  if I match .active
+                                      remove .active
+                                      send close to <[data-menu]/> in me
+                                  end
+                              end
+                          |]
+                        ]
+                        $ do
+                          div_ [class_ "space-2 grow "] $ do
+                            strong_ [class_ "block"] $ toHtml $ project ^. #title
+                            small_ [class_ "block"] "Development"
+                          div_ $ do
+                            img_ [src_ "/assets/svgs/up_chevron.svg"]
+                            img_ [src_ "/assets/svgs/down_chevron.svg"]
+                      projectsDropDown project (Sessions.getProjects $ Sessions.projects sess)
+                    nav_ [class_ "mt-4"] $ do
+                      menu (project ^. #id)
+                        & mapM_
+                          ( \(mTitle, mUrl, mIcon) -> do
+                              a_ [href_ mUrl, class_ $ "block flex gap-3 px-5 py-3" <> (if title == mTitle then " bg-gray-100 border-l-4 border-blue-700" else "")] $ do
+                                img_ [src_ mIcon]
+                                span_ [class_ "flex-grow"] $ toHtml mTitle
+                          )
+                  section_ [class_ "pt-20 p-5 w-3/4 grow absolute right-0"] child   
 
             -- main body
-            section_ [class_ "grow bg-gray-50"] $ do
-              nav_ [class_ "px-6 py-3 border-b bg-white flex flex-row justify-between"] $ do
-                img_ [src_ "/assets/svgs/hamburger_menu.svg"]
+            section_ [class_ " grow w-full bg-gray-50"] $ do
+              nav_ [class_ "fixed grow w-full px-6 py-3 border-b bg-white flex flex-row justify-between"] $ do
+                div_ [class_ "flex "] $ do
+                  img_ [src_ "/assets/svgs/logo.svg"]
+                  img_ [src_ "/assets/svgs/hamburger_menu.svg", class_ "ml-5"]
                 div_ [class_ "inline-block flex items-center"] $ do
                   a_ [class_ "inline-block p-2 px-3 align-middle"] $ img_ [src_ "/assets/svgs/search.svg"]
                   a_ [class_ "inline-block border-r-2 p-2 pr-5"] $ img_ [src_ "/assets/svgs/notifications_active.svg"]
-                  a_ [class_ "cursor-pointer inline-block space-x-4 pl-4"] $ do
+                  a_ [class_ "cursor-pointer inline-block space-x-4 pl-4 relative ",
+                    term
+                      "_"
+                      [r| 
+                        on click queue first
+                            if I do not match .active
+                                add .active
+                                send open to <[drop-menu]/> 
+                            else 
+                                remove .active
+                                send close to <[drop-menu]/> 
+                            end
+                        end
+                        on keyup[key is 'Escape'] from <body/>  
+                            if I match .active
+                                remove .active
+                                send close to <[drop-menu]/> in me
+                            end
+                        end
+                    |]
+                    ] $ do
                     img_ [class_ "inline-block w-9 h-9 rounded-lg", src_ (currUser ^. #displayImageUrl)]
                     span_ [class_ "inline-block"] $ toHtml $ currUser ^. #firstName <> " " <> currUser ^. #lastName
-                    img_ [class_ "inline-block", src_ "/assets/svgs/down_caret.svg"]
-              section_ [class_ "p-6 "] child
+                    img_ [class_ "inline-block", src_ "/assets/svgs/down_caret.svg" ]
+
+                    --logout dropdown
+                  div_ [term "drop-menu" "true", 
+                    class_ "hidden origin-top-left border border-gray-100 w-[10rem] rounded-lg shadow-2xl shadow-indigo-200 z-40 transition transform bg-white p-1 absolute top-14 right-5 ",
+                    term
+                      "_"
+                      [r|
+                        on open
+                            remove .hidden
+                            add .ease-out .duration-100 .opacity-0 .scale-95
+                            wait a tick toggle .opacity-0 .opacity-100 .scale-95 .scale-100
+                            settle remove .ease-out .duration-100
+                        end
+                        on close
+                            toggle .ease-in .duration-75
+                            wait a tick toggle .opacity-100 .opacity-0 .scale-100 .scale-95 
+                            settle remove .ease-in .duration-75 .opacity-0 .opacity-100 .scale-95 .scale-100
+                            add .hidden 
+                        end
+                        |]
+                   ] $ do
+                    -- dropdown mainbody
+                    a_ [class_ "text-base p-2 flex gap-3 rounded hover:bg-gray-100", href_ "/logout"] $ do
+                      img_ [src_ "/assets/svgs/add_user.svg"]
+                      span_ "Logout"
+
+              -- section_ [class_ "p-6 "] child
 
 projectsDropDown :: Projects.Project -> Vector.Vector Projects.Project -> Html ()
 projectsDropDown currProject projects =

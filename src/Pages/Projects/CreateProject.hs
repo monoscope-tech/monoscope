@@ -132,7 +132,7 @@ createProjectBody cp cpe = do
                   term
                     "_"
                     [r| 
-                    remove my parent             
+                    remove from my parent             
                   |]
                 ]
                 $ do img_ [src_ "/assets/svgs/delete.svg", class_ "cursor-pointer"]
