@@ -49,7 +49,6 @@ import Lucid
     type_,
   )
 import Lucid.HTMX (hxPost_, hxTarget_)
-import Models.Projects.ProjectMembers
 import Models.Projects.Projects (Project, ProjectId)
 import qualified Models.Projects.Projects as Projects
 import Optics.Operators ()
