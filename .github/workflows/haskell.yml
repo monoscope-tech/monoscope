@@ -40,8 +40,6 @@ jobs:
           
       - name: copy
         run: |
-         mkdir -p /app/user
-         cd /app/user
          cp stack.yaml *.cabal ./
           
       - name: Build package
