@@ -38,9 +38,11 @@ jobs:
           cabal --version
           ghc --version
           
-      - name: Build package dependencies
+      - name: copy
         run: |
-         stack build 
+         mkdir -p /app/user
+         cd /app/user
+         cp stack.yaml *.cabal ./
           
       - name: Build package
         run: |
