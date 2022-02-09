@@ -12,6 +12,7 @@ import qualified Models.Users.Sessions as Sessions
 import Optics.Operators ((^.))
 import Relude
 import Text.RawString.QQ
+import qualified Models.Users.Users as Users
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu ppid =
@@ -34,6 +35,7 @@ bodyWrapper sessM currProject title child =
           script_ [src_ "https://unpkg.com/htmx.org@1.6.1"] ("" :: Text)
           script_ [src_ "https://unpkg.com/hyperscript.org@0.9.3"] ("" :: Text)
         body_ [class_ "text-gray-700"] $ do
+          navbar currUser
           section_ [class_ "flex flex-row"] $ do
             -- Side nav
             case currProject of
@@ -82,68 +84,9 @@ bodyWrapper sessM currProject title child =
                                 img_ [src_ mIcon]
                                 span_ [class_ "flex-grow"] $ toHtml mTitle
                           )
-                  section_ [class_ "pt-20 p-5 w-3/4 grow absolute right-0"] child   
+                section_ [class_ "pt-20 p-5 w-3/4 grow border border-slate-600"] child   
 
-            -- main body
-            section_ [class_ " grow w-full bg-gray-50"] $ do
-              nav_ [class_ "fixed grow w-full px-6 py-3 border-b bg-white flex flex-row justify-between"] $ do
-                div_ [class_ "flex "] $ do
-                  img_ [src_ "/assets/svgs/logo.svg"]
-                  img_ [src_ "/assets/svgs/hamburger_menu.svg", class_ "ml-5"]
-                div_ [class_ "inline-block flex items-center"] $ do
-                  a_ [class_ "inline-block p-2 px-3 align-middle"] $ img_ [src_ "/assets/svgs/search.svg"]
-                  a_ [class_ "inline-block border-r-2 p-2 pr-5"] $ img_ [src_ "/assets/svgs/notifications_active.svg"]
-                  a_ [class_ "cursor-pointer inline-block space-x-4 pl-4 relative ",
-                    term
-                      "_"
-                      [r| 
-                        on click queue first
-                            if I do not match .active
-                                add .active
-                                send open to <[drop-menu]/> 
-                            else 
-                                remove .active
-                                send close to <[drop-menu]/> 
-                            end
-                        end
-                        on keyup[key is 'Escape'] from <body/>  
-                            if I match .active
-                                remove .active
-                                send close to <[drop-menu]/> in me
-                            end
-                        end
-                    |]
-                    ] $ do
-                    img_ [class_ "inline-block w-9 h-9 rounded-lg", src_ (currUser ^. #displayImageUrl)]
-                    span_ [class_ "inline-block"] $ toHtml $ currUser ^. #firstName <> " " <> currUser ^. #lastName
-                    img_ [class_ "inline-block", src_ "/assets/svgs/down_caret.svg" ]
-
-                    --logout dropdown
-                  div_ [term "drop-menu" "true", 
-                    class_ "hidden origin-top-left border border-gray-100 w-[10rem] rounded-lg shadow-2xl shadow-indigo-200 z-40 transition transform bg-white p-1 absolute top-14 right-5 ",
-                    term
-                      "_"
-                      [r|
-                        on open
-                            remove .hidden
-                            add .ease-out .duration-100 .opacity-0 .scale-95
-                            wait a tick toggle .opacity-0 .opacity-100 .scale-95 .scale-100
-                            settle remove .ease-out .duration-100
-                        end
-                        on close
-                            toggle .ease-in .duration-75
-                            wait a tick toggle .opacity-100 .opacity-0 .scale-100 .scale-95 
-                            settle remove .ease-in .duration-75 .opacity-0 .opacity-100 .scale-95 .scale-100
-                            add .hidden 
-                        end
-                        |]
-                   ] $ do
-                    -- dropdown mainbody
-                    a_ [class_ "text-base p-2 flex gap-3 rounded hover:bg-gray-100", href_ "/logout"] $ do
-                      img_ [src_ "/assets/svgs/add_user.svg"]
-                      span_ "Logout"
-
-              -- section_ [class_ "p-6 "] child
+            
 
 projectsDropDown :: Projects.Project -> Vector.Vector Projects.Project -> Html ()
 projectsDropDown currProject projects =
@@ -205,3 +148,62 @@ projectsDropDown currProject projects =
                         span_ [class_ "inline-block"] $ toHtml $ project ^. #title
                       when (currProject ^. #id == project ^. #id) $ img_ [src_ "/assets/svgs/checkmark_blue.svg"]
                 )
+
+navbar :: Users.User -> Html ()
+navbar  currUser = section_ [class_ " grow w-full bg-gray-50"] $ do
+              nav_ [class_ "fixed grow w-full px-6 py-3 border-b bg-white flex flex-row justify-between"] $ do
+                div_ [class_ "flex "] $ do
+                  img_ [src_ "/assets/svgs/logo.svg"]
+                  img_ [src_ "/assets/svgs/hamburger_menu.svg", class_ "ml-5"]
+                div_ [class_ "inline-block flex items-center"] $ do
+                  a_ [class_ "inline-block p-2 px-3 align-middle"] $ img_ [src_ "/assets/svgs/search.svg"]
+                  a_ [class_ "inline-block border-r-2 p-2 pr-5"] $ img_ [src_ "/assets/svgs/notifications_active.svg"]
+                  a_ [class_ "cursor-pointer inline-block space-x-4 pl-4 relative ",
+                    term
+                      "_"
+                      [r| 
+                        on click queue first
+                            if I do not match .active
+                                add .active
+                                send open to <[drop-menu]/> 
+                            else 
+                                remove .active
+                                send close to <[drop-menu]/> 
+                            end
+                        end
+                        on keyup[key is 'Escape'] from <body/>  
+                            if I match .active
+                                remove .active
+                                send close to <[drop-menu]/> in me
+                            end
+                        end
+                    |]
+                    ] $ do
+                    img_ [class_ "inline-block w-9 h-9 rounded-lg", src_ (currUser ^. #displayImageUrl)]
+                    span_ [class_ "inline-block"] $ toHtml $ currUser ^. #firstName <> " " <> currUser ^. #lastName
+                    img_ [class_ "inline-block", src_ "/assets/svgs/down_caret.svg" ]
+
+                    --logout dropdown
+                  div_ [term "drop-menu" "true", 
+                    class_ "hidden origin-top-left border border-gray-100 w-[10rem] rounded-lg shadow-2xl shadow-indigo-200 z-40 transition transform bg-white p-1 absolute top-14 right-5 ",
+                    term
+                      "_"
+                      [r|
+                        on open
+                            remove .hidden
+                            add .ease-out .duration-100 .opacity-0 .scale-95
+                            wait a tick toggle .opacity-0 .opacity-100 .scale-95 .scale-100
+                            settle remove .ease-out .duration-100
+                        end
+                        on close
+                            toggle .ease-in .duration-75
+                            wait a tick toggle .opacity-100 .opacity-0 .scale-100 .scale-95 
+                            settle remove .ease-in .duration-75 .opacity-0 .opacity-100 .scale-95 .scale-100
+                            add .hidden 
+                        end
+                        |]
+                   ] $ do
+                    -- dropdown mainbody
+                    a_ [class_ "text-base p-2 flex gap-3 rounded hover:bg-gray-100", href_ "/logout"] $ do
+                      img_ [src_ "/assets/svgs/add_user.svg"]
+                      span_ "Logout"
