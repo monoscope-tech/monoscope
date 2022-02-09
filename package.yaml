@@ -101,6 +101,7 @@ dependencies:
 - errors
 - transformers-either
 - case-insensitive
+- doctest-parallel
 library:
   source-dirs: src
 

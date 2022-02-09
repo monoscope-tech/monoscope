@@ -1,4 +1,5 @@
 .stack-work
+.halive
 node_modules/
 static/assets/.DS_Store
 static/assets/css/tailwind.min.css

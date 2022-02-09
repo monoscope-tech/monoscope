@@ -74,6 +74,7 @@ extra-deps:
   - data-default-instances-vector-0.0.1@sha256:8a78beb491235231802c98fb1a58fea519359be1c9374b9f08d37feed34a385e,1791
   - digestive-functors-0.8.4.2@sha256:badff1797b6dcd860a48ed4558985b2f6bec501e1016fa5afd9d7d6b0d8e4c08,3364
   - transformers-either-0.1.2@sha256:e2ba24af49df7fa09794dcff6cb203d086d5c18e35b3cf10a8ecf7eb465fdedf,1677
+  - doctest-parallel-0.2.1@sha256:c6c0d095dd6e0b8ce1bd9f6f5fc4e0cf5cf50b6895b557356ac41b8aa2947399,5631
   - git: https://github.com/brendanhay/gogol.git
     commit: 801f00b6e63c22522eb2b3e3e2fc77694730a70f
     subdirs:

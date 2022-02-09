@@ -52,7 +52,7 @@ import Relude.Unsafe as Unsafe
 import Text.RawString.QQ
 import Text.Regex.TDFA ((=~))
 
--- RequestMessage represents a message for a single request pulled from pubsub.
+-- | RequestMessage represents a message for a single request pulled from pubsub.
 -- >>> show RequestMessage
 data RequestMessage = RequestMessage
   { timestamp :: ZonedTime,
@@ -158,6 +158,14 @@ valueToFormat AET.Null = "null"
 valueToFormat (AET.Object _) = "object"
 valueToFormat (AET.Array _) = "array"
 
+-- | valueToFormatStr will take a string and try to find a format which matches that string best.
+-- At the moment it takes a text and returns a generic mask that represents the format of that text
+-- >>> valueToFormatStr "22/02/2022"
+-- "text"
+-- >>> valueToFormatStr "20-02-2022"
+-- "text"
+-- >>> valueToFormatStr "22.02.2022"
+-- "text"
 valueToFormatStr :: Text -> Text
 valueToFormatStr val
   | val =~ ([r|^[0-9]+$|] :: Text) = "integer"

@@ -89,6 +89,7 @@ library
     , cookie
     , data-default-extra
     , deriving-aeson
+    , doctest-parallel
     , dotenv
     , envy
     , errors
@@ -174,6 +175,7 @@ executable apitoolkit-server-exe
     , cookie
     , data-default-extra
     , deriving-aeson
+    , doctest-parallel
     , dotenv
     , envy
     , errors
@@ -262,6 +264,7 @@ test-suite apitoolkit-server-test
     , cookie
     , data-default-extra
     , deriving-aeson
+    , doctest-parallel
     , dotenv
     , envy
     , errors

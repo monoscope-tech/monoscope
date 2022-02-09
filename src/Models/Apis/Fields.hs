@@ -46,6 +46,7 @@ instance ToField FieldTypes where
   toField FTObject = Escape "object"
   toField FTList = Escape "list"
   toField FTNull = Escape "null"
+  toField FTUnknown = Escape "unknown"
 
 parseFieldTypes :: (Eq s, IsString s) => s -> Maybe FieldTypes
 parseFieldTypes "string" = Just FTString

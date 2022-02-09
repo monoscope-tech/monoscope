@@ -1,5 +1,5 @@
 /*
-! tailwindcss v3.0.19 | MIT License | https://tailwindcss.com
+! tailwindcss v3.0.12 | MIT License | https://tailwindcss.com
 */
 
 /*
@@ -579,6 +579,14 @@ body {
   bottom: 0px;
 }
 
+.left-0 {
+  left: 0px;
+}
+
+.bottom-0 {
+  bottom: 0px;
+}
+
 .right-0 {
   right: 0px;
 }
@@ -589,14 +597,6 @@ body {
 
 .right-5 {
   right: 1.25rem;
-}
-
-.left-0 {
-  left: 0px;
-}
-
-.bottom-0 {
-  bottom: 0px;
 }
 
 .z-40 {
@@ -677,10 +677,6 @@ body {
   margin-top: 1rem;
 }
 
-.ml-5 {
-  margin-left: 1.25rem;
-}
-
 .mt-2 {
   margin-top: 0.5rem;
 }
@@ -723,6 +719,10 @@ body {
 
 .mr-12 {
   margin-right: 3rem;
+}
+
+.ml-5 {
+  margin-left: 1.25rem;
 }
 
 .-mr-8 {
@@ -845,28 +845,20 @@ body {
   height: 100%;
 }
 
-.w-1\/4 {
-  width: 25%;
-}
-
-.w-3\/4 {
-  width: 75%;
-}
-
-.w-full {
-  width: 100%;
+.w-72 {
+  width: 18rem;
 }
 
 .w-9 {
   width: 2.25rem;
 }
 
-.w-\[10rem\] {
-  width: 10rem;
-}
-
 .w-\[20rem\] {
   width: 20rem;
+}
+
+.w-full {
+  width: 100%;
 }
 
 .w-1\/2 {
@@ -897,6 +889,10 @@ body {
   width: 0.75rem;
 }
 
+.w-3\/4 {
+  width: 75%;
+}
+
 .w-auto {
   width: auto;
 }
@@ -911,6 +907,14 @@ body {
 
 .w-5 {
   width: 1.25rem;
+}
+
+.w-1\/4 {
+  width: 25%;
+}
+
+.w-\[10rem\] {
+  width: 10rem;
 }
 
 .min-w-0 {
@@ -937,12 +941,12 @@ body {
   table-layout: auto;
 }
 
-.origin-top-left {
-  transform-origin: top left;
-}
-
 .origin-top-right {
   transform-origin: top right;
+}
+
+.origin-top-left {
+  transform-origin: top left;
 }
 
 .scale-95 {
@@ -1064,12 +1068,12 @@ body {
   border-radius: 0.5rem;
 }
 
-.rounded {
-  border-radius: 0.25rem;
-}
-
 .rounded-2xl {
   border-radius: 1rem;
+}
+
+.rounded {
+  border-radius: 0.25rem;
 }
 
 .rounded-xl {
@@ -1084,12 +1088,12 @@ body {
   border-radius: 9999px;
 }
 
-.border {
-  border-width: 1px;
-}
-
 .border-0 {
   border-width: 0px;
+}
+
+.border {
+  border-width: 1px;
 }
 
 .border-2 {
@@ -1140,11 +1144,6 @@ body {
   border-bottom-color: rgb(203 213 225 / var(--tw-border-opacity));
 }
 
-.bg-white {
-  --tw-bg-opacity: 1;
-  background-color: rgb(255 255 255 / var(--tw-bg-opacity));
-}
-
 .bg-gray-100 {
   --tw-bg-opacity: 1;
   background-color: rgb(243 244 246 / var(--tw-bg-opacity));
@@ -1153,6 +1152,11 @@ body {
 .bg-gray-50 {
   --tw-bg-opacity: 1;
   background-color: rgb(249 250 251 / var(--tw-bg-opacity));
+}
+
+.bg-white {
+  --tw-bg-opacity: 1;
+  background-color: rgb(255 255 255 / var(--tw-bg-opacity));
 }
 
 .bg-blue-700 {
@@ -1195,20 +1199,20 @@ body {
   padding: 1.5rem;
 }
 
-.p-5 {
-  padding: 1.25rem;
-}
-
 .p-2 {
   padding: 0.5rem;
+}
+
+.p-3 {
+  padding: 0.75rem;
 }
 
 .p-1 {
   padding: 0.25rem;
 }
 
-.p-3 {
-  padding: 0.75rem;
+.p-5 {
+  padding: 1.25rem;
 }
 
 .px-5 {
@@ -1276,10 +1280,6 @@ body {
   padding-bottom: 0.25rem;
 }
 
-.pt-20 {
-  padding-top: 5rem;
-}
-
 .pr-5 {
   padding-right: 1.25rem;
 }
@@ -1304,6 +1304,10 @@ body {
   padding-left: 3rem;
 }
 
+.pt-20 {
+  padding-top: 5rem;
+}
+
 .text-left {
   text-align: left;
 }
@@ -1314,11 +1318,6 @@ body {
 
 .align-middle {
   vertical-align: middle;
-}
-
-.text-base {
-  font-size: 1rem;
-  line-height: 1.5rem;
 }
 
 .text-xl {
@@ -1334,6 +1333,11 @@ body {
 .text-2xl {
   font-size: 1.5rem;
   line-height: 2rem;
+}
+
+.text-base {
+  font-size: 1rem;
+  line-height: 1.5rem;
 }
 
 .text-lg {

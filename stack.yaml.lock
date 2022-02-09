@@ -215,6 +215,13 @@ packages:
   original:
     hackage: transformers-either-0.1.2@sha256:e2ba24af49df7fa09794dcff6cb203d086d5c18e35b3cf10a8ecf7eb465fdedf,1677
 - completed:
+    hackage: doctest-parallel-0.2.1@sha256:c6c0d095dd6e0b8ce1bd9f6f5fc4e0cf5cf50b6895b557356ac41b8aa2947399,5631
+    pantry-tree:
+      size: 7415
+      sha256: 8dbc2bc8c5dc5a97f3f0c4fa49f77bddc6d55a5b524f15432a8fb9c3a5aae2ce
+  original:
+    hackage: doctest-parallel-0.2.1@sha256:c6c0d095dd6e0b8ce1bd9f6f5fc4e0cf5cf50b6895b557356ac41b8aa2947399,5631
+- completed:
     subdir: core
     name: gogol-core
     version: 0.5.0
