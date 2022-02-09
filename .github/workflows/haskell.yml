@@ -34,6 +34,10 @@ jobs:
           cabal --version
           ghc --version
       
+      - name: Test solver
+        run: |
+          stack solver --update-config
+      
       - name: Build package dependencies
         run: |
          stack --resolver ${{ matrix.resolver }} build --no-run-tests --no-run-benchmarks --only-dependencies
