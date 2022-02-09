@@ -64,9 +64,9 @@ startApp = do
       let createPgConnIO = connectPostgreSQL $ encodeUtf8 (envConfig ^. #databaseUrl)
       conn <- createPgConnIO
       initializationRes <- Migrations.runMigration conn Migrations.defaultOptions MigrationInitialization
-      logger <& "⚠️ migration initialized " <> show initializationRes
+      logger <& "migration initialized " <> show initializationRes
       migrationRes <- Migrations.runMigration conn Migrations.defaultOptions $ MigrationDirectory ((toString $ envConfig ^. #migrationsDir) :: FilePath)
-      logger <& "⚠️ migration result: " <> show migrationRes
+      logger <& "migration result: " <> show migrationRes
 
       poolConn <-
         Pool.createPool
@@ -93,7 +93,7 @@ startApp = do
               }
 
       logger <& "\n"
-      logger <& "🚀  Starting server at port " <> show (envConfig ^. #port)
+      logger <& "Starting server at port " <> show (envConfig ^. #port)
       logger <& "\n"
       concurrently_
         (pubsubService logger envConfig poolConn)

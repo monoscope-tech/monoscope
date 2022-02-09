@@ -166,6 +166,8 @@ valueToFormat (AET.Array _) = "array"
 -- "text"
 -- >>> valueToFormatStr "22.02.2022"
 -- "text"
+-- >>> valueToFormatStr "222"
+-- "integer"
 valueToFormatStr :: Text -> Text
 valueToFormatStr val
   | val =~ ([r|^[0-9]+$|] :: Text) = "integer"
