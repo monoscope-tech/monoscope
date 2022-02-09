@@ -9,6 +9,8 @@ module Models.Projects.Projects
     projectIdText,
     selectProjectsForUser,
     selectProjectForUser,
+    updateProject,
+    deleteProject
   )
 where
 
@@ -94,3 +96,23 @@ selectProjectForUser :: (Users.UserId, ProjectId) -> PgT.DBT IO (Maybe Project)
 selectProjectForUser = queryOne Select q
   where
     q = [sql| select pp.* from projects.projects as pp join projects.project_members as ppm on (pp.id=ppm.project_id) where ppm.user_id=? and ppm.project_id=? order by updated_at desc|]
+
+editProjectGetH :: ProjectId -> PgT.DBT IO (Vector.Vector Project)
+editProjectGetH pid = query Select q (Only pid)
+  where
+    q =
+      [sql|
+        SELECT pp*, ppm* FROM projects.projects AS pp 
+            INNER JOIN projects.project_members AS ppm
+            ON pp.id = pid 
+        WHERE ppm.project_id = pp.id;|]
+    
+updateProject :: CreateProject -> PgT.DBT IO Int64
+updateProject = PgT.execute q
+  where
+    q =
+      [sql|
+      UPDATE projects.projects(title, description) VALUES (?, ?);|]
+
+deleteProject :: ProjectId -> PgT.DBT IO ()
+deleteProject pid = delete @Project (Only pid)

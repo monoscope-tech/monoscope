@@ -32,7 +32,6 @@ library
       Models.Apis.RequestDumps
       Models.Projects.ProjectMembers
       Models.Projects.Projects
-      Models.Projects.ProjectSettings
       Models.Users.Sessions
       Models.Users.Users
       Pages.BodyWrapper
@@ -41,6 +40,7 @@ library
       Pages.Endpoints.EndpointList
       Pages.Projects.CreateProject
       Pages.Projects.ListProjects
+      Pages.Projects.ProjectSettings
       Pages.Projects.ProjectView
       ProcessMessage
       RequestMessages

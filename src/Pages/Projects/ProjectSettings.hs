@@ -1,7 +1,7 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module Models.Projects.ProjectSettings
+module Pages.Projects.ProjectSettings
   (
   )
 where
@@ -49,7 +49,7 @@ import Lucid
     type_,
   )
 import Lucid.HTMX (hxPost_, hxTarget_)
-import Models.Projects.ProjectMembers ()
+import Models.Projects.ProjectMembers
 import Models.Projects.Projects (Project, ProjectId)
 import qualified Models.Projects.Projects as Projects
 import Optics.Operators ()
@@ -63,7 +63,7 @@ import Pages.Projects.CreateProject
     createProjectFormV,
     createProjectFormToModel
   )
--- import Relude
+import qualified Models.Projects.ProjectMembers as ProjectMembers
 import Relude
   ( Applicative (pure),
     Either (Left, Right),
@@ -86,33 +86,10 @@ import Servant
     addHeader,
     noHeader,
   )
-import Servant.HTML.Lucid ()
-import Web.FormUrlEncoded (FromForm)
 import Data.Text
-
 import Servant.HTML.Lucid
 import Text.RawString.QQ
 import Web.FormUrlEncoded (FromForm)
-
-data MemberPermissionForm = MemberPermissionForm
-  { permissionf :: Text
-  }
-  deriving (Eq, Show, Generic)
-  deriving anyclass (FromForm, Default)
-
-data MemberPermissionFormError = MemberPermissionFormError
-  { permissionE :: Maybe [String]
-  }
-  deriving (Eq, Show, Generic)
-  deriving anyclass (Default)
-
-memberPermissionFormToModel :: Projects.ProjectId -> MemberPermissionForm -> CreateProjectMembers
-memberPermissionFormToModel pid MemberPermissionForm {..} = CreateProjectMembers {projectId = pid, ..}
-
-memberPermissionFormV :: Monad m => Valor MemberPermissionForm m MemberPermissionFormError
-memberPermissionFormV =
-  MemberPermissionFormError
-    <$> check1 permissionf (failIf ["permission can't be empty"] T.null)
 
 editProjectH :: Sessions.PersistentSession -> DashboardM (Html ())
 editProjectH sess = do
@@ -143,7 +120,7 @@ editProjectBody cp cpe = do
           ""
       button_ [class_ "py-2 px-5 bg-blue-700 absolute m-5 bottom-0 right-0 text-[white] text-sm rounded-xl cursor-pointer", type_ "submit"] "Next step"
 
-editProjectMembersBody :: MemberPermissionForm -> MemberPermissionFormError -> Html ()
+editProjectMembersBody :: ProjectMembers.MemberPermissionForm -> ProjectMembers.MemberPermissionFormError -> Html ()
 editProjectMembersBody mb cpe = do
   section_ [id_ "main-content"] $ do
     h2_ [class_ "text-slate-700 text-2xl font-medium mb-5"] "Edit Project Members"
@@ -176,23 +153,23 @@ editProjectMembersBody mb cpe = do
           span_ [class_ "text-blue-700 font-medium text-base "] "Add member"
       button_ [class_ "py-2 px-5 bg-blue-700 absolute m-5 bottom-0 right-0 text-[white] text-sm rounded-xl cursor-pointer", type_ "submit"] "Next step"
 
-editProjectMemberH :: ProjectId -> MemberPermissionForm -> DashboardM (HeadersTriggerRedirect (Html ()))
+editProjectMemberH :: ProjectId -> ProjectMembers.MemberPermissionForm -> DashboardM (HeadersTriggerRedirect (Html ()))
 editProjectMemberH pid mb = do
-  validationRes <- validateM memberPermissionFormV mb
+  validationRes <- validateM ProjectMembers.memberPermissionFormV mb
   case validationRes of
     Left epRaw -> do
       let ep = Valor.unValid epRaw
       pool <- asks pool
       _ <- liftIO $
         withPool pool $ do
-          updateMemberPermission pid mb
+          ProjectMembers.updateMemberPermission pid mb
           pure ()
 
-      pure $ addHeader "HX-Trigger" $ addHeader "/p" $ editProjectMembersBody ep (def @MemberPermissionFormError)
+      pure $ addHeader "HX-Trigger" $ addHeader "/p" $ editProjectMembersBody ep (def @ProjectMembers.MemberPermissionFormError)
     Right epe -> pure $ noHeader $ noHeader $ editProjectMembersBody mb epe
 
 
-editProjectPostH :: ProjectId -> CreateProjectForm -> DashboardM (HeadersTriggerRedirect (Html ()))
+editProjectPostH :: Projects.ProjectId -> CreateProjectForm -> DashboardM (HeadersTriggerRedirect (Html ()))
 editProjectPostH pid editP = do
   validationRes <- validateM createProjectFormV editP
   case validationRes of
@@ -201,41 +178,11 @@ editProjectPostH pid editP = do
       pool <- asks pool
       _ <- liftIO $
         withPool pool $ do
-          -- updateProject $ createProjectFormToModel pid ep
+          Projects.updateProject $ createProjectFormToModel pid editP
           pure ()
 
       pure $ addHeader "HX-Trigger" $ addHeader "/p" $ editProjectBody ep (def @CreateProjectFormError)
     Right epe -> pure $ noHeader $ noHeader $ editProjectBody editP epe
 
-editProjectGetH :: ProjectId -> PgT.DBT IO (Vector.Vector Project)
-editProjectGetH pid = query Select q (Only pid)
-  where
-    q =
-      [sql|
-        SELECT pp*, ppm* FROM projects.projects AS pp 
-            INNER JOIN projects.project_members AS ppm
-            ON pp.id = pid 
-        WHERE ppm.project_id = pp.id;|]
 
-updateProject :: ProjectId -> PgT.DBT IO Int64
-updateProject pid = PgT.execute q (Only pid)
-  where
-    q =
-      [sql|
-      UPDATE projects.projects(title, description) VALUES (?, ?)
-      WHERE projects.projects.id = pid;|]
 
-deleteProject :: ProjectId -> PgT.DBT IO ()
-deleteProject pid = delete @Project (Only pid)
-
-updateMemberPermission :: ProjectId -> MemberPermissionForm -> PgT.DBT IO Int64
-updateMemberPermission mid pm = PgT.execute q (Only mid)
-  where
-    q =
-      [sql|
-    UPDATE projects.project_members (permission) VALUES (?)
-    WHERE projects.project_members.id = mid
-    OPTIONS (pm);|]
-
--- deleteMember :: ProjectMembers -> PgT.DBT IO ()
--- deleteMember mid = delete @ProjectMembers (Only mid)
