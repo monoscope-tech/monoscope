@@ -11,7 +11,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        ghc: ['8.10.7']
+        ghc: ['8.2.2']
         cabal: ['3.6.2.0']
         os: [ubuntu-latest]
         resolver: ['https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/18/18.yaml']
