@@ -35,7 +35,7 @@ listProjectsGetH sess = do
 
 listProjectsBody :: Vector.Vector Projects.Project -> Html ()
 listProjectsBody projects = do
-  section_ [id_ "main-content"] $ do
+  section_ [id_ "main-content", class_ "p-6"] $ do
     div_ [class_ "flex justify-between mb-6"] $ do
       h2_ [class_ "text-slate-700 text-2xl font-medium"] "Projects"
       a_ [class_ "btn-indigo", href_ "/p/new"] "Create Project"
