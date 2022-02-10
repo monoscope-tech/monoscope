@@ -11,22 +11,26 @@ module Models.Projects.ProjectMembers
     memberPermissionFormToModel,
     memberPermissionFormV,
     updateMemberPermission,
-    deleteMember
+    deleteMember,
   )
 where
 
 import qualified Data.Aeson as AE
 import qualified Data.Aeson.Types as AET
-import Data.Default
-import Data.Default.Instances
+import Data.Default (Default)
+import Data.Default.Instances ()
+import Data.Text (Text)
+import qualified Data.Text as T
 import Data.Time (CalendarDiffTime, UTCTime, ZonedTime)
 import Data.Time.Clock (DiffTime, NominalDiffTime)
 import qualified Data.UUID as UUID
+import Data.Valor (Valid, Valor, check1, failIf, validateM)
+import qualified Data.Valor as Valor
 import qualified Data.Vector as Vector
+import Database.PostgreSQL.Entity (delete)
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, queryOne, query_, withPool)
 import qualified Database.PostgreSQL.Entity.Types as PET
 import Database.PostgreSQL.Simple (Connection, FromRow, Only (Only), ResultError (..), ToRow, query_)
-import Database.PostgreSQL.Entity (delete)
 import Database.PostgreSQL.Simple.FromField (FromField, fromField, returnError)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
@@ -35,15 +39,9 @@ import qualified Deriving.Aeson as DAE
 import GHC.Generics (Generic)
 import qualified Models.Projects.Projects as Projects
 import qualified Models.Users.Users as Users
-import Optics.Operators
-import Optics.TH
-import Relude 
-import Data.Default (Default (def))
-import qualified Data.Text as T
-import qualified Data.UUID as UUID
-import Data.Valor (Valid, Valor, check1, failIf, validateM)
-import qualified Data.Valor as Valor
-import Data.Text
+import Optics.Operators ()
+import Optics.TH (makeFieldLabelsNoPrefix)
+import Relude
 import Web.FormUrlEncoded (FromForm)
 
 data Permissions

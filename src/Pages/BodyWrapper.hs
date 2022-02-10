@@ -39,7 +39,7 @@ bodyWrapper sessM currProject pageTitle child =
           script_ [src_ "https://unpkg.com/htmx.org@1.6.1"] ("" :: Text)
           script_ [src_ "https://unpkg.com/hyperscript.org@0.9.3"] ("" :: Text)
         body_ [class_ "text-gray-700"] $ do
-          section_ [class_ "flex flex-row"] $ do
+          section_ [class_ "flex flex-row bg-gray-50"] $ do
             -- Side nav
             sideNav'
             section_ [class_ "grow"] $ do
@@ -153,8 +153,8 @@ sideNav sess project pageTitle = do
           )
 
 navbar :: Users.User -> Html ()
-navbar currUser = section_ [class_ "sticky top-0 w-full bg-gray-50"] $ do
-  nav_ [class_ "w-full px-6 py-3 border-b bg-white flex flex-row justify-between"] $ do
+navbar currUser = do
+  nav_ [class_ "sticky top-0 w-full w-full px-6 py-3 border-b bg-white flex flex-row justify-between"] $ do
     a_ [class_ "cursor-pointer flex "] $ do
       img_ [src_ "/assets/svgs/hamburger_menu.svg"]
     div_ [class_ "inline-block flex items-center"] $ do

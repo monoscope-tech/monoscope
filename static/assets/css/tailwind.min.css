@@ -1,5 +1,5 @@
 /*
-! tailwindcss v3.0.20 | MIT License | https://tailwindcss.com
+! tailwindcss v3.0.12 | MIT License | https://tailwindcss.com
 */
 
 /*
@@ -1056,6 +1056,10 @@ body {
   overflow-x: auto;
 }
 
+.overflow-y-scroll {
+  overflow-y: scroll;
+}
+
 .truncate {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1215,6 +1219,10 @@ body {
 
 .p-5 {
   padding: 1.25rem;
+}
+
+.p-8 {
+  padding: 2rem;
 }
 
 .py-5 {

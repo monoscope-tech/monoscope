@@ -1,50 +1,4 @@
-BEGIN;
-
-CREATE EXTENSION IF NOT EXISTS citext;
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
-
-
--- create schemas
-CREATE SCHEMA IF NOT EXISTS users;
-CREATE SCHEMA IF NOT EXISTS projects;
-CREATE SCHEMA IF NOT EXISTS apis;
-
-
-
-CREATE OR REPLACE FUNCTION manage_updated_at(_tbl regclass) RETURNS VOID AS $$
-BEGIN
-  EXECUTE format('CREATE TRIGGER set_updated_at BEFORE UPDATE ON %s
-FOR EACH ROW EXECUTE PROCEDURE set_updated_at()', _tbl);
-END;
-
--- create function to automatically set updated at in trigger
-$$ LANGUAGE plpgsql;
-CREATE OR REPLACE FUNCTION set_updated_at() RETURNS trigger AS $$
-BEGIN
-  IF (
-    NEW IS DISTINCT FROM OLD AND
-    NEW.updated_at IS NOT DISTINCT FROM OLD.updated_at
-  ) THEN
-    NEW.updated_at := current_timestamp;
-  END IF;
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-
-DO $$ BEGIN
-  CREATE DOMAIN email AS citext
-    CHECK ( value ~ '^[a-zA-Z0-9.!#$%&''*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$' );
-EXCEPTION
-    WHEN duplicate_object THEN null;
-END $$;
-
--- create user table
-CREATE TABLE IF NOT EXISTS users.users
-(
-  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-  deleted_at TIMESTAMP WITH TIME ZONE,
+TIMESTAMP WITH TIME ZONE,
   active BOOL NOT NULL DEFAULT 't',
   id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
   first_name VARCHAR(100) NOT NULL DEFAULT '',
@@ -178,7 +132,7 @@ CREATE TABLE IF NOT EXISTS apis.endpoints
 SELECT manage_updated_at('apis.endpoints');
 
 CREATE TYPE apis.field_type AS ENUM ('unknown','string','number','bool','object', 'list', 'null');
-CREATE TYPE apis.field_category AS ENUM ('queryparam', 'request_header','response_headers', 'request_body', 'response_body');
+CREATE TYPE apis.field_category AS ENUM ('queryparam', 'request_header','response_header', 'request_body', 'response_body');
 CREATE TABLE IF NOT EXISTS apis.fields
 (
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,

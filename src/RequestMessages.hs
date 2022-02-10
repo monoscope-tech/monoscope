@@ -1,21 +1,4 @@
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DeriveAnyClass #-}
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE DerivingVia #-}
-{-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE OverloadedLabels #-}
-{-# LANGUAGE OverloadedLists #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE QuasiQuotes #-}
-{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE TypeApplications #-}
-{-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE UndecidableInstances #-}
 
 module RequestMessages
   ( RequestMessage (..),
@@ -199,7 +182,7 @@ fieldsToFieldDTO fieldCategory projectID (keyPath, val) =
         description = "",
         keyPath = fromList $ T.splitOn "," keyPath,
         keyPathStr = keyPath,
-        fieldCategory = fieldCategory
+        fieldCategory = Unsafe.fromJust $ Fields.parseFieldCategoryEnum fieldCategory
       },
     []
   )
