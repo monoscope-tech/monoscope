@@ -31,14 +31,21 @@ jobs:
         with:
           enable-stack: true
           stack-version: 'latest'
-          allow-newer: true
-
+         
       - name: Versions
         run: |
           stack --version
           cabal --version
           ghc --version
-          
+      
+      - name: write to file
+        uses: DamianReeves/write-file-action@v1.0
+        with:
+          path: ${{ env.home}}/.bashrc
+          contents: |
+            echo "allow-newer: true"
+          write-mode: append
+  
       - name: Build package
         run: |
           stack build --dependencies-only
