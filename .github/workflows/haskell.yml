@@ -38,7 +38,13 @@ jobs:
           cabal --version
           ghc --version
       
-      
+      - name: write to file
+        uses: DamianReeves/write-file-action@v1.0
+        with:
+          path: /home/runner/.stack/config.yaml     
+          contents: |
+            echo "allow-newer: true"
+          write-mode: append
   
       - name: Build package
         run: |
