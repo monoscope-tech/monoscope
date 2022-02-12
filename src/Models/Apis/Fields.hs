@@ -34,6 +34,7 @@ import Database.PostgreSQL.Transact as PgT (DBT, queryOne)
 import qualified Deriving.Aeson as DAE
 import GHC.Generics (Generic)
 import qualified Models.Apis.Endpoints as Endpoints
+import qualified Models.Projects.Projects as Projects
 import Optics.Operators
 import Optics.TH
 import Relude
@@ -119,8 +120,8 @@ data Field = Field
   { createdAt :: ZonedTime,
     updatedAt :: ZonedTime,
     id :: UUID.UUID,
-    projectId :: UUID.UUID,
-    endpoint :: UUID.UUID,
+    projectId :: Projects.ProjectId,
+    endpoint :: Endpoints.EndpointId,
     key :: Text,
     fieldType :: FieldTypes,
     fieldTypeOverride :: Maybe Text,
@@ -136,6 +137,18 @@ data Field = Field
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "fields", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Field)
+
+instance Ord Field where
+  (<=) f1 f2 =
+    (projectId f1 <= projectId f2)
+      && (endpoint f1 <= endpoint f2)
+      && keyPathStr f1 <= keyPathStr f2
+
+instance Eq Field where
+  (==) f1 f2 =
+    (projectId f1 == projectId f2)
+      && (endpoint f1 == endpoint f2)
+      && (keyPathStr f1 == keyPathStr f2)
 
 makeFieldLabelsNoPrefix ''Field
 

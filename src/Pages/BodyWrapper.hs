@@ -44,7 +44,7 @@ bodyWrapper sessM currProject pageTitle child =
             sideNav'
             section_ [class_ "grow"] $ do
               navbar currUser
-              section_ [class_ "p-4"] child
+              child
 
 projectsDropDown :: Projects.Project -> Vector.Vector Projects.Project -> Html ()
 projectsDropDown currProject projects =

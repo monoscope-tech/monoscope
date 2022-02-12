@@ -31,4 +31,30 @@ body {
   @apply btn-sm bg-white border-gray-300 text-gray-700 hover:bg-gray-50 focus:ring-indigo-500;
 }
 
+/* table td { */
+/*   border: 1px solid #eee; */
+/* } */
+
+/* .level1 td:first-child { */
+/*   padding-left: 15px; */
+/* } */
+
+/* .level2 td:first-child { */
+/*   padding-left: 30px; */
+/* } */
+
+.collapse .toggle {
+  background: url("http://mleibman.github.com/SlickGrid/images/collapse.gif");
+}
+
+.expand .toggle {
+  background: url("http://mleibman.github.com/SlickGrid/images/expand.gif");
+}
+
+.toggle {
+  height: 9px;
+  width: 9px;
+  display: inline-block;
+}
+
 }

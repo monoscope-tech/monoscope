@@ -1,12 +1,13 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections #-}
 
 module Pages.Endpoints.EndpointDetails (endpointDetailsH) where
 
 import Config
 import qualified Data.Map as Map
-import Data.Text (toUpper)
+import Data.Text (breakOn, breakOnAll, isInfixOf, replace, splitOn, toUpper)
 import Data.UUID as UUID
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
@@ -16,7 +17,7 @@ import qualified Models.Apis.Endpoints as Endpoints
 import qualified Models.Apis.Fields as Fields
 import qualified Models.Projects.Projects as Projects
 import qualified Models.Users.Sessions as Sessions
-import Optics.Core ((^.))
+import Optics.Core ((^.), (^?))
 import Pages.BodyWrapper (bodyWrapper)
 import Relude
 import qualified Relude.Unsafe as Unsafe
@@ -88,23 +89,53 @@ subSubSection title fieldsM = do
   case fieldsM of
     Nothing -> toHtml ""
     Just fields -> do
-      div_ [class_ "bg-white rounded-xl p-5"] $ do
+      div_ [class_ "bg-white rounded-xl p-5 space-y-2"] $ do
         div_ [class_ "flex flex-row "] $ do
           img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-4 mr-3 mt-4 w-4"]
           div_ [class_ "bg-gray-100 px-10 rounded-xl w-full p-4 text-sm text-slate-600"] $ toHtml title
-        fields
+        fieldsToNormalized fields
           & mapM_
-            ( \field -> do
-                div_ [class_ "border flex mb-5 flex-row border-gray-100 ml-20 px-5 p-3 rounded-xl mt-2 "] $ do
-                  input_ [type_ "checkbox", class_ " mr-12 m-1"]
-                  span_ [class_ "grow text-sm text-slate-600"] $ toHtml $ field ^. #keyPathStr <> "   ==>   " <> field ^. #key <> "   ==>   " <> field ^. #format
-                  span_ [class_ "text-sm text-slate-500 mx-12"] "[] obj"
-                  img_ [src_ "/assets/svgs/alert-red.svg", class_ " mx-10 "]
-                  img_ [src_ "/assets/svgs/dots-vertical.svg", class_ "mx-5"]
+            ( \(key, fieldM) -> do
+                let segments = splitOn "." key
+                let depth = length segments
+                let depthPadding = "margin-left:" <> show (20 + (depth * 20)) <> "px"
+                let displayKey = replace " " "»" $ last ("" :| segments)
+                case fieldM of
+                  Nothing -> do
+                    div_ [class_ "flex flex-row", style_ depthPadding] $ do
+                      img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-4 mr-3 mt-4 w-4"]
+                      div_ [class_ "border flex flex-row border-gray-100 px-5 p-3 rounded-xl w-full"] $ do
+                        input_ [type_ "checkbox", class_ " mr-12 m-1"]
+                        span_ [class_ "grow text-sm text-slate-600"] $ toHtml displayKey
+                        span_ [class_ "text-sm text-slate-500 mx-12"] $ toHtml $ if "»" `isInfixOf` key then "[]" else "{}"
+                  Just field -> do
+                    div_ [class_ "flex flex-row", style_ depthPadding] $ do
+                      img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-4 mr-3 mt-4 w-4"]
+                      div_ [class_ "border flex flex-row border-gray-100 px-5 p-3 rounded-xl w-full"] $ do
+                        input_ [type_ "checkbox", class_ " mr-12 m-1"]
+                        span_ [class_ "grow text-sm text-slate-600"] $ toHtml $ field ^. #key
+                        span_ [class_ "text-sm text-slate-500 mx-12"] $ toHtml $ show $ field ^. #fieldType
+                        img_ [src_ "/assets/svgs/alert-red.svg", class_ " mx-10 "]
+                        img_ [src_ "/assets/svgs/dots-vertical.svg", class_ "mx-5"]
             )
         div_ [class_ " border-2 border-dashed flex mb-5 flex-row border-gray-100 ml-5  px-5 p-3 rounded-xl mt-2 "] $ do
           img_ [src_ "/assets/svgs/blue-plus.svg", class_ "mx-2"]
           span_ [class_ "text-blue-700 font-medium text-base "] "Add a field"
+
+fieldsToNormalized :: [Fields.Field] -> [(Text, Maybe Fields.Field)]
+fieldsToNormalized =
+  sortNub
+    . concatMap
+      ( \field ->
+          map
+            ((,Nothing) . fst)
+            ( replace ".[]" "»" (field ^. #keyPathStr)
+                & breakOnAll "."
+            )
+            & (++ [(field ^. #keyPathStr, Just field)])
+      )
+
+-- A.B.C.D -> [(A, 1), (A.B, 2), (A.B.C), 3]
 
 sidebar :: Html ()
 sidebar = do
