@@ -99,7 +99,7 @@ subSubSection title fieldsM = do
                 let segments = splitOn "." key
                 let depth = length segments
                 let depthPadding = "margin-left:" <> show (20 + (depth * 20)) <> "px"
-                let displayKey = replace " " "»" $ last ("" :| segments)
+                let displayKey = replace "»" "" $ last ("" :| segments)
                 case fieldM of
                   Nothing -> do
                     div_ [class_ "flex flex-row", style_ depthPadding] $ do
@@ -113,7 +113,7 @@ subSubSection title fieldsM = do
                       img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-4 mr-3 mt-4 w-4"]
                       div_ [class_ "border flex flex-row border-gray-100 px-5 p-3 rounded-xl w-full"] $ do
                         input_ [type_ "checkbox", class_ " mr-12 m-1"]
-                        span_ [class_ "grow text-sm text-slate-600"] $ toHtml $ field ^. #key
+                        span_ [class_ "grow text-sm text-slate-600"] $ toHtml displayKey
                         span_ [class_ "text-sm text-slate-500 mx-12"] $ toHtml $ show $ field ^. #fieldType
                         img_ [src_ "/assets/svgs/alert-red.svg", class_ " mx-10 "]
                         img_ [src_ "/assets/svgs/dots-vertical.svg", class_ "mx-5"]
@@ -129,10 +129,10 @@ fieldsToNormalized =
       ( \field ->
           map
             ((,Nothing) . fst)
-            ( replace ".[]" "»" (field ^. #keyPathStr)
+            ( replace "[]" "»" (field ^. #keyPathStr)
                 & breakOnAll "."
             )
-            & (++ [(field ^. #keyPathStr, Just field)])
+            & (++ [(replace "[]" "»" $ field ^. #keyPathStr, Just field)])
       )
 
 -- A.B.C.D -> [(A, 1), (A.B, 2), (A.B.C), 3]
