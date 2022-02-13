@@ -4,7 +4,9 @@ module Models.Apis.Fields
   ( Field (..),
     FieldTypes (..),
     FieldCategoryEnum (..),
+    FieldId (..),
     selectFields,
+    fieldById,
     upsertFields,
     parseFieldCategoryEnum,
     groupFieldsByCategory,
@@ -22,7 +24,7 @@ import Data.Time (CalendarDiffTime, UTCTime, ZonedTime)
 import Data.Time.Clock (DiffTime, NominalDiffTime)
 import qualified Data.UUID as UUID
 import Data.Vector as Vector (Vector, fromList, toList)
-import Database.PostgreSQL.Entity (selectManyByField)
+import Database.PostgreSQL.Entity (selectById, selectManyByField)
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, queryOne, query_, withPool)
 import Database.PostgreSQL.Entity.Internal.QQ (field)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
@@ -40,6 +42,14 @@ import Optics.TH
 import Relude
 import Relude.Unsafe ((!!))
 import qualified Relude.Unsafe as Unsafe
+import Web.HttpApiData (FromHttpApiData)
+
+newtype FieldId = FieldId {unFieldId :: UUID.UUID}
+  deriving stock (Generic, Show)
+  deriving
+    (Eq, Ord, FromField, ToField, FromHttpApiData, Default)
+    via UUID.UUID
+  deriving anyclass (FromRow, ToRow)
 
 data FieldTypes
   = FTUnknown
@@ -117,9 +127,9 @@ instance FromField FieldCategoryEnum where
           Nothing -> returnError ConversionFailed f $ "Conversion error: Expected 'field_type' enum, got " <> decodeUtf8 bs <> " instead."
 
 data Field = Field
-  { createdAt :: ZonedTime,
+  { id :: FieldId,
+    createdAt :: ZonedTime,
     updatedAt :: ZonedTime,
-    id :: UUID.UUID,
     projectId :: Projects.ProjectId,
     endpoint :: Endpoints.EndpointId,
     key :: Text,
@@ -153,7 +163,7 @@ instance Eq Field where
 makeFieldLabelsNoPrefix ''Field
 
 -- | upsertFields
-upsertFields :: UUID.UUID -> [(Field, [Text])] -> DBT IO [Maybe (Only Text)]
+upsertFields :: Endpoints.EndpointId -> [(Field, [Text])] -> DBT IO [Maybe (Only Text)]
 upsertFields endpointID fields = options & mapM (PgT.queryOne q)
   where
     q =
@@ -183,7 +193,13 @@ upsertFields endpointID fields = options & mapM (PgT.queryOne q)
 selectFields :: Endpoints.EndpointId -> DBT IO (Vector Field)
 selectFields = query Select q
   where
-    q = [sql| select * from apis.fields where endpoint=? order by field_category, key |]
+    q =
+      [sql| select id,created_at,updated_at,project_id,endpoint,key,field_type,
+                    field_type_override,format,format_override,description,key_path,key_path_str,field_category
+                    from apis.fields where endpoint=? order by field_category, key |]
+
+fieldById :: FieldId -> DBT IO (Maybe Field)
+fieldById = selectById @Field
 
 -- | NB: The GroupBy function has been merged into the vectors package.
 -- We should use that instead of converting to list, once that is available on hackage.

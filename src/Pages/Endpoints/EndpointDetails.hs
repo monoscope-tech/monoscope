@@ -3,18 +3,21 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
 
-module Pages.Endpoints.EndpointDetails (endpointDetailsH) where
+module Pages.Endpoints.EndpointDetails (endpointDetailsH, fieldDetailsPartialH) where
 
 import Config
 import qualified Data.Map as Map
-import Data.Text (breakOn, breakOnAll, isInfixOf, replace, splitOn, toUpper)
+import Data.Text as T (breakOn, breakOnAll, dropWhile, isInfixOf, replace, splitOn, toUpper)
+import Data.Time (defaultTimeLocale, formatTime)
 import Data.UUID as UUID
+import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import Lucid.HTMX
 import Models.Apis.Endpoints
 import qualified Models.Apis.Endpoints as Endpoints
 import qualified Models.Apis.Fields as Fields
+import qualified Models.Apis.Formats as Formats
 import qualified Models.Projects.Projects as Projects
 import qualified Models.Users.Sessions as Sessions
 import Optics.Core ((^.), (^?))
@@ -24,6 +27,54 @@ import qualified Relude.Unsafe as Unsafe
 import Servant
 import Servant.HTML.Lucid
 import Text.RawString.QQ
+
+fieldDetailsPartialH :: Sessions.PersistentSession -> Projects.ProjectId -> Fields.FieldId -> DashboardM (Html ())
+fieldDetailsPartialH sess pid fid = do
+  pool <- asks pool
+  (fieldsM, formats) <- liftIO $
+    withPool pool $ do
+      field <- Fields.fieldById fid
+      formats <- Formats.formatsByFieldId fid
+      pure (field, formats)
+  case fieldsM of
+    Nothing -> pure $ toHtml ""
+    Just field -> pure $ fieldDetailsView field formats
+
+fieldDetailsView :: Fields.Field -> Vector Formats.Format -> Html ()
+fieldDetailsView field formats = do
+  img_ [src_ "/assets/svgs/ellipsis.svg", class_ "my-2 float-right"]
+  h3_ [class_ "text-lg text-slate-700 mt-6"] $ toHtml $ field ^. #key
+  formats
+    & mapM_
+      ( \format -> do
+          div_ [class_ "flex mt-5 flex-row"] $ do
+            div_ [class_ ""] $ do
+              h6_ [class_ "text-slate-600 text-xs"] "TYPE"
+              h4_ [class_ "text-base text-slate-600"] $ toHtml $ show $ format ^. #fieldType
+            div_ [class_ "mx-5"] $ do
+              h6_ [class_ "text-slate-600 text-xs"] "FORMAT"
+              h4_ [class_ "text-base text-slate-600"] $ toHtml $ format ^. #fieldFormat
+          h6_ [class_ "text-slate-600 mt-4 text-xs"] "EXAMPLE VALUES"
+          ul_ [class_ "list-disc"] $ do
+            format ^. #examples
+              & mapM_
+                ( \ex -> do
+                    li_ [class_ "ml-10 text-slate-600 text-sm"] $ toHtml ex
+                )
+      )
+  div_ [class_ "flex flex-row justify-between mt-10 "] $ do
+    div_ [class_ " "] $ do
+      h4_ [class_ "text-sm text-slate-600 mb-2"] "CREATION DATE"
+      div_ [class_ "flex border border-gray-200 m-1 rounded-xl p-2"] $ do
+        img_ [src_ "/assets/svgs/calender.svg", class_ "h-4 mr-2 w-4"]
+        span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" (field ^. #createdAt)
+    div_ [class_ " "] $ do
+      h4_ [class_ "text-sm text-slate-600 mb-2"] "LAST CHANGE"
+      div_ [class_ "flex border border-gray-200 m-1 justify-between rounded-xl p-2"] $ do
+        img_ [src_ "/assets/svgs/calender.svg", class_ "h-4 mr-2 w-4"]
+        span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" (field ^. #updatedAt)
+  h6_ [class_ "mt-5 text-sm text-slate-600 mb-2"] "DESCRIPTION"
+  p_ [class_ "text-gray-400 text-sm"] $ toHtml $ field ^. #description
 
 endpointDetailsH :: Sessions.PersistentSession -> Projects.ProjectId -> Endpoints.EndpointId -> DashboardM (Html ())
 endpointDetailsH sess pid eid = do
@@ -57,9 +108,10 @@ endpointDetails endpoint fieldsM = do
               h3_ [class_ "text-white text-sm text-bold mx-2 mt-1"] "Download Swagger"
               div_ [class_ "bg-blue-900 p-1 rounded-lg ml-2"] $ do
                 img_ [src_ "/assets/svgs/whitedown.svg", class_ "text-white h-2 w-2 m-1"]
-      reqResSection "Request" True fieldsM
-      reqResSection "Response" True fieldsM
-    sidebar
+      div_ [class_ "space-y-8"] $ do
+        reqResSection "Request" True fieldsM
+        reqResSection "Response" True fieldsM
+    aside_ [class_ "w-1/3 bg-white h-screen -mr-8 -mt-5 border border-gray-200 ml-3 p-5 sticky top-0", id_ "detailSidebar"] $ toHtml ""
 
 -- NB: We could enable the fields cycling functionality using the groups of response list functionality on the endpoint.
 -- So we go through the list and in each request or response view, only show the fields that appear in the field list.
@@ -84,6 +136,7 @@ reqResSection title isRequest fieldsM =
         subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader fieldsM)
         subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody fieldsM)
 
+-- | subSubSection ..
 subSubSection :: Text -> Maybe [Fields.Field] -> Html ()
 subSubSection title fieldsM = do
   case fieldsM of
@@ -102,21 +155,28 @@ subSubSection title fieldsM = do
                 let displayKey = replace "»" "" $ last ("" :| segments)
                 case fieldM of
                   Nothing -> do
-                    div_ [class_ "flex flex-row", style_ depthPadding] $ do
+                    a_ [class_ "flex flex-row cursor-pointer", style_ depthPadding, term "data-depth" $ show depth] $ do
                       img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-4 mr-3 mt-4 w-4"]
                       div_ [class_ "border flex flex-row border-gray-100 px-5 p-3 rounded-xl w-full"] $ do
                         input_ [type_ "checkbox", class_ " mr-12 m-1"]
                         span_ [class_ "grow text-sm text-slate-600"] $ toHtml displayKey
                         span_ [class_ "text-sm text-slate-500 mx-12"] $ toHtml $ if "»" `isInfixOf` key then "[]" else "{}"
                   Just field -> do
-                    div_ [class_ "flex flex-row", style_ depthPadding] $ do
-                      img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-4 mr-3 mt-4 w-4"]
-                      div_ [class_ "border flex flex-row border-gray-100 px-5 p-3 rounded-xl w-full"] $ do
-                        input_ [type_ "checkbox", class_ " mr-12 m-1"]
-                        span_ [class_ "grow text-sm text-slate-600"] $ toHtml displayKey
-                        span_ [class_ "text-sm text-slate-500 mx-12"] $ toHtml $ show $ field ^. #fieldType
-                        img_ [src_ "/assets/svgs/alert-red.svg", class_ " mx-10 "]
-                        img_ [src_ "/assets/svgs/dots-vertical.svg", class_ "mx-5"]
+                    a_
+                      [ hxGet_ $ "/p/" <> Projects.projectIdText (field ^. #projectId) <> "/fields/" <> UUID.toText (Fields.unFieldId $ field ^. #id),
+                        hxTarget_ "#detailSidebar",
+                        class_ "flex flex-row cursor-pointer",
+                        style_ depthPadding,
+                        term "data-depth" $ show depth
+                      ]
+                      $ do
+                        img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-4 mr-3 mt-4 w-4 ", style_ "visibility: hidden"]
+                        div_ [class_ "border flex flex-row border-gray-100 px-5 p-3 rounded-xl w-full"] $ do
+                          input_ [type_ "checkbox", class_ " mr-12 m-1"]
+                          span_ [class_ "grow text-sm text-slate-600"] $ toHtml displayKey
+                          span_ [class_ "text-sm text-slate-500 mx-12"] $ toHtml $ show $ field ^. #fieldType
+                          img_ [src_ "/assets/svgs/alert-red.svg", class_ " mx-10 "]
+                          img_ [src_ "/assets/svgs/dots-vertical.svg", class_ "mx-5"]
             )
         div_ [class_ " border-2 border-dashed flex mb-5 flex-row border-gray-100 ml-5  px-5 p-3 rounded-xl mt-2 "] $ do
           img_ [src_ "/assets/svgs/blue-plus.svg", class_ "mx-2"]
@@ -129,40 +189,13 @@ fieldsToNormalized =
       ( \field ->
           map
             ((,Nothing) . fst)
-            ( replace "[]" "»" (field ^. #keyPathStr)
+            ( (field ^. #keyPathStr)
+                & keyPathStrToKey
                 & breakOnAll "."
             )
-            & (++ [(replace "[]" "»" $ field ^. #keyPathStr, Just field)])
+            & (++ [(keyPathStrToKey $ field ^. #keyPathStr, Just field)])
       )
-
--- A.B.C.D -> [(A, 1), (A.B, 2), (A.B.C), 3]
-
-sidebar :: Html ()
-sidebar = do
-  aside_ [class_ "w-1/3 bg-white h-screen -mr-8 -mt-5 border border-gray-200 ml-3 p-5 sticky top-0"] $ do
-    img_ [src_ "/assets/svgs/ellipsis.svg", class_ "my-2 float-right"]
-    h3_ [class_ "text-lg text-slate-700 mt-6"] "bank_name"
-    div_ [class_ "flex mt-5 flex-row"] $ do
-      div_ [class_ ""] $ do
-        h6_ [class_ "text-slate-600 text-xs"] "TYPE"
-        h4_ [class_ "text-base text-slate-600"] "keyword"
-      div_ [class_ "mx-5"] $ do
-        h6_ [class_ "text-slate-600 text-xs"] "FORMAT"
-        h4_ [class_ "text-base text-slate-600"] "keyword"
-    h6_ [class_ "text-slate-600 mt-4 text-xs"] "EXAMPLE VALUES"
-    ul_ [class_ "list-disc"] $ do
-      li_ [class_ "ml-10 text-slate-600 text-sm"] "UBA"
-      li_ [class_ "ml-10 text-slate-600 text-sm"] "ABC"
-    div_ [class_ "flex flex-row justify-between mt-10 "] $ do
-      div_ [class_ " "] $ do
-        h4_ [class_ "text-sm text-slate-600 mb-2"] "CREATION DATE"
-        div_ [class_ "flex border border-gray-200 m-1 rounded-xl p-2"] $ do
-          img_ [src_ "/assets/svgs/calender.svg", class_ "h-4 mr-2 w-4"]
-          span_ [class_ "text-xs"] "Jan 17, 2020, 10:50AM"
-      div_ [class_ " "] $ do
-        h4_ [class_ "text-sm text-slate-600 mb-2"] "LAST CHANGE"
-        div_ [class_ "flex border border-gray-200 m-1 justify-between rounded-xl p-2"] $ do
-          img_ [src_ "/assets/svgs/calender.svg", class_ "h-4 mr-2 w-4"]
-          span_ [class_ "text-xs"] "Sept 17, 2021, 10:50AM"
-    h6_ [class_ "mt-5 text-sm text-slate-600 mb-2"] "DESCRIPTION"
-    p_ [class_ "text-gray-400 text-sm"] "We need to develop several options (Inbox template, Chat template, tasks template, Projects template) of cool user interface design templates - to carefully work out the smallest details."
+  where
+    rmvDotPrefix = T.dropWhile (== '.')
+    listToUnicode = replace "[]" "»"
+    keyPathStrToKey = rmvDotPrefix . listToUnicode

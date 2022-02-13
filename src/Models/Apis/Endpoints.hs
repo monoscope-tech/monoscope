@@ -64,7 +64,7 @@ data Endpoint = Endpoint
 
 makeFieldLabelsNoPrefix ''Endpoint
 
-upsertEndpoints :: Endpoint -> PgT.DBT IO (Maybe (UUID.UUID, Text, Text))
+upsertEndpoints :: Endpoint -> PgT.DBT IO (Maybe (EndpointId, Text, Text))
 upsertEndpoints endpoint = queryOne Insert q options
   where
     q =

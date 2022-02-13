@@ -1,5 +1,5 @@
 /*
-! tailwindcss v3.0.20 | MIT License | https://tailwindcss.com
+! tailwindcss v3.0.12 | MIT License | https://tailwindcss.com
 */
 
 /*
@@ -577,13 +577,17 @@ body {
 
 /* } */
 
-.collapse .toggle {
-  background: url("http://mleibman.github.com/SlickGrid/images/collapse.gif");
-}
+/* .collapse .toggle { */
 
-.expand .toggle {
-  background: url("http://mleibman.github.com/SlickGrid/images/expand.gif");
-}
+/*   background: url("http://mleibman.github.com/SlickGrid/images/collapse.gif"); */
+
+/* } */
+
+/* .expand .toggle { */
+
+/*   background: url("http://mleibman.github.com/SlickGrid/images/expand.gif"); */
+
+/* } */
 
 .toggle {
   height: 9px;
@@ -666,6 +670,16 @@ body {
   margin-right: 0.5rem;
 }
 
+.my-2 {
+  margin-top: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.mx-5 {
+  margin-left: 1.25rem;
+  margin-right: 1.25rem;
+}
+
 .mx-4 {
   margin-left: 1rem;
   margin-right: 1rem;
@@ -679,16 +693,6 @@ body {
 .mx-10 {
   margin-left: 2.5rem;
   margin-right: 2.5rem;
-}
-
-.mx-5 {
-  margin-left: 1.25rem;
-  margin-right: 1.25rem;
-}
-
-.my-2 {
-  margin-top: 0.5rem;
-  margin-bottom: 0.5rem;
 }
 
 .mx-auto {
@@ -735,6 +739,22 @@ body {
   margin-top: 1rem;
 }
 
+.mt-5 {
+  margin-top: 1.25rem;
+}
+
+.ml-10 {
+  margin-left: 2.5rem;
+}
+
+.mt-10 {
+  margin-top: 2.5rem;
+}
+
+.mr-2 {
+  margin-right: 0.5rem;
+}
+
 .mb-10 {
   margin-bottom: 2.5rem;
 }
@@ -747,8 +767,16 @@ body {
   margin-left: 0.5rem;
 }
 
-.mt-5 {
-  margin-top: 1.25rem;
+.-mr-8 {
+  margin-right: -2rem;
+}
+
+.-mt-5 {
+  margin-top: -1.25rem;
+}
+
+.ml-3 {
+  margin-left: 0.75rem;
 }
 
 .mr-3 {
@@ -765,30 +793,6 @@ body {
 
 .ml-5 {
   margin-left: 1.25rem;
-}
-
-.-mr-8 {
-  margin-right: -2rem;
-}
-
-.-mt-5 {
-  margin-top: -1.25rem;
-}
-
-.ml-3 {
-  margin-left: 0.75rem;
-}
-
-.ml-10 {
-  margin-left: 2.5rem;
-}
-
-.mt-10 {
-  margin-top: 2.5rem;
-}
-
-.mr-2 {
-  margin-right: 0.5rem;
 }
 
 .mt-3 {
@@ -903,12 +907,12 @@ body {
   width: 10rem;
 }
 
-.w-2\/3 {
-  width: 66.666667%;
-}
-
 .w-4 {
   width: 1rem;
+}
+
+.w-2\/3 {
+  width: 66.666667%;
 }
 
 .w-6 {
@@ -1057,6 +1061,12 @@ body {
   --tw-space-x-reverse: 0;
   margin-right: calc(1rem * var(--tw-space-x-reverse));
   margin-left: calc(1rem * calc(1 - var(--tw-space-x-reverse)));
+}
+
+.space-y-8 > :not([hidden]) ~ :not([hidden]) {
+  --tw-space-y-reverse: 0;
+  margin-top: calc(2rem * calc(1 - var(--tw-space-y-reverse)));
+  margin-bottom: calc(2rem * var(--tw-space-y-reverse));
 }
 
 .-space-x-1 > :not([hidden]) ~ :not([hidden]) {

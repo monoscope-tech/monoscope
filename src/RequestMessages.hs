@@ -171,7 +171,7 @@ fieldsToFieldDTO fieldCategory projectID (keyPath, val) =
   ( Fields.Field
       { createdAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC",
         updatedAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC",
-        id = UUID.nil,
+        id = Fields.FieldId UUID.nil,
         endpoint = Endpoints.EndpointId UUID.nil,
         projectId = Projects.ProjectId projectID,
         key = snd $ T.breakOnEnd "." keyPath,

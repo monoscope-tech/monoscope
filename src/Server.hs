@@ -16,10 +16,11 @@ import qualified Data.UUID.V4 as UUIDV4
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (Connection)
 import Lucid
+import qualified Models.Apis.Endpoints as Endpoints
+import qualified Models.Apis.Fields as Fields
 import qualified Models.Projects.Projects as Projects
 import qualified Models.Users.Sessions as Sessions
 import qualified Models.Users.Users as Users
-import qualified Models.Apis.Endpoints as Endpoints
 import Network.Wai (Application, Request)
 import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
 import Optics.Operators
@@ -78,6 +79,7 @@ type ProtectedAPI =
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "endpoints" :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "endpoints" :> Capture "endpoints_id" Endpoints.EndpointId :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "apis" :> Get '[HTML] (Html ())
+    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> Get '[HTML] (Html ())
 
 type PublicAPI =
   "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
@@ -115,6 +117,7 @@ protectedServer sess =
     :<|> EndpointList.endpointListH sess
     :<|> EndpointDetails.endpointDetailsH sess
     :<|> Api.apiGetH sess
+    :<|> EndpointDetails.fieldDetailsPartialH sess
 
 publicServer :: ServerT PublicAPI DashboardM
 publicServer =
