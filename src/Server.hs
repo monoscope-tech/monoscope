@@ -24,6 +24,7 @@ import Network.Wai (Application, Request)
 import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
 import Optics.Operators
 import qualified Pages.Dashboard as Dashboard
+import qualified Pages.Api as Api
 import qualified Pages.Endpoints.EndpointDetails as EndpointDetails
 import qualified Pages.Endpoints.EndpointList as EndpointList
 import qualified Pages.Projects.CreateProject as CreateProject
@@ -76,6 +77,7 @@ type ProtectedAPI =
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "endpoints" :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "endpoints" :> Capture "endpoints_id" Endpoints.EndpointId :> Get '[HTML] (Html ())
+    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "apis" :> Get '[HTML] (Html ())
 
 type PublicAPI =
   "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
@@ -112,6 +114,7 @@ protectedServer sess =
     :<|> Dashboard.dashboardGetH sess
     :<|> EndpointList.endpointListH sess
     :<|> EndpointDetails.endpointDetailsH sess
+    :<|> Api.apiGetH sess
 
 publicServer :: ServerT PublicAPI DashboardM
 publicServer =

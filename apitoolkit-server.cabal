@@ -34,6 +34,7 @@ library
       Models.Projects.Projects
       Models.Users.Sessions
       Models.Users.Users
+      Pages.Api
       Pages.BodyWrapper
       Pages.Dashboard
       Pages.Endpoints.EndpointDetails
