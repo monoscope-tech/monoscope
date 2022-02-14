@@ -1,6 +1,3 @@
-{-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE TemplateHaskell #-}
-
 module Pages.Projects.ProjectSettings
   (
   )
@@ -11,7 +8,9 @@ import Config
     DashboardM,
     HeadersTriggerRedirect,
   )
+import Control.Monad
 import Data.Default (Default (def))
+import Data.Text
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
 import Data.Valor (Valid, Valor, check1, failIf, validateM)
@@ -24,7 +23,6 @@ import Database.PostgreSQL.Simple (Connection, FromRow, Only (Only), ToRow, quer
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import qualified Database.PostgreSQL.Transact as PgT
 import GHC.Generics (Generic)
-import Control.Monad
 import Lucid
   ( Html,
     button_,
@@ -49,43 +47,26 @@ import Lucid
     type_,
   )
 import Lucid.HTMX (hxPost_, hxTarget_)
+import Models.Projects.ProjectMembers
+import qualified Models.Projects.ProjectMembers as ProjectMembers
 import Models.Projects.Projects (Project, ProjectId)
 import qualified Models.Projects.Projects as Projects
+import qualified Models.Users.Sessions as Sessions
 import Optics.Operators ()
 import Optics.TH ()
-import Models.Projects.ProjectMembers
 import Pages.BodyWrapper (bodyWrapper)
-import qualified Models.Users.Sessions as Sessions
 import Pages.Projects.CreateProject
   ( CreateProjectForm,
     CreateProjectFormError,
+    createProjectFormToModel,
     createProjectFormV,
-    createProjectFormToModel
   )
-import qualified Models.Projects.ProjectMembers as ProjectMembers
 import Relude
-  ( Applicative (pure),
-    Either (Left, Right),
-    IO,
-    Int64,
-    MonadIO (liftIO),
-    asks,
-    ($),
-    Eq,
-    Show,
-    Generic,
-    Maybe,
-    String,
-    (<$>),
-    Maybe(..)
-
-  )
 import Servant
   ( Handler,
     addHeader,
     noHeader,
   )
-import Data.Text
 import Servant.HTML.Lucid
 import Text.RawString.QQ
 import Web.FormUrlEncoded (FromForm)
@@ -167,7 +148,6 @@ editProjectMemberH pid mb = do
       pure $ addHeader "HX-Trigger" $ addHeader "/p" $ editProjectMembersBody ep (def @ProjectMembers.MemberPermissionFormError)
     Right epe -> pure $ noHeader $ noHeader $ editProjectMembersBody mb epe
 
-
 editProjectPostH :: Projects.ProjectId -> CreateProjectForm -> DashboardM (HeadersTriggerRedirect (Html ()))
 editProjectPostH pid editP = do
   validationRes <- validateM createProjectFormV editP
@@ -182,6 +162,3 @@ editProjectPostH pid editP = do
 
       pure $ addHeader "HX-Trigger" $ addHeader "/p" $ editProjectBody ep (def @CreateProjectFormError)
     Right epe -> pure $ noHeader $ noHeader $ editProjectBody editP epe
-
-
-
