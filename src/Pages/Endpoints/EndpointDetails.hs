@@ -96,7 +96,7 @@ endpointDetails endpoint fieldsM = do
   div_ [class_ "w-full flex flex-row h-screen overflow-y-scroll"] $ do
     div_ [class_ "w-2/3  p-8"] $ do
       div_ [class_ "flex flex-row justify-between mb-10"] $ do
-        div_ [class_ "flex flex-row"] $ do
+        div_ [class_ "flex flex-row place-items-center"] $ do
           h3_ [class_ "text-lg text-slate-700"] $ toHtml $ (endpoint ^. #method) <> " " <> (endpoint ^. #urlPath)
           img_ [src_ "/assets/svgs/cheveron-down.svg", class_ " h-4 w-4 m-2"]
         div_ [class_ "flex flex-row"] $ do

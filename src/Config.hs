@@ -39,7 +39,8 @@ data EnvConfig = EnvConfig
     auth0Domain :: Text,
     auth0LogoutRedirect :: Text,
     auth0Callback :: Text,
-    testEmail :: Maybe Text
+    testEmail :: Maybe Text,
+    apiKeyEncryptionSecretKey :: Text
   }
   deriving (Show, Generic)
   deriving anyclass (FromEnv)
@@ -57,6 +58,8 @@ type DashboardM = ReaderT AuthContext Handler
 -- | HeadersTriggerRedirect is a type alias for th hx-trigger header and the hx-redirect.
 -- These headers will be primarily used on form submissions.
 type HeadersTriggerRedirect = Headers '[Header "HX-Trigger" String, Header "HX-Redirect" String]
+
+type HeadersTrigger = Headers '[Header "HX-Trigger" String]
 
 ctxToHandler :: AuthContext -> DashboardM a -> Handler a
 ctxToHandler s x = runReaderT x s

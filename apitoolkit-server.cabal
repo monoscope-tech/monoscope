@@ -30,6 +30,7 @@ library
       Models.Apis.Fields
       Models.Apis.Formats
       Models.Apis.RequestDumps
+      Models.Projects.ProjectApiKeys
       Models.Projects.ProjectMembers
       Models.Projects.Projects
       Models.Users.Sessions
@@ -88,6 +89,7 @@ library
     , co-log-core
     , containers
     , cookie
+    , cryptonite
     , data-default-extra
     , deriving-aeson
     , doctest-parallel
@@ -107,6 +109,7 @@ library
     , lens-aeson
     , lucid
     , lucid-htmx
+    , memory
     , optics-core
     , optics-th
     , pg-entity
@@ -174,6 +177,7 @@ executable apitoolkit-server-exe
     , co-log-core
     , containers
     , cookie
+    , cryptonite
     , data-default-extra
     , deriving-aeson
     , doctest-parallel
@@ -193,6 +197,7 @@ executable apitoolkit-server-exe
     , lens-aeson
     , lucid
     , lucid-htmx
+    , memory
     , optics-core
     , optics-th
     , pg-entity
@@ -263,6 +268,7 @@ test-suite apitoolkit-server-test
     , co-log-core
     , containers
     , cookie
+    , cryptonite
     , data-default-extra
     , deriving-aeson
     , doctest-parallel
@@ -282,6 +288,7 @@ test-suite apitoolkit-server-test
     , lens-aeson
     , lucid
     , lucid-htmx
+    , memory
     , optics-core
     , optics-th
     , pg-entity

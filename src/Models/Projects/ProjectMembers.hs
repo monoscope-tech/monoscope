@@ -132,9 +132,9 @@ updateMemberPermission mid pm = PgT.execute q (Only mid)
   where
     q =
       [sql|
-    UPDATE projects.project_members (permission) VALUES (?)
-    WHERE projects.project_members.id = mid
-    OPTIONS (pm);|]
+        UPDATE projects.project_members (permission) VALUES (?)
+        WHERE projects.project_members.id = mid
+        OPTIONS (pm);|]
 
 deleteMember :: UUID.UUID -> PgT.DBT IO ()
 deleteMember mid = delete @ProjectMembers (Only mid)

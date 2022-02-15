@@ -4,57 +4,61 @@
 
 
 @layer components {
-@font-face {
-  font-family: 'Poppins', sans-serif;
-}
-@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500&display=swap');
-body {
-  font-height: 14px;
-  font-family: 'Poppins', sans-serif;
-}
+  @font-face {
+    font-family: 'Poppins', sans-serif;
+  }
+  @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500&display=swap');
+  body {
+    font-height: 14px;
+    font-family: 'Poppins', sans-serif;
+  }
 
 
-.btn-sm {
-  @apply px-4 py-2  rounded inline-flex items-center border border-transparent rounded-md shadow-sm text-sm font-medium focus:outline-none focus:ring-2 focus:ring-offset-2 cursor-pointer;
-}
+  .btn-sm {
+    @apply px-4 py-2  rounded inline-flex items-center border border-transparent rounded-md shadow-sm text-sm font-medium focus:outline-none focus:ring-2 focus:ring-offset-2 cursor-pointer;
+  }
 
 
-.btn-indigo {
-  @apply btn-sm ml-3 text-white bg-indigo-600 hover:bg-indigo-700 focus:ring-indigo-500;
-}
+  .btn-indigo {
+    @apply btn-sm ml-3 text-white bg-indigo-600 hover:bg-indigo-700 focus:ring-indigo-500;
+  }
 
-.btn-yellow {
-  @apply btn-sm ml-3 text-black bg-yellow-300 hover:bg-yellow-400 focus:ring-yellow-500;
-}
+  .btn-yellow {
+    @apply btn-sm ml-3 text-black bg-yellow-300 hover:bg-yellow-400 focus:ring-yellow-500;
+  }
 
-.btn-white-sm {
-  @apply btn-sm bg-white border-gray-300 text-gray-700 hover:bg-gray-50 focus:ring-indigo-500;
-}
+  .btn-white-sm {
+    @apply btn-sm bg-white border-gray-300 text-gray-700 hover:bg-gray-50 focus:ring-indigo-500;
+  }
 
-/* table td { */
-/*   border: 1px solid #eee; */
-/* } */
+  .input-txt {
+      @apply shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md;
+    }
 
-/* .level1 td:first-child { */
-/*   padding-left: 15px; */
-/* } */
+  /* table td { */
+  /*   border: 1px solid #eee; */
+  /* } */
 
-/* .level2 td:first-child { */
-/*   padding-left: 30px; */
-/* } */
+  /* .level1 td:first-child { */
+  /*   padding-left: 15px; */
+  /* } */
 
-/* .collapse .toggle { */
-/*   background: url("http://mleibman.github.com/SlickGrid/images/collapse.gif"); */
-/* } */
+  /* .level2 td:first-child { */
+  /*   padding-left: 30px; */
+  /* } */
 
-/* .expand .toggle { */
-/*   background: url("http://mleibman.github.com/SlickGrid/images/expand.gif"); */
-/* } */
+  /* .collapse .toggle { */
+  /*   background: url("http://mleibman.github.com/SlickGrid/images/collapse.gif"); */
+  /* } */
 
-.toggle {
-  height: 9px;
-  width: 9px;
-  display: inline-block;
-}
+  /* .expand .toggle { */
+  /*   background: url("http://mleibman.github.com/SlickGrid/images/expand.gif"); */
+  /* } */
+
+  .toggle {
+    height: 9px;
+    width: 9px;
+    display: inline-block;
+  }
 
 }

@@ -102,6 +102,8 @@ dependencies:
 - transformers-either
 - case-insensitive
 - doctest-parallel
+- cryptonite
+- memory
 library:
   source-dirs: src
 

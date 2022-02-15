@@ -2,7 +2,7 @@
 
 module Server (app) where
 
-import Config (AuthContext, DashboardM, EnvConfig, HeadersTriggerRedirect, ctxToHandler, env, pool)
+import Config (AuthContext, DashboardM, EnvConfig, HeadersTrigger, HeadersTriggerRedirect, ctxToHandler, env, pool)
 import qualified Control.Lens as L
 import Control.Monad.Trans.Either
 import qualified Crypto.JOSE.Compact
@@ -24,8 +24,8 @@ import qualified Models.Users.Users as Users
 import Network.Wai (Application, Request)
 import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
 import Optics.Operators
-import qualified Pages.Dashboard as Dashboard
 import qualified Pages.Api as Api
+import qualified Pages.Dashboard as Dashboard
 import qualified Pages.Endpoints.EndpointDetails as EndpointDetails
 import qualified Pages.Endpoints.EndpointList as EndpointList
 import qualified Pages.Projects.CreateProject as CreateProject
@@ -79,6 +79,7 @@ type ProtectedAPI =
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "endpoints" :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "endpoints" :> Capture "endpoints_id" Endpoints.EndpointId :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "apis" :> Get '[HTML] (Html ())
+    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Api.GenerateAPIKeyForm :> Post '[HTML] (HeadersTrigger (Html ()))
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> Get '[HTML] (Html ())
 
 type PublicAPI =
@@ -117,6 +118,7 @@ protectedServer sess =
     :<|> EndpointList.endpointListH sess
     :<|> EndpointDetails.endpointDetailsH sess
     :<|> Api.apiGetH sess
+    :<|> Api.apiPostH sess
     :<|> EndpointDetails.fieldDetailsPartialH sess
 
 publicServer :: ServerT PublicAPI DashboardM

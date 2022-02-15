@@ -62,25 +62,6 @@ import Pages.Projects.CreateProject
     createProjectFormV,
   )
 import Relude
-<<<<<<< HEAD
-=======
-  ( Applicative (pure),
-    Either (Left, Right),
-    IO,
-    Int64,
-    MonadIO (liftIO),
-    asks,
-    ($),
-    Eq,
-    Show,
-    Generic,
-    Maybe,
-    String,
-    (<$>),
-    Maybe(..), pass
-
-  )
->>>>>>> e5150e9 (updates)
 import Servant
   ( Handler,
     addHeader,
