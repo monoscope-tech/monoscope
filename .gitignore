@@ -7,3 +7,5 @@ static/assets/css/tailwind.min.css
 dist-newstyle
 .env
 .vscode
+apitoolkit-server-exe
+gha-creds-*.json

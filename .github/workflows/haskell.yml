@@ -1,4 +1,4 @@
-name: Haskell CI
+name:  Build and test 
 
 on:
   push:
@@ -7,58 +7,56 @@ on:
     branches: [ master ]
 
 jobs:
-  build:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        ghc: ['8.10.7']
-        cabal: ['3.6.2.0']
-        os: [ubuntu-latest]
-        resolver: ['https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/18/18.yaml']
-    name: ${{ matrix.resolver }} (${{ matrix.ghc }}/${{ matrix.cabal }})
+  runhaskell:
+    name: Build and test 
+    runs-on: ubuntu-latest # or macOS-latest, or windows-latest
     steps:
-
-      - name: Check out
-        uses: actions/checkout@v2
-        
-      
-      - name: Check
-        run: |
-          ls
-        
-      - name: Setup Haskell
-        uses: haskell/actions/setup@v1
+      - uses: actions/checkout@v2
+      - uses: haskell/actions/setup@v1
         with:
+          ghc-version: "8.10.7" # Exact version of ghc to use
+          # cabal-version: 'latest'. Omitted, but defalts to 'latest'
           enable-stack: true
-          stack-version: 'latest'
-          ghc-version: '8.10.7'
-         
-      - name: Versions
-        run: |
-          stack --version
-          cabal --version
-          ghc --version
-      
-      - name: write to file
-        uses: DamianReeves/write-file-action@v1.0
+          stack-version: "latest"
+      - uses: actions/cache@v2
         with:
-          path: /home/runner/.stack/config.yaml     
-          contents: |
-            echo "allow-newer: true"
-          write-mode: append
-  
-      - name: Build package
-        run: |
-          stack build --dependencies-only
+          path: |
+            ~/.stack
+            .stack-work
+          # best effort for cache: tie it to Stack resolver and package config
+          key: ${{ runner.os }}-stack-${{ hashFiles('stack.yaml.lock', 'package.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-stack
+      - run: stack install --local-bin-path=.
+      # - run: stack test
 
-      - name: Build testing dependencies
-        run: |
-          stack --resolver ${{ matrix.resolver }} build --no-run-tests --no-run-benchmarks --test --bench
+      - id: 'auth'
+        name: 'Authenticate to Google Cloud'
+        uses: 'google-github-actions/auth@v0'
+        with:
+          workload_identity_provider: 'projects/263066866150/locations/global/workloadIdentityPools/apitoolkit-wrk-id/providers/apitoolkit-wrk-pvd'
+          service_account: 'apitoolkit-ci-account@past-3.iam.gserviceaccount.com'
+      - name: Setup Cloud SDK
+        uses: google-github-actions/setup-gcloud@v0
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          service_account_key: ${{ secrets.GCP_SA_KEY }}
+          export_default_credentials: true  # Set to true to authenticate the Cloud Run action
 
-      - name: Run tests
-        run: |
-          stack --resolver ${{ matrix.resolver }} build --test --no-run-benchmarks
+      - name: Authorize Docker push
+        run: gcloud auth configure-docker
 
-      - name: Package list
-        run: |
-          stack --resolver ${{ matrix.resolver }} exec ghc-pkg list || true
+      - name: Build and Push Container
+        run: |-
+          docker build -t gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE }}:${{  github.sha }} . 
+          docker push gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE }}:${{  github.sha }}
+      - name: Deploy to Cloud Run
+        id: deploy
+        uses: google-github-actions/deploy-cloudrun@v0
+        with:
+          service: ${{ env.SERVICE }}
+          image: gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE }}:${{  github.sha }}
+          region: ${{ env.REGION }}
+
+      - name: Show Output
+        run: echo ${{ steps.deploy.outputs.url }}
