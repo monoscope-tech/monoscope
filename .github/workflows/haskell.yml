@@ -21,16 +21,17 @@ jobs:
           # cabal-version: 'latest'. Omitted, but defalts to 'latest'
           enable-stack: true
           stack-version: "latest"
-      - uses: actions/cache@v2
-        with:
-          path: |
-            ~/.stack
-            .stack-work
-          # best effort for cache: tie it to Stack resolver and package config
-          key: ${{ runner.os }}-stack-${{ hashFiles('stack.yaml.lock', 'package.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-stack
-      # - run: stack install --local-bin-path=.
+      # - uses: actions/cache@v2
+      #   with:
+      #     path: |
+      #       ~/.stack
+      #       .stack-work
+      #     # best effort for cache: tie it to Stack resolver and package config
+      #     key: ${{ runner.os }}-stack-${{ hashFiles('stack.yaml.lock', 'package.yaml') }}
+      #     restore-keys: |
+      #       ${{ runner.os }}-stack
+      - uses: freckle/stack-cache-action@main
+      - run: stack install --local-bin-path=.
       # - run: stack test
 
       - id: 'auth'
