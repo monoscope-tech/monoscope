@@ -87,7 +87,7 @@ projectsDropDown currProject projects =
             span_ "Billing and usage"
       div_ [class_ "border-t border-gray-100 p-2"] $ do
         div_ [class_ "flex justify-between content-center items-center py-5 mb-2 "] $ do
-          h3_ [class_ "text-xl"] "Switch projects"
+          a_ [href_ "/"] $ h3_ [class_ "text-xl"] "Switch projects"
           a_ [class_ "inline-block bg-blue-700 flex pl-3 pr-4 py-2 rounded-xl text-white space-x-2", href_ "/p/new"] $ do
             img_ [class_ "bg-blue-800 p-2 rounded-lg", src_ "/assets/svgs/plus.svg"]
             span_ [class_ "inline-block px-1"] "Add"
