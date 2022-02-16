@@ -10,6 +10,9 @@ jobs:
   runhaskell:
     name: Build and test 
     runs-on: ubuntu-latest # or macOS-latest, or windows-latest
+    permissions:
+      contents: 'read'
+      id-token: 'write'
     steps:
       - uses: actions/checkout@v2
       - uses: haskell/actions/setup@v1
@@ -27,7 +30,7 @@ jobs:
           key: ${{ runner.os }}-stack-${{ hashFiles('stack.yaml.lock', 'package.yaml') }}
           restore-keys: |
             ${{ runner.os }}-stack
-      - run: stack install --local-bin-path=.
+      # - run: stack install --local-bin-path=.
       # - run: stack test
 
       - id: 'auth'
