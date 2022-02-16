@@ -11,7 +11,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        ghc: ['8.2.2']
+        ghc: ['8.10.7']
         cabal: ['3.6.2.0']
         os: [ubuntu-latest]
         resolver: ['https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/18/18.yaml']
@@ -31,6 +31,7 @@ jobs:
         with:
           enable-stack: true
           stack-version: 'latest'
+          ghc-version: '8.10.7'
          
       - name: Versions
         run: |
