@@ -123,10 +123,26 @@ mainContent apiKeys newKeyM = do
                 h3_ [class_ "text-sm font-medium text-green-800"] $ toHtml "API Key was generated successfully"
                 div_ [class_ "mt-2 text-sm text-green-700"] $ do
                   p_ $ toHtml "Please copy the generated APIKey as you would not be able to view it anymore after this message."
-                  strong_ [class_ "block pt-2"] $ toHtml newKey
+                  strong_ [class_ "block pt-2", id_ "newKey"] $ toHtml newKey
                 div_ [class_ "mt-4"] $ do
                   div_ [class_ "-mx-2 -my-1.5 flex"] $ do
-                    button_ [type_ "button", class_ "bg-green-50 px-2 py-1.5 rounded-md text-sm font-medium text-green-800 hover:bg-green-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600"] $ toHtml "Copy Key"
+                    button_ [
+                      type_ "button", 
+                      class_ "bg-green-50 px-2 py-1.5 rounded-md text-sm font-medium text-green-800 hover:bg-green-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600",
+                      term 
+                      "_" 
+                      [r| 
+                      on click 
+                        js
+                            if ('clipboard' in window.navigator) {
+                                navigator.clipboard.writeText(document.getElementById("newKey").innerText).then(Text=>{
+                                  alert ("Copied to Clipboard")
+                                })
+                            }
+                        end
+                        |]
+                      ]
+                      $ toHtml "Copy Key"
                     button_
                       [ type_ "button",
                         class_ "ml-3 bg-green-50 px-2 py-1.5 rounded-md text-sm font-medium text-green-800 hover:bg-green-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600",
