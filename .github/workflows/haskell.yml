@@ -48,15 +48,15 @@ jobs:
 
       - name: Build and Push Container
         run: |-
-          docker build -t gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE }}:${{  github.sha }} . 
-          docker push gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE }}:${{  github.sha }}
+          docker build -t gcr.io/past-3/apitoolkit:${{  github.sha }} . 
+          docker push gcr.io/past-3/apitoolkit:${{  github.sha }}
       - name: Deploy to Cloud Run
         id: deploy
         uses: google-github-actions/deploy-cloudrun@v0
         with:
-          service: ${{ env.SERVICE }}
-          image: gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE }}:${{  github.sha }}
-          region: ${{ env.REGION }}
+          service: apitoolkit
+          image: gcr.io/past-3/apitoolkit:${{  github.sha }}
+          region: europe-west1
 
       - name: Show Output
         run: echo ${{ steps.deploy.outputs.url }}
