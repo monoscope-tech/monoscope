@@ -40,7 +40,8 @@ data EnvConfig = EnvConfig
     auth0LogoutRedirect :: Text,
     auth0Callback :: Text,
     testEmail :: Maybe Text,
-    apiKeyEncryptionSecretKey :: Text
+    apiKeyEncryptionSecretKey :: Text,
+    messagesPerPubsubPullBatch :: Int
   }
   deriving (Show, Generic)
   deriving anyclass (FromEnv)

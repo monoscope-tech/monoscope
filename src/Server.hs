@@ -65,6 +65,7 @@ import Servant.Server.Experimental.Auth (AuthHandler, AuthServerData, mkAuthHand
 import Servant.Server.StaticFiles
 import SessionCookies (craftSessionCookie)
 import Web.Auth
+import qualified Web.ClientMetadata as ClientMetadata
 import Web.Cookie (SetCookie)
 
 type GetRedirect = Verb 'GET 302
@@ -86,6 +87,10 @@ type PublicAPI =
   "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
     :<|> "logout" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
     :<|> "auth_callback" :> QueryParam "code" Text :> QueryParam "state" Text :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] (Html ()))
+    -- on the client metadata endpoint we will be passing the authorization token directly to the handler,
+    -- and perfoming all the auth logic at the handler level. This is because the clients will only call this endpoint,
+    -- so it doesnt need an exclusive robust authorization middleware solution.
+    :<|> "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] ClientMetadata.ClientMetadata
     :<|> "assets" :> Raw
 
 type API =
@@ -126,6 +131,7 @@ publicServer =
   loginH
     :<|> logoutH
     :<|> authCallbackH
+    :<|> ClientMetadata.clientMetadataH
     :<|> serveDirectoryWebApp "./static/assets"
 
 server :: ServerT API DashboardM

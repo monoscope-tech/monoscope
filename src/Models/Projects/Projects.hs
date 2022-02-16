@@ -10,7 +10,8 @@ module Models.Projects.Projects
     selectProjectsForUser,
     selectProjectForUser,
     updateProject,
-    deleteProject
+    deleteProject,
+    projectById,
   )
 where
 
@@ -51,11 +52,11 @@ projectIdText :: ProjectId -> Text
 projectIdText = UUID.toText . unProjectId
 
 data Project = Project
-  { createdAt :: ZonedTime,
+  { id :: ProjectId,
+    createdAt :: ZonedTime,
     updatedAt :: ZonedTime,
     deletedAt :: Maybe ZonedTime,
     active :: Bool,
-    id :: ProjectId,
     title :: Text,
     description :: Text,
     hosts :: Vector.Vector Text
@@ -87,6 +88,9 @@ makeFieldLabelsNoPrefix ''CreateProject
 insertProject :: CreateProject -> PgT.DBT IO ()
 insertProject = insert @CreateProject
 
+projectById :: ProjectId -> PgT.DBT IO (Maybe Project)
+projectById = selectById @Project
+
 selectProjectsForUser :: Users.UserId -> PgT.DBT IO (Vector.Vector Project)
 selectProjectsForUser = query Select q
   where
@@ -106,7 +110,7 @@ editProjectGetH pid = query Select q (Only pid)
             INNER JOIN projects.project_members AS ppm
             ON pp.id = pid 
         WHERE ppm.project_id = pp.id;|]
-    
+
 updateProject :: CreateProject -> PgT.DBT IO Int64
 updateProject = PgT.execute q
   where

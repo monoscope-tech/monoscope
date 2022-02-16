@@ -109,7 +109,7 @@ pubsubService logger envConfig conn = do
     Google.newEnv
       <&> (Google.envLogger L..~ lgr)
         . (Google.envScopes L..~ PubSub.pubSubScope)
-  let pullReq = PubSub.pullRequest & PubSub.prMaxMessages L.?~ 1
+  let pullReq = PubSub.pullRequest & PubSub.prMaxMessages L.?~ fromIntegral (envConfig ^. #messagesPerPubsubPullBatch)
   let subscription = "projects/past-3/subscriptions/apitoolkit-go-client-sub"
 
   forever $

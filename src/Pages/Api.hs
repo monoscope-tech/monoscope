@@ -1,5 +1,3 @@
-{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
-
 module Pages.Api (apiGetH, apiPostH, GenerateAPIKeyForm (..)) where
 
 import Config
@@ -35,7 +33,7 @@ apiPostH sess pid apiKeyForm = do
   pool <- asks pool
   env <- asks env
   projectKeyUUID <- liftIO UUIDV4.nextRandom
-  let encryptedKey = ProjectApiKeys.encryptAPIKey (encodeUtf8 $ env ^. #apiKeyEncryptionSecretKey) (UUID.toASCIIBytes projectKeyUUID)
+  let encryptedKey = ProjectApiKeys.encryptAPIKey (encodeUtf8 $ env ^. #apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
   let encryptedKeyB64 = B64.encodeBase64 encryptedKey
   let keyPrefix = T.take 8 encryptedKeyB64
 
@@ -44,10 +42,10 @@ apiPostH sess pid apiKeyForm = do
     withPool pool $ do
       ProjectApiKeys.insertProjectApiKey pApiKey
       ProjectApiKeys.projectApiKeysByProjectId pid
-
   let hxTriggerData = encode [aesonQQ| {"closeModal": ""}|]
   pure $ addHeader (decodeUtf8 hxTriggerData) $ mainContent apiKeys (Just (pApiKey, encryptedKeyB64))
 
+-- | apiGetH renders the api keys list page which includes a modal for creating the apikeys.
 apiGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 apiGetH sess pid = do
   pool <- asks pool
@@ -56,10 +54,10 @@ apiGetH sess pid = do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
       apiKeys <- ProjectApiKeys.projectApiKeysByProjectId pid
       pure (project, apiKeys)
-  pure $ bodyWrapper (Just sess) project "API Keys" $ api pid apiKeys
+  pure $ bodyWrapper (Just sess) project "API Keys" $ apiKeysPage pid apiKeys
 
-api :: Projects.ProjectId -> Vector ProjectApiKeys.ProjectApiKey -> Html ()
-api pid apiKeys = do
+apiKeysPage :: Projects.ProjectId -> Vector ProjectApiKeys.ProjectApiKey -> Html ()
+apiKeysPage pid apiKeys = do
   section_ [class_ "container mx-auto  px-4 py-10"] $ do
     div_ [class_ "flex justify-between mb-6"] $ do
       h2_ [class_ "text-slate-700 text-2xl font-medium"] "API Keys"

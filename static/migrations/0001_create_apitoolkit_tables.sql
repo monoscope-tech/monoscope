@@ -1,4 +1,51 @@
-TIMESTAMP WITH TIME ZONE,
+BEGIN;
+
+CREATE EXTENSION IF NOT EXISTS citext;
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;
+
+
+-- create schemas
+CREATE SCHEMA IF NOT EXISTS users;
+CREATE SCHEMA IF NOT EXISTS projects;
+CREATE SCHEMA IF NOT EXISTS apis;
+
+
+
+CREATE OR REPLACE FUNCTION manage_updated_at(_tbl regclass) RETURNS VOID AS $$
+BEGIN
+  EXECUTE format('CREATE TRIGGER set_updated_at BEFORE UPDATE ON %s
+FOR EACH ROW EXECUTE PROCEDURE set_updated_at()', _tbl);
+END;
+
+-- create function to automatically set updated at in trigger
+$$ LANGUAGE plpgsql;
+CREATE OR REPLACE FUNCTION set_updated_at() RETURNS trigger AS $$
+BEGIN
+  IF (
+    NEW IS DISTINCT FROM OLD AND
+    NEW.updated_at IS NOT DISTINCT FROM OLD.updated_at
+  ) THEN
+    NEW.updated_at := current_timestamp;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+
+DO $$ BEGIN
+  CREATE DOMAIN email AS citext
+    CHECK ( value ~ '^[a-zA-Z0-9.!#$%&''*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$' );
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+-- create user table
+CREATE TABLE IF NOT EXISTS users.users
+(
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+  deleted_at TIMESTAMP WITH TIME ZONE,
   active BOOL NOT NULL DEFAULT 't',
   id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
   first_name VARCHAR(100) NOT NULL DEFAULT '',
@@ -8,6 +55,7 @@ TIMESTAMP WITH TIME ZONE,
 );
 SELECT manage_updated_at('users.users');
 
+
 CREATE TABLE IF NOT EXISTS users.persistent_sessions
 (
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
@@ -16,26 +64,8 @@ CREATE TABLE IF NOT EXISTS users.persistent_sessions
   user_id  UUID NOT NULL REFERENCES users.users ON DELETE CASCADE,
   session_data JSONB NOT NULL DEFAULT '{}' 
 );
+SELECT manage_updated_at('users.persistent_sessions');
 
--- create user auth options table
-CREATE TABLE IF NOT EXISTS users.user_auth_options
-(
-  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-  deleted_at TIMESTAMP WITH TIME ZONE,
-  active BOOL NOT NULL DEFAULT 't',
-  id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
-  user_id UUID NOT NULL REFERENCES users.users ON DELETE CASCADE,
-  auth_provider VARCHAR(100) NOT NULL DEFAULT '',
-  auth_id TEXT NOT NULL DEFAULT '', 
-  auth_password TEXT NOT NULL DEFAULT '', -- password for the auth provider. Only used for email login
-  auth_token TEXT NOT NULL DEFAULT '',
-  auth_secret TEXT NOT NULL DEFAULT '',
-  auth_refresh_token TEXT NOT NULL DEFAULT '',
-  auth_expires_at TIMESTAMP WITH TIME ZONE,
-  auth_data JSONB
-);
-SELECT manage_updated_at('users.user_auth_options');
 
 CREATE TABLE IF NOT EXISTS projects.projects
 (
@@ -49,6 +79,7 @@ CREATE TABLE IF NOT EXISTS projects.projects
   hosts TEXT[] NOT NULL DEFAULT '{}'
 );
 SELECT manage_updated_at('projects.projects');
+
 
 CREATE TYPE projects.project_permissions AS ENUM ('admin', 'view', 'edit');
 CREATE TABLE IF NOT EXISTS projects.project_members
@@ -79,17 +110,6 @@ CREATE TABLE IF NOT EXISTS projects.project_api_keys
 );
 SELECT manage_updated_at('projects.project_api_keys');
 
--- insert an initial user. User should be deleted from db when app is ready for prod
-INSERT INTO users.users(id, first_name, last_name, email)
-  VALUES ('00000000-0000-0000-0000-000000000000', 'test', 'user', 'test@user.com');
-INSERT INTO users.user_auth_options ( user_id, auth_id, auth_password)
-  VALUES ('00000000-0000-0000-0000-000000000000', 'test@user.com', crypt('password', gen_salt('bf')));
--- insert an initial project.
-INSERT INTO projects.projects (id, title, description)
-  VALUES ('00000000-0000-0000-0000-000000000000','test title', 'test desc');
-INSERT INTO projects.project_members (project_id, user_id, permission)
-  VALUES ('00000000-0000-0000-0000-000000000000','00000000-0000-0000-0000-000000000000','view');
-
 ---
 ---
 ---
@@ -97,7 +117,7 @@ CREATE TABLE IF NOT EXISTS apis.request_dumps
 (
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-    id uuid NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+    id uuid NOT NULL DEFAULT gen_random_uuid(),
     project_id uuid NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE ON UPDATE CASCADE,
     host text NOT NULL DEFAULT '',
     url_path text NOT NULL DEFAULT '',
@@ -110,9 +130,11 @@ CREATE TABLE IF NOT EXISTS apis.request_dumps
     request_body jsonb NOT NULL DEFAULT '{}'::jsonb,
     response_body jsonb NOT NULL DEFAULT '{}'::jsonb,
     request_headers jsonb NOT NULL DEFAULT '{}'::jsonb,
-    response_headers jsonb NOT NULL DEFAULT '{}'::jsonb
+    response_headers jsonb NOT NULL DEFAULT '{}'::jsonb,
+    PRIMARY KEY(project_id,created_at,id)
 );
 SELECT manage_updated_at('apis.request_dumps');
+SELECT create_hypertable('apis.request_dumps', 'created_at');
 
 CREATE TABLE IF NOT EXISTS apis.endpoints
 (
@@ -132,7 +154,7 @@ CREATE TABLE IF NOT EXISTS apis.endpoints
 SELECT manage_updated_at('apis.endpoints');
 
 CREATE TYPE apis.field_type AS ENUM ('unknown','string','number','bool','object', 'list', 'null');
-CREATE TYPE apis.field_category AS ENUM ('queryparam', 'request_header','response_header', 'request_body', 'response_body');
+CREATE TYPE apis.field_category AS ENUM ('queryparam', 'request_header','response_headers', 'request_body', 'response_body');
 CREATE TABLE IF NOT EXISTS apis.fields
 (
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,

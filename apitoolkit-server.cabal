@@ -52,6 +52,7 @@ library
       Spec
       Start
       Web.Auth
+      Web.ClientMetadata
   other-modules:
       Paths_apitoolkit_server
   hs-source-dirs:
