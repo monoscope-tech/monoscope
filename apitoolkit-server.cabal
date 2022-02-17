@@ -78,8 +78,6 @@ library
       FlexibleInstances
       MultiParamTypeClasses
       UndecidableInstances
-  cc-options: -static
-  ld-options: -static -pthread
   build-depends:
       aeson
     , aeson-optics
@@ -166,9 +164,7 @@ executable apitoolkit-server-exe
       FlexibleInstances
       MultiParamTypeClasses
       UndecidableInstances
-  ghc-options: -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie -fPIC
-  cc-options: -static
-  ld-options: -static -pthread
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
   build-depends:
       aeson
     , aeson-optics
@@ -260,8 +256,6 @@ test-suite apitoolkit-server-test
       MultiParamTypeClasses
       UndecidableInstances
   ghc-options: -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
-  cc-options: -static
-  ld-options: -static -pthread
   build-depends:
       aeson
     , aeson-optics
