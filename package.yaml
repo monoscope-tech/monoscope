@@ -6,8 +6,8 @@ author:              "Author name here"
 maintainer:          "example@example.com"
 copyright:           "2021 Author name here"
 
-cc-options: -static
-ld-options: -static -pthread
+# cc-options: -static
+# ld-options: -static -pthread
 
 default-extensions: 
   - NoImplicitPrelude
@@ -120,7 +120,7 @@ executables:
     - -with-rtsopts=-N
     - -fwrite-ide-info                   
     - -hiedir=.hie
-    - -fPIC
+    # - -fPIC
     dependencies:
     - base
     - apitoolkit-server
