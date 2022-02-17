@@ -85,6 +85,7 @@ type ProtectedAPI =
 
 type PublicAPI =
   "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
+    :<|> "to_login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
     :<|> "logout" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
     :<|> "auth_callback" :> QueryParam "code" Text :> QueryParam "state" Text :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] (Html ()))
     -- on the client metadata endpoint we will be passing the authorization token directly to the handler,
@@ -129,6 +130,7 @@ protectedServer sess =
 publicServer :: ServerT PublicAPI DashboardM
 publicServer =
   loginH
+    :<|> loginRedirectH
     :<|> logoutH
     :<|> authCallbackH
     :<|> ClientMetadata.clientMetadataH

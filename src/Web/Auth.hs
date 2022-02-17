@@ -3,6 +3,7 @@
 module Web.Auth where
 
 import Config (AuthContext, DashboardM, EnvConfig, HeadersTriggerRedirect, env, pool)
+import Control.Error (note)
 import qualified Control.Lens as L
 import Control.Monad.Trans.Either (hoistMaybe, runEitherT)
 import qualified Crypto.JOSE.Compact
@@ -102,6 +103,17 @@ logoutH = do
   let redirectTo = envCfg ^. #auth0Domain <> "/v2/logout?client_id=" <> envCfg ^. #auth0ClientId <> "&returnTo=" <> envCfg ^. #auth0LogoutRedirect
   pure $ addHeader redirectTo $ addHeader emptySessionCookie NoContent
 
+loginRedirectH ::
+  DashboardM
+    ( Headers
+        '[Header "Location" Text, Header "Set-Cookie" SetCookie]
+        NoContent
+    )
+loginRedirectH = do
+  envCfg <- asks env
+  let redirectTo = "/login"
+  pure $ addHeader redirectTo $ addHeader emptySessionCookie NoContent
+
 -- loginH
 loginH ::
   DashboardM
@@ -169,6 +181,9 @@ authCallbackH codeM stateM = do
         Sessions.insertSession persistentSessId userId (Sessions.SessionData Map.empty)
         pure persistentSessId
 
+  traceShowM "RESP from auth callback"
+  traceShowM resp
+
   case resp of
     Left err -> putStrLn ("unable to process auth callback page " <> err) >> (throwError $ err302 {errHeaders = [("Location", "/login?auth0_callback_failure")]}) >> pure (noHeader $ noHeader $ toHtml "")
     Right persistentSessId -> pure $
@@ -186,13 +201,13 @@ authCallbackH codeM stateM = do
 authHandler :: Pool Connection -> AuthHandler Request Sessions.PersistentSession
 authHandler conn = mkAuthHandler handler
   where
-    maybeToEither e = maybe (Left e) Right
-    throw301 err = traceShowM err >> throwError $ err302 {errHeaders = [("Location", "/login")]}
+    -- instead of just redirecting, we could delete the cookie first?
+    throw301 err = traceShowM err >> throwError $ err302 {errHeaders = [("Location", "/to_login")]}
 
     handler :: Request -> Handler Sessions.PersistentSession
     handler req = either throw301 (lookupAccount conn) $ do
-      cookie <- maybeToEither "Missing cookie header" $ lookup "cookie" $ requestHeaders req
-      maybeToEither "Missing token in cookie" $ lookup "apitoolkit_session" $ parseCookies cookie
+      cookie <- note "Missing cookie header" $ lookup "cookie" $ requestHeaders req
+      note "Missing token in cookie" $ lookup "apitoolkit_session" $ parseCookies cookie
 
 -- We need to handle errors for the persistent session better and redirect if there's an error
 lookupAccount :: Pool Connection -> ByteString -> Handler Sessions.PersistentSession
@@ -203,6 +218,5 @@ lookupAccount conn key = do
     hoistMaybe "lookupAccount: invalid persistentID " presistentSess
   case resp of
     Left err -> do
-      traceShowM $ "Auth: Unable to unmarshal auth cookie value into PersistentSessionId. Value: " <> show key
-      throwError $ err302 {errHeaders = [("Location", "/login")]}
+      throwError $ err302 {errHeaders = [("Location", "/to_login")]}
     Right session -> pure session
