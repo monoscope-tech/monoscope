@@ -36,8 +36,8 @@ bodyWrapper sessM currProject pageTitle child =
         head_ $ do
           title_ $ toHtml pageTitle
           link_ [rel_ "stylesheet", type_ "text/css", href_ "/assets/css/tailwind.min.css"]
-          script_ [src_ "https://unpkg.com/htmx.org@1.6.1"] ("" :: Text)
-          script_ [src_ "https://unpkg.com/hyperscript.org@0.9.3"] ("" :: Text)
+          script_ [src_ "https://unpkg.com/htmx.org@1.6.1"] ""
+          script_ [src_ "https://unpkg.com/hyperscript.org@0.9.3"] ""
         body_ [class_ "text-gray-700"] $ do
           section_ [class_ "flex flex-row bg-gray-50"] $ do
             -- Side nav

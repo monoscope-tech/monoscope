@@ -52,11 +52,11 @@ projectIdText :: ProjectId -> Text
 projectIdText = UUID.toText . unProjectId
 
 data Project = Project
-  { id :: ProjectId,
-    createdAt :: ZonedTime,
+  { createdAt :: ZonedTime,
     updatedAt :: ZonedTime,
     deletedAt :: Maybe ZonedTime,
     active :: Bool,
+    id :: ProjectId,
     title :: Text,
     description :: Text,
     hosts :: Vector.Vector Text

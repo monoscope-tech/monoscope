@@ -28,9 +28,8 @@ import Servant.HTML.Lucid
 
 listProjectsGetH :: Sessions.PersistentSession -> DashboardM (Html ())
 listProjectsGetH sess = do
-  traceShowM sess
   pool <- asks pool
-  projects <- liftIO $ withPool pool $ Projects.selectProjectsForUser (Users.UserId UUID.nil)
+  projects <- liftIO $ withPool pool $ Projects.selectProjectsForUser (sess ^. #userId)
   pure $ bodyWrapper (Just sess) Nothing "Projects" $ listProjectsBody projects
 
 listProjectsBody :: Vector.Vector Projects.Project -> Html ()

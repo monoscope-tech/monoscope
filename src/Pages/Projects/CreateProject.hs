@@ -28,6 +28,7 @@ import qualified Models.Projects.ProjectMembers as ProjectMembers
 import qualified Models.Projects.Projects as Projects
 import qualified Models.Users.Sessions as Sessions
 import qualified Models.Users.Users as Users
+import Optics.Core ((^.))
 import Pages.BodyWrapper (bodyWrapper)
 import Relude
 import Servant
@@ -78,7 +79,7 @@ createProjectPostH sess createP = do
     Left cpRaw -> do
       let cp = Valor.unValid cpRaw
       pool <- asks pool
-      let userID = Users.UserId UUID.nil
+      let userID = sess ^. #userId
       puid <- liftIO UUIDV4.nextRandom
       let pid = Projects.ProjectId puid
       -- Temporary. They should come from the form
@@ -87,7 +88,10 @@ createProjectPostH sess createP = do
       _ <- liftIO $
         withPool pool $ do
           Projects.insertProject (createProjectFormToModel pid cp)
+          traceShowM "Before pm"
           ProjectMembers.insertProjectMembers projectMembers
+          traceShowM projectMembers
+          traceShowM "after pm"
           pass
 
       pure $ addHeader "HX-Trigger" $ addHeader "/" $ createProjectBody cp (def @CreateProjectFormError)
@@ -99,7 +103,8 @@ createProjectBody :: CreateProjectForm -> CreateProjectFormError -> Html ()
 createProjectBody cp cpe = do
   section_ [id_ "main-content ", class_ "p-6"] $ do
     h2_ [class_ "text-slate-700 text-2xl font-medium mb-5"] "Create Project"
-    form_ [class_ "relative px-10 border border-gray-200 py-10  bg-white w-1/2 rounded-3xl", hxPost_ "/p/new", hxTarget_ "#main-content"] $ do
+    form_ [class_ "relative px-10 border border-gray-200 py-10  bg-white w-1/2 rounded-3xl", hxPost_ "/p/new"] $ do
+      -- , hxTarget_ "#main-content"
       div_ $ do
         label_ [class_ "text-gray-400 mx-2 font-light text-sm"] "Title"
         input_
@@ -128,8 +133,7 @@ createProjectBody cp cpe = do
                 option_ [class_ "text-gray-500"] "Can Edit"
                 option_ [class_ "text-gray-500"] "Can View"
               button_
-                [ class_ "",
-                  term
+                [ term
                     "_"
                     [r| 
                     remove from my parent             
