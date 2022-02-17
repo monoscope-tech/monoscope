@@ -52,8 +52,9 @@ jobs:
 
       - name: Build and Push Container
         run: |-
-          docker build -t gcr.io/past-3/apitoolkit:${{  github.sha }} . 
+          docker build -t gcr.io/past-3/apitoolkit:${{  github.sha }} -t gcr.io/past-3/apitoolkit:latest . 
           docker push gcr.io/past-3/apitoolkit:${{  github.sha }}
+          docker push gcr.io/past-3/apitoolkit:latest
       - name: Deploy to Cloud Run
         id: deploy
         uses: google-github-actions/deploy-cloudrun@v0
