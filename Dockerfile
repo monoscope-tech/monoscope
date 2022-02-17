@@ -6,5 +6,5 @@ RUN apt-get update && apt-get install -y \
   libgmp-dev \
   libpq-dev
 COPY apitoolkit-server-exe /opt/apitoolkit
-COPY static /opt/apitoolkit
+COPY static /opt/apitoolkit/static
 CMD ["/opt/apitoolkit/apitoolkit-server-exe"]
