@@ -55,7 +55,9 @@ import System.Envy (FromEnv, Option (Option), decodeEnv, gFromEnvCustom, runEnv)
 startApp :: IO ()
 startApp = do
   let logger = logStringStdout
-  Dotenv.loadFile Dotenv.defaultConfig
+  loadFileErr <- try (Dotenv.loadFile Dotenv.defaultConfig) :: IO (Either SomeException [(String, String)])
+  logger <& "Load .env Resp " <> show loadFileErr
+
   env <- decodeEnv :: IO (Either String Config.EnvConfig)
   logger <& "..." <> show env
   case env of

@@ -1,0 +1,67 @@
+name:  Build and test 
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  runhaskell:
+    name: Build and test 
+    runs-on: ubuntu-latest # or macOS-latest, or windows-latest
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+    steps:
+      - uses: actions/checkout@v2
+      - uses: freckle/stack-cache-action@main
+      - uses: haskell/actions/setup@v1
+        with:
+          ghc-version: "8.10.7" # Exact version of ghc to use
+          # cabal-version: 'latest'. Omitted, but defalts to 'latest'
+          enable-stack: true
+          stack-version: "latest"
+      # - uses: actions/cache@v2
+      #   with:
+      #     path: |
+      #       ~/.stack
+      #       .stack-work
+      #     # best effort for cache: tie it to Stack resolver and package config
+      #     key: ${{ runner.os }}-stack-${{ hashFiles('stack.yaml.lock', 'package.yaml') }}
+      #     restore-keys: |
+      #       ${{ runner.os }}-stack
+      
+      - run: stack --no-terminal build --dependencies-only
+      # - run: stack install --local-bin-path=. --ghc-options '-optl-static -fPIC'
+      - run: stack install --local-bin-path=. 
+      # - run: stack test
+
+      - id: 'auth'
+        name: 'Authenticate to Google Cloud'
+        uses: 'google-github-actions/auth@v0'
+        with:
+          workload_identity_provider: 'projects/263066866150/locations/global/workloadIdentityPools/apitoolkit-wrk-id/providers/apitoolkit-wrk-pvd'
+          service_account: 'apitoolkit-ci-account@past-3.iam.gserviceaccount.com'
+
+      - name: Setup Cloud SDK
+        uses: google-github-actions/setup-gcloud@v0
+
+      - name: Authorize Docker push
+        run: gcloud auth configure-docker
+
+      - name: Build and Push Container
+        run: |-
+          docker build -t gcr.io/past-3/apitoolkit:${{  github.sha }} -t gcr.io/past-3/apitoolkit:latest .
+          docker push gcr.io/past-3/apitoolkit:${{  github.sha }}
+          docker push gcr.io/past-3/apitoolkit:latest
+      - name: Deploy to Cloud Run
+        id: deploy
+        uses: google-github-actions/deploy-cloudrun@v0
+        with:
+          service: apitoolkit
+          image: gcr.io/past-3/apitoolkit:${{  github.sha }}
+          region: europe-west1
+
+      - name: Show Output
+        run: echo ${{ steps.deploy.outputs.url }}
