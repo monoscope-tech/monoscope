@@ -31,7 +31,8 @@ jobs:
       #     restore-keys: |
       #       ${{ runner.os }}-stack
       - uses: freckle/stack-cache-action@main
-      - run: stack install --local-bin-path=. --ghc-options '-optl-static -fPIC'
+      # - run: stack install --local-bin-path=. --ghc-options '-optl-static -fPIC'
+      - run: stack install --local-bin-path=. --ghc-options '-fPIC'
       # - run: stack test
 
       - id: 'auth'
