@@ -107,6 +107,7 @@ dependencies:
 - doctest-parallel
 - cryptonite
 - memory
+- sendgrid-v3
 library:
   source-dirs: src
 

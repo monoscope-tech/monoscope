@@ -16,6 +16,7 @@ module Models.Projects.Projects
 where
 
 import Data.Aeson (FromJSON, ToJSON)
+import qualified Data.Text as T
 import qualified Data.Aeson as AE
 import qualified Data.Aeson.Types as AET
 import Data.Default
@@ -40,6 +41,10 @@ import Optics.TH
 import Relude
 import qualified Relude.Unsafe as Unsafe
 import Web.HttpApiData
+import qualified Data.List.NonEmpty as NonEmptyDataList
+import Network.SendGridV3.Api
+import qualified Control.Lens as Lens
+import Network.Wreq (responseStatus, statusCode)
 
 newtype ProjectId = ProjectId {unProjectId :: UUID.UUID}
   deriving stock (Generic, Show)
@@ -120,3 +125,41 @@ updateProject = PgT.execute q
 
 deleteProject :: ProjectId -> PgT.DBT IO ()
 deleteProject pid = delete @Project (Only pid)
+
+
+-- email with sendgrid
+
+-- get from env later plus set up actual sendgrid api key in env
+sendGridApiKey :: ApiKey
+sendGridApiKey = 
+  ApiKey "SG........."
+
+nmailContentText :: T.Text -> Maybe MailContent
+nmailContentText txt = MailContent "text/plain" txt
+
+nfromList :: [a] -> Maybe (NonEmpty a) 
+nfromList [text] = Just text
+
+mailContentHtml :: T.Text -> Maybe MailContent
+mailContentHtml html = MailContent "text/html" html
+
+-- rName rAddress -> receiver email and address sName sAddress sender email and address
+emailCtx :: T.Text -> T.Text -> T.Text -> T.Text -> Mail () ()
+emailCtx rName rAddress sName sAddress =
+  let to = personalization $ NonEmptyDataList.fromList [MailAddress rAddress rName]
+      from = MailAddress sAddress sName
+      subject = "Email Subject"
+      -- mailContentText will be swapped with mailContentText and the appropriate html email
+      content = nfromList [nmailContentText "Mail Content"]
+  in mail [to] from subject content
+
+-- test values..values will be parsed from create project and invite members form
+sendEmail :: Mail () ()
+sendEmail = emailCtx "anthony" "anthonyalaribe@gmail.com" "david" "davidoluwatobi41@gmail.com"
+  
+sendInviteMail :: Mail () () -> IO ()
+sendInviteMail sendEmail = do
+  eResponse <- sendMail sendGridApiKey (sendEmail { _mailSendAt = Just 1516468000 })
+  case eResponse of
+    Left httpException -> error $ show httpException
+    Right response -> print (response Lens.^. responseStatus . statusCode)
