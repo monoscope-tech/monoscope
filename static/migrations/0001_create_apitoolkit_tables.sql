@@ -43,11 +43,11 @@ END $$;
 -- create user table
 CREATE TABLE IF NOT EXISTS users.users
 (
+  id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
   updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
   deleted_at TIMESTAMP WITH TIME ZONE,
   active BOOL NOT NULL DEFAULT 't',
-  id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
   first_name VARCHAR(100) NOT NULL DEFAULT '',
   last_name VARCHAR(100) NOT NULL DEFAULT '',
   display_image_url TEXT NOT NULL DEFAULT '',
@@ -58,9 +58,9 @@ SELECT manage_updated_at('users.users');
 
 CREATE TABLE IF NOT EXISTS users.persistent_sessions
 (
+  id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
   updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-  id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
   user_id  UUID NOT NULL REFERENCES users.users ON DELETE CASCADE,
   session_data JSONB NOT NULL DEFAULT '{}' 
 );
@@ -69,11 +69,11 @@ SELECT manage_updated_at('users.persistent_sessions');
 
 CREATE TABLE IF NOT EXISTS projects.projects
 (
+  id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
   updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
   deleted_at TIMESTAMP WITH TIME ZONE,
   active BOOL NOT NULL DEFAULT 't',
-  id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
   title TEXT NOT NULL DEFAULT '',
   description TEXT NOT NULL DEFAULT '',
   hosts TEXT[] NOT NULL DEFAULT '{}'
@@ -84,11 +84,11 @@ SELECT manage_updated_at('projects.projects');
 CREATE TYPE projects.project_permissions AS ENUM ('admin', 'view', 'edit');
 CREATE TABLE IF NOT EXISTS projects.project_members
 (
+  id UUID NOT NULL DEFAULT gen_random_uuid(),
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
   updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
   deleted_at TIMESTAMP WITH TIME ZONE,
   active BOOL NOT NULL DEFAULT 't',
-  id UUID NOT NULL DEFAULT gen_random_uuid(),
   project_id UUID NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE ON UPDATE CASCADE,
   user_id UUID NOT NULL REFERENCES users.users (id) ON DELETE CASCADE ON UPDATE CASCADE,
   permission projects.project_permissions NOT NULL DEFAULT 'view',
@@ -99,11 +99,11 @@ SELECT manage_updated_at('projects.project_members');
 
 CREATE TABLE IF NOT EXISTS projects.project_api_keys
 (
+  id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
   updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
   deleted_at TIMESTAMP WITH TIME ZONE,
   active BOOL NOT NULL DEFAULT 't',
-  id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
   project_id UUID NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE ON UPDATE CASCADE,
   title TEXT NOT NULL DEFAULT '',
   key_prefix TEXT NOT NULL DEFAULT ''
@@ -115,9 +115,9 @@ SELECT manage_updated_at('projects.project_api_keys');
 ---
 CREATE TABLE IF NOT EXISTS apis.request_dumps
 (
+    id uuid NOT NULL DEFAULT gen_random_uuid(),
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-    id uuid NOT NULL DEFAULT gen_random_uuid(),
     project_id uuid NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE ON UPDATE CASCADE,
     host text NOT NULL DEFAULT '',
     url_path text NOT NULL DEFAULT '',
@@ -138,9 +138,9 @@ SELECT create_hypertable('apis.request_dumps', 'created_at');
 
 CREATE TABLE IF NOT EXISTS apis.endpoints
 (
+    id uuid NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-    id uuid NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
     project_id uuid NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE ON UPDATE CASCADE,
     url_path text NOT NULL DEFAULT ''::text,
     url_params jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -157,9 +157,9 @@ CREATE TYPE apis.field_type AS ENUM ('unknown','string','number','bool','object'
 CREATE TYPE apis.field_category AS ENUM ('queryparam', 'request_header','response_headers', 'request_body', 'response_body');
 CREATE TABLE IF NOT EXISTS apis.fields
 (
+    id uuid NOT NULL DEFAULT gen_random_uuid()  PRIMARY KEY,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-    id uuid NOT NULL DEFAULT gen_random_uuid()  PRIMARY KEY,
     project_id uuid NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE ON UPDATE CASCADE,
     endpoint uuid NOT NULL,
     key text  NOT NULL DEFAULT ''::text,
@@ -177,11 +177,11 @@ SELECT manage_updated_at('apis.fields');
 
 CREATE TABLE IF NOT EXISTS apis.formats
 (
+  id uuid NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
   updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
   deleted_at TIMESTAMP WITH TIME ZONE,
   project_id uuid NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE ON UPDATE CASCADE,
-  id uuid NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
   field_id uuid NOT NULL REFERENCES apis.fields (id) ON DELETE CASCADE ON UPDATE CASCADE,
   field_type apis.field_type NOT NULL DEFAULT 'unknown'::apis.field_type,
   field_format text NOT NULL DEFAULT '',

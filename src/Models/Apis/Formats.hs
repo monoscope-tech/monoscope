@@ -32,9 +32,9 @@ import Relude
 import qualified Relude.Unsafe as Unsafe
 
 data Format = Format
-  { createdAt :: ZonedTime,
+  { id :: UUID.UUID,
+    createdAt :: ZonedTime,
     updatedAt :: ZonedTime,
-    id :: UUID.UUID,
     fieldId :: UUID.UUID,
     fieldType :: Fields.FieldTypes,
     fieldFormat :: Text,

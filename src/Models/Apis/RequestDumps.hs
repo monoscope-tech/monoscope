@@ -29,9 +29,9 @@ import Relude
 import qualified Relude.Unsafe as Unsafe
 
 data RequestDump = RequestDump
-  { createdAt :: ZonedTime,
+  { id :: UUID.UUID,
+    createdAt :: ZonedTime,
     updatedAt :: ZonedTime,
-    id :: UUID.UUID,
     projectId :: UUID.UUID,
     host :: Text,
     urlPath :: Text,

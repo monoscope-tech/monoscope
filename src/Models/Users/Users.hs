@@ -50,11 +50,11 @@ newtype UserId = UserId {getUserId :: UUID.UUID}
   deriving anyclass (FromRow, ToRow)
 
 data User = User
-  { createdAt :: ZonedTime,
+  { id :: UserId,
+    createdAt :: ZonedTime,
     updatedAt :: ZonedTime,
     deletedAt :: Maybe ZonedTime,
     active :: Bool,
-    id :: UserId,
     firstName :: Text,
     lastName :: Text,
     displayImageUrl :: Text,
@@ -78,11 +78,11 @@ createUser firstName lastName picture email = do
   now <- getZonedTime
   pure $
     User
-      { createdAt = now,
+      { id = uid,
+        createdAt = now,
         updatedAt = now,
         deletedAt = Nothing,
         active = True,
-        id = uid,
         firstName = firstName,
         lastName = lastName,
         displayImageUrl = picture,

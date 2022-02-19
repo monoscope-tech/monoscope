@@ -71,11 +71,11 @@ instance FromField Permissions where
           Nothing -> returnError ConversionFailed f $ "Conversion error: Expected permission enum, got " <> decodeUtf8 bs <> " instead."
 
 data ProjectMembers = ProjectMembers
-  { createdAt :: ZonedTime,
+  { id :: UUID.UUID,
+    createdAt :: ZonedTime,
     updatedAt :: ZonedTime,
     deletedAt :: Maybe ZonedTime,
     active :: Bool,
-    id :: UUID.UUID,
     projectId :: Projects.ProjectId,
     userId :: Users.UserId,
     permission :: Permissions
