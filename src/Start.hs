@@ -106,11 +106,9 @@ startApp = do
 -- acknoleges the list message in one request.
 pubsubService :: LogAction IO String -> Config.EnvConfig -> Pool.Pool Connection -> IO ()
 pubsubService logger envConfig conn = do
-  lgr <- Google.newLogger Google.Trace stdout
   env <-
     Google.newEnv
-      <&> (Google.envLogger L..~ lgr)
-        . (Google.envScopes L..~ PubSub.pubSubScope)
+      <&> (Google.envScopes L..~ PubSub.pubSubScope)
   let pullReq = PubSub.pullRequest & PubSub.prMaxMessages L.?~ fromIntegral (envConfig ^. #messagesPerPubsubPullBatch)
   let subscription = "projects/past-3/subscriptions/apitoolkit-go-client-sub"
 
