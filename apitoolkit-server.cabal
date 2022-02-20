@@ -125,6 +125,7 @@ library
     , resource-pool
     , resourcet
     , scientific
+    , sendgrid-v3
     , servant-lucid
     , servant-server
     , text
@@ -213,6 +214,7 @@ executable apitoolkit-server-exe
     , resource-pool
     , resourcet
     , scientific
+    , sendgrid-v3
     , servant-lucid
     , servant-server
     , text
@@ -304,6 +306,7 @@ test-suite apitoolkit-server-test
     , resource-pool
     , resourcet
     , scientific
+    , sendgrid-v3
     , servant-lucid
     , servant-server
     , text
