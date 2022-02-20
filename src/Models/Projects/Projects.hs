@@ -44,7 +44,8 @@ import Web.HttpApiData
 import qualified Data.List.NonEmpty as NonEmptyDataList
 import Network.SendGridV3.Api
 import qualified Control.Lens as Lens
-import qualified Network.Wreq as Wreq      
+import qualified Network.Wreq as Wreq
+import qualified GHC.Exts       
 
 newtype ProjectId = ProjectId {unProjectId :: UUID.UUID}
   deriving stock (Generic, Show)
@@ -133,13 +134,24 @@ sendGridApiKey :: ApiKey
 sendGridApiKey = 
   ApiKey "SG........."
 
+-- instances derived to avoid error no instance for (IsString ([Char] -> Text)) for contentMail due to the use of overloadedstrings
+class GHC.Exts.IsString a => SafeIsString a where
+  fromString :: String -> a
+  fromString = GHC.Exts.fromString
+
+instance SafeIsString String 
+instance SafeIsString T.Text 
+
 contentMail :: T.Text
 contentMail =
-    mailBody
+    mailBody <>
     link
   where 
     mailBody = "ApiToolKit Mail Invite. Click on the link below"
     link = "<a href =https://apitoolkit.io>"
+
+patternMatchMailContent :: Maybe T.Text -> Maybe (NonEmpty MailContent)
+patternMatchMailContent (Just txt) = Just (NonEmptyDataList.fromList [mailContentHtml txt])
 
 -- rName rAddress -> receiver email and address sName sAddress sender email and address
 emailCtx :: T.Text -> T.Text -> T.Text -> T.Text -> Mail () ()
@@ -147,7 +159,7 @@ emailCtx rName rAddress sName sAddress =
   let to = personalization $ NonEmptyDataList.fromList [MailAddress rAddress rName]
       from = MailAddress sAddress sName
       subject = "Email Subject"
-      content = NonEmptyDataList.fromList [mailContentHtml contentMail]
+      content = patternMatchMailContent (Just contentMail)
   in mail [to] from subject content
 
 -- test values..values will be parsed from create project and invite members form
