@@ -108,6 +108,7 @@ dependencies:
 - cryptonite
 - memory
 - sendgrid-v3
+- text-conversions
 library:
   source-dirs: src
 

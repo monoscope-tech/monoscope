@@ -33,6 +33,7 @@ library
       Models.Projects.ProjectApiKeys
       Models.Projects.ProjectMembers
       Models.Projects.Projects
+      Models.Projects.ProjectsEmail
       Models.Users.Sessions
       Models.Users.Users
       Pages.Api
@@ -129,6 +130,7 @@ library
     , servant-lucid
     , servant-server
     , text
+    , text-conversions
     , time
     , transformers-either
     , unordered-containers
@@ -218,6 +220,7 @@ executable apitoolkit-server-exe
     , servant-lucid
     , servant-server
     , text
+    , text-conversions
     , time
     , transformers-either
     , unordered-containers
@@ -310,6 +313,7 @@ test-suite apitoolkit-server-test
     , servant-lucid
     , servant-server
     , text
+    , text-conversions
     , time
     , transformers-either
     , unordered-containers
