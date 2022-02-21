@@ -1,6 +1,3 @@
-{-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE TemplateHaskell #-}
-
 module Models.Projects.ProjectsEmail () where
 
 import qualified Data.Text as T
@@ -46,6 +43,7 @@ contentMail =
 
 patternMatchMailContent :: Maybe T.Text -> Maybe (NonEmpty MailContent)
 patternMatchMailContent (Just txt) = Just (NonEmptyDataList.fromList [mailContentHtml txt])
+patternMatchMailContent Nothing = Nothing
 
 -- rName rAddress -> receiver email and address sName sAddress sender email and address
 emailCtx :: T.Text -> T.Text -> T.Text -> T.Text -> Mail () ()

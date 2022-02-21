@@ -63,6 +63,36 @@ createProjectFormV =
     <$> check1 title (failIf ["name can't be empty"] T.null)
     <*> check1 description Valor.pass
 
+
+data InviteProjectMemberForm = InviteProjectMemberForm 
+  { memberEmail :: Text,
+    memberPriviledge :: Text
+  }
+  deriving (Eq, Show, Generic)
+  deriving anyclass (FromForm, Default)
+
+data InviteProjectMemberFormError = InviteProjectMemberFormError
+  { memberEmailE :: Maybe [String],
+    memberPriviledgeE :: Maybe [String]
+  }
+  deriving (Eq, Show, Generic)
+  deriving anyclass (Default)
+
+-- default permission level will be edit, changes can be made in settings
+inviteProjectMemberFormToModel :: Projects.ProjectId ->  Users.UserId -> InviteProjectMemberForm -> ProjectMembers.CreateProjectMembers
+inviteProjectMemberFormToModel pid uid InviteProjectMemberForm {..} = ProjectMembers.CreateProjectMembers {projectId = pid, userId = uid, ..}
+
+-- a package will be introduced if this does not work
+checkEmail :: Text -> Bool
+checkEmail = isJust . T.find (== '@')
+
+inviteProjectMemberFormV :: Monad m => Valor InviteProjectMemberForm m InviteProjectMemberFormError
+inviteProjectMemberFormV =
+  InviteProjectMemberFormError 
+    <$> check1 memberEmail (failIf ["email can't be blank"] T.null)
+    -- <*> check1 memberEmail (failIf ["must be a valid email address"] checkEmail)
+    <*> check1 memberPriviledge (failIf ["option can't be blank"] T.null)
+
 ----------------------------------------------------------------------------------------------------------
 -- createProjectGetH is the handler for the create projects page
 createProjectGetH :: Sessions.PersistentSession -> DashboardM (Html ())
