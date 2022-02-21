@@ -9,5 +9,5 @@ import Test.Hspec.Runner
 
 main :: IO ()
 main = do
-  mainFromCabal "apitoolkit-server" =<< getArgs
+  -- mainFromCabal "apitoolkit-server" =<< getArgs
   hspecWith defaultConfig {configFormatter = Just progress} Spec.spec

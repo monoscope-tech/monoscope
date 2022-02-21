@@ -32,7 +32,7 @@ processMessage logger envConfig conn msg = do
   let jsonByteStr = fromRight "{}" decodedMsg
   let decodedMsg = eitherDecode (fromStrict jsonByteStr) :: Either String RequestMessages.RequestMessage
   case decodedMsg of
-    Left err -> logger <& "error decoding message" <> err
+    Left err -> logger <& "error decoding message " <> err
     Right recMsg -> processRequestMessage logger conn recMsg
   pure $ msg L.^. PubSub.rmAckId
 

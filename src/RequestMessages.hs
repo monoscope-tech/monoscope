@@ -9,6 +9,7 @@ module RequestMessages
 where
 
 import qualified Data.Aeson as AE
+import Data.Aeson.QQ (aesonQQ)
 import qualified Data.Aeson.Types as AET
 import qualified Data.ByteString.Base64 as B64
 import qualified Data.HashMap.Strict as HM
@@ -35,8 +36,10 @@ import Relude.Unsafe as Unsafe
 import Text.RawString.QQ
 import Text.Regex.TDFA ((=~))
 
+-- $setup
+-- import Relude
+
 -- | RequestMessage represents a message for a single request pulled from pubsub.
--- >>> show RequestMessage
 data RequestMessage = RequestMessage
   { timestamp :: ZonedTime,
     projectId :: UUID.UUID,
@@ -64,10 +67,16 @@ makeFieldLabelsNoPrefix ''RequestMessage
 requestMsgToDumpAndEndpoint :: RequestMessages.RequestMessage -> ZonedTime -> UUID.UUID -> Either Text (RequestDumps.RequestDump, Endpoints.Endpoint, [(Fields.Field, [Text])])
 requestMsgToDumpAndEndpoint rM now dumpID = do
   reqBodyB64 <- B64.decodeBase64 $ encodeUtf8 $ rM ^. #requestBody
-  reqBody <- eitherStrToText $ AE.eitherDecodeStrict reqBodyB64 :: Either Text AE.Value
+  -- NB: At the moment we're discarding the error messages from when we're unable to parse the input
+  -- We should log this inputs and maybe input them into the db as is. This is also a potential annomaly for our customers,
+  -- And would help us identity what request formats our customers are actually processing, which would help guide our new features.
+  -- It could look something like this for a start, but with proper logging and not trace debug.
+  -- let reqBodyFields = case reqBodyE of
+  --       Left err -> traceShowM err >> []
+  --       Right reqBody -> valueToFields reqBody
+  let reqBody = fromRight [aesonQQ| {} |] $ AE.eitherDecodeStrict reqBodyB64
   respBodyB64 <- B64.decodeBase64 $ encodeUtf8 $ rM ^. #responseBody
-  respBody <- eitherStrToText $ AE.eitherDecodeStrict respBodyB64 :: Either Text AE.Value
-
+  let respBody = fromRight [aesonQQ| {} |] $ AE.eitherDecodeStrict respBodyB64
   let reqBodyFields = valueToFields reqBody
   let respBodyFields = valueToFields respBody
   let reqBodyFieldHashes = fieldsToHash reqBodyFields
@@ -113,7 +122,9 @@ requestMsgToDumpAndEndpoint rM now dumpID = do
 
 -- | valueToFields takes an aeson object and converts it into a list of paths to
 -- each primitive value in the json and the values.
--- >>> valueToFields exJSON
+--
+-- >>> (valueToFields exampleJSON) == exampleJSONFlattened
+-- True
 valueToFields :: AE.Value -> [(Text, AE.Value)]
 valueToFields value = snd $ valueToFields' value ("", [])
   where
@@ -192,3 +203,36 @@ fieldsToFieldDTO fieldCategory projectID (keyPath, val) =
 eitherStrToText :: Either String a -> Either Text a
 eitherStrToText (Left str) = Left $ toText str
 eitherStrToText (Right a) = Right a
+
+---------------------------------------------------------------------------------------
+-- Test Stubs
+
+-- | exampleJSON is a test stup used for testing the valueToFields function via doctest
+exampleJSON :: AE.Value
+exampleJSON =
+  [aesonQQ| {
+              "menu": {
+                "id": "file",
+                "value": "File",
+                "popup": {
+                  "menuitem": [
+                    {"value": "New", "onclick": "CreateNewDoc()"},
+                    {"value": "Open", "onclick": "OpenDoc()"},
+                    {"value": "Close", "onclick": "CloseDoc()"}
+                  ]
+                }
+              }
+            }|]
+
+-- | exampleJSONFlattened is the response from when exampleJSON is flattened via the valueToFields function
+exampleJSONFlattened :: [(Text, AE.Value)]
+exampleJSONFlattened =
+  [ (".menu.id", AE.String "file"),
+    (".menu.value", AE.String "File"),
+    (".menu.popup.menuitem.[].value", AE.String "Close"),
+    (".menu.popup.menuitem.[].onclick", AE.String "CloseDoc()"),
+    (".menu.popup.menuitem.[].value", AE.String "Open"),
+    (".menu.popup.menuitem.[].onclick", AE.String "OpenDoc()"),
+    (".menu.popup.menuitem.[].value", AE.String "New"),
+    (".menu.popup.menuitem.[].onclick", AE.String "CreateNewDoc()")
+  ]

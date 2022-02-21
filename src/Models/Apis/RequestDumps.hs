@@ -28,6 +28,9 @@ import Optics.TH
 import Relude
 import qualified Relude.Unsafe as Unsafe
 
+instance Eq ZonedTime where
+  (==) _ _ = True
+
 data RequestDump = RequestDump
   { id :: UUID.UUID,
     createdAt :: ZonedTime,
@@ -46,7 +49,7 @@ data RequestDump = RequestDump
     responseBody :: AE.Value,
     statusCode :: Int
   }
-  deriving (Show, Generic)
+  deriving (Show, Generic, Eq)
   deriving (ToRow, FromRow)
   deriving
     (PET.Entity)

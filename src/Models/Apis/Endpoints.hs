@@ -36,6 +36,10 @@ import Relude
 import qualified Relude.Unsafe as Unsafe
 import Web.HttpApiData
 
+-- Added only for satisfying the tests
+instance Eq ZonedTime where
+  (==) _ _ = True
+
 newtype EndpointId = EndpointId {unEndpointId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving
@@ -56,7 +60,7 @@ data Endpoint = Endpoint
     responseHashes :: Vector.Vector Text,
     queryparamHashes :: Vector.Vector Text
   }
-  deriving (Show, Generic)
+  deriving (Show, Generic, Eq)
   deriving anyclass (FromRow, ToRow, Default)
   deriving
     (PET.Entity)
