@@ -12,6 +12,7 @@ module Models.Projects.ProjectMembers
     memberPermissionFormV,
     updateMemberPermission,
     deleteMember,
+    InvProjectMember (..)
   )
 where
 
@@ -98,6 +99,19 @@ data CreateProjectMembers = CreateProjectMembers
   deriving
     (PET.Entity)
     via (PET.GenericEntity '[PET.Schema "projects", PET.TableName "project_members", PET.PrimaryKey "id", PET.FieldModifiers '[PET.CamelToSnake]] CreateProjectMembers)
+
+data InvProjectMember = InvProjectMember 
+  { projectId :: Projects.ProjectId,
+    userId :: Users.UserId,
+    permission :: Text
+  }
+  deriving (Show, Generic)
+  deriving anyclass (FromRow, ToRow)
+  deriving
+    (PET.Entity)
+    via (PET.GenericEntity '[PET.Schema "projects", PET.TableName "project_members", PET.PrimaryKey "id", PET.FieldModifiers '[PET.CamelToSnake]] InvProjectMember)
+
+makeFieldLabelsNoPrefix ''InvProjectMember
 
 data MemberPermissionForm = MemberPermissionForm
   { permissionf :: Text

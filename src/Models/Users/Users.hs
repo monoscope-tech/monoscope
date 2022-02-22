@@ -30,6 +30,7 @@ import qualified Deriving.Aeson as DAE
 import GHC.Generics (Generic)
 import Optics.Operators
 import Optics.TH
+import Optics.TH (makeFieldLabelsNoPrefix)
 import Relude
 import qualified Relude.Unsafe as Unsafe
 
@@ -68,6 +69,18 @@ data User = User
   deriving
     (PET.Entity)
     via (PET.GenericEntity '[PET.Schema "users", PET.TableName "users", PET.PrimaryKey "id", PET.FieldModifiers '[PET.CamelToSnake]] User)
+
+data InvUser = InvUser 
+  { userId :: UserId,
+    email :: Text
+  }
+  deriving (Show, Generic)
+  deriving anyclass (FromRow, ToRow)
+  deriving
+    (PET.Entity)
+    via (PET.GenericEntity '[PET.Schema "users", PET.TableName "users", PET.PrimaryKey "id", PET.FieldModifiers '[PET.CamelToSnake]] InvUser)
+
+makeFieldLabelsNoPrefix ''InvUser
 
 createUserId :: IO UserId
 createUserId = UserId <$> UUIDV4.nextRandom

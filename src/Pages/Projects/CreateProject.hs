@@ -16,6 +16,7 @@ where
 import Config
 import Control.Concurrent (forkIO)
 import Data.Default
+import Data.Maybe (isJust)
 import qualified Data.Text as T
 import qualified Data.CaseInsensitive as CI
 import qualified Data.UUID as UUID
@@ -66,10 +67,11 @@ createProjectFormV =
     <*> check1 description Valor.pass
 
 data InviteProjectMemberForm = InviteProjectMemberForm 
-  { email :: CI.CI Text,
-    permission :: ProjectMembers.Permissions
+  { email :: Text,
+    permission :: Text
   }
   deriving (Eq, Show, Generic)
+  deriving anyclass (FromForm, Default)
 
 data InviteProjectMemberFormError = InviteProjectMemberFormError
   { emailE :: Maybe [String],
@@ -77,16 +79,25 @@ data InviteProjectMemberFormError = InviteProjectMemberFormError
   }
   deriving (Eq, Show, Generic)
   deriving anyclass (Default)
+ 
+checkEmail :: Text -> Bool 
+checkEmail = isJust . T.find(== '@')
 
-inviteProjectMember :: Projects.ProjectId ->  Users.UserId -> InviteProjectMemberForm -> ProjectMembers.CreateProjectMembers
-inviteProjectMember pid uid InviteProjectMemberForm { permission } = ProjectMembers.CreateProjectMembers { projectId, userId, permission }
+inviteProjectMemberFormV :: Monad m => Valor InviteProjectMemberForm m InviteProjectMemberFormError
+inviteProjectMemberFormV = 
+  InviteProjectMemberFormError
+    <$> check1 email (failIf ["must be a valid email address"] checkEmail)
+    <*> check1 permission (failIf ["must not be blank"] T.null)
+
+inviteProjectMember :: Projects.ProjectId ->  Users.UserId -> InviteProjectMemberForm -> ProjectMembers.InvProjectMember
+inviteProjectMember pid uid InviteProjectMemberForm { permission } = ProjectMembers.InvProjectMember { projectId, userId, permission }
   where
     projectId = pid
     userId = uid
 
--- userid will be generated in Users.createUser
-createUserFromInvitation :: InviteProjectMemberForm -> Users.User
-createUserFromInvitation InviteProjectMemberForm { email } = Users.User { email }
+createUserFromInvitation :: Users.UserId -> InviteProjectMemberForm -> Users.InvUser
+createUserFromInvitation uid InviteProjectMemberForm { email } = Users.InvUser { userId, email }
+  where userId = uid 
 
 ----------------------------------------------------------------------------------------------------------
 -- createProjectGetH is the handler for the create projects page
