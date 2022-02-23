@@ -10,6 +10,7 @@ module Pages.Projects.CreateProject
     createProjectFormV,
     createProjectFormToModel,
     CreateProjectFormError,
+    InvProjectMemberForm,
   )
 where
 
@@ -18,7 +19,9 @@ import Control.Concurrent (forkIO)
 import Data.Default
 import Data.Maybe (isJust)
 import qualified Data.Text as T
+import Optics.TH (makeFieldLabelsNoPrefix)
 import qualified Data.CaseInsensitive as CI
+import Data.Time (ZonedTime, getZonedTime)
 import qualified Data.UUID as UUID
 import qualified Data.UUID.V4 as UUIDV4
 import Data.Valor (Valid, Valor, check1, failIf, validateM)
@@ -31,6 +34,7 @@ import qualified Models.Projects.ProjectMembers as ProjectMembers
 import qualified Models.Projects.Projects as Projects
 import qualified Models.Users.Sessions as Sessions
 import qualified Models.Users.Users as Users
+import qualified  Models.Projects.ProjectsEmail as ProjectEmail
 import Optics.Core ((^.))
 import Pages.BodyWrapper (bodyWrapper)
 import Relude
@@ -95,9 +99,55 @@ inviteProjectMember pid uid InviteProjectMemberForm { permission } = ProjectMemb
     projectId = pid
     userId = uid
 
-createUserFromInvitation :: Users.UserId -> InviteProjectMemberForm -> Users.InvUser
-createUserFromInvitation uid InviteProjectMemberForm { email } = Users.InvUser { userId, email }
-  where userId = uid 
+-- createUserFromInvitation :: Users.UserId -> InviteProjectMemberForm -> Users.InvUser
+-- createUserFromInvitation uid InviteProjectMemberForm { email } = Users.InvUser { userId, email }
+--   where userId = uid 
+
+-- createUserFromInvitation needed as Users.createUser does not accomodate the constraint of invited member and user having the same userid as well as active status should be false until invited member activates the user account
+createUserFromInvitation :: Users.UserId -> ZonedTime -> InviteProjectMemberForm -> IO Users.User
+createUserFromInvitation uid tNow InviteProjectMemberForm { email } = do
+  pure $ 
+    Users.User
+      { id = uid,
+        createdAt = tNow,
+        updatedAt = tNow,
+        deletedAt = Nothing,
+        active = False,
+        firstName = "",
+        lastName = "",
+        displayImageUrl = "",
+        email = CI.mk email
+      }
+
+-- makeFieldLabelsNoPrefix ''Users.User
+
+invMemberH :: InviteProjectMemberForm -> DashboardM (Html ()) 
+invMemberH invP = do
+  validationRes <- validateM inviteProjectMemberFormV invP
+  case validationRes of
+    Left invRaw -> do 
+      let inv = Valor.unValid invRaw
+      pool <- asks pool
+      uid <- Users.createUserId
+      tNow <- getZonedTime
+      let invUser = createUserFromInvitation uid tNow inv -- inv really should be email section not the total form detail 
+      -- create project and invite member needs to be merged inorder to have the same projectid
+      puid <- liftIO UUIDV4.nextRandom
+      let pid = Projects.ProjectId puid
+      let invMember = inviteProjectMember pid uid inv -- inv should be the permission section of the form
+      let memberEmail = ProjectEmail.sendEmail inv -- email section
+
+      _ <- liftIO $ 
+        withPool pool $ do
+          ProjectMembers.insertProjectMembers [invMember]
+          ProjectEmail.sendInviteMail memberEmail
+          Users.insertUser invUser
+          pass
+
+      pure $ addHeader "HX-Trigger" $ addHeader "/" $ createProjectBody inv (def @InviteProjectMemberFormError)
+
+    Right inve -> pure $ noHeader $ noHeader $ createProjectBody invP inve
+
 
 ----------------------------------------------------------------------------------------------------------
 -- createProjectGetH is the handler for the create projects page
