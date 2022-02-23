@@ -2,15 +2,13 @@ module Models.Users.Sessions where
 
 import Control.Monad.IO.Class
 import Data.Default
-import Data.Map.Strict (Map)
-import qualified Data.Map.Strict as Map
+import Data.Map.Strict qualified as Map
 import Data.Pool
 import Data.Text
 import Data.Time
-import qualified Data.Time as Time
 import Data.UUID
-import qualified Data.UUID.V4 as UUID
-import qualified Data.Vector as Vector
+import Data.UUID.V4 qualified as UUID
+import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, queryOne, withPool)
 import Database.PostgreSQL.Entity.Types
@@ -20,10 +18,9 @@ import Database.PostgreSQL.Simple.Newtypes
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField
 import Database.PostgreSQL.Transact hiding (execute, queryOne)
-import qualified Models.Projects.Projects as Projects
+import Models.Projects.Projects qualified as Projects
 import Models.Users.Users (UserId)
-import qualified Models.Users.Users as Users
-import Optics.Core
+import Models.Users.Users qualified as Users
 import Relude
 import Web.HttpApiData
 

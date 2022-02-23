@@ -14,6 +14,7 @@
 
 module Config where
 
+import Colog (LogAction)
 import Data.Default
 import Data.Pool as Pool
 import qualified Data.UUID as UUID
@@ -50,9 +51,9 @@ makeFieldLabelsNoPrefix ''EnvConfig
 
 data AuthContext = AuthContext
   { env :: EnvConfig,
-    pool :: Pool.Pool Connection
+    pool :: Pool.Pool Connection,
+    logger :: LogAction IO String
   }
-  deriving stock (Show, Generic)
 
 type DashboardM = ReaderT AuthContext Handler
 

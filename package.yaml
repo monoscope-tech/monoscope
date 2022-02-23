@@ -6,6 +6,21 @@ author:              "Author name here"
 maintainer:          "example@example.com"
 copyright:           "2021 Author name here"
 
+ghc-options:
+# For details on warnings: https://downloads.haskell.org/~ghc/master/users-guide/using-warnings.html
+# This list taken from https://medium.com/mercury-bank/enable-all-the-warnings-a0517bc081c3
+# Enable all warnings with -Weverything, then disable the ones we don’t care about
+- -Weverything
+- -Wno-missing-exported-signatures # missing-exported-signatures turns off the more strict -Wmissing-signatures. See https://ghc.haskell.org/trac/ghc/ticket/14794#ticket
+- -Wno-missing-import-lists # Requires explicit imports of _every_ function (e.g. ‘$’); too strict
+- -Wno-missed-specialisations # When GHC can’t specialize a polymorphic function. No big deal and requires fixing underlying libraries to solve.
+- -Wno-all-missed-specialisations # See missed-specialisations
+- -Wno-unsafe # Don’t use Safe Haskell warnings
+- -Wno-safe # Don’t use Safe Haskell warnings
+- -Wno-missing-local-signatures # Warning for polymorphic local bindings; nothing wrong with those.
+- -Wno-monomorphism-restriction # Don’t warn if the monomorphism restriction is used
+- -Wno-missing-safe-haskell-mode
+- -fforce-recomp
 # cc-options: -static
 # ld-options: -static -pthread
 
@@ -30,6 +45,13 @@ default-extensions:
   - FlexibleInstances
   - MultiParamTypeClasses
   - UndecidableInstances
+  - InstanceSigs          
+  - MultiParamTypeClasses 
+  - PatternSynonyms       
+  - QuasiQuotes
+  - DisambiguateRecordFields
+  - ImportQualifiedPost
+
 
 extra-source-files:
 - README.md
@@ -44,71 +66,62 @@ extra-source-files:
 description:         Please see the README on GitHub at <https://github.com/githubuser/apitoolkit-server#readme>
 
 dependencies:
-- aeson
-- aeson-qq
-- base >= 4.7 && < 5
-- base64
-- co-log
-- co-log-core
-- deriving-aeson
-- dotenv
-- envy
-- gogol
-- gogol-core
-- gogol-pubsub
-- hspec
-- lens 
-- optics-core
-- optics-th
-- pg-entity
-- pg-transact  
-- postgresql-migration
-- postgresql-simple
-- postgresql-simple-named
-- relude
-- resource-pool
-- resource-pool
-- resourcet
-- servant-server
-- text
-- time
-- unordered-containers
-- uuid
-- vector
-- wai
-- warp
-- raw-strings-qq
-- regex-tdfa
-- regex-tdfa-quasiquoter
-- scientific
-- async
-- servant-lucid
-- lucid
-- lucid-htmx
-- data-default-extra
-- hspec-expectations-lifted
-- hspec-pg-transact
-- hspec-discover
-- pg-entity
-- pg-transact
-- postgresql-simple
-- resource-pool
-- http-api-data
-- valor >= 1.0.0.0
-- containers
-- cookie
-- wreq
-- aeson-optics
-- lens-aeson
-- jose
-- errors
-- transformers-either
-- case-insensitive
-- doctest-parallel
-- cryptonite
-- memory
-- sendgrid-v3
-- text-conversions
+  - aeson
+  - data-default-extra
+  - time
+  - relude
+  - uuid
+  - optics-th
+  - vector
+  - pg-entity
+  - postgresql-simple
+  - deriving-aeson
+  - base
+  - optics-core
+  - pg-transact
+  - sendgrid-v3
+  - lens
+  - wreq
+  - text-conversions
+  - text
+  - case-insensitive
+  - http-api-data
+  - containers
+  - resource-pool
+  - co-log
+  - servant-server
+  - envy
+  - cookie
+  - wai
+  - memory # 3 remove from codebase
+  - aeson-qq
+  - async
+  - base64
+  - co-log-core
+  - cryptonite
+  - dotenv
+  - errors
+  - gogol
+  - gogol-core
+  - gogol-pubsub
+  - hspec
+  - hspec-pg-transact
+  - jose
+  - lens-aeson
+  - lucid
+  - lucid-htmx 
+  - postgresql-migration
+  - raw-strings-qq
+  - regex-tdfa
+  - resourcet
+  - scientific
+  - servant-lucid
+  - transformers-either
+  - unordered-containers
+  - valor >= 1.0.0.0
+  - warp
+
+
 library:
   source-dirs: src
 
@@ -124,30 +137,29 @@ executables:
     - -hiedir=.hie
     # - -fPIC
     dependencies:
-    - base
-    - apitoolkit-server
-    - hspec-discover
+      - apitoolkit-server
     when:        
     - condition: false        
       other-modules: Paths_apitoolkit_server
 
-tests:
-  apitoolkit-server-test:
-    main:                Test.hs
-    source-dirs:         test
-    ghc-options:
-    - -threaded
-    - -rtsopts
-    - -with-rtsopts=-N
-    - -fwrite-ide-info                   
-    - -hiedir=.hie
-    dependencies:
-    - base
-    - apitoolkit-server
-    - hspec-expectations-lifted
-    - hspec-pg-transact
-    - pg-entity
-    - pg-transact
-    - postgresql-simple
-    - resource-pool
-    - hspec-discover
+# tests:
+#   apitoolkit-server-test:
+#     main:                Test.hs
+#     source-dirs:         test
+#     ghc-options:
+#     - -threaded
+#     - -rtsopts
+#     - -with-rtsopts=-N
+#     - -fwrite-ide-info                   
+#     - -hiedir=.hie
+#     - -Weverything
+#     dependencies:
+#     - base
+#     - apitoolkit-server
+#     - hspec-expectations-lifted
+#     - hspec-pg-transact
+#     - pg-entity
+#     - pg-transact
+#     - postgresql-simple
+#     - resource-pool
+#     - hspec-discover

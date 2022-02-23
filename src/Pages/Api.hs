@@ -3,18 +3,18 @@ module Pages.Api (apiGetH, apiPostH, GenerateAPIKeyForm (..)) where
 import Config
 import Data.Aeson (encode)
 import Data.Aeson.QQ (aesonQQ)
-import qualified Data.ByteString.Base64 as B64
+import Data.ByteString.Base64 qualified as B64
 import Data.Text as T
 import Data.UUID as UUID
-import qualified Data.UUID.V4 as UUIDV4
+import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import Lucid.HTMX
-import qualified Models.Projects.ProjectApiKeys as ProjectApiKey
-import qualified Models.Projects.ProjectApiKeys as ProjectApiKeys
-import qualified Models.Projects.Projects as Projects
-import qualified Models.Users.Sessions as Sessions
+import Models.Projects.ProjectApiKeys qualified as ProjectApiKey
+import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
+import Models.Projects.Projects qualified as Projects
+import Models.Users.Sessions qualified as Sessions
 import Optics.Core ((^.))
 import Pages.BodyWrapper (bodyWrapper)
 import Relude
@@ -124,12 +124,12 @@ mainContent apiKeys newKeyM = do
                   strong_ [class_ "block pt-2", id_ "newKey"] $ toHtml newKey
                 div_ [class_ "mt-4"] $ do
                   div_ [class_ "-mx-2 -my-1.5 flex"] $ do
-                    button_ [
-                      type_ "button", 
-                      class_ "bg-green-50 px-2 py-1.5 rounded-md text-sm font-medium text-green-800 hover:bg-green-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600",
-                      term 
-                      "_" 
-                      [r| 
+                    button_
+                      [ type_ "button",
+                        class_ "bg-green-50 px-2 py-1.5 rounded-md text-sm font-medium text-green-800 hover:bg-green-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600",
+                        term
+                          "_"
+                          [r| 
                       on click 
                         js
                             if ('clipboard' in window.navigator) {

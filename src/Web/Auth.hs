@@ -2,86 +2,40 @@
 
 module Web.Auth where
 
-import Config (AuthContext, DashboardM, EnvConfig, HeadersTriggerRedirect, env, pool)
+import Config (DashboardM, env, pool)
 import Control.Error (note)
-import qualified Control.Lens as L
+import Control.Lens qualified as L
 import Control.Monad.Trans.Either (hoistMaybe, runEitherT)
-import qualified Crypto.JOSE.Compact
-import qualified Crypto.JOSE.JWK
-import qualified Crypto.JWT
 import Data.Aeson.Lens (key, _String)
-import qualified Data.Map.Strict as Map
+import Data.Map.Strict qualified as Map
 import Data.Pool (Pool)
-import Data.Time.LocalTime (getZonedTime)
-import qualified Data.UUID as UUID
-import qualified Data.UUID.V4 as UUIDV4
+import Data.UUID qualified as UUID
+import Data.UUID.V4 qualified as UUIDV4
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (Connection)
 import Lucid (Html, ToHtml (toHtml))
 import Lucid.Html5
-import qualified Models.Projects.Projects as Projects
-import qualified Models.Users.Sessions as Sessions
-import qualified Models.Users.Users as Users
-import Network.Wai (Application, Request (requestHeaders))
+import Models.Users.Sessions qualified as Sessions
+import Models.Users.Users qualified as Users
+import Network.Wai (Request (requestHeaders))
 import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
 import Optics.Operators ((^.))
 import Relude
-  ( Applicative (pure),
-    Bool (False, True),
-    ByteString,
-    ConvertUtf8 (encodeUtf8),
-    Either (Left, Right),
-    Maybe (..),
-    MaybeT (runMaybeT),
-    Monad ((>>)),
-    MonadIO (liftIO),
-    Semigroup ((<>)),
-    String,
-    Text,
-    ToString (toString),
-    asks,
-    either,
-    error,
-    fromMaybe,
-    maybe,
-    putStrLn,
-    traceShowM,
-    ($),
-    (&),
-    (.),
-    (<$>),
-  )
-import Relude.String (show)
 import Servant
-  ( Capture,
-    Context (EmptyContext, (:.)),
-    FormUrlEncoded,
-    Get,
+  ( Context (EmptyContext, (:.)),
     Handler,
     Header,
     Headers,
-    JSON,
     NoContent (..),
-    Post,
-    QueryParam,
-    Raw,
-    ReqBody,
     ServerError (errHeaders),
-    ServerT,
-    StdMethod (GET),
-    Verb,
     addHeader,
     err302,
-    hoistServer,
-    hoistServerWithContext,
     noHeader,
-    serve,
-    serveWithContext,
     throwError,
     type (:<|>) (..),
     type (:>),
   )
-import Servant.Server.Experimental.Auth (AuthHandler, AuthServerData, mkAuthHandler)
+import Servant.Server.Experimental.Auth (AuthHandler, mkAuthHandler)
 import SessionCookies (craftSessionCookie, emptySessionCookie)
 import Web.Cookie (SetCookie, parseCookies)
 import Prelude (lookup)

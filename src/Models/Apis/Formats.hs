@@ -1,4 +1,3 @@
-{-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 module Models.Apis.Formats
@@ -7,29 +6,17 @@ module Models.Apis.Formats
   )
 where
 
-import qualified Data.Aeson as AE
-import qualified Data.Aeson.Types as AET
-import Data.Default
-import Data.Default.Instances
-import Data.Time (CalendarDiffTime, UTCTime, ZonedTime)
-import Data.Time.Clock (DiffTime, NominalDiffTime)
-import qualified Data.UUID as UUID
-import qualified Data.Vector as Vector
-import Database.PostgreSQL.Entity (Entity (fields, tableName), insert, selectManyByField)
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, queryOne, query_, withPool)
+import Data.Time (ZonedTime)
+import Data.UUID qualified as UUID
+import Data.Vector qualified as Vector
+import Database.PostgreSQL.Entity (selectManyByField)
 import Database.PostgreSQL.Entity.Internal.QQ (field)
-import qualified Database.PostgreSQL.Entity.Types as PET
-import Database.PostgreSQL.Simple (Connection, FromRow, Only (Only), ToRow, query_)
-import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Entity.Types qualified as PET
+import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Transact (DBT)
-import qualified Database.PostgreSQL.Transact as PgT
-import qualified Deriving.Aeson as DAE
-import GHC.Generics (Generic)
-import qualified Models.Apis.Fields as Fields
-import Optics.Operators
+import Models.Apis.Fields qualified as Fields
 import Optics.TH
 import Relude
-import qualified Relude.Unsafe as Unsafe
 
 data Format = Format
   { id :: UUID.UUID,

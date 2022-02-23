@@ -8,50 +8,16 @@ import Config
     DashboardM,
     HeadersTriggerRedirect,
   )
-import Control.Monad
 import Data.Default (Default (def))
-import Data.Text
-import qualified Data.Text as T
-import qualified Data.UUID as UUID
-import Data.Valor (Valid, Valor, check1, failIf, validateM)
-import qualified Data.Valor as Valor
-import qualified Data.Vector as Vector
-import Database.PostgreSQL.Entity (delete)
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, queryOne, query_, withPool)
-import qualified Database.PostgreSQL.Entity.Types as PET
-import Database.PostgreSQL.Simple (Connection, FromRow, Only (Only), ToRow, query_)
-import Database.PostgreSQL.Simple.SqlQQ (sql)
-import qualified Database.PostgreSQL.Transact as PgT
-import GHC.Generics (Generic)
+import Data.Valor (validateM)
+import Data.Valor qualified as Valor
+import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
-  ( Html,
-    button_,
-    class_,
-    div_,
-    form_,
-    h2_,
-    id_,
-    img_,
-    input_,
-    label_,
-    name_,
-    option_,
-    p_,
-    placeholder_,
-    rows_,
-    section_,
-    select_,
-    span_,
-    src_,
-    textarea_,
-    type_,
-  )
 import Lucid.HTMX (hxPost_, hxTarget_)
-import Models.Projects.ProjectMembers
-import qualified Models.Projects.ProjectMembers as ProjectMembers
-import Models.Projects.Projects (Project, ProjectId)
-import qualified Models.Projects.Projects as Projects
-import qualified Models.Users.Sessions as Sessions
+import Models.Projects.ProjectMembers qualified as ProjectMembers
+import Models.Projects.Projects (ProjectId)
+import Models.Projects.Projects qualified as Projects
+import Models.Users.Sessions qualified as Sessions
 import Optics.Operators ()
 import Optics.TH ()
 import Pages.BodyWrapper (bodyWrapper)
@@ -63,13 +29,9 @@ import Pages.Projects.CreateProject
   )
 import Relude
 import Servant
-  ( Handler,
-    addHeader,
+  ( addHeader,
     noHeader,
   )
-import Servant.HTML.Lucid
-import Text.RawString.QQ
-import Web.FormUrlEncoded (FromForm)
 
 editProjectH :: Sessions.PersistentSession -> DashboardM (Html ())
 editProjectH sess = do

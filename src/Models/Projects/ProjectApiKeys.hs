@@ -17,28 +17,24 @@ module Models.Projects.ProjectApiKeys
 where
 
 import Crypto.Cipher.AES (AES256)
-import Crypto.Cipher.Types (BlockCipher (..), Cipher (..), IV, KeySizeSpecifier (..), makeIV, nullIV)
-import Crypto.Error (CryptoError (..), CryptoFailable (..), throwCryptoError)
-import qualified Crypto.Random.Types as CRT
-import Data.ByteArray (ByteArray)
-import Data.ByteString.Base64 as B64
+import Crypto.Cipher.Types (BlockCipher (..), Cipher (..), nullIV)
+import Crypto.Error (throwCryptoError)
 import Data.Default (Default)
 import Data.Time (ZonedTime)
-import qualified Data.Time as Time
-import qualified Data.UUID as UUID
-import qualified Data.UUID.V4 as UUIDV4
+import Data.Time qualified as Time
+import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), queryOne)
 import Database.PostgreSQL.Entity.Internal.QQ (field)
-import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
+import Database.PostgreSQL.Entity.Types (CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Simple.ToRow (ToRow)
 import Database.PostgreSQL.Transact (DBT)
-import qualified Models.Projects.Projects as Projects
+import Models.Projects.Projects qualified as Projects
 import Network.Google.Prelude (FromHttpApiData)
 import Optics.TH
 import Relude
@@ -88,7 +84,7 @@ getProjectApiKey = queryOne Select q
 
 -- AES256 encryption
 encryptAPIKey :: ByteString -> ByteString -> ByteString
-encryptAPIKey key plainData = ctrCombine ctx nullIV plainData
+encryptAPIKey key = ctrCombine ctx nullIV
   where
     ctx :: AES256
     ctx = throwCryptoError $ cipherInit key

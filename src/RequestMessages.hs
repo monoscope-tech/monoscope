@@ -35,6 +35,8 @@ import Relude
 import Relude.Unsafe as Unsafe
 import Text.RawString.QQ
 import Text.Regex.TDFA ((=~))
+import Web.FormUrlEncoded (FromForm)
+import Web.HttpApiData (FromHttpApiData (parseQueryParam, parseUrlPiece))
 
 -- $setup
 -- import Relude
@@ -49,7 +51,6 @@ data RequestMessage = RequestMessage
     urlPath :: Text,
     protoMajor :: Int,
     protoMinor :: Int,
-    durationMicroSecs :: Int,
     duration :: Int,
     requestHeaders :: AE.Value,
     responseHeaders :: AE.Value,

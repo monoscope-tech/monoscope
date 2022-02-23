@@ -1,30 +1,17 @@
-{-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE OverloadedLists #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-
 module Pages.Projects.ListProjects
   ( listProjectsGetH,
   )
 where
 
 import Config
-import qualified Data.UUID as UUID
-import qualified Data.Vector as Vector
+import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
-import Lucid.HTMX
-import qualified Models.Projects.Projects as Projects
-import qualified Models.Users.Sessions as Sessions
-import qualified Models.Users.Users as Users
+import Models.Projects.Projects qualified as Projects
+import Models.Users.Sessions qualified as Sessions
 import Optics.Operators
 import Pages.BodyWrapper (bodyWrapper)
 import Relude
-import Servant
-  ( Handler,
-    addHeader,
-    noHeader,
-  )
-import Servant.HTML.Lucid
 
 listProjectsGetH :: Sessions.PersistentSession -> DashboardM (Html ())
 listProjectsGetH sess = do

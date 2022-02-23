@@ -84,7 +84,7 @@ extra-deps:
       - gogol-pubsub
       - gogol-cloudtrace
   - git: https://github.com/tchoutri/pg-entity.git
-    commit: 45abf171fb7c3e0a4ec1137f79364239f1d2f24d
+    commit: 656edce707950a1176dac98f2cc55a9d7717f956
     subdirs:
       - .
   - git: https://github.com/mastarija/valor

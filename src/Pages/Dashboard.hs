@@ -1,12 +1,10 @@
 module Pages.Dashboard (dashboardGetH) where
 
 import Config
-import Data.UUID as UUID
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
-import Lucid.HTMX
-import qualified Models.Projects.Projects as Projects
-import qualified Models.Users.Sessions as Sessions
+import Models.Projects.Projects qualified as Projects
+import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper
 import Relude
 

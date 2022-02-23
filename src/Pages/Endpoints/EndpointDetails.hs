@@ -6,8 +6,8 @@
 module Pages.Endpoints.EndpointDetails (endpointDetailsH, fieldDetailsPartialH) where
 
 import Config
-import qualified Data.Map as Map
-import Data.Text as T (breakOn, breakOnAll, dropWhile, isInfixOf, replace, splitOn, toUpper)
+import Data.Map qualified as Map
+import Data.Text as T (breakOnAll, dropWhile, isInfixOf, replace, splitOn)
 import Data.Time (defaultTimeLocale, formatTime)
 import Data.UUID as UUID
 import Data.Vector (Vector)
@@ -15,18 +15,14 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import Lucid.HTMX
 import Models.Apis.Endpoints
-import qualified Models.Apis.Endpoints as Endpoints
-import qualified Models.Apis.Fields as Fields
-import qualified Models.Apis.Formats as Formats
-import qualified Models.Projects.Projects as Projects
-import qualified Models.Users.Sessions as Sessions
-import Optics.Core ((^.), (^?))
+import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.Fields qualified as Fields
+import Models.Apis.Formats qualified as Formats
+import Models.Projects.Projects qualified as Projects
+import Models.Users.Sessions qualified as Sessions
+import Optics.Core ((^.))
 import Pages.BodyWrapper (bodyWrapper)
 import Relude
-import qualified Relude.Unsafe as Unsafe
-import Servant
-import Servant.HTML.Lucid
-import Text.RawString.QQ
 
 fieldDetailsPartialH :: Sessions.PersistentSession -> Projects.ProjectId -> Fields.FieldId -> DashboardM (Html ())
 fieldDetailsPartialH sess pid fid = do

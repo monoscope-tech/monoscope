@@ -1,4 +1,3 @@
-{-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 module Models.Apis.RequestDumps
@@ -7,26 +6,15 @@ module Models.Apis.RequestDumps
   )
 where
 
-import qualified Data.Aeson as AE
-import qualified Data.Aeson.Types as AET
-import Data.Default
-import Data.Default.Instances
-import Data.Time (CalendarDiffTime, UTCTime, ZonedTime)
-import Data.Time.Clock (DiffTime, NominalDiffTime)
-import qualified Data.UUID as UUID
-import qualified Data.Vector as Vector
-import Database.PostgreSQL.Entity (Entity (fields, tableName), insert)
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, queryOne, query_, withPool)
-import qualified Database.PostgreSQL.Entity.Types as PET
-import Database.PostgreSQL.Simple (Connection, FromRow, Only (Only), ToRow, query_)
-import Database.PostgreSQL.Simple.SqlQQ (sql)
-import qualified Database.PostgreSQL.Transact as PgT
-import qualified Deriving.Aeson as DAE
-import GHC.Generics (Generic)
-import Optics.Operators
+import Data.Aeson qualified as AE
+import Data.Time (CalendarDiffTime, ZonedTime)
+import Data.UUID qualified as UUID
+import Database.PostgreSQL.Entity (insert)
+import Database.PostgreSQL.Entity.Types qualified as PET
+import Database.PostgreSQL.Simple (FromRow, ToRow)
+import Database.PostgreSQL.Transact qualified as PgT
 import Optics.TH
 import Relude
-import qualified Relude.Unsafe as Unsafe
 
 instance Eq ZonedTime where
   (==) _ _ = True

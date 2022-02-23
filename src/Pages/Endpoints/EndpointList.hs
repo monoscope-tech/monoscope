@@ -8,25 +8,16 @@ module Pages.Endpoints.EndpointList (endpointListH) where
 import Config
 import Data.UUID as UUID
 import Data.Vector (Vector)
-import Database.PostgreSQL.Entity
 import Database.PostgreSQL.Entity.DBT
-  ( QueryNature (Select),
-    query,
-    queryOne,
-    query_,
-    withPool,
+  ( withPool,
   )
-import Database.PostgreSQL.Transact (DBT)
 import Lucid
-import Lucid.HTMX
-import qualified Models.Apis.Endpoints as Endpoints
-import qualified Models.Projects.Projects as Projects
-import qualified Models.Users.Sessions as Sessions
+import Models.Apis.Endpoints qualified as Endpoints
+import Models.Projects.Projects qualified as Projects
+import Models.Users.Sessions qualified as Sessions
 import Optics.Operators
 import Pages.BodyWrapper (bodyWrapper)
 import Relude
-import Servant.HTML.Lucid
-import Text.RawString.QQ
 
 endpointListH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 endpointListH sess pid = do

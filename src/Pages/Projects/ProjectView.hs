@@ -1,17 +1,8 @@
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DerivingVia #-}
-{-# LANGUAGE OverloadedStrings #-}
-
 module Pages.Projects.ProjectView (projectView) where
 
-import Data.UUID as UUID
 import Lucid
-import Lucid.HTMX
 import Pages.BodyWrapper (bodyWrapper)
 import Relude
-import Servant
-import Servant.HTML.Lucid
-import Text.RawString.QQ
 
 projectView :: Html ()
 projectView = bodyWrapper Nothing Nothing "Project View" $ do

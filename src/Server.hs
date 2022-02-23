@@ -28,9 +28,11 @@ import qualified Pages.Api as Api
 import qualified Pages.Dashboard as Dashboard
 import qualified Pages.Endpoints.EndpointDetails as EndpointDetails
 import qualified Pages.Endpoints.EndpointList as EndpointList
+import qualified Pages.ManualIngestion as ManualIngestion
 import qualified Pages.Projects.CreateProject as CreateProject
 import qualified Pages.Projects.ListProjects as ListProjects
 import Relude hiding (hoistMaybe)
+import qualified RequestMessages
 import Servant
   ( AuthProtect,
     Capture,
@@ -82,6 +84,10 @@ type ProtectedAPI =
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "apis" :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Api.GenerateAPIKeyForm :> Post '[HTML] (HeadersTrigger (Html ()))
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> Get '[HTML] (Html ())
+    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "manual_ingest" :> Get '[HTML] (Html ())
+    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "manual_ingest" :> ReqBody '[FormUrlEncoded] ManualIngestion.RequestMessageForm :> Post '[HTML] (Html ())
+
+-- :<|> "p" :> Capture "projectID" Projects.ProjectId :> "manualIngest" :> Get '[HTML] (Html ())
 
 type PublicAPI =
   "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
@@ -126,6 +132,8 @@ protectedServer sess =
     :<|> Api.apiGetH sess
     :<|> Api.apiPostH sess
     :<|> EndpointDetails.fieldDetailsPartialH sess
+    :<|> ManualIngestion.manualIngestGetH sess
+    :<|> ManualIngestion.manualIngestPostH sess
 
 publicServer :: ServerT PublicAPI DashboardM
 publicServer =

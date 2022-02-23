@@ -4,26 +4,24 @@ module ProcessMessage
   )
 where
 
-import Colog.Core (LogAction (..), logStringStdout, (<&))
-import qualified Config
+import Colog.Core (LogAction (..), (<&))
+import Config qualified
 import Control.Lens ((^?), _Just)
-import qualified Control.Lens as L
+import Control.Lens qualified as L
 import Data.Aeson (eitherDecode)
-import qualified Data.ByteString.Base64 as B64
-import Data.Pool (Pool, withResource)
-import qualified Data.Text.Encoding.Base64 as B64T
+import Data.ByteString.Base64 qualified as B64
+import Data.Pool (Pool)
 import Data.Time.LocalTime (getZonedTime)
-import Data.UUID (UUID)
 import Data.UUID.V4 (nextRandom)
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (Connection)
-import qualified Models.Apis.Endpoints as Endpoints
-import qualified Models.Apis.Fields as Fields
-import qualified Models.Apis.RequestDumps as RequestDumps
-import qualified Network.Google.PubSub as PubSub
+import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.Fields qualified as Fields
+import Models.Apis.RequestDumps qualified as RequestDumps
+import Network.Google.PubSub qualified as PubSub
 import Relude
 import Relude.Unsafe (fromJust)
-import qualified RequestMessages
+import RequestMessages qualified
 
 processMessage :: LogAction IO String -> Config.EnvConfig -> Pool Connection -> PubSub.ReceivedMessage -> IO (Maybe Text)
 processMessage logger envConfig conn msg = do

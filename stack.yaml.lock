@@ -292,13 +292,13 @@ packages:
     version: 0.0.1.0
     git: https://github.com/tchoutri/pg-entity.git
     pantry-tree:
-      size: 2678
-      sha256: c83f086f60abc2ccf768dc255e2c81741dc5a18543046e98fc0ec4d072299f0b
-    commit: 45abf171fb7c3e0a4ec1137f79364239f1d2f24d
+      size: 2732
+      sha256: 7005ca58baed5be9f55acf4f052f5c59b6873e55a813134288815c4d9b60af41
+    commit: 656edce707950a1176dac98f2cc55a9d7717f956
   original:
     subdir: .
     git: https://github.com/tchoutri/pg-entity.git
-    commit: 45abf171fb7c3e0a4ec1137f79364239f1d2f24d
+    commit: 656edce707950a1176dac98f2cc55a9d7717f956
 - completed:
     subdir: .
     name: valor

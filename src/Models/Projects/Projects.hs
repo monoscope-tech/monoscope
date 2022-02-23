@@ -41,7 +41,6 @@ import Relude
 import qualified Relude.Unsafe as Unsafe
 import Web.HttpApiData
 
-
 newtype ProjectId = ProjectId {unProjectId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving

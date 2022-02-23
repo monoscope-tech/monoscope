@@ -1,15 +1,10 @@
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE QuasiQuotes #-}
-
 module Pages.BodyWrapper (bodyWrapper) where
 
-import qualified Data.UUID as UUID
-import qualified Data.Vector as Vector
+import Data.Vector qualified as Vector
 import Lucid
-import Lucid.HTMX
-import qualified Models.Projects.Projects as Projects
-import qualified Models.Users.Sessions as Sessions
-import qualified Models.Users.Users as Users
+import Models.Projects.Projects qualified as Projects
+import Models.Users.Sessions qualified as Sessions
+import Models.Users.Users qualified as Users
 import Optics.Operators ((^.))
 import Relude
 import Text.RawString.QQ

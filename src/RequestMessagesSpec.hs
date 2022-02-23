@@ -1,29 +1,20 @@
-{-# LANGUAGE DisambiguateRecordFields #-}
-{-# LANGUAGE OverloadedLists #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE QuasiQuotes #-}
-
 module RequestMessagesSpec where
 
-import Data.Aeson (Object, Value (Array, Bool, Null, Number, Object, String), decodeStrict, eitherDecode, eitherDecodeStrict)
 import Data.Aeson as AE
 import Data.Aeson.QQ
-import Data.Aeson.Types as AET
 import Data.Text.Encoding.Base64 as B64
 import Data.Time (secondsToNominalDiffTime)
-import qualified Data.Time as Time
+import Data.Time qualified as Time
 import Data.Time.LocalTime (calendarTimeTime)
-import qualified Data.UUID as UUID
-import qualified Data.UUID.V4 as UUIDV4
-import qualified Models.Apis.Endpoints as Endpoints
-import qualified Models.Apis.Fields as Fields
-import qualified Models.Apis.RequestDumps as RequestDumps
-import qualified Models.Projects.Projects as Projects
+import Data.UUID qualified as UUID
+import Data.UUID.V4 qualified as UUIDV4
+import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.Fields qualified as Fields
+import Models.Apis.RequestDumps qualified as RequestDumps
+import Models.Projects.Projects qualified as Projects
 import Relude
-import Relude.Unsafe (read)
-import qualified RequestMessages
+import RequestMessages qualified
 import Test.Hspec
-import Test.Hspec.DB (TestDB, describeDB, itDB)
 import Text.RawString.QQ (r)
 
 spec :: Spec
@@ -69,8 +60,9 @@ spec = do
                 urlPath = "/path/to/data",
                 protoMajor = 1,
                 protoMinor = 1,
-                durationMicroSecs = 50000,
-                duration = 500,
+                duration = 50000,
+                -- requestHeaders = fromList [],
+                -- responseHeaders = fromList [],
                 requestHeaders = [aesonQQ| {"Content-Type": "application/json"} |],
                 responseHeaders = [aesonQQ| {"X-Rand": "random-value"} |],
                 requestBody = B64.encodeBase64 [r|{"key": "value"}|],
@@ -79,8 +71,6 @@ spec = do
               }
 
       let resp = RequestMessages.requestMsgToDumpAndEndpoint requestMsg timestamp recId
-      putStrLn $ show resp
-
       let respDump =
             RequestDumps.RequestDump
               { id = recId,
@@ -174,8 +164,9 @@ spec = do
                 urlPath = "/path/to/data",
                 protoMajor = 1,
                 protoMinor = 1,
-                durationMicroSecs = 50000,
                 duration = 500,
+                -- requestHeaders = fromList [],
+                -- responseHeaders = fromList [],
                 requestHeaders = [aesonQQ| {"Content-Type": "application/json"} |],
                 responseHeaders = [aesonQQ| {"X-Rand": "random-value"} |],
                 requestBody = B64.encodeBase64 "",
@@ -184,7 +175,6 @@ spec = do
               }
 
       let resp = RequestMessages.requestMsgToDumpAndEndpoint requestMsg timestamp recId
-      putStrLn $ show resp
 
       let respDump =
             RequestDumps.RequestDump

@@ -1,9 +1,8 @@
 module SessionCookies where
 
-import qualified Data.UUID as UUID
-import qualified Models.Users.Sessions as Sessions
+import Data.UUID qualified as UUID
+import Models.Users.Sessions qualified as Sessions
 import Relude
-import Servant (Header, Headers, addHeader)
 import Web.Cookie
 
 -- | This function builds a cookie with the provided content

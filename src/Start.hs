@@ -91,7 +91,8 @@ startApp = do
       let serverCtx =
             Config.AuthContext
               { env = envConfig,
-                pool = poolConn
+                pool = poolConn,
+                logger = logger
               }
 
       logger <& "\n"

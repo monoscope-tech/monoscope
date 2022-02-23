@@ -10,31 +10,35 @@ module Models.Apis.Endpoints
   )
 where
 
-import qualified Data.Aeson as AE
-import qualified Data.Aeson.Types as AET
-import Data.Default
-import Data.Default.Instances
-import Data.Time (CalendarDiffTime, UTCTime, ZonedTime)
-import Data.Time.Clock (DiffTime, NominalDiffTime)
-import qualified Data.UUID as UUID
-import qualified Data.Vector as Vector
+import Data.Aeson qualified as AE
+import Data.Default (Default)
+import Data.Default.Instances ()
+import Data.Time (ZonedTime)
+import Data.UUID qualified as UUID
+import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity (selectById, selectManyByField)
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, queryOne, query_, withPool)
-import Database.PostgreSQL.Entity.Internal.QQ
-import qualified Database.PostgreSQL.Entity.Types as PET
-import Database.PostgreSQL.Simple (Connection, FromRow, Only (Only), ToRow, query_)
+import Database.PostgreSQL.Entity.DBT (QueryNature (..), queryOne)
+import Database.PostgreSQL.Entity.Internal.QQ (field)
+import Database.PostgreSQL.Entity.Types qualified as PET
+import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
-import qualified Database.PostgreSQL.Transact as PgT
-import qualified Deriving.Aeson as DAE
+import Database.PostgreSQL.Transact qualified as PgT
 import GHC.Generics (Generic)
-import qualified Models.Projects.Projects as Projects
-import Optics.Operators
-import Optics.TH
+import Models.Projects.Projects qualified as Projects
+import Optics.Operators ((^.))
+import Optics.TH (makeFieldLabelsNoPrefix)
 import Relude
-import qualified Relude.Unsafe as Unsafe
-import Web.HttpApiData
+  ( Bool (True),
+    Eq ((==)),
+    IO,
+    Maybe,
+    Ord,
+    Show,
+    Text,
+  )
+import Web.HttpApiData (FromHttpApiData)
 
 -- Added only for satisfying the tests
 instance Eq ZonedTime where

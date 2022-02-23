@@ -38,7 +38,7 @@ clientMetadataH authTextM = do
       case authTextE of
         Left err -> traceShowM err >> throwError err300
         Right authText -> do
-          let decryptedKey = ProjectApiKeys.decryptAPIKey (encodeUtf8 $ env ^. #apiKeyEncryptionSecretKey) (authText)
+          let decryptedKey = ProjectApiKeys.decryptAPIKey (encodeUtf8 $ env ^. #apiKeyEncryptionSecretKey) authText
           case ProjectApiKeys.ProjectApiKeyId <$> UUID.fromASCIIBytes decryptedKey of
             Nothing -> throwError err300
             Just apiKeyUUID -> do

@@ -13,35 +13,25 @@ module Models.Apis.Fields
   )
 where
 
-import qualified Data.Aeson as AE
-import qualified Data.Aeson.Types as AET
 import Data.Default
-import Data.Default.Instances
-import Data.HashMap.Strict as HM (fromList)
 import Data.List (groupBy)
-import qualified Data.Map as Map
-import Data.Time (CalendarDiffTime, UTCTime, ZonedTime)
-import Data.Time.Clock (DiffTime, NominalDiffTime)
-import qualified Data.UUID as UUID
+import Data.Time (ZonedTime)
+import Data.UUID qualified as UUID
 import Data.Vector as Vector (Vector, fromList, toList)
-import Database.PostgreSQL.Entity (selectById, selectManyByField)
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, queryOne, query_, withPool)
-import Database.PostgreSQL.Entity.Internal.QQ (field)
+import Database.PostgreSQL.Entity (selectById)
+import Database.PostgreSQL.Entity.DBT (QueryNature (..), query)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
-import Database.PostgreSQL.Simple (Connection, FromRow, Only (Only), ResultError (..), ToRow, query_)
+import Database.PostgreSQL.Simple (FromRow, Only, ResultError (..), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, fromField, returnError)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
 import Database.PostgreSQL.Transact as PgT (DBT, queryOne)
-import qualified Deriving.Aeson as DAE
-import GHC.Generics (Generic)
-import qualified Models.Apis.Endpoints as Endpoints
-import qualified Models.Projects.Projects as Projects
+import Models.Apis.Endpoints qualified as Endpoints
+import Models.Projects.Projects qualified as Projects
 import Optics.Operators
 import Optics.TH
 import Relude
 import Relude.Unsafe ((!!))
-import qualified Relude.Unsafe as Unsafe
 import Web.HttpApiData (FromHttpApiData)
 
 newtype FieldId = FieldId {unFieldId :: UUID.UUID}

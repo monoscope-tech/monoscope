@@ -1,3 +1,4 @@
+{-# LANGUAGE DuplicateRecordFields #-}
 module Models.Projects.ProjectsEmail () where
 
 import qualified Data.Text as T
@@ -19,9 +20,9 @@ class ToText a where
 instance TC.ToText (IO (Maybe String))
 
 sendGridApiKey :: ApiKey
-sendGridApiKey = 
-  let 
-    env = TC.toText $ SE.lookupEnv "SENDGRIDAPIKEY"
+sendGridApiKey =
+  let
+    env = TC.toText $ lookupEnv "SENDGRIDAPIKEY"
   in ApiKey env
 
 
@@ -30,14 +31,14 @@ class GHC.Exts.IsString a => SafeIsString a where
   fromString :: String -> a
   fromString = GHC.Exts.fromString
 
-instance SafeIsString String 
-instance SafeIsString T.Text 
+instance SafeIsString String
+instance SafeIsString T.Text
 
 contentMail :: T.Text
 contentMail =
     mailBody <>
     link
-  where 
+  where
     mailBody = "ApiToolKit Mail Invite. Click on the link below"
     link = "<a href =https://apitoolkit.io>"
 

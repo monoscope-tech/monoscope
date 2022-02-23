@@ -16,30 +16,21 @@ module Models.Projects.ProjectMembers
   )
 where
 
-import qualified Data.Aeson as AE
-import qualified Data.Aeson.Types as AET
 import Data.Default (Default)
 import Data.Default.Instances ()
-import Data.Text (Text)
-import qualified Data.Text as T
-import Data.Time (CalendarDiffTime, UTCTime, ZonedTime)
-import Data.Time.Clock (DiffTime, NominalDiffTime)
-import qualified Data.UUID as UUID
-import Data.Valor (Valid, Valor, check1, failIf, validateM)
-import qualified Data.Valor as Valor
-import qualified Data.Vector as Vector
+import Data.Text qualified as T
+import Data.Time (ZonedTime)
+import Data.UUID qualified as UUID
+import Data.Valor (Valor, check1, failIf)
 import Database.PostgreSQL.Entity (delete)
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, queryOne, query_, withPool)
-import qualified Database.PostgreSQL.Entity.Types as PET
-import Database.PostgreSQL.Simple (Connection, FromRow, Only (Only), ResultError (..), ToRow, query_)
+import Database.PostgreSQL.Entity.Types qualified as PET
+import Database.PostgreSQL.Simple (FromRow, Only (Only), ResultError (..), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, fromField, returnError)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
-import qualified Database.PostgreSQL.Transact as PgT
-import qualified Deriving.Aeson as DAE
-import GHC.Generics (Generic)
-import qualified Models.Projects.Projects as Projects
-import qualified Models.Users.Users as Users
+import Database.PostgreSQL.Transact qualified as PgT
+import Models.Projects.Projects qualified as Projects
+import Models.Users.Users qualified as Users
 import Optics.Operators ()
 import Optics.TH (makeFieldLabelsNoPrefix)
 import Relude

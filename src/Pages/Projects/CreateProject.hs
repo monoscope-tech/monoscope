@@ -14,7 +14,6 @@ module Pages.Projects.CreateProject
 where
 
 import Config
-import Control.Concurrent (forkIO)
 import Data.Default
 import Data.Maybe (isJust)
 import qualified Data.Text as T
@@ -27,19 +26,16 @@ import qualified Data.Vector as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import Lucid.HTMX
-import qualified Models.Projects.ProjectMembers as ProjectMembers
-import qualified Models.Projects.Projects as Projects
-import qualified Models.Users.Sessions as Sessions
-import qualified Models.Users.Users as Users
+import Models.Projects.ProjectMembers qualified as ProjectMembers
+import Models.Projects.Projects qualified as Projects
+import Models.Users.Sessions qualified as Sessions
 import Optics.Core ((^.))
 import Pages.BodyWrapper (bodyWrapper)
 import Relude
 import Servant
-  ( Handler,
-    addHeader,
+  ( addHeader,
     noHeader,
   )
-import Servant.HTML.Lucid
 import Text.RawString.QQ
 import Web.FormUrlEncoded (FromForm)
 
@@ -124,10 +120,7 @@ createProjectPostH sess createP = do
       _ <- liftIO $
         withPool pool $ do
           Projects.insertProject (createProjectFormToModel pid cp)
-          traceShowM "Before pm"
           ProjectMembers.insertProjectMembers projectMembers
-          traceShowM projectMembers
-          traceShowM "after pm"
           pass
 
       pure $ addHeader "HX-Trigger" $ addHeader "/" $ createProjectBody cp (def @CreateProjectFormError)

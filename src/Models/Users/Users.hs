@@ -1,38 +1,27 @@
-{-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 module Models.Users.Users where
 
 import Data.Aeson (FromJSON (parseJSON), ToJSON (toJSON))
-import qualified Data.Aeson as AE
-import qualified Data.Aeson.Types as AET
 import Data.CaseInsensitive (CI)
-import qualified Data.CaseInsensitive as CI
+import Data.CaseInsensitive qualified as CI
 import Data.Default
-import Data.Default.Instances
-import qualified Data.Text as Text
-import Data.Time (CalendarDiffTime, UTCTime, ZonedTime, getZonedTime)
-import Data.Time.Clock (DiffTime, NominalDiffTime)
-import qualified Data.UUID as UUID
-import qualified Data.UUID.V4 as UUIDV4
-import qualified Data.Vector as Vector
+import Data.Time (ZonedTime, getZonedTime)
+import Data.UUID qualified as UUID
+import Data.UUID.V4 qualified as UUIDV4
 import Database.PostgreSQL.Entity
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, queryOne, query_, withPool)
+import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute)
 import Database.PostgreSQL.Entity.Internal.QQ (field)
-import qualified Database.PostgreSQL.Entity.Types as PET
-import Database.PostgreSQL.Simple (Connection, FromRow, Only (Only), ToRow, query_)
-import Database.PostgreSQL.Simple.FromField (Format (Text), FromField)
-import Database.PostgreSQL.Simple.Newtypes (Aeson)
+import Database.PostgreSQL.Entity.Types qualified as PET
+import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
+import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
-import qualified Database.PostgreSQL.Transact as PgT
-import qualified Deriving.Aeson as DAE
-import GHC.Generics (Generic)
-import Optics.Operators
+import Database.PostgreSQL.Transact qualified as PgT
+import Deriving.Aeson qualified as DAE
 import Optics.TH
 import Optics.TH (makeFieldLabelsNoPrefix)
 import Relude
-import qualified Relude.Unsafe as Unsafe
 
 instance FromJSON (CI Text) where
   parseJSON = fmap CI.mk . parseJSON
