@@ -1,11 +1,11 @@
 {-# LANGUAGE FlexibleContexts #-}
 
-module Web.Auth where
+module Web.Auth (logoutH, loginRedirectH, loginH, authCallbackH,genAuthServerContext) where
 
 import Config (DashboardM, env, pool)
 import Control.Error (note)
 import Control.Lens qualified as L
-import Control.Monad.Trans.Either (hoistMaybe, runEitherT)
+import Control.Monad.Trans.Either (runEitherT)
 import Data.Aeson.Lens (key, _String)
 import Data.Map.Strict qualified as Map
 import Data.Pool (Pool)
@@ -64,7 +64,6 @@ loginRedirectH ::
         NoContent
     )
 loginRedirectH = do
-  envCfg <- asks env
   let redirectTo = "/login"
   pure $ addHeader redirectTo $ addHeader emptySessionCookie NoContent
 
@@ -77,9 +76,8 @@ loginH ::
     )
 loginH = do
   envCfg <- asks env
-  state <- liftIO $ UUID.toText <$> UUIDV4.nextRandom
-  let redirectTo = envCfg ^. #auth0Domain <> "/authorize?response_type=code&client_id=" <> envCfg ^. #auth0ClientId <> "&redirect_uri=" <> envCfg ^. #auth0Callback <> "&state=" <> state <> "&scope=openid profile email"
-  traceShowM redirectTo
+  stateVar <- liftIO $ UUID.toText <$> UUIDV4.nextRandom
+  let redirectTo = envCfg ^. #auth0Domain <> "/authorize?response_type=code&client_id=" <> envCfg ^. #auth0ClientId <> "&redirect_uri=" <> envCfg ^. #auth0Callback <> "&state=" <> stateVar <> "&scope=openid profile email"
   pure $ addHeader redirectTo $ addHeader emptySessionCookie NoContent
 
 -- authCallbackH will accept a request with code and state, and use that code to queery auth- for an auth token, and then for user info
@@ -87,19 +85,18 @@ loginH = do
 -- would simply create a new session. If we dont have the user (by that email), then create the user and still create a session with that user.
 authCallbackH ::
   Maybe Text ->
-  Maybe Text ->
+  Maybe Text -> -- ^ state variable from auth0
   DashboardM
     ( Headers
         '[Header "Location" Text, Header "Set-Cookie" SetCookie]
         (Html ())
     )
-authCallbackH codeM stateM = do
+authCallbackH codeM _ = do
   envCfg <- asks env
   pool <- asks pool
 
   resp <- runEitherT $ do
-    state <- hoistMaybe "invalid state " stateM
-    code <- hoistMaybe "invalid code " codeM
+    code <- hoistEither $ note "invalid code " codeM
     r <-
       liftIO $
         post
@@ -112,15 +109,15 @@ authCallbackH codeM stateM = do
             ] ::
               [FormParam]
           )
-    accessToken <- hoistMaybe "invalid access_token in response" $ r L.^? responseBody . key "access_token" . _String
+    accessToken <- hoistEither $ note "invalid access_token in response" $ r L.^? responseBody . key "access_token" . _String
     let opts = defaults & header "Authorization" L..~ ["Bearer " <> encodeUtf8 @Text @ByteString accessToken]
-    r <- liftIO $ getWith opts (toString $ envCfg ^. #auth0Domain <> "/userinfo")
-    let email = fromMaybe "" $ r L.^? responseBody . key "email" . _String
-    let firstName = fromMaybe "" $ r L.^? responseBody . key "given_name" . _String
-    let lastName = fromMaybe "" $ r L.^? responseBody . key "family_name" . _String
+    resp <- liftIO $ getWith opts (toString $ envCfg ^. #auth0Domain <> "/userinfo")
+    let email = fromMaybe "" $ resp L.^? responseBody . key "email" . _String
+    let firstName = fromMaybe "" $ resp L.^? responseBody . key "given_name" . _String
+    let lastName = fromMaybe "" $ resp L.^? responseBody . key "family_name" . _String
     -- TODO: For users with no profile photos or empty profile photos, use gravatars as their profile photo
     -- https://en.gravatar.com/site/implement/images/
-    let picture = fromMaybe "" $ r L.^? responseBody . key "picture" . _String
+    let picture = fromMaybe "" $ resp L.^? responseBody . key "picture" . _String
 
     liftIO $
       withPool pool $ do
@@ -134,9 +131,6 @@ authCallbackH codeM stateM = do
         persistentSessId <- liftIO Sessions.newPersistentSessionId
         Sessions.insertSession persistentSessId userId (Sessions.SessionData Map.empty)
         pure persistentSessId
-
-  traceShowM "RESP from auth callback"
-  traceShowM resp
 
   case resp of
     Left err -> putStrLn ("unable to process auth callback page " <> err) >> (throwError $ err302 {errHeaders = [("Location", "/login?auth0_callback_failure")]}) >> pure (noHeader $ noHeader $ toHtml "")
@@ -165,12 +159,12 @@ authHandler conn = mkAuthHandler handler
 
 -- We need to handle errors for the persistent session better and redirect if there's an error
 lookupAccount :: Pool Connection -> ByteString -> Handler Sessions.PersistentSession
-lookupAccount conn key = do
+lookupAccount conn keyV = do
   resp <- runEitherT $ do
-    pid <- hoistMaybe "unable to convert cookie value to persistent session UUID" (Sessions.PersistentSessionId <$> UUID.fromASCIIBytes key)
+    pid <- hoistEither $ note "unable to convert cookie value to persistent session UUID" (Sessions.PersistentSessionId <$> UUID.fromASCIIBytes keyV)
     presistentSess <- liftIO $ withPool conn $ Sessions.getPersistentSession pid
-    hoistMaybe "lookupAccount: invalid persistentID " presistentSess
+    hoistEither $ note "lookupAccount: invalid persistentID " presistentSess
   case resp of
-    Left err -> do
+    Left _ -> do
       throwError $ err302 {errHeaders = [("Location", "/to_login")]}
     Right session -> pure session

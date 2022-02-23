@@ -2,72 +2,29 @@
 
 module Server (app) where
 
-import Config (AuthContext, DashboardM, EnvConfig, HeadersTrigger, HeadersTriggerRedirect, ctxToHandler, env, pool)
-import qualified Control.Lens as L
-import Control.Monad.Trans.Either
-import qualified Crypto.JOSE.Compact
-import qualified Crypto.JOSE.JWK
-import qualified Crypto.JWT
-import Data.Aeson.Lens (key, _String)
+import Config (AuthContext, DashboardM, HeadersTrigger, HeadersTriggerRedirect, ctxToHandler, env, pool)
 import Data.Pool (Pool)
-import Data.Time.LocalTime (getZonedTime)
-import qualified Data.UUID as UUID
-import qualified Data.UUID.V4 as UUIDV4
-import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (Connection)
 import Lucid
-import qualified Models.Apis.Endpoints as Endpoints
-import qualified Models.Apis.Fields as Fields
-import qualified Models.Projects.Projects as Projects
-import qualified Models.Users.Sessions as Sessions
-import qualified Models.Users.Users as Users
-import Network.Wai (Application, Request)
-import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
-import Optics.Operators
-import qualified Pages.Api as Api
-import qualified Pages.Dashboard as Dashboard
-import qualified Pages.Endpoints.EndpointDetails as EndpointDetails
-import qualified Pages.Endpoints.EndpointList as EndpointList
-import qualified Pages.ManualIngestion as ManualIngestion
-import qualified Pages.Projects.CreateProject as CreateProject
-import qualified Pages.Projects.ListProjects as ListProjects
-import Relude hiding (hoistMaybe)
-import qualified RequestMessages
+import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.Fields qualified as Fields
+import Models.Projects.Projects qualified as Projects
+import Models.Users.Sessions qualified as Sessions
+import Network.Wai (Request)
+import Pages.Api qualified as Api
+import Pages.Dashboard qualified as Dashboard
+import Pages.Endpoints.EndpointDetails qualified as EndpointDetails
+import Pages.Endpoints.EndpointList qualified as EndpointList
+import Pages.ManualIngestion qualified as ManualIngestion
+import Pages.Projects.CreateProject qualified as CreateProject
+import Pages.Projects.ListProjects qualified as ListProjects
+import Relude
 import Servant
-  ( AuthProtect,
-    Capture,
-    Context (EmptyContext, (:.)),
-    FormUrlEncoded,
-    Get,
-    Handler,
-    Header,
-    Headers,
-    JSON,
-    NoContent (..),
-    Post,
-    QueryParam,
-    Raw,
-    ReqBody,
-    ServerError (errHeaders),
-    ServerT,
-    StdMethod (GET),
-    Verb,
-    addHeader,
-    hoistServer,
-    hoistServerWithContext,
-    noHeader,
-    serve,
-    serveWithContext,
-    throwError,
-    type (:<|>) (..),
-    type (:>),
-  )
 import Servant.HTML.Lucid
-import Servant.Server.Experimental.Auth (AuthHandler, AuthServerData, mkAuthHandler)
+import Servant.Server.Experimental.Auth (AuthHandler, AuthServerData)
 import Servant.Server.StaticFiles
-import SessionCookies (craftSessionCookie)
-import Web.Auth
-import qualified Web.ClientMetadata as ClientMetadata
+import Web.Auth (authCallbackH, genAuthServerContext, loginH, loginRedirectH, logoutH)
+import Web.ClientMetadata qualified as ClientMetadata
 import Web.Cookie (SetCookie)
 
 type GetRedirect = Verb 'GET 302

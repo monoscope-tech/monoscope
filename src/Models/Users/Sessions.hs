@@ -1,4 +1,17 @@
-module Models.Users.Sessions where
+module Models.Users.Sessions
+  ( PersistentSessionId (..),
+    PersistentSession (..),
+    SessionData (..),
+    PSUser (..),
+    PSProjects (..),
+    persistSession,
+    insertSession,
+    deleteSession,
+    getPersistentSession,
+    lookup,
+    newPersistentSessionId,
+  )
+where
 
 import Control.Monad.IO.Class
 import Data.Default

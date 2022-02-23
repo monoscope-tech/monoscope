@@ -86,7 +86,7 @@ library
       QuasiQuotes
       DisambiguateRecordFields
       ImportQualifiedPost
-  ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -fforce-recomp
+  ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -fforce-recomp -Wno-orphans
   build-depends:
       aeson
     , aeson-qq
@@ -124,7 +124,7 @@ library
     , postgresql-simple
     , raw-strings-qq
     , regex-tdfa
-    , relude
+    , relude >=1.0.0.1
     , resource-pool
     , resourcet
     , scientific
@@ -175,7 +175,7 @@ executable apitoolkit-server-exe
       QuasiQuotes
       DisambiguateRecordFields
       ImportQualifiedPost
-  ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -fforce-recomp -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
+  ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -fforce-recomp -Wno-orphans -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
   build-depends:
       aeson
     , aeson-qq
@@ -214,7 +214,7 @@ executable apitoolkit-server-exe
     , postgresql-simple
     , raw-strings-qq
     , regex-tdfa
-    , relude
+    , relude >=1.0.0.1
     , resource-pool
     , resourcet
     , scientific

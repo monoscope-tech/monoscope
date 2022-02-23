@@ -4,13 +4,13 @@ import Config (AuthContext (env, pool), DashboardM)
 import Data.Aeson (Value)
 import Data.Aeson.QQ (aesonQQ)
 import Data.Aeson.Types (ToJSON)
-import qualified Data.ByteString.Base64 as B64
-import qualified Data.Text as T
-import qualified Data.UUID as UUID
+import Data.ByteString.Base64 qualified as B64
+import Data.Text qualified as T
+import Data.UUID qualified as UUID
 import Database.PostgreSQL.Entity.DBT (withPool)
-import qualified Deriving.Aeson as DAE
-import qualified Models.Projects.ProjectApiKeys as ProjectApiKeys
-import qualified Models.Projects.Projects as Projects
+import Deriving.Aeson qualified as DAE
+import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
+import Models.Projects.Projects qualified as Projects
 import Optics.Core ((^.))
 import Relude
 import Servant (err300, throwError)
@@ -27,7 +27,6 @@ data ClientMetadata = ClientMetadata
 
 clientMetadataH :: Maybe Text -> DashboardM ClientMetadata
 clientMetadataH authTextM = do
-  traceShowM authTextM
   case authTextM of
     Nothing -> throwError err300
     Just authTextB64 -> do

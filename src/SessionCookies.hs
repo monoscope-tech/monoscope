@@ -1,4 +1,4 @@
-module SessionCookies where
+module SessionCookies (craftSessionCookie, emptySessionCookie) where
 
 import Data.UUID qualified as UUID
 import Models.Users.Sessions qualified as Sessions

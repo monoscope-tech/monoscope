@@ -21,6 +21,7 @@ ghc-options:
 - -Wno-monomorphism-restriction # Don’t warn if the monomorphism restriction is used
 - -Wno-missing-safe-haskell-mode
 - -fforce-recomp
+- -Wno-orphans
 # cc-options: -static
 # ld-options: -static -pthread
 
@@ -69,7 +70,7 @@ dependencies:
   - aeson
   - data-default-extra
   - time
-  - relude
+  - relude >=1.0.0.1
   - uuid
   - optics-th
   - vector

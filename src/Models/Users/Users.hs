@@ -6,6 +6,7 @@ import Data.Aeson (FromJSON (parseJSON), ToJSON (toJSON))
 import Data.CaseInsensitive (CI)
 import Data.CaseInsensitive qualified as CI
 import Data.Default
+import Data.Default.Instances ()
 import Data.Time (ZonedTime, getZonedTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4

@@ -24,7 +24,7 @@ import Relude.Unsafe (fromJust)
 import RequestMessages qualified
 
 processMessage :: LogAction IO String -> Config.EnvConfig -> Pool Connection -> PubSub.ReceivedMessage -> IO (Maybe Text)
-processMessage logger envConfig conn msg = do
+processMessage logger _ conn msg = do
   let rmMsg = msg ^? PubSub.rmMessage . _Just . PubSub.pmData . _Just
   let decodedMsg = B64.decodeBase64 $ fromJust rmMsg
   let jsonByteStr = fromRight "{}" decodedMsg
@@ -53,5 +53,5 @@ processRequestMessage logger pool requestMsg = do
         case enpResp of
           Nothing -> error "error"
           Just (enpID, _, _) -> do
-            Fields.upsertFields enpID fields
+            _ <- Fields.upsertFields enpID fields
             pass

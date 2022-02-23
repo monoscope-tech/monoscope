@@ -1,35 +1,15 @@
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DeriveAnyClass #-}
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE DerivingVia #-}
-{-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE OverloadedLabels #-}
 {-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE UndecidableInstances #-}
 
-module Config where
+module Config (EnvConfig (..), AuthContext (..), DashboardM, HeadersTriggerRedirect, HeadersTrigger, ctxToHandler) where
 
 import Colog (LogAction)
-import Data.Default
 import Data.Pool as Pool
-import qualified Data.UUID as UUID
-import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (Connection)
-import qualified Models.Users.Sessions as Sessions
-import Network.Wai (Request, requestHeaders)
 import Optics.TH
 import Relude
-import Servant (Header, Headers, ServerError (errBody, errHeaders), err301, err401, throwError)
+import Servant (Header, Headers)
 import Servant.Server (Handler)
-import Servant.Server.Experimental.Auth
 import System.Envy (FromEnv)
-import Web.Cookie
-import Prelude (lookup)
 
 data EnvConfig = EnvConfig
   { databaseUrl :: Text, -- "DATABASE_URL"

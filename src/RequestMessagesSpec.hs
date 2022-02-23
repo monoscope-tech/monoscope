@@ -1,4 +1,4 @@
-module RequestMessagesSpec where
+module RequestMessagesSpec (spec) where
 
 import Data.Aeson as AE
 import Data.Aeson.QQ

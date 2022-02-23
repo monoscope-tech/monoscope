@@ -16,29 +16,22 @@ module Models.Projects.Projects
 where
 
 import Data.Aeson (FromJSON, ToJSON)
-import qualified Data.Aeson as AE
-import qualified Data.Aeson.Types as AET
 import Data.Default
-import Data.Default.Instances
-import Data.Time (CalendarDiffTime, UTCTime, ZonedTime)
-import Data.Time.Clock (DiffTime, NominalDiffTime)
-import qualified Data.UUID as UUID
-import qualified Data.Vector as Vector
+import Data.Time (ZonedTime)
+import Data.UUID qualified as UUID
+import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, queryOne, query_, withPool)
-import qualified Database.PostgreSQL.Entity.Types as PET
-import Database.PostgreSQL.Simple (Connection, FromRow, Only (Only), ToRow, query_)
+import Database.PostgreSQL.Entity.DBT (QueryNature (..), query, queryOne)
+import Database.PostgreSQL.Entity.Types qualified as PET
+import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
-import qualified Database.PostgreSQL.Transact as PgT
-import qualified Deriving.Aeson as DAE
-import GHC.Generics (Generic)
-import qualified Models.Users.Users as Users
-import Optics.Operators
+import Database.PostgreSQL.Transact qualified as PgT
+import Deriving.Aeson qualified as DAE
+import Models.Users.Users qualified as Users
 import Optics.TH
 import Relude
-import qualified Relude.Unsafe as Unsafe
 import Web.HttpApiData
 
 newtype ProjectId = ProjectId {unProjectId :: UUID.UUID}

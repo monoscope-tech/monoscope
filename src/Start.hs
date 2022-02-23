@@ -9,48 +9,26 @@ module Start
 where
 
 import Colog.Core (LogAction (..), logStringStdout, (<&))
-import qualified Config
+import Config qualified
 import Configuration.Dotenv as Dotenv
 import Control.Concurrent.Async
-import Control.Exception (catch, try)
-import qualified Control.Lens as L
-import Control.Monad (when)
-import Control.Monad.Trans.Resource (ResourceT, liftResourceT, runResourceT)
-import Data.Aeson
-  ( FromJSON,
-    Object,
-    ToJSON,
-    eitherDecode,
-  )
-import Data.Aeson as Aeson
-import Data.Aeson.TH (deriveJSON)
-import Data.ByteString.Base64 as B64 (decodeBase64)
+import Control.Exception (try)
+import Control.Lens qualified as L
+import Control.Monad.Trans.Resource (runResourceT)
 import Data.Pool as Pool
 import Database.PostgreSQL.Entity.DBT (withPool)
-import Database.PostgreSQL.Simple (Connection, Only (Only), close, connectPostgreSQL, query_)
-import Database.PostgreSQL.Simple.Migration (MigrationCommand (MigrationDirectory), runMigration)
+import Database.PostgreSQL.Simple (Connection, close, connectPostgreSQL)
 import Database.PostgreSQL.Simple.Migration as Migrations
-import Deriving.Aeson
-  ( CamelToSnake,
-    CustomJSON (CustomJSON),
-    FieldLabelModifier,
-    Generic,
-    OmitNothingFields,
-    StripPrefix,
-  )
 import GHC.Generics ()
-import qualified Models.Users.Users as Users
-import qualified Network.Google as Google
-import qualified Network.Google.Env as Env
-import qualified Network.Google.PubSub as PubSub
-import qualified Network.Google.Resource.PubSub.Projects.Subscriptions.Pull as PubSubPull
+import Models.Users.Users qualified as Users
+import Network.Google qualified as Google
+import Network.Google.PubSub qualified as PubSub
 import Network.Wai.Handler.Warp (run)
 import Optics.Operators
 import ProcessMessage
 import Relude
-import qualified Relude.Unsafe as Unsafe
-import qualified Server
-import System.Envy (FromEnv, Option (Option), decodeEnv, gFromEnvCustom, runEnv)
+import Server qualified
+import System.Envy (decodeEnv)
 
 startApp :: IO ()
 startApp = do
