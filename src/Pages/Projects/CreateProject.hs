@@ -136,7 +136,6 @@ invMemberH invP = do
       let pid = Projects.ProjectId puid
       let invMember = inviteProjectMember pid uid inv -- inv should be the permission section of the form
       let memberEmail = ProjectEmail.sendEmail inv -- email section
-
       _ <- liftIO $ 
         withPool pool $ do
           ProjectMembers.insertProjectMembers [invMember]
