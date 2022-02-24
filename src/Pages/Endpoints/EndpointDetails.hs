@@ -40,24 +40,18 @@ fieldDetailsView :: Fields.Field -> Vector Formats.Format -> Html ()
 fieldDetailsView field formats = do
   img_ [src_ "/assets/svgs/ellipsis.svg", class_ "my-2 float-right"]
   h3_ [class_ "text-lg text-slate-700 mt-6"] $ toHtml $ field ^. #key
-  formats
-    & mapM_
-      ( \format -> do
-          div_ [class_ "flex mt-5 flex-row"] $ do
-            div_ [class_ ""] $ do
-              h6_ [class_ "text-slate-600 text-xs"] "TYPE"
-              h4_ [class_ "text-base text-slate-600"] $ toHtml $ show $ format ^. #fieldType
-            div_ [class_ "mx-5"] $ do
-              h6_ [class_ "text-slate-600 text-xs"] "FORMAT"
-              h4_ [class_ "text-base text-slate-600"] $ toHtml $ format ^. #fieldFormat
-          h6_ [class_ "text-slate-600 mt-4 text-xs"] "EXAMPLE VALUES"
-          ul_ [class_ "list-disc"] $ do
-            format ^. #examples
-              & mapM_
-                ( \ex -> do
-                    li_ [class_ "ml-10 text-slate-600 text-sm"] $ toHtml ex
-                )
-      )
+  formats & mapM_ \format -> do
+    div_ [class_ "flex mt-5 flex-row"] $ do
+      div_ [class_ ""] $ do
+        h6_ [class_ "text-slate-600 text-xs"] "TYPE"
+        h4_ [class_ "text-base text-slate-600"] $ toHtml $ show $ format ^. #fieldType
+      div_ [class_ "mx-5"] $ do
+        h6_ [class_ "text-slate-600 text-xs"] "FORMAT"
+        h4_ [class_ "text-base text-slate-600"] $ toHtml $ format ^. #fieldFormat
+    h6_ [class_ "text-slate-600 mt-4 text-xs"] "EXAMPLE VALUES"
+    ul_ [class_ "list-disc"] $ do
+      format ^. #examples & mapM_ \ex -> do
+        li_ [class_ "ml-10 text-slate-600 text-sm"] $ toHtml ex
   div_ [class_ "flex flex-row justify-between mt-10 "] $ do
     div_ [class_ " "] $ do
       h4_ [class_ "text-sm text-slate-600 mb-2"] "CREATION DATE"
@@ -142,55 +136,49 @@ subSubSection title fieldsM = do
         div_ [class_ "flex flex-row "] $ do
           img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-4 mr-3 mt-4 w-4"]
           div_ [class_ "bg-gray-100 px-10 rounded-xl w-full p-4 text-sm text-slate-600"] $ toHtml title
-        fieldsToNormalized fields
-          & mapM_
-            ( \(key, fieldM) -> do
-                let segments = splitOn "." key
-                let depth = length segments
-                let depthPadding = "margin-left:" <> show (20 + (depth * 20)) <> "px"
-                let displayKey = replace "»" "" $ last ("" :| segments)
-                case fieldM of
-                  Nothing -> do
-                    a_ [class_ "flex flex-row cursor-pointer", style_ depthPadding, term "data-depth" $ show depth] $ do
-                      img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-4 mr-3 mt-4 w-4"]
-                      div_ [class_ "border flex flex-row border-gray-100 px-5 p-3 rounded-xl w-full"] $ do
-                        input_ [type_ "checkbox", class_ " mr-12 m-1"]
-                        span_ [class_ "grow text-sm text-slate-600"] $ toHtml displayKey
-                        span_ [class_ "text-sm text-slate-500 mx-12"] $ toHtml $ if "»" `isInfixOf` key then "[]" else "{}"
-                  Just field -> do
-                    a_
-                      [ hxGet_ $ "/p/" <> Projects.projectIdText (field ^. #projectId) <> "/fields/" <> UUID.toText (Fields.unFieldId $ field ^. #id),
-                        hxTarget_ "#detailSidebar",
-                        class_ "flex flex-row cursor-pointer",
-                        style_ depthPadding,
-                        term "data-depth" $ show depth
-                      ]
-                      $ do
-                        img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-4 mr-3 mt-4 w-4 ", style_ "visibility: hidden"]
-                        div_ [class_ "border flex flex-row border-gray-100 px-5 p-3 rounded-xl w-full"] $ do
-                          input_ [type_ "checkbox", class_ " mr-12 m-1"]
-                          span_ [class_ "grow text-sm text-slate-600"] $ toHtml displayKey
-                          span_ [class_ "text-sm text-slate-500 mx-12"] $ toHtml $ show $ field ^. #fieldType
-                          img_ [src_ "/assets/svgs/alert-red.svg", class_ " mx-10 "]
-                          img_ [src_ "/assets/svgs/dots-vertical.svg", class_ "mx-5"]
-            )
+        fieldsToNormalized fields & mapM_ \(key, fieldM) -> do
+          let segments = splitOn "." key
+          let depth = length segments
+          let depthPadding = "margin-left:" <> show (20 + (depth * 20)) <> "px"
+          let displayKey = replace "»" "" $ last ("" :| segments)
+          case fieldM of
+            Nothing -> do
+              a_ [class_ "flex flex-row cursor-pointer", style_ depthPadding, term "data-depth" $ show depth] $ do
+                img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-4 mr-3 mt-4 w-4"]
+                div_ [class_ "border flex flex-row border-gray-100 px-5 p-3 rounded-xl w-full"] $ do
+                  input_ [type_ "checkbox", class_ " mr-12 m-1"]
+                  span_ [class_ "grow text-sm text-slate-600"] $ toHtml displayKey
+                  span_ [class_ "text-sm text-slate-500 mx-12"] $ toHtml $ if "»" `isInfixOf` key then "[]" else "{}"
+            Just field -> do
+              a_
+                [ hxGet_ $ "/p/" <> Projects.projectIdText (field ^. #projectId) <> "/fields/" <> UUID.toText (Fields.unFieldId $ field ^. #id),
+                  hxTarget_ "#detailSidebar",
+                  class_ "flex flex-row cursor-pointer",
+                  style_ depthPadding,
+                  term "data-depth" $ show depth
+                ]
+                $ do
+                  img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-4 mr-3 mt-4 w-4 ", style_ "visibility: hidden"]
+                  div_ [class_ "border flex flex-row border-gray-100 px-5 p-3 rounded-xl w-full"] $ do
+                    input_ [type_ "checkbox", class_ " mr-12 m-1"]
+                    span_ [class_ "grow text-sm text-slate-600"] $ toHtml displayKey
+                    span_ [class_ "text-sm text-slate-500 mx-12"] $ toHtml $ show $ field ^. #fieldType
+                    img_ [src_ "/assets/svgs/alert-red.svg", class_ " mx-10 "]
+                    img_ [src_ "/assets/svgs/dots-vertical.svg", class_ "mx-5"]
         div_ [class_ " border-2 border-dashed flex mb-5 flex-row border-gray-100 ml-5  px-5 p-3 rounded-xl mt-2 "] $ do
           img_ [src_ "/assets/svgs/blue-plus.svg", class_ "mx-2"]
           span_ [class_ "text-blue-700 font-medium text-base "] "Add a field"
 
 fieldsToNormalized :: [Fields.Field] -> [(Text, Maybe Fields.Field)]
 fieldsToNormalized =
-  sortNub
-    . concatMap
-      ( \field ->
-          map
-            ((,Nothing) . fst)
-            ( (field ^. #keyPathStr)
-                & keyPathStrToKey
-                & breakOnAll "."
-            )
-            & (++ [(keyPathStrToKey $ field ^. #keyPathStr, Just field)])
+  sortNub . concatMap \field ->
+    map
+      ((,Nothing) . fst)
+      ( (field ^. #keyPathStr)
+          & keyPathStrToKey
+          & breakOnAll "."
       )
+      & (++ [(keyPathStrToKey $ field ^. #keyPathStr, Just field)])
   where
     rmvDotPrefix = T.dropWhile (== '.')
     listToUnicode = replace "[]" "»"

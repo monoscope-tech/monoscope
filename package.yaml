@@ -62,6 +62,7 @@ default-extensions:
   - QuasiQuotes
   - DisambiguateRecordFields
   - ImportQualifiedPost
+  - BlockArguments
 
 
 extra-source-files:

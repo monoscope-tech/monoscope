@@ -159,14 +159,11 @@ mainContent apiKeys newKeyM = do
                   th_ [class_ "relative px-6 py-3"] $ do
                     span_ [class_ "sr-only"] $ toHtml "Edit"
               tbody_ [class_ "bg-white divide-y divide-gray-200"] $ do
-                apiKeys
-                  & mapM_
-                    ( \apiKey -> do
-                        tr_ $ do
-                          td_ [class_ "px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900"] $ toHtml $ apiKey ^. #title
-                          td_ [class_ "px-6 py-4 whitespace-nowrap text-sm text-gray-500"] $ toHtml $ apiKey ^. #keyPrefix <> "**********"
-                          td_ [class_ "px-6 py-4 whitespace-nowrap text-right text-sm font-medium"] $ do
-                            a_ [class_ "text-indigo-600 hover:text-indigo-900"] $ do
-                              img_ [src_ "/assets/svgs/revoke.svg", class_ "h-3 w-3 mr-2 inline-block"]
-                              span_ [class_ "text-slate-500"] "Revoke"
-                    )
+                apiKeys & mapM_ \apiKey -> do
+                  tr_ $ do
+                    td_ [class_ "px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900"] $ toHtml $ apiKey ^. #title
+                    td_ [class_ "px-6 py-4 whitespace-nowrap text-sm text-gray-500"] $ toHtml $ apiKey ^. #keyPrefix <> "**********"
+                    td_ [class_ "px-6 py-4 whitespace-nowrap text-right text-sm font-medium"] $ do
+                      a_ [class_ "text-indigo-600 hover:text-indigo-900"] $ do
+                        img_ [src_ "/assets/svgs/revoke.svg", class_ "h-3 w-3 mr-2 inline-block"]
+                        span_ [class_ "text-slate-500"] "Revoke"

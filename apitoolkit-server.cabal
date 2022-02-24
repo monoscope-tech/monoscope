@@ -87,6 +87,7 @@ library
       QuasiQuotes
       DisambiguateRecordFields
       ImportQualifiedPost
+      BlockArguments
   ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-missing-deriving-strategies -Wno-unused-top-binds -Wno-missing-methods -Wno-prepositive-qualified-module -Wno-unused-matches -Wno-type-defaults
   build-depends:
       aeson
@@ -175,6 +176,7 @@ executable apitoolkit-server-exe
       QuasiQuotes
       DisambiguateRecordFields
       ImportQualifiedPost
+      BlockArguments
   ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-missing-deriving-strategies -Wno-unused-top-binds -Wno-missing-methods -Wno-prepositive-qualified-module -Wno-unused-matches -Wno-type-defaults -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
   build-depends:
       aeson
@@ -267,6 +269,7 @@ test-suite apitoolkit-server-test
       QuasiQuotes
       DisambiguateRecordFields
       ImportQualifiedPost
+      BlockArguments
   ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-missing-deriving-strategies -Wno-unused-top-binds -Wno-missing-methods -Wno-prepositive-qualified-module -Wno-unused-matches -Wno-type-defaults -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie -Weverything
   build-depends:
       aeson

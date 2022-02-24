@@ -92,15 +92,12 @@ projectsDropDown currProject projects =
               img_ [class_ "", src_ "/assets/svgs/search.svg"]
             input_ [class_ "pl-12 w-full text-sm bg-gray-100 rounded-2xl border-0 p-3", placeholder_ "Search Projects"]
           div_ [class_ "space-y-2 py-4 text-sm"] $ do
-            projects
-              & mapM_
-                ( \project -> do
-                    a_ [class_ "flex justify-between p-2", href_ ("/p/" <> Projects.projectIdText (project ^. #id))] $ do
-                      div_ [class_ "space-x-3"] $ do
-                        img_ [class_ "inline-block", src_ "/assets/svgs/projects.svg"]
-                        span_ [class_ "inline-block"] $ toHtml $ project ^. #title
-                      when (currProject ^. #id == project ^. #id) $ img_ [src_ "/assets/svgs/checkmark_blue.svg"]
-                )
+            projects & mapM_ \project -> do
+              a_ [class_ "flex justify-between p-2", href_ ("/p/" <> Projects.projectIdText (project ^. #id))] $ do
+                div_ [class_ "space-x-3"] $ do
+                  img_ [class_ "inline-block", src_ "/assets/svgs/projects.svg"]
+                  span_ [class_ "inline-block"] $ toHtml $ project ^. #title
+                when (currProject ^. #id == project ^. #id) $ img_ [src_ "/assets/svgs/checkmark_blue.svg"]
 
 sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Html ()
 sideNav sess project pageTitle = do
@@ -139,13 +136,10 @@ sideNav sess project pageTitle = do
             img_ [src_ "/assets/svgs/down_chevron.svg"]
       projectsDropDown project (Sessions.getProjects $ Sessions.projects sess)
     nav_ [class_ "mt-4"] $ do
-      menu (project ^. #id)
-        & mapM_
-          ( \(mTitle, mUrl, mIcon) -> do
-              a_ [href_ mUrl, class_ $ "block flex gap-3 px-5 py-3" <> (if pageTitle == mTitle then " bg-gray-100 border-l-4 border-blue-700" else "")] $ do
-                img_ [src_ mIcon]
-                span_ [class_ "grow"] $ toHtml mTitle
-          )
+      menu (project ^. #id) & mapM_ \(mTitle, mUrl, mIcon) -> do
+        a_ [href_ mUrl, class_ $ "block flex gap-3 px-5 py-3" <> (if pageTitle == mTitle then " bg-gray-100 border-l-4 border-blue-700" else "")] $ do
+          img_ [src_ mIcon]
+          span_ [class_ "grow"] $ toHtml mTitle
 
 navbar :: Users.User -> Html ()
 navbar currUser = do
