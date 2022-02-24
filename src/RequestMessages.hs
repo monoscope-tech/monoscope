@@ -70,13 +70,20 @@ requestMsgToDumpAndEndpoint rM now dumpID = do
   let reqBody = fromRight [aesonQQ| {} |] $ AE.eitherDecodeStrict reqBodyB64
   respBodyB64 <- B64.decodeBase64 $ encodeUtf8 $ rM ^. #responseBody
   let respBody = fromRight [aesonQQ| {} |] $ AE.eitherDecodeStrict respBodyB64
+
+  let reqHeaderFields = valueToFields $ rM ^. #requestHeaders
+  let respHeaderFields = valueToFields $ rM ^. #responseHeaders
   let reqBodyFields = valueToFields reqBody
   let respBodyFields = valueToFields respBody
+
   let reqBodyFieldHashes = fieldsToHash reqBodyFields
   let respBodyFieldHashes = fieldsToHash respBodyFields
-  let reqBodyFieldsDTO = reqBodyFields & map (fieldsToFieldDTO "request_body" (rM ^. #projectId))
-  let respBodyFieldsDTO = respBodyFields & map (fieldsToFieldDTO "response_body" (rM ^. #projectId))
-  let fieldsDTO = reqBodyFieldsDTO <> respBodyFieldsDTO
+
+  let reqHeadersFieldsDTO = reqHeaderFields & map (fieldsToFieldDTO Fields.FCRequestHeader (rM ^. #projectId))
+  let respHeadersFieldsDTO = respHeaderFields & map (fieldsToFieldDTO Fields.FCResponseHeader (rM ^. #projectId))
+  let reqBodyFieldsDTO = reqBodyFields & map (fieldsToFieldDTO Fields.FCRequestBody (rM ^. #projectId))
+  let respBodyFieldsDTO = respBodyFields & map (fieldsToFieldDTO Fields.FCResponseBody (rM ^. #projectId))
+  let fieldsDTO = reqHeadersFieldsDTO <> respHeadersFieldsDTO <> reqBodyFieldsDTO <> respBodyFieldsDTO
 
   let reqDump =
         RequestDumps.RequestDump
@@ -92,8 +99,8 @@ requestMsgToDumpAndEndpoint rM now dumpID = do
             protoMinor = rM ^. #protoMinor,
             duration = calendarTimeTime $ secondsToNominalDiffTime $ fromIntegral $ rM ^. #duration,
             statusCode = rM ^. #statusCode,
-            requestHeaders = AET.emptyArray,
-            responseHeaders = AET.emptyArray,
+            requestHeaders = rM ^. #requestHeaders,
+            responseHeaders = rM ^. #responseHeaders,
             requestBody = reqBody,
             responseBody = respBody
           }
@@ -110,6 +117,7 @@ requestMsgToDumpAndEndpoint rM now dumpID = do
             requestHashes = [reqBodyFieldHashes],
             responseHashes = [respBodyFieldHashes],
             queryparamHashes = []
+            -- FIXME: Should we have request and response headers? Or should they be part of request and response hashes?
           }
   pure (reqDump, endpoint, fieldsDTO)
 
@@ -170,7 +178,7 @@ valueToFormatNum val
   | Scientific.isInteger val = "integer"
   | otherwise = "unknown"
 
-fieldsToFieldDTO :: Text -> UUID.UUID -> (Text, AE.Value) -> (Fields.Field, [Text])
+fieldsToFieldDTO :: Fields.FieldCategoryEnum -> UUID.UUID -> (Text, AE.Value) -> (Fields.Field, [Text])
 fieldsToFieldDTO fieldCategory projectID (keyPath, val) =
   ( Fields.Field
       { createdAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC",
@@ -186,16 +194,10 @@ fieldsToFieldDTO fieldCategory projectID (keyPath, val) =
         description = "",
         keyPath = fromList $ T.splitOn "." keyPath,
         keyPathStr = keyPath,
-        fieldCategory = Unsafe.fromJust $ Fields.parseFieldCategoryEnum fieldCategory
+        fieldCategory = fieldCategory
       },
     []
   )
-
--- | eitherStrToText helps to convert Either String a to Either Text a,
--- to allow using both of them via do notation in the same monad.
-eitherStrToText :: Either String a -> Either Text a
-eitherStrToText (Left str) = Left $ toText str
-eitherStrToText (Right a) = Right a
 
 ---------------------------------------------------------------------------------------
 -- Test Stubs

@@ -2,7 +2,7 @@ module Pages.ManualIngestion (RequestMessageForm (..), manualIngestGetH, manualI
 
 import Colog.Core ((<&))
 import Config
-import Data.Aeson.QQ
+import Data.Aeson (Value, eitherDecodeStrict)
 import Data.Text.Encoding.Base64 qualified as B64
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
@@ -16,6 +16,7 @@ import ProcessMessage qualified
 import Relude
 import RequestMessages qualified
 import Text.RawString.QQ (r)
+import Utils
 import Web.FormUrlEncoded (FromForm)
 
 data RequestMessageForm = RequestMessageForm
@@ -36,24 +37,29 @@ data RequestMessageForm = RequestMessageForm
   deriving (Show, Generic)
   deriving anyclass (FromForm)
 
-reqMsgFormToReqMsg :: UUID.UUID -> RequestMessageForm -> RequestMessages.RequestMessage
-reqMsgFormToReqMsg pid RequestMessageForm {..} =
-  RequestMessages.RequestMessage
-    { projectId = pid,
-      requestHeaders = [aesonQQ|{}|],
-      responseHeaders = [aesonQQ|{}|],
-      requestBody = B64.encodeBase64 requestBody,
-      responseBody = B64.encodeBase64 responseBody,
-      ..
-    }
+reqMsgFormToReqMsg :: UUID.UUID -> RequestMessageForm -> Either Text RequestMessages.RequestMessage
+reqMsgFormToReqMsg pid RequestMessageForm {..} = do
+  reqHeaders <- eitherStrToText $ eitherDecodeStrict (encodeUtf8 @Text @ByteString requestHeaders) :: Either Text Value
+  respHeaders <- eitherStrToText $ eitherDecodeStrict (encodeUtf8 @Text @ByteString responseHeaders) :: Either Text Value
+  Right
+    RequestMessages.RequestMessage
+      { projectId = pid,
+        requestHeaders = reqHeaders,
+        responseHeaders = respHeaders,
+        requestBody = B64.encodeBase64 requestBody,
+        responseBody = B64.encodeBase64 responseBody,
+        ..
+      }
 
 -- TODO:
 -- - [x] Parse the time to the ZonedTime from string or default to current time.
 -- - [x] use one of duration or durationMicroSecs and derive one from the other, or even get read of 1 of them from the expected input. We can always calculate one from the other
 -- - [x] Base64 encode requst and response Bodies before processing
 -- - [x] Process and persist the request as usual
--- - implement support for processing and persisting the request and response headers
--- - include a datalist of http methods
+-- - [~] implement support for processing and persisting the request and response headers
+-- - - Partial support until we support header hashes in both the db and the codebase
+-- - implement support for process request params. Figure out how we should accept the request params from the clients: raw path, path, map of params separately (vs processing string and building map server side)
+-- - [x] include a datalist of http methods
 -- - include a data list of http status codes for the status codes
 -- - include a data list of all endpoints in the service in the endpoints field
 -- - timestamp should default to the current data in the browser form except preloaded
@@ -61,16 +67,16 @@ reqMsgFormToReqMsg pid RequestMessageForm {..} =
 -- - document how to access this page from within the github readme.
 -- - [FUTURE] If we ever have a super admin, it should be possible to access this page directly from there for any given company.
 manualIngestPostH :: Sessions.PersistentSession -> Projects.ProjectId -> RequestMessageForm -> DashboardM (Html ())
-manualIngestPostH sess pid reqM = do
-  traceShowM reqM
+manualIngestPostH sess pid reqMF = do
   logger <- asks logger
-  liftIO $ logger <& show reqM
+  liftIO $ logger <& "manualIngestPost RequestMessageForm <> " <> show reqMF
   pool <- asks pool
   project <-
     liftIO $
       withPool pool $ Projects.selectProjectForUser (Sessions.userId sess, pid)
-
-  liftIO $ ProcessMessage.processRequestMessage logger pool $ reqMsgFormToReqMsg (Projects.unProjectId pid) reqM
+  case reqMsgFormToReqMsg (Projects.unProjectId pid) reqMF of
+    Left err -> liftIO $ logger <& "error parsing manualIngestPost req Message; " <> show err
+    Right reqM -> liftIO $ ProcessMessage.processRequestMessage logger pool reqM
 
   pure manualIngestPage
 
@@ -109,16 +115,16 @@ manualIngestPage = do
         $ do
           inputDatetime "timestamp"
           inputText "" "host"
-          inputText "" "method"
+          inputTextDatalist "" "method" ["GET", "POST", "PUT", "DELETE", "OPTION", "HEAD"]
           inputText "" "referer"
           inputText "" "urlPath"
           inputInt "" "protoMajor"
           inputInt "" "protoMinor"
           inputInt "duration in nanoseconds (1ms -> 1,000,000 ns)" "duration"
-          inputText "" "requestHeaders"
-          inputText "" "responseHeaders"
-          inputTextArea "requestBody"
-          inputTextArea "responseBody"
+          inputTextArea "requestHeaders as a key value json pair" "requestHeaders"
+          inputTextArea "responseHeaders as a key value json pair" "responseHeaders"
+          inputTextArea "" "requestBody"
+          inputTextArea "" "responseBody"
           inputInt "" "statusCode"
           div_ $ do
             button_ [class_ "btn-sm btn-indigo", type_ "submit"] "Submit"
@@ -127,11 +133,19 @@ manualIngestPage = do
       [r|
         // create the editor
         var opt = {mode:"code", modes: ["code","tree"]}
+        var reqHeadersEditor = new JSONEditor(document.getElementById("requestHeaders"), opt)
+        var respHeadersEditor = new JSONEditor(document.getElementById("responseHeaders"), opt)
         var reqBodyEditor = new JSONEditor(document.getElementById("requestBody"), opt)
         var respBodyEditor = new JSONEditor(document.getElementById("responseBody"), opt)
 
-        // set json
         var initialJson = {
+            "Content-Type": ["application/json"],
+        }
+        reqHeadersEditor.set(initialJSON)
+        respHeadersEditor.set(initialJSON)
+
+        // set json
+        var initialJsonB = {
             "Array": [1, 2, 3],
             "Boolean": true,
             "Null": null,
@@ -139,8 +153,8 @@ manualIngestPage = do
             "Object": {"a": "b", "c": "d"},
             "String": "Hello World"
         }
-        reqBodyEditor.set(initialJson)
-        respBodyEditor.set(initialJson)
+        reqBodyEditor.set(initialJsonB)
+        respBodyEditor.set(initialJsonB)
     |]
 
 inputText :: Text -> Text -> Html ()
@@ -154,10 +168,24 @@ inputText title name = do
         name_ name
       ]
 
-inputTextArea :: Text -> Html ()
-inputTextArea name = do
+inputTextDatalist :: Text -> Text -> [Text] -> Html ()
+inputTextDatalist title name datalist = do
   div_ $ do
-    label_ [class_ "text-gray-400 mx-2  text-sm"] $ toHtml name
+    label_ [class_ "text-gray-400 mx-2  text-sm"] $ toHtml $ title <> " [" <> name <> "]"
+    input_
+      [ class_ "h-10 px-5 my-2 w-full text-sm bg-white text-black border-solid border border-gray-200 rounded-2xl  ",
+        type_ "text",
+        id_ name,
+        name_ name,
+        list_ $ name <> "-list"
+      ]
+    datalist_ [id_ $ name <> "-list"] $ do
+      datalist & mapM_ (\it -> option_ [value_ it] $ toHtml it)
+
+inputTextArea :: Text -> Text -> Html ()
+inputTextArea title name = do
+  div_ $ do
+    label_ [class_ "text-gray-400 mx-2  text-sm"] $ toHtml $ title <> " [" <> name <> "]"
     div_
       [ class_ "w-full text-sm bg-white text-black border-solid border border-gray-200 rounded-2xl",
         id_ name,
@@ -187,3 +215,61 @@ inputInt title name = do
         id_ name,
         name_ name
       ]
+
+httpStatusCodes :: [(Text, Text)]
+httpStatusCodes =
+  [ ("100", "Continue"),
+    ("101", "Switching Protocols"),
+    ("103", "Early Hints"),
+    ("200", "OK"),
+    ("201", "Created"),
+    ("202", "Accepted"),
+    ("203", "Non-Authoritative Information"),
+    ("204", "No Content"),
+    ("205", "Reset Content"),
+    ("206", "Partial Content"),
+    ("300", "Multiple Choices"),
+    ("301", "Moved Permanently"),
+    ("302", "Found"),
+    ("303", "See Other"),
+    ("304", "Not Modified"),
+    ("307", "Temporary Redirect"),
+    ("308", "Permanent Redirect"),
+    ("400", "Bad Request"),
+    ("401", "Unauthorized"),
+    ("402", "Payment Required"),
+    ("403", "Forbidden"),
+    ("404", "Not Found"),
+    ("405", "Method Not Allowed"),
+    ("406", "Not Acceptable"),
+    ("407", "Proxy Authentication Required"),
+    ("408", "Request Timeout"),
+    ("409", "Conflict"),
+    ("410", "Gone"),
+    ("411", "Length Required"),
+    ("412", "Precondition Failed"),
+    ("413", "Payload Too Large"),
+    ("414", "URI Too Long"),
+    ("415", "Unsupported Media Type"),
+    ("416", "Range Not Satisfiable"),
+    ("417", "Expectation Failed"),
+    ("418", "I'm a teapot"),
+    ("422", "Unprocessable Entity"),
+    ("425", "Too Early"),
+    ("426", "Upgrade Required"),
+    ("428", "Precondition Required"),
+    ("429", "Too Many Requests"),
+    ("431", "Request Header Fields Too Large"),
+    ("451", "Unavailable For Legal Reasons"),
+    ("500", "Internal Server Error"),
+    ("501", "Not Implemented"),
+    ("502", "Bad Gateway"),
+    ("503", "Service Unavailable"),
+    ("504", "Gateway Timeout"),
+    ("505", "HTTP Version Not Supported"),
+    ("506", "Variant Also Negotiates"),
+    ("507", "Insufficient Storage"),
+    ("508", "Loop Detected"),
+    ("510", "Not Extended"),
+    ("511", "Network Authentication Required")
+  ]

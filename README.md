@@ -23,6 +23,9 @@ brew install libpq
 go test -run=TestAPIToolkitWorkflow
 ```
 
+## Useful links
+- There is now a page for manual data ingestion available at `/p/<project-id>/manual_ingest`. This link isn't added to the menu since it's for dev testing only.
+
 ## Useful tools
 - install ormolu (brew install ormolu), for fmt 
 - install hlint for linting (brew install hlint)

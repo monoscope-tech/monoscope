@@ -50,6 +50,7 @@ newtype EndpointId = EndpointId {unEndpointId :: UUID.UUID}
     via UUID.UUID
   deriving anyclass (FromRow, ToRow)
 
+-- TODO: Introduce request header hashes and response header hashes
 data Endpoint = Endpoint
   { id :: EndpointId,
     createdAt :: ZonedTime,
