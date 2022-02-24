@@ -153,24 +153,25 @@ executables:
     - condition: false        
       other-modules: Paths_apitoolkit_server
 
-# tests:
-#   apitoolkit-server-test:
-#     main:                Test.hs
-#     source-dirs:         test
-#     ghc-options:
-#     - -threaded
-#     - -rtsopts
-#     - -with-rtsopts=-N
-#     - -fwrite-ide-info                   
-#     - -hiedir=.hie
-#     - -Weverything
-#     dependencies:
-#     - base
-#     - apitoolkit-server
-#     - hspec-expectations-lifted
-#     - hspec-pg-transact
-#     - pg-entity
-#     - pg-transact
-#     - postgresql-simple
-#     - resource-pool
-#     - hspec-discover
+tests:
+  apitoolkit-server-test:
+    main:                Test.hs
+    source-dirs:         test
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    - -fwrite-ide-info                  
+    - -hiedir=.hie
+    - -Weverything
+    dependencies:
+    - base
+    - apitoolkit-server
+    - hspec-expectations-lifted
+    - hspec-pg-transact
+    - pg-entity
+    - pg-transact
+    - postgresql-simple
+    - resource-pool
+    - hspec-discover
+    - doctest-parallel
