@@ -2,13 +2,12 @@
 
 module Models.Projects.ProjectsEmail () where
 
-import Control.Lens qualified as Lens
-import Data.List.NonEmpty qualified as NonEmptyDataList
-import Data.Text qualified as T
-import Data.Text.Conversions qualified as TC
-import GHC.Exts qualified
+import qualified Control.Lens as Lens
+import qualified Data.List.NonEmpty as NonEmptyDataList
+import qualified Data.Text as T
+import qualified Data.Text.Conversions as TC
 import Network.SendGridV3.Api
-import Network.Wreq qualified as Wreq
+import qualified Network.Wreq as Wreq
 import Relude
 import System.Environment (lookupEnv)
 
@@ -44,18 +43,17 @@ patternMatchMailContent :: Maybe T.Text -> Maybe (NonEmpty MailContent)
 patternMatchMailContent (Just txt) = Just (NonEmptyDataList.fromList [mailContentHtml txt])
 patternMatchMailContent Nothing = Nothing
 
--- rName rAddress -> receiver email and address sName sAddress sender email and address
-emailCtx :: T.Text -> T.Text -> T.Text -> T.Text -> Mail () ()
-emailCtx rName rAddress sName sAddress =
-  let to = personalization $ NonEmptyDataList.fromList [MailAddress rAddress rName]
-      from = MailAddress sAddress sName
+-- rAddress -> receiver email 
+emailCtx :: T.Text -> Mail () ()
+emailCtx rAddress =
+  let to = personalization $ NonEmptyDataList.fromList [MailAddress rAddress "User"]
+      from = MailAddress "apitoolkit@testemail.com" "Api Toolkit"
       subject = "Email Subject"
       content = patternMatchMailContent (Just contentMail)
    in mail [to] from subject content
 
--- test values..values will be parsed from create project and invite members form
-sendEmail :: Mail () ()
-sendEmail = emailCtx "anthony" "anthonyalaribe@gmail.com" "david" "davidoluwatobi41@gmail.com"
+sendEmail :: T.Text -> Mail () ()
+sendEmail = emailCtx
 
 sendInviteMail :: Mail () () -> IO ()
 sendInviteMail sendEmailV = do

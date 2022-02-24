@@ -13,6 +13,7 @@ module Models.Projects.ProjectMembers
     updateMemberPermission,
     deleteMember,
     InvProjectMember (..),
+    invProjectMembers
   )
 where
 
@@ -131,6 +132,14 @@ insertProjectMembers = PgT.executeMany q
       [sql|
           INSERT INTO projects.project_members(project_id, user_id, permission) VALUES (?,?,?)
          |]
+
+invProjectMembers :: [InvProjectMember] -> PgT.DBT IO Int64
+invProjectMembers = PgT.executeMany q
+  where
+    q =
+      [sql|
+          INSERT INTO projects.project_members(project_id, user_id, permission) VALUES (?,?,?)
+        |]
 
 updateMemberPermission :: Projects.ProjectId -> MemberPermissionForm -> PgT.DBT IO Int64
 updateMemberPermission mid pm = PgT.execute q (Only mid)
