@@ -99,10 +99,6 @@ inviteProjectMember pid uid perm = ProjectMembers.InvProjectMember { projectId, 
     userId = uid
     permission = perm
 
--- createUserFromInvitation :: Users.UserId -> InviteProjectMemberForm -> Users.InvUser
--- createUserFromInvitation uid InviteProjectMemberForm { email } = Users.InvUser { userId, email }
---   where userId = uid 
-
 -- createUserFromInvitation needed as Users.createUser does not accomodate the constraint of invited member and user having the same userid as well as active status should be false until invited member activates the user account
 createUserFromInvitation :: Users.UserId -> ZonedTime -> Text -> IO Users.User
 createUserFromInvitation uid tNow email = do
@@ -119,10 +115,6 @@ createUserFromInvitation uid tNow email = do
         email = CI.mk email
       }
 
--- makeFieldLabelsNoPrefix ''Users.User
-
--- cEmail :: Mail () () -> DashboardM (HeadersTriggerRedirect (Html ()))
--- cEmail 
 
 invMemberH :: InviteProjectMemberForm -> DashboardM (HeadersTriggerRedirect (Html ())) 
 invMemberH InviteProjectMemberForm { email, permission } = do
@@ -139,7 +131,7 @@ invMemberH InviteProjectMemberForm { email, permission } = do
       invUser <- liftIO $ createUserFromInvitation uid tNow email
       let invMember = inviteProjectMember pid uid permission 
       let memberEmail = ProjectEmail.sendEmail email
-      ProjectEmail.sendInviteMail memberEmail
+      -- ProjectEmail.sendInviteMail memberEmail
       _ <- liftIO $ 
         withPool pool $ do
           ProjectMembers.invProjectMembers [invMember]
@@ -185,8 +177,7 @@ createProjectPostH sess createP = do
       pure $ addHeader "HX-Trigger" $ addHeader "/" $ createProjectBody cp (def @CreateProjectFormError)
     Right cpe -> pure $ noHeader $ noHeader $ createProjectBody createP cpe
 
-----------------------------------------------------------------------------------------------------------
--- createProjectBody is the core html view
+-- invite member body and create project body as well as the forms needs to be merged as they come from the same web page
 invMemberBody :: InviteProjectMemberForm -> InviteProjectMemberFormError -> Html ()
 invMemberBody inv inve = do
   section_ [id_ "main-content ", class_ "p-6"] $ do
@@ -243,7 +234,8 @@ invMemberBody inv inve = do
       button_ [class_ "py-2 px-5 bg-blue-700 absolute m-5 bottom-0 right-0 text-[white] text-sm rounded-xl cursor-pointer", type_ "submit"] "Next step"
 
 
-
+----------------------------------------------------------------------------------------------------------
+-- createProjectBody is the core html view
 createProjectBody :: CreateProjectForm -> CreateProjectFormError -> Html ()
 createProjectBody cp cpe = do
   section_ [id_ "main-content ", class_ "p-6"] $ do
