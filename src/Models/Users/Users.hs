@@ -1,6 +1,7 @@
+{-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module Models.Users.Users (User (..), UserId (..), createUser, createUserId, insertUser, userByEmail, addUserToAllProjects) where
+module Models.Users.Users (User (..), UserId (..), InvUser (..), createUser, createUserId, insertUser, userByEmail, addUserToAllProjects) where
 
 import Data.Aeson (FromJSON (parseJSON), ToJSON (toJSON))
 import Data.CaseInsensitive (CI)
@@ -21,7 +22,6 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact qualified as PgT
 import Deriving.Aeson qualified as DAE
 import Optics.TH
-import Optics.TH (makeFieldLabelsNoPrefix)
 import Relude
 
 instance FromJSON (CI Text) where
@@ -60,7 +60,7 @@ data User = User
     (PET.Entity)
     via (PET.GenericEntity '[PET.Schema "users", PET.TableName "users", PET.PrimaryKey "id", PET.FieldModifiers '[PET.CamelToSnake]] User)
 
-data InvUser = InvUser 
+data InvUser = InvUser
   { userId :: UserId,
     email :: Text
   }

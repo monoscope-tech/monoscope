@@ -1,7 +1,7 @@
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
-{-# LANGUAGE NamedFieldPuns #-}
 
 module Pages.Projects.CreateProject
   ( CreateProjectForm,
@@ -15,20 +15,17 @@ where
 
 import Config
 import Data.Default
-import Data.Maybe (isJust)
-import qualified Data.Text as T
-import qualified Data.CaseInsensitive as CI
-import qualified Data.UUID as UUID
-import qualified Data.UUID.V4 as UUIDV4
-import Data.Valor (Valid, Valor, check1, failIf, validateM)
-import qualified Data.Valor as Valor
-import qualified Data.Vector as Vector
+import Data.Text qualified as T
+import Data.UUID.V4 qualified as UUIDV4
+import Data.Valor (Valor, check1, failIf, validateM)
+import Data.Valor qualified as Valor
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import Lucid.HTMX
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
+import Models.Users.Users qualified as Users
 import Optics.Core ((^.))
 import Pages.BodyWrapper (bodyWrapper)
 import Relude
@@ -62,7 +59,7 @@ createProjectFormV =
     <$> check1 title (failIf ["name can't be empty"] T.null)
     <*> check1 description Valor.pass
 
-data InviteProjectMemberForm = InviteProjectMemberForm 
+data InviteProjectMemberForm = InviteProjectMemberForm
   { email :: Text,
     permission :: Text
   }
@@ -75,25 +72,26 @@ data InviteProjectMemberFormError = InviteProjectMemberFormError
   }
   deriving (Eq, Show, Generic)
   deriving anyclass (Default)
- 
-checkEmail :: Text -> Bool 
-checkEmail = isJust . T.find(== '@')
+
+checkEmail :: Text -> Bool
+checkEmail = isJust . T.find (== '@')
 
 inviteProjectMemberFormV :: Monad m => Valor InviteProjectMemberForm m InviteProjectMemberFormError
-inviteProjectMemberFormV = 
+inviteProjectMemberFormV =
   InviteProjectMemberFormError
     <$> check1 email (failIf ["must be a valid email address"] checkEmail)
     <*> check1 permission (failIf ["must not be blank"] T.null)
 
-inviteProjectMember :: Projects.ProjectId ->  Users.UserId -> InviteProjectMemberForm -> ProjectMembers.InvProjectMember
-inviteProjectMember pid uid InviteProjectMemberForm { permission } = ProjectMembers.InvProjectMember { projectId, userId, permission }
+inviteProjectMember :: Projects.ProjectId -> Users.UserId -> InviteProjectMemberForm -> ProjectMembers.InvProjectMember
+inviteProjectMember pid uid InviteProjectMemberForm {permission} = ProjectMembers.InvProjectMember {projectId, userId, permission}
   where
     projectId = pid
     userId = uid
 
 createUserFromInvitation :: Users.UserId -> InviteProjectMemberForm -> Users.InvUser
-createUserFromInvitation uid InviteProjectMemberForm { email } = Users.InvUser { userId, email }
-  where userId = uid 
+createUserFromInvitation uid InviteProjectMemberForm {email} = Users.InvUser {userId, email}
+  where
+    userId = uid
 
 ----------------------------------------------------------------------------------------------------------
 -- createProjectGetH is the handler for the create projects page
