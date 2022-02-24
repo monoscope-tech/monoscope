@@ -1,9 +1,7 @@
-name:  Build and test 
+name:  Deploy
 
 on:
   push:
-    branches: [ master ]
-  pull_request:
     branches: [ master ]
 
 jobs:
