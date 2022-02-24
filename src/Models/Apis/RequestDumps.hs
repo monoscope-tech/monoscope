@@ -10,7 +10,7 @@ import Data.Aeson qualified as AE
 import Data.Time (CalendarDiffTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Entity (insert)
-import Database.PostgreSQL.Entity.Types qualified as PET
+import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Transact qualified as PgT
 import Optics.TH
@@ -40,8 +40,8 @@ data RequestDump = RequestDump
   deriving (Show, Generic, Eq)
   deriving (ToRow, FromRow)
   deriving
-    (PET.Entity)
-    via (PET.GenericEntity '[PET.Schema "apis", PET.TableName "request_dumps", PET.PrimaryKey "id", PET.FieldModifiers '[PET.StripPrefix "rd", PET.CamelToSnake]] RequestDump)
+    (Entity)
+    via (GenericEntity '[Schema "apis", TableName "request_dumps", PrimaryKey "id", FieldModifiers '[StripPrefix "rd", CamelToSnake]] RequestDump)
 
 makeFieldLabelsNoPrefix ''RequestDump
 

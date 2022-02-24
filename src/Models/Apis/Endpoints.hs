@@ -18,8 +18,7 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity (selectById, selectManyByField)
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), queryOne)
-import Database.PostgreSQL.Entity.Internal.QQ (field)
-import Database.PostgreSQL.Entity.Types qualified as PET
+import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -67,8 +66,8 @@ data Endpoint = Endpoint
   deriving (Show, Generic, Eq)
   deriving anyclass (FromRow, ToRow, Default)
   deriving
-    (PET.Entity)
-    via (PET.GenericEntity '[PET.Schema "apis", PET.TableName "endpoints", PET.PrimaryKey "id", PET.FieldModifiers '[PET.CamelToSnake]] Endpoint)
+    (Entity)
+    via (GenericEntity '[Schema "apis", TableName "endpoints", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Endpoint)
 
 makeFieldLabelsNoPrefix ''Endpoint
 

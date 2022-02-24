@@ -22,7 +22,7 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), query, queryOne)
-import Database.PostgreSQL.Entity.Types qualified as PET
+import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -60,8 +60,8 @@ data Project = Project
     (FromJSON, ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Project
   deriving
-    (PET.Entity)
-    via (PET.GenericEntity '[PET.Schema "projects", PET.TableName "projects", PET.PrimaryKey "id", PET.FieldModifiers '[PET.CamelToSnake]] Project)
+    (Entity)
+    via (GenericEntity '[Schema "projects", TableName "projects", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Project)
 
 makeFieldLabelsNoPrefix ''Project
 
@@ -73,8 +73,8 @@ data CreateProject = CreateProject
   deriving (Show, Generic)
   deriving anyclass (FromRow, ToRow)
   deriving
-    (PET.Entity)
-    via (PET.GenericEntity '[PET.Schema "projects", PET.TableName "projects", PET.PrimaryKey "id", PET.FieldModifiers '[PET.CamelToSnake]] CreateProject)
+    (Entity)
+    via (GenericEntity '[Schema "projects", TableName "projects", PrimaryKey "id", FieldModifiers '[CamelToSnake]] CreateProject)
 
 makeFieldLabelsNoPrefix ''CreateProject
 

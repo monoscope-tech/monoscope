@@ -1,7 +1,17 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module Models.Users.Users (User (..), UserId (..), InvUser (..), createUser, createUserId, insertUser, userByEmail, addUserToAllProjects) where
+module Models.Users.Users
+  ( User (..),
+    UserId (..),
+    InvUser (..),
+    createUser,
+    createUserId,
+    insertUser,
+    userByEmail,
+    addUserToAllProjects,
+  )
+where
 
 import Data.Aeson (FromJSON (parseJSON), ToJSON (toJSON))
 import Data.CaseInsensitive (CI)
@@ -13,8 +23,7 @@ import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Database.PostgreSQL.Entity
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute)
-import Database.PostgreSQL.Entity.Internal.QQ (field)
-import Database.PostgreSQL.Entity.Types qualified as PET
+import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -57,8 +66,8 @@ data User = User
     (FromJSON, ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] User
   deriving
-    (PET.Entity)
-    via (PET.GenericEntity '[PET.Schema "users", PET.TableName "users", PET.PrimaryKey "id", PET.FieldModifiers '[PET.CamelToSnake]] User)
+    (Entity)
+    via (GenericEntity '[Schema "users", TableName "users", PrimaryKey "id", FieldModifiers '[CamelToSnake]] User)
 
 data InvUser = InvUser
   { userId :: UserId,
@@ -67,8 +76,8 @@ data InvUser = InvUser
   deriving (Show, Generic)
   deriving anyclass (FromRow, ToRow)
   deriving
-    (PET.Entity)
-    via (PET.GenericEntity '[PET.Schema "users", PET.TableName "users", PET.PrimaryKey "id", PET.FieldModifiers '[PET.CamelToSnake]] InvUser)
+    (Entity)
+    via (GenericEntity '[Schema "users", TableName "users", PrimaryKey "id", FieldModifiers '[CamelToSnake]] InvUser)
 
 makeFieldLabelsNoPrefix ''InvUser
 
@@ -106,6 +115,6 @@ addUserToAllProjects email = execute Insert q values
   where
     q =
       [sql| insert into projects.project_members (active, project_id, permission, user_id)
-select true::Boolean, id, 'admin'::projects.project_permissions, (select id from users.users where email=?) from projects.projects
-on conflict do nothing; |]
+            select true::Boolean, id, 'admin'::projects.project_permissions, (select id from users.users where email=?) from projects.projects
+            on conflict do nothing; |]
     values = Only email

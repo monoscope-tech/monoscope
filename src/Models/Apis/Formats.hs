@@ -10,8 +10,7 @@ import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity (selectManyByField)
-import Database.PostgreSQL.Entity.Internal.QQ (field)
-import Database.PostgreSQL.Entity.Types qualified as PET
+import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Transact (DBT)
 import Models.Apis.Fields qualified as Fields
@@ -30,8 +29,8 @@ data Format = Format
   deriving (Show, Generic)
   deriving anyclass (FromRow, ToRow)
   deriving
-    (PET.Entity)
-    via (PET.GenericEntity '[PET.Schema "apis", PET.TableName "formats", PET.PrimaryKey "id", PET.FieldModifiers '[PET.CamelToSnake]] Format)
+    (Entity)
+    via (GenericEntity '[Schema "apis", TableName "formats", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Format)
 
 makeFieldLabelsNoPrefix ''Format
 

@@ -12,7 +12,7 @@ module Models.Projects.ProjectMembers
     memberPermissionFormV,
     updateMemberPermission,
     deleteMember,
-    InvProjectMember (..)
+    InvProjectMember (..),
   )
 where
 
@@ -23,7 +23,7 @@ import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Valor (Valor, check1, failIf)
 import Database.PostgreSQL.Entity (delete)
-import Database.PostgreSQL.Entity.Types qualified as PET
+import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ResultError (..), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, fromField, returnError)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -75,8 +75,8 @@ data ProjectMembers = ProjectMembers
   deriving (Show, Generic)
   deriving anyclass (FromRow, ToRow)
   deriving
-    (PET.Entity)
-    via (PET.GenericEntity '[PET.Schema "projects", PET.TableName "project_members", PET.PrimaryKey "id", PET.FieldModifiers '[PET.CamelToSnake]] ProjectMembers)
+    (Entity)
+    via (GenericEntity '[Schema "projects", TableName "project_members", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ProjectMembers)
 
 makeFieldLabelsNoPrefix ''ProjectMembers
 
@@ -88,10 +88,10 @@ data CreateProjectMembers = CreateProjectMembers
   deriving (Show, Generic)
   deriving anyclass (FromRow, ToRow)
   deriving
-    (PET.Entity)
-    via (PET.GenericEntity '[PET.Schema "projects", PET.TableName "project_members", PET.PrimaryKey "id", PET.FieldModifiers '[PET.CamelToSnake]] CreateProjectMembers)
+    (Entity)
+    via (GenericEntity '[Schema "projects", TableName "project_members", PrimaryKey "id", FieldModifiers '[CamelToSnake]] CreateProjectMembers)
 
-data InvProjectMember = InvProjectMember 
+data InvProjectMember = InvProjectMember
   { projectId :: Projects.ProjectId,
     userId :: Users.UserId,
     permission :: Text
@@ -99,8 +99,8 @@ data InvProjectMember = InvProjectMember
   deriving (Show, Generic)
   deriving anyclass (FromRow, ToRow)
   deriving
-    (PET.Entity)
-    via (PET.GenericEntity '[PET.Schema "projects", PET.TableName "project_members", PET.PrimaryKey "id", PET.FieldModifiers '[PET.CamelToSnake]] InvProjectMember)
+    (Entity)
+    via (GenericEntity '[Schema "projects", TableName "project_members", PrimaryKey "id", FieldModifiers '[CamelToSnake]] InvProjectMember)
 
 makeFieldLabelsNoPrefix ''InvProjectMember
 
