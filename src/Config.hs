@@ -1,6 +1,6 @@
 {-# LANGUAGE TemplateHaskell #-}
 
-module Config (EnvConfig (..), AuthContext (AuthContext), DashboardM, HeadersTriggerRedirect, HeadersTrigger, ctxToHandler) where
+module Config (EnvConfig (..), AuthContext (..), DashboardM, HeadersTriggerRedirect, HeadersTrigger, ctxToHandler) where
 
 import Colog (LogAction)
 import Data.Pool as Pool

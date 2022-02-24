@@ -28,8 +28,8 @@ processMessage logger _ conn msg = do
   let rmMsg = msg ^? PubSub.rmMessage . _Just . PubSub.pmData . _Just
   let decodedMsg = B64.decodeBase64 $ fromJust rmMsg
   let jsonByteStr = fromRight "{}" decodedMsg
-  let decodedMsg = eitherDecode (fromStrict jsonByteStr) :: Either String RequestMessages.RequestMessage
-  case decodedMsg of
+  let decodedMsgE = eitherDecode (fromStrict jsonByteStr) :: Either String RequestMessages.RequestMessage
+  case decodedMsgE of
     Left err -> logger <& "error decoding message " <> err
     Right recMsg -> processRequestMessage logger conn recMsg
   pure $ msg L.^. PubSub.rmAckId

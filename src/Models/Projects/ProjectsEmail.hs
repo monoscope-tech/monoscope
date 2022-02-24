@@ -58,8 +58,8 @@ sendEmail :: Mail () ()
 sendEmail = emailCtx "anthony" "anthonyalaribe@gmail.com" "david" "davidoluwatobi41@gmail.com"
 
 sendInviteMail :: Mail () () -> IO ()
-sendInviteMail sendEmail = do
-  eResponse <- sendMail sendGridApiKey (sendEmail {_mailSendAt = Just 1516468000})
+sendInviteMail sendEmailV = do
+  eResponse <- sendMail sendGridApiKey (sendEmailV {_mailSendAt = Just 1516468000})
   case eResponse of
     Left httpException -> error $ show httpException
     Right response -> print (response Lens.^. Wreq.responseStatus . Wreq.statusCode)

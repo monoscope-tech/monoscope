@@ -28,7 +28,7 @@ ghc-options:
 - -Wno-missing-methods
 - -Wno-prepositive-qualified-module
 - -Wno-unused-matches
-- -Wno-name-shadowing
+# - -Wno-name-shadowing
 - -Wno-type-defaults
 # - -Wno-unused-record-wildcards
 

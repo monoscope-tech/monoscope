@@ -62,7 +62,7 @@ startApp = do
         Just email -> do
           err <- try (withPool poolConn (Users.addUserToAllProjects email)) :: IO (Either SomeException Int64)
           case err of
-            Left err -> logger <& "unable to run addUserToAllProjects " <> show err
+            Left err' -> logger <& "unable to run addUserToAllProjects " <> show err'
             Right resp -> logger <& "addUserToAllProjects resp" <> show resp
         Nothing -> pass
 

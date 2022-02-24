@@ -37,7 +37,7 @@ import Database.PostgreSQL.Transact (DBT)
 import Models.Projects.Projects qualified as Projects
 import Network.Google.Prelude (FromHttpApiData)
 import Optics.TH
-import Relude
+import Relude hiding (id)
 
 newtype ProjectApiKeyId = ProjectApiKeyId {unProjectApiKeyId :: UUID.UUID}
   deriving stock (Generic, Show)
