@@ -86,7 +86,7 @@ library
       QuasiQuotes
       DisambiguateRecordFields
       ImportQualifiedPost
-  ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -fforce-recomp -Wno-orphans
+  ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -fforce-recomp -Wno-orphans -Wno-missing-deriving-strategies -Wno-unused-top-binds -Wno-missing-methods -Wno-prepositive-qualified-module -Wno-unused-matches -Wno-name-shadowing -Wno-type-defaults
   build-depends:
       aeson
     , aeson-qq
@@ -108,7 +108,6 @@ library
     , gogol-core
     , gogol-pubsub
     , hspec
-    , hspec-pg-transact
     , http-api-data
     , jose
     , lens
@@ -175,7 +174,7 @@ executable apitoolkit-server-exe
       QuasiQuotes
       DisambiguateRecordFields
       ImportQualifiedPost
-  ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -fforce-recomp -Wno-orphans -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
+  ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -fforce-recomp -Wno-orphans -Wno-missing-deriving-strategies -Wno-unused-top-binds -Wno-missing-methods -Wno-prepositive-qualified-module -Wno-unused-matches -Wno-name-shadowing -Wno-type-defaults -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
   build-depends:
       aeson
     , aeson-qq
@@ -198,7 +197,6 @@ executable apitoolkit-server-exe
     , gogol-core
     , gogol-pubsub
     , hspec
-    , hspec-pg-transact
     , http-api-data
     , jose
     , lens

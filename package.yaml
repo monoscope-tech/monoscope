@@ -22,6 +22,16 @@ ghc-options:
 - -Wno-missing-safe-haskell-mode
 - -fforce-recomp
 - -Wno-orphans
+# remove the next options when possible. This is a temporary workaround
+- -Wno-missing-deriving-strategies
+- -Wno-unused-top-binds
+- -Wno-missing-methods
+- -Wno-prepositive-qualified-module
+- -Wno-unused-matches
+- -Wno-name-shadowing
+- -Wno-type-defaults
+# - -Wno-unused-record-wildcards
+
 # cc-options: -static
 # ld-options: -static -pthread
 
@@ -106,7 +116,7 @@ dependencies:
   - gogol-core
   - gogol-pubsub
   - hspec
-  - hspec-pg-transact
+  # - hspec-pg-transact
   - jose
   - lens-aeson
   - lucid

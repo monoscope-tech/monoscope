@@ -1,8 +1,8 @@
-module Data.Default.Instances where
+module Data.Default.Instances () where
 
 import Data.Aeson.Types qualified as AET
 import Data.Default
-import Data.Time (CalendarDiffTime, UTCTime, ZonedTime)
+import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Relude.Unsafe qualified as Unsafe
 

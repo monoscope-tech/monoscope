@@ -104,7 +104,7 @@ editProjectMemberH pid mb = do
       pool <- asks pool
       _ <- liftIO $
         withPool pool $ do
-          ProjectMembers.updateMemberPermission pid mb
+          _ <- ProjectMembers.updateMemberPermission pid mb
           pass
 
       pure $ addHeader "HX-Trigger" $ addHeader "/p" $ editProjectMembersBody ep (def @ProjectMembers.MemberPermissionFormError)
@@ -119,7 +119,7 @@ editProjectPostH pid editP = do
       pool <- asks pool
       _ <- liftIO $
         withPool pool $ do
-          Projects.updateProject $ createProjectFormToModel pid editP
+          _ <- Projects.updateProject $ createProjectFormToModel pid editP
           pass
 
       pure $ addHeader "HX-Trigger" $ addHeader "/p" $ editProjectBody ep (def @CreateProjectFormError)

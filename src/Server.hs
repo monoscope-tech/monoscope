@@ -2,7 +2,7 @@
 
 module Server (app) where
 
-import Config (AuthContext, DashboardM, HeadersTrigger, HeadersTriggerRedirect, ctxToHandler, env, pool)
+import Config (AuthContext (AuthContext), DashboardM, HeadersTrigger, HeadersTriggerRedirect, ctxToHandler, env, pool)
 import Data.Pool (Pool)
 import Database.PostgreSQL.Simple (Connection)
 import Lucid
@@ -22,7 +22,6 @@ import Relude
 import Servant
 import Servant.HTML.Lucid
 import Servant.Server.Experimental.Auth (AuthHandler, AuthServerData)
-import Servant.Server.StaticFiles
 import Web.Auth (authCallbackH, genAuthServerContext, loginH, loginRedirectH, logoutH)
 import Web.ClientMetadata qualified as ClientMetadata
 import Web.Cookie (SetCookie)

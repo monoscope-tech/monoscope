@@ -120,7 +120,7 @@ createProjectPostH sess createP = do
       _ <- liftIO $
         withPool pool $ do
           Projects.insertProject (createProjectFormToModel pid cp)
-          ProjectMembers.insertProjectMembers projectMembers
+          _ <- ProjectMembers.insertProjectMembers projectMembers
           pass
 
       pure $ addHeader "HX-Trigger" $ addHeader "/" $ createProjectBody cp (def @CreateProjectFormError)

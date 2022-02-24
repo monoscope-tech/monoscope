@@ -1,4 +1,4 @@
-module Pages.ManualIngestion where
+module Pages.ManualIngestion (RequestMessageForm (..), manualIngestGetH, manualIngestPostH) where
 
 import Colog.Core ((<&))
 import Config

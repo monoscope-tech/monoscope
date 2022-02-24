@@ -1,6 +1,6 @@
 {-# LANGUAGE TemplateHaskell #-}
 
-module Models.Users.Users where
+module Models.Users.Users (User (..), UserId (..), createUser, createUserId, insertUser, userByEmail, addUserToAllProjects) where
 
 import Data.Aeson (FromJSON (parseJSON), ToJSON (toJSON))
 import Data.CaseInsensitive (CI)

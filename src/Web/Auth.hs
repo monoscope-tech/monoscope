@@ -32,8 +32,6 @@ import Servant
     err302,
     noHeader,
     throwError,
-    type (:<|>) (..),
-    type (:>),
   )
 import Servant.Server.Experimental.Auth (AuthHandler, mkAuthHandler)
 import SessionCookies (craftSessionCookie, emptySessionCookie)
