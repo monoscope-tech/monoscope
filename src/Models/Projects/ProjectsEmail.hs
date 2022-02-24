@@ -1,6 +1,6 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 
-module Models.Projects.ProjectsEmail () where
+module Models.Projects.ProjectsEmail  where
 
 import qualified Control.Lens as Lens
 import qualified Data.List.NonEmpty as NonEmptyDataList
@@ -9,6 +9,7 @@ import qualified Data.Text.Conversions as TC
 import Network.SendGridV3.Api
 import qualified Network.Wreq as Wreq
 import Relude
+import GHC.Exts
 import System.Environment (lookupEnv)
 
 -- sendgrid's ApiKey expects a Text paramater but lookupEnv returns IO (Maybe String). This class and instances are generated to allow conversion to Text

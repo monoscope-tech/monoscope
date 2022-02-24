@@ -131,8 +131,8 @@ invMemberH InviteProjectMemberForm { email, permission } = do
       -- ProjectEmail.sendInviteMail memberEmail
       _ <- liftIO $ 
         withPool pool $ do
-          ProjectMembers.invProjectMembers [invMember]
-          Users.insertUser invUser
+          _ <- ProjectMembers.invProjectMembers [invMember]
+          _ <- Users.insertUser invUser
           pass
 
       pure $ addHeader "HX-Trigger" $ addHeader "/" $ invMemberBody inv (def @InviteProjectMemberFormError)
