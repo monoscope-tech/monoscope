@@ -1,3 +1,5 @@
+{-# LANGUAGE NamedFieldPuns #-}
+
 module Pages.Projects.ProjectSettings
   (
   )
@@ -10,23 +12,19 @@ import Config
   )
 import Data.Default (Default (def))
 import Data.Valor (validateM)
-import Data.Valor qualified as Valor
+import qualified Data.Valor as Valor
+import qualified Data.UUID as UUID
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import Lucid.HTMX (hxPost_, hxTarget_)
-import Models.Projects.ProjectMembers qualified as ProjectMembers
-import Models.Projects.Projects (ProjectId)
-import Models.Projects.Projects qualified as Projects
-import Models.Users.Sessions qualified as Sessions
+import qualified Models.Projects.ProjectMembers as ProjectMembers
+import qualified Models.Projects.Projects as Projects
+import qualified Models.Users.Sessions as Sessions
 import Optics.Operators ()
 import Optics.TH ()
 import Pages.BodyWrapper (bodyWrapper)
-import Pages.Projects.CreateProject
-  ( CreateProjectForm,
-    CreateProjectFormError,
-    createProjectFormToModel,
-    createProjectFormV,
-  )
+import qualified Pages.Projects.CreateProject as CreateProject
+import qualified Models.Users.Users as Users
 import Relude
 import Servant
   ( addHeader,
@@ -35,9 +33,9 @@ import Servant
 
 editProjectH :: Sessions.PersistentSession -> DashboardM (Html ())
 editProjectH sess = do
-  pure $ bodyWrapper (Just sess) Nothing "Project Settings" $ editProjectBody (def @CreateProjectForm) (def @CreateProjectFormError)
+  pure $ bodyWrapper (Just sess) Nothing "Project Settings" $ editProjectBody (def @CreateProject.CreateProjectForm) (def @CreateProject.CreateProjectFormError)
 
-editProjectBody :: CreateProjectForm -> CreateProjectFormError -> Html ()
+editProjectBody :: CreateProject.CreateProjectForm -> CreateProject.CreateProjectFormError -> Html ()
 editProjectBody cp cpe = do
   section_ [id_ "main-content"] $ do
     h2_ [class_ "text-slate-700 text-2xl font-medium mb-5"] "Edit Project"
@@ -62,8 +60,8 @@ editProjectBody cp cpe = do
           ""
       button_ [class_ "py-2 px-5 bg-blue-700 absolute m-5 bottom-0 right-0 text-[white] text-sm rounded-xl cursor-pointer", type_ "submit"] "Next step"
 
-editProjectMembersBody :: ProjectMembers.MemberPermissionForm -> ProjectMembers.MemberPermissionFormError -> Html ()
-editProjectMembersBody mb cpe = do
+editProjectMembersBody :: CreateProject.InviteProjectMemberForm -> CreateProject.InviteProjectMemberFormError -> Html ()
+editProjectMembersBody mb epe = do
   section_ [id_ "main-content"] $ do
     h2_ [class_ "text-slate-700 text-2xl font-medium mb-5"] "Edit Project Members"
     form_ [class_ "relative px-10 border border-gray-200 py-10  bg-white w-1/2 rounded-3xl", hxPost_ "/p/edit-members", hxTarget_ "#main-content"] $ do
@@ -95,32 +93,36 @@ editProjectMembersBody mb cpe = do
           span_ [class_ "text-blue-700 font-medium text-base "] "Add member"
       button_ [class_ "py-2 px-5 bg-blue-700 absolute m-5 bottom-0 right-0 text-[white] text-sm rounded-xl cursor-pointer", type_ "submit"] "Next step"
 
-editProjectMemberH :: ProjectId -> ProjectMembers.MemberPermissionForm -> DashboardM (HeadersTriggerRedirect (Html ()))
-editProjectMemberH pid mb = do
-  validationRes <- validateM ProjectMembers.memberPermissionFormV mb
+editProjectMemberH :: Projects.ProjectId -> Users.UserId -> UUID.UUID -> CreateProject.InviteProjectMemberForm -> DashboardM (HeadersTriggerRedirect (Html ()))
+editProjectMemberH pid uid mid CreateProject.InviteProjectMemberForm { permission } = do
+  validationRes <- validateM CreateProject.inviteProjectMemberFormV CreateProject.InviteProjectMemberForm { permission }
   case validationRes of
     Left epRaw -> do
       let ep = Valor.unValid epRaw
       pool <- asks pool
+      let memberPermission = ProjectMembers.updateMemberPermissionFormToModel pid uid permission
       _ <- liftIO $
         withPool pool $ do
-          _ <- ProjectMembers.updateMemberPermission pid mb
+          _ <- ProjectMembers.updateMemberPermission pid mid memberPermission
           pass
 
-      pure $ addHeader "HX-Trigger" $ addHeader "/p" $ editProjectMembersBody ep (def @ProjectMembers.MemberPermissionFormError)
-    Right epe -> pure $ noHeader $ noHeader $ editProjectMembersBody mb epe
+      pure $ addHeader "HX-Trigger" $ addHeader "/p" $ editProjectMembersBody ep (def @CreateProject.InviteProjectMemberFormError)
 
-editProjectPostH :: Projects.ProjectId -> CreateProjectForm -> DashboardM (HeadersTriggerRedirect (Html ()))
+    Right epe -> pure $ noHeader $ noHeader $ editProjectMembersBody CreateProject.InviteProjectMemberForm { permission } epe
+   
+
+-- this can be deleted depending on how the mergings are done
+editProjectPostH :: Projects.ProjectId -> CreateProject.CreateProjectForm -> DashboardM (HeadersTriggerRedirect (Html ()))
 editProjectPostH pid editP = do
-  validationRes <- validateM createProjectFormV editP
+  validationRes <- validateM CreateProject.createProjectFormV editP
   case validationRes of
     Left epRaw -> do
       let ep = Valor.unValid epRaw
       pool <- asks pool
       _ <- liftIO $
         withPool pool $ do
-          _ <- Projects.updateProject $ createProjectFormToModel pid editP
+          _ <- Projects.updateProject $ CreateProject.createProjectFormToModel pid editP
           pass
 
-      pure $ addHeader "HX-Trigger" $ addHeader "/p" $ editProjectBody ep (def @CreateProjectFormError)
+      pure $ addHeader "HX-Trigger" $ addHeader "/p" $ editProjectBody ep (def @CreateProject.CreateProjectFormError)
     Right epe -> pure $ noHeader $ noHeader $ editProjectBody editP epe

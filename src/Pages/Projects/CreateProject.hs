@@ -10,6 +10,9 @@ module Pages.Projects.CreateProject
     createProjectFormV,
     createProjectFormToModel,
     CreateProjectFormError,
+    InviteProjectMemberForm (..),
+    InviteProjectMemberFormError,
+    inviteProjectMemberFormV,
   )
 where
 
@@ -66,6 +69,9 @@ createProjectFormV =
     <$> check1 title (failIf ["name can't be empty"] T.null)
     <*> check1 description Valor.pass
 
+checkEmail :: Text -> Bool
+checkEmail = isJust . T.find (== '@')
+
 data InviteProjectMemberForm = InviteProjectMemberForm
   { email :: Text,
     permission :: Text
@@ -79,9 +85,6 @@ data InviteProjectMemberFormError = InviteProjectMemberFormError
   }
   deriving (Eq, Show, Generic)
   deriving anyclass (Default)
-
-checkEmail :: Text -> Bool
-checkEmail = isJust . T.find (== '@')
 
 inviteProjectMemberFormV :: Monad m => Valor InviteProjectMemberForm m InviteProjectMemberFormError
 inviteProjectMemberFormV =

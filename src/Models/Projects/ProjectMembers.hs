@@ -1,27 +1,25 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE NamedFieldPuns #-}
 
 module Models.Projects.ProjectMembers
   ( ProjectMembers (..),
     insertProjectMembers,
     CreateProjectMembers (..),
     Permissions (..),
-    MemberPermissionForm,
-    MemberPermissionFormError,
-    memberPermissionFormToModel,
-    memberPermissionFormV,
     updateMemberPermission,
     deleteMember,
     InvProjectMember (..),
-    invProjectMembers
+    invProjectMembers,
+    updateMemberPermissionFormToModel,
   )
 where
 
 import Data.Default (Default)
 import Data.Default.Instances ()
-import Data.Text qualified as T
+import qualified Data.Text as T
 import Data.Time (ZonedTime)
-import Data.UUID qualified as UUID
+import qualified Data.UUID as UUID
 import Data.Valor (Valor, check1, failIf)
 import Database.PostgreSQL.Entity (delete)
 import Database.PostgreSQL.Entity.Types
@@ -29,9 +27,9 @@ import Database.PostgreSQL.Simple (FromRow, Only (Only), ResultError (..), ToRow
 import Database.PostgreSQL.Simple.FromField (FromField, fromField, returnError)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
-import Database.PostgreSQL.Transact qualified as PgT
-import Models.Projects.Projects qualified as Projects
-import Models.Users.Users qualified as Users
+import qualified Database.PostgreSQL.Transact as PgT
+import qualified Models.Projects.Projects as Projects
+import qualified Models.Users.Users as Users
 import Optics.Operators ()
 import Optics.TH (makeFieldLabelsNoPrefix)
 import Relude
@@ -105,25 +103,12 @@ data InvProjectMember = InvProjectMember
 
 makeFieldLabelsNoPrefix ''InvProjectMember
 
-data MemberPermissionForm = MemberPermissionForm
-  { permissionf :: Text
-  }
-  deriving (Eq, Show, Generic)
-  deriving anyclass (FromForm, Default)
-
-data MemberPermissionFormError = MemberPermissionFormError
-  { permissionE :: Maybe [String]
-  }
-  deriving (Eq, Show, Generic)
-  deriving anyclass (Default)
-
-memberPermissionFormToModel :: Projects.ProjectId -> MemberPermissionForm -> CreateProjectMembers
-memberPermissionFormToModel pid MemberPermissionForm {..} = CreateProjectMembers {projectId = pid, ..}
-
-memberPermissionFormV :: Monad m => Valor MemberPermissionForm m MemberPermissionFormError
-memberPermissionFormV =
-  MemberPermissionFormError
-    <$> check1 permissionf (failIf ["permission can't be empty"] T.null)
+updateMemberPermissionFormToModel :: Projects.ProjectId -> Users.UserId -> Text -> InvProjectMember
+updateMemberPermissionFormToModel pid uid perm = InvProjectMember { projectId, userId, permission }
+  where 
+    projectId = pid
+    userId = uid
+    permission = perm
 
 insertProjectMembers :: [CreateProjectMembers] -> PgT.DBT IO Int64
 insertProjectMembers = PgT.executeMany q
@@ -141,8 +126,8 @@ invProjectMembers = PgT.executeMany q
           INSERT INTO projects.project_members(project_id, user_id, permission) VALUES (?,?,?)
         |]
 
-updateMemberPermission :: Projects.ProjectId -> MemberPermissionForm -> PgT.DBT IO Int64
-updateMemberPermission mid pm = PgT.execute q (Only mid)
+updateMemberPermission :: Projects.ProjectId -> UUID.UUID -> InvProjectMember -> PgT.DBT IO Int64
+updateMemberPermission pid mid pm = PgT.execute q (Only pid)
   where
     q =
       [sql|
