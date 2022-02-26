@@ -11,6 +11,7 @@ import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import Lucid.HTMX
+import Lucid.Hyperscript
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKey
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
@@ -19,7 +20,6 @@ import Optics.Core ((^.))
 import Pages.BodyWrapper (bodyWrapper)
 import Relude
 import Servant (addHeader)
-import Text.RawString.QQ (r)
 import Web.FormUrlEncoded (FromForm)
 
 newtype GenerateAPIKeyForm = GenerateAPIKeyForm
@@ -61,7 +61,7 @@ apiKeysPage pid apiKeys = do
   section_ [class_ "container mx-auto  px-4 py-10"] $ do
     div_ [class_ "flex justify-between mb-6"] $ do
       h2_ [class_ "text-slate-700 text-2xl font-medium"] "API Keys"
-      button_ [class_ "btn-indigo", term "_" [r|on click remove .hidden from #generateApiKeyDialog |]] "Create an API Key"
+      button_ [class_ "btn-indigo", [__|on click remove .hidden from #generateApiKeyDialog |]] "Create an API Key"
     mainContent apiKeys Nothing
     div_
       [ class_ "hidden fixed z-10 inset-0 overflow-y-auto",
@@ -73,7 +73,7 @@ apiKeysPage pid apiKeys = do
           [ hxPost_ $ "/p/" <> Projects.projectIdText pid <> "/apis",
             class_ "flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0",
             hxTarget_ "#main-content",
-            term "_" [r|on closeModal from body add .hidden to #generateApiKeyDialog then call me.reset()|]
+            [__|on closeModal from body add .hidden to #generateApiKeyDialog then call me.reset()|]
           ]
           $ do
             div_ [class_ "fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"] $ do
@@ -83,7 +83,7 @@ apiKeysPage pid apiKeys = do
                 button_
                   [ type_ "button",
                     class_ "bg-white rounded-md text-gray-400 hover:text-gray-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500",
-                    term "_" [r|on click add .hidden to #generateApiKeyDialog|]
+                    [__|on click add .hidden to #generateApiKeyDialog|]
                   ]
                   $ do
                     span_ [class_ "sr-only"] $ toHtml "Close"
@@ -102,7 +102,7 @@ apiKeysPage pid apiKeys = do
                 button_
                   [ type_ "button",
                     class_ "mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:text-gray-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:w-auto sm:text-sm",
-                    term "_" [r|on click add .hidden to #generateApiKeyDialog|]
+                    [__|on click add .hidden to #generateApiKeyDialog|]
                   ]
                   $ toHtml "Cancel"
 
@@ -127,9 +127,7 @@ mainContent apiKeys newKeyM = do
                     button_
                       [ type_ "button",
                         class_ "bg-green-50 px-2 py-1.5 rounded-md text-sm font-medium text-green-800 hover:bg-green-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600",
-                        term
-                          "_"
-                          [r| 
+                        [__| 
                       on click 
                         js
                             if ('clipboard' in window.navigator) {
@@ -144,7 +142,7 @@ mainContent apiKeys newKeyM = do
                     button_
                       [ type_ "button",
                         class_ "ml-3 bg-green-50 px-2 py-1.5 rounded-md text-sm font-medium text-green-800 hover:bg-green-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600",
-                        term "_" [r|on click remove #apiFeedbackSection|]
+                        [__|on click remove #apiFeedbackSection|]
                       ]
                       $ toHtml "Dismiss"
     div_ [class_ "flex flex-col"] $ do

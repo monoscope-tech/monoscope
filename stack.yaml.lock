@@ -222,6 +222,20 @@ packages:
   original:
     hackage: doctest-parallel-0.2.1@sha256:c6c0d095dd6e0b8ce1bd9f6f5fc4e0cf5cf50b6895b557356ac41b8aa2947399,5631
 - completed:
+    hackage: lucid-hyperscript-0.1.0.2@sha256:c3b048424e75c0e9cbadc30f7ebeb6abc164c2b45b2c995fd0674d4cc57be216,2035
+    pantry-tree:
+      size: 502
+      sha256: 4fad3e11a8a599a8bc05a9b70d22d29dbdc07740ab8ebd5e4236af37f20ee554
+  original:
+    hackage: lucid-hyperscript-0.1.0.2@sha256:c3b048424e75c0e9cbadc30f7ebeb6abc164c2b45b2c995fd0674d4cc57be216,2035
+- completed:
+    hackage: lucid-svg-0.7.1@sha256:012455fd2b1ec6b0f3bba405fd66c99cc6d26592bf25c2624741969567c6e510,1088
+    pantry-tree:
+      size: 456
+      sha256: 46cd22d19a82b9defe4cdec84eaca2fbc804d81515631f0afdb7f2c76a7b548a
+  original:
+    hackage: lucid-svg-0.7.1@sha256:012455fd2b1ec6b0f3bba405fd66c99cc6d26592bf25c2624741969567c6e510,1088
+- completed:
     subdir: core
     name: gogol-core
     version: 0.5.0
@@ -248,19 +262,6 @@ packages:
     git: https://github.com/brendanhay/gogol.git
     commit: 801f00b6e63c22522eb2b3e3e2fc77694730a70f
 - completed:
-    subdir: gogol-logging
-    name: gogol-logging
-    version: 0.5.0
-    git: https://github.com/brendanhay/gogol.git
-    pantry-tree:
-      size: 7969
-      sha256: 140e60d7d2773e876f9b46af3094b8e025b7394bef45ce0a5e3ce6b688cb9c13
-    commit: 801f00b6e63c22522eb2b3e3e2fc77694730a70f
-  original:
-    subdir: gogol-logging
-    git: https://github.com/brendanhay/gogol.git
-    commit: 801f00b6e63c22522eb2b3e3e2fc77694730a70f
-- completed:
     subdir: gogol-pubsub
     name: gogol-pubsub
     version: 0.5.0
@@ -271,6 +272,19 @@ packages:
     commit: 801f00b6e63c22522eb2b3e3e2fc77694730a70f
   original:
     subdir: gogol-pubsub
+    git: https://github.com/brendanhay/gogol.git
+    commit: 801f00b6e63c22522eb2b3e3e2fc77694730a70f
+- completed:
+    subdir: gogol-logging
+    name: gogol-logging
+    version: 0.5.0
+    git: https://github.com/brendanhay/gogol.git
+    pantry-tree:
+      size: 7969
+      sha256: 140e60d7d2773e876f9b46af3094b8e025b7394bef45ce0a5e3ce6b688cb9c13
+    commit: 801f00b6e63c22522eb2b3e3e2fc77694730a70f
+  original:
+    subdir: gogol-logging
     git: https://github.com/brendanhay/gogol.git
     commit: 801f00b6e63c22522eb2b3e3e2fc77694730a70f
 - completed:

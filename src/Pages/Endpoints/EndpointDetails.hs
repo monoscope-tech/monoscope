@@ -14,6 +14,7 @@ import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import Lucid.HTMX
+import Lucid.Svg qualified as Svg
 import Models.Apis.Endpoints
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields qualified as Fields
@@ -23,6 +24,7 @@ import Models.Users.Sessions qualified as Sessions
 import Optics.Core ((^.))
 import Pages.BodyWrapper (bodyWrapper)
 import Relude
+import Text.RawString.QQ (r)
 
 fieldDetailsPartialH :: Sessions.PersistentSession -> Projects.ProjectId -> Fields.FieldId -> DashboardM (Html ())
 fieldDetailsPartialH sess pid fid = do
@@ -83,6 +85,8 @@ endpointDetailsH sess pid eid = do
 
 endpointDetails :: Endpoint -> Map Fields.FieldCategoryEnum [Fields.Field] -> Html ()
 endpointDetails endpoint fieldsM = do
+  link_ [rel_ "stylesheet", href_ "//cdn.jsdelivr.net/chartist.js/latest/chartist.min.css"]
+  script_ [src_ "//cdn.jsdelivr.net/chartist.js/latest/chartist.min.js"] ""
   div_ [class_ "w-full flex flex-row h-screen overflow-y-scroll"] $ do
     div_ [class_ "w-2/3  p-8"] $ do
       div_ [class_ "flex flex-row justify-between mb-10"] $ do
@@ -99,9 +103,75 @@ endpointDetails endpoint fieldsM = do
               div_ [class_ "bg-blue-900 p-1 rounded-lg ml-2"] $ do
                 img_ [src_ "/assets/svgs/whitedown.svg", class_ "text-white h-2 w-2 m-1"]
       div_ [class_ "space-y-8"] $ do
+        endpointStats
         reqResSection "Request" True fieldsM
         reqResSection "Response" True fieldsM
     aside_ [class_ "w-1/3 bg-white h-screen -mr-8 -mt-5 border border-gray-200 ml-3 p-5 sticky top-0", id_ "detailSidebar"] $ toHtml ""
+    script_
+      [r|
+new Chartist.Bar('#reqByStatusCode', {
+  labels: ['Q1', 'Q2', 'Q3', 'Q4'],
+  series: [
+    [800000, 1200000, 1400000, 1300000],
+    [200000, 400000, 500000, 300000],
+    [100000, 200000, 400000, 600000]
+  ]
+}, {
+  stackBars: true,
+  axisY: {
+    labelInterpolationFnc: function(value) {
+      return (value / 1000) + 'k';
+    }
+  }
+}).on('draw', function(data) {
+  if(data.type === 'bar') {
+    data.element.attr({
+      style: 'stroke-width: 30px'
+    });
+  }
+});
+      |]
+
+endpointStats :: Html ()
+endpointStats =
+  section_ $ do
+    div_ [class_ "flex justify-between mt-5"] $ do
+      div_ [class_ "flex flex-row"] $ do
+        img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-4 mr-3 mt-1 w-4"]
+        span_ [class_ "text-lg text-slate-700"] "Endpoint Stats"
+    div_ [class_ "grid grid-cols-3 grid-rows-3 grid-flow-col gap-5"] $ do
+      div_ [class_ "col-span-1 bg-white rounded-2xl p-3 flex flex-row justify-between"] $ do
+        div_ [class_ "flex flex-col justify-center"] $ do
+          span_ "avg Reqs per minute"
+          div_ [class_ "inline-block flex flex-row content-between"] $ do
+            strong_ [class_ "text-xl"] "3.5k"
+            div_ [class_ "inline-block"] $ do
+              img_ [src_ "/assets/svgs/chevron-down.svg"]
+              span_ "10.5%"
+        div_ $ do
+          Svg.svg_ [Svg.width_ "90", Svg.height_ "88", Svg.viewBox_ "0 0 90 88", Svg.fill_ "none", xmlns_ "http://www.w3.org/2000/svg"] $ do
+            Svg.mask_ [Svg.id_ "mask0_4463_66717", Svg.style_ "mask-type:alpha", Svg.maskUnits_ "userSpaceOnUse", Svg.x_ "0", Svg.y_ "0", Svg.width_ "90", height_ "88"] $ do
+              Svg.rect_ [Svg.opacity_ "0.1", Svg.x_ "0.51416", Svg.width_ "89.2571", Svg.height_ "88", Svg.rx_ "22", Svg.fill_ "#FF965D"]
+            Svg.g_ [Svg.mask_ "url(#mask0_4463_66717)"] $ do
+              Svg.rect_ [Svg.x_ "0.51416", Svg.width_ "89.2571", Svg.height_ "88", Svg.fill_ "#FF965D"]
+            Svg.path_ [Svg.d_ "M25.6685 50.55C25.6685 49.5835 26.5161 48.8 27.5618 48.8H33.5123C34.5579 48.8 35.4056 49.5835 35.4056 50.55V60.8H25.6685V50.55Z", Svg.fill_ "#FF965D"]
+            Svg.path_ [Svg.d_ "M40.2744 38.7091C40.2744 37.6547 41.1221 36.8 42.1678 36.8H48.1182C49.1639 36.8 50.0116 37.6547 50.0116 38.7091V60.8H40.2744V38.7091Z", Svg.fill_ "#FF965D"]
+            Svg.path_ [Svg.d_ "M54.8799 29.16C54.8799 28.0775 55.7276 27.2 56.7732 27.2H62.7237C63.7694 27.2 64.617 28.0775 64.617 29.16V60.8H54.8799V29.16Z", Svg.fill_ "#FF965D"]
+      div_ [class_ "col-span-1 bg-white rounded-xl p-3 flex flex-row content-between"] $ do
+        div_ $ do
+          span_ "Anomalies this week"
+          div_ [class_ "inline-block flex flex-row content-between"] $ do
+            strong_ [class_ "text-xl"] "3"
+            div_ [class_ "inline-block"] $ do
+              img_ [src_ "/assets/svgs/chevron-down.svg"]
+              span_ "10.5%"
+        div_ $ do
+          Svg.svg_ [Svg.width_ "86", Svg.height_ "86", Svg.viewBox_ "0 0 86 86", Svg.fill_ "none", xmlns_ "http://www.w3.org/2000/svg"] $ do
+            Svg.circle_ [Svg.cx_ "43", Svg.cy_ "43", Svg.r_ "40.5", Svg.stroke_ "#F8F8F8", Svg.stroke_width_ "5"]
+            Svg.path_ [Svg.d_ "M43 2.5C51.5528 2.5 59.886 5.20763 66.8053 10.2348C73.7246 15.262 78.8748 22.3507 81.5178 30.4848C84.1607 38.619 84.1607 47.381 81.5178 55.5152C78.8748 63.6493 73.7246 70.738 66.8053 75.7652C59.886 80.7924 51.5528 83.5 43 83.5C34.4472 83.5 26.114 80.7924 19.1947 75.7652C12.2754 70.738 7.12516 63.6493 4.48221 55.5152C1.83926 47.381 1.83926 38.619 4.48221 30.4848", Svg.stroke_ "#FF965D", Svg.stroke_width_ "5", Svg.stroke_linecap_ "round"]
+            Svg.text_ "80%"
+      div_ [class_ "col-span-2 bg-white row-span-2 rounded-2xl p-3"] $ do
+        div_ [id_ "reqByStatusCode", class_ "ct-chart ct-perfect-fourth"] ""
 
 -- NB: We could enable the fields cycling functionality using the groups of response list functionality on the endpoint.
 -- So we go through the list and in each request or response view, only show the fields that appear in the field list.

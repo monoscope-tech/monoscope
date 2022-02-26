@@ -17,33 +17,33 @@ module Pages.Projects.CreateProject
 where
 
 import Config
+import Data.CaseInsensitive qualified as CI
 import Data.Default
 import Data.Maybe (isJust)
-import qualified Data.Text as T
-import Optics.TH (makeFieldLabelsNoPrefix)
-import qualified Data.CaseInsensitive as CI
+import Data.Text qualified as T
 import Data.Time (ZonedTime, getZonedTime)
-import qualified Data.UUID as UUID
-import qualified Data.UUID.V4 as UUIDV4
+import Data.UUID qualified as UUID
+import Data.UUID.V4 qualified as UUIDV4
 import Data.Valor (Valid, Valor, check1, failIf, validateM)
-import qualified Data.Valor as Valor
-import qualified Data.Vector as Vector
+import Data.Valor qualified as Valor
+import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import Lucid.HTMX
-import qualified Models.Projects.ProjectMembers as ProjectMembers
-import qualified Models.Projects.Projects as Projects
-import qualified Models.Users.Sessions as Sessions
-import qualified Models.Users.Users as Users
-import qualified  Models.Projects.ProjectsEmail as ProjectEmail
+import Lucid.Hyperscript
+import Models.Projects.ProjectMembers qualified as ProjectMembers
+import Models.Projects.Projects qualified as Projects
+import Models.Projects.ProjectsEmail qualified as ProjectEmail
+import Models.Users.Sessions qualified as Sessions
+import Models.Users.Users qualified as Users
 import Optics.Core ((^.))
+import Optics.TH (makeFieldLabelsNoPrefix)
 import Pages.BodyWrapper (bodyWrapper)
 import Relude
 import Servant
   ( addHeader,
     noHeader,
   )
-import Text.RawString.QQ
 import Web.FormUrlEncoded (FromForm)
 
 data CreateProjectForm = CreateProjectForm
@@ -92,8 +92,8 @@ inviteProjectMemberFormV =
     <$> check1 email (failIf ["must be a valid email address"] checkEmail)
     <*> check1 permission (failIf ["must not be blank"] T.null)
 
-inviteProjectMember :: Projects.ProjectId ->  Users.UserId -> Text -> ProjectMembers.InvProjectMember
-inviteProjectMember pid uid perm = ProjectMembers.InvProjectMember { projectId, userId, permission }
+inviteProjectMember :: Projects.ProjectId -> Users.UserId -> Text -> ProjectMembers.InvProjectMember
+inviteProjectMember pid uid perm = ProjectMembers.InvProjectMember {projectId, userId, permission}
   where
     projectId = pid
     userId = uid
@@ -102,7 +102,7 @@ inviteProjectMember pid uid perm = ProjectMembers.InvProjectMember { projectId, 
 -- createUserFromInvitation needed as Users.createUser does not accomodate the constraint of invited member and user having the same userid as well as active status should be false until invited member activates the user account
 createUserFromInvitation :: Users.UserId -> ZonedTime -> Text -> IO Users.User
 createUserFromInvitation uid tNow email = do
-  pure $ 
+  pure $
     Users.User
       { id = uid,
         createdAt = tNow,
@@ -115,33 +115,30 @@ createUserFromInvitation uid tNow email = do
         email = CI.mk email
       }
 
-
-invMemberH :: InviteProjectMemberForm -> DashboardM (HeadersTriggerRedirect (Html ())) 
-invMemberH InviteProjectMemberForm { email, permission } = do
+invMemberH :: InviteProjectMemberForm -> DashboardM (HeadersTriggerRedirect (Html ()))
+invMemberH InviteProjectMemberForm {email, permission} = do
   uid <- liftIO Users.createUserId
   tNow <- liftIO getZonedTime
   puid <- liftIO UUIDV4.nextRandom
   let pid = Projects.ProjectId puid
-  validationRes <- validateM inviteProjectMemberFormV InviteProjectMemberForm { email, permission }
+  validationRes <- validateM inviteProjectMemberFormV InviteProjectMemberForm {email, permission}
   case validationRes of
-    Left invRaw -> do 
+    Left invRaw -> do
       let inv = Valor.unValid invRaw
       pool <- asks pool
-      
+
       invUser <- liftIO $ createUserFromInvitation uid tNow email
-      let invMember = inviteProjectMember pid uid permission 
+      let invMember = inviteProjectMember pid uid permission
       let memberEmail = ProjectEmail.sendEmail email
       -- ProjectEmail.sendInviteMail memberEmail
-      _ <- liftIO $ 
+      _ <- liftIO $
         withPool pool $ do
           _ <- ProjectMembers.invProjectMembers [invMember]
           _ <- Users.insertUser invUser
           pass
 
       pure $ addHeader "HX-Trigger" $ addHeader "/" $ invMemberBody inv (def @InviteProjectMemberFormError)
-
-    Right inve -> pure $ noHeader $ noHeader $ invMemberBody InviteProjectMemberForm { email, permission } inve
-
+    Right inve -> pure $ noHeader $ noHeader $ invMemberBody InviteProjectMemberForm {email, permission} inve
 
 ----------------------------------------------------------------------------------------------------------
 -- createProjectGetH is the handler for the create projects page
@@ -230,7 +227,6 @@ invMemberBody inv inve = do
             span_ [class_ "text-blue-700 font-medium text-sm "] "Add member"
       button_ [class_ "py-2 px-5 bg-blue-700 absolute m-5 bottom-0 right-0 text-[white] text-sm rounded-xl cursor-pointer", type_ "submit"] "Next step"
 
-
 ----------------------------------------------------------------------------------------------------------
 -- createProjectBody is the core html view
 createProjectBody :: CreateProjectForm -> CreateProjectFormError -> Html ()
@@ -267,24 +263,19 @@ createProjectBody cp cpe = do
                 option_ [class_ "text-gray-500"] "Can Edit"
                 option_ [class_ "text-gray-500"] "Can View"
               button_
-                [ term
-                    "_"
-                    [r| 
+                [ [__| 
                     remove from my parent             
                   |]
                 ]
                 $ do img_ [src_ "/assets/svgs/delete.svg", class_ "cursor-pointer"]
         a_
           [ class_ "bg-transparent inline-flex cursor-pointer mt-2",
-            term
-              "_"
-              [r| 
-                  on click append #invite.innerHTML to #manage   
-                  end 
-                |]
+            [__| 
+              on click append #invite.innerHTML to #manage   
+              end 
+            |]
           ]
           $ do
             img_ [src_ "/assets/svgs/blue-plus.svg", class_ " mt-1 mx-2 w-3 h-3"]
             span_ [class_ "text-blue-700 font-medium text-sm "] "Add member"
       button_ [class_ "py-2 px-5 bg-blue-700 absolute m-5 bottom-0 right-0 text-[white] text-sm rounded-xl cursor-pointer", type_ "submit"] "Next step"
-      

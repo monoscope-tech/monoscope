@@ -34,19 +34,21 @@ startApp :: IO ()
 startApp = do
   let logger = logStringStdout
   loadFileErr <- try (Dotenv.loadFile Dotenv.defaultConfig) :: IO (Either SomeException [(String, String)])
-  logger <& "Load .env Resp " <> show loadFileErr
+  case loadFileErr of
+    Left err -> logger <& "Load .env error " <> show loadFileErr
+    Right _ -> pass
 
   env <- decodeEnv :: IO (Either String Config.EnvConfig)
-  logger <& "..." <> show env
   case env of
-    Left err -> logger <& "Error: " <> show err
+    Left err -> logger <& "Error decoding env variables : " <> show err
     Right envConfig -> do
       let createPgConnIO = connectPostgreSQL $ encodeUtf8 (envConfig ^. #databaseUrl)
       conn <- createPgConnIO
-      initializationRes <- Migrations.runMigration conn Migrations.defaultOptions MigrationInitialization
-      logger <& "migration initialized " <> show initializationRes
-      migrationRes <- Migrations.runMigration conn Migrations.defaultOptions $ MigrationDirectory ((toString $ envConfig ^. #migrationsDir) :: FilePath)
-      logger <& "migration result: " <> show migrationRes
+      when (envConfig ^. #migrateAndInitializeOnStart) do
+        initializationRes <- Migrations.runMigration conn Migrations.defaultOptions MigrationInitialization
+        logger <& "migration initialized " <> show initializationRes
+        migrationRes <- Migrations.runMigration conn Migrations.defaultOptions $ MigrationDirectory ((toString $ envConfig ^. #migrationsDir) :: FilePath)
+        logger <& "migration result: " <> show migrationRes
 
       poolConn <-
         Pool.createPool
@@ -60,10 +62,11 @@ startApp = do
       -- We watch and catch thrown exceptions which would likely happen if the user does not yet exist in the db
       case envConfig ^. #testEmail of
         Just email -> do
-          err <- try (withPool poolConn (Users.addUserToAllProjects email)) :: IO (Either SomeException Int64)
-          case err of
-            Left err' -> logger <& "unable to run addUserToAllProjects " <> show err'
-            Right resp -> logger <& "addUserToAllProjects resp" <> show resp
+          when (envConfig ^. #migrateAndInitializeOnStart) do
+            err <- try (withPool poolConn (Users.addUserToAllProjects email)) :: IO (Either SomeException Int64)
+            case err of
+              Left err' -> logger <& "unable to run addUserToAllProjects " <> show err'
+              Right resp -> logger <& "addUserToAllProjects resp" <> show resp
         Nothing -> pass
 
       let serverCtx =
@@ -97,6 +100,6 @@ pubsubService logger envConfig conn = do
       let messages = pullResp L.^. PubSub.prReceivedMessages
       msgIds <- liftIO $ mapM (processMessage logger envConfig conn) messages
       let acknowlegReq = PubSub.acknowledgeRequest & PubSub.arAckIds L..~ catMaybes msgIds
-      if null msgIds
-        then pass
-        else (PubSub.projectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send) >> pass
+      unless (null msgIds) do
+        _ <- PubSub.projectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send
+        pass

@@ -116,6 +116,8 @@ library
     , lens-aeson
     , lucid
     , lucid-htmx
+    , lucid-hyperscript
+    , lucid-svg
     , memory
     , optics-core
     , optics-th
@@ -206,6 +208,8 @@ executable apitoolkit-server-exe
     , lens-aeson
     , lucid
     , lucid-htmx
+    , lucid-hyperscript
+    , lucid-svg
     , memory
     , optics-core
     , optics-th
@@ -303,6 +307,8 @@ test-suite apitoolkit-server-test
     , lens-aeson
     , lucid
     , lucid-htmx
+    , lucid-hyperscript
+    , lucid-svg
     , memory
     , optics-core
     , optics-th

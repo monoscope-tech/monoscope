@@ -7,30 +7,30 @@ maintainer:          "example@example.com"
 copyright:           "2021 Author name here"
 
 ghc-options:
-# For details on warnings: https://downloads.haskell.org/~ghc/master/users-guide/using-warnings.html
-# This list taken from https://medium.com/mercury-bank/enable-all-the-warnings-a0517bc081c3
-# Enable all warnings with -Weverything, then disable the ones we don’t care about
-- -Weverything
-- -Wno-missing-exported-signatures # missing-exported-signatures turns off the more strict -Wmissing-signatures. See https://ghc.haskell.org/trac/ghc/ticket/14794#ticket
-- -Wno-missing-import-lists # Requires explicit imports of _every_ function (e.g. ‘$’); too strict
-- -Wno-missed-specialisations # When GHC can’t specialize a polymorphic function. No big deal and requires fixing underlying libraries to solve.
-- -Wno-all-missed-specialisations # See missed-specialisations
-- -Wno-unsafe # Don’t use Safe Haskell warnings
-- -Wno-safe # Don’t use Safe Haskell warnings
-- -Wno-missing-local-signatures # Warning for polymorphic local bindings; nothing wrong with those.
-- -Wno-monomorphism-restriction # Don’t warn if the monomorphism restriction is used
-- -Wno-missing-safe-haskell-mode
-# - -fforce-recomp # force recompilation. Useful for seeing the result of compiling ghc with these listed options. It impacts compile time and should be disabled when not needed.
-- -Wno-orphans
-# remove the next options when possible. This is a temporary workaround
-- -Wno-missing-deriving-strategies
-- -Wno-unused-top-binds
-- -Wno-missing-methods
-- -Wno-prepositive-qualified-module
-- -Wno-unused-matches
-# - -Wno-name-shadowing
-- -Wno-type-defaults
-# - -Wno-unused-record-wildcards
+  # For details on warnings: https://downloads.haskell.org/~ghc/master/users-guide/using-warnings.html
+  # This list taken from https://medium.com/mercury-bank/enable-all-the-warnings-a0517bc081c3
+  # Enable all warnings with -Weverything, then disable the ones we don’t care about
+  - -Weverything
+  - -Wno-missing-exported-signatures # missing-exported-signatures turns off the more strict -Wmissing-signatures. See https://ghc.haskell.org/trac/ghc/ticket/14794#ticket
+  - -Wno-missing-import-lists # Requires explicit imports of _every_ function (e.g. ‘$’); too strict
+  - -Wno-missed-specialisations # When GHC can’t specialize a polymorphic function. No big deal and requires fixing underlying libraries to solve.
+  - -Wno-all-missed-specialisations # See missed-specialisations
+  - -Wno-unsafe # Don’t use Safe Haskell warnings
+  - -Wno-safe # Don’t use Safe Haskell warnings
+  - -Wno-missing-local-signatures # Warning for polymorphic local bindings; nothing wrong with those.
+  - -Wno-monomorphism-restriction # Don’t warn if the monomorphism restriction is used
+  - -Wno-missing-safe-haskell-mode
+  # - -fforce-recomp # force recompilation. Useful for seeing the result of compiling ghc with these listed options. It impacts compile time and should be disabled when not needed.
+  - -Wno-orphans
+  # remove the next options when possible. This is a temporary workaround
+  - -Wno-missing-deriving-strategies
+  - -Wno-unused-top-binds
+  - -Wno-missing-methods
+  - -Wno-prepositive-qualified-module
+  - -Wno-unused-matches
+  # - -Wno-name-shadowing
+  - -Wno-type-defaults
+  # - -Wno-unused-record-wildcards
 
 # cc-options: -static
 # ld-options: -static -pthread
@@ -117,7 +117,6 @@ dependencies:
   - gogol-core
   - gogol-pubsub
   - hspec
-  # - hspec-pg-transact
   - jose
   - lens-aeson
   - lucid
@@ -132,6 +131,8 @@ dependencies:
   - unordered-containers
   - valor >= 1.0.0.0
   - warp
+  - lucid-hyperscript
+  - lucid-svg
 
 
 library:

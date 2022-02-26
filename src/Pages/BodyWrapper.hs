@@ -2,12 +2,12 @@ module Pages.BodyWrapper (bodyWrapper) where
 
 import Data.Vector qualified as Vector
 import Lucid
+import Lucid.Hyperscript
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import Optics.Operators ((^.))
 import Relude
-import Text.RawString.QQ
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu ppid =
@@ -46,9 +46,7 @@ projectsDropDown currProject projects =
   div_
     [ term "data-menu" "true",
       class_ "hidden origin-top-right z-40 transition transform bg-white p-4 absolute w-[20rem] rounded-2xl shadow-2xl shadow-indigo-200",
-      term
-        "_"
-        [r|
+      [__|
           on open
               remove .hidden
               add .ease-out .duration-100 .opacity-0 .scale-95
@@ -107,9 +105,7 @@ sideNav sess project pageTitle = do
     div_ [class_ "p-4"] $ do
       a_
         [ class_ "flex flex-row bg-gray-100 block p-6 rounded-md cursor-pointer",
-          term
-            "_"
-            [r| 
+          [__| 
                 on click queue first
                     if I do not match .active
                         add .active
@@ -151,9 +147,7 @@ navbar currUser = do
       a_ [class_ "inline-block border-r-2 p-2 pr-5"] $ img_ [src_ "/assets/svgs/notifications_active.svg"]
       a_
         [ class_ "cursor-pointer inline-block space-x-4 pl-4 relative ",
-          term
-            "_"
-            [r| 
+          [__| 
             on click queue first
                 if I do not match .active
                     add .active
@@ -180,9 +174,7 @@ navbar currUser = do
       div_
         [ term "drop-menu" "true",
           class_ "hidden origin-top-left border border-gray-100 w-[10rem] rounded-lg shadow-2xl shadow-indigo-200 z-40 transition transform bg-white p-1 absolute top-14 right-5 ",
-          term
-            "_"
-            [r|
+          [__|
             on open
                 remove .hidden
                 add .ease-out .duration-100 .opacity-0 .scale-95

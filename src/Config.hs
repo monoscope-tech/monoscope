@@ -22,7 +22,8 @@ data EnvConfig = EnvConfig
     auth0Callback :: Text,
     testEmail :: Maybe Text,
     apiKeyEncryptionSecretKey :: Text,
-    messagesPerPubsubPullBatch :: Int
+    messagesPerPubsubPullBatch :: Int,
+    migrateAndInitializeOnStart :: Bool
   }
   deriving (Show, Generic)
   deriving anyclass (FromEnv)
