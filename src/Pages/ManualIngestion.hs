@@ -109,8 +109,10 @@ manualIngestPage = do
           hxPost_ "",
           hxVals_
             [r|js: requestBody:reqBodyEditor.getText(), 
-                       responseBody: respBodyEditor.getText(),
-                       timestamp: (new Date(document.getElementById('timestamp').value)).toISOString()|]
+                   responseBody: respBodyEditor.getText(),
+                   requestHeaders: reqHeadersEditor.getText(),
+                   responseHeaders: respHeadersEditor.getText(),
+                   timestamp: (new Date(document.getElementById('timestamp').value)).toISOString()|]
         ]
         $ do
           inputDatetime "timestamp"
