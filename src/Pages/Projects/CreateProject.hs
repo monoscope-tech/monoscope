@@ -19,14 +19,11 @@ where
 import Config
 import Data.CaseInsensitive qualified as CI
 import Data.Default
-import Data.Maybe (isJust)
 import Data.Text qualified as T
 import Data.Time (ZonedTime, getZonedTime)
-import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
-import Data.Valor (Valid, Valor, check1, failIf, validateM)
+import Data.Valor (Valor, check1, failIf, validateM)
 import Data.Valor qualified as Valor
-import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import Lucid.HTMX
@@ -37,7 +34,6 @@ import Models.Projects.ProjectsEmail qualified as ProjectEmail
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import Optics.Core ((^.))
-import Optics.TH (makeFieldLabelsNoPrefix)
 import Pages.BodyWrapper (bodyWrapper)
 import Relude
 import Servant
@@ -206,21 +202,17 @@ invMemberBody inv inve = do
                 option_ [class_ "text-gray-500"] "Can Edit"
                 option_ [class_ "text-gray-500"] "Can View"
               button_
-                [ term
-                    "_"
-                    [r| 
+                [ [__| 
                     remove from my parent             
                   |]
                 ]
                 $ do img_ [src_ "/assets/svgs/delete.svg", class_ "cursor-pointer"]
         a_
           [ class_ "bg-transparent inline-flex cursor-pointer mt-2",
-            term
-              "_"
-              [r| 
-                  on click append #invite.innerHTML to #manage   
-                  end 
-                |]
+            [__| 
+              on click append #invite.innerHTML to #manage   
+              end 
+            |]
           ]
           $ do
             img_ [src_ "/assets/svgs/blue-plus.svg", class_ " mt-1 mx-2 w-3 h-3"]
