@@ -6,6 +6,7 @@ static/assets/css/tailwind.min.css
 .hie
 dist-newstyle
 .env
+env
 .vscode
 apitoolkit-server-exe
 gha-creds-*.json
