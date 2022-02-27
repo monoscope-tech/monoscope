@@ -64,7 +64,7 @@ reqMsgFormToReqMsg pid RequestMessageForm {..} = do
 -- - include a data list of all endpoints in the service in the endpoints field
 -- - timestamp should default to the current data in the browser form except preloaded
 -- - preload the form wiht the data from the last submitted and persisted request dump from the database.
--- - document how to access this page from within the github readme.
+-- - [x] document how to access this page from within the github readme.
 -- - [FUTURE] If we ever have a super admin, it should be possible to access this page directly from there for any given company.
 manualIngestPostH :: Sessions.PersistentSession -> Projects.ProjectId -> RequestMessageForm -> DashboardM (Html ())
 manualIngestPostH sess pid reqMF = do
@@ -120,14 +120,14 @@ manualIngestPage = do
           inputTextDatalist "" "method" ["GET", "POST", "PUT", "DELETE", "OPTION", "HEAD"]
           inputText "" "referer"
           inputText "" "urlPath"
-          inputInt "" "protoMajor"
-          inputInt "" "protoMinor"
-          inputInt "duration in nanoseconds (1ms -> 1,000,000 ns)" "duration"
+          inputInt "" "protoMajor" 2
+          inputInt "" "protoMinor" 2
+          inputInt "duration in nanoseconds (1ms -> 1,000,000 ns)" "duration" 56000000
           inputTextArea "requestHeaders as a key value json pair" "requestHeaders"
           inputTextArea "responseHeaders as a key value json pair" "responseHeaders"
           inputTextArea "" "requestBody"
           inputTextArea "" "responseBody"
-          inputInt "" "statusCode"
+          inputInt "" "statusCode" 200
           div_ $ do
             button_ [class_ "btn-sm btn-indigo", type_ "submit"] "Submit"
     script_
@@ -207,15 +207,17 @@ inputDatetime name = do
         pattern_ "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}"
       ]
 
-inputInt :: Text -> Text -> Html ()
-inputInt title name = do
+inputInt :: Text -> Text -> Int -> Html ()
+inputInt title name value = do
   div_ $ do
     label_ [class_ "text-gray-400 mx-2  text-sm"] $ toHtml $ title <> " [" <> name <> "]"
     input_
       [ class_ "h-10 px-5 my-2 w-full text-sm bg-white text-black border-solid border border-gray-200 rounded-2xl  ",
         type_ "number",
         id_ name,
-        name_ name
+        name_ name,
+        value_ $ show value,
+        lang_ "en-150"
       ]
 
 httpStatusCodes :: [(Text, Text)]

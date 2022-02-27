@@ -12,7 +12,8 @@ import Data.UUID qualified as UUID
 import Database.PostgreSQL.Entity (insert)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, ToRow)
-import Database.PostgreSQL.Transact qualified as PgT
+import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Transact (DBT)
 import Optics.TH
 import Relude
 
@@ -45,5 +46,19 @@ data RequestDump = RequestDump
 
 makeFieldLabelsNoPrefix ''RequestDump
 
-insertRequestDump :: RequestDump -> PgT.DBT IO ()
+insertRequestDump :: RequestDump -> DBT IO ()
 insertRequestDump = insert @RequestDump
+
+-- selectRequestsByStatusCodesStatByDay :: DBT IO (ZonedTime, Int, Int)
+-- selectRequestsByStatusCodesStatByDay = query Select q
+--   where q = [sql|
+--        with abc as (SELECT time_bucket('1 day', created_at) as day,
+--              status_code,
+--              count(id),
+--            project_id, url_path, method
+--         FROM apis.request_dumps
+--         where created_at > NOW() - interval '14' day
+--         --where project_id='', url_path='' and method='';
+--         GROUP BY project_id, url_path, method, day, status_code)
+--       select  status_code  from abc
+--     |]

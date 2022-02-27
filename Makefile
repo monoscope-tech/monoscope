@@ -5,7 +5,7 @@ run:
 	stack run
 
 live-reload:
-	ghcid --command 'stack ghci' --test ':run Main.main' --warnings
+	ghcid --command 'stack ghci apitoolkit-server --ghc-options=-w' --test ':run Main.main' --warnings
 
 fmt:
 	ormolu --mode inplace $$(find . -name '*.hs')

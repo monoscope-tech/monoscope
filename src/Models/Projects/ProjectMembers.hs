@@ -1,6 +1,6 @@
 {-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 module Models.Projects.ProjectMembers
   ( ProjectMembers (..),
@@ -15,25 +15,21 @@ module Models.Projects.ProjectMembers
   )
 where
 
-import Data.Default (Default)
 import Data.Default.Instances ()
-import qualified Data.Text as T
 import Data.Time (ZonedTime)
-import qualified Data.UUID as UUID
-import Data.Valor (Valor, check1, failIf)
+import Data.UUID qualified as UUID
 import Database.PostgreSQL.Entity (delete)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ResultError (..), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, fromField, returnError)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
-import qualified Database.PostgreSQL.Transact as PgT
-import qualified Models.Projects.Projects as Projects
-import qualified Models.Users.Users as Users
+import Database.PostgreSQL.Transact qualified as PgT
+import Models.Projects.Projects qualified as Projects
+import Models.Users.Users qualified as Users
 import Optics.Operators ()
 import Optics.TH (makeFieldLabelsNoPrefix)
 import Relude
-import Web.FormUrlEncoded (FromForm)
 
 data Permissions
   = PAdmin
@@ -104,8 +100,8 @@ data InvProjectMember = InvProjectMember
 makeFieldLabelsNoPrefix ''InvProjectMember
 
 updateMemberPermissionFormToModel :: Projects.ProjectId -> Users.UserId -> Text -> InvProjectMember
-updateMemberPermissionFormToModel pid uid perm = InvProjectMember { projectId, userId, permission }
-  where 
+updateMemberPermissionFormToModel pid uid perm = InvProjectMember {projectId, userId, permission}
+  where
     projectId = pid
     userId = uid
     permission = perm

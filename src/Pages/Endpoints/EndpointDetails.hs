@@ -106,7 +106,7 @@ endpointDetails endpoint fieldsM = do
         endpointStats
         reqResSection "Request" True fieldsM
         reqResSection "Response" True fieldsM
-    aside_ [class_ "w-1/3 bg-white h-screen -mr-8 -mt-5 border border-gray-200 ml-3 p-5 sticky top-0", id_ "detailSidebar"] $ toHtml ""
+    aside_ [class_ "w-1/3 bg-white h-screen -mr-8 -mt-5 border border-gray-200 p-5 sticky top-0", id_ "detailSidebar"] $ toHtml ""
     script_
       [r|
 new Chartist.Bar('#reqByStatusCode', {
@@ -213,12 +213,12 @@ subSubSection title fieldsM = do
           let displayKey = replace "»" "" $ last ("" :| segments)
           case fieldM of
             Nothing -> do
-              a_ [class_ "flex flex-row cursor-pointer", style_ depthPadding, term "data-depth" $ show depth] $ do
+              a_ [class_ "flex flex-row items-center", style_ depthPadding, term "data-depth" $ show depth] $ do
                 img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-4 mr-3 mt-4 w-4"]
-                div_ [class_ "border flex flex-row border-gray-100 px-5 p-3 rounded-xl w-full"] $ do
-                  input_ [type_ "checkbox", class_ " mr-12 m-1"]
-                  span_ [class_ "grow text-sm text-slate-600"] $ toHtml displayKey
-                  span_ [class_ "text-sm text-slate-500 mx-12"] $ toHtml $ if "»" `isInfixOf` key then "[]" else "{}"
+                div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full"] $ do
+                  input_ [type_ "checkbox", class_ " mr-12"]
+                  span_ [class_ "grow text-sm text-slate-600 inline-flex items-center"] $ toHtml displayKey
+                  span_ [class_ "text-sm text-slate-500 mx-12 inline-flex items-center"] $ toHtml $ if "»" `isInfixOf` key then "[]" else "{}"
             Just field -> do
               a_
                 [ hxGet_ $ "/p/" <> Projects.projectIdText (field ^. #projectId) <> "/fields/" <> UUID.toText (Fields.unFieldId $ field ^. #id),
@@ -229,12 +229,12 @@ subSubSection title fieldsM = do
                 ]
                 $ do
                   img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-4 mr-3 mt-4 w-4 ", style_ "visibility: hidden"]
-                  div_ [class_ "border flex flex-row border-gray-100 px-5 p-3 rounded-xl w-full"] $ do
-                    input_ [type_ "checkbox", class_ " mr-12 m-1"]
-                    span_ [class_ "grow text-sm text-slate-600"] $ toHtml displayKey
-                    span_ [class_ "text-sm text-slate-500 mx-12"] $ toHtml $ show $ field ^. #fieldType
-                    img_ [src_ "/assets/svgs/alert-red.svg", class_ " mx-10 "]
-                    img_ [src_ "/assets/svgs/dots-vertical.svg", class_ "mx-5"]
+                  div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full items-center"] $ do
+                    input_ [type_ "checkbox", class_ " mr-12"]
+                    span_ [class_ "grow text-sm text-slate-600 inline-flex items-center"] $ toHtml displayKey
+                    span_ [class_ "text-sm text-slate-500 mx-12 inline-flex items-center"] $ toHtml $ show $ field ^. #fieldType
+                    img_ [src_ "/assets/svgs/alert-red.svg", class_ " mr-8 ml-4 h-5"]
+                    img_ [src_ "/assets/svgs/dots-vertical.svg", class_ "mx-5 h-5"]
         div_ [class_ " border-2 border-dashed flex mb-5 flex-row border-gray-100 ml-5  px-5 p-3 rounded-xl mt-2 "] $ do
           img_ [src_ "/assets/svgs/blue-plus.svg", class_ "mx-2"]
           span_ [class_ "text-blue-700 font-medium text-base "] "Add a field"

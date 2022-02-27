@@ -8,8 +8,8 @@
     font-family: 'Poppins', sans-serif;
   }
   @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500&display=swap');
-  body {
-    font-height: 14px;
+  html {
+    font-size: 14px;
     font-family: 'Poppins', sans-serif;
   }
 
