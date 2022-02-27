@@ -34,6 +34,9 @@
   .input-txt {
       @apply shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md;
     }
+  .endpoint {
+    @apply w-8 rounded-lg text-center text-white bg-green-400 p-2 m-2 inline-block;
+  }
 
   /* table td { */
   /*   border: 1px solid #eee; */

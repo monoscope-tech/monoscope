@@ -8,16 +8,25 @@ module Pages.Endpoints.EndpointList (endpointListH) where
 import Config
 import Data.UUID as UUID
 import Data.Vector (Vector)
+import Database.PostgreSQL.Entity
 import Database.PostgreSQL.Entity.DBT
-  ( withPool,
+  ( QueryNature (Select),
+    query,
+    queryOne,
+    query_,
+    withPool,
   )
+import Database.PostgreSQL.Transact (DBT)
 import Lucid
-import Models.Apis.Endpoints qualified as Endpoints
-import Models.Projects.Projects qualified as Projects
-import Models.Users.Sessions qualified as Sessions
+import Lucid.HTMX
+import qualified Models.Apis.Endpoints as Endpoints
+import qualified Models.Projects.Projects as Projects
+import qualified Models.Users.Sessions as Sessions
 import Optics.Operators
 import Pages.BodyWrapper (bodyWrapper)
 import Relude
+import Servant.HTML.Lucid
+import Text.RawString.QQ
 
 endpointListH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 endpointListH sess pid = do
@@ -67,21 +76,24 @@ endpointList enps = do
             th_ [class_ "text-left text-sm text-gray-400 font-normal"] "AVG LATENCY"
             th_ [class_ "text-left text-sm text-gray-400 font-normal"] "FLAG"
         tbody_ $ do
-          enps & mapM_ \enp -> do
-            tr_ [class_ "border-b border-b-slate-300 py-2"] $ do
-              td_ [class_ "text-left pr-4 "] $ do
-                input_ [type_ "checkbox"]
-              td_ [class_ "flex flex-row"] $ do
-                a_ [href_ ("/p/" <> UUID.toText (Projects.unProjectId $ enp ^. #projectId) <> "/endpoints/" <> UUID.toText (Endpoints.unEndpointId $ enp ^. #id))] $ do
-                  span_ [class_ "w-25 rounded-lg text-center text-white bg-green-400 p-2 m-2 inline-block"] $ toHtml $ enp ^. #method
-                  span_ [class_ " text-base text-slate-500 font-normal"] $ toHtml $ enp ^. #urlPath
-              td_ [class_ " text-sm text-gray-400 font-normal"] "4500"
-              td_ [class_ " text-sm text-slate-500 font-normal"] "200"
-              td_ [class_ " text-sm text-gray-400 font-normal"] "400ms"
-              td_ [class_ "grid justify-items-end font-medium text-gray-400"] $ do
-                div_ [class_ "flex flex-row"] $ do
-                  img_ [src_ "/assets/svgs/alert-red.svg"]
-                  img_ [src_ "/assets/svgs/dots-vertical.svg"]
+          enps
+            & mapM_
+              ( \enp -> do
+                  tr_ [class_ "border-b border-b-slate-300 py-2"] $ do
+                    td_ [class_ "text-left pr-4 "] $ do
+                      input_ [type_ "checkbox"]
+                    td_ [class_ "flex flex-row"] $ do
+                      a_ [href_ ("/p/" <> UUID.toText (Projects.unProjectId $ enp ^. #projectId) <> "/endpoints/" <> UUID.toText (Endpoints.unEndpointId $ enp ^. #id))] $ do
+                        span_ [class_ "endpoint"] $ toHtml $ enp ^. #method
+                        span_ [class_ " text-base text-slate-500 font-normal"] $ toHtml $ enp ^. #urlPath
+                    td_ [class_ " text-sm text-gray-400 font-normal"] "4500"
+                    td_ [class_ " text-sm text-slate-500 font-normal"] "200"
+                    td_ [class_ " text-sm text-gray-400 font-normal"] "400ms"
+                    td_ [class_ "grid justify-items-end font-medium text-gray-400"] $ do
+                      div_ [class_ "flex flex-row"] $ do
+                        img_ [src_ "/assets/svgs/alert-red.svg"]
+                        img_ [src_ "/assets/svgs/dots-vertical.svg"]
+              )
 
       -- table footer
       div_ [class_ "flex flex-row mt-5 justify-between"] $ do
