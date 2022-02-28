@@ -170,7 +170,7 @@ endpointStats percentiles =
         img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-4 mr-3 mt-1 w-4"]
         span_ [class_ "text-lg text-slate-700"] "Endpoint Stats"
     div_ [class_ "grid grid-cols-3 grid-rows-3 grid-flow-col gap-5"] $ do
-      div_ [class_ "col-span-1 bg-white rounded-2xl p-3 flex flex-row justify-between"] $ do
+      div_ [class_ "col-span-1 bg-white  border border-gray-100  rounded-2xl p-3 flex flex-row justify-between"] $ do
         div_ [class_ "flex flex-col justify-center"] $ do
           span_ "avg Reqs per minute"
           div_ [class_ "inline-block flex flex-row content-between"] $ do
@@ -187,7 +187,7 @@ endpointStats percentiles =
             Svg.path_ [Svg.d_ "M25.6685 50.55C25.6685 49.5835 26.5161 48.8 27.5618 48.8H33.5123C34.5579 48.8 35.4056 49.5835 35.4056 50.55V60.8H25.6685V50.55Z", Svg.fill_ "#FF965D"]
             Svg.path_ [Svg.d_ "M40.2744 38.7091C40.2744 37.6547 41.1221 36.8 42.1678 36.8H48.1182C49.1639 36.8 50.0116 37.6547 50.0116 38.7091V60.8H40.2744V38.7091Z", Svg.fill_ "#FF965D"]
             Svg.path_ [Svg.d_ "M54.8799 29.16C54.8799 28.0775 55.7276 27.2 56.7732 27.2H62.7237C63.7694 27.2 64.617 28.0775 64.617 29.16V60.8H54.8799V29.16Z", Svg.fill_ "#FF965D"]
-      div_ [class_ "col-span-1 bg-white rounded-xl p-3 flex flex-row content-between"] $ do
+      div_ [class_ "col-span-1 bg-white  border border-gray-100  rounded-xl p-3 flex flex-row content-between"] $ do
         div_ $ do
           span_ "Anomalies this week"
           div_ [class_ "inline-block flex flex-row content-between"] $ do
@@ -200,13 +200,13 @@ endpointStats percentiles =
             Svg.circle_ [Svg.cx_ "43", Svg.cy_ "43", Svg.r_ "40.5", Svg.stroke_ "#F8F8F8", Svg.stroke_width_ "5"]
             Svg.path_ [Svg.d_ "M43 2.5C51.5528 2.5 59.886 5.20763 66.8053 10.2348C73.7246 15.262 78.8748 22.3507 81.5178 30.4848C84.1607 38.619 84.1607 47.381 81.5178 55.5152C78.8748 63.6493 73.7246 70.738 66.8053 75.7652C59.886 80.7924 51.5528 83.5 43 83.5C34.4472 83.5 26.114 80.7924 19.1947 75.7652C12.2754 70.738 7.12516 63.6493 4.48221 55.5152C1.83926 47.381 1.83926 38.619 4.48221 30.4848", Svg.stroke_ "#FF965D", Svg.stroke_width_ "5", Svg.stroke_linecap_ "round"]
             Svg.text_ "80%"
-      div_ [class_ "col-span-2 bg-white row-span-2 rounded-2xl p-3"] $ do
+      div_ [class_ "col-span-2 bg-white  border border-gray-100  row-span-2 rounded-2xl p-3"] $ do
         div_ [class_ "p-4"] $ do
           select_ [] $ do
             option_ "Reqs by Status code"
             option_ "Avg Reqs per minute"
         div_ [id_ "reqByStatusCode", class_ ""] ""
-      div_ [class_ "col-span-1 bg-white rounded-xl p-3 flex flex-row content-between"] $ do
+      div_ [class_ "col-span-1 bg-white  border border-gray-100  rounded-xl p-3 flex flex-row content-between"] $ do
         div_ $ ""
         div_ [] $ do
           ul_ $ do
