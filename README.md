@@ -11,6 +11,8 @@ curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
 ```
 brew install llvm
 ```
+- Install timescale db and the timescaledb toolkit https://docs.timescale.com/timescaledb/latest/how-to-guides/hyperfunctions/install-toolkit/#install-toolkit-on-self-hosted-timescaledb
+
 - Install Libpq
 ```
 brew install libpq

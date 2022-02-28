@@ -3,17 +3,21 @@
 module Models.Apis.RequestDumps
   ( RequestDump (..),
     insertRequestDump,
+    selectRequestsByStatusCodesStatByMin,
   )
 where
 
 import Data.Aeson qualified as AE
 import Data.Time (CalendarDiffTime, ZonedTime)
 import Data.UUID qualified as UUID
+import Data.Vector (Vector)
 import Database.PostgreSQL.Entity (insert)
+import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact (DBT)
+import Models.Projects.Projects qualified as Projects
 import Optics.TH
 import Relude
 
@@ -49,16 +53,16 @@ makeFieldLabelsNoPrefix ''RequestDump
 insertRequestDump :: RequestDump -> DBT IO ()
 insertRequestDump = insert @RequestDump
 
--- selectRequestsByStatusCodesStatByDay :: DBT IO (ZonedTime, Int, Int)
--- selectRequestsByStatusCodesStatByDay = query Select q
---   where q = [sql|
---        with abc as (SELECT time_bucket('1 day', created_at) as day,
---              status_code,
---              count(id),
---            project_id, url_path, method
---         FROM apis.request_dumps
---         where created_at > NOW() - interval '14' day
---         --where project_id='', url_path='' and method='';
---         GROUP BY project_id, url_path, method, day, status_code)
---       select  status_code  from abc
---     |]
+selectRequestsByStatusCodesStatByMin :: Projects.ProjectId -> Text -> Text -> DBT IO (Vector (ZonedTime, Text, Int))
+selectRequestsByStatusCodesStatByMin pid urlPath method = query Select q (pid, urlPath, method)
+  where
+    q =
+      [sql|
+       SELECT time_bucket('1 minute', created_at) as day,
+             status_code::text,
+             count(id)
+        FROM apis.request_dumps
+        where created_at > NOW() - interval '14' day
+        and project_id=? and url_path=? and method=?
+        GROUP BY day, status_code;
+    |]

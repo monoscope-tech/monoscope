@@ -119,6 +119,7 @@ library
     , lucid-hyperscript
     , lucid-svg
     , memory
+    , neat-interpolation
     , optics-core
     , optics-th
     , pg-entity
@@ -211,6 +212,7 @@ executable apitoolkit-server-exe
     , lucid-hyperscript
     , lucid-svg
     , memory
+    , neat-interpolation
     , optics-core
     , optics-th
     , pg-entity
@@ -310,6 +312,7 @@ test-suite apitoolkit-server-test
     , lucid-hyperscript
     , lucid-svg
     , memory
+    , neat-interpolation
     , optics-core
     , optics-th
     , pg-entity

@@ -34,7 +34,7 @@ bodyWrapper sessM currProject pageTitle child =
           script_ [src_ "https://unpkg.com/htmx.org@1.6.1"] ""
           script_ [src_ "https://unpkg.com/hyperscript.org@0.9.3"] ""
         body_ [class_ "text-gray-700"] $ do
-          section_ [class_ "flex flex-row bg-gray-50"] $ do
+          section_ [class_ "flex flex-row bg-gray-50 h-screen"] $ do
             -- Side nav
             sideNav'
             section_ [class_ "grow"] $ do

@@ -133,6 +133,7 @@ dependencies:
   - warp
   - lucid-hyperscript
   - lucid-svg
+  - neat-interpolation
 
 
 library:

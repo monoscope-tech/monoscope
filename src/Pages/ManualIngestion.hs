@@ -143,8 +143,8 @@ manualIngestPage = do
         var initialJson = {
             "Content-Type": ["application/json"],
         }
-        reqHeadersEditor.set(initialJSON)
-        respHeadersEditor.set(initialJSON)
+        reqHeadersEditor.set(initialJson)
+        respHeadersEditor.set(initialJson)
 
         // set json
         var initialJsonB = {
