@@ -30,6 +30,7 @@ ghc-options:
   - -Wno-unused-matches
   # - -Wno-name-shadowing
   - -Wno-type-defaults
+  - -fllvm
   # - -Wno-unused-record-wildcards
 
 # cc-options: -static
