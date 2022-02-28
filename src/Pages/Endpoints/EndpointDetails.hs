@@ -220,7 +220,7 @@ endpointStats percentiles =
             percentileRow $ percentiles ^. #p10
             percentileRow $ percentiles ^. #min
 
-percentileRow :: Int -> Html ()
+percentileRow :: Double -> Html ()
 percentileRow p = do
   li_ $ do
     span_ "max"

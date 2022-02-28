@@ -6,6 +6,7 @@ module Models.Apis.RequestDumps
     selectRequestsByStatusCodesStatByMin,
     selectReqLatencyPercentiles,
     Percentiles (..),
+    selectReqLatenciesRolledBy10,
   )
 where
 
@@ -70,27 +71,21 @@ selectRequestsByStatusCodesStatByMin pid urlPath method = query Select q (pid, u
     |]
 
 data Percentiles = Percentiles
-  { min :: Int,
-    p10 :: Int,
-    p25 :: Int,
-    p50 :: Int,
-    p75 :: Int,
-    p90 :: Int,
-    p95 :: Int,
-    p99 :: Int,
-    max :: Int
+  { min :: Double,
+    p10 :: Double,
+    p25 :: Double,
+    p50 :: Double,
+    p75 :: Double,
+    p90 :: Double,
+    p95 :: Double,
+    p99 :: Double,
+    max :: Double
   }
   deriving (Generic, FromRow)
 
 makeFieldLabelsNoPrefix ''Percentiles
 
-selectReqLatencyPercentiles ::
-  Projects.ProjectId ->
-  Text ->
-  Text ->
-  DBT
-    IO
-    (Maybe Percentiles)
+selectReqLatencyPercentiles :: Projects.ProjectId -> Text -> Text -> DBT IO (Maybe Percentiles)
 selectReqLatencyPercentiles pid urlPath method = queryOne Select q (pid, urlPath, method)
   where
     q =
@@ -114,4 +109,14 @@ selectReqLatencyPercentiles pid urlPath method = queryOne Select q (pid, urlPath
           approx_percentile(0.99, agg) p99,
           approx_percentile(1, agg) max 
         FROM latency_percentiles;
+      |]
+
+selectReqLatenciesRolledBy10 :: Projects.ProjectId -> Text -> Text -> DBT IO (Vector (Int, Int))
+selectReqLatenciesRolledBy10 pid urlPath method = query Select q (pid, urlPath, method)
+  where
+    q =
+      [sql| 
+      select round((EXTRACT(epoch FROM duration)*1000)/5)*5 as duration, count(id) 
+        from apis.request_dumps
+        group by duration;
       |]
