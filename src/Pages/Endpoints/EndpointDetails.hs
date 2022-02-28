@@ -76,7 +76,7 @@ fieldDetailsView field formats = do
 endpointDetailsH :: Sessions.PersistentSession -> Projects.ProjectId -> Endpoints.EndpointId -> DashboardM (Html ())
 endpointDetailsH sess pid eid = do
   pool <- asks pool
-  (endpoint, project, fieldsMap, reqsByStatsByMin) <- liftIO $
+  (endpoint, project, fieldsMap, reqsByStatsByMin, reqLatencyPercentiles) <- liftIO $
     withPool pool $ do
       endpointM <- Endpoints.endpointById eid
       let endpoint = Unsafe.fromJust endpointM
@@ -84,17 +84,16 @@ endpointDetailsH sess pid eid = do
       fieldsV <- Fields.selectFields eid
       let fieldsMap = Fields.groupFieldsByCategory fieldsV
       reqsByStatsByMin <- RequestDumps.selectRequestsByStatusCodesStatByMin pid (endpoint ^. #urlPath) (endpoint ^. #method)
-      pure (endpoint, project, fieldsMap, reqsByStatsByMin)
+
+      reqLatencyPercentilesM <- RequestDumps.selectReqLatencyPercentiles pid (endpoint ^. #urlPath) (endpoint ^. #method)
+      let reqLatencyPercentiles = Unsafe.fromJust reqLatencyPercentilesM
+      pure (endpoint, project, fieldsMap, reqsByStatsByMin, reqLatencyPercentiles)
 
   let reqsByStatsByMinJ = decodeUtf8 $ AE.encode reqsByStatsByMin
-  traceShowM reqsByStatsByMinJ
-  pure $ bodyWrapper (Just sess) project "Endpoint Details" $ endpointDetails endpoint fieldsMap reqsByStatsByMinJ
+  pure $ bodyWrapper (Just sess) project "Endpoint Details" $ endpointDetails endpoint fieldsMap reqsByStatsByMinJ reqLatencyPercentiles
 
-endpointDetails :: Endpoint -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> Html ()
-endpointDetails endpoint fieldsM reqsByStatsByMinJ = do
-  -- link_ [rel_ "stylesheet", href_ "//cdn.jsdelivr.net/chartist.js/latest/chartist.min.css"]
-  -- script_ [src_ "//cdn.jsdelivr.net/chartist.js/latest/chartist.min.js"] ""
-  -- link_ [rel_ "stylesheet", href_ "//cdn.jsdelivr.net/chartist.js/latest/chartist.min.css"]
+endpointDetails :: Endpoint -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> RequestDumps.Percentiles -> Html ()
+endpointDetails endpoint fieldsM reqsByStatsByMinJ percentiles = do
   script_ [src_ "https://cdn.fusioncharts.com/fusioncharts/latest/fusioncharts.js"] ""
   script_ [src_ "https://cdn.fusioncharts.com/fusioncharts/latest/themes/fusioncharts.theme.fusion.js"] ""
 
@@ -114,58 +113,57 @@ endpointDetails endpoint fieldsM reqsByStatsByMinJ = do
               div_ [class_ "bg-blue-900 p-1 rounded-lg ml-2"] $ do
                 img_ [src_ "/assets/svgs/whitedown.svg", class_ "text-white h-2 w-2 m-1"]
       div_ [class_ "space-y-8"] $ do
-        endpointStats
+        endpointStats percentiles
         reqResSection "Request" True fieldsM
         reqResSection "Response" True fieldsM
     aside_ [class_ "w-1/3 bg-white h-screen -mr-8 -mt-5 border border-gray-200 p-5 sticky top-0", id_ "detailSidebar"] $ toHtml ""
     script_
       [text|
-let data = $reqsByStatsByMinJ
-let schema = [{
-    "name": "Time",
-    "type": "date",
-    "format": "%Y-%m-%dT%H:%M:%S%Z" // https://www.fusioncharts.com/dev/fusiontime/fusiontime-attributes
-}, {
-    "name": "StatusCode",
-    "type": "string"
-},{
-    "name": "Count",
-    "type": "number"
-}]
+        let data = $reqsByStatsByMinJ
+        let schema = [{
+            "name": "Time",
+            "type": "date",
+            "format": "%Y-%m-%dT%H:%M:%S%Z" // https://www.fusioncharts.com/dev/fusiontime/fusiontime-attributes
+        }, {
+            "name": "StatusCode",
+            "type": "string"
+        },{
+            "name": "Count",
+            "type": "number"
+        }]
 
-let chart = {}
+        let chart = {}
 
-let fusionDataStore = new FusionCharts.DataStore();
-let fusionTable = fusionDataStore.createDataTable(data, schema);
+        let fusionDataStore = new FusionCharts.DataStore();
+        let fusionTable = fusionDataStore.createDataTable(data, schema);
 
-new FusionCharts({
-  type: "timeseries",
-  renderAt: "reqByStatusCode",
-  width: "95%",
-  height: 350,
-  dataSource: {
-    data: fusionTable,
-    chart: chart,
-    navigator: {
-        "enabled": 0
-    },
-    series: "StatusCode",
-    yaxis: [
-      {
-        plot:[{
-          value: "Count",
-          type: "column"
-        }],
-        title: ""
-      }
-    ]
-  }
-}).render();
-
+        new FusionCharts({
+          type: "timeseries",
+          renderAt: "reqByStatusCode",
+          width: "95%",
+          height: 350,
+          dataSource: {
+            data: fusionTable,
+            chart: chart,
+            navigator: {
+                "enabled": 0
+            },
+            series: "StatusCode",
+            yaxis: [
+              {
+                plot:[{
+                  value: "Count",
+                  type: "column"
+                }],
+                title: ""
+              }
+            ]
+          }
+        }).render();
       |]
 
-endpointStats :: Html ()
-endpointStats =
+endpointStats :: RequestDumps.Percentiles -> Html ()
+endpointStats percentiles =
   section_ $ do
     div_ [class_ "flex justify-between mt-5"] $ do
       div_ [class_ "flex flex-row"] $ do
@@ -208,6 +206,26 @@ endpointStats =
             option_ "Reqs by Status code"
             option_ "Avg Reqs per minute"
         div_ [id_ "reqByStatusCode", class_ ""] ""
+      div_ [class_ "col-span-1 bg-white rounded-xl p-3 flex flex-row content-between"] $ do
+        div_ $ ""
+        div_ [] $ do
+          ul_ $ do
+            percentileRow $ percentiles ^. #max
+            percentileRow $ percentiles ^. #p99
+            percentileRow $ percentiles ^. #p95
+            percentileRow $ percentiles ^. #p90
+            percentileRow $ percentiles ^. #p75
+            percentileRow $ percentiles ^. #p50
+            percentileRow $ percentiles ^. #p25
+            percentileRow $ percentiles ^. #p10
+            percentileRow $ percentiles ^. #min
+
+percentileRow :: Int -> Html ()
+percentileRow p = do
+  li_ $ do
+    span_ "max"
+    span_ $ toHtml $ show $ p
+    span_ "ms"
 
 -- NB: We could enable the fields cycling functionality using the groups of response list functionality on the endpoint.
 -- So we go through the list and in each request or response view, only show the fields that appear in the field list.
