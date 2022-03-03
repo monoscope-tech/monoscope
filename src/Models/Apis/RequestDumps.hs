@@ -6,7 +6,7 @@ module Models.Apis.RequestDumps
     selectRequestsByStatusCodesStatByMin,
     selectReqLatencyPercentiles,
     Percentiles (..),
-    selectReqLatenciesRolledBy10,
+    selectReqLatenciesRolledBySteps,
   )
 where
 
@@ -72,8 +72,6 @@ selectRequestsByStatusCodesStatByMin pid urlPath method = query Select q (pid, u
 
 data Percentiles = Percentiles
   { min :: Double,
-    p10 :: Double,
-    p25 :: Double,
     p50 :: Double,
     p75 :: Double,
     p90 :: Double,
@@ -92,31 +90,33 @@ selectReqLatencyPercentiles pid urlPath method = queryOne Select q (pid, urlPath
       [sql|
       WITH latency_percentiles as (
         SELECT
-          percentile_agg(EXTRACT(epoch FROM duration)*1000) as agg
+          percentile_agg(EXTRACT(epoch FROM duration)) as agg
         FROM apis.request_dumps
         where created_at > NOW() - interval '14' day
         and project_id=? and url_path=? and method=?
 
         )
       SELECT 		
-          approx_percentile(0, agg) min,
-          approx_percentile(0.1, agg) p10,
-          approx_percentile(0.25, agg) p25,
-          approx_percentile(0.50, agg) p50,
-          approx_percentile(0.75, agg) p75,
-          approx_percentile(0.90, agg) p90,
-          approx_percentile(0.95, agg) p95,
-          approx_percentile(0.99, agg) p99,
-          approx_percentile(1, agg) max 
+          approx_percentile(0, agg)/1000000 min,
+          approx_percentile(0.50, agg)/1000000 p50,
+          approx_percentile(0.75, agg)/1000000 p75,
+          approx_percentile(0.90, agg)/1000000 p90,
+          approx_percentile(0.95, agg)/1000000 p95,
+          approx_percentile(0.99, agg)/1000000 p99,
+          approx_percentile(1, agg)/1000000 max 
         FROM latency_percentiles;
       |]
 
-selectReqLatenciesRolledBy10 :: Projects.ProjectId -> Text -> Text -> DBT IO (Vector (Int, Int))
-selectReqLatenciesRolledBy10 pid urlPath method = query Select q (pid, urlPath, method)
+selectReqLatenciesRolledBySteps :: Int -> Int -> Projects.ProjectId -> Text -> Text -> DBT IO (Vector (Int, Int))
+selectReqLatenciesRolledBySteps maxv steps pid urlPath method = query Select q (maxv, steps, steps, steps, pid, urlPath, method)
   where
     q =
       [sql| 
-      select round((EXTRACT(epoch FROM duration)*1000)/5)*5 as duration, count(id) 
-        from apis.request_dumps
-        group by duration;
+select duration_steps, count(id)
+	FROM generate_series(0, ?, ?) AS duration_steps
+	LEFT OUTER JOIN apis.request_dumps on (duration_steps = round((EXTRACT(epoch FROM duration)/1000000)/?)*? 
+    AND created_at > NOW() - interval '14' day
+    AND project_id=? and url_path=? and method=?)
+	GROUP BY duration_steps 
+	ORDER BY duration_steps;
       |]

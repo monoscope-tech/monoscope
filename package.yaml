@@ -135,6 +135,7 @@ dependencies:
   - lucid-hyperscript
   - lucid-svg
   - neat-interpolation
+  - fmt
 
 
 library:

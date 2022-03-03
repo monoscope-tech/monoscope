@@ -106,6 +106,7 @@ library
     , dotenv
     , envy
     , errors
+    , fmt
     , gogol
     , gogol-core
     , gogol-pubsub
@@ -199,6 +200,7 @@ executable apitoolkit-server-exe
     , dotenv
     , envy
     , errors
+    , fmt
     , gogol
     , gogol-core
     , gogol-pubsub
@@ -296,6 +298,7 @@ test-suite apitoolkit-server-test
     , dotenv
     , envy
     , errors
+    , fmt
     , gogol
     , gogol-core
     , gogol-pubsub

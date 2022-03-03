@@ -6,13 +6,16 @@
 module Pages.Endpoints.EndpointDetails (endpointDetailsH, fieldDetailsPartialH) where
 
 import Config
+import Data.Aeson (KeyValue ((.=)), ToJSON, object)
 import Data.Aeson qualified as AE
 import Data.Map qualified as Map
 import Data.Text as T (breakOnAll, dropWhile, isInfixOf, replace, splitOn)
 import Data.Time (defaultTimeLocale, formatTime)
 import Data.UUID as UUID
 import Data.Vector (Vector)
+import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
+import Fmt
 import Lucid
 import Lucid.HTMX
 import Lucid.Svg qualified as Svg
@@ -71,12 +74,19 @@ fieldDetailsView field formats = do
   h6_ [class_ "mt-5 text-sm text-slate-700 mb-2"] "DESCRIPTION"
   p_ [class_ "text-gray-400 text-sm"] $ toHtml $ field ^. #description
 
+data LabelValue = LabelValue (Int, Int, Maybe Text)
+  deriving (Show)
+
+instance ToJSON LabelValue where
+  toJSON (LabelValue (x, y, Nothing)) = object ["label" .= show x, "value" .= y]
+  toJSON (LabelValue (x, y, Just z)) = object ["label" .= z, "lineposition" .= show x, "labelposition" .= show x, "vline" .= "true", "labelhalign" .= "center", "dashed" .= "1"]
+
 -- | endpointDetailsH is the main handler for the endpoint details page.
 -- It reuses the fieldDetailsView as well, which is used for the side navigation on the page and also exposed un the fieldDetailsPartialH endpoint
 endpointDetailsH :: Sessions.PersistentSession -> Projects.ProjectId -> Endpoints.EndpointId -> DashboardM (Html ())
 endpointDetailsH sess pid eid = do
   pool <- asks pool
-  (endpoint, project, fieldsMap, reqsByStatsByMin, reqLatencyPercentiles) <- liftIO $
+  (endpoint, project, fieldsMap, reqsByStatsByMin, reqLatencyPercentiles, reqLatenciesRolledByStepsLabeled) <- liftIO $
     withPool pool $ do
       endpointM <- Endpoints.endpointById eid
       let endpoint = Unsafe.fromJust endpointM
@@ -87,13 +97,34 @@ endpointDetailsH sess pid eid = do
 
       reqLatencyPercentilesM <- RequestDumps.selectReqLatencyPercentiles pid (endpoint ^. #urlPath) (endpoint ^. #method)
       let reqLatencyPercentiles = Unsafe.fromJust reqLatencyPercentilesM
-      pure (endpoint, project, fieldsMap, reqsByStatsByMin, reqLatencyPercentiles)
+
+      let maxV = round (reqLatencyPercentiles ^. #max) :: Int
+      let steps = (maxV `div` 100) :: Int
+      reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledBySteps maxV steps pid (endpoint ^. #urlPath) (endpoint ^. #method)
+
+      let reqLatencyPercentileSteps =
+            ( (round (reqLatencyPercentiles ^. #max) `div` steps) * steps,
+              (round (reqLatencyPercentiles ^. #p90) `div` steps) * steps,
+              (round (reqLatencyPercentiles ^. #p75) `div` steps) * steps,
+              (round (reqLatencyPercentiles ^. #p50) `div` steps) * steps
+            )
+      let reqLatenciesRolledByStepsLabeled = Vector.toList reqLatenciesRolledBySteps & map \(x, y) -> labelRequestLatency reqLatencyPercentileSteps (x, y)
+      pure (endpoint, project, fieldsMap, reqsByStatsByMin, reqLatencyPercentiles, concat reqLatenciesRolledByStepsLabeled)
 
   let reqsByStatsByMinJ = decodeUtf8 $ AE.encode reqsByStatsByMin
-  pure $ bodyWrapper (Just sess) project "Endpoint Details" $ endpointDetails endpoint fieldsMap reqsByStatsByMinJ reqLatencyPercentiles
+  let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
+  pure $ bodyWrapper (Just sess) project "Endpoint Details" $ endpointDetails endpoint fieldsMap reqsByStatsByMinJ reqLatencyPercentiles reqLatenciesRolledByStepsJ
 
-endpointDetails :: Endpoint -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> RequestDumps.Percentiles -> Html ()
-endpointDetails endpoint fieldsM reqsByStatsByMinJ percentiles = do
+labelRequestLatency :: (Int, Int, Int, Int) -> (Int, Int) -> [LabelValue]
+labelRequestLatency (pMax, p90, p75, p50) (x, y)
+  | x == pMax = [LabelValue (x, y, Just "max"), LabelValue (x, y, Nothing)]
+  | x == p90 = [LabelValue (x, y, Just "p90"), LabelValue (x, y, Nothing)]
+  | x == p75 = [LabelValue (x, y, Just "p75"), LabelValue (x, y, Nothing)]
+  | x == p50 = [LabelValue (x, y, Just "p50"), LabelValue (x, y, Nothing)]
+  | otherwise = [LabelValue (x, y, Nothing)]
+
+endpointDetails :: Endpoint -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> RequestDumps.Percentiles -> Text -> Html ()
+endpointDetails endpoint fieldsM reqsByStatsByMinJ percentiles reqLatenciesRolledByStepsJ = do
   script_ [src_ "https://cdn.fusioncharts.com/fusioncharts/latest/fusioncharts.js"] ""
   script_ [src_ "https://cdn.fusioncharts.com/fusioncharts/latest/themes/fusioncharts.theme.fusion.js"] ""
 
@@ -160,72 +191,109 @@ endpointDetails endpoint fieldsM reqsByStatsByMinJ percentiles = do
             ]
           }
         }).render();
+
+
+        new FusionCharts({
+          type: "column2d",
+          renderAt: "reqsLatencyHistogram",
+          width: "100%",
+          // height: "auto",
+          dataSource: {
+            data:  $reqLatenciesRolledByStepsJ,
+            "chart": {
+                "theme": "fusion",
+                "xAxisName": "Latency in ms",
+                "yAxisName": "Count",
+                // "numberSuffix": "K"
+            },
+          }
+        }).render();
+
       |]
 
 endpointStats :: RequestDumps.Percentiles -> Html ()
 endpointStats percentiles =
-  section_ $ do
+  section_ [class_ "space-y-3"] $ do
     div_ [class_ "flex justify-between mt-5"] $ do
       div_ [class_ "flex flex-row"] $ do
         img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-4 mr-3 mt-1 w-4"]
         span_ [class_ "text-lg text-slate-700"] "Endpoint Stats"
-    div_ [class_ "grid grid-cols-3 grid-rows-3 grid-flow-col gap-5"] $ do
-      div_ [class_ "col-span-1 bg-white  border border-gray-100  rounded-2xl p-3 flex flex-row justify-between"] $ do
-        div_ [class_ "flex flex-col justify-center"] $ do
-          span_ "avg Reqs per minute"
-          div_ [class_ "inline-block flex flex-row content-between"] $ do
-            strong_ [class_ "text-xl"] "3.5k"
-            div_ [class_ "inline-flex justify-center text-red-700 "] $ do
-              img_ [class_ "inline-block", src_ "/assets/svgs/down-arrow-red.svg"]
-              span_ "10.5%"
-        div_ $ do
-          Svg.svg_ [Svg.width_ "90", Svg.height_ "88", Svg.viewBox_ "0 0 90 88", Svg.fill_ "none", xmlns_ "http://www.w3.org/2000/svg"] $ do
-            Svg.mask_ [Svg.id_ "mask0_4463_66717", Svg.style_ "mask-type:alpha", Svg.maskUnits_ "userSpaceOnUse", Svg.x_ "0", Svg.y_ "0", Svg.width_ "90", height_ "88"] $ do
-              Svg.rect_ [Svg.opacity_ "0.1", Svg.x_ "0.51416", Svg.width_ "89.2571", Svg.height_ "88", Svg.rx_ "22", Svg.fill_ "#FF965D"]
-            Svg.g_ [Svg.mask_ "url(#mask0_4463_66717)"] $ do
-              Svg.rect_ [Svg.x_ "0.51416", Svg.width_ "89.2571", Svg.height_ "88", Svg.fill_ "#FF965D"]
-            Svg.path_ [Svg.d_ "M25.6685 50.55C25.6685 49.5835 26.5161 48.8 27.5618 48.8H33.5123C34.5579 48.8 35.4056 49.5835 35.4056 50.55V60.8H25.6685V50.55Z", Svg.fill_ "#FF965D"]
-            Svg.path_ [Svg.d_ "M40.2744 38.7091C40.2744 37.6547 41.1221 36.8 42.1678 36.8H48.1182C49.1639 36.8 50.0116 37.6547 50.0116 38.7091V60.8H40.2744V38.7091Z", Svg.fill_ "#FF965D"]
-            Svg.path_ [Svg.d_ "M54.8799 29.16C54.8799 28.0775 55.7276 27.2 56.7732 27.2H62.7237C63.7694 27.2 64.617 28.0775 64.617 29.16V60.8H54.8799V29.16Z", Svg.fill_ "#FF965D"]
-      div_ [class_ "col-span-1 bg-white  border border-gray-100  rounded-xl p-3 flex flex-row content-between"] $ do
-        div_ $ do
-          span_ "Anomalies this week"
-          div_ [class_ "inline-block flex flex-row content-between"] $ do
-            strong_ [class_ "text-xl"] "3"
-            div_ [class_ "inline-block text-red-700"] $ do
-              img_ [class_ "inline-block", src_ "/assets/svgs/down-arrow-red.svg"]
-              span_ "10.5%"
-        div_ $ do
-          Svg.svg_ [Svg.width_ "86", Svg.height_ "86", Svg.viewBox_ "0 0 86 86", Svg.fill_ "none", xmlns_ "http://www.w3.org/2000/svg"] $ do
-            Svg.circle_ [Svg.cx_ "43", Svg.cy_ "43", Svg.r_ "40.5", Svg.stroke_ "#F8F8F8", Svg.stroke_width_ "5"]
-            Svg.path_ [Svg.d_ "M43 2.5C51.5528 2.5 59.886 5.20763 66.8053 10.2348C73.7246 15.262 78.8748 22.3507 81.5178 30.4848C84.1607 38.619 84.1607 47.381 81.5178 55.5152C78.8748 63.6493 73.7246 70.738 66.8053 75.7652C59.886 80.7924 51.5528 83.5 43 83.5C34.4472 83.5 26.114 80.7924 19.1947 75.7652C12.2754 70.738 7.12516 63.6493 4.48221 55.5152C1.83926 47.381 1.83926 38.619 4.48221 30.4848", Svg.stroke_ "#FF965D", Svg.stroke_width_ "5", Svg.stroke_linecap_ "round"]
-            Svg.text_ "80%"
+    div_ [class_ "grid grid-cols-3  gap-5"] $ do
+      div_ [class_ "col-span-1 content-between space-y-8"] $ do
+        div_ [class_ "row-span-1 col-span-1 bg-white  border border-gray-100  rounded-2xl p-3 flex flex-row justify-between"] $ do
+          div_ [class_ "flex flex-col justify-center"] $ do
+            span_ "avg Reqs per minute"
+            div_ [class_ "inline-block flex flex-row content-between"] $ do
+              strong_ [class_ "text-xl"] "3.5k"
+              div_ [class_ "inline-flex justify-center text-red-700 "] $ do
+                img_ [class_ "inline-block", src_ "/assets/svgs/down-arrow-red.svg"]
+                span_ "10.5%"
+          div_ $ do
+            Svg.svg_ [Svg.width_ "90", Svg.height_ "88", Svg.viewBox_ "0 0 90 88", Svg.fill_ "none", xmlns_ "http://www.w3.org/2000/svg"] $ do
+              Svg.mask_ [Svg.id_ "mask0_4463_66717", Svg.style_ "mask-type:alpha", Svg.maskUnits_ "userSpaceOnUse", Svg.x_ "0", Svg.y_ "0", Svg.width_ "90", height_ "88"] $ do
+                Svg.rect_ [Svg.opacity_ "0.1", Svg.x_ "0.51416", Svg.width_ "89.2571", Svg.height_ "88", Svg.rx_ "22", Svg.fill_ "#FF965D"]
+              Svg.g_ [Svg.mask_ "url(#mask0_4463_66717)"] $ do
+                Svg.rect_ [Svg.x_ "0.51416", Svg.width_ "89.2571", Svg.height_ "88", Svg.fill_ "#FF965D"]
+              Svg.path_ [Svg.d_ "M25.6685 50.55C25.6685 49.5835 26.5161 48.8 27.5618 48.8H33.5123C34.5579 48.8 35.4056 49.5835 35.4056 50.55V60.8H25.6685V50.55Z", Svg.fill_ "#FF965D"]
+              Svg.path_ [Svg.d_ "M40.2744 38.7091C40.2744 37.6547 41.1221 36.8 42.1678 36.8H48.1182C49.1639 36.8 50.0116 37.6547 50.0116 38.7091V60.8H40.2744V38.7091Z", Svg.fill_ "#FF965D"]
+              Svg.path_ [Svg.d_ "M54.8799 29.16C54.8799 28.0775 55.7276 27.2 56.7732 27.2H62.7237C63.7694 27.2 64.617 28.0775 64.617 29.16V60.8H54.8799V29.16Z", Svg.fill_ "#FF965D"]
+        div_ [class_ "row-span-1 col-span-1 bg-white  border border-gray-100  rounded-xl p-3 flex flex-row content-between"] $ do
+          div_ $ do
+            span_ "Anomalies this week"
+            div_ [class_ "inline-block flex flex-row content-between"] $ do
+              strong_ [class_ "text-xl"] "3"
+              div_ [class_ "inline-block text-red-700"] $ do
+                img_ [class_ "inline-block", src_ "/assets/svgs/down-arrow-red.svg"]
+                span_ "10.5%"
+          div_ $ do
+            Svg.svg_ [Svg.width_ "86", Svg.height_ "86", Svg.viewBox_ "0 0 86 86", Svg.fill_ "none", xmlns_ "http://www.w3.org/2000/svg"] $ do
+              Svg.circle_ [Svg.cx_ "43", Svg.cy_ "43", Svg.r_ "40.5", Svg.stroke_ "#F8F8F8", Svg.stroke_width_ "5"]
+              Svg.path_ [Svg.d_ "M43 2.5C51.5528 2.5 59.886 5.20763 66.8053 10.2348C73.7246 15.262 78.8748 22.3507 81.5178 30.4848C84.1607 38.619 84.1607 47.381 81.5178 55.5152C78.8748 63.6493 73.7246 70.738 66.8053 75.7652C59.886 80.7924 51.5528 83.5 43 83.5C34.4472 83.5 26.114 80.7924 19.1947 75.7652C12.2754 70.738 7.12516 63.6493 4.48221 55.5152C1.83926 47.381 1.83926 38.619 4.48221 30.4848", Svg.stroke_ "#FF965D", Svg.stroke_width_ "5", Svg.stroke_linecap_ "round"]
+              Svg.text_ "80%"
+        div_ [class_ "row-span-1 col-span-1 bg-white  border border-gray-100  rounded-xl p-3 flex flex-row content-between"] $ do
+          div_ $ do
+            span_ "Anomalies this week"
+            div_ [class_ "inline-block flex flex-row content-between"] $ do
+              strong_ [class_ "text-xl"] "3"
+              div_ [class_ "inline-block text-red-700"] $ do
+                img_ [class_ "inline-block", src_ "/assets/svgs/down-arrow-red.svg"]
+                span_ "10.5%"
+          div_ $ do
+            Svg.svg_ [Svg.width_ "86", Svg.height_ "86", Svg.viewBox_ "0 0 86 86", Svg.fill_ "none", xmlns_ "http://www.w3.org/2000/svg"] $ do
+              Svg.circle_ [Svg.cx_ "43", Svg.cy_ "43", Svg.r_ "40.5", Svg.stroke_ "#F8F8F8", Svg.stroke_width_ "5"]
+              Svg.path_ [Svg.d_ "M43 2.5C51.5528 2.5 59.886 5.20763 66.8053 10.2348C73.7246 15.262 78.8748 22.3507 81.5178 30.4848C84.1607 38.619 84.1607 47.381 81.5178 55.5152C78.8748 63.6493 73.7246 70.738 66.8053 75.7652C59.886 80.7924 51.5528 83.5 43 83.5C34.4472 83.5 26.114 80.7924 19.1947 75.7652C12.2754 70.738 7.12516 63.6493 4.48221 55.5152C1.83926 47.381 1.83926 38.619 4.48221 30.4848", Svg.stroke_ "#FF965D", Svg.stroke_width_ "5", Svg.stroke_linecap_ "round"]
+              Svg.text_ "80%"
       div_ [class_ "col-span-2 bg-white  border border-gray-100  row-span-2 rounded-2xl p-3"] $ do
         div_ [class_ "p-4"] $ do
           select_ [] $ do
             option_ "Reqs by Status code"
             option_ "Avg Reqs per minute"
         div_ [id_ "reqByStatusCode", class_ ""] ""
-      div_ [class_ "col-span-1 bg-white  border border-gray-100  rounded-xl p-3 flex flex-row content-between"] $ do
-        div_ $ ""
-        div_ [] $ do
-          ul_ $ do
-            percentileRow $ percentiles ^. #max
-            percentileRow $ percentiles ^. #p99
-            percentileRow $ percentiles ^. #p95
-            percentileRow $ percentiles ^. #p90
-            percentileRow $ percentiles ^. #p75
-            percentileRow $ percentiles ^. #p50
-            percentileRow $ percentiles ^. #p25
-            percentileRow $ percentiles ^. #p10
-            percentileRow $ percentiles ^. #min
+      div_ [class_ "col-span-3 bg-white   border border-gray-100  rounded-xl py-3 px-6"] $ do
+        div_ [class_ "p-4"] $ do
+          select_ [] $ do
+            option_ "Request Latency Distribution"
+            option_ "Avg Reqs per minute"
+        div_ [class_ "flex flex-row gap-5"] $ do
+          div_ [id_ "reqsLatencyHistogram", class_ "grow"] $ ""
+          div_ [class_ "flex-1 space-y-2 min-w-[20%]"] $ do
+            strong_ [class_ "block"] $ "Latency Percentiles"
+            ul_ [class_ "space-y-1"] $ do
+              percentileRow "max" $ percentiles ^. #max
+              percentileRow "p99" $ percentiles ^. #p99
+              percentileRow "p95" $ percentiles ^. #p95
+              percentileRow "p90" $ percentiles ^. #p90
+              percentileRow "p75" $ percentiles ^. #p75
+              percentileRow "p50" $ percentiles ^. #p50
+              percentileRow "min" $ percentiles ^. #min
 
-percentileRow :: Double -> Html ()
-percentileRow p = do
-  li_ $ do
-    span_ "max"
-    span_ $ toHtml $ show $ p
-    span_ "ms"
+percentileRow :: Text -> Double -> Html ()
+percentileRow key p = do
+  li_ [class_ "flex flex-row content-between justify-between"] $ do
+    span_ [class_ "inline-block"] $ toHtml key
+    span_ [class_ "inline-block"] $ do
+      span_ $ toHtml ((fmt $ fixedF 2 p) :: Text)
+      span_ "ms"
 
 -- NB: We could enable the fields cycling functionality using the groups of response list functionality on the endpoint.
 -- So we go through the list and in each request or response view, only show the fields that appear in the field list.
