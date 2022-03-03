@@ -7,6 +7,8 @@ module Models.Apis.RequestDumps
     selectReqLatencyPercentiles,
     Percentiles (..),
     selectReqLatenciesRolledBySteps,
+    selectReqLatencyPercentilesForProject,
+    selectRequestsByEndpointsStatByMin,
   )
 where
 
@@ -17,7 +19,7 @@ import Data.Vector (Vector)
 import Database.PostgreSQL.Entity (insert)
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, queryOne)
 import Database.PostgreSQL.Entity.Types
-import Database.PostgreSQL.Simple (FromRow, ToRow)
+import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact (DBT)
 import Models.Projects.Projects qualified as Projects
@@ -61,13 +63,27 @@ selectRequestsByStatusCodesStatByMin pid urlPath method = query Select q (pid, u
   where
     q =
       [sql|
-       SELECT time_bucket('1 minute', created_at) as day,
+       SELECT time_bucket('1 minute', created_at) as timeB,
              status_code::text,
              count(id)
         FROM apis.request_dumps
         where created_at > NOW() - interval '14' day
         and project_id=? and url_path=? and method=?
-        GROUP BY day, status_code;
+        GROUP BY timeB, status_code;
+    |]
+
+selectRequestsByEndpointsStatByMin :: Projects.ProjectId -> DBT IO (Vector (ZonedTime, Text, Int))
+selectRequestsByEndpointsStatByMin pid = query Select q (Only pid)
+  where
+    q =
+      [sql|
+       SELECT time_bucket('1 minute', created_at) as timeB,
+             concat_ws(' ', method, url_path)::text,
+             count(id)
+        FROM apis.request_dumps
+        where created_at > NOW() - interval '14' day
+        and project_id=?
+        GROUP BY timeB, method, url_path;
     |]
 
 data Percentiles = Percentiles
@@ -95,6 +111,29 @@ selectReqLatencyPercentiles pid urlPath method = queryOne Select q (pid, urlPath
         where created_at > NOW() - interval '14' day
         and project_id=? and url_path=? and method=?
 
+        )
+      SELECT 		
+          approx_percentile(0, agg)/1000000 min,
+          approx_percentile(0.50, agg)/1000000 p50,
+          approx_percentile(0.75, agg)/1000000 p75,
+          approx_percentile(0.90, agg)/1000000 p90,
+          approx_percentile(0.95, agg)/1000000 p95,
+          approx_percentile(0.99, agg)/1000000 p99,
+          approx_percentile(1, agg)/1000000 max 
+        FROM latency_percentiles;
+      |]
+
+selectReqLatencyPercentilesForProject :: Projects.ProjectId -> DBT IO (Maybe Percentiles)
+selectReqLatencyPercentilesForProject pid = queryOne Select q (Only pid)
+  where
+    q =
+      [sql|
+      WITH latency_percentiles as (
+        SELECT
+          percentile_agg(EXTRACT(epoch FROM duration)) as agg
+        FROM apis.request_dumps
+        where created_at > NOW() - interval '14' day
+        and project_id=?
         )
       SELECT 		
           approx_percentile(0, agg)/1000000 min,

@@ -33,6 +33,9 @@ bodyWrapper sessM currProject pageTitle child =
           link_ [rel_ "stylesheet", type_ "text/css", href_ "/assets/css/tailwind.min.css"]
           script_ [src_ "https://unpkg.com/htmx.org@1.6.1"] ""
           script_ [src_ "https://unpkg.com/hyperscript.org@0.9.3"] ""
+          script_ [src_ "https://cdn.fusioncharts.com/fusioncharts/latest/fusioncharts.js"] ""
+          script_ [src_ "https://cdn.fusioncharts.com/fusioncharts/latest/themes/fusioncharts.theme.fusion.js"] ""
+
         body_ [class_ "text-gray-700"] $ do
           section_ [class_ "flex flex-row bg-gray-50 h-screen"] $ do
             -- Side nav

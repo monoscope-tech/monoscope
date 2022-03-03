@@ -48,17 +48,17 @@ fieldDetailsView :: Fields.Field -> Vector Formats.Format -> Html ()
 fieldDetailsView field formats = do
   img_ [src_ "/assets/svgs/ellipsis.svg", class_ "my-2 float-right"]
   h3_ [class_ "text-lg text-slate-700 mt-6"] $ toHtml $ field ^. #key
-  formats & mapM_ \format -> do
+  formats & mapM_ \formatV -> do
     div_ [class_ "flex mt-5 flex-row"] $ do
       div_ [class_ ""] $ do
         h6_ [class_ "text-slate-700 text-xs"] "TYPE"
-        h4_ [class_ "text-base text-slate-700"] $ toHtml $ show $ format ^. #fieldType
+        h4_ [class_ "text-base text-slate-700"] $ toHtml $ show $ formatV ^. #fieldType
       div_ [class_ "mx-5"] $ do
         h6_ [class_ "text-slate-700 text-xs"] "FORMAT"
-        h4_ [class_ "text-base text-slate-700"] $ toHtml $ format ^. #fieldFormat
+        h4_ [class_ "text-base text-slate-700"] $ toHtml $ formatV ^. #fieldFormat
     h6_ [class_ "text-slate-600 mt-4 text-xs"] "EXAMPLE VALUES"
     ul_ [class_ "list-disc"] $ do
-      format ^. #examples & mapM_ \ex -> do
+      formatV ^. #examples & mapM_ \ex -> do
         li_ [class_ "ml-10 text-slate-700 text-sm"] $ toHtml ex
   div_ [class_ "flex flex-row justify-between mt-10 "] $ do
     div_ [class_ " "] $ do
@@ -125,9 +125,6 @@ labelRequestLatency (pMax, p90, p75, p50) (x, y)
 
 endpointDetails :: Endpoint -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> RequestDumps.Percentiles -> Text -> Html ()
 endpointDetails endpoint fieldsM reqsByStatsByMinJ percentiles reqLatenciesRolledByStepsJ = do
-  script_ [src_ "https://cdn.fusioncharts.com/fusioncharts/latest/fusioncharts.js"] ""
-  script_ [src_ "https://cdn.fusioncharts.com/fusioncharts/latest/themes/fusioncharts.theme.fusion.js"] ""
-
   div_ [class_ "w-full flex flex-row h-screen overflow-y-scroll"] $ do
     div_ [class_ "w-2/3  p-8"] $ do
       div_ [class_ "flex flex-row justify-between mb-10"] $ do
@@ -163,8 +160,6 @@ endpointDetails endpoint fieldsM reqsByStatsByMinJ percentiles reqLatenciesRolle
             "type": "number"
         }]
 
-        let chart = {}
-
         let fusionDataStore = new FusionCharts.DataStore();
         let fusionTable = fusionDataStore.createDataTable(data, schema);
 
@@ -175,7 +170,7 @@ endpointDetails endpoint fieldsM reqsByStatsByMinJ percentiles reqLatenciesRolle
           height: 350,
           dataSource: {
             data: fusionTable,
-            chart: chart,
+            chart: {},
             navigator: {
                 "enabled": 0
             },
@@ -275,9 +270,9 @@ endpointStats percentiles =
             option_ "Request Latency Distribution"
             option_ "Avg Reqs per minute"
         div_ [class_ "flex flex-row gap-5"] $ do
-          div_ [id_ "reqsLatencyHistogram", class_ "grow"] $ ""
+          div_ [id_ "reqsLatencyHistogram", class_ "grow"] ""
           div_ [class_ "flex-1 space-y-2 min-w-[20%]"] $ do
-            strong_ [class_ "block"] $ "Latency Percentiles"
+            strong_ [class_ "block"] "Latency Percentiles"
             ul_ [class_ "space-y-1"] $ do
               percentileRow "max" $ percentiles ^. #max
               percentileRow "p99" $ percentiles ^. #p99
