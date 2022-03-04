@@ -7,15 +7,25 @@
   @font-face {
     font-family: 'Poppins', sans-serif;
   }
+  @font-face {
+    font-family: 'Inconsolata', monospace;
+  }
   @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Inconsolata:wght@300;400&display=swap');
   html {
     font-size: 14px;
     font-family: 'Poppins', sans-serif;
   }
-
+  .inconsolata {
+    font-family: 'Inconsolata', monospace;
+    font-size: 14px;
+  }
 
   .btn-sm {
     @apply px-4 py-2  rounded inline-flex items-center border border-transparent rounded-md shadow-sm text-sm font-medium focus:outline-none focus:ring-2 focus:ring-offset-2 cursor-pointer;
+  }
+  .dataTable-search {
+    @apply rounded;
   }
 
 
@@ -35,7 +45,28 @@
       @apply shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md;
     }
   .endpoint {
-    @apply w-8 rounded-lg text-center text-white bg-green-400 p-2 m-2 inline-block;
+    @apply w-20 rounded-lg text-center bg-orange-400 text-white text-sm p-2 m-2 inline-block;
+  }
+  .endpoint-options {
+    @apply bg-red-400
+  }
+  .endpoint-get {
+    @apply bg-orange-400
+  }
+  .endpoint-head {
+    @apply bg-yellow-400
+  }
+  .endpoint-post {
+    @apply bg-green-400
+  }
+  .endpoint-put {
+    @apply bg-blue-400
+  }
+  .endpoint-delete {
+    @apply bg-indigo-400
+  }
+  .endpoint-trace {
+    @apply bg-purple-400
   }
 
   /* table td { */

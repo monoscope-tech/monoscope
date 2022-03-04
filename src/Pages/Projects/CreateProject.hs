@@ -230,7 +230,7 @@ createProjectBody cp cpe = do
       div_ $ do
         label_ [class_ "text-gray-400 mx-2 font-light text-sm"] "Title"
         input_
-          [ class_ "h-10 px-5 my-2 w-full text-sm bg-white text-black border-solid border border-gray-200 rounded-2xl border-0 ",
+          [ class_ "h-10 px-5 my-2 w-full text-sm bg-white text-black border-solid border border-gray-200 rounded-2xl ",
             type_ "text",
             id_ "title",
             name_ "title"

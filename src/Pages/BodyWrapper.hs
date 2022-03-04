@@ -8,6 +8,7 @@ import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import Optics.Operators ((^.))
 import Relude
+import NeatInterpolation
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu ppid =
@@ -31,7 +32,11 @@ bodyWrapper sessM currProject pageTitle child =
         head_ $ do
           title_ $ toHtml pageTitle
           link_ [rel_ "stylesheet", type_ "text/css", href_ "/assets/css/tailwind.min.css"]
+          link_ [rel_ "stylesheet", type_ "text/css", href_ "https://cdn.jsdelivr.net/npm/notyf@3/notyf.min.css"]
+          link_ [rel_ "stylesheet", type_ "text/css", href_ "https://cdn.jsdelivr.net/npm/vanilla-datatables@latest/dist/vanilla-dataTables.min.css"]
+          script_ [src_ "https://cdn.jsdelivr.net/npm/vanilla-datatables@latest/dist/vanilla-dataTables.min.js"] ""
           script_ [src_ "https://unpkg.com/htmx.org@1.6.1"] ""
+          script_ [src_ "https://cdn.jsdelivr.net/npm/notyf@3/notyf.min.js"] ""
           script_ [src_ "https://unpkg.com/hyperscript.org@0.9.3"] ""
           script_ [src_ "https://cdn.fusioncharts.com/fusioncharts/latest/fusioncharts.js"] ""
           script_ [src_ "https://cdn.fusioncharts.com/fusioncharts/latest/themes/fusioncharts.theme.fusion.js"] ""
@@ -197,3 +202,14 @@ navbar currUser = do
           a_ [class_ "text-base p-2 flex gap-3 rounded hover:bg-gray-100", href_ "/logout"] $ do
             img_ [src_ "/assets/svgs/add_user.svg"]
             span_ "Logout"
+
+
+  script_ [text|
+var notyf = new Notyf({
+    duration: 1000,
+    position: {
+    x: 'right',
+    y: 'top',
+  },
+});
+    |]

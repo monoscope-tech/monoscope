@@ -18,6 +18,9 @@ import Models.Users.Sessions qualified as Sessions
 import Optics.Operators
 import Pages.BodyWrapper (bodyWrapper)
 import Relude
+import Servant.HTML.Lucid
+import Text.RawString.QQ
+import NeatInterpolation
 
 endpointListH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 endpointListH sess pid = do
@@ -47,7 +50,7 @@ endpointList enps = do
       div_ [class_ "w-full flex flex-row m-3"] $ do
         div_ [class_ "flex rounded-xl bg-white py-2 px-3 flex-row w-3/4 border-solid border border-gray-200 h-10"] $ do
           img_ [src_ "/assets/svgs/search.svg", class_ "h-5 w-auto"]
-          input_ [type_ "text", class_ "w-full h-full p-2 text-sm text-gray-400 font-normal focus:outline-none", placeholder_ "Search endpoints..."]
+          input_ [type_ "text", class_ "dataTable-search w-full h-full p-2 text-sm text-gray-400 font-normal focus:outline-none", placeholder_ "Search endpoints..."]
           img_ [src_ "/assets/svgs/filter.svg", class_ "h-5 w-auto self-end"]
         button_ [class_ "bg-blue-700/20 place-content-center py-2 px-4 w-28 mx-3 flex flex-row rounded-xl h-10"] $ do
           img_ [src_ "/assets/svgs/merge.svg", class_ "h-4 w-4 mt-1 "]
@@ -56,7 +59,8 @@ endpointList enps = do
           span_ [class_ "text-sm text-slate-600 mr-1"] "Actions"
           img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-3 w-3 mt-1 "]
       -- table head
-      table_ [class_ "table-auto w-full  mt-6"] $ do
+
+      table_ [class_ "table-auto w-full  mt-6", id_ "apitab"] $ do
         thead_ $ do
           tr_ [class_ "border-b border-b-slate-300 p-10ç "] $ do
             th_ [class_ "text-left "] $ do
@@ -76,9 +80,9 @@ endpointList enps = do
                     td_ [class_ "flex flex-row"] $ do
                       a_ [href_ ("/p/" <> UUID.toText (Projects.unProjectId $ enp ^. #projectId) <> "/endpoints/" <> UUID.toText (Endpoints.unEndpointId $ enp ^. #id))] $ do
                         span_ [class_ "endpoint"] $ toHtml $ enp ^. #method
-                        span_ [class_ " text-base text-slate-500 font-normal"] $ toHtml $ enp ^. #urlPath
+                        span_ [class_ " inconsolata text-base text-slate-700"] $ toHtml $ enp ^. #urlPath
                     td_ [class_ " text-sm text-gray-400 font-normal"] "4500"
-                    td_ [class_ " text-sm text-slate-500 font-normal"] "200"
+                    td_ [class_ " inconsolata text-base text-slate-700"] "200"
                     td_ [class_ " text-sm text-gray-400 font-normal"] "400ms"
                     td_ [class_ "grid justify-items-end font-medium text-gray-400"] $ do
                       div_ [class_ "flex flex-row"] $ do
@@ -114,3 +118,22 @@ endpointList enps = do
           button_ [class_ "bg-blue-700/20 place-content-center h-10 mx-1 flex flex-row rounded-xl py-3 w-10"] $ do
             img_ [src_ "/assets/svgs/arrowright1.svg", class_ "-mr-1"]
             img_ [src_ "/assets/svgs/arrowright1.svg", class_ "-ml-1"]
+
+  script_ [text|
+var dataTable = new DataTable("#apitab", {
+	searchable: true,
+	fixedHeight: true,
+  nextPrev: true,
+  firstLast: true,
+  labels: {
+      placeholder: "Search...", // The search input placeholder
+      perPage: "{select} ", // per-page dropdown label
+      noRows: "No entries found", // Message shown when there are no search results
+      info: "Showing {start} - {end} of {rows} " //
+  },
+  layout: {
+            top: "{search}",
+            bottom: "{select} {info}{pager}"
+        }
+});
+    |]

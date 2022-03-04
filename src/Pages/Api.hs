@@ -132,7 +132,7 @@ mainContent apiKeys newKeyM = do
                         js
                             if ('clipboard' in window.navigator) {
                                 navigator.clipboard.writeText(document.getElementById("newKey").innerText).then(Text=>{
-                                  alert ("Copied to Clipboard")
+                                  notyf.success('Copied')
                                 })
                             }
                         end
