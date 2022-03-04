@@ -2,7 +2,7 @@
 
 module Server (app) where
 
-import Config (AuthContext (AuthContext), DashboardM, HeadersTrigger, HeadersTriggerRedirect, ctxToHandler, env, pool)
+import Config (AuthContext (..), DashboardM, HeadersTrigger, HeadersTriggerRedirect, ctxToHandler, env, pool)
 import Data.Pool (Pool)
 import Database.PostgreSQL.Simple (Connection)
 import Lucid

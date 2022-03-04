@@ -2,10 +2,10 @@ module Pages.Dashboard (dashboardGetH) where
 
 import Config
 import Data.Aeson qualified as AE
+import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Fmt (fixedF, fmt)
 import Lucid
-import Lucid.HTMX
 import Lucid.Svg qualified as Svg
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
@@ -19,20 +19,33 @@ import Relude.Unsafe qualified as Unsafe
 dashboardGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 dashboardGetH sess pid = do
   pool <- asks pool
-  (project, reqLatencyPercentiles, reqsByEndpoint) <- liftIO $
+  (project, reqLatencyPercentiles, reqsByEndpoint, reqLatenciesRolledByStepsLabeled) <- liftIO $
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
       reqLatencyPercentilesM <- RequestDumps.selectReqLatencyPercentilesForProject pid
       let reqLatencyPercentiles = Unsafe.fromJust reqLatencyPercentilesM
       reqsByEndpoint <- RequestDumps.selectRequestsByEndpointsStatByMin pid
-      pure (project, reqLatencyPercentiles, reqsByEndpoint)
+
+      let maxV = round (reqLatencyPercentiles ^. #max) :: Int
+      let steps = (maxV `div` 100) :: Int
+      reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledByStepsForProject maxV steps pid
+
+      let reqLatencyPercentileSteps =
+            ( (round (reqLatencyPercentiles ^. #max) `div` steps) * steps,
+              (round (reqLatencyPercentiles ^. #p90) `div` steps) * steps,
+              (round (reqLatencyPercentiles ^. #p75) `div` steps) * steps,
+              (round (reqLatencyPercentiles ^. #p50) `div` steps) * steps
+            )
+
+      let reqLatenciesRolledByStepsLabeled = Vector.toList reqLatenciesRolledBySteps & map \(x, y) -> RequestDumps.labelRequestLatency reqLatencyPercentileSteps (x, y)
+      pure (project, reqLatencyPercentiles, reqsByEndpoint, concat reqLatenciesRolledByStepsLabeled)
 
   let reqsByEndpointJ = decodeUtf8 $ AE.encode reqsByEndpoint
-  pure $ bodyWrapper (Just sess) project "Dashboard" $ dashboardPage reqLatencyPercentiles reqsByEndpointJ
+  let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
+  pure $ bodyWrapper (Just sess) project "Dashboard" $ dashboardPage reqLatencyPercentiles reqsByEndpointJ reqLatenciesRolledByStepsJ
 
-dashboardPage :: RequestDumps.Percentiles -> Text -> Html ()
-dashboardPage percentiles reqsByEndpointJ = do
-  let reqLatenciesRolledByStepsJ = "[]"
+dashboardPage :: RequestDumps.Percentiles -> Text -> Text -> Html ()
+dashboardPage percentiles reqsByEndpointJ reqLatenciesRolledByStepsJ = do
   section_ [class_ "p-8"] $ do
     dStats percentiles
   script_

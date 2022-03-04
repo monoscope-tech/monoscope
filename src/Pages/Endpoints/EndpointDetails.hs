@@ -6,7 +6,6 @@
 module Pages.Endpoints.EndpointDetails (endpointDetailsH, fieldDetailsPartialH) where
 
 import Config
-import Data.Aeson (KeyValue ((.=)), ToJSON, object)
 import Data.Aeson qualified as AE
 import Data.Map qualified as Map
 import Data.Text as T (breakOnAll, dropWhile, isInfixOf, replace, splitOn)
@@ -74,13 +73,6 @@ fieldDetailsView field formats = do
   h6_ [class_ "mt-5 text-sm text-slate-700 mb-2"] "DESCRIPTION"
   p_ [class_ "text-gray-400 text-sm"] $ toHtml $ field ^. #description
 
-data LabelValue = LabelValue (Int, Int, Maybe Text)
-  deriving (Show)
-
-instance ToJSON LabelValue where
-  toJSON (LabelValue (x, y, Nothing)) = object ["label" .= show x, "value" .= y]
-  toJSON (LabelValue (x, y, Just z)) = object ["label" .= z, "lineposition" .= show x, "labelposition" .= show x, "vline" .= "true", "labelhalign" .= "center", "dashed" .= "1"]
-
 -- | endpointDetailsH is the main handler for the endpoint details page.
 -- It reuses the fieldDetailsView as well, which is used for the side navigation on the page and also exposed un the fieldDetailsPartialH endpoint
 endpointDetailsH :: Sessions.PersistentSession -> Projects.ProjectId -> Endpoints.EndpointId -> DashboardM (Html ())
@@ -108,20 +100,12 @@ endpointDetailsH sess pid eid = do
               (round (reqLatencyPercentiles ^. #p75) `div` steps) * steps,
               (round (reqLatencyPercentiles ^. #p50) `div` steps) * steps
             )
-      let reqLatenciesRolledByStepsLabeled = Vector.toList reqLatenciesRolledBySteps & map \(x, y) -> labelRequestLatency reqLatencyPercentileSteps (x, y)
+      let reqLatenciesRolledByStepsLabeled = Vector.toList reqLatenciesRolledBySteps & map \(x, y) -> RequestDumps.labelRequestLatency reqLatencyPercentileSteps (x, y)
       pure (endpoint, project, fieldsMap, reqsByStatsByMin, reqLatencyPercentiles, concat reqLatenciesRolledByStepsLabeled)
 
   let reqsByStatsByMinJ = decodeUtf8 $ AE.encode reqsByStatsByMin
   let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
   pure $ bodyWrapper (Just sess) project "Endpoint Details" $ endpointDetails endpoint fieldsMap reqsByStatsByMinJ reqLatencyPercentiles reqLatenciesRolledByStepsJ
-
-labelRequestLatency :: (Int, Int, Int, Int) -> (Int, Int) -> [LabelValue]
-labelRequestLatency (pMax, p90, p75, p50) (x, y)
-  | x == pMax = [LabelValue (x, y, Just "max"), LabelValue (x, y, Nothing)]
-  | x == p90 = [LabelValue (x, y, Just "p90"), LabelValue (x, y, Nothing)]
-  | x == p75 = [LabelValue (x, y, Just "p75"), LabelValue (x, y, Nothing)]
-  | x == p50 = [LabelValue (x, y, Just "p50"), LabelValue (x, y, Nothing)]
-  | otherwise = [LabelValue (x, y, Nothing)]
 
 endpointDetails :: Endpoint -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> RequestDumps.Percentiles -> Text -> Html ()
 endpointDetails endpoint fieldsM reqsByStatsByMinJ percentiles reqLatenciesRolledByStepsJ = do

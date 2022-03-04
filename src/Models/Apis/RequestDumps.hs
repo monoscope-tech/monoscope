@@ -5,13 +5,17 @@ module Models.Apis.RequestDumps
     insertRequestDump,
     selectRequestsByStatusCodesStatByMin,
     selectReqLatencyPercentiles,
+    labelRequestLatency,
+    LabelValue,
     Percentiles (..),
     selectReqLatenciesRolledBySteps,
     selectReqLatencyPercentilesForProject,
     selectRequestsByEndpointsStatByMin,
+    selectReqLatenciesRolledByStepsForProject,
   )
 where
 
+import Data.Aeson (KeyValue ((.=)), ToJSON, object)
 import Data.Aeson qualified as AE
 import Data.Time (CalendarDiffTime, ZonedTime)
 import Data.UUID qualified as UUID
@@ -159,3 +163,33 @@ select duration_steps, count(id)
 	GROUP BY duration_steps 
 	ORDER BY duration_steps;
       |]
+
+selectReqLatenciesRolledByStepsForProject :: Int -> Int -> Projects.ProjectId -> DBT IO (Vector (Int, Int))
+selectReqLatenciesRolledByStepsForProject maxv steps pid = query Select q (maxv, steps, steps, steps, pid)
+  where
+    q =
+      [sql| 
+select duration_steps, count(id)
+	FROM generate_series(0, ?, ?) AS duration_steps
+	LEFT OUTER JOIN apis.request_dumps on (duration_steps = round((EXTRACT(epoch FROM duration)/1000000)/?)*? 
+    AND created_at > NOW() - interval '14' day
+    AND project_id=?)
+	GROUP BY duration_steps 
+	ORDER BY duration_steps;
+      |]
+
+-- Useful for charting latency histogram on the dashbaord and endpoint details pages
+data LabelValue = LabelValue (Int, Int, Maybe Text)
+  deriving (Show)
+
+instance ToJSON LabelValue where
+  toJSON (LabelValue (x, y, Nothing)) = object ["label" .= show x, "value" .= y]
+  toJSON (LabelValue (x, y, Just z)) = object ["label" .= z, "lineposition" .= show x, "labelposition" .= show x, "vline" .= "true", "labelhalign" .= "center", "dashed" .= "1"]
+
+labelRequestLatency :: (Int, Int, Int, Int) -> (Int, Int) -> [LabelValue]
+labelRequestLatency (pMax, p90, p75, p50) (x, y)
+  | x == pMax = [LabelValue (x, y, Just "max"), LabelValue (x, y, Nothing)]
+  | x == p90 = [LabelValue (x, y, Just "p90"), LabelValue (x, y, Nothing)]
+  | x == p75 = [LabelValue (x, y, Just "p75"), LabelValue (x, y, Nothing)]
+  | x == p50 = [LabelValue (x, y, Just "p50"), LabelValue (x, y, Nothing)]
+  | otherwise = [LabelValue (x, y, Nothing)]
