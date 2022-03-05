@@ -33,21 +33,32 @@ bodyWrapper sessM currProject pageTitle child =
           title_ $ toHtml pageTitle
           link_ [rel_ "stylesheet", type_ "text/css", href_ "/assets/css/tailwind.min.css"]
           link_ [rel_ "stylesheet", type_ "text/css", href_ "https://cdn.jsdelivr.net/npm/notyf@3/notyf.min.css"]
-          link_ [rel_ "stylesheet", type_ "text/css", href_ "https://cdn.jsdelivr.net/npm/vanilla-datatables@latest/dist/vanilla-dataTables.min.css"]
-          script_ [src_ "https://cdn.jsdelivr.net/npm/vanilla-datatables@latest/dist/vanilla-dataTables.min.js"] ""
+          link_ [rel_ "stylesheet", type_ "text/css", href_ "https://cdn.jsdelivr.net/npm/simple-datatables@latest/dist/style.css"]
+          script_ [src_ "https://unpkg.com/simple-datatables"] ""
           script_ [src_ "https://unpkg.com/htmx.org@1.6.1"] ""
           script_ [src_ "https://cdn.jsdelivr.net/npm/notyf@3/notyf.min.js"] ""
           script_ [src_ "https://unpkg.com/hyperscript.org@0.9.3"] ""
           script_ [src_ "https://cdn.fusioncharts.com/fusioncharts/latest/fusioncharts.js"] ""
           script_ [src_ "https://cdn.fusioncharts.com/fusioncharts/latest/themes/fusioncharts.theme.fusion.js"] ""
 
-        body_ [class_ "text-gray-700"] $ do
-          section_ [class_ "flex flex-row bg-gray-50 h-screen"] $ do
-            -- Side nav
-            sideNav'
-            section_ [class_ "grow"] $ do
-              navbar currUser
-              child
+        body_
+          [class_ "text-gray-700", 
+          [__|
+              
+            |]
+          ]
+          $ do
+            section_
+              [id_ "notifications_parent",
+              class_ "fixed inset-0 flex flex-col items-end px-4 py-6 pointer-events-none sm:p-6 space-y-1 z-50"
+              ] ""
+
+            section_ [class_ "flex flex-row bg-gray-50 h-screen"] $ do
+              -- Side nav
+              sideNav'
+              section_ [class_ "grow"] $ do
+                navbar currUser
+                child
 
 projectsDropDown :: Projects.Project -> Vector.Vector Projects.Project -> Html ()
 projectsDropDown currProject projects =
@@ -205,11 +216,19 @@ navbar currUser = do
 
 
   script_ [text|
-var notyf = new Notyf({
-    duration: 1000,
-    position: {
-    x: 'right',
-    y: 'top',
-  },
-});
-    |]
+    //var dataTable = new DataTable("#apitab");
+
+    var notyf = new Notyf({
+        duration: 5000,
+        position: {
+        x: 'right',
+        y: 'top',
+      },
+    });
+
+
+    document.body.addEventListener("click", (e)=> {
+      notyf.success('Works');
+    });
+
+  |]

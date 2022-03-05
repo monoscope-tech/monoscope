@@ -108,6 +108,10 @@ apiKeysPage pid apiKeys = do
 
 mainContent :: Vector ProjectApiKeys.ProjectApiKey -> Maybe (ProjectApiKey.ProjectApiKey, Text) -> Html ()
 mainContent apiKeys newKeyM = do
+  section_
+      [id_ "notifications_parent", 
+      class_ "fixed inset-0 flex flex-col items-end px-4 py-6 pointer-events-none sm:p-6 space-y-1 z-50"] ""
+
   section_ [id_ "main-content"] $ do
     case newKeyM of
       Nothing -> toHtml ""
@@ -132,7 +136,7 @@ mainContent apiKeys newKeyM = do
                         js
                             if ('clipboard' in window.navigator) {
                                 navigator.clipboard.writeText(document.getElementById("newKey").innerText).then(Text=>{
-                                  notyf.success('Copied')
+                                  notyf.success('API Key has been added to the Clipboard')
                                 })
                             }
                         end
