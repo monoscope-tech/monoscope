@@ -42,8 +42,14 @@
   }
 
   .input-txt {
-      @apply shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md;
-    }
+    @apply shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md;
+  }
+
+  /* Added because using - in class name prefix via hyperscript doesnt work*/
+  .neg-rotate-90 {
+    @apply -rotate-90;
+  }
+
   .endpoint {
     @apply w-20 rounded-lg text-center bg-orange-400 text-white text-sm p-2 m-2 inline-block;
   }

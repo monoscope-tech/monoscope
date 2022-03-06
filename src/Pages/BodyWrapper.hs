@@ -6,9 +6,9 @@ import Lucid.Hyperscript
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
+import NeatInterpolation
 import Optics.Operators ((^.))
 import Relude
-import NeatInterpolation
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu ppid =
@@ -41,24 +41,13 @@ bodyWrapper sessM currProject pageTitle child =
           script_ [src_ "https://cdn.fusioncharts.com/fusioncharts/latest/fusioncharts.js"] ""
           script_ [src_ "https://cdn.fusioncharts.com/fusioncharts/latest/themes/fusioncharts.theme.fusion.js"] ""
 
-        body_
-          [class_ "text-gray-700", 
-          [__|
-              
-            |]
-          ]
-          $ do
-            section_
-              [id_ "notifications_parent",
-              class_ "fixed inset-0 flex flex-col items-end px-4 py-6 pointer-events-none sm:p-6 space-y-1 z-50"
-              ] ""
-
-            section_ [class_ "flex flex-row bg-gray-50 h-screen"] $ do
-              -- Side nav
-              sideNav'
-              section_ [class_ "grow"] $ do
-                navbar currUser
-                child
+        body_ [class_ "text-gray-700"] $ do
+          section_ [class_ "flex flex-row bg-gray-50 h-screen overflow-hidden"] $ do
+            -- Side nav
+            sideNav'
+            section_ [class_ "grow"] $ do
+              navbar currUser
+              child
 
 projectsDropDown :: Projects.Project -> Vector.Vector Projects.Project -> Html ()
 projectsDropDown currProject projects =
@@ -118,7 +107,7 @@ projectsDropDown currProject projects =
 
 sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Html ()
 sideNav sess project pageTitle = do
-  aside_ [class_ "shrink-0  w-72 sticky top-0 border-r-2 bg-white border-gray-200 h-screen"] $ do
+  aside_ [class_ "shrink-0  w-72 sticky top-0 border-r-2 bg-white border-gray-200 h-screen overflow-hidden"] $ do
     a_ [href_ "/", class_ "inline-block p-4"] $ do
       img_ [src_ "/assets/svgs/logo.svg"]
     div_ [class_ "p-4"] $ do
@@ -214,8 +203,8 @@ navbar currUser = do
             img_ [src_ "/assets/svgs/add_user.svg"]
             span_ "Logout"
 
-
-  script_ [text|
+  script_
+    [text|
     //var dataTable = new DataTable("#apitab");
 
     var notyf = new Notyf({
@@ -227,8 +216,8 @@ navbar currUser = do
     });
 
 
-    document.body.addEventListener("click", (e)=> {
-      notyf.success('Works');
-    });
+    // document.body.addEventListener("click", (e)=> {
+    //  notyf.success('Works');
+    // });
 
   |]

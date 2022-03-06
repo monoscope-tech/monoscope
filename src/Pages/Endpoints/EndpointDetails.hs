@@ -17,6 +17,8 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Fmt
 import Lucid
 import Lucid.HTMX
+import Lucid.Hyperscript (_hs)
+import Lucid.Hyperscript.QuasiQuoter (__)
 import Lucid.Svg qualified as Svg
 import Models.Apis.Endpoints
 import Models.Apis.Endpoints qualified as Endpoints
@@ -109,8 +111,8 @@ endpointDetailsH sess pid eid = do
 
 endpointDetails :: Endpoint -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> RequestDumps.Percentiles -> Text -> Html ()
 endpointDetails endpoint fieldsM reqsByStatsByMinJ percentiles reqLatenciesRolledByStepsJ = do
-  div_ [class_ "w-full flex flex-row h-screen overflow-y-scroll"] $ do
-    div_ [class_ "w-2/3  p-8"] $ do
+  div_ [class_ "w-full flex flex-row h-screen overflow-hidden"] $ do
+    div_ [class_ "w-2/3 p-8 h-full overflow-y-scroll"] $ do
       div_ [class_ "flex flex-row justify-between mb-10"] $ do
         div_ [class_ "flex flex-row place-items-center"] $ do
           h3_ [class_ "text-lg text-slate-700"] $ toHtml $ (endpoint ^. #method) <> " " <> (endpoint ^. #urlPath)
@@ -124,11 +126,21 @@ endpointDetails endpoint fieldsM reqsByStatsByMinJ percentiles reqLatenciesRolle
               h3_ [class_ "text-white text-sm text-bold mx-2 mt-1"] "Download Swagger"
               div_ [class_ "bg-blue-900 p-1 rounded-lg ml-2"] $ do
                 img_ [src_ "/assets/svgs/whitedown.svg", class_ "text-white h-2 w-2 m-1"]
-      div_ [class_ "space-y-8"] $ do
+      div_ [class_ "space-y-16 pb-20"] $ do
         endpointStats percentiles
         reqResSection "Request" True fieldsM
         reqResSection "Response" True fieldsM
-    aside_ [class_ "w-1/3 bg-white h-screen -mr-8 -mt-5 border border-gray-200 p-5 sticky top-0", id_ "detailSidebar"] $ toHtml ""
+    aside_ [class_ "w-1/3 h-full overflow-y-scroll bg-white h-screen -mr-8 -mt-5 border border-gray-200 p-5 sticky top-0", id_ "detailSidebar"] $ toHtml ""
+    script_
+      [type_ "text/hyperscript"]
+      [text| 
+      def collapseUntil(elem, level)
+        set nxtElem to (next <[data-depth]/> from elem) then
+        if nxtElem's @data-depth is greater than level 
+          then toggle .hidden on nxtElem 
+          then collapseUntil(nxtElem, level)
+      end
+      |]
     script_
       [text|
         let data = $reqsByStatsByMinJ
@@ -195,9 +207,13 @@ endpointStats percentiles =
   section_ [class_ "space-y-3"] $ do
     div_ [class_ "flex justify-between mt-5"] $ do
       div_ [class_ "flex flex-row"] $ do
-        img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-4 mr-3 mt-1 w-4"]
+        img_
+          [ src_ "/assets/svgs/cheveron-down.svg",
+            class_ "h-4 mr-3 mt-1 w-4 cursor-pointer",
+            [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .endpointStatsSubSection)|]
+          ]
         span_ [class_ "text-lg text-slate-700"] "Endpoint Stats"
-    div_ [class_ "grid grid-cols-3  gap-5"] $ do
+    div_ [class_ "grid grid-cols-3  gap-5 endpointStatsSubSection"] $ do
       div_ [class_ "col-span-1 content-between space-y-8"] $ do
         div_ [class_ "row-span-1 col-span-1 bg-white  border border-gray-100  rounded-2xl p-3 flex flex-row justify-between"] $ do
           div_ [class_ "flex flex-col justify-center"] $ do
@@ -282,20 +298,25 @@ reqResSection title isRequest fieldsM =
   section_ [class_ "space-y-3"] $ do
     div_ [class_ "flex justify-between mt-5"] $ do
       div_ [class_ "flex flex-row"] $ do
-        img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-4 mr-3 mt-1 w-4"]
+        img_
+          [ src_ "/assets/svgs/cheveron-down.svg",
+            class_ "h-4 mr-3 mt-1 w-4",
+            [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]
+          ]
         span_ [class_ "text-lg text-slate-700"] $ toHtml title
       div_ [class_ "flex flex-row mt-2"] $ do
         img_ [src_ "/assets/svgs/leftarrow.svg", class_ " m-2"]
         span_ [src_ " mx-4"] "1/1"
         img_ [src_ "/assets/svgs/rightarrow.svg", class_ " m-2"]
-    if isRequest
-      then do
-        subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader fieldsM)
-        subSubSection (title <> " Query Params") (Map.lookup Fields.FCQueryParam fieldsM)
-        subSubSection (title <> " Body") (Map.lookup Fields.FCRequestBody fieldsM)
-      else do
-        subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader fieldsM)
-        subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody fieldsM)
+    div_ [class_ "bg-white border border-gray-100 rounded-xl py-10 px-5 space-y-6 reqResSubSection"] $ do
+      if isRequest
+        then do
+          subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader fieldsM)
+          subSubSection (title <> " Query Params") (Map.lookup Fields.FCQueryParam fieldsM)
+          subSubSection (title <> " Body") (Map.lookup Fields.FCRequestBody fieldsM)
+        else do
+          subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader fieldsM)
+          subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody fieldsM)
 
 -- | subSubSection ..
 subSubSection :: Text -> Maybe [Fields.Field] -> Html ()
@@ -303,42 +324,50 @@ subSubSection title fieldsM = do
   case fieldsM of
     Nothing -> toHtml ""
     Just fields -> do
-      div_ [class_ "bg-white border border-gray-100 rounded-xl py-10 px-5 space-y-2"] $ do
-        div_ [class_ "flex flex-row "] $ do
-          img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-4 mr-3 mt-4 w-4"]
+      div_ [class_ "space-y-1"] $ do
+        div_ [class_ "flex flex-row items-center"] $ do
+          img_
+            [ src_ "/assets/svgs/cheveron-down.svg",
+              class_ "h-6 mr-3 w-6 p-1 cursor-pointer",
+              [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .subSectionContent)|]
+            ]
           div_ [class_ "bg-gray-100 px-10 rounded-xl w-full p-4 text-sm text-slate-700"] $ toHtml title
-        fieldsToNormalized fields & mapM_ \(key, fieldM) -> do
-          let segments = splitOn "." key
-          let depth = length segments
-          let depthPadding = "margin-left:" <> show (20 + (depth * 20)) <> "px"
-          let displayKey = replace "»" "" $ last ("" :| segments)
-          case fieldM of
-            Nothing -> do
-              a_ [class_ "flex flex-row items-center", style_ depthPadding, term "data-depth" $ show depth] $ do
-                img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-4 mr-3 mt-4 w-4"]
-                div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full"] $ do
-                  input_ [type_ "checkbox", class_ " mr-12"]
-                  span_ [class_ "grow text-sm text-slate-700 inline-flex items-center"] $ toHtml displayKey
-                  span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ toHtml $ if "»" `isInfixOf` key then "[]" else "{}"
-            Just field -> do
-              a_
-                [ hxGet_ $ "/p/" <> Projects.projectIdText (field ^. #projectId) <> "/fields/" <> UUID.toText (Fields.unFieldId $ field ^. #id),
-                  hxTarget_ "#detailSidebar",
-                  class_ "flex flex-row cursor-pointer",
-                  style_ depthPadding,
-                  term "data-depth" $ show depth
-                ]
-                $ do
-                  img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-4 mr-3 mt-4 w-4 ", style_ "visibility: hidden"]
-                  div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full items-center"] $ do
-                    input_ [type_ "checkbox", class_ " mr-12"]
-                    span_ [class_ "grow text-sm text-slate-700 inline-flex items-center"] $ toHtml displayKey
-                    span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ toHtml $ show $ field ^. #fieldType
-                    img_ [src_ "/assets/svgs/alert-red.svg", class_ " mr-8 ml-4 h-5"]
-                    img_ [src_ "/assets/svgs/dots-vertical.svg", class_ "mx-5 h-5"]
-        div_ [class_ " border-2 border-dashed flex mb-5 flex-row border-gray-100 ml-5  px-5 p-3 rounded-xl mt-2 hidden"] $ do
-          img_ [src_ "/assets/svgs/blue-plus.svg", class_ "mx-2"]
-          span_ [class_ "text-blue-700 font-medium text-base "] "Add a field"
+        div_ [class_ "space-y-1 subSectionContent"] $ do
+          fieldsToNormalized fields & mapM_ \(key, fieldM) -> do
+            let segments = splitOn "." key
+            let depth = length segments
+            let depthPadding = "margin-left:" <> show (20 + (depth * 20)) <> "px"
+            let displayKey = replace "»" "" $ last ("" :| segments)
+            case fieldM of
+              Nothing -> do
+                a_
+                  [ class_ "flex flex-row items-center",
+                    style_ depthPadding,
+                    [__| on click toggle .neg-rotate-90 on <.chevron/> in me then collapseUntil((me), (my @data-depth))  |],
+                    term "data-depth" $ show depth
+                  ]
+                  $ do
+                    img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-6 w-6 mr-1 chevron cursor-pointer p-1"]
+                    div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full"] $ do
+                      input_ [type_ "checkbox", class_ " mr-12"]
+                      span_ [class_ "grow text-sm text-slate-700 inline-flex items-center"] $ toHtml displayKey
+                      span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ toHtml $ if "»" `isInfixOf` key then "[]" else "{}"
+              Just field -> do
+                a_
+                  [ hxGet_ $ "/p/" <> Projects.projectIdText (field ^. #projectId) <> "/fields/" <> UUID.toText (Fields.unFieldId $ field ^. #id),
+                    hxTarget_ "#detailSidebar",
+                    class_ "flex flex-row cursor-pointer",
+                    style_ depthPadding,
+                    term "data-depth" $ show depth
+                  ]
+                  $ do
+                    img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-4 mr-3 mt-4 w-4 ", style_ "visibility: hidden"]
+                    div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full items-center"] $ do
+                      input_ [type_ "checkbox", class_ " mr-12"]
+                      span_ [class_ "grow text-sm text-slate-700 inline-flex items-center"] $ toHtml displayKey
+                      span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ toHtml $ show $ field ^. #fieldType
+                      img_ [src_ "/assets/svgs/alert-red.svg", class_ " mr-8 ml-4 h-5"]
+                      img_ [src_ "/assets/svgs/dots-vertical.svg", class_ "mx-5 h-5"]
 
 fieldsToNormalized :: [Fields.Field] -> [(Text, Maybe Fields.Field)]
 fieldsToNormalized =
