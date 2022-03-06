@@ -1,6 +1,3 @@
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DerivingVia #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
 
 module Pages.Endpoints.EndpointDetails (endpointDetailsH, fieldDetailsPartialH) where
@@ -17,7 +14,6 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Fmt
 import Lucid
 import Lucid.HTMX
-import Lucid.Hyperscript (_hs)
 import Lucid.Hyperscript.QuasiQuoter (__)
 import Lucid.Svg qualified as Svg
 import Models.Apis.Endpoints
@@ -93,14 +89,15 @@ endpointDetailsH sess pid eid = do
       let reqLatencyPercentiles = Unsafe.fromJust reqLatencyPercentilesM
 
       let maxV = round (reqLatencyPercentiles ^. #max) :: Int
-      let steps = (maxV `div` 100) :: Int
-      reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledBySteps maxV steps pid (endpoint ^. #urlPath) (endpoint ^. #method)
+      let steps = (maxV `quot` 100) :: Int
+      let steps' = if steps == 0 then 100 else steps
+      reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledBySteps maxV steps' pid (endpoint ^. #urlPath) (endpoint ^. #method)
 
       let reqLatencyPercentileSteps =
-            ( (round (reqLatencyPercentiles ^. #max) `div` steps) * steps,
-              (round (reqLatencyPercentiles ^. #p90) `div` steps) * steps,
-              (round (reqLatencyPercentiles ^. #p75) `div` steps) * steps,
-              (round (reqLatencyPercentiles ^. #p50) `div` steps) * steps
+            ( (round (reqLatencyPercentiles ^. #max) `quot` steps') * steps',
+              (round (reqLatencyPercentiles ^. #p90) `quot` steps') * steps',
+              (round (reqLatencyPercentiles ^. #p75) `quot` steps') * steps',
+              (round (reqLatencyPercentiles ^. #p50) `quot` steps') * steps'
             )
       let reqLatenciesRolledByStepsLabeled = Vector.toList reqLatenciesRolledBySteps & map \(x, y) -> RequestDumps.labelRequestLatency reqLatencyPercentileSteps (x, y)
       pure (endpoint, project, fieldsMap, reqsByStatsByMin, reqLatencyPercentiles, concat reqLatenciesRolledByStepsLabeled)
@@ -114,7 +111,7 @@ endpointDetails endpoint fieldsM reqsByStatsByMinJ percentiles reqLatenciesRolle
   div_ [class_ "w-full flex flex-row h-screen overflow-hidden"] $ do
     div_ [class_ "w-2/3 p-8 h-full overflow-y-scroll"] $ do
       div_ [class_ "flex flex-row justify-between mb-10"] $ do
-        div_ [class_ "flex flex-row place-items-center"] $ do
+        div_ [class_ "flex flex-row place-items-center text-lg font-medium"] $ do
           h3_ [class_ "text-lg text-slate-700"] $ toHtml $ (endpoint ^. #method) <> " " <> (endpoint ^. #urlPath)
           img_ [src_ "/assets/svgs/cheveron-down.svg", class_ " h-4 w-4 m-2"]
         div_ [class_ "flex flex-row"] $ do

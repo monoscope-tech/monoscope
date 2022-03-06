@@ -7,6 +7,7 @@ module Models.Apis.Endpoints
     upsertEndpoints,
     endpointsByProject,
     endpointById,
+    endpointIdText,
   )
 where
 
@@ -24,19 +25,10 @@ import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact qualified as PgT
-import GHC.Generics (Generic)
 import Models.Projects.Projects qualified as Projects
 import Optics.Operators ((^.))
 import Optics.TH (makeFieldLabelsNoPrefix)
 import Relude
-  ( Bool (True),
-    Eq ((==)),
-    IO,
-    Maybe,
-    Ord,
-    Show,
-    Text,
-  )
 import Web.HttpApiData (FromHttpApiData)
 
 -- Added only for satisfying the tests
@@ -49,6 +41,9 @@ newtype EndpointId = EndpointId {unEndpointId :: UUID.UUID}
     (Eq, Ord, FromField, ToField, FromHttpApiData, Default)
     via UUID.UUID
   deriving anyclass (FromRow, ToRow)
+
+endpointIdText :: EndpointId -> Text
+endpointIdText = UUID.toText . unEndpointId
 
 -- TODO: Introduce request header hashes and response header hashes
 data Endpoint = Endpoint

@@ -40,6 +40,9 @@ bodyWrapper sessM currProject pageTitle child =
           script_ [src_ "https://unpkg.com/hyperscript.org@0.9.3"] ""
           script_ [src_ "https://cdn.fusioncharts.com/fusioncharts/latest/fusioncharts.js"] ""
           script_ [src_ "https://cdn.fusioncharts.com/fusioncharts/latest/themes/fusioncharts.theme.fusion.js"] ""
+          link_ [rel_ "preconnect", href_ "https://fonts.googleapis.com"]
+          link_ [rel_ "preconnect", href_ "https://fonts.gstatic.com", crossorigin_ "true"]
+          link_ [href_ "https://fonts.googleapis.com/css2?family=Inconsolata&family=Poppins:wght@400;700&display=swap", rel_ "stylesheet"]
 
         body_ [class_ "text-gray-700"] $ do
           section_ [class_ "flex flex-row bg-gray-50 h-screen overflow-hidden"] $ do

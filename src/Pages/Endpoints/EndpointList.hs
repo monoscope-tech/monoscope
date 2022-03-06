@@ -6,6 +6,7 @@
 module Pages.Endpoints.EndpointList (endpointListH) where
 
 import Config
+import Data.Text (toLower)
 import Data.UUID as UUID
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT
@@ -15,12 +16,12 @@ import Lucid
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
+import NeatInterpolation
 import Optics.Operators
 import Pages.BodyWrapper (bodyWrapper)
 import Relude
 import Servant.HTML.Lucid
 import Text.RawString.QQ
-import NeatInterpolation
 
 endpointListH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 endpointListH sess pid = do
@@ -65,11 +66,12 @@ endpointList enps = do
           tr_ [class_ "border-b border-b-slate-300 p-10ç "] $ do
             th_ [class_ "text-left "] $ do
               input_ [type_ "checkbox"]
-            th_ [class_ "text-left text-sm text-gray-400 font-normal "] "ENDPOINTS"
-            th_ [class_ "text-left text-sm text-gray-400 font-normal"] "AVG RPM"
-            th_ [class_ "text-left text-sm text-gray-400 font-normal"] "MEAN STATUS"
-            th_ [class_ "text-left text-sm text-gray-400 font-normal"] "AVG LATENCY"
-            th_ [class_ "text-left text-sm text-gray-400 font-normal"] "FLAG"
+            th_ [style_ "width:7rem; min-width:7rem; max-width:7rem;"] ""
+            th_ [class_ "text-left text-sm text-gray-400 font-normal"] "ENDPOINTS"
+            th_ [class_ "text-left text-sm text-gray-400 font-normal text-center"] "AVG RPM"
+            th_ [class_ "text-left text-sm text-gray-400 font-normal text-center"] "MEAN STATUS"
+            th_ [class_ "text-left text-sm text-gray-400 font-normal text-center"] "AVG LATENCY"
+            th_ [class_ "text-left text-sm text-gray-400 font-normal text-center"] ""
         tbody_ $ do
           enps
             & mapM_
@@ -77,21 +79,24 @@ endpointList enps = do
                   tr_ [class_ "border-b border-b-slate-300 py-2"] $ do
                     td_ [class_ "text-left pr-4 "] $ do
                       input_ [type_ "checkbox"]
-                    td_ [class_ "flex flex-row"] $ do
-                      a_ [href_ ("/p/" <> UUID.toText (Projects.unProjectId $ enp ^. #projectId) <> "/endpoints/" <> UUID.toText (Endpoints.unEndpointId $ enp ^. #id))] $ do
-                        span_ [class_ "endpoint"] $ toHtml $ enp ^. #method
+                    td_ [class_ "text-right"] $ do
+                      a_ [href_ ("/p/" <> Projects.projectIdText (enp ^. #projectId) <> "/endpoints/" <> Endpoints.endpointIdText (enp ^. #id))] $ do
+                        span_ [class_ $ "endpoint endpoint-" <> toLower (enp ^. #method)] $ toHtml $ enp ^. #method
+                    td_ [class_ ""] $ do
+                      a_ [href_ ("/p/" <> Projects.projectIdText (enp ^. #projectId) <> "/endpoints/" <> Endpoints.endpointIdText (enp ^. #id))] $ do
                         span_ [class_ " inconsolata text-base text-slate-700"] $ toHtml $ enp ^. #urlPath
-                    td_ [class_ " text-sm text-gray-400 font-normal"] "4500"
-                    td_ [class_ " inconsolata text-base text-slate-700"] "200"
-                    td_ [class_ " text-sm text-gray-400 font-normal"] "400ms"
-                    td_ [class_ "grid justify-items-end font-medium text-gray-400"] $ do
-                      div_ [class_ "flex flex-row"] $ do
-                        img_ [src_ "/assets/svgs/alert-red.svg"]
-                        img_ [src_ "/assets/svgs/dots-vertical.svg"]
+                    td_ [class_ " text-sm text-gray-400 font-normal text-center"] "4500"
+                    td_ [class_ " inconsolata text-base text-slate-700 text-center"] "200"
+                    td_ [class_ " text-sm text-gray-400 font-normal text-center"] "400ms"
+                    td_ [class_ "grid justify-items-end font-medium text-gray-400 "] $ do
+                      div_ [class_ "flex flex-row content-around"] $ do
+                        img_ [class_ "px-3", src_ "/assets/svgs/alert-red.svg"]
+                        img_ [class_ "px-3", src_ "/assets/svgs/dots-vertical.svg"]
               )
-
       -- table footer
-      div_ [class_ "flex flex-row mt-5 justify-between"] $ do
+      -- README: Hiding the pagination logic because while pagination is important,
+      -- we might not quickly have companies who have enough endpoints that they need pagination. So it's better to focus on important topics.
+      div_ [class_ "flex flex-row mt-5 justify-between hidden"] $ do
         div_ [class_ "flex flex-row"] $ do
           button_ [class_ "bg-transparent place-content-center py-2 px-3 mx-3 flex flex-row border-solid border border-gray-200 rounded-xl h-10"] $ do
             span_ [class_ "text-sm text-slate-500 mr-1"] "10"
