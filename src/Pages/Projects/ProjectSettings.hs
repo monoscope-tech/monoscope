@@ -11,20 +11,20 @@ import Config
     HeadersTriggerRedirect,
   )
 import Data.Default (Default (def))
+import Data.UUID qualified as UUID
 import Data.Valor (validateM)
-import qualified Data.Valor as Valor
-import qualified Data.UUID as UUID
+import Data.Valor qualified as Valor
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import Lucid.HTMX (hxPost_, hxTarget_)
-import qualified Models.Projects.ProjectMembers as ProjectMembers
-import qualified Models.Projects.Projects as Projects
-import qualified Models.Users.Sessions as Sessions
+import Models.Projects.ProjectMembers qualified as ProjectMembers
+import Models.Projects.Projects qualified as Projects
+import Models.Users.Sessions qualified as Sessions
+import Models.Users.Users qualified as Users
 import Optics.Operators ()
 import Optics.TH ()
 import Pages.BodyWrapper (bodyWrapper)
-import qualified Pages.Projects.CreateProject as CreateProject
-import qualified Models.Users.Users as Users
+import Pages.Projects.CreateProject qualified as CreateProject
 import Relude
 import Servant
   ( addHeader,
@@ -94,8 +94,8 @@ editProjectMembersBody mb epe = do
       button_ [class_ "py-2 px-5 bg-blue-700 absolute m-5 bottom-0 right-0 text-[white] text-sm rounded-xl cursor-pointer", type_ "submit"] "Next step"
 
 editProjectMemberH :: Projects.ProjectId -> Users.UserId -> UUID.UUID -> CreateProject.InviteProjectMemberForm -> DashboardM (HeadersTriggerRedirect (Html ()))
-editProjectMemberH pid uid mid CreateProject.InviteProjectMemberForm { permission } = do
-  validationRes <- validateM CreateProject.inviteProjectMemberFormV CreateProject.InviteProjectMemberForm { permission }
+editProjectMemberH pid uid mid CreateProject.InviteProjectMemberForm {permission} = do
+  validationRes <- validateM CreateProject.inviteProjectMemberFormV CreateProject.InviteProjectMemberForm {permission}
   case validationRes of
     Left epRaw -> do
       let ep = Valor.unValid epRaw
@@ -107,9 +107,7 @@ editProjectMemberH pid uid mid CreateProject.InviteProjectMemberForm { permissio
           pass
 
       pure $ addHeader "HX-Trigger" $ addHeader "/p" $ editProjectMembersBody ep (def @CreateProject.InviteProjectMemberFormError)
-
-    Right epe -> pure $ noHeader $ noHeader $ editProjectMembersBody CreateProject.InviteProjectMemberForm { permission } epe
-   
+    Right epe -> pure $ noHeader $ noHeader $ editProjectMembersBody CreateProject.InviteProjectMemberForm {permission} epe
 
 -- this can be deleted depending on how the mergings are done
 editProjectPostH :: Projects.ProjectId -> CreateProject.CreateProjectForm -> DashboardM (HeadersTriggerRedirect (Html ()))

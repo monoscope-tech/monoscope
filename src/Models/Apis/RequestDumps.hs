@@ -51,8 +51,8 @@ data RequestDump = RequestDump
     responseBody :: AE.Value,
     statusCode :: Int
   }
-  deriving (Show, Generic, Eq)
-  deriving (ToRow, FromRow)
+  deriving stock (Show, Generic, Eq)
+  deriving anyclass (ToRow, FromRow)
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "request_dumps", PrimaryKey "id", FieldModifiers '[StripPrefix "rd", CamelToSnake]] RequestDump)
@@ -99,7 +99,8 @@ data Percentiles = Percentiles
     p99 :: Double,
     max :: Double
   }
-  deriving (Generic, FromRow)
+  deriving stock (Generic)
+  deriving anyclass (FromRow)
 
 makeFieldLabelsNoPrefix ''Percentiles
 
@@ -180,11 +181,19 @@ select duration_steps, count(id)
 
 -- Useful for charting latency histogram on the dashbaord and endpoint details pages
 data LabelValue = LabelValue (Int, Int, Maybe Text)
-  deriving (Show)
+  deriving stock (Show)
 
 instance ToJSON LabelValue where
-  toJSON (LabelValue (x, y, Nothing)) = object ["label" .= show x, "value" .= y]
-  toJSON (LabelValue (x, y, Just z)) = object ["label" .= z, "lineposition" .= show x, "labelposition" .= show x, "vline" .= "true", "labelhalign" .= "center", "dashed" .= "1"]
+  toJSON (LabelValue (x, y, Nothing)) = object ["label" .= ((show x) :: Text), "value" .= (y :: Int)]
+  toJSON (LabelValue (x, y, Just z)) =
+    object
+      [ "label" .= (z :: Text),
+        "lineposition" .= ((show x) :: Text),
+        "labelposition" .= ((show x) :: Text),
+        "vline" .= ("true" :: Text),
+        "labelhalign" .= ("center" :: Text),
+        "dashed" .= ("1" :: Text)
+      ]
 
 labelRequestLatency :: (Int, Int, Int, Int) -> (Int, Int) -> [LabelValue]
 labelRequestLatency (pMax, p90, p75, p50) (x, y)

@@ -25,7 +25,7 @@ bodyWrapper sessM currProject pageTitle child =
     Just sess -> do
       let currUser = Sessions.getUser (Sessions.user sess)
           sideNav' = case currProject of
-            Nothing -> toHtml ""
+            Nothing -> ""
             Just project -> sideNav sess project pageTitle
 
       doctypehtml_ $ do
@@ -34,12 +34,12 @@ bodyWrapper sessM currProject pageTitle child =
           link_ [rel_ "stylesheet", type_ "text/css", href_ "/assets/css/tailwind.min.css"]
           link_ [rel_ "stylesheet", type_ "text/css", href_ "https://cdn.jsdelivr.net/npm/notyf@3/notyf.min.css"]
           link_ [rel_ "stylesheet", type_ "text/css", href_ "https://cdn.jsdelivr.net/npm/simple-datatables@latest/dist/style.css"]
-          script_ [src_ "https://unpkg.com/simple-datatables"] ""
-          script_ [src_ "https://unpkg.com/htmx.org@1.6.1"] ""
-          script_ [src_ "https://cdn.jsdelivr.net/npm/notyf@3/notyf.min.js"] ""
-          script_ [src_ "https://unpkg.com/hyperscript.org@0.9.3"] ""
-          script_ [src_ "https://cdn.fusioncharts.com/fusioncharts/latest/fusioncharts.js"] ""
-          script_ [src_ "https://cdn.fusioncharts.com/fusioncharts/latest/themes/fusioncharts.theme.fusion.js"] ""
+          script_ [src_ "https://unpkg.com/simple-datatables"] ("" :: Text)
+          script_ [src_ "https://unpkg.com/htmx.org@1.6.1"] ("" :: Text)
+          script_ [src_ "https://cdn.jsdelivr.net/npm/notyf@3/notyf.min.js"] ("" :: Text)
+          script_ [src_ "https://unpkg.com/hyperscript.org@0.9.3"] ("" :: Text)
+          script_ [src_ "https://cdn.fusioncharts.com/fusioncharts/latest/fusioncharts.js"] ("" :: Text)
+          script_ [src_ "https://cdn.fusioncharts.com/fusioncharts/latest/themes/fusioncharts.theme.fusion.js"] ("" :: Text)
           link_ [rel_ "preconnect", href_ "https://fonts.googleapis.com"]
           link_ [rel_ "preconnect", href_ "https://fonts.gstatic.com", crossorigin_ "true"]
           link_ [href_ "https://fonts.googleapis.com/css2?family=Inconsolata&family=Poppins:wght@400;700&display=swap", rel_ "stylesheet"]

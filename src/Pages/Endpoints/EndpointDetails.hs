@@ -38,7 +38,7 @@ fieldDetailsPartialH sess pid fid = do
       formats <- Formats.formatsByFieldId fid
       pure (field, formats)
   case fieldsM of
-    Nothing -> pure $ toHtml ""
+    Nothing -> pure ""
     Just field -> pure $ fieldDetailsView field formats
 
 fieldDetailsView :: Fields.Field -> Vector Formats.Format -> Html ()
@@ -49,7 +49,7 @@ fieldDetailsView field formats = do
     div_ [class_ "flex mt-5 flex-row"] $ do
       div_ [class_ ""] $ do
         h6_ [class_ "text-slate-700 text-xs"] "TYPE"
-        h4_ [class_ "text-base text-slate-700"] $ toHtml $ show $ formatV ^. #fieldType
+        h4_ [class_ "text-base text-slate-700"] $ show $ formatV ^. #fieldType
       div_ [class_ "mx-5"] $ do
         h6_ [class_ "text-slate-700 text-xs"] "FORMAT"
         h4_ [class_ "text-base text-slate-700"] $ toHtml $ formatV ^. #fieldFormat
@@ -127,7 +127,7 @@ endpointDetails endpoint fieldsM reqsByStatsByMinJ percentiles reqLatenciesRolle
         endpointStats percentiles
         reqResSection "Request" True fieldsM
         reqResSection "Response" True fieldsM
-    aside_ [class_ "w-1/3 h-full overflow-y-scroll bg-white h-screen -mr-8 -mt-5 border border-gray-200 p-5 sticky top-0", id_ "detailSidebar"] $ toHtml ""
+    aside_ [class_ "w-1/3 h-full overflow-y-scroll bg-white h-screen -mr-8 -mt-5 border border-gray-200 p-5 sticky top-0", id_ "detailSidebar"] ""
     script_
       [type_ "text/hyperscript"]
       [text| 
@@ -319,7 +319,7 @@ reqResSection title isRequest fieldsM =
 subSubSection :: Text -> Maybe [Fields.Field] -> Html ()
 subSubSection title fieldsM = do
   case fieldsM of
-    Nothing -> toHtml ""
+    Nothing -> ""
     Just fields -> do
       div_ [class_ "space-y-1"] $ do
         div_ [class_ "flex flex-row items-center"] $ do
@@ -348,7 +348,7 @@ subSubSection title fieldsM = do
                     div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full"] $ do
                       input_ [type_ "checkbox", class_ " mr-12"]
                       span_ [class_ "grow text-sm text-slate-700 inline-flex items-center"] $ toHtml displayKey
-                      span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ toHtml $ if "»" `isInfixOf` key then "[]" else "{}"
+                      span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ if "»" `isInfixOf` key then "[]" else "{}"
               Just field -> do
                 a_
                   [ hxGet_ $ "/p/" <> Projects.projectIdText (field ^. #projectId) <> "/fields/" <> UUID.toText (Fields.unFieldId $ field ^. #id),
@@ -362,7 +362,7 @@ subSubSection title fieldsM = do
                     div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full items-center"] $ do
                       input_ [type_ "checkbox", class_ " mr-12"]
                       span_ [class_ "grow text-sm text-slate-700 inline-flex items-center"] $ toHtml displayKey
-                      span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ toHtml $ show $ field ^. #fieldType
+                      span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ show $ field ^. #fieldType
                       img_ [src_ "/assets/svgs/alert-red.svg", class_ " mr-8 ml-4 h-5"]
                       img_ [src_ "/assets/svgs/dots-vertical.svg", class_ "mx-5 h-5"]
 

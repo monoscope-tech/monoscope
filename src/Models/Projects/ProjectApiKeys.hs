@@ -56,7 +56,7 @@ data ProjectApiKey = ProjectApiKey
     title :: Text,
     keyPrefix :: Text
   }
-  deriving (Show, Generic)
+  deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow)
   deriving (Entity) via (GenericEntity '[Schema "projects", TableName "project_api_keys", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ProjectApiKey)
 

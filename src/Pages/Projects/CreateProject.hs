@@ -45,14 +45,14 @@ data CreateProjectForm = CreateProjectForm
   { title :: Text,
     description :: Text
   }
-  deriving (Eq, Show, Generic)
+  deriving stock (Eq, Show, Generic)
   deriving anyclass (FromForm, Default)
 
 data CreateProjectFormError = CreateProjectFormError
   { titleE :: Maybe [String],
     descriptionE :: Maybe [String]
   }
-  deriving (Eq, Show, Generic)
+  deriving stock (Eq, Show, Generic)
   deriving anyclass (Default)
 
 createProjectFormToModel :: Projects.ProjectId -> CreateProjectForm -> Projects.CreateProject
@@ -71,14 +71,14 @@ data InviteProjectMemberForm = InviteProjectMemberForm
   { email :: Text,
     permission :: Text
   }
-  deriving (Eq, Show, Generic)
+  deriving stock (Eq, Show, Generic)
   deriving anyclass (FromForm, Default)
 
 data InviteProjectMemberFormError = InviteProjectMemberFormError
   { emailE :: Maybe [String],
     permissionE :: Maybe [String]
   }
-  deriving (Eq, Show, Generic)
+  deriving stock (Eq, Show, Generic)
   deriving anyclass (Default)
 
 inviteProjectMemberFormV :: Monad m => Valor InviteProjectMemberForm m InviteProjectMemberFormError

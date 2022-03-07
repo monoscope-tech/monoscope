@@ -54,7 +54,7 @@ data FieldTypes
   | FTObject
   | FTList
   | FTNull
-  deriving (Eq, Generic, Show)
+  deriving stock (Eq, Generic, Show)
 
 instance Default FieldTypes where
   def = FTUnknown
@@ -92,7 +92,7 @@ data FieldCategoryEnum
   | FCResponseHeader
   | FCRequestBody
   | FCResponseBody
-  deriving (Eq, Generic, Show, Ord)
+  deriving stock (Eq, Generic, Show, Ord)
 
 instance Default FieldCategoryEnum where
   def = FCQueryParam
@@ -137,8 +137,8 @@ data Field = Field
     keyPathStr :: Text,
     fieldCategory :: FieldCategoryEnum
   }
-  deriving (Show, Generic, Default)
-  deriving anyclass (FromRow, ToRow)
+  deriving stock (Show, Generic)
+  deriving anyclass (FromRow, ToRow, Default)
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "fields", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Field)

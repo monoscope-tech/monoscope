@@ -50,7 +50,7 @@ data RequestMessage = RequestMessage
     responseBody :: Text,
     statusCode :: Int
   }
-  deriving (Show, Generic)
+  deriving stock (Show, Generic)
   deriving
     (AE.FromJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestMessage

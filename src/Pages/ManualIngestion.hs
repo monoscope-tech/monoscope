@@ -34,7 +34,7 @@ data RequestMessageForm = RequestMessageForm
     responseBody :: Text,
     statusCode :: Int
   }
-  deriving (Show, Generic)
+  deriving stock (Show, Generic)
   deriving anyclass (FromForm)
 
 reqMsgFormToReqMsg :: UUID.UUID -> RequestMessageForm -> Either Text RequestMessages.RequestMessage
@@ -97,7 +97,7 @@ manualIngestPage = do
         integrity_ "sha512-9T9AIzkTI9pg694MCTReaZ0vOimxuTKXA15Gin+AZ4eycmg85iEXGX811BAjyY+NOcDCdlA9k2u9SqVAyNqFkQ==",
         crossorigin_ "anonymous"
       ]
-      ""
+      ("" :: Text)
     link_ [rel_ "stylesheet", type_ "text/css", href_ "https://cdnjs.cloudflare.com/ajax/libs/jsoneditor/9.7.2/jsoneditor.min.css"]
     section_ [class_ "container mx-auto  px-4 py-10"] $ do
       div_ [class_ "flex justify-between mb-6"] $ do
@@ -130,8 +130,7 @@ manualIngestPage = do
           inputInt "" "statusCode" 200
           div_ $ do
             button_ [class_ "btn-sm btn-indigo", type_ "submit"] "Submit"
-    script_
-      []
+    script_ @Text
       [r|
         // create the editor
         var opt = {mode:"code", modes: ["code","tree"]}

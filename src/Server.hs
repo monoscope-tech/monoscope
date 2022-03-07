@@ -2,7 +2,9 @@
 
 module Server (app) where
 
-import Config (AuthContext (..), DashboardM, HeadersTrigger, HeadersTriggerRedirect, ctxToHandler, env, pool)
+import Colog (LogAction)
+import Config (DashboardM, HeadersTrigger, HeadersTriggerRedirect, ctxToHandler)
+import Config qualified
 import Data.Pool (Pool)
 import Database.PostgreSQL.Simple (Connection)
 import Lucid
@@ -64,8 +66,8 @@ type instance AuthServerData (AuthProtect "apitoolkit_session") = Sessions.Persi
 
 --
 --
-app :: Pool Connection -> AuthContext -> Application
-app dbConn ctx = serveWithContext api (genAuthServerContext dbConn) $ hoistServerWithContext api ctxProxy (ctxToHandler ctx) server
+app :: LogAction IO String -> Pool Connection -> Config.AuthContext -> Application
+app logger dbConn ctx = serveWithContext api (genAuthServerContext logger dbConn) $ hoistServerWithContext api ctxProxy (ctxToHandler ctx) server
 
 api :: Proxy API
 api = Proxy

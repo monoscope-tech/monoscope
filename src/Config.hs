@@ -25,7 +25,7 @@ data EnvConfig = EnvConfig
     messagesPerPubsubPullBatch :: Int,
     migrateAndInitializeOnStart :: Bool
   }
-  deriving (Show, Generic)
+  deriving stock (Show, Generic)
   deriving anyclass (FromEnv)
 
 makeFieldLabelsNoPrefix ''EnvConfig

@@ -35,7 +35,7 @@ data Permissions
   = PAdmin
   | PView
   | PEdit
-  deriving (Eq, Generic, Show)
+  deriving stock (Eq, Generic, Show)
 
 instance ToField Permissions where
   toField PAdmin = Escape "admin"
@@ -67,7 +67,7 @@ data ProjectMembers = ProjectMembers
     userId :: Users.UserId,
     permission :: Permissions
   }
-  deriving (Show, Generic)
+  deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow)
   deriving
     (Entity)
@@ -80,7 +80,7 @@ data CreateProjectMembers = CreateProjectMembers
     userId :: Users.UserId,
     permission :: Permissions
   }
-  deriving (Show, Generic)
+  deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow)
   deriving
     (Entity)
@@ -91,7 +91,7 @@ data InvProjectMember = InvProjectMember
     userId :: Users.UserId,
     permission :: Text
   }
-  deriving (Show, Generic)
+  deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow)
   deriving
     (Entity)

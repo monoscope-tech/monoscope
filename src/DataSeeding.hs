@@ -19,7 +19,7 @@ data SeedConfig = SeedConfig
     requestBody :: [FieldConfig],
     responseBody :: [FieldConfig]
   }
-  deriving (Show, Generic)
+  deriving stock (Show, Generic)
   deriving
     (AE.FromJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SeedConfig
@@ -30,7 +30,7 @@ data FieldConfig = FieldConfig
     typeGenFormat :: Text,
     children :: [FieldConfig]
   }
-  deriving (Show, Generic)
+  deriving stock (Show, Generic)
   deriving
     (AE.FromJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] FieldConfig

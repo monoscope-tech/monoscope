@@ -59,7 +59,7 @@ data Endpoint = Endpoint
     responseHashes :: Vector.Vector Text,
     queryparamHashes :: Vector.Vector Text
   }
-  deriving (Show, Generic, Eq)
+  deriving stock (Show, Generic, Eq)
   deriving anyclass (FromRow, ToRow, Default)
   deriving
     (Entity)

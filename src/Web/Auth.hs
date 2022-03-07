@@ -2,6 +2,8 @@
 
 module Web.Auth (logoutH, loginRedirectH, loginH, authCallbackH, genAuthServerContext) where
 
+import Colog (LogAction)
+import Colog.Core ((<&))
 import Config (DashboardM, env, pool)
 import Control.Error (note)
 import Control.Lens qualified as L
@@ -13,7 +15,7 @@ import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (Connection)
-import Lucid (Html, ToHtml (toHtml))
+import Lucid (Html)
 import Lucid.Html5
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
@@ -41,8 +43,8 @@ import Prelude (lookup)
 -- | The context that will be made available to request handlers. We supply the
 -- "cookie-auth"-tagged request handler defined above, so that the 'HasServer' instance
 -- of 'AuthProtect' can extract the handler and run it on the request.
-genAuthServerContext :: Pool Connection -> Context (AuthHandler Request Sessions.PersistentSession ': '[])
-genAuthServerContext dbConn = authHandler dbConn :. EmptyContext
+genAuthServerContext :: LogAction IO String -> Pool Connection -> Context (AuthHandler Request Sessions.PersistentSession ': '[])
+genAuthServerContext logger dbConn = authHandler logger dbConn :. EmptyContext
 
 logoutH ::
   DashboardM
@@ -131,7 +133,7 @@ authCallbackH codeM _ = do
         pure persistentSessId
 
   case resp of
-    Left err -> putStrLn ("unable to process auth callback page " <> err) >> (throwError $ err302 {errHeaders = [("Location", "/login?auth0_callback_failure")]}) >> pure (noHeader $ noHeader $ toHtml "")
+    Left err -> putStrLn ("unable to process auth callback page " <> err) >> (throwError $ err302 {errHeaders = [("Location", "/login?auth0_callback_failure")]}) >> pure (noHeader $ noHeader "")
     Right persistentSessId -> pure $
       addHeader "/" $
         addHeader (craftSessionCookie persistentSessId True) $ do
@@ -144,11 +146,14 @@ authCallbackH codeM _ = do
 --- | The auth handler wraps a function from Request -> Handler Account.
 --- We look for a token in the request headers that we expect to be in the cookie.
 --- The token is then passed to our `lookupAccount` function.
-authHandler :: Pool Connection -> AuthHandler Request Sessions.PersistentSession
-authHandler conn = mkAuthHandler handler
+authHandler :: LogAction IO String -> Pool Connection -> AuthHandler Request Sessions.PersistentSession
+authHandler logger conn = mkAuthHandler handler
   where
     -- instead of just redirecting, we could delete the cookie first?
-    throw301 err = traceShowM err >> throwError $ err302 {errHeaders = [("Location", "/to_login")]}
+    throw301 :: Text -> Handler Sessions.PersistentSession
+    throw301 err = do
+      liftIO (logger <& toString err)
+      throwError $ err302 {errHeaders = [("Location", "/to_login")]}
 
     handler :: Request -> Handler Sessions.PersistentSession
     handler req = either throw301 (lookupAccount conn) $ do
@@ -159,7 +164,7 @@ authHandler conn = mkAuthHandler handler
 lookupAccount :: Pool Connection -> ByteString -> Handler Sessions.PersistentSession
 lookupAccount conn keyV = do
   resp <- runEitherT $ do
-    pid <- hoistEither $ note "unable to convert cookie value to persistent session UUID" (Sessions.PersistentSessionId <$> UUID.fromASCIIBytes keyV)
+    pid <- hoistEither $ note @Text "unable to convert cookie value to persistent session UUID" (Sessions.PersistentSessionId <$> UUID.fromASCIIBytes keyV)
     presistentSess <- liftIO $ withPool conn $ Sessions.getPersistentSession pid
     hoistEither $ note "lookupAccount: invalid persistentID " presistentSess
   case resp of

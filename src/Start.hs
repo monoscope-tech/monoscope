@@ -81,7 +81,7 @@ startApp = do
       logger <& "\n"
       concurrently_
         (pubsubService logger envConfig poolConn)
-        (run (Config.port envConfig) $ Server.app poolConn serverCtx)
+        (run (Config.port envConfig) $ Server.app logger poolConn serverCtx)
 
 -- pubsubService connects to the pubsub service and listens for  messages,
 -- then it calls the processMessage function to process the messages, and

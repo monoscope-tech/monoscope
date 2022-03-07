@@ -54,7 +54,7 @@ data Project = Project
     description :: Text,
     hosts :: Vector.Vector Text
   }
-  deriving (Show, Generic)
+  deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow)
   deriving
     (FromJSON, ToJSON)
@@ -70,7 +70,7 @@ data CreateProject = CreateProject
     title :: Text,
     description :: Text
   }
-  deriving (Show, Generic)
+  deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow)
   deriving
     (Entity)

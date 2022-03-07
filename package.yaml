@@ -20,21 +20,12 @@ ghc-options:
   - -Wno-missing-local-signatures # Warning for polymorphic local bindings; nothing wrong with those.
   - -Wno-monomorphism-restriction # Don’t warn if the monomorphism restriction is used
   - -Wno-missing-safe-haskell-mode
-  # - -fforce-recomp # force recompilation. Useful for seeing the result of compiling ghc with these listed options. It impacts compile time and should be disabled when not needed.
+  - -fforce-recomp # force recompilation. Useful for seeing the result of compiling ghc with these listed options. It impacts compile time and should be disabled when not needed.
   - -Wno-orphans
   # remove the next options when possible. This is a temporary workaround
-  - -Wno-missing-deriving-strategies
   - -Wno-unused-top-binds
-  - -Wno-missing-methods
-  - -Wno-prepositive-qualified-module
   - -Wno-unused-matches
-  # - -Wno-name-shadowing
-  - -Wno-type-defaults
-  # - -fllvm
-  # - -Wno-unused-record-wildcards
-
-# cc-options: -static
-# ld-options: -static -pthread
+  - -fllvm
 
 default-extensions: 
   - NoImplicitPrelude

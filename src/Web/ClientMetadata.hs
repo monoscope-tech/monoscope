@@ -1,6 +1,7 @@
 module Web.ClientMetadata (ClientMetadata, clientMetadataH) where
 
-import Config (AuthContext (env, pool), DashboardM)
+import Colog ((<&))
+import Config (AuthContext (env, logger, pool), DashboardM)
 import Data.Aeson (Value)
 import Data.Aeson.QQ (aesonQQ)
 import Data.Aeson.Types (ToJSON)
@@ -20,7 +21,7 @@ data ClientMetadata = ClientMetadata
     pubsubProjectId :: Text,
     pubsubPushServiceAccount :: Value
   }
-  deriving (Show, Generic)
+  deriving stock (Show, Generic)
   deriving
     (ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ClientMetadata
@@ -32,10 +33,11 @@ clientMetadataH authTextM = do
     Just authTextB64 -> do
       pool <- asks pool
       env <- asks env
+      logger <- asks logger
 
       let authTextE = B64.decodeBase64 (encodeUtf8 $ T.replace "Bearer " "" authTextB64)
       case authTextE of
-        Left err -> traceShowM err >> throwError err300
+        Left err -> liftIO (logger <& toString err) >> throwError err300
         Right authText -> do
           let decryptedKey = ProjectApiKeys.decryptAPIKey (encodeUtf8 $ env ^. #apiKeyEncryptionSecretKey) authText
           case ProjectApiKeys.ProjectApiKeyId <$> UUID.fromASCIIBytes decryptedKey of

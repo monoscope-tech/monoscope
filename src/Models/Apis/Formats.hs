@@ -26,7 +26,7 @@ data Format = Format
     fieldFormat :: Text,
     examples :: Vector.Vector Text
   }
-  deriving (Show, Generic)
+  deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow)
   deriving
     (Entity)

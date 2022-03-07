@@ -60,7 +60,7 @@ data User = User
     displayImageUrl :: Text,
     email :: CI Text
   }
-  deriving (Show, Generic)
+  deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, Default)
   deriving
     (FromJSON, ToJSON)
@@ -73,7 +73,7 @@ data InvUser = InvUser
   { userId :: UserId,
     email :: Text
   }
-  deriving (Show, Generic)
+  deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow)
   deriving
     (Entity)
