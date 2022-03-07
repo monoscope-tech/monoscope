@@ -92,6 +92,12 @@ extra-deps:
     commit: 0a5d0af518f5408ccf234bda7b414e037aca58dc
     subdirs:
       - .
+  - git: https://github.com/kowainik/relude
+    commit: 715afb764034d88b2db2b7d69e08573589fdd41d
+    subdirs:
+      - .
+
+
 
 # Override default flag values for local packages and extra-deps
 # flags: {}

@@ -117,6 +117,7 @@ requestMsgToDumpAndEndpoint rM now dumpID = do
             requestHashes = [reqBodyFieldHashes],
             responseHashes = [respBodyFieldHashes],
             queryparamHashes = []
+            -- FIXME: Implement query param hashes.
             -- FIXME: Should we have request and response headers? Or should they be part of request and response hashes?
           }
   pure (reqDump, endpoint, fieldsDTO)

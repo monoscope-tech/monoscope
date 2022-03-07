@@ -26,6 +26,8 @@ library
   exposed-modules:
       Config
       Data.Default.Instances
+      DataSeeding
+      DataSeedingSpec
       Models.Apis.Endpoints
       Models.Apis.Fields
       Models.Apis.Formats
@@ -88,7 +90,7 @@ library
       DisambiguateRecordFields
       ImportQualifiedPost
       BlockArguments
-  ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-missing-deriving-strategies -Wno-unused-top-binds -Wno-missing-methods -Wno-prepositive-qualified-module -Wno-unused-matches -Wno-type-defaults -fllvm
+  ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -fforce-recomp -Wno-orphans -Wno-missing-deriving-strategies -Wno-unused-top-binds -Wno-missing-methods -Wno-prepositive-qualified-module -Wno-unused-matches -Wno-type-defaults
   build-depends:
       aeson
     , aeson-qq
@@ -112,14 +114,12 @@ library
     , gogol-pubsub
     , hspec
     , http-api-data
-    , jose
     , lens
     , lens-aeson
     , lucid
     , lucid-htmx
     , lucid-hyperscript
     , lucid-svg
-    , memory
     , neat-interpolation
     , optics-core
     , optics-th
@@ -181,66 +181,10 @@ executable apitoolkit-server-exe
       DisambiguateRecordFields
       ImportQualifiedPost
       BlockArguments
-  ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-missing-deriving-strategies -Wno-unused-top-binds -Wno-missing-methods -Wno-prepositive-qualified-module -Wno-unused-matches -Wno-type-defaults -fllvm -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
+  ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -fforce-recomp -Wno-orphans -Wno-missing-deriving-strategies -Wno-unused-top-binds -Wno-missing-methods -Wno-prepositive-qualified-module -Wno-unused-matches -Wno-type-defaults -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
   build-depends:
-      aeson
-    , aeson-qq
-    , apitoolkit-server
-    , async
-    , base
-    , base64
-    , case-insensitive
-    , co-log
-    , co-log-core
-    , containers
-    , cookie
-    , cryptonite
-    , data-default-extra
-    , deriving-aeson
-    , dotenv
-    , envy
-    , errors
-    , fmt
-    , gogol
-    , gogol-core
-    , gogol-pubsub
-    , hspec
-    , http-api-data
-    , jose
-    , lens
-    , lens-aeson
-    , lucid
-    , lucid-htmx
-    , lucid-hyperscript
-    , lucid-svg
-    , memory
-    , neat-interpolation
-    , optics-core
-    , optics-th
-    , pg-entity
-    , pg-transact
-    , postgresql-migration
-    , postgresql-simple
-    , raw-strings-qq
-    , regex-tdfa
+      apitoolkit-server
     , relude >=1.0.0.1
-    , resource-pool
-    , resourcet
-    , scientific
-    , sendgrid-v3
-    , servant-lucid
-    , servant-server
-    , text
-    , text-conversions
-    , time
-    , transformers-either
-    , unordered-containers
-    , uuid
-    , valor >=1.0.0.0
-    , vector
-    , wai
-    , warp
-    , wreq
   default-language: Haskell2010
 
 test-suite apitoolkit-server-test
@@ -278,68 +222,11 @@ test-suite apitoolkit-server-test
       DisambiguateRecordFields
       ImportQualifiedPost
       BlockArguments
-  ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-missing-deriving-strategies -Wno-unused-top-binds -Wno-missing-methods -Wno-prepositive-qualified-module -Wno-unused-matches -Wno-type-defaults -fllvm -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie -Weverything
+  ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -fforce-recomp -Wno-orphans -Wno-missing-deriving-strategies -Wno-unused-top-binds -Wno-missing-methods -Wno-prepositive-qualified-module -Wno-unused-matches -Wno-type-defaults -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
   build-depends:
-      aeson
-    , aeson-qq
-    , apitoolkit-server
-    , async
+      apitoolkit-server
     , base
-    , base64
-    , case-insensitive
-    , co-log
-    , co-log-core
-    , containers
-    , cookie
-    , cryptonite
-    , data-default-extra
-    , deriving-aeson
     , doctest-parallel
-    , dotenv
-    , envy
-    , errors
-    , fmt
-    , gogol
-    , gogol-core
-    , gogol-pubsub
     , hspec
-    , hspec-discover
-    , hspec-expectations-lifted
-    , hspec-pg-transact
-    , http-api-data
-    , jose
-    , lens
-    , lens-aeson
-    , lucid
-    , lucid-htmx
-    , lucid-hyperscript
-    , lucid-svg
-    , memory
-    , neat-interpolation
-    , optics-core
-    , optics-th
-    , pg-entity
-    , pg-transact
-    , postgresql-migration
-    , postgresql-simple
-    , raw-strings-qq
-    , regex-tdfa
     , relude >=1.0.0.1
-    , resource-pool
-    , resourcet
-    , scientific
-    , sendgrid-v3
-    , servant-lucid
-    , servant-server
-    , text
-    , text-conversions
-    , time
-    , transformers-either
-    , unordered-containers
-    , uuid
-    , valor >=1.0.0.0
-    , vector
-    , wai
-    , warp
-    , wreq
   default-language: Haskell2010

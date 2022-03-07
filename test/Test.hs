@@ -1,11 +1,14 @@
-module Main where
+module Main (main) where
 
-import Relude
+import Relude (IO, Maybe (Just), getArgs, (=<<))
 import Spec qualified
-import System.Environment (getArgs)
 import Test.DocTest (mainFromCabal)
-import Test.Hspec.Formatters
+import Test.Hspec.Formatters (progress)
 import Test.Hspec.Runner
+  ( Config (configFormatter),
+    defaultConfig,
+    hspecWith,
+  )
 
 main :: IO ()
 main = do

@@ -34,6 +34,11 @@ import Relude
 import Relude.Unsafe ((!!))
 import Web.HttpApiData (FromHttpApiData)
 
+-- $setup
+-- import Relude
+-- import Data.Default
+-- import Data.Vector
+
 newtype FieldId = FieldId {unFieldId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving

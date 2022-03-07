@@ -30,7 +30,7 @@ ghc-options:
   - -Wno-unused-matches
   # - -Wno-name-shadowing
   - -Wno-type-defaults
-  - -fllvm
+  # - -fllvm
   # - -Wno-unused-record-wildcards
 
 # cc-options: -static
@@ -78,68 +78,66 @@ extra-source-files:
 # common to point users to the README.md file.
 description:         Please see the README on GitHub at <https://github.com/githubuser/apitoolkit-server#readme>
 
-dependencies:
-  - aeson
-  - data-default-extra
-  - time
-  - relude >=1.0.0.1
-  - uuid
-  - optics-th
-  - vector
-  - pg-entity
-  - postgresql-simple
-  - deriving-aeson
-  - base
-  - optics-core
-  - pg-transact
-  - sendgrid-v3
-  - lens
-  - wreq
-  - text-conversions
-  - text
-  - case-insensitive
-  - http-api-data
-  - containers
-  - resource-pool
-  - co-log
-  - servant-server
-  - envy
-  - cookie
-  - wai
-  - memory # 3 remove from codebase
-  - aeson-qq
-  - async
-  - base64
-  - co-log-core
-  - cryptonite
-  - dotenv
-  - errors
-  - gogol
-  - gogol-core
-  - gogol-pubsub
-  - hspec
-  - jose
-  - lens-aeson
-  - lucid
-  - lucid-htmx 
-  - postgresql-migration
-  - raw-strings-qq
-  - regex-tdfa
-  - resourcet
-  - scientific
-  - servant-lucid
-  - transformers-either
-  - unordered-containers
-  - valor >= 1.0.0.0
-  - warp
-  - lucid-hyperscript
-  - lucid-svg
-  - neat-interpolation
-  - fmt
-
 
 library:
   source-dirs: src
+  dependencies:
+    - aeson
+    - aeson-qq
+    - async
+    - base
+    - base64
+    - case-insensitive
+    - co-log
+    - co-log-core
+    - containers
+    - cookie
+    - cryptonite
+    - data-default-extra
+    - deriving-aeson
+    - dotenv
+    - envy
+    - errors
+    - fmt
+    - gogol
+    - gogol-core
+    - gogol-pubsub
+    - hspec
+    - http-api-data
+    - lens
+    - lens-aeson
+    - lucid
+    - lucid-htmx 
+    - lucid-hyperscript
+    - lucid-svg
+    - neat-interpolation
+    - optics-core
+    - optics-th
+    - pg-entity
+    - pg-transact
+    - postgresql-migration
+    - postgresql-simple
+    - raw-strings-qq
+    - regex-tdfa
+    - relude >=1.0.0.1
+    - resource-pool
+    - resourcet
+    - scientific
+    - sendgrid-v3
+    - servant-lucid
+    - servant-server
+    - text
+    - text-conversions
+    - time
+    - transformers-either
+    - unordered-containers
+    - uuid
+    - valor >= 1.0.0.0
+    - vector
+    - wai
+    - warp
+    - wreq
+
 
 executables:
   apitoolkit-server-exe:
@@ -153,9 +151,10 @@ executables:
     - -hiedir=.hie
     # - -fPIC
     dependencies:
-      - apitoolkit-server
-    when:        
-    - condition: false        
+    - apitoolkit-server
+    - relude >=1.0.0.1
+    when:       
+    - condition: false       
       other-modules: Paths_apitoolkit_server
 
 tests:
@@ -168,15 +167,10 @@ tests:
     - -with-rtsopts=-N
     - -fwrite-ide-info                  
     - -hiedir=.hie
-    - -Weverything
     dependencies:
     - base
     - apitoolkit-server
-    - hspec-expectations-lifted
-    - hspec-pg-transact
-    - pg-entity
-    - pg-transact
-    - postgresql-simple
-    - resource-pool
-    - hspec-discover
+    - hspec
+    # - hspec-discover
     - doctest-parallel
+    - relude >= 1.0.0.1

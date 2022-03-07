@@ -1,16 +1,19 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 
-module Models.Projects.ProjectsEmail  where
+module Models.Projects.ProjectsEmail
+  ( sendEmail,
+  )
+where
 
-import qualified Control.Lens as Lens
-import qualified Data.List.NonEmpty as NonEmptyDataList
-import qualified Data.Text as T
-import qualified Data.Text.Conversions as TC
-import Network.SendGridV3.Api
-import qualified Network.Wreq as Wreq
-import Relude
+import Control.Lens qualified as Lens
+import Data.List.NonEmpty qualified as NonEmptyDataList
+import Data.Text qualified as T
+import Data.Text.Conversions qualified as TC
 import GHC.Exts
-import System.Environment (lookupEnv)
+import Network.SendGridV3.Api
+import Network.Wreq qualified as Wreq
+import Relude
+import Relude.Unsafe qualified as Unsafe
 
 -- sendgrid's ApiKey expects a Text paramater but lookupEnv returns IO (Maybe String). This class and instances are generated to allow conversion to Text
 class ToText a where
@@ -18,10 +21,12 @@ class ToText a where
 
 instance TC.ToText (IO (Maybe String))
 
-sendGridApiKey :: ApiKey
-sendGridApiKey =
-  let env = TC.toText $ lookupEnv "SENDGRIDAPIKEY"
-   in ApiKey env
+sendGridApiKey :: IO ApiKey
+sendGridApiKey = do
+  -- FIXME: We shoul load all env variables via the Config package like the other envs
+  apiKeyEnv <- lookupEnv "SENDGRIDAPIKEY"
+  let env = TC.toText $ Unsafe.fromJust apiKeyEnv
+  pure $ ApiKey env
 
 -- instances derived to avoid error no instance for (IsString ([Char] -> Text)) for contentMail due to the use of overloadedstrings
 class GHC.Exts.IsString a => SafeIsString a where
@@ -44,7 +49,7 @@ patternMatchMailContent :: Maybe T.Text -> Maybe (NonEmpty MailContent)
 patternMatchMailContent (Just txt) = Just (NonEmptyDataList.fromList [mailContentHtml txt])
 patternMatchMailContent Nothing = Nothing
 
--- rAddress -> receiver email 
+-- rAddress -> receiver email
 emailCtx :: T.Text -> Mail () ()
 emailCtx rAddress =
   let to = personalization $ NonEmptyDataList.fromList [MailAddress rAddress "User"]
@@ -58,7 +63,8 @@ sendEmail = emailCtx
 
 sendInviteMail :: Mail () () -> IO ()
 sendInviteMail sendEmailV = do
-  eResponse <- sendMail sendGridApiKey (sendEmailV {_mailSendAt = Just 1516468000})
+  apiKey <- sendGridApiKey
+  eResponse <- sendMail apiKey (sendEmailV {_mailSendAt = Just 1516468000})
   case eResponse of
     Left httpException -> error $ show httpException
     Right response -> print (response Lens.^. Wreq.responseStatus . Wreq.statusCode)

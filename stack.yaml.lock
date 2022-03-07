@@ -326,6 +326,19 @@ packages:
     subdir: .
     git: https://github.com/mastarija/valor
     commit: 0a5d0af518f5408ccf234bda7b414e037aca58dc
+- completed:
+    subdir: .
+    name: relude
+    version: 1.0.0.1
+    git: https://github.com/kowainik/relude
+    pantry-tree:
+      size: 4976
+      sha256: 873cc9488b250e2aece22e5e335476d03be46ba52257bd3f1a44d6b27b5e9f05
+    commit: 715afb764034d88b2db2b7d69e08573589fdd41d
+  original:
+    subdir: .
+    git: https://github.com/kowainik/relude
+    commit: 715afb764034d88b2db2b7d69e08573589fdd41d
 snapshots:
 - completed:
     size: 586296

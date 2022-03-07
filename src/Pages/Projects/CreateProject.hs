@@ -30,7 +30,6 @@ import Lucid.HTMX
 import Lucid.Hyperscript
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
-import Models.Projects.ProjectsEmail qualified as ProjectEmail
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import Optics.Core ((^.))
@@ -125,8 +124,6 @@ invMemberH InviteProjectMemberForm {email, permission} = do
 
       invUser <- liftIO $ createUserFromInvitation uid tNow email
       let invMember = inviteProjectMember pid uid permission
-      let memberEmail = ProjectEmail.sendEmail email
-      -- ProjectEmail.sendInviteMail memberEmail
       _ <- liftIO $
         withPool pool $ do
           _ <- ProjectMembers.invProjectMembers [invMember]

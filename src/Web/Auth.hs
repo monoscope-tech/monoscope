@@ -1,6 +1,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 
-module Web.Auth (logoutH, loginRedirectH, loginH, authCallbackH,genAuthServerContext) where
+module Web.Auth (logoutH, loginRedirectH, loginH, authCallbackH, genAuthServerContext) where
 
 import Config (DashboardM, env, pool)
 import Control.Error (note)
@@ -83,7 +83,7 @@ loginH = do
 -- would simply create a new session. If we dont have the user (by that email), then create the user and still create a session with that user.
 authCallbackH ::
   Maybe Text ->
-  Maybe Text -> -- ^ state variable from auth0
+  Maybe Text -> -- state variable from auth0
   DashboardM
     ( Headers
         '[Header "Location" Text, Header "Set-Cookie" SetCookie]

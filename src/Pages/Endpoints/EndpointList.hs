@@ -7,7 +7,6 @@ module Pages.Endpoints.EndpointList (endpointListH) where
 
 import Config
 import Data.Text (toLower)
-import Data.UUID as UUID
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT
   ( withPool,
@@ -16,12 +15,9 @@ import Lucid
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import NeatInterpolation
 import Optics.Operators
 import Pages.BodyWrapper (bodyWrapper)
 import Relude
-import Servant.HTML.Lucid
-import Text.RawString.QQ
 
 endpointListH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 endpointListH sess pid = do
