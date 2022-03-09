@@ -90,7 +90,7 @@ library
       DisambiguateRecordFields
       ImportQualifiedPost
       BlockArguments
-  ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -fforce-recomp -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches
+  ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches
   build-depends:
       aeson
     , aeson-qq
@@ -108,6 +108,7 @@ library
     , dotenv
     , envy
     , errors
+    , fakedata
     , fmt
     , gogol
     , gogol-core
@@ -127,6 +128,7 @@ library
     , pg-transact
     , postgresql-migration
     , postgresql-simple
+    , random
     , raw-strings-qq
     , regex-tdfa
     , relude >=1.0.0.1
@@ -147,6 +149,7 @@ library
     , wai
     , warp
     , wreq
+    , yaml
   default-language: Haskell2010
 
 executable apitoolkit-server-exe
@@ -181,7 +184,7 @@ executable apitoolkit-server-exe
       DisambiguateRecordFields
       ImportQualifiedPost
       BlockArguments
-  ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -fforce-recomp -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
+  ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
   build-depends:
       apitoolkit-server
     , relude >=1.0.0.1
@@ -222,7 +225,7 @@ test-suite apitoolkit-server-test
       DisambiguateRecordFields
       ImportQualifiedPost
       BlockArguments
-  ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -fforce-recomp -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
+  ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
   build-depends:
       apitoolkit-server
     , base

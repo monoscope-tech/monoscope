@@ -27,7 +27,8 @@ dashboardGetH sess pid = do
       reqsByEndpoint <- RequestDumps.selectRequestsByEndpointsStatByMin pid
 
       let maxV = round (reqLatencyPercentiles ^. #max) :: Int
-      let steps = (maxV `div` 100) :: Int
+      let steps' = (maxV `quot` 100) :: Int
+      let steps = if steps' == 0 then 100 else steps'
       reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledByStepsForProject maxV steps pid
 
       let reqLatencyPercentileSteps =
@@ -46,7 +47,7 @@ dashboardGetH sess pid = do
 
 dashboardPage :: RequestDumps.Percentiles -> Text -> Text -> Html ()
 dashboardPage percentiles reqsByEndpointJ reqLatenciesRolledByStepsJ = do
-  section_ [class_ "p-8"] $ do
+  section_ [class_ "p-8 container mx-auto h-full overflow-y-scroll"] $ do
     dStats percentiles
   script_
     [text|

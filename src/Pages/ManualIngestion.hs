@@ -30,6 +30,7 @@ data RequestMessageForm = RequestMessageForm
     duration :: Int,
     requestHeaders :: Text,
     responseHeaders :: Text,
+    queryParams :: Text,
     requestBody :: Text,
     responseBody :: Text,
     statusCode :: Int
@@ -41,11 +42,13 @@ reqMsgFormToReqMsg :: UUID.UUID -> RequestMessageForm -> Either Text RequestMess
 reqMsgFormToReqMsg pid RequestMessageForm {..} = do
   reqHeaders <- eitherStrToText $ eitherDecodeStrict (encodeUtf8 @Text @ByteString requestHeaders) :: Either Text Value
   respHeaders <- eitherStrToText $ eitherDecodeStrict (encodeUtf8 @Text @ByteString responseHeaders) :: Either Text Value
+  queryParams' <- eitherStrToText $ eitherDecodeStrict (encodeUtf8 @Text @ByteString queryParams) :: Either Text Value
   Right
     RequestMessages.RequestMessage
       { projectId = pid,
         requestHeaders = reqHeaders,
         responseHeaders = respHeaders,
+        queryParameters = queryParams',
         requestBody = B64.encodeBase64 requestBody,
         responseBody = B64.encodeBase64 responseBody,
         ..
@@ -91,7 +94,7 @@ manualIngestGetH sess pid = do
 
 manualIngestPage :: Html ()
 manualIngestPage = do
-  section_ [id_ "mainContent"] $ do
+  section_ [id_ "mainContent", class_ "h-full overflow-scroll"] $ do
     script_
       [ src_ "https://cdnjs.cloudflare.com/ajax/libs/jsoneditor/9.7.2/jsoneditor.min.js",
         integrity_ "sha512-9T9AIzkTI9pg694MCTReaZ0vOimxuTKXA15Gin+AZ4eycmg85iEXGX811BAjyY+NOcDCdlA9k2u9SqVAyNqFkQ==",
@@ -110,6 +113,7 @@ manualIngestPage = do
           hxVals_
             [r|js: requestBody:reqBodyEditor.getText(), 
                    responseBody: respBodyEditor.getText(),
+                   queryParams: queryParamsEditor.getText(),
                    requestHeaders: reqHeadersEditor.getText(),
                    responseHeaders: respHeadersEditor.getText(),
                    timestamp: (new Date(document.getElementById('timestamp').value)).toISOString()|]
@@ -125,6 +129,7 @@ manualIngestPage = do
           inputInt "duration in nanoseconds (1ms -> 1,000,000 ns)" "duration" 56000000
           inputTextArea "requestHeaders as a key value json pair" "requestHeaders"
           inputTextArea "responseHeaders as a key value json pair" "responseHeaders"
+          inputTextArea "" "queryParams"
           inputTextArea "" "requestBody"
           inputTextArea "" "responseBody"
           inputInt "" "statusCode" 200
@@ -138,6 +143,7 @@ manualIngestPage = do
         var respHeadersEditor = new JSONEditor(document.getElementById("responseHeaders"), opt)
         var reqBodyEditor = new JSONEditor(document.getElementById("requestBody"), opt)
         var respBodyEditor = new JSONEditor(document.getElementById("responseBody"), opt)
+        var queryParamsEditor = new JSONEditor(document.getElementById("queryParams"), opt)
 
         var initialJson = {
             "Content-Type": ["application/json"],

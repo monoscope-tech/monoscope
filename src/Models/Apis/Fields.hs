@@ -35,9 +35,10 @@ import Relude.Unsafe ((!!))
 import Web.HttpApiData (FromHttpApiData)
 
 -- $setup
--- import Relude
--- import Data.Default
--- import Data.Vector
+-- >>> import Relude
+-- >>> import Data.Default
+-- >>> import Data.Vector hiding (fromList)
+-- >>> import Data.Vector qualified as Vector
 
 newtype FieldId = FieldId {unFieldId :: UUID.UUID}
   deriving stock (Generic, Show)
@@ -203,7 +204,7 @@ fieldById = selectById @Field
 -- >>> let respB = (def::Field){fieldCategory=FCResponseBody}
 -- >>> let respB2 = (def::Field){fieldCategory=FCResponseBody, key="respBody2"}
 -- >>> groupFieldsByCategory $ Vector.fromList [qparam, respB, respB2]
--- fromList [(FCQueryParam,[Field {createdAt = 2019-08-31 05:14:37.537084021 UTC, updatedAt = 2019-08-31 05:14:37.537084021 UTC, id = 00000000-0000-0000-0000-000000000000, projectId = 00000000-0000-0000-0000-000000000000, endpoint = 00000000-0000-0000-0000-000000000000, key = "", fieldType = FTUnknown, fieldTypeOverride = Nothing, format = "", formatOverride = Nothing, description = "", keyPath = [], keyPathStr = "", fieldCategory = FCQueryParam}]),(FCRequestBody,[Field {createdAt = 2019-08-31 05:14:37.537084021 UTC, updatedAt = 2019-08-31 05:14:37.537084021 UTC, id = 00000000-0000-0000-0000-000000000000, projectId = 00000000-0000-0000-0000-000000000000, endpoint = 00000000-0000-0000-0000-000000000000, key = "", fieldType = FTUnknown, fieldTypeOverride = Nothing, format = "", formatOverride = Nothing, description = "", keyPath = [], keyPathStr = "", fieldCategory = FCRequestBody}]),(FCResponseBody,[Field {createdAt = 2019-08-31 05:14:37.537084021 UTC, updatedAt = 2019-08-31 05:14:37.537084021 UTC, id = 00000000-0000-0000-0000-000000000000, projectId = 00000000-0000-0000-0000-000000000000, endpoint = 00000000-0000-0000-0000-000000000000, key = "", fieldType = FTUnknown, fieldTypeOverride = Nothing, format = "", formatOverride = Nothing, description = "", keyPath = [], keyPathStr = "", fieldCategory = FCResponseBody},Field {createdAt = 2019-08-31 05:14:37.537084021 UTC, updatedAt = 2019-08-31 05:14:37.537084021 UTC, id = 00000000-0000-0000-0000-000000000000, projectId = 00000000-0000-0000-0000-000000000000, endpoint = 00000000-0000-0000-0000-000000000000, key = "respBody2", fieldType = FTUnknown, fieldTypeOverride = Nothing, format = "", formatOverride = Nothing, description = "", keyPath = [], keyPathStr = "", fieldCategory = FCResponseBody}])]
+-- fromList [(FCQueryParam,[Field {id = FieldId {unFieldId = 00000000-0000-0000-0000-000000000000}, createdAt = 2019-08-31 05:14:37.537084021 UTC, updatedAt = 2019-08-31 05:14:37.537084021 UTC, projectId = ProjectId {unProjectId = 00000000-0000-0000-0000-000000000000}, endpoint = EndpointId {unEndpointId = 00000000-0000-0000-0000-000000000000}, key = "", fieldType = FTUnknown, fieldTypeOverride = Nothing, format = "", formatOverride = Nothing, description = "", keyPath = [], keyPathStr = "", fieldCategory = FCQueryParam}]),(FCResponseBody,[Field {id = FieldId {unFieldId = 00000000-0000-0000-0000-000000000000}, createdAt = 2019-08-31 05:14:37.537084021 UTC, updatedAt = 2019-08-31 05:14:37.537084021 UTC, projectId = ProjectId {unProjectId = 00000000-0000-0000-0000-000000000000}, endpoint = EndpointId {unEndpointId = 00000000-0000-0000-0000-000000000000}, key = "", fieldType = FTUnknown, fieldTypeOverride = Nothing, format = "", formatOverride = Nothing, description = "", keyPath = [], keyPathStr = "", fieldCategory = FCResponseBody},Field {id = FieldId {unFieldId = 00000000-0000-0000-0000-000000000000}, createdAt = 2019-08-31 05:14:37.537084021 UTC, updatedAt = 2019-08-31 05:14:37.537084021 UTC, projectId = ProjectId {unProjectId = 00000000-0000-0000-0000-000000000000}, endpoint = EndpointId {unEndpointId = 00000000-0000-0000-0000-000000000000}, key = "respBody2", fieldType = FTUnknown, fieldTypeOverride = Nothing, format = "", formatOverride = Nothing, description = "", keyPath = [], keyPathStr = "", fieldCategory = FCResponseBody}])]
 groupFieldsByCategory :: Vector Field -> Map FieldCategoryEnum [Field]
 groupFieldsByCategory fields = Relude.fromList fieldGroupTupple
   where

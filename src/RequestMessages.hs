@@ -31,7 +31,9 @@ import Text.RawString.QQ
 import Text.Regex.TDFA ((=~))
 
 -- $setup
--- import Relude
+-- >>> import Relude
+-- >>> import Data.Vector qualified as Vector
+-- >>> import Data.Aeson.QQ (aesonQQ)
 
 -- | RequestMessage represents a message for a single request pulled from pubsub.
 data RequestMessage = RequestMessage
@@ -44,6 +46,7 @@ data RequestMessage = RequestMessage
     protoMajor :: Int,
     protoMinor :: Int,
     duration :: Int,
+    queryParameters :: AE.Value,
     requestHeaders :: AE.Value,
     responseHeaders :: AE.Value,
     requestBody :: Text,
@@ -52,7 +55,7 @@ data RequestMessage = RequestMessage
   }
   deriving stock (Show, Generic)
   deriving
-    (AE.FromJSON)
+    (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestMessage
 
 makeFieldLabelsNoPrefix ''RequestMessage
@@ -125,8 +128,25 @@ requestMsgToDumpAndEndpoint rM now dumpID = do
 -- | valueToFields takes an aeson object and converts it into a list of paths to
 -- each primitive value in the json and the values.
 --
--- >>> (valueToFields exampleJSON) == exampleJSONFlattened
--- True
+-- Regular nested text fields:
+-- >>> valueToFields [aesonQQ|{"menu":{"id":"text"}}|]
+-- [(".menu.id",String "text")]
+--
+-- Integer nested field within an array of objects:
+-- >>> valueToFields [aesonQQ|{"menu":{"id":[{"int_field":22}]}}|]
+-- [(".menu.id.[].int_field",Number 22.0)]
+--
+-- Deeper nested field with an array of objects:
+-- >>> valueToFields [aesonQQ|{"menu":{"id":{"menuitems":[{"key":"value"}]}}}|]
+-- [(".menu.id.menuitems.[].key",String "value")]
+--
+-- Flat array value:
+-- >>> valueToFields [aesonQQ|{"menu":["abc", "xyz"]}|]
+-- [(".menu.[]",String "xyz"),(".menu.[]",String "abc")]
+--
+-- Float values and Null
+-- >>> valueToFields [aesonQQ|{"fl":1.234, "nl": null}|]
+-- [(".nl",Null),(".fl",Number 1.234)]
 valueToFields :: AE.Value -> [(Text, AE.Value)]
 valueToFields value = snd $ valueToFields' value ("", [])
   where
@@ -199,36 +219,3 @@ fieldsToFieldDTO fieldCategory projectID (keyPath, val) =
       },
     []
   )
-
----------------------------------------------------------------------------------------
--- Test Stubs
-
--- | exampleJSON is a test stup used for testing the valueToFields function via doctest
-exampleJSON :: AE.Value
-exampleJSON =
-  [aesonQQ| {
-              "menu": {
-                "id": "file",
-                "value": "File",
-                "popup": {
-                  "menuitem": [
-                    {"value": "New", "onclick": "CreateNewDoc()"},
-                    {"value": "Open", "onclick": "OpenDoc()"},
-                    {"value": "Close", "onclick": "CloseDoc()"}
-                  ]
-                }
-              }
-            }|]
-
--- | exampleJSONFlattened is the response from when exampleJSON is flattened via the valueToFields function
-exampleJSONFlattened :: [(Text, AE.Value)]
-exampleJSONFlattened =
-  [ (".menu.id", AE.String "file"),
-    (".menu.value", AE.String "File"),
-    (".menu.popup.menuitem.[].value", AE.String "Close"),
-    (".menu.popup.menuitem.[].onclick", AE.String "CloseDoc()"),
-    (".menu.popup.menuitem.[].value", AE.String "Open"),
-    (".menu.popup.menuitem.[].onclick", AE.String "OpenDoc()"),
-    (".menu.popup.menuitem.[].value", AE.String "New"),
-    (".menu.popup.menuitem.[].onclick", AE.String "CreateNewDoc()")
-  ]

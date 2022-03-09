@@ -5,7 +5,7 @@ module Pages.Endpoints.EndpointDetails (endpointDetailsH, fieldDetailsPartialH) 
 import Config
 import Data.Aeson qualified as AE
 import Data.Map qualified as Map
-import Data.Text as T (breakOnAll, dropWhile, isInfixOf, replace, splitOn)
+import Data.Text as T (breakOnAll, dropWhile, isInfixOf, replace, splitOn, toLower)
 import Data.Time (defaultTimeLocale, formatTime)
 import Data.UUID as UUID
 import Data.Vector (Vector)
@@ -112,7 +112,9 @@ endpointDetails endpoint fieldsM reqsByStatsByMinJ percentiles reqLatenciesRolle
     div_ [class_ "w-2/3 p-8 h-full overflow-y-scroll"] $ do
       div_ [class_ "flex flex-row justify-between mb-10"] $ do
         div_ [class_ "flex flex-row place-items-center text-lg font-medium"] $ do
-          h3_ [class_ "text-lg text-slate-700"] $ toHtml $ (endpoint ^. #method) <> " " <> (endpoint ^. #urlPath)
+          h3_ [class_ "text-lg text-slate-700"] $ do
+            span_ [class_ $ "p-1 endpoint endpoint-" <> toLower (endpoint ^. #method)] $ toHtml $ (endpoint ^. #method) <> " "
+            strong_ [class_ "inconsolata text-xl"] $ toHtml (endpoint ^. #urlPath)
           img_ [src_ "/assets/svgs/cheveron-down.svg", class_ " h-4 w-4 m-2"]
         div_ [class_ "flex flex-row"] $ do
           a_ [href_ ""] $ do

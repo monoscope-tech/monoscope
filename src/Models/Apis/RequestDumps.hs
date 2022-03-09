@@ -118,14 +118,14 @@ selectReqLatencyPercentiles pid urlPath method = queryOne Select q (pid, urlPath
 
         )
       SELECT 		
-          approx_percentile(0, agg)/1000000 min,
-          approx_percentile(0.50, agg)/1000000 p50,
-          approx_percentile(0.75, agg)/1000000 p75,
-          approx_percentile(0.90, agg)/1000000 p90,
-          approx_percentile(0.95, agg)/1000000 p95,
-          approx_percentile(0.99, agg)/1000000 p99,
-          approx_percentile(1, agg)/1000000 max 
-        FROM latency_percentiles;
+         coalesce(approx_percentile(0, agg)/10000000,0) min,
+         coalesce(approx_percentile(0.50, agg)/1000000, 0) p50,
+         coalesce(approx_percentile(0.75, agg)/1000000, 0) p75,
+         coalesce(approx_percentile(0.90, agg)/1000000, 0) p90,
+         coalesce(approx_percentile(0.95, agg)/1000000, 0) p95,
+         coalesce(approx_percentile(0.99, agg)/100000, 0) p99,
+         coalesce(approx_percentile(1, agg)/10000000,0) max 
+        FROM latency_percentiles;                  
       |]
 
 selectReqLatencyPercentilesForProject :: Projects.ProjectId -> DBT IO (Maybe Percentiles)
@@ -141,13 +141,13 @@ selectReqLatencyPercentilesForProject pid = queryOne Select q (Only pid)
         and project_id=?
         )
       SELECT 		
-          approx_percentile(0, agg)/1000000 min,
-          approx_percentile(0.50, agg)/1000000 p50,
-          approx_percentile(0.75, agg)/1000000 p75,
-          approx_percentile(0.90, agg)/1000000 p90,
-          approx_percentile(0.95, agg)/1000000 p95,
-          approx_percentile(0.99, agg)/1000000 p99,
-          approx_percentile(1, agg)/1000000 max 
+          coalesce(approx_percentile(0, agg)/1000000, 0) min,
+          coalesce(approx_percentile(0.50, agg)/1000000, 0) p50,
+          coalesce(approx_percentile(0.75, agg)/1000000, 0) p75,
+          coalesce(approx_percentile(0.90, agg)/1000000, 0) p90,
+          coalesce(approx_percentile(0.95, agg)/1000000, 0) p95,
+          coalesce(approx_percentile(0.99, agg)/1000000, 0) p99,
+          coalesce(approx_percentile(1, agg)/1000000, 0) max 
         FROM latency_percentiles;
       |]
 

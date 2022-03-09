@@ -32,7 +32,7 @@ endpointListH sess pid = do
 
 endpointList :: Vector Endpoints.Endpoint -> Html ()
 endpointList enps = do
-  div_ [class_ "container mx-auto  px-4 py-10"] $ do
+  div_ [class_ "container mx-auto  px-4 pt-10 pb-24 h-full overflow-y-scroll"] $ do
     div_ [class_ "flex justify-between"] $ do
       h3_ [class_ "text-xl text-slate-700 flex place-items-center"] "Endpoints"
       div_ [class_ "flex flex-row"] $ do

@@ -48,7 +48,7 @@ bodyWrapper sessM currProject pageTitle child =
           section_ [class_ "flex flex-row bg-gray-50 h-screen overflow-hidden"] $ do
             -- Side nav
             sideNav'
-            section_ [class_ "grow"] $ do
+            section_ [class_ "grow h-full"] $ do
               navbar currUser
               child
 

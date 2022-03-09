@@ -7,6 +7,13 @@ run:
 live-reload:
 	ghcid --command 'stack ghci apitoolkit-server --ghc-options=-w' --test ':run Main.main' --warnings
 
+live-test-reload:
+	ghcid --command 'stack ghci apitoolkit-server:apitoolkit-server-test --ghc-options=-w' --test ':run main' --warnings
+
+live-test-reload-stack:
+	stack test --ghc-options=-w --file-watch
+	# stack test --ghc-options=-w --ta='--match "SeedingConfig/should parse simple config to obj"' --file-watch
+
 fmt:
 	ormolu --mode inplace $$(find . -name '*.hs')
 
