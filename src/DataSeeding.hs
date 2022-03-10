@@ -2,7 +2,8 @@
 
 module DataSeeding (parseConfigToJson, dataSeedingGetH, dataSeedingPostH, DataSeedingForm) where
 
-import Config (DashboardM, pool)
+import Colog ((<&))
+import Config (DashboardM, logger, pool)
 import Data.Aeson qualified as AE
 import Data.ByteString.Base64 qualified as B64
 import Data.Scientific (scientific)
@@ -21,6 +22,7 @@ import NeatInterpolation (text)
 import Optics.Core ((^.))
 import Optics.TH (makeFieldLabelsNoPrefix)
 import Pages.BodyWrapper (bodyWrapper)
+import ProcessMessage qualified
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import RequestMessages qualified
@@ -62,7 +64,6 @@ makeFieldLabelsNoPrefix ''SeedConfig
 
 fieldConfigToField :: FieldConfig -> IO (Text, AE.Value)
 fieldConfigToField fc = do
-  traceShowM "in config to field"
   val <-
     ( case fc ^. #fieldType of
         "string" ->
@@ -78,7 +79,6 @@ fieldConfigToField fc = do
           tval <- generate fullAddress
           pure $ AE.String tval
       )
-  traceShowM (fc ^. #name, val)
   pure (fc ^. #name, val)
 
 randomTimesBtwToAndFrom :: RandomGen g => UTCTime -> Int -> g -> NominalDiffTime -> [ZonedTime]
@@ -86,8 +86,8 @@ randomTimesBtwToAndFrom startTime countToReturn rg maxDiff =
   take countToReturn $
     utcToZonedTime utc . flip addUTCTime startTime . realToFrac <$> randomRs (0, truncate maxDiff :: Int) rg
 
-parseConfigToJson :: Projects.ProjectId -> ByteString -> IO (Either Yaml.ParseException [ByteString])
-parseConfigToJson pid input = do
+parseConfigToRequestMessages :: Projects.ProjectId -> ByteString -> IO (Either Yaml.ParseException [RequestMessages.RequestMessage])
+parseConfigToRequestMessages pid input = do
   randGen <- getStdGen
   case (Yaml.decodeEither' input :: Either Yaml.ParseException [SeedConfig]) of
     Left err -> pure $ Left err
@@ -115,12 +115,15 @@ parseConfigToJson pid input = do
             responseBody <- B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField (config ^. #responseBody)
             requestBody <- B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField (config ^. #responseBody)
             pure RequestMessages.RequestMessage {..}
+      pure $ Right $ concat resp
 
-      let flattenedResp = map AE.encode $ concat resp
-      traceShowM "PRE_RESP"
-      traceShowM $ flattenedResp
-      traceShowM "POST RESAP"
-      pure $ Right $ map toStrict flattenedResp
+parseConfigToJson :: Projects.ProjectId -> ByteString -> IO (Either Yaml.ParseException [ByteString])
+parseConfigToJson pid input = do
+  respE <- parseConfigToRequestMessages pid input
+  case respE of
+    Left err -> pure $ Left err
+    Right resp -> do
+      pure $ Right $ map (toStrict . AE.encode) resp
 
 --------------------------------------------------------------------------------------------------------
 
@@ -134,12 +137,18 @@ data DataSeedingForm = DataSeedingForm
 dataSeedingPostH :: Sessions.PersistentSession -> Projects.ProjectId -> DataSeedingForm -> DashboardM (Html ())
 dataSeedingPostH sess pid form = do
   pool <- asks pool
+  logger <- asks logger
   project <-
     liftIO $
       withPool pool $ Projects.selectProjectForUser (Sessions.userId sess, pid)
 
-  traceShowM form
-  pure dataSeedingPage
+  respE <- liftIO $ parseConfigToRequestMessages pid (encodeUtf8 $ config form)
+  case respE of
+    Left err -> liftIO $ logger <& "ERROR processing req message " <> show err >> pure dataSeedingPage
+    Right resp -> do
+      _ <- liftIO $ do
+        resp & mapM_ (ProcessMessage.processRequestMessage logger pool)
+      pure dataSeedingPage
 
 dataSeedingGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 dataSeedingGetH sess pid = do
@@ -161,7 +170,7 @@ dataSeedingPage = do
           hxSwap_ "outerHTML",
           hxPost_ "",
           hxVals_
-            [r|js: config:document.getElementById('configElement').textContent 
+            [r|js: config:editor.getValue() 
             |]
         ]
         $ do
@@ -173,36 +182,36 @@ dataSeedingPage = do
             [id_ "configElement", name_ "config", class_ "editor w-full border border-gray-200 h-96"]
             $ toHtml
               [text|
-        - from: 2022-03-01 01:00 +0000
-          to: 2022-03-09 01:00 +0000
-          intervals: 5min
-          path: /test/path
-          path_params: []
-          query_params:
-            - name: key
-              field_type: "string"
-              type_gen_format: "address"
-              children: []
-          request_headers:             
-            - name: key
-              field_type: "string"
-              type_gen_format: "address"
-              children: []
-          response_headers: 
-            - name: key
-              field_type: "string"
-              type_gen_format: "address"
-              children: []
-          request_body:
-            - name: key
-              field_type: "string"
-              type_gen_format: "address"
-              children: []
-          response_body:
-            - name: key
-              field_type: "string"
-              type_gen_format: "address"
-              children: []
+- from: 2022-03-01 01:00 +0000
+  to: 2022-03-09 01:00 +0000
+  count_per_interval: 50
+  path: /test/path
+  path_params: []
+  query_params:
+    - name: key
+      field_type: "string"
+      type_gen_format: "address"
+      children: []
+  request_headers:             
+    - name: key
+      field_type: "string"
+      type_gen_format: "address"
+      children: []
+  response_headers: 
+    - name: key
+      field_type: "string"
+      type_gen_format: "address"
+      children: []
+  request_body:
+    - name: key
+      field_type: "string"
+      type_gen_format: "address"
+      children: []
+  response_body:
+    - name: key
+      field_type: "string"
+      type_gen_format: "address"
+      children: []
             |]
           div_ $ do
             button_ [type_ "submit", class_ "btn-sm btn-indigo"] "Submit"
