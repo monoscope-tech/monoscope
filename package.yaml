@@ -141,8 +141,9 @@ executables:
     - -threaded
     - -rtsopts
     - -with-rtsopts=-N
-    - -fwrite-ide-info                   
+    # - -fwrite-ide-info                   
     - -hiedir=.hie
+    - -O2
     # - -fPIC
     dependencies:
     - apitoolkit-server

@@ -3,6 +3,7 @@ BEGIN;
 CREATE EXTENSION IF NOT EXISTS citext;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
 
 
 -- create schemas
@@ -152,6 +153,7 @@ CREATE TABLE IF NOT EXISTS apis.endpoints
     UNIQUE(project_id, url_path, method)
 );
 SELECT manage_updated_at('apis.endpoints');
+CREATE INDEX IF NOT EXISTS idx_apis_endpoints ON apis.endpoints(project_id);
 
 CREATE TYPE apis.field_type AS ENUM ('unknown','string','number','bool','object', 'list', 'null');
 CREATE TYPE apis.field_category AS ENUM ('queryparam', 'request_header','response_headers', 'request_body', 'response_body');
