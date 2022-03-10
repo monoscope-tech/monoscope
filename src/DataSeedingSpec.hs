@@ -17,6 +17,7 @@ spec = do
             [text|
         - from: 2022-03-01 01:00 +0000
           to: 2022-03-09 01:00 +0000
+          count_per_interval: 10
           intervals: 5min
           path: /test/path
           path_params: []
@@ -47,6 +48,7 @@ spec = do
               children: []
         |]
       generated <- liftIO $ parseConfigToJson (Projects.ProjectId UUID.nil) (encodeUtf8 input)
+      traceShowM generated
       mapM_ traceShowM generated
       traceShowM "generated"
       pending

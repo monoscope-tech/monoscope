@@ -110,7 +110,7 @@ projectsDropDown currProject projects =
 
 sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Html ()
 sideNav sess project pageTitle = do
-  aside_ [class_ "shrink-0  w-72 sticky top-0 border-r-2 bg-white border-gray-200 h-screen overflow-hidden"] $ do
+  aside_ [class_ "shrink-0  w-72 top-0 border-r-2 bg-white border-gray-200 h-screen overflow-hidden"] $ do
     a_ [href_ "/", class_ "inline-block p-4"] $ do
       img_ [src_ "/assets/svgs/logo.svg"]
     div_ [class_ "p-4"] $ do

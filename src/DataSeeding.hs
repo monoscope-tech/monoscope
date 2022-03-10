@@ -62,22 +62,21 @@ data SeedConfig = SeedConfig
 
 makeFieldLabelsNoPrefix ''SeedConfig
 
-fieldConfigToField :: FieldConfig -> IO (Text, AE.Value)
+fieldConfigToField :: FieldConfig -> Fake (Text, AE.Value)
 fieldConfigToField fc = do
   val <-
     ( case fc ^. #fieldType of
         "string" ->
           AE.String <$> case fc ^. #typeGenFormat of
-            "address" -> generate Faker.Address.fullAddress
-            "name" -> generate Faker.Name.name
-            "first_name" -> generate Faker.Name.firstName
-            "last_name" -> generate Faker.Name.lastName
-            _ -> generate Faker.Name.name
-        "number" -> AE.Number . flip scientific 0 <$> (randomIO :: IO Integer)
+            "address" -> Faker.Address.fullAddress
+            "name" -> Faker.Name.name
+            "first_name" -> Faker.Name.firstName
+            "last_name" -> Faker.Name.lastName
+            _ -> Faker.Name.name
+        -- "number" -> AE.Number . flip scientific 0 <$> (randomIO :: IO Integer)
         -- "null" -> AE.Null
         _ -> do
-          tval <- generate fullAddress
-          pure $ AE.String tval
+          AE.String <$> Faker.Address.fullAddress
       )
   pure (fc ^. #name, val)
 
@@ -109,11 +108,11 @@ parseConfigToRequestMessages pid input = do
             let host = "https://apitoolkit.io/"
             let projectId = Projects.unProjectId pid
             let timestamp = timestampV
-            queryParameters <- AE.toJSON <$> mapM fieldConfigToField (config ^. #queryParams)
-            requestHeaders <- AE.toJSON <$> mapM fieldConfigToField (config ^. #requestHeaders)
-            responseHeaders <- AE.toJSON <$> mapM fieldConfigToField (config ^. #responseHeaders)
-            responseBody <- B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField (config ^. #responseBody)
-            requestBody <- B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField (config ^. #responseBody)
+            queryParameters <- generateNonDeterministic $ AE.toJSON <$> mapM fieldConfigToField (config ^. #queryParams)
+            requestHeaders <- generateNonDeterministic $ AE.toJSON <$> mapM fieldConfigToField (config ^. #requestHeaders)
+            responseHeaders <- generateNonDeterministic $ AE.toJSON <$> mapM fieldConfigToField (config ^. #responseHeaders)
+            responseBody <- generateNonDeterministic $ B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField (config ^. #responseBody)
+            requestBody <- generateNonDeterministic $ B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField (config ^. #responseBody)
             pure RequestMessages.RequestMessage {..}
       pure $ Right $ concat resp
 

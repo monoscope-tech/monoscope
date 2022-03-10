@@ -55,8 +55,8 @@ startApp = do
           createPgConnIO
           close
           2 -- stripes
-          600 -- unused connections are kept open for 10 minutes (60*10)
-          50 -- max 50 connections open per stripe
+          60 -- unused connections are kept open for 10 minutes (60*10)
+          20 -- max 50 connections open per stripe
 
       -- If a test email is set, attempt to add that test email user to all projects in the database
       -- We watch and catch thrown exceptions which would likely happen if the user does not yet exist in the db
