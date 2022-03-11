@@ -2,7 +2,7 @@ BEGIN;
 
 CREATE EXTENSION IF NOT EXISTS citext;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
-CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;
+-- CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;
 CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
 
 
@@ -90,7 +90,7 @@ CREATE TABLE IF NOT EXISTS projects.project_members
   updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
   deleted_at TIMESTAMP WITH TIME ZONE,
   active BOOL NOT NULL DEFAULT 't',
-  project_id UUID NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE ON UPDATE CASCADE,
+  project_id UUID NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
   user_id UUID NOT NULL REFERENCES users.users (id) ON DELETE CASCADE ON UPDATE CASCADE,
   permission projects.project_permissions NOT NULL DEFAULT 'view',
   PRIMARY KEY (project_id, user_id)
@@ -105,7 +105,7 @@ CREATE TABLE IF NOT EXISTS projects.project_api_keys
   updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
   deleted_at TIMESTAMP WITH TIME ZONE,
   active BOOL NOT NULL DEFAULT 't',
-  project_id UUID NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE ON UPDATE CASCADE,
+  project_id UUID NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
   title TEXT NOT NULL DEFAULT '',
   key_prefix TEXT NOT NULL DEFAULT ''
 );
@@ -114,46 +114,39 @@ SELECT manage_updated_at('projects.project_api_keys');
 ---
 ---
 ---
-CREATE TABLE IF NOT EXISTS apis.request_dumps
-(
-    id uuid NOT NULL DEFAULT gen_random_uuid(),
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-    project_id uuid NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE ON UPDATE CASCADE,
-    host text NOT NULL DEFAULT '',
-    url_path text NOT NULL DEFAULT '',
-    method text NOT NULL DEFAULT '',
-    referer text NOT NULL DEFAULT '',
-    proto_major int NOT NULL DEFAULT 0,
-    proto_minor int NOT NULL DEFAULT 0,
-    duration interval,
-    status_code int NOT NULL DEFAULT 0,
-    request_body jsonb NOT NULL DEFAULT '{}'::jsonb,
-    response_body jsonb NOT NULL DEFAULT '{}'::jsonb,
-    request_headers jsonb NOT NULL DEFAULT '{}'::jsonb,
-    response_headers jsonb NOT NULL DEFAULT '{}'::jsonb,
-    PRIMARY KEY(project_id,created_at,id)
-);
-SELECT manage_updated_at('apis.request_dumps');
-SELECT create_hypertable('apis.request_dumps', 'created_at');
 
 CREATE TABLE IF NOT EXISTS apis.endpoints
 (
     id uuid NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-    project_id uuid NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE ON UPDATE CASCADE,
+    project_id uuid NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
     url_path text NOT NULL DEFAULT ''::text,
     url_params jsonb NOT NULL DEFAULT '{}'::jsonb,
     method text NOT NULL DEFAULT 'GET'::text,
     hosts text[] NOT NULL DEFAULT '{}'::text[],
-    request_hashes text[] NOT NULL DEFAULT '{}'::text[],
-    response_hashes text[] NOT NULL DEFAULT '{}'::text[],
-    queryparam_hashes text[] NOT NULL DEFAULT '{}'::text[],
     UNIQUE(project_id, url_path, method)
 );
 SELECT manage_updated_at('apis.endpoints');
 CREATE INDEX IF NOT EXISTS idx_apis_endpoints ON apis.endpoints(project_id);
+
+CREATE TABLE IF NOT EXISTS apis.shapes
+(
+    id uuid NOT NULL DEFAULT gen_random_uuid()  PRIMARY KEY,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+    project_id uuid NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
+    endpoint_id uuid NOT NULL,
+    
+    query_params_keypaths text[] NOT NULL DEFAULT '{}'::TEXT[],    
+    request_body_keypaths text[] NOT NULL DEFAULT '{}'::TEXT[],    
+    response_body_keypaths text[] NOT NULL DEFAULT '{}'::TEXT[],    
+    request_headers_keypaths text[] NOT NULL DEFAULT '{}'::TEXT[],    
+    response_headers_keypaths text[] NOT NULL DEFAULT '{}'::TEXT[],
+
+    -- A shape is the combination of all the keypaths accross all the different fields
+    UNIQUE(project_id, endpoint_id, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, response_headers_keypaths)
+);
 
 CREATE TYPE apis.field_type AS ENUM ('unknown','string','number','bool','object', 'list', 'null');
 CREATE TYPE apis.field_category AS ENUM ('queryparam', 'request_header','response_headers', 'request_body', 'response_body');
@@ -162,8 +155,8 @@ CREATE TABLE IF NOT EXISTS apis.fields
     id uuid NOT NULL DEFAULT gen_random_uuid()  PRIMARY KEY,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-    project_id uuid NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE ON UPDATE CASCADE,
-    endpoint uuid NOT NULL,
+    project_id uuid NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
+    endpoint_id uuid NOT NULL,
     key text  NOT NULL DEFAULT ''::text,
     field_type apis.field_type NOT NULL DEFAULT 'unknown'::apis.field_type,
     field_type_override text,
@@ -173,7 +166,7 @@ CREATE TABLE IF NOT EXISTS apis.fields
     key_path text[] NOT NULL DEFAULT '{}'::text[],
     key_path_str text NOT NULL DEFAULT '',
     field_category text NOT NULL DEFAULT '',
-    UNIQUE (project_id, endpoint, key_path_str, format)
+    UNIQUE (project_id, endpoint_id, key_path_str, format)
 );
 SELECT manage_updated_at('apis.fields');
 
@@ -183,8 +176,8 @@ CREATE TABLE IF NOT EXISTS apis.formats
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
   updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
   deleted_at TIMESTAMP WITH TIME ZONE,
-  project_id uuid NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE ON UPDATE CASCADE,
-  field_id uuid NOT NULL REFERENCES apis.fields (id) ON DELETE CASCADE ON UPDATE CASCADE,
+  project_id uuid NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
+  field_id uuid NOT NULL REFERENCES apis.fields (id) ON DELETE CASCADE,
   field_type apis.field_type NOT NULL DEFAULT 'unknown'::apis.field_type,
   field_format text NOT NULL DEFAULT '',
   examples text[] NOT NULL DEFAULT '{}'::text[],
@@ -192,8 +185,46 @@ CREATE TABLE IF NOT EXISTS apis.formats
 );
 SELECT manage_updated_at('apis.formats');
 
+CREATE TYPE apis.anomaly_type AS ENUM ('unknown', 'field', 'endpoint','shape', 'format');
+CREATE TYPE apis.anomaly_action AS ENUM ('unknown', 'created');
+CREATE TABLE IF NOT EXISTS apis.anomaly
+(
+  id uuid NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+  project_id uuid NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
+  acknowleged_at TIMESTAMP WITH TIME ZONE,
+  acknowleged_by UUID REFERENCES users.users (id), -- user who acknowleges the anomaly
+  anomaly_type apis.anomaly_type NOT NULL DEFAULT 'unknown'::apis.anomaly_type,
+  action apis.anomaly_action NOT NULL DEFAULT 'unknown'::apis.anomaly_action,
+  target_id uuid
+);
+SELECT manage_updated_at('apis.anomaly');
+
+-- TODO: Create triggers to create new anomalies when new fields, endpoints and shapes are created.
+
+CREATE FUNCTION apis.new_anomaly_proc() RETURNS trigger AS $$
+DECLARE 
+	anomaly_type apis.anomaly_type;
+	anomaly_action apis.anomaly_action;
+BEGIN
+    IF TG_WHEN <> 'AFTER' THEN
+        RAISE EXCEPTION 'apis.new_anomaly_proc() may only run as an AFTER trigger';
+    END IF;
+	anomaly_type := TG_ARGV[0];
+	anomaly_action := TG_ARGV[1];
+    INSERT INTO apis.anomaly (project_id, anomaly_type, action, target_id) VALUES (NEW.project_id, anomaly_type, anomaly_action, NEW.id);
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS fields_created_anomaly ON apis.fields;
+CREATE TRIGGER fields_created_anomaly AFTER INSERT ON apis.fields FOR EACH ROW EXECUTE PROCEDURE apis.new_anomaly_proc('field', 'created');
+
+
+
 CREATE OR REPLACE FUNCTION apis.create_field_and_formats(
-  i_project_id UUID, i_endpoint UUID, i_key TEXT, i_field_type apis.field_type, i_field_type_override TEXT, 
+  i_project_id UUID, i_endpoint_id UUID, i_key TEXT, i_field_type apis.field_type, i_field_type_override TEXT, 
   i_format TEXT, i_format_override TEXT, i_description TEXT, i_key_path TEXT[], i_key_path_str TEXT, 
   i_field_category TEXT, i_examples TEXT[], i_examples_max_count INT 
 )
@@ -201,16 +232,16 @@ RETURNS setof apis.formats AS $$
 BEGIN
   return query
   with returned_fields AS (
-    INSERT INTO apis.fields (project_id, endpoint, key, field_type, field_type_override, format, format_override, description, key_path, key_path_str, field_category)
-      VALUES(i_project_id, i_endpoint, i_key, i_field_type, i_field_type_override, i_format, i_format_override, i_description, i_key_path, i_key_path_str, i_field_category)
-      ON CONFLICT (project_id, endpoint, key_path_str,format) DO NOTHING
+    INSERT INTO apis.fields (project_id, endpoint_id, key, field_type, field_type_override, format, format_override, description, key_path, key_path_str, field_category)
+      VALUES(i_project_id, i_endpoint_id, i_key, i_field_type, i_field_type_override, i_format, i_format_override, i_description, i_key_path, i_key_path_str, i_field_category)
+      ON CONFLICT (project_id, endpoint_id, key_path_str,format) DO NOTHING
     RETURNING project_id, id, field_type, format,i_examples
   ), current_fields AS (
     SELECT * FROM returned_fields
       UNION ALL
 	SELECT project_id, id, field_type, format,i_examples
      FROM apis.fields
-     WHERE  project_id=i_project_id AND endpoint=i_endpoint AND key_path_str=i_key_path_str AND format=i_format -- only executed if no INSERT
+     WHERE  project_id=i_project_id AND endpoint_id=i_endpoint_id AND key_path_str=i_key_path_str AND format=i_format -- only executed if no INSERT
     LIMIT  1
   )
  INSERT INTO apis.formats (project_id, field_id, field_type, field_format, examples)
@@ -223,4 +254,43 @@ BEGIN
 
 END;
 $$ LANGUAGE plpgsql;
+
+
+-- apis.request_dumps table holds a timeseries dump of all requests that come into the backend.
+-- We rely on it heavily, for ploting time series graphs to show changes in shapes and endpoint fields over time.
+CREATE TABLE IF NOT EXISTS apis.request_dumps
+(
+    id uuid NOT NULL DEFAULT gen_random_uuid(),
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+    project_id uuid NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
+    host text NOT NULL DEFAULT '',
+    url_path text NOT NULL DEFAULT '',
+    path_params jsonb NOT NULL DEFAULT '{}',
+    method text NOT NULL DEFAULT '',
+    referer text NOT NULL DEFAULT '',
+    proto_major int NOT NULL DEFAULT 0,
+    proto_minor int NOT NULL DEFAULT 0,
+    duration interval,
+    status_code int NOT NULL DEFAULT 0,
+
+    query_params jsonb NOT NULL DEFAULT '{}'::jsonb,
+    request_body jsonb NOT NULL DEFAULT '{}'::jsonb,
+    response_body jsonb NOT NULL DEFAULT '{}'::jsonb,
+    request_headers jsonb NOT NULL DEFAULT '{}'::jsonb,
+    response_headers jsonb NOT NULL DEFAULT '{}'::jsonb,
+
+    query_params_keypaths text[] NOT NULL DEFAULT '{}'::TEXT[],    
+    request_body_keypaths text[] NOT NULL DEFAULT '{}'::TEXT[],    
+    response_body_keypaths text[] NOT NULL DEFAULT '{}'::TEXT[],    
+    request_headers_keypaths text[] NOT NULL DEFAULT '{}'::TEXT[],    
+    response_headers_keypaths text[] NOT NULL DEFAULT '{}'::TEXT[],
+
+    shape_id uuid NOT NULL REFERENCES apis.shapes (id),
+
+    PRIMARY KEY(project_id,created_at,id)
+);
+SELECT manage_updated_at('apis.request_dumps');
+-- SELECT create_hypertable('apis.request_dumps', 'created_at');
+
 COMMIT;

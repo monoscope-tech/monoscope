@@ -27,6 +27,7 @@ go test -run=TestAPIToolkitWorkflow
 
 ## Useful links
 - There is now a page for manual data ingestion available at `/p/<project-id>/manual_ingest`. This link isn't added to the menu since it's for dev testing only.
+- https://lightstep.com/ and datadog and https://www.instana.com/ For their observability. We should learn from them. Lightstep has nice landing page
 
 ## Useful tools
 - install ormolu (brew install ormolu), for fmt 

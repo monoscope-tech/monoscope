@@ -17,8 +17,8 @@ import Data.Default.Instances ()
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as Vector
-import Database.PostgreSQL.Entity (selectById, selectManyByField)
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), queryOne)
+import Database.PostgreSQL.Entity (selectById)
+import Database.PostgreSQL.Entity.DBT (QueryNature (..), query, queryOne)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
@@ -54,10 +54,10 @@ data Endpoint = Endpoint
     urlPath :: Text,
     urlParams :: AE.Value,
     method :: Text,
-    hosts :: Vector.Vector Text,
-    requestHashes :: Vector.Vector Text,
-    responseHashes :: Vector.Vector Text,
-    queryparamHashes :: Vector.Vector Text
+    hosts :: Vector.Vector Text
+    -- requestHashes :: Vector.Vector Text,
+    -- responseHashes :: Vector.Vector Text,
+    -- queryParamHashes :: Vector.Vector Text
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (FromRow, ToRow, Default)
@@ -67,21 +67,23 @@ data Endpoint = Endpoint
 
 makeFieldLabelsNoPrefix ''Endpoint
 
-upsertEndpoints :: Endpoint -> PgT.DBT IO (Maybe (EndpointId, Text, Text))
+upsertEndpoints :: Endpoint -> PgT.DBT IO (Maybe EndpointId)
 upsertEndpoints endpoint = queryOne Insert q options
   where
     q =
       [sql|  
-        INSERT INTO apis.endpoints (project_id, url_path, url_params, method, hosts, request_hashes, response_hashes, queryparam_hashes)
-        VALUES(?, ?, ?, ?, ?, ?, ?, ?) 
-        ON CONFLICT (project_id, url_path, method) 
-        DO 
-           UPDATE SET 
-            hosts = ARRAY(SELECT DISTINCT e from unnest(apis.endpoints.hosts, excluded.hosts) as e order by e),
-            request_hashes = ARRAY(SELECT DISTINCT e from unnest(apis.endpoints.request_hashes, excluded.request_hashes) as e order by e),
-            response_hashes = ARRAY(SELECT DISTINCT e from unnest(apis.endpoints.response_hashes, excluded.response_hashes) as e order by e),
-            queryparam_hashes = ARRAY(SELECT DISTINCT e from unnest(apis.endpoints.queryparam_hashes, excluded.queryparam_hashes) as e order by e)
-        RETURNING id, method, url_path 
+        with e as (
+          INSERT INTO apis.endpoints (project_id, url_path, url_params, method, hosts)
+          VALUES(?, ?, ?, ?, ?) 
+          ON CONFLICT (project_id, url_path, method) 
+          DO 
+             UPDATE SET 
+              hosts = ARRAY(SELECT DISTINCT e from unnest(apis.endpoints.hosts, excluded.hosts) as e order by e),
+          RETURNING id 
+        )
+        SELECT * from e 
+        UNION 
+          SELECT id from apis.endpoints WHERE project_id=?, url_path=?, method=?;
       |]
     options =
       ( endpoint ^. #projectId,
@@ -89,13 +91,18 @@ upsertEndpoints endpoint = queryOne Insert q options
         endpoint ^. #urlParams,
         endpoint ^. #method,
         endpoint ^. #hosts,
-        endpoint ^. #requestHashes,
-        endpoint ^. #responseHashes,
-        endpoint ^. #queryparamHashes
+        endpoint ^. #projectId,
+        endpoint ^. #urlPath,
+        endpoint ^. #method
       )
 
 endpointsByProject :: Projects.ProjectId -> PgT.DBT IO (Vector.Vector Endpoint)
-endpointsByProject pid = selectManyByField @Endpoint [field| project_id |] pid
+endpointsByProject = query Select q
+  where
+    q = [sql|select * from apis.endpoints where project_id=?|]
+
+-- It appears the selectManyByField leaks memory
+-- endpointsByProject pid = selectManyByField @Endpoint [field| project_id |] pid
 
 endpointById :: EndpointId -> PgT.DBT IO (Maybe Endpoint)
 endpointById = selectById @Endpoint

@@ -25,6 +25,7 @@ data RequestMessageForm = RequestMessageForm
     method :: Text,
     referer :: Text,
     urlPath :: Text,
+    pathParams :: Text,
     protoMajor :: Int,
     protoMinor :: Int,
     duration :: Int,
@@ -43,12 +44,14 @@ reqMsgFormToReqMsg pid RequestMessageForm {..} = do
   reqHeaders <- eitherStrToText $ eitherDecodeStrict (encodeUtf8 @Text @ByteString requestHeaders) :: Either Text Value
   respHeaders <- eitherStrToText $ eitherDecodeStrict (encodeUtf8 @Text @ByteString responseHeaders) :: Either Text Value
   queryParams' <- eitherStrToText $ eitherDecodeStrict (encodeUtf8 @Text @ByteString queryParams) :: Either Text Value
+  pathParams' <- eitherStrToText $ eitherDecodeStrict (encodeUtf8 @Text @ByteString pathParams) :: Either Text Value
   Right
     RequestMessages.RequestMessage
       { projectId = pid,
         requestHeaders = reqHeaders,
         responseHeaders = respHeaders,
-        queryParameters = queryParams',
+        queryParams = queryParams',
+        pathParams = pathParams',
         requestBody = B64.encodeBase64 requestBody,
         responseBody = B64.encodeBase64 responseBody,
         ..
@@ -72,7 +75,6 @@ reqMsgFormToReqMsg pid RequestMessageForm {..} = do
 manualIngestPostH :: Sessions.PersistentSession -> Projects.ProjectId -> RequestMessageForm -> DashboardM (Html ())
 manualIngestPostH sess pid reqMF = do
   logger <- asks logger
-  liftIO $ logger <& "manualIngestPost RequestMessageForm <> " <> show reqMF
   pool <- asks pool
   project <-
     liftIO $
@@ -114,6 +116,7 @@ manualIngestPage = do
             [r|js: requestBody:reqBodyEditor.getText(), 
                    responseBody: respBodyEditor.getText(),
                    queryParams: queryParamsEditor.getText(),
+                   pathParams: pathParamsEditor.getText(),
                    requestHeaders: reqHeadersEditor.getText(),
                    responseHeaders: respHeadersEditor.getText(),
                    timestamp: (new Date(document.getElementById('timestamp').value)).toISOString()|]
@@ -129,6 +132,7 @@ manualIngestPage = do
           inputInt "duration in nanoseconds (1ms -> 1,000,000 ns)" "duration" 56000000
           inputTextArea "requestHeaders as a key value json pair" "requestHeaders"
           inputTextArea "responseHeaders as a key value json pair" "responseHeaders"
+          inputTextArea "" "pathParams"
           inputTextArea "" "queryParams"
           inputTextArea "" "requestBody"
           inputTextArea "" "responseBody"
@@ -144,6 +148,7 @@ manualIngestPage = do
         var reqBodyEditor = new JSONEditor(document.getElementById("requestBody"), opt)
         var respBodyEditor = new JSONEditor(document.getElementById("responseBody"), opt)
         var queryParamsEditor = new JSONEditor(document.getElementById("queryParams"), opt)
+        var pathParamsEditor = new JSONEditor(document.getElementById("pathParams"), opt)
 
         var initialJson = {
             "Content-Type": ["application/json"],

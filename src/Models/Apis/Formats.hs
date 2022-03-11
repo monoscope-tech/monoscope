@@ -11,7 +11,7 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity (selectManyByField)
 import Database.PostgreSQL.Entity.Types
-import Database.PostgreSQL.Simple (FromRow, ToRow)
+import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Transact (DBT)
 import Models.Apis.Fields qualified as Fields
 import Optics.TH
@@ -35,4 +35,4 @@ data Format = Format
 makeFieldLabelsNoPrefix ''Format
 
 formatsByFieldId :: Fields.FieldId -> DBT IO (Vector.Vector Format)
-formatsByFieldId = selectManyByField @Format [field| field_id |]
+formatsByFieldId fid = selectManyByField @Format [field| field_id |] (Only fid)

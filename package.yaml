@@ -55,6 +55,7 @@ default-extensions:
   - DisambiguateRecordFields
   - ImportQualifiedPost
   - BlockArguments
+  - BangPatterns
 
 
 extra-source-files:

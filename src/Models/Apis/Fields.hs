@@ -21,7 +21,7 @@ import Data.Vector as Vector (Vector, fromList, toList)
 import Database.PostgreSQL.Entity (selectById)
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), query)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
-import Database.PostgreSQL.Simple (FromRow, Only, ResultError (..), ToRow)
+import Database.PostgreSQL.Simple (FromRow, Only (Only), ResultError (..), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, fromField, returnError)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
@@ -45,7 +45,6 @@ newtype FieldId = FieldId {unFieldId :: UUID.UUID}
   deriving
     (Eq, Ord, FromField, ToField, FromHttpApiData, Default)
     via UUID.UUID
-  deriving anyclass (FromRow, ToRow)
 
 data FieldTypes
   = FTUnknown
@@ -127,7 +126,7 @@ data Field = Field
     createdAt :: ZonedTime,
     updatedAt :: ZonedTime,
     projectId :: Projects.ProjectId,
-    endpoint :: Endpoints.EndpointId,
+    endpointId :: Endpoints.EndpointId,
     key :: Text,
     fieldType :: FieldTypes,
     fieldTypeOverride :: Maybe Text,
@@ -147,13 +146,13 @@ data Field = Field
 instance Ord Field where
   (<=) f1 f2 =
     (projectId f1 <= projectId f2)
-      && (endpoint f1 <= endpoint f2)
+      && (endpointId f1 <= endpointId f2)
       && keyPathStr f1 <= keyPathStr f2
 
 instance Eq Field where
   (==) f1 f2 =
     (projectId f1 == projectId f2)
-      && (endpoint f1 == endpoint f2)
+      && (endpointId f1 == endpointId f2)
       && (keyPathStr f1 == keyPathStr f2)
 
 makeFieldLabelsNoPrefix ''Field
@@ -195,7 +194,7 @@ selectFields = query Select q
                     from apis.fields where endpoint=? order by field_category, key |]
 
 fieldById :: FieldId -> DBT IO (Maybe Field)
-fieldById = selectById @Field
+fieldById fid = selectById @Field (Only fid)
 
 -- | NB: The GroupBy function has been merged into the vectors package.
 -- We should use that instead of converting to list, once that is available on hackage.

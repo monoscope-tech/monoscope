@@ -91,29 +91,31 @@ parseConfigToRequestMessages pid input = do
   case (Yaml.decodeEither' input :: Either Yaml.ParseException [SeedConfig]) of
     Left err -> pure $ Left err
     Right configs -> do
+      let fakerSettings = setRandomGen randGen defaultFakerSettings
       resp <-
-        configs & mapM \config -> do
-          let startTimeUTC = zonedTimeToUTC (config ^. #from)
-          let maxDiffTime = diffUTCTime (zonedTimeToUTC (config ^. #to)) startTimeUTC
-          let timestamps = randomTimesBtwToAndFrom startTimeUTC (config ^. #countPerInterval) randGen maxDiffTime
+        generateWithSettings fakerSettings $
+          configs & mapM \config -> do
+            let startTimeUTC = zonedTimeToUTC (config ^. #from)
+            let maxDiffTime = diffUTCTime (zonedTimeToUTC (config ^. #to)) startTimeUTC
+            let timestamps = randomTimesBtwToAndFrom startTimeUTC (config ^. #countPerInterval) randGen maxDiffTime
 
-          timestamps & mapM \timestampV -> do
-            let duration = 50000
-            let statusCode = 200
-            let method = "GET"
-            let urlPath = config ^. #path
-            let protoMajor = 1
-            let protoMinor = 1
-            let referer = "https://google.com"
-            let host = "https://apitoolkit.io/"
-            let projectId = Projects.unProjectId pid
-            let timestamp = timestampV
-            queryParameters <- generateNonDeterministic $ AE.toJSON <$> mapM fieldConfigToField (config ^. #queryParams)
-            requestHeaders <- generateNonDeterministic $ AE.toJSON <$> mapM fieldConfigToField (config ^. #requestHeaders)
-            responseHeaders <- generateNonDeterministic $ AE.toJSON <$> mapM fieldConfigToField (config ^. #responseHeaders)
-            responseBody <- generateNonDeterministic $ B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField (config ^. #responseBody)
-            requestBody <- generateNonDeterministic $ B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField (config ^. #responseBody)
-            pure RequestMessages.RequestMessage {..}
+            timestamps & mapM \timestampV -> do
+              let duration = 50000
+              let statusCode = 200
+              let method = "GET"
+              let urlPath = config ^. #path
+              let protoMajor = 1
+              let protoMinor = 1
+              let referer = "https://google.com"
+              let host = "https://apitoolkit.io/"
+              let projectId = Projects.unProjectId pid
+              let timestamp = timestampV
+              queryParameters <- AE.toJSON <$> mapM fieldConfigToField (config ^. #queryParams)
+              requestHeaders <- AE.toJSON <$> mapM fieldConfigToField (config ^. #requestHeaders)
+              responseHeaders <- AE.toJSON <$> mapM fieldConfigToField (config ^. #responseHeaders)
+              responseBody <- B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField (config ^. #responseBody)
+              requestBody <- B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField (config ^. #responseBody)
+              pure RequestMessages.RequestMessage {..}
       pure $ Right $ concat resp
 
 parseConfigToJson :: Projects.ProjectId -> ByteString -> IO (Either Yaml.ParseException [ByteString])

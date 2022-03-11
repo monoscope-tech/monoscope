@@ -18,10 +18,13 @@ import Data.Text qualified as T
 import Data.Time.Clock as Clock
 import Data.Time.LocalTime as Time
 import Data.UUID qualified as UUID
+import Data.Vector (Vector)
+import Data.Vector qualified as Vector
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields qualified as Fields
 import Models.Apis.RequestDumps qualified as RequestDumps
+import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Optics.Operators
 import Optics.TH
@@ -43,10 +46,11 @@ data RequestMessage = RequestMessage
     method :: Text,
     referer :: Text,
     urlPath :: Text,
+    pathParams :: AE.Value,
     protoMajor :: Int,
     protoMinor :: Int,
     duration :: Int,
-    queryParameters :: AE.Value,
+    queryParams :: AE.Value,
     requestHeaders :: AE.Value,
     responseHeaders :: AE.Value,
     requestBody :: Text,
@@ -60,7 +64,7 @@ data RequestMessage = RequestMessage
 
 makeFieldLabelsNoPrefix ''RequestMessage
 
-requestMsgToDumpAndEndpoint :: RequestMessages.RequestMessage -> ZonedTime -> UUID.UUID -> Either Text (RequestDumps.RequestDump, Endpoints.Endpoint, [(Fields.Field, [Text])])
+requestMsgToDumpAndEndpoint :: RequestMessages.RequestMessage -> ZonedTime -> UUID.UUID -> Either Text (RequestDumps.RequestDump, Endpoints.Endpoint, [(Fields.Field, [Text])], Shapes.Shape)
 requestMsgToDumpAndEndpoint rM now dumpID = do
   reqBodyB64 <- B64.decodeBase64 $ encodeUtf8 $ rM ^. #requestBody
   -- NB: At the moment we're discarding the error messages from when we're unable to parse the input
@@ -74,19 +78,43 @@ requestMsgToDumpAndEndpoint rM now dumpID = do
   respBodyB64 <- B64.decodeBase64 $ encodeUtf8 $ rM ^. #responseBody
   let respBody = fromRight [aesonQQ| {} |] $ AE.eitherDecodeStrict respBodyB64
 
+  let queryParamFields = valueToFields $ rM ^. #queryParams
   let reqHeaderFields = valueToFields $ rM ^. #requestHeaders
   let respHeaderFields = valueToFields $ rM ^. #responseHeaders
   let reqBodyFields = valueToFields reqBody
   let respBodyFields = valueToFields respBody
 
-  let reqBodyFieldHashes = fieldsToHash reqBodyFields
-  let respBodyFieldHashes = fieldsToHash respBodyFields
+  -- let queryParamFieldsHashes = fieldsToHash queryParamFields
+  -- let reqBodyFieldHashes = fieldsToHash reqBodyFields
+  -- let respBodyFieldHashes = fieldsToHash respBodyFields
 
+  let queryParamsKeypaths = Vector.fromList $ map fst queryParamFields :: Vector Text
+  let requestHeadersKeypaths = Vector.fromList $ map fst reqHeaderFields :: Vector Text
+  let responseHeadersKeypaths = Vector.fromList $ map fst reqHeaderFields :: Vector Text
+  let requestBodyKeypaths = Vector.fromList $ map fst reqBodyFields :: Vector Text
+  let responseBodyKeypaths = Vector.fromList $ map fst respBodyFields :: Vector Text
+
+  let queryParamsFieldsDTO = queryParamFields & map (fieldsToFieldDTO Fields.FCQueryParam (rM ^. #projectId))
   let reqHeadersFieldsDTO = reqHeaderFields & map (fieldsToFieldDTO Fields.FCRequestHeader (rM ^. #projectId))
   let respHeadersFieldsDTO = respHeaderFields & map (fieldsToFieldDTO Fields.FCResponseHeader (rM ^. #projectId))
   let reqBodyFieldsDTO = reqBodyFields & map (fieldsToFieldDTO Fields.FCRequestBody (rM ^. #projectId))
   let respBodyFieldsDTO = respBodyFields & map (fieldsToFieldDTO Fields.FCResponseBody (rM ^. #projectId))
-  let fieldsDTO = reqHeadersFieldsDTO <> respHeadersFieldsDTO <> reqBodyFieldsDTO <> respBodyFieldsDTO
+  let fieldsDTO = queryParamsFieldsDTO <> reqHeadersFieldsDTO <> respHeadersFieldsDTO <> reqBodyFieldsDTO <> respBodyFieldsDTO
+
+  let shape =
+        Shapes.Shape
+          { createdAt = rM ^. #timestamp,
+            updatedAt = now,
+            id = Shapes.ShapeId dumpID,
+            projectId = Projects.ProjectId $ rM ^. #projectId,
+            endpointId = Endpoints.EndpointId dumpID, -- SHould be overwritten based off what we get from the db when creating endpoints id
+            --
+            queryParamsKeypaths = queryParamsKeypaths,
+            requestHeadersKeypaths = requestHeadersKeypaths,
+            responseHeadersKeypaths = responseHeadersKeypaths,
+            requestBodyKeypaths = requestBodyKeypaths,
+            responseBodyKeypaths = responseBodyKeypaths
+          }
 
   let reqDump =
         RequestDumps.RequestDump
@@ -96,16 +124,26 @@ requestMsgToDumpAndEndpoint rM now dumpID = do
             projectId = rM ^. #projectId,
             host = rM ^. #host,
             urlPath = rM ^. #urlPath,
+            pathParams = rM ^. #pathParams,
             method = rM ^. #method,
             referer = rM ^. #referer,
             protoMajor = rM ^. #protoMajor,
             protoMinor = rM ^. #protoMinor,
             duration = calendarTimeTime $ secondsToNominalDiffTime $ fromIntegral $ rM ^. #duration,
             statusCode = rM ^. #statusCode,
+            queryParams = rM ^. #queryParams,
             requestHeaders = rM ^. #requestHeaders,
             responseHeaders = rM ^. #responseHeaders,
             requestBody = reqBody,
-            responseBody = respBody
+            responseBody = respBody,
+            --
+            queryParamsKeypaths = queryParamsKeypaths,
+            requestHeadersKeypaths = requestHeadersKeypaths,
+            responseHeadersKeypaths = responseHeadersKeypaths,
+            requestBodyKeypaths = requestBodyKeypaths,
+            responseBodyKeypaths = responseBodyKeypaths,
+            --
+            shapeId = Shapes.ShapeId dumpID
           }
   let endpoint =
         Endpoints.Endpoint
@@ -116,14 +154,14 @@ requestMsgToDumpAndEndpoint rM now dumpID = do
             urlPath = rM ^. #urlPath,
             urlParams = AET.emptyObject,
             method = rM ^. #method,
-            hosts = [rM ^. #host],
-            requestHashes = [reqBodyFieldHashes],
-            responseHashes = [respBodyFieldHashes],
-            queryparamHashes = []
+            hosts = [rM ^. #host]
+            -- requestHashes = [reqBodyFieldHashes],
+            -- responseHashes = [respBodyFieldHashes],
+            -- queryParamHashes = [queryParamFieldsHashes]
             -- FIXME: Implement query param hashes.
             -- FIXME: Should we have request and response headers? Or should they be part of request and response hashes?
           }
-  pure (reqDump, endpoint, fieldsDTO)
+  pure (reqDump, endpoint, fieldsDTO, shape)
 
 -- | valueToFields takes an aeson object and converts it into a list of paths to
 -- each primitive value in the json and the values.
@@ -155,8 +193,8 @@ valueToFields value = snd $ valueToFields' value ("", [])
     valueToFields' (AE.Array v) akk = foldl' (\(akkT, akkL) val -> (akkT, snd $ valueToFields' val (akkT <> ".[]", akkL))) akk v
     valueToFields' v (akk, l) = (akk, (akk, v) : l)
 
-fieldsToHash :: [(Text, AE.Value)] -> Text
-fieldsToHash = foldl' (\akk tp -> akk <> "," <> fst tp) ""
+-- fieldsToHash :: [(Text, AE.Value)] -> Text
+-- fieldsToHash = foldl' (\akk tp -> akk <> "," <> fst tp) ""
 
 aeValueToFieldType :: AE.Value -> Fields.FieldTypes
 aeValueToFieldType (AET.String _) = Fields.FTString
@@ -205,7 +243,7 @@ fieldsToFieldDTO fieldCategory projectID (keyPath, val) =
       { createdAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC",
         updatedAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC",
         id = Fields.FieldId UUID.nil,
-        endpoint = Endpoints.EndpointId UUID.nil,
+        endpointId = Endpoints.EndpointId UUID.nil,
         projectId = Projects.ProjectId projectID,
         key = snd $ T.breakOnEnd "." keyPath,
         fieldType = aeValueToFieldType val,

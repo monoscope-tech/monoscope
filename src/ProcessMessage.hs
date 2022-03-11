@@ -18,7 +18,9 @@ import Database.PostgreSQL.Simple (Connection)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields qualified as Fields
 import Models.Apis.RequestDumps qualified as RequestDumps
+import Models.Apis.Shapes qualified as Shapes
 import Network.Google.PubSub qualified as PubSub
+import Optics.Core ((.~))
 import Relude
 import Relude.Unsafe (fromJust)
 import RequestMessages qualified
@@ -46,12 +48,15 @@ processRequestMessage logger pool requestMsg = do
   case dumpAndEndpoint of
     Left err -> logger <& "error with converting request message to dump and endpoint" <> toString err
     Right dAndE -> do
-      let (reqDump, endpoint, fields) = dAndE
+      let (reqDump, endpoint, fields, shape) = dAndE
       withPool pool $ do
-        RequestDumps.insertRequestDump reqDump
         enpResp <- Endpoints.upsertEndpoints endpoint
         case enpResp of
           Nothing -> error "error"
-          Just (enpID, _, _) -> do
+          Just enpID -> do
             _ <- Fields.upsertFields enpID fields
+            let shape' = shape & #endpointId .~ enpID
+            _ <- Shapes.insertShape shape'
+            let reqDump' = reqDump & #shapeId .~ 
+            _ <- RequestDumps.insertRequestDump reqDump
             pass

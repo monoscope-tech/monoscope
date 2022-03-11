@@ -26,12 +26,13 @@ import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact (DBT)
+import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Optics.TH
 import Relude
 
-instance Eq ZonedTime where
-  (==) _ _ = True
+-- instance Eq ZonedTime where
+--   (==) _ _ = True
 
 data RequestDump = RequestDump
   { id :: UUID.UUID,
@@ -40,22 +41,33 @@ data RequestDump = RequestDump
     projectId :: UUID.UUID,
     host :: Text,
     urlPath :: Text,
+    pathParams :: AE.Value,
     method :: Text,
     referer :: Text,
     protoMajor :: Int,
     protoMinor :: Int,
     duration :: CalendarDiffTime,
-    requestHeaders :: AE.Value,
-    responseHeaders :: AE.Value,
+    statusCode :: Int,
+    --
+    queryParams :: AE.Value,
     requestBody :: AE.Value,
     responseBody :: AE.Value,
-    statusCode :: Int
+    requestHeaders :: AE.Value,
+    responseHeaders :: AE.Value,
+    --
+    queryParamsKeypaths :: Vector Text,
+    requestBodyKeypaths :: Vector Text,
+    responseBodyKeypaths :: Vector Text,
+    requestHeadersKeypaths :: Vector Text,
+    responseHeadersKeypaths :: Vector Text,
+    --
+    shapeId :: Shapes.ShapeId
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (ToRow, FromRow)
   deriving
     (Entity)
-    via (GenericEntity '[Schema "apis", TableName "request_dumps", PrimaryKey "id", FieldModifiers '[StripPrefix "rd", CamelToSnake]] RequestDump)
+    via (GenericEntity '[Schema "apis", TableName "request_dumps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] RequestDump)
 
 makeFieldLabelsNoPrefix ''RequestDump
 

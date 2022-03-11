@@ -24,10 +24,9 @@ endpointListH sess pid = do
   pool <- asks pool
   (project, endpoints) <- liftIO $
     withPool pool $ do
-      endpoints <- Endpoints.endpointsByProject pid
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+      endpoints <- Endpoints.endpointsByProject pid
       pure (project, endpoints)
-
   pure $ bodyWrapper (Just sess) project "Endpoints" $ endpointList endpoints
 
 endpointList :: Vector Endpoints.Endpoint -> Html ()
@@ -89,33 +88,35 @@ endpointList enps = do
                         img_ [class_ "px-3", src_ "/assets/svgs/alert-red.svg"]
                         img_ [class_ "px-3", src_ "/assets/svgs/dots-vertical.svg"]
               )
-      -- table footer
-      -- README: Hiding the pagination logic because while pagination is important,
-      -- we might not quickly have companies who have enough endpoints that they need pagination. So it's better to focus on important topics.
-      div_ [class_ "flex flex-row mt-5 justify-between hidden"] $ do
-        div_ [class_ "flex flex-row"] $ do
-          button_ [class_ "bg-transparent place-content-center py-2 px-3 mx-3 flex flex-row border-solid border border-gray-200 rounded-xl h-10"] $ do
-            span_ [class_ "text-sm text-slate-500 mr-1"] "10"
-            img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-3 w-3 mt-1 mx-1"]
-          span_ [src_ "text-gray-200 mt-6 font-light text-base"] "Showing 1 - 10 of 100"
-        div_ [class_ "flex flex-row"] $ do
-          button_ [class_ "bg-gray-100 h-10 w-10 mx-1 px-2 flex flex-row rounded-xl py-3 place-content-center"] $ do
-            img_ [src_ "/assets/svgs/arrowleft1.svg", class_ "-mr-1"]
-            img_ [src_ "/assets/svgs/arrowleft1.svg", class_ "-ml-1"]
-          button_ [class_ "bg-gray-100 h-10 w-10 mx-1 px-2 rounded-xl py-1 place-content-center"] $ do
-            img_ [src_ "/assets/svgs/arrowleft1.svg", class_ "ml-1"]
-          button_ [class_ "bg-blue-700 h-10 w-10 mx-1 px-2 rounded-xl py-1"] $ do
-            span_ [class_ "text-white text-bold"] "1"
-          button_ [class_ "bg-transparent h-10 w-10 mx-1 px-2 rounded-xl py-1 hover:bg-gray-100 "] $ do
-            span_ [class_ "text-slate-700 text-bold"] "2"
-          button_ [class_ "bg-transparent h-10 w-10 mx-1 px-2 rounded-xl py-1 hover:bg-gray-100 "] $ do
-            span_ [class_ "text-slate-700 text-bold"] "3"
-          button_ [class_ "bg-transparent h-10 w-10 mx-1 px-2 rounded-xl py-1 hover:bg-gray-100 "] $ do
-            span_ [class_ "text-slate-700 text-bold"] "..."
-          button_ [class_ "bg-transparent h-10 w-10 mx-1 px-2 rounded-xl py-1 hover:bg-gray-100 "] $ do
-            span_ [class_ "text-slate-700 text-bold"] "5"
-          button_ [class_ "bg-[#304FFD]/20 place-content-center h-10 mx-1 rounded-xl py-1 w-10"] $ do
-            img_ [src_ "/assets/svgs/arrowright1.svg", class_ "ml-3"]
-          button_ [class_ "bg-blue-700/20 place-content-center h-10 mx-1 flex flex-row rounded-xl py-3 w-10"] $ do
-            img_ [src_ "/assets/svgs/arrowright1.svg", class_ "-mr-1"]
-            img_ [src_ "/assets/svgs/arrowright1.svg", class_ "-ml-1"]
+
+-- table footer
+-- README: Hiding the pagination logic because while pagination is important,
+-- TODO: SHow this pagination when we're ready to actually implement the pagination logic.
+-- we might not quickly have companies who have enough endpoints that they need pagination. So it's better to focus on important topics.
+-- div_ [class_ "flex flex-row mt-5 justify-between hidden"] $ do
+--   div_ [class_ "flex flex-row"] $ do
+--     button_ [class_ "bg-transparent place-content-center py-2 px-3 mx-3 flex flex-row border-solid border border-gray-200 rounded-xl h-10"] $ do
+--       span_ [class_ "text-sm text-slate-500 mr-1"] "10"
+--       img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-3 w-3 mt-1 mx-1"]
+--     span_ [src_ "text-gray-200 mt-6 font-light text-base"] "Showing 1 - 10 of 100"
+--   div_ [class_ "flex flex-row"] $ do
+--     button_ [class_ "bg-gray-100 h-10 w-10 mx-1 px-2 flex flex-row rounded-xl py-3 place-content-center"] $ do
+--       img_ [src_ "/assets/svgs/arrowleft1.svg", class_ "-mr-1"]
+--       img_ [src_ "/assets/svgs/arrowleft1.svg", class_ "-ml-1"]
+--     button_ [class_ "bg-gray-100 h-10 w-10 mx-1 px-2 rounded-xl py-1 place-content-center"] $ do
+--       img_ [src_ "/assets/svgs/arrowleft1.svg", class_ "ml-1"]
+--     button_ [class_ "bg-blue-700 h-10 w-10 mx-1 px-2 rounded-xl py-1"] $ do
+--       span_ [class_ "text-white text-bold"] "1"
+--     button_ [class_ "bg-transparent h-10 w-10 mx-1 px-2 rounded-xl py-1 hover:bg-gray-100 "] $ do
+--       span_ [class_ "text-slate-700 text-bold"] "2"
+--     button_ [class_ "bg-transparent h-10 w-10 mx-1 px-2 rounded-xl py-1 hover:bg-gray-100 "] $ do
+--       span_ [class_ "text-slate-700 text-bold"] "3"
+--     button_ [class_ "bg-transparent h-10 w-10 mx-1 px-2 rounded-xl py-1 hover:bg-gray-100 "] $ do
+--       span_ [class_ "text-slate-700 text-bold"] "..."
+--     button_ [class_ "bg-transparent h-10 w-10 mx-1 px-2 rounded-xl py-1 hover:bg-gray-100 "] $ do
+--       span_ [class_ "text-slate-700 text-bold"] "5"
+--     button_ [class_ "bg-[#304FFD]/20 place-content-center h-10 mx-1 rounded-xl py-1 w-10"] $ do
+--       img_ [src_ "/assets/svgs/arrowright1.svg", class_ "ml-3"]
+--     button_ [class_ "bg-blue-700/20 place-content-center h-10 mx-1 flex flex-row rounded-xl py-3 w-10"] $ do
+--       img_ [src_ "/assets/svgs/arrowright1.svg", class_ "-mr-1"]
+--       img_ [src_ "/assets/svgs/arrowright1.svg", class_ "-ml-1"]
