@@ -236,6 +236,13 @@ packages:
   original:
     hackage: lucid-svg-0.7.1@sha256:012455fd2b1ec6b0f3bba405fd66c99cc6d26592bf25c2624741969567c6e510,1088
 - completed:
+    hackage: mr-env-0.1.0.4@sha256:56439c7df09a83b72b170f104723293643ad2635df03cdcd174a05d0d73e788d,1055
+    pantry-tree:
+      size: 376
+      sha256: da91d4e0f5aff5336e3e73ecb1d44fe595dd47bc572335956ba30d937d14573d
+  original:
+    hackage: mr-env-0.1.0.4@sha256:56439c7df09a83b72b170f104723293643ad2635df03cdcd174a05d0d73e788d,1055
+- completed:
     subdir: core
     name: gogol-core
     version: 0.5.0

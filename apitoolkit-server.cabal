@@ -121,6 +121,7 @@ library
     , lucid-htmx
     , lucid-hyperscript
     , lucid-svg
+    , mr-env
     , neat-interpolation
     , optics-core
     , optics-th

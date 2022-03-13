@@ -76,6 +76,7 @@ extra-deps:
   - doctest-parallel-0.2.1@sha256:c6c0d095dd6e0b8ce1bd9f6f5fc4e0cf5cf50b6895b557356ac41b8aa2947399,5631
   - lucid-hyperscript-0.1.0.2@sha256:c3b048424e75c0e9cbadc30f7ebeb6abc164c2b45b2c995fd0674d4cc57be216,2035
   - lucid-svg-0.7.1@sha256:012455fd2b1ec6b0f3bba405fd66c99cc6d26592bf25c2624741969567c6e510,1088
+  - mr-env-0.1.0.4@sha256:56439c7df09a83b72b170f104723293643ad2635df03cdcd174a05d0d73e788d,1055
   - git: https://github.com/brendanhay/gogol.git
     commit: 801f00b6e63c22522eb2b3e3e2fc77694730a70f
     subdirs:

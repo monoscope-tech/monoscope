@@ -21,6 +21,7 @@ import Database.PostgreSQL.Simple (Connection, close, connectPostgreSQL)
 import Database.PostgreSQL.Simple.Migration as Migrations
 import GHC.Generics ()
 import Models.Users.Users qualified as Users
+import Models.Projects.ProjectsEmail as ProjectEmail
 import Network.Google qualified as Google
 import Network.Google.PubSub qualified as PubSub
 import Network.Wai.Handler.Warp (run)
@@ -32,6 +33,7 @@ import System.Envy (decodeEnv)
 
 startApp :: IO ()
 startApp = do
+  ProjectEmail.sendEmailTrial
   let logger = logStringStdout
   loadFileErr <- try (Dotenv.loadFile Dotenv.defaultConfig) :: IO (Either SomeException [(String, String)])
   case loadFileErr of

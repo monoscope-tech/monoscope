@@ -10,3 +10,5 @@ env
 .vscode
 apitoolkit-server-exe
 gha-creds-*.json
+ghcid.txt
+commands.txt

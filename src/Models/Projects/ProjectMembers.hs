@@ -9,9 +9,8 @@ module Models.Projects.ProjectMembers
     Permissions (..),
     updateMemberPermission,
     deleteMember,
-    InvProjectMember (..),
-    invProjectMembers,
     updateMemberPermissionFormToModel,
+    parsePermissions
   )
 where
 
@@ -78,7 +77,7 @@ makeFieldLabelsNoPrefix ''ProjectMembers
 data CreateProjectMembers = CreateProjectMembers
   { projectId :: Projects.ProjectId,
     userId :: Users.UserId,
-    permission :: Permissions
+    permission :: Maybe Permissions
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow)
@@ -86,21 +85,8 @@ data CreateProjectMembers = CreateProjectMembers
     (Entity)
     via (GenericEntity '[Schema "projects", TableName "project_members", PrimaryKey "id", FieldModifiers '[CamelToSnake]] CreateProjectMembers)
 
-data InvProjectMember = InvProjectMember
-  { projectId :: Projects.ProjectId,
-    userId :: Users.UserId,
-    permission :: Text
-  }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow)
-  deriving
-    (Entity)
-    via (GenericEntity '[Schema "projects", TableName "project_members", PrimaryKey "id", FieldModifiers '[CamelToSnake]] InvProjectMember)
-
-makeFieldLabelsNoPrefix ''InvProjectMember
-
-updateMemberPermissionFormToModel :: Projects.ProjectId -> Users.UserId -> Text -> InvProjectMember
-updateMemberPermissionFormToModel pid uid perm = InvProjectMember {projectId, userId, permission}
+updateMemberPermissionFormToModel :: Projects.ProjectId -> Users.UserId -> Maybe Permissions -> CreateProjectMembers
+updateMemberPermissionFormToModel pid uid perm = CreateProjectMembers {projectId, userId, permission}
   where
     projectId = pid
     userId = uid
@@ -114,15 +100,7 @@ insertProjectMembers = PgT.executeMany q
           INSERT INTO projects.project_members(project_id, user_id, permission) VALUES (?,?,?)
          |]
 
-invProjectMembers :: [InvProjectMember] -> PgT.DBT IO Int64
-invProjectMembers = PgT.executeMany q
-  where
-    q =
-      [sql|
-          INSERT INTO projects.project_members(project_id, user_id, permission) VALUES (?,?,?)
-        |]
-
-updateMemberPermission :: Projects.ProjectId -> UUID.UUID -> InvProjectMember -> PgT.DBT IO Int64
+updateMemberPermission :: Projects.ProjectId -> UUID.UUID -> CreateProjectMembers -> PgT.DBT IO Int64
 updateMemberPermission pid mid pm = PgT.execute q (Only pid)
   where
     q =

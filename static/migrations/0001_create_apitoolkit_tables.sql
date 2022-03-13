@@ -56,7 +56,6 @@ CREATE TABLE IF NOT EXISTS users.users
 );
 SELECT manage_updated_at('users.users');
 
-
 CREATE TABLE IF NOT EXISTS users.persistent_sessions
 (
   id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,

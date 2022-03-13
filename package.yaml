@@ -131,6 +131,7 @@ library:
     - yaml
     - fakedata
     - random
+    - mr-env
 
 
 executables:
