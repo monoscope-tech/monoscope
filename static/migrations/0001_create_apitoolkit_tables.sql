@@ -187,7 +187,7 @@ SELECT manage_updated_at('apis.formats');
 
 CREATE TYPE apis.anomaly_type AS ENUM ('unknown', 'field', 'endpoint','shape', 'format');
 CREATE TYPE apis.anomaly_action AS ENUM ('unknown', 'created');
-CREATE TABLE IF NOT EXISTS apis.anomaly
+CREATE TABLE IF NOT EXISTS apis.anomalies
 (
   id uuid NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
@@ -199,9 +199,9 @@ CREATE TABLE IF NOT EXISTS apis.anomaly
   action apis.anomaly_action NOT NULL DEFAULT 'unknown'::apis.anomaly_action,
   target_id uuid
 );
-SELECT manage_updated_at('apis.anomaly');
+SELECT manage_updated_at('apis.anomalies');
 
--- TODO: Create triggers to create new anomalies when new fields, endpoints and shapes are created.
+
 
 CREATE FUNCTION apis.new_anomaly_proc() RETURNS trigger AS $$
 DECLARE 
@@ -213,7 +213,7 @@ BEGIN
     END IF;
 	anomaly_type := TG_ARGV[0];
 	anomaly_action := TG_ARGV[1];
-    INSERT INTO apis.anomaly (project_id, anomaly_type, action, target_id) VALUES (NEW.project_id, anomaly_type, anomaly_action, NEW.id);
+    INSERT INTO apis.anomalies (project_id, anomaly_type, action, target_id) VALUES (NEW.project_id, anomaly_type, anomaly_action, NEW.id);
     RETURN NULL;
 END;
 $$ LANGUAGE plpgsql;
@@ -221,6 +221,16 @@ $$ LANGUAGE plpgsql;
 DROP TRIGGER IF EXISTS fields_created_anomaly ON apis.fields;
 CREATE TRIGGER fields_created_anomaly AFTER INSERT ON apis.fields FOR EACH ROW EXECUTE PROCEDURE apis.new_anomaly_proc('field', 'created');
 
+DROP TRIGGER IF EXISTS format_created_anomaly ON apis.formats;
+CREATE TRIGGER format_created_anomaly AFTER INSERT ON apis.formats FOR EACH ROW EXECUTE PROCEDURE apis.new_anomaly_proc('format', 'created');
+
+DROP TRIGGER IF EXISTS endpoint_created_anomaly ON apis.endpoints;
+CREATE TRIGGER endpoint_created_anomaly AFTER INSERT ON apis.endpoints FOR EACH ROW EXECUTE PROCEDURE apis.new_anomaly_proc('endpoint', 'created');
+
+DROP TRIGGER IF EXISTS shapes_created_anomaly ON apis.shapes;
+CREATE TRIGGER shapes_created_anomaly AFTER INSERT ON apis.shapes FOR EACH ROW EXECUTE PROCEDURE apis.new_anomaly_proc('shape', 'created');
+
+-- TODO: Create triggers to create new anomalies when new fields, endpoints and shapes are created.
 
 
 CREATE OR REPLACE FUNCTION apis.create_field_and_formats(

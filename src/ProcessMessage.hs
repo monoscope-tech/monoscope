@@ -14,7 +14,7 @@ import Data.Pool (Pool)
 import Data.Time.LocalTime (getZonedTime)
 import Data.UUID.V4 (nextRandom)
 import Database.PostgreSQL.Entity.DBT (withPool)
-import Database.PostgreSQL.Simple (Connection)
+import Database.PostgreSQL.Simple (Connection, Only (Only))
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields qualified as Fields
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -56,7 +56,10 @@ processRequestMessage logger pool requestMsg = do
           Just enpID -> do
             _ <- Fields.upsertFields enpID fields
             let shape' = shape & #endpointId .~ enpID
-            _ <- Shapes.insertShape shape'
-            let reqDump' = reqDump & #shapeId .~ 
-            _ <- RequestDumps.insertRequestDump reqDump
-            pass
+            shapeIdM <- Shapes.insertShape shape'
+            case shapeIdM of
+              Nothing -> error "error"
+              Just (Only shapeId) -> do
+                let reqDump' = reqDump & #shapeId .~ shapeId
+                RequestDumps.insertRequestDump reqDump'
+                pass

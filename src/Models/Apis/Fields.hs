@@ -13,6 +13,8 @@ module Models.Apis.Fields
   )
 where
 
+import Data.Aeson (FromJSON)
+import Data.Aeson qualified as AE
 import Data.Default
 import Data.List (groupBy)
 import Data.Time (ZonedTime)
@@ -26,6 +28,7 @@ import Database.PostgreSQL.Simple.FromField (FromField, fromField, returnError)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
 import Database.PostgreSQL.Transact as PgT (DBT, queryOne)
+import Deriving.Aeson qualified as DAE
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Optics.Operators
@@ -43,7 +46,7 @@ import Web.HttpApiData (FromHttpApiData)
 newtype FieldId = FieldId {unFieldId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving
-    (Eq, Ord, FromField, ToField, FromHttpApiData, Default)
+    (Eq, Ord, FromJSON, FromField, ToField, FromHttpApiData, Default)
     via UUID.UUID
 
 data FieldTypes
@@ -55,6 +58,9 @@ data FieldTypes
   | FTList
   | FTNull
   deriving stock (Eq, Generic, Show)
+  deriving
+    (AE.FromJSON, AE.ToJSON)
+    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] FieldTypes
 
 instance Default FieldTypes where
   def = FTUnknown
@@ -93,6 +99,9 @@ data FieldCategoryEnum
   | FCRequestBody
   | FCResponseBody
   deriving stock (Eq, Generic, Show, Ord)
+  deriving
+    (AE.FromJSON, AE.ToJSON)
+    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] FieldCategoryEnum
 
 instance Default FieldCategoryEnum where
   def = FCQueryParam
@@ -139,6 +148,9 @@ data Field = Field
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, Default)
+  deriving
+    (AE.FromJSON)
+    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Field
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "fields", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Field)

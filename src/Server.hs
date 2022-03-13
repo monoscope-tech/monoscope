@@ -13,6 +13,7 @@ import Models.Apis.Fields qualified as Fields
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Network.Wai (Request)
+import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.Api qualified as Api
 import Pages.Log qualified as Log
 import Pages.Dashboard qualified as Dashboard
@@ -46,8 +47,9 @@ type ProtectedAPI =
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "manual_ingest" :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "manual_ingest" :> ReqBody '[FormUrlEncoded] ManualIngestion.RequestMessageForm :> Post '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "log" :> Get '[HTML] (Html ())
-
--- :<|> "p" :> Capture "projectID" Projects.ProjectId :> "manualIngest" :> Get '[HTML] (Html ())
+    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "bulk_seed_and_ingest" :> Get '[HTML] (Html ())
+    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "bulk_seed_and_ingest" :> ReqBody '[FormUrlEncoded] DataSeeding.DataSeedingForm :> Post '[HTML] (Html ())
+    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "anomalies" :> Get '[HTML] (Html ())
 
 type PublicAPI =
   "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
@@ -95,6 +97,9 @@ protectedServer sess =
     :<|> ManualIngestion.manualIngestGetH sess
     :<|> ManualIngestion.manualIngestPostH sess
     :<|> Log.apiLog sess
+    :<|> DataSeeding.dataSeedingGetH sess
+    :<|> DataSeeding.dataSeedingPostH sess
+    :<|> AnomalyList.anomalyListGetH sess
 
 publicServer :: ServerT PublicAPI DashboardM
 publicServer =

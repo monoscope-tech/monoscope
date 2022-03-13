@@ -11,6 +11,7 @@ module Models.Apis.Endpoints
   )
 where
 
+import Data.Aeson (FromJSON)
 import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.Default.Instances ()
@@ -25,6 +26,7 @@ import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact qualified as PgT
+import Deriving.Aeson qualified as DAE
 import Models.Projects.Projects qualified as Projects
 import Optics.Operators ((^.))
 import Optics.TH (makeFieldLabelsNoPrefix)
@@ -38,7 +40,7 @@ instance Eq ZonedTime where
 newtype EndpointId = EndpointId {unEndpointId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving
-    (Eq, Ord, FromField, ToField, FromHttpApiData, Default)
+    (FromJSON, Eq, Ord, FromField, ToField, FromHttpApiData, Default)
     via UUID.UUID
   deriving anyclass (FromRow, ToRow)
 
@@ -62,6 +64,9 @@ data Endpoint = Endpoint
   deriving stock (Show, Generic, Eq)
   deriving anyclass (FromRow, ToRow, Default)
   deriving
+    (AE.FromJSON)
+    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Endpoint
+  deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "endpoints", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Endpoint)
 
@@ -78,12 +83,12 @@ upsertEndpoints endpoint = queryOne Insert q options
           ON CONFLICT (project_id, url_path, method) 
           DO 
              UPDATE SET 
-              hosts = ARRAY(SELECT DISTINCT e from unnest(apis.endpoints.hosts, excluded.hosts) as e order by e),
+              hosts = ARRAY(SELECT DISTINCT e from unnest(apis.endpoints.hosts, excluded.hosts) as e order by e)
           RETURNING id 
         )
         SELECT * from e 
         UNION 
-          SELECT id from apis.endpoints WHERE project_id=?, url_path=?, method=?;
+          SELECT id FROM apis.endpoints WHERE project_id=? AND url_path=? AND method=?;
       |]
     options =
       ( endpoint ^. #projectId,
