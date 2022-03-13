@@ -78,7 +78,6 @@ sendInviteMail sendEmailV = do
   case eResponse of
     Left httpException -> error $ show httpException
     Right response -> print (response Lens.^. Wreq.responseStatus . Wreq.statusCode) 
-      
 
 -- Test implementation
 emailTrial :: Mail () ()
