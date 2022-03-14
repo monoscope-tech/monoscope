@@ -33,7 +33,6 @@ import System.Envy (decodeEnv)
 
 startApp :: IO ()
 startApp = do
-  ProjectEmail.sendEmailTrial
   let logger = logStringStdout
   loadFileErr <- try (Dotenv.loadFile Dotenv.defaultConfig) :: IO (Either SomeException [(String, String)])
   case loadFileErr of
