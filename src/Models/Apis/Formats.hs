@@ -13,6 +13,8 @@ import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity (selectManyByField)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
+import Database.PostgreSQL.Simple.FromField (FromField)
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Transact (DBT)
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Fields qualified as Fields
@@ -30,12 +32,9 @@ data Format = Format
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow)
-  deriving
-    (AE.FromJSON)
-    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Format
-  deriving
-    (Entity)
-    via (GenericEntity '[Schema "apis", TableName "formats", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Format)
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Format
+  deriving (Entity) via (GenericEntity '[Schema "apis", TableName "formats", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Format)
+  deriving (FromField) via Aeson Format
 
 makeFieldLabelsNoPrefix ''Format
 

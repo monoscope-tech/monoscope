@@ -1,12 +1,13 @@
 module Pages.Anomalies.AnomalyList (anomalyListGetH) where
 
 import Config
-import Data.Vector
+import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
+import Optics.Core ((^.))
 import Pages.BodyWrapper (bodyWrapper)
 import Relude
 
@@ -17,6 +18,7 @@ anomalyListGetH sess pid = do
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
       anomalies <- Anomalies.selectAnomalies pid
+      traceShowM anomalies
       pure (project, anomalies)
   pure $ bodyWrapper (Just sess) project "Anomalies" $ anomalyList anomalies
 
@@ -32,3 +34,59 @@ anomalyList anomalies = do
           img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-3 w-3 mt-1 mx-1"]
         button_ [class_ "bg-blue-700 h-10  px-2 rounded-xl py-1 mt-3 "] $ do
           img_ [src_ "/assets/svgs/white-plus.svg", class_ "text-white h-4 w-6 text-bold"]
+    div_ [class_ "grid grid-cols-5"] $ do
+      div_ [class_ "col-span-1"] $ do
+        div_ [] "endpoints"
+      div_ [class_ "col-span-4 space-y-2"] $ do
+        anomalies & mapM_ fieldAnomaly
+
+fieldAnomaly :: Anomalies.AnomalyVM -> Html ()
+fieldAnomaly anomaly = case anomaly ^. #dataObject of
+  Anomalies.ADField _ -> do
+    div_ [class_ "bg-white border border-gray-50 rounded-xl p-5 hover:bg-blue-50"] $ do
+      div_ [class_ "clear-both"] $ do
+        span_ "Fields"
+        a_ [class_ "inline-block float-right"] "Details  → "
+      div_ [class_ "flex flex-row"] $ do
+        div_ [class_ "flex-1"] $ do
+          p_ "A new field `new_field` as added to `/bla/bla` yesterday. Was this intended? "
+        div_ [class_ "flex-1"] $ do
+          "graph"
+  Anomalies.ADShape _ -> do
+    div_ [class_ "bg-white border border-gray-50 rounded-xl p-5 hover:bg-blue-50"] $ do
+      div_ [class_ "clear-both"] $ do
+        span_ "Shapes"
+        a_ [class_ "inline-block float-right"] "Details  → "
+      div_ [class_ "flex flex-row"] $ do
+        div_ [class_ "flex-1"] $ do
+          p_ "A new field `new_field` as added to `/bla/bla` yesterday. Was this intended? "
+        div_ [class_ "flex-1"] $ do
+          "graph"
+  Anomalies.ADEndpoint _ -> do
+    div_ [class_ "bg-white border border-gray-50 rounded-xl p-5 hover:bg-blue-50"] $ do
+      div_ [class_ "clear-both"] $ do
+        span_ "Endpoint"
+        a_ [class_ "inline-block float-right"] "Details  → "
+      div_ [class_ "flex flex-row"] $ do
+        div_ [class_ "flex-1"] $ do
+          p_ "A new field `new_field` as added to `/bla/bla` yesterday. Was this intended? "
+        div_ [class_ "flex-1"] $ do
+          "graph"
+  Anomalies.ADFormat _ -> do
+    div_ [class_ "bg-white border border-gray-50 rounded-xl p-5 hover:bg-blue-50"] $ do
+      div_ [class_ "clear-both"] $ do
+        span_ "format"
+        a_ [class_ "inline-block float-right"] "Details  → "
+      div_ [class_ "flex flex-row"] $ do
+        div_ [class_ "flex-1"] $ do
+          p_ "A new field `new_field` as added to `/bla/bla` yesterday. Was this intended? "
+        div_ [class_ "flex-1"] $ do
+          "graph"
+  Anomalies.ADUnknown err -> do
+    div_ [class_ "bg-white border border-gray-50 rounded-xl p-5 hover:bg-blue-50"] $ do
+      div_ [class_ "clear-both"] $ do
+        span_ "unknown format"
+        a_ [class_ "inline-block float-right"] "Details  → "
+      div_ [class_ "flex flex-row"] $ do
+        div_ [class_ "flex-1"] $ do
+          p_ $ show err

@@ -11,6 +11,7 @@ import Database.PostgreSQL.Entity.DBT (QueryNature (Insert), queryOne)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, Only, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact (DBT)
@@ -42,12 +43,9 @@ data Shape = Shape
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, Default)
-  deriving
-    (AE.FromJSON)
-    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Shape
-  deriving
-    (Entity)
-    via (GenericEntity '[Schema "apis", TableName "fields", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Shape)
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Shape
+  deriving (Entity) via (GenericEntity '[Schema "apis", TableName "fields", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Shape)
+  deriving (FromField) via Aeson Shape
 
 makeFieldLabelsNoPrefix ''Shape
 

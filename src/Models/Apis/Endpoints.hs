@@ -11,7 +11,7 @@ module Models.Apis.Endpoints
   )
 where
 
-import Data.Aeson (FromJSON)
+import Data.Aeson (FromJSON, ToJSON)
 import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.Default.Instances ()
@@ -23,6 +23,7 @@ import Database.PostgreSQL.Entity.DBT (QueryNature (..), query, queryOne)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact qualified as PgT
@@ -40,7 +41,7 @@ instance Eq ZonedTime where
 newtype EndpointId = EndpointId {unEndpointId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving
-    (FromJSON, Eq, Ord, FromField, ToField, FromHttpApiData, Default)
+    (ToJSON, FromJSON, Eq, Ord, FromField, ToField, FromHttpApiData, Default)
     via UUID.UUID
   deriving anyclass (FromRow, ToRow)
 
@@ -57,18 +58,12 @@ data Endpoint = Endpoint
     urlParams :: AE.Value,
     method :: Text,
     hosts :: Vector.Vector Text
-    -- requestHashes :: Vector.Vector Text,
-    -- responseHashes :: Vector.Vector Text,
-    -- queryParamHashes :: Vector.Vector Text
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (FromRow, ToRow, Default)
-  deriving
-    (AE.FromJSON)
-    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Endpoint
-  deriving
-    (Entity)
-    via (GenericEntity '[Schema "apis", TableName "endpoints", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Endpoint)
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Endpoint
+  deriving (Entity) via (GenericEntity '[Schema "apis", TableName "endpoints", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Endpoint)
+  deriving (FromField) via Aeson Endpoint
 
 makeFieldLabelsNoPrefix ''Endpoint
 

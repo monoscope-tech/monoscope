@@ -1,7 +1,7 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module Models.Apis.Anomalies (selectAnomalies, AnomalyVM (..)) where
+module Models.Apis.Anomalies (selectAnomalies, AnomalyVM (..), AnomalyActions (..), AnomalyTypes (..), AnomalyData (..)) where
 
 import Data.Aeson qualified as AE
 import Data.Default (Default, def)
@@ -114,23 +114,40 @@ data AnomalyData
   | ADUnknown AE.Value
   deriving stock (Show)
 
-data AnomalyVM' = AnomalyVM'
-  { id :: AnomalyId,
-    createdAt :: ZonedTime,
-    updatedAt :: ZonedTime,
-    projectId :: Projects.ProjectId,
-    acknowlegedAt :: Maybe ZonedTime,
-    acknowlegedBy :: Maybe Users.UserId,
-    anomalyType :: AnomalyTypes,
-    action :: AnomalyActions,
-    targetId :: UUID.UUID,
-    dataObject :: AE.Value,
-    endpointId :: Endpoints.EndpointId
-  }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, Default)
+-- data AnomalyVM' = AnomalyVM'
+--   { id :: AnomalyId,
+--     createdAt :: ZonedTime,
+--     updatedAt :: ZonedTime,
+--     projectId :: Projects.ProjectId,
+--     acknowlegedAt :: Maybe ZonedTime,
+--     acknowlegedBy :: Maybe Users.UserId,
+--     anomalyType :: AnomalyTypes,
+--     action :: AnomalyActions,
+--     targetId :: UUID.UUID,
+--     dataObject :: AE.Value,
+--     endpointId :: Endpoints.EndpointId
+--   }
+--   deriving stock (Show, Generic)
+--   deriving anyclass (FromRow, ToRow, Default)
 
-data AnomalyVM = AnomalyVM
+-- data AnomalyVM = AnomalyVM
+--   { id :: AnomalyId,
+--     createdAt :: ZonedTime,
+--     updatedAt :: ZonedTime,
+--     projectId :: Projects.ProjectId,
+--     acknowlegedAt :: Maybe ZonedTime,
+--     acknowlegedBy :: Maybe Users.UserId,
+--     anomalyType :: AnomalyTypes,
+--     action :: AnomalyActions,
+--     targetId :: UUID.UUID,
+--     dataObject :: AnomalyData,
+--     endpointId :: Endpoints.EndpointId
+--   }
+--   deriving stock (Show, Generic)
+
+-- makeFieldLabelsNoPrefix ''AnomalyVM
+
+data AnomalyVM = AnomalyCM
   { id :: AnomalyId,
     createdAt :: ZonedTime,
     updatedAt :: ZonedTime,
@@ -140,10 +157,13 @@ data AnomalyVM = AnomalyVM
     anomalyType :: AnomalyTypes,
     action :: AnomalyActions,
     targetId :: UUID.UUID,
-    dataObject :: AnomalyData,
-    endpointId :: Endpoints.EndpointId
+    field :: Maybe Fields.Field,
+    shape :: Maybe Shapes.Shape,
+    format :: Maybe Formats.Format,
+    endpoint :: Maybe Endpoints.Endpoint
   }
   deriving stock (Show, Generic)
+  deriving anyclass (FromRow, Default)
 
 makeFieldLabelsNoPrefix ''AnomalyVM
 
@@ -153,36 +173,33 @@ selectAnomalies pid = do
   -- SHould be an auto updating view using timescale db functionality.
   let q =
         [sql| 
-	SELECT an.id, an.created_at, an.updated_at, an.project_id, an.acknowleged_at,an.acknowleged_by, an.anomaly_type, an.action, an.target_id,
-	(CASE WHEN anomaly_type='field' THEN to_jsonb(fields.*) 
-		 WHEN anomaly_type='shape' THEN to_jsonb(shapes.*) 
-		 WHEN anomaly_type='format' THEN to_jsonb(formats.*) 
-		 WHEN anomaly_type='endpoint' THEN to_jsonb(endpoints.*) 
-	 END
-	) data_object,
-	(CASE WHEN anomaly_type='field' THEN fields.endpoint_id 
-		 WHEN anomaly_type='shape' THEN shapes.endpoint_id
-		 WHEN anomaly_type='format' THEN (select endpoint_id from apis.fields where id=formats.field_id )
-		 WHEN anomaly_type='endpoint' THEN endpoints.id
-	 END
-	) endpoint_id
+	SELECT 
+    an.id, an.created_at, an.updated_at, an.project_id, an.acknowleged_at,an.acknowleged_by, an.anomaly_type, an.action, an.target_id,
+    to_jsonb(fields.*) field,
+    to_jsonb(shapes.*) shape,
+    to_jsonb(formats.*) format,
+    to_jsonb(endpoints.*) endpoint
 	FROM apis.anomaly an
-	LEFT JOIN apis.fields on target_id=fields.id
-	LEFT JOIN apis.shapes on target_id=shapes.id
 	LEFT JOIN apis.formats on target_id=formats.id
-	LEFT JOIN apis.endpoints on target_id=endpoints.id
-
+	LEFT JOIN apis.fields on (fields.id=target_id OR fields.id=formats.field_id) 
+	LEFT JOIN apis.shapes on target_id=shapes.id
+	LEFT JOIN apis.endpoints 
+      ON (endpoints.id = target_id 
+          OR endpoints.id = fields.endpoint_id 
+          OR endpoints.id = shapes.endpoint_id
+          )
   where an.project_id = ?
-	;
       |]
   let options = Only pid
-  resp <- query Select q options
-  pure $ Vector.map normalizeAnomaly resp
+  query Select q options
 
-normalizeAnomaly :: AnomalyVM' -> AnomalyVM
-normalizeAnomaly AnomalyVM' {..} =
-  let dataObject' = aesonToAnomalyData anomalyType dataObject
-   in AnomalyVM {dataObject = dataObject', ..}
+-- resp <- query Select q options
+-- pure $ Vector.map normalizeAnomaly resp
+
+-- normalizeAnomaly :: AnomalyVM' -> AnomalyVM
+-- normalizeAnomaly AnomalyVM' {..} =
+--   let dataObject' = aesonToAnomalyData anomalyType dataObject
+--    in AnomalyVM {dataObject = dataObject', ..}
 
 aesonToAnomalyData :: AnomalyTypes -> AE.Value -> AnomalyData
 aesonToAnomalyData at val = case at of
@@ -198,4 +215,4 @@ aesonToAnomalyData at val = case at of
     AE.Success shape -> ADShape shape
   ATFormat -> case AE.fromJSON val of
     AE.Error v -> ADUnknown $ AE.toJSON v
-    AE.Success format -> ADEndpoint format
+    AE.Success format -> ADFormat format

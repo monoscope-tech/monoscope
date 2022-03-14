@@ -13,7 +13,7 @@ module Models.Apis.Fields
   )
 where
 
-import Data.Aeson (FromJSON)
+import Data.Aeson (FromJSON, ToJSON)
 import Data.Aeson qualified as AE
 import Data.Default
 import Data.List (groupBy)
@@ -25,6 +25,7 @@ import Database.PostgreSQL.Entity.DBT (QueryNature (..), query)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ResultError (..), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, fromField, returnError)
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
 import Database.PostgreSQL.Transact as PgT (DBT, queryOne)
@@ -46,7 +47,7 @@ import Web.HttpApiData (FromHttpApiData)
 newtype FieldId = FieldId {unFieldId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving
-    (Eq, Ord, FromJSON, FromField, ToField, FromHttpApiData, Default)
+    (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default)
     via UUID.UUID
 
 data FieldTypes
@@ -59,8 +60,12 @@ data FieldTypes
   | FTNull
   deriving stock (Eq, Generic, Show)
   deriving
-    (AE.FromJSON, AE.ToJSON)
-    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] FieldTypes
+    (AE.ToJSON)
+    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "FT", DAE.CamelToSnake]] FieldTypes
+
+instance FromJSON FieldTypes where
+  parseJSON (AE.String v) = maybe empty pure (parseFieldTypes v)
+  parseJSON _ = empty
 
 instance Default FieldTypes where
   def = FTUnknown
@@ -100,8 +105,12 @@ data FieldCategoryEnum
   | FCResponseBody
   deriving stock (Eq, Generic, Show, Ord)
   deriving
-    (AE.FromJSON, AE.ToJSON)
-    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] FieldCategoryEnum
+    (AE.ToJSON)
+    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "FC", DAE.CamelToSnake]] FieldCategoryEnum
+
+instance FromJSON FieldCategoryEnum where
+  parseJSON (AE.String v) = maybe empty pure (parseFieldCategoryEnum v)
+  parseJSON _ = empty
 
 instance Default FieldCategoryEnum where
   def = FCQueryParam
@@ -149,11 +158,14 @@ data Field = Field
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, Default)
   deriving
-    (AE.FromJSON)
+    (AE.ToJSON, AE.FromJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Field
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "fields", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Field)
+  deriving
+    (FromField)
+    via Aeson Field
 
 instance Ord Field where
   (<=) f1 f2 =
