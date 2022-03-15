@@ -6,6 +6,7 @@ import Colog (LogAction)
 import Config (DashboardM, HeadersTrigger, HeadersTriggerRedirect, ctxToHandler)
 import Config qualified
 import Data.Pool (Pool)
+import DataSeeding qualified
 import Database.PostgreSQL.Simple (Connection)
 import Lucid
 import Models.Apis.Endpoints qualified as Endpoints
@@ -45,9 +46,9 @@ type ProtectedAPI =
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "manual_ingest" :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "manual_ingest" :> ReqBody '[FormUrlEncoded] ManualIngestion.RequestMessageForm :> Post '[HTML] (Html ())
-    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "log" :> Get '[HTML] (Html ())
-
--- :<|> "p" :> Capture "projectID" Projects.ProjectId :> "manualIngest" :> Get '[HTML] (Html ())
+    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "bulk_seed_and_ingest" :> Get '[HTML] (Html ())
+    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "bulk_seed_and_ingest" :> ReqBody '[FormUrlEncoded] DataSeeding.DataSeedingForm :> Post '[HTML] (Html ())
+    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "logs" :> Get '[HTML] (Html ())
 
 type PublicAPI =
   "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
@@ -94,6 +95,8 @@ protectedServer sess =
     :<|> EndpointDetails.fieldDetailsPartialH sess
     :<|> ManualIngestion.manualIngestGetH sess
     :<|> ManualIngestion.manualIngestPostH sess
+    :<|> DataSeeding.dataSeedingGetH sess
+    :<|> DataSeeding.dataSeedingPostH sess
     :<|> Log.apiLog sess
 
 publicServer :: ServerT PublicAPI DashboardM

@@ -219,14 +219,8 @@ navbar currUser = do
     });
 
 
-<<<<<<< HEAD
-    // document.body.addEventListener("click", (e)=> {
-    //  notyf.success('Works');
-    // });
-=======
     document.body.addEventListener("", (e)=> {
       notyf.success('Works');
     });
->>>>>>> ccb84ab (Logs page)
 
   |]
