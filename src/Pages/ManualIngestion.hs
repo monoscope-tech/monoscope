@@ -40,7 +40,7 @@ data RequestMessageForm = RequestMessageForm
   deriving anyclass (FromForm)
 
 reqMsgFormToReqMsg :: UUID.UUID -> RequestMessageForm -> Either Text RequestMessages.RequestMessage
-reqMsgFormToReqMsg pid RequestMessageForm {..} = do
+reqMsgFormToReqMsg pid RequestMessageForm {urlPath, ..} = do
   reqHeaders <- eitherStrToText $ eitherDecodeStrict (encodeUtf8 @Text @ByteString requestHeaders) :: Either Text Value
   respHeaders <- eitherStrToText $ eitherDecodeStrict (encodeUtf8 @Text @ByteString responseHeaders) :: Either Text Value
   queryParams' <- eitherStrToText $ eitherDecodeStrict (encodeUtf8 @Text @ByteString queryParams) :: Either Text Value
@@ -54,6 +54,8 @@ reqMsgFormToReqMsg pid RequestMessageForm {..} = do
         pathParams = pathParams',
         requestBody = B64.encodeBase64 requestBody,
         responseBody = B64.encodeBase64 responseBody,
+        sdkType = RequestMessages.GoGin,
+        rawUrl = urlPath,
         ..
       }
 
@@ -167,6 +169,10 @@ manualIngestPage = do
         }
         reqBodyEditor.set(initialJsonB)
         respBodyEditor.set(initialJsonB)
+
+        var pathInitialJsonB = {"abc":"xyz"}
+        pathParamsEditor.set(pathInitialJsonB)
+        queryParamsEditor.set(pathInitialJsonB)
     |]
 
 inputText :: Text -> Text -> Html ()

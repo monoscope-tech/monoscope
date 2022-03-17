@@ -128,7 +128,7 @@ endpointDetails endpoint fieldsM reqsByStatsByMinJ percentiles reqLatenciesRolle
       div_ [class_ "space-y-16 pb-20"] $ do
         endpointStats percentiles
         reqResSection "Request" True fieldsM
-        reqResSection "Response" True fieldsM
+        reqResSection "Response" False fieldsM
     aside_ [class_ "w-1/3 h-full overflow-y-scroll bg-white h-screen -mr-8 -mt-5 border border-gray-200 p-5 sticky top-0", id_ "detailSidebar"] ""
     script_
       [type_ "text/hyperscript"]
@@ -310,8 +310,9 @@ reqResSection title isRequest fieldsM =
     div_ [class_ "bg-white border border-gray-100 rounded-xl py-10 px-5 space-y-6 reqResSubSection"] $ do
       if isRequest
         then do
-          subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader fieldsM)
+          subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam fieldsM)
           subSubSection (title <> " Query Params") (Map.lookup Fields.FCQueryParam fieldsM)
+          subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader fieldsM)
           subSubSection (title <> " Body") (Map.lookup Fields.FCRequestBody fieldsM)
         else do
           subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader fieldsM)

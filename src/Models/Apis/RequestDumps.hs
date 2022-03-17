@@ -41,6 +41,7 @@ data RequestDump = RequestDump
     projectId :: UUID.UUID,
     host :: Text,
     urlPath :: Text,
+    rawUrl :: Text,
     pathParams :: AE.Value,
     method :: Text,
     referer :: Text,
@@ -196,12 +197,12 @@ data LabelValue = LabelValue (Int, Int, Maybe Text)
   deriving stock (Show)
 
 instance ToJSON LabelValue where
-  toJSON (LabelValue (x, y, Nothing)) = object ["label" .= ((show x) :: Text), "value" .= (y :: Int)]
+  toJSON (LabelValue (x, y, Nothing)) = object ["label" .= (show x :: Text), "value" .= (y :: Int)]
   toJSON (LabelValue (x, y, Just z)) =
     object
       [ "label" .= (z :: Text),
-        "lineposition" .= ((show x) :: Text),
-        "labelposition" .= ((show x) :: Text),
+        "lineposition" .= (show x :: Text),
+        "labelposition" .= (show x :: Text),
         "vline" .= ("true" :: Text),
         "labelhalign" .= ("center" :: Text),
         "dashed" .= ("1" :: Text)

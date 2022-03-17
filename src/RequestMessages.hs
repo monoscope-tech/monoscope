@@ -5,6 +5,7 @@ module RequestMessages
     requestMsgToDumpAndEndpoint,
     valueToFormatStr,
     valueToFields,
+    SDKTypes (..),
   )
 where
 
@@ -38,24 +39,30 @@ import Text.Regex.TDFA ((=~))
 -- >>> import Data.Vector qualified as Vector
 -- >>> import Data.Aeson.QQ (aesonQQ)
 
+data SDKTypes = GoGin | GoBuiltIn
+  deriving stock (Show, Generic)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SDKTypes
+
 -- | RequestMessage represents a message for a single request pulled from pubsub.
 data RequestMessage = RequestMessage
-  { timestamp :: ZonedTime,
-    projectId :: UUID.UUID,
+  { duration :: Int, -- in nanoseconds
     host :: Text,
     method :: Text,
-    referer :: Text,
-    urlPath :: Text,
-    pathParams :: AE.Value,
+    pathParams :: AE.Value, --- key value map of the params to their values in the original urlpath.
+    projectId :: UUID.UUID,
     protoMajor :: Int,
     protoMinor :: Int,
-    duration :: Int,
-    queryParams :: AE.Value,
-    requestHeaders :: AE.Value,
-    responseHeaders :: AE.Value,
+    queryParams :: AE.Value, -- key value map of a key to a list of text values map[string][]string
+    rawUrl :: Text, -- raw request uri: path?query combination
+    referer :: Text,
     requestBody :: Text,
+    requestHeaders :: AE.Value, -- key value map of a key to a list of text values map[string][]string
     responseBody :: Text,
-    statusCode :: Int
+    responseHeaders :: AE.Value, -- key value map of a key to a list of text values map[string][]string
+    sdkType :: SDKTypes, -- convension should be <language>-<router library> eg: go-gin, go-builtin, js-express
+    statusCode :: Int,
+    urlPath :: Text,
+    timestamp :: ZonedTime
   }
   deriving stock (Show, Generic)
   deriving
@@ -78,15 +85,12 @@ requestMsgToDumpAndEndpoint rM now dumpID = do
   respBodyB64 <- B64.decodeBase64 $ encodeUtf8 $ rM ^. #responseBody
   let respBody = fromRight [aesonQQ| {} |] $ AE.eitherDecodeStrict respBodyB64
 
+  let pathParamFields = valueToFields $ rM ^. #pathParams
   let queryParamFields = valueToFields $ rM ^. #queryParams
   let reqHeaderFields = valueToFields $ rM ^. #requestHeaders
   let respHeaderFields = valueToFields $ rM ^. #responseHeaders
   let reqBodyFields = valueToFields reqBody
   let respBodyFields = valueToFields respBody
-
-  -- let queryParamFieldsHashes = fieldsToHash queryParamFields
-  -- let reqBodyFieldHashes = fieldsToHash reqBodyFields
-  -- let respBodyFieldHashes = fieldsToHash respBodyFields
 
   let queryParamsKeypaths = Vector.fromList $ map fst queryParamFields :: Vector Text
   let requestHeadersKeypaths = Vector.fromList $ map fst reqHeaderFields :: Vector Text
@@ -94,12 +98,19 @@ requestMsgToDumpAndEndpoint rM now dumpID = do
   let requestBodyKeypaths = Vector.fromList $ map fst reqBodyFields :: Vector Text
   let responseBodyKeypaths = Vector.fromList $ map fst respBodyFields :: Vector Text
 
+  let pathParamsFieldsDTO = pathParamFields & map (fieldsToFieldDTO Fields.FCPathParam (rM ^. #projectId))
   let queryParamsFieldsDTO = queryParamFields & map (fieldsToFieldDTO Fields.FCQueryParam (rM ^. #projectId))
   let reqHeadersFieldsDTO = reqHeaderFields & map (fieldsToFieldDTO Fields.FCRequestHeader (rM ^. #projectId))
   let respHeadersFieldsDTO = respHeaderFields & map (fieldsToFieldDTO Fields.FCResponseHeader (rM ^. #projectId))
   let reqBodyFieldsDTO = reqBodyFields & map (fieldsToFieldDTO Fields.FCRequestBody (rM ^. #projectId))
   let respBodyFieldsDTO = respBodyFields & map (fieldsToFieldDTO Fields.FCResponseBody (rM ^. #projectId))
-  let fieldsDTO = queryParamsFieldsDTO <> reqHeadersFieldsDTO <> respHeadersFieldsDTO <> reqBodyFieldsDTO <> respBodyFieldsDTO
+  let fieldsDTO =
+        pathParamsFieldsDTO
+          <> queryParamsFieldsDTO
+          <> reqHeadersFieldsDTO
+          <> respHeadersFieldsDTO
+          <> reqBodyFieldsDTO
+          <> respBodyFieldsDTO
 
   let shape =
         Shapes.Shape
@@ -124,6 +135,7 @@ requestMsgToDumpAndEndpoint rM now dumpID = do
             projectId = rM ^. #projectId,
             host = rM ^. #host,
             urlPath = rM ^. #urlPath,
+            rawUrl = rM ^. #rawUrl,
             pathParams = rM ^. #pathParams,
             method = rM ^. #method,
             referer = rM ^. #referer,
@@ -155,11 +167,6 @@ requestMsgToDumpAndEndpoint rM now dumpID = do
             urlParams = AET.emptyObject,
             method = rM ^. #method,
             hosts = [rM ^. #host]
-            -- requestHashes = [reqBodyFieldHashes],
-            -- responseHashes = [respBodyFieldHashes],
-            -- queryParamHashes = [queryParamFieldsHashes]
-            -- FIXME: Implement query param hashes.
-            -- FIXME: Should we have request and response headers? Or should they be part of request and response hashes?
           }
   pure (reqDump, endpoint, fieldsDTO, shape)
 

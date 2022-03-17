@@ -70,7 +70,7 @@ endpointList enps = do
                     td_ [class_ "text-left pr-4 "] $ do
                       input_ [type_ "checkbox"]
                     td_ [class_ "text-right"] $ do
-                      a_ [href_ ("/p/" <> Projects.projectIdText (enp ^. #projectId) <> "/endpoints/" <> Endpoints.endpointIdText (enp ^. #id))] $ do
+                      a_ [href_ $ Endpoints.endpointToUrlPath enp] $ do
                         span_ [class_ $ "endpoint endpoint-" <> toLower (enp ^. #method)] $ toHtml $ enp ^. #method
                     td_ [class_ ""] $ do
                       a_ [href_ ("/p/" <> Projects.projectIdText (enp ^. #projectId) <> "/endpoints/" <> Endpoints.endpointIdText (enp ^. #id))] $ do

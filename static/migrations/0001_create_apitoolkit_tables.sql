@@ -2,7 +2,8 @@ BEGIN;
 
 CREATE EXTENSION IF NOT EXISTS citext;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
--- CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;
+CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;
+CREATE EXTENSION IF NOT EXISTS timescaledb_toolkit;
 CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
 
 
@@ -148,8 +149,8 @@ CREATE TABLE IF NOT EXISTS apis.shapes
     UNIQUE(project_id, endpoint_id, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, response_headers_keypaths)
 );
 
-CREATE TYPE apis.field_type AS ENUM ('unknown','string','number','bool','object', 'list', 'null');
-CREATE TYPE apis.field_category AS ENUM ('queryparam', 'request_header','response_headers', 'request_body', 'response_body');
+CREATE TYPE apis.field_type AS ENUM ('unknown','string','number','bool','object', 'list', 'null', 'number_list', 'string_list');
+CREATE TYPE apis.field_category AS ENUM ('path_param','query_param', 'request_header','response_header', 'request_body', 'response_body');
 CREATE TABLE IF NOT EXISTS apis.fields
 (
     id uuid NOT NULL DEFAULT gen_random_uuid()  PRIMARY KEY,
@@ -165,8 +166,8 @@ CREATE TABLE IF NOT EXISTS apis.fields
     description text NOT NULL DEFAULT ''::text,
     key_path text[] NOT NULL DEFAULT '{}'::text[],
     key_path_str text NOT NULL DEFAULT '',
-    field_category text NOT NULL DEFAULT '',
-    UNIQUE (project_id, endpoint_id, key_path_str, format)
+    field_category apis.field_category NOT NULL DEFAULT 'request_body'::apis.field_category,
+    UNIQUE (project_id, endpoint_id, field_category, key_path_str, format)
 );
 SELECT manage_updated_at('apis.fields');
 
@@ -197,7 +198,8 @@ CREATE TABLE IF NOT EXISTS apis.anomalies
   acknowleged_by UUID REFERENCES users.users (id), -- user who acknowleges the anomaly
   anomaly_type apis.anomaly_type NOT NULL DEFAULT 'unknown'::apis.anomaly_type,
   action apis.anomaly_action NOT NULL DEFAULT 'unknown'::apis.anomaly_action,
-  target_id uuid
+  target_id uuid,
+  archived_at TIMESTAMP WITH TIME ZONE
 );
 SELECT manage_updated_at('apis.anomalies');
 
@@ -236,7 +238,7 @@ CREATE TRIGGER shapes_created_anomaly AFTER INSERT ON apis.shapes FOR EACH ROW E
 CREATE OR REPLACE FUNCTION apis.create_field_and_formats(
   i_project_id UUID, i_endpoint_id UUID, i_key TEXT, i_field_type apis.field_type, i_field_type_override TEXT, 
   i_format TEXT, i_format_override TEXT, i_description TEXT, i_key_path TEXT[], i_key_path_str TEXT, 
-  i_field_category TEXT, i_examples TEXT[], i_examples_max_count INT 
+  i_field_category apis.field_category, i_examples TEXT[], i_examples_max_count INT 
 )
 RETURNS setof apis.formats AS $$
 BEGIN
@@ -244,7 +246,7 @@ BEGIN
   with returned_fields AS (
     INSERT INTO apis.fields (project_id, endpoint_id, key, field_type, field_type_override, format, format_override, description, key_path, key_path_str, field_category)
       VALUES(i_project_id, i_endpoint_id, i_key, i_field_type, i_field_type_override, i_format, i_format_override, i_description, i_key_path, i_key_path_str, i_field_category)
-      ON CONFLICT (project_id, endpoint_id, key_path_str,format) DO NOTHING
+      ON CONFLICT (project_id, endpoint_id, field_category, key_path_str,format) DO NOTHING
     RETURNING project_id, id, field_type, format,i_examples
   ), current_fields AS (
     SELECT * FROM returned_fields
@@ -276,6 +278,7 @@ CREATE TABLE IF NOT EXISTS apis.request_dumps
     project_id uuid NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
     host text NOT NULL DEFAULT '',
     url_path text NOT NULL DEFAULT '',
+    raw_url text NOT NULL DEFAULT '',
     path_params jsonb NOT NULL DEFAULT '{}',
     method text NOT NULL DEFAULT '',
     referer text NOT NULL DEFAULT '',

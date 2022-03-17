@@ -35,15 +35,11 @@ bodyWrapper sessM currProject pageTitle child =
           link_ [rel_ "stylesheet", type_ "text/css", href_ "/assets/css/tailwind.min.css"]
           link_ [rel_ "stylesheet", type_ "text/css", href_ "https://cdn.jsdelivr.net/npm/notyf@3/notyf.min.css"]
           link_ [rel_ "stylesheet", type_ "text/css", href_ "https://cdn.jsdelivr.net/npm/simple-datatables@latest/dist/style.css"]
-          script_ [src_ "https://unpkg.com/simple-datatables"] ("" :: Text)
-          script_ [src_ "https://unpkg.com/htmx.org@1.6.1"] ("" :: Text)
-          script_ [src_ "https://cdn.jsdelivr.net/npm/notyf@3/notyf.min.js"] ("" :: Text)
-          script_ [src_ "https://unpkg.com/hyperscript.org@0.9.3"] ("" :: Text)
-          script_ [src_ "https://cdn.fusioncharts.com/fusioncharts/latest/fusioncharts.js"] ("" :: Text)
-          script_ [src_ "https://cdn.fusioncharts.com/fusioncharts/latest/themes/fusioncharts.theme.fusion.js"] ("" :: Text)
           link_ [rel_ "preconnect", href_ "https://fonts.googleapis.com"]
           link_ [rel_ "preconnect", href_ "https://fonts.gstatic.com", crossorigin_ "true"]
-          link_ [href_ "https://fonts.googleapis.com/css2?family=Inconsolata&family=Poppins:wght@400;700&display=swap", rel_ "stylesheet"]
+          link_ [href_ "https://fonts.googleapis.com/css2?family=Inconsolata&family=Poppins:wght@400;500;600&display=swap", rel_ "stylesheet"]
+          script_ [src_ "https://cdn.fusioncharts.com/fusioncharts/latest/fusioncharts.js"] ("" :: Text)
+          script_ [src_ "https://cdn.fusioncharts.com/fusioncharts/latest/themes/fusioncharts.theme.fusion.js"] ("" :: Text)
 
         body_ [class_ "text-gray-700"] $ do
           section_ [class_ "flex flex-row bg-gray-50 h-screen overflow-hidden"] $ do
@@ -52,6 +48,17 @@ bodyWrapper sessM currProject pageTitle child =
             section_ [class_ "grow h-full"] $ do
               navbar currUser
               child
+
+          script_ [src_ "https://unpkg.com/simple-datatables"] ("" :: Text)
+          script_ [src_ "https://unpkg.com/htmx.org@1.6.1"] ("" :: Text)
+          script_ [src_ "https://cdn.jsdelivr.net/npm/notyf@3/notyf.min.js"] ("" :: Text)
+          script_ [src_ "https://unpkg.com/hyperscript.org@0.9.3"] ("" :: Text)
+          script_ [src_ "https://unpkg.com/@popperjs/core@2"] ("" :: Text)
+          script_ [src_ "https://unpkg.com/tippy.js@6"] ("" :: Text)
+          script_
+            [text|
+            tippy('[data-tippy-content]');
+            |]
 
 projectsDropDown :: Projects.Project -> Vector.Vector Projects.Project -> Html ()
 projectsDropDown currProject projects =

@@ -1,16 +1,14 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module Models.Apis.Anomalies (selectAnomalies, AnomalyVM (..), AnomalyActions (..), AnomalyTypes (..), AnomalyData (..)) where
+module Models.Apis.Anomalies (selectAnomalies, AnomalyVM (..), AnomalyActions (..), AnomalyTypes (..)) where
 
-import Data.Aeson qualified as AE
 import Data.Default (Default, def)
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
-import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query)
-import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
+import Database.PostgreSQL.Simple (FromRow, Only (Only))
 import Database.PostgreSQL.Simple.FromField (FromField, ResultError (ConversionFailed, UnexpectedNull), fromField, returnError)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
@@ -92,61 +90,6 @@ instance FromField AnomalyActions where
           Just a -> pure a
           Nothing -> returnError ConversionFailed f $ "Conversion error: Expected 'anomaly_actions' enum, got " <> decodeUtf8 bs <> " instead."
 
-data Anomaly = Anomaly
-  { id :: AnomalyId,
-    createdAt :: ZonedTime,
-    updatedAt :: ZonedTime,
-    projectId :: Projects.ProjectId,
-    acknowlegedAt :: Maybe ZonedTime,
-    acknowlegedBy :: Maybe Users.UserId,
-    anomalyType :: AnomalyTypes,
-    action :: AnomalyActions,
-    targetId :: UUID.UUID
-  }
-
-makeFieldLabelsNoPrefix ''Anomaly
-
-data AnomalyData
-  = ADEndpoint Endpoints.Endpoint
-  | ADShape Shapes.Shape
-  | ADField Fields.Field
-  | ADFormat Formats.Format
-  | ADUnknown AE.Value
-  deriving stock (Show)
-
--- data AnomalyVM' = AnomalyVM'
---   { id :: AnomalyId,
---     createdAt :: ZonedTime,
---     updatedAt :: ZonedTime,
---     projectId :: Projects.ProjectId,
---     acknowlegedAt :: Maybe ZonedTime,
---     acknowlegedBy :: Maybe Users.UserId,
---     anomalyType :: AnomalyTypes,
---     action :: AnomalyActions,
---     targetId :: UUID.UUID,
---     dataObject :: AE.Value,
---     endpointId :: Endpoints.EndpointId
---   }
---   deriving stock (Show, Generic)
---   deriving anyclass (FromRow, ToRow, Default)
-
--- data AnomalyVM = AnomalyVM
---   { id :: AnomalyId,
---     createdAt :: ZonedTime,
---     updatedAt :: ZonedTime,
---     projectId :: Projects.ProjectId,
---     acknowlegedAt :: Maybe ZonedTime,
---     acknowlegedBy :: Maybe Users.UserId,
---     anomalyType :: AnomalyTypes,
---     action :: AnomalyActions,
---     targetId :: UUID.UUID,
---     dataObject :: AnomalyData,
---     endpointId :: Endpoints.EndpointId
---   }
---   deriving stock (Show, Generic)
-
--- makeFieldLabelsNoPrefix ''AnomalyVM
-
 data AnomalyVM = AnomalyCM
   { id :: AnomalyId,
     createdAt :: ZonedTime,
@@ -160,7 +103,8 @@ data AnomalyVM = AnomalyCM
     field :: Maybe Fields.Field,
     shape :: Maybe Shapes.Shape,
     format :: Maybe Formats.Format,
-    endpoint :: Maybe Endpoints.Endpoint
+    endpoint :: Maybe Endpoints.Endpoint,
+    archivedAt :: Maybe ZonedTime
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, Default)
@@ -178,8 +122,9 @@ selectAnomalies pid = do
     to_jsonb(fields.*) field,
     to_jsonb(shapes.*) shape,
     to_jsonb(formats.*) format,
-    to_jsonb(endpoints.*) endpoint
-	FROM apis.anomaly an
+    to_jsonb(endpoints.*) endpoint,
+    an.archived_at
+	FROM apis.anomalies an
 	LEFT JOIN apis.formats on target_id=formats.id
 	LEFT JOIN apis.fields on (fields.id=target_id OR fields.id=formats.field_id) 
 	LEFT JOIN apis.shapes on target_id=shapes.id
@@ -192,27 +137,3 @@ selectAnomalies pid = do
       |]
   let options = Only pid
   query Select q options
-
--- resp <- query Select q options
--- pure $ Vector.map normalizeAnomaly resp
-
--- normalizeAnomaly :: AnomalyVM' -> AnomalyVM
--- normalizeAnomaly AnomalyVM' {..} =
---   let dataObject' = aesonToAnomalyData anomalyType dataObject
---    in AnomalyVM {dataObject = dataObject', ..}
-
-aesonToAnomalyData :: AnomalyTypes -> AE.Value -> AnomalyData
-aesonToAnomalyData at val = case at of
-  ATUnknown -> ADUnknown val
-  ATEndpoint -> case AE.fromJSON val of
-    AE.Error v -> ADUnknown $ AE.toJSON v
-    AE.Success enp -> ADEndpoint enp
-  ATField -> case AE.fromJSON val of
-    AE.Error v -> ADUnknown $ AE.toJSON v
-    AE.Success field -> ADField field
-  ATShape -> case AE.fromJSON val of
-    AE.Error v -> ADUnknown $ AE.toJSON v
-    AE.Success shape -> ADShape shape
-  ATFormat -> case AE.fromJSON val of
-    AE.Error v -> ADUnknown $ AE.toJSON v
-    AE.Success format -> ADFormat format

@@ -8,6 +8,7 @@ module Models.Apis.Endpoints
     endpointsByProject,
     endpointById,
     endpointIdText,
+    endpointToUrlPath,
   )
 where
 
@@ -55,7 +56,7 @@ data Endpoint = Endpoint
     updatedAt :: ZonedTime,
     projectId :: Projects.ProjectId,
     urlPath :: Text,
-    urlParams :: AE.Value,
+    urlParams :: AE.Value, -- Key value map of key to the type. Needs a bit more figuring out.
     method :: Text,
     hosts :: Vector.Vector Text
   }
@@ -66,6 +67,10 @@ data Endpoint = Endpoint
   deriving (FromField) via Aeson Endpoint
 
 makeFieldLabelsNoPrefix ''Endpoint
+
+-- | endpointToUrlPath builds an apitoolkit path link to the endpoint details page of that endpoint.
+endpointToUrlPath :: Endpoint -> Text
+endpointToUrlPath enp = "/p/" <> Projects.projectIdText (enp ^. #projectId) <> "/endpoints/" <> endpointIdText (enp ^. #id)
 
 upsertEndpoints :: Endpoint -> PgT.DBT IO (Maybe EndpointId)
 upsertEndpoints endpoint = queryOne Insert q options

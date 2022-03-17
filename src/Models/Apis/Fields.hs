@@ -6,6 +6,7 @@ module Models.Apis.Fields
     FieldCategoryEnum (..),
     FieldId (..),
     selectFields,
+    fieldIdText,
     fieldById,
     upsertFields,
     parseFieldCategoryEnum,
@@ -50,6 +51,9 @@ newtype FieldId = FieldId {unFieldId :: UUID.UUID}
     (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default)
     via UUID.UUID
 
+fieldIdText :: FieldId -> Text
+fieldIdText = UUID.toText . unFieldId
+
 data FieldTypes
   = FTUnknown
   | FTString
@@ -58,6 +62,8 @@ data FieldTypes
   | FTObject
   | FTList
   | FTNull
+  | FTStringList
+  | FTNumberList
   deriving stock (Eq, Generic, Show)
   deriving
     (AE.ToJSON)
@@ -78,6 +84,8 @@ instance ToField FieldTypes where
   toField FTList = Escape "list"
   toField FTNull = Escape "null"
   toField FTUnknown = Escape "unknown"
+  toField FTStringList = Escape "string_list"
+  toField FTNumberList = Escape "number_list"
 
 parseFieldTypes :: (Eq s, IsString s) => s -> Maybe FieldTypes
 parseFieldTypes "string" = Just FTString
@@ -99,6 +107,7 @@ instance FromField FieldTypes where
 
 data FieldCategoryEnum
   = FCQueryParam
+  | FCPathParam
   | FCRequestHeader
   | FCResponseHeader
   | FCRequestBody
@@ -116,14 +125,16 @@ instance Default FieldCategoryEnum where
   def = FCQueryParam
 
 instance ToField FieldCategoryEnum where
-  toField FCQueryParam = Escape "queryparam"
+  toField FCQueryParam = Escape "query_param"
+  toField FCPathParam = Escape "path_param"
   toField FCRequestHeader = Escape "request_header"
   toField FCResponseHeader = Escape "response_header"
   toField FCRequestBody = Escape "request_body"
   toField FCResponseBody = Escape "response_body"
 
 parseFieldCategoryEnum :: (Eq s, IsString s) => s -> Maybe FieldCategoryEnum
-parseFieldCategoryEnum "queryparam" = Just FCQueryParam
+parseFieldCategoryEnum "query_param" = Just FCQueryParam
+parseFieldCategoryEnum "path_param" = Just FCPathParam
 parseFieldCategoryEnum "request_header" = Just FCRequestHeader
 parseFieldCategoryEnum "response_header" = Just FCResponseHeader
 parseFieldCategoryEnum "request_body" = Just FCRequestBody
@@ -213,9 +224,9 @@ selectFields :: Endpoints.EndpointId -> DBT IO (Vector Field)
 selectFields = query Select q
   where
     q =
-      [sql| select id,created_at,updated_at,project_id,endpoint,key,field_type,
+      [sql| select id,created_at,updated_at,project_id,endpoint_id,key,field_type,
                     field_type_override,format,format_override,description,key_path,key_path_str,field_category
-                    from apis.fields where endpoint=? order by field_category, key |]
+                    from apis.fields where endpoint_id=? order by field_category, key |]
 
 fieldById :: FieldId -> DBT IO (Maybe Field)
 fieldById fid = selectById @Field (Only fid)

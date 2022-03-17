@@ -56,6 +56,7 @@ default-extensions:
   - ImportQualifiedPost
   - BlockArguments
   - BangPatterns
+  - NamedFieldPuns
 
 
 extra-source-files:

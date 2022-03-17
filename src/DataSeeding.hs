@@ -6,7 +6,6 @@ import Colog ((<&))
 import Config (DashboardM, logger, pool)
 import Data.Aeson qualified as AE
 import Data.ByteString.Base64 qualified as B64
-import Data.Scientific (scientific)
 import Data.Time (NominalDiffTime, UTCTime, ZonedTime, addUTCTime, diffUTCTime, utc, utcToZonedTime, zonedTimeToUTC)
 import Data.Yaml qualified as Yaml
 import Database.PostgreSQL.Entity.DBT (withPool)
@@ -24,9 +23,8 @@ import Optics.TH (makeFieldLabelsNoPrefix)
 import Pages.BodyWrapper (bodyWrapper)
 import ProcessMessage qualified
 import Relude
-import Relude.Unsafe qualified as Unsafe
 import RequestMessages qualified
-import System.Random (RandomGen, getStdGen, randomIO, randomRs)
+import System.Random (RandomGen, getStdGen, randomRs)
 import Text.RawString.QQ (r)
 import Web.FormUrlEncoded (FromForm)
 
@@ -37,9 +35,7 @@ data FieldConfig = FieldConfig
     children :: [FieldConfig]
   }
   deriving stock (Show, Generic)
-  deriving
-    (AE.FromJSON)
-    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] FieldConfig
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] FieldConfig
 
 makeFieldLabelsNoPrefix ''FieldConfig
 
@@ -56,9 +52,7 @@ data SeedConfig = SeedConfig
     responseBody :: [FieldConfig]
   }
   deriving stock (Show, Generic)
-  deriving
-    (AE.FromJSON)
-    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SeedConfig
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SeedConfig
 
 makeFieldLabelsNoPrefix ''SeedConfig
 
@@ -104,13 +98,16 @@ parseConfigToRequestMessages pid input = do
               let statusCode = 200
               let method = "GET"
               let urlPath = config ^. #path
+              let rawUrl = config ^. #path
               let protoMajor = 1
               let protoMinor = 1
               let referer = "https://google.com"
               let host = "https://apitoolkit.io/"
               let projectId = Projects.unProjectId pid
               let timestamp = timestampV
-              queryParameters <- AE.toJSON <$> mapM fieldConfigToField (config ^. #queryParams)
+              let sdkType = RequestMessages.GoGin
+              pathParams <- AE.toJSON <$> mapM fieldConfigToField (config ^. #pathParams)
+              queryParams <- AE.toJSON <$> mapM fieldConfigToField (config ^. #queryParams)
               requestHeaders <- AE.toJSON <$> mapM fieldConfigToField (config ^. #requestHeaders)
               responseHeaders <- AE.toJSON <$> mapM fieldConfigToField (config ^. #responseHeaders)
               responseBody <- B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField (config ^. #responseBody)

@@ -69,6 +69,44 @@
     display: inline-block;
   }
 
+  .parent-hover .child-hover{
+    visibility: hidden;
+  }
+  .parent-hover:hover .child-hover{
+    visibility: visible;
+  }
+
+  /* [data-tooltip] { */
+  /*   position: relative; */
+  /*   /* border-bottom: 1px dashed #000; */
+  /*   cursor: help */
+  /*   */ 
+  /* } */
+
+  /* [data-tooltip]::after { */
+  /*   position: absolute; */
+  /*   opacity: 0; */
+  /*   pointer-events: none; */
+  /*   content: attr(data-tooltip); */
+  /*   left: 0; */
+  /*   top: calc(100% + 10px); */
+  /*   border-radius: 3px; */
+  /*   box-shadow: 0 0 5px 2px rgba(100, 100, 100, 0.1); */
+  /*   background-color: white; */
+  /*   z-index: 10; */
+  /*   padding: 8px; */
+  /*   width: 100px; */
+  /*   transform: translateY(-20px); */
+  /*   transition: all 150ms cubic-bezier(.25, .8, .25, 1); */
+  /* } */
+
+  /* [data-tooltip]:hover::after { */
+  /*   opacity: 1; */
+  /*   transform: translateY(0); */
+  /*   transition-duration: 300ms; */
+  /* } */
+
+  /* END */
 }
 
 
