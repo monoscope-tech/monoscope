@@ -122,7 +122,6 @@ library
     , lucid-htmx
     , lucid-hyperscript
     , lucid-svg
-    , mr-env
     , neat-interpolation
     , optics-core
     , optics-th
@@ -141,7 +140,6 @@ library
     , servant-lucid
     , servant-server
     , text
-    , text-conversions
     , time
     , transformers-either
     , unordered-containers

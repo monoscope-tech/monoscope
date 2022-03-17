@@ -23,7 +23,8 @@ data EnvConfig = EnvConfig
     testEmail :: Maybe Text,
     apiKeyEncryptionSecretKey :: Text,
     messagesPerPubsubPullBatch :: Int,
-    migrateAndInitializeOnStart :: Bool
+    migrateAndInitializeOnStart :: Bool,
+    sendGridApiKey :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromEnv)

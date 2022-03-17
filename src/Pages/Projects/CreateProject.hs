@@ -99,6 +99,7 @@ createProjectPostH sess createP = do
       let perm = ProjectMembers.parsePermissions permissionField
       let emailField = email cp
       pool <- asks pool
+      envKey <- asks env
       let userID = sess ^. #userId
       puid <- liftIO UUIDV4.nextRandom
       invUserID <- liftIO Users.createUserId
@@ -119,7 +120,7 @@ createProjectPostH sess createP = do
           _  <- ProjectMembers.insertProjectMembers invMember
           pass
 
-      _ <- liftIO $ ProjectEmail.sendInviteMail invEmail
+      _ <- liftIO $ ProjectEmail.sendInviteMail envKey invEmail
 
       pure $ addHeader "HX-Trigger" $ addHeader "/" $ createProjectBody cp (def @CreateProjectFormError)
     

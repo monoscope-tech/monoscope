@@ -118,7 +118,6 @@ library:
     - servant-lucid
     - servant-server
     - text
-    - text-conversions
     - time
     - transformers-either
     - unordered-containers
@@ -131,7 +130,6 @@ library:
     - yaml
     - fakedata
     - random
-    - mr-env
 
 
 executables:
