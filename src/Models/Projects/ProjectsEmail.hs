@@ -89,7 +89,7 @@ data InviteTable = InviteTable
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] InviteTable
   deriving
     (Entity)
-    via (GenericEntity '[Schema "users", TableName "inviteTable", PrimaryKey "id", FieldModifiers '[CamelToSnake]] InviteTable)
+    via (GenericEntity '[Schema "users", TableName "inviteTable", PrimaryKey "inviteID", FieldModifiers '[CamelToSnake]] InviteTable)
 
 inviteUUID :: UUID.UUID -> Project.ProjectId-> ZonedTime -> IO InviteTable
 inviteUUID invID pid tNow = do
@@ -100,6 +100,10 @@ inviteUUID invID pid tNow = do
       expired = False,
       invitedProjectID = pid
     }
+
+-- parseInviteUrl :: 
+
+
 
 insertInviteID :: InviteTable -> PgT.DBT IO ()
 insertInviteID = insert @InviteTable

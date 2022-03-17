@@ -41,6 +41,16 @@ EXCEPTION
     WHEN duplicate_object THEN null;
 END $$;
 
+CREATE TABLE IF NOT EXISTS users.inviteTable
+(
+  inviteID UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+  deleted_at TIMESTAMP WITH TIME ZONE,
+  expired BOOL NOT NULL DEFAULT 't',
+  invitedProjectID UUID ON DELETE CASCADE
+);
+SELECT manage_updated_at('users.inviteTable');
+
 -- create user table
 CREATE TABLE IF NOT EXISTS users.users
 (
