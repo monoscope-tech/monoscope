@@ -102,6 +102,7 @@ createProjectPostH sess createP = do
       envKey <- asks env
       let userID = sess ^. #userId
       puid <- liftIO UUIDV4.nextRandom
+      inviteID <- liftIO UUIDV4.nextRandom
       invUserID <- liftIO Users.createUserId
       tNow <- liftIO getZonedTime
       let pid = Projects.ProjectId puid
@@ -110,7 +111,8 @@ createProjectPostH sess createP = do
       let projectMembers = [ProjectMembers.CreateProjectMembers pid userID adminPermission]
       invUser <- liftIO $ createUserFromInvitation invUserID tNow emailField
       let invMember = [ProjectMembers.CreateProjectMembers pid invUserID perm]
-      let invEmail = ProjectEmail.sendEmail emailField
+      invUUID <- liftIO $ ProjectEmail.inviteUUID inviteID pid tNow
+      let invEmail = ProjectEmail.sendEmail inviteID emailField
 
       _ <- liftIO $
         withPool pool $ do
@@ -118,6 +120,7 @@ createProjectPostH sess createP = do
           _  <- ProjectMembers.insertProjectMembers projectMembers
           _  <- Users.insertUser invUser
           _  <- ProjectMembers.insertProjectMembers invMember
+          _  <- ProjectEmail.insertInviteID invUUID
           pass
 
       _ <- liftIO $ ProjectEmail.sendInviteMail envKey invEmail
