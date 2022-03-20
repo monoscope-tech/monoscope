@@ -41,3 +41,6 @@ go test -run=TestAPIToolkitWorkflow
 ## Useful reading
 - Build reload feedback cycle in haskell: https://functor.tokyo/blog/2019-04-07-ghcid-for-web-app-dev 
 
+# To build the service worker, run
+
+  workbox generateSW workbox-config.js

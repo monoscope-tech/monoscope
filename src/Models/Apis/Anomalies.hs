@@ -1,13 +1,13 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module Models.Apis.Anomalies (selectAnomalies, AnomalyVM (..), AnomalyActions (..), AnomalyTypes (..)) where
+module Models.Apis.Anomalies (selectAnomalies, AnomalyVM (..), AnomalyActions (..), AnomalyTypes (..), AnomalyId (..), acknowlegeAnomaly, anomalyIdText, unAcknowlegeAnomaly) where
 
 import Data.Default (Default, def)
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
-import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query)
+import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query)
 import Database.PostgreSQL.Simple (FromRow, Only (Only))
 import Database.PostgreSQL.Simple.FromField (FromField, ResultError (ConversionFailed, UnexpectedNull), fromField, returnError)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -28,6 +28,9 @@ newtype AnomalyId = AnomalyId {unAnomalyId :: UUID.UUID}
   deriving
     (Eq, Ord, FromField, ToField, FromHttpApiData, Default)
     via UUID.UUID
+
+anomalyIdText :: AnomalyId -> Text
+anomalyIdText = UUID.toText . unAnomalyId
 
 data AnomalyTypes
   = ATUnknown
@@ -110,6 +113,26 @@ data AnomalyVM = AnomalyCM
   deriving anyclass (FromRow, Default)
 
 makeFieldLabelsNoPrefix ''AnomalyVM
+
+acknowlegeAnomaly :: AnomalyId -> Users.UserId -> DBT IO ()
+acknowlegeAnomaly aid uid = void $ execute Update q (uid, aid)
+  where
+    q = [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where id=? |]
+
+unAcknowlegeAnomaly :: AnomalyId -> DBT IO ()
+unAcknowlegeAnomaly aid = void $ execute Update q (Only aid)
+  where
+    q = [sql| update apis.anomalies set acknowleged_by=null, acknowleged_at=null where id=? |]
+
+archiveAnomaly :: AnomalyId -> Users.UserId -> DBT IO ()
+archiveAnomaly aid uid = void $ execute Update q (uid, aid)
+  where
+    q = [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where id=? |]
+
+unArchiveAnomaly :: AnomalyId -> DBT IO ()
+unArchiveAnomaly aid = void $ execute Update q (Only aid)
+  where
+    q = [sql| update apis.anomalies set acknowleged_by=null, acknowleged_at=null where id=? |]
 
 selectAnomalies :: Projects.ProjectId -> DBT IO (Vector AnomalyVM)
 selectAnomalies pid = do

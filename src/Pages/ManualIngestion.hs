@@ -3,6 +3,7 @@ module Pages.ManualIngestion (RequestMessageForm (..), manualIngestGetH, manualI
 import Colog.Core ((<&))
 import Config
 import Data.Aeson (Value, eitherDecodeStrict)
+import Data.Default (def)
 import Data.Text.Encoding.Base64 qualified as B64
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
@@ -11,7 +12,7 @@ import Lucid
 import Lucid.HTMX
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Pages.BodyWrapper (bodyWrapper)
+import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import ProcessMessage qualified
 import Relude
 import RequestMessages qualified
@@ -94,7 +95,13 @@ manualIngestGetH sess pid = do
     liftIO $
       withPool pool $ Projects.selectProjectForUser (Sessions.userId sess, pid)
 
-  pure $ bodyWrapper (Just sess) project "Manual Ingest" manualIngestPage
+  let bwconf =
+        (def :: BWConfig)
+          { sessM = Just sess,
+            currProject = project,
+            pageTitle = "ManualIngest"
+          }
+  pure $ bodyWrapper bwconf manualIngestPage
 
 manualIngestPage :: Html ()
 manualIngestPage = do

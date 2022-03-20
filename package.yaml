@@ -133,6 +133,7 @@ library:
     - yaml
     - fakedata
     - random
+    - http-types
 
 
 executables:

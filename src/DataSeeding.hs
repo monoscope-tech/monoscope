@@ -6,6 +6,7 @@ import Colog ((<&))
 import Config (DashboardM, logger, pool)
 import Data.Aeson qualified as AE
 import Data.ByteString.Base64 qualified as B64
+import Data.Default (def)
 import Data.Time (NominalDiffTime, UTCTime, ZonedTime, addUTCTime, diffUTCTime, utc, utcToZonedTime, zonedTimeToUTC)
 import Data.Yaml qualified as Yaml
 import Database.PostgreSQL.Entity.DBT (withPool)
@@ -20,7 +21,7 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Optics.Core ((^.))
 import Optics.TH (makeFieldLabelsNoPrefix)
-import Pages.BodyWrapper (bodyWrapper)
+import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import ProcessMessage qualified
 import Relude
 import RequestMessages qualified
@@ -154,7 +155,14 @@ dataSeedingGetH sess pid = do
   project <-
     liftIO $
       withPool pool $ Projects.selectProjectForUser (Sessions.userId sess, pid)
-  pure $ bodyWrapper (Just sess) project "Data Seeding" dataSeedingPage
+
+  let bwconf =
+        (def :: BWConfig)
+          { sessM = Just sess,
+            currProject = project,
+            pageTitle = "Data Seeding"
+          }
+  pure $ bodyWrapper bwconf dataSeedingPage
 
 dataSeedingPage :: Html ()
 dataSeedingPage = do

@@ -33,7 +33,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import Optics.Core ((^.))
-import Pages.BodyWrapper (bodyWrapper)
+import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
 import Servant
   ( addHeader,
@@ -137,7 +137,12 @@ invMemberH InviteProjectMemberForm {email, permission} = do
 -- createProjectGetH is the handler for the create projects page
 createProjectGetH :: Sessions.PersistentSession -> DashboardM (Html ())
 createProjectGetH sess = do
-  pure $ bodyWrapper (Just sess) Nothing "Create Project" $ createProjectBody (def @CreateProjectForm) (def @CreateProjectFormError)
+  let bwconf =
+        (def :: BWConfig)
+          { sessM = Just sess,
+            pageTitle = "Endpoints"
+          }
+  pure $ bodyWrapper bwconf $ createProjectBody (def @CreateProjectForm) (def @CreateProjectFormError)
 
 ----------------------------------------------------------------------------------------------------------
 -- createProjectPostH is the handler for the create projects page form handling.

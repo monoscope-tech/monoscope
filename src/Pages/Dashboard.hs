@@ -2,6 +2,7 @@ module Pages.Dashboard (dashboardGetH) where
 
 import Config
 import Data.Aeson qualified as AE
+import Data.Default (def)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Fmt (fixedF, fmt)
@@ -43,7 +44,14 @@ dashboardGetH sess pid = do
 
   let reqsByEndpointJ = decodeUtf8 $ AE.encode reqsByEndpoint
   let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
-  pure $ bodyWrapper (Just sess) project "Dashboard" $ dashboardPage reqLatencyPercentiles reqsByEndpointJ reqLatenciesRolledByStepsJ
+
+  let bwconf =
+        (def :: BWConfig)
+          { sessM = Just sess,
+            currProject = project,
+            pageTitle = "Dashboard"
+          }
+  pure $ bodyWrapper bwconf $ dashboardPage reqLatencyPercentiles reqsByEndpointJ reqLatenciesRolledByStepsJ
 
 dashboardPage :: RequestDumps.Percentiles -> Text -> Text -> Html ()
 dashboardPage percentiles reqsByEndpointJ reqLatenciesRolledByStepsJ = do
@@ -51,8 +59,13 @@ dashboardPage percentiles reqsByEndpointJ reqLatenciesRolledByStepsJ = do
     dStats percentiles
   script_
     [text|
-        let data = $reqsByEndpointJ
-        let schema = [{
+        new FusionCharts({
+          type: "timeseries",
+          renderAt: "reqByStatusCode",
+          width: "95%",
+          height: 350,
+          dataSource: {
+            data: new FusionCharts.DataStore().createDataTable($reqsByEndpointJ, [{
             "name": "Time",
             "type": "date",
             "format": "%Y-%m-%dT%H:%M:%S%Z" // https://www.fusioncharts.com/dev/fusiontime/fusiontime-attributes
@@ -62,18 +75,7 @@ dashboardPage percentiles reqsByEndpointJ reqLatenciesRolledByStepsJ = do
         },{
             "name": "Count",
             "type": "number"
-        }]
-
-        let fusionDataStore = new FusionCharts.DataStore();
-        let fusionTable = fusionDataStore.createDataTable(data, schema);
-
-        new FusionCharts({
-          type: "timeseries",
-          renderAt: "reqByStatusCode",
-          width: "95%",
-          height: 350,
-          dataSource: {
-            data: fusionTable,
+        }]),
             chart: {},
             navigator: {
                 "enabled": 0

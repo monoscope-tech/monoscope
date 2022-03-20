@@ -1,17 +1,19 @@
 module Pages.Endpoints.EndpointList (endpointListH) where
 
 import Config
+import Data.Default (def)
 import Data.Text (toLower)
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT
   ( withPool,
   )
 import Lucid
+import Lucid.HTMX
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Optics.Operators
-import Pages.BodyWrapper (bodyWrapper)
+import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
 
 endpointListH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
@@ -22,7 +24,14 @@ endpointListH sess pid = do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
       endpoints <- Endpoints.endpointsByProject pid
       pure (project, endpoints)
-  pure $ bodyWrapper (Just sess) project "Endpoints" $ endpointList endpoints
+
+  let bwconf =
+        (def :: BWConfig)
+          { sessM = Just sess,
+            currProject = project,
+            pageTitle = "Endpoints"
+          }
+  pure $ bodyWrapper bwconf $ endpointList endpoints
 
 endpointList :: Vector Endpoints.Endpoint -> Html ()
 endpointList enps = do
@@ -51,7 +60,7 @@ endpointList enps = do
           img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-3 w-3 mt-1 "]
       -- table head
 
-      table_ [class_ "table-auto w-full  mt-6", id_ "apitab"] $ do
+      table_ [class_ "table-auto w-full  mt-6", id_ "apitab", hxBoost_ "true"] $ do
         thead_ $ do
           tr_ [class_ "border-b border-b-slate-300 p-10ç "] $ do
             th_ [class_ "text-left "] $ do

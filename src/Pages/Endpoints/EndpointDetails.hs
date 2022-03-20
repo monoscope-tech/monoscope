@@ -4,6 +4,7 @@ module Pages.Endpoints.EndpointDetails (endpointDetailsH, fieldDetailsPartialH) 
 
 import Config
 import Data.Aeson qualified as AE
+import Data.Default (def)
 import Data.Map qualified as Map
 import Data.Text as T (breakOnAll, dropWhile, isInfixOf, replace, splitOn, toLower)
 import Data.Time (defaultTimeLocale, formatTime)
@@ -25,7 +26,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation
 import Optics.Core ((^.))
-import Pages.BodyWrapper (bodyWrapper)
+import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 
@@ -104,7 +105,14 @@ endpointDetailsH sess pid eid = do
 
   let reqsByStatsByMinJ = decodeUtf8 $ AE.encode reqsByStatsByMin
   let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
-  pure $ bodyWrapper (Just sess) project "Endpoint Details" $ endpointDetails endpoint fieldsMap reqsByStatsByMinJ reqLatencyPercentiles reqLatenciesRolledByStepsJ
+  let bwconf =
+        (def :: BWConfig)
+          { sessM = Just sess,
+            currProject = project,
+            pageTitle = "Endpoint Details",
+            menuItem = Just "Endpoints"
+          }
+  pure $ bodyWrapper bwconf $ endpointDetails endpoint fieldsMap reqsByStatsByMinJ reqLatencyPercentiles reqLatenciesRolledByStepsJ
 
 endpointDetails :: Endpoint -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> RequestDumps.Percentiles -> Text -> Html ()
 endpointDetails endpoint fieldsM reqsByStatsByMinJ percentiles reqLatenciesRolledByStepsJ = do
@@ -129,7 +137,7 @@ endpointDetails endpoint fieldsM reqsByStatsByMinJ percentiles reqLatenciesRolle
         endpointStats percentiles
         reqResSection "Request" True fieldsM
         reqResSection "Response" False fieldsM
-    aside_ [class_ "w-1/3 h-full overflow-y-scroll bg-white h-screen -mr-8 -mt-5 border border-gray-200 p-5 sticky top-0", id_ "detailSidebar"] ""
+    aside_ [class_ "w-1/3 h-full overflow-y-scroll bg-white h-screen -mr-8 -mt-20 border border-gray-200 p-5 sticky top-0", id_ "detailSidebar"] ""
     script_
       [type_ "text/hyperscript"]
       [text| 
@@ -142,8 +150,13 @@ endpointDetails endpoint fieldsM reqsByStatsByMinJ percentiles reqLatenciesRolle
       |]
     script_
       [text|
-        let data = $reqsByStatsByMinJ
-        let schema = [{
+        new FusionCharts({
+          type: "timeseries",
+          renderAt: "reqByStatusCode",
+          width: "95%",
+          height: 350,
+          dataSource: {
+            data: new FusionCharts.DataStore().createDataTable($reqsByStatsByMinJ, [{
             "name": "Time",
             "type": "date",
             "format": "%Y-%m-%dT%H:%M:%S%Z" // https://www.fusioncharts.com/dev/fusiontime/fusiontime-attributes
@@ -153,18 +166,7 @@ endpointDetails endpoint fieldsM reqsByStatsByMinJ percentiles reqLatenciesRolle
         },{
             "name": "Count",
             "type": "number"
-        }]
-
-        let fusionDataStore = new FusionCharts.DataStore();
-        let fusionTable = fusionDataStore.createDataTable(data, schema);
-
-        new FusionCharts({
-          type: "timeseries",
-          renderAt: "reqByStatusCode",
-          width: "95%",
-          height: 350,
-          dataSource: {
-            data: fusionTable,
+        }]),
             chart: {},
             navigator: {
                 "enabled": 0

@@ -4,20 +4,26 @@ module Pages.Projects.ListProjects
 where
 
 import Config
+import Data.Default (def)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Optics.Operators
-import Pages.BodyWrapper (bodyWrapper)
+import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
 
 listProjectsGetH :: Sessions.PersistentSession -> DashboardM (Html ())
 listProjectsGetH sess = do
   pool <- asks pool
   projects <- liftIO $ withPool pool $ Projects.selectProjectsForUser (sess ^. #userId)
-  pure $ bodyWrapper (Just sess) Nothing "Projects" $ listProjectsBody projects
+  let bwconf =
+        (def :: BWConfig)
+          { sessM = Just sess,
+            pageTitle = "Endpoints"
+          }
+  pure $ bodyWrapper bwconf $ listProjectsBody projects
 
 listProjectsBody :: Vector.Vector Projects.Project -> Html ()
 listProjectsBody projects = do

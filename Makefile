@@ -1,5 +1,5 @@
 css-start:
-	npx tailwindcss -i ./static/assets/css/tailwind.css -o ./static/assets/css/tailwind.min.css --watch
+	npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --watch
 
 run:
 	stack run

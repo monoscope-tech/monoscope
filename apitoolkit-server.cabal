@@ -120,6 +120,7 @@ library
     , gogol-pubsub
     , hspec
     , http-api-data
+    , http-types
     , lens
     , lens-aeson
     , lucid

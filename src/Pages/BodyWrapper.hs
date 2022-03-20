@@ -1,7 +1,9 @@
-module Pages.BodyWrapper (bodyWrapper) where
+module Pages.BodyWrapper (bodyWrapper, BWConfig (..)) where
 
+import Data.Default (Default)
 import Data.Vector qualified as Vector
 import Lucid
+import Lucid.HTMX
 import Lucid.Hyperscript
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
@@ -19,46 +21,87 @@ menu ppid =
         ("API Keys", "/p/" <> pid <> "/apis", "/assets/svgs/api.svg")
       ]
 
-bodyWrapper :: Maybe Sessions.PersistentSession -> Maybe Projects.Project -> Text -> Html () -> Html ()
-bodyWrapper sessM currProject pageTitle child =
+data BWConfig = BWConfig
+  { sessM :: Maybe Sessions.PersistentSession,
+    currProject :: Maybe Projects.Project,
+    pageTitle :: Text,
+    menuItem :: Maybe Text -- Use PageTitle if menuItem is not set
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (Default)
+
+bodyWrapper :: BWConfig -> Html () -> Html ()
+bodyWrapper BWConfig {sessM, currProject, pageTitle, menuItem} child =
   case sessM of
     Nothing -> child
     Just sess -> do
       let currUser = Sessions.getUser (Sessions.user sess)
           sideNav' = case currProject of
             Nothing -> ""
-            Just project -> sideNav sess project pageTitle
+            Just project -> sideNav sess project pageTitle menuItem
 
       doctypehtml_ $ do
         head_ $ do
           title_ $ toHtml pageTitle
+          meta_ [charset_ "UTF-8"]
+          meta_ [name_ "viewport", content_ "width=device-width, initial-scale=1.0"]
+          meta_ [httpEquiv_ "X-UA-Compatible", content_ "ie=edge"]
+          -- favicon items
+          link_ [rel_ "apple-touch-icon", sizes_ "180x180", href_ "/apple-touch-icon.png"]
+          link_ [rel_ "icon", type_ "image/png", sizes_ "32x32", href_ "/favicon-32x32.png"]
+          link_ [rel_ "icon", type_ "image/png", sizes_ "16x16", href_ "/favicon-16x16.png"]
+          link_ [rel_ "manifest", href_ "/site.webmanifest"]
+          link_ [rel_ "mask-icon", href_ "/safari-pinned-tab.svg", term "color" "#5bbad5"]
+          meta_ [name_ "msapplication-TileColor", content_ "#da532c"]
+          meta_ [name_ "theme-color", content_ "#ffffff"]
+
           link_ [rel_ "stylesheet", type_ "text/css", href_ "/assets/css/tailwind.min.css"]
-          link_ [rel_ "stylesheet", type_ "text/css", href_ "https://cdn.jsdelivr.net/npm/notyf@3/notyf.min.css"]
-          link_ [rel_ "stylesheet", type_ "text/css", href_ "https://cdn.jsdelivr.net/npm/simple-datatables@latest/dist/style.css"]
+          link_ [rel_ "stylesheet", type_ "text/css", href_ "/assets/css/thirdparty/notyf3.min.css"]
           link_ [rel_ "preconnect", href_ "https://fonts.googleapis.com"]
           link_ [rel_ "preconnect", href_ "https://fonts.gstatic.com", crossorigin_ "true"]
           link_ [href_ "https://fonts.googleapis.com/css2?family=Inconsolata&family=Poppins:wght@400;500;600&display=swap", rel_ "stylesheet"]
+          -- SCRIPTS
           script_ [src_ "https://cdn.fusioncharts.com/fusioncharts/latest/fusioncharts.js"] ("" :: Text)
           script_ [src_ "https://cdn.fusioncharts.com/fusioncharts/latest/themes/fusioncharts.theme.fusion.js"] ("" :: Text)
+          script_ [src_ "/assets/js/thirdparty/notyf3.min.js", defer_ "true"] ("" :: Text)
+          script_ [src_ "/assets/js/thirdparty/htmx1_7_0.min.js", defer_ "true"] ("" :: Text)
+          script_ [src_ "/assets/js/thirdparty/_hyperscript_web0_9_5.min.js", defer_ "true"] ("" :: Text)
+          script_ [src_ "/assets/js/thirdparty/popper2_11_4.min.js", defer_ "true"] ("" :: Text)
+          script_ [src_ "/assets/js/thirdparty/tippy6_3_7.umd.min.js", defer_ "true"] ("" :: Text)
+          script_ [src_ "/assets/js/thirdparty/instantpage5_1_0.js", type_ "module", defer_ "true"] ("" :: Text)
+          script_
+            [text|
+              document.addEventListener('DOMContentLoaded', function(){ 
+                // htmx.logAll()
+                tippy('[data-tippy-content]');
+                var notyf = new Notyf({
+                    duration: 5000,
+                    position: {
+                    x: 'right',
+                    y: 'top',
+                  },
+                });
+                document.body.addEventListener("successToast", (e)=> {e.detail.value.map(v=>notyf.success(v));});
+                document.body.addEventListener("errorToast", (e)=> {e.detail.value.map(v=>notyf.error(v));});
+              });
+
+
+              if("serviceWorker" in navigator) {
+                  window.addEventListener("load", () => {
+                    navigator.serviceWorker.register("/sw.js").then(swReg => {}).catch(err => {
+                        console.error('Service Worker Error', err);
+                    });
+                });
+              }
+            |]
 
         body_ [class_ "text-gray-700"] $ do
           section_ [class_ "flex flex-row bg-gray-50 h-screen overflow-hidden"] $ do
             -- Side nav
             sideNav'
-            section_ [class_ "grow h-full"] $ do
+            section_ [class_ "grow h-full overflow-y-scroll"] $ do
               navbar currUser
               child
-
-          script_ [src_ "https://unpkg.com/simple-datatables"] ("" :: Text)
-          script_ [src_ "https://unpkg.com/htmx.org@1.6.1"] ("" :: Text)
-          script_ [src_ "https://cdn.jsdelivr.net/npm/notyf@3/notyf.min.js"] ("" :: Text)
-          script_ [src_ "https://unpkg.com/hyperscript.org@0.9.3"] ("" :: Text)
-          script_ [src_ "https://unpkg.com/@popperjs/core@2"] ("" :: Text)
-          script_ [src_ "https://unpkg.com/tippy.js@6"] ("" :: Text)
-          script_
-            [text|
-            tippy('[data-tippy-content]');
-            |]
 
 projectsDropDown :: Projects.Project -> Vector.Vector Projects.Project -> Html ()
 projectsDropDown currProject projects =
@@ -116,11 +159,14 @@ projectsDropDown currProject projects =
                   span_ [class_ "inline-block"] $ toHtml $ project ^. #title
                 when (currProject ^. #id == project ^. #id) $ img_ [src_ "/assets/svgs/checkmark_blue.svg"]
 
-sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Html ()
-sideNav sess project pageTitle = do
+sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Maybe Text -> Html ()
+sideNav sess project pageTitle menuItem = do
   aside_ [class_ "shrink-0  w-72 top-0 border-r-2 bg-white border-gray-200 h-screen overflow-hidden"] $ do
     a_ [href_ "/", class_ "inline-block p-4"] $ do
-      img_ [src_ "/assets/svgs/logo.svg"]
+      img_
+        [ class_ "h-12",
+          src_ "/assets/svgs/logo.svg"
+        ]
     div_ [class_ "p-4"] $ do
       a_
         [ class_ "flex flex-row bg-gray-100 block p-6 rounded-md cursor-pointer",
@@ -150,20 +196,29 @@ sideNav sess project pageTitle = do
             img_ [src_ "/assets/svgs/up_chevron.svg"]
             img_ [src_ "/assets/svgs/down_chevron.svg"]
       projectsDropDown project (Sessions.getProjects $ Sessions.projects sess)
-    nav_ [class_ "mt-4"] $ do
+    nav_ [class_ "mt-4", hxBoost_ "true"] $ do
       menu (project ^. #id) & mapM_ \(mTitle, mUrl, mIcon) -> do
-        a_ [href_ mUrl, class_ $ "block flex gap-3 px-5 py-3" <> (if pageTitle == mTitle then " bg-gray-100 border-l-4 border-blue-700" else "")] $ do
-          img_ [src_ mIcon]
-          span_ [class_ "grow"] $ toHtml mTitle
+        a_
+          [ href_ mUrl,
+            class_ $
+              "block flex gap-3 px-5 py-3 flex justify-center items-center"
+                <> ( if maybe (pageTitle == mTitle) (== mTitle) menuItem
+                       then " bg-gray-100 border-l-4 border-blue-700"
+                       else ""
+                   )
+          ]
+          $ do
+            img_ [class_ "w-5 h-5", src_ mIcon]
+            span_ [class_ "grow"] $ toHtml mTitle
 
 navbar :: Users.User -> Html ()
 navbar currUser = do
-  nav_ [class_ "sticky top-0 w-full w-full px-6 py-3 border-b bg-white flex flex-row justify-between"] $ do
-    a_ [class_ "cursor-pointer flex "] $ do
-      img_ [src_ "/assets/svgs/hamburger_menu.svg"]
+  nav_ [class_ "sticky z-20 top-0 w-full w-full px-6 py-3 border-b bg-white flex flex-row justify-between"] $ do
+    a_ [class_ "cursor-pointer flex items-center"] $ do
+      img_ [class_ "w-4 h-4", src_ "/assets/svgs/hamburger_menu.svg"]
     div_ [class_ "inline-block flex items-center"] $ do
-      a_ [class_ "inline-block p-2 px-3 align-middle"] $ img_ [src_ "/assets/svgs/search.svg"]
-      a_ [class_ "inline-block border-r-2 p-2 pr-5"] $ img_ [src_ "/assets/svgs/notifications_active.svg"]
+      a_ [class_ "inline-block p-2 px-3 align-middle"] $ img_ [class_ "w-5 h-5", src_ "/assets/svgs/search.svg"]
+      a_ [class_ "inline-block border-r-2 p-2 pr-5"] $ img_ [class_ "w-5 h-5", src_ "/assets/svgs/notifications_active.svg"]
       a_
         [ class_ "cursor-pointer inline-block space-x-4 pl-4 relative ",
           [__| 
@@ -185,9 +240,9 @@ navbar currUser = do
         |]
         ]
         $ do
-          img_ [class_ "inline-block w-9 h-9 rounded-lg", src_ (currUser ^. #displayImageUrl)]
+          img_ [class_ "inline-block w-9 h-9 rounded-lg bg-gray-300", src_ (currUser ^. #displayImageUrl)]
           span_ [class_ "inline-block"] $ toHtml $ currUser ^. #firstName <> " " <> currUser ^. #lastName
-          img_ [class_ "inline-block", src_ "/assets/svgs/down_caret.svg"]
+          img_ [class_ "w-4 h-4 inline-block", src_ "/assets/svgs/down_caret.svg"]
 
       --logout dropdown
       div_
@@ -225,16 +280,5 @@ navbar currUser = do
         y: 'top',
       },
     });
-
-
-<<<<<<< HEAD
-    // document.body.addEventListener("click", (e)=> {
-    //  notyf.success('Works');
-    // });
-=======
-    document.body.addEventListener("", (e)=> {
-      notyf.success('Works');
-    });
->>>>>>> ccb84ab (Logs page)
 
   |]

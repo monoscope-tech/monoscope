@@ -23,7 +23,7 @@ import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import Optics.Operators ()
 import Optics.TH ()
-import Pages.BodyWrapper (bodyWrapper)
+import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Projects.CreateProject qualified as CreateProject
 import Relude
 import Servant
@@ -33,7 +33,12 @@ import Servant
 
 editProjectH :: Sessions.PersistentSession -> DashboardM (Html ())
 editProjectH sess = do
-  pure $ bodyWrapper (Just sess) Nothing "Project Settings" $ editProjectBody (def @CreateProject.CreateProjectForm) (def @CreateProject.CreateProjectFormError)
+  let bwconf =
+        (def :: BWConfig)
+          { sessM = Just sess,
+            pageTitle = "Project Settings"
+          }
+  pure $ bodyWrapper bwconf $ editProjectBody (def @CreateProject.CreateProjectForm) (def @CreateProject.CreateProjectFormError)
 
 editProjectBody :: CreateProject.CreateProjectForm -> CreateProject.CreateProjectFormError -> Html ()
 editProjectBody cp cpe = do

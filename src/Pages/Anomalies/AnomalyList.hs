@@ -1,10 +1,12 @@
-module Pages.Anomalies.AnomalyList (anomalyListGetH) where
+module Pages.Anomalies.AnomalyList (anomalyListGetH, acknowlegeAnomalyGetH, unAcknowlegeAnomalyGetH) where
 
 import Config
-import Data.Time (defaultTimeLocale, formatTime, utc)
+import Data.Default (def)
+import Data.Time (defaultTimeLocale, formatTime)
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
+import Lucid.HTMX
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields qualified as Fields
@@ -12,8 +14,20 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Optics.Core ((%), (^.), (^?), _Just)
-import Pages.BodyWrapper (bodyWrapper)
+import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
+
+acknowlegeAnomalyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Anomalies.AnomalyId -> DashboardM (Html ())
+acknowlegeAnomalyGetH sess pid aid = do
+  pool <- asks pool
+  liftIO $ withPool pool $ Anomalies.acknowlegeAnomaly aid (sess ^. #userId)
+  pure $ anomalyAcknowlegeButton pid aid True
+
+unAcknowlegeAnomalyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Anomalies.AnomalyId -> DashboardM (Html ())
+unAcknowlegeAnomalyGetH sess pid aid = do
+  pool <- asks pool
+  liftIO $ withPool pool $ Anomalies.unAcknowlegeAnomaly aid
+  pure $ anomalyAcknowlegeButton pid aid False
 
 anomalyListGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 anomalyListGetH sess pid = do
@@ -23,11 +37,18 @@ anomalyListGetH sess pid = do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
       anomalies <- Anomalies.selectAnomalies pid
       pure (project, anomalies)
-  pure $ bodyWrapper (Just sess) project "Anomalies" $ anomalyList anomalies
+
+  let bwconf =
+        (def :: BWConfig)
+          { sessM = Just sess,
+            currProject = project,
+            pageTitle = "Anomalies"
+          }
+  pure $ bodyWrapper bwconf $ anomalyList anomalies
 
 anomalyList :: Vector Anomalies.AnomalyVM -> Html ()
 anomalyList anomalies = do
-  div_ [class_ "container mx-auto  px-4 pt-10 pb-24 h-full overflow-y-scroll"] $ do
+  div_ [class_ "container mx-auto  px-4 pt-10 pb-24"] $ do
     div_ [class_ "flex justify-between"] $ do
       h3_ [class_ "text-xl text-slate-700 flex place-items-center"] "Anomalies"
       div_ [class_ "flex flex-row"] $ do
@@ -38,19 +59,44 @@ anomalyList anomalies = do
         button_ [class_ "bg-blue-700 h-10  px-2 rounded-xl py-1 mt-3 "] $ do
           img_ [src_ "/assets/svgs/white-plus.svg", class_ "text-white h-4 w-6 text-bold"]
     div_ [class_ "grid grid-cols-5"] $ do
-      div_ [class_ "col-span-1"] $ do
-        div_ [] "endpoints"
-      div_ [class_ "col-span-4 space-y-2"] $ do
-        anomalies & mapM_ fieldAnomaly
+      div_ [class_ "col-span-5 space-y-2"] $ do
+        anomalies & mapM_ renderAnomaly
 
-fieldAnomaly :: Anomalies.AnomalyVM -> Html ()
-fieldAnomaly anomaly = case anomaly ^. #anomalyType of
-  Anomalies.ATField -> do
-    div_ [class_ "bg-white border-2 border-gray-100 rounded-xl p-8 hover:bg-blue-50 parent-hover cursor-pointer"] $ do
+renderAnomaly :: Anomalies.AnomalyVM -> Html ()
+renderAnomaly anomaly = do
+  let (anomalyTitle, chartTitle, icon) = anomalyDisplayConfig anomaly
+  let fieldGraphId = "field-" <> maybe "" Fields.fieldIdText (anomaly ^? #field % _Just % #id)
+
+  div_ [class_ "bg-white border-2 border-gray-100 rounded-xl px-8 py-6 hover:bg-blue-50 parent-hover cursor-pointer"] $ do
+    div_ [class_ "grid grid-cols-2 gap-5"] $ do
+      div_ [class_ ""] $ do
+        div_ [class_ "inline-block flex items-center space-x-2"] $ do
+          img_ [src_ icon, class_ "inline w-4 h-4"]
+          strong_ [class_ "font-semibold"] $toHtml $ "  " <> anomalyTitle
+        div_ [class_ "py-3 space-x-2"] $ do
+          case anomaly ^. #acknowlegedAt of
+            Nothing -> do
+              small_ [class_ "bg-red-200 text-red-900 inline-block px-3 rounded-lg"] "ONGOING"
+              time_ [class_ "inline-block"] $ toHtml @String $ formatTime defaultTimeLocale "%F %R" (anomaly ^. #createdAt)
+              span_ [class_ "inline-block"] "-"
+              span_ "present"
+            Just ackTime -> do
+              small_ [class_ "bg-green-200 text-green-900 inline-block px-3 rounded-lg"] "ACKNOWLEGED"
+              time_ [class_ "inline-block"] $ toHtml @String $ formatTime defaultTimeLocale "%F %R" (anomaly ^. #createdAt)
+              span_ [class_ "inline-block"] "-"
+              time_ [class_ "inline-block"] $ toHtml @String $ formatTime defaultTimeLocale "%F %R" ackTime
+        div_ [class_ "pt-5"] $ do
+          p_ [class_ "text-lg"] $ do
+            span_ "A new field "
+            a_ [class_ "inline-block px-2 text-blue-800"] $ toHtml $ "`" <> fromMaybe "" (anomaly ^? #field % _Just % #keyPathStr) <> "`"
+            span_ "was added to"
+            a_
+              [ class_ "text-blue-800 inline-block px-2",
+                href_ $ maybe "" Endpoints.endpointToUrlPath (anomaly ^. #endpoint)
+              ]
+              $ toHtml $ "`" <> fromMaybe "" (anomaly ^? #endpoint % _Just % #urlPath) <> "`"
+            span_ ". Was this intended? "
       div_ [class_ "clear-both"] $ do
-        div_ [class_ "inline-block"] $ do
-          img_ [src_ "/assets/svgs/anomalies/fields.svg", class_ "inline w-4 h-4"]
-          strong_ [class_ "font-semibold"] "  Fields"
         div_ [class_ "float-right flex items-center gap-2"] $ do
           a_
             [ class_ "inline-block child-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100",
@@ -58,96 +104,76 @@ fieldAnomaly anomaly = case anomaly ^. #anomalyType of
             ]
             $ do
               img_ [src_ "/assets/svgs/anomalies/archive.svg", class_ "h-4 w-4"]
-          a_ [class_ "inline-block child-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100"] "Details  → "
-      div_ [class_ "flex flex-row basis-0 gap-5"] $ do
-        div_ [class_ "flex-1"] $ do
-          div_ [class_ "pt-5"] $ do
-            p_ [class_ "text-lg"] $ do
-              span_ "A new field "
-              a_ [class_ "inline-block px-2 text-blue-800"] $ toHtml $ "`" <> fromMaybe "" (anomaly ^? #field % _Just % #keyPathStr) <> "`"
-              span_ "was added to"
-              a_
-                [ class_ "text-blue-800 inline-block px-2",
-                  href_ $ maybe "" Endpoints.endpointToUrlPath (anomaly ^. #endpoint)
-                ]
-                $ toHtml $ "`" <> fromMaybe "" (anomaly ^? #endpoint % _Just % #urlPath) <> "`"
-              time_ [class_ "inline-block"] $ toHtml @String $ "on " <> formatTime defaultTimeLocale "%F %R" (anomaly ^. #createdAt)
-              span_ ". Was this intended? "
-        div_ [class_ "flex-1"] $ do
-          let fieldGraphId = "field-" <> maybe "" Fields.fieldIdText (anomaly ^? #field % _Just % #id)
-          p_ [class_ "border-0 border-b-2  border-gray-100 border py-2 mb-1"] "Count of field occurence over time"
-          div_ [id_ fieldGraphId] ""
-          script_
-            [text|
-                  new FusionCharts({
-                    type: "timeseries",
-                    renderAt: "$fieldGraphId",
-                    width: "95%",
-                    height: 350,
-                    dataSource: {
-                      data: new FusionCharts.DataStore().createDataTable([["2022-01-01T10:00:00Z", "200", 22], ["2022-02-05T10:00:00Z", "200", 2] , ["2022-03-05T10:00:00Z", "200", 42],["2022-04-05T10:00:00Z", "200", 2]], [{
-                      "name": "Time",
-                      "type": "date",
-                      "format": "%Y-%m-%dT%H:%M:%S%Z" // https://www.fusioncharts.com/dev/fusiontime/fusiontime-attributes
-                  }, {
-                      "name": "StatusCode",
-                      "type": "string"
-                  },{
-                      "name": "Count",
-                      "type": "number"
-                  }]),
-                      chart: {},
-                      navigator: {
-                          "enabled": 0
-                      },
-                      series: "StatusCode",
-                      yaxis: [
-                        {
-                          plot:[{
-                            value: "Count",
-                            type: "smooth-line",
-                            title: ""
-                          }],
-                        }
-                      ]
-                    }
-                  }).render();
-                |]
-  Anomalies.ATShape -> do
-    div_ [class_ "bg-white border border-gray-50 rounded-xl p-5 hover:bg-blue-50"] $ do
-      div_ [class_ "clear-both"] $ do
-        span_ "Shapes"
-        a_ [class_ "inline-block float-right"] "Details  → "
-      div_ [class_ "flex flex-row"] $ do
-        div_ [class_ "flex-1"] $ do
-          p_ "A new field `new_field` as added to `/bla/bla` yesterday. Was this intended? "
-        div_ [class_ "flex-1"] $ do
-          "graph"
-  Anomalies.ATEndpoint -> do
-    div_ [class_ "bg-white border border-gray-50 rounded-xl p-5 hover:bg-blue-50"] $ do
-      div_ [class_ "clear-both"] $ do
-        span_ "Endpoint"
-        a_ [class_ "inline-block float-right"] "Details  → "
-      div_ [class_ "flex flex-row"] $ do
-        div_ [class_ "flex-1"] $ do
-          p_ "A new field `new_field` as added to `/bla/bla` yesterday. Was this intended? "
-        div_ [class_ "flex-1"] $ do
-          "graph"
-  Anomalies.ATFormat -> do
-    div_ [class_ "bg-white border border-gray-50 rounded-xl p-5 hover:bg-blue-50"] $ do
-      div_ [class_ "clear-both"] $ do
-        span_ "format"
-        a_ [class_ "inline-block float-right"] "Details  → "
-      div_ [class_ "flex flex-row"] $ do
-        div_ [class_ "flex-1"] $ do
-          p_ "A new field `new_field` as added to `/bla/bla` yesterday. Was this intended? "
-        div_ [class_ "flex-1"] $ do
-          "graph"
-  Anomalies.ATUnknown -> do
-    div_ [class_ "bg-white border border-gray-50 rounded-xl p-5 hover:bg-blue-50"] $ do
-      div_ [class_ "clear-both"] $ do
-        span_ "unknown format"
-        a_ [class_ "inline-block float-right"] "Details  → "
-      div_ [class_ "flex flex-row"] $ do
-        div_ [class_ "flex-1"] $ do
-          p_ "unknown type"
+          anomalyAcknowlegeButton
+            (anomaly ^. #projectId)
+            (anomaly ^. #id)
+            (isJust (anomaly ^. #acknowlegedAt))
+
+        p_ [class_ "border-0 border-b-2  border-gray-100 border py-2 mb-1"] $ toHtml chartTitle
+        div_ [id_ fieldGraphId, style_ "height:250px", class_ "w-full"] ""
+        script_ $ anomalyChartScript anomaly fieldGraphId
+
+anomalyAcknowlegeButton :: Projects.ProjectId -> Anomalies.AnomalyId -> Bool -> Html ()
+anomalyAcknowlegeButton pid aid acked = do
+  let acknowlegeAnomalyEndpoint = "/p/" <> Projects.projectIdText pid <> "/anomalies/" <> Anomalies.anomalyIdText aid <> if acked then "/unacknowlege" else "/acknowlege"
+  a_
+    [ class_ $
+        "inline-block child-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
+          <> (if acked then "bg-green-100 text-green-900" else " "),
+      term "data-tippy-content" "acknowlege anomaly",
+      hxGet_ acknowlegeAnomalyEndpoint,
+      hxSwap_ "outerHTML"
+    ]
+    if acked then "✓ Acknowleged" else "✓ Acknowlege"
+
+anomalyChartScript :: Anomalies.AnomalyVM -> Text -> Text
+anomalyChartScript anomaly fieldGraphId = case anomaly ^. #anomalyType of
+  Anomalies.ATField ->
+    [text|
+      new FusionCharts({
+        type: "timeseries",
+        renderAt: "$fieldGraphId",
+        width: "100%",
+        height: 250,
+        dataSource: {
+          data: new FusionCharts.DataStore().createDataTable([["2022-01-01T10:00:00Z", "200", 22], ["2022-02-05T10:00:00Z", "200", 2] , ["2022-03-05T10:00:00Z", "200", 42],["2022-04-05T10:00:00Z", "200", 2]], 
+          [{
+            "name": "Time",
+            "type": "date",
+            "format": "%Y-%m-%dT%H:%M:%S%Z" // https://www.fusioncharts.com/dev/fusiontime/fusiontime-attributes
+          },{
+            "name": "StatusCode",
+            "type": "string"
+          },{
+            "name": "Count",
+            "type": "number"
+          }]),
+          chart: {},
+          navigator: {
+              "enabled": 0
+          },
+          series: "StatusCode",
+          yaxis: [
+            {
+              plot:[{
+                value: "Count",
+                type: "smooth-line"
+              }],
+              title: ""
+            }
+          ]
+        }
+      }).render();
+          |]
+  Anomalies.ATShape -> ""
+  Anomalies.ATEndpoint -> ""
+  Anomalies.ATFormat -> ""
+  Anomalies.ATUnknown -> ""
+
+anomalyDisplayConfig :: Anomalies.AnomalyVM -> (Text, Text, Text)
+anomalyDisplayConfig anomaly = case anomaly ^. #anomalyType of
+  Anomalies.ATField -> ("New Field Found", "Field Occurences over Time", "/assets/svgs/anomalies/fields.svg")
+  Anomalies.ATShape -> ("New Endpoint Requests Shape", "Shape Occurences over Time vs Total by all Shapes", "/assets/svgs/anomalies/fields.svg")
+  Anomalies.ATEndpoint -> ("New Endpoint Found", "Endpoint occurences over time vs Total by all Endpoints", "/assets/svgs/endpoint.svg")
+  Anomalies.ATFormat -> ("Field Format Changed", "Requests with the new field format", "/assets/svgs/anomalies/fields.svg")
+  Anomalies.ATUnknown -> ("Unknown anomaly", "Unknown anomaly", "/assets/svgs/anomalies/fields.svg")

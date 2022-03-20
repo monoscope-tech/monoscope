@@ -8,6 +8,7 @@ import Config qualified
 import Data.Pool (Pool)
 import Database.PostgreSQL.Simple (Connection)
 import Lucid
+import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields qualified as Fields
 import Models.Projects.Projects qualified as Projects
@@ -50,6 +51,8 @@ type ProtectedAPI =
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "bulk_seed_and_ingest" :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "bulk_seed_and_ingest" :> ReqBody '[FormUrlEncoded] DataSeeding.DataSeedingForm :> Post '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "anomalies" :> Get '[HTML] (Html ())
+    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "acknowlege" :> Get '[HTML] (Html ())
+    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "unacknowlege" :> Get '[HTML] (Html ())
 
 type PublicAPI =
   "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
@@ -60,7 +63,7 @@ type PublicAPI =
     -- and perfoming all the auth logic at the handler level. This is because the clients will only call this endpoint,
     -- so it doesnt need an exclusive robust authorization middleware solution.
     :<|> "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] ClientMetadata.ClientMetadata
-    :<|> "assets" :> Raw
+    :<|> Raw
 
 type API =
   AuthProtect "apitoolkit_session" :> ProtectedAPI
@@ -100,6 +103,8 @@ protectedServer sess =
     :<|> DataSeeding.dataSeedingGetH sess
     :<|> DataSeeding.dataSeedingPostH sess
     :<|> AnomalyList.anomalyListGetH sess
+    :<|> AnomalyList.acknowlegeAnomalyGetH sess
+    :<|> AnomalyList.unAcknowlegeAnomalyGetH sess
 
 publicServer :: ServerT PublicAPI DashboardM
 publicServer =
@@ -108,7 +113,7 @@ publicServer =
     :<|> logoutH
     :<|> authCallbackH
     :<|> ClientMetadata.clientMetadataH
-    :<|> serveDirectoryWebApp "./static/assets"
+    :<|> serveDirectoryWebApp "./static/public"
 
 server :: ServerT API DashboardM
 server = protectedServer :<|> publicServer

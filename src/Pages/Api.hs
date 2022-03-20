@@ -4,6 +4,7 @@ import Config
 import Data.Aeson (encode)
 import Data.Aeson.QQ (aesonQQ)
 import Data.ByteString.Base64 qualified as B64
+import Data.Default (def)
 import Data.Text as T
 import Data.UUID as UUID
 import Data.UUID.V4 qualified as UUIDV4
@@ -17,7 +18,7 @@ import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Optics.Core ((^.))
-import Pages.BodyWrapper (bodyWrapper)
+import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
 import Servant (addHeader)
 import Web.FormUrlEncoded (FromForm)
@@ -42,7 +43,7 @@ apiPostH sess pid apiKeyForm = do
     withPool pool $ do
       ProjectApiKeys.insertProjectApiKey pApiKey
       ProjectApiKeys.projectApiKeysByProjectId pid
-  let hxTriggerData = encode [aesonQQ| {"closeModal": ""}|]
+  let hxTriggerData = encode [aesonQQ| {"closeModal": "", "successToast": ["Created API Key Successfully"]}|]
   pure $ addHeader (decodeUtf8 hxTriggerData) $ mainContent apiKeys (Just (pApiKey, encryptedKeyB64))
 
 -- | apiGetH renders the api keys list page which includes a modal for creating the apikeys.
@@ -54,7 +55,14 @@ apiGetH sess pid = do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
       apiKeys <- ProjectApiKeys.projectApiKeysByProjectId pid
       pure (project, apiKeys)
-  pure $ bodyWrapper (Just sess) project "API Keys" $ apiKeysPage pid apiKeys
+
+  let bwconf =
+        (def :: BWConfig)
+          { sessM = Just sess,
+            currProject = project,
+            pageTitle = "API Keys"
+          }
+  pure $ bodyWrapper bwconf $ apiKeysPage pid apiKeys
 
 apiKeysPage :: Projects.ProjectId -> Vector ProjectApiKeys.ProjectApiKey -> Html ()
 apiKeysPage pid apiKeys = do
@@ -64,7 +72,7 @@ apiKeysPage pid apiKeys = do
       button_ [class_ "btn-indigo", [__|on click remove .hidden from #generateApiKeyDialog |]] "Create an API Key"
     mainContent apiKeys Nothing
     div_
-      [ class_ "hidden fixed z-10 inset-0 overflow-y-auto",
+      [ class_ "hidden fixed z-30 inset-0 overflow-y-auto",
         role_ "dialog",
         id_ "generateApiKeyDialog"
       ]
@@ -77,7 +85,7 @@ apiKeysPage pid apiKeys = do
           ]
           $ do
             div_ [class_ "fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"] $ do
-              span_ [class_ "hidden sm:inline-block sm:align-middle sm:h-screen"] "&#8203;"
+              span_ [class_ "hidden sm:inline-block sm:align-middle sm:h-screen"] ""
             div_ [class_ "inline-block align-bottom bg-white rounded-lg px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full sm:p-6"] $ do
               div_ [class_ "hidden sm:block absolute top-0 right-0 pt-4 pr-4"] $ do
                 button_
@@ -135,12 +143,9 @@ mainContent apiKeys newKeyM = do
                         class_ "bg-green-50 px-2 py-1.5 rounded-md text-sm font-medium text-green-800 hover:bg-green-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600",
                         [__| 
                       on click 
-                        js
-                            if ('clipboard' in window.navigator) {
-                                navigator.clipboard.writeText(document.getElementById("newKey").innerText).then(Text=>{
-                                  notyf.success('API Key has been added to the Clipboard')
-                                })
-                            }
+                        if 'clipboard' in window.navigator then 
+                          call navigator.clipboard.writeText(#newKey's innerText)
+                          send successToast(value:['API Key has been added to the Clipboard']) to <body/>
                         end
                         |]
                       ]
