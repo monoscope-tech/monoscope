@@ -17,6 +17,7 @@ import Lucid
 import Lucid.HTMX
 import Lucid.Hyperscript.QuasiQuoter (__)
 import Lucid.Svg qualified as Svg
+import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields qualified as Fields
@@ -26,6 +27,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation
 import Optics.Core ((^.))
+import Pages.Anomalies.AnomalyList qualified as AnomaliesList
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
 import Relude.Unsafe qualified as Unsafe
@@ -77,7 +79,7 @@ fieldDetailsView field formats = do
 endpointDetailsH :: Sessions.PersistentSession -> Projects.ProjectId -> Endpoints.EndpointId -> DashboardM (Html ())
 endpointDetailsH sess pid eid = do
   pool <- asks pool
-  (endpoint, project, fieldsMap, reqsByStatsByMin, reqLatencyPercentiles, reqLatenciesRolledByStepsLabeled) <- liftIO $
+  (endpoint, project, fieldsMap, reqsByStatsByMin, reqLatencyPercentiles, reqLatenciesRolledByStepsLabeled, anomalies) <- liftIO $
     withPool pool $ do
       endpointM <- Endpoints.endpointById eid
       let endpoint = Unsafe.fromJust endpointM
@@ -101,7 +103,8 @@ endpointDetailsH sess pid eid = do
               (round (reqLatencyPercentiles ^. #p50) `quot` steps') * steps'
             )
       let reqLatenciesRolledByStepsLabeled = Vector.toList reqLatenciesRolledBySteps & map \(x, y) -> RequestDumps.labelRequestLatency reqLatencyPercentileSteps (x, y)
-      pure (endpoint, project, fieldsMap, reqsByStatsByMin, reqLatencyPercentiles, concat reqLatenciesRolledByStepsLabeled)
+      anomalies <- Anomalies.selectOngoingAnomaliesForEndpoint pid eid
+      pure (endpoint, project, fieldsMap, reqsByStatsByMin, reqLatencyPercentiles, concat reqLatenciesRolledByStepsLabeled, anomalies)
 
   let reqsByStatsByMinJ = decodeUtf8 $ AE.encode reqsByStatsByMin
   let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
@@ -112,10 +115,10 @@ endpointDetailsH sess pid eid = do
             pageTitle = "Endpoint Details",
             menuItem = Just "Endpoints"
           }
-  pure $ bodyWrapper bwconf $ endpointDetails endpoint fieldsMap reqsByStatsByMinJ reqLatencyPercentiles reqLatenciesRolledByStepsJ
+  pure $ bodyWrapper bwconf $ endpointDetails endpoint fieldsMap reqsByStatsByMinJ reqLatencyPercentiles reqLatenciesRolledByStepsJ anomalies
 
-endpointDetails :: Endpoint -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> RequestDumps.Percentiles -> Text -> Html ()
-endpointDetails endpoint fieldsM reqsByStatsByMinJ percentiles reqLatenciesRolledByStepsJ = do
+endpointDetails :: Endpoint -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> RequestDumps.Percentiles -> Text -> Vector Anomalies.AnomalyVM -> Html ()
+endpointDetails endpoint fieldsM reqsByStatsByMinJ percentiles reqLatenciesRolledByStepsJ anomalies = do
   div_ [class_ "w-full flex flex-row h-screen overflow-hidden"] $ do
     div_ [class_ "w-2/3 p-8 h-full overflow-y-scroll"] $ do
       div_ [class_ "flex flex-row justify-between mb-10"] $ do
@@ -134,6 +137,7 @@ endpointDetails endpoint fieldsM reqsByStatsByMinJ percentiles reqLatenciesRolle
               div_ [class_ "bg-blue-900 p-1 rounded-lg ml-2"] $ do
                 img_ [src_ "/assets/svgs/whitedown.svg", class_ "text-white h-2 w-2 m-1"]
       div_ [class_ "space-y-16 pb-20"] $ do
+        section_ $ AnomaliesList.anomalyListSlider anomalies
         endpointStats percentiles
         reqResSection "Request" True fieldsM
         reqResSection "Response" False fieldsM
@@ -299,11 +303,11 @@ reqResSection title isRequest fieldsM =
   section_ [class_ "space-y-3"] $ do
     div_ [class_ "flex justify-between mt-5"] $ do
       div_ [class_ "flex flex-row"] $ do
-        img_
-          [ src_ "/assets/svgs/cheveron-down.svg",
-            class_ "h-4 mr-3 mt-1 w-4",
-            [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]
-          ]
+        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]] $
+          img_
+            [ src_ "/assets/svgs/cheveron-down.svg",
+              class_ "h-4 mr-3 mt-1 w-4"
+            ]
         span_ [class_ "text-lg text-slate-700"] $ toHtml title
       div_ [class_ "flex flex-row mt-2"] $ do
         img_ [src_ "/assets/svgs/leftarrow.svg", class_ " m-2"]

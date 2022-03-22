@@ -1,7 +1,19 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module Models.Apis.Anomalies (selectAnomalies, AnomalyVM (..), AnomalyActions (..), AnomalyTypes (..), AnomalyId (..), acknowlegeAnomaly, anomalyIdText, unAcknowlegeAnomaly) where
+module Models.Apis.Anomalies
+  ( selectAnomalies,
+    AnomalyVM (..),
+    AnomalyActions (..),
+    AnomalyTypes (..),
+    AnomalyId (..),
+    selectOngoingAnomaliesForEndpoint,
+    acknowlegeAnomaly,
+    anomalyIdText,
+    unAcknowlegeAnomaly,
+    selectOngoingAnomalies,
+  )
+where
 
 import Data.Default (Default, def)
 import Data.Time (ZonedTime)
@@ -107,7 +119,8 @@ data AnomalyVM = AnomalyCM
     shape :: Maybe Shapes.Shape,
     format :: Maybe Formats.Format,
     endpoint :: Maybe Endpoints.Endpoint,
-    archivedAt :: Maybe ZonedTime
+    archivedAt :: Maybe ZonedTime,
+    endpointId :: Maybe Endpoints.EndpointId
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, Default)
@@ -146,7 +159,8 @@ selectAnomalies pid = do
     to_jsonb(shapes.*) shape,
     to_jsonb(formats.*) format,
     to_jsonb(endpoints.*) endpoint,
-    an.archived_at
+    an.archived_at,
+    endpoints.id endpoint_id
 	FROM apis.anomalies an
 	LEFT JOIN apis.formats on target_id=formats.id
 	LEFT JOIN apis.fields on (fields.id=target_id OR fields.id=formats.field_id) 
@@ -159,4 +173,60 @@ selectAnomalies pid = do
   where an.project_id = ?
       |]
   let options = Only pid
+  query Select q options
+
+selectOngoingAnomalies :: Projects.ProjectId -> DBT IO (Vector AnomalyVM)
+selectOngoingAnomalies pid = do
+  -- FIXME: when this is vaguely tested to be fine, it should be converted into a materialized view
+  -- SHould be an auto updating view using timescale db functionality.
+  let q =
+        [sql| 
+	SELECT 
+    an.id, an.created_at, an.updated_at, an.project_id, an.acknowleged_at,an.acknowleged_by, an.anomaly_type, an.action, an.target_id,
+    to_jsonb(fields.*) field,
+    to_jsonb(shapes.*) shape,
+    to_jsonb(formats.*) format,
+    to_jsonb(endpoints.*) endpoint,
+    an.archived_at,
+    endpoints.id endpoint_id
+	FROM apis.anomalies an
+	LEFT JOIN apis.formats on target_id=formats.id
+	LEFT JOIN apis.fields on (fields.id=target_id OR fields.id=formats.field_id) 
+	LEFT JOIN apis.shapes on target_id=shapes.id
+	LEFT JOIN apis.endpoints 
+      ON (endpoints.id = target_id 
+          OR endpoints.id = fields.endpoint_id 
+          OR endpoints.id = shapes.endpoint_id
+          )
+  where an.project_id = ? and an.acknowleged_at is null and an.archived_at is null
+      |]
+  let options = Only pid
+  query Select q options
+
+selectOngoingAnomaliesForEndpoint :: Projects.ProjectId -> Endpoints.EndpointId -> DBT IO (Vector AnomalyVM)
+selectOngoingAnomaliesForEndpoint pid eid = do
+  -- FIXME: when this is vaguely tested to be fine, it should be converted into a materialized view
+  -- SHould be an auto updating view using timescale db functionality.
+  let q =
+        [sql| 
+	SELECT 
+    an.id, an.created_at, an.updated_at, an.project_id, an.acknowleged_at,an.acknowleged_by, an.anomaly_type, an.action, an.target_id,
+    to_jsonb(fields.*) field,
+    to_jsonb(shapes.*) shape,
+    to_jsonb(formats.*) format,
+    to_jsonb(endpoints.*) endpoint,
+    an.archived_at,
+    endpoints.id endpoint_id
+	FROM apis.anomalies an
+	LEFT JOIN apis.formats on target_id=formats.id
+	LEFT JOIN apis.fields on (fields.id=target_id OR fields.id=formats.field_id) 
+	LEFT JOIN apis.shapes on target_id=shapes.id
+	LEFT JOIN apis.endpoints 
+      ON (endpoints.id = target_id 
+          OR endpoints.id = fields.endpoint_id 
+          OR endpoints.id = shapes.endpoint_id
+          )
+  where an.project_id = ? and endpoints.id=? and an.acknowleged_at is null and an.archived_at is null
+      |]
+  let options = (pid, eid)
   query Select q options

@@ -3,16 +3,20 @@ module Pages.Dashboard (dashboardGetH) where
 import Config
 import Data.Aeson qualified as AE
 import Data.Default (def)
+import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Fmt (fixedF, fmt)
 import Lucid
+import Lucid.Hyperscript
 import Lucid.Svg qualified as Svg
+import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Optics.Core ((^.))
+import Pages.Anomalies.AnomalyList qualified as AnomaliesList
 import Pages.BodyWrapper
 import Relude
 import Relude.Unsafe qualified as Unsafe
@@ -20,7 +24,7 @@ import Relude.Unsafe qualified as Unsafe
 dashboardGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 dashboardGetH sess pid = do
   pool <- asks pool
-  (project, reqLatencyPercentiles, reqsByEndpoint, reqLatenciesRolledByStepsLabeled) <- liftIO $
+  (project, reqLatencyPercentiles, reqsByEndpoint, reqLatenciesRolledByStepsLabeled, anomalies) <- liftIO $
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
       reqLatencyPercentilesM <- RequestDumps.selectReqLatencyPercentilesForProject pid
@@ -40,7 +44,8 @@ dashboardGetH sess pid = do
             )
 
       let reqLatenciesRolledByStepsLabeled = Vector.toList reqLatenciesRolledBySteps & map \(x, y) -> RequestDumps.labelRequestLatency reqLatencyPercentileSteps (x, y)
-      pure (project, reqLatencyPercentiles, reqsByEndpoint, concat reqLatenciesRolledByStepsLabeled)
+      anomalies <- Anomalies.selectOngoingAnomalies pid
+      pure (project, reqLatencyPercentiles, reqsByEndpoint, concat reqLatenciesRolledByStepsLabeled, anomalies)
 
   let reqsByEndpointJ = decodeUtf8 $ AE.encode reqsByEndpoint
   let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
@@ -51,11 +56,12 @@ dashboardGetH sess pid = do
             currProject = project,
             pageTitle = "Dashboard"
           }
-  pure $ bodyWrapper bwconf $ dashboardPage reqLatencyPercentiles reqsByEndpointJ reqLatenciesRolledByStepsJ
+  pure $ bodyWrapper bwconf $ dashboardPage reqLatencyPercentiles reqsByEndpointJ reqLatenciesRolledByStepsJ anomalies
 
-dashboardPage :: RequestDumps.Percentiles -> Text -> Text -> Html ()
-dashboardPage percentiles reqsByEndpointJ reqLatenciesRolledByStepsJ = do
-  section_ [class_ "p-8 container mx-auto h-full overflow-y-scroll"] $ do
+dashboardPage :: RequestDumps.Percentiles -> Text -> Text -> Vector Anomalies.AnomalyVM -> Html ()
+dashboardPage percentiles reqsByEndpointJ reqLatenciesRolledByStepsJ anomalies = do
+  section_ [class_ "p-8 container mx-auto px-4 pt-10 pb-24"] $ do
+    section_ $ AnomaliesList.anomalyListSlider anomalies
     dStats percentiles
   script_
     [text|
@@ -115,7 +121,15 @@ dashboardPage percentiles reqsByEndpointJ reqLatenciesRolledByStepsJ = do
 dStats :: RequestDumps.Percentiles -> Html ()
 dStats percentiles =
   section_ [class_ "space-y-3"] $ do
-    div_ [class_ "grid grid-cols-3  gap-5"] $ do
+    div_ [class_ "flex justify-between mt-5"] $ do
+      div_ [class_ "flex flex-row"] $ do
+        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]] $
+          img_
+            [ src_ "/assets/svgs/cheveron-down.svg",
+              class_ "h-4 mr-3 mt-1 w-4"
+            ]
+        span_ [class_ "text-lg text-slate-700"] "Stats"
+    div_ [class_ "grid grid-cols-3  gap-5 reqResSubSection"] $ do
       div_ [class_ "col-span-1 content-between space-y-8"] $ do
         div_ [class_ "row-span-1 col-span-1 bg-white  border border-gray-100  rounded-2xl p-3 flex flex-row justify-between"] $ do
           div_ [class_ "flex flex-col justify-center"] $ do

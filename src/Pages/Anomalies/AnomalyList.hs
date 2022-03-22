@@ -1,12 +1,14 @@
-module Pages.Anomalies.AnomalyList (anomalyListGetH, acknowlegeAnomalyGetH, unAcknowlegeAnomalyGetH) where
+module Pages.Anomalies.AnomalyList (anomalyListGetH, acknowlegeAnomalyGetH, unAcknowlegeAnomalyGetH, anomalyListSlider) where
 
 import Config
 import Data.Default (def)
+import Data.Text (replace)
 import Data.Time (defaultTimeLocale, formatTime)
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import Lucid.HTMX
+import Lucid.Hyperscript
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields qualified as Fields
@@ -60,14 +62,72 @@ anomalyList anomalies = do
           img_ [src_ "/assets/svgs/white-plus.svg", class_ "text-white h-4 w-6 text-bold"]
     div_ [class_ "grid grid-cols-5"] $ do
       div_ [class_ "col-span-5 space-y-2"] $ do
-        anomalies & mapM_ renderAnomaly
+        anomalies & mapM_ (renderAnomaly False)
 
-renderAnomaly :: Anomalies.AnomalyVM -> Html ()
-renderAnomaly anomaly = do
+anomalyListSlider :: Vector Anomalies.AnomalyVM -> Html ()
+anomalyListSlider [] = ""
+anomalyListSlider anomalies = do
+  let anomalyIds = replace "\"" "'" $ show $ fmap (Anomalies.anomalyIdText . (^. #id)) anomalies
+  div_
+    [ class_ "container mx-auto"
+    ]
+    $ do
+      script_ [text| var rem = (x,y)=>((x%y)==0?1:(x%y)); |]
+      script_
+        [type_ "text/hyperscript"]
+        [text| 
+         init set $$currentAnomaly to 1 then
+              set $$anomalyIds to $anomalyIds
+
+          def setAnomalySliderPag()
+            set #anomalySliderPagination.innerHTML to $$currentAnomaly+'/'+$$anomalyIds.length
+          end
+
+         |]
+      div_ [class_ ""] $ do
+        div_ [class_ "flex justify-between mt-5 pb-2"] $ do
+          div_ [class_ "flex flex-row"] $ do
+            img_
+              [ src_ "/assets/svgs/cheveron-down.svg",
+                class_ "h-4 mr-3 mt-1 w-4",
+                [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .parent-slider)|]
+              ]
+            span_ [class_ "text-lg text-slate-700"] "Ongoing Anomalies and Monitors"
+          div_ [class_ "flex flex-row mt-2"] $ do
+            a_
+              [ class_ "cursor-pointer",
+                [__|on click hide #{$anomalyIds[$currentAnomaly]} then
+                            set $currentAnomaly to rem($currentAnomaly-1, $anomalyIds.length) then 
+                            show #{$anomalyIds[$currentAnomaly]} then 
+                            setAnomalySliderPag()|]
+              ]
+              $ do
+                img_ [src_ "/assets/svgs/leftarrow.svg", class_ " m-2"]
+            span_ [src_ " mx-4", id_ "anomalySliderPagination"] "1/1"
+            a_
+              [ class_ "cursor-pointer",
+                [__|on click hide #{$anomalyIds[$currentAnomaly]} then
+                            set $currentAnomaly to rem($currentAnomaly+1, $anomalyIds.length) then 
+                            show #{$anomalyIds[$currentAnomaly]} then
+                            setAnomalySliderPag()|]
+              ]
+              $ do
+                img_ [src_ "/assets/svgs/rightarrow.svg", class_ " m-2"]
+
+        div_
+          [ class_ "parent-slider",
+            [__|init setAnomalySliderPag() then show #{$anomalyIds[$currentAnomaly]} |]
+          ]
+          $ do
+            anomalies & mapM_ (renderAnomaly True)
+
+renderAnomaly :: Bool -> Anomalies.AnomalyVM -> Html ()
+renderAnomaly hideByDefault anomaly = do
   let (anomalyTitle, chartTitle, icon) = anomalyDisplayConfig anomaly
+  let anomalyId = Anomalies.anomalyIdText (anomaly ^. #id)
   let fieldGraphId = "field-" <> maybe "" Fields.fieldIdText (anomaly ^? #field % _Just % #id)
 
-  div_ [class_ "bg-white border-2 border-gray-100 rounded-xl px-8 py-6 hover:bg-blue-50 parent-hover cursor-pointer"] $ do
+  div_ [class_ "anomaly-item bg-white border-2 border-gray-100 rounded-xl px-8 py-6 hover:bg-blue-50 parent-hover cursor-pointer", style_ (if hideByDefault then "display:none" else ""), id_ anomalyId] $ do
     div_ [class_ "grid grid-cols-2 gap-5"] $ do
       div_ [class_ ""] $ do
         div_ [class_ "inline-block flex items-center space-x-2"] $ do
