@@ -21,18 +21,24 @@ import Pages.BodyWrapper (bodyWrapper)
 import Relude
 import Servant (addHeader)
 import Web.FormUrlEncoded (FromForm)
+import Models.Apis.RequestDumps
+import qualified Data.Vector as Vector
 
 apiLog :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 apiLog sess pid = do 
   pool <- asks pool
   (project) <- liftIO $
     withPool pool $ do
+      logs <- logsByProject pid
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
       pure (project)
-  pure $ bodyWrapper (Just sess) project "Api Logs" $ apiLogsPage pid
+  pure $ bodyWrapper (Just sess) project "Api Logs" $ apiLogsPage logs
 
-apiLogsPage :: Projects.ProjectId -> Html ()
-apiLogsPage pid = do 
+logs :: Vector RequestDump
+logs = error "not implemented"
+
+apiLogsPage :: Vector.Vector RequestDump -> Html ()
+apiLogsPage logs = do 
   section_ [class_ "container mx-auto  px-4 py-10"] $ do 
     div_ [class_ "flex justify-between mb-5"] $ do 
       h3_ [class_ "place-items-center"] "ApiToolKit"

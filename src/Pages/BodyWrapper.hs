@@ -15,7 +15,8 @@ menu ppid =
   let pid = Projects.projectIdText ppid
    in [ ("Dashboard", "/p/" <> pid <> "/", "/assets/svgs/dashboard.svg"),
         ("Endpoints", "/p/" <> pid <> "/endpoints", "/assets/svgs/endpoint.svg"),
-        ("API Keys", "/p/" <> pid <> "/apis", "/assets/svgs/api.svg")
+        ("API Keys", "/p/" <> pid <> "/apis", "/assets/svgs/api.svg"),
+        ("Logs", "/p/" <> pid <> "/logs", "/assets/svgs/api.svg")
       ]
 
 bodyWrapper :: Maybe Sessions.PersistentSession -> Maybe Projects.Project -> Text -> Html () -> Html ()

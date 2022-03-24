@@ -12,6 +12,7 @@ module Models.Apis.RequestDumps
     selectReqLatencyPercentilesForProject,
     selectRequestsByEndpointsStatByMin,
     selectReqLatenciesRolledByStepsForProject,
+    logsByProject
   )
 where
 
@@ -20,7 +21,7 @@ import Data.Aeson qualified as AE
 import Data.Time (CalendarDiffTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
-import Database.PostgreSQL.Entity (insert)
+import Database.PostgreSQL.Entity (insert, selectManyByField)
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, queryOne)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
@@ -29,6 +30,8 @@ import Database.PostgreSQL.Transact (DBT)
 import Models.Projects.Projects qualified as Projects
 import Optics.TH
 import Relude
+import qualified Data.Vector as Vector
+import qualified Database.PostgreSQL.Transact as PgT
 
 instance Eq ZonedTime where
   (==) _ _ = True
@@ -202,3 +205,6 @@ labelRequestLatency (pMax, p90, p75, p50) (x, y)
   | x == p75 = [LabelValue (x, y, Just "p75"), LabelValue (x, y, Nothing)]
   | x == p50 = [LabelValue (x, y, Just "p50"), LabelValue (x, y, Nothing)]
   | otherwise = [LabelValue (x, y, Nothing)]
+
+logsByProject :: Projects.ProjectId -> PgT.DBT IO (Vector.Vector RequestDump)
+logsByProject pid = selectManyByField @RequestDump [field| project_id |] pid
