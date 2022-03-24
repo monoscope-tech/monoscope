@@ -1,9 +1,10 @@
-module Pages.Log (apiLog) where 
+module Pages.Log (apiLog) where
 
 import Config
 import Data.Aeson (encode)
 import Data.Aeson.QQ (aesonQQ)
 import Data.ByteString.Base64 qualified as B64
+import Data.Default (def)
 import Data.Text as T
 import Data.UUID as UUID
 import Data.UUID.V4 qualified as UUIDV4
@@ -17,24 +18,31 @@ import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Optics.Core ((^.))
-import Pages.BodyWrapper (bodyWrapper)
+import Pages.BodyWrapper (BWConfig (BWConfig), bodyWrapper, currProject, pageTitle, sessM)
 import Relude
 import Servant (addHeader)
 import Web.FormUrlEncoded (FromForm)
 
 apiLog :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
-apiLog sess pid = do 
+apiLog sess pid = do
   pool <- asks pool
   (project) <- liftIO $
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      pure (project)
-  pure $ bodyWrapper (Just sess) project "Api Logs" $ apiLogsPage pid
+      pure project
+
+  let bwconf =
+        (def :: BWConfig)
+          { sessM = Just sess,
+            currProject = project,
+            pageTitle = "API Logs"
+          }
+  pure $ bodyWrapper bwconf $ apiLogsPage pid
 
 apiLogsPage :: Projects.ProjectId -> Html ()
-apiLogsPage pid = do 
-  section_ [class_ "container mx-auto  px-4 py-10"] $ do 
-    div_ [class_ "flex justify-between mb-5"] $ do 
+apiLogsPage pid = do
+  section_ [class_ "container mx-auto  px-4 py-10"] $ do
+    div_ [class_ "flex justify-between mb-5"] $ do
       h3_ [class_ "place-items-center"] "ApiToolKit"
       div_ [class_ "flex flex-row"] $ do
         img_ [src_ "/assets/svgs/funnel.svg", class_ "h-4 mt-4 mx-3 w-auto"]
@@ -62,10 +70,7 @@ apiLogsPage pid = do
             th_ [class_ "text-left text-sm text-slate-700 "] "HOST"
             th_ [class_ "text-left text-sm text-slate-700 "] "SERVICE"
         tbody_ $ do
-            tr_ [class_ "border-b border-b-gray-300 py-8 font-medium"] $ do
-              td_ [class_ " text-sm inconsolata text-slate-700 font-normal"] "Feb 27 10:10:23.213"
-              td_ [class_ " inconsolata text-base text-slate-700"] "200"
-              td_ [class_ " text-sm inconsolata text-slate-700 font-normal"] "400ms"
-
-
-
+          tr_ [class_ "border-b border-b-gray-300 py-8 font-medium"] $ do
+            td_ [class_ " text-sm inconsolata text-slate-700 font-normal"] "Feb 27 10:10:23.213"
+            td_ [class_ " inconsolata text-base text-slate-700"] "200"
+            td_ [class_ " text-sm inconsolata text-slate-700 font-normal"] "400ms"

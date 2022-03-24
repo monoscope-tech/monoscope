@@ -6,6 +6,7 @@ import Colog (LogAction)
 import Config (DashboardM, HeadersTrigger, HeadersTriggerRedirect, ctxToHandler)
 import Config qualified
 import Data.Pool (Pool)
+import DataSeeding qualified
 import Database.PostgreSQL.Simple (Connection)
 import Lucid
 import Models.Apis.Anomalies qualified as Anomalies
@@ -16,10 +17,10 @@ import Models.Users.Sessions qualified as Sessions
 import Network.Wai (Request)
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.Api qualified as Api
-import Pages.Log qualified as Log
 import Pages.Dashboard qualified as Dashboard
 import Pages.Endpoints.EndpointDetails qualified as EndpointDetails
 import Pages.Endpoints.EndpointList qualified as EndpointList
+import Pages.Log qualified as Log
 import Pages.ManualIngestion qualified as ManualIngestion
 import Pages.Projects.CreateProject qualified as CreateProject
 import Pages.Projects.ListProjects qualified as ListProjects
