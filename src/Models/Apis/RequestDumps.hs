@@ -1,4 +1,6 @@
 {-# LANGUAGE TemplateHaskell #-}
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+{-# HLINT ignore "Use newtype instead of data" #-}
 
 module Models.Apis.RequestDumps
   ( RequestDump (..),
@@ -193,7 +195,7 @@ select duration_steps, count(id)
       |]
 
 -- Useful for charting latency histogram on the dashbaord and endpoint details pages
-data LabelValue = LabelValue (Int, Int, Maybe Text)
+newtype LabelValue = LabelValue (Int, Int, Maybe Text)
   deriving stock (Show)
 
 instance ToJSON LabelValue where

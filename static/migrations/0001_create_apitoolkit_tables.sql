@@ -306,4 +306,44 @@ CREATE TABLE IF NOT EXISTS apis.request_dumps
 SELECT manage_updated_at('apis.request_dumps');
 -- SELECT create_hypertable('apis.request_dumps', 'created_at');
 
+
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS apis.anomalies_vm 
+    AS	SELECT 
+    an.id, an.created_at, an.updated_at, an.project_id, an.acknowleged_at,an.acknowleged_by, an.anomaly_type, an.action, an.target_id,
+    to_jsonb(fields.*) field_obj,
+    to_jsonb(shapes.*) shape_obj,
+    to_jsonb(formats.*) format_obj,
+    to_jsonb(endpoints.*) endpoint_obj,
+    an.archived_at,
+	  endpoints.id endpoint_id
+	FROM apis.anomalies an
+	LEFT JOIN apis.formats on target_id=formats.id
+	LEFT JOIN apis.fields on (fields.id=target_id OR fields.id=formats.field_id) 
+	LEFT JOIN apis.shapes on target_id=shapes.id
+	LEFT JOIN apis.endpoints 
+      ON (endpoints.id = target_id 
+          OR endpoints.id = fields.endpoint_id 
+          OR endpoints.id = shapes.endpoint_id
+          );
+CREATE UNIQUE INDEX idx_apis_anomaly_vm_id ON apis.anomalies_vm (id);
+CREATE INDEX idx_apis_anomaly_vm_project_id ON apis.anomalies_vm (project_id);
+CREATE INDEX idx_apis_anomaly_vm_project_id_endpoint_id ON apis.anomalies_vm (project_id, endpoint_id);
+
+CREATE OR REPLACE FUNCTION apis.refresh_anomalies_vm()
+    RETURNS TRIGGER
+    LANGUAGE PLPGSQL
+AS
+$$
+BEGIN
+    REFRESH MATERIALIZED VIEW CONCURRENTLY apis.anomalies_vm;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER anomaly_update 
+  AFTER UPDATE OR INSERT ON apis.anomalies
+  FOR EACH STATEMENT EXECUTE PROCEDURE apis.refresh_anomalies_vm();
+
+
 COMMIT;

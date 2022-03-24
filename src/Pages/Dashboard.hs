@@ -60,7 +60,7 @@ dashboardGetH sess pid = do
 
 dashboardPage :: RequestDumps.Percentiles -> Text -> Text -> Vector Anomalies.AnomalyVM -> Html ()
 dashboardPage percentiles reqsByEndpointJ reqLatenciesRolledByStepsJ anomalies = do
-  section_ [class_ "p-8 container mx-auto px-4 pt-10 pb-24"] $ do
+  section_ [class_ "p-8 container mx-auto px-4 space-y-16 10 pb-24"] $ do
     section_ $ AnomaliesList.anomalyListSlider anomalies
     dStats percentiles
   script_

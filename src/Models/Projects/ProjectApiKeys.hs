@@ -27,6 +27,7 @@ import Data.Vector (Vector)
 import Database.PostgreSQL.Entity
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), queryOne)
 import Database.PostgreSQL.Entity.Internal.QQ (field)
+import Database.PostgreSQL.Entity.Internal.QQ qualified as QQ
 import Database.PostgreSQL.Entity.Types (CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow)
 import Database.PostgreSQL.Simple.FromField (FromField)

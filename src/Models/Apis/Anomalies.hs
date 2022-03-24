@@ -19,11 +19,15 @@ import Data.Default (Default, def)
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
-import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query)
+import Database.PostgreSQL.Entity
+import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query, query_)
+import Database.PostgreSQL.Entity.Internal.QQ (field)
+import Database.PostgreSQL.Entity.Types (CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, Only (Only))
 import Database.PostgreSQL.Simple.FromField (FromField, ResultError (ConversionFailed, UnexpectedNull), fromField, returnError)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
+import Database.PostgreSQL.Simple.Types (Null (Null))
 import Database.PostgreSQL.Transact (DBT)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields qualified as Fields
@@ -33,6 +37,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
 import Optics.TH
 import Relude hiding (id)
+import Text.RawString.QQ (r)
 import Web.HttpApiData (FromHttpApiData)
 
 newtype AnomalyId = AnomalyId {unAnomalyId :: UUID.UUID}
@@ -115,15 +120,18 @@ data AnomalyVM = AnomalyCM
     anomalyType :: AnomalyTypes,
     action :: AnomalyActions,
     targetId :: UUID.UUID,
-    field :: Maybe Fields.Field,
-    shape :: Maybe Shapes.Shape,
-    format :: Maybe Formats.Format,
-    endpoint :: Maybe Endpoints.Endpoint,
+    fieldObj :: Maybe Fields.Field,
+    shapeObj :: Maybe Shapes.Shape,
+    formatObj :: Maybe Formats.Format,
+    endpointObj :: Maybe Endpoints.Endpoint,
     archivedAt :: Maybe ZonedTime,
     endpointId :: Maybe Endpoints.EndpointId
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, Default)
+  deriving
+    (Entity)
+    via (GenericEntity '[Schema "apis", TableName "anomalies_vm", PrimaryKey "id", FieldModifiers '[CamelToSnake]] AnomalyVM)
 
 makeFieldLabelsNoPrefix ''AnomalyVM
 
@@ -148,85 +156,72 @@ unArchiveAnomaly aid = void $ execute Update q (Only aid)
     q = [sql| update apis.anomalies set acknowleged_by=null, acknowleged_at=null where id=? |]
 
 selectAnomalies :: Projects.ProjectId -> DBT IO (Vector AnomalyVM)
-selectAnomalies pid = do
-  -- FIXME: when this is vaguely tested to be fine, it should be converted into a materialized view
-  -- SHould be an auto updating view using timescale db functionality.
-  let q =
-        [sql| 
-	SELECT 
-    an.id, an.created_at, an.updated_at, an.project_id, an.acknowleged_at,an.acknowleged_by, an.anomaly_type, an.action, an.target_id,
-    to_jsonb(fields.*) field,
-    to_jsonb(shapes.*) shape,
-    to_jsonb(formats.*) format,
-    to_jsonb(endpoints.*) endpoint,
-    an.archived_at,
-    endpoints.id endpoint_id
-	FROM apis.anomalies an
-	LEFT JOIN apis.formats on target_id=formats.id
-	LEFT JOIN apis.fields on (fields.id=target_id OR fields.id=formats.field_id) 
-	LEFT JOIN apis.shapes on target_id=shapes.id
-	LEFT JOIN apis.endpoints 
-      ON (endpoints.id = target_id 
-          OR endpoints.id = fields.endpoint_id 
-          OR endpoints.id = shapes.endpoint_id
-          )
-  where an.project_id = ?
-      |]
-  let options = Only pid
-  query Select q options
+selectAnomalies pid = selectManyByField @AnomalyVM [field| project_id |] pid
 
 selectOngoingAnomalies :: Projects.ProjectId -> DBT IO (Vector AnomalyVM)
-selectOngoingAnomalies pid = do
-  -- FIXME: when this is vaguely tested to be fine, it should be converted into a materialized view
-  -- SHould be an auto updating view using timescale db functionality.
-  let q =
-        [sql| 
-	SELECT 
-    an.id, an.created_at, an.updated_at, an.project_id, an.acknowleged_at,an.acknowleged_by, an.anomaly_type, an.action, an.target_id,
-    to_jsonb(fields.*) field,
-    to_jsonb(shapes.*) shape,
-    to_jsonb(formats.*) format,
-    to_jsonb(endpoints.*) endpoint,
-    an.archived_at,
-    endpoints.id endpoint_id
-	FROM apis.anomalies an
-	LEFT JOIN apis.formats on target_id=formats.id
-	LEFT JOIN apis.fields on (fields.id=target_id OR fields.id=formats.field_id) 
-	LEFT JOIN apis.shapes on target_id=shapes.id
-	LEFT JOIN apis.endpoints 
-      ON (endpoints.id = target_id 
-          OR endpoints.id = fields.endpoint_id 
-          OR endpoints.id = shapes.endpoint_id
-          )
-  where an.project_id = ? and an.acknowleged_at is null and an.archived_at is null
-      |]
-  let options = Only pid
-  query Select q options
+selectOngoingAnomalies pid = query Select q opt
+  where
+    q = _selectWhere @AnomalyVM [[field| project_id |]] <> [r|   AND "acknowleged_at" is null AND "archived_at" is null |]
+    opt = Only pid
 
 selectOngoingAnomaliesForEndpoint :: Projects.ProjectId -> Endpoints.EndpointId -> DBT IO (Vector AnomalyVM)
-selectOngoingAnomaliesForEndpoint pid eid = do
-  -- FIXME: when this is vaguely tested to be fine, it should be converted into a materialized view
-  -- SHould be an auto updating view using timescale db functionality.
-  let q =
-        [sql| 
-	SELECT 
-    an.id, an.created_at, an.updated_at, an.project_id, an.acknowleged_at,an.acknowleged_by, an.anomaly_type, an.action, an.target_id,
-    to_jsonb(fields.*) field,
-    to_jsonb(shapes.*) shape,
-    to_jsonb(formats.*) format,
-    to_jsonb(endpoints.*) endpoint,
-    an.archived_at,
-    endpoints.id endpoint_id
-	FROM apis.anomalies an
-	LEFT JOIN apis.formats on target_id=formats.id
-	LEFT JOIN apis.fields on (fields.id=target_id OR fields.id=formats.field_id) 
-	LEFT JOIN apis.shapes on target_id=shapes.id
-	LEFT JOIN apis.endpoints 
-      ON (endpoints.id = target_id 
-          OR endpoints.id = fields.endpoint_id 
-          OR endpoints.id = shapes.endpoint_id
-          )
-  where an.project_id = ? and endpoints.id=? and an.acknowleged_at is null and an.archived_at is null
-      |]
-  let options = (pid, eid)
-  query Select q options
+selectOngoingAnomaliesForEndpoint pid eid = query Select q opt
+  where
+    q = _selectWhere @AnomalyVM [[field| project_id |], [field| endpoint_id |]] <> [r|   AND "acknowleged_at" is null AND "archived_at" is null |]
+    opt = (pid, eid)
+
+-- selectOngoingAnomalies :: Projects.ProjectId -> DBT IO (Vector AnomalyVM)
+-- selectOngoingAnomalies pid = do
+--   -- FIXME: when this is vaguely tested to be fine, it should be converted into a materialized view
+--   -- SHould be an auto updating view using timescale db functionality.
+--   let q =
+--         [sql|
+-- 	SELECT
+--     an.id, an.created_at, an.updated_at, an.project_id, an.acknowleged_at,an.acknowleged_by, an.anomaly_type, an.action, an.target_id,
+--     to_jsonb(fields.*) field,
+--     to_jsonb(shapes.*) shape,
+--     to_jsonb(formats.*) format,
+--     to_jsonb(endpoints.*) endpoint,
+--     an.archived_at,
+--     endpoints.id endpoint_id
+-- 	FROM apis.anomalies an
+-- 	LEFT JOIN apis.formats on target_id=formats.id
+-- 	LEFT JOIN apis.fields on (fields.id=target_id OR fields.id=formats.field_id)
+-- 	LEFT JOIN apis.shapes on target_id=shapes.id
+-- 	LEFT JOIN apis.endpoints
+--       ON (endpoints.id = target_id
+--           OR endpoints.id = fields.endpoint_id
+--           OR endpoints.id = shapes.endpoint_id
+--           )
+--   where an.project_id = ? and an.acknowleged_at is null and an.archived_at is null
+--       |]
+--   let options = Only pid
+--   query Select q options
+
+-- selectOngoingAnomaliesForEndpoint :: Projects.ProjectId -> Endpoints.EndpointId -> DBT IO (Vector AnomalyVM)
+-- selectOngoingAnomaliesForEndpoint pid eid = do
+--   -- FIXME: when this is vaguely tested to be fine, it should be converted into a materialized view
+--   -- SHould be an auto updating view using timescale db functionality.
+--   let q =
+--         [sql|
+-- 	SELECT
+--     an.id, an.created_at, an.updated_at, an.project_id, an.acknowleged_at,an.acknowleged_by, an.anomaly_type, an.action, an.target_id,
+--     to_jsonb(fields.*) field,
+--     to_jsonb(shapes.*) shape,
+--     to_jsonb(formats.*) format,
+--     to_jsonb(endpoints.*) endpoint,
+--     an.archived_at,
+--     endpoints.id endpoint_id
+-- 	FROM apis.anomalies an
+-- 	LEFT JOIN apis.formats on target_id=formats.id
+-- 	LEFT JOIN apis.fields on (fields.id=target_id OR fields.id=formats.field_id)
+-- 	LEFT JOIN apis.shapes on target_id=shapes.id
+-- 	LEFT JOIN apis.endpoints
+--       ON (endpoints.id = target_id
+--           OR endpoints.id = fields.endpoint_id
+--           OR endpoints.id = shapes.endpoint_id
+--           )
+--   where an.project_id = ? and endpoints.id=? and an.acknowleged_at is null and an.archived_at is null
+--       |]
+--   let options = (pid, eid)
+--   query Select q options
