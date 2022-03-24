@@ -89,7 +89,8 @@ library:
     - containers
     - cookie
     - cryptonite
-    - data-default-extra
+    # - data-default-extra
+    - data-default
     - deriving-aeson
     - dotenv
     - envy
