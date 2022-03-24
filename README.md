@@ -44,3 +44,12 @@ go test -run=TestAPIToolkitWorkflow
 # To build the service worker, run
 
   workbox generateSW workbox-config.js
+
+
+## Run the timescale database via docker
+- Install docker via the docker website
+- setup a docker volume to hold the postgres data: `docker volume create pgdata` 
+- run the docker image
+```
+    make timescaledb-docker
+```
