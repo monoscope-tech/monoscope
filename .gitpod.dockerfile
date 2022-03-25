@@ -1,6 +1,5 @@
 FROM gitpod/workspace-postgres
 
-
 # Install postgres
 USER root
 RUN apt-get update && apt-get install -y \
@@ -27,9 +26,9 @@ RUN cargo install diesel_cli --no-default-features --features postgres
 # Some transitive dependencies are very picky: We need the nightly build build on the 2018-04-14, meant for the 2018-04-15
 RUN rustup default nightly-2018-04-15
 # Set some environment variables
-ENV DATABASE_URL=postgres://gitpod@127.0.0.1/apitoolkit
+ENV DATABASE_URL=postgres://gitpod@127.0.0.1/apitoolkit4
 ENV ROCKET_ADDRESS=0.0.0.0
-ENV ROCKET_PORT=5432
+ENV ROCKET_PORT=8000
 
 # Give back control
 USER root

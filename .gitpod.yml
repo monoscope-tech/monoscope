@@ -22,7 +22,7 @@ tasks:
         stack --no-terminal build --dependencies-only
         stack install --local-bin-path=.
       )
-  - command: gp await-port 8080 && gp preview $(gp url 8080)
+  - command: gp await-port 8000 && gp preview $(gp url 8000)
       stack run
 
 github:
@@ -43,5 +43,5 @@ github:
     addLabel: prebuilt-in-gitpod
 
 ports:
-  - port: 8080
+  - port: 8000
     onOpen: open-preview
