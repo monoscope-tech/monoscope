@@ -1,5 +1,19 @@
+image:
+  file: .gitpod.dockerfile
+
 tasks:    
   - init: stack install
+
+  - command: |
+      echo "setting up postgres database"
+      echo DATABASE_URL=$DATABASE_URL >> .env &&
+      echo ROCKET_ADDRESS=$ROCKET_ADDRESS >> .env &&
+      echo ROCKET_PORT=$ROCKET_PORT >> .env &&
+      pg_start.sh &&
+      diesel setup &&
+      cargo build &&
+      cargo run
+
   - command: |
       echo "installing and running stack executable with dependencies"
       (
@@ -8,7 +22,7 @@ tasks:
         stack --no-terminal build --dependencies-only
         stack install --local-bin-path=.
       )
-
+  - command: gp await-port 8080 && gp preview $(gp url 8080)
       stack run
 
 github:
@@ -28,5 +42,6 @@ github:
     # add a label once the prebuild is ready to pull requests (defaults to false)
     addLabel: prebuilt-in-gitpod
 
-
-
+ports:
+  - port: 8080
+    onOpen: open-preview
