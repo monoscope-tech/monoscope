@@ -1,3 +1,16 @@
+tasks:    
+  - init: stack install
+  - command: |
+      echo "installing and running stack executable with dependencies"
+      (
+        curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
+        curl -sSL https://get.haskellstack.org/ | sh
+        stack --no-terminal build --dependencies-only
+        stack install --local-bin-path=.
+      )
+
+      stack run
+
 github:
   prebuilds:
     # enable for the master/default branch (defaults to true)
@@ -14,3 +27,6 @@ github:
     addBadge: false
     # add a label once the prebuild is ready to pull requests (defaults to false)
     addLabel: prebuilt-in-gitpod
+
+
+
