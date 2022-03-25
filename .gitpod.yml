@@ -4,7 +4,7 @@ image:
 tasks:    
   - init: stack install
 
-  - command: Dockerfile up
+  - command: docker-compose up
   
   - command: |
       echo "installing and running stack executable with dependencies"
@@ -14,7 +14,7 @@ tasks:
         stack --no-terminal build --dependencies-only
         stack install --local-bin-path=.
       )
-  - command: gp await-port 8000 && gp preview $(gp url 8000)
+  - command: gp await-port 8080 && gp preview $(gp url 8080)
       stack run
 
 github:
@@ -35,5 +35,5 @@ github:
     addLabel: prebuilt-in-gitpod
 
 ports:
-  - port: 8000
+  - port: 8080
     onOpen: open-preview
