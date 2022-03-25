@@ -187,7 +187,7 @@ upsertFields endpointID fields = options & mapM (PgT.queryOne q)
           )
 
 selectFields :: Endpoints.EndpointId -> DBT IO (Vector Field)
-selectFields = query Select q
+selectFields eid = query Select q (Only eid)
   where
     q =
       [sql| select id,created_at,updated_at,project_id,endpoint,key,field_type,

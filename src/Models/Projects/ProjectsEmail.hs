@@ -12,12 +12,17 @@ where
 
 import Control.Lens qualified as Lens
 import Data.List.NonEmpty qualified as NonEmptyDataList
+import Models.Users.Users qualified as Users
+import Web.Auth qualified as Auth
 import Data.Text qualified as T
+import Database.PostgreSQL.Entity.DBT ( QueryNature (..), query, queryOne, withPool )
 import GHC.Exts
 import Config qualified
+import Config
 import Network.SendGridV3.Api
 import Network.Wreq qualified as Wreq
 import Relude
+import Data.Vector qualified as Vector
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Models.Projects.Projects as Project
@@ -25,9 +30,13 @@ import Database.PostgreSQL.Entity
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Transact qualified as PgT
+import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Simple (Only (Only))
 import Deriving.Aeson qualified as DAE
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Default
+import Servant ( Header, Headers, NoContent (..) )
+import Web.Cookie (SetCookie)
        
 sendGridApiKeyE :: Config.EnvConfig -> ApiKey
 sendGridApiKeyE Config.EnvConfig { sendGridApiKey } = 
@@ -80,30 +89,51 @@ data InviteTable = InviteTable
     createdAt :: ZonedTime,
     deletedAt :: Maybe ZonedTime,
     expired :: Bool,
-    invitedProjectID :: Project.ProjectId
+    userID :: Users.UserId
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, Default)
-  deriving
-    (FromJSON, ToJSON)
+  deriving anyclass (FromRow, Default)
+  deriving (FromJSON, ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] InviteTable
   deriving
     (Entity)
-    via (GenericEntity '[Schema "users", TableName "inviteTable", PrimaryKey "inviteID", FieldModifiers '[CamelToSnake]] InviteTable)
+    via (GenericEntity '[Schema "users", TableName "inviteTable", PrimaryKey "invite_id", FieldModifiers '[CamelToSnake]] InviteTable)
 
-inviteUUID :: UUID.UUID -> Project.ProjectId-> ZonedTime -> IO InviteTable
-inviteUUID invID pid tNow = do
+inviteUUID :: UUID.UUID -> Users.UserId-> ZonedTime -> IO InviteTable
+inviteUUID invID uid tNow = do
   pure $ InviteTable 
     { inviteID = invID,
       createdAt = tNow,
       deletedAt = Nothing,
       expired = False,
-      invitedProjectID = pid
+      userID = uid
     }
 
--- parseInviteUrl :: 
 
+inviteDetails :: T.Text -> PgT.DBT IO (Vector.Vector InviteTable)
+inviteDetails uuidText =
+  query Select q (Only uid)
+  where 
+    uid = UUID.fromText uuidText
+    q =
+      [sql|
+      SELECT user_id from users.inviteTable where inviteID = uid and expired = false|]
 
+updateUserStatus :: Vector.Vector InviteTable -> PgT.DBT IO Int64
+updateUserStatus invD= PgT.execute q invD
+  where
+    q = [sql|
+    UPDATE users.users(active) VALUES (true) where users.inviteTable.user_id = uid|]
+
+invitedUserConstruct :: T.Text -> Config.DashboardM ( Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
+invitedUserConstruct uuidText = do
+  pool <- asks pool
+  liftIO $ 
+    withPool pool $ do
+      uidd <- inviteDetails uuidText
+      status <- updateUserStatus uidd
+      pass
+  Auth.loginH
 
 insertInviteID :: InviteTable -> PgT.DBT IO ()
 insertInviteID = insert @InviteTable
