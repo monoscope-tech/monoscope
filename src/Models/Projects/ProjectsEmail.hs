@@ -51,13 +51,13 @@ instance SafeIsString String
 
 instance SafeIsString T.Text
 
-contentMail :: T.Text
-contentMail =
+contentMail :: Maybe T.Text -> T.Text
+contentMail id =
   mailBody
     <> link
   where
     mailBody = "ApiToolKit Mail Invite. Click on the link below"
-    link = "<a href =https://apitoolkit.io>"
+    link = "<a href =https://apitoolkit.io/invite/>" <> id
 
 patternMatchMailContent :: Maybe T.Text -> Maybe (NonEmpty MailContent)
 patternMatchMailContent (Just txt) = Just (NonEmptyDataList.fromList [mailContentHtml txt])
@@ -68,9 +68,9 @@ emailCtx :: UUID.UUID -> T.Text -> Mail () ()
 emailCtx invID rAddress =
   let to = personalization $ NonEmptyDataList.fromList [MailAddress rAddress "User"]
       textInvID = UUID.toText invID
-      from = MailAddress ("hello@apitoolkit.io/" <> textInvID) "Api Toolkit"
+      from = MailAddress ("hello@apitoolkit.io/") "Api Toolkit"
       subject = "Email Subject"
-      content = patternMatchMailContent (Just contentMail)
+      content = patternMatchMailContent (Just contentMail textInvID)
    in mail [to] from subject content
 
 sendEmail :: UUID.UUID -> T.Text -> Mail () ()
@@ -110,28 +110,29 @@ inviteUUID invID uid tNow = do
     }
 
 
-inviteDetails :: T.Text -> PgT.DBT IO (Vector.Vector InviteTable)
-inviteDetails uuidText =
-  query Select q (Only uid)
-  where 
-    uid = UUID.fromText uuidText
-    q =
-      [sql|
-      SELECT user_id from users.inviteTable where inviteID = uid and expired = false|]
+-- inviteDetails :: T.Text -> PgT.DBT IO (Maybe InviteTable)
+-- inviteDetails uuidText =
+--   query Select q (Only uid)
+--   where 
+--     uid = UUID.fromText uuidText
+--     q =
+--       [sql|
+--       SELECT user_id from users.inviteTable where inviteID = uid and expired = false|]
 
-updateUserStatus :: Vector.Vector InviteTable -> PgT.DBT IO Int64
-updateUserStatus invD= PgT.execute q invD
+updateUserStatus :: T.Text -> PgT.DBT IO Int64
+updateUserStatus user_id = PgT.execute q user_id
   where
+    uid = UUID.fromText user_id
     q = [sql|
-    UPDATE users.users(active) VALUES (true) where users.inviteTable.user_id = uid|]
+    UPDATE users.users(active) VALUES (true) where users.users.id = uid|]
 
 invitedUserConstruct :: T.Text -> Config.DashboardM ( Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
 invitedUserConstruct uuidText = do
   pool <- asks pool
   liftIO $ 
     withPool pool $ do
-      uidd <- inviteDetails uuidText
-      status <- updateUserStatus uidd
+      -- uidd <- inviteDetails uuidText
+      status <- updateUserStatus uuidText
       pass
   Auth.loginH
 

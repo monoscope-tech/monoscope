@@ -112,7 +112,7 @@ createProjectPostH sess createP = do
       invUser <- liftIO $ createUserFromInvitation invUserID tNow emailField
       let invMember = [ProjectMembers.CreateProjectMembers pid invUserID perm]
       invUUID <- liftIO $ ProjectEmail.inviteUUID inviteID invUserID tNow
-      let invEmail = ProjectEmail.sendEmail inviteID emailField
+      let invEmail = ProjectEmail.sendEmail invUserID emailField
       
       _ <- liftIO $
         withPool pool $ do
