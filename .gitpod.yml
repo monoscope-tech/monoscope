@@ -1,21 +1,9 @@
 image:
-  file: Dockerfile
+  file: .gitpod.dockerfile
 
 tasks:    
-  - init: stack install
-
-  - command: docker-compose up
+  - init: stack update && stack install unordered-containers
   
-  - command: |
-      echo "installing and running stack executable with dependencies"
-      (
-        curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
-        curl -sSL https://get.haskellstack.org/ | sh
-        stack --no-terminal build --dependencies-only
-        stack install --local-bin-path=.
-      )
-  - command: gp await-port 8080 && gp preview $(gp url 8080)
-      stack run
 
 github:
   prebuilds:
@@ -33,7 +21,3 @@ github:
     addBadge: false
     # add a label once the prebuild is ready to pull requests (defaults to false)
     addLabel: prebuilt-in-gitpod
-
-ports:
-  - port: 8080
-    onOpen: open-preview
