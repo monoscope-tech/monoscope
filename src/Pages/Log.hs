@@ -30,7 +30,7 @@ apiLogsPage pid =
     div_ [class_ "flex justify-between mb-5"] $ do
       h3_ [class_ "place-items-center"] "ApiToolKit"
       div_ [class_ "flex flex-row"] $ do
-        img_ [src_ "/assets/svgs/funnel.svg", class_ "h-4 mt-4 mx-3 w-auto"]
+        img_ [src_ "/public/assets/svgs/funnel.svg", class_ "h-4 mt-4 mx-3 w-auto"]
         div_ [class_ "flex flex-row px-5  my-2  text-sm bg-white text-zinc-500 border-solid border border-gray-200 rounded-2xl"] $ do
           input_ [type_ "date", class_ " h-10 "]
           span_ [class_ "mx-4 mt-2 text-base text-zinc-500"] "--"
