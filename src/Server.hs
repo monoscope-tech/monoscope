@@ -21,6 +21,7 @@ import Pages.Endpoints.EndpointList qualified as EndpointList
 import Pages.ManualIngestion qualified as ManualIngestion
 import Pages.Projects.CreateProject qualified as CreateProject
 import Pages.Projects.ListProjects qualified as ListProjects
+import Models.Projects.ProjectsEmail qualified as ProjectEmail
 import Relude
 import Servant
 import Servant.HTML.Lucid
@@ -104,7 +105,7 @@ publicServer =
     :<|> authCallbackH
     :<|> ClientMetadata.clientMetadataH
     :<|> serveDirectoryWebApp "./static/assets"
-    :<|> projectEmail.invitedUserConstruct
+    :<|> ProjectEmail.invitedUserConstruct 
 
 server :: ServerT API DashboardM
 server = protectedServer :<|> publicServer

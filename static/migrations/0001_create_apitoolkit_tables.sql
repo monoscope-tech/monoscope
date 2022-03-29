@@ -55,6 +55,7 @@ SELECT manage_updated_at('users.inviteTable');
 CREATE TABLE IF NOT EXISTS users.users
 (
   id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  invite_id UUID NOT NULL DEFAULT '', 
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
   updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
   deleted_at TIMESTAMP WITH TIME ZONE,

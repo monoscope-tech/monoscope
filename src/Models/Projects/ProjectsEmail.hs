@@ -5,8 +5,8 @@ module Models.Projects.ProjectsEmail
   ( sendEmail,
     sendInviteMail,
     inviteUUID,
-    insertInviteID
-    -- sendEmailTrial
+    insertInviteID,
+    invitedUserConstruct
   )
 where
 
@@ -28,7 +28,7 @@ import Data.UUID qualified as UUID
 import Models.Projects.Projects as Project
 import Database.PostgreSQL.Entity
 import Database.PostgreSQL.Entity.Types
-import Database.PostgreSQL.Simple (FromRow, ToRow)
+import Database.PostgreSQL.Simple ( FromRow, ToRow )
 import Database.PostgreSQL.Transact qualified as PgT
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple (Only (Only))
@@ -51,13 +51,13 @@ instance SafeIsString String
 
 instance SafeIsString T.Text
 
-contentMail :: Maybe T.Text -> T.Text
-contentMail id =
+contentMail :: T.Text -> T.Text
+contentMail inviteid =
   mailBody
     <> link
   where
     mailBody = "ApiToolKit Mail Invite. Click on the link below"
-    link = "<a href =https://apitoolkit.io/invite/>" <> id
+    link = "<a href =https://apitoolkit.io/invite_link/>" <> inviteid
 
 patternMatchMailContent :: Maybe T.Text -> Maybe (NonEmpty MailContent)
 patternMatchMailContent (Just txt) = Just (NonEmptyDataList.fromList [mailContentHtml txt])
@@ -70,7 +70,7 @@ emailCtx invID rAddress =
       textInvID = UUID.toText invID
       from = MailAddress ("hello@apitoolkit.io/") "Api Toolkit"
       subject = "Email Subject"
-      content = patternMatchMailContent (Just contentMail textInvID)
+      content = patternMatchMailContent (Just (contentMail textInvID))
    in mail [to] from subject content
 
 sendEmail :: UUID.UUID -> T.Text -> Mail () ()
@@ -92,7 +92,7 @@ data InviteTable = InviteTable
     userID :: Users.UserId
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromRow, Default)
+  deriving anyclass (FromRow, ToRow, Default)
   deriving (FromJSON, ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] InviteTable
   deriving
@@ -109,30 +109,18 @@ inviteUUID invID uid tNow = do
       userID = uid
     }
 
-
--- inviteDetails :: T.Text -> PgT.DBT IO (Maybe InviteTable)
--- inviteDetails uuidText =
---   query Select q (Only uid)
---   where 
---     uid = UUID.fromText uuidText
---     q =
---       [sql|
---       SELECT user_id from users.inviteTable where inviteID = uid and expired = false|]
-
-updateUserStatus :: T.Text -> PgT.DBT IO Int64
-updateUserStatus user_id = PgT.execute q user_id
+updateUserStatus :: Users.User -> Maybe UUID.UUID -> PgT.DBT IO Int64
+updateUserStatus users user_id = PgT.execute q users
   where
-    uid = UUID.fromText user_id
     q = [sql|
-    UPDATE users.users(active) VALUES (true) where users.users.id = uid|]
+    UPDATE users.users(active) VALUES (true) where users.users.invite_id = user_id|]
 
-invitedUserConstruct :: T.Text -> Config.DashboardM ( Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
-invitedUserConstruct uuidText = do
+invitedUserConstruct :: T.Text -> Users.User -> Config.DashboardM ( Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
+invitedUserConstruct inviteid users = do
   pool <- asks pool
   liftIO $ 
     withPool pool $ do
-      -- uidd <- inviteDetails uuidText
-      status <- updateUserStatus uuidText
+      status <- updateUserStatus users (UUID.fromText inviteid)
       pass
   Auth.loginH
 
