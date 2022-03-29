@@ -112,6 +112,8 @@ requestMsgToDumpAndEndpoint rM now dumpID = do
           <> reqBodyFieldsDTO
           <> respBodyFieldsDTO
 
+  let urlPath = rM ^. #urlPath
+
   let shape =
         Shapes.Shape
           { createdAt = rM ^. #timestamp,
@@ -134,7 +136,7 @@ requestMsgToDumpAndEndpoint rM now dumpID = do
             id = dumpID,
             projectId = rM ^. #projectId,
             host = rM ^. #host,
-            urlPath = rM ^. #urlPath,
+            urlPath = urlPath,
             rawUrl = rM ^. #rawUrl,
             pathParams = rM ^. #pathParams,
             method = rM ^. #method,
@@ -163,7 +165,7 @@ requestMsgToDumpAndEndpoint rM now dumpID = do
             updatedAt = now,
             id = Endpoints.EndpointId dumpID,
             projectId = Projects.ProjectId $ rM ^. #projectId,
-            urlPath = rM ^. #urlPath,
+            urlPath = urlPath,
             urlParams = AET.emptyObject,
             method = rM ^. #method,
             hosts = [rM ^. #host]

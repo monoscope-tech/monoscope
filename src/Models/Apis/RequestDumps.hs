@@ -1,17 +1,12 @@
 {-# LANGUAGE TemplateHaskell #-}
-{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
-{-# HLINT ignore "Use newtype instead of data" #-}
 
 module Models.Apis.RequestDumps
   ( RequestDump (..),
     insertRequestDump,
     selectRequestsByStatusCodesStatByMin,
-    selectReqLatencyPercentiles,
     labelRequestLatency,
     LabelValue,
-    Percentiles (..),
     selectReqLatenciesRolledBySteps,
-    selectReqLatencyPercentilesForProject,
     selectRequestsByEndpointsStatByMin,
     selectReqLatenciesRolledByStepsForProject,
   )
@@ -23,7 +18,7 @@ import Data.Time (CalendarDiffTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity (insert)
-import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, queryOne)
+import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -105,67 +100,6 @@ selectRequestsByEndpointsStatByMin pid = query Select q (Only pid)
         GROUP BY timeB, method, url_path;
     |]
 
-data Percentiles = Percentiles
-  { min :: Double,
-    p50 :: Double,
-    p75 :: Double,
-    p90 :: Double,
-    p95 :: Double,
-    p99 :: Double,
-    max :: Double
-  }
-  deriving stock (Generic)
-  deriving anyclass (FromRow)
-
-makeFieldLabelsNoPrefix ''Percentiles
-
-selectReqLatencyPercentiles :: Projects.ProjectId -> Text -> Text -> DBT IO (Maybe Percentiles)
-selectReqLatencyPercentiles pid urlPath method = queryOne Select q (pid, urlPath, method)
-  where
-    q =
-      [sql|
-      WITH latency_percentiles as (
-        SELECT
-          percentile_agg(EXTRACT(epoch FROM duration)) as agg
-        FROM apis.request_dumps
-        where created_at > NOW() - interval '14' day
-        and project_id=? and url_path=? and method=?
-
-        )
-      SELECT 		
-         coalesce(approx_percentile(0, agg)/10000000,0) min,
-         coalesce(approx_percentile(0.50, agg)/1000000, 0) p50,
-         coalesce(approx_percentile(0.75, agg)/1000000, 0) p75,
-         coalesce(approx_percentile(0.90, agg)/1000000, 0) p90,
-         coalesce(approx_percentile(0.95, agg)/1000000, 0) p95,
-         coalesce(approx_percentile(0.99, agg)/100000, 0) p99,
-         coalesce(approx_percentile(1, agg)/10000000,0) max 
-        FROM latency_percentiles;                  
-      |]
-
-selectReqLatencyPercentilesForProject :: Projects.ProjectId -> DBT IO (Maybe Percentiles)
-selectReqLatencyPercentilesForProject pid = queryOne Select q (Only pid)
-  where
-    q =
-      [sql|
-      WITH latency_percentiles as (
-        SELECT
-          percentile_agg(EXTRACT(epoch FROM duration)) as agg
-        FROM apis.request_dumps
-        where created_at > NOW() - interval '14' day
-        and project_id=?
-        )
-      SELECT 		
-          coalesce(approx_percentile(0, agg)/1000000, 0) min,
-          coalesce(approx_percentile(0.50, agg)/1000000, 0) p50,
-          coalesce(approx_percentile(0.75, agg)/1000000, 0) p75,
-          coalesce(approx_percentile(0.90, agg)/1000000, 0) p90,
-          coalesce(approx_percentile(0.95, agg)/1000000, 0) p95,
-          coalesce(approx_percentile(0.99, agg)/1000000, 0) p99,
-          coalesce(approx_percentile(1, agg)/1000000, 0) max 
-        FROM latency_percentiles;
-      |]
-
 selectReqLatenciesRolledBySteps :: Int -> Int -> Projects.ProjectId -> Text -> Text -> DBT IO (Vector (Int, Int))
 selectReqLatenciesRolledBySteps maxv steps pid urlPath method = query Select q (maxv, steps, steps, steps, pid, urlPath, method)
   where
@@ -187,8 +121,7 @@ selectReqLatenciesRolledByStepsForProject maxv steps pid = query Select q (maxv,
       [sql| 
 select duration_steps, count(id)
 	FROM generate_series(0, ?, ?) AS duration_steps
-	LEFT OUTER JOIN apis.request_dumps on (duration_steps = round((EXTRACT(epoch FROM duration)/1000000)/?)*? 
-    AND created_at > NOW() - interval '14' day
+	LEFT OUTER JOIN apis.request_dumps on (duration_steps = round((EXTRACT(epoch FROM duration)/1000000)/?)*? AND created_at > NOW() - interval '14' day
     AND project_id=?)
 	GROUP BY duration_steps 
 	ORDER BY duration_steps;

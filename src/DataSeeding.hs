@@ -7,6 +7,7 @@ import Config (DashboardM, logger, pool)
 import Data.Aeson qualified as AE
 import Data.ByteString.Base64 qualified as B64
 import Data.Default (def)
+import Data.HashMap.Strict qualified as HM
 import Data.Time (NominalDiffTime, UTCTime, ZonedTime, addUTCTime, diffUTCTime, utc, utcToZonedTime, zonedTimeToUTC)
 import Data.Yaml qualified as Yaml
 import Database.PostgreSQL.Entity.DBT (withPool)
@@ -24,6 +25,7 @@ import Optics.TH (makeFieldLabelsNoPrefix)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import ProcessMessage qualified
 import Relude
+import Relude.Unsafe ((!!))
 import RequestMessages qualified
 import System.Random (RandomGen, getStdGen, randomRs)
 import Text.RawString.QQ (r)
@@ -43,7 +45,11 @@ makeFieldLabelsNoPrefix ''FieldConfig
 data SeedConfig = SeedConfig
   { from :: ZonedTime,
     to :: ZonedTime,
-    countPerInterval :: Int,
+    method :: Text,
+    durationTo :: Int,
+    durationFrom :: Int,
+    statusCodesOneof :: [Int],
+    count :: Int,
     path :: Text,
     pathParams :: [FieldConfig],
     queryParams :: [FieldConfig],
@@ -92,12 +98,15 @@ parseConfigToRequestMessages pid input = do
           configs & mapM \config -> do
             let startTimeUTC = zonedTimeToUTC (config ^. #from)
             let maxDiffTime = diffUTCTime (zonedTimeToUTC (config ^. #to)) startTimeUTC
-            let timestamps = randomTimesBtwToAndFrom startTimeUTC (config ^. #countPerInterval) randGen maxDiffTime
+            let timestamps = randomTimesBtwToAndFrom startTimeUTC (config ^. #count) randGen maxDiffTime
+            let durations = take (config ^. #count) $ randomRs (config ^. #durationFrom, config ^. #durationTo) randGen
+            let allowedStatusCodes = config ^. #statusCodesOneof
+            let statusCodes = take (config ^. #count) $ map (allowedStatusCodes !!) $ randomRs (0, length allowedStatusCodes -1) randGen
 
-            timestamps & mapM \timestampV -> do
-              let duration = 50000
-              let statusCode = 200
-              let method = "GET"
+            zip3 timestamps durations statusCodes & mapM \(timestampV, duration', statusCode') -> do
+              let duration = duration'
+              let statusCode = statusCode'
+              let method = config ^. #method
               let urlPath = config ^. #path
               let rawUrl = config ^. #path
               let protoMajor = 1
@@ -107,10 +116,12 @@ parseConfigToRequestMessages pid input = do
               let projectId = Projects.unProjectId pid
               let timestamp = timestampV
               let sdkType = RequestMessages.GoGin
-              pathParams <- AE.toJSON <$> mapM fieldConfigToField (config ^. #pathParams)
-              queryParams <- AE.toJSON <$> mapM fieldConfigToField (config ^. #queryParams)
-              requestHeaders <- AE.toJSON <$> mapM fieldConfigToField (config ^. #requestHeaders)
-              responseHeaders <- AE.toJSON <$> mapM fieldConfigToField (config ^. #responseHeaders)
+
+              pathLog <- mapM fieldConfigToField (config ^. #queryParams)
+              pathParams <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField (config ^. #pathParams)
+              queryParams <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField (config ^. #queryParams)
+              requestHeaders <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField (config ^. #requestHeaders)
+              responseHeaders <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField (config ^. #responseHeaders)
               responseBody <- B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField (config ^. #responseBody)
               requestBody <- B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField (config ^. #responseBody)
               pure RequestMessages.RequestMessage {..}
@@ -190,7 +201,11 @@ dataSeedingPage = do
               [text|
 - from: 2022-03-01 01:00 +0000
   to: 2022-03-09 01:00 +0000
-  count_per_interval: 50
+  count: 10
+  method: GET
+  duration_to: 500000000
+  duration_from: 1000000
+  status_codes_oneof: [200,404,503]
   path: /test/path
   path_params: []
   query_params:

@@ -7,6 +7,7 @@ import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT
   ( withPool,
   )
+import Fmt (fixedF, fmt, (|+))
 import Lucid
 import Lucid.HTMX
 import Models.Apis.Endpoints qualified as Endpoints
@@ -19,11 +20,11 @@ import Relude
 endpointListH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 endpointListH sess pid = do
   pool <- asks pool
-  (project, endpoints) <- liftIO $
+  (project, endpointStats) <- liftIO $
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      endpoints <- Endpoints.endpointsByProject pid
-      pure (project, endpoints)
+      endpointStats <- Endpoints.endpointRequestStatsByProject pid
+      pure (project, endpointStats)
 
   let bwconf =
         (def :: BWConfig)
@@ -31,9 +32,9 @@ endpointListH sess pid = do
             currProject = project,
             pageTitle = "Endpoints"
           }
-  pure $ bodyWrapper bwconf $ endpointList endpoints
+  pure $ bodyWrapper bwconf $ endpointList endpointStats
 
-endpointList :: Vector Endpoints.Endpoint -> Html ()
+endpointList :: Vector Endpoints.EndpointRequestStats -> Html ()
 endpointList enps = do
   div_ [class_ "container mx-auto  px-4 pt-10 pb-24 h-full overflow-y-scroll"] $ do
     div_ [class_ "flex justify-between"] $ do
@@ -67,26 +68,34 @@ endpointList enps = do
               input_ [type_ "checkbox"]
             th_ [style_ "width:7rem; min-width:7rem; max-width:7rem;"] ""
             th_ [class_ "text-left text-sm text-gray-400 font-normal"] "ENDPOINTS"
-            th_ [class_ "text-left text-sm text-gray-400 font-normal text-center"] "AVG RPM"
-            th_ [class_ "text-left text-sm text-gray-400 font-normal text-center"] "MEAN STATUS"
-            th_ [class_ "text-left text-sm text-gray-400 font-normal text-center"] "AVG LATENCY"
+            th_ [class_ "text-left text-sm text-gray-400 font-normal text-center"] "REQUESTS"
+            th_ [class_ "text-left text-sm text-gray-400 font-normal text-right"] "TOTAL TIME"
+            th_ [class_ "text-left text-sm text-gray-400 font-normal text-right"] "P50 LATENCY"
+            th_ [class_ "text-left text-sm text-gray-400 font-normal text-right"] "P99 LATENCY"
             th_ [class_ "text-left text-sm text-gray-400 font-normal text-center"] ""
         tbody_ $ do
           enps
             & mapM_
               ( \enp -> do
                   tr_ [class_ "border-b border-b-slate-300 py-2"] $ do
-                    td_ [class_ "text-left pr-4 "] $ do
-                      input_ [type_ "checkbox"]
+                    td_ [class_ "text-left pr-4 "] $input_ [type_ "checkbox"]
                     td_ [class_ "text-right"] $ do
-                      a_ [href_ $ Endpoints.endpointToUrlPath enp] $ do
+                      a_ [href_ ("/p/" <> Projects.projectIdText (enp ^. #projectId) <> "/endpoints/" <> Endpoints.endpointIdText (enp ^. #endpointId))] $ do
                         span_ [class_ $ "endpoint endpoint-" <> toLower (enp ^. #method)] $ toHtml $ enp ^. #method
                     td_ [class_ ""] $ do
-                      a_ [href_ ("/p/" <> Projects.projectIdText (enp ^. #projectId) <> "/endpoints/" <> Endpoints.endpointIdText (enp ^. #id))] $ do
+                      a_ [href_ ("/p/" <> Projects.projectIdText (enp ^. #projectId) <> "/endpoints/" <> Endpoints.endpointIdText (enp ^. #endpointId))] $ do
                         span_ [class_ " inconsolata text-base text-slate-700"] $ toHtml $ enp ^. #urlPath
-                    td_ [class_ " text-sm text-gray-400 font-normal text-center"] "4500"
-                    td_ [class_ " inconsolata text-base text-slate-700 text-center"] "200"
-                    td_ [class_ " text-sm text-gray-400 font-normal text-center"] "400ms"
+                    td_ [class_ " text-sm text-gray-400 font-normal text-center"] $ do
+                      span_ $ toHtml @String $ show $ enp ^. #totalRequests
+                    td_ [class_ " inconsolata text-base text-slate-700 text-right space-x-2"] $ do
+                      span_ $ toHtml @String $ show $ enp ^. #totalTime -- convert from milliseconds
+                      meter_ [min_ $ show (0 :: Integer), max_ (fmt $ fixedF 4 (enp ^. #totalTimeProj)), value_ (fmt $ fixedF 4 (enp ^. #totalTime))] "total time in ms"
+                    td_ [class_ " text-sm text-gray-400 font-normal text-right space-x-2"] $ do
+                      span_ $ toHtml @Text $ fmt $ fixedF 2 (enp ^. #p50) |+ " ms"
+                      meter_ [min_ $ show (0 :: Integer), max_ (fmt $ fixedF 4 (enp ^. #max)), value_ (fmt $ fixedF 4 (enp ^. #p50))] "p50 vs max"
+                    td_ [class_ " text-sm text-gray-400 font-normal text-right space-x-2"] $ do
+                      span_ $ toHtml @Text $ fmt $ fixedF 2 (enp ^. #p99) |+ " ms"
+                      meter_ [min_ $ show (0 :: Integer), max_ (fmt $ fixedF 4 (enp ^. #max)), value_ (fmt $ fixedF 4 (enp ^. #p99))] "p99 vs max"
                     td_ [class_ "grid justify-items-end font-medium text-gray-400 "] $ do
                       div_ [class_ "flex flex-row content-around"] $ do
                         img_ [class_ "px-3", src_ "/assets/svgs/alert-red.svg"]

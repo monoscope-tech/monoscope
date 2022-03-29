@@ -51,7 +51,6 @@ library
       Pages.Projects.CreateProject
       Pages.Projects.ListProjects
       Pages.Projects.ProjectSettings
-      Pages.Projects.ProjectView
       ProcessMessage
       RequestMessages
       RequestMessagesSpec

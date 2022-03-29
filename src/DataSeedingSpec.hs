@@ -2,7 +2,6 @@ module DataSeedingSpec (spec) where
 
 import Data.UUID qualified as UUID
 import DataSeeding
-import Faker.Address
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Relude
@@ -17,8 +16,11 @@ spec = do
             [text|
         - from: 2022-03-01 01:00 +0000
           to: 2022-03-09 01:00 +0000
-          count_per_interval: 10
-          intervals: 5min
+          count: 2
+          method: GET
+          duration_to: 500000000
+          duration_from: 1000000
+          status_codes_oneof: [200,404,203]
           path: /test/path
           path_params: []
           query_params:
@@ -48,7 +50,4 @@ spec = do
               children: []
         |]
       generated <- liftIO $ parseConfigToJson (Projects.ProjectId UUID.nil) (encodeUtf8 input)
-      traceShowM generated
-      mapM_ traceShowM generated
-      traceShowM "generated"
       pending

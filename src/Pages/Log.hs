@@ -1,35 +1,20 @@
 module Pages.Log (apiLog) where
 
 import Config
-import Data.Aeson (encode)
-import Data.Aeson.QQ (aesonQQ)
-import Data.ByteString.Base64 qualified as B64
 import Data.Default (def)
-import Data.Text as T
-import Data.UUID as UUID
-import Data.UUID.V4 qualified as UUIDV4
-import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
-import Lucid.HTMX
-import Lucid.Hyperscript
-import Models.Projects.ProjectApiKeys qualified as ProjectApiKey
-import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Optics.Core ((^.))
-import Pages.BodyWrapper (BWConfig (BWConfig), bodyWrapper, currProject, pageTitle, sessM)
+import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Relude
-import Servant (addHeader)
-import Web.FormUrlEncoded (FromForm)
 
 apiLog :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 apiLog sess pid = do
   pool <- asks pool
-  (project) <- liftIO $
+  project <- liftIO $
     withPool pool $ do
-      project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      pure project
+      Projects.selectProjectForUser (Sessions.userId sess, pid)
 
   let bwconf =
         (def :: BWConfig)
@@ -40,7 +25,7 @@ apiLog sess pid = do
   pure $ bodyWrapper bwconf $ apiLogsPage pid
 
 apiLogsPage :: Projects.ProjectId -> Html ()
-apiLogsPage pid = do
+apiLogsPage pid =
   section_ [class_ "container mx-auto  px-4 py-10"] $ do
     div_ [class_ "flex justify-between mb-5"] $ do
       h3_ [class_ "place-items-center"] "ApiToolKit"

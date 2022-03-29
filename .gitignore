@@ -3,6 +3,7 @@
 node_modules/
 static/assets/.DS_Store
 static/assets/css/tailwind.min.css
+static/public/assets/css/tailwind.min.css
 .hie
 dist-newstyle
 .env
@@ -10,3 +11,4 @@ env
 .vscode
 apitoolkit-server-exe
 gha-creds-*.json
+.DS_Store

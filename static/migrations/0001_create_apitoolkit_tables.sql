@@ -304,19 +304,30 @@ CREATE TABLE IF NOT EXISTS apis.request_dumps
     PRIMARY KEY(project_id,created_at,id)
 );
 SELECT manage_updated_at('apis.request_dumps');
--- SELECT create_hypertable('apis.request_dumps', 'created_at');
+SELECT create_hypertable('apis.request_dumps', 'created_at');
 
 
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS apis.anomalies_vm 
     AS	SELECT 
     an.id, an.created_at, an.updated_at, an.project_id, an.acknowleged_at,an.acknowleged_by, an.anomaly_type, an.action, an.target_id,
-    to_jsonb(fields.*) field_obj,
-    to_jsonb(shapes.*) shape_obj,
-    to_jsonb(formats.*) format_obj,
-    to_jsonb(endpoints.*) endpoint_obj,
-    an.archived_at,
-	  endpoints.id endpoint_id
+    shapes.id shape_id,
+
+    fields.id field_id,
+    fields.key field_key,
+    fields.key_path_str field_key_path_str,
+    fields.field_category field_category,
+    fields.format field_format,
+    
+    formats.id format_id,
+    formats.field_type format_type,
+    formats.examples format_examples,
+
+    endpoints.id endpoint_id,
+    endpoints.method endpoint_method,
+    endpoints.url_path endpoint_url_path,
+
+    an.archived_at
 	FROM apis.anomalies an
 	LEFT JOIN apis.formats on target_id=formats.id
 	LEFT JOIN apis.fields on (fields.id=target_id OR fields.id=formats.field_id) 
@@ -345,5 +356,87 @@ CREATE TRIGGER anomaly_update
   AFTER UPDATE OR INSERT ON apis.anomalies
   FOR EACH STATEMENT EXECUTE PROCEDURE apis.refresh_anomalies_vm();
 
+
+
+-- Create a view that tracks endpoint related statistic points from the request dump table.
+DROP MATERIALIZED VIEW IF EXISTS apis.endpoint_request_stats;
+CREATE MATERIALIZED VIEW apis.endpoint_request_stats AS 
+    WITH request_dump_stats as (
+        SELECT
+            project_id, url_path, method,
+            percentile_agg(EXTRACT(epoch FROM duration)) as agg,
+            sum(EXTRACT(epoch FROM duration))  as total_time,
+            count(1)  as total_requests,
+            sum(sum(EXTRACT(epoch FROM duration))) OVER (partition by project_id) as total_time_proj,
+            sum(count(*)) OVER (partition by project_id) as total_requests_proj
+        FROM apis.request_dumps
+        where created_at > NOW() - interval '14' day
+        GROUP BY project_id, url_path, method,duration
+    )
+    SELECT 	
+        enp.id endpoint_id,
+        rds.project_id,
+        rds.url_path, rds.method,
+        coalesce(approx_percentile(0,    agg)/1000000, 0) min,
+        coalesce(approx_percentile(0.50, agg)/1000000, 0) p50,
+        coalesce(approx_percentile(0.75, agg)/1000000, 0) p75,
+        coalesce(approx_percentile(0.90, agg)/1000000, 0) p90,
+        coalesce(approx_percentile(0.95, agg)/1000000, 0) p95,
+        coalesce(approx_percentile(0.99, agg)/1000000, 0) p99,
+        coalesce(approx_percentile(1,    agg)/1000000, 0) max,
+        CAST (total_time/1000000 AS FLOAT8) total_time,
+        CAST (total_time_proj/1000000  AS FLOAT8) total_time_proj,
+        CAST (total_requests AS INT),
+        CAST (total_requests_proj AS INT)
+    FROM request_dump_stats rds
+    JOIN apis.endpoints enp on (rds.project_id=enp.project_id AND rds.method=enp.method AND rds.url_path=enp.url_path);
+CREATE INDEX IF NOT EXISTS idx_apis_endpoint_request_stats_project_id ON apis.endpoint_request_stats(project_id);
+CREATE INDEX IF NOT EXISTS idx_apis_endpoint_request_stats_endpoint_id ON apis.endpoint_request_stats(endpoint_id);
+
+-- Create a view that tracks project request related statistic points from the request dump table.
+DROP MATERIALIZED VIEW IF EXISTS apis.project_request_stats;
+CREATE MATERIALIZED VIEW apis.project_request_stats AS 
+  WITH request_dump_stats as (
+      SELECT
+          project_id,
+          percentile_agg(EXTRACT(epoch FROM duration)) as agg,
+          sum(EXTRACT(epoch FROM duration))  as total_time,
+          count(1)  as total_requests
+      FROM apis.request_dumps
+      where created_at > NOW() - interval '14' day
+      GROUP BY project_id, duration
+  )
+  SELECT 	
+    rds.project_id,
+    coalesce(approx_percentile(0,    agg)/1000000, 0) min,
+    coalesce(approx_percentile(0.50, agg)/1000000, 0) p50,
+    coalesce(approx_percentile(0.75, agg)/1000000, 0) p75,
+    coalesce(approx_percentile(0.90, agg)/1000000, 0) p90,
+    coalesce(approx_percentile(0.95, agg)/1000000, 0) p95,
+    coalesce(approx_percentile(0.99, agg)/1000000, 0) p99,
+    coalesce(approx_percentile(1,    agg)/1000000, 0) max,
+    CAST    (total_time/1000000   AS FLOAT8) total_time,
+    CAST    (total_requests       AS INT) total_requests,
+    (select count(*) from apis.endpoints enp where rds.project_id=enp.project_id) total_endpoints,
+    (select count(*) from apis.endpoints enp where rds.project_id=enp.project_id and created_at<=NOW()::DATE-7) total_endpoints_last_week,
+    (select count(*) from apis.shapes    sh  where rds.project_id=sh.project_id) total_shapes,
+    (select count(*) from apis.shapes    sh  where rds.project_id=sh.project_id and created_at<=NOW()::DATE-7) total_shapes_last_week,
+    (select count(*) from apis.anomalies ann where rds.project_id=ann.project_id) total_anomalies,
+    (select count(*) from apis.anomalies ann where rds.project_id=ann.project_id and created_at<=NOW()::DATE-7) total_anomalies_last_week,
+    (select count(*) from apis.anomalies ann where rds.project_id=ann.project_id) total_fields,
+    (select count(*) from apis.anomalies ann where rds.project_id=ann.project_id and created_at<=NOW()::DATE-7) total_fields_last_week
+  FROM request_dump_stats rds;
+CREATE INDEX IF NOT EXISTS idx_apis_project_request_stats_project_id ON apis.project_request_stats(project_id);
+
+CREATE OR REPLACE PROCEDURE apis.refresh_request_dump_views_every_5mins(job_id int, config jsonb) LANGUAGE PLPGSQL AS
+$$
+BEGIN
+  RAISE NOTICE 'Executing action % with config %', job_id, config;
+  REFRESH MATERIALIZED VIEW CONCURRENTLY apis.endpoint_request_stats;
+  REFRESH MATERIALIZED VIEW CONCURRENTLY apis.project_request_stats;
+END
+$$;
+-- Refresg view every 5mins
+SELECT add_job('apis.refresh_request_dump_views_every_5mins','5min');
 
 COMMIT;

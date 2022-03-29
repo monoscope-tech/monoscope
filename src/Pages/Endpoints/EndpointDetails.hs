@@ -79,32 +79,27 @@ fieldDetailsView field formats = do
 endpointDetailsH :: Sessions.PersistentSession -> Projects.ProjectId -> Endpoints.EndpointId -> DashboardM (Html ())
 endpointDetailsH sess pid eid = do
   pool <- asks pool
-  (endpoint, project, fieldsMap, reqsByStatsByMin, reqLatencyPercentiles, reqLatenciesRolledByStepsLabeled, anomalies) <- liftIO $
+  (endpoint, project, fieldsMap, reqsByStatsByMin, reqLatenciesRolledByStepsLabeled, anomalies) <- liftIO $
     withPool pool $ do
-      endpointM <- Endpoints.endpointById eid
-      let endpoint = Unsafe.fromJust endpointM
+      endpoint <- Unsafe.fromJust <$> Endpoints.endpointRequestStatsByEndpoint eid
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      fieldsV <- Fields.selectFields eid
-      let fieldsMap = Fields.groupFieldsByCategory fieldsV
+      fieldsMap <- Fields.groupFieldsByCategory <$> Fields.selectFields eid
       reqsByStatsByMin <- RequestDumps.selectRequestsByStatusCodesStatByMin pid (endpoint ^. #urlPath) (endpoint ^. #method)
 
-      reqLatencyPercentilesM <- RequestDumps.selectReqLatencyPercentiles pid (endpoint ^. #urlPath) (endpoint ^. #method)
-      let reqLatencyPercentiles = Unsafe.fromJust reqLatencyPercentilesM
-
-      let maxV = round (reqLatencyPercentiles ^. #max) :: Int
+      let maxV = round (endpoint ^. #max) :: Int
       let steps = (maxV `quot` 100) :: Int
       let steps' = if steps == 0 then 100 else steps
       reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledBySteps maxV steps' pid (endpoint ^. #urlPath) (endpoint ^. #method)
 
       let reqLatencyPercentileSteps =
-            ( (round (reqLatencyPercentiles ^. #max) `quot` steps') * steps',
-              (round (reqLatencyPercentiles ^. #p90) `quot` steps') * steps',
-              (round (reqLatencyPercentiles ^. #p75) `quot` steps') * steps',
-              (round (reqLatencyPercentiles ^. #p50) `quot` steps') * steps'
+            ( (round (endpoint ^. #max) `quot` steps') * steps',
+              (round (endpoint ^. #p90) `quot` steps') * steps',
+              (round (endpoint ^. #p75) `quot` steps') * steps',
+              (round (endpoint ^. #p50) `quot` steps') * steps'
             )
       let reqLatenciesRolledByStepsLabeled = Vector.toList reqLatenciesRolledBySteps & map \(x, y) -> RequestDumps.labelRequestLatency reqLatencyPercentileSteps (x, y)
       anomalies <- Anomalies.selectOngoingAnomaliesForEndpoint pid eid
-      pure (endpoint, project, fieldsMap, reqsByStatsByMin, reqLatencyPercentiles, concat reqLatenciesRolledByStepsLabeled, anomalies)
+      pure (endpoint, project, fieldsMap, reqsByStatsByMin, concat reqLatenciesRolledByStepsLabeled, anomalies)
 
   let reqsByStatsByMinJ = decodeUtf8 $ AE.encode reqsByStatsByMin
   let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
@@ -115,10 +110,10 @@ endpointDetailsH sess pid eid = do
             pageTitle = "Endpoint Details",
             menuItem = Just "Endpoints"
           }
-  pure $ bodyWrapper bwconf $ endpointDetails endpoint fieldsMap reqsByStatsByMinJ reqLatencyPercentiles reqLatenciesRolledByStepsJ anomalies
+  pure $ bodyWrapper bwconf $ endpointDetails endpoint fieldsMap reqsByStatsByMinJ reqLatenciesRolledByStepsJ anomalies
 
-endpointDetails :: Endpoint -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> RequestDumps.Percentiles -> Text -> Vector Anomalies.AnomalyVM -> Html ()
-endpointDetails endpoint fieldsM reqsByStatsByMinJ percentiles reqLatenciesRolledByStepsJ anomalies = do
+endpointDetails :: EndpointRequestStats -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> Text -> Vector Anomalies.AnomalyVM -> Html ()
+endpointDetails endpoint fieldsM reqsByStatsByMinJ reqLatenciesRolledByStepsJ anomalies = do
   div_ [class_ "w-full flex flex-row h-screen overflow-hidden"] $ do
     div_ [class_ "w-2/3 p-8 h-full overflow-y-scroll"] $ do
       div_ [class_ "flex flex-row justify-between mb-10"] $ do
@@ -138,7 +133,7 @@ endpointDetails endpoint fieldsM reqsByStatsByMinJ percentiles reqLatenciesRolle
                 img_ [src_ "/assets/svgs/whitedown.svg", class_ "text-white h-2 w-2 m-1"]
       div_ [class_ "space-y-16 pb-20"] $ do
         section_ $ AnomaliesList.anomalyListSlider anomalies
-        endpointStats percentiles
+        endpointStats endpoint
         reqResSection "Request" True fieldsM
         reqResSection "Response" False fieldsM
     aside_ [class_ "w-1/3 h-full overflow-y-scroll bg-white h-screen -mr-8 -mt-20 border border-gray-200 p-5 sticky top-0", id_ "detailSidebar"] ""
@@ -207,8 +202,8 @@ endpointDetails endpoint fieldsM reqsByStatsByMinJ percentiles reqLatenciesRolle
 
       |]
 
-endpointStats :: RequestDumps.Percentiles -> Html ()
-endpointStats percentiles =
+endpointStats :: Endpoints.EndpointRequestStats -> Html ()
+endpointStats enpStats =
   section_ [class_ "space-y-3"] $ do
     div_ [class_ "flex justify-between mt-5"] $ do
       div_ [class_ "flex flex-row"] $ do
@@ -279,13 +274,13 @@ endpointStats percentiles =
           div_ [class_ "flex-1 space-y-2 min-w-[20%]"] $ do
             strong_ [class_ "block"] "Latency Percentiles"
             ul_ [class_ "space-y-1"] $ do
-              percentileRow "max" $ percentiles ^. #max
-              percentileRow "p99" $ percentiles ^. #p99
-              percentileRow "p95" $ percentiles ^. #p95
-              percentileRow "p90" $ percentiles ^. #p90
-              percentileRow "p75" $ percentiles ^. #p75
-              percentileRow "p50" $ percentiles ^. #p50
-              percentileRow "min" $ percentiles ^. #min
+              percentileRow "max" $ enpStats ^. #max
+              percentileRow "p99" $ enpStats ^. #p99
+              percentileRow "p95" $ enpStats ^. #p95
+              percentileRow "p90" $ enpStats ^. #p90
+              percentileRow "p75" $ enpStats ^. #p75
+              percentileRow "p50" $ enpStats ^. #p50
+              percentileRow "min" $ enpStats ^. #min
 
 percentileRow :: Text -> Double -> Html ()
 percentileRow key p = do
