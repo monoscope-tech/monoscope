@@ -60,10 +60,14 @@ type PublicAPI =
     -- so it doesnt need an exclusive robust authorization middleware solution.
     :<|> "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] ClientMetadata.ClientMetadata
     :<|> "assets" :> Raw
-    :<|> "invite_link" :> Capture "inviteid" Text :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
+
+type InviteAPI =
+  "p" :> "invite_link" :> Capture "inviteid" Text :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
+
 type API =
   AuthProtect "apitoolkit_session" :> ProtectedAPI
     :<|> PublicAPI
+    :<|> InviteAPI
 
 type instance AuthServerData (AuthProtect "apitoolkit_session") = Sessions.PersistentSession
 
@@ -105,7 +109,9 @@ publicServer =
     :<|> authCallbackH
     :<|> ClientMetadata.clientMetadataH
     :<|> serveDirectoryWebApp "./static/assets"
-    :<|> ProjectEmail.invitedUserConstruct 
+
+inviteServer :: ServerT InviteAPI DashboardM
+inviteServer = ProjectEmail.invitedUserConstruct 
 
 server :: ServerT API DashboardM
-server = protectedServer :<|> publicServer
+server = protectedServer :<|> publicServer :<|> inviteServer
