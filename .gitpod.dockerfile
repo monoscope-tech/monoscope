@@ -6,7 +6,5 @@ RUN git clone https://github.com/haskell/haskell-ide-engine --recurse-submodules
     && cd haskell-ide-engine  \
     && stack install haskell-ide-engine \
     && cd .. \
-    && rm -rf haskell-ide-engine \
-    && cd apitoolkit-server \
-    && stack run
+    && rm -rf haskell-ide-engine 
 ENV PATH=/home/gitpod/.local/bin:$PATH
