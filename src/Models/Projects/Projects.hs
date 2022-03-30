@@ -5,9 +5,11 @@ module Models.Projects.Projects
   ( Project (..),
     ProjectId (..),
     CreateProject (..),
+    ProjectRequestStats (..),
     insertProject,
     projectIdText,
     selectProjectsForUser,
+    projectRequestStatsByProject,
     selectProjectForUser,
     updateProject,
     deleteProject,
@@ -113,3 +115,30 @@ updateProject = PgT.execute q
 
 deleteProject :: ProjectId -> PgT.DBT IO ()
 deleteProject pid = delete @Project (Only pid)
+
+data ProjectRequestStats = ProjectRequestStats
+  { projectId :: ProjectId,
+    min :: Double,
+    p50 :: Double,
+    p75 :: Double,
+    p90 :: Double,
+    p95 :: Double,
+    p99 :: Double,
+    max :: Double,
+    totalTime :: Double,
+    totalRequests :: Int,
+    totalEndpoints :: Int,
+    totalEndpointsLastWeek :: Int,
+    totalShapes :: Int,
+    totalShapesLastWeek :: Int,
+    totalAnomalies :: Int,
+    totalAnomaliesLastWeek :: Int,
+    totalFields :: Int,
+    totalFieldsLastWeek :: Int
+  }
+  deriving stock (Show, Generic, Eq)
+  deriving anyclass (FromRow, ToRow, Default)
+  deriving (Entity) via (GenericEntity '[Schema "apis", TableName "project_request_stats", PrimaryKey "project_id", FieldModifiers '[CamelToSnake]] ProjectRequestStats)
+
+projectRequestStatsByProject :: ProjectId -> PgT.DBT IO (Maybe ProjectRequestStats)
+projectRequestStatsByProject = selectById @ProjectRequestStats

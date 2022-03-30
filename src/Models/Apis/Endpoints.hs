@@ -4,8 +4,11 @@
 module Models.Apis.Endpoints
   ( Endpoint (..),
     EndpointId (..),
+    EndpointRequestStats (..),
+    endpointUrlPath,
     upsertEndpoints,
-    endpointsByProject,
+    endpointRequestStatsByProject,
+    endpointRequestStatsByEndpoint,
     endpointById,
     endpointIdText,
     endpointToUrlPath,
@@ -18,9 +21,10 @@ import Data.Default (Default)
 import Data.Default.Instances ()
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
+import Data.Vector (Vector)
 import Data.Vector qualified as Vector
-import Database.PostgreSQL.Entity (selectById)
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), query, queryOne)
+import Database.PostgreSQL.Entity (selectById, selectManyByField)
+import Database.PostgreSQL.Entity.DBT (QueryNature (..), queryOne)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
@@ -70,7 +74,10 @@ makeFieldLabelsNoPrefix ''Endpoint
 
 -- | endpointToUrlPath builds an apitoolkit path link to the endpoint details page of that endpoint.
 endpointToUrlPath :: Endpoint -> Text
-endpointToUrlPath enp = "/p/" <> Projects.projectIdText (enp ^. #projectId) <> "/endpoints/" <> endpointIdText (enp ^. #id)
+endpointToUrlPath enp = endpointUrlPath (enp ^. #projectId) (enp ^. #id)
+
+endpointUrlPath :: Projects.ProjectId -> EndpointId -> Text
+endpointUrlPath pid eid = "/p/" <> Projects.projectIdText pid <> "/endpoints/" <> endpointIdText eid
 
 upsertEndpoints :: Endpoint -> PgT.DBT IO (Maybe EndpointId)
 upsertEndpoints endpoint = queryOne Insert q options
@@ -101,13 +108,33 @@ upsertEndpoints endpoint = queryOne Insert q options
         endpoint ^. #method
       )
 
-endpointsByProject :: Projects.ProjectId -> PgT.DBT IO (Vector.Vector Endpoint)
-endpointsByProject = query Select q
-  where
-    q = [sql|select * from apis.endpoints where project_id=?|]
+-- Based of a view which is generated every 5minutes.
+data EndpointRequestStats = EndpointRequestStats
+  { endpointId :: EndpointId,
+    projectId :: Projects.ProjectId,
+    urlPath :: Text,
+    method :: Text,
+    min :: Double,
+    p50 :: Double,
+    p75 :: Double,
+    p90 :: Double,
+    p95 :: Double,
+    p99 :: Double,
+    max :: Double,
+    totalTime :: Double,
+    totalTimeProj :: Double,
+    totalRequests :: Int,
+    totalRequestsProj :: Int
+  }
+  deriving stock (Show, Generic, Eq)
+  deriving anyclass (FromRow, ToRow, Default)
+  deriving (Entity) via (GenericEntity '[Schema "apis", TableName "endpoint_request_stats", PrimaryKey "endpoint_id", FieldModifiers '[CamelToSnake]] EndpointRequestStats)
 
--- It appears the selectManyByField leaks memory
--- endpointsByProject pid = selectManyByField @Endpoint [field| project_id |] pid
+endpointRequestStatsByProject :: Projects.ProjectId -> PgT.DBT IO (Vector EndpointRequestStats)
+endpointRequestStatsByProject = selectManyByField @EndpointRequestStats [field| project_id |]
+
+endpointRequestStatsByEndpoint :: EndpointId -> PgT.DBT IO (Maybe EndpointRequestStats)
+endpointRequestStatsByEndpoint = selectById @EndpointRequestStats
 
 endpointById :: EndpointId -> PgT.DBT IO (Maybe Endpoint)
 endpointById = selectById @Endpoint

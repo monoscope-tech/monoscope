@@ -15,9 +15,10 @@ import Models.Apis.Fields qualified as Fields
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
-import Optics.Core ((%), (^.), (^?), _Just)
+import Optics.Core ((^.))
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
+import Relude.Unsafe qualified as Unsafe
 
 acknowlegeAnomalyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Anomalies.AnomalyId -> DashboardM (Html ())
 acknowlegeAnomalyGetH sess pid aid = do
@@ -125,7 +126,7 @@ renderAnomaly :: Bool -> Anomalies.AnomalyVM -> Html ()
 renderAnomaly hideByDefault anomaly = do
   let (anomalyTitle, chartTitle, icon) = anomalyDisplayConfig anomaly
   let anomalyId = Anomalies.anomalyIdText (anomaly ^. #id)
-  let fieldGraphId = "field-" <> maybe "" Fields.fieldIdText (anomaly ^? #fieldObj % _Just % #id)
+  let fieldGraphId = "field-" <> maybe "" Fields.fieldIdText (anomaly ^. #fieldId)
 
   div_ [class_ "anomaly-item bg-white border-2 border-gray-100 rounded-xl px-8 py-6 hover:bg-blue-50 parent-hover cursor-pointer", style_ (if hideByDefault then "display:none" else ""), id_ anomalyId] $ do
     div_ [class_ "grid grid-cols-2 gap-5"] $ do
@@ -148,13 +149,13 @@ renderAnomaly hideByDefault anomaly = do
         div_ [class_ "pt-5"] $ do
           p_ [class_ "text-lg"] $ do
             span_ "A new field "
-            a_ [class_ "inline-block px-2 text-blue-800"] $ toHtml $ "`" <> fromMaybe "" (anomaly ^? #fieldObj % _Just % #keyPathStr) <> "`"
+            a_ [class_ "inline-block px-2 text-blue-800"] $ toHtml $ "`" <> fromMaybe "" (anomaly ^. #fieldKeyPathStr) <> "`"
             span_ "was added to"
             a_
               [ class_ "text-blue-800 inline-block px-2",
-                href_ $ maybe "" Endpoints.endpointToUrlPath (anomaly ^. #endpointObj)
+                href_ $ Endpoints.endpointUrlPath (anomaly ^. #projectId) (Unsafe.fromJust $ anomaly ^. #endpointId)
               ]
-              $ toHtml $ "`" <> fromMaybe "" (anomaly ^? #endpointObj % _Just % #urlPath) <> "`"
+              $ toHtml $ "`" <> fromMaybe "" (anomaly ^. #endpointUrlPath) <> "`"
             span_ ". Was this intended? "
       div_ [class_ "clear-both"] $ do
         div_ [class_ "float-right flex items-center gap-2"] $ do

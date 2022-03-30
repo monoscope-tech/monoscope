@@ -159,7 +159,7 @@ data Field = Field
     key :: Text,
     fieldType :: FieldTypes,
     fieldTypeOverride :: Maybe Text,
-    format :: Text,
+    format :: Text, -- SHould fields be linked to the format table via the fieldFormat text or format Id?
     formatOverride :: Maybe Text,
     description :: Text,
     keyPath :: Vector Text,

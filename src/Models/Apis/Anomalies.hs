@@ -20,14 +20,13 @@ import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity
-import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query, query_)
+import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query)
 import Database.PostgreSQL.Entity.Internal.QQ (field)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, Only (Only))
 import Database.PostgreSQL.Simple.FromField (FromField, ResultError (ConversionFailed, UnexpectedNull), fromField, returnError)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
-import Database.PostgreSQL.Simple.Types (Null (Null))
 import Database.PostgreSQL.Transact (DBT)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields qualified as Fields
@@ -120,12 +119,24 @@ data AnomalyVM = AnomalyCM
     anomalyType :: AnomalyTypes,
     action :: AnomalyActions,
     targetId :: UUID.UUID,
-    fieldObj :: Maybe Fields.Field,
-    shapeObj :: Maybe Shapes.Shape,
-    formatObj :: Maybe Formats.Format,
-    endpointObj :: Maybe Endpoints.Endpoint,
-    archivedAt :: Maybe ZonedTime,
-    endpointId :: Maybe Endpoints.EndpointId
+    --
+    shapeId :: Maybe Shapes.ShapeId,
+    --
+    fieldId :: Maybe Fields.FieldId,
+    fieldKey :: Maybe Text,
+    fieldKeyPathStr :: Maybe Text,
+    fieldCategory :: Maybe Fields.FieldCategoryEnum,
+    fieldFormat :: Maybe Text,
+    --
+    formatId :: Maybe Formats.FormatId,
+    formatType :: Maybe Fields.FieldTypes, -- fieldFormat in the formats table
+    formatExamples :: Maybe (Vector Text),
+    --
+    endpointId :: Maybe Endpoints.EndpointId,
+    endpointMethod :: Maybe Text,
+    endpointUrlPath :: Maybe Text,
+    --
+    archivedAt :: Maybe ZonedTime
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, Default)
