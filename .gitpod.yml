@@ -2,7 +2,7 @@ image:
   file: .gitpod.dockerfile
 
 tasks:    
-  - init: cabal update && cabal install unordered-containers
+  - init: stack update && stack install unordered-containers
   
 
 github:
