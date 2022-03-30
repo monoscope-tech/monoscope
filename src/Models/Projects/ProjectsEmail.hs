@@ -15,6 +15,8 @@ import Data.List.NonEmpty qualified as NonEmptyDataList
 import Models.Users.Users qualified as Users
 import Web.Auth qualified as Auth
 import Data.Text qualified as T
+import Data.Time
+import Data.UUID qualified as UUID
 import Database.PostgreSQL.Entity.DBT ( QueryNature (..), query, queryOne, withPool )
 import GHC.Exts
 import Config qualified
@@ -23,7 +25,7 @@ import Network.SendGridV3.Api
 import Network.Wreq qualified as Wreq
 import Relude
 import Data.Vector qualified as Vector
-import Data.Time (ZonedTime)
+import Data.Time (ZonedTime, getZonedTime)
 import Data.UUID qualified as UUID
 import Models.Projects.Projects as Project
 import Database.PostgreSQL.Entity
@@ -50,6 +52,10 @@ class GHC.Exts.IsString a => SafeIsString a where
 instance SafeIsString String
 
 instance SafeIsString T.Text
+
+instance IsString (ZonedTime)
+instance IsString (Maybe ZonedTime)
+instance IsString (Users.UserId)
 
 contentMail :: T.Text -> T.Text
 contentMail inviteid =
@@ -115,12 +121,22 @@ updateUserStatus users user_id = PgT.execute q users
     q = [sql|
     UPDATE users.users(active) VALUES (true) where users.users.invite_id = user_id|]
 
-invitedUserConstruct :: T.Text -> Users.User -> Config.DashboardM ( Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
-invitedUserConstruct inviteid users = do
+invitedUserConstruct :: T.Text -> Config.DashboardM ( Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
+invitedUserConstruct inviteid  = do
   pool <- asks pool
   liftIO $ 
     withPool pool $ do
-      status <- updateUserStatus users (UUID.fromText inviteid)
+      status <- updateUserStatus Users.User { inviteId = UUID.fromText inviteid,
+      id = "",
+      createdAt = "",
+      updatedAt = "",
+      deletedAt = "",
+      active = True,
+      firstName = "",
+      lastName = "",
+      displayImageUrl = "",
+      email = ""
+      } (UUID.fromText inviteid)
       pass
   Auth.loginH
 

@@ -42,6 +42,8 @@ instance ToJSON (CI Text) where
 instance Default Bool where
   def = False
 
+instance IsString (UUID.UUID)
+
 newtype UserId = UserId {getUserId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving
@@ -50,7 +52,8 @@ newtype UserId = UserId {getUserId :: UUID.UUID}
   deriving anyclass (FromRow, ToRow)
 
 data User = User
-  { id :: UserId,
+  { inviteId :: UUID.UUID,
+    id :: UserId,
     createdAt :: ZonedTime,
     updatedAt :: ZonedTime,
     deletedAt :: Maybe ZonedTime,
@@ -90,7 +93,8 @@ createUser firstName lastName picture email = do
   now <- getZonedTime
   pure $
     User
-      { id = uid,
+      { inviteId = "",
+        id = uid,
         createdAt = now,
         updatedAt = now,
         deletedAt = Nothing,

@@ -21,6 +21,7 @@ import Data.Time (ZonedTime, getZonedTime)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Valor (Valor, check1, failIf, validateM)
 import Data.Valor qualified as Valor
+import Data.UUID qualified as UUID
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import Lucid.HTMX
@@ -72,11 +73,12 @@ checkEmail :: Text -> Bool
 checkEmail = isJust . T.find (== '@')
 
 -- createUserFromInvitation needed as Users.createUser does not accomodate the constraint of invited member and user having the same userid as well as active status should be false until invited member activates the user account
-createUserFromInvitation :: Users.UserId -> ZonedTime -> Text -> IO Users.User
-createUserFromInvitation uid tNow txt = do
+createUserFromInvitation :: UUID.UUID -> Users.UserId -> ZonedTime -> Text -> IO Users.User
+createUserFromInvitation invid uid tNow txt = do
   pure $
     Users.User
-      { id = uid,
+      { inviteId = invid,
+        id = uid,
         createdAt = tNow,
         updatedAt = tNow,
         deletedAt = Nothing,
@@ -109,7 +111,7 @@ createProjectPostH sess createP = do
       -- Temporary. They should come from the form
       let adminPermission = ProjectMembers.parsePermissions "admin"
       let projectMembers = [ProjectMembers.CreateProjectMembers pid userID adminPermission]
-      invUser <- liftIO $ createUserFromInvitation invUserID tNow emailField
+      invUser <- liftIO $ createUserFromInvitation inviteID invUserID tNow emailField
       let invMember = [ProjectMembers.CreateProjectMembers pid invUserID perm]
       invUUID <- liftIO $ ProjectEmail.inviteUUID inviteID invUserID tNow
       let invEmail = ProjectEmail.sendEmail inviteID emailField
