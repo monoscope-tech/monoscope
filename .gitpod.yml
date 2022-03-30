@@ -2,7 +2,7 @@ image:
   file: .gitpod.dockerfile
 
 tasks:    
-  - init: stack update && stack install unordered-containers
+  - init: stack build
   
 
 github:
