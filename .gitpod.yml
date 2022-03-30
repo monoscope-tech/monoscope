@@ -1,3 +1,10 @@
+image:
+  file: .gitpod.dockerfile
+
+tasks:    
+  - init: stack build
+  
+
 github:
   prebuilds:
     # enable for the master/default branch (defaults to true)
