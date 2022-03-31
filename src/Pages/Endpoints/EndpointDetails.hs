@@ -16,7 +16,6 @@ import Fmt
 import Lucid
 import Lucid.HTMX
 import Lucid.Hyperscript.QuasiQuoter (__)
-import Lucid.Svg qualified as Svg
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints
 import Models.Apis.Endpoints qualified as Endpoints
@@ -49,11 +48,11 @@ fieldDetailsView field formats = do
   img_ [src_ "/assets/svgs/ellipsis.svg", class_ "my-2 float-right"]
   h3_ [class_ "text-lg text-slate-700 mt-6"] $ toHtml $ field ^. #key
   formats & mapM_ \formatV -> do
-    div_ [class_ "flex mt-5 flex-row"] $ do
-      div_ [class_ ""] $ do
+    div_ [class_ "flex mt-5 flex-row gap-9"] $ do
+      div_ [class_ "space-y-2"] $ do
         h6_ [class_ "text-slate-700 text-xs"] "TYPE"
-        h4_ [class_ "text-base text-slate-700"] $ show $ formatV ^. #fieldType
-      div_ [class_ "mx-5"] $ do
+        h4_ [class_ "text-base text-slate-700"] $ fieldTypeToDisplay $ formatV ^. #fieldType
+      div_ [class_ "mx-5 space-y-2"] $ do
         h6_ [class_ "text-slate-700 text-xs"] "FORMAT"
         h4_ [class_ "text-base text-slate-700"] $ toHtml $ formatV ^. #fieldFormat
     h6_ [class_ "text-slate-600 mt-4 text-xs"] "EXAMPLE VALUES"
@@ -114,7 +113,7 @@ endpointDetailsH sess pid eid = do
 
 endpointDetails :: EndpointRequestStats -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> Text -> Vector Anomalies.AnomalyVM -> Html ()
 endpointDetails endpoint fieldsM reqsByStatsByMinJ reqLatenciesRolledByStepsJ anomalies = do
-  div_ [class_ "w-full flex flex-row h-screen overflow-hidden"] $ do
+  div_ [class_ "w-full flex flex-row h-full overflow-hidden"] $ do
     div_ [class_ "w-2/3 p-8 h-full overflow-y-scroll"] $ do
       div_ [class_ "flex flex-row justify-between mb-10"] $ do
         div_ [class_ "flex flex-row place-items-center text-lg font-medium"] $ do
@@ -136,7 +135,11 @@ endpointDetails endpoint fieldsM reqsByStatsByMinJ reqLatenciesRolledByStepsJ an
         endpointStats endpoint
         reqResSection "Request" True fieldsM
         reqResSection "Response" False fieldsM
-    aside_ [class_ "w-1/3 h-full overflow-y-scroll bg-white h-screen -mr-8 -mt-20 border border-gray-200 p-5 sticky top-0", id_ "detailSidebar"] ""
+    aside_
+      [ class_ "w-1/3 h-full overflow-y-scroll bg-white border border-gray-200 p-5 sticky top-0",
+        id_ "detailSidebar"
+      ]
+      ""
     script_
       [type_ "text/hyperscript"]
       [text| 
@@ -214,50 +217,20 @@ endpointStats enpStats =
           ]
         span_ [class_ "text-lg text-slate-700"] "Endpoint Stats"
     div_ [class_ "grid grid-cols-3  gap-5 endpointStatsSubSection"] $ do
-      div_ [class_ "col-span-1 content-between space-y-8"] $ do
-        div_ [class_ "row-span-1 col-span-1 bg-white  border border-gray-100  rounded-2xl p-3 flex flex-row justify-between"] $ do
-          div_ [class_ "flex flex-col justify-center"] $ do
-            span_ "avg Reqs per minute"
+      div_ [class_ "col-span-1 content-between space-y-2"] $ do
+        --
+        div_ [class_ " row-span-1 col-span-1 card-round p-5 flex flex-row content-between "] $ do
+          div_ $ do
+            span_ "Total Anomalies"
             div_ [class_ "inline-block flex flex-row content-between"] $ do
-              strong_ [class_ "text-xl"] "3.5k"
-              div_ [class_ "inline-flex justify-center text-red-700 "] $ do
-                img_ [class_ "inline-block", src_ "/assets/svgs/down-arrow-red.svg"]
-                span_ "10.5%"
+              strong_ [class_ "text-xl"] $ toHtml @Text $ show (1 :: Integer) -- (enpStats ^. #ongoingAnomalies)
+        div_ [class_ " row-span-1 col-span-1 card-round p-5 flex flex-row content-between "] $ do
           div_ $ do
-            Svg.svg_ [Svg.width_ "90", Svg.height_ "88", Svg.viewBox_ "0 0 90 88", Svg.fill_ "none", xmlns_ "http://www.w3.org/2000/svg"] $ do
-              Svg.mask_ [Svg.id_ "mask0_4463_66717", Svg.style_ "mask-type:alpha", Svg.maskUnits_ "userSpaceOnUse", Svg.x_ "0", Svg.y_ "0", Svg.width_ "90", height_ "88"] $ do
-                Svg.rect_ [Svg.opacity_ "0.1", Svg.x_ "0.51416", Svg.width_ "89.2571", Svg.height_ "88", Svg.rx_ "22", Svg.fill_ "#FF965D"]
-              Svg.g_ [Svg.mask_ "url(#mask0_4463_66717)"] $ do
-                Svg.rect_ [Svg.x_ "0.51416", Svg.width_ "89.2571", Svg.height_ "88", Svg.fill_ "#FF965D"]
-              Svg.path_ [Svg.d_ "M25.6685 50.55C25.6685 49.5835 26.5161 48.8 27.5618 48.8H33.5123C34.5579 48.8 35.4056 49.5835 35.4056 50.55V60.8H25.6685V50.55Z", Svg.fill_ "#FF965D"]
-              Svg.path_ [Svg.d_ "M40.2744 38.7091C40.2744 37.6547 41.1221 36.8 42.1678 36.8H48.1182C49.1639 36.8 50.0116 37.6547 50.0116 38.7091V60.8H40.2744V38.7091Z", Svg.fill_ "#FF965D"]
-              Svg.path_ [Svg.d_ "M54.8799 29.16C54.8799 28.0775 55.7276 27.2 56.7732 27.2H62.7237C63.7694 27.2 64.617 28.0775 64.617 29.16V60.8H54.8799V29.16Z", Svg.fill_ "#FF965D"]
-        div_ [class_ "row-span-1 col-span-1 bg-white  border border-gray-100  rounded-xl p-3 flex flex-row content-between"] $ do
-          div_ $ do
-            span_ "Anomalies this week"
+            span_ "Total Requests"
             div_ [class_ "inline-block flex flex-row content-between"] $ do
-              strong_ [class_ "text-xl"] "3"
-              div_ [class_ "inline-block text-red-700"] $ do
-                img_ [class_ "inline-block", src_ "/assets/svgs/down-arrow-red.svg"]
-                span_ "10.5%"
-          div_ $ do
-            Svg.svg_ [Svg.width_ "86", Svg.height_ "86", Svg.viewBox_ "0 0 86 86", Svg.fill_ "none", xmlns_ "http://www.w3.org/2000/svg"] $ do
-              Svg.circle_ [Svg.cx_ "43", Svg.cy_ "43", Svg.r_ "40.5", Svg.stroke_ "#F8F8F8", Svg.stroke_width_ "5"]
-              Svg.path_ [Svg.d_ "M43 2.5C51.5528 2.5 59.886 5.20763 66.8053 10.2348C73.7246 15.262 78.8748 22.3507 81.5178 30.4848C84.1607 38.619 84.1607 47.381 81.5178 55.5152C78.8748 63.6493 73.7246 70.738 66.8053 75.7652C59.886 80.7924 51.5528 83.5 43 83.5C34.4472 83.5 26.114 80.7924 19.1947 75.7652C12.2754 70.738 7.12516 63.6493 4.48221 55.5152C1.83926 47.381 1.83926 38.619 4.48221 30.4848", Svg.stroke_ "#FF965D", Svg.stroke_width_ "5", Svg.stroke_linecap_ "round"]
-              Svg.text_ "80%"
-        div_ [class_ "row-span-1 col-span-1 bg-white  border border-gray-100  rounded-xl p-3 flex flex-row content-between"] $ do
-          div_ $ do
-            span_ "Anomalies this week"
-            div_ [class_ "inline-block flex flex-row content-between"] $ do
-              strong_ [class_ "text-xl"] "3"
-              div_ [class_ "inline-block text-red-700"] $ do
-                img_ [class_ "inline-block", src_ "/assets/svgs/down-arrow-red.svg"]
-                span_ "10.5%"
-          div_ $ do
-            Svg.svg_ [Svg.width_ "86", Svg.height_ "86", Svg.viewBox_ "0 0 86 86", Svg.fill_ "none", xmlns_ "http://www.w3.org/2000/svg"] $ do
-              Svg.circle_ [Svg.cx_ "43", Svg.cy_ "43", Svg.r_ "40.5", Svg.stroke_ "#F8F8F8", Svg.stroke_width_ "5"]
-              Svg.path_ [Svg.d_ "M43 2.5C51.5528 2.5 59.886 5.20763 66.8053 10.2348C73.7246 15.262 78.8748 22.3507 81.5178 30.4848C84.1607 38.619 84.1607 47.381 81.5178 55.5152C78.8748 63.6493 73.7246 70.738 66.8053 75.7652C59.886 80.7924 51.5528 83.5 43 83.5C34.4472 83.5 26.114 80.7924 19.1947 75.7652C12.2754 70.738 7.12516 63.6493 4.48221 55.5152C1.83926 47.381 1.83926 38.619 4.48221 30.4848", Svg.stroke_ "#FF965D", Svg.stroke_width_ "5", Svg.stroke_linecap_ "round"]
-              Svg.text_ "80%"
+              strong_ [class_ "text-xl"] $ toHtml @Text $ fmt $ commaizeF (enpStats ^. #totalRequests) -- (enpStats ^. #ongoingAnomalies)
+              sub_ $ toHtml @Text $ fmt ("/" +| commaizeF (enpStats ^. #totalRequestsProj))
+
       div_ [class_ "col-span-2 bg-white  border border-gray-100  row-span-2 rounded-2xl p-3"] $ do
         div_ [class_ "p-4"] $ do
           select_ [] $ do
@@ -269,11 +242,11 @@ endpointStats enpStats =
           select_ [] $ do
             option_ "Request Latency Distribution"
             option_ "Avg Reqs per minute"
-        div_ [class_ "flex flex-row gap-5"] $ do
+        div_ [class_ "flex flex-row gap-8"] $ do
           div_ [id_ "reqsLatencyHistogram", class_ "grow"] ""
-          div_ [class_ "flex-1 space-y-2 min-w-[20%]"] $ do
-            strong_ [class_ "block"] "Latency Percentiles"
-            ul_ [class_ "space-y-1"] $ do
+          div_ [class_ "flex-1 space-y-4 min-w-[15%]"] $ do
+            strong_ [class_ "block text-right"] "Latency Percentiles"
+            ul_ [class_ "space-y-1 divide-y divide-slate-100"] $ do
               percentileRow "max" $ enpStats ^. #max
               percentileRow "p99" $ enpStats ^. #p99
               percentileRow "p95" $ enpStats ^. #p95
@@ -286,7 +259,7 @@ percentileRow :: Text -> Double -> Html ()
 percentileRow key p = do
   li_ [class_ "flex flex-row content-between justify-between"] $ do
     span_ [class_ "inline-block"] $ toHtml key
-    span_ [class_ "inline-block"] $ do
+    span_ [class_ "inline-block monospace"] $ do
       span_ $ toHtml ((fmt $ fixedF 2 p) :: Text)
       span_ "ms"
 
@@ -366,9 +339,21 @@ subSubSection title fieldsM = do
                     div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full items-center"] $ do
                       input_ [type_ "checkbox", class_ " mr-12"]
                       span_ [class_ "grow text-sm text-slate-700 inline-flex items-center"] $ toHtml displayKey
-                      span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ show $ field ^. #fieldType
+                      span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ fieldTypeToDisplay $ field ^. #fieldType
                       img_ [src_ "/assets/svgs/alert-red.svg", class_ " mr-8 ml-4 h-5"]
                       img_ [src_ "/assets/svgs/dots-vertical.svg", class_ "mx-5 h-5"]
+
+fieldTypeToDisplay :: Fields.FieldTypes -> Html ()
+fieldTypeToDisplay fieldType = case fieldType of
+  Fields.FTUnknown -> span_ [class_ "px-2 rounded-xl bg-red-100 red-800 monospace"] "unknown"
+  Fields.FTString -> span_ [class_ "px-2 rounded-xl bg-slate-100 slate-800 monospace"] "abc"
+  Fields.FTNumber -> span_ [class_ "px-2 rounded-xl bg-blue-100 blue-800 monospace"] "123"
+  Fields.FTBool -> span_ [class_ "px-2 rounded-xl bg-gray-100 black-800 monospace"] "bool"
+  Fields.FTObject -> span_ [class_ "px-2 rounded-xl bg-orange-100 orange-800 monospace"] "{obj}"
+  Fields.FTList -> span_ [class_ "px-2 rounded-xl bg-stone-100 stone-800 monospace"] "[list]"
+  Fields.FTNull -> span_ [class_ "px-2 rounded-xl bg-red-100 red-800 monospace"] "null"
+  Fields.FTStringList -> span_ [class_ "px-2 rounded-xl bg-indigo-100 red-800 monospace"] "[]abc"
+  Fields.FTNumberList -> span_ [class_ "px-2 rounded-xl bg-neutral-100 neutral-800 monospace"] "[]123"
 
 fieldsToNormalized :: [Fields.Field] -> [(Text, Maybe Fields.Field)]
 fieldsToNormalized =

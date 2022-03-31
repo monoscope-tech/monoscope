@@ -138,7 +138,7 @@ dStats projReqStats =
 
           div_ [class_ "col-span-1 card-round p-5 flex flex-row content-between "] $ do
             div_ $ do
-              span_ "Total Anomaliesk"
+              span_ "Total Anomalies"
               div_ [class_ "inline-block flex flex-row content-between"] $ do
                 strong_ [class_ "text-xl"] $ toHtml @Text $ show (projReqStats ^. #totalAnomalies)
 

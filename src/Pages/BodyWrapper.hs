@@ -99,9 +99,10 @@ bodyWrapper BWConfig {sessM, currProject, pageTitle, menuItem} child =
           section_ [class_ "flex flex-row bg-gray-50 h-screen overflow-hidden"] $ do
             -- Side nav
             sideNav'
-            section_ [class_ "grow h-full overflow-y-scroll"] $ do
+            section_ [class_ "grow h-full overflow-y-hidden"] $ do
               navbar currUser
-              child
+              section_ [class_ "h-full overflow-y-scroll"] $ do
+                child
 
 projectsDropDown :: Projects.Project -> Vector.Vector Projects.Project -> Html ()
 projectsDropDown currProject projects =
@@ -213,7 +214,7 @@ sideNav sess project pageTitle menuItem = do
 
 navbar :: Users.User -> Html ()
 navbar currUser = do
-  nav_ [class_ "sticky z-20 top-0 w-full w-full px-6 py-3 border-b bg-white flex flex-row justify-between"] $ do
+  nav_ [id_ "main-navbar", class_ "sticky z-20 top-0 w-full w-full px-6 py-3 border-b bg-white flex flex-row justify-between"] $ do
     a_ [class_ "cursor-pointer flex items-center"] $ do
       img_ [class_ "w-4 h-4", src_ "/assets/svgs/hamburger_menu.svg"]
     div_ [class_ "inline-block flex items-center"] $ do

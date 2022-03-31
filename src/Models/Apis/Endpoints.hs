@@ -127,11 +127,13 @@ data EndpointRequestStats = EndpointRequestStats
     totalTimeProj :: Double,
     totalRequests :: Int,
     totalRequestsProj :: Int
+    -- ongoingAnomalies :: Int
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (FromRow, ToRow, Default)
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "endpoint_request_stats", PrimaryKey "endpoint_id", FieldModifiers '[CamelToSnake]] EndpointRequestStats)
 
+-- FIXME: Include and return a boolean flag to show if fields that have annomalies.
 endpointRequestStatsByProject :: Projects.ProjectId -> PgT.DBT IO (Vector EndpointRequestStats)
 endpointRequestStatsByProject = selectManyByField @EndpointRequestStats [field| project_id |]
 
