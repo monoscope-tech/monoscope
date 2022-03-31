@@ -99,6 +99,7 @@ insertSession pid userId sessionData = execute Insert q (pid, userId, sessionDat
 deleteSession :: PersistentSessionId -> DBT IO ()
 deleteSession sessionId = delete @PersistentSession (Only sessionId)
 
+-- TODO: getting persistent session happens very frequently, so we should create a view for this, when our user base grows.
 getPersistentSession :: PersistentSessionId -> DBT IO (Maybe PersistentSession)
 getPersistentSession sessionId = queryOne Select q value
   where

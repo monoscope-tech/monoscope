@@ -18,7 +18,6 @@ import Optics.Core ((^.))
 import Pages.Anomalies.AnomalyList qualified as AnomaliesList
 import Pages.BodyWrapper
 import Relude
-import Relude.Unsafe qualified as Unsafe
 
 dashboardGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 dashboardGetH sess pid = do
@@ -26,7 +25,7 @@ dashboardGetH sess pid = do
   (project, projectRequestStats, reqsByEndpoint, reqLatenciesRolledByStepsLabeled, anomalies) <- liftIO $
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      projectRequestStats <- Unsafe.fromJust <$> Projects.projectRequestStatsByProject pid
+      projectRequestStats <- fromMaybe (def :: Projects.ProjectRequestStats) <$> Projects.projectRequestStatsByProject pid
       reqsByEndpoint <- RequestDumps.selectRequestsByEndpointsStatByMin pid
 
       let maxV = round (projectRequestStats ^. #max) :: Int
@@ -131,31 +130,31 @@ dStats projReqStats =
     div_ [class_ "grid grid-cols-3  gap-5 reqResSubSection"] $ do
       div_ [class_ "col-span-3 flex flex-row gap-5"] $ do
         div_ [class_ "col-span-1 shrink content-between space-y-2"] $ do
-          div_ [class_ "col-span-1 bg-white  border border-gray-100  rounded-2xl p-5 flex flex-row justify-between "] $ do
+          div_ [class_ "col-span-1 card-round p-5 flex flex-row justify-between "] $ do
             div_ [class_ "flex flex-col justify-center"] $ do
               span_ "Total Requests"
               div_ [class_ "inline-block flex flex-row content-between"] $ do
                 strong_ [class_ "text-xl"] $ toHtml @Text $ show (projReqStats ^. #totalRequests)
 
-          div_ [class_ "col-span-1 bg-white  border border-gray-100  rounded-xl p-5 flex flex-row content-between "] $ do
+          div_ [class_ "col-span-1 card-round p-5 flex flex-row content-between "] $ do
             div_ $ do
               span_ "Total Anomaliesk"
               div_ [class_ "inline-block flex flex-row content-between"] $ do
                 strong_ [class_ "text-xl"] $ toHtml @Text $ show (projReqStats ^. #totalAnomalies)
 
-          div_ [class_ "col-span-1 bg-white  border border-gray-100  rounded-xl p-5 flex flex-row content-between "] $ do
+          div_ [class_ "col-span-1 card-round p-5 flex flex-row content-between "] $ do
             div_ $ do
               span_ "Managed Endpoints"
               div_ [class_ "inline-block flex flex-row content-between"] $ do
                 strong_ [class_ "text-xl"] $ toHtml @Text $ show (projReqStats ^. #totalEndpoints)
 
-          div_ [class_ "col-span-1 bg-white  border border-gray-100  rounded-xl p-5 flex flex-row content-between "] $ do
+          div_ [class_ "col-span-1 card-round p-5 flex flex-row content-between "] $ do
             div_ $ do
               span_ "Total shapes"
               div_ [class_ "inline-block flex flex-row content-between"] $ do
                 strong_ [class_ "text-xl"] $ toHtml @Text $ show (projReqStats ^. #totalShapes)
 
-          div_ [class_ "col-span-1 bg-white  border border-gray-100  rounded-xl p-5 flex flex-row content-between "] $ do
+          div_ [class_ "col-span-1 card-round p-5 flex flex-row content-between "] $ do
             div_ $ do
               span_ "Total Fields"
               div_ [class_ "inline-block flex flex-row content-between"] $ do
@@ -168,7 +167,7 @@ dStats projReqStats =
               option_ "Avg Reqs per minute"
           div_ [id_ "reqByStatusCode", class_ ""] ""
 
-      div_ [class_ "col-span-3 bg-white   border border-gray-100  rounded-xl py-3 px-6"] $ do
+      div_ [class_ "col-span-3 card-round py-3 px-6"] $ do
         div_ [class_ "p-4"] $ do
           select_ [] $ do
             option_ "Request Latency Distribution"

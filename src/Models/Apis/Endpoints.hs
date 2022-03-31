@@ -82,18 +82,19 @@ endpointUrlPath pid eid = "/p/" <> Projects.projectIdText pid <> "/endpoints/" <
 upsertEndpoints :: Endpoint -> PgT.DBT IO (Maybe EndpointId)
 upsertEndpoints endpoint = queryOne Insert q options
   where
+    host = fromMaybe "" ((endpoint ^. #hosts) Vector.!? 0) -- Read the first item from head or default to empty string
     q =
       [sql|  
         with e as (
           INSERT INTO apis.endpoints (project_id, url_path, url_params, method, hosts)
-          VALUES(?, ?, ?, ?, ?) 
+          VALUES(?, ?, ?, ?, $$ ? => null$$) 
           ON CONFLICT (project_id, url_path, method) 
           DO 
              UPDATE SET 
-              hosts = ARRAY(SELECT DISTINCT e from unnest(apis.endpoints.hosts, excluded.hosts) as e order by e)
+              hosts[?] = null 
           RETURNING id 
         )
-        SELECT * from e 
+        SELECT id from e 
         UNION 
           SELECT id FROM apis.endpoints WHERE project_id=? AND url_path=? AND method=?;
       |]
@@ -102,7 +103,8 @@ upsertEndpoints endpoint = queryOne Insert q options
         endpoint ^. #urlPath,
         endpoint ^. #urlParams,
         endpoint ^. #method,
-        endpoint ^. #hosts,
+        host,
+        host,
         endpoint ^. #projectId,
         endpoint ^. #urlPath,
         endpoint ^. #method
