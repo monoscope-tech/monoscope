@@ -38,7 +38,7 @@ jobs:
         run: |-
           curl -LJO https://github.com/tailwindlabs/tailwindcss/releases/download/v3.0.23/tailwindcss-linux-x64
           chmod +x tailwindcss-linux-x64
-          ./tailwindcss-linux-x64 -i ./static/assets/css/tailwind.css -o ./static/assets/css/tailwind.min.css
+          ./tailwindcss-linux-x64 -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css
 
       - id: 'auth'
         name: 'Authenticate to Google Cloud'
