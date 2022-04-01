@@ -172,11 +172,11 @@ dStats projReqStats =
           select_ [] $ do
             option_ "Request Latency Distribution"
             option_ "Avg Reqs per minute"
-        div_ [class_ "flex flex-row gap-5"] $ do
+        div_ [class_ "flex flex-row gap-8"] $ do
           div_ [id_ "reqsLatencyHistogram", class_ "grow"] ""
-          div_ [class_ "flex-1 space-y-2 min-w-[20%]"] $ do
-            strong_ [class_ "block"] "Latency Percentiles"
-            ul_ [class_ "space-y-1"] $ do
+          div_ [class_ "flex-1 space-y-4 min-w-[20%]"] $ do
+            span_ [class_ "block text-right text-lg"] "Latency Percentiles"
+            ul_ [class_ "space-y-1 divide-y divide-slate-100"] $ do
               percentileRow "max" $ projReqStats ^. #max
               percentileRow "p99" $ projReqStats ^. #p99
               percentileRow "p95" $ projReqStats ^. #p95

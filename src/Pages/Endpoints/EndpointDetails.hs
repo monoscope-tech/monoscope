@@ -15,7 +15,7 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Fmt
 import Lucid
 import Lucid.HTMX
-import Lucid.Hyperscript.QuasiQuoter (__)
+import Lucid.Hyperscript.QuasiQuoter
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints
 import Models.Apis.Endpoints qualified as Endpoints
@@ -46,32 +46,49 @@ fieldDetailsPartialH sess pid fid = do
 fieldDetailsView :: Fields.Field -> Vector Formats.Format -> Html ()
 fieldDetailsView field formats = do
   img_ [src_ "/assets/svgs/ellipsis.svg", class_ "my-2 float-right"]
-  h3_ [class_ "text-lg text-slate-700 mt-6"] $ toHtml $ field ^. #key
-  formats & mapM_ \formatV -> do
-    div_ [class_ "flex mt-5 flex-row gap-9"] $ do
+  section_ [class_ "space-y-4"] $ do
+    div_ $ do
+      h6_ [class_ "text-slate-700 text-xs"] "FIELD NAME"
+      h3_ [class_ "text-lg text-slate-700"] $ toHtml $ field ^. #key
+    div_ $ do
+      h6_ [class_ "text-slate-700 text-xs"] "FIELD PATH"
+      h3_ [class_ "text-lg text-slate-700"] $ toHtml $ field ^. #keyPathStr
+    div_ [class_ "flex flex-row gap-9"] $ do
+      div_ $ do
+        h6_ [class_ "text-slate-700 text-xs"] "FIELD CATEGORY"
+        h4_ [class_ "text-base text-slate-700"] $ fieldCategoryToDisplay $ field ^. #fieldCategory
+      div_ [class_ "mx-5"] $ do
+        h6_ [class_ "text-slate-700 text-xs"] "FORMAT OVERRIDE"
+        h4_ [class_ "text-base text-slate-700"] $ toHtml $ fromMaybe "[unset]" (field ^. #fieldTypeOverride)
+    div_ $ do
+      h5_ [class_ "text-sm text-slate-700"] "DETECTED FIELD FORMATS AND TYPES"
       div_ [class_ "space-y-2"] $ do
-        h6_ [class_ "text-slate-700 text-xs"] "TYPE"
-        h4_ [class_ "text-base text-slate-700"] $ fieldTypeToDisplay $ formatV ^. #fieldType
-      div_ [class_ "mx-5 space-y-2"] $ do
-        h6_ [class_ "text-slate-700 text-xs"] "FORMAT"
-        h4_ [class_ "text-base text-slate-700"] $ toHtml $ formatV ^. #fieldFormat
-    h6_ [class_ "text-slate-600 mt-4 text-xs"] "EXAMPLE VALUES"
-    ul_ [class_ "list-disc"] $ do
-      formatV ^. #examples & mapM_ \ex -> do
-        li_ [class_ "ml-10 text-slate-700 text-sm"] $ toHtml ex
-  div_ [class_ "flex flex-row justify-between mt-10 "] $ do
-    div_ [class_ " "] $ do
-      h4_ [class_ "text-sm text-slate-700 mb-2"] "CREATION DATE"
-      div_ [class_ "flex border border-gray-200 m-1 rounded-xl p-2"] $ do
-        img_ [src_ "/assets/svgs/calender.svg", class_ "h-4 mr-2 w-4"]
-        span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" (field ^. #createdAt)
-    div_ [class_ " "] $ do
-      h4_ [class_ "text-sm text-slate-700 mb-2"] "LAST CHANGE"
-      div_ [class_ "flex border border-gray-200 m-1 justify-between rounded-xl p-2"] $ do
-        img_ [src_ "/assets/svgs/calender.svg", class_ "h-4 mr-2 w-4"]
-        span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" (field ^. #updatedAt)
-  h6_ [class_ "mt-5 text-sm text-slate-700 mb-2"] "DESCRIPTION"
-  p_ [class_ "text-gray-400 text-sm"] $ toHtml $ field ^. #description
+        formats & mapM_ \formatV -> do
+          div_ [class_ "border-l-slate-200 border-l-2 pl-2 py-2"] $ do
+            div_ [class_ "flex flex-row gap-9"] $ do
+              div_ [class_ "space-y-2"] $ do
+                h6_ [class_ "text-slate-700 text-xs"] "TYPE"
+                h4_ [class_ "text-base text-slate-700"] $ fieldTypeToDisplay $ formatV ^. #fieldType
+              div_ [class_ "mx-5 space-y-2"] $ do
+                h6_ [class_ "text-slate-700 text-xs"] "FORMAT"
+                h4_ [class_ "text-base text-slate-700"] $ toHtml $ formatV ^. #fieldFormat
+            h6_ [class_ "text-slate-600 mt-4 text-xs"] "EXAMPLE VALUES"
+            ul_ [class_ "list-disc"] $ do
+              formatV ^. #examples & mapM_ \ex -> do
+                li_ [class_ "ml-10 text-slate-700 text-sm"] $ toHtml ex
+    div_ [class_ "flex flex-row justify-between mt-10 "] $ do
+      div_ [class_ " "] $ do
+        h4_ [class_ "text-sm text-slate-700 mb-2"] "CREATION DATE"
+        div_ [class_ "flex border border-gray-200 m-1 rounded-xl p-2"] $ do
+          img_ [src_ "/assets/svgs/calender.svg", class_ "h-4 mr-2 w-4"]
+          span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" (field ^. #createdAt)
+      div_ [class_ " "] $ do
+        h4_ [class_ "text-sm text-slate-700 mb-2"] "LAST CHANGE"
+        div_ [class_ "flex border border-gray-200 m-1 justify-between rounded-xl p-2"] $ do
+          img_ [src_ "/assets/svgs/calender.svg", class_ "h-4 mr-2 w-4"]
+          span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" (field ^. #updatedAt)
+    h6_ [class_ "mt-5 text-sm text-slate-700 mb-2"] "DESCRIPTION"
+    p_ [class_ "text-gray-400 text-sm"] $ toHtml $ field ^. #description
 
 -- | endpointDetailsH is the main handler for the endpoint details page.
 -- It reuses the fieldDetailsView as well, which is used for the side navigation on the page and also exposed un the fieldDetailsPartialH endpoint
@@ -114,7 +131,7 @@ endpointDetailsH sess pid eid = do
 endpointDetails :: EndpointRequestStats -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> Text -> Vector Anomalies.AnomalyVM -> Html ()
 endpointDetails endpoint fieldsM reqsByStatsByMinJ reqLatenciesRolledByStepsJ anomalies = do
   div_ [class_ "w-full flex flex-row h-full overflow-hidden"] $ do
-    div_ [class_ "w-2/3 p-8 h-full overflow-y-scroll"] $ do
+    div_ [class_ "w-2/3 p-5 h-full overflow-y-scroll"] $ do
       div_ [class_ "flex flex-row justify-between mb-10"] $ do
         div_ [class_ "flex flex-row place-items-center text-lg font-medium"] $ do
           h3_ [class_ "text-lg text-slate-700"] $ do
@@ -139,17 +156,24 @@ endpointDetails endpoint fieldsM reqsByStatsByMinJ reqLatenciesRolledByStepsJ an
       [ class_ "w-1/3 h-full overflow-y-scroll bg-white border border-gray-200 p-5 sticky top-0",
         id_ "detailSidebar"
       ]
-      ""
+      $ do
+        div_ [class_ "h-full flex flex-col items-center justify-center"] $ do
+          img_ [class_ "w-36", src_ "/assets/svgs/tasks.svg"]
+          h3_ [class_ "mt-2 text-lg font-medium text-gray-900"] "Nothing selected"
+          p_ [class_ "mt-1 text-sm text-gray-500"] "Select a field or similar item on the left"
+          p_ [class_ "mt-1 text-sm text-gray-500"] "to view more details about it here."
+
     script_
       [type_ "text/hyperscript"]
       [text| 
-      def collapseUntil(elem, level)
-        set nxtElem to (next <[data-depth]/> from elem) then
-        if nxtElem's @data-depth is greater than level 
-          then toggle .hidden on nxtElem 
-          then collapseUntil(nxtElem, level)
-      end
-      |]
+        def collapseUntil(elem, level)
+          set nxtElem to (next <[data-depth]/> from elem) then
+          if nxtElem's @data-depth is greater than level 
+            then toggle .hidden on nxtElem 
+            then collapseUntil(nxtElem, level)
+        end
+        |]
+
     script_
       [text|
         new FusionCharts({
@@ -227,9 +251,9 @@ endpointStats enpStats =
         div_ [class_ " row-span-1 col-span-1 card-round p-5 flex flex-row content-between "] $ do
           div_ $ do
             span_ "Total Requests"
-            div_ [class_ "inline-block flex flex-row content-between"] $ do
+            div_ [class_ "inline-block flex flex-row items-baseline"] $ do
               strong_ [class_ "text-xl"] $ toHtml @Text $ fmt $ commaizeF (enpStats ^. #totalRequests) -- (enpStats ^. #ongoingAnomalies)
-              sub_ $ toHtml @Text $ fmt ("/" +| commaizeF (enpStats ^. #totalRequestsProj))
+              small_ $ toHtml @Text $ fmt ("/" +| commaizeF (enpStats ^. #totalRequestsProj))
 
       div_ [class_ "col-span-2 bg-white  border border-gray-100  row-span-2 rounded-2xl p-3"] $ do
         div_ [class_ "p-4"] $ do
@@ -244,7 +268,7 @@ endpointStats enpStats =
             option_ "Avg Reqs per minute"
         div_ [class_ "flex flex-row gap-8"] $ do
           div_ [id_ "reqsLatencyHistogram", class_ "grow"] ""
-          div_ [class_ "flex-1 space-y-4 min-w-[15%]"] $ do
+          div_ [class_ "flex-1 space-y-4 min-w-[20%]"] $ do
             strong_ [class_ "block text-right"] "Latency Percentiles"
             ul_ [class_ "space-y-1 divide-y divide-slate-100"] $ do
               percentileRow "max" $ enpStats ^. #max
@@ -354,6 +378,15 @@ fieldTypeToDisplay fieldType = case fieldType of
   Fields.FTNull -> span_ [class_ "px-2 rounded-xl bg-red-100 red-800 monospace"] "null"
   Fields.FTStringList -> span_ [class_ "px-2 rounded-xl bg-indigo-100 red-800 monospace"] "[]abc"
   Fields.FTNumberList -> span_ [class_ "px-2 rounded-xl bg-neutral-100 neutral-800 monospace"] "[]123"
+
+fieldCategoryToDisplay :: Fields.FieldCategoryEnum -> Html ()
+fieldCategoryToDisplay fieldType = case fieldType of
+  Fields.FCRequestBody -> span_ [class_ "px-2 rounded-xl bg-slate-100 slate-800 monospace"] "Request Body"
+  Fields.FCQueryParam -> span_ [class_ "px-2 rounded-xl bg-blue-100 blue-800 monospace"] "Query Param"
+  Fields.FCPathParam -> span_ [class_ "px-2 rounded-xl bg-gray-100 black-800 monospace"] "Path Param"
+  Fields.FCRequestHeader -> span_ [class_ "px-2 rounded-xl bg-orange-100 orange-800 monospace"] "Request Header"
+  Fields.FCResponseHeader -> span_ [class_ "px-2 rounded-xl bg-stone-100 stone-800 monospace"] "Response Header"
+  Fields.FCResponseBody -> span_ [class_ "px-2 rounded-xl bg-red-100 red-800 monospace"] "Response Body"
 
 fieldsToNormalized :: [Fields.Field] -> [(Text, Maybe Fields.Field)]
 fieldsToNormalized =

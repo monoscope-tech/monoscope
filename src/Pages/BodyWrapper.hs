@@ -269,17 +269,3 @@ navbar currUser = do
           a_ [class_ "text-base p-2 flex gap-3 rounded hover:bg-gray-100", href_ "/logout"] $ do
             img_ [src_ "/assets/svgs/add_user.svg"]
             span_ "Logout"
-
-  script_
-    [text|
-    //var dataTable = new DataTable("#apitab");
-
-    var notyf = new Notyf({
-        duration: 5000,
-        position: {
-        x: 'right',
-        y: 'top',
-      },
-    });
-
-  |]
