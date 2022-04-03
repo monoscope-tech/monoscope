@@ -18,7 +18,8 @@ menu ppid =
    in [ ("Dashboard", "/p/" <> pid <> "/", "/assets/svgs/dashboard.svg"),
         ("Endpoints", "/p/" <> pid <> "/endpoints", "/assets/svgs/endpoint.svg"),
         ("Anomalies", "/p/" <> pid <> "/anomalies", "/assets/svgs/anomalies.svg"),
-        ("API Keys", "/p/" <> pid <> "/apis", "/assets/svgs/api.svg")
+        ("API Keys", "/p/" <> pid <> "/apis", "/assets/svgs/api.svg"),
+         ("Logs", "/p/" <> pid <> "/log", "/assets/svgs/api.svg")
       ]
 
 data BWConfig = BWConfig
