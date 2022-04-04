@@ -459,7 +459,7 @@ CREATE MATERIALIZED VIEW apis.project_requests_by_endpoint_per_min AS
               url_path
       ) ts_data
       GROUP BY project_id;
-CREATE INDEX IF NOT EXISTS idx_apis_project_requests_by_endpoint_per_min_project_id ON apis.project_requests_by_endpoint_per_min(project_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_project_requests_by_endpoint_per_min_project_id ON apis.project_requests_by_endpoint_per_min(project_id);
 
 
 -- TODO: Create triggers to create new anomalies when new fields, endpoints and shapes are created.
