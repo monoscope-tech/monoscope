@@ -38,7 +38,7 @@ data Format = Format
     fieldId :: UUID.UUID,
     fieldType :: Fields.FieldTypes,
     fieldFormat :: Text,
-    examples :: Vector.Vector Text
+    examples :: Vector.Vector AE.Value
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow)

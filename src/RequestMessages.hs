@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 module RequestMessages
@@ -14,6 +15,7 @@ import Data.Aeson.QQ (aesonQQ)
 import Data.Aeson.Types qualified as AET
 import Data.ByteString.Base64 qualified as B64
 import Data.HashMap.Strict qualified as HM
+import Data.List (groupBy)
 import Data.Scientific qualified as Scientific
 import Data.Text qualified as T
 import Data.Time.Clock as Clock
@@ -30,7 +32,7 @@ import Models.Projects.Projects qualified as Projects
 import Optics.Operators
 import Optics.TH
 import Relude
-import Relude.Unsafe as Unsafe
+import Relude.Unsafe as Unsafe hiding (head)
 import Text.RawString.QQ
 import Text.Regex.TDFA ((=~))
 
@@ -38,6 +40,7 @@ import Text.Regex.TDFA ((=~))
 -- >>> import Relude
 -- >>> import Data.Vector qualified as Vector
 -- >>> import Data.Aeson.QQ (aesonQQ)
+-- >>> import Data.Aeson
 
 data SDKTypes = GoGin | GoBuiltIn
   deriving stock (Show, Generic)
@@ -71,7 +74,7 @@ data RequestMessage = RequestMessage
 
 makeFieldLabelsNoPrefix ''RequestMessage
 
-requestMsgToDumpAndEndpoint :: RequestMessages.RequestMessage -> ZonedTime -> UUID.UUID -> Either Text (RequestDumps.RequestDump, Endpoints.Endpoint, [(Fields.Field, [Text])], Shapes.Shape)
+requestMsgToDumpAndEndpoint :: RequestMessages.RequestMessage -> ZonedTime -> UUID.UUID -> Either Text (RequestDumps.RequestDump, Endpoints.Endpoint, [(Fields.Field, [AE.Value])], Shapes.Shape)
 requestMsgToDumpAndEndpoint rM now dumpID = do
   reqBodyB64 <- B64.decodeBase64 $ encodeUtf8 $ rM ^. #requestBody
   -- NB: At the moment we're discarding the error messages from when we're unable to parse the input
@@ -200,16 +203,24 @@ normalizeUrlPath GoBuiltIn urlPath = urlPath
 -- Float values and Null
 -- >>> valueToFields [aesonQQ|{"fl":1.234, "nl": null}|]
 -- [(".nl",Null),(".fl",Number 1.234)]
-valueToFields :: AE.Value -> [(Text, AE.Value)]
-valueToFields value = snd $ valueToFields' value ("", [])
+valueToFields :: AE.Value -> [(Text, [AE.Value])]
+valueToFields value = dedupFields $ snd $ valueToFields' value ("", [])
   where
     valueToFields' :: AE.Value -> (Text, [(Text, AE.Value)]) -> (Text, [(Text, AE.Value)])
     valueToFields' (AE.Object v) akk = HM.toList v & foldl' (\(akkT, akkL) (key, val) -> (akkT, snd $ valueToFields' val (akkT <> "." <> key, akkL))) akk
     valueToFields' (AE.Array v) akk = foldl' (\(akkT, akkL) val -> (akkT, snd $ valueToFields' val (akkT <> ".[]", akkL))) akk v
     valueToFields' v (akk, l) = (akk, (akk, v) : l)
 
--- fieldsToHash :: [(Text, AE.Value)] -> Text
--- fieldsToHash = foldl' (\akk tp -> akk <> "," <> fst tp) ""
+-- >>> dedupFields [(".menu.[]",String "xyz"),(".menu.[]",String "abc")]
+-- [(".menu.[]",[String "xyz",String "abc"])]
+dedupFields :: [(Text, AE.Value)] -> [(Text, [AE.Value])]
+dedupFields fields =
+  sortWith fst fields
+    & groupBy (\a b -> fst a == fst b)
+    & map \case
+      [(a, b), (c, d)] -> (a, [b, d])
+      [(a, b)] -> (a, [b])
+      _ -> error "Unreachable"
 
 aeValueToFieldType :: AE.Value -> Fields.FieldTypes
 aeValueToFieldType (AET.String _) = Fields.FTString
@@ -252,7 +263,7 @@ valueToFormatNum val
   | Scientific.isInteger val = "integer"
   | otherwise = "unknown"
 
-fieldsToFieldDTO :: Fields.FieldCategoryEnum -> UUID.UUID -> (Text, AE.Value) -> (Fields.Field, [Text])
+fieldsToFieldDTO :: Fields.FieldCategoryEnum -> UUID.UUID -> (Text, [AE.Value]) -> (Fields.Field, [AE.Value])
 fieldsToFieldDTO fieldCategory projectID (keyPath, val) =
   ( Fields.Field
       { createdAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC",
@@ -261,14 +272,16 @@ fieldsToFieldDTO fieldCategory projectID (keyPath, val) =
         endpointId = Endpoints.EndpointId UUID.nil,
         projectId = Projects.ProjectId projectID,
         key = snd $ T.breakOnEnd "." keyPath,
-        fieldType = aeValueToFieldType val,
+        -- FIXME: We're discarding the field values of the others, if theer was more than 1 value.
+        -- FIXME: We should instead take all the fields into consideration when generating the field types and formats
+        fieldType = fromMaybe Fields.FTUnknown $ viaNonEmpty head $ aeValueToFieldType <$> val,
         fieldTypeOverride = Just "",
-        format = valueToFormat val,
+        format = fromMaybe "" $ viaNonEmpty head $ valueToFormat <$> val,
         formatOverride = Just "",
         description = "",
         keyPath = fromList $ T.splitOn "." keyPath,
         keyPathStr = keyPath,
         fieldCategory = fieldCategory
       },
-    []
+    val
   )

@@ -76,7 +76,7 @@ fieldDetailsView field formats = do
             h6_ [class_ "text-slate-600 mt-4 text-xs"] "EXAMPLE VALUES"
             ul_ [class_ "list-disc"] $ do
               formatV ^. #examples & mapM_ \ex -> do
-                li_ [class_ "ml-10 text-slate-700 text-sm"] $ toHtml ex
+                li_ [class_ "ml-10 text-slate-700 text-sm"] $ toHtml @String $ show ex
     div_ [class_ "flex flex-row justify-between mt-10 "] $ do
       div_ [class_ " "] $ do
         h4_ [class_ "text-sm text-slate-700 mb-2"] "CREATION DATE"

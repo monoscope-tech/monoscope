@@ -1,5 +1,6 @@
 module Models.Apis.Fields.Query (upsertFields, fieldById, selectFields) where
 
+import Data.Aeson qualified as AE
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity (selectById)
@@ -11,10 +12,10 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Types (Field, FieldId)
 import Models.Apis.Formats qualified as Formats
 import Optics.Core ((^.))
-import Relude (IO, Int64, Maybe, Text, map, (&))
+import Relude (IO, Int64, Maybe, map, (&))
 
 -- | upsertFields
-upsertFields :: Endpoints.EndpointId -> [(Field, [Text])] -> DBT IO [(Formats.FormatId, FieldId)]
+upsertFields :: Endpoints.EndpointId -> [(Field, [AE.Value])] -> DBT IO [(Formats.FormatId, FieldId)]
 upsertFields endpointID fields = returning q options
   where
     q =
