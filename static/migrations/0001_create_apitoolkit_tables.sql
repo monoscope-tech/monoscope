@@ -279,85 +279,6 @@ CREATE TRIGGER endpoint_created_anomaly AFTER INSERT ON apis.endpoints FOR EACH 
 DROP TRIGGER IF EXISTS shapes_created_anomaly ON apis.shapes;
 CREATE TRIGGER shapes_created_anomaly AFTER INSERT ON apis.shapes FOR EACH ROW EXECUTE PROCEDURE apis.new_anomaly_proc('shape', 'created');
 
--- TODO: Create triggers to create new anomalies when new fields, endpoints and shapes are created.
-
-
-CREATE MATERIALIZED VIEW IF NOT EXISTS apis.anomalies_vm 
-    AS	SELECT 
-    an.id, an.created_at, an.updated_at, an.project_id, an.acknowleged_at,an.acknowleged_by, an.anomaly_type, an.action, an.target_id,
-    shapes.id shape_id,
-
-    fields.id field_id,
-    fields.key field_key,
-    fields.key_path_str field_key_path_str,
-    fields.field_category field_category,
-    fields.format field_format,
-    
-    formats.id format_id,
-    formats.field_type format_type,
-    formats.examples format_examples,
-
-    endpoints.id endpoint_id,
-    endpoints.method endpoint_method,
-    endpoints.url_path endpoint_url_path,
-
-    an.archived_at,
-    (
-      SELECT
-          json_agg(json_build_array(timeB, count))
-      from
-          (
-              SELECT
-                  time_bucket('1 minute', created_at) as timeB,
-                  count(id) count
-              FROM
-                  apis.request_dumps
-              where
-                  created_at > NOW() - interval '14' day
-                  AND project_id = project_id
-                  AND CASE
-                      WHEN anomaly_type = 'endpoint' THEN 
-                          method = method
-                          AND url_path = url_path
-                      WHEN anomaly_type = 'shape' THEN
-                          shape_id = target_id
-                      WHEN anomaly_type = 'format' THEN
-                          target_id = ANY(format_ids)
-                  END
-              GROUP BY
-                  timeB
-          ) ts 
-    )::text ts
-	FROM apis.anomalies an
-	LEFT JOIN apis.formats on target_id=formats.id
-	LEFT JOIN apis.fields on (fields.id=target_id OR fields.id=formats.field_id) 
-	LEFT JOIN apis.shapes on target_id=shapes.id
-	LEFT JOIN apis.endpoints 
-      ON (endpoints.id = target_id 
-          OR endpoints.id = fields.endpoint_id 
-          OR endpoints.id = shapes.endpoint_id
-          );
-CREATE UNIQUE INDEX idx_apis_anomaly_vm_id ON apis.anomalies_vm (id);
-CREATE INDEX idx_apis_anomaly_vm_project_id ON apis.anomalies_vm (project_id);
-CREATE INDEX idx_apis_anomaly_vm_project_id_endpoint_id ON apis.anomalies_vm (project_id, endpoint_id);
-
-CREATE OR REPLACE FUNCTION apis.refresh_anomalies_vm()
-    RETURNS TRIGGER
-    LANGUAGE PLPGSQL
-AS
-$$
-BEGIN
-    REFRESH MATERIALIZED VIEW CONCURRENTLY apis.anomalies_vm;
-    RETURN NEW;
-END;
-$$;
-
-CREATE TRIGGER anomaly_update 
-  AFTER UPDATE OR INSERT ON apis.anomalies
-  FOR EACH STATEMENT EXECUTE PROCEDURE apis.refresh_anomalies_vm();
-
-
-
 -----------------------------------------------------------------------
 -- Single function to generate fields and formats within postgres while
 -- reducing the round trips.
@@ -541,6 +462,90 @@ CREATE MATERIALIZED VIEW apis.project_requests_by_endpoint_per_min AS
 CREATE INDEX IF NOT EXISTS idx_apis_project_requests_by_endpoint_per_min_project_id ON apis.project_requests_by_endpoint_per_min(project_id);
 
 
+-- TODO: Create triggers to create new anomalies when new fields, endpoints and shapes are created.
+
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS apis.anomalies_vm 
+    AS	SELECT 
+    an.id, an.created_at, an.updated_at, an.project_id, an.acknowleged_at,an.acknowleged_by, an.anomaly_type, an.action, an.target_id,
+    shapes.id shape_id,
+
+    fields.id field_id,
+    fields.key field_key,
+    fields.key_path_str field_key_path_str,
+    fields.field_category field_category,
+    fields.format field_format,
+    
+    formats.id format_id,
+    formats.field_type format_type,
+    formats.examples format_examples,
+
+    endpoints.id endpoint_id,
+    endpoints.method endpoint_method,
+    endpoints.url_path endpoint_url_path,
+
+    an.archived_at,
+    (
+      SELECT
+          json_agg(json_build_array(timeB, count))
+      from
+          (
+              SELECT
+                  time_bucket('1 minute', created_at) as timeB,
+                  count(id) count
+              FROM
+                  apis.request_dumps
+              where
+                  created_at > NOW() - interval '14' day
+                  AND project_id = project_id
+                  AND CASE
+                      WHEN anomaly_type = 'endpoint' THEN 
+                          method = method
+                          AND url_path = url_path
+                      WHEN anomaly_type = 'shape' THEN
+                          shape_id = target_id
+                      WHEN anomaly_type = 'format' THEN
+                          target_id = ANY(format_ids)
+                  END
+              GROUP BY
+                  timeB
+          ) ts 
+    )::text ts
+	FROM apis.anomalies an
+	LEFT JOIN apis.formats on target_id=formats.id
+	LEFT JOIN apis.fields on (fields.id=target_id OR fields.id=formats.field_id) 
+	LEFT JOIN apis.shapes on target_id=shapes.id
+	LEFT JOIN apis.endpoints 
+      ON (endpoints.id = target_id 
+          OR endpoints.id = fields.endpoint_id 
+          OR endpoints.id = shapes.endpoint_id
+          );
+CREATE UNIQUE INDEX idx_apis_anomaly_vm_id ON apis.anomalies_vm (id);
+CREATE INDEX idx_apis_anomaly_vm_project_id ON apis.anomalies_vm (project_id);
+CREATE INDEX idx_apis_anomaly_vm_project_id_endpoint_id ON apis.anomalies_vm (project_id, endpoint_id);
+
+
+
+-- REFRESH VIEWS
+-- CREATE OR REPLACE FUNCTION apis.refresh_anomalies_vm()
+--     RETURNS TRIGGER
+--     LANGUAGE PLPGSQL
+-- AS
+-- $$
+-- BEGIN
+--     REFRESH MATERIALIZED VIEW CONCURRENTLY apis.anomalies_vm;
+--     RETURN NEW;
+-- END;
+-- $$;
+
+-- README: commented out in favour of refreshing every 5mins, because it includes time series data
+-- CREATE TRIGGER anomaly_update 
+--   AFTER UPDATE OR INSERT ON apis.anomalies
+--   FOR EACH STATEMENT EXECUTE PROCEDURE apis.refresh_anomalies_vm();
+
+
+
+
 CREATE OR REPLACE PROCEDURE apis.refresh_request_dump_views_every_5mins(job_id int, config jsonb) LANGUAGE PLPGSQL AS
 $$
 BEGIN
@@ -548,7 +553,7 @@ BEGIN
   REFRESH MATERIALIZED VIEW CONCURRENTLY apis.endpoint_request_stats;
   REFRESH MATERIALIZED VIEW CONCURRENTLY apis.project_request_stats;
   REFRESH MATERIALIZED VIEW CONCURRENTLY apis.project_requests_by_endpoint_per_min;
-
+  REFRESH MATERIALIZED VIEW CONCURRENTLY apis.anomalies_vm;
 END
 $$;
 -- Refresg view every 5mins
