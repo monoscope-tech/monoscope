@@ -186,23 +186,27 @@ normalizeUrlPath GoBuiltIn urlPath = urlPath
 --
 -- Regular nested text fields:
 -- >>> valueToFields [aesonQQ|{"menu":{"id":"text"}}|]
--- [(".menu.id",String "text")]
+-- [(".menu.id",[String "text"])]
 --
 -- Integer nested field within an array of objects:
 -- >>> valueToFields [aesonQQ|{"menu":{"id":[{"int_field":22}]}}|]
--- [(".menu.id.[].int_field",Number 22.0)]
+-- [(".menu.id.[].int_field",[Number 22.0])]
 --
 -- Deeper nested field with an array of objects:
 -- >>> valueToFields [aesonQQ|{"menu":{"id":{"menuitems":[{"key":"value"}]}}}|]
--- [(".menu.id.menuitems.[].key",String "value")]
+-- [(".menu.id.menuitems.[].key",[String "value"])]
 --
 -- Flat array value:
 -- >>> valueToFields [aesonQQ|{"menu":["abc", "xyz"]}|]
--- [(".menu.[]",String "xyz"),(".menu.[]",String "abc")]
+-- [(".menu.[]",[String "abc",String "xyz"])]
 --
 -- Float values and Null
 -- >>> valueToFields [aesonQQ|{"fl":1.234, "nl": null}|]
--- [(".nl",Null),(".fl",Number 1.234)]
+-- [(".fl",[Number 1.234]),(".nl",[Null])]
+--
+-- Multiple fields with same key via array:
+-- >>> valueToFields [aesonQQ|{"menu":[{"id":"text"},{"id":123}]}|]
+-- [(".menu.[].id",[String "text",Number 123.0])]
 valueToFields :: AE.Value -> [(Text, [AE.Value])]
 valueToFields value = dedupFields $ snd $ valueToFields' value ("", [])
   where
@@ -211,16 +215,15 @@ valueToFields value = dedupFields $ snd $ valueToFields' value ("", [])
     valueToFields' (AE.Array v) akk = foldl' (\(akkT, akkL) val -> (akkT, snd $ valueToFields' val (akkT <> ".[]", akkL))) akk v
     valueToFields' v (akk, l) = (akk, (akk, v) : l)
 
--- >>> dedupFields [(".menu.[]",String "xyz"),(".menu.[]",String "abc")]
--- [(".menu.[]",[String "xyz",String "abc"])]
-dedupFields :: [(Text, AE.Value)] -> [(Text, [AE.Value])]
-dedupFields fields =
-  sortWith fst fields
-    & groupBy (\a b -> fst a == fst b)
-    & map \case
-      [(a, b), (c, d)] -> (a, [b, d])
-      [(a, b)] -> (a, [b])
-      _ -> error "Unreachable"
+    -- >>> dedupFields [(".menu.[]",String "xyz"),(".menu.[]",String "abc")]
+    -- [(".menu.[]",[String "abc",String "xyz"])]
+    -- >>> dedupFields [(".menu.[]",String "xyz"),(".menu.[]",String "abc"),(".menu.[]",Number 123)]
+    -- [(".menu.[]",[Number 123.0,String "abc",String "xyz"])]
+    dedupFields :: [(Text, AE.Value)] -> [(Text, [AE.Value])]
+    dedupFields fields =
+      sortWith fst fields
+        & groupBy (\a b -> fst a == fst b)
+        & map (foldl' (\(_, xs) (a, b) -> (a, b : xs)) ("", []))
 
 aeValueToFieldType :: AE.Value -> Fields.FieldTypes
 aeValueToFieldType (AET.String _) = Fields.FTString
