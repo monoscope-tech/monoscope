@@ -1,6 +1,6 @@
 {-# LANGUAGE TemplateHaskell #-}
 
-module Models.Apis.Shapes (insertShape, Shape (..), ShapeId (..)) where
+module Models.Apis.Shapes (insertShape, Shape (..), ShapeId (..), shapeIdText) where
 
 import Data.Aeson qualified as AE
 import Data.Default (Default)
@@ -28,6 +28,9 @@ newtype ShapeId = ShapeId {unShapeId :: UUID.UUID}
   deriving
     (AE.FromJSON, Eq, Ord, FromField, ToField, FromHttpApiData, Default)
     via UUID.UUID
+
+shapeIdText :: ShapeId -> Text
+shapeIdText = UUID.toText . unShapeId
 
 data Shape = Shape
   { id :: ShapeId,

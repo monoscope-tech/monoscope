@@ -301,7 +301,33 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS apis.anomalies_vm
     endpoints.method endpoint_method,
     endpoints.url_path endpoint_url_path,
 
-    an.archived_at
+    an.archived_at,
+    (
+      SELECT
+          json_agg(json_build_array(timeB, count))
+      from
+          (
+              SELECT
+                  time_bucket('1 minute', created_at) as timeB,
+                  count(id) count
+              FROM
+                  apis.request_dumps
+              where
+                  created_at > NOW() - interval '14' day
+                  AND project_id = project_id
+                  AND CASE
+                      WHEN anomaly_type = 'endpoint' THEN 
+                          method = method
+                          AND url_path = url_path
+                      WHEN anomaly_type = 'shape' THEN
+                          shape_id = target_id
+                      WHEN anomaly_type = 'format' THEN
+                          target_id = ANY(format_ids)
+                  END
+              GROUP BY
+                  timeB
+          ) ts 
+    )::text ts
 	FROM apis.anomalies an
 	LEFT JOIN apis.formats on target_id=formats.id
 	LEFT JOIN apis.fields on (fields.id=target_id OR fields.id=formats.field_id) 
@@ -342,7 +368,7 @@ CREATE OR REPLACE FUNCTION apis.create_field_and_formats(
   i_format TEXT, i_format_override TEXT, i_description TEXT, i_key_path TEXT[], i_key_path_str TEXT, 
   i_field_category apis.field_category, i_examples TEXT[], i_examples_max_count INT 
 )
-RETURNS setof apis.formats AS $$
+RETURNS TABLE (fmt_id UUID, f_id UUID) AS $$
 BEGIN
   return query
   with returned_fields AS (
@@ -364,7 +390,7 @@ BEGIN
 		DO
 			UPDATE SET 
 				examples = ARRAY(SELECT DISTINCT e from unnest(apis.formats.examples || excluded.examples) as e order by e limit 5)
-	RETURNING *;
+	RETURNING id, field_id;
 
 END;
 $$ LANGUAGE plpgsql;
@@ -403,11 +429,20 @@ CREATE TABLE IF NOT EXISTS apis.request_dumps
     response_headers_keypaths text[] NOT NULL DEFAULT '{}'::TEXT[],
 
     shape_id uuid NOT NULL REFERENCES apis.shapes (id),
+    
+    format_ids uuid[] NOT NULL DEFAULT '{}'::UUID[],
+    field_ids uuid[] NOT NULL DEFAULT '{}'::UUID[],
 
     PRIMARY KEY(project_id,created_at,id)
 );
 SELECT manage_updated_at('apis.request_dumps');
 SELECT create_hypertable('apis.request_dumps', 'created_at');
+CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_project_id ON apis.request_dumps(project_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_shape_id ON apis.request_dumps(shape_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_format_ids ON apis.request_dumps(format_ids, created_at);
+CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_field_ids ON apis.request_dumps(field_ids, created_at);
+CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_endpointss ON apis.request_dumps(url_path,method, created_at);
+
 
 -- Create a view that tracks endpoint related statistic points from the request dump table.
 DROP MATERIALIZED VIEW IF EXISTS apis.endpoint_request_stats;
@@ -479,12 +514,41 @@ CREATE MATERIALIZED VIEW apis.project_request_stats AS
   FROM request_dump_stats rds;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_project_request_stats_project_id ON apis.project_request_stats(project_id);
 
+-- Create a view that tracks project request related statistic points from the request dump table.
+DROP MATERIALIZED VIEW IF EXISTS apis.project_requests_by_endpoint_per_min;
+CREATE MATERIALIZED VIEW apis.project_requests_by_endpoint_per_min AS 
+  SELECT
+      project_id,
+      json_agg(json_build_array(timeB,enp, count))::text ts_text
+  FROM
+      (
+          SELECT
+              time_bucket('1 minute', created_at) as timeB,
+              concat_ws(' ', method, url_path)::text enp,
+              count(id) count,
+              project_id
+          FROM
+              apis.request_dumps
+          where
+              created_at > NOW() - interval '14' day --and project_id=?
+          GROUP BY
+              project_id,
+              timeB,
+              method,
+              url_path
+      ) ts_data
+      GROUP BY project_id;
+CREATE INDEX IF NOT EXISTS idx_apis_project_requests_by_endpoint_per_min_project_id ON apis.project_requests_by_endpoint_per_min(project_id);
+
+
 CREATE OR REPLACE PROCEDURE apis.refresh_request_dump_views_every_5mins(job_id int, config jsonb) LANGUAGE PLPGSQL AS
 $$
 BEGIN
   RAISE NOTICE 'Executing action % with config %', job_id, config;
   REFRESH MATERIALIZED VIEW CONCURRENTLY apis.endpoint_request_stats;
   REFRESH MATERIALIZED VIEW CONCURRENTLY apis.project_request_stats;
+  REFRESH MATERIALIZED VIEW CONCURRENTLY apis.project_requests_by_endpoint_per_min;
+
 END
 $$;
 -- Refresg view every 5mins

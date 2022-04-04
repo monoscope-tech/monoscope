@@ -23,8 +23,8 @@ import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
-import Database.PostgreSQL.Entity (selectById, selectManyByField)
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), queryOne)
+import Database.PostgreSQL.Entity (selectById)
+import Database.PostgreSQL.Entity.DBT (QueryNature (..), query, queryOne)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
@@ -126,8 +126,9 @@ data EndpointRequestStats = EndpointRequestStats
     totalTime :: Double,
     totalTimeProj :: Double,
     totalRequests :: Int,
-    totalRequestsProj :: Int
-    -- ongoingAnomalies :: Int
+    totalRequestsProj :: Int,
+    ongoingAnomalies :: Int,
+    ongoingAnomaliesProj :: Int
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (FromRow, ToRow, Default)
@@ -135,10 +136,32 @@ data EndpointRequestStats = EndpointRequestStats
 
 -- FIXME: Include and return a boolean flag to show if fields that have annomalies.
 endpointRequestStatsByProject :: Projects.ProjectId -> PgT.DBT IO (Vector EndpointRequestStats)
-endpointRequestStatsByProject = selectManyByField @EndpointRequestStats [field| project_id |]
+endpointRequestStatsByProject pid = query Select q (pid, pid)
+  where
+    q =
+      [sql| SELECT endpoint_id, project_id, url_path, method, min, p50, p75, p90, p95, p99, max, 
+                   total_time, total_time_proj, total_requests, total_requests_proj,
+                   (SELECT count(*) from apis.anomalies 
+                           where project_id=? AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
+                   ) ongoing_anomalies,
+                  (SELECT count(*) from apis.anomalies 
+                           where project_id=project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
+                   ) ongoing_anomalies_proj
+              FROM apis.endpoint_request_stats WHERE project_id=?|]
 
 endpointRequestStatsByEndpoint :: EndpointId -> PgT.DBT IO (Maybe EndpointRequestStats)
-endpointRequestStatsByEndpoint = selectById @EndpointRequestStats
+endpointRequestStatsByEndpoint eid = queryOne Select q (eid, eid)
+  where
+    q =
+      [sql| SELECT endpoint_id, project_id, url_path, method, min, p50, p75, p90, p95, p99, max, 
+                   total_time, total_time_proj, total_requests, total_requests_proj,
+                   (SELECT count(*) from apis.anomalies 
+                           where endpoint_id=? AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
+                   ) ongoing_anomalies,
+                  (SELECT count(*) from apis.anomalies 
+                           where project_id=project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
+                   ) ongoing_anomalies_proj
+              FROM apis.endpoint_request_stats WHERE endpoint_id=?|]
 
 endpointById :: EndpointId -> PgT.DBT IO (Maybe Endpoint)
 endpointById = selectById @Endpoint

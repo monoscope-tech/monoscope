@@ -112,7 +112,7 @@ requestMsgToDumpAndEndpoint rM now dumpID = do
           <> reqBodyFieldsDTO
           <> respBodyFieldsDTO
 
-  let urlPath = rM ^. #urlPath
+  let urlPath = normalizeUrlPath (rM ^. #sdkType) (rM ^. #urlPath)
 
   let shape =
         Shapes.Shape
@@ -157,7 +157,9 @@ requestMsgToDumpAndEndpoint rM now dumpID = do
             requestBodyKeypaths = requestBodyKeypaths,
             responseBodyKeypaths = responseBodyKeypaths,
             --
-            shapeId = Shapes.ShapeId dumpID
+            shapeId = Shapes.ShapeId dumpID,
+            formatIds = Vector.empty,
+            fieldIds = Vector.empty
           }
   let endpoint =
         Endpoints.Endpoint
@@ -171,6 +173,10 @@ requestMsgToDumpAndEndpoint rM now dumpID = do
             hosts = [rM ^. #host]
           }
   pure (reqDump, endpoint, fieldsDTO, shape)
+
+normalizeUrlPath :: SDKTypes -> Text -> Text
+normalizeUrlPath GoGin urlPath = urlPath
+normalizeUrlPath GoBuiltIn urlPath = urlPath
 
 -- | valueToFields takes an aeson object and converts it into a list of paths to
 -- each primitive value in the json and the values.

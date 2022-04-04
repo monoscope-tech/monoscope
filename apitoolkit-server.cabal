@@ -31,6 +31,8 @@ library
       Models.Apis.Anomalies
       Models.Apis.Endpoints
       Models.Apis.Fields
+      Models.Apis.Fields.Query
+      Models.Apis.Fields.Types
       Models.Apis.Formats
       Models.Apis.RequestDumps
       Models.Apis.Shapes
@@ -44,6 +46,7 @@ library
       Pages.Api
       Pages.BodyWrapper
       Pages.Dashboard
+      Pages.Endpoints.EndpointComponents
       Pages.Endpoints.EndpointDetails
       Pages.Endpoints.EndpointList
       Pages.Log

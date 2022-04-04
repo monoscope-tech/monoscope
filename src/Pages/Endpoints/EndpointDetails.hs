@@ -28,6 +28,7 @@ import NeatInterpolation
 import Optics.Core ((^.))
 import Pages.Anomalies.AnomalyList qualified as AnomaliesList
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
 import Relude
 import Relude.Unsafe qualified as Unsafe
 
@@ -46,7 +47,7 @@ fieldDetailsPartialH sess pid fid = do
 fieldDetailsView :: Fields.Field -> Vector Formats.Format -> Html ()
 fieldDetailsView field formats = do
   img_ [src_ "/assets/svgs/ellipsis.svg", class_ "my-2 float-right"]
-  section_ [class_ "space-y-4"] $ do
+  section_ [class_ "space-y-6"] $ do
     div_ $ do
       h6_ [class_ "text-slate-700 text-xs"] "FIELD NAME"
       h3_ [class_ "text-lg text-slate-700"] $ toHtml $ field ^. #key
@@ -68,7 +69,7 @@ fieldDetailsView field formats = do
             div_ [class_ "flex flex-row gap-9"] $ do
               div_ [class_ "space-y-2"] $ do
                 h6_ [class_ "text-slate-700 text-xs"] "TYPE"
-                h4_ [class_ "text-base text-slate-700"] $ fieldTypeToDisplay $ formatV ^. #fieldType
+                h4_ [class_ "text-base text-slate-700"] $ EndpointComponents.fieldTypeToDisplay $ formatV ^. #fieldType
               div_ [class_ "mx-5 space-y-2"] $ do
                 h6_ [class_ "text-slate-700 text-xs"] "FORMAT"
                 h4_ [class_ "text-base text-slate-700"] $ toHtml $ formatV ^. #fieldFormat
@@ -246,13 +247,14 @@ endpointStats enpStats =
         div_ [class_ " row-span-1 col-span-1 card-round p-5 flex flex-row content-between "] $ do
           div_ $ do
             span_ "Total Anomalies"
-            div_ [class_ "inline-block flex flex-row content-between"] $ do
-              strong_ [class_ "text-xl"] $ toHtml @Text $ show (1 :: Integer) -- (enpStats ^. #ongoingAnomalies)
+            div_ [class_ "inline-block flex flex-row items-baseline"] $ do
+              strong_ [class_ "text-xl"] $ toHtml @Text $ fmt $ commaizeF (enpStats ^. #ongoingAnomalies)
+              small_ $ toHtml @Text $ fmt ("/" +| commaizeF (enpStats ^. #ongoingAnomaliesProj))
         div_ [class_ " row-span-1 col-span-1 card-round p-5 flex flex-row content-between "] $ do
           div_ $ do
             span_ "Total Requests"
             div_ [class_ "inline-block flex flex-row items-baseline"] $ do
-              strong_ [class_ "text-xl"] $ toHtml @Text $ fmt $ commaizeF (enpStats ^. #totalRequests) -- (enpStats ^. #ongoingAnomalies)
+              strong_ [class_ "text-xl"] $ toHtml @Text $ fmt $ commaizeF (enpStats ^. #totalRequests)
               small_ $ toHtml @Text $ fmt ("/" +| commaizeF (enpStats ^. #totalRequestsProj))
 
       div_ [class_ "col-span-2 bg-white  border border-gray-100  row-span-2 rounded-2xl p-3"] $ do
@@ -363,21 +365,9 @@ subSubSection title fieldsM = do
                     div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full items-center"] $ do
                       input_ [type_ "checkbox", class_ " mr-12"]
                       span_ [class_ "grow text-sm text-slate-700 inline-flex items-center"] $ toHtml displayKey
-                      span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ fieldTypeToDisplay $ field ^. #fieldType
+                      span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ EndpointComponents.fieldTypeToDisplay $ field ^. #fieldType
                       img_ [src_ "/assets/svgs/alert-red.svg", class_ " mr-8 ml-4 h-5"]
                       img_ [src_ "/assets/svgs/dots-vertical.svg", class_ "mx-5 h-5"]
-
-fieldTypeToDisplay :: Fields.FieldTypes -> Html ()
-fieldTypeToDisplay fieldType = case fieldType of
-  Fields.FTUnknown -> span_ [class_ "px-2 rounded-xl bg-red-100 red-800 monospace"] "unknown"
-  Fields.FTString -> span_ [class_ "px-2 rounded-xl bg-slate-100 slate-800 monospace"] "abc"
-  Fields.FTNumber -> span_ [class_ "px-2 rounded-xl bg-blue-100 blue-800 monospace"] "123"
-  Fields.FTBool -> span_ [class_ "px-2 rounded-xl bg-gray-100 black-800 monospace"] "bool"
-  Fields.FTObject -> span_ [class_ "px-2 rounded-xl bg-orange-100 orange-800 monospace"] "{obj}"
-  Fields.FTList -> span_ [class_ "px-2 rounded-xl bg-stone-100 stone-800 monospace"] "[list]"
-  Fields.FTNull -> span_ [class_ "px-2 rounded-xl bg-red-100 red-800 monospace"] "null"
-  Fields.FTStringList -> span_ [class_ "px-2 rounded-xl bg-indigo-100 red-800 monospace"] "[]abc"
-  Fields.FTNumberList -> span_ [class_ "px-2 rounded-xl bg-neutral-100 neutral-800 monospace"] "[]123"
 
 fieldCategoryToDisplay :: Fields.FieldCategoryEnum -> Html ()
 fieldCategoryToDisplay fieldType = case fieldType of

@@ -13,6 +13,7 @@ import Data.ByteString.Base64 qualified as B64
 import Data.Pool (Pool)
 import Data.Time.LocalTime (getZonedTime)
 import Data.UUID.V4 (nextRandom)
+import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (Connection, Only (Only))
 import Models.Apis.Endpoints qualified as Endpoints
@@ -54,12 +55,15 @@ processRequestMessage logger pool requestMsg = do
         case enpResp of
           Nothing -> error "error"
           Just enpID -> do
-            _ <- Fields.upsertFields enpID fields
+            (formatIds, fieldIds) <- unzip <$> Fields.upsertFields enpID fields
             let shape' = shape & #endpointId .~ enpID
             shapeIdM <- Shapes.insertShape shape'
             case shapeIdM of
               Nothing -> error "error"
               Just (Only shapeId) -> do
-                let reqDump' = reqDump & #shapeId .~ shapeId
+                let reqDump' =
+                      reqDump & #shapeId .~ shapeId
+                        & #formatIds .~ Vector.fromList formatIds
+                        & #fieldIds .~ Vector.fromList fieldIds
                 RequestDumps.insertRequestDump reqDump'
                 pass

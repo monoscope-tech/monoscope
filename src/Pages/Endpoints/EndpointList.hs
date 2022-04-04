@@ -96,13 +96,18 @@ endpointList enps = do
                 div_ [class_ "w-10 inline-block", term "data-tippy-content" "p99 vs max"] $ meter__ $ ((enp ^. #p99) / (enp ^. #max)) * 100
               td_ [class_ "text-right font-medium text-gray-400 "] $ do
                 div_ [class_ "flex flex-row w-full justify-end gap-6"] $ do
-                  img_ [class_ "px-3", term "data-tippy-content" "ongoing anomaly", src_ "/assets/svgs/alert-red.svg"]
+                  when (enp ^. #ongoingAnomalies > 0) $ do
+                    img_ [class_ "px-3", term "data-tippy-content" "ongoing anomaly", src_ "/assets/svgs/alert-red.svg"]
                   img_ [class_ "px-3", src_ "/assets/svgs/dots-vertical.svg"]
 
 meter__ :: Double -> Html ()
 meter__ prcntg = div_ [class_ "shadow w-full bg-slate-200 h-2.5 "] $ do
   div_ [class_ "shadow bg-blue-500 h-full", style_ $ fmt $ "width: " +| fixedF 2 prcntg |+ "%"] ""
 
+-------------------------------------------------------------------------------------------
+-- TODO: This section holds the navbar for pagination.
+-- TODO: We should uncomment it when we have bandwidth to implement endpoint pagination
+-------------------------------------------------------------------------------------------
 -- table footer
 -- README: Hiding the pagination logic because while pagination is important,
 -- TODO: SHow this pagination when we're ready to actually implement the pagination logic.

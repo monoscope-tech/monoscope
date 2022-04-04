@@ -11,12 +11,13 @@ import Lucid.HTMX
 import Lucid.Hyperscript
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Fields qualified as Fields
+import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Optics.Core ((^.))
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
 import Relude
 import Relude.Unsafe qualified as Unsafe
 
@@ -123,7 +124,7 @@ renderAnomaly :: Bool -> Anomalies.AnomalyVM -> Html ()
 renderAnomaly hideByDefault anomaly = do
   let (anomalyTitle, chartTitle, icon) = anomalyDisplayConfig anomaly
   let anomalyId = Anomalies.anomalyIdText (anomaly ^. #id)
-  let fieldGraphId = "field-" <> maybe "" Fields.fieldIdText (anomaly ^. #fieldId)
+  let anomalyGraphId = "field-" <> anomalyId
 
   div_ [class_ "anomaly-item card-round px-8 py-6 hover:bg-blue-50 parent-hover cursor-pointer", style_ (if hideByDefault then "display:none" else ""), id_ anomalyId] $ do
     div_ [class_ "grid grid-cols-2 gap-5"] $ do
@@ -143,17 +144,36 @@ renderAnomaly hideByDefault anomaly = do
               time_ [class_ "inline-block"] $ toHtml @String $ formatTime defaultTimeLocale "%F %R" (anomaly ^. #createdAt)
               span_ [class_ "inline-block"] "-"
               time_ [class_ "inline-block"] $ toHtml @String $ formatTime defaultTimeLocale "%F %R" ackTime
-        div_ [class_ "pt-5"] $ do
-          p_ [class_ "text-lg"] $ do
-            span_ "A new field "
-            a_ [class_ "inline-block px-2 text-blue-800"] $ toHtml $ "`" <> fromMaybe "" (anomaly ^. #fieldKeyPathStr) <> "`"
-            span_ "was added to"
+        div_ [class_ "pt-5 space-y-1"] $ do
+          div_ $ do
+            span_ "endpoint: "
             a_
               [ class_ "text-blue-800 inline-block px-2",
                 href_ $ Endpoints.endpointUrlPath (anomaly ^. #projectId) (Unsafe.fromJust $ anomaly ^. #endpointId)
               ]
-              $ toHtml $ "`" <> fromMaybe "" (anomaly ^. #endpointUrlPath) <> "`"
-            span_ ". Was this intended? "
+              $ toHtml $ fromMaybe "" (anomaly ^. #endpointMethod) <> "  " <> fromMaybe "" (anomaly ^. #endpointUrlPath)
+          case anomaly ^. #anomalyType of
+            Anomalies.ATShape -> do
+              div_ $ do
+                span_ "shape_id: "
+                a_
+                  [ class_ "text-blue-800 inline-block px-2"
+                  ]
+                  $ toHtml $ "`" <> maybe "" Shapes.shapeIdText (anomaly ^. #shapeId) <> "`"
+            Anomalies.ATEndpoint -> ""
+            Anomalies.ATFormat -> do
+              div_ $ do
+                span_ "field_path: "
+                span_ $ toHtml $ fromMaybe "" (anomaly ^. #fieldKey)
+              div_ $ do
+                span_ "type: "
+                maybe "" EndpointComponents.fieldTypeToDisplay (anomaly ^. #formatType)
+              div_ $ do
+                span_ "format: "
+                span_ $ toHtml $ fromMaybe "" (anomaly ^. #fieldFormat)
+            Anomalies.ATField -> ""
+            Anomalies.ATUnknown -> ""
+        p_ [class_ "pt-3 text-lg"] "Was this intended? "
       div_ [class_ "clear-both"] $ do
         div_ [class_ "float-right flex items-center gap-2"] $ do
           a_
@@ -168,8 +188,8 @@ renderAnomaly hideByDefault anomaly = do
             (isJust (anomaly ^. #acknowlegedAt))
 
         p_ [class_ "border-0 border-b-2  border-gray-100 border py-2 mb-1"] $ toHtml chartTitle
-        div_ [id_ fieldGraphId, style_ "height:250px", class_ "w-full"] ""
-        script_ $ anomalyChartScript anomaly fieldGraphId
+        div_ [id_ anomalyGraphId, style_ "height:250px", class_ "w-full"] ""
+        script_ $ anomalyChartScript anomaly anomalyGraphId
 
 anomalyAcknowlegeButton :: Projects.ProjectId -> Anomalies.AnomalyId -> Bool -> Html ()
 anomalyAcknowlegeButton pid aid acked = do
@@ -185,53 +205,32 @@ anomalyAcknowlegeButton pid aid acked = do
     if acked then "✓ Acknowleged" else "✓ Acknowlege"
 
 anomalyChartScript :: Anomalies.AnomalyVM -> Text -> Text
-anomalyChartScript anomaly fieldGraphId = case anomaly ^. #anomalyType of
-  Anomalies.ATField ->
-    [text|
+anomalyChartScript anomaly anomalyGraphId =
+  let timeSeriesData = fromMaybe "[]" $ anomaly ^. #timeSeries
+   in [text|
       new FusionCharts({
         type: "timeseries",
-        renderAt: "$fieldGraphId",
+        renderAt: "$anomalyGraphId",
         width: "100%",
         height: 250,
         dataSource: {
-          data: new FusionCharts.DataStore().createDataTable([["2022-01-01T10:00:00Z", "200", 22], ["2022-02-05T10:00:00Z", "200", 2] , ["2022-03-05T10:00:00Z", "200", 42],["2022-04-05T10:00:00Z", "200", 2]], 
-          [{
-            "name": "Time",
+          data: new FusionCharts.DataStore().createDataTable($timeSeriesData, 
+          [{"name": "Time",
             "type": "date",
             "format": "%Y-%m-%dT%H:%M:%S%Z" // https://www.fusioncharts.com/dev/fusiontime/fusiontime-attributes
-          },{
-            "name": "StatusCode",
-            "type": "string"
-          },{
-            "name": "Count",
-            "type": "number"
-          }]),
+          },{"name": "Count","type": "number"}]),
           chart: {},
-          navigator: {
-              "enabled": 0
-          },
+          navigator: {"enabled": 0},
           series: "StatusCode",
-          yaxis: [
-            {
-              plot:[{
-                value: "Count",
-                type: "smooth-line"
-              }],
-              title: ""
-            }
-          ]
+          yaxis: [{plot:[{value: "Count",type: "smooth-line"}],title: ""}]
         }
       }).render();
-          |]
-  Anomalies.ATShape -> ""
-  Anomalies.ATEndpoint -> ""
-  Anomalies.ATFormat -> ""
-  Anomalies.ATUnknown -> ""
+     |]
 
 anomalyDisplayConfig :: Anomalies.AnomalyVM -> (Text, Text, Text)
 anomalyDisplayConfig anomaly = case anomaly ^. #anomalyType of
   Anomalies.ATField -> ("New Field Found", "Field Occurences over Time", "/assets/svgs/anomalies/fields.svg")
-  Anomalies.ATShape -> ("New Endpoint Requests Shape", "Shape Occurences over Time vs Total by all Shapes", "/assets/svgs/anomalies/fields.svg")
+  Anomalies.ATShape -> ("New Req/Resp Shape", "Shape Occurences over Time vs Total by all Shapes", "/assets/svgs/anomalies/fields.svg")
   Anomalies.ATEndpoint -> ("New Endpoint Found", "Endpoint occurences over time vs Total by all Endpoints", "/assets/svgs/endpoint.svg")
-  Anomalies.ATFormat -> ("Field Format Changed", "Requests with the new field format", "/assets/svgs/anomalies/fields.svg")
+  Anomalies.ATFormat -> ("Field Format Detected", "Requests with the new field format", "/assets/svgs/anomalies/fields.svg")
   Anomalies.ATUnknown -> ("Unknown anomaly", "Unknown anomaly", "/assets/svgs/anomalies/fields.svg")

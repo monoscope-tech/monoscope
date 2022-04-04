@@ -17,19 +17,17 @@ import Data.Aeson qualified as AE
 import Data.Time (CalendarDiffTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
-import Database.PostgreSQL.Entity (insert)
-import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query)
+import Database.PostgreSQL.Entity.DBT (QueryNature (Insert, Select), execute, query, queryOne)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact (DBT)
+import Models.Apis.Fields qualified as Fields
+import Models.Apis.Formats qualified as Formats
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Optics.TH
 import Relude
-
--- instance Eq ZonedTime where
---   (==) _ _ = True
 
 data RequestDump = RequestDump
   { id :: UUID.UUID,
@@ -59,7 +57,10 @@ data RequestDump = RequestDump
     requestHeadersKeypaths :: Vector Text,
     responseHeadersKeypaths :: Vector Text,
     --
-    shapeId :: Shapes.ShapeId
+    shapeId :: Shapes.ShapeId,
+    --
+    formatIds :: Vector Formats.FormatId,
+    fieldIds :: Vector Fields.FieldId
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (ToRow, FromRow)
@@ -70,7 +71,9 @@ data RequestDump = RequestDump
 makeFieldLabelsNoPrefix ''RequestDump
 
 insertRequestDump :: RequestDump -> DBT IO ()
-insertRequestDump = insert @RequestDump
+insertRequestDump = void <$> execute Insert q
+  where
+    q = [sql| INSERT INTO apis.request_dumps VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::uuid[],?::uuid[])|]
 
 selectRequestsByStatusCodesStatByMin :: Projects.ProjectId -> Text -> Text -> DBT IO (Vector (ZonedTime, Text, Int))
 selectRequestsByStatusCodesStatByMin pid urlPath method = query Select q (pid, urlPath, method)
@@ -86,19 +89,11 @@ selectRequestsByStatusCodesStatByMin pid urlPath method = query Select q (pid, u
         GROUP BY timeB, status_code;
     |]
 
-selectRequestsByEndpointsStatByMin :: Projects.ProjectId -> DBT IO (Vector (ZonedTime, Text, Int))
-selectRequestsByEndpointsStatByMin pid = query Select q (Only pid)
-  where
-    q =
-      [sql|
-       SELECT time_bucket('1 minute', created_at) as timeB,
-             concat_ws(' ', method, url_path)::text,
-             count(id)
-        FROM apis.request_dumps
-        where created_at > NOW() - interval '14' day
-        and project_id=?
-        GROUP BY timeB, method, url_path;
-    |]
+selectRequestsByEndpointsStatByMin :: Projects.ProjectId -> DBT IO Text
+selectRequestsByEndpointsStatByMin pid = do
+  let q = [sql| SELECT ts_text FROM apis.project_requests_by_endpoint_per_min WHERE project_id=?; |]
+  (Only val) <- fromMaybe (Only "[]") <$> queryOne Select q (Only pid)
+  pure val
 
 selectReqLatenciesRolledBySteps :: Int -> Int -> Projects.ProjectId -> Text -> Text -> DBT IO (Vector (Int, Int))
 selectReqLatenciesRolledBySteps maxv steps pid urlPath method = query Select q (maxv, steps, steps, steps, pid, urlPath, method)
@@ -114,6 +109,7 @@ select duration_steps, count(id)
 	ORDER BY duration_steps;
       |]
 
+-- TODO: expand this into a view
 selectReqLatenciesRolledByStepsForProject :: Int -> Int -> Projects.ProjectId -> DBT IO (Vector (Int, Int))
 selectReqLatenciesRolledByStepsForProject maxv steps pid = query Select q (maxv, steps, steps, steps, pid)
   where

@@ -20,7 +20,7 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact (DBT)
 import Deriving.Aeson qualified as DAE
-import Models.Apis.Fields qualified as Fields
+import Models.Apis.Fields.Types qualified as Fields
 import Optics.TH
 import Relude
 import Servant (FromHttpApiData)

@@ -22,7 +22,7 @@ import Relude
 dashboardGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 dashboardGetH sess pid = do
   pool <- asks pool
-  (project, projectRequestStats, reqsByEndpoint, reqLatenciesRolledByStepsLabeled, anomalies) <- liftIO $
+  (project, projectRequestStats, reqsByEndpointJ, reqLatenciesRolledByStepsLabeled, anomalies) <- liftIO $
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
       projectRequestStats <- fromMaybe (def :: Projects.ProjectRequestStats) <$> Projects.projectRequestStatsByProject pid
@@ -44,7 +44,6 @@ dashboardGetH sess pid = do
       anomalies <- Anomalies.selectOngoingAnomalies pid
       pure (project, projectRequestStats, reqsByEndpoint, concat reqLatenciesRolledByStepsLabeled, anomalies)
 
-  let reqsByEndpointJ = decodeUtf8 $ AE.encode reqsByEndpoint
   let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
 
   let bwconf =
@@ -59,44 +58,9 @@ dashboardPage :: Projects.ProjectRequestStats -> Text -> Text -> Vector Anomalie
 dashboardPage projectStats reqsByEndpointJ reqLatenciesRolledByStepsJ anomalies = do
   section_ [class_ "p-8 container mx-auto px-4 space-y-16 10 pb-24"] $ do
     section_ $ AnomaliesList.anomalyListSlider anomalies
-    dStats projectStats
+    dStats projectStats reqsByEndpointJ
   script_
     [text|
-        new FusionCharts({
-          type: "timeseries",
-          renderAt: "reqByStatusCode",
-          width: "95%",
-          height: 350,
-          dataSource: {
-            data: new FusionCharts.DataStore().createDataTable($reqsByEndpointJ, [{
-            "name": "Time",
-            "type": "date",
-            "format": "%Y-%m-%dT%H:%M:%S%Z" // https://www.fusioncharts.com/dev/fusiontime/fusiontime-attributes
-        }, {
-            "name": "StatusCode",
-            "type": "string"
-        },{
-            "name": "Count",
-            "type": "number"
-        }]),
-            chart: {},
-            navigator: {
-                "enabled": 0
-            },
-            series: "StatusCode",
-            yaxis: [
-              {
-                plot:[{
-                  value: "Count",
-                  type: "column"
-                }],
-                title: ""
-              }
-            ]
-          }
-        }).render();
-
-
         new FusionCharts({
           type: "column2d",
           renderAt: "reqsLatencyHistogram",
@@ -115,8 +79,8 @@ dashboardPage projectStats reqsByEndpointJ reqLatenciesRolledByStepsJ anomalies 
 
       |]
 
-dStats :: Projects.ProjectRequestStats -> Html ()
-dStats projReqStats =
+dStats :: Projects.ProjectRequestStats -> Text -> Html ()
+dStats projReqStats reqsByEndpointJ =
   section_ [class_ "space-y-3"] $ do
     div_ [class_ "flex justify-between mt-5"] $ do
       div_ [class_ "flex flex-row"] $ do
@@ -165,7 +129,36 @@ dStats projReqStats =
             select_ [] $ do
               option_ "Reqs Grouped by Endpoint"
               option_ "Avg Reqs per minute"
-          div_ [id_ "reqByStatusCode", class_ ""] ""
+          div_ [id_ "reqsByEndpoints", class_ ""] ""
+          script_
+            [text|
+      new FusionCharts({
+          type: "timeseries",
+          renderAt: "reqsByEndpoints",
+          width: "95%",
+          height: 350,
+          dataSource: {
+            data: new FusionCharts.DataStore().createDataTable($reqsByEndpointJ, [{
+              "name": "Time",
+              "type": "date",
+              "format": "%Y-%m-%dT%H:%M:%S%Z" // https://www.fusioncharts.com/dev/fusiontime/fusiontime-attributes
+              }, {"name": "StatusCode","type": "string"},{"name": "Count","type": "number"}]),
+            chart: {},
+            navigator: {
+                "enabled": 0
+            },
+            series: "StatusCode",
+            yaxis: [
+              {
+                plot:[{
+                  value: "Count",
+                  type: "column"
+                }],
+                title: ""
+              }
+            ]
+          }
+        }).render();|]
 
       div_ [class_ "col-span-3 card-round py-3 px-6"] $ do
         div_ [class_ "p-4"] $ do
