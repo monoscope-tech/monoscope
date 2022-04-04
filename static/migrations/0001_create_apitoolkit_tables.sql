@@ -553,10 +553,19 @@ BEGIN
   REFRESH MATERIALIZED VIEW CONCURRENTLY apis.endpoint_request_stats;
   REFRESH MATERIALIZED VIEW CONCURRENTLY apis.project_request_stats;
   REFRESH MATERIALIZED VIEW CONCURRENTLY apis.project_requests_by_endpoint_per_min;
-  REFRESH MATERIALIZED VIEW CONCURRENTLY apis.anomalies_vm;
 END
 $$;
 -- Refresg view every 5mins
 SELECT add_job('apis.refresh_request_dump_views_every_5mins','5min');
+
+CREATE OR REPLACE PROCEDURE apis.refresh_request_dump_views_every_2mins(job_id int, config jsonb) LANGUAGE PLPGSQL AS
+$$
+BEGIN
+  RAISE NOTICE 'Executing action % with config %', job_id, config;
+  REFRESH MATERIALIZED VIEW CONCURRENTLY apis.anomalies_vm;
+END
+$$;
+-- Refresg view every 5mins
+SELECT add_job('apis.refresh_request_dump_views_every_2mins','2min');
 
 COMMIT;
