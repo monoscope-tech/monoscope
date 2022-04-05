@@ -2,20 +2,24 @@ module Pages.Log (apiLog) where
 
 import Config
 import Data.Default (def)
+import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
+import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
+import Optics.Core ((^.))
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Relude
-import Optics.Core ((^.))
 
 apiLog :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 apiLog sess pid = do
   pool <- asks pool
-  project <- liftIO $
+  (project, requests) <- liftIO $
     withPool pool $ do
-      Projects.selectProjectForUser (Sessions.userId sess, pid)
+      project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+      requests <- RequestDumps.selectRequestDumpByProject pid
+      pure (project, requests)
 
   let bwconf =
         (def :: BWConfig)
@@ -23,10 +27,10 @@ apiLog sess pid = do
             currProject = project,
             pageTitle = "Logs"
           }
-  pure $ bodyWrapper bwconf $ apiLogsPage pid
+  pure $ bodyWrapper bwconf $ apiLogsPage pid requests
 
-apiLogsPage :: Projects.ProjectId -> Html ()
-apiLogsPage pid =
+apiLogsPage :: Projects.ProjectId -> Vector RequestDumps.RequestDumpLogItem -> Html ()
+apiLogsPage pid requests =
   section_ [class_ "container mx-auto  px-4 py-10"] $ do
     div_ [class_ "flex justify-between mb-5"] $ do
       h3_ [class_ "place-items-center"] "ApiToolKit"
@@ -56,7 +60,8 @@ apiLogsPage pid =
             th_ [class_ "text-left text-sm text-slate-700 "] "HOST"
             th_ [class_ "text-left text-sm text-slate-700 "] "SERVICE"
         tbody_ $ do
-          tr_ [class_ "border-b border-b-gray-300 py-8 font-medium"] $ do
-            td_ [class_ " text-sm inconsolata text-slate-700 font-normal"] "Feb 29 10:10:23"
-            td_ [class_ " inconsolata text-base text-slate-700"] "200"
-            td_ [class_ " text-sm inconsolata text-slate-700 font-normal"] "400ms"
+          requests & mapM_ \req -> do
+            tr_ [class_ "border-b border-b-gray-300 py-8 font-medium"] $ do
+              td_ [class_ " text-sm inconsolata text-slate-700 font-normal"] "Feb 29 10:10:23"
+              td_ [class_ " inconsolata text-base text-slate-700"] $ toHtml $ req ^. #urlPath
+              td_ [class_ " text-sm inconsolata text-slate-700 font-normal"] "400ms"

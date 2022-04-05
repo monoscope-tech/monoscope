@@ -1,7 +1,9 @@
+{-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 module Models.Apis.RequestDumps
   ( RequestDump (..),
+    RequestDumpLogItem,
     insertRequestDump,
     selectRequestsByStatusCodesStatByMin,
     labelRequestLatency,
@@ -9,6 +11,7 @@ module Models.Apis.RequestDumps
     selectReqLatenciesRolledBySteps,
     selectRequestsByEndpointsStatByMin,
     selectReqLatenciesRolledByStepsForProject,
+    selectRequestDumpByProject,
   )
 where
 
@@ -17,6 +20,7 @@ import Data.Aeson qualified as AE
 import Data.Time (CalendarDiffTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
+import Database.PostgreSQL.Entity (selectManyByField)
 import Database.PostgreSQL.Entity.DBT (QueryNature (Insert, Select), execute, query, queryOne)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
@@ -69,6 +73,23 @@ data RequestDump = RequestDump
     via (GenericEntity '[Schema "apis", TableName "request_dumps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] RequestDump)
 
 makeFieldLabelsNoPrefix ''RequestDump
+
+data RequestDumpLogItem = RequestDumpLogItem
+  { id :: UUID.UUID,
+    createdAt :: ZonedTime,
+    host :: Text,
+    urlPath :: Text,
+    method :: Text
+  }
+  deriving stock (Show, Generic, Eq)
+  deriving anyclass (ToRow, FromRow)
+
+makeFieldLabelsNoPrefix ''RequestDumpLogItem
+
+selectRequestDumpByProject :: Projects.ProjectId -> DBT IO (Vector RequestDumpLogItem)
+selectRequestDumpByProject pid = query Select q (Only pid)
+  where
+    q = [sql|SELECT id, created_at,host, url_path, method  from apis.request_dumps where project_id=?|]
 
 insertRequestDump :: RequestDump -> DBT IO ()
 insertRequestDump = void <$> execute Insert q
