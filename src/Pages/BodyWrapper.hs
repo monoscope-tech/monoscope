@@ -19,7 +19,7 @@ menu ppid =
         ("Endpoints", "/p/" <> pid <> "/endpoints", "/assets/svgs/endpoint.svg"),
         ("Anomalies", "/p/" <> pid <> "/anomalies", "/assets/svgs/anomalies.svg"),
         ("API Keys", "/p/" <> pid <> "/apis", "/assets/svgs/api.svg"),
-         ("Logs", "/p/" <> pid <> "/log", "/assets/svgs/api.svg")
+        ("Logs", "/p/" <> pid <> "/log", "/assets/svgs/logs.svg")
       ]
 
 data BWConfig = BWConfig

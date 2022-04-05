@@ -8,6 +8,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Relude
+import Optics.Core ((^.))
 
 apiLog :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 apiLog sess pid = do
@@ -20,7 +21,7 @@ apiLog sess pid = do
         (def :: BWConfig)
           { sessM = Just sess,
             currProject = project,
-            pageTitle = "API Logs"
+            pageTitle = "Logs"
           }
   pure $ bodyWrapper bwconf $ apiLogsPage pid
 
@@ -56,6 +57,6 @@ apiLogsPage pid =
             th_ [class_ "text-left text-sm text-slate-700 "] "SERVICE"
         tbody_ $ do
           tr_ [class_ "border-b border-b-gray-300 py-8 font-medium"] $ do
-            td_ [class_ " text-sm inconsolata text-slate-700 font-normal"] "Feb 27 10:10:23.213"
+            td_ [class_ " text-sm inconsolata text-slate-700 font-normal"] "Feb 29 10:10:23"
             td_ [class_ " inconsolata text-base text-slate-700"] "200"
             td_ [class_ " text-sm inconsolata text-slate-700 font-normal"] "400ms"
