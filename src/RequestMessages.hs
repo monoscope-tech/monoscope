@@ -161,7 +161,7 @@ requestMsgToDumpAndEndpoint rM now dumpID = do
             responseBodyKeypaths = responseBodyKeypaths,
             --
             shapeId = Shapes.ShapeId dumpID,
-            formatIds = Vector.empty,
+            formatIds = Vector.empty, -- set with values from the db
             fieldIds = Vector.empty
           }
   let endpoint =

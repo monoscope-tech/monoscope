@@ -190,7 +190,7 @@ CREATE INDEX IF NOT EXISTS idx_apis_shapes_project_id ON apis.shapes(project_id)
 -----------------------------------------------------------------------
 -- FIELDS table 
 -----------------------------------------------------------------------
-CREATE TYPE apis.field_type AS ENUM ('unknown','string','number','bool','object', 'list', 'null', 'number_list', 'string_list');
+CREATE TYPE apis.field_type AS ENUM ('unknown','string','number','bool','object', 'list', 'null');
 CREATE TYPE apis.field_category AS ENUM ('path_param','query_param', 'request_header','response_header', 'request_body', 'response_body');
 CREATE TABLE IF NOT EXISTS apis.fields
 (
