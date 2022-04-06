@@ -42,7 +42,7 @@ import Text.Regex.TDFA ((=~))
 -- >>> import Data.Aeson.QQ (aesonQQ)
 -- >>> import Data.Aeson
 
-data SDKTypes = GoGin | GoBuiltIn | PhpLaravel
+data SDKTypes = GoGin | GoBuiltIn | PhpLaravel | JsExpress
   deriving stock (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SDKTypes
 
