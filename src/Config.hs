@@ -4,12 +4,13 @@ module Config (EnvConfig (..), AuthContext (..), DashboardM, HeadersTriggerRedir
 
 import Colog (LogAction)
 import Data.Pool as Pool
+import Data.Text qualified as T
 import Database.PostgreSQL.Simple (Connection)
 import Optics.TH
 import Relude
 import Servant (Header, Headers)
 import Servant.Server (Handler)
-import System.Envy (FromEnv)
+import System.Envy (FromEnv, Var, fromVar, toVar)
 
 data EnvConfig = EnvConfig
   { databaseUrl :: Text, -- "DATABASE_URL"
@@ -23,10 +24,16 @@ data EnvConfig = EnvConfig
     testEmail :: Maybe Text,
     apiKeyEncryptionSecretKey :: Text,
     messagesPerPubsubPullBatch :: Int,
-    migrateAndInitializeOnStart :: Bool
+    migrateAndInitializeOnStart :: Bool,
+    requestPubsubTopics :: [Text]
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromEnv)
+
+-- Support unmarshalling a coma separated text into a text list
+instance Var [Text] where
+  fromVar = Just . T.splitOn "," . toText
+  toVar = toString . T.intercalate ","
 
 makeFieldLabelsNoPrefix ''EnvConfig
 

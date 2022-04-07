@@ -83,6 +83,12 @@ startApp = do
         (pubsubService logger envConfig poolConn)
         (run (Config.port envConfig) $ Server.app logger poolConn serverCtx)
 
+-- _<- waitAnyCancel
+--   [ (pubsubService logger envConfig poolConn),
+--     (run (Config.port envConfig) $ Server.app logger poolConn serverCtx)
+--   ]
+-- pure ()
+
 -- pubsubService connects to the pubsub service and listens for  messages,
 -- then it calls the processMessage function to process the messages, and
 -- acknoleges the list message in one request.
@@ -92,14 +98,15 @@ pubsubService logger envConfig conn = do
     Google.newEnv
       <&> (Google.envScopes L..~ PubSub.pubSubScope)
   let pullReq = PubSub.pullRequest & PubSub.prMaxMessages L.?~ fromIntegral (envConfig ^. #messagesPerPubsubPullBatch)
-  let subscription = "projects/past-3/subscriptions/apitoolkit-go-client-sub"
 
   forever $
     runResourceT . Google.runGoogle env $ do
-      pullResp <- Google.send $ PubSub.projectsSubscriptionsPull pullReq subscription
-      let messages = pullResp L.^. PubSub.prReceivedMessages
-      msgIds <- liftIO $ mapM (processMessage logger envConfig conn) messages
-      let acknowlegReq = PubSub.acknowledgeRequest & PubSub.arAckIds L..~ catMaybes msgIds
-      unless (null msgIds) do
-        _ <- PubSub.projectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send
-        pass
+      forM (envConfig ^. #requestPubsubTopics) \topic -> do
+        let subscription = "projects/past-3/subscriptions/" <> topic <> "-sub"
+        pullResp <- Google.send $ PubSub.projectsSubscriptionsPull pullReq subscription
+        let messages = pullResp L.^. PubSub.prReceivedMessages
+        msgIds <- liftIO $ mapM (processMessage logger envConfig conn) messages
+        let acknowlegReq = PubSub.acknowledgeRequest & PubSub.arAckIds L..~ catMaybes msgIds
+        unless (null msgIds) do
+          _ <- PubSub.projectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send
+          pass

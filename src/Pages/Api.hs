@@ -104,7 +104,7 @@ apiKeysPage pid apiKeys = do
                   div_ [class_ "mt-6 space-y-2"] $ do
                     p_ [class_ "text-sm text-gray-500"] "Please input a title for your API Key."
                     div_ $ do
-                      input_ [class_ "input-txt px-4 py-2  border w-full", type_ "text", placeholder_ "API Key Title", name_ "title"]
+                      input_ [class_ "input-txt px-4 py-2  border w-full", type_ "text", placeholder_ "API Key Title", name_ "title", autofocus_]
               div_ [class_ "mt-5 sm:mt-4 sm:flex sm:flex-row-reverse"] $ do
                 button_ [type_ "submit", class_ "w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-red-600 text-base font-medium text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 sm:ml-3 sm:w-auto sm:text-sm"] "Submit"
                 button_

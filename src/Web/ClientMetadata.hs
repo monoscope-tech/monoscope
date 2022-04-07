@@ -14,10 +14,12 @@ import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Optics.Core ((^.))
 import Relude
+import Relude.Unsafe ((!!))
 import Servant (err300, throwError)
 
 data ClientMetadata = ClientMetadata
   { projectId :: Projects.ProjectId,
+    topicId :: Text,
     pubsubProjectId :: Text,
     pubsubPushServiceAccount :: Value
   }
@@ -56,6 +58,7 @@ clientMetadataH authTextM = do
                 ClientMetadata
                   { projectId = pApiKey ^. #projectId,
                     pubsubProjectId = "past-3",
+                    topicId = (env ^. #requestPubsubTopics) !! 0, -- apitoolkit-prod-default
                     pubsubPushServiceAccount = apitoolkitPusherServiceAccount
                   }
 
