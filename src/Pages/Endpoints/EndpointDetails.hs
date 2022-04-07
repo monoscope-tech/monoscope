@@ -4,6 +4,7 @@ module Pages.Endpoints.EndpointDetails (endpointDetailsH, fieldDetailsPartialH) 
 
 import Config
 import Data.Aeson qualified as AE
+import Data.Aeson.Text (encodeToLazyText)
 import Data.Default (def)
 import Data.Map qualified as Map
 import Data.Text as T (breakOnAll, dropWhile, isInfixOf, replace, splitOn, toLower)
@@ -76,7 +77,7 @@ fieldDetailsView field formats = do
             h6_ [class_ "text-slate-600 mt-4 text-xs"] "EXAMPLE VALUES"
             ul_ [class_ "list-disc"] $ do
               formatV ^. #examples & mapM_ \ex -> do
-                li_ [class_ "ml-10 text-slate-700 text-sm"] $ toHtml @String $ show ex
+                li_ [class_ "ml-10 text-slate-700 text-sm"] $ toHtml $ aesonValueToText ex
     div_ [class_ "flex flex-row justify-between mt-10 "] $ do
       div_ [class_ " "] $ do
         h4_ [class_ "text-sm text-slate-700 mb-2"] "CREATION DATE"
@@ -90,6 +91,9 @@ fieldDetailsView field formats = do
           span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" (field ^. #updatedAt)
     h6_ [class_ "mt-5 text-sm text-slate-700 mb-2"] "DESCRIPTION"
     p_ [class_ "text-gray-400 text-sm"] $ toHtml $ field ^. #description
+
+aesonValueToText :: AE.Value -> Text
+aesonValueToText = toStrict . encodeToLazyText
 
 -- | endpointDetailsH is the main handler for the endpoint details page.
 -- It reuses the fieldDetailsView as well, which is used for the side navigation on the page and also exposed un the fieldDetailsPartialH endpoint
