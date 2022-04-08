@@ -180,6 +180,8 @@ requestMsgToDumpAndEndpoint rM now dumpID = do
 normalizeUrlPath :: SDKTypes -> Text -> Text
 normalizeUrlPath GoGin urlPath = urlPath
 normalizeUrlPath GoBuiltIn urlPath = urlPath
+normalizeUrlPath PhpLaravel urlPath = urlPath
+normalizeUrlPath JsExpress urlPath = urlPath
 
 -- | valueToFields takes an aeson object and converts it into a list of paths to
 -- each primitive value in the json and the values.

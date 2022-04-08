@@ -295,24 +295,23 @@ BEGIN
   with returned_fields AS (
     INSERT INTO apis.fields (project_id, endpoint_id, key, field_type, field_type_override, format, format_override, description, key_path, key_path_str, field_category)
       VALUES(i_project_id, i_endpoint_id, i_key, i_field_type, i_field_type_override, i_format, i_format_override, i_description, i_key_path, i_key_path_str, i_field_category)
-      ON CONFLICT (project_id, endpoint_id, field_category, key_path_str,format) DO NOTHING
-    RETURNING project_id, id, field_type, format,i_examples
+      ON CONFLICT (project_id, endpoint_id, field_category, key_path_str, format) DO NOTHING
+    RETURNING project_id, id, field_type, format, i_examples
   ), current_fields AS (
-    SELECT * FROM returned_fields
-      UNION ALL
+  SELECT * FROM returned_fields
+    UNION ALL
 	SELECT project_id, id, field_type, format,i_examples
-     FROM apis.fields
-     WHERE  project_id=i_project_id AND endpoint_id=i_endpoint_id AND key_path_str=i_key_path_str AND format=i_format -- only executed if no INSERT
-    LIMIT  1
+    FROM apis.fields
+    WHERE  project_id=i_project_id AND endpoint_id=i_endpoint_id AND key_path_str=i_key_path_str AND format=i_format -- only executed if no INSERT
+  LIMIT  1
   )
  INSERT INTO apis.formats (project_id, field_id, field_type, field_format, examples)
   SELECT * from current_fields
 		ON CONFLICT (project_id, field_id, field_format)
 		DO
 			UPDATE SET 
-				examples = ARRAY(SELECT DISTINCT e from unnest(apis.formats.examples || excluded.examples) as e order by e limit 5)
+				examples = ARRAY(SELECT DISTINCT e from unnest(apis.formats.examples || excluded.examples) as e order by e limit i_examples_max_count)
 	RETURNING id, field_id;
-
 END;
 $$ LANGUAGE plpgsql;
 
@@ -428,7 +427,7 @@ CREATE MATERIALIZED VIEW apis.project_request_stats AS
     (select count(*) from apis.endpoints enp where rds.project_id=enp.project_id and created_at<=NOW()::DATE-7) total_endpoints_last_week,
     (select count(*) from apis.shapes    sh  where rds.project_id=sh.project_id) total_shapes,
     (select count(*) from apis.shapes    sh  where rds.project_id=sh.project_id and created_at<=NOW()::DATE-7) total_shapes_last_week,
-    (select count(*) from apis.anomalies ann where rds.project_id=ann.project_id) total_anomalies,
+    (select count(*) from apis.anomalies ann where rds.project_id=ann.project_id and ann.anomaly_type!='field') total_anomalies,
     (select count(*) from apis.anomalies ann where rds.project_id=ann.project_id and created_at<=NOW()::DATE-7) total_anomalies_last_week,
     (select count(*) from apis.anomalies ann where rds.project_id=ann.project_id) total_fields,
     (select count(*) from apis.anomalies ann where rds.project_id=ann.project_id and created_at<=NOW()::DATE-7) total_fields_last_week
@@ -523,27 +522,6 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS apis.anomalies_vm
 CREATE UNIQUE INDEX idx_apis_anomaly_vm_id ON apis.anomalies_vm (id);
 CREATE INDEX idx_apis_anomaly_vm_project_id ON apis.anomalies_vm (project_id);
 CREATE INDEX idx_apis_anomaly_vm_project_id_endpoint_id ON apis.anomalies_vm (project_id, endpoint_id);
-
-
-
--- REFRESH VIEWS
--- CREATE OR REPLACE FUNCTION apis.refresh_anomalies_vm()
---     RETURNS TRIGGER
---     LANGUAGE PLPGSQL
--- AS
--- $$
--- BEGIN
---     REFRESH MATERIALIZED VIEW CONCURRENTLY apis.anomalies_vm;
---     RETURN NEW;
--- END;
--- $$;
-
--- README: commented out in favour of refreshing every 5mins, because it includes time series data
--- CREATE TRIGGER anomaly_update 
---   AFTER UPDATE OR INSERT ON apis.anomalies
---   FOR EACH STATEMENT EXECUTE PROCEDURE apis.refresh_anomalies_vm();
-
-
 
 
 CREATE OR REPLACE PROCEDURE apis.refresh_request_dump_views_every_5mins(job_id int, config jsonb) LANGUAGE PLPGSQL AS
