@@ -91,7 +91,7 @@ upsertEndpoints endpoint = queryOne Insert q options
           ON CONFLICT (project_id, url_path, method) 
           DO 
              UPDATE SET 
-              hosts[?] = null 
+               hosts=endpoints.hosts||hstore(?, null) 
           RETURNING id 
         )
         SELECT id from e 
