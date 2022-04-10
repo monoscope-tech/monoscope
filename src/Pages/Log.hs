@@ -11,6 +11,8 @@ import Models.Users.Sessions qualified as Sessions
 import Optics.Core ((^.))
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Relude
+import Data.Time (defaultTimeLocale)
+import Data.Time.Format (formatTime)
 
 apiLog :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 apiLog sess pid = do
@@ -62,6 +64,7 @@ apiLogsPage pid requests =
         tbody_ $ do
           requests & mapM_ \req -> do
             tr_ [class_ "border-b border-b-gray-300 py-8 font-medium"] $ do
-              td_ [class_ " text-sm inconsolata text-slate-700 font-normal"] "Feb 29 10:10:23"
+              td_ [class_ " text-sm inconsolata text-slate-700 font-normal"]$ toHtml @String $ formatTime defaultTimeLocale "%F %R" (req ^. #createdAt)
+              td_ [class_ " text-sm inconsolata text-slate-700 font-normal"] $ toHtml $ req ^. #host
               td_ [class_ " inconsolata text-base text-slate-700"] $ toHtml $ req ^. #urlPath
-              td_ [class_ " text-sm inconsolata text-slate-700 font-normal"] "400ms"
+              
