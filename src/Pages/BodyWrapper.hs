@@ -19,7 +19,7 @@ menu ppid =
         ("Endpoints", "/p/" <> pid <> "/endpoints", "/assets/svgs/endpoint.svg"),
         ("Anomalies", "/p/" <> pid <> "/anomalies", "/assets/svgs/anomalies.svg"),
         ("API Keys", "/p/" <> pid <> "/apis", "/assets/svgs/api.svg"),
-        ("Logs", "/p/" <> pid <> "/log", "/assets/svgs/logs.svg")
+        ("API Log Explorer", "/p/" <> pid <> "/log", "/assets/svgs/logs.svg")
       ]
 
 data BWConfig = BWConfig
@@ -96,7 +96,7 @@ bodyWrapper BWConfig {sessM, currProject, pageTitle, menuItem} child =
               }
             |]
 
-        body_ [class_ "text-gray-700"] $ do
+        body_ [class_ "text-gray-800"] $ do
           section_ [class_ "flex flex-row bg-gray-50 h-screen overflow-hidden"] $ do
             -- Side nav
             sideNav'

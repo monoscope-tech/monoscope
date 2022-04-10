@@ -97,7 +97,7 @@ requestMsgToDumpAndEndpoint rM now dumpID = do
 
   let queryParamsKeypaths = Vector.fromList $ map fst queryParamFields :: Vector Text
   let requestHeadersKeypaths = Vector.fromList $ map fst reqHeaderFields :: Vector Text
-  let responseHeadersKeypaths = Vector.fromList $ map fst reqHeaderFields :: Vector Text
+  let responseHeadersKeypaths = Vector.fromList $ map fst respHeaderFields :: Vector Text
   let requestBodyKeypaths = Vector.fromList $ map fst reqBodyFields :: Vector Text
   let responseBodyKeypaths = Vector.fromList $ map fst respBodyFields :: Vector Text
 
@@ -115,6 +115,7 @@ requestMsgToDumpAndEndpoint rM now dumpID = do
           <> reqBodyFieldsDTO
           <> respBodyFieldsDTO
 
+  let method = T.toUpper $ rM ^. #method
   let urlPath = normalizeUrlPath (rM ^. #sdkType) (rM ^. #urlPath)
 
   let shape =
@@ -142,7 +143,7 @@ requestMsgToDumpAndEndpoint rM now dumpID = do
             urlPath = urlPath,
             rawUrl = rM ^. #rawUrl,
             pathParams = rM ^. #pathParams,
-            method = rM ^. #method,
+            method = method,
             referer = rM ^. #referer,
             protoMajor = rM ^. #protoMajor,
             protoMinor = rM ^. #protoMinor,
@@ -172,7 +173,7 @@ requestMsgToDumpAndEndpoint rM now dumpID = do
             projectId = Projects.ProjectId $ rM ^. #projectId,
             urlPath = urlPath,
             urlParams = AET.emptyObject,
-            method = rM ^. #method,
+            method = method,
             hosts = [rM ^. #host]
           }
   pure (reqDump, endpoint, fieldsDTO, shape)
@@ -226,14 +227,6 @@ valueToFields value = dedupFields $ snd $ valueToFields' value ("", [])
       sortWith fst fields
         & groupBy (\a b -> fst a == fst b)
         & map (foldl' (\(_, xs) (a, b) -> (a, b : xs)) ("", []))
-
-aeValueToFieldType :: AE.Value -> Fields.FieldTypes
-aeValueToFieldType (AET.String _) = Fields.FTString
-aeValueToFieldType (AET.Number _) = Fields.FTNumber
-aeValueToFieldType AET.Null = Fields.FTNull
-aeValueToFieldType (AET.Bool _) = Fields.FTBool
-aeValueToFieldType (AET.Object _) = Fields.FTObject
-aeValueToFieldType (AET.Array _) = Fields.FTList
 
 valueToFormat :: AE.Value -> Text
 valueToFormat (AET.String val) = valueToFormatStr val
@@ -290,3 +283,11 @@ fieldsToFieldDTO fieldCategory projectID (keyPath, val) =
       },
     val
   )
+  where
+    aeValueToFieldType :: AE.Value -> Fields.FieldTypes
+    aeValueToFieldType (AET.String _) = Fields.FTString
+    aeValueToFieldType (AET.Number _) = Fields.FTNumber
+    aeValueToFieldType AET.Null = Fields.FTNull
+    aeValueToFieldType (AET.Bool _) = Fields.FTBool
+    aeValueToFieldType (AET.Object _) = Fields.FTObject
+    aeValueToFieldType (AET.Array _) = Fields.FTList

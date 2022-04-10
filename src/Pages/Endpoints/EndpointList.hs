@@ -63,16 +63,16 @@ endpointList enps = do
 
       table_ [class_ "table-auto w-full  mt-6", id_ "apitab", hxBoost_ "true"] $ do
         thead_ $ do
-          tr_ [class_ "border-b border-b-slate-50 p-10ç "] $ do
+          tr_ [class_ "border-b border-b-slate-50 text-sm text-gray-400 font-normal "] $ do
             th_ [class_ "text-left "] $ do
               input_ [type_ "checkbox"]
             th_ [style_ "width:7rem; min-width:7rem; max-width:7rem;"] ""
-            th_ [class_ "text-left text-sm text-gray-400 font-normal"] "ENDPOINTS"
-            th_ [class_ "text-left text-sm text-gray-400 font-normal text-center"] "REQUESTS"
-            th_ [class_ "text-left text-sm text-gray-400 font-normal text-right"] "TOTAL TIME"
-            th_ [class_ "text-left text-sm text-gray-400 font-normal text-right"] "P50 LATENCY"
-            th_ [class_ "text-left text-sm text-gray-400 font-normal text-right"] "P99 LATENCY"
-            th_ [class_ "text-left text-sm text-gray-400 font-normal text-center"] ""
+            th_ [class_ ""] "ENDPOINTS"
+            th_ [class_ "text-center"] "REQUESTS"
+            th_ [class_ "text-right"] "TOTAL TIME"
+            th_ [class_ "text-right"] "P50 LATENCY"
+            th_ [class_ "text-right"] "P99 LATENCY"
+            th_ [class_ "text-center"] ""
         tbody_ $ do
           enps & mapM_ \enp -> do
             tr_ [class_ "border-b border-b-slate-50 py-2"] $ do

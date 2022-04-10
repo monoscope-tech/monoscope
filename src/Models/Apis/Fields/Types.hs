@@ -56,8 +56,6 @@ data FieldTypes
   | FTObject
   | FTList
   | FTNull
-  | FTStringList
-  | FTNumberList
   deriving stock (Eq, Generic, Show)
   deriving
     (AE.ToJSON)
@@ -81,8 +79,6 @@ fieldTypeToText FTObject = "object"
 fieldTypeToText FTList = "list"
 fieldTypeToText FTNull = "null"
 fieldTypeToText FTUnknown = "unknown"
-fieldTypeToText FTStringList = "string_list"
-fieldTypeToText FTNumberList = "number_list"
 
 parseFieldTypes :: (Eq s, IsString s) => s -> Maybe FieldTypes
 parseFieldTypes "string" = Just FTString

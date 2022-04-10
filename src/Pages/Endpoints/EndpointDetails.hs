@@ -54,7 +54,7 @@ fieldDetailsView field formats = do
       h3_ [class_ "text-lg text-slate-700"] $ toHtml $ field ^. #key
     div_ $ do
       h6_ [class_ "text-slate-700 text-xs"] "FIELD PATH"
-      h3_ [class_ "text-lg text-slate-700"] $ toHtml $ field ^. #keyPathStr
+      h3_ [class_ "text-base text-slate-700 monospace"] $ toHtml $ field ^. #keyPathStr
     div_ [class_ "flex flex-row gap-9"] $ do
       div_ $ do
         h6_ [class_ "text-slate-700 text-xs"] "FIELD CATEGORY"
@@ -64,7 +64,7 @@ fieldDetailsView field formats = do
         h4_ [class_ "text-base text-slate-700"] $ toHtml $ fromMaybe "[unset]" (field ^. #fieldTypeOverride)
     div_ $ do
       h5_ [class_ "text-sm text-slate-700"] "DETECTED FIELD FORMATS AND TYPES"
-      div_ [class_ "space-y-2"] $ do
+      div_ [class_ "space-y-2"] $
         formats & mapM_ \formatV -> do
           div_ [class_ "border-l-slate-200 border-l-2 pl-2 py-2"] $ do
             div_ [class_ "flex flex-row gap-9"] $ do
@@ -113,10 +113,10 @@ endpointDetailsH sess pid eid = do
       reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledBySteps maxV steps' pid (endpoint ^. #urlPath) (endpoint ^. #method)
 
       let reqLatencyPercentileSteps =
-            ( (round (endpoint ^. #max) `quot` steps') * steps',
-              (round (endpoint ^. #p90) `quot` steps') * steps',
-              (round (endpoint ^. #p75) `quot` steps') * steps',
-              (round (endpoint ^. #p50) `quot` steps') * steps'
+            ( round (endpoint ^. #max) `quot` steps' * steps',
+              round (endpoint ^. #p90) `quot` steps' * steps',
+              round (endpoint ^. #p75) `quot` steps' * steps',
+              round (endpoint ^. #p50) `quot` steps' * steps'
             )
       let reqLatenciesRolledByStepsLabeled = Vector.toList reqLatenciesRolledBySteps & map \(x, y) -> RequestDumps.labelRequestLatency reqLatencyPercentileSteps (x, y)
       anomalies <- Anomalies.selectOngoingAnomaliesForEndpoint pid eid
@@ -134,7 +134,7 @@ endpointDetailsH sess pid eid = do
   pure $ bodyWrapper bwconf $ endpointDetails endpoint fieldsMap reqsByStatsByMinJ reqLatenciesRolledByStepsJ anomalies
 
 endpointDetails :: EndpointRequestStats -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> Text -> Vector Anomalies.AnomalyVM -> Html ()
-endpointDetails endpoint fieldsM reqsByStatsByMinJ reqLatenciesRolledByStepsJ anomalies = do
+endpointDetails endpoint fieldsM reqsByStatsByMinJ reqLatenciesRolledByStepsJ anomalies =
   div_ [class_ "w-full flex flex-row h-full overflow-hidden"] $ do
     div_ [class_ "w-2/3 p-5 h-full overflow-y-scroll"] $ do
       div_ [class_ "flex flex-row justify-between mb-10"] $ do
@@ -237,7 +237,7 @@ endpointDetails endpoint fieldsM reqsByStatsByMinJ reqLatenciesRolledByStepsJ an
 endpointStats :: Endpoints.EndpointRequestStats -> Html ()
 endpointStats enpStats =
   section_ [class_ "space-y-3"] $ do
-    div_ [class_ "flex justify-between mt-5"] $ do
+    div_ [class_ "flex justify-between mt-5"] $
       div_ [class_ "flex flex-row"] $ do
         img_
           [ src_ "/assets/svgs/cheveron-down.svg",
@@ -248,13 +248,13 @@ endpointStats enpStats =
     div_ [class_ "grid grid-cols-3  gap-5 endpointStatsSubSection"] $ do
       div_ [class_ "col-span-1 content-between space-y-2"] $ do
         --
-        div_ [class_ " row-span-1 col-span-1 card-round p-5 flex flex-row content-between "] $ do
+        div_ [class_ " row-span-1 col-span-1 card-round p-5 flex flex-row content-between "] $
           div_ $ do
             span_ "Total Anomalies"
             div_ [class_ "inline-block flex flex-row items-baseline"] $ do
               strong_ [class_ "text-xl"] $ toHtml @Text $ fmt $ commaizeF (enpStats ^. #ongoingAnomalies)
               small_ $ toHtml @Text $ fmt ("/" +| commaizeF (enpStats ^. #ongoingAnomaliesProj))
-        div_ [class_ " row-span-1 col-span-1 card-round p-5 flex flex-row content-between "] $ do
+        div_ [class_ " row-span-1 col-span-1 card-round p-5 flex flex-row content-between "] $
           div_ $ do
             span_ "Total Requests"
             div_ [class_ "inline-block flex flex-row items-baseline"] $ do
@@ -262,13 +262,13 @@ endpointStats enpStats =
               small_ $ toHtml @Text $ fmt ("/" +| commaizeF (enpStats ^. #totalRequestsProj))
 
       div_ [class_ "col-span-2 bg-white  border border-gray-100  row-span-2 rounded-2xl p-3"] $ do
-        div_ [class_ "p-4"] $ do
+        div_ [class_ "p-4"] $
           select_ [] $ do
             option_ "Reqs by Status code"
             option_ "Avg Reqs per minute"
         div_ [id_ "reqByStatusCode", class_ ""] ""
       div_ [class_ "col-span-3 bg-white   border border-gray-100  rounded-xl py-3 px-6"] $ do
-        div_ [class_ "p-4"] $ do
+        div_ [class_ "p-4"] $
           select_ [] $ do
             option_ "Request Latency Distribution"
             option_ "Avg Reqs per minute"
@@ -286,7 +286,7 @@ endpointStats enpStats =
               percentileRow "min" $ enpStats ^. #min
 
 percentileRow :: Text -> Double -> Html ()
-percentileRow key p = do
+percentileRow key p =
   li_ [class_ "flex flex-row content-between justify-between"] $ do
     span_ [class_ "inline-block"] $ toHtml key
     span_ [class_ "inline-block monospace"] $ do
@@ -311,7 +311,7 @@ reqResSection title isRequest fieldsM =
         img_ [src_ "/assets/svgs/leftarrow.svg", class_ " m-2"]
         span_ [src_ " mx-4"] "1/1"
         img_ [src_ "/assets/svgs/rightarrow.svg", class_ " m-2"]
-    div_ [class_ "bg-white border border-gray-100 rounded-xl py-10 px-5 space-y-6 reqResSubSection"] $ do
+    div_ [class_ "bg-white border border-gray-100 rounded-xl py-10 px-5 space-y-6 reqResSubSection"] $
       if isRequest
         then do
           subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam fieldsM)
@@ -324,7 +324,7 @@ reqResSection title isRequest fieldsM =
 
 -- | subSubSection ..
 subSubSection :: Text -> Maybe [Fields.Field] -> Html ()
-subSubSection title fieldsM = do
+subSubSection title fieldsM =
   case fieldsM of
     Nothing -> ""
     Just fields -> do
@@ -335,13 +335,13 @@ subSubSection title fieldsM = do
               class_ "h-6 mr-3 w-6 p-1 cursor-pointer",
               [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .subSectionContent)|]
             ]
-          div_ [class_ "bg-gray-100 px-10 rounded-xl w-full p-4 text-sm text-slate-700"] $ toHtml title
+          div_ [class_ "bg-gray-100 px-10 rounded-xl w-full p-4 text-sm text-slate-900 "] $ toHtml title
         div_ [class_ "space-y-1 subSectionContent"] $ do
           fieldsToNormalized fields & mapM_ \(key, fieldM) -> do
             let segments = splitOn "." key
             let depth = length segments
             let depthPadding = "margin-left:" <> show (20 + (depth * 20)) <> "px"
-            let displayKey = replace "»" "" $ last ("" :| segments)
+            let displayKey = replace "«" "" $ last ("" :| segments)
             case fieldM of
               Nothing -> do
                 a_
@@ -354,8 +354,11 @@ subSubSection title fieldsM = do
                     img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-6 w-6 mr-1 chevron cursor-pointer p-1"]
                     div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full"] $ do
                       input_ [type_ "checkbox", class_ " mr-12"]
-                      span_ [class_ "grow text-sm text-slate-700 inline-flex items-center"] $ toHtml displayKey
-                      span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ if "»" `isInfixOf` key then "[]" else "{}"
+                      span_ [class_ "text-sm text-slate-700 inline-flex items-center"] $ toHtml displayKey
+                      span_ [class_ "text-sm text-slate-600 inline-flex items-center ml-4"] $ do
+                        if "«" `isInfixOf` key
+                          then EndpointComponents.fieldTypeToDisplay Fields.FTList
+                          else EndpointComponents.fieldTypeToDisplay Fields.FTObject
               Just field -> do
                 a_
                   [ hxGet_ $ "/p/" <> Projects.projectIdText (field ^. #projectId) <> "/fields/" <> UUID.toText (Fields.unFieldId $ field ^. #id),
@@ -382,17 +385,20 @@ fieldCategoryToDisplay fieldType = case fieldType of
   Fields.FCResponseHeader -> span_ [class_ "px-2 rounded-xl bg-stone-100 stone-800 monospace"] "Response Header"
   Fields.FCResponseBody -> span_ [class_ "px-2 rounded-xl bg-red-100 red-800 monospace"] "Response Body"
 
+-- fieldsToNormalized, gets a list of fields and returns a list of tuples with the keypath, and the field, sorted by the key path
 fieldsToNormalized :: [Fields.Field] -> [(Text, Maybe Fields.Field)]
 fieldsToNormalized =
   sortNub . concatMap \field ->
     map
       ((,Nothing) . fst)
-      ( (field ^. #keyPathStr)
+      ( field ^. #keyPathStr
           & keyPathStrToKey
           & breakOnAll "."
       )
       & (++ [(keyPathStrToKey $ field ^. #keyPathStr, Just field)])
   where
     rmvDotPrefix = T.dropWhile (== '.')
-    listToUnicode = replace "[]" "»"
+    -- listToUnicode: add « as a suffix to all lists, and as the key for it's child.
+    -- This helps us identify and display lists correct. This could be simplified if posssible
+    listToUnicode = replace ".[]" "«.»"
     keyPathStrToKey = rmvDotPrefix . listToUnicode

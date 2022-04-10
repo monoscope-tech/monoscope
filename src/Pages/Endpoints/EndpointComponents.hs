@@ -12,5 +12,3 @@ fieldTypeToDisplay fieldType = case fieldType of
   Fields.FTObject -> span_ [class_ "px-2 rounded-xl bg-orange-100 orange-800 monospace"] "{obj}"
   Fields.FTList -> span_ [class_ "px-2 rounded-xl bg-stone-100 stone-800 monospace"] "[list]"
   Fields.FTNull -> span_ [class_ "px-2 rounded-xl bg-red-100 red-800 monospace"] "null"
-  Fields.FTStringList -> span_ [class_ "px-2 rounded-xl bg-indigo-100 red-800 monospace"] "[]abc"
-  Fields.FTNumberList -> span_ [class_ "px-2 rounded-xl bg-neutral-100 neutral-800 monospace"] "[]123"
