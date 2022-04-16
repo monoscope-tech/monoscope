@@ -293,7 +293,7 @@ percentileRow key p =
       span_ $ toHtml ((fmt $ fixedF 2 p) :: Text)
       span_ "ms"
 
--- NB: We could enable the fields cycling functionality using the groups of response list functionality on the endpoint.
+-- NOTE: We could enable the fields cycling functionality using the groups of response list functionality on the endpoint.
 -- So we go through the list and in each request or response view, only show the fields that appear in the field list.
 -- We can enable a view to show all the request/response options.
 reqResSection :: Text -> Bool -> Map Fields.FieldCategoryEnum [Fields.Field] -> Html ()
