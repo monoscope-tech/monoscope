@@ -28,3 +28,7 @@ timescaledb-docker:
 	docker start apitoolkit || docker run -it --rm -v pgdata:/var/lib/postgresql/data  --name=apitoolkit -p 5432:5432/tcp -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=apitoolkit \
 		docker.io/timescale/timescaledb-ha:pg14-latest \
 		-c shared_preload_libraries='pg_stat_statements,timescaledb'
+
+
+update-service-worker:
+	workbox generateSW workbox-config.js
