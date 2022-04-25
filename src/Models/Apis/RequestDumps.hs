@@ -20,12 +20,12 @@ import Data.Aeson qualified as AE
 import Data.Time (CalendarDiffTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
-import Database.PostgreSQL.Entity (selectManyByField)
 import Database.PostgreSQL.Entity.DBT (QueryNature (Insert, Select), execute, query, queryOne)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact (DBT)
+import Deriving.Aeson qualified as DAE
 import Models.Apis.Fields qualified as Fields
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.Shapes qualified as Shapes
@@ -81,17 +81,32 @@ data RequestDumpLogItem = RequestDumpLogItem
     urlPath :: Text,
     method :: Text,
     rawUrl :: Text,
-    referer :: Text
+    referer :: Text,
+    --
+    pathParams :: AE.Value,
+    -- duration :: CalendarDiffTime,
+    statusCode :: Int,
+    --
+    queryParams :: AE.Value,
+    requestBody :: AE.Value,
+    responseBody :: AE.Value,
+    requestHeaders :: AE.Value,
+    responseHeaders :: AE.Value
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (ToRow, FromRow)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestDumpLogItem
 
 makeFieldLabelsNoPrefix ''RequestDumpLogItem
 
 selectRequestDumpByProject :: Projects.ProjectId -> DBT IO (Vector RequestDumpLogItem)
 selectRequestDumpByProject pid = query Select q (Only pid)
   where
-    q = [sql|SELECT id, created_at,host, url_path, method, raw_url,referer  from apis.request_dumps where project_id=?|]
+    q =
+      [sql|SELECT   id,created_at,host,url_path,method,raw_url,referer,
+                      path_params,status_code,query_params,
+                      request_body,response_body,request_headers,response_headers
+             FROM apis.request_dumps where project_id=?|]
 
 insertRequestDump :: RequestDump -> DBT IO ()
 insertRequestDump = void <$> execute Insert q

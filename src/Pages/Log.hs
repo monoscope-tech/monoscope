@@ -7,11 +7,12 @@ import Data.HashMap.Strict qualified as HM
 import Data.Sequence (mapWithIndex)
 import Data.Time (defaultTimeLocale)
 import Data.Time.Format (formatTime)
-import Data.Vector (Vector)
+import Data.Vector (Vector, imapM_)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import Lucid.Hyperscript (__)
+import Lucid.Hyperscript.QuasiQuoter (_hs)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
@@ -45,7 +46,7 @@ apiLog sess pid = do
 
 apiLogsPage :: Projects.ProjectId -> Vector RequestDumps.RequestDumpLogItem -> Html ()
 apiLogsPage pid requests =
-  section_ [class_ "container mx-auto  px-3 py-10 flex flex-col h-full overflow-hidden"] $ do
+  section_ [class_ "container mx-auto  px-3 py-10 flex flex-col h-full overflow-hidden"] $
     div_ [class_ "card-round bg-white overflow-hidden grow divide-y flex flex-col mb-8 text-sm"] $ do
       div_ [class_ "pl-3 py-2 space-x-5"] $ do
         strong_ "Query results"
@@ -72,9 +73,9 @@ apiLogsPage pid requests =
                   let rawUrl = req ^. #rawUrl
                   let referer = req ^. #referer
                   p_ [class_ "inline-block"] $ toHtml $ [text| raw_url=$rawUrl referer=$referer |]
-          tr_ $
-            td_ $ do
-              "test line"
+            tr_ $
+              td_ $ do
+                jsonValueToHtmlTree $ AE.toJSON req
 
 -- valueToFields :: AE.Value -> [(Text, [AE.Value])]
 -- valueToFields value = snd $ valueToFields' value ("", [])
@@ -119,6 +120,44 @@ jsonValueToHtmlTree :: AE.Value -> Html ()
 jsonValueToHtmlTree val = div_ $ jsonValueToHtmlTree' ("", val)
   where
     jsonValueToHtmlTree' :: (Text, AE.Value) -> Html ()
-    jsonValueToHtmlTree' (key, (AE.Object v)) = div_ $ toHtml $ (HM.toList v & mapM_ jsonValueToHtmlTree')
-    -- jsonValueToHtmlTree' (key, (AE.Array v)) = div_ $ toHtml $ (Vector.toList v & mapM_ (\i item -> jsonValueToHtmlTree' ((toText $ show i), item)))
-    jsonValueToHtmlTree' (key, value) = div_ $ toHtml $ show value
+    jsonValueToHtmlTree' (key, AE.Object v) = div_ $ do
+      a_
+        [ class_ "-ml-2 cursor-pointer",
+          [__|on click toggle .hidden on next <div/> from me|]
+        ]
+        $ do
+          span_ [class_ ""] "▸"
+          span_ $ toHtml (key <> ": {")
+      div_ [class_ "pl-10 hidden"] $
+        toHtml (HM.toList v & mapM_ jsonValueToHtmlTree')
+      span_ "}"
+    jsonValueToHtmlTree' (key, AE.Array v) = div_ $ do
+      a_
+        [ class_ "-ml-2",
+          [__|on click toggle .hidden on next <div/> from me|]
+        ]
+        $ do
+          span_ [class_ ""] "▸"
+          span_ $ toHtml (key <> ": [")
+      div_ [class_ "pl-10 hidden"] $
+        v & imapM_ \i item -> jsonValueToHtmlTree' (toText @String $ show i, item)
+      span_ "]"
+    jsonValueToHtmlTree' (key, value) = do
+      div_ $ do
+        span_ [class_ "inline-block"] $ toHtml key
+        span_ [class_ "inline-block text-blue-800"] ":"
+        a_ [class_ "inline-block hover:bg-blue-50 text-blue-800 ml-2.5 cursor-pointer"] $toHtml $ unwrapJsonPrimValue value
+
+jsonTreeAuxillaryCode :: Html ()
+jsonTreeAuxillaryCode = div_ $ do
+  script_ [text||]
+  style_ [text||]
+
+unwrapJsonPrimValue :: AE.Value -> Text
+unwrapJsonPrimValue (AE.Bool True) = "true"
+unwrapJsonPrimValue (AE.Bool False) = "true"
+unwrapJsonPrimValue (AE.String v) = "\"" <> toText v <> "\""
+unwrapJsonPrimValue (AE.Number v) = toText @String $ show v
+unwrapJsonPrimValue AE.Null = "null"
+unwrapJsonPrimValue (AE.Object _) = error "Impossible. unwrapJsonPrimValue should be for primitive types only" -- should never be reached
+unwrapJsonPrimValue (AE.Array _) = error "Impossible. unwrapJsonPrimValue should be for primitive types only" -- should never be reached
