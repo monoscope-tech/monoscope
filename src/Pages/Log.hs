@@ -52,6 +52,7 @@ apiLogsPage pid requests =
         strong_ "Query results"
         span_ "330 log entries"
 
+      jsonTreeAuxillaryCode
       table_ [class_ "table-fixed grow min-w-full h-full divide-y flex flex-col monospace"] $ do
         thead_ [class_ "text-xs bg-gray-100 gray-400"] $ do
           tr_ [class_ "flex flex-row text-left space-x-4"] $ do
@@ -73,8 +74,8 @@ apiLogsPage pid requests =
                   let rawUrl = req ^. #rawUrl
                   let referer = req ^. #referer
                   p_ [class_ "inline-block"] $ toHtml $ [text| raw_url=$rawUrl referer=$referer |]
-            tr_ $
-              td_ $ do
+            tr_ [class_ "border-l-blue-200 border-l-4"] $
+              td_ [class_ "pl-8 py-3"] $ do
                 jsonValueToHtmlTree $ AE.toJSON req
 
 -- valueToFields :: AE.Value -> [(Text, [AE.Value])]
@@ -123,24 +124,28 @@ jsonValueToHtmlTree val = div_ $ jsonValueToHtmlTree' ("", val)
     jsonValueToHtmlTree' (key, AE.Object v) = div_ $ do
       a_
         [ class_ "-ml-2 cursor-pointer",
-          [__|on click toggle .hidden on next <div/> from me|]
+          [__|on click toggle .collapsed on next <div/> from me|]
         ]
         $ do
           span_ [class_ ""] "▸"
-          span_ $ toHtml (key <> ": {")
-      div_ [class_ "pl-10 hidden"] $
-        toHtml (HM.toList v & mapM_ jsonValueToHtmlTree')
+          span_ $ toHtml $ if key == "" then "{" else key <> ": {"
+      div_ [class_ $ "pl-10 " <> (if key == "" then "" else "collapsed")] $ do
+        div_ [class_ "tree-children-count"] $ show $ length $ HM.toList v
+        div_ [class_ "tree-children"] $ do
+          toHtml (HM.toList v & mapM_ jsonValueToHtmlTree')
       span_ "}"
     jsonValueToHtmlTree' (key, AE.Array v) = div_ $ do
       a_
         [ class_ "-ml-2",
-          [__|on click toggle .hidden on next <div/> from me|]
+          [__|on click toggle .collapsed on next <div/> from me|]
         ]
         $ do
           span_ [class_ ""] "▸"
           span_ $ toHtml (key <> ": [")
-      div_ [class_ "pl-10 hidden"] $
-        v & imapM_ \i item -> jsonValueToHtmlTree' (toText @String $ show i, item)
+      div_ [class_ "pl-10 "] $ do
+        div_ [class_ "tree-children-count"] $ show $ Vector.length v
+        div_ [class_ "tree-children"] $ do
+          v & imapM_ \i item -> jsonValueToHtmlTree' (toText @String $ show i, item)
       span_ "]"
     jsonValueToHtmlTree' (key, value) = do
       div_ $ do
@@ -151,7 +156,18 @@ jsonValueToHtmlTree val = div_ $ jsonValueToHtmlTree' ("", val)
 jsonTreeAuxillaryCode :: Html ()
 jsonTreeAuxillaryCode = div_ $ do
   script_ [text||]
-  style_ [text||]
+  style_
+    [text|
+    .tree-children {
+      display: block;
+    }
+    .tree-children-count { display: none; }
+    .collapsed {display: inline-block;padding-left:0; }
+    .collapsed .tree-children {
+      display: none !important; 
+    }
+    .collapsed .tree-children-count {display: block !important;}
+  |]
 
 unwrapJsonPrimValue :: AE.Value -> Text
 unwrapJsonPrimValue (AE.Bool True) = "true"
