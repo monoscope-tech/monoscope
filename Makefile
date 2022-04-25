@@ -24,10 +24,8 @@ fix-lint:
 	find ./src -name '*.hs' | xargs -L1 hlint --refactor --refactor-options="--inplace"
 
 timescaledb-docker:
-	docker volume create pgdata
-	docker start apitoolkit || docker run -it --rm -v pgdata:/var/lib/postgresql/data  --name=apitoolkit -p 5432:5432/tcp -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=apitoolkit \
-		docker.io/timescale/timescaledb-ha:pg14-latest \
-		-c shared_preload_libraries='pg_stat_statements,timescaledb'
+	docker run -it --rm --name=apitoolkit -p 5432:5432/tcp -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=apitoolkit -v $$HOME/pg-data:/home/postgres/pgdata \
+		docker.io/timescale/timescaledb-ha:pg14-latest -c shared_preload_libraries='pg_stat_statements,timescaledb'
 
 
 update-service-worker:
