@@ -42,7 +42,7 @@ import Text.Regex.TDFA ((=~))
 -- >>> import Data.Aeson.QQ (aesonQQ)
 -- >>> import Data.Aeson
 
-data SDKTypes = GoGin | GoBuiltIn | PhpLaravel | JsExpress
+data SDKTypes = GoGin | GoBuiltIn | PhpLaravel | JsExpress | JavaSpringBoot
   deriving stock (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SDKTypes
 
@@ -183,6 +183,7 @@ normalizeUrlPath GoGin urlPath = urlPath
 normalizeUrlPath GoBuiltIn urlPath = urlPath
 normalizeUrlPath PhpLaravel urlPath = urlPath
 normalizeUrlPath JsExpress urlPath = urlPath
+normalizeUrlPath JavaSpringBoot urlPath = urlPath
 
 -- | valueToFields takes an aeson object and converts it into a list of paths to
 -- each primitive value in the json and the values.
@@ -218,6 +219,8 @@ valueToFields value = dedupFields $ snd $ valueToFields' value ("", [])
     valueToFields' (AE.Array v) akk = foldl' (\(akkT, akkL) val -> (akkT, snd $ valueToFields' val (akkT <> ".[]", akkL))) akk v
     valueToFields' v (akk, l) = (akk, (akk, v) : l)
 
+    -- debupFields would merge all fields in the list of tuples by the first item in the tupple.
+    --
     -- >>> dedupFields [(".menu.[]",String "xyz"),(".menu.[]",String "abc")]
     -- [(".menu.[]",[String "abc",String "xyz"])]
     -- >>> dedupFields [(".menu.[]",String "xyz"),(".menu.[]",String "abc"),(".menu.[]",Number 123)]

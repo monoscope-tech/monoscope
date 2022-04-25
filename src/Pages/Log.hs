@@ -1,18 +1,30 @@
 module Pages.Log (apiLog) where
 
 import Config
+import Data.Aeson qualified as AE
 import Data.Default (def)
+import Data.HashMap.Strict qualified as HM
+import Data.Sequence (mapWithIndex)
+import Data.Time (defaultTimeLocale)
+import Data.Time.Format (formatTime)
 import Data.Vector (Vector)
+import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
+import Lucid.Hyperscript (__)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
+import NeatInterpolation (text)
 import Optics.Core ((^.))
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Relude
-import Data.Time (defaultTimeLocale)
-import Data.Time.Format (formatTime)
+
+-- $setup
+-- >>> import Relude
+-- >>> import Data.Vector qualified as Vector
+-- >>> import Data.Aeson.QQ (aesonQQ)
+-- >>> import Data.Aeson
 
 apiLog :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 apiLog sess pid = do
@@ -33,38 +45,80 @@ apiLog sess pid = do
 
 apiLogsPage :: Projects.ProjectId -> Vector RequestDumps.RequestDumpLogItem -> Html ()
 apiLogsPage pid requests =
-  section_ [class_ "container mx-auto  px-4 py-10"] $ do
-    div_ [class_ "flex justify-between mb-5"] $ do
-      h3_ [class_ "place-items-center"] "ApiToolKit"
-      div_ [class_ "flex flex-row"] $ do
-        img_ [src_ "/public/assets/svgs/funnel.svg", class_ "h-4 mt-4 mx-3 w-auto"]
-        div_ [class_ "flex flex-row px-5  my-2  text-sm bg-white text-zinc-500 border-solid border border-gray-200 rounded-2xl"] $ do
-          input_ [type_ "date", class_ " h-10 "]
-          span_ [class_ "mx-4 mt-2 text-base text-zinc-500"] "--"
-          input_ [type_ "date", class_ " h-10 "]
-    div_ [class_ "card rounded-lg mb-5 bg-white border-solid border-2 border-light-blue-500 p-5 overflow-x-auto"] "Charts"
+  section_ [class_ "container mx-auto  px-3 py-10 flex flex-col h-full overflow-hidden"] $ do
+    div_ [class_ "card-round bg-white overflow-hidden grow divide-y flex flex-col mb-8 text-sm"] $ do
+      div_ [class_ "pl-3 py-2 space-x-5"] $ do
+        strong_ "Query results"
+        span_ "330 log entries"
 
-    div_ [class_ "card rounded-lg bg-white border-solid border-2 border-light-blue-500 p-5 overflow-x-auto"] $ do
-      div_ [class_ "w-full flex flex-row justify-between m-3"] $ do
-        div_ [class_ "flex rounded-xl bg-white py-2 px-3 flex-row w-3/4 border-solid border border-gray-200 h-10"] $ do
-          img_ [src_ "/assets/svgs/search.svg", class_ "h-5 w-auto"]
-          input_ [type_ "text", class_ " w-full h-full p-2 text-sm text-gray-400 font-normal focus:outline-none", placeholder_ "Search logs"]
-          img_ [src_ "/assets/svgs/filter.svg", class_ "h-5 w-auto self-end"]
-        button_ [class_ "bg-transparent place-content-center py-2 px-4 w-28 mx-3 flex flex-row border-solid border border-gray-200 rounded-xl h-10"] $ do
-          span_ [class_ "text-sm text-slate-600 mr-1"] "Actions"
-          img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-3 w-3 mt-1 "]
-      -- table head
+      table_ [class_ "table-fixed grow min-w-full h-full divide-y flex flex-col monospace"] $ do
+        thead_ [class_ "text-xs bg-gray-100 gray-400"] $ do
+          tr_ [class_ "flex flex-row text-left space-x-4"] $ do
+            th_ [class_ "font-normal inline-block py-1.5 p-1 px-2 w-8"] ""
+            th_ [class_ "font-normal inline-block py-1.5 p-1 px-2 w-32"] "TIMESTAMP"
+            th_ [class_ "font-normal inline-block py-1.5 p-1 px-2 grow"] "SUMMARY"
+        tbody_ [class_ " grow overflow-y-scroll h-full whitespace-nowrap text-sm"] $ do
+          requests & traverse_ \req -> do
+            tr_
+              [ class_ "border-t divide-x space-x-4 flex hover:bg-blue-50 cursor-pointer",
+                [__| |]
+              ]
+              $ do
+                td_ [class_ "inline-block p-1 px-2 w-8"] ">"
+                td_ [class_ "inline-block p-1 px-2 w-32 overflow-hidden"] $ toHtml @String $ formatTime defaultTimeLocale "%F %R" (req ^. #createdAt)
+                td_ [class_ "inline-block p-1 px-2  grow overflow-hidden"] $ do
+                  span_ [class_ "inline-block bg-green-100 green-800 px-3 rounded-xl monospace"] $ toHtml $ req ^. #method
+                  span_ [class_ "inline-block bg-stone-100 stone-800 px-3 rounded-xl monospace"] $ toHtml $ req ^. #urlPath
+                  let rawUrl = req ^. #rawUrl
+                  let referer = req ^. #referer
+                  p_ [class_ "inline-block"] $ toHtml $ [text| raw_url=$rawUrl referer=$referer |]
+          tr_ $
+            td_ $ do
+              "test line"
 
-      table_ [class_ "table-auto w-full  mt-6"] $ do
-        thead_ $ do
-          tr_ [class_ "border-b border-b-gray-300 py-5 font-semibold "] $ do
-            th_ [class_ "text-left text-sm text-slate-700 "] "DATE"
-            th_ [class_ "text-left text-sm text-slate-700 "] "HOST"
-            th_ [class_ "text-left text-sm text-slate-700 "] "SERVICE"
-        tbody_ $ do
-          requests & mapM_ \req -> do
-            tr_ [class_ "border-b border-b-gray-300 py-8 font-medium"] $ do
-              td_ [class_ " text-sm inconsolata text-slate-700 font-normal"]$ toHtml @String $ formatTime defaultTimeLocale "%F %R" (req ^. #createdAt)
-              td_ [class_ " text-sm inconsolata text-slate-700 font-normal"] $ toHtml $ req ^. #host
-              td_ [class_ " inconsolata text-base text-slate-700"] $ toHtml $ req ^. #urlPath
-              
+-- valueToFields :: AE.Value -> [(Text, [AE.Value])]
+-- valueToFields value = snd $ valueToFields' value ("", [])
+--   where
+--     valueToFields' :: AE.Value -> (Text, [(Text, AE.Value)]) -> (Text, [(Text, AE.Value)])
+--     valueToFields' (AE.Object v) akk = HM.toList v & foldl' (\(akkT, akkL) (key, val) -> (akkT, snd $ valueToFields' val (akkT <> "." <> key, akkL))) akk
+--     valueToFields' (AE.Array v) akk = foldl' (\(akkT, akkL) val -> (akkT, snd $ valueToFields' val (akkT <> ".[]", akkL))) akk v
+--     valueToFields' v (akk, l) = (akk, (akk, v) : l)
+
+-- | jsonValueToHtmlTree takes an aeson object and converts it into a html tree
+-- each primitive value in the json and the values.
+--
+-- Regular nested text fields:
+-- >>> valueToFields [aesonQQ|{"menu":{"id":"text"}}|]
+-- [(".menu.id",[String "text"])]
+--
+-- Integer nested field within an array of objects:
+-- >>> valueToFields [aesonQQ|{"menu":{"id":[{"int_field":22}]}}|]
+-- WAS [(".menu.id.[].int_field",[Number 22.0])]
+-- NOW Not in scope: ‘aesonQQ’
+--
+-- Deeper nested field with an array of objects:
+-- >>> valueToFields [aesonQQ|{"menu":{"id":{"menuitems":[{"key":"value"}]}}}|]
+-- WAS [(".menu.id.menuitems.[].key",[String "value"])]
+-- NOW Not in scope: ‘aesonQQ’
+--
+-- Flat array value:
+-- >>> valueToFields [aesonQQ|{"menu":["abc", "xyz"]}|]
+-- WAS [(".menu.[]",[String "abc",String "xyz"])]
+-- NOW Not in scope: ‘aesonQQ’
+--
+-- Float values and Null
+-- >>> valueToFields [aesonQQ|{"fl":1.234, "nl": null}|]
+-- WAS [(".fl",[Number 1.234]),(".nl",[Null])]
+-- NOW Not in scope: ‘aesonQQ’
+--
+-- Multiple fields with same key via array:
+-- >>> valueToFields [aesonQQ|{"menu":[{"id":"text"},{"id":123}]}|]
+-- WAS [(".menu.[].id",[String "text",Number 123.0])]
+-- NOW Not in scope: ‘aesonQQ’
+jsonValueToHtmlTree :: AE.Value -> Html ()
+jsonValueToHtmlTree val = div_ $ jsonValueToHtmlTree' ("", val)
+  where
+    jsonValueToHtmlTree' :: (Text, AE.Value) -> Html ()
+    jsonValueToHtmlTree' (key, (AE.Object v)) = div_ $ toHtml $ (HM.toList v & mapM_ jsonValueToHtmlTree')
+    -- jsonValueToHtmlTree' (key, (AE.Array v)) = div_ $ toHtml $ (Vector.toList v & mapM_ (\i item -> jsonValueToHtmlTree' ((toText $ show i), item)))
+    jsonValueToHtmlTree' (key, value) = div_ $ toHtml $ show value

@@ -79,7 +79,9 @@ data RequestDumpLogItem = RequestDumpLogItem
     createdAt :: ZonedTime,
     host :: Text,
     urlPath :: Text,
-    method :: Text
+    method :: Text,
+    rawUrl :: Text,
+    referer :: Text
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (ToRow, FromRow)
@@ -89,7 +91,7 @@ makeFieldLabelsNoPrefix ''RequestDumpLogItem
 selectRequestDumpByProject :: Projects.ProjectId -> DBT IO (Vector RequestDumpLogItem)
 selectRequestDumpByProject pid = query Select q (Only pid)
   where
-    q = [sql|SELECT id, created_at,host, url_path, method  from apis.request_dumps where project_id=?|]
+    q = [sql|SELECT id, created_at,host, url_path, method, raw_url,referer  from apis.request_dumps where project_id=?|]
 
 insertRequestDump :: RequestDump -> DBT IO ()
 insertRequestDump = void <$> execute Insert q
