@@ -95,12 +95,11 @@ apiLogsPage pid requests =
                   span_ [class_ "inline-block bg-green-100 green-800 px-3 rounded-xl monospace"] $ toHtml $ req ^. #method
                   span_ [class_ "inline-block bg-stone-100 stone-800 px-3 rounded-xl monospace"] $ toHtml $ req ^. #urlPath
                   let rawUrl = req ^. #rawUrl
-                  let referer = req ^. #referer
                   let reqBody = decodeUtf8 $ AE.encode $ req ^. #requestBody
                   let respBody = decodeUtf8 $ AE.encode $ req ^. #responseBody
                   let reqHeaders = decodeUtf8 $ AE.encode $ req ^. #requestHeaders
                   let respHeaders = decodeUtf8 $ AE.encode $ req ^. #responseHeaders
-                  p_ [class_ "inline-block"] $ toHtml $ T.take 300 [text| raw_url=$rawUrl referer=$referer request_body=$reqBody response_body=$respBody request_headers=$reqHeaders response_headers=$respHeaders|]
+                  p_ [class_ "inline-block"] $ toHtml $ T.take 300 [text| raw_url=$rawUrl request_body=$reqBody response_body=$respBody request_headers=$reqHeaders response_headers=$respHeaders|]
 
 apiLogItemView :: RequestDumps.RequestDumpLogItem -> Html ()
 apiLogItemView req =
