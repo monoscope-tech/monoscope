@@ -4,17 +4,14 @@ import Config
 import Data.Aeson qualified as AE
 import Data.Default (def)
 import Data.HashMap.Strict qualified as HM
-import Data.Sequence (mapWithIndex)
 import Data.Time (defaultTimeLocale)
 import Data.Time.Format (formatTime)
 import Data.UUID qualified as UUID
-import Data.Vector (Vector, imapM_)
+import Data.Vector (Vector, iforM_)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
-import Lucid.HTMX (hxGet_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
-import Lucid.Hyperscript.QuasiQuoter (_hs)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
@@ -110,39 +107,12 @@ jsonValueToHtmlTree :: AE.Value -> Html ()
 jsonValueToHtmlTree val = jsonValueToHtmlTree' ("", val)
   where
     jsonValueToHtmlTree' :: (Text, AE.Value) -> Html ()
-    -- jsonValueToHtmlTree' (key, AE.Object v) = div_ [class_ (if key == "" then "" else "collapsed")] $ do
-    --   a_
-    --     [ class_ "inline-block",
-    --       [__|on click toggle .collapsed on the closest parent <div/>|]
-    --     ]
-    --     $ do
-    --       span_ [class_ "log-item-tree-chevron "] "▾"
-    --       span_ $ toHtml $ if key == "" then "{" else key <> ": {"
-    --   div_ [class_ "pl-5 children "] $ do
-    --     span_ [class_ "tree-children-count"] $ show $ length $ HM.toList v
-    --     div_ [class_ "tree-children"] $ do
-    --       toHtml (HM.toList v & mapM_ jsonValueToHtmlTree')
-    --   span_ [class_ "pl-5 closing-token"] "}"
     jsonValueToHtmlTree' (key, AE.Object v) = renderParentType "{" "}" key (length $ HM.toList v) (HM.toList v & mapM_ jsonValueToHtmlTree')
-    jsonValueToHtmlTree' (key, AE.Array v) = renderParentType "[" "]" key (Vector.length v) (v & imapM_ \i item -> jsonValueToHtmlTree' (toText @String $ show i, item))
-    -- jsonValueToHtmlTree' (key, AE.Array v) = div_ [class_ "collapsed"] $ do
-    --   a_
-    --     [ class_ "inline-block",
-    --       [__|on click toggle .collapsed on the closest parent <div/>|]
-    --     ]
-    --     $ do
-    --       span_ [class_ "log-item-tree-chevron"] "▾"
-    --       span_ $ toHtml (key <> ": [")
-    --   div_ [class_ "pl-5 children "] $ do
-    --     div_ [class_ "tree-children-count"] $ show $ Vector.length v
-    --     div_ [class_ "tree-children"] $ do
-    --       v & imapM_ \i item -> jsonValueToHtmlTree' (toText @String $ show i, item)
-    --   span_ [class_ "pl-5 closing-token"] "]"
-    jsonValueToHtmlTree' (key, value) = div_ $ do
-      div_ [class_ "pl-6"] $ do
-        span_ [class_ "inline-block"] $ toHtml key
-        span_ [class_ "inline-block text-blue-800"] ":"
-        a_ [class_ "inline-block hover:bg-blue-50 text-blue-800 ml-2.5 cursor-pointer"] $ toHtml $ unwrapJsonPrimValue value
+    jsonValueToHtmlTree' (key, AE.Array v) = renderParentType "[" "]" key (Vector.length v) (iforM_ v \i item -> jsonValueToHtmlTree' (show i, item))
+    jsonValueToHtmlTree' (key, value) = div_ [class_ "pl-6"] $ do
+      span_ [class_ "inline-block"] $ toHtml key
+      span_ [class_ "inline-block text-blue-800"] ":"
+      a_ [class_ "inline-block hover:bg-blue-50 text-blue-800 ml-2.5 cursor-pointer"] $ toHtml $ unwrapJsonPrimValue value
 
     renderParentType :: Text -> Text -> Text -> Int -> Html () -> Html ()
     renderParentType opening closing key count child = div_ [class_ (if key == "" then "" else "collapsed")] $ do
