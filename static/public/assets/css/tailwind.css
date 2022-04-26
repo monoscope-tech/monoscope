@@ -121,7 +121,10 @@
   }
 
 }
-
+/* HERE SINCE IT"S BASICALLY AN OVERRIDE.  Its for the log items rows */
+.expanded-log{
+  @apply border-l-blue-200 bg-blue-50;
+}
 
 /*
 == THIS SECTION IS FOR CSS CLASSES THAT ARE ADDED DYNAMICALLY, 

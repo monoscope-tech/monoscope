@@ -1,4 +1,4 @@
-module Pages.Log (apiLog) where
+module Pages.Log (apiLog, apiLogItem) where
 
 import Config
 import Data.Aeson qualified as AE
@@ -7,10 +7,12 @@ import Data.HashMap.Strict qualified as HM
 import Data.Sequence (mapWithIndex)
 import Data.Time (defaultTimeLocale)
 import Data.Time.Format (formatTime)
+import Data.UUID qualified as UUID
 import Data.Vector (Vector, imapM_)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
+import Lucid.HTMX (hxGet_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Lucid.Hyperscript.QuasiQuoter (_hs)
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -44,6 +46,14 @@ apiLog sess pid = do
           }
   pure $ bodyWrapper bwconf $ apiLogsPage pid requests
 
+apiLogItem :: Sessions.PersistentSession -> Projects.ProjectId -> UUID.UUID -> DashboardM (Html ())
+apiLogItem sess pid rdId = do
+  pool <- asks pool
+  logItemM <- liftIO $ withPool pool $ RequestDumps.selectRequestDumpByProjectAndId pid rdId
+  case logItemM of
+    Just logItem -> pure $ apiLogItemView logItem
+    Nothing -> pure $ div_ "invalid log request ID"
+
 apiLogsPage :: Projects.ProjectId -> Vector RequestDumps.RequestDumpLogItem -> Html ()
 apiLogsPage pid requests =
   section_ [class_ "container mx-auto  px-3 py-10 flex flex-col h-full overflow-hidden"] $
@@ -59,11 +69,24 @@ apiLogsPage pid requests =
             th_ [class_ "font-normal inline-block py-1.5 p-1 px-2 w-8"] ""
             th_ [class_ "font-normal inline-block py-1.5 p-1 px-2 w-32"] "TIMESTAMP"
             th_ [class_ "font-normal inline-block py-1.5 p-1 px-2 grow"] "SUMMARY"
-        tbody_ [class_ " grow overflow-y-scroll h-full whitespace-nowrap text-sm"] $ do
+        tbody_ [class_ " grow overflow-y-scroll h-full whitespace-nowrap text-sm divide-y"] $ do
           requests & traverse_ \req -> do
+            let logItemPath = RequestDumps.requestDumpLogItemUrlPath pid (req ^. #id)
             tr_
-              [ class_ "border-t divide-x space-x-4 flex hover:bg-blue-50 cursor-pointer",
-                [__| |]
+              [ class_ "border-l-4 border-l-transparent divide-x space-x-4 flex hover:bg-blue-50 cursor-pointer",
+                term
+                  "_"
+                  [text|
+                  on click 
+                    if I match <.expanded-log/> then 
+                      log "matched" then
+                      remove next <.log-item-info/> then 
+                      remove .expanded-log from me
+                    else
+                      fetch $logItemPath as html then put it after me then
+                      add .expanded-log to me
+                    end 
+                  |]
               ]
               $ do
                 td_ [class_ "inline-block p-1 px-2 w-8"] ">"
@@ -73,50 +96,14 @@ apiLogsPage pid requests =
                   span_ [class_ "inline-block bg-stone-100 stone-800 px-3 rounded-xl monospace"] $ toHtml $ req ^. #urlPath
                   let rawUrl = req ^. #rawUrl
                   let referer = req ^. #referer
-                  p_ [class_ "inline-block"] $ toHtml $ [text| raw_url=$rawUrl referer=$referer |]
-            tr_ [class_ "border-l-blue-200 border-l-4"] $
-              td_ [class_ "pl-8 py-3"] $ do
-                jsonValueToHtmlTree $ AE.toJSON req
+                  p_ [class_ "inline-block"] $ toHtml [text| raw_url=$rawUrl referer=$referer |]
 
--- valueToFields :: AE.Value -> [(Text, [AE.Value])]
--- valueToFields value = snd $ valueToFields' value ("", [])
---   where
---     valueToFields' :: AE.Value -> (Text, [(Text, AE.Value)]) -> (Text, [(Text, AE.Value)])
---     valueToFields' (AE.Object v) akk = HM.toList v & foldl' (\(akkT, akkL) (key, val) -> (akkT, snd $ valueToFields' val (akkT <> "." <> key, akkL))) akk
---     valueToFields' (AE.Array v) akk = foldl' (\(akkT, akkL) val -> (akkT, snd $ valueToFields' val (akkT <> ".[]", akkL))) akk v
---     valueToFields' v (akk, l) = (akk, (akk, v) : l)
+apiLogItemView :: RequestDumps.RequestDumpLogItem -> Html ()
+apiLogItemView req =
+  tr_ [class_ "log-item-info border-l-blue-200 border-l-4"] $
+    td_ [class_ "pl-8 py-3"] $ do
+      jsonValueToHtmlTree $ AE.toJSON req
 
--- | jsonValueToHtmlTree takes an aeson object and converts it into a html tree
--- each primitive value in the json and the values.
---
--- Regular nested text fields:
--- >>> valueToFields [aesonQQ|{"menu":{"id":"text"}}|]
--- [(".menu.id",[String "text"])]
---
--- Integer nested field within an array of objects:
--- >>> valueToFields [aesonQQ|{"menu":{"id":[{"int_field":22}]}}|]
--- WAS [(".menu.id.[].int_field",[Number 22.0])]
--- NOW Not in scope: ‘aesonQQ’
---
--- Deeper nested field with an array of objects:
--- >>> valueToFields [aesonQQ|{"menu":{"id":{"menuitems":[{"key":"value"}]}}}|]
--- WAS [(".menu.id.menuitems.[].key",[String "value"])]
--- NOW Not in scope: ‘aesonQQ’
---
--- Flat array value:
--- >>> valueToFields [aesonQQ|{"menu":["abc", "xyz"]}|]
--- WAS [(".menu.[]",[String "abc",String "xyz"])]
--- NOW Not in scope: ‘aesonQQ’
---
--- Float values and Null
--- >>> valueToFields [aesonQQ|{"fl":1.234, "nl": null}|]
--- WAS [(".fl",[Number 1.234]),(".nl",[Null])]
--- NOW Not in scope: ‘aesonQQ’
---
--- Multiple fields with same key via array:
--- >>> valueToFields [aesonQQ|{"menu":[{"id":"text"},{"id":123}]}|]
--- WAS [(".menu.[].id",[String "text",Number 123.0])]
--- NOW Not in scope: ‘aesonQQ’
 jsonValueToHtmlTree :: AE.Value -> Html ()
 jsonValueToHtmlTree val = div_ $ jsonValueToHtmlTree' ("", val)
   where

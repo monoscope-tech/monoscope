@@ -12,6 +12,8 @@ module Models.Apis.RequestDumps
     selectRequestsByEndpointsStatByMin,
     selectReqLatenciesRolledByStepsForProject,
     selectRequestDumpByProject,
+    selectRequestDumpByProjectAndId,
+    requestDumpLogItemUrlPath,
   )
 where
 
@@ -99,6 +101,9 @@ data RequestDumpLogItem = RequestDumpLogItem
 
 makeFieldLabelsNoPrefix ''RequestDumpLogItem
 
+requestDumpLogItemUrlPath :: Projects.ProjectId -> UUID.UUID -> Text
+requestDumpLogItemUrlPath pid rdId = "/p/" <> Projects.projectIdText pid <> "/log_explorer/" <> UUID.toText rdId
+
 selectRequestDumpByProject :: Projects.ProjectId -> DBT IO (Vector RequestDumpLogItem)
 selectRequestDumpByProject pid = query Select q (Only pid)
   where
@@ -107,6 +112,15 @@ selectRequestDumpByProject pid = query Select q (Only pid)
                       path_params,status_code,query_params,
                       request_body,response_body,request_headers,response_headers
              FROM apis.request_dumps where project_id=?|]
+
+selectRequestDumpByProjectAndId :: Projects.ProjectId -> UUID.UUID -> DBT IO (Maybe RequestDumpLogItem)
+selectRequestDumpByProjectAndId pid rdId = queryOne Select q (pid, rdId)
+  where
+    q =
+      [sql|SELECT   id,created_at,host,url_path,method,raw_url,referer,
+                      path_params,status_code,query_params,
+                      request_body,response_body,request_headers,response_headers
+             FROM apis.request_dumps where project_id=? and id=?|]
 
 insertRequestDump :: RequestDump -> DBT IO ()
 insertRequestDump = void <$> execute Insert q
