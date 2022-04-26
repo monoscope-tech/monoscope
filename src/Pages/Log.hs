@@ -103,6 +103,7 @@ apiLogItemView req =
     td_ [class_ "pl-4 py-1"] $ do
       jsonValueToHtmlTree $ AE.toJSON req
 
+-- | jsonValueToHtmlTree takes an aeson json object and renders it as a collapsible html tree, with hyperscript for interactivity.
 jsonValueToHtmlTree :: AE.Value -> Html ()
 jsonValueToHtmlTree val = jsonValueToHtmlTree' ("", val)
   where
