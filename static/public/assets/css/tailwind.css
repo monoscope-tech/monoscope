@@ -125,6 +125,16 @@
 .expanded-log{
   @apply border-l-blue-200 bg-blue-50;
 }
+.expanded-log .log-chevron{
+  @apply rotate-90;
+}
+
+.log-item-tree-chevron{
+  @apply cursor-pointer inline-block hover:bg-blue-50 text-blue-800 rounded-md  px-1 mr-2;
+}
+.collapsed .log-item-tree-chevron {
+  @apply neg-rotate-90;
+}
 
 /*
 == THIS SECTION IS FOR CSS CLASSES THAT ARE ADDED DYNAMICALLY, 
