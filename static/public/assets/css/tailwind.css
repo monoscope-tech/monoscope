@@ -2,23 +2,18 @@
 @tailwind components;
 @tailwind utilities;
 
-
 @layer components {
-  /* @font-face { */
-  /*     font-family: Roboto; */
-  /*     src: url(/assets/fonts/Roboto.ttf); */
-  /* } */
   html {
     font-size: 14px;
-    font-family: 'Poppins', sans-serif;
+    font-family: "Poppins", sans-serif;
     /* font-family: 'Roboto', sans-serif; */
   }
   .inconsolata {
-    font-family: 'Inconsolata', monospace;
+    font-family: "Inconsolata", monospace;
     font-size: 14px;
   }
   .monospace {
-      font-family: 'Inconsolata', monospace;
+    font-family: "Inconsolata", monospace;
   }
 
   .btn-sm {
@@ -27,7 +22,6 @@
   .dataTable-search {
     @apply rounded;
   }
-
 
   .btn-indigo {
     @apply btn-sm ml-3 text-white bg-indigo-600 hover:bg-indigo-700 focus:ring-indigo-500;
@@ -50,86 +44,32 @@
     @apply -rotate-90;
   }
 
-
-  /* table td { */
-  /*   border: 1px solid #eee; */
-  /* } */
-
-  /* .level1 td:first-child { */
-  /*   padding-left: 15px; */
-  /* } */
-
-  /* .level2 td:first-child { */
-  /*   padding-left: 30px; */
-  /* } */
-
-  /* .collapse .toggle { */
-  /*   background: url("http://mleibman.github.com/SlickGrid/images/collapse.gif"); */
-  /* } */
-
-  /* .expand .toggle { */
-  /*   background: url("http://mleibman.github.com/SlickGrid/images/expand.gif"); */
-  /* } */
-
   .toggle {
     height: 9px;
     width: 9px;
     display: inline-block;
   }
 
-  .parent-hover .child-hover{
+  .parent-hover .child-hover {
     visibility: hidden;
   }
-  .parent-hover:hover .child-hover{
+  .parent-hover:hover .child-hover {
     visibility: visible;
   }
 
-  /* [data-tooltip] { */
-  /*   position: relative; */
-  /*   /* border-bottom: 1px dashed #000; */
-  /*   cursor: help */
-  /*   */ 
-  /* } */
-
-  /* [data-tooltip]::after { */
-  /*   position: absolute; */
-  /*   opacity: 0; */
-  /*   pointer-events: none; */
-  /*   content: attr(data-tooltip); */
-  /*   left: 0; */
-  /*   top: calc(100% + 10px); */
-  /*   border-radius: 3px; */
-  /*   box-shadow: 0 0 5px 2px rgba(100, 100, 100, 0.1); */
-  /*   background-color: white; */
-  /*   z-index: 10; */
-  /*   padding: 8px; */
-  /*   width: 100px; */
-  /*   transform: translateY(-20px); */
-  /*   transition: all 150ms cubic-bezier(.25, .8, .25, 1); */
-  /* } */
-
-  /* [data-tooltip]:hover::after { */
-  /*   opacity: 1; */
-  /*   transform: translateY(0); */
-  /*   transition-duration: 300ms; */
-  /* } */
-
-  /* END */
-
-  .card-round{
+  .card-round {
     @apply bg-white border-2 border-gray-100 rounded-xl;
   }
-
 }
 /* HERE SINCE IT"S BASICALLY AN OVERRIDE.  Its for the log items rows */
-.expanded-log{
+.expanded-log {
   @apply border-l-blue-200 bg-blue-50;
 }
-.expanded-log .log-chevron{
+.expanded-log .log-chevron {
   @apply rotate-90;
 }
 
-.log-item-tree-chevron{
+.log-item-tree-chevron {
   @apply cursor-pointer inline-block hover:bg-blue-50 text-blue-800 rounded-md  px-1 mr-2;
 }
 .collapsed .log-item-tree-chevron {

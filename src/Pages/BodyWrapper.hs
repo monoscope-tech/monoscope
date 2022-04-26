@@ -18,8 +18,8 @@ menu ppid =
    in [ ("Dashboard", "/p/" <> pid <> "/", "/assets/svgs/dashboard.svg"),
         ("Endpoints", "/p/" <> pid <> "/endpoints", "/assets/svgs/endpoint.svg"),
         ("Anomalies", "/p/" <> pid <> "/anomalies", "/assets/svgs/anomalies.svg"),
-        ("API Keys", "/p/" <> pid <> "/apis", "/assets/svgs/api.svg"),
-        ("API Log Explorer", "/p/" <> pid <> "/log_explorer", "/assets/svgs/logs.svg")
+        ("API Log Explorer", "/p/" <> pid <> "/log_explorer", "/assets/svgs/logs.svg"),
+        ("API Keys", "/p/" <> pid <> "/apis", "/assets/svgs/api.svg")
       ]
 
 data BWConfig = BWConfig
