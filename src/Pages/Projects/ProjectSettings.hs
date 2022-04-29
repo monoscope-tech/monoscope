@@ -8,7 +8,6 @@ where
 import Config
   ( AuthContext (pool),
     DashboardM,
-    HeadersTriggerRedirect,
   )
 import Data.Default (Default (def))
 import Data.UUID qualified as UUID
@@ -27,9 +26,11 @@ import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Projects.CreateProject qualified as CreateProject
 import Relude
 import Servant
-  ( addHeader,
+  ( Headers,
+    addHeader,
     noHeader,
   )
+import Servant.Htmx
 
 editProjectH :: Sessions.PersistentSession -> DashboardM (Html ())
 editProjectH sess = do
@@ -98,7 +99,7 @@ editProjectMembersBody mb epe = do
           span_ [class_ "text-blue-700 font-medium text-base "] "Add member"
       button_ [class_ "py-2 px-5 bg-blue-700 absolute m-5 bottom-0 right-0 text-[white] text-sm rounded-xl cursor-pointer", type_ "submit"] "Next step"
 
-editProjectMemberH :: Projects.ProjectId -> Users.UserId -> UUID.UUID -> CreateProject.InviteProjectMemberForm -> DashboardM (HeadersTriggerRedirect (Html ()))
+editProjectMemberH :: Projects.ProjectId -> Users.UserId -> UUID.UUID -> CreateProject.InviteProjectMemberForm -> DashboardM (Headers '[HXTrigger, HXRedirect] (Html ()))
 editProjectMemberH pid uid mid CreateProject.InviteProjectMemberForm {permission} = do
   validationRes <- validateM CreateProject.inviteProjectMemberFormV CreateProject.InviteProjectMemberForm {permission}
   case validationRes of
@@ -115,7 +116,7 @@ editProjectMemberH pid uid mid CreateProject.InviteProjectMemberForm {permission
     Right epe -> pure $ noHeader $ noHeader $ editProjectMembersBody CreateProject.InviteProjectMemberForm {permission} epe
 
 -- this can be deleted depending on how the mergings are done
-editProjectPostH :: Projects.ProjectId -> CreateProject.CreateProjectForm -> DashboardM (HeadersTriggerRedirect (Html ()))
+editProjectPostH :: Projects.ProjectId -> CreateProject.CreateProjectForm -> DashboardM (Headers '[HXTrigger, HXRedirect] (Html ()))
 editProjectPostH pid editP = do
   validationRes <- validateM CreateProject.createProjectFormV editP
   case validationRes of

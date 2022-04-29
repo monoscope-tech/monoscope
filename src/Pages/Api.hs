@@ -20,7 +20,8 @@ import Models.Users.Sessions qualified as Sessions
 import Optics.Core ((^.))
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
-import Servant (addHeader)
+import Servant (Headers, addHeader)
+import Servant.Htmx (HXTrigger)
 import Web.FormUrlEncoded (FromForm)
 
 newtype GenerateAPIKeyForm = GenerateAPIKeyForm
@@ -29,7 +30,7 @@ newtype GenerateAPIKeyForm = GenerateAPIKeyForm
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
 
-apiPostH :: Sessions.PersistentSession -> Projects.ProjectId -> GenerateAPIKeyForm -> DashboardM (HeadersTrigger (Html ()))
+apiPostH :: Sessions.PersistentSession -> Projects.ProjectId -> GenerateAPIKeyForm -> DashboardM (Headers '[HXTrigger] (Html ()))
 apiPostH sess pid apiKeyForm = do
   pool <- asks pool
   env <- asks env

@@ -236,6 +236,13 @@ packages:
   original:
     hackage: lucid-svg-0.7.1@sha256:012455fd2b1ec6b0f3bba405fd66c99cc6d26592bf25c2624741969567c6e510,1088
 - completed:
+    hackage: servant-htmx-0.1.0.1@sha256:280470ac28adb11362929915dce69af0ba5edae9355b09a80d91b558b9fcff7a,1817
+    pantry-tree:
+      size: 415
+      sha256: 388bad47143abf00e408a48bf11e1cc06e31338f5703e22d5a43dcb3d7ecf945
+  original:
+    hackage: servant-htmx-0.1.0.1@sha256:280470ac28adb11362929915dce69af0ba5edae9355b09a80d91b558b9fcff7a,1817
+- completed:
     subdir: core
     name: gogol-core
     version: 0.5.0

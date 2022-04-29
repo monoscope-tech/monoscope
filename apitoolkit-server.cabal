@@ -145,6 +145,7 @@ library
     , resourcet
     , scientific
     , sendgrid-v3
+    , servant-htmx
     , servant-lucid
     , servant-server
     , text

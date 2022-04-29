@@ -5,6 +5,7 @@ module Models.Apis.RequestDumps
   ( RequestDump (..),
     RequestDumpLogItem,
     insertRequestDump,
+    requestDumpLogUrlPath,
     selectRequestsByStatusCodesStatByMin,
     labelRequestLatency,
     LabelValue,
@@ -103,6 +104,9 @@ makeFieldLabelsNoPrefix ''RequestDumpLogItem
 
 requestDumpLogItemUrlPath :: Projects.ProjectId -> UUID.UUID -> Text
 requestDumpLogItemUrlPath pid rdId = "/p/" <> Projects.projectIdText pid <> "/log_explorer/" <> UUID.toText rdId
+
+requestDumpLogUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Text
+requestDumpLogUrlPath pid q cols = "/p/" <> Projects.projectIdText pid <> "/log_explorer/?query=" <> fromMaybe "" q <> "&cols=" <> fromMaybe "" cols
 
 selectRequestDumpByProject :: Projects.ProjectId -> DBT IO (Vector RequestDumpLogItem)
 selectRequestDumpByProject pid = query Select q (Only pid)

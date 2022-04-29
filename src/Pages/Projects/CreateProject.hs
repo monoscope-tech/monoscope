@@ -36,9 +36,11 @@ import Optics.Core ((^.))
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
 import Servant
-  ( addHeader,
+  ( Headers,
+    addHeader,
     noHeader,
   )
+import Servant.Htmx
 import Web.FormUrlEncoded (FromForm)
 
 data CreateProjectForm = CreateProjectForm
@@ -110,7 +112,7 @@ createUserFromInvitation uid tNow email = do
         email = CI.mk email
       }
 
-invMemberH :: InviteProjectMemberForm -> DashboardM (HeadersTriggerRedirect (Html ()))
+invMemberH :: InviteProjectMemberForm -> DashboardM (Headers '[HXTrigger, HXRedirect] (Html ()))
 invMemberH InviteProjectMemberForm {email, permission} = do
   uid <- liftIO Users.createUserId
   tNow <- liftIO getZonedTime
@@ -147,7 +149,7 @@ createProjectGetH sess = do
 ----------------------------------------------------------------------------------------------------------
 -- createProjectPostH is the handler for the create projects page form handling.
 -- It processes post requests and is expected to return a redirect header and a hyperscript event trigger header.
-createProjectPostH :: Sessions.PersistentSession -> CreateProjectForm -> DashboardM (HeadersTriggerRedirect (Html ()))
+createProjectPostH :: Sessions.PersistentSession -> CreateProjectForm -> DashboardM (Headers '[HXTrigger, HXRedirect] (Html ()))
 createProjectPostH sess createP = do
   validationRes <- validateM createProjectFormV createP
   case validationRes of

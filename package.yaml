@@ -134,6 +134,7 @@ library:
     - fakedata
     - random
     - http-types
+    - servant-htmx
 
 
 executables:

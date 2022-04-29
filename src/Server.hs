@@ -3,7 +3,7 @@
 module Server (app) where
 
 import Colog (LogAction)
-import Config (DashboardM, HeadersTrigger, HeadersTriggerRedirect, ctxToHandler)
+import Config (DashboardM, ctxToHandler)
 import Config qualified
 import Data.Pool (Pool)
 import Data.UUID qualified as UUID
@@ -28,6 +28,7 @@ import Pages.Projects.ListProjects qualified as ListProjects
 import Relude
 import Servant
 import Servant.HTML.Lucid
+import Servant.Htmx
 import Servant.Server.Experimental.Auth (AuthHandler, AuthServerData)
 import Web.Auth (authCallbackH, genAuthServerContext, loginH, loginRedirectH, logoutH)
 import Web.ClientMetadata qualified as ClientMetadata
@@ -35,21 +36,23 @@ import Web.Cookie (SetCookie)
 
 type GetRedirect = Verb 'GET 302
 
+type HXBoosted = Header "HX-Boosted" Text
+
 --
 -- API Section
 type ProtectedAPI =
   Get '[HTML] (Html ())
     :<|> "p" :> "new" :> Get '[HTML] (Html ()) -- p represents project
-    :<|> "p" :> "new" :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (HeadersTriggerRedirect (Html ()))
+    :<|> "p" :> "new" :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "endpoints" :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "endpoints" :> Capture "endpoints_id" Endpoints.EndpointId :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "apis" :> Get '[HTML] (Html ())
-    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Api.GenerateAPIKeyForm :> Post '[HTML] (HeadersTrigger (Html ()))
+    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Api.GenerateAPIKeyForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "manual_ingest" :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "manual_ingest" :> ReqBody '[FormUrlEncoded] ManualIngestion.RequestMessageForm :> Post '[HTML] (Html ())
-    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "log_explorer" :> Get '[HTML] (Html ())
+    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "log_explorer" :> QueryParam "query" Text :> QueryParam "cols" Text :> HXRequest :> HXBoosted :> Get '[HTML] (Headers '[HXPush] (Html ()))
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "log_explorer" :> Capture "logItemID" UUID.UUID :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "bulk_seed_and_ingest" :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "bulk_seed_and_ingest" :> ReqBody '[FormUrlEncoded] DataSeeding.DataSeedingForm :> Post '[HTML] (Html ())
