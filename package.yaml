@@ -135,6 +135,8 @@ library:
     - random
     - http-types
     - servant-htmx
+    - megaparsec
+    - text-display
 
 
 executables:

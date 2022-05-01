@@ -243,6 +243,13 @@ packages:
   original:
     hackage: servant-htmx-0.1.0.1@sha256:280470ac28adb11362929915dce69af0ba5edae9355b09a80d91b558b9fcff7a,1817
 - completed:
+    hackage: text-display-0.0.1.0@sha256:b8a94bf4188b77dbcdc7f8d290c998643780e8be5a5df58034b4098d19cd2481,1859
+    pantry-tree:
+      size: 330
+      sha256: ee3ab08a0af09c07070394163857f516192d2f8072e6fc140d64e2bd5562be23
+  original:
+    hackage: text-display-0.0.1.0@sha256:b8a94bf4188b77dbcdc7f8d290c998643780e8be5a5df58034b4098d19cd2481,1859
+- completed:
     subdir: core
     name: gogol-core
     version: 0.5.0

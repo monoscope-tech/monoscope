@@ -2,7 +2,6 @@ module Pages.Log (apiLog, apiLogItem) where
 
 import Config
 import Data.Aeson qualified as AE
-import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
@@ -32,17 +31,18 @@ import Servant.Htmx (HXPush)
 -- >>> import Data.Aeson
 
 apiLog :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Headers '[HXPush] (Html ()))
-apiLog sess pid query cols' hxRequestM hxBoostedM = do
-  traceShowM query
+apiLog sess pid queryM cols' hxRequestM hxBoostedM = do
+  traceShowM queryM
   let cols = T.splitOn "," (fromMaybe "" cols')
+  let query = fromMaybe "" queryM
   pool <- asks pool
   (project, requests) <- liftIO $
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      requests <- RequestDumps.selectRequestDumpByProject pid
+      requests <- RequestDumps.selectRequestDumpByProject pid query
       pure (project, requests)
 
-  let currentUrlPath = RequestDumps.requestDumpLogUrlPath pid query cols'
+  let currentUrlPath = RequestDumps.requestDumpLogUrlPath pid queryM cols'
   case (hxRequestM, hxBoostedM) of
     (Just "true", Nothing) -> pure $ addHeader currentUrlPath $ logItemRows pid requests cols
     _ -> do
@@ -64,18 +64,21 @@ apiLogItem sess pid rdId = do
 
 apiLogsPage :: Projects.ProjectId -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Html ()
 apiLogsPage pid requests cols =
-  section_ [class_ "container mx-auto  px-3 py-5 gap-4 flex flex-col h-full overflow-hidden card-round"] $ do
-    div_ [class_ ""] $ do
-      nav_ $ do
-        a_ "Query"
-      div_ $ do
+  section_ [class_ "container mx-auto  px-3 py-5 gap-4 flex flex-col h-full overflow-hidden "] $ do
+    form_
+      [ class_ "card-round",
+        hxGet_ $ "/p/" <> Projects.projectIdText pid <> "/log_explorer",
+        hxVals_ "js:{query:getQueryFromEditor(), cols:params().cols}",
+        hxTarget_ "#log-item-table-body"
+      ]
+      $ do
+        nav_ [class_ "flex flex-row p-2 content-end justify-between items-baseline border-slate-100"] $ do
+          a_ [class_ "inline-block"] "Query"
+          button_ [type_ "submit", class_ "inline-block btn-sm btn-indigo"] "Run query"
         div_ $ do
-          label_ "Show Query"
-          input_ [type_ "checkbox"]
-      div_ $ do
-        div_ [id_ "queryEditor", class_ "h-52"] ""
+          div_ [id_ "queryEditor", class_ "h-24"] ""
 
-    div_ [class_ "grow divide-y flex flex-col mb-8 text-sm"] $ do
+    div_ [class_ "card-round grow divide-y flex flex-col mb-8 text-sm h-full"] $ do
       div_ [class_ "pl-3 py-2 space-x-5"] $ do
         strong_ "Query results"
         span_ "330 log entries"
@@ -194,9 +197,7 @@ jsonTreeAuxillaryCode pid = do
             hxTarget_ "#log-item-table-body",
             [__|init 
                   set fp to (closest <.log-item-field-parent/>)'s @data-field-path then 
-                  if isFieldInSummary(fp) then 
-                    set my innerHTML to 'Remove field from summary'
-                  end|]
+                  if isFieldInSummary(fp) then set my innerHTML to 'Remove field from summary' end|]
           ]
           "Add field to Summary"
         a_
@@ -205,10 +206,11 @@ jsonTreeAuxillaryCode pid = do
             tabindex_ "-1",
             id_ "menu-item-1",
             [__|on click 
-                if 'clipboard' in window.navigator then 
-                  call navigator.clipboard.writeText((previous <.log-item-field-value/>)'s innerText) then
-                  send successToast(value:['Value has been added to the Clipboard']) to <body/>
-                end|]
+                  if 'clipboard' in window.navigator then 
+                    call navigator.clipboard.writeText((previous <.log-item-field-value/>)'s innerText)
+                    send successToast(value:['Value has been added to the Clipboard']) to <body/>
+                    halt
+                  end|]
           ]
           "Copy field value"
 
@@ -241,6 +243,7 @@ jsonTreeAuxillaryCode pid = do
           end 
       end
     |]
+
   script_ [src_ "/assets/js/monaco/vs/loader.js"] ("" :: Text)
   script_
     [text|
@@ -255,12 +258,27 @@ jsonTreeAuxillaryCode pid = do
       } 
       return [...new Set(cols.concat(subject))].join(",");
     }
-    var isFieldInSummary = (field)=>params().cols.split(",").includes(field);
+    var isFieldInSummary = field=>params().cols.split(",").includes(field);
+    var getQueryFromEditor = ()=>window.editor.getValue();
 
+    var execd = false
     document.addEventListener('DOMContentLoaded', function(){
+      // Configuration for the monaco editor which the query editor is built on.
       require.config({ paths: { vs: '/assets/js/monaco/vs' } });
 			require(['vs/editor/editor.main'], function () {
-				var editor = monaco.editor.create(document.getElementById('queryEditor'), {
+        monaco.editor.defineTheme('apitoolkit', {
+          base: 'vs',
+          inherit: true,
+          rules: [{ background: 'EDF9FA' }],
+          colors: {
+            'editor.foreground': '#000000',
+            'editor.background': '#f5f5f5',
+            'editorGutter.background': '#e8e8e8',
+          }
+        });
+        monaco.editor.setTheme('apitoolkit');
+				window.editor = monaco.editor.create(document.getElementById('queryEditor'), {
+          value: params().query,
 					language:'hcl',
           minimap:{enabled:false}
 				});
@@ -268,6 +286,7 @@ jsonTreeAuxillaryCode pid = do
       // Monaco code suggestions https://github.com/microsoft/monaco-editor/issues/1850
     })
     |]
+
   style_
     [text|
     .tree-children {

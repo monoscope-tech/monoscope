@@ -130,6 +130,7 @@ library
     , lucid-htmx
     , lucid-hyperscript
     , lucid-svg
+    , megaparsec
     , neat-interpolation
     , optics-core
     , optics-th
@@ -150,6 +151,7 @@ library
     , servant-server
     , text
     , text-conversions
+    , text-display
     , time
     , transformers-either
     , unordered-containers

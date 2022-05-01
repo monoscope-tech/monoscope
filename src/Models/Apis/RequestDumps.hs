@@ -1,4 +1,6 @@
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 module Models.Apis.RequestDumps
@@ -15,26 +17,35 @@ module Models.Apis.RequestDumps
     selectRequestDumpByProject,
     selectRequestDumpByProjectAndId,
     requestDumpLogItemUrlPath,
+    parseQueryStringToWhereClause,
   )
 where
 
 import Data.Aeson (KeyValue ((.=)), ToJSON, object)
 import Data.Aeson qualified as AE
+import Data.Text qualified as T
+import Data.Text.Display
 import Data.Time (CalendarDiffTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
+import Data.Void
 import Database.PostgreSQL.Entity.DBT (QueryNature (Insert, Select), execute, query, queryOne)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Simple.Types (Query (Query))
 import Database.PostgreSQL.Transact (DBT)
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Fields qualified as Fields
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
+import NeatInterpolation (text)
 import Optics.TH
-import Relude
+import Relude hiding (many, some)
+import Relude.Unsafe qualified as Unsafe
+import Text.Megaparsec hiding (State)
+import Text.Megaparsec.Char
 
 data RequestDump = RequestDump
   { id :: UUID.UUID,
@@ -108,14 +119,17 @@ requestDumpLogItemUrlPath pid rdId = "/p/" <> Projects.projectIdText pid <> "/lo
 requestDumpLogUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Text
 requestDumpLogUrlPath pid q cols = "/p/" <> Projects.projectIdText pid <> "/log_explorer/?query=" <> fromMaybe "" q <> "&cols=" <> fromMaybe "" cols
 
-selectRequestDumpByProject :: Projects.ProjectId -> DBT IO (Vector RequestDumpLogItem)
-selectRequestDumpByProject pid = query Select q (Only pid)
+selectRequestDumpByProject :: Projects.ProjectId -> Text -> DBT IO (Vector RequestDumpLogItem)
+selectRequestDumpByProject pid extraQuery = do
+  query Select (Query $ encodeUtf8 q) (Only pid)
   where
+    extraQueryParsed = either error (\v -> if v == "" then "" else " AND " <> v) $ parseQueryStringToWhereClause extraQuery
     q =
-      [sql|SELECT   id,created_at,host,url_path,method,raw_url,referer,
+      [text| SELECT  id,created_at,host,url_path,method,raw_url,referer,
                       path_params,status_code,query_params,
                       request_body,response_body,request_headers,response_headers
-             FROM apis.request_dumps where project_id=?|]
+             FROM apis.request_dumps where project_id=? |]
+        <> extraQueryParsed
 
 selectRequestDumpByProjectAndId :: Projects.ProjectId -> UUID.UUID -> DBT IO (Maybe RequestDumpLogItem)
 selectRequestDumpByProjectAndId pid rdId = queryOne Select q (pid, rdId)
@@ -202,3 +216,91 @@ labelRequestLatency (pMax, p90, p75, p50) (x, y)
   | x == p75 = [LabelValue (x, y, Just "p75"), LabelValue (x, y, Nothing)]
   | x == p50 = [LabelValue (x, y, Just "p50"), LabelValue (x, y, Nothing)]
   | otherwise = [LabelValue (x, y, Nothing)]
+
+type Parser = Parsec Void Text
+
+data Operator
+  = Eq
+  | NotEq
+  deriving stock (Eq, Show)
+
+-- FOR postgres sql gen
+instance Display Operator where
+  displayPrec prec Eq = "="
+  displayPrec prec NotEq = "!="
+
+pOperator :: Parser Operator
+pOperator =
+  choice @[]
+    [ Eq <$ string "=",
+      NotEq <$ string "!="
+    ]
+
+data Subject = Subject Text [Text]
+  deriving stock (Eq, Show)
+
+instance Display Subject where
+  displayPrec prec (Subject x []) = displayPrec prec x
+  displayPrec prec (Subject x [y]) = displayPrec prec $ x <> "->>" <> "'" <> y <> "'"
+  displayPrec prec (Subject x z) = do
+    let z' = reverse $ map (\a -> "'" <> a <> "'") z
+    let y = Unsafe.head z'
+    let ys = reverse $ Unsafe.tail z'
+    let valIntermediate = x <> "->" <> T.intercalate "->" ys
+    let val = valIntermediate <> "->>" <> y
+    displayPrec prec val
+
+data UnitExpr = UnitExpr Operator Subject Val
+  deriving stock (Eq, Show)
+
+instance Display UnitExpr where
+  displayPrec prec (UnitExpr opp key val) = displayParen (prec > 0) $ displayPrec prec key <> displayPrec prec opp <> displayBuilder val
+
+-- pUnitExpr would parse the smallest unit of a query expression, which has a subject, operation, and object
+-- >>> parseTest pUnitExpr "abc==xyz"
+-- >>> parseTest pUnitExpr "abc.mm==null"
+-- UnitExpr Eq "abc.mm" Null
+pUnitExpr :: Parser UnitExpr
+pUnitExpr = do
+  subjectT <- toText <$> some (alphaNumChar <|> oneOf @[] ['.', '-', '_'])
+  hspace
+  operator <- pOperator
+  hspace
+  val <- pVal
+  case T.splitOn "." subjectT of
+    (x : xs) -> pure $ UnitExpr operator (Subject x xs) val
+    [] -> error "unreachable step, empty subject in query unit expr parsing."
+
+data Val = Num Text | Str Text | Boolean Bool | Null
+  deriving stock (Eq, Show)
+
+instance Display Val where
+  displayPrec prec (Num a) = displayBuilder a
+  displayPrec prec (Str a) = displayBuilder $ "'" <> a <> "'"
+  displayPrec prec (Boolean True) = "t"
+  displayPrec prec (Boolean False) = "f"
+  displayPrec prec Null = "null"
+
+pBool :: Parser Bool
+pBool = (True <$ string "true") <|> True <$ string "false"
+
+pString :: Parser String
+pString = do
+  -- TODO: support single quotes as well. Maybe?
+  _ <- char '"'
+  val <- some (anySingleBut '"')
+  _ <- char '"'
+  pure val
+
+pVal :: Parser Val
+pVal =
+  choice @[]
+    [ Null <$ string "null",
+      Boolean <$> pBool,
+      Num . toText <$> some (digitChar <|> char '.'),
+      Str . toText <$> pString
+    ]
+
+-- TODO: actually parse this section to remove possibility of malicious input
+parseQueryStringToWhereClause :: Text -> Either Text Text
+parseQueryStringToWhereClause q = if q == "" then Right "" else bimap (toText . errorBundlePretty) display (parse pUnitExpr "" q)
