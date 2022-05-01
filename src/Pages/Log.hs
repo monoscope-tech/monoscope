@@ -32,7 +32,6 @@ import Servant.Htmx (HXPush)
 
 apiLog :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Headers '[HXPush] (Html ()))
 apiLog sess pid queryM cols' hxRequestM hxBoostedM = do
-  traceShowM queryM
   let cols = T.splitOn "," (fromMaybe "" cols')
   let query = fromMaybe "" queryM
   pool <- asks pool
