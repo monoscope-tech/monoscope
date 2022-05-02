@@ -21,8 +21,6 @@ import NeatInterpolation (text)
 import Optics.Core ((^.))
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Relude
-import Servant (Headers, addHeader)
-import Servant.Htmx (HXPush)
 
 -- $setup
 -- >>> import Relude
@@ -30,7 +28,7 @@ import Servant.Htmx (HXPush)
 -- >>> import Data.Aeson.QQ (aesonQQ)
 -- >>> import Data.Aeson
 
-apiLog :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Headers '[HXPush] (Html ()))
+apiLog :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
 apiLog sess pid queryM cols' hxRequestM hxBoostedM = do
   let cols = T.splitOn "," (fromMaybe "" cols')
   let query = fromMaybe "" queryM
@@ -41,9 +39,8 @@ apiLog sess pid queryM cols' hxRequestM hxBoostedM = do
       requests <- RequestDumps.selectRequestDumpByProject pid query
       pure (project, requests)
 
-  let currentUrlPath = RequestDumps.requestDumpLogUrlPath pid queryM cols'
   case (hxRequestM, hxBoostedM) of
-    (Just "true", Nothing) -> pure $ addHeader currentUrlPath $ logItemRows pid requests cols
+    (Just "true", Nothing) -> pure $ logItemRows pid requests cols
     _ -> do
       let bwconf =
             (def :: BWConfig)
@@ -51,7 +48,7 @@ apiLog sess pid queryM cols' hxRequestM hxBoostedM = do
                 currProject = project,
                 pageTitle = "API Log Explorer"
               }
-      pure $ addHeader currentUrlPath $ bodyWrapper bwconf $ apiLogsPage pid requests cols
+      pure $ bodyWrapper bwconf $ apiLogsPage pid requests cols
 
 apiLogItem :: Sessions.PersistentSession -> Projects.ProjectId -> UUID.UUID -> DashboardM (Html ())
 apiLogItem sess pid rdId = do
@@ -67,6 +64,7 @@ apiLogsPage pid requests cols =
     form_
       [ class_ "card-round",
         hxGet_ $ "/p/" <> Projects.projectIdText pid <> "/log_explorer",
+        hxPushUrl_ "true",
         hxVals_ "js:{query:getQueryFromEditor(), cols:params().cols}",
         hxTarget_ "#log-item-table-body"
       ]
@@ -192,6 +190,7 @@ jsonTreeAuxillaryCode pid = do
             tabindex_ "-1",
             id_ "menu-item-0",
             hxGet_ $ "/p/" <> Projects.projectIdText pid <> "/log_explorer",
+            hxPushUrl_ "true",
             hxVals_ "js:{query:params().query,cols:toggleColumnToSummary(event)}",
             hxTarget_ "#log-item-table-body",
             [__|init 
