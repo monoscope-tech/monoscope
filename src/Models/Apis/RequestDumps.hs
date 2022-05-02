@@ -316,8 +316,8 @@ data Val = Num Text | Str Text | Boolean Bool | Null
 instance Display Val where
   displayPrec prec (Num a) = displayBuilder a
   displayPrec prec (Str a) = displayBuilder $ "'" <> a <> "'"
-  displayPrec prec (Boolean True) = "t"
-  displayPrec prec (Boolean False) = "f"
+  displayPrec prec (Boolean True) = "'true'"
+  displayPrec prec (Boolean False) = "'true'"
   displayPrec prec Null = "null"
 
 pBool :: Parser Bool

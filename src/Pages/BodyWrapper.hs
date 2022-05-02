@@ -70,6 +70,7 @@ bodyWrapper BWConfig {sessM, currProject, pageTitle, menuItem} child =
           script_ [src_ "/assets/js/thirdparty/popper2_11_4.min.js", defer_ "true"] ("" :: Text)
           script_ [src_ "/assets/js/thirdparty/tippy6_3_7.umd.min.js", defer_ "true"] ("" :: Text)
           script_ [src_ "/assets/js/thirdparty/instantpage5_1_0.js", type_ "module", defer_ "true"] ("" :: Text)
+          script_ [src_ "/assets/js/monaco/vs/loader.js", defer_ "true"] ("" :: Text)
           script_
             [text|
               document.addEventListener('DOMContentLoaded', function(){ 
