@@ -212,7 +212,7 @@ normalizeUrlPath JavaSpringBoot urlPath = urlPath
 -- >>> valueToFields [aesonQQ|{"menu":[{"id":"text"},{"id":123}]}|]
 -- [(".menu.[].id",[String "text",Number 123.0])]
 valueToFields :: AE.Value -> [(Text, [AE.Value])]
-valueToFields value = dedupFields $ snd $ valueToFields' value ("", [])
+valueToFields value = dedupFields $ removeBlacklistedFields $ snd $ valueToFields' value ("", [])
   where
     valueToFields' :: AE.Value -> (Text, [(Text, AE.Value)]) -> (Text, [(Text, AE.Value)])
     valueToFields' (AE.Object v) akk = HM.toList v & foldl' (\(akkT, akkL) (key, val) -> (akkT, snd $ valueToFields' val (akkT <> "." <> key, akkL))) akk
@@ -230,6 +230,20 @@ valueToFields value = dedupFields $ snd $ valueToFields' value ("", [])
       sortWith fst fields
         & groupBy (\a b -> fst a == fst b)
         & map (foldl' (\(_, xs) (a, b) -> (a, b : xs)) ("", []))
+
+    -- >>> removeBlacklistedFields [(".menu.password",String "xyz"),(".authorization",String "abc")]
+    -- [(".menu.password",String "[REDACTED]"),(".authorization",String "[REDACTED]")]
+    -- >>> removeBlacklistedFields [(".menu.password",Null),(".regular",String "abc")]
+    -- [(".menu.password",String "[REDACTED]"),(".regular",String "abc")]
+    removeBlacklistedFields :: [(Text, AE.Value)] -> [(Text, AE.Value)]
+    removeBlacklistedFields = map \(key, val) -> do
+      if or @[]
+        [ T.isSuffixOf "password" (T.toLower key),
+          T.isSuffixOf "authorization" (T.toLower key),
+          T.isSuffixOf "cookie" (T.toLower key)
+        ]
+        then (key, AE.String "[REDACTED]")
+        else (key, val)
 
 valueToFormat :: AE.Value -> Text
 valueToFormat (AET.String val) = valueToFormatStr val
