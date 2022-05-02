@@ -243,7 +243,7 @@ jsonTreeAuxillaryCode pid = do
       end
     |]
 
-  script_ [src_ "/assets/js/monaco/vs/loader.js"] ("" :: Text)
+  script_ [src_ "/assets/js/monaco/vs/loader.js", defer_ "true"] ("" :: Text)
   script_
     [text|
     var params = () => new Proxy(new URLSearchParams(window.location.search), {

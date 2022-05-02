@@ -125,9 +125,9 @@ selectRequestDumpByProject pid extraQuery = do
   where
     extraQueryParsed = either error (\v -> if v == "" then "" else " AND " <> v) $ parseQueryStringToWhereClause extraQuery
     q =
-      [text| SELECT  id,created_at,host,url_path,method,raw_url,referer,
-                      path_params,status_code,query_params,
-                      request_body,response_body,request_headers,response_headers
+      [text| SELECT id,created_at,host,url_path,method,raw_url,referer,
+                    path_params,status_code,query_params,
+                    request_body,response_body,request_headers,response_headers
              FROM apis.request_dumps where project_id=? |]
         <> extraQueryParsed
 
@@ -136,8 +136,8 @@ selectRequestDumpByProjectAndId pid rdId = queryOne Select q (pid, rdId)
   where
     q =
       [sql|SELECT   id,created_at,host,url_path,method,raw_url,referer,
-                      path_params,status_code,query_params,
-                      request_body,response_body,request_headers,response_headers
+                    path_params,status_code,query_params,
+                    request_body,response_body,request_headers,response_headers
              FROM apis.request_dumps where project_id=? and id=?|]
 
 insertRequestDump :: RequestDump -> DBT IO ()
@@ -250,18 +250,54 @@ instance Display Subject where
     let val = valIntermediate <> "->>" <> y
     displayPrec prec val
 
-data UnitExpr = UnitExpr Operator Subject Val
+data UnitExpr
+  = UnitExpr Operator Subject Val
+  | OrUnitExpr UnitExpr UnitExpr
+  | AndUnitExpr UnitExpr UnitExpr
   deriving stock (Eq, Show)
 
 instance Display UnitExpr where
   displayPrec prec (UnitExpr opp key val) = displayParen (prec > 0) $ displayPrec prec key <> displayPrec prec opp <> displayBuilder val
+  displayPrec prec (AndUnitExpr u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " AND " <> displayBuilder u2
+  displayPrec prec (OrUnitExpr u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " OR " <> displayBuilder u2
+
+pOr :: Parser UnitExpr
+pOr = do
+  -- _ <- char '('
+  u1 <- pUnitExprSM
+  space
+  void $ string "OR"
+  space
+  u2 <- pUnitExprSM
+  space
+  -- _ <- char ')'
+  pure $ OrUnitExpr u1 u2
+
+pAnd :: Parser UnitExpr
+pAnd = do
+  -- _ <- char '('
+  u1 <- pUnitExprSM
+  space
+  void $ string "AND"
+  space
+  u2 <- pUnitExprSM
+  space
+  -- _ <- char ')'
+  pure $ AndUnitExpr u1 u2
+
+pConjunctions :: Parser UnitExpr
+pConjunctions = try pAnd <|> pOr
+
+-- >>> parseTest pUnitExprGroup "(abc==123 OR xyz==436)"
+-- pUnitExprGroup :: Parser UnitExprGroup
+-- pUnitExprGroup = try pOr <|> pAnd
 
 -- pUnitExpr would parse the smallest unit of a query expression, which has a subject, operation, and object
 -- >>> parseTest pUnitExpr "abc==xyz"
 -- >>> parseTest pUnitExpr "abc.mm==null"
 -- UnitExpr Eq "abc.mm" Null
-pUnitExpr :: Parser UnitExpr
-pUnitExpr = do
+pUnitExprSM :: Parser UnitExpr
+pUnitExprSM = do
   subjectT <- toText <$> some (alphaNumChar <|> oneOf @[] ['.', '-', '_'])
   hspace
   operator <- pOperator
@@ -270,6 +306,9 @@ pUnitExpr = do
   case T.splitOn "." subjectT of
     (x : xs) -> pure $ UnitExpr operator (Subject x xs) val
     [] -> error "unreachable step, empty subject in query unit expr parsing."
+
+pUnitExpr :: Parser UnitExpr
+pUnitExpr = try pAnd <|> try pOr <|> pUnitExprSM
 
 data Val = Num Text | Str Text | Boolean Bool | Null
   deriving stock (Eq, Show)
@@ -287,9 +326,9 @@ pBool = (True <$ string "true") <|> True <$ string "false"
 pString :: Parser String
 pString = do
   -- TODO: support single quotes as well. Maybe?
-  _ <- char '"'
+  void $ char '"'
   val <- some (anySingleBut '"')
-  _ <- char '"'
+  void $ char '"'
   pure val
 
 pVal :: Parser Val

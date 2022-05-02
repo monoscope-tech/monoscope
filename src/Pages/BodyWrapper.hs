@@ -199,7 +199,8 @@ sideNav sess project pageTitle menuItem = do
             img_ [src_ "/assets/svgs/up_chevron.svg"]
             img_ [src_ "/assets/svgs/down_chevron.svg"]
       projectsDropDown project (Sessions.getProjects $ Sessions.projects sess)
-    nav_ [class_ "mt-4", hxBoost_ "true"] $ do
+    nav_ [class_ "mt-4"] $ do
+      -- FIXME: reeanable hx-boost hxBoost_ "true"
       menu (project ^. #id) & mapM_ \(mTitle, mUrl, mIcon) -> do
         a_
           [ href_ mUrl,
