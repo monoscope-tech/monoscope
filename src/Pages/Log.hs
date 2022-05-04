@@ -8,7 +8,7 @@ import Data.Text qualified as T
 import Data.Time (defaultTimeLocale)
 import Data.Time.Format (formatTime)
 import Data.UUID qualified as UUID
-import Data.Vector (Vector, iforM_)
+import Data.Vector (Vector, iforM_, (!?))
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
@@ -39,8 +39,14 @@ apiLog sess pid queryM cols' hxRequestM hxBoostedM = do
       requests <- RequestDumps.selectRequestDumpByProject pid query
       pure (project, requests)
 
+  reqChartTxt <- liftIO $ withPool pool $ RequestDumps.selectRequestDumpsByProjectForChart pid query
+
+  let resultCount = maybe 0 (^. #fullCount) (requests !? 0)
   case (hxRequestM, hxBoostedM) of
-    (Just "true", Nothing) -> pure $ logItemRows pid requests cols
+    (Just "true", Nothing) -> pure $ do
+      span_ [id_ "result-count", hxSwapOob_ "outerHTML"] $ show resultCount
+      reqChart reqChartTxt True
+      logItemRows pid requests cols
     _ -> do
       let bwconf =
             (def :: BWConfig)
@@ -48,7 +54,7 @@ apiLog sess pid queryM cols' hxRequestM hxBoostedM = do
                 currProject = project,
                 pageTitle = "API Log Explorer"
               }
-      pure $ bodyWrapper bwconf $ apiLogsPage pid requests cols
+      pure $ bodyWrapper bwconf $ apiLogsPage pid resultCount requests cols reqChartTxt
 
 apiLogItem :: Sessions.PersistentSession -> Projects.ProjectId -> UUID.UUID -> DashboardM (Html ())
 apiLogItem sess pid rdId = do
@@ -58,8 +64,8 @@ apiLogItem sess pid rdId = do
     Just logItem -> pure $ apiLogItemView logItem
     Nothing -> pure $ div_ "invalid log request ID"
 
-apiLogsPage :: Projects.ProjectId -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Html ()
-apiLogsPage pid requests cols =
+apiLogsPage :: Projects.ProjectId -> Int -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Text -> Html ()
+apiLogsPage pid resultCount requests cols reqChartTxt = do
   section_ [class_ "container mx-auto  px-3 py-5 gap-4 flex flex-col h-full overflow-hidden "] $ do
     form_
       [ class_ "card-round",
@@ -76,25 +82,63 @@ apiLogsPage pid requests cols =
           div_ [id_ "queryEditor", class_ "h-24"] ""
 
     div_ [class_ "card-round grow divide-y flex flex-col mb-8 text-sm h-full"] $ do
+      reqChart reqChartTxt False
       div_ [class_ "pl-3 py-2 space-x-5"] $ do
         strong_ "Query results"
-        span_ "330 log entries"
+        span_ [class_ "space-x-1"] $ do
+          span_ [id_ "result-count"] $ show resultCount
+          span_ " log entries"
 
       jsonTreeAuxillaryCode pid
-      table_ [class_ "table-fixed grow w-full min-w-full h-full divide-y flex flex-col monospace"] $ do
-        thead_ [class_ "text-xs bg-gray-100 gray-400"] $ do
-          tr_ [class_ "flex flex-row text-left space-x-4"] $ do
-            th_ [class_ "font-normal inline-block py-1.5 p-1 px-2 w-8"] ""
-            th_ [class_ "font-normal inline-block py-1.5 p-1 px-2 w-32"] "TIMESTAMP"
-            th_ [class_ "font-normal inline-block py-1.5 p-1 px-2 grow"] "SUMMARY"
-        tbody_ [class_ " grow overflow-y-scroll h-full whitespace-nowrap text-sm divide-y overflow-x-hidden", id_ "log-item-table-body"] $ logItemRows pid requests cols
+      div_ [class_ "table-fixed grow w-full min-w-full h-full divide-y flex flex-col monospace"] $ do
+        div_ [class_ "text-xs bg-gray-100 gray-400"] $ do
+          div_ [class_ "flex flex-row text-left space-x-4"] $ do
+            span_ [class_ "font-normal inline-block py-1.5 p-1 px-2 w-8"] ""
+            span_ [class_ "font-normal inline-block py-1.5 p-1 px-2 w-32"] "TIMESTAMP"
+            span_ [class_ "font-normal inline-block py-1.5 p-1 px-2 grow"] "SUMMARY"
+        div_ [class_ " grow overflow-y-scroll h-full whitespace-nowrap text-sm divide-y overflow-x-hidden", id_ "log-item-table-body"] $ logItemRows pid requests cols
+
+reqChart :: Text -> Bool -> Html ()
+reqChart reqChartTxt hxOob = do
+  div_ [id_ "reqsChartParent", hxSwapOob_ $ show hxOob] $ do
+    div_ [id_ "reqsCharts", class_ "", style_ "height:250px"] ""
+    script_
+      [text|
+      new FusionCharts({
+          type: "timeseries",
+          renderAt: "reqsCharts",
+          width: "100%",
+          height: 250,
+          dataSource: {
+            data: new FusionCharts.DataStore().createDataTable($reqChartTxt, [{
+              "name": "Time",
+              "type": "date",
+              "format": "%Y-%m-%dT%H:%M:%S%Z" // https://www.fusioncharts.com/dev/fusiontime/fusiontime-attributes
+              }, {"name": "Count","type": "number"}]),
+            chart: {},
+            navigator: {
+                "enabled": 0
+            },
+            series: "StatusCode",
+            yaxis: [
+              {
+                plot:[{
+                  value: "Count",
+                  type: "column"
+                }],
+                title: ""
+              }
+            ],
+            legend: {enabled:"0"}
+          }
+        }).render();|]
 
 logItemRows :: Projects.ProjectId -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Html ()
 logItemRows pid requests cols =
   requests & traverse_ \req -> do
     let logItemPath = RequestDumps.requestDumpLogItemUrlPath pid (req ^. #id)
-    tr_
-      [ class_ "border-l-4 border-l-transparent divide-x space-x-4 hover:bg-blue-50 cursor-pointer",
+    div_
+      [ class_ "flex flex-row border-l-4 border-l-transparent divide-x space-x-4 hover:bg-blue-50 cursor-pointer",
         term "data-log-item-path" logItemPath,
         term
           "_"
@@ -103,10 +147,10 @@ logItemRows pid requests cols =
         |]
       ]
       $ do
-        td_ [class_ "p-1 px-2 w-8 flex justify-center align-middle"] $ do
+        div_ [class_ "flex-none inline-block p-1 px-2 w-8 flex justify-center align-middle"] $ do
           img_ [src_ "/assets/svgs/cheveron-right.svg", class_ "w-1.5 log-chevron"]
-        td_ [class_ "p-1 px-2 w-32 overflow-hidden"] $ toHtml @String $ formatTime defaultTimeLocale "%F %R" (req ^. #createdAt)
-        td_ [class_ "p-1 px-2"] $ do
+        div_ [class_ "flex-none inline-block p-1 px-2 w-32 overflow-hidden"] $ toHtml @String $ formatTime defaultTimeLocale "%F %R" (req ^. #createdAt)
+        div_ [class_ "inline-block p-1 px-2 grow"] $ do
           let reqJSON = AE.toJSON req
           let colValues = concatMap (\col -> findValueByKeyInJSON (T.splitOn "." col) reqJSON) cols
           -- FIXME: probably inefficient implementation and should be optimized
@@ -121,7 +165,7 @@ logItemRows pid requests cols =
                     ]
                     $ toHtml colValue
           span_ [class_ "mx-1 inline-block bg-green-100 green-800 px-3 rounded-xl monospace"] $ toHtml $ req ^. #method
-          span_ [class_ "mx-1 inline-block bg-stone-200 stone-900 px-3 rounded-xl monospace"] $ toHtml $ req ^. #urlPath
+          span_ [class_ "mx-1 inline-block bg-slate-100 slate-900 px-3 rounded-xl monospace"] $ toHtml $ req ^. #urlPath
           let rawUrl = req ^. #rawUrl
           let reqBody = decodeUtf8 $ AE.encode $ req ^. #requestBody
           let respBody = decodeUtf8 $ AE.encode $ req ^. #responseBody
@@ -131,8 +175,8 @@ logItemRows pid requests cols =
 
 apiLogItemView :: RequestDumps.RequestDumpLogItem -> Html ()
 apiLogItemView req =
-  tr_ [class_ "log-item-info border-l-blue-200 border-l-4"] $
-    td_ [class_ "pl-4 py-1 ", colspan_ "3"] $ do
+  div_ [class_ "log-item-info border-l-blue-200 border-l-4"] $
+    div_ [class_ "pl-4 py-1 ", colspan_ "3"] $ do
       jsonValueToHtmlTree $ AE.toJSON req
 
 -- | jsonValueToHtmlTree takes an aeson json object and renders it as a collapsible html tree, with hyperscript for interactivity.

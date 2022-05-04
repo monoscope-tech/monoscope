@@ -106,6 +106,7 @@ library:
     - neat-interpolation
     - optics-core
     - optics-th
+    - optics-extra
     - pg-entity
     - pg-transact
     - postgresql-migration
@@ -137,6 +138,7 @@ library:
     - servant-htmx
     - megaparsec
     - text-display
+    - parser-combinators
 
 
 executables:

@@ -129,7 +129,7 @@ dStats projReqStats reqsByEndpointJ =
             select_ [] $ do
               option_ "Reqs Grouped by Endpoint"
               option_ "Avg Reqs per minute"
-          div_ [id_ "reqsByEndpoints", class_ ""] ""
+          div_ [id_ "reqsByEndpoints", class_ "", style_ "height:350px"] ""
           script_
             [text|
       new FusionCharts({
@@ -156,7 +156,8 @@ dStats projReqStats reqsByEndpointJ =
                 }],
                 title: ""
               }
-            ]
+            ],
+            legend: {enabled:"0"}
           }
         }).render();|]
 

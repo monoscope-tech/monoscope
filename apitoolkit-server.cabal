@@ -54,6 +54,7 @@ library
       Pages.Projects.CreateProject
       Pages.Projects.ListProjects
       Pages.Projects.ProjectSettings
+      Pkg.Parser
       ProcessMessage
       RequestMessages
       RequestMessagesSpec
@@ -133,7 +134,9 @@ library
     , megaparsec
     , neat-interpolation
     , optics-core
+    , optics-extra
     , optics-th
+    , parser-combinators
     , pg-entity
     , pg-transact
     , postgresql-migration

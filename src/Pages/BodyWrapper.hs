@@ -74,7 +74,7 @@ bodyWrapper BWConfig {sessM, currProject, pageTitle, menuItem} child =
           script_
             [text|
               document.addEventListener('DOMContentLoaded', function(){ 
-                htmx.config.useTemplateFragments = true
+                // htmx.config.useTemplateFragments = true
                 // htmx.logAll()
                 tippy('[data-tippy-content]');
                 var notyf = new Notyf({
