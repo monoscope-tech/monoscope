@@ -193,8 +193,8 @@ sideNav sess project pageTitle menuItem = do
         ]
         $ do
           div_ [class_ "space-2 grow "] $ do
-            strong_ [class_ "block text-slate-90b"] $ toHtml $ project ^. #title
-            small_ [class_ "block "] "Development"
+            strong_ [class_ "block text-slate-900"] $ toHtml $ project ^. #title
+            small_ [class_ "block text-slate-900"] "Development"
           div_ $ do
             img_ [src_ "/assets/svgs/up_chevron.svg"]
             img_ [src_ "/assets/svgs/down_chevron.svg"]

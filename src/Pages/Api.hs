@@ -67,7 +67,7 @@ apiGetH sess pid = do
 
 apiKeysPage :: Projects.ProjectId -> Vector ProjectApiKeys.ProjectApiKey -> Html ()
 apiKeysPage pid apiKeys = do
-  section_ [class_ "container mx-auto  px-4 py-10"] $ do
+  section_ [class_ "container mx-auto  px-4 py-10 overflow-hidden overflow-y-scroll"] $ do
     div_ [class_ "flex justify-between mb-6"] $ do
       h2_ [class_ "text-slate-700 text-2xl font-medium"] "API Keys"
       button_ [class_ "btn-indigo", [__|on click remove .hidden from #generateApiKeyDialog |]] "Create an API Key"

@@ -113,7 +113,7 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
         div_ [class_ "text-xs bg-gray-100 gray-400"] $ do
           div_ [class_ "flex flex-row text-left space-x-4"] $ do
             span_ [class_ "font-normal inline-block py-1.5 p-1 px-2 w-8"] ""
-            span_ [class_ "font-normal inline-block py-1.5 p-1 px-2 w-32"] "TIMESTAMP"
+            span_ [class_ "font-normal inline-block py-1.5 p-1 px-2 w-36"] "TIMESTAMP"
             span_ [class_ "font-normal inline-block py-1.5 p-1 px-2 grow"] "SUMMARY"
         div_ [class_ " grow overflow-y-scroll h-full whitespace-nowrap text-sm divide-y overflow-x-hidden", id_ "log-item-table-body"] $
           logItemRows pid requests cols nextLogsURL
@@ -169,7 +169,7 @@ logItemRows pid requests cols nextLogsURL = do
       $ do
         div_ [class_ "flex-none inline-block p-1 px-2 w-8 flex justify-center align-middle"] $ do
           img_ [src_ "/assets/svgs/cheveron-right.svg", class_ "w-1.5 log-chevron"]
-        div_ [class_ "flex-none inline-block p-1 px-2 w-34 overflow-hidden"] $ toHtml @String $ formatTime defaultTimeLocale "%F %T" (req ^. #createdAt)
+        div_ [class_ "flex-none inline-block p-1 px-2 w-36 overflow-hidden"] $ toHtml @String $ formatTime defaultTimeLocale "%F %T" (req ^. #createdAt)
         div_ [class_ "inline-block p-1 px-2 grow"] $ do
           let reqJSON = AE.toJSON req
           let colValues = concatMap (\col -> findValueByKeyInJSON (T.splitOn "." col) reqJSON) cols
