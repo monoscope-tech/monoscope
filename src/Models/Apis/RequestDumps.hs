@@ -112,20 +112,27 @@ makeFieldLabelsNoPrefix ''RequestDumpLogItem
 requestDumpLogItemUrlPath :: Projects.ProjectId -> UUID.UUID -> Text
 requestDumpLogItemUrlPath pid rdId = "/p/" <> Projects.projectIdText pid <> "/log_explorer/" <> UUID.toText rdId
 
-requestDumpLogUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Text
-requestDumpLogUrlPath pid q cols = "/p/" <> Projects.projectIdText pid <> "/log_explorer/?query=" <> fromMaybe "" q <> "&cols=" <> fromMaybe "" cols
-
-selectRequestDumpByProject :: Projects.ProjectId -> Text -> DBT IO (Vector RequestDumpLogItem)
-selectRequestDumpByProject pid extraQuery = query Select (Query $ encodeUtf8 q) (Only pid)
+requestDumpLogUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Text
+requestDumpLogUrlPath pid q cols fromM = [text|/p/$pidT/log_explorer?query=$queryT&cols=$colsT&from=$fromT|]
   where
+    pidT = Projects.projectIdText pid
+    queryT = fromMaybe "" q
+    colsT = fromMaybe "" cols
+    fromT = fromMaybe "" fromM
+
+selectRequestDumpByProject :: Projects.ProjectId -> Text -> Maybe Text -> DBT IO (Vector RequestDumpLogItem)
+selectRequestDumpByProject pid extraQuery fromM = query Select (Query $ encodeUtf8 q) (pid, fromT)
+  where
+    fromT = fromMaybe "infinity" fromM
     extraQueryParsed = either error (\v -> if v == "" then "" else " AND " <> v) $ parseQueryStringToWhereClause extraQuery
     q =
       [text| SELECT id,created_at,host,url_path,method,raw_url,referer,
                     path_params,status_code,query_params,
                     request_body,response_body,request_headers,response_headers,
                     count(*) OVER() AS full_count
-             FROM apis.request_dumps where project_id=? |]
+             FROM apis.request_dumps where project_id=? and created_at<? |]
         <> extraQueryParsed
+        <> " order by created_at desc limit 200;"
 
 selectRequestDumpsByProjectForChart :: Projects.ProjectId -> Text -> DBT IO Text
 selectRequestDumpsByProjectForChart pid extraQuery = do

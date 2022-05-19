@@ -3,7 +3,6 @@ module Pages.BodyWrapper (bodyWrapper, BWConfig (..)) where
 import Data.Default (Default)
 import Data.Vector qualified as Vector
 import Lucid
-import Lucid.HTMX
 import Lucid.Hyperscript
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
@@ -133,7 +132,7 @@ projectsDropDown currProject projects =
           img_ [class_ "p-4", src_ "/assets/svgs/projects.svg"]
           div_ $ do
             strong_ [class_ "block"] $ toHtml $ currProject ^. #title
-            small_ [class_ "block text-gray-600"] "Development"
+            small_ [class_ "block text-blue-800"] "Development"
         nav_ [] $ do
           a_ [class_ "p-3 flex gap-3 rounded-2xl bg-gray-100"] $ do
             img_ [src_ "/assets/svgs/settings.svg"]
@@ -173,7 +172,7 @@ sideNav sess project pageTitle menuItem = do
         ]
     div_ [class_ "p-4"] $ do
       a_
-        [ class_ "flex flex-row bg-gray-100 block p-6 rounded-md cursor-pointer",
+        [ class_ "flex flex-row bg-blue-50 hover:bg-blue-100 text-blue-900 block p-6 rounded-md cursor-pointer",
           [__| 
                 on click queue first
                     if I do not match .active
@@ -194,8 +193,8 @@ sideNav sess project pageTitle menuItem = do
         ]
         $ do
           div_ [class_ "space-2 grow "] $ do
-            strong_ [class_ "block"] $ toHtml $ project ^. #title
-            small_ [class_ "block"] "Development"
+            strong_ [class_ "block text-slate-90b"] $ toHtml $ project ^. #title
+            small_ [class_ "block "] "Development"
           div_ $ do
             img_ [src_ "/assets/svgs/up_chevron.svg"]
             img_ [src_ "/assets/svgs/down_chevron.svg"]
@@ -206,9 +205,9 @@ sideNav sess project pageTitle menuItem = do
         a_
           [ href_ mUrl,
             class_ $
-              "block flex gap-3 px-5 py-3 flex justify-center items-center"
+              "block flex gap-3 px-5 py-3 flex justify-center items-center hover:bg-blue-50 "
                 <> ( if maybe (pageTitle == mTitle) (== mTitle) menuItem
-                       then " bg-gray-100 border-l-4 border-blue-700"
+                       then "bg-blue-50 border-l-4 border-blue-700"
                        else ""
                    )
           ]

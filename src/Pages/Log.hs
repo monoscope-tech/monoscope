@@ -28,25 +28,33 @@ import Relude
 -- >>> import Data.Aeson.QQ (aesonQQ)
 -- >>> import Data.Aeson
 
-apiLog :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
-apiLog sess pid queryM cols' hxRequestM hxBoostedM = do
+apiLog :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
+apiLog sess pid queryM cols' fromM hxRequestM hxBoostedM = do
   let cols = T.splitOn "," (fromMaybe "" cols')
   let query = fromMaybe "" queryM
+  let fromM' = case fromM of
+        Nothing -> Nothing
+        Just "" -> Nothing
+        Just a -> Just a
+
   pool <- asks pool
   (project, requests) <- liftIO $
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      requests <- RequestDumps.selectRequestDumpByProject pid query
+      requests <- RequestDumps.selectRequestDumpByProject pid query fromM'
       pure (project, requests)
 
   reqChartTxt <- liftIO $ withPool pool $ RequestDumps.selectRequestDumpsByProjectForChart pid query
+  let reqLastCreatedAtM = (^. #createdAt) <$> viaNonEmpty last (Vector.toList requests) -- FIXME: unoptimal implementation, converting from vector to list for last
+  let fromTempM = toText . formatTime defaultTimeLocale "%F %T" <$> reqLastCreatedAtM
+  let nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' fromTempM
 
   let resultCount = maybe 0 (^. #fullCount) (requests !? 0)
   case (hxRequestM, hxBoostedM) of
     (Just "true", Nothing) -> pure $ do
       span_ [id_ "result-count", hxSwapOob_ "outerHTML"] $ show resultCount
       reqChart reqChartTxt True
-      logItemRows pid requests cols
+      logItemRows pid requests cols nextLogsURL
     _ -> do
       let bwconf =
             (def :: BWConfig)
@@ -54,7 +62,8 @@ apiLog sess pid queryM cols' hxRequestM hxBoostedM = do
                 currProject = project,
                 pageTitle = "API Log Explorer"
               }
-      pure $ bodyWrapper bwconf $ apiLogsPage pid resultCount requests cols reqChartTxt
+      let resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing
+      pure $ bodyWrapper bwconf $ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL
 
 apiLogItem :: Sessions.PersistentSession -> Projects.ProjectId -> UUID.UUID -> DashboardM (Html ())
 apiLogItem sess pid rdId = do
@@ -64,11 +73,11 @@ apiLogItem sess pid rdId = do
     Just logItem -> pure $ apiLogItemView logItem
     Nothing -> pure $ div_ "invalid log request ID"
 
-apiLogsPage :: Projects.ProjectId -> Int -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Text -> Html ()
-apiLogsPage pid resultCount requests cols reqChartTxt = do
-  section_ [class_ "container mx-auto  px-3 py-5 gap-4 flex flex-col h-full overflow-hidden "] $ do
+apiLogsPage :: Projects.ProjectId -> Int -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Text -> Text -> Text -> Html ()
+apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL = do
+  section_ [class_ "container mx-auto  px-2 py-2 pb-5 gap-2 flex flex-col h-[98%] overflow-hidden "] $ do
     form_
-      [ class_ "card-round",
+      [ class_ "card-round text-sm",
         hxGet_ $ "/p/" <> Projects.projectIdText pid <> "/log_explorer",
         hxPushUrl_ "true",
         hxVals_ "js:{query:getQueryFromEditor(), cols:params().cols}",
@@ -77,26 +86,37 @@ apiLogsPage pid resultCount requests cols reqChartTxt = do
       $ do
         nav_ [class_ "flex flex-row p-2 content-end justify-between items-baseline border-slate-100"] $ do
           a_ [class_ "inline-block"] "Query"
-          button_ [type_ "submit", class_ "inline-block btn-sm btn-indigo"] "Run query"
+          button_ [type_ "submit", class_ "cursor-pointer inline-block space-x-1 bg-blue-100 hover:bg-blue-200 blue-800 py-1 px-2 rounded-lg"] do
+            img_ [src_ "/assets/svgs/sparkles.svg", class_ "w-3 h-3 inline-block"]
+            span_ "Run query"
         div_ $ do
-          div_ [id_ "queryEditor", class_ "h-24"] ""
+          div_ [id_ "queryEditor", class_ "h-14"] ""
 
-    div_ [class_ "card-round grow divide-y flex flex-col mb-8 text-sm h-full"] $ do
+    div_ [class_ "card-round grow divide-y flex flex-col pb-8 text-sm h-full overflow-y-hidden"] $ do
+      div_ [class_ "pl-3 py-1 space-x-5 flex flex-row justify-between"] $ do
+        a_ [class_ "cursor-pointer inline-block pr-3 space-x-2 bg-blue-50 hover:bg-blue-100 blue-800 p-1 rounded-md", [__|on click toggle .hidden on #reqsChartParent|]] $ do
+          img_ [src_ "/assets/svgs/cube-transparent.svg", class_ "w-4 inline-block"]
+          span_ [] "toggle chart"
       reqChart reqChartTxt False
-      div_ [class_ "pl-3 py-2 space-x-5"] $ do
-        strong_ "Query results"
-        span_ [class_ "space-x-1"] $ do
-          span_ [id_ "result-count"] $ show resultCount
-          span_ " log entries"
+      div_ [class_ "pl-3 py-2 space-x-5 flex flex-row justify-between"] $ do
+        div_ [class_ "inline-block space-x-3"] $ do
+          strong_ "Query results"
+          span_ [class_ "space-x-1"] $ do
+            span_ [id_ "result-count"] $ show resultCount
+            span_ " log entries"
+        a_ [class_ "cursor-pointer inline-block pr-3 space-x-2", hxGet_ resetLogsURL, hxTarget_ "#log-item-table-body", hxSwap_ "innerHTML scroll:#log-item-table-body:top"] $ do
+          img_ [src_ "/assets/svgs/refresh.svg", class_ "w-4 inline-block"]
+          span_ [] "refresh"
 
       jsonTreeAuxillaryCode pid
-      div_ [class_ "table-fixed grow w-full min-w-full h-full divide-y flex flex-col monospace"] $ do
+      div_ [class_ "table-fixed grow w-full min-w-full h-full divide-y flex flex-col monospace overflow-hidden"] $ do
         div_ [class_ "text-xs bg-gray-100 gray-400"] $ do
           div_ [class_ "flex flex-row text-left space-x-4"] $ do
             span_ [class_ "font-normal inline-block py-1.5 p-1 px-2 w-8"] ""
             span_ [class_ "font-normal inline-block py-1.5 p-1 px-2 w-32"] "TIMESTAMP"
             span_ [class_ "font-normal inline-block py-1.5 p-1 px-2 grow"] "SUMMARY"
-        div_ [class_ " grow overflow-y-scroll h-full whitespace-nowrap text-sm divide-y overflow-x-hidden", id_ "log-item-table-body"] $ logItemRows pid requests cols
+        div_ [class_ " grow overflow-y-scroll h-full whitespace-nowrap text-sm divide-y overflow-x-hidden", id_ "log-item-table-body"] $
+          logItemRows pid requests cols nextLogsURL
 
 reqChart :: Text -> Bool -> Html ()
 reqChart reqChartTxt hxOob = do
@@ -133,8 +153,8 @@ reqChart reqChartTxt hxOob = do
           }
         }).render();|]
 
-logItemRows :: Projects.ProjectId -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Html ()
-logItemRows pid requests cols =
+logItemRows :: Projects.ProjectId -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Text -> Html ()
+logItemRows pid requests cols nextLogsURL = do
   requests & traverse_ \req -> do
     let logItemPath = RequestDumps.requestDumpLogItemUrlPath pid (req ^. #id)
     div_
@@ -149,7 +169,7 @@ logItemRows pid requests cols =
       $ do
         div_ [class_ "flex-none inline-block p-1 px-2 w-8 flex justify-center align-middle"] $ do
           img_ [src_ "/assets/svgs/cheveron-right.svg", class_ "w-1.5 log-chevron"]
-        div_ [class_ "flex-none inline-block p-1 px-2 w-32 overflow-hidden"] $ toHtml @String $ formatTime defaultTimeLocale "%F %R" (req ^. #createdAt)
+        div_ [class_ "flex-none inline-block p-1 px-2 w-34 overflow-hidden"] $ toHtml @String $ formatTime defaultTimeLocale "%F %T" (req ^. #createdAt)
         div_ [class_ "inline-block p-1 px-2 grow"] $ do
           let reqJSON = AE.toJSON req
           let colValues = concatMap (\col -> findValueByKeyInJSON (T.splitOn "." col) reqJSON) cols
@@ -159,7 +179,7 @@ logItemRows pid requests cols =
               \(col, colValue) ->
                 div_ [class_ "relative inline-block log-item-field-parent", term "data-field-path" col] $ do
                   a_
-                    [ class_ "cursor-pointer mx-1 inline-block bg-blue-100 blue-800 hover:bg-blue-200 blue-900 px-3 rounded-xl monospace log-item-field-anchor log-item-field-value",
+                    [ class_ "cursor-pointer mx-1 inline-block bg-blue-100 hover:bg-blue-200 blue-900 px-3 rounded-xl monospace log-item-field-anchor log-item-field-value",
                       term "data-field-path" col,
                       [__|install LogItemMenuable|]
                     ]
@@ -172,6 +192,7 @@ logItemRows pid requests cols =
           let reqHeaders = decodeUtf8 $ AE.encode $ req ^. #requestHeaders
           let respHeaders = decodeUtf8 $ AE.encode $ req ^. #responseHeaders
           p_ [class_ "inline-block"] $ toHtml $ T.take 300 [text| raw_url=$rawUrl request_body=$reqBody response_body=$respBody request_headers=$reqHeaders response_headers=$respHeaders|]
+  a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ nextLogsURL] "LOAD MORE"
 
 apiLogItemView :: RequestDumps.RequestDumpLogItem -> Html ()
 apiLogItemView req =
@@ -236,6 +257,7 @@ jsonTreeAuxillaryCode pid = do
             hxGet_ $ "/p/" <> Projects.projectIdText pid <> "/log_explorer",
             hxPushUrl_ "true",
             hxVals_ "js:{query:params().query,cols:toggleColumnToSummary(event)}",
+            hxSwap_ "innerHTML scroll:#log-item-table-body:top",
             hxTarget_ "#log-item-table-body",
             [__|init 
                   set fp to (closest <.log-item-field-parent/>)'s @data-field-path then 

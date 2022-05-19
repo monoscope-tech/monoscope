@@ -59,7 +59,7 @@ pValues :: Parser Values
 pValues =
   choice @[]
     [ Null <$ string "null",
-      Boolean <$> ((True <$ string "true") <|> True <$ string "false"),
+      Boolean <$> ((True <$ string "true") <|> False <$ string "false"),
       Num . toText <$> some (digitChar <|> char '.'),
       Str . toText <$> (char '\"' *> manyTill L.charLiteral (char '\"'))
     ]
