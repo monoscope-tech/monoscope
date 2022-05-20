@@ -14,6 +14,7 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import Lucid.HTMX
 import Lucid.Hyperscript (__)
+import Lucid.Svg (use_)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
@@ -105,7 +106,7 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
             span_ [id_ "result-count"] $ show resultCount
             span_ " log entries"
         a_ [class_ "cursor-pointer inline-block pr-3 space-x-2", hxGet_ resetLogsURL, hxTarget_ "#log-item-table-body", hxSwap_ "innerHTML scroll:#log-item-table-body:top"] $ do
-          img_ [src_ "/assets/svgs/refresh.svg", class_ "w-4 inline-block"]
+          svg_ [class_ "w-4 h-4 icon text-slate-500 inline-block"] $ use_ [href_ "/assets/svgs/sprite/sprite.svg#refresh"]
           span_ [] "refresh"
 
       jsonTreeAuxillaryCode pid

@@ -4,6 +4,7 @@ import Data.Default (Default)
 import Data.Vector qualified as Vector
 import Lucid
 import Lucid.Hyperscript
+import Lucid.Svg (use_)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
@@ -14,11 +15,11 @@ import Relude
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu ppid =
   let pid = Projects.projectIdText ppid
-   in [ ("Dashboard", "/p/" <> pid <> "/", "/assets/svgs/dashboard.svg"),
-        ("Endpoints", "/p/" <> pid <> "/endpoints", "/assets/svgs/endpoint.svg"),
-        ("Anomalies", "/p/" <> pid <> "/anomalies", "/assets/svgs/anomalies.svg"),
-        ("API Log Explorer", "/p/" <> pid <> "/log_explorer", "/assets/svgs/logs.svg"),
-        ("API Keys", "/p/" <> pid <> "/apis", "/assets/svgs/api.svg")
+   in [ ("Dashboard", "/p/" <> pid <> "/", "#dashboard"),
+        ("Endpoints", "/p/" <> pid <> "/endpoints", "#endpoint"),
+        ("Anomalies", "/p/" <> pid <> "/anomalies", "#anomalies"),
+        ("API Log Explorer", "/p/" <> pid <> "/log_explorer", "#logs"),
+        ("API Keys", "/p/" <> pid <> "/apis", "#api")
       ]
 
 data BWConfig = BWConfig
@@ -205,14 +206,14 @@ sideNav sess project pageTitle menuItem = do
         a_
           [ href_ mUrl,
             class_ $
-              "block flex gap-3 px-5 py-3 flex justify-center items-center hover:bg-blue-50 "
+              "block flex gap-3 px-5 py-3 flex justify-center items-center hover:bg-blue-50 text-slate-800 "
                 <> ( if maybe (pageTitle == mTitle) (== mTitle) menuItem
                        then "bg-blue-50 border-l-4 border-blue-700"
                        else ""
                    )
           ]
           $ do
-            img_ [class_ "w-5 h-5", src_ mIcon]
+            svg_ [class_ "w-5 h-5 icon text-slate-500"] $ use_ [href_ $ "/assets/svgs/sprite/sprite.svg" <> mIcon]
             span_ [class_ "grow"] $ toHtml mTitle
 
 navbar :: Users.User -> Html ()

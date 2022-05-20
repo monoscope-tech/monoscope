@@ -495,7 +495,7 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS apis.anomalies_vm
               FROM
                   apis.request_dumps
               where
-                  created_at > NOW() - interval '14' day
+                  created_at > NOW() - interval '14' day -- TODO: update to 30days retention
                   AND project_id = project_id
                   AND CASE
                       WHEN anomaly_type = 'endpoint' THEN 
