@@ -24,6 +24,7 @@ source-repository head
 
 library
   exposed-modules:
+      BackgroundJobs
       Config
       Data.Default.Instances
       DataSeeding
@@ -40,6 +41,7 @@ library
       Models.Projects.ProjectMembers
       Models.Projects.Projects
       Models.Projects.ProjectsEmail
+      Models.Projects.RedactedFields
       Models.Users.Sessions
       Models.Users.Users
       Pages.Anomalies.AnomalyList
@@ -53,7 +55,9 @@ library
       Pages.ManualIngestion
       Pages.Projects.CreateProject
       Pages.Projects.ListProjects
-      Pages.Projects.ProjectSettings
+      Pages.Projects.ManageMembers
+      Pages.RedactedFields
+      Pkg.Mail
       Pkg.Parser
       ProcessMessage
       RequestMessages
@@ -99,9 +103,12 @@ library
       BlockArguments
       BangPatterns
       NamedFieldPuns
+      LambdaCase
   ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches
   build-depends:
-      aeson
+      HaskellNet
+    , Unique
+    , aeson
     , aeson-qq
     , async
     , base
@@ -117,6 +124,7 @@ library
     , dotenv
     , envy
     , errors
+    , extra
     , fakedata
     , fmt
     , gogol
@@ -133,9 +141,11 @@ library
     , lucid-svg
     , megaparsec
     , neat-interpolation
+    , odd-jobs
     , optics-core
     , optics-extra
     , optics-th
+    , parallel-io
     , parser-combinators
     , pg-entity
     , pg-transact
@@ -201,6 +211,7 @@ executable apitoolkit-server-exe
       BlockArguments
       BangPatterns
       NamedFieldPuns
+      LambdaCase
   ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches -threaded -rtsopts -with-rtsopts=-N -hiedir=.hie -O2
   build-depends:
       apitoolkit-server
@@ -244,6 +255,7 @@ test-suite apitoolkit-server-test
       BlockArguments
       BangPatterns
       NamedFieldPuns
+      LambdaCase
   ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
   build-depends:
       apitoolkit-server

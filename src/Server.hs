@@ -25,6 +25,8 @@ import Pages.Log qualified as Log
 import Pages.ManualIngestion qualified as ManualIngestion
 import Pages.Projects.CreateProject qualified as CreateProject
 import Pages.Projects.ListProjects qualified as ListProjects
+import Pages.Projects.ManageMembers qualified as ManageMembers
+import Pages.RedactedFields qualified as RedactedFields
 import Relude
 import Servant
 import Servant.HTML.Lucid
@@ -45,6 +47,8 @@ type ProtectedAPI =
     :<|> "p" :> "new" :> Get '[HTML] (Html ()) -- p represents project
     :<|> "p" :> "new" :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> Get '[HTML] (Html ())
+    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "manage_members" :> Get '[HTML] (Html ())
+    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "manage_members" :> ReqBody '[FormUrlEncoded] ManageMembers.ManageMembersForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "endpoints" :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "endpoints" :> Capture "endpoints_id" Endpoints.EndpointId :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "apis" :> Get '[HTML] (Html ())
@@ -59,6 +63,8 @@ type ProtectedAPI =
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "anomalies" :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "acknowlege" :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "unacknowlege" :> Get '[HTML] (Html ())
+    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "redacted_fields" :> Get '[HTML] (Html ())
+    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "redacted_fields" :> ReqBody '[FormUrlEncoded] RedactedFields.RedactFieldForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
 
 type PublicAPI =
   "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
@@ -98,6 +104,8 @@ protectedServer sess =
     :<|> CreateProject.createProjectGetH sess
     :<|> CreateProject.createProjectPostH sess
     :<|> Dashboard.dashboardGetH sess
+    :<|> ManageMembers.manageMembersGetH sess
+    :<|> ManageMembers.manageMembersPostH sess
     :<|> EndpointList.endpointListH sess
     :<|> EndpointDetails.endpointDetailsH sess
     :<|> Api.apiGetH sess
@@ -112,6 +120,8 @@ protectedServer sess =
     :<|> AnomalyList.anomalyListGetH sess
     :<|> AnomalyList.acknowlegeAnomalyGetH sess
     :<|> AnomalyList.unAcknowlegeAnomalyGetH sess
+    :<|> RedactedFields.redactedFieldsGetH sess
+    :<|> RedactedFields.redactedFieldsPostH sess
 
 publicServer :: ServerT PublicAPI DashboardM
 publicServer =

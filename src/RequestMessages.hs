@@ -43,7 +43,7 @@ import Text.Regex.TDFA ((=~))
 -- >>> import Data.Aeson
 
 data SDKTypes = GoGin | GoBuiltIn | PhpLaravel | JsExpress | JavaSpringBoot
-  deriving stock (Show, Generic)
+  deriving stock (Show, Generic, Read)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SDKTypes
 
 -- | RequestMessage represents a message for a single request pulled from pubsub.

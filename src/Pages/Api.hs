@@ -44,8 +44,8 @@ apiPostH sess pid apiKeyForm = do
     withPool pool $ do
       ProjectApiKeys.insertProjectApiKey pApiKey
       ProjectApiKeys.projectApiKeysByProjectId pid
-  let hxTriggerData = encode [aesonQQ| {"closeModal": "", "successToast": ["Created API Key Successfully"]}|]
-  pure $ addHeader (decodeUtf8 hxTriggerData) $ mainContent apiKeys (Just (pApiKey, encryptedKeyB64))
+  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Created API Key Successfully"]}|]
+  pure $ addHeader hxTriggerData $ mainContent pid apiKeys (Just (pApiKey, encryptedKeyB64))
 
 -- | apiGetH renders the api keys list page which includes a modal for creating the apikeys.
 apiGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
@@ -71,7 +71,7 @@ apiKeysPage pid apiKeys = do
     div_ [class_ "flex justify-between mb-6"] $ do
       h2_ [class_ "text-slate-700 text-2xl font-medium"] "API Keys"
       button_ [class_ "btn-indigo", [__|on click remove .hidden from #generateApiKeyDialog |]] "Create an API Key"
-    mainContent apiKeys Nothing
+    mainContent pid apiKeys Nothing
     div_
       [ class_ "hidden fixed z-30 inset-0 overflow-y-auto",
         role_ "dialog",
@@ -115,65 +115,58 @@ apiKeysPage pid apiKeys = do
                   ]
                   "Cancel"
 
-mainContent :: Vector ProjectApiKeys.ProjectApiKey -> Maybe (ProjectApiKey.ProjectApiKey, Text) -> Html ()
-mainContent apiKeys newKeyM = do
-  section_
-    [ id_ "notifications_parent",
-      class_ "fixed inset-0 flex flex-col items-end px-4 py-6 pointer-events-none sm:p-6 space-y-1 z-50"
-    ]
-    ""
-
-  section_ [id_ "main-content"] $ do
-    case newKeyM of
-      Nothing -> ""
-      Just (keyObj, newKey) -> do
-        div_ [id_ "apiFeedbackSection", class_ "pb-8"] $ do
-          div_ [class_ "rounded-md bg-green-50 p-4"] $ do
-            div_ [class_ "flex"] $ do
-              div_ [class_ "flex-shrink-0"] $ do
-                img_ [class_ "h-5 w-5 text-green-400", src_ "/assets/svgs/check_circle.svg"]
-              div_ [class_ "ml-3"] $ do
-                h3_ [class_ "text-sm font-medium text-green-800"] "API Key was generated successfully"
-                div_ [class_ "mt-2 text-sm text-green-700"] $ do
-                  p_ "Please copy the generated APIKey as you would not be able to view it anymore after this message."
-                  strong_ [class_ "block pt-2", id_ "newKey"] $ toHtml newKey
-                div_ [class_ "mt-4"] $ do
-                  div_ [class_ "-mx-2 -my-1.5 flex"] $ do
-                    button_
-                      [ type_ "button",
-                        class_ "bg-green-50 px-2 py-1.5 rounded-md text-sm font-medium text-green-800 hover:bg-green-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600",
-                        [__| 
+mainContent :: Projects.ProjectId -> Vector ProjectApiKeys.ProjectApiKey -> Maybe (ProjectApiKey.ProjectApiKey, Text) -> Html ()
+mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] $ do
+  case newKeyM of
+    Nothing -> ""
+    Just (keyObj, newKey) -> do
+      div_ [id_ "apiFeedbackSection", class_ "pb-8"] $ do
+        div_ [class_ "rounded-md bg-green-50 p-4"] $ do
+          div_ [class_ "flex"] $ do
+            div_ [class_ "flex-shrink-0"] $ do
+              img_ [class_ "h-5 w-5 text-green-400", src_ "/assets/svgs/check_circle.svg"]
+            div_ [class_ "ml-3"] $ do
+              h3_ [class_ "text-sm font-medium text-green-800"] "API Key was generated successfully"
+              div_ [class_ "mt-2 text-sm text-green-700"] $ do
+                p_ "Please copy the generated APIKey as you would not be able to view it anymore after this message."
+                strong_ [class_ "block pt-2", id_ "newKey"] $ toHtml newKey
+              div_ [class_ "mt-4"] $ do
+                div_ [class_ "-mx-2 -my-1.5 flex"] $ do
+                  button_
+                    [ type_ "button",
+                      class_ "bg-green-50 px-2 py-1.5 rounded-md text-sm font-medium text-green-800 hover:bg-green-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600",
+                      [__| 
                       on click 
                         if 'clipboard' in window.navigator then 
                           call navigator.clipboard.writeText(#newKey's innerText)
                           send successToast(value:['API Key has been added to the Clipboard']) to <body/>
                         end
                         |]
-                      ]
-                      "Copy Key"
-                    button_
-                      [ type_ "button",
-                        class_ "ml-3 bg-green-50 px-2 py-1.5 rounded-md text-sm font-medium text-green-800 hover:bg-green-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600",
-                        [__|on click remove #apiFeedbackSection|]
-                      ]
-                      "Dismiss"
-    div_ [class_ "flex flex-col"] $ do
-      div_ [class_ "-my-2 overflow-x-auto sm:-mx-6 lg:-mx-8"] $ do
-        div_ [class_ "py-2 align-middle inline-block min-w-full sm:px-6 lg:px-8"] $ do
-          div_ [class_ "shadow overflow-hidden border-b border-gray-200 sm:rounded-lg"] $ do
-            table_ [class_ "min-w-full divide-y divide-gray-200"] $ do
-              thead_ [class_ "bg-gray-50"] $ do
+                    ]
+                    "Copy Key"
+                  button_
+                    [ type_ "button",
+                      class_ "ml-3 bg-green-50 px-2 py-1.5 rounded-md text-sm font-medium text-green-800 hover:bg-green-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600",
+                      [__|on click remove #apiFeedbackSection|]
+                    ]
+                    "Dismiss"
+  div_ [class_ "flex flex-col"] $ do
+    div_ [class_ "-my-2 overflow-x-auto sm:-mx-6 lg:-mx-8"] $ do
+      div_ [class_ "py-2 align-middle inline-block min-w-full sm:px-6 lg:px-8"] $ do
+        div_ [class_ "shadow overflow-hidden border-b border-gray-200 sm:rounded-lg"] $ do
+          table_ [class_ "min-w-full divide-y divide-gray-200"] $ do
+            thead_ [class_ "bg-gray-50"] $ do
+              tr_ $ do
+                th_ [class_ "px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"] "Title"
+                th_ [class_ "px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"] "Key"
+                th_ [class_ "relative px-6 py-3"] $ do
+                  span_ [class_ "sr-only"] "Edit"
+            tbody_ [class_ "bg-white divide-y divide-gray-200"] $ do
+              apiKeys & mapM_ \apiKey -> do
                 tr_ $ do
-                  th_ [class_ "px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"] "Title"
-                  th_ [class_ "px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"] "Key"
-                  th_ [class_ "relative px-6 py-3"] $ do
-                    span_ [class_ "sr-only"] "Edit"
-              tbody_ [class_ "bg-white divide-y divide-gray-200"] $ do
-                apiKeys & mapM_ \apiKey -> do
-                  tr_ $ do
-                    td_ [class_ "px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900"] $ toHtml $ apiKey ^. #title
-                    td_ [class_ "px-6 py-4 whitespace-nowrap text-sm text-gray-500"] $ toHtml $ apiKey ^. #keyPrefix <> "**********"
-                    td_ [class_ "px-6 py-4 whitespace-nowrap text-right text-sm font-medium"] $ do
-                      a_ [class_ "text-indigo-600 hover:text-indigo-900"] $ do
-                        img_ [src_ "/assets/svgs/revoke.svg", class_ "h-3 w-3 mr-2 inline-block"]
-                        span_ [class_ "text-slate-500"] "Revoke"
+                  td_ [class_ "px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900"] $ toHtml $ apiKey ^. #title
+                  td_ [class_ "px-6 py-4 whitespace-nowrap text-sm text-gray-500"] $ toHtml $ apiKey ^. #keyPrefix <> "**********"
+                  td_ [class_ "px-6 py-4 whitespace-nowrap text-right text-sm font-medium"] $ do
+                    a_ [class_ "text-indigo-600 hover:text-indigo-900", href_ $ "/p/" <> Projects.projectIdText pid <> "/api/id/delete"] $ do
+                      img_ [src_ "/assets/svgs/revoke.svg", class_ "h-3 w-3 mr-2 inline-block"]
+                      span_ [class_ "text-slate-500"] "Revoke"

@@ -24,7 +24,12 @@ data EnvConfig = EnvConfig
     apiKeyEncryptionSecretKey :: Text,
     messagesPerPubsubPullBatch :: Int,
     migrateAndInitializeOnStart :: Bool,
-    requestPubsubTopics :: [Text]
+    requestPubsubTopics :: [Text],
+    smtpHost :: Text,
+    smtpPort :: Int,
+    smtpUsername :: Text,
+    smtpPassword :: Text,
+    smtpSender :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromEnv)

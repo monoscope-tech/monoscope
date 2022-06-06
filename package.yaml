@@ -57,6 +57,7 @@ default-extensions:
   - BlockArguments
   - BangPatterns
   - NamedFieldPuns
+  - LambdaCase
 
 
 extra-source-files:
@@ -139,7 +140,11 @@ library:
     - megaparsec
     - text-display
     - parser-combinators
-
+    - odd-jobs
+    - parallel-io
+    - HaskellNet
+    - Unique
+    - extra
 
 executables:
   apitoolkit-server-exe:

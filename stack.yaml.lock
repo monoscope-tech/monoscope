@@ -250,6 +250,48 @@ packages:
   original:
     hackage: text-display-0.0.1.0@sha256:b8a94bf4188b77dbcdc7f8d290c998643780e8be5a5df58034b4098d19cd2481,1859
 - completed:
+    hackage: odd-jobs-0.2.2@sha256:6bb890a74f8f075e4f058dbe04ea16a60985c09944b76fcbd27061b785acefc8,6718
+    pantry-tree:
+      size: 2357
+      sha256: 16593747cbc70035535bba6ab740c52941c3403d5149bedbeb4ef8884d90f9a2
+  original:
+    hackage: odd-jobs-0.2.2@sha256:6bb890a74f8f075e4f058dbe04ea16a60985c09944b76fcbd27061b785acefc8,6718
+- completed:
+    hackage: direct-daemonize-3.1@sha256:f33505932b8613267cd8ad2d51470af2c5708d750ddf55a5dd38292f04962dcc,1630
+    pantry-tree:
+      size: 220
+      sha256: 5cbf9c1ac065471cb9caa29136b06bcddee17800bbc3e8ed6020b4af19a81f3e
+  original:
+    hackage: direct-daemonize-3.1@sha256:f33505932b8613267cd8ad2d51470af2c5708d750ddf55a5dd38292f04962dcc,1630
+- completed:
+    hackage: servant-static-th-1.0.0.0@sha256:7dc46a426d8c78ee0386729159e8bbc18ff98e0dd700a2c723c87901b204fa6c,3883
+    pantry-tree:
+      size: 1493
+      sha256: 13269fcc1c871ee1548d31010f0278484318bffbd9b8e0c0bfdfab4e27d6c3d5
+  original:
+    hackage: servant-static-th-1.0.0.0@sha256:7dc46a426d8c78ee0386729159e8bbc18ff98e0dd700a2c723c87901b204fa6c,3883
+- completed:
+    hackage: timing-convenience-0.1@sha256:7ff807a9a9e5596f2b18d45c5a01aefb91d4a98f6a1008d183b5c550f68f7cb7,2092
+    pantry-tree:
+      size: 469
+      sha256: fbcb00f5b8a4f7b8fd94b034b7f507ffdd7579848de782ce60ad2b661dcb2b42
+  original:
+    hackage: timing-convenience-0.1@sha256:7ff807a9a9e5596f2b18d45c5a01aefb91d4a98f6a1008d183b5c550f68f7cb7,2092
+- completed:
+    hackage: parallel-io-0.3.5@sha256:97db32eb84b3141f4957f6d208c0ef8adce647cbf68099417e93c7d9a45f9b35,3482
+    pantry-tree:
+      size: 706
+      sha256: 9c81a6a331620aca19c7f8cfb88df2a9584346820687d75147b2a7bab87e112b
+  original:
+    hackage: parallel-io-0.3.5@sha256:97db32eb84b3141f4957f6d208c0ef8adce647cbf68099417e93c7d9a45f9b35,3482
+- completed:
+    hackage: Unique-0.4.7.9@sha256:a7e154cf6d05169777a1e54aadab24fb3a6eae3ee167e5e77d7ba96d182436c7,2064
+    pantry-tree:
+      size: 1366
+      sha256: eb62502b1de8adee91f0feb104a36f87a21a9367f95295d4f12c73183a9b1e54
+  original:
+    hackage: Unique-0.4.7.9@sha256:a7e154cf6d05169777a1e54aadab24fb3a6eae3ee167e5e77d7ba96d182436c7,2064
+- completed:
     subdir: core
     name: gogol-core
     version: 0.5.0

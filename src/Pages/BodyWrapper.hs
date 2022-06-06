@@ -19,7 +19,8 @@ menu ppid =
         ("Endpoints", "/p/" <> pid <> "/endpoints", "#endpoint"),
         ("Anomalies", "/p/" <> pid <> "/anomalies", "#anomalies"),
         ("API Log Explorer", "/p/" <> pid <> "/log_explorer", "#logs"),
-        ("API Keys", "/p/" <> pid <> "/apis", "#api")
+        ("API Keys", "/p/" <> pid <> "/apis", "#api"),
+        ("Redacted Fields", "/p/" <> pid <> "/redacted_fields", "#api")
       ]
 
 data BWConfig = BWConfig
@@ -108,7 +109,8 @@ bodyWrapper BWConfig {sessM, currProject, pageTitle, menuItem} child =
                 child
 
 projectsDropDown :: Projects.Project -> Vector.Vector Projects.Project -> Html ()
-projectsDropDown currProject projects =
+projectsDropDown currProject projects = do
+  let pidTxt = Projects.projectIdText $currProject ^. #id
   div_
     [ term "data-menu" "true",
       class_ "hidden origin-top-right z-40 transition transform bg-white p-4 absolute w-[20rem] rounded-2xl shadow-2xl shadow-indigo-200",
@@ -135,13 +137,13 @@ projectsDropDown currProject projects =
             strong_ [class_ "block"] $ toHtml $ currProject ^. #title
             small_ [class_ "block text-blue-800"] "Development"
         nav_ [] $ do
-          a_ [class_ "p-3 flex gap-3 rounded-2xl bg-gray-100"] $ do
+          a_ [class_ "p-3 flex gap-3 rounded-2xl hover:bg-gray-100"] $ do
             img_ [src_ "/assets/svgs/settings.svg"]
             span_ "Settings"
-          a_ [class_ "p-3 flex gap-3 rounded"] $ do
+          a_ [href_ [text| /p/$pidTxt/manage_members |], class_ "p-3 flex gap-3 rounded hover:bg-gray-100"] $ do
             img_ [src_ "/assets/svgs/add_user.svg"]
-            span_ "Invite a member"
-          a_ [class_ "p-3 flex gap-3 rounded"] $ do
+            span_ "Manage members"
+          a_ [class_ "p-3 flex gap-3 rounded hover:bg-gray-100 "] $ do
             img_ [src_ "/assets/svgs/dollar.svg"]
             span_ "Billing and usage"
       div_ [class_ "border-t border-gray-100 p-2"] $ do

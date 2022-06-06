@@ -1,3 +1,5 @@
+{-# LANGUAGE TemplateHaskell #-}
+
 module Models.Users.Sessions
   ( PersistentSessionId (..),
     PersistentSession (..),
@@ -34,6 +36,7 @@ import Database.PostgreSQL.Transact hiding (execute, queryOne)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users (UserId)
 import Models.Users.Users qualified as Users
+import Optics.TH
 import Relude
 import Web.HttpApiData
 
@@ -41,21 +44,6 @@ newtype PersistentSessionId = PersistentSessionId {getPersistentSessionId :: UUI
   deriving
     (Show, Eq, FromField, ToField, FromHttpApiData, ToHttpApiData, Default)
     via UUID
-
-data PersistentSession = PersistentSession
-  { id :: PersistentSessionId,
-    createdAt :: ZonedTime,
-    updatedAt :: ZonedTime,
-    userId :: UserId,
-    sessionData :: SessionData,
-    user :: PSUser,
-    projects :: PSProjects
-  }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, Default)
-  deriving
-    (Entity)
-    via (GenericEntity '[Schema "users", TableName "persistent_sessions", PrimaryKey "id"] PersistentSession)
 
 newtype SessionData = SessionData {getSessionData :: Map Text Text}
   deriving stock (Show, Eq, Generic)
@@ -77,6 +65,23 @@ newtype PSProjects = PSProjects {getProjects :: Vector.Vector Projects.Project}
     (FromField)
     via Aeson (Vector.Vector Projects.Project)
   deriving anyclass (Default)
+
+data PersistentSession = PersistentSession
+  { id :: PersistentSessionId,
+    createdAt :: ZonedTime,
+    updatedAt :: ZonedTime,
+    userId :: UserId,
+    sessionData :: SessionData,
+    user :: PSUser,
+    projects :: PSProjects
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (FromRow, Default)
+  deriving
+    (Entity)
+    via (GenericEntity '[Schema "users", TableName "persistent_sessions", PrimaryKey "id"] PersistentSession)
+
+makeFieldLabelsNoPrefix ''PersistentSession
 
 newPersistentSessionId :: IO PersistentSessionId
 newPersistentSessionId = PersistentSessionId <$> UUID.nextRandom

@@ -4,11 +4,12 @@
 module Models.Users.Users
   ( User (..),
     UserId (..),
-    InvUser (..),
     createUser,
+    userIdByEmail,
     createUserId,
     insertUser,
     userByEmail,
+    createEmptyUser,
     addUserToAllProjects,
   )
 where
@@ -22,7 +23,7 @@ import Data.Time (ZonedTime, getZonedTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Database.PostgreSQL.Entity
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute)
+import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, queryOne)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
@@ -43,9 +44,9 @@ instance Default Bool where
   def = False
 
 newtype UserId = UserId {getUserId :: UUID.UUID}
-  deriving stock (Generic, Show)
+  deriving stock (Generic, Show, Eq)
   deriving
-    (Eq, Ord, ToJSON, FromJSON, FromField, ToField, Default)
+    (Ord, ToJSON, FromJSON, FromField, ToField, Default)
     via UUID.UUID
   deriving anyclass (FromRow, ToRow)
 
@@ -69,17 +70,7 @@ data User = User
     (Entity)
     via (GenericEntity '[Schema "users", TableName "users", PrimaryKey "id", FieldModifiers '[CamelToSnake]] User)
 
-data InvUser = InvUser
-  { userId :: UserId,
-    email :: Text
-  }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow)
-  deriving
-    (Entity)
-    via (GenericEntity '[Schema "users", TableName "users", PrimaryKey "id", FieldModifiers '[CamelToSnake]] InvUser)
-
-makeFieldLabelsNoPrefix ''InvUser
+makeFieldLabelsNoPrefix ''User
 
 createUserId :: IO UserId
 createUserId = UserId <$> UUIDV4.nextRandom
@@ -101,13 +92,21 @@ createUser firstName lastName picture email = do
         email = CI.mk email
       }
 
-makeFieldLabelsNoPrefix ''User
-
 insertUser :: User -> PgT.DBT IO ()
 insertUser = insert @User
 
 userByEmail :: Text -> PgT.DBT IO (Maybe User)
 userByEmail email = selectOneByField @User [field| email |] (Only email)
+
+userIdByEmail :: Text -> PgT.DBT IO (Maybe UserId)
+userIdByEmail email = queryOne Select q (Only email)
+  where
+    q = [sql|select id from users.users where email=?|]
+
+createEmptyUser :: Text -> PgT.DBT IO (Maybe UserId)
+createEmptyUser email = queryOne Insert q (Only email)
+  where
+    q = [sql| insert into users.users (email, active) values (?, TRUE) on conflict do nothing returning id |]
 
 -- addUserToAllProjects is a hack for development to add the user to all projects
 addUserToAllProjects :: Text -> PgT.DBT IO Int64

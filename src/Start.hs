@@ -8,6 +8,7 @@ module Start
   )
 where
 
+import BackgroundJobs qualified
 import Colog.Core (LogAction (..), logStringStdout, (<&))
 import Config qualified
 import Configuration.Dotenv as Dotenv
@@ -41,53 +42,53 @@ startApp = do
   env <- decodeEnv :: IO (Either String Config.EnvConfig)
   case env of
     Left err -> logger <& "Error decoding env variables : " <> show err
-    Right envConfig -> do
-      let createPgConnIO = connectPostgreSQL $ encodeUtf8 (envConfig ^. #databaseUrl)
-      conn <- createPgConnIO
-      when (envConfig ^. #migrateAndInitializeOnStart) do
-        initializationRes <- Migrations.runMigration conn Migrations.defaultOptions MigrationInitialization
-        logger <& "migration initialized " <> show initializationRes
-        migrationRes <- Migrations.runMigration conn Migrations.defaultOptions $ MigrationDirectory ((toString $ envConfig ^. #migrationsDir) :: FilePath)
-        logger <& "migration result: " <> show migrationRes
+    Right envConfig ->
+      do
+        let createPgConnIO = connectPostgreSQL $ encodeUtf8 (envConfig ^. #databaseUrl)
+        conn <- createPgConnIO
+        when (envConfig ^. #migrateAndInitializeOnStart) do
+          initializationRes <- Migrations.runMigration conn Migrations.defaultOptions MigrationInitialization
+          logger <& "migration initialized " <> show initializationRes
+          migrationRes <- Migrations.runMigration conn Migrations.defaultOptions $ MigrationDirectory ((toString $ envConfig ^. #migrationsDir) :: FilePath)
+          logger <& "migration result: " <> show migrationRes
 
-      poolConn <-
-        Pool.createPool
-          createPgConnIO
-          close
-          2 -- stripes
-          60 -- unused connections are kept open for 10 minutes (60*10)
-          20 -- max 50 connections open per stripe
+        poolConn <-
+          Pool.createPool
+            createPgConnIO
+            close
+            2 -- stripes
+            60 -- unused connections are kept open for 10 minutes (60*10)
+            20 -- max 50 connections open per stripe
 
-      -- If a test email is set, attempt to add that test email user to all projects in the database
-      -- We watch and catch thrown exceptions which would likely happen if the user does not yet exist in the db
-      case envConfig ^. #testEmail of
-        Just email -> do
-          when (envConfig ^. #migrateAndInitializeOnStart) do
-            err <- try (withPool poolConn (Users.addUserToAllProjects email)) :: IO (Either SomeException Int64)
-            case err of
-              Left err' -> logger <& "unable to run addUserToAllProjects " <> show err'
-              Right resp -> logger <& "addUserToAllProjects resp" <> show resp
-        Nothing -> pass
+        -- If a test email is set, attempt to add that test email user to all projects in the database
+        -- We watch and catch thrown exceptions which would likely happen if the user does not yet exist in the db
+        case envConfig ^. #testEmail of
+          Just email -> do
+            when (envConfig ^. #migrateAndInitializeOnStart) do
+              err <- try (withPool poolConn (Users.addUserToAllProjects email)) :: IO (Either SomeException Int64)
+              case err of
+                Left err' -> logger <& "unable to run addUserToAllProjects " <> show err'
+                Right resp -> logger <& "addUserToAllProjects resp" <> show resp
+          Nothing -> pass
 
-      let serverCtx =
-            Config.AuthContext
-              { env = envConfig,
-                pool = poolConn,
-                logger = logger
-              }
+        let serverCtx =
+              Config.AuthContext
+                { env = envConfig,
+                  pool = poolConn,
+                  logger = logger
+                }
 
-      logger <& "\n"
-      logger <& "Starting server at port " <> show (envConfig ^. #port)
-      logger <& "\n"
-      concurrently_
-        (pubsubService logger envConfig poolConn)
-        (run (Config.port envConfig) $ Server.app logger poolConn serverCtx)
+        logger <& "\n"
+        logger <& "Starting server at port " <> show (envConfig ^. #port)
+        logger <& "\n"
 
--- _<- waitAnyCancel
---   [ (pubsubService logger envConfig poolConn),
---     (run (Config.port envConfig) $ Server.app logger poolConn serverCtx)
---   ]
--- pure ()
+        asyncs <-
+          sequence
+            [ async (pubsubService logger envConfig poolConn),
+              async (run (Config.port envConfig) $ Server.app logger poolConn serverCtx),
+              async $ BackgroundJobs.jobsWorkerInit poolConn logger envConfig
+            ]
+        void $ waitAnyCancel asyncs
 
 -- pubsubService connects to the pubsub service and listens for  messages,
 -- then it calls the processMessage function to process the messages, and
@@ -107,6 +108,4 @@ pubsubService logger envConfig conn = do
         let messages = pullResp L.^. PubSub.prReceivedMessages
         msgIds <- liftIO $ mapM (processMessage logger envConfig conn) messages
         let acknowlegReq = PubSub.acknowledgeRequest & PubSub.arAckIds L..~ catMaybes msgIds
-        unless (null msgIds) do
-          _ <- PubSub.projectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send
-          pass
+        unless (null msgIds) $ void $ PubSub.projectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send

@@ -12,6 +12,8 @@
     - [] improve anomalies UX as much as possible
 - [] improve querying.
   - [] click a field in log explorer. 
+- [] When you log in with auth0, override the existing name and photos with the latest from auth0
+- [] Add concept of super admins who can see all projects on their platforms and who can log into any project.
   
 ### Completed Column ✓
 
