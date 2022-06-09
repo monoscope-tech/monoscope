@@ -154,8 +154,8 @@ selectRequestDumpByProjectAndId pid rdId = queryOne Select q (pid, rdId)
                     count(*) OVER() AS full_count
              FROM apis.request_dumps where project_id=? and id=?|]
 
-insertRequestDump :: RequestDump -> DBT IO ()
-insertRequestDump = void <$> execute Insert q
+insertRequestDump :: RequestDump -> DBT IO Int64
+insertRequestDump = execute Insert q
   where
     q = [sql| INSERT INTO apis.request_dumps VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::uuid[],?::uuid[])|]
 

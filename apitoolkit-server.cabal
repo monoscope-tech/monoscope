@@ -109,6 +109,7 @@ library
       HaskellNet
     , Unique
     , aeson
+    , aeson-optics
     , aeson-qq
     , async
     , base
@@ -166,7 +167,9 @@ library
     , text-conversions
     , text-display
     , time
+    , transformers
     , transformers-either
+    , transformers-except
     , unordered-containers
     , uuid
     , valor >=1.0.0.0

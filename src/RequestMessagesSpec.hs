@@ -28,7 +28,7 @@ spec = do
               (".menu.popup.menuitem.[].value", [AE.String "v2", AE.String "v1"]),
               (".menu.popup.menuitem.[].onclick", [AE.String "oc2", AE.String "oc1"])
             ]
-      RequestMessages.valueToFields exJSON `shouldBe` expectedResp
+      RequestMessages.valueToFields (const True) exJSON `shouldBe` expectedResp
 
   -- Commented out until we fix and standardize durations handling.
   -- it "should should process request messages" $ do

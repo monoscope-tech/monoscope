@@ -1,4 +1,6 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE PartialTypeSignatures #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 module RequestMessages
@@ -10,7 +12,9 @@ module RequestMessages
   )
 where
 
+import Data.Aeson (Value)
 import Data.Aeson qualified as AE
+import Data.Aeson.Optics
 import Data.Aeson.QQ (aesonQQ)
 import Data.Aeson.Types qualified as AET
 import Data.ByteString.Base64 qualified as B64
@@ -29,6 +33,7 @@ import Models.Apis.Fields qualified as Fields
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
+import Optics.Core
 import Optics.Operators
 import Optics.TH
 import Relude
@@ -74,8 +79,40 @@ data RequestMessage = RequestMessage
 
 makeFieldLabelsNoPrefix ''RequestMessage
 
-requestMsgToDumpAndEndpoint :: RequestMessages.RequestMessage -> ZonedTime -> UUID.UUID -> Either Text (RequestDumps.RequestDump, Endpoints.Endpoint, [(Fields.Field, [AE.Value])], Shapes.Shape)
-requestMsgToDumpAndEndpoint rM now dumpID = do
+-- >>> redactJSON "menu.id" [aesonQQ| {"menu":{"id":"file", "name":"John"}} |]
+-- Object (fromList [("menu",Object (fromList [("id",String "[REDACTED]"),("name",String "John")]))])
+-- -- >>> redactJSON "menu.[].id" [aesonQQ| {"menu":[{"id":"file", "name":"John"}]} |]
+-- redactJSON :: Text -> Value -> Value
+-- redactJSON path = redactJSON' (T.splitOn "." path)
+--   where
+--     redactJSON' :: [Text] -> Value -> Value
+--     redactJSON' [] json = json
+--     -- redactJSON' ("[]" : xs) json = json & snd (keyPathToOptics (xs, values)) .~ AE.String "[REDACTED]"
+--     redactJSON' (x : xs) json = json & snd (keyPathToOptics (xs, key x)) .~ AE.String "[REDACTED]"
+
+--     keyPathToOptics :: ([Text], AffineTraversal' Value Value) -> ([Text], AffineTraversal' Value Value)
+--     keyPathToOptics ([], optics) = ([], optics)
+--     keyPathToOptics ("[]" : x : xs, optics) = keyPathToOptics (xs, optics % values % key x)
+--     keyPathToOptics ("[]" : xs, optics) = keyPathToOptics (xs, optics % values)
+--     keyPathToOptics (x : xs, optics) = keyPathToOptics (xs, optics % key x)
+
+exJSON :: AET.Value
+exJSON =
+  [aesonQQ| {
+              "menu": {
+                "id": "file",
+                "list": ["a", "b"],
+                "popup": {
+                  "menuitem": [
+                    {"value": "v1", "onclick": "oc1"},
+                    {"value": "v2", "onclick": "oc2"}
+                  ]
+                }
+              }
+            }|]
+
+requestMsgToDumpAndEndpoint :: (Text -> Bool) -> RequestMessages.RequestMessage -> ZonedTime -> UUID.UUID -> Either Text (RequestDumps.RequestDump, Endpoints.Endpoint, [(Fields.Field, [AE.Value])], Shapes.Shape)
+requestMsgToDumpAndEndpoint shouldRedact rM now dumpID = do
   reqBodyB64 <- B64.decodeBase64 $ encodeUtf8 $ rM ^. #requestBody
   -- NB: At the moment we're discarding the error messages from when we're unable to parse the input
   -- We should log this inputs and maybe input them into the db as is. This is also a potential annomaly for our customers,
@@ -88,12 +125,12 @@ requestMsgToDumpAndEndpoint rM now dumpID = do
   respBodyB64 <- B64.decodeBase64 $ encodeUtf8 $ rM ^. #responseBody
   let respBody = fromRight [aesonQQ| {} |] $ AE.eitherDecodeStrict respBodyB64
 
-  let pathParamFields = valueToFields $ rM ^. #pathParams
-  let queryParamFields = valueToFields $ rM ^. #queryParams
-  let reqHeaderFields = valueToFields $ rM ^. #requestHeaders
-  let respHeaderFields = valueToFields $ rM ^. #responseHeaders
-  let reqBodyFields = valueToFields reqBody
-  let respBodyFields = valueToFields respBody
+  let pathParamFields = valueToFields shouldRedact $ rM ^. #pathParams
+  let queryParamFields = valueToFields shouldRedact $ rM ^. #queryParams
+  let reqHeaderFields = valueToFields shouldRedact $ rM ^. #requestHeaders
+  let respHeaderFields = valueToFields shouldRedact $ rM ^. #responseHeaders
+  let reqBodyFields = valueToFields shouldRedact reqBody
+  let respBodyFields = valueToFields shouldRedact respBody
 
   let queryParamsKeypaths = Vector.fromList $ map fst queryParamFields :: Vector Text
   let requestHeadersKeypaths = Vector.fromList $ map fst reqHeaderFields :: Vector Text
@@ -211,8 +248,8 @@ normalizeUrlPath JavaSpringBoot urlPath = urlPath
 -- Multiple fields with same key via array:
 -- >>> valueToFields [aesonQQ|{"menu":[{"id":"text"},{"id":123}]}|]
 -- [(".menu.[].id",[String "text",Number 123.0])]
-valueToFields :: AE.Value -> [(Text, [AE.Value])]
-valueToFields value = dedupFields $ removeBlacklistedFields $ snd $ valueToFields' value ("", [])
+valueToFields :: (Text -> Bool) -> AE.Value -> [(Text, [AE.Value])]
+valueToFields shouldRedact value = dedupFields $ removeBlacklistedFields $ snd $ valueToFields' value ("", [])
   where
     valueToFields' :: AE.Value -> (Text, [(Text, AE.Value)]) -> (Text, [(Text, AE.Value)])
     valueToFields' (AE.Object v) akk = HM.toList v & foldl' (\(akkT, akkL) (key, val) -> (akkT, snd $ valueToFields' val (akkT <> "." <> key, akkL))) akk
@@ -236,14 +273,19 @@ valueToFields value = dedupFields $ removeBlacklistedFields $ snd $ valueToField
     -- >>> removeBlacklistedFields [(".menu.password",Null),(".regular",String "abc")]
     -- [(".menu.password",String "[REDACTED]"),(".regular",String "abc")]
     removeBlacklistedFields :: [(Text, AE.Value)] -> [(Text, AE.Value)]
-    removeBlacklistedFields = map \(key, val) -> do
+    removeBlacklistedFields = map \(key, val) ->
       if or @[]
         [ T.isSuffixOf "password" (T.toLower key),
           T.isSuffixOf "authorization" (T.toLower key),
-          T.isSuffixOf "cookie" (T.toLower key)
+          T.isSuffixOf "cookie" (T.toLower key),
+          shouldRedact key
         ]
-        then (key, AE.String "[REDACTED]")
-        else (key, val)
+        then do
+          traceShowM $ "🔥 REDACTED " <> show key
+          (key, AE.String "[REDACTED]")
+        else do
+          traceShowM $ "NOT REDACTED " <> show key
+          (key, val)
 
 valueToFormat :: AE.Value -> Text
 valueToFormat (AET.String val) = valueToFormatStr val

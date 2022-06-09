@@ -124,7 +124,9 @@ library:
     - text
     - text-conversions
     - time
+    - transformers
     - transformers-either
+    - transformers-except
     - unordered-containers
     - uuid
     - valor >= 1.0.0.0
@@ -145,6 +147,7 @@ library:
     - HaskellNet
     - Unique
     - extra
+    - aeson-optics
 
 executables:
   apitoolkit-server-exe:

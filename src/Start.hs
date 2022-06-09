@@ -88,7 +88,8 @@ startApp = do
               async (run (Config.port envConfig) $ Server.app logger poolConn serverCtx),
               async $ BackgroundJobs.jobsWorkerInit poolConn logger envConfig
             ]
-        void $ waitAnyCancel asyncs
+        _ <- waitAnyCancel asyncs
+        pass
 
 -- pubsubService connects to the pubsub service and listens for  messages,
 -- then it calls the processMessage function to process the messages, and
