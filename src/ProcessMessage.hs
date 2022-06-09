@@ -28,6 +28,7 @@ import Models.Projects.RedactedFields qualified as RedactedFields
 import Network.Google.PubSub qualified as PubSub
 import Optics.Core ((.~), (^.))
 import Relude hiding (hoistMaybe)
+import Relude.Extra (elems)
 import Relude.Unsafe (fromJust)
 import RequestMessages qualified
 
@@ -55,7 +56,8 @@ processRequestMessage logger pool requestMsg = do
     redactedFieldsMap <- handleIOExceptT (toText @String . show) $ withPool pool $ RedactedFields.redactedFieldsMapByProject pid
     -- For now, we will compare the key accross all endpoints, since we have no easy way to descriminate by endpoint at the moment
     let shouldRedact = \val -> Map.foldr (\redactList acc -> Vector.elem val redactList || acc) False redactedFieldsMap
-    (reqDump, endpoint, fields, shape) <- except $ RequestMessages.requestMsgToDumpAndEndpoint shouldRedact requestMsg timestamp recId
+    let redactFieldsList = toList $ Vector.concat $ elems redactedFieldsMap
+    (reqDump, endpoint, fields, shape) <- except $ RequestMessages.requestMsgToDumpAndEndpoint redactFieldsList shouldRedact requestMsg timestamp recId
     handleIOExceptT (toText @String . show) $
       withPool pool $ do
         liftIO $ logger <& "🔥 logging redactedFieldsMap"

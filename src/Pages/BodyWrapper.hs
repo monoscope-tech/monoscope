@@ -20,7 +20,7 @@ menu ppid =
         ("Anomalies", "/p/" <> pid <> "/anomalies", "#anomalies"),
         ("API Log Explorer", "/p/" <> pid <> "/log_explorer", "#logs"),
         ("API Keys", "/p/" <> pid <> "/apis", "#api"),
-        ("Redacted Fields", "/p/" <> pid <> "/redacted_fields", "#api")
+        ("Redacted Fields", "/p/" <> pid <> "/redacted_fields", "#redacted")
       ]
 
 data BWConfig = BWConfig

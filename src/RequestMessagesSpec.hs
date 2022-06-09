@@ -17,7 +17,7 @@ spec = do
                 "popup": {
                   "menuitem": [
                     {"value": "v1", "onclick": "oc1"},
-                     {"value": "v2", "onclick": "oc2"}
+                    {"value": "v2", "onclick": "oc2"}
                   ]
                 }
               }
