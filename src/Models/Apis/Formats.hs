@@ -4,6 +4,7 @@ module Models.Apis.Formats
   ( Format (..),
     FormatId (..),
     formatsByFieldId,
+    insertFormatQueryAndParams,
   )
 where
 
@@ -14,7 +15,7 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query)
 import Database.PostgreSQL.Entity.Types
-import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
+import Database.PostgreSQL.Simple (FromRow, Only (Only), Query, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -22,9 +23,12 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact (DBT)
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Fields.Types qualified as Fields
+import Models.Projects.Projects qualified as Projects
+import Optics.Core ((^.))
 import Optics.TH
 import Relude
 import Servant (FromHttpApiData)
+import Utils (DBField (MkDBField))
 
 newtype FormatId = FormatId {unFormatId :: UUID.UUID}
   deriving stock (Generic, Show)
@@ -36,10 +40,12 @@ data Format = Format
   { id :: FormatId,
     createdAt :: ZonedTime,
     updatedAt :: ZonedTime,
-    fieldId :: UUID.UUID,
+    projectId :: Projects.ProjectId,
+    fieldHash :: Text,
     fieldType :: Fields.FieldTypes,
     fieldFormat :: Text,
-    examples :: Vector.Vector AE.Value
+    examples :: Vector.Vector AE.Value,
+    hash :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow)
@@ -52,4 +58,26 @@ makeFieldLabelsNoPrefix ''Format
 formatsByFieldId :: Fields.FieldId -> DBT IO (Vector.Vector Format)
 formatsByFieldId fid = query Select q (Only fid)
   where
-    q = [sql| SELECT id,created_at,updated_at,field_id,field_type,field_format,examples::json[] from apis.formats where field_id=? |]
+    q = [sql| SELECT id,created_at,updated_at,project_id, field_id,field_type,field_format,examples::json[] from apis.formats where field_id=? |]
+
+-- TODO: explore using postgres values to handle bulking loading multiple fields and formats into the same insert query.
+insertFormatQueryAndParams :: Format -> (Query, [DBField])
+insertFormatQueryAndParams format = (q, params)
+  where
+    q =
+      [sql| 
+      insert into api.formats (project_id, field_hash, field_type, field_format, examples, hash) VALUES (?,?,?,?,?,?,?,?,?)
+        ON CONFLICT (hash)
+        DO
+          UPDATE SET 
+            examples = ARRAY(SELECT DISTINCT e from unnest(apis.formats.examples || excluded.examples) as e order by e limit ?; 
+      |]
+    params =
+      [ MkDBField $ format ^. #projectId,
+        MkDBField $ format ^. #fieldHash,
+        MkDBField $ format ^. #fieldType,
+        MkDBField $ format ^. #fieldFormat,
+        MkDBField $ format ^. #examples,
+        MkDBField $ format ^. #hash,
+        MkDBField (10 :: Int64) -- NOTE: max number of examples
+      ]

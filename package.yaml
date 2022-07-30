@@ -148,6 +148,10 @@ library:
     - Unique
     - extra
     - aeson-optics
+    - xxhash
+    - vector-algorithms
+    - witch
+    - hex-text
 
 executables:
   apitoolkit-server-exe:

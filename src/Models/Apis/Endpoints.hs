@@ -1,4 +1,5 @@
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 module Models.Apis.Endpoints
@@ -12,6 +13,7 @@ module Models.Apis.Endpoints
     endpointById,
     endpointIdText,
     endpointToUrlPath,
+    upsertEndpointQueryAndParam,
   )
 where
 
@@ -26,7 +28,7 @@ import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity (selectById)
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), query, queryOne)
 import Database.PostgreSQL.Entity.Types
-import Database.PostgreSQL.Simple (FromRow, ToRow)
+import Database.PostgreSQL.Simple (FromRow, Query, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -37,6 +39,7 @@ import Models.Projects.Projects qualified as Projects
 import Optics.Operators ((^.))
 import Optics.TH (makeFieldLabelsNoPrefix)
 import Relude
+import Utils (DBField (MkDBField))
 import Web.HttpApiData (FromHttpApiData)
 
 -- Added only for satisfying the tests
@@ -62,7 +65,8 @@ data Endpoint = Endpoint
     urlPath :: Text,
     urlParams :: AE.Value, -- Key value map of key to the type. Needs a bit more figuring out.
     method :: Text,
-    hosts :: Vector.Vector Text
+    hosts :: Vector.Vector Text,
+    hash :: Text
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (FromRow, ToRow, Default)
@@ -79,6 +83,39 @@ endpointToUrlPath enp = endpointUrlPath (enp ^. #projectId) (enp ^. #id)
 endpointUrlPath :: Projects.ProjectId -> EndpointId -> Text
 endpointUrlPath pid eid = "/p/" <> Projects.projectIdText pid <> "/endpoints/" <> endpointIdText eid
 
+upsertEndpointQueryAndParam :: Endpoint -> (Query, [DBField])
+upsertEndpointQueryAndParam endpoint = (q, params)
+  where
+    host = fromMaybe @Text "" ((endpoint ^. #hosts) Vector.!? 0) -- Read the first item from head or default to empty string
+    q =
+      [sql|  
+        with e as (
+          INSERT INTO apis.endpoints (project_id, url_path, url_params, method, hosts)
+          VALUES(?, ?, ?, ?, $$ ? => null$$) 
+          ON CONFLICT (project_id, url_path, method) 
+          DO 
+             UPDATE SET 
+               hosts=endpoints.hosts||hstore(?, null) 
+          RETURNING id 
+        )
+        SELECT id from e 
+        UNION 
+          SELECT id FROM apis.endpoints WHERE project_id=? AND url_path=? AND method=?;
+      |]
+    params =
+      [ MkDBField $ endpoint ^. #projectId,
+        MkDBField $ endpoint ^. #urlPath,
+        MkDBField $ endpoint ^. #urlParams,
+        MkDBField $ endpoint ^. #method,
+        MkDBField host,
+        MkDBField host,
+        MkDBField $ endpoint ^. #projectId,
+        MkDBField $ endpoint ^. #urlPath,
+        MkDBField $ endpoint ^. #method
+      ]
+
+-- FIXME: Delete this, as this function is deprecated and no longer in use.
+-- Updating hosts can be a specific functino that does just that.
 upsertEndpoints :: Endpoint -> PgT.DBT IO (Maybe EndpointId)
 upsertEndpoints endpoint = queryOne Insert q options
   where

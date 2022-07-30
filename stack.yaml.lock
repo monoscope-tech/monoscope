@@ -299,6 +299,20 @@ packages:
   original:
     hackage: transformers-except-0.1.2@sha256:2ff895fd65ec9e45cbe839ef5b66e26b7d9f3fe561148993293a41e14491e625,1548
 - completed:
+    hackage: xxhash-0.0.2@sha256:ed6892fd5827a16bea1641619c586234b6aacd39d26b076a5bc6cf9dc6baacb9,1842
+    pantry-tree:
+      size: 570
+      sha256: 022bde7ca7aaf3eff9b4543c6f5ed2826bae9d13721a32ca62ef353d84f2b798
+  original:
+    hackage: xxhash-0.0.2@sha256:ed6892fd5827a16bea1641619c586234b6aacd39d26b076a5bc6cf9dc6baacb9,1842
+- completed:
+    hackage: hex-text-0.1.0.6@sha256:b38dfcc8626a9235fea9b2dad01870816e864c8322041c176b1923c03310ee0f,1183
+    pantry-tree:
+      size: 367
+      sha256: 173e0878f628c770df9efb76d98148a4219cf1a8fdb36ff48e01d79fec16b32d
+  original:
+    hackage: hex-text-0.1.0.6@sha256:b38dfcc8626a9235fea9b2dad01870816e864c8322041c176b1923c03310ee0f,1183
+- completed:
     subdir: core
     name: gogol-core
     version: 0.5.0

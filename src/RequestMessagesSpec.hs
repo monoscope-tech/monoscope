@@ -2,9 +2,16 @@ module RequestMessagesSpec (spec) where
 
 import Data.Aeson as AE
 import Data.Aeson.QQ
+import Data.ByteString.Base64 qualified as B64
+import Data.Time qualified as Time
+import Data.UUID qualified as UUID
+import Data.UUID.V4 qualified as UUIDV4
 import Relude
+import Relude.Unsafe qualified as Unsafe
+import RequestMessages (SDKTypes (..))
 import RequestMessages qualified
 import Test.Hspec
+import Text.RawString.QQ (r)
 
 spec :: Spec
 spec = do
@@ -224,3 +231,39 @@ spec = do
     it "should get support string types" $ do
       RequestMessages.valueToFormatStr "123" `shouldBe` "integer"
       RequestMessages.valueToFormatStr "abc" `shouldBe` "text"
+
+  describe "requestMessageEndpoint" $ do
+    it "should be able to convert simple request message to series on insert db commands" $ do
+      let redactFieldsList = []
+      let shouldRedact = const True
+      recId <- UUIDV4.nextRandom
+      -- timestamp <- Time.getZonedTime
+      let timestamp = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
+      let requestMsg =
+            RequestMessages.RequestMessage
+              { timestamp = timestamp,
+                projectId = UUID.nil,
+                sdkType = GoGin,
+                host = "http://apitoolkit.io",
+                method = "POST",
+                referer = "https://referer",
+                urlPath = "/path/to/data",
+                rawUrl = "/path/to/data",
+                pathParams = [aesonQQ|{}|],
+                queryParams = [aesonQQ|{}|],
+                protoMajor = 1,
+                protoMinor = 1,
+                duration = 50000,
+                requestHeaders = [aesonQQ|{}|],
+                responseHeaders = [aesonQQ|{}|],
+                -- requestHeaders = [aesonQQ| {"Content-Type": "application/json"} |],
+                -- responseHeaders = [aesonQQ| {"X-Rand": "random-value"} |],
+                requestBody = B64.encodeBase64 "",
+                responseBody = B64.encodeBase64 [r|{"key": "value"}|],
+                statusCode = 203
+              }
+      let Right (query, params) = RequestMessages.requestMsgToDumpAndEndpoint redactFieldsList shouldRedact requestMsg timestamp recId
+      traceShowM "In request Message Endpoint test ===BEGIN==="
+      traceShowM query
+      traceShowM "===END==="
+      pass

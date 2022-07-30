@@ -14,6 +14,7 @@ module Models.Projects.Projects
     updateProject,
     deleteProject,
     projectById,
+    ProjectCache (..),
   )
 where
 
@@ -66,6 +67,25 @@ data Project = Project
     via (GenericEntity '[Schema "projects", TableName "projects", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Project)
 
 makeFieldLabelsNoPrefix ''Project
+
+data ProjectCache = ProjectCache
+  { -- We need this hosts to mirrow all the hosts in the endpoints table, and could use this for validation purposes to skip inserting endpoints just because of hosts
+    -- if endpoint exists but host is not in this list, then we have a query specifically for inserting hosts.
+    hosts :: Vector.Vector Text,
+    -- maybe we don't need this? See the next point.
+    endpointHashes :: Vector.Vector Text,
+    -- Since shapes always have the endpoints hash prepended to them, maybe we don't need to store the hash of endpoints,
+    -- since we can derive that from the shapes.
+    shapeHashes :: Vector.Vector Text,
+    -- We check if every request is part of the redact list, so it's better if we don't need to  hit the db for them with each request.
+    -- Since we have a need to redact fields by endpoint, we can simply have the fields paths be prepended by the endpoint hash.
+    -- <endpointHash><><field_key_path>
+    redactFieldslist :: Vector.Vector Text
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (FromRow)
+
+makeFieldLabelsNoPrefix ''ProjectCache
 
 data CreateProject = CreateProject
   { id :: ProjectId,

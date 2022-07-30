@@ -17,6 +17,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Aeson.Types qualified as AET
 import Data.ByteString.Base64 qualified as B64
+import Data.Digest.XXHash
 import Data.HashMap.Strict qualified as HM
 import Data.List (groupBy)
 import Data.Scientific qualified as Scientific
@@ -26,18 +27,23 @@ import Data.Time.LocalTime as Time
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
+import Database.PostgreSQL.Simple (Query)
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields qualified as Fields
+import Models.Apis.Formats qualified as Formats
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
+import Numeric (showHex)
 import Optics.Core
 import Optics.TH
 import Relude
 import Relude.Unsafe as Unsafe hiding (head)
 import Text.RawString.QQ
 import Text.Regex.TDFA ((=~))
+import Utils (DBField (MkDBField))
+import Witch (from)
 
 -- $setup
 -- >>> import Relude
@@ -79,16 +85,16 @@ makeFieldLabelsNoPrefix ''RequestMessage
 
 -- | Walk the JSON once, redact any fields which are in the list of json paths to be redacted.
 -- >>> redactJSON ["menu.id."] [aesonQQ| {"menu":{"id":"file", "name":"John"}} |]
--- Object (fromList [("menu",Object (fromList [("id",String "REDACTED"),("name",String "John[]")]))])
+-- Object (fromList [("menu",Object (fromList [("id",String "[REDACTED]"),("name",String "John")]))])
 --
 -- >>> redactJSON ["menu.id"] [aesonQQ| {"menu":{"id":"file", "name":"John"}} |]
--- Object (fromList [("menu",Object (fromList [("id",String "REDACTED"),("name",String "John[]")]))])
+-- Object (fromList [("menu",Object (fromList [("id",String "[REDACTED]"),("name",String "John")]))])
 --
 -- >>> redactJSON ["menu.id", "menu.name"] [aesonQQ| {"menu":{"id":"file", "name":"John"}} |]
--- Object (fromList [("menu",Object (fromList [("id",String "REDACTED"),("name",String "REDACTED")]))])
+-- Object (fromList [("menu",Object (fromList [("id",String "[REDACTED]"),("name",String "[REDACTED]")]))])
 --
--- >>> redactJSON  ["menu.[].id", "menu.[].names.[]"] [aesonQQ| {"menu":[{"id":"i1", "names":["John","okon"]}, {"id":"i2"}]} |]
--- Object (fromList [("menu",Array [Object (fromList [("id",String "REDACTED"),("names",Array [String "REDACTED",String "REDACTED"])]),Object (fromList [("id",String "REDACTED")])])])
+-- >>> redactJSON ["menu.[].id", "menu.[].names.[]"] [aesonQQ| {"menu":[{"id":"i1", "names":["John","okon"]}, {"id":"i2"}]} |]
+-- Object (fromList [("menu",Array [Object (fromList [("id",String "[REDACTED]"),("names",Array [String "[REDACTED]",String "[REDACTED]"])]),Object (fromList [("id",String "[REDACTED]")])])])
 redactJSON :: [Text] -> Value -> Value
 redactJSON paths' = redactJSON' (stripPrefixDot paths')
   where
@@ -101,8 +107,19 @@ redactJSON paths' = redactJSON' (stripPrefixDot paths')
 
     stripPrefixDot = map (\p -> fromMaybe p (T.stripPrefix "." p))
 
-requestMsgToDumpAndEndpoint :: [Text] -> (Text -> Bool) -> RequestMessages.RequestMessage -> ZonedTime -> UUID.UUID -> Either Text (RequestDumps.RequestDump, Endpoints.Endpoint, [(Fields.Field, [AE.Value])], Shapes.Shape)
-requestMsgToDumpAndEndpoint redactFieldsList shouldRedact rM now dumpID = do
+-- requestMsgToDumpAndEndpoint is a very improtant function designed to be run as a pure function
+-- which takes in a request and processes it returning an sql query and it's params which can be executed.
+-- The advantage of returning these queries and params is that it becomes possible to group together batches of requests
+-- from the google cloud pub sub, and to concatenate their queries so that only a single database call is needed for a batch.
+-- Also, being a pure function means it's easier to test the request processing logic since we can unit test pure functions easily.
+-- We can pass in a request, it's project cache object and inspect the generated sql and params.
+requestMsgToDumpAndEndpoint :: Projects.ProjectCache -> [Text] -> (Text -> Bool) -> RequestMessages.RequestMessage -> ZonedTime -> UUID.UUID -> Either Text (Query, [DBField])
+requestMsgToDumpAndEndpoint pjc redactFieldsList' shouldRedact rM now dumpID = do
+  let method = T.toUpper $ rM ^. #method
+  let urlPath = normalizeUrlPath (rM ^. #sdkType) (rM ^. #urlPath)
+  let !endpointHash = from @String @Text $ showHex (xxHash $ from @Text $ UUID.toText (rM ^. #projectId) <> method <> urlPath) ""
+
+  let redactFieldsList = redactFieldsList' <> [".set-cookie"]
   reqBodyB64 <- B64.decodeBase64 $ encodeUtf8 $ rM ^. #requestBody
   -- NB: At the moment we're discarding the error messages from when we're unable to parse the input
   -- We should log this inputs and maybe input them into the db as is. This is also a potential annomaly for our customers,
@@ -122,18 +139,26 @@ requestMsgToDumpAndEndpoint redactFieldsList shouldRedact rM now dumpID = do
   let reqBodyFields = valueToFields shouldRedact reqBody
   let respBodyFields = valueToFields shouldRedact respBody
 
-  let queryParamsKeypaths = Vector.fromList $ map fst queryParamFields :: Vector Text
-  let requestHeadersKeypaths = Vector.fromList $ map fst reqHeaderFields :: Vector Text
-  let responseHeadersKeypaths = Vector.fromList $ map fst respHeaderFields :: Vector Text
-  let requestBodyKeypaths = Vector.fromList $ map fst reqBodyFields :: Vector Text
-  let responseBodyKeypaths = Vector.fromList $ map fst respBodyFields :: Vector Text
+  let queryParamsKP = Vector.fromList $ map fst queryParamFields
+  let requestHeadersKP = Vector.fromList $ map fst reqHeaderFields
+  let responseHeadersKP = Vector.fromList $ map fst respHeaderFields
+  let requestBodyKP = Vector.fromList $ map fst reqBodyFields
+  let responseBodyKP = Vector.fromList $ map fst respBodyFields
 
-  let pathParamsFieldsDTO = pathParamFields & map (fieldsToFieldDTO Fields.FCPathParam (rM ^. #projectId))
-  let queryParamsFieldsDTO = queryParamFields & map (fieldsToFieldDTO Fields.FCQueryParam (rM ^. #projectId))
-  let reqHeadersFieldsDTO = reqHeaderFields & map (fieldsToFieldDTO Fields.FCRequestHeader (rM ^. #projectId))
-  let respHeadersFieldsDTO = respHeaderFields & map (fieldsToFieldDTO Fields.FCResponseHeader (rM ^. #projectId))
-  let reqBodyFieldsDTO = reqBodyFields & map (fieldsToFieldDTO Fields.FCRequestBody (rM ^. #projectId))
-  let respBodyFieldsDTO = respBodyFields & map (fieldsToFieldDTO Fields.FCResponseBody (rM ^. #projectId))
+  -- We calculate a hash that represents the request.
+  -- We skip the request headers from this hash, since the source of the request like browsers might add or skip headers at will,
+  -- which would make this process not deterministic anymore, and that's necessary for a hash.
+  let combinedKeyPathStr = T.concat $ sort $ Vector.toList $ queryParamsKP <> responseHeadersKP <> requestBodyKP <> responseBodyKP
+  let !shapeHash' = from @String @Text $ showHex (xxHash $ from @Text $ combinedKeyPathStr) ""
+  let shapeHash = endpointHash <> shapeHash' -- Include the endpoint hash to make the shape hash unique by endpoint
+  let projectId = Projects.ProjectId (rM ^. #projectId)
+
+  let pathParamsFieldsDTO = pathParamFields & map (fieldsToFieldDTO Fields.FCPathParam projectId endpointHash)
+  let queryParamsFieldsDTO = queryParamFields & map (fieldsToFieldDTO Fields.FCQueryParam projectId endpointHash)
+  let reqHeadersFieldsDTO = reqHeaderFields & map (fieldsToFieldDTO Fields.FCRequestHeader projectId endpointHash)
+  let respHeadersFieldsDTO = respHeaderFields & map (fieldsToFieldDTO Fields.FCResponseHeader projectId endpointHash)
+  let reqBodyFieldsDTO = reqBodyFields & map (fieldsToFieldDTO Fields.FCRequestBody projectId endpointHash)
+  let respBodyFieldsDTO = respBodyFields & map (fieldsToFieldDTO Fields.FCResponseBody projectId endpointHash)
   let fieldsDTO =
         pathParamsFieldsDTO
           <> queryParamsFieldsDTO
@@ -141,69 +166,101 @@ requestMsgToDumpAndEndpoint redactFieldsList shouldRedact rM now dumpID = do
           <> respHeadersFieldsDTO
           <> reqBodyFieldsDTO
           <> respBodyFieldsDTO
+  let (fields, formats) = unzip fieldsDTO
+  let fieldHashes = Vector.fromList $ sort $ map (^. #hash) fields
+  let formatHashes = Vector.fromList $ sort $ map (^. #hash) formats
 
-  let method = T.toUpper $ rM ^. #method
-  let urlPath = normalizeUrlPath (rM ^. #sdkType) (rM ^. #urlPath)
+  --- FIXME: why are we not using the actual url params?
+  -- Since it foes into the endpoint, maybe it should be the keys and their type? I'm unsure.
+  let urlParams = AET.emptyObject
+  let (endpointQ, endpointP) =
+        if endpointHash `elem` (pjc ^. #endpointHashes) -- We have the endpoint cache in our db already. Skill adding
+          then ("", [])
+          else Endpoints.upsertEndpointQueryAndParam $ buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash
 
-  let shape =
-        Shapes.Shape
-          { createdAt = rM ^. #timestamp,
-            updatedAt = now,
-            id = Shapes.ShapeId dumpID,
-            projectId = Projects.ProjectId $ rM ^. #projectId,
-            endpointId = Endpoints.EndpointId dumpID, -- SHould be overwritten based off what we get from the db when creating endpoints id
-            --
-            queryParamsKeypaths = queryParamsKeypaths,
-            requestHeadersKeypaths = requestHeadersKeypaths,
-            responseHeadersKeypaths = responseHeadersKeypaths,
-            requestBodyKeypaths = requestBodyKeypaths,
-            responseBodyKeypaths = responseBodyKeypaths
-          }
+  let (shapeQ, shapeP) =
+        if shapeHash `elem` (pjc ^. #shapeHashes)
+          then ("", [])
+          else do
+            -- A shape is a deterministic representation of a request-response combination for a given endpoint.
+            -- We usually expect multiple shapes per endpoint. Eg a shape for a success request-response and another for an error response.
+            let shape = Shapes.Shape (Shapes.ShapeId dumpID) (rM ^. #timestamp) now projectId endpointHash queryParamsKP requestHeadersKP responseHeadersKP requestBodyKP responseBodyKP shapeHash
+            Shapes.insertShapeQueryAndParam shape
 
-  let reqDump =
-        RequestDumps.RequestDump
-          { createdAt = rM ^. #timestamp,
-            updatedAt = now,
-            id = dumpID,
-            projectId = rM ^. #projectId,
-            host = rM ^. #host,
-            urlPath = urlPath,
-            rawUrl = rM ^. #rawUrl,
-            pathParams = rM ^. #pathParams,
-            method = method,
-            referer = rM ^. #referer,
-            protoMajor = rM ^. #protoMajor,
-            protoMinor = rM ^. #protoMinor,
-            duration = calendarTimeTime $ secondsToNominalDiffTime $ fromIntegral $ rM ^. #duration,
-            statusCode = rM ^. #statusCode,
-            queryParams = rM ^. #queryParams,
-            requestHeaders = rM ^. #requestHeaders,
-            responseHeaders = rM ^. #responseHeaders,
-            requestBody = reqBody,
-            responseBody = respBody,
-            --
-            queryParamsKeypaths = queryParamsKeypaths,
-            requestHeadersKeypaths = requestHeadersKeypaths,
-            responseHeadersKeypaths = responseHeadersKeypaths,
-            requestBodyKeypaths = requestBodyKeypaths,
-            responseBodyKeypaths = responseBodyKeypaths,
-            --
-            shapeId = Shapes.ShapeId dumpID,
-            formatIds = Vector.empty, -- set with values from the db
-            fieldIds = Vector.empty
-          }
-  let endpoint =
-        Endpoints.Endpoint
-          { createdAt = rM ^. #timestamp,
-            updatedAt = now,
-            id = Endpoints.EndpointId dumpID,
-            projectId = Projects.ProjectId $ rM ^. #projectId,
-            urlPath = urlPath,
-            urlParams = AET.emptyObject,
-            method = method,
-            hosts = [rM ^. #host]
-          }
-  pure (reqDump, endpoint, fieldsDTO, shape)
+  -- Build the query and params for inserting a request dump into the database.
+  let (reqDumpQ, reqDumpP) = buildRequestDumpQuery rM dumpID now method urlPath reqBody respBody queryParamsKP requestHeadersKP responseHeadersKP requestBodyKP responseBodyKP endpointHash shapeHash formatHashes fieldHashes
+
+  -- Build all fields and formats, unzip them as separate lists and append them to query and params
+  -- We don't border adding them if their shape exists, as we asume that we've already seen such before.
+  let (fieldsQ, fieldsP) =
+        if shapeHash `elem` (pjc ^. #shapeHashes)
+          then ([], [])
+          else unzip $ map Fields.insertFieldQueryAndParams fields
+
+  let (formatsQ, formatsP) =
+        if shapeHash `elem` (pjc ^. #shapeHashes)
+          then ([], [])
+          else unzip $ map Formats.insertFormatQueryAndParams formats
+
+  let query = shapeQ <> reqDumpQ <> endpointQ <> mconcat fieldsQ <> mconcat formatsQ
+  let params = shapeP <> reqDumpP <> endpointP <> concat fieldsP <> concat formatsP
+  pure (query, params)
+
+-- pure (reqDump, endpoint, fields, formats, shape)
+
+buildEndpoint :: RequestMessages.RequestMessage -> ZonedTime -> UUID.UUID -> Projects.ProjectId -> Text -> Text -> Value -> Text -> Endpoints.Endpoint
+buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash =
+  Endpoints.Endpoint
+    { createdAt = rM ^. #timestamp,
+      updatedAt = now,
+      id = Endpoints.EndpointId dumpID,
+      projectId = projectId,
+      urlPath = urlPath,
+      urlParams = urlParams,
+      -- urlParams = AET.emptyObject,
+      method = method,
+      hosts = [rM ^. #host],
+      hash = endpointHash
+    }
+
+-- request dumps are time series dumps representing each requests which we consume from our users.
+-- We use this field via the log explorer for exploring and searching traffic. And at the moment also use it for most time series analytics.
+-- It's likely a good idea to stop relying on it for some of the time series analysis, to allow us easily support request sampling, but still support
+-- relatively accurate analytic counts.
+buildRequestDumpQuery :: RequestMessages.RequestMessage -> UUID.UUID -> ZonedTime -> Text -> Text -> Value -> Value -> Vector Text -> Vector Text -> Vector Text -> Vector Text -> Vector Text -> Text -> Text -> Vector Text -> Vector Text -> (Query, [DBField])
+buildRequestDumpQuery rM dumpID now method urlPath reqBody respBody queryParamsKP requestHeadersKP responseHeadersKP requestBodyKP responseBodyKP endpointH shapeH formatHs fieldHs =
+  (RequestDumps.insertRequestDumpQuery, requestDump)
+  where
+    requestDump =
+      [ MkDBField $ rM ^. #timestamp,
+        MkDBField now,
+        MkDBField dumpID,
+        MkDBField $ rM ^. #projectId,
+        MkDBField $ rM ^. #host,
+        MkDBField urlPath,
+        MkDBField $ rM ^. #rawUrl,
+        MkDBField $ rM ^. #pathParams,
+        MkDBField method,
+        MkDBField $ rM ^. #referer,
+        MkDBField $ rM ^. #protoMajor,
+        MkDBField $ rM ^. #protoMinor,
+        MkDBField $ calendarTimeTime $ secondsToNominalDiffTime $ fromIntegral $ rM ^. #duration,
+        MkDBField $ rM ^. #statusCode,
+        MkDBField $ rM ^. #queryParams,
+        MkDBField $ rM ^. #requestHeaders,
+        MkDBField $ rM ^. #responseHeaders,
+        MkDBField reqBody,
+        MkDBField respBody,
+        MkDBField queryParamsKP,
+        MkDBField requestHeadersKP,
+        MkDBField responseHeadersKP,
+        MkDBField requestBodyKP,
+        MkDBField responseBodyKP,
+        MkDBField endpointH,
+        MkDBField shapeH,
+        MkDBField formatHs,
+        MkDBField fieldHs
+      ]
 
 normalizeUrlPath :: SDKTypes -> Text -> Text
 normalizeUrlPath GoGin urlPath = urlPath
@@ -216,27 +273,27 @@ normalizeUrlPath JavaSpringBoot urlPath = urlPath
 -- each primitive value in the json and the values.
 --
 -- Regular nested text fields:
--- >>> valueToFields [aesonQQ|{"menu":{"id":"text"}}|]
+-- >>> valueToFields (const False) [aesonQQ|{"menu":{"id":"text"}}|]
 -- [(".menu.id",[String "text"])]
 --
 -- Integer nested field within an array of objects:
--- >>> valueToFields [aesonQQ|{"menu":{"id":[{"int_field":22}]}}|]
+-- >>> valueToFields (const False) [aesonQQ|{"menu":{"id":[{"int_field":22}]}}|]
 -- [(".menu.id.[].int_field",[Number 22.0])]
 --
 -- Deeper nested field with an array of objects:
--- >>> valueToFields [aesonQQ|{"menu":{"id":{"menuitems":[{"key":"value"}]}}}|]
+-- >>> valueToFields (const False) [aesonQQ|{"menu":{"id":{"menuitems":[{"key":"value"}]}}}|]
 -- [(".menu.id.menuitems.[].key",[String "value"])]
 --
 -- Flat array value:
--- >>> valueToFields [aesonQQ|{"menu":["abc", "xyz"]}|]
+-- >>> valueToFields (const False) [aesonQQ|{"menu":["abc", "xyz"]}|]
 -- [(".menu.[]",[String "abc",String "xyz"])]
 --
 -- Float values and Null
--- >>> valueToFields [aesonQQ|{"fl":1.234, "nl": null}|]
+-- >>> valueToFields (const False) [aesonQQ|{"fl":1.234, "nl": null}|]
 -- [(".fl",[Number 1.234]),(".nl",[Null])]
 --
 -- Multiple fields with same key via array:
--- >>> valueToFields [aesonQQ|{"menu":[{"id":"text"},{"id":123}]}|]
+-- >>> valueToFields (const False) [aesonQQ|{"menu":[{"id":"text"},{"id":123}]}|]
 -- [(".menu.[].id",[String "text",Number 123.0])]
 valueToFields :: (Text -> Bool) -> AE.Value -> [(Text, [AE.Value])]
 valueToFields shouldRedact value = dedupFields $ removeBlacklistedFields $ snd $ valueToFields' value ("", [])
@@ -306,27 +363,40 @@ valueToFormatNum val
   | Scientific.isInteger val = "integer"
   | otherwise = "unknown"
 
-fieldsToFieldDTO :: Fields.FieldCategoryEnum -> UUID.UUID -> (Text, [AE.Value]) -> (Fields.Field, [AE.Value])
-fieldsToFieldDTO fieldCategory projectID (keyPath, val) =
+fieldsToFieldDTO :: Fields.FieldCategoryEnum -> Projects.ProjectId -> Text -> (Text, [AE.Value]) -> (Fields.Field, Formats.Format)
+fieldsToFieldDTO fieldCategory projectID endpointHash (keyPath, val) =
   ( Fields.Field
       { createdAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC",
         updatedAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC",
         id = Fields.FieldId UUID.nil,
-        endpointId = Endpoints.EndpointId UUID.nil,
-        projectId = Projects.ProjectId projectID,
+        endpointHash = endpointHash,
+        projectId = projectID,
         key = snd $ T.breakOnEnd "." keyPath,
         -- FIXME: We're discarding the field values of the others, if theer was more than 1 value.
         -- FIXME: We should instead take all the fields into consideration when generating the field types and formats
-        fieldType = fromMaybe Fields.FTUnknown $ viaNonEmpty head $ aeValueToFieldType <$> val,
+        fieldType = fieldType,
         fieldTypeOverride = Just "",
-        format = fromMaybe "" $ viaNonEmpty head $ valueToFormat <$> val,
+        format = format,
         formatOverride = Just "",
         description = "",
-        keyPath = fromList $ T.splitOn "." keyPath,
-        keyPathStr = keyPath,
-        fieldCategory = fieldCategory
+        keyPath = keyPath,
+        fieldCategory = fieldCategory,
+        hash = fieldHash
       },
-    val
+    Formats.Format
+      { id = Formats.FormatId UUID.nil,
+        createdAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC",
+        updatedAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC",
+        projectId = projectID,
+        fieldHash = fieldHash,
+        fieldType = fieldType,
+        fieldFormat = format,
+        examples = Vector.fromList val,
+        hash = formatHash
+      }
+      -- NOTE: Instead of returning val, I could just return the format.
+      -- Then we can have a separate insert for format and a separate one for fields.
+      -- val
   )
   where
     aeValueToFieldType :: AE.Value -> Fields.FieldTypes
@@ -336,3 +406,17 @@ fieldsToFieldDTO fieldCategory projectID (keyPath, val) =
     aeValueToFieldType (AET.Bool _) = Fields.FTBool
     aeValueToFieldType (AET.Object _) = Fields.FTObject
     aeValueToFieldType (AET.Array _) = Fields.FTList
+
+    fieldType :: Fields.FieldTypes
+    fieldType = fromMaybe Fields.FTUnknown $ viaNonEmpty head $ aeValueToFieldType <$> val
+
+    -- FIXME: We should rethink this value to format logic.
+    -- FIXME: Maybe it actually needs machine learning, or maybe it should operate on the entire list, and not just one value.
+    format = fromMaybe "" $ viaNonEmpty head $ valueToFormat <$> val
+
+    -- field hash is <hash of the endpoint> + <the hash of <field_category><key_path_str><field_type>> (No space or comma between data)
+    preFieldHash = Fields.fieldCategoryEnumToText fieldCategory <> keyPath <> Fields.fieldTypeToText fieldType
+    fieldHash' = from @String @Text $ showHex (xxHash $ from @Text $ preFieldHash) ""
+    fieldHash = endpointHash <> fieldHash'
+    formatHash' = from @String @Text $ showHex (xxHash $ from @Text $ format) ""
+    formatHash = fieldHash <> formatHash'

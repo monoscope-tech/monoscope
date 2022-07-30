@@ -32,6 +32,7 @@ import Servant
 import Servant.HTML.Lucid
 import Servant.Htmx
 import Servant.Server.Experimental.Auth (AuthHandler, AuthServerData)
+import Utils
 import Web.Auth (authCallbackH, genAuthServerContext, loginH, loginRedirectH, logoutH)
 import Web.ClientMetadata qualified as ClientMetadata
 import Web.Cookie (SetCookie)
@@ -43,7 +44,7 @@ type HXBoosted = Header "HX-Boosted" Text
 --
 -- API Section
 type ProtectedAPI =
-  Get '[HTML] (Html ())
+  UVerb 'GET '[HTML] GetOrRedirect
     :<|> "p" :> "new" :> Get '[HTML] (Html ()) -- p represents project
     :<|> "p" :> "new" :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> Get '[HTML] (Html ())

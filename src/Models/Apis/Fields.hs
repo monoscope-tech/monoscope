@@ -6,10 +6,11 @@ module Models.Apis.Fields
     selectFields,
     fieldIdText,
     fieldById,
-    upsertFields,
     parseFieldCategoryEnum,
     groupFieldsByCategory,
     fieldTypeToText,
+    fieldCategoryEnumToText,
+    insertFieldQueryAndParams,
   )
 where
 

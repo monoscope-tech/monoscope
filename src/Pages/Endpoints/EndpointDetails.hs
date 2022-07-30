@@ -54,7 +54,7 @@ fieldDetailsView field formats = do
       h3_ [class_ "text-lg text-slate-700"] $ toHtml $ field ^. #key
     div_ $ do
       h6_ [class_ "text-slate-700 text-xs"] "FIELD PATH"
-      h3_ [class_ "text-base text-slate-700 monospace"] $ toHtml $ field ^. #keyPathStr
+      h3_ [class_ "text-base text-slate-700 monospace"] $ toHtml $ field ^. #keyPath
     div_ [class_ "flex flex-row gap-9"] $ do
       div_ $ do
         h6_ [class_ "text-slate-700 text-xs"] "FIELD CATEGORY"
@@ -391,11 +391,11 @@ fieldsToNormalized =
   sortNub . concatMap \field ->
     map
       ((,Nothing) . fst)
-      ( field ^. #keyPathStr
+      ( field ^. #keyPath
           & keyPathStrToKey
           & breakOnAll "."
       )
-      & (++ [(keyPathStrToKey $ field ^. #keyPathStr, Just field)])
+      & (++ [(keyPathStrToKey $ field ^. #keyPath, Just field)])
   where
     rmvDotPrefix = T.dropWhile (== '.')
     -- listToUnicode: add « as a suffix to all lists, and as the key for it's child.

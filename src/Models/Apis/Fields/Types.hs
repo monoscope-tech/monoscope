@@ -9,6 +9,7 @@ module Models.Apis.Fields.Types
     parseFieldCategoryEnum,
     groupFieldsByCategory,
     fieldTypeToText,
+    fieldCategoryEnumToText,
   )
 where
 
@@ -25,7 +26,6 @@ import Database.PostgreSQL.Simple.FromField (FromField, fromField, returnError)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
 import Deriving.Aeson qualified as DAE
-import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Optics.Operators
 import Optics.TH
@@ -118,12 +118,15 @@ instance Default FieldCategoryEnum where
   def = FCQueryParam
 
 instance ToField FieldCategoryEnum where
-  toField FCQueryParam = Escape "query_param"
-  toField FCPathParam = Escape "path_param"
-  toField FCRequestHeader = Escape "request_header"
-  toField FCResponseHeader = Escape "response_header"
-  toField FCRequestBody = Escape "request_body"
-  toField FCResponseBody = Escape "response_body"
+  toField = Escape . encodeUtf8 <$> fieldCategoryEnumToText
+
+fieldCategoryEnumToText :: FieldCategoryEnum -> Text
+fieldCategoryEnumToText FCQueryParam = "query_param"
+fieldCategoryEnumToText FCPathParam = "path_param"
+fieldCategoryEnumToText FCRequestHeader = "request_header"
+fieldCategoryEnumToText FCResponseHeader = "response_header"
+fieldCategoryEnumToText FCRequestBody = "request_body"
+fieldCategoryEnumToText FCResponseBody = "response_body"
 
 parseFieldCategoryEnum :: (Eq s, IsString s) => s -> Maybe FieldCategoryEnum
 parseFieldCategoryEnum "query_param" = Just FCQueryParam
@@ -148,16 +151,16 @@ data Field = Field
     createdAt :: ZonedTime,
     updatedAt :: ZonedTime,
     projectId :: Projects.ProjectId,
-    endpointId :: Endpoints.EndpointId,
+    endpointHash :: Text,
     key :: Text,
     fieldType :: FieldTypes,
     fieldTypeOverride :: Maybe Text,
     format :: Text, -- SHould fields be linked to the format table via the fieldFormat text or format Id?
     formatOverride :: Maybe Text,
     description :: Text,
-    keyPath :: Vector Text,
-    keyPathStr :: Text,
-    fieldCategory :: FieldCategoryEnum
+    keyPath :: Text,
+    fieldCategory :: FieldCategoryEnum,
+    hash :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, Default)
@@ -174,14 +177,14 @@ data Field = Field
 instance Ord Field where
   (<=) f1 f2 =
     (projectId f1 <= projectId f2)
-      && (endpointId f1 <= endpointId f2)
-      && keyPathStr f1 <= keyPathStr f2
+      && (endpointHash f1 <= endpointHash f2)
+      && keyPath f1 <= keyPath f2
 
 instance Eq Field where
   (==) f1 f2 =
     (projectId f1 == projectId f2)
-      && (endpointId f1 == endpointId f2)
-      && (keyPathStr f1 == keyPathStr f2)
+      && (endpointHash f1 == endpointHash f2)
+      && (keyPath f1 == keyPath f2)
 
 makeFieldLabelsNoPrefix ''Field
 

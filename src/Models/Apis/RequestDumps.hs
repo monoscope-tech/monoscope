@@ -18,6 +18,7 @@ module Models.Apis.RequestDumps
     selectRequestDumpsByProjectForChart,
     selectRequestsByEndpointsStatByMin,
     selectRequestsByStatusCodesStatByMin,
+    insertRequestDumpQuery,
   )
 where
 
@@ -35,13 +36,16 @@ import Database.PostgreSQL.Transact (DBT)
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Fields qualified as Fields
 import Models.Apis.Formats qualified as Formats
-import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Optics.TH
 import Pkg.Parser
 import Relude hiding (many, some)
 
+-- request dumps are time series dumps representing each requests which we consume from our users.
+-- We use this field via the log explorer for exploring and searching traffic. And at the moment also use it for most time series analytics.
+-- It's likely a good idea to stop relying on it for some of the time series analysis, to allow us easily support request sampling, but still support
+-- relatively accurate analytic counts.
 data RequestDump = RequestDump
   { id :: UUID.UUID,
     createdAt :: ZonedTime,
@@ -70,10 +74,10 @@ data RequestDump = RequestDump
     requestHeadersKeypaths :: Vector Text,
     responseHeadersKeypaths :: Vector Text,
     --
-    shapeId :: Shapes.ShapeId,
-    --
-    formatIds :: Vector Formats.FormatId,
-    fieldIds :: Vector Fields.FieldId
+    endpointHash :: Text,
+    shapeHash :: Text,
+    formatHashes :: Vector Text,
+    fieldHashes :: Vector Text
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (ToRow, FromRow)
@@ -83,6 +87,8 @@ data RequestDump = RequestDump
 
 makeFieldLabelsNoPrefix ''RequestDump
 
+-- RequestDumpLogItem is used in the to query log items for the log query explorer on the dashboard. Each item here can be queried
+-- via the query language on said dashboard page.
 data RequestDumpLogItem = RequestDumpLogItem
   { id :: UUID.UUID,
     createdAt :: ZonedTime,
@@ -154,10 +160,13 @@ selectRequestDumpByProjectAndId pid rdId = queryOne Select q (pid, rdId)
                     count(*) OVER() AS full_count
              FROM apis.request_dumps where project_id=? and id=?|]
 
+insertRequestDumpQuery :: Query
+insertRequestDumpQuery =
+  [sql| INSERT INTO apis.request_dumps VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::uuid[],?::uuid[]); 
+        |]
+
 insertRequestDump :: RequestDump -> DBT IO Int64
-insertRequestDump = execute Insert q
-  where
-    q = [sql| INSERT INTO apis.request_dumps VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::uuid[],?::uuid[])|]
+insertRequestDump = execute Insert insertRequestDumpQuery
 
 selectRequestsByStatusCodesStatByMin :: Projects.ProjectId -> Text -> Text -> DBT IO (Vector (ZonedTime, Text, Int))
 selectRequestsByStatusCodesStatByMin pid urlPath method = query Select q (pid, urlPath, method)

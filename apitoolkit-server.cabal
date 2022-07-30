@@ -131,6 +131,7 @@ library
     , gogol
     , gogol-core
     , gogol-pubsub
+    , hex-text
     , hspec
     , http-api-data
     , http-types
@@ -174,9 +175,12 @@ library
     , uuid
     , valor >=1.0.0.0
     , vector
+    , vector-algorithms
     , wai
     , warp
+    , witch
     , wreq
+    , xxhash
     , yaml
   default-language: Haskell2010
 

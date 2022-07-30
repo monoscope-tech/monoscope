@@ -13,8 +13,10 @@ import Models.Users.Sessions qualified as Sessions
 import Optics.Operators
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
+import Servant (Union, WithStatus (..), respond)
+import Utils (GetOrRedirect, redirect)
 
-listProjectsGetH :: Sessions.PersistentSession -> DashboardM (Html ())
+listProjectsGetH :: Sessions.PersistentSession -> DashboardM (Union GetOrRedirect)
 listProjectsGetH sess = do
   pool <- asks pool
   projects <- liftIO $ withPool pool $ Projects.selectProjectsForUser (sess ^. #userId)
@@ -23,7 +25,11 @@ listProjectsGetH sess = do
           { sessM = Just sess,
             pageTitle = "Endpoints"
           }
-  pure $ bodyWrapper bwconf $ listProjectsBody projects
+  let page = bodyWrapper bwconf $ listProjectsBody projects
+  -- Redirect to the create projects page if there's no project under the logged in user
+  if null projects
+    then respond $ WithStatus @302 $ redirect "/p/new"
+    else respond $ WithStatus @200 page
 
 listProjectsBody :: Vector.Vector Projects.Project -> Html ()
 listProjectsBody projects = do

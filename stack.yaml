@@ -85,6 +85,8 @@ extra-deps:
   - parallel-io-0.3.5@sha256:97db32eb84b3141f4957f6d208c0ef8adce647cbf68099417e93c7d9a45f9b35,3482
   - Unique-0.4.7.9@sha256:a7e154cf6d05169777a1e54aadab24fb3a6eae3ee167e5e77d7ba96d182436c7,2064
   - transformers-except-0.1.2@sha256:2ff895fd65ec9e45cbe839ef5b66e26b7d9f3fe561148993293a41e14491e625,1548
+  - xxhash-0.0.2@sha256:ed6892fd5827a16bea1641619c586234b6aacd39d26b076a5bc6cf9dc6baacb9,1842
+  - hex-text-0.1.0.6@sha256:b38dfcc8626a9235fea9b2dad01870816e864c8322041c176b1923c03310ee0f,1183
   - git: https://github.com/brendanhay/gogol.git
     commit: 801f00b6e63c22522eb2b3e3e2fc77694730a70f
     subdirs:

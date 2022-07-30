@@ -17,14 +17,20 @@ CREATE SCHEMA IF NOT EXISTS apis;
 -----------------------------------------------------------------------
 -- HELPER FUNCTIONS AND DOMAIN. 
 -----------------------------------------------------------------------
+-----------------------------------------------------------------------
+--make manage_updated_at reusable
+-----------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION manage_updated_at(_tbl regclass) RETURNS VOID AS $$
 BEGIN
   EXECUTE format('CREATE TRIGGER set_updated_at BEFORE UPDATE ON %s
 FOR EACH ROW EXECUTE PROCEDURE set_updated_at()', _tbl);
+  EXCEPTION
+    WHEN others THEN null;
 END;
-
--- create function to automatically set updated at in trigger
 $$ LANGUAGE plpgsql;
+
+--------------------------------------------------------------------
+
 CREATE OR REPLACE FUNCTION set_updated_at() RETURNS trigger AS $$
 BEGIN
   IF (
@@ -37,6 +43,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- end -------------------------------------------------------------
 
 DO $$ BEGIN
   CREATE DOMAIN email AS citext
@@ -53,15 +60,17 @@ END $$;
 
 CREATE TABLE IF NOT EXISTS users.users
 (
-  id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
-  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-  deleted_at TIMESTAMP WITH TIME ZONE,
-  active BOOL NOT NULL DEFAULT 't',
-  first_name VARCHAR(100) NOT NULL DEFAULT '',
-  last_name VARCHAR(100) NOT NULL DEFAULT '',
-  display_image_url TEXT NOT NULL DEFAULT '',
-  email email NOT NULL UNIQUE
+  id                UUID         NOT  NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  created_at        TIMESTAMP    WITH TIME ZONE    NOT               NULL    DEFAULT current_timestamp,
+  updated_at        TIMESTAMP    WITH TIME ZONE    NOT               NULL    DEFAULT current_timestamp,
+  deleted_at        TIMESTAMP    WITH TIME ZONE,
+  active            BOOL         NOT  NULL DEFAULT 't',
+  first_name        VARCHAR(100) NOT  NULL DEFAULT '',
+  last_name         VARCHAR(100) NOT  NULL DEFAULT '',
+  display_image_url TEXT         NOT  NULL DEFAULT '',
+  email             email        NOT  NULL UNIQUE,
+  -- Is sudo is a rough work around to mark users who will be able to see and access all projects.
+  is_sudo           BOOL         NOT  NULL DEFAULT 'f'
 );
 SELECT manage_updated_at('users.users');
 
@@ -71,30 +80,30 @@ SELECT manage_updated_at('users.users');
 
 CREATE TABLE IF NOT EXISTS users.persistent_sessions
 (
-  id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
-  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-  user_id  UUID NOT NULL REFERENCES users.users ON DELETE CASCADE,
-  session_data JSONB NOT NULL DEFAULT '{}' 
+  id           UUID      NOT  NULL DEFAULT    gen_random_uuid() PRIMARY KEY,
+  created_at   TIMESTAMP WITH TIME ZONE       NOT               NULL    DEFAULT current_timestamp,
+  updated_at   TIMESTAMP WITH TIME ZONE       NOT               NULL    DEFAULT current_timestamp,
+  user_id      UUID      NOT  NULL REFERENCES users.users       ON      DELETE  CASCADE,
+  session_data JSONB     NOT  NULL DEFAULT    '{}'
 );
 SELECT manage_updated_at('users.persistent_sessions');
 
 
 CREATE TABLE IF NOT EXISTS projects.projects
 (
-  id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
-  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-  deleted_at TIMESTAMP WITH TIME ZONE,
-  active BOOL NOT NULL DEFAULT 't',
-  title TEXT NOT NULL DEFAULT '',
-  description TEXT NOT NULL DEFAULT '',
+  id          UUID      NOT  NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  created_at  TIMESTAMP WITH TIME ZONE    NOT               NULL    DEFAULT current_timestamp,
+  updated_at  TIMESTAMP WITH TIME ZONE    NOT               NULL    DEFAULT current_timestamp,
+  deleted_at  TIMESTAMP WITH TIME ZONE,
+  active      BOOL      NOT  NULL DEFAULT 't',
+  title       TEXT      NOT  NULL DEFAULT '',
+  description TEXT      NOT  NULL DEFAULT ''
   -- FIXME: Should this hosts field be removed? We can get the list of hosts by querying the hosts in endpoints.
   -- FIXME: And it doesn't seem as straightforward how this hosts in the projects will be kept up to date efficiently.
-  hosts TEXT[] NOT NULL DEFAULT '{}'
+  -- hosts TEXT[] NOT NULL DEFAULT '{}'
+  -- hosts should always be gotten from the endpoints table. We could use a queue if needed, or just rely on the inmemory projects cache on the haskell side.
 );
 SELECT manage_updated_at('projects.projects');
-
 
 -----------------------------------------------------------------------
 -- PROJECT MEMBERS table 
@@ -104,15 +113,15 @@ SELECT manage_updated_at('projects.projects');
 CREATE TYPE projects.project_permissions AS ENUM ('admin', 'view', 'edit');
 CREATE TABLE IF NOT EXISTS projects.project_members
 (
-  id UUID NOT NULL DEFAULT gen_random_uuid(),
-  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-  deleted_at TIMESTAMP WITH TIME ZONE,
-  active BOOL NOT NULL DEFAULT 't',
-  project_id UUID NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
-  user_id UUID NOT NULL REFERENCES users.users (id) ON DELETE CASCADE ON UPDATE CASCADE,
-  permission projects.project_permissions NOT NULL DEFAULT 'view',
-  PRIMARY KEY (project_id, user_id)
+  id         UUID                         NOT          NULL DEFAULT    gen_random_uuid(),
+  created_at TIMESTAMP                    WITH         TIME ZONE       NOT               NULL DEFAULT current_timestamp,
+  updated_at TIMESTAMP                    WITH         TIME ZONE       NOT               NULL DEFAULT current_timestamp,
+  deleted_at TIMESTAMP                    WITH         TIME ZONE,
+  active     BOOL                         NOT          NULL DEFAULT    't',
+  project_id UUID                         NOT          NULL REFERENCES projects.projects (id) ON      DELETE CASCADE,
+  user_id    UUID                         NOT          NULL REFERENCES users.users       (id) ON      DELETE CASCADE ON UPDATE CASCADE,
+  permission projects.project_permissions NOT          NULL DEFAULT    'view',
+  PRIMARY    KEY                          (project_id, user_id)
 );
 SELECT manage_updated_at('projects.project_members');
 
@@ -124,14 +133,14 @@ SELECT manage_updated_at('projects.project_members');
 
 CREATE TABLE IF NOT EXISTS projects.project_api_keys
 (
-  id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
-  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+  id         UUID      NOT  NULL DEFAULT    gen_random_uuid() PRIMARY KEY,
+  created_at TIMESTAMP WITH TIME ZONE       NOT               NULL    DEFAULT current_timestamp,
+  updated_at TIMESTAMP WITH TIME ZONE       NOT               NULL    DEFAULT current_timestamp,
   deleted_at TIMESTAMP WITH TIME ZONE,
-  active BOOL NOT NULL DEFAULT 't',
-  project_id UUID NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
-  title TEXT NOT NULL DEFAULT '',
-  key_prefix TEXT NOT NULL DEFAULT ''
+  active     BOOL      NOT  NULL DEFAULT    't',
+  project_id UUID      NOT  NULL REFERENCES projects.projects (id)    ON      DELETE CASCADE,
+  title      TEXT      NOT  NULL DEFAULT    '',
+  key_prefix TEXT      NOT  NULL DEFAULT    ''
 );
 SELECT manage_updated_at('projects.project_api_keys');
 CREATE INDEX IF NOT EXISTS idx_projects_project_api_keys_project_id ON projects.project_api_keys(project_id);
@@ -143,13 +152,13 @@ CREATE INDEX IF NOT EXISTS idx_projects_project_api_keys_project_id ON projects.
 
 CREATE TABLE IF NOT EXISTS apis.endpoints
 (
-    id uuid NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-    project_id uuid NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
-    url_path text NOT NULL DEFAULT ''::text,
-    url_params jsonb NOT NULL DEFAULT '{}'::jsonb,
-    method text NOT NULL DEFAULT 'GET'::text,
+    id         uuid      NOT  NULL DEFAULT    gen_random_uuid() PRIMARY KEY,
+    created_at TIMESTAMP WITH TIME ZONE       NOT               NULL    DEFAULT current_timestamp,
+    updated_at TIMESTAMP WITH TIME ZONE       NOT               NULL    DEFAULT current_timestamp,
+    project_id uuid      NOT  NULL REFERENCES projects.projects (id)    ON      DELETE CASCADE,
+    url_path   text      NOT  NULL DEFAULT    ''::text,
+    url_params jsonb     NOT  NULL DEFAULT    '{}'::jsonb,
+    method     text      NOT  NULL DEFAULT    'GET'::text,
     -- Hosts is a unique set of hosts. Implemented originally as an array
     -- but then switched implementation to hstore for performance reasons
     -- https://gist.github.com/semaperepelitsa/66527f35f5127ed8dbb95974e68139b7
@@ -159,94 +168,119 @@ CREATE TABLE IF NOT EXISTS apis.endpoints
     -- TODO: update the endpoint_request_stats materialized view to support getting keys only if needed.
     -- TODO: Although I don't think we store the hosts in the materialized view.
     hosts hstore NOT NULL DEFAULT ''::hstore,
+
+    -- the hash will represent an xxhash of the project_id and method and the url_path
+    -- it will be used as the main identifier for endpoints since it can be generated deterministically
+    -- without having to check the value from the database.
+    hash text NOT NULL DEFAULT ''::text,
     UNIQUE(project_id, url_path, method)
 );
 SELECT manage_updated_at('apis.endpoints');
 CREATE INDEX IF NOT EXISTS idx_apis_endpoints_project_id ON apis.endpoints(project_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_endpoints_hash ON apis.endpoints(hash);
 
 -----------------------------------------------------------------------
 -- SHAPES table 
 -----------------------------------------------------------------------
+
 CREATE TABLE IF NOT EXISTS apis.shapes
 (
-    id uuid NOT NULL DEFAULT gen_random_uuid()  PRIMARY KEY,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-    project_id uuid NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
-    endpoint_id uuid NOT NULL,
+    id                        uuid      NOT  NULL DEFAULT    gen_random_uuid() PRIMARY KEY,
+    created_at                TIMESTAMP WITH TIME ZONE       NOT               NULL    DEFAULT current_timestamp,
+    updated_at                TIMESTAMP WITH TIME ZONE       NOT               NULL    DEFAULT current_timestamp,
+    project_id                uuid      NOT  NULL REFERENCES projects.projects (id)    ON      DELETE CASCADE,
+    endpoint_hash             text      NOT  NULL,
     
-    query_params_keypaths text[] NOT NULL DEFAULT '{}'::TEXT[],    
-    request_body_keypaths text[] NOT NULL DEFAULT '{}'::TEXT[],    
-    response_body_keypaths text[] NOT NULL DEFAULT '{}'::TEXT[],    
-    request_headers_keypaths text[] NOT NULL DEFAULT '{}'::TEXT[],    
-    response_headers_keypaths text[] NOT NULL DEFAULT '{}'::TEXT[],
+    query_params_keypaths     text[]    NOT  NULL DEFAULT    '{}'::TEXT[],
+    request_body_keypaths     text[]    NOT  NULL DEFAULT    '{}'::TEXT[],
+    response_body_keypaths    text[]    NOT  NULL DEFAULT    '{}'::TEXT[],
+    request_headers_keypaths  text[]    NOT  NULL DEFAULT    '{}'::TEXT[],
+    response_headers_keypaths text[]    NOT  NULL DEFAULT    '{}'::TEXT[],
 
-    -- A shape is the combination of all the keypaths accross all the different fields
-    UNIQUE(project_id, endpoint_id, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, response_headers_keypaths)
+    -- shape hash is a hash of all the key paths put together into a single sorted list and hashed
+    -- We skip the request headers from the shape hash, since a lot of sources might add unnecessary hashes at anytime
+    -- the final hash is the hash as described above, but with the endpoint hash prepended to it. 
+    -- This opens up prefix search possibilities as well, for shapes.
+    hash text NOT NULL DEFAULT ''::TEXT
 );
 SELECT manage_updated_at('apis.shapes');
 CREATE INDEX IF NOT EXISTS idx_apis_shapes_project_id ON apis.shapes(project_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_shapes_hash ON apis.shapes(hash);
 
 -----------------------------------------------------------------------
 -- FIELDS table 
 -----------------------------------------------------------------------
+
 CREATE TYPE apis.field_type AS ENUM ('unknown','string','number','bool','object', 'list', 'null');
 CREATE TYPE apis.field_category AS ENUM ('path_param','query_param', 'request_header','response_header', 'request_body', 'response_body');
 CREATE TABLE IF NOT EXISTS apis.fields
 (
-    id uuid NOT NULL DEFAULT gen_random_uuid()  PRIMARY KEY,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-    project_id uuid NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
-    endpoint_id uuid NOT NULL,
-    key text  NOT NULL DEFAULT ''::text,
-    field_type apis.field_type NOT NULL DEFAULT 'unknown'::apis.field_type,
+    id                  uuid            NOT  NULL DEFAULT    gen_random_uuid() PRIMARY KEY,
+    created_at          TIMESTAMP       WITH TIME ZONE       NOT               NULL    DEFAULT current_timestamp,
+    updated_at          TIMESTAMP       WITH TIME ZONE       NOT               NULL    DEFAULT current_timestamp,
+    project_id          uuid            NOT  NULL REFERENCES projects.projects (id)    ON      DELETE CASCADE,
+    endpoint_hash       text            NOT  NULL,
+    key                 text            NOT  NULL DEFAULT    ''::text,
+    field_type          apis.field_type NOT  NULL DEFAULT    'unknown'::apis.field_type,
     field_type_override text,
-    format text NOT NULL DEFAULT 'none'::text,
-    format_override text NOT NULL DEFAULT '',
-    description text NOT NULL DEFAULT ''::text,
-    key_path text[] NOT NULL DEFAULT '{}'::text[],
-    key_path_str text NOT NULL DEFAULT '',
+    -- I'm forgetting what this format is. But I think it should be the mask of the field format. 
+    -- And should sort of mirror the formats table?
+    format              text            NOT  NULL DEFAULT    'none'::text,
+    format_override     text            NOT  NULL DEFAULT    '',
+    description         text            NOT  NULL DEFAULT    ''::text,
+    key_path        text            NOT  NULL DEFAULT    '',
     field_category apis.field_category NOT NULL DEFAULT 'request_body'::apis.field_category,
-    UNIQUE (project_id, endpoint_id, field_category, key_path_str, format)
+
+    -- the hash of a field is the <hash of the endpoint> + <the hash of <field_category>,<key_path_str>,<field_type>>
+    hash text NOT NULL DEFAULT ''::TEXT
 );
 SELECT manage_updated_at('apis.fields');
 CREATE INDEX IF NOT EXISTS idx_apis_fields_project_id ON apis.fields(project_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_fields_hash ON apis.fields(hash);
+
+
 -----------------------------------------------------------------------
 -- FORMATS table 
 -----------------------------------------------------------------------
+
 CREATE TABLE IF NOT EXISTS apis.formats
 (
-  id uuid NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
-  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-  deleted_at TIMESTAMP WITH TIME ZONE,
-  project_id uuid NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
-  field_id uuid NOT NULL REFERENCES apis.fields (id) ON DELETE CASCADE,
-  field_type apis.field_type NOT NULL DEFAULT 'unknown'::apis.field_type,
-  field_format text NOT NULL DEFAULT '',
-  examples text[] NOT NULL DEFAULT '{}'::text[],
-  UNIQUE (project_id, field_id, field_format)
+  id           uuid            NOT  NULL DEFAULT    gen_random_uuid() PRIMARY KEY,
+  created_at   TIMESTAMP       WITH TIME ZONE       NOT               NULL    DEFAULT current_timestamp,
+  updated_at   TIMESTAMP       WITH TIME ZONE       NOT               NULL    DEFAULT current_timestamp,
+  deleted_at   TIMESTAMP       WITH TIME ZONE,
+  project_id   uuid            NOT  NULL REFERENCES projects.projects (id)    ON      DELETE CASCADE,
+  field_hash   TEXT            NOT  NULL,
+  field_type   apis.field_type NOT  NULL DEFAULT    'unknown'::apis.field_type,
+  field_format text            NOT  NULL DEFAULT    '',
+  examples     text[]          NOT  NULL DEFAULT    '{}'::text[],
+
+  -- hash for formats will be the <field hash> + <field_format hash> 
+  hash         text            NOT  NULL DEFAULT    ''::TEXT,
+
+  UNIQUE (project_id, field_hash, field_format)
 );
 SELECT manage_updated_at('apis.formats');
+CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_fields_hash ON apis.fields(hash);
 
 -----------------------------------------------------------------------
 -- ANOMALIES table 
 -----------------------------------------------------------------------
+
 CREATE TYPE apis.anomaly_type AS ENUM ('unknown', 'field', 'endpoint','shape', 'format');
 CREATE TYPE apis.anomaly_action AS ENUM ('unknown', 'created');
 CREATE TABLE IF NOT EXISTS apis.anomalies
 (
-  id uuid NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
-  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-  project_id uuid NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
-  acknowleged_at TIMESTAMP WITH TIME ZONE,
-  acknowleged_by UUID REFERENCES users.users (id), -- user who acknowleges the anomaly
-  anomaly_type apis.anomaly_type NOT NULL DEFAULT 'unknown'::apis.anomaly_type,
-  action apis.anomaly_action NOT NULL DEFAULT 'unknown'::apis.anomaly_action,
-  target_id uuid,
-  archived_at TIMESTAMP WITH TIME ZONE
+  id             uuid                NOT        NULL        DEFAULT    gen_random_uuid() PRIMARY KEY,
+  created_at     TIMESTAMP           WITH       TIME        ZONE       NOT               NULL    DEFAULT current_timestamp,
+  updated_at     TIMESTAMP           WITH       TIME        ZONE       NOT               NULL    DEFAULT current_timestamp,
+  project_id     uuid                NOT        NULL        REFERENCES projects.projects (id)    ON      DELETE CASCADE,
+  acknowleged_at TIMESTAMP           WITH       TIME        ZONE,
+  acknowleged_by UUID                REFERENCES users.users (id),      -- user who acknowleges the anomaly
+  anomaly_type   apis.anomaly_type   NOT        NULL        DEFAULT    'unknown'::apis.anomaly_type,
+  action         apis.anomaly_action NOT        NULL        DEFAULT    'unknown'::apis.anomaly_action,
+  target_id      uuid,
+  archived_at    TIMESTAMP           WITH       TIME        ZONE
 );
 SELECT manage_updated_at('apis.anomalies');
 
@@ -284,36 +318,38 @@ CREATE TRIGGER shapes_created_anomaly AFTER INSERT ON apis.shapes FOR EACH ROW E
 -- reducing the round trips.
 -----------------------------------------------------------------------
 
-CREATE OR REPLACE FUNCTION apis.create_field_and_formats(
-  i_project_id UUID, i_endpoint_id UUID, i_key TEXT, i_field_type apis.field_type, i_field_type_override TEXT, 
-  i_format TEXT, i_format_override TEXT, i_description TEXT, i_key_path TEXT[], i_key_path_str TEXT, 
-  i_field_category apis.field_category, i_examples TEXT[], i_examples_max_count INT 
-)
-RETURNS TABLE (fmt_id UUID, f_id UUID) AS $$
-BEGIN
-  return query
-  with returned_fields AS (
-    INSERT INTO apis.fields (project_id, endpoint_id, key, field_type, field_type_override, format, format_override, description, key_path, key_path_str, field_category)
-      VALUES(i_project_id, i_endpoint_id, i_key, i_field_type, i_field_type_override, i_format, i_format_override, i_description, i_key_path, i_key_path_str, i_field_category)
-      ON CONFLICT (project_id, endpoint_id, field_category, key_path_str, format) DO NOTHING
-    RETURNING project_id, id, field_type, format, i_examples
-  ), current_fields AS (
-  SELECT * FROM returned_fields
-    UNION ALL
-	SELECT project_id, id, field_type, format,i_examples
-    FROM apis.fields
-    WHERE  project_id=i_project_id AND endpoint_id=i_endpoint_id AND key_path_str=i_key_path_str AND format=i_format -- only executed if no INSERT
-  LIMIT  1
-  )
- INSERT INTO apis.formats (project_id, field_id, field_type, field_format, examples)
-  SELECT * from current_fields
-		ON CONFLICT (project_id, field_id, field_format)
-		DO
-			UPDATE SET 
-				examples = ARRAY(SELECT DISTINCT e from unnest(apis.formats.examples || excluded.examples) as e order by e limit i_examples_max_count)
-	RETURNING id, field_id;
-END;
-$$ LANGUAGE plpgsql;
+-- This function should no longer be needed, since it should be possible ot insert into the 3 tables separately. So at the least, it shouldn't be this complicated.
+-- TODO: insert into this table without the need for this function.
+-- CREATE OR REPLACE FUNCTION apis.create_field_and_formats(
+--   i_project_id UUID, i_endpoint_id UUID, i_key TEXT, i_field_type apis.field_type, i_field_type_override TEXT, 
+--   i_format TEXT, i_format_override TEXT, i_description TEXT, i_key_path TEXT[], i_key_path_str TEXT, 
+--   i_field_category apis.field_category, i_examples TEXT[], i_examples_max_count INT, i_field_hash TEXT 
+-- )
+-- RETURNS TABLE (fmt_hash text, f_hash text) AS $$
+-- BEGIN
+--   return query
+--   with returned_fields AS (
+--     INSERT INTO apis.fields (project_id, endpoint_id, key, field_type, field_type_override, format, format_override, description, key_path, key_path_str, field_category, hash)
+--       VALUES(i_project_id, i_endpoint_id, i_key, i_field_type, i_field_type_override, i_format, i_format_override, i_description, i_key_path, i_key_path_str, i_field_category, i_field_hash)
+--       ON CONFLICT (project_id, endpoint_id, field_category, key_path_str, format) DO NOTHING
+--     RETURNING project_id, id, field_type, format, i_examples
+--   ), current_fields AS (
+--   SELECT * FROM returned_fields
+--     UNION ALL
+-- 	SELECT project_id, hash, field_type, format, i_examples
+--     FROM apis.fields
+--     WHERE  project_id=i_project_id AND endpoint_id=i_endpoint_id AND key_path_str=i_key_path_str AND format=i_format -- only executed if no INSERT
+--   LIMIT  1
+--   )
+--  INSERT INTO apis.formats (project_id, field_hash, field_type, field_format, examples)
+--   SELECT * from current_fields
+-- 		ON CONFLICT (project_id, field_hash, field_format)
+-- 		DO
+-- 			UPDATE SET 
+-- 				examples = ARRAY(SELECT DISTINCT e from unnest(apis.formats.examples || excluded.examples) as e order by e limit i_examples_max_count)
+-- 	RETURNING hash, field_hash;
+-- END;
+-- $$ LANGUAGE plpgsql;
 
 ----------------------------------------------------------------------------------------------------------
 -- apis.request_dumps table holds a timeseries dump of all requests that come into the backend.
@@ -321,46 +357,47 @@ $$ LANGUAGE plpgsql;
 ----------------------------------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS apis.request_dumps
 (
-    id uuid NOT NULL DEFAULT gen_random_uuid(),
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
-    project_id uuid NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
-    host text NOT NULL DEFAULT '',
-    url_path text NOT NULL DEFAULT '',
-    raw_url text NOT NULL DEFAULT '',
-    path_params jsonb NOT NULL DEFAULT '{}',
-    method text NOT NULL DEFAULT '',
-    referer text NOT NULL DEFAULT '',
-    proto_major int NOT NULL DEFAULT 0,
-    proto_minor int NOT NULL DEFAULT 0,
-    duration interval,
-    status_code int NOT NULL DEFAULT 0,
+    id                        uuid      NOT  NULL DEFAULT    gen_random_uuid(),
+    created_at                TIMESTAMP WITH TIME ZONE       NOT               NULL DEFAULT current_timestamp,
+    updated_at                TIMESTAMP WITH TIME ZONE       NOT               NULL DEFAULT current_timestamp,
+    project_id                uuid      NOT  NULL REFERENCES projects.projects (id) ON      DELETE CASCADE,
+    host                      text      NOT  NULL DEFAULT    '',
+    url_path                  text      NOT  NULL DEFAULT    '',
+    raw_url                   text      NOT  NULL DEFAULT    '',
+    path_params               jsonb     NOT  NULL DEFAULT    '{}',
+    method                    text      NOT  NULL DEFAULT    '',
+    referer                   text      NOT  NULL DEFAULT    '',
+    proto_major               int       NOT  NULL DEFAULT    0,
+    proto_minor               int       NOT  NULL DEFAULT    0,
+    duration                  interval,
+    status_code               int       NOT  NULL DEFAULT    0,
 
-    query_params jsonb NOT NULL DEFAULT '{}'::jsonb,
-    request_body jsonb NOT NULL DEFAULT '{}'::jsonb,
-    response_body jsonb NOT NULL DEFAULT '{}'::jsonb,
-    request_headers jsonb NOT NULL DEFAULT '{}'::jsonb,
-    response_headers jsonb NOT NULL DEFAULT '{}'::jsonb,
+    query_params              jsonb     NOT  NULL DEFAULT    '{}'::jsonb,
+    request_body              jsonb     NOT  NULL DEFAULT    '{}'::jsonb,
+    response_body             jsonb     NOT  NULL DEFAULT    '{}'::jsonb,
+    request_headers           jsonb     NOT  NULL DEFAULT    '{}'::jsonb,
+    response_headers          jsonb     NOT  NULL DEFAULT    '{}'::jsonb,
 
-    query_params_keypaths text[] NOT NULL DEFAULT '{}'::TEXT[],    
-    request_body_keypaths text[] NOT NULL DEFAULT '{}'::TEXT[],    
-    response_body_keypaths text[] NOT NULL DEFAULT '{}'::TEXT[],    
-    request_headers_keypaths text[] NOT NULL DEFAULT '{}'::TEXT[],    
-    response_headers_keypaths text[] NOT NULL DEFAULT '{}'::TEXT[],
+    query_params_keypaths     text[]    NOT  NULL DEFAULT    '{}'::TEXT[],
+    request_body_keypaths     text[]    NOT  NULL DEFAULT    '{}'::TEXT[],
+    response_body_keypaths    text[]    NOT  NULL DEFAULT    '{}'::TEXT[],
+    request_headers_keypaths  text[]    NOT  NULL DEFAULT    '{}'::TEXT[],
+    response_headers_keypaths text[]    NOT  NULL DEFAULT    '{}'::TEXT[],
 
-    shape_id uuid NOT NULL REFERENCES apis.shapes (id),
-    
-    format_ids uuid[] NOT NULL DEFAULT '{}'::UUID[],
-    field_ids uuid[] NOT NULL DEFAULT '{}'::UUID[],
+    -- Instead of holding ids which are difficult to compute, let's rather store their hashes only. 
+    endpoint_hash             text      NOT  NULL DEFAULT    ''::text,
+    shape_hash                text      NOT  NULL DEFAULT    ''::text,
+    format_hashes             text[]    NOT  NULL DEFAULT    '{}'::text[],
+    field_hashes              text[]    NOT  NULL DEFAULT    '{}'::text[],
 
     PRIMARY KEY(project_id,created_at,id)
 );
 SELECT manage_updated_at('apis.request_dumps');
 SELECT create_hypertable('apis.request_dumps', 'created_at');
 CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_project_id ON apis.request_dumps(project_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_shape_id ON apis.request_dumps(shape_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_format_ids ON apis.request_dumps(format_ids, created_at);
-CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_field_ids ON apis.request_dumps(field_ids, created_at);
+CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_shape_hash ON apis.request_dumps(shape_hash, created_at);
+CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_format_hashes ON apis.request_dumps(format_hashes, created_at);
+CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_field_hashes ON apis.request_dumps(field_hashes, created_at);
 CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_endpointss ON apis.request_dumps(url_path,method, created_at);
 
 
@@ -462,66 +499,67 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_project_requests_by_endpoint_per_min_
 
 
 -- TODO: Create triggers to create new anomalies when new fields, endpoints and shapes are created.
+-- TODO: Write anomalies_vm view to use hashes not ids
 
+-- FIXME: reevaluate how anomaly_vm will work and be rendered
+-- CREATE MATERIALIZED VIEW IF NOT EXISTS apis.anomalies_vm 
+--     AS	SELECT 
+--     an.id, an.created_at, an.updated_at, an.project_id, an.acknowleged_at,an.acknowleged_by, an.anomaly_type, an.action, an.target_id,
+--     shapes.id shape_id,
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS apis.anomalies_vm 
-    AS	SELECT 
-    an.id, an.created_at, an.updated_at, an.project_id, an.acknowleged_at,an.acknowleged_by, an.anomaly_type, an.action, an.target_id,
-    shapes.id shape_id,
+--     fields.id field_id,
+--     fields.key field_key,
+--     fields.key_path_str field_key_path_str,
+--     fields.field_category field_category,
+--     fields.format field_format,
+--     
+--     formats.id format_id,
+--     formats.field_type format_type,
+--     formats.examples format_examples,
 
-    fields.id field_id,
-    fields.key field_key,
-    fields.key_path_str field_key_path_str,
-    fields.field_category field_category,
-    fields.format field_format,
-    
-    formats.id format_id,
-    formats.field_type format_type,
-    formats.examples format_examples,
+--     endpoints.id endpoint_id,
+--     endpoints.method endpoint_method,
+--     endpoints.url_path endpoint_url_path,
 
-    endpoints.id endpoint_id,
-    endpoints.method endpoint_method,
-    endpoints.url_path endpoint_url_path,
-
-    an.archived_at,
-    (
-      SELECT
-          json_agg(json_build_array(timeB, count))
-      from
-          (
-              SELECT
-                  time_bucket('1 minute', created_at) as timeB,
-                  count(id) count
-              FROM
-                  apis.request_dumps
-              where
-                  created_at > NOW() - interval '14' day -- TODO: update to 30days retention
-                  AND project_id = project_id
-                  AND CASE
-                      WHEN anomaly_type = 'endpoint' THEN 
-                          method = method
-                          AND url_path = url_path
-                      WHEN anomaly_type = 'shape' THEN
-                          shape_id = target_id
-                      WHEN anomaly_type = 'format' THEN
-                          target_id = ANY(format_ids)
-                  END
-              GROUP BY
-                  timeB
-          ) ts 
-    )::text ts
-	FROM apis.anomalies an
-	LEFT JOIN apis.formats on target_id=formats.id
-	LEFT JOIN apis.fields on (fields.id=target_id OR fields.id=formats.field_id) 
-	LEFT JOIN apis.shapes on target_id=shapes.id
-	LEFT JOIN apis.endpoints 
-      ON (endpoints.id = target_id 
-          OR endpoints.id = fields.endpoint_id 
-          OR endpoints.id = shapes.endpoint_id
-          );
-CREATE UNIQUE INDEX idx_apis_anomaly_vm_id ON apis.anomalies_vm (id);
-CREATE INDEX idx_apis_anomaly_vm_project_id ON apis.anomalies_vm (project_id);
-CREATE INDEX idx_apis_anomaly_vm_project_id_endpoint_id ON apis.anomalies_vm (project_id, endpoint_id);
+--     an.archived_at,
+--     (
+--       SELECT
+--           json_agg(json_build_array(timeB, count))
+--       from
+--           (
+--               SELECT
+--                   time_bucket('1 minute', created_at) as timeB,
+--                   count(id) count
+--               FROM
+--                   apis.request_dumps
+--               where
+--                   created_at > NOW() - interval '14' day -- TODO: update to 30days retention
+--                   AND project_id = project_id
+--                   AND CASE
+--                       WHEN anomaly_type = 'endpoint' THEN 
+--                           method = method
+--                           AND url_path = url_path
+--                       WHEN anomaly_type = 'shape' THEN
+--                           shape_id = target_id
+--                       WHEN anomaly_type = 'format' THEN
+--                           target_id = ANY(format_ids)
+--                   END
+--               GROUP BY
+--                   timeB
+--           ) ts 
+--     )::text ts
+-- 	FROM apis.anomalies an
+-- 	LEFT JOIN apis.formats on target_id=formats.hash
+-- 	LEFT JOIN apis.fields on (fields.hash=target_id OR fields.hash=formats.field_hash) 
+-- 	LEFT JOIN apis.shapes on target_id=shapes.hash
+-- 	LEFT JOIN apis.endpoints 
+--       ON (endpoints.id = target_id 
+--           OR endpoints.hash = fields.endpoint_hash 
+--           OR endpoints.hash = shapes.endpoint_hash
+--           );
+-- CREATE UNIQUE INDEX idx_apis_anomaly_vm_id ON apis.anomalies_vm (id);
+-- CREATE INDEX idx_apis_anomaly_vm_project_id ON apis.anomalies_vm (project_id);
+-- CREATE INDEX idx_apis_anomaly_vm_project_id_endpoint_id ON apis.anomalies_vm (project_id, endpoint_hash);
 
 
 CREATE OR REPLACE PROCEDURE apis.refresh_request_dump_views_every_5mins(job_id int, config jsonb) LANGUAGE PLPGSQL AS
@@ -533,17 +571,65 @@ BEGIN
   REFRESH MATERIALIZED VIEW CONCURRENTLY apis.project_requests_by_endpoint_per_min;
 END
 $$;
--- Refresg view every 5mins
+-- Refresh view every 5mins
 SELECT add_job('apis.refresh_request_dump_views_every_5mins','5min');
 
-CREATE OR REPLACE PROCEDURE apis.refresh_request_dump_views_every_2mins(job_id int, config jsonb) LANGUAGE PLPGSQL AS
-$$
-BEGIN
-  RAISE NOTICE 'Executing action % with config %', job_id, config;
-  REFRESH MATERIALIZED VIEW CONCURRENTLY apis.anomalies_vm;
-END
-$$;
--- Refresg view every 5mins
-SELECT add_job('apis.refresh_request_dump_views_every_2mins','2min');
+-- FIXME: uncomment or reevaluate after reintroducing anomaly_vm view.
+-- CREATE OR REPLACE PROCEDURE apis.refresh_request_dump_views_every_2mins(job_id int, config jsonb) LANGUAGE PLPGSQL AS
+-- $$
+-- BEGIN
+--   RAISE NOTICE 'Executing action % with config %', job_id, config;
+--   REFRESH MATERIALIZED VIEW CONCURRENTLY apis.anomalies_vm;
+-- END
+-- $$;
+-- Refresh view every 5mins
+-- SELECT add_job('apis.refresh_request_dump_views_every_2mins','2min');
+--------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS background_jobs 
+  ( id         serial    primary key
+  , created_at timestamp with    time zone    default now() not null
+  , updated_at timestamp with    time zone    default now() not null
+  , run_at     timestamp with    time zone    default now() not null
+  , status     text      not     null
+  , payload    jsonb     not     null
+  , last_error jsonb     null
+  , attempts   int       not     null default 0
+  , locked_at  timestamp with    time zone    null
+  , locked_by  text      null
+  , constraint incorrect_locking_info CHECK ((status <> 'locked' and locked_at is null and locked_by is null) or (status = 'locked' and locked_at is not null and locked_by is not null)) 
+  ); 
+
+create index if not exists idx_background_jobs_created_at on background_jobs(created_at); 
+create index if not exists idx_background_jobs_updated_at on background_jobs(updated_at); 
+create index if not exists idx_background_jobs_locked_at on background_jobs(locked_at); 
+create index if not exists idx_background_jobs_locked_by on background_jobs(locked_by); 
+create index if not exists idx_background_jobs_status on background_jobs(status); 
+create index if not exists idx_background_jobs_run_at on background_jobs(run_at);
+
+
+create or replace function notify_job_monitor_for_background_jobs() returns trigger as $$ 
+begin  
+  perform pg_notify('background_jobs',  
+    json_build_object('id', new.id, 'run_at', new.run_at, 'locked_at', new.locked_at)::text);  
+  return new;  
+end;  
+$$ language plpgsql; 
+drop trigger if exists trg_notify_job_monitor_for_background_jobs on background_jobs; 
+create trigger trg_notify_job_monitor_for_background_jobs after insert on background_jobs for each row execute procedure notify_job_monitor_for_background_jobs();
+
+CREATE TABLE IF NOT EXISTS projects.redacted_fields
+  (                id        UUID       NOT            NULL       DEFAULT           gen_random_uuid() PRIMARY KEY,
+    project_id     UUID      NOT        NULL           REFERENCES projects.projects (id)              ON      DELETE CASCADE,
+    created_at     TIMESTAMP WITH       TIME           ZONE       NOT               NULL              DEFAULT current_timestamp,
+    updated_at     TIMESTAMP WITH       TIME           ZONE       NOT               NULL              DEFAULT current_timestamp,
+    deleted_at     TIMESTAMP WITH       TIME           ZONE,
+    path           TEXT      NOT        NULL           DEFAULT    '',
+    configured_via TEXT      NOT        NULL           DEFAULT    '',
+    description    TEXT      NOT        NULL           DEFAULT    '',
+    endpoint       UUID      REFERENCES apis.endpoints (id)       ON                DELETE            CASCADE
+);
+SELECT manage_updated_at('projects.redacted_fields');
+CREATE INDEX IF NOT EXISTS idx_projects_redacted_fields_project_id ON projects.redacted_fields(project_id);
 
 COMMIT;
