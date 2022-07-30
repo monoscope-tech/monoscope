@@ -6,6 +6,7 @@ import Data.ByteString.Base64 qualified as B64
 import Data.Time qualified as Time
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
+import Models.Projects.Projects qualified as Projects
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import RequestMessages (SDKTypes (..))
@@ -35,7 +36,7 @@ spec = do
               (".menu.popup.menuitem.[].value", [AE.String "v2", AE.String "v1"]),
               (".menu.popup.menuitem.[].onclick", [AE.String "oc2", AE.String "oc1"])
             ]
-      RequestMessages.valueToFields (const True) exJSON `shouldBe` expectedResp
+      RequestMessages.valueToFields exJSON `shouldBe` expectedResp
 
   -- Commented out until we fix and standardize durations handling.
   -- it "should should process request messages" $ do
@@ -234,8 +235,6 @@ spec = do
 
   describe "requestMessageEndpoint" $ do
     it "should be able to convert simple request message to series on insert db commands" $ do
-      let redactFieldsList = []
-      let shouldRedact = const True
       recId <- UUIDV4.nextRandom
       -- timestamp <- Time.getZonedTime
       let timestamp = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
@@ -262,7 +261,8 @@ spec = do
                 responseBody = B64.encodeBase64 [r|{"key": "value"}|],
                 statusCode = 203
               }
-      let Right (query, params) = RequestMessages.requestMsgToDumpAndEndpoint redactFieldsList shouldRedact requestMsg timestamp recId
+      let projectCache = Projects.ProjectCache {hosts = [], endpointHashes = ["abc"], shapeHashes = [], redactFieldslist = []}
+      let Right (query, params) = RequestMessages.requestMsgToDumpAndEndpoint projectCache requestMsg timestamp recId
       traceShowM "In request Message Endpoint test ===BEGIN==="
       traceShowM query
       traceShowM "===END==="

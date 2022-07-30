@@ -54,8 +54,9 @@ data Project = Project
     deletedAt :: Maybe ZonedTime,
     active :: Bool,
     title :: Text,
-    description :: Text,
-    hosts :: Vector.Vector Text
+    description :: Text
+    -- NOTE: We used to have hsots under project, but now hosts should be gotten from the endpoints.
+    -- NOTE: If there's heavy need and usage, we caould create a view. Otherwise, the project cache is best, if it meets our needs.
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow)
@@ -79,7 +80,8 @@ data ProjectCache = ProjectCache
     shapeHashes :: Vector.Vector Text,
     -- We check if every request is part of the redact list, so it's better if we don't need to  hit the db for them with each request.
     -- Since we have a need to redact fields by endpoint, we can simply have the fields paths be prepended by the endpoint hash.
-    -- <endpointHash><><field_key_path>
+    -- [endpointHash]<>[field_category eg requestBody]<>[field_key_path]
+    -- Those redace fields that don't have endpoint or field_category attached, would be aplied to every endpoint and field category.
     redactFieldslist :: Vector.Vector Text
   }
   deriving stock (Show, Generic)

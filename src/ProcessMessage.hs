@@ -17,7 +17,7 @@ import Data.Pool (Pool)
 import Data.Time.LocalTime (getZonedTime)
 import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as Vector
-import Database.PostgreSQL.Entity.DBT (withPool)
+import Database.PostgreSQL.Entity.DBT (QueryNature (Insert), execute, withPool)
 import Database.PostgreSQL.Simple (Connection, Only (Only))
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields qualified as Fields
@@ -53,19 +53,25 @@ processRequestMessage logger pool requestMsg = do
   timestamp <- getZonedTime
   let pid = Projects.ProjectId (requestMsg ^. #projectId)
   resp <- runExceptT $ do
-    redactedFieldsMap <- handleIOExceptT (toText @String . show) $ withPool pool $ RedactedFields.redactedFieldsMapByProject pid
+    -- redactedFieldsMap <- handleIOExceptT (toText @String . show) $ withPool pool $ RedactedFields.redactedFieldsMapByProject pid
     -- For now, we will compare the key accross all endpoints, since we have no easy way to descriminate by endpoint at the moment
-    let shouldRedact = \val -> Map.foldr (\redactList acc -> Vector.elem val redactList || acc) False redactedFieldsMap
-    let redactFieldsList = toList $ Vector.concat $ elems redactedFieldsMap
+    -- Commented out because we want to use the redact fields in the project cache for this purpose.
+    -- let shouldRedact = \val -> Map.foldr (\redactList acc -> Vector.elem val redactList || acc) False redactedFieldsMap
+    -- let redactFieldsList = toList $ Vector.concat $ elems redactedFieldsMap
     -- (reqDump, endpoint, fields, format, shape) <- except $ RequestMessages.requestMsgToDumpAndEndpoint redactFieldsList shouldRedact requestMsg timestamp recId
-    (query, params) <- except $ RequestMessages.requestMsgToDumpAndEndpoint redactFieldsList shouldRedact requestMsg timestamp recId
+
+    -- FIXME: Project cache should represent the current project and should come from the db or inmemory cache.
+    let projectCache = Projects.ProjectCache {hosts = [], endpointHashes = ["abc"], shapeHashes = [], redactFieldslist = []}
+    (query, params) <- except $ RequestMessages.requestMsgToDumpAndEndpoint projectCache requestMsg timestamp recId
     traceShowM "LOG BUILT QUERY AND PARAMS"
     traceShowM query
     -- traceShowM params
     handleIOExceptT (toText @String . show) $
       withPool pool $ do
-        liftIO $ logger <& "🔥 logging redactedFieldsMap"
-        liftIO $ logger <& show redactedFieldsMap
+        _ <- execute Insert query params
+
+        -- liftIO $ logger <& "🔥 logging redactedFieldsMap"
+        -- liftIO $ logger <& show redactedFieldsMap
 
         -- TODO: Create inmemory cache with TTL and size limit of the endpoints and projects.
         -- Must include all shapes of a given endpoint, and also a hash of the endpoint.
@@ -94,7 +100,7 @@ processRequestMessage logger pool requestMsg = do
         --         & #formatIds .~ Vector.fromList formatIds
         --         & #fieldIds .~ Vector.fromList fieldIds
 
-        liftIO $ logger <& "Before insert req dump"
+        -- liftIO $ logger <& "Before insert req dump"
         -- _ <- RequestDumps.insertRequestDump reqDump
         pass
 

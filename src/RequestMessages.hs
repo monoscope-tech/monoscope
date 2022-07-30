@@ -113,13 +113,13 @@ redactJSON paths' = redactJSON' (stripPrefixDot paths')
 -- from the google cloud pub sub, and to concatenate their queries so that only a single database call is needed for a batch.
 -- Also, being a pure function means it's easier to test the request processing logic since we can unit test pure functions easily.
 -- We can pass in a request, it's project cache object and inspect the generated sql and params.
-requestMsgToDumpAndEndpoint :: Projects.ProjectCache -> [Text] -> (Text -> Bool) -> RequestMessages.RequestMessage -> ZonedTime -> UUID.UUID -> Either Text (Query, [DBField])
-requestMsgToDumpAndEndpoint pjc redactFieldsList' shouldRedact rM now dumpID = do
+requestMsgToDumpAndEndpoint :: Projects.ProjectCache -> RequestMessages.RequestMessage -> ZonedTime -> UUID.UUID -> Either Text (Query, [DBField])
+requestMsgToDumpAndEndpoint pjc rM now dumpID = do
   let method = T.toUpper $ rM ^. #method
   let urlPath = normalizeUrlPath (rM ^. #sdkType) (rM ^. #urlPath)
   let !endpointHash = from @String @Text $ showHex (xxHash $ from @Text $ UUID.toText (rM ^. #projectId) <> method <> urlPath) ""
 
-  let redactFieldsList = redactFieldsList' <> [".set-cookie"]
+  let redactFieldsList = Vector.toList (pjc ^. #redactFieldslist) <> [".set-cookie"]
   reqBodyB64 <- B64.decodeBase64 $ encodeUtf8 $ rM ^. #requestBody
   -- NB: At the moment we're discarding the error messages from when we're unable to parse the input
   -- We should log this inputs and maybe input them into the db as is. This is also a potential annomaly for our customers,
@@ -132,12 +132,12 @@ requestMsgToDumpAndEndpoint pjc redactFieldsList' shouldRedact rM now dumpID = d
   respBodyB64 <- B64.decodeBase64 $ encodeUtf8 $ rM ^. #responseBody
   let respBody = redactJSON redactFieldsList $ fromRight [aesonQQ| {} |] $ AE.eitherDecodeStrict respBodyB64
 
-  let pathParamFields = valueToFields shouldRedact $ redactJSON redactFieldsList $ rM ^. #pathParams
-  let queryParamFields = valueToFields shouldRedact $ redactJSON redactFieldsList $ rM ^. #queryParams
-  let reqHeaderFields = valueToFields shouldRedact $ redactJSON redactFieldsList $ rM ^. #requestHeaders
-  let respHeaderFields = valueToFields shouldRedact $ redactJSON redactFieldsList $ rM ^. #responseHeaders
-  let reqBodyFields = valueToFields shouldRedact reqBody
-  let respBodyFields = valueToFields shouldRedact respBody
+  let pathParamFields = valueToFields $ redactJSON redactFieldsList $ rM ^. #pathParams
+  let queryParamFields = valueToFields $ redactJSON redactFieldsList $ rM ^. #queryParams
+  let reqHeaderFields = valueToFields $ redactJSON redactFieldsList $ rM ^. #requestHeaders
+  let respHeaderFields = valueToFields $ redactJSON redactFieldsList $ rM ^. #responseHeaders
+  let reqBodyFields = valueToFields reqBody
+  let respBodyFields = valueToFields respBody
 
   let queryParamsKP = Vector.fromList $ map fst queryParamFields
   let requestHeadersKP = Vector.fromList $ map fst reqHeaderFields
@@ -273,30 +273,31 @@ normalizeUrlPath JavaSpringBoot urlPath = urlPath
 -- each primitive value in the json and the values.
 --
 -- Regular nested text fields:
--- >>> valueToFields (const False) [aesonQQ|{"menu":{"id":"text"}}|]
+-- >>> valueToFields [aesonQQ|{"menu":{"id":"text"}}|]
 -- [(".menu.id",[String "text"])]
 --
 -- Integer nested field within an array of objects:
--- >>> valueToFields (const False) [aesonQQ|{"menu":{"id":[{"int_field":22}]}}|]
+-- >>> valueToFields [aesonQQ|{"menu":{"id":[{"int_field":22}]}}|]
 -- [(".menu.id.[].int_field",[Number 22.0])]
 --
 -- Deeper nested field with an array of objects:
--- >>> valueToFields (const False) [aesonQQ|{"menu":{"id":{"menuitems":[{"key":"value"}]}}}|]
+-- >>> valueToFields [aesonQQ|{"menu":{"id":{"menuitems":[{"key":"value"}]}}}|]
 -- [(".menu.id.menuitems.[].key",[String "value"])]
 --
 -- Flat array value:
--- >>> valueToFields (const False) [aesonQQ|{"menu":["abc", "xyz"]}|]
+-- >>> valueToFields [aesonQQ|{"menu":["abc", "xyz"]}|]
 -- [(".menu.[]",[String "abc",String "xyz"])]
 --
 -- Float values and Null
--- >>> valueToFields (const False) [aesonQQ|{"fl":1.234, "nl": null}|]
+-- >>> valueToFields [aesonQQ|{"fl":1.234, "nl": null}|]
 -- [(".fl",[Number 1.234]),(".nl",[Null])]
 --
 -- Multiple fields with same key via array:
--- >>> valueToFields (const False) [aesonQQ|{"menu":[{"id":"text"},{"id":123}]}|]
+-- >>> valueToFields [aesonQQ|{"menu":[{"id":"text"},{"id":123}]}|]
 -- [(".menu.[].id",[String "text",Number 123.0])]
-valueToFields :: (Text -> Bool) -> AE.Value -> [(Text, [AE.Value])]
-valueToFields shouldRedact value = dedupFields $ removeBlacklistedFields $ snd $ valueToFields' value ("", [])
+-- FIXME: value To Fields should use the redact fields list to actually redact fields
+valueToFields :: AE.Value -> [(Text, [AE.Value])]
+valueToFields value = dedupFields $ removeBlacklistedFields $ snd $ valueToFields' value ("", [])
   where
     valueToFields' :: AE.Value -> (Text, [(Text, AE.Value)]) -> (Text, [(Text, AE.Value)])
     valueToFields' (AE.Object v) akk = HM.toList v & foldl' (\(akkT, akkL) (k, val) -> (akkT, snd $ valueToFields' val (akkT <> "." <> k, akkL))) akk
@@ -324,8 +325,7 @@ valueToFields shouldRedact value = dedupFields $ removeBlacklistedFields $ snd $
       if or @[]
         [ T.isSuffixOf "password" (T.toLower k),
           T.isSuffixOf "authorization" (T.toLower k),
-          T.isSuffixOf "cookie" (T.toLower k),
-          shouldRedact k
+          T.isSuffixOf "cookie" (T.toLower k)
         ]
         then (k, AE.String "[REDACTED]")
         else (k, val)

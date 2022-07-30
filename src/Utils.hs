@@ -1,8 +1,9 @@
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE RankNTypes #-}
 
 module Utils (eitherStrToText, GetOrRedirect, redirect, DBField (..)) where
 
-import Database.PostgreSQL.Simple.ToField (ToField)
+import Database.PostgreSQL.Simple.ToField (ToField (..))
 import Lucid (Html)
 import Relude
 import Servant
@@ -18,5 +19,7 @@ type GetOrRedirect = '[WithStatus 200 (Html ()), WithStatus 302 (Headers '[Heade
 redirect :: Text -> Headers '[Header "Location" Text] NoContent
 redirect destination = addHeader destination NoContent
 
-data DBField where
-  MkDBField :: ToField a => a -> DBField
+data DBField = forall a. ToField a => MkDBField a
+
+instance ToField DBField where
+  toField (MkDBField a) = toField a
