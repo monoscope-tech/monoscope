@@ -373,17 +373,17 @@ CREATE TABLE IF NOT EXISTS apis.request_dumps
     status_code               int       NOT  NULL DEFAULT    0,
 
     query_params              jsonb     NOT  NULL DEFAULT    '{}'::jsonb,
-    request_body              jsonb     NOT  NULL DEFAULT    '{}'::jsonb,
-    response_body             jsonb     NOT  NULL DEFAULT    '{}'::jsonb,
     request_headers           jsonb     NOT  NULL DEFAULT    '{}'::jsonb,
     response_headers          jsonb     NOT  NULL DEFAULT    '{}'::jsonb,
-
+    request_body              jsonb     NOT  NULL DEFAULT    '{}'::jsonb,
+    response_body             jsonb     NOT  NULL DEFAULT    '{}'::jsonb,
+    
     query_params_keypaths     text[]    NOT  NULL DEFAULT    '{}'::TEXT[],
-    request_body_keypaths     text[]    NOT  NULL DEFAULT    '{}'::TEXT[],
-    response_body_keypaths    text[]    NOT  NULL DEFAULT    '{}'::TEXT[],
     request_headers_keypaths  text[]    NOT  NULL DEFAULT    '{}'::TEXT[],
     response_headers_keypaths text[]    NOT  NULL DEFAULT    '{}'::TEXT[],
-
+    request_body_keypaths     text[]    NOT  NULL DEFAULT    '{}'::TEXT[],
+    response_body_keypaths    text[]    NOT  NULL DEFAULT    '{}'::TEXT[],
+ 
     -- Instead of holding ids which are difficult to compute, let's rather store their hashes only. 
     endpoint_hash             text      NOT  NULL DEFAULT    ''::text,
     shape_hash                text      NOT  NULL DEFAULT    ''::text,

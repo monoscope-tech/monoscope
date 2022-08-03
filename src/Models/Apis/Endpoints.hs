@@ -89,18 +89,11 @@ upsertEndpointQueryAndParam endpoint = (q, params)
     host = fromMaybe @Text "" ((endpoint ^. #hosts) Vector.!? 0) -- Read the first item from head or default to empty string
     q =
       [sql|  
-        with e as (
-          INSERT INTO apis.endpoints (project_id, url_path, url_params, method, hosts)
-          VALUES(?, ?, ?, ?, $$ ? => null$$) 
+          INSERT INTO apis.endpoints (project_id, url_path, url_params, method, hosts, hash)
+          VALUES(?, ?, ?, ?, $$ ? => null$$, ?) 
           ON CONFLICT (project_id, url_path, method) 
           DO 
-             UPDATE SET 
-               hosts=endpoints.hosts||hstore(?, null) 
-          RETURNING id 
-        )
-        SELECT id from e 
-        UNION 
-          SELECT id FROM apis.endpoints WHERE project_id=? AND url_path=? AND method=?;
+             UPDATE SET hosts=endpoints.hosts||hstore(?, null); 
       |]
     params =
       [ MkDBField $ endpoint ^. #projectId,
@@ -108,10 +101,8 @@ upsertEndpointQueryAndParam endpoint = (q, params)
         MkDBField $ endpoint ^. #urlParams,
         MkDBField $ endpoint ^. #method,
         MkDBField host,
-        MkDBField host,
-        MkDBField $ endpoint ^. #projectId,
-        MkDBField $ endpoint ^. #urlPath,
-        MkDBField $ endpoint ^. #method
+        MkDBField $ endpoint ^. #hash,
+        MkDBField host
       ]
 
 -- FIXME: Delete this, as this function is deprecated and no longer in use.

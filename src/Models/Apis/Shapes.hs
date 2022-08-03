@@ -62,7 +62,7 @@ insertShapeQueryAndParam shape@Shape {projectId} = (q, params)
       [sql| 
             INSERT INTO apis.shapes
             (project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, response_headers_keypaths)
-            VALUES (?, ?, ?, ?, ?, ?, ?); 
+            VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING; 
           |]
     params =
       [ MkDBField $ shape ^. #projectId,

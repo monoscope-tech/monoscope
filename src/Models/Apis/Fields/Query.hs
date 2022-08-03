@@ -15,7 +15,9 @@ import Utils (DBField (MkDBField))
 insertFieldQueryAndParams :: Field -> (Query, [DBField])
 insertFieldQueryAndParams field = (q, params)
   where
-    q = [sql| insert into api.fields (project_id, endpoint_hash, key, field_type, format, description, key_path, field_category, hash) VALUES (?,?,?,?,?,?,?,?,?); |]
+    q =
+      [sql| insert into apis.fields (project_id, endpoint_hash, key, field_type, format, description, key_path, field_category, hash) 
+                    VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING; |]
     params =
       [ MkDBField $ field ^. #projectId,
         MkDBField $ field ^. #endpointHash,

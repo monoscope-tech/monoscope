@@ -66,11 +66,11 @@ insertFormatQueryAndParams format = (q, params)
   where
     q =
       [sql| 
-      insert into api.formats (project_id, field_hash, field_type, field_format, examples, hash) VALUES (?,?,?,?,?,?,?,?,?)
-        ON CONFLICT (hash)
+      insert into apis.formats (project_id, field_hash, field_type, field_format, examples, hash) VALUES (?,?,?,?,?,?)
+        ON CONFLICT (project_id, field_hash, field_format)
         DO
           UPDATE SET 
-            examples = ARRAY(SELECT DISTINCT e from unnest(apis.formats.examples || excluded.examples) as e order by e limit ?; 
+            examples = ARRAY(SELECT DISTINCT e from unnest(apis.formats.examples || excluded.examples) as e order by e limit ?); 
       |]
     params =
       [ MkDBField $ format ^. #projectId,

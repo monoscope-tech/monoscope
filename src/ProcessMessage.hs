@@ -63,9 +63,6 @@ processRequestMessage logger pool requestMsg = do
     -- FIXME: Project cache should represent the current project and should come from the db or inmemory cache.
     let projectCache = Projects.ProjectCache {hosts = [], endpointHashes = ["abc"], shapeHashes = [], redactFieldslist = []}
     (query, params) <- except $ RequestMessages.requestMsgToDumpAndEndpoint projectCache requestMsg timestamp recId
-    traceShowM "LOG BUILT QUERY AND PARAMS"
-    traceShowM query
-    -- traceShowM params
     handleIOExceptT (toText @String . show) $
       withPool pool $ do
         _ <- execute Insert query params

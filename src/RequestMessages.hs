@@ -28,6 +28,7 @@ import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Simple (Query)
+import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields qualified as Fields
@@ -187,6 +188,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
             let shape = Shapes.Shape (Shapes.ShapeId dumpID) (rM ^. #timestamp) now projectId endpointHash queryParamsKP requestHeadersKP responseHeadersKP requestBodyKP responseBodyKP shapeHash
             Shapes.insertShapeQueryAndParam shape
 
+  -- FIXME: 9+7+
   -- Build the query and params for inserting a request dump into the database.
   let (reqDumpQ, reqDumpP) = buildRequestDumpQuery rM dumpID now method urlPath reqBody respBody queryParamsKP requestHeadersKP responseHeadersKP requestBodyKP responseBodyKP endpointHash shapeHash formatHashes fieldHashes
 
@@ -202,8 +204,8 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
           then ([], [])
           else unzip $ map Formats.insertFormatQueryAndParams formats
 
-  let query = shapeQ <> reqDumpQ <> endpointQ <> mconcat fieldsQ <> mconcat formatsQ
-  let params = shapeP <> reqDumpP <> endpointP <> concat fieldsP <> concat formatsP
+  let query = endpointQ <> shapeQ <> reqDumpQ <> mconcat fieldsQ <> mconcat formatsQ
+  let params = endpointP <> shapeP <> reqDumpP <> concat fieldsP <> concat formatsP
   pure (query, params)
 
 -- pure (reqDump, endpoint, fields, formats, shape)
@@ -229,13 +231,17 @@ buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash =
 -- relatively accurate analytic counts.
 buildRequestDumpQuery :: RequestMessages.RequestMessage -> UUID.UUID -> ZonedTime -> Text -> Text -> Value -> Value -> Vector Text -> Vector Text -> Vector Text -> Vector Text -> Vector Text -> Text -> Text -> Vector Text -> Vector Text -> (Query, [DBField])
 buildRequestDumpQuery rM dumpID now method urlPath reqBody respBody queryParamsKP requestHeadersKP responseHeadersKP requestBodyKP responseBodyKP endpointH shapeH formatHs fieldHs =
-  (RequestDumps.insertRequestDumpQuery, requestDump)
+  (insertRequestDumpQuery, requestDump)
   where
+    insertRequestDumpQuery =
+      [sql| INSERT INTO apis.request_dumps VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?); 
+        |]
+    -- NOTE: This list mirrors the order of fields in the actual tables schema
     requestDump =
-      [ MkDBField $ rM ^. #timestamp,
-        MkDBField now,
-        MkDBField dumpID,
-        MkDBField $ rM ^. #projectId,
+      [ MkDBField dumpID, -- id
+        MkDBField $ rM ^. #timestamp, -- created_at
+        MkDBField now, -- updated_at
+        MkDBField $ rM ^. #projectId, --project_id
         MkDBField $ rM ^. #host,
         MkDBField urlPath,
         MkDBField $ rM ^. #rawUrl,

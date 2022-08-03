@@ -7,7 +7,6 @@ module Models.Apis.RequestDumps
   ( RequestDump (..),
     LabelValue,
     RequestDumpLogItem,
-    insertRequestDump,
     labelRequestLatency,
     requestDumpLogItemUrlPath,
     requestDumpLogUrlPath,
@@ -18,7 +17,6 @@ module Models.Apis.RequestDumps
     selectRequestDumpsByProjectForChart,
     selectRequestsByEndpointsStatByMin,
     selectRequestsByStatusCodesStatByMin,
-    insertRequestDumpQuery,
   )
 where
 
@@ -160,13 +158,9 @@ selectRequestDumpByProjectAndId pid rdId = queryOne Select q (pid, rdId)
                     count(*) OVER() AS full_count
              FROM apis.request_dumps where project_id=? and id=?|]
 
-insertRequestDumpQuery :: Query
-insertRequestDumpQuery =
-  [sql| INSERT INTO apis.request_dumps VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::uuid[],?::uuid[]); 
-        |]
-
-insertRequestDump :: RequestDump -> DBT IO Int64
-insertRequestDump = execute Insert insertRequestDumpQuery
+-- FIXME: delete
+-- insertRequestDump :: RequestDump -> DBT IO Int64
+-- insertRequestDump = execute Insert insertRequestDumpQuery
 
 selectRequestsByStatusCodesStatByMin :: Projects.ProjectId -> Text -> Text -> DBT IO (Vector (ZonedTime, Text, Int))
 selectRequestsByStatusCodesStatByMin pid urlPath method = query Select q (pid, urlPath, method)
