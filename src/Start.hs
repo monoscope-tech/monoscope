@@ -107,6 +107,6 @@ pubsubService logger envConfig conn = do
         let subscription = "projects/past-3/subscriptions/" <> topic <> "-sub"
         pullResp <- Google.send $ PubSub.projectsSubscriptionsPull pullReq subscription
         let messages = pullResp L.^. PubSub.prReceivedMessages
-        msgIds <- liftIO $ mapM (processMessage logger envConfig conn) messages
+        msgIds <- liftIO $ processMessages logger envConfig conn messages
         let acknowlegReq = PubSub.acknowledgeRequest & PubSub.arAckIds L..~ catMaybes msgIds
         unless (null msgIds) $ void $ PubSub.projectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send

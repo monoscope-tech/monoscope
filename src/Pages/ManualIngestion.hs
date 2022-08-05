@@ -79,12 +79,13 @@ manualIngestPostH :: Sessions.PersistentSession -> Projects.ProjectId -> Request
 manualIngestPostH sess pid reqMF = do
   logger <- asks logger
   pool <- asks pool
+  env <- asks env
   project <-
     liftIO $
       withPool pool $ Projects.selectProjectForUser (Sessions.userId sess, pid)
   case reqMsgFormToReqMsg (Projects.unProjectId pid) reqMF of
     Left err -> liftIO $ logger <& "error parsing manualIngestPost req Message; " <> show err
-    Right reqM -> liftIO $ ProcessMessage.processRequestMessage logger pool reqM
+    Right reqM -> void $ liftIO $ ProcessMessage.processMessages' logger env pool [Right (Just "", reqM)]
 
   pure manualIngestPage
 

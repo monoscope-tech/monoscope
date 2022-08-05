@@ -5,10 +5,8 @@ module Pages.RedactedFields (redactedFieldsGetH, redactedFieldsPostH, RedactFiel
 import Config
 import Data.Aeson (encode)
 import Data.Aeson.QQ (aesonQQ)
-import Data.ByteString.Base64 qualified as B64
 import Data.Default (def)
 import Data.Text as T
-import Data.UUID as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (withPool)

@@ -1,6 +1,6 @@
 module ProcessMessage
-  ( processMessage,
-    processRequestMessage,
+  ( processMessages,
+    processMessages',
   )
 where
 
@@ -12,98 +12,67 @@ import Control.Monad.Trans.Except
 import Control.Monad.Trans.Except.Extra (handleIOExceptT)
 import Data.Aeson (eitherDecode)
 import Data.ByteString.Base64 qualified as B64
-import Data.Map qualified as Map
 import Data.Pool (Pool)
 import Data.Time.LocalTime (getZonedTime)
 import Data.UUID.V4 (nextRandom)
-import Data.Vector qualified as Vector
-import Database.PostgreSQL.Entity.DBT (QueryNature (Insert), execute, withPool)
-import Database.PostgreSQL.Simple (Connection, Only (Only))
-import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Fields qualified as Fields
-import Models.Apis.RequestDumps qualified as RequestDumps
-import Models.Apis.Shapes qualified as Shapes
+import Database.PostgreSQL.Entity.DBT (withPool)
+import Database.PostgreSQL.Simple (Connection, Query)
+import Database.PostgreSQL.Transact (execute)
 import Models.Projects.Projects qualified as Projects
-import Models.Projects.RedactedFields qualified as RedactedFields
 import Network.Google.PubSub qualified as PubSub
-import Optics.Core ((.~), (^.))
+import Optics.Core ((^.))
 import Relude hiding (hoistMaybe)
-import Relude.Extra (elems)
 import Relude.Unsafe (fromJust)
 import RequestMessages qualified
+import Utils (DBField, eitherStrToText)
 
-processMessage :: LogAction IO String -> Config.EnvConfig -> Pool Connection -> PubSub.ReceivedMessage -> IO (Maybe Text)
-processMessage logger _ conn msg = do
-  let rmMsg = msg ^? PubSub.rmMessage . _Just . PubSub.pmData . _Just
-  let decodedMsg = B64.decodeBase64 $ fromJust rmMsg
-  let jsonByteStr = fromRight "{}" decodedMsg
-  let decodedMsgE = eitherDecode (fromStrict jsonByteStr) :: Either String RequestMessages.RequestMessage
-  case decodedMsgE of
-    Left err -> logger <& "error decoding message " <> err
-    Right recMsg -> processRequestMessage logger conn recMsg
-  pure $ msg L.^. PubSub.rmAckId
+processMessages :: LogAction IO String -> Config.EnvConfig -> Pool Connection -> [PubSub.ReceivedMessage] -> IO [Maybe Text]
+processMessages logger' env conn' msgs = do
+  let msgs' =
+        msgs & map \msg -> do
+          let rmMsg = msg ^? PubSub.rmMessage . _Just . PubSub.pmData . _Just
+          let decodedMsg = B64.decodeBase64 $ fromJust rmMsg
+          let jsonByteStr = fromRight "{}" decodedMsg
+          recMsg <- eitherStrToText $ eitherDecode (fromStrict jsonByteStr)
+          Right (msg L.^. PubSub.rmAckId, recMsg)
+  if null msgs'
+    then pure []
+    else processMessages' logger' env conn' msgs'
 
--- | processRequestMessage would take a request message and
--- process it into formats which can be persisited into the database.
--- it processes the request message into the request dump,
--- the endpoint struct and then the request fields.
-processRequestMessage :: LogAction IO String -> Pool Connection -> RequestMessages.RequestMessage -> IO ()
-processRequestMessage logger pool requestMsg = do
-  recId <- nextRandom
-  timestamp <- getZonedTime
-  let pid = Projects.ProjectId (requestMsg ^. #projectId)
-  resp <- runExceptT $ do
-    -- redactedFieldsMap <- handleIOExceptT (toText @String . show) $ withPool pool $ RedactedFields.redactedFieldsMapByProject pid
-    -- For now, we will compare the key accross all endpoints, since we have no easy way to descriminate by endpoint at the moment
-    -- Commented out because we want to use the redact fields in the project cache for this purpose.
-    -- let shouldRedact = \val -> Map.foldr (\redactList acc -> Vector.elem val redactList || acc) False redactedFieldsMap
-    -- let redactFieldsList = toList $ Vector.concat $ elems redactedFieldsMap
-    -- (reqDump, endpoint, fields, format, shape) <- except $ RequestMessages.requestMsgToDumpAndEndpoint redactFieldsList shouldRedact requestMsg timestamp recId
+processMessages' :: LogAction IO String -> Config.EnvConfig -> Pool Connection -> [Either Text (Maybe Text, RequestMessages.RequestMessage)] -> IO [Maybe Text]
+processMessages' logger' _ conn' msgs = do
+  processed <- mapM (processMessage logger' conn') msgs
+  let (rmAckIds, queries, params) = unzip3 $ rights processed
+  let query' = mconcat queries
+  let params' = concat params
 
-    -- FIXME: Project cache should represent the current project and should come from the db or inmemory cache.
-    let projectCache = Projects.ProjectCache {hosts = [], endpointHashes = ["abc"], shapeHashes = [], redactFieldslist = []}
-    (query, params) <- except $ RequestMessages.requestMsgToDumpAndEndpoint projectCache requestMsg timestamp recId
-    handleIOExceptT (toText @String . show) $
-      withPool pool $ do
-        _ <- execute Insert query params
+  let errs = lefts processed
+  unless (null errs) do
+    mapM_ (\err -> logger' <& "error with converting request message to dump and endpoint" <> show err) errs
+    pass
 
-        -- liftIO $ logger <& "🔥 logging redactedFieldsMap"
-        -- liftIO $ logger <& show redactedFieldsMap
-
-        -- TODO: Create inmemory cache with TTL and size limit of the endpoints and projects.
-        -- Must include all shapes of a given endpoint, and also a hash of the endpoint.
-        -- Let's use this to prevent processing requests that don't fail our model matching logic
-        -- Operational Behaviour:
-        --
-        -- Question: What if we have a large enough bloom filter? with some randomness to fight around the false positives.
-        -- Using a bloom filter or any fancy techniques might be difficult to pull off,
-        -- because the number of examples in the shape are very important before we can start skipping them.
-        -- Maybe we can have a cache that keeps a count of how many times we've seen that shape, and start allowing the shape through, after the first 10 or 20 requests.
-
-        -- FIXME: future steps should not depend on on the enpID. Maybe it should not be returned.
-        -- incomplete thought: Could we also have in the projects cache, the list of hosts? (maybe hashes?), so that we can skip updating endpoints host
-        -- What if we have a cache that holds projects, and one that holds endpoints, and then hosts of the endpoints and the shapes for that endpoint in memory,
-        -- And use that to skip inserting endpoints or all of the other operations.
-        -- This inmemory structure will have huge runtime usage, and we need to put in thought into what we're using, to ensure that performance doesn't degrade.
-        -- (Just enpID) <- Endpoints.upsertEndpoints endpoint
-        -- FIXME: upsertFields doesn't need to return the fieldids and the format ids anymore if we rely on their hashes.
-        -- FIXME: reimplement based of fields, and format from above.
-        -- (formatIds, fieldIds) <- unzip <$> Fields.upsertFields enpID fields
-        -- let shape' = shape & #endpointId .~ enpID
-        -- Shapes.insertShape shape
-        -- TODO: delete; commented out as unneeded
-        -- let reqDump' =
-        --       reqDump & #shapeId .~ shapeId
-        --         & #formatIds .~ Vector.fromList formatIds
-        --         & #fieldIds .~ Vector.fromList fieldIds
-
-        -- liftIO $ logger <& "Before insert req dump"
-        -- _ <- RequestDumps.insertRequestDump reqDump
-        pass
-
+  resp <-
+    if null params'
+      then pure $ Left "Empty params/query for processMessages"
+      else
+        runExceptT $
+          handleIOExceptT (toText @String . show) $
+            withPool conn' $ execute query' params'
   case resp of
-    Left err -> logger <& "error with converting request message to dump and endpoint" <> toString err
-    Right _ -> pass
+    Left err -> do
+      logger' <& "error with converting request message to dump and endpoint" <> toString err
+      pure []
+    Right _ -> pure rmAckIds
+  where
+    processMessage :: LogAction IO String -> Pool Connection -> Either Text (Maybe Text, RequestMessages.RequestMessage) -> IO (Either Text (Maybe Text, Query, [DBField]))
+    processMessage logger conn recMsgEither = runExceptT do
+      (rmAckId, recMsg) <- except recMsgEither
+      recId <- liftIO nextRandom
+      timestamp <- liftIO getZonedTime
+      let pid = Projects.ProjectId (recMsg ^. #projectId)
+      let projectCache = Projects.ProjectCache {hosts = [], endpointHashes = ["abc"], shapeHashes = [], redactFieldslist = []}
+      (query, params) <- except $ RequestMessages.requestMsgToDumpAndEndpoint projectCache recMsg timestamp recId
+      pure (rmAckId, query, params)
 
 {--
   Exploring how the inmemory cache could be shaped for performance, and low footprint ability to skip hitting the postgres database when not needed.
