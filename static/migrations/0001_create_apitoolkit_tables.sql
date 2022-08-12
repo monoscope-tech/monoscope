@@ -98,10 +98,10 @@ CREATE TABLE IF NOT EXISTS projects.projects
   active      BOOL      NOT  NULL DEFAULT 't',
   title       TEXT      NOT  NULL DEFAULT '',
   description TEXT      NOT  NULL DEFAULT ''
-  -- FIXME: Should this hosts field be removed? We can get the list of hosts by querying the hosts in endpoints.
-  -- FIXME: And it doesn't seem as straightforward how this hosts in the projects will be kept up to date efficiently.
-  -- hosts TEXT[] NOT NULL DEFAULT '{}'
-  -- hosts should always be gotten from the endpoints table. We could use a queue if needed, or just rely on the inmemory projects cache on the haskell side.
+  -- We originally stored the hosts lists under projects table, 
+  -- but realised that it is immensely difficult to keep the hosts up to date under projects,
+  -- when we don't update projects with requests data. So we store hosts under the endpoints now.
+  -- The hosts can be queried from endpoints when needed.
 );
 SELECT manage_updated_at('projects.projects');
 
@@ -279,7 +279,7 @@ CREATE TABLE IF NOT EXISTS apis.anomalies
   acknowleged_by UUID                REFERENCES users.users (id),      -- user who acknowleges the anomaly
   anomaly_type   apis.anomaly_type   NOT        NULL        DEFAULT    'unknown'::apis.anomaly_type,
   action         apis.anomaly_action NOT        NULL        DEFAULT    'unknown'::apis.anomaly_action,
-  target_id      uuid,
+  target_hash    text,
   archived_at    TIMESTAMP           WITH       TIME        ZONE
 );
 SELECT manage_updated_at('apis.anomalies');
@@ -296,7 +296,7 @@ BEGIN
     END IF;
 	anomaly_type := TG_ARGV[0];
 	anomaly_action := TG_ARGV[1];
-    INSERT INTO apis.anomalies (project_id, anomaly_type, action, target_id) VALUES (NEW.project_id, anomaly_type, anomaly_action, NEW.id);
+    INSERT INTO apis.anomalies (project_id, anomaly_type, action, target_hash) VALUES (NEW.project_id, anomaly_type, anomaly_action, NEW.hash);
     RETURN NULL;
 END;
 $$ LANGUAGE plpgsql;
@@ -312,44 +312,6 @@ CREATE TRIGGER endpoint_created_anomaly AFTER INSERT ON apis.endpoints FOR EACH 
 
 DROP TRIGGER IF EXISTS shapes_created_anomaly ON apis.shapes;
 CREATE TRIGGER shapes_created_anomaly AFTER INSERT ON apis.shapes FOR EACH ROW EXECUTE PROCEDURE apis.new_anomaly_proc('shape', 'created');
-
------------------------------------------------------------------------
--- Single function to generate fields and formats within postgres while
--- reducing the round trips.
------------------------------------------------------------------------
-
--- This function should no longer be needed, since it should be possible ot insert into the 3 tables separately. So at the least, it shouldn't be this complicated.
--- TODO: insert into this table without the need for this function.
--- CREATE OR REPLACE FUNCTION apis.create_field_and_formats(
---   i_project_id UUID, i_endpoint_id UUID, i_key TEXT, i_field_type apis.field_type, i_field_type_override TEXT, 
---   i_format TEXT, i_format_override TEXT, i_description TEXT, i_key_path TEXT[], i_key_path_str TEXT, 
---   i_field_category apis.field_category, i_examples TEXT[], i_examples_max_count INT, i_field_hash TEXT 
--- )
--- RETURNS TABLE (fmt_hash text, f_hash text) AS $$
--- BEGIN
---   return query
---   with returned_fields AS (
---     INSERT INTO apis.fields (project_id, endpoint_id, key, field_type, field_type_override, format, format_override, description, key_path, key_path_str, field_category, hash)
---       VALUES(i_project_id, i_endpoint_id, i_key, i_field_type, i_field_type_override, i_format, i_format_override, i_description, i_key_path, i_key_path_str, i_field_category, i_field_hash)
---       ON CONFLICT (project_id, endpoint_id, field_category, key_path_str, format) DO NOTHING
---     RETURNING project_id, id, field_type, format, i_examples
---   ), current_fields AS (
---   SELECT * FROM returned_fields
---     UNION ALL
--- 	SELECT project_id, hash, field_type, format, i_examples
---     FROM apis.fields
---     WHERE  project_id=i_project_id AND endpoint_id=i_endpoint_id AND key_path_str=i_key_path_str AND format=i_format -- only executed if no INSERT
---   LIMIT  1
---   )
---  INSERT INTO apis.formats (project_id, field_hash, field_type, field_format, examples)
---   SELECT * from current_fields
--- 		ON CONFLICT (project_id, field_hash, field_format)
--- 		DO
--- 			UPDATE SET 
--- 				examples = ARRAY(SELECT DISTINCT e from unnest(apis.formats.examples || excluded.examples) as e order by e limit i_examples_max_count)
--- 	RETURNING hash, field_hash;
--- END;
--- $$ LANGUAGE plpgsql;
 
 ----------------------------------------------------------------------------------------------------------
 -- apis.request_dumps table holds a timeseries dump of all requests that come into the backend.
@@ -378,6 +340,9 @@ CREATE TABLE IF NOT EXISTS apis.request_dumps
     request_body              jsonb     NOT  NULL DEFAULT    '{}'::jsonb,
     response_body             jsonb     NOT  NULL DEFAULT    '{}'::jsonb,
     
+    -- TODO: remove these key paths, since we already store the field hashes.
+    -- Let's not overload the size of a request_dump item, considering that larger rows are really
+    -- expensive to query.
     query_params_keypaths     text[]    NOT  NULL DEFAULT    '{}'::TEXT[],
     request_headers_keypaths  text[]    NOT  NULL DEFAULT    '{}'::TEXT[],
     response_headers_keypaths text[]    NOT  NULL DEFAULT    '{}'::TEXT[],
@@ -418,6 +383,7 @@ CREATE MATERIALIZED VIEW apis.endpoint_request_stats AS
     )
     SELECT 	
         enp.id endpoint_id,
+        enp.hash endpoint_hash,
         rds.project_id,
         rds.url_path, rds.method,
         coalesce(approx_percentile(0,    agg)/1000000, 0) min,
@@ -498,13 +464,15 @@ CREATE MATERIALIZED VIEW apis.project_requests_by_endpoint_per_min AS
 CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_project_requests_by_endpoint_per_min_project_id ON apis.project_requests_by_endpoint_per_min(project_id);
 
 
--- TODO: Create triggers to create new anomalies when new fields, endpoints and shapes are created.
+-- TODO: Create triggers to create new anomalies when new fields, 
+-- TODO: endpoints and shapes are created.
 -- TODO: Write anomalies_vm view to use hashes not ids
 
 -- FIXME: reevaluate how anomaly_vm will work and be rendered
+DROP MATERIALIZED VIEW IF EXISTS apis.project_requests_by_endpoint_per_min;
 -- CREATE MATERIALIZED VIEW IF NOT EXISTS apis.anomalies_vm 
 --     AS	SELECT 
---     an.id, an.created_at, an.updated_at, an.project_id, an.acknowleged_at,an.acknowleged_by, an.anomaly_type, an.action, an.target_id,
+--     an.id, an.created_at, an.updated_at, an.project_id, an.acknowleged_at,an.acknowleged_by, an.anomaly_type, an.action, an.target_hash,
 --     shapes.id shape_id,
 
 --     fields.id field_id,
@@ -540,26 +508,26 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_project_requests_by_endpoint_per_min_
 --                           method = method
 --                           AND url_path = url_path
 --                       WHEN anomaly_type = 'shape' THEN
---                           shape_id = target_id
+--                           shape_id = target_hash
 --                       WHEN anomaly_type = 'format' THEN
---                           target_id = ANY(format_ids)
+--                           target_hash = ANY(format_ids)
 --                   END
 --               GROUP BY
 --                   timeB
 --           ) ts 
 --     )::text ts
 -- 	FROM apis.anomalies an
--- 	LEFT JOIN apis.formats on target_id=formats.hash
--- 	LEFT JOIN apis.fields on (fields.hash=target_id OR fields.hash=formats.field_hash) 
--- 	LEFT JOIN apis.shapes on target_id=shapes.hash
+-- 	LEFT JOIN apis.formats on target_hash=formats.hash
+-- 	LEFT JOIN apis.fields on (fields.hash=target_hash OR fields.hash=formats.field_hash) 
+-- 	LEFT JOIN apis.shapes on target_hash=shapes.hash
 -- 	LEFT JOIN apis.endpoints 
---       ON (endpoints.id = target_id 
+--       ON (endpoints.id = target_hash 
 --           OR endpoints.hash = fields.endpoint_hash 
 --           OR endpoints.hash = shapes.endpoint_hash
 --           );
 -- CREATE UNIQUE INDEX idx_apis_anomaly_vm_id ON apis.anomalies_vm (id);
 -- CREATE INDEX idx_apis_anomaly_vm_project_id ON apis.anomalies_vm (project_id);
--- CREATE INDEX idx_apis_anomaly_vm_project_id_endpoint_id ON apis.anomalies_vm (project_id, endpoint_hash);
+-- CREATE INDEX idx_apis_anomaly_vm_project_id_endpoint_hash ON apis.anomalies_vm (project_id, endpoint_hash);
 
 
 CREATE OR REPLACE PROCEDURE apis.refresh_request_dump_views_every_5mins(job_id int, config jsonb) LANGUAGE PLPGSQL AS
@@ -624,11 +592,14 @@ CREATE TABLE IF NOT EXISTS projects.redacted_fields
     created_at     TIMESTAMP WITH       TIME           ZONE       NOT               NULL              DEFAULT current_timestamp,
     updated_at     TIMESTAMP WITH       TIME           ZONE       NOT               NULL              DEFAULT current_timestamp,
     deleted_at     TIMESTAMP WITH       TIME           ZONE,
+    -- path is a key path for field path to the field that should be redacted. eg .data.message (Note the trailing dot)
     path           TEXT      NOT        NULL           DEFAULT    '',
+    -- configured_via represents where the source of the redacted_fields listing. Eg via the dashboard
+    -- or in the future if we allow setting redacted fields via our sdks.
     configured_via TEXT      NOT        NULL           DEFAULT    '',
     description    TEXT      NOT        NULL           DEFAULT    '',
-    endpoint       UUID      REFERENCES apis.endpoints (id)       ON                DELETE            CASCADE,
-    endpoint_hash  TEXT      NOT        NULL           DEFAULT           ''
+    endpoint_hash  TEXT,
+    field_category apis.field_category 
 );
 SELECT manage_updated_at('projects.redacted_fields');
 CREATE INDEX IF NOT EXISTS idx_projects_redacted_fields_project_id ON projects.redacted_fields(project_id);

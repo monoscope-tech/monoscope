@@ -16,12 +16,12 @@ import Control.Concurrent.Async
 import Control.Exception (try)
 import Control.Lens qualified as L
 import Control.Monad.Trans.Resource (runResourceT)
+import Data.Cache
 import Data.Pool as Pool
-import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (Connection, close, connectPostgreSQL)
 import Database.PostgreSQL.Simple.Migration as Migrations
 import GHC.Generics ()
-import Models.Users.Users qualified as Users
+import Models.Projects.Projects qualified as Projects
 import Network.Google qualified as Google
 import Network.Google.PubSub qualified as PubSub
 import Network.Wai.Handler.Warp (run)
@@ -29,6 +29,7 @@ import Optics.Operators
 import ProcessMessage
 import Relude
 import Server qualified
+import System.Clock
 import System.Envy (decodeEnv)
 
 startApp :: IO ()
@@ -59,32 +60,23 @@ startApp = do
             2 -- stripes
             60 -- unused connections are kept open for 10 minutes (60*10)
             20 -- max 50 connections open per stripe
-
-        -- If a test email is set, attempt to add that test email user to all projects in the database
-        -- We watch and catch thrown exceptions which would likely happen if the user does not yet exist in the db
-        case envConfig ^. #testEmail of
-          Just email -> do
-            when (envConfig ^. #migrateAndInitializeOnStart) do
-              err <- try (withPool poolConn (Users.addUserToAllProjects email)) :: IO (Either SomeException Int64)
-              case err of
-                Left err' -> logger <& "unable to run addUserToAllProjects " <> show err'
-                Right resp -> logger <& "addUserToAllProjects resp" <> show resp
-          Nothing -> pass
-
+        projectCache <- newCache (Just $ TimeSpec (60 * 60) 0) :: IO (Cache Projects.ProjectId Projects.ProjectCache) -- 60*60secs or 1 hour TTL
         let serverCtx =
               Config.AuthContext
                 { env = envConfig,
                   pool = poolConn,
-                  logger = logger
+                  logger = logger,
+                  projectCache = projectCache
                 }
 
         logger <& "\n"
-        logger <& "Starting server at port " <> show (envConfig ^. #port)
+        logger <& "🚀 Starting server at port " <> show (envConfig ^. #port)
         logger <& "\n"
 
         asyncs <-
           sequence
-            [ async (pubsubService logger envConfig poolConn),
+            [ async (pubsubService logger envConfig poolConn projectCache),
+              async (pubsubService logger envConfig poolConn projectCache),
               async (run (Config.port envConfig) $ Server.app logger poolConn serverCtx),
               async $ BackgroundJobs.jobsWorkerInit poolConn logger envConfig
             ]
@@ -94,8 +86,8 @@ startApp = do
 -- pubsubService connects to the pubsub service and listens for  messages,
 -- then it calls the processMessage function to process the messages, and
 -- acknoleges the list message in one request.
-pubsubService :: LogAction IO String -> Config.EnvConfig -> Pool.Pool Connection -> IO ()
-pubsubService logger envConfig conn = do
+pubsubService :: LogAction IO String -> Config.EnvConfig -> Pool.Pool Connection -> Cache Projects.ProjectId Projects.ProjectCache -> IO ()
+pubsubService logger envConfig conn projectCache = do
   env <-
     Google.newEnv
       <&> (Google.envScopes L..~ PubSub.pubSubScope)
@@ -107,6 +99,6 @@ pubsubService logger envConfig conn = do
         let subscription = "projects/past-3/subscriptions/" <> topic <> "-sub"
         pullResp <- Google.send $ PubSub.projectsSubscriptionsPull pullReq subscription
         let messages = pullResp L.^. PubSub.prReceivedMessages
-        msgIds <- liftIO $ processMessages logger envConfig conn messages
+        msgIds <- liftIO $ processMessages logger envConfig conn messages projectCache
         let acknowlegReq = PubSub.acknowledgeRequest & PubSub.arAckIds L..~ catMaybes msgIds
         unless (null msgIds) $ void $ PubSub.projectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send

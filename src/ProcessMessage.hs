@@ -12,6 +12,7 @@ import Control.Monad.Trans.Except
 import Control.Monad.Trans.Except.Extra (handleIOExceptT)
 import Data.Aeson (eitherDecode)
 import Data.ByteString.Base64 qualified as B64
+import Data.Cache qualified as Cache
 import Data.Pool (Pool)
 import Data.Time.LocalTime (getZonedTime)
 import Data.UUID.V4 (nextRandom)
@@ -26,75 +27,19 @@ import Relude.Unsafe (fromJust)
 import RequestMessages qualified
 import Utils (DBField, eitherStrToText)
 
-processMessages :: LogAction IO String -> Config.EnvConfig -> Pool Connection -> [PubSub.ReceivedMessage] -> IO [Maybe Text]
-processMessages logger' env conn' msgs = do
-  let msgs' =
-        msgs & map \msg -> do
-          let rmMsg = msg ^? PubSub.rmMessage . _Just . PubSub.pmData . _Just
-          let decodedMsg = B64.decodeBase64 $ fromJust rmMsg
-          let jsonByteStr = fromRight "{}" decodedMsg
-          recMsg <- eitherStrToText $ eitherDecode (fromStrict jsonByteStr)
-          Right (msg L.^. PubSub.rmAckId, recMsg)
-  if null msgs'
-    then pure []
-    else processMessages' logger' env conn' msgs'
-
-processMessages' :: LogAction IO String -> Config.EnvConfig -> Pool Connection -> [Either Text (Maybe Text, RequestMessages.RequestMessage)] -> IO [Maybe Text]
-processMessages' logger' _ conn' msgs = do
-  processed <- mapM (processMessage logger' conn') msgs
-  let (rmAckIds, queries, params) = unzip3 $ rights processed
-  let query' = mconcat queries
-  let params' = concat params
-
-  let errs = lefts processed
-  unless (null errs) do
-    mapM_ (\err -> logger' <& "error with converting request message to dump and endpoint" <> show err) errs
-    pass
-
-  resp <-
-    if null params'
-      then pure $ Left "Empty params/query for processMessages"
-      else
-        runExceptT $
-          handleIOExceptT (toText @String . show) $
-            withPool conn' $ execute query' params'
-  case resp of
-    Left err -> do
-      logger' <& "error with converting request message to dump and endpoint" <> toString err
-      pure []
-    Right _ -> pure rmAckIds
-  where
-    processMessage :: LogAction IO String -> Pool Connection -> Either Text (Maybe Text, RequestMessages.RequestMessage) -> IO (Either Text (Maybe Text, Query, [DBField]))
-    processMessage logger conn recMsgEither = runExceptT do
-      (rmAckId, recMsg) <- except recMsgEither
-      recId <- liftIO nextRandom
-      timestamp <- liftIO getZonedTime
-      let pid = Projects.ProjectId (recMsg ^. #projectId)
-      let projectCache = Projects.ProjectCache {hosts = [], endpointHashes = ["abc"], shapeHashes = [], redactFieldslist = []}
-      (query, params) <- except $ RequestMessages.requestMsgToDumpAndEndpoint projectCache recMsg timestamp recId
-      pure (rmAckId, query, params)
-
 {--
   Exploring how the inmemory cache could be shaped for performance, and low footprint ability to skip hitting the postgres database when not needed.
 
- Raw project ID.
- { id :: ProjectId,
-   createdAt :: ZonedTime,
-   updatedAt :: ZonedTime,
-   deletedAt :: Maybe ZonedTime,
-   active :: Bool,
-   title :: Text,
-   description :: Text,
-   hosts :: Vector.Vector Text
- }
-
- HashMap?
-  -- All vectors here should be sorted, then we would be able to do conttainment and prefix searches via binary search (Works fast on sorted lists)
+  -- All vectors here should be sorted (or we could use sets), then we would be able to do conttainment and prefix searches via binary search (Works fast on sorted lists)
   -- It will likely be fine to just insert these projects into the cache with a short (eg 5mins) TTL, and then reload if from the db every 5 mins as needed.
   -- - This might not be most efficient, but we don't need to worry too much about keeping this data in sync but updating values in the cache based on live requests.
   -- - Over inserting into the database within that 5minute timeline should probably be a non-issue in comparison.
   -- Implementation should just be a function that accepts the cache type and a project id, then it checks if the project id exists or not. if it doesn't exist,
   -- it would run the query to get the project from the db in the exact shape we need, and fill up the cache before returning the value
+
+  -- NOTE: It might be worth it to explore using sets as well for the project cache
+
+  Project Cache structure.
  <projectID> =
    {
       -- Used for the dashboards on every page. The title is displayed on the sidebar.
@@ -141,3 +86,61 @@ processMessages' logger' _ conn' msgs = do
 
     We could also maintain hashes of all the formats in the cache, and check each field format within this list.🤔
  --}
+processMessages :: LogAction IO String -> Config.EnvConfig -> Pool Connection -> [PubSub.ReceivedMessage] -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> IO [Maybe Text]
+processMessages logger' env conn' msgs projectCache = do
+  let msgs' =
+        msgs & map \msg -> do
+          let rmMsg = msg ^? PubSub.rmMessage . _Just . PubSub.pmData . _Just
+          let decodedMsg = B64.decodeBase64 $ fromJust rmMsg
+          let jsonByteStr = fromRight "{}" decodedMsg
+          recMsg <- eitherStrToText $ eitherDecode (fromStrict jsonByteStr)
+          Right (msg L.^. PubSub.rmAckId, recMsg)
+  if null msgs'
+    then pure []
+    else processMessages' logger' env conn' msgs' projectCache
+
+processMessages' :: LogAction IO String -> Config.EnvConfig -> Pool Connection -> [Either Text (Maybe Text, RequestMessages.RequestMessage)] -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> IO [Maybe Text]
+processMessages' logger' _ conn' msgs projectCache' = do
+  processed <- mapM (processMessage logger' conn' projectCache') msgs
+  let (rmAckIds, queries, params) = unzip3 $ rights processed
+  let query' = mconcat queries
+  let params' = concat params
+
+  let errs = lefts processed
+  unless (null errs) do
+    mapM_ (\err -> logger' <& "error with converting request message to dump and endpoint" <> show err) errs
+    pass
+
+  resp <-
+    if null params'
+      then pure $ Left "Empty params/query for processMessages"
+      else
+        runExceptT $
+          handleIOExceptT (toText @String . show) $
+            withPool conn' $ execute query' params'
+  case resp of
+    Left err -> do
+      logger' <& "error with converting request message to dump and endpoint" <> toString err
+      pure []
+    Right _ -> pure rmAckIds
+  where
+    projectCacheDefault :: Projects.ProjectCache
+    projectCacheDefault = Projects.ProjectCache {hosts = [], endpointHashes = [], shapeHashes = [], redactFieldslist = []}
+
+    processMessage :: LogAction IO String -> Pool Connection -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> Either Text (Maybe Text, RequestMessages.RequestMessage) -> IO (Either Text (Maybe Text, Query, [DBField]))
+    processMessage logger conn projectCache recMsgEither = runExceptT do
+      (rmAckId, recMsg) <- except recMsgEither
+      recId <- liftIO nextRandom
+      timestamp <- liftIO getZonedTime
+      let pid = Projects.ProjectId (recMsg ^. #projectId)
+
+      -- We retrieve the projectCache object from the inmemory cache and if it doesn't exist,
+      -- we set the value in the db into the cache and return that.
+      -- This should help with our performance, since this project Cache is the only information we need in order to process
+      -- an apitoolkit requestmessage payload. So we're able to process payloads without hitting the database except for the actual db inserts.
+      projectCacheVal <- liftIO $ Cache.fetchWithCache projectCache pid \pid' -> do
+        mpjCache <- withPool conn $ Projects.projectCacheById pid'
+        pure $ fromMaybe projectCacheDefault mpjCache
+
+      (query, params) <- except $ RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId
+      pure (rmAckId, query, params)

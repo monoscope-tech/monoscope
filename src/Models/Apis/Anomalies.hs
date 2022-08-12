@@ -116,7 +116,7 @@ data AnomalyVM = AnomalyCM
     acknowlegedBy :: Maybe Users.UserId,
     anomalyType :: AnomalyTypes,
     action :: AnomalyActions,
-    targetId :: UUID.UUID,
+    targetHash :: Text,
     --
     shapeId :: Maybe Shapes.ShapeId,
     --

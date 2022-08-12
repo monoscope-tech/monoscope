@@ -74,36 +74,33 @@ library
   hs-source-dirs:
       src
   default-extensions:
-      NoImplicitPrelude
-      DerivingStrategies
+      BangPatterns
+      BlockArguments
       DataKinds
-      TypeFamilies
-      TypeOperators
-      TypeApplications
-      DataKinds
-      DerivingVia
-      DerivingStrategies
       DeriveAnyClass
       DeriveGeneric
-      RecordWildCards
-      QuasiQuotes
-      OverloadedStrings
-      OverloadedLists
+      DerivingStrategies
+      DerivingVia
+      DisambiguateRecordFields
       ExtendedDefaultRules
-      OverloadedLabels
       FlexibleInstances
-      MultiParamTypeClasses
-      UndecidableInstances
+      ImportQualifiedPost
       InstanceSigs
+      LambdaCase
       MultiParamTypeClasses
+      NamedFieldPuns
+      NoImplicitPrelude
+      OverloadedLabels
+      OverloadedLists
+      OverloadedStrings
       PatternSynonyms
       QuasiQuotes
-      DisambiguateRecordFields
-      ImportQualifiedPost
-      BlockArguments
-      BangPatterns
-      NamedFieldPuns
-      LambdaCase
+      RecordWildCards
+      StrictData
+      TypeApplications
+      TypeFamilies
+      TypeOperators
+      UndecidableInstances
   ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches
   build-depends:
       HaskellNet
@@ -114,7 +111,9 @@ library
     , async
     , base
     , base64
+    , cache
     , case-insensitive
+    , clock
     , co-log
     , co-log-core
     , containers
@@ -175,7 +174,7 @@ library
     , uuid
     , valor >=1.0.0.0
     , vector
-    , vector-algorithms
+    , vector-algorithms >=0.9.0.1
     , wai
     , warp
     , witch
@@ -189,36 +188,33 @@ executable apitoolkit-server-exe
   hs-source-dirs:
       app
   default-extensions:
-      NoImplicitPrelude
-      DerivingStrategies
+      BangPatterns
+      BlockArguments
       DataKinds
-      TypeFamilies
-      TypeOperators
-      TypeApplications
-      DataKinds
-      DerivingVia
-      DerivingStrategies
       DeriveAnyClass
       DeriveGeneric
-      RecordWildCards
-      QuasiQuotes
-      OverloadedStrings
-      OverloadedLists
+      DerivingStrategies
+      DerivingVia
+      DisambiguateRecordFields
       ExtendedDefaultRules
-      OverloadedLabels
       FlexibleInstances
-      MultiParamTypeClasses
-      UndecidableInstances
+      ImportQualifiedPost
       InstanceSigs
+      LambdaCase
       MultiParamTypeClasses
+      NamedFieldPuns
+      NoImplicitPrelude
+      OverloadedLabels
+      OverloadedLists
+      OverloadedStrings
       PatternSynonyms
       QuasiQuotes
-      DisambiguateRecordFields
-      ImportQualifiedPost
-      BlockArguments
-      BangPatterns
-      NamedFieldPuns
-      LambdaCase
+      RecordWildCards
+      StrictData
+      TypeApplications
+      TypeFamilies
+      TypeOperators
+      UndecidableInstances
   ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches -threaded -rtsopts -with-rtsopts=-N -hiedir=.hie -O2
   build-depends:
       apitoolkit-server
@@ -233,36 +229,33 @@ test-suite apitoolkit-server-test
   hs-source-dirs:
       test
   default-extensions:
-      NoImplicitPrelude
-      DerivingStrategies
+      BangPatterns
+      BlockArguments
       DataKinds
-      TypeFamilies
-      TypeOperators
-      TypeApplications
-      DataKinds
-      DerivingVia
-      DerivingStrategies
       DeriveAnyClass
       DeriveGeneric
-      RecordWildCards
-      QuasiQuotes
-      OverloadedStrings
-      OverloadedLists
+      DerivingStrategies
+      DerivingVia
+      DisambiguateRecordFields
       ExtendedDefaultRules
-      OverloadedLabels
       FlexibleInstances
-      MultiParamTypeClasses
-      UndecidableInstances
+      ImportQualifiedPost
       InstanceSigs
+      LambdaCase
       MultiParamTypeClasses
+      NamedFieldPuns
+      NoImplicitPrelude
+      OverloadedLabels
+      OverloadedLists
+      OverloadedStrings
       PatternSynonyms
       QuasiQuotes
-      DisambiguateRecordFields
-      ImportQualifiedPost
-      BlockArguments
-      BangPatterns
-      NamedFieldPuns
-      LambdaCase
+      RecordWildCards
+      StrictData
+      TypeApplications
+      TypeFamilies
+      TypeOperators
+      UndecidableInstances
   ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
   build-depends:
       apitoolkit-server

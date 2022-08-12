@@ -3,9 +3,11 @@
 module Config (EnvConfig (..), AuthContext (..), DashboardM, ctxToHandler) where
 
 import Colog (LogAction)
+import Data.Cache (Cache)
 import Data.Pool as Pool
 import Data.Text qualified as T
 import Database.PostgreSQL.Simple (Connection)
+import Models.Projects.Projects qualified as Projects
 import Optics.TH
 import Relude
 import Servant.Server (Handler)
@@ -44,7 +46,8 @@ makeFieldLabelsNoPrefix ''EnvConfig
 data AuthContext = AuthContext
   { env :: EnvConfig,
     pool :: Pool.Pool Connection,
-    logger :: LogAction IO String
+    logger :: LogAction IO String,
+    projectCache :: Cache Projects.ProjectId Projects.ProjectCache
   }
 
 type DashboardM = ReaderT AuthContext Handler

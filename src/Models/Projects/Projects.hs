@@ -14,6 +14,7 @@ module Models.Projects.Projects
     updateProject,
     deleteProject,
     projectById,
+    projectCacheById,
     ProjectCache (..),
   )
 where
@@ -22,7 +23,7 @@ import Data.Aeson (FromJSON, ToJSON)
 import Data.Default
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
-import Data.Vector qualified as Vector
+import Data.Vector qualified as V
 import Database.PostgreSQL.Entity
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), query, queryOne)
 import Database.PostgreSQL.Entity.Types
@@ -40,7 +41,7 @@ import Web.HttpApiData
 newtype ProjectId = ProjectId {unProjectId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving
-    (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default)
+    (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default, Hashable)
     via UUID.UUID
   deriving anyclass (FromRow, ToRow)
 
@@ -72,17 +73,17 @@ makeFieldLabelsNoPrefix ''Project
 data ProjectCache = ProjectCache
   { -- We need this hosts to mirrow all the hosts in the endpoints table, and could use this for validation purposes to skip inserting endpoints just because of hosts
     -- if endpoint exists but host is not in this list, then we have a query specifically for inserting hosts.
-    hosts :: Vector.Vector Text,
+    hosts :: V.Vector Text,
     -- maybe we don't need this? See the next point.
-    endpointHashes :: Vector.Vector Text,
+    endpointHashes :: V.Vector Text,
     -- Since shapes always have the endpoints hash prepended to them, maybe we don't need to store the hash of endpoints,
     -- since we can derive that from the shapes.
-    shapeHashes :: Vector.Vector Text,
+    shapeHashes :: V.Vector Text,
     -- We check if every request is part of the redact list, so it's better if we don't need to  hit the db for them with each request.
     -- Since we have a need to redact fields by endpoint, we can simply have the fields paths be prepended by the endpoint hash.
     -- [endpointHash]<>[field_category eg requestBody]<>[field_key_path]
     -- Those redace fields that don't have endpoint or field_category attached, would be aplied to every endpoint and field category.
-    redactFieldslist :: Vector.Vector Text
+    redactFieldslist :: V.Vector Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow)
@@ -102,13 +103,30 @@ data CreateProject = CreateProject
 
 makeFieldLabelsNoPrefix ''CreateProject
 
+-- FIXME: We currently return an object with empty vectors when nothing was found.
+projectCacheById :: ProjectId -> PgT.DBT IO (Maybe ProjectCache)
+projectCacheById = queryOne Select q
+  where
+    q =
+      [sql| select  coalesce(ARRAY_AGG(DISTINCT hosts ORDER BY hosts ASC),'{}') hosts, 
+                    coalesce(ARRAY_AGG(DISTINCT endpoint_hashes ORDER BY endpoint_hashes ASC),'{}') endpoint_hashes, 
+                    coalesce(ARRAY_AGG(DISTINCT shape_hashes ORDER BY shape_hashes ASC),'{}') shape_hashes, 
+                    coalesce(ARRAY_AGG(DISTINCT paths ORDER BY paths ASC),'{}') redacted_fields 
+            from
+              (select unnest(akeys(hosts)) hosts, e.hash endpoint_hashes, sh.hash shape_hashes, concat(rf.endpoint_hash,'<>', rf.field_category,'<>', rf.path) paths
+                from apis.endpoints e
+                left join apis.shapes sh on sh.endpoint_hash = e.hash
+                left join projects.redacted_fields rf on rf.project_id = e.project_id
+                where e.project_id = ?
+               ) enp; |]
+
 insertProject :: CreateProject -> PgT.DBT IO ()
 insertProject = insert @CreateProject
 
 projectById :: ProjectId -> PgT.DBT IO (Maybe Project)
 projectById = selectById @Project
 
-selectProjectsForUser :: Users.UserId -> PgT.DBT IO (Vector.Vector Project)
+selectProjectsForUser :: Users.UserId -> PgT.DBT IO (V.Vector Project)
 selectProjectsForUser = query Select q
   where
     q = [sql| select pp.* from projects.projects as pp join projects.project_members as ppm on (pp.id=ppm.project_id) where ppm.user_id=? order by updated_at desc|]
@@ -116,9 +134,15 @@ selectProjectsForUser = query Select q
 selectProjectForUser :: (Users.UserId, ProjectId) -> PgT.DBT IO (Maybe Project)
 selectProjectForUser = queryOne Select q
   where
-    q = [sql| select pp.* from projects.projects as pp join projects.project_members as ppm on (pp.id=ppm.project_id) where ppm.user_id=? and ppm.project_id=? order by updated_at desc|]
+    q =
+      [sql| 
+        select pp.* from projects.projects as pp 
+          join projects.project_members as ppm on (pp.id=ppm.project_id)
+          join users.users uu on (uu.id=ppm.user_id)
+          where (ppm.user_id=? or uu.is_sudo is True) and ppm.project_id=? order by updated_at desc
+          |]
 
-editProjectGetH :: ProjectId -> PgT.DBT IO (Vector.Vector Project)
+editProjectGetH :: ProjectId -> PgT.DBT IO (V.Vector Project)
 editProjectGetH pid = query Select q (Only pid)
   where
     q =

@@ -28,36 +28,33 @@ ghc-options:
   # - -fllvm
 
 default-extensions: 
-  - NoImplicitPrelude
-  - DerivingStrategies
+  - BangPatterns
+  - BlockArguments
   - DataKinds
-  - TypeFamilies
-  - TypeOperators
-  - TypeApplications
-  - DataKinds
-  - DerivingVia
-  - DerivingStrategies
   - DeriveAnyClass
   - DeriveGeneric
-  - RecordWildCards
-  - QuasiQuotes
-  - OverloadedStrings
-  - OverloadedLists
+  - DerivingStrategies
+  - DerivingVia
+  - DisambiguateRecordFields
   - ExtendedDefaultRules
-  - OverloadedLabels
   - FlexibleInstances
-  - MultiParamTypeClasses
-  - UndecidableInstances
+  - ImportQualifiedPost
   - InstanceSigs          
-  - MultiParamTypeClasses 
+  - LambdaCase
+  - MultiParamTypeClasses
+  - NamedFieldPuns
+  - NoImplicitPrelude
+  - OverloadedLabels
+  - OverloadedLists
+  - OverloadedStrings
   - PatternSynonyms       
   - QuasiQuotes
-  - DisambiguateRecordFields
-  - ImportQualifiedPost
-  - BlockArguments
-  - BangPatterns
-  - NamedFieldPuns
-  - LambdaCase
+  - RecordWildCards
+  - StrictData
+  - TypeApplications
+  - TypeFamilies
+  - TypeOperators
+  - UndecidableInstances
 
 
 extra-source-files:
@@ -76,12 +73,17 @@ description:         Please see the README on GitHub at <https://github.com/gith
 library:
   source-dirs: src
   dependencies:
+    - HaskellNet
+    - Unique
     - aeson
+    - aeson-optics
     - aeson-qq
     - async
     - base
     - base64
+    - cache
     - case-insensitive
+    - clock
     - co-log
     - co-log-core
     - containers
@@ -92,26 +94,35 @@ library:
     - dotenv
     - envy
     - errors
+    - extra
+    - fakedata
     - fmt
     - gogol
     - gogol-core
     - gogol-pubsub
+    - hex-text
     - hspec
     - http-api-data
+    - http-types
     - lens
     - lens-aeson
     - lucid
     - lucid-htmx 
     - lucid-hyperscript
     - lucid-svg
+    - megaparsec
     - neat-interpolation
+    - odd-jobs
     - optics-core
-    - optics-th
     - optics-extra
+    - optics-th
+    - parallel-io
+    - parser-combinators
     - pg-entity
     - pg-transact
     - postgresql-migration
     - postgresql-simple
+    - random
     - raw-strings-qq
     - regex-tdfa
     - relude >=1.0.0.1
@@ -119,10 +130,12 @@ library:
     - resourcet
     - scientific
     - sendgrid-v3
+    - servant-htmx
     - servant-lucid
     - servant-server
     - text
     - text-conversions
+    - text-display
     - time
     - transformers
     - transformers-either
@@ -131,27 +144,13 @@ library:
     - uuid
     - valor >= 1.0.0.0
     - vector
+    - vector-algorithms >= 0.9.0.1
     - wai
     - warp
-    - wreq
-    - yaml
-    - fakedata
-    - random
-    - http-types
-    - servant-htmx
-    - megaparsec
-    - text-display
-    - parser-combinators
-    - odd-jobs
-    - parallel-io
-    - HaskellNet
-    - Unique
-    - extra
-    - aeson-optics
-    - xxhash
-    - vector-algorithms
     - witch
-    - hex-text
+    - wreq
+    - xxhash
+    - yaml
 
 executables:
   apitoolkit-server-exe:

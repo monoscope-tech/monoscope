@@ -15,7 +15,6 @@ import Database.PostgreSQL.Simple.FromField
 import Database.PostgreSQL.Simple.ToField
 import Database.PostgreSQL.Transact (DBT)
 import Deriving.Aeson qualified as DAE
-import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Relude
 import Relude.Unsafe (read)
@@ -50,8 +49,7 @@ data RedactedField = RedactedField
     path :: Text,
     configuredVia :: ConfiguredVia,
     description :: Text,
-    endpoint :: Maybe Endpoints.EndpointId,
-    endpointHash :: Text
+    endpointHash :: Maybe Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow)
@@ -67,16 +65,3 @@ redactedFieldById id' = selectById (Only id')
 
 redactedFieldsByProject :: Projects.ProjectId -> DBT IO (Vector RedactedField)
 redactedFieldsByProject pid = selectManyByField [field| project_id |] pid
-
--- redactedFieldsMapByProject :: Projects.ProjectId -> DBT IO (Map (Maybe Text) (Vector Text))
--- redactedFieldsMapByProject pid = vectorToMap <$> query Select q (Only pid)
---   where
---     q =
---       [sql|
---     select  endpoint::text, array_agg(path)
--- 		from projects.redacted_fields
---     where project_id = ?
--- 		group by endpoint |]
-
---     vectorToMap :: Ord a => Vector (a, b) -> Map a b
---     vectorToMap = Map.fromList . Vector.toList

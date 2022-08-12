@@ -22,23 +22,23 @@ where
 
 import Data.Aeson (KeyValue ((.=)), ToJSON, object)
 import Data.Aeson qualified as AE
+import Data.Default.Instances ()
 import Data.Time (CalendarDiffTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
-import Database.PostgreSQL.Entity.DBT (QueryNature (Insert, Select), execute, query, queryOne)
+import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, queryOne)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Database.PostgreSQL.Transact (DBT)
 import Deriving.Aeson qualified as DAE
-import Models.Apis.Fields qualified as Fields
-import Models.Apis.Formats qualified as Formats
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Optics.TH
 import Pkg.Parser
 import Relude hiding (many, some)
+import Utils ()
 
 -- request dumps are time series dumps representing each requests which we consume from our users.
 -- We use this field via the log explorer for exploring and searching traffic. And at the moment also use it for most time series analytics.

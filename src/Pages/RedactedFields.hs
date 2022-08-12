@@ -13,7 +13,6 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import Lucid.HTMX
 import Lucid.Hyperscript
-import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Projects.RedactedFields qualified as RedactedFields
 import Models.Users.Sessions qualified as Sessions
@@ -27,13 +26,13 @@ import Web.FormUrlEncoded (FromForm)
 data RedactFieldForm = RedactFieldForm
   { path :: Text,
     description :: Text,
-    endpoint :: Maybe Endpoints.EndpointId
+    endpointHash :: Maybe Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
 
 redactedFieldsPostH :: Sessions.PersistentSession -> Projects.ProjectId -> RedactFieldForm -> DashboardM (Headers '[HXTrigger] (Html ()))
-redactedFieldsPostH sess pid RedactFieldForm {path, description, endpoint} = do
+redactedFieldsPostH sess pid RedactFieldForm {path, description, endpointHash} = do
   pool <- asks pool
   env <- asks env
   redactedFieldId <- RedactedFields.RedactedFieldId <$> liftIO UUIDV4.nextRandom

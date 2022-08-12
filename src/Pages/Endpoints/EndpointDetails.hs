@@ -104,7 +104,7 @@ endpointDetailsH sess pid eid = do
     withPool pool $ do
       endpoint <- Unsafe.fromJust <$> Endpoints.endpointRequestStatsByEndpoint eid
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      fieldsMap <- Fields.groupFieldsByCategory <$> Fields.selectFields eid
+      fieldsMap <- Fields.groupFieldsByCategory <$> Fields.selectFields (endpoint ^. #endpointHash)
       reqsByStatsByMin <- RequestDumps.selectRequestsByStatusCodesStatByMin pid (endpoint ^. #urlPath) (endpoint ^. #method)
 
       let maxV = round (endpoint ^. #max) :: Int

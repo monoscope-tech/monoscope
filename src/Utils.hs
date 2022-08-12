@@ -3,10 +3,15 @@
 
 module Utils (eitherStrToText, GetOrRedirect, redirect, DBField (..)) where
 
+import Data.Time (ZonedTime)
 import Database.PostgreSQL.Simple.ToField (ToField (..))
 import Lucid (Html)
 import Relude
 import Servant
+
+-- Added only for satisfying the tests
+instance Eq ZonedTime where
+  (==) _ _ = True
 
 -- | eitherStrToText helps to convert Either String a to Either Text a,
 -- to allow using both of them via do notation in the same monad.

@@ -42,10 +42,6 @@ import Relude
 import Utils (DBField (MkDBField))
 import Web.HttpApiData (FromHttpApiData)
 
--- Added only for satisfying the tests
-instance Eq ZonedTime where
-  (==) _ _ = True
-
 newtype EndpointId = EndpointId {unEndpointId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving
@@ -141,6 +137,7 @@ upsertEndpoints endpoint = queryOne Insert q options
 -- Based of a view which is generated every 5minutes.
 data EndpointRequestStats = EndpointRequestStats
   { endpointId :: EndpointId,
+    endpointHash :: Text,
     projectId :: Projects.ProjectId,
     urlPath :: Text,
     method :: Text,
@@ -163,11 +160,12 @@ data EndpointRequestStats = EndpointRequestStats
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "endpoint_request_stats", PrimaryKey "endpoint_id", FieldModifiers '[CamelToSnake]] EndpointRequestStats)
 
 -- FIXME: Include and return a boolean flag to show if fields that have annomalies.
+-- FIXME: return endpoint_hash as well.
 endpointRequestStatsByProject :: Projects.ProjectId -> PgT.DBT IO (Vector EndpointRequestStats)
 endpointRequestStatsByProject pid = query Select q (pid, pid)
   where
     q =
-      [sql| SELECT endpoint_id, project_id, url_path, method, min, p50, p75, p90, p95, p99, max, 
+      [sql| SELECT endpoint_id, endpoint_hash, project_id, url_path, method, min, p50, p75, p90, p95, p99, max, 
                    total_time, total_time_proj, total_requests, total_requests_proj,
                    (SELECT count(*) from apis.anomalies 
                            where project_id=? AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
@@ -177,11 +175,13 @@ endpointRequestStatsByProject pid = query Select q (pid, pid)
                    ) ongoing_anomalies_proj
               FROM apis.endpoint_request_stats WHERE project_id=?|]
 
+-- FIXME: return endpoint_hash as well.
+-- This would require tampering with the view.
 endpointRequestStatsByEndpoint :: EndpointId -> PgT.DBT IO (Maybe EndpointRequestStats)
 endpointRequestStatsByEndpoint eid = queryOne Select q (eid, eid)
   where
     q =
-      [sql| SELECT endpoint_id, project_id, url_path, method, min, p50, p75, p90, p95, p99, max, 
+      [sql| SELECT endpoint_id, endpoint_hash, project_id, url_path, method, min, p50, p75, p90, p95, p99, max, 
                    total_time, total_time_proj, total_requests, total_requests_proj,
                    (SELECT count(*) from apis.anomalies 
                            where endpoint_id=? AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'

@@ -19,7 +19,10 @@ import Utils (GetOrRedirect, redirect)
 listProjectsGetH :: Sessions.PersistentSession -> DashboardM (Union GetOrRedirect)
 listProjectsGetH sess = do
   pool <- asks pool
-  projects <- liftIO $ withPool pool $ Projects.selectProjectsForUser (sess ^. #userId)
+  projects <-
+    if sess ^. #isSudo
+      then liftIO $ withPool pool $ Projects.selectProjectsForUser (sess ^. #userId)
+      else liftIO $ withPool pool $ Projects.selectProjectsForUser (sess ^. #userId)
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess,

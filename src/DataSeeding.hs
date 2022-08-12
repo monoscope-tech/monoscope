@@ -3,7 +3,7 @@
 module DataSeeding (parseConfigToJson, dataSeedingGetH, dataSeedingPostH, DataSeedingForm) where
 
 import Colog ((<&))
-import Config (DashboardM, env, logger, pool)
+import Config (DashboardM, env, logger, pool, projectCache)
 import Data.Aeson qualified as AE
 import Data.ByteString.Base64 qualified as B64
 import Data.Default (def)
@@ -149,6 +149,7 @@ dataSeedingPostH sess pid form = do
   pool <- asks pool
   logger <- asks logger
   env <- asks env
+  projectCache <- asks projectCache
   project <-
     liftIO $
       withPool pool $ Projects.selectProjectForUser (Sessions.userId sess, pid)
@@ -157,8 +158,8 @@ dataSeedingPostH sess pid form = do
   case respE of
     Left err -> liftIO $ logger <& "ERROR processing req message " <> show err >> pure dataSeedingPage
     Right resp -> do
-      let seeds = resp & map (\x -> Right (Just "", x))
-      _ <- liftIO $ ProcessMessage.processMessages' logger env pool seeds
+      let !seeds = resp & map (\x -> Right (Just "", x))
+      _ <- liftIO $ ProcessMessage.processMessages' logger env pool seeds projectCache
       pure dataSeedingPage
 
 dataSeedingGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
