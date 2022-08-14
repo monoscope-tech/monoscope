@@ -127,6 +127,7 @@ library
     , extra
     , fakedata
     , fmt
+    , formatting
     , gogol
     , gogol-core
     , gogol-pubsub

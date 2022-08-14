@@ -340,15 +340,6 @@ CREATE TABLE IF NOT EXISTS apis.request_dumps
     request_body              jsonb     NOT  NULL DEFAULT    '{}'::jsonb,
     response_body             jsonb     NOT  NULL DEFAULT    '{}'::jsonb,
     
-    -- TODO: remove these key paths, since we already store the field hashes.
-    -- Let's not overload the size of a request_dump item, considering that larger rows are really
-    -- expensive to query.
-    query_params_keypaths     text[]    NOT  NULL DEFAULT    '{}'::TEXT[],
-    request_headers_keypaths  text[]    NOT  NULL DEFAULT    '{}'::TEXT[],
-    response_headers_keypaths text[]    NOT  NULL DEFAULT    '{}'::TEXT[],
-    request_body_keypaths     text[]    NOT  NULL DEFAULT    '{}'::TEXT[],
-    response_body_keypaths    text[]    NOT  NULL DEFAULT    '{}'::TEXT[],
- 
     -- Instead of holding ids which are difficult to compute, let's rather store their hashes only. 
     endpoint_hash             text      NOT  NULL DEFAULT    ''::text,
     shape_hash                text      NOT  NULL DEFAULT    ''::text,
@@ -360,18 +351,14 @@ CREATE TABLE IF NOT EXISTS apis.request_dumps
 SELECT manage_updated_at('apis.request_dumps');
 SELECT create_hypertable('apis.request_dumps', 'created_at');
 CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_project_id ON apis.request_dumps(project_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_shape_hash ON apis.request_dumps(shape_hash, created_at);
-CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_format_hashes ON apis.request_dumps(format_hashes, created_at);
-CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_field_hashes ON apis.request_dumps(field_hashes, created_at);
-CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_endpointss ON apis.request_dumps(url_path,method, created_at);
-
 
 -- Create a view that tracks endpoint related statistic points from the request dump table.
 DROP MATERIALIZED VIEW IF EXISTS apis.endpoint_request_stats;
 CREATE MATERIALIZED VIEW apis.endpoint_request_stats AS 
-    WITH request_dump_stats as (
+ WITH request_dump_stats as (
         SELECT
             project_id, url_path, method,
+	 		endpoint_hash,
             percentile_agg(EXTRACT(epoch FROM duration)) as agg,
             sum(EXTRACT(epoch FROM duration))  as total_time,
             count(1)  as total_requests,
@@ -379,7 +366,7 @@ CREATE MATERIALIZED VIEW apis.endpoint_request_stats AS
             sum(count(*)) OVER (partition by project_id) as total_requests_proj
         FROM apis.request_dumps
         where created_at > NOW() - interval '14' day
-        GROUP BY project_id, url_path, method
+        GROUP BY project_id, url_path, method, endpoint_hash
     )
     SELECT 	
         enp.id endpoint_id,
@@ -397,8 +384,9 @@ CREATE MATERIALIZED VIEW apis.endpoint_request_stats AS
         CAST (total_time_proj/1000000  AS FLOAT8) total_time_proj,
         CAST (total_requests AS INT),
         CAST (total_requests_proj AS INT)
-    FROM request_dump_stats rds
-    JOIN apis.endpoints enp on (rds.project_id=enp.project_id AND rds.method=enp.method AND rds.url_path=enp.url_path);
+	FROM apis.endpoints enp 
+	JOIN request_dump_stats rds on (rds.project_id=enp.project_id AND rds.endpoint_hash=enp.hash);
+  
 CREATE INDEX IF NOT EXISTS idx_apis_endpoint_request_stats_project_id ON apis.endpoint_request_stats(project_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_endpoint_request_stats_endpoint_id ON apis.endpoint_request_stats(endpoint_id);
 
@@ -466,68 +454,68 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_project_requests_by_endpoint_per_min_
 
 -- TODO: Create triggers to create new anomalies when new fields, 
 -- TODO: endpoints and shapes are created.
--- TODO: Write anomalies_vm view to use hashes not ids
 
 -- FIXME: reevaluate how anomaly_vm will work and be rendered
-DROP MATERIALIZED VIEW IF EXISTS apis.project_requests_by_endpoint_per_min;
--- CREATE MATERIALIZED VIEW IF NOT EXISTS apis.anomalies_vm 
---     AS	SELECT 
---     an.id, an.created_at, an.updated_at, an.project_id, an.acknowleged_at,an.acknowleged_by, an.anomaly_type, an.action, an.target_hash,
---     shapes.id shape_id,
+DROP MATERIALIZED VIEW IF EXISTS apis.anomalies_vm;
+CREATE MATERIALIZED VIEW IF NOT EXISTS apis.anomalies_vm 
+  AS	SELECT 
+    an.id, an.created_at, an.updated_at, an.project_id, an.acknowleged_at,an.acknowleged_by, an.anomaly_type, an.action, an.target_hash,
+    shapes.id shape_id,
 
---     fields.id field_id,
---     fields.key field_key,
---     fields.key_path_str field_key_path_str,
---     fields.field_category field_category,
---     fields.format field_format,
---     
---     formats.id format_id,
---     formats.field_type format_type,
---     formats.examples format_examples,
+    fields.id field_id,
+    fields.key field_key,
+    fields.key_path field_key_path,
+    fields.field_category field_category,
+    fields.format field_format,
+    
+    formats.id format_id,
+    formats.field_type format_type,
+    formats.examples format_examples,
 
---     endpoints.id endpoint_id,
---     endpoints.method endpoint_method,
---     endpoints.url_path endpoint_url_path,
+    endpoints.id endpoint_id,
+    endpoints.method endpoint_method,
+    endpoints.url_path endpoint_url_path,
 
---     an.archived_at,
---     (
---       SELECT
---           json_agg(json_build_array(timeB, count))
---       from
---           (
---               SELECT
---                   time_bucket('1 minute', created_at) as timeB,
---                   count(id) count
---               FROM
---                   apis.request_dumps
---               where
---                   created_at > NOW() - interval '14' day -- TODO: update to 30days retention
---                   AND project_id = project_id
---                   AND CASE
---                       WHEN anomaly_type = 'endpoint' THEN 
---                           method = method
---                           AND url_path = url_path
---                       WHEN anomaly_type = 'shape' THEN
---                           shape_id = target_hash
---                       WHEN anomaly_type = 'format' THEN
---                           target_hash = ANY(format_ids)
---                   END
---               GROUP BY
---                   timeB
---           ) ts 
---     )::text ts
--- 	FROM apis.anomalies an
--- 	LEFT JOIN apis.formats on target_hash=formats.hash
--- 	LEFT JOIN apis.fields on (fields.hash=target_hash OR fields.hash=formats.field_hash) 
--- 	LEFT JOIN apis.shapes on target_hash=shapes.hash
--- 	LEFT JOIN apis.endpoints 
---       ON (endpoints.id = target_hash 
---           OR endpoints.hash = fields.endpoint_hash 
---           OR endpoints.hash = shapes.endpoint_hash
---           );
--- CREATE UNIQUE INDEX idx_apis_anomaly_vm_id ON apis.anomalies_vm (id);
--- CREATE INDEX idx_apis_anomaly_vm_project_id ON apis.anomalies_vm (project_id);
--- CREATE INDEX idx_apis_anomaly_vm_project_id_endpoint_hash ON apis.anomalies_vm (project_id, endpoint_hash);
+    an.archived_at,
+    (
+      SELECT
+          json_agg(json_build_array(timeB, count))
+      from
+          (
+              SELECT
+                  time_bucket('1 minute', created_at) as timeB,
+                  count(id) count
+              FROM
+                  apis.request_dumps
+              where
+                  created_at > NOW() - interval '14' day
+                  AND project_id = project_id
+                  AND CASE
+                      WHEN anomaly_type = 'endpoint' THEN 
+                          endpoint_hash = target_hash
+                      WHEN anomaly_type = 'shape' THEN
+                          shape_hash = target_hash
+                      WHEN anomaly_type = 'format' THEN
+                          target_hash = ANY(format_hashes)
+                  END
+              GROUP BY
+                  timeB
+          ) ts 
+    )::text ts
+	FROM apis.anomalies an
+	LEFT JOIN apis.formats on target_hash=formats.hash
+	LEFT JOIN apis.fields on (fields.hash=target_hash OR fields.hash=formats.field_hash) 
+	LEFT JOIN apis.shapes on target_hash=shapes.hash
+	LEFT JOIN apis.endpoints 
+      ON (endpoints.hash = target_hash 
+          OR endpoints.hash = fields.endpoint_hash
+          OR endpoints.hash = shapes.endpoint_hash
+          );
+
+
+CREATE UNIQUE INDEX idx_apis_anomaly_vm_id ON apis.anomalies_vm (id);
+CREATE INDEX idx_apis_anomaly_vm_project_id ON apis.anomalies_vm (project_id);
+CREATE INDEX idx_apis_anomaly_vm_project_id_endpoint_id ON apis.anomalies_vm (project_id, endpoint_id);
 
 
 CREATE OR REPLACE PROCEDURE apis.refresh_request_dump_views_every_5mins(job_id int, config jsonb) LANGUAGE PLPGSQL AS
@@ -542,16 +530,16 @@ $$;
 -- Refresh view every 5mins
 SELECT add_job('apis.refresh_request_dump_views_every_5mins','5min');
 
--- FIXME: uncomment or reevaluate after reintroducing anomaly_vm view.
--- CREATE OR REPLACE PROCEDURE apis.refresh_request_dump_views_every_2mins(job_id int, config jsonb) LANGUAGE PLPGSQL AS
--- $$
--- BEGIN
---   RAISE NOTICE 'Executing action % with config %', job_id, config;
---   REFRESH MATERIALIZED VIEW CONCURRENTLY apis.anomalies_vm;
--- END
--- $$;
--- Refresh view every 5mins
--- SELECT add_job('apis.refresh_request_dump_views_every_2mins','2min');
+------------------------
+ CREATE OR REPLACE PROCEDURE apis.refresh_request_dump_views_every_2mins(job_id int, config jsonb) LANGUAGE PLPGSQL AS
+ $$
+ BEGIN
+   RAISE NOTICE 'Executing action % with config %', job_id, config;
+   REFRESH MATERIALIZED VIEW CONCURRENTLY apis.anomalies_vm;
+ END
+ $$;
+ -- Refresh view every 5mins
+ SELECT add_job('apis.refresh_request_dump_views_every_2mins','2min');
 --------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS background_jobs 

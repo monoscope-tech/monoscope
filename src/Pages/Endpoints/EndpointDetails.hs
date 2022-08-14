@@ -39,7 +39,7 @@ fieldDetailsPartialH sess pid fid = do
   (fieldsM, formats) <- liftIO $
     withPool pool $ do
       field <- Fields.fieldById fid
-      formats <- Formats.formatsByFieldId fid
+      formats <- Formats.formatsByFieldHash (maybe "" (^. #hash) field)
       pure (field, formats)
   case fieldsM of
     Nothing -> pure ""

@@ -262,7 +262,7 @@ spec = do
                 statusCode = 203
               }
       let projectCache = Projects.ProjectCache {hosts = [], endpointHashes = ["abc"], shapeHashes = [], redactFieldslist = []}
-      let Right (query, params) = RequestMessages.requestMsgToDumpAndEndpoint projectCache requestMsg timestamp recId
+      let Right (query, params, _) = RequestMessages.requestMsgToDumpAndEndpoint projectCache requestMsg timestamp recId
       traceShowM "In request Message Endpoint test ===BEGIN==="
       traceShowM query
       traceShowM "===END==="

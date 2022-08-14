@@ -3,7 +3,7 @@
 module Models.Apis.Formats
   ( Format (..),
     FormatId (..),
-    formatsByFieldId,
+    formatsByFieldHash,
     insertFormatQueryAndParams,
   )
 where
@@ -55,10 +55,10 @@ data Format = Format
 
 makeFieldLabelsNoPrefix ''Format
 
-formatsByFieldId :: Fields.FieldId -> DBT IO (Vector.Vector Format)
-formatsByFieldId fid = query Select q (Only fid)
+formatsByFieldHash :: Text -> DBT IO (Vector.Vector Format)
+formatsByFieldHash fhash = query Select q (Only fhash)
   where
-    q = [sql| SELECT id,created_at,updated_at,project_id, field_id,field_type,field_format,examples::json[] from apis.formats where field_id=? |]
+    q = [sql| SELECT id,created_at,updated_at,project_id, field_hash,field_type,field_format,examples::json[], hash from apis.formats where field_hash=? |]
 
 -- TODO: explore using postgres values to handle bulking loading multiple fields and formats into the same insert query.
 insertFormatQueryAndParams :: Format -> (Query, [DBField])
@@ -79,5 +79,5 @@ insertFormatQueryAndParams format = (q, params)
         MkDBField $ format ^. #fieldFormat,
         MkDBField $ format ^. #examples,
         MkDBField $ format ^. #hash,
-        MkDBField (10 :: Int64) -- NOTE: max number of examples
+        MkDBField (20 :: Int64) -- NOTE: max number of examples
       ]

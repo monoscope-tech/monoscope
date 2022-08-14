@@ -37,5 +37,5 @@ selectFields endpointHash = query Select q (Only endpointHash)
   where
     q =
       [sql| select id,created_at,updated_at,project_id,endpoint_hash,key,field_type,
-                    field_type_override,format,format_override,description,key_path,key_path_str,field_category
-                    from apis.fields where endpoint_hash=? order by field_category, key |]
+                field_type_override,format,format_override,description,key_path,field_category, hash
+                from apis.fields where endpoint_hash=? order by field_category, key |]

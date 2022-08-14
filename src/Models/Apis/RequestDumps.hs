@@ -66,12 +66,6 @@ data RequestDump = RequestDump
     requestHeaders :: AE.Value,
     responseHeaders :: AE.Value,
     --
-    queryParamsKeypaths :: Vector Text,
-    requestBodyKeypaths :: Vector Text,
-    responseBodyKeypaths :: Vector Text,
-    requestHeadersKeypaths :: Vector Text,
-    responseHeadersKeypaths :: Vector Text,
-    --
     endpointHash :: Text,
     shapeHash :: Text,
     formatHashes :: Vector Text,

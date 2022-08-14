@@ -114,7 +114,7 @@ redactJSON paths' = redactJSON' (stripPrefixDot paths')
 -- from the google cloud pub sub, and to concatenate their queries so that only a single database call is needed for a batch.
 -- Also, being a pure function means it's easier to test the request processing logic since we can unit test pure functions easily.
 -- We can pass in a request, it's project cache object and inspect the generated sql and params.
-requestMsgToDumpAndEndpoint :: Projects.ProjectCache -> RequestMessages.RequestMessage -> ZonedTime -> UUID.UUID -> Either Text (Query, [DBField])
+requestMsgToDumpAndEndpoint :: Projects.ProjectCache -> RequestMessages.RequestMessage -> ZonedTime -> UUID.UUID -> Either Text (Query, [DBField], RequestDumps.RequestDump)
 requestMsgToDumpAndEndpoint pjc rM now dumpID = do
   let method = T.toUpper $ rM ^. #method
   let urlPath = normalizeUrlPath (rM ^. #sdkType) (rM ^. #urlPath)
@@ -173,6 +173,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
 
   --- FIXME: why are we not using the actual url params?
   -- Since it foes into the endpoint, maybe it should be the keys and their type? I'm unsure.
+  -- At the moment, if an endpoint exists, we don't insert it anymore. But then how do we deal with requests from new hosts?
   let urlParams = AET.emptyObject
   let (endpointQ, endpointP) =
         if endpointHash `elem` (pjc ^. #endpointHashes) -- We have the endpoint cache in our db already. Skill adding
@@ -188,9 +189,41 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
             let shape = Shapes.Shape (Shapes.ShapeId dumpID) (rM ^. #timestamp) now projectId endpointHash queryParamsKP requestHeadersKP responseHeadersKP requestBodyKP responseBodyKP shapeHash
             Shapes.insertShapeQueryAndParam shape
 
-  -- FIXME: 9+7+
+  -- request dumps are time series dumps representing each requests which we consume from our users.
+  -- We use this field via the log explorer for exploring and searching traffic. And at the moment also use it for most time series analytics.
+  -- It's likely a good idea to stop relying on it for some of the time series analysis, to allow us easily support request sampling, but still support
+  -- relatively accurate analytic counts.
   -- Build the query and params for inserting a request dump into the database.
-  let (reqDumpQ, reqDumpP) = buildRequestDumpQuery rM dumpID now method urlPath reqBody respBody queryParamsKP requestHeadersKP responseHeadersKP requestBodyKP responseBodyKP endpointHash shapeHash formatHashes fieldHashes
+  -- let (reqDumpQ, reqDumpP) = buildRequestDumpQuery rM dumpID now method urlPath reqBody respBody queryParamsKP requestHeadersKP responseHeadersKP requestBodyKP responseBodyKP endpointHash shapeHash formatHashes fieldHashes
+  -- let reqDumpP = RequestDumps.RequestDump rM dumpID now method urlPath reqBody respBody queryParamsKP requestHeadersKP responseHeadersKP requestBodyKP responseBodyKP endpointHash shapeHash formatHashes fieldHashes
+  let reqDumpP =
+        RequestDumps.RequestDump
+          { id = dumpID,
+            createdAt = rM ^. #timestamp,
+            updatedAt = now,
+            projectId = rM ^. #projectId,
+            host = rM ^. #host,
+            urlPath = urlPath,
+            rawUrl = rM ^. #rawUrl,
+            pathParams = rM ^. #pathParams,
+            method = method,
+            referer = rM ^. #referer,
+            protoMajor = rM ^. #protoMajor,
+            protoMinor = rM ^. #protoMinor,
+            duration = calendarTimeTime $ secondsToNominalDiffTime $ fromIntegral $ rM ^. #duration,
+            statusCode = rM ^. #statusCode,
+            --
+            queryParams = rM ^. #queryParams,
+            requestBody = reqBody,
+            responseBody = respBody,
+            requestHeaders = rM ^. #requestHeaders,
+            responseHeaders = rM ^. #responseHeaders,
+            --
+            endpointHash = endpointHash,
+            shapeHash = shapeHash,
+            formatHashes = formatHashes,
+            fieldHashes = fieldHashes
+          }
 
   -- Build all fields and formats, unzip them as separate lists and append them to query and params
   -- We don't border adding them if their shape exists, as we asume that we've already seen such before.
@@ -199,16 +232,20 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
           then ([], [])
           else unzip $ map Fields.insertFieldQueryAndParams fields
 
+  -- FIXME:
+  -- Instead of having examples as a column under formats, could we be better served by having an examples table?
+  -- How do we solve the problem of updating examples for formats if we never insert the format when the shape already exists?
+  -- Should we use some randomizer?
+  -- The original plan was that we could skip the shape from the input into this function, but then that would mean
+  -- also inserting the fields and the shape, when all we want to insert is just the example.
   let (formatsQ, formatsP) =
         if shapeHash `elem` (pjc ^. #shapeHashes)
           then ([], [])
           else unzip $ map Formats.insertFormatQueryAndParams formats
 
-  let query = endpointQ <> shapeQ <> reqDumpQ <> mconcat fieldsQ <> mconcat formatsQ
-  let params = endpointP <> shapeP <> reqDumpP <> concat fieldsP <> concat formatsP
-  pure (query, params)
-
--- pure (reqDump, endpoint, fields, formats, shape)
+  let query = endpointQ <> shapeQ <> mconcat fieldsQ <> mconcat formatsQ
+  let params = endpointP <> shapeP <> concat fieldsP <> concat formatsP
+  pure (query, params, reqDumpP)
 
 buildEndpoint :: RequestMessages.RequestMessage -> ZonedTime -> UUID.UUID -> Projects.ProjectId -> Text -> Text -> Value -> Text -> Endpoints.Endpoint
 buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash =
@@ -219,54 +256,10 @@ buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash =
       projectId = projectId,
       urlPath = urlPath,
       urlParams = urlParams,
-      -- urlParams = AET.emptyObject,
       method = method,
       hosts = [rM ^. #host],
       hash = endpointHash
     }
-
--- request dumps are time series dumps representing each requests which we consume from our users.
--- We use this field via the log explorer for exploring and searching traffic. And at the moment also use it for most time series analytics.
--- It's likely a good idea to stop relying on it for some of the time series analysis, to allow us easily support request sampling, but still support
--- relatively accurate analytic counts.
-buildRequestDumpQuery :: RequestMessages.RequestMessage -> UUID.UUID -> ZonedTime -> Text -> Text -> Value -> Value -> Vector Text -> Vector Text -> Vector Text -> Vector Text -> Vector Text -> Text -> Text -> Vector Text -> Vector Text -> (Query, [DBField])
-buildRequestDumpQuery rM dumpID now method urlPath reqBody respBody queryParamsKP requestHeadersKP responseHeadersKP requestBodyKP responseBodyKP endpointH shapeH formatHs fieldHs =
-  (insertRequestDumpQuery, requestDump)
-  where
-    insertRequestDumpQuery =
-      [sql| INSERT INTO apis.request_dumps VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?); 
-        |]
-    -- NOTE: This list mirrors the order of fields in the actual tables schema
-    requestDump =
-      [ MkDBField dumpID, -- id
-        MkDBField $ rM ^. #timestamp, -- created_at
-        MkDBField now, -- updated_at
-        MkDBField $ rM ^. #projectId, --project_id
-        MkDBField $ rM ^. #host,
-        MkDBField urlPath,
-        MkDBField $ rM ^. #rawUrl,
-        MkDBField $ rM ^. #pathParams,
-        MkDBField method,
-        MkDBField $ rM ^. #referer,
-        MkDBField $ rM ^. #protoMajor,
-        MkDBField $ rM ^. #protoMinor,
-        MkDBField $ calendarTimeTime $ secondsToNominalDiffTime $ fromIntegral $ rM ^. #duration,
-        MkDBField $ rM ^. #statusCode,
-        MkDBField $ rM ^. #queryParams,
-        MkDBField $ rM ^. #requestHeaders,
-        MkDBField $ rM ^. #responseHeaders,
-        MkDBField reqBody,
-        MkDBField respBody,
-        MkDBField queryParamsKP,
-        MkDBField requestHeadersKP,
-        MkDBField responseHeadersKP,
-        MkDBField requestBodyKP,
-        MkDBField responseBodyKP,
-        MkDBField endpointH,
-        MkDBField shapeH,
-        MkDBField formatHs,
-        MkDBField fieldHs
-      ]
 
 normalizeUrlPath :: SDKTypes -> Text -> Text
 normalizeUrlPath GoGin urlPath = urlPath
@@ -369,6 +362,8 @@ valueToFormatNum val
   | Scientific.isInteger val = "integer"
   | otherwise = "unknown"
 
+-- fieldsToFieldDTO processes a field from apitoolkit clients into a field and format record,
+-- which can then be converted into separate sql insert queries.
 fieldsToFieldDTO :: Fields.FieldCategoryEnum -> Projects.ProjectId -> Text -> (Text, [AE.Value]) -> (Fields.Field, Formats.Format)
 fieldsToFieldDTO fieldCategory projectID endpointHash (keyPath, val) =
   ( Fields.Field
@@ -379,11 +374,12 @@ fieldsToFieldDTO fieldCategory projectID endpointHash (keyPath, val) =
         projectId = projectID,
         key = snd $ T.breakOnEnd "." keyPath,
         -- FIXME: We're discarding the field values of the others, if theer was more than 1 value.
-        -- FIXME: We should instead take all the fields into consideration when generating the field types and formats
+        -- FIXME: We should instead take all the fields into consideration
+        -- FIXME: when generating the field types and formats
         fieldType = fieldType,
-        fieldTypeOverride = Just "",
+        fieldTypeOverride = Nothing,
         format = format,
-        formatOverride = Just "",
+        formatOverride = Nothing,
         description = "",
         keyPath = keyPath,
         fieldCategory = fieldCategory,
@@ -397,12 +393,11 @@ fieldsToFieldDTO fieldCategory projectID endpointHash (keyPath, val) =
         fieldHash = fieldHash,
         fieldType = fieldType,
         fieldFormat = format,
+        -- NOTE: A trailing question, is whether to store examples into a separate table.
+        -- It requires some more of a cost benefit analysis.
         examples = Vector.fromList val,
         hash = formatHash
       }
-      -- NOTE: Instead of returning val, I could just return the format.
-      -- Then we can have a separate insert for format and a separate one for fields.
-      -- val
   )
   where
     aeValueToFieldType :: AE.Value -> Fields.FieldTypes
@@ -417,7 +412,8 @@ fieldsToFieldDTO fieldCategory projectID endpointHash (keyPath, val) =
     fieldType = fromMaybe Fields.FTUnknown $ viaNonEmpty head $ aeValueToFieldType <$> val
 
     -- FIXME: We should rethink this value to format logic.
-    -- FIXME: Maybe it actually needs machine learning, or maybe it should operate on the entire list, and not just one value.
+    -- FIXME: Maybe it actually needs machine learning,
+    -- FIXME: or maybe it should operate on the entire list, and not just one value.
     format = fromMaybe "" $ viaNonEmpty head $ valueToFormat <$> val
 
     -- field hash is <hash of the endpoint> + <the hash of <field_category><key_path_str><field_type>> (No space or comma between data)

@@ -80,7 +80,13 @@ dashboardPage projectStats reqsByEndpointJ reqLatenciesRolledByStepsJ anomalies 
       |]
 
 dStats :: Projects.ProjectRequestStats -> Text -> Html ()
-dStats projReqStats reqsByEndpointJ =
+dStats projReqStats reqsByEndpointJ = do
+  when (reqsByEndpointJ == "[]") do
+    section_ [class_ "card-round p-5 sm:p-10 space-y-4 text-lg"] $ do
+      h2_ [class_ "text-2xl"] "Welcome onboard APIToolkit."
+      p_ "You're currently not sending any data to apitoolkit from your backends yet. Here's a guide to get you setup for your tech stack."
+      a_ [href_ "https://apitoolkit.io/docs/quickstarts/", class_ "btn-indigo btn-sm my-3 -ml-0 mt-6", target_ "_blank"] "Read the setup guide"
+
   section_ [class_ "space-y-3"] $ do
     div_ [class_ "flex justify-between mt-5"] $ do
       div_ [class_ "flex flex-row"] $ do
@@ -128,38 +134,40 @@ dStats projReqStats reqsByEndpointJ =
           div_ [class_ "p-4"] $ do
             select_ [] $ do
               option_ "Reqs Grouped by Endpoint"
-              option_ "Avg Reqs per minute"
-          div_ [id_ "reqsByEndpoints", class_ "", style_ "height:350px"] ""
-          script_
-            [text|
-      new FusionCharts({
-          type: "timeseries",
-          renderAt: "reqsByEndpoints",
-          width: "95%",
-          height: 350,
-          dataSource: {
-            data: new FusionCharts.DataStore().createDataTable($reqsByEndpointJ, [{
-              "name": "Time",
-              "type": "date",
-              "format": "%Y-%m-%dT%H:%M:%S%Z" // https://www.fusioncharts.com/dev/fusiontime/fusiontime-attributes
-              }, {"name": "StatusCode","type": "string"},{"name": "Count","type": "number"}]),
-            chart: {},
-            navigator: {
-                "enabled": 0
-            },
-            series: "StatusCode",
-            yaxis: [
-              {
-                plot:[{
-                  value: "Count",
-                  type: "column"
-                }],
-                title: ""
-              }
-            ],
-            legend: {enabled:"0"}
-          }
-        }).render();|]
+          -- TODO: option_ "Avg Reqs per minute"
+          div_ [id_ "reqsByEndpoints", class_ "text-center flex items-center justify-center", style_ "height:350px"] $ do
+            strong_ "No data yet."
+          unless (reqsByEndpointJ == "[]") do
+            script_
+              [text|
+        new FusionCharts({
+            type: "timeseries",
+            renderAt: "reqsByEndpoints",
+            width: "95%",
+            height: 350,
+            dataSource: {
+              data: new FusionCharts.DataStore().createDataTable($reqsByEndpointJ, [{
+                "name": "Time",
+                "type": "date",
+                "format": "%Y-%m-%dT%H:%M:%S%Z" // https://www.fusioncharts.com/dev/fusiontime/fusiontime-attributes
+                }, {"name": "StatusCode","type": "string"},{"name": "Count","type": "number"}]),
+              chart: {},
+              navigator: {
+                  "enabled": 0
+              },
+              series: "StatusCode",
+              yaxis: [
+                {
+                  plot:[{
+                    value: "Count",
+                    type: "column"
+                  }],
+                  title: ""
+                }
+              ],
+              legend: {enabled:"0"}
+            }
+          }).render();|]
 
       div_ [class_ "col-span-3 card-round py-3 px-6"] $ do
         div_ [class_ "p-4"] $ do

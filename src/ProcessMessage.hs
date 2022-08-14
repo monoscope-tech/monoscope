@@ -13,18 +13,24 @@ import Control.Monad.Trans.Except.Extra (handleIOExceptT)
 import Data.Aeson (eitherDecode)
 import Data.ByteString.Base64 qualified as B64
 import Data.Cache qualified as Cache
+import Data.List (unzip4)
 import Data.Pool (Pool)
 import Data.Time.LocalTime (getZonedTime)
 import Data.UUID.V4 (nextRandom)
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (Connection, Query)
-import Database.PostgreSQL.Transact (execute)
+import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Transact (execute, executeMany)
+import Formatting
+import Formatting.Clock
+import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Network.Google.PubSub qualified as PubSub
 import Optics.Core ((^.))
 import Relude hiding (hoistMaybe)
 import Relude.Unsafe (fromJust)
 import RequestMessages qualified
+import System.Clock
 import Utils (DBField, eitherStrToText)
 
 {--
@@ -101,8 +107,10 @@ processMessages logger' env conn' msgs projectCache = do
 
 processMessages' :: LogAction IO String -> Config.EnvConfig -> Pool Connection -> [Either Text (Maybe Text, RequestMessages.RequestMessage)] -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> IO [Maybe Text]
 processMessages' logger' _ conn' msgs projectCache' = do
+  logger' <& "start processing message batch"
+  startTime <- getTime Monotonic
   processed <- mapM (processMessage logger' conn' projectCache') msgs
-  let (rmAckIds, queries, params) = unzip3 $ rights processed
+  let (rmAckIds, queries, params, reqDumps) = unzip4 $ rights processed
   let query' = mconcat queries
   let params' = concat params
 
@@ -111,13 +119,26 @@ processMessages' logger' _ conn' msgs projectCache' = do
     mapM_ (\err -> logger' <& "error with converting request message to dump and endpoint" <> show err) errs
     pass
 
-  resp <-
-    if null params'
-      then pure $ Left "Empty params/query for processMessages"
-      else
-        runExceptT $
-          handleIOExceptT (toText @String . show) $
-            withPool conn' $ execute query' params'
+  afterProccessing <- getTime Monotonic
+
+  when (null reqDumps) $ logger' <& "ERROR: Empty params/query for processMessages for request dumps; "
+  resp <- runExceptT $
+    handleIOExceptT (toText @String . show) $
+      withPool conn' $ do
+        unless (null params') $ do
+          _ <- execute query' params'
+          pass
+        unless (null reqDumps) $ do
+          let q = [sql| INSERT INTO apis.request_dumps VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?); |]
+          _ <- executeMany q reqDumps
+          pass
+
+  endTime <- getTime Monotonic
+  fprint (timeSpecs % " Processing Time \n") startTime afterProccessing
+  fprint (timeSpecs % " DB ime \n") afterProccessing endTime
+  fprint (timeSpecs % " Total Time\n") startTime endTime
+  -- logger' <& show query'
+
   case resp of
     Left err -> do
       logger' <& "error with converting request message to dump and endpoint" <> toString err
@@ -127,7 +148,7 @@ processMessages' logger' _ conn' msgs projectCache' = do
     projectCacheDefault :: Projects.ProjectCache
     projectCacheDefault = Projects.ProjectCache {hosts = [], endpointHashes = [], shapeHashes = [], redactFieldslist = []}
 
-    processMessage :: LogAction IO String -> Pool Connection -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> Either Text (Maybe Text, RequestMessages.RequestMessage) -> IO (Either Text (Maybe Text, Query, [DBField]))
+    processMessage :: LogAction IO String -> Pool Connection -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> Either Text (Maybe Text, RequestMessages.RequestMessage) -> IO (Either Text (Maybe Text, Query, [DBField], RequestDumps.RequestDump))
     processMessage logger conn projectCache recMsgEither = runExceptT do
       (rmAckId, recMsg) <- except recMsgEither
       recId <- liftIO nextRandom
@@ -142,5 +163,5 @@ processMessages' logger' _ conn' msgs projectCache' = do
         mpjCache <- withPool conn $ Projects.projectCacheById pid'
         pure $ fromMaybe projectCacheDefault mpjCache
 
-      (query, params) <- except $ RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId
-      pure (rmAckId, query, params)
+      (query, params, reqDump) <- except $ RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId
+      pure (rmAckId, query, params, reqDump)

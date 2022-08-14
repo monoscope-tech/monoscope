@@ -64,6 +64,9 @@ anomalyList anomalies = do
           img_ [src_ "/assets/svgs/white-plus.svg", class_ "text-white h-4 w-6 text-bold"]
     div_ [class_ "grid grid-cols-5"] $ do
       div_ [class_ "col-span-5 space-y-2"] $ do
+        when (null anomalies) $ do
+          div_ [class_ "flex card-round  text-center justify-center items-center h-32"] $ do
+            strong_ "No anomalies yet"
         anomalies & mapM_ (renderAnomaly False)
 
 anomalyListSlider :: Vector Anomalies.AnomalyVM -> Html ()
@@ -207,14 +210,16 @@ anomalyAcknowlegeButton pid aid acked = do
 anomalyChartScript :: Anomalies.AnomalyVM -> Text -> Text
 anomalyChartScript anomaly anomalyGraphId =
   let timeSeriesData = fromMaybe "[]" $ anomaly ^. #timeSeries
-   in [text|
+   in -- Adding the current day and time to the end of the chart data, so that the chart is scaled to include the current day/time
+      -- currentISOTimeStringVar is declared on every page, in case they need a string for the current time in ISO format
+      [text|
       new FusionCharts({
         type: "timeseries",
         renderAt: "$anomalyGraphId",
         width: "100%",
         height: 250,
         dataSource: {
-          data: new FusionCharts.DataStore().createDataTable($timeSeriesData, 
+          data: new FusionCharts.DataStore().createDataTable(($timeSeriesData).concat([[currentISOTimeStringVar, 0]]), 
           [{"name": "Time",
             "type": "date",
             "format": "%Y-%m-%dT%H:%M:%S%Z" // https://www.fusioncharts.com/dev/fusiontime/fusiontime-attributes
