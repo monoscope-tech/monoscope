@@ -45,6 +45,7 @@ import Text.RawString.QQ
 import Text.Regex.TDFA ((=~))
 import Utils (DBField (MkDBField))
 import Witch (from)
+import Data.Aeson.KeyMap qualified as AEK
 
 -- $setup
 -- >>> import Relude
@@ -103,7 +104,7 @@ redactJSON paths' = redactJSON' (stripPrefixDot paths')
     redactJSON' paths (AET.Number value) = if "" `elem` paths then AET.String "[REDACTED]" else AET.Number value
     redactJSON' paths AET.Null = AET.Null
     redactJSON' paths (AET.Bool value) = AET.Bool value
-    redactJSON' paths (AET.Object objMap) = AET.Object $ HM.mapWithKey (\k v -> redactJSON' (mapMaybe (\path -> T.stripPrefix (k <> ".") path <|> T.stripPrefix k path) paths) v) objMap
+    redactJSON' paths (AET.Object objMap) = AET.Object $ AEK.fromHashMapText $ HM.mapWithKey (\k v -> redactJSON' (mapMaybe (\path -> T.stripPrefix (k <> ".") path <|> T.stripPrefix k path) paths) v) (AEK.toHashMapText objMap) 
     redactJSON' paths (AET.Array jsonList) = AET.Array $ Vector.map (redactJSON' (mapMaybe (\path -> T.stripPrefix "[]." path <|> T.stripPrefix "[]" path) paths)) jsonList
 
     stripPrefixDot = map (\p -> fromMaybe p (T.stripPrefix "." p))
@@ -299,7 +300,7 @@ valueToFields :: AE.Value -> [(Text, [AE.Value])]
 valueToFields value = dedupFields $ removeBlacklistedFields $ snd $ valueToFields' value ("", [])
   where
     valueToFields' :: AE.Value -> (Text, [(Text, AE.Value)]) -> (Text, [(Text, AE.Value)])
-    valueToFields' (AE.Object v) akk = HM.toList v & foldl' (\(akkT, akkL) (k, val) -> (akkT, snd $ valueToFields' val (akkT <> "." <> k, akkL))) akk
+    valueToFields' (AE.Object v) akk = AEK.toHashMapText v & HM.toList & foldl' (\(akkT, akkL) (k, val) -> (akkT, snd $ valueToFields' val (akkT <> "." <> k, akkL))) akk
     valueToFields' (AE.Array v) akk = foldl' (\(akkT, akkL) val -> (akkT, snd $ valueToFields' val (akkT <> ".[]", akkL))) akk v
     valueToFields' v (akk, l) = (akk, (akk, v) : l)
 

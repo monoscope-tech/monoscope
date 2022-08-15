@@ -17,7 +17,7 @@ import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
-import Lucid.HTMX
+import Lucid.Htmx
 import Lucid.Hyperscript
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects

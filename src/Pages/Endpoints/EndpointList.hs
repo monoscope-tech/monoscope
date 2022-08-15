@@ -9,7 +9,7 @@ import Database.PostgreSQL.Entity.DBT
   )
 import Fmt (commaizeF, fixedF, fmt, (+|), (|+))
 import Lucid
-import Lucid.HTMX
+import Lucid.Htmx
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions

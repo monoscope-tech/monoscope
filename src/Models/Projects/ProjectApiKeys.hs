@@ -35,7 +35,7 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Simple.ToRow (ToRow)
 import Database.PostgreSQL.Transact (DBT)
 import Models.Projects.Projects qualified as Projects
-import Network.Google.Prelude (FromHttpApiData)
+import Servant.API (FromHttpApiData)
 import Optics.TH
 import Relude hiding (id)
 

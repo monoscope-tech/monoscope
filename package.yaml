@@ -76,7 +76,6 @@ library:
     - HaskellNet
     - Unique
     - aeson
-    - aeson-optics
     - aeson-qq
     - async
     - base
@@ -89,7 +88,6 @@ library:
     - containers
     - cookie
     - cryptonite
-    # - data-default-extra
     - data-default
     - deriving-aeson
     - dotenv
@@ -98,13 +96,12 @@ library:
     - extra
     - fakedata
     - fmt
+    - formatting
     - gogol
     - gogol-core
     - gogol-pubsub
-    - hex-text
     - hspec
     - http-api-data
-    - http-types
     - lens
     - lens-aeson
     - lucid
@@ -115,9 +112,7 @@ library:
     - neat-interpolation
     - odd-jobs
     - optics-core
-    - optics-extra
     - optics-th
-    - parallel-io
     - parser-combinators
     - pg-entity
     - pg-transact
@@ -131,6 +126,7 @@ library:
     - resourcet
     - scientific
     - sendgrid-v3
+    - servant
     - servant-htmx
     - servant-lucid
     - servant-server
@@ -145,14 +141,13 @@ library:
     - uuid
     - valor >= 1.0.0.0
     - vector
-    - vector-algorithms >= 0.9.0.1
     - wai
     - warp
     - witch
     - wreq
     - xxhash
     - yaml
-    - formatting
+    - generic-lens
 
 executables:
   apitoolkit-server-exe:

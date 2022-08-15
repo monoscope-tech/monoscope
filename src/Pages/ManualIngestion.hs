@@ -9,7 +9,7 @@ import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
-import Lucid.HTMX
+import Lucid.Htmx
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)

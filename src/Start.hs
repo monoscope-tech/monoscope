@@ -22,8 +22,8 @@ import Database.PostgreSQL.Simple (Connection, close, connectPostgreSQL)
 import Database.PostgreSQL.Simple.Migration as Migrations
 import GHC.Generics ()
 import Models.Projects.Projects qualified as Projects
-import Network.Google qualified as Google
-import Network.Google.PubSub qualified as PubSub
+import Gogol qualified as Google
+import Gogol.PubSub qualified as PubSub
 import Network.Wai.Handler.Warp (run)
 import Optics.Operators
 import ProcessMessage
@@ -31,6 +31,7 @@ import Relude
 import Server qualified
 import System.Clock
 import System.Envy (decodeEnv)
+import Data.Generics.Product (field)
 
 startApp :: IO ()
 startApp = do
@@ -90,15 +91,20 @@ pubsubService :: LogAction IO String -> Config.EnvConfig -> Pool.Pool Connection
 pubsubService logger envConfig conn projectCache = do
   env <-
     Google.newEnv
-      <&> (Google.envScopes L..~ PubSub.pubSubScope)
-  let pullReq = PubSub.pullRequest & PubSub.prMaxMessages L.?~ fromIntegral (envConfig ^. #messagesPerPubsubPullBatch)
+      <&> (Google.envScopes L..~ pubSubScope)
+  let pullReq = PubSub.newPullRequest & field @"maxMessages" L.?~ fromIntegral (envConfig ^. #messagesPerPubsubPullBatch)
 
   forever $
-    runResourceT . Google.runGoogle env $ do
+    runResourceT $ do
       forM (envConfig ^. #requestPubsubTopics) \topic -> do
         let subscription = "projects/past-3/subscriptions/" <> topic <> "-sub"
-        pullResp <- Google.send $ PubSub.projectsSubscriptionsPull pullReq subscription
-        let messages = pullResp L.^. PubSub.prReceivedMessages
+        pullResp <- Google.send env $ PubSub.newPubSubProjectsSubscriptionsPull pullReq subscription
+        let messages = (pullResp L.^. field @"receivedMessages") & fromMaybe [] 
         msgIds <- liftIO $ processMessages logger envConfig conn messages projectCache
-        let acknowlegReq = PubSub.acknowledgeRequest & PubSub.arAckIds L..~ catMaybes msgIds
-        unless (null msgIds) $ void $ PubSub.projectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send
+        let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ (Just $ catMaybes msgIds)
+        unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env
+
+
+-- pubSubScope :: Proxy PubSub.Pubsub'FullControl
+pubSubScope :: Proxy '["https://www.googleapis.com/auth/pubsub"]
+pubSubScope = Proxy
