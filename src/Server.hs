@@ -39,7 +39,7 @@ import Web.Cookie (SetCookie)
 
 type GetRedirect = Verb 'GET 302
 
-type HXBoosted = Header "HX-Boosted" Text
+-- type HXBoosted = Header "HX-Boosted" Text
 
 --
 -- API Section

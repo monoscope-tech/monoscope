@@ -7,7 +7,7 @@ import Data.Time (defaultTimeLocale, formatTime)
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
-import Lucid.HTMX
+import Lucid.Htmx
 import Lucid.Hyperscript
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints

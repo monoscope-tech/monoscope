@@ -6,8 +6,14 @@ where
 
 import Colog.Core (LogAction (..), (<&))
 import Config qualified
+-- import Data.Generics.Internal.VL.Lens ((^?), _Just) 
 import Control.Lens ((^?), _Just)
 import Control.Lens qualified as L
+import Gogol.PubSub.Types (ReceivedMessage(message), PubsubMessage(data'))
+import Gogol.Data.Base64 (_Base64)
+import Data.Generics.Product (field)
+-- import Data.Generics.Sum
+-- import Data.Generics.Internal.VL qualified as L
 import Control.Monad.Trans.Except
 import Control.Monad.Trans.Except.Extra (handleIOExceptT)
 import Data.Aeson (eitherDecode)
@@ -25,7 +31,7 @@ import Formatting
 import Formatting.Clock
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
-import Network.Google.PubSub qualified as PubSub
+import Gogol.PubSub qualified as PubSub
 import Optics.Core ((^.))
 import Relude hiding (hoistMaybe)
 import Relude.Unsafe (fromJust)
@@ -96,11 +102,11 @@ processMessages :: LogAction IO String -> Config.EnvConfig -> Pool Connection ->
 processMessages logger' env conn' msgs projectCache = do
   let msgs' =
         msgs & map \msg -> do
-          let rmMsg = msg ^? PubSub.rmMessage . _Just . PubSub.pmData . _Just
+          let rmMsg = msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64
           let decodedMsg = B64.decodeBase64 $ fromJust rmMsg
           let jsonByteStr = fromRight "{}" decodedMsg
           recMsg <- eitherStrToText $ eitherDecode (fromStrict jsonByteStr)
-          Right (msg L.^. PubSub.rmAckId, recMsg)
+          Right (msg L.^. field @"ackId", recMsg)
   if null msgs'
     then pure []
     else processMessages' logger' env conn' msgs' projectCache

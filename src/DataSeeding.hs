@@ -16,7 +16,7 @@ import Faker
 import Faker.Address (fullAddress)
 import Faker.Name qualified
 import Lucid
-import Lucid.HTMX
+import Lucid.Htmx
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)

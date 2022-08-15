@@ -12,7 +12,7 @@ import Data.Vector (Vector, iforM_, (!?))
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
-import Lucid.HTMX
+import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Lucid.Svg (use_)
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -22,6 +22,8 @@ import NeatInterpolation (text)
 import Optics.Core ((^.))
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Relude
+import Data.Aeson.KeyMap qualified as AEK
+import Witch (from)
 
 -- $setup
 -- >>> import Relude
@@ -206,7 +208,7 @@ jsonValueToHtmlTree :: AE.Value -> Html ()
 jsonValueToHtmlTree val = jsonValueToHtmlTree' ("", "", val)
   where
     jsonValueToHtmlTree' :: (Text, Text, AE.Value) -> Html ()
-    jsonValueToHtmlTree' (path, key, AE.Object v) = renderParentType "{" "}" key (length v) (HM.toList v & mapM_ (\(kk, vv) -> jsonValueToHtmlTree' (path <> "." <> key, kk, vv)))
+    jsonValueToHtmlTree' (path, key, AE.Object v) = renderParentType "{" "}" key (length v) (AEK.toHashMapText v & HM.toList & mapM_ (\(kk, vv) -> jsonValueToHtmlTree' (path <> "." <> key, kk, vv)))
     jsonValueToHtmlTree' (path, key, AE.Array v) = renderParentType "[" "]" key (length v) (iforM_ v \i item -> jsonValueToHtmlTree' (path <> "." <> key <> "." <> "[]", show i, item))
     jsonValueToHtmlTree' (path, key, value) = do
       let fullFieldPath = if T.isSuffixOf ".[]" path then path else path <> "." <> key
@@ -239,7 +241,7 @@ jsonValueToHtmlTree val = jsonValueToHtmlTree' ("", "", val)
 -- >>> findValueByKeyInJSON ["key1", "[]", "key2"] [aesonQQ|{"kx":0, "key1":[{"key2":"k2val"}]}|]
 -- ["\"k2val\""]
 findValueByKeyInJSON :: [Text] -> AE.Value -> [Text]
-findValueByKeyInJSON (x : path) (AE.Object obj) = concatMap (\(_, v) -> findValueByKeyInJSON path v) (HM.toList obj & filter (\(k, _) -> k == x))
+findValueByKeyInJSON (x : path) (AE.Object obj) = concatMap (\(_, v) -> findValueByKeyInJSON path v) (AEK.toHashMapText obj & HM.toList & filter (\(k, _) -> k == x))
 findValueByKeyInJSON ("[]" : path) (AE.Array vals) = concatMap (findValueByKeyInJSON path) (Vector.toList vals)
 findValueByKeyInJSON [] value = [unwrapJsonPrimValue value]
 findValueByKeyInJSON _ _ = error "findValueByKeyInJSON: case should be unreachable"

@@ -28,7 +28,7 @@ import Data.Valor (Valor, check1, failIf, validateM)
 import Data.Valor qualified as Valor
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
-import Lucid.HTMX
+import Lucid.Htmx
 import Lucid.Hyperscript
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMembers qualified as Projects

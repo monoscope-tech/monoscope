@@ -15,7 +15,7 @@ import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Fmt
 import Lucid
-import Lucid.HTMX
+import Lucid.Htmx
 import Lucid.Hyperscript.QuasiQuoter
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints

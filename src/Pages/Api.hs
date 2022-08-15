@@ -11,7 +11,7 @@ import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
-import Lucid.HTMX
+import Lucid.Htmx
 import Lucid.Hyperscript
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKey
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
