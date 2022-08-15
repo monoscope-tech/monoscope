@@ -17,13 +17,15 @@ import Control.Exception (try)
 import Control.Lens qualified as L
 import Control.Monad.Trans.Resource (runResourceT)
 import Data.Cache
+import Data.Generics.Product (field)
 import Data.Pool as Pool
 import Database.PostgreSQL.Simple (Connection, close, connectPostgreSQL)
 import Database.PostgreSQL.Simple.Migration as Migrations
 import GHC.Generics ()
-import Models.Projects.Projects qualified as Projects
+import GHC.IO.Encoding hiding (close)
 import Gogol qualified as Google
 import Gogol.PubSub qualified as PubSub
+import Models.Projects.Projects qualified as Projects
 import Network.Wai.Handler.Warp (run)
 import Optics.Operators
 import ProcessMessage
@@ -31,10 +33,10 @@ import Relude
 import Server qualified
 import System.Clock
 import System.Envy (decodeEnv)
-import Data.Generics.Product (field)
 
 startApp :: IO ()
 startApp = do
+  setLocaleEncoding utf8
   let logger = logStringStdout
   loadFileErr <- try (Dotenv.loadFile Dotenv.defaultConfig) :: IO (Either SomeException [(String, String)])
   case loadFileErr of
@@ -99,11 +101,10 @@ pubsubService logger envConfig conn projectCache = do
       forM (envConfig ^. #requestPubsubTopics) \topic -> do
         let subscription = "projects/past-3/subscriptions/" <> topic <> "-sub"
         pullResp <- Google.send env $ PubSub.newPubSubProjectsSubscriptionsPull pullReq subscription
-        let messages = (pullResp L.^. field @"receivedMessages") & fromMaybe [] 
+        let messages = (pullResp L.^. field @"receivedMessages") & fromMaybe []
         msgIds <- liftIO $ processMessages logger envConfig conn messages projectCache
-        let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ (Just $ catMaybes msgIds)
+        let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just (catMaybes msgIds)
         unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env
-
 
 -- pubSubScope :: Proxy PubSub.Pubsub'FullControl
 pubSubScope :: Proxy '["https://www.googleapis.com/auth/pubsub"]
