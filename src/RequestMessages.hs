@@ -14,6 +14,7 @@ where
 
 import Data.Aeson (Value)
 import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as AEK
 import Data.Aeson.QQ (aesonQQ)
 import Data.Aeson.Types qualified as AET
 import Data.ByteString.Base64 qualified as B64
@@ -25,13 +26,21 @@ import Data.Text qualified as T
 import Data.Time.Clock as Clock
 import Data.Time.LocalTime as Time
 import Data.UUID qualified as UUID
-import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Simple (Query)
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Fields qualified as Fields
+import Models.Apis.Fields.Query qualified as Fields
+  ( insertFieldQueryAndParams,
+  )
+import Models.Apis.Fields.Types qualified as Fields
+  ( Field (..),
+    FieldCategoryEnum (..),
+    FieldId (FieldId),
+    FieldTypes (..),
+    fieldCategoryEnumToText,
+    fieldTypeToText,
+  )
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
@@ -43,9 +52,8 @@ import Relude
 import Relude.Unsafe as Unsafe hiding (head)
 import Text.RawString.QQ
 import Text.Regex.TDFA ((=~))
-import Utils (DBField (MkDBField))
+import Utils (DBField ())
 import Witch (from)
-import Data.Aeson.KeyMap qualified as AEK
 
 -- $setup
 -- >>> import Relude
@@ -104,7 +112,7 @@ redactJSON paths' = redactJSON' (stripPrefixDot paths')
     redactJSON' paths (AET.Number value) = if "" `elem` paths then AET.String "[REDACTED]" else AET.Number value
     redactJSON' paths AET.Null = AET.Null
     redactJSON' paths (AET.Bool value) = AET.Bool value
-    redactJSON' paths (AET.Object objMap) = AET.Object $ AEK.fromHashMapText $ HM.mapWithKey (\k v -> redactJSON' (mapMaybe (\path -> T.stripPrefix (k <> ".") path <|> T.stripPrefix k path) paths) v) (AEK.toHashMapText objMap) 
+    redactJSON' paths (AET.Object objMap) = AET.Object $ AEK.fromHashMapText $ HM.mapWithKey (\k v -> redactJSON' (mapMaybe (\path -> T.stripPrefix (k <> ".") path <|> T.stripPrefix k path) paths) v) (AEK.toHashMapText objMap)
     redactJSON' paths (AET.Array jsonList) = AET.Array $ Vector.map (redactJSON' (mapMaybe (\path -> T.stripPrefix "[]." path <|> T.stripPrefix "[]" path) paths)) jsonList
 
     stripPrefixDot = map (\p -> fromMaybe p (T.stripPrefix "." p))
