@@ -25,6 +25,7 @@ ghc-options:
   # remove the next options when possible. This is a temporary workaround
   - -Wno-unused-top-binds
   - -Wno-unused-matches
+  - -Wno-missing-kind-signatures
   # - -fllvm
 
 default-extensions: 
