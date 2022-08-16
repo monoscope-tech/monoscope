@@ -38,6 +38,7 @@ import Relude.Unsafe (fromJust)
 import RequestMessages qualified
 import System.Clock
 import Utils (DBField, eitherStrToText)
+import Control.Error.Util
 
 {--
   Exploring how the inmemory cache could be shaped for performance, and low footprint ability to skip hitting the postgres database when not needed.
@@ -100,11 +101,11 @@ import Utils (DBField, eitherStrToText)
  --}
 processMessages :: LogAction IO String -> Config.EnvConfig -> Pool Connection -> [PubSub.ReceivedMessage] -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> IO [Maybe Text]
 processMessages logger' env conn' msgs projectCache = do
+
   let msgs' =
         msgs & map \msg -> do
           let rmMsg = msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64
-          let decodedMsg = B64.decodeBase64 $ fromJust rmMsg
-          let jsonByteStr = fromRight "{}" decodedMsg
+          let jsonByteStr = fromMaybe "{}" rmMsg 
           recMsg <- eitherStrToText $ eitherDecode (fromStrict jsonByteStr)
           Right (msg L.^. field @"ackId", recMsg)
   if null msgs'
@@ -113,17 +114,13 @@ processMessages logger' env conn' msgs projectCache = do
 
 processMessages' :: LogAction IO String -> Config.EnvConfig -> Pool Connection -> [Either Text (Maybe Text, RequestMessages.RequestMessage)] -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> IO [Maybe Text]
 processMessages' logger' _ conn' msgs projectCache' = do
-  logger' <& "start processing message batch"
   startTime <- getTime Monotonic
   processed <- mapM (processMessage logger' conn' projectCache') msgs
   let (rmAckIds, queries, params, reqDumps) = unzip4 $ rights processed
   let query' = mconcat queries
   let params' = concat params
 
-  let errs = lefts processed
-  unless (null errs) do
-    mapM_ (\err -> logger' <& "error with converting request message to dump and endpoint" <> show err) errs
-    pass
+  lefts processed & mapM_ \err -> logger' <& "error with processing request dump to queries; " <> show err 
 
   afterProccessing <- getTime Monotonic
 
@@ -141,15 +138,15 @@ processMessages' logger' _ conn' msgs projectCache' = do
 
   endTime <- getTime Monotonic
   fprint (timeSpecs % " Processing Time \n") startTime afterProccessing
-  fprint (timeSpecs % " DB ime \n") afterProccessing endTime
+  fprint (timeSpecs % " DB time \n") afterProccessing endTime
   fprint (timeSpecs % " Total Time\n") startTime endTime
-  -- logger' <& show query'
 
   case resp of
     Left err -> do
-      logger' <& "error with converting request message to dump and endpoint" <> toString err
+      logger' <& "error running generated request message based insert queries" <> toString err
       pure []
     Right _ -> pure rmAckIds
+
   where
     projectCacheDefault :: Projects.ProjectCache
     projectCacheDefault = Projects.ProjectCache {hosts = [], endpointHashes = [], shapeHashes = [], redactFieldslist = []}
