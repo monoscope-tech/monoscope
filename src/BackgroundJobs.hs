@@ -64,6 +64,6 @@ Apitoolkit team
        in sendEmail cfg reciever subject body
 
 jobsWorkerInit :: Pool Connection -> LogAction IO String -> Config.EnvConfig -> IO ()
-jobsWorkerInit dbPool logger envConfig = startJobRunner $ mkConfig jobLogger "background_jobs" dbPool (MaxConcurrentJobs 50) (jobsRunner dbPool logger envConfig) id
+jobsWorkerInit dbPool logger envConfig = startJobRunner $ mkConfig jobLogger "background_jobs" dbPool (MaxConcurrentJobs 1) (jobsRunner dbPool logger envConfig) id
   where
     jobLogger = \logLevel logEvent -> logger <& show (logLevel, logEvent)
