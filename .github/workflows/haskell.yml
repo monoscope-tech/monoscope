@@ -33,38 +33,38 @@ jobs:
       - run: stack --no-terminal build --dependencies-only
       # - run: stack install --local-bin-path=. --ghc-options '-optl-static -fPIC'
       - run: stack install --local-bin-path=. 
-      - run: stack test
+      # - run: stack test
       - name: Build tailwindcss
         run: |-
           curl -LJO https://github.com/tailwindlabs/tailwindcss/releases/download/v3.0.23/tailwindcss-linux-x64
           chmod +x tailwindcss-linux-x64
           ./tailwindcss-linux-x64 -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css
 
-      - id: 'auth'
-        name: 'Authenticate to Google Cloud'
-        uses: 'google-github-actions/auth@v0'
-        with:
-          workload_identity_provider: 'projects/263066866150/locations/global/workloadIdentityPools/apitoolkit-wrk-id/providers/apitoolkit-wrk-pvd'
-          service_account: 'apitoolkit-ci-account@past-3.iam.gserviceaccount.com'
+      # - id: 'auth'
+      #   name: 'Authenticate to Google Cloud'
+      #   uses: 'google-github-actions/auth@v0'
+      #   with:
+      #     workload_identity_provider: 'projects/263066866150/locations/global/workloadIdentityPools/apitoolkit-wrk-id/providers/apitoolkit-wrk-pvd'
+      #     service_account: 'apitoolkit-ci-account@past-3.iam.gserviceaccount.com'
 
-      - name: Setup Cloud SDK
-        uses: google-github-actions/setup-gcloud@v0
+      # - name: Setup Cloud SDK
+      #   uses: google-github-actions/setup-gcloud@v0
 
-      - name: Authorize Docker push
-        run: gcloud auth configure-docker
+      # - name: Authorize Docker push
+      #   run: gcloud auth configure-docker
 
-      - name: Build and Push Container
-        run: |-
-          docker build -t gcr.io/past-3/apitoolkit:${{  github.sha }} -t gcr.io/past-3/apitoolkit:latest .
-          docker push gcr.io/past-3/apitoolkit:${{  github.sha }}
-          docker push gcr.io/past-3/apitoolkit:latest
-      - name: Deploy to Cloud Run
-        id: deploy
-        uses: google-github-actions/deploy-cloudrun@v0
-        with:
-          service: apitoolkit
-          image: gcr.io/past-3/apitoolkit:${{  github.sha }}
-          region: europe-west1
+      # - name: Build and Push Container
+      #   run: |-
+      #     docker build -t gcr.io/past-3/apitoolkit:${{  github.sha }} -t gcr.io/past-3/apitoolkit:latest .
+      #     docker push gcr.io/past-3/apitoolkit:${{  github.sha }}
+      #     docker push gcr.io/past-3/apitoolkit:latest
+      # - name: Deploy to Cloud Run
+      #   id: deploy
+      #   uses: google-github-actions/deploy-cloudrun@v0
+      #   with:
+      #     service: apitoolkit
+      #     image: gcr.io/past-3/apitoolkit:${{  github.sha }}
+      #     region: europe-west1
 
-      - name: Show Output
-        run: echo ${{ steps.deploy.outputs.url }}
+      # - name: Show Output
+      #   run: echo ${{ steps.deploy.outputs.url }}
