@@ -1,6 +1,5 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 module Models.Apis.RequestDumps
@@ -44,6 +43,7 @@ import Utils ()
 -- We use this field via the log explorer for exploring and searching traffic. And at the moment also use it for most time series analytics.
 -- It's likely a good idea to stop relying on it for some of the time series analysis, to allow us easily support request sampling, but still support
 -- relatively accurate analytic counts.
+-- NOTE: This record closely mirrors the order of fields in the table. Changing the orfer of fields here would break inserting and querying request dumps
 data RequestDump = RequestDump
   { id :: UUID.UUID,
     createdAt :: ZonedTime,
@@ -61,10 +61,10 @@ data RequestDump = RequestDump
     statusCode :: Int,
     --
     queryParams :: AE.Value,
-    requestBody :: AE.Value,
-    responseBody :: AE.Value,
     requestHeaders :: AE.Value,
     responseHeaders :: AE.Value,
+    requestBody :: AE.Value,
+    responseBody :: AE.Value,
     --
     endpointHash :: Text,
     shapeHash :: Text,

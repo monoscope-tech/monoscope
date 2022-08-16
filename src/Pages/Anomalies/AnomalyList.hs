@@ -134,7 +134,7 @@ renderAnomaly hideByDefault anomaly = do
       div_ [class_ ""] $ do
         div_ [class_ "inline-block flex items-center space-x-2"] $ do
           img_ [src_ icon, class_ "inline w-4 h-4"]
-          strong_ [class_ "font-semibold"] $toHtml $ "  " <> anomalyTitle
+          strong_ [class_ "font-semibold"] $ toHtml $ "  " <> anomalyTitle
         div_ [class_ "py-3 space-x-2"] $ do
           case anomaly ^. #acknowlegedAt of
             Nothing -> do

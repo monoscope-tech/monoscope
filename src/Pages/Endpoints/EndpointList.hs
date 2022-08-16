@@ -76,7 +76,7 @@ endpointList enps = do
         tbody_ $ do
           enps & mapM_ \enp -> do
             tr_ [class_ "border-b border-b-slate-50 py-2"] $ do
-              td_ [class_ "text-left pr-4 "] $input_ [type_ "checkbox"]
+              td_ [class_ "text-left pr-4 "] $ input_ [type_ "checkbox"]
               td_ [class_ "text-right"] $ do
                 a_ [href_ ("/p/" <> Projects.projectIdText (enp ^. #projectId) <> "/endpoints/" <> Endpoints.endpointIdText (enp ^. #endpointId))] $ do
                   span_ [class_ $ "endpoint endpoint-" <> toLower (enp ^. #method)] $ toHtml $ enp ^. #method
