@@ -191,13 +191,13 @@ endpointDetails endpoint fieldsM reqsByStatsByMinJ reqLatenciesRolledByStepsJ an
             "name": "Time",
             "type": "date",
             "format": "%Y-%m-%dT%H:%M:%S%Z" // https://www.fusioncharts.com/dev/fusiontime/fusiontime-attributes
-        }, {
-            "name": "StatusCode",
-            "type": "string"
-        },{
-            "name": "Count",
-            "type": "number"
-        }]),
+          }, {
+              "name": "StatusCode",
+              "type": "string"
+          },{
+              "name": "Count",
+              "type": "number"
+          }]),
             chart: {},
             navigator: {
                 "enabled": 0

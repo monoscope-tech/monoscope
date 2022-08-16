@@ -16,6 +16,7 @@ module Models.Apis.RequestDumps
     selectRequestDumpsByProjectForChart,
     selectRequestsByEndpointsStatByMin,
     selectRequestsByStatusCodesStatByMin,
+    bulkInsertRequestDumps,
   )
 where
 
@@ -26,6 +27,7 @@ import Data.Time (CalendarDiffTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, queryOne)
+import Database.PostgreSQL.Transact (executeMany)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -142,6 +144,11 @@ selectRequestDumpsByProjectForChart pid extraQuery = do
       [text| SELECT COALESCE(NULLIF(json_agg(json_build_array(timeB, count))::text, '[null]'), '[]')::text from (SELECT time_bucket('1 minute', created_at) as timeB,count(*) 
                FROM apis.request_dumps where project_id=? $extraQueryParsed  GROUP BY timeB) ts|]
 
+bulkInsertRequestDumps :: [RequestDump] -> DBT IO Int64 
+bulkInsertRequestDumps = executeMany q 
+    where q = [sql| INSERT INTO apis.request_dumps VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?); |]
+
+
 selectRequestDumpByProjectAndId :: Projects.ProjectId -> UUID.UUID -> DBT IO (Maybe RequestDumpLogItem)
 selectRequestDumpByProjectAndId pid rdId = queryOne Select q (pid, rdId)
   where
@@ -151,10 +158,6 @@ selectRequestDumpByProjectAndId pid rdId = queryOne Select q (pid, rdId)
                     request_body,response_body,request_headers,response_headers,
                     count(*) OVER() AS full_count
              FROM apis.request_dumps where project_id=? and id=?|]
-
--- FIXME: delete
--- insertRequestDump :: RequestDump -> DBT IO Int64
--- insertRequestDump = execute Insert insertRequestDumpQuery
 
 selectRequestsByStatusCodesStatByMin :: Projects.ProjectId -> Text -> Text -> DBT IO (Vector (ZonedTime, Text, Int))
 selectRequestsByStatusCodesStatByMin pid urlPath method = query Select q (pid, urlPath, method)

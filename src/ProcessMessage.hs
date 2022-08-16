@@ -6,14 +6,11 @@ where
 
 import Colog.Core (LogAction (..), (<&))
 import Config qualified
--- import Data.Generics.Internal.VL.Lens ((^?), _Just) 
 import Control.Lens ((^?), _Just)
 import Control.Lens qualified as L
 import Gogol.PubSub.Types (ReceivedMessage(message), PubsubMessage(data'))
 import Gogol.Data.Base64 (_Base64)
 import Data.Generics.Product (field)
--- import Data.Generics.Sum
--- import Data.Generics.Internal.VL qualified as L
 import Control.Monad.Trans.Except
 import Control.Monad.Trans.Except.Extra (handleIOExceptT)
 import Data.Aeson (eitherDecode)
@@ -132,8 +129,7 @@ processMessages' logger' _ conn' msgs projectCache' = do
           _ <- execute query' params'
           pass
         unless (null reqDumps) $ do
-          let q = [sql| INSERT INTO apis.request_dumps VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?); |]
-          _ <- executeMany q reqDumps
+          _ <- RequestDumps.bulkInsertRequestDumps reqDumps 
           pass
 
   endTime <- getTime Monotonic
