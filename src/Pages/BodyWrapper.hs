@@ -166,7 +166,7 @@ projectsDropDown currProject projects = do
 
 sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Maybe Text -> Html ()
 sideNav sess project pageTitle menuItem = do
-  aside_ [class_ "shrink-0  w-64 top-0 border-r-2 bg-white border-gray-200 h-screen overflow-hidden"] $ do
+  aside_ [class_ "shrink-0  w-68 top-0 border-r-2 bg-white border-gray-200 h-screen overflow-hidden"] $ do
     a_ [href_ "/", class_ "inline-block p-4"] $ do
       img_
         [ class_ "h-12",
