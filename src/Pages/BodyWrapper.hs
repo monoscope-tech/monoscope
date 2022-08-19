@@ -38,9 +38,7 @@ bodyWrapper BWConfig {sessM, currProject, pageTitle, menuItem} child =
     Nothing -> child
     Just sess -> do
       let currUser = Sessions.getUser (Sessions.user sess)
-          sideNav' = case currProject of
-            Nothing -> ""
-            Just project -> sideNav sess project pageTitle menuItem
+          sideNav' = currProject & maybe  "" \project-> sideNav sess project pageTitle menuItem
 
       doctypehtml_ $ do
         head_ $ do
@@ -100,7 +98,7 @@ bodyWrapper BWConfig {sessM, currProject, pageTitle, menuItem} child =
               }
             |]
 
-        body_ [class_ "text-gray-800"] $ do
+        body_ [class_ "text-gray-900"] $ do
           section_ [class_ "flex flex-row bg-gray-50 h-screen overflow-hidden"] $ do
             -- Side nav
             sideNav'
@@ -168,7 +166,7 @@ projectsDropDown currProject projects = do
 
 sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Maybe Text -> Html ()
 sideNav sess project pageTitle menuItem = do
-  aside_ [class_ "shrink-0  w-72 top-0 border-r-2 bg-white border-gray-200 h-screen overflow-hidden"] $ do
+  aside_ [class_ "shrink-0  w-64 top-0 border-r-2 bg-white border-gray-200 h-screen overflow-hidden"] $ do
     a_ [href_ "/", class_ "inline-block p-4"] $ do
       img_
         [ class_ "h-12",

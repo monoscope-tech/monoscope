@@ -149,16 +149,15 @@ renderAnomaly hideByDefault anomaly = do
               time_ [class_ "inline-block"] $ toHtml @String $ formatTime defaultTimeLocale "%F %R" ackTime
         div_ [class_ "pt-5 space-y-1"] $ do
           div_ $ do
-            span_ "endpoint: "
             a_
-              [ class_ "text-blue-800 inline-block px-2",
+              [ class_ "text-blue-800 inline-block monospace pb-3 pt-1",
                 href_ $ Endpoints.endpointUrlPath (anomaly ^. #projectId) (Unsafe.fromJust $ anomaly ^. #endpointId)
               ]
               $ toHtml $ fromMaybe "" (anomaly ^. #endpointMethod) <> "  " <> fromMaybe "" (anomaly ^. #endpointUrlPath)
           case anomaly ^. #anomalyType of
             Anomalies.ATShape -> do
               div_ $ do
-                span_ "shape_id: "
+                small_ "shape_id: "
                 a_
                   [ class_ "text-blue-800 inline-block px-2"
                   ]
@@ -166,14 +165,14 @@ renderAnomaly hideByDefault anomaly = do
             Anomalies.ATEndpoint -> ""
             Anomalies.ATFormat -> do
               div_ $ do
-                span_ "field_path: "
-                span_ $ toHtml $ fromMaybe "" (anomaly ^. #fieldKey)
+                small_ "field_path: "
+                span_  [class_ "monospace inline-block background-slate-50 p-1"]$ toHtml $ fromMaybe "" (anomaly ^. #fieldKeyPath)
               div_ $ do
-                span_ "type: "
+                small_ "type: "
                 maybe "" EndpointComponents.fieldTypeToDisplay (anomaly ^. #formatType)
               div_ $ do
-                span_ "format: "
-                span_ $ toHtml $ fromMaybe "" (anomaly ^. #fieldFormat)
+                small_ "format: "
+                span_ [class_ "monospace"] $ toHtml $ fromMaybe "" (anomaly ^. #fieldFormat)
             Anomalies.ATField -> ""
             Anomalies.ATUnknown -> ""
         p_ [class_ "pt-3 text-lg"] "Was this intended? "

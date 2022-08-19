@@ -51,33 +51,33 @@ fieldDetailsView field formats = do
   section_ [class_ "space-y-6"] $ do
     div_ $ do
       h6_ [class_ "text-slate-700 text-xs"] "FIELD NAME"
-      h3_ [class_ "text-lg text-slate-700"] $ toHtml $ field ^. #key
+      h3_ [class_ "text-lg text-slate-800"] $ toHtml $ field ^. #key
     div_ $ do
       h6_ [class_ "text-slate-700 text-xs"] "FIELD PATH"
-      h3_ [class_ "text-base text-slate-700 monospace"] $ toHtml $ field ^. #keyPath
-    div_ [class_ "flex flex-row gap-9"] $ do
+      h3_ [class_ "text-base text-slate-800 monospace"] $ toHtml $ field ^. #keyPath
+    div_ [class_ "flex flex-row gap-6"] $ do
       div_ $ do
         h6_ [class_ "text-slate-700 text-xs"] "FIELD CATEGORY"
-        h4_ [class_ "text-base text-slate-700"] $ fieldCategoryToDisplay $ field ^. #fieldCategory
-      div_ [class_ "mx-5"] $ do
+        h4_ [class_ "text-base text-slate-800"] $ fieldCategoryToDisplay $ field ^. #fieldCategory
+      div_ [class_ ""] $ do
         h6_ [class_ "text-slate-700 text-xs"] "FORMAT OVERRIDE"
-        h4_ [class_ "text-base text-slate-700"] $ toHtml $ fromMaybe "[unset]" (field ^. #fieldTypeOverride)
+        h4_ [class_ "text-base text-slate-800"] $ toHtml $ fromMaybe "[unset]" (field ^. #fieldTypeOverride)
     div_ $ do
-      h5_ [class_ "text-sm text-slate-700"] "DETECTED FIELD FORMATS AND TYPES"
+      h5_ [class_ "text-sm text-slate-800"] "DETECTED FIELD FORMATS AND TYPES"
       div_ [class_ "space-y-2"] $
         formats & mapM_ \formatV -> do
           div_ [class_ "border-l-slate-200 border-l-2 pl-2 py-2"] $ do
             div_ [class_ "flex flex-row gap-9"] $ do
               div_ [class_ "space-y-2"] $ do
                 h6_ [class_ "text-slate-700 text-xs"] "TYPE"
-                h4_ [class_ "text-base text-slate-700"] $ EndpointComponents.fieldTypeToDisplay $ formatV ^. #fieldType
+                h4_ [class_ "text-base text-slate-800"] $ EndpointComponents.fieldTypeToDisplay $ formatV ^. #fieldType
               div_ [class_ "mx-5 space-y-2"] $ do
                 h6_ [class_ "text-slate-700 text-xs"] "FORMAT"
-                h4_ [class_ "text-base text-slate-700"] $ toHtml $ formatV ^. #fieldFormat
+                h4_ [class_ "text-base text-slate-800"] $ toHtml $ formatV ^. #fieldFormat
             h6_ [class_ "text-slate-600 mt-4 text-xs"] "EXAMPLE VALUES"
             ul_ [class_ "list-disc"] $ do
               formatV ^. #examples & mapM_ \ex -> do
-                li_ [class_ "ml-10 text-slate-700 text-sm"] $ toHtml $ aesonValueToText ex
+                li_ [class_ "ml-10 text-slate-800 text-sm"] $ toHtml $ aesonValueToText ex
     div_ [class_ "flex flex-row justify-between mt-10 "] $ do
       div_ [class_ " "] $ do
         h4_ [class_ "text-sm text-slate-700 mb-2"] "CREATION DATE"
@@ -90,7 +90,7 @@ fieldDetailsView field formats = do
           img_ [src_ "/assets/svgs/calender.svg", class_ "h-4 mr-2 w-4"]
           span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" (field ^. #updatedAt)
     h6_ [class_ "mt-5 text-sm text-slate-700 mb-2"] "DESCRIPTION"
-    p_ [class_ "text-gray-400 text-sm"] $ toHtml $ field ^. #description
+    p_ [class_ "text-slate-800 text-sm"] $ toHtml $ field ^. #description
 
 aesonValueToText :: AE.Value -> Text
 aesonValueToText = toStrict . encodeToLazyText
@@ -136,7 +136,7 @@ endpointDetailsH sess pid eid = do
 endpointDetails :: EndpointRequestStats -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> Text -> Vector Anomalies.AnomalyVM -> Html ()
 endpointDetails endpoint fieldsM reqsByStatsByMinJ reqLatenciesRolledByStepsJ anomalies =
   div_ [class_ "w-full flex flex-row h-full overflow-hidden"] $ do
-    div_ [class_ "w-2/3 p-5 h-full overflow-y-scroll"] $ do
+    div_ [class_ "w-5/8 p-5 h-full overflow-y-scroll"] $ do
       div_ [class_ "flex flex-row justify-between mb-10"] $ do
         div_ [class_ "flex flex-row place-items-center text-lg font-medium"] $ do
           h3_ [class_ "text-lg text-slate-700"] $ do
@@ -158,7 +158,7 @@ endpointDetails endpoint fieldsM reqsByStatsByMinJ reqLatenciesRolledByStepsJ an
         reqResSection "Request" True fieldsM
         reqResSection "Response" False fieldsM
     aside_
-      [ class_ "w-1/3 h-full overflow-y-scroll bg-white border border-gray-200 p-5 sticky top-0",
+      [ class_ "w-3/8 h-full overflow-y-scroll bg-white border border-gray-200 p-5 sticky top-0",
         id_ "detailSidebar"
       ]
       $ do

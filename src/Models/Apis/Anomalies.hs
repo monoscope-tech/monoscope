@@ -122,7 +122,7 @@ data AnomalyVM = AnomalyCM
     --
     fieldId :: Maybe Fields.FieldId,
     fieldKey :: Maybe Text,
-    fieldKeyPathStr :: Maybe Text,
+    fieldKeyPath :: Maybe Text,
     fieldCategory :: Maybe Fields.FieldCategoryEnum,
     fieldFormat :: Maybe Text,
     --

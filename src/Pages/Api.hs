@@ -13,7 +13,6 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript
-import Models.Projects.ProjectApiKeys qualified as ProjectApiKey
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
@@ -115,7 +114,7 @@ apiKeysPage pid apiKeys = do
                   ]
                   "Cancel"
 
-mainContent :: Projects.ProjectId -> Vector ProjectApiKeys.ProjectApiKey -> Maybe (ProjectApiKey.ProjectApiKey, Text) -> Html ()
+mainContent :: Projects.ProjectId -> Vector ProjectApiKeys.ProjectApiKey -> Maybe (ProjectApiKeys.ProjectApiKey, Text) -> Html ()
 mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] $ do
   case newKeyM of
     Nothing -> ""
