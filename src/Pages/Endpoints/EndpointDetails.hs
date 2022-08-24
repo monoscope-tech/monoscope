@@ -136,7 +136,7 @@ endpointDetailsH sess pid eid = do
 endpointDetails :: EndpointRequestStats -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> Text -> Vector Anomalies.AnomalyVM -> Html ()
 endpointDetails endpoint fieldsM reqsByStatsByMinJ reqLatenciesRolledByStepsJ anomalies =
   div_ [class_ "w-full flex flex-row h-full overflow-hidden"] $ do
-    div_ [class_ "w-5/8 p-5 h-full overflow-y-scroll"] $ do
+    div_ [class_ "w-4/6 p-5 h-full overflow-y-scroll"] $ do
       div_ [class_ "flex flex-row justify-between mb-10"] $ do
         div_ [class_ "flex flex-row place-items-center text-lg font-medium"] $ do
           h3_ [class_ "text-lg text-slate-700"] $ do
@@ -158,7 +158,7 @@ endpointDetails endpoint fieldsM reqsByStatsByMinJ reqLatenciesRolledByStepsJ an
         reqResSection "Request" True fieldsM
         reqResSection "Response" False fieldsM
     aside_
-      [ class_ "w-3/8 h-full overflow-y-scroll bg-white border border-gray-200 p-5 sticky top-0",
+      [ class_ "w-2/6 h-full overflow-y-scroll bg-white border border-gray-200 p-5 sticky top-0",
         id_ "detailSidebar"
       ]
       $ do

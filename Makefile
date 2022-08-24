@@ -4,6 +4,9 @@ css-start:
 run:
 	stack run
 
+cypress:
+	npx cypress run --record --key 2a2372e2-4ba1-4cd5-8bed-f39f4f047b3e
+
 live-reload:
 	ghcid --command 'stack ghci apitoolkit-server --ghc-options=-w' --test ':run Main.main' --warnings
 
