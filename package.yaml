@@ -56,6 +56,7 @@ default-extensions:
   - TypeFamilies
   - TypeOperators
   - UndecidableInstances
+  - OverloadedRecordDot
 
 
 extra-source-files:

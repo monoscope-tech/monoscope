@@ -24,7 +24,7 @@ import Relude.Unsafe qualified as Unsafe
 acknowlegeAnomalyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Anomalies.AnomalyId -> DashboardM (Html ())
 acknowlegeAnomalyGetH sess pid aid = do
   pool <- asks pool
-  liftIO $ withPool pool $ Anomalies.acknowlegeAnomaly aid (sess ^. #userId)
+  liftIO $ withPool pool $ Anomalies.acknowlegeAnomaly aid (sess.userId)
   pure $ anomalyAcknowlegeButton pid aid True
 
 unAcknowlegeAnomalyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Anomalies.AnomalyId -> DashboardM (Html ())
@@ -126,7 +126,7 @@ anomalyListSlider anomalies = do
 renderAnomaly :: Bool -> Anomalies.AnomalyVM -> Html ()
 renderAnomaly hideByDefault anomaly = do
   let (anomalyTitle, chartTitle, icon) = anomalyDisplayConfig anomaly
-  let anomalyId = Anomalies.anomalyIdText (anomaly ^. #id)
+  let anomalyId = Anomalies.anomalyIdText (anomaly.id)
   let anomalyGraphId = "field-" <> anomalyId
 
   div_ [class_ "anomaly-item card-round px-8 py-6 hover:bg-blue-50 parent-hover cursor-pointer", style_ (if hideByDefault then "display:none" else ""), id_ anomalyId] $ do
@@ -136,43 +136,43 @@ renderAnomaly hideByDefault anomaly = do
           img_ [src_ icon, class_ "inline w-4 h-4"]
           strong_ [class_ "font-semibold"] $ toHtml $ "  " <> anomalyTitle
         div_ [class_ "py-3 space-x-2"] $ do
-          case anomaly ^. #acknowlegedAt of
+          case anomaly.acknowlegedAt of
             Nothing -> do
               small_ [class_ "bg-red-200 text-red-900 inline-block px-3 rounded-lg"] "ONGOING"
-              time_ [class_ "inline-block"] $ toHtml @String $ formatTime defaultTimeLocale "%F %R" (anomaly ^. #createdAt)
+              time_ [class_ "inline-block"] $ toHtml @String $ formatTime defaultTimeLocale "%F %R" (anomaly.createdAt)
               span_ [class_ "inline-block"] "-"
               span_ "present"
             Just ackTime -> do
               small_ [class_ "bg-green-200 text-green-900 inline-block px-3 rounded-lg"] "ACKNOWLEGED"
-              time_ [class_ "inline-block"] $ toHtml @String $ formatTime defaultTimeLocale "%F %R" (anomaly ^. #createdAt)
+              time_ [class_ "inline-block"] $ toHtml @String $ formatTime defaultTimeLocale "%F %R" (anomaly.createdAt)
               span_ [class_ "inline-block"] "-"
               time_ [class_ "inline-block"] $ toHtml @String $ formatTime defaultTimeLocale "%F %R" ackTime
         div_ [class_ "pt-5 space-y-1"] $ do
           div_ $ do
             a_
               [ class_ "text-blue-800 inline-block monospace pb-3 pt-1",
-                href_ $ Endpoints.endpointUrlPath (anomaly ^. #projectId) (Unsafe.fromJust $ anomaly ^. #endpointId)
+                href_ $ Endpoints.endpointUrlPath (anomaly.projectId) (Unsafe.fromJust $ anomaly.endpointId)
               ]
-              $ toHtml $ fromMaybe "" (anomaly ^. #endpointMethod) <> "  " <> fromMaybe "" (anomaly ^. #endpointUrlPath)
-          case anomaly ^. #anomalyType of
+              $ toHtml $ fromMaybe "" (anomaly.endpointMethod) <> "  " <> fromMaybe "" (anomaly.endpointUrlPath)
+          case anomaly.anomalyType of
             Anomalies.ATShape -> do
               div_ $ do
                 small_ "shape_id: "
                 a_
                   [ class_ "text-blue-800 inline-block px-2"
                   ]
-                  $ toHtml $ "`" <> maybe "" Shapes.shapeIdText (anomaly ^. #shapeId) <> "`"
+                  $ toHtml $ "`" <> maybe "" Shapes.shapeIdText (anomaly.shapeId) <> "`"
             Anomalies.ATEndpoint -> ""
             Anomalies.ATFormat -> do
               div_ $ do
                 small_ "field_path: "
-                span_  [class_ "monospace inline-block background-slate-50 p-1"]$ toHtml $ fromMaybe "" (anomaly ^. #fieldKeyPath)
+                span_  [class_ "monospace inline-block background-slate-50 p-1"]$ toHtml $ fromMaybe "" (anomaly.fieldKeyPath)
               div_ $ do
                 small_ "type: "
-                maybe "" EndpointComponents.fieldTypeToDisplay (anomaly ^. #formatType)
+                maybe "" EndpointComponents.fieldTypeToDisplay (anomaly.formatType)
               div_ $ do
                 small_ "format: "
-                span_ [class_ "monospace"] $ toHtml $ fromMaybe "" (anomaly ^. #fieldFormat)
+                span_ [class_ "monospace"] $ toHtml $ fromMaybe "" (anomaly.fieldFormat)
             Anomalies.ATField -> ""
             Anomalies.ATUnknown -> ""
         p_ [class_ "pt-3 text-lg"] "Was this intended? "
@@ -185,9 +185,9 @@ renderAnomaly hideByDefault anomaly = do
             $ do
               img_ [src_ "/assets/svgs/anomalies/archive.svg", class_ "h-4 w-4"]
           anomalyAcknowlegeButton
-            (anomaly ^. #projectId)
-            (anomaly ^. #id)
-            (isJust (anomaly ^. #acknowlegedAt))
+            (anomaly.projectId)
+            (anomaly.id)
+            (isJust (anomaly.acknowlegedAt))
 
         p_ [class_ "border-0 border-b-2  border-gray-100 border py-2 mb-1"] $ toHtml chartTitle
         div_ [id_ anomalyGraphId, style_ "height:250px", class_ "w-full"] ""
@@ -208,7 +208,7 @@ anomalyAcknowlegeButton pid aid acked = do
 
 anomalyChartScript :: Anomalies.AnomalyVM -> Text -> Text
 anomalyChartScript anomaly anomalyGraphId =
-  let timeSeriesData = fromMaybe "[]" $ anomaly ^. #timeSeries
+  let timeSeriesData = fromMaybe "[]" $ anomaly.timeSeries
    in -- Adding the current day and time to the end of the chart data, so that the chart is scaled to include the current day/time
       -- currentISOTimeStringVar is declared on every page, in case they need a string for the current time in ISO format
       [text|
@@ -232,7 +232,7 @@ anomalyChartScript anomaly anomalyGraphId =
      |]
 
 anomalyDisplayConfig :: Anomalies.AnomalyVM -> (Text, Text, Text)
-anomalyDisplayConfig anomaly = case anomaly ^. #anomalyType of
+anomalyDisplayConfig anomaly = case anomaly.anomalyType of
   Anomalies.ATField -> ("New Field Found", "Field Occurences over Time", "/assets/svgs/anomalies/fields.svg")
   Anomalies.ATShape -> ("New Req/Resp Shape", "Shape Occurences over Time vs Total by all Shapes", "/assets/svgs/anomalies/fields.svg")
   Anomalies.ATEndpoint -> ("New Endpoint Found", "Endpoint occurences over time vs Total by all Endpoints", "/assets/svgs/endpoint.svg")

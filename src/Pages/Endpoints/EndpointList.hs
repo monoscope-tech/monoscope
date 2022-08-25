@@ -78,25 +78,25 @@ endpointList enps = do
             tr_ [class_ "border-b border-b-slate-50 py-2"] $ do
               td_ [class_ "text-left pr-4 "] $ input_ [type_ "checkbox"]
               td_ [class_ "text-right"] $ do
-                a_ [href_ ("/p/" <> Projects.projectIdText (enp ^. #projectId) <> "/endpoints/" <> Endpoints.endpointIdText (enp ^. #endpointId))] $ do
-                  span_ [class_ $ "endpoint endpoint-" <> toLower (enp ^. #method)] $ toHtml $ enp ^. #method
+                a_ [href_ ("/p/" <> Projects.projectIdText (enp.projectId) <> "/endpoints/" <> Endpoints.endpointIdText (enp.endpointId))] $ do
+                  span_ [class_ $ "endpoint endpoint-" <> toLower (enp.method)] $ toHtml $ enp.method
               td_ [class_ ""] $ do
-                a_ [href_ ("/p/" <> Projects.projectIdText (enp ^. #projectId) <> "/endpoints/" <> Endpoints.endpointIdText (enp ^. #endpointId))] $ do
-                  span_ [class_ " inconsolata text-base text-slate-700"] $ toHtml $ enp ^. #urlPath
+                a_ [href_ ("/p/" <> Projects.projectIdText (enp.projectId) <> "/endpoints/" <> Endpoints.endpointIdText (enp.endpointId))] $ do
+                  span_ [class_ " inconsolata text-base text-slate-700"] $ toHtml $ enp.urlPath
               td_ [class_ " text-sm text-gray-400 font-normal text-center"] $ do
-                span_ $ toHtml @String $ fmt $ commaizeF (enp ^. #totalRequests)
+                span_ $ toHtml @String $ fmt $ commaizeF (enp.totalRequests)
               td_ [class_ " inconsolata text-base text-slate-700 text-right space-x-2"] $ do
-                span_ $ toHtml @String $ fmt $ fixedF 1 (enp ^. #totalTime) -- convert from milliseconds
-                div_ [class_ "w-10 inline-block", term "data-tippy-content" "enpoint total time vs project total"] $ meter__ $ ((enp ^. #totalTime) / (enp ^. #totalTimeProj)) * 100
+                span_ $ toHtml @String $ fmt $ fixedF 1 (enp.totalTime) -- convert from milliseconds
+                div_ [class_ "w-10 inline-block", term "data-tippy-content" "enpoint total time vs project total"] $ meter__ $ ((enp.totalTime) / (enp.totalTimeProj)) * 100
               td_ [class_ " text-sm text-gray-400 font-normal text-right space-x-2"] $ do
-                span_ $ toHtml @Text $ fmt $ fixedF 2 (enp ^. #p50) |+ " ms"
-                div_ [class_ "w-10 inline-block", term "data-tippy-content" "p50 vs max"] $ meter__ $ ((enp ^. #p50) / (enp ^. #max)) * 100
+                span_ $ toHtml @Text $ fmt $ fixedF 2 (enp.p50) |+ " ms"
+                div_ [class_ "w-10 inline-block", term "data-tippy-content" "p50 vs max"] $ meter__ $ ((enp.p50) / (enp.max)) * 100
               td_ [class_ " text-sm text-gray-400 font-normal text-right space-x-2"] $ do
-                span_ $ toHtml @Text $ fmt $ fixedF 2 (enp ^. #p99) |+ " ms"
-                div_ [class_ "w-10 inline-block", term "data-tippy-content" "p99 vs max"] $ meter__ $ ((enp ^. #p99) / (enp ^. #max)) * 100
+                span_ $ toHtml @Text $ fmt $ fixedF 2 (enp.p99) |+ " ms"
+                div_ [class_ "w-10 inline-block", term "data-tippy-content" "p99 vs max"] $ meter__ $ ((enp.p99) / (enp.max)) * 100
               td_ [class_ "text-right font-medium text-gray-400 "] $ do
                 div_ [class_ "flex flex-row w-full justify-end gap-6"] $ do
-                  when (enp ^. #ongoingAnomalies > 0) $ do
+                  when (enp.ongoingAnomalies > 0) $ do
                     img_ [class_ "px-3", term "data-tippy-content" "ongoing anomaly", src_ "/assets/svgs/alert-red.svg"]
                   img_ [class_ "px-3", src_ "/assets/svgs/dots-vertical.svg"]
 

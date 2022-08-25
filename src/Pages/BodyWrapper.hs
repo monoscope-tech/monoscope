@@ -109,7 +109,7 @@ bodyWrapper BWConfig {sessM, currProject, pageTitle, menuItem} child =
 
 projectsDropDown :: Projects.Project -> Vector.Vector Projects.Project -> Html ()
 projectsDropDown currProject projects = do
-  let pidTxt = Projects.projectIdText $currProject ^. #id
+  let pidTxt = Projects.projectIdText $currProject.id
   div_
     [ term "data-menu" "true",
       class_ "hidden origin-top-right z-40 transition transform bg-white p-4 absolute w-[20rem] rounded-2xl shadow-2xl shadow-indigo-200",
@@ -133,7 +133,7 @@ projectsDropDown currProject projects = do
         div_ [class_ "flex mt-2 mb-4"] $ do
           img_ [class_ "p-4", src_ "/assets/svgs/projects.svg"]
           div_ $ do
-            strong_ [class_ "block"] $ toHtml $ currProject ^. #title
+            strong_ [class_ "block"] $ toHtml $ currProject.title
             small_ [class_ "block text-blue-800"] "Development"
         nav_ [] $ do
           a_ [class_ "p-3 flex gap-3 rounded-2xl hover:bg-gray-100"] $ do
@@ -158,11 +158,11 @@ projectsDropDown currProject projects = do
             input_ [class_ "pl-12 w-full text-sm bg-gray-100 rounded-2xl border-0 p-3", placeholder_ "Search Projects"]
           div_ [class_ "space-y-2 py-4 text-sm"] $ do
             projects & mapM_ \project -> do
-              a_ [class_ "flex justify-between p-2", href_ ("/p/" <> Projects.projectIdText (project ^. #id))] $ do
+              a_ [class_ "flex justify-between p-2", href_ ("/p/" <> Projects.projectIdText (project.id))] $ do
                 div_ [class_ "space-x-3"] $ do
                   img_ [class_ "inline-block", src_ "/assets/svgs/projects.svg"]
-                  span_ [class_ "inline-block"] $ toHtml $ project ^. #title
-                when (currProject ^. #id == project ^. #id) $ img_ [src_ "/assets/svgs/checkmark_blue.svg"]
+                  span_ [class_ "inline-block"] $ toHtml $ project.title
+                when (currProject.id == project.id) $ img_ [src_ "/assets/svgs/checkmark_blue.svg"]
 
 sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Maybe Text -> Html ()
 sideNav sess project pageTitle menuItem = do
@@ -195,7 +195,7 @@ sideNav sess project pageTitle menuItem = do
         ]
         $ do
           div_ [class_ "space-2 grow "] $ do
-            strong_ [class_ "block text-slate-900"] $ toHtml $ project ^. #title
+            strong_ [class_ "block text-slate-900"] $ toHtml $ project.title
             small_ [class_ "block text-slate-900"] "Development"
           div_ $ do
             img_ [src_ "/assets/svgs/up_chevron.svg"]
@@ -203,7 +203,7 @@ sideNav sess project pageTitle menuItem = do
       projectsDropDown project (Sessions.getProjects $ Sessions.projects sess)
     nav_ [class_ "mt-4"] $ do
       -- FIXME: reeanable hx-boost hxBoost_ "true"
-      menu (project ^. #id) & mapM_ \(mTitle, mUrl, mIcon) -> do
+      menu (project.id) & mapM_ \(mTitle, mUrl, mIcon) -> do
         a_
           [ href_ mUrl,
             class_ $
@@ -246,8 +246,8 @@ navbar currUser = do
         |]
         ]
         $ do
-          img_ [class_ "inline-block w-9 h-9 rounded-lg bg-gray-300", src_ (currUser ^. #displayImageUrl)]
-          span_ [class_ "inline-block"] $ toHtml $ currUser ^. #firstName <> " " <> currUser ^. #lastName
+          img_ [class_ "inline-block w-9 h-9 rounded-lg bg-gray-300", src_ (currUser.displayImageUrl)]
+          span_ [class_ "inline-block"] $ toHtml $ currUser.firstName <> " " <> currUser.lastName
           img_ [class_ "w-4 h-4 inline-block", src_ "/assets/svgs/down_caret.svg"]
 
       --logout dropdown

@@ -152,7 +152,7 @@ processMessages' logger' _ conn' msgs projectCache' = do
       (rmAckId, recMsg) <- except recMsgEither
       recId <- liftIO nextRandom
       timestamp <- liftIO getZonedTime
-      let pid = Projects.ProjectId (recMsg ^. #projectId)
+      let pid = Projects.ProjectId (recMsg.projectId)
 
       -- We retrieve the projectCache object from the inmemory cache and if it doesn't exist,
       -- we set the value in the db into the cache and return that.

@@ -125,12 +125,12 @@ redactJSON paths' = redactJSON' (stripPrefixDot paths')
 -- We can pass in a request, it's project cache object and inspect the generated sql and params.
 requestMsgToDumpAndEndpoint :: Projects.ProjectCache -> RequestMessages.RequestMessage -> ZonedTime -> UUID.UUID -> Either Text (Query, [DBField], RequestDumps.RequestDump)
 requestMsgToDumpAndEndpoint pjc rM now dumpID = do
-  let method = T.toUpper $ rM ^. #method
-  let urlPath = normalizeUrlPath (rM ^. #sdkType) (rM ^. #urlPath)
-  let !endpointHash = from @String @Text $ showHex (xxHash $ from @Text $ UUID.toText (rM ^. #projectId) <> method <> urlPath) ""
+  let method = T.toUpper $ rM.method
+  let urlPath = normalizeUrlPath (rM.sdkType) (rM.urlPath)
+  let !endpointHash = from @String @Text $ showHex (xxHash $ from @Text $ UUID.toText (rM.projectId) <> method <> urlPath) ""
 
-  let redactFieldsList = Vector.toList (pjc ^. #redactFieldslist) <> [".set-cookie"]
-  reqBodyB64 <- B64.decodeBase64 $ encodeUtf8 $ rM ^. #requestBody
+  let redactFieldsList = Vector.toList (pjc.redactFieldslist) <> [".set-cookie"]
+  reqBodyB64 <- B64.decodeBase64 $ encodeUtf8 $ rM.requestBody
   -- NB: At the moment we're discarding the error messages from when we're unable to parse the input
   -- We should log this inputs and maybe input them into the db as is. This is also a potential annomaly for our customers,
   -- And would help us identity what request formats our customers are actually processing, which would help guide our new features.
@@ -139,13 +139,13 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
   --       Left err -> traceShowM err >> []
   --       Right reqBody -> valueToFields reqBody
   let reqBody = redactJSON redactFieldsList $ fromRight [aesonQQ| {} |] $ AE.eitherDecodeStrict reqBodyB64
-  respBodyB64 <- B64.decodeBase64 $ encodeUtf8 $ rM ^. #responseBody
+  respBodyB64 <- B64.decodeBase64 $ encodeUtf8 $ rM.responseBody
   let respBody = redactJSON redactFieldsList $ fromRight [aesonQQ| {} |] $ AE.eitherDecodeStrict respBodyB64
 
-  let pathParamFields = valueToFields $ redactJSON redactFieldsList $ rM ^. #pathParams
-  let queryParamFields = valueToFields $ redactJSON redactFieldsList $ rM ^. #queryParams
-  let reqHeaderFields = valueToFields $ redactJSON redactFieldsList $ rM ^. #requestHeaders
-  let respHeaderFields = valueToFields $ redactJSON redactFieldsList $ rM ^. #responseHeaders
+  let pathParamFields = valueToFields $ redactJSON redactFieldsList $ rM.pathParams
+  let queryParamFields = valueToFields $ redactJSON redactFieldsList $ rM.queryParams
+  let reqHeaderFields = valueToFields $ redactJSON redactFieldsList $ rM.requestHeaders
+  let respHeaderFields = valueToFields $ redactJSON redactFieldsList $ rM.responseHeaders
   let reqBodyFields = valueToFields reqBody
   let respBodyFields = valueToFields respBody
 
@@ -161,7 +161,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
   let combinedKeyPathStr = T.concat $ sort $ Vector.toList $ queryParamsKP <> responseHeadersKP <> requestBodyKP <> responseBodyKP
   let !shapeHash' = from @String @Text $ showHex (xxHash $ from @Text $ combinedKeyPathStr) ""
   let shapeHash = endpointHash <> shapeHash' -- Include the endpoint hash to make the shape hash unique by endpoint
-  let projectId = Projects.ProjectId (rM ^. #projectId)
+  let projectId = Projects.ProjectId (rM.projectId)
 
   let pathParamsFieldsDTO = pathParamFields & map (fieldsToFieldDTO Fields.FCPathParam projectId endpointHash)
   let queryParamsFieldsDTO = queryParamFields & map (fieldsToFieldDTO Fields.FCQueryParam projectId endpointHash)
@@ -185,17 +185,17 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
   -- At the moment, if an endpoint exists, we don't insert it anymore. But then how do we deal with requests from new hosts?
   let urlParams = AET.emptyObject
   let (endpointQ, endpointP) =
-        if endpointHash `elem` (pjc ^. #endpointHashes) -- We have the endpoint cache in our db already. Skill adding
+        if endpointHash `elem` (pjc.endpointHashes) -- We have the endpoint cache in our db already. Skill adding
           then ("", [])
           else Endpoints.upsertEndpointQueryAndParam $ buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash
 
   let (shapeQ, shapeP) =
-        if shapeHash `elem` (pjc ^. #shapeHashes)
+        if shapeHash `elem` (pjc.shapeHashes)
           then ("", [])
           else do
             -- A shape is a deterministic representation of a request-response combination for a given endpoint.
             -- We usually expect multiple shapes per endpoint. Eg a shape for a success request-response and another for an error response.
-            let shape = Shapes.Shape (Shapes.ShapeId dumpID) (rM ^. #timestamp) now projectId endpointHash queryParamsKP requestHeadersKP responseHeadersKP requestBodyKP responseBodyKP shapeHash
+            let shape = Shapes.Shape (Shapes.ShapeId dumpID) (rM.timestamp) now projectId endpointHash queryParamsKP requestHeadersKP responseHeadersKP requestBodyKP responseBodyKP shapeHash
             Shapes.insertShapeQueryAndParam shape
 
   -- request dumps are time series dumps representing each requests which we consume from our users.
@@ -208,25 +208,25 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
   let reqDumpP =
         RequestDumps.RequestDump
           { id = dumpID,
-            createdAt = rM ^. #timestamp,
+            createdAt = rM.timestamp,
             updatedAt = now,
-            projectId = rM ^. #projectId,
-            host = rM ^. #host,
+            projectId = rM.projectId,
+            host = rM.host,
             urlPath = urlPath,
-            rawUrl = rM ^. #rawUrl,
-            pathParams = rM ^. #pathParams,
+            rawUrl = rM.rawUrl,
+            pathParams = rM.pathParams,
             method = method,
-            referer = rM ^. #referer,
-            protoMajor = rM ^. #protoMajor,
-            protoMinor = rM ^. #protoMinor,
-            duration = calendarTimeTime $ secondsToNominalDiffTime $ fromIntegral $ rM ^. #duration,
-            statusCode = rM ^. #statusCode,
+            referer = rM.referer,
+            protoMajor = rM.protoMajor,
+            protoMinor = rM.protoMinor,
+            duration = calendarTimeTime $ secondsToNominalDiffTime $ fromIntegral $ rM.duration,
+            statusCode = rM.statusCode,
             --
-            queryParams = rM ^. #queryParams,
+            queryParams = rM.queryParams,
             requestBody = reqBody,
             responseBody = respBody,
-            requestHeaders = rM ^. #requestHeaders,
-            responseHeaders = rM ^. #responseHeaders,
+            requestHeaders = rM.requestHeaders,
+            responseHeaders = rM.responseHeaders,
             --
             endpointHash = endpointHash,
             shapeHash = shapeHash,
@@ -237,7 +237,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
   -- Build all fields and formats, unzip them as separate lists and append them to query and params
   -- We don't border adding them if their shape exists, as we asume that we've already seen such before.
   let (fieldsQ, fieldsP) =
-        if shapeHash `elem` (pjc ^. #shapeHashes)
+        if shapeHash `elem` (pjc.shapeHashes)
           then ([], [])
           else unzip $ map Fields.insertFieldQueryAndParams fields
 
@@ -248,7 +248,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
   -- The original plan was that we could skip the shape from the input into this function, but then that would mean
   -- also inserting the fields and the shape, when all we want to insert is just the example.
   let (formatsQ, formatsP) =
-        if shapeHash `elem` (pjc ^. #shapeHashes)
+        if shapeHash `elem` (pjc.shapeHashes)
           then ([], [])
           else unzip $ map Formats.insertFormatQueryAndParams formats
 
@@ -259,14 +259,14 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
 buildEndpoint :: RequestMessages.RequestMessage -> ZonedTime -> UUID.UUID -> Projects.ProjectId -> Text -> Text -> Value -> Text -> Endpoints.Endpoint
 buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash =
   Endpoints.Endpoint
-    { createdAt = rM ^. #timestamp,
+    { createdAt = rM.timestamp,
       updatedAt = now,
       id = Endpoints.EndpointId dumpID,
       projectId = projectId,
       urlPath = urlPath,
       urlParams = urlParams,
       method = method,
-      hosts = [rM ^. #host],
+      hosts = [rM.host],
       hash = endpointHash
     }
 

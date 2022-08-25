@@ -66,9 +66,9 @@ makeFieldLabelsNoPrefix ''SeedConfig
 fieldConfigToField :: FieldConfig -> Fake (Text, AE.Value)
 fieldConfigToField fc = do
   val <-
-    ( case fc ^. #fieldType of
+    ( case fc.fieldType of
         "string" ->
-          AE.String <$> case fc ^. #typeGenFormat of
+          AE.String <$> case fc.typeGenFormat of
             "address" -> Faker.Address.fullAddress
             "name" -> Faker.Name.name
             "first_name" -> Faker.Name.firstName
@@ -79,7 +79,7 @@ fieldConfigToField fc = do
         _ -> do
           AE.String <$> Faker.Address.fullAddress
       )
-  pure (fc ^. #name, val)
+  pure (fc.name, val)
 
 randomTimesBtwToAndFrom :: RandomGen g => UTCTime -> Int -> g -> NominalDiffTime -> [ZonedTime]
 randomTimesBtwToAndFrom startTime countToReturn rg maxDiff =
@@ -96,19 +96,19 @@ parseConfigToRequestMessages pid input = do
       resp <-
         generateWithSettings fakerSettings $
           configs & mapM \config -> do
-            let startTimeUTC = zonedTimeToUTC (config ^. #from)
-            let maxDiffTime = diffUTCTime (zonedTimeToUTC (config ^. #to)) startTimeUTC
-            let timestamps = randomTimesBtwToAndFrom startTimeUTC (config ^. #count) randGen maxDiffTime
-            let durations = take (config ^. #count) $ randomRs (config ^. #durationFrom, config ^. #durationTo) randGen
-            let allowedStatusCodes = config ^. #statusCodesOneof
-            let statusCodes = take (config ^. #count) $ map (allowedStatusCodes !!) $ randomRs (0, length allowedStatusCodes -1) randGen
+            let startTimeUTC = zonedTimeToUTC (config.from)
+            let maxDiffTime = diffUTCTime (zonedTimeToUTC (config.to)) startTimeUTC
+            let timestamps = randomTimesBtwToAndFrom startTimeUTC (config.count) randGen maxDiffTime
+            let durations = take (config.count) $ randomRs (config.durationFrom, config.durationTo) randGen
+            let allowedStatusCodes = config.statusCodesOneof
+            let statusCodes = take (config.count) $ map (allowedStatusCodes !!) $ randomRs (0, length allowedStatusCodes -1) randGen
 
             zip3 timestamps durations statusCodes & mapM \(timestampV, duration', statusCode') -> do
               let duration = duration'
               let statusCode = statusCode'
-              let method = config ^. #method
-              let urlPath = config ^. #path
-              let rawUrl = config ^. #path
+              let method = config.method
+              let urlPath = config.path
+              let rawUrl = config.path
               let protoMajor = 1
               let protoMinor = 1
               let referer = "https://google.com"
@@ -117,13 +117,13 @@ parseConfigToRequestMessages pid input = do
               let timestamp = timestampV
               let sdkType = RequestMessages.GoGin
 
-              pathLog <- mapM fieldConfigToField (config ^. #queryParams)
-              pathParams <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField (config ^. #pathParams)
-              queryParams <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField (config ^. #queryParams)
-              requestHeaders <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField (config ^. #requestHeaders)
-              responseHeaders <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField (config ^. #responseHeaders)
-              responseBody <- B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField (config ^. #responseBody)
-              requestBody <- B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField (config ^. #responseBody)
+              pathLog <- mapM fieldConfigToField (config.queryParams)
+              pathParams <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField (config.pathParams)
+              queryParams <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField (config.queryParams)
+              requestHeaders <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField (config.requestHeaders)
+              responseHeaders <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField (config.responseHeaders)
+              responseBody <- B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField (config.responseBody)
+              requestBody <- B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField (config.responseBody)
               pure RequestMessages.RequestMessage {..}
       pure $ Right $ concat resp
 

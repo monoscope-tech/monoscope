@@ -158,7 +158,7 @@ reqChart reqChartTxt hxOob = do
 
 logItemRows :: Projects.ProjectId -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Text -> Html ()
 logItemRows pid requests cols nextLogsURL = do
-  requests & traverse_ \req -> do
+  requests & traverse_ \(req::RequestDumps.RequestDumpLogItem) -> do
     let logItemPath = RequestDumps.requestDumpLogItemUrlPath pid (req ^. #id)
     div_
       [ class_ "flex flex-row border-l-4 border-l-transparent divide-x space-x-4 hover:bg-blue-50 cursor-pointer",

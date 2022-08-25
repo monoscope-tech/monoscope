@@ -51,17 +51,17 @@ fieldDetailsView field formats = do
   section_ [class_ "space-y-6"] $ do
     div_ $ do
       h6_ [class_ "text-slate-700 text-xs"] "FIELD NAME"
-      h3_ [class_ "text-lg text-slate-800"] $ toHtml $ field ^. #key
+      h3_ [class_ "text-lg text-slate-800"] $ toHtml $ field.key
     div_ $ do
       h6_ [class_ "text-slate-700 text-xs"] "FIELD PATH"
-      h3_ [class_ "text-base text-slate-800 monospace"] $ toHtml $ field ^. #keyPath
+      h3_ [class_ "text-base text-slate-800 monospace"] $ toHtml $ field.keyPath
     div_ [class_ "flex flex-row gap-6"] $ do
       div_ $ do
         h6_ [class_ "text-slate-700 text-xs"] "FIELD CATEGORY"
-        h4_ [class_ "text-base text-slate-800"] $ fieldCategoryToDisplay $ field ^. #fieldCategory
+        h4_ [class_ "text-base text-slate-800"] $ fieldCategoryToDisplay $ field.fieldCategory
       div_ [class_ ""] $ do
         h6_ [class_ "text-slate-700 text-xs"] "FORMAT OVERRIDE"
-        h4_ [class_ "text-base text-slate-800"] $ toHtml $ fromMaybe "[unset]" (field ^. #fieldTypeOverride)
+        h4_ [class_ "text-base text-slate-800"] $ toHtml $ fromMaybe "[unset]" (field.fieldTypeOverride)
     div_ $ do
       h5_ [class_ "text-sm text-slate-800"] "DETECTED FIELD FORMATS AND TYPES"
       div_ [class_ "space-y-2"] $
@@ -70,27 +70,27 @@ fieldDetailsView field formats = do
             div_ [class_ "flex flex-row gap-9"] $ do
               div_ [class_ "space-y-2"] $ do
                 h6_ [class_ "text-slate-700 text-xs"] "TYPE"
-                h4_ [class_ "text-base text-slate-800"] $ EndpointComponents.fieldTypeToDisplay $ formatV ^. #fieldType
+                h4_ [class_ "text-base text-slate-800"] $ EndpointComponents.fieldTypeToDisplay $ formatV.fieldType
               div_ [class_ "mx-5 space-y-2"] $ do
                 h6_ [class_ "text-slate-700 text-xs"] "FORMAT"
-                h4_ [class_ "text-base text-slate-800"] $ toHtml $ formatV ^. #fieldFormat
+                h4_ [class_ "text-base text-slate-800"] $ toHtml $ formatV.fieldFormat
             h6_ [class_ "text-slate-600 mt-4 text-xs"] "EXAMPLE VALUES"
             ul_ [class_ "list-disc"] $ do
-              formatV ^. #examples & mapM_ \ex -> do
+              formatV.examples & mapM_ \ex -> do
                 li_ [class_ "ml-10 text-slate-800 text-sm"] $ toHtml $ aesonValueToText ex
     div_ [class_ "flex flex-row justify-between mt-10 "] $ do
       div_ [class_ " "] $ do
         h4_ [class_ "text-sm text-slate-700 mb-2"] "CREATION DATE"
         div_ [class_ "flex border border-gray-200 m-1 rounded-xl p-2"] $ do
           img_ [src_ "/assets/svgs/calender.svg", class_ "h-4 mr-2 w-4"]
-          span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" (field ^. #createdAt)
+          span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" (field.createdAt)
       div_ [class_ " "] $ do
         h4_ [class_ "text-sm text-slate-700 mb-2"] "LAST CHANGE"
         div_ [class_ "flex border border-gray-200 m-1 justify-between rounded-xl p-2"] $ do
           img_ [src_ "/assets/svgs/calender.svg", class_ "h-4 mr-2 w-4"]
-          span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" (field ^. #updatedAt)
+          span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" (field.updatedAt)
     h6_ [class_ "mt-5 text-sm text-slate-700 mb-2"] "DESCRIPTION"
-    p_ [class_ "text-slate-800 text-sm"] $ toHtml $ field ^. #description
+    p_ [class_ "text-slate-800 text-sm"] $ toHtml $ field.description
 
 aesonValueToText :: AE.Value -> Text
 aesonValueToText = toStrict . encodeToLazyText
@@ -104,19 +104,19 @@ endpointDetailsH sess pid eid = do
     withPool pool $ do
       endpoint <- Unsafe.fromJust <$> Endpoints.endpointRequestStatsByEndpoint eid
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      fieldsMap <- Fields.groupFieldsByCategory <$> Fields.selectFields (endpoint ^. #endpointHash)
-      reqsByStatsByMin <- RequestDumps.selectRequestsByStatusCodesStatByMin pid (endpoint ^. #urlPath) (endpoint ^. #method)
+      fieldsMap <- Fields.groupFieldsByCategory <$> Fields.selectFields (endpoint.endpointHash)
+      reqsByStatsByMin <- RequestDumps.selectRequestsByStatusCodesStatByMin pid (endpoint.urlPath) (endpoint.method)
 
-      let maxV = round (endpoint ^. #max) :: Int
+      let maxV = round (endpoint.max) :: Int
       let steps = (maxV `quot` 100) :: Int
       let steps' = if steps == 0 then 100 else steps
-      reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledBySteps maxV steps' pid (endpoint ^. #urlPath) (endpoint ^. #method)
+      reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledBySteps maxV steps' pid (endpoint.urlPath) (endpoint.method)
 
       let reqLatencyPercentileSteps =
-            ( round (endpoint ^. #max) `quot` steps' * steps',
-              round (endpoint ^. #p90) `quot` steps' * steps',
-              round (endpoint ^. #p75) `quot` steps' * steps',
-              round (endpoint ^. #p50) `quot` steps' * steps'
+            ( round (endpoint.max) `quot` steps' * steps',
+              round (endpoint.p90) `quot` steps' * steps',
+              round (endpoint.p75) `quot` steps' * steps',
+              round (endpoint.p50) `quot` steps' * steps'
             )
       let reqLatenciesRolledByStepsLabeled = Vector.toList reqLatenciesRolledBySteps & map \(x, y) -> RequestDumps.labelRequestLatency reqLatencyPercentileSteps (x, y)
       anomalies <- Anomalies.selectOngoingAnomaliesForEndpoint pid eid
@@ -140,8 +140,8 @@ endpointDetails endpoint fieldsM reqsByStatsByMinJ reqLatenciesRolledByStepsJ an
       div_ [class_ "flex flex-row justify-between mb-10"] $ do
         div_ [class_ "flex flex-row place-items-center text-lg font-medium"] $ do
           h3_ [class_ "text-lg text-slate-700"] $ do
-            span_ [class_ $ "p-1 endpoint endpoint-" <> toLower (endpoint ^. #method)] $ toHtml $ (endpoint ^. #method) <> " "
-            strong_ [class_ "inconsolata text-xl"] $ toHtml (endpoint ^. #urlPath)
+            span_ [class_ $ "p-1 endpoint endpoint-" <> toLower (endpoint.method)] $ toHtml $ (endpoint.method) <> " "
+            strong_ [class_ "inconsolata text-xl"] $ toHtml (endpoint.urlPath)
           img_ [src_ "/assets/svgs/cheveron-down.svg", class_ " h-4 w-4 m-2"]
         div_ [class_ "flex flex-row"] $ do
           a_ [href_ ""] $ do
@@ -252,14 +252,14 @@ endpointStats enpStats =
           div_ $ do
             span_ "Total Anomalies"
             div_ [class_ "inline-block flex flex-row items-baseline"] $ do
-              strong_ [class_ "text-xl"] $ toHtml @Text $ fmt $ commaizeF (enpStats ^. #ongoingAnomalies)
-              small_ $ toHtml @Text $ fmt ("/" +| commaizeF (enpStats ^. #ongoingAnomaliesProj))
+              strong_ [class_ "text-xl"] $ toHtml @Text $ fmt $ commaizeF (enpStats.ongoingAnomalies)
+              small_ $ toHtml @Text $ fmt ("/" +| commaizeF (enpStats.ongoingAnomaliesProj))
         div_ [class_ " row-span-1 col-span-1 card-round p-5 flex flex-row content-between "] $
           div_ $ do
             span_ "Total Requests"
             div_ [class_ "inline-block flex flex-row items-baseline"] $ do
-              strong_ [class_ "text-xl"] $ toHtml @Text $ fmt $ commaizeF (enpStats ^. #totalRequests)
-              small_ $ toHtml @Text $ fmt ("/" +| commaizeF (enpStats ^. #totalRequestsProj))
+              strong_ [class_ "text-xl"] $ toHtml @Text $ fmt $ commaizeF (enpStats.totalRequests)
+              small_ $ toHtml @Text $ fmt ("/" +| commaizeF (enpStats.totalRequestsProj))
 
       div_ [class_ "col-span-2 bg-white  border border-gray-100  row-span-2 rounded-2xl p-3"] $ do
         div_ [class_ "p-4"] $
@@ -277,13 +277,13 @@ endpointStats enpStats =
           div_ [class_ "flex-1 space-y-4 min-w-[20%]"] $ do
             strong_ [class_ "block text-right"] "Latency Percentiles"
             ul_ [class_ "space-y-1 divide-y divide-slate-100"] $ do
-              percentileRow "max" $ enpStats ^. #max
-              percentileRow "p99" $ enpStats ^. #p99
-              percentileRow "p95" $ enpStats ^. #p95
-              percentileRow "p90" $ enpStats ^. #p90
-              percentileRow "p75" $ enpStats ^. #p75
-              percentileRow "p50" $ enpStats ^. #p50
-              percentileRow "min" $ enpStats ^. #min
+              percentileRow "max" $ enpStats.max
+              percentileRow "p99" $ enpStats.p99
+              percentileRow "p95" $ enpStats.p95
+              percentileRow "p90" $ enpStats.p90
+              percentileRow "p75" $ enpStats.p75
+              percentileRow "p50" $ enpStats.p50
+              percentileRow "min" $ enpStats.min
 
 percentileRow :: Text -> Double -> Html ()
 percentileRow key p =
@@ -361,7 +361,7 @@ subSubSection title fieldsM =
                           else EndpointComponents.fieldTypeToDisplay Fields.FTObject
               Just field -> do
                 a_
-                  [ hxGet_ $ "/p/" <> Projects.projectIdText (field ^. #projectId) <> "/fields/" <> UUID.toText (Fields.unFieldId $ field ^. #id),
+                  [ hxGet_ $ "/p/" <> Projects.projectIdText (field.projectId) <> "/fields/" <> UUID.toText (Fields.unFieldId $ field.id),
                     hxTarget_ "#detailSidebar",
                     class_ "flex flex-row cursor-pointer",
                     style_ depthPadding,
@@ -372,7 +372,7 @@ subSubSection title fieldsM =
                     div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full items-center"] $ do
                       input_ [type_ "checkbox", class_ " mr-12"]
                       span_ [class_ "grow text-sm text-slate-700 inline-flex items-center"] $ toHtml displayKey
-                      span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ EndpointComponents.fieldTypeToDisplay $ field ^. #fieldType
+                      span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ EndpointComponents.fieldTypeToDisplay $ field.fieldType
                       img_ [src_ "/assets/svgs/alert-red.svg", class_ " mr-8 ml-4 h-5"]
                       img_ [src_ "/assets/svgs/dots-vertical.svg", class_ "mx-5 h-5"]
 
@@ -391,11 +391,11 @@ fieldsToNormalized =
   sortNub . concatMap \field ->
     map
       ((,Nothing) . fst)
-      ( field ^. #keyPath
+      ( field.keyPath
           & keyPathStrToKey
           & breakOnAll "."
       )
-      & (++ [(keyPathStrToKey $ field ^. #keyPath, Just field)])
+      & (++ [(keyPathStrToKey $ field.keyPath, Just field)])
   where
     rmvDotPrefix = T.dropWhile (== '.')
     -- listToUnicode: add « as a suffix to all lists, and as the key for it's child.

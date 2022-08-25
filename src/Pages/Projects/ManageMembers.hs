@@ -40,7 +40,7 @@ data ManageMembersForm = ManageMembersForm
 
 manageMembersPostH :: Sessions.PersistentSession -> Projects.ProjectId -> ManageMembersForm -> DashboardM (Headers '[HXTrigger] (Html ()))
 manageMembersPostH sess pid form = do
-  let currUserId = sess ^. #userId
+  let currUserId = sess.userId
   pool <- asks pool
   (project, projMembers) <- liftIO $
     withPool pool $ do
@@ -53,7 +53,7 @@ manageMembersPostH sess pid form = do
   -- Insert the new emails and permissions.
   -- Update the permissions only of the existing emails.
 
-  let usersAndPermissions = zip (form ^. #emails) (form ^. #permissions) & uniq
+  let usersAndPermissions = zip (form.emails) (form.permissions) & uniq
   let uAndPOldAndChanged =
         mapMaybe
           ( \(email, permission) -> do

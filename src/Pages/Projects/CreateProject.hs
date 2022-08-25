@@ -99,9 +99,9 @@ createProjectPostH sess createP = do
 processProjectPostForm :: Sessions.PersistentSession -> Valor.Valid CreateProjectForm -> DashboardM (Headers '[HXTrigger, HXRedirect] (Html ()))
 processProjectPostForm sess cpRaw = do
   let cp = Valor.unValid cpRaw
-  let currUserId = sess ^. #userId
+  let currUserId = sess.userId
   pid <- Projects.ProjectId <$> liftIO UUIDV4.nextRandom
-  let usersAndPermissions = zip (cp ^. #emails) (cp ^. #permissions) & uniq
+  let usersAndPermissions = zip (cp.emails) (cp.permissions) & uniq
   pool <- asks pool
 
   newProjectMembers <- liftIO $
@@ -117,7 +117,7 @@ processProjectPostForm sess cpRaw = do
           Just idX -> pure idX
 
       when (userId' /= currUserId) $ -- invite the users to the project (Usually as an email)
-        void $ withResource pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId' pid email (cp ^. #title)
+        void $ withResource pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId' pid email (cp.title)
 
       pure (email, permission, userId')
 
@@ -133,7 +133,7 @@ processProjectPostForm sess cpRaw = do
 
     withResource pool \conn ->
       createJob conn "background_jobs" $
-        BackgroundJobs.CreatedProjectSuccessfully currUserId pid (original $ sess ^. #user ^. #getUser ^. #email) (cp ^. #title)
+        BackgroundJobs.CreatedProjectSuccessfully currUserId pid (original $ sess.user.getUser.email) (cp.title)
 
   let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Created Project Successfully"]}|]
   pure $ addHeader hxTriggerData $ addHeader ("/p/" <> Projects.projectIdText pid) $ createProjectBody cp (def @CreateProjectFormError)

@@ -28,16 +28,16 @@ dashboardGetH sess pid = do
       projectRequestStats <- fromMaybe (def :: Projects.ProjectRequestStats) <$> Projects.projectRequestStatsByProject pid
       reqsByEndpoint <- RequestDumps.selectRequestsByEndpointsStatByMin pid
 
-      let maxV = round (projectRequestStats ^. #max) :: Int
+      let maxV = round (projectRequestStats.max) :: Int
       let steps' = (maxV `quot` 100) :: Int
       let steps = if steps' == 0 then 100 else steps'
       reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledByStepsForProject maxV steps pid
 
       let reqLatencyPercentileSteps =
-            ( (round (projectRequestStats ^. #max) `div` steps) * steps,
-              (round (projectRequestStats ^. #p90) `div` steps) * steps,
-              (round (projectRequestStats ^. #p75) `div` steps) * steps,
-              (round (projectRequestStats ^. #p50) `div` steps) * steps
+            ( (round (projectRequestStats.max) `div` steps) * steps,
+              (round (projectRequestStats.p90) `div` steps) * steps,
+              (round (projectRequestStats.p75) `div` steps) * steps,
+              (round (projectRequestStats.p50) `div` steps) * steps
             )
 
       let reqLatenciesRolledByStepsLabeled = Vector.toList reqLatenciesRolledBySteps & map \(x, y) -> RequestDumps.labelRequestLatency reqLatencyPercentileSteps (x, y)
@@ -104,31 +104,31 @@ dStats projReqStats reqsByEndpointJ = do
             div_ [class_ "flex flex-col justify-center"] $ do
               span_ "Total Requests"
               div_ [class_ "inline-block flex flex-row content-between"] $ do
-                strong_ [class_ "text-xl"] $ toHtml @Text $ show (projReqStats ^. #totalRequests)
+                strong_ [class_ "text-xl"] $ toHtml @Text $ show (projReqStats.totalRequests)
 
           div_ [class_ "col-span-1 card-round p-5 flex flex-row content-between "] $ do
             div_ $ do
               span_ "Total Anomalies"
               div_ [class_ "inline-block flex flex-row content-between"] $ do
-                strong_ [class_ "text-xl"] $ toHtml @Text $ show (projReqStats ^. #totalAnomalies)
+                strong_ [class_ "text-xl"] $ toHtml @Text $ show (projReqStats.totalAnomalies)
 
           div_ [class_ "col-span-1 card-round p-5 flex flex-row content-between "] $ do
             div_ $ do
               span_ "Managed Endpoints"
               div_ [class_ "inline-block flex flex-row content-between"] $ do
-                strong_ [class_ "text-xl"] $ toHtml @Text $ show (projReqStats ^. #totalEndpoints)
+                strong_ [class_ "text-xl"] $ toHtml @Text $ show (projReqStats.totalEndpoints)
 
           div_ [class_ "col-span-1 card-round p-5 flex flex-row content-between "] $ do
             div_ $ do
               span_ "Total shapes"
               div_ [class_ "inline-block flex flex-row content-between"] $ do
-                strong_ [class_ "text-xl"] $ toHtml @Text $ show (projReqStats ^. #totalShapes)
+                strong_ [class_ "text-xl"] $ toHtml @Text $ show (projReqStats.totalShapes)
 
           div_ [class_ "col-span-1 card-round p-5 flex flex-row content-between "] $ do
             div_ $ do
               span_ "Total Fields"
               div_ [class_ "inline-block flex flex-row content-between"] $ do
-                strong_ [class_ "text-xl"] $ toHtml @Text $ show (projReqStats ^. #totalFields)
+                strong_ [class_ "text-xl"] $ toHtml @Text $ show (projReqStats.totalFields)
 
         div_ [class_ "flex-1 grow bg-white  border border-gray-100  row-span-2 rounded-2xl p-3"] $ do
           div_ [class_ "p-4"] $ do
@@ -179,13 +179,13 @@ dStats projReqStats reqsByEndpointJ = do
           div_ [class_ "flex-1 space-y-4 min-w-[20%]"] $ do
             span_ [class_ "block text-right text-lg"] "Latency Percentiles"
             ul_ [class_ "space-y-1 divide-y divide-slate-100"] $ do
-              percentileRow "max" $ projReqStats ^. #max
-              percentileRow "p99" $ projReqStats ^. #p99
-              percentileRow "p95" $ projReqStats ^. #p95
-              percentileRow "p90" $ projReqStats ^. #p90
-              percentileRow "p75" $ projReqStats ^. #p75
-              percentileRow "p50" $ projReqStats ^. #p50
-              percentileRow "min" $ projReqStats ^. #min
+              percentileRow "max" $ projReqStats.max
+              percentileRow "p99" $ projReqStats.p99
+              percentileRow "p95" $ projReqStats.p95
+              percentileRow "p90" $ projReqStats.p90
+              percentileRow "p75" $ projReqStats.p75
+              percentileRow "p50" $ projReqStats.p50
+              percentileRow "min" $ projReqStats.min
 
 percentileRow :: Text -> Double -> Html ()
 percentileRow key p = do

@@ -200,5 +200,5 @@ groupFieldsByCategory :: Vector Field -> Map FieldCategoryEnum [Field]
 groupFieldsByCategory fields = Relude.fromList fieldGroupTupple
   where
     fields' = Vector.toList fields
-    fieldGroup = groupBy (\f1 f2 -> f1 ^. #fieldCategory == f2 ^. #fieldCategory) fields'
-    fieldGroupTupple = map (\f -> ((f !! 0) ^. #fieldCategory, f)) fieldGroup
+    fieldGroup = groupBy (\f1 f2 -> f1.fieldCategory == f2.fieldCategory) fields'
+    fieldGroupTupple = map (\f -> ((f !! 0).fieldCategory, f)) fieldGroup

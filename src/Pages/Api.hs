@@ -34,7 +34,7 @@ apiPostH sess pid apiKeyForm = do
   pool <- asks pool
   env <- asks env
   projectKeyUUID <- liftIO UUIDV4.nextRandom
-  let encryptedKey = ProjectApiKeys.encryptAPIKey (encodeUtf8 $ env ^. #apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
+  let encryptedKey = ProjectApiKeys.encryptAPIKey (encodeUtf8 $ env.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
   let encryptedKeyB64 = B64.encodeBase64 encryptedKey
   let keyPrefix = T.take 8 encryptedKeyB64
 
@@ -163,8 +163,8 @@ mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] $ do
             tbody_ [class_ "bg-white divide-y divide-gray-200"] $ do
               apiKeys & mapM_ \apiKey -> do
                 tr_ $ do
-                  td_ [class_ "px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900"] $ toHtml $ apiKey ^. #title
-                  td_ [class_ "px-6 py-4 whitespace-nowrap text-sm text-gray-500"] $ toHtml $ apiKey ^. #keyPrefix <> "**********"
+                  td_ [class_ "px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900"] $ toHtml $ apiKey.title
+                  td_ [class_ "px-6 py-4 whitespace-nowrap text-sm text-gray-500"] $ toHtml $ apiKey.keyPrefix <> "**********"
                   td_ [class_ "px-6 py-4 whitespace-nowrap text-right text-sm font-medium"] $ do
                     a_ [class_ "text-indigo-600 hover:text-indigo-900", href_ $ "/p/" <> Projects.projectIdText pid <> "/api/id/delete"] $ do
                       img_ [src_ "/assets/svgs/revoke.svg", class_ "h-3 w-3 mr-2 inline-block"]

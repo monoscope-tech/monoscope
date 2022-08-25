@@ -65,14 +65,14 @@ insertShapeQueryAndParam shape@Shape {projectId} = (q, params)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING; 
           |]
     params =
-      [ MkDBField $ shape ^. #projectId,
-        MkDBField $ shape ^. #endpointHash,
-        MkDBField $ shape ^. #queryParamsKeypaths,
-        MkDBField $ shape ^. #requestBodyKeypaths,
-        MkDBField $ shape ^. #responseBodyKeypaths,
-        MkDBField $ shape ^. #requestHeadersKeypaths,
-        MkDBField $ shape ^. #responseHeadersKeypaths,
-        MkDBField $ shape ^. #hash
+      [ MkDBField $ shape.projectId,
+        MkDBField $ shape.endpointHash,
+        MkDBField $ shape.queryParamsKeypaths,
+        MkDBField $ shape.requestBodyKeypaths,
+        MkDBField $ shape.responseBodyKeypaths,
+        MkDBField $ shape.requestHeadersKeypaths,
+        MkDBField $ shape.responseHeadersKeypaths,
+        MkDBField $ shape.hash
       ]
 
 insertShape :: Shape -> DBT IO ()
@@ -85,11 +85,11 @@ insertShape shape = void $ execute Insert q options
             VALUES (?, ?, ?, ?, ?, ?, ?) 
           |]
     options =
-      ( shape ^. #projectId,
-        shape ^. #endpointHash,
-        shape ^. #queryParamsKeypaths,
-        shape ^. #requestBodyKeypaths,
-        shape ^. #responseBodyKeypaths,
-        shape ^. #requestHeadersKeypaths,
-        shape ^. #responseHeadersKeypaths
+      ( shape.projectId,
+        shape.endpointHash,
+        shape.queryParamsKeypaths,
+        shape.requestBodyKeypaths,
+        shape.responseBodyKeypaths,
+        shape.requestHeadersKeypaths,
+        shape.responseHeadersKeypaths
       )
