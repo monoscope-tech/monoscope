@@ -27,12 +27,11 @@ import Data.Time (CalendarDiffTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, queryOne)
-import Database.PostgreSQL.Transact (executeMany)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (Query (Query))
-import Database.PostgreSQL.Transact (DBT)
+import Database.PostgreSQL.Transact (DBT, executeMany)
 import Deriving.Aeson qualified as DAE
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
@@ -144,10 +143,10 @@ selectRequestDumpsByProjectForChart pid extraQuery = do
       [text| SELECT COALESCE(NULLIF(json_agg(json_build_array(timeB, count))::text, '[null]'), '[]')::text from (SELECT time_bucket('1 minute', created_at) as timeB,count(*) 
                FROM apis.request_dumps where project_id=? $extraQueryParsed  GROUP BY timeB) ts|]
 
-bulkInsertRequestDumps :: [RequestDump] -> DBT IO Int64 
-bulkInsertRequestDumps = executeMany q 
-    where q = [sql| INSERT INTO apis.request_dumps VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?); |]
-
+bulkInsertRequestDumps :: [RequestDump] -> DBT IO Int64
+bulkInsertRequestDumps = executeMany q
+  where
+    q = [sql| INSERT INTO apis.request_dumps VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?); |]
 
 selectRequestDumpByProjectAndId :: Projects.ProjectId -> UUID.UUID -> DBT IO (Maybe RequestDumpLogItem)
 selectRequestDumpByProjectAndId pid rdId = queryOne Select q (pid, rdId)

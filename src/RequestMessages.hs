@@ -185,8 +185,9 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
   -- At the moment, if an endpoint exists, we don't insert it anymore. But then how do we deal with requests from new hosts?
   let urlParams = AET.emptyObject
   let (endpointQ, endpointP) =
-        if endpointHash `elem` (pjc.endpointHashes) -- We have the endpoint cache in our db already. Skill adding
-          then ("", [])
+        if endpointHash `elem` (pjc.endpointHashes)
+          then -- We have the endpoint cache in our db already. Skill adding
+            ("", [])
           else Endpoints.upsertEndpointQueryAndParam $ buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash
 
   let (shapeQ, shapeP) =
@@ -276,6 +277,7 @@ normalizeUrlPath GoBuiltIn urlPath = urlPath
 normalizeUrlPath PhpLaravel urlPath = urlPath
 normalizeUrlPath JsExpress urlPath = urlPath
 normalizeUrlPath JavaSpringBoot urlPath = urlPath
+normalizeUrlPath JsNest urlPath = urlPath
 
 -- | valueToFields takes an aeson object and converts it into a list of paths to
 -- each primitive value in the json and the values.

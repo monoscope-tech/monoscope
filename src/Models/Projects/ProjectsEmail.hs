@@ -19,8 +19,6 @@ import Relude.Unsafe qualified as Unsafe
 class ToText a where
   toText :: Maybe a -> T.Text
 
-instance TC.ToText (IO (Maybe String))
-
 sendGridApiKey :: IO ApiKey
 sendGridApiKey = do
   -- FIXME: We shoul load all env variables via the Config package like the other envs

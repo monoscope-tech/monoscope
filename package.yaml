@@ -57,6 +57,8 @@ default-extensions:
   - TypeOperators
   - UndecidableInstances
   - OverloadedRecordDot
+  # - OverloadedRecordUpdate
+  # - RebindableSyntax
 
 
 extra-source-files:

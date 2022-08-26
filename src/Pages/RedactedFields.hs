@@ -16,7 +16,6 @@ import Lucid.Hyperscript
 import Models.Projects.Projects qualified as Projects
 import Models.Projects.RedactedFields qualified as RedactedFields
 import Models.Users.Sessions qualified as Sessions
-import Optics.Core ((^.))
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
 import Servant (Headers, addHeader)

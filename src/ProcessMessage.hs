@@ -117,7 +117,7 @@ processMessages' logger' _ conn' msgs projectCache' = do
   let query' = mconcat queries
   let params' = concat params
 
-  lefts processed & mapM_ \err -> logger' <& "error with processing request dump to queries; " <> show err 
+  lefts processed & mapM_ \err -> logger' <& "ERROR: with processing request dump to queries; " <> show err 
 
   afterProccessing <- getTime Monotonic
 

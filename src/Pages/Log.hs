@@ -2,6 +2,7 @@ module Pages.Log (apiLog, apiLogItem) where
 
 import Config
 import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as AEK
 import Data.Default (def)
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
@@ -22,7 +23,6 @@ import NeatInterpolation (text)
 import Optics.Core ((^.))
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Relude
-import Data.Aeson.KeyMap qualified as AEK
 import Witch (from)
 
 -- $setup
@@ -72,9 +72,7 @@ apiLogItem :: Sessions.PersistentSession -> Projects.ProjectId -> UUID.UUID -> D
 apiLogItem sess pid rdId = do
   pool <- asks pool
   logItemM <- liftIO $ withPool pool $ RequestDumps.selectRequestDumpByProjectAndId pid rdId
-  case logItemM of
-    Just logItem -> pure $ apiLogItemView logItem
-    Nothing -> pure $ div_ "invalid log request ID"
+  pure $ maybe (div_ "invalid log request ID") (apiLogItemView) logItemM
 
 apiLogsPage :: Projects.ProjectId -> Int -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Text -> Text -> Text -> Html ()
 apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL = do
@@ -158,7 +156,7 @@ reqChart reqChartTxt hxOob = do
 
 logItemRows :: Projects.ProjectId -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Text -> Html ()
 logItemRows pid requests cols nextLogsURL = do
-  requests & traverse_ \(req::RequestDumps.RequestDumpLogItem) -> do
+  requests & traverse_ \req -> do
     let logItemPath = RequestDumps.requestDumpLogItemUrlPath pid (req ^. #id)
     div_
       [ class_ "flex flex-row border-l-4 border-l-transparent divide-x space-x-4 hover:bg-blue-50 cursor-pointer",
@@ -217,7 +215,8 @@ jsonValueToHtmlTree val = jsonValueToHtmlTree' ("", "", val)
         [ class_ "relative log-item-field-parent",
           term "data-field-path" fullFieldPath'
         ]
-        $ a_ [class_ "block hover:bg-blue-50 cursor-pointer pl-6 relative log-item-field-anchor ", [__|install LogItemMenuable|]] $ do
+        $ a_ [class_ "block hover:bg-blue-50 cursor-pointer pl-6 relative log-item-field-anchor ", [__|install LogItemMenuable|]]
+        $ do
           span_ $ toHtml key
           span_ [class_ "text-blue-800"] ":"
           span_ [class_ "text-blue-800 ml-2.5 log-item-field-value"] $ toHtml $ unwrapJsonPrimValue value

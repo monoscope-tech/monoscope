@@ -17,7 +17,6 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact (DBT)
 import Deriving.Aeson qualified as DAE
 import Models.Projects.Projects qualified as Projects
-import Optics.Core ((^.))
 import Optics.TH
 import Relude
 import Utils (DBField (MkDBField))
@@ -53,10 +52,10 @@ data Shape = Shape
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "fields", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Shape)
   deriving (FromField) via Aeson Shape
 
-makeFieldLabelsNoPrefix ''Shape
+Optics.TH.makeFieldLabelsNoPrefix ''Shape
 
 insertShapeQueryAndParam :: Shape -> (Query, [DBField])
-insertShapeQueryAndParam shape@Shape {projectId} = (q, params)
+insertShapeQueryAndParam shape = (q, params)
   where
     q =
       [sql| 

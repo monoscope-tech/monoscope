@@ -14,7 +14,6 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
-import Optics.Core ((^.))
 import Pages.Anomalies.AnomalyList qualified as AnomaliesList
 import Pages.BodyWrapper
 import Relude

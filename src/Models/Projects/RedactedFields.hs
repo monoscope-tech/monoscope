@@ -1,5 +1,4 @@
 {-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE TemplateHaskell #-}
 
 module Models.Projects.RedactedFields (RedactedField (..), RedactedFieldId (..), ConfiguredVia (..), redactField, redactedFieldById, redactedFieldsByProject) where
 

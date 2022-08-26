@@ -36,7 +36,6 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact qualified as PgT
 import Deriving.Aeson qualified as DAE
 import Models.Projects.Projects qualified as Projects
-import Optics.Operators ((^.))
 import Optics.TH (makeFieldLabelsNoPrefix)
 import Relude
 import Utils (DBField (MkDBField))
@@ -74,7 +73,7 @@ makeFieldLabelsNoPrefix ''Endpoint
 
 -- | endpointToUrlPath builds an apitoolkit path link to the endpoint details page of that endpoint.
 endpointToUrlPath :: Endpoint -> Text
-endpointToUrlPath enp = endpointUrlPath (enp ^. #projectId) (enp ^. #id)
+endpointToUrlPath enp = endpointUrlPath (enp.projectId) (enp.id)
 
 endpointUrlPath :: Projects.ProjectId -> EndpointId -> Text
 endpointUrlPath pid eid = "/p/" <> Projects.projectIdText pid <> "/endpoints/" <> endpointIdText eid
@@ -82,7 +81,7 @@ endpointUrlPath pid eid = "/p/" <> Projects.projectIdText pid <> "/endpoints/" <
 upsertEndpointQueryAndParam :: Endpoint -> (Query, [DBField])
 upsertEndpointQueryAndParam endpoint = (q, params)
   where
-    host = fromMaybe @Text "" ((endpoint ^. #hosts) Vector.!? 0) -- Read the first item from head or default to empty string
+    host = fromMaybe @Text "" ((endpoint.hosts) Vector.!? 0) -- Read the first item from head or default to empty string
     q =
       [sql|  
           INSERT INTO apis.endpoints (project_id, url_path, url_params, method, hosts, hash)
@@ -92,12 +91,12 @@ upsertEndpointQueryAndParam endpoint = (q, params)
              UPDATE SET hosts=endpoints.hosts||hstore(?, null); 
       |]
     params =
-      [ MkDBField $ endpoint ^. #projectId,
-        MkDBField $ endpoint ^. #urlPath,
-        MkDBField $ endpoint ^. #urlParams,
-        MkDBField $ endpoint ^. #method,
+      [ MkDBField endpoint.projectId,
+        MkDBField endpoint.urlPath,
+        MkDBField endpoint.urlParams,
+        MkDBField endpoint.method,
         MkDBField host,
-        MkDBField $ endpoint ^. #hash,
+        MkDBField endpoint.hash,
         MkDBField host
       ]
 
@@ -106,7 +105,7 @@ upsertEndpointQueryAndParam endpoint = (q, params)
 upsertEndpoints :: Endpoint -> PgT.DBT IO (Maybe EndpointId)
 upsertEndpoints endpoint = queryOne Insert q options
   where
-    host = fromMaybe "" ((endpoint ^. #hosts) Vector.!? 0) -- Read the first item from head or default to empty string
+    host = fromMaybe "" ((endpoint.hosts) Vector.!? 0) -- Read the first item from head or default to empty string
     q =
       [sql|  
         with e as (
@@ -123,15 +122,15 @@ upsertEndpoints endpoint = queryOne Insert q options
           SELECT id FROM apis.endpoints WHERE project_id=? AND url_path=? AND method=?;
       |]
     options =
-      ( endpoint ^. #projectId,
-        endpoint ^. #urlPath,
-        endpoint ^. #urlParams,
-        endpoint ^. #method,
+      ( endpoint.projectId,
+        endpoint.urlPath,
+        endpoint.urlParams,
+        endpoint.method,
         host,
         host,
-        endpoint ^. #projectId,
-        endpoint ^. #urlPath,
-        endpoint ^. #method
+        endpoint.projectId,
+        endpoint.urlPath,
+        endpoint.method
       )
 
 -- Based of a view which is generated every 5minutes.

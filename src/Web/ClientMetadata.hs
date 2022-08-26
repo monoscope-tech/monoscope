@@ -51,12 +51,12 @@ clientMetadataH authTextM = do
                   case pApiKeyM of
                     Nothing -> error "no api key with given id"
                     Just pApiKey -> do
-                      project <- Projects.projectById $ pApiKey ^. #projectId
+                      project <- Projects.projectById $ pApiKey.projectId
                       pure (pApiKey, project)
 
               pure $
                 ClientMetadata
-                  { projectId = pApiKey ^. #projectId,
+                  { projectId = pApiKey.projectId,
                     pubsubProjectId = "past-3",
                     topicId = (env ^. #requestPubsubTopics) !! 0, -- apitoolkit-prod-default
                     pubsubPushServiceAccount = apitoolkitPusherServiceAccount

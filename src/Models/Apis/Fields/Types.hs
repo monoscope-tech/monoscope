@@ -27,7 +27,6 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
 import Deriving.Aeson qualified as DAE
 import Models.Projects.Projects qualified as Projects
-import Optics.Operators
 import Optics.TH
 import Relude
 import Relude.Unsafe ((!!))

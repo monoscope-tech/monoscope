@@ -9,8 +9,6 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import NeatInterpolation
-import Optics.Operators ((^.))
-import Relude
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu ppid =
@@ -38,7 +36,7 @@ bodyWrapper BWConfig {sessM, currProject, pageTitle, menuItem} child =
     Nothing -> child
     Just sess -> do
       let currUser = Sessions.getUser (Sessions.user sess)
-          sideNav' = currProject & maybe  "" \project-> sideNav sess project pageTitle menuItem
+          sideNav' = currProject & maybe "" \project -> sideNav sess project pageTitle menuItem
 
       doctypehtml_ $ do
         head_ $ do
@@ -109,7 +107,7 @@ bodyWrapper BWConfig {sessM, currProject, pageTitle, menuItem} child =
 
 projectsDropDown :: Projects.Project -> Vector.Vector Projects.Project -> Html ()
 projectsDropDown currProject projects = do
-  let pidTxt = Projects.projectIdText $currProject.id
+  let pidTxt = Projects.projectIdText $ currProject.id
   div_
     [ term "data-menu" "true",
       class_ "hidden origin-top-right z-40 transition transform bg-white p-4 absolute w-[20rem] rounded-2xl shadow-2xl shadow-indigo-200",
@@ -250,7 +248,7 @@ navbar currUser = do
           span_ [class_ "inline-block"] $ toHtml $ currUser.firstName <> " " <> currUser.lastName
           img_ [class_ "w-4 h-4 inline-block", src_ "/assets/svgs/down_caret.svg"]
 
-      --logout dropdown
+      -- logout dropdown
       div_
         [ term "drop-menu" "true",
           class_ "hidden origin-top-left border border-gray-100 w-[10rem] rounded-lg shadow-2xl shadow-indigo-200 z-40 transition transform bg-white p-1 absolute top-14 right-5 ",

@@ -153,7 +153,8 @@ renderAnomaly hideByDefault anomaly = do
               [ class_ "text-blue-800 inline-block monospace pb-3 pt-1",
                 href_ $ Endpoints.endpointUrlPath (anomaly.projectId) (Unsafe.fromJust $ anomaly.endpointId)
               ]
-              $ toHtml $ fromMaybe "" (anomaly.endpointMethod) <> "  " <> fromMaybe "" (anomaly.endpointUrlPath)
+              $ toHtml
+              $ fromMaybe "" (anomaly.endpointMethod) <> "  " <> fromMaybe "" (anomaly.endpointUrlPath)
           case anomaly.anomalyType of
             Anomalies.ATShape -> do
               div_ $ do
@@ -161,12 +162,13 @@ renderAnomaly hideByDefault anomaly = do
                 a_
                   [ class_ "text-blue-800 inline-block px-2"
                   ]
-                  $ toHtml $ "`" <> maybe "" Shapes.shapeIdText (anomaly.shapeId) <> "`"
+                  $ toHtml
+                  $ "`" <> maybe "" Shapes.shapeIdText (anomaly.shapeId) <> "`"
             Anomalies.ATEndpoint -> ""
             Anomalies.ATFormat -> do
               div_ $ do
                 small_ "field_path: "
-                span_  [class_ "monospace inline-block background-slate-50 p-1"]$ toHtml $ fromMaybe "" (anomaly.fieldKeyPath)
+                span_ [class_ "monospace inline-block background-slate-50 p-1"] $ toHtml $ fromMaybe "" (anomaly.fieldKeyPath)
               div_ $ do
                 small_ "type: "
                 maybe "" EndpointComponents.fieldTypeToDisplay (anomaly.formatType)
