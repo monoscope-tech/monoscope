@@ -8,34 +8,28 @@ import Colog.Core (LogAction (..), (<&))
 import Config qualified
 import Control.Lens ((^?), _Just)
 import Control.Lens qualified as L
-import Gogol.PubSub.Types (ReceivedMessage(message), PubsubMessage(data'))
-import Gogol.Data.Base64 (_Base64)
-import Data.Generics.Product (field)
 import Control.Monad.Trans.Except
 import Control.Monad.Trans.Except.Extra (handleIOExceptT)
 import Data.Aeson (eitherDecode)
-import Data.ByteString.Base64 qualified as B64
 import Data.Cache qualified as Cache
+import Data.Generics.Product (field)
 import Data.List (unzip4)
 import Data.Pool (Pool)
 import Data.Time.LocalTime (getZonedTime)
 import Data.UUID.V4 (nextRandom)
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (Connection, Query)
-import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Transact (execute, executeMany)
+import Database.PostgreSQL.Transact (execute)
 import Formatting
 import Formatting.Clock
+import Gogol.Data.Base64 (_Base64)
+import Gogol.PubSub qualified as PubSub
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
-import Gogol.PubSub qualified as PubSub
-import Optics.Core ((^.))
 import Relude hiding (hoistMaybe)
-import Relude.Unsafe (fromJust)
 import RequestMessages qualified
 import System.Clock
 import Utils (DBField, eitherStrToText)
-import Control.Error.Util
 
 {--
   Exploring how the inmemory cache could be shaped for performance, and low footprint ability to skip hitting the postgres database when not needed.
@@ -98,13 +92,12 @@ import Control.Error.Util
  --}
 processMessages :: LogAction IO String -> Config.EnvConfig -> Pool Connection -> [PubSub.ReceivedMessage] -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> IO [Maybe Text]
 processMessages logger' env conn' msgs projectCache = do
-
   let msgs' =
         msgs & map \msg -> do
           let rmMsg = msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64
-          let jsonByteStr = fromMaybe "{}" rmMsg 
+          let jsonByteStr = fromMaybe "{}" rmMsg
           recMsg <- eitherStrToText $ eitherDecode (fromStrict jsonByteStr)
-          Right (msg L.^. field @"ackId", recMsg)
+          Right (msg.ackId, recMsg)
   if null msgs'
     then pure []
     else processMessages' logger' env conn' msgs' projectCache
@@ -117,7 +110,7 @@ processMessages' logger' _ conn' msgs projectCache' = do
   let query' = mconcat queries
   let params' = concat params
 
-  lefts processed & mapM_ \err -> logger' <& "ERROR: with processing request dump to queries; " <> show err 
+  lefts processed & mapM_ \err -> logger' <& "ERROR: with processing request dump to queries; " <> show err
 
   afterProccessing <- getTime Monotonic
 
@@ -129,7 +122,7 @@ processMessages' logger' _ conn' msgs projectCache' = do
           _ <- execute query' params'
           pass
         unless (null reqDumps) $ do
-          _ <- RequestDumps.bulkInsertRequestDumps reqDumps 
+          _ <- RequestDumps.bulkInsertRequestDumps reqDumps
           pass
 
   endTime <- getTime Monotonic
@@ -142,7 +135,6 @@ processMessages' logger' _ conn' msgs projectCache' = do
       logger' <& "error running generated request message based insert queries" <> toString err
       pure []
     Right _ -> pure rmAckIds
-
   where
     projectCacheDefault :: Projects.ProjectCache
     projectCacheDefault = Projects.ProjectCache {hosts = [], endpointHashes = [], shapeHashes = [], redactFieldslist = []}
