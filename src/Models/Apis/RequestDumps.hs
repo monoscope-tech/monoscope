@@ -23,7 +23,8 @@ where
 import Data.Aeson (KeyValue ((.=)), ToJSON, object)
 import Data.Aeson qualified as AE
 import Data.Default.Instances ()
-import Data.Time (CalendarDiffTime, ZonedTime)
+import Data.Time (CalendarDiffTime, ZonedTime, defaultTimeLocale, formatTime)
+import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, queryOne)
@@ -39,6 +40,7 @@ import Optics.TH
 import Pkg.Parser
 import Relude hiding (many, some)
 import Utils ()
+import Witch (from)
 
 -- request dumps are time series dumps representing each requests which we consume from our users.
 -- We use this field via the log explorer for exploring and searching traffic. And at the moment also use it for most time series analytics.
@@ -108,8 +110,8 @@ data RequestDumpLogItem = RequestDumpLogItem
 
 makeFieldLabelsNoPrefix ''RequestDumpLogItem
 
-requestDumpLogItemUrlPath :: Projects.ProjectId -> UUID.UUID -> Text
-requestDumpLogItemUrlPath pid rdId = "/p/" <> Projects.projectIdText pid <> "/log_explorer/" <> UUID.toText rdId
+requestDumpLogItemUrlPath :: Projects.ProjectId -> RequestDumpLogItem -> Text
+requestDumpLogItemUrlPath pid rd = "/p/" <> Projects.projectIdText pid <> "/log_explorer/" <> UUID.toText rd.id <> "/" <> from @String (formatShow iso8601Format rd.createdAt)
 
 requestDumpLogUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Text
 requestDumpLogUrlPath pid q cols fromM = [text|/p/$pidT/log_explorer?query=$queryT&cols=$colsT&from=$fromT|]
@@ -148,15 +150,15 @@ bulkInsertRequestDumps = executeMany q
   where
     q = [sql| INSERT INTO apis.request_dumps VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?); |]
 
-selectRequestDumpByProjectAndId :: Projects.ProjectId -> UUID.UUID -> DBT IO (Maybe RequestDumpLogItem)
-selectRequestDumpByProjectAndId pid rdId = queryOne Select q (pid, rdId)
+selectRequestDumpByProjectAndId :: Projects.ProjectId -> ZonedTime -> UUID.UUID -> DBT IO (Maybe RequestDumpLogItem)
+selectRequestDumpByProjectAndId pid createdAt rdId = queryOne Select q (createdAt, pid, rdId)
   where
     q =
       [sql|SELECT   id,created_at,host,url_path,method,raw_url,referer,
                     path_params,status_code,query_params,
                     request_body,response_body,request_headers,response_headers,
-                    count(*) OVER() AS full_count
-             FROM apis.request_dumps where project_id=? and id=?|]
+                    0 AS full_count
+             FROM apis.request_dumps where created_at=? and project_id=? and id=? LIMIT 1|]
 
 selectRequestsByStatusCodesStatByMin :: Projects.ProjectId -> Text -> Text -> DBT IO (Vector (ZonedTime, Text, Int))
 selectRequestsByStatusCodesStatByMin pid urlPath method = query Select q (pid, urlPath, method)

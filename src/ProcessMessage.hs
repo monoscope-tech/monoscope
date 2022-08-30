@@ -7,8 +7,7 @@ where
 import Colog.Core (LogAction (..), (<&))
 import Config qualified
 import Control.Lens ((^?), _Just)
-import Control.Lens qualified as L
-import Control.Monad.Trans.Except
+import Control.Monad.Trans.Except (except)
 import Control.Monad.Trans.Except.Extra (handleIOExceptT)
 import Data.Aeson (eitherDecode)
 import Data.Cache qualified as Cache

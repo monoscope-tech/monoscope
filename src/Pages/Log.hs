@@ -6,12 +6,15 @@ import Data.Aeson.KeyMap qualified as AEK
 import Data.Default (def)
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
-import Data.Time (defaultTimeLocale)
+import Data.Time (ZonedTime, defaultTimeLocale)
 import Data.Time.Format (formatTime)
+import Data.Time.Format.ISO8601
 import Data.UUID qualified as UUID
 import Data.Vector (Vector, iforM_, (!?))
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
+import Formatting hiding (text)
+import Formatting.Clock
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
@@ -23,6 +26,7 @@ import NeatInterpolation (text)
 import Optics.Core ((^.))
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Relude
+import System.Clock
 import Witch (from)
 
 -- $setup
@@ -68,11 +72,20 @@ apiLog sess pid queryM cols' fromM hxRequestM hxBoostedM = do
       let resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing
       pure $ bodyWrapper bwconf $ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL
 
-apiLogItem :: Sessions.PersistentSession -> Projects.ProjectId -> UUID.UUID -> DashboardM (Html ())
-apiLogItem sess pid rdId = do
+apiLogItem :: Sessions.PersistentSession -> Projects.ProjectId -> UUID.UUID -> ZonedTime -> DashboardM (Html ())
+apiLogItem sess pid rdId createdAt = do
   pool <- asks pool
-  logItemM <- liftIO $ withPool pool $ RequestDumps.selectRequestDumpByProjectAndId pid rdId
-  pure $ maybe (div_ "invalid log request ID") (apiLogItemView) logItemM
+
+  startTime <- liftIO $ getTime Monotonic
+  logItemM <- liftIO $ withPool pool $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
+  afterProccessing <- liftIO $ getTime Monotonic
+  let content = maybe (div_ "invalid log request ID") apiLogItemView logItemM
+  endTime <- liftIO $ getTime Monotonic
+
+  liftIO $ fprint (timeSpecs % " APILOG Item  DB Time \n") startTime afterProccessing
+  liftIO $ fprint (timeSpecs % " APILOG Item  Processing time \n") afterProccessing endTime
+  liftIO $ fprint (timeSpecs % " APILOG Item  Total Time\n") startTime endTime
+  pure content
 
 apiLogsPage :: Projects.ProjectId -> Int -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Text -> Text -> Text -> Html ()
 apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL = do
@@ -157,7 +170,7 @@ reqChart reqChartTxt hxOob = do
 logItemRows :: Projects.ProjectId -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Text -> Html ()
 logItemRows pid requests cols nextLogsURL = do
   requests & traverse_ \req -> do
-    let logItemPath = RequestDumps.requestDumpLogItemUrlPath pid (req ^. #id)
+    let logItemPath = RequestDumps.requestDumpLogItemUrlPath pid req
     div_
       [ class_ "flex flex-row border-l-4 border-l-transparent divide-x space-x-4 hover:bg-blue-50 cursor-pointer",
         term "data-log-item-path" logItemPath,
@@ -303,9 +316,9 @@ jsonTreeAuxillaryCode pid = do
             remove next <.log-item-info/> then 
             remove .expanded-log from me
           else
+            add .expanded-log to me
             fetch `$${@data-log-item-path}` as html then put it after me then
             _hyperscript.processNode(next <.log-item-info />) then
-            add .expanded-log to me
           end 
       end
     |]

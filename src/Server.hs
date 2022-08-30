@@ -6,6 +6,7 @@ import Colog (LogAction)
 import Config (DashboardM, ctxToHandler)
 import Config qualified
 import Data.Pool (Pool)
+import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import DataSeeding qualified
 import Database.PostgreSQL.Simple (Connection)
@@ -58,7 +59,7 @@ type ProtectedAPI =
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "manual_ingest" :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "manual_ingest" :> ReqBody '[FormUrlEncoded] ManualIngestion.RequestMessageForm :> Post '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "log_explorer" :> QueryParam "query" Text :> QueryParam "cols" Text :> QueryParam "from" Text :> HXRequest :> HXBoosted :> Get '[HTML] (Html ())
-    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "log_explorer" :> Capture "logItemID" UUID.UUID :> Get '[HTML] (Html ())
+    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" ZonedTime :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "bulk_seed_and_ingest" :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "bulk_seed_and_ingest" :> ReqBody '[FormUrlEncoded] DataSeeding.DataSeedingForm :> Post '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "anomalies" :> Get '[HTML] (Html ())
