@@ -9,6 +9,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import NeatInterpolation
+import Relude
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu ppid =

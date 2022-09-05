@@ -33,14 +33,10 @@ unAcknowlegeAnomalyGetH sess pid aid = do
   liftIO $ withPool pool $ Anomalies.unAcknowlegeAnomaly aid
   pure $ anomalyAcknowlegeButton pid aid False
 
-anomalyListGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
-anomalyListGetH sess pid = do
+anomalyListGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> DashboardM (Html ())
+anomalyListGetH sess pid layoutM hxRequestM = do
   pool <- asks pool
-  (project, anomalies) <- liftIO $
-    withPool pool $ do
-      project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      anomalies <- Anomalies.selectAnomalies pid
-      pure (project, anomalies)
+  project <- liftIO $ withPool pool $ Projects.selectProjectForUser (Sessions.userId sess, pid)
 
   let bwconf =
         (def :: BWConfig)
@@ -48,10 +44,17 @@ anomalyListGetH sess pid = do
             currProject = project,
             pageTitle = "Anomalies"
           }
-  pure $ bodyWrapper bwconf $ anomalyList anomalies
+  case (layoutM, hxRequestM) of
+    (Just "slider", Just "true") -> do
+      anomalies <- liftIO $ withPool pool $ Anomalies.selectAnomalies pid
+      pure $ anomalyListSlider anomalies
+    (_, Just "true") -> do
+      anomalies <- liftIO $ withPool pool $ Anomalies.selectAnomalies pid
+      pure $ anomalyList anomalies
+    _ -> pure $ bodyWrapper bwconf $ anomalyListPage pid
 
-anomalyList :: Vector Anomalies.AnomalyVM -> Html ()
-anomalyList anomalies = do
+anomalyListPage :: Projects.ProjectId -> Html ()
+anomalyListPage pid = do
   div_ [class_ "container mx-auto  px-4 pt-10 pb-24"] $ do
     div_ [class_ "flex justify-between"] $ do
       h3_ [class_ "text-xl text-slate-700 flex place-items-center"] "Anomalies"
@@ -62,12 +65,15 @@ anomalyList anomalies = do
           img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-3 w-3 mt-1 mx-1"]
         button_ [class_ "bg-blue-700 h-10  px-2 rounded-xl py-1 mt-3 "] $ do
           img_ [src_ "/assets/svgs/white-plus.svg", class_ "text-white h-4 w-6 text-bold"]
-    div_ [class_ "grid grid-cols-5"] $ do
-      div_ [class_ "col-span-5 space-y-2"] $ do
-        when (null anomalies) $ do
-          div_ [class_ "flex card-round  text-center justify-center items-center h-32"] $ do
-            strong_ "No anomalies yet"
-        anomalies & mapM_ (renderAnomaly False)
+    div_ [class_ "grid grid-cols-5", hxGet_ $ "/p/" <> Projects.projectIdText pid <> "/anomalies", hxSwap_ "innerHTML", hxTrigger_ "load"] ""
+
+anomalyList :: Vector Anomalies.AnomalyVM -> Html ()
+anomalyList anomalies = do
+  div_ [class_ "col-span-5 space-y-2"] $ do
+    when (null anomalies) $ do
+      div_ [class_ "flex card-round  text-center justify-center items-center h-32"] $ do
+        strong_ "No anomalies yet"
+    mapM_ (renderAnomaly False) anomalies
 
 anomalyListSlider :: Vector Anomalies.AnomalyVM -> Html ()
 anomalyListSlider [] = ""
@@ -84,7 +90,6 @@ anomalyListSlider anomalies = do
           def setAnomalySliderPag()
             set #anomalySliderPagination.innerHTML to $$currentAnomaly+'/'+$$anomalyIds.length
           end
-
          |]
     div_ [class_ ""] $ do
       div_ [class_ "flex justify-between mt-5 pb-2"] $ do
@@ -121,7 +126,7 @@ anomalyListSlider anomalies = do
           [__|init setAnomalySliderPag() then show #{$anomalyIds[$currentAnomaly]} |]
         ]
         $ do
-          anomalies & mapM_ (renderAnomaly True)
+          mapM_ (renderAnomaly True) anomalies
 
 renderAnomaly :: Bool -> Anomalies.AnomalyVM -> Html ()
 renderAnomaly hideByDefault anomaly = do

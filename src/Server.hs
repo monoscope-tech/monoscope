@@ -62,7 +62,7 @@ type ProtectedAPI =
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" ZonedTime :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "bulk_seed_and_ingest" :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "bulk_seed_and_ingest" :> ReqBody '[FormUrlEncoded] DataSeeding.DataSeedingForm :> Post '[HTML] (Html ())
-    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "anomalies" :> Get '[HTML] (Html ())
+    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "anomalies" :> QueryParam "layout" Text :> HXRequest :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "acknowlege" :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "unacknowlege" :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "redacted_fields" :> Get '[HTML] (Html ())
