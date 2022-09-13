@@ -3,8 +3,10 @@ module Pages.Anomalies.AnomalyList (anomalyListGetH, acknowlegeAnomalyGetH, unAc
 import Config
 import Data.Default (def)
 import Data.Text (replace)
-import Data.Time (defaultTimeLocale, formatTime)
+import Data.Text qualified as T
+import Data.Time (ZonedTime, defaultTimeLocale, formatTime)
 import Data.Vector (Vector)
+import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import Lucid.Htmx
@@ -36,7 +38,11 @@ unAcknowlegeAnomalyGetH sess pid aid = do
 anomalyListGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> DashboardM (Html ())
 anomalyListGetH sess pid layoutM hxRequestM = do
   pool <- asks pool
-  project <- liftIO $ withPool pool $ Projects.selectProjectForUser (Sessions.userId sess, pid)
+  (project, anomalies) <- liftIO $
+    withPool pool $ do
+      project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+      anomalies <- Anomalies.selectAnomalies pid
+      pure (project, anomalies)
 
   let bwconf =
         (def :: BWConfig)
@@ -45,35 +51,26 @@ anomalyListGetH sess pid layoutM hxRequestM = do
             pageTitle = "Anomalies"
           }
   case (layoutM, hxRequestM) of
-    (Just "slider", Just "true") -> do
-      anomalies <- liftIO $ withPool pool $ Anomalies.selectAnomalies pid
-      pure $ anomalyListSlider anomalies
-    (_, Just "true") -> do
-      anomalies <- liftIO $ withPool pool $ Anomalies.selectAnomalies pid
-      pure $ anomalyList anomalies
-    _ -> pure $ bodyWrapper bwconf $ anomalyListPage pid
+    (Just "slider", Just "true") -> pure $ anomalyListSlider anomalies
+    _ -> pure $ bodyWrapper bwconf $ anomalyListPage anomalies
 
-anomalyListPage :: Projects.ProjectId -> Html ()
-anomalyListPage pid = do
-  div_ [class_ "container mx-auto  px-4 pt-10 pb-24"] $ do
-    div_ [class_ "flex justify-between"] $ do
-      h3_ [class_ "text-xl text-slate-700 flex place-items-center"] "Anomalies"
-      div_ [class_ "flex flex-row"] $ do
-        button_ [class_ "bg-white rounded-xl py-2 px-4 m-3 h-10 flex flex-row"] $ do
-          img_ [src_ "/assets/svgs/download.svg", class_ "h-4 w-6"]
-          span_ [class_ "text-sm"] "Export"
-          img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-3 w-3 mt-1 mx-1"]
-        button_ [class_ "bg-blue-700 h-10  px-2 rounded-xl py-1 mt-3 "] $ do
-          img_ [src_ "/assets/svgs/white-plus.svg", class_ "text-white h-4 w-6 text-bold"]
-    div_ [class_ "grid grid-cols-5", hxGet_ $ "/p/" <> Projects.projectIdText pid <> "/anomalies", hxSwap_ "innerHTML", hxTrigger_ "load"] ""
+anomalyListPage :: Vector Anomalies.AnomalyVM -> Html ()
+anomalyListPage anomalies = div_ [class_ "container mx-auto  px-4 pt-10 pb-24"] $ do
+  div_ [class_ "flex justify-between"] $ do
+    h3_ [class_ "text-xl text-slate-700 flex place-items-center"] "Anomalies"
+    div_ [class_ "flex flex-row"] $ do
+      button_ [class_ "bg-white rounded-xl py-2 px-4 m-3 h-10 flex flex-row"] $ do
+        img_ [src_ "/assets/svgs/download.svg", class_ "h-4 w-6"]
+        span_ [class_ "text-sm"] "Export"
+        img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-3 w-3 mt-1 mx-1"]
+      button_ [class_ "bg-blue-700 h-10  px-2 rounded-xl py-1 mt-3 "] $ img_ [src_ "/assets/svgs/white-plus.svg", class_ "text-white h-4 w-6 text-bold"]
+  div_ [class_ "grid grid-cols-5"] $ anomalyList anomalies
 
 anomalyList :: Vector Anomalies.AnomalyVM -> Html ()
-anomalyList anomalies = do
-  div_ [class_ "col-span-5 space-y-2"] $ do
-    when (null anomalies) $ do
-      div_ [class_ "flex card-round  text-center justify-center items-center h-32"] $ do
-        strong_ "No anomalies yet"
-    mapM_ (renderAnomaly False) anomalies
+anomalyList anomalies = div_ [class_ "col-span-5 space-y-2"] $ do
+  when (null anomalies) $ div_ [class_ "flex card-round  text-center justify-center items-center h-32"] $ do
+    strong_ "No anomalies yet"
+  mapM_ (renderAnomaly False) anomalies
 
 anomalyListSlider :: Vector Anomalies.AnomalyVM -> Html ()
 anomalyListSlider [] = ""
@@ -108,8 +105,7 @@ anomalyListSlider anomalies = do
                             show #{$anomalyIds[$currentAnomaly]} then 
                             setAnomalySliderPag()|]
             ]
-            $ do
-              img_ [src_ "/assets/svgs/leftarrow.svg", class_ " m-2"]
+            $ img_ [src_ "/assets/svgs/leftarrow.svg", class_ " m-2"]
           span_ [src_ " mx-4", id_ "anomalySliderPagination"] "1/1"
           a_
             [ class_ "cursor-pointer",
@@ -118,87 +114,185 @@ anomalyListSlider anomalies = do
                             show #{$anomalyIds[$currentAnomaly]} then
                             setAnomalySliderPag()|]
             ]
-            $ do
-              img_ [src_ "/assets/svgs/rightarrow.svg", class_ " m-2"]
+            $ img_ [src_ "/assets/svgs/rightarrow.svg", class_ " m-2"]
 
       div_
         [ class_ "parent-slider",
           [__|init setAnomalySliderPag() then show #{$anomalyIds[$currentAnomaly]} |]
         ]
-        $ do
-          mapM_ (renderAnomaly True) anomalies
+        $ mapM_ (renderAnomaly True) anomalies
+
+anomalyTimeline :: ZonedTime -> Maybe ZonedTime -> Html ()
+anomalyTimeline createdAt acknowlegedAt = small_ [class_ "inline-block  px-8 py-6 space-x-2"] $ case acknowlegedAt of
+  Nothing -> do
+    span_ [class_ "bg-red-200 text-red-900 inline-block px-3 rounded-lg"] "ONGOING"
+    time_ [class_ "inline-block"] $ toHtml @String $ formatTime defaultTimeLocale "%F %R" createdAt
+    span_ [class_ "inline-block"] "-"
+    span_ "present"
+  Just ackTime -> do
+    span_ [class_ "bg-green-200 text-green-900 inline-block px-3 rounded-lg"] "ACKNOWLEGED"
+    time_ [class_ "inline-block"] $ toHtml @String $ formatTime defaultTimeLocale "%F %R" createdAt
+    span_ [class_ "inline-block"] "-"
+    time_ [class_ "inline-block"] $ toHtml @String $ formatTime defaultTimeLocale "%F %R" ackTime
+
+shapeParameterStats_ :: Html ()
+shapeParameterStats_ = div_ [class_ "py-4 inline-block"] do
+  div_ [class_ "grid grid-cols-3 gap-1 text-center text-xs"] do
+    div_ [class_ "border p-1"] do
+      div_ [class_ "text-base"] "0"
+      div_ "new"
+      div_ "parameters"
+    div_ [class_ "border p-1"] do
+      div_ [class_ "text-base"] "0"
+      div_ "updated"
+      div_ "parameters"
+    div_ [class_ "border p-1"] do
+      div_ [class_ "text-base"] "0"
+      div_ [] "deleted"
+      div_ "parameters"
 
 renderAnomaly :: Bool -> Anomalies.AnomalyVM -> Html ()
 renderAnomaly hideByDefault anomaly = do
   let (anomalyTitle, chartTitle, icon) = anomalyDisplayConfig anomaly
   let anomalyId = Anomalies.anomalyIdText (anomaly.id)
   let anomalyGraphId = "field-" <> anomalyId
-
-  div_ [class_ "anomaly-item card-round px-8 py-6 hover:bg-blue-50 parent-hover cursor-pointer", style_ (if hideByDefault then "display:none" else ""), id_ anomalyId] $ do
-    div_ [class_ "grid grid-cols-2 gap-5"] $ do
-      div_ [class_ ""] $ do
-        div_ [class_ "inline-block flex items-center space-x-2"] $ do
-          img_ [src_ icon, class_ "inline w-4 h-4"]
-          strong_ [class_ "font-semibold"] $ toHtml $ "  " <> anomalyTitle
-        div_ [class_ "py-3 space-x-2"] $ do
-          case anomaly.acknowlegedAt of
-            Nothing -> do
-              small_ [class_ "bg-red-200 text-red-900 inline-block px-3 rounded-lg"] "ONGOING"
-              time_ [class_ "inline-block"] $ toHtml @String $ formatTime defaultTimeLocale "%F %R" (anomaly.createdAt)
-              span_ [class_ "inline-block"] "-"
-              span_ "present"
-            Just ackTime -> do
-              small_ [class_ "bg-green-200 text-green-900 inline-block px-3 rounded-lg"] "ACKNOWLEGED"
-              time_ [class_ "inline-block"] $ toHtml @String $ formatTime defaultTimeLocale "%F %R" (anomaly.createdAt)
-              span_ [class_ "inline-block"] "-"
-              time_ [class_ "inline-block"] $ toHtml @String $ formatTime defaultTimeLocale "%F %R" ackTime
-        div_ [class_ "pt-5 space-y-1"] $ do
-          div_ $ do
-            a_
-              [ class_ "text-blue-800 inline-block monospace pb-3 pt-1",
-                href_ $ Endpoints.endpointUrlPath (anomaly.projectId) (Unsafe.fromJust $ anomaly.endpointId)
-              ]
-              $ toHtml
-              $ fromMaybe "" (anomaly.endpointMethod) <> "  " <> fromMaybe "" (anomaly.endpointUrlPath)
-          case anomaly.anomalyType of
-            Anomalies.ATShape -> do
-              div_ $ do
-                small_ "shape_id: "
+  case anomaly.anomalyType of
+    Anomalies.ATEndpoint -> do
+      let endpointTitle = toHtml $ fromMaybe "" (anomaly.endpointMethod) <> "  " <> fromMaybe "" (anomaly.endpointUrlPath)
+      let endpointPath = Endpoints.endpointUrlPath (anomaly.projectId) (Unsafe.fromJust $ anomaly.endpointId)
+      div_ [class_ "anomaly-item card-round hover:drop-shadow-md  xparent-hover ", style_ (if hideByDefault then "display:none" else ""), id_ anomalyId] $ do
+        anomalyTimeline anomaly.createdAt anomaly.acknowlegedAt
+        div_ [class_ "px-8 grid grid-cols-5 gap-3"] do
+          div_ [class_ "col-span-2 space-y-2 flex flex-col content-between justify-between"] do
+            div_ do
+              div_ [class_ "inline-block flex items-center space-x-2"] do
+                img_ [src_ icon, class_ "inline w-4 h-4"]
+                strong_ [class_ "font-semibold"] $ toHtml $ "  " <> anomalyTitle
+              a_ [class_ "text-blue-800 inline-block monospace pb-3 pt-1", href_ endpointPath] endpointTitle
+            shapeParameterStats_
+            div_ [class_ "flex items-center gap-2"] do
+              a_
+                [ class_ "inline-block xchild-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100",
+                  term "data-tippy-content" "archive"
+                ]
+                $ img_ [src_ "/assets/svgs/anomalies/archive.svg", class_ "h-4 w-4"]
+              anomalyAcknowlegeButton
+                (anomaly.projectId)
+                (anomaly.id)
+                (isJust (anomaly.acknowlegedAt))
+          div_ [class_ "col-span-3"] do
+            p_ [class_ "border-0 border-b-2  border-gray-100 border pb-2"] $ toHtml chartTitle
+            div_ [id_ anomalyGraphId, style_ "height:250px", class_ "w-full"] ""
+            script_ $ anomalyChartScript anomaly anomalyGraphId
+        div_ [class_ "hidden shape-fields"] do
+          span_ "shape fields"
+        a_
+          [ class_ "hover:bg-blue-100 block  px-4 py-1  border border-t-2 border-gray-100 mt-3 text-center cursor-pointer",
+            [__| on click toggle .hidden on previous .shape-fields|]
+          ]
+          do
+            small_ "Toggle Request parameters section"
+    Anomalies.ATShape -> do
+      let endpointTitle = toHtml $ fromMaybe "" (anomaly.endpointMethod) <> "  " <> fromMaybe "" (anomaly.endpointUrlPath)
+      let endpointPath = Endpoints.endpointUrlPath (anomaly.projectId) (Unsafe.fromJust $ anomaly.endpointId)
+      div_
+        [ class_ "anomaly-item card-round hover:drop-shadow-md xparent-hover ",
+          style_ (if hideByDefault then "display:none" else ""),
+          id_ anomalyId
+        ]
+        $ do
+          anomalyTimeline anomaly.createdAt anomaly.acknowlegedAt
+          div_ [class_ "px-8 grid grid-cols-5 gap-3"] do
+            div_ [class_ "col-span-2 space-y-2 flex flex-col content-between justify-between"] do
+              div_ [class_ "inline-block flex items-center space-x-2"] do
+                img_ [src_ icon, class_ "inline w-4 h-4"]
+                strong_ [class_ "font-semibold"] $ toHtml $ "  " <> anomalyTitle
+              div_ do
+                small_ [class_ "py-2"] do
+                  span_ "id: "
+                  a_ [class_ "text-blue-800  inline-block monospace "] $ toHtml anomaly.targetHash
+                p_ "found with new field/parameters on endpoint: "
+                a_ [class_ "text-blue-800 inline-block monospace pb-3 pt-1", href_ endpointPath] endpointTitle
+              shapeParameterStats_
+              div_ [class_ "flex items-center gap-2"] do
                 a_
-                  [ class_ "text-blue-800 inline-block px-2"
+                  [ class_ "inline-block xchild-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100",
+                    term "data-tippy-content" "archive"
                   ]
-                  $ toHtml
-                  $ "`" <> maybe "" Shapes.shapeIdText (anomaly.shapeId) <> "`"
-            Anomalies.ATEndpoint -> ""
-            Anomalies.ATFormat -> do
-              div_ $ do
-                small_ "field_path: "
-                span_ [class_ "monospace inline-block background-slate-50 p-1"] $ toHtml $ fromMaybe "" (anomaly.fieldKeyPath)
-              div_ $ do
-                small_ "type: "
-                maybe "" EndpointComponents.fieldTypeToDisplay (anomaly.formatType)
-              div_ $ do
-                small_ "format: "
-                span_ [class_ "monospace"] $ toHtml $ fromMaybe "" (anomaly.fieldFormat)
-            Anomalies.ATField -> ""
-            Anomalies.ATUnknown -> ""
-        p_ [class_ "pt-3 text-lg"] "Was this intended? "
-      div_ [class_ "clear-both"] $ do
-        div_ [class_ "float-right flex items-center gap-2"] $ do
+                  $ img_ [src_ "/assets/svgs/anomalies/archive.svg", class_ "h-4 w-4"]
+                anomalyAcknowlegeButton
+                  (anomaly.projectId)
+                  (anomaly.id)
+                  (isJust (anomaly.acknowlegedAt))
+            div_ [class_ "col-span-3"] do
+              p_ [class_ "border-0 border-b-2  border-gray-100 border pb-2"] $ toHtml chartTitle
+              div_ [id_ anomalyGraphId, style_ "height:250px", class_ "w-full"] ""
+              script_ $ anomalyChartScript anomaly anomalyGraphId
+          div_ [class_ "hidden shape-fields"] do
+            span_ "shape fields"
           a_
-            [ class_ "inline-block child-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100",
-              term "data-tippy-content" "archive"
+            [ class_ "hover:bg-blue-100 block  px-4 py-1  border border-t-2 border-gray-100 mt-3 text-center",
+              [__| on click toggle .hidden on previous .shape-fields|]
             ]
-            $ do
-              img_ [src_ "/assets/svgs/anomalies/archive.svg", class_ "h-4 w-4"]
-          anomalyAcknowlegeButton
-            (anomaly.projectId)
-            (anomaly.id)
-            (isJust (anomaly.acknowlegedAt))
-
-        p_ [class_ "border-0 border-b-2  border-gray-100 border py-2 mb-1"] $ toHtml chartTitle
-        div_ [id_ anomalyGraphId, style_ "height:250px", class_ "w-full"] ""
-        script_ $ anomalyChartScript anomaly anomalyGraphId
+            do
+              small_ "Toggle Request parameters section"
+    Anomalies.ATFormat -> do
+      let endpointTitle = toHtml $ fromMaybe "" (anomaly.endpointMethod) <> "  " <> fromMaybe "" (anomaly.endpointUrlPath)
+      let endpointPath = Endpoints.endpointUrlPath (anomaly.projectId) (Unsafe.fromJust $ anomaly.endpointId)
+      div_
+        [ class_ "anomaly-item card-round hover:drop-shadow-md xparent-hover ",
+          style_ (if hideByDefault then "display:none" else ""),
+          id_ anomalyId
+        ]
+        $ do
+          anomalyTimeline anomaly.createdAt anomaly.acknowlegedAt
+          div_ [class_ "px-8 grid grid-cols-5 gap-3"] do
+            div_ [class_ "col-span-2 space-y-2 flex flex-col content-between justify-between"] do
+              div_ [class_ "inline-block flex items-center space-x-2"] do
+                img_ [src_ icon, class_ "inline w-4 h-4"]
+                strong_ [class_ "font-semibold"] $ toHtml $ "  " <> anomalyTitle
+              div_ do
+                small_ [class_ "py-2"] do
+                  a_ [class_ "cursor-pointer "] do
+                    -- TODO: Should show a helpful tooltip
+                    maybe (span_ "") EndpointComponents.fieldCategoryToDisplay anomaly.fieldCategory
+                  span_ " field  with path "
+                  strong_ [class_ "monospace px-2"] $ toHtml $ fromMaybe "" anomaly.fieldKeyPath
+                p_ $ toHtml $ "found on shape: " <> maybe "" Shapes.shapeIdText anomaly.shapeId <> " and endpoint: "
+                a_ [class_ "text-blue-800 inline-block monospace pb-3 pt-1", href_ endpointPath] endpointTitle
+              div_ [class_ "text-sm"] do
+                div_ do
+                  small_ "current format: "
+                  span_ $ maybe "" show anomaly.formatType
+                div_ do
+                  small_ "previous formats: "
+                  span_ "" -- TODO: Should be comma separated list of formats for that field.
+                div_ do
+                  small_ "examples: "
+                  small_ $ toHtml $ maybe "" (T.intercalate ", " . Vector.toList) anomaly.formatExamples
+              div_ [class_ "flex items-center gap-2"] do
+                a_
+                  [ class_ "inline-block xchild-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100",
+                    term "data-tippy-content" "archive"
+                  ]
+                  $ img_ [src_ "/assets/svgs/anomalies/archive.svg", class_ "h-4 w-4"]
+                anomalyAcknowlegeButton
+                  (anomaly.projectId)
+                  (anomaly.id)
+                  (isJust (anomaly.acknowlegedAt))
+            div_ [class_ "col-span-3"] do
+              p_ [class_ "border-0 border-b-2  border-gray-100 border pb-2"] $ toHtml chartTitle
+              div_ [id_ anomalyGraphId, style_ "height:250px", class_ "w-full"] ""
+              script_ $ anomalyChartScript anomaly anomalyGraphId
+          div_ [class_ "hidden shape-fields"] do
+            span_ "shape fields"
+          a_
+            [ class_ "hover:bg-blue-100 block  px-4 py-1 border border-t-2 border-gray-100 mt-3 text-center",
+              [__| on click toggle .hidden on previous .shape-fields|]
+            ]
+            do
+              small_ "Toggle Request parameters section"
+    _ -> ""
 
 anomalyAcknowlegeButton :: Projects.ProjectId -> Anomalies.AnomalyId -> Bool -> Html ()
 anomalyAcknowlegeButton pid aid acked = do
@@ -241,7 +335,7 @@ anomalyChartScript anomaly anomalyGraphId =
 anomalyDisplayConfig :: Anomalies.AnomalyVM -> (Text, Text, Text)
 anomalyDisplayConfig anomaly = case anomaly.anomalyType of
   Anomalies.ATField -> ("New Field Found", "Field Occurences over Time", "/assets/svgs/anomalies/fields.svg")
-  Anomalies.ATShape -> ("New Req/Resp Shape", "Shape Occurences over Time vs Total by all Shapes", "/assets/svgs/anomalies/fields.svg")
-  Anomalies.ATEndpoint -> ("New Endpoint Found", "Endpoint occurences over time vs Total by all Endpoints", "/assets/svgs/endpoint.svg")
-  Anomalies.ATFormat -> ("Field Format Detected", "Requests with the new field format", "/assets/svgs/anomalies/fields.svg")
+  Anomalies.ATShape -> ("New Request Shape", "Throughput", "/assets/svgs/anomalies/fields.svg")
+  Anomalies.ATEndpoint -> ("New Endpoint", "Throughput", "/assets/svgs/endpoint.svg")
+  Anomalies.ATFormat -> ("Existing field changed", "Throughput", "/assets/svgs/anomalies/fields.svg")
   Anomalies.ATUnknown -> ("Unknown anomaly", "Unknown anomaly", "/assets/svgs/anomalies/fields.svg")

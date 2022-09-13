@@ -160,23 +160,23 @@ selectRequestDumpByProjectAndId pid createdAt rdId = queryOne Select q (createdA
                     0 AS full_count
              FROM apis.request_dumps where created_at=? and project_id=? and id=? LIMIT 1|]
 
-selectRequestsByStatusCodesStatByMin :: Projects.ProjectId -> Text -> Text -> DBT IO (Vector (ZonedTime, Text, Int))
-selectRequestsByStatusCodesStatByMin pid urlPath method = query Select q (pid, urlPath, method)
-  where
-    q =
-      [sql|
-       SELECT time_bucket('1 minute', created_at) as timeB,
-             status_code::text,
-             count(id)
-        FROM apis.request_dumps
-        where created_at > NOW() - interval '14' day
-        and project_id=? and url_path=? and method=?
-        GROUP BY timeB, status_code;
-    |]
+selectRequestsByStatusCodesStatByMin :: Projects.ProjectId -> Text -> DBT IO Text
+selectRequestsByStatusCodesStatByMin pid enpHash = do
+  let q =
+        [sql| WITH q as (SELECT timeB, endpoint_title, SUM(total_count) total_count 
+                  FROM apis.project_requests_by_endpoint_per_min 
+                  WHERE project_id=? AND endpoint_hash=? GROUP BY timeB, endpoint_title, total_count)
+              SELECT COALESCE(json_agg(json_build_array(timeB, endpoint_title, total_count)), '[]')::text from q; |]
+  (Only val) <- fromMaybe (Only "[]") <$> queryOne Select q (pid, enpHash)
+  pure val
 
 selectRequestsByEndpointsStatByMin :: Projects.ProjectId -> DBT IO Text
 selectRequestsByEndpointsStatByMin pid = do
-  let q = [sql| SELECT ts_text FROM apis.project_requests_by_endpoint_per_min WHERE project_id=?; |]
+  let q =
+        [sql| WITH q as (SELECT timeB, endpoint_title, SUM(total_count) total_count 
+                  FROM apis.project_requests_by_endpoint_per_min 
+                  WHERE project_id=? GROUP BY timeB, endpoint_title, total_count)
+              SELECT COALESCE(json_agg(json_build_array(timeB, endpoint_title, total_count)), '[]')::text from q; |]
   (Only val) <- fromMaybe (Only "[]") <$> queryOne Select q (Only pid)
   pure val
 

@@ -44,6 +44,7 @@ data Shape = Shape
     responseBodyKeypaths :: Vector Text,
     requestHeadersKeypaths :: Vector Text,
     responseHeadersKeypaths :: Vector Text,
+    fieldHashes :: Vector Text,
     hash :: Text
   }
   deriving stock (Show, Generic)
@@ -60,8 +61,8 @@ insertShapeQueryAndParam shape = (q, params)
     q =
       [sql| 
             INSERT INTO apis.shapes
-            (project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, response_headers_keypaths, hash)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING; 
+            (project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING; 
           |]
     params =
       [ MkDBField $ shape.projectId,
@@ -71,6 +72,7 @@ insertShapeQueryAndParam shape = (q, params)
         MkDBField $ shape.responseBodyKeypaths,
         MkDBField $ shape.requestHeadersKeypaths,
         MkDBField $ shape.responseHeadersKeypaths,
+        MkDBField $ shape.fieldHashes,
         MkDBField $ shape.hash
       ]
 

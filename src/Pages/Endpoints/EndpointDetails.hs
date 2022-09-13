@@ -58,7 +58,7 @@ fieldDetailsView field formats = do
     div_ [class_ "flex flex-row gap-6"] $ do
       div_ $ do
         h6_ [class_ "text-slate-700 text-xs"] "FIELD CATEGORY"
-        h4_ [class_ "text-base text-slate-800"] $ fieldCategoryToDisplay $ field.fieldCategory
+        h4_ [class_ "text-base text-slate-800"] $ EndpointComponents.fieldCategoryToDisplay $ field.fieldCategory
       div_ [class_ ""] $ do
         h6_ [class_ "text-slate-700 text-xs"] "FORMAT OVERRIDE"
         h4_ [class_ "text-base text-slate-800"] $ toHtml $ fromMaybe "[unset]" (field.fieldTypeOverride)
@@ -100,29 +100,31 @@ aesonValueToText = toStrict . encodeToLazyText
 endpointDetailsH :: Sessions.PersistentSession -> Projects.ProjectId -> Endpoints.EndpointId -> DashboardM (Html ())
 endpointDetailsH sess pid eid = do
   pool <- asks pool
-  (endpoint, project, fieldsMap, reqsByStatsByMin, reqLatenciesRolledByStepsLabeled, anomalies) <- liftIO $
+  (enpStats, project, fieldsMap, reqsByStatsByMinJ, reqLatenciesRolledByStepsLabeled, anomalies) <- liftIO $
     withPool pool $ do
-      endpoint <- Unsafe.fromJust <$> Endpoints.endpointRequestStatsByEndpoint eid
+      -- Should swap names betw enp and endpoint endpoint could be endpointStats
+      endpoint <- Unsafe.fromJust <$> Endpoints.endpointById eid
+      enpStats <- Unsafe.fromJust <$> Endpoints.endpointRequestStatsByEndpoint eid
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      fieldsMap <- Fields.groupFieldsByCategory <$> Fields.selectFields (endpoint.endpointHash)
-      reqsByStatsByMin <- RequestDumps.selectRequestsByStatusCodesStatByMin pid (endpoint.urlPath) (endpoint.method)
+      fieldsMap <- Fields.groupFieldsByCategory <$> Fields.selectFields (endpoint.hash)
+      reqsByStatsByMinJ <- RequestDumps.selectRequestsByStatusCodesStatByMin pid endpoint.hash
 
-      let maxV = round (endpoint.max) :: Int
+      let maxV = round (enpStats.max) :: Int
       let steps = (maxV `quot` 100) :: Int
       let steps' = if steps == 0 then 100 else steps
       reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledBySteps maxV steps' pid (endpoint.urlPath) (endpoint.method)
 
       let reqLatencyPercentileSteps =
-            ( round (endpoint.max) `quot` steps' * steps',
-              round (endpoint.p90) `quot` steps' * steps',
-              round (endpoint.p75) `quot` steps' * steps',
-              round (endpoint.p50) `quot` steps' * steps'
+            ( round (enpStats.max) `quot` steps' * steps',
+              round (enpStats.p90) `quot` steps' * steps',
+              round (enpStats.p75) `quot` steps' * steps',
+              round (enpStats.p50) `quot` steps' * steps'
             )
       let reqLatenciesRolledByStepsLabeled = Vector.toList reqLatenciesRolledBySteps & map \(x, y) -> RequestDumps.labelRequestLatency reqLatencyPercentileSteps (x, y)
       anomalies <- Anomalies.selectOngoingAnomaliesForEndpoint pid eid
-      pure (endpoint, project, fieldsMap, reqsByStatsByMin, concat reqLatenciesRolledByStepsLabeled, anomalies)
+      pure (enpStats, project, fieldsMap, reqsByStatsByMinJ, concat reqLatenciesRolledByStepsLabeled, anomalies)
 
-  let reqsByStatsByMinJ = decodeUtf8 $ AE.encode reqsByStatsByMin
+  -- let reqsByStatsByMinJ = decodeUtf8 $ AE.encode reqsByStatsByMin
   let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
   let bwconf =
         (def :: BWConfig)
@@ -131,7 +133,7 @@ endpointDetailsH sess pid eid = do
             pageTitle = "Endpoint Details",
             menuItem = Just "Endpoints"
           }
-  pure $ bodyWrapper bwconf $ endpointDetails endpoint fieldsMap reqsByStatsByMinJ reqLatenciesRolledByStepsJ anomalies
+  pure $ bodyWrapper bwconf $ endpointDetails enpStats fieldsMap reqsByStatsByMinJ reqLatenciesRolledByStepsJ anomalies
 
 endpointDetails :: EndpointRequestStats -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> Text -> Vector Anomalies.AnomalyVM -> Html ()
 endpointDetails endpoint fieldsM reqsByStatsByMinJ reqLatenciesRolledByStepsJ anomalies =
@@ -375,15 +377,6 @@ subSubSection title fieldsM =
                       span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ EndpointComponents.fieldTypeToDisplay $ field.fieldType
                       img_ [src_ "/assets/svgs/alert-red.svg", class_ " mr-8 ml-4 h-5"]
                       img_ [src_ "/assets/svgs/dots-vertical.svg", class_ "mx-5 h-5"]
-
-fieldCategoryToDisplay :: Fields.FieldCategoryEnum -> Html ()
-fieldCategoryToDisplay fieldType = case fieldType of
-  Fields.FCRequestBody -> span_ [class_ "px-2 rounded-xl bg-slate-100 slate-800 monospace"] "Request Body"
-  Fields.FCQueryParam -> span_ [class_ "px-2 rounded-xl bg-blue-100 blue-800 monospace"] "Query Param"
-  Fields.FCPathParam -> span_ [class_ "px-2 rounded-xl bg-gray-100 black-800 monospace"] "Path Param"
-  Fields.FCRequestHeader -> span_ [class_ "px-2 rounded-xl bg-orange-100 orange-800 monospace"] "Request Header"
-  Fields.FCResponseHeader -> span_ [class_ "px-2 rounded-xl bg-stone-100 stone-800 monospace"] "Response Header"
-  Fields.FCResponseBody -> span_ [class_ "px-2 rounded-xl bg-red-100 red-800 monospace"] "Response Body"
 
 -- fieldsToNormalized, gets a list of fields and returns a list of tuples with the keypath, and the field, sorted by the key path
 fieldsToNormalized :: [Fields.Field] -> [(Text, Maybe Fields.Field)]

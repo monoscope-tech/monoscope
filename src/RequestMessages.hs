@@ -184,19 +184,17 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
   -- Since it foes into the endpoint, maybe it should be the keys and their type? I'm unsure.
   -- At the moment, if an endpoint exists, we don't insert it anymore. But then how do we deal with requests from new hosts?
   let urlParams = AET.emptyObject
-  let (endpointQ, endpointP) =
-        if endpointHash `elem` (pjc.endpointHashes)
-          then -- We have the endpoint cache in our db already. Skill adding
-            ("", [])
-          else Endpoints.upsertEndpointQueryAndParam $ buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash
 
-  let (shapeQ, shapeP) =
-        if shapeHash `elem` (pjc.shapeHashes)
-          then ("", [])
-          else do
+  let (endpointQ, endpointP)
+        | endpointHash `elem` (pjc.endpointHashes) = ("", []) -- We have the endpoint cache in our db already. Skill adding
+        | otherwise = Endpoints.upsertEndpointQueryAndParam $ buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash
+
+  let (shapeQ, shapeP)
+        | shapeHash `elem` (pjc.shapeHashes) = ("", [])
+        | otherwise = do
             -- A shape is a deterministic representation of a request-response combination for a given endpoint.
             -- We usually expect multiple shapes per endpoint. Eg a shape for a success request-response and another for an error response.
-            let shape = Shapes.Shape (Shapes.ShapeId dumpID) (rM.timestamp) now projectId endpointHash queryParamsKP requestHeadersKP responseHeadersKP requestBodyKP responseBodyKP shapeHash
+            let shape = Shapes.Shape (Shapes.ShapeId dumpID) (rM.timestamp) now projectId endpointHash queryParamsKP requestHeadersKP responseHeadersKP requestBodyKP responseBodyKP fieldHashes shapeHash
             Shapes.insertShapeQueryAndParam shape
 
   -- request dumps are time series dumps representing each requests which we consume from our users.
@@ -237,10 +235,9 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
 
   -- Build all fields and formats, unzip them as separate lists and append them to query and params
   -- We don't border adding them if their shape exists, as we asume that we've already seen such before.
-  let (fieldsQ, fieldsP) =
-        if shapeHash `elem` (pjc.shapeHashes)
-          then ([], [])
-          else unzip $ map Fields.insertFieldQueryAndParams fields
+  let (fieldsQ, fieldsP)
+        | shapeHash `elem` (pjc.shapeHashes) = ([], [])
+        | otherwise = unzip $ map Fields.insertFieldQueryAndParams fields
 
   -- FIXME:
   -- Instead of having examples as a column under formats, could we be better served by having an examples table?
@@ -248,10 +245,9 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
   -- Should we use some randomizer?
   -- The original plan was that we could skip the shape from the input into this function, but then that would mean
   -- also inserting the fields and the shape, when all we want to insert is just the example.
-  let (formatsQ, formatsP) =
-        if shapeHash `elem` (pjc.shapeHashes)
-          then ([], [])
-          else unzip $ map Formats.insertFormatQueryAndParams formats
+  let (formatsQ, formatsP)
+        | shapeHash `elem` (pjc.shapeHashes) = ([], [])
+        | otherwise = unzip $ map Formats.insertFormatQueryAndParams formats
 
   let query = endpointQ <> shapeQ <> mconcat fieldsQ <> mconcat formatsQ
   let params = endpointP <> shapeP <> concat fieldsP <> concat formatsP

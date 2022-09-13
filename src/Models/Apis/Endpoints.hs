@@ -28,7 +28,7 @@ import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity (selectById)
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), query, queryOne)
 import Database.PostgreSQL.Entity.Types
-import Database.PostgreSQL.Simple (FromRow, Query, ToRow)
+import Database.PostgreSQL.Simple (FromRow, Only (Only), Query, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -66,7 +66,6 @@ data Endpoint = Endpoint
   deriving stock (Show, Generic, Eq)
   deriving anyclass (FromRow, ToRow, Default)
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Endpoint
-  deriving (Entity) via (GenericEntity '[Schema "apis", TableName "endpoints", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Endpoint)
   deriving (FromField) via Aeson Endpoint
 
 makeFieldLabelsNoPrefix ''Endpoint
@@ -191,4 +190,6 @@ endpointRequestStatsByEndpoint eid = queryOne Select q (eid, eid)
               FROM apis.endpoint_request_stats WHERE endpoint_id=?|]
 
 endpointById :: EndpointId -> PgT.DBT IO (Maybe Endpoint)
-endpointById = selectById @Endpoint
+endpointById eid = queryOne Select q (Only eid)
+  where
+    q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, akeys(hosts), hash from apis.endpoints where id=? |]

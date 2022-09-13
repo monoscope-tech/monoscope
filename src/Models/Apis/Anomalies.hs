@@ -107,7 +107,7 @@ instance FromField AnomalyActions where
           Just a -> pure a
           Nothing -> returnError ConversionFailed f $ "Conversion error: Expected 'anomaly_actions' enum, got " <> decodeUtf8 bs <> " instead."
 
-data AnomalyVM = AnomalyCM
+data AnomalyVM = AnomalyVM
   { id :: AnomalyId,
     createdAt :: ZonedTime,
     updatedAt :: ZonedTime,
@@ -171,14 +171,38 @@ selectAnomalies pid = query Select q opt
     q =
       [sql| 
 SELECT
-    *
-FROM
-    apis.anomalies_vm
-WHERE
-    project_id = ?
-    AND archived_at is null
-    and anomaly_type != 'field'
-        |]
+    *,
+    (
+      SELECT
+          json_agg(json_build_array(timeB, count))
+      from
+          (
+              SELECT
+                  time_bucket('5 minute', created_at) as timeB,
+                  count(id) count
+              FROM
+                  apis.request_dumps
+              where
+                  created_at > NOW() - interval '14' day
+                  AND project_id = project_id
+                  AND CASE
+                      WHEN anomaly_type = 'endpoint' THEN 
+                          endpoint_hash = target_hash
+                      WHEN anomaly_type = 'shape' THEN
+                          shape_hash = target_hash
+                      WHEN anomaly_type = 'format' THEN
+                          target_hash = ANY(format_hashes)
+                  END
+              GROUP BY
+                  timeB
+          )timeB)::text ts 
+    FROM
+        apis.anomalies_vm
+    WHERE
+        project_id = ?
+        AND archived_at is null
+        and anomaly_type != 'field'
+            |]
     opt = Only pid
 
 selectOngoingAnomalies :: Projects.ProjectId -> DBT IO (Vector AnomalyVM)
@@ -187,15 +211,39 @@ selectOngoingAnomalies pid = query Select q opt
     q =
       [sql| 
 SELECT
-    *
-FROM
-    apis.anomalies_vm
-WHERE
-    project_id = ?
-    AND acknowleged_at is null
-    AND archived_at is null
-    and anomaly_type != 'field'
-        |]
+    *,
+    (
+      SELECT
+          json_agg(json_build_array(timeB, count))
+      from
+          (
+              SELECT
+                  time_bucket('5 minute', created_at) as timeB,
+                  count(id) count
+              FROM
+                  apis.request_dumps
+              where
+                  created_at > NOW() - interval '14' day
+                  AND project_id = project_id
+                  AND CASE
+                      WHEN anomaly_type = 'endpoint' THEN 
+                          endpoint_hash = target_hash
+                      WHEN anomaly_type = 'shape' THEN
+                          shape_hash = target_hash
+                      WHEN anomaly_type = 'format' THEN
+                          target_hash = ANY(format_hashes)
+                  END
+              GROUP BY
+                  timeB
+          )timeB)::text ts 
+      FROM
+          apis.anomalies_vm
+      WHERE
+          project_id = ?
+          AND acknowleged_at is null
+          AND archived_at is null
+          and anomaly_type != 'field'
+              |]
     opt = Only pid
 
 selectOngoingAnomaliesForEndpoint :: Projects.ProjectId -> Endpoints.EndpointId -> DBT IO (Vector AnomalyVM)
@@ -204,7 +252,31 @@ selectOngoingAnomaliesForEndpoint pid eid = query Select q opt
     q =
       [sql| 
 SELECT
-    *
+    *,
+    (
+      SELECT
+          json_agg(json_build_array(timeB, count))
+      from
+          (
+              SELECT
+                  time_bucket('5 minute', created_at) as timeB,
+                  count(id) count
+              FROM
+                  apis.request_dumps
+              where
+                  created_at > NOW() - interval '14' day
+                  AND project_id = project_id
+                  AND CASE
+                      WHEN anomaly_type = 'endpoint' THEN 
+                          endpoint_hash = target_hash
+                      WHEN anomaly_type = 'shape' THEN
+                          shape_hash = target_hash
+                      WHEN anomaly_type = 'format' THEN
+                          target_hash = ANY(format_hashes)
+                  END
+              GROUP BY
+                  timeB
+          )timeB)::text ts 
 FROM
     apis.anomalies_vm
 WHERE
