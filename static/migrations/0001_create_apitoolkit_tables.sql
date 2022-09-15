@@ -466,7 +466,7 @@ from
     )
     LEFT JOIN apis.fields on (
         (
-            fields.hash = target_hash
+            (fields.hash = formats.field_hash )
             AND an.project_id = fields.project_id
         )
         OR fields.hash = formats.field_hash

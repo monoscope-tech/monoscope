@@ -258,7 +258,8 @@ renderAnomaly hideByDefault anomaly = do
                     maybe (span_ "") EndpointComponents.fieldCategoryToDisplay anomaly.fieldCategory
                   span_ " field  with path "
                   strong_ [class_ "monospace px-2"] $ toHtml $ fromMaybe "" anomaly.fieldKeyPath
-                p_ $ toHtml $ "found on shape: " <> maybe "" Shapes.shapeIdText anomaly.shapeId <> " and endpoint: "
+                -- p_ $ toHtml $ "found on shape: " <> maybe "" Shapes.shapeIdText anomaly.shapeId <> " and
+                p_ "found on endpoint: "
                 a_ [class_ "text-blue-800 inline-block monospace pb-3 pt-1", href_ endpointPath] endpointTitle
               div_ [class_ "text-sm"] do
                 div_ do

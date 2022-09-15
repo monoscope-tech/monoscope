@@ -171,37 +171,14 @@ selectAnomalies pid = query Select q opt
     q =
       [sql| 
 SELECT
-    *,
-    (
-      SELECT
-          json_agg(json_build_array(timeB, count))
-      from
-          (
-              SELECT
-                  time_bucket('5 minute', created_at) as timeB,
-                  count(id) count
-              FROM
-                  apis.request_dumps
-              where
-                  created_at > NOW() - interval '14' day
-                  AND project_id = project_id
-                  AND CASE
-                      WHEN anomaly_type = 'endpoint' THEN 
-                          endpoint_hash = target_hash
-                      WHEN anomaly_type = 'shape' THEN
-                          shape_hash = target_hash
-                      WHEN anomaly_type = 'format' THEN
-                          target_hash = ANY(format_hashes)
-                  END
-              GROUP BY
-                  timeB
-          )timeB)::text ts 
+    *, '[]'::text
     FROM
         apis.anomalies_vm
     WHERE
         project_id = ?
         AND archived_at is null
         and anomaly_type != 'field'
+    ORDER BY created_at desc
             |]
     opt = Only pid
 
@@ -211,31 +188,7 @@ selectOngoingAnomalies pid = query Select q opt
     q =
       [sql| 
 SELECT
-    *,
-    (
-      SELECT
-          json_agg(json_build_array(timeB, count))
-      from
-          (
-              SELECT
-                  time_bucket('5 minute', created_at) as timeB,
-                  count(id) count
-              FROM
-                  apis.request_dumps
-              where
-                  created_at > NOW() - interval '14' day
-                  AND project_id = project_id
-                  AND CASE
-                      WHEN anomaly_type = 'endpoint' THEN 
-                          endpoint_hash = target_hash
-                      WHEN anomaly_type = 'shape' THEN
-                          shape_hash = target_hash
-                      WHEN anomaly_type = 'format' THEN
-                          target_hash = ANY(format_hashes)
-                  END
-              GROUP BY
-                  timeB
-          )timeB)::text ts 
+    *, '[]'::text
       FROM
           apis.anomalies_vm
       WHERE
@@ -243,6 +196,7 @@ SELECT
           AND acknowleged_at is null
           AND archived_at is null
           and anomaly_type != 'field'
+      ORDER BY created_at desc
               |]
     opt = Only pid
 
@@ -252,32 +206,8 @@ selectOngoingAnomaliesForEndpoint pid eid = query Select q opt
     q =
       [sql| 
 SELECT
-    *,
-    (
-      SELECT
-          json_agg(json_build_array(timeB, count))
-      from
-          (
-              SELECT
-                  time_bucket('5 minute', created_at) as timeB,
-                  count(id) count
-              FROM
-                  apis.request_dumps
-              where
-                  created_at > NOW() - interval '14' day
-                  AND project_id = project_id
-                  AND CASE
-                      WHEN anomaly_type = 'endpoint' THEN 
-                          endpoint_hash = target_hash
-                      WHEN anomaly_type = 'shape' THEN
-                          shape_hash = target_hash
-                      WHEN anomaly_type = 'format' THEN
-                          target_hash = ANY(format_hashes)
-                  END
-              GROUP BY
-                  timeB
-          )timeB)::text ts 
-FROM
+    *, '[]'::text
+    FROM
     apis.anomalies_vm
 WHERE
     project_id = ?
@@ -285,5 +215,31 @@ WHERE
     AND acknowleged_at is null
     AND archived_at is null
     and anomaly_type != 'field'
+ORDER BY created_at desc
         |]
     opt = (pid, eid)
+
+-- (
+--       SELECT
+--           json_agg(json_build_array(timeB, count))
+--       from
+--           (
+--               SELECT
+--                   time_bucket('5 minute', created_at) as timeB,
+--                   count(id) count
+--               FROM
+--                   apis.request_dumps
+--               where
+--                   created_at > NOW() - interval '14' day
+--                   AND project_id = project_id
+--                   AND CASE
+--                       WHEN anomaly_type = 'endpoint' THEN
+--                           endpoint_hash = target_hash
+--                       WHEN anomaly_type = 'shape' THEN
+--                           shape_hash = target_hash
+--                       WHEN anomaly_type = 'format' THEN
+--                           target_hash = ANY(format_hashes)
+--                   END
+--               GROUP BY
+--                   timeB
+--           )timeB)::text ts
