@@ -20,7 +20,6 @@ import Lucid.Htmx
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
-import Optics.Core ((^.))
 import Optics.TH (makeFieldLabelsNoPrefix)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import ProcessMessage qualified
@@ -101,7 +100,7 @@ parseConfigToRequestMessages pid input = do
             let timestamps = randomTimesBtwToAndFrom startTimeUTC (config.count) randGen maxDiffTime
             let durations = take (config.count) $ randomRs (config.durationFrom, config.durationTo) randGen
             let allowedStatusCodes = config.statusCodesOneof
-            let statusCodes = take (config.count) $ map (allowedStatusCodes !!) $ randomRs (0, length allowedStatusCodes -1) randGen
+            let statusCodes = take (config.count) $ map (allowedStatusCodes !!) $ randomRs (0, length allowedStatusCodes - 1) randGen
 
             zip3 timestamps durations statusCodes & mapM \(timestampV, duration', statusCode') -> do
               let duration = duration'
@@ -152,7 +151,8 @@ dataSeedingPostH sess pid form = do
   projectCache <- asks projectCache
   project <-
     liftIO $
-      withPool pool $ Projects.selectProjectForUser (Sessions.userId sess, pid)
+      withPool pool $
+        Projects.selectProjectForUser (Sessions.userId sess, pid)
 
   respE <- liftIO $ parseConfigToRequestMessages pid (encodeUtf8 $ config form)
   case respE of
@@ -167,7 +167,8 @@ dataSeedingGetH sess pid = do
   pool <- asks pool
   project <-
     liftIO $
-      withPool pool $ Projects.selectProjectForUser (Sessions.userId sess, pid)
+      withPool pool $
+        Projects.selectProjectForUser (Sessions.userId sess, pid)
 
   let bwconf =
         (def :: BWConfig)

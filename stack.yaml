@@ -59,6 +59,7 @@ extra-deps:
   - timing-convenience-0.1@sha256:7ff807a9a9e5596f2b18d45c5a01aefb91d4a98f6a1008d183b5c550f68f7cb7,2092
   - typerep-map-0.3.3.0@sha256:20510efab770158414ac7828d1eca063d795bcc724ac634dd13bc7a50b476f42,4681
   - daemons-0.3.0@sha256:356edaf06a8cf5e9f19685f9ce793ad6d2b6bce2e55379f6b2aff1b0c07a633f,3178
+  - postgresql-query-3.10.0@sha256:bad59810fc464cf0f4a839a9c6372ba17c54fd04500a50e16fb46d578a0649ae,6320
   - git: https://github.com/emilypi/base64
     commit: aae6a23944bbc2e19cf814a7030557612e10e52c
     subdirs:

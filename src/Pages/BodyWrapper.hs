@@ -9,6 +9,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import NeatInterpolation
+import Pages.Charts.Charts qualified as Charts
 import Relude
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
@@ -96,6 +97,7 @@ bodyWrapper BWConfig {sessM, currProject, pageTitle, menuItem} child =
                 });
               }
             |]
+          script_ Charts.chartInit
 
         body_ [class_ "text-gray-900"] $ do
           section_ [class_ "flex flex-row bg-gray-50 h-screen overflow-hidden"] $ do

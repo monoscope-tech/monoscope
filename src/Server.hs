@@ -16,9 +16,11 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields qualified as Fields
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
+import Network.HTTP.Media hiding (Accept)
 import Network.Wai (Request)
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.Api qualified as Api
+import Pages.Charts.Charts qualified as Charts
 import Pages.Dashboard qualified as Dashboard
 import Pages.Endpoints.EndpointDetails qualified as EndpointDetails
 import Pages.Endpoints.EndpointList qualified as EndpointList
@@ -37,10 +39,13 @@ import Utils
 import Web.Auth (authCallbackH, genAuthServerContext, loginH, loginRedirectH, logoutH)
 import Web.ClientMetadata qualified as ClientMetadata
 import Web.Cookie (SetCookie)
+import Witch (from)
 
 type GetRedirect = Verb 'GET 302
 
--- type HXBoosted = Header "HX-Boosted" Text
+-- When bystring is returned for json, simply return the bytestring
+instance MimeRender JSON ByteString where
+  mimeRender _ = from @ByteString
 
 --
 -- API Section
@@ -67,6 +72,8 @@ type ProtectedAPI =
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "unacknowlege" :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "redacted_fields" :> Get '[HTML] (Html ())
     :<|> "p" :> Capture "projectID" Projects.ProjectId :> "redacted_fields" :> ReqBody '[FormUrlEncoded] RedactedFields.RedactFieldForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
+    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "charts_json" :> "throughput" :> QueryParam "endpoint_hash" Text :> QueryParam "shape_hash" Text :> Get '[JSON] ByteString
+    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "charts_html" :> "throughput" :> QueryParam "endpoint_hash" Text :> QueryParam "shape_hash" Text :> Get '[HTML] (Html ())
 
 type PublicAPI =
   "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
@@ -124,6 +131,8 @@ protectedServer sess =
     :<|> AnomalyList.unAcknowlegeAnomalyGetH sess
     :<|> RedactedFields.redactedFieldsGetH sess
     :<|> RedactedFields.redactedFieldsPostH sess
+    :<|> Charts.throughputEndpoint sess
+    :<|> Charts.throughputEndpointHTML sess
 
 publicServer :: ServerT PublicAPI DashboardM
 publicServer =

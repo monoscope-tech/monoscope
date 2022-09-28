@@ -117,6 +117,13 @@ packages:
   original:
     hackage: daemons-0.3.0@sha256:356edaf06a8cf5e9f19685f9ce793ad6d2b6bce2e55379f6b2aff1b0c07a633f,3178
 - completed:
+    hackage: postgresql-query-3.10.0@sha256:bad59810fc464cf0f4a839a9c6372ba17c54fd04500a50e16fb46d578a0649ae,6320
+    pantry-tree:
+      size: 2123
+      sha256: 29015669d6a00757ff0c67e2abe344a2456848d27ccbaf0875693eb66e6b04d8
+  original:
+    hackage: postgresql-query-3.10.0@sha256:bad59810fc464cf0f4a839a9c6372ba17c54fd04500a50e16fb46d578a0649ae,6320
+- completed:
     subdir: .
     name: base64
     version: 0.4.2.4

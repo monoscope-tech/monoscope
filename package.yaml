@@ -101,6 +101,7 @@ library:
     - fakedata
     - fmt
     - formatting
+    - generic-lens
     - gogol
     - gogol-core
     - gogol-pubsub
@@ -121,6 +122,7 @@ library:
     - pg-entity
     - pg-transact
     - postgresql-migration
+    - postgresql-query
     - postgresql-simple
     - random
     - raw-strings-qq
@@ -151,7 +153,7 @@ library:
     - wreq
     - xxhash
     - yaml
-    - generic-lens
+    - http-media
 
 executables:
   apitoolkit-server-exe:

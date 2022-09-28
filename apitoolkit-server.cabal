@@ -47,6 +47,7 @@ library
       Pages.Anomalies.AnomalyList
       Pages.Api
       Pages.BodyWrapper
+      Pages.Charts.Charts
       Pages.Dashboard
       Pages.Endpoints.EndpointComponents
       Pages.Endpoints.EndpointDetails
@@ -134,6 +135,7 @@ library
     , gogol-pubsub
     , hspec
     , http-api-data
+    , http-media
     , lens
     , lens-aeson
     , lucid
@@ -149,6 +151,7 @@ library
     , pg-entity
     , pg-transact
     , postgresql-migration
+    , postgresql-query
     , postgresql-simple
     , random
     , raw-strings-qq

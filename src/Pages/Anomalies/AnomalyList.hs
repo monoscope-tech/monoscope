@@ -13,12 +13,13 @@ import Lucid.Htmx
 import Lucid.Hyperscript
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Optics.Core ((^.))
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pages.Charts.Charts
+import Pages.Charts.Charts qualified as Chart
 import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
 import Relude
 import Relude.Unsafe qualified as Unsafe
@@ -182,8 +183,10 @@ renderAnomaly hideByDefault anomaly = do
                 (isJust (anomaly.acknowlegedAt))
           div_ [class_ "col-span-3"] do
             p_ [class_ "border-0 border-b-2  border-gray-100 border pb-2"] $ toHtml chartTitle
-            div_ [id_ anomalyGraphId, style_ "height:250px", class_ "w-full"] ""
-            script_ $ anomalyChartScript anomaly anomalyGraphId
+            Chart.anomalyThroughput anomaly.projectId anomaly.anomalyType anomaly.targetHash
+        -- FIXME: delete after testing the anomalyThroughput lazyload function works
+        -- div_ [id_ anomalyGraphId, style_ "height:250px", class_ "w-full"] ""
+        -- script_ $ anomalyChartScript anomaly anomalyGraphId
         div_ [class_ "hidden shape-fields"] do
           span_ "shape fields"
         a_
@@ -226,8 +229,9 @@ renderAnomaly hideByDefault anomaly = do
                   (isJust (anomaly.acknowlegedAt))
             div_ [class_ "col-span-3"] do
               p_ [class_ "border-0 border-b-2  border-gray-100 border pb-2"] $ toHtml chartTitle
-              div_ [id_ anomalyGraphId, style_ "height:250px", class_ "w-full"] ""
-              script_ $ anomalyChartScript anomaly anomalyGraphId
+              Chart.anomalyThroughput anomaly.projectId anomaly.anomalyType anomaly.targetHash
+          -- div_ [id_ anomalyGraphId, style_ "height:250px", class_ "w-full"] ""
+          -- script_ $ anomalyChartScript anomaly anomalyGraphId
           div_ [class_ "hidden shape-fields"] do
             span_ "shape fields"
           a_
@@ -283,8 +287,9 @@ renderAnomaly hideByDefault anomaly = do
                   (isJust (anomaly.acknowlegedAt))
             div_ [class_ "col-span-3"] do
               p_ [class_ "border-0 border-b-2  border-gray-100 border pb-2"] $ toHtml chartTitle
-              div_ [id_ anomalyGraphId, style_ "height:250px", class_ "w-full"] ""
-              script_ $ anomalyChartScript anomaly anomalyGraphId
+              Chart.anomalyThroughput anomaly.projectId anomaly.anomalyType anomaly.targetHash
+          -- div_ [id_ anomalyGraphId, style_ "height:250px", class_ "w-full"] ""
+          -- script_ $ anomalyChartScript anomaly anomalyGraphId
           div_ [class_ "hidden shape-fields"] do
             span_ "shape fields"
           a_

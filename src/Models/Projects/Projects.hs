@@ -33,6 +33,7 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact qualified as PgT
 import Deriving.Aeson qualified as DAE
+import GHC.Records (HasField (getField))
 import Models.Users.Users qualified as Users
 import Optics.TH
 import Relude
@@ -44,6 +45,12 @@ newtype ProjectId = ProjectId {unProjectId :: UUID.UUID}
     (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default, Hashable)
     via UUID.UUID
   deriving anyclass (FromRow, ToRow)
+
+instance HasField "unwrap" ProjectId UUID.UUID where
+  getField = coerce
+
+instance HasField "toText" ProjectId Text where
+  getField = projectIdText
 
 projectIdText :: ProjectId -> Text
 projectIdText = UUID.toText . unProjectId

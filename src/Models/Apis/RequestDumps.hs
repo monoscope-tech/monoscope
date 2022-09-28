@@ -6,6 +6,7 @@ module Models.Apis.RequestDumps
   ( RequestDump (..),
     LabelValue,
     RequestDumpLogItem,
+    throughputBy,
     labelRequestLatency,
     requestDumpLogItemUrlPath,
     requestDumpLogUrlPath,
@@ -23,7 +24,7 @@ where
 import Data.Aeson (KeyValue ((.=)), ToJSON, object)
 import Data.Aeson qualified as AE
 import Data.Default.Instances ()
-import Data.Time (CalendarDiffTime, ZonedTime, defaultTimeLocale, formatTime)
+import Data.Time (CalendarDiffTime, ZonedTime)
 import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
@@ -39,7 +40,7 @@ import NeatInterpolation (text)
 import Optics.TH
 import Pkg.Parser
 import Relude hiding (many, some)
-import Utils ()
+import Utils (DBField (MkDBField))
 import Witch (from)
 
 -- request dumps are time series dumps representing each requests which we consume from our users.
@@ -207,6 +208,27 @@ select duration_steps, count(id)
 	GROUP BY duration_steps 
 	ORDER BY duration_steps;
       |]
+
+throughputBy :: Projects.ProjectId -> Maybe Text -> Maybe Text -> DBT IO Text
+throughputBy pid endpointHash shapeHash = do
+  let condlist =
+        catMaybes
+          [ " endpoint_hash=? " <$ endpointHash,
+            "shape_hash=? " <$ shapeHash
+          ]
+  let paramList = mapMaybe (MkDBField <$>) [endpointHash, shapeHash]
+
+  let cond
+        | null condlist = mempty
+        | otherwise = "AND " <> mconcat (intersperse " AND " condlist)
+
+  let q =
+        [text| WITH q as (SELECT timeB, SUM(total_count) total_count 
+                  FROM apis.project_requests_by_endpoint_per_min 
+                  WHERE project_id=? $cond GROUP BY timeB, total_count)
+              SELECT COALESCE(json_agg(json_build_array(timeB, total_count)), '[]')::text from q; |]
+  (Only val) <- fromMaybe (Only "[]") <$> queryOne Select (Query $ from @Text q) (MkDBField pid : paramList)
+  pure val
 
 -- Useful for charting latency histogram on the dashbaord and endpoint details pages
 newtype LabelValue = LabelValue (Int, Int, Maybe Text)
