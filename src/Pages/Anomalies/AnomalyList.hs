@@ -184,9 +184,6 @@ renderAnomaly hideByDefault anomaly = do
           div_ [class_ "col-span-3"] do
             p_ [class_ "border-0 border-b-2  border-gray-100 border pb-2"] $ toHtml chartTitle
             Chart.anomalyThroughput anomaly.projectId anomaly.anomalyType anomaly.targetHash
-        -- FIXME: delete after testing the anomalyThroughput lazyload function works
-        -- div_ [id_ anomalyGraphId, style_ "height:250px", class_ "w-full"] ""
-        -- script_ $ anomalyChartScript anomaly anomalyGraphId
         div_ [class_ "hidden shape-fields"] do
           span_ "shape fields"
         a_
@@ -230,8 +227,6 @@ renderAnomaly hideByDefault anomaly = do
             div_ [class_ "col-span-3"] do
               p_ [class_ "border-0 border-b-2  border-gray-100 border pb-2"] $ toHtml chartTitle
               Chart.anomalyThroughput anomaly.projectId anomaly.anomalyType anomaly.targetHash
-          -- div_ [id_ anomalyGraphId, style_ "height:250px", class_ "w-full"] ""
-          -- script_ $ anomalyChartScript anomaly anomalyGraphId
           div_ [class_ "hidden shape-fields"] do
             span_ "shape fields"
           a_
@@ -243,6 +238,7 @@ renderAnomaly hideByDefault anomaly = do
     Anomalies.ATFormat -> do
       let endpointTitle = toHtml $ fromMaybe "" (anomaly.endpointMethod) <> "  " <> fromMaybe "" (anomaly.endpointUrlPath)
       let endpointPath = Endpoints.endpointUrlPath (anomaly.projectId) (Unsafe.fromJust $ anomaly.endpointId)
+      -- traceShowM anomaly
       div_
         [ class_ "anomaly-item card-round hover:drop-shadow-md xparent-hover ",
           style_ (if hideByDefault then "display:none" else ""),
@@ -288,8 +284,6 @@ renderAnomaly hideByDefault anomaly = do
             div_ [class_ "col-span-3"] do
               p_ [class_ "border-0 border-b-2  border-gray-100 border pb-2"] $ toHtml chartTitle
               Chart.anomalyThroughput anomaly.projectId anomaly.anomalyType anomaly.targetHash
-          -- div_ [id_ anomalyGraphId, style_ "height:250px", class_ "w-full"] ""
-          -- script_ $ anomalyChartScript anomaly anomalyGraphId
           div_ [class_ "hidden shape-fields"] do
             span_ "shape fields"
           a_

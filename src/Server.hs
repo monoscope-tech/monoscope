@@ -47,33 +47,37 @@ type GetRedirect = Verb 'GET 302
 instance MimeRender JSON ByteString where
   mimeRender _ = from @ByteString
 
+type QPT a = QueryParam a Text
+
+type ProjectId = Capture "projectID" Projects.ProjectId
+
 --
 -- API Section
 type ProtectedAPI =
   UVerb 'GET '[HTML] GetOrRedirect
     :<|> "p" :> "new" :> Get '[HTML] (Html ()) -- p represents project
     :<|> "p" :> "new" :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
-    :<|> "p" :> Capture "projectID" Projects.ProjectId :> Get '[HTML] (Html ())
-    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "manage_members" :> Get '[HTML] (Html ())
-    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "manage_members" :> ReqBody '[FormUrlEncoded] ManageMembers.ManageMembersForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "endpoints" :> Get '[HTML] (Html ())
-    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "endpoints" :> Capture "endpoints_id" Endpoints.EndpointId :> Get '[HTML] (Html ())
-    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "apis" :> Get '[HTML] (Html ())
-    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Api.GenerateAPIKeyForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> Get '[HTML] (Html ())
-    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "manual_ingest" :> Get '[HTML] (Html ())
-    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "manual_ingest" :> ReqBody '[FormUrlEncoded] ManualIngestion.RequestMessageForm :> Post '[HTML] (Html ())
-    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "log_explorer" :> QueryParam "query" Text :> QueryParam "cols" Text :> QueryParam "from" Text :> HXRequest :> HXBoosted :> Get '[HTML] (Html ())
-    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" ZonedTime :> Get '[HTML] (Html ())
-    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "bulk_seed_and_ingest" :> Get '[HTML] (Html ())
-    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "bulk_seed_and_ingest" :> ReqBody '[FormUrlEncoded] DataSeeding.DataSeedingForm :> Post '[HTML] (Html ())
-    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "anomalies" :> QueryParam "layout" Text :> HXRequest :> Get '[HTML] (Html ())
-    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "acknowlege" :> Get '[HTML] (Html ())
-    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "unacknowlege" :> Get '[HTML] (Html ())
-    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "redacted_fields" :> Get '[HTML] (Html ())
-    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "redacted_fields" :> ReqBody '[FormUrlEncoded] RedactedFields.RedactFieldForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "charts_json" :> "throughput" :> QueryParam "endpoint_hash" Text :> QueryParam "shape_hash" Text :> Get '[JSON] ByteString
-    :<|> "p" :> Capture "projectID" Projects.ProjectId :> "charts_html" :> "throughput" :> QueryParam "endpoint_hash" Text :> QueryParam "shape_hash" Text :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "manage_members" :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "manage_members" :> ReqBody '[FormUrlEncoded] ManageMembers.ManageMembersForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
+    :<|> "p" :> ProjectId :> "endpoints" :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "endpoints" :> Capture "endpoints_id" Endpoints.EndpointId :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "apis" :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Api.GenerateAPIKeyForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
+    :<|> "p" :> ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "manual_ingest" :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "manual_ingest" :> ReqBody '[FormUrlEncoded] ManualIngestion.RequestMessageForm :> Post '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "log_explorer" :> QPT "query" :> QPT "cols" :> QPT "from" :> HXRequest :> HXBoosted :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" ZonedTime :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "bulk_seed_and_ingest" :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "bulk_seed_and_ingest" :> ReqBody '[FormUrlEncoded] DataSeeding.DataSeedingForm :> Post '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "anomalies" :> QPT "layout" :> HXRequest :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "acknowlege" :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "unacknowlege" :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "redacted_fields" :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "redacted_fields" :> ReqBody '[FormUrlEncoded] RedactedFields.RedactFieldForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
+    :<|> "p" :> ProjectId :> "charts_json" :> "throughput" :> QPT "endpoint_hash" :> QPT "shape_hash" :> QPT "format_hash" :> Get '[JSON] ByteString
+    :<|> "p" :> ProjectId :> "charts_html" :> "throughput" :> QPT "endpoint_hash" :> QPT "shape_hash" :> QPT "format_hash" :> Get '[HTML] (Html ())
 
 type PublicAPI =
   "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)

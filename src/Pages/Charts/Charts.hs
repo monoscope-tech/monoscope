@@ -12,16 +12,17 @@ import NeatInterpolation (text)
 import Relude
 import Witch (from)
 
-throughputEndpoint :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> DashboardM ByteString
-throughputEndpoint _ pid endpointHash shapeHash = do
+throughputEndpoint :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM ByteString
+throughputEndpoint _ pid endpointHash shapeHash formatHash = do
   pool <- asks pool
-  liftIO $ withPool pool $ from @Text <$> RequestDumps.throughputBy pid endpointHash shapeHash
+  chartData <- liftIO $ withPool pool $ RequestDumps.throughputBy pid endpointHash shapeHash formatHash
+  pure $ from @Text chartData
 
-throughputEndpointHTML :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> DashboardM (Html ())
-throughputEndpointHTML _ pid endpointHash shapeHash = do
+throughputEndpointHTML :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
+throughputEndpointHTML _ pid endpointHash shapeHash formatHash = do
   pool <- asks pool
-  chartData <- liftIO $ withPool pool $ RequestDumps.throughputBy pid endpointHash shapeHash
-  let entityId = fromMaybe "" $ endpointHash <|> shapeHash
+  chartData <- liftIO $ withPool pool $ RequestDumps.throughputBy pid endpointHash shapeHash formatHash
+  let entityId = fromMaybe "" $ endpointHash <|> shapeHash <|> formatHash
   pure $ do
     div_ [id_ $ "id-" <> entityId, style_ "height:250px", class_ "w-full"] ""
     script_ [text| throughputChart("id-$entityId", $chartData) |]
@@ -42,43 +43,14 @@ anomalyThroughput pid anType queryValue = do
       style_ "height:250px",
       class_ "w-full",
       hxGet_ [text| /p/$pidT/charts_html/throughput?$queryKey=$queryValue |],
-      hxTrigger_ "intersect"
+      hxTrigger_ "intersect",
+      hxSwap_ "outerHTML"
     ]
     ""
-  -- [__| init call throughputChart(my @data-entityId) then
-  -- on intersection(intersecting) fetch/|]
-  -- ] ""
-  script_ [text| throughputChart("id-$queryValue", [])|]
-
--- anomalyChartScript :: Anomalies.AnomalyVM -> Text -> Text
--- anomalyChartScript anomaly anomalyGraphId =
---   let timeSeriesData = fromMaybe "[]" $ anomaly.timeSeries
---    in -- Adding the current day and time to the end of the chart data, so that the chart is scaled to include the current day/time
---       -- currentISOTimeStringVar is declared on every page, in case they need a string for the current time in ISO format
---       [text|
---       new FusionCharts({
---         type: "timeseries",
---         renderAt: "$anomalyGraphId",
---         width: "100%",
---         height: 250,
---         dataSource: {
---           data: new FusionCharts.DataStore().createDataTable(($timeSeriesData).concat([[currentISOTimeStringVar, 0]]),
---           [{"name": "Time",
---             "type": "date",
---             "format": "%Y-%m-%dT%H:%M:%S%Z" // https://www.fusioncharts.com/dev/fusiontime/fusiontime-attributes
---           },{"name": "Count","type": "number"}]),
---           chart: {},
---           navigator: {"enabled": 0},
---           series: "StatusCode",
---           yaxis: [{plot:[{value: "Count",type: "smooth-line"}],title: ""}]
---         }
---       }).render();
---      |]
 
 chartInit :: Text
 chartInit =
   [text|
-  
   function throughputChart(renderAt, data){
     const chart = new FusionCharts({
       type: "timeseries",
@@ -97,6 +69,8 @@ chartInit =
         yaxis: [{plot:[{value: "Count",type: "smooth-line"}],title: ""}]
       }
     });
+    // chart.setJSONUrl("http://localhost:8080/p/51d14050-7480-4d14-be7b-3d806d1be43b/charts_json/throughput?endpoint_hash=c1356656");
+    chart.render();
     return chart
   }
   |]

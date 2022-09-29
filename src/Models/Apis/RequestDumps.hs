@@ -209,23 +209,24 @@ select duration_steps, count(id)
 	ORDER BY duration_steps;
       |]
 
-throughputBy :: Projects.ProjectId -> Maybe Text -> Maybe Text -> DBT IO Text
-throughputBy pid endpointHash shapeHash = do
+throughputBy :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> DBT IO Text
+throughputBy pid endpointHash shapeHash formatHash = do
   let condlist =
         catMaybes
           [ " endpoint_hash=? " <$ endpointHash,
-            "shape_hash=? " <$ shapeHash
+            " shape_hash=? " <$ shapeHash,
+            " ?=ANY(format_hashes) " <$ formatHash
           ]
-  let paramList = mapMaybe (MkDBField <$>) [endpointHash, shapeHash]
+  let paramList = mapMaybe (MkDBField <$>) [endpointHash, shapeHash, formatHash]
 
   let cond
         | null condlist = mempty
         | otherwise = "AND " <> mconcat (intersperse " AND " condlist)
 
   let q =
-        [text| WITH q as (SELECT timeB, SUM(total_count) total_count 
-                  FROM apis.project_requests_by_endpoint_per_min 
-                  WHERE project_id=? $cond GROUP BY timeB, total_count)
+        [text| WITH q as (SELECT time_bucket('5 minutes', created_at) as timeB, COUNT(*) total_count 
+                  FROM apis.request_dumps 
+                  WHERE project_id=? $cond GROUP BY timeB)
               SELECT COALESCE(json_agg(json_build_array(timeB, total_count)), '[]')::text from q; |]
   (Only val) <- fromMaybe (Only "[]") <$> queryOne Select (Query $ from @Text q) (MkDBField pid : paramList)
   pure val
