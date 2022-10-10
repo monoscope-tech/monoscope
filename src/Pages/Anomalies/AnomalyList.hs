@@ -18,7 +18,6 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Optics.Core ((^.))
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Pages.Charts.Charts
 import Pages.Charts.Charts qualified as Chart
 import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
 import Relude
@@ -82,11 +81,11 @@ anomalyListSlider anomalies = do
     script_
       [type_ "text/hyperscript"]
       [text| 
-         init set $$currentAnomaly to 1 then
+         init set $$currentAnomaly to 0 then
               set $$anomalyIds to $anomalyIds
 
           def setAnomalySliderPag()
-            set #anomalySliderPagination.innerHTML to $$currentAnomaly+'/'+$$anomalyIds.length
+            set #anomalySliderPagination.innerHTML to ($$currentAnomaly+1)+'/'+$$anomalyIds.length
           end
          |]
     div_ [class_ ""] $ do
@@ -102,7 +101,8 @@ anomalyListSlider anomalies = do
           a_
             [ class_ "cursor-pointer",
               [__|on click hide #{$anomalyIds[$currentAnomaly]} then
-                            set $currentAnomaly to rem($currentAnomaly-1, $anomalyIds.length) then 
+                            js($currentAnomaly, $anomalyIds) return (Math.max(0, $currentAnomaly-1) % $anomalyIds.length) end then 
+                            set $currentAnomaly to it then
                             show #{$anomalyIds[$currentAnomaly]} then 
                             setAnomalySliderPag()|]
             ]
@@ -111,7 +111,8 @@ anomalyListSlider anomalies = do
           a_
             [ class_ "cursor-pointer",
               [__|on click hide #{$anomalyIds[$currentAnomaly]} then
-                            set $currentAnomaly to rem($currentAnomaly+1, $anomalyIds.length) then 
+                            js($currentAnomaly, $anomalyIds) return (($currentAnomaly+1) % $anomalyIds.length) end then 
+                            set $currentAnomaly to it then
                             show #{$anomalyIds[$currentAnomaly]} then
                             setAnomalySliderPag()|]
             ]
@@ -136,19 +137,19 @@ anomalyTimeline createdAt acknowlegedAt = small_ [class_ "inline-block  px-8 py-
     span_ [class_ "inline-block"] "-"
     time_ [class_ "inline-block"] $ toHtml @String $ formatTime defaultTimeLocale "%F %R" ackTime
 
-shapeParameterStats_ :: Html ()
-shapeParameterStats_ = div_ [class_ "py-4 inline-block"] do
+shapeParameterStats_ :: Int -> Int -> Int -> Html ()
+shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "py-4 inline-block"] do
   div_ [class_ "grid grid-cols-3 gap-1 text-center text-xs"] do
-    div_ [class_ "border p-1"] do
-      div_ [class_ "text-base"] "0"
+    div_ [class_ "p-1 bg-slate-100 text-slate-900 border border-slate-300"] do
+      div_ [class_ "text-base"] $ toHtml $ show newF
       div_ "new"
       div_ "parameters"
-    div_ [class_ "border p-1"] do
-      div_ [class_ "text-base"] "0"
+    div_ [class_ " p-1 bg-violet-100 text-violet-900 border border-violet-300"] do
+      div_ [class_ "text-base"] $ toHtml $ show updatedFF
       div_ "updated"
       div_ "parameters"
-    div_ [class_ "border p-1"] do
-      div_ [class_ "text-base"] "0"
+    div_ [class_ "p-1  bg-emerald-100 text-emerald-900 border border-emerald-300"] do
+      div_ [class_ "text-base"] $ toHtml $ show deletedF
       div_ [] "deleted"
       div_ "parameters"
 
@@ -156,7 +157,6 @@ renderAnomaly :: Bool -> Anomalies.AnomalyVM -> Html ()
 renderAnomaly hideByDefault anomaly = do
   let (anomalyTitle, chartTitle, icon) = anomalyDisplayConfig anomaly
   let anomalyId = Anomalies.anomalyIdText (anomaly.id)
-  let anomalyGraphId = "field-" <> anomalyId
   case anomaly.anomalyType of
     Anomalies.ATEndpoint -> do
       let endpointTitle = toHtml $ fromMaybe "" (anomaly.endpointMethod) <> "  " <> fromMaybe "" (anomaly.endpointUrlPath)
@@ -170,7 +170,6 @@ renderAnomaly hideByDefault anomaly = do
                 img_ [src_ icon, class_ "inline w-4 h-4"]
                 strong_ [class_ "font-semibold"] $ toHtml $ "  " <> anomalyTitle
               a_ [class_ "text-blue-800 inline-block monospace pb-3 pt-1", href_ endpointPath] endpointTitle
-            shapeParameterStats_
             div_ [class_ "flex items-center gap-2"] do
               a_
                 [ class_ "inline-block xchild-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100",
@@ -213,7 +212,7 @@ renderAnomaly hideByDefault anomaly = do
                   a_ [class_ "text-blue-800  inline-block monospace "] $ toHtml anomaly.targetHash
                 p_ "found with new field/parameters on endpoint: "
                 a_ [class_ "text-blue-800 inline-block monospace pb-3 pt-1", href_ endpointPath] endpointTitle
-              shapeParameterStats_
+              shapeParameterStats_ (length anomaly.shapeNewUniqueFields) (length anomaly.shapeDeletedFields) (length anomaly.shapeUpdatedFieldFormats)
               div_ [class_ "flex items-center gap-2"] do
                 a_
                   [ class_ "inline-block xchild-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100",
@@ -238,7 +237,6 @@ renderAnomaly hideByDefault anomaly = do
     Anomalies.ATFormat -> do
       let endpointTitle = toHtml $ fromMaybe "" (anomaly.endpointMethod) <> "  " <> fromMaybe "" (anomaly.endpointUrlPath)
       let endpointPath = Endpoints.endpointUrlPath (anomaly.projectId) (Unsafe.fromJust $ anomaly.endpointId)
-      -- traceShowM anomaly
       div_
         [ class_ "anomaly-item card-round hover:drop-shadow-md xparent-hover ",
           style_ (if hideByDefault then "display:none" else ""),

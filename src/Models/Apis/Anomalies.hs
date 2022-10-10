@@ -7,6 +7,9 @@ module Models.Apis.Anomalies
     AnomalyActions (..),
     AnomalyTypes (..),
     AnomalyId (..),
+    parseAnomalyTypes,
+    parseAnomalyActions,
+    getAnomalyVM,
     selectOngoingAnomaliesForEndpoint,
     acknowlegeAnomaly,
     anomalyIdText,
@@ -15,20 +18,26 @@ module Models.Apis.Anomalies
   )
 where
 
+import Data.Aeson qualified as AE
 import Data.Default (Default, def)
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity
-import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query)
+import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query, queryOne)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, Only (Only))
 import Database.PostgreSQL.Simple.FromField (FromField, ResultError (ConversionFailed, UnexpectedNull), fromField, returnError)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
 import Database.PostgreSQL.Transact (DBT)
+import Deriving.Aeson qualified as DAE
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Fields qualified as Fields
+import Models.Apis.Fields.Types qualified as Fields
+  ( FieldCategoryEnum,
+    FieldId,
+    FieldTypes,
+  )
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
@@ -53,16 +62,22 @@ data AnomalyTypes
   | ATShape
   | ATFormat
   deriving stock (Eq, Generic, Show)
+  deriving
+    (AE.ToJSON, AE.FromJSON)
+    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "FT", DAE.CamelToSnake]] AnomalyTypes
 
 instance Default AnomalyTypes where
   def = ATUnknown
 
+anomalyTypesToText :: AnomalyTypes -> Text
+anomalyTypesToText ATUnknown = "unknown"
+anomalyTypesToText ATField = "field"
+anomalyTypesToText ATEndpoint = "endpoint"
+anomalyTypesToText ATShape = "shape"
+anomalyTypesToText ATFormat = "format"
+
 instance ToField AnomalyTypes where
-  toField ATUnknown = Escape "unknown"
-  toField ATField = Escape "field"
-  toField ATEndpoint = Escape "endpoint"
-  toField ATShape = Escape "shape"
-  toField ATFormat = Escape "format"
+  toField = Escape . encodeUtf8 <$> anomalyTypesToText
 
 parseAnomalyTypes :: (Eq s, IsString s) => s -> Maybe AnomalyTypes
 parseAnomalyTypes "unknown" = Just ATUnknown
@@ -84,14 +99,20 @@ instance FromField AnomalyTypes where
 data AnomalyActions
   = AAUnknown
   | AACreated
-  deriving stock (Show)
+  deriving stock (Show, Eq, Generic)
+  deriving
+    (AE.ToJSON, AE.FromJSON)
+    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "FT", DAE.CamelToSnake]] AnomalyActions
 
 instance Default AnomalyActions where
   def = AAUnknown
 
+anomalyActionsToText :: AnomalyActions -> Text
+anomalyActionsToText AAUnknown = "unknown"
+anomalyActionsToText AACreated = "created"
+
 instance ToField AnomalyActions where
-  toField AAUnknown = Escape "unknown"
-  toField AACreated = Escape "created"
+  toField = Escape . encodeUtf8 <$> anomalyActionsToText
 
 parseAnomalyActions :: (Eq s, IsString s) => s -> Maybe AnomalyActions
 parseAnomalyActions "unknown" = Just AAUnknown
@@ -119,6 +140,9 @@ data AnomalyVM = AnomalyVM
     targetHash :: Text,
     --
     shapeId :: Maybe Shapes.ShapeId,
+    shapeNewUniqueFields :: Vector Text,
+    shapeDeletedFields :: Vector Text,
+    shapeUpdatedFieldFormats :: Vector Text,
     --
     fieldId :: Maybe Fields.FieldId,
     fieldKey :: Maybe Text,
@@ -164,6 +188,11 @@ unArchiveAnomaly :: AnomalyId -> DBT IO ()
 unArchiveAnomaly aid = void $ execute Update q (Only aid)
   where
     q = [sql| update apis.anomalies set acknowleged_by=null, acknowleged_at=null where id=? |]
+
+getAnomalyVM :: Projects.ProjectId -> Text -> DBT IO (Maybe AnomalyVM)
+getAnomalyVM pid hash = queryOne Select q (pid, hash)
+  where
+    q = [sql| SELECT *, '[]'::text FROM apis.anomalies_vm WHERE project_id=? AND target_hash=?|]
 
 selectAnomalies :: Projects.ProjectId -> DBT IO (Vector AnomalyVM)
 selectAnomalies pid = query Select q opt

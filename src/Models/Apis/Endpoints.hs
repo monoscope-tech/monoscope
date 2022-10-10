@@ -14,6 +14,7 @@ module Models.Apis.Endpoints
     endpointIdText,
     endpointToUrlPath,
     upsertEndpointQueryAndParam,
+    endpointByHash,
   )
 where
 
@@ -25,7 +26,6 @@ import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
-import Database.PostgreSQL.Entity (selectById)
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), query, queryOne)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), Query, ToRow)
@@ -193,3 +193,8 @@ endpointById :: EndpointId -> PgT.DBT IO (Maybe Endpoint)
 endpointById eid = queryOne Select q (Only eid)
   where
     q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, akeys(hosts), hash from apis.endpoints where id=? |]
+
+endpointByHash :: Projects.ProjectId -> Text -> PgT.DBT IO (Maybe Endpoint)
+endpointByHash pid hash = queryOne Select q (pid, hash)
+  where
+    q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, akeys(hosts), hash from apis.endpoints where project_id=? AND hash=? |]

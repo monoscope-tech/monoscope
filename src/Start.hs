@@ -27,6 +27,9 @@ import Gogol qualified as Google
 import Gogol.PubSub qualified as PubSub
 import Models.Projects.Projects qualified as Projects
 import Network.Wai.Handler.Warp (run)
+import OddJobs.Cli qualified as OJCli
+import OddJobs.ConfigBuilder qualified as OJConfig
+import OddJobs.Types qualified as OJTypes
 import Optics.Operators
 import ProcessMessage
 import Relude
@@ -77,12 +80,21 @@ startApp = do
         logger <& "🚀 Starting server at port " <> show (envConfig ^. #port)
         logger <& "\n"
 
+        let ojStartArgs =
+              OJCli.UIStartArgs
+                { uistartAuth = OJCli.AuthNone,
+                  uistartPort = 5002
+                }
+
+        let ojLogger logLevel logEvent = logger <& show (logLevel, logEvent)
+        let ojTable = "background_jobs" :: OJTypes.TableName
+        let ojCfg = OJConfig.mkUIConfig ojLogger ojTable poolConn id
         asyncs <-
           sequence
             [ async (pubsubService logger envConfig poolConn projectCache),
-              async (pubsubService logger envConfig poolConn projectCache),
               async (run (Config.port envConfig) $ Server.app logger poolConn serverCtx),
-              async $ BackgroundJobs.jobsWorkerInit poolConn logger envConfig
+              async $ BackgroundJobs.jobsWorkerInit poolConn logger envConfig,
+              async $ OJCli.defaultWebUI ojStartArgs ojCfg
             ]
         _ <- waitAnyCancel asyncs
         pass

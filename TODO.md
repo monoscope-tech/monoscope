@@ -24,6 +24,12 @@
 #### 12/8/2022
 - [] Instead of having examples as a column under formats, could we be better served by having an examples table?
 - [x] Create an onboarding screen for projects with checklist until a user has data in their dashboard. 
+
+#### 10/10/2022
+- [] Add tabs/menu to endpoint page for docs and overview
+- [] Add payment processing 
+- [] Test for data processing, especially updates
+- [] 
   
 ### Completed Column ✓
 

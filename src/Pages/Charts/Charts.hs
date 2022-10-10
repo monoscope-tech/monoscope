@@ -48,6 +48,7 @@ anomalyThroughput pid anType queryValue = do
     ]
     ""
 
+-- chartInit is registered once in the BodyWrapper to be injected once into the webpage
 chartInit :: Text
 chartInit =
   [text|

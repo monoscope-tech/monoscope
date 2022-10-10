@@ -2,6 +2,12 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer base {
+  .card-round {
+    @apply bg-white border-2 border-gray-100 rounded-xl;
+  }
+}
+
 @layer components {
   html {
     font-size: 14px;
@@ -57,9 +63,7 @@
     visibility: visible;
   }
 
-  .card-round {
-    @apply bg-white border-2 border-gray-100 rounded-xl;
-  }
+
 }
 /* HERE SINCE IT"S BASICALLY AN OVERRIDE.  Its for the log items rows */
 .expanded-log {

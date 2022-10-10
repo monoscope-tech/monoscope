@@ -78,7 +78,7 @@ data Project = Project
 makeFieldLabelsNoPrefix ''Project
 
 data ProjectCache = ProjectCache
-  { -- We need this hosts to mirrow all the hosts in the endpoints table, and could use this for validation purposes to skip inserting endpoints just because of hosts
+  { -- We need this hosts to mirror all the hosts in the endpoints table, and could use this for validation purposes to skip inserting endpoints just because of hosts
     -- if endpoint exists but host is not in this list, then we have a query specifically for inserting hosts.
     hosts :: V.Vector Text,
     -- maybe we don't need this? See the next point.
@@ -89,7 +89,7 @@ data ProjectCache = ProjectCache
     -- We check if every request is part of the redact list, so it's better if we don't need to  hit the db for them with each request.
     -- Since we have a need to redact fields by endpoint, we can simply have the fields paths be prepended by the endpoint hash.
     -- [endpointHash]<>[field_category eg requestBody]<>[field_key_path]
-    -- Those redace fields that don't have endpoint or field_category attached, would be aplied to every endpoint and field category.
+    -- Those redact fields that don't have endpoint or field_category attached, would be aplied to every endpoint and field category.
     redactFieldslist :: V.Vector Text
   }
   deriving stock (Show, Generic)

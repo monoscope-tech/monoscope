@@ -202,7 +202,13 @@ CREATE TABLE IF NOT EXISTS apis.shapes
     -- the final hash is the hash as described above, but with the endpoint hash prepended to it. 
     -- This opens up prefix search possibilities as well, for shapes.
     hash text NOT NULL DEFAULT ''::TEXT,
-    field_hashes              text[]    NOT  NULL DEFAULT    '{}'::TEXT[]
+    field_hashes              text[]    NOT  NULL DEFAULT    '{}'::TEXT[],
+    -- All fields which are showing up for the first time on this endpoint
+    new_unique_fields  text[] NOT NULL DEFAULT '{}'::TEXT[],
+    -- All fields which were usually sent for all other requests on this endpoint, but are no longer being sent.
+    deleted_fields     text[] NOT NULL DEFAULT '{}'::TEXT[],
+    -- All fields associated with this shape which are updates
+    updated_field_formats     text[] NOT NULL DEFAULT '{}'::TEXT[]
 );
 SELECT manage_updated_at('apis.shapes');
 CREATE INDEX IF NOT EXISTS idx_apis_shapes_project_id ON apis.shapes(project_id);
@@ -289,8 +295,7 @@ CREATE INDEX IF NOT EXISTS idx_apis_anomalies_project_id ON apis.anomalies(proje
 CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_anomalies_target_hash ON apis.anomalies(target_hash);
 
 
-
-CREATE FUNCTION apis.new_anomaly_proc() RETURNS trigger AS $$
+CREATE OR REPLACE FUNCTION apis.new_anomaly_proc() RETURNS trigger AS $$
 DECLARE 
 	anomaly_type apis.anomaly_type;
 	anomaly_action apis.anomaly_action;
@@ -301,6 +306,7 @@ BEGIN
 	anomaly_type := TG_ARGV[0];
 	anomaly_action := TG_ARGV[1];
     INSERT INTO apis.anomalies (project_id, anomaly_type, action, target_hash) VALUES (NEW.project_id, anomaly_type, anomaly_action, NEW.hash);
+    INSERT INTO background_jobs (run_at, status, payload) VALUES (now() + INTERVAL '2 minutes', 'queued',  jsonb_build_object('tag', 'NewAnomaly', 'contents', json_build_array(NEW.project_id, NEW.created_at, anomaly_type::text, anomaly_action::text, NEW.hash)));
     RETURN NULL;
 END;
 $$ LANGUAGE plpgsql;
@@ -446,6 +452,9 @@ SELECT
     an.action,
     an.target_hash,
     shapes.id shape_id,
+    coalesce(shapes.new_unique_fields, '{}'::TEXT[]) new_unique_fields, 
+    coalesce(shapes.deleted_fields, '{}'::TEXT[]) deleted_fields,
+    coalesce(shapes.updated_field_formats, '{}'::TEXT[]) updated_field_formats,
     fields.id field_id,
     fields.key field_key,
     fields.key_path field_key_path,
@@ -571,6 +580,7 @@ SELECT manage_updated_at('projects.redacted_fields');
 CREATE INDEX IF NOT EXISTS idx_projects_redacted_fields_project_id ON projects.redacted_fields(project_id);
 
 -- NEW project requests view that rounds up stats by 1minute
+-- NOTE: Is this actually used?
 DROP MATERIALIZED VIEW  IF EXISTS apis.project_requests_by_endpoint_per_min;
 CREATE MATERIALIZED VIEW apis.project_requests_by_endpoint_per_min WITH (timescaledb.continuous)
     AS SELECT
@@ -582,7 +592,8 @@ CREATE MATERIALIZED VIEW apis.project_requests_by_endpoint_per_min WITH (timesca
     sum(EXTRACT(epoch FROM duration)) as total_time
   FROM
     apis.request_dumps
-  GROUP BY project_id, timeB, endpoint_hash, method, url_path, status_code,host;
+  GROUP BY project_id, timeB, endpoint_hash, method, url_path, status_code,host
+  WITH NO DATA;
 -- continuous aggregate policy to refresh every hour.
 SELECT add_continuous_aggregate_policy('apis.project_requests_by_endpoint_per_min',
      start_offset => INTERVAL '2 months',
