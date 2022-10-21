@@ -13,10 +13,9 @@ import Database.PostgreSQL.Simple (Connection)
 import Lucid
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Fields qualified as Fields
+import Models.Apis.Fields.Types qualified as Fields (FieldId)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Network.HTTP.Media hiding (Accept)
 import Network.Wai (Request)
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.Api qualified as Api
@@ -25,10 +24,13 @@ import Pages.Dashboard qualified as Dashboard
 import Pages.Endpoints.EndpointDetails qualified as EndpointDetails
 import Pages.Endpoints.EndpointList qualified as EndpointList
 import Pages.Log qualified as Log
+import Pages.ManualIngestion (RequestMessageForm)
 import Pages.ManualIngestion qualified as ManualIngestion
 import Pages.Projects.CreateProject qualified as CreateProject
 import Pages.Projects.ListProjects qualified as ListProjects
+import Pages.Projects.ManageMembers (ManageMembersForm)
 import Pages.Projects.ManageMembers qualified as ManageMembers
+import Pages.RedactedFields (RedactFieldForm)
 import Pages.RedactedFields qualified as RedactedFields
 import Relude
 import Servant
@@ -59,14 +61,14 @@ type ProtectedAPI =
     :<|> "p" :> "new" :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
     :<|> "p" :> ProjectId :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "manage_members" :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "manage_members" :> ReqBody '[FormUrlEncoded] ManageMembers.ManageMembersForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
+    :<|> "p" :> ProjectId :> "manage_members" :> ReqBody '[FormUrlEncoded] ManageMembersForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "endpoints" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "endpoints" :> Capture "endpoints_id" Endpoints.EndpointId :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "apis" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Api.GenerateAPIKeyForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "manual_ingest" :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "manual_ingest" :> ReqBody '[FormUrlEncoded] ManualIngestion.RequestMessageForm :> Post '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "manual_ingest" :> ReqBody '[FormUrlEncoded] RequestMessageForm :> Post '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "log_explorer" :> QPT "query" :> QPT "cols" :> QPT "from" :> HXRequest :> HXBoosted :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" ZonedTime :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "bulk_seed_and_ingest" :> Get '[HTML] (Html ())
@@ -75,7 +77,7 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "acknowlege" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "unacknowlege" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "redacted_fields" :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "redacted_fields" :> ReqBody '[FormUrlEncoded] RedactedFields.RedactFieldForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
+    :<|> "p" :> ProjectId :> "redacted_fields" :> ReqBody '[FormUrlEncoded] RedactFieldForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "charts_json" :> "throughput" :> QPT "endpoint_hash" :> QPT "shape_hash" :> QPT "format_hash" :> Get '[JSON] ByteString
     :<|> "p" :> ProjectId :> "charts_html" :> "throughput" :> QPT "endpoint_hash" :> QPT "shape_hash" :> QPT "format_hash" :> Get '[HTML] (Html ())
 
@@ -83,7 +85,7 @@ type PublicAPI =
   "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
     :<|> "to_login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
     :<|> "logout" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
-    :<|> "auth_callback" :> QueryParam "code" Text :> QueryParam "state" Text :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] (Html ()))
+    :<|> "auth_callback" :> QPT "code" :> QPT "state" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] (Html ()))
     -- on the client metadata endpoint we will be passing the authorization token directly to the handler,
     -- and perfoming all the auth logic at the handler level. This is because the clients will only call this endpoint,
     -- so it doesnt need an exclusive robust authorization middleware solution.

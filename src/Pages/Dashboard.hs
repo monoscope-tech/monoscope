@@ -97,37 +97,37 @@ dStats projReqStats reqsByEndpointJ = do
     div_ [class_ "grid grid-cols-3  gap-5 reqResSubSection"] $ do
       div_ [class_ "col-span-3 flex flex-row gap-5"] $ do
         div_ [class_ "col-span-1 shrink content-between space-y-2"] $ do
-          div_ [class_ "col-span-1 card-round p-5 flex flex-row justify-between bg-slate-100 text-slate-900 border border-slate-300"] $ do
+          div_ [class_ "col-span-1 card-round p-5 flex flex-row justify-between bg-slate-100 text-slate-900 border border-slate-200"] $ do
             div_ [class_ "flex flex-col justify-center"] $ do
               div_ [class_ "inline-block flex flex-row content-between"] $ do
-                strong_ [class_ "text-xl"] $ toHtml @Text $ show (projReqStats.totalRequests)
+                strong_ [class_ "font-normal text-xl"] $ toHtml @Text $ show (projReqStats.totalRequests)
               small_ "Total Requests"
 
-          div_ [class_ "col-span-1 card-round p-5 flex flex-row content-between bg-violet-100 text-violet-900 border border-violet-300"] $ do
+          div_ [class_ "col-span-1 card-round p-5 flex flex-row content-between bg-violet-50 text-slate-900 border border-violet-200"] $ do
             div_ $ do
               div_ [class_ "inline-block flex flex-row content-between"] $ do
-                strong_ [class_ "text-xl"] $ toHtml @Text $ show (projReqStats.totalAnomalies)
+                strong_ [class_ "font-normal text-2xl"] $ toHtml @Text $ show (projReqStats.totalAnomalies)
               small_ "Total Anomalies"
 
-          div_ [class_ "col-span-1 card-round p-5 flex flex-row content-between bg-emerald-100 text-emerald-900 border border-emerald-300"] $ do
+          div_ [class_ "col-span-1 card-round p-5 flex flex-row content-between bg-emerald-50 text-slate-900 border border-emerald-200"] $ do
             div_ $ do
               div_ [class_ "inline-block flex flex-row content-between"] $ do
-                strong_ [class_ "text-xl"] $ toHtml @Text $ show (projReqStats.totalEndpoints)
+                strong_ [class_ "font-normal text-2xl"] $ toHtml @Text $ show (projReqStats.totalEndpoints)
               small_ "Managed Endpoints"
 
-          div_ [class_ "col-span-1 card-round p-5 flex flex-row content-between bg-amber-100 text-amber-900 border border-amber-300"] $ do
+          div_ [class_ "col-span-1 card-round p-5 flex flex-row content-between bg-amber-50 text-slate-900 border border-amber-200"] $ do
             div_ $ do
               div_ [class_ "inline-block flex flex-row content-between"] $ do
-                strong_ [class_ "text-xl"] $ toHtml @Text $ show (projReqStats.totalShapes)
+                strong_ [class_ "font-normal text-2xl"] $ toHtml @Text $ show (projReqStats.totalShapes)
               small_ "Total shapes"
 
-          div_ [class_ "col-span-1 card-round p-5 flex flex-row content-between bg-rose-100 text-rose-900 border border-rose-300"] $ do
+          div_ [class_ "col-span-1 card-round p-5 flex flex-row content-between bg-rose-50 text-slate-900 border border-rose-200"] $ do
             div_ $ do
               div_ [class_ "inline-block flex flex-row content-between"] $ do
-                strong_ [class_ "text-xl"] $ toHtml @Text $ show (projReqStats.totalFields)
+                strong_ [class_ "font-normal text-2xl"] $ toHtml @Text $ show (projReqStats.totalFields)
               small_ "Total Fields"
 
-        div_ [class_ "flex-1 grow bg-white  border border-gray-100  row-span-2 rounded-2xl p-3"] $ do
+        div_ [class_ "flex-1 grow card-round row-span-2 p-3"] $ do
           div_ [class_ "p-4"] $ do
             select_ [] $ do
               option_ "Reqs Grouped by Endpoint"

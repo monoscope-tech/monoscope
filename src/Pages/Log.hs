@@ -8,7 +8,6 @@ import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
 import Data.Time (ZonedTime, defaultTimeLocale)
 import Data.Time.Format (formatTime)
-import Data.Time.Format.ISO8601
 import Data.UUID qualified as UUID
 import Data.Vector (Vector, iforM_, (!?))
 import Data.Vector qualified as Vector
@@ -27,7 +26,6 @@ import Optics.Core ((^.))
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Relude
 import System.Clock
-import Witch (from)
 
 -- $setup
 -- >>> import Relude

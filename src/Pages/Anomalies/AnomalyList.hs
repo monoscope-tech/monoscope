@@ -139,19 +139,16 @@ anomalyTimeline createdAt acknowlegedAt = small_ [class_ "inline-block  px-8 py-
 
 shapeParameterStats_ :: Int -> Int -> Int -> Html ()
 shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "py-4 inline-block"] do
-  div_ [class_ "grid grid-cols-3 gap-1 text-center text-xs"] do
-    div_ [class_ "p-1 bg-slate-100 text-slate-900 border border-slate-300"] do
-      div_ [class_ "text-base"] $ toHtml $ show newF
-      div_ "new"
-      div_ "parameters"
-    div_ [class_ " p-1 bg-violet-100 text-violet-900 border border-violet-300"] do
-      div_ [class_ "text-base"] $ toHtml $ show updatedFF
-      div_ "updated"
-      div_ "parameters"
-    div_ [class_ "p-1  bg-emerald-100 text-emerald-900 border border-emerald-300"] do
-      div_ [class_ "text-base"] $ toHtml $ show deletedF
-      div_ [] "deleted"
-      div_ "parameters"
+  div_ [class_ "grid grid-cols-3 gap-2 text-center text-xs w-96"] do
+    div_ [class_ "p-2 bg-emerald-100 text-emerald-900 border border-emerald-300"] do
+      div_ [class_ "text-base"] $ toHtml @String $ show newF
+      div_ "new fields"
+    div_ [class_ " p-2 bg-slate-100 text-slate-900 border border-slate-300"] do
+      div_ [class_ "text-base"] $ toHtml @String $ show updatedFF
+      div_ "updated fields"
+    div_ [class_ "p-2  bg-rose-100 text-rose-900 border border-rose-300"] do
+      div_ [class_ "text-base"] $ toHtml @String $ show deletedF
+      div_ [] "deleted fields"
 
 renderAnomaly :: Bool -> Anomalies.AnomalyVM -> Html ()
 renderAnomaly hideByDefault anomaly = do
@@ -189,8 +186,7 @@ renderAnomaly hideByDefault anomaly = do
           [ class_ "hover:bg-blue-100 block  px-4 py-1  border border-t-2 border-gray-100 mt-3 text-center cursor-pointer",
             [__| on click toggle .hidden on previous .shape-fields|]
           ]
-          do
-            small_ "Toggle Request parameters section"
+          $ small_ "Toggle Request parameters section"
     Anomalies.ATShape -> do
       let endpointTitle = toHtml $ fromMaybe "" (anomaly.endpointMethod) <> "  " <> fromMaybe "" (anomaly.endpointUrlPath)
       let endpointPath = Endpoints.endpointUrlPath (anomaly.projectId) (Unsafe.fromJust $ anomaly.endpointId)
