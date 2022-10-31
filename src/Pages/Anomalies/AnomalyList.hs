@@ -19,6 +19,7 @@ import NeatInterpolation (text)
 import Optics.Core ((^.))
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Charts.Charts qualified as Chart
+import Pages.Charts.Charts qualified as Charts
 import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
 import Relude
 import Relude.Unsafe qualified as Unsafe
@@ -193,8 +194,16 @@ anomalyItem hideByDefault anomaly icon title subTitle content = do
           (anomaly.projectId)
           (anomaly.id)
           (isJust (anomaly.acknowlegedAt))
-    div_ [class_ "flex items-center justify-center "] $ div_ [class_ "w-64 h-28"] $ Chart.anomalyThroughput anomaly.projectId anomaly.anomalyType anomaly.targetHash
+    let chartQuery = Just $ anomaly2ChartQuery anomaly.anomalyType anomaly.targetHash
+    div_ [class_ "flex items-center justify-center "] $ div_ [class_ "w-64 h-28"] $ Charts.throughput anomaly.projectId anomaly.targetHash chartQuery Nothing (12 * 60) (Just 28) False
     div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "tabular-nums text-xl"] "349"
+
+anomaly2ChartQuery :: Anomalies.AnomalyTypes -> Text -> Charts.QueryBy
+anomaly2ChartQuery Anomalies.ATEndpoint = Charts.QBEndpointHash
+anomaly2ChartQuery Anomalies.ATShape = Charts.QBShapeHash
+anomaly2ChartQuery Anomalies.ATFormat = Charts.QBFormatHash
+anomaly2ChartQuery Anomalies.ATUnknown = error "Should not convert unknown anomaly to chart"
+anomaly2ChartQuery Anomalies.ATField = error "Should not see field anomaly to chart in anomaly UI. ATField gets hidden under shape"
 
 renderAnomaly :: Bool -> Anomalies.AnomalyVM -> Html ()
 renderAnomaly hideByDefault anomaly = do

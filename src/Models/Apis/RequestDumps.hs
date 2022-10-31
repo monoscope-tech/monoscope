@@ -209,23 +209,31 @@ select duration_steps, count(id)
 	ORDER BY duration_steps;
       |]
 
-throughputBy :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> DBT IO Text
-throughputBy pid endpointHash shapeHash formatHash = do
+-- A throughput chart query for the request_dump table.
+throughputBy :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Maybe Int -> DBT IO Text
+throughputBy pid groupByM endpointHash shapeHash formatHash interval limitM = do
   let condlist =
         catMaybes
           [ " endpoint_hash=? " <$ endpointHash,
             " shape_hash=? " <$ shapeHash,
             " ?=ANY(format_hashes) " <$ formatHash
           ]
+  let groupBy' = fromMaybe @Text "" $ mappend " ," <$> groupByM
+  let (groupBy, groupByFields) = case groupByM of
+        Just "endpoint" -> (",method, url_path", ",method||' '||url_path as g")
+        _ -> (groupBy', groupBy')
+  let groupByFinal = maybe "" (const ",g") groupByM
   let paramList = mapMaybe (MkDBField <$>) [endpointHash, shapeHash, formatHash]
   let cond
         | null condlist = mempty
         | otherwise = "AND " <> mconcat (intersperse " AND " condlist)
+  let limit = maybe @Text "" (\x -> "limit " <> show x) limitM
+  let intervalT = show interval
   let q =
-        [text| WITH q as (SELECT time_bucket_gapfill('12 hours', created_at, now() - INTERVAL '14 days', now()) as timeB, COALESCE(COUNT(*), 0) total_count 
+        [text| WITH q as (SELECT time_bucket_gapfill('$intervalT minutes', created_at, now() - INTERVAL '14 days', now()) as timeB $groupByFields , COALESCE(COUNT(*), 0) total_count 
                   FROM apis.request_dumps 
-                  WHERE project_id=? AND created_at>now()-INTERVAL '14 days' $cond GROUP BY timeB limit 28)
-              SELECT COALESCE(json_agg(json_build_array(timeB, total_count)), '[]')::text from q; |]
+                  WHERE project_id=? AND created_at>now()-INTERVAL '14 days' $cond GROUP BY timeB $groupBy $limit)
+              SELECT COALESCE(json_agg(json_build_array(timeB $groupByFinal, total_count)), '[]')::text from q; |]
   (Only val) <- fromMaybe (Only "[]") <$> queryOne Select (Query $ from @Text q) (MkDBField pid : paramList)
   pure val
 

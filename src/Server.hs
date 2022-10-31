@@ -51,6 +51,10 @@ instance MimeRender JSON ByteString where
 
 type QPT a = QueryParam a Text
 
+type QPB a = QueryParam a Bool
+
+type QPI a = QueryParam a Int
+
 type ProjectId = Capture "projectID" Projects.ProjectId
 
 --
@@ -78,8 +82,7 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "unacknowlege" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "redacted_fields" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "redacted_fields" :> ReqBody '[FormUrlEncoded] RedactFieldForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-    :<|> "p" :> ProjectId :> "charts_json" :> "throughput" :> QPT "endpoint_hash" :> QPT "shape_hash" :> QPT "format_hash" :> Get '[JSON] ByteString
-    :<|> "p" :> ProjectId :> "charts_html" :> "throughput" :> QPT "endpoint_hash" :> QPT "shape_hash" :> QPT "format_hash" :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "charts_html" :> "throughput" :> QPT "id" :> QPT "group_by" :> QPT "endpoint_hash" :> QPT "shape_hash" :> QPT "format_hash" :> QPI "interval" :> QPI "limit" :> QPB "show_legend" :> Get '[HTML] (Html ())
 
 type PublicAPI =
   "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
@@ -137,7 +140,6 @@ protectedServer sess =
     :<|> AnomalyList.unAcknowlegeAnomalyGetH sess
     :<|> RedactedFields.redactedFieldsGetH sess
     :<|> RedactedFields.redactedFieldsPostH sess
-    :<|> Charts.throughputEndpoint sess
     :<|> Charts.throughputEndpointHTML sess
 
 publicServer :: ServerT PublicAPI DashboardM

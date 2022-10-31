@@ -16,6 +16,7 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.Anomalies.AnomalyList qualified as AnomaliesList
 import Pages.BodyWrapper
+import Pages.Charts.Charts qualified as Charts
 import Relude
 
 dashboardGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
@@ -112,43 +113,10 @@ dStats projReqStats reqsByEndpointJ = do
           statBox "Total Fields" (show (projReqStats.totalFields))
 
         div_ [class_ "flex-1 grow card-round row-span-2 p-3"] $ do
-          div_ [class_ "p-4"] $ do
+          div_ [class_ "p-4 h-full"] $ do
             select_ [] $ do
               option_ "Reqs Grouped by Endpoint"
-          -- TODO: option_ "Avg Reqs per minute"
-          div_ [id_ "reqsByEndpoints", class_ "text-center flex items-center justify-center", style_ "height:350px"] $ do
-            strong_ "No data yet."
-          unless (reqsByEndpointJ == "[]") do
-            script_
-              [text|
-        new FusionCharts({
-            type: "timeseries",
-            renderAt: "reqsByEndpoints",
-            width: "95%",
-            height: 350,
-            dataSource: {
-              data: new FusionCharts.DataStore().createDataTable($reqsByEndpointJ, [{
-                "name": "Time",
-                "type": "date",
-                "format": "%Y-%m-%dT%H:%M:%S%Z" // https://www.fusioncharts.com/dev/fusiontime/fusiontime-attributes
-                }, {"name": "StatusCode","type": "string"},{"name": "Count","type": "number"}]),
-              chart: {},
-              navigator: {
-                  "enabled": 0
-              },
-              series: "StatusCode",
-              yaxis: [
-                {
-                  plot:[{
-                    value: "Count",
-                    type: "column"
-                  }],
-                  title: ""
-                }
-              ],
-              legend: {enabled:"0"}
-            }
-          }).render();|]
+            Charts.throughput projReqStats.projectId "reqsByEndpoints" Nothing (Just Charts.GBEndpoint) (6 * 60) Nothing True
 
       div_ [class_ "col-span-3 card-round py-3 px-6"] $ do
         div_ [class_ "p-4"] $ do
