@@ -61,6 +61,7 @@ bodyWrapper BWConfig {sessM, currProject, pageTitle, menuItem} child =
           link_ [rel_ "preconnect", href_ "https://fonts.gstatic.com", crossorigin_ "true"]
           link_ [href_ "https://fonts.googleapis.com/css2?family=Inconsolata&family=Poppins:wght@400;500;600&display=swap", rel_ "stylesheet"]
           -- SCRIPTS
+          script_ [src_ "https://cdn.jsdelivr.net/npm/echarts@5.4.0/dist/echarts.min.js"] ("" :: Text)
           script_ [src_ "https://cdn.fusioncharts.com/fusioncharts/latest/fusioncharts.js"] ("" :: Text)
           script_ [src_ "https://cdn.fusioncharts.com/fusioncharts/latest/themes/fusioncharts.theme.fusion.js"] ("" :: Text)
           script_ [src_ "/assets/js/thirdparty/notyf3.min.js", defer_ "true"] ("" :: Text)
@@ -100,7 +101,7 @@ bodyWrapper BWConfig {sessM, currProject, pageTitle, menuItem} child =
           script_ Charts.chartInit
 
         body_ [class_ "text-gray-900"] $ do
-          section_ [class_ "flex flex-row bg-gray-50 h-screen overflow-hidden"] $ do
+          section_ [class_ "flex flex-row h-screen overflow-hidden"] $ do
             -- Side nav
             sideNav'
             section_ [class_ "grow h-full overflow-y-hidden"] $ do

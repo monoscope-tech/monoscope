@@ -24,8 +24,8 @@ throughputEndpointHTML _ pid endpointHash shapeHash formatHash = do
   chartData <- liftIO $ withPool pool $ RequestDumps.throughputBy pid endpointHash shapeHash formatHash
   let entityId = fromMaybe "" $ endpointHash <|> shapeHash <|> formatHash
   pure $ do
-    div_ [id_ $ "id-" <> entityId, style_ "height:250px", class_ "w-full"] ""
-    script_ [text| throughputChart("id-$entityId", $chartData) |]
+    div_ [id_ $ "id-" <> entityId, class_ "w-full h-full"] ""
+    script_ [text| throughputEChart("id-$entityId", $chartData, []) |]
 
 anomalyTypeToQueryKey :: Anomalies.AnomalyTypes -> Text
 anomalyTypeToQueryKey Anomalies.ATEndpoint = "endpoint_hash"
@@ -40,8 +40,8 @@ anomalyThroughput pid anType queryValue = do
   let queryKey = anomalyTypeToQueryKey anType
   div_
     [ id_ $ "id-" <> queryValue,
-      style_ "height:250px",
-      class_ "w-full",
+      -- style_ "height:250px",
+      class_ "w-full h-full",
       hxGet_ [text| /p/$pidT/charts_html/throughput?$queryKey=$queryValue |],
       hxTrigger_ "intersect",
       hxSwap_ "outerHTML"
@@ -74,4 +74,34 @@ chartInit =
     chart.render();
     return chart
   }
+
+function throughputEChart(renderAt, data, groupby){
+  const myChart = echarts.init(document.getElementById(renderAt));
+  const option = {
+    legend: {show: false},
+    tooltip: {
+      trigger: 'axis',
+    },
+    dataset: {
+      source:data,
+      dimensions: ['timestamp'].concat(groupby,  ['throughput']),
+    },
+    xAxis: { show: false, type: 'time' },
+    yAxis: { show: false, scale: true },
+    series: [
+      {
+         name: 'throughput',
+         type: 'bar',
+         barMinHeight: '1.5',
+         barMinWidth: '1.5',
+         encode: {
+           x: 'timestamp',
+           y: 'count'
+         }
+      }
+    ]
+  };
+  myChart.setOption(option);
+ }
+
   |]

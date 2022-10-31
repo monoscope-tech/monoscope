@@ -218,15 +218,13 @@ throughputBy pid endpointHash shapeHash formatHash = do
             " ?=ANY(format_hashes) " <$ formatHash
           ]
   let paramList = mapMaybe (MkDBField <$>) [endpointHash, shapeHash, formatHash]
-
   let cond
         | null condlist = mempty
         | otherwise = "AND " <> mconcat (intersperse " AND " condlist)
-
   let q =
-        [text| WITH q as (SELECT time_bucket('5 minutes', created_at) as timeB, COUNT(*) total_count 
+        [text| WITH q as (SELECT time_bucket_gapfill('12 hours', created_at, now() - INTERVAL '14 days', now()) as timeB, COALESCE(COUNT(*), 0) total_count 
                   FROM apis.request_dumps 
-                  WHERE project_id=? $cond GROUP BY timeB)
+                  WHERE project_id=? AND created_at>now()-INTERVAL '14 days' $cond GROUP BY timeB limit 28)
               SELECT COALESCE(json_agg(json_build_array(timeB, total_count)), '[]')::text from q; |]
   (Only val) <- fromMaybe (Only "[]") <$> queryOne Select (Query $ from @Text q) (MkDBField pid : paramList)
   pure val

@@ -10,7 +10,6 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Optics.Operators
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
 import Servant (Union, WithStatus (..), respond)
@@ -26,7 +25,7 @@ listProjectsGetH sess = do
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess,
-            pageTitle = "Endpoints"
+            pageTitle = "Projects List"
           }
   let page = bodyWrapper bwconf $ listProjectsBody projects
   -- Redirect to the create projects page if there's no project under the logged in user
