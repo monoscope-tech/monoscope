@@ -116,7 +116,7 @@ dStats projReqStats reqsByEndpointJ = do
           div_ [class_ "p-4 h-full"] $ do
             select_ [] $ do
               option_ "Reqs Grouped by Endpoint"
-            Charts.throughput projReqStats.projectId "reqsByEndpoints" Nothing (Just Charts.GBEndpoint) (6 * 60) Nothing True
+            Charts.throughput projReqStats.projectId "reqsByEndpoints" Nothing (Just Charts.GBEndpoint) (3 * 60) Nothing True
 
       div_ [class_ "col-span-3 card-round py-3 px-6"] $ do
         div_ [class_ "p-4"] $ do
