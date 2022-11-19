@@ -210,20 +210,20 @@ renderAnomaly hideByDefault anomaly = do
       anomalyItem hideByDefault anomaly icon anomalyTitle (Just $ toHtml endpointTitle) Nothing
     Anomalies.ATShape -> do
       let endpointTitle = fromMaybe "" (anomaly.endpointMethod) <> "  " <> fromMaybe "" (anomaly.endpointUrlPath)
-      let subTitle :: Html () = span_ [class_ "space-x-2"] do
+      let subTitle = span_ [class_ "space-x-2"] do
             a_ [class_ "cursor-pointer"] $ toHtml anomaly.targetHash
             span_ [] "in"
             span_ [] $ toHtml endpointTitle
-      let shapeContent :: Html () = small_ [class_ "block"] do
+      let shapeContent = small_ [class_ "block"] do
             shapeParameterStats_ (length anomaly.shapeNewUniqueFields) (length anomaly.shapeDeletedFields) (length anomaly.shapeUpdatedFieldFormats)
       anomalyItem hideByDefault anomaly icon anomalyTitle (Just subTitle) (Just shapeContent)
     Anomalies.ATFormat -> do
       let endpointTitle = toHtml $ fromMaybe "" (anomaly.endpointMethod) <> "  " <> fromMaybe "" (anomaly.endpointUrlPath)
-      let subTitle :: Html () = span_ [class_ "space-x-2"] do
+      let subTitle = span_ [class_ "space-x-2"] do
             a_ [class_ "cursor-pointer"] $ toHtml $ fromMaybe "" anomaly.fieldKeyPath
             span_ [] "in"
             span_ [] $ toHtml endpointTitle
-      let formatContent :: Html () = div_ [class_ "block"] do
+      let formatContent = div_ [class_ "block"] do
             div_ [class_ "text-sm"] do
               div_ do
                 small_ "current format: "

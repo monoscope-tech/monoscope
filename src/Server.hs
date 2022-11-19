@@ -174,7 +174,7 @@ statusH :: DashboardM (Status)
 statusH = do
   pool <- asks pool
   let query = [sql| select version(); |]
-  version :: Maybe Text <- liftIO $ withPool pool $ queryOne Select query ()
+  version <- liftIO $ withPool pool $ queryOne Select query ()
   pure $
     Status
       { ping = "pong",

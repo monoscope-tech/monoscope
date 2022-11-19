@@ -30,5 +30,5 @@ instance ToField DBField where
   toField (MkDBField a) = toField a
 
 -- Useful Alternative abstractions
--- (<?>) :: Alternative f => fa -> a -> fa
--- (<?>) fa def = fa <|> pure def
+(<?>) :: Alternative f => f a -> a -> f a
+(<?>) fa def = fa <|> pure def
