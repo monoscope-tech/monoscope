@@ -197,6 +197,11 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
             let shape = Shapes.Shape (Shapes.ShapeId dumpID) (rM.timestamp) now projectId endpointHash queryParamsKP requestHeadersKP responseHeadersKP requestBodyKP responseBodyKP fieldHashes shapeHash
             Shapes.insertShapeQueryAndParam shape
 
+  -- FIXME: This 1000 is added on the php sdk in a previous version and has been remove. This workaround code should be removed ASAP
+  let duration = case rM.sdkType of
+        PhpLaravel -> (rM.duration `div` 1000)
+        _ -> rM.duration
+
   -- request dumps are time series dumps representing each requests which we consume from our users.
   -- We use this field via the log explorer for exploring and searching traffic. And at the moment also use it for most time series analytics.
   -- It's likely a good idea to stop relying on it for some of the time series analysis, to allow us easily support request sampling, but still support
@@ -218,7 +223,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
             referer = rM.referer,
             protoMajor = rM.protoMajor,
             protoMinor = rM.protoMinor,
-            duration = calendarTimeTime $ secondsToNominalDiffTime $ fromIntegral $ rM.duration,
+            duration = calendarTimeTime $ secondsToNominalDiffTime $ fromIntegral $ duration,
             statusCode = rM.statusCode,
             --
             queryParams = rM.queryParams,

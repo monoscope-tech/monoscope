@@ -3,13 +3,18 @@
 module Server (app) where
 
 import Colog (LogAction)
-import Config (DashboardM, ctxToHandler)
+import Config (DashboardM, ctxToHandler, pool)
 import Config qualified
+import Data.Aeson (FromJSON)
+import Data.Aeson.Types (ToJSON)
 import Data.Pool (Pool)
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import DataSeeding qualified
+import Database.PostgreSQL.Entity.DBT (QueryNature (Select), queryOne, withPool)
 import Database.PostgreSQL.Simple (Connection)
+import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Deriving.Aeson qualified as DAE
 import Lucid
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
@@ -93,6 +98,7 @@ type PublicAPI =
     -- and perfoming all the auth logic at the handler level. This is because the clients will only call this endpoint,
     -- so it doesnt need an exclusive robust authorization middleware solution.
     :<|> "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] ClientMetadata.ClientMetadata
+    :<|> "status" :> Get '[JSON] Status
     :<|> Raw
 
 type API =
@@ -149,7 +155,28 @@ publicServer =
     :<|> logoutH
     :<|> authCallbackH
     :<|> ClientMetadata.clientMetadataH
+    :<|> statusH
     :<|> serveDirectoryWebApp "./static/public"
 
 server :: ServerT API DashboardM
 server = protectedServer :<|> publicServer
+
+data Status = Status
+  { ping :: Text,
+    dbVersion :: Maybe Text
+  }
+  deriving stock (Generic)
+  deriving
+    (FromJSON, ToJSON)
+    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Status
+
+statusH :: DashboardM (Status)
+statusH = do
+  pool <- asks pool
+  let query = [sql| select version(); |]
+  version :: Maybe Text <- liftIO $ withPool pool $ queryOne Select query ()
+  pure $
+    Status
+      { ping = "pong",
+        dbVersion = version
+      }

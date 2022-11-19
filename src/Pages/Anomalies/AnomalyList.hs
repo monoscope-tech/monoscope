@@ -12,17 +12,13 @@ import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript
 import Models.Apis.Anomalies qualified as Anomalies
-import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Optics.Core ((^.))
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Pages.Charts.Charts qualified as Chart
 import Pages.Charts.Charts qualified as Charts
-import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
 import Relude
-import Relude.Unsafe qualified as Unsafe
 
 acknowlegeAnomalyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Anomalies.AnomalyId -> DashboardM (Html ())
 acknowlegeAnomalyGetH sess pid aid = do
