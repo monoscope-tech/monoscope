@@ -4,7 +4,7 @@ import Config
 import Data.Default (def)
 import Data.Text (replace)
 import Data.Text qualified as T
-import Data.Time (ZonedTime, defaultTimeLocale, formatTime)
+import Data.Time (UTCTime, ZonedTime, defaultTimeLocale, formatTime, getCurrentTime, zonedTimeToUTC)
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
@@ -19,6 +19,7 @@ import Optics.Core ((^.))
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Charts.Charts qualified as Charts
 import Relude
+import Text.Time.Pretty (prettyTimeAuto)
 
 acknowlegeAnomalyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Anomalies.AnomalyId -> DashboardM (Html ())
 acknowlegeAnomalyGetH sess pid aid = do
@@ -38,9 +39,10 @@ anomalyListGetH sess pid layoutM hxRequestM = do
   (project, anomalies) <- liftIO $
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      anomalies <- Anomalies.selectAnomalies pid
+      anomalies <- Anomalies.selectAnomalies pid Nothing (Just False) (Just False)
       pure (project, anomalies)
 
+  currTime <- liftIO getCurrentTime
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess,
@@ -48,11 +50,11 @@ anomalyListGetH sess pid layoutM hxRequestM = do
             pageTitle = "Anomalies"
           }
   case (layoutM, hxRequestM) of
-    (Just "slider", Just "true") -> pure $ anomalyListSlider anomalies
-    _ -> pure $ bodyWrapper bwconf $ anomalyListPage anomalies
+    (Just "slider", Just "true") -> pure $ anomalyListSlider currTime anomalies
+    _ -> pure $ bodyWrapper bwconf $ anomalyListPage currTime anomalies
 
-anomalyListPage :: Vector Anomalies.AnomalyVM -> Html ()
-anomalyListPage anomalies = div_ [class_ "container mx-auto  px-4 pt-10 pb-24"] $ do
+anomalyListPage :: UTCTime -> Vector Anomalies.AnomalyVM -> Html ()
+anomalyListPage currTime anomalies = div_ [class_ "container mx-auto  px-4 pt-10 pb-24"] $ do
   div_ [class_ "flex justify-between"] $ do
     h3_ [class_ "text-xl text-slate-700 flex place-items-center"] "Anomalies"
     div_ [class_ "flex flex-row"] $ do
@@ -61,10 +63,10 @@ anomalyListPage anomalies = div_ [class_ "container mx-auto  px-4 pt-10 pb-24"] 
         span_ [class_ "text-sm"] "Export"
         img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-3 w-3 mt-1 mx-1"]
       button_ [class_ "bg-blue-700 h-10  px-2 rounded-xl py-1 mt-3 "] $ img_ [src_ "/assets/svgs/white-plus.svg", class_ "text-white h-4 w-6 text-bold"]
-  div_ [class_ "grid grid-cols-5"] $ anomalyList anomalies
+  div_ [class_ "grid grid-cols-5"] $ anomalyList currTime anomalies
 
-anomalyList :: Vector Anomalies.AnomalyVM -> Html ()
-anomalyList anomalies = div_ [class_ "col-span-5 bg-white divide-y border rounded-md "] $ do
+anomalyList :: UTCTime -> Vector Anomalies.AnomalyVM -> Html ()
+anomalyList currTime anomalies = div_ [class_ "col-span-5 bg-white divide-y border rounded-md "] $ do
   div_ [class_ "flex py-3 gap-8 items-center  bg-gray-50"] do
     div_ [class_ "h-4 flex space-x-3 w-8"] do
       a_ [class_ " w-2 h-full"] ""
@@ -79,11 +81,11 @@ anomalyList anomalies = div_ [class_ "col-span-5 bg-white divide-y border rounde
 
   when (null anomalies) $ div_ [class_ "flex card-round  text-center justify-center items-center h-32"] $ do
     strong_ "No anomalies yet"
-  mapM_ (renderAnomaly False) anomalies
+  mapM_ (renderAnomaly False currTime) anomalies
 
-anomalyListSlider :: Vector Anomalies.AnomalyVM -> Html ()
-anomalyListSlider [] = ""
-anomalyListSlider anomalies = do
+anomalyListSlider :: UTCTime -> Vector Anomalies.AnomalyVM -> Html ()
+anomalyListSlider _ [] = ""
+anomalyListSlider currTime anomalies = do
   let anomalyIds = replace "\"" "'" $ show $ fmap (Anomalies.anomalyIdText . (^. #id)) anomalies
   div_ $ do
     script_ [text| var rem = (x,y)=>((x%y)==0?1:(x%y)); |]
@@ -97,41 +99,40 @@ anomalyListSlider anomalies = do
             set #anomalySliderPagination.innerHTML to ($$currentAnomaly+1)+'/'+$$anomalyIds.length
           end
          |]
-    div_ [class_ ""] $ do
-      div_ [class_ "flex justify-between mt-5 pb-2"] $ do
-        div_ [class_ "flex flex-row"] $ do
-          img_
-            [ src_ "/assets/svgs/cheveron-down.svg",
-              class_ "h-4 mr-3 mt-1 w-4",
-              [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .parent-slider)|]
-            ]
-          span_ [class_ "text-lg text-slate-700"] "Ongoing Anomalies and Monitors"
-        div_ [class_ "flex flex-row mt-2"] $ do
-          a_
-            [ class_ "cursor-pointer",
-              [__|on click hide #{$anomalyIds[$currentAnomaly]} then
-                            js($currentAnomaly, $anomalyIds) return (Math.max(0, $currentAnomaly-1) % $anomalyIds.length) end then 
-                            set $currentAnomaly to it then
-                            show #{$anomalyIds[$currentAnomaly]} then 
-                            setAnomalySliderPag()|]
-            ]
-            $ img_ [src_ "/assets/svgs/leftarrow.svg", class_ " m-2"]
-          span_ [src_ " mx-4", id_ "anomalySliderPagination"] "1/1"
-          a_
-            [ class_ "cursor-pointer",
-              [__|on click hide #{$anomalyIds[$currentAnomaly]} then
-                            js($currentAnomaly, $anomalyIds) return (($currentAnomaly+1) % $anomalyIds.length) end then 
-                            set $currentAnomaly to it then
-                            show #{$anomalyIds[$currentAnomaly]} then
-                            setAnomalySliderPag()|]
-            ]
-            $ img_ [src_ "/assets/svgs/rightarrow.svg", class_ " m-2"]
+    div_ [class_ "flex justify-between mt-5 pb-2"] $ do
+      div_ [class_ "flex flex-row"] $ do
+        img_
+          [ src_ "/assets/svgs/cheveron-down.svg",
+            class_ "h-4 mr-3 mt-1 w-4",
+            [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .parent-slider)|]
+          ]
+        span_ [class_ "text-lg text-slate-700"] "Ongoing Anomalies and Monitors"
+      div_ [class_ "flex flex-row mt-2"] $ do
+        a_
+          [ class_ "cursor-pointer",
+            [__|on click hide #{$anomalyIds[$currentAnomaly]} then
+                          js($currentAnomaly, $anomalyIds) return (Math.max(0, $currentAnomaly-1) % $anomalyIds.length) end then 
+                          set $currentAnomaly to it then
+                          show #{$anomalyIds[$currentAnomaly]} then 
+                          setAnomalySliderPag()|]
+          ]
+          $ img_ [src_ "/assets/svgs/leftarrow.svg", class_ " m-2"]
+        span_ [src_ " mx-4", id_ "anomalySliderPagination"] "1/1"
+        a_
+          [ class_ "cursor-pointer",
+            [__|on click hide #{$anomalyIds[$currentAnomaly]} then
+                          js($currentAnomaly, $anomalyIds) return (($currentAnomaly+1) % $anomalyIds.length) end then 
+                          set $currentAnomaly to it then
+                          show #{$anomalyIds[$currentAnomaly]} then
+                          setAnomalySliderPag()|]
+          ]
+          $ img_ [src_ "/assets/svgs/rightarrow.svg", class_ " m-2"]
 
-      div_
-        [ class_ "parent-slider",
-          [__|init setAnomalySliderPag() then show #{$anomalyIds[$currentAnomaly]} |]
-        ]
-        $ mapM_ (renderAnomaly True) anomalies
+    div_
+      [ class_ "parent-slider",
+        [__|init setAnomalySliderPag() then show #{$anomalyIds[$currentAnomaly]} |]
+      ]
+      $ mapM_ (renderAnomaly True currTime) anomalies
 
 anomalyTimeline :: ZonedTime -> Maybe ZonedTime -> Html ()
 anomalyTimeline createdAt acknowlegedAt = small_ [class_ "inline-block  px-8 py-6 space-x-2"] $ case acknowlegedAt of
@@ -147,20 +148,20 @@ anomalyTimeline createdAt acknowlegedAt = small_ [class_ "inline-block  px-8 py-
     time_ [class_ "inline-block"] $ toHtml @String $ formatTime defaultTimeLocale "%F %R" ackTime
 
 shapeParameterStats_ :: Int -> Int -> Int -> Html ()
-shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "py-4 inline-block"] do
+shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "inline-block"] do
   div_ [class_ "grid grid-cols-3 gap-2 text-center text-xs w-96"] do
     div_ [class_ "p-2 bg-emerald-100 text-emerald-900 border border-emerald-300"] do
       div_ [class_ "text-base"] $ toHtml @String $ show newF
-      div_ "new fields"
+      small_ [class_ "block"] "new fields"
     div_ [class_ " p-2 bg-slate-100 text-slate-900 border border-slate-300"] do
       div_ [class_ "text-base"] $ toHtml @String $ show updatedFF
-      div_ "updated fields"
+      small_ [class_ "block"] "updated fields"
     div_ [class_ "p-2  bg-rose-100 text-rose-900 border border-rose-300"] do
       div_ [class_ "text-base"] $ toHtml @String $ show deletedF
-      div_ [] "deleted fields"
+      small_ [class_ "block"] "deleted fields"
 
-anomalyItem :: Bool -> Anomalies.AnomalyVM -> Text -> Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
-anomalyItem hideByDefault anomaly icon title subTitle content = do
+anomalyItem :: Bool -> UTCTime -> Anomalies.AnomalyVM -> Text -> Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
+anomalyItem hideByDefault currTime anomaly icon title subTitle content = do
   let anomalyId = Anomalies.anomalyIdText (anomaly.id)
   div_ [class_ $ "flex py-4 gap-8 " <> if hideByDefault then "card-round bg-white px-5" else "", style_ (if hideByDefault then "display:none" else ""), id_ anomalyId] do
     div_ [class_ $ "h-4 flex self-start space-x-3 w-8 " <> if hideByDefault then "hidden" else ""] do
@@ -172,27 +173,35 @@ anomalyItem hideByDefault anomaly icon title subTitle content = do
           img_ [src_ icon, class_ "inline w-4 h-4"]
           span_ $ toHtml title
         small_ [class_ "inline-block text-gray-800"] $ fromMaybe (toHtml @String "") subTitle
-      fromMaybe (toHtml @String "") content
-      div_ [class_ "text-xs decoration-dotted underline-offset-2 space-x-4 "] do
-        span_ [class_ "bg-red-50 p-1"] "ongoing"
-        span_ [class_ "inline-block space-x-1"] do
-          img_ [src_ icon, class_ "inline w-4 h-4"]
-          span_ [class_ "decoration-black underline"] "18hr ago"
-          span_ "|"
-          span_ [class_ "decoration-black underline"] "2mins ago"
-      div_ [class_ "flex items-center gap-2 mt-5"] do
-        a_
-          [ class_ "inline-block xchild-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100",
-            term "data-tippy-content" "archive"
-          ]
-          $ img_ [src_ "/assets/svgs/anomalies/archive.svg", class_ "h-4 w-4"]
-        anomalyAcknowlegeButton
-          (anomaly.projectId)
-          (anomaly.id)
-          (isJust (anomaly.acknowlegedAt))
+      div_ [class_ "flex flex-row gap-8"] do
+        div_ do
+          div_ [class_ "text-xs decoration-dotted underline-offset-2 space-x-4 "] do
+            span_ [class_ "bg-red-50 p-1"] "ongoing"
+            span_ [class_ "inline-block space-x-1"] do
+              img_ [src_ icon, class_ "inline w-4 h-4"]
+              span_
+                [ class_ "decoration-black underline",
+                  term "data-tippy-content" $ "first seen: " <> show anomaly.createdAt
+                ]
+                $ toHtml
+                $ prettyTimeAuto currTime
+                $ zonedTimeToUTC anomaly.createdAt
+              span_ "|"
+              span_ [class_ "decoration-black underline", term "data-tippy-content" $ "last seen: " <> show anomaly.lastSeen] $ toHtml $ prettyTimeAuto currTime $ zonedTimeToUTC anomaly.lastSeen
+          div_ [class_ "flex items-center gap-2 mt-5"] do
+            a_
+              [ class_ "inline-block xchild-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100",
+                term "data-tippy-content" "archive"
+              ]
+              $ img_ [src_ "/assets/svgs/anomalies/archive.svg", class_ "h-4 w-4"]
+            anomalyAcknowlegeButton
+              (anomaly.projectId)
+              (anomaly.id)
+              (isJust (anomaly.acknowlegedAt))
+        fromMaybe (toHtml @String "") content
     let chartQuery = Just $ anomaly2ChartQuery anomaly.anomalyType anomaly.targetHash
     div_ [class_ "flex items-center justify-center "] $ div_ [class_ "w-64 h-28"] $ Charts.throughput anomaly.projectId anomaly.targetHash chartQuery Nothing (12 * 60) (Just 28) False
-    div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "tabular-nums text-xl"] "349"
+    div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $ show $ anomaly.eventsCount14d
 
 anomaly2ChartQuery :: Anomalies.AnomalyTypes -> Text -> Charts.QueryBy
 anomaly2ChartQuery Anomalies.ATEndpoint = Charts.QBEndpointHash
@@ -201,22 +210,21 @@ anomaly2ChartQuery Anomalies.ATFormat = Charts.QBFormatHash
 anomaly2ChartQuery Anomalies.ATUnknown = error "Should not convert unknown anomaly to chart"
 anomaly2ChartQuery Anomalies.ATField = error "Should not see field anomaly to chart in anomaly UI. ATField gets hidden under shape"
 
-renderAnomaly :: Bool -> Anomalies.AnomalyVM -> Html ()
-renderAnomaly hideByDefault anomaly = do
+renderAnomaly :: Bool -> UTCTime -> Anomalies.AnomalyVM -> Html ()
+renderAnomaly hideByDefault currTime anomaly = do
   let (anomalyTitle, icon) = anomalyDisplayConfig anomaly
   case anomaly.anomalyType of
     Anomalies.ATEndpoint -> do
-      let endpointTitle = fromMaybe "" (anomaly.endpointMethod) <> "  " <> fromMaybe "" (anomaly.endpointUrlPath)
-      anomalyItem hideByDefault anomaly icon anomalyTitle (Just $ toHtml endpointTitle) Nothing
+      let endpointTitle = fromMaybe "" anomaly.endpointMethod <> "  " <> fromMaybe "" anomaly.endpointUrlPath
+      anomalyItem hideByDefault currTime anomaly icon anomalyTitle (Just $ toHtml endpointTitle) Nothing
     Anomalies.ATShape -> do
-      let endpointTitle = fromMaybe "" (anomaly.endpointMethod) <> "  " <> fromMaybe "" (anomaly.endpointUrlPath)
+      let endpointTitle = fromMaybe "" anomaly.endpointMethod <> "  " <> fromMaybe "" anomaly.endpointUrlPath
       let subTitle = span_ [class_ "space-x-2"] do
             a_ [class_ "cursor-pointer"] $ toHtml anomaly.targetHash
             span_ [] "in"
             span_ [] $ toHtml endpointTitle
-      let shapeContent = small_ [class_ "block"] do
-            shapeParameterStats_ (length anomaly.shapeNewUniqueFields) (length anomaly.shapeDeletedFields) (length anomaly.shapeUpdatedFieldFormats)
-      anomalyItem hideByDefault anomaly icon anomalyTitle (Just subTitle) (Just shapeContent)
+      let shapeContent = shapeParameterStats_ (length anomaly.shapeNewUniqueFields) (length anomaly.shapeDeletedFields) (length anomaly.shapeUpdatedFieldFormats)
+      anomalyItem hideByDefault currTime anomaly icon anomalyTitle (Just subTitle) (Just shapeContent)
     Anomalies.ATFormat -> do
       let endpointTitle = toHtml $ fromMaybe "" (anomaly.endpointMethod) <> "  " <> fromMaybe "" (anomaly.endpointUrlPath)
       let subTitle = span_ [class_ "space-x-2"] do
@@ -234,8 +242,9 @@ renderAnomaly hideByDefault anomaly = do
               div_ do
                 small_ "examples: "
                 small_ $ toHtml $ maybe "" (T.intercalate ", " . Vector.toList) anomaly.formatExamples
-      anomalyItem hideByDefault anomaly icon anomalyTitle (Just subTitle) (Just formatContent)
-    _ -> ""
+      anomalyItem hideByDefault currTime anomaly icon anomalyTitle (Just subTitle) (Just formatContent)
+    Anomalies.ATField -> error "Anomalies.ATField anomaly should never show up in practice "
+    Anomalies.ATUnknown -> error "Anomalies.ATField anomaly should never show up in practice "
 
 anomalyAcknowlegeButton :: Projects.ProjectId -> Anomalies.AnomalyId -> Bool -> Html ()
 anomalyAcknowlegeButton pid aid acked = do
@@ -249,31 +258,6 @@ anomalyAcknowlegeButton pid aid acked = do
       hxSwap_ "outerHTML"
     ]
     if acked then "✓ Acknowleged" else "✓ Acknowlege"
-
-anomalyChartScript :: Anomalies.AnomalyVM -> Text -> Text
-anomalyChartScript anomaly anomalyGraphId =
-  let timeSeriesData = fromMaybe "[]" $ anomaly.timeSeries
-   in -- Adding the current day and time to the end of the chart data, so that the chart is scaled to include the current day/time
-      -- currentISOTimeStringVar is declared on every page, in case they need a string for the current time in ISO format
-      [text|
-      new FusionCharts({
-        type: "timeseries",
-        renderAt: "$anomalyGraphId",
-        width: "100%",
-        height: 250,
-        dataSource: {
-          data: new FusionCharts.DataStore().createDataTable(($timeSeriesData).concat([[currentISOTimeStringVar, 0]]), 
-          [{"name": "Time",
-            "type": "date",
-            "format": "%Y-%m-%dT%H:%M:%S%Z" // https://www.fusioncharts.com/dev/fusiontime/fusiontime-attributes
-          },{"name": "Count","type": "number"}]),
-          chart: {},
-          navigator: {"enabled": 0},
-          series: "StatusCode",
-          yaxis: [{plot:[{value: "Count",type: "smooth-line"}],title: ""}]
-        }
-      }).render();
-     |]
 
 anomalyDisplayConfig :: Anomalies.AnomalyVM -> (Text, Text)
 anomalyDisplayConfig anomaly = case anomaly.anomalyType of

@@ -10,11 +10,9 @@ module Models.Apis.Anomalies
     parseAnomalyTypes,
     parseAnomalyActions,
     getAnomalyVM,
-    selectOngoingAnomaliesForEndpoint,
     acknowlegeAnomaly,
     anomalyIdText,
     unAcknowlegeAnomaly,
-    selectOngoingAnomalies,
   )
 where
 
@@ -26,6 +24,7 @@ import Data.Vector (Vector)
 import Database.PostgreSQL.Entity
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query, queryOne)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
+import Database.PostgreSQL.Query (Query (Query))
 import Database.PostgreSQL.Simple (FromRow, Only (Only))
 import Database.PostgreSQL.Simple.FromField (FromField, ResultError (ConversionFailed, UnexpectedNull), fromField, returnError)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -42,9 +41,12 @@ import Models.Apis.Formats qualified as Formats
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
+import NeatInterpolation (text)
 import Optics.TH
 import Relude hiding (id)
+import Utils
 import Web.HttpApiData (FromHttpApiData)
+import Witch (from)
 
 newtype AnomalyId = AnomalyId {unAnomalyId :: UUID.UUID}
   deriving stock (Generic, Show)
@@ -159,7 +161,8 @@ data AnomalyVM = AnomalyVM
     endpointUrlPath :: Maybe Text,
     --
     archivedAt :: Maybe ZonedTime,
-    timeSeries :: Maybe Text -- JSON array representing the timeseries
+    eventsCount14d :: Int,
+    lastSeen :: ZonedTime
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, Default)
@@ -192,83 +195,36 @@ unArchiveAnomaly aid = void $ execute Update q (Only aid)
 getAnomalyVM :: Projects.ProjectId -> Text -> DBT IO (Maybe AnomalyVM)
 getAnomalyVM pid hash = queryOne Select q (pid, hash)
   where
-    q = [sql| SELECT *, '[]'::text FROM apis.anomalies_vm WHERE project_id=? AND target_hash=?|]
+    q = [sql| SELECT * FROM apis.anomalies_vm WHERE project_id=? AND target_hash=?|]
 
-selectAnomalies :: Projects.ProjectId -> DBT IO (Vector AnomalyVM)
-selectAnomalies pid = query Select q opt
+selectAnomalies :: Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe Bool -> Maybe Bool -> DBT IO (Vector AnomalyVM)
+selectAnomalies pid endpointM isAcknowleged isArchived = query Select (Query $ from @Text q) (MkDBField pid : paramList)
   where
+    boolToNullSubQ a = if a then " not " else ""
+    condlist =
+      catMaybes
+        [ (\a -> " acknowleged_at is" <> a <> " null ") <$> (boolToNullSubQ <$> isAcknowleged),
+          (\a -> " archived_at is" <> a <> " null ") <$> (boolToNullSubQ <$> isArchived),
+          "endpoint_id=?" <$ endpointM
+        ]
+    cond
+      | null condlist = mempty
+      | otherwise = "AND " <> mconcat (intersperse " AND " condlist)
+    paramList = mapMaybe (MkDBField <$>) [endpointM]
     q =
-      [sql| 
-SELECT
-    *, '[]'::text
+      [text|
+SELECT avm.*, count(rd.id), max(rd.created_at) 
     FROM
-        apis.anomalies_vm
+        apis.anomalies_vm avm
+    JOIN apis.request_dumps rd ON avm.project_id=rd.project_id 
+        AND (avm.target_hash=ANY(rd.format_hashes) AND avm.anomaly_type='format')
+        OR  (avm.target_hash=rd.shape_hash AND avm.anomaly_type='shape')
+        OR  (avm.target_hash=rd.endpoint_hash AND avm.anomaly_type='endpoint')
     WHERE
-        project_id = ?
-        AND archived_at is null
-        and anomaly_type != 'field'
-    ORDER BY created_at desc
-            |]
-    opt = Only pid
-
-selectOngoingAnomalies :: Projects.ProjectId -> DBT IO (Vector AnomalyVM)
-selectOngoingAnomalies pid = query Select q opt
-  where
-    q =
-      [sql| 
-SELECT
-    *, '[]'::text
-      FROM
-          apis.anomalies_vm
-      WHERE
-          project_id = ?
-          AND acknowleged_at is null
-          AND archived_at is null
-          and anomaly_type != 'field'
-      ORDER BY created_at desc
-              |]
-    opt = Only pid
-
-selectOngoingAnomaliesForEndpoint :: Projects.ProjectId -> Endpoints.EndpointId -> DBT IO (Vector AnomalyVM)
-selectOngoingAnomaliesForEndpoint pid eid = query Select q opt
-  where
-    q =
-      [sql| 
-SELECT
-    *, '[]'::text
-    FROM
-    apis.anomalies_vm
-WHERE
-    project_id = ?
-    AND endpoint_id = ?
-    AND acknowleged_at is null
-    AND archived_at is null
-    and anomaly_type != 'field'
-ORDER BY created_at desc
-        |]
-    opt = (pid, eid)
-
--- (
---       SELECT
---           json_agg(json_build_array(timeB, count))
---       from
---           (
---               SELECT
---                   time_bucket('5 minute', created_at) as timeB,
---                   count(id) count
---               FROM
---                   apis.request_dumps
---               where
---                   created_at > NOW() - interval '14' day
---                   AND project_id = project_id
---                   AND CASE
---                       WHEN anomaly_type = 'endpoint' THEN
---                           endpoint_hash = target_hash
---                       WHEN anomaly_type = 'shape' THEN
---                           shape_hash = target_hash
---                       WHEN anomaly_type = 'format' THEN
---                           target_hash = ANY(format_hashes)
---                   END
---               GROUP BY
---                   timeB
---           )timeB)::text ts
+        avm.project_id = ? 
+        $cond
+        AND avm.anomaly_type != 'field'
+        AND rd.created_at > NOW() - interval '14 days'
+    GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25
+    ORDER BY avm.created_at desc;
+      |]

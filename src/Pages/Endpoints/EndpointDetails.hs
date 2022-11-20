@@ -8,7 +8,7 @@ import Data.Aeson.Text (encodeToLazyText)
 import Data.Default (def)
 import Data.Map qualified as Map
 import Data.Text as T (breakOnAll, dropWhile, isInfixOf, replace, splitOn, toLower)
-import Data.Time (defaultTimeLocale, formatTime)
+import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID as UUID
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
@@ -121,7 +121,7 @@ endpointDetailsH sess pid eid = do
               round (enpStats.p50) `quot` steps' * steps'
             )
       let reqLatenciesRolledByStepsLabeled = Vector.toList reqLatenciesRolledBySteps & map \(x, y) -> RequestDumps.labelRequestLatency reqLatencyPercentileSteps (x, y)
-      anomalies <- Anomalies.selectOngoingAnomaliesForEndpoint pid eid
+      anomalies <- Anomalies.selectAnomalies pid (Just eid) (Just False) (Just False)
       pure (enpStats, project, fieldsMap, reqsByStatsByMinJ, concat reqLatenciesRolledByStepsLabeled, anomalies)
 
   -- let reqsByStatsByMinJ = decodeUtf8 $ AE.encode reqsByStatsByMin
@@ -133,10 +133,11 @@ endpointDetailsH sess pid eid = do
             pageTitle = "Endpoint Details",
             menuItem = Just "Endpoints"
           }
-  pure $ bodyWrapper bwconf $ endpointDetails enpStats fieldsMap reqsByStatsByMinJ reqLatenciesRolledByStepsJ anomalies
+  currTime <- liftIO $ getCurrentTime
+  pure $ bodyWrapper bwconf $ endpointDetails currTime enpStats fieldsMap reqsByStatsByMinJ reqLatenciesRolledByStepsJ anomalies
 
-endpointDetails :: EndpointRequestStats -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> Text -> Vector Anomalies.AnomalyVM -> Html ()
-endpointDetails endpoint fieldsM reqsByStatsByMinJ reqLatenciesRolledByStepsJ anomalies =
+endpointDetails :: UTCTime -> EndpointRequestStats -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> Text -> Vector Anomalies.AnomalyVM -> Html ()
+endpointDetails currTime endpoint fieldsM reqsByStatsByMinJ reqLatenciesRolledByStepsJ anomalies =
   div_ [class_ "w-full flex flex-row h-full overflow-hidden"] $ do
     div_ [class_ "w-4/6 p-5 h-full overflow-y-scroll"] $ do
       div_ [class_ "flex flex-row justify-between mb-10"] $ do
@@ -155,7 +156,7 @@ endpointDetails endpoint fieldsM reqsByStatsByMinJ reqLatenciesRolledByStepsJ an
               div_ [class_ "bg-blue-900 p-1 rounded-lg ml-2"] $ do
                 img_ [src_ "/assets/svgs/whitedown.svg", class_ "text-white h-2 w-2 m-1"]
       div_ [class_ "space-y-16 pb-20"] $ do
-        section_ $ AnomaliesList.anomalyListSlider anomalies
+        section_ $ AnomaliesList.anomalyListSlider currTime anomalies
         endpointStats endpoint
         reqResSection "Request" True fieldsM
         reqResSection "Response" False fieldsM

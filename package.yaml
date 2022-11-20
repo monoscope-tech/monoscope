@@ -154,6 +154,7 @@ library:
     - xxhash
     - yaml
     - http-media
+    - pretty-relative-time
 
 executables:
   apitoolkit-server-exe:

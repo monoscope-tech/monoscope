@@ -3,6 +3,7 @@ module Pages.Dashboard (dashboardGetH) where
 import Config
 import Data.Aeson qualified as AE
 import Data.Default (def)
+import Data.Time (UTCTime, getCurrentTime)
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
@@ -41,7 +42,7 @@ dashboardGetH sess pid = do
             )
 
       let reqLatenciesRolledByStepsLabeled = Vector.toList reqLatenciesRolledBySteps & map \(x, y) -> RequestDumps.labelRequestLatency reqLatencyPercentileSteps (x, y)
-      anomalies <- Anomalies.selectOngoingAnomalies pid
+      anomalies <- Anomalies.selectAnomalies pid Nothing (Just False) (Just False)
       pure (project, projectRequestStats, reqsByEndpoint, concat reqLatenciesRolledByStepsLabeled, anomalies)
   let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
   let bwconf =
@@ -50,12 +51,13 @@ dashboardGetH sess pid = do
             currProject = project,
             pageTitle = "Dashboard"
           }
-  pure $ bodyWrapper bwconf $ dashboardPage projectRequestStats reqsByEndpointJ reqLatenciesRolledByStepsJ anomalies
+  currTime <- liftIO $ getCurrentTime
+  pure $ bodyWrapper bwconf $ dashboardPage currTime projectRequestStats reqsByEndpointJ reqLatenciesRolledByStepsJ anomalies
 
-dashboardPage :: Projects.ProjectRequestStats -> Text -> Text -> Vector Anomalies.AnomalyVM -> Html ()
-dashboardPage projectStats reqsByEndpointJ reqLatenciesRolledByStepsJ anomalies = do
+dashboardPage :: UTCTime -> Projects.ProjectRequestStats -> Text -> Text -> Vector Anomalies.AnomalyVM -> Html ()
+dashboardPage currTime projectStats reqsByEndpointJ reqLatenciesRolledByStepsJ anomalies = do
   section_ [class_ "p-8 container mx-auto px-4 space-y-16 10 pb-24"] $ do
-    section_ $ AnomaliesList.anomalyListSlider anomalies
+    section_ $ AnomaliesList.anomalyListSlider currTime anomalies
     dStats projectStats reqsByEndpointJ
   script_
     [text|
