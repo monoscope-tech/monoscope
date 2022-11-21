@@ -17,7 +17,7 @@ menu ppid =
   let pid = Projects.projectIdText ppid
    in [ ("Dashboard", "/p/" <> pid <> "/", "#dashboard"),
         ("Endpoints", "/p/" <> pid <> "/endpoints", "#endpoint"),
-        ("Anomalies", "/p/" <> pid <> "/anomalies", "#anomalies"),
+        ("Anomalies", "/p/" <> pid <> "/anomalies?ackd=false&archived=false", "#anomalies"),
         ("API Log Explorer", "/p/" <> pid <> "/log_explorer", "#logs"),
         ("API Keys", "/p/" <> pid <> "/apis", "#api"),
         ("Redacted Fields", "/p/" <> pid <> "/redacted_fields", "#redacted")

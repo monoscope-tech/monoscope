@@ -82,9 +82,11 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" ZonedTime :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "bulk_seed_and_ingest" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "bulk_seed_and_ingest" :> ReqBody '[FormUrlEncoded] DataSeeding.DataSeedingForm :> Post '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "anomalies" :> QPT "layout" :> HXRequest :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "anomalies" :> QPT "layout" :> QPT "ackd" :> QPT "archived" :> HXRequest :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "acknowlege" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "unacknowlege" :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "archive" :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "unarchive" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "redacted_fields" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "redacted_fields" :> ReqBody '[FormUrlEncoded] RedactFieldForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "charts_html" :> "throughput" :> QPT "id" :> QPT "group_by" :> QPT "endpoint_hash" :> QPT "shape_hash" :> QPT "format_hash" :> QPI "interval" :> QPI "limit" :> QPB "show_legend" :> Get '[HTML] (Html ())
@@ -144,6 +146,8 @@ protectedServer sess =
     :<|> AnomalyList.anomalyListGetH sess
     :<|> AnomalyList.acknowlegeAnomalyGetH sess
     :<|> AnomalyList.unAcknowlegeAnomalyGetH sess
+    :<|> AnomalyList.archiveAnomalyGetH sess
+    :<|> AnomalyList.unArchiveAnomalyGetH sess
     :<|> RedactedFields.redactedFieldsGetH sess
     :<|> RedactedFields.redactedFieldsPostH sess
     :<|> Charts.throughputEndpointHTML sess

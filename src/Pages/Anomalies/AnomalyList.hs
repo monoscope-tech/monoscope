@@ -1,4 +1,4 @@
-module Pages.Anomalies.AnomalyList (anomalyListGetH, acknowlegeAnomalyGetH, unAcknowlegeAnomalyGetH, anomalyListSlider) where
+module Pages.Anomalies.AnomalyList (anomalyListGetH, acknowlegeAnomalyGetH, unAcknowlegeAnomalyGetH, archiveAnomalyGetH, unArchiveAnomalyGetH, anomalyListSlider) where
 
 import Config
 import Data.Default (def)
@@ -7,7 +7,9 @@ import Data.Text qualified as T
 import Data.Time (UTCTime, ZonedTime, defaultTimeLocale, formatTime, getCurrentTime, zonedTimeToUTC)
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
-import Database.PostgreSQL.Entity.DBT (withPool)
+import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute, withPool)
+import Database.PostgreSQL.Query (Only (Only))
+import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript
@@ -24,22 +26,41 @@ import Text.Time.Pretty (prettyTimeAuto)
 acknowlegeAnomalyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Anomalies.AnomalyId -> DashboardM (Html ())
 acknowlegeAnomalyGetH sess pid aid = do
   pool <- asks pool
-  liftIO $ withPool pool $ Anomalies.acknowlegeAnomaly aid (sess.userId)
+  let q = [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where id=? |]
+  _ <- liftIO $ withPool pool $ execute Update q (sess.userId, aid)
   pure $ anomalyAcknowlegeButton pid aid True
 
 unAcknowlegeAnomalyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Anomalies.AnomalyId -> DashboardM (Html ())
 unAcknowlegeAnomalyGetH sess pid aid = do
   pool <- asks pool
-  liftIO $ withPool pool $ Anomalies.unAcknowlegeAnomaly aid
+  let q = [sql| update apis.anomalies set acknowleged_by=null, acknowleged_at=null where id=? |]
+  _ <- liftIO $ withPool pool $ execute Update q (Only aid)
   pure $ anomalyAcknowlegeButton pid aid False
 
-anomalyListGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> DashboardM (Html ())
-anomalyListGetH sess pid layoutM hxRequestM = do
+archiveAnomalyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Anomalies.AnomalyId -> DashboardM (Html ())
+archiveAnomalyGetH sess pid aid = do
+  pool <- asks pool
+  let q = [sql| update apis.anomalies set acknowleged_by=null, acknowleged_at=null where id=? |]
+  _ <- liftIO $ withPool pool $ execute Update q (sess.userId, aid)
+  pure $ anomalyAcknowlegeButton pid aid True
+
+unArchiveAnomalyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Anomalies.AnomalyId -> DashboardM (Html ())
+unArchiveAnomalyGetH sess pid aid = do
+  pool <- asks pool
+  let q = [sql| update apis.anomalies set acknowleged_by=null, acknowleged_at=null where id=? |]
+  _ <- liftIO $ withPool pool $ execute Update q (sess.userId, aid)
+  pure $ anomalyAcknowlegeButton pid aid False
+
+anomalyListGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
+anomalyListGetH sess pid layoutM ackdM archivedM hxRequestM = do
+  let textToBool a = if a == "true" then True else False
+  let ackd = textToBool <$> ackdM
+  let archived = textToBool <$> archivedM
   pool <- asks pool
   (project, anomalies) <- liftIO $
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      anomalies <- Anomalies.selectAnomalies pid Nothing (Just False) (Just False)
+      anomalies <- Anomalies.selectAnomalies pid Nothing ackd archived
       pure (project, anomalies)
 
   currTime <- liftIO getCurrentTime
@@ -189,15 +210,8 @@ anomalyItem hideByDefault currTime anomaly icon title subTitle content = do
               span_ "|"
               span_ [class_ "decoration-black underline", term "data-tippy-content" $ "last seen: " <> show anomaly.lastSeen] $ toHtml $ prettyTimeAuto currTime $ zonedTimeToUTC anomaly.lastSeen
           div_ [class_ "flex items-center gap-2 mt-5"] do
-            a_
-              [ class_ "inline-block xchild-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100",
-                term "data-tippy-content" "archive"
-              ]
-              $ img_ [src_ "/assets/svgs/anomalies/archive.svg", class_ "h-4 w-4"]
-            anomalyAcknowlegeButton
-              (anomaly.projectId)
-              (anomaly.id)
-              (isJust (anomaly.acknowlegedAt))
+            anomalyArchiveButton anomaly.projectId anomaly.id (isJust anomaly.archivedAt)
+            anomalyAcknowlegeButton anomaly.projectId anomaly.id (isJust anomaly.acknowlegedAt)
         fromMaybe (toHtml @String "") content
     let chartQuery = Just $ anomaly2ChartQuery anomaly.anomalyType anomaly.targetHash
     div_ [class_ "flex items-center justify-center "] $ div_ [class_ "w-64 h-28"] $ Charts.throughput anomaly.projectId anomaly.targetHash chartQuery Nothing (12 * 60) (Just 28) False
@@ -252,12 +266,25 @@ anomalyAcknowlegeButton pid aid acked = do
   a_
     [ class_ $
         "inline-block child-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
-          <> (if acked then "bg-green-100 text-green-900" else " "),
+          <> (if acked then "bg-green-100 text-green-900" else ""),
       term "data-tippy-content" "acknowlege anomaly",
       hxGet_ acknowlegeAnomalyEndpoint,
       hxSwap_ "outerHTML"
     ]
     if acked then "✓ Acknowleged" else "✓ Acknowlege"
+
+anomalyArchiveButton :: Projects.ProjectId -> Anomalies.AnomalyId -> Bool -> Html ()
+anomalyArchiveButton pid aid archived = do
+  let archiveAnomalyEndpoint = "/p/" <> Projects.projectIdText pid <> "/anomalies/" <> Anomalies.anomalyIdText aid <> if archived then "/unarchive" else "/archive"
+  a_
+    [ class_ $
+        "inline-block xchild-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
+          <> (if archived then " bg-green-100 text-green-900" else ""),
+      term "data-tippy-content" $ if archived then "unarchive" else "archive",
+      hxGet_ archiveAnomalyEndpoint,
+      hxSwap_ "outerHTML"
+    ]
+    $ img_ [src_ "/assets/svgs/anomalies/archive.svg", class_ "h-4 w-4"]
 
 anomalyDisplayConfig :: Anomalies.AnomalyVM -> (Text, Text)
 anomalyDisplayConfig anomaly = case anomaly.anomalyType of

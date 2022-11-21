@@ -10,9 +10,7 @@ module Models.Apis.Anomalies
     parseAnomalyTypes,
     parseAnomalyActions,
     getAnomalyVM,
-    acknowlegeAnomaly,
     anomalyIdText,
-    unAcknowlegeAnomaly,
   )
 where
 
@@ -171,26 +169,6 @@ data AnomalyVM = AnomalyVM
     via (GenericEntity '[Schema "apis", TableName "anomalies_vm", PrimaryKey "id", FieldModifiers '[CamelToSnake]] AnomalyVM)
 
 makeFieldLabelsNoPrefix ''AnomalyVM
-
-acknowlegeAnomaly :: AnomalyId -> Users.UserId -> DBT IO ()
-acknowlegeAnomaly aid uid = void $ execute Update q (uid, aid)
-  where
-    q = [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where id=? |]
-
-unAcknowlegeAnomaly :: AnomalyId -> DBT IO ()
-unAcknowlegeAnomaly aid = void $ execute Update q (Only aid)
-  where
-    q = [sql| update apis.anomalies set acknowleged_by=null, acknowleged_at=null where id=? |]
-
-archiveAnomaly :: AnomalyId -> Users.UserId -> DBT IO ()
-archiveAnomaly aid uid = void $ execute Update q (uid, aid)
-  where
-    q = [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where id=? |]
-
-unArchiveAnomaly :: AnomalyId -> DBT IO ()
-unArchiveAnomaly aid = void $ execute Update q (Only aid)
-  where
-    q = [sql| update apis.anomalies set acknowleged_by=null, acknowleged_at=null where id=? |]
 
 getAnomalyVM :: Projects.ProjectId -> Text -> DBT IO (Maybe AnomalyVM)
 getAnomalyVM pid hash = queryOne Select q (pid, hash)
