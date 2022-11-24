@@ -65,7 +65,7 @@ bodyWrapper BWConfig {sessM, currProject, pageTitle, menuItem} child =
           script_ [src_ "https://cdn.fusioncharts.com/fusioncharts/latest/fusioncharts.js"] ("" :: Text)
           script_ [src_ "https://cdn.fusioncharts.com/fusioncharts/latest/themes/fusioncharts.theme.fusion.js"] ("" :: Text)
           script_ [src_ "/assets/js/thirdparty/notyf3.min.js", defer_ "true"] ("" :: Text)
-          script_ [src_ "/assets/js/thirdparty/htmx1_7_0.min.js", defer_ "true"] ("" :: Text)
+          script_ [src_ "/assets/js/thirdparty/htmx1_8_4.min.js", defer_ "true"] ("" :: Text)
           script_ [src_ "/assets/js/thirdparty/_hyperscript_web0_9_5.min.js", defer_ "true"] ("" :: Text)
           script_ [src_ "/assets/js/thirdparty/popper2_11_4.min.js", defer_ "true"] ("" :: Text)
           script_ [src_ "/assets/js/thirdparty/tippy6_3_7.umd.min.js", defer_ "true"] ("" :: Text)

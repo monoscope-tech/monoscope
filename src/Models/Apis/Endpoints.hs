@@ -160,18 +160,22 @@ data EndpointRequestStats = EndpointRequestStats
 -- FIXME: Include and return a boolean flag to show if fields that have annomalies.
 -- FIXME: return endpoint_hash as well.
 endpointRequestStatsByProject :: Projects.ProjectId -> PgT.DBT IO (Vector EndpointRequestStats)
-endpointRequestStatsByProject pid = query Select q (pid, pid)
+endpointRequestStatsByProject pid = query Select q (Only pid)
   where
     q =
-      [sql| SELECT endpoint_id, endpoint_hash, project_id, url_path, method, min, p50, p75, p90, p95, p99, max, 
-                   total_time, total_time_proj, total_requests, total_requests_proj,
-                   (SELECT count(*) from apis.anomalies 
-                           where project_id=? AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
-                   ) ongoing_anomalies,
-                  (SELECT count(*) from apis.anomalies 
-                           where project_id=project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
-                   ) ongoing_anomalies_proj
-              FROM apis.endpoint_request_stats WHERE project_id=?|]
+      [sql| 
+      SELECT id endpoint_id, hash endpoint_hash, enp.project_id, enp.url_path, enp.method, min, p50, p75, p90, p95, p99, max, 
+         total_time, total_time_proj, total_requests, total_requests_proj,
+         (SELECT count(*) from apis.anomalies_vm 
+                 where project_id=enp.project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
+         ) ongoing_anomalies,
+        (SELECT count(*) from apis.anomalies_vm
+                 where project_id=enp.project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
+         ) ongoing_anomalies_proj
+     from apis.endpoints enp
+     join apis.endpoint_request_stats ers on (enp.id=ers.endpoint_id)
+     where enp.project_id=? order by total_requests DESC, url_path ASC
+                |]
 
 -- FIXME: return endpoint_hash as well.
 -- This would require tampering with the view.

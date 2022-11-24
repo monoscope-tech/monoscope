@@ -22,6 +22,7 @@ import Models.Apis.Fields.Types qualified as Fields (FieldId)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Network.Wai (Request)
+import Pages.Anomalies.AnomalyList (AnomalyBulkForm)
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.Api qualified as Api
 import Pages.Charts.Charts qualified as Charts
@@ -82,7 +83,8 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" ZonedTime :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "bulk_seed_and_ingest" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "bulk_seed_and_ingest" :> ReqBody '[FormUrlEncoded] DataSeeding.DataSeedingForm :> Post '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "anomalies" :> QPT "layout" :> QPT "ackd" :> QPT "archived" :> HXRequest :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "anomalies" :> QPT "layout" :> QPT "ackd" :> QPT "archived" :> HXRequest :> HXBoosted :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "anomalies" :> "bulk_actions" :> Capture "action" Text :> ReqBody '[FormUrlEncoded] AnomalyBulkForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "acknowlege" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "unacknowlege" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "archive" :> Get '[HTML] (Html ())
@@ -144,6 +146,7 @@ protectedServer sess =
     :<|> DataSeeding.dataSeedingGetH sess
     :<|> DataSeeding.dataSeedingPostH sess
     :<|> AnomalyList.anomalyListGetH sess
+    :<|> AnomalyList.anomalyBulkActionsPostH sess
     :<|> AnomalyList.acknowlegeAnomalyGetH sess
     :<|> AnomalyList.unAcknowlegeAnomalyGetH sess
     :<|> AnomalyList.archiveAnomalyGetH sess

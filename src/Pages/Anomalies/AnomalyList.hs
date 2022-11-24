@@ -1,6 +1,18 @@
-module Pages.Anomalies.AnomalyList (anomalyListGetH, acknowlegeAnomalyGetH, unAcknowlegeAnomalyGetH, archiveAnomalyGetH, unArchiveAnomalyGetH, anomalyListSlider) where
+module Pages.Anomalies.AnomalyList
+  ( anomalyListGetH,
+    anomalyBulkActionsPostH,
+    acknowlegeAnomalyGetH,
+    unAcknowlegeAnomalyGetH,
+    archiveAnomalyGetH,
+    unArchiveAnomalyGetH,
+    anomalyListSlider,
+    AnomalyBulkForm,
+  )
+where
 
 import Config
+import Data.Aeson (encode)
+import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
 import Data.Text (replace)
 import Data.Text qualified as T
@@ -21,7 +33,18 @@ import Optics.Core ((^.))
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Charts.Charts qualified as Charts
 import Relude
+import Servant (Headers, addHeader)
+import Servant.Htmx (HXTrigger)
+import Text.Regex.TDFA ((=~))
 import Text.Time.Pretty (prettyTimeAuto)
+import Utils
+import Web.FormUrlEncoded (FromForm)
+
+data AnomalyBulkForm = AnomalyBulk
+  { anomalyId :: [Text]
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (FromForm)
 
 acknowlegeAnomalyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Anomalies.AnomalyId -> DashboardM (Html ())
 acknowlegeAnomalyGetH sess pid aid = do
@@ -40,19 +63,36 @@ unAcknowlegeAnomalyGetH sess pid aid = do
 archiveAnomalyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Anomalies.AnomalyId -> DashboardM (Html ())
 archiveAnomalyGetH sess pid aid = do
   pool <- asks pool
-  let q = [sql| update apis.anomalies set acknowleged_by=null, acknowleged_at=null where id=? |]
-  _ <- liftIO $ withPool pool $ execute Update q (sess.userId, aid)
-  pure $ anomalyAcknowlegeButton pid aid True
+  let q = [sql| update apis.anomalies set archived_at=NOW() where id=? |]
+  _ <- liftIO $ withPool pool $ execute Update q (Only aid)
+  pure $ anomalyArchiveButton pid aid True
 
 unArchiveAnomalyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Anomalies.AnomalyId -> DashboardM (Html ())
 unArchiveAnomalyGetH sess pid aid = do
   pool <- asks pool
-  let q = [sql| update apis.anomalies set acknowleged_by=null, acknowleged_at=null where id=? |]
-  _ <- liftIO $ withPool pool $ execute Update q (sess.userId, aid)
-  pure $ anomalyAcknowlegeButton pid aid False
+  let q = [sql| update apis.anomalies set archived_at=null where id=? |]
+  _ <- liftIO $ withPool pool $ execute Update q (Only aid)
+  pure $ anomalyArchiveButton pid aid False
 
-anomalyListGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
-anomalyListGetH sess pid layoutM ackdM archivedM hxRequestM = do
+-- When given a list of anomalyIDs and an action, said action would be applied to the anomalyIDs.
+-- Then a notification should be triggered, as well as an action to reload the anomaly List.
+anomalyBulkActionsPostH :: Sessions.PersistentSession -> Projects.ProjectId -> Text -> AnomalyBulkForm -> DashboardM (Headers '[HXTrigger] (Html ()))
+anomalyBulkActionsPostH sess pid action items = do
+  pool <- asks pool
+  _ <- case action of
+    "acknowlege" -> liftIO $ withPool pool $ execute Update [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) |] (sess.userId, Vector.fromList items.anomalyId)
+    "archive" -> liftIO $ withPool pool $ execute Update [sql| update apis.anomalies set archived_at=NOW() where id=ANY(?::uuid[]) |] (Only $ Vector.fromList items.anomalyId)
+    _ -> error $ "unhandled anomaly bulk action state " <> action
+  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"refreshMain": "", "successToast": [#{action <> "d anomalies Successfully"}]}|]
+  pure $ addHeader hxTriggerData $ ""
+
+data ParamInput = ParamInput
+  { ackd :: Bool,
+    archived :: Bool
+  }
+
+anomalyListGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
+anomalyListGetH sess pid layoutM ackdM archivedM hxRequestM hxBoostedM = do
   let textToBool a = if a == "true" then True else False
   let ackd = textToBool <$> ackdM
   let archived = textToBool <$> archivedM
@@ -62,7 +102,6 @@ anomalyListGetH sess pid layoutM ackdM archivedM hxRequestM = do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
       anomalies <- Anomalies.selectAnomalies pid Nothing ackd archived
       pure (project, anomalies)
-
   currTime <- liftIO getCurrentTime
   let bwconf =
         (def :: BWConfig)
@@ -70,12 +109,31 @@ anomalyListGetH sess pid layoutM ackdM archivedM hxRequestM = do
             currProject = project,
             pageTitle = "Anomalies"
           }
-  case (layoutM, hxRequestM) of
-    (Just "slider", Just "true") -> pure $ anomalyListSlider currTime anomalies
-    _ -> pure $ bodyWrapper bwconf $ anomalyListPage currTime anomalies
+  let pidT = Projects.projectIdText pid
+  let refreshURL = "/p/" <> pidT <> "/anomalies?layout=" <> fromMaybe "false" layoutM <> "&ackd=" <> fromMaybe "false" ackdM <> "&archived=" <> fromMaybe "false" archivedM
+  let paramInput =
+        ParamInput
+          { ackd = fromMaybe False ackd,
+            archived = fromMaybe False archived
+          }
+  case (layoutM, hxRequestM, hxBoostedM) of
+    (Just "slider", Just "true", _) -> pure $ anomalyListSlider currTime anomalies
+    (_, Just "true", Just "false") ->
+      pure $
+        div_ [class_ "grid grid-cols-5", hxGet_ refreshURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $
+          anomalyList pid currTime anomalies
+    _ -> pure $ bodyWrapper bwconf $ anomalyListPage paramInput refreshURL pid currTime anomalies
 
-anomalyListPage :: UTCTime -> Vector Anomalies.AnomalyVM -> Html ()
-anomalyListPage currTime anomalies = div_ [class_ "container mx-auto  px-4 pt-10 pb-24"] $ do
+deleteParam :: Text -> Text -> Text
+deleteParam key url = if needle == "" then url else replace needle "" url
+  where
+    needle = (url =~ reg :: Text)
+    reg = "&" <> key <> "(=[^&]*)?|^" <> key <> "(=[^&]*)?&?" :: Text
+
+-- reg2 = "(^|(?<=&))filter(=[^&]*)?(&|$)"
+
+anomalyListPage :: ParamInput -> Text -> Projects.ProjectId -> UTCTime -> Vector Anomalies.AnomalyVM -> Html ()
+anomalyListPage paramInput currentURL pid currTime anomalies = div_ [class_ "container mx-auto  px-4 pt-10 pb-24"] $ do
   div_ [class_ "flex justify-between"] $ do
     h3_ [class_ "text-xl text-slate-700 flex place-items-center"] "Anomalies"
     div_ [class_ "flex flex-row"] $ do
@@ -84,21 +142,34 @@ anomalyListPage currTime anomalies = div_ [class_ "container mx-auto  px-4 pt-10
         span_ [class_ "text-sm"] "Export"
         img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-3 w-3 mt-1 mx-1"]
       button_ [class_ "bg-blue-700 h-10  px-2 rounded-xl py-1 mt-3 "] $ img_ [src_ "/assets/svgs/white-plus.svg", class_ "text-white h-4 w-6 text-bold"]
-  div_ [class_ "grid grid-cols-5"] $ anomalyList currTime anomalies
+  div_ [class_ "py-2 px-4 space-x-1 border-b border-slate-20 mb-2 ", hxBoost_ "true"] do
+    let uri = deleteParam "archived" $ deleteParam "ackd" currentURL
+    a_ [class_ $ "btn-sm p-2 " <> if (not paramInput.ackd && not paramInput.archived) then " font-bold text-black " else "", href_ $ uri <> "&ackd=false&archived=false"] "Inbox"
+    a_ [class_ $ "btn-sm p-2 " <> if (paramInput.ackd && not paramInput.archived) then " font-bold text-black " else "", href_ $ uri <> "&ackd=true&archived=false"] "Acknowleged"
+    a_ [class_ $ "btn-sm p-2 " <> if paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&archived=true"] "Archived"
+  div_ [class_ "grid grid-cols-5", hxGet_ currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $ anomalyList pid currTime anomalies
 
-anomalyList :: UTCTime -> Vector Anomalies.AnomalyVM -> Html ()
-anomalyList currTime anomalies = div_ [class_ "col-span-5 bg-white divide-y border rounded-md "] $ do
-  div_ [class_ "flex py-3 gap-8 items-center  bg-gray-50"] do
-    div_ [class_ "h-4 flex space-x-3 w-8"] do
-      a_ [class_ " w-2 h-full"] ""
-      input_ [term "aria-label" "Select Issue", type_ "checkbox"]
-    div_ [class_ "space-y-3 grow"] ""
-    div_ [class_ "flex justify-center font-base w-64 content-between gap-14"] do
-      span_ "GRAPH"
-      div_ [class_ " space-x-2"] $ do
-        a_ "24h"
-        a_ [class_ "cursor-pointer font-medium"] "14d"
-    div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "font-base"] "EVENTS"
+anomalyList :: Projects.ProjectId -> UTCTime -> Vector Anomalies.AnomalyVM -> Html ()
+anomalyList pid currTime anomalies = form_ [class_ "col-span-5 bg-white divide-y border rounded-md ", id_ "anomalyListForm"] $ do
+  let bulkActionBase = "/p/" <> Projects.projectIdText pid <> "/anomalies/bulk_actions"
+  div_
+    [class_ "flex py-3 gap-8 items-center  bg-gray-50"]
+    do
+      div_ [class_ "h-4 flex space-x-3 w-8"] do
+        a_ [class_ " w-2 h-full"] ""
+        input_ [term "aria-label" "Select Issue", type_ "checkbox"]
+      div_ [class_ " grow flex flex-row gap-2", hxInclude_ "#anomalyListForm"] do
+        button_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/acknowlege"] "✓ acknowlege"
+        button_ [class_ "btn-sm bg-transparent space-x-1 border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/archive"] do
+          img_ [src_ "/assets/svgs/anomalies/archive.svg", class_ "h-4 w-4 inline-block"]
+          span_ "archive"
+
+      div_ [class_ "flex justify-center font-base w-64 content-between gap-14"] do
+        span_ "GRAPH"
+        div_ [class_ " space-x-2"] $ do
+          a_ "24h"
+          a_ [class_ "cursor-pointer font-medium"] "14d"
+      div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "font-base"] "EVENTS"
 
   when (null anomalies) $ div_ [class_ "flex card-round  text-center justify-center items-center h-32"] $ do
     strong_ "No anomalies yet"
@@ -181,13 +252,19 @@ shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "inline-block"] do
       div_ [class_ "text-base"] $ toHtml @String $ show deletedF
       small_ [class_ "block"] "deleted fields"
 
+-- anomalyAccentColor isAcknowleged isArchived
+anomalyAccentColor :: Bool -> Bool -> Text
+anomalyAccentColor _ True = "bg-slate-400"
+anomalyAccentColor True False = "bg-green-200"
+anomalyAccentColor False False = "bg-red-800"
+
 anomalyItem :: Bool -> UTCTime -> Anomalies.AnomalyVM -> Text -> Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
 anomalyItem hideByDefault currTime anomaly icon title subTitle content = do
   let anomalyId = Anomalies.anomalyIdText (anomaly.id)
   div_ [class_ $ "flex py-4 gap-8 " <> if hideByDefault then "card-round bg-white px-5" else "", style_ (if hideByDefault then "display:none" else ""), id_ anomalyId] do
     div_ [class_ $ "h-4 flex self-start space-x-3 w-8 " <> if hideByDefault then "hidden" else ""] do
-      a_ [class_ "bg-red-800 w-2 h-full"] ""
-      input_ [term "aria-label" "Select Issue", type_ "checkbox"]
+      a_ [class_ $ anomalyAccentColor (isJust anomaly.acknowlegedAt) (isJust anomaly.archivedAt) <> " w-2 h-full"] ""
+      input_ [term "aria-label" "Select Issue", type_ "checkbox", name_ "anomalyId", value_ anomalyId]
     div_ [class_ "space-y-3 grow"] do
       div_ [class_ "space-x-3"] do
         a_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
@@ -199,9 +276,9 @@ anomalyItem hideByDefault currTime anomaly icon title subTitle content = do
           div_ [class_ "text-xs decoration-dotted underline-offset-2 space-x-4 "] do
             span_ [class_ "bg-red-50 p-1"] "ongoing"
             span_ [class_ "inline-block space-x-1"] do
-              img_ [src_ icon, class_ "inline w-4 h-4"]
+              mIcon_ "clock" "w-3 h-3"
               span_
-                [ class_ "decoration-black underline",
+                [ class_ "decoration-black underline ml-1",
                   term "data-tippy-content" $ "first seen: " <> show anomaly.createdAt
                 ]
                 $ toHtml
@@ -224,6 +301,14 @@ anomaly2ChartQuery Anomalies.ATFormat = Charts.QBFormatHash
 anomaly2ChartQuery Anomalies.ATUnknown = error "Should not convert unknown anomaly to chart"
 anomaly2ChartQuery Anomalies.ATField = error "Should not see field anomaly to chart in anomaly UI. ATField gets hidden under shape"
 
+anomalyDisplayConfig :: Anomalies.AnomalyVM -> (Text, Text)
+anomalyDisplayConfig anomaly = case anomaly.anomalyType of
+  Anomalies.ATField -> ("New Field Found", "/assets/svgs/anomalies/fields.svg")
+  Anomalies.ATShape -> ("New Request Shape", "/assets/svgs/anomalies/fields.svg")
+  Anomalies.ATEndpoint -> ("New Endpoint", "/assets/svgs/endpoint.svg")
+  Anomalies.ATFormat -> ("Modified field", "/assets/svgs/anomalies/fields.svg")
+  Anomalies.ATUnknown -> ("Unknown anomaly", "/assets/svgs/anomalies/fields.svg")
+
 renderAnomaly :: Bool -> UTCTime -> Anomalies.AnomalyVM -> Html ()
 renderAnomaly hideByDefault currTime anomaly = do
   let (anomalyTitle, icon) = anomalyDisplayConfig anomaly
@@ -240,7 +325,7 @@ renderAnomaly hideByDefault currTime anomaly = do
       let shapeContent = shapeParameterStats_ (length anomaly.shapeNewUniqueFields) (length anomaly.shapeDeletedFields) (length anomaly.shapeUpdatedFieldFormats)
       anomalyItem hideByDefault currTime anomaly icon anomalyTitle (Just subTitle) (Just shapeContent)
     Anomalies.ATFormat -> do
-      let endpointTitle = toHtml $ fromMaybe "" (anomaly.endpointMethod) <> "  " <> fromMaybe "" (anomaly.endpointUrlPath)
+      let endpointTitle = toHtml $ fromMaybe "" anomaly.endpointMethod <> "  " <> fromMaybe "" anomaly.endpointUrlPath
       let subTitle = span_ [class_ "space-x-2"] do
             a_ [class_ "cursor-pointer"] $ toHtml $ fromMaybe "" anomaly.fieldKeyPath
             span_ [] "in"
@@ -285,11 +370,3 @@ anomalyArchiveButton pid aid archived = do
       hxSwap_ "outerHTML"
     ]
     $ img_ [src_ "/assets/svgs/anomalies/archive.svg", class_ "h-4 w-4"]
-
-anomalyDisplayConfig :: Anomalies.AnomalyVM -> (Text, Text)
-anomalyDisplayConfig anomaly = case anomaly.anomalyType of
-  Anomalies.ATField -> ("New Field Found", "/assets/svgs/anomalies/fields.svg")
-  Anomalies.ATShape -> ("New Request Shape", "/assets/svgs/anomalies/fields.svg")
-  Anomalies.ATEndpoint -> ("New Endpoint", "/assets/svgs/endpoint.svg")
-  Anomalies.ATFormat -> ("Modified field", "/assets/svgs/anomalies/fields.svg")
-  Anomalies.ATUnknown -> ("Unknown anomaly", "/assets/svgs/anomalies/fields.svg")

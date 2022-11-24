@@ -1,11 +1,12 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE RankNTypes #-}
 
-module Utils (eitherStrToText, GetOrRedirect, redirect, DBField (..)) where
+module Utils (eitherStrToText, GetOrRedirect, redirect, DBField (..), mIcon_) where
 
 import Data.Time (ZonedTime)
 import Database.PostgreSQL.Simple.ToField (ToField (..))
-import Lucid (Html)
+import Lucid (Html, href_)
+import Lucid.Svg (class_, svg_, use_)
 import Relude
 import Servant
 
@@ -32,3 +33,6 @@ instance ToField DBField where
 -- Useful Alternative abstractions
 (<?>) :: Alternative f => f a -> a -> f a
 (<?>) fa def = fa <|> pure def
+
+mIcon_ :: Text -> Text -> Html ()
+mIcon_ mIcon classes = svg_ [class_ $ "inline-block icon " <> classes] $ use_ [href_ $ "/assets/svgs/symbol-defs.svg#icon-" <> mIcon]

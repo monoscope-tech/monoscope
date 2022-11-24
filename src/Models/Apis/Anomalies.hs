@@ -20,10 +20,10 @@ import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity
-import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query, queryOne)
+import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, queryOne)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Query (Query (Query))
-import Database.PostgreSQL.Simple (FromRow, Only (Only))
+import Database.PostgreSQL.Simple (FromRow)
 import Database.PostgreSQL.Simple.FromField (FromField, ResultError (ConversionFailed, UnexpectedNull), fromField, returnError)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
@@ -173,7 +173,7 @@ makeFieldLabelsNoPrefix ''AnomalyVM
 getAnomalyVM :: Projects.ProjectId -> Text -> DBT IO (Maybe AnomalyVM)
 getAnomalyVM pid hash = queryOne Select q (pid, hash)
   where
-    q = [sql| SELECT * FROM apis.anomalies_vm WHERE project_id=? AND target_hash=?|]
+    q = [sql| SELECT *,0,now() FROM apis.anomalies_vm WHERE project_id=? AND target_hash=?|]
 
 selectAnomalies :: Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe Bool -> Maybe Bool -> DBT IO (Vector AnomalyVM)
 selectAnomalies pid endpointM isAcknowleged isArchived = query Select (Query $ from @Text q) (MkDBField pid : paramList)

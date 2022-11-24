@@ -22,6 +22,16 @@
     font-family: "Inconsolata", monospace;
   }
 
+  /* From icomoon app*/
+  .icon {
+    display: inline-block;
+    width: 1em;
+    height: 1em;
+    stroke-width: 0;
+    stroke: currentColor;
+    fill: currentColor;
+  }
+
   .btn-sm {
     @apply px-4 py-2  rounded inline-flex items-center border border-transparent rounded-md shadow-sm text-sm font-medium focus:outline-none focus:ring-2 focus:ring-offset-2 cursor-pointer;
   }
