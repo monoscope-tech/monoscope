@@ -134,19 +134,12 @@ deleteParam key url = if needle == "" then url else replace needle "" url
 
 anomalyListPage :: ParamInput -> Text -> Projects.ProjectId -> UTCTime -> Vector Anomalies.AnomalyVM -> Html ()
 anomalyListPage paramInput currentURL pid currTime anomalies = div_ [class_ "container mx-auto  px-4 pt-10 pb-24"] $ do
-  div_ [class_ "flex justify-between"] $ do
-    h3_ [class_ "text-xl text-slate-700 flex place-items-center"] "Anomalies"
-    div_ [class_ "flex flex-row"] $ do
-      button_ [class_ "bg-white rounded-xl py-2 px-4 m-3 h-10 flex flex-row"] $ do
-        img_ [src_ "/assets/svgs/download.svg", class_ "h-4 w-6"]
-        span_ [class_ "text-sm"] "Export"
-        img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-3 w-3 mt-1 mx-1"]
-      button_ [class_ "bg-blue-700 h-10  px-2 rounded-xl py-1 mt-3 "] $ img_ [src_ "/assets/svgs/white-plus.svg", class_ "text-white h-4 w-6 text-bold"]
-  div_ [class_ "py-2 px-4 space-x-1 border-b border-slate-20 mb-2 ", hxBoost_ "true"] do
+  h3_ [class_ "text-xl text-slate-700 flex place-items-center"] "Anomalies"
+  div_ [class_ "py-2 px-2 space-x-6 border-b border-slate-20 mt-6 mb-8 text-sm font-light", hxBoost_ "true"] do
     let uri = deleteParam "archived" $ deleteParam "ackd" currentURL
-    a_ [class_ $ "btn-sm p-2 " <> if (not paramInput.ackd && not paramInput.archived) then " font-bold text-black " else "", href_ $ uri <> "&ackd=false&archived=false"] "Inbox"
-    a_ [class_ $ "btn-sm p-2 " <> if (paramInput.ackd && not paramInput.archived) then " font-bold text-black " else "", href_ $ uri <> "&ackd=true&archived=false"] "Acknowleged"
-    a_ [class_ $ "btn-sm p-2 " <> if paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&archived=true"] "Archived"
+    a_ [class_ $ "inline-block py-2 " <> if (not paramInput.ackd && not paramInput.archived) then " font-bold text-black " else "", href_ $ uri <> "&ackd=false&archived=false"] "Inbox"
+    a_ [class_ $ "inline-block  py-2 " <> if (paramInput.ackd && not paramInput.archived) then " font-bold text-black " else "", href_ $ uri <> "&ackd=true&archived=false"] "Acknowleged"
+    a_ [class_ $ "inline-block  py-2 " <> if paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&archived=true"] "Archived"
   div_ [class_ "grid grid-cols-5", hxGet_ currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $ anomalyList pid currTime anomalies
 
 anomalyList :: Projects.ProjectId -> UTCTime -> Vector Anomalies.AnomalyVM -> Html ()
@@ -166,9 +159,9 @@ anomalyList pid currTime anomalies = form_ [class_ "col-span-5 bg-white divide-y
 
       div_ [class_ "flex justify-center font-base w-64 content-between gap-14"] do
         span_ "GRAPH"
-        div_ [class_ " space-x-2"] $ do
-          a_ "24h"
-          a_ [class_ "cursor-pointer font-medium"] "14d"
+        div_ [class_ " space-x-2 font-base text-sm"] $ do
+          a_ [class_ "cursor-pointer"] "24h"
+          a_ [class_ "cursor-pointer font-bold text-base"] "14d"
       div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "font-base"] "EVENTS"
 
   when (null anomalies) $ div_ [class_ "flex card-round  text-center justify-center items-center h-32"] $ do
