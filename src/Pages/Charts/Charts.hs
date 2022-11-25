@@ -66,8 +66,7 @@ function throughputEChart(renderAt, data, gb, showLegend){
   let series ={
       name: "Throughput",
       type: 'bar',
-      barMinHeight: '1.5',
-      barMinWidth: '1.5',
+      barWidth: '70%',
       encode: {
         x: 'timestamp',
         y: 'throughput',
@@ -84,8 +83,7 @@ function throughputEChart(renderAt, data, gb, showLegend){
       name: k,
       type: 'bar',
       stack: 'Endpoints',
-      barMinHeight: '1.5',
-      barMinWidth: '1.5',
+      barWidth: '70%',
       encode: {
         x: 'timestamp',
         y: 'throughput',
@@ -97,13 +95,23 @@ function throughputEChart(renderAt, data, gb, showLegend){
   const myChart = echarts.init(document.getElementById(renderAt));
   const option = {
     legend: {show: showLegend, type: 'scroll', top: 'bottom'},
+    grid: {
+        width: '100%',
+        left: '0%',
+        top: '1%',
+        bottom: '1%',
+        containLabel: true
+    },
     tooltip: {
       trigger: 'axis',
     },
-    xAxis: { show: showLegend, type: 'time' },
+    xAxis: { show: showLegend, type: 'time', scale: true },
     yAxis: { show: showLegend, scale: true },
     series: series,
   };
+  if (showLegend) {
+    option.grid.bottom = '7%'
+  }
   myChart.setOption(option);
  }
 

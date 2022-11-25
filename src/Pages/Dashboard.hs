@@ -115,9 +115,9 @@ dStats projReqStats reqsByEndpointJ = do
           statBox "Total Fields" (show (projReqStats.totalFields))
 
         div_ [class_ "flex-1 grow card-round row-span-2 p-3"] $ do
-          div_ [class_ "p-4 h-full"] $ do
+          div_ [class_ "p-4 h-full space-y-6"] $ do
             select_ [] $ do
-              option_ "Reqs Grouped by Endpoint"
+              option_ [class_ "text-2xl font-normal"] "Reqs Grouped by Endpoint"
             Charts.throughput projReqStats.projectId "reqsByEndpoints" Nothing (Just Charts.GBEndpoint) (3 * 60) Nothing True
 
       div_ [class_ "col-span-3 card-round py-3 px-6"] $ do
