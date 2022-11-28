@@ -42,7 +42,7 @@ dashboardGetH sess pid = do
             )
 
       let reqLatenciesRolledByStepsLabeled = Vector.toList reqLatenciesRolledBySteps & map \(x, y) -> RequestDumps.labelRequestLatency reqLatencyPercentileSteps (x, y)
-      anomalies <- Anomalies.selectAnomalies pid Nothing (Just False) (Just False)
+      anomalies <- Anomalies.selectAnomalies pid Nothing (Just False) (Just False) Nothing
       pure (project, projectRequestStats, reqsByEndpoint, concat reqLatenciesRolledByStepsLabeled, anomalies)
   let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
   let bwconf =

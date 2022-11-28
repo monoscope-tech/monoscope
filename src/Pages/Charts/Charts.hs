@@ -66,6 +66,7 @@ function throughputEChart(renderAt, data, gb, showLegend){
   let series ={
       name: "Throughput",
       type: 'bar',
+      showBackground: true,
       barWidth: '70%',
       encode: {
         x: 'timestamp',
@@ -83,6 +84,7 @@ function throughputEChart(renderAt, data, gb, showLegend){
       name: k,
       type: 'bar',
       stack: 'Endpoints',
+      showBackground: true,
       barWidth: '70%',
       encode: {
         x: 'timestamp',
@@ -112,6 +114,7 @@ function throughputEChart(renderAt, data, gb, showLegend){
   if (showLegend) {
     option.grid.bottom = '7%'
   }
+  console.log(option)
   myChart.setOption(option);
  }
 

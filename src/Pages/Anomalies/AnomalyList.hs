@@ -91,16 +91,16 @@ data ParamInput = ParamInput
     archived :: Bool
   }
 
-anomalyListGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
-anomalyListGetH sess pid layoutM ackdM archivedM hxRequestM hxBoostedM = do
-  let textToBool a = if a == "true" then True else False
+anomalyListGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
+anomalyListGetH sess pid layoutM ackdM archivedM sortM hxRequestM hxBoostedM = do
+  let textToBool a = a == "true"
   let ackd = textToBool <$> ackdM
   let archived = textToBool <$> archivedM
   pool <- asks pool
   (project, anomalies) <- liftIO $
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      anomalies <- Anomalies.selectAnomalies pid Nothing ackd archived
+      anomalies <- Anomalies.selectAnomalies pid Nothing ackd archived sortM
       pure (project, anomalies)
   currTime <- liftIO getCurrentTime
   let bwconf =
@@ -156,6 +156,16 @@ anomalyList pid currTime anomalies = form_ [class_ "col-span-5 bg-white divide-y
         button_ [class_ "btn-sm bg-transparent space-x-1 border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/archive"] do
           img_ [src_ "/assets/svgs/anomalies/archive.svg", class_ "h-4 w-4 inline-block"]
           span_ "archive"
+      div_ [class_ "relative inline-block"] do
+        button_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl", [__|on click halt default then toggle .hidden on #sortMenuDiv |]] do
+          mIcon_ "" "lan3"
+          span_ "First Seen"
+        div_ [id_ "sortMenuDiv", class_ "text-sm absolute right-0 z-10 mt-2 w-56 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none", tabindex_ "-1"] do
+          a_ [class_ "block flex flex-row px-3 py-2 hover:bg-blue-50"] do
+            mIcon_ "" "lan3"
+            div_ [class_ "grow space-y-1"] do
+              span_ [class_ "block "] "First Seen"
+              span_ [class_ "block "] "First time the issue occured"
 
       div_ [class_ "flex justify-center font-base w-64 content-between gap-14"] do
         span_ "GRAPH"

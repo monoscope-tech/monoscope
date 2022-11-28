@@ -175,8 +175,8 @@ getAnomalyVM pid hash = queryOne Select q (pid, hash)
   where
     q = [sql| SELECT *,0,now() FROM apis.anomalies_vm WHERE project_id=? AND target_hash=?|]
 
-selectAnomalies :: Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe Bool -> Maybe Bool -> DBT IO (Vector AnomalyVM)
-selectAnomalies pid endpointM isAcknowleged isArchived = query Select (Query $ from @Text q) (MkDBField pid : paramList)
+selectAnomalies :: Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe Bool -> Maybe Bool -> Maybe Text -> DBT IO (Vector AnomalyVM)
+selectAnomalies pid endpointM isAcknowleged isArchived sortM = query Select (Query $ from @Text q) (MkDBField pid : paramList)
   where
     boolToNullSubQ a = if a then " not " else ""
     condlist =
@@ -189,9 +189,16 @@ selectAnomalies pid endpointM isAcknowleged isArchived = query Select (Query $ f
       | null condlist = mempty
       | otherwise = "AND " <> mconcat (intersperse " AND " condlist)
     paramList = mapMaybe (MkDBField <$>) [endpointM]
+    orderBy = case sortM of
+      Nothing -> "avm.created_at desc"
+      Just "first_seen" -> "avm.created_at desc"
+      Just "events" -> "events desc"
+      Just "last_seen" -> "last_seen desc"
+      _ -> "avm.created_at desc"
+
     q =
       [text|
-SELECT avm.*, count(rd.id), max(rd.created_at) 
+SELECT avm.*, count(rd.id) events, max(rd.created_at) last_seen
     FROM
         apis.anomalies_vm avm
     JOIN apis.request_dumps rd ON avm.project_id=rd.project_id 
@@ -204,5 +211,5 @@ SELECT avm.*, count(rd.id), max(rd.created_at)
         AND avm.anomaly_type != 'field'
         AND rd.created_at > NOW() - interval '14 days'
     GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25
-    ORDER BY avm.created_at desc;
+    ORDER BY $orderBy;
       |]

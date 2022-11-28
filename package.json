@@ -1,5 +1,8 @@
 {
   "devDependencies": {
     "tailwindcss": "^3.0.12"
+  },
+  "dependencies": {
+    "workbox-cli": "^6.5.4"
   }
 }

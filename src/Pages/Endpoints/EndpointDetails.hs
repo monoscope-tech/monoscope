@@ -121,7 +121,7 @@ endpointDetailsH sess pid eid = do
               round (enpStats.p50) `quot` steps' * steps'
             )
       let reqLatenciesRolledByStepsLabeled = Vector.toList reqLatenciesRolledBySteps & map \(x, y) -> RequestDumps.labelRequestLatency reqLatencyPercentileSteps (x, y)
-      anomalies <- Anomalies.selectAnomalies pid (Just eid) (Just False) (Just False)
+      anomalies <- Anomalies.selectAnomalies pid (Just eid) (Just False) (Just False) Nothing
       pure (enpStats, project, fieldsMap, reqsByStatsByMinJ, concat reqLatenciesRolledByStepsLabeled, anomalies)
 
   -- let reqsByStatsByMinJ = decodeUtf8 $ AE.encode reqsByStatsByMin
@@ -133,7 +133,7 @@ endpointDetailsH sess pid eid = do
             pageTitle = "Endpoint Details",
             menuItem = Just "Endpoints"
           }
-  currTime <- liftIO $ getCurrentTime
+  currTime <- liftIO getCurrentTime
   pure $ bodyWrapper bwconf $ endpointDetails currTime enpStats fieldsMap reqsByStatsByMinJ reqLatenciesRolledByStepsJ anomalies
 
 endpointDetails :: UTCTime -> EndpointRequestStats -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> Text -> Vector Anomalies.AnomalyVM -> Html ()
