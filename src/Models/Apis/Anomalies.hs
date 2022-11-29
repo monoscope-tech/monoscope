@@ -181,8 +181,8 @@ selectAnomalies pid endpointM isAcknowleged isArchived sortM = query Select (Que
     boolToNullSubQ a = if a then " not " else ""
     condlist =
       catMaybes
-        [ (\a -> " acknowleged_at is" <> a <> " null ") <$> (boolToNullSubQ <$> isAcknowleged),
-          (\a -> " archived_at is" <> a <> " null ") <$> (boolToNullSubQ <$> isArchived),
+        [ (\a -> " aan.acknowleged_at is" <> a <> " null ") <$> (boolToNullSubQ <$> isAcknowleged),
+          (\a -> " aan.archived_at is" <> a <> " null ") <$> (boolToNullSubQ <$> isArchived),
           "endpoint_id=?" <$ endpointM
         ]
     cond
@@ -198,9 +198,15 @@ selectAnomalies pid endpointM isAcknowleged isArchived sortM = query Select (Que
 
     q =
       [text|
-SELECT avm.*, count(rd.id) events, max(rd.created_at) last_seen
+SELECT avm.id, avm.created_at, avm.updated_at, avm.project_id, aan.acknowleged_at, aan.acknowleged_by, avm.anomaly_type, avm.action, avm.target_hash,
+       avm.shape_id, avm.new_unique_fields, avm.deleted_fields, avm.updated_field_formats, 
+       avm.field_id, avm.field_key, avm.field_key_path, avm.field_category, avm.field_format, 
+       avm.format_id, avm.format_type, avm.format_examples, 
+       avm.endpoint_id, avm.endpoint_method, avm.endpoint_url_path, aan.archived_at,
+       count(rd.id) events, max(rd.created_at) last_seen
     FROM
         apis.anomalies_vm avm
+    JOIN apis.anomalies aan ON avm.id = aan.id
     JOIN apis.request_dumps rd ON avm.project_id=rd.project_id 
         AND (avm.target_hash=ANY(rd.format_hashes) AND avm.anomaly_type='format')
         OR  (avm.target_hash=rd.shape_hash AND avm.anomaly_type='shape')

@@ -122,8 +122,6 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM hxRequestM hxBoostedM = d
             sort = fromMaybe "" sortM
           }
 
-  traceShowM (layoutM, hxRequestM, hxBoostedM)
-
   let elementBelowTabs =
         div_ [class_ "grid grid-cols-5", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $
           anomalyList paramInput pid currTime anomalies
@@ -139,8 +137,6 @@ deleteParam key url = if needle == "" then url else replace needle "" url
   where
     needle = (url =~ reg :: Text)
     reg = "&" <> key <> "(=[^&]*)?|^" <> key <> "(=[^&]*)?&?" :: Text
-
--- reg2 = "(^|(?<=&))filter(=[^&]*)?(&|$)"
 
 anomalyListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Anomalies.AnomalyVM -> Html ()
 anomalyListPage paramInput pid currTime anomalies = div_ [class_ "container mx-auto  px-4 pt-10 pb-24"] $ do
@@ -170,8 +166,8 @@ anomalyList paramInput pid currTime anomalies = form_ [class_ "col-span-5 bg-whi
         a_ [class_ " w-2 h-full"] ""
         input_ [term "aria-label" "Select Issue", type_ "checkbox"]
       div_ [class_ " grow flex flex-row gap-2"] do
-        a_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/acknowlege", hxSwap_ "none"] "✓ acknowlege"
-        a_ [class_ "btn-sm bg-transparent space-x-1 border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/archive", hxSwap_ "none"] do
+        button_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/acknowlege", hxSwap_ "none"] "✓ acknowlege"
+        button_ [class_ "btn-sm bg-transparent space-x-1 border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/archive", hxSwap_ "none"] do
           img_ [src_ "/assets/svgs/anomalies/archive.svg", class_ "h-4 w-4 inline-block"]
           span_ "archive"
       div_ [class_ "relative inline-block"] do

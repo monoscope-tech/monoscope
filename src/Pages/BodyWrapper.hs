@@ -102,7 +102,6 @@ bodyWrapper BWConfig {sessM, currProject, pageTitle, menuItem} child =
 
         body_ [class_ "text-gray-900"] $ do
           section_ [class_ "flex flex-row h-screen overflow-hidden"] $ do
-            -- Side nav
             sideNav'
             section_ [class_ "grow h-full overflow-y-hidden"] $ do
               navbar currUser
