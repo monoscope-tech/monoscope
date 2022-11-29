@@ -176,7 +176,7 @@ anomalyList paramInput pid currTime anomalies = form_ [class_ "col-span-5 bg-whi
           span_ $ toHtml $ currentSortTitle
         div_ [id_ "sortMenuDiv", hxBoost_ "true", class_ "p-1 hidden text-sm border border-black-30 absolute right-0 z-10 mt-2 w-72 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none", tabindex_ "-1"] do
           sortMenu & mapM_ \(title, desc, identifier) -> do
-            let isActive = paramInput.sort == identifier
+            let isActive = paramInput.sort == identifier || paramInput.sort == ""
             a_
               [ class_ $ "block flex flex-row px-3 py-2 hover:bg-blue-50 rounded-md cursor-pointer " <> (if isActive then " text-blue-800 " else ""),
                 href_ $ currentURL' <> "&sort=" <> identifier
