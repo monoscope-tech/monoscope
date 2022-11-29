@@ -17,6 +17,7 @@ import Data.Default (def)
 import Data.Text (replace)
 import Data.Text qualified as T
 import Data.Time (UTCTime, ZonedTime, defaultTimeLocale, formatTime, getCurrentTime, zonedTimeToUTC)
+import Data.Tuple.Extra (fst3, thd3)
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute, withPool)
@@ -87,8 +88,10 @@ anomalyBulkActionsPostH sess pid action items = do
   pure $ addHeader hxTriggerData $ ""
 
 data ParamInput = ParamInput
-  { ackd :: Bool,
-    archived :: Bool
+  { currentURL :: Text,
+    ackd :: Bool,
+    archived :: Bool,
+    sort :: Text
   }
 
 anomalyListGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
@@ -110,19 +113,26 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM hxRequestM hxBoostedM = d
             pageTitle = "Anomalies"
           }
   let pidT = Projects.projectIdText pid
-  let refreshURL = "/p/" <> pidT <> "/anomalies?layout=" <> fromMaybe "false" layoutM <> "&ackd=" <> fromMaybe "false" ackdM <> "&archived=" <> fromMaybe "false" archivedM
+  let currentURL = "/p/" <> pidT <> "/anomalies?layout=" <> fromMaybe "false" layoutM <> "&ackd=" <> fromMaybe "false" ackdM <> "&archived=" <> fromMaybe "false" archivedM
   let paramInput =
         ParamInput
-          { ackd = fromMaybe False ackd,
-            archived = fromMaybe False archived
+          { currentURL = currentURL,
+            ackd = fromMaybe False ackd,
+            archived = fromMaybe False archived,
+            sort = fromMaybe "" sortM
           }
+
+  traceShowM (layoutM, hxRequestM, hxBoostedM)
+
+  let elementBelowTabs =
+        div_ [class_ "grid grid-cols-5", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $
+          anomalyList paramInput pid currTime anomalies
+
   case (layoutM, hxRequestM, hxBoostedM) of
     (Just "slider", Just "true", _) -> pure $ anomalyListSlider currTime anomalies
-    (_, Just "true", Just "false") ->
-      pure $
-        div_ [class_ "grid grid-cols-5", hxGet_ refreshURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $
-          anomalyList pid currTime anomalies
-    _ -> pure $ bodyWrapper bwconf $ anomalyListPage paramInput refreshURL pid currTime anomalies
+    (_, Just "true", Just "false") -> pure $ elementBelowTabs
+    (_, Just "true", Nothing) -> pure $ elementBelowTabs
+    _ -> pure $ bodyWrapper bwconf $ anomalyListPage paramInput pid currTime anomalies
 
 deleteParam :: Text -> Text -> Text
 deleteParam key url = if needle == "" then url else replace needle "" url
@@ -132,40 +142,55 @@ deleteParam key url = if needle == "" then url else replace needle "" url
 
 -- reg2 = "(^|(?<=&))filter(=[^&]*)?(&|$)"
 
-anomalyListPage :: ParamInput -> Text -> Projects.ProjectId -> UTCTime -> Vector Anomalies.AnomalyVM -> Html ()
-anomalyListPage paramInput currentURL pid currTime anomalies = div_ [class_ "container mx-auto  px-4 pt-10 pb-24"] $ do
+anomalyListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Anomalies.AnomalyVM -> Html ()
+anomalyListPage paramInput pid currTime anomalies = div_ [class_ "container mx-auto  px-4 pt-10 pb-24"] $ do
   h3_ [class_ "text-xl text-slate-700 flex place-items-center"] "Anomalies"
   div_ [class_ "py-2 px-2 space-x-6 border-b border-slate-20 mt-6 mb-8 text-sm font-light", hxBoost_ "true"] do
-    let uri = deleteParam "archived" $ deleteParam "ackd" currentURL
+    let uri = deleteParam "archived" $ deleteParam "ackd" paramInput.currentURL
     a_ [class_ $ "inline-block py-2 " <> if (not paramInput.ackd && not paramInput.archived) then " font-bold text-black " else "", href_ $ uri <> "&ackd=false&archived=false"] "Inbox"
     a_ [class_ $ "inline-block  py-2 " <> if (paramInput.ackd && not paramInput.archived) then " font-bold text-black " else "", href_ $ uri <> "&ackd=true&archived=false"] "Acknowleged"
     a_ [class_ $ "inline-block  py-2 " <> if paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&archived=true"] "Archived"
-  div_ [class_ "grid grid-cols-5", hxGet_ currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $ anomalyList pid currTime anomalies
+  div_ [class_ "grid grid-cols-5", id_ "anomalyListBelowTab", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $ anomalyList paramInput pid currTime anomalies
 
-anomalyList :: Projects.ProjectId -> UTCTime -> Vector Anomalies.AnomalyVM -> Html ()
-anomalyList pid currTime anomalies = form_ [class_ "col-span-5 bg-white divide-y border rounded-md ", id_ "anomalyListForm"] $ do
+anomalyList :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Anomalies.AnomalyVM -> Html ()
+anomalyList paramInput pid currTime anomalies = form_ [class_ "col-span-5 bg-white divide-y border rounded-md ", id_ "anomalyListForm"] $ do
   let bulkActionBase = "/p/" <> Projects.projectIdText pid <> "/anomalies/bulk_actions"
+  let currentURL' = deleteParam "sort" paramInput.currentURL
+  let sortMenu =
+        [ ("First Seen", "First time the issue occured", "first_seen"),
+          ("Last Seen", "Last time the issue occured", "last_seen"),
+          ("Events", "Number of events", "events")
+        ] ::
+          [(Text, Text, Text)]
+  let currentSortTitle = fromMaybe "First Seen" $ fst3 <$> find (\(_, _, identifier) -> identifier == paramInput.sort) sortMenu
   div_
     [class_ "flex py-3 gap-8 items-center  bg-gray-50"]
     do
       div_ [class_ "h-4 flex space-x-3 w-8"] do
         a_ [class_ " w-2 h-full"] ""
         input_ [term "aria-label" "Select Issue", type_ "checkbox"]
-      div_ [class_ " grow flex flex-row gap-2", hxInclude_ "#anomalyListForm"] do
-        button_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/acknowlege"] "✓ acknowlege"
-        button_ [class_ "btn-sm bg-transparent space-x-1 border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/archive"] do
+      div_ [class_ " grow flex flex-row gap-2"] do
+        a_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/acknowlege", hxSwap_ "none"] "✓ acknowlege"
+        a_ [class_ "btn-sm bg-transparent space-x-1 border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/archive", hxSwap_ "none"] do
           img_ [src_ "/assets/svgs/anomalies/archive.svg", class_ "h-4 w-4 inline-block"]
           span_ "archive"
       div_ [class_ "relative inline-block"] do
-        button_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl", [__|on click halt default then toggle .hidden on #sortMenuDiv |]] do
-          mIcon_ "" "lan3"
-          span_ "First Seen"
-        div_ [id_ "sortMenuDiv", class_ "text-sm absolute right-0 z-10 mt-2 w-56 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none", tabindex_ "-1"] do
-          a_ [class_ "block flex flex-row px-3 py-2 hover:bg-blue-50"] do
-            mIcon_ "" "lan3"
-            div_ [class_ "grow space-y-1"] do
-              span_ [class_ "block "] "First Seen"
-              span_ [class_ "block "] "First time the issue occured"
+        a_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl space-x-2", [__|on click toggle .hidden on #sortMenuDiv |]] do
+          mIcon_ "sort" "h-4 w-4"
+          span_ $ toHtml $ currentSortTitle
+        div_ [id_ "sortMenuDiv", hxBoost_ "true", class_ "p-1 hidden text-sm border border-black-30 absolute right-0 z-10 mt-2 w-72 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none", tabindex_ "-1"] do
+          sortMenu & mapM_ \(title, desc, identifier) -> do
+            let isActive = paramInput.sort == identifier
+            a_
+              [ class_ $ "block flex flex-row px-3 py-2 hover:bg-blue-50 rounded-md cursor-pointer " <> (if isActive then " text-blue-800 " else ""),
+                href_ $ currentURL' <> "&sort=" <> identifier
+              ]
+              do
+                div_ [class_ "flex flex-col items-center justify-center px-3"] do
+                  if isActive then mIcon_ "checkmark4" "w-4 h-5" else mIcon_ "" "w-4 h-5"
+                div_ [class_ "grow space-y-1"] do
+                  span_ [class_ "block text-lg"] $ toHtml title
+                  span_ [class_ "block "] $ toHtml desc
 
       div_ [class_ "flex justify-center font-base w-64 content-between gap-14"] do
         span_ "GRAPH"

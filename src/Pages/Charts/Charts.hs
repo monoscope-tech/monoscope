@@ -63,11 +63,15 @@ chartInit :: Text
 chartInit =
   [text|
 function throughputEChart(renderAt, data, gb, showLegend){
+  let backgroundStyle = {
+    color: 'rgba(240,248,255, 0.4)'
+  }
   let series ={
       name: "Throughput",
       type: 'bar',
       showBackground: true,
-      barWidth: '70%',
+      backgroundStyle: backgroundStyle,
+      barWidth: '60%',
       encode: {
         x: 'timestamp',
         y: 'throughput',
@@ -85,7 +89,8 @@ function throughputEChart(renderAt, data, gb, showLegend){
       type: 'bar',
       stack: 'Endpoints',
       showBackground: true,
-      barWidth: '70%',
+      backgroundStyle: backgroundStyle,
+      barWidth: '60%',
       encode: {
         x: 'timestamp',
         y: 'throughput',
@@ -114,7 +119,6 @@ function throughputEChart(renderAt, data, gb, showLegend){
   if (showLegend) {
     option.grid.bottom = '7%'
   }
-  console.log(option)
   myChart.setOption(option);
  }
 
