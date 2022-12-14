@@ -276,6 +276,7 @@ normalizeUrlPath :: SDKTypes -> Text -> Text
 normalizeUrlPath GoGin urlPath = urlPath
 normalizeUrlPath GoBuiltIn urlPath = urlPath
 normalizeUrlPath PhpLaravel urlPath = urlPath
+normalizeUrlPath PhpSymfony urlPath = urlPath
 normalizeUrlPath JsExpress urlPath = urlPath
 normalizeUrlPath JavaSpringBoot urlPath = urlPath
 normalizeUrlPath JsNest urlPath = urlPath
