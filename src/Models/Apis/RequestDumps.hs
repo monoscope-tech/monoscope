@@ -15,8 +15,6 @@ module Models.Apis.RequestDumps
     selectRequestDumpByProject,
     selectRequestDumpByProjectAndId,
     selectRequestDumpsByProjectForChart,
-    selectRequestsByEndpointsStatByMin,
-    selectRequestsByStatusCodesStatByMin,
     bulkInsertRequestDumps,
   )
 where
@@ -161,26 +159,6 @@ selectRequestDumpByProjectAndId pid createdAt rdId = queryOne Select q (createdA
                     0 AS full_count
              FROM apis.request_dumps where created_at=? and project_id=? and id=? LIMIT 1|]
 
-selectRequestsByStatusCodesStatByMin :: Projects.ProjectId -> Text -> DBT IO Text
-selectRequestsByStatusCodesStatByMin pid enpHash = do
-  let q =
-        [sql| WITH q as (SELECT timeB, endpoint_title, SUM(total_count) total_count 
-                  FROM apis.project_requests_by_endpoint_per_min 
-                  WHERE project_id=? AND endpoint_hash=? GROUP BY timeB, endpoint_title, total_count)
-              SELECT COALESCE(json_agg(json_build_array(timeB, endpoint_title, total_count)), '[]')::text from q; |]
-  (Only val) <- fromMaybe (Only "[]") <$> queryOne Select q (pid, enpHash)
-  pure val
-
-selectRequestsByEndpointsStatByMin :: Projects.ProjectId -> DBT IO Text
-selectRequestsByEndpointsStatByMin pid = do
-  let q =
-        [sql| WITH q as (SELECT timeB, endpoint_title, SUM(total_count) total_count 
-                  FROM apis.project_requests_by_endpoint_per_min 
-                  WHERE project_id=? GROUP BY timeB, endpoint_title, total_count)
-              SELECT COALESCE(json_agg(json_build_array(timeB, endpoint_title, total_count)), '[]')::text from q; |]
-  (Only val) <- fromMaybe (Only "[]") <$> queryOne Select q (Only pid)
-  pure val
-
 selectReqLatenciesRolledBySteps :: Int -> Int -> Projects.ProjectId -> Text -> Text -> DBT IO (Vector (Int, Int))
 selectReqLatenciesRolledBySteps maxv steps pid urlPath method = query Select q (maxv, steps, steps, steps, pid, urlPath, method)
   where
@@ -221,7 +199,7 @@ throughputBy pid groupByM endpointHash shapeHash formatHash interval limitM = do
   let groupBy' = fromMaybe @Text "" $ mappend " ," <$> groupByM
   let (groupBy, groupByFields) = case groupByM of
         Just "endpoint" -> (",method, url_path", ",method||' '||url_path as g")
-        _ -> (groupBy', groupBy')
+        _ -> (groupBy', groupBy' <> " as g")
   let groupByFinal = maybe "" (const ",g") groupByM
   let paramList = mapMaybe (MkDBField <$>) [endpointHash, shapeHash, formatHash]
   let cond

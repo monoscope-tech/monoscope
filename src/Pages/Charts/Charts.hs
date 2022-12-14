@@ -32,10 +32,13 @@ runQueryBy (QBEndpointHash t) = "endpoint_hash=" <> t
 runQueryBy (QBShapeHash t) = "shape_hash=" <> t
 runQueryBy (QBFormatHash t) = "format_hash=" <> t
 
-data GroupBy = GBEndpoint
+data GroupBy
+  = GBEndpoint
+  | GBStatusCode
 
 runGroupBy :: GroupBy -> Text
 runGroupBy GBEndpoint = "group_by=endpoint"
+runGroupBy GBStatusCode = "group_by=status_code"
 
 -- This endpoint will return a throughput chart partial
 throughput :: Projects.ProjectId -> Text -> Maybe QueryBy -> Maybe GroupBy -> Int -> Maybe Int -> Bool -> Html ()
@@ -106,7 +109,7 @@ function throughputEChart(renderAt, data, gb, showLegend){
         width: '100%',
         left: '0%',
         top: '1%',
-        bottom: '1%',
+        bottom: '1.5%',
         containLabel: true
     },
     tooltip: {
@@ -117,9 +120,54 @@ function throughputEChart(renderAt, data, gb, showLegend){
     series: series,
   };
   if (showLegend) {
-    option.grid.bottom = '7%'
+    option.grid.bottom = '9%'
   }
   myChart.setOption(option);
  }
 
+
+function latencyHistogram(renderAt, data, pc){
+  const myChart = echarts.init(document.getElementById(renderAt));
+  const option = {
+    grid: {width: '100%', containLabel: false},
+    xAxis: { show: true, type: 'value', scale: true },
+    yAxis: { show: true, type: 'value', scale: true },
+    series: {
+      name: 'Direct',
+      type: 'bar',
+      barWidth: '60%',
+      data: data,
+      markLine: {
+        data: [
+          [
+            { name: "p50', coord: [pc.p50, 0]  },
+            { name: "end", coord: [pc.p50, 'max'] },
+          ],
+          [
+            { name: "p75", coord: [pc.p75, 0] },
+            { name: "end", coord: [pc.p75, 'max'] },
+          ],
+          [
+            { name: "p90", coord: [pc.p90, 0] },
+            { name: "end", coord: [pc.p90, 'max'] },
+          ],
+          [
+            { name: "p95", coord: [pc.p95, 0] },
+            { name: "end", coord: [pc.p95, 'max'] },
+          ],
+          [
+            { name: "p99", coord: [pc.p99, 0] },
+            { name: "end", coord: [pc.p99, 'max'] },
+          ],
+          [
+            { name: "max", coord: [pc.max, 0] },
+            { name: "end", coord: [pc.max, 'max'] },
+          ]
+        ],
+      },
+    },
+  };
+  console.log(option);
+  myChart.setOption(option);
+ }
   |]

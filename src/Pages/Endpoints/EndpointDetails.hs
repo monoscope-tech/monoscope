@@ -29,6 +29,7 @@ import NeatInterpolation
 import Optics.Core ((^.))
 import Pages.Anomalies.AnomalyList qualified as AnomaliesList
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pages.Charts.Charts qualified as Charts
 import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
 import Relude
 import Relude.Unsafe qualified as Unsafe
@@ -100,14 +101,13 @@ aesonValueToText = toStrict . encodeToLazyText
 endpointDetailsH :: Sessions.PersistentSession -> Projects.ProjectId -> Endpoints.EndpointId -> DashboardM (Html ())
 endpointDetailsH sess pid eid = do
   pool <- asks pool
-  (enpStats, project, fieldsMap, reqsByStatsByMinJ, reqLatenciesRolledByStepsLabeled, anomalies) <- liftIO $
+  (enpStats, project, fieldsMap, reqLatenciesRolledByStepsLabeled, anomalies) <- liftIO $
     withPool pool $ do
       -- Should swap names betw enp and endpoint endpoint could be endpointStats
       endpoint <- Unsafe.fromJust <$> Endpoints.endpointById eid
       enpStats <- Unsafe.fromJust <$> Endpoints.endpointRequestStatsByEndpoint eid
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
       fieldsMap <- Fields.groupFieldsByCategory <$> Fields.selectFields (endpoint.hash)
-      reqsByStatsByMinJ <- RequestDumps.selectRequestsByStatusCodesStatByMin pid endpoint.hash
 
       let maxV = round (enpStats.max) :: Int
       let steps = (maxV `quot` 100) :: Int
@@ -122,7 +122,7 @@ endpointDetailsH sess pid eid = do
             )
       let reqLatenciesRolledByStepsLabeled = Vector.toList reqLatenciesRolledBySteps & map \(x, y) -> RequestDumps.labelRequestLatency reqLatencyPercentileSteps (x, y)
       anomalies <- Anomalies.selectAnomalies pid (Just eid) (Just False) (Just False) Nothing
-      pure (enpStats, project, fieldsMap, reqsByStatsByMinJ, concat reqLatenciesRolledByStepsLabeled, anomalies)
+      pure (enpStats, project, fieldsMap, concat reqLatenciesRolledByStepsLabeled, anomalies)
 
   -- let reqsByStatsByMinJ = decodeUtf8 $ AE.encode reqsByStatsByMin
   let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
@@ -134,10 +134,10 @@ endpointDetailsH sess pid eid = do
             menuItem = Just "Endpoints"
           }
   currTime <- liftIO getCurrentTime
-  pure $ bodyWrapper bwconf $ endpointDetails currTime enpStats fieldsMap reqsByStatsByMinJ reqLatenciesRolledByStepsJ anomalies
+  pure $ bodyWrapper bwconf $ endpointDetails currTime enpStats fieldsMap reqLatenciesRolledByStepsJ anomalies
 
-endpointDetails :: UTCTime -> EndpointRequestStats -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> Text -> Vector Anomalies.AnomalyVM -> Html ()
-endpointDetails currTime endpoint fieldsM reqsByStatsByMinJ reqLatenciesRolledByStepsJ anomalies =
+endpointDetails :: UTCTime -> EndpointRequestStats -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> Vector Anomalies.AnomalyVM -> Html ()
+endpointDetails currTime endpoint fieldsM reqLatenciesRolledByStepsJ anomalies =
   div_ [class_ "w-full flex flex-row h-full overflow-hidden"] $ do
     div_ [class_ "w-4/6 p-5 h-full overflow-y-scroll"] $ do
       div_ [class_ "flex flex-row justify-between mb-10"] $ do
@@ -184,41 +184,21 @@ endpointDetails currTime endpoint fieldsM reqsByStatsByMinJ reqLatenciesRolledBy
 
     script_
       [text|
-        new FusionCharts({
-          type: "timeseries",
-          renderAt: "reqByStatusCode",
-          width: "95%",
-          height: 350,
+        console.log({
+          type: "column2d",
+          renderAt: "reqsLatencyHistogram",
+          width: "100%",
+          // height: "auto",
           dataSource: {
-            data: new FusionCharts.DataStore().createDataTable($reqsByStatsByMinJ, [{
-            "name": "Time",
-            "type": "date",
-            "format": "%Y-%m-%dT%H:%M:%S%Z" // https://www.fusioncharts.com/dev/fusiontime/fusiontime-attributes
-          }, {
-              "name": "StatusCode",
-              "type": "string"
-          },{
-              "name": "Count",
-              "type": "number"
-          }]),
-            chart: {},
-            navigator: {
-                "enabled": 0
+            data:  $reqLatenciesRolledByStepsJ,
+            "chart": {
+                "theme": "fusion",
+                "xAxisName": "Latency in ms",
+                "yAxisName": "Count",
+                // "numberSuffix": "K"
             },
-            series: "StatusCode",
-            yaxis: [
-              {
-                plot:[{
-                  value: "Count",
-                  type: "column"
-                }],
-                title: ""
-              }
-            ]
           }
-        }).render();
-
-
+        })
         new FusionCharts({
           type: "column2d",
           renderAt: "reqsLatencyHistogram",
@@ -270,6 +250,7 @@ endpointStats enpStats =
             option_ "Reqs by Status code"
             option_ "Avg Reqs per minute"
         div_ [id_ "reqByStatusCode", class_ ""] ""
+        Charts.throughput enpStats.projectId "reqByStatusCode" (Just $ Charts.QBEndpointHash enpStats.endpointHash) (Just Charts.GBStatusCode) (3 * 60) Nothing True
       div_ [class_ "col-span-3 bg-white   border border-gray-100  rounded-xl py-3 px-6"] $ do
         div_ [class_ "p-4"] $
           select_ [] $ do
