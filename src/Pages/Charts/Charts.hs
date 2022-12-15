@@ -140,7 +140,7 @@ function latencyHistogram(renderAt, data, pc){
       markLine: {
         data: [
           [
-            { name: "p50', coord: [pc.p50, 0]  },
+            { name: "p50", coord: [pc.p50, 0]  },
             { name: "end", coord: [pc.p50, 'max'] },
           ],
           [
