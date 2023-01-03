@@ -49,7 +49,8 @@ apiLog sess pid queryM cols' fromM hxRequestM hxBoostedM = do
       requests <- RequestDumps.selectRequestDumpByProject pid query fromM'
       pure (project, requests)
 
-  reqChartTxt <- liftIO $ withPool pool $ RequestDumps.selectRequestDumpsByProjectForChart pid query
+  -- reqChartTxt <- liftIO $ withPool pool $ RequestDumps.selectRequestDumpsByProjectForChart pid query
+  reqChartTxt <- liftIO $ withPool pool $ RequestDumps.throughputBy pid Nothing Nothing Nothing Nothing (3 * 60) Nothing Nothing
   let reqLastCreatedAtM = (^. #createdAt) <$> viaNonEmpty last (Vector.toList requests) -- FIXME: unoptimal implementation, converting from vector to list for last
   let fromTempM = toText . formatTime defaultTimeLocale "%F %T" <$> reqLastCreatedAtM
   let nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' fromTempM
@@ -73,13 +74,11 @@ apiLog sess pid queryM cols' fromM hxRequestM hxBoostedM = do
 apiLogItem :: Sessions.PersistentSession -> Projects.ProjectId -> UUID.UUID -> ZonedTime -> DashboardM (Html ())
 apiLogItem sess pid rdId createdAt = do
   pool <- asks pool
-
   startTime <- liftIO $ getTime Monotonic
   logItemM <- liftIO $ withPool pool $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
   afterProccessing <- liftIO $ getTime Monotonic
   let content = maybe (div_ "invalid log request ID") apiLogItemView logItemM
   endTime <- liftIO $ getTime Monotonic
-
   liftIO $ fprint (timeSpecs % " APILOG Item  DB Time \n") startTime afterProccessing
   liftIO $ fprint (timeSpecs % " APILOG Item  Processing time \n") afterProccessing endTime
   liftIO $ fprint (timeSpecs % " APILOG Item  Total Time\n") startTime endTime
@@ -132,38 +131,10 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
 
 reqChart :: Text -> Bool -> Html ()
 reqChart reqChartTxt hxOob = do
-  div_ [id_ "reqsChartParent", hxSwapOob_ $ show hxOob] $ do
-    div_ [id_ "reqsCharts", class_ "", style_ "height:250px"] ""
+  div_ [id_ "reqsChartParent", class_ "p-5", hxSwapOob_ $ show hxOob] $ do
+    div_ [id_ "reqsChartsEC", class_ "", style_ "height:200px"] ""
     script_
-      [text|
-      new FusionCharts({
-          type: "timeseries",
-          renderAt: "reqsCharts",
-          width: "100%",
-          height: 250,
-          dataSource: {
-            data: new FusionCharts.DataStore().createDataTable($reqChartTxt, [{
-              "name": "Time",
-              "type": "date",
-              "format": "%Y-%m-%dT%H:%M:%S%Z" // https://www.fusioncharts.com/dev/fusiontime/fusiontime-attributes
-              }, {"name": "Count","type": "number"}]),
-            chart: {},
-            navigator: {
-                "enabled": 0
-            },
-            series: "StatusCode",
-            yaxis: [
-              {
-                plot:[{
-                  value: "Count",
-                  type: "column"
-                }],
-                title: ""
-              }
-            ],
-            legend: {enabled:"0"}
-          }
-        }).render();|]
+      [text| throughputEChart("reqsChartsEC", $reqChartTxt, [], true) |]
 
 logItemRows :: Projects.ProjectId -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Text -> Html ()
 logItemRows pid requests cols nextLogsURL = do

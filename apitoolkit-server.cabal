@@ -144,6 +144,7 @@ library
     , lucid-svg
     , megaparsec
     , neat-interpolation
+    , nyan-interpolation
     , odd-jobs
     , optics-core
     , optics-th

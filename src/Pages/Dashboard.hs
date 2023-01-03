@@ -8,17 +8,18 @@ import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Fmt (fixedF, fmt)
+import Formatting (commas, sformat)
 import Lucid
 import Lucid.Hyperscript
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import NeatInterpolation (text)
 import Pages.Anomalies.AnomalyList qualified as AnomaliesList
 import Pages.BodyWrapper
 import Pages.Charts.Charts qualified as Charts
-import Relude
+import Relude hiding (max, min)
+import Text.Interpolation.Nyan
 
 dashboardGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 dashboardGetH sess pid = do
@@ -27,22 +28,13 @@ dashboardGetH sess pid = do
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
       projectRequestStats <- fromMaybe (def :: Projects.ProjectRequestStats) <$> Projects.projectRequestStatsByProject pid
-
-      let maxV = round (projectRequestStats.max) :: Int
+      let maxV = round (projectRequestStats.p99) :: Int
       let steps' = (maxV `quot` 100) :: Int
       let steps = if steps' == 0 then 100 else steps'
       reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledByStepsForProject maxV steps pid
-
-      let reqLatencyPercentileSteps =
-            ( (round (projectRequestStats.max) `div` steps) * steps,
-              (round (projectRequestStats.p90) `div` steps) * steps,
-              (round (projectRequestStats.p75) `div` steps) * steps,
-              (round (projectRequestStats.p50) `div` steps) * steps
-            )
-
-      let reqLatenciesRolledByStepsLabeled = Vector.toList reqLatenciesRolledBySteps -- & map \(x, y) -> RequestDumps.labelRequestLatency reqLatencyPercentileSteps (x, y)
       anomalies <- Anomalies.selectAnomalies pid Nothing (Just False) (Just False) Nothing
-      pure (project, projectRequestStats, reqLatenciesRolledByStepsLabeled, anomalies)
+      pure (project, projectRequestStats, Vector.toList reqLatenciesRolledBySteps, anomalies)
+
   let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
   let bwconf =
         (def :: BWConfig)
@@ -51,7 +43,6 @@ dashboardGetH sess pid = do
             pageTitle = "Dashboard"
           }
   currTime <- liftIO getCurrentTime
-  traceShowM reqLatenciesRolledByStepsJ
   pure $ bodyWrapper bwconf $ dashboardPage currTime projectRequestStats reqLatenciesRolledByStepsJ anomalies
 
 dashboardPage :: UTCTime -> Projects.ProjectRequestStats -> Text -> Vector Anomalies.AnomalyVM -> Html ()
@@ -59,25 +50,6 @@ dashboardPage currTime projectStats reqLatenciesRolledByStepsJ anomalies = do
   section_ [class_ "p-8 container mx-auto px-4 space-y-16 10 pb-24"] $ do
     section_ $ AnomaliesList.anomalyListSlider currTime anomalies
     dStats projectStats reqLatenciesRolledByStepsJ
-  script_
-    [text|
-   /*     new FusionCharts({
-          type: "column2d",
-          renderAt: "reqsLatencyHistogram",
-          width: "100%",
-          // height: "auto",
-          dataSource: {
-            data:  $reqLatenciesRolledByStepsJ,
-            "chart": {
-                "theme": "fusion",
-                "xAxisName": "Latency in ms",
-                "yAxisName": "Count",
-                // "numberSuffix": "K"
-            },
-          }
-        }).render();
-*/
-      |]
 
 statBox :: Text -> Text -> Html ()
 statBox title val = do
@@ -88,7 +60,8 @@ statBox title val = do
       small_ $ toHtml title
 
 dStats :: Projects.ProjectRequestStats -> Text -> Html ()
-dStats projReqStats reqLatenciesRolledByStepsJ = do
+dStats projReqStats@Projects.ProjectRequestStats {..} reqLatenciesRolledByStepsJ = do
+  let _ = min
   when (projReqStats.totalRequests == 0) do
     section_ [class_ "card-round p-5 sm:p-10 space-y-4 text-lg"] $ do
       h2_ [class_ "text-2xl"] "Welcome onboard APIToolkit."
@@ -108,11 +81,11 @@ dStats projReqStats reqLatenciesRolledByStepsJ = do
     div_ [class_ "grid grid-cols-3  gap-5 reqResSubSection"] $ do
       div_ [class_ "col-span-3 flex flex-row gap-5"] $ do
         div_ [class_ "col-span-1 shrink content-between space-y-2"] $ do
-          statBox "Total Requests" (show (projReqStats.totalRequests))
-          statBox "Total Anomalies" (show (projReqStats.totalAnomalies))
-          statBox "Managed Endpoints" (show (projReqStats.totalEndpoints))
-          statBox "Total Shapes" (show (projReqStats.totalShapes))
-          statBox "Total Fields" (show (projReqStats.totalFields))
+          statBox "Total Requests" (sformat commas projReqStats.totalRequests)
+          statBox "Total Anomalies" (sformat commas (projReqStats.totalAnomalies))
+          statBox "Managed Endpoints" (sformat commas (projReqStats.totalEndpoints))
+          statBox "Total Shapes" (sformat commas (projReqStats.totalShapes))
+          statBox "Total Fields" (sformat commas (projReqStats.totalFields))
 
         div_ [class_ "flex-1 grow card-round row-span-2 p-3"] $ do
           div_ [class_ "p-4 h-full space-y-6"] $ do
@@ -126,9 +99,9 @@ dStats projReqStats reqLatenciesRolledByStepsJ = do
             option_ "Request Latency Distribution"
             option_ "Avg Reqs per minute"
         div_ [class_ "grid grid-cols-9  gap-8 w-full"] $ do
-          div_ [id_ "reqsLatencyHistogramx", class_ "col-span-7 h-72"] ""
+          div_ [id_ "reqsLatencyHistogram", class_ "col-span-7 h-72"] ""
           div_ [class_ "col-span-2 space-y-4 "] $ do
-            span_ [class_ "block text-right text-lg"] "Latency Percentiles"
+            span_ [class_ "block text-right"] "Latency Percentiles"
             ul_ [class_ "space-y-1 divide-y divide-slate-100"] $ do
               percentileRow "max" $ projReqStats.max
               percentileRow "p99" $ projReqStats.p99
@@ -137,12 +110,18 @@ dStats projReqStats reqLatenciesRolledByStepsJ = do
               percentileRow "p75" $ projReqStats.p75
               percentileRow "p50" $ projReqStats.p50
               percentileRow "min" $ projReqStats.min
-          script_ [text| latencyHistogram('reqsLatencyHistogramx', $reqLatenciesRolledByStepsJ) |]
+        script_ [int|| latencyHistogram('reqsLatencyHistogram',{p50:#{p50}, p75:#{p75}, p90:#{p90}, p95:#{p95}, p99:#{p99}, max:#{max}},  #{reqLatenciesRolledByStepsJ}) |]
 
 percentileRow :: Text -> Double -> Html ()
 percentileRow key p = do
+  let (d, unit) = fmtDuration p
   li_ [class_ "flex flex-row content-between justify-between"] $ do
     span_ [class_ "inline-block"] $ toHtml key
-    span_ [class_ "inline-block"] $ do
-      span_ $ toHtml ((fmt $ fixedF 2 p) :: Text)
-      span_ "ms"
+    span_ [class_ "inline-block font-mono"] $ do
+      span_ [class_ "tabular-nums"] $ toHtml d
+      span_ $ toHtml unit
+
+fmtDuration :: Double -> (Text, Text)
+fmtDuration d
+  | d > 1000 = (fmt $ fixedF 2 (d / 1000), "s")
+  | otherwise = (fmt $ fixedF 0 d, "ms")

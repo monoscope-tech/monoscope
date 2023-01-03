@@ -7,242 +7,256 @@ packages:
 - completed:
     hackage: Unique-0.4.7.9@sha256:a7e154cf6d05169777a1e54aadab24fb3a6eae3ee167e5e77d7ba96d182436c7,2064
     pantry-tree:
-      size: 1366
       sha256: eb62502b1de8adee91f0feb104a36f87a21a9367f95295d4f12c73183a9b1e54
+      size: 1366
   original:
     hackage: Unique-0.4.7.9@sha256:a7e154cf6d05169777a1e54aadab24fb3a6eae3ee167e5e77d7ba96d182436c7,2064
 - completed:
     hackage: co-log-0.4.0.1@sha256:3d4c17f37693c80d1aa2c41669bc3438fac3e89dc5f479e57d79bc3ddc4dfcc5,5087
     pantry-tree:
-      size: 1126
       sha256: e73165ff8f744709428e2e87984c9d60ca1cec43d8455c413181c7c466e7497c
+      size: 1126
   original:
     hackage: co-log-0.4.0.1@sha256:3d4c17f37693c80d1aa2c41669bc3438fac3e89dc5f479e57d79bc3ddc4dfcc5,5087
 - completed:
     hackage: co-log-core-0.3.1.0@sha256:9794bdedd1391decd0e22bdfe2b11abcb42e6cff7a4531e1f8882890828f4e63,3816
     pantry-tree:
-      size: 584
       sha256: d4cc089c40c5052ee02f91eafa567e0a239908aabc561dfa6080ba3bfc8c25bd
+      size: 584
   original:
     hackage: co-log-core-0.3.1.0@sha256:9794bdedd1391decd0e22bdfe2b11abcb42e6cff7a4531e1f8882890828f4e63,3816
 - completed:
     hackage: colourista-0.1.0.1@sha256:98353ee0e2f5d97d2148513f084c1cd37dfda03e48aa9dd7a017c9d9c0ba710e,3307
     pantry-tree:
-      size: 571
       sha256: aa027b21ac1ed1d446a4b20b9a1708fabed9042edf7a28ef05f3fc6278b07841
+      size: 571
   original:
     hackage: colourista-0.1.0.1@sha256:98353ee0e2f5d97d2148513f084c1cd37dfda03e48aa9dd7a017c9d9c0ba710e,3307
 - completed:
     hackage: envy-2.1.0.0@sha256:b58b12d9b61a4e07562e7718f28a864178cfc4bb4c24a45c68b5e46cfd9b39be,1772
     pantry-tree:
-      size: 368
       sha256: 1cd74e12d2f3dcb9997607e1521833b874dd209bb713bb0abda1988c298f39f8
+      size: 368
   original:
     hackage: envy-2.1.0.0@sha256:b58b12d9b61a4e07562e7718f28a864178cfc4bb4c24a45c68b5e46cfd9b39be,1772
 - completed:
     hackage: lucid-htmx-0.1.0.6@sha256:83d9eed5ff74778a2dfc3f320a66b08592a2880abca28d75747a0513a39bd871,1528
     pantry-tree:
-      size: 427
       sha256: e7e0ebb5432ec6dd278e1ac594a94aa3311e378c683275274874dfee2e12dfe3
+      size: 427
   original:
     hackage: lucid-htmx-0.1.0.6@sha256:83d9eed5ff74778a2dfc3f320a66b08592a2880abca28d75747a0513a39bd871,1528
 - completed:
     hackage: lucid-hyperscript-0.1.0.2@sha256:c3b048424e75c0e9cbadc30f7ebeb6abc164c2b45b2c995fd0674d4cc57be216,2035
     pantry-tree:
-      size: 502
       sha256: 4fad3e11a8a599a8bc05a9b70d22d29dbdc07740ab8ebd5e4236af37f20ee554
+      size: 502
   original:
     hackage: lucid-hyperscript-0.1.0.2@sha256:c3b048424e75c0e9cbadc30f7ebeb6abc164c2b45b2c995fd0674d4cc57be216,2035
 - completed:
     hackage: lucid-svg-0.7.1@sha256:012455fd2b1ec6b0f3bba405fd66c99cc6d26592bf25c2624741969567c6e510,1088
     pantry-tree:
-      size: 456
       sha256: 46cd22d19a82b9defe4cdec84eaca2fbc804d81515631f0afdb7f2c76a7b548a
+      size: 456
   original:
     hackage: lucid-svg-0.7.1@sha256:012455fd2b1ec6b0f3bba405fd66c99cc6d26592bf25c2624741969567c6e510,1088
 - completed:
     hackage: servant-htmx-0.1.0.2@sha256:cdafd3165d28694ec4bf81fff3b87b4721415293d75a394a97c26d0d4d57e38c,1817
     pantry-tree:
-      size: 416
       sha256: e2eac22dcc977e6081ba7614d748d7a6a83b2001d4e719d6afb9ae6edf6bb23d
+      size: 416
   original:
     hackage: servant-htmx-0.1.0.2@sha256:cdafd3165d28694ec4bf81fff3b87b4721415293d75a394a97c26d0d4d57e38c,1817
 - completed:
     hackage: text-display-0.0.2.0@sha256:e96a1082f8f362032797f80e901d969b56a6dd7b43d1cb03e9654b08508da8e8,1818
     pantry-tree:
-      size: 330
       sha256: 2d93987e93e9b0681ae77bdfaa49d6cc755a2d15757c6ffd06387041efaf4c18
+      size: 330
   original:
     hackage: text-display-0.0.2.0@sha256:e96a1082f8f362032797f80e901d969b56a6dd7b43d1cb03e9654b08508da8e8,1818
 - completed:
     hackage: transformers-except-0.1.2@sha256:2ff895fd65ec9e45cbe839ef5b66e26b7d9f3fe561148993293a41e14491e625,1548
     pantry-tree:
-      size: 276
       sha256: 255031ad4b86a6f3cecd01752ba63186d54c07dd4f667ed77033326970f0120c
+      size: 276
   original:
     hackage: transformers-except-0.1.2@sha256:2ff895fd65ec9e45cbe839ef5b66e26b7d9f3fe561148993293a41e14491e625,1548
 - completed:
     hackage: chronos-1.1.4@sha256:7ba7df7496a880ca4b898ca2cd5ebbf9ee8408fb93e95f8011d2a68c6faf655d,3677
     pantry-tree:
-      size: 581
       sha256: 36231e4f7a0609c59c9ae1089b66c87a4eeb7cc86f09dd54a15109fe7407e836
+      size: 581
   original:
     hackage: chronos-1.1.4@sha256:7ba7df7496a880ca4b898ca2cd5ebbf9ee8408fb93e95f8011d2a68c6faf655d,3677
 - completed:
     hackage: direct-daemonize-3.1@sha256:f33505932b8613267cd8ad2d51470af2c5708d750ddf55a5dd38292f04962dcc,1630
     pantry-tree:
-      size: 220
       sha256: 5cbf9c1ac065471cb9caa29136b06bcddee17800bbc3e8ed6020b4af19a81f3e
+      size: 220
   original:
     hackage: direct-daemonize-3.1@sha256:f33505932b8613267cd8ad2d51470af2c5708d750ddf55a5dd38292f04962dcc,1630
 - completed:
     hackage: timing-convenience-0.1@sha256:7ff807a9a9e5596f2b18d45c5a01aefb91d4a98f6a1008d183b5c550f68f7cb7,2092
     pantry-tree:
-      size: 469
       sha256: fbcb00f5b8a4f7b8fd94b034b7f507ffdd7579848de782ce60ad2b661dcb2b42
+      size: 469
   original:
     hackage: timing-convenience-0.1@sha256:7ff807a9a9e5596f2b18d45c5a01aefb91d4a98f6a1008d183b5c550f68f7cb7,2092
 - completed:
     hackage: typerep-map-0.3.3.0@sha256:20510efab770158414ac7828d1eca063d795bcc724ac634dd13bc7a50b476f42,4681
     pantry-tree:
-      size: 1487
       sha256: 30d61ac00807c3229b7b6ee274853f0ec1e272503a1b210ce10aad3db19f443a
+      size: 1487
   original:
     hackage: typerep-map-0.3.3.0@sha256:20510efab770158414ac7828d1eca063d795bcc724ac634dd13bc7a50b476f42,4681
 - completed:
     hackage: daemons-0.3.0@sha256:356edaf06a8cf5e9f19685f9ce793ad6d2b6bce2e55379f6b2aff1b0c07a633f,3178
     pantry-tree:
-      size: 918
       sha256: 26b1a5279be340c896edbc72baa6d95b071384b9bf7e19cd146025cf13d21769
+      size: 918
   original:
     hackage: daemons-0.3.0@sha256:356edaf06a8cf5e9f19685f9ce793ad6d2b6bce2e55379f6b2aff1b0c07a633f,3178
 - completed:
     hackage: postgresql-query-3.10.0@sha256:bad59810fc464cf0f4a839a9c6372ba17c54fd04500a50e16fb46d578a0649ae,6320
     pantry-tree:
-      size: 2123
       sha256: 29015669d6a00757ff0c67e2abe344a2456848d27ccbaf0875693eb66e6b04d8
+      size: 2123
   original:
     hackage: postgresql-query-3.10.0@sha256:bad59810fc464cf0f4a839a9c6372ba17c54fd04500a50e16fb46d578a0649ae,6320
 - completed:
-    subdir: .
+    hackage: nyan-interpolation-core-0.9.0.1@sha256:1bda0e90d2045eb18c905f905082f4098829c1bdcbc4012663686a1c503b4ded,4067
+    pantry-tree:
+      sha256: 2a1a8d8b66746a246b3c0a4cd07daa6b961c9911676d30bc308a8a2682353b2b
+      size: 1463
+  original:
+    hackage: nyan-interpolation-core-0.9.0.1@sha256:1bda0e90d2045eb18c905f905082f4098829c1bdcbc4012663686a1c503b4ded,4067
+- completed:
+    hackage: nyan-interpolation-0.9@sha256:8cf238be4c04746e4e9eabb34001c990c23e5837a19eb8652c584e57e92ecb41,3797
+    pantry-tree:
+      sha256: 1ba3d0b9c1dd65cd6c8a3e10dc31261c70366d5822281176b84617b6c7b7bbc1
+      size: 661
+  original:
+    hackage: nyan-interpolation-0.9@sha256:8cf238be4c04746e4e9eabb34001c990c23e5837a19eb8652c584e57e92ecb41,3797
+- completed:
+    commit: aae6a23944bbc2e19cf814a7030557612e10e52c
+    git: https://github.com/emilypi/base64
     name: base64
-    version: 0.4.2.4
-    git: https://github.com/emilypi/base64
     pantry-tree:
-      size: 2534
       sha256: bdcff19c1ed299a6c1af161b05b86e638313b37c9f356c57dd0e56ccb08b0a96
-    commit: aae6a23944bbc2e19cf814a7030557612e10e52c
-  original:
+      size: 2534
     subdir: .
+    version: 0.4.2.4
+  original:
+    commit: aae6a23944bbc2e19cf814a7030557612e10e52c
     git: https://github.com/emilypi/base64
-    commit: aae6a23944bbc2e19cf814a7030557612e10e52c
-- completed:
     subdir: .
+- completed:
+    commit: 0fa01adb871e66996d4ed2c27a3e97fac39ac466
+    git: https://github.com/tonyalaribe/xxhash
     name: xxhash
-    version: 0.0.2
-    git: https://github.com/tonyalaribe/xxhash
     pantry-tree:
-      size: 718
       sha256: 36e7f55c49eb37693fb7198c46e161319280bfbfa103fd7c40a8780c8ca61851
-    commit: 0fa01adb871e66996d4ed2c27a3e97fac39ac466
-  original:
+      size: 718
     subdir: .
+    version: 0.0.2
+  original:
+    commit: 0fa01adb871e66996d4ed2c27a3e97fac39ac466
     git: https://github.com/tonyalaribe/xxhash
-    commit: 0fa01adb871e66996d4ed2c27a3e97fac39ac466
+    subdir: .
 - completed:
-    subdir: lib/gogol-core
+    commit: 494098af1709d32b75b0be41157547ae7a2bd89d
+    git: https://github.com/brendanhay/gogol.git
     name: gogol-core
-    version: 1.0.0.0
-    git: https://github.com/brendanhay/gogol.git
     pantry-tree:
-      size: 567
       sha256: c182f1a65a61166778b86b5e778c52f12e962f1f4f061656712cc8d2514675f8
-    commit: 494098af1709d32b75b0be41157547ae7a2bd89d
-  original:
+      size: 567
     subdir: lib/gogol-core
-    git: https://github.com/brendanhay/gogol.git
+    version: 1.0.0.0
+  original:
     commit: 494098af1709d32b75b0be41157547ae7a2bd89d
+    git: https://github.com/brendanhay/gogol.git
+    subdir: lib/gogol-core
 - completed:
-    subdir: lib/gogol
+    commit: 494098af1709d32b75b0be41157547ae7a2bd89d
+    git: https://github.com/brendanhay/gogol.git
     name: gogol
-    version: 1.0.0.0
-    git: https://github.com/brendanhay/gogol.git
     pantry-tree:
-      size: 1194
       sha256: 60a0adca351263e22d12dd279f4ed30f8c0308d660c15a048f7c3dac6c1a3704
-    commit: 494098af1709d32b75b0be41157547ae7a2bd89d
-  original:
+      size: 1194
     subdir: lib/gogol
-    git: https://github.com/brendanhay/gogol.git
+    version: 1.0.0.0
+  original:
     commit: 494098af1709d32b75b0be41157547ae7a2bd89d
+    git: https://github.com/brendanhay/gogol.git
+    subdir: lib/gogol
 - completed:
-    subdir: lib/services/gogol-pubsub
+    commit: 494098af1709d32b75b0be41157547ae7a2bd89d
+    git: https://github.com/brendanhay/gogol.git
     name: gogol-pubsub
-    version: 1.0.0.0
-    git: https://github.com/brendanhay/gogol.git
     pantry-tree:
-      size: 4278
       sha256: 3d122fb15743eb434e195338f4520968078128bb499c392a3299f470745f36c8
-    commit: 494098af1709d32b75b0be41157547ae7a2bd89d
-  original:
+      size: 4278
     subdir: lib/services/gogol-pubsub
-    git: https://github.com/brendanhay/gogol.git
+    version: 1.0.0.0
+  original:
     commit: 494098af1709d32b75b0be41157547ae7a2bd89d
+    git: https://github.com/brendanhay/gogol.git
+    subdir: lib/services/gogol-pubsub
 - completed:
-    subdir: lib/services/gogol-logging
+    commit: 494098af1709d32b75b0be41157547ae7a2bd89d
+    git: https://github.com/brendanhay/gogol.git
     name: gogol-logging
-    version: 1.0.0.0
-    git: https://github.com/brendanhay/gogol.git
     pantry-tree:
-      size: 15630
       sha256: 59243a1ba6cbde8e0493f8c384a7031a2b4aaefdf6444d43e24d6213ab9f9aac
-    commit: 494098af1709d32b75b0be41157547ae7a2bd89d
-  original:
+      size: 15630
     subdir: lib/services/gogol-logging
-    git: https://github.com/brendanhay/gogol.git
-    commit: 494098af1709d32b75b0be41157547ae7a2bd89d
-- completed:
-    subdir: lib/services/gogol-cloudtrace
-    name: gogol-cloudtrace
     version: 1.0.0.0
+  original:
+    commit: 494098af1709d32b75b0be41157547ae7a2bd89d
     git: https://github.com/brendanhay/gogol.git
+    subdir: lib/services/gogol-logging
+- completed:
+    commit: 494098af1709d32b75b0be41157547ae7a2bd89d
+    git: https://github.com/brendanhay/gogol.git
+    name: gogol-cloudtrace
     pantry-tree:
-      size: 740
       sha256: 5d59688b2be83e9b2531821a5c37977d7d245d4e7389ca7b0cace9dec71083b7
-    commit: 494098af1709d32b75b0be41157547ae7a2bd89d
-  original:
+      size: 740
     subdir: lib/services/gogol-cloudtrace
-    git: https://github.com/brendanhay/gogol.git
+    version: 1.0.0.0
+  original:
     commit: 494098af1709d32b75b0be41157547ae7a2bd89d
+    git: https://github.com/brendanhay/gogol.git
+    subdir: lib/services/gogol-cloudtrace
 - completed:
-    subdir: .
+    commit: 179f9cd6ed41557c524ab6ab47eae6e7aeacc9a3
+    git: https://github.com/tchoutri/pg-entity.git
     name: pg-entity
-    version: 0.0.1.0
-    git: https://github.com/tchoutri/pg-entity.git
     pantry-tree:
-      size: 2735
       sha256: 1dbaa7bbb98e7bde91befb82f57e85d3b0cd8943c801ef64b40cd6002a7d11b9
-    commit: 179f9cd6ed41557c524ab6ab47eae6e7aeacc9a3
-  original:
+      size: 2735
     subdir: .
+    version: 0.0.1.0
+  original:
+    commit: 179f9cd6ed41557c524ab6ab47eae6e7aeacc9a3
     git: https://github.com/tchoutri/pg-entity.git
-    commit: 179f9cd6ed41557c524ab6ab47eae6e7aeacc9a3
+    subdir: .
 - completed:
-    subdir: .
+    commit: dce96c0245fa0820d46c354f44f838ee804bfdfb
+    git: https://github.com/saurabhnanda/odd-jobs
     name: odd-jobs
-    version: 0.2.2
-    git: https://github.com/saurabhnanda/odd-jobs
     pantry-tree:
-      size: 2633
       sha256: cea01179fa2d87b75026e2523ecdae4e07f91c5e87367ec32360369dfcb1affb
-    commit: dce96c0245fa0820d46c354f44f838ee804bfdfb
-  original:
+      size: 2633
     subdir: .
-    git: https://github.com/saurabhnanda/odd-jobs
+    version: 0.2.2
+  original:
     commit: dce96c0245fa0820d46c354f44f838ee804bfdfb
+    git: https://github.com/saurabhnanda/odd-jobs
+    subdir: .
 snapshots:
 - completed:
+    sha256: a3caecc996b1e5406de3b1afa3d6c0ebbc7225d990d3372593207d23988b37ea
     size: 630639
     url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/nightly/2022/8/16.yaml
-    sha256: a3caecc996b1e5406de3b1afa3d6c0ebbc7225d990d3372593207d23988b37ea
   original: nightly-2022-08-16

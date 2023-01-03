@@ -155,6 +155,7 @@ library:
     - yaml
     - http-media
     - pretty-relative-time
+    - nyan-interpolation
 
 executables:
   apitoolkit-server-exe:

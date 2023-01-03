@@ -14,7 +14,7 @@ import Relude
 throughputEndpointHTML :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Bool -> DashboardM (Html ())
 throughputEndpointHTML _ pid idM groupBy_ endpointHash shapeHash formatHash intervalM limitM showLegend_ = do
   pool <- asks pool
-  chartData <- liftIO $ withPool pool $ RequestDumps.throughputBy pid groupBy_ endpointHash shapeHash formatHash (fromMaybe 0 intervalM) limitM
+  chartData <- liftIO $ withPool pool $ RequestDumps.throughputBy pid groupBy_ endpointHash shapeHash formatHash (fromMaybe 0 intervalM) limitM Nothing
   let entityId = fromMaybe "" idM
   let groupBy = maybe "" (\x -> "\"" <> x <> "\"") groupBy_
   let showLegend = T.toLower $ show $ fromMaybe False showLegend_
@@ -53,7 +53,6 @@ throughput pid elemID qByM gByM intervalMinutes' limit' showLegend' = do
 
   div_
     [ id_ $ "id-" <> elemID,
-      -- style_ "height:250px",
       class_ "w-full h-full",
       hxGet_ [text| /p/$pidT/charts_html/throughput?id=$elemID&show_legend=$showLegend&interval=$intervalMinutes&$limit&$queryStr |],
       hxTrigger_ "intersect",
@@ -65,6 +64,7 @@ throughput pid elemID qByM gByM intervalMinutes' limit' showLegend' = do
 chartInit :: Text
 chartInit =
   [text|
+// gb = group by
 function throughputEChart(renderAt, data, gb, showLegend){
   let backgroundStyle = {
     color: 'rgba(240,248,255, 0.4)'
@@ -126,12 +126,12 @@ function throughputEChart(renderAt, data, gb, showLegend){
  }
 
 
-function latencyHistogram(renderAt, data, pc){
+function latencyHistogram(renderAt, pc, data){
   const myChart = echarts.init(document.getElementById(renderAt));
   const option = {
-    grid: {width: '100%', containLabel: false},
-    xAxis: { show: true, type: 'value', scale: true },
-    yAxis: { show: true, type: 'value', scale: true },
+    grid: {width: '100%', width: '100%', left: '1%',right: '-1%', top: '5%',bottom: '1.5%', containLabel: true},
+    xAxis: { show: true, type: 'value', scale: true, splitLine: {show: false}, },
+    yAxis: { show: true, type: 'value', scale: true,},
     series: {
       name: 'Direct',
       type: 'bar',

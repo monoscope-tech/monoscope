@@ -4,10 +4,8 @@
 
 module Models.Apis.RequestDumps
   ( RequestDump (..),
-    LabelValue,
     RequestDumpLogItem,
     throughputBy,
-    labelRequestLatency,
     requestDumpLogItemUrlPath,
     requestDumpLogUrlPath,
     selectReqLatenciesRolledBySteps,
@@ -19,7 +17,7 @@ module Models.Apis.RequestDumps
   )
 where
 
-import Data.Aeson (KeyValue ((.=)), ToJSON, object)
+import Control.Error (hush)
 import Data.Aeson qualified as AE
 import Data.Default.Instances ()
 import Data.Time (CalendarDiffTime, ZonedTime)
@@ -141,8 +139,31 @@ selectRequestDumpsByProjectForChart pid extraQuery = do
   where
     extraQueryParsed = either error (\v -> if v == "" then "" else " AND " <> v) $ parseQueryStringToWhereClause extraQuery
     q =
-      [text| SELECT COALESCE(NULLIF(json_agg(json_build_array(timeB, count))::text, '[null]'), '[]')::text from (SELECT time_bucket('1 minute', created_at) as timeB,count(*) 
+      [text| SELECT COALESCE(NULLIF(json_agg(json_build_array(timeB, count))::text, '[null]'), '[]')::text from (SELECT time_bucket('1 minute', created_at) as timeB,count(*)
                FROM apis.request_dumps where project_id=? $extraQueryParsed  GROUP BY timeB) ts|]
+
+-- selectRequestDumpsByProjectForChart :: Projects.ProjectId -> Text -> DBT IO Text
+-- selectRequestDumpsByProjectForChart pid extraQuery = do
+--   (Only val) <- fromMaybe (Only "[]") <$> queryOne Select (Query $ encodeUtf8 q) (Only pid)
+--   pure val
+--   where
+--     extraQueryParsed = either error (\v -> if v == "" then "" else " AND " <> v) $ parseQueryStringToWhereClause extraQuery
+--     intervalT = show
+--     q =
+--       [text| WITH q as (SELECT time_bucket_gapfill('$intervalT minutes', created_at, now() - INTERVAL '14 days', now()) as timeB $groupByFields , COALESCE(COUNT(*), 0) total_count
+--                   FROM apis.request_dumps
+--                   WHERE project_id=? AND created_at>now()-INTERVAL '14 days' $cond GROUP BY timeB $groupBy $limit)
+--               SELECT COALESCE(json_agg(json_build_array(timeB $groupByFinal, total_count)), '[]')::text from q; |]
+
+-- selectRequestDumpsByProjectForChart :: Projects.ProjectId -> Text -> DBT IO Text
+-- selectRequestDumpsByProjectForChart pid extraQuery = do
+--   (Only val) <- fromMaybe (Only "[]") <$> queryOne Select (Query $ encodeUtf8 q) (Only pid)
+--   pure val
+--   where
+--     extraQueryParsed = either error (\v -> if v == "" then "" else " AND " <> v) $ parseQueryStringToWhereClause extraQuery
+--     q =
+--       [text| SELECT COALESCE(NULLIF(json_agg(json_build_array(timeB, count))::text, '[null]'), '[]')::text from (SELECT time_bucket('1 minute', created_at) as timeB,count(*)
+--                FROM apis.request_dumps where project_id=? $extraQueryParsed  GROUP BY timeB) ts|]
 
 bulkInsertRequestDumps :: [RequestDump] -> DBT IO Int64
 bulkInsertRequestDumps = executeMany q
@@ -188,20 +209,24 @@ select duration_steps, count(id)
       |]
 
 -- A throughput chart query for the request_dump table.
-throughputBy :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Maybe Int -> DBT IO Text
-throughputBy pid groupByM endpointHash shapeHash formatHash interval limitM = do
+throughputBy :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Maybe Int -> Maybe Text -> DBT IO Text
+throughputBy pid groupByM endpointHash shapeHash formatHash interval limitM extraQuery = do
+  let extraQueryParsed = hush . parseQueryStringToWhereClause =<< extraQuery
   let condlist =
         catMaybes
           [ " endpoint_hash=? " <$ endpointHash,
             " shape_hash=? " <$ shapeHash,
-            " ?=ANY(format_hashes) " <$ formatHash
+            " ?=ANY(format_hashes) " <$ formatHash,
+            extraQueryParsed
           ]
   let groupBy' = fromMaybe @Text "" $ mappend " ," <$> groupByM
   let (groupBy, groupByFields) = case groupByM of
         Just "endpoint" -> (",method, url_path", ",method||' '||url_path as g")
+        Nothing -> ("", "")
         _ -> (groupBy', groupBy' <> " as g")
   let groupByFinal = maybe "" (const ",g") groupByM
-  let paramList = mapMaybe (MkDBField <$>) [endpointHash, shapeHash, formatHash]
+
+  let paramList = mapMaybe (MkDBField <$>) [endpointHash, shapeHash, formatHash, extraQueryParsed]
   let cond
         | null condlist = mempty
         | otherwise = "AND " <> mconcat (intersperse " AND " condlist)
@@ -214,27 +239,3 @@ throughputBy pid groupByM endpointHash shapeHash formatHash interval limitM = do
               SELECT COALESCE(json_agg(json_build_array(timeB $groupByFinal, total_count)), '[]')::text from q; |]
   (Only val) <- fromMaybe (Only "[]") <$> queryOne Select (Query $ from @Text q) (MkDBField pid : paramList)
   pure val
-
--- Useful for charting latency histogram on the dashbaord and endpoint details pages
-newtype LabelValue = LabelValue (Int, Int, Maybe Text)
-  deriving stock (Show)
-
-instance ToJSON LabelValue where
-  toJSON (LabelValue (x, y, Nothing)) = object ["label" .= (show x :: Text), "value" .= (y :: Int)]
-  toJSON (LabelValue (x, y, Just z)) =
-    object
-      [ "label" .= (z :: Text),
-        "lineposition" .= (show x :: Text),
-        "labelposition" .= (show x :: Text),
-        "vline" .= ("true" :: Text),
-        "labelhalign" .= ("center" :: Text),
-        "dashed" .= ("1" :: Text)
-      ]
-
-labelRequestLatency :: (Int, Int, Int, Int) -> (Int, Int) -> [LabelValue]
-labelRequestLatency (pMax, p90, p75, p50) (x, y)
-  | x == pMax = [LabelValue (x, y, Just "max"), LabelValue (x, y, Nothing)]
-  | x == p90 = [LabelValue (x, y, Just "p90"), LabelValue (x, y, Nothing)]
-  | x == p75 = [LabelValue (x, y, Just "p75"), LabelValue (x, y, Nothing)]
-  | x == p50 = [LabelValue (x, y, Just "p50"), LabelValue (x, y, Nothing)]
-  | otherwise = [LabelValue (x, y, Nothing)]

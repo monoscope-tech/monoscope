@@ -31,8 +31,9 @@ import Pages.Anomalies.AnomalyList qualified as AnomaliesList
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Charts.Charts qualified as Charts
 import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
-import Relude
+import Relude hiding (max, min)
 import Relude.Unsafe qualified as Unsafe
+import Text.Interpolation.Nyan (int, rmode')
 
 fieldDetailsPartialH :: Sessions.PersistentSession -> Projects.ProjectId -> Fields.FieldId -> DashboardM (Html ())
 fieldDetailsPartialH sess pid fid = do
@@ -113,18 +114,9 @@ endpointDetailsH sess pid eid = do
       let steps = (maxV `quot` 100) :: Int
       let steps' = if steps == 0 then 100 else steps
       reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledBySteps maxV steps' pid (endpoint.urlPath) (endpoint.method)
-
-      let reqLatencyPercentileSteps =
-            ( round (enpStats.max) `quot` steps' * steps',
-              round (enpStats.p90) `quot` steps' * steps',
-              round (enpStats.p75) `quot` steps' * steps',
-              round (enpStats.p50) `quot` steps' * steps'
-            )
-      let reqLatenciesRolledByStepsLabeled = Vector.toList reqLatenciesRolledBySteps & map \(x, y) -> RequestDumps.labelRequestLatency reqLatencyPercentileSteps (x, y)
       anomalies <- Anomalies.selectAnomalies pid (Just eid) (Just False) (Just False) Nothing
-      pure (enpStats, project, fieldsMap, concat reqLatenciesRolledByStepsLabeled, anomalies)
+      pure (enpStats, project, fieldsMap, Vector.toList reqLatenciesRolledBySteps, anomalies)
 
-  -- let reqsByStatsByMinJ = decodeUtf8 $ AE.encode reqsByStatsByMin
   let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
   let bwconf =
         (def :: BWConfig)
@@ -157,7 +149,7 @@ endpointDetails currTime endpoint fieldsM reqLatenciesRolledByStepsJ anomalies =
                 img_ [src_ "/assets/svgs/whitedown.svg", class_ "text-white h-2 w-2 m-1"]
       div_ [class_ "space-y-16 pb-20"] $ do
         section_ $ AnomaliesList.anomalyListSlider currTime anomalies
-        endpointStats endpoint
+        endpointStats endpoint reqLatenciesRolledByStepsJ
         reqResSection "Request" True fieldsM
         reqResSection "Response" False fieldsM
     aside_
@@ -182,43 +174,8 @@ endpointDetails currTime endpoint fieldsM reqLatenciesRolledByStepsJ anomalies =
         end
         |]
 
-    script_
-      [text|
-        console.log({
-          type: "column2d",
-          renderAt: "reqsLatencyHistogram",
-          width: "100%",
-          // height: "auto",
-          dataSource: {
-            data:  $reqLatenciesRolledByStepsJ,
-            "chart": {
-                "theme": "fusion",
-                "xAxisName": "Latency in ms",
-                "yAxisName": "Count",
-                // "numberSuffix": "K"
-            },
-          }
-        })
-        new FusionCharts({
-          type: "column2d",
-          renderAt: "reqsLatencyHistogram",
-          width: "100%",
-          // height: "auto",
-          dataSource: {
-            data:  $reqLatenciesRolledByStepsJ,
-            "chart": {
-                "theme": "fusion",
-                "xAxisName": "Latency in ms",
-                "yAxisName": "Count",
-                // "numberSuffix": "K"
-            },
-          }
-        }).render();
-
-      |]
-
-endpointStats :: Endpoints.EndpointRequestStats -> Html ()
-endpointStats enpStats =
+endpointStats :: Endpoints.EndpointRequestStats -> Text -> Html ()
+endpointStats enpStats@Endpoints.EndpointRequestStats {min, p50, p75, p90, p95, p99, max} reqLatenciesRolledByStepsJ =
   section_ [class_ "space-y-3"] $ do
     div_ [class_ "flex justify-between mt-5"] $
       div_ [class_ "flex flex-row"] $ do
@@ -256,9 +213,9 @@ endpointStats enpStats =
           select_ [] $ do
             option_ "Request Latency Distribution"
             option_ "Avg Reqs per minute"
-        div_ [class_ "flex flex-row gap-8"] $ do
-          div_ [id_ "reqsLatencyHistogram", class_ "grow"] ""
-          div_ [class_ "flex-1 space-y-4 min-w-[20%]"] $ do
+        div_ [class_ "grid grid-cols-9  gap-8 w-full"] $ do
+          div_ [id_ "reqsLatencyHistogram", class_ "col-span-7 h-72"] ""
+          div_ [class_ "col-span-2 space-y-4 "] $ do
             strong_ [class_ "block text-right"] "Latency Percentiles"
             ul_ [class_ "space-y-1 divide-y divide-slate-100"] $ do
               percentileRow "max" $ enpStats.max
@@ -268,14 +225,21 @@ endpointStats enpStats =
               percentileRow "p75" $ enpStats.p75
               percentileRow "p50" $ enpStats.p50
               percentileRow "min" $ enpStats.min
+        script_ [int|| latencyHistogram('reqsLatencyHistogram',{p50:#{p50}, p75:#{p75}, p90:#{p90}, p95:#{p95}, p99:#{p99}, max:#{max}},  #{reqLatenciesRolledByStepsJ}) |]
 
 percentileRow :: Text -> Double -> Html ()
-percentileRow key p =
+percentileRow key p = do
+  let (d, unit) = fmtDuration p
   li_ [class_ "flex flex-row content-between justify-between"] $ do
     span_ [class_ "inline-block"] $ toHtml key
-    span_ [class_ "inline-block monospace"] $ do
-      span_ $ toHtml ((fmt $ fixedF 2 p) :: Text)
-      span_ "ms"
+    span_ [class_ "inline-block font-mono"] $ do
+      span_ [class_ "tabular-nums"] $ toHtml d
+      span_ $ toHtml unit
+
+fmtDuration :: Double -> (Text, Text)
+fmtDuration d
+  | d > 1000 = (fmt $ fixedF 2 (d / 1000), "s")
+  | otherwise = (fmt $ fixedF 0 d, "ms")
 
 -- NOTE: We could enable the fields cycling functionality using the groups of response list functionality on the endpoint.
 -- So we go through the list and in each request or response view, only show the fields that appear in the field list.
