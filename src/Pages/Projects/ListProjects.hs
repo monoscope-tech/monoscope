@@ -7,6 +7,8 @@ import Config
 import Data.Default (def)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
+import Formatting (sformat)
+import Formatting.Time (dateDash)
 import Lucid
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
@@ -33,7 +35,7 @@ listProjectsGetH sess = do
     then respond $ WithStatus @302 $ redirect "/p/new"
     else respond $ WithStatus @200 page
 
-listProjectsBody :: Vector.Vector Projects.Project -> Html ()
+listProjectsBody :: Vector.Vector Projects.Project' -> Html ()
 listProjectsBody projects = do
   section_ [id_ "main-content", class_ "p-6 pb-36"] $ do
     div_ [class_ "flex justify-between mb-6"] $ do
@@ -55,10 +57,9 @@ listProjectsBody projects = do
                         div_ [class_ "flex items-center text-sm text-gray-500"] $ do
                           small_ $ do
                             span_ "Created on "
-                            time_ [datetime_ "2020-01-07"] "January 7, 2020"
+                            time_ [datetime_ $ sformat dateDash (project.createdAt)] $ toHtml $ sformat dateDash (project.createdAt)
                     div_ [class_ "mt-4 flex-shrink-0 sm:mt-0 sm:ml-5"] $ do
                       div_ [class_ "flex overflow-hidden -space-x-1"] $ do
-                        img_ [class_ "inline-block h-6 w-6 rounded-full ring-2 ring-white", src_ "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?ixlib=rb-1.2.1&ixid=eyJhcHBfaWQiOjEyMDd9&auto=format&fit=facearea&facepad=2&w=256&h=256&q=80", alt_ "Dries Vincent"]
-                        img_ [class_ "inline-block h-6 w-6 rounded-full ring-2 ring-white", src_ "https://images.unsplash.com/photo-1517841905240-472988babdf9?ixlib=rb-1.2.1&ixid=eyJhcHBfaWQiOjEyMDd9&auto=format&fit=facearea&facepad=2&w=256&h=256&q=80", alt_ "Lindsay Walton"]
+                        project.usersDisplayImages & Vector.toList & mapM \imgSrc -> img_ [class_ "inline-block h-6 w-6 rounded-full ring-2 ring-white", src_ imgSrc, alt_ "Dries Vincent"]
                   div_ [class_ "ml-5 flex-shrink-0 text-gray-400"] $ do
                     img_ [src_ "/assets/svgs/right_chevron.svg"]

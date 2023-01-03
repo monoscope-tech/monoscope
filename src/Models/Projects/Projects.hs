@@ -3,6 +3,7 @@
 
 module Models.Projects.Projects
   ( Project (..),
+    Project' (..),
     ProjectId (..),
     CreateProject (..),
     ProjectRequestStats (..),
@@ -23,6 +24,7 @@ import Data.Aeson (FromJSON, ToJSON)
 import Data.Default
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
+import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), query, queryOne)
@@ -63,11 +65,11 @@ data Project = Project
     active :: Bool,
     title :: Text,
     description :: Text
-    -- NOTE: We used to have hsots under project, but now hosts should be gotten from the endpoints.
+    -- NOTE: We used to have hosts under project, but now hosts should be gotten from the endpoints.
     -- NOTE: If there's heavy need and usage, we caould create a view. Otherwise, the project cache is best, if it meets our needs.
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow)
+  deriving anyclass (FromRow)
   deriving
     (FromJSON, ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Project
@@ -76,6 +78,21 @@ data Project = Project
     via (GenericEntity '[Schema "projects", TableName "projects", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Project)
 
 makeFieldLabelsNoPrefix ''Project
+
+data Project' = Project'
+  { id :: ProjectId,
+    createdAt :: ZonedTime,
+    updatedAt :: ZonedTime,
+    deletedAt :: Maybe ZonedTime,
+    active :: Bool,
+    title :: Text,
+    description :: Text,
+    -- NOTE: We used to have hosts under project, but now hosts should be gotten from the endpoints.
+    -- NOTE: If there's heavy need and usage, we caould create a view. Otherwise, the project cache is best, if it meets our needs.
+    usersDisplayImages :: Vector Text
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (FromRow)
 
 data ProjectCache = ProjectCache
   { -- We need this hosts to mirror all the hosts in the endpoints table, and could use this for validation purposes to skip inserting endpoints just because of hosts
@@ -131,12 +148,18 @@ insertProject :: CreateProject -> PgT.DBT IO ()
 insertProject = insert @CreateProject
 
 projectById :: ProjectId -> PgT.DBT IO (Maybe Project)
-projectById = selectById @Project
+projectById = queryOne Select q
+  where
+    q = [sql| select p.*, '{}' from projects.project where id=?|]
 
-selectProjectsForUser :: Users.UserId -> PgT.DBT IO (V.Vector Project)
+selectProjectsForUser :: Users.UserId -> PgT.DBT IO (V.Vector Project')
 selectProjectsForUser = query Select q
   where
-    q = [sql| select pp.* from projects.projects as pp join projects.project_members as ppm on (pp.id=ppm.project_id) where ppm.user_id=? order by updated_at desc|]
+    q =
+      [sql| select pp.*,  ARRAY_AGG(us.display_image_url) OVER (PARTITION BY pp.id) from projects.projects as pp 
+                join projects.project_members as ppm on (pp.id=ppm.project_id) 
+                join users.users as us on (us.id=ppm.user_id)
+                where ppm.user_id=? order by updated_at desc|]
 
 selectProjectForUser :: (Users.UserId, ProjectId) -> PgT.DBT IO (Maybe Project)
 selectProjectForUser = queryOne Select q
@@ -147,7 +170,7 @@ selectProjectForUser = queryOne Select q
           join projects.project_members as ppm on (pp.id=ppm.project_id)
           join users.users uu on (uu.id=ppm.user_id)
           where (ppm.user_id=? or uu.is_sudo is True) and ppm.project_id=? order by updated_at desc
-          |]
+      |]
 
 editProjectGetH :: ProjectId -> PgT.DBT IO (V.Vector Project)
 editProjectGetH pid = query Select q (Only pid)
