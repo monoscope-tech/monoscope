@@ -9,6 +9,7 @@ module Models.Projects.Projects
     ProjectRequestStats (..),
     insertProject,
     projectIdText,
+    projectIdFromText,
     selectProjectsForUser,
     projectRequestStatsByProject,
     selectProjectForUser,
@@ -27,12 +28,13 @@ import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), query, queryOne)
+import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, queryOne)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
+import Database.PostgreSQL.Transact (DBT)
 import Database.PostgreSQL.Transact qualified as PgT
 import Deriving.Aeson qualified as DAE
 import GHC.Records (HasField (getField))
@@ -56,6 +58,9 @@ instance HasField "toText" ProjectId Text where
 
 projectIdText :: ProjectId -> Text
 projectIdText = UUID.toText . unProjectId
+
+projectIdFromText :: Text -> Maybe ProjectId
+projectIdFromText pid = ProjectId <$> UUID.fromText pid
 
 data Project = Project
   { id :: ProjectId,
@@ -128,7 +133,7 @@ data CreateProject = CreateProject
 makeFieldLabelsNoPrefix ''CreateProject
 
 -- FIXME: We currently return an object with empty vectors when nothing was found.
-projectCacheById :: ProjectId -> PgT.DBT IO (Maybe ProjectCache)
+projectCacheById :: ProjectId -> DBT IO (Maybe ProjectCache)
 projectCacheById = queryOne Select q
   where
     q =
@@ -144,24 +149,24 @@ projectCacheById = queryOne Select q
                 where e.project_id = ?
                ) enp; |]
 
-insertProject :: CreateProject -> PgT.DBT IO ()
+insertProject :: CreateProject -> DBT IO ()
 insertProject = insert @CreateProject
 
-projectById :: ProjectId -> PgT.DBT IO (Maybe Project)
+projectById :: ProjectId -> DBT IO (Maybe Project)
 projectById = queryOne Select q
   where
     q = [sql| select p.*, '{}' from projects.project where id=?|]
 
-selectProjectsForUser :: Users.UserId -> PgT.DBT IO (V.Vector Project')
+selectProjectsForUser :: Users.UserId -> DBT IO (V.Vector Project')
 selectProjectsForUser = query Select q
   where
     q =
       [sql| select pp.*,  ARRAY_AGG(us.display_image_url) OVER (PARTITION BY pp.id) from projects.projects as pp 
                 join projects.project_members as ppm on (pp.id=ppm.project_id) 
                 join users.users as us on (us.id=ppm.user_id)
-                where ppm.user_id=? order by updated_at desc|]
+                where ppm.user_id=? and pp.deleted_at IS NULL order by updated_at desc|]
 
-selectProjectForUser :: (Users.UserId, ProjectId) -> PgT.DBT IO (Maybe Project)
+selectProjectForUser :: (Users.UserId, ProjectId) -> DBT IO (Maybe Project)
 selectProjectForUser = queryOne Select q
   where
     q =
@@ -169,10 +174,10 @@ selectProjectForUser = queryOne Select q
         select pp.* from projects.projects as pp 
           join projects.project_members as ppm on (pp.id=ppm.project_id)
           join users.users uu on (uu.id=ppm.user_id)
-          where (ppm.user_id=? or uu.is_sudo is True) and ppm.project_id=? order by updated_at desc
+          where (ppm.user_id=? or uu.is_sudo is True) and ppm.project_id=? and pp.deleted_at IS NULL order by updated_at desc
       |]
 
-editProjectGetH :: ProjectId -> PgT.DBT IO (V.Vector Project)
+editProjectGetH :: ProjectId -> DBT IO (V.Vector Project)
 editProjectGetH pid = query Select q (Only pid)
   where
     q =
@@ -182,15 +187,19 @@ editProjectGetH pid = query Select q (Only pid)
             ON pp.id = pid 
         WHERE ppm.project_id = pp.id;|]
 
-updateProject :: CreateProject -> PgT.DBT IO Int64
-updateProject = PgT.execute q
+updateProject :: CreateProject -> DBT IO Int64
+updateProject cp = do
+  execute Update q (cp.title, cp.description, cp.id)
   where
     q =
-      [sql|
-      UPDATE projects.projects(title, description) VALUES (?, ?);|]
+      [sql| UPDATE projects.projects SET title=?, description=? where id=?;|]
 
-deleteProject :: ProjectId -> PgT.DBT IO ()
-deleteProject pid = delete @Project (Only pid)
+deleteProject :: ProjectId -> DBT IO Int64
+deleteProject pid = do
+  execute Update q pid
+  where
+    q =
+      [sql| UPDATE projects.projects SET deleted_at=NOW() where id=?;|]
 
 data ProjectRequestStats = ProjectRequestStats
   { projectId :: ProjectId,
@@ -216,5 +225,5 @@ data ProjectRequestStats = ProjectRequestStats
   deriving anyclass (FromRow, ToRow, Default)
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "project_request_stats", PrimaryKey "project_id", FieldModifiers '[CamelToSnake]] ProjectRequestStats)
 
-projectRequestStatsByProject :: ProjectId -> PgT.DBT IO (Maybe ProjectRequestStats)
+projectRequestStatsByProject :: ProjectId -> DBT IO (Maybe ProjectRequestStats)
 projectRequestStatsByProject = selectById @ProjectRequestStats

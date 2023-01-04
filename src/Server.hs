@@ -70,6 +70,8 @@ type ProtectedAPI =
     :<|> "p" :> "new" :> Get '[HTML] (Html ()) -- p represents project
     :<|> "p" :> "new" :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
     :<|> "p" :> ProjectId :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "settings" :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "delete" :> Get '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
     :<|> "p" :> ProjectId :> "manage_members" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "manage_members" :> ReqBody '[FormUrlEncoded] ManageMembersForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "endpoints" :> Get '[HTML] (Html ())
@@ -132,6 +134,8 @@ protectedServer sess =
     :<|> CreateProject.createProjectGetH sess
     :<|> CreateProject.createProjectPostH sess
     :<|> Dashboard.dashboardGetH sess
+    :<|> CreateProject.projectSettingsGetH sess
+    :<|> CreateProject.deleteProjectGetH sess
     :<|> ManageMembers.manageMembersGetH sess
     :<|> ManageMembers.manageMembersPostH sess
     :<|> EndpointList.endpointListH sess

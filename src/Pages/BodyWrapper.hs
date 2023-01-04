@@ -135,7 +135,7 @@ projectsDropDown currProject projects = do
             strong_ [class_ "block"] $ toHtml $ currProject.title
             small_ [class_ "block text-blue-800"] "Development"
         nav_ [] $ do
-          a_ [class_ "p-3 flex gap-3 rounded-2xl hover:bg-gray-100"] $ do
+          a_ [href_ [text| /p/$pidTxt/settings |], class_ "p-3 flex gap-3 rounded-2xl hover:bg-gray-100"] $ do
             img_ [src_ "/assets/svgs/settings.svg"]
             span_ "Settings"
           a_ [href_ [text| /p/$pidTxt/manage_members |], class_ "p-3 flex gap-3 rounded hover:bg-gray-100"] $ do
