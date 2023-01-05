@@ -1,6 +1,7 @@
 module Pages.Charts.Charts (throughput, chartInit, throughputEndpointHTML, QueryBy (..), GroupBy (..)) where
 
 import Config (DashboardM, pool)
+import Data.Aeson.Combinators.Decode (decode, zonedTime)
 import Data.Text qualified as T
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
@@ -10,11 +11,14 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Relude
+import Witch (from)
 
-throughputEndpointHTML :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Bool -> DashboardM (Html ())
-throughputEndpointHTML _ pid idM groupBy_ endpointHash shapeHash formatHash intervalM limitM showLegend_ = do
+throughputEndpointHTML :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Bool -> Maybe Text -> Maybe Text -> DashboardM (Html ())
+throughputEndpointHTML _ pid idM groupBy_ endpointHash shapeHash formatHash intervalM limitM showLegend_ fromDStr toDStr = do
   pool <- asks pool
-  chartData <- liftIO $ withPool pool $ RequestDumps.throughputBy pid groupBy_ endpointHash shapeHash formatHash (fromMaybe 0 intervalM) limitM Nothing
+  let fromD = decode zonedTime $ (from @Text $ fromMaybe "" fromDStr)
+  let toD = decode zonedTime $ (from @Text $ fromMaybe "" toDStr)
+  chartData <- liftIO $ withPool pool $ RequestDumps.throughputBy pid groupBy_ endpointHash shapeHash formatHash (fromMaybe 0 intervalM) limitM Nothing (fromD, toD)
   let entityId = fromMaybe "" idM
   let groupBy = maybe "" (\x -> "\"" <> x <> "\"") groupBy_
   let showLegend = T.toLower $ show $ fromMaybe False showLegend_

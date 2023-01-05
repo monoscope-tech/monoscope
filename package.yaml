@@ -156,6 +156,7 @@ library:
     - http-media
     - pretty-relative-time
     - nyan-interpolation
+    - aeson-combinators
 
 executables:
   apitoolkit-server-exe:

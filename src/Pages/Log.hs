@@ -49,8 +49,7 @@ apiLog sess pid queryM cols' fromM hxRequestM hxBoostedM = do
       requests <- RequestDumps.selectRequestDumpByProject pid query fromM'
       pure (project, requests)
 
-  -- reqChartTxt <- liftIO $ withPool pool $ RequestDumps.selectRequestDumpsByProjectForChart pid query
-  reqChartTxt <- liftIO $ withPool pool $ RequestDumps.throughputBy pid Nothing Nothing Nothing Nothing (3 * 60) Nothing Nothing
+  reqChartTxt <- liftIO $ withPool pool $ RequestDumps.throughputBy pid Nothing Nothing Nothing Nothing (3 * 60) Nothing queryM (Nothing, Nothing)
   let reqLastCreatedAtM = (^. #createdAt) <$> viaNonEmpty last (Vector.toList requests) -- FIXME: unoptimal implementation, converting from vector to list for last
   let fromTempM = toText . formatTime defaultTimeLocale "%F %T" <$> reqLastCreatedAtM
   let nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' fromTempM

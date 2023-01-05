@@ -111,7 +111,7 @@ getPersistentSession sessionId = queryOne Select q value
   where
     q =
       [sql| select ps.id, ps.created_at, ps.updated_at, ps.user_id, ps.session_data, row_to_json(u) as user, u.is_sudo,
-        COALESCE(json_agg(pp.* ORDER BY pp.updated_at DESC) FILTER (WHERE pp.id is not NULL),'[]') as projects
+        COALESCE(json_agg(pp.* ORDER BY pp.updated_at DESC) FILTER (WHERE pp.id is not NULL AND pp.deleted_at IS NULL),'[]') as projects
         from users.persistent_sessions as ps 
         left join users.users u on (u.id=ps.user_id)
         left join projects.project_members ppm on (ps.user_id=ppm.user_id) 

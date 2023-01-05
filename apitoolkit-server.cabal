@@ -108,6 +108,7 @@ library
       HaskellNet
     , Unique
     , aeson
+    , aeson-combinators
     , aeson-qq
     , async
     , base

@@ -20,7 +20,7 @@ where
 import Control.Error (hush)
 import Data.Aeson qualified as AE
 import Data.Default.Instances ()
-import Data.Time (CalendarDiffTime, ZonedTime)
+import Data.Time (CalendarDiffTime, ZonedTime, defaultTimeLocale, formatTime)
 import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
@@ -209,8 +209,11 @@ select duration_steps, count(id)
       |]
 
 -- A throughput chart query for the request_dump table.
-throughputBy :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Maybe Int -> Maybe Text -> DBT IO Text
-throughputBy pid groupByM endpointHash shapeHash formatHash interval limitM extraQuery = do
+-- daterange :: (Maybe Int, Maybe Int)?
+-- We have a requirement that the date range could either be an interval like now to 7 days ago, or be specific dates like day x to day y.
+-- Now thinking about it, it might be easier to calculate 7days ago into a specific date than dealing with integer day ranges.
+throughputBy :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Maybe Int -> Maybe Text -> (Maybe ZonedTime, Maybe ZonedTime) -> DBT IO Text
+throughputBy pid groupByM endpointHash shapeHash formatHash interval limitM extraQuery dateRange = do
   let extraQueryParsed = hush . parseQueryStringToWhereClause =<< extraQuery
   let condlist =
         catMaybes
@@ -226,16 +229,24 @@ throughputBy pid groupByM endpointHash shapeHash formatHash interval limitM extr
         _ -> (groupBy', groupBy' <> " as g")
   let groupByFinal = maybe "" (const ",g") groupByM
 
-  let paramList = mapMaybe (MkDBField <$>) [endpointHash, shapeHash, formatHash, extraQueryParsed]
+  let paramList = mapMaybe (MkDBField <$>) [endpointHash, shapeHash, formatHash]
   let cond
         | null condlist = mempty
         | otherwise = "AND " <> mconcat (intersperse " AND " condlist)
   let limit = maybe @Text "" (\x -> "limit " <> show x) limitM
   let intervalT = show interval
+
+  let dateRangeStr = from @String $ case dateRange of
+        (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND " <> formatTime defaultTimeLocale "%F %R" b
+        (Just a, Just b) -> "AND created_at BETWEEN " <> formatTime defaultTimeLocale "%F %R" a <> " AND " <> formatTime defaultTimeLocale "%F %R" b
+        _ -> ""
+  -- This limits the range of all throughpu by queries to 1 month.
+  -- _ -> "AND created_at BETWEEN NOW() AND NOW() - INTERVAL '30 days' "
+
   let q =
         [text| WITH q as (SELECT time_bucket_gapfill('$intervalT minutes', created_at, now() - INTERVAL '14 days', now()) as timeB $groupByFields , COALESCE(COUNT(*), 0) total_count 
                   FROM apis.request_dumps 
-                  WHERE project_id=? AND created_at>now()-INTERVAL '14 days' $cond GROUP BY timeB $groupBy $limit)
+                  WHERE project_id=? $cond $dateRangeStr GROUP BY timeB $groupBy $limit)
               SELECT COALESCE(json_agg(json_build_array(timeB $groupByFinal, total_count)), '[]')::text from q; |]
   (Only val) <- fromMaybe (Only "[]") <$> queryOne Select (Query $ from @Text q) (MkDBField pid : paramList)
   pure val
