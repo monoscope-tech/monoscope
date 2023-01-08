@@ -65,10 +65,21 @@ bodyWrapper BWConfig {sessM, currProject, pageTitle, menuItem} child =
           script_ [src_ "/assets/js/thirdparty/notyf3.min.js", defer_ "true"] ("" :: Text)
           script_ [src_ "/assets/js/thirdparty/htmx1_8_4.min.js", defer_ "true"] ("" :: Text)
           script_ [src_ "/assets/js/thirdparty/_hyperscript_web0_9_5.min.js", defer_ "true"] ("" :: Text)
+          script_ [src_ "/assets/js/thirdparty/luxon.min.js", defer_ "true"] ("" :: Text)
           script_ [src_ "/assets/js/thirdparty/popper2_11_4.min.js", defer_ "true"] ("" :: Text)
           script_ [src_ "/assets/js/thirdparty/tippy6_3_7.umd.min.js", defer_ "true"] ("" :: Text)
           script_ [src_ "/assets/js/thirdparty/instantpage5_1_0.js", type_ "module", defer_ "true"] ("" :: Text)
+          script_ [src_ "/assets/js/monaco/vs/luxon.min.js", defer_ "true"] ("" :: Text)
           script_ [src_ "/assets/js/monaco/vs/loader.js", defer_ "true"] ("" :: Text)
+
+          -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/core@1.2.0/dist/index.umd.min.js"] ("" :: Text)
+          -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/datetime@1.2.0/dist/index.umd.min.js"] ("" :: Text)
+          -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/base-plugin@1.2.0/dist/index.umd.min.js"] ("" :: Text)
+          -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/range-plugin@1.2.0/dist/index.umd.min.js"] ("" :: Text)
+          -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/preset-plugin@1.2.0/dist/index.umd.min.js"] ("" :: Text)
+          -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/time-plugin@1.2.0/dist/index.umd.min.js"] ("" :: Text)
+          script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.0/dist/index.umd.min.js"] ("" :: Text)
+
           script_
             [text|
               var currentISOTimeStringVar = ((new Date()).toISOString().split(".")[0])+"+00:00";

@@ -132,7 +132,6 @@ processProjectPostForm sess cpRaw = do
   let currUserId = sess.userId
   pool <- asks pool
   pid <- liftIO $ maybe (Projects.ProjectId <$> UUIDV4.nextRandom) pure $ Projects.projectIdFromText cp.projectId
-
   _ <-
     if cp.isUpdate
       then do
@@ -180,10 +179,10 @@ processProjectPostForm sess cpRaw = do
 createProjectBody :: Bool -> CreateProjectForm -> CreateProjectFormError -> Html ()
 createProjectBody isUpdate cp cpe =
   section_ [id_ "main-content", class_ "p-6"] $ do
-    h2_ [class_ "text-slate-700 text-2xl font-medium mb-5"] $ toHtml $ if isUpdate then "Project Settings" else "Create Project"
+    h2_ [class_ "text-slate-700 text-2xl font-medium mb-5"] $ toHtml @String $ if isUpdate then "Project Settings" else "Create Project"
     div_ [class_ "grid grid-cols-2 gap-5"] do
-      form_ [class_ "col-span-1 relative px-10 border border-gray-200 py-10  bg-white rounded-3xl", hxPost_ "/p/new", hxTarget_ "#main-content"] $ do
-        input_ [name_ "isUpdate", type_ "hidden", value_ $ if isUpdate then "true" else ""]
+      form_ [class_ "col-span-1 relative px-10 border border-gray-200 py-10  bg-white rounded-3xl", hxPost_ "/p/new", hxTarget_ "#main-content", hxSwap_ "outerHTML"] $ do
+        input_ [name_ "isUpdate", type_ "hidden", value_ $ if isUpdate then "true" else "false"]
         input_ [name_ "projectId", type_ "hidden", value_ $ cp.projectId]
         div_ $ do
           label_ [class_ "text-gray-400 mx-2 font-light text-sm"] "Title"

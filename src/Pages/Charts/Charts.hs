@@ -134,7 +134,18 @@ function latencyHistogram(renderAt, pc, data){
   const myChart = echarts.init(document.getElementById(renderAt));
   const option = {
     grid: {width: '100%', width: '100%', left: '1%',right: '-1%', top: '5%',bottom: '1.5%', containLabel: true},
-    xAxis: { show: true, type: 'value', scale: true, splitLine: {show: false}, },
+    xAxis: { show: true, type: 'value', scale: true, splitLine: {show: false},
+    axisLabel: {
+      formatter: function (params) {
+        if (params>1000){
+          return `$${params/1000}s`
+        }
+        return `$${params}ms`
+      },
+      show: true,
+      position: 'inside'
+    },
+           },
     yAxis: { show: true, type: 'value', scale: true,},
     series: {
       name: 'Direct',

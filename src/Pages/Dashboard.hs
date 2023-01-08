@@ -15,6 +15,7 @@ import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
+import NeatInterpolation (text)
 import Pages.Anomalies.AnomalyList qualified as AnomaliesList
 import Pages.BodyWrapper
 import Pages.Charts.Charts qualified as Charts
@@ -48,6 +49,42 @@ dashboardGetH sess pid = do
 dashboardPage :: UTCTime -> Projects.ProjectRequestStats -> Text -> Vector Anomalies.AnomalyVM -> Html ()
 dashboardPage currTime projectStats reqLatenciesRolledByStepsJ anomalies = do
   section_ [class_ "p-8 container mx-auto px-4 space-y-16 10 pb-24"] $ do
+    div_ do
+      input_ [id_ "startTime", type_ "hidden"]
+      input_ [id_ "endTime", type_ "hidden"]
+      a_ [id_ "timepickerTrigger", onclick_ "picker.show()"] "last 2 weeks"
+
+    script_
+      [text|
+    const picker = new easepick.create({
+      element: '#timepickerTrigger',
+      css: [
+        'https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.0/dist/index.css',
+      ],
+      plugins: ['RangePlugin', 'PresetPlugin', 'TimePlugin'],
+      autoApply: false,
+      setup(picker) {
+        picker.on('select', (e) => {
+          const start = JSON.stringify(e.detail.start).slice(1, -1);
+          const end = JSON.stringify(e.detail.end).slice(1, -1);
+          document.getElementById("startTime").value = start;
+          document.getElementById("endTime").value = end;
+
+          const url = new URL(window.location.href);
+          url.searchParams.set('from', start);
+          url.searchParams.set('to', end);
+          window.location.href = url.toString();
+          // window.history.replaceState(null, null, url);
+
+          console.log(start);
+          console.log(luxon.DateTime.fromISO(start));
+        });
+      },
+    });
+    window.picker = picker;
+
+      |]
+    -- button_ [class_ "", id_ "checkin", onclick_ "window.picker.show()"] "timepicker"
     section_ $ AnomaliesList.anomalyListSlider currTime anomalies
     dStats projectStats reqLatenciesRolledByStepsJ
 
