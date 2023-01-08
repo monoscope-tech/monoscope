@@ -225,7 +225,7 @@ createProjectBody isUpdate cp cpe =
               img_ [src_ "/assets/svgs/blue-plus.svg", class_ " mt-1 mx-2 w-3 h-3"]
               span_ [class_ "text-blue-700 font-medium text-sm "] "Add member"
         div_ [class_ "p-5 text-right"] do
-          button_ [class_ "inline-block py-2 px-5 bg-blue-700  text-[white] text-sm rounded-xl cursor-pointer", type_ "submit"] "Next step"
+          button_ [class_ "inline-block py-2 px-5 bg-blue-700  text-[white] text-sm rounded-xl cursor-pointer", type_ "submit"] "Submit"
 
       div_ [class_ "col-span-1 h-full justify-center items-center w-full text-center pt-24"] do
         h2_ [class_ "text-red-800 font-medium pb-4"] "Delete project. This is dangerous and unreversable"

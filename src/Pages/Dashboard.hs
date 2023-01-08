@@ -21,6 +21,7 @@ import Pages.BodyWrapper
 import Pages.Charts.Charts qualified as Charts
 import Relude hiding (max, min)
 import Text.Interpolation.Nyan
+import Utils (mIcon_)
 
 dashboardGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 dashboardGetH sess pid = do
@@ -48,14 +49,22 @@ dashboardGetH sess pid = do
 
 dashboardPage :: UTCTime -> Projects.ProjectRequestStats -> Text -> Vector Anomalies.AnomalyVM -> Html ()
 dashboardPage currTime projectStats reqLatenciesRolledByStepsJ anomalies = do
-  section_ [class_ "p-8 container mx-auto px-4 space-y-16 10 pb-24"] $ do
-    div_ do
+  section_ [class_ "p-8 container mx-auto px-4 space-y-12 pb-24"] $ do
+    div_ [class_ "p-1"] do
       input_ [id_ "startTime", type_ "hidden"]
       input_ [id_ "endTime", type_ "hidden"]
-      a_ [id_ "timepickerTrigger", onclick_ "picker.show()"] "last 2 weeks"
-
-    script_
-      [text|
+      a_ [onclick_ "picker.show()", class_ "p-2 border border-1 border-black-200 space-x-2"] do
+        mIcon_ "clock" "h-4 w-4"
+        span_ [id_ "timepickerTrigger", class_ "inline-block"] "last 2 weeks"
+        img_
+          [ src_ "/assets/svgs/cheveron-down.svg",
+            class_ "h-4 w-4 inline-block"
+          ]
+    -- button_ [class_ "", id_ "checkin", onclick_ "window.picker.show()"] "timepicker"
+    section_ $ AnomaliesList.anomalyListSlider currTime anomalies
+    dStats projectStats reqLatenciesRolledByStepsJ
+  script_
+    [text|
     const picker = new easepick.create({
       element: '#timepickerTrigger',
       css: [
@@ -84,9 +93,6 @@ dashboardPage currTime projectStats reqLatenciesRolledByStepsJ anomalies = do
     window.picker = picker;
 
       |]
-    -- button_ [class_ "", id_ "checkin", onclick_ "window.picker.show()"] "timepicker"
-    section_ $ AnomaliesList.anomalyListSlider currTime anomalies
-    dStats projectStats reqLatenciesRolledByStepsJ
 
 statBox :: Text -> Text -> Html ()
 statBox title val = do
@@ -106,7 +112,7 @@ dStats projReqStats@Projects.ProjectRequestStats {..} reqLatenciesRolledByStepsJ
       a_ [href_ "https://apitoolkit.io/docs/quickstarts/", class_ "btn-indigo btn-sm my-3 -ml-0 mt-6", target_ "_blank"] "Read the setup guide"
 
   section_ [class_ "space-y-3"] $ do
-    div_ [class_ "flex justify-between mt-5"] $ do
+    div_ [class_ "flex justify-between mt-4"] $ do
       div_ [class_ "flex flex-row"] $ do
         a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]] $
           img_
