@@ -25,8 +25,8 @@ listProjectsGetH sess = do
       else liftIO $ withPool pool $ Projects.selectProjectsForUser (sess.userId)
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess,
-            pageTitle = "Projects List"
+          { sessM = Just sess
+          , pageTitle = "Projects List"
           }
   let page = bodyWrapper bwconf $ listProjectsBody projects
   -- Redirect to the create projects page if there's no project under the logged in user

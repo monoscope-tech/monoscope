@@ -43,29 +43,29 @@ data BgJobs
 
 getShapes :: Projects.ProjectId -> Text -> DBT IO (Vector (Text, Vector Text))
 getShapes pid enpHash = query Select q (pid, enpHash)
-  where
-    q = [sql| select hash, field_hashes from apis.shapes where project_id=? and endpoint_hash=? |]
+ where
+  q = [sql| select hash, field_hashes from apis.shapes where project_id=? and endpoint_hash=? |]
 
 instance FromRow Text where
   fromRow = field
 
 getUpdatedFieldFormats :: Projects.ProjectId -> Vector Text -> DBT IO (Vector Text)
 getUpdatedFieldFormats pid fieldHashes = query Select q (pid, fieldHashes)
-  where
-    q =
-      [sql| select fm.hash from apis.formats fm JOIN apis.fields fd ON (fm.project_id=fd.project_id AND fd.hash=fm.field_hash) 
+ where
+  q =
+    [sql| select fm.hash from apis.formats fm JOIN apis.fields fd ON (fm.project_id=fd.project_id AND fd.hash=fm.field_hash) 
                 where fm.project_id=? AND fm.created_at>(fd.created_at+interval '2 minutes') AND fm.field_hash=ANY(?) |]
 
 updateShapeCounts :: Projects.ProjectId -> Text -> Vector Text -> Vector Text -> Vector Text -> DBT IO Int64
 updateShapeCounts pid shapeHash newFields deletedFields updatedFields = execute Update q (newFields, deletedFields, updatedFields, pid, shapeHash)
-  where
-    q = [sql| update apis.shapes SET new_unique_fields=?, deleted_fields=?, updated_field_formats=? where project_id=? and hash=?|]
+ where
+  q = [sql| update apis.shapes SET new_unique_fields=?, deleted_fields=?, updated_field_formats=? where project_id=? and hash=?|]
 
 getUsersByProjectId :: Projects.ProjectId -> DBT IO (Vector Users.User)
 getUsersByProjectId pid = query Select q (Only pid)
-  where
-    q =
-      [sql| select u.id, u.created_at, u.updated_at, u.deleted_at, u.active, u.first_name, u.last_name, u.display_image_url, u.email
+ where
+  q =
+    [sql| select u.id, u.created_at, u.updated_at, u.deleted_at, u.active, u.first_name, u.last_name, u.display_image_url, u.email
                     from users.users u join projects.project_members pm on (pm.user_id=u.id) where project_id=? |]
 
 -- TODO:
@@ -204,5 +204,5 @@ Apitoolkit team
 
 jobsWorkerInit :: Pool Connection -> LogAction IO String -> Config.EnvConfig -> IO ()
 jobsWorkerInit dbPool logger envConfig = startJobRunner $ mkConfig jobLogger "background_jobs" dbPool (MaxConcurrentJobs 1) (jobsRunner dbPool logger envConfig) id
-  where
-    jobLogger logLevel logEvent = logger <& show (logLevel, logEvent)
+ where
+  jobLogger logLevel logEvent = logger <& show (logLevel, logEvent)

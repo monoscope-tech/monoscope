@@ -87,10 +87,10 @@ anomalyBulkActionsPostH sess pid action items = do
   pure $ addHeader hxTriggerData $ ""
 
 data ParamInput = ParamInput
-  { currentURL :: Text,
-    ackd :: Bool,
-    archived :: Bool,
-    sort :: Text
+  { currentURL :: Text
+  , ackd :: Bool
+  , archived :: Bool
+  , sort :: Text
   }
 
 anomalyListGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
@@ -107,18 +107,18 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM hxRequestM hxBoostedM = d
   currTime <- liftIO getCurrentTime
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess,
-            currProject = project,
-            pageTitle = "Anomalies"
+          { sessM = Just sess
+          , currProject = project
+          , pageTitle = "Anomalies"
           }
   let pidT = Projects.projectIdText pid
   let currentURL = "/p/" <> pidT <> "/anomalies?layout=" <> fromMaybe "false" layoutM <> "&ackd=" <> fromMaybe "false" ackdM <> "&archived=" <> fromMaybe "false" archivedM
   let paramInput =
         ParamInput
-          { currentURL = currentURL,
-            ackd = fromMaybe False ackd,
-            archived = fromMaybe False archived,
-            sort = fromMaybe "" sortM
+          { currentURL = currentURL
+          , ackd = fromMaybe False ackd
+          , archived = fromMaybe False archived
+          , sort = fromMaybe "" sortM
           }
 
   let elementBelowTabs =
@@ -146,9 +146,9 @@ anomalyList paramInput pid currTime anomalies = form_ [class_ "col-span-5 bg-whi
   let bulkActionBase = "/p/" <> Projects.projectIdText pid <> "/anomalies/bulk_actions"
   let currentURL' = deleteParam "sort" paramInput.currentURL
   let sortMenu =
-        [ ("First Seen", "First time the issue occured", "first_seen"),
-          ("Last Seen", "Last time the issue occured", "last_seen"),
-          ("Events", "Number of events", "events")
+        [ ("First Seen", "First time the issue occured", "first_seen")
+        , ("Last Seen", "Last time the issue occured", "last_seen")
+        , ("Events", "Number of events", "events")
         ] ::
           [(Text, Text, Text)]
   let currentSortTitle = fromMaybe "First Seen" $ fst3 <$> find (\(_, _, identifier) -> identifier == paramInput.sort) sortMenu
@@ -171,8 +171,8 @@ anomalyList paramInput pid currTime anomalies = form_ [class_ "col-span-5 bg-whi
           sortMenu & mapM_ \(title, desc, identifier) -> do
             let isActive = paramInput.sort == identifier || paramInput.sort == ""
             a_
-              [ class_ $ "block flex flex-row px-3 py-2 hover:bg-blue-50 rounded-md cursor-pointer " <> (if isActive then " text-blue-800 " else ""),
-                href_ $ currentURL' <> "&sort=" <> identifier
+              [ class_ $ "block flex flex-row px-3 py-2 hover:bg-blue-50 rounded-md cursor-pointer " <> (if isActive then " text-blue-800 " else "")
+              , href_ $ currentURL' <> "&sort=" <> identifier
               ]
               do
                 div_ [class_ "flex flex-col items-center justify-center px-3"] do
@@ -211,15 +211,15 @@ anomalyListSlider currTime anomalies = do
     div_ [class_ "flex justify-between mt-5 pb-2"] $ do
       div_ [class_ "flex flex-row"] $ do
         img_
-          [ src_ "/assets/svgs/cheveron-down.svg",
-            class_ "h-4 mr-3 mt-1 w-4",
-            [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .parent-slider)|]
+          [ src_ "/assets/svgs/cheveron-down.svg"
+          , class_ "h-4 mr-3 mt-1 w-4"
+          , [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .parent-slider)|]
           ]
         span_ [class_ "text-lg text-slate-700"] "Ongoing Anomalies and Monitors"
       div_ [class_ "flex flex-row mt-2"] $ do
         a_
-          [ class_ "cursor-pointer",
-            [__|on click hide #{$anomalyIds[$currentAnomaly]} then
+          [ class_ "cursor-pointer"
+          , [__|on click hide #{$anomalyIds[$currentAnomaly]} then
                           js($currentAnomaly, $anomalyIds) return (Math.max(0, $currentAnomaly-1) % $anomalyIds.length) end then 
                           set $currentAnomaly to it then
                           show #{$anomalyIds[$currentAnomaly]} then 
@@ -228,8 +228,8 @@ anomalyListSlider currTime anomalies = do
           $ img_ [src_ "/assets/svgs/leftarrow.svg", class_ " m-2"]
         span_ [src_ " mx-4", id_ "anomalySliderPagination"] "1/1"
         a_
-          [ class_ "cursor-pointer",
-            [__|on click hide #{$anomalyIds[$currentAnomaly]} then
+          [ class_ "cursor-pointer"
+          , [__|on click hide #{$anomalyIds[$currentAnomaly]} then
                           js($currentAnomaly, $anomalyIds) return (($currentAnomaly+1) % $anomalyIds.length) end then 
                           set $currentAnomaly to it then
                           show #{$anomalyIds[$currentAnomaly]} then
@@ -238,8 +238,8 @@ anomalyListSlider currTime anomalies = do
           $ img_ [src_ "/assets/svgs/rightarrow.svg", class_ " m-2"]
 
     div_
-      [ class_ "parent-slider",
-        [__|init setAnomalySliderPag() then show #{$anomalyIds[$currentAnomaly]} |]
+      [ class_ "parent-slider"
+      , [__|init setAnomalySliderPag() then show #{$anomalyIds[$currentAnomaly]} |]
       ]
       $ mapM_ (renderAnomaly True currTime) anomalies
 
@@ -295,8 +295,8 @@ anomalyItem hideByDefault currTime anomaly icon title subTitle content = do
             span_ [class_ "inline-block space-x-1"] do
               mIcon_ "clock" "w-3 h-3"
               span_
-                [ class_ "decoration-black underline ml-1",
-                  term "data-tippy-content" $ "first seen: " <> show anomaly.createdAt
+                [ class_ "decoration-black underline ml-1"
+                , term "data-tippy-content" $ "first seen: " <> show anomaly.createdAt
                 ]
                 $ toHtml
                 $ prettyTimeAuto currTime
@@ -368,10 +368,10 @@ anomalyAcknowlegeButton pid aid acked = do
   a_
     [ class_ $
         "inline-block child-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
-          <> (if acked then "bg-green-100 text-green-900" else ""),
-      term "data-tippy-content" "acknowlege anomaly",
-      hxGet_ acknowlegeAnomalyEndpoint,
-      hxSwap_ "outerHTML"
+          <> (if acked then "bg-green-100 text-green-900" else "")
+    , term "data-tippy-content" "acknowlege anomaly"
+    , hxGet_ acknowlegeAnomalyEndpoint
+    , hxSwap_ "outerHTML"
     ]
     if acked then "✓ Acknowleged" else "✓ Acknowlege"
 
@@ -381,9 +381,9 @@ anomalyArchiveButton pid aid archived = do
   a_
     [ class_ $
         "inline-block xchild-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
-          <> (if archived then " bg-green-100 text-green-900" else ""),
-      term "data-tippy-content" $ if archived then "unarchive" else "archive",
-      hxGet_ archiveAnomalyEndpoint,
-      hxSwap_ "outerHTML"
+          <> (if archived then " bg-green-100 text-green-900" else "")
+    , term "data-tippy-content" $ if archived then "unarchive" else "archive"
+    , hxGet_ archiveAnomalyEndpoint
+    , hxSwap_ "outerHTML"
     ]
     $ img_ [src_ "/assets/svgs/anomalies/archive.svg", class_ "h-4 w-4"]

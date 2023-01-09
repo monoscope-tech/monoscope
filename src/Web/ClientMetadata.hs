@@ -18,10 +18,10 @@ import Relude.Unsafe ((!!))
 import Servant (err300, throwError)
 
 data ClientMetadata = ClientMetadata
-  { projectId :: Projects.ProjectId,
-    topicId :: Text,
-    pubsubProjectId :: Text,
-    pubsubPushServiceAccount :: Value
+  { projectId :: Projects.ProjectId
+  , topicId :: Text
+  , pubsubProjectId :: Text
+  , pubsubPushServiceAccount :: Value
   }
   deriving stock (Show, Generic)
   deriving
@@ -56,10 +56,10 @@ clientMetadataH authTextM = do
 
               pure $
                 ClientMetadata
-                  { projectId = pApiKey.projectId,
-                    pubsubProjectId = "past-3",
-                    topicId = (env ^. #requestPubsubTopics) !! 0, -- apitoolkit-prod-default
-                    pubsubPushServiceAccount = apitoolkitPusherServiceAccount
+                  { projectId = pApiKey.projectId
+                  , pubsubProjectId = "past-3"
+                  , topicId = (env ^. #requestPubsubTopics) !! 0 -- apitoolkit-prod-default
+                  , pubsubPushServiceAccount = apitoolkitPusherServiceAccount
                   }
 
 apitoolkitPusherServiceAccount :: Value

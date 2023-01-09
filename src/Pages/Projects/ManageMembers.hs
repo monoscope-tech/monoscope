@@ -31,8 +31,8 @@ import Servant.Htmx
 import Web.FormUrlEncoded (FromForm)
 
 data ManageMembersForm = ManageMembersForm
-  { emails :: [Text],
-    permissions :: [ProjectMembers.Permissions]
+  { emails :: [Text]
+  , permissions :: [ProjectMembers.Permissions]
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromForm)
@@ -122,7 +122,7 @@ manageMembersGetH sess pid = do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
       projMembers <- ProjectMembers.selectActiveProjectMembers pid
       pure (project, projMembers)
-  let bwconf = (def :: BWConfig) {sessM = Just sess, pageTitle = "Settings", currProject = project}
+  let bwconf = (def :: BWConfig){sessM = Just sess, pageTitle = "Settings", currProject = project}
   pure $ bodyWrapper bwconf $ manageMembersBody projMembers
 
 manageMembersBody :: Vector ProjectMembers.ProjectMemberVM -> Html ()
@@ -130,10 +130,10 @@ manageMembersBody projMembers =
   section_ [id_ "main-content", class_ "p-6"] $ do
     h2_ [class_ "text-slate-700 text-2xl font-medium mb-5"] "Manage project members"
     form_
-      [ class_ "relative px-10 border border-gray-200 py-10  bg-white w-1/2 rounded-3xl",
-        hxPost_ "",
-        hxTarget_ "#main-content",
-        hxSwap_ "outerHTML"
+      [ class_ "relative px-10 border border-gray-200 py-10  bg-white w-1/2 rounded-3xl"
+      , hxPost_ ""
+      , hxTarget_ "#main-content"
+      , hxSwap_ "outerHTML"
       ]
       $ do
         div_ [class_ "mt-6"] $ do
@@ -141,8 +141,8 @@ manageMembersBody projMembers =
             mapM_ (projectMemberRow . Just) projMembers
             template_ [id_ "inviteTmpl"] $ projectMemberRow Nothing
           a_
-            [ class_ "bg-transparent inline-flex cursor-pointer mt-2",
-              [__| on click append #inviteTmpl.innerHTML to #inviteMemberSection then 
+            [ class_ "bg-transparent inline-flex cursor-pointer mt-2"
+            , [__| on click append #inviteTmpl.innerHTML to #inviteMemberSection then 
                           _hyperscript.processNode(#inviteMemberSection) then halt |]
             ]
             $ do
@@ -154,10 +154,10 @@ projectMemberRow :: Maybe ProjectMembers.ProjectMemberVM -> Html ()
 projectMemberRow projMembersM =
   div_ [class_ "flex flex-row space-x-2"] $ do
     input_
-      [ name_ "emails",
-        class_ "w-2/3 h-10 px-5 my-2 w-full text-sm bg-white text-slate-700 font-light border-solid border border-gray-200 rounded-2xl border-0 ",
-        placeholder_ "name@example.com",
-        value_ (maybe "" (original . (^. #email)) projMembersM)
+      [ name_ "emails"
+      , class_ "w-2/3 h-10 px-5 my-2 w-full text-sm bg-white text-slate-700 font-light border-solid border border-gray-200 rounded-2xl border-0 "
+      , placeholder_ "name@example.com"
+      , value_ (maybe "" (original . (^. #email)) projMembersM)
       ]
     let permission = maybe ProjectMembers.PView (^. #permission) projMembersM
     select_ [name_ "permissions", class_ "w-1/3 h-10 px-5  my-2 w-full text-sm bg-white text-zinc-500 border-solid border border-gray-200 rounded-2xl border-0"] $ do
@@ -168,6 +168,6 @@ projectMemberRow projMembersM =
       [ [__| on click remove the closest parent <div/> then halt |]
       ]
       $ img_ [src_ "/assets/svgs/delete.svg", class_ "cursor-pointer"]
-  where
-    selectedIf :: ProjectMembers.Permissions -> ProjectMembers.Permissions -> [Attribute]
-    selectedIf a b = [selected_ "" | a == b]
+ where
+  selectedIf :: ProjectMembers.Permissions -> ProjectMembers.Permissions -> [Attribute]
+  selectedIf a b = [selected_ "" | a == b]

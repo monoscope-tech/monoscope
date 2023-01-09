@@ -46,14 +46,14 @@ newtype ProjectApiKeyId = ProjectApiKeyId {unProjectApiKeyId :: UUID.UUID}
   deriving anyclass (FromRow, ToRow)
 
 data ProjectApiKey = ProjectApiKey
-  { id :: ProjectApiKeyId,
-    createdAt :: ZonedTime,
-    updatedAt :: ZonedTime,
-    deletedAt :: Maybe ZonedTime,
-    active :: Bool,
-    projectId :: Projects.ProjectId,
-    title :: Text,
-    keyPrefix :: Text
+  { id :: ProjectApiKeyId
+  , createdAt :: ZonedTime
+  , updatedAt :: ZonedTime
+  , deletedAt :: Maybe ZonedTime
+  , active :: Bool
+  , projectId :: Projects.ProjectId
+  , title :: Text
+  , keyPrefix :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow)
@@ -68,7 +68,7 @@ newProjectApiKeys projectId projectKeyUUID title keyPrefix = do
       deletedAt = Nothing
       active = True
       id = ProjectApiKeyId projectKeyUUID
-  pure $ ProjectApiKey {..}
+  pure $ ProjectApiKey{..}
 
 insertProjectApiKey :: ProjectApiKey -> DBT IO ()
 insertProjectApiKey = insert @ProjectApiKey
@@ -78,15 +78,15 @@ projectApiKeysByProjectId = selectManyByField @ProjectApiKey [field| project_id 
 
 getProjectApiKey :: ProjectApiKeyId -> DBT IO (Maybe ProjectApiKey)
 getProjectApiKey = queryOne Select q
-  where
-    q = [sql|select id, created_at, updated_at, deleted_at, active, project_id,  title, key_prefix from projects.project_api_keys where id=? and active=true |]
+ where
+  q = [sql|select id, created_at, updated_at, deleted_at, active, project_id,  title, key_prefix from projects.project_api_keys where id=? and active=true |]
 
 -- AES256 encryption
 encryptAPIKey :: ByteString -> ByteString -> ByteString
 encryptAPIKey key = ctrCombine ctx nullIV
-  where
-    ctx :: AES256
-    ctx = throwCryptoError $ cipherInit key
+ where
+  ctx :: AES256
+  ctx = throwCryptoError $ cipherInit key
 
 -- | decryptAPIKey :: secretKey -> TextToDecrypt -> DecryptedText as bytestring
 decryptAPIKey :: ByteString -> ByteString -> ByteString

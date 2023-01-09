@@ -124,10 +124,10 @@ endpointDetailsH sess pid eid fromDStr toDStr = do
   let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess,
-            currProject = project,
-            pageTitle = "Endpoint Details",
-            menuItem = Just "Endpoints"
+          { sessM = Just sess
+          , currProject = project
+          , pageTitle = "Endpoint Details"
+          , menuItem = Just "Endpoints"
           }
   currTime <- liftIO getCurrentTime
   pure $ bodyWrapper bwconf $ endpointDetails currTime enpStats fieldsMap reqLatenciesRolledByStepsJ anomalies (fromD, toD)
@@ -157,8 +157,8 @@ endpointDetails currTime endpoint fieldsM reqLatenciesRolledByStepsJ anomalies d
         reqResSection "Request" True fieldsM
         reqResSection "Response" False fieldsM
     aside_
-      [ class_ "w-2/6 h-full overflow-y-scroll bg-white border border-gray-200 p-5 sticky top-0",
-        id_ "detailSidebar"
+      [ class_ "w-2/6 h-full overflow-y-scroll bg-white border border-gray-200 p-5 sticky top-0"
+      , id_ "detailSidebar"
       ]
       $ do
         div_ [class_ "h-full flex flex-col items-center justify-center"] $ do
@@ -179,14 +179,14 @@ endpointDetails currTime endpoint fieldsM reqLatenciesRolledByStepsJ anomalies d
         |]
 
 endpointStats :: Endpoints.EndpointRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
-endpointStats enpStats@Endpoints.EndpointRequestStats {min, p50, p75, p90, p95, p99, max} reqLatenciesRolledByStepsJ dateRange =
+endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p99, max} reqLatenciesRolledByStepsJ dateRange =
   section_ [class_ "space-y-3"] $ do
     div_ [class_ "flex justify-between mt-5"] $
       div_ [class_ "flex flex-row"] $ do
         img_
-          [ src_ "/assets/svgs/cheveron-down.svg",
-            class_ "h-4 mr-3 mt-1 w-4 cursor-pointer",
-            [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .endpointStatsSubSection)|]
+          [ src_ "/assets/svgs/cheveron-down.svg"
+          , class_ "h-4 mr-3 mt-1 w-4 cursor-pointer"
+          , [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .endpointStatsSubSection)|]
           ]
         span_ [class_ "text-lg text-slate-700"] "Endpoint Stats"
     div_ [class_ "grid grid-cols-3  gap-5 endpointStatsSubSection"] $ do
@@ -255,8 +255,8 @@ reqResSection title isRequest fieldsM =
       div_ [class_ "flex flex-row"] $ do
         a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]] $
           img_
-            [ src_ "/assets/svgs/cheveron-down.svg",
-              class_ "h-4 mr-3 mt-1 w-4"
+            [ src_ "/assets/svgs/cheveron-down.svg"
+            , class_ "h-4 mr-3 mt-1 w-4"
             ]
         span_ [class_ "text-lg text-slate-700"] $ toHtml title
       div_ [class_ "flex flex-row mt-2"] $ do
@@ -283,9 +283,9 @@ subSubSection title fieldsM =
       div_ [class_ "space-y-1"] $ do
         div_ [class_ "flex flex-row items-center"] $ do
           img_
-            [ src_ "/assets/svgs/cheveron-down.svg",
-              class_ "h-6 mr-3 w-6 p-1 cursor-pointer",
-              [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .subSectionContent)|]
+            [ src_ "/assets/svgs/cheveron-down.svg"
+            , class_ "h-6 mr-3 w-6 p-1 cursor-pointer"
+            , [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .subSectionContent)|]
             ]
           div_ [class_ "bg-gray-100 px-10 rounded-xl w-full p-4 text-sm text-slate-900 "] $ toHtml title
         div_ [class_ "space-y-1 subSectionContent"] $ do
@@ -297,10 +297,10 @@ subSubSection title fieldsM =
             case fieldM of
               Nothing -> do
                 a_
-                  [ class_ "flex flex-row items-center",
-                    style_ depthPadding,
-                    [__| on click toggle .neg-rotate-90 on <.chevron/> in me then collapseUntil((me), (my @data-depth))  |],
-                    term "data-depth" $ show depth
+                  [ class_ "flex flex-row items-center"
+                  , style_ depthPadding
+                  , [__| on click toggle .neg-rotate-90 on <.chevron/> in me then collapseUntil((me), (my @data-depth))  |]
+                  , term "data-depth" $ show depth
                   ]
                   $ do
                     img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-6 w-6 mr-1 chevron cursor-pointer p-1"]
@@ -313,11 +313,11 @@ subSubSection title fieldsM =
                           else EndpointComponents.fieldTypeToDisplay Fields.FTObject
               Just field -> do
                 a_
-                  [ hxGet_ $ "/p/" <> Projects.projectIdText (field.projectId) <> "/fields/" <> UUID.toText (Fields.unFieldId $ field.id),
-                    hxTarget_ "#detailSidebar",
-                    class_ "flex flex-row cursor-pointer",
-                    style_ depthPadding,
-                    term "data-depth" $ show depth
+                  [ hxGet_ $ "/p/" <> Projects.projectIdText (field.projectId) <> "/fields/" <> UUID.toText (Fields.unFieldId $ field.id)
+                  , hxTarget_ "#detailSidebar"
+                  , class_ "flex flex-row cursor-pointer"
+                  , style_ depthPadding
+                  , term "data-depth" $ show depth
                   ]
                   $ do
                     img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-4 mr-3 mt-4 w-4 ", style_ "visibility: hidden"]
@@ -339,9 +339,9 @@ fieldsToNormalized =
           & breakOnAll "."
       )
       & (++ [(keyPathStrToKey $ field.keyPath, Just field)])
-  where
-    rmvDotPrefix = T.dropWhile (== '.')
-    -- listToUnicode: add « as a suffix to all lists, and as the key for it's child.
-    -- This helps us identify and display lists correct. This could be simplified if posssible
-    listToUnicode = replace ".[]" "«.»"
-    keyPathStrToKey = rmvDotPrefix . listToUnicode
+ where
+  rmvDotPrefix = T.dropWhile (== '.')
+  -- listToUnicode: add « as a suffix to all lists, and as the key for it's child.
+  -- This helps us identify and display lists correct. This could be simplified if posssible
+  listToUnicode = replace ".[]" "«.»"
+  keyPathStrToKey = rmvDotPrefix . listToUnicode

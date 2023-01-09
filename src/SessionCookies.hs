@@ -14,19 +14,19 @@ craftSessionCookie ::
   SetCookie
 craftSessionCookie (Sessions.PersistentSessionId content) rememberSession =
   defaultSetCookie
-    { setCookieValue = UUID.toASCIIBytes content,
-      setCookieName = "apitoolkit_session",
-      setCookiePath = Just "/",
-      setCookieHttpOnly = True,
-      setCookieSameSite = Just sameSiteLax,
-      setCookieMaxAge = if rememberSession then Just 604800 else Nothing,
-      setCookieSecure = True
+    { setCookieValue = UUID.toASCIIBytes content
+    , setCookieName = "apitoolkit_session"
+    , setCookiePath = Just "/"
+    , setCookieHttpOnly = True
+    , setCookieSameSite = Just sameSiteLax
+    , setCookieMaxAge = if rememberSession then Just 604800 else Nothing
+    , setCookieSecure = True
     }
 
 emptySessionCookie :: SetCookie
 emptySessionCookie =
   defaultSetCookie
-    { setCookieName = "apitoolkit_session",
-      setCookieValue = "",
-      setCookieMaxAge = Just 0
+    { setCookieName = "apitoolkit_session"
+    , setCookieValue = ""
+    , setCookieMaxAge = Just 0
     }

@@ -38,9 +38,9 @@ contentMail :: T.Text
 contentMail =
   mailBody
     <> link
-  where
-    mailBody = "ApiToolKit Mail Invite. Click on the link below"
-    link = "<a href =https://apitoolkit.io>"
+ where
+  mailBody = "ApiToolKit Mail Invite. Click on the link below"
+  link = "<a href =https://apitoolkit.io>"
 
 patternMatchMailContent :: Maybe T.Text -> Maybe (NonEmpty MailContent)
 patternMatchMailContent (Just txt) = Just (NonEmptyDataList.fromList [mailContentHtml txt])
@@ -61,7 +61,7 @@ sendEmail = emailCtx
 sendInviteMail :: Mail () () -> IO ()
 sendInviteMail sendEmailV = do
   apiKey <- sendGridApiKey
-  eResponse <- sendMail apiKey (sendEmailV {_mailSendAt = Just 1516468000})
+  eResponse <- sendMail apiKey (sendEmailV{_mailSendAt = Just 1516468000})
   case eResponse of
     Left httpException -> error $ show httpException
     Right response -> print (response Lens.^. Wreq.responseStatus . Wreq.statusCode)

@@ -31,10 +31,10 @@ spec = do
               }
             }|]
       let expectedResp =
-            [ (".menu.id", [AE.String "file"]),
-              -- FIXME: We can correctly handle objects in arrays.
-              (".menu.popup.menuitem.[].onclick", [AE.String "oc1", AE.String "oc2"]),
-              (".menu.popup.menuitem.[].value", [AE.String "v1", AE.String "v2"])
+            [ (".menu.id", [AE.String "file"])
+            , -- FIXME: We can correctly handle objects in arrays.
+              (".menu.popup.menuitem.[].onclick", [AE.String "oc1", AE.String "oc2"])
+            , (".menu.popup.menuitem.[].value", [AE.String "v1", AE.String "v2"])
             ]
       RequestMessages.valueToFields exJSON `shouldBe` expectedResp
 
@@ -240,28 +240,28 @@ spec = do
       let timestamp = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
       let requestMsg =
             RequestMessages.RequestMessage
-              { timestamp = timestamp,
-                projectId = UUID.nil,
-                sdkType = GoGin,
-                host = "http://apitoolkit.io",
-                method = "POST",
-                referer = "https://referer",
-                urlPath = "/path/to/data",
-                rawUrl = "/path/to/data",
-                pathParams = [aesonQQ|{}|],
-                queryParams = [aesonQQ|{}|],
-                protoMajor = 1,
-                protoMinor = 1,
-                duration = 50000,
-                requestHeaders = [aesonQQ|{}|],
-                responseHeaders = [aesonQQ|{}|],
-                -- requestHeaders = [aesonQQ| {"Content-Type": "application/json"} |],
+              { timestamp = timestamp
+              , projectId = UUID.nil
+              , sdkType = GoGin
+              , host = "http://apitoolkit.io"
+              , method = "POST"
+              , referer = "https://referer"
+              , urlPath = "/path/to/data"
+              , rawUrl = "/path/to/data"
+              , pathParams = [aesonQQ|{}|]
+              , queryParams = [aesonQQ|{}|]
+              , protoMajor = 1
+              , protoMinor = 1
+              , duration = 50000
+              , requestHeaders = [aesonQQ|{}|]
+              , responseHeaders = [aesonQQ|{}|]
+              , -- requestHeaders = [aesonQQ| {"Content-Type": "application/json"} |],
                 -- responseHeaders = [aesonQQ| {"X-Rand": "random-value"} |],
-                requestBody = B64.encodeBase64 "",
-                responseBody = B64.encodeBase64 [r|{"key": "value"}|],
-                statusCode = 203
+                requestBody = B64.encodeBase64 ""
+              , responseBody = B64.encodeBase64 [r|{"key": "value"}|]
+              , statusCode = 203
               }
-      let projectCache = Projects.ProjectCache {hosts = [], endpointHashes = ["abc"], shapeHashes = [], redactFieldslist = []}
+      let projectCache = Projects.ProjectCache{hosts = [], endpointHashes = ["abc"], shapeHashes = [], redactFieldslist = []}
       let Right (query, params, _) = RequestMessages.requestMsgToDumpAndEndpoint projectCache requestMsg timestamp recId
       traceShowM "In request Message Endpoint test ===BEGIN==="
       traceShowM query

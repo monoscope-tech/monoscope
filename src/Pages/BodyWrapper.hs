@@ -15,25 +15,25 @@ import Relude
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu ppid =
   let pid = Projects.projectIdText ppid
-   in [ ("Dashboard", "/p/" <> pid <> "/", "#dashboard"),
-        ("Endpoints", "/p/" <> pid <> "/endpoints", "#endpoint"),
-        ("Anomalies", "/p/" <> pid <> "/anomalies?ackd=false&archived=false", "#anomalies"),
-        ("API Log Explorer", "/p/" <> pid <> "/log_explorer", "#logs"),
-        ("API Keys", "/p/" <> pid <> "/apis", "#api"),
-        ("Redacted Fields", "/p/" <> pid <> "/redacted_fields", "#redacted")
+   in [ ("Dashboard", "/p/" <> pid <> "/", "#dashboard")
+      , ("Endpoints", "/p/" <> pid <> "/endpoints", "#endpoint")
+      , ("Anomalies", "/p/" <> pid <> "/anomalies?ackd=false&archived=false", "#anomalies")
+      , ("API Log Explorer", "/p/" <> pid <> "/log_explorer", "#logs")
+      , ("API Keys", "/p/" <> pid <> "/apis", "#api")
+      , ("Redacted Fields", "/p/" <> pid <> "/redacted_fields", "#redacted")
       ]
 
 data BWConfig = BWConfig
-  { sessM :: Maybe Sessions.PersistentSession,
-    currProject :: Maybe Projects.Project,
-    pageTitle :: Text,
-    menuItem :: Maybe Text -- Use PageTitle if menuItem is not set
+  { sessM :: Maybe Sessions.PersistentSession
+  , currProject :: Maybe Projects.Project
+  , pageTitle :: Text
+  , menuItem :: Maybe Text -- Use PageTitle if menuItem is not set
   }
   deriving stock (Show, Generic)
   deriving anyclass (Default)
 
 bodyWrapper :: BWConfig -> Html () -> Html ()
-bodyWrapper BWConfig {sessM, currProject, pageTitle, menuItem} child =
+bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child =
   case sessM of
     Nothing -> child
     Just sess -> do
@@ -121,9 +121,9 @@ projectsDropDown :: Projects.Project -> Vector.Vector Projects.Project -> Html (
 projectsDropDown currProject projects = do
   let pidTxt = Projects.projectIdText $ currProject.id
   div_
-    [ term "data-menu" "true",
-      class_ "hidden origin-top-right z-40 transition transform bg-white p-4 absolute w-[20rem] rounded-2xl shadow-2xl shadow-indigo-200",
-      [__|
+    [ term "data-menu" "true"
+    , class_ "hidden origin-top-right z-40 transition transform bg-white p-4 absolute w-[20rem] rounded-2xl shadow-2xl shadow-indigo-200"
+    , [__|
           on open
               remove .hidden
               add .ease-out .duration-100 .opacity-0 .scale-95
@@ -179,13 +179,13 @@ sideNav sess project pageTitle menuItem = do
   aside_ [class_ "shrink-0  w-72 top-0 border-r-2 bg-white border-gray-200 h-screen overflow-hidden"] $ do
     a_ [href_ "/", class_ "inline-block p-4"] $ do
       img_
-        [ class_ "h-12",
-          src_ "/assets/svgs/logo.svg"
+        [ class_ "h-12"
+        , src_ "/assets/svgs/logo.svg"
         ]
     div_ [class_ "p-4"] $ do
       a_
-        [ class_ "flex flex-row bg-blue-50 hover:bg-blue-100 text-blue-900 block p-6 rounded-md cursor-pointer",
-          [__| 
+        [ class_ "flex flex-row bg-blue-50 hover:bg-blue-100 text-blue-900 block p-6 rounded-md cursor-pointer"
+        , [__| 
                 on click queue first
                     if I do not match .active
                         add .active
@@ -215,8 +215,8 @@ sideNav sess project pageTitle menuItem = do
       -- FIXME: reeanable hx-boost hxBoost_ "true"
       menu (project.id) & mapM_ \(mTitle, mUrl, mIcon) -> do
         a_
-          [ href_ mUrl,
-            class_ $
+          [ href_ mUrl
+          , class_ $
               "block flex gap-3 px-5 py-3 flex justify-center items-center hover:bg-blue-50 text-slate-800 "
                 <> ( if maybe (pageTitle == mTitle) (== mTitle) menuItem
                       then "bg-blue-50 border-l-4 border-blue-700"
@@ -236,8 +236,8 @@ navbar currUser = do
       a_ [class_ "inline-block p-2 px-3 align-middle"] $ img_ [class_ "w-5 h-5", src_ "/assets/svgs/search.svg"]
       a_ [class_ "inline-block border-r-2 p-2 pr-5"] $ img_ [class_ "w-5 h-5", src_ "/assets/svgs/notifications_active.svg"]
       a_
-        [ class_ "cursor-pointer inline-block space-x-4 pl-4 relative ",
-          [__| 
+        [ class_ "cursor-pointer inline-block space-x-4 pl-4 relative "
+        , [__| 
             on click queue first
                 if I do not match .active
                     add .active
@@ -262,9 +262,9 @@ navbar currUser = do
 
       -- logout dropdown
       div_
-        [ term "drop-menu" "true",
-          class_ "hidden origin-top-left border border-gray-100 w-[10rem] rounded-lg shadow-2xl shadow-indigo-200 z-40 transition transform bg-white p-1 absolute top-14 right-5 ",
-          [__|
+        [ term "drop-menu" "true"
+        , class_ "hidden origin-top-left border border-gray-100 w-[10rem] rounded-lg shadow-2xl shadow-indigo-200 z-40 transition transform bg-white p-1 absolute top-14 right-5 "
+        , [__|
             on open
                 remove .hidden
                 add .ease-out .duration-100 .opacity-0 .scale-95

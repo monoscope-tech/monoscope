@@ -14,24 +14,24 @@ import Servant.Server (Handler)
 import System.Envy (FromEnv, Var, fromVar, toVar)
 
 data EnvConfig = EnvConfig
-  { databaseUrl :: Text, -- "DATABASE_URL"
-    port :: Int,
-    migrationsDir :: Text, -- "MIGRATIONS_DIR"
-    auth0ClientId :: Text,
-    auth0Secret :: Text,
-    auth0Domain :: Text,
-    auth0LogoutRedirect :: Text,
-    auth0Callback :: Text,
-    testEmail :: Maybe Text,
-    apiKeyEncryptionSecretKey :: Text,
-    messagesPerPubsubPullBatch :: Int,
-    migrateAndInitializeOnStart :: Bool,
-    requestPubsubTopics :: [Text],
-    smtpHost :: Text,
-    smtpPort :: Int,
-    smtpUsername :: Text,
-    smtpPassword :: Text,
-    smtpSender :: Text
+  { databaseUrl :: Text -- "DATABASE_URL"
+  , port :: Int
+  , migrationsDir :: Text -- "MIGRATIONS_DIR"
+  , auth0ClientId :: Text
+  , auth0Secret :: Text
+  , auth0Domain :: Text
+  , auth0LogoutRedirect :: Text
+  , auth0Callback :: Text
+  , testEmail :: Maybe Text
+  , apiKeyEncryptionSecretKey :: Text
+  , messagesPerPubsubPullBatch :: Int
+  , migrateAndInitializeOnStart :: Bool
+  , requestPubsubTopics :: [Text]
+  , smtpHost :: Text
+  , smtpPort :: Int
+  , smtpUsername :: Text
+  , smtpPassword :: Text
+  , smtpSender :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromEnv)
@@ -44,10 +44,10 @@ instance Var [Text] where
 makeFieldLabelsNoPrefix ''EnvConfig
 
 data AuthContext = AuthContext
-  { env :: EnvConfig,
-    pool :: Pool.Pool Connection,
-    logger :: LogAction IO String,
-    projectCache :: Cache Projects.ProjectId Projects.ProjectCache
+  { env :: EnvConfig
+  , pool :: Pool.Pool Connection
+  , logger :: LogAction IO String
+  , projectCache :: Cache Projects.ProjectId Projects.ProjectCache
   }
 
 type DashboardM = ReaderT AuthContext Handler

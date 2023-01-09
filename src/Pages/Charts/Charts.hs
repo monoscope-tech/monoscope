@@ -60,11 +60,11 @@ throughput pid elemID qByM gByM intervalMinutes' limit' showLegend' (fromD, toD)
   let toDStr = from @String @Text $ maybe "" (iso8601Show . zonedTimeToUTC) toD
 
   div_
-    [ id_ $ "id-" <> elemID,
-      class_ "w-full h-full",
-      hxGet_ [text| /p/$pidT/charts_html/throughput?id=$elemID&show_legend=$showLegend&interval=$intervalMinutes&$limit&$queryStr&from=$fromDStr&to=$toDStr |],
-      hxTrigger_ "intersect",
-      hxSwap_ "outerHTML"
+    [ id_ $ "id-" <> elemID
+    , class_ "w-full h-full"
+    , hxGet_ [text| /p/$pidT/charts_html/throughput?id=$elemID&show_legend=$showLegend&interval=$intervalMinutes&$limit&$queryStr&from=$fromDStr&to=$toDStr |]
+    , hxTrigger_ "intersect"
+    , hxSwap_ "outerHTML"
     ]
     ""
 

@@ -31,10 +31,10 @@ import Text.RawString.QQ (r)
 import Web.FormUrlEncoded (FromForm)
 
 data FieldConfig = FieldConfig
-  { name :: Text,
-    fieldType :: Text,
-    typeGenFormat :: Text,
-    children :: [FieldConfig]
+  { name :: Text
+  , fieldType :: Text
+  , typeGenFormat :: Text
+  , children :: [FieldConfig]
   }
   deriving stock (Show, Generic)
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] FieldConfig
@@ -42,20 +42,20 @@ data FieldConfig = FieldConfig
 makeFieldLabelsNoPrefix ''FieldConfig
 
 data SeedConfig = SeedConfig
-  { from :: ZonedTime,
-    to :: ZonedTime,
-    method :: Text,
-    durationTo :: Int,
-    durationFrom :: Int,
-    statusCodesOneof :: [Int],
-    count :: Int,
-    path :: Text,
-    pathParams :: [FieldConfig],
-    queryParams :: [FieldConfig],
-    requestHeaders :: [FieldConfig],
-    responseHeaders :: [FieldConfig],
-    requestBody :: [FieldConfig],
-    responseBody :: [FieldConfig]
+  { from :: ZonedTime
+  , to :: ZonedTime
+  , method :: Text
+  , durationTo :: Int
+  , durationFrom :: Int
+  , statusCodesOneof :: [Int]
+  , count :: Int
+  , path :: Text
+  , pathParams :: [FieldConfig]
+  , queryParams :: [FieldConfig]
+  , requestHeaders :: [FieldConfig]
+  , responseHeaders :: [FieldConfig]
+  , requestBody :: [FieldConfig]
+  , responseBody :: [FieldConfig]
   }
   deriving stock (Show, Generic)
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SeedConfig
@@ -123,7 +123,7 @@ parseConfigToRequestMessages pid input = do
               responseHeaders <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField (config.responseHeaders)
               responseBody <- B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField (config.responseBody)
               requestBody <- B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField (config.responseBody)
-              pure RequestMessages.RequestMessage {..}
+              pure RequestMessages.RequestMessage{..}
       pure $ Right $ concat resp
 
 parseConfigToJson :: Projects.ProjectId -> ByteString -> IO (Either Yaml.ParseException [ByteString])
@@ -137,8 +137,8 @@ parseConfigToJson pid input = do
 --------------------------------------------------------------------------------------------------------
 
 data DataSeedingForm = DataSeedingForm
-  { environment :: Text,
-    config :: Text
+  { environment :: Text
+  , config :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
@@ -172,9 +172,9 @@ dataSeedingGetH sess pid = do
 
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess,
-            currProject = project,
-            pageTitle = "Data Seeding"
+          { sessM = Just sess
+          , currProject = project
+          , pageTitle = "Data Seeding"
           }
   pure $ bodyWrapper bwconf dataSeedingPage
 
@@ -185,11 +185,11 @@ dataSeedingPage = do
       div_ [class_ "flex justify-between mb-6"] $ do
         h2_ [class_ "text-slate-700 text-2xl font-medium"] "Bulk Seed Data via Config"
       form_
-        [ class_ "relative space-y-10 px-10 border border-gray-200 py-10  bg-white w-3/4 rounded-3xl",
-          hxTarget_ "#mainContent",
-          hxSwap_ "outerHTML",
-          hxPost_ "",
-          hxVals_
+        [ class_ "relative space-y-10 px-10 border border-gray-200 py-10  bg-white w-3/4 rounded-3xl"
+        , hxTarget_ "#mainContent"
+        , hxSwap_ "outerHTML"
+        , hxPost_ ""
+        , hxVals_
             [r|js: config:editor.getValue() 
             |]
         ]

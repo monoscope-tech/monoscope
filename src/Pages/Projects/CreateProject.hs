@@ -49,25 +49,25 @@ import Servant.Htmx
 import Web.FormUrlEncoded (FromForm)
 
 data CreateProjectForm = CreateProjectForm
-  { title :: Text,
-    description :: Text,
-    emails :: [Text],
-    permissions :: [ProjectMembers.Permissions],
-    isUpdate :: Bool,
-    projectId :: Text
+  { title :: Text
+  , description :: Text
+  , emails :: [Text]
+  , permissions :: [ProjectMembers.Permissions]
+  , isUpdate :: Bool
+  , projectId :: Text
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromForm, Default)
 
 data CreateProjectFormError = CreateProjectFormError
-  { titleE :: Maybe [String],
-    descriptionE :: Maybe [String]
+  { titleE :: Maybe [String]
+  , descriptionE :: Maybe [String]
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (Default)
 
 createProjectFormToModel :: Projects.ProjectId -> CreateProjectForm -> Projects.CreateProject
-createProjectFormToModel pid CreateProjectForm {..} = Projects.CreateProject {id = pid, ..}
+createProjectFormToModel pid CreateProjectForm{..} = Projects.CreateProject{id = pid, ..}
 
 createProjectFormV :: Monad m => Valor CreateProjectForm m CreateProjectFormError
 createProjectFormV =
@@ -84,8 +84,8 @@ createProjectGetH :: Sessions.PersistentSession -> DashboardM (Html ())
 createProjectGetH sess = do
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess,
-            pageTitle = "Endpoints"
+          { sessM = Just sess
+          , pageTitle = "Endpoints"
           }
   pure $ bodyWrapper bwconf $ createProjectBody False (def @CreateProjectForm) (def @CreateProjectFormError)
 
@@ -96,14 +96,14 @@ projectSettingsGetH sess pid = do
   Just proj <- liftIO $ withPool pool $ Projects.selectProjectForUser (sess.userId, pid)
   let createProj =
         CreateProjectForm
-          { title = proj.title,
-            description = proj.description,
-            emails = [],
-            permissions = [],
-            isUpdate = True,
-            projectId = Projects.projectIdText pid
+          { title = proj.title
+          , description = proj.description
+          , emails = []
+          , permissions = []
+          , isUpdate = True
+          , projectId = Projects.projectIdText pid
           }
-  let bwconf = (def :: BWConfig) {sessM = Just sess, currProject = Just proj, pageTitle = "Settings"}
+  let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just proj, pageTitle = "Settings"}
   pure $ bodyWrapper bwconf $ createProjectBody True createProj (def @CreateProjectFormError)
 
 ----------------------------------------------------------------------------------------------------------
@@ -186,20 +186,20 @@ createProjectBody isUpdate cp cpe =
         div_ $ do
           label_ [class_ "text-gray-400 mx-2 font-light text-sm"] "Title"
           input_
-            [ class_ "h-10 px-5 my-2 w-full text-sm bg-white text-black border-solid border border-gray-200 rounded-2xl ",
-              type_ "text",
-              id_ "title",
-              name_ "title",
-              value_ cp.title
+            [ class_ "h-10 px-5 my-2 w-full text-sm bg-white text-black border-solid border border-gray-200 rounded-2xl "
+            , type_ "text"
+            , id_ "title"
+            , name_ "title"
+            , value_ cp.title
             ]
         div_ [class_ "mt-5 "] $ do
           label_ [class_ "text-gray-400 mx-2  font-light text-sm"] "Description"
           textarea_
-            [ class_ " py-2 px-5 my-2 w-full text-sm bg-white text-black border-solid border border-gray-200 rounded-2xl border-1 ",
-              rows_ "4",
-              placeholder_ "Description",
-              id_ "description",
-              name_ "description"
+            [ class_ " py-2 px-5 my-2 w-full text-sm bg-white text-black border-solid border border-gray-200 rounded-2xl border-1 "
+            , rows_ "4"
+            , placeholder_ "Description"
+            , id_ "description"
+            , name_ "description"
             ]
             $ toHtml cp.description
         div_ [class_ $ "mt-6 " <> if isUpdate then "hidden" else ""] $ do
@@ -216,8 +216,8 @@ createProjectBody isUpdate cp cpe =
                   ]
                   $ img_ [src_ "/assets/svgs/delete.svg", class_ "cursor-pointer"]
           a_
-            [ class_ "bg-transparent inline-flex cursor-pointer mt-2",
-              [__| on click append #inviteTmpl.innerHTML to #inviteMemberSection then 
+            [ class_ "bg-transparent inline-flex cursor-pointer mt-2"
+            , [__| on click append #inviteTmpl.innerHTML to #inviteMemberSection then 
                         _hyperscript.processNode(#inviteMemberSection) then halt |]
             ]
             $ do
@@ -230,8 +230,8 @@ createProjectBody isUpdate cp cpe =
         h2_ [class_ "text-red-800 font-medium pb-4"] "Delete project. This is dangerous and unreversable"
         let pid = cp.projectId
         button_
-          [ class_ "btn btn-sm bg-red-800 text-white shadow-md hover:bg-red-700 cursor-pointer rounded-md",
-            hxGet_ [text|/p/$pid/delete|],
-            hxConfirm_ "Are you sure you want to delete this project?"
+          [ class_ "btn btn-sm bg-red-800 text-white shadow-md hover:bg-red-700 cursor-pointer rounded-md"
+          , hxGet_ [text|/p/$pid/delete|]
+          , hxConfirm_ "Are you sure you want to delete this project?"
           ]
           "Delete Project"

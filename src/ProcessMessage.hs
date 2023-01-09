@@ -133,24 +133,24 @@ processMessages' logger' _ conn' msgs projectCache' = do
       logger' <& "error running generated request message based insert queries" <> toString err
       pure []
     Right _ -> pure rmAckIds
-  where
-    projectCacheDefault :: Projects.ProjectCache
-    projectCacheDefault = Projects.ProjectCache {hosts = [], endpointHashes = [], shapeHashes = [], redactFieldslist = []}
+ where
+  projectCacheDefault :: Projects.ProjectCache
+  projectCacheDefault = Projects.ProjectCache{hosts = [], endpointHashes = [], shapeHashes = [], redactFieldslist = []}
 
-    processMessage :: LogAction IO String -> Pool Connection -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> Either Text (Maybe Text, RequestMessages.RequestMessage) -> IO (Either Text (Maybe Text, Query, [DBField], RequestDumps.RequestDump))
-    processMessage logger conn projectCache recMsgEither = runExceptT do
-      (rmAckId, recMsg) <- except recMsgEither
-      recId <- liftIO nextRandom
-      timestamp <- liftIO getZonedTime
-      let pid = Projects.ProjectId (recMsg.projectId)
+  processMessage :: LogAction IO String -> Pool Connection -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> Either Text (Maybe Text, RequestMessages.RequestMessage) -> IO (Either Text (Maybe Text, Query, [DBField], RequestDumps.RequestDump))
+  processMessage logger conn projectCache recMsgEither = runExceptT do
+    (rmAckId, recMsg) <- except recMsgEither
+    recId <- liftIO nextRandom
+    timestamp <- liftIO getZonedTime
+    let pid = Projects.ProjectId (recMsg.projectId)
 
-      -- We retrieve the projectCache object from the inmemory cache and if it doesn't exist,
-      -- we set the value in the db into the cache and return that.
-      -- This should help with our performance, since this project Cache is the only information we need in order to process
-      -- an apitoolkit requestmessage payload. So we're able to process payloads without hitting the database except for the actual db inserts.
-      projectCacheVal <- liftIO $ Cache.fetchWithCache projectCache pid \pid' -> do
-        mpjCache <- withPool conn $ Projects.projectCacheById pid'
-        pure $ fromMaybe projectCacheDefault mpjCache
+    -- We retrieve the projectCache object from the inmemory cache and if it doesn't exist,
+    -- we set the value in the db into the cache and return that.
+    -- This should help with our performance, since this project Cache is the only information we need in order to process
+    -- an apitoolkit requestmessage payload. So we're able to process payloads without hitting the database except for the actual db inserts.
+    projectCacheVal <- liftIO $ Cache.fetchWithCache projectCache pid \pid' -> do
+      mpjCache <- withPool conn $ Projects.projectCacheById pid'
+      pure $ fromMaybe projectCacheDefault mpjCache
 
-      (query, params, reqDump) <- except $ RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId
-      pure (rmAckId, query, params, reqDump)
+    (query, params, reqDump) <- except $ RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId
+    pure (rmAckId, query, params, reqDump)

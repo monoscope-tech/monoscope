@@ -23,20 +23,20 @@ import Servant.Htmx (HXTrigger)
 import Web.FormUrlEncoded (FromForm)
 
 data RedactFieldForm = RedactFieldForm
-  { path :: Text,
-    description :: Text,
-    endpointHash :: Maybe Text
+  { path :: Text
+  , description :: Text
+  , endpointHash :: Maybe Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
 
 redactedFieldsPostH :: Sessions.PersistentSession -> Projects.ProjectId -> RedactFieldForm -> DashboardM (Headers '[HXTrigger] (Html ()))
-redactedFieldsPostH sess pid RedactFieldForm {path, description, endpointHash} = do
+redactedFieldsPostH sess pid RedactFieldForm{path, description, endpointHash} = do
   pool <- asks pool
   env <- asks env
   redactedFieldId <- RedactedFields.RedactedFieldId <$> liftIO UUIDV4.nextRandom
   -- adding path, description, endpoints via record punning
-  let fieldToRedact = RedactedFields.RedactedField {id = redactedFieldId, projectId = pid, configuredVia = RedactedFields.Dashboard, ..}
+  let fieldToRedact = RedactedFields.RedactedField{id = redactedFieldId, projectId = pid, configuredVia = RedactedFields.Dashboard, ..}
 
   redactedFields <- liftIO $
     withPool pool $ do
@@ -58,9 +58,9 @@ redactedFieldsGetH sess pid = do
 
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess,
-            currProject = project,
-            pageTitle = "Redacted Fields"
+          { sessM = Just sess
+          , currProject = project
+          , pageTitle = "Redacted Fields"
           }
   pure $ bodyWrapper bwconf $ redactedFieldsPage pid redactedFields
 
@@ -72,16 +72,16 @@ redactedFieldsPage pid redactedFields = do
       button_ [class_ "btn-indigo", [__|on click remove .hidden from #redactFieldDialog |]] "Add a field to Redact"
     mainContent pid redactedFields
     div_
-      [ class_ "hidden fixed z-30 inset-0 overflow-y-auto",
-        role_ "dialog",
-        id_ "redactFieldDialog"
+      [ class_ "hidden fixed z-30 inset-0 overflow-y-auto"
+      , role_ "dialog"
+      , id_ "redactFieldDialog"
       ]
       $ do
         form_
-          [ hxPost_ $ "/p/" <> Projects.projectIdText pid <> "/redacted_fields",
-            class_ "flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0",
-            hxTarget_ "#main-content",
-            [__|on closeModal from body add .hidden to #redactFieldDialog then call me.reset()|]
+          [ hxPost_ $ "/p/" <> Projects.projectIdText pid <> "/redacted_fields"
+          , class_ "flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0"
+          , hxTarget_ "#main-content"
+          , [__|on closeModal from body add .hidden to #redactFieldDialog then call me.reset()|]
           ]
           $ do
             div_ [class_ "fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"] $ do
@@ -89,9 +89,9 @@ redactedFieldsPage pid redactedFields = do
             div_ [class_ "inline-block align-bottom bg-white rounded-lg px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full sm:p-6"] $ do
               div_ [class_ "hidden sm:block absolute top-0 right-0 pt-4 pr-4"] $ do
                 button_
-                  [ type_ "button",
-                    class_ "bg-white rounded-md text-gray-400 hover:text-gray-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500",
-                    [__|on click add .hidden to #redactFieldDialog|]
+                  [ type_ "button"
+                  , class_ "bg-white rounded-md text-gray-400 hover:text-gray-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                  , [__|on click add .hidden to #redactFieldDialog|]
                   ]
                   $ do
                     span_ [class_ "sr-only"] "Close"
@@ -114,9 +114,9 @@ redactedFieldsPage pid redactedFields = do
               div_ [class_ "mt-5 sm:mt-4 sm:flex sm:flex-row-reverse"] $ do
                 button_ [type_ "submit", class_ "w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-red-600 text-base font-medium text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 sm:ml-3 sm:w-auto sm:text-sm"] "Submit"
                 button_
-                  [ type_ "button",
-                    class_ "mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:text-gray-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:w-auto sm:text-sm",
-                    [__|on click add .hidden to #redactFieldDialog|]
+                  [ type_ "button"
+                  , class_ "mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:text-gray-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:w-auto sm:text-sm"
+                  , [__|on click add .hidden to #redactFieldDialog|]
                   ]
                   "Cancel"
 

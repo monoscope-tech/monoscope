@@ -57,9 +57,9 @@ apiGetH sess pid = do
 
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess,
-            currProject = project,
-            pageTitle = "API Keys"
+          { sessM = Just sess
+          , currProject = project
+          , pageTitle = "API Keys"
           }
   pure $ bodyWrapper bwconf $ apiKeysPage pid apiKeys
 
@@ -71,16 +71,16 @@ apiKeysPage pid apiKeys = do
       button_ [class_ "btn-indigo", [__|on click remove .hidden from #generateApiKeyDialog |]] "Create an API Key"
     mainContent pid apiKeys Nothing
     div_
-      [ class_ "hidden fixed z-30 inset-0 overflow-y-auto",
-        role_ "dialog",
-        id_ "generateApiKeyDialog"
+      [ class_ "hidden fixed z-30 inset-0 overflow-y-auto"
+      , role_ "dialog"
+      , id_ "generateApiKeyDialog"
       ]
       $ do
         form_
-          [ hxPost_ $ "/p/" <> Projects.projectIdText pid <> "/apis",
-            class_ "flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0",
-            hxTarget_ "#main-content",
-            [__|on closeModal from body add .hidden to #generateApiKeyDialog then call me.reset()|]
+          [ hxPost_ $ "/p/" <> Projects.projectIdText pid <> "/apis"
+          , class_ "flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0"
+          , hxTarget_ "#main-content"
+          , [__|on closeModal from body add .hidden to #generateApiKeyDialog then call me.reset()|]
           ]
           $ do
             div_ [class_ "fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"] $ do
@@ -88,9 +88,9 @@ apiKeysPage pid apiKeys = do
             div_ [class_ "inline-block align-bottom bg-white rounded-lg px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full sm:p-6"] $ do
               div_ [class_ "hidden sm:block absolute top-0 right-0 pt-4 pr-4"] $ do
                 button_
-                  [ type_ "button",
-                    class_ "bg-white rounded-md text-gray-400 hover:text-gray-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500",
-                    [__|on click add .hidden to #generateApiKeyDialog|]
+                  [ type_ "button"
+                  , class_ "bg-white rounded-md text-gray-400 hover:text-gray-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                  , [__|on click add .hidden to #generateApiKeyDialog|]
                   ]
                   $ do
                     span_ [class_ "sr-only"] "Close"
@@ -107,9 +107,9 @@ apiKeysPage pid apiKeys = do
               div_ [class_ "mt-5 sm:mt-4 sm:flex sm:flex-row-reverse"] $ do
                 button_ [type_ "submit", class_ "w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-red-600 text-base font-medium text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 sm:ml-3 sm:w-auto sm:text-sm"] "Submit"
                 button_
-                  [ type_ "button",
-                    class_ "mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:text-gray-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:w-auto sm:text-sm",
-                    [__|on click add .hidden to #generateApiKeyDialog|]
+                  [ type_ "button"
+                  , class_ "mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:text-gray-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:w-auto sm:text-sm"
+                  , [__|on click add .hidden to #generateApiKeyDialog|]
                   ]
                   "Cancel"
 
@@ -131,9 +131,9 @@ mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] $ do
               div_ [class_ "mt-4"] $ do
                 div_ [class_ "-mx-2 -my-1.5 flex"] $ do
                   button_
-                    [ type_ "button",
-                      class_ "bg-green-50 px-2 py-1.5 rounded-md text-sm font-medium text-green-800 hover:bg-green-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600",
-                      [__| 
+                    [ type_ "button"
+                    , class_ "bg-green-50 px-2 py-1.5 rounded-md text-sm font-medium text-green-800 hover:bg-green-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600"
+                    , [__| 
                       on click 
                         if 'clipboard' in window.navigator then 
                           call navigator.clipboard.writeText(#newKey's innerText)
@@ -143,9 +143,9 @@ mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] $ do
                     ]
                     "Copy Key"
                   button_
-                    [ type_ "button",
-                      class_ "ml-3 bg-green-50 px-2 py-1.5 rounded-md text-sm font-medium text-green-800 hover:bg-green-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600",
-                      [__|on click remove #apiFeedbackSection|]
+                    [ type_ "button"
+                    , class_ "ml-3 bg-green-50 px-2 py-1.5 rounded-md text-sm font-medium text-green-800 hover:bg-green-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600"
+                    , [__|on click remove #apiFeedbackSection|]
                     ]
                     "Dismiss"
   div_ [class_ "flex flex-col"] $ do

@@ -44,31 +44,31 @@ import Witch (from)
 -- relatively accurate analytic counts.
 -- NOTE: This record closely mirrors the order of fields in the table. Changing the orfer of fields here would break inserting and querying request dumps
 data RequestDump = RequestDump
-  { id :: UUID.UUID,
-    createdAt :: ZonedTime,
-    updatedAt :: ZonedTime,
-    projectId :: UUID.UUID,
-    host :: Text,
-    urlPath :: Text,
-    rawUrl :: Text,
-    pathParams :: AE.Value,
-    method :: Text,
-    referer :: Text,
-    protoMajor :: Int,
-    protoMinor :: Int,
-    duration :: CalendarDiffTime,
-    statusCode :: Int,
-    --
-    queryParams :: AE.Value,
-    requestHeaders :: AE.Value,
-    responseHeaders :: AE.Value,
-    requestBody :: AE.Value,
-    responseBody :: AE.Value,
-    --
-    endpointHash :: Text,
-    shapeHash :: Text,
-    formatHashes :: Vector Text,
-    fieldHashes :: Vector Text
+  { id :: UUID.UUID
+  , createdAt :: ZonedTime
+  , updatedAt :: ZonedTime
+  , projectId :: UUID.UUID
+  , host :: Text
+  , urlPath :: Text
+  , rawUrl :: Text
+  , pathParams :: AE.Value
+  , method :: Text
+  , referer :: Text
+  , protoMajor :: Int
+  , protoMinor :: Int
+  , duration :: CalendarDiffTime
+  , statusCode :: Int
+  , --
+    queryParams :: AE.Value
+  , requestHeaders :: AE.Value
+  , responseHeaders :: AE.Value
+  , requestBody :: AE.Value
+  , responseBody :: AE.Value
+  , --
+    endpointHash :: Text
+  , shapeHash :: Text
+  , formatHashes :: Vector Text
+  , fieldHashes :: Vector Text
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (ToRow, FromRow)
@@ -81,24 +81,24 @@ makeFieldLabelsNoPrefix ''RequestDump
 -- RequestDumpLogItem is used in the to query log items for the log query explorer on the dashboard. Each item here can be queried
 -- via the query language on said dashboard page.
 data RequestDumpLogItem = RequestDumpLogItem
-  { id :: UUID.UUID,
-    createdAt :: ZonedTime,
-    host :: Text,
-    urlPath :: Text,
-    method :: Text,
-    rawUrl :: Text,
-    referer :: Text,
-    --
-    pathParams :: AE.Value,
-    -- duration :: CalendarDiffTime,
-    statusCode :: Int,
-    --
-    queryParams :: AE.Value,
-    requestBody :: AE.Value,
-    responseBody :: AE.Value,
-    requestHeaders :: AE.Value,
-    responseHeaders :: AE.Value,
-    fullCount :: Int
+  { id :: UUID.UUID
+  , createdAt :: ZonedTime
+  , host :: Text
+  , urlPath :: Text
+  , method :: Text
+  , rawUrl :: Text
+  , referer :: Text
+  , --
+    pathParams :: AE.Value
+  , -- duration :: CalendarDiffTime,
+    statusCode :: Int
+  , --
+    queryParams :: AE.Value
+  , requestBody :: AE.Value
+  , responseBody :: AE.Value
+  , requestHeaders :: AE.Value
+  , responseHeaders :: AE.Value
+  , fullCount :: Int
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (ToRow, FromRow)
@@ -111,34 +111,34 @@ requestDumpLogItemUrlPath pid rd = "/p/" <> Projects.projectIdText pid <> "/log_
 
 requestDumpLogUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Text
 requestDumpLogUrlPath pid q cols fromM = [text|/p/$pidT/log_explorer?query=$queryT&cols=$colsT&from=$fromT|]
-  where
-    pidT = Projects.projectIdText pid
-    queryT = fromMaybe "" q
-    colsT = fromMaybe "" cols
-    fromT = fromMaybe "" fromM
+ where
+  pidT = Projects.projectIdText pid
+  queryT = fromMaybe "" q
+  colsT = fromMaybe "" cols
+  fromT = fromMaybe "" fromM
 
 selectRequestDumpByProject :: Projects.ProjectId -> Text -> Maybe Text -> DBT IO (Vector RequestDumpLogItem)
 selectRequestDumpByProject pid extraQuery fromM = query Select (Query $ encodeUtf8 q) (pid, fromT)
-  where
-    fromT = fromMaybe "infinity" fromM
-    extraQueryParsed = either error (\v -> if v == "" then "" else " AND " <> v) $ parseQueryStringToWhereClause extraQuery
-    q =
-      [text| SELECT id,created_at,host,url_path,method,raw_url,referer,
+ where
+  fromT = fromMaybe "infinity" fromM
+  extraQueryParsed = either error (\v -> if v == "" then "" else " AND " <> v) $ parseQueryStringToWhereClause extraQuery
+  q =
+    [text| SELECT id,created_at,host,url_path,method,raw_url,referer,
                     path_params,status_code,query_params,
                     request_body,response_body,request_headers,response_headers,
                     count(*) OVER() AS full_count
              FROM apis.request_dumps where project_id=? and created_at<? |]
-        <> extraQueryParsed
-        <> " order by created_at desc limit 200;"
+      <> extraQueryParsed
+      <> " order by created_at desc limit 200;"
 
 selectRequestDumpsByProjectForChart :: Projects.ProjectId -> Text -> DBT IO Text
 selectRequestDumpsByProjectForChart pid extraQuery = do
   (Only val) <- fromMaybe (Only "[]") <$> queryOne Select (Query $ encodeUtf8 q) (Only pid)
   pure val
-  where
-    extraQueryParsed = either error (\v -> if v == "" then "" else " AND " <> v) $ parseQueryStringToWhereClause extraQuery
-    q =
-      [text| SELECT COALESCE(NULLIF(json_agg(json_build_array(timeB, count))::text, '[null]'), '[]')::text from (SELECT time_bucket('1 minute', created_at) as timeB,count(*)
+ where
+  extraQueryParsed = either error (\v -> if v == "" then "" else " AND " <> v) $ parseQueryStringToWhereClause extraQuery
+  q =
+    [text| SELECT COALESCE(NULLIF(json_agg(json_build_array(timeB, count))::text, '[null]'), '[]')::text from (SELECT time_bucket('1 minute', created_at) as timeB,count(*)
                FROM apis.request_dumps where project_id=? $extraQueryParsed  GROUP BY timeB) ts|]
 
 -- selectRequestDumpsByProjectForChart :: Projects.ProjectId -> Text -> DBT IO Text
@@ -166,14 +166,14 @@ selectRequestDumpsByProjectForChart pid extraQuery = do
 
 bulkInsertRequestDumps :: [RequestDump] -> DBT IO Int64
 bulkInsertRequestDumps = executeMany q
-  where
-    q = [sql| INSERT INTO apis.request_dumps VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?); |]
+ where
+  q = [sql| INSERT INTO apis.request_dumps VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?); |]
 
 selectRequestDumpByProjectAndId :: Projects.ProjectId -> ZonedTime -> UUID.UUID -> DBT IO (Maybe RequestDumpLogItem)
 selectRequestDumpByProjectAndId pid createdAt rdId = queryOne Select q (createdAt, pid, rdId)
-  where
-    q =
-      [sql|SELECT   id,created_at,host,url_path,method,raw_url,referer,
+ where
+  q =
+    [sql|SELECT   id,created_at,host,url_path,method,raw_url,referer,
                     path_params,status_code,query_params,
                     request_body,response_body,request_headers,response_headers,
                     0 AS full_count
@@ -181,9 +181,9 @@ selectRequestDumpByProjectAndId pid createdAt rdId = queryOne Select q (createdA
 
 selectReqLatenciesRolledBySteps :: Int -> Int -> Projects.ProjectId -> Text -> Text -> DBT IO (Vector (Int, Int))
 selectReqLatenciesRolledBySteps maxv steps pid urlPath method = query Select q (maxv, steps, steps, steps, pid, urlPath, method)
-  where
-    q =
-      [sql| 
+ where
+  q =
+    [sql| 
 select duration_steps, count(id)
 	FROM generate_series(0, ?, ?) AS duration_steps
 	LEFT OUTER JOIN apis.request_dumps on (duration_steps = round((EXTRACT(epoch FROM duration)/1000000)/?)*? 
@@ -196,13 +196,13 @@ select duration_steps, count(id)
 -- TODO: expand this into a view
 selectReqLatenciesRolledByStepsForProject :: Int -> Int -> Projects.ProjectId -> (Maybe ZonedTime, Maybe ZonedTime) -> DBT IO (Vector (Int, Int))
 selectReqLatenciesRolledByStepsForProject maxv steps pid dateRange = query Select (Query $ from @Text q) (maxv, steps, steps, steps, pid)
-  where
-    dateRangeStr = from @String $ case dateRange of
-      (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
-      (Just a, Just b) -> "AND created_at BETWEEN '" <> formatTime defaultTimeLocale "%F %R" a <> "' AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
-      _ -> ""
-    q =
-      [text| 
+ where
+  dateRangeStr = from @String $ case dateRange of
+    (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
+    (Just a, Just b) -> "AND created_at BETWEEN '" <> formatTime defaultTimeLocale "%F %R" a <> "' AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
+    _ -> ""
+  q =
+    [text| 
 select duration_steps, count(id)
 	FROM generate_series(0, ?, ?) AS duration_steps
 	LEFT OUTER JOIN apis.request_dumps on (duration_steps = round((EXTRACT(epoch FROM duration)/1000000)/?)*?
@@ -220,10 +220,10 @@ throughputBy pid groupByM endpointHash shapeHash formatHash interval limitM extr
   let extraQueryParsed = hush . parseQueryStringToWhereClause =<< extraQuery
   let condlist =
         catMaybes
-          [ " endpoint_hash=? " <$ endpointHash,
-            " shape_hash=? " <$ shapeHash,
-            " ?=ANY(format_hashes) " <$ formatHash,
-            extraQueryParsed
+          [ " endpoint_hash=? " <$ endpointHash
+          , " shape_hash=? " <$ shapeHash
+          , " ?=ANY(format_hashes) " <$ formatHash
+          , extraQueryParsed
           ]
   let groupBy' = fromMaybe @Text "" $ mappend " ," <$> groupByM
   let (groupBy, groupByFields) = case groupByM of

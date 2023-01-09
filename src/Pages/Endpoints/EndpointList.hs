@@ -28,9 +28,9 @@ endpointListH sess pid = do
 
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess,
-            currProject = project,
-            pageTitle = "Endpoints"
+          { sessM = Just sess
+          , currProject = project
+          , pageTitle = "Endpoints"
           }
   pure $ bodyWrapper bwconf $ endpointList endpointStats
 

@@ -41,6 +41,6 @@ mIcon_ mIcon classes = svg_ [class_ $ "inline-block icon " <> classes] $ use_ [h
 
 deleteParam :: Text -> Text -> Text
 deleteParam key url = if needle == "" then url else replace needle "" url
-  where
-    needle = (url =~ reg :: Text)
-    reg = "&" <> key <> "(=[^&]*)?|^" <> key <> "(=[^&]*)?&?" :: Text
+ where
+  needle = (url =~ reg :: Text)
+  reg = "&" <> key <> "(=[^&]*)?|^" <> key <> "(=[^&]*)?&?" :: Text

@@ -30,17 +30,17 @@ import Witch (from)
 
 timePickerItems :: [(Text, Text)]
 timePickerItems =
-  [ ("1H", "Last Hour"),
-    ("24H", "Last 24 Hours"),
-    ("7D", "Last 7 days"),
-    ("14D", "Last 14 days")
+  [ ("1H", "Last Hour")
+  , ("24H", "Last 24 Hours")
+  , ("7D", "Last 7 days")
+  , ("14D", "Last 14 days")
   ]
 
 data ParamInput = ParamInput
-  { currentURL :: Text,
-    sinceStr :: Maybe Text,
-    dateRange :: (Maybe ZonedTime, Maybe ZonedTime),
-    currentPickerTxt :: Text
+  { currentURL :: Text
+  , sinceStr :: Maybe Text
+  , dateRange :: (Maybe ZonedTime, Maybe ZonedTime)
+  , currentPickerTxt :: Text
   }
 
 dashboardGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
@@ -78,16 +78,16 @@ dashboardGetH sess pid fromDStr toDStr sinceStr = do
   let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess,
-            currProject = project,
-            pageTitle = "Dashboard"
+          { sessM = Just sess
+          , currProject = project
+          , pageTitle = "Dashboard"
           }
   currTime <- liftIO getCurrentTime
   let currentURL = "/p/" <> Projects.projectIdText pid <> "?from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
   let currentPickerTxt = case sinceStr of
         Just a -> a
         Nothing -> maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> "-" <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD
-  let paramInput = ParamInput {currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt}
+  let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt}
   pure $ bodyWrapper bwconf $ dashboardPage paramInput currTime projectRequestStats reqLatenciesRolledByStepsJ anomalies (fromD, toD)
 
 dashboardPage :: ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Text -> Vector Anomalies.AnomalyVM -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
@@ -96,8 +96,8 @@ dashboardPage paramInput currTime projectStats reqLatenciesRolledByStepsJ anomal
   section_ [class_ "p-8 container mx-auto px-4 space-y-12 pb-24"] $ do
     div_ [class_ "relative p-1 "] do
       a_
-        [ class_ "relative p-2 border border-1 border-black-200 space-x-2  inline-block relative cursor-pointer",
-          [__| on click toggle .hidden on #timepickerBox|]
+        [ class_ "relative p-2 border border-1 border-black-200 space-x-2  inline-block relative cursor-pointer"
+        , [__| on click toggle .hidden on #timepickerBox|]
         ]
         do
           input_ [id_ "startTime", type_ "hidden"]
@@ -105,15 +105,15 @@ dashboardPage paramInput currTime projectStats reqLatenciesRolledByStepsJ anomal
           mIcon_ "clock" "h-4 w-4"
           span_ [class_ "inline-block"] $ toHtml paramInput.currentPickerTxt
           img_
-            [ src_ "/assets/svgs/cheveron-down.svg",
-              class_ "h-4 w-4 inline-block"
+            [ src_ "/assets/svgs/cheveron-down.svg"
+            , class_ "h-4 w-4 inline-block"
             ]
       div_ [id_ "timepickerBox", class_ "hidden absolute z-10 mt-1 max-h-60 w-84 overflow-auto rounded-md bg-white py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm"] do
         timePickerItems
           & mapM \(val, title) -> do
             a_
-              [ class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ",
-                href_ $ currentURL' <> "&since=" <> val
+              [ class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 "
+              , href_ $ currentURL' <> "&since=" <> val
               ]
               $ toHtml title
         a_ [class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ", onclick_ "picker.show()"] "Custom date range"
@@ -158,7 +158,7 @@ statBox title val = do
       small_ $ toHtml title
 
 dStats :: Projects.ProjectRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
-dStats projReqStats@Projects.ProjectRequestStats {..} reqLatenciesRolledByStepsJ dateRange = do
+dStats projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledByStepsJ dateRange = do
   let _ = min
   when (projReqStats.totalRequests == 0) do
     section_ [class_ "card-round p-5 sm:p-10 space-y-4 text-lg"] $ do
@@ -171,8 +171,8 @@ dStats projReqStats@Projects.ProjectRequestStats {..} reqLatenciesRolledByStepsJ
       div_ [class_ "flex flex-row"] $ do
         a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]] $
           img_
-            [ src_ "/assets/svgs/cheveron-down.svg",
-              class_ "h-4 mr-3 mt-1 w-4"
+            [ src_ "/assets/svgs/cheveron-down.svg"
+            , class_ "h-4 mr-3 mt-1 w-4"
             ]
         span_ [class_ "text-lg text-slate-700"] "Stats"
 

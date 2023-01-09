@@ -1,8 +1,14 @@
 indentation: 2
-comma-style: trailing
-record-brace-space: true
-indent-wheres: true
-diff-friendly-import-export: true
-respectful: false # don't be too opinionated about newlines etc.
-haddock-style: single-line
+function-arrows: trailing
+comma-style: leading
+import-export-style: diff-friendly
+indent-wheres: false
+record-brace-space: false
 newlines-between-decls: 1
+haddock-style: single-line
+haddock-style-module:
+let-style: auto
+in-style: right-align
+respectful: true
+fixities: []
+unicode: never

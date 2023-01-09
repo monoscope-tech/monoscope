@@ -34,18 +34,18 @@ shapeIdText = UUID.toText . unShapeId
 -- A shape is a deterministic representation of a request-response combination for a given endpoint.
 -- We usually expect multiple shapes per endpoint. Eg a shape for a success request-response and another for an error response.
 data Shape = Shape
-  { id :: ShapeId,
-    createdAt :: ZonedTime,
-    updatedAt :: ZonedTime,
-    projectId :: Projects.ProjectId,
-    endpointHash :: Text,
-    queryParamsKeypaths :: Vector Text,
-    requestBodyKeypaths :: Vector Text,
-    responseBodyKeypaths :: Vector Text,
-    requestHeadersKeypaths :: Vector Text,
-    responseHeadersKeypaths :: Vector Text,
-    fieldHashes :: Vector Text,
-    hash :: Text
+  { id :: ShapeId
+  , createdAt :: ZonedTime
+  , updatedAt :: ZonedTime
+  , projectId :: Projects.ProjectId
+  , endpointHash :: Text
+  , queryParamsKeypaths :: Vector Text
+  , requestBodyKeypaths :: Vector Text
+  , responseBodyKeypaths :: Vector Text
+  , requestHeadersKeypaths :: Vector Text
+  , responseHeadersKeypaths :: Vector Text
+  , fieldHashes :: Vector Text
+  , hash :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, Default)
@@ -57,40 +57,40 @@ Optics.TH.makeFieldLabelsNoPrefix ''Shape
 
 insertShapeQueryAndParam :: Shape -> (Query, [DBField])
 insertShapeQueryAndParam shape = (q, params)
-  where
-    q =
-      [sql| 
+ where
+  q =
+    [sql| 
             INSERT INTO apis.shapes
             (project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING; 
           |]
-    params =
-      [ MkDBField $ shape.projectId,
-        MkDBField $ shape.endpointHash,
-        MkDBField $ shape.queryParamsKeypaths,
-        MkDBField $ shape.requestBodyKeypaths,
-        MkDBField $ shape.responseBodyKeypaths,
-        MkDBField $ shape.requestHeadersKeypaths,
-        MkDBField $ shape.responseHeadersKeypaths,
-        MkDBField $ shape.fieldHashes,
-        MkDBField $ shape.hash
-      ]
+  params =
+    [ MkDBField $ shape.projectId
+    , MkDBField $ shape.endpointHash
+    , MkDBField $ shape.queryParamsKeypaths
+    , MkDBField $ shape.requestBodyKeypaths
+    , MkDBField $ shape.responseBodyKeypaths
+    , MkDBField $ shape.requestHeadersKeypaths
+    , MkDBField $ shape.responseHeadersKeypaths
+    , MkDBField $ shape.fieldHashes
+    , MkDBField $ shape.hash
+    ]
 
 insertShape :: Shape -> DBT IO ()
 insertShape shape = void $ execute Insert q options
-  where
-    q =
-      [sql| 
+ where
+  q =
+    [sql| 
             INSERT INTO apis.shapes
             (project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, response_headers_keypaths)
             VALUES (?, ?, ?, ?, ?, ?, ?) 
           |]
-    options =
-      ( shape.projectId,
-        shape.endpointHash,
-        shape.queryParamsKeypaths,
-        shape.requestBodyKeypaths,
-        shape.responseBodyKeypaths,
-        shape.requestHeadersKeypaths,
-        shape.responseHeadersKeypaths
-      )
+  options =
+    ( shape.projectId
+    , shape.endpointHash
+    , shape.queryParamsKeypaths
+    , shape.requestBodyKeypaths
+    , shape.responseBodyKeypaths
+    , shape.requestHeadersKeypaths
+    , shape.responseHeadersKeypaths
+    )

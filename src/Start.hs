@@ -69,10 +69,10 @@ startApp = do
         projectCache <- newCache (Just $ TimeSpec (60 * 60) 0) :: IO (Cache Projects.ProjectId Projects.ProjectCache) -- 60*60secs or 1 hour TTL
         let serverCtx =
               Config.AuthContext
-                { env = envConfig,
-                  pool = poolConn,
-                  logger = logger,
-                  projectCache = projectCache
+                { env = envConfig
+                , pool = poolConn
+                , logger = logger
+                , projectCache = projectCache
                 }
 
         logger <& "\n"
@@ -81,8 +81,8 @@ startApp = do
 
         let ojStartArgs =
               OJCli.UIStartArgs
-                { uistartAuth = OJCli.AuthNone,
-                  uistartPort = 5002
+                { uistartAuth = OJCli.AuthNone
+                , uistartPort = 5002
                 }
 
         let ojLogger logLevel logEvent = logger <& show (logLevel, logEvent)
@@ -90,10 +90,10 @@ startApp = do
         let ojCfg = OJConfig.mkUIConfig ojLogger ojTable poolConn id
         asyncs <-
           sequence
-            [ async (pubsubService logger envConfig poolConn projectCache),
-              async (run (Config.port envConfig) $ Server.app logger poolConn serverCtx),
-              async $ BackgroundJobs.jobsWorkerInit poolConn logger envConfig,
-              async $ OJCli.defaultWebUI ojStartArgs ojCfg
+            [ async (pubsubService logger envConfig poolConn projectCache)
+            , async (run (Config.port envConfig) $ Server.app logger poolConn serverCtx)
+            , async $ BackgroundJobs.jobsWorkerInit poolConn logger envConfig
+            , async $ OJCli.defaultWebUI ojStartArgs ojCfg
             ]
         _ <- waitAnyCancel asyncs
         pass

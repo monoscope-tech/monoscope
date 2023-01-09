@@ -128,38 +128,38 @@ instance FromField AnomalyActions where
           Nothing -> returnError ConversionFailed f $ "Conversion error: Expected 'anomaly_actions' enum, got " <> decodeUtf8 bs <> " instead."
 
 data AnomalyVM = AnomalyVM
-  { id :: AnomalyId,
-    createdAt :: ZonedTime,
-    updatedAt :: ZonedTime,
-    projectId :: Projects.ProjectId,
-    acknowlegedAt :: Maybe ZonedTime,
-    acknowlegedBy :: Maybe Users.UserId,
-    anomalyType :: AnomalyTypes,
-    action :: AnomalyActions,
-    targetHash :: Text,
-    --
-    shapeId :: Maybe Shapes.ShapeId,
-    shapeNewUniqueFields :: Vector Text,
-    shapeDeletedFields :: Vector Text,
-    shapeUpdatedFieldFormats :: Vector Text,
-    --
-    fieldId :: Maybe Fields.FieldId,
-    fieldKey :: Maybe Text,
-    fieldKeyPath :: Maybe Text,
-    fieldCategory :: Maybe Fields.FieldCategoryEnum,
-    fieldFormat :: Maybe Text,
-    --
-    formatId :: Maybe Formats.FormatId,
-    formatType :: Maybe Fields.FieldTypes, -- fieldFormat in the formats table
-    formatExamples :: Maybe (Vector Text),
-    --
-    endpointId :: Maybe Endpoints.EndpointId,
-    endpointMethod :: Maybe Text,
-    endpointUrlPath :: Maybe Text,
-    --
-    archivedAt :: Maybe ZonedTime,
-    eventsCount14d :: Int,
-    lastSeen :: ZonedTime
+  { id :: AnomalyId
+  , createdAt :: ZonedTime
+  , updatedAt :: ZonedTime
+  , projectId :: Projects.ProjectId
+  , acknowlegedAt :: Maybe ZonedTime
+  , acknowlegedBy :: Maybe Users.UserId
+  , anomalyType :: AnomalyTypes
+  , action :: AnomalyActions
+  , targetHash :: Text
+  , --
+    shapeId :: Maybe Shapes.ShapeId
+  , shapeNewUniqueFields :: Vector Text
+  , shapeDeletedFields :: Vector Text
+  , shapeUpdatedFieldFormats :: Vector Text
+  , --
+    fieldId :: Maybe Fields.FieldId
+  , fieldKey :: Maybe Text
+  , fieldKeyPath :: Maybe Text
+  , fieldCategory :: Maybe Fields.FieldCategoryEnum
+  , fieldFormat :: Maybe Text
+  , --
+    formatId :: Maybe Formats.FormatId
+  , formatType :: Maybe Fields.FieldTypes -- fieldFormat in the formats table
+  , formatExamples :: Maybe (Vector Text)
+  , --
+    endpointId :: Maybe Endpoints.EndpointId
+  , endpointMethod :: Maybe Text
+  , endpointUrlPath :: Maybe Text
+  , --
+    archivedAt :: Maybe ZonedTime
+  , eventsCount14d :: Int
+  , lastSeen :: ZonedTime
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, Default)
@@ -171,32 +171,32 @@ makeFieldLabelsNoPrefix ''AnomalyVM
 
 getAnomalyVM :: Projects.ProjectId -> Text -> DBT IO (Maybe AnomalyVM)
 getAnomalyVM pid hash = queryOne Select q (pid, hash)
-  where
-    q = [sql| SELECT *,0,now() FROM apis.anomalies_vm WHERE project_id=? AND target_hash=?|]
+ where
+  q = [sql| SELECT *,0,now() FROM apis.anomalies_vm WHERE project_id=? AND target_hash=?|]
 
 selectAnomalies :: Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe Bool -> Maybe Bool -> Maybe Text -> DBT IO (Vector AnomalyVM)
 selectAnomalies pid endpointM isAcknowleged isArchived sortM = query Select (Query $ from @Text q) (MkDBField pid : paramList)
-  where
-    boolToNullSubQ a = if a then " not " else ""
-    condlist =
-      catMaybes
-        [ (\a -> " aan.acknowleged_at is" <> a <> " null ") <$> (boolToNullSubQ <$> isAcknowleged),
-          (\a -> " aan.archived_at is" <> a <> " null ") <$> (boolToNullSubQ <$> isArchived),
-          "endpoint_id=?" <$ endpointM
-        ]
-    cond
-      | null condlist = mempty
-      | otherwise = "AND " <> mconcat (intersperse " AND " condlist)
-    paramList = mapMaybe (MkDBField <$>) [endpointM]
-    orderBy = case sortM of
-      Nothing -> "avm.created_at desc"
-      Just "first_seen" -> "avm.created_at desc"
-      Just "events" -> "events desc"
-      Just "last_seen" -> "last_seen desc"
-      _ -> "avm.created_at desc"
+ where
+  boolToNullSubQ a = if a then " not " else ""
+  condlist =
+    catMaybes
+      [ (\a -> " aan.acknowleged_at is" <> a <> " null ") <$> (boolToNullSubQ <$> isAcknowleged)
+      , (\a -> " aan.archived_at is" <> a <> " null ") <$> (boolToNullSubQ <$> isArchived)
+      , "endpoint_id=?" <$ endpointM
+      ]
+  cond
+    | null condlist = mempty
+    | otherwise = "AND " <> mconcat (intersperse " AND " condlist)
+  paramList = mapMaybe (MkDBField <$>) [endpointM]
+  orderBy = case sortM of
+    Nothing -> "avm.created_at desc"
+    Just "first_seen" -> "avm.created_at desc"
+    Just "events" -> "events desc"
+    Just "last_seen" -> "last_seen desc"
+    _ -> "avm.created_at desc"
 
-    q =
-      [text|
+  q =
+    [text|
 SELECT avm.id, avm.created_at, avm.updated_at, avm.project_id, aan.acknowleged_at, aan.acknowleged_by, avm.anomaly_type, avm.action, avm.target_hash,
        avm.shape_id, avm.new_unique_fields, avm.deleted_fields, avm.updated_field_formats, 
        avm.field_id, avm.field_key, avm.field_key_path, avm.field_category, avm.field_format, 

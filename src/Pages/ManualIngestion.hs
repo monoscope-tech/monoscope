@@ -21,43 +21,43 @@ import Utils
 import Web.FormUrlEncoded (FromForm)
 
 data RequestMessageForm = RequestMessageForm
-  { timestamp :: ZonedTime,
-    host :: Text,
-    method :: Text,
-    referer :: Text,
-    urlPath :: Text,
-    pathParams :: Text,
-    protoMajor :: Int,
-    protoMinor :: Int,
-    duration :: Int,
-    requestHeaders :: Text,
-    responseHeaders :: Text,
-    queryParams :: Text,
-    requestBody :: Text,
-    responseBody :: Text,
-    statusCode :: Int
+  { timestamp :: ZonedTime
+  , host :: Text
+  , method :: Text
+  , referer :: Text
+  , urlPath :: Text
+  , pathParams :: Text
+  , protoMajor :: Int
+  , protoMinor :: Int
+  , duration :: Int
+  , requestHeaders :: Text
+  , responseHeaders :: Text
+  , queryParams :: Text
+  , requestBody :: Text
+  , responseBody :: Text
+  , statusCode :: Int
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
 
 reqMsgFormToReqMsg :: UUID.UUID -> RequestMessageForm -> Either Text RequestMessages.RequestMessage
-reqMsgFormToReqMsg pid RequestMessageForm {urlPath, ..} = do
+reqMsgFormToReqMsg pid RequestMessageForm{urlPath, ..} = do
   reqHeaders <- eitherStrToText $ eitherDecodeStrict (encodeUtf8 @Text @ByteString requestHeaders) :: Either Text Value
   respHeaders <- eitherStrToText $ eitherDecodeStrict (encodeUtf8 @Text @ByteString responseHeaders) :: Either Text Value
   queryParams' <- eitherStrToText $ eitherDecodeStrict (encodeUtf8 @Text @ByteString queryParams) :: Either Text Value
   pathParams' <- eitherStrToText $ eitherDecodeStrict (encodeUtf8 @Text @ByteString pathParams) :: Either Text Value
   Right
     RequestMessages.RequestMessage
-      { projectId = pid,
-        requestHeaders = reqHeaders,
-        responseHeaders = respHeaders,
-        queryParams = queryParams',
-        pathParams = pathParams',
-        requestBody = B64.encodeBase64 requestBody,
-        responseBody = B64.encodeBase64 responseBody,
-        sdkType = RequestMessages.GoGin,
-        rawUrl = urlPath,
-        ..
+      { projectId = pid
+      , requestHeaders = reqHeaders
+      , responseHeaders = respHeaders
+      , queryParams = queryParams'
+      , pathParams = pathParams'
+      , requestBody = B64.encodeBase64 requestBody
+      , responseBody = B64.encodeBase64 responseBody
+      , sdkType = RequestMessages.GoGin
+      , rawUrl = urlPath
+      , ..
       }
 
 -- TODO:
@@ -101,9 +101,9 @@ manualIngestGetH sess pid = do
 
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess,
-            currProject = project,
-            pageTitle = "ManualIngest"
+          { sessM = Just sess
+          , currProject = project
+          , pageTitle = "ManualIngest"
           }
   pure $ bodyWrapper bwconf manualIngestPage
 
@@ -111,9 +111,9 @@ manualIngestPage :: Html ()
 manualIngestPage = do
   section_ [id_ "mainContent", class_ "h-full overflow-scroll"] $ do
     script_
-      [ src_ "https://cdnjs.cloudflare.com/ajax/libs/jsoneditor/9.7.2/jsoneditor.min.js",
-        integrity_ "sha512-9T9AIzkTI9pg694MCTReaZ0vOimxuTKXA15Gin+AZ4eycmg85iEXGX811BAjyY+NOcDCdlA9k2u9SqVAyNqFkQ==",
-        crossorigin_ "anonymous"
+      [ src_ "https://cdnjs.cloudflare.com/ajax/libs/jsoneditor/9.7.2/jsoneditor.min.js"
+      , integrity_ "sha512-9T9AIzkTI9pg694MCTReaZ0vOimxuTKXA15Gin+AZ4eycmg85iEXGX811BAjyY+NOcDCdlA9k2u9SqVAyNqFkQ=="
+      , crossorigin_ "anonymous"
       ]
       ("" :: Text)
     link_ [rel_ "stylesheet", type_ "text/css", href_ "https://cdnjs.cloudflare.com/ajax/libs/jsoneditor/9.7.2/jsoneditor.min.css"]
@@ -121,11 +121,11 @@ manualIngestPage = do
       div_ [class_ "flex justify-between mb-6"] $ do
         h2_ [class_ "text-slate-700 text-2xl font-medium"] "API Keys"
       form_
-        [ class_ "relative space-y-10 px-10 border border-gray-200 py-10  bg-white w-3/4 rounded-3xl",
-          hxTarget_ "#mainContent",
-          hxSwap_ "outerHTML",
-          hxPost_ "",
-          hxVals_
+        [ class_ "relative space-y-10 px-10 border border-gray-200 py-10  bg-white w-3/4 rounded-3xl"
+        , hxTarget_ "#mainContent"
+        , hxSwap_ "outerHTML"
+        , hxPost_ ""
+        , hxVals_
             [r|js: requestBody:reqBodyEditor.getText(), 
                    responseBody: respBodyEditor.getText(),
                    queryParams: queryParamsEditor.getText(),
@@ -191,10 +191,10 @@ inputText title name = do
   div_ $ do
     label_ [class_ "text-gray-400 mx-2  text-sm"] $ toHtml $ title <> " [" <> name <> "]"
     input_
-      [ class_ "h-10 px-5 my-2 w-full text-sm bg-white text-black border-solid border border-gray-200 rounded-2xl  ",
-        type_ "text",
-        id_ name,
-        name_ name
+      [ class_ "h-10 px-5 my-2 w-full text-sm bg-white text-black border-solid border border-gray-200 rounded-2xl  "
+      , type_ "text"
+      , id_ name
+      , name_ name
       ]
 
 inputTextDatalist :: Text -> Text -> [Text] -> Html ()
@@ -202,11 +202,11 @@ inputTextDatalist title name datalist = do
   div_ $ do
     label_ [class_ "text-gray-400 mx-2  text-sm"] $ toHtml $ title <> " [" <> name <> "]"
     input_
-      [ class_ "h-10 px-5 my-2 w-full text-sm bg-white text-black border-solid border border-gray-200 rounded-2xl  ",
-        type_ "text",
-        id_ name,
-        name_ name,
-        list_ $ name <> "-list"
+      [ class_ "h-10 px-5 my-2 w-full text-sm bg-white text-black border-solid border border-gray-200 rounded-2xl  "
+      , type_ "text"
+      , id_ name
+      , name_ name
+      , list_ $ name <> "-list"
       ]
     datalist_ [id_ $ name <> "-list"] $ do
       datalist & mapM_ (\it -> option_ [value_ it] $ toHtml it)
@@ -216,9 +216,9 @@ inputTextArea title name = do
   div_ $ do
     label_ [class_ "text-gray-400 mx-2  text-sm"] $ toHtml $ title <> " [" <> name <> "]"
     div_
-      [ class_ "w-full text-sm bg-white text-black border-solid border border-gray-200 rounded-2xl",
-        id_ name,
-        name_ name
+      [ class_ "w-full text-sm bg-white text-black border-solid border border-gray-200 rounded-2xl"
+      , id_ name
+      , name_ name
       ]
       ""
 
@@ -227,11 +227,11 @@ inputDatetime name = do
   div_ $ do
     label_ [class_ "text-gray-400 mx-2  text-sm"] $ toHtml name
     input_
-      [ class_ "h-10 px-5 my-2 w-full text-sm bg-white text-black border-solid border border-gray-200 rounded-2xl  ",
-        type_ "datetime-local",
-        id_ name,
-        name_ name,
-        pattern_ "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}"
+      [ class_ "h-10 px-5 my-2 w-full text-sm bg-white text-black border-solid border border-gray-200 rounded-2xl  "
+      , type_ "datetime-local"
+      , id_ name
+      , name_ name
+      , pattern_ "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}"
       ]
 
 inputInt :: Text -> Text -> Int -> Html ()
@@ -239,68 +239,68 @@ inputInt title name value = do
   div_ $ do
     label_ [class_ "text-gray-400 mx-2  text-sm"] $ toHtml $ title <> " [" <> name <> "]"
     input_
-      [ class_ "h-10 px-5 my-2 w-full text-sm bg-white text-black border-solid border border-gray-200 rounded-2xl  ",
-        type_ "number",
-        id_ name,
-        name_ name,
-        value_ $ show value,
-        lang_ "en-150"
+      [ class_ "h-10 px-5 my-2 w-full text-sm bg-white text-black border-solid border border-gray-200 rounded-2xl  "
+      , type_ "number"
+      , id_ name
+      , name_ name
+      , value_ $ show value
+      , lang_ "en-150"
       ]
 
 httpStatusCodes :: [(Text, Text)]
 httpStatusCodes =
-  [ ("100", "Continue"),
-    ("101", "Switching Protocols"),
-    ("103", "Early Hints"),
-    ("200", "OK"),
-    ("201", "Created"),
-    ("202", "Accepted"),
-    ("203", "Non-Authoritative Information"),
-    ("204", "No Content"),
-    ("205", "Reset Content"),
-    ("206", "Partial Content"),
-    ("300", "Multiple Choices"),
-    ("301", "Moved Permanently"),
-    ("302", "Found"),
-    ("303", "See Other"),
-    ("304", "Not Modified"),
-    ("307", "Temporary Redirect"),
-    ("308", "Permanent Redirect"),
-    ("400", "Bad Request"),
-    ("401", "Unauthorized"),
-    ("402", "Payment Required"),
-    ("403", "Forbidden"),
-    ("404", "Not Found"),
-    ("405", "Method Not Allowed"),
-    ("406", "Not Acceptable"),
-    ("407", "Proxy Authentication Required"),
-    ("408", "Request Timeout"),
-    ("409", "Conflict"),
-    ("410", "Gone"),
-    ("411", "Length Required"),
-    ("412", "Precondition Failed"),
-    ("413", "Payload Too Large"),
-    ("414", "URI Too Long"),
-    ("415", "Unsupported Media Type"),
-    ("416", "Range Not Satisfiable"),
-    ("417", "Expectation Failed"),
-    ("418", "I'm a teapot"),
-    ("422", "Unprocessable Entity"),
-    ("425", "Too Early"),
-    ("426", "Upgrade Required"),
-    ("428", "Precondition Required"),
-    ("429", "Too Many Requests"),
-    ("431", "Request Header Fields Too Large"),
-    ("451", "Unavailable For Legal Reasons"),
-    ("500", "Internal Server Error"),
-    ("501", "Not Implemented"),
-    ("502", "Bad Gateway"),
-    ("503", "Service Unavailable"),
-    ("504", "Gateway Timeout"),
-    ("505", "HTTP Version Not Supported"),
-    ("506", "Variant Also Negotiates"),
-    ("507", "Insufficient Storage"),
-    ("508", "Loop Detected"),
-    ("510", "Not Extended"),
-    ("511", "Network Authentication Required")
+  [ ("100", "Continue")
+  , ("101", "Switching Protocols")
+  , ("103", "Early Hints")
+  , ("200", "OK")
+  , ("201", "Created")
+  , ("202", "Accepted")
+  , ("203", "Non-Authoritative Information")
+  , ("204", "No Content")
+  , ("205", "Reset Content")
+  , ("206", "Partial Content")
+  , ("300", "Multiple Choices")
+  , ("301", "Moved Permanently")
+  , ("302", "Found")
+  , ("303", "See Other")
+  , ("304", "Not Modified")
+  , ("307", "Temporary Redirect")
+  , ("308", "Permanent Redirect")
+  , ("400", "Bad Request")
+  , ("401", "Unauthorized")
+  , ("402", "Payment Required")
+  , ("403", "Forbidden")
+  , ("404", "Not Found")
+  , ("405", "Method Not Allowed")
+  , ("406", "Not Acceptable")
+  , ("407", "Proxy Authentication Required")
+  , ("408", "Request Timeout")
+  , ("409", "Conflict")
+  , ("410", "Gone")
+  , ("411", "Length Required")
+  , ("412", "Precondition Failed")
+  , ("413", "Payload Too Large")
+  , ("414", "URI Too Long")
+  , ("415", "Unsupported Media Type")
+  , ("416", "Range Not Satisfiable")
+  , ("417", "Expectation Failed")
+  , ("418", "I'm a teapot")
+  , ("422", "Unprocessable Entity")
+  , ("425", "Too Early")
+  , ("426", "Upgrade Required")
+  , ("428", "Precondition Required")
+  , ("429", "Too Many Requests")
+  , ("431", "Request Header Fields Too Large")
+  , ("451", "Unavailable For Legal Reasons")
+  , ("500", "Internal Server Error")
+  , ("501", "Not Implemented")
+  , ("502", "Bad Gateway")
+  , ("503", "Service Unavailable")
+  , ("504", "Gateway Timeout")
+  , ("505", "HTTP Version Not Supported")
+  , ("506", "Variant Also Negotiates")
+  , ("507", "Insufficient Storage")
+  , ("508", "Loop Detected")
+  , ("510", "Not Extended")
+  , ("511", "Network Authentication Required")
   ]

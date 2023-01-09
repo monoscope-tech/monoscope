@@ -101,11 +101,11 @@ authCallbackH codeM _ = do
       liftIO $
         post
           (toString $ envCfg ^. #auth0Domain <> "/oauth/token")
-          ( [ "grant_type" := ("authorization_code" :: String),
-              "client_id" := envCfg ^. #auth0ClientId,
-              "client_secret" := envCfg ^. #auth0Secret,
-              "code" := code,
-              "redirect_uri" := envCfg ^. #auth0Callback
+          ( [ "grant_type" := ("authorization_code" :: String)
+            , "client_id" := envCfg ^. #auth0ClientId
+            , "client_secret" := envCfg ^. #auth0Secret
+            , "code" := code
+            , "redirect_uri" := envCfg ^. #auth0Callback
             ] ::
               [FormParam]
           )
@@ -133,7 +133,7 @@ authCallbackH codeM _ = do
         pure persistentSessId
 
   case resp of
-    Left err -> putStrLn ("unable to process auth callback page " <> err) >> (throwError $ err302 {errHeaders = [("Location", "/login?auth0_callback_failure")]}) >> pure (noHeader $ noHeader "")
+    Left err -> putStrLn ("unable to process auth callback page " <> err) >> (throwError $ err302{errHeaders = [("Location", "/login?auth0_callback_failure")]}) >> pure (noHeader $ noHeader "")
     Right persistentSessId -> pure $
       addHeader "/" $
         addHeader (craftSessionCookie persistentSessId True) $ do
@@ -148,17 +148,17 @@ authCallbackH codeM _ = do
 --- The token is then passed to our `lookupAccount` function.
 authHandler :: LogAction IO String -> Pool Connection -> AuthHandler Request Sessions.PersistentSession
 authHandler logger conn = mkAuthHandler handler
-  where
-    -- instead of just redirecting, we could delete the cookie first?
-    throw301 :: Text -> Handler Sessions.PersistentSession
-    throw301 err = do
-      liftIO (logger <& toString err)
-      throwError $ err302 {errHeaders = [("Location", "/to_login")]}
+ where
+  -- instead of just redirecting, we could delete the cookie first?
+  throw301 :: Text -> Handler Sessions.PersistentSession
+  throw301 err = do
+    liftIO (logger <& toString err)
+    throwError $ err302{errHeaders = [("Location", "/to_login")]}
 
-    handler :: Request -> Handler Sessions.PersistentSession
-    handler req = either throw301 (lookupAccount conn) $ do
-      cookie <- note "Missing cookie header" $ lookup "cookie" $ requestHeaders req
-      note "Missing token in cookie" $ lookup "apitoolkit_session" $ parseCookies cookie
+  handler :: Request -> Handler Sessions.PersistentSession
+  handler req = either throw301 (lookupAccount conn) $ do
+    cookie <- note "Missing cookie header" $ lookup "cookie" $ requestHeaders req
+    note "Missing token in cookie" $ lookup "apitoolkit_session" $ parseCookies cookie
 
 -- We need to handle errors for the persistent session better and redirect if there's an error
 lookupAccount :: Pool Connection -> ByteString -> Handler Sessions.PersistentSession
@@ -169,5 +169,5 @@ lookupAccount conn keyV = do
     hoistEither $ note "lookupAccount: invalid persistentID " presistentSess
   case resp of
     Left _ -> do
-      throwError $ err302 {errHeaders = [("Location", "/to_login")]}
+      throwError $ err302{errHeaders = [("Location", "/to_login")]}
     Right session -> pure session

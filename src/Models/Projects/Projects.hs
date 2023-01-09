@@ -62,15 +62,15 @@ projectIdFromText :: Text -> Maybe ProjectId
 projectIdFromText pid = ProjectId <$> UUID.fromText pid
 
 data Project = Project
-  { id :: ProjectId,
-    createdAt :: ZonedTime,
-    updatedAt :: ZonedTime,
-    deletedAt :: Maybe ZonedTime,
-    active :: Bool,
-    title :: Text,
-    description :: Text
-    -- NOTE: We used to have hosts under project, but now hosts should be gotten from the endpoints.
-    -- NOTE: If there's heavy need and usage, we caould create a view. Otherwise, the project cache is best, if it meets our needs.
+  { id :: ProjectId
+  , createdAt :: ZonedTime
+  , updatedAt :: ZonedTime
+  , deletedAt :: Maybe ZonedTime
+  , active :: Bool
+  , title :: Text
+  , description :: Text
+  -- NOTE: We used to have hosts under project, but now hosts should be gotten from the endpoints.
+  -- NOTE: If there's heavy need and usage, we caould create a view. Otherwise, the project cache is best, if it meets our needs.
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow)
@@ -84,14 +84,14 @@ data Project = Project
 makeFieldLabelsNoPrefix ''Project
 
 data Project' = Project'
-  { id :: ProjectId,
-    createdAt :: ZonedTime,
-    updatedAt :: ZonedTime,
-    deletedAt :: Maybe ZonedTime,
-    active :: Bool,
-    title :: Text,
-    description :: Text,
-    -- NOTE: We used to have hosts under project, but now hosts should be gotten from the endpoints.
+  { id :: ProjectId
+  , createdAt :: ZonedTime
+  , updatedAt :: ZonedTime
+  , deletedAt :: Maybe ZonedTime
+  , active :: Bool
+  , title :: Text
+  , description :: Text
+  , -- NOTE: We used to have hosts under project, but now hosts should be gotten from the endpoints.
     -- NOTE: If there's heavy need and usage, we caould create a view. Otherwise, the project cache is best, if it meets our needs.
     usersDisplayImages :: Vector Text
   }
@@ -101,13 +101,13 @@ data Project' = Project'
 data ProjectCache = ProjectCache
   { -- We need this hosts to mirror all the hosts in the endpoints table, and could use this for validation purposes to skip inserting endpoints just because of hosts
     -- if endpoint exists but host is not in this list, then we have a query specifically for inserting hosts.
-    hosts :: V.Vector Text,
-    -- maybe we don't need this? See the next point.
-    endpointHashes :: V.Vector Text,
-    -- Since shapes always have the endpoints hash prepended to them, maybe we don't need to store the hash of endpoints,
+    hosts :: V.Vector Text
+  , -- maybe we don't need this? See the next point.
+    endpointHashes :: V.Vector Text
+  , -- Since shapes always have the endpoints hash prepended to them, maybe we don't need to store the hash of endpoints,
     -- since we can derive that from the shapes.
-    shapeHashes :: V.Vector Text,
-    -- We check if every request is part of the redact list, so it's better if we don't need to  hit the db for them with each request.
+    shapeHashes :: V.Vector Text
+  , -- We check if every request is part of the redact list, so it's better if we don't need to  hit the db for them with each request.
     -- Since we have a need to redact fields by endpoint, we can simply have the fields paths be prepended by the endpoint hash.
     -- [endpointHash]<>[field_category eg requestBody]<>[field_key_path]
     -- Those redact fields that don't have endpoint or field_category attached, would be aplied to every endpoint and field category.
@@ -119,9 +119,9 @@ data ProjectCache = ProjectCache
 makeFieldLabelsNoPrefix ''ProjectCache
 
 data CreateProject = CreateProject
-  { id :: ProjectId,
-    title :: Text,
-    description :: Text
+  { id :: ProjectId
+  , title :: Text
+  , description :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow)
@@ -134,9 +134,9 @@ makeFieldLabelsNoPrefix ''CreateProject
 -- FIXME: We currently return an object with empty vectors when nothing was found.
 projectCacheById :: ProjectId -> DBT IO (Maybe ProjectCache)
 projectCacheById = queryOne Select q
-  where
-    q =
-      [sql| select  coalesce(ARRAY_AGG(DISTINCT hosts ORDER BY hosts ASC),'{}') hosts, 
+ where
+  q =
+    [sql| select  coalesce(ARRAY_AGG(DISTINCT hosts ORDER BY hosts ASC),'{}') hosts, 
                     coalesce(ARRAY_AGG(DISTINCT endpoint_hashes ORDER BY endpoint_hashes ASC),'{}') endpoint_hashes, 
                     coalesce(ARRAY_AGG(DISTINCT shape_hashes ORDER BY shape_hashes ASC),'{}') shape_hashes, 
                     coalesce(ARRAY_AGG(DISTINCT paths ORDER BY paths ASC),'{}') redacted_fields 
@@ -153,23 +153,23 @@ insertProject = insert @CreateProject
 
 projectById :: ProjectId -> DBT IO (Maybe Project)
 projectById = queryOne Select q
-  where
-    q = [sql| select p.*, '{}' from projects.project where id=?|]
+ where
+  q = [sql| select p.*, '{}' from projects.project where id=?|]
 
 selectProjectsForUser :: Users.UserId -> DBT IO (V.Vector Project')
 selectProjectsForUser = query Select q
-  where
-    q =
-      [sql| select pp.*,  ARRAY_AGG(us.display_image_url) OVER (PARTITION BY pp.id) from projects.projects as pp 
+ where
+  q =
+    [sql| select pp.*,  ARRAY_AGG(us.display_image_url) OVER (PARTITION BY pp.id) from projects.projects as pp 
                 join projects.project_members as ppm on (pp.id=ppm.project_id) 
                 join users.users as us on (us.id=ppm.user_id)
                 where ppm.user_id=? and pp.deleted_at IS NULL order by updated_at desc|]
 
 selectProjectForUser :: (Users.UserId, ProjectId) -> DBT IO (Maybe Project)
 selectProjectForUser = queryOne Select q
-  where
-    q =
-      [sql| 
+ where
+  q =
+    [sql| 
         select pp.* from projects.projects as pp 
           join projects.project_members as ppm on (pp.id=ppm.project_id)
           join users.users uu on (uu.id=ppm.user_id)
@@ -178,9 +178,9 @@ selectProjectForUser = queryOne Select q
 
 editProjectGetH :: ProjectId -> DBT IO (V.Vector Project)
 editProjectGetH pid = query Select q (Only pid)
-  where
-    q =
-      [sql|
+ where
+  q =
+    [sql|
         SELECT pp*, ppm* FROM projects.projects AS pp 
             INNER JOIN projects.project_members AS ppm
             ON pp.id = pid 
@@ -189,36 +189,36 @@ editProjectGetH pid = query Select q (Only pid)
 updateProject :: CreateProject -> DBT IO Int64
 updateProject cp = do
   execute Update q (cp.title, cp.description, cp.id)
-  where
-    q =
-      [sql| UPDATE projects.projects SET title=?, description=? where id=?;|]
+ where
+  q =
+    [sql| UPDATE projects.projects SET title=?, description=? where id=?;|]
 
 deleteProject :: ProjectId -> DBT IO Int64
 deleteProject pid = do
   execute Update q pid
-  where
-    q =
-      [sql| UPDATE projects.projects SET deleted_at=NOW() where id=?;|]
+ where
+  q =
+    [sql| UPDATE projects.projects SET deleted_at=NOW() where id=?;|]
 
 data ProjectRequestStats = ProjectRequestStats
-  { projectId :: ProjectId,
-    min :: Double,
-    p50 :: Double,
-    p75 :: Double,
-    p90 :: Double,
-    p95 :: Double,
-    p99 :: Double,
-    max :: Double,
-    totalTime :: Double,
-    totalRequests :: Int,
-    totalEndpoints :: Int,
-    totalEndpointsLastWeek :: Int,
-    totalShapes :: Int,
-    totalShapesLastWeek :: Int,
-    totalAnomalies :: Int,
-    totalAnomaliesLastWeek :: Int,
-    totalFields :: Int,
-    totalFieldsLastWeek :: Int
+  { projectId :: ProjectId
+  , min :: Double
+  , p50 :: Double
+  , p75 :: Double
+  , p90 :: Double
+  , p95 :: Double
+  , p99 :: Double
+  , max :: Double
+  , totalTime :: Double
+  , totalRequests :: Int
+  , totalEndpoints :: Int
+  , totalEndpointsLastWeek :: Int
+  , totalShapes :: Int
+  , totalShapesLastWeek :: Int
+  , totalAnomalies :: Int
+  , totalAnomaliesLastWeek :: Int
+  , totalFields :: Int
+  , totalFieldsLastWeek :: Int
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (FromRow, ToRow, Default)

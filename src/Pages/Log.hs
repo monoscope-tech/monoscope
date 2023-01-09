@@ -63,9 +63,9 @@ apiLog sess pid queryM cols' fromM hxRequestM hxBoostedM = do
     _ -> do
       let bwconf =
             (def :: BWConfig)
-              { sessM = Just sess,
-                currProject = project,
-                pageTitle = "API Log Explorer"
+              { sessM = Just sess
+              , currProject = project
+              , pageTitle = "API Log Explorer"
               }
       let resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing
       pure $ bodyWrapper bwconf $ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL
@@ -87,11 +87,11 @@ apiLogsPage :: Projects.ProjectId -> Int -> Vector RequestDumps.RequestDumpLogIt
 apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL = do
   section_ [class_ "container mx-auto  px-2 py-2 pb-5 gap-2 flex flex-col h-[98%] overflow-hidden "] $ do
     form_
-      [ class_ "card-round text-sm",
-        hxGet_ $ "/p/" <> Projects.projectIdText pid <> "/log_explorer",
-        hxPushUrl_ "true",
-        hxVals_ "js:{query:getQueryFromEditor(), cols:params().cols}",
-        hxTarget_ "#log-item-table-body"
+      [ class_ "card-round text-sm"
+      , hxGet_ $ "/p/" <> Projects.projectIdText pid <> "/log_explorer"
+      , hxPushUrl_ "true"
+      , hxVals_ "js:{query:getQueryFromEditor(), cols:params().cols}"
+      , hxTarget_ "#log-item-table-body"
       ]
       $ do
         nav_ [class_ "flex flex-row p-2 content-end justify-between items-baseline border-slate-100"] $ do
@@ -140,9 +140,9 @@ logItemRows pid requests cols nextLogsURL = do
   requests & traverse_ \req -> do
     let logItemPath = RequestDumps.requestDumpLogItemUrlPath pid req
     div_
-      [ class_ "flex flex-row border-l-4 border-l-transparent divide-x space-x-4 hover:bg-blue-50 cursor-pointer",
-        term "data-log-item-path" logItemPath,
-        term
+      [ class_ "flex flex-row border-l-4 border-l-transparent divide-x space-x-4 hover:bg-blue-50 cursor-pointer"
+      , term "data-log-item-path" logItemPath
+      , term
           "_"
           [text|
             install LogItemExpandable
@@ -161,9 +161,9 @@ logItemRows pid requests cols nextLogsURL = do
               \(col, colValue) ->
                 div_ [class_ "relative inline-block log-item-field-parent", term "data-field-path" col] $ do
                   a_
-                    [ class_ "cursor-pointer mx-1 inline-block bg-blue-100 hover:bg-blue-200 blue-900 px-3 rounded-xl monospace log-item-field-anchor log-item-field-value",
-                      term "data-field-path" col,
-                      [__|install LogItemMenuable|]
+                    [ class_ "cursor-pointer mx-1 inline-block bg-blue-100 hover:bg-blue-200 blue-900 px-3 rounded-xl monospace log-item-field-anchor log-item-field-value"
+                    , term "data-field-path" col
+                    , [__|install LogItemMenuable|]
                     ]
                     $ toHtml colValue
           span_ [class_ "mx-1 inline-block bg-green-100 green-800 px-3 rounded-xl monospace"] $ toHtml $ req ^. #method
@@ -185,36 +185,36 @@ apiLogItemView req =
 -- | jsonValueToHtmlTree takes an aeson json object and renders it as a collapsible html tree, with hyperscript for interactivity.
 jsonValueToHtmlTree :: AE.Value -> Html ()
 jsonValueToHtmlTree val = jsonValueToHtmlTree' ("", "", val)
-  where
-    jsonValueToHtmlTree' :: (Text, Text, AE.Value) -> Html ()
-    jsonValueToHtmlTree' (path, key, AE.Object v) = renderParentType "{" "}" key (length v) (AEK.toHashMapText v & HM.toList & mapM_ (\(kk, vv) -> jsonValueToHtmlTree' (path <> "." <> key, kk, vv)))
-    jsonValueToHtmlTree' (path, key, AE.Array v) = renderParentType "[" "]" key (length v) (iforM_ v \i item -> jsonValueToHtmlTree' (path <> "." <> key <> "." <> "[]", show i, item))
-    jsonValueToHtmlTree' (path, key, value) = do
-      let fullFieldPath = if T.isSuffixOf ".[]" path then path else path <> "." <> key
-      let fullFieldPath' = fromMaybe fullFieldPath $ T.stripPrefix ".." fullFieldPath
-      div_
-        [ class_ "relative log-item-field-parent",
-          term "data-field-path" fullFieldPath'
-        ]
-        $ a_ [class_ "block hover:bg-blue-50 cursor-pointer pl-6 relative log-item-field-anchor ", [__|install LogItemMenuable|]]
-        $ do
-          span_ $ toHtml key
-          span_ [class_ "text-blue-800"] ":"
-          span_ [class_ "text-blue-800 ml-2.5 log-item-field-value"] $ toHtml $ unwrapJsonPrimValue value
+ where
+  jsonValueToHtmlTree' :: (Text, Text, AE.Value) -> Html ()
+  jsonValueToHtmlTree' (path, key, AE.Object v) = renderParentType "{" "}" key (length v) (AEK.toHashMapText v & HM.toList & mapM_ (\(kk, vv) -> jsonValueToHtmlTree' (path <> "." <> key, kk, vv)))
+  jsonValueToHtmlTree' (path, key, AE.Array v) = renderParentType "[" "]" key (length v) (iforM_ v \i item -> jsonValueToHtmlTree' (path <> "." <> key <> "." <> "[]", show i, item))
+  jsonValueToHtmlTree' (path, key, value) = do
+    let fullFieldPath = if T.isSuffixOf ".[]" path then path else path <> "." <> key
+    let fullFieldPath' = fromMaybe fullFieldPath $ T.stripPrefix ".." fullFieldPath
+    div_
+      [ class_ "relative log-item-field-parent"
+      , term "data-field-path" fullFieldPath'
+      ]
+      $ a_ [class_ "block hover:bg-blue-50 cursor-pointer pl-6 relative log-item-field-anchor ", [__|install LogItemMenuable|]]
+      $ do
+        span_ $ toHtml key
+        span_ [class_ "text-blue-800"] ":"
+        span_ [class_ "text-blue-800 ml-2.5 log-item-field-value"] $ toHtml $ unwrapJsonPrimValue value
 
-    renderParentType :: Text -> Text -> Text -> Int -> Html () -> Html ()
-    renderParentType opening closing key count child = div_ [class_ (if key == "" then "" else "collapsed")] $ do
-      a_
-        [ class_ "inline-block cursor-pointer",
-          [__|on click toggle .collapsed on the closest parent <div/>|]
-        ]
-        $ do
-          span_ [class_ "log-item-tree-chevron "] "▾"
-          span_ [] $ toHtml $ if key == "" then opening else key <> ": " <> opening
-      div_ [class_ "pl-5 children "] $ do
-        span_ [class_ "tree-children-count"] $ show count
-        div_ [class_ "tree-children"] child
-      span_ [class_ "pl-5 closing-token"] $ toHtml closing
+  renderParentType :: Text -> Text -> Text -> Int -> Html () -> Html ()
+  renderParentType opening closing key count child = div_ [class_ (if key == "" then "" else "collapsed")] $ do
+    a_
+      [ class_ "inline-block cursor-pointer"
+      , [__|on click toggle .collapsed on the closest parent <div/>|]
+      ]
+      $ do
+        span_ [class_ "log-item-tree-chevron "] "▾"
+        span_ [] $ toHtml $ if key == "" then opening else key <> ": " <> opening
+    div_ [class_ "pl-5 children "] $ do
+      span_ [class_ "tree-children-count"] $ show count
+      div_ [class_ "tree-children"] child
+    span_ [class_ "pl-5 closing-token"] $ toHtml closing
 
 -- >>> findValueByKeyInJSON ["key1", "key2"] [aesonQQ|{"kx":0, "key1":{"key2":"k2val"}}|]
 -- ["\"k2val\""]
@@ -233,26 +233,26 @@ jsonTreeAuxillaryCode pid = do
     div_ [id_ "log-item-context-menu", class_ "log-item-context-menu text-sm origin-top-right absolute left-0 mt-2 w-56 rounded-md shadow-md shadow-slate-300 bg-white ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 focus:outline-none z-10", role_ "menu", tabindex_ "-1"] $ do
       div_ [class_ "py-1", role_ "none"] $ do
         a_
-          [ class_ "cursor-pointer text-gray-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-gray-900",
-            role_ "menuitem",
-            tabindex_ "-1",
-            id_ "menu-item-0",
-            hxGet_ $ "/p/" <> Projects.projectIdText pid <> "/log_explorer",
-            hxPushUrl_ "true",
-            hxVals_ "js:{query:params().query,cols:toggleColumnToSummary(event)}",
-            hxSwap_ "innerHTML scroll:#log-item-table-body:top",
-            hxTarget_ "#log-item-table-body",
-            [__|init 
+          [ class_ "cursor-pointer text-gray-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-gray-900"
+          , role_ "menuitem"
+          , tabindex_ "-1"
+          , id_ "menu-item-0"
+          , hxGet_ $ "/p/" <> Projects.projectIdText pid <> "/log_explorer"
+          , hxPushUrl_ "true"
+          , hxVals_ "js:{query:params().query,cols:toggleColumnToSummary(event)}"
+          , hxSwap_ "innerHTML scroll:#log-item-table-body:top"
+          , hxTarget_ "#log-item-table-body"
+          , [__|init 
                   set fp to (closest <.log-item-field-parent/>)'s @data-field-path then 
                   if isFieldInSummary(fp) then set my innerHTML to 'Remove field from summary' end|]
           ]
           "Add field to Summary"
         a_
-          [ class_ "cursor-pointer text-gray-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-gray-900",
-            role_ "menuitem",
-            tabindex_ "-1",
-            id_ "menu-item-1",
-            [__|on click 
+          [ class_ "cursor-pointer text-gray-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-gray-900"
+          , role_ "menuitem"
+          , tabindex_ "-1"
+          , id_ "menu-item-1"
+          , [__|on click 
                   if 'clipboard' in window.navigator then 
                     call navigator.clipboard.writeText((previous <.log-item-field-value/>)'s innerText)
                     send successToast(value:['Value has been added to the Clipboard']) to <body/>

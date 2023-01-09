@@ -58,10 +58,10 @@ parens = between (symbol "(") (symbol ")")
 pValues :: Parser Values
 pValues =
   choice @[]
-    [ Null <$ string "null",
-      Boolean <$> (True <$ string "true" <|> False <$ string "false" <|> False <$ string "FALSE" <|> True <$ string "TRUE"),
-      Num . toText <$> some (digitChar <|> char '.'),
-      Str . toText <$> (char '\"' *> manyTill L.charLiteral (char '\"'))
+    [ Null <$ string "null"
+    , Boolean <$> (True <$ string "true" <|> False <$ string "false" <|> False <$ string "FALSE" <|> True <$ string "TRUE")
+    , Num . toText <$> some (digitChar <|> char '.')
+    , Str . toText <$> (char '\"' *> manyTill L.charLiteral (char '\"'))
     ]
 
 pTerm :: Parser Expr
@@ -79,14 +79,15 @@ pExpr = makeExprParser pTerm operatorTable
 
 operatorTable :: [[Operator Parser Expr]]
 operatorTable =
-  [ [ binary " AND " And,
-      binary "AND" And,
-      binary " OR " Or,
-      binary "OR" Or,
-      binary " and " And,
-      binary "and" And,
-      binary " or " Or,
-      binary "or" Or
+  [
+    [ binary " AND " And
+    , binary "AND" And
+    , binary " OR " Or
+    , binary "OR" Or
+    , binary " and " And
+    , binary "and" And
+    , binary " or " Or
+    , binary "or" Or
     ]
   ]
 

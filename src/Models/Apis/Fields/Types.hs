@@ -145,20 +145,20 @@ instance FromField FieldCategoryEnum where
           Nothing -> returnError ConversionFailed f $ "Conversion error: Expected 'field_type' enum, got " <> decodeUtf8 bs <> " instead."
 
 data Field = Field
-  { id :: FieldId,
-    createdAt :: ZonedTime,
-    updatedAt :: ZonedTime,
-    projectId :: Projects.ProjectId,
-    endpointHash :: Text,
-    key :: Text,
-    fieldType :: FieldTypes,
-    fieldTypeOverride :: Maybe Text,
-    format :: Text, -- SHould fields be linked to the format table via the fieldFormat text or format Id?
-    formatOverride :: Maybe Text,
-    description :: Text,
-    keyPath :: Text,
-    fieldCategory :: FieldCategoryEnum,
-    hash :: Text
+  { id :: FieldId
+  , createdAt :: ZonedTime
+  , updatedAt :: ZonedTime
+  , projectId :: Projects.ProjectId
+  , endpointHash :: Text
+  , key :: Text
+  , fieldType :: FieldTypes
+  , fieldTypeOverride :: Maybe Text
+  , format :: Text -- SHould fields be linked to the format table via the fieldFormat text or format Id?
+  , formatOverride :: Maybe Text
+  , description :: Text
+  , keyPath :: Text
+  , fieldCategory :: FieldCategoryEnum
+  , hash :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, Default)
@@ -196,7 +196,7 @@ makeFieldLabelsNoPrefix ''Field
 -- fromList [(FCQueryParam,[Field {id = FieldId {unFieldId = 00000000-0000-0000-0000-000000000000}, createdAt = 2019-08-31 05:14:37.537084021 UTC, updatedAt = 2019-08-31 05:14:37.537084021 UTC, projectId = ProjectId {unProjectId = 00000000-0000-0000-0000-000000000000}, endpoint = EndpointId {unEndpointId = 00000000-0000-0000-0000-000000000000}, key = "", fieldType = FTUnknown, fieldTypeOverride = Nothing, format = "", formatOverride = Nothing, description = "", keyPath = [], keyPathStr = "", fieldCategory = FCQueryParam}]),(FCResponseBody,[Field {id = FieldId {unFieldId = 00000000-0000-0000-0000-000000000000}, createdAt = 2019-08-31 05:14:37.537084021 UTC, updatedAt = 2019-08-31 05:14:37.537084021 UTC, projectId = ProjectId {unProjectId = 00000000-0000-0000-0000-000000000000}, endpoint = EndpointId {unEndpointId = 00000000-0000-0000-0000-000000000000}, key = "", fieldType = FTUnknown, fieldTypeOverride = Nothing, format = "", formatOverride = Nothing, description = "", keyPath = [], keyPathStr = "", fieldCategory = FCResponseBody},Field {id = FieldId {unFieldId = 00000000-0000-0000-0000-000000000000}, createdAt = 2019-08-31 05:14:37.537084021 UTC, updatedAt = 2019-08-31 05:14:37.537084021 UTC, projectId = ProjectId {unProjectId = 00000000-0000-0000-0000-000000000000}, endpoint = EndpointId {unEndpointId = 00000000-0000-0000-0000-000000000000}, key = "respBody2", fieldType = FTUnknown, fieldTypeOverride = Nothing, format = "", formatOverride = Nothing, description = "", keyPath = [], keyPathStr = "", fieldCategory = FCResponseBody}])]
 groupFieldsByCategory :: Vector Field -> Map FieldCategoryEnum [Field]
 groupFieldsByCategory fields = Relude.fromList fieldGroupTupple
-  where
-    fields' = Vector.toList fields
-    fieldGroup = groupBy (\f1 f2 -> f1.fieldCategory == f2.fieldCategory) fields'
-    fieldGroupTupple = map (\f -> ((f !! 0).fieldCategory, f)) fieldGroup
+ where
+  fields' = Vector.toList fields
+  fieldGroup = groupBy (\f1 f2 -> f1.fieldCategory == f2.fieldCategory) fields'
+  fieldGroupTupple = map (\f -> ((f !! 0).fieldCategory, f)) fieldGroup

@@ -43,12 +43,12 @@ instance ToField ConfiguredVia where
 
 -- FIXME: implement insert redacted fields to also store the hash of the endpoints.
 data RedactedField = RedactedField
-  { id :: RedactedFieldId,
-    projectId :: Projects.ProjectId,
-    path :: Text,
-    configuredVia :: ConfiguredVia,
-    description :: Text,
-    endpointHash :: Maybe Text
+  { id :: RedactedFieldId
+  , projectId :: Projects.ProjectId
+  , path :: Text
+  , configuredVia :: ConfiguredVia
+  , description :: Text
+  , endpointHash :: Maybe Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow)

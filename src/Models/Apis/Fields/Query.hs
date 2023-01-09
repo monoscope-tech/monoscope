@@ -13,29 +13,29 @@ import Utils (DBField (MkDBField))
 
 insertFieldQueryAndParams :: Field -> (Query, [DBField])
 insertFieldQueryAndParams field = (q, params)
-  where
-    q =
-      [sql| insert into apis.fields (project_id, endpoint_hash, key, field_type, format, description, key_path, field_category, hash) 
+ where
+  q =
+    [sql| insert into apis.fields (project_id, endpoint_hash, key, field_type, format, description, key_path, field_category, hash) 
                     VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING; |]
-    params =
-      [ MkDBField $ field ^. #projectId,
-        MkDBField $ field ^. #endpointHash,
-        MkDBField $ field ^. #key,
-        MkDBField $ field ^. #fieldType,
-        MkDBField $ field ^. #format,
-        MkDBField $ field ^. #description,
-        MkDBField $ field ^. #keyPath,
-        MkDBField $ field ^. #fieldCategory,
-        MkDBField $ field ^. #hash
-      ]
+  params =
+    [ MkDBField $ field ^. #projectId
+    , MkDBField $ field ^. #endpointHash
+    , MkDBField $ field ^. #key
+    , MkDBField $ field ^. #fieldType
+    , MkDBField $ field ^. #format
+    , MkDBField $ field ^. #description
+    , MkDBField $ field ^. #keyPath
+    , MkDBField $ field ^. #fieldCategory
+    , MkDBField $ field ^. #hash
+    ]
 
 fieldById :: FieldId -> DBT IO (Maybe Field)
 fieldById fid = selectById @Field (Only fid)
 
 selectFields :: Text -> DBT IO (Vector Field)
 selectFields endpointHash = query Select q (Only endpointHash)
-  where
-    q =
-      [sql| select id,created_at,updated_at,project_id,endpoint_hash,key,field_type,
+ where
+  q =
+    [sql| select id,created_at,updated_at,project_id,endpoint_hash,key,field_type,
                 field_type_override,format,format_override,description,key_path,field_category, hash
                 from apis.fields where endpoint_hash=? order by field_category, key |]
