@@ -23,18 +23,18 @@ import Network.Wai (Request (requestHeaders))
 import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
 import Optics.Operators ((^.))
 import Relude
-import Servant
-  ( Context (EmptyContext, (:.)),
-    Handler,
-    Header,
-    Headers,
-    NoContent (..),
-    ServerError (errHeaders),
-    addHeader,
-    err302,
-    noHeader,
-    throwError,
-  )
+import Servant (
+  Context (EmptyContext, (:.)),
+  Handler,
+  Header,
+  Headers,
+  NoContent (..),
+  ServerError (errHeaders),
+  addHeader,
+  err302,
+  noHeader,
+  throwError,
+ )
 import Servant.Server.Experimental.Auth (AuthHandler, mkAuthHandler)
 import SessionCookies (craftSessionCookie, emptySessionCookie)
 import Web.Cookie (SetCookie, parseCookies)

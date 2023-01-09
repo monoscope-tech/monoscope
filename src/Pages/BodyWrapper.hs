@@ -219,8 +219,8 @@ sideNav sess project pageTitle menuItem = do
             class_ $
               "block flex gap-3 px-5 py-3 flex justify-center items-center hover:bg-blue-50 text-slate-800 "
                 <> ( if maybe (pageTitle == mTitle) (== mTitle) menuItem
-                       then "bg-blue-50 border-l-4 border-blue-700"
-                       else ""
+                      then "bg-blue-50 border-l-4 border-blue-700"
+                      else ""
                    )
           ]
           $ do

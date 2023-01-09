@@ -1,14 +1,13 @@
-module Pages.Anomalies.AnomalyList
-  ( anomalyListGetH,
-    anomalyBulkActionsPostH,
-    acknowlegeAnomalyGetH,
-    unAcknowlegeAnomalyGetH,
-    archiveAnomalyGetH,
-    unArchiveAnomalyGetH,
-    anomalyListSlider,
-    AnomalyBulkForm,
-  )
-where
+module Pages.Anomalies.AnomalyList (
+  anomalyListGetH,
+  anomalyBulkActionsPostH,
+  acknowlegeAnomalyGetH,
+  unAcknowlegeAnomalyGetH,
+  archiveAnomalyGetH,
+  unArchiveAnomalyGetH,
+  anomalyListSlider,
+  AnomalyBulkForm,
+) where
 
 import Config
 import Data.Aeson (encode)

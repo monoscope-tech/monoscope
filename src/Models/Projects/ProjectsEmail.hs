@@ -1,9 +1,8 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 
-module Models.Projects.ProjectsEmail
-  ( sendEmail,
-  )
-where
+module Models.Projects.ProjectsEmail (
+  sendEmail,
+) where
 
 import Control.Lens qualified as Lens
 import Data.List.NonEmpty qualified as NonEmptyDataList

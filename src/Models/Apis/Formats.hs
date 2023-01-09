@@ -1,12 +1,11 @@
 {-# LANGUAGE TemplateHaskell #-}
 
-module Models.Apis.Formats
-  ( Format (..),
-    FormatId (..),
-    formatsByFieldHash,
-    insertFormatQueryAndParams,
-  )
-where
+module Models.Apis.Formats (
+  Format (..),
+  FormatId (..),
+  formatsByFieldHash,
+  insertFormatQueryAndParams,
+) where
 
 import Data.Aeson qualified as AE
 import Data.Default (Default)

@@ -1,8 +1,7 @@
-module ProcessMessage
-  ( processMessages,
-    processMessages',
-  )
-where
+module ProcessMessage (
+  processMessages,
+  processMessages',
+) where
 
 import Colog.Core (LogAction (..), (<&))
 import Config qualified

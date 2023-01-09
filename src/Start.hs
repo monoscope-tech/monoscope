@@ -3,10 +3,9 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Start
-  ( startApp,
-  )
-where
+module Start (
+  startApp,
+) where
 
 import BackgroundJobs qualified
 import Colog.Core (LogAction (..), logStringStdout, (<&))

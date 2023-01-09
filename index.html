@@ -20,17 +20,11 @@
       element: '#dpbt',
       css: [
         'https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.0/dist/index.css',
-        // 'https://cdn.jsdelivr.net/npm/@easepick/range-plugin@1.2.0/dist/index.css',
-        // 'https://cdn.jsdelivr.net/npm/@easepick/preset-plugin@1.2.0/dist/index.css',
-        // 'https://cdn.jsdelivr.net/npm/@easepick/time-plugin@1.2.0/dist/index.css',
       ],
       plugins: ['RangePlugin', 'PresetPlugin', 'TimePlugin'],
       autoApply: false,
       setup(picker) {
         picker.on('select', (e) => {
-          console.log(e.detail);
-          console.dir(e.detail.start);
-
           const start = JSON.stringify(e.detail.start).slice(1, -1);
           const end = JSON.stringify(e.detail.end).slice(1, -1);
           document.getElementById("startTime").value = start;

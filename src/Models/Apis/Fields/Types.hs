@@ -1,17 +1,16 @@
 {-# LANGUAGE TemplateHaskell #-}
 
-module Models.Apis.Fields.Types
-  ( Field (..),
-    FieldTypes (..),
-    FieldCategoryEnum (..),
-    FieldId (..),
-    fieldIdText,
-    parseFieldCategoryEnum,
-    groupFieldsByCategory,
-    fieldTypeToText,
-    fieldCategoryEnumToText,
-  )
-where
+module Models.Apis.Fields.Types (
+  Field (..),
+  FieldTypes (..),
+  FieldCategoryEnum (..),
+  FieldId (..),
+  fieldIdText,
+  parseFieldCategoryEnum,
+  groupFieldsByCategory,
+  fieldTypeToText,
+  fieldCategoryEnumToText,
+) where
 
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Aeson qualified as AE

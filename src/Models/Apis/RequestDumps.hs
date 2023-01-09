@@ -2,20 +2,19 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module Models.Apis.RequestDumps
-  ( RequestDump (..),
-    RequestDumpLogItem,
-    throughputBy,
-    requestDumpLogItemUrlPath,
-    requestDumpLogUrlPath,
-    selectReqLatenciesRolledBySteps,
-    selectReqLatenciesRolledByStepsForProject,
-    selectRequestDumpByProject,
-    selectRequestDumpByProjectAndId,
-    selectRequestDumpsByProjectForChart,
-    bulkInsertRequestDumps,
-  )
-where
+module Models.Apis.RequestDumps (
+  RequestDump (..),
+  RequestDumpLogItem,
+  throughputBy,
+  requestDumpLogItemUrlPath,
+  requestDumpLogUrlPath,
+  selectReqLatenciesRolledBySteps,
+  selectReqLatenciesRolledByStepsForProject,
+  selectRequestDumpByProject,
+  selectRequestDumpByProjectAndId,
+  selectRequestDumpsByProjectForChart,
+  bulkInsertRequestDumps,
+) where
 
 import Control.Error (hush)
 import Data.Aeson qualified as AE

@@ -1,18 +1,17 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module Models.Users.Users
-  ( User (..),
-    UserId (..),
-    createUser,
-    userIdByEmail,
-    createUserId,
-    insertUser,
-    userByEmail,
-    createEmptyUser,
-    addUserToAllProjects,
-  )
-where
+module Models.Users.Users (
+  User (..),
+  UserId (..),
+  createUser,
+  userIdByEmail,
+  createUserId,
+  insertUser,
+  userByEmail,
+  createEmptyUser,
+  addUserToAllProjects,
+) where
 
 import Data.Aeson (FromJSON (parseJSON), ToJSON (toJSON))
 import Data.CaseInsensitive (CI)

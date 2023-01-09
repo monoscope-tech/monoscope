@@ -3,17 +3,16 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 
-module Pages.Projects.CreateProject
-  ( CreateProjectForm,
-    createProjectGetH,
-    createProjectPostH,
-    createProjectFormV,
-    createProjectFormToModel,
-    CreateProjectFormError,
-    projectSettingsGetH,
-    deleteProjectGetH,
-  )
-where
+module Pages.Projects.CreateProject (
+  CreateProjectForm,
+  createProjectGetH,
+  createProjectPostH,
+  createProjectFormV,
+  createProjectFormToModel,
+  CreateProjectFormError,
+  projectSettingsGetH,
+  deleteProjectGetH,
+) where
 
 import BackgroundJobs qualified
 import Config
@@ -41,11 +40,11 @@ import NeatInterpolation (text)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
-import Servant
-  ( Headers,
-    addHeader,
-    noHeader,
-  )
+import Servant (
+  Headers,
+  addHeader,
+  noHeader,
+ )
 import Servant.Htmx
 import Web.FormUrlEncoded (FromForm)
 

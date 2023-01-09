@@ -1,18 +1,17 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module Models.Apis.Anomalies
-  ( selectAnomalies,
-    AnomalyVM (..),
-    AnomalyActions (..),
-    AnomalyTypes (..),
-    AnomalyId (..),
-    parseAnomalyTypes,
-    parseAnomalyActions,
-    getAnomalyVM,
-    anomalyIdText,
-  )
-where
+module Models.Apis.Anomalies (
+  selectAnomalies,
+  AnomalyVM (..),
+  AnomalyActions (..),
+  AnomalyTypes (..),
+  AnomalyId (..),
+  parseAnomalyTypes,
+  parseAnomalyActions,
+  getAnomalyVM,
+  anomalyIdText,
+) where
 
 import Data.Aeson qualified as AE
 import Data.Default (Default, def)
@@ -30,11 +29,11 @@ import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
 import Database.PostgreSQL.Transact (DBT)
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Fields.Types qualified as Fields
-  ( FieldCategoryEnum,
-    FieldId,
-    FieldTypes,
-  )
+import Models.Apis.Fields.Types qualified as Fields (
+  FieldCategoryEnum,
+  FieldId,
+  FieldTypes,
+ )
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects

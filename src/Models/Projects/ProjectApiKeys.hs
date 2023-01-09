@@ -4,17 +4,16 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module Models.Projects.ProjectApiKeys
-  ( ProjectApiKey (..),
-    ProjectApiKeyId (..),
-    encryptAPIKey,
-    decryptAPIKey,
-    newProjectApiKeys,
-    insertProjectApiKey,
-    projectApiKeysByProjectId,
-    getProjectApiKey,
-  )
-where
+module Models.Projects.ProjectApiKeys (
+  ProjectApiKey (..),
+  ProjectApiKeyId (..),
+  encryptAPIKey,
+  decryptAPIKey,
+  newProjectApiKeys,
+  insertProjectApiKey,
+  projectApiKeysByProjectId,
+  getProjectApiKey,
+) where
 
 import Crypto.Cipher.AES (AES256)
 import Crypto.Cipher.Types (BlockCipher (..), Cipher (..), nullIV)
@@ -35,9 +34,9 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Simple.ToRow (ToRow)
 import Database.PostgreSQL.Transact (DBT)
 import Models.Projects.Projects qualified as Projects
-import Servant.API (FromHttpApiData)
 import Optics.TH
 import Relude hiding (id)
+import Servant.API (FromHttpApiData)
 
 newtype ProjectApiKeyId = ProjectApiKeyId {unProjectApiKeyId :: UUID.UUID}
   deriving stock (Generic, Show)

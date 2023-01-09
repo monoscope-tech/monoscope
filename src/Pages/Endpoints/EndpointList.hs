@@ -4,9 +4,9 @@ import Config
 import Data.Default (def)
 import Data.Text (toLower)
 import Data.Vector (Vector)
-import Database.PostgreSQL.Entity.DBT
-  ( withPool,
-  )
+import Database.PostgreSQL.Entity.DBT (
+  withPool,
+ )
 import Fmt (commaizeF, fixedF, fmt, (+|), (|+))
 import Lucid
 import Lucid.Htmx
@@ -86,7 +86,8 @@ endpointList enps = do
               td_ [class_ " text-sm text-gray-400 font-normal text-center"] $ do
                 span_ $ toHtml @String $ fmt $ commaizeF (enp.totalRequests)
               td_ [class_ " inconsolata text-base text-slate-700 text-right space-x-2"] $ do
-                span_ $ toHtml @String $ fmt $ fixedF 1 (enp.totalTime) -- convert from milliseconds
+                span_ $ toHtml @String $ fmt $ fixedF 1 (enp.totalTime)
+                -- convert from milliseconds
                 div_ [class_ "w-10 inline-block", term "data-tippy-content" "enpoint total time vs project total"] $ meter__ $ ((enp.totalTime) / (enp.totalTimeProj)) * 100
               td_ [class_ " text-sm text-gray-400 font-normal text-right space-x-2"] $ do
                 span_ $ toHtml @Text $ fmt $ fixedF 2 (enp.p50) |+ " ms"

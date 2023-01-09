@@ -2,21 +2,20 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module Models.Apis.Endpoints
-  ( Endpoint (..),
-    EndpointId (..),
-    EndpointRequestStats (..),
-    endpointUrlPath,
-    upsertEndpoints,
-    endpointRequestStatsByProject,
-    endpointRequestStatsByEndpoint,
-    endpointById,
-    endpointIdText,
-    endpointToUrlPath,
-    upsertEndpointQueryAndParam,
-    endpointByHash,
-  )
-where
+module Models.Apis.Endpoints (
+  Endpoint (..),
+  EndpointId (..),
+  EndpointRequestStats (..),
+  endpointUrlPath,
+  upsertEndpoints,
+  endpointRequestStatsByProject,
+  endpointRequestStatsByEndpoint,
+  endpointById,
+  endpointIdText,
+  endpointToUrlPath,
+  upsertEndpointQueryAndParam,
+  endpointByHash,
+) where
 
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Aeson qualified as AE

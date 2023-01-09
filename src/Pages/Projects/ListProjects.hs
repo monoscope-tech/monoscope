@@ -1,7 +1,6 @@
-module Pages.Projects.ListProjects
-  ( listProjectsGetH,
-  )
-where
+module Pages.Projects.ListProjects (
+  listProjectsGetH,
+) where
 
 import Config
 import Data.Default (def)

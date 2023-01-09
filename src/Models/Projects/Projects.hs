@@ -1,25 +1,24 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module Models.Projects.Projects
-  ( Project (..),
-    Project' (..),
-    ProjectId (..),
-    CreateProject (..),
-    ProjectRequestStats (..),
-    insertProject,
-    projectIdText,
-    projectIdFromText,
-    selectProjectsForUser,
-    projectRequestStatsByProject,
-    selectProjectForUser,
-    updateProject,
-    deleteProject,
-    projectById,
-    projectCacheById,
-    ProjectCache (..),
-  )
-where
+module Models.Projects.Projects (
+  Project (..),
+  Project' (..),
+  ProjectId (..),
+  CreateProject (..),
+  ProjectRequestStats (..),
+  insertProject,
+  projectIdText,
+  projectIdFromText,
+  selectProjectsForUser,
+  projectRequestStatsByProject,
+  selectProjectForUser,
+  updateProject,
+  deleteProject,
+  projectById,
+  projectCacheById,
+  ProjectCache (..),
+) where
 
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Default

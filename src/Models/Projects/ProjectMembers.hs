@@ -2,17 +2,16 @@
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module Models.Projects.ProjectMembers
-  ( ProjectMembers (..),
-    insertProjectMembers,
-    CreateProjectMembers (..),
-    ProjectMemberVM,
-    Permissions (..),
-    selectActiveProjectMembers,
-    updateProjectMembersPermissons,
-    softDeleteProjectMembers,
-  )
-where
+module Models.Projects.ProjectMembers (
+  ProjectMembers (..),
+  insertProjectMembers,
+  CreateProjectMembers (..),
+  ProjectMemberVM,
+  Permissions (..),
+  selectActiveProjectMembers,
+  updateProjectMembersPermissons,
+  softDeleteProjectMembers,
+) where
 
 import Control.Error (note)
 import Data.CaseInsensitive (CI)

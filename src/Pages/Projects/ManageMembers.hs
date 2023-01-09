@@ -1,9 +1,8 @@
-module Pages.Projects.ManageMembers
-  ( manageMembersGetH,
-    manageMembersPostH,
-    ManageMembersForm (..),
-  )
-where
+module Pages.Projects.ManageMembers (
+  manageMembersGetH,
+  manageMembersPostH,
+  ManageMembersForm (..),
+) where
 
 import BackgroundJobs qualified
 import Config
@@ -66,7 +65,8 @@ manageMembersPostH sess pid form = do
   let projectTitle = maybe "" (^. #title) project
 
   let deletedUAndP =
-        Vector.toList projMembers & filter (\pm -> not $ any (\(email, _) -> original (pm ^. #email) == email) usersAndPermissions)
+        Vector.toList projMembers
+          & filter (\pm -> not $ any (\(email, _) -> original (pm ^. #email) == email) usersAndPermissions)
           & filter (\a -> a ^. #userId /= currUserId)
           & map (\a -> a ^. #id) -- We should not allow deleting the current user from the project
 
@@ -84,22 +84,30 @@ manageMembersPostH sess pid form = do
           Just idX -> pure idX
 
       when (userId' /= currUserId) $ -- invite the users to the project (Usually as an email)
-        void $ withResource pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId' pid email projectTitle
+        void $
+          withResource pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId' pid email projectTitle
       pure (email, permission, userId')
 
   let projectMembers =
-        newProjectMembers & filter (\(_, _, id') -> id' /= currUserId)
+        newProjectMembers
+          & filter (\(_, _, id') -> id' /= currUserId)
           & map (\(email, permission, id') -> ProjectMembers.CreateProjectMembers pid id' permission)
   _ <- liftIO $ withPool pool $ ProjectMembers.insertProjectMembers projectMembers -- insert new project members
 
   -- Update existing contacts with updated permissions
   -- TODO: Send a notification via background job, about the users permission having been updated.
   unless (null uAndPOldAndChanged) $
-    void $ liftIO $ withPool pool $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
+    void $
+      liftIO $
+        withPool pool $
+          ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
   -- soft delete project members with id
   unless (null deletedUAndP) $
-    void $ liftIO $ withPool pool $ ProjectMembers.softDeleteProjectMembers deletedUAndP
+    void $
+      liftIO $
+        withPool pool $
+          ProjectMembers.softDeleteProjectMembers deletedUAndP
 
   projMembersLatest <- liftIO $ withPool pool $ ProjectMembers.selectActiveProjectMembers pid
 

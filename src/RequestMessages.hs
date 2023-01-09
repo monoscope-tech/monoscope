@@ -3,14 +3,13 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module RequestMessages
-  ( RequestMessage (..),
-    requestMsgToDumpAndEndpoint,
-    valueToFormatStr,
-    valueToFields,
-    SDKTypes (..),
-  )
-where
+module RequestMessages (
+  RequestMessage (..),
+  requestMsgToDumpAndEndpoint,
+  valueToFormatStr,
+  valueToFields,
+  SDKTypes (..),
+) where
 
 import Data.Aeson (Value)
 import Data.Aeson qualified as AE
@@ -30,17 +29,17 @@ import Data.Vector qualified as Vector
 import Database.PostgreSQL.Simple (Query)
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Fields.Query qualified as Fields
-  ( insertFieldQueryAndParams,
-  )
-import Models.Apis.Fields.Types qualified as Fields
-  ( Field (..),
-    FieldCategoryEnum (..),
-    FieldId (FieldId),
-    FieldTypes (..),
-    fieldCategoryEnumToText,
-    fieldTypeToText,
-  )
+import Models.Apis.Fields.Query qualified as Fields (
+  insertFieldQueryAndParams,
+ )
+import Models.Apis.Fields.Types qualified as Fields (
+  Field (..),
+  FieldCategoryEnum (..),
+  FieldId (FieldId),
+  FieldTypes (..),
+  fieldCategoryEnumToText,
+  fieldTypeToText,
+ )
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
