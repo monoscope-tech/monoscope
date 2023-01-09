@@ -16,11 +16,11 @@ import Relude
 import Witch (from)
 
 throughputEndpointHTML :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Bool -> Maybe Text -> Maybe Text -> DashboardM (Html ())
-throughputEndpointHTML _ pid idM groupBy_ endpointHash shapeHash formatHash intervalM limitM showLegend_ fromDStr toDStr = do
+throughputEndpointHTML _ pid idM groupBy_ endpointHash shapeHash formatHash numSlotsM limitM showLegend_ fromDStr toDStr = do
   pool <- asks pool
   let fromD = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromDStr) :: Maybe UTCTime)
   let toD = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
-  chartData <- liftIO $ withPool pool $ RequestDumps.throughputBy pid groupBy_ endpointHash shapeHash formatHash (fromMaybe 0 intervalM) limitM Nothing (fromD, toD)
+  chartData <- liftIO $ withPool pool $ RequestDumps.throughputBy pid groupBy_ endpointHash shapeHash formatHash (fromMaybe 0 numSlotsM) limitM Nothing (fromD, toD)
   let entityId = fromMaybe "" idM
   let groupBy = maybe "" (\x -> "\"" <> x <> "\"") groupBy_
   let showLegend = T.toLower $ show $ fromMaybe False showLegend_
@@ -48,13 +48,13 @@ runGroupBy GBStatusCode = "group_by=status_code"
 
 -- This endpoint will return a throughput chart partial
 throughput :: Projects.ProjectId -> Text -> Maybe QueryBy -> Maybe GroupBy -> Int -> Maybe Int -> Bool -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
-throughput pid elemID qByM gByM intervalMinutes' limit' showLegend' (fromD, toD) = do
+throughput pid elemID qByM gByM numSlots' limit' showLegend' (fromD, toD) = do
   let pidT = pid.toText
   let queryBy = runQueryBy <$> qByM
   let gBy = runGroupBy <$> gByM
   let queryStr = [queryBy, gBy] & catMaybes & T.intercalate "&"
   let showLegend = T.toLower $ show showLegend'
-  let intervalMinutes = show intervalMinutes'
+  let numSlots = show numSlots' 
   let limit = maybe "" (\x -> "limit=" <> show x) limit'
   let fromDStr = from @String @Text $ maybe "" (iso8601Show . zonedTimeToUTC) fromD
   let toDStr = from @String @Text $ maybe "" (iso8601Show . zonedTimeToUTC) toD
@@ -62,7 +62,7 @@ throughput pid elemID qByM gByM intervalMinutes' limit' showLegend' (fromD, toD)
   div_
     [ id_ $ "id-" <> elemID
     , class_ "w-full h-full"
-    , hxGet_ [text| /p/$pidT/charts_html/throughput?id=$elemID&show_legend=$showLegend&interval=$intervalMinutes&$limit&$queryStr&from=$fromDStr&to=$toDStr |]
+    , hxGet_ [text| /p/$pidT/charts_html/throughput?id=$elemID&show_legend=$showLegend&num_slots=$numSlots&$limit&$queryStr&from=$fromDStr&to=$toDStr |]
     , hxTrigger_ "intersect"
     , hxSwap_ "outerHTML"
     ]

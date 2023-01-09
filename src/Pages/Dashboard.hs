@@ -2,10 +2,6 @@ module Pages.Dashboard (dashboardGetH) where
 
 import Config
 import Data.Aeson qualified as AE
-import Data.Aeson.Combinators.Decode (decode, utcTime, zonedTime)
-import Data.Default (def)
-import Data.Text (unpack)
-import Data.Time (UTCTime, ZonedTime, addUTCTime, defaultTimeLocale, formatTime, getCurrentTime, getCurrentTimeZone, secondsToNominalDiffTime, utc, utcToLocalZonedTime, utcToZonedTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
@@ -13,8 +9,6 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Fmt (fixedF, fmt)
 import Formatting (commas, sformat)
 import Lucid
-import Lucid.Htmx
-import Lucid.Hyperscript
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
@@ -27,6 +21,10 @@ import Relude hiding (max, min)
 import Text.Interpolation.Nyan
 import Utils (deleteParam, mIcon_)
 import Witch (from)
+import Data.Time (ZonedTime, UTCTime, getCurrentTime, utcToZonedTime, utc, addUTCTime, secondsToNominalDiffTime, formatTime)
+import Lucid.Hyperscript (__)
+import Data.Default (def)
+import Data.Time.Format (defaultTimeLocale)
 
 timePickerItems :: [(Text, Text)]
 timePickerItems =
@@ -86,7 +84,7 @@ dashboardGetH sess pid fromDStr toDStr sinceStr = do
   let currentURL = "/p/" <> Projects.projectIdText pid <> "?from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
   let currentPickerTxt = case sinceStr of
         Just a -> a
-        Nothing -> maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> "-" <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD
+        Nothing -> maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD
   let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt}
   pure $ bodyWrapper bwconf $ dashboardPage paramInput currTime projectRequestStats reqLatenciesRolledByStepsJ anomalies (fromD, toD)
 
@@ -96,27 +94,27 @@ dashboardPage paramInput currTime projectStats reqLatenciesRolledByStepsJ anomal
   section_ [class_ "p-8 container mx-auto px-4 space-y-12 pb-24"] $ do
     div_ [class_ "relative p-1 "] do
       a_
-        [ class_ "relative p-2 border border-1 border-black-200 space-x-2  inline-block relative cursor-pointer"
+        [ class_ "relative p-2 border border-1 border-black-200 space-x-2  inline-block relative cursor-pointer rounded-md"
         , [__| on click toggle .hidden on #timepickerBox|]
         ]
         do
-          input_ [id_ "startTime", type_ "hidden"]
-          input_ [id_ "endTime", type_ "hidden"]
           mIcon_ "clock" "h-4 w-4"
           span_ [class_ "inline-block"] $ toHtml paramInput.currentPickerTxt
           img_
             [ src_ "/assets/svgs/cheveron-down.svg"
             , class_ "h-4 w-4 inline-block"
             ]
-      div_ [id_ "timepickerBox", class_ "hidden absolute z-10 mt-1 max-h-60 w-84 overflow-auto rounded-md bg-white py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm"] do
-        timePickerItems
-          & mapM \(val, title) -> do
-            a_
-              [ class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 "
-              , href_ $ currentURL' <> "&since=" <> val
-              ]
-              $ toHtml title
-        a_ [class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ", onclick_ "picker.show()"] "Custom date range"
+      div_ [id_ "timepickerBox", class_ "hidden absolute z-10 mt-1  rounded-md flex"] do
+        div_ [class_ "inline-block w-84 overflow-auto bg-white py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm"] do
+          timePickerItems
+            & mapM \(val, title) -> a_
+                [ class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 "
+                , href_ $ currentURL' <> "&since=" <> val
+                ]
+                $ toHtml title
+          a_ [class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ", [__| on click toggle .hidden on #timepickerSidebar |]] "Custom date range"
+        div_ [class_ "inline-block relative hidden", id_ "timepickerSidebar"] do
+          div_ [id_ "startTime", class_ "hidden"] ""
 
     -- button_ [class_ "", id_ "checkin", onclick_ "window.picker.show()"] "timepicker"
     section_ $ AnomaliesList.anomalyListSlider currTime anomalies
@@ -128,14 +126,13 @@ dashboardPage paramInput currTime projectStats reqLatenciesRolledByStepsJ anomal
       css: [
         'https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.0/dist/index.css',
       ],
-      plugins: ['RangePlugin', 'PresetPlugin', 'TimePlugin'],
+      inline: true,
+      plugins: ['RangePlugin', 'TimePlugin'],
       autoApply: false,
       setup(picker) {
         picker.on('select', (e) => {
           const start = JSON.stringify(e.detail.start).slice(1, -1);
           const end = JSON.stringify(e.detail.end).slice(1, -1);
-          document.getElementById("startTime").value = start;
-          document.getElementById("endTime").value = end;
 
           const url = new URL(window.location.href);
           url.searchParams.set('from', start);
@@ -146,8 +143,7 @@ dashboardPage paramInput currTime projectStats reqLatenciesRolledByStepsJ anomal
       },
     });
     window.picker = picker;
-
-      |]
+    |]
 
 statBox :: Text -> Text -> Html ()
 statBox title val = do
@@ -189,7 +185,7 @@ dStats projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledByStepsJ 
           div_ [class_ "p-4 h-full space-y-6"] $ do
             select_ [] $ do
               option_ [class_ "text-2xl font-normal"] "Reqs Grouped by Endpoint"
-            Charts.throughput projReqStats.projectId "reqsByEndpoints" Nothing (Just Charts.GBEndpoint) (3 * 60) Nothing True dateRange
+            Charts.throughput projReqStats.projectId "reqsByEndpoints" Nothing (Just Charts.GBEndpoint) 120 Nothing True dateRange
 
       div_ [class_ "col-span-3 card-round py-3 px-6"] $ do
         div_ [class_ "p-4"] $ do

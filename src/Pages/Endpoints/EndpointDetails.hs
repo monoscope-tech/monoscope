@@ -211,7 +211,7 @@ endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p
             option_ "Reqs by Status code"
             option_ "Avg Reqs per minute"
         div_ [id_ "reqByStatusCode", class_ ""] ""
-        Charts.throughput enpStats.projectId "reqByStatusCode" (Just $ Charts.QBEndpointHash enpStats.endpointHash) (Just Charts.GBStatusCode) (3 * 60) Nothing True dateRange
+        Charts.throughput enpStats.projectId "reqByStatusCode" (Just $ Charts.QBEndpointHash enpStats.endpointHash) (Just Charts.GBStatusCode) (120) Nothing True dateRange
       div_ [class_ "col-span-3 bg-white   border border-gray-100  rounded-xl py-3 px-6"] $ do
         div_ [class_ "p-4"] $
           select_ [] $ do
