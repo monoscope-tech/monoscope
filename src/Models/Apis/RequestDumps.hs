@@ -195,15 +195,19 @@ select duration_steps, count(id)
       |]
 
 -- TODO: expand this into a view
-selectReqLatenciesRolledByStepsForProject :: Int -> Int -> Projects.ProjectId -> DBT IO (Vector (Int, Int))
-selectReqLatenciesRolledByStepsForProject maxv steps pid = query Select q (maxv, steps, steps, steps, pid)
+selectReqLatenciesRolledByStepsForProject :: Int -> Int -> Projects.ProjectId -> (Maybe ZonedTime, Maybe ZonedTime) -> DBT IO (Vector (Int, Int))
+selectReqLatenciesRolledByStepsForProject maxv steps pid dateRange = query Select (Query $ from @Text q) (maxv, steps, steps, steps, pid)
   where
+    dateRangeStr = from @String $ case dateRange of
+      (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
+      (Just a, Just b) -> "AND created_at BETWEEN '" <> formatTime defaultTimeLocale "%F %R" a <> "' AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
+      _ -> ""
     q =
-      [sql| 
+      [text| 
 select duration_steps, count(id)
 	FROM generate_series(0, ?, ?) AS duration_steps
-	LEFT OUTER JOIN apis.request_dumps on (duration_steps = round((EXTRACT(epoch FROM duration)/1000000)/?)*? AND created_at > NOW() - interval '14' day
-    AND project_id=?)
+	LEFT OUTER JOIN apis.request_dumps on (duration_steps = round((EXTRACT(epoch FROM duration)/1000000)/?)*?
+    AND project_id=? $dateRangeStr )
 	GROUP BY duration_steps 
 	ORDER BY duration_steps;
       |]
@@ -237,8 +241,8 @@ throughputBy pid groupByM endpointHash shapeHash formatHash interval limitM extr
   let intervalT = show interval
 
   let dateRangeStr = from @String $ case dateRange of
-        (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND " <> formatTime defaultTimeLocale "%F %R" b
-        (Just a, Just b) -> "AND created_at BETWEEN " <> formatTime defaultTimeLocale "%F %R" a <> " AND " <> formatTime defaultTimeLocale "%F %R" b
+        (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
+        (Just a, Just b) -> "AND created_at BETWEEN '" <> formatTime defaultTimeLocale "%F %R" a <> "' AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
         _ -> ""
   -- This limits the range of all throughpu by queries to 1 month.
   -- _ -> "AND created_at BETWEEN NOW() AND NOW() - INTERVAL '30 days' "

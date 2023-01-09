@@ -1,14 +1,16 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE RankNTypes #-}
 
-module Utils (eitherStrToText, GetOrRedirect, redirect, DBField (..), mIcon_) where
+module Utils (eitherStrToText, GetOrRedirect, redirect, DBField (..), mIcon_, deleteParam) where
 
+import Data.Text (replace)
 import Data.Time (ZonedTime)
 import Database.PostgreSQL.Simple.ToField (ToField (..))
 import Lucid (Html, href_)
 import Lucid.Svg (class_, svg_, use_)
 import Relude
 import Servant
+import Text.Regex.TDFA ((=~))
 
 -- Added only for satisfying the tests
 instance Eq ZonedTime where
@@ -36,3 +38,9 @@ instance ToField DBField where
 
 mIcon_ :: Text -> Text -> Html ()
 mIcon_ mIcon classes = svg_ [class_ $ "inline-block icon " <> classes] $ use_ [href_ $ "/assets/svgs/symbol-defs.svg#icon-" <> mIcon]
+
+deleteParam :: Text -> Text -> Text
+deleteParam key url = if needle == "" then url else replace needle "" url
+  where
+    needle = (url =~ reg :: Text)
+    reg = "&" <> key <> "(=[^&]*)?|^" <> key <> "(=[^&]*)?&?" :: Text

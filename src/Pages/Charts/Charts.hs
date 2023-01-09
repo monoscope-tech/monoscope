@@ -3,6 +3,8 @@ module Pages.Charts.Charts (throughput, chartInit, throughputEndpointHTML, Query
 import Config (DashboardM, pool)
 import Data.Aeson.Combinators.Decode (decode, zonedTime)
 import Data.Text qualified as T
+import Data.Time (UTCTime, ZonedTime, defaultTimeLocale, formatTime, utc, utcToZonedTime, zonedTimeToUTC)
+import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import Lucid.Htmx
@@ -16,8 +18,8 @@ import Witch (from)
 throughputEndpointHTML :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Bool -> Maybe Text -> Maybe Text -> DashboardM (Html ())
 throughputEndpointHTML _ pid idM groupBy_ endpointHash shapeHash formatHash intervalM limitM showLegend_ fromDStr toDStr = do
   pool <- asks pool
-  let fromD = decode zonedTime $ (from @Text $ fromMaybe "" fromDStr)
-  let toD = decode zonedTime $ (from @Text $ fromMaybe "" toDStr)
+  let fromD = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromDStr) :: Maybe UTCTime)
+  let toD = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
   chartData <- liftIO $ withPool pool $ RequestDumps.throughputBy pid groupBy_ endpointHash shapeHash formatHash (fromMaybe 0 intervalM) limitM Nothing (fromD, toD)
   let entityId = fromMaybe "" idM
   let groupBy = maybe "" (\x -> "\"" <> x <> "\"") groupBy_
@@ -45,8 +47,8 @@ runGroupBy GBEndpoint = "group_by=endpoint"
 runGroupBy GBStatusCode = "group_by=status_code"
 
 -- This endpoint will return a throughput chart partial
-throughput :: Projects.ProjectId -> Text -> Maybe QueryBy -> Maybe GroupBy -> Int -> Maybe Int -> Bool -> Html ()
-throughput pid elemID qByM gByM intervalMinutes' limit' showLegend' = do
+throughput :: Projects.ProjectId -> Text -> Maybe QueryBy -> Maybe GroupBy -> Int -> Maybe Int -> Bool -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
+throughput pid elemID qByM gByM intervalMinutes' limit' showLegend' (fromD, toD) = do
   let pidT = pid.toText
   let queryBy = runQueryBy <$> qByM
   let gBy = runGroupBy <$> gByM
@@ -54,11 +56,13 @@ throughput pid elemID qByM gByM intervalMinutes' limit' showLegend' = do
   let showLegend = T.toLower $ show showLegend'
   let intervalMinutes = show intervalMinutes'
   let limit = maybe "" (\x -> "limit=" <> show x) limit'
+  let fromDStr = from @String @Text $ maybe "" (iso8601Show . zonedTimeToUTC) fromD
+  let toDStr = from @String @Text $ maybe "" (iso8601Show . zonedTimeToUTC) toD
 
   div_
     [ id_ $ "id-" <> elemID,
       class_ "w-full h-full",
-      hxGet_ [text| /p/$pidT/charts_html/throughput?id=$elemID&show_legend=$showLegend&interval=$intervalMinutes&$limit&$queryStr |],
+      hxGet_ [text| /p/$pidT/charts_html/throughput?id=$elemID&show_legend=$showLegend&interval=$intervalMinutes&$limit&$queryStr&from=$fromDStr&to=$toDStr |],
       hxTrigger_ "intersect",
       hxSwap_ "outerHTML"
     ]

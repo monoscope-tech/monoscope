@@ -69,13 +69,13 @@ type ProtectedAPI =
   UVerb 'GET '[HTML] GetOrRedirect
     :<|> "p" :> "new" :> Get '[HTML] (Html ()) -- p represents project
     :<|> "p" :> "new" :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
-    :<|> "p" :> ProjectId :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "settings" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "delete" :> Get '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
     :<|> "p" :> ProjectId :> "manage_members" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "manage_members" :> ReqBody '[FormUrlEncoded] ManageMembersForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "endpoints" :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "endpoints" :> Capture "endpoints_id" Endpoints.EndpointId :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "endpoints" :> Capture "endpoints_id" Endpoints.EndpointId :> QPT "from" :> QPT "to" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "apis" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Api.GenerateAPIKeyForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> Get '[HTML] (Html ())

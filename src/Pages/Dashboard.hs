@@ -2,14 +2,18 @@ module Pages.Dashboard (dashboardGetH) where
 
 import Config
 import Data.Aeson qualified as AE
+import Data.Aeson.Combinators.Decode (decode, utcTime, zonedTime)
 import Data.Default (def)
-import Data.Time (UTCTime, getCurrentTime)
+import Data.Text (unpack)
+import Data.Time (UTCTime, ZonedTime, addUTCTime, defaultTimeLocale, formatTime, getCurrentTime, getCurrentTimeZone, secondsToNominalDiffTime, utc, utcToLocalZonedTime, utcToZonedTime)
+import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Fmt (fixedF, fmt)
 import Formatting (commas, sformat)
 import Lucid
+import Lucid.Htmx
 import Lucid.Hyperscript
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -21,11 +25,45 @@ import Pages.BodyWrapper
 import Pages.Charts.Charts qualified as Charts
 import Relude hiding (max, min)
 import Text.Interpolation.Nyan
-import Utils (mIcon_)
+import Utils (deleteParam, mIcon_)
+import Witch (from)
 
-dashboardGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
-dashboardGetH sess pid = do
+timePickerItems :: [(Text, Text)]
+timePickerItems =
+  [ ("1H", "Last Hour"),
+    ("24H", "Last 24 Hours"),
+    ("7D", "Last 7 days"),
+    ("14D", "Last 14 days")
+  ]
+
+data ParamInput = ParamInput
+  { currentURL :: Text,
+    sinceStr :: Maybe Text,
+    dateRange :: (Maybe ZonedTime, Maybe ZonedTime),
+    currentPickerTxt :: Text
+  }
+
+dashboardGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
+dashboardGetH sess pid fromDStr toDStr sinceStr = do
   pool <- asks pool
+  now <- liftIO getCurrentTime
+  let sinceStr' = if isNothing fromDStr && isNothing toDStr && isNothing sinceStr then Just "14D" else sinceStr
+
+  -- TODO: Replace with a duration parser.
+  let (fromD, toD) = case sinceStr' of
+        Just "1H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just $ utcToZonedTime utc now)
+        Just "24H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just $ utcToZonedTime utc now)
+        Just "7D" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 7) now, Just $ utcToZonedTime utc now)
+        Just "14D" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 14) now, Just $ utcToZonedTime utc now)
+        Nothing -> do
+          let f = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromDStr) :: Maybe UTCTime)
+          let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
+          (f, t)
+        _ -> do
+          let f = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromDStr) :: Maybe UTCTime)
+          let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
+          (f, t)
+
   (project, projectRequestStats, reqLatenciesRolledByStepsLabeled, anomalies) <- liftIO $
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
@@ -33,7 +71,7 @@ dashboardGetH sess pid = do
       let maxV = round (projectRequestStats.p99) :: Int
       let steps' = (maxV `quot` 100) :: Int
       let steps = if steps' == 0 then 100 else steps'
-      reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledByStepsForProject maxV steps pid
+      reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledByStepsForProject maxV steps pid (fromD, toD)
       anomalies <- Anomalies.selectAnomalies pid Nothing (Just False) (Just False) Nothing
       pure (project, projectRequestStats, Vector.toList reqLatenciesRolledBySteps, anomalies)
 
@@ -45,28 +83,48 @@ dashboardGetH sess pid = do
             pageTitle = "Dashboard"
           }
   currTime <- liftIO getCurrentTime
-  pure $ bodyWrapper bwconf $ dashboardPage currTime projectRequestStats reqLatenciesRolledByStepsJ anomalies
+  let currentURL = "/p/" <> Projects.projectIdText pid <> "?from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
+  let currentPickerTxt = case sinceStr of
+        Just a -> a
+        Nothing -> maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> "-" <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD
+  let paramInput = ParamInput {currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt}
+  pure $ bodyWrapper bwconf $ dashboardPage paramInput currTime projectRequestStats reqLatenciesRolledByStepsJ anomalies (fromD, toD)
 
-dashboardPage :: UTCTime -> Projects.ProjectRequestStats -> Text -> Vector Anomalies.AnomalyVM -> Html ()
-dashboardPage currTime projectStats reqLatenciesRolledByStepsJ anomalies = do
+dashboardPage :: ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Text -> Vector Anomalies.AnomalyVM -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
+dashboardPage paramInput currTime projectStats reqLatenciesRolledByStepsJ anomalies dateRange = do
+  let currentURL' = deleteParam "since" paramInput.currentURL
   section_ [class_ "p-8 container mx-auto px-4 space-y-12 pb-24"] $ do
-    div_ [class_ "p-1"] do
-      input_ [id_ "startTime", type_ "hidden"]
-      input_ [id_ "endTime", type_ "hidden"]
-      a_ [onclick_ "picker.show()", class_ "p-2 border border-1 border-black-200 space-x-2"] do
-        mIcon_ "clock" "h-4 w-4"
-        span_ [id_ "timepickerTrigger", class_ "inline-block"] "last 2 weeks"
-        img_
-          [ src_ "/assets/svgs/cheveron-down.svg",
-            class_ "h-4 w-4 inline-block"
-          ]
+    div_ [class_ "relative p-1 "] do
+      a_
+        [ class_ "relative p-2 border border-1 border-black-200 space-x-2  inline-block relative cursor-pointer",
+          [__| on click toggle .hidden on #timepickerBox|]
+        ]
+        do
+          input_ [id_ "startTime", type_ "hidden"]
+          input_ [id_ "endTime", type_ "hidden"]
+          mIcon_ "clock" "h-4 w-4"
+          span_ [class_ "inline-block"] $ toHtml paramInput.currentPickerTxt
+          img_
+            [ src_ "/assets/svgs/cheveron-down.svg",
+              class_ "h-4 w-4 inline-block"
+            ]
+      div_ [id_ "timepickerBox", class_ "hidden absolute z-10 mt-1 max-h-60 w-84 overflow-auto rounded-md bg-white py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm"] do
+        timePickerItems
+          & mapM \(val, title) -> do
+            a_
+              [ class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ",
+                href_ $ currentURL' <> "&since=" <> val
+              ]
+              $ toHtml title
+        a_ [class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ", onclick_ "picker.show()"] "Custom date range"
+
     -- button_ [class_ "", id_ "checkin", onclick_ "window.picker.show()"] "timepicker"
     section_ $ AnomaliesList.anomalyListSlider currTime anomalies
-    dStats projectStats reqLatenciesRolledByStepsJ
+    dStats projectStats reqLatenciesRolledByStepsJ dateRange
   script_
     [text|
     const picker = new easepick.create({
-      element: '#timepickerTrigger',
+      element: '#startTime',
       css: [
         'https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.0/dist/index.css',
       ],
@@ -82,11 +140,8 @@ dashboardPage currTime projectStats reqLatenciesRolledByStepsJ anomalies = do
           const url = new URL(window.location.href);
           url.searchParams.set('from', start);
           url.searchParams.set('to', end);
+          url.searchParams.delete('since');
           window.location.href = url.toString();
-          // window.history.replaceState(null, null, url);
-
-          console.log(start);
-          console.log(luxon.DateTime.fromISO(start));
         });
       },
     });
@@ -102,8 +157,8 @@ statBox title val = do
         strong_ [class_ "font-normal text-2xl"] $ toHtml val
       small_ $ toHtml title
 
-dStats :: Projects.ProjectRequestStats -> Text -> Html ()
-dStats projReqStats@Projects.ProjectRequestStats {..} reqLatenciesRolledByStepsJ = do
+dStats :: Projects.ProjectRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
+dStats projReqStats@Projects.ProjectRequestStats {..} reqLatenciesRolledByStepsJ dateRange = do
   let _ = min
   when (projReqStats.totalRequests == 0) do
     section_ [class_ "card-round p-5 sm:p-10 space-y-4 text-lg"] $ do
@@ -134,7 +189,7 @@ dStats projReqStats@Projects.ProjectRequestStats {..} reqLatenciesRolledByStepsJ
           div_ [class_ "p-4 h-full space-y-6"] $ do
             select_ [] $ do
               option_ [class_ "text-2xl font-normal"] "Reqs Grouped by Endpoint"
-            Charts.throughput projReqStats.projectId "reqsByEndpoints" Nothing (Just Charts.GBEndpoint) (3 * 60) Nothing True
+            Charts.throughput projReqStats.projectId "reqsByEndpoints" Nothing (Just Charts.GBEndpoint) (3 * 60) Nothing True dateRange
 
       div_ [class_ "col-span-3 card-round py-3 px-6"] $ do
         div_ [class_ "p-4"] $ do

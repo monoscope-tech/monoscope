@@ -132,12 +132,6 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM hxRequestM hxBoostedM = d
     (_, Just "true", Nothing) -> pure $ elementBelowTabs
     _ -> pure $ bodyWrapper bwconf $ anomalyListPage paramInput pid currTime anomalies
 
-deleteParam :: Text -> Text -> Text
-deleteParam key url = if needle == "" then url else replace needle "" url
-  where
-    needle = (url =~ reg :: Text)
-    reg = "&" <> key <> "(=[^&]*)?|^" <> key <> "(=[^&]*)?&?" :: Text
-
 anomalyListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Anomalies.AnomalyVM -> Html ()
 anomalyListPage paramInput pid currTime anomalies = div_ [class_ "container mx-auto  px-4 pt-10 pb-24"] $ do
   h3_ [class_ "text-xl text-slate-700 flex place-items-center"] "Anomalies"
@@ -315,7 +309,7 @@ anomalyItem hideByDefault currTime anomaly icon title subTitle content = do
             anomalyAcknowlegeButton anomaly.projectId anomaly.id (isJust anomaly.acknowlegedAt)
         fromMaybe (toHtml @String "") content
     let chartQuery = Just $ anomaly2ChartQuery anomaly.anomalyType anomaly.targetHash
-    div_ [class_ "flex items-center justify-center "] $ div_ [class_ "w-64 h-16 px-3"] $ Charts.throughput anomaly.projectId anomaly.targetHash chartQuery Nothing (12 * 60) (Just 28) False
+    div_ [class_ "flex items-center justify-center "] $ div_ [class_ "w-64 h-16 px-3"] $ Charts.throughput anomaly.projectId anomaly.targetHash chartQuery Nothing (12 * 60) (Just 28) False (Nothing, Nothing)
     div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $ show $ anomaly.eventsCount14d
 
 anomaly2ChartQuery :: Anomalies.AnomalyTypes -> Text -> Charts.QueryBy

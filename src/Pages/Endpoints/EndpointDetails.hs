@@ -4,11 +4,12 @@ module Pages.Endpoints.EndpointDetails (endpointDetailsH, fieldDetailsPartialH) 
 
 import Config
 import Data.Aeson qualified as AE
+import Data.Aeson.Combinators.Decode (decode, zonedTime)
 import Data.Aeson.Text (encodeToLazyText)
 import Data.Default (def)
 import Data.Map qualified as Map
 import Data.Text as T (breakOnAll, dropWhile, isInfixOf, replace, splitOn, toLower)
-import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime)
+import Data.Time (UTCTime, ZonedTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID as UUID
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
@@ -34,6 +35,7 @@ import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
 import Relude hiding (max, min)
 import Relude.Unsafe qualified as Unsafe
 import Text.Interpolation.Nyan (int, rmode')
+import Witch (from)
 
 fieldDetailsPartialH :: Sessions.PersistentSession -> Projects.ProjectId -> Fields.FieldId -> DashboardM (Html ())
 fieldDetailsPartialH sess pid fid = do
@@ -99,9 +101,11 @@ aesonValueToText = toStrict . encodeToLazyText
 
 -- | endpointDetailsH is the main handler for the endpoint details page.
 -- It reuses the fieldDetailsView as well, which is used for the side navigation on the page and also exposed un the fieldDetailsPartialH endpoint
-endpointDetailsH :: Sessions.PersistentSession -> Projects.ProjectId -> Endpoints.EndpointId -> DashboardM (Html ())
-endpointDetailsH sess pid eid = do
+endpointDetailsH :: Sessions.PersistentSession -> Projects.ProjectId -> Endpoints.EndpointId -> Maybe Text -> Maybe Text -> DashboardM (Html ())
+endpointDetailsH sess pid eid fromDStr toDStr = do
   pool <- asks pool
+  let fromD = decode zonedTime $ (from @Text $ fromMaybe "" fromDStr)
+  let toD = decode zonedTime $ (from @Text $ fromMaybe "" toDStr)
   (enpStats, project, fieldsMap, reqLatenciesRolledByStepsLabeled, anomalies) <- liftIO $
     withPool pool $ do
       -- Should swap names betw enp and endpoint endpoint could be endpointStats
@@ -126,10 +130,10 @@ endpointDetailsH sess pid eid = do
             menuItem = Just "Endpoints"
           }
   currTime <- liftIO getCurrentTime
-  pure $ bodyWrapper bwconf $ endpointDetails currTime enpStats fieldsMap reqLatenciesRolledByStepsJ anomalies
+  pure $ bodyWrapper bwconf $ endpointDetails currTime enpStats fieldsMap reqLatenciesRolledByStepsJ anomalies (fromD, toD)
 
-endpointDetails :: UTCTime -> EndpointRequestStats -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> Vector Anomalies.AnomalyVM -> Html ()
-endpointDetails currTime endpoint fieldsM reqLatenciesRolledByStepsJ anomalies =
+endpointDetails :: UTCTime -> EndpointRequestStats -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> Vector Anomalies.AnomalyVM -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
+endpointDetails currTime endpoint fieldsM reqLatenciesRolledByStepsJ anomalies dateRange =
   div_ [class_ "w-full flex flex-row h-full overflow-hidden"] $ do
     div_ [class_ "w-4/6 p-5 h-full overflow-y-scroll"] $ do
       div_ [class_ "flex flex-row justify-between mb-10"] $ do
@@ -149,7 +153,7 @@ endpointDetails currTime endpoint fieldsM reqLatenciesRolledByStepsJ anomalies =
                 img_ [src_ "/assets/svgs/whitedown.svg", class_ "text-white h-2 w-2 m-1"]
       div_ [class_ "space-y-16 pb-20"] $ do
         section_ $ AnomaliesList.anomalyListSlider currTime anomalies
-        endpointStats endpoint reqLatenciesRolledByStepsJ
+        endpointStats endpoint reqLatenciesRolledByStepsJ dateRange
         reqResSection "Request" True fieldsM
         reqResSection "Response" False fieldsM
     aside_
@@ -174,8 +178,8 @@ endpointDetails currTime endpoint fieldsM reqLatenciesRolledByStepsJ anomalies =
         end
         |]
 
-endpointStats :: Endpoints.EndpointRequestStats -> Text -> Html ()
-endpointStats enpStats@Endpoints.EndpointRequestStats {min, p50, p75, p90, p95, p99, max} reqLatenciesRolledByStepsJ =
+endpointStats :: Endpoints.EndpointRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
+endpointStats enpStats@Endpoints.EndpointRequestStats {min, p50, p75, p90, p95, p99, max} reqLatenciesRolledByStepsJ dateRange =
   section_ [class_ "space-y-3"] $ do
     div_ [class_ "flex justify-between mt-5"] $
       div_ [class_ "flex flex-row"] $ do
@@ -207,7 +211,7 @@ endpointStats enpStats@Endpoints.EndpointRequestStats {min, p50, p75, p90, p95, 
             option_ "Reqs by Status code"
             option_ "Avg Reqs per minute"
         div_ [id_ "reqByStatusCode", class_ ""] ""
-        Charts.throughput enpStats.projectId "reqByStatusCode" (Just $ Charts.QBEndpointHash enpStats.endpointHash) (Just Charts.GBStatusCode) (3 * 60) Nothing True
+        Charts.throughput enpStats.projectId "reqByStatusCode" (Just $ Charts.QBEndpointHash enpStats.endpointHash) (Just Charts.GBStatusCode) (3 * 60) Nothing True dateRange
       div_ [class_ "col-span-3 bg-white   border border-gray-100  rounded-xl py-3 px-6"] $ do
         div_ [class_ "p-4"] $
           select_ [] $ do
