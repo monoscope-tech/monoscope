@@ -42,13 +42,13 @@ data ParamInput = ParamInput
   }
 
 dashboardGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
-dashboardGetH sess pid fromDStr toDStr sinceStr = do
+dashboardGetH sess pid fromDStr toDStr sinceStr' = do
   pool <- asks pool
   now <- liftIO getCurrentTime
-  let sinceStr' = if isNothing fromDStr && isNothing toDStr && isNothing sinceStr then Just "14D" else sinceStr
+  let sinceStr = if isNothing fromDStr && isNothing toDStr && isNothing sinceStr' then Just "14D" else sinceStr'
 
   -- TODO: Replace with a duration parser.
-  let (fromD, toD) = case sinceStr' of
+  let (fromD, toD) = case sinceStr of
         Just "1H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just $ utcToZonedTime utc now)
         Just "24H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just $ utcToZonedTime utc now)
         Just "7D" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 7) now, Just $ utcToZonedTime utc now)
@@ -90,11 +90,11 @@ dashboardGetH sess pid fromDStr toDStr sinceStr = do
 
 dashboardPage :: ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Text -> Vector Anomalies.AnomalyVM -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 dashboardPage paramInput currTime projectStats reqLatenciesRolledByStepsJ anomalies dateRange = do
-  let currentURL' = deleteParam "since" paramInput.currentURL
+  let currentURL' = deleteParam "to" $ deleteParam "from" $ deleteParam "since" paramInput.currentURL
   section_ [class_ "p-8 container mx-auto px-4 space-y-12 pb-24"] $ do
     div_ [class_ "relative p-1 "] do
       a_
-        [ class_ "relative p-2 border border-1 border-black-200 space-x-2  inline-block relative cursor-pointer rounded-md"
+        [ class_ "relative px-3 py-2 border border-1 border-black-200 space-x-2  inline-block relative cursor-pointer rounded-md"
         , [__| on click toggle .hidden on #timepickerBox|]
         ]
         do

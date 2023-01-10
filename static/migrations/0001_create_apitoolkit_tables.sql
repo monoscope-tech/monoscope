@@ -504,6 +504,8 @@ where
 
 CREATE UNIQUE INDEX idx_apis_anomaly_vm_id ON apis.anomalies_vm (id);
 CREATE INDEX idx_apis_anomaly_vm_project_id ON apis.anomalies_vm (project_id);
+CREATE INDEX idx_apis_anomaly_vm_anomaly_type ON apis.anomalies_vm (anomaly_type);
+CREATE INDEX idx_apis_anomaly_vm_project_id_target_hash ON apis.anomalies_vm (project_id, target_hash);
 CREATE INDEX idx_apis_anomaly_vm_project_id_endpoint_id ON apis.anomalies_vm (project_id, endpoint_id);
 
 CREATE OR REPLACE PROCEDURE apis.refresh_request_dump_views_every_5mins(job_id int, config jsonb) LANGUAGE PLPGSQL AS
