@@ -16,7 +16,7 @@ import Data.Default (def)
 import Data.Text (replace)
 import Data.Text qualified as T
 import Data.Time (UTCTime, ZonedTime, defaultTimeLocale, formatTime, getCurrentTime, zonedTimeToUTC)
-import Data.Tuple.Extra (fst3, thd3)
+import Data.Tuple.Extra (fst3)
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute, withPool)

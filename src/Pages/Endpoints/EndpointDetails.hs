@@ -4,13 +4,12 @@ module Pages.Endpoints.EndpointDetails (endpointDetailsH, fieldDetailsPartialH) 
 
 import Config
 import Data.Aeson qualified as AE
-import Data.Aeson.Combinators.Decode (decode, zonedTime)
 import Data.Aeson.Text (encodeToLazyText)
 import Data.Default (def)
 import Data.Map qualified as Map
 import Data.Text as T (breakOnAll, dropWhile, isInfixOf, replace, splitOn, toLower)
-import Data.Time (UTCTime, ZonedTime, defaultTimeLocale, formatTime, getCurrentTime)
-import Data.UUID as UUID
+import Data.Time (UTCTime, ZonedTime, defaultTimeLocale, formatTime, getCurrentTime, utcToZonedTime, utc, addUTCTime, secondsToNominalDiffTime)
+import Data.UUID qualified as UUID 
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
@@ -36,6 +35,28 @@ import Relude hiding (max, min)
 import Relude.Unsafe qualified as Unsafe
 import Text.Interpolation.Nyan (int, rmode')
 import Witch (from)
+import Data.Time.Format.ISO8601 (iso8601ParseM)
+import Utils
+
+timePickerItems :: [(Text, Text)]
+timePickerItems =
+  [ ("1H", "Last Hour")
+  , ("24H", "Last 24 Hours")
+  , ("7D", "Last 7 days")
+  , ("14D", "Last 14 days")
+  ]
+
+data ParamInput = ParamInput
+  { currentURL :: Text
+  , sinceStr :: Maybe Text
+  , dateRange :: (Maybe ZonedTime, Maybe ZonedTime)
+  , currentPickerTxt :: Text
+  , subPage :: Text
+  }
+
+subPageMenu :: [(Text, Text)]
+subPageMenu =  [("Overview", "overview")
+              ,("API Docs", "api_docs")]
 
 fieldDetailsPartialH :: Sessions.PersistentSession -> Projects.ProjectId -> Fields.FieldId -> DashboardM (Html ())
 fieldDetailsPartialH sess pid fid = do
@@ -101,11 +122,27 @@ aesonValueToText = toStrict . encodeToLazyText
 
 -- | endpointDetailsH is the main handler for the endpoint details page.
 -- It reuses the fieldDetailsView as well, which is used for the side navigation on the page and also exposed un the fieldDetailsPartialH endpoint
-endpointDetailsH :: Sessions.PersistentSession -> Projects.ProjectId -> Endpoints.EndpointId -> Maybe Text -> Maybe Text -> DashboardM (Html ())
-endpointDetailsH sess pid eid fromDStr toDStr = do
+endpointDetailsH :: Sessions.PersistentSession -> Projects.ProjectId -> Endpoints.EndpointId -> Maybe Text -> Maybe Text ->Maybe Text -> Maybe Text-> DashboardM (Html ())
+endpointDetailsH sess pid eid fromDStr toDStr sinceStr' subPageM= do
   pool <- asks pool
-  let fromD = decode zonedTime $ (from @Text $ fromMaybe "" fromDStr)
-  let toD = decode zonedTime $ (from @Text $ fromMaybe "" toDStr)
+  now <- liftIO getCurrentTime
+  let sinceStr = if (isNothing fromDStr && isNothing toDStr && isNothing sinceStr') || (fromDStr == Just "") then Just "14D" else sinceStr'
+
+  -- TODO: Replace with a duration parser.
+  let (fromD, toD) = case sinceStr of
+        Just "1H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just $ utcToZonedTime utc now)
+        Just "24H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just $ utcToZonedTime utc now)
+        Just "7D" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 7) now, Just $ utcToZonedTime utc now)
+        Just "14D" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 14) now, Just $ utcToZonedTime utc now)
+        Nothing -> do
+          let f = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromDStr) :: Maybe UTCTime)
+          let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
+          (f, t)
+        _ -> do
+          let f = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromDStr) :: Maybe UTCTime)
+          let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
+          (f, t)
+
   (enpStats, project, fieldsMap, reqLatenciesRolledByStepsLabeled, anomalies) <- liftIO $
     withPool pool $ do
       -- Should swap names betw enp and endpoint endpoint could be endpointStats
@@ -130,10 +167,17 @@ endpointDetailsH sess pid eid fromDStr toDStr = do
           , menuItem = Just "Endpoints"
           }
   currTime <- liftIO getCurrentTime
-  pure $ bodyWrapper bwconf $ endpointDetails currTime enpStats fieldsMap reqLatenciesRolledByStepsJ anomalies (fromD, toD)
+  let currentURL = "/p/" <> Projects.projectIdText pid <> "/endpoints/" <> Endpoints.endpointIdText eid <> "?from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
+  let subPage = fromMaybe "overview" subPageM
+  let currentPickerTxt = case sinceStr of
+        Just a -> a
+        Nothing -> maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD
+  let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt, subPage = subPage}
+  pure $ bodyWrapper bwconf $ endpointDetails paramInput currTime enpStats fieldsMap reqLatenciesRolledByStepsJ anomalies (fromD, toD)
 
-endpointDetails :: UTCTime -> EndpointRequestStats -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> Vector Anomalies.AnomalyVM -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
-endpointDetails currTime endpoint fieldsM reqLatenciesRolledByStepsJ anomalies dateRange =
+endpointDetails :: ParamInput -> UTCTime -> EndpointRequestStats -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> Vector Anomalies.AnomalyVM -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
+endpointDetails paramInput currTime endpoint fieldsM reqLatenciesRolledByStepsJ anomalies dateRange = do
+  let currentURLSubPage =  deleteParam "subpage" paramInput.currentURL
   div_ [class_ "w-full flex flex-row h-full overflow-hidden"] $ do
     div_ [class_ "w-4/6 p-5 h-full overflow-y-scroll"] $ do
       div_ [class_ "flex flex-row justify-between mb-10"] $ do
@@ -142,7 +186,13 @@ endpointDetails currTime endpoint fieldsM reqLatenciesRolledByStepsJ anomalies d
             span_ [class_ $ "p-1 endpoint endpoint-" <> toLower (endpoint.method)] $ toHtml $ (endpoint.method) <> " "
             strong_ [class_ "inconsolata text-xl"] $ toHtml (endpoint.urlPath)
           img_ [src_ "/assets/svgs/cheveron-down.svg", class_ " h-4 w-4 m-2"]
-        div_ [class_ "flex flex-row"] $ do
+        nav_ [class_ " space-x-4"] $ do
+          subPageMenu
+            & mapM_ \(title, slug) -> a_ [href_ $ currentURLSubPage <> "&subpage=" <> slug
+                , class_ $ "cursor-pointer px-3 py-2 font-medium text-sm rounded-md " 
+                  <> if slug == paramInput.subPage then " bg-indigo-100 text-indigo-700 " else " text-gray-500 hover:text-gray-700" ] $ toHtml title 
+
+        div_ [class_ "flex flex-row hidden"] $ do
           a_ [href_ ""] $ do
             button_ [class_ "bg-white rounded-lg h-10 mt-1 "] $ do
               img_ [src_ "/assets/svgs/filter.svg", class_ "h-6 w-6 m-2"]
@@ -151,13 +201,13 @@ endpointDetails currTime endpoint fieldsM reqLatenciesRolledByStepsJ anomalies d
               h3_ [class_ "text-white text-sm text-bold mx-2 mt-1"] "Download Swagger"
               div_ [class_ "bg-blue-900 p-1 rounded-lg ml-2"] $ do
                 img_ [src_ "/assets/svgs/whitedown.svg", class_ "text-white h-2 w-2 m-1"]
-      div_ [class_ "space-y-16 pb-20"] $ do
-        section_ $ AnomaliesList.anomalyListSlider currTime anomalies
-        endpointStats endpoint reqLatenciesRolledByStepsJ dateRange
-        reqResSection "Request" True fieldsM
-        reqResSection "Response" False fieldsM
+      if paramInput.subPage == "api_docs" then
+          apiDocsSubPage fieldsM
+        else
+          apiOverviewSubPage paramInput currTime endpoint fieldsM reqLatenciesRolledByStepsJ anomalies dateRange 
+        
     aside_
-      [ class_ "w-2/6 h-full overflow-y-scroll bg-white border border-gray-200 p-5 sticky top-0"
+      [ class_ "w-2/6 h-full overflow-y-scroll bg-white border border-gray-200 p-5 sticky top-0 "
       , id_ "detailSidebar"
       ]
       $ do
@@ -177,6 +227,41 @@ endpointDetails currTime endpoint fieldsM reqLatenciesRolledByStepsJ anomalies d
             then collapseUntil(nxtElem, level)
         end
         |]
+
+apiDocsSubPage :: Map Fields.FieldCategoryEnum [Fields.Field] -> Html ()
+apiDocsSubPage fieldsM = do
+  div_ [class_ "space-y-16 pb-20", id_ "subpage"] $ do
+      reqResSection "Request" True fieldsM
+      reqResSection "Response" False fieldsM
+
+apiOverviewSubPage :: ParamInput -> UTCTime -> EndpointRequestStats -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> Vector Anomalies.AnomalyVM -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
+apiOverviewSubPage paramInput currTime endpoint fieldsM reqLatenciesRolledByStepsJ anomalies dateRange = do
+  let currentURLSearch = deleteParam "to" $ deleteParam "from" $ deleteParam "since" paramInput.currentURL
+  div_ [class_ "space-y-16 pb-20", id_ "subpage"] $ do
+    a_
+      [ class_ "relative px-3 py-2 border border-1 border-black-200 space-x-2  inline-block relative cursor-pointer rounded-md"
+      , [__| on click toggle .hidden on #timepickerBox|]
+      ]
+      do
+        mIcon_ "clock" "h-4 w-4"
+        span_ [class_ "inline-block"] $ toHtml paramInput.currentPickerTxt
+        img_
+          [ src_ "/assets/svgs/cheveron-down.svg"
+          , class_ "h-4 w-4 inline-block"
+          ]
+    div_ [id_ "timepickerBox", class_ "hidden absolute z-10 mt-1  rounded-md flex"] do
+      div_ [class_ "inline-block w-84 overflow-auto bg-white py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm"] do
+        timePickerItems
+          & mapM \(val, title) -> a_
+              [ class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 "
+              , href_ $ currentURLSearch <> "&since=" <> val
+              ]
+              $ toHtml title
+        a_ [class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ", [__| on click toggle .hidden on #timepickerSidebar |]] "Custom date range"
+      div_ [class_ "inline-block relative hidden", id_ "timepickerSidebar"] do
+        div_ [id_ "startTime", class_ "hidden"] ""
+    section_ $ AnomaliesList.anomalyListSlider currTime anomalies
+    endpointStats endpoint reqLatenciesRolledByStepsJ dateRange
 
 endpointStats :: Endpoints.EndpointRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p99, max} reqLatenciesRolledByStepsJ dateRange =

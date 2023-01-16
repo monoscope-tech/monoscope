@@ -45,7 +45,7 @@ dashboardGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text 
 dashboardGetH sess pid fromDStr toDStr sinceStr' = do
   pool <- asks pool
   now <- liftIO getCurrentTime
-  let sinceStr = if isNothing fromDStr && isNothing toDStr && isNothing sinceStr' then Just "14D" else sinceStr'
+  let sinceStr = if (isNothing fromDStr && isNothing toDStr && isNothing sinceStr' ) || (fromDStr == Just "")then Just "14D" else sinceStr'
 
   -- TODO: Replace with a duration parser.
   let (fromD, toD) = case sinceStr of
@@ -93,28 +93,29 @@ dashboardPage paramInput currTime projectStats reqLatenciesRolledByStepsJ anomal
   let currentURL' = deleteParam "to" $ deleteParam "from" $ deleteParam "since" paramInput.currentURL
   section_ [class_ "p-8 container mx-auto px-4 space-y-12 pb-24"] $ do
     div_ [class_ "relative p-1 "] do
-      a_
-        [ class_ "relative px-3 py-2 border border-1 border-black-200 space-x-2  inline-block relative cursor-pointer rounded-md"
-        , [__| on click toggle .hidden on #timepickerBox|]
-        ]
-        do
-          mIcon_ "clock" "h-4 w-4"
-          span_ [class_ "inline-block"] $ toHtml paramInput.currentPickerTxt
-          img_
-            [ src_ "/assets/svgs/cheveron-down.svg"
-            , class_ "h-4 w-4 inline-block"
-            ]
-      div_ [id_ "timepickerBox", class_ "hidden absolute z-10 mt-1  rounded-md flex"] do
-        div_ [class_ "inline-block w-84 overflow-auto bg-white py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm"] do
-          timePickerItems
-            & mapM \(val, title) -> a_
-                [ class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 "
-                , href_ $ currentURL' <> "&since=" <> val
-                ]
-                $ toHtml title
-          a_ [class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ", [__| on click toggle .hidden on #timepickerSidebar |]] "Custom date range"
-        div_ [class_ "inline-block relative hidden", id_ "timepickerSidebar"] do
-          div_ [id_ "startTime", class_ "hidden"] ""
+      div_ [class_ "relative"] do
+        a_
+          [ class_ "relative px-3 py-2 border border-1 border-black-200 space-x-2  inline-block relative cursor-pointer rounded-md"
+          , [__| on click toggle .hidden on #timepickerBox|]
+          ]
+          do
+            mIcon_ "clock" "h-4 w-4"
+            span_ [class_ "inline-block"] $ toHtml paramInput.currentPickerTxt
+            img_
+              [ src_ "/assets/svgs/cheveron-down.svg"
+              , class_ "h-4 w-4 inline-block"
+              ]
+        div_ [id_ "timepickerBox", class_ "hidden absolute z-10 mt-1  rounded-md flex"] do
+          div_ [class_ "inline-block w-84 overflow-auto bg-white py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm"] do
+            timePickerItems
+              & mapM \(val, title) -> a_
+                  [ class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 "
+                  , href_ $ currentURL' <> "&since=" <> val
+                  ]
+                  $ toHtml title
+            a_ [class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ", [__| on click toggle .hidden on #timepickerSidebar |]] "Custom date range"
+          div_ [class_ "inline-block relative hidden", id_ "timepickerSidebar"] do
+            div_ [id_ "startTime", class_ "hidden"] ""
 
     -- button_ [class_ "", id_ "checkin", onclick_ "window.picker.show()"] "timepicker"
     section_ $ AnomaliesList.anomalyListSlider currTime anomalies
