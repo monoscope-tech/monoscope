@@ -226,6 +226,7 @@ createProjectBody isUpdate cp cpe =
         div_ [class_ "p-5 text-right"] do
           button_ [class_ "inline-block py-2 px-5 bg-blue-700  text-[white] text-sm rounded-xl cursor-pointer", type_ "submit"] "Submit"
 
+    when isUpdate do
       div_ [class_ "col-span-1 h-full justify-center items-center w-full text-center pt-24"] do
         h2_ [class_ "text-red-800 font-medium pb-4"] "Delete project. This is dangerous and unreversable"
         let pid = cp.projectId

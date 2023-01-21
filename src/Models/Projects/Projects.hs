@@ -154,7 +154,7 @@ insertProject = insert @CreateProject
 projectById :: ProjectId -> DBT IO (Maybe Project)
 projectById = queryOne Select q
  where
-  q = [sql| select p.*, '{}' from projects.projects p where id=?|]
+  q = [sql| select p.* from projects.projects p where id=?|]
 
 selectProjectsForUser :: Users.UserId -> DBT IO (V.Vector Project')
 selectProjectsForUser = query Select q
