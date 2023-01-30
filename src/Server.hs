@@ -93,7 +93,8 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "unarchive" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "redacted_fields" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "redacted_fields" :> ReqBody '[FormUrlEncoded] RedactFieldForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-    :<|> "p" :> ProjectId :> "charts_html" :> "throughput" :> QPT "id" :> QPT "group_by" :> QPT "endpoint_hash" :> QPT "shape_hash" :> QPT "format_hash" :> QPI "num_slots" :> QPI "limit" :> QPB "show_legend" :> QPT "from" :> QPT "to" :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "charts_html" :> "throughput" :> QPT "id" :> QPT "group_by" :> QPT "endpoint_hash" :> QPT "shape_hash" :> QPT "format_hash" :> QPT "status_code_gt" :> QPI "num_slots" :> QPI "limit" :> QPB "show_legend" :> QPT "from" :> QPT "to" :> QPT "theme" :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "charts_html" :> "latency" :> QPT "id"  :> QPT "endpoint_hash"  :> QPI "num_slots":> QPT "from" :> QPT "to" :> QPT "theme" :> Get '[HTML] (Html ())
 
 type PublicAPI =
   "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
@@ -158,6 +159,7 @@ protectedServer sess =
     :<|> RedactedFields.redactedFieldsGetH sess
     :<|> RedactedFields.redactedFieldsPostH sess
     :<|> Charts.throughputEndpointHTML sess
+    :<|> Charts.latencyEndpointHTML sess
 
 publicServer :: ServerT PublicAPI DashboardM
 publicServer =

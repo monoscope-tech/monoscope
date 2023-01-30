@@ -173,20 +173,44 @@ dStats projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledByStepsJ 
             ]
         span_ [class_ "text-lg text-slate-700"] "Stats"
 
-    div_ [class_ "grid grid-cols-3  gap-5 reqResSubSection"] $ do
-      div_ [class_ "col-span-3 flex flex-row gap-5"] $ do
-        div_ [class_ "col-span-1 shrink content-between space-y-2"] $ do
-          statBox "Total Requests" (sformat commas projReqStats.totalRequests)
-          statBox "Total Anomalies" (sformat commas (projReqStats.totalAnomalies))
-          statBox "Managed Endpoints" (sformat commas (projReqStats.totalEndpoints))
-          statBox "Total Shapes" (sformat commas (projReqStats.totalShapes))
-          statBox "Total Fields" (sformat commas (projReqStats.totalFields))
+    div_ [class_ "reqResSubSection space-y-5"] $ do
+      div_ [class_ "grid grid-cols-5 gap-5"] $ do
+        statBox "Total Requests" (sformat commas projReqStats.totalRequests)
+        statBox "Total Anomalies" (sformat commas (projReqStats.totalAnomalies))
+        statBox "Managed Endpoints" (sformat commas (projReqStats.totalEndpoints))
+        statBox "Total Shapes" (sformat commas (projReqStats.totalShapes))
+        statBox "Total Fields" (sformat commas (projReqStats.totalFields))
 
-        div_ [class_ "flex-1 grow card-round row-span-2 p-3"] $ do
-          div_ [class_ "p-4 h-full space-y-6"] $ do
+      div_ [class_ "flex gap-5"] do
+        div_ [class_ "flex-1 card-round p-3"] $ do
+          div_ [class_ "p-4 space-y-6"] $ do
+            select_ [] $ do
+              option_ [class_ "text-2xl font-normal"] "Throughput by Status Code"
+            div_ [class_ "h-64 "] do
+              Charts.throughput projReqStats.projectId "reqsByStatusCode" Nothing (Just Charts.GBStatusCode) 120 Nothing True dateRange Nothing
+
+        div_ [class_ "flex-1 card-round p-3"] $ do
+          div_ [class_ "p-4 space-y-6"] $ do
+            select_ [] $ do
+              option_ [class_ "text-2xl font-normal"] "Latency Percentiles"
+            div_ [class_ "h-64 "] do
+              Charts.latency projReqStats.projectId "reqsLatencyPercentiles" Nothing 120 dateRange Nothing
+
+      div_ [class_ "flex gap-5"] do
+        div_ [class_ "flex-1 card-round p-3"] $ do
+          div_ [class_ "p-4 space-y-6"] $ do
+            select_ [] $ do
+              option_ [class_ "text-2xl font-normal"] "Error Rates"
+            div_ [class_ "h-64 "] do
+              Charts.throughput projReqStats.projectId "reqsErrorRates" (Just $ Charts.QBStatusCodeGT 400) (Just Charts.GBStatusCode) 120 Nothing True dateRange (Just "roma") 
+
+        div_ [class_ "flex-1 card-round p-3"] $ do
+          div_ [class_ "p-4 space-y-6"] $ do
             select_ [] $ do
               option_ [class_ "text-2xl font-normal"] "Reqs Grouped by Endpoint"
-            Charts.throughput projReqStats.projectId "reqsByEndpoints" Nothing (Just Charts.GBEndpoint) 120 Nothing True dateRange
+            div_ [class_ "h-64 "] do
+              Charts.throughput projReqStats.projectId "reqsByEndpoints" Nothing (Just Charts.GBEndpoint) 120 Nothing True dateRange Nothing
+
 
       div_ [class_ "col-span-3 card-round py-3 px-6"] $ do
         div_ [class_ "p-4"] $ do

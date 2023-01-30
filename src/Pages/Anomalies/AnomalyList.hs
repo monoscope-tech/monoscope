@@ -308,7 +308,7 @@ anomalyItem hideByDefault currTime anomaly icon title subTitle content = do
             anomalyAcknowlegeButton anomaly.projectId anomaly.id (isJust anomaly.acknowlegedAt)
         fromMaybe (toHtml @String "") content
     let chartQuery = Just $ anomaly2ChartQuery anomaly.anomalyType anomaly.targetHash
-    div_ [class_ "flex items-center justify-center "] $ div_ [class_ "w-64 h-16 px-3"] $ Charts.throughput anomaly.projectId anomaly.targetHash chartQuery Nothing 14 (Just 28) False (Nothing, Nothing)
+    div_ [class_ "flex items-center justify-center "] $ div_ [class_ "w-64 h-16 px-3"] $ Charts.throughput anomaly.projectId anomaly.targetHash chartQuery Nothing 14 (Just 28) False (Nothing, Nothing) Nothing
     div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $ show $ anomaly.eventsCount14d
 
 anomaly2ChartQuery :: Anomalies.AnomalyTypes -> Text -> Charts.QueryBy

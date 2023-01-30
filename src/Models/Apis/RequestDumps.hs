@@ -6,6 +6,7 @@ module Models.Apis.RequestDumps (
   RequestDump (..),
   RequestDumpLogItem,
   throughputBy,
+  latencyBy,
   requestDumpLogItemUrlPath,
   requestDumpLogUrlPath,
   selectReqLatenciesRolledBySteps,
@@ -19,7 +20,7 @@ module Models.Apis.RequestDumps (
 import Control.Error (hush)
 import Data.Aeson qualified as AE
 import Data.Default.Instances ()
-import Data.Time (CalendarDiffTime, ZonedTime, defaultTimeLocale, formatTime, addLocalTime, diffUTCTime, zonedTimeToUTC, nominalDiffTimeToSeconds)
+import Data.Time (CalendarDiffTime, ZonedTime, defaultTimeLocale, formatTime, diffUTCTime, zonedTimeToUTC)
 import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
@@ -37,7 +38,6 @@ import Pkg.Parser
 import Relude hiding (many, some)
 import Utils (DBField (MkDBField))
 import Witch (from)
-import Data.Fixed (div', Pico)
 
 -- request dumps are time series dumps representing each requests which we consume from our users.
 -- We use this field via the log explorer for exploring and searching traffic. And at the moment also use it for most time series analytics.
@@ -214,18 +214,58 @@ select duration_steps, count(id)
 	ORDER BY duration_steps;
       |]
 
+latencyBy :: Projects.ProjectId -> Maybe Text -> Int-> (Maybe ZonedTime, Maybe ZonedTime) -> DBT IO Text
+latencyBy pid endpointHash numSlots dateRange@(fromT, toT) = do
+  let interval =  case dateRange of 
+        (Just a, Just b) -> diffUTCTime (zonedTimeToUTC b) (zonedTimeToUTC a)
+        _ -> 60*60*24*14 
+
+  let intervalT = from @String @Text $ show  $ (floor interval) `div` (if numSlots == 0 then 1 else numSlots)
+  let dateRange' = bimap ( quoteTxt . from @String . formatTime defaultTimeLocale "%F %R" <$> ) ( quoteTxt . from @String . formatTime defaultTimeLocale "%F %R" <$> ) dateRange 
+  let dateRangeStr =  case dateRange' of
+        (Nothing, Just b) -> "AND timeb BETWEEN NOW() AND " <>  b 
+        (Just a, Just b) -> "AND timeb BETWEEN " <>  a <> " AND " <>  b 
+        _ -> ""
+  let q = [text| 
+    with f as (  
+    SELECT
+            to_char(time_bucket('$intervalT seconds', timeb), 'YYYY-DD-MM HH24:MI:SS') time,
+            COALESCE(approx_percentile(0.5, rollup(agg))/1000000, 0) p50,
+            COALESCE(approx_percentile(0.75, rollup(agg))/1000000, 0) p75,
+            COALESCE(approx_percentile(0.9, rollup(agg))/1000000, 0) p90
+    from
+        apis.project_requests_by_endpoint_per_min
+    where
+        project_id = ?
+        and (
+            timeb between now() - INTERVAL '14 days'
+            and now()
+        )
+        $dateRangeStr
+    group by
+        time
+    limit
+        10
+) 
+SELECT COALESCE(json_agg(json_build_array(f.time, f.p50, f.p75, f.p90)), '[]')::text  from f; 
+|]
+  (Only val) <- fromMaybe (Only "[]") <$> queryOne Select (Query $ from @Text q) (pid)
+  pure val
+
+
 -- A throughput chart query for the request_dump table.
 -- daterange :: (Maybe Int, Maybe Int)?
 -- We have a requirement that the date range could either be an interval like now to 7 days ago, or be specific dates like day x to day y.
 -- Now thinking about it, it might be easier to calculate 7days ago into a specific date than dealing with integer day ranges.
-throughputBy :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Maybe Int -> Maybe Text -> (Maybe ZonedTime, Maybe ZonedTime) -> DBT IO Text
-throughputBy pid groupByM endpointHash shapeHash formatHash numSlots limitM extraQuery dateRange@(fromT, toT) = do
+throughputBy :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Maybe Int -> Maybe Text -> (Maybe ZonedTime, Maybe ZonedTime) -> DBT IO Text
+throughputBy pid groupByM endpointHash shapeHash formatHash statusCodeGT numSlots limitM extraQuery dateRange@(fromT, toT) = do
   let extraQueryParsed = hush . parseQueryStringToWhereClause =<< extraQuery
   let condlist =
         catMaybes
           [ " endpoint_hash=? " <$ endpointHash
           , " shape_hash=? " <$ shapeHash
           , " ?=ANY(format_hashes) " <$ formatHash
+          , " status_code>? " <$ statusCodeGT
           , extraQueryParsed
           ]
   let groupBy' = fromMaybe @Text "" $ mappend " ," <$> groupByM
@@ -234,19 +274,16 @@ throughputBy pid groupByM endpointHash shapeHash formatHash numSlots limitM extr
         Nothing -> ("", "")
         _ -> (groupBy', groupBy' <> " as g")
   let groupByFinal = maybe "" (const ",g") groupByM
-
-  let paramList = mapMaybe (MkDBField <$>) [endpointHash, shapeHash, formatHash]
+  let paramList = mapMaybe (MkDBField <$>) [endpointHash, shapeHash, formatHash, statusCodeGT]
   let cond
         | null condlist = mempty
         | otherwise = "AND " <> mconcat (intersperse " AND " condlist)
   let limit = maybe @Text "" (\x -> "limit " <> show x) limitM
-
   let interval =  case dateRange of 
           (Just a, Just b) -> (diffUTCTime (zonedTimeToUTC b) (zonedTimeToUTC a))
           _ -> 60*60*24*14 
 
   let intervalT = from @String @Text $ show  $ (floor interval) `div` (if numSlots == 0 then 1 else numSlots) 
-
   let dateRange' = bimap ( quoteTxt . from @String . formatTime defaultTimeLocale "%F %R" <$> ) ( quoteTxt . from @String . formatTime defaultTimeLocale "%F %R" <$> ) dateRange 
   let dateRangeStr =  case dateRange' of
         (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND " <>  b 
