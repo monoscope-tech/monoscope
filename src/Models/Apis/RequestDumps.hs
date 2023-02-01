@@ -226,28 +226,23 @@ latencyBy pid endpointHash numSlots dateRange@(fromT, toT) = do
         (Nothing, Just b) -> "AND timeb BETWEEN NOW() AND " <>  b 
         (Just a, Just b) -> "AND timeb BETWEEN " <>  a <> " AND " <>  b 
         _ -> ""
+  let (fromD, toD) = bimap (fromMaybe "now() - INTERVAL '14 days'")  (fromMaybe "now()" ) dateRange'
   let q = [text| 
     with f as (  
     SELECT
-            to_char(time_bucket('$intervalT seconds', timeb), 'YYYY-DD-MM HH24:MI:SS') time,
-            COALESCE(approx_percentile(0.5, rollup(agg))/1000000, 0) p50,
-            COALESCE(approx_percentile(0.75, rollup(agg))/1000000, 0) p75,
-            COALESCE(approx_percentile(0.9, rollup(agg))/1000000, 0) p90
+            time_bucket_gapfill('$intervalT seconds', timeb, $fromD, $toD) time,
+            approx_percentile(0.5, rollup(agg))/1000000 p50,
+            approx_percentile(0.75, rollup(agg))/1000000 p75,
+            approx_percentile(0.9, rollup(agg))/1000000 p90
     from
         apis.project_requests_by_endpoint_per_min
     where
         project_id = ?
-        and (
-            timeb between now() - INTERVAL '14 days'
-            and now()
-        )
         $dateRangeStr
     group by
         time
-    limit
-        10
 ) 
-SELECT COALESCE(json_agg(json_build_array(f.time, f.p50, f.p75, f.p90)), '[]')::text  from f; 
+SELECT COALESCE(json_agg(json_build_array(to_char(f.time, 'YYYY-DD-MM HH24:MI:SS'), f.p50, f.p75, f.p90)), '[]')::text  from f; 
 |]
   (Only val) <- fromMaybe (Only "[]") <$> queryOne Select (Query $ from @Text q) (pid)
   pure val
