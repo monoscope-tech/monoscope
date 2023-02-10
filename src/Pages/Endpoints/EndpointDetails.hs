@@ -3,6 +3,7 @@
 module Pages.Endpoints.EndpointDetails (endpointDetailsH, fieldDetailsPartialH) where
 
 import Config
+import Pages.Components
 import Data.Aeson qualified as AE
 import Data.Aeson.Text (encodeToLazyText)
 import Data.Default (def)
@@ -178,8 +179,8 @@ endpointDetailsH sess pid eid fromDStr toDStr sinceStr' subPageM= do
 endpointDetails :: ParamInput -> UTCTime -> EndpointRequestStats -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> Vector Anomalies.AnomalyVM -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 endpointDetails paramInput currTime endpoint fieldsM reqLatenciesRolledByStepsJ anomalies dateRange = do
   let currentURLSubPage =  deleteParam "subpage" paramInput.currentURL
-  div_ [class_ "w-full flex flex-row h-full overflow-hidden"] $ do
-    div_ [class_ "w-4/6 p-5 h-full overflow-y-scroll"] $ do
+  div_ [class_ "w-full h-full overflow-hidden"] $ do
+    div_ [class_ "w-[75%] inline-block p-5 h-full overflow-y-scroll"] $ do
       div_ [class_ "flex flex-row justify-between mb-10"] $ do
         div_ [class_ "flex flex-row place-items-center text-lg font-medium"] $ do
           h3_ [class_ "text-lg text-slate-700"] $ do
@@ -207,7 +208,7 @@ endpointDetails paramInput currTime endpoint fieldsM reqLatenciesRolledByStepsJ 
           apiOverviewSubPage paramInput currTime endpoint fieldsM reqLatenciesRolledByStepsJ anomalies dateRange 
         
     aside_
-      [ class_ "w-2/6 h-full overflow-y-scroll bg-white border border-gray-200 p-5 sticky top-0 "
+      [ class_ "w-[25%] inline-block h-full overflow-y-auto overflow-x-hidden bg-white border border-gray-200 p-5 xsticky xtop-0 "
       , id_ "detailSidebar"
       ]
       $ do
@@ -252,7 +253,7 @@ apiOverviewSubPage paramInput currTime endpoint fieldsM reqLatenciesRolledByStep
     div_ [id_ "timepickerBox", class_ "hidden absolute z-10 mt-1  rounded-md flex"] do
       div_ [class_ "inline-block w-84 overflow-auto bg-white py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm"] do
         timePickerItems
-          & mapM \(val, title) -> a_
+          & mapM_ \(val, title) -> a_
               [ class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 "
               , href_ $ currentURLSearch <> "&since=" <> val
               ]
@@ -274,29 +275,42 @@ endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p
           , [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .endpointStatsSubSection)|]
           ]
         span_ [class_ "text-lg text-slate-700"] "Endpoint Stats"
-    div_ [class_ "grid grid-cols-3  gap-5 endpointStatsSubSection"] $ do
-      div_ [class_ "col-span-1 content-between space-y-2"] $ do
-        --
-        div_ [class_ " row-span-1 col-span-1 card-round p-5 flex flex-row content-between "] $
-          div_ $ do
-            span_ "Total Anomalies"
-            div_ [class_ "inline-block flex flex-row items-baseline"] $ do
-              strong_ [class_ "text-xl"] $ toHtml @Text $ fmt $ commaizeF (enpStats.ongoingAnomalies)
-              small_ $ toHtml @Text $ fmt ("/" +| commaizeF (enpStats.ongoingAnomaliesProj))
-        div_ [class_ " row-span-1 col-span-1 card-round p-5 flex flex-row content-between "] $
-          div_ $ do
-            span_ "Total Requests"
-            div_ [class_ "inline-block flex flex-row items-baseline"] $ do
-              strong_ [class_ "text-xl"] $ toHtml @Text $ fmt $ commaizeF (enpStats.totalRequests)
-              small_ $ toHtml @Text $ fmt ("/" +| commaizeF (enpStats.totalRequestsProj))
+    div_ [class_ "space-y-5 endpointStatsSubSection"] $ do
+      div_ [class_ "grid grid-cols-3  gap-5"] $ do
+        statBox "Total Anomalies" "Total Anomalies for this endpoint this week vs total for the project" enpStats.ongoingAnomaliesProj (Just enpStats.ongoingAnomaliesProj) 
+        statBox "Total Requests" "Total Requests on this endpoint this week vs total for the project" enpStats.totalRequests (Just enpStats.totalRequestsProj)
+        statBox "Total Time" "Total Time on this endpoint this week vs total for the project" enpStats.totalRequests (Just enpStats.totalRequestsProj)
 
-      div_ [class_ "col-span-2 bg-white  border border-gray-100  row-span-2 rounded-2xl p-3"] $ do
-        div_ [class_ "p-4"] $
-          select_ [] $ do
-            option_ "Reqs by Status code"
-            option_ "Avg Reqs per minute"
-        div_ [id_ "reqByStatusCode", class_ ""] ""
-        Charts.throughput enpStats.projectId "reqByStatusCode" (Just $ Charts.QBEndpointHash enpStats.endpointHash) (Just Charts.GBStatusCode) (120) Nothing True dateRange Nothing
+      div_ [class_ "flex gap-5"] do
+        div_ [class_ "flex-1 card-round p-3"] $ do
+          div_ [class_ "p-4 space-y-6"] $ do
+            select_ [] $ do
+              option_ [class_ "text-2xl font-normal"] "Throughput by Status Code"
+            div_ [class_ "h-64 "] do
+              Charts.throughput enpStats.projectId "reqsByStatusCode" (Just $ Charts.QBEndpointHash enpStats.endpointHash) (Just Charts.GBStatusCode) 120 Nothing True dateRange Nothing
+
+        div_ [class_ "flex-1 card-round p-3"] $ do
+          div_ [class_ "p-4 space-y-6"] $ do
+            select_ [] $ do
+              option_ [class_ "text-2xl font-normal"] "Latency Percentiles"
+            div_ [class_ "h-64 "] do
+              Charts.latency enpStats.projectId "reqsLatencyPercentiles" (Just $ Charts.QBEndpointHash enpStats.endpointHash) 120 dateRange Nothing
+
+      div_ [class_ "flex gap-5"] do
+        div_ [class_ "flex-1 card-round p-3"] $ do
+          div_ [class_ "p-4 space-y-6"] $ do
+            select_ [] $ do
+              option_ [class_ "text-2xl font-normal"] "Error Rates"
+            div_ [class_ "h-64 "] do
+              Charts.throughput enpStats.projectId "reqsErrorRates" (Just $ Charts.QBAnd (Charts.QBEndpointHash enpStats.endpointHash) (Charts.QBStatusCodeGT 400))  (Just Charts.GBStatusCode) 120 Nothing True dateRange (Just "roma") 
+
+        div_ [class_ "flex-1 card-round p-3"] $ do
+          div_ [class_ "p-4 space-y-6"] $ do
+            select_ [] $ do
+              option_ [class_ "text-2xl font-normal"] "Reqs Grouped by Endpoint"
+            div_ [class_ "h-64 "] do
+              Charts.throughput enpStats.projectId "reqsByEndpoints" (Just $ Charts.QBEndpointHash enpStats.endpointHash) (Just Charts.GBEndpoint) 120 Nothing True dateRange Nothing
+
       div_ [class_ "col-span-3 bg-white   border border-gray-100  rounded-xl py-3 px-6"] $ do
         div_ [class_ "p-4"] $
           select_ [] $ do

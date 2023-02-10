@@ -2,6 +2,7 @@ module Pages.Dashboard (dashboardGetH) where
 
 import Config
 import Data.Aeson qualified as AE
+import Pages.Components (statBox)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
@@ -145,15 +146,6 @@ dashboardPage paramInput currTime projectStats reqLatenciesRolledByStepsJ anomal
     window.picker = picker;
     |]
 
-statBox :: Text -> Text -> Text -> Html ()
-statBox title helpInfo val= do
-  div_ [class_ "col-span-1 card-round p-5 flex flex-row content-between justify-between"] $ do
-    div_ $ do
-      div_ [class_ "inline-block flex flex-row content-between"] $ do
-        strong_ [class_ "font-normal text-2xl"] $ toHtml val
-      small_ $ toHtml title
-    span_ [class_ "inline-block", term "data-tippy-content" helpInfo] $ mIcon_ "info" "w-4 h-4"
-
 dStats :: Projects.ProjectRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 dStats projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledByStepsJ dateRange = do
   let _ = min
@@ -175,11 +167,11 @@ dStats projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledByStepsJ 
 
     div_ [class_ "reqResSubSection space-y-5"] $ do
       div_ [class_ "grid grid-cols-5 gap-5"] $ do
-        statBox "Total Requests" "Total requests in the last 2 weeks" (sformat commas projReqStats.totalRequests)
-        statBox "Total Anomalies" "Total anomalies still active or unarchived" (sformat commas (projReqStats.totalAnomalies))
-        statBox "Managed Endpoints" "Total endpoints which are active" (sformat commas (projReqStats.totalEndpoints))
-        statBox "Total Shapes" "Total shapes which are active" (sformat commas (projReqStats.totalShapes))
-        statBox "Total Fields" "Total fields which are active" (sformat commas (projReqStats.totalFields))
+        statBox "Total Requests" "Total requests in the last 2 weeks" (projReqStats.totalRequests) Nothing 
+        statBox "Total Anomalies" "Total anomalies still active this week vs last week" projReqStats.totalAnomalies (Just projReqStats.totalAnomaliesLastWeek)
+        statBox "Managed Endpoints" "Total endpoints now vs last week" projReqStats.totalEndpoints (Just projReqStats.totalEndpointsLastWeek)
+        statBox "Total Shapes" "Total shapes which are active now vs last week" projReqStats.totalShapes (Just projReqStats.totalShapesLastWeek)
+        statBox "Total Fields" "Total fields which are active now vs last week" projReqStats.totalFields (Just projReqStats.totalFieldsLastWeek)
 
       div_ [class_ "flex gap-5"] do
         div_ [class_ "flex-1 card-round p-3"] $ do

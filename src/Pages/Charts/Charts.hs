@@ -46,12 +46,14 @@ data QueryBy
   | QBShapeHash Text
   | QBFormatHash Text
   | QBStatusCodeGT Int
+  | QBAnd QueryBy QueryBy
 
 runQueryBy :: QueryBy -> Text
 runQueryBy (QBEndpointHash t) = "endpoint_hash=" <> t
 runQueryBy (QBShapeHash t) = "shape_hash=" <> t
 runQueryBy (QBFormatHash t) = "format_hash=" <> t
 runQueryBy (QBStatusCodeGT t) = "status_code_gt=" <> show t
+runQueryBy (QBAnd a b ) = runQueryBy a <> "&" <> runQueryBy b
 
 data GroupBy
   = GBEndpoint
@@ -152,7 +154,7 @@ function throughputEChart(renderAt, data, gb, showLegend, theme){
         width: '100%',
         left: '0%',
         top: '1%',
-        bottom: '1.5%',
+        bottom: '1.8%',
         containLabel: true
     },
     tooltip: {
@@ -198,7 +200,7 @@ function throughputEChart(renderAt, data, gb, showLegend, theme){
         width: '100%',
         left: '0%',
         top: '1%',
-        bottom: '11%',
+        bottom: '12%',
         containLabel: true
       },
       dataset: {
