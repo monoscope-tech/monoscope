@@ -108,12 +108,12 @@ fieldDetailsView field formats = do
       div_ [class_ " "] $ do
         h4_ [class_ "text-sm text-slate-700 mb-2"] "CREATION DATE"
         div_ [class_ "flex border border-gray-200 m-1 rounded-xl p-2"] $ do
-          img_ [src_ "/assets/svgs/calender.svg", class_ "h-4 mr-2 w-4"]
+          mIcon_ "calender" "h-4 mr-2 w-4"
           span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" (field.createdAt)
       div_ [class_ " "] $ do
         h4_ [class_ "text-sm text-slate-700 mb-2"] "LAST CHANGE"
         div_ [class_ "flex border border-gray-200 m-1 justify-between rounded-xl p-2"] $ do
-          img_ [src_ "/assets/svgs/calender.svg", class_ "h-4 mr-2 w-4"]
+          mIcon_ "calender" "h-4 mr-2 w-4"
           span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" (field.updatedAt)
     h6_ [class_ "mt-5 text-sm text-slate-700 mb-2"] "DESCRIPTION"
     p_ [class_ "text-slate-800 text-sm"] $ toHtml $ field.description
@@ -148,7 +148,7 @@ endpointDetailsH sess pid eid fromDStr toDStr sinceStr' subPageM= do
     withPool pool $ do
       -- Should swap names betw enp and endpoint endpoint could be endpointStats
       endpoint <- Unsafe.fromJust <$> Endpoints.endpointById eid
-      enpStats <- Unsafe.fromJust <$> Endpoints.endpointRequestStatsByEndpoint eid
+      enpStats <- fromMaybe (def :: EndpointRequestStats) <$> Endpoints.endpointRequestStatsByEndpoint eid
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
       fieldsMap <- Fields.groupFieldsByCategory <$> Fields.selectFields (endpoint.hash)
 

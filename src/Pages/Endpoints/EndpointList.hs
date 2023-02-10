@@ -41,7 +41,7 @@ endpointList enps = do
       h3_ [class_ "text-xl text-slate-700 flex place-items-center"] "Endpoints"
 
     -- search
-    div_ [class_ "card-round p-5 overflow-x-auto"] $ do
+    div_ [class_ "card-round p-5"] $ do
       div_ [class_ "w-full flex flex-row m-3"] $ do
         div_ [class_ "flex rounded-xl bg-white py-2 px-3 flex-row w-3/4 border-solid border border-gray-200 h-10"] $ do
           img_ [src_ "/assets/svgs/search.svg", class_ "h-5 w-auto"]

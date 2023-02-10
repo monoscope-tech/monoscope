@@ -163,16 +163,16 @@ endpointRequestStatsByProject pid = query Select q (Only pid)
  where
   q =
     [sql| 
-      SELECT id endpoint_id, hash endpoint_hash, enp.project_id, enp.url_path, enp.method, min, p50, p75, p90, p95, p99, max, 
-         total_time, total_time_proj, total_requests, total_requests_proj,
+      SELECT id endpoint_id, hash endpoint_hash, enp.project_id, enp.url_path, enp.method, coalesce(min,0),  coalesce(p50,0),  coalesce(p75,0),  coalesce(p90,0),  coalesce(p95,0),  coalesce(p99,0),  coalesce(max,0) , 
+         coalesce(total_time,0), coalesce(total_time_proj,0), coalesce(total_requests,0), coalesce(total_requests_proj,0),
          (SELECT count(*) from apis.anomalies_vm 
                  where project_id=enp.project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
          ) ongoing_anomalies,
         (SELECT count(*) from apis.anomalies_vm
                  where project_id=enp.project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
-         ) ongoing_anomalies_proj
+        ) ongoing_anomalies_proj
      from apis.endpoints enp
-     join apis.endpoint_request_stats ers on (enp.id=ers.endpoint_id)
+     left join apis.endpoint_request_stats ers on (enp.id=ers.endpoint_id)
      where enp.project_id=? order by total_requests DESC, url_path ASC
                 |]
 

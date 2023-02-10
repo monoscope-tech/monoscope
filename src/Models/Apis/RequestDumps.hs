@@ -283,7 +283,7 @@ throughputBy pid groupByM endpointHash shapeHash formatHash statusCodeGT numSlot
   let dateRangeStr =  case dateRange' of
         (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND " <>  b 
         (Just a, Just b) -> "AND created_at BETWEEN " <>  a <> " AND " <>  b 
-        _ -> ""
+        _ -> "AND created_at BETWEEN NOW() - INTERVAL '14 days' AND NOW()"
   let (fromD, toD) = bimap (fromMaybe "now() - INTERVAL '14 days'")  (fromMaybe "now()" ) dateRange'
   let q =
         [text| WITH q as (SELECT time_bucket_gapfill('$intervalT seconds', created_at, $fromD, $toD) as timeB $groupByFields , COALESCE(COUNT(*), 0) total_count 
@@ -292,4 +292,3 @@ throughputBy pid groupByM endpointHash shapeHash formatHash statusCodeGT numSlot
               SELECT COALESCE(json_agg(json_build_array(timeB $groupByFinal, total_count)), '[]')::text from q; |]
   (Only val) <- fromMaybe (Only "[]") <$> queryOne Select (Query $ from @Text q) (MkDBField pid : paramList)
   pure val
-
