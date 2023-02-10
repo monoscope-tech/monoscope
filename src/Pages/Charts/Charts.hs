@@ -198,7 +198,7 @@ function throughputEChart(renderAt, data, gb, showLegend, theme){
         width: '100%',
         left: '0%',
         top: '1%',
-        bottom: '1.5%',
+        bottom: '11%',
         containLabel: true
       },
       dataset: {
@@ -208,6 +208,7 @@ function throughputEChart(renderAt, data, gb, showLegend, theme){
       series: [
         {
           type: 'line',
+          name: 'p50',
           encode: {
             x: 'date',
             y: 'p50'
@@ -216,6 +217,7 @@ function throughputEChart(renderAt, data, gb, showLegend, theme){
         },
         {
           type: 'line',
+          name: 'p75',
           encode: {
             x: 'date',
             y: 'p75'
@@ -224,6 +226,7 @@ function throughputEChart(renderAt, data, gb, showLegend, theme){
         },
         {
           type: 'line',
+          name: 'p90',
           encode: {
             x: 'date',
             y: 'p90'

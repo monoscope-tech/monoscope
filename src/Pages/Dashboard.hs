@@ -65,7 +65,7 @@ dashboardGetH sess pid fromDStr toDStr sinceStr' = do
   (project, projectRequestStats, reqLatenciesRolledByStepsLabeled, anomalies) <- liftIO $
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      projectRequestStats <- fromMaybe (def :: Projects.ProjectRequestStats) <$> Projects.projectRequestStatsByProject pid
+      projectRequestStats <- fromMaybe (def :: Projects.ProjectRequestStats) <$> Projects.projectRequestStatsByProject pid 
       let maxV = round (projectRequestStats.p99) :: Int
       let steps' = (maxV `quot` 100) :: Int
       let steps = if steps' == 0 then 100 else steps'
@@ -81,10 +81,8 @@ dashboardGetH sess pid fromDStr toDStr sinceStr' = do
           , pageTitle = "Dashboard"
           }
   currTime <- liftIO getCurrentTime
-  let currentURL = "/p/" <> Projects.projectIdText pid <> "?from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
-  let currentPickerTxt = case sinceStr of
-        Just a -> a
-        Nothing -> maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD
+  let currentURL = "/p/" <> Projects.projectIdText pid <> "?&from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
+  let currentPickerTxt = fromMaybe (maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD ) sinceStr
   let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt}
   pure $ bodyWrapper bwconf $ dashboardPage paramInput currTime projectRequestStats reqLatenciesRolledByStepsJ anomalies (fromD, toD)
 
@@ -108,7 +106,7 @@ dashboardPage paramInput currTime projectStats reqLatenciesRolledByStepsJ anomal
         div_ [id_ "timepickerBox", class_ "hidden absolute z-10 mt-1  rounded-md flex"] do
           div_ [class_ "inline-block w-84 overflow-auto bg-white py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm"] do
             timePickerItems
-              & mapM \(val, title) -> a_
+              & mapM_ \(val, title) -> a_
                   [ class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 "
                   , href_ $ currentURL' <> "&since=" <> val
                   ]
@@ -136,6 +134,7 @@ dashboardPage paramInput currTime projectStats reqLatenciesRolledByStepsJ anomal
           const end = JSON.stringify(e.detail.end).slice(1, -1);
 
           const url = new URL(window.location.href);
+          url.searchParams.set('x', true);
           url.searchParams.set('from', start);
           url.searchParams.set('to', end);
           url.searchParams.delete('since');
@@ -146,13 +145,14 @@ dashboardPage paramInput currTime projectStats reqLatenciesRolledByStepsJ anomal
     window.picker = picker;
     |]
 
-statBox :: Text -> Text -> Html ()
-statBox title val = do
-  div_ [class_ "col-span-1 card-round p-5 flex flex-row content-between "] $ do
+statBox :: Text -> Text -> Text -> Html ()
+statBox title helpInfo val= do
+  div_ [class_ "col-span-1 card-round p-5 flex flex-row content-between justify-between"] $ do
     div_ $ do
       div_ [class_ "inline-block flex flex-row content-between"] $ do
         strong_ [class_ "font-normal text-2xl"] $ toHtml val
       small_ $ toHtml title
+    span_ [class_ "inline-block", term "data-tippy-content" helpInfo] $ mIcon_ "info" "w-4 h-4"
 
 dStats :: Projects.ProjectRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 dStats projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledByStepsJ dateRange = do
@@ -175,11 +175,11 @@ dStats projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledByStepsJ 
 
     div_ [class_ "reqResSubSection space-y-5"] $ do
       div_ [class_ "grid grid-cols-5 gap-5"] $ do
-        statBox "Total Requests" (sformat commas projReqStats.totalRequests)
-        statBox "Total Anomalies" (sformat commas (projReqStats.totalAnomalies))
-        statBox "Managed Endpoints" (sformat commas (projReqStats.totalEndpoints))
-        statBox "Total Shapes" (sformat commas (projReqStats.totalShapes))
-        statBox "Total Fields" (sformat commas (projReqStats.totalFields))
+        statBox "Total Requests" "Total requests in the last 2 weeks" (sformat commas projReqStats.totalRequests)
+        statBox "Total Anomalies" "Total anomalies still active or unarchived" (sformat commas (projReqStats.totalAnomalies))
+        statBox "Managed Endpoints" "Total endpoints which are active" (sformat commas (projReqStats.totalEndpoints))
+        statBox "Total Shapes" "Total shapes which are active" (sformat commas (projReqStats.totalShapes))
+        statBox "Total Fields" "Total fields which are active" (sformat commas (projReqStats.totalFields))
 
       div_ [class_ "flex gap-5"] do
         div_ [class_ "flex-1 card-round p-3"] $ do

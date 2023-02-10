@@ -200,7 +200,7 @@ endpointDetails paramInput currTime endpoint fieldsM reqLatenciesRolledByStepsJ 
             button_ [class_ "bg-blue-700 flex h-11 flex-row mx-2 px-3 rounded-xl py-2"] $ do
               h3_ [class_ "text-white text-sm text-bold mx-2 mt-1"] "Download Swagger"
               div_ [class_ "bg-blue-900 p-1 rounded-lg ml-2"] $ do
-                img_ [src_ "/assets/svgs/whitedown.svg", class_ "text-white h-2 w-2 m-1"]
+                mIcon_ "whitedown" "text-white h-2 w-2 m-1"
       if paramInput.subPage == "api_docs" then
           apiDocsSubPage fieldsM
         else

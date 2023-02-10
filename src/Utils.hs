@@ -1,7 +1,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE RankNTypes #-}
 
-module Utils (eitherStrToText, GetOrRedirect, redirect, DBField (..), mIcon_, deleteParam) where
+module Utils (eitherStrToText, GetOrRedirect, redirect, DBField (..), mIcon_, deleteParam, quoteTxt) where
 
 import Data.Text (replace)
 import Data.Time (ZonedTime)
@@ -44,3 +44,6 @@ deleteParam key url = if needle == "" then url else replace needle "" url
  where
   needle = (url =~ reg :: Text)
   reg = "&" <> key <> "(=[^&]*)?|^" <> key <> "(=[^&]*)?&?" :: Text
+
+quoteTxt :: Text -> Text
+quoteTxt a = "'" <> a <> "'"

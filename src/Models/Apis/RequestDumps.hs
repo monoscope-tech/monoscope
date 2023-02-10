@@ -36,7 +36,7 @@ import NeatInterpolation (text)
 import Optics.TH
 import Pkg.Parser
 import Relude hiding (many, some)
-import Utils (DBField (MkDBField))
+import Utils (DBField (MkDBField), quoteTxt)
 import Witch (from)
 
 -- request dumps are time series dumps representing each requests which we consume from our users.
@@ -275,10 +275,10 @@ throughputBy pid groupByM endpointHash shapeHash formatHash statusCodeGT numSlot
         | otherwise = "AND " <> mconcat (intersperse " AND " condlist)
   let limit = maybe @Text "" (\x -> "limit " <> show x) limitM
   let interval =  case dateRange of 
-          (Just a, Just b) -> (diffUTCTime (zonedTimeToUTC b) (zonedTimeToUTC a))
+          (Just a, Just b) -> diffUTCTime (zonedTimeToUTC b) (zonedTimeToUTC a)
           _ -> 60*60*24*14 
 
-  let intervalT = from @String @Text $ show  $ (floor interval) `div` (if numSlots == 0 then 1 else numSlots) 
+  let intervalT = from @String @Text $ show  $ floor interval `div` (if numSlots == 0 then 1 else numSlots) 
   let dateRange' = bimap ( quoteTxt . from @String . formatTime defaultTimeLocale "%F %R" <$> ) ( quoteTxt . from @String . formatTime defaultTimeLocale "%F %R" <$> ) dateRange 
   let dateRangeStr =  case dateRange' of
         (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND " <>  b 
@@ -293,6 +293,3 @@ throughputBy pid groupByM endpointHash shapeHash formatHash statusCodeGT numSlot
   (Only val) <- fromMaybe (Only "[]") <$> queryOne Select (Query $ from @Text q) (MkDBField pid : paramList)
   pure val
 
-
-quoteTxt :: Text -> Text
-quoteTxt a = "'" <> a <> "'"
