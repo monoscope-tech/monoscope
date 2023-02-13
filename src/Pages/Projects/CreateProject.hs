@@ -2,6 +2,7 @@
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE ImportQualifiedPost #-}
 
 module Pages.Projects.CreateProject (
   CreateProjectForm,
@@ -47,6 +48,7 @@ import Servant (
  )
 import Servant.Htmx
 import Web.FormUrlEncoded (FromForm)
+import Data.CaseInsensitive qualified as CI
 
 data CreateProjectForm = CreateProjectForm
   { title :: Text
@@ -55,6 +57,7 @@ data CreateProjectForm = CreateProjectForm
   , permissions :: [ProjectMembers.Permissions]
   , isUpdate :: Bool
   , projectId :: Text
+  , paymentPlan :: Text
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromForm, Default)
@@ -82,17 +85,19 @@ checkEmail = isJust . T.find (== '@')
 -- createProjectGetH is the handler for the create projects page
 createProjectGetH :: Sessions.PersistentSession -> DashboardM (Html ())
 createProjectGetH sess = do
+  envCfg <- asks env 
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess
           , pageTitle = "Endpoints"
           }
-  pure $ bodyWrapper bwconf $ createProjectBody False (def @CreateProjectForm) (def @CreateProjectFormError)
+  pure $ bodyWrapper bwconf $ createProjectBody sess envCfg False (def @CreateProjectForm) (def @CreateProjectFormError)
 
 ----------------------------------------------------------------------------------------------------------
 projectSettingsGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 projectSettingsGetH sess pid = do
   pool <- asks pool
+  envCfg <- asks env
   Just proj <- liftIO $ withPool pool $ Projects.selectProjectForUser (sess.userId, pid)
   let createProj =
         CreateProjectForm
@@ -102,9 +107,10 @@ projectSettingsGetH sess pid = do
           , permissions = []
           , isUpdate = True
           , projectId = Projects.projectIdText pid
+          , paymentPlan = proj.paymentPlan -- FIXME: Should be a value from the db 
           }
   let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just proj, pageTitle = "Settings"}
-  pure $ bodyWrapper bwconf $ createProjectBody True createProj (def @CreateProjectFormError)
+  pure $ bodyWrapper bwconf $ createProjectBody sess envCfg True createProj (def @CreateProjectFormError)
 
 ----------------------------------------------------------------------------------------------------------
 deleteProjectGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Headers '[HXTrigger, HXRedirect] (Html ()))
@@ -112,7 +118,7 @@ deleteProjectGetH sess pid = do
   pool <- asks pool
   _ <- liftIO $ withPool pool $ Projects.deleteProject pid
 
-  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Created Project Successfully"]}|]
+  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Deleted Project Successfully"]}|]
   pure $ addHeader hxTriggerData $ addHeader "/" $ span_ ""
 
 ----------------------------------------------------------------------------------------------------------
@@ -120,13 +126,15 @@ deleteProjectGetH sess pid = do
 -- It processes post requests and is expected to return a redirect header and a hyperscript event trigger header.
 createProjectPostH :: Sessions.PersistentSession -> CreateProjectForm -> DashboardM (Headers '[HXTrigger, HXRedirect] (Html ()))
 createProjectPostH sess createP = do
+  envCfg <- asks env
   validationRes <- validateM createProjectFormV createP
   case validationRes of
-    Right cpe -> pure $ noHeader $ noHeader $ createProjectBody createP.isUpdate createP cpe
+    Right cpe -> pure $ noHeader $ noHeader $ createProjectBody sess envCfg createP.isUpdate createP cpe
     Left cp -> processProjectPostForm sess cp
 
 processProjectPostForm :: Sessions.PersistentSession -> Valor.Valid CreateProjectForm -> DashboardM (Headers '[HXTrigger, HXRedirect] (Html ()))
 processProjectPostForm sess cpRaw = do
+  envCfg <- asks env
   let cp = Valor.unValid cpRaw
   let currUserId = sess.userId
   pool <- asks pool
@@ -168,21 +176,23 @@ processProjectPostForm sess cpRaw = do
         pass
 
   let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Created Project Successfully"]}|]
-  let bdy = createProjectBody cp.isUpdate cp (def @CreateProjectFormError)
+  let hxTriggerDataUpdate = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Updated Project Successfully"]}|]
+  let bdy = createProjectBody sess envCfg cp.isUpdate cp (def @CreateProjectFormError)
   if cp.isUpdate
-    then pure $ addHeader hxTriggerData $ noHeader bdy
+    then pure $ addHeader hxTriggerDataUpdate $ noHeader bdy
     else pure $ addHeader hxTriggerData $ addHeader ("/p/" <> Projects.projectIdText pid) bdy
 
 ----------------------------------------------------------------------------------------------------------
 -- createProjectBody is the core html view
-createProjectBody :: Bool -> CreateProjectForm -> CreateProjectFormError -> Html ()
-createProjectBody isUpdate cp cpe =
+createProjectBody :: Sessions.PersistentSession -> EnvConfig -> Bool -> CreateProjectForm -> CreateProjectFormError -> Html ()
+createProjectBody sess envCfg isUpdate cp cpe =
   section_ [id_ "main-content", class_ "p-6"] $ do
     h2_ [class_ "text-slate-700 text-2xl font-medium mb-5"] $ toHtml @String $ if isUpdate then "Project Settings" else "Create Project"
     div_ [class_ "grid grid-cols-2 gap-5"] do
-      form_ [class_ "col-span-1 relative px-10 border border-gray-200 py-10  bg-white rounded-3xl", hxPost_ "/p/new", hxTarget_ "#main-content", hxSwap_ "outerHTML"] $ do
+      form_ [class_ "col-span-1 relative px-10 border border-gray-200 py-10  bg-white rounded-3xl", hxPost_ "/p/new", hxTarget_ "#main-content", hxSwap_ "outerHTML", id_ "createUpdateBodyForm"] $ do
         input_ [name_ "isUpdate", type_ "hidden", value_ $ if isUpdate then "true" else "false"]
         input_ [name_ "projectId", type_ "hidden", value_ $ cp.projectId]
+        input_ [name_ "paymentPlan", type_ "hidden", value_ $ cp.paymentPlan, id_ "paymentPlanEl"]
         div_ $ do
           label_ [class_ "text-gray-400 mx-2 font-light text-sm"] "Title"
           input_
@@ -202,7 +212,34 @@ createProjectBody isUpdate cp cpe =
             , name_ "description"
             ]
             $ toHtml cp.description
-        div_ [class_ $ "mt-6 " <> if isUpdate then "hidden" else ""] $ do
+
+        div_ [class_ "mt-5"] do 
+          p_ [class_ "text-gray-400 mx-2 pb-2 font-light text-sm"] "Please select a plan"
+          div_ [class_ "grid grid-cols-3 gap-4 border-1"] do
+            ([("Free", "20k", "$0", "1", cp.paymentPlan == "Free", "")
+              ,("Startup", "50k", "$50", "3",  cp.paymentPlan == "Startup", if envCfg.paddleSandbox then envCfg.paddleSandboxStartup else envCfg.paddleStartup)
+              ,("Growth", "5m", "$250", "10",  cp.paymentPlan == "Growth", if envCfg.paddleSandbox then envCfg.paddleSandboxGrowth else envCfg.paddleGrowth)
+              ] :: [(Text, Text, Text, Text, Bool, Text)])  & mapM_ \(title, included, price, team, isSelected, paddleSubsCode)-> do
+                  a_ [class_ $ "payment-plans cursor-pointer space-y-1 border border-1  block p-2 rounded-md  shadow-blue-100 " <> if isSelected then " border-blue-200 shadow-lg" else ""
+                      ,term "_" [text| on click set window.paymentPlan to $paddleSubsCode
+                                          then set #paymentPlanEl.value to "$title"
+                                          then remove .border-blue-200 .shadow-lg from .payment-plans 
+                                          then add .border-blue-200 .shadow-lg to me
+                                          |]] do
+                    h4_ [ class_ "border border-b-1  p-1 px-2"] $ toHtml title
+                    div_ [class_ "text-lg py-3"] do
+                      strong_ [] $ toHtml price
+                      span_ [] "/mo"
+                    div_ [] do
+                      strong_ [] $ toHtml included
+                      small_ " Reqs/mo included"
+                    div_ do 
+                      small_  "max "
+                      span_ $ toHtml team 
+                      small_ " team members"
+                    div_ $ small_ "14days data retention"
+
+        div_ [class_ $ "mt-10 " <> if isUpdate then "hidden" else ""] $ do
           p_ [class_ "text-gray-400 mx-2 font-light text-sm"] "Invite a project member"
           section_ [id_ "inviteMemberSection"] $ do
             template_ [id_ "inviteTmpl"] $ do
@@ -223,8 +260,59 @@ createProjectBody isUpdate cp cpe =
             $ do
               img_ [src_ "/assets/svgs/blue-plus.svg", class_ " mt-1 mx-2 w-3 h-3"]
               span_ [class_ "text-blue-700 font-medium text-sm "] "Add member"
+    
+
+
+        -- START PADDLE payment
+        script_ [src_ "https://cdn.paddle.com/paddle/paddle.js"] (""::Text)
+        let paddleSandbox = if envCfg.paddleSandbox then "Paddle.Environment.set('sandbox');" else ""
+        let paddleVendor = if envCfg.paddleSandbox then envCfg.paddleSandboxVendorId else envCfg.paddleVendorId
+        let projectId = cp.projectId
+        let userId = sess.userId.toText
+        let email = CI.original $ (sess.user.getUser).email
+        script_ [type_ "text/javascript"] [text|
+          $paddleSandbox 
+          Paddle.Setup({ vendor: $paddleVendor });
+
+          window.paymentAction = function(){
+            console.log("PaymentPlan", document.getElementById("paymentPlanEl").value)
+            if (document.getElementById("paymentPlanEl").value == "Free"){
+              htmx.trigger("#createUpdateBodyForm", "submit")
+              return
+            }
+
+            const passthrough = {
+              projectId: "$projectId",
+              userId: "$userId",
+            };
+
+            window.onPaddleSuccess = function (x) {
+              console.log(x);
+              htmx.trigger("#createUpdateBodyForm", "submit")
+            };
+            window.onPaddleClose = function () {
+            };
+
+            Paddle.Checkout.open({
+              product: window.paymentPlan,
+              email: "$email",
+              disableLogout: true,
+              passthrough: JSON.stringify(passthrough),
+              closeCallback: 'onPaddleClose',
+              successCallback: 'onPaddleSuccess',
+            });
+          };
+        |]
+        -- END PADDLE payment
         div_ [class_ "p-5 text-right"] do
-          button_ [class_ "inline-block py-2 px-5 bg-blue-700  text-[white] text-sm rounded-xl cursor-pointer", type_ "submit"] "Submit"
+          -- if isUpdate then
+          --     button_ [class_ "inline-block py-2 px-5 bg-blue-700  text-[white] text-sm rounded-xl cursor-pointer"
+          --       , type_ "Submit"
+          --       ] "Submit"
+          --   else
+          a_ [class_ "inline-block py-2 px-5 bg-blue-700  text-[white] text-sm rounded-xl cursor-pointer"
+            , [__|on click call window.paymentAction() |]
+            ] "Proceed"
 
     when isUpdate do
       div_ [class_ "col-span-1 h-full justify-center items-center w-full text-center pt-24"] do

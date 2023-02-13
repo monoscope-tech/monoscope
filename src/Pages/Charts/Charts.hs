@@ -153,7 +153,7 @@ function throughputEChart(renderAt, data, gb, showLegend, theme){
     grid: {
         width: '100%',
         left: '0%',
-        top: '1%',
+        top: '5%',
         bottom: '1.8%',
         containLabel: true
     },
@@ -199,7 +199,7 @@ function throughputEChart(renderAt, data, gb, showLegend, theme){
       grid: {
         width: '100%',
         left: '0%',
-        top: '1%',
+        top: '5%',
         bottom: '12%',
         containLabel: true
       },
@@ -246,7 +246,7 @@ function throughputEChart(renderAt, data, gb, showLegend, theme){
 function latencyHistogram(renderAt, pc, data){
   const myChart = echarts.init(document.getElementById(renderAt));
   const option = {
-    grid: {width: '100%', width: '100%', left: '1%',right: '-1%', top: '5%',bottom: '1.5%', containLabel: true},
+    grid: {width: '100%', width: '100%', left: '1%',right: '-1%', top: '10%',bottom: '1.5%', containLabel: true},
     xAxis: { show: true, type: 'value', scale: true, splitLine: {show: false},
     axisLabel: {
       formatter: function (params) {

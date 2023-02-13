@@ -153,7 +153,7 @@ projectsDropDown currProject projects = do
           a_ [href_ [text| /p/$pidTxt/manage_members |], class_ "p-3 flex gap-3 rounded hover:bg-gray-100"] $ do
             img_ [src_ "/assets/svgs/add_user.svg"]
             span_ "Manage members"
-          a_ [class_ "p-3 flex gap-3 rounded hover:bg-gray-100 "] $ do
+          a_ [class_ "hidden p-3 flex gap-3 rounded hover:bg-gray-100 "] $ do
             img_ [src_ "/assets/svgs/dollar.svg"]
             span_ "Billing and usage"
       div_ [class_ "border-t border-gray-100 p-2"] $ do

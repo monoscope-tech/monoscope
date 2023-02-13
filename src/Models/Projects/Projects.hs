@@ -34,7 +34,6 @@ import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact (DBT)
-import Database.PostgreSQL.Transact qualified as PgT
 import Deriving.Aeson qualified as DAE
 import GHC.Records (HasField (getField))
 import Models.Users.Users qualified as Users
@@ -71,6 +70,7 @@ data Project = Project
   , description :: Text
   -- NOTE: We used to have hosts under project, but now hosts should be gotten from the endpoints.
   -- NOTE: If there's heavy need and usage, we caould create a view. Otherwise, the project cache is best, if it meets our needs.
+  , paymentPlan :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow)
@@ -122,6 +122,7 @@ data CreateProject = CreateProject
   { id :: ProjectId
   , title :: Text
   , description :: Text
+  , paymentPlan :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow)
@@ -188,10 +189,10 @@ editProjectGetH pid = query Select q (Only pid)
 
 updateProject :: CreateProject -> DBT IO Int64
 updateProject cp = do
-  execute Update q (cp.title, cp.description, cp.id)
+  execute Update q (cp.title, cp.description, cp.paymentPlan, cp.id)
  where
   q =
-    [sql| UPDATE projects.projects SET title=?, description=? where id=?;|]
+    [sql| UPDATE projects.projects SET title=?, description=?, payment_plan=? where id=?;|]
 
 deleteProject :: ProjectId -> DBT IO Int64
 deleteProject pid = do

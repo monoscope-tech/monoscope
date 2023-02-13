@@ -97,11 +97,12 @@ CREATE TABLE IF NOT EXISTS projects.projects
   deleted_at  TIMESTAMP WITH TIME ZONE,
   active      BOOL      NOT  NULL DEFAULT 't',
   title       TEXT      NOT  NULL DEFAULT '',
-  description TEXT      NOT  NULL DEFAULT ''
+  description TEXT      NOT  NULL DEFAULT '',
   -- We originally stored the hosts lists under projects table, 
   -- but realised that it is immensely difficult to keep the hosts up to date under projects,
   -- when we don't update projects with requests data. So we store hosts under the endpoints now.
   -- The hosts can be queried from endpoints when needed.
+  payment_plan TEXT NOT NULL DEFAULT 'Free'
 );
 SELECT manage_updated_at('projects.projects');
 

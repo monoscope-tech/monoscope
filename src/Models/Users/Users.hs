@@ -32,6 +32,7 @@ import Database.PostgreSQL.Transact qualified as PgT
 import Deriving.Aeson qualified as DAE
 import Optics.TH
 import Relude
+import GHC.Records (HasField (getField))
 
 instance FromJSON (CI Text) where
   parseJSON = fmap CI.mk . parseJSON
@@ -48,6 +49,9 @@ newtype UserId = UserId {getUserId :: UUID.UUID}
     (Ord, ToJSON, FromJSON, FromField, ToField, Default)
     via UUID.UUID
   deriving anyclass (FromRow, ToRow)
+
+instance HasField "toText" UserId Text where
+  getField = UUID.toText . getUserId 
 
 data User = User
   { id :: UserId
