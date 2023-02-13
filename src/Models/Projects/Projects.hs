@@ -91,9 +91,10 @@ data Project' = Project'
   , active :: Bool
   , title :: Text
   , description :: Text
-  , -- NOTE: We used to have hosts under project, but now hosts should be gotten from the endpoints.
-    -- NOTE: If there's heavy need and usage, we caould create a view. Otherwise, the project cache is best, if it meets our needs.
-    usersDisplayImages :: Vector Text
+  -- NOTE: We used to have hosts under project, but now hosts should be gotten from the endpoints.
+  -- NOTE: If there's heavy need and usage, we caould create a view. Otherwise, the project cache is best, if it meets our needs.
+  , paymentPlan :: Text
+  , usersDisplayImages :: Vector Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow)
