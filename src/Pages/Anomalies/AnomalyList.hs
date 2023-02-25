@@ -35,7 +35,6 @@ import Pages.Charts.Charts qualified as Charts
 import Relude
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
-import Text.Regex.TDFA ((=~))
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils
 import Web.FormUrlEncoded (FromForm)
@@ -84,7 +83,7 @@ anomalyBulkActionsPostH sess pid action items = do
     "archive" -> liftIO $ withPool pool $ execute Update [sql| update apis.anomalies set archived_at=NOW() where id=ANY(?::uuid[]) |] (Only $ Vector.fromList items.anomalyId)
     _ -> error $ "unhandled anomaly bulk action state " <> action
   let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"refreshMain": "", "successToast": [#{action <> "d anomalies Successfully"}]}|]
-  pure $ addHeader hxTriggerData $ ""
+  pure $ addHeader hxTriggerData ""
 
 data ParamInput = ParamInput
   { currentURL :: Text
@@ -111,8 +110,7 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM hxRequestM hxBoostedM = d
           , currProject = project
           , pageTitle = "Anomalies"
           }
-  let pidT = Projects.projectIdText pid
-  let currentURL = "/p/" <> pidT <> "/anomalies?layout=" <> fromMaybe "false" layoutM <> "&ackd=" <> fromMaybe "false" ackdM <> "&archived=" <> fromMaybe "false" archivedM
+  let currentURL = "/p/" <> pid.toText <> "/anomalies?layout=" <> fromMaybe "false" layoutM <> "&ackd=" <> fromMaybe "false" ackdM <> "&archived=" <> fromMaybe "false" archivedM
   let paramInput =
         ParamInput
           { currentURL = currentURL
@@ -127,8 +125,8 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM hxRequestM hxBoostedM = d
 
   case (layoutM, hxRequestM, hxBoostedM) of
     (Just "slider", Just "true", _) -> pure $ anomalyListSlider currTime anomalies
-    (_, Just "true", Just "false") -> pure $ elementBelowTabs
-    (_, Just "true", Nothing) -> pure $ elementBelowTabs
+    (_, Just "true", Just "false") -> pure elementBelowTabs
+    (_, Just "true", Nothing) -> pure  elementBelowTabs
     _ -> pure $ bodyWrapper bwconf $ anomalyListPage paramInput pid currTime anomalies
 
 anomalyListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Anomalies.AnomalyVM -> Html ()
@@ -136,14 +134,14 @@ anomalyListPage paramInput pid currTime anomalies = div_ [class_ "container mx-a
   h3_ [class_ "text-xl text-slate-700 flex place-items-center"] "Anomalies"
   div_ [class_ "py-2 px-2 space-x-6 border-b border-slate-20 mt-6 mb-8 text-sm font-light", hxBoost_ "true"] do
     let uri = deleteParam "archived" $ deleteParam "ackd" paramInput.currentURL
-    a_ [class_ $ "inline-block py-2 " <> if (not paramInput.ackd && not paramInput.archived) then " font-bold text-black " else "", href_ $ uri <> "&ackd=false&archived=false"] "Inbox"
-    a_ [class_ $ "inline-block  py-2 " <> if (paramInput.ackd && not paramInput.archived) then " font-bold text-black " else "", href_ $ uri <> "&ackd=true&archived=false"] "Acknowleged"
+    a_ [class_ $ "inline-block py-2 " <> if not paramInput.ackd && not paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&ackd=false&archived=false"] "Inbox"
+    a_ [class_ $ "inline-block  py-2 " <> if paramInput.ackd && not paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&ackd=true&archived=false"] "Acknowleged"
     a_ [class_ $ "inline-block  py-2 " <> if paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&archived=true"] "Archived"
   div_ [class_ "grid grid-cols-5", id_ "anomalyListBelowTab", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $ anomalyList paramInput pid currTime anomalies
 
 anomalyList :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Anomalies.AnomalyVM -> Html ()
 anomalyList paramInput pid currTime anomalies = form_ [class_ "col-span-5 bg-white divide-y border rounded-md ", id_ "anomalyListForm"] $ do
-  let bulkActionBase = "/p/" <> Projects.projectIdText pid <> "/anomalies/bulk_actions"
+  let bulkActionBase = "/p/" <>  pid.toText <> "/anomalies/bulk_actions"
   let currentURL' = deleteParam "sort" paramInput.currentURL
   let sortMenu =
         [ ("First Seen", "First time the issue occured", "first_seen")
@@ -151,7 +149,7 @@ anomalyList paramInput pid currTime anomalies = form_ [class_ "col-span-5 bg-whi
         , ("Events", "Number of events", "events")
         ] ::
           [(Text, Text, Text)]
-  let currentSortTitle = fromMaybe "First Seen" $ fst3 <$> find (\(_, _, identifier) -> identifier == paramInput.sort) sortMenu
+  let currentSortTitle = maybe "First Seen" fst3 $ find (\(_, _, identifier) -> identifier == paramInput.sort) sortMenu
   div_
     [class_ "flex py-3 gap-8 items-center  bg-gray-50"]
     do
@@ -166,7 +164,7 @@ anomalyList paramInput pid currTime anomalies = form_ [class_ "col-span-5 bg-whi
       div_ [class_ "relative inline-block"] do
         a_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl space-x-2", [__|on click toggle .hidden on #sortMenuDiv |]] do
           mIcon_ "sort" "h-4 w-4"
-          span_ $ toHtml $ currentSortTitle
+          span_ $ toHtml currentSortTitle
         div_ [id_ "sortMenuDiv", hxBoost_ "true", class_ "p-1 hidden text-sm border border-black-30 absolute right-0 z-10 mt-2 w-72 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none", tabindex_ "-1"] do
           sortMenu & mapM_ \(title, desc, identifier) -> do
             let isActive = paramInput.sort == identifier || (paramInput.sort == "" && identifier == "first_seen")
@@ -308,7 +306,7 @@ anomalyItem hideByDefault currTime anomaly icon title subTitle content = do
             anomalyAcknowlegeButton anomaly.projectId anomaly.id (isJust anomaly.acknowlegedAt)
         fromMaybe (toHtml @String "") content
     let chartQuery = Just $ anomaly2ChartQuery anomaly.anomalyType anomaly.targetHash
-    div_ [class_ "flex items-center justify-center "] $ div_ [class_ "w-64 h-16 px-3"] $ Charts.throughput anomaly.projectId anomaly.targetHash chartQuery Nothing 14 (Nothing) False (Nothing, Nothing) Nothing
+    div_ [class_ "flex items-center justify-center "] $ div_ [class_ "w-64 h-16 px-3"] $ Charts.throughput anomaly.projectId anomaly.targetHash chartQuery Nothing 14 Nothing False (Nothing, Nothing) Nothing
     div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $ show $ anomaly.eventsCount14d
 
 anomaly2ChartQuery :: Anomalies.AnomalyTypes -> Text -> Charts.QueryBy
@@ -364,7 +362,7 @@ renderAnomaly hideByDefault currTime anomaly = do
 
 anomalyAcknowlegeButton :: Projects.ProjectId -> Anomalies.AnomalyId -> Bool -> Html ()
 anomalyAcknowlegeButton pid aid acked = do
-  let acknowlegeAnomalyEndpoint = "/p/" <> Projects.projectIdText pid <> "/anomalies/" <> Anomalies.anomalyIdText aid <> if acked then "/unacknowlege" else "/acknowlege"
+  let acknowlegeAnomalyEndpoint = "/p/" <>  pid.toText <> "/anomalies/" <> Anomalies.anomalyIdText aid <> if acked then "/unacknowlege" else "/acknowlege"
   a_
     [ class_ $
         "inline-block child-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
@@ -377,7 +375,7 @@ anomalyAcknowlegeButton pid aid acked = do
 
 anomalyArchiveButton :: Projects.ProjectId -> Anomalies.AnomalyId -> Bool -> Html ()
 anomalyArchiveButton pid aid archived = do
-  let archiveAnomalyEndpoint = "/p/" <> Projects.projectIdText pid <> "/anomalies/" <> Anomalies.anomalyIdText aid <> if archived then "/unarchive" else "/archive"
+  let archiveAnomalyEndpoint = "/p/" <> pid.toText <> "/anomalies/" <> Anomalies.anomalyIdText aid <> if archived then "/unarchive" else "/archive"
   a_
     [ class_ $
         "inline-block xchild-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "

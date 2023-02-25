@@ -106,7 +106,7 @@ projectSettingsGetH sess pid = do
           , emails = []
           , permissions = []
           , isUpdate = True
-          , projectId = Projects.projectIdText pid
+          , projectId = pid.toText
           , paymentPlan = proj.paymentPlan -- FIXME: Should be a value from the db 
           }
   let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just proj, pageTitle = "Settings"}
@@ -171,7 +171,7 @@ processProjectPostForm sess cpRaw = do
                   & map (\(email, permission, id') -> ProjectMembers.CreateProjectMembers pid id' permission)
                   & cons (ProjectMembers.CreateProjectMembers pid currUserId Projects.PAdmin)
           ProjectMembers.insertProjectMembers projectMembers
-        liftIO $ withResource pool \conn ->
+        _<-liftIO $ withResource pool \conn ->
           createJob conn "background_jobs" $ BackgroundJobs.CreatedProjectSuccessfully currUserId pid (original $ sess.user.getUser.email) (cp.title)
         pass
 
@@ -180,7 +180,7 @@ processProjectPostForm sess cpRaw = do
   let bdy = createProjectBody sess envCfg cp.isUpdate cp (def @CreateProjectFormError)
   if cp.isUpdate
     then pure $ addHeader hxTriggerDataUpdate $ noHeader bdy
-    else pure $ addHeader hxTriggerData $ addHeader ("/p/" <> Projects.projectIdText pid) bdy
+    else pure $ addHeader hxTriggerData $ addHeader ("/p/" <> pid.toText) bdy
 
 ----------------------------------------------------------------------------------------------------------
 -- createProjectBody is the core html view

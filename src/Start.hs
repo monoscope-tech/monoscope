@@ -82,7 +82,7 @@ startApp = do
         let ojStartArgs =
               OJCli.UIStartArgs
                 { uistartAuth = OJCli.AuthNone
-                , uistartPort = 5002
+                  , uistartPort = 8081 
                 }
 
         let ojLogger logLevel logEvent = logger <& show (logLevel, logEvent)

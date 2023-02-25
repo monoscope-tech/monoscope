@@ -13,7 +13,6 @@ import Lucid.Htmx
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Optics.Operators
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
 
@@ -72,10 +71,10 @@ endpointList enps = do
             tr_ [class_ "border-b border-b-slate-50 py-2"] $ do
               td_ [class_ "text-left pr-4 "] $ input_ [type_ "checkbox"]
               td_ [class_ "text-right"] $ do
-                a_ [href_ ("/p/" <> Projects.projectIdText (enp.projectId) <> "/endpoints/" <> Endpoints.endpointIdText (enp.endpointId))] $ do
+                a_ [href_ ("/p/" <> enp.projectId.toText <> "/endpoints/" <> Endpoints.endpointIdText (enp.endpointId))] $ do
                   span_ [class_ $ "endpoint endpoint-" <> toLower (enp.method)] $ toHtml $ enp.method
               td_ [class_ ""] $ do
-                a_ [href_ ("/p/" <> Projects.projectIdText (enp.projectId) <> "/endpoints/" <> Endpoints.endpointIdText (enp.endpointId))] $ do
+                a_ [href_ ("/p/" <> enp.projectId.toText <> "/endpoints/" <> Endpoints.endpointIdText (enp.endpointId))] $ do
                   span_ [class_ " inconsolata text-base text-slate-700"] $ toHtml $ enp.urlPath
               td_ [class_ " text-sm text-gray-400 font-normal text-center"] $ do
                 span_ $ toHtml @String $ fmt $ commaizeF (enp.totalRequests)

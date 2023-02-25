@@ -45,7 +45,7 @@ listProjectsBody projects = do
         ul_ [role_ "list", class_ "divide-y divide-gray-200"] $ do
           projects & mapM_ \project -> do
             li_ $ do
-              a_ [href_ ("/p/" <> Projects.projectIdText (project.id)), class_ "block hover:bg-gray-50"] $ do
+              a_ [href_ ("/p/" <> project.id.toText), class_ "block hover:bg-gray-50"] $ do
                 div_ [class_ "px-4 py-4 flex items-center sm:px-6"] $ do
                   div_ [class_ "min-w-0 flex-1 sm:flex sm:items-center sm:justify-between"] $ do
                     div_ [class_ "truncate"] $ do
@@ -59,6 +59,6 @@ listProjectsBody projects = do
                             time_ [datetime_ $ sformat dateDash (project.createdAt)] $ toHtml $ sformat dateDash (project.createdAt)
                     div_ [class_ "mt-4 flex-shrink-0 sm:mt-0 sm:ml-5"] $ do
                       div_ [class_ "flex overflow-hidden -space-x-1"] $ do
-                        project.usersDisplayImages & Vector.toList & mapM \imgSrc -> img_ [class_ "inline-block h-6 w-6 rounded-full ring-2 ring-white", src_ imgSrc, alt_ "Dries Vincent"]
+                        project.usersDisplayImages & Vector.toList & mapM_ \imgSrc -> img_ [class_ "inline-block h-6 w-6 rounded-full ring-2 ring-white", src_ imgSrc, alt_ "Dries Vincent"]
                   div_ [class_ "ml-5 flex-shrink-0 text-gray-400"] $ do
                     img_ [src_ "/assets/svgs/right_chevron.svg"]

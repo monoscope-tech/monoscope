@@ -74,7 +74,7 @@ endpointToUrlPath :: Endpoint -> Text
 endpointToUrlPath enp = endpointUrlPath (enp.projectId) (enp.id)
 
 endpointUrlPath :: Projects.ProjectId -> EndpointId -> Text
-endpointUrlPath pid eid = "/p/" <> Projects.projectIdText pid <> "/endpoints/" <> endpointIdText eid
+endpointUrlPath pid eid = "/p/" <> pid.toText <> "/endpoints/" <> endpointIdText eid
 
 upsertEndpointQueryAndParam :: Endpoint -> (Query, [DBField])
 upsertEndpointQueryAndParam endpoint = (q, params)

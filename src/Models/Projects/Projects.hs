@@ -8,7 +8,6 @@ module Models.Projects.Projects (
   CreateProject (..),
   ProjectRequestStats (..),
   insertProject,
-  projectIdText,
   projectIdFromText,
   selectProjectsForUser,
   projectRequestStatsByProject,
@@ -52,10 +51,7 @@ instance HasField "unwrap" ProjectId UUID.UUID where
   getField = coerce
 
 instance HasField "toText" ProjectId Text where
-  getField = projectIdText
-
-projectIdText :: ProjectId -> Text
-projectIdText = UUID.toText . unProjectId
+  getField = UUID.toText . unProjectId 
 
 projectIdFromText :: Text -> Maybe ProjectId
 projectIdFromText pid = ProjectId <$> UUID.fromText pid

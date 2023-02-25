@@ -3,6 +3,8 @@ RUN mkdir -p /opt/apitoolkit/
 WORKDIR /opt/apitoolkit
 RUN apt-get update && apt-get install -y \
   ca-certificates \
+  netbase \
+  curl \
   libgmp-dev \
   libpq-dev
 COPY apitoolkit-server-exe /opt/apitoolkit

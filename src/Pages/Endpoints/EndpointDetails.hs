@@ -168,7 +168,7 @@ endpointDetailsH sess pid eid fromDStr toDStr sinceStr' subPageM= do
           , menuItem = Just "Endpoints"
           }
   currTime <- liftIO getCurrentTime
-  let currentURL = "/p/" <> Projects.projectIdText pid <> "/endpoints/" <> Endpoints.endpointIdText eid <> "?from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
+  let currentURL = "/p/" <> pid.toText <> "/endpoints/" <> Endpoints.endpointIdText eid <> "?from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
   let subPage = fromMaybe "overview" subPageM
   let currentPickerTxt = case sinceStr of
         Just a -> a
@@ -412,7 +412,7 @@ subSubSection title fieldsM =
                           else EndpointComponents.fieldTypeToDisplay Fields.FTObject
               Just field -> do
                 a_
-                  [ hxGet_ $ "/p/" <> Projects.projectIdText (field.projectId) <> "/fields/" <> UUID.toText (Fields.unFieldId $ field.id)
+                  [ hxGet_ $ "/p/" <> field.projectId.toText <> "/fields/" <> UUID.toText (Fields.unFieldId $ field.id)
                   , hxTarget_ "#detailSidebar"
                   , class_ "flex flex-row cursor-pointer"
                   , style_ depthPadding

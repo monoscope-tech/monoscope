@@ -89,7 +89,7 @@ jobsRunner dbPool logger cfg job =
           project <- Unsafe.fromJust <<$>> withPool dbPool $ Projects.projectById pid
           forM_ users \u ->
             let projectTitle = project.title
-                projectIdTxt = Projects.projectIdText pid
+                projectIdTxt = pid.toText
                 name = u.firstName
                 subject = [text| 🤖 APITOOLKIT: New Endpoint detected for `$projectTitle` |]
                 body =
@@ -123,7 +123,7 @@ jobsRunner dbPool logger cfg job =
               project <- Unsafe.fromJust <<$>> withPool dbPool $ Projects.projectById pid
               forM_ users \u ->
                 let projectTitle = project.title
-                    projectIdTxt = Projects.projectIdText pid
+                    projectIdTxt =  pid.toText
                     name = u.firstName
                     subject = [text| 🤖 APITOOLKIT: New Shape anomaly found for `$projectTitle` |]
                     body =
@@ -149,7 +149,7 @@ jobsRunner dbPool logger cfg job =
               project <- Unsafe.fromJust <<$>> withPool dbPool $ Projects.projectById pid
               forM_ users \u ->
                 let projectTitle = project.title
-                    projectIdTxt = Projects.projectIdText pid
+                    projectIdTxt = pid.toText
                     name = u.firstName
                     subject = [text| 🤖 APITOOLKIT: New field format anomaly found for `$projectTitle` |]
                     body =
@@ -169,7 +169,7 @@ jobsRunner dbPool logger cfg job =
         Anomalies.ATUnknown -> pass
     InviteUserToProject userId projectId reciever projectTitle' ->
       let projectTitle = projectTitle'
-          projectIdTxt = Projects.projectIdText projectId
+          projectIdTxt = projectId.toText
           subject = [text| 🤖 APITOOLKIT: You've been invited to a project '$projectTitle' on apitoolkit.io |]
           body =
             toLText
@@ -186,7 +186,7 @@ Apitoolkit team
        in sendEmail cfg reciever subject body
     CreatedProjectSuccessfully userId projectId reciever projectTitle' ->
       let projectTitle = projectTitle'
-          projectIdTxt = Projects.projectIdText projectId
+          projectIdTxt =  projectId.toText
           subject = [text| 🤖 APITOOLKIT: Project created successfully '$projectTitle' on apitoolkit.io |]
           body =
             toLText

@@ -88,7 +88,7 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
   section_ [class_ "container mx-auto  px-2 py-2 pb-5 gap-2 flex flex-col h-[98%] overflow-hidden "] $ do
     form_
       [ class_ "card-round text-sm"
-      , hxGet_ $ "/p/" <> Projects.projectIdText pid <> "/log_explorer"
+      , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
       , hxPushUrl_ "true"
       , hxVals_ "js:{query:getQueryFromEditor(), cols:params().cols}"
       , hxTarget_ "#log-item-table-body"
@@ -237,7 +237,7 @@ jsonTreeAuxillaryCode pid = do
           , role_ "menuitem"
           , tabindex_ "-1"
           , id_ "menu-item-0"
-          , hxGet_ $ "/p/" <> Projects.projectIdText pid <> "/log_explorer"
+          , hxGet_ $ "/p/" <>  pid.toText <> "/log_explorer"
           , hxPushUrl_ "true"
           , hxVals_ "js:{query:params().query,cols:toggleColumnToSummary(event)}"
           , hxSwap_ "innerHTML scroll:#log-item-table-body:top"

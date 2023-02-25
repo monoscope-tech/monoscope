@@ -8,7 +8,6 @@ import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Fmt (fixedF, fmt)
-import Formatting (commas, sformat)
 import Lucid
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -82,7 +81,7 @@ dashboardGetH sess pid fromDStr toDStr sinceStr' = do
           , pageTitle = "Dashboard"
           }
   currTime <- liftIO getCurrentTime
-  let currentURL = "/p/" <> Projects.projectIdText pid <> "?&from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
+  let currentURL = "/p/" <> pid.toText <> "?&from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
   let currentPickerTxt = fromMaybe (maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD ) sinceStr
   let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt}
   pure $ bodyWrapper bwconf $ dashboardPage paramInput currTime projectRequestStats reqLatenciesRolledByStepsJ anomalies (fromD, toD)

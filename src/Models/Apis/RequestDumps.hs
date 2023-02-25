@@ -38,6 +38,7 @@ import Pkg.Parser
 import Relude hiding (many, some)
 import Utils (DBField (MkDBField), quoteTxt)
 import Witch (from)
+import Data.Tuple.Extra (both)
 
 -- request dumps are time series dumps representing each requests which we consume from our users.
 -- We use this field via the log explorer for exploring and searching traffic. And at the moment also use it for most time series analytics.
@@ -108,12 +109,12 @@ data RequestDumpLogItem = RequestDumpLogItem
 makeFieldLabelsNoPrefix ''RequestDumpLogItem
 
 requestDumpLogItemUrlPath :: Projects.ProjectId -> RequestDumpLogItem -> Text
-requestDumpLogItemUrlPath pid rd = "/p/" <> Projects.projectIdText pid <> "/log_explorer/" <> UUID.toText rd.id <> "/" <> from @String (formatShow iso8601Format rd.createdAt)
+requestDumpLogItemUrlPath pid rd = "/p/" <> pid.toText <> "/log_explorer/" <> UUID.toText rd.id <> "/" <> from @String (formatShow iso8601Format rd.createdAt)
 
 requestDumpLogUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Text
 requestDumpLogUrlPath pid q cols fromM = [text|/p/$pidT/log_explorer?query=$queryT&cols=$colsT&from=$fromT|]
  where
-  pidT = Projects.projectIdText pid
+  pidT =  pid.toText
   queryT = fromMaybe "" q
   colsT = fromMaybe "" cols
   fromT = fromMaybe "" fromM
@@ -143,29 +144,6 @@ selectRequestDumpsByProjectForChart pid extraQuery = do
               from (
                 SELECT time_bucket('1 minute', created_at) as timeB,count(*)
                FROM apis.request_dumps where project_id=? $extraQueryParsed  GROUP BY timeB) ts|]
-
--- selectRequestDumpsByProjectForChart :: Projects.ProjectId -> Text -> DBT IO Text
--- selectRequestDumpsByProjectForChart pid extraQuery = do
---   (Only val) <- fromMaybe (Only "[]") <$> queryOne Select (Query $ encodeUtf8 q) (Only pid)
---   pure val
---   where
---     extraQueryParsed = either error (\v -> if v == "" then "" else " AND " <> v) $ parseQueryStringToWhereClause extraQuery
---     intervalT = show
---     q =
---       [text| WITH q as (SELECT time_bucket_gapfill('$intervalT minutes', created_at, now() - INTERVAL '14 days', now()) as timeB $groupByFields , COALESCE(COUNT(*), 0) total_count
---                   FROM apis.request_dumps
---                   WHERE project_id=? AND created_at>now()-INTERVAL '14 days' $cond GROUP BY timeB $groupBy $limit)
---               SELECT COALESCE(json_agg(json_build_array(timeB $groupByFinal, total_count)), '[]')::text from q; |]
-
--- selectRequestDumpsByProjectForChart :: Projects.ProjectId -> Text -> DBT IO Text
--- selectRequestDumpsByProjectForChart pid extraQuery = do
---   (Only val) <- fromMaybe (Only "[]") <$> queryOne Select (Query $ encodeUtf8 q) (Only pid)
---   pure val
---   where
---     extraQueryParsed = either error (\v -> if v == "" then "" else " AND " <> v) $ parseQueryStringToWhereClause extraQuery
---     q =
---       [text| SELECT COALESCE(NULLIF(json_agg(json_build_array(timeB, count))::text, '[null]'), '[]')::text from (SELECT time_bucket('1 minute', created_at) as timeB,count(*)
---                FROM apis.request_dumps where project_id=? $extraQueryParsed  GROUP BY timeB) ts|]
 
 bulkInsertRequestDumps :: [RequestDump] -> DBT IO Int64
 bulkInsertRequestDumps = executeMany q
@@ -220,15 +198,15 @@ latencyBy pid endpointHash numSlots dateRange@(fromT, toT) = do
         (Just a, Just b) -> diffUTCTime (zonedTimeToUTC b) (zonedTimeToUTC a)
         _ -> 60*60*24*14 
 
-  let intervalT = from @String @Text $ show  $ (floor interval) `div` (if numSlots == 0 then 1 else numSlots)
-  let dateRange' = bimap ( quoteTxt . from @String . formatTime defaultTimeLocale "%F %R" <$> ) ( quoteTxt . from @String . formatTime defaultTimeLocale "%F %R" <$> ) dateRange 
+  let intervalT = from @String @Text $ show  $ floor interval `div` (if numSlots == 0 then 1 else numSlots)
+  let dateRange' = both ( quoteTxt . from @String . formatTime defaultTimeLocale "%F %R" <$> ) dateRange 
   let dateRangeStr =  case dateRange' of
         (Nothing, Just b) -> "AND timeb BETWEEN NOW() AND " <>  b 
         (Just a, Just b) -> "AND timeb BETWEEN " <>  a <> " AND " <>  b 
         _ -> ""
-  let (fromD, toD) = bimap (fromMaybe "now() - INTERVAL '14 days'")  (fromMaybe "now()" ) dateRange'
+  let (fromD, toD) = bimap (maybe "now() - INTERVAL '14 days'" ("TIMESTAMP " <> ))  (maybe "now()" ("TIMESTAMP " <>)) dateRange'
   let q = [text| 
-    with f as (  
+  with f as (  
     SELECT
             time_bucket_gapfill('$intervalT seconds', timeb, $fromD, $toD) time,
             approx_percentile(0.5, rollup(agg))/1000000 p50,
@@ -241,10 +219,10 @@ latencyBy pid endpointHash numSlots dateRange@(fromT, toT) = do
         $dateRangeStr
     group by
         time
-) 
-SELECT COALESCE(json_agg(json_build_array(to_char(f.time, 'YYYY-DD-MM HH24:MI:SS'), f.p50, f.p75, f.p90)), '[]')::text  from f; 
-|]
-  (Only val) <- fromMaybe (Only "[]") <$> queryOne Select (Query $ from @Text q) (pid)
+  ) 
+  SELECT COALESCE(json_agg(json_build_array(to_char(f.time, 'YYYY-DD-MM HH24:MI:SS'), f.p50, f.p75, f.p90)), '[]')::text  from f; 
+  |]
+  (Only val) <- fromMaybe (Only "[]") <$> queryOne Select (Query $ from @Text q) pid
   pure val
 
 
@@ -273,20 +251,20 @@ throughputBy pid groupByM endpointHash shapeHash formatHash statusCodeGT numSlot
   let cond
         | null condlist = mempty
         | otherwise = "AND " <> mconcat (intersperse " AND " condlist)
-  let limit = maybe @Text "" (\x -> "limit " <> show x) limitM
+  let limit = maybe "" (("limit " <>) . show) limitM
   let interval =  case dateRange of 
           (Just a, Just b) -> diffUTCTime (zonedTimeToUTC b) (zonedTimeToUTC a)
           _ -> 60*60*24*14 
 
   let intervalT = from @String @Text $ show  $ floor interval `div` (if numSlots == 0 then 1 else numSlots) 
-  let dateRange' = bimap ( quoteTxt . from @String . formatTime defaultTimeLocale "%F %R" <$> ) ( quoteTxt . from @String . formatTime defaultTimeLocale "%F %R" <$> ) dateRange 
+  let dateRange' = both ( quoteTxt . from @String . formatTime defaultTimeLocale "%F %R" <$> ) dateRange 
   let dateRangeStr =  case dateRange' of
         (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND " <>  b 
         (Just a, Just b) -> "AND created_at BETWEEN " <>  a <> " AND " <>  b 
         _ -> "AND created_at BETWEEN NOW() - INTERVAL '14 days' AND NOW()"
-  let (fromD, toD) = bimap (fromMaybe "now() - INTERVAL '14 days'")  (fromMaybe "now()" ) dateRange'
+  let (fromD, toD) = bimap (maybe "now() - INTERVAL '14 days'" ("TIMESTAMP " <> ) )  (maybe "now()" ("TIMESTAMP " <>)) dateRange'
   let q =
-        [text| WITH q as (SELECT time_bucket_gapfill('$intervalT seconds', created_at, $fromD, $toD) as timeB $groupByFields , COALESCE(COUNT(*), 0) total_count 
+        [text| WITH q as (SELECT time_bucket_gapfill('$intervalT seconds', created_at, $fromD,$toD) as timeB $groupByFields , COALESCE(COUNT(*), 0) total_count 
                   FROM apis.request_dumps 
                   WHERE project_id=? $cond $dateRangeStr GROUP BY timeB $groupBy $limit)
               SELECT COALESCE(json_agg(json_build_array(timeB $groupByFinal, total_count)), '[]')::text from q; |]
