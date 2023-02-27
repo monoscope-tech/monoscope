@@ -12,7 +12,7 @@ import Relude.Unsafe qualified as Unsafe
 import RequestMessages (SDKTypes (..))
 import RequestMessages qualified
 import Test.Hspec
-import Text.RawString.QQ (r)
+import NeatInterpolation
 
 spec :: Spec
 spec = do
@@ -258,7 +258,7 @@ spec = do
               , -- requestHeaders = [aesonQQ| {"Content-Type": "application/json"} |],
                 -- responseHeaders = [aesonQQ| {"X-Rand": "random-value"} |],
                 requestBody = B64.encodeBase64 ""
-              , responseBody = B64.encodeBase64 [r|{"key": "value"}|]
+              , responseBody = B64.encodeBase64 $ encodeUtf8 [text|{"key": "value"}|]
               , statusCode = 203
               }
       let projectCache = Projects.ProjectCache{hosts = [], endpointHashes = ["abc"], shapeHashes = [], redactFieldslist = []}

@@ -125,9 +125,8 @@ library:
     - postgresql-query
     - postgresql-simple
     - random
-    - raw-strings-qq
     - regex-tdfa
-    - relude >=1.0.0.1
+    - relude
     - resource-pool
     - resourcet
     - scientific
@@ -153,10 +152,8 @@ library:
     - wreq
     - xxhash
     - yaml
-    - http-media
     - pretty-relative-time
     - nyan-interpolation
-    - aeson-combinators
 
 executables:
   apitoolkit-server-exe:
@@ -172,7 +169,7 @@ executables:
     # - -fPIC
     dependencies:
     - apitoolkit-server
-    - relude >=1.0.0.1
+    - relude >=1.1.0.0
     when:       
     - condition: false       
       other-modules: Paths_apitoolkit_server
@@ -193,4 +190,4 @@ tests:
     - hspec
     # - hspec-discover
     - doctest-parallel
-    - relude >= 1.0.0.1
+    - relude >= 1.1.0.0

@@ -33,13 +33,6 @@ packages:
   original:
     hackage: colourista-0.1.0.1@sha256:98353ee0e2f5d97d2148513f084c1cd37dfda03e48aa9dd7a017c9d9c0ba710e,3307
 - completed:
-    hackage: envy-2.1.0.0@sha256:b58b12d9b61a4e07562e7718f28a864178cfc4bb4c24a45c68b5e46cfd9b39be,1772
-    pantry-tree:
-      sha256: 1cd74e12d2f3dcb9997607e1521833b874dd209bb713bb0abda1988c298f39f8
-      size: 368
-  original:
-    hackage: envy-2.1.0.0@sha256:b58b12d9b61a4e07562e7718f28a864178cfc4bb4c24a45c68b5e46cfd9b39be,1772
-- completed:
     hackage: lucid-htmx-0.1.0.6@sha256:83d9eed5ff74778a2dfc3f320a66b08592a2880abca28d75747a0513a39bd871,1528
     pantry-tree:
       sha256: e7e0ebb5432ec6dd278e1ac594a94aa3311e378c683275274874dfee2e12dfe3
@@ -89,13 +82,6 @@ packages:
   original:
     hackage: chronos-1.1.4@sha256:7ba7df7496a880ca4b898ca2cd5ebbf9ee8408fb93e95f8011d2a68c6faf655d,3677
 - completed:
-    hackage: direct-daemonize-3.1@sha256:f33505932b8613267cd8ad2d51470af2c5708d750ddf55a5dd38292f04962dcc,1630
-    pantry-tree:
-      sha256: 5cbf9c1ac065471cb9caa29136b06bcddee17800bbc3e8ed6020b4af19a81f3e
-      size: 220
-  original:
-    hackage: direct-daemonize-3.1@sha256:f33505932b8613267cd8ad2d51470af2c5708d750ddf55a5dd38292f04962dcc,1630
-- completed:
     hackage: timing-convenience-0.1@sha256:7ff807a9a9e5596f2b18d45c5a01aefb91d4a98f6a1008d183b5c550f68f7cb7,2092
     pantry-tree:
       sha256: fbcb00f5b8a4f7b8fd94b034b7f507ffdd7579848de782ce60ad2b661dcb2b42
@@ -117,13 +103,6 @@ packages:
   original:
     hackage: daemons-0.3.0@sha256:356edaf06a8cf5e9f19685f9ce793ad6d2b6bce2e55379f6b2aff1b0c07a633f,3178
 - completed:
-    hackage: postgresql-query-3.10.0@sha256:bad59810fc464cf0f4a839a9c6372ba17c54fd04500a50e16fb46d578a0649ae,6320
-    pantry-tree:
-      sha256: 29015669d6a00757ff0c67e2abe344a2456848d27ccbaf0875693eb66e6b04d8
-      size: 2123
-  original:
-    hackage: postgresql-query-3.10.0@sha256:bad59810fc464cf0f4a839a9c6372ba17c54fd04500a50e16fb46d578a0649ae,6320
-- completed:
     hackage: nyan-interpolation-core-0.9.0.1@sha256:1bda0e90d2045eb18c905f905082f4098829c1bdcbc4012663686a1c503b4ded,4067
     pantry-tree:
       sha256: 2a1a8d8b66746a246b3c0a4cd07daa6b961c9911676d30bc308a8a2682353b2b
@@ -137,19 +116,6 @@ packages:
       size: 661
   original:
     hackage: nyan-interpolation-0.9@sha256:8cf238be4c04746e4e9eabb34001c990c23e5837a19eb8652c584e57e92ecb41,3797
-- completed:
-    commit: aae6a23944bbc2e19cf814a7030557612e10e52c
-    git: https://github.com/emilypi/base64
-    name: base64
-    pantry-tree:
-      sha256: bdcff19c1ed299a6c1af161b05b86e638313b37c9f356c57dd0e56ccb08b0a96
-      size: 2534
-    subdir: .
-    version: 0.4.2.4
-  original:
-    commit: aae6a23944bbc2e19cf814a7030557612e10e52c
-    git: https://github.com/emilypi/base64
-    subdir: .
 - completed:
     commit: 0fa01adb871e66996d4ed2c27a3e97fac39ac466
     git: https://github.com/tonyalaribe/xxhash
@@ -229,34 +195,34 @@ packages:
     git: https://github.com/brendanhay/gogol.git
     subdir: lib/services/gogol-cloudtrace
 - completed:
-    commit: 179f9cd6ed41557c524ab6ab47eae6e7aeacc9a3
+    commit: da682990e5f283ab809474901cb4348ac9dbcb05
     git: https://github.com/tchoutri/pg-entity.git
     name: pg-entity
     pantry-tree:
-      sha256: 1dbaa7bbb98e7bde91befb82f57e85d3b0cd8943c801ef64b40cd6002a7d11b9
-      size: 2735
+      sha256: cd47d51ede7a6cc39ac72eee15b952c923d7977463fe44ab6fe18c133da781eb
+      size: 2162
     subdir: .
-    version: 0.0.1.0
+    version: 0.0.4.2
   original:
-    commit: 179f9cd6ed41557c524ab6ab47eae6e7aeacc9a3
+    commit: da682990e5f283ab809474901cb4348ac9dbcb05
     git: https://github.com/tchoutri/pg-entity.git
     subdir: .
 - completed:
-    commit: dce96c0245fa0820d46c354f44f838ee804bfdfb
+    commit: cc05b640528697ba37529ee617a031d1acd60c4b
     git: https://github.com/saurabhnanda/odd-jobs
     name: odd-jobs
     pantry-tree:
-      sha256: cea01179fa2d87b75026e2523ecdae4e07f91c5e87367ec32360369dfcb1affb
-      size: 2633
+      sha256: d613a6b35010ca233515d1c36b0dea060045cb4a65db63089cca70a5c5c1272d
+      size: 3004
     subdir: .
     version: 0.2.2
   original:
-    commit: dce96c0245fa0820d46c354f44f838ee804bfdfb
+    commit: cc05b640528697ba37529ee617a031d1acd60c4b
     git: https://github.com/saurabhnanda/odd-jobs
     subdir: .
 snapshots:
 - completed:
-    sha256: a3caecc996b1e5406de3b1afa3d6c0ebbc7225d990d3372593207d23988b37ea
-    size: 630639
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/nightly/2022/8/16.yaml
-  original: nightly-2022-08-16
+    sha256: adbc602422dde10cc330175da7de8609e70afc41449a7e2d6e8b1827aa0e5008
+    size: 649342
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/20/11.yaml
+  original: lts-20.11

@@ -40,6 +40,7 @@ import Models.Apis.Fields.Types qualified as Fields (
   fieldCategoryEnumToText,
   fieldTypeToText,
  )
+import NeatInterpolation
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
@@ -49,7 +50,6 @@ import Optics.Core
 import Optics.TH
 import Relude
 import Relude.Unsafe as Unsafe hiding (head)
-import Text.RawString.QQ
 import Text.Regex.TDFA ((=~))
 import Utils (DBField ())
 import Witch (from)
@@ -126,7 +126,7 @@ requestMsgToDumpAndEndpoint :: Projects.ProjectCache -> RequestMessages.RequestM
 requestMsgToDumpAndEndpoint pjc rM now dumpID = do
   let method = T.toUpper $ rM.method
   let urlPath = normalizeUrlPath (rM.sdkType) (rM.urlPath)
-  let !endpointHash = from @String @Text $ showHex (xxHash $ from @Text $ UUID.toText (rM.projectId) <> method <> urlPath) ""
+  let !endpointHash = from @String @Text $ showHex (xxHash $ encodeUtf8 $ UUID.toText (rM.projectId) <> method <> urlPath) ""
 
   let redactFieldsList = Vector.toList (pjc.redactFieldslist) <> [".set-cookie"]
   reqBodyB64 <- B64.decodeBase64 $ encodeUtf8 $ rM.requestBody
@@ -158,7 +158,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
   -- We skip the request headers from this hash, since the source of the request like browsers might add or skip headers at will,
   -- which would make this process not deterministic anymore, and that's necessary for a hash.
   let combinedKeyPathStr = T.concat $ sort $ Vector.toList $ queryParamsKP <> responseHeadersKP <> requestBodyKP <> responseBodyKP
-  let !shapeHash' = from @String @Text $ showHex (xxHash $ from @Text $ combinedKeyPathStr) ""
+  let !shapeHash' = from @String @Text $ showHex (xxHash $ encodeUtf8 $ combinedKeyPathStr) ""
   let shapeHash = endpointHash <> shapeHash' -- Include the endpoint hash to make the shape hash unique by endpoint
   let projectId = Projects.ProjectId (rM.projectId)
 
@@ -361,11 +361,11 @@ valueToFormat (AET.Array _) = "array"
 -- "integer"
 valueToFormatStr :: Text -> Text
 valueToFormatStr val
-  | val =~ ([r|^[0-9]+$|] :: Text) = "integer"
-  | val =~ ([r|^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)$|] :: Text) = "float"
-  | val =~ ([r|^(0[1-9]|1[012])[- /.](0[1-9]|[12][0-9]|3[01])[- /.](19|20)\d\d$|] :: Text) = "mm/dd/yyyy"
-  | val =~ ([r|^(0[1-9]|1[012])[- -.](0[1-9]|[12][0-9]|3[01])[- -.](19|20)\d\d$|] :: Text) = "mm-dd-yyyy"
-  | val =~ ([r|^(0[1-9]|1[012])[- ..](0[1-9]|[12][0-9]|3[01])[- ..](19|20)\d\d$|] :: Text) = "mm.dd.yyyy"
+  | val =~ ([text|^[0-9]+$|] :: Text) = "integer"
+  | val =~ ([text|^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)$|] :: Text) = "float"
+  | val =~ ([text|^(0[1-9]|1[012])[- /.](0[1-9]|[12][0-9]|3[01])[- /.](19|20)\d\d$|] :: Text) = "mm/dd/yyyy"
+  | val =~ ([text|^(0[1-9]|1[012])[- -.](0[1-9]|[12][0-9]|3[01])[- -.](19|20)\d\d$|] :: Text) = "mm-dd-yyyy"
+  | val =~ ([text|^(0[1-9]|1[012])[- ..](0[1-9]|[12][0-9]|3[01])[- ..](19|20)\d\d$|] :: Text) = "mm.dd.yyyy"
   | otherwise = "text"
 
 valueToFormatNum :: Scientific.Scientific -> Text
@@ -430,7 +430,7 @@ fieldsToFieldDTO fieldCategory projectID endpointHash (keyPath, val) =
 
   -- field hash is <hash of the endpoint> + <the hash of <field_category><key_path_str><field_type>> (No space or comma between data)
   preFieldHash = Fields.fieldCategoryEnumToText fieldCategory <> keyPath <> Fields.fieldTypeToText fieldType
-  fieldHash' = from @String @Text $ showHex (xxHash $ from @Text $ preFieldHash) ""
+  fieldHash' = from @String @Text $ showHex (xxHash $ encodeUtf8 preFieldHash) ""
   fieldHash = endpointHash <> fieldHash'
-  formatHash' = from @String @Text $ showHex (xxHash $ from @Text $ format) ""
+  formatHash' = from @String @Text $ showHex (xxHash $ encodeUtf8 format) ""
   formatHash = fieldHash <> formatHash'

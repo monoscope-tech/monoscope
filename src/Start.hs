@@ -40,7 +40,7 @@ startApp :: IO ()
 startApp = do
   setLocaleEncoding utf8
   let logger = logStringStdout
-  loadFileErr <- try (Dotenv.loadFile Dotenv.defaultConfig) :: IO (Either SomeException [(String, String)])
+  loadFileErr <- try (Dotenv.loadFile Dotenv.defaultConfig) :: IO (Either SomeException ())
   case loadFileErr of
     Left err -> logger <& "Load .env error " <> show loadFileErr
     Right _ -> pass

@@ -80,7 +80,7 @@ jobsRunner dbPool logger cfg job =
   throwParsePayload job >>= \case
     NewAnomaly pid createdAt anomalyTypesT anomalyActionsT targetHash -> do
       let anomalyType = Unsafe.fromJust $ Anomalies.parseAnomalyTypes anomalyTypesT
-      let anomalyAction = Unsafe.fromJust $ Anomalies.parseAnomalyActions anomalyActionsT
+      -- let anomalyAction = Unsafe.fromJust $ Anomalies.parseAnomalyActions anomalyActionsT
 
       case anomalyType of
         Anomalies.ATEndpoint -> do

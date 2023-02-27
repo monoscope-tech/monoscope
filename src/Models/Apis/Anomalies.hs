@@ -43,7 +43,6 @@ import Optics.TH
 import Relude hiding (id)
 import Utils
 import Web.HttpApiData (FromHttpApiData)
-import Witch (from)
 
 newtype AnomalyId = AnomalyId {unAnomalyId :: UUID.UUID}
   deriving stock (Generic, Show)
@@ -175,7 +174,7 @@ getAnomalyVM pid hash = queryOne Select q (pid, hash)
   q = [sql| SELECT *,0,now() FROM apis.anomalies_vm WHERE project_id=? AND target_hash=?|]
 
 selectAnomalies :: Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe Bool -> Maybe Bool -> Maybe Text -> DBT IO (Vector AnomalyVM)
-selectAnomalies pid endpointM isAcknowleged isArchived sortM = query Select (Query $ from @Text q) (MkDBField pid : paramList)
+selectAnomalies pid endpointM isAcknowleged isArchived sortM = query Select (Query $ encodeUtf8 q) (MkDBField pid : paramList)
  where
   boolToNullSubQ a = if a then " not " else ""
   condlist =

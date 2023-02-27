@@ -19,7 +19,9 @@
 # resolver: https://example.com/snapshots/2018-01-01.yaml
 # resolver:
 #   url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/18/18.yaml
-resolver: nightly-2022-08-16
+# resolver: nightly-2022-08-16
+# resolver: nightly-2023-02-23
+resolver: lts-20.11
 
 
 # User packages to be built.
@@ -47,7 +49,6 @@ extra-deps:
   - co-log-0.4.0.1@sha256:3d4c17f37693c80d1aa2c41669bc3438fac3e89dc5f479e57d79bc3ddc4dfcc5,5087
   - co-log-core-0.3.1.0@sha256:9794bdedd1391decd0e22bdfe2b11abcb42e6cff7a4531e1f8882890828f4e63,3816
   - colourista-0.1.0.1@sha256:98353ee0e2f5d97d2148513f084c1cd37dfda03e48aa9dd7a017c9d9c0ba710e,3307
-  - envy-2.1.0.0@sha256:b58b12d9b61a4e07562e7718f28a864178cfc4bb4c24a45c68b5e46cfd9b39be,1772
   - lucid-htmx-0.1.0.6@sha256:83d9eed5ff74778a2dfc3f320a66b08592a2880abca28d75747a0513a39bd871,1528
   - lucid-hyperscript-0.1.0.2@sha256:c3b048424e75c0e9cbadc30f7ebeb6abc164c2b45b2c995fd0674d4cc57be216,2035
   - lucid-svg-0.7.1@sha256:012455fd2b1ec6b0f3bba405fd66c99cc6d26592bf25c2624741969567c6e510,1088
@@ -55,17 +56,11 @@ extra-deps:
   - text-display-0.0.2.0@sha256:e96a1082f8f362032797f80e901d969b56a6dd7b43d1cb03e9654b08508da8e8,1818
   - transformers-except-0.1.2@sha256:2ff895fd65ec9e45cbe839ef5b66e26b7d9f3fe561148993293a41e14491e625,1548
   - chronos-1.1.4@sha256:7ba7df7496a880ca4b898ca2cd5ebbf9ee8408fb93e95f8011d2a68c6faf655d,3677
-  - direct-daemonize-3.1@sha256:f33505932b8613267cd8ad2d51470af2c5708d750ddf55a5dd38292f04962dcc,1630
   - timing-convenience-0.1@sha256:7ff807a9a9e5596f2b18d45c5a01aefb91d4a98f6a1008d183b5c550f68f7cb7,2092
   - typerep-map-0.3.3.0@sha256:20510efab770158414ac7828d1eca063d795bcc724ac634dd13bc7a50b476f42,4681
   - daemons-0.3.0@sha256:356edaf06a8cf5e9f19685f9ce793ad6d2b6bce2e55379f6b2aff1b0c07a633f,3178
-  - postgresql-query-3.10.0@sha256:bad59810fc464cf0f4a839a9c6372ba17c54fd04500a50e16fb46d578a0649ae,6320
   - nyan-interpolation-core-0.9.0.1@sha256:1bda0e90d2045eb18c905f905082f4098829c1bdcbc4012663686a1c503b4ded,4067
   - nyan-interpolation-0.9@sha256:8cf238be4c04746e4e9eabb34001c990c23e5837a19eb8652c584e57e92ecb41,3797
-  - git: https://github.com/emilypi/base64
-    commit: aae6a23944bbc2e19cf814a7030557612e10e52c
-    subdirs:
-      - .
   - git: https://github.com/tonyalaribe/xxhash
     commit: 0fa01adb871e66996d4ed2c27a3e97fac39ac466 
     subdirs:
@@ -79,14 +74,13 @@ extra-deps:
       - lib/services/gogol-logging
       - lib/services/gogol-cloudtrace
   - git: https://github.com/tchoutri/pg-entity.git
-    commit: 179f9cd6ed41557c524ab6ab47eae6e7aeacc9a3
+    commit: da682990e5f283ab809474901cb4348ac9dbcb05 
     subdirs:
       - .
   - git: https://github.com/saurabhnanda/odd-jobs
-    commit: dce96c0245fa0820d46c354f44f838ee804bfdfb
+    commit: cc05b640528697ba37529ee617a031d1acd60c4b
     subdirs:
       - .
-
 
 # Override default flag values for local packages and extra-deps
 # flags: {}

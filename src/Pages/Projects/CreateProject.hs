@@ -146,7 +146,7 @@ processProjectPostForm sess cpRaw = do
         pass
       else do
         let usersAndPermissions = zip (cp.emails) (cp.permissions) & uniq
-        liftIO $ withPool pool $ do
+        _ <- liftIO $ withPool pool $ do
           Projects.insertProject (createProjectFormToModel pid cp)
           newProjectMembers <-
             usersAndPermissions & mapM \(email, permission) -> do

@@ -176,7 +176,7 @@ select duration_steps, count(id)
 
 -- TODO: expand this into a view
 selectReqLatenciesRolledByStepsForProject :: Int -> Int -> Projects.ProjectId -> (Maybe ZonedTime, Maybe ZonedTime) -> DBT IO (Vector (Int, Int))
-selectReqLatenciesRolledByStepsForProject maxv steps pid dateRange = query Select (Query $ from @Text q) (maxv, steps, steps, steps, pid)
+selectReqLatenciesRolledByStepsForProject maxv steps pid dateRange = query Select (Query $ encodeUtf8 q) (maxv, steps, steps, steps, pid)
  where
   dateRangeStr = from @String $ case dateRange of
     (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
@@ -222,7 +222,7 @@ latencyBy pid endpointHash numSlots dateRange@(fromT, toT) = do
   ) 
   SELECT COALESCE(json_agg(json_build_array(to_char(f.time, 'YYYY-DD-MM HH24:MI:SS'), f.p50, f.p75, f.p90)), '[]')::text  from f; 
   |]
-  (Only val) <- fromMaybe (Only "[]") <$> queryOne Select (Query $ from @Text q) pid
+  (Only val) <- fromMaybe (Only "[]") <$> queryOne Select (Query $ encodeUtf8 q) pid
   pure val
 
 
@@ -268,5 +268,5 @@ throughputBy pid groupByM endpointHash shapeHash formatHash statusCodeGT numSlot
                   FROM apis.request_dumps 
                   WHERE project_id=? $cond $dateRangeStr GROUP BY timeB $groupBy $limit)
               SELECT COALESCE(json_agg(json_build_array(timeB $groupByFinal, total_count)), '[]')::text from q; |]
-  (Only val) <- fromMaybe (Only "[]") <$> queryOne Select (Query $ from @Text q) (MkDBField pid : paramList)
+  (Only val) <- fromMaybe (Only "[]") <$> queryOne Select (Query $ encodeUtf8 q) (MkDBField pid : paramList)
   pure val

@@ -7,7 +7,6 @@ import Config qualified
 import Data.Text
 import Network.HaskellNet.SMTP
 import Network.Mail.Mime
-import Optics.Core
 import Relude
 
 sendEmail :: Config.EnvConfig -> Text -> Text -> LText -> IO ()

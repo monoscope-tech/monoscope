@@ -16,9 +16,9 @@ import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import ProcessMessage qualified
 import Relude
 import RequestMessages qualified
-import Text.RawString.QQ (r)
 import Utils
 import Web.FormUrlEncoded (FromForm)
+import NeatInterpolation
 
 data RequestMessageForm = RequestMessageForm
   { timestamp :: ZonedTime
@@ -126,7 +126,7 @@ manualIngestPage = do
         , hxSwap_ "outerHTML"
         , hxPost_ ""
         , hxVals_
-            [r|js: requestBody:reqBodyEditor.getText(), 
+            [text|js: requestBody:reqBodyEditor.getText(), 
                    responseBody: respBodyEditor.getText(),
                    queryParams: queryParamsEditor.getText(),
                    pathParams: pathParamsEditor.getText(),
@@ -153,7 +153,7 @@ manualIngestPage = do
           div_ $ do
             button_ [class_ "btn-sm btn-indigo", type_ "submit"] "Submit"
     script_ @Text
-      [r|
+      [text|
         // create the editor
         var opt = {mode:"code", modes: ["code","tree"]}
         var reqHeadersEditor = new JSONEditor(document.getElementById("requestHeaders"), opt)

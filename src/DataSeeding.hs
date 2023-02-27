@@ -27,7 +27,6 @@ import Relude
 import Relude.Unsafe ((!!))
 import RequestMessages qualified
 import System.Random (RandomGen, getStdGen, randomRs)
-import Text.RawString.QQ (r)
 import Web.FormUrlEncoded (FromForm)
 
 data FieldConfig = FieldConfig
@@ -190,7 +189,7 @@ dataSeedingPage = do
         , hxSwap_ "outerHTML"
         , hxPost_ ""
         , hxVals_
-            [r|js: config:editor.getValue() 
+            [text|js: config:editor.getValue() 
             |]
         ]
         $ do
