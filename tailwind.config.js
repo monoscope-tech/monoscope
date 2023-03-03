@@ -4,7 +4,7 @@ module.exports = {
     extend: {
       fontFamily: {
         'Poppins': ['Poppins', 'sans-serif']
-        ,'Inconsolata': ['Inconsolata', 'monospace']
+        , 'Inconsolata': ['Inconsolata', 'monospace']
       },
     },
   },

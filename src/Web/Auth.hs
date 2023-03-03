@@ -7,7 +7,6 @@ import Colog.Core ((<&))
 import Config (DashboardM, env, pool)
 import Control.Error (note)
 import Control.Lens qualified as L
-import Control.Monad.Trans.Either (runEitherT)
 import Data.Aeson.Lens (key, _String)
 import Data.Map.Strict qualified as Map
 import Data.Pool (Pool)
@@ -95,7 +94,7 @@ authCallbackH codeM _ = do
   envCfg <- asks env
   pool <- asks pool
 
-  resp <- runEitherT $ do
+  resp <- runExceptT $ do
     code <- hoistEither $ note "invalid code " codeM
     r <-
       liftIO $
@@ -163,7 +162,7 @@ authHandler logger conn = mkAuthHandler handler
 -- We need to handle errors for the persistent session better and redirect if there's an error
 lookupAccount :: Pool Connection -> ByteString -> Handler Sessions.PersistentSession
 lookupAccount conn keyV = do
-  resp <- runEitherT $ do
+  resp <- runExceptT $ do
     pid <- hoistEither $ note @Text "unable to convert cookie value to persistent session UUID" (Sessions.PersistentSessionId <$> UUID.fromASCIIBytes keyV)
     presistentSess <- liftIO $ withPool conn $ Sessions.getPersistentSession pid
     hoistEither $ note "lookupAccount: invalid persistentID " presistentSess

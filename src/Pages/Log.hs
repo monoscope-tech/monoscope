@@ -12,8 +12,6 @@ import Data.UUID qualified as UUID
 import Data.Vector (Vector, iforM_, (!?))
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
-import Formatting hiding (text)
-import Formatting.Clock
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
@@ -26,6 +24,7 @@ import Optics.Core ((^.))
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Relude
 import System.Clock
+import Fmt
 
 -- $setup
 -- >>> import Relude
@@ -78,9 +77,9 @@ apiLogItem sess pid rdId createdAt = do
   afterProccessing <- liftIO $ getTime Monotonic
   let content = maybe (div_ "invalid log request ID") apiLogItemView logItemM
   endTime <- liftIO $ getTime Monotonic
-  liftIO $ fprint (timeSpecs % " APILOG Item  DB Time \n") startTime afterProccessing
-  liftIO $ fprint (timeSpecs % " APILOG Item  Processing time \n") afterProccessing endTime
-  liftIO $ fprint (timeSpecs % " APILOG Item  Total Time\n") startTime endTime
+  liftIO $ putStrLn $ fmtLn $ " APILOG Item in ns DB Time " +| toNanoSecs (diffTimeSpec startTime afterProccessing) |+ ""
+  liftIO $ putStrLn $ fmtLn $ " APILOG Item in ns Processing time " +| toNanoSecs (diffTimeSpec afterProccessing endTime) |+ ""
+  liftIO $ putStrLn $ fmtLn $ " APILOG Item in ns Total Time" +| toNanoSecs (diffTimeSpec startTime endTime) |+ ""
   pure content
 
 apiLogsPage :: Projects.ProjectId -> Int -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Text -> Text -> Text -> Html ()

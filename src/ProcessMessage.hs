@@ -18,8 +18,6 @@ import Data.UUID.V4 (nextRandom)
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (Connection, Query)
 import Database.PostgreSQL.Transact (execute)
-import Formatting
-import Formatting.Clock
 import Gogol.Data.Base64 (_Base64)
 import Gogol.PubSub qualified as PubSub
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -28,6 +26,7 @@ import Relude hiding (hoistMaybe)
 import RequestMessages qualified
 import System.Clock
 import Utils (DBField, eitherStrToText)
+import Fmt
 
 {--
   Exploring how the inmemory cache could be shaped for performance, and low footprint ability to skip hitting the postgres database when not needed.
@@ -124,9 +123,9 @@ processMessages' logger' _ conn' msgs projectCache' = do
           pass
 
   endTime <- getTime Monotonic
-  fprint (timeSpecs % " Processing Time \n") startTime afterProccessing
-  fprint (timeSpecs % " DB time \n") afterProccessing endTime
-  fprint (timeSpecs % " Total Time\n") startTime endTime
+  liftIO $ putStrLn $ fmtLn $ " APILOG Item in ns DB Time " +| toNanoSecs (diffTimeSpec startTime afterProccessing) |+ ""
+  liftIO $ putStrLn $ fmtLn $ " APILOG Item in ns Processing time " +| toNanoSecs (diffTimeSpec afterProccessing endTime) |+ ""
+  liftIO $ putStrLn $ fmtLn $ " APILOG Item in ns Total Time" +| toNanoSecs (diffTimeSpec startTime endTime) |+ ""
 
   case resp of
     Left err -> do

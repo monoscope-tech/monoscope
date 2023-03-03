@@ -22,6 +22,7 @@
 # resolver: nightly-2022-08-16
 # resolver: nightly-2023-02-23
 resolver: lts-20.11
+# resolver: nightly-2023-02-27
 
 
 # User packages to be built.
