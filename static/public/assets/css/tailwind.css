@@ -4,7 +4,7 @@
 
 @layer base {
   .card-round {
-    @apply bg-white border border-slate-300 rounded-xl shadow-md  shadow-slate-200;
+    @apply bg-white border border-slate-200 rounded-xl shadow-md  shadow-slate-200;
   }
 }
 
