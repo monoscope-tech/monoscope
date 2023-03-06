@@ -137,10 +137,10 @@ anomalyListPage paramInput pid currTime anomalies = div_ [class_ "container mx-a
     a_ [class_ $ "inline-block py-2 " <> if not paramInput.ackd && not paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&ackd=false&archived=false"] "Inbox"
     a_ [class_ $ "inline-block  py-2 " <> if paramInput.ackd && not paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&ackd=true&archived=false"] "Acknowleged"
     a_ [class_ $ "inline-block  py-2 " <> if paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&archived=true"] "Archived"
-  div_ [class_ "grid grid-cols-5", id_ "anomalyListBelowTab", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $ anomalyList paramInput pid currTime anomalies
+  div_ [class_ "grid grid-cols-5 card-round", id_ "anomalyListBelowTab", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $ anomalyList paramInput pid currTime anomalies
 
 anomalyList :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Anomalies.AnomalyVM -> Html ()
-anomalyList paramInput pid currTime anomalies = form_ [class_ "col-span-5 bg-white divide-y border rounded-md ", id_ "anomalyListForm"] $ do
+anomalyList paramInput pid currTime anomalies = form_ [class_ "col-span-5 bg-white divide-y ", id_ "anomalyListForm"] $ do
   let bulkActionBase = "/p/" <>  pid.toText <> "/anomalies/bulk_actions"
   let currentURL' = deleteParam "sort" paramInput.currentURL
   let sortMenu =
@@ -186,7 +186,7 @@ anomalyList paramInput pid currTime anomalies = form_ [class_ "col-span-5 bg-whi
           a_ [class_ "cursor-pointer font-bold text-base"] "14d"
       div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "font-base"] "EVENTS"
 
-  when (null anomalies) $ div_ [class_ "flex card-round  text-center justify-center items-center h-32"] $ do
+  when (null anomalies) $ div_ [class_ "flex text-center justify-center items-center h-32"] $ do
     strong_ "No anomalies yet"
   mapM_ (renderAnomaly False currTime) anomalies
 

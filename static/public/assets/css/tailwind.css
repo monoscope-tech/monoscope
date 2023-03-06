@@ -1,10 +1,11 @@
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
   .card-round {
-    @apply bg-white border border-slate-200 rounded-xl shadow-md  shadow-slate-200;
+    @apply bg-white border border-slate-200 rounded-xl shadow-md  shadow-slate-200 overflow-hidden;
   }
 }
 
@@ -13,6 +14,7 @@
     font-size: 14px;
     font-family: "Poppins", sans-serif;
     /* font-family: 'Roboto', sans-serif; */
+    --white: 255 255 255;
   }
   .inconsolata {
     font-family: "Inconsolata", monospace;
@@ -73,7 +75,25 @@
     visibility: visible;
   }
 
+  .hidden-side-nav-menu .sd-hidden {
+    display: none;
+  }
+  .hidden-side-nav-menu .sd-show{
+    display: inline-block;
+  }
+}
 
+@layer utilities {
+  #side-nav-menu:not(.hidden-side-nav-menu) {
+    @apply w-72;
+  }
+  #side-nav-ctx-btn {
+    @apply px-0;
+  }
+
+  .hidden-side-nav-menu #side-nav-menu {
+    @apply w-16;
+  }
 }
 /* HERE SINCE IT"S BASICALLY AN OVERRIDE.  Its for the log items rows */
 .expanded-log {

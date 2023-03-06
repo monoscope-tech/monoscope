@@ -176,13 +176,17 @@ projectsDropDown currProject projects = do
 
 sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Maybe Text -> Html ()
 sideNav sess project pageTitle menuItem = do
-  aside_ [class_ "shrink-0  w-72 top-0 border-r-2 bg-white border-gray-200 h-screen overflow-hidden"] $ do
-    a_ [href_ "/", class_ "inline-block p-4"] $ do
+  aside_ [class_ "shrink-0 top-0 border-r-2 bg-white border-gray-200 h-screen overflow-hidden transition-all duration-1000 ease-in-out", id_ "side-nav-menu"] $ do
+    a_ [href_ "/", class_ "inline-block p-4 h-12"] $ do
       img_
-        [ class_ "h-12"
+        [ class_ "h-12 sd-hidden"
         , src_ "/assets/svgs/logo.svg"
         ]
-    div_ [class_ "p-4"] $ do
+      img_
+        [ class_ "h-12 w-10 hidden sd-show"
+        , src_ "/assets/svgs/logo_mini.svg"
+        ]
+    div_ [class_ "py-4 px-4 transition-all  duration-1000 ease-in-out", id_ "side-nav-ctx-btn"] $ do
       a_
         [ class_ "flex flex-row bg-blue-50 hover:bg-blue-100 text-blue-900 block p-6 rounded-md cursor-pointer"
         , [__| 
@@ -204,7 +208,7 @@ sideNav sess project pageTitle menuItem = do
             |]
         ]
         $ do
-          div_ [class_ "space-2 grow "] $ do
+          div_ [class_ "space-2 grow sd-hidden"] $ do
             strong_ [class_ "block text-slate-900"] $ toHtml $ project.title
             small_ [class_ "block text-slate-900"] "Development"
           div_ $ do
@@ -225,12 +229,12 @@ sideNav sess project pageTitle menuItem = do
           ]
           $ do
             svg_ [class_ "w-5 h-5 icon text-slate-500"] $ use_ [href_ $ "/assets/svgs/sprite/sprite.svg" <> mIcon]
-            span_ [class_ "grow"] $ toHtml mTitle
+            span_ [class_ "grow sd-hidden"] $ toHtml mTitle
 
 navbar :: Users.User -> Html ()
 navbar currUser = do
   nav_ [id_ "main-navbar", class_ "sticky z-20 top-0 w-full w-full px-6 py-3 border-b bg-white flex flex-row justify-between"] $ do
-    a_ [class_ "cursor-pointer flex items-center"] $ do
+    a_ [class_ "cursor-pointer flex items-center", [__| on click toggle .hidden-side-nav-menu on #side-nav-menu |]] $ do
       img_ [class_ "w-4 h-4", src_ "/assets/svgs/hamburger_menu.svg"]
     div_ [class_ "inline-block flex items-center"] $ do
       a_ [class_ "inline-block p-2 px-3 align-middle"] $ img_ [class_ "w-5 h-5", src_ "/assets/svgs/search.svg"]

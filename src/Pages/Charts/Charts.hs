@@ -167,6 +167,7 @@ function throughputEChart(renderAt, data, gb, showLegend, theme){
   if (showLegend) {
     option.grid.bottom = '9%'
   }
+console.log(option)
   myChart.setOption(option);
  }
 
@@ -238,7 +239,6 @@ function throughputEChart(renderAt, data, gb, showLegend, theme){
       ]
     };
     const myChart = echarts.init(document.getElementById(renderAt), theme);
-    console.log(option)
     myChart.setOption(option);
   }
 
@@ -295,7 +295,6 @@ function latencyHistogram(renderAt, pc, data){
       },
     },
   };
-  console.log(option);
   myChart.setOption(option);
  }
   |]

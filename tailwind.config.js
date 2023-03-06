@@ -8,5 +8,8 @@ module.exports = {
       },
     },
   },
-  plugins: [],
+  plugins: [require("rippleui")],
+  rippleui: {
+    removeThemes: ["dark"],
+  },
 }
