@@ -82,8 +82,14 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child =
 
           script_
             [text|
+              window.initialCloseSideMenu = localStorage.getItem('close-sidemenu');
               var currentISOTimeStringVar = ((new Date()).toISOString().split(".")[0])+"+00:00";
               document.addEventListener('DOMContentLoaded', function(){ 
+                if (window.initialCloseSideMenu == 'true'){
+                   document.getElementById('side-nav-menu').classList.add('hidden-side-nav-menu');
+                }
+
+
                 // htmx.config.useTemplateFragments = true
                 // htmx.logAll()
                 tippy('[data-tippy-content]');
@@ -228,13 +234,22 @@ sideNav sess project pageTitle menuItem = do
                    )
           ]
           $ do
-            svg_ [class_ "w-5 h-5 icon text-slate-500"] $ use_ [href_ $ "/assets/svgs/sprite/sprite.svg" <> mIcon]
+            svg_ [class_ "w-5 h-5 icon text-slate-500",term "data-tippy-placement" "right", term "data-tippy-content" mTitle] $ use_ [href_ $ "/assets/svgs/sprite/sprite.svg" <> mIcon]
             span_ [class_ "grow sd-hidden"] $ toHtml mTitle
 
 navbar :: Users.User -> Html ()
 navbar currUser = do
   nav_ [id_ "main-navbar", class_ "sticky z-20 top-0 w-full w-full px-6 py-3 border-b bg-white flex flex-row justify-between"] $ do
-    a_ [class_ "cursor-pointer flex items-center", [__| on click toggle .hidden-side-nav-menu on #side-nav-menu |]] $ do
+    a_ [class_ "cursor-pointer flex items-center", 
+      [__|
+      on click 
+        if (localStorage.getItem('close-sidemenu') != 'true') then  
+          add .hidden-side-nav-menu to #side-nav-menu then 
+          call localStorage.setItem('close-sidemenu', 'true')
+        else remove  .hidden-side-nav-menu from #side-nav-menu then 
+             call localStorage.removeItem('close-sidemenu') 
+        end
+          |]] $ do
       img_ [class_ "w-4 h-4", src_ "/assets/svgs/hamburger_menu.svg"]
     div_ [class_ "inline-block flex items-center"] $ do
       a_ [class_ "inline-block p-2 px-3 align-middle"] $ img_ [class_ "w-5 h-5", src_ "/assets/svgs/search.svg"]

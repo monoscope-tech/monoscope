@@ -120,6 +120,7 @@ function throughputEChart(renderAt, data, gb, showLegend, theme){
       showBackground: true,
       backgroundStyle: backgroundStyle,
       barWidth: '60%',
+      barMinHeight: "1",
       encode: {
         x: 'timestamp',
         y: 'throughput',

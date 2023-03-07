@@ -166,11 +166,11 @@ dStats projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledByStepsJ 
 
     div_ [class_ "reqResSubSection space-y-5"] $ do
       div_ [class_ "grid grid-cols-5 gap-5"] $ do
-        statBox "Total Requests" "Total requests in the last 2 weeks" (projReqStats.totalRequests) Nothing 
-        statBox "Total Anomalies" "Total anomalies still active this week vs last week" projReqStats.totalAnomalies (Just projReqStats.totalAnomaliesLastWeek)
-        statBox "Managed Endpoints" "Total endpoints now vs last week" projReqStats.totalEndpoints (Just projReqStats.totalEndpointsLastWeek)
-        statBox "Total Shapes" "Total shapes which are active now vs last week" projReqStats.totalShapes (Just projReqStats.totalShapesLastWeek)
-        statBox "Total Fields" "Total fields which are active now vs last week" projReqStats.totalFields (Just projReqStats.totalFieldsLastWeek)
+        statBox "Requests" "Total requests in the last 2 weeks" (projReqStats.totalRequests) Nothing 
+        statBox "Anomalies" "Total anomalies still active this week vs last week" projReqStats.totalAnomalies (Just projReqStats.totalAnomaliesLastWeek)
+        statBox "Endpoints" "Total endpoints now vs last week" projReqStats.totalEndpoints (Just projReqStats.totalEndpointsLastWeek)
+        statBox "Signatures" "Total request signatures which are active now vs last week" projReqStats.totalShapes (Just projReqStats.totalShapesLastWeek)
+        statBox "Fields" "Total fields which are active now vs last week" projReqStats.totalFields (Just projReqStats.totalFieldsLastWeek)
 
       div_ [class_ "flex gap-5"] do
         div_ [class_ "flex-1 card-round p-3"] $ do

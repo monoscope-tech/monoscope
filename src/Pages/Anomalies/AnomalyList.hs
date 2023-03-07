@@ -179,7 +179,7 @@ anomalyList paramInput pid currTime anomalies = form_ [class_ "col-span-5 bg-whi
                   span_ [class_ "block text-lg"] $ toHtml title
                   span_ [class_ "block "] $ toHtml desc
 
-      div_ [class_ "flex justify-center font-base w-64 content-between gap-14"] do
+      div_ [class_ "flex justify-center font-base w-60 content-between gap-14"] do
         span_ "GRAPH"
         div_ [class_ " space-x-2 font-base text-sm"] $ do
           a_ [class_ "cursor-pointer"] "24h"
@@ -306,7 +306,7 @@ anomalyItem hideByDefault currTime anomaly icon title subTitle content = do
             anomalyAcknowlegeButton anomaly.projectId anomaly.id (isJust anomaly.acknowlegedAt)
         fromMaybe (toHtml @String "") content
     let chartQuery = Just $ anomaly2ChartQuery anomaly.anomalyType anomaly.targetHash
-    div_ [class_ "flex items-center justify-center "] $ div_ [class_ "w-64 h-16 px-3"] $ Charts.throughput anomaly.projectId anomaly.targetHash chartQuery Nothing 14 Nothing False (Nothing, Nothing) Nothing
+    div_ [class_ "flex items-center justify-center "] $ div_ [class_ "w-60 h-16 px-3"] $ Charts.throughput anomaly.projectId anomaly.targetHash chartQuery Nothing 14 Nothing False (Nothing, Nothing) Nothing
     div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $ show $ anomaly.eventsCount14d
 
 anomaly2ChartQuery :: Anomalies.AnomalyTypes -> Text -> Charts.QueryBy
