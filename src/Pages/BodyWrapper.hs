@@ -38,6 +38,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child =
     Just sess -> do
       let currUser = Sessions.getUser (Sessions.user sess)
           sideNav' = currProject & maybe "" \project -> sideNav sess project pageTitle menuItem
+      let currUserEmail = currUser.email
 
       doctypehtml_ $ do
         head_ $ do
@@ -115,18 +116,21 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child =
             |]
           script_ Charts.chartInit
           script_ [text|
-// Ortto apitoolkit capture code 
-    window.ap3c = window.ap3c || {};
-    var ap3c = window.ap3c;
-    ap3c.cmd = ap3c.cmd || [];
-    ap3c.cmd.push(function() {
-        ap3c.init('ZCp34YmuGHeQ46i4YXBpdG9vbGtpdA', 'https://capture-api.eu.autopilotapp.com/');
-        ap3c.track({v: 0});
-    });
-    ap3c.activity = function(act) { ap3c.act = (ap3c.act || []); ap3c.act.push(act); };
-    var s, t; s = document.createElement('script'); s.type = 'text/javascript'; s.src = "https://cdneu.net/app.js";
-    t = document.getElementsByTagName('script')[0]; t.parentNode.insertBefore(s, t);
-            |]
+            // Ortto apitoolkit capture code 
+            window.ap3c = window.ap3c || {};
+            var ap3c = window.ap3c;
+            ap3c.cmd = ap3c.cmd || [];
+            ap3c.cmd.push(function() {
+                ap3c.init('ZCp34YmuGHeQ46i4YXBpdG9vbGtpdA', 'https://capture-api.eu.autopilotapp.com/');
+                ap3c.track({v: 0});
+            });
+            ap3c.activity = function(act) { ap3c.act = (ap3c.act || []); ap3c.act.push(act); };
+            var s, t; s = document.createElement('script'); s.type = 'text/javascript'; s.src = "https://cdneu.net/app.js";
+            t = document.getElementsByTagName('script')[0]; t.parentNode.insertBefore(s, t);
+
+            // Track user on dashboard
+            ap3c.track({email: "$currUserEmail", skipNonExisting: true});
+          |]
 
         body_ [class_ "text-gray-900"] $ do
           section_ [class_ "flex flex-row h-screen overflow-hidden"] $ do
