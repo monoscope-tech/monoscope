@@ -11,6 +11,7 @@ import Models.Users.Users qualified as Users
 import NeatInterpolation
 import Pages.Charts.Charts qualified as Charts
 import Relude
+import Data.CaseInsensitive qualified as CI
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu pid =
@@ -38,7 +39,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child =
     Just sess -> do
       let currUser = Sessions.getUser (Sessions.user sess)
           sideNav' = currProject & maybe "" \project -> sideNav sess project pageTitle menuItem
-      let currUserEmail = currUser.email
+      let currUserEmail = CI.original currUser.email
 
       doctypehtml_ $ do
         head_ $ do
