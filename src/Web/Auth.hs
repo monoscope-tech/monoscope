@@ -38,6 +38,7 @@ import Servant.Server.Experimental.Auth (AuthHandler, mkAuthHandler)
 import SessionCookies (craftSessionCookie, emptySessionCookie)
 import Web.Cookie (SetCookie, parseCookies)
 import Prelude (lookup)
+import Pkg.Ortto qualified as Ortto
 
 -- | The context that will be made available to request handlers. We supply the
 -- "cookie-auth"-tagged request handler defined above, so that the 'HasServer' instance
@@ -117,8 +118,7 @@ authCallbackH codeM _ = do
     -- TODO: For users with no profile photos or empty profile photos, use gravatars as their profile photo
     -- https://en.gravatar.com/site/implement/images/
     let picture = fromMaybe "" $ resp L.^? responseBody . key "picture" . _String
-
-    liftIO $
+    (userId, persistentSessId) <- liftIO $
       withPool pool $ do
         userM <- Users.userByEmail email
         userId <- case userM of
@@ -129,7 +129,9 @@ authCallbackH codeM _ = do
           Just user -> pure $ user.id
         persistentSessId <- liftIO Sessions.newPersistentSessionId
         Sessions.insertSession persistentSessId userId (Sessions.SessionData Map.empty)
-        pure persistentSessId
+        pure (userId, persistentSessId)
+    _ <- liftIO $ Ortto.mergePerson  (envCfg ^. #orttoApiKey) userId firstName lastName email
+    pure persistentSessId
 
   case resp of
     Left err -> putStrLn ("unable to process auth callback page " <> err) >> (throwError $ err302{errHeaders = [("Location", "/login?auth0_callback_failure")]}) >> pure (noHeader $ noHeader "")

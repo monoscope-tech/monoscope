@@ -49,6 +49,11 @@ import Servant (
 import Servant.Htmx
 import Web.FormUrlEncoded (FromForm)
 import Data.CaseInsensitive qualified as CI
+import Network.Wreq (postWith, defaults, header)
+import Control.Lens ((.~))
+import Optics.Core ((^.))
+import qualified Pkg.Ortto as Ortto
+import Data.Tuple.Extra (thd3)
 
 data CreateProjectForm = CreateProjectForm
   { title :: Text
@@ -139,6 +144,7 @@ processProjectPostForm sess cpRaw = do
   let currUserId = sess.userId
   pool <- asks pool
   pid <- liftIO $ maybe (Projects.ProjectId <$> UUIDV4.nextRandom) pure $ Projects.projectIdFromText cp.projectId
+  orttoPID <- liftIO $ fromMaybe "" <$> Ortto.mergeOrganization (envCfg.orttoApiKey) pid cp.title cp.paymentPlan
   _ <-
     if cp.isUpdate
       then do
@@ -148,21 +154,21 @@ processProjectPostForm sess cpRaw = do
         let usersAndPermissions = zip (cp.emails) (cp.permissions) & uniq
         _ <- liftIO $ withPool pool $ do
           Projects.insertProject (createProjectFormToModel pid cp)
-          newProjectMembers <-
-            usersAndPermissions & mapM \(email, permission) -> do
-              userId' <- do
-                userIdM' <- Users.userIdByEmail email
-                case userIdM' of
-                  Nothing -> do
-                    idM' <- Users.createEmptyUser email -- NEXT Trigger email sending
-                    case idM' of
+          newProjectMembers <- forM usersAndPermissions \(email, permission) -> do
+              userId' <- Users.userIdByEmail email >>= \case
+                  Nothing -> Users.createEmptyUser email >>= \case                -- NEXT Trigger email sending
                       Nothing -> error "duplicate email in createEmptyUser"
-                      Just idX -> pure idX
+                      Just idX -> do
+                        -- upload person to ortto. Person to be attributed to company in a next step
+                        _<- liftIO $ Ortto.mergePerson (envCfg.orttoApiKey) idX "" "" email
+                        pure idX
                   Just idX -> pure idX
-              when (userId' /= currUserId) $ -- invite the users to the project (Usually as an email)
-                void $
-                  liftIO $
-                    withResource pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId' pid email (cp.title)
+
+              when (userId' /= currUserId) $  -- invite the users to the project (Usually as an email)
+                  liftIO $ do
+                    _ <- withResource pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId' pid email (cp.title) 
+                    pass
+
               pure (email, permission, userId')
 
           let projectMembers =
@@ -170,7 +176,8 @@ processProjectPostForm sess cpRaw = do
                   & filter (\(_, _, id') -> id' /= currUserId)
                   & map (\(email, permission, id') -> ProjectMembers.CreateProjectMembers pid id' permission)
                   & cons (ProjectMembers.CreateProjectMembers pid currUserId Projects.PAdmin)
-          ProjectMembers.insertProjectMembers projectMembers
+          _ <- ProjectMembers.insertProjectMembers projectMembers
+          liftIO $ Ortto.addToOrganization (envCfg.orttoApiKey) orttoPID $ currUserId:(thd3 <$> newProjectMembers) 
         _<-liftIO $ withResource pool \conn ->
           createJob conn "background_jobs" $ BackgroundJobs.CreatedProjectSuccessfully currUserId pid (original $ sess.user.getUser.email) (cp.title)
         pass
@@ -181,6 +188,7 @@ processProjectPostForm sess cpRaw = do
   if cp.isUpdate
     then pure $ addHeader hxTriggerDataUpdate $ noHeader bdy
     else pure $ addHeader hxTriggerData $ addHeader ("/p/" <> pid.toText) bdy
+
 
 ----------------------------------------------------------------------------------------------------------
 -- createProjectBody is the core html view
