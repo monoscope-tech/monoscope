@@ -1,4 +1,4 @@
-module Pkg.Ortto (mergePerson, mergeOrganization, addToOrganization) where 
+module Pkg.Ortto (mergePerson, mergeOrganization, addToOrganization, pushedTrafficViaSdk) where 
 import Models.Projects.Projects qualified as Projects
 import Relude
 import Data.Aeson.QQ (aesonQQ)
@@ -6,7 +6,37 @@ import Network.Wreq (postWith, defaults, header, responseBody, putWith)
 import Control.Lens ((.~), (^?), (^..))
 import Data.Aeson.Lens (key, nth, _String, values)
 import Models.Users.Users qualified as Users
+import Data.List.Extra (chunksOf)
 
+pushedTrafficViaSdk :: Text -> [(Projects.ProjectId, Text, Int)] -> IO ()
+pushedTrafficViaSdk orttoApiKey projectsList = do
+  let chunks = chunksOf 50 projectsList -- Limit to 50 items per request
+  forM_ chunks \chunk -> do
+    let activities = chunk & map \(pid, projectName, count ) -> let pidText = pid.toText in [aesonQQ|
+        {
+            "activity_id": "act:cm:pushed-traffic-via-sdk-24hrs",
+            "attributes": {
+                "int:cm:traffic-count":#{count} 
+            },
+            "fields": {
+                "str:oc:external-id": #{pidText},
+                "str:o:name": #{projectName}
+            }
+        }
+      |]
+    r <- postWith
+            (defaults & header "X-Api-Key" .~ [encodeUtf8 @Text @ByteString orttoApiKey] & header "Content-Type" .~ ["application/json"])
+            "https://api.eu.ap3api.com/v1/activities/create"
+              [aesonQQ| {
+                "async": true,
+                "activities": #{activities},
+                "merge_by": [
+                    "str:oc:external-id"
+                ]
+              }
+            |]
+    pass
+  pass
 
 mergePerson :: Text -> Users.UserId -> Text -> Text -> Text-> IO (Maybe Text) 
 mergePerson orttoApiKey userId' firstName lastName email = do

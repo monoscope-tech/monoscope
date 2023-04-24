@@ -183,7 +183,7 @@ data Status = Status
     (FromJSON, ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Status
 
-statusH :: DashboardM (Status)
+statusH :: DashboardM Status
 statusH = do
   pool <- asks pool
   let query = [sql| select version(); |]

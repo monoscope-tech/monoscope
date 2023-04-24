@@ -32,12 +32,14 @@ import OddJobs.Job (ConcurrencyControl (..), Job (..), startJobRunner, throwPars
 import Pkg.Mail
 import Relude
 import Relude.Unsafe qualified as Unsafe
+import qualified Pkg.Ortto as Ortto
 
 data BgJobs
   = InviteUserToProject Users.UserId Projects.ProjectId Text Text
   | CreatedProjectSuccessfully Users.UserId Projects.ProjectId Text Text
   | -- NewAnomaly Projects.ProjectId Anomalies.AnomalyTypes Anomalies.AnomalyActions TargetHash
     NewAnomaly Projects.ProjectId ZonedTime Text Text Text
+  | DailyOrttoSync
   deriving stock (Eq, Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
 
@@ -67,6 +69,15 @@ getUsersByProjectId pid = query Select q (Only pid)
   q =
     [sql| select u.id, u.created_at, u.updated_at, u.deleted_at, u.active, u.first_name, u.last_name, u.display_image_url, u.email
                     from users.users u join projects.project_members pm on (pm.user_id=u.id) where project_id=? |]
+
+getProjectsReqsCount :: DBT IO (Vector (Projects.ProjectId,Text, Int))
+getProjectsReqsCount = query Select q ()
+  where q = [sql|SELECT pp.id, pp.title, SUM(total_count) total_count 
+                  FROM apis.project_requests_by_endpoint_per_min apm
+                  JOIN projects.projects pp ON (id=project_id)
+                  where apm.timeB > NOW() - INTERVAL '140 days'
+                  GROUP BY pp.id, pp.title
+        |]
 
 -- TODO:
 -- Analyze shapes for
@@ -201,6 +212,10 @@ Regards,<br/>
 Apitoolkit team
           |]
        in sendEmail cfg reciever subject body
+    DailyOrttoSync -> do
+      projReqs <- withPool dbPool getProjectsReqsCount
+      Ortto.pushedTrafficViaSdk cfg.orttoApiKey $ toList projReqs
+      
 
 jobsWorkerInit :: Pool Connection -> LogAction IO String -> Config.EnvConfig -> IO ()
 jobsWorkerInit dbPool logger envConfig = startJobRunner $ mkConfig jobLogger "background_jobs" dbPool (MaxConcurrentJobs 1) (jobsRunner dbPool logger envConfig) id
