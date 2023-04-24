@@ -8,33 +8,38 @@ import Data.Aeson.Lens (key, nth, _String, values)
 import Models.Users.Users qualified as Users
 import Data.List.Extra (chunksOf)
 
-pushedTrafficViaSdk :: Text -> [(Projects.ProjectId, Text, Int)] -> IO ()
+pushedTrafficViaSdk :: Text -> [(Projects.ProjectId, Text, Int64, Users.UserId)] -> IO ()
 pushedTrafficViaSdk orttoApiKey projectsList = do
   let chunks = chunksOf 50 projectsList -- Limit to 50 items per request
   forM_ chunks \chunk -> do
-    let activities = chunk & map \(pid, projectName, count ) -> let pidText = pid.toText in [aesonQQ|
-        {
-            "activity_id": "act:cm:pushed-traffic-via-sdk-24hrs",
-            "attributes": {
-                "int:cm:traffic-count":#{count} 
-            },
-            "fields": {
-                "str:oc:external-id": #{pidText},
-                "str:o:name": #{projectName}
-            }
-        }
-      |]
-    r <- postWith
-            (defaults & header "X-Api-Key" .~ [encodeUtf8 @Text @ByteString orttoApiKey] & header "Content-Type" .~ ["application/json"])
-            "https://api.eu.ap3api.com/v1/activities/create"
-              [aesonQQ| {
+    let activities = 
+          chunk & map \(pid, projectName, count, userId ) -> let 
+                                    pidText = pid.toText 
+                                    userIdText = userId.toText
+                      in [aesonQQ|
+                          {
+                              "activity_id": "act:cm:pushed-traffic-via-sdk-24hrs",
+                              "attributes": {
+                                  "int:cm:traffic-count":#{count},
+                                  "str:cm:company-id": #{pidText}
+                              },
+                              "fields": {
+                                  "str::ei": #{userIdText}
+                              }
+                          }
+                        |]
+    let requestBody = [aesonQQ| {
                 "async": true,
                 "activities": #{activities},
                 "merge_by": [
-                    "str:oc:external-id"
+                    "str::ei"
                 ]
               }
             |]
+    r <- postWith
+            (defaults & header "X-Api-Key" .~ [encodeUtf8 @Text @ByteString orttoApiKey] & header "Content-Type" .~ ["application/json"])
+            "https://api.eu.ap3api.com/v1/activities/create"
+            requestBody
     pass
   pass
 

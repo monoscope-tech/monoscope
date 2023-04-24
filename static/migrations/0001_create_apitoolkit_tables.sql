@@ -603,4 +603,8 @@ SELECT add_continuous_aggregate_policy('apis.project_requests_by_endpoint_per_mi
      end_offset => INTERVAL '6 hours',
      schedule_interval => INTERVAL '1 hour');
 
+
+
+SELECT cron.schedule('0 8 * * *', $$INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued',  jsonb_build_object('tag', 'DailyOrttoSync', 'contents', '[]')$$);
+
 COMMIT;

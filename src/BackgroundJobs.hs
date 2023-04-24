@@ -70,15 +70,6 @@ getUsersByProjectId pid = query Select q (Only pid)
     [sql| select u.id, u.created_at, u.updated_at, u.deleted_at, u.active, u.first_name, u.last_name, u.display_image_url, u.email
                     from users.users u join projects.project_members pm on (pm.user_id=u.id) where project_id=? |]
 
-getProjectsReqsCount :: DBT IO (Vector (Projects.ProjectId,Text, Int))
-getProjectsReqsCount = query Select q ()
-  where q = [sql|SELECT pp.id, pp.title, SUM(total_count) total_count 
-                  FROM apis.project_requests_by_endpoint_per_min apm
-                  JOIN projects.projects pp ON (id=project_id)
-                  where apm.timeB > NOW() - INTERVAL '140 days'
-                  GROUP BY pp.id, pp.title
-        |]
-
 -- TODO:
 -- Analyze shapes for
 -- 1: [x] how many fields in the current shape are completely new?
@@ -214,7 +205,19 @@ Apitoolkit team
        in sendEmail cfg reciever subject body
     DailyOrttoSync -> do
       projReqs <- withPool dbPool getProjectsReqsCount
+      logger <& "📊  pushed ortto updates for " <> show (length projReqs) <> " companies"
       Ortto.pushedTrafficViaSdk cfg.orttoApiKey $ toList projReqs
+        where
+          getProjectsReqsCount :: DBT IO (Vector (Projects.ProjectId, Text, Int64, Users.UserId))
+          getProjectsReqsCount = query Select q ()
+            where q = [sql|SELECT pp.id, pp.title, CAST(SUM(total_count) AS integer), pm.user_id --, us.email
+                  FROM apis.project_requests_by_endpoint_per_min apm
+                  JOIN projects.projects pp ON (id=project_id)
+                  JOIN projects.project_members pm ON (pp.id = pm.project_id)
+                  --JOIN users.users us on (pm.user_id = us.id)
+                  where apm.timeB > NOW() - INTERVAL '1 days'
+                  GROUP BY pp.id, pp.title, pm.user_id --, us.email
+          |]
       
 
 jobsWorkerInit :: Pool Connection -> LogAction IO String -> Config.EnvConfig -> IO ()
