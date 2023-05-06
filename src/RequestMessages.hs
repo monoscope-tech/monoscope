@@ -60,7 +60,7 @@ import Witch (from)
 -- >>> import Data.Aeson.QQ (aesonQQ)
 -- >>> import Data.Aeson
 
-data SDKTypes = GoGin | GoBuiltIn | PhpLaravel | PhpSymfony | JsExpress | JsNest | JavaSpringBoot
+data SDKTypes = GoGin | GoBuiltIn | PhpLaravel | PhpSymfony | JsExpress | JsNest | JavaSpringBoot | DotNet
   deriving stock (Show, Generic, Read)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SDKTypes
 
