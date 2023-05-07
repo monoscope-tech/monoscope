@@ -279,6 +279,7 @@ normalizeUrlPath PhpSymfony urlPath = urlPath
 normalizeUrlPath JsExpress urlPath = urlPath
 normalizeUrlPath JavaSpringBoot urlPath = urlPath
 normalizeUrlPath JsNest urlPath = urlPath
+normalizeUrlPath DotNet urlPath = urlPath
 
 -- | valueToFields takes an aeson object and converts it into a list of paths to
 -- each primitive value in the json and the values.
