@@ -27,6 +27,8 @@ sudo apt-get install llvm
 
 - Install Libpq
 
+Mac
+
 ```
 brew install libpq
 ```
