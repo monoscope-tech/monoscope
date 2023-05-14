@@ -14,6 +14,7 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Projects.Projects qualified as Projets
 import Models.Users.Sessions qualified as Sessions
+import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
 
@@ -39,10 +40,11 @@ endpointList enps pid = do
   div_ [class_ "container mx-auto relative  px-4 pt-10 pb-24 h-full overflow-y-scroll"] $ do
     -- modal
     div_
-      [ style_ "z-index:99999",
+      [ style_ "z-index:99",
         class_ "fixed hidden pt-24 justify-center z-50 w-full p-4 bg-gray-500 bg-opacity-75 overflow-y-auto inset-0 h-full max-h-full",
         id_ "swaggerModal",
-        tabindex_ "-1"
+        tabindex_ "-1",
+        onclick_ "closeModal(event)"
       ]
       $ do
         div_
@@ -56,16 +58,15 @@ endpointList enps pid = do
                 hxPost_ $ "/p/" <> pid.toText <> "/documentation"
               ]
               $ do
-                div_ [class_ "flex items-start justify-between p-4 border-b rounded-t"] $ do
+                div_ [class_ "flex items-center justify-between p-4 border-b rounded-t"] $ do
                   h3_ [class_ "text-xl font-semibold text-gray-900 dark:text-white"] "Upload Swagger"
-                  button_ [type_ "button", class_ "btn bg-transparent hover:bg-gray-200 hover:text-gray-900 rounded-lg text-sm p-1.5 ml-auto inline-flex items-center", onclick_ "closeModal()"] "Close"
                 -- Modal body
                 div_ [class_ "p-6 space-y-6"] $ do
                   input_ [type_ "hidden", name_ "from", value_ "endpoints"]
                   textarea_ [name_ "swagger_json", style_ "height:65vh;resize:none", class_ "w-full border outline-none p-4 focus:outline-none focus:border-blue-200", placeholder_ "Paste swagger here"] ""
                 -- Modal footer
-                div_ [class_ "flex w-full justify-between items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] $ do
-                  button_ [type_ "button", class_ "btn", onclick_ "closeModal()"] "Close"
+                div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] $ do
+                  button_ [style_ "margin-right: 50px", type_ "button", class_ "btn mr-24", onclick_ "closeModal(event)", id_ "close_btn"] "Close"
                   button_ [type_ "submit", class_ "btn btn-primary"] "Upload"
 
     -- page content
@@ -127,8 +128,15 @@ endpointList enps pid = do
                     when (enp.ongoingAnomalies > 0) $ do
                       img_ [class_ "px-3", term "data-tippy-content" "ongoing anomaly", src_ "/assets/svgs/alert-red.svg"]
                     img_ [class_ "px-3", src_ "/assets/svgs/dots-vertical.svg"]
-  script_ "function showModal() { document.getElementById('swaggerModal').style.display = 'flex'; }"
-  script_ "function closeModal(e) { document.getElementById('swaggerModal').style.display = 'none';}"
+  script_
+    [text|
+          function showModal() { document.getElementById('swaggerModal').style.display = 'flex'; }
+          function closeModal(event) {
+            if(event.target.id === 'close_btn' || event.target.id ==='swaggerModal') {
+               document.getElementById('swaggerModal').style.display = 'none';
+              }
+             }
+         |]
 
 meter__ :: Double -> Html ()
 meter__ prcntg = div_ [class_ "shadow w-full bg-slate-200 h-2.5 "] $ do

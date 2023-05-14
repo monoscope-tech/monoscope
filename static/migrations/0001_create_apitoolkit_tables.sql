@@ -165,7 +165,6 @@ CREATE TABLE IF NOT EXISTS projects.swagger_jsons
 );
 
 SELECT manage_updated_at('swagger_jsons');
-
 CREATE INDEX IF NOT EXISTS idx_swagger_jsons_project_id ON swagger_jsons(project_id);
 
 -----------------------------------------------------------------------
