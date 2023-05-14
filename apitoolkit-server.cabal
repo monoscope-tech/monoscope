@@ -42,6 +42,7 @@ library
       Models.Projects.Projects
       Models.Projects.ProjectsEmail
       Models.Projects.RedactedFields
+      Models.Projects.Swaggers
       Models.Users.Sessions
       Models.Users.Users
       Pages.Anomalies.AnomalyList

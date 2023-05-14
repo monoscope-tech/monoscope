@@ -1,0 +1,46 @@
+{-# LANGUAGE DuplicateRecordFields #-}
+
+module Models.Projects.Swaggers (Swagger (..), SwaggerId (..), addSwagger, swaggersByProject) where
+
+import Data.Aeson (FromJSON, ToJSON, Value)
+import Data.Default (Default)
+import Data.Time (ZonedTime)
+import Data.UUID qualified as UUID
+import Data.Vector (Vector)
+import Database.PostgreSQL.Entity (Entity, insert, selectManyByField)
+import Database.PostgreSQL.Entity.Internal.QQ (field)
+import Database.PostgreSQL.Entity.Types (CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
+import Database.PostgreSQL.Simple hiding (query)
+import Database.PostgreSQL.Simple.FromField
+import Database.PostgreSQL.Simple.ToField
+import Database.PostgreSQL.Transact (DBT)
+import Models.Projects.Projects qualified as Projects
+import Models.Users.Users qualified as Users
+import Relude
+import Servant (FromHttpApiData)
+
+newtype SwaggerId = SwaggerId {swaggerId :: UUID.UUID}
+  deriving stock (Generic, Show)
+  deriving
+    (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default)
+    via UUID.UUID
+
+data Swagger = Swagger
+  { id :: SwaggerId,
+    projectId :: Projects.ProjectId,
+    createdBy :: Users.UserId,
+    createdAt :: ZonedTime,
+    updatedAt :: ZonedTime,
+    swaggerJson :: Value
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (FromRow, ToRow)
+  deriving
+    (Entity)
+    via (GenericEntity '[Schema "projects", TableName "swagger_jsons", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Swagger)
+
+addSwagger :: Swagger -> DBT IO ()
+addSwagger = insert @Swagger
+
+swaggersByProject :: Projects.ProjectId -> DBT IO (Vector Swagger)
+swaggersByProject pid = selectManyByField [field| project_id |] pid

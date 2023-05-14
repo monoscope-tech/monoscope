@@ -1,24 +1,68 @@
-module Pages.Documentation (documentationGetH) where
+module Pages.Documentation (documentationGetH, documentationPostH, SwaggerForm) where
 
 import Config
+import Data.Aeson (decodeStrict, encode)
+import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
+import Data.Text as T
+import Data.Time.LocalTime (getZonedTime)
+import Data.UUID.V4 qualified as UUIDV4
+import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import Lucid.Htmx
 import Models.Projects.Projects qualified as Projects
-import Models.Projects.RedactedFields qualified as RedactedFields
+import Models.Projects.Swaggers qualified as Swaggers
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
+import Servant (Headers, addHeader)
+import Servant.Htmx (HXTrigger)
+import Web.FormUrlEncoded (FromForm)
+
+data SwaggerForm = SwaggerForm
+  { swagger_json :: Text,
+    from :: Text
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (FromForm)
+
+documentationPostH :: Sessions.PersistentSession -> Projects.ProjectId -> SwaggerForm -> DashboardM (Headers '[HXTrigger] (Html ()))
+documentationPostH sess pid SwaggerForm {swagger_json, from} = do
+  pool <- asks pool
+  env <- asks env
+  swaggerId <- Swaggers.SwaggerId <$> liftIO UUIDV4.nextRandom
+  currentTime <- liftIO getZonedTime
+  let value = case decodeStrict (encodeUtf8 swagger_json) of
+        Just val -> val
+        Nothing -> error "Failed to parse JSON"
+  let swaggerToAdd =
+        Swaggers.Swagger
+          { id = swaggerId,
+            projectId = pid,
+            createdBy = sess.userId,
+            createdAt = currentTime,
+            updatedAt = currentTime,
+            swaggerJson = value
+          }
+
+  swaggers <- liftIO $
+    withPool pool $ do
+      Swaggers.addSwagger swaggerToAdd
+      Swaggers.swaggersByProject pid
+
+  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Swagger uploaded Successfully"]}|]
+  let v = if from == "docs" then documentationsPage pid swaggers else ""
+  pure $ addHeader hxTriggerData v
 
 documentationGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 documentationGetH sess pid = do
   pool <- asks pool
-  (project, redactedFields) <- liftIO $
+  (project, swaggers) <- liftIO $
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      redactedFields <- RedactedFields.redactedFieldsByProject pid
-      pure (project, redactedFields)
+      swaggers <- Swaggers.swaggersByProject pid
+      pure (project, swaggers)
 
   let bwconf =
         (def :: BWConfig)
@@ -26,10 +70,10 @@ documentationGetH sess pid = do
             currProject = project,
             pageTitle = "Documentation"
           }
-  pure $ bodyWrapper bwconf $ documentationsPage pid
+  pure $ bodyWrapper bwconf $ documentationsPage pid swaggers
 
-documentationsPage :: Projects.ProjectId -> Html ()
-documentationsPage pid = do
+documentationsPage :: Projects.ProjectId -> Vector Swaggers.Swagger -> Html ()
+documentationsPage pid swaggers = do
   div_ [class_ "container mx-auto relative  px-4 pt-10 pb-24 h-full", id_ "main-content"] $ do
     -- modal
     div_
@@ -47,7 +91,7 @@ documentationsPage pid = do
             -- Modal content
             form_
               [ class_ "relative bg-white rounded-lg shadow",
-                hxPost_ $ "/p/" <> pid.toText <> "/swagger",
+                hxPost_ $ "/p/" <> pid.toText <> "/documentation",
                 hxTarget_ "#main-content"
               ]
               $ do
@@ -56,7 +100,8 @@ documentationsPage pid = do
                   button_ [type_ "button", class_ "btn bg-transparent hover:bg-gray-200 hover:text-gray-900 rounded-lg text-sm p-1.5 ml-auto inline-flex items-center", onclick_ "closeModal()"] "Close"
                 -- Modal body
                 div_ [class_ "p-6 space-y-6"] $ do
-                  textarea_ [style_ "height:65vh;resize:none", class_ "w-full border outline-none p-4 focus:outline-none focus:border-blue-200", placeholder_ "Paste swagger here"] ""
+                  input_ [type_ "hidden", name_ "from", value_ "docs"]
+                  textarea_ [style_ "height:65vh;resize:none", name_ "swagger_json", class_ "w-full border outline-none p-4 focus:outline-none focus:border-blue-200", placeholder_ "Paste swagger here"] ""
                 -- Modal footer
                 div_ [class_ "flex w-full justify-between items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] $ do
                   button_ [type_ "button", class_ "btn", onclick_ "closeModal()"] "Close"
@@ -69,7 +114,18 @@ documentationsPage pid = do
         button_ [class_ "place-content-center text-md btn btn-primary", onclick_ "showModal()"] "Upload swagger"
       -- search
       div_ [class_ "card-round p-5"] $ do
-        div_ [class_ "w-full flex flex-row m-3"] ""
+        div_ [class_ "w-full flex flex-row m-3"] $ do
+          mainContent pid swaggers
 
   script_ "function showModal() { document.getElementById('swaggerModal').style.display = 'flex'; }"
   script_ "function closeModal(e) { document.getElementById('swaggerModal').style.display = 'none';}"
+
+mainContent :: Projects.ProjectId -> Vector Swaggers.Swagger -> Html ()
+mainContent pid swaggers = do
+  section_ [id_ "main-content", class_ "flex flex-col"] $ do
+    div_ [class_ "-my-2 overflow-x-auto sm:-mx-6 lg:-mx-8"] $ do
+      div_ [class_ "flex flex-col py-2 align-middle inline-block w-full sm:px-6 lg:px-8"] $ do
+        swaggers & mapM_ \rf -> do
+          div_ [style_ "height:300px;", class_ "shadow overflow-y-auto border-b border-gray-200 mb-10 sm:rounded-lg"] $ do
+            div_ $ do
+              p_ [class_ "px-6 py-4 text-sm font-medium text-gray-900"] $ toHtml $ encode $ rf.swaggerJson

@@ -53,7 +53,7 @@ endpointList enps pid = do
             -- Modal content
             form_
               [ class_ "relative bg-white rounded-lg shadow",
-                hxPost_ $ "/p/" <> pid.toText <> "/swagger"
+                hxPost_ $ "/p/" <> pid.toText <> "/documentation"
               ]
               $ do
                 div_ [class_ "flex items-start justify-between p-4 border-b rounded-t"] $ do
@@ -61,11 +61,12 @@ endpointList enps pid = do
                   button_ [type_ "button", class_ "btn bg-transparent hover:bg-gray-200 hover:text-gray-900 rounded-lg text-sm p-1.5 ml-auto inline-flex items-center", onclick_ "closeModal()"] "Close"
                 -- Modal body
                 div_ [class_ "p-6 space-y-6"] $ do
-                  textarea_ [style_ "height:65vh;resize:none", class_ "w-full border outline-none p-4 focus:outline-none focus:border-blue-200", placeholder_ "Paste swagger here"] ""
+                  input_ [type_ "hidden", name_ "from", value_ "endpoints"]
+                  textarea_ [name_ "swagger_json", style_ "height:65vh;resize:none", class_ "w-full border outline-none p-4 focus:outline-none focus:border-blue-200", placeholder_ "Paste swagger here"] ""
                 -- Modal footer
                 div_ [class_ "flex w-full justify-between items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] $ do
                   button_ [type_ "button", class_ "btn", onclick_ "closeModal()"] "Close"
-                  button_ [type_ "button", class_ "btn btn-primary"] "Upload"
+                  button_ [type_ "submit", class_ "btn btn-primary"] "Upload"
 
     -- page content
     div_ [class_ "flex flex-col justify-between"] $ do
