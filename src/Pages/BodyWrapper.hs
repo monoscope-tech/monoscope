@@ -1,5 +1,6 @@
 module Pages.BodyWrapper (bodyWrapper, BWConfig (..)) where
 
+import Data.CaseInsensitive qualified as CI
 import Data.Default (Default)
 import Data.Vector qualified as Vector
 import Lucid
@@ -11,29 +12,29 @@ import Models.Users.Users qualified as Users
 import NeatInterpolation
 import Pages.Charts.Charts qualified as Charts
 import Relude
-import Data.CaseInsensitive qualified as CI
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu pid =
-   [ ("Dashboard", "/p/" <> pid.toText <> "/", "#dashboard")
-      , ("Endpoints", "/p/" <> pid.toText <> "/endpoints", "#endpoint")
-      , ("Anomalies", "/p/" <> pid.toText <> "/anomalies?ackd=false&archived=false", "#anomalies")
-      , ("API Log Explorer", "/p/" <> pid.toText <> "/log_explorer", "#logs")
-      , ("API Keys", "/p/" <> pid.toText <> "/apis", "#api")
-      , ("Redacted Fields", "/p/" <> pid.toText <> "/redacted_fields", "#redacted")
-      ]
+  [ ("Dashboard", "/p/" <> pid.toText <> "/", "#dashboard"),
+    ("Endpoints", "/p/" <> pid.toText <> "/endpoints", "#endpoint"),
+    ("Anomalies", "/p/" <> pid.toText <> "/anomalies?ackd=false&archived=false", "#anomalies"),
+    ("API Log Explorer", "/p/" <> pid.toText <> "/log_explorer", "#logs"),
+    ("API Keys", "/p/" <> pid.toText <> "/apis", "#api"),
+    ("Redacted Fields", "/p/" <> pid.toText <> "/redacted_fields", "#redacted"),
+    ("Documentation", "/p/" <> pid.toText <> "/documentation", "#documentation")
+  ]
 
 data BWConfig = BWConfig
-  { sessM :: Maybe Sessions.PersistentSession
-  , currProject :: Maybe Projects.Project
-  , pageTitle :: Text
-  , menuItem :: Maybe Text -- Use PageTitle if menuItem is not set
+  { sessM :: Maybe Sessions.PersistentSession,
+    currProject :: Maybe Projects.Project,
+    pageTitle :: Text,
+    menuItem :: Maybe Text -- Use PageTitle if menuItem is not set
   }
   deriving stock (Show, Generic)
   deriving anyclass (Default)
 
 bodyWrapper :: BWConfig -> Html () -> Html ()
-bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child =
+bodyWrapper BWConfig {sessM, currProject, pageTitle, menuItem} child =
   case sessM of
     Nothing -> child
     Just sess -> do
@@ -116,7 +117,8 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child =
               }
             |]
           script_ Charts.chartInit
-          script_ [text|
+          script_
+            [text|
             // Ortto apitoolkit capture code 
             window.ap3c = window.ap3c || {};
             var ap3c = window.ap3c;
@@ -145,9 +147,9 @@ projectsDropDown :: Projects.Project -> Vector.Vector Projects.Project -> Html (
 projectsDropDown currProject projects = do
   let pidTxt = currProject.id.toText
   div_
-    [ term "data-menu" "true"
-    , class_ "hidden origin-top-right z-40 transition transform bg-white p-4 absolute w-[20rem] rounded-2xl shadow-2xl shadow-indigo-200"
-    , [__|
+    [ term "data-menu" "true",
+      class_ "hidden origin-top-right z-40 transition transform bg-white p-4 absolute w-[20rem] rounded-2xl shadow-2xl shadow-indigo-200",
+      [__|
           on open
               remove .hidden
               add .ease-out .duration-100 .opacity-0 .scale-95
@@ -203,17 +205,17 @@ sideNav sess project pageTitle menuItem = do
   aside_ [class_ "shrink-0 top-0 border-r-2 bg-white border-gray-200 h-screen overflow-hidden transition-all duration-1000 ease-in-out", id_ "side-nav-menu"] $ do
     a_ [href_ "/", class_ "inline-block p-4 h-12"] $ do
       img_
-        [ class_ "h-12 sd-hidden"
-        , src_ "/assets/svgs/logo.svg"
+        [ class_ "h-12 sd-hidden",
+          src_ "/assets/svgs/logo.svg"
         ]
       img_
-        [ class_ "h-12 w-10 hidden sd-show"
-        , src_ "/assets/svgs/logo_mini.svg"
+        [ class_ "h-12 w-10 hidden sd-show",
+          src_ "/assets/svgs/logo_mini.svg"
         ]
     div_ [class_ "py-4 px-4 transition-all  duration-1000 ease-in-out", id_ "side-nav-ctx-btn"] $ do
       a_
-        [ class_ "flex flex-row bg-blue-50 hover:bg-blue-100 text-blue-900 block p-6 rounded-md cursor-pointer"
-        , [__| 
+        [ class_ "flex flex-row bg-blue-50 hover:bg-blue-100 text-blue-900 block p-6 rounded-md cursor-pointer",
+          [__| 
                 on click queue first
                     if I do not match .active
                         add .active
@@ -243,23 +245,24 @@ sideNav sess project pageTitle menuItem = do
       -- FIXME: reeanable hx-boost hxBoost_ "true"
       menu (project.id) & mapM_ \(mTitle, mUrl, mIcon) -> do
         a_
-          [ href_ mUrl
-          , class_ $
+          [ href_ mUrl,
+            class_ $
               "block flex gap-3 px-5 py-3 flex justify-center items-center hover:bg-blue-50 text-slate-800 "
                 <> ( if maybe (pageTitle == mTitle) (== mTitle) menuItem
-                      then "bg-blue-50 border-l-4 border-blue-700"
-                      else ""
+                       then "bg-blue-50 border-l-4 border-blue-700"
+                       else ""
                    )
           ]
           $ do
-            svg_ [class_ "w-5 h-5 icon text-slate-500",term "data-tippy-placement" "right", term "data-tippy-content" mTitle] $ use_ [href_ $ "/assets/svgs/sprite/sprite.svg" <> mIcon]
+            svg_ [class_ "w-5 h-5 icon text-slate-500", term "data-tippy-placement" "right", term "data-tippy-content" mTitle] $ use_ [href_ $ "/assets/svgs/sprite/spr.svg" <> mIcon]
             span_ [class_ "grow sd-hidden"] $ toHtml mTitle
 
 navbar :: Users.User -> Html ()
 navbar currUser = do
   nav_ [id_ "main-navbar", class_ "sticky z-20 top-0 w-full w-full px-6 py-3 border-b bg-white flex flex-row justify-between"] $ do
-    a_ [class_ "cursor-pointer flex items-center", 
-      [__|
+    a_
+      [ class_ "cursor-pointer flex items-center",
+        [__|
       on click 
         if (localStorage.getItem('close-sidemenu') != 'true') then  
           add .hidden-side-nav-menu to #side-nav-menu then 
@@ -267,14 +270,16 @@ navbar currUser = do
         else remove  .hidden-side-nav-menu from #side-nav-menu then 
              call localStorage.removeItem('close-sidemenu') 
         end
-          |]] $ do
-      img_ [class_ "w-4 h-4", src_ "/assets/svgs/hamburger_menu.svg"]
+          |]
+      ]
+      $ do
+        img_ [class_ "w-4 h-4", src_ "/assets/svgs/hamburger_menu.svg"]
     div_ [class_ "inline-block flex items-center"] $ do
       a_ [class_ "inline-block p-2 px-3 align-middle"] $ img_ [class_ "w-5 h-5", src_ "/assets/svgs/search.svg"]
       a_ [class_ "inline-block border-r-2 p-2 pr-5"] $ img_ [class_ "w-5 h-5", src_ "/assets/svgs/notifications_active.svg"]
       a_
-        [ class_ "cursor-pointer inline-block space-x-4 pl-4 relative "
-        , [__| 
+        [ class_ "cursor-pointer inline-block space-x-4 pl-4 relative ",
+          [__| 
             on click queue first
                 if I do not match .active
                     add .active
@@ -299,9 +304,9 @@ navbar currUser = do
 
       -- logout dropdown
       div_
-        [ term "drop-menu" "true"
-        , class_ "hidden origin-top-left border border-gray-100 w-[10rem] rounded-lg shadow-2xl shadow-indigo-200 z-40 transition transform bg-white p-1 absolute top-14 right-5 "
-        , [__|
+        [ term "drop-menu" "true",
+          class_ "hidden origin-top-left border border-gray-100 w-[10rem] rounded-lg shadow-2xl shadow-indigo-200 z-40 transition transform bg-white p-1 absolute top-14 right-5 ",
+          [__|
             on open
                 remove .hidden
                 add .ease-out .duration-100 .opacity-0 .scale-95

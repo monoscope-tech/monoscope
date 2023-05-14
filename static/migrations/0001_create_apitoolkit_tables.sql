@@ -147,6 +147,27 @@ CREATE TABLE IF NOT EXISTS projects.project_api_keys
 SELECT manage_updated_at('projects.project_api_keys');
 CREATE INDEX IF NOT EXISTS idx_projects_project_api_keys_project_id ON projects.project_api_keys(project_id);
 
+------------------------------------------------------------------------
+-- Swagger JSON table
+-- query patterns:
+-- -- a project's swagger uploads history
+-- -- generate a projects recent swagger
+------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS projects.swagger_jsons
+(
+  id           UUID      NOT  NULL DEFAULT    gen_random_uuid() PRIMARY KEY,
+  created_at   TIMESTAMP WITH TIME ZONE       NOT               NULL    DEFAULT current_timestamp,
+  updated_at   TIMESTAMP WITH TIME ZONE       NOT               NULL    DEFAULT current_timestamp,
+  created_by   UUID                           NOT          NULL REFERENCES users.users       (id) ON      DELETE CASCADE ON UPDATE CASCADE,
+  project_id   UUID      NOT  NULL REFERENCES projects.projects (id)    ON      DELETE CASCADE,
+  swagger_json JSONB     NOT  NULL
+);
+
+SELECT manage_updated_at('swagger_jsons');
+
+CREATE INDEX IF NOT EXISTS idx_swagger_jsons_project_id ON swagger_jsons(project_id);
+
 -----------------------------------------------------------------------
 -- ENDPOINTS table 
 -- -- Used to build the endpoint_vm which is used to display endpoint list view and endpoint stats
@@ -553,6 +574,8 @@ create index if not exists idx_background_jobs_locked_at on background_jobs(lock
 create index if not exists idx_background_jobs_locked_by on background_jobs(locked_by); 
 create index if not exists idx_background_jobs_status on background_jobs(status); 
 create index if not exists idx_background_jobs_run_at on background_jobs(run_at);
+
+
 
 
 create or replace function notify_job_monitor_for_background_jobs() returns trigger as $$ 

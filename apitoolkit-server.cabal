@@ -50,6 +50,7 @@ library
       Pages.Charts.Charts
       Pages.Components
       Pages.Dashboard
+      Pages.Documentation
       Pages.Endpoints.EndpointComponents
       Pages.Endpoints.EndpointDetails
       Pages.Endpoints.EndpointList
