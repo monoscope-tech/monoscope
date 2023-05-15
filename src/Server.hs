@@ -181,8 +181,8 @@ server :: ServerT API DashboardM
 server = protectedServer :<|> publicServer
 
 data Status = Status
-  { ping :: Text,
-    dbVersion :: Maybe Text
+  { ping :: Text
+  , dbVersion :: Maybe Text
   }
   deriving stock (Generic)
   deriving
@@ -196,6 +196,6 @@ statusH = do
   version <- liftIO $ withPool pool $ queryOne Select query ()
   pure $
     Status
-      { ping = "pong",
-        dbVersion = version
+      { ping = "pong"
+      , dbVersion = version
       }

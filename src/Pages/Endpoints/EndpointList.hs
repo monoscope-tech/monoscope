@@ -4,9 +4,9 @@ import Config
 import Data.Default (def)
 import Data.Text (toLower)
 import Data.Vector (Vector)
-import Database.PostgreSQL.Entity.DBT
-  ( withPool,
-  )
+import Database.PostgreSQL.Entity.DBT (
+  withPool,
+ )
 import Fmt (commaizeF, fixedF, fmt, (+|), (|+))
 import Lucid
 import Lucid.Htmx
@@ -29,9 +29,9 @@ endpointListH sess pid = do
 
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess,
-            currProject = project,
-            pageTitle = "Endpoints"
+          { sessM = Just sess
+          , currProject = project
+          , pageTitle = "Endpoints"
           }
   pure $ bodyWrapper bwconf $ endpointList endpointStats pid
 
@@ -40,22 +40,22 @@ endpointList enps pid = do
   div_ [class_ "container mx-auto relative  px-4 pt-10 pb-24 h-full overflow-y-scroll"] $ do
     -- modal
     div_
-      [ style_ "z-index:99",
-        class_ "fixed hidden pt-24 justify-center z-50 w-full p-4 bg-gray-500 bg-opacity-75 overflow-y-auto inset-0 h-full max-h-full",
-        id_ "swaggerModal",
-        tabindex_ "-1",
-        onclick_ "closeModal(event)"
+      [ style_ "z-index:99"
+      , class_ "fixed hidden pt-24 justify-center z-50 w-full p-4 bg-gray-500 bg-opacity-75 overflow-y-auto inset-0 h-full max-h-full"
+      , id_ "swaggerModal"
+      , tabindex_ "-1"
+      , onclick_ "closeModal(event)"
       ]
       $ do
         div_
-          [ class_ "relative w-[500px] max-h-full",
-            style_ "width: min(90vw, 750px)"
+          [ class_ "relative w-[500px] max-h-full"
+          , style_ "width: min(90vw, 750px)"
           ]
           $ do
             -- Modal content
             form_
-              [ class_ "relative bg-white rounded-lg shadow",
-                hxPost_ $ "/p/" <> pid.toText <> "/documentation"
+              [ class_ "relative bg-white rounded-lg shadow"
+              , hxPost_ $ "/p/" <> pid.toText <> "/documentation"
               ]
               $ do
                 div_ [class_ "flex items-center justify-between p-4 border-b rounded-t"] $ do

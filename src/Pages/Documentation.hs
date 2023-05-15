@@ -22,14 +22,14 @@ import Servant.Htmx (HXTrigger)
 import Web.FormUrlEncoded (FromForm)
 
 data SwaggerForm = SwaggerForm
-  { swagger_json :: Text,
-    from :: Text
+  { swagger_json :: Text
+  , from :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
 
 documentationPostH :: Sessions.PersistentSession -> Projects.ProjectId -> SwaggerForm -> DashboardM (Headers '[HXTrigger] (Html ()))
-documentationPostH sess pid SwaggerForm {swagger_json, from} = do
+documentationPostH sess pid SwaggerForm{swagger_json, from} = do
   pool <- asks pool
   env <- asks env
   swaggerId <- Swaggers.SwaggerId <$> liftIO UUIDV4.nextRandom
@@ -39,12 +39,12 @@ documentationPostH sess pid SwaggerForm {swagger_json, from} = do
         Nothing -> error "Failed to parse JSON"
   let swaggerToAdd =
         Swaggers.Swagger
-          { id = swaggerId,
-            projectId = pid,
-            createdBy = sess.userId,
-            createdAt = currentTime,
-            updatedAt = currentTime,
-            swaggerJson = value
+          { id = swaggerId
+          , projectId = pid
+          , createdBy = sess.userId
+          , createdAt = currentTime
+          , updatedAt = currentTime
+          , swaggerJson = value
           }
 
   swaggers <- liftIO $
@@ -67,9 +67,9 @@ documentationGetH sess pid = do
 
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess,
-            currProject = project,
-            pageTitle = "Documentation"
+          { sessM = Just sess
+          , currProject = project
+          , pageTitle = "Documentation"
           }
   pure $ bodyWrapper bwconf $ documentationsPage pid swaggers
 
@@ -78,23 +78,23 @@ documentationsPage pid swaggers = do
   div_ [class_ "container mx-auto relative  px-4 pt-10 pb-24 h-full", id_ "main-content"] $ do
     -- modal
     div_
-      [ style_ "z-index:99999",
-        class_ "fixed hidden pt-24 justify-center z-50 w-full p-4 bg-gray-500 bg-opacity-75 overflow-y-auto inset-0 h-full max-h-full",
-        id_ "swaggerModal",
-        tabindex_ "-1",
-        onclick_ "closeModal(event)"
+      [ style_ "z-index:99999"
+      , class_ "fixed hidden pt-24 justify-center z-50 w-full p-4 bg-gray-500 bg-opacity-75 overflow-y-auto inset-0 h-full max-h-full"
+      , id_ "swaggerModal"
+      , tabindex_ "-1"
+      , onclick_ "closeModal(event)"
       ]
       $ do
         div_
-          [ class_ "relative w-[500px] max-h-full",
-            style_ "width: min(90vw, 750px)"
+          [ class_ "relative w-[500px] max-h-full"
+          , style_ "width: min(90vw, 750px)"
           ]
           $ do
             -- Modal content
             form_
-              [ class_ "relative bg-white rounded-lg shadow",
-                hxPost_ $ "/p/" <> pid.toText <> "/documentation",
-                hxTarget_ "#main-content"
+              [ class_ "relative bg-white rounded-lg shadow"
+              , hxPost_ $ "/p/" <> pid.toText <> "/documentation"
+              , hxTarget_ "#main-content"
               ]
               $ do
                 div_ [class_ "flex items-start justify-between p-4 border-b rounded-t"] $ do

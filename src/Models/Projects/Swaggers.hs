@@ -26,12 +26,12 @@ newtype SwaggerId = SwaggerId {swaggerId :: UUID.UUID}
     via UUID.UUID
 
 data Swagger = Swagger
-  { id :: SwaggerId,
-    projectId :: Projects.ProjectId,
-    createdBy :: Users.UserId,
-    createdAt :: ZonedTime,
-    updatedAt :: ZonedTime,
-    swaggerJson :: Value
+  { id :: SwaggerId
+  , projectId :: Projects.ProjectId
+  , createdBy :: Users.UserId
+  , createdAt :: ZonedTime
+  , updatedAt :: ZonedTime
+  , swaggerJson :: Value
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow)
