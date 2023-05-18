@@ -1,8 +1,6 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeApplications #-}
-{-# LANGUAGE ImportQualifiedPost #-}
 
 module Pages.Projects.CreateProject (
   CreateProjectForm,
@@ -49,10 +47,7 @@ import Servant (
 import Servant.Htmx
 import Web.FormUrlEncoded (FromForm)
 import Data.CaseInsensitive qualified as CI
-import Network.Wreq (postWith, defaults, header)
-import Control.Lens ((.~))
-import Optics.Core ((^.))
-import qualified Pkg.Ortto as Ortto
+import Pkg.Ortto qualified as Ortto
 import Data.Tuple.Extra (thd3)
 
 data CreateProjectForm = CreateProjectForm

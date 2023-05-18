@@ -155,7 +155,6 @@ library
     , pg-entity
     , pg-transact
     , postgresql-migration
-    , postgresql-query
     , postgresql-simple
     , pretty-relative-time
     , random
@@ -164,7 +163,7 @@ library
     , resource-pool
     , resourcet
     , scientific
-    , sendgrid-v3
+    , sendgrid-v3 >=0.3.0.0
     , servant
     , servant-htmx
     , servant-lucid

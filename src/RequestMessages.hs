@@ -158,7 +158,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
   -- We skip the request headers from this hash, since the source of the request like browsers might add or skip headers at will,
   -- which would make this process not deterministic anymore, and that's necessary for a hash.
   let combinedKeyPathStr = T.concat $ sort $ Vector.toList $ queryParamsKP <> responseHeadersKP <> requestBodyKP <> responseBodyKP
-  let !shapeHash' = from @String @Text $ showHex (xxHash $ encodeUtf8 $ combinedKeyPathStr) ""
+  let !shapeHash' = from @String @Text $ showHex (xxHash $ encodeUtf8 combinedKeyPathStr) ""
   let shapeHash = endpointHash <> shapeHash' -- Include the endpoint hash to make the shape hash unique by endpoint
   let projectId = Projects.ProjectId (rM.projectId)
 
@@ -198,7 +198,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
 
   -- FIXME: This 1000 is added on the php sdk in a previous version and has been remove. This workaround code should be removed ASAP
   let duration = case rM.sdkType of
-        PhpLaravel -> (rM.duration `div` 1000)
+        PhpLaravel -> rM.duration `div` 1000
         _ -> rM.duration
 
   -- request dumps are time series dumps representing each requests which we consume from our users.
@@ -222,7 +222,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
           , referer = rM.referer
           , protoMajor = rM.protoMajor
           , protoMinor = rM.protoMinor
-          , duration = calendarTimeTime $ secondsToNominalDiffTime $ fromIntegral $ duration
+          , duration = calendarTimeTime $ secondsToNominalDiffTime $ fromIntegral duration
           , statusCode = rM.statusCode
           , --
             queryParams = rM.queryParams
@@ -313,7 +313,7 @@ valueToFields value = dedupFields $ removeBlacklistedFields $ snd $ valueToField
  where
   valueToFields' :: AE.Value -> (Text, [(Text, AE.Value)]) -> (Text, [(Text, AE.Value)])
   valueToFields' (AE.Object v) akk = AEK.toHashMapText v & HM.toList & foldl' (\(akkT, akkL) (k, val) -> (akkT, snd $ valueToFields' val (akkT <> "." <> k, akkL))) akk
-  valueToFields' (AE.Array v) akk = foldl' (\(akkT, akkL) val -> (akkT, snd $ valueToFields' val (akkT <> ".[]", akkL))) akk v
+  valueToFields' (AE.Array v) akk = foldl' (\(akkT, akkL) val -> (akkT, snd $ valueToFields' val (akkT <> "[*]", akkL))) akk v
   valueToFields' v (akk, l) = (akk, (akk, v) : l)
 
   -- debupFields would merge all fields in the list of tuples by the first item in the tupple.

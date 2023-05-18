@@ -20,7 +20,7 @@ import Data.Tuple.Extra (fst3)
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute, withPool)
-import Database.PostgreSQL.Query (Only (Only))
+import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Lucid
 import Lucid.Htmx

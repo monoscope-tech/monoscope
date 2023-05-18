@@ -3,7 +3,6 @@ module RequestMessagesSpec (spec) where
 import Data.Aeson as AE
 import Data.Aeson.QQ
 import Data.ByteString.Base64 qualified as B64
-import Data.Time qualified as Time
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Models.Projects.Projects qualified as Projects

@@ -12,19 +12,12 @@ packages:
   original:
     hackage: Unique-0.4.7.9@sha256:a7e154cf6d05169777a1e54aadab24fb3a6eae3ee167e5e77d7ba96d182436c7,2064
 - completed:
-    hackage: co-log-0.4.0.1@sha256:3d4c17f37693c80d1aa2c41669bc3438fac3e89dc5f479e57d79bc3ddc4dfcc5,5087
+    hackage: resource-pool-0.3.0.0@sha256:b47dca24af48001d8247cc8a38cd09f148e9b22d959b845bbdb43ebf47ab072a,1280
     pantry-tree:
-      sha256: e73165ff8f744709428e2e87984c9d60ca1cec43d8455c413181c7c466e7497c
-      size: 1126
+      sha256: 3f32d8e8bb2e68d5d28ed7fd8d960f6c3df95400dd43d68c9b26fdc342a2e9ea
+      size: 406
   original:
-    hackage: co-log-0.4.0.1@sha256:3d4c17f37693c80d1aa2c41669bc3438fac3e89dc5f479e57d79bc3ddc4dfcc5,5087
-- completed:
-    hackage: co-log-core-0.3.1.0@sha256:9794bdedd1391decd0e22bdfe2b11abcb42e6cff7a4531e1f8882890828f4e63,3816
-    pantry-tree:
-      sha256: d4cc089c40c5052ee02f91eafa567e0a239908aabc561dfa6080ba3bfc8c25bd
-      size: 584
-  original:
-    hackage: co-log-core-0.3.1.0@sha256:9794bdedd1391decd0e22bdfe2b11abcb42e6cff7a4531e1f8882890828f4e63,3816
+    hackage: resource-pool-0.3.0.0
 - completed:
     hackage: colourista-0.1.0.1@sha256:98353ee0e2f5d97d2148513f084c1cd37dfda03e48aa9dd7a017c9d9c0ba710e,3307
     pantry-tree:
@@ -89,13 +82,6 @@ packages:
   original:
     hackage: timing-convenience-0.1@sha256:7ff807a9a9e5596f2b18d45c5a01aefb91d4a98f6a1008d183b5c550f68f7cb7,2092
 - completed:
-    hackage: typerep-map-0.3.3.0@sha256:20510efab770158414ac7828d1eca063d795bcc724ac634dd13bc7a50b476f42,4681
-    pantry-tree:
-      sha256: 30d61ac00807c3229b7b6ee274853f0ec1e272503a1b210ce10aad3db19f443a
-      size: 1487
-  original:
-    hackage: typerep-map-0.3.3.0@sha256:20510efab770158414ac7828d1eca063d795bcc724ac634dd13bc7a50b476f42,4681
-- completed:
     hackage: daemons-0.3.0@sha256:356edaf06a8cf5e9f19685f9ce793ad6d2b6bce2e55379f6b2aff1b0c07a633f,3178
     pantry-tree:
       sha256: 26b1a5279be340c896edbc72baa6d95b071384b9bf7e19cd146025cf13d21769
@@ -116,6 +102,58 @@ packages:
       size: 661
   original:
     hackage: nyan-interpolation-0.9@sha256:8cf238be4c04746e4e9eabb34001c990c23e5837a19eb8652c584e57e92ecb41,3797
+- completed:
+    commit: 5787946c3c89c9b608f4d5308d2a27cc9a27761f
+    git: https://github.com/kowainik/typerep-map
+    name: typerep-map
+    pantry-tree:
+      sha256: f6b3b35ee5c099de08a9e5d1dea3dfefa1fdaac926b3473724fc0e59f2697bd0
+      size: 1937
+    subdir: .
+    version: 0.6.0.0
+  original:
+    commit: 5787946c3c89c9b608f4d5308d2a27cc9a27761f
+    git: https://github.com/kowainik/typerep-map
+    subdir: .
+- completed:
+    commit: 08c1cbc3b5df64a19d059b84239d384b7382ec43
+    git: https://github.com/co-log/co-log
+    name: co-log
+    pantry-tree:
+      sha256: 1802731dde73d673deec491f05fc6ef7506a23d8b69d28b50590161133d16d77
+      size: 1584
+    subdir: .
+    version: 0.5.0.0
+  original:
+    commit: 08c1cbc3b5df64a19d059b84239d384b7382ec43
+    git: https://github.com/co-log/co-log
+    subdir: .
+- completed:
+    commit: c8b7fa416e5c11b4828c35d0ef29158019433fa2
+    git: https://github.com/marcelbuesing/sendgrid-v3
+    name: sendgrid-v3
+    pantry-tree:
+      sha256: 7549cd1165aa728732c6f3184e5688d1e9ef3431581b1a010ab8f462f85ec436
+      size: 725
+    subdir: .
+    version: 1.0.0.1
+  original:
+    commit: c8b7fa416e5c11b4828c35d0ef29158019433fa2
+    git: https://github.com/marcelbuesing/sendgrid-v3
+    subdir: .
+- completed:
+    commit: ca0ccc45ffa073556f74befb114710e797b4628a
+    git: https://github.com/haskell-servant/servant-lucid
+    name: servant-lucid
+    pantry-tree:
+      sha256: 0e3a6981b8be2fa5e692560324753c2f618ea632b7641e8e15ca6bd683feb1d9
+      size: 724
+    subdir: .
+    version: 0.9.0.6
+  original:
+    commit: ca0ccc45ffa073556f74befb114710e797b4628a
+    git: https://github.com/haskell-servant/servant-lucid
+    subdir: .
 - completed:
     commit: 0fa01adb871e66996d4ed2c27a3e97fac39ac466
     git: https://github.com/tonyalaribe/xxhash
@@ -208,21 +246,21 @@ packages:
     git: https://github.com/tchoutri/pg-entity.git
     subdir: .
 - completed:
-    commit: cc05b640528697ba37529ee617a031d1acd60c4b
+    commit: 60481132b229d22eda8efcd3392dd1df237bd968
     git: https://github.com/saurabhnanda/odd-jobs
     name: odd-jobs
     pantry-tree:
-      sha256: d613a6b35010ca233515d1c36b0dea060045cb4a65db63089cca70a5c5c1272d
-      size: 3004
+      sha256: f2e4c0e1a540c85b1fa1c5134ec1a0f1d5b99cb2f1918f11ed07eff0baf12302
+      size: 3003
     subdir: .
     version: 0.2.2
   original:
-    commit: cc05b640528697ba37529ee617a031d1acd60c4b
+    commit: 60481132b229d22eda8efcd3392dd1df237bd968
     git: https://github.com/saurabhnanda/odd-jobs
     subdir: .
 snapshots:
 - completed:
-    sha256: adbc602422dde10cc330175da7de8609e70afc41449a7e2d6e8b1827aa0e5008
-    size: 649342
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/20/11.yaml
-  original: lts-20.11
+    sha256: b64045aa29de03a25d28d73e23944246e5baa612fad48241fb20081a695baff0
+    size: 608841
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/nightly/2023/4/24.yaml
+  original: nightly-2023-04-24

@@ -121,7 +121,6 @@ library:
     - pg-entity
     - pg-transact
     - postgresql-migration
-    - postgresql-query
     - postgresql-simple
     - random
     - regex-tdfa
@@ -129,10 +128,10 @@ library:
     - resource-pool
     - resourcet
     - scientific
-    - sendgrid-v3
+    - sendgrid-v3 >= 0.3.0.0
     - servant
     - servant-htmx
-    - servant-lucid
+    - servant-lucid 
     - servant-server
     - text
     - text-conversions

@@ -19,10 +19,8 @@
 # resolver: https://example.com/snapshots/2018-01-01.yaml
 # resolver:
 #   url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/18/18.yaml
-# resolver: nightly-2022-08-16
-# resolver: nightly-2023-02-23
-resolver: lts-20.11
-# resolver: nightly-2023-02-27
+resolver: nightly-2023-04-24
+# resolver: lts-20.11
 
 
 # User packages to be built.
@@ -47,8 +45,9 @@ packages:
 #
 extra-deps: 
   - Unique-0.4.7.9@sha256:a7e154cf6d05169777a1e54aadab24fb3a6eae3ee167e5e77d7ba96d182436c7,2064
-  - co-log-0.4.0.1@sha256:3d4c17f37693c80d1aa2c41669bc3438fac3e89dc5f479e57d79bc3ddc4dfcc5,5087
-  - co-log-core-0.3.1.0@sha256:9794bdedd1391decd0e22bdfe2b11abcb42e6cff7a4531e1f8882890828f4e63,3816
+  # - co-log-0.5.0.0
+  # - co-log-core-0.3.1.0
+  - resource-pool-0.3.0.0
   - colourista-0.1.0.1@sha256:98353ee0e2f5d97d2148513f084c1cd37dfda03e48aa9dd7a017c9d9c0ba710e,3307
   - lucid-htmx-0.1.0.6@sha256:83d9eed5ff74778a2dfc3f320a66b08592a2880abca28d75747a0513a39bd871,1528
   - lucid-hyperscript-0.1.0.2@sha256:c3b048424e75c0e9cbadc30f7ebeb6abc164c2b45b2c995fd0674d4cc57be216,2035
@@ -58,10 +57,26 @@ extra-deps:
   - transformers-except-0.1.2@sha256:2ff895fd65ec9e45cbe839ef5b66e26b7d9f3fe561148993293a41e14491e625,1548
   - chronos-1.1.4@sha256:7ba7df7496a880ca4b898ca2cd5ebbf9ee8408fb93e95f8011d2a68c6faf655d,3677
   - timing-convenience-0.1@sha256:7ff807a9a9e5596f2b18d45c5a01aefb91d4a98f6a1008d183b5c550f68f7cb7,2092
-  - typerep-map-0.3.3.0@sha256:20510efab770158414ac7828d1eca063d795bcc724ac634dd13bc7a50b476f42,4681
+  # - typerep-map-0.3.3.0@sha256:20510efab770158414ac7828d1eca063d795bcc724ac634dd13bc7a50b476f42,4681
   - daemons-0.3.0@sha256:356edaf06a8cf5e9f19685f9ce793ad6d2b6bce2e55379f6b2aff1b0c07a633f,3178
   - nyan-interpolation-core-0.9.0.1@sha256:1bda0e90d2045eb18c905f905082f4098829c1bdcbc4012663686a1c503b4ded,4067
   - nyan-interpolation-0.9@sha256:8cf238be4c04746e4e9eabb34001c990c23e5837a19eb8652c584e57e92ecb41,3797
+  - git: https://github.com/kowainik/typerep-map
+    commit: 5787946c3c89c9b608f4d5308d2a27cc9a27761f 
+    subdirs:
+      - .
+  - git: https://github.com/co-log/co-log
+    commit: 08c1cbc3b5df64a19d059b84239d384b7382ec43 
+    subdirs:
+      - .
+  - git: https://github.com/marcelbuesing/sendgrid-v3
+    commit: c8b7fa416e5c11b4828c35d0ef29158019433fa2 
+    subdirs:
+      - .
+  - git: https://github.com/haskell-servant/servant-lucid
+    commit: ca0ccc45ffa073556f74befb114710e797b4628a 
+    subdirs:
+      - .
   - git: https://github.com/tonyalaribe/xxhash
     commit: 0fa01adb871e66996d4ed2c27a3e97fac39ac466 
     subdirs:
@@ -79,7 +94,7 @@ extra-deps:
     subdirs:
       - .
   - git: https://github.com/saurabhnanda/odd-jobs
-    commit: cc05b640528697ba37529ee617a031d1acd60c4b
+    commit: 60481132b229d22eda8efcd3392dd1df237bd968 
     subdirs:
       - .
 

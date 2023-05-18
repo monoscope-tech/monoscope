@@ -16,9 +16,8 @@ import Data.Time (ZonedTime)
 import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query, withPool)
-import Database.PostgreSQL.Query (FromRow (fromRow))
 import Database.PostgreSQL.Simple (Connection, Only (Only))
-import Database.PostgreSQL.Simple.FromRow (field)
+import Database.PostgreSQL.Simple.FromRow (field, FromRow (fromRow))
 import Database.PostgreSQL.Simple.SqlQQ
 import Database.PostgreSQL.Transact (DBT)
 import GHC.Generics
