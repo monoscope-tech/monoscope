@@ -53,7 +53,7 @@ documentationPostH sess pid SwaggerForm{swagger_json, from} = do
       Swaggers.swaggersByProject pid
 
   let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Swagger uploaded Successfully"]}|]
-  let v = if from == "docs" then documentationsPage pid swaggers else ""
+  let v = if from == "docs" then mainContent swaggers else ""
   pure $ addHeader hxTriggerData v
 
 documentationGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
@@ -75,7 +75,7 @@ documentationGetH sess pid = do
 
 documentationsPage :: Projects.ProjectId -> Vector Swaggers.Swagger -> Html ()
 documentationsPage pid swaggers = do
-  div_ [class_ "container mx-auto relative  px-4 pt-10 pb-24 h-full", id_ "main-content"] $ do
+  div_ [class_ "relative h-full"] $ do
     -- modal
     div_
       [ style_ "z-index:99999"
@@ -109,14 +109,23 @@ documentationsPage pid swaggers = do
                   button_ [type_ "sumbit", class_ "btn btn-primary"] "Upload"
 
     -- page content
-    div_ [class_ "flex flex-col justify-between"] $ do
-      div_ [class_ "flex w-full justify-between my-3 px-2"] $ do
-        h3_ [class_ "text-xl text-slate-700 text-2xl font-medium"] "Swagger History"
+    div_ [class_ "flex flex-col h-full justify-between"] $ do
+      div_ [class_ "flex py-3 w-full bg-white border-b items-center justify-between px-2", style_ "top: 0; position: sticky"] $ do
+        h3_ [class_ "text-xl text-slate-700 text-2xl font-medium"] "Swagger"
         button_ [class_ "place-content-center text-md btn btn-primary", onclick_ "showModal()"] "Upload swagger"
-      -- search
-      div_ [class_ "card-round p-5"] $ do
-        div_ [class_ "w-full flex flex-row m-3"] $ do
-          mainContent pid swaggers
+
+      div_ [class_ "h-full"] $ do
+        div_ [id_ "columns_container", class_ "w-full h-full flex flex-row"] $ do
+          div_ [id_ "endpoints_container", class_ "flex flex-auto overflow-auto", style_ "width:30%; height:100%"] $ do
+            div_ [class_ "h-full", style_ "width: calc(100% - 2px)"] pass
+            div_ [onmousedown_ "mouseDown(event)", id_ "endpoints_resizer", class_ "h-full bg-neutral-400", style_ "width: 2px; cursor: col-resize; background-color: rgb(209 213 219)"] pass
+          div_ [id_ "editor_container", class_ "flex flex-auto overflow-auto", style_ "width:40%; height:100%"] $ do
+            div_ [class_ "h-full", style_ "width: calc(100% - 2px)"] pass
+            div_ [onmousedown_ "mouseDown(event)", id_ "editor_resizer", class_ "h-full bg-neutral-400", style_ "width: 2px; cursor: col-resize; background-color: rgb(209 213 219);"] pass
+          div_ [id_ "details_container", class_ "flex-auto overflow-auto", style_ "width:30%; height:100%"] $ do
+            div_ [class_ "h-full w-full"] pass
+
+  -- modal and resize columns
   script_
     [text|
           function showModal() { document.getElementById('swaggerModal').style.display = 'flex'; }
@@ -125,10 +134,55 @@ documentationsPage pid swaggers = do
                document.getElementById('swaggerModal').style.display = 'none';
               }
              }
+
+          let mouseState = {x: 0}
+          let resizeStart = false
+          let target = ""
+
+          const endpointsColumn = document.querySelector('#endpoints_container')
+          const editorColumn = document.querySelector('#editor_container')
+          const detailsColumn = document.querySelector('#details_container')
+          const container = document.querySelector('#columns_container')
+          const containerWidth = Number(window.getComputedStyle(container).width.replace('px',''))
+
+          endpointsColumn.style.width = (0.3 * containerWidth) + 'px'
+          editorColumn.style.width = (0.4 * containerWidth) + 'px'
+          detailsColumn.style.width = (0.3 * containerWidth) + 'px'
+          
+          function mouseDown(event) {
+              resizeStart = true
+              mouseState = {x: event.pageX}
+              target = event.target.id
+          }
+
+          function handleMouseMove(event) {
+            if(!resizeStart) return
+            const diff = event.pageX - mouseState.x
+            mouseState = {x: event.pageX}
+            if(target === 'endpoints_resizer') {
+                const enpW = Number(endpointsColumn.style.width.replace('px',''))
+                const edW = Number(editorColumn.style.width.replace('px',''))
+                endpointsColumn.style.width = (enpW + diff) + 'px'
+                editorColumn.style.width = (edW - diff) + 'px'
+              }else if (target === "editor_resizer") {
+                const deW = Number(detailsColumn.style.width.replace('px',''))
+                const edW = Number(editorColumn.style.width.replace('px',''))
+                editorColumn.style.width = (edW + diff) + 'px'
+                detailsColumn.style.width = (deW - diff) + 'px'
+              }
+          }
+
+          function handleMouseup(event) {
+            resizeStart = false 
+            target = ""
+          }
+
+          window.addEventListener ('mousemove', handleMouseMove)
+          window.addEventListener ('mouseup', handleMouseup)
          |]
 
-mainContent :: Projects.ProjectId -> Vector Swaggers.Swagger -> Html ()
-mainContent pid swaggers = do
+mainContent :: Vector Swaggers.Swagger -> Html ()
+mainContent swaggers = do
   section_ [id_ "main-content", class_ "flex flex-col"] $ do
     div_ [class_ "-my-2 overflow-x-auto sm:-mx-6 lg:-mx-8"] $ do
       div_ [class_ "flex flex-col py-2 align-middle inline-block w-full sm:px-6 lg:px-8"] $ do
