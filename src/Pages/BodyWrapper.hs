@@ -140,7 +140,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child =
             sideNav'
             section_ [class_ "grow h-full overflow-y-hidden"] $ do
               navbar currUser
-              section_ [class_ "h-full overflow-y-scroll"] $ do
+              section_ [class_ "h-full overflow-y-auto"] $ do
                 child
 
 projectsDropDown :: Projects.Project -> Vector.Vector Projects.Project -> Html ()
@@ -261,7 +261,8 @@ navbar :: Users.User -> Html ()
 navbar currUser = do
   nav_ [id_ "main-navbar", class_ "sticky z-20 top-0 w-full w-full px-6 py-3 border-b bg-white flex flex-row justify-between"] $ do
     a_
-      [ class_ "cursor-pointer flex items-center"
+      [ id_ "side_nav_toggler"
+      , class_ "cursor-pointer flex items-center"
       , [__|
       on click 
         if (localStorage.getItem('close-sidemenu') != 'true') then  

@@ -7,7 +7,7 @@ import Data.Default (def)
 import Data.Text as T
 import Data.Time.LocalTime (getZonedTime)
 import Data.UUID.V4 qualified as UUIDV4
-import Data.Vector (Vector)
+import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import Lucid.Htmx
@@ -53,7 +53,7 @@ documentationPostH sess pid SwaggerForm{swagger_json, from} = do
       Swaggers.swaggersByProject pid
 
   let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Swagger uploaded Successfully"]}|]
-  let v = if from == "docs" then mainContent swaggers else ""
+  let v = if from == "docs" then documentationsPage pid swaggers else ""
   pure $ addHeader hxTriggerData v
 
 documentationGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
@@ -73,7 +73,7 @@ documentationGetH sess pid = do
           }
   pure $ bodyWrapper bwconf $ documentationsPage pid swaggers
 
-documentationsPage :: Projects.ProjectId -> Vector Swaggers.Swagger -> Html ()
+documentationsPage :: Projects.ProjectId -> V.Vector Swaggers.Swagger -> Html ()
 documentationsPage pid swaggers = do
   div_ [class_ "relative h-full"] $ do
     -- modal
@@ -109,21 +109,29 @@ documentationsPage pid swaggers = do
                   button_ [type_ "sumbit", class_ "btn btn-primary"] "Upload"
 
     -- page content
-    div_ [class_ "flex flex-col h-full justify-between"] $ do
+    div_ [class_ "flex flex-col h-full w-full justify-between"] $ do
       div_ [class_ "flex py-3 w-full bg-white border-b items-center justify-between px-2", style_ "top: 0; position: sticky"] $ do
-        h3_ [class_ "text-xl text-slate-700 text-2xl font-medium"] "Swagger"
+        div_ [class_ "flex items-center gap-4"] $ do
+          h3_ [class_ "text-xl text-slate-700 text-2xl font-medium"] "Swagger"
+          select_ [] $ do
+            swaggers & mapM_ \sw -> do
+              option_ [value_ (show sw.id.swaggerId)] $ show sw.id.swaggerId
         button_ [class_ "place-content-center text-md btn btn-primary", onclick_ "showModal()"] "Upload swagger"
 
-      div_ [class_ "h-full"] $ do
-        div_ [id_ "columns_container", class_ "w-full h-full flex flex-row"] $ do
-          div_ [id_ "endpoints_container", class_ "flex flex-auto overflow-auto", style_ "width:30%; height:100%"] $ do
-            div_ [class_ "h-full", style_ "width: calc(100% - 2px)"] pass
+      div_ [class_ "h-full w-full"] $ do
+        div_ [id_ "columns_container", class_ "w-full h-full flex flex-row bg-blue-900"] $ do
+          div_ [id_ "endpoints_container", class_ "flex flex-auto", style_ "width:30%; height:100%"] $ do
+            div_ [class_ "h-full overflow-auto px-4 py-4", style_ "width: calc(100% - 2px); background-color : red"] $ do
+              let currentSwagger = V.head swaggers :: Swaggers.Swagger
+              input_ [id_ "swaggerData", type_ "hidden", value_ (show $ encode $ currentSwagger.swaggerJson)]
             div_ [onmousedown_ "mouseDown(event)", id_ "endpoints_resizer", class_ "h-full bg-neutral-400", style_ "width: 2px; cursor: col-resize; background-color: rgb(209 213 219)"] pass
           div_ [id_ "editor_container", class_ "flex flex-auto overflow-auto", style_ "width:40%; height:100%"] $ do
-            div_ [class_ "h-full", style_ "width: calc(100% - 2px)"] pass
+            div_ [class_ "h-full", style_ "width: calc(100% - 2px); background-color : yellow"] $ do
+              div_ [id_ "swaggerEditor", class_ "w-full h-full bg-blue-900"] pass
             div_ [onmousedown_ "mouseDown(event)", id_ "editor_resizer", class_ "h-full bg-neutral-400", style_ "width: 2px; cursor: col-resize; background-color: rgb(209 213 219);"] pass
           div_ [id_ "details_container", class_ "flex-auto overflow-auto", style_ "width:30%; height:100%"] $ do
-            div_ [class_ "h-full w-full"] pass
+            div_ [class_ "h-full w-full bg-green-500", style_ "background-color:green"] pass
+  -- mainContent swaggers
 
   -- modal and resize columns
   script_
@@ -135,20 +143,22 @@ documentationsPage pid swaggers = do
               }
              }
 
-          let mouseState = {x: 0}
-          let resizeStart = false
-          let target = ""
-
           const endpointsColumn = document.querySelector('#endpoints_container')
           const editorColumn = document.querySelector('#editor_container')
           const detailsColumn = document.querySelector('#details_container')
           const container = document.querySelector('#columns_container')
           const containerWidth = Number(window.getComputedStyle(container).width.replace('px',''))
+  
+          document.addEventListener('DOMContentLoaded', function (){
+             endpointsColumn.style.width = (0.3 * containerWidth) + 'px'
+             editorColumn.style.width = (0.4 * containerWidth) + 'px'
+             detailsColumn.style.width = (0.3 * containerWidth) + 'px'
+           })
+        
+          let mouseState = {x: 0}
+          let resizeStart = false
+          let target = ""
 
-          endpointsColumn.style.width = (0.3 * containerWidth) + 'px'
-          editorColumn.style.width = (0.4 * containerWidth) + 'px'
-          detailsColumn.style.width = (0.3 * containerWidth) + 'px'
-          
           function mouseDown(event) {
               resizeStart = true
               mouseState = {x: event.pageX}
@@ -159,16 +169,16 @@ documentationsPage pid swaggers = do
             if(!resizeStart) return
             const diff = event.pageX - mouseState.x
             mouseState = {x: event.pageX}
+            const deW = Number(detailsColumn.style.width.replace('px',''))
+            const edW = Number(editorColumn.style.width.replace('px',''))
+            const enpW = Number(endpointsColumn.style.width.replace('px',''))
+
             if(target === 'endpoints_resizer') {
-                const enpW = Number(endpointsColumn.style.width.replace('px',''))
-                const edW = Number(editorColumn.style.width.replace('px',''))
-                endpointsColumn.style.width = (enpW + diff) + 'px'
-                editorColumn.style.width = (edW - diff) + 'px'
+                   endpointsColumn.style.width = (enpW + diff) + 'px'
+                   editorColumn.style.width = (edW - diff) + 'px'
               }else if (target === "editor_resizer") {
-                const deW = Number(detailsColumn.style.width.replace('px',''))
-                const edW = Number(editorColumn.style.width.replace('px',''))
-                editorColumn.style.width = (edW + diff) + 'px'
-                detailsColumn.style.width = (deW - diff) + 'px'
+                    editorColumn.style.width = (edW + diff) + 'px'
+                    detailsColumn.style.width = (deW - diff) + 'px'
               }
           }
 
@@ -179,9 +189,73 @@ documentationsPage pid swaggers = do
 
           window.addEventListener ('mousemove', handleMouseMove)
           window.addEventListener ('mouseup', handleMouseup)
-         |]
 
-mainContent :: Vector Swaggers.Swagger -> Html ()
+          document.querySelector("#side_nav_toggler").addEventListener('click', ()=> {
+           setTimeout(()=> {
+              const endpointsColumn = document.querySelector('#endpoints_container')
+              const editorColumn = document.querySelector('#editor_container')
+              const detailsColumn = document.querySelector('#details_container')
+              const container = document.querySelector('#columns_container')
+              const containerWidth = Number(window.getComputedStyle(container).width.replace('px',''))
+              endpointsColumn.style.width = (0.3 * containerWidth) + 'px'
+              editorColumn.style.width = (0.4 * containerWidth) + 'px'
+              detailsColumn.style.width = (0.3 * containerWidth) + 'px'
+           })
+          })
+         |]
+  script_ [src_ "/assets/js/monaco/vs/loader.js", defer_ "true"] ("" :: Text)
+  script_
+    [text|
+      document.addEventListener('DOMContentLoaded', function(){
+        // Configuration for the monaco editor which the query editor is built on.
+        require.config({ paths: { vs: '/assets/js/monaco/vs' } });
+        require.config({ paths: { 'vs': 'https://unpkg.com/monaco-editor/min/vs' } });
+		  	require(['vs/editor/editor.main'], function () {
+        monaco.editor.defineTheme('nightOwl', {
+           base: 'vs-dark',
+           inherit: true,
+           rules: [
+             { token: 'comment', foreground: '#6A9955' },
+             { token: 'keyword', foreground: '#C586C0' },
+             { token: 'number', foreground: '#B5CEA8' },
+             { token: 'string', foreground: '#CE9178' },
+             { token: 'operator', foreground: '#D4D4D4' },
+             { token: 'identifier', foreground: '#D4D4D4' },
+             { token: 'type', foreground: '#4EC9B0' },
+             { token: 'delimiter', foreground: '#D4D4D4' },
+             { token: 'punctuation', foreground: '#D4D4D4' },
+             { token: 'namespace', foreground: '#9CDCFE' },
+             { token: 'function', foreground: '#DCDCAA' },
+             { token: 'class', foreground: '#4EC9B0' },
+             { token: 'variable', foreground: '#D4D4D4' }
+           ],
+           colors: {
+             'editor.foreground': '#D4D4D4',
+             'editor.background': '#011627',
+             'editor.selectionBackground': '#2D3643',
+             'editor.lineHighlightBackground': '#202B33',
+             'editorCursor.foreground': '#D4D4D4',
+             'editorWhitespace.foreground': '#404040'
+           }
+        });
+
+       monaco.editor.setTheme('nightOwl');
+       let json = JSON.parse(document.querySelector('#swaggerData').value)
+		   window.editor = monaco.editor.create(document.getElementById('swaggerEditor'), {
+            value:  json,
+		  			language:'yaml',
+            minimap:{enabled:true},
+            automaticLayout : true,
+            fontSize: 14,
+            lineHeight: 20,
+            lineNumbersMinChars: 3
+		  		});
+		   });
+        // Monaco code suggestions https://github.com/microsoft/monaco-editor/issues/1850
+      })
+   |]
+
+mainContent :: V.Vector Swaggers.Swagger -> Html ()
 mainContent swaggers = do
   section_ [id_ "main-content", class_ "flex flex-col"] $ do
     div_ [class_ "-my-2 overflow-x-auto sm:-mx-6 lg:-mx-8"] $ do

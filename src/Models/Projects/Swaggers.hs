@@ -1,13 +1,13 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 
-module Models.Projects.Swaggers (Swagger (..), SwaggerId (..), addSwagger, swaggersByProject) where
+module Models.Projects.Swaggers (Swagger (..), SwaggerId (..), addSwagger, swaggersByProject, getSwaggerById) where
 
 import Data.Aeson (FromJSON, ToJSON, Value)
 import Data.Default (Default)
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
-import Database.PostgreSQL.Entity (Entity, insert, selectManyByField)
+import Database.PostgreSQL.Entity (Entity, insert, selectById, selectManyByField)
 import Database.PostgreSQL.Entity.Internal.QQ (field)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple hiding (query)
@@ -42,5 +42,8 @@ data Swagger = Swagger
 addSwagger :: Swagger -> DBT IO ()
 addSwagger = insert @Swagger
 
+getSwaggerById :: SwaggerId -> DBT IO (Maybe Swagger)
+getSwaggerById id' = selectById (Only id')
+
 swaggersByProject :: Projects.ProjectId -> DBT IO (Vector Swagger)
-swaggersByProject pid = selectManyByField [field| project_id |] pid
+swaggersByProject pid = selectManyByField [field| project_id | Desc [field| created_at]|] pid

@@ -1,9 +1,20 @@
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
+  .swagger_history_container {
+    width: 200px !important;
+  }
+
+  .swagger_history_containe .options_container {
+    display: block;
+  }
+
+  .swagger_history_container .active {
+    background-color: lightgrey;
+  }
+
   .card-round {
     @apply bg-white border border-slate-200 rounded-xl shadow-md  shadow-slate-200 overflow-hidden;
   }
@@ -12,16 +23,16 @@
 @layer components {
   html {
     font-size: 14px;
-    font-family: "Poppins", sans-serif;
+    font-family: 'Poppins', sans-serif;
     /* font-family: 'Roboto', sans-serif; */
     --white: 255 255 255;
   }
   .inconsolata {
-    font-family: "Inconsolata", monospace;
+    font-family: 'Inconsolata', monospace;
     font-size: 14px;
   }
   .monospace {
-    font-family: "Inconsolata", monospace;
+    font-family: 'Inconsolata', monospace;
   }
 
   /* From icomoon app*/
@@ -78,7 +89,7 @@
   .hidden-side-nav-menu .sd-hidden {
     display: none;
   }
-  .hidden-side-nav-menu .sd-show{
+  .hidden-side-nav-menu .sd-show {
     display: inline-block;
   }
 }
