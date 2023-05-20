@@ -155,9 +155,9 @@ documentationsPage pid swaggers = do
           const containerWidth = Number(window.getComputedStyle(container).width.replace('px',''))
   
           document.addEventListener('DOMContentLoaded', function (){
-             endpointsColumn.style.width = (0.3 * containerWidth) + 'px'
+             endpointsColumn.style.width = (0.2 * containerWidth) + 'px'
              editorColumn.style.width = (0.4 * containerWidth) + 'px'
-             detailsColumn.style.width = (0.3 * containerWidth) + 'px'
+             detailsColumn.style.width = (0.4 * containerWidth) + 'px'
            })
         
           let mouseState = {x: 0}
