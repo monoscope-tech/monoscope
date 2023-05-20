@@ -109,8 +109,11 @@ documentationsPage pid swaggers = do
                   button_ [type_ "sumbit", class_ "btn btn-primary"] "Upload"
 
     -- page content
+    let currentSwagger = V.head swaggers :: Swaggers.Swagger
+    input_ [id_ "swaggerData", type_ "hidden", value_ (show $ encode $ currentSwagger.swaggerJson)]
+
     div_ [class_ "flex flex-col h-full w-full justify-between"] $ do
-      div_ [class_ "flex py-3 w-full bg-white border-b items-center justify-between px-2", style_ "top: 0; position: sticky"] $ do
+      div_ [class_ "flex w-full bg-white border-b items-center justify-between px-2", style_ "top: 0; height:60px; position: sticky"] $ do
         div_ [class_ "flex items-center gap-4"] $ do
           h3_ [class_ "text-xl text-slate-700 text-2xl font-medium"] "Swagger"
           select_ [] $ do
@@ -118,22 +121,26 @@ documentationsPage pid swaggers = do
               option_ [value_ (show sw.id.swaggerId)] $ show sw.id.swaggerId
         button_ [class_ "place-content-center text-md btn btn-primary", onclick_ "showModal()"] "Upload swagger"
 
-      div_ [class_ "h-full w-full"] $ do
-        div_ [id_ "columns_container", class_ "w-full h-full flex flex-row bg-blue-900"] $ do
+      div_ [class_ "w-full", style_ "height: calc(100% - 60px)"] $ do
+        div_ [id_ "columns_container", class_ "w-full h-full flex flex-row", style_ "height: calc(100% - 60px)"] $ do
           div_ [id_ "endpoints_container", class_ "flex flex-auto", style_ "width:30%; height:100%"] $ do
-            div_ [class_ "h-full overflow-auto px-4 py-4", style_ "width: calc(100% - 2px); background-color : red"] $ do
-              let currentSwagger = V.head swaggers :: Swaggers.Swagger
-              input_ [id_ "swaggerData", type_ "hidden", value_ (show $ encode $ currentSwagger.swaggerJson)]
+            div_ [class_ "h-full overflow-auto", style_ "width: calc(100% - 2px)"] $ do
+              div_ [id_ "info_tags_container", class_ "h-24 w-full"] $ do
+                div_ [class_ "px-4  py-3 font-bold text-lg cursor-pointer w-full"] "Info"
+                div_ [class_ "px-4  py-3 font-bold text-lg cursor-pointer w-full"] "Tags"
+              div_ [class_ "w-full"] $ do
+                input_ [type_ "search", class_ "w-full px-2 py-3 text-lg border-b border-t outline-none focus:outline-none", placeholder_ "Search.."]
+                div_ [id_ "endpoint_paths_container", class_ "w-full"] pass
             div_ [onmousedown_ "mouseDown(event)", id_ "endpoints_resizer", class_ "h-full bg-neutral-400", style_ "width: 2px; cursor: col-resize; background-color: rgb(209 213 219)"] pass
           div_ [id_ "editor_container", class_ "flex flex-auto overflow-auto", style_ "width:40%; height:100%"] $ do
-            div_ [class_ "h-full", style_ "width: calc(100% - 2px); background-color : yellow"] $ do
-              div_ [id_ "swaggerEditor", class_ "w-full h-full bg-blue-900"] pass
+            div_ [class_ "h-full", style_ "width: calc(100% - 2px"] $ do
+              div_ [id_ "swaggerEditor", class_ "w-full h-full overflow-y-auto"] pass
             div_ [onmousedown_ "mouseDown(event)", id_ "editor_resizer", class_ "h-full bg-neutral-400", style_ "width: 2px; cursor: col-resize; background-color: rgb(209 213 219);"] pass
-          div_ [id_ "details_container", class_ "flex-auto overflow-auto", style_ "width:30%; height:100%"] $ do
-            div_ [class_ "h-full w-full bg-green-500", style_ "background-color:green"] pass
+          div_ [id_ "details_container", class_ "flex-auto overflow-y-auto", style_ "width:30%; height:100%"] $ do
+            div_ [id_ "swagger-ui", class_ "h-full w-full overflow-aut"] pass
   -- mainContent swaggers
 
-  -- modal and resize columns
+  -- modal and resize columns swagerr ui
   script_
     [text|
           function showModal() { document.getElementById('swaggerModal').style.display = 'flex'; }
@@ -203,6 +210,7 @@ documentationsPage pid swaggers = do
            })
           })
          |]
+
   script_ [src_ "/assets/js/monaco/vs/loader.js", defer_ "true"] ("" :: Text)
   script_
     [text|
@@ -243,7 +251,7 @@ documentationsPage pid swaggers = do
        let json = JSON.parse(document.querySelector('#swaggerData').value)
 		   window.editor = monaco.editor.create(document.getElementById('swaggerEditor'), {
             value:  json,
-		  			language:'yaml',
+		  			language:'json',
             minimap:{enabled:true},
             automaticLayout : true,
             fontSize: 14,
@@ -254,6 +262,32 @@ documentationsPage pid swaggers = do
         // Monaco code suggestions https://github.com/microsoft/monaco-editor/issues/1850
       })
    |]
+
+  script_ [src_ "https://unpkg.com/swagger-ui-dist@4.5.0/swagger-ui-bundle.js", crossorigin_ "true"] ("" :: Text)
+  script_ [src_ "/assets/js/swagger_endpoints.js"] ("" :: Text)
+
+  script_
+    [text|
+      window.onload = () => {
+          let json = JSON.parse(document.querySelector('#swaggerData').value)
+          fetch('https://petstore3.swagger.io/api/v3/openapi.json')
+          .then(response => response.json())
+          .then(data => {
+            // Use the JSON data here
+            const swaggerEndPointsUI = new SwaggerEndPointsUI(data);
+            swaggerEndPointsUI.initialize();
+            window.ui = SwaggerUIBundle({
+              spec: data,
+              dom_id: '#swagger-ui',
+            });
+          })
+          .catch(error => {
+            // Handle any errors that occur during the fetch request
+            console.error('Error:', error);
+          });
+        
+      };
+    |]
 
 mainContent :: V.Vector Swaggers.Swagger -> Html ()
 mainContent swaggers = do

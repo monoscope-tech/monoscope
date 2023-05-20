@@ -62,6 +62,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child =
           link_ [rel_ "preconnect", href_ "https://fonts.googleapis.com"]
           link_ [rel_ "preconnect", href_ "https://fonts.gstatic.com", crossorigin_ "true"]
           link_ [href_ "https://fonts.googleapis.com/css2?family=Inconsolata&family=Poppins:wght@400;500;600&display=swap", rel_ "stylesheet"]
+          link_ [rel_ "stylesheet", href_ "https://unpkg.com/swagger-ui-dist@4.5.0/swagger-ui.css"]
           -- SCRIPTS
           script_ [src_ "https://cdn.jsdelivr.net/npm/echarts@5.4.1/dist/echarts.min.js"] ("" :: Text)
           script_ [src_ "/assets/roma-echarts.js", defer_ "true"] ("" :: Text)
@@ -108,13 +109,13 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child =
               });
 
 
-              if("serviceWorker" in navigator) {
-                  window.addEventListener("load", () => {
-                    navigator.serviceWorker.register("/sw.js").then(swReg => {}).catch(err => {
-                        console.error('Service Worker Error', err);
-                    });
-                });
-              }
+              // if("serviceWorker" in navigator) {
+              //     window.addEventListener("load", () => {
+              //       navigator.serviceWorker.register("/sw.js").then(swReg => {}).catch(err => {
+              //           console.error('Service Worker Error', err);
+              //       });
+              //   });
+              // }
             |]
           script_ Charts.chartInit
           script_

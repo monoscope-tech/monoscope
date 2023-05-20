@@ -7,7 +7,7 @@
     width: 200px !important;
   }
 
-  .swagger_history_containe .options_container {
+  .swagger_history_container .options_container {
     display: block;
   }
 
@@ -18,6 +18,45 @@
   .card-round {
     @apply bg-white border border-slate-200 rounded-xl shadow-md  shadow-slate-200 overflow-hidden;
   }
+}
+
+.endpoint-path-collapse > .subpaths-container {
+  display: none;
+}
+
+.endpoint-path-collapse .collpase-icon {
+  transform: rotate(180deg);
+}
+
+.subpaths-container {
+  cursor: pointer;
+  @apply flex flex-col pb-4;
+}
+
+.subpaths-container > div {
+  @apply px-4 py-2;
+}
+.subpaths-container > div:hover {
+  @apply bg-gray-100;
+}
+
+.path-method-get {
+  color: blue;
+}
+.path-method-put {
+  color: orange;
+}
+.path-method-post {
+  color: green;
+}
+.path-method-delete {
+  color: red;
+}
+
+.subpaths-header {
+  display: flex;
+  cursor: pointer;
+  @apply hover:bg-gray-100 py-3 px-2 w-full items-center justify-between;
 }
 
 @layer components {
