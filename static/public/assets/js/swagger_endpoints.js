@@ -1,4 +1,4 @@
-'use script'
+'use strict'
 
 class SwaggerEndPointsUI {
     constructor(json) {
@@ -18,7 +18,7 @@ class SwaggerEndPointsUI {
                     }
                     const methods = paths[path];
                     for (const method in methods) {
-                        this.paths[startWord].push({ path: path, method: method });
+                        this.paths[startWord].push({ path: path, method: method, operationId: methods[method].operationId });
                     }
                 }
             }
@@ -111,7 +111,23 @@ class SwaggerEndPointsUI {
             const pathsContainer = this.elt("div", { class: "subpaths-container" })
             for (const pathObj of pathsArray) {
                 const method = this.elt("div", { class: `path-method-${pathObj.method} text-sm font-bold`, style: "text-transform: uppercase; width: 70px" }, pathObj.method)
-                const endpoint = this.elt("div", { class: `flex gap-4 items-center` }, method, this.elt("p", {}, pathObj.path))
+                const endpoint = this.elt(
+                    "div",
+                    {
+                        class: `flex gap-4 items-center`,
+                        onclick: (event) => {
+                            event.stopPropagation()
+                            const target = document.getElementById(`operations-${key}-${pathObj.operationId}`)
+                            if (target) {
+                                if (target.firstElementChild && target.firstElementChild.firstElementChild) {
+                                    target.firstElementChild.firstElementChild.click()
+                                }
+                                target.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" })
+                            }
+                        }
+                    },
+                    method, this.elt("p", {}, pathObj.path)
+                )
                 pathsContainer.appendChild(endpoint);
             }
             article.appendChild(pathsContainer)
@@ -120,7 +136,6 @@ class SwaggerEndPointsUI {
     }
 
     renderSchemaUI(schemas) {
-        console.log(schemas)
         const container = document.getElementById("endpoint_paths_container");
         const headerContainer = this.elt(
             "div",
@@ -146,10 +161,28 @@ class SwaggerEndPointsUI {
 
         for (const key in schemas) {
             const method = this.elt("div", { class: `endpoint_schema text-sm font-bold`, style: "text-transform: uppercase; width: 70px" }, "Schema")
-            const endpoint = this.elt("div", { class: `flex gap-4 items-center` }, method, this.elt("p", {}, key))
+            const endpoint = this.elt(
+                "div",
+                {
+                    class: `flex gap-4 items-center`,
+                    onclick: (event) => {
+                        const target = document.getElementById(`model-${key}`)
+                        console.log(target)
+                        if (target) {
+                            const clickTarget = target.querySelector(".model-box")
+                            if (clickTarget && clickTarget.firstElementChild) {
+                                clickTarget.firstElementChild.click()
+                            }
+                            target.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" })
+                        }
+                    }
+                },
+                method,
+                this.elt("p", {}, key)
+            )
             pathsContainer.appendChild(endpoint);
-            article.appendChild(pathsContainer)
         }
+        article.appendChild(pathsContainer)
         container.appendChild(article);
     }
 
@@ -158,13 +191,10 @@ class SwaggerEndPointsUI {
         while (container.firstChild) {
             container.removeChild(container.firstChild);
         }
-        // Implement your UI rendering logic here
+
         console.log("Rendering UI...");
         this.renderPathsUI(paths)
         this.renderSchemaUI(schemas)
-
-        //console.log("Schemas:", this.schemas);
-        // Update the UI based on the parsed paths and schemas
     }
 
     initialize() {
