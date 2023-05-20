@@ -1,3 +1,5 @@
+'use script'
+
 class SwaggerEndPointsUI {
     constructor(json) {
         this.json = json;
@@ -29,6 +31,30 @@ class SwaggerEndPointsUI {
         }
     }
 
+    searchListener() {
+        const searchBar = document.getElementById("endpoints-search")
+        searchBar.oninput = (event) => {
+            const searchValue = event.target.value
+            if (searchValue) {
+                const searchPaths = {}
+                for (const key in this.paths) {
+                    for (const path of this.paths[key]) {
+                        if (path.path.toLowerCase().includes(searchValue.toLowerCase())) {
+                            if (!searchPaths[key]) {
+                                searchPaths[key] = []
+                            }
+                            searchPaths[key].push(path)
+                        }
+                    }
+                }
+                this.renderUI(searchPaths, this.schemas)
+
+            } else {
+                this.renderUI(this.paths, this.schemas)
+            }
+        }
+    }
+
     elt(type, props, ...children) {
         let dom = document.createElement(type);
         if (props) {
@@ -52,17 +78,26 @@ class SwaggerEndPointsUI {
 
     //operations-tag-{val}
 
-    renderPathsUI() {
+    renderPathsUI(paths) {
         const container = document.getElementById("endpoint_paths_container");
-        for (const key in this.paths) {
-            const pathsArray = this.paths[key];
+        for (const key in paths) {
+            const pathsArray = paths[key];
             const headerContainer = this.elt(
                 "div",
                 {
                     class: "subpaths-header",
-                    onclick: (event) => { event.target.parentNode.classList.toggle("endpoint-path-collapse") }
+                    onclick: (event) => {
+                        event.target.parentNode.classList.toggle("endpoint-path-collapse")
+                        const targetHeader = document.getElementById(`operations-tag-${key}`)
+                        if (targetHeader) {
+                            const parentNode = targetHeader.parentNode
+                            parentNode.classList.add("is-open")
+                            targetHeader.setAttribute("data-is-open", "true")
+                            targetHeader.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
+                        }
+                    }
                 },
-                this.elt("h4", { style: "font-size:16px; text-transform: capitalize;" }, key),
+                this.elt("h4", { style: "font-size: 16px; font-weight: bold; text-transform: capitalize;" }, key),
                 this.elt("img", { class: "collpase-icon", src: "/assets/svgs/up_chevron.svg" })
             )
 
@@ -78,17 +113,58 @@ class SwaggerEndPointsUI {
         }
     }
 
-    renderUI() {
+    renderSchemaUI(schemas) {
+        console.log(schemas)
+        const container = document.getElementById("endpoint_paths_container");
+        const headerContainer = this.elt(
+            "div",
+            {
+                class: "subpaths-header",
+                onclick: (event) => {
+                    event.target.parentNode.classList.toggle("endpoint-path-collapse")
+                    const targetHeader = document.getElementById(`operations-tag-${key}`)
+                    if (targetHeader) {
+                        const parentNode = targetHeader.parentNode
+                        parentNode.classList.add("is-open")
+                        targetHeader.setAttribute("data-is-open", "true")
+                        targetHeader.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
+                    }
+                }
+            },
+            this.elt("h4", { style: "font-size: 16px; font-weight: bold; text-transform: capitalize;" }, "Schemas"),
+            this.elt("img", { class: "collpase-icon", src: "/assets/svgs/up_chevron.svg" })
+        )
+
+        const article = this.elt("div", {}, headerContainer)
+        const pathsContainer = this.elt("div", { class: "subpaths-container" })
+
+        for (const key in schemas) {
+            const method = this.elt("div", { class: `endpoint_schema text-sm font-bold`, style: "text-transform: uppercase; width: 70px" }, "Schema")
+            const endpoint = this.elt("div", { class: `flex gap-4 items-center` }, method, this.elt("p", {}, key))
+            pathsContainer.appendChild(endpoint);
+            article.appendChild(pathsContainer)
+        }
+        container.appendChild(article);
+    }
+
+    renderUI(paths, schemas) {
+        const container = document.getElementById("endpoint_paths_container");
+        while (container.firstChild) {
+            container.removeChild(container.firstChild);
+        }
         // Implement your UI rendering logic here
         console.log("Rendering UI...");
-        this.renderPathsUI()
-        console.log("Schemas:", this.schemas);
+        this.renderPathsUI(paths)
+        this.renderSchemaUI(schemas)
+
+        //console.log("Schemas:", this.schemas);
         // Update the UI based on the parsed paths and schemas
     }
 
     initialize() {
+        this.searchListener()
         this.parsePaths();
         this.parseSchemas();
-        this.renderUI();
+        this.renderUI(this.paths, this.schemas);
     }
 }

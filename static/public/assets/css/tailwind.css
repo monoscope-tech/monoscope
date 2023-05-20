@@ -28,6 +28,10 @@
   transform: rotate(180deg);
 }
 
+.endpoint_schema {
+  @apply text-gray-600;
+}
+
 .subpaths-container {
   cursor: pointer;
   @apply flex flex-col pb-4;

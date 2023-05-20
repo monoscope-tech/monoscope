@@ -129,7 +129,7 @@ documentationsPage pid swaggers = do
                 div_ [class_ "px-4  py-3 font-bold text-lg cursor-pointer w-full"] "Info"
                 div_ [class_ "px-4  py-3 font-bold text-lg cursor-pointer w-full"] "Tags"
               div_ [class_ "w-full"] $ do
-                input_ [type_ "search", class_ "w-full px-2 py-3 text-lg border-b border-t outline-none focus:outline-none", placeholder_ "Search.."]
+                input_ [id_ "endpoints-search", type_ "text", class_ "w-full px-2 py-3 text-lg border-b border-t outline-none focus:outline-none", placeholder_ "Search.."]
                 div_ [id_ "endpoint_paths_container", class_ "w-full"] pass
             div_ [onmousedown_ "mouseDown(event)", id_ "endpoints_resizer", class_ "h-full bg-neutral-400", style_ "width: 2px; cursor: col-resize; background-color: rgb(209 213 219)"] pass
           div_ [id_ "editor_container", class_ "flex flex-auto overflow-auto", style_ "width:40%; height:100%"] $ do
