@@ -37,6 +37,7 @@ class SwaggerEndPointsUI {
             const searchValue = event.target.value
             if (searchValue) {
                 const searchPaths = {}
+                const searchSchemas = {}
                 for (const key in this.paths) {
                     for (const path of this.paths[key]) {
                         if (path.path.toLowerCase().includes(searchValue.toLowerCase())) {
@@ -47,7 +48,12 @@ class SwaggerEndPointsUI {
                         }
                     }
                 }
-                this.renderUI(searchPaths, this.schemas)
+                for (const key in this.schemas) {
+                    if (key.toLocaleLowerCase().includes(searchValue.toLocaleLowerCase())) {
+                        searchSchemas[key] = ""
+                    }
+                }
+                this.renderUI(searchPaths, searchSchemas)
 
             } else {
                 this.renderUI(this.paths, this.schemas)
