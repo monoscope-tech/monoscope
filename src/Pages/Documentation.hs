@@ -125,9 +125,7 @@ documentationsPage pid swaggers = do
         div_ [id_ "columns_container", class_ "w-full h-full flex flex-row", style_ "height: calc(100% - 60px)"] $ do
           div_ [id_ "endpoints_container", class_ "flex flex-auto", style_ "width:30%; height:100%"] $ do
             div_ [class_ "h-full overflow-auto", style_ "width: calc(100% - 2px)"] $ do
-              div_ [id_ "info_tags_container", class_ "h-24 w-full"] $ do
-                div_ [class_ "px-4  py-3 font-bold text-lg cursor-pointer w-full"] "Info"
-                div_ [class_ "px-4  py-3 font-bold text-lg cursor-pointer w-full"] "Tags"
+              div_ [id_ "info_tags_container", class_ "w-full"] pass
               div_ [class_ "w-full"] $ do
                 input_ [id_ "endpoints-search", type_ "text", class_ "w-full px-2 py-3 text-lg border-b border-t outline-none focus:outline-none", placeholder_ "Search.."]
                 div_ [id_ "endpoint_paths_container", class_ "w-full"] pass

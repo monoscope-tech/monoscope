@@ -165,7 +165,7 @@ class SwaggerEndPointsUI {
                 "div",
                 {
                     class: `flex gap-4 items-center`,
-                    onclick: (event) => {
+                    onclick: () => {
                         const target = document.getElementById(`model-${key}`)
                         console.log(target)
                         if (target) {
@@ -186,13 +186,53 @@ class SwaggerEndPointsUI {
         container.appendChild(article);
     }
 
+    infoTagsServer() {
+        const container = document.querySelector("#info_tags_container")
+        if (this.json.info) {
+            container.appendChild(this.elt
+                ("div",
+                    {
+                        class: "px-4 py-3 font-bold text-lg cursor-pointer w-full hover:bg-gray-500",
+                        onclick: () => {
+                            const infoArea = document.querySelector(".info")
+                            if (infoArea) {
+                                infoArea.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" })
+                            }
+                        }
+                    },
+                    "Info"
+                ))
+        }
+
+        if (this.json.servers) {
+            container.appendChild(this.elt(
+                "div",
+                {
+                    class: "px-4 py-3 font-bold text-lg cursor-pointer w-full hover:bg-gray-500",
+                    onclick: () => {
+                        const infoArea = document.querySelector(".scheme-container")
+                        infoArea.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" })
+                    }
+                },
+                "Servers"
+            ))
+        }
+        // if (this.json.tags) {
+        //     container.appendChild(this.elt("div", {
+        //         class: "px-4 py-3 font-bold text-lg cursor-pointer w-full hover:bg-gray-500",
+        //         onclick: () => {
+        //             const infoArea = document.querySelector(".info")
+        //             infoArea.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" })
+        //         }
+        //     }, "Tags"))
+        // }
+    }
+
     renderUI(paths, schemas) {
         const container = document.getElementById("endpoint_paths_container");
         while (container.firstChild) {
             container.removeChild(container.firstChild);
         }
-
-        console.log("Rendering UI...");
         this.renderPathsUI(paths)
         this.renderSchemaUI(schemas)
     }
@@ -201,6 +241,7 @@ class SwaggerEndPointsUI {
         this.searchListener()
         this.parsePaths();
         this.parseSchemas();
+        this.infoTagsServer()
         this.renderUI(this.paths, this.schemas);
     }
 }
