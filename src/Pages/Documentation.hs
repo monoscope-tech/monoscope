@@ -248,8 +248,8 @@ documentationsPage pid swaggers = do
        monaco.editor.setTheme('nightOwl');
        let json = JSON.parse(document.querySelector('#swaggerData').value)
 		   window.editor = monaco.editor.create(document.getElementById('swaggerEditor'), {
-            value:  json,
-		  			language:'json',
+            value:  "",
+		  			language:'yaml',
             minimap:{enabled:true},
             automaticLayout : true,
             fontSize: 14,
@@ -263,7 +263,7 @@ documentationsPage pid swaggers = do
 
   script_ [src_ "https://unpkg.com/swagger-ui-dist@4.5.0/swagger-ui-bundle.js", crossorigin_ "true"] ("" :: Text)
   script_ [src_ "/assets/js/swagger_endpoints.js"] ("" :: Text)
-
+  script_ [src_ "https://unpkg.com/js-yaml/dist/js-yaml.min.js"] ("" :: Text)
   script_
     [text|
       window.onload = () => {
@@ -278,7 +278,8 @@ documentationsPage pid swaggers = do
               spec: data,
               dom_id: '#swagger-ui',
             });
-            window.editor.setValue(JSON.stringify(data,null, 2))
+            const yamlData = jsyaml.dump (data)
+            window.editor.setValue(yamlData)
           })
           .catch(error => {
             // Handle any errors that occur during the fetch request
