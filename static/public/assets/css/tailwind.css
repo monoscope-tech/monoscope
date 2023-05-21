@@ -45,16 +45,22 @@
 }
 
 .path-method-get {
-  color: blue;
+  @apply text-blue-500;
+}
+
+.active {
+  border-left: 5px solid currentColor;
 }
 .path-method-put {
-  color: orange;
+  @apply text-orange-500;
 }
+
 .path-method-post {
-  color: green;
+  @apply text-green-500;
 }
+
 .path-method-delete {
-  color: red;
+  @apply text-red-500;
 }
 
 .subpaths-header {

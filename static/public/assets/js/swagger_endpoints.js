@@ -110,23 +110,27 @@ class SwaggerEndPointsUI {
             const article = this.elt("article", {}, headerContainer)
             const pathsContainer = this.elt("div", { class: "subpaths-container" })
             for (const pathObj of pathsArray) {
-                const method = this.elt("div", { class: `path-method-${pathObj.method} text-sm font-bold`, style: "text-transform: uppercase; width: 70px" }, pathObj.method)
+                const method = this.elt("div", { class: `text-sm font-bold`, style: "text-transform: uppercase; width: 70px" }, pathObj.method)
                 const endpoint = this.elt(
                     "div",
                     {
-                        class: `flex gap-4 items-center`,
+                        class: `path-method-${pathObj.method} flex gap-4 items-center`,
                         onclick: (event) => {
-                            event.stopPropagation()
-                            const target = document.getElementById(`operations-${key}-${pathObj.operationId}`)
+                            event.stopPropagation();
+                            for (const child of Array.from(pathsContainer.childNodes)) {
+                                child.classList.remove("active");
+                            }
+                            event.currentTarget.classList.add("active");
+                            const target = document.getElementById(`operations-${key}-${pathObj.operationId}`);
                             if (target) {
                                 if (target.firstElementChild && target.firstElementChild.firstElementChild) {
-                                    target.firstElementChild.firstElementChild.click()
+                                    target.firstElementChild.firstElementChild.click();
                                 }
-                                target.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" })
+                                target.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
                             }
                         }
                     },
-                    method, this.elt("p", {}, pathObj.path)
+                    method, this.elt("p", { class: "text-gray-700" }, pathObj.path)
                 )
                 pathsContainer.appendChild(endpoint);
             }
@@ -167,7 +171,6 @@ class SwaggerEndPointsUI {
                     class: `flex gap-4 items-center`,
                     onclick: () => {
                         const target = document.getElementById(`model-${key}`)
-                        console.log(target)
                         if (target) {
                             const clickTarget = target.querySelector(".model-box")
                             if (clickTarget && clickTarget.firstElementChild) {
