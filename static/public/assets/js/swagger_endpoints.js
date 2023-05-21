@@ -117,10 +117,10 @@ class SwaggerEndPointsUI {
                         class: `path-method-${pathObj.method} flex gap-4 items-center`,
                         onclick: (event) => {
                             event.stopPropagation();
-                            for (const child of Array.from(pathsContainer.childNodes)) {
-                                child.classList.remove("active");
+                            for (const child of Array.from(document.querySelectorAll('[class^="path-method-"]'))) {
+                                child.classList.remove("endpoint_active");
                             }
-                            event.currentTarget.classList.add("active");
+                            event.currentTarget.classList.add("endpoint_active");
                             const target = document.getElementById(`operations-${key}-${pathObj.operationId}`);
                             if (target) {
                                 if (target.firstElementChild && target.firstElementChild.firstElementChild) {
