@@ -109,13 +109,13 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child =
               });
 
 
-              // if("serviceWorker" in navigator) {
-              //     window.addEventListener("load", () => {
-              //       navigator.serviceWorker.register("/sw.js").then(swReg => {}).catch(err => {
-              //           console.error('Service Worker Error', err);
-              //       });
-              //   });
-              // }
+              if("serviceWorker" in navigator) {
+                  window.addEventListener("load", () => {
+                    navigator.serviceWorker.register("/sw.js").then(swReg => {}).catch(err => {
+                        console.error('Service Worker Error', err);
+                    });
+                });
+              }
             |]
           script_ Charts.chartInit
           script_
