@@ -123,6 +123,11 @@ documentationsPage pid swaggers = do
 
       div_ [class_ "w-full", style_ "height: calc(100% - 60px)"] $ do
         div_ [id_ "columns_container", class_ "w-full h-full flex flex-row", style_ "height: calc(100% - 60px)"] $ do
+          -- loading indicator
+          div_ [id_ "loading_indicator", class_ "fixed inset-0 flex justify-center bg-[rgba(0,0,0,0.4)] items-center", style_ "z-index:9999;"] $ do
+            div_ [class_ "py-10 px-24 bg-white flex gap-2"] $ do
+              div_ [class_ "animate-spin h-5 w-5 mr-3 rounded-full border-t border-8 border-blue-500"] pass
+              span_ "Loading..."
           div_ [id_ "endpoints_container", class_ "flex flex-auto", style_ "width:30%; height:100%"] $ do
             div_ [class_ "h-full overflow-auto", style_ "width: calc(100% - 2px)"] $ do
               div_ [id_ "info_tags_container", class_ "w-full"] pass
@@ -190,10 +195,11 @@ documentationsPage pid swaggers = do
              const url = new URL(window.location.href);
              url.searchParams.set('swagger_id', event.target.value);
              window.history.replaceState({}, '', url.toString());     
-
+             document.getElementById ("loading_indicator").style.display = 'flex'
              fetch('https://petstore3.swagger.io/api/v3/openapi.json')
              .then(response => response.json())
              .then(data => {
+              document.getElementById ("loading_indicator").style.display = 'none'
               if(event.target.value === '3b8ac8f9-8d87-43fc-8871-1c1e814286d9'){
                   window.ui.specActions.updateSpec("")
                   endpointsUI.updateData("")
@@ -206,6 +212,7 @@ documentationsPage pid swaggers = do
              })
              .catch(error => {
                // Handle any errors that occur during the fetch request
+               document.getElementById ("loading_indicator").style.display = 'none'
                console.error('Error:', error);
              });
           }
@@ -333,6 +340,7 @@ documentationsPage pid swaggers = do
           fetch('https://petstore3.swagger.io/api/v3/openapi.json')
           .then(response => response.json())
           .then(data => {
+            document.getElementById ("loading_indicator").style.display = 'none'
             window.endpointsUI = new SwaggerEndPointsUI(data);
             window.endpointsUI.initialize ()
             window.ui = SwaggerUIBundle({
@@ -344,6 +352,8 @@ documentationsPage pid swaggers = do
           })
           .catch(error => {
             // Handle any errors that occur during the fetch request
+            document.getElementById ("loading_indicator").style.display = 'none'
+            alert("Something went wrong")
             console.error('Error:', error);
           });
         
