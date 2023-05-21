@@ -44,6 +44,10 @@
   @apply bg-gray-100;
 }
 
+.font_toggle_active {
+  @apply bg-blue-200;
+}
+
 .path-method-get {
   @apply text-blue-500;
 }

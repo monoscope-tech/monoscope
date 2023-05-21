@@ -132,7 +132,15 @@ documentationsPage pid swaggers = do
             div_ [onmousedown_ "mouseDown(event)", id_ "endpoints_resizer", class_ "h-full bg-neutral-400", style_ "width: 2px; cursor: col-resize; background-color: rgb(209 213 219)"] pass
           div_ [id_ "editor_container", class_ "flex flex-auto overflow-auto", style_ "width:40%; height:100%"] $ do
             div_ [class_ "h-full", style_ "width: calc(100% - 2px"] $ do
-              div_ [id_ "swaggerEditor", class_ "w-full h-full overflow-y-auto"] pass
+              div_ [class_ "w-full flex gap-8 justify-end px-2 items-center", style_ "height:40px"] $ do
+                div_ [onclick_ "toggleFontSize(event)", class_ "relative"] $ do
+                  button_ [id_ "toggle_font", class_ "font-semibold"] "Aa"
+                  div_ [id_ "toggle_dropdown_container", class_ "absolute hidden flex flex-col justify-between bg-white shadow bottom-0 rounded-b overflow-hidden", style_ "bottom:-105px;left:-50px; height: 100px;width:100px; z-index:999"] $ do
+                    span_ [id_ "toggle_sm", class_ "cursor-pointer text-sm w-full px-3 py-2 hover:bg-blue-100"] "Small"
+                    span_ [id_ "toggle_md", class_ "font_toggle_active cursor-pointer w-full px-3 py-2 hover:bg-blue-100"] "Medium"
+                    span_ [id_ "toggle_lg", class_ "cursor-pointer text-lg w-full px-3 py-2 hover:bg-blue-100"] "Large"
+                button_ [id_ "save_btn", class_ "bg-green-500 text-sm py-2 px-4 text-white rounded active:bg-green-600"] "Save"
+              div_ [id_ "swaggerEditor", class_ "w-full overflow-y-auto", style_ "height: calc(100% - 40px)"] pass
             div_ [onmousedown_ "mouseDown(event)", id_ "editor_resizer", class_ "h-full bg-neutral-400", style_ "width: 2px; cursor: col-resize; background-color: rgb(209 213 219);"] pass
           div_ [id_ "details_container", class_ "flex-auto overflow-y-auto", style_ "width:30%; height:100%"] $ do
             div_ [id_ "swagger-ui", class_ "h-full w-full overflow-aut"] pass
@@ -141,12 +149,43 @@ documentationsPage pid swaggers = do
   -- modal and resize columns swagerr ui
   script_
     [text|
-          function showModal() { document.getElementById('swaggerModal').style.display = 'flex'; }
+
+          function showModal() { 
+            document.getElementById('swaggerModal').style.display = 'flex'; 
+          }
+
           function closeModal(event) {
             if(event.target.id === 'close_btn' || event.target.id ==='swaggerModal') {
                document.getElementById('swaggerModal').style.display = 'none';
+            }
+          }
+
+          function toggleFontSize(event) {
+             const container = document.querySelector('#toggle_dropdown_container')
+             if(event.target.id ==='toggle_font') {
+                if(container) {
+                  container.style.display = "flex"
+                  }
+              }else {
+                const targetid = event.target.id
+                const siblings = Array.from(event.target.parentNode.children);
+                siblings.forEach(sibling => {
+                        sibling.classList.remove('font_toggle_active');
+                });
+                event.target.classList.add('font_toggle_active');
+                let fontSize = 14
+                if(targetid === 'toggle_sm') {
+                  fontSize = 12
+                 }else if (targetid === 'toggle_lg') {
+                   fontSize = 16
+                 }
+                 if(container) {
+                  container.style.display = "none"
+                  }
+                  window.editor.updateOptions({ fontSize })
               }
-             }
+          }
+
           function swaggerChanged(event) {
              const url = new URL(window.location.href);
              url.searchParams.set('swagger_id', event.target.value);
