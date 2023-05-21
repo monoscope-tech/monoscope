@@ -278,6 +278,7 @@ documentationsPage pid swaggers = do
               spec: data,
               dom_id: '#swagger-ui',
             });
+            window.editor.setValue(JSON.stringify(data,null, 2))
           })
           .catch(error => {
             // Handle any errors that occur during the fetch request
