@@ -116,7 +116,7 @@ documentationsPage pid swaggers = do
       div_ [class_ "flex w-full bg-white border-b items-center justify-between px-2", style_ "top: 0; height:60px; position: sticky"] $ do
         div_ [class_ "flex items-center gap-4"] $ do
           h3_ [class_ "text-xl text-slate-700 text-2xl font-medium"] "Swagger"
-          select_ [] $ do
+          select_ [onchange_ "swaggerChanged(event)"] $ do
             swaggers & mapM_ \sw -> do
               option_ [value_ (show sw.id.swaggerId)] $ show sw.id.swaggerId
         button_ [class_ "place-content-center text-md btn btn-primary", onclick_ "showModal()"] "Upload swagger"
@@ -147,6 +147,29 @@ documentationsPage pid swaggers = do
                document.getElementById('swaggerModal').style.display = 'none';
               }
              }
+          function swaggerChanged(event) {
+             const url = new URL(window.location.href);
+             url.searchParams.set('swagger_id', event.target.value);
+             window.history.replaceState({}, '', url.toString());     
+
+             fetch('https://petstore3.swagger.io/api/v3/openapi.json')
+             .then(response => response.json())
+             .then(data => {
+              if(event.target.value === '3b8ac8f9-8d87-43fc-8871-1c1e814286d9'){
+                  window.ui.specActions.updateSpec("")
+                  endpointsUI.updateData("")
+                }else {
+                  window.ui.specActions.updateSpec(JSON.stringify(data))
+                  endpointsUI.updateData(data)
+                }
+               const yamlData = jsyaml.dump (data)
+               window.editor.setValue(yamlData)
+             })
+             .catch(error => {
+               // Handle any errors that occur during the fetch request
+               console.error('Error:', error);
+             });
+          }
 
           const endpointsColumn = document.querySelector('#endpoints_container')
           const editorColumn = document.querySelector('#editor_container')
@@ -271,9 +294,8 @@ documentationsPage pid swaggers = do
           fetch('https://petstore3.swagger.io/api/v3/openapi.json')
           .then(response => response.json())
           .then(data => {
-            // Use the JSON data here
-            const swaggerEndPointsUI = new SwaggerEndPointsUI(data);
-            swaggerEndPointsUI.initialize();
+            window.endpointsUI = new SwaggerEndPointsUI(data);
+            window.endpointsUI.initialize ()
             window.ui = SwaggerUIBundle({
               spec: data,
               dom_id: '#swagger-ui',

@@ -236,15 +236,31 @@ class SwaggerEndPointsUI {
         while (container.firstChild) {
             container.removeChild(container.firstChild);
         }
+        const infoTagsServerContainer = document.getElementById("info_tags_container")
+        while (infoTagsServerContainer.firstChild) {
+            infoTagsServerContainer.removeChild(infoTagsServerContainer.firstChild);
+        }
+        this.infoTagsServer()
         this.renderPathsUI(paths)
         this.renderSchemaUI(schemas)
+    }
+
+    updateData(data) {
+        try {
+            JSON.stringify(data)
+            this.json = data
+        } catch (error) {
+            this.json = {}
+        }
+        this.paths = {};
+        this.schemas = {};
+        this.initialize()
     }
 
     initialize() {
         this.searchListener()
         this.parsePaths();
         this.parseSchemas();
-        this.infoTagsServer()
         this.renderUI(this.paths, this.schemas);
     }
 }
