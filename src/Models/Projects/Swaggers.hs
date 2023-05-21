@@ -42,7 +42,7 @@ data Swagger = Swagger
 addSwagger :: Swagger -> DBT IO ()
 addSwagger = insert @Swagger
 
-getSwaggerById :: SwaggerId -> DBT IO (Maybe Swagger)
+getSwaggerById :: Text -> DBT IO (Maybe Swagger)
 getSwaggerById id' = selectById (Only id')
 
 swaggersByProject :: Projects.ProjectId -> DBT IO (Vector Swagger)

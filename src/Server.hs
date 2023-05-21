@@ -97,7 +97,7 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "redacted_fields" :> ReqBody '[FormUrlEncoded] RedactFieldForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "charts_html" :> "throughput" :> QPT "id" :> QPT "group_by" :> QPT "endpoint_hash" :> QPT "shape_hash" :> QPT "format_hash" :> QPT "status_code_gt" :> QPI "num_slots" :> QPI "limit" :> QPB "show_legend" :> QPT "from" :> QPT "to" :> QPT "theme" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "charts_html" :> "latency" :> QPT "id" :> QPT "endpoint_hash" :> QPI "num_slots" :> QPT "from" :> QPT "to" :> QPT "theme" :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "documentation" :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "documentation" :> QPT "swagger_id" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "documentation" :> ReqBody '[FormUrlEncoded] SwaggerForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
 
 type PublicAPI =

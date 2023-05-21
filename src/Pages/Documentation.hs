@@ -4,7 +4,6 @@ import Config
 import Data.Aeson (decodeStrict, encode)
 import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
-import Data.Text as T
 import Data.Time.LocalTime (getZonedTime)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
@@ -53,17 +52,19 @@ documentationPostH sess pid SwaggerForm{swagger_json, from} = do
       Swaggers.swaggersByProject pid
 
   let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Swagger uploaded Successfully"]}|]
-  let v = if from == "docs" then documentationsPage pid swaggers else ""
-  pure $ addHeader hxTriggerData v
+  pure $ addHeader hxTriggerData ""
 
-documentationGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
-documentationGetH sess pid = do
+documentationGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> DashboardM (Html ())
+documentationGetH sess pid swagger_id = do
   pool <- asks pool
-  (project, swaggers) <- liftIO $
+  (project, swaggers, currentSwagger) <- liftIO $
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
       swaggers <- Swaggers.swaggersByProject pid
-      pure (project, swaggers)
+      currentSwagger <- case swagger_id of
+        Just swId -> Swaggers.getSwaggerById swId
+        Nothing -> pure Nothing
+      pure (project, swaggers, currentSwagger)
 
   let bwconf =
         (def :: BWConfig)
@@ -71,10 +72,10 @@ documentationGetH sess pid = do
           , currProject = project
           , pageTitle = "Documentation"
           }
-  pure $ bodyWrapper bwconf $ documentationsPage pid swaggers
+  pure $ bodyWrapper bwconf $ documentationsPage pid swaggers currentSwagger
 
-documentationsPage :: Projects.ProjectId -> V.Vector Swaggers.Swagger -> Html ()
-documentationsPage pid swaggers = do
+documentationsPage :: Projects.ProjectId -> V.Vector Swaggers.Swagger -> Maybe Swaggers.Swagger -> Html ()
+documentationsPage pid swaggers currentSwagger = do
   div_ [class_ "relative h-full"] $ do
     -- modal
     div_
@@ -94,7 +95,6 @@ documentationsPage pid swaggers = do
             form_
               [ class_ "relative bg-white rounded-lg shadow"
               , hxPost_ $ "/p/" <> pid.toText <> "/documentation"
-              , hxTarget_ "#main-content"
               ]
               $ do
                 div_ [class_ "flex items-start justify-between p-4 border-b rounded-t"] $ do
@@ -109,14 +109,18 @@ documentationsPage pid swaggers = do
                   button_ [type_ "sumbit", class_ "btn btn-primary"] "Upload"
 
     -- page content
-    let currentSwagger = V.head swaggers :: Swaggers.Swagger
-    input_ [id_ "swaggerData", type_ "hidden", value_ (show $ encode $ currentSwagger.swaggerJson)]
+    let recentSwagger = case currentSwagger of
+          Just swg -> swg
+          Nothing -> V.head $ V.reverse swaggers :: Swaggers.Swagger
+
+    let jsonString = decodeUtf8 (encode recentSwagger.swaggerJson)
+    input_ [id_ "swaggerData", type_ "hidden", value_ jsonString]
 
     div_ [class_ "flex flex-col h-full w-full justify-between"] $ do
       div_ [class_ "flex w-full bg-white border-b items-center justify-between px-2", style_ "top: 0; height:60px; position: sticky"] $ do
         div_ [class_ "flex items-center gap-4"] $ do
           h3_ [class_ "text-xl text-slate-700 text-2xl font-medium"] "Swagger"
-          select_ [onchange_ "swaggerChanged(event)"] $ do
+          select_ [onchange_ "swaggerChanged(event)", id_ "swaggerSelect"] $ do
             swaggers & mapM_ \sw -> do
               option_ [value_ (show sw.id.swaggerId)] $ show sw.id.swaggerId
         button_ [class_ "place-content-center text-md btn btn-primary", onclick_ "showModal()"] "Upload swagger"
@@ -159,6 +163,16 @@ documentationsPage pid swaggers = do
             document.getElementById('swaggerModal').style.display = 'flex'; 
           }
 
+         window.addEventListener('DOMContentLoaded', function() {
+           const urlParams = new URLSearchParams(window.location.search);
+           const swaggerId = urlParams.get('swagger_id');
+          console.log(swaggerId)
+           const selectElement = document.getElementById('swaggerSelect');
+           if (selectElement && swaggerId) {
+             selectElement.value = swaggerId;
+           }
+         });
+
           function closeModal(event) {
             if(event.target.id === 'close_btn' || event.target.id ==='swaggerModal') {
                document.getElementById('swaggerModal').style.display = 'none';
@@ -192,29 +206,13 @@ documentationsPage pid swaggers = do
           }
 
           function swaggerChanged(event) {
-             const url = new URL(window.location.href);
-             url.searchParams.set('swagger_id', event.target.value);
-             window.history.replaceState({}, '', url.toString());     
-             document.getElementById ("loading_indicator").style.display = 'flex'
-             fetch('https://petstore3.swagger.io/api/v3/openapi.json')
-             .then(response => response.json())
-             .then(data => {
-              document.getElementById ("loading_indicator").style.display = 'none'
-              if(event.target.value === '3b8ac8f9-8d87-43fc-8871-1c1e814286d9'){
-                  window.ui.specActions.updateSpec("")
-                  endpointsUI.updateData("")
-                }else {
-                  window.ui.specActions.updateSpec(JSON.stringify(data))
-                  endpointsUI.updateData(data)
-                }
-               const yamlData = jsyaml.dump (data)
-               window.editor.setValue(yamlData)
-             })
-             .catch(error => {
-               // Handle any errors that occur during the fetch request
-               document.getElementById ("loading_indicator").style.display = 'none'
-               console.error('Error:', error);
-             });
+            const urlParams = new URLSearchParams (window.location.search)
+            const swaggerId = urlParams.get ('swagger_id')
+            if(swaggerId === event.target.value) return
+            const url = new URL(window.location.href);
+            url.searchParams.set('swagger_id', event.target.value);
+            document.getElementById("loading_indicator").style.display = 'flex';
+            window.location.href = url.toString();
           }
 
           const endpointsColumn = document.querySelector('#endpoints_container')
@@ -315,9 +313,11 @@ documentationsPage pid swaggers = do
         });
 
        monaco.editor.setTheme('nightOwl');
-       let json = JSON.parse(document.querySelector('#swaggerData').value)
+       const val = document.querySelector('#swaggerData').value
+       let json = JSON.parse(val)
+       const yamlData = jsyaml.dump(json)
 		   window.editor = monaco.editor.create(document.getElementById('swaggerEditor'), {
-            value:  "",
+            value: yamlData,
 		  			language:'yaml',
             minimap:{enabled:true},
             automaticLayout : true,
@@ -332,31 +332,19 @@ documentationsPage pid swaggers = do
 
   script_ [src_ "https://unpkg.com/swagger-ui-dist@4.5.0/swagger-ui-bundle.js", crossorigin_ "true"] ("" :: Text)
   script_ [src_ "/assets/js/swagger_endpoints.js"] ("" :: Text)
-  script_ [src_ "https://unpkg.com/js-yaml/dist/js-yaml.min.js"] ("" :: Text)
+  script_ [src_ "https://unpkg.com/js-yaml/dist/js-yaml.min.js", crossorigin_ "true"] ("" :: Text)
   script_
     [text|
       window.onload = () => {
-          let json = JSON.parse(document.querySelector('#swaggerData').value)
-          fetch('https://petstore3.swagger.io/api/v3/openapi.json')
-          .then(response => response.json())
-          .then(data => {
-            document.getElementById ("loading_indicator").style.display = 'none'
-            window.endpointsUI = new SwaggerEndPointsUI(data);
+           const val = document.querySelector('#swaggerData').value
+           let json = JSON.parse(val)
+           document.getElementById ("loading_indicator").style.display = 'none'
+            window.endpointsUI = new SwaggerEndPointsUI(json);
             window.endpointsUI.initialize ()
             window.ui = SwaggerUIBundle({
-              spec: data,
+              spec: json,
               dom_id: '#swagger-ui',
-            });
-            const yamlData = jsyaml.dump (data)
-            window.editor.setValue(yamlData)
-          })
-          .catch(error => {
-            // Handle any errors that occur during the fetch request
-            document.getElementById ("loading_indicator").style.display = 'none'
-            alert("Something went wrong")
-            console.error('Error:', error);
-          });
-        
+            });       
       };
     |]
 
