@@ -27,7 +27,7 @@ import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.Api qualified as Api
 import Pages.Charts.Charts qualified as Charts
 import Pages.Dashboard qualified as Dashboard
-import Pages.Documentation (SwaggerForm)
+import Pages.Documentation (SaveSwaggerForm, SwaggerForm)
 import Pages.Documentation qualified as Documentation
 import Pages.Endpoints.EndpointDetails qualified as EndpointDetails
 import Pages.Endpoints.EndpointList qualified as EndpointList
@@ -99,6 +99,7 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "charts_html" :> "latency" :> QPT "id" :> QPT "endpoint_hash" :> QPI "num_slots" :> QPT "from" :> QPT "to" :> QPT "theme" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "documentation" :> QPT "swagger_id" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "documentation" :> ReqBody '[FormUrlEncoded] SwaggerForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
+    :<|> "p" :> ProjectId :> "documentation" :> "save" :> ReqBody '[FormUrlEncoded] SaveSwaggerForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
 
 type PublicAPI =
   "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
@@ -166,6 +167,7 @@ protectedServer sess =
     :<|> Charts.latencyEndpointHTML sess
     :<|> Documentation.documentationGetH sess
     :<|> Documentation.documentationPostH sess
+    :<|> Documentation.documentationPutH sess
 
 publicServer :: ServerT PublicAPI DashboardM
 publicServer =

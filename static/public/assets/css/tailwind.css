@@ -44,6 +44,10 @@
   @apply bg-gray-100;
 }
 
+.save_swagger_btn_active {
+  @apply bg-green-500 text-white;
+}
+
 .font_toggle_active {
   @apply bg-blue-200;
 }

@@ -1,17 +1,19 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 
-module Models.Projects.Swaggers (Swagger (..), SwaggerId (..), addSwagger, swaggersByProject, getSwaggerById) where
+module Models.Projects.Swaggers (Swagger (..), SwaggerId (..), addSwagger, swaggersByProject, updateSwagger, getSwaggerById) where
 
-import Data.Aeson (FromJSON, ToJSON, Value)
+import Data.Aeson as Aeson
 import Data.Default (Default)
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity (Entity, insert, selectById, selectManyByField)
+import Database.PostgreSQL.Entity.DBT
 import Database.PostgreSQL.Entity.Internal.QQ (field)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
-import Database.PostgreSQL.Simple hiding (query)
+import Database.PostgreSQL.Simple hiding (execute, query)
 import Database.PostgreSQL.Simple.FromField
+import Database.PostgreSQL.Simple.SqlQQ
 import Database.PostgreSQL.Simple.ToField
 import Database.PostgreSQL.Transact (DBT)
 import Models.Projects.Projects qualified as Projects
@@ -46,4 +48,10 @@ getSwaggerById :: Text -> DBT IO (Maybe Swagger)
 getSwaggerById id' = selectById (Only id')
 
 swaggersByProject :: Projects.ProjectId -> DBT IO (Vector Swagger)
-swaggersByProject pid = selectManyByField [field| project_id | Desc [field| created_at]|] pid
+swaggersByProject pid = selectManyByField [field| project_id |] pid
+
+updateSwagger :: Text -> Value -> DBT IO Int64
+updateSwagger swaggerId swaggerJson = do
+  execute Update q (swaggerJson, swaggerId)
+ where
+  q = [sql| UPDATE projects.swagger_jsons SET swagger_json=? WHERE id=? |]

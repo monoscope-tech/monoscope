@@ -1,7 +1,7 @@
-module Pages.Documentation (documentationGetH, documentationPostH, SwaggerForm) where
+module Pages.Documentation (documentationGetH, documentationPostH, documentationPutH, SwaggerForm, SaveSwaggerForm) where
 
 import Config
-import Data.Aeson (decodeStrict, encode)
+import Data.Aeson (decodeStrict, eitherDecodeStrict, encode)
 import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
 import Data.Time.LocalTime (getZonedTime)
@@ -26,6 +26,25 @@ data SwaggerForm = SwaggerForm
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
+
+data SaveSwaggerForm = SaveSwaggerForm
+  { updated_swagger :: Text
+  , swagger_id :: Text
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (FromForm)
+
+documentationPutH :: Sessions.PersistentSession -> Projects.ProjectId -> SaveSwaggerForm -> DashboardM (Headers '[HXTrigger] (Html ()))
+documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id} = do
+  pool <- asks pool
+  env <- asks env
+  let value = case decodeStrict (encodeUtf8 updated_swagger) of
+        Just val -> val
+        Nothing -> error "Failed to parse JSON: "
+  res <- liftIO $ withPool pool $ Swaggers.updateSwagger swagger_id value
+  print res
+  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Swagger Saved Successfully"]}|]
+  pure $ addHeader hxTriggerData ""
 
 documentationPostH :: Sessions.PersistentSession -> Projects.ProjectId -> SwaggerForm -> DashboardM (Headers '[HXTrigger] (Html ()))
 documentationPostH sess pid SwaggerForm{swagger_json, from} = do
@@ -112,7 +131,6 @@ documentationsPage pid swaggers currentSwagger = do
     let recentSwagger = case currentSwagger of
           Just swg -> swg
           Nothing -> V.head $ V.reverse swaggers :: Swaggers.Swagger
-
     let jsonString = decodeUtf8 (encode recentSwagger.swaggerJson)
     input_ [id_ "swaggerData", type_ "hidden", value_ jsonString]
 
@@ -148,7 +166,10 @@ documentationsPage pid swaggers currentSwagger = do
                     span_ [id_ "toggle_sm", class_ "cursor-pointer text-sm w-full px-3 py-2 hover:bg-blue-100"] "Small"
                     span_ [id_ "toggle_md", class_ "font_toggle_active cursor-pointer w-full px-3 py-2 hover:bg-blue-100"] "Medium"
                     span_ [id_ "toggle_lg", class_ "cursor-pointer text-lg w-full px-3 py-2 hover:bg-blue-100"] "Large"
-                button_ [id_ "save_btn", class_ "bg-green-500 text-sm py-2 px-4 text-white rounded active:bg-green-600"] "Save"
+                form_ [hxPost_ $ "/p/" <> pid.toText <> "/documentation/save"] $ do
+                  input_ [id_ "save_swagger_input_id", name_ "swagger_id", type_ "hidden", value_ (show recentSwagger.id.swaggerId)]
+                  input_ [id_ "save_swagger_input_data", name_ "updated_swagger", type_ "hidden", value_ jsonString]
+                  button_ [type_ "submit", id_ "save_swagger_btn", class_ "bg-gray-200 text-sm py-2 px-4 rounded active:bg-green-600"] "Save"
               div_ [id_ "swaggerEditor", class_ "w-full overflow-y-auto", style_ "height: calc(100% - 40px)"] pass
             div_ [onmousedown_ "mouseDown(event)", id_ "editor_resizer", class_ "h-full bg-neutral-400", style_ "width: 2px; cursor: col-resize; background-color: rgb(209 213 219);"] pass
           div_ [id_ "details_container", class_ "flex-auto overflow-y-auto", style_ "width:30%; height:100%"] $ do
@@ -166,7 +187,6 @@ documentationsPage pid swaggers currentSwagger = do
          window.addEventListener('DOMContentLoaded', function() {
            const urlParams = new URLSearchParams(window.location.search);
            const swaggerId = urlParams.get('swagger_id');
-          console.log(swaggerId)
            const selectElement = document.getElementById('swaggerSelect');
            if (selectElement && swaggerId) {
              selectElement.value = swaggerId;
@@ -344,7 +364,26 @@ documentationsPage pid swaggers currentSwagger = do
             window.ui = SwaggerUIBundle({
               spec: json,
               dom_id: '#swagger-ui',
-            });       
+            });    
+
+        window.editor.onDidChangeModelContent(function(event) {
+          try{
+              const saveBtn = document.getElementById("save_swagger_btn")
+             if(saveBtn) {
+               saveBtn.classList.add("save_swagger_btn_active") 
+               }
+             const value = window.editor.getValue();
+             const jsObject = jsyaml.load(value);
+             if(jsObject) {
+                const inp = document.querySelector("#save_swagger_input_data")
+                if(inp) {
+                  inp.value = JSON.stringify(jsObject)
+                 }
+               }
+          }catch(e) {
+            console.log(e)
+          }
+        });   
       };
     |]
 
