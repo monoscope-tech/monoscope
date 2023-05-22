@@ -40,7 +40,7 @@ class SwaggerEndPointsUI {
                 const searchSchemas = {}
                 for (const key in this.paths) {
                     for (const path of this.paths[key]) {
-                        if (path.path.toLowerCase().includes(searchValue.toLowerCase())) {
+                        if (path.path.toLowerCase().includes(searchValue.toLowerCase()) || path.method.toLocaleLowerCase().includes(searchValue.toLocaleLowerCase())) {
                             if (!searchPaths[key]) {
                                 searchPaths[key] = []
                             }
