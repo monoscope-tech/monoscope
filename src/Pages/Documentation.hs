@@ -1,7 +1,7 @@
 module Pages.Documentation (documentationGetH, documentationPostH, documentationPutH, SwaggerForm, SaveSwaggerForm) where
 
 import Config
-import Data.Aeson (decodeStrict, eitherDecodeStrict, encode)
+import Data.Aeson (decodeStrict, encode)
 import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
 import Data.Time.LocalTime (getZonedTime)
@@ -83,7 +83,7 @@ documentationGetH sess pid swagger_id = do
       currentSwagger <- case swagger_id of
         Just swId -> Swaggers.getSwaggerById swId
         Nothing -> pure Nothing
-      pure (project, swaggers, currentSwagger)
+      pure (project, V.reverse swaggers, currentSwagger)
 
   let bwconf =
         (def :: BWConfig)
@@ -130,7 +130,7 @@ documentationsPage pid swaggers currentSwagger = do
     -- page content
     let recentSwagger = case currentSwagger of
           Just swg -> swg
-          Nothing -> V.head $ V.reverse swaggers :: Swaggers.Swagger
+          Nothing -> V.head swaggers :: Swaggers.Swagger
     let jsonString = decodeUtf8 (encode recentSwagger.swaggerJson)
     input_ [id_ "swaggerData", type_ "hidden", value_ jsonString]
 

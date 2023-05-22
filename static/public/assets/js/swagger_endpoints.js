@@ -128,6 +128,14 @@ class SwaggerEndPointsUI {
                                 }
                                 target.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
                             }
+                            const model = window.editor.getModel()
+                            const startPos = model.findNextMatch(pathObj.path + ":", 0, false, false, "", false)
+                            const position = model.findNextMatch(pathObj.method + ":", startPos.range.getStartPosition(), false, false, "", false);
+                            console.log(position)
+                            if (position) {
+                                editor.revealPositionInCenter(position.range.getStartPosition());
+                                editor.setPosition(position.range.getStartPosition());
+                            }
                         }
                     },
                     method, this.elt("p", { class: "text-gray-700" }, pathObj.path)
@@ -177,6 +185,13 @@ class SwaggerEndPointsUI {
                                 clickTarget.firstElementChild.click()
                             }
                             target.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" })
+                            const model = window.editor.getModel()
+                            const startPos = model.findNextMatch("schemas:", 0, false, false, "", false)
+                            const position = model.findNextMatch(key + ":", startPos.range.getStartPosition(), false, false, "", false);
+                            if (position) {
+                                editor.revealPositionInCenter(position.range.getStartPosition());
+                                editor.setPosition(position.range.getStartPosition());
+                            }
                         }
                     }
                 },
