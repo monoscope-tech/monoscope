@@ -142,14 +142,14 @@ documentationsPage pid swaggers currentSwagger = do
             button_
               [ onclick_ "toggleSwaggerHistory(event)"
               , id_ "toggle_swagger_btn"
-              , class_ "w-full flex gap-2 text-gray-600 justify_between items-center cursor-pointer px-2 py-1 border rounded active:ring-blue-200"
+              , class_ "w-full flex gap-2 text-gray-600 justify_between items-center cursor-pointer px-2 py-1 border rounded focus:ring-2 focus:ring-blue-200 active:ring-2 active:ring-blue-200"
               ]
               $ do
                 p_ [style_ "width: calc(100% - 25px)", class_ "truncate ..."] $ show recentSwagger.id.swaggerId
                 img_ [src_ "/assets/svgs/select_chevron.svg", style_ "height:15px; width:15px"]
             div_ [id_ "swagger_history_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] $ do
               swaggers & mapM_ \sw -> do
-                button_ [onclick_ "swaggerChanged(event)", class_ "p-2 w-full text-left truncate ... hover:bg-blue-100"] $ show sw.id.swaggerId
+                button_ [onclick_ "swaggerChanged(event)", class_ "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"] $ show sw.id.swaggerId
 
         -- select_ [onchange_ "swaggerChanged(event)", id_ "swaggerSelect"] $ do
         --   swaggers & mapM_ \sw -> do

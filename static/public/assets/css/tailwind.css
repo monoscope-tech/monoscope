@@ -48,7 +48,7 @@
   @apply bg-green-500 text-white;
 }
 .selected_swagger {
-  @apply bg-blue-200;
+  @apply bg-blue-600 text-white;
 }
 .font_toggle_active {
   @apply bg-blue-200;
