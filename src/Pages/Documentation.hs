@@ -138,9 +138,22 @@ documentationsPage pid swaggers currentSwagger = do
       div_ [class_ "flex w-full bg-white border-b items-center justify-between px-2", style_ "top: 0; height:60px; position: sticky"] $ do
         div_ [class_ "flex items-center gap-4"] $ do
           h3_ [class_ "text-xl text-slate-700 text-2xl font-medium"] "Swagger"
-          select_ [onchange_ "swaggerChanged(event)", id_ "swaggerSelect"] $ do
-            swaggers & mapM_ \sw -> do
-              option_ [value_ (show sw.id.swaggerId)] $ show sw.id.swaggerId
+          div_ [class_ "relative", style_ "width:200px"] $ do
+            button_
+              [ onclick_ "toggleSwaggerHistory(event)"
+              , id_ "toggle_swagger_btn"
+              , class_ "w-full flex gap-2 text-gray-600 justify_between items-center cursor-pointer px-2 py-1 border rounded active:ring-blue-200"
+              ]
+              $ do
+                p_ [style_ "width: calc(100% - 25px)", class_ "truncate ..."] $ show recentSwagger.id.swaggerId
+                img_ [src_ "/assets/svgs/select_chevron.svg", style_ "height:15px; width:15px"]
+            div_ [id_ "swagger_history_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] $ do
+              swaggers & mapM_ \sw -> do
+                button_ [onclick_ "swaggerChanged(event)", class_ "p-2 w-full text-left truncate ... hover:bg-blue-100"] $ show sw.id.swaggerId
+
+        -- select_ [onchange_ "swaggerChanged(event)", id_ "swaggerSelect"] $ do
+        --   swaggers & mapM_ \sw -> do
+        --     option_ [value_ (show sw.id.swaggerId)] $ show sw.id.swaggerId
         button_ [class_ "place-content-center text-md btn btn-primary", onclick_ "showModal()"] "Upload swagger"
 
       div_ [class_ "w-full", style_ "height: calc(100% - 60px)"] $ do
@@ -176,7 +189,6 @@ documentationsPage pid swaggers currentSwagger = do
             div_ [id_ "swagger-ui", class_ "h-full w-full overflow-aut"] pass
   -- mainContent swaggers
 
-  -- modal and resize columns swagerr ui
   script_
     [text|
 
@@ -184,20 +196,75 @@ documentationsPage pid swaggers currentSwagger = do
             document.getElementById('swaggerModal').style.display = 'flex'; 
           }
 
+          function toggleSwaggerHistory(event) {
+            event.stopPropagation()
+            const container = document.querySelector('#swagger_history_container')
+            if(container) {
+              if(container.style.display === 'block') {
+                  container.style.display = 'none'
+                }else {
+                 container.style.display = 'block'
+                }
+              }
+          }
+
+          function swaggerChanged(event) {
+            event.stopPropagation()
+            const current = document.querySelector('#toggle_swagger_btn')
+            const urlParams = new URLSearchParams (window.location.search)
+            const swaggerId = urlParams.get ('swagger_id')
+            if(current && current.firstChild) {
+               const currentId = current.firstChild.innerText
+               if (event.target.innerText === currentId) return
+               current.firstChild.innerText = event.target.innerText
+               const url = new URL(window.location.href);
+               url.searchParams.set('swagger_id', event.target.innerText);
+               document.getElementById("loading_indicator").style.display = 'flex';
+               window.location.href = url.toString();
+            }
+          }
+
          window.addEventListener('DOMContentLoaded', function() {
            const urlParams = new URLSearchParams(window.location.search);
            const swaggerId = urlParams.get('swagger_id');
-           const selectElement = document.getElementById('swaggerSelect');
-           if (selectElement && swaggerId) {
-             selectElement.value = swaggerId;
-           }
+           const historyContainer = document.querySelector('#swagger_history_container')
+            if(container) {
+               Array.from(historyContainer.children).forEach(child => {
+                if(child.innerText === swaggerId) {
+                   child.classList.add("selected_swagger")
+                  }
+               })
+              }
          });
-
+         
+         //close modals
+         document.body.addEventListener('click', function() {
+            document.querySelector('#swagger_history_container').style.display = 'none'
+            //document.querySelector('#toggle_dropdown_container').style.display = 'none'
+         })
+        
           function closeModal(event) {
             if(event.target.id === 'close_btn' || event.target.id ==='swaggerModal') {
                document.getElementById('swaggerModal').style.display = 'none';
             }
           }
+
+       // function saveSwagger(event) {         
+       //   const value = window.editor.getValue();
+       //   const jsObject = jsyaml.load(value);
+       //   const selectElement = document.getElementById('swaggerSelect');
+       //   
+       //   if (selectElement && jsObject) {
+       //     const id = selectElement.value;
+       //     const swagger = jsObject;
+       //     
+       //     const formData = new FormData();
+       //     formData.append('swagger_id', id);
+       //     formData.append('updated_swagger', JSON.stringify(swagger));
+       //   }
+       //   event.target.classList.remove('save_swagger_btn_active');
+       // }
+          
 
           function toggleFontSize(event) {
              const container = document.querySelector('#toggle_dropdown_container')
@@ -223,16 +290,6 @@ documentationsPage pid swaggers currentSwagger = do
                   }
                   window.editor.updateOptions({ fontSize })
               }
-          }
-
-          function swaggerChanged(event) {
-            const urlParams = new URLSearchParams (window.location.search)
-            const swaggerId = urlParams.get ('swagger_id')
-            if(swaggerId === event.target.value) return
-            const url = new URL(window.location.href);
-            url.searchParams.set('swagger_id', event.target.value);
-            document.getElementById("loading_indicator").style.display = 'flex';
-            window.location.href = url.toString();
           }
 
           const endpointsColumn = document.querySelector('#endpoints_container')
@@ -289,9 +346,9 @@ documentationsPage pid swaggers currentSwagger = do
               const detailsColumn = document.querySelector('#details_container')
               const container = document.querySelector('#columns_container')
               const containerWidth = Number(window.getComputedStyle(container).width.replace('px',''))
-              endpointsColumn.style.width = (0.3 * containerWidth) + 'px'
+              endpointsColumn.style.width = (0.2 * containerWidth) + 'px'
               editorColumn.style.width = (0.4 * containerWidth) + 'px'
-              detailsColumn.style.width = (0.3 * containerWidth) + 'px'
+              detailsColumn.style.width = (0.4 * containerWidth) + 'px'
            })
           })
          |]

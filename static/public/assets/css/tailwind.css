@@ -47,7 +47,9 @@
 .save_swagger_btn_active {
   @apply bg-green-500 text-white;
 }
-
+.selected_swagger {
+  @apply bg-blue-200;
+}
 .font_toggle_active {
   @apply bg-blue-200;
 }
@@ -69,6 +71,17 @@
 
 .path-method-delete {
   @apply text-red-500;
+}
+
+.path-method-patch {
+  @apply text-purple-500;
+}
+
+.path-method-options {
+  @apply text-gray-500;
+}
+.path-method-head {
+  @apply text-purple-500;
 }
 
 .subpaths-header {
