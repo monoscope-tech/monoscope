@@ -35,7 +35,7 @@ createSwagger projectId createdBy swaggerJson = do
   currentTime <- liftIO getZonedTime
   let swagger =
         Swagger
-          { Models.Projects.Swaggers.id = SwaggerId nil
+          { Models.Projects.Swaggers.id = SwaggerId <$> liftIO UUIDV4.nextRandom
           , projectId = projectId
           , createdBy = createdBy
           , createdAt = currentTime
