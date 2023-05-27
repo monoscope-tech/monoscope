@@ -152,6 +152,7 @@ library:
     - pretty-relative-time
     - nyan-interpolation
     - pretty-simple
+    - tmp-postgres
     # - doctest-parallel
 
 executables:

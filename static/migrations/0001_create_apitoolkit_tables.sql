@@ -154,7 +154,7 @@ CREATE INDEX IF NOT EXISTS idx_projects_project_api_keys_project_id ON projects.
 -- -- generate a projects recent swagger
 ------------------------------------------------------------------------
 
-CREATE TABLE IF NOT EXISTS projects.swagger_jsons
+CREATE TABLE IF NOT EXISTS apis.swagger_jsons
 (
   id           UUID      NOT  NULL DEFAULT    gen_random_uuid() PRIMARY KEY,
   created_at   TIMESTAMP WITH TIME ZONE       NOT               NULL    DEFAULT current_timestamp,
@@ -164,8 +164,8 @@ CREATE TABLE IF NOT EXISTS projects.swagger_jsons
   swagger_json JSONB     NOT  NULL
 );
 
-SELECT manage_updated_at('swagger_jsons');
-CREATE INDEX IF NOT EXISTS idx_swagger_jsons_project_id ON swagger_jsons(project_id);
+SELECT manage_updated_at('apis.swagger_jsons');
+CREATE INDEX IF NOT EXISTS idx_swagger_jsons_project_id ON apis.swagger_jsons(project_id);
 
 -----------------------------------------------------------------------
 -- ENDPOINTS table 

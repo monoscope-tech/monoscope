@@ -21,7 +21,8 @@ menu pid =
   , ("API Log Explorer", "/p/" <> pid.toText <> "/log_explorer", "#logs")
   , ("API Keys", "/p/" <> pid.toText <> "/apis", "#api")
   , ("Redacted Fields", "/p/" <> pid.toText <> "/redacted_fields", "#redacted")
-  , ("Documentation", "/p/" <> pid.toText <> "/documentation", "#documentation")
+  -- Hide it from the UI for now, so our users don't have to deal with it
+  -- , ("Documentation", "/p/" <> pid.toText <> "/documentation", "#documentation")
   ]
 
 data BWConfig = BWConfig

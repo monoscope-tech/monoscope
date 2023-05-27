@@ -20,12 +20,16 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
 import Relude
 import Servant (FromHttpApiData)
+import GHC.Records (HasField (getField))
 
 newtype SwaggerId = SwaggerId {swaggerId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving
     (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default)
     via UUID.UUID
+
+instance HasField "toText" SwaggerId Text where
+  getField = UUID.toText . swaggerId 
 
 data Swagger = Swagger
   { id :: SwaggerId
@@ -39,7 +43,7 @@ data Swagger = Swagger
   deriving anyclass (FromRow, ToRow)
   deriving
     (Entity)
-    via (GenericEntity '[Schema "projects", TableName "swagger_jsons", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Swagger)
+    via (GenericEntity '[Schema "apis", TableName "swagger_jsons", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Swagger)
 
 addSwagger :: Swagger -> DBT IO ()
 addSwagger = insert @Swagger
@@ -54,4 +58,4 @@ updateSwagger :: Text -> Value -> DBT IO Int64
 updateSwagger swaggerId swaggerJson = do
   execute Update q (swaggerJson, swaggerId)
  where
-  q = [sql| UPDATE projects.swagger_jsons SET swagger_json=? WHERE id=? |]
+  q = [sql| UPDATE apis.swagger_jsons SET swagger_json=? WHERE id=? |]

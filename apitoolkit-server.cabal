@@ -173,6 +173,7 @@ library
     , text-conversions
     , text-display
     , time
+    , tmp-postgres
     , transformers
     , transformers-except
     , unordered-containers

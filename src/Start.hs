@@ -51,8 +51,8 @@ startApp = do
     Right envConfig ->
       do
         let createPgConnIO = connectPostgreSQL $ encodeUtf8 (envConfig ^. #databaseUrl)
-        conn <- createPgConnIO
         when (envConfig ^. #migrateAndInitializeOnStart) do
+          conn <- createPgConnIO
           initializationRes <- Migrations.runMigration conn Migrations.defaultOptions MigrationInitialization
           logger <& "migration initialized " <> show initializationRes
           migrationRes <- Migrations.runMigration conn Migrations.defaultOptions $ MigrationDirectory ((toString $ envConfig ^. #migrationsDir) :: FilePath)
