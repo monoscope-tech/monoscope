@@ -104,6 +104,7 @@ makeFieldLabelsNoPrefix ''RequestMessage
 --
 -- >>> redactJSON ["menu.[].id", "menu.[].names.[]"] [aesonQQ| {"menu":[{"id":"i1", "names":["John","okon"]}, {"id":"i2"}]} |]
 -- Object (fromList [("menu",Array [Object (fromList [("id",String "[REDACTED]"),("names",Array [String "[REDACTED]",String "[REDACTED]"])]),Object (fromList [("id",String "[REDACTED]")])])])
+--
 redactJSON :: [Text] -> Value -> Value
 redactJSON paths' = redactJSON' (stripPrefixDot paths')
  where
@@ -145,6 +146,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
   let queryParamFields = valueToFields $ redactJSON redactFieldsList $ rM.queryParams
   let reqHeaderFields = valueToFields $ redactJSON redactFieldsList $ rM.requestHeaders
   let respHeaderFields = valueToFields $ redactJSON redactFieldsList $ rM.responseHeaders
+
   let reqBodyFields = valueToFields reqBody
   let respBodyFields = valueToFields respBody
 
@@ -159,7 +161,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
   -- which would make this process not deterministic anymore, and that's necessary for a hash.
   let combinedKeyPathStr = T.concat $ sort $ Vector.toList $ queryParamsKP <> responseHeadersKP <> requestBodyKP <> responseBodyKP
   let !shapeHash' = from @String @Text $ showHex (xxHash $ encodeUtf8 combinedKeyPathStr) ""
-  let shapeHash = endpointHash <> shapeHash' -- Include the endpoint hash to make the shape hash unique by endpoint
+  let shapeHash = endpointHash <> show rM.statusCode <> shapeHash' -- Include the endpoint hash and status code to make the shape hash unique by endpoint and status code.
   let projectId = Projects.ProjectId (rM.projectId)
 
   let pathParamsFieldsDTO = pathParamFields & map (fieldsToFieldDTO Fields.FCPathParam projectId endpointHash)
@@ -193,7 +195,8 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
         | otherwise = do
             -- A shape is a deterministic representation of a request-response combination for a given endpoint.
             -- We usually expect multiple shapes per endpoint. Eg a shape for a success request-response and another for an error response.
-            let shape = Shapes.Shape (Shapes.ShapeId dumpID) (rM.timestamp) now projectId endpointHash queryParamsKP requestHeadersKP responseHeadersKP requestBodyKP responseBodyKP fieldHashes shapeHash
+            -- Shapes are dependent on the endpoint, statusCode and the unique fields in that shape.  
+            let shape = Shapes.Shape (Shapes.ShapeId dumpID) (rM.timestamp) now projectId endpointHash queryParamsKP requestHeadersKP responseHeadersKP requestBodyKP responseBodyKP fieldHashes shapeHash rM.statusCode
             Shapes.insertShapeQueryAndParam shape
 
   -- FIXME: This 1000 is added on the php sdk in a previous version and has been remove. This workaround code should be removed ASAP
@@ -281,7 +284,7 @@ normalizeUrlPath JavaSpringBoot urlPath = urlPath
 normalizeUrlPath JsNest urlPath = urlPath
 normalizeUrlPath DotNet urlPath = urlPath
 
--- | valueToFields takes an aeson object and converts it into a list of paths to
+-- valueToFields takes an aeson object and converts it into a list of paths to
 -- each primitive value in the json and the values.
 --
 -- Regular nested text fields:
@@ -290,15 +293,15 @@ normalizeUrlPath DotNet urlPath = urlPath
 --
 -- Integer nested field within an array of objects:
 -- >>> valueToFields [aesonQQ|{"menu":{"id":[{"int_field":22}]}}|]
--- [(".menu.id.[].int_field",[Number 22.0])]
+-- [(".menu.id[*].int_field",[Number 22.0])]
 --
 -- Deeper nested field with an array of objects:
 -- >>> valueToFields [aesonQQ|{"menu":{"id":{"menuitems":[{"key":"value"}]}}}|]
--- [(".menu.id.menuitems.[].key",[String "value"])]
+-- [(".menu.id.menuitems[*].key",[String "value"])]
 --
 -- Flat array value:
 -- >>> valueToFields [aesonQQ|{"menu":["abc", "xyz"]}|]
--- [(".menu.[]",[String "abc",String "xyz"])]
+-- [(".menu[*]",[String "abc",String "xyz"])]
 --
 -- Float values and Null
 -- >>> valueToFields [aesonQQ|{"fl":1.234, "nl": null}|]
@@ -306,7 +309,8 @@ normalizeUrlPath DotNet urlPath = urlPath
 --
 -- Multiple fields with same key via array:
 -- >>> valueToFields [aesonQQ|{"menu":[{"id":"text"},{"id":123}]}|]
--- [(".menu.[].id",[String "text",Number 123.0])]
+-- [(".menu[*].id",[String "text",Number 123.0])]
+--
 -- FIXME: value To Fields should use the redact fields list to actually redact fields
 valueToFields :: AE.Value -> [(Text, [AE.Value])]
 valueToFields value = dedupFields $ removeBlacklistedFields $ snd $ valueToFields' value ("", [])
@@ -316,31 +320,37 @@ valueToFields value = dedupFields $ removeBlacklistedFields $ snd $ valueToField
   valueToFields' (AE.Array v) akk = foldl' (\(akkT, akkL) val -> (akkT, snd $ valueToFields' val (akkT <> "[*]", akkL))) akk v
   valueToFields' v (akk, l) = (akk, (akk, v) : l)
 
-  -- debupFields would merge all fields in the list of tuples by the first item in the tupple.
-  --
-  -- >>> dedupFields [(".menu.[]",String "xyz"),(".menu.[]",String "abc")]
-  -- [(".menu.[]",[String "abc",String "xyz"])]
-  -- >>> dedupFields [(".menu.[]",String "xyz"),(".menu.[]",String "abc"),(".menu.[]",Number 123)]
-  -- [(".menu.[]",[Number 123.0,String "abc",String "xyz"])]
-  dedupFields :: [(Text, AE.Value)] -> [(Text, [AE.Value])]
-  dedupFields fields =
-    sortWith fst fields
-      & groupBy (\a b -> fst a == fst b)
-      & map (foldl' (\(_, xs) (a, b) -> (a, b : xs)) ("", []))
+-- debupFields would merge all fields in the list of tuples by the first item in the tupple.
+--
+-- >>> dedupFields [(".menu[*]",String "xyz"),(".menu[*]",String "abc")]
+-- [(".menu[*]",[String "abc",String "xyz"])]
+--
+-- dedupFields [(".menu.[*]",String "xyz"),(".menu.[*]",String "abc"),(".menu.[*]",Number 123)]
+-- [(".menu.[*]",[Number 123.0,String "abc",String "xyz"])]
+--
+-- dedupFields [(".menu.[*].a",String "xyz"),(".menu.[*].b",String "abc"),(".menu.[*].a",Number 123)]
+-- [(".menu.[*].a",[Number 123.0,String "xyz"]),(".menu.[*].b",[String "abc"])]
+--
+dedupFields :: [(Text, AE.Value)] -> [(Text, [AE.Value])]
+dedupFields fields =
+  sortWith fst fields
+    & groupBy (\a b -> fst a == fst b)
+    & map (foldl' (\(_, xs) (a, b) -> (a, b : xs)) ("", []))
 
-  -- >>> removeBlacklistedFields [(".menu.password",String "xyz"),(".authorization",String "abc")]
-  -- [(".menu.password",String "[REDACTED]"),(".authorization",String "[REDACTED]")]
-  -- >>> removeBlacklistedFields [(".menu.password",Null),(".regular",String "abc")]
-  -- [(".menu.password",String "[REDACTED]"),(".regular",String "abc")]
-  removeBlacklistedFields :: [(Text, AE.Value)] -> [(Text, AE.Value)]
-  removeBlacklistedFields = map \(k, val) ->
-    if or @[]
-      [ T.isSuffixOf "password" (T.toLower k)
-      , T.isSuffixOf "authorization" (T.toLower k)
-      , T.isSuffixOf "cookie" (T.toLower k)
-      ]
-      then (k, AE.String "[REDACTED]")
-      else (k, val)
+-- >>> removeBlacklistedFields [(".menu.password",String "xyz"),(".authorization",String "abc")]
+-- [(".menu.password",String "[REDACTED]"),(".authorization",String "[REDACTED]")]
+--
+-- >>> removeBlacklistedFields [(".menu.password",Null),(".regular",String "abc")]
+-- [(".menu.password",String "[REDACTED]"),(".regular",String "abc")]
+removeBlacklistedFields :: [(Text, AE.Value)] -> [(Text, AE.Value)]
+removeBlacklistedFields = map \(k, val) ->
+  if or @[]
+    [ T.isSuffixOf "password" (T.toLower k)
+    , T.isSuffixOf "authorization" (T.toLower k)
+    , T.isSuffixOf "cookie" (T.toLower k)
+    ]
+    then (k, AE.String "[REDACTED]")
+    else (k, val)
 
 valueToFormat :: AE.Value -> Text
 valueToFormat (AET.String val) = valueToFormatStr val
@@ -350,14 +360,18 @@ valueToFormat AET.Null = "null"
 valueToFormat (AET.Object _) = "object"
 valueToFormat (AET.Array _) = "array"
 
--- | valueToFormatStr will take a string and try to find a format which matches that string best.
+-- valueToFormatStr will take a string and try to find a format which matches that string best.
 -- At the moment it takes a text and returns a generic mask that represents the format of that text
+--
 -- >>> valueToFormatStr "22/02/2022"
 -- "text"
+--
 -- >>> valueToFormatStr "20-02-2022"
 -- "text"
+--
 -- >>> valueToFormatStr "22.02.2022"
 -- "text"
+--
 -- >>> valueToFormatStr "222"
 -- "integer"
 valueToFormatStr :: Text -> Text

@@ -6,7 +6,7 @@ CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;
 CREATE EXTENSION IF NOT EXISTS timescaledb_toolkit;
 CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
 CREATE EXTENSION IF NOT EXISTS hstore;
-CREATE EXTENSION IF NOT EXISTS pg_cron;
+-- CREATE EXTENSION IF NOT EXISTS pg_cron;
 
 
 -- create schemas
@@ -230,7 +230,8 @@ CREATE TABLE IF NOT EXISTS apis.shapes
     -- All fields which were usually sent for all other requests on this endpoint, but are no longer being sent.
     deleted_fields     text[] NOT NULL DEFAULT '{}'::TEXT[],
     -- All fields associated with this shape which are updates
-    updated_field_formats     text[] NOT NULL DEFAULT '{}'::TEXT[]
+    updated_field_formats     text[] NOT NULL DEFAULT '{}'::TEXT[],
+    status_code               int DEFAULT 0
 );
 SELECT manage_updated_at('apis.shapes');
 CREATE INDEX IF NOT EXISTS idx_apis_shapes_project_id ON apis.shapes(project_id);
@@ -382,6 +383,7 @@ CREATE TABLE IF NOT EXISTS apis.request_dumps
 );
 SELECT manage_updated_at('apis.request_dumps');
 SELECT create_hypertable('apis.request_dumps', 'created_at');
+SELECT add_retention_policy('apis.request_dumps',INTERVAL '3 months',true);
 CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_project_id ON apis.request_dumps(project_id, created_at);
 
 -- Create a view that tracks endpoint related statistic points from the request dump table.
@@ -633,7 +635,7 @@ SELECT add_continuous_aggregate_policy('apis.project_requests_by_endpoint_per_mi
 -- SELECT cron.schedule_in_database('DailyOrttoSync', '0 8 * * *', $$INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued',  jsonb_build_object('tag', 'DailyOrttoSync')$$, 'apitoolkit-prod-eu');
 
 -- This is for regular databases locally or if we migrate to a new database setup.
-SELECT cron.schedule('DailyOrttoSync', '0 8 * * *', $$INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued',  jsonb_build_object('tag', 'DailyOrttoSync')$$);
+-- SELECT cron.schedule('DailyOrttoSync', '0 8 * * *', $$INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued',  jsonb_build_object('tag', 'DailyOrttoSync')$$);
 -- useful query to view job details
 -- select * from cron.job_run_details order by start_time desc limit 5;
 

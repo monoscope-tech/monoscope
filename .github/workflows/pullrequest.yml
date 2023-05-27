@@ -16,7 +16,7 @@ jobs:
       - uses: freckle/stack-cache-action@main
       - uses: haskell/actions/setup@v1
         with:
-          ghc-version: "9.2.5" # Exact version of ghc to use
+          ghc-version: "9.2.7" # Exact version of ghc to use
           # cabal-version: 'latest'. Omitted, but defalts to 'latest'
           enable-stack: true
           stack-version: "latest"

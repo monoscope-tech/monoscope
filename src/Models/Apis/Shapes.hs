@@ -1,20 +1,18 @@
 {-# LANGUAGE TemplateHaskell #-}
 
-module Models.Apis.Shapes (insertShape, Shape (..), ShapeId (..), shapeIdText, insertShapeQueryAndParam) where
+module Models.Apis.Shapes (Shape (..), ShapeId (..), shapeIdText, insertShapeQueryAndParam) where
 
 import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
-import Database.PostgreSQL.Entity.DBT (QueryNature (Insert), execute)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, Query, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
-import Database.PostgreSQL.Transact (DBT)
 import Deriving.Aeson qualified as DAE
 import Models.Projects.Projects qualified as Projects
 import Optics.TH
@@ -46,6 +44,7 @@ data Shape = Shape
   , responseHeadersKeypaths :: Vector Text
   , fieldHashes :: Vector Text
   , hash :: Text
+  , statusCode :: Int
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, Default)
@@ -61,8 +60,8 @@ insertShapeQueryAndParam shape = (q, params)
   q =
     [sql| 
             INSERT INTO apis.shapes
-            (project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING; 
+            (project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash, status_code)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING; 
           |]
   params =
     [ MkDBField $ shape.projectId
@@ -74,23 +73,5 @@ insertShapeQueryAndParam shape = (q, params)
     , MkDBField $ shape.responseHeadersKeypaths
     , MkDBField $ shape.fieldHashes
     , MkDBField $ shape.hash
+    , MkDBField $ shape.statusCode
     ]
-
-insertShape :: Shape -> DBT IO ()
-insertShape shape = void $ execute Insert q options
- where
-  q =
-    [sql| 
-            INSERT INTO apis.shapes
-            (project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, response_headers_keypaths)
-            VALUES (?, ?, ?, ?, ?, ?, ?) 
-          |]
-  options =
-    ( shape.projectId
-    , shape.endpointHash
-    , shape.queryParamsKeypaths
-    , shape.requestBodyKeypaths
-    , shape.responseBodyKeypaths
-    , shape.requestHeadersKeypaths
-    , shape.responseHeadersKeypaths
-    )

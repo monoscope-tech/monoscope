@@ -8,7 +8,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Text (encodeToLazyText)
 import Data.Default (def)
 import Data.Map qualified as Map
-import Data.Text as T (breakOnAll, dropWhile, isInfixOf, replace, splitOn, toLower)
+import Data.Text as T (breakOnAll, dropWhile, isInfixOf, replace, splitOn, toLower, isSuffixOf)
 import Data.Time (UTCTime, ZonedTime, defaultTimeLocale, formatTime, getCurrentTime, utcToZonedTime, utc, addUTCTime, secondsToNominalDiffTime)
 import Data.UUID qualified as UUID 
 import Data.Vector (Vector)
@@ -38,6 +38,8 @@ import Text.Interpolation.Nyan (int, rmode')
 import Witch (from)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Utils
+import Text.Pretty.Simple
+import Debug.Pretty.Simple
 
 timePickerItems :: [(Text, Text)]
 timePickerItems =
@@ -76,17 +78,17 @@ fieldDetailsView field formats = do
   img_ [src_ "/assets/svgs/ellipsis.svg", class_ "my-2 float-right"]
   section_ [class_ "space-y-6"] $ do
     div_ $ do
-      h6_ [class_ "text-slate-700 text-xs"] "FIELD NAME"
+      h6_ [class_ "text-slate-800 text-xs"] "FIELD NAME"
       h3_ [class_ "text-lg text-slate-800"] $ toHtml $ field.key
     div_ $ do
-      h6_ [class_ "text-slate-700 text-xs"] "FIELD PATH"
+      h6_ [class_ "text-slate-800 text-xs"] "FIELD PATH"
       h3_ [class_ "text-base text-slate-800 monospace"] $ toHtml $ field.keyPath
     div_ [class_ "flex flex-row gap-6"] $ do
       div_ $ do
-        h6_ [class_ "text-slate-700 text-xs"] "FIELD CATEGORY"
+        h6_ [class_ "text-slate-800 text-xs"] "FIELD CATEGORY"
         h4_ [class_ "text-base text-slate-800"] $ EndpointComponents.fieldCategoryToDisplay $ field.fieldCategory
       div_ [class_ ""] $ do
-        h6_ [class_ "text-slate-700 text-xs"] "FORMAT OVERRIDE"
+        h6_ [class_ "text-slate-800 text-xs"] "FORMAT OVERRIDE"
         h4_ [class_ "text-base text-slate-800"] $ toHtml $ fromMaybe "[unset]" (field.fieldTypeOverride)
     div_ $ do
       h5_ [class_ "text-sm text-slate-800"] "DETECTED FIELD FORMATS AND TYPES"
@@ -95,10 +97,10 @@ fieldDetailsView field formats = do
           div_ [class_ "border-l-slate-200 border-l-2 pl-2 py-2"] $ do
             div_ [class_ "flex flex-row gap-9"] $ do
               div_ [class_ "space-y-2"] $ do
-                h6_ [class_ "text-slate-700 text-xs"] "TYPE"
+                h6_ [class_ "text-slate-800 text-xs"] "TYPE"
                 h4_ [class_ "text-base text-slate-800"] $ EndpointComponents.fieldTypeToDisplay $ formatV.fieldType
               div_ [class_ "mx-5 space-y-2"] $ do
-                h6_ [class_ "text-slate-700 text-xs"] "FORMAT"
+                h6_ [class_ "text-slate-800 text-xs"] "FORMAT"
                 h4_ [class_ "text-base text-slate-800"] $ toHtml $ formatV.fieldFormat
             h6_ [class_ "text-slate-600 mt-4 text-xs"] "EXAMPLE VALUES"
             ul_ [class_ "list-disc"] $ do
@@ -106,16 +108,16 @@ fieldDetailsView field formats = do
                 li_ [class_ "ml-10 text-slate-800 text-sm"] $ toHtml $ aesonValueToText ex
     div_ [class_ "flex flex-row justify-between mt-10 "] $ do
       div_ [class_ " "] $ do
-        h4_ [class_ "text-sm text-slate-700 mb-2"] "CREATION DATE"
+        h4_ [class_ "text-sm text-slate-800 mb-2"] "CREATION DATE"
         div_ [class_ "flex border border-gray-200 m-1 rounded-xl p-2"] $ do
           mIcon_ "calender" "h-4 mr-2 w-4"
           span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" (field.createdAt)
       div_ [class_ " "] $ do
-        h4_ [class_ "text-sm text-slate-700 mb-2"] "LAST CHANGE"
+        h4_ [class_ "text-sm text-slate-800 mb-2"] "LAST CHANGE"
         div_ [class_ "flex border border-gray-200 m-1 justify-between rounded-xl p-2"] $ do
           mIcon_ "calender" "h-4 mr-2 w-4"
           span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" (field.updatedAt)
-    h6_ [class_ "mt-5 text-sm text-slate-700 mb-2"] "DESCRIPTION"
+    h6_ [class_ "mt-5 text-sm text-slate-800 mb-2"] "DESCRIPTION"
     p_ [class_ "text-slate-800 text-sm"] $ toHtml $ field.description
 
 aesonValueToText :: AE.Value -> Text
@@ -144,7 +146,7 @@ endpointDetailsH sess pid eid fromDStr toDStr sinceStr' subPageM= do
           let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
           (f, t)
 
-  (enpStats, project, fieldsMap, reqLatenciesRolledByStepsLabeled, anomalies) <- liftIO $
+  (endpoint, enpStats, project, fieldsMap, reqLatenciesRolledByStepsLabeled, anomalies) <- liftIO $
     withPool pool $ do
       -- Should swap names betw enp and endpoint endpoint could be endpointStats
       endpoint <- Unsafe.fromJust <$> Endpoints.endpointById eid
@@ -157,7 +159,7 @@ endpointDetailsH sess pid eid fromDStr toDStr sinceStr' subPageM= do
       let steps' = if steps == 0 then 100 else steps
       reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledBySteps maxV steps' pid (endpoint.urlPath) (endpoint.method)
       anomalies <- Anomalies.selectAnomalies pid (Just eid) (Just False) (Just False) Nothing
-      pure (enpStats, project, fieldsMap, Vector.toList reqLatenciesRolledBySteps, anomalies)
+      pure (endpoint, enpStats, project, fieldsMap, Vector.toList reqLatenciesRolledBySteps, anomalies)
 
   let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
   let bwconf =
@@ -174,16 +176,16 @@ endpointDetailsH sess pid eid fromDStr toDStr sinceStr' subPageM= do
         Just a -> a
         Nothing -> maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD
   let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt, subPage = subPage}
-  pure $ bodyWrapper bwconf $ endpointDetails paramInput currTime enpStats fieldsMap reqLatenciesRolledByStepsJ anomalies (fromD, toD)
+  pure $ bodyWrapper bwconf $ endpointDetails paramInput currTime endpoint enpStats fieldsMap reqLatenciesRolledByStepsJ anomalies (fromD, toD)
 
-endpointDetails :: ParamInput -> UTCTime -> EndpointRequestStats -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> Vector Anomalies.AnomalyVM -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
-endpointDetails paramInput currTime endpoint fieldsM reqLatenciesRolledByStepsJ anomalies dateRange = do
+endpointDetails :: ParamInput -> UTCTime -> Endpoints.Endpoint -> EndpointRequestStats -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> Vector Anomalies.AnomalyVM -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
+endpointDetails paramInput currTime endpoint endpointStats fieldsM reqLatenciesRolledByStepsJ anomalies dateRange = do
   let currentURLSubPage =  deleteParam "subpage" paramInput.currentURL
   div_ [class_ "w-full h-full overflow-hidden"] $ do
     div_ [class_ "w-[75%] inline-block p-5 h-full overflow-y-scroll"] $ do
       div_ [class_ "flex flex-row justify-between mb-10"] $ do
         div_ [class_ "flex flex-row place-items-center text-lg font-medium"] $ do
-          h3_ [class_ "text-lg text-slate-700"] $ do
+          h3_ [class_ "text-lg text-slate-800"] $ do
             span_ [class_ $ "p-1 endpoint endpoint-" <> toLower (endpoint.method)] $ toHtml $ (endpoint.method) <> " "
             strong_ [class_ "inconsolata text-xl"] $ toHtml (endpoint.urlPath)
           img_ [src_ "/assets/svgs/cheveron-down.svg", class_ " h-4 w-4 m-2"]
@@ -205,7 +207,7 @@ endpointDetails paramInput currTime endpoint fieldsM reqLatenciesRolledByStepsJ 
       if paramInput.subPage == "api_docs" then
           apiDocsSubPage fieldsM
         else
-          apiOverviewSubPage paramInput currTime endpoint fieldsM reqLatenciesRolledByStepsJ anomalies dateRange 
+          apiOverviewSubPage paramInput currTime endpointStats fieldsM reqLatenciesRolledByStepsJ anomalies dateRange 
         
     aside_
       [ class_ "w-[25%] inline-block h-full overflow-y-auto overflow-x-hidden bg-white border border-gray-200 p-5 xsticky xtop-0 "
@@ -274,7 +276,7 @@ endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p
           , class_ "h-4 mr-3 mt-1 w-4 cursor-pointer"
           , [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .endpointStatsSubSection)|]
           ]
-        span_ [class_ "text-lg text-slate-700"] "Endpoint Stats"
+        span_ [class_ "text-lg text-slate-800"] "Endpoint Stats"
     div_ [class_ "space-y-5 endpointStatsSubSection"] $ do
       div_ [class_ "grid grid-cols-3  gap-5"] $ do
         statBox "Total Anomalies" "Total Anomalies for this endpoint this week vs total for the project" enpStats.ongoingAnomaliesProj (Just enpStats.ongoingAnomaliesProj) 
@@ -357,7 +359,7 @@ reqResSection title isRequest fieldsM =
             [ src_ "/assets/svgs/cheveron-down.svg"
             , class_ "h-4 mr-3 mt-1 w-4"
             ]
-        span_ [class_ "text-lg text-slate-700"] $ toHtml title
+        span_ [class_ "text-lg text-slate-800"] $ toHtml title
       div_ [class_ "flex flex-row mt-2"] $ do
         img_ [src_ "/assets/svgs/leftarrow.svg", class_ " m-2"]
         span_ [src_ " mx-4"] "1/1"
@@ -388,11 +390,14 @@ subSubSection title fieldsM =
             ]
           div_ [class_ "bg-gray-100 px-10 rounded-xl w-full p-4 text-sm text-slate-900 "] $ toHtml title
         div_ [class_ "space-y-1 subSectionContent"] $ do
+          -- pTraceShowM $ fields
+          -- pTraceShowM "========================" 
+          -- pTraceShowM $ fieldsToNormalized fields
           fieldsToNormalized fields & mapM_ \(key, fieldM) -> do
             let segments = splitOn "." key
             let depth = length segments
             let depthPadding = "margin-left:" <> show (20 + (depth * 20)) <> "px"
-            let displayKey = replace "«" "" $ last ("" :| segments)
+            let displayKey = last ("" :| segments)
             case fieldM of
               Nothing -> do
                 a_
@@ -405,9 +410,9 @@ subSubSection title fieldsM =
                     img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-6 w-6 mr-1 chevron cursor-pointer p-1"]
                     div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full"] $ do
                       input_ [type_ "checkbox", class_ " mr-12"]
-                      span_ [class_ "text-sm text-slate-700 inline-flex items-center"] $ toHtml displayKey
+                      span_ [class_ "text-sm text-slate-800 inline-flex items-center"] $ toHtml displayKey
                       span_ [class_ "text-sm text-slate-600 inline-flex items-center ml-4"] $ do
-                        if "«" `isInfixOf` key
+                        if "[*]" `isSuffixOf` key
                           then EndpointComponents.fieldTypeToDisplay Fields.FTList
                           else EndpointComponents.fieldTypeToDisplay Fields.FTObject
               Just field -> do
@@ -422,25 +427,23 @@ subSubSection title fieldsM =
                     img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-4 mr-3 mt-4 w-4 ", style_ "visibility: hidden"]
                     div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full items-center"] $ do
                       input_ [type_ "checkbox", class_ " mr-12"]
-                      span_ [class_ "grow text-sm text-slate-700 inline-flex items-center"] $ toHtml displayKey
+                      span_ [class_ "grow text-sm text-slate-800 inline-flex items-center"] $ toHtml displayKey
                       span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ EndpointComponents.fieldTypeToDisplay $ field.fieldType
                       img_ [src_ "/assets/svgs/alert-red.svg", class_ " mr-8 ml-4 h-5"]
                       img_ [src_ "/assets/svgs/dots-vertical.svg", class_ "mx-5 h-5"]
 
--- fieldsToNormalized, gets a list of fields and returns a list of tuples with the keypath, and the field, sorted by the key path
+-- | fieldsToNormalized, gets a list of fields and returns a list of tuples with the keypath, and the field, sorted by the key path
+-- >>> let v1 = (def::Field){fieldCategory=FCQueryParam, keyPath=".k1.k2[*]", key="k2[*]"}
+-- >>> let v2 = (def::Field){fieldCategory=FCResponseBody, keyPath=".k1.k2[*].v", key="v"}
+-- >>> let v3 = (def::Field){fieldCategory=FCResponseBody, keyPath=".k1.k2[*].x", key="x"}
+-- >>> fieldsToNormalized [v1]
 fieldsToNormalized :: [Fields.Field] -> [(Text, Maybe Fields.Field)]
 fieldsToNormalized =
   sortNub . concatMap \field ->
     map
       ((,Nothing) . fst)
       ( field.keyPath
-          & keyPathStrToKey
+          & T.dropWhile (== '.') 
           & breakOnAll "."
       )
-      & (++ [(keyPathStrToKey $ field.keyPath, Just field)])
- where
-  rmvDotPrefix = T.dropWhile (== '.')
-  -- listToUnicode: add « as a suffix to all lists, and as the key for it's child.
-  -- This helps us identify and display lists correct. This could be simplified if posssible
-  listToUnicode = replace ".[]" "«.»"
-  keyPathStrToKey = rmvDotPrefix . listToUnicode
+      & (++ [(T.dropWhile (== '.') $ field.keyPath, Just field)])

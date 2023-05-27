@@ -72,3 +72,15 @@ workbox generateSW workbox-config.js
 ```
     make timescaledb-docker
 ```
+
+- apitoolkit depends on pg_cron so you would need to update the postgres config in your pgdata volume to include the following;
+```
+shared_preload_libraries = 'pg_cron'
+cron.database_name = 'apitoolkit'
+```
+alternatively you can run the following sql commands against the database
+```sql
+ALTER system SET cron.database_name = 'apitoolkit';
+ALTER system SET shared_preload_libraries = 'pg_cron';
+```
+- restart timescaledb-docker

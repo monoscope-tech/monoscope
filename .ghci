@@ -1,5 +1,5 @@
-:set prompt "\ESC[1;35m\x03BB> \ESC[m"
-:set prompt-cont "\ESC[1;35m > \ESC[m"
+:set prompt "\ESC[1;32m\x03BB> \ESC[m"
+:set prompt-cont "\ESC[1;32m > \ESC[m"
 :seti -XGADTSyntax
 :seti -XGeneralizedNewtypeDeriving
 :seti -XInstanceSigs
@@ -8,3 +8,14 @@
 :seti -XScopedTypeVariables
 :seti -XTypeApplications
 :seti -XOverloadedStrings
+
+
+:set +m
+:set +s
+:set +t
+
+:set -package pretty-simple
+
+:set -fprint-explicit-foralls
+:set -interactive-print=Text.Pretty.Simple.pPrint
+:set -XTypeApplications -XKindSignatures

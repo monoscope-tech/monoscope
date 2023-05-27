@@ -151,6 +151,8 @@ library:
     - yaml
     - pretty-relative-time
     - nyan-interpolation
+    - pretty-simple
+    # - doctest-parallel
 
 executables:
   apitoolkit-server-exe:
@@ -166,6 +168,7 @@ executables:
     # - -fPIC
     dependencies:
     - apitoolkit-server
+    - doctest-parallel
     - relude >=1.1.0.0
     when:       
     - condition: false       
@@ -186,6 +189,6 @@ tests:
     - apitoolkit-server
     - tmp-postgres
     - hspec
-    # - hspec-discover
+    - hspec-discover
     - doctest-parallel
     - relude >= 1.1.0.0

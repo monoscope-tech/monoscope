@@ -19,8 +19,8 @@
 # resolver: https://example.com/snapshots/2018-01-01.yaml
 # resolver:
 #   url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/18/18.yaml
-resolver: nightly-2023-04-24
-# resolver: lts-20.11
+# resolver: nightly-2023-04-24
+resolver: lts-20.21
 
 
 # User packages to be built.
@@ -105,7 +105,7 @@ extra-deps:
 # extra-package-dbs: []
 
 # Control whether we use the GHC we find on the path
-system-ghc: true
+# system-ghc: true
 allow-newer: true
 #
 # Require a specific version of stack, using version ranges

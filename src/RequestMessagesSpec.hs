@@ -32,8 +32,8 @@ spec = do
       let expectedResp =
             [ (".menu.id", [AE.String "file"])
             , -- FIXME: We can correctly handle objects in arrays.
-              (".menu.popup.menuitem.[].onclick", [AE.String "oc1", AE.String "oc2"])
-            , (".menu.popup.menuitem.[].value", [AE.String "v1", AE.String "v2"])
+              (".menu.popup.menuitem[*].onclick", [AE.String "oc1", AE.String "oc2"])
+            , (".menu.popup.menuitem[*].value", [AE.String "v1", AE.String "v2"])
             ]
       RequestMessages.valueToFields exJSON `shouldBe` expectedResp
 
