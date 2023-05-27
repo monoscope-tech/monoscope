@@ -42,6 +42,8 @@ library
       Models.Projects.Projects
       Models.Projects.ProjectsEmail
       Models.Projects.RedactedFields
+      Models.Projects.Swaggers
+      Models.Projects.SwaggersSpec
       Models.Users.Sessions
       Models.Users.Users
       Pages.Anomalies.AnomalyList
@@ -50,6 +52,7 @@ library
       Pages.Charts.Charts
       Pages.Components
       Pages.Dashboard
+      Pages.Documentation
       Pages.Endpoints.EndpointComponents
       Pages.Endpoints.EndpointDetails
       Pages.Endpoints.EndpointList
@@ -266,4 +269,5 @@ test-suite apitoolkit-server-test
     , doctest-parallel
     , hspec
     , relude >=1.1.0.0
+    , tmp-postgres
   default-language: Haskell2010

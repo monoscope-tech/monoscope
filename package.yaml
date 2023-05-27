@@ -185,6 +185,7 @@ tests:
     dependencies:
     - base
     - apitoolkit-server
+    - tmp-postgres
     - hspec
     # - hspec-discover
     - doctest-parallel

@@ -12,7 +12,9 @@ import Lucid
 import Lucid.Htmx
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
+import Models.Projects.Projects qualified as Projets
 import Models.Users.Sessions qualified as Sessions
+import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
 
@@ -31,68 +33,110 @@ endpointListH sess pid = do
           , currProject = project
           , pageTitle = "Endpoints"
           }
-  pure $ bodyWrapper bwconf $ endpointList endpointStats
+  pure $ bodyWrapper bwconf $ endpointList endpointStats pid
 
-endpointList :: Vector Endpoints.EndpointRequestStats -> Html ()
-endpointList enps = do
-  div_ [class_ "container mx-auto  px-4 pt-10 pb-24 h-full overflow-y-scroll"] $ do
-    div_ [class_ "flex justify-between"] $ do
-      h3_ [class_ "text-xl text-slate-700 flex place-items-center"] "Endpoints"
+endpointList :: Vector Endpoints.EndpointRequestStats -> Projets.ProjectId -> Html ()
+endpointList enps pid = do
+  div_ [class_ "container mx-auto relative  px-4 pt-10 pb-24 h-full overflow-y-scroll"] $ do
+    -- modal
+    div_
+      [ style_ "z-index:99"
+      , class_ "fixed hidden pt-24 justify-center z-50 w-full p-4 bg-gray-500 bg-opacity-75 overflow-y-auto inset-0 h-full max-h-full"
+      , id_ "swaggerModal"
+      , tabindex_ "-1"
+      , onclick_ "closeModal(event)"
+      ]
+      $ do
+        div_
+          [ class_ "relative w-[500px] max-h-full"
+          , style_ "width: min(90vw, 750px)"
+          ]
+          $ do
+            -- Modal content
+            form_
+              [ class_ "relative bg-white rounded-lg shadow"
+              , hxPost_ $ "/p/" <> pid.toText <> "/documentation"
+              ]
+              $ do
+                div_ [class_ "flex items-center justify-between p-4 border-b rounded-t"] $ do
+                  h3_ [class_ "text-xl font-semibold text-gray-900 dark:text-white"] "Upload Swagger"
+                -- Modal body
+                div_ [class_ "p-6 space-y-6"] $ do
+                  input_ [type_ "hidden", name_ "from", value_ "endpoints"]
+                  textarea_ [name_ "swagger_json", style_ "height:65vh;resize:none", class_ "w-full border outline-none p-4 focus:outline-none focus:border-blue-200", placeholder_ "Paste swagger here"] ""
+                -- Modal footer
+                div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] $ do
+                  button_ [style_ "margin-right: 50px", type_ "button", class_ "btn mr-24", onclick_ "closeModal(event)", id_ "close_btn"] "Close"
+                  button_ [type_ "submit", class_ "btn btn-primary"] "Upload"
 
-    -- search
-    div_ [class_ "card-round p-5"] $ do
-      div_ [class_ "w-full flex flex-row m-3"] $ do
-        div_ [class_ "flex rounded-xl bg-white py-2 px-3 flex-row w-3/4 border-solid border border-gray-200 h-10"] $ do
-          img_ [src_ "/assets/svgs/search.svg", class_ "h-5 w-auto"]
-          input_ [type_ "text", class_ "dataTable-search w-full h-full p-2 text-sm text-gray-400 font-normal focus:outline-none", placeholder_ "Search endpoints..."]
-          img_ [src_ "/assets/svgs/filter.svg", class_ "h-5 w-auto self-end"]
-        button_ [class_ "bg-blue-700/20 place-content-center py-2 px-4 w-28 mx-3 flex flex-row rounded-xl h-10"] $ do
-          img_ [src_ "/assets/svgs/merge.svg", class_ "h-4 w-4 mt-1 "]
-          span_ [class_ "text-blue-600"] "Merge"
-        button_ [class_ "bg-transparent place-content-center py-2 px-4 w-28 mx-3 flex flex-row border-solid border border-gray-200 rounded-xl h-10"] $ do
-          span_ [class_ "text-sm text-slate-600 mr-1"] "Actions"
-          img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-3 w-3 mt-1 "]
-      -- table head
+    -- page content
+    div_ [class_ "flex flex-col justify-between"] $ do
+      div_ [class_ "flex w-full justify-between my-3 px-2"] $ do
+        h3_ [class_ "text-xl text-slate-700 flex place-items-center"] "Endpoints"
+        button_ [class_ "place-content-center text-md btn btn-primary", onclick_ "showModal()"] "Upload swagger"
+      -- search
+      div_ [class_ "card-round p-5"] $ do
+        div_ [class_ "w-full flex flex-row m-3"] $ do
+          div_ [class_ "flex rounded-xl bg-white py-2 px-3 flex-row w-3/4 border-solid border border-gray-200 h-10"] $ do
+            img_ [src_ "/assets/svgs/search.svg", class_ "h-5 w-auto"]
+            input_ [type_ "text", class_ "dataTable-search w-full h-full p-2 text-sm text-gray-400 font-normal focus:outline-none", placeholder_ "Search endpoints..."]
+            img_ [src_ "/assets/svgs/filter.svg", class_ "h-5 w-auto self-end"]
+          button_ [class_ "bg-blue-700/20 place-content-center py-2 px-4 w-28 mx-3 flex flex-row rounded-xl h-10"] $ do
+            img_ [src_ "/assets/svgs/merge.svg", class_ "h-4 w-4 mt-1 "]
+            span_ [class_ "text-blue-600"] "Merge"
+          button_ [class_ "bg-transparent place-content-center py-2 px-4 w-28 mx-3 flex flex-row border-solid border border-gray-200 rounded-xl h-10"] $ do
+            span_ [class_ "text-sm text-slate-600 mr-1"] "Actions"
+            img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-3 w-3 mt-1 "]
+        -- table head
 
-      table_ [class_ "table-auto w-full  mt-6", id_ "apitab", hxBoost_ "true"] $ do
-        thead_ $ do
-          tr_ [class_ "border-b border-b-slate-50 text-sm text-gray-400 font-normal "] $ do
-            th_ [class_ "text-left "] $ do
-              input_ [type_ "checkbox"]
-            th_ [style_ "width:7rem; min-width:7rem; max-width:7rem;"] ""
-            th_ [class_ ""] "ENDPOINTS"
-            th_ [class_ "text-center"] "REQUESTS"
-            th_ [class_ "text-right"] "TOTAL TIME"
-            th_ [class_ "text-right"] "P50 LATENCY"
-            th_ [class_ "text-right"] "P99 LATENCY"
-            th_ [class_ "text-center"] ""
-        tbody_ $ do
-          enps & mapM_ \enp -> do
-            tr_ [class_ "border-b border-b-slate-50 py-2"] $ do
-              td_ [class_ "text-left pr-4 "] $ input_ [type_ "checkbox"]
-              td_ [class_ "text-right"] $ do
-                a_ [href_ ("/p/" <> enp.projectId.toText <> "/endpoints/" <> Endpoints.endpointIdText (enp.endpointId))] $ do
-                  span_ [class_ $ "endpoint endpoint-" <> toLower (enp.method)] $ toHtml $ enp.method
-              td_ [class_ ""] $ do
-                a_ [href_ ("/p/" <> enp.projectId.toText <> "/endpoints/" <> Endpoints.endpointIdText (enp.endpointId))] $ do
-                  span_ [class_ " inconsolata text-base text-slate-700"] $ toHtml $ enp.urlPath
-              td_ [class_ " text-sm text-gray-400 font-normal text-center"] $ do
-                span_ $ toHtml @String $ fmt $ commaizeF (enp.totalRequests)
-              td_ [class_ " inconsolata text-base text-slate-700 text-right space-x-2"] $ do
-                span_ $ toHtml @String $ fmt $ fixedF 1 (enp.totalTime)
-                -- convert from milliseconds
-                div_ [class_ "w-10 inline-block", term "data-tippy-content" "enpoint total time vs project total"] $ meter__ $ ((enp.totalTime) / (enp.totalTimeProj)) * 100
-              td_ [class_ " text-sm text-gray-400 font-normal text-right space-x-2"] $ do
-                span_ $ toHtml @Text $ fmt $ fixedF 2 (enp.p50) |+ " ms"
-                div_ [class_ "w-10 inline-block", term "data-tippy-content" "p50 vs max"] $ meter__ $ ((enp.p50) / (enp.max)) * 100
-              td_ [class_ " text-sm text-gray-400 font-normal text-right space-x-2"] $ do
-                span_ $ toHtml @Text $ fmt $ fixedF 2 (enp.p99) |+ " ms"
-                div_ [class_ "w-10 inline-block", term "data-tippy-content" "p99 vs max"] $ meter__ $ ((enp.p99) / (enp.max)) * 100
-              td_ [class_ "text-right font-medium text-gray-400 "] $ do
-                div_ [class_ "flex flex-row w-full justify-end gap-6"] $ do
-                  when (enp.ongoingAnomalies > 0) $ do
-                    img_ [class_ "px-3", term "data-tippy-content" "ongoing anomaly", src_ "/assets/svgs/alert-red.svg"]
-                  img_ [class_ "px-3", src_ "/assets/svgs/dots-vertical.svg"]
+        table_ [class_ "table-auto w-full  mt-6", id_ "apitab", hxBoost_ "true"] $ do
+          thead_ $ do
+            tr_ [class_ "border-b border-b-slate-50 text-sm text-gray-400 font-normal "] $ do
+              th_ [class_ "text-left "] $ do
+                input_ [type_ "checkbox"]
+              th_ [style_ "width:7rem; min-width:7rem; max-width:7rem;"] ""
+              th_ [class_ ""] "ENDPOINTS"
+              th_ [class_ "text-center"] "REQUESTS"
+              th_ [class_ "text-right"] "TOTAL TIME"
+              th_ [class_ "text-right"] "P50 LATENCY"
+              th_ [class_ "text-right"] "P99 LATENCY"
+              th_ [class_ "text-center"] ""
+          tbody_ $ do
+            enps & mapM_ \enp -> do
+              tr_ [class_ "border-b border-b-slate-50 py-2"] $ do
+                td_ [class_ "text-left pr-4 "] $ input_ [type_ "checkbox"]
+                td_ [class_ "text-right"] $ do
+                  a_ [href_ ("/p/" <> enp.projectId.toText <> "/endpoints/" <> Endpoints.endpointIdText (enp.endpointId))] $ do
+                    span_ [class_ $ "endpoint endpoint-" <> toLower (enp.method)] $ toHtml $ enp.method
+                td_ [class_ ""] $ do
+                  a_ [href_ ("/p/" <> enp.projectId.toText <> "/endpoints/" <> Endpoints.endpointIdText (enp.endpointId))] $ do
+                    span_ [class_ " inconsolata text-base text-slate-700"] $ toHtml $ enp.urlPath
+                td_ [class_ " text-sm text-gray-400 font-normal text-center"] $ do
+                  span_ $ toHtml @String $ fmt $ commaizeF (enp.totalRequests)
+                td_ [class_ " inconsolata text-base text-slate-700 text-right space-x-2"] $ do
+                  span_ $ toHtml @String $ fmt $ fixedF 1 (enp.totalTime)
+                  -- convert from milliseconds
+                  div_ [class_ "w-10 inline-block", term "data-tippy-content" "enpoint total time vs project total"] $ meter__ $ ((enp.totalTime) / (enp.totalTimeProj)) * 100
+                td_ [class_ " text-sm text-gray-400 font-normal text-right space-x-2"] $ do
+                  span_ $ toHtml @Text $ fmt $ fixedF 2 (enp.p50) |+ " ms"
+                  div_ [class_ "w-10 inline-block", term "data-tippy-content" "p50 vs max"] $ meter__ $ ((enp.p50) / (enp.max)) * 100
+                td_ [class_ " text-sm text-gray-400 font-normal text-right space-x-2"] $ do
+                  span_ $ toHtml @Text $ fmt $ fixedF 2 (enp.p99) |+ " ms"
+                  div_ [class_ "w-10 inline-block", term "data-tippy-content" "p99 vs max"] $ meter__ $ ((enp.p99) / (enp.max)) * 100
+                td_ [class_ "text-right font-medium text-gray-400 "] $ do
+                  div_ [class_ "flex flex-row w-full justify-end gap-6"] $ do
+                    when (enp.ongoingAnomalies > 0) $ do
+                      img_ [class_ "px-3", term "data-tippy-content" "ongoing anomaly", src_ "/assets/svgs/alert-red.svg"]
+                    img_ [class_ "px-3", src_ "/assets/svgs/dots-vertical.svg"]
+  script_
+    [text|
+          function showModal() { document.getElementById('swaggerModal').style.display = 'flex'; }
+          function closeModal(event) {
+            if(event.target.id === 'close_btn' || event.target.id ==='swaggerModal') {
+               document.getElementById('swaggerModal').style.display = 'none';
+              }
+             }
+         |]
 
 meter__ :: Double -> Html ()
 meter__ prcntg = div_ [class_ "shadow w-full bg-slate-200 h-2.5 "] $ do

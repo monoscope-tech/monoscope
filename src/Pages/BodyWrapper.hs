@@ -1,5 +1,6 @@
 module Pages.BodyWrapper (bodyWrapper, BWConfig (..)) where
 
+import Data.CaseInsensitive qualified as CI
 import Data.Default (Default)
 import Data.Vector qualified as Vector
 import Lucid
@@ -11,17 +12,17 @@ import Models.Users.Users qualified as Users
 import NeatInterpolation
 import Pages.Charts.Charts qualified as Charts
 import Relude
-import Data.CaseInsensitive qualified as CI
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu pid =
-   [ ("Dashboard", "/p/" <> pid.toText <> "/", "#dashboard")
-      , ("Endpoints", "/p/" <> pid.toText <> "/endpoints", "#endpoint")
-      , ("Anomalies", "/p/" <> pid.toText <> "/anomalies?ackd=false&archived=false", "#anomalies")
-      , ("API Log Explorer", "/p/" <> pid.toText <> "/log_explorer", "#logs")
-      , ("API Keys", "/p/" <> pid.toText <> "/apis", "#api")
-      , ("Redacted Fields", "/p/" <> pid.toText <> "/redacted_fields", "#redacted")
-      ]
+  [ ("Dashboard", "/p/" <> pid.toText <> "/", "#dashboard")
+  , ("Endpoints", "/p/" <> pid.toText <> "/endpoints", "#endpoint")
+  , ("Anomalies", "/p/" <> pid.toText <> "/anomalies?ackd=false&archived=false", "#anomalies")
+  , ("API Log Explorer", "/p/" <> pid.toText <> "/log_explorer", "#logs")
+  , ("API Keys", "/p/" <> pid.toText <> "/apis", "#api")
+  , ("Redacted Fields", "/p/" <> pid.toText <> "/redacted_fields", "#redacted")
+  , ("Documentation", "/p/" <> pid.toText <> "/documentation", "#documentation")
+  ]
 
 data BWConfig = BWConfig
   { sessM :: Maybe Sessions.PersistentSession
@@ -61,6 +62,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child =
           link_ [rel_ "preconnect", href_ "https://fonts.googleapis.com"]
           link_ [rel_ "preconnect", href_ "https://fonts.gstatic.com", crossorigin_ "true"]
           link_ [href_ "https://fonts.googleapis.com/css2?family=Inconsolata&family=Poppins:wght@400;500;600&display=swap", rel_ "stylesheet"]
+          link_ [rel_ "stylesheet", href_ "https://unpkg.com/swagger-ui-dist@4.5.0/swagger-ui.css"]
           -- SCRIPTS
           script_ [src_ "https://cdn.jsdelivr.net/npm/echarts@5.4.1/dist/echarts.min.js"] ("" :: Text)
           script_ [src_ "/assets/roma-echarts.js", defer_ "true"] ("" :: Text)
@@ -116,7 +118,8 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child =
               }
             |]
           script_ Charts.chartInit
-          script_ [text|
+          script_
+            [text|
             // Ortto apitoolkit capture code 
             window.ap3c = window.ap3c || {};
             var ap3c = window.ap3c;
@@ -138,7 +141,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child =
             sideNav'
             section_ [class_ "grow h-full overflow-y-hidden"] $ do
               navbar currUser
-              section_ [class_ "h-full overflow-y-scroll"] $ do
+              section_ [class_ "h-full overflow-y-auto"] $ do
                 child
 
 projectsDropDown :: Projects.Project -> Vector.Vector Projects.Project -> Html ()
@@ -252,14 +255,16 @@ sideNav sess project pageTitle menuItem = do
                    )
           ]
           $ do
-            svg_ [class_ "w-5 h-5 icon text-slate-500",term "data-tippy-placement" "right", term "data-tippy-content" mTitle] $ use_ [href_ $ "/assets/svgs/sprite/sprite.svg" <> mIcon]
+            svg_ [class_ "w-5 h-5 icon text-slate-500", term "data-tippy-placement" "right", term "data-tippy-content" mTitle] $ use_ [href_ $ "/assets/svgs/sprite/sprite.svg" <> mIcon]
             span_ [class_ "grow sd-hidden"] $ toHtml mTitle
 
 navbar :: Users.User -> Html ()
 navbar currUser = do
   nav_ [id_ "main-navbar", class_ "sticky z-20 top-0 w-full w-full px-6 py-3 border-b bg-white flex flex-row justify-between"] $ do
-    a_ [class_ "cursor-pointer flex items-center", 
-      [__|
+    a_
+      [ id_ "side_nav_toggler"
+      , class_ "cursor-pointer flex items-center"
+      , [__|
       on click 
         if (localStorage.getItem('close-sidemenu') != 'true') then  
           add .hidden-side-nav-menu to #side-nav-menu then 
@@ -267,8 +272,10 @@ navbar currUser = do
         else remove  .hidden-side-nav-menu from #side-nav-menu then 
              call localStorage.removeItem('close-sidemenu') 
         end
-          |]] $ do
-      img_ [class_ "w-4 h-4", src_ "/assets/svgs/hamburger_menu.svg"]
+          |]
+      ]
+      $ do
+        img_ [class_ "w-4 h-4", src_ "/assets/svgs/hamburger_menu.svg"]
     div_ [class_ "inline-block flex items-center"] $ do
       a_ [class_ "inline-block p-2 px-3 align-middle"] $ img_ [class_ "w-5 h-5", src_ "/assets/svgs/search.svg"]
       a_ [class_ "inline-block border-r-2 p-2 pr-5"] $ img_ [class_ "w-5 h-5", src_ "/assets/svgs/notifications_active.svg"]

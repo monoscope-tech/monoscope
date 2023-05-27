@@ -1,27 +1,108 @@
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
+  .swagger_history_container {
+    width: 200px !important;
+  }
+
+  .swagger_history_container .options_container {
+    display: block;
+  }
+
+  .swagger_history_container .active {
+    background-color: lightgrey;
+  }
+
   .card-round {
     @apply bg-white border border-slate-200 rounded-xl shadow-md  shadow-slate-200 overflow-hidden;
   }
 }
 
+.endpoint-path-collapse > .subpaths-container {
+  display: none;
+}
+
+.endpoint-path-collapse .collpase-icon {
+  transform: rotate(180deg);
+}
+
+.endpoint_schema {
+  @apply text-gray-600;
+}
+
+.subpaths-container {
+  cursor: pointer;
+  @apply flex flex-col pb-4;
+}
+
+.subpaths-container > div {
+  @apply px-4 py-2;
+}
+.subpaths-container > div:hover {
+  @apply bg-gray-100;
+}
+
+.save_swagger_btn_active {
+  @apply bg-green-500 text-white;
+}
+.selected_swagger {
+  @apply bg-blue-600 text-white;
+}
+.font_toggle_active {
+  @apply bg-blue-200;
+}
+
+.path-method-get {
+  @apply text-blue-500;
+}
+
+.endpoint_active {
+  border-left: 5px solid currentColor;
+}
+.path-method-put {
+  @apply text-orange-500;
+}
+
+.path-method-post {
+  @apply text-green-500;
+}
+
+.path-method-delete {
+  @apply text-red-500;
+}
+
+.path-method-patch {
+  @apply text-purple-500;
+}
+
+.path-method-options {
+  @apply text-gray-500;
+}
+.path-method-head {
+  @apply text-purple-500;
+}
+
+.subpaths-header {
+  display: flex;
+  cursor: pointer;
+  @apply hover:bg-gray-100 py-3 px-2 w-full items-center justify-between;
+}
+
 @layer components {
   html {
     font-size: 14px;
-    font-family: "Poppins", sans-serif;
+    font-family: 'Poppins', sans-serif;
     /* font-family: 'Roboto', sans-serif; */
     --white: 255 255 255;
   }
   .inconsolata {
-    font-family: "Inconsolata", monospace;
+    font-family: 'Inconsolata', monospace;
     font-size: 14px;
   }
   .monospace {
-    font-family: "Inconsolata", monospace;
+    font-family: 'Inconsolata', monospace;
   }
 
   /* From icomoon app*/
@@ -78,7 +159,7 @@
   .hidden-side-nav-menu .sd-hidden {
     display: none;
   }
-  .hidden-side-nav-menu .sd-show{
+  .hidden-side-nav-menu .sd-show {
     display: inline-block;
   }
 }
