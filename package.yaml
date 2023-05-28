@@ -176,15 +176,25 @@ executables:
       other-modules: Paths_apitoolkit_server
 
 tests:
-  apitoolkit-server-test:
-    main:                Test.hs
-    source-dirs:         test
+  doctests:
+    main: Main.hs
+    source-dirs: test/doctests
     ghc-options:
     - -threaded
     - -rtsopts
     - -with-rtsopts=-N
     - -fwrite-ide-info                  
     - -hiedir=.hie
+    dependencies:
+    - base
+    - apitoolkit-server
+    - doctest-parallel >= 0.1
+    - relude >= 1.1.0.0
+    - hspec
+    - hspec-discover
+  tests:
+    main:                Main.hs
+    source-dirs:         test/hspec
     dependencies:
     - base
     - apitoolkit-server

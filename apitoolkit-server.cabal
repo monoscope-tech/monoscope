@@ -228,13 +228,13 @@ executable apitoolkit-server-exe
     , relude >=1.1.0.0
   default-language: Haskell2010
 
-test-suite apitoolkit-server-test
+test-suite doctests
   type: exitcode-stdio-1.0
-  main-is: Test.hs
+  main-is: Main.hs
   other-modules:
       Paths_apitoolkit_server
   hs-source-dirs:
-      test
+      test/doctests
   default-extensions:
       BangPatterns
       BlockArguments
@@ -265,6 +265,52 @@ test-suite apitoolkit-server-test
       UndecidableInstances
       OverloadedRecordDot
   ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches -Wno-missing-kind-signatures -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
+  build-depends:
+      apitoolkit-server
+    , base
+    , doctest-parallel >=0.1
+    , hspec
+    , hspec-discover
+    , relude >=1.1.0.0
+  default-language: Haskell2010
+
+test-suite tests
+  type: exitcode-stdio-1.0
+  main-is: Main.hs
+  other-modules:
+      Paths_apitoolkit_server
+  hs-source-dirs:
+      test/hspec
+  default-extensions:
+      BangPatterns
+      BlockArguments
+      DataKinds
+      DeriveAnyClass
+      DeriveGeneric
+      DerivingStrategies
+      DerivingVia
+      DisambiguateRecordFields
+      ExtendedDefaultRules
+      FlexibleInstances
+      ImportQualifiedPost
+      InstanceSigs
+      LambdaCase
+      MultiParamTypeClasses
+      NamedFieldPuns
+      NoImplicitPrelude
+      OverloadedLabels
+      OverloadedLists
+      OverloadedStrings
+      PatternSynonyms
+      QuasiQuotes
+      RecordWildCards
+      StrictData
+      TypeApplications
+      TypeFamilies
+      TypeOperators
+      UndecidableInstances
+      OverloadedRecordDot
+  ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches -Wno-missing-kind-signatures
   build-depends:
       apitoolkit-server
     , base

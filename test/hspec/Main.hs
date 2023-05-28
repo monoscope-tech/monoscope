@@ -1,6 +1,6 @@
 module Main (main) where
 
-import Relude (IO, Maybe (Just))
+import Relude
 import Spec qualified
 import Test.DocTest (mainFromCabal)
 import Test.Hspec.Formatters (progress)
@@ -13,5 +13,5 @@ import Test.Hspec.Runner (
 main :: IO ()
 main = do
   -- FIXME: figure out why some of the doctests are not working correctly and fix them. Maybe upgrade the dependency first.
-  mainFromCabal "apitoolkit-server" [] -- =<< getArgs
+  -- mainFromCabal "apitoolkit-server" =<< getArgs
   hspecWith defaultConfig{configFormatter = Just progress} Spec.spec

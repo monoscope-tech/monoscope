@@ -1,0 +1,7 @@
+module Doctests (main) where
+
+import Test.DocTest (mainFromCabal)
+import Relude
+
+main :: IO ()
+main = mainFromCabal "your-project" =<< getArgs
