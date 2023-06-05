@@ -35,6 +35,7 @@ library
       Models.Apis.Fields.Query
       Models.Apis.Fields.Types
       Models.Apis.Formats
+      Models.Apis.GenerateSwagger
       Models.Apis.RequestDumps
       Models.Apis.Shapes
       Models.Projects.ProjectApiKeys
@@ -56,6 +57,7 @@ library
       Pages.Endpoints.EndpointComponents
       Pages.Endpoints.EndpointDetails
       Pages.Endpoints.EndpointList
+      Pages.GenerateSwagger
       Pages.Log
       Pages.ManualIngestion
       Pages.Projects.CreateProject

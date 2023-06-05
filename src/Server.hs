@@ -31,6 +31,7 @@ import Pages.Documentation (SaveSwaggerForm, SwaggerForm)
 import Pages.Documentation qualified as Documentation
 import Pages.Endpoints.EndpointDetails qualified as EndpointDetails
 import Pages.Endpoints.EndpointList qualified as EndpointList
+import Pages.GenerateSwagger qualified as GenerateSwagger
 import Pages.Log qualified as Log
 import Pages.ManualIngestion (RequestMessageForm)
 import Pages.ManualIngestion qualified as ManualIngestion
@@ -100,6 +101,7 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "documentation" :> QPT "swagger_id" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "documentation" :> ReqBody '[FormUrlEncoded] SwaggerForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "documentation" :> "save" :> ReqBody '[FormUrlEncoded] SaveSwaggerForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
+    :<|> "p" :> ProjectId :> "generate_swagger" :> Get '[HTML] (Html ())
 
 type PublicAPI =
   "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
@@ -168,6 +170,7 @@ protectedServer sess =
     :<|> Documentation.documentationGetH sess
     :<|> Documentation.documentationPostH sess
     :<|> Documentation.documentationPutH sess
+    :<|> GenerateSwagger.generateGetH sess
 
 publicServer :: ServerT PublicAPI DashboardM
 publicServer =
