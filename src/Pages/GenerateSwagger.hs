@@ -1,20 +1,15 @@
 module Pages.GenerateSwagger (generateGetH) where
 
 import Config
-import Data.Aeson (ToJSON, decodeStrict, encode)
 import Data.Default (def)
-import Data.Text.Encoding qualified as TLE
-import Data.Text.Lazy qualified as TL
 import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 
 import Lucid
+import Models.Apis.GenerateSwagger qualified as GenerateSwagger
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-
-import Data.Aeson (ToJSON (toJSON))
-import Models.Apis.GenerateSwagger qualified as GenerateSwagger
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
 
@@ -25,8 +20,12 @@ generateGetH sess pid = do
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
       endpointStats <- GenerateSwagger.endpointsSwaggerData pid
-      let endpoint_hashes = map (\x -> x.hash) (V.toList endpointStats)
-
+      let endpoint_hashes = V.map (\x -> x.hash) endpointStats
+      shape <- GenerateSwagger.shapeSwaggerData pid endpoint_hashes
+      fields <- GenerateSwagger.fieldsSwaggerData pid endpoint_hashes
+      let field_hashes = V.map (\x -> x.fieldHash) fields
+      formats <- GenerateSwagger.formatSwaggerData pid field_hashes
+      print formats
       pure (project, endpointStats)
 
   let bwconf =
