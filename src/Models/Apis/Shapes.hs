@@ -92,6 +92,7 @@ data SwShape = SwShape
   deriving anyclass (FromRow, ToRow, Default)
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SwShape
   deriving (FromField) via Aeson SwShape
+  deriving anyclass (AE.ToJSON)
 
 shapesByEndpointHash :: Projects.ProjectId -> Vector Text -> PgT.DBT IO (Vector SwShape)
 shapesByEndpointHash pid hashes = query Select q (pid, hashes)

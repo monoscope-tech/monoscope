@@ -3,6 +3,7 @@
 module Models.Apis.Formats (
   Format (..),
   FormatId (..),
+  SwFormat (..),
   formatsByFieldHash,
   formatsByFieldsHashes,
   insertFormatQueryAndParams,
@@ -82,7 +83,21 @@ insertFormatQueryAndParams format = (q, params)
     , MkDBField $ format.hash
     , MkDBField (20 :: Int64) -- NOTE: max number of examples
     ]
-formatsByFieldsHashes :: Projects.ProjectId -> Vector Text -> PgT.DBT IO (Vector Format)
+
+data SwFormat = SwFormat
+  { swFieldHash :: Text
+  , swFieldType :: Fields.FieldTypes
+  , swFieldFormat :: Text
+  , swExamples :: Vector.Vector AE.Value
+  , swHash :: Text
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (FromRow, ToRow)
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SwFormat
+  deriving (FromField) via Aeson SwFormat
+  deriving anyclass (AE.ToJSON)
+
+formatsByFieldsHashes :: Projects.ProjectId -> Vector Text -> PgT.DBT IO (Vector SwFormat)
 formatsByFieldsHashes pid fieldHashes = query Select q (pid, fieldHashes)
  where
   q =

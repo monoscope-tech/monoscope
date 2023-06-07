@@ -2,6 +2,7 @@ module Pages.GenerateSwagger (generateGetH) where
 
 import Config
 import Data.Default (def)
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Vector (Vector)
 import Data.Vector qualified as V
@@ -14,6 +15,9 @@ import Models.Apis.Fields qualified as Fields
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.Shapes qualified as Shapes
 
+import Data.Aeson (object, (.=))
+import Data.Aeson.Key qualified as AEKey
+
 import Models.Projects.Projects qualified as Projects
 
 import Models.Apis.Fields.Query qualified as Fields
@@ -21,7 +25,7 @@ import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
 
-data MergedEndpoints = MergedEndpoints
+data MergedEndpoint = MergedEndpoint
   { urlPath :: Text
   , urlParams :: AE.Value
   , method :: Text
@@ -34,21 +38,22 @@ data MergedEndpoints = MergedEndpoints
 
 data MergedFieldsAndFormats = MergedFieldsAndFormats
   { field :: Fields.SwField
-  , format :: Maybe Formats.Format
+  , format :: Maybe Formats.SwFormat
   }
   deriving stock (Show, Generic)
+  deriving anyclass (AE.ToJSON)
 
-mergeEndpoints :: V.Vector Endpoints.SwEndpoint -> V.Vector Shapes.SwShape -> V.Vector Fields.SwField -> V.Vector Formats.Format -> V.Vector MergedEndpoints
+mergeEndpoints :: V.Vector Endpoints.SwEndpoint -> V.Vector Shapes.SwShape -> V.Vector Fields.SwField -> V.Vector Formats.SwFormat -> V.Vector MergedEndpoint
 mergeEndpoints endpoints shapes fields formats = V.map mergeEndpoint endpoints
  where
-  mergeEndpoint :: Endpoints.SwEndpoint -> MergedEndpoints
+  mergeEndpoint :: Endpoints.SwEndpoint -> MergedEndpoint
   mergeEndpoint endpoint =
     let endpointHash = endpoint.hash
         matchingShapes = V.filter (\shape -> shape.swEndpointHash == endpointHash) shapes
         matchingFields = V.filter (\field -> field.fEndpointHash == endpointHash) fields
         mergedFieldsAndFormats = V.map (`findMatchingFormat` formats) matchingFields
         path = specCompartiblePath endpoint.urlPath
-     in MergedEndpoints
+     in MergedEndpoint
           { urlPath = path
           , urlParams = endpoint.urlParams
           , method = endpoint.method
@@ -58,20 +63,20 @@ mergeEndpoints endpoints shapes fields formats = V.map mergeEndpoint endpoints
           , fields = mergedFieldsAndFormats
           }
 
-findMatchingFormat :: Fields.SwField -> V.Vector Formats.Format -> MergedFieldsAndFormats
+findMatchingFormat :: Fields.SwField -> V.Vector Formats.SwFormat -> MergedFieldsAndFormats
 findMatchingFormat field formats =
   let fieldHash = field.fHash
-      matchingFormat = V.find (\format -> fieldHash == format.fieldHash) formats
+      matchingFormat = V.find (\format -> fieldHash == format.swFieldHash) formats
    in MergedFieldsAndFormats
         { field = field
         , format = matchingFormat
         }
 
--- for Servers part of the swagger
+-- For Servers part of the swagger
 getUniqueHosts :: Vector Endpoints.Endpoint -> [Text]
 getUniqueHosts endpoints = sortNub $ concatMap (\endpoint -> V.toList endpoint.hosts) endpoints
 
--- convert paths to openapi compartible paths
+-- Make urlPaths openapi compartible
 specCompartiblePath :: Text -> Text
 specCompartiblePath path = toText $ intercalate "/" modifiedSegments
  where
@@ -82,6 +87,17 @@ specCompartiblePath path = toText $ intercalate "/" modifiedSegments
     | x == ':' = "{" ++ xs ++ "}"
     | otherwise = segment
   modifySegment "" = ""
+
+groupEndpointsByUrlPath :: [MergedEndpoint] -> AE.Value
+groupEndpointsByUrlPath endpoints =
+  let grouped = Map.fromListWith (++) [(urlPath ep, [ep]) | ep <- endpoints]
+   in object $ map constructUrlPathEntry (Map.toList grouped)
+ where
+  constructUrlPathEntry (urlPath, mergedEndpoints) =
+    AEKey.fromText urlPath .= object (map constructMethodEntry mergedEndpoints)
+
+  constructMethodEntry mergedEndpoint =
+    AEKey.fromText (method mergedEndpoint) .= object ["shape" .= shapes mergedEndpoint, "fields" .= fields mergedEndpoint]
 
 generateGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 generateGetH sess pid = do
