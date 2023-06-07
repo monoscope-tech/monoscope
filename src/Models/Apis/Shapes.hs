@@ -1,6 +1,6 @@
 {-# LANGUAGE TemplateHaskell #-}
 
-module Models.Apis.Shapes (Shape (..), ShapeId (..), shapeIdText, insertShapeQueryAndParam, shapesByEndpointHash) where
+module Models.Apis.Shapes (Shape (..), SwShape (..), ShapeId (..), shapeIdText, insertShapeQueryAndParam, shapesByEndpointHash) where
 
 import Data.Aeson qualified as AE
 import Data.Default (Default)
@@ -62,7 +62,7 @@ insertShapeQueryAndParam shape = (q, params)
   q =
     [sql| 
             INSERT INTO apis.shapes
-            (project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash, status_code)
+            (project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, response_headers_keypaths, hash, status_code)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING; 
           |]
   params =
@@ -78,13 +78,29 @@ insertShapeQueryAndParam shape = (q, params)
     , MkDBField $ shape.statusCode
     ]
 
-shapesByEndpointHash :: Projects.ProjectId -> Vector Text -> PgT.DBT IO (Vector Shape)
+data SwShape = SwShape
+  { swEndpointHash :: Text
+  , swQueryParamsKeypaths :: Vector Text
+  , swRequestBodyKeypaths :: Vector Text
+  , swResponseBodyKeypaths :: Vector Text
+  , swRequestHeadersKeypaths :: Vector Text
+  , swResponseHeadersKeypaths :: Vector Text
+  , swHash :: Text
+  , swStatusCode :: Int
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (FromRow, ToRow, Default)
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SwShape
+  deriving (FromField) via Aeson SwShape
+
+shapesByEndpointHash :: Projects.ProjectId -> Vector Text -> PgT.DBT IO (Vector SwShape)
 shapesByEndpointHash pid hashes = query Select q (pid, hashes)
  where
   q =
     [sql|
-      SELECT id, created_at, updated_at, project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, 
-             response_headers_keypaths, field_hashes, hash, status_code
+      SELECT endpoint_hash sw_endpoint_hash, query_params_keypaths sw_query_params_keypaths, request_body_keypaths sw_request_body_keypaths,
+             response_body_keypaths sw_response_body_keypaths, request_headers_keypaths sw_request_headers_keypaths, 
+             response_headers_keypaths sw_response_headers_keypaths, hash sw_hash,status_code sw_status_code
       FROM apis.shapes
       WHERE project_id = ? AND endpoint_hash = ANY(?)
     |]

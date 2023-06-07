@@ -25,12 +25,11 @@ generateGetH sess pid = do
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
       endpointStats <- Endpoints.endpointsByProjectId pid
-      let endpoint_hashes = V.map (\x -> x.hash) endpointStats
+      let endpoint_hashes = V.map (\enp -> enp.hash) endpointStats
       shapes <- Shapes.shapesByEndpointHash pid endpoint_hashes
       fields <- Fields.fieldsByEndpointHashes pid endpoint_hashes
-      let field_hashes = V.map (\x -> x.hash) fields
+      let field_hashes = V.map (\field -> field.fHash) fields
       formats <- Formats.formatsByFieldsHashes pid field_hashes
-      print formats
       pure (project, endpointStats)
 
   let bwconf =
@@ -42,6 +41,6 @@ generateGetH sess pid = do
 
   pure $ bodyWrapper bwconf $ endpointList endpointStats pid
 
-endpointList :: Vector Endpoints.Endpoint -> Projects.ProjectId -> Html ()
+endpointList :: Vector Endpoints.SwEndpoint -> Projects.ProjectId -> Html ()
 endpointList enps pid = do
   div_ [] $ show enps

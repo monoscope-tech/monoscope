@@ -5,6 +5,7 @@ module Models.Apis.Fields.Types (
   FieldTypes (..),
   FieldCategoryEnum (..),
   FieldId (..),
+  SwField (..),
   fieldIdText,
   parseFieldCategoryEnum,
   groupFieldsByCategory,
@@ -171,6 +172,22 @@ data Field = Field
   deriving
     (FromField)
     via Aeson Field
+
+data SwField = SwField
+  { fFieldType :: FieldTypes
+  , fFieldTypeOverride :: Maybe Text
+  , fFormat :: Text -- SHould fields be linked to the format table via the fieldFormat text or format Id?
+  , fFormatOverride :: Maybe Text
+  , fDescription :: Text
+  , fKeyPath :: Text
+  , fFieldCategory :: FieldCategoryEnum
+  , fHash :: Text
+  , fEndpointHash :: Text
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (FromRow, ToRow, Default)
+  deriving (AE.ToJSON, AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SwField
+  deriving (FromField) via Aeson SwField
 
 instance Ord Field where
   (<=) f1 f2 =

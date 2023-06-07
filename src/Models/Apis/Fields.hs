@@ -3,6 +3,7 @@ module Models.Apis.Fields (
   FieldTypes (..),
   FieldCategoryEnum (..),
   FieldId (..),
+  SwField (..),
   selectFields,
   fieldIdText,
   fieldById,
