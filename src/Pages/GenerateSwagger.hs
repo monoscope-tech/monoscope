@@ -38,8 +38,7 @@ data MergedFieldsAndFormats = MergedFieldsAndFormats
   deriving stock (Show, Generic)
 
 mergeEndpoints :: V.Vector Endpoints.SwEndpoint -> V.Vector Shapes.SwShape -> V.Vector Fields.SwField -> V.Vector Formats.Format -> V.Vector MergedEndpoints
-mergeEndpoints endpoints shapes fields formats =
-  V.map mergeEndpoint endpoints
+mergeEndpoints endpoints shapes fields formats = V.map mergeEndpoint endpoints
  where
   mergeEndpoint :: Endpoints.SwEndpoint -> MergedEndpoints
   mergeEndpoint endpoint =
@@ -65,6 +64,9 @@ findMatchingFormat field formats =
         { field = field
         , format = matchingFormat
         }
+
+getUniqueHosts :: Vector Endpoints.Endpoint -> [Text]
+getUniqueHosts endpoints = sortNub $ concatMap (\endpoint -> V.toList endpoint.hosts) endpoints
 
 generateGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 generateGetH sess pid = do
