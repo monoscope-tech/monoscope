@@ -6,6 +6,7 @@ module Models.Apis.Endpoints (
   Endpoint (..),
   EndpointId (..),
   EndpointRequestStats (..),
+  endpointsByProjectId,
   endpointUrlPath,
   upsertEndpoints,
   endpointRequestStatsByProject,
@@ -201,3 +202,13 @@ endpointByHash :: Projects.ProjectId -> Text -> PgT.DBT IO (Maybe Endpoint)
 endpointByHash pid hash = queryOne Select q (pid, hash)
  where
   q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, akeys(hosts), hash from apis.endpoints where project_id=? AND hash=? |]
+
+endpointsByProjectId :: Projects.ProjectId -> PgT.DBT IO (Vector Endpoint)
+endpointsByProjectId pid = query Select q (Only pid)
+ where
+  q =
+    [sql|
+         SELECT id, created_at, updated_at, project_id, url_path, url_params, method, akeys(hosts), hash
+         FROM apis.endpoints
+         WHERE project_id = ?
+       |]

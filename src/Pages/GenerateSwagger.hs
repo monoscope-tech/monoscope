@@ -7,8 +7,13 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 
 import Lucid
-import Models.Apis.GenerateSwagger qualified as GenerateSwagger
+import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.Fields qualified as Fields
+import Models.Apis.Formats qualified as Formats
+import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
+
+import Models.Apis.Fields.Query qualified as Fields
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
@@ -19,12 +24,12 @@ generateGetH sess pid = do
   (project, endpointStats) <- liftIO $
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      endpointStats <- GenerateSwagger.endpointsSwaggerData pid
+      endpointStats <- Endpoints.endpointsByProjectId pid
       let endpoint_hashes = V.map (\x -> x.hash) endpointStats
-      shape <- GenerateSwagger.shapeSwaggerData pid endpoint_hashes
-      fields <- GenerateSwagger.fieldsSwaggerData pid endpoint_hashes
-      let field_hashes = V.map (\x -> x.fieldHash) fields
-      formats <- GenerateSwagger.formatSwaggerData pid field_hashes
+      shapes <- Shapes.shapesByEndpointHash pid endpoint_hashes
+      fields <- Fields.fieldsByEndpointHashes pid endpoint_hashes
+      let field_hashes = V.map (\x -> x.hash) fields
+      formats <- Formats.formatsByFieldsHashes pid field_hashes
       print formats
       pure (project, endpointStats)
 
@@ -37,6 +42,6 @@ generateGetH sess pid = do
 
   pure $ bodyWrapper bwconf $ endpointList endpointStats pid
 
-endpointList :: Vector GenerateSwagger.Endpoint -> Projects.ProjectId -> Html ()
+endpointList :: Vector Endpoints.Endpoint -> Projects.ProjectId -> Html ()
 endpointList enps pid = do
   div_ [] $ show enps

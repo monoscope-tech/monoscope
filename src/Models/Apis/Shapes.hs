@@ -1,18 +1,20 @@
 {-# LANGUAGE TemplateHaskell #-}
 
-module Models.Apis.Shapes (Shape (..), ShapeId (..), shapeIdText, insertShapeQueryAndParam) where
+module Models.Apis.Shapes (Shape (..), ShapeId (..), shapeIdText, insertShapeQueryAndParam, shapesByEndpointHash) where
 
 import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
+import Database.PostgreSQL.Entity.DBT (QueryNature (..), query)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, Query, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
+import Database.PostgreSQL.Transact qualified as PgT
 import Deriving.Aeson qualified as DAE
 import Models.Projects.Projects qualified as Projects
 import Optics.TH
@@ -75,3 +77,14 @@ insertShapeQueryAndParam shape = (q, params)
     , MkDBField $ shape.hash
     , MkDBField $ shape.statusCode
     ]
+
+shapesByEndpointHash :: Projects.ProjectId -> Vector Text -> PgT.DBT IO (Vector Shape)
+shapesByEndpointHash pid hashes = query Select q (pid, hashes)
+ where
+  q =
+    [sql|
+      SELECT id, created_at, updated_at, project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, 
+             response_headers_keypaths, field_hashes, hash, status_code
+      FROM apis.shapes
+      WHERE project_id = ? AND endpoint_hash = ANY(?)
+    |]

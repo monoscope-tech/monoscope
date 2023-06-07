@@ -4,6 +4,7 @@ module Models.Apis.Formats (
   Format (..),
   FormatId (..),
   formatsByFieldHash,
+  formatsByFieldsHashes,
   insertFormatQueryAndParams,
 ) where
 
@@ -11,6 +12,7 @@ import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
+import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query)
 import Database.PostgreSQL.Entity.Types
@@ -20,6 +22,7 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact (DBT)
+import Database.PostgreSQL.Transact qualified as PgT
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Fields.Types qualified as Fields
 import Models.Projects.Projects qualified as Projects
@@ -79,3 +82,12 @@ insertFormatQueryAndParams format = (q, params)
     , MkDBField $ format.hash
     , MkDBField (20 :: Int64) -- NOTE: max number of examples
     ]
+formatsByFieldsHashes :: Projects.ProjectId -> Vector Text -> PgT.DBT IO (Vector Format)
+formatsByFieldsHashes pid fieldHashes = query Select q (pid, fieldHashes)
+ where
+  q =
+    [sql|
+          SELECT field_hash, field_format, examples
+          FROM apis.formats
+          WHERE project_id = ? AND  field_hash = ANY(?)
+        |]

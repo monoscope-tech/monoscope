@@ -35,7 +35,6 @@ library
       Models.Apis.Fields.Query
       Models.Apis.Fields.Types
       Models.Apis.Formats
-      Models.Apis.GenerateSwagger
       Models.Apis.RequestDumps
       Models.Apis.Shapes
       Models.Projects.ProjectApiKeys
