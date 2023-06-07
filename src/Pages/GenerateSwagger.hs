@@ -47,9 +47,9 @@ mergeEndpoints endpoints shapes fields formats = V.map mergeEndpoint endpoints
         matchingShapes = V.filter (\shape -> shape.swEndpointHash == endpointHash) shapes
         matchingFields = V.filter (\field -> field.fEndpointHash == endpointHash) fields
         mergedFieldsAndFormats = V.map (`findMatchingFormat` formats) matchingFields
-        spectCompartiblePath = endpoint.urlPath
+        path = specCompartiblePath endpoint.urlPath
      in MergedEndpoints
-          { urlPath = spectCompartiblePath
+          { urlPath = path
           , urlParams = endpoint.urlParams
           , method = endpoint.method
           , hosts = endpoint.hosts
@@ -72,8 +72,8 @@ getUniqueHosts :: Vector Endpoints.Endpoint -> [Text]
 getUniqueHosts endpoints = sortNub $ concatMap (\endpoint -> V.toList endpoint.hosts) endpoints
 
 -- convert paths to openapi compartible paths
-spectCompatiblePath :: Text -> Text
-spectCompatiblePath path = toText $ intercalate "/" modifiedSegments
+specCompartiblePath :: Text -> Text
+specCompartiblePath path = toText $ intercalate "/" modifiedSegments
  where
   segments = T.splitOn "/" path
   modifiedSegments = map (modifySegment . toString) segments
