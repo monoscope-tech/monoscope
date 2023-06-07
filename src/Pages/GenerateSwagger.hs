@@ -2,6 +2,7 @@ module Pages.GenerateSwagger (generateGetH) where
 
 import Config
 import Data.Default (def)
+import Data.Text qualified as T
 import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
@@ -46,8 +47,9 @@ mergeEndpoints endpoints shapes fields formats = V.map mergeEndpoint endpoints
         matchingShapes = V.filter (\shape -> shape.swEndpointHash == endpointHash) shapes
         matchingFields = V.filter (\field -> field.fEndpointHash == endpointHash) fields
         mergedFieldsAndFormats = V.map (`findMatchingFormat` formats) matchingFields
+        spectCompartiblePath = endpoint.urlPath
      in MergedEndpoints
-          { urlPath = endpoint.urlPath
+          { urlPath = spectCompartiblePath
           , urlParams = endpoint.urlParams
           , method = endpoint.method
           , hosts = endpoint.hosts
@@ -65,8 +67,21 @@ findMatchingFormat field formats =
         , format = matchingFormat
         }
 
+-- for Servers part of the swagger
 getUniqueHosts :: Vector Endpoints.Endpoint -> [Text]
 getUniqueHosts endpoints = sortNub $ concatMap (\endpoint -> V.toList endpoint.hosts) endpoints
+
+-- convert paths to openapi compartible paths
+spectCompatiblePath :: Text -> Text
+spectCompatiblePath path = toText $ intercalate "/" modifiedSegments
+ where
+  segments = T.splitOn "/" path
+  modifiedSegments = map (modifySegment . toString) segments
+  modifySegment :: String -> String
+  modifySegment segment@(x : xs)
+    | x == ':' = "{" ++ xs ++ "}"
+    | otherwise = segment
+  modifySegment "" = ""
 
 generateGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 generateGetH sess pid = do
