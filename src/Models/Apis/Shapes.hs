@@ -102,5 +102,5 @@ shapesByEndpointHash pid hashes = query Select q (pid, hashes)
              response_body_keypaths sw_response_body_keypaths, request_headers_keypaths sw_request_headers_keypaths, 
              response_headers_keypaths sw_response_headers_keypaths, hash sw_hash,status_code sw_status_code
       FROM apis.shapes
-      WHERE project_id = ? AND endpoint_hash = ANY(?) limit 5
+      WHERE project_id = ? AND endpoint_hash = ANY(?)
     |]

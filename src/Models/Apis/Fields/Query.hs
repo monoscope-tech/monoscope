@@ -52,5 +52,5 @@ fieldsByEndpointHashes pid hashes = query Select q (pid, hashes)
              description f_description, key_path f_key_path, field_category f_field_category,
              hash f_hash, format_override f_format_override, endpoint_hash f_endpoint_hash
       FROM apis.fields
-      WHERE project_id = ? AND endpoint_hash = ANY(?) limit 5
+      WHERE project_id = ? AND endpoint_hash = ANY(?)
     |]
