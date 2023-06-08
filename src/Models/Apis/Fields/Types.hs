@@ -180,7 +180,6 @@ data SwField = SwField
   , fFormatOverride :: Maybe Text
   , fDescription :: Text
   , fKeyPath :: Text
-  , fFieldCategory :: FieldCategoryEnum
   , fHash :: Text
   , fEndpointHash :: Text
   }

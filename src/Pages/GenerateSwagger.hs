@@ -9,6 +9,7 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 
 import Data.Aeson qualified as AE
+import Data.Aeson.Types qualified as AET
 import Lucid
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields qualified as Fields
@@ -73,7 +74,7 @@ findMatchingFormat field formats =
         }
 
 -- For Servers part of the swagger
-getUniqueHosts :: Vector Endpoints.Endpoint -> [Text]
+getUniqueHosts :: Vector Endpoints.SwEndpoint -> [Text]
 getUniqueHosts endpoints = sortNub $ concatMap (\endpoint -> V.toList endpoint.hosts) endpoints
 
 -- Make urlPaths openapi compartible
@@ -97,7 +98,13 @@ groupEndpointsByUrlPath endpoints =
     AEKey.fromText urlPath .= object (map constructMethodEntry mergedEndpoints)
 
   constructMethodEntry mergedEndpoint =
-    AEKey.fromText (method mergedEndpoint) .= object ["shape" .= shapes mergedEndpoint, "fields" .= fields mergedEndpoint]
+    AEKey.fromText (method mergedEndpoint) .= object ["responses" .= groupShapesByStatusCode (shapes mergedEndpoint)]
+groupShapesByStatusCode :: V.Vector Shapes.SwShape -> AE.Value
+groupShapesByStatusCode shapes =
+  object $ constructStatusCodeEntry (V.toList shapes)
+
+constructStatusCodeEntry :: [Shapes.SwShape] -> [AET.Pair]
+constructStatusCodeEntry shapes = map (\shape -> show shape.swStatusCode .= shape) shapes
 
 generateGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 generateGetH sess pid = do
@@ -107,14 +114,15 @@ generateGetH sess pid = do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
       endpoints <- Endpoints.endpointsByProjectId pid
       let endpoint_hashes = V.map (\enp -> enp.hash) endpoints
-      print endpoints
       shapes <- Shapes.shapesByEndpointHash pid endpoint_hashes
       fields <- Fields.fieldsByEndpointHashes pid endpoint_hashes
       let field_hashes = V.map (\field -> field.fHash) fields
       formats <- Formats.formatsByFieldsHashes pid field_hashes
       let merged = mergeEndpoints endpoints shapes fields formats
-      print merged
-      pure (project, endpoints)
+      let hosts = getUniqueHosts endpoints
+      let paths = groupEndpointsByUrlPath $ V.toList merged
+      let minimalJson = object ["Info" .= "Information about the server and stuff", "Servers" .= hosts, "paths" .= paths, "components" .= object ["schema" .= "Some schemas"]]
+      pure (project, minimalJson)
 
   let bwconf =
         (def :: BWConfig)
@@ -125,6 +133,6 @@ generateGetH sess pid = do
 
   pure $ bodyWrapper bwconf $ endpointList endpointStats pid
 
-endpointList :: Vector Endpoints.SwEndpoint -> Projects.ProjectId -> Html ()
+endpointList :: AE.Value -> Projects.ProjectId -> Html ()
 endpointList enps pid = do
-  div_ [] $ show enps
+  div_ [] $ toHtml (AE.encode enps)
