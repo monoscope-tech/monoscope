@@ -80,16 +80,19 @@ convertToJson :: [Text] -> Value
 convertToJson items = convertToJson' groups
  where
   groups = processItems items Map.empty
-  processGroup :: (Text, [Text]) -> Value -> Value
-  processGroup (grp, subGroups) json =
+  processGroup :: (Text, [Text]) -> Map.Map AEKey.Key Value -> Map.Map AEKey.Key Value
+  processGroup (grp, subGroups) parsedMap =
     let conv = convertToJson subGroups
         updatedJson = if null subGroups then Null else conv
-        key = AEKeyM.singleton (AEKey.fromText grp) updatedJson
-     in Object $ AEKeyM.fromMap $ Map.unionWith key (AEKeyM.fromMapText json)
-  objectValue :: Value
-  objectValue = object []
+        updateMap = Map.insert (AEKey.fromText grp) updatedJson parsedMap
+     in updateMap
+  objectValue :: Map.Map AEKey.Key Value
+  objectValue = Map.empty
   convertToJson' :: Map.Map Text [Text] -> Value
-  convertToJson' grps = foldr processGroup objectValue (Map.toList grps)
+  convertToJson' grps = cc
+   where
+    json = foldr processGroup objectValue (Map.toList grps)
+    cc = AEKeyM.fromMap json
 
 -----------end
 
