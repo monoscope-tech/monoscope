@@ -1,6 +1,7 @@
 module Pages.GenerateSwagger (generateGetH) where
 
 import Config
+import Data.Aeson (Value (Object), object, (.=))
 import Data.Default (def)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -8,8 +9,11 @@ import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 
+import Data.Aeson ()
 import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as AEKeyM
 import Data.Aeson.Types qualified as AET
+import Data.HashMap.Lazy qualified as HML
 import Lucid
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields qualified as Fields
@@ -46,10 +50,6 @@ data MergedFieldsAndFormats = MergedFieldsAndFormats
   deriving anyclass (AE.ToJSON)
 
 -- Function to generate Swagger schema template from field paths
-substringIfDot :: Text -> Text
-substringIfDot item
-  | T.head item == '.' = T.tail item
-  | otherwise = item
 
 splitItem :: Text -> [Text]
 splitItem = T.splitOn "."
@@ -81,11 +81,11 @@ convertToJson items = convertToJson' groups
  where
   groups = processItems items Map.empty
   processGroup :: (Text, [Text]) -> Value -> Value
-  processGroup (grp, subGroups) val =
+  processGroup (grp, subGroups) json =
     let conv = convertToJson subGroups
         updatedJson = if null subGroups then Null else conv
-     in object [AEKey.fromText grp .= updatedJson] <> val
-
+        key = AEKeyM.singleton (AEKey.fromText grp) updatedJson
+     in Object $ AEKeyM.fromMap $ Map.unionWith key (AEKeyM.fromMapText json)
   objectValue :: Value
   objectValue = object []
   convertToJson' :: Map.Map Text [Text] -> Value
@@ -170,6 +170,8 @@ generateGetH sess pid = do
       let merged = mergeEndpoints endpoints shapes fields formats
       let hosts = getUniqueHosts endpoints
       let paths = groupEndpointsByUrlPath $ V.toList merged
+      let ke = V.head shapes
+      print $ convertToJson (V.toList ke.swResponseBodyKeypaths)
       let minimalJson = object ["info" .= "Information about the server and stuff", "servers" .= object ["url" .= hosts], "paths" .= paths, "components" .= object ["schema" .= "Some schemas"]]
       pure (project, minimalJson)
 
