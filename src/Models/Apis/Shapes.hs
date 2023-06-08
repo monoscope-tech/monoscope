@@ -81,10 +81,10 @@ insertShapeQueryAndParam shape = (q, params)
 data SwShape = SwShape
   { swEndpointHash :: Text
   , swQueryParamsKeypaths :: Vector Text
-  , swRequestBodyKeypaths :: Vector Text
-  , swResponseBodyKeypaths :: Vector Text
   , swRequestHeadersKeypaths :: Vector Text
   , swResponseHeadersKeypaths :: Vector Text
+  , swRequestBodyKeypaths :: Vector Text
+  , swResponseBodyKeypaths :: Vector Text
   , swHash :: Text
   , swStatusCode :: Int
   }

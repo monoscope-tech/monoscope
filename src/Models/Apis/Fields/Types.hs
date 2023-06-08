@@ -175,11 +175,7 @@ data Field = Field
 
 data SwField = SwField
   { fFieldType :: FieldTypes
-  , fFieldTypeOverride :: Maybe Text
-  , fFormat :: Text -- SHould fields be linked to the format table via the fieldFormat text or format Id?
-  , fFormatOverride :: Maybe Text
   , fDescription :: Text
-  , fKeyPath :: Text
   , fHash :: Text
   , fEndpointHash :: Text
   }

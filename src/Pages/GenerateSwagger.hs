@@ -16,9 +16,10 @@ import Models.Apis.Fields qualified as Fields
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.Shapes qualified as Shapes
 
-import Data.Aeson (object, (.=))
+-- import Data.Aeson (object, (.=))
 import Data.Aeson.Key qualified as AEKey
 
+import Data.Aeson
 import Models.Projects.Projects qualified as Projects
 
 import Models.Apis.Fields.Query qualified as Fields
@@ -43,6 +44,54 @@ data MergedFieldsAndFormats = MergedFieldsAndFormats
   }
   deriving stock (Show, Generic)
   deriving anyclass (AE.ToJSON)
+
+-- Function to generate Swagger schema template from field paths
+substringIfDot :: Text -> Text
+substringIfDot item
+  | T.head item == '.' = T.tail item
+  | otherwise = item
+
+splitItem :: Text -> [Text]
+splitItem = T.splitOn "."
+
+processItem :: Text -> Map.Map Text [Text] -> Map.Map Text [Text]
+processItem item groups =
+  let splitItems = splitItem item
+      root = fromMaybe "" (viaNonEmpty head splitItems)
+      remainingItems =
+        if length splitItems > 1
+          then
+            if fromMaybe "" (viaNonEmpty head splitItems) == "[]"
+              then fromMaybe [] (viaNonEmpty tail (fromMaybe [] (viaNonEmpty tail splitItems)))
+              else fromMaybe [] (viaNonEmpty tail splitItems)
+          else []
+      updatedGroups = Map.insertWith (++) root remainingItems groups
+   in if Map.notMember root groups
+        then Map.insert root [] updatedGroups
+        else updatedGroups
+
+processItems :: [Text] -> Map.Map Text [Text] -> Map.Map Text [Text]
+processItems [] groups = groups
+processItems (x : xs) groups = processItems xs updatedGroups
+ where
+  updatedGroups = processItem x groups
+
+convertToJson :: [Text] -> Value
+convertToJson items = convertToJson' groups
+ where
+  groups = processItems items Map.empty
+  processGroup :: (Text, [Text]) -> Value -> Value
+  processGroup (grp, subGroups) val =
+    let conv = convertToJson subGroups
+        updatedJson = if null subGroups then Null else conv
+     in object [AEKey.fromText grp .= updatedJson] <> val
+
+  objectValue :: Value
+  objectValue = object []
+  convertToJson' :: Map.Map Text [Text] -> Value
+  convertToJson' grps = foldr processGroup objectValue (Map.toList grps)
+
+-----------end
 
 mergeEndpoints :: V.Vector Endpoints.SwEndpoint -> V.Vector Shapes.SwShape -> V.Vector Fields.SwField -> V.Vector Formats.SwFormat -> V.Vector MergedEndpoint
 mergeEndpoints endpoints shapes fields formats = V.map mergeEndpoint endpoints
@@ -104,7 +153,7 @@ groupShapesByStatusCode shapes =
   object $ constructStatusCodeEntry (V.toList shapes)
 
 constructStatusCodeEntry :: [Shapes.SwShape] -> [AET.Pair]
-constructStatusCodeEntry shapes = map (\shape -> show shape.swStatusCode .= shape) shapes
+constructStatusCodeEntry shapes = map (\shape -> show shape.swStatusCode .= object ["content" .= object ["*/*" .= shape]]) shapes
 
 generateGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 generateGetH sess pid = do
@@ -121,7 +170,7 @@ generateGetH sess pid = do
       let merged = mergeEndpoints endpoints shapes fields formats
       let hosts = getUniqueHosts endpoints
       let paths = groupEndpointsByUrlPath $ V.toList merged
-      let minimalJson = object ["Info" .= "Information about the server and stuff", "Servers" .= hosts, "paths" .= paths, "components" .= object ["schema" .= "Some schemas"]]
+      let minimalJson = object ["info" .= "Information about the server and stuff", "servers" .= object ["url" .= hosts], "paths" .= paths, "components" .= object ["schema" .= "Some schemas"]]
       pure (project, minimalJson)
 
   let bwconf =
