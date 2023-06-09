@@ -153,6 +153,7 @@ library:
     - nyan-interpolation
     - pretty-simple
     - tmp-postgres
+    - directory
     # - doctest-parallel
 
 executables:
