@@ -55,17 +55,21 @@ processItem :: T.Text -> Map.Map T.Text [T.Text] -> Map.Map T.Text [T.Text]
 processItem item groups =
   let splitItems = T.splitOn "." item
       c = fromMaybe "" (viaNonEmpty head splitItems)
-      root = toText $ dropWhile (== ".") (toString c)
+      root = toText $ dropWhile (== '.') (toString c)
       remainingItems =
         if length splitItems > 1
           then
             if fromMaybe "" (viaNonEmpty head splitItems) == "[*]"
               then T.intercalate "." $ fromMaybe [] (viaNonEmpty tail (fromMaybe [] (viaNonEmpty tail splitItems)))
               else T.intercalate "." $ fromMaybe [] (viaNonEmpty tail splitItems)
-          else []
+          else ""
       updatedGroups = case Map.lookup root groups of
-        Just items -> Map.insert root (items ++ [remainingItems]) groups
-        Nothing -> Map.insert root [remainingItems] groups
+        Just items -> case remainingItems of
+          "" -> groups
+          val -> Map.insert root (items ++ [remainingItems]) groups
+        Nothing -> case remainingItems of
+          "" -> Map.insert root [] groups
+          val -> Map.insert root [remainingItems] groups
    in updatedGroups
 
 processItems :: [T.Text] -> Map.Map T.Text [T.Text] -> Map.Map T.Text [T.Text]
@@ -74,20 +78,21 @@ processItems (x : xs) groups = processItems xs updatedGroups
  where
   updatedGroups = processItem x groups
 
-convertToJson :: [T.Text] -> AE.Object
-convertToJson items = convertToJson' groups
- where
-  groups = processItems items Map.empty
-  processGroup :: (T.Text, [T.Text]) -> Map.Map AE.Key AE.Object -> Map.Map AE.Key AE.Object
-  processGroup (grp, subGroups) parsedMap =
-    let conv = convertToJson subGroups
-        updatedJson = if null subGroups then AET.emptyObject else AE.Object (HM.singleton "items" (AE.toJSON conv))
-        updateMap = Map.insert (AE.String grp) updatedJson parsedMap
-     in updateMap
-  objectValue :: Map.Map AE.Key AE.Object
-  objectValue = Map.empty
-  convertToJson' :: Map.Map T.Text [T.Text] -> AE.Object
-  convertToJson' grps = AE.Object (foldr processGroup objectValue (Map.toList grps))
+-- TODO: fix this function
+-- convertToJson :: [T.Text] -> AE.Object
+-- convertToJson items = convertToJson' groups
+--  where
+--   groups = processItems items Map.empty
+--   processGroup :: (T.Text, [T.Text]) -> Map.Map AE.Key AE.Object -> Map.Map AE.Key AE.Object
+--   processGroup (grp, subGroups) parsedMap =
+--     let conv = convertToJson subGroups
+--         updatedJson = if null subGroups then AET.emptyObject else AE.Object (HM.singleton "items" (AE.toJSON conv))
+--         updateMap = Map.insert (AE.String grp) updatedJson parsedMap
+--      in updateMap
+--   objectValue :: Map.Map AE.Key AE.Object
+--   objectValue = Map.empty
+--   convertToJson' :: Map.Map T.Text [T.Text] -> AE.Object
+--   convertToJson' grps = AE.Object (foldr processGroup objectValue (Map.toList grps))
 
 -----------end
 
@@ -168,8 +173,6 @@ generateGetH sess pid = do
       let merged = mergeEndpoints endpoints shapes fields formats
       let hosts = getUniqueHosts endpoints
       let paths = groupEndpointsByUrlPath $ V.toList merged
-      let ke = V.head shapes
-      print $ convertToJson (V.toList ke.swResponseBodyKeypaths)
       let minimalJson = object ["info" .= "Information about the server and stuff", "servers" .= object ["url" .= hosts], "paths" .= paths, "components" .= object ["schema" .= "Some schemas"]]
       pure (project, minimalJson)
 
