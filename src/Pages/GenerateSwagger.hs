@@ -79,20 +79,19 @@ processItems (x : xs) groups = processItems xs updatedGroups
   updatedGroups = processItem x groups
 
 -- TODO: fix this function
--- convertToJson :: [T.Text] -> AE.Object
--- convertToJson items = convertToJson' groups
---  where
---   groups = processItems items Map.empty
---   processGroup :: (T.Text, [T.Text]) -> Map.Map AE.Key AE.Object -> Map.Map AE.Key AE.Object
---   processGroup (grp, subGroups) parsedMap =
---     let conv = convertToJson subGroups
---         updatedJson = if null subGroups then AET.emptyObject else AE.Object (HM.singleton "items" (AE.toJSON conv))
---         updateMap = Map.insert (AE.String grp) updatedJson parsedMap
---      in updateMap
---   objectValue :: Map.Map AE.Key AE.Object
---   objectValue = Map.empty
---   convertToJson' :: Map.Map T.Text [T.Text] -> AE.Object
---   convertToJson' grps = AE.Object (foldr processGroup objectValue (Map.toList grps))
+convertToJson :: [T.Text] -> Value
+convertToJson items = convertToJson' groups
+ where
+  groups = processItems items Map.empty
+  processGroup :: (T.Text, [T.Text]) -> Value -> Value
+  processGroup (grp, subGroups) parsedValue =
+    let updatedJson = if null subGroups then Null else convertToJson subGroups
+        updateMap = object [AEKey.fromText grp .= updatedJson] <> parsedValue -- How do I join these two values
+     in updateMap
+  objectValue :: Value
+  objectValue = object []
+  convertToJson' :: Map.Map T.Text [T.Text] -> Value
+  convertToJson' grps = foldr processGroup objectValue (Map.toList grps)
 
 -----------end
 
