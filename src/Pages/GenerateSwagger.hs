@@ -78,6 +78,10 @@ processItems (x : xs) groups = processItems xs updatedGroups
  where
   updatedGroups = processItem x groups
 
+mergeObjects :: Value -> Value -> Maybe Value
+mergeObjects (Object obj1) (Object obj2) = Just $ Object (HM.union (Object obj1) (Object obj2))
+mergeObjects _ _ = Nothing
+
 -- TODO: fix this function
 convertToJson :: [T.Text] -> Value
 convertToJson items = convertToJson' groups
@@ -86,7 +90,10 @@ convertToJson items = convertToJson' groups
   processGroup :: (T.Text, [T.Text]) -> Value -> Value
   processGroup (grp, subGroups) parsedValue =
     let updatedJson = if null subGroups then Null else convertToJson subGroups
-        updateMap = object [AEKey.fromText grp .= updatedJson] <> parsedValue -- How do I join these two values
+        ob = object [AEKey.fromText grp .= updatedJson]
+        updateMap = case mergeObjects ob parsedValue of
+          Just obj -> obj
+          Nothing -> object []
      in updateMap
   objectValue :: Value
   objectValue = object []
