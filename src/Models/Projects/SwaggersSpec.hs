@@ -14,18 +14,9 @@ import Models.Projects.Swaggers
 import Models.Users.Users (UserId (..))
 import Relude
 import Test.Hspec
-import Test.Hspec.QuickCheck
-import Database.Postgres.Temp qualified as TmpPostgres
-import Database.PostgreSQL.Simple (Connection, connectPostgreSQL, close)
-import Data.Pool (Pool, createPool)
-import Control.Exception (throwIO)
-import Database.Postgres.Temp (withDbCache, defaultConfig, cacheConfig, cacheAction, withConfig, toConnectionString, withSnapshot, DirectoryType (Temporary), snapshotConfig)
-import Database.PostgreSQL.Simple.Migration qualified as Migrations
-import Database.PostgreSQL.Simple.Migration
 import Database.PostgreSQL.Entity.DBT qualified as DBT
-import Debug.Pretty.Simple (pTraceShowM)
 import Data.Maybe
-import System.Directory
+import Pkg.TmpPg qualified as TmpPg
 
 -- Helper function to create a Swagger value for testing
 createSwagger ::  ProjectId -> UserId -> Value -> DBT.DBT IO Swagger
@@ -44,47 +35,24 @@ createSwagger projectId createdBy swaggerJson = do
   addSwagger swagger
   pure swagger
 
--- Setup function that spins up a database with the db migrations already executed.
--- source: https://jfischoff.github.io/blog/keeping-database-tests-fast.html
-withSetup :: (Pool Connection -> IO ()) -> IO ()
-withSetup f = do
-  putStrLn "In setup 🔥 bb"
-  -- Helper to throw exceptions
-  let throwE x = either throwIO pure =<< x
-
-  throwE $ withDbCache $ \dbCache -> traceShowM "In with dbcache 🔥" >> withConfig (cacheConfig dbCache) $ \db -> do
-    pt <- liftIO $ getCurrentDirectory 
-    putStrLn "In with config 🔥"
-    putStrLn $ show pt
-    conn <- liftIO $ connectPostgreSQL (TmpPostgres.toConnectionString db)
-    initializationRes <- Migrations.runMigration conn Migrations.defaultOptions MigrationInitialization
-    putStrLn $ show initializationRes
-    putStrLn $ "after conn"  
-    -- putStrLn $ TmpPostgres.toConnectionString db
-    migrationRes <- Migrations.runMigration conn Migrations.defaultOptions $ MigrationDirectory ("./static/migrations" :: FilePath)
-    putStrLn $ "migration result: " <> show migrationRes
-    x <- withSnapshot db $ \snapshot -> do
-      withConfig (snapshotConfig snapshot) $ \migratedDb -> f =<< createPool (connectPostgreSQL $ toConnectionString migratedDb) close 2 60 10
-    pTraceShowM x 
-    pass
-
-
 spec :: Spec
--- spec = beforeAll_ resetDatabase $ describe "Models.Projects.Swaggers" $ do
-spec = aroundAll withSetup $ describe "Models.Projects.Swaggers" $ do
+spec = aroundAll TmpPg.withSetup $ describe "Models.Projects.Swaggers" $ do
   describe "addSwagger" $
     it "should insert a new Swagger into the database" $ \pool -> do
+      
+
       projectId <- ProjectId <$> liftIO UUIDV4.nextRandom
       createdBy <- UserId <$> liftIO UUIDV4.nextRandom
       swaggerId <- SwaggerId <$> liftIO UUIDV4.nextRandom
+      currentTime <- liftIO getZonedTime
       let swaggerJson = object ["info" .= object ["title" .= "API"]]
       let swagger =
             Swagger
               { Models.Projects.Swaggers.id = swaggerId
               , projectId = projectId
               , createdBy = createdBy
-              , createdAt = undefined
-              , updatedAt = undefined
+              , createdAt = currentTime 
+              , updatedAt = currentTime 
               , swaggerJson = swaggerJson
               }
       

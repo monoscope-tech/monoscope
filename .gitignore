@@ -14,3 +14,5 @@ apitoolkit-server-exe
 gha-creds-*.json
 .DS_Store
 **/*/.DS_Store
+tmp/
+.tmp/
