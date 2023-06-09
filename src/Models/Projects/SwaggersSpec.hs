@@ -25,6 +25,7 @@ import Database.PostgreSQL.Simple.Migration
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Debug.Pretty.Simple (pTraceShowM)
 import Data.Maybe
+import System.Directory
 
 -- Helper function to create a Swagger value for testing
 createSwagger ::  ProjectId -> UserId -> Value -> DBT.DBT IO Swagger
@@ -47,13 +48,17 @@ createSwagger projectId createdBy swaggerJson = do
 -- source: https://jfischoff.github.io/blog/keeping-database-tests-fast.html
 withSetup :: (Pool Connection -> IO ()) -> IO ()
 withSetup f = do
-  putStrLn "In setup 🔥"
+  putStrLn "In setup 🔥 bb"
   -- Helper to throw exceptions
   let throwE x = either throwIO pure =<< x
 
   throwE $ withDbCache $ \dbCache -> traceShowM "In with dbcache 🔥" >> withConfig (cacheConfig dbCache) $ \db -> do
+    pt <- liftIO $ getCurrentDirectory 
     putStrLn "In with config 🔥"
+    putStrLn $ show pt
     conn <- liftIO $ connectPostgreSQL (TmpPostgres.toConnectionString db)
+    initializationRes <- Migrations.runMigration conn Migrations.defaultOptions MigrationInitialization
+    putStrLn $ show initializationRes
     putStrLn $ "after conn"  
     -- putStrLn $ TmpPostgres.toConnectionString db
     migrationRes <- Migrations.runMigration conn Migrations.defaultOptions $ MigrationDirectory ("./static/migrations" :: FilePath)
