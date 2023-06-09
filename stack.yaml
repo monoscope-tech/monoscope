@@ -99,7 +99,7 @@ extra-deps:
     subdirs:
       - .
   - git: https://github.com/tonyalaribe/tmp-postgres
-    branch: support-homebrew-initdb
+    # branch: support-homebrew-initdb
     commit: 92bf7825e90dddb9e77758f9819295ecffc0f420 
     subdirs:
       - .
