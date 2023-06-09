@@ -13,7 +13,7 @@ import Data.Aeson ()
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKeyM
 import Data.Aeson.Types qualified as AET
-import Data.HashMap.Lazy qualified as HML
+import Data.HashMap.Strict qualified as HM
 import Lucid
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields qualified as Fields
@@ -51,48 +51,43 @@ data MergedFieldsAndFormats = MergedFieldsAndFormats
 
 -- Function to generate Swagger schema template from field paths
 
-splitItem :: Text -> [Text]
-splitItem = T.splitOn "."
-
-processItem :: Text -> Map.Map Text [Text] -> Map.Map Text [Text]
+processItem :: T.Text -> Map.Map T.Text [T.Text] -> Map.Map T.Text [T.Text]
 processItem item groups =
-  let splitItems = splitItem item
-      root = fromMaybe "" (viaNonEmpty head splitItems)
+  let splitItems = T.splitOn "." item
+      c = fromMaybe "" (viaNonEmpty head splitItems)
+      root = toText $ dropWhile (== ".") (toString c)
       remainingItems =
         if length splitItems > 1
           then
-            if fromMaybe "" (viaNonEmpty head splitItems) == "[]"
-              then fromMaybe [] (viaNonEmpty tail (fromMaybe [] (viaNonEmpty tail splitItems)))
-              else fromMaybe [] (viaNonEmpty tail splitItems)
+            if fromMaybe "" (viaNonEmpty head splitItems) == "[*]"
+              then T.intercalate "." $ fromMaybe [] (viaNonEmpty tail (fromMaybe [] (viaNonEmpty tail splitItems)))
+              else T.intercalate "." $ fromMaybe [] (viaNonEmpty tail splitItems)
           else []
-      updatedGroups = Map.insertWith (++) root remainingItems groups
-   in if Map.notMember root groups
-        then Map.insert root [] updatedGroups
-        else updatedGroups
+      updatedGroups = case Map.lookup root groups of
+        Just items -> Map.insert root (items ++ [remainingItems]) groups
+        Nothing -> Map.insert root [remainingItems] groups
+   in updatedGroups
 
-processItems :: [Text] -> Map.Map Text [Text] -> Map.Map Text [Text]
+processItems :: [T.Text] -> Map.Map T.Text [T.Text] -> Map.Map T.Text [T.Text]
 processItems [] groups = groups
 processItems (x : xs) groups = processItems xs updatedGroups
  where
   updatedGroups = processItem x groups
 
-convertToJson :: [Text] -> Value
+convertToJson :: [T.Text] -> AE.Object
 convertToJson items = convertToJson' groups
  where
   groups = processItems items Map.empty
-  processGroup :: (Text, [Text]) -> Map.Map AEKey.Key Value -> Map.Map AEKey.Key Value
+  processGroup :: (T.Text, [T.Text]) -> Map.Map AE.Key AE.Object -> Map.Map AE.Key AE.Object
   processGroup (grp, subGroups) parsedMap =
     let conv = convertToJson subGroups
-        updatedJson = if null subGroups then Null else conv
-        updateMap = Map.insert (AEKey.fromText grp) updatedJson parsedMap
+        updatedJson = if null subGroups then AET.emptyObject else AE.Object (HM.singleton "items" (AE.toJSON conv))
+        updateMap = Map.insert (AE.String grp) updatedJson parsedMap
      in updateMap
-  objectValue :: Map.Map AEKey.Key Value
+  objectValue :: Map.Map AE.Key AE.Object
   objectValue = Map.empty
-  convertToJson' :: Map.Map Text [Text] -> Value
-  convertToJson' grps = cc
-   where
-    json = foldr processGroup objectValue (Map.toList grps)
-    cc = AEKeyM.fromMap json
+  convertToJson' :: Map.Map T.Text [T.Text] -> AE.Object
+  convertToJson' grps = AE.Object (foldr processGroup objectValue (Map.toList grps))
 
 -----------end
 
