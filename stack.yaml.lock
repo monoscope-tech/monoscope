@@ -258,6 +258,19 @@ packages:
     commit: 60481132b229d22eda8efcd3392dd1df237bd968
     git: https://github.com/saurabhnanda/odd-jobs
     subdir: .
+- completed:
+    commit: 92bf7825e90dddb9e77758f9819295ecffc0f420
+    git: https://github.com/tonyalaribe/tmp-postgres
+    name: tmp-postgres
+    pantry-tree:
+      sha256: 2ad71c0271451fe1111d3a95b3d2b6ef5034c973e331836582a95b68d00f5427
+      size: 1616
+    subdir: .
+    version: 1.35.0.0
+  original:
+    commit: 92bf7825e90dddb9e77758f9819295ecffc0f420
+    git: https://github.com/tonyalaribe/tmp-postgres
+    subdir: .
 snapshots:
 - completed:
     sha256: b0735b9986f57ed36b99a704f3cf1d839e85345db36bc5e7d25215270e698746

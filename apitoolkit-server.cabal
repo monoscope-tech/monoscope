@@ -66,6 +66,7 @@ library
       Pkg.Mail
       Pkg.Ortto
       Pkg.Parser
+      Pkg.TmpPg
       ProcessMessage
       RequestMessages
       RequestMessagesSpec
