@@ -87,6 +87,7 @@ data SwShape = SwShape
   , swResponseBodyKeypaths :: Vector Text
   , swHash :: Text
   , swStatusCode :: Int
+  , swFieldHashes :: Vector Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, Default)
@@ -101,7 +102,7 @@ shapesByEndpointHash pid hashes = query Select q (pid, hashes)
     [sql|
       SELECT endpoint_hash sw_endpoint_hash, query_params_keypaths sw_query_params_keypaths, request_body_keypaths sw_request_body_keypaths,
              response_body_keypaths sw_response_body_keypaths, request_headers_keypaths sw_request_headers_keypaths, 
-             response_headers_keypaths sw_response_headers_keypaths, hash sw_hash,status_code sw_status_code
+             response_headers_keypaths sw_response_headers_keypaths, hash sw_hash,status_code sw_status_code,field_hashes sw_field_hashes 
       FROM apis.shapes
       WHERE project_id = ? AND endpoint_hash = ANY(?)
     |]

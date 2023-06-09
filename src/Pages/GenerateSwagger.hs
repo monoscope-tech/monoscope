@@ -4,7 +4,6 @@ import Config
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
 import Data.Default (def)
-import Data.HashMap.Strict qualified as HashMap
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Vector (Vector)
@@ -16,13 +15,11 @@ import Models.Apis.Fields qualified as Fields
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.Shapes qualified as Shapes
 
--- import Data.Aeson (object, (.=))
 import Data.Aeson.Key qualified as AEKey
 
 import Data.Aeson
 import Models.Projects.Projects qualified as Projects
 
-import Data.Aeson.KeyMap qualified as AE
 import Models.Apis.Fields.Query qualified as Fields
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
@@ -34,14 +31,20 @@ data MergedEndpoint = MergedEndpoint
   , method :: Text
   , hosts :: V.Vector Text
   , hash :: Text
-  , shapes :: V.Vector Shapes.SwShape
-  , fields :: V.Vector MergedFieldsAndFormats
+  , shapes :: V.Vector MergedShapesAndFields
   }
   deriving stock (Show, Generic)
 
 data MergedFieldsAndFormats = MergedFieldsAndFormats
   { field :: Fields.SwField
   , format :: Maybe Formats.SwFormat
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (AE.ToJSON)
+
+data MergedShapesAndFields = MergedShapesAndFields
+  { shape :: Shapes.SwShape
+  , sField :: Vector MergedFieldsAndFormats
   }
   deriving stock (Show, Generic)
   deriving anyclass (AE.ToJSON)
@@ -84,7 +87,6 @@ mergeObjects :: Value -> Value -> Maybe Value
 mergeObjects (Object obj1) (Object obj2) = Just $ Object (obj1 <> obj2)
 mergeObjects _ _ = Nothing
 
--- TODO: fix this function
 convertToJson :: [T.Text] -> Value
 convertToJson items = convertToJson' groups
  where
@@ -107,9 +109,10 @@ mergeEndpoints endpoints shapes fields formats = V.map mergeEndpoint endpoints
   mergeEndpoint :: Endpoints.SwEndpoint -> MergedEndpoint
   mergeEndpoint endpoint =
     let endpointHash = endpoint.hash
-        matchingShapes = V.filter (\shape -> shape.swEndpointHash == endpointHash) shapes
         matchingFields = V.filter (\field -> field.fEndpointHash == endpointHash) fields
         mergedFieldsAndFormats = V.map (`findMatchingFormat` formats) matchingFields
+        matchingShapes = V.map (`findMatchingFields` mergedFieldsAndFormats) shapes
+
         path = specCompartiblePath endpoint.urlPath
      in MergedEndpoint
           { urlPath = path
@@ -118,7 +121,6 @@ mergeEndpoints endpoints shapes fields formats = V.map mergeEndpoint endpoints
           , hosts = endpoint.hosts
           , hash = endpointHash
           , shapes = matchingShapes
-          , fields = mergedFieldsAndFormats
           }
 
 findMatchingFormat :: Fields.SwField -> V.Vector Formats.SwFormat -> MergedFieldsAndFormats
@@ -128,6 +130,15 @@ findMatchingFormat field formats =
    in MergedFieldsAndFormats
         { field = field
         , format = matchingFormat
+        }
+
+findMatchingFields :: Shapes.SwShape -> V.Vector MergedFieldsAndFormats -> MergedShapesAndFields
+findMatchingFields shape fields =
+  let fieldHashes = Shapes.swFieldHashes shape
+      filteredFields = V.filter (\mfaf -> mfaf.field.fHash `elem` fieldHashes) fields
+   in MergedShapesAndFields
+        { shape = shape
+        , sField = filteredFields
         }
 
 -- For Servers part of the swagger
@@ -156,12 +167,12 @@ groupEndpointsByUrlPath endpoints =
 
   constructMethodEntry mergedEndpoint =
     AEKey.fromText (method mergedEndpoint) .= object ["responses" .= groupShapesByStatusCode (shapes mergedEndpoint)]
-groupShapesByStatusCode :: V.Vector Shapes.SwShape -> AE.Value
+groupShapesByStatusCode :: V.Vector MergedShapesAndFields -> AE.Value
 groupShapesByStatusCode shapes =
   object $ constructStatusCodeEntry (V.toList shapes)
 
-constructStatusCodeEntry :: [Shapes.SwShape] -> [AET.Pair]
-constructStatusCodeEntry shapes = map (\shape -> show shape.swStatusCode .= object ["content" .= object ["*/*" .= (convertToJson $ V.toList shape.swResponseBodyKeypaths)]]) shapes
+constructStatusCodeEntry :: [MergedShapesAndFields] -> [AET.Pair]
+constructStatusCodeEntry shapes = map (\shape -> show shape.shape.swStatusCode .= object ["content" .= object ["*/*" .= (convertToJson $ V.toList shape.shape.swResponseBodyKeypaths)]]) shapes
 
 generateGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 generateGetH sess pid = do
@@ -171,15 +182,20 @@ generateGetH sess pid = do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
       endpoints <- Endpoints.endpointsByProjectId pid
       let endpoint_hashes = V.map (\enp -> enp.hash) endpoints
+
       shapes <- Shapes.shapesByEndpointHash pid endpoint_hashes
+
       fields <- Fields.fieldsByEndpointHashes pid endpoint_hashes
       let field_hashes = V.map (\field -> field.fHash) fields
+
       formats <- Formats.formatsByFieldsHashes pid field_hashes
+
       let merged = mergeEndpoints endpoints shapes fields formats
       let hosts = getUniqueHosts endpoints
       let paths = groupEndpointsByUrlPath $ V.toList merged
+      let mi = paths
       let minimalJson = object ["info" .= String "Information about the server and stuff", "servers" .= object ["url" .= hosts], "paths" .= paths, "components" .= object ["schema" .= String "Some schemas"]]
-      pure (project, minimalJson)
+      pure (project, mi)
 
   let bwconf =
         (def :: BWConfig)

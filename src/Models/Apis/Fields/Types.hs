@@ -175,6 +175,7 @@ data Field = Field
 
 data SwField = SwField
   { fFieldType :: FieldTypes
+  , fFormat :: Text
   , fDescription :: Text
   , fHash :: Text
   , fEndpointHash :: Text

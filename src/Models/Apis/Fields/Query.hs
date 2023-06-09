@@ -49,7 +49,7 @@ fieldsByEndpointHashes pid hashes = query Select q (pid, hashes)
   q =
     [sql|
       SELECT field_type f_field_type, format f_format,
-             description f_description, endpoint_hash f_endpoint_hash
+             description f_description, endpoint_hash f_endpoint_hash, hash f_hash
       FROM apis.fields
       WHERE project_id = ? AND endpoint_hash = ANY(?)
     |]
