@@ -161,7 +161,7 @@ groupShapesByStatusCode shapes =
   object $ constructStatusCodeEntry (V.toList shapes)
 
 constructStatusCodeEntry :: [Shapes.SwShape] -> [AET.Pair]
-constructStatusCodeEntry shapes = map (\shape -> show shape.swStatusCode .= object ["content" .= object ["*/*" .= (convertToJson $ V.toList shape.swRequestBodyKeypaths)]]) shapes
+constructStatusCodeEntry shapes = map (\shape -> show shape.swStatusCode .= object ["content" .= object ["*/*" .= (convertToJson $ V.toList shape.swResponseBodyKeypaths)]]) shapes
 
 generateGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 generateGetH sess pid = do
