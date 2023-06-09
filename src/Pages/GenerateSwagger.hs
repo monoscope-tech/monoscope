@@ -1,19 +1,15 @@
 module Pages.GenerateSwagger (generateGetH) where
 
 import Config
-import Data.Aeson (Value (Object), object, (.=))
+import Data.Aeson qualified as AE
+import Data.Aeson.Types qualified as AET
 import Data.Default (def)
+import Data.HashMap.Strict qualified as HashMap
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
-
-import Data.Aeson ()
-import Data.Aeson qualified as AE
-import Data.Aeson.KeyMap qualified as AEKeyM
-import Data.Aeson.Types qualified as AET
-import Data.HashMap.Strict qualified as HM
 import Lucid
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields qualified as Fields
@@ -26,6 +22,7 @@ import Data.Aeson.Key qualified as AEKey
 import Data.Aeson
 import Models.Projects.Projects qualified as Projects
 
+import Data.Aeson.KeyMap qualified as AE
 import Models.Apis.Fields.Query qualified as Fields
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
@@ -63,7 +60,7 @@ processItem item groups =
       remainingItems
         | newArr = T.intercalate "." $ fromMaybe [] (viaNonEmpty tail splitItems)
         | length splitItems > 1 =
-            if fromMaybe "" (viaNonEmpty head splitItems) == "[]"
+            if fromMaybe "" (viaNonEmpty head (fromMaybe [] (viaNonEmpty tail splitItems))) == "[]"
               then T.intercalate "." $ fromMaybe [] (viaNonEmpty tail (fromMaybe [] (viaNonEmpty tail splitItems)))
               else T.intercalate "." $ fromMaybe [] (viaNonEmpty tail splitItems)
         | otherwise = ""
@@ -94,9 +91,8 @@ convertToJson items = convertToJson' groups
   groups = processItems items Map.empty
   processGroup :: (T.Text, [T.Text]) -> Value -> Value
   processGroup (grp, subGroups) parsedValue =
-    let updatedJson = if null subGroups then object ["description" .= String "", "type" .= String ""] else convertToJson subGroups
-        ob = object [AEKey.fromText grp .= object ["propperties" .= updatedJson, "type" .= String ""]]
-        updateMap = case mergeObjects ob parsedValue of
+    let updatedJson = if null subGroups then object [AEKey.fromText grp .= object ["description" .= String "", "type" .= String ""]] else object [AEKey.fromText grp .= object ["properties" .= convertToJson subGroups, "type" .= String "Object"]]
+        updateMap = case mergeObjects updatedJson parsedValue of
           Just obj -> obj
           Nothing -> object []
      in updateMap
@@ -165,14 +161,13 @@ groupShapesByStatusCode shapes =
   object $ constructStatusCodeEntry (V.toList shapes)
 
 constructStatusCodeEntry :: [Shapes.SwShape] -> [AET.Pair]
-constructStatusCodeEntry shapes = map (\shape -> show shape.swStatusCode .= object ["content" .= object ["*/*" .= shape]]) shapes
+constructStatusCodeEntry shapes = map (\shape -> show shape.swStatusCode .= object ["content" .= object ["*/*" .= (convertToJson $ V.toList shape.swRequestBodyKeypaths)]]) shapes
 
 generateGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 generateGetH sess pid = do
   pool <- asks pool
   (project, endpointStats) <- liftIO $
     withPool pool $ do
-      print $ encode $ convertToJson [".post.[].married", ".post.[].files.[].height", ".post.[].files.[].width", ".post.[].files.[].name", ".pagination.end", ".pagination.next", ".messages.[].caption", ".messages.[].couple_id", ".messages.[].date", ".messages.[].from", ".messages.[].to", ".messages.[].type", ".messages.[].received"]
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
       endpoints <- Endpoints.endpointsByProjectId pid
       let endpoint_hashes = V.map (\enp -> enp.hash) endpoints
@@ -183,7 +178,7 @@ generateGetH sess pid = do
       let merged = mergeEndpoints endpoints shapes fields formats
       let hosts = getUniqueHosts endpoints
       let paths = groupEndpointsByUrlPath $ V.toList merged
-      let minimalJson = object ["info" .= "Information about the server and stuff", "servers" .= object ["url" .= hosts], "paths" .= paths, "components" .= object ["schema" .= "Some schemas"]]
+      let minimalJson = object ["info" .= String "Information about the server and stuff", "servers" .= object ["url" .= hosts], "paths" .= paths, "components" .= object ["schema" .= String "Some schemas"]]
       pure (project, minimalJson)
 
   let bwconf =
