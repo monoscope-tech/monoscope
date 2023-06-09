@@ -79,7 +79,7 @@ processItems (x : xs) groups = processItems xs updatedGroups
   updatedGroups = processItem x groups
 
 mergeObjects :: Value -> Value -> Maybe Value
-mergeObjects (Object obj1) (Object obj2) = Just $ Object (HM.union (Object obj1) (Object obj2))
+mergeObjects (Object obj1) (Object obj2) = Just $ Object (obj1 <> obj2)
 mergeObjects _ _ = Nothing
 
 -- TODO: fix this function
