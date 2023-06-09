@@ -49,20 +49,25 @@ data MergedFieldsAndFormats = MergedFieldsAndFormats
   deriving stock (Show, Generic)
   deriving anyclass (AE.ToJSON)
 
--- Function to generate Swagger schema template from field paths
-
 processItem :: T.Text -> Map.Map T.Text [T.Text] -> Map.Map T.Text [T.Text]
 processItem item groups =
   let splitItems = T.splitOn "." item
       c = fromMaybe "" (viaNonEmpty head splitItems)
-      root = toText $ dropWhile (== '.') (toString c)
-      remainingItems =
-        if length splitItems > 1
+      stripRoot = toText $ dropWhile (== '.') (toString c)
+      (root, newArr) =
+        if T.isSuffixOf "[*]" stripRoot
           then
-            if fromMaybe "" (viaNonEmpty head splitItems) == "[*]"
+            let strT = T.take (T.length stripRoot - 3) stripRoot
+             in (strT, True)
+          else (stripRoot, False)
+      remainingItems
+        | newArr = T.intercalate "." $ fromMaybe [] (viaNonEmpty tail splitItems)
+        | length splitItems > 1 =
+            if fromMaybe "" (viaNonEmpty head splitItems) == "[]"
               then T.intercalate "." $ fromMaybe [] (viaNonEmpty tail (fromMaybe [] (viaNonEmpty tail splitItems)))
               else T.intercalate "." $ fromMaybe [] (viaNonEmpty tail splitItems)
-          else ""
+        | otherwise = ""
+
       updatedGroups = case Map.lookup root groups of
         Just items -> case remainingItems of
           "" -> groups
@@ -89,8 +94,8 @@ convertToJson items = convertToJson' groups
   groups = processItems items Map.empty
   processGroup :: (T.Text, [T.Text]) -> Value -> Value
   processGroup (grp, subGroups) parsedValue =
-    let updatedJson = if null subGroups then Null else convertToJson subGroups
-        ob = object [AEKey.fromText grp .= updatedJson]
+    let updatedJson = if null subGroups then object ["description" .= String "", "type" .= String ""] else convertToJson subGroups
+        ob = object [AEKey.fromText grp .= object ["propperties" .= updatedJson, "type" .= String ""]]
         updateMap = case mergeObjects ob parsedValue of
           Just obj -> obj
           Nothing -> object []
@@ -99,8 +104,6 @@ convertToJson items = convertToJson' groups
   objectValue = object []
   convertToJson' :: Map.Map T.Text [T.Text] -> Value
   convertToJson' grps = foldr processGroup objectValue (Map.toList grps)
-
------------end
 
 mergeEndpoints :: V.Vector Endpoints.SwEndpoint -> V.Vector Shapes.SwShape -> V.Vector Fields.SwField -> V.Vector Formats.SwFormat -> V.Vector MergedEndpoint
 mergeEndpoints endpoints shapes fields formats = V.map mergeEndpoint endpoints
@@ -169,6 +172,7 @@ generateGetH sess pid = do
   pool <- asks pool
   (project, endpointStats) <- liftIO $
     withPool pool $ do
+      print $ encode $ convertToJson [".post.[].married", ".post.[].files.[].height", ".post.[].files.[].width", ".post.[].files.[].name", ".pagination.end", ".pagination.next", ".messages.[].caption", ".messages.[].couple_id", ".messages.[].date", ".messages.[].from", ".messages.[].to", ".messages.[].type", ".messages.[].received"]
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
       endpoints <- Endpoints.endpointsByProjectId pid
       let endpoint_hashes = V.map (\enp -> enp.hash) endpoints
