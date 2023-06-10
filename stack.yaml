@@ -20,7 +20,8 @@
 # resolver:
 #   url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/18/18.yaml
 # resolver: nightly-2023-04-24
-resolver: lts-20.21
+# resolver: lts-20.21
+resolver: nightly-2023-06-04
 
 
 # User packages to be built.
@@ -97,6 +98,11 @@ extra-deps:
     commit: 60481132b229d22eda8efcd3392dd1df237bd968 
     subdirs:
       - .
+  - git: https://github.com/tonyalaribe/tmp-postgres
+    # branch: support-homebrew-initdb
+    commit: 92bf7825e90dddb9e77758f9819295ecffc0f420 
+    subdirs:
+      - .
 
 # Override default flag values for local packages and extra-deps
 # flags: {}
@@ -115,6 +121,9 @@ allow-newer: true
 # Override the architecture used by stack, especially useful on Windows
 # arch: i386
 # arch: x86_64
+# arch: arm64
+arch: aarch64
+
 #
 # Extra directories used by stack for building
 # extra-include-dirs: [/path/to/dir]
