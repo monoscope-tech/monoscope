@@ -23,6 +23,7 @@ import Data.Aeson.Key qualified as AEKey
 import Data.Aeson
 import Models.Projects.Projects qualified as Projects
 
+import Models.Apis.Fields qualified as Field
 import Models.Apis.Fields.Query qualified as Fields
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
@@ -57,18 +58,18 @@ data KeyPathGroup = KeyPathGroup
   }
   deriving stock (Show, Generic)
 
-processItem :: T.Text -> Map.Map T.Text [T.Text] -> Map.Map T.Text [T.Text]
+processItem :: T.Text -> Map.Map T.Text KeyPathGroup -> Map.Map T.Text KeyPathGroup
 processItem item groups =
   let splitItems = T.splitOn "." item
       c = fromMaybe "" (viaNonEmpty head splitItems)
-      tmpRoot = toText $ dropWhile (== '.') (toString c)
+
+      tmpRoot = T.dropWhile (== '.') c
       -- newArr checks if it's a new arr identifier
       newArr = T.isSuffixOf "[*]" tmpRoot
       root
         | newArr = tmpRoot
         | length splitItems > 1 && fromMaybe "" (viaNonEmpty head (fromMaybe [] (viaNonEmpty tail splitItems))) == "[]" = tmpRoot <> "[*]"
-        | otherwise = ""
-
+        | otherwise = tmpRoot
       remainingItems
         | newArr = T.intercalate "." $ fromMaybe [] (viaNonEmpty tail splitItems)
         | length splitItems > 1 =
@@ -80,13 +81,13 @@ processItem item groups =
       updatedGroups = case Map.lookup root groups of
         Just items -> case remainingItems of
           "" -> groups
-          val -> Map.insert root (items ++ [remainingItems]) groups
+          val -> Map.insert root (KeyPathGroup{subGoups = items.subGoups ++ [remainingItems], keyPath = items.keyPath <> "." <> root}) groups
         Nothing -> case remainingItems of
-          "" -> Map.insert root [] groups
-          val -> Map.insert root [remainingItems] groups
+          "" -> Map.insert root (KeyPathGroup{subGoups = [], keyPath = "." <> root}) groups
+          val -> Map.insert root (KeyPathGroup{subGoups = [remainingItems], keyPath = "." <> root}) groups
    in updatedGroups
 
-processItems :: [T.Text] -> Map.Map T.Text [T.Text] -> Map.Map T.Text [T.Text]
+processItems :: [T.Text] -> Map.Map T.Text KeyPathGroup -> Map.Map T.Text KeyPathGroup
 processItems [] groups = groups
 processItems (x : xs) groups = processItems xs updatedGroups
  where
@@ -96,25 +97,33 @@ mergeObjects :: Value -> Value -> Maybe Value
 mergeObjects (Object obj1) (Object obj2) = Just $ Object (obj1 <> obj2)
 mergeObjects _ _ = Nothing
 
-convertToJson :: [T.Text] -> Value
-convertToJson items = convertToJson' groups
+convertToJson :: [T.Text] -> [MergedFieldsAndFormats] -> Text -> Value
+convertToJson items categoryFields parentPath = convertToJson' groups
  where
   groups = processItems items Map.empty
-  processGroup :: (T.Text, [T.Text]) -> Value -> Value
-  processGroup (grp, subGroups) parsedValue =
+  processGroup :: (T.Text, KeyPathGroup) -> Value -> Value
+  processGroup (grp, keypath) parsedValue =
     let updatedJson =
-          if null subGroups
-            then object [AEKey.fromText grp .= object ["description" .= String "", "type" .= String ""]]
+          if null keypath.subGoups
+            then
+              let field = find (\fi -> (T.tail $ parentPath <> "." <> grp) == fi.field.fKeyPath) categoryFields
+                  desc = case field of
+                    Just f -> f.field.fDescription
+                    Nothing -> parentPath <> "." <> grp
+                  t = case field of
+                    Just f -> f.field.fFormat
+                    Nothing -> "text"
+               in object [AEKey.fromText grp .= object ["description" .= String desc, "type" .= String t]]
             else
-              let (key, t) = if T.isSuffixOf "[*]" grp then (T.take (T.length grp - 3) grp, "array") else (grp, "object")
-               in object [AEKey.fromText key .= object ["properties" .= convertToJson subGroups, "type" .= String t]]
+              let (key, t) = if T.isSuffixOf "[*]" grp then (T.takeWhile (/= '[') grp, "array") else (grp, "object")
+               in object [AEKey.fromText key .= object ["properties" .= convertToJson keypath.subGoups categoryFields (parentPath <> "." <> grp), "type" .= String t]]
         updateMap = case mergeObjects updatedJson parsedValue of
           Just obj -> obj
           Nothing -> object []
      in updateMap
   objectValue :: Value
   objectValue = object []
-  convertToJson' :: Map.Map T.Text [T.Text] -> Value
+  convertToJson' :: Map.Map T.Text KeyPathGroup -> Value
   convertToJson' grps = foldr processGroup objectValue (Map.toList grps)
 
 mergeEndpoints :: V.Vector Endpoints.SwEndpoint -> V.Vector Shapes.SwShape -> V.Vector Fields.SwField -> V.Vector Formats.SwFormat -> V.Vector MergedEndpoint
@@ -191,7 +200,15 @@ groupShapesByStatusCode shapes =
 
 constructStatusCodeEntry :: [MergedShapesAndFields] -> [AET.Pair]
 -- shape
-constructStatusCodeEntry shapes = map (\shape -> show shape.shape.swStatusCode .= object ["content" .= "shs"]) shapes
+constructStatusCodeEntry =
+  map
+    ( \shape ->
+        show shape.shape.swStatusCode
+          .= object
+            [ "content"
+                .= object ["*/*" .= (convertToJson (V.toList shape.shape.swResponseBodyKeypaths) (fromMaybe [] (Map.lookup Field.FCResponseBody shape.sField)) "")]
+            ]
+    )
 
 -- constructStatusCodeEntry shapes = map (\shape -> show shape.shape.swStatusCode .= object ["content" .= object ["*/*" .= (convertToJson $ V.toList shape.shape.swResponseBodyKeypaths)]]) shapes
 
@@ -203,16 +220,11 @@ generateGetH sess pid = do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
       endpoints <- Endpoints.endpointsByProjectId pid
       let endpoint_hashes = V.map (\enp -> enp.hash) endpoints
-
       shapes <- Shapes.shapesByEndpointHash pid endpoint_hashes
-
       fields <- Fields.fieldsByEndpointHashes pid endpoint_hashes
       let field_hashes = V.map (\field -> field.fEndpointHash) fields
       formats <- Formats.formatsByFieldsHashes pid field_hashes
-
-      print field_hashes
-      print $ V.map (\field -> field.fEndpointHash) fields
-
+      print shapes
       let merged = mergeEndpoints endpoints shapes fields formats
       let hosts = getUniqueHosts endpoints
       let paths = groupEndpointsByUrlPath $ V.toList merged
