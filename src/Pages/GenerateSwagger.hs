@@ -4,6 +4,7 @@ import Config
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
 import Data.Default (def)
+import Data.List (groupBy)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Vector (Vector)
@@ -12,6 +13,8 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields qualified as Fields
+import Relude.Unsafe ((!!))
+
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.Shapes qualified as Shapes
 
@@ -44,22 +47,28 @@ data MergedFieldsAndFormats = MergedFieldsAndFormats
 
 data MergedShapesAndFields = MergedShapesAndFields
   { shape :: Shapes.SwShape
-  , sField :: Vector MergedFieldsAndFormats
+  , sField :: Map Fields.FieldCategoryEnum [MergedFieldsAndFormats]
   }
   deriving stock (Show, Generic)
-  deriving anyclass (AE.ToJSON)
+
+data KeyPathGroup = KeyPathGroup
+  { subGoups :: [Text]
+  , keyPath :: Text
+  }
+  deriving stock (Show, Generic)
 
 processItem :: T.Text -> Map.Map T.Text [T.Text] -> Map.Map T.Text [T.Text]
 processItem item groups =
   let splitItems = T.splitOn "." item
       c = fromMaybe "" (viaNonEmpty head splitItems)
-      stripRoot = toText $ dropWhile (== '.') (toString c)
-      (root, newArr) =
-        if T.isSuffixOf "[*]" stripRoot
-          then
-            let strT = T.take (T.length stripRoot - 3) stripRoot
-             in (strT, True)
-          else (stripRoot, False)
+      tmpRoot = toText $ dropWhile (== '.') (toString c)
+      -- newArr checks if it's a new arr identifier
+      newArr = T.isSuffixOf "[*]" tmpRoot
+      root
+        | newArr = tmpRoot
+        | length splitItems > 1 && fromMaybe "" (viaNonEmpty head (fromMaybe [] (viaNonEmpty tail splitItems))) == "[]" = tmpRoot <> "[*]"
+        | otherwise = ""
+
       remainingItems
         | newArr = T.intercalate "." $ fromMaybe [] (viaNonEmpty tail splitItems)
         | length splitItems > 1 =
@@ -93,7 +102,12 @@ convertToJson items = convertToJson' groups
   groups = processItems items Map.empty
   processGroup :: (T.Text, [T.Text]) -> Value -> Value
   processGroup (grp, subGroups) parsedValue =
-    let updatedJson = if null subGroups then object [AEKey.fromText grp .= object ["description" .= String "", "type" .= String ""]] else object [AEKey.fromText grp .= object ["properties" .= convertToJson subGroups, "type" .= String "Object"]]
+    let updatedJson =
+          if null subGroups
+            then object [AEKey.fromText grp .= object ["description" .= String "", "type" .= String ""]]
+            else
+              let (key, t) = if T.isSuffixOf "[*]" grp then (T.take (T.length grp - 3) grp, "array") else (grp, "object")
+               in object [AEKey.fromText key .= object ["properties" .= convertToJson subGroups, "type" .= String t]]
         updateMap = case mergeObjects updatedJson parsedValue of
           Just obj -> obj
           Nothing -> object []
@@ -136,9 +150,13 @@ findMatchingFields :: Shapes.SwShape -> V.Vector MergedFieldsAndFormats -> Merge
 findMatchingFields shape fields =
   let fieldHashes = Shapes.swFieldHashes shape
       filteredFields = V.filter (\mfaf -> mfaf.field.fHash `elem` fieldHashes) fields
+      fields' = V.toList filteredFields
+      fieldGroup = groupBy (\f1 f2 -> f1.field.fFieldCategory == f2.field.fFieldCategory) fields'
+      fieldGroupTupple = map (\f -> ((f !! 0).field.fFieldCategory, f)) fieldGroup
+      groupedMap = Map.fromList fieldGroupTupple
    in MergedShapesAndFields
         { shape = shape
-        , sField = filteredFields
+        , sField = groupedMap
         }
 
 -- For Servers part of the swagger
@@ -172,7 +190,10 @@ groupShapesByStatusCode shapes =
   object $ constructStatusCodeEntry (V.toList shapes)
 
 constructStatusCodeEntry :: [MergedShapesAndFields] -> [AET.Pair]
-constructStatusCodeEntry shapes = map (\shape -> show shape.shape.swStatusCode .= object ["content" .= object ["*/*" .= (convertToJson $ V.toList shape.shape.swResponseBodyKeypaths)]]) shapes
+-- shape
+constructStatusCodeEntry shapes = map (\shape -> show shape.shape.swStatusCode .= object ["content" .= "shs"]) shapes
+
+-- constructStatusCodeEntry shapes = map (\shape -> show shape.shape.swStatusCode .= object ["content" .= object ["*/*" .= (convertToJson $ V.toList shape.shape.swResponseBodyKeypaths)]]) shapes
 
 generateGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 generateGetH sess pid = do
@@ -186,15 +207,17 @@ generateGetH sess pid = do
       shapes <- Shapes.shapesByEndpointHash pid endpoint_hashes
 
       fields <- Fields.fieldsByEndpointHashes pid endpoint_hashes
-      let field_hashes = V.map (\field -> field.fHash) fields
-
+      let field_hashes = V.map (\field -> field.fEndpointHash) fields
       formats <- Formats.formatsByFieldsHashes pid field_hashes
+
+      print field_hashes
+      print $ V.map (\field -> field.fEndpointHash) fields
 
       let merged = mergeEndpoints endpoints shapes fields formats
       let hosts = getUniqueHosts endpoints
       let paths = groupEndpointsByUrlPath $ V.toList merged
       let mi = paths
-      let minimalJson = object ["info" .= String "Information about the server and stuff", "servers" .= object ["url" .= hosts], "paths" .= paths, "components" .= object ["schema" .= String "Some schemas"]]
+      -- let minimalJson = object ["info" .= String "Information about the server and stuff", "servers" .= object ["url" .= hosts], "paths" .= paths, "components" .= object ["schema" .= String "Some schemas"]]
       pure (project, mi)
 
   let bwconf =

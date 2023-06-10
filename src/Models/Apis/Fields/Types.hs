@@ -174,11 +174,14 @@ data Field = Field
     via Aeson Field
 
 data SwField = SwField
-  { fFieldType :: FieldTypes
+  { fEndpointHash :: Text
+  , fKey :: Text
+  , fFieldType :: FieldTypes
   , fFormat :: Text
   , fDescription :: Text
+  , fKeyPath :: Text
+  , fFieldCategory :: FieldCategoryEnum
   , fHash :: Text
-  , fEndpointHash :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, Default)
