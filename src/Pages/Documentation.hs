@@ -129,16 +129,11 @@ documentationsPage pid swaggers currentSwagger = do
 
     -- page content
     let recentSwagger = case currentSwagger of
-          Just swg -> Just swg
-          Nothing -> if V.null swaggers then Nothing else Just (V.head swaggers :: Swaggers.Swagger)
-    let jsonString = case recentSwagger of
-          Just swg -> decodeUtf8 (encode swg.swaggerJson)
-          Nothing -> "{\"info\": \"you have no swaggers at the moment\"}"
-    let swaggerID = case recentSwagger of
-          Just swg -> show swg.id.swaggerId
-          Nothing -> ""
-
+          Just swg -> swg
+          Nothing -> V.head swaggers :: Swaggers.Swagger
+    let jsonString = decodeUtf8 (encode recentSwagger.swaggerJson)
     input_ [id_ "swaggerData", type_ "hidden", value_ jsonString]
+
     div_ [class_ "flex flex-col h-full w-full justify-between"] $ do
       div_ [class_ "flex w-full bg-white border-b items-center justify-between px-2", style_ "top: 0; height:60px; position: sticky"] $ do
         div_ [class_ "flex items-center gap-4"] $ do
@@ -150,11 +145,11 @@ documentationsPage pid swaggers currentSwagger = do
               , class_ "w-full flex gap-2 text-gray-600 justify_between items-center cursor-pointer px-2 py-1 border rounded focus:ring-2 focus:ring-blue-200 active:ring-2 active:ring-blue-200"
               ]
               $ do
-                p_ [style_ "width: calc(100% - 25px)", class_ "truncate ..."] $ toHtml swaggerID
+                p_ [style_ "width: calc(100% - 25px)", class_ "truncate ..."] $ show recentSwagger.id.swaggerId
                 img_ [src_ "/assets/svgs/select_chevron.svg", style_ "height:15px; width:15px"]
             div_ [id_ "swagger_history_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] $ do
               swaggers & mapM_ \sw -> do
-                button_ [onclick_ "swaggerChanged(event)", class_ "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"] $ toHtml swaggerID
+                button_ [onclick_ "swaggerChanged(event)", class_ "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"] $ show sw.id.swaggerId
 
         -- select_ [onchange_ "swaggerChanged(event)", id_ "swaggerSelect"] $ do
         --   swaggers & mapM_ \sw -> do
@@ -185,7 +180,7 @@ documentationsPage pid swaggers currentSwagger = do
                     span_ [id_ "toggle_md", class_ "font_toggle_active cursor-pointer w-full px-3 py-2 hover:bg-blue-100"] "Medium"
                     span_ [id_ "toggle_lg", class_ "cursor-pointer text-lg w-full px-3 py-2 hover:bg-blue-100"] "Large"
                 form_ [hxPost_ $ "/p/" <> pid.toText <> "/documentation/save"] $ do
-                  input_ [id_ "save_swagger_input_id", name_ "swagger_id", type_ "hidden", value_ swaggerID]
+                  input_ [id_ "save_swagger_input_id", name_ "swagger_id", type_ "hidden", value_ (show recentSwagger.id.swaggerId)]
                   input_ [id_ "save_swagger_input_data", name_ "updated_swagger", type_ "hidden", value_ jsonString]
                   button_ [type_ "submit", id_ "save_swagger_btn", class_ "bg-gray-200 text-sm py-2 px-4 rounded active:bg-green-600"] "Save"
               div_ [id_ "swaggerEditor", class_ "w-full overflow-y-auto", style_ "height: calc(100% - 40px)"] pass
