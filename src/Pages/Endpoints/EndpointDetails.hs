@@ -1,6 +1,6 @@
 {-# LANGUAGE TupleSections #-}
 
-module Pages.Endpoints.EndpointDetails (endpointDetailsH, fieldDetailsPartialH) where
+module Pages.Endpoints.EndpointDetails (endpointDetailsH, fieldDetailsPartialH, fieldsToNormalized) where
 
 import Config
 import Pages.Components
@@ -434,11 +434,14 @@ subSubSection title fieldsM =
 
 -- | fieldsToNormalized, gets a list of fields and returns a list of tuples with the keypath, and the field, sorted by the key path
 -- >>> import Models.Apis.Fields.Types
+-- >>> import Data.Default
 -- >>> let v1 = (def::Field){fieldCategory=FCQueryParam, keyPath=".k1.k2[*]", key="k2[*]"}
 -- >>> let v2 = (def::Field){fieldCategory=FCResponseBody, keyPath=".k1.k2[*].v", key="v"}
 -- >>> let v3 = (def::Field){fieldCategory=FCResponseBody, keyPath=".k1.k2[*].x", key="x"}
 -- >>> fieldsToNormalized [v1]
 -- [("k1",Nothing),("k1.k2[*]",Just (Field {id = FieldId {unFieldId = 00000000-0000-0000-0000-000000000000}, createdAt = 2019-08-31 05:14:37.537084021 UTC, updatedAt = 2019-08-31 05:14:37.537084021 UTC, projectId = ProjectId {unProjectId = 00000000-0000-0000-0000-000000000000}, endpointHash = "", key = "k2[*]", fieldType = FTUnknown, fieldTypeOverride = Nothing, format = "", formatOverride = Nothing, description = "", keyPath = ".k1.k2[*]", fieldCategory = FCQueryParam, hash = ""}))]
+---- >>> fieldsToNormalized [v2]
+---- >>> fieldsToNormalized [v2]
 fieldsToNormalized :: [Fields.Field] -> [(Text, Maybe Fields.Field)]
 fieldsToNormalized =
   sortNub . concatMap \field ->

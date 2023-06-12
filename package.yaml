@@ -154,7 +154,6 @@ library:
     - pretty-simple
     - tmp-postgres
     - directory
-    # - doctest-parallel
 
 executables:
   apitoolkit-server-exe:
@@ -170,7 +169,6 @@ executables:
     # - -fPIC
     dependencies:
     - apitoolkit-server
-    - doctest-parallel
     - relude >=1.1.0.0
     when:       
     - condition: false       

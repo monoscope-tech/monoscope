@@ -9,7 +9,6 @@ import Control.Exception (throwIO)
 import Database.Postgres.Temp (withDbCache, cacheConfig, cacheAction, withConfig, toConnectionString)
 import System.Directory (listDirectory, getFileSize)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Entity.DBT (withPool, QueryNature (Insert))
 
 migrationsDir :: FilePath
 migrationsDir = "./static/migrations/" 
@@ -34,7 +33,7 @@ withSetup f = do
   -- Helper to throw exceptions
   let throwE x = either throwIO pure =<< x
   throwE $ withDbCache $ \dbCache -> do
-    let combinedConfig = cacheConfig dbCache <> TmpPostgres.verboseConfig 
+    let combinedConfig = cacheConfig dbCache -- <> TmpPostgres.verboseConfig 
             <> mempty { TmpPostgres.postgresConfigFile = [("shared_preload_libraries", "'timescaledb'")]
                       }
     dirSize <- sum <$> (listDirectory migrationsDir >>= mapM (getFileSize . (migrationsDir <>)))
