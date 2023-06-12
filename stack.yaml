@@ -115,6 +115,7 @@ allow-newer: true
 # Override the architecture used by stack, especially useful on Windows
 # arch: i386
 # arch: x86_64
+# arch: arm64
 #
 # Extra directories used by stack for building
 # extra-include-dirs: [/path/to/dir]
