@@ -225,13 +225,3 @@ endpointsByProjectId pid = query Select q (Only pid)
          FROM apis.endpoints
          WHERE project_id = ?
        |]
-
-endpointsByProjectId :: Projects.ProjectId -> PgT.DBT IO (Vector Endpoint)
-endpointsByProjectId pid = query Select q (Only pid)
- where
-  q =
-    [sql|
-         SELECT id, created_at, updated_at, project_id, url_path, url_params, method, akeys(hosts), hash
-         FROM apis.endpoints
-         WHERE project_id = ?
-       |]

@@ -5,28 +5,17 @@ module Models.Projects.SwaggersSpec (spec) where
 import Data.Aeson (Value (..), object, (.=))
 import Data.Time.LocalTime (getZonedTime)
 import Data.UUID.V4 qualified as UUIDV4
-import Database.PostgreSQL.Simple qualified as PG
 import Optics.Core ((^.))
-import Database.PostgreSQL.Simple.Transaction qualified as DBT
 import Database.PostgreSQL.Transact qualified as DBT
 import Models.Projects.Projects (ProjectId (..))
 import Models.Projects.Swaggers
 import Models.Users.Users (UserId (..))
 import Relude
 import Test.Hspec
-import Test.Hspec.QuickCheck
-import Database.Postgres.Temp qualified as TmpPostgres
-import Database.PostgreSQL.Simple (Connection, connectPostgreSQL, close)
-import Data.Pool (Pool, createPool)
-import Control.Exception (throwIO)
-import Database.Postgres.Temp (withDbCache, defaultConfig, cacheConfig, cacheAction, withConfig, toConnectionString, withSnapshot, DirectoryType (Temporary), snapshotConfig)
-import Database.PostgreSQL.Simple.Migration qualified as Migrations
-import Database.PostgreSQL.Simple.Migration
-import Database.PostgreSQL.Entity.DBT qualified as DBT
-import Debug.Pretty.Simple (pTraceShowM)
 import Data.Maybe
 import Pkg.TmpPg qualified as TmpPg
-import Database.PostgreSQL.Transact (DBT)
+import Data.UUID qualified as UUID
+import Database.PostgreSQL.Entity.DBT (withPool)
 
 -- Helper function to create a Swagger value for testing
 createSwagger ::  ProjectId -> UserId -> Value -> DBT.DBT IO Swagger
@@ -47,7 +36,7 @@ createSwagger projectId createdBy swaggerJson = do
 
 spec :: Spec
 spec = aroundAll TmpPg.withSetup $ describe "Models.Projects.Swaggers" $ do
-  let swaggerId = SwaggerId UUID.nil 
+  let swaggerId = SwaggerId UUID.nil
   let swaggerJson' = object ["info" .= object ["title" .= "API"]]
   let swaggerJson1 = object ["info" .= object ["title" .= "API 1"]]
   let swaggerJson2 = object ["info" .= object ["title" .= "API 2"]]
@@ -57,16 +46,16 @@ spec = aroundAll TmpPg.withSetup $ describe "Models.Projects.Swaggers" $ do
       let swagger =
             Swagger
               { Models.Projects.Swaggers.id = swaggerId
-              , projectId = ProjectId UUID.nil 
+              , projectId = ProjectId UUID.nil
               , createdBy =  UserId UUID.nil
-              , createdAt = currentTime 
-              , updatedAt = currentTime 
+              , createdAt = currentTime
+              , updatedAt = currentTime
               , swaggerJson = swaggerJson'
               }
       result <- withPool pool $ do
         _ <- addSwagger swagger
         getSwaggerById (swaggerId.toText)
-      (fromJust result).swaggerJson `shouldBe` swaggerJson' 
+      (fromJust result).swaggerJson `shouldBe` swaggerJson'
 
   describe "getSwaggerById" $
     it "should retrieve a Swagger by its ID" $ \pool -> do
@@ -79,8 +68,8 @@ spec = aroundAll TmpPg.withSetup $ describe "Models.Projects.Swaggers" $ do
       result <- withPool pool $ do
         _ <- createSwagger (ProjectId UUID.nil) (UserId UUID.nil)  swaggerJson1
         _ <- createSwagger (ProjectId UUID.nil) (UserId UUID.nil)  swaggerJson2
-        swaggersByProject (ProjectId UUID.nil) 
-      (map (^. #swaggerJson) (toList result)) `shouldBe` [swaggerJson',swaggerJson', swaggerJson1, swaggerJson2]
+        swaggersByProject (ProjectId UUID.nil)
+      map (^. #swaggerJson) (toList result) `shouldBe` [swaggerJson',swaggerJson', swaggerJson1, swaggerJson2]
 
   describe "updateSwagger" $
     it "should update the Swagger JSON of a Swagger" $ \pool -> do
