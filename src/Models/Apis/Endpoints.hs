@@ -223,5 +223,5 @@ endpointsByProjectId pid = query Select q (Only pid)
     [sql|
          SELECT url_path, url_params, method, akeys(hosts), hash
          FROM apis.endpoints
-         WHERE project_id = ?  AND hash = 'e6c4f0b1'
+         WHERE project_id = ?
        |]

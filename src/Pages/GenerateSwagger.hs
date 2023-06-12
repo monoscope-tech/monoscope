@@ -97,8 +97,8 @@ mergeObjects :: Value -> Value -> Maybe Value
 mergeObjects (Object obj1) (Object obj2) = Just $ Object (obj1 <> obj2)
 mergeObjects _ _ = Nothing
 
-convertToJson :: [T.Text] -> [MergedFieldsAndFormats] -> Text -> Value
-convertToJson items categoryFields parentPath = convertToJson' groups
+convertKeyPathsToJson :: [T.Text] -> [MergedFieldsAndFormats] -> Text -> Value
+convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
  where
   groups = processItems items Map.empty
   processGroup :: (T.Text, KeyPathGroup) -> Value -> Value
@@ -106,17 +106,22 @@ convertToJson items categoryFields parentPath = convertToJson' groups
     let updatedJson =
           if null keypath.subGoups
             then
-              let field = find (\fi -> (T.tail $ parentPath <> "." <> grp) == fi.field.fKeyPath) categoryFields
-                  desc = case field of
-                    Just f -> f.field.fDescription
-                    Nothing -> parentPath <> "." <> grp
-                  t = case field of
-                    Just f -> f.field.fFormat
-                    Nothing -> "text"
-               in object [AEKey.fromText grp .= object ["description" .= String desc, "type" .= String t]]
+              let field = find (\fi -> T.tail (parentPath <> "." <> grp) == fi.field.fKeyPath) categoryFields
+                  (desc, t) = case field of
+                    Just f -> (f.field.fDescription, f.field.fFormat)
+                    Nothing -> (parentPath <> "." <> grp, "text")
+                  ob =
+                    if T.isSuffixOf "[*]" grp
+                      then object [AEKey.fromText (T.takeWhile (/= '[') grp) .= object ["description" .= String desc, "type" .= String "array", "items" .= object ["type" .= t]]]
+                      else object [AEKey.fromText grp .= object ["description" .= String desc, "type" .= String t]]
+               in ob
             else
               let (key, t) = if T.isSuffixOf "[*]" grp then (T.takeWhile (/= '[') grp, "array") else (grp, "object")
-               in object [AEKey.fromText key .= object ["properties" .= convertToJson keypath.subGoups categoryFields (parentPath <> "." <> grp), "type" .= String t]]
+                  ob =
+                    if t == "array"
+                      then object [AEKey.fromText key .= object ["type" .= String t, "items" .= object ["type" .= String "object", "properties" .= convertKeyPathsToJson keypath.subGoups categoryFields (parentPath <> "." <> grp)]]]
+                      else object [AEKey.fromText key .= object ["properties" .= convertKeyPathsToJson keypath.subGoups categoryFields (parentPath <> "." <> grp), "type" .= String t]]
+               in ob
         updateMap = case mergeObjects updatedJson parsedValue of
           Just obj -> obj
           Nothing -> object []
@@ -134,7 +139,8 @@ mergeEndpoints endpoints shapes fields formats = V.map mergeEndpoint endpoints
     let endpointHash = endpoint.hash
         matchingFields = V.filter (\field -> field.fEndpointHash == endpointHash) fields
         mergedFieldsAndFormats = V.map (`findMatchingFormat` formats) matchingFields
-        matchingShapes = V.map (`findMatchingFields` mergedFieldsAndFormats) shapes
+        filteredShapes = V.filter (\shape -> shape.swEndpointHash == endpointHash) shapes
+        matchingShapes = V.map (`findMatchingFields` mergedFieldsAndFormats) filteredShapes
 
         path = specCompartiblePath endpoint.urlPath
      in MergedEndpoint
@@ -193,23 +199,33 @@ groupEndpointsByUrlPath endpoints =
     AEKey.fromText urlPath .= object (map constructMethodEntry mergedEndpoints)
 
   constructMethodEntry mergedEndpoint =
-    AEKey.fromText (method mergedEndpoint) .= object ["responses" .= groupShapesByStatusCode (shapes mergedEndpoint)]
+    let okShape = case V.find (\shape -> length shape.shape.swRequestBodyKeypaths > 1) mergedEndpoint.shapes of
+          (Just s) -> s
+          Nothing -> V.head mergedEndpoint.shapes
+        rqBodyJson = convertKeyPathsToJson (V.toList okShape.shape.swRequestBodyKeypaths) (fromMaybe [] (Map.lookup Field.FCRequestBody okShape.sField)) ""
+     in AEKey.fromText (method mergedEndpoint) .= object ["responses" .= groupShapesByStatusCode (shapes mergedEndpoint), "requestBody" .= rqBodyJson]
+
 groupShapesByStatusCode :: V.Vector MergedShapesAndFields -> AE.Value
 groupShapesByStatusCode shapes =
   object $ constructStatusCodeEntry (V.toList shapes)
 
 constructStatusCodeEntry :: [MergedShapesAndFields] -> [AET.Pair]
--- shape
 constructStatusCodeEntry =
-  map
-    ( \shape ->
-        show shape.shape.swStatusCode
-          .= object
-            [ "content"
-                .= object ["*/*" .= (convertToJson (V.toList shape.shape.swResponseBodyKeypaths) (fromMaybe [] (Map.lookup Field.FCResponseBody shape.sField)) "")]
-            ]
-    )
+  map mapFunc
 
+mapFunc :: MergedShapesAndFields -> AET.Pair
+mapFunc mShape =
+  let content = object ["*/*" .= convertKeyPathsToJson (V.toList mShape.shape.swResponseBodyKeypaths) (fromMaybe [] (Map.lookup Field.FCResponseBody mShape.sField)) ""]
+      headers = convertKeyPathsToJson (V.toList mShape.shape.swResponseHeadersKeypaths) (fromMaybe [] (Map.lookup Field.FCResponseHeader mShape.sField)) ""
+   in show mShape.shape.swStatusCode .= object ["description" .= String "", "headers" .= headers, "content" .= content]
+
+-- ( \shape ->
+--       show shape.shape.swStatusCode
+--         .= object
+--           [ "content"
+--               .= object ["*/*" .= convertKeyPathsToJson (V.toList shape.shape.swResponseBodyKeypaths) (fromMaybe [] (Map.lookup Field.FCResponseBody shape.sField)) ""]
+--           ]
+--   )
 -- constructStatusCodeEntry shapes = map (\shape -> show shape.shape.swStatusCode .= object ["content" .= object ["*/*" .= (convertToJson $ V.toList shape.shape.swResponseBodyKeypaths)]]) shapes
 
 generateGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
@@ -224,13 +240,15 @@ generateGetH sess pid = do
       fields <- Fields.fieldsByEndpointHashes pid endpoint_hashes
       let field_hashes = V.map (\field -> field.fEndpointHash) fields
       formats <- Formats.formatsByFieldsHashes pid field_hashes
-      print shapes
       let merged = mergeEndpoints endpoints shapes fields formats
       let hosts = getUniqueHosts endpoints
       let paths = groupEndpointsByUrlPath $ V.toList merged
-      let mi = paths
-      -- let minimalJson = object ["info" .= String "Information about the server and stuff", "servers" .= object ["url" .= hosts], "paths" .= paths, "components" .= object ["schema" .= String "Some schemas"]]
-      pure (project, mi)
+      let (projectTitle, projectDescription) = case project of
+            (Just pr) -> (pr.title, pr.description)
+            Nothing -> ("__APITOOLKIT", "Edit project description")
+      let info = object ["description" .= String projectTitle, "title" .= String projectDescription, "version" .= String "1.0.0", "termsOfService" .= String "'https://apitoolkit.io/terms-and-conditions/'"]
+      let minimalJson = object ["openapi" .= String "3.0.0", "info" .= info, "servers" .= object ["url" .= hosts], "paths" .= paths, "components" .= object ["schema" .= String "Some schemas"]]
+      pure (project, minimalJson)
 
   let bwconf =
         (def :: BWConfig)
