@@ -121,7 +121,6 @@ allow-newer: true
 # arch: i386
 # arch: x86_64
 # arch: arm64
-
 #
 # Extra directories used by stack for building
 # extra-include-dirs: [/path/to/dir]
