@@ -89,7 +89,7 @@ sampleFormats =
         }
     ]
 
-expectedSwaggerJSON = T.pack "{ \"openapi\": \"3.0.0\", \"info\": { \"description\": \"Sample Project\", \"title\": \"Sample description\", \"version\": \"1.0.0\", \"termsOfService\": \"'https://apitoolkit.io/terms-and-conditions/'\" }, \"servers\": [ { \"url\": \"localhost\" } ], \"paths\": { \"/users\": { \"get\": { \"responses\": { \"200\": { \"description\": \"\", \"headers\": {}, \"content\": { \"*/*\": { \"users.field1\": { \"description\": \"\", \"type\": \"Text\" }, \"users.field2\": { \"description\": \"\", \"type\": \"Text\" } } } } } } } }"
+expectedSwaggerJSON = "{ \"openapi\": \"3.0.0\", \"info\": { \"description\": \"Sample Project\", \"title\": \"Sample description\", \"version\": \"1.0.0\", \"termsOfService\": \"'https://apitoolkit.io/terms-and-conditions/'\" }, \"servers\": [ { \"url\": \"localhost\" } ], \"paths\": { \"/users\": { \"get\": { \"responses\": { \"200\": { \"description\": \"\", \"headers\": {}, \"content\": { \"*/*\": { \"users.field1\": { \"description\": \"\", \"type\": \"Text\" }, \"users.field2\": { \"description\": \"\", \"type\": \"Text\" } } } } } } } }"
 
 spec :: Spec
 spec = describe "generateSwagger" $ do
