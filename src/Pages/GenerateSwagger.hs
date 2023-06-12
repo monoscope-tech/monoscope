@@ -1,4 +1,4 @@
-module Pages.GenerateSwagger (generateGetH) where
+module Pages.GenerateSwagger (generateGetH, generateSwagger) where
 
 import Config
 import Data.Aeson qualified as AE
@@ -15,7 +15,6 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields qualified as Fields
 import Relude.Unsafe ((!!))
 
-import Data.HashMap.Strict qualified as HM
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.Shapes qualified as Shapes
 
@@ -111,7 +110,7 @@ convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
               let field = find (\fi -> T.tail (parentPath <> "." <> grp) == fi.field.fKeyPath) categoryFields
                   (desc, t) = case field of
                     Just f -> (f.field.fDescription, fieldTypeToText f.format.swFieldType)
-                    Nothing -> (parentPath <> "." <> grp, fieldTypeToText Fields.FTString)
+                    Nothing -> (parentPath <> "." <> grp, "string")
                   (key, ob) =
                     if T.isSuffixOf "[*]" grp
                       then (T.takeWhile (/= '[') grp, object ["description" .= String desc, "type" .= String "array", "items" .= object ["type" .= t]])
@@ -165,7 +164,6 @@ findMatchingFormat field formats =
             { swFieldHash = fieldHash
             , swFieldFormat = "Text"
             , swFieldType = Fields.FTString
-            , swExamples = [AE.Null]
             , swHash = ""
             }
           (V.find (\format -> fieldHash == format.swFieldHash) formats)
@@ -255,17 +253,9 @@ generateGetH sess pid = do
       let endpoint_hashes = V.map (\enp -> enp.hash) endpoints
       shapes <- Shapes.shapesByEndpointHash pid endpoint_hashes
       fields <- Fields.fieldsByEndpointHashes pid endpoint_hashes
-      let field_hashes = V.map (\field -> field.fEndpointHash) fields
+      let field_hashes = V.map (\field -> field.fHash) fields
       formats <- Formats.formatsByFieldsHashes pid field_hashes
       let swagger = generateSwagger project endpoints shapes fields formats
-      -- let merged = mergeEndpoints endpoints shapes fields formats
-      -- let hosts = getUniqueHosts endpoints
-      -- let paths = groupEndpointsByUrlPath $ V.toList merged
-      -- let (projectTitle, projectDescription) = case project of
-      --       (Just pr) -> (pr.title, pr.description)
-      --       Nothing -> ("__APITOOLKIT", "Edit project description")
-      -- let info = object ["description" .= String projectTitle, "title" .= String projectDescription, "version" .= String "1.0.0", "termsOfService" .= String "'https://apitoolkit.io/terms-and-conditions/'"]
-      -- let minimalJson = object ["openapi" .= String "3.0.0", "info" .= info, "servers" .= Array hosts, "paths" .= paths]
       pure (project, swagger)
 
   let bwconf =
