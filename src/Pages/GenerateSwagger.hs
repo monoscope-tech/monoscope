@@ -230,7 +230,7 @@ constructStatusCodeEntry =
 mapFunc :: MergedShapesAndFields -> AET.Pair
 mapFunc mShape =
   let content = object ["*/*" .= convertKeyPathsToJson (V.toList mShape.shape.swResponseBodyKeypaths) (fromMaybe [] (Map.lookup Field.FCResponseBody mShape.sField)) ""]
-      headers = convertKeyPathsToJson (V.toList mShape.shape.swResponseHeadersKeypaths) (fromMaybe [] (Map.lookup Field.FCResponseHeader mShape.sField)) ""
+      headers = object ["*/*" .= convertKeyPathsToJson (V.toList mShape.shape.swResponseHeadersKeypaths) (fromMaybe [] (Map.lookup Field.FCResponseHeader mShape.sField)) ""]
    in show mShape.shape.swStatusCode .= object ["description" .= String "", "headers" .= headers, "content" .= content]
 
 -- ( \shape ->
@@ -261,7 +261,7 @@ generateGetH sess pid = do
             (Just pr) -> (pr.title, pr.description)
             Nothing -> ("__APITOOLKIT", "Edit project description")
       let info = object ["description" .= String projectTitle, "title" .= String projectDescription, "version" .= String "1.0.0", "termsOfService" .= String "'https://apitoolkit.io/terms-and-conditions/'"]
-      let minimalJson = object ["openapi" .= String "3.0.0", "info" .= info, "servers" .= object ["url" .= hosts], "paths" .= paths, "components" .= object ["schema" .= String "Some schemas"]]
+      let minimalJson = object ["openapi" .= String "3.0.0", "info" .= info, "servers" .= hosts, "paths" .= paths, "components" .= object ["schema" .= String "Some schemas"]]
       pure (project, minimalJson)
 
   let bwconf =
