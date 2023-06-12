@@ -233,14 +233,17 @@ mapFunc mShape =
       headers = object ["application/json" .= convertKeyPathsToJson (V.toList mShape.shape.swResponseHeadersKeypaths) (fromMaybe [] (Map.lookup Field.FCResponseHeader mShape.sField)) ""]
    in show mShape.shape.swStatusCode .= object ["description" .= String "", "headers" .= headers, "content" .= content]
 
--- ( \shape ->
---       show shape.shape.swStatusCode
---         .= object
---           [ "content"
---               .= object ["*/*" .= convertKeyPathsToJson (V.toList shape.shape.swResponseBodyKeypaths) (fromMaybe [] (Map.lookup Field.FCResponseBody shape.sField)) ""]
---           ]
---   )
--- constructStatusCodeEntry shapes = map (\shape -> show shape.shape.swStatusCode .= object ["content" .= object ["*/*" .= (convertToJson $ V.toList shape.shape.swResponseBodyKeypaths)]]) shapes
+generateSwagger :: Maybe Projects.Project -> Vector Endpoints.SwEndpoint -> Vector Shapes.SwShape -> Vector Fields.SwField -> Vector Formats.SwFormat -> Value
+generateSwagger project endpoints shapes fields formats = swagger
+ where
+  merged = mergeEndpoints endpoints shapes fields formats
+  hosts = getUniqueHosts endpoints
+  paths = groupEndpointsByUrlPath $ V.toList merged
+  (projectTitle, projectDescription) = case project of
+    (Just pr) -> (pr.title, pr.description)
+    Nothing -> ("__APITOOLKIT", "Edit project description")
+  info = object ["description" .= String projectTitle, "title" .= String projectDescription, "version" .= String "1.0.0", "termsOfService" .= String "'https://apitoolkit.io/terms-and-conditions/'"]
+  swagger = object ["openapi" .= String "3.0.0", "info" .= info, "servers" .= Array hosts, "paths" .= paths]
 
 generateGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 generateGetH sess pid = do
@@ -254,15 +257,16 @@ generateGetH sess pid = do
       fields <- Fields.fieldsByEndpointHashes pid endpoint_hashes
       let field_hashes = V.map (\field -> field.fEndpointHash) fields
       formats <- Formats.formatsByFieldsHashes pid field_hashes
-      let merged = mergeEndpoints endpoints shapes fields formats
-      let hosts = getUniqueHosts endpoints
-      let paths = groupEndpointsByUrlPath $ V.toList merged
-      let (projectTitle, projectDescription) = case project of
-            (Just pr) -> (pr.title, pr.description)
-            Nothing -> ("__APITOOLKIT", "Edit project description")
-      let info = object ["description" .= String projectTitle, "title" .= String projectDescription, "version" .= String "1.0.0", "termsOfService" .= String "'https://apitoolkit.io/terms-and-conditions/'"]
-      let minimalJson = object ["openapi" .= String "3.0.0", "info" .= info, "servers" .= Array hosts, "paths" .= paths]
-      pure (project, minimalJson)
+      let swagger = generateSwagger project endpoints shapes fields formats
+      -- let merged = mergeEndpoints endpoints shapes fields formats
+      -- let hosts = getUniqueHosts endpoints
+      -- let paths = groupEndpointsByUrlPath $ V.toList merged
+      -- let (projectTitle, projectDescription) = case project of
+      --       (Just pr) -> (pr.title, pr.description)
+      --       Nothing -> ("__APITOOLKIT", "Edit project description")
+      -- let info = object ["description" .= String projectTitle, "title" .= String projectDescription, "version" .= String "1.0.0", "termsOfService" .= String "'https://apitoolkit.io/terms-and-conditions/'"]
+      -- let minimalJson = object ["openapi" .= String "3.0.0", "info" .= info, "servers" .= Array hosts, "paths" .= paths]
+      pure (project, swagger)
 
   let bwconf =
         (def :: BWConfig)
