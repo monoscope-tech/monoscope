@@ -153,7 +153,7 @@ library:
     - nyan-interpolation
     - pretty-simple
     - tmp-postgres
-    # - doctest-parallel
+    - directory
 
 executables:
   apitoolkit-server-exe:
@@ -169,7 +169,6 @@ executables:
     # - -fPIC
     dependencies:
     - apitoolkit-server
-    - doctest-parallel
     - relude >=1.1.0.0
     when:       
     - condition: false       
