@@ -102,7 +102,7 @@ formatsByFieldsHashes pid fieldHashes = query Select q (pid, fieldHashes)
  where
   q =
     [sql|
-          SELECT field_hash, field_format, examples
+          SELECT field_hash, field_format, examples, field_type
           FROM apis.formats
           WHERE project_id = ? AND  field_hash = ANY(?)
         |]

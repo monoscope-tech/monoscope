@@ -23,6 +23,7 @@ import Data.Aeson.Key qualified as AEKey
 import Data.Aeson
 import Models.Projects.Projects qualified as Projects
 
+import Models.Apis.Fields (fieldTypeToText)
 import Models.Apis.Fields qualified as Field
 import Models.Apis.Fields.Query qualified as Fields
 import Models.Users.Sessions qualified as Sessions
@@ -41,7 +42,7 @@ data MergedEndpoint = MergedEndpoint
 
 data MergedFieldsAndFormats = MergedFieldsAndFormats
   { field :: Fields.SwField
-  , format :: Maybe Formats.SwFormat
+  , format :: Formats.SwFormat
   }
   deriving stock (Show, Generic)
   deriving anyclass (AE.ToJSON)
@@ -108,12 +109,12 @@ convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
             then
               let field = find (\fi -> T.tail (parentPath <> "." <> grp) == fi.field.fKeyPath) categoryFields
                   (desc, t) = case field of
-                    Just f -> (f.field.fDescription, f.field.fFormat)
-                    Nothing -> (parentPath <> "." <> grp, "text")
+                    Just f -> (f.field.fDescription, fieldTypeToText f.format.swFieldType)
+                    Nothing -> (parentPath <> "." <> grp, fieldTypeToText Fields.FTString)
                   ob =
                     if T.isSuffixOf "[*]" grp
                       then object [AEKey.fromText (T.takeWhile (/= '[') grp) .= object ["description" .= String desc, "type" .= String "array", "items" .= object ["type" .= t]]]
-                      else object [AEKey.fromText grp .= object ["description" .= String desc, "type" .= String t]]
+                      else object [AEKey.fromText grp .= object ["description" .= String desc, "type" .= t]]
                in ob
             else
               let (key, t) = if T.isSuffixOf "[*]" grp then (T.takeWhile (/= '[') grp, "array") else (grp, "object")
@@ -155,7 +156,9 @@ mergeEndpoints endpoints shapes fields formats = V.map mergeEndpoint endpoints
 findMatchingFormat :: Fields.SwField -> V.Vector Formats.SwFormat -> MergedFieldsAndFormats
 findMatchingFormat field formats =
   let fieldHash = field.fHash
-      matchingFormat = V.find (\format -> fieldHash == format.swFieldHash) formats
+      matchingFormat = case V.find (\format -> fieldHash == format.swFieldHash) formats of
+        Just f -> f
+        Nothing -> Formats.SwFormat{swFieldHash = fieldHash, swFieldFormat = "Text", swFieldType = Fields.FTString, swExamples = [AE.Null], swHash = ""}
    in MergedFieldsAndFormats
         { field = field
         , format = matchingFormat
@@ -203,7 +206,7 @@ groupEndpointsByUrlPath endpoints =
           (Just s) -> s
           Nothing -> V.head mergedEndpoint.shapes
         rqBodyJson = convertKeyPathsToJson (V.toList okShape.shape.swRequestBodyKeypaths) (fromMaybe [] (Map.lookup Field.FCRequestBody okShape.sField)) ""
-     in AEKey.fromText (method mergedEndpoint) .= object ["responses" .= groupShapesByStatusCode (shapes mergedEndpoint), "requestBody" .= rqBodyJson]
+     in AEKey.fromText (T.toLower $ method mergedEndpoint) .= object ["responses" .= groupShapesByStatusCode (shapes mergedEndpoint), "requestBody" .= rqBodyJson]
 
 groupShapesByStatusCode :: V.Vector MergedShapesAndFields -> AE.Value
 groupShapesByStatusCode shapes =
