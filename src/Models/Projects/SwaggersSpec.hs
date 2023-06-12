@@ -14,17 +14,10 @@ import Models.Projects.Swaggers
 import Models.Users.Users (UserId (..))
 import Relude
 import Test.Hspec
-import Test.Hspec.QuickCheck
-import Database.Postgres.Temp qualified as TmpPostgres
-import Database.PostgreSQL.Simple (Connection, connectPostgreSQL, close)
-import Data.Pool (Pool, createPool)
-import Control.Exception (throwIO)
-import Database.Postgres.Temp (withDbCache, defaultConfig, cacheConfig, cacheAction, withConfig, toConnectionString, withSnapshot, DirectoryType (Temporary), snapshotConfig)
-import Database.PostgreSQL.Simple.Migration qualified as Migrations
-import Database.PostgreSQL.Simple.Migration
-import Database.PostgreSQL.Entity.DBT qualified as DBT
-import Debug.Pretty.Simple (pTraceShowM)
+import Database.PostgreSQL.Entity.DBT (withPool)
 import Data.Maybe
+import Pkg.TmpPg qualified as TmpPg
+import Database.PostgreSQL.Transact (DBT)
 
 -- Helper function to create a Swagger value for testing
 createSwagger ::  ProjectId -> UserId -> Value -> DBT.DBT IO Swagger
@@ -65,56 +58,45 @@ withSetup f = do
 
 
 spec :: Spec
--- spec = beforeAll_ resetDatabase $ describe "Models.Projects.Swaggers" $ do
-spec = aroundAll withSetup $ describe "Models.Projects.Swaggers" $ do
+spec = aroundAll TmpPg.withSetup $ describe "Models.Projects.Swaggers" $ do
+  let swaggerId = SwaggerId UUID.nil 
+  let swaggerJson' = object ["info" .= object ["title" .= "API"]]
+  let swaggerJson1 = object ["info" .= object ["title" .= "API 1"]]
+  let swaggerJson2 = object ["info" .= object ["title" .= "API 2"]]
   describe "addSwagger" $
     it "should insert a new Swagger into the database" $ \pool -> do
-      projectId <- ProjectId <$> liftIO UUIDV4.nextRandom
-      createdBy <- UserId <$> liftIO UUIDV4.nextRandom
-      swaggerId <- SwaggerId <$> liftIO UUIDV4.nextRandom
-      let swaggerJson = object ["info" .= object ["title" .= "API"]]
+      currentTime <- liftIO getZonedTime
       let swagger =
             Swagger
               { Models.Projects.Swaggers.id = swaggerId
-              , projectId = projectId
-              , createdBy = createdBy
-              , createdAt = undefined
-              , updatedAt = undefined
-              , swaggerJson = swaggerJson
+              , projectId = ProjectId UUID.nil 
+              , createdBy =  UserId UUID.nil
+              , createdAt = currentTime 
+              , updatedAt = currentTime 
+              , swaggerJson = swaggerJson'
               }
-      
-      result <- DBT.withPool pool $ do
-        addSwagger swagger
+      result <- withPool pool $ do
+        _ <- addSwagger swagger
         getSwaggerById (swaggerId.toText)
-      (fromJust result).swaggerJson `shouldBe` swaggerJson 
+      (fromJust result).swaggerJson `shouldBe` swaggerJson' 
 
   describe "getSwaggerById" $
     it "should retrieve a Swagger by its ID" $ \pool -> do
-      projectId <- ProjectId <$> liftIO UUIDV4.nextRandom
-      createdBy <- UserId <$> liftIO UUIDV4.nextRandom
-      let swaggerJson' = object ["info" .= object ["title" .= ("API" :: String)]]
-      swagger <- DBT.withPool pool $ createSwagger projectId createdBy swaggerJson'
-      result <- DBT.withPool pool $ getSwaggerById ( swagger.id.toText )
+      swagger <- withPool pool $ createSwagger (ProjectId UUID.nil) (UserId UUID.nil) swaggerJson'
+      result <- withPool pool $ getSwaggerById ( swagger.id.toText )
       (fromJust result).swaggerJson `shouldBe` swagger.swaggerJson
 
   describe "swaggersByProject" $
     it "should retrieve all Swaggers for a given Project" $ \pool -> do
-      projectId <- ProjectId <$> liftIO UUIDV4.nextRandom
-      createdBy <- UserId <$> liftIO UUIDV4.nextRandom
-      let swaggerJson1 = object ["info" .= object ["title" .= "API 1"]]
-      let swaggerJson2 = object ["info" .= object ["title" .= "API 2"]]
-      result <- DBT.withPool pool $ do
-        createSwagger projectId createdBy swaggerJson1
-        createSwagger projectId createdBy swaggerJson2
-        swaggersByProject projectId
-      (map (^. #swaggerJson) (toList result)) `shouldBe` [swaggerJson1, swaggerJson2]
+      result <- withPool pool $ do
+        _ <- createSwagger (ProjectId UUID.nil) (UserId UUID.nil)  swaggerJson1
+        _ <- createSwagger (ProjectId UUID.nil) (UserId UUID.nil)  swaggerJson2
+        swaggersByProject (ProjectId UUID.nil) 
+      (map (^. #swaggerJson) (toList result)) `shouldBe` [swaggerJson',swaggerJson', swaggerJson1, swaggerJson2]
 
-  -- describe "updateSwagger" $
-  --   prop "should update the Swagger JSON of a Swagger" $ \pool -> \(swaggerJson1, swaggerJson2) -> do
-  --     projectId <- ProjectId <$> liftIO UUIDV4.nextRandom
-  --     createdBy <- UserId <$> liftIO UUIDV4.nextRandom
-  --     swagger <- liftIO $ createSwagger projectId createdBy swaggerJson1
-  --     result <- DBT.withPool pool $ do
-  --       updateSwagger (toText $ Models.Projects.Swaggers.id swagger) swaggerJson2
-  --       getSwaggerById (toText $ Models.Projects.Swaggers.id swagger)
-  --     fmap Models.Projects.Swaggers.swaggerJson result `shouldBe` Just swaggerJson2
+  describe "updateSwagger" $
+    it "should update the Swagger JSON of a Swagger" $ \pool -> do
+      result <- withPool pool $ do
+        _ <- updateSwagger (swaggerId.toText) swaggerJson2
+        getSwaggerById (swaggerId.toText)
+      (fromJust result).swaggerJson `shouldBe` swaggerJson2

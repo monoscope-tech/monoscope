@@ -20,8 +20,8 @@
 # resolver:
 #   url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/18/18.yaml
 # resolver: nightly-2023-04-24
-resolver: lts-20.21
-
+# resolver: lts-20.21
+resolver: nightly-2023-06-04
 
 # User packages to be built.
 # Various formats can be used as shown in the example below.
@@ -33,7 +33,7 @@ resolver: lts-20.21
 #   - auto-update
 #   - wai
 packages:
-- .
+  - .
 # Dependency packages to be pulled from upstream that are not in the resolver.
 # These entries can reference officially published versions as well as
 # forks / in-progress versions pinned to a git hash. For example:
@@ -43,7 +43,7 @@ packages:
 # - git: https://github.com/commercialhaskell/stack.git
 #   commit: e7b331f14bcffb8367cd58fbfc8b40ec7642100a
 #
-extra-deps: 
+extra-deps:
   - Unique-0.4.7.9@sha256:a7e154cf6d05169777a1e54aadab24fb3a6eae3ee167e5e77d7ba96d182436c7,2064
   # - co-log-0.5.0.0
   # - co-log-core-0.3.1.0
@@ -62,23 +62,23 @@ extra-deps:
   - nyan-interpolation-core-0.9.0.1@sha256:1bda0e90d2045eb18c905f905082f4098829c1bdcbc4012663686a1c503b4ded,4067
   - nyan-interpolation-0.9@sha256:8cf238be4c04746e4e9eabb34001c990c23e5837a19eb8652c584e57e92ecb41,3797
   - git: https://github.com/kowainik/typerep-map
-    commit: 5787946c3c89c9b608f4d5308d2a27cc9a27761f 
+    commit: 5787946c3c89c9b608f4d5308d2a27cc9a27761f
     subdirs:
       - .
   - git: https://github.com/co-log/co-log
-    commit: 08c1cbc3b5df64a19d059b84239d384b7382ec43 
+    commit: 08c1cbc3b5df64a19d059b84239d384b7382ec43
     subdirs:
       - .
   - git: https://github.com/marcelbuesing/sendgrid-v3
-    commit: c8b7fa416e5c11b4828c35d0ef29158019433fa2 
+    commit: c8b7fa416e5c11b4828c35d0ef29158019433fa2
     subdirs:
       - .
   - git: https://github.com/haskell-servant/servant-lucid
-    commit: ca0ccc45ffa073556f74befb114710e797b4628a 
+    commit: ca0ccc45ffa073556f74befb114710e797b4628a
     subdirs:
       - .
   - git: https://github.com/tonyalaribe/xxhash
-    commit: 0fa01adb871e66996d4ed2c27a3e97fac39ac466 
+    commit: 0fa01adb871e66996d4ed2c27a3e97fac39ac466
     subdirs:
       - .
   - git: https://github.com/brendanhay/gogol.git
@@ -90,11 +90,16 @@ extra-deps:
       - lib/services/gogol-logging
       - lib/services/gogol-cloudtrace
   - git: https://github.com/tchoutri/pg-entity.git
-    commit: da682990e5f283ab809474901cb4348ac9dbcb05 
+    commit: da682990e5f283ab809474901cb4348ac9dbcb05
     subdirs:
       - .
   - git: https://github.com/saurabhnanda/odd-jobs
-    commit: 60481132b229d22eda8efcd3392dd1df237bd968 
+    commit: 60481132b229d22eda8efcd3392dd1df237bd968
+    subdirs:
+      - .
+  - git: https://github.com/tonyalaribe/tmp-postgres
+    # branch: support-homebrew-initdb
+    commit: 92bf7825e90dddb9e77758f9819295ecffc0f420
     subdirs:
       - .
 
@@ -115,6 +120,8 @@ allow-newer: true
 # Override the architecture used by stack, especially useful on Windows
 # arch: i386
 # arch: x86_64
+# arch: arm64
+
 #
 # Extra directories used by stack for building
 # extra-include-dirs: [/path/to/dir]

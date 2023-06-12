@@ -8,6 +8,7 @@ module RequestMessages (
   requestMsgToDumpAndEndpoint,
   valueToFormatStr,
   valueToFields,
+  redactJSON,
   SDKTypes (..),
 ) where
 
