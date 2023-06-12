@@ -15,6 +15,7 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields qualified as Fields
 import Relude.Unsafe ((!!))
 
+import Data.HashMap.Strict qualified as HM
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.Shapes qualified as Shapes
 
@@ -111,17 +112,19 @@ convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
                   (desc, t) = case field of
                     Just f -> (f.field.fDescription, fieldTypeToText f.format.swFieldType)
                     Nothing -> (parentPath <> "." <> grp, fieldTypeToText Fields.FTString)
-                  ob =
+                  (key, ob) =
                     if T.isSuffixOf "[*]" grp
-                      then object [AEKey.fromText (T.takeWhile (/= '[') grp) .= object ["description" .= String desc, "type" .= String "array", "items" .= object ["type" .= t]]]
-                      else object [AEKey.fromText grp .= object ["description" .= String desc, "type" .= t]]
-               in ob
+                      then (T.takeWhile (/= '[') grp, object ["description" .= String desc, "type" .= String "array", "items" .= object ["type" .= t]])
+                      else (grp, object ["description" .= String desc, "type" .= t])
+                  validKey = if key == "" then "schema" else key
+               in object [AEKey.fromText validKey .= ob]
             else
               let (key, t) = if T.isSuffixOf "[*]" grp then (T.takeWhile (/= '[') grp, "array") else (grp, "object")
+                  validKey = if key == "" then "schema" else key
                   ob =
                     if t == "array"
-                      then object [AEKey.fromText key .= object ["type" .= String t, "items" .= object ["type" .= String "object", "properties" .= convertKeyPathsToJson keypath.subGoups categoryFields (parentPath <> "." <> grp)]]]
-                      else object [AEKey.fromText key .= object ["properties" .= convertKeyPathsToJson keypath.subGoups categoryFields (parentPath <> "." <> grp), "type" .= String t]]
+                      then object [AEKey.fromText validKey .= object ["type" .= String t, "items" .= object ["type" .= String "object", "properties" .= convertKeyPathsToJson keypath.subGoups categoryFields (parentPath <> "." <> grp)]]]
+                      else object [AEKey.fromText validKey .= object ["properties" .= convertKeyPathsToJson keypath.subGoups categoryFields (parentPath <> "." <> grp), "type" .= String t]]
                in ob
         updateMap = case mergeObjects updatedJson parsedValue of
           Just obj -> obj
@@ -156,9 +159,16 @@ mergeEndpoints endpoints shapes fields formats = V.map mergeEndpoint endpoints
 findMatchingFormat :: Fields.SwField -> V.Vector Formats.SwFormat -> MergedFieldsAndFormats
 findMatchingFormat field formats =
   let fieldHash = field.fHash
-      matchingFormat = case V.find (\format -> fieldHash == format.swFieldHash) formats of
-        Just f -> f
-        Nothing -> Formats.SwFormat{swFieldHash = fieldHash, swFieldFormat = "Text", swFieldType = Fields.FTString, swExamples = [AE.Null], swHash = ""}
+      matchingFormat =
+        fromMaybe
+          Formats.SwFormat
+            { swFieldHash = fieldHash
+            , swFieldFormat = "Text"
+            , swFieldType = Fields.FTString
+            , swExamples = [AE.Null]
+            , swHash = ""
+            }
+          (V.find (\format -> fieldHash == format.swFieldHash) formats)
    in MergedFieldsAndFormats
         { field = field
         , format = matchingFormat
@@ -205,7 +215,8 @@ groupEndpointsByUrlPath endpoints =
     let okShape = case V.find (\shape -> length shape.shape.swRequestBodyKeypaths > 1) mergedEndpoint.shapes of
           (Just s) -> s
           Nothing -> V.head mergedEndpoint.shapes
-        rqBodyJson = convertKeyPathsToJson (V.toList okShape.shape.swRequestBodyKeypaths) (fromMaybe [] (Map.lookup Field.FCRequestBody okShape.sField)) ""
+        rqProps = convertKeyPathsToJson (V.toList okShape.shape.swRequestBodyKeypaths) (fromMaybe [] (Map.lookup Field.FCRequestBody okShape.sField)) ""
+        rqBodyJson = object ["content" .= object ["*/*" .= rqProps]]
      in AEKey.fromText (T.toLower $ method mergedEndpoint) .= object ["responses" .= groupShapesByStatusCode (shapes mergedEndpoint), "requestBody" .= rqBodyJson]
 
 groupShapesByStatusCode :: V.Vector MergedShapesAndFields -> AE.Value
