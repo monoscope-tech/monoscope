@@ -213,11 +213,12 @@ expectedSwaggerJSON =
                     "type": "object",
                     "properties": {
                       "name": {
+                        "description": "",
                         "type": "string"
                       },
                       "age": {
-                        "type": "number",
-                        "format": "integer"
+                        "description": "",
+                        "type": "number"
                       }
                     }
                   }
@@ -232,9 +233,11 @@ expectedSwaggerJSON =
                   "type": "object",
                   "properties": {
                     "message": {
+                      "description": "",
                       "type": "string"
                     },
                     "type": {
+                      "description": "",
                       "type": "string"
                     }
                   }
@@ -249,13 +252,15 @@ expectedSwaggerJSON =
                      "type": "object",
                        "properties": {
                          "name": {
+                           "description": "",
                            "type": "string"
                          },
                          "age": {
-                           "type": "number",
-                           "format": "integer"
+                           "description": "",
+                           "type": "number"
                          },
                          "weight": {
+                           "description": "",
                            "type": "number"
                          }
                        }
