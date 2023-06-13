@@ -109,7 +109,7 @@ convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
             then
               let field = find (\fi -> T.tail (parentPath <> "." <> grp) == fi.field.fKeyPath) categoryFields
                   (desc, t) = case field of
-                    Just f -> (f.field.fDescription, fieldTypeToText f.format.swFieldType)
+                    Just f -> if fieldTypeToText f.format.swFieldType == "bool" then (f.field.fDescription, "boolean") else (f.field.fDescription, fieldTypeToText f.format.swFieldType)
                     Nothing -> (parentPath <> "." <> grp, "string")
                   (key, ob) =
                     if T.isSuffixOf "[*]" grp
@@ -144,7 +144,6 @@ mergeEndpoints endpoints shapes fields formats = V.map mergeEndpoint endpoints
         mergedFieldsAndFormats = V.map (`findMatchingFormat` formats) matchingFields
         filteredShapes = V.filter (\shape -> shape.swEndpointHash == endpointHash) shapes
         matchingShapes = V.map (`findMatchingFields` mergedFieldsAndFormats) filteredShapes
-
         path = specCompartiblePath endpoint.urlPath
      in MergedEndpoint
           { urlPath = path
