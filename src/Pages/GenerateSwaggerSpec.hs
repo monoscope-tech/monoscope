@@ -4,6 +4,7 @@ module Pages.GenerateSwaggerSpec (spec) where
 
 import Data.Aeson (decode, encode)
 import Data.Aeson qualified as AE
+import Data.Aeson.QQ
 import Data.Maybe
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -17,21 +18,10 @@ import Pages.GenerateSwagger
 import Relude
 import Test.Hspec
 
--- Define a sample input for the generateSwagger function
-sampleProject :: Maybe Projects.Project
-sampleProject =
-  Just
-    ( Projects.Project
-        { id = Projects.ProjectId UUID.nil
-        , title = "Sample Project"
-        , description = "Sample description"
-        , active = True
-        , paymentPlan = "pro"
-        , createdAt = undefined
-        , updatedAt = undefined
-        , deletedAt = undefined
-        }
-    )
+projectTitle :: Text
+projectTitle = "Sample Project"
+projectDescription :: Text
+projectDescription = "Sample description"
 
 sampleEndpoints :: V.Vector Endpoints.SwEndpoint
 sampleEndpoints =
@@ -201,13 +191,88 @@ sampleFormats =
         }
     ]
 
-expectedSwaggerJSON = "{ \"openapi\": \"3.0.0\", \"info\": { \"description\": \"Sample Project\", \"title\": \"Sample description\", \"version\": \"1.0.0\", \"termsOfService\": \"'https://apitoolkit.io/terms-and-conditions/'\" }, \"servers\": [ { \"url\": \"localhost\" } ], \"paths\": { \"/users\": { \"get\": { \"responses\": { \"200\": { \"description\": \"\", \"headers\": {}, \"content\": { \"*/*\": { \"users.field1\": { \"description\": \"\", \"type\": \"Text\" }, \"users.field2\": { \"description\": \"\", \"type\": \"Text\" } } } } } } } }"
+expectedSwaggerJSON :: AE.Value
+expectedSwaggerJSON =
+  [aesonQQ|
+    {
+      "openapi": "3.0.0",
+      "info": {
+        "title":  "Sample Project",
+        "description" : "Sample description"
+      },
+      "servers": [{url:"localhost"}],
+      "paths": {
+        "/users": {
+          "get": {
+            "responses": {
+              "200": {
+                "description": "",
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "age": {
+                        "type": "number",
+                        "format": "integer"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "post": {
+            "responses": {
+              "401": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            },
+             "requestBody": {
+               "content": {
+                 "*/*": {
+                   "schema": {
+                     "description": "",
+                     "type": "object",
+                       "properties": {
+                         "name": {
+                           "type": "string"
+                         },
+                         "age": {
+                           "type": "number",
+                           "format": "integer"
+                         },
+                         "weight": {
+                           "type": "number"
+                         }
+                       }
+                   }
+                 }
+               }
+             }
+          }
+        }
+      }
+    }
+  |]
 
 spec :: Spec
 spec = describe "generateSwagger" $ do
-  -- it "generates Swagger JSON matching the expected output" $ do
-  --   let generatedSwaggerJSON = generateSwagger sampleProject sampleEndpoints sampleShapes sampleFields sampleFormats
-  --   case (decode expectedSwaggerJSON, encode generatedSwaggerJSON) of
-  --     (Just expected, Just generated) -> expected `shouldBe` generated
-  --     _ -> expectationFailure "Failed to decode JSON"
-  pass
+  it "generates Swagger JSON matching the expected output" $ do
+    let generatedSwaggerJSON = generateSwagger projectTitle projectDescription sampleEndpoints sampleShapes sampleFields sampleFormats
+    case (decode $ encode expectedSwaggerJSON, decode $ encode generatedSwaggerJSON) of
+      (Just expected, Just generated) -> expected `shouldBe` generated
+      _ -> expectationFailure "Failed to decode JSON"
