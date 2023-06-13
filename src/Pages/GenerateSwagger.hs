@@ -230,15 +230,12 @@ mapFunc mShape =
       headers = object ["*/*" .= convertKeyPathsToJson (V.toList mShape.shape.swResponseHeadersKeypaths) (fromMaybe [] (Map.lookup Field.FCResponseHeader mShape.sField)) ""]
    in show mShape.shape.swStatusCode .= object ["description" .= String "", "headers" .= headers, "content" .= content]
 
-generateSwagger :: Maybe Projects.Project -> Vector Endpoints.SwEndpoint -> Vector Shapes.SwShape -> Vector Fields.SwField -> Vector Formats.SwFormat -> Value
-generateSwagger project endpoints shapes fields formats = swagger
+generateSwagger :: Text -> Text -> Vector Endpoints.SwEndpoint -> Vector Shapes.SwShape -> Vector Fields.SwField -> Vector Formats.SwFormat -> Value
+generateSwagger projectTitle projectDescription endpoints shapes fields formats = swagger
  where
   merged = mergeEndpoints endpoints shapes fields formats
   hosts = getUniqueHosts endpoints
   paths = groupEndpointsByUrlPath $ V.toList merged
-  (projectTitle, projectDescription) = case project of
-    (Just pr) -> (pr.title, pr.description)
-    Nothing -> ("__APITOOLKIT", "Edit project description")
   info = object ["description" .= String projectTitle, "title" .= String projectDescription, "version" .= String "1.0.0", "termsOfService" .= String "'https://apitoolkit.io/terms-and-conditions/'"]
   swagger = object ["openapi" .= String "3.0.0", "info" .= info, "servers" .= Array hosts, "paths" .= paths]
 
@@ -254,7 +251,10 @@ generateGetH sess pid = do
       fields <- Fields.fieldsByEndpointHashes pid endpoint_hashes
       let field_hashes = V.map (\field -> field.fHash) fields
       formats <- Formats.formatsByFieldsHashes pid field_hashes
-      let swagger = generateSwagger project endpoints shapes fields formats
+      let (projectTitle, projectDescription) = case project of
+            (Just pr) -> (toText pr.title, toText pr.description)
+            Nothing -> ("__APITOOLKIT", "Edit project description")
+      let swagger = generateSwagger projectTitle projectDescription endpoints shapes fields formats
       pure (project, swagger)
 
   let bwconf =
