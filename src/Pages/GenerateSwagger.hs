@@ -206,7 +206,7 @@ groupEndpointsByUrlPath endpoints =
    in object $ map constructUrlPathEntry (Map.toList grouped)
  where
   constructUrlPathEntry (urlPath, mergedEndpoints) =
-    AEKey.fromText urlPath .= object (map constructMethodEntry mergedEndpoints)
+    AEKey.fromText (if urlPath == "" then "/" else urlPath) .= object (map constructMethodEntry mergedEndpoints)
 
   constructMethodEntry mergedEndpoint =
     let okShape = case V.find (\shape -> length shape.shape.swRequestBodyKeypaths > 1) mergedEndpoint.shapes of
@@ -214,7 +214,7 @@ groupEndpointsByUrlPath endpoints =
           Nothing -> V.head mergedEndpoint.shapes
         rqProps = convertKeyPathsToJson (V.toList okShape.shape.swRequestBodyKeypaths) (fromMaybe [] (Map.lookup Field.FCRequestBody okShape.sField)) ""
         rqBodyJson = object ["content" .= object ["*/*" .= rqProps]]
-     in AEKey.fromText (T.toLower $ method mergedEndpoint) .= object ["responses" .= groupShapesByStatusCode (shapes mergedEndpoint), "requestBody" .= rqBodyJson]
+     in AEKey.fromText (T.toLower $ method mergedEndpoint) .= object ["summary" .= String "", "responses" .= groupShapesByStatusCode (shapes mergedEndpoint), "requestBody" .= rqBodyJson]
 
 groupShapesByStatusCode :: V.Vector MergedShapesAndFields -> AE.Value
 groupShapesByStatusCode shapes =
@@ -227,7 +227,7 @@ constructStatusCodeEntry =
 mapFunc :: MergedShapesAndFields -> AET.Pair
 mapFunc mShape =
   let content = object ["*/*" .= convertKeyPathsToJson (V.toList mShape.shape.swResponseBodyKeypaths) (fromMaybe [] (Map.lookup Field.FCResponseBody mShape.sField)) ""]
-      headers = object ["application/json" .= convertKeyPathsToJson (V.toList mShape.shape.swResponseHeadersKeypaths) (fromMaybe [] (Map.lookup Field.FCResponseHeader mShape.sField)) ""]
+      headers = object ["*/*" .= convertKeyPathsToJson (V.toList mShape.shape.swResponseHeadersKeypaths) (fromMaybe [] (Map.lookup Field.FCResponseHeader mShape.sField)) ""]
    in show mShape.shape.swStatusCode .= object ["description" .= String "", "headers" .= headers, "content" .= content]
 
 generateSwagger :: Maybe Projects.Project -> Vector Endpoints.SwEndpoint -> Vector Shapes.SwShape -> Vector Fields.SwField -> Vector Formats.SwFormat -> Value
