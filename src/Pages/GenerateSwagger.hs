@@ -110,7 +110,7 @@ convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
               let field = find (\fi -> T.tail (parentPath <> "." <> grp) == fi.field.fKeyPath) categoryFields
                   (desc, t) = case field of
                     Just f -> if fieldTypeToText f.format.swFieldType == "bool" then (f.field.fDescription, "boolean") else (f.field.fDescription, fieldTypeToText f.format.swFieldType)
-                    Nothing -> (parentPath <> "." <> grp, "string")
+                    Nothing -> ("", "string")
                   (key, ob) =
                     if T.isSuffixOf "[*]" grp
                       then (T.takeWhile (/= '[') grp, object ["description" .= String desc, "type" .= String "array", "items" .= object ["type" .= t]])
@@ -209,13 +209,16 @@ groupEndpointsByUrlPath endpoints =
     AEKey.fromText (if urlPath == "" then "/" else urlPath) .= object (map constructMethodEntry mergedEndpoints)
 
   constructMethodEntry mergedEndpoint =
-    let okShape = case V.find (\shape -> length shape.shape.swRequestBodyKeypaths > 1) mergedEndpoint.shapes of
-          (Just s) -> s
-          Nothing -> V.head mergedEndpoint.shapes
-        rqProps = convertKeyPathsToJson (V.toList okShape.shape.swRequestBodyKeypaths) (fromMaybe [] (Map.lookup Field.FCRequestBody okShape.sField)) ""
-        rqBodyJson = object ["content" .= object ["*/*" .= rqProps]]
-     in AEKey.fromText (T.toLower $ method mergedEndpoint) .= object ["summary" .= String "", "responses" .= groupShapesByStatusCode (shapes mergedEndpoint), "requestBody" .= rqBodyJson]
+    let endPointJSON = case V.find (\shape -> length (V.filter (T.isPrefixOf "") shape.shape.swRequestBodyKeypaths) > 1) mergedEndpoint.shapes of
+          (Just s) ->
+            let rqProps = convertKeyPathsToJson (V.toList s.shape.swRequestBodyKeypaths) (fromMaybe [] (Map.lookup Field.FCRequestBody s.sField)) ""
+             in AEKey.fromText (T.toLower $ method mergedEndpoint) .= object ["responses" .= groupShapesByStatusCode (shapes mergedEndpoint), "requestBody" .= object ["content" .= object ["*/*" .= rqProps]]]
+          Nothing -> AEKey.fromText (T.toLower $ method mergedEndpoint) .= object ["responses" .= groupShapesByStatusCode (shapes mergedEndpoint)]
+     in endPointJSON
 
+-- qrShape = case V.find (\shape -> length shape.shape.swQueryParamsKeypaths > 1) mergedEndpoint.shapes of
+--   (Just s) -> s
+--   Nothing -> V.head mergedEndpoint.shapes
 groupShapesByStatusCode :: V.Vector MergedShapesAndFields -> AE.Value
 groupShapesByStatusCode shapes =
   object $ constructStatusCodeEntry (V.toList shapes)
