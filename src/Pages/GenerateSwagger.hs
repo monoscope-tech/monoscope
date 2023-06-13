@@ -251,7 +251,7 @@ generateSwagger projectTitle projectDescription endpoints shapes fields formats 
   merged = mergeEndpoints endpoints shapes fields formats
   hosts = getUniqueHosts endpoints
   paths = groupEndpointsByUrlPath $ V.toList merged
-  info = object ["description" .= String projectTitle, "title" .= String projectDescription, "version" .= String "1.0.0", "termsOfService" .= String "'https://apitoolkit.io/terms-and-conditions/'"]
+  info = object ["description" .= String projectDescription, "title" .= String projectTitle, "version" .= String "1.0.0", "termsOfService" .= String "https://apitoolkit.io/terms-and-conditions/"]
   swagger = object ["openapi" .= String "3.0.0", "info" .= info, "servers" .= Array hosts, "paths" .= paths]
 
 generateGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
