@@ -62,8 +62,13 @@ data KeyPathGroup = KeyPathGroup
 convertQueryParamsToJSON :: [T.Text] -> [MergedFieldsAndFormats] -> Value
 convertQueryParamsToJSON params fields = paramsJSON
  where
+  mapFunc param = let f = find (\fld -> fld.field.fKeyPath == param) fields
+                      (des, t) = case f of 
+                        Just f -> (f.field.fDescription, fieldTypeToText f.format.swFieldType)
+                        Nothing -> ("", "unknown")
+                  in object ["in" .= String "query", "name" .= T.takeWhile (/= '.') (T.dropWhile (== '.') param), "description" .= String des, "schema" .= object ["type" .= String t]]
   paramsJSON =
-    let ar = V.fromList $ map (\f -> object ["in" .= String "query", "name" .= T.takeWhile (/= '.') (T.dropWhile (== '.') f), "description" .= String "", "schema" .= object ["type" .= String "string"]]) params
+    let ar = V.fromList $ map mapFunc params
      in Array ar
 
 processItem :: T.Text -> Map.Map T.Text KeyPathGroup -> Map.Map T.Text KeyPathGroup
@@ -121,7 +126,7 @@ convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
                                    newF = find (\fi -> newK == fi.field.fKeyPath) categoryFields
                                    ob = case newF of
                                     Just f -> if fieldTypeToText f.format.swFieldType == "bool" then (f.field.fDescription, "boolean") else (f.field.fDescription, fieldTypeToText f.format.swFieldType)
-                                    Nothing -> ("", "string")
+                                    Nothing -> ("", "unknown")
                                 in ob
                   (key, ob) =
                     if T.isSuffixOf "[*]" grp
@@ -226,13 +231,13 @@ groupEndpointsByUrlPath endpoints =
         endPointJSON = case (rqShape, qShape) of 
             (Just rqS, Just qS) ->
                   let rqProps = convertKeyPathsToJson (V.toList rqS.shape.swRequestBodyKeypaths) (fromMaybe [] (Map.lookup Field.FCRequestBody rqS.sField)) ""
-                      qParams = convertQueryParamsToJSON (V.toList qS.shape.swQueryParamsKeypaths) (fromMaybe [] (Map.lookup Field.FCRequestBody qS.sField))
+                      qParams = convertQueryParamsToJSON (V.toList qS.shape.swQueryParamsKeypaths) (fromMaybe [] (Map.lookup Field.FCQueryParam qS.sField))
                    in AEKey.fromText (T.toLower $ method mergedEndpoint) .= object ["parameters" .= qParams, "responses" .= groupShapesByStatusCode (shapes mergedEndpoint), "requestBody" .= object ["content" .= object ["*/*" .= rqProps]]]
             (Just rqS, Nothing) ->
                   let rqProps = convertKeyPathsToJson (V.toList rqS.shape.swRequestBodyKeypaths) (fromMaybe [] (Map.lookup Field.FCRequestBody rqS.sField)) ""
                    in AEKey.fromText (T.toLower $ method mergedEndpoint) .= object ["responses" .= groupShapesByStatusCode (shapes mergedEndpoint), "requestBody" .= object ["content" .= object ["*/*" .= rqProps]]]
             (Nothing, Just qS) ->
-                let qParams = convertQueryParamsToJSON (V.toList qS.shape.swQueryParamsKeypaths) (fromMaybe [] (Map.lookup Field.FCRequestBody qS.sField))
+                let qParams = convertQueryParamsToJSON (V.toList qS.shape.swQueryParamsKeypaths) (fromMaybe [] (Map.lookup Field.FCQueryParam qS.sField))
                 in AEKey.fromText (T.toLower $ method mergedEndpoint) .= object ["parameters" .= qParams, "responses" .= groupShapesByStatusCode (shapes mergedEndpoint)]
             (_,_) -> AEKey.fromText (T.toLower $ method mergedEndpoint) .= object ["responses" .= groupShapesByStatusCode (shapes mergedEndpoint)]
      in endPointJSON
