@@ -129,8 +129,8 @@ convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
                   validKey = if key == "" then "schema" else key
                   ob =
                     if t == "array"
-                      then object [AEKey.fromText validKey .= object ["type" .= String t, "items" .= object ["type" .= String "object", "properties" .= convertKeyPathsToJson keypath.subGoups categoryFields (parentPath <> "." <> grp)]]]
-                      else object [AEKey.fromText validKey .= object ["properties" .= convertKeyPathsToJson keypath.subGoups categoryFields (parentPath <> "." <> grp), "type" .= String t]]
+                      then object [AEKey.fromText validKey .= object ["type" .= String "array", "items" .= object ["type" .= String "object", "properties" .= convertKeyPathsToJson keypath.subGoups categoryFields (parentPath <> "." <> grp)]]]
+                      else object [AEKey.fromText validKey .= object ["properties" .= convertKeyPathsToJson keypath.subGoups categoryFields (parentPath <> "." <> grp), "type" .= String "object"]]
                in ob
         updateMap = case mergeObjects updatedJson parsedValue of
           Just obj -> obj

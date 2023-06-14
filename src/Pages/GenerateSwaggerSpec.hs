@@ -252,7 +252,8 @@ expectedSwaggerJSON =
                                 "description": "",
                                 "type": "number"
                               }
-                            }
+                            },
+                            "type": "object"
                           }
                         },
                         "key": {
@@ -315,11 +316,9 @@ expectedSwaggerJSON =
               }
             },
              "requestBody": {
-               "description": "",
                "content": {
                  "*/*": {
                    "schema": {
-                     "description": "",
                      "type": "object",
                       "properties": {
                         "name": {
