@@ -348,5 +348,4 @@ spec :: Spec
 spec = describe "generateSwagger" $ do
   it "generates Swagger JSON matching the expected output" $ do
     let generatedSwaggerJSON = generateSwagger projectTitle projectDescription sampleEndpoints sampleShapes sampleFields sampleFormats
-    print $ encode generatedSwaggerJSON
     RequestMessages.valueToFields generatedSwaggerJSON `shouldBe` RequestMessages.valueToFields expectedSwaggerJSON
