@@ -117,7 +117,12 @@ convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
               let field = find (\fi -> T.tail (parentPath <> "." <> grp) == fi.field.fKeyPath) categoryFields
                   (desc, t) = case field of
                     Just f -> if fieldTypeToText f.format.swFieldType == "bool" then (f.field.fDescription, "boolean") else (f.field.fDescription, fieldTypeToText f.format.swFieldType)
-                    Nothing -> ("", "string")
+                    Nothing -> let newK = T.replace "[*]" ".[]" (T.tail parentPath <> "." <> grp)
+                                   newF = find (\fi -> newK == fi.field.fKeyPath) categoryFields
+                                   ob = case newF of
+                                    Just f -> if fieldTypeToText f.format.swFieldType == "bool" then (f.field.fDescription, "boolean") else (f.field.fDescription, fieldTypeToText f.format.swFieldType)
+                                    Nothing -> ("", "string")
+                                in ob
                   (key, ob) =
                     if T.isSuffixOf "[*]" grp
                       then (T.takeWhile (/= '[') grp, object ["description" .= String desc, "type" .= String "array", "items" .= object ["type" .= t]])
@@ -242,7 +247,7 @@ constructStatusCodeEntry =
 mapFunc :: MergedShapesAndFields -> AET.Pair
 mapFunc mShape =
   let content = object ["*/*" .= convertKeyPathsToJson (V.toList mShape.shape.swResponseBodyKeypaths) (fromMaybe [] (Map.lookup Field.FCResponseBody mShape.sField)) ""]
-      headers = object ["*/*" .= convertKeyPathsToJson (V.toList mShape.shape.swResponseHeadersKeypaths) (fromMaybe [] (Map.lookup Field.FCResponseHeader mShape.sField)) ""]
+      headers = object ["content" .= convertKeyPathsToJson (V.toList mShape.shape.swResponseHeadersKeypaths) (fromMaybe [] (Map.lookup Field.FCResponseHeader mShape.sField)) ""]
    in show mShape.shape.swStatusCode .= object ["description" .= String "", "headers" .= headers, "content" .= content]
 
 generateSwagger :: Text -> Text -> Vector Endpoints.SwEndpoint -> Vector Shapes.SwShape -> Vector Fields.SwField -> Vector Formats.SwFormat -> Value

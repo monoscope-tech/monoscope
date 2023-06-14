@@ -21,6 +21,11 @@ projectTitle = "Sample Project"
 projectDescription :: Text
 projectDescription = "Sample description"
 
+
+----
+--- GENERAL STRUCTURE TEST
+----
+
 sampleEndpoints :: V.Vector Endpoints.SwEndpoint
 sampleEndpoints =
   V.fromList
@@ -344,8 +349,152 @@ expectedSwaggerJSON =
     }
   |]
 
+----
+--- HEADERS TEST
+----
+hSampleEndpoints :: V.Vector Endpoints.SwEndpoint
+hSampleEndpoints = V.fromList [
+  Endpoints.SwEndpoint
+    { Endpoints.urlPath = "/headers"
+    , Endpoints.urlParams = AE.Null
+    , Endpoints.method = "GET"
+    , Endpoints.hosts = V.fromList ["localhost"]
+    , Endpoints.hash = "endpoint1_GET"
+    }
+  ]
+
+hSampleShapes :: V.Vector Shapes.SwShape
+hSampleShapes = V.fromList [
+  Shapes.SwShape
+    { swEndpointHash = "endpoint1_GET"
+    , swFieldHashes = V.fromList ["field1", "field2","field3"]
+    , swRequestBodyKeypaths = V.fromList []
+    , swResponseBodyKeypaths = V.fromList []
+    , swResponseHeadersKeypaths = V.fromList [".Access-Control-Allow-Credentials.[]", ".Access-Control-Allow-Methods.[]", ".Content-Length"]
+    , swRequestHeadersKeypaths = V.fromList []
+    , swQueryParamsKeypaths = V.fromList []
+    , swHash = "shape1"
+    , swStatusCode = 200
+    }
+  ]
+
+hSampleFields :: V.Vector Fields.SwField
+hSampleFields = V.fromList [
+  Fields.SwField
+    { fHash = "field1"
+    , fFieldCategory = Fields.FCResponseHeader
+    , fKeyPath = ".Access-Control-Allow-Credentials.[]"
+    , fDescription = "Sample header 1"
+    , fEndpointHash = "endpoint1_GET"
+    , fKey = "header1"
+    , fFieldType = Fields.FTString
+    , fFormat = "text"
+    }
+  , Fields.SwField
+    { fHash = "field2"
+    , fFieldCategory = Fields.FCResponseHeader
+    , fKeyPath = ".Access-Control-Allow-Methods.[]"
+    , fDescription = "Sample header 2"
+    , fEndpointHash = "endpoint1_GET"
+    , fKey = "header2"
+    , fFieldType = Fields.FTString
+    , fFormat = "text"
+    }
+  , Fields.SwField
+    { fHash = "field3"
+    , fFieldCategory = Fields.FCResponseHeader
+    , fKeyPath = ".Content-Length"
+    , fDescription = "Sample header 3"
+    , fEndpointHash = "endpoint1_GET"
+    , fKey = "header3"
+    , fFieldType = Fields.FTNumber
+    , fFormat = "text"
+    }
+  ]
+
+hSampleFormats :: V.Vector Formats.SwFormat
+hSampleFormats = V.fromList [
+      Formats.SwFormat
+      { Formats.swFieldHash = "field1"
+      , Formats.swFieldFormat = "text"
+      , Formats.swFieldType = Fields.FTString
+      , Formats.swHash = ""
+      }
+    , Formats.SwFormat
+      { Formats.swFieldHash = "field2"
+      , Formats.swFieldFormat = "text"
+      , Formats.swFieldType = Fields.FTString
+      , Formats.swHash = ""
+      }
+    , Formats.SwFormat
+      { Formats.swFieldHash = "field3"
+      , Formats.swFieldFormat = "integer"
+      , Formats.swFieldType = Fields.FTNumber
+      , Formats.swHash = ""
+      }
+  ]
+
+hExpectedSwaggerJSON :: AE.Value
+hExpectedSwaggerJSON =
+  [aesonQQ|
+    {
+      "openapi": "3.0.0",
+      "info": {
+        "title":  "Sample Project",
+        "termsOfService" : "https://apitoolkit.io/terms-and-conditions/",
+        "description" : "Sample description",
+        "version": "1.0.0"
+      },
+      "servers": [{"url":"localhost"}],
+      "paths": {
+        "/headers": {
+          "get": {
+            "responses": {
+              "200": {
+                "description": "",
+                "headers": {
+                   "content": {
+                      "schema": {
+                        "properties": {
+                          "Access-Control-Allow-Credentials": {
+                            "description": "Sample header 1",
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "Access-Control-Allow-Methods": {
+                            "description": "Sample header 2",
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "Content-Length": {
+                            "description": "Sample header 3",
+                             type: "number"
+                          }
+                        },
+                        "type": "object"
+                      }
+                   }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  |]
+
+
 spec :: Spec
 spec = describe "generateSwagger" $ do
-  it "generates Swagger JSON matching the expected output" $ do
+  it "GENERAL: generates Swagger JSON matching the expected output" $ do
     let generatedSwaggerJSON = generateSwagger projectTitle projectDescription sampleEndpoints sampleShapes sampleFields sampleFormats
     RequestMessages.valueToFields generatedSwaggerJSON `shouldBe` RequestMessages.valueToFields expectedSwaggerJSON
+    --- headers
+  it "HEADERS: generates swagger JSON matching expected output" $ do
+    let hGeneratedSwaggerJSON = generateSwagger projectTitle projectDescription hSampleEndpoints hSampleShapes hSampleFields hSampleFormats
+    print $ encode hGeneratedSwaggerJSON
+    RequestMessages.valueToFields hGeneratedSwaggerJSON `shouldBe` RequestMessages.valueToFields hExpectedSwaggerJSON
