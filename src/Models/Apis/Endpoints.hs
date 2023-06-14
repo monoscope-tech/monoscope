@@ -4,8 +4,10 @@
 
 module Models.Apis.Endpoints (
   Endpoint (..),
+  SwEndpoint (..),
   EndpointId (..),
   EndpointRequestStats (..),
+  endpointsByProjectId,
   endpointUrlPath,
   upsertEndpoints,
   endpointRequestStatsByProject,
@@ -201,3 +203,25 @@ endpointByHash :: Projects.ProjectId -> Text -> PgT.DBT IO (Maybe Endpoint)
 endpointByHash pid hash = queryOne Select q (pid, hash)
  where
   q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, akeys(hosts), hash from apis.endpoints where project_id=? AND hash=? |]
+
+data SwEndpoint = SwEndpoint
+  { urlPath :: Text
+  , urlParams :: AE.Value -- Key value map of key to the type. Needs a bit more figuring out.
+  , method :: Text
+  , hosts :: Vector.Vector Text
+  , hash :: Text
+  }
+  deriving stock (Show, Generic, Eq)
+  deriving anyclass (FromRow, ToRow, Default)
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SwEndpoint
+  deriving (FromField) via Aeson SwEndpoint
+
+endpointsByProjectId :: Projects.ProjectId -> PgT.DBT IO (Vector SwEndpoint)
+endpointsByProjectId pid = query Select q (Only pid)
+ where
+  q =
+    [sql|
+         SELECT url_path, url_params, method, akeys(hosts), hash
+         FROM apis.endpoints
+         WHERE project_id = ?
+       |]

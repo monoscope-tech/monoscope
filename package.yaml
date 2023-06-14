@@ -1,10 +1,10 @@
-name:                apitoolkit-server
-version:             0.1.0.0
-github:              "githubuser/apitoolkit-server"
-license:             BSD3
-author:              "Author name here"
-maintainer:          "example@example.com"
-copyright:           "2021 Author name here"
+name: apitoolkit-server
+version: 0.1.0.0
+github: 'githubuser/apitoolkit-server'
+license: BSD3
+author: 'Author name here'
+maintainer: 'example@example.com'
+copyright: '2021 Author name here'
 
 ghc-options:
   # For details on warnings: https://downloads.haskell.org/~ghc/master/users-guide/using-warnings.html
@@ -28,7 +28,7 @@ ghc-options:
   - -Wno-missing-kind-signatures
   # - -fllvm
 
-default-extensions: 
+default-extensions:
   - BangPatterns
   - BlockArguments
   - DataKinds
@@ -40,7 +40,7 @@ default-extensions:
   - ExtendedDefaultRules
   - FlexibleInstances
   - ImportQualifiedPost
-  - InstanceSigs          
+  - InstanceSigs
   - LambdaCase
   - MultiParamTypeClasses
   - NamedFieldPuns
@@ -48,7 +48,7 @@ default-extensions:
   - OverloadedLabels
   - OverloadedLists
   - OverloadedStrings
-  - PatternSynonyms       
+  - PatternSynonyms
   - QuasiQuotes
   - RecordWildCards
   - StrictData
@@ -60,9 +60,8 @@ default-extensions:
   # - OverloadedRecordUpdate
   # - RebindableSyntax
 
-
 extra-source-files:
-- README.md
+  - README.md
 
 # Metadata used when publishing your package
 # synopsis:            Short description of your package
@@ -71,8 +70,7 @@ extra-source-files:
 # To avoid duplicated efforts in documentation and dealing with the
 # complications of embedding Haddock markup inside cabal files, it is
 # common to point users to the README.md file.
-description:         Please see the README on GitHub at <https://github.com/githubuser/apitoolkit-server#readme>
-
+description: Please see the README on GitHub at <https://github.com/githubuser/apitoolkit-server#readme>
 
 library:
   source-dirs: src
@@ -109,7 +107,7 @@ library:
     - lens
     - lens-aeson
     - lucid
-    - lucid-htmx 
+    - lucid-htmx
     - lucid-hyperscript
     - lucid-svg
     - megaparsec
@@ -131,7 +129,7 @@ library:
     - sendgrid-v3 >= 0.3.0.0
     - servant
     - servant-htmx
-    - servant-lucid 
+    - servant-lucid
     - servant-server
     - text
     - text-conversions
@@ -157,48 +155,48 @@ library:
 
 executables:
   apitoolkit-server-exe:
-    main:                Main.hs
-    source-dirs:         app
+    main: Main.hs
+    source-dirs: app
     ghc-options:
-    - -threaded
-    - -rtsopts
-    - -with-rtsopts=-N
-    # - -fwrite-ide-info                   
-    - -hiedir=.hie
-    - -O2
+      - -threaded
+      - -rtsopts
+      - -with-rtsopts=-N
+      # - -fwrite-ide-info
+      - -hiedir=.hie
+      - -O2
     # - -fPIC
     dependencies:
-    - apitoolkit-server
-    - relude >=1.1.0.0
-    when:       
-    - condition: false       
-      other-modules: Paths_apitoolkit_server
+      - apitoolkit-server
+      - relude >=1.1.0.0
+    when:
+      - condition: false
+        other-modules: Paths_apitoolkit_server
 
 tests:
   doctests:
     main: Main.hs
     source-dirs: test/doctests
     ghc-options:
-    - -threaded
-    - -rtsopts
-    - -with-rtsopts=-N
-    - -fwrite-ide-info                  
-    - -hiedir=.hie
+      - -threaded
+      - -rtsopts
+      - -with-rtsopts=-N
+      - -fwrite-ide-info
+      - -hiedir=.hie
     dependencies:
-    - base
-    - apitoolkit-server
-    - doctest-parallel >= 0.1
-    - relude >= 1.1.0.0
-    - hspec
-    - hspec-discover
+      - base
+      - apitoolkit-server
+      - doctest-parallel >= 0.1
+      - relude >= 1.1.0.0
+      - hspec
+      - hspec-discover
   tests:
-    main:                Main.hs
-    source-dirs:         test/hspec
+    main: Main.hs
+    source-dirs: test/hspec
     dependencies:
-    - base
-    - apitoolkit-server
-    - tmp-postgres
-    - hspec
-    - hspec-discover
-    - doctest-parallel
-    - relude >= 1.1.0.0
+      - base
+      - apitoolkit-server
+      - tmp-postgres
+      - hspec
+      - hspec-discover
+      - doctest-parallel
+      - relude >= 1.1.0.0

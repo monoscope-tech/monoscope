@@ -3,17 +3,18 @@
 module Pages.Endpoints.EndpointDetails (endpointDetailsH, fieldDetailsPartialH, fieldsToNormalized) where
 
 import Config
-import Pages.Components
 import Data.Aeson qualified as AE
 import Data.Aeson.Text (encodeToLazyText)
 import Data.Default (def)
 import Data.Map qualified as Map
-import Data.Text as T (breakOnAll, dropWhile, isInfixOf, replace, splitOn, toLower, isSuffixOf)
-import Data.Time (UTCTime, ZonedTime, defaultTimeLocale, formatTime, getCurrentTime, utcToZonedTime, utc, addUTCTime, secondsToNominalDiffTime)
-import Data.UUID qualified as UUID 
+import Data.Text as T (breakOnAll, dropWhile, isInfixOf, isSuffixOf, replace, splitOn, toLower)
+import Data.Time (UTCTime, ZonedTime, addUTCTime, defaultTimeLocale, formatTime, getCurrentTime, secondsToNominalDiffTime, utc, utcToZonedTime)
+import Data.Time.Format.ISO8601 (iso8601ParseM)
+import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
+import Debug.Pretty.Simple
 import Fmt
 import Lucid
 import Lucid.Htmx
@@ -31,15 +32,14 @@ import Optics.Core ((^.))
 import Pages.Anomalies.AnomalyList qualified as AnomaliesList
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Charts.Charts qualified as Charts
+import Pages.Components
 import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
 import Relude hiding (max, min)
 import Relude.Unsafe qualified as Unsafe
 import Text.Interpolation.Nyan (int, rmode')
-import Witch (from)
-import Data.Time.Format.ISO8601 (iso8601ParseM)
-import Utils
 import Text.Pretty.Simple
-import Debug.Pretty.Simple
+import Utils
+import Witch (from)
 
 timePickerItems :: [(Text, Text)]
 timePickerItems =
@@ -58,8 +58,10 @@ data ParamInput = ParamInput
   }
 
 subPageMenu :: [(Text, Text)]
-subPageMenu =  [("Overview", "overview")
-              ,("API Docs", "api_docs")]
+subPageMenu =
+  [ ("Overview", "overview")
+  , ("API Docs", "api_docs")
+  ]
 
 fieldDetailsPartialH :: Sessions.PersistentSession -> Projects.ProjectId -> Fields.FieldId -> DashboardM (Html ())
 fieldDetailsPartialH sess pid fid = do
@@ -125,8 +127,8 @@ aesonValueToText = toStrict . encodeToLazyText
 
 -- | endpointDetailsH is the main handler for the endpoint details page.
 -- It reuses the fieldDetailsView as well, which is used for the side navigation on the page and also exposed un the fieldDetailsPartialH endpoint
-endpointDetailsH :: Sessions.PersistentSession -> Projects.ProjectId -> Endpoints.EndpointId -> Maybe Text -> Maybe Text ->Maybe Text -> Maybe Text-> DashboardM (Html ())
-endpointDetailsH sess pid eid fromDStr toDStr sinceStr' subPageM= do
+endpointDetailsH :: Sessions.PersistentSession -> Projects.ProjectId -> Endpoints.EndpointId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
+endpointDetailsH sess pid eid fromDStr toDStr sinceStr' subPageM = do
   pool <- asks pool
   now <- liftIO getCurrentTime
   let sinceStr = if (isNothing fromDStr && isNothing toDStr && isNothing sinceStr') || (fromDStr == Just "") then Just "14D" else sinceStr'
@@ -180,7 +182,7 @@ endpointDetailsH sess pid eid fromDStr toDStr sinceStr' subPageM= do
 
 endpointDetails :: ParamInput -> UTCTime -> Endpoints.Endpoint -> EndpointRequestStats -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> Vector Anomalies.AnomalyVM -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 endpointDetails paramInput currTime endpoint endpointStats fieldsM reqLatenciesRolledByStepsJ anomalies dateRange = do
-  let currentURLSubPage =  deleteParam "subpage" paramInput.currentURL
+  let currentURLSubPage = deleteParam "subpage" paramInput.currentURL
   div_ [class_ "w-full h-full overflow-hidden"] $ do
     div_ [class_ "w-[75%] inline-block p-5 h-full overflow-y-scroll"] $ do
       div_ [class_ "flex flex-row justify-between mb-10"] $ do
@@ -191,9 +193,14 @@ endpointDetails paramInput currTime endpoint endpointStats fieldsM reqLatenciesR
           img_ [src_ "/assets/svgs/cheveron-down.svg", class_ " h-4 w-4 m-2"]
         nav_ [class_ " space-x-4"] $ do
           subPageMenu
-            & mapM_ \(title, slug) -> a_ [href_ $ currentURLSubPage <> "&subpage=" <> slug
-                , class_ $ "cursor-pointer px-3 py-2 font-medium text-sm rounded-md " 
-                  <> if slug == paramInput.subPage then " bg-indigo-100 text-indigo-700 " else " text-gray-500 hover:text-gray-700" ] $ toHtml title 
+            & mapM_ \(title, slug) ->
+              a_
+                [ href_ $ currentURLSubPage <> "&subpage=" <> slug
+                , class_ $
+                    "cursor-pointer px-3 py-2 font-medium text-sm rounded-md "
+                      <> if slug == paramInput.subPage then " bg-indigo-100 text-indigo-700 " else " text-gray-500 hover:text-gray-700"
+                ]
+                $ toHtml title
 
         div_ [class_ "flex flex-row hidden"] $ do
           a_ [href_ ""] $ do
@@ -204,11 +211,10 @@ endpointDetails paramInput currTime endpoint endpointStats fieldsM reqLatenciesR
               h3_ [class_ "text-white text-sm text-bold mx-2 mt-1"] "Download Swagger"
               div_ [class_ "bg-blue-900 p-1 rounded-lg ml-2"] $ do
                 mIcon_ "whitedown" "text-white h-2 w-2 m-1"
-      if paramInput.subPage == "api_docs" then
-          apiDocsSubPage fieldsM
-        else
-          apiOverviewSubPage paramInput currTime endpointStats fieldsM reqLatenciesRolledByStepsJ anomalies dateRange 
-        
+      if paramInput.subPage == "api_docs"
+        then apiDocsSubPage fieldsM
+        else apiOverviewSubPage paramInput currTime endpointStats fieldsM reqLatenciesRolledByStepsJ anomalies dateRange
+
     aside_
       [ class_ "w-[25%] inline-block h-full overflow-y-auto overflow-x-hidden bg-white border border-gray-200 p-5 xsticky xtop-0 "
       , id_ "detailSidebar"
@@ -234,8 +240,8 @@ endpointDetails paramInput currTime endpoint endpointStats fieldsM reqLatenciesR
 apiDocsSubPage :: Map Fields.FieldCategoryEnum [Fields.Field] -> Html ()
 apiDocsSubPage fieldsM = do
   div_ [class_ "space-y-16 pb-20", id_ "subpage"] $ do
-      reqResSection "Request" True fieldsM
-      reqResSection "Response" False fieldsM
+    reqResSection "Request" True fieldsM
+    reqResSection "Response" False fieldsM
 
 apiOverviewSubPage :: ParamInput -> UTCTime -> EndpointRequestStats -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> Vector Anomalies.AnomalyVM -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 apiOverviewSubPage paramInput currTime endpoint fieldsM reqLatenciesRolledByStepsJ anomalies dateRange = do
@@ -255,7 +261,8 @@ apiOverviewSubPage paramInput currTime endpoint fieldsM reqLatenciesRolledByStep
     div_ [id_ "timepickerBox", class_ "hidden absolute z-10 mt-1  rounded-md flex"] do
       div_ [class_ "inline-block w-84 overflow-auto bg-white py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm"] do
         timePickerItems
-          & mapM_ \(val, title) -> a_
+          & mapM_ \(val, title) ->
+            a_
               [ class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 "
               , href_ $ currentURLSearch <> "&since=" <> val
               ]
@@ -279,7 +286,7 @@ endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p
         span_ [class_ "text-lg text-slate-800"] "Endpoint Stats"
     div_ [class_ "space-y-5 endpointStatsSubSection"] $ do
       div_ [class_ "grid grid-cols-3  gap-5"] $ do
-        statBox "Total Anomalies" "Total Anomalies for this endpoint this week vs total for the project" enpStats.ongoingAnomaliesProj (Just enpStats.ongoingAnomaliesProj) 
+        statBox "Total Anomalies" "Total Anomalies for this endpoint this week vs total for the project" enpStats.ongoingAnomaliesProj (Just enpStats.ongoingAnomaliesProj)
         statBox "Total Requests" "Total Requests on this endpoint this week vs total for the project" enpStats.totalRequests (Just enpStats.totalRequestsProj)
         statBox "Total Time" "Total Time on this endpoint this week vs total for the project" enpStats.totalRequests (Just enpStats.totalRequestsProj)
 
@@ -304,7 +311,7 @@ endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p
             select_ [] $ do
               option_ [class_ "text-2xl font-normal"] "Error Rates"
             div_ [class_ "h-64 "] do
-              Charts.throughput enpStats.projectId "reqsErrorRates" (Just $ Charts.QBAnd (Charts.QBEndpointHash enpStats.endpointHash) (Charts.QBStatusCodeGT 400))  (Just Charts.GBStatusCode) 120 Nothing True dateRange (Just "roma") 
+              Charts.throughput enpStats.projectId "reqsErrorRates" (Just $ Charts.QBAnd (Charts.QBEndpointHash enpStats.endpointHash) (Charts.QBStatusCodeGT 400)) (Just Charts.GBStatusCode) 120 Nothing True dateRange (Just "roma")
 
         div_ [class_ "flex-1 card-round p-3"] $ do
           div_ [class_ "p-4 space-y-6"] $ do
@@ -391,7 +398,7 @@ subSubSection title fieldsM =
           div_ [class_ "bg-gray-100 px-10 rounded-xl w-full p-4 text-sm text-slate-900 "] $ toHtml title
         div_ [class_ "space-y-1 subSectionContent"] $ do
           -- pTraceShowM $ fields
-          -- pTraceShowM "========================" 
+          -- pTraceShowM "========================"
           -- pTraceShowM $ fieldsToNormalized fields
           fieldsToNormalized fields & mapM_ \(key, fieldM) -> do
             let segments = splitOn "." key
@@ -448,7 +455,7 @@ fieldsToNormalized =
     map
       ((,Nothing) . fst)
       ( field.keyPath
-          & T.dropWhile (== '.') 
+          & T.dropWhile (== '.')
           & breakOnAll "."
       )
       & (++ [(T.dropWhile (== '.') $ field.keyPath, Just field)])

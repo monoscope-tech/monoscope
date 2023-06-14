@@ -56,6 +56,8 @@ library
       Pages.Endpoints.EndpointComponents
       Pages.Endpoints.EndpointDetails
       Pages.Endpoints.EndpointList
+      Pages.GenerateSwagger
+      Pages.GenerateSwaggerSpec
       Pages.Log
       Pages.ManualIngestion
       Pages.Projects.CreateProject
