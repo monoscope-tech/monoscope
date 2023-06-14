@@ -488,6 +488,145 @@ hExpectedSwaggerJSON =
   |]
 
 
+-----
+--- ParametersTests
+----
+
+pSampleEndpoints :: V.Vector Endpoints.SwEndpoint
+pSampleEndpoints = V.fromList [
+  Endpoints.SwEndpoint
+    { Endpoints.urlPath = "/headers"
+    , Endpoints.urlParams = AE.Null
+    , Endpoints.method = "GET"
+    , Endpoints.hosts = V.fromList ["localhost"]
+    , Endpoints.hash = "endpoint1_GET"
+    }
+  ]
+
+pSampleShapes :: V.Vector Shapes.SwShape
+pSampleShapes = V.fromList [
+  Shapes.SwShape
+    { swEndpointHash = "endpoint1_GET"
+    , swFieldHashes = V.fromList ["field1", "field2","field3"]
+    , swRequestBodyKeypaths = V.fromList []
+    , swResponseBodyKeypaths = V.fromList []
+    , swResponseHeadersKeypaths = V.fromList []
+    , swRequestHeadersKeypaths = V.fromList []
+    , swQueryParamsKeypaths = V.fromList ["from.[]", "page.[]", "ref.[]"]
+    , swHash = "shape1"
+    , swStatusCode = 200
+    }
+  ]
+
+pSampleFields :: V.Vector Fields.SwField
+pSampleFields = V.fromList [
+  Fields.SwField
+    { fHash = "field1"
+    , fFieldCategory = Fields.FCQueryParam
+    , fKeyPath = "from.[]"
+    , fDescription = "Sample param 1"
+    , fEndpointHash = "endpoint1_GET"
+    , fKey = "header1"
+    , fFieldType = Fields.FTString
+    , fFormat = "text"
+    }
+  , Fields.SwField
+    { fHash = "field2"
+    , fFieldCategory = Fields.FCQueryParam
+    , fKeyPath = "page.[]"
+    , fDescription = "Sample param 2"
+    , fEndpointHash = "endpoint1_GET"
+    , fKey = "header2"
+    , fFieldType = Fields.FTString
+    , fFormat = "text"
+    }
+  , Fields.SwField
+    { fHash = "field3"
+    , fFieldCategory = Fields.FCQueryParam
+    , fKeyPath = "ref.[]"
+    , fDescription = "Sample param 3"
+    , fEndpointHash = "endpoint1_GET"
+    , fKey = "header3"
+    , fFieldType = Fields.FTString
+    , fFormat = "text"
+    }
+  ]
+
+pSampleFormats :: V.Vector Formats.SwFormat
+pSampleFormats = V.fromList [
+      Formats.SwFormat
+      { Formats.swFieldHash = "field1"
+      , Formats.swFieldFormat = "text"
+      , Formats.swFieldType = Fields.FTString
+      , Formats.swHash = ""
+      }
+    , Formats.SwFormat
+      { Formats.swFieldHash = "field2"
+      , Formats.swFieldFormat = "text"
+      , Formats.swFieldType = Fields.FTString
+      , Formats.swHash = ""
+      }
+    , Formats.SwFormat
+      { Formats.swFieldHash = "field3"
+      , Formats.swFieldFormat = "integer"
+      , Formats.swFieldType = Fields.FTString
+      , Formats.swHash = ""
+      }
+  ]
+
+pExpectedSwaggerJSON :: AE.Value
+pExpectedSwaggerJSON =
+  [aesonQQ|
+    {
+      "openapi": "3.0.0",
+      "info": {
+        "title":  "Sample Project",
+        "termsOfService" : "https://apitoolkit.io/terms-and-conditions/",
+        "description" : "Sample description",
+        "version": "1.0.0"
+      },
+      "servers": [{"url":"localhost"}],
+      "paths": {
+        "/headers": {
+          "get": {
+            "parameters": [
+              {
+                "in": "query",
+                "name": "from",
+                "description": "Sample param 1",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              {
+                "in": "query",
+                "name": "page",
+                "description": "Sample param 2",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              {
+                "in": "query",
+                "name": "ref",
+                "description": "Sample param 3",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            ],
+            "responses": {
+              "200": {
+                "description": ""
+              }
+            }
+          }
+        }
+      }
+    }
+  |]
+
+
 spec :: Spec
 spec = describe "generateSwagger" $ do
   it "GENERAL: generates Swagger JSON matching the expected output" $ do
@@ -496,5 +635,8 @@ spec = describe "generateSwagger" $ do
     --- headers
   it "HEADERS: generates swagger JSON matching expected output" $ do
     let hGeneratedSwaggerJSON = generateSwagger projectTitle projectDescription hSampleEndpoints hSampleShapes hSampleFields hSampleFormats
-    print $ encode hGeneratedSwaggerJSON
     RequestMessages.valueToFields hGeneratedSwaggerJSON `shouldBe` RequestMessages.valueToFields hExpectedSwaggerJSON
+    -- parameters
+  it "PARAMETERS: generates swagger JSON matching expected output" $ do
+    let pGeneratedSwaggerJSON = generateSwagger projectTitle projectDescription pSampleEndpoints pSampleShapes pSampleFields pSampleFormats
+    RequestMessages.valueToFields pGeneratedSwaggerJSON `shouldBe` RequestMessages.valueToFields pExpectedSwaggerJSON
