@@ -30,18 +30,18 @@ sampleEndpoints :: V.Vector Endpoints.SwEndpoint
 sampleEndpoints =
   V.fromList
     [ Endpoints.SwEndpoint
-        { Endpoints.urlPath = "/users"
-        , Endpoints.urlParams = AE.Null
-        , Endpoints.method = "GET"
-        , Endpoints.hosts = V.fromList ["localhost"]
-        , Endpoints.hash = "endpoint1_GET"
+        { urlPath = "/users"
+        , urlParams = AE.Null
+        , method = "GET"
+        , hosts = V.fromList ["localhost"]
+        , hash = "endpoint1_GET"
         }
     , Endpoints.SwEndpoint
-        { Endpoints.urlPath = "/users"
-        , Endpoints.urlParams = AE.Null
-        , Endpoints.method = "POST"
-        , Endpoints.hosts = V.fromList ["localhost"]
-        , Endpoints.hash = "endpoint1_POST"
+        { urlPath = "/users"
+        , urlParams = AE.Null
+        , method = "POST"
+        , hosts = V.fromList ["localhost"]
+        , hash = "endpoint1_POST"
         }
     ]
 
@@ -104,7 +104,7 @@ sampleFields =
         , fEndpointHash = "endpoint1_GET"
         , fKey = "key"
         , fFieldType = Fields.FTNumber
-        , fFormat = "Integer"
+        , fFormat = "integer"
         }
     , Fields.SwField
         { fHash = "field3"
@@ -173,52 +173,60 @@ sampleFormats :: V.Vector Formats.SwFormat
 sampleFormats =
   V.fromList
     [ Formats.SwFormat
-        { Formats.swFieldHash = "field1"
-        , Formats.swFieldFormat = "Text"
-        , Formats.swFieldType = Fields.FTString
-        , Formats.swHash = ""
+        { swFieldHash = "field1"
+        , swFieldFormat = "text"
+        , swFieldType = Fields.FTString
+        , swExamples = ["jon"]
+        , swHash = ""
         }
     , Formats.SwFormat
-        { Formats.swFieldHash = "field2"
-        , Formats.swFieldFormat = "Integer"
-        , Formats.swFieldType = Fields.FTNumber
-        , Formats.swHash = ""
+        { swFieldHash = "field2"
+        , swFieldFormat = "integer"
+        , swFieldType = Fields.FTNumber
+        , swExamples = ["18"]
+        , swHash = ""
         }
     , Formats.SwFormat
-        { Formats.swFieldHash = "field3"
-        , Formats.swFieldFormat = "Text"
-        , Formats.swFieldType = Fields.FTString
-        , Formats.swHash = ""
+        { swFieldHash = "field3"
+        , swFieldFormat = "text"
+        , swFieldType = Fields.FTString
+        , swExamples = ["jon"]
+        , swHash = ""
         }
     , Formats.SwFormat
-        { Formats.swFieldHash = "field4"
-        , Formats.swFieldFormat = "Integer"
-        , Formats.swFieldType = Fields.FTNumber
-        , Formats.swHash = ""
+        { swFieldHash = "field4"
+        , swFieldFormat = "integer"
+        , swFieldType = Fields.FTNumber
+        , swExamples = ["18"]
+        , swHash = ""
         }
     , Formats.SwFormat
-        { Formats.swFieldHash = "field5"
-        , Formats.swFieldFormat = "Integer"
-        , Formats.swFieldType = Fields.FTNumber
-        , Formats.swHash = ""
+        { swFieldHash = "field5"
+        , swFieldFormat = "integer"
+        , swFieldType = Fields.FTNumber
+        , swExamples = ["75"]
+        , swHash = ""
         }
     , Formats.SwFormat
-        { Formats.swFieldHash = "field6"
-        , Formats.swFieldFormat = "Text"
-        , Formats.swFieldType = Fields.FTString
-        , Formats.swHash = ""
+        { swFieldHash = "field6"
+        , swFieldFormat = "text"
+        , swFieldType = Fields.FTString
+        , swExamples = ["hello"]
+        , swHash = ""
         }
     , Formats.SwFormat
-        { Formats.swFieldHash = "field7"
-        , Formats.swFieldFormat = "Text"
-        , Formats.swFieldType = Fields.FTString
-        , Formats.swHash = ""
+        { swFieldHash = "field7"
+        , swFieldFormat = "text"
+        , swFieldType = Fields.FTString
+        , swExamples = ["SUCCESS"]
+        , swHash = ""
         }
     , Formats.SwFormat
-      { Formats.swFieldHash = "field8"
-      , Formats.swFieldFormat = "Text"
-      , Formats.swFieldType = Fields.FTString
-      , Formats.swHash = ""
+      { swFieldHash = "field8"
+      , swFieldFormat = "text"
+      , swFieldType = Fields.FTString
+      , swExamples = ["no"]
+      , swHash = ""
       }
     ]
 
@@ -251,11 +259,15 @@ expectedSwaggerJSON =
                             "properties": {
                               "name": {
                                 "description": "",
-                                "type": "string"
+                                "type": "string",
+                                "format": "text",
+                                "example": "jon"
                               },
                               "age": {
                                 "description": "",
-                                "type": "number"
+                                "type": "number",
+                                "format": "integer",
+                                "example": "18"
                               }
                             },
                             "type": "object"
@@ -266,7 +278,9 @@ expectedSwaggerJSON =
                           "properties": {
                             "end": {
                               "description": "",
-                              "type": "string"
+                              "type": "string",
+                              "format": "text",
+                              "example": "no"
                             }
                           }
                         }
@@ -288,11 +302,15 @@ expectedSwaggerJSON =
                       "properties": {
                         "message": {
                           "description": "",
-                          "type": "string"
+                          "type": "string",
+                          "format": "text",
+                          "example": "hello"
                         },
                         "type": {
                           "description": "",
-                          "type": "string"
+                          "type": "string",
+                          "format": "text",
+                          "example": "SUCCESS"
                         }
                       }
                     }
@@ -308,11 +326,15 @@ expectedSwaggerJSON =
                       "properties": {
                         "message": {
                           "description": "",
-                          "type": "string"
+                          "type": "string",
+                          "format": "text",
+                          "example": "hello"
                         },
                         "type": {
                           "description": "",
-                          "type": "string"
+                          "type": "string",
+                          "format": "text",
+                          "example": "SUCCESS"
                         }
                       }
                     }
@@ -328,15 +350,21 @@ expectedSwaggerJSON =
                       "properties": {
                         "name": {
                           "description": "",
-                          "type": "string"
+                          "type": "string",
+                          "format": "text",
+                          "example":"jon"
                         },
                         "age": {
                           "description": "",
-                          "type": "number"
+                          "type": "number",
+                          "format": "integer",
+                          "example": "18"
                         },
                         "weight": {
                           "description": "",
-                          "type": "number"
+                          "type": "number",
+                          "format": "integer",
+                          "example": "75"
                         }
                       }
                    }
@@ -355,11 +383,11 @@ expectedSwaggerJSON =
 hSampleEndpoints :: V.Vector Endpoints.SwEndpoint
 hSampleEndpoints = V.fromList [
   Endpoints.SwEndpoint
-    { Endpoints.urlPath = "/headers"
-    , Endpoints.urlParams = AE.Null
-    , Endpoints.method = "GET"
-    , Endpoints.hosts = V.fromList ["localhost"]
-    , Endpoints.hash = "endpoint1_GET"
+    { urlPath = "/headers"
+    , urlParams = AE.Null
+    , method = "GET"
+    , hosts = V.fromList ["localhost"]
+    , hash = "endpoint1_GET"
     }
   ]
 
@@ -408,29 +436,32 @@ hSampleFields = V.fromList [
     , fEndpointHash = "endpoint1_GET"
     , fKey = "header3"
     , fFieldType = Fields.FTNumber
-    , fFormat = "text"
+    , fFormat = "integer"
     }
   ]
 
 hSampleFormats :: V.Vector Formats.SwFormat
 hSampleFormats = V.fromList [
       Formats.SwFormat
-      { Formats.swFieldHash = "field1"
-      , Formats.swFieldFormat = "text"
-      , Formats.swFieldType = Fields.FTString
-      , Formats.swHash = ""
+      { swFieldHash = "field1"
+      , swFieldFormat = "text"
+      , swFieldType = Fields.FTString
+      , swExamples = ["header 1"]
+      , swHash = ""
       }
     , Formats.SwFormat
-      { Formats.swFieldHash = "field2"
-      , Formats.swFieldFormat = "text"
-      , Formats.swFieldType = Fields.FTString
-      , Formats.swHash = ""
+      { swFieldHash = "field2"
+      , swFieldFormat = "text"
+      , swFieldType = Fields.FTString
+      , swExamples = ["header 2"]
+      , swHash = ""
       }
     , Formats.SwFormat
-      { Formats.swFieldHash = "field3"
-      , Formats.swFieldFormat = "integer"
-      , Formats.swFieldType = Fields.FTNumber
-      , Formats.swHash = ""
+      { swFieldHash = "field3"
+      , swFieldFormat = "integer"
+      , swFieldType = Fields.FTNumber
+      , swExamples = ["header 3"]
+      , swHash = ""
       }
   ]
 
@@ -459,20 +490,26 @@ hExpectedSwaggerJSON =
                           "Access-Control-Allow-Credentials": {
                             "description": "Sample header 1",
                             "items": {
-                              "type": "string"
+                              "type": "string",
+                              "format": "text",
+                              "example": "header 1"
                             },
                             "type": "array"
                           },
                           "Access-Control-Allow-Methods": {
                             "description": "Sample header 2",
                             "items": {
-                              "type": "string"
+                              "type": "string",
+                              "format": "text",
+                              "example": "header 2"
                             },
                             "type": "array"
                           },
                           "Content-Length": {
                             "description": "Sample header 3",
-                             type: "number"
+                             "type": "number",
+                             "format": "integer",
+                             "example": "header 3"
                           }
                         },
                         "type": "object"
@@ -495,11 +532,11 @@ hExpectedSwaggerJSON =
 pSampleEndpoints :: V.Vector Endpoints.SwEndpoint
 pSampleEndpoints = V.fromList [
   Endpoints.SwEndpoint
-    { Endpoints.urlPath = "/headers"
-    , Endpoints.urlParams = AE.Null
-    , Endpoints.method = "GET"
-    , Endpoints.hosts = V.fromList ["localhost"]
-    , Endpoints.hash = "endpoint1_GET"
+    { urlPath = "/headers"
+    , urlParams = AE.Null
+    , method = "GET"
+    , hosts = V.fromList ["localhost"]
+    , hash = "endpoint1_GET"
     }
   ]
 
@@ -555,22 +592,25 @@ pSampleFields = V.fromList [
 pSampleFormats :: V.Vector Formats.SwFormat
 pSampleFormats = V.fromList [
       Formats.SwFormat
-      { Formats.swFieldHash = "field1"
-      , Formats.swFieldFormat = "text"
-      , Formats.swFieldType = Fields.FTString
-      , Formats.swHash = ""
+      { swFieldHash = "field1"
+      , swFieldFormat = "text"
+      , swFieldType = Fields.FTString
+      , swExamples = ["/home"]
+      , swHash = ""
       }
     , Formats.SwFormat
-      { Formats.swFieldHash = "field2"
-      , Formats.swFieldFormat = "text"
-      , Formats.swFieldType = Fields.FTString
-      , Formats.swHash = ""
+      { swFieldHash = "field2"
+      , swFieldFormat = "text"
+      , swFieldType = Fields.FTString
+      , swExamples = ["2"]
+      , swHash = ""
       }
     , Formats.SwFormat
-      { Formats.swFieldHash = "field3"
-      , Formats.swFieldFormat = "integer"
-      , Formats.swFieldType = Fields.FTString
-      , Formats.swHash = ""
+      { swFieldHash = "field3"
+      , swFieldFormat = "text"
+      , swFieldType = Fields.FTString
+      , swExamples = ["me"]
+      , swHash = ""
       }
   ]
 
@@ -595,7 +635,9 @@ pExpectedSwaggerJSON =
                 "name": "from",
                 "description": "Sample param 1",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                   "format": "text",
+                   "example": "/home"
                 }
               },
               {
@@ -603,7 +645,9 @@ pExpectedSwaggerJSON =
                 "name": "page",
                 "description": "Sample param 2",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "format": "text",
+                  "example": "2"
                 }
               },
               {
@@ -611,7 +655,9 @@ pExpectedSwaggerJSON =
                 "name": "ref",
                 "description": "Sample param 3",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "format": "text",
+                  "example": "me"
                 }
               }
             ],

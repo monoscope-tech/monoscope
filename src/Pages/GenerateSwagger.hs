@@ -63,10 +63,10 @@ convertQueryParamsToJSON :: [T.Text] -> [MergedFieldsAndFormats] -> Value
 convertQueryParamsToJSON params fields = paramsJSON
  where
   mapFunc param = let f = find (\fld -> fld.field.fKeyPath == param) fields
-                      (des, t) = case f of 
-                        Just f -> (f.field.fDescription, fieldTypeToText f.format.swFieldType)
-                        Nothing -> ("", "unknown")
-                  in object ["in" .= String "query", "name" .= T.takeWhile (/= '.') (T.dropWhile (== '.') param), "description" .= String des, "schema" .= object ["type" .= String t]]
+                      (des, t, ft, eg) = case f of 
+                        Just f -> (f.field.fDescription, fieldTypeToText f.format.swFieldType, f.field.fFormat, (V.head f.format.swExamples))
+                        Nothing -> ("", "string", "text", "")
+                  in object ["in" .= String "query", "name" .= T.takeWhile (/= '.') (T.dropWhile (== '.') param), "description" .= String des, "schema" .= object ["type" .= String t, "format" .= ft, "example" .= eg]]
   paramsJSON =
     let ar = V.fromList $ map mapFunc params
      in Array ar
@@ -120,18 +120,22 @@ convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
           if null keypath.subGoups
             then
               let field = find (\fi -> T.tail (parentPath <> "." <> grp) == fi.field.fKeyPath) categoryFields
-                  (desc, t) = case field of
-                    Just f -> if fieldTypeToText f.format.swFieldType == "bool" then (f.field.fDescription, "boolean") else (f.field.fDescription, fieldTypeToText f.format.swFieldType)
+                  (desc, t, ft, eg) = case field of
+                    Just f -> if fieldTypeToText f.format.swFieldType == "bool" 
+                                then (f.field.fDescription, "boolean", f.field.fFormat,  (V.head f.format.swExamples)) 
+                              else (f.field.fDescription, fieldTypeToText f.format.swFieldType, f.field.fFormat, (V.head f.format.swExamples))
                     Nothing -> let newK = T.replace "[*]" ".[]" (T.tail parentPath <> "." <> grp)
                                    newF = find (\fi -> newK == fi.field.fKeyPath) categoryFields
                                    ob = case newF of
-                                    Just f -> if fieldTypeToText f.format.swFieldType == "bool" then (f.field.fDescription, "boolean") else (f.field.fDescription, fieldTypeToText f.format.swFieldType)
-                                    Nothing -> ("", "unknown")
+                                    Just f -> if fieldTypeToText f.format.swFieldType == "bool" 
+                                                then (f.field.fDescription, "boolean",f.field.fFormat,  (V.head f.format.swExamples))
+                                              else (f.field.fDescription, fieldTypeToText f.format.swFieldType, f.field.fFormat, (V.head f.format.swExamples))
+                                    Nothing -> ("", "string","text", "")
                                 in ob
                   (key, ob) =
                     if T.isSuffixOf "[*]" grp
-                      then (T.takeWhile (/= '[') grp, object ["description" .= String desc, "type" .= String "array", "items" .= object ["type" .= t]])
-                      else (grp, object ["description" .= String desc, "type" .= t])
+                      then (T.takeWhile (/= '[') grp, object ["description" .= String desc, "type" .= String "array", "items" .= object ["type" .= t,"format" .= ft, "example" .= eg]])
+                      else (grp, object ["description" .= String desc, "type" .= t, "format" .= ft, "example" .= eg])
                   validKey = if key == "" then "schema" else key
                in object [AEKey.fromText validKey .= ob]
             else
@@ -181,6 +185,7 @@ findMatchingFormat field formats =
             , swFieldFormat = "Text"
             , swFieldType = Fields.FTString
             , swHash = ""
+            , swExamples = []
             }
           (V.find (\format -> fieldHash == format.swFieldHash) formats)
    in MergedFieldsAndFormats
@@ -265,10 +270,10 @@ generateSwagger projectTitle projectDescription endpoints shapes fields formats 
   info = object ["description" .= String projectDescription, "title" .= String projectTitle, "version" .= String "1.0.0", "termsOfService" .= String "https://apitoolkit.io/terms-and-conditions/"]
   swagger = object ["openapi" .= String "3.0.0", "info" .= info, "servers" .= Array hosts, "paths" .= paths]
 
-generateGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
+generateGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM AE.Value
 generateGetH sess pid = do
   pool <- asks pool
-  (project, endpointStats) <- liftIO $
+  swagger <- liftIO $
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
       endpoints <- Endpoints.endpointsByProjectId pid
@@ -281,17 +286,5 @@ generateGetH sess pid = do
             (Just pr) -> (toText pr.title, toText pr.description)
             Nothing -> ("__APITOOLKIT", "Edit project description")
       let swagger = generateSwagger projectTitle projectDescription endpoints shapes fields formats
-      pure (project, swagger)
-
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = project
-          , pageTitle = "Endpoints"
-          }
-
-  pure $ bodyWrapper bwconf $ endpointList endpointStats pid
-
-endpointList :: AE.Value -> Projects.ProjectId -> Html ()
-endpointList enps pid = do
-  div_ [] $ toHtml (AE.encode enps)
+      pure  swagger
+  pure $ swagger

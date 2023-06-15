@@ -19,6 +19,18 @@ import Relude
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
 import Web.FormUrlEncoded (FromForm)
+import Pages.GenerateSwagger qualified as GenerateSwagger
+import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.Fields qualified as Fields
+
+import Models.Apis.Formats qualified as Formats
+import Models.Apis.Shapes qualified as Shapes
+import Models.Apis.Fields (fieldTypeToText)
+import Models.Apis.Fields qualified as Field
+import Models.Apis.Fields.Query qualified as Fields
+
+
+
 
 data SwaggerForm = SwaggerForm
   { swagger_json :: Text
@@ -41,8 +53,18 @@ documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id} = do
   let value = case decodeStrict (encodeUtf8 updated_swagger) of
         Just val -> val
         Nothing -> error "Failed to parse JSON: "
-  res <- liftIO $ withPool pool $ Swaggers.updateSwagger swagger_id value
-  print res
+  res <- liftIO $ withPool pool $ do
+        case swagger_id of 
+          "" -> do
+                swaggerId <- Swaggers.SwaggerId <$> liftIO UUIDV4.nextRandom
+                currentTime <- liftIO getZonedTime
+                let swaggerToAdd = Swaggers.Swagger{ id = swaggerId, projectId = pid, createdBy = sess.userId, createdAt = currentTime, updatedAt = currentTime, swaggerJson = value}
+                Swaggers.addSwagger swaggerToAdd
+                pass
+          _  -> do 
+                Swaggers.updateSwagger swagger_id value
+                pass
+
   let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Swagger Saved Successfully"]}|]
   pure $ addHeader hxTriggerData ""
 
@@ -76,14 +98,36 @@ documentationPostH sess pid SwaggerForm{swagger_json, from} = do
 documentationGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> DashboardM (Html ())
 documentationGetH sess pid swagger_id = do
   pool <- asks pool
-  (project, swaggers, currentSwagger) <- liftIO $
+  (project, swaggers, swagger, swaggerId) <- liftIO $
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
       swaggers <- Swaggers.swaggersByProject pid
       currentSwagger <- case swagger_id of
         Just swId -> Swaggers.getSwaggerById swId
-        Nothing -> pure Nothing
-      pure (project, V.reverse swaggers, currentSwagger)
+        Nothing -> pure Nothing 
+      (swaggerVal, swaggerValId) <- case (swaggers, currentSwagger) of 
+                     (_, Just swg) ->  do
+                                    let sw = swg.swaggerJson
+                                    let id = show swg.id.swaggerId
+                                    pure (sw, id)
+                     ([], Nothing) ->  do
+                                    endpoints <- Endpoints.endpointsByProjectId pid
+                                    let endpoint_hashes = V.map (\enp -> enp.hash) endpoints
+                                    shapes <- Shapes.shapesByEndpointHash pid endpoint_hashes
+                                    fields <- Fields.fieldsByEndpointHashes pid endpoint_hashes
+                                    let field_hashes = V.map (\field -> field.fHash) fields
+                                    formats <- Formats.formatsByFieldsHashes pid field_hashes
+                                    let (projectTitle, projectDescription) = case project of
+                                          (Just pr) -> (toText pr.title, toText pr.description)
+                                          Nothing -> ("__APITOOLKIT", "Edit project description")
+                                    let gn = GenerateSwagger.generateSwagger projectTitle projectDescription endpoints shapes fields formats
+                                    pure (gn, "")
+                     (val, Nothing) -> do
+                                    let latest = V.head $ V.reverse swaggers
+                                    let sw = latest.swaggerJson
+                                    let id = show latest.id.swaggerId
+                                    pure (sw, id)
+      pure (project, V.reverse swaggers,swaggerVal, swaggerValId)
 
   let bwconf =
         (def :: BWConfig)
@@ -91,10 +135,10 @@ documentationGetH sess pid swagger_id = do
           , currProject = project
           , pageTitle = "Documentation"
           }
-  pure $ bodyWrapper bwconf $ documentationsPage pid swaggers currentSwagger
+  pure $ bodyWrapper bwconf $ documentationsPage pid swaggers swaggerId (decodeUtf8 (encode swagger))
 
-documentationsPage :: Projects.ProjectId -> V.Vector Swaggers.Swagger -> Maybe Swaggers.Swagger -> Html ()
-documentationsPage pid swaggers currentSwagger = do
+documentationsPage :: Projects.ProjectId -> V.Vector Swaggers.Swagger -> String -> String -> Html ()
+documentationsPage pid swaggers swaggerID jsonString = do
   div_ [class_ "relative h-full"] $ do
     -- modal
     div_
@@ -128,17 +172,8 @@ documentationsPage pid swaggers currentSwagger = do
                   button_ [type_ "sumbit", class_ "btn btn-primary"] "Upload"
 
     -- page content
-    let recentSwagger = case currentSwagger of
-          Just swg -> Just swg
-          Nothing -> if V.null swaggers then Nothing else Just (V.head swaggers :: Swaggers.Swagger)
-    let jsonString = case recentSwagger of
-          Just swg -> decodeUtf8 (encode swg.swaggerJson)
-          Nothing -> "{\"info\": \"you have no swaggers at the moment\"}"
-    let swaggerID = case recentSwagger of
-          Just swg -> show swg.id.swaggerId
-          Nothing -> ""
 
-    input_ [id_ "swaggerData", type_ "hidden", value_ jsonString]
+    input_ [id_ "swaggerData", type_ "hidden", value_ (toText jsonString)]
     div_ [class_ "flex flex-col h-full w-full justify-between"] $ do
       div_ [class_ "flex w-full bg-white border-b items-center justify-between px-2", style_ "top: 0; height:60px; position: sticky"] $ do
         div_ [class_ "flex items-center gap-4"] $ do
@@ -185,8 +220,8 @@ documentationsPage pid swaggers currentSwagger = do
                     span_ [id_ "toggle_md", class_ "font_toggle_active cursor-pointer w-full px-3 py-2 hover:bg-blue-100"] "Medium"
                     span_ [id_ "toggle_lg", class_ "cursor-pointer text-lg w-full px-3 py-2 hover:bg-blue-100"] "Large"
                 form_ [hxPost_ $ "/p/" <> pid.toText <> "/documentation/save"] $ do
-                  input_ [id_ "save_swagger_input_id", name_ "swagger_id", type_ "hidden", value_ swaggerID]
-                  input_ [id_ "save_swagger_input_data", name_ "updated_swagger", type_ "hidden", value_ jsonString]
+                  input_ [id_ "save_swagger_input_id", name_ "swagger_id", type_ "hidden", value_ (toText swaggerID)]
+                  input_ [id_ "save_swagger_input_data", name_ "updated_swagger", type_ "hidden", value_ (toText jsonString)]
                   button_ [type_ "submit", id_ "save_swagger_btn", class_ "bg-gray-200 text-sm py-2 px-4 rounded active:bg-green-600"] "Save"
               div_ [id_ "swaggerEditor", class_ "w-full overflow-y-auto", style_ "height: calc(100% - 40px)"] pass
             div_ [onmousedown_ "mouseDown(event)", id_ "editor_resizer", class_ "h-full bg-neutral-400", style_ "width: 2px; cursor: col-resize; background-color: rgb(209 213 219);"] pass
@@ -438,10 +473,14 @@ documentationsPage pid swaggers currentSwagger = do
              const jsObject = jsyaml.load(value);
              if(jsObject) {
                 const inp = document.querySelector("#save_swagger_input_data")
+                const data = JSON.stringify(jsObject)
                 if(inp) {
                   inp.value = JSON.stringify(jsObject)
                  }
+                 window.ui.specActions.updateSpec(data)
+                 endpointsUI.updateData(jsObject)
                }
+
           }catch(e) {
             console.log(e)
           }

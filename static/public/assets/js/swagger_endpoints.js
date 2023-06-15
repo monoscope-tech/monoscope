@@ -18,7 +18,10 @@ class SwaggerEndPointsUI {
                     }
                     const methods = paths[path];
                     for (const method in methods) {
-                        this.paths[startWord].push({ path: path, method: method, operationId: methods[method].operationId });
+                        let opId = methods[method].operationId
+                        let modifiedPath = path.replaceAll(/[^a-zA-Z0-9]/g, "_");
+                        let targetId = opId ? `operations-${startWord}-${opId}` : `operations-default-${method}${modifiedPath}`
+                        this.paths[startWord].push({ path: path, method: method, operationId: targetId });
                     }
                 }
             }
@@ -121,7 +124,7 @@ class SwaggerEndPointsUI {
                                 child.classList.remove("endpoint_active");
                             }
                             event.currentTarget.classList.add("endpoint_active");
-                            const target = document.getElementById(`operations-${key}-${pathObj.operationId}`);
+                            const target = document.getElementById(pathObj.operationId);
                             if (target) {
                                 if (target.firstElementChild && target.firstElementChild.firstElementChild) {
                                     target.firstElementChild.firstElementChild.click();

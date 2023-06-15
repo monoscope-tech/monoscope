@@ -88,6 +88,7 @@ data SwFormat = SwFormat
   { swFieldHash :: Text
   , swFieldType :: Fields.FieldTypes
   , swFieldFormat :: Text
+  , swExamples :: Vector.Vector AE.Value
   , swHash :: Text
   }
   deriving stock (Show, Generic)
@@ -101,7 +102,7 @@ formatsByFieldsHashes pid fieldHashes = query Select q (pid, fieldHashes)
  where
   q =
     [sql|
-          SELECT field_hash sw_field_hash,field_type sw_field_type, field_format sw_field_format, hash sw_hash
+          SELECT field_hash sw_field_hash,field_type sw_field_type, field_format sw_field_format, examples::json[] sw_examples, hash sw_hash
           FROM apis.formats
           WHERE project_id = ? AND  field_hash = ANY(?)
         |]
