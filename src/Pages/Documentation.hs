@@ -438,10 +438,14 @@ documentationsPage pid swaggers currentSwagger = do
              const jsObject = jsyaml.load(value);
              if(jsObject) {
                 const inp = document.querySelector("#save_swagger_input_data")
+                const data = JSON.stringify(jsObject)
                 if(inp) {
                   inp.value = JSON.stringify(jsObject)
                  }
+                 window.ui.specActions.updateSpec(data)
+                 endpointsUI.updateData(jsObject)
                }
+
           }catch(e) {
             console.log(e)
           }
