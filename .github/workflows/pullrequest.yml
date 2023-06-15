@@ -38,8 +38,7 @@ jobs:
       - name: Install timescaledb
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            timescaledb-2${{ matrix.pkg_suffix }}-postgresql-${{ matrix.pg }} timescaledb-tools
+          sudo apt-get install -y --no-install-recommends timescaledb-2-postgresql-14 timescaledb-tools
           timescaledb-tune --quiet --yes
       # - name: "Install postgresql"
       #   run: |
