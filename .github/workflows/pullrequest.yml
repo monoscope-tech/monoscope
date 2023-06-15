@@ -41,7 +41,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends timescaledb-2-postgresql-14 timescaledb-tools timescaledb-toolkit-postgresql-14
           sudo timescaledb-tune --quiet --yes
-
-      - run: |
           export PATH=$PATH:/usr/lib/postgresql/14/bin
-          stack test
+
+      - run: stack test
