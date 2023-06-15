@@ -27,8 +27,8 @@ jobs:
       #
       - name: Add repositories
         run: |
-          apt-get update
-          apt-get install -y wget lsb-release gnupg apt-transport-https sudo postgresql-common
+          sudo apt-get update
+          sudo apt-get install -y wget lsb-release gnupg apt-transport-https sudo postgresql-common
           yes | /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh
           image_type=$(lsb_release -i -s | tr '[:upper:]' '[:lower:]')
           echo "deb https://packagecloud.io/timescale/timescaledb/${image_type}/ $(lsb_release -c -s) main" \
@@ -37,8 +37,8 @@ jobs:
 
       - name: Install timescaledb
         run: |
-          apt-get update
-          apt-get install -y --no-install-recommends \
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
             timescaledb-2${{ matrix.pkg_suffix }}-postgresql-${{ matrix.pg }} timescaledb-tools
           timescaledb-tune --quiet --yes
       # - name: "Install postgresql"
