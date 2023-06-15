@@ -29,18 +29,16 @@ jobs:
         with:
           packages:  wget lsb-release gnupg apt-transport-https postgresql-common
           version: 1.0
-      - name: Add repositories
+      - name: Install timescaledb
         run: |
-          # sudo apt-get install -y wget lsb-release gnupg apt-transport-https postgresql-common
           sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -v 14 -p -i
           echo "deb https://packagecloud.io/timescale/timescaledb/ubuntu/ $(lsb_release -c -s) main" | sudo tee /etc/apt/sources.list.d/timescaledb.list
           wget --quiet -O - https://packagecloud.io/timescale/timescaledb/gpgkey | sudo apt-key add -
-
-      - name: Install timescaledb
-        run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends timescaledb-2-postgresql-14 timescaledb-tools timescaledb-toolkit-postgresql-14
           sudo timescaledb-tune --quiet --yes
-          export PATH=$PATH:/usr/lib/postgresql/14/bin
 
-      - run: stack test
+      - name: stack test
+        run: |
+          export PATH=$PATH:/usr/lib/postgresql/14/bin
+          stack test
