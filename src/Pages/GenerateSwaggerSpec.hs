@@ -30,18 +30,18 @@ sampleEndpoints :: V.Vector Endpoints.SwEndpoint
 sampleEndpoints =
   V.fromList
     [ Endpoints.SwEndpoint
-        { Endpoints.urlPath = "/users"
-        , Endpoints.urlParams = AE.Null
-        , Endpoints.method = "GET"
-        , Endpoints.hosts = V.fromList ["localhost"]
-        , Endpoints.hash = "endpoint1_GET"
+        { urlPath = "/users"
+        , urlParams = AE.Null
+        , method = "GET"
+        , hosts = V.fromList ["localhost"]
+        , hash = "endpoint1_GET"
         }
     , Endpoints.SwEndpoint
-        { Endpoints.urlPath = "/users"
-        , Endpoints.urlParams = AE.Null
-        , Endpoints.method = "POST"
-        , Endpoints.hosts = V.fromList ["localhost"]
-        , Endpoints.hash = "endpoint1_POST"
+        { urlPath = "/users"
+        , urlParams = AE.Null
+        , method = "POST"
+        , hosts = V.fromList ["localhost"]
+        , hash = "endpoint1_POST"
         }
     ]
 
@@ -173,52 +173,60 @@ sampleFormats :: V.Vector Formats.SwFormat
 sampleFormats =
   V.fromList
     [ Formats.SwFormat
-        { Formats.swFieldHash = "field1"
-        , Formats.swFieldFormat = "Text"
-        , Formats.swFieldType = Fields.FTString
-        , Formats.swHash = ""
+        { swFieldHash = "field1"
+        , swFieldFormat = "Text"
+        , swFieldType = Fields.FTString
+        , swExamples = [AE.Null]
+        , swHash = ""
         }
     , Formats.SwFormat
-        { Formats.swFieldHash = "field2"
-        , Formats.swFieldFormat = "Integer"
-        , Formats.swFieldType = Fields.FTNumber
-        , Formats.swHash = ""
+        { swFieldHash = "field2"
+        , swFieldFormat = "Integer"
+        , swFieldType = Fields.FTNumber
+        , swExamples = [AE.Null]
+        , swHash = ""
         }
     , Formats.SwFormat
-        { Formats.swFieldHash = "field3"
-        , Formats.swFieldFormat = "Text"
-        , Formats.swFieldType = Fields.FTString
-        , Formats.swHash = ""
+        { swFieldHash = "field3"
+        , swFieldFormat = "Text"
+        , swFieldType = Fields.FTString
+        , swExamples = [AE.Null]
+        , swHash = ""
         }
     , Formats.SwFormat
-        { Formats.swFieldHash = "field4"
-        , Formats.swFieldFormat = "Integer"
-        , Formats.swFieldType = Fields.FTNumber
-        , Formats.swHash = ""
+        { swFieldHash = "field4"
+        , swFieldFormat = "Integer"
+        , swFieldType = Fields.FTNumber
+        , swExamples = [AE.Null]
+        , swHash = ""
         }
     , Formats.SwFormat
-        { Formats.swFieldHash = "field5"
-        , Formats.swFieldFormat = "Integer"
-        , Formats.swFieldType = Fields.FTNumber
-        , Formats.swHash = ""
+        { swFieldHash = "field5"
+        , swFieldFormat = "Integer"
+        , swFieldType = Fields.FTNumber
+        , swExamples = [AE.Null]
+        , swHash = ""
         }
     , Formats.SwFormat
-        { Formats.swFieldHash = "field6"
-        , Formats.swFieldFormat = "Text"
-        , Formats.swFieldType = Fields.FTString
-        , Formats.swHash = ""
+        { swFieldHash = "field6"
+        , swFieldFormat = "Text"
+        , swFieldType = Fields.FTString
+        , swExamples = [AE.Null]
+        , swHash = ""
         }
     , Formats.SwFormat
-        { Formats.swFieldHash = "field7"
-        , Formats.swFieldFormat = "Text"
-        , Formats.swFieldType = Fields.FTString
-        , Formats.swHash = ""
+        { swFieldHash = "field7"
+        , swFieldFormat = "Text"
+        , swFieldType = Fields.FTString
+        , swExamples = [AE.Null]
+        , swHash = ""
         }
     , Formats.SwFormat
-      { Formats.swFieldHash = "field8"
-      , Formats.swFieldFormat = "Text"
-      , Formats.swFieldType = Fields.FTString
-      , Formats.swHash = ""
+      { swFieldHash = "field8"
+      , swFieldFormat = "Text"
+      , swFieldType = Fields.FTString
+      , swExamples = [AE.Null]
+      , swHash = ""
       }
     ]
 
@@ -355,11 +363,11 @@ expectedSwaggerJSON =
 hSampleEndpoints :: V.Vector Endpoints.SwEndpoint
 hSampleEndpoints = V.fromList [
   Endpoints.SwEndpoint
-    { Endpoints.urlPath = "/headers"
-    , Endpoints.urlParams = AE.Null
-    , Endpoints.method = "GET"
-    , Endpoints.hosts = V.fromList ["localhost"]
-    , Endpoints.hash = "endpoint1_GET"
+    { urlPath = "/headers"
+    , urlParams = AE.Null
+    , method = "GET"
+    , hosts = V.fromList ["localhost"]
+    , hash = "endpoint1_GET"
     }
   ]
 
@@ -415,22 +423,25 @@ hSampleFields = V.fromList [
 hSampleFormats :: V.Vector Formats.SwFormat
 hSampleFormats = V.fromList [
       Formats.SwFormat
-      { Formats.swFieldHash = "field1"
-      , Formats.swFieldFormat = "text"
-      , Formats.swFieldType = Fields.FTString
-      , Formats.swHash = ""
+      { swFieldHash = "field1"
+      , swFieldFormat = "text"
+      , swFieldType = Fields.FTString
+      , swExamples = [AE.Null]
+      , swHash = ""
       }
     , Formats.SwFormat
-      { Formats.swFieldHash = "field2"
-      , Formats.swFieldFormat = "text"
-      , Formats.swFieldType = Fields.FTString
-      , Formats.swHash = ""
+      { swFieldHash = "field2"
+      , swFieldFormat = "text"
+      , swFieldType = Fields.FTString
+      , swExamples = [AE.Null]
+      , swHash = ""
       }
     , Formats.SwFormat
-      { Formats.swFieldHash = "field3"
-      , Formats.swFieldFormat = "integer"
-      , Formats.swFieldType = Fields.FTNumber
-      , Formats.swHash = ""
+      { swFieldHash = "field3"
+      , swFieldFormat = "integer"
+      , swFieldType = Fields.FTNumber
+      , swExamples = [AE.Null]
+      , swHash = ""
       }
   ]
 
@@ -495,11 +506,11 @@ hExpectedSwaggerJSON =
 pSampleEndpoints :: V.Vector Endpoints.SwEndpoint
 pSampleEndpoints = V.fromList [
   Endpoints.SwEndpoint
-    { Endpoints.urlPath = "/headers"
-    , Endpoints.urlParams = AE.Null
-    , Endpoints.method = "GET"
-    , Endpoints.hosts = V.fromList ["localhost"]
-    , Endpoints.hash = "endpoint1_GET"
+    { urlPath = "/headers"
+    , urlParams = AE.Null
+    , method = "GET"
+    , hosts = V.fromList ["localhost"]
+    , hash = "endpoint1_GET"
     }
   ]
 
@@ -555,22 +566,25 @@ pSampleFields = V.fromList [
 pSampleFormats :: V.Vector Formats.SwFormat
 pSampleFormats = V.fromList [
       Formats.SwFormat
-      { Formats.swFieldHash = "field1"
-      , Formats.swFieldFormat = "text"
-      , Formats.swFieldType = Fields.FTString
-      , Formats.swHash = ""
+      { swFieldHash = "field1"
+      , swFieldFormat = "text"
+      , swFieldType = Fields.FTString
+      , swExamples = [AE.Null]
+      , swHash = ""
       }
     , Formats.SwFormat
-      { Formats.swFieldHash = "field2"
-      , Formats.swFieldFormat = "text"
-      , Formats.swFieldType = Fields.FTString
-      , Formats.swHash = ""
+      { swFieldHash = "field2"
+      , swFieldFormat = "text"
+      , swFieldType = Fields.FTString
+      , swExamples = [AE.Null]
+      , swHash = ""
       }
     , Formats.SwFormat
-      { Formats.swFieldHash = "field3"
-      , Formats.swFieldFormat = "integer"
-      , Formats.swFieldType = Fields.FTString
-      , Formats.swHash = ""
+      { swFieldHash = "field3"
+      , swFieldFormat = "integer"
+      , swFieldType = Fields.FTString
+      , swExamples = [AE.Null]
+      , swHash = ""
       }
   ]
 
