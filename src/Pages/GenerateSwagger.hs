@@ -270,10 +270,10 @@ generateSwagger projectTitle projectDescription endpoints shapes fields formats 
   info = object ["description" .= String projectDescription, "title" .= String projectTitle, "version" .= String "1.0.0", "termsOfService" .= String "https://apitoolkit.io/terms-and-conditions/"]
   swagger = object ["openapi" .= String "3.0.0", "info" .= info, "servers" .= Array hosts, "paths" .= paths]
 
-generateGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
+generateGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM AE.Value
 generateGetH sess pid = do
   pool <- asks pool
-  (project, endpointStats) <- liftIO $
+  swagger <- liftIO $
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
       endpoints <- Endpoints.endpointsByProjectId pid
@@ -286,17 +286,5 @@ generateGetH sess pid = do
             (Just pr) -> (toText pr.title, toText pr.description)
             Nothing -> ("__APITOOLKIT", "Edit project description")
       let swagger = generateSwagger projectTitle projectDescription endpoints shapes fields formats
-      pure (project, swagger)
-
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = project
-          , pageTitle = "Endpoints"
-          }
-
-  pure $ bodyWrapper bwconf $ endpointList endpointStats pid
-
-endpointList :: AE.Value -> Projects.ProjectId -> Html ()
-endpointList enps pid = do
-  div_ [] $ toHtml (AE.encode enps)
+      pure  swagger
+  pure $ swagger

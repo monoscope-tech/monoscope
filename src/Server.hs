@@ -9,6 +9,7 @@ import Data.Aeson (FromJSON)
 import Data.Aeson.Types (ToJSON)
 import Data.Pool (Pool)
 import Data.Time (ZonedTime)
+import Data.Aeson qualified as AE
 import Data.UUID qualified as UUID
 import DataSeeding qualified
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), queryOne, withPool)
@@ -101,7 +102,7 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "documentation" :> QPT "swagger_id" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "documentation" :> ReqBody '[FormUrlEncoded] SwaggerForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "documentation" :> "save" :> ReqBody '[FormUrlEncoded] SaveSwaggerForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-    :<|> "p" :> ProjectId :> "generate_swagger" :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "generate_swagger" :> Get '[JSON] (AE.Value)
 
 type PublicAPI =
   "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
