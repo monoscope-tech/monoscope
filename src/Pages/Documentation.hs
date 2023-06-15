@@ -53,8 +53,18 @@ documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id} = do
   let value = case decodeStrict (encodeUtf8 updated_swagger) of
         Just val -> val
         Nothing -> error "Failed to parse JSON: "
-  res <- liftIO $ withPool pool $ Swaggers.updateSwagger swagger_id value
-  print res
+  res <- liftIO $ withPool pool $ do
+        case swagger_id of 
+          "" -> do
+                swaggerId <- Swaggers.SwaggerId <$> liftIO UUIDV4.nextRandom
+                currentTime <- liftIO getZonedTime
+                let swaggerToAdd = Swaggers.Swagger{ id = swaggerId, projectId = pid, createdBy = sess.userId, createdAt = currentTime, updatedAt = currentTime, swaggerJson = value}
+                Swaggers.addSwagger swaggerToAdd
+                pass
+          _  -> do 
+                Swaggers.updateSwagger swagger_id value
+                pass
+
   let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Swagger Saved Successfully"]}|]
   pure $ addHeader hxTriggerData ""
 
