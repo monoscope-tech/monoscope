@@ -220,7 +220,8 @@ createProjectBody sess envCfg isUpdate cp cpe =
           p_ [class_ "text-gray-400 mx-2 pb-2 font-light text-sm"] "Please select a plan"
           div_ [class_ "grid grid-cols-3 gap-4 border-1"] do
             ([("Free", "20k", "$0", "1", cp.paymentPlan == "Free", "")
-              ,("Startup", "50k", "$50", "3",  cp.paymentPlan == "Startup", if envCfg.paddleSandbox then envCfg.paddleSandboxStartup else envCfg.paddleStartup)
+              ,("Hobby", "250k", "$20", "3",  cp.paymentPlan == "Hobby", if envCfg.paddleSandbox then envCfg.paddleSandboxHobby else envCfg.paddleHobby)
+              ,("Startup", "500k", "$50", "5",  cp.paymentPlan == "Startup", if envCfg.paddleSandbox then envCfg.paddleSandboxStartup else envCfg.paddleStartup)
               ,("Growth", "5m", "$250", "10",  cp.paymentPlan == "Growth", if envCfg.paddleSandbox then envCfg.paddleSandboxGrowth else envCfg.paddleGrowth)
               ] :: [(Text, Text, Text, Text, Bool, Text)])  & mapM_ \(title, included, price, team, isSelected, paddleSubsCode)-> do
                   a_ [class_ $ "payment-plans cursor-pointer space-y-1 border border-1  block p-2 rounded-md  shadow-blue-100 " <> if isSelected then " border-blue-200 shadow-lg" else ""
@@ -240,7 +241,14 @@ createProjectBody sess envCfg isUpdate cp cpe =
                       small_  "max "
                       span_ $ toHtml team 
                       small_ " team members"
-                    div_ $ small_ "14days data retention"
+                    if (paddleSubsCode == "") then do
+                      div_ $ small_ "7days data retention"
+                    else do
+                      div_ $ small_ "14days data retention"
+                      div_ $ small_ "API testing pipelines"
+                      div_ $ small_ "API Swagger/OpenAPI Hosting"
+                      div_ $ small_ "API Metrics Custom Monitors"
+                      div_ $ small_ "API Live Traffic AI based validations"
 
         div_ [class_ $ "mt-10 " <> if isUpdate then "hidden" else ""] $ do
           p_ [class_ "text-gray-400 mx-2 font-light text-sm"] "Invite a project member"

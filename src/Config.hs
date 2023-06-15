@@ -41,6 +41,8 @@ data EnvConfig = EnvConfig
   , paddleStartup :: Text
   , paddleSandboxGrowth :: Text
   , paddleGrowth :: Text
+  , paddleSandboxHobby :: Text
+  , paddleHobby :: Text
   , orttoApiKey :: Text
   }
   deriving stock (Show, Generic)
