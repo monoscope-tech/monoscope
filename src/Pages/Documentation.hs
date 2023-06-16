@@ -138,29 +138,30 @@ documentationsPage pid swaggers swaggerID jsonString = do
     -- modal
     div_
       [ style_ "z-index:99999"
-      , class_ "fixed hidden pt-24 justify-center z-50 w-full p-4 bg-gray-500 bg-opacity-75 overflow-y-auto inset-0 h-full max-h-full"
+      , class_ "fixed pt-24 hidden justify-center z-50 w-full p-4 bg-gray-500 bg-opacity-75 overflow-y-auto inset-0 h-full max-h-full"
       , id_ "swaggerModal"
       , tabindex_ "-1"
       , onclick_ "closeModal(event)"
       ]
       $ do
         div_
-          [ class_ "relative w-[500px] max-h-full"
-          , style_ "width: min(90vw, 750px)"
+          [ class_ "relative max-h-full"
+          , style_ "width: min(90vw, 1000px)"
           ]
           $ do
             -- Modal content
             form_
-              [ class_ "relative bg-white rounded-lg shadow"
+              [ class_ "bg-white rounded-lg shadow w-full"
               , hxPost_ $ "/p/" <> pid.toText <> "/documentation"
               ]
               $ do
-                div_ [class_ "flex items-start justify-between p-4 border-b rounded-t"] $ do
+                div_ [class_ "flex items-start justify-between p-6 space-x-2  border-b rounded-t"] $ do
                   h3_ [class_ "text-xl font-semibold text-gray-900 dark:text-white"] "Save Swagger"
                 -- Modal body
-                div_ [class_ "p-6 space-y-6"] $ do
-                  input_ [type_ "hidden", name_ "from", value_ "docs"]
-                  textarea_ [style_ "height:65vh;resize:none", name_ "swagger_json", class_ "w-full border outline-none p-4 focus:outline-none focus:border-blue-200", placeholder_ "Paste swagger here"] ""
+                div_ [class_ "w-full"] $ do
+                  div_ [id_ "diff_editor_container", style_ "height:65vh; width:100%"] pass
+                -- input_ [type_ "hidden", name_ "from", value_ "docs"]
+                -- textarea_ [style_ "height:65vh;resize:none", name_ "swagger_json", class_ "w-full border outline-none p-4 focus:outline-none focus:border-blue-200", placeholder_ "Paste swagger here"] ""
                 -- Modal footer
                 div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] $ do
                   button_ [style_ "margin-right:50px", type_ "button", class_ "btn", onclick_ "closeModal(event)", id_ "close_btn"] "Close"
@@ -229,6 +230,25 @@ documentationsPage pid swaggers swaggerID jsonString = do
 
           function showModal() { 
             document.getElementById('swaggerModal').style.display = 'flex'; 
+            const val = document.querySelector('#swaggerData').value
+            let json = JSON.parse(val)
+            const yamlData = jsyaml.dump(json)
+            const modifiedValue = window.editor.getValue()
+            monacoEditor.setTheme ('vs')
+            if(!window.diffEditor) {
+                window.diffEditor = monacoEditor.createDiffEditor(document.getElementById ('diff_editor_container'))
+              }
+            diffEditor.setModel({
+	         	   original: monaco.editor.createModel(yamlData, 'yaml'),
+	         	   modified: monaco.editor.createModel(modifiedValue, 'yaml'),
+	         });
+          }
+
+          function closeModal(event) {
+            if(event.target.id === 'close_btn' || event.target.id ==='swaggerModal') {
+               monacoEditor.setTheme ('nightOwl')
+               document.getElementById('swaggerModal').style.display = 'none';
+            }
           }
 
           function toggleSwaggerHistory(event) {
@@ -278,11 +298,6 @@ documentationsPage pid swaggers swaggerID jsonString = do
             //document.querySelector('#toggle_dropdown_container').style.display = 'none'
          })
         
-          function closeModal(event) {
-            if(event.target.id === 'close_btn' || event.target.id ==='swaggerModal') {
-               document.getElementById('swaggerModal').style.display = 'none';
-            }
-          }
 
        // function saveSwagger(event) {         
        //   const value = window.editor.getValue();
@@ -392,7 +407,6 @@ documentationsPage pid swaggers swaggerID jsonString = do
   script_
     [text|
       document.addEventListener('DOMContentLoaded', function(){
-        // Configuration for the monaco editor which the query editor is built on.
         require.config({ paths: { vs: '/assets/js/monaco/vs' } });
         require.config({ paths: { 'vs': 'https://unpkg.com/monaco-editor/min/vs' } });
 		  	require(['vs/editor/editor.main'], function () {
@@ -423,8 +437,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
              'editorWhitespace.foreground': '#404040'
            }
         });
-
-       monaco.editor.setTheme('nightOwl');
+       window.monacoEditor = monaco.editor
        const val = document.querySelector('#swaggerData').value
        let json = JSON.parse(val)
        const yamlData = jsyaml.dump(json)
@@ -435,10 +448,10 @@ documentationsPage pid swaggers swaggerID jsonString = do
             automaticLayout : true,
             fontSize: 14,
             lineHeight: 20,
-            lineNumbersMinChars: 3
+            lineNumbersMinChars: 3,
+            theme: 'nightOwl'
 		  		});
 		   });
-        // Monaco code suggestions https://github.com/microsoft/monaco-editor/issues/1850
       })
    |]
 
