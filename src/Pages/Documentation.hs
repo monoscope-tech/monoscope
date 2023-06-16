@@ -157,6 +157,10 @@ documentationsPage pid swaggers swaggerID jsonString = do
               $ do
                 div_ [class_ "flex items-start justify-between p-6 space-x-2  border-b rounded-t"] $ do
                   h3_ [class_ "text-xl font-semibold text-gray-900 dark:text-white"] "Save Swagger"
+                  fieldset_ [class_ "px-4 py-2 flex items-center gap-2"] $ do
+                    label_ [] $ do
+                      "Inline"
+                      input_ [type_ "checkbox", class_ "ml-2", onchange_ "toggleDiffEditorInline(event)"]
                 -- Modal body
                 div_ [class_ "w-full"] $ do
                   div_ [id_ "diff_editor_container", style_ "height:65vh; width:100%"] pass
@@ -249,6 +253,12 @@ documentationsPage pid swaggers swaggerID jsonString = do
                monacoEditor.setTheme ('nightOwl')
                document.getElementById('swaggerModal').style.display = 'none';
             }
+          }
+          
+          function toggleDiffEditorInline(event) {
+            if(window.diffEditor) {
+                 diffEditor.updateOptions({ renderSideBySide: !event.target.checked });
+              }
           }
 
           function toggleSwaggerHistory(event) {
