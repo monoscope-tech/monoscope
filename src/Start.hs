@@ -62,9 +62,9 @@ startApp = do
           Pool.createPool
             createPgConnIO
             close
-            1 -- stripes
+            5 -- stripes  (distinct sub-pools)
             30 -- unused connections are kept open for 5 minutes (60*5) ~ Not sure if this is seconds or minutes
-            3 -- max 50 connections open per stripe
+            50 -- max 50 connections open per stripe
             -- poolConn <- Pool.newPool Pool.PoolConfig {createResource = createPgConnIO, freeResource = close, poolCacheTTL = 60 * 10, poolMaxResources = 20}
         projectCache <- newCache (Just $ TimeSpec (60 * 60) 0) :: IO (Cache Projects.ProjectId Projects.ProjectCache) -- 60*60secs or 1 hour TTL
         let serverCtx =
@@ -76,7 +76,7 @@ startApp = do
                 }
 
         logger <& "\n"
-        logger <& "🚀 Starting server at port " <> show (envConfig ^. #port)
+        logger <& "🚀 Starting server at port " <> show envConfig.port
         logger <& "\n"
 
         let ojStartArgs =

@@ -84,3 +84,11 @@ ALTER system SET cron.database_name = 'apitoolkit';
 ALTER system SET shared_preload_libraries = 'pg_cron';
 ```
 - restart timescaledb-docker
+
+
+## Run a specific individual test 
+```haskell
+    stack test --test-arguments "--match=SeedingConfig" apitoolkit-server:tests
+    OR 
+    stack test --ta "--match=SeedingConfig" apitoolkit-server:tests
+```

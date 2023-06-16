@@ -6,6 +6,7 @@ import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Relude
 import Test.Hspec
+import Debug.Pretty.Simple (pTraceM, pTraceShowM)
 
 spec :: Spec
 spec = do
@@ -14,40 +15,53 @@ spec = do
       -- let timestamp = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
       let input =
             [text|
-        - from: 2022-03-01 01:00 +0000
-          to: 2022-03-09 01:00 +0000
-          count: 2
-          method: GET
-          duration_to: 500000000
-          duration_from: 1000000
-          status_codes_oneof: [200,404,203]
-          path: /test/path
-          path_params: []
-          query_params:
-            - name: key
-              field_type: "string"
-              type_gen_format: "address"
-              children: []
-          request_headers:             
-            - name: key
-              field_type: "string"
-              type_gen_format: "address"
-              children: []
-          response_headers: 
-            - name: key
-              field_type: "string"
-              type_gen_format: "address"
-              children: []
-          request_body:
-            - name: key
-              field_type: "string"
-              type_gen_format: "address"
-              children: []
-          response_body:
-            - name: key
-              field_type: "string"
-              type_gen_format: "address"
-              children: []
-        |]
+- from: 2023-06-01 01:00 +0000
+  to: 2023-06-20 01:00 +0000
+  count: 1000
+  method: GET
+  duration_to: 100000000
+  duration_from: 1000000
+  status_codes_oneof: [200,404,203]
+  path: /vehicles/query
+  path_params: []
+  query_params:
+    - name: action 
+      field_type: "string"
+      type_gen_format: "verbs"
+      children: []
+  request_headers:             
+    - name: X-Vehicle-Type 
+      field_type: "string"
+      type_gen_format: "vehicle"
+      children: []
+  response_headers: 
+    - name: X-Action 
+      field_type: "string"
+      type_gen_format: "verb"
+      children: []
+  request_body:
+    - name: first_name
+      field_type: "string"
+      type_gen_format: "first_name"
+      children: []
+    - name: last_name
+      field_type: "string"
+      type_gen_format: "last_name"
+      children: []
+  response_body:
+    - name: first_name
+      field_type: "string"
+      type_gen_format: "first_name"
+      children: []
+    - name: last_name
+      field_type: "string"
+      type_gen_format: "last_name"
+      children: []
+    - name: car 
+      field_type: "string"
+      type_gen_format: "vehicle"
+      children: []
+              |]
       generated <- liftIO $ parseConfigToJson (Projects.ProjectId UUID.nil) (encodeUtf8 input)
+      pTraceShowM generated
       pending

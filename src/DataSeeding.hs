@@ -28,6 +28,8 @@ import Relude.Unsafe ((!!))
 import RequestMessages qualified
 import System.Random (RandomGen, getStdGen, randomRs)
 import Web.FormUrlEncoded (FromForm)
+import Faker.Verbs qualified
+import Faker.Vehicle qualified
 
 data FieldConfig = FieldConfig
   { name :: Text
@@ -71,6 +73,8 @@ fieldConfigToField fc = do
             "name" -> Faker.Name.name
             "first_name" -> Faker.Name.firstName
             "last_name" -> Faker.Name.lastName
+            "verbs" -> Faker.Verbs.base
+            "vehicles" -> Faker.Vehicle.makes
             _ -> Faker.Name.name
         -- "number" -> AE.Number . flip scientific 0 <$> (randomIO :: IO Integer)
         -- "null" -> AE.Null
