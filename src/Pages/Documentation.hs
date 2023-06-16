@@ -10,27 +10,22 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import Lucid.Htmx
+import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.Fields qualified as Fields
 import Models.Projects.Projects qualified as Projects
 import Models.Projects.Swaggers qualified as Swaggers
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pages.GenerateSwagger qualified as GenerateSwagger
 import Relude
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
 import Web.FormUrlEncoded (FromForm)
-import Pages.GenerateSwagger qualified as GenerateSwagger
-import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Fields qualified as Fields
 
+import Models.Apis.Fields.Query qualified as Fields
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.Shapes qualified as Shapes
-import Models.Apis.Fields (fieldTypeToText)
-import Models.Apis.Fields qualified as Field
-import Models.Apis.Fields.Query qualified as Fields
-
-
-
 
 data SwaggerForm = SwaggerForm
   { swagger_json :: Text
@@ -54,16 +49,16 @@ documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id} = do
         Just val -> val
         Nothing -> error "Failed to parse JSON: "
   res <- liftIO $ withPool pool $ do
-        case swagger_id of 
-          "" -> do
-                swaggerId <- Swaggers.SwaggerId <$> liftIO UUIDV4.nextRandom
-                currentTime <- liftIO getZonedTime
-                let swaggerToAdd = Swaggers.Swagger{ id = swaggerId, projectId = pid, createdBy = sess.userId, createdAt = currentTime, updatedAt = currentTime, swaggerJson = value}
-                Swaggers.addSwagger swaggerToAdd
-                pass
-          _  -> do 
-                Swaggers.updateSwagger swagger_id value
-                pass
+    case swagger_id of
+      "" -> do
+        swaggerId <- Swaggers.SwaggerId <$> liftIO UUIDV4.nextRandom
+        currentTime <- liftIO getZonedTime
+        let swaggerToAdd = Swaggers.Swagger{id = swaggerId, projectId = pid, createdBy = sess.userId, createdAt = currentTime, updatedAt = currentTime, swaggerJson = value}
+        Swaggers.addSwagger swaggerToAdd
+        pass
+      _ -> do
+        Swaggers.updateSwagger swagger_id value
+        pass
 
   let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Swagger Saved Successfully"]}|]
   pure $ addHeader hxTriggerData ""
@@ -104,30 +99,30 @@ documentationGetH sess pid swagger_id = do
       swaggers <- Swaggers.swaggersByProject pid
       currentSwagger <- case swagger_id of
         Just swId -> Swaggers.getSwaggerById swId
-        Nothing -> pure Nothing 
-      (swaggerVal, swaggerValId) <- case (swaggers, currentSwagger) of 
-                     (_, Just swg) ->  do
-                                    let sw = swg.swaggerJson
-                                    let id = show swg.id.swaggerId
-                                    pure (sw, id)
-                     ([], Nothing) ->  do
-                                    endpoints <- Endpoints.endpointsByProjectId pid
-                                    let endpoint_hashes = V.map (\enp -> enp.hash) endpoints
-                                    shapes <- Shapes.shapesByEndpointHash pid endpoint_hashes
-                                    fields <- Fields.fieldsByEndpointHashes pid endpoint_hashes
-                                    let field_hashes = V.map (\field -> field.fHash) fields
-                                    formats <- Formats.formatsByFieldsHashes pid field_hashes
-                                    let (projectTitle, projectDescription) = case project of
-                                          (Just pr) -> (toText pr.title, toText pr.description)
-                                          Nothing -> ("__APITOOLKIT", "Edit project description")
-                                    let gn = GenerateSwagger.generateSwagger projectTitle projectDescription endpoints shapes fields formats
-                                    pure (gn, "")
-                     (val, Nothing) -> do
-                                    let latest = V.head $ V.reverse swaggers
-                                    let sw = latest.swaggerJson
-                                    let id = show latest.id.swaggerId
-                                    pure (sw, id)
-      pure (project, V.reverse swaggers,swaggerVal, swaggerValId)
+        Nothing -> pure Nothing
+      (swaggerVal, swaggerValId) <- case (swaggers, currentSwagger) of
+        (_, Just swg) -> do
+          let sw = swg.swaggerJson
+          let id = show swg.id.swaggerId
+          pure (sw, id)
+        ([], Nothing) -> do
+          endpoints <- Endpoints.endpointsByProjectId pid
+          let endpoint_hashes = V.map (\enp -> enp.hash) endpoints
+          shapes <- Shapes.shapesByEndpointHash pid endpoint_hashes
+          fields <- Fields.fieldsByEndpointHashes pid endpoint_hashes
+          let field_hashes = V.map (\field -> field.fHash) fields
+          formats <- Formats.formatsByFieldsHashes pid field_hashes
+          let (projectTitle, projectDescription) = case project of
+                (Just pr) -> (toText pr.title, toText pr.description)
+                Nothing -> ("__APITOOLKIT", "Edit project description")
+          let gn = GenerateSwagger.generateSwagger projectTitle projectDescription endpoints shapes fields formats
+          pure (gn, "")
+        (val, Nothing) -> do
+          let latest = V.head $ V.reverse swaggers
+          let sw = latest.swaggerJson
+          let id = show latest.id.swaggerId
+          pure (sw, id)
+      pure (project, V.reverse swaggers, swaggerVal, swaggerValId)
 
   let bwconf =
         (def :: BWConfig)
@@ -161,7 +156,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
               ]
               $ do
                 div_ [class_ "flex items-start justify-between p-4 border-b rounded-t"] $ do
-                  h3_ [class_ "text-xl font-semibold text-gray-900 dark:text-white"] "Upload Swagger"
+                  h3_ [class_ "text-xl font-semibold text-gray-900 dark:text-white"] "Save Swagger"
                 -- Modal body
                 div_ [class_ "p-6 space-y-6"] $ do
                   input_ [type_ "hidden", name_ "from", value_ "docs"]
@@ -194,7 +189,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
         -- select_ [onchange_ "swaggerChanged(event)", id_ "swaggerSelect"] $ do
         --   swaggers & mapM_ \sw -> do
         --     option_ [value_ (show sw.id.swaggerId)] $ show sw.id.swaggerId
-        button_ [class_ "place-content-center text-md btn btn-primary", onclick_ "showModal()"] "Upload swagger"
+        button_ [class_ "place-content-center text-md btn btn-primary", onclick_ "showModal()"] "Save swagger"
 
       div_ [class_ "w-full", style_ "height: calc(100% - 60px)"] $ do
         div_ [id_ "columns_container", class_ "w-full h-full flex flex-row", style_ "height: calc(100% - 60px)"] $ do
@@ -222,7 +217,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
                 form_ [hxPost_ $ "/p/" <> pid.toText <> "/documentation/save"] $ do
                   input_ [id_ "save_swagger_input_id", name_ "swagger_id", type_ "hidden", value_ (toText swaggerID)]
                   input_ [id_ "save_swagger_input_data", name_ "updated_swagger", type_ "hidden", value_ (toText jsonString)]
-                  button_ [type_ "submit", id_ "save_swagger_btn", class_ "bg-gray-200 text-sm py-2 px-4 rounded active:bg-green-600"] "Save"
+              --  button_ [type_ "submit", id_ "save_swagger_btn", class_ "bg-gray-200 text-sm py-2 px-4 rounded active:bg-green-600"] "Save"
               div_ [id_ "swaggerEditor", class_ "w-full overflow-y-auto", style_ "height: calc(100% - 40px)"] pass
             div_ [onmousedown_ "mouseDown(event)", id_ "editor_resizer", class_ "h-full bg-neutral-400", style_ "width: 2px; cursor: col-resize; background-color: rgb(209 213 219);"] pass
           div_ [id_ "details_container", class_ "flex-auto overflow-y-auto", style_ "width:30%; height:100%"] $ do
