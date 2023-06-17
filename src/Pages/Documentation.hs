@@ -169,7 +169,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
                 -- Modal footer
                 div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] $ do
                   button_ [style_ "margin-right:50px", type_ "button", class_ "btn", onclick_ "closeModal(event)", id_ "close_btn"] "Close"
-                  button_ [type_ "sumbit", class_ "btn btn-primary"] "Upload"
+                  button_ [type_ "sumbit", class_ "btn btn-primary"] "Save"
 
     -- page content
 
@@ -190,10 +190,6 @@ documentationsPage pid swaggers swaggerID jsonString = do
             div_ [id_ "swagger_history_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] $ do
               swaggers & mapM_ \sw -> do
                 button_ [onclick_ "swaggerChanged(event)", class_ "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"] $ toHtml swaggerID
-
-        -- select_ [onchange_ "swaggerChanged(event)", id_ "swaggerSelect"] $ do
-        --   swaggers & mapM_ \sw -> do
-        --     option_ [value_ (show sw.id.swaggerId)] $ show sw.id.swaggerId
         button_ [class_ "place-content-center text-md btn btn-primary", onclick_ "showModal()"] "Save swagger"
 
       div_ [class_ "w-full", style_ "height: calc(100% - 60px)"] $ do
@@ -226,7 +222,9 @@ documentationsPage pid swaggers swaggerID jsonString = do
               div_ [id_ "swaggerEditor", class_ "w-full overflow-y-auto", style_ "height: calc(100% - 40px)"] pass
             div_ [onmousedown_ "mouseDown(event)", id_ "editor_resizer", class_ "h-full bg-neutral-400", style_ "width: 2px; cursor: col-resize; background-color: rgb(209 213 219);"] pass
           div_ [id_ "details_container", class_ "flex-auto overflow-y-auto", style_ "width:30%; height:100%"] $ do
-            div_ [id_ "swagger-ui", class_ "h-full w-full overflow-aut"] pass
+            div_ [id_ "swagger-ui", class_ "relative h-full w-full bg-white overflow-auto"] pass
+          button_ [class_ "absolute z-10 p-2", style_ "right: 15px", onclick_ "fullscreen()", title_ "full screen"] $ do
+            img_ [src_ "/assets/svgs/fullscreen.svg", style_ "height:24px; width: 24px"]
   -- mainContent swaggers
 
   script_
@@ -271,6 +269,19 @@ documentationsPage pid swaggers swaggerID jsonString = do
                  container.style.display = 'block'
                 }
               }
+          }
+
+          function fullscreen() {
+             const fullscreenElement = document.getElementById('swagger-ui');
+             if (fullscreenElement.requestFullscreen) {
+               fullscreenElement.requestFullscreen();
+             } else if (fullscreenElement.mozRequestFullScreen) { // Firefox
+               fullscreenElement.mozRequestFullScreen();
+             } else if (fullscreenElement.webkitRequestFullscreen) { // Chrome, Safari and Opera
+               fullscreenElement.webkitRequestFullscreen();
+             } else if (fullscreenElement.msRequestFullscreen) { // IE/Edge
+               fullscreenElement.msRequestFullscreen();
+             }
           }
 
           function swaggerChanged(event) {
