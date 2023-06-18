@@ -150,9 +150,9 @@ documentationsPage pid swaggers swaggerID jsonString = do
           ]
           $ do
             -- Modal content
-            form_
+            div_
               [ class_ "bg-white rounded-lg shadow w-full"
-              , hxPost_ $ "/p/" <> pid.toText <> "/documentation"
+              -- , hxPost_ $ "/p/" <> pid.toText <> "/documentation"
               ]
               $ do
                 div_ [class_ "flex items-start justify-between p-6 space-x-2  border-b rounded-t"] $ do
@@ -169,7 +169,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
                 -- Modal footer
                 div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] $ do
                   button_ [style_ "margin-right:50px", type_ "button", class_ "btn", onclick_ "closeModal(event)", id_ "close_btn"] "Close"
-                  button_ [type_ "sumbit", class_ "btn btn-primary"] "Save"
+                  button_ [type_ "sumbit", class_ "btn btn-primary", onclick_ "parsePaths()"] "Save"
 
     -- page content
 
@@ -240,6 +240,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
             if(!window.diffEditor) {
                 window.diffEditor = monacoEditor.createDiffEditor(document.getElementById ('diff_editor_container'))
               }
+              
             diffEditor.setModel({
 	         	   original: monaco.editor.createModel(yamlData, 'yaml'),
 	         	   modified: monaco.editor.createModel(modifiedValue, 'yaml'),
@@ -478,6 +479,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
 
   script_ [src_ "https://unpkg.com/swagger-ui-dist@4.5.0/swagger-ui-bundle.js", crossorigin_ "true"] ("" :: Text)
   script_ [src_ "/assets/js/swagger_endpoints.js"] ("" :: Text)
+  script_ [src_ "/assets/js/build_keypaths.js"] ("" :: Text)
   script_ [src_ "https://unpkg.com/js-yaml/dist/js-yaml.min.js", crossorigin_ "true"] ("" :: Text)
   script_
     [text|
