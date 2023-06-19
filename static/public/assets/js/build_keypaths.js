@@ -15,13 +15,14 @@ function groupByFieldCategories(paths) {
     for (let [key, value] of Object.entries(paths)) {
         for (let [method, v] of Object.entries(value)) {
             let ob = { url: key, method }
-            // const headersAndParams = parseHeadersAndParams(v.headers, v.parameters)
+            console.log(v.parameters)
+            const headersAndParams = parseHeadersAndParams(v.headers, v.parameters)
             ob.requestBodyKeyPaths = parseRequestBody(v.requestBody)
             ob.response = parseResponses(v.responses)
+            ob = { ...ob, ...headersAndParams }
             arr.push(ob)
         }
     }
-
     return arr
 }
 
@@ -56,6 +57,32 @@ function parseRequestBody(body) {
     }
 }
 
+function parseHeadersAndParams(headers, parameters) {
+    let ob = {}
+    ob.requestHeadersKeyPaths = getKeyPaths(headers?.content?.schema || undefined)
+    ob.queryParamsKeyPaths = []
+    ob.pathParamsKeyPaths = []
+
+    if (!parameters || !Array.isArray(parameters)) return ob
+
+    parameters.forEach(param => {
+        const v = param.schema
+        v.description = param.description
+        const key = param.name + ".[]"
+        const fVal = {}
+        fVal[key] = v
+        if (param.in === "query") {
+            ob.queryParamsKeyPaths.push(fVal)
+        } else if (param.in === "path") {
+            ob.pathParamsKeyPaths.push(fVal)
+        } else {
+            ob.requestHeadersKeyPaths.push(fVal)
+        }
+    })
+    return ob
+}
+
+
 function getKeyPaths(value) {
     if (!value) {
         return []
@@ -77,7 +104,3 @@ function getKeyPathsHelper(value, path) {
     ob[path] = value
     return [ob]
 }
-
-// function parseHeadersAndParams(headers, parameters) {
-
-// }
