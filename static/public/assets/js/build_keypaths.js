@@ -10,20 +10,23 @@ function parsePaths() {
     }
 }
 
+function findMatch() {
+
+}
+
 function groupByFieldCategories(paths) {
-    let arr = []
+    let hash = {}
     for (let [key, value] of Object.entries(paths)) {
         for (let [method, v] of Object.entries(value)) {
             let ob = { url: key, method }
-            console.log(v.parameters)
             const headersAndParams = parseHeadersAndParams(v.headers, v.parameters)
             ob.requestBodyKeyPaths = parseRequestBody(v.requestBody)
             ob.response = parseResponses(v.responses)
             ob = { ...ob, ...headersAndParams }
-            arr.push(ob)
+            hash[`${key}_${method}`] = ob
         }
     }
-    return arr
+    return hash
 }
 
 function parseResponses(responses) {
