@@ -41,6 +41,22 @@ data SaveSwaggerForm = SaveSwaggerForm
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
 
+data FieldOperation = FieldOperation
+  { action :: Text
+  , keypath :: Text
+  , url :: Text
+  , method :: Text
+  , description :: Text
+  , example :: Text
+  , category :: Text
+  , ftype :: Text
+  , format :: Text
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (FromForm)
+
+data FieldOperations = FieldOperations {operations :: [FieldOperation]}
+
 documentationPutH :: Sessions.PersistentSession -> Projects.ProjectId -> SaveSwaggerForm -> DashboardM (Headers '[HXTrigger] (Html ()))
 documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id} = do
   pool <- asks pool
@@ -157,10 +173,6 @@ documentationsPage pid swaggers swaggerID jsonString = do
               $ do
                 div_ [class_ "flex items-start justify-between p-6 space-x-2  border-b rounded-t"] $ do
                   h3_ [class_ "text-xl font-semibold text-gray-900 dark:text-white"] "Save Swagger"
-                  fieldset_ [class_ "px-4 py-2 flex items-center gap-2"] $ do
-                    label_ [] $ do
-                      "Inline"
-                      input_ [type_ "checkbox", class_ "ml-2", onchange_ "toggleDiffEditorInline(event)"]
                 -- Modal body
                 div_ [class_ "w-full"] $ do
                   div_ [id_ "diff_editor_container", style_ "height:65vh; width:100%"] pass
@@ -169,7 +181,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
                 -- Modal footer
                 div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] $ do
                   button_ [style_ "margin-right:50px", type_ "button", class_ "btn", onclick_ "closeModal(event)", id_ "close_btn"] "Close"
-                  button_ [type_ "sumbit", class_ "btn btn-primary", onclick_ "parsePaths()"] "Save"
+                  button_ [type_ "sumbit", class_ "btn btn-primary", onclick_ "parsePaths()"] "Confirm  & Save"
 
     -- page content
 
@@ -238,7 +250,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
             const modifiedValue = window.editor.getValue()
             monacoEditor.setTheme ('vs')
             if(!window.diffEditor) {
-                window.diffEditor = monacoEditor.createDiffEditor(document.getElementById ('diff_editor_container'))
+                window.diffEditor = monacoEditor.createDiffEditor(document.getElementById ('diff_editor_container'),{renderSideBySide: false})
               }
               
             diffEditor.setModel({
