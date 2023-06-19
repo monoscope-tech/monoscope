@@ -6,12 +6,77 @@ function parsePaths() {
         const modifiedObject = jsyaml.load(modifiedValue)
         const catOriginal = groupByFieldCategories(originalObject.paths)
         const catModified = groupByFieldCategories(modifiedObject.paths)
-        console.log(catOriginal, catModified)
+
+        let updateDBOb = {
+            endpoints: [],
+            fields: [],
+        }
+
+        for (const [key, originalVal] of Object.entries(catOriginal)) {
+            const modifiedVal = catModified[key]
+            if (!modifiedVal) continue
+            // compare request body
+            updateDBOb.fields.push(...getFieldsToOperate(originalVal.requestBodyKeyPaths, modifiedVal.requestBodyKeyPaths, originalVal.method, originalVal.url, "request_body"))
+            // compare response bodies
+            for (const [status, ogVal] of Object.entries(originalVal.response)) {
+                const mdVal = modifiedVal.response[status]
+                if (!mdVal) continue
+                updateDBOb.fields.push(...getFieldsToOperate(ogVal.responseBodyKeyPaths, mdVal.responseBodyKeyPaths, originalVal.method, originalVal.url, "response_body"))
+                updateDBOb.fields.push(...getFieldsToOperate(ogVal.responseHeadersKeyPaths, mdVal.responseHeadersKeyPaths, originalVal.method, originalVal.url, "response_header"))
+            }
+            // compare request headers
+            updateDBOb.fields.push(...getFieldsToOperate(originalVal.requestHeadersKeyPaths, modifiedVal.requestHeadersKeyPaths, originalVal.method, originalVal.url, "request_header"))
+            // compare query params
+            updateDBOb.fields.push(...getFieldsToOperate(originalVal.queryParamsKeyPaths, modifiedVal.queryParamsKeyPaths, originalVal.method, originalVal.url, "query_param"))
+            // compare path params
+            updateDBOb.fields.push(...getFieldsToOperate(originalVal.pathParamsKeyPaths, modifiedVal.pathParamsKeyPaths, originalVal.method, originalVal.url, "path_param"))
+        }
     }
 }
 
-function findMatch() {
 
+function getFieldsToOperate(ogPaths, mdPaths, method, url, category) {
+    let ops = []
+    let hasDeleted = false
+    ogPaths.forEach(path => {
+        const t = mdPaths.find((v) => v.keypath === path.keypath)
+        if (!t) {
+            hasDeleted = true
+            ops.push({
+                action: "delete", keypath: path.keypath, description: path.description, category: category,
+                url: url, method: method, type: path.type, format: path.format, example: path.example
+            })
+        } else {
+            if (keyPathModified(path, t)) {
+                ops.push({
+                    action: "update", keypath: t.keypath, description: t.description, category: category, url: url,
+                    method: method, type: t.type, format: t.format, example: t.example,
+                })
+            }
+        }
+    })
+
+    if (mdPaths > ogPaths || hasDeleted) {
+        mdPaths.forEach(path => {
+            const t = ogPaths.find((v) => v.keypath === path.keypath)
+            if (!t) {
+                ops.push({
+                    action: "add", keypath: path.keypath, description: path.description, category: category,
+                    url: url, method: method, type: path.type, format: path.format, example: path.example
+                })
+            }
+        })
+    }
+    return ops
+}
+
+
+
+function keyPathModified(v1, v2) {
+    if (v1.description !== v2.description || v1.type !== v2.type || v1.format !== v2.format || v1.example !== v2.example) {
+        return true
+    }
+    return false
 }
 
 function groupByFieldCategories(paths) {
@@ -72,19 +137,17 @@ function parseHeadersAndParams(headers, parameters) {
         const v = param.schema
         v.description = param.description
         const key = param.name + ".[]"
-        const fVal = {}
-        fVal[key] = v
+        v.keypath = key
         if (param.in === "query") {
-            ob.queryParamsKeyPaths.push(fVal)
+            ob.queryParamsKeyPaths.push(v)
         } else if (param.in === "path") {
-            ob.pathParamsKeyPaths.push(fVal)
+            ob.pathParamsKeyPaths.push(v)
         } else {
-            ob.requestHeadersKeyPaths.push(fVal)
+            ob.requestHeadersKeyPaths.push(v)
         }
     })
     return ob
 }
-
 
 function getKeyPaths(value) {
     if (!value) {
@@ -103,7 +166,6 @@ function getKeyPathsHelper(value, path) {
     } else if (value.type === "array") {
         return getKeyPathsHelper(value.items, `${path}[*]`)
     }
-    let ob = {}
-    ob[path] = value
-    return [ob]
+    value.keypath = path
+    return [value]
 }
