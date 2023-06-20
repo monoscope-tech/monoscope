@@ -76,13 +76,13 @@ function getFieldsToOperate(ogPaths, mdPaths, method, url, category) {
             hasDeleted = true
             ops.push({
                 action: "delete", keypath: path.keypath, description: path.description, category: category,
-                url: url, method: method, ftype: path.type === "boolean" ? "bool" : path.type, format: path.format, example: String(path.example)
+                url: url, method: method, ftype: path.type === "boolean" ? "bool" : path.type, format: path.format, example: path.example
             })
         } else {
             if (keyPathModified(path, t)) {
                 ops.push({
                     action: "update", keypath: t.keypath, description: t.description, category: category, url: url,
-                    method: method, ftype: t.type === "boolean" ? "bool" : t.type, format: t.format, example: String(t.example),
+                    method: method, ftype: path.type === "boolean" ? "bool" : path.type, format: t.format, example: t.example,
                 })
             }
         }
@@ -94,7 +94,7 @@ function getFieldsToOperate(ogPaths, mdPaths, method, url, category) {
             if (!t) {
                 ops.push({
                     action: "insert", keypath: path.keypath, description: path.description, category: category,
-                    url: url, method: method, ftype: path.type === "boolean" ? "bool" : path.type, format: path.format, example: String(path.example)
+                    url: url, method: method, ftype: path.type === "boolean" ? "bool" : path.type, format: path.format, example: path.example
                 })
             }
         })
