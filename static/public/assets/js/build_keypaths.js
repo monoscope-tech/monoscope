@@ -6,6 +6,8 @@ function parsePaths() {
         const modifiedObject = jsyaml.load(modifiedValue)
         const catOriginal = groupByFieldCategories(originalObject.paths)
         const catModified = groupByFieldCategories(modifiedObject.paths)
+        const idTarget = document.querySelector("#save_swagger_input_id")
+        const swagger_id = idTarget ? idTarget.value : ""
 
         let updateDBOb = {
             endpoints: [],
@@ -31,6 +33,36 @@ function parsePaths() {
             // compare path params
             updateDBOb.fields.push(...getFieldsToOperate(originalVal.pathParamsKeyPaths, modifiedVal.pathParamsKeyPaths, originalVal.method, originalVal.url, "path_param"))
         }
+
+        saveData(swagger_id, modifiedObject, updateDBOb)
+    }
+}
+
+
+async function saveData(swaggerId, modifiedObject, updateDBOb) {
+    const url = window.location.pathname + '/save';
+    const data = {
+        swagger_id: swaggerId,
+        updated_swagger: JSON.stringify(modifiedObject),
+        operations: updateDBOb.fields
+    };
+
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(data)
+        });
+
+        if (response.ok) {
+            console.log('Data sent successfully to the backend.');
+        } else {
+            console.error('Error sending data to the backend:', response);
+        }
+    } catch (error) {
+        console.error('Error sending data to the backend:', error);
     }
 }
 
@@ -44,13 +76,13 @@ function getFieldsToOperate(ogPaths, mdPaths, method, url, category) {
             hasDeleted = true
             ops.push({
                 action: "delete", keypath: path.keypath, description: path.description, category: category,
-                url: url, method: method, type: path.type, format: path.format, example: path.example
+                url: url, method: method, ftype: path.type === "boolean" ? "bool" : path.type, format: path.format, example: String(path.example)
             })
         } else {
             if (keyPathModified(path, t)) {
                 ops.push({
                     action: "update", keypath: t.keypath, description: t.description, category: category, url: url,
-                    method: method, type: t.type, format: t.format, example: t.example,
+                    method: method, ftype: t.type === "boolean" ? "bool" : t.type, format: t.format, example: String(t.example),
                 })
             }
         }
@@ -61,16 +93,14 @@ function getFieldsToOperate(ogPaths, mdPaths, method, url, category) {
             const t = ogPaths.find((v) => v.keypath === path.keypath)
             if (!t) {
                 ops.push({
-                    action: "add", keypath: path.keypath, description: path.description, category: category,
-                    url: url, method: method, type: path.type, format: path.format, example: path.example
+                    action: "insert", keypath: path.keypath, description: path.description, category: category,
+                    url: url, method: method, ftype: path.type === "boolean" ? "bool" : path.type, format: path.format, example: String(path.example)
                 })
             }
         })
     }
     return ops
 }
-
-
 
 function keyPathModified(v1, v2) {
     if (v1.description !== v2.description || v1.type !== v2.type || v1.format !== v2.format || v1.example !== v2.example) {
@@ -164,8 +194,7 @@ function getKeyPathsHelper(value, path) {
         }
         return paths
     } else if (value.type === "array") {
-        return getKeyPathsHelper(value.items, `${path}[*]`)
+        return getKeyPathsHelper({ ...value.items, description: value.description || "" }, `${path}[*]`)
     }
-    value.keypath = path
-    return [value]
+    return [{ ...value, keypath: path }]
 }
