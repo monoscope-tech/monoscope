@@ -1,10 +1,11 @@
-module Models.Apis.Fields.Query (fieldById, selectFields, insertFieldQueryAndParams, fieldsByEndpointHashes) where
+module Models.Apis.Fields.Query (fieldById, selectFields, insertFieldQueryAndParams, fieldsByEndpointHashes, updateFieldByHash) where
 
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity (selectById)
-import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query)
+import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query)
 import Database.PostgreSQL.Simple (Only (Only), Query)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+
 import Database.PostgreSQL.Transact (DBT)
 import Database.PostgreSQL.Transact qualified as PgT
 import Models.Projects.Projects qualified as Projects
@@ -42,6 +43,12 @@ selectFields endpointHash = query Select q (Only endpointHash)
     [sql| select id,created_at,updated_at,project_id,endpoint_hash,key,field_type,
                 field_type_override,format,format_override,description,key_path,field_category, hash
                 from apis.fields where endpoint_hash=? order by field_category, key |]
+
+updateFieldByHash :: Text -> Text -> Text -> DBT IO Int64
+updateFieldByHash endpointHash fieldHash description = do
+  let q =
+        [sql| UPDATE apis.fields SET  description=? WHERE endpoint_hash=? AND hash=? |]
+  execute Update q (description, endpointHash, fieldHash)
 
 fieldsByEndpointHashes :: Projects.ProjectId -> Vector Text -> PgT.DBT IO (Vector SwField)
 fieldsByEndpointHashes pid hashes = query Select q (pid, hashes)

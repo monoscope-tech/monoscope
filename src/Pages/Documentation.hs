@@ -1,13 +1,20 @@
+{-# OPTIONS_GHC -Wno-unused-do-bind #-}
+
 module Pages.Documentation (documentationGetH, documentationPostH, documentationPutH, SwaggerForm, SaveSwaggerForm) where
 
 import Config
-import Data.Aeson (FromJSON, decodeStrict, encode)
+import Data.Aeson (FromJSON, ToJSON, decodeStrict, encode)
 import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
+import Data.Digest.XXHash
+import Data.Text qualified as T
 import Data.Time.LocalTime (getZonedTime)
+import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
+
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
+
 import Lucid
 import Lucid.Htmx
 import Models.Apis.Endpoints qualified as Endpoints
@@ -16,11 +23,13 @@ import Models.Projects.Projects qualified as Projects
 import Models.Projects.Swaggers qualified as Swaggers
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
+import Numeric (showHex)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.GenerateSwagger qualified as GenerateSwagger
 import Relude
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
+
 import Web.FormUrlEncoded (FromForm)
 
 import Models.Apis.Fields.Query qualified as Fields
@@ -53,15 +62,21 @@ data FieldOperation = FieldOperation
   , format :: Text
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromJSON)
+  deriving anyclass (FromJSON, ToJSON)
 
 data SaveSwaggerForm = SaveSwaggerForm
   { updated_swagger :: Text
   , swagger_id :: Text
-  , operations :: [FieldOperation]
+  , operations :: V.Vector FieldOperation
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromJSON)
+  deriving anyclass (FromJSON, ToJSON)
+
+getEndpointHash :: Projects.ProjectId -> Text -> Text -> Text
+getEndpointHash pid urlPath method = toText $ showHex (xxHash $ encodeUtf8 $ (UUID.toText pid.unProjectId) <> method <> urlPath) ""
+
+getFieldHash :: Text -> Text -> Text -> Text -> Text
+getFieldHash enpHash fcategory keypath ftype = enpHash <> toText (showHex (xxHash $ encodeUtf8 (fcategory <> keypath <> ftype)) "")
 
 documentationPutH :: Sessions.PersistentSession -> Projects.ProjectId -> SaveSwaggerForm -> DashboardM (Headers '[HXTrigger] (Html ()))
 documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id, operations} = do
@@ -80,7 +95,18 @@ documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id, operatio
         Swaggers.addSwagger swaggerToAdd
         pass
       _ -> do
+        forM_ operations $ \operation -> do
+          case action operation of
+            -- "insert" -> insertIntoDB conn operation
+            "update" -> do
+              let endpHash = getEndpointHash pid operation.url (T.toUpper operation.method)
+              let fieldHash = getFieldHash endpHash operation.category operation.keypath operation.ftype
+              Fields.updateFieldByHash endpHash fieldHash operation.description
+              pass
+            -- "delete" -> deleteFromDB conn operation
+            _ -> liftIO $ putStrLn $ "Unsupported action: " ++ toString operation.action
         Swaggers.updateSwagger swagger_id value
+
         pass
 
   let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Swagger Saved Successfully"]}|]
