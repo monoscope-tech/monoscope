@@ -1,7 +1,7 @@
 module Pages.Documentation (documentationGetH, documentationPostH, documentationPutH, SwaggerForm, SaveSwaggerForm) where
 
 import Config
-import Data.Aeson (decodeStrict, encode)
+import Data.Aeson (FromJSON, decodeStrict, encode)
 import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
 import Data.Time.LocalTime (getZonedTime)
@@ -34,12 +34,12 @@ data SwaggerForm = SwaggerForm
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
 
-data SaveSwaggerForm = SaveSwaggerForm
-  { updated_swagger :: Text
-  , swagger_id :: Text
-  }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromForm)
+-- data SaveSwaggerForm = SaveSwaggerForm
+--   { updated_swagger :: Text
+--   , swagger_id :: Text
+--   }
+--   deriving stock (Show, Generic)
+--   deriving anyclass (FromForm)
 
 data FieldOperation = FieldOperation
   { action :: Text
@@ -53,14 +53,21 @@ data FieldOperation = FieldOperation
   , format :: Text
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromForm)
+  deriving anyclass (FromJSON)
 
-data FieldOperations = FieldOperations {operations :: [FieldOperation]}
+data SaveSwaggerForm = SaveSwaggerForm
+  { updated_swagger :: Text
+  , swagger_id :: Text
+  , operations :: [FieldOperation]
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (FromJSON)
 
 documentationPutH :: Sessions.PersistentSession -> Projects.ProjectId -> SaveSwaggerForm -> DashboardM (Headers '[HXTrigger] (Html ()))
-documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id} = do
+documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id, operations} = do
   pool <- asks pool
   env <- asks env
+  print operations
   let value = case decodeStrict (encodeUtf8 updated_swagger) of
         Just val -> val
         Nothing -> error "Failed to parse JSON: "
