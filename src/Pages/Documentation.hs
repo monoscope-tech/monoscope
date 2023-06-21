@@ -4,6 +4,7 @@ module Pages.Documentation (documentationGetH, documentationPostH, documentation
 
 import Config
 import Data.Aeson (FromJSON, ToJSON, decodeStrict, encode)
+import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
 import Data.Digest.XXHash
@@ -18,11 +19,13 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import Lucid.Htmx
 import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.Fields (parseFieldCategoryEnum, parseFieldTypes)
 import Models.Apis.Fields qualified as Fields
 import Models.Projects.Projects qualified as Projects
 import Models.Projects.Swaggers qualified as Swaggers
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
+
 import Numeric (showHex)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.GenerateSwagger qualified as GenerateSwagger
@@ -30,11 +33,12 @@ import Relude
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
 
-import Web.FormUrlEncoded (FromForm)
-
 import Models.Apis.Fields.Query qualified as Fields
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.Shapes qualified as Shapes
+import Relude.Unsafe as Unsafe hiding (head)
+import RequestMessages (fieldsToFieldDTO)
+import Web.FormUrlEncoded (FromForm)
 
 data SwaggerForm = SwaggerForm
   { swagger_json :: Text
@@ -43,20 +47,13 @@ data SwaggerForm = SwaggerForm
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
 
--- data SaveSwaggerForm = SaveSwaggerForm
---   { updated_swagger :: Text
---   , swagger_id :: Text
---   }
---   deriving stock (Show, Generic)
---   deriving anyclass (FromForm)
-
 data FieldOperation = FieldOperation
   { action :: Text
   , keypath :: Text
   , url :: Text
   , method :: Text
   , description :: Text
-  , example :: Text
+  , example :: AE.Value
   , category :: Text
   , ftype :: Text
   , format :: Text
@@ -64,10 +61,33 @@ data FieldOperation = FieldOperation
   deriving stock (Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
+data KeyPathData = KeyPathData
+  { fkKeyPath :: Text
+  , fkCategory :: Text
+  , fkType :: Text
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+data OpShape = OpShape
+  { opOperations :: V.Vector FieldOperation
+  , opShapeChanged :: Bool
+  , opRequestBodyKeyPaths :: V.Vector KeyPathData
+  , opResponseBodyKeyPaths :: V.Vector KeyPathData
+  , opRequestHeadersKeyPaths :: V.Vector KeyPathData
+  , opResponseHeadersKeyPaths :: V.Vector KeyPathData
+  , opQueryParamsKeyPaths :: V.Vector KeyPathData
+  , opMethod :: Text
+  , opUrl :: Text
+  , opStatus :: Text
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
 data SaveSwaggerForm = SaveSwaggerForm
   { updated_swagger :: Text
   , swagger_id :: Text
-  , operations :: V.Vector FieldOperation
+  , diffsInfo :: V.Vector OpShape
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
@@ -79,10 +99,10 @@ getFieldHash :: Text -> Text -> Text -> Text -> Text
 getFieldHash enpHash fcategory keypath ftype = enpHash <> toText (showHex (xxHash $ encodeUtf8 (fcategory <> keypath <> ftype)) "")
 
 documentationPutH :: Sessions.PersistentSession -> Projects.ProjectId -> SaveSwaggerForm -> DashboardM (Headers '[HXTrigger] (Html ()))
-documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id, operations} = do
+documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id, diffsInfo} = do
   pool <- asks pool
   env <- asks env
-  print operations
+  print diffsInfo
   let value = case decodeStrict (encodeUtf8 updated_swagger) of
         Just val -> val
         Nothing -> error "Failed to parse JSON: "
@@ -92,20 +112,66 @@ documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id, operatio
         swaggerId <- Swaggers.SwaggerId <$> liftIO UUIDV4.nextRandom
         currentTime <- liftIO getZonedTime
         let swaggerToAdd = Swaggers.Swagger{id = swaggerId, projectId = pid, createdBy = sess.userId, createdAt = currentTime, updatedAt = currentTime, swaggerJson = value}
-        Swaggers.addSwagger swaggerToAdd
+        -- Swaggers.addSwagger swaggerToAdd
         pass
       _ -> do
-        forM_ operations $ \operation -> do
-          case action operation of
-            -- "insert" -> insertIntoDB conn operation
-            "update" -> do
-              let endpHash = getEndpointHash pid operation.url (T.toUpper operation.method)
-              let fieldHash = getFieldHash endpHash operation.category operation.keypath operation.ftype
-              Fields.updateFieldByHash endpHash fieldHash operation.description
-              pass
-            -- "delete" -> deleteFromDB conn operation
-            _ -> liftIO $ putStrLn $ "Unsupported action: " ++ toString operation.action
-        Swaggers.updateSwagger swagger_id value
+        -- forM_ operations $ \operation -> do
+        --   let endpointHash = getEndpointHash pid operation.url (T.toUpper operation.method)
+        --   let fieldHash = getFieldHash endpointHash operation.category operation.keypath operation.ftype
+        --   let keyPath = operation.keypath
+        --   let format = operation.format
+        --   case action operation of
+        --     "insert" -> do
+        --       let fCategory = fromMaybe Fields.FCRequestBody (parseFieldCategoryEnum operation.category)
+        --       let fieldType = fromMaybe Fields.FTUnknown (parseFieldTypes operation.ftype)
+        --       let formatHash = fieldHash <> toText (showHex (xxHash $ encodeUtf8 format) "")
+
+        --       let newField =
+        --             Fields.Field
+        --               { createdAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
+        --               , updatedAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
+        --               , id = Fields.FieldId UUID.nil
+        --               , endpointHash = endpointHash
+        --               , projectId = pid
+        --               , key = snd $ T.breakOnEnd "." keyPath
+        --               , fieldType = fieldType
+        --               , fieldTypeOverride = Nothing
+        --               , format = format
+        --               , formatOverride = Nothing
+        --               , description = ""
+        --               , keyPath = keyPath
+        --               , fieldCategory = fCategory
+        --               , hash = fieldHash
+        --               }
+
+        --       let newFormat =
+        --             Formats.Format
+        --               { id = Formats.FormatId UUID.nil
+        --               , createdAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
+        --               , updatedAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
+        --               , projectId = pid
+        --               , fieldHash = fieldHash
+        --               , fieldType = fieldType
+        --               , fieldFormat = format
+        --               , examples = V.fromList []
+        --               , hash = formatHash
+        --               }
+
+        --       let (fieldQ, fieldP) = Fields.insertFieldQueryAndParams newField
+        --       let (formatQ, formatP) = Formats.insertFormatQueryAndParams newFormat
+        --       let query = fieldQ <> formatQ
+        --       let params = fieldP <> formatP
+
+        --       pass
+        --     "update" -> do
+        --       Fields.updateFieldByHash endpointHash fieldHash operation.description
+        --       pass
+        --     "delete" -> do
+        --       currentTime <- liftIO getZonedTime
+        --       Fields.deleteFieldByHash fieldHash currentTime
+        --       pass
+        --     _ -> liftIO $ putStrLn $ "Unsupported action: " ++ toString operation.action
+        -- Swaggers.updateSwagger swagger_id value
 
         pass
 
