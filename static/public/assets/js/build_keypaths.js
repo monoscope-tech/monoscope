@@ -71,21 +71,21 @@ function parsePaths() {
                 operations.push(...info.ops)
 
                 shapes.push({
-                    shapeChanged,
-                    requestBodyKeyPaths,
-                    queryParamsKeyPaths,
-                    requestHeadersKeyPaths,
-                    responseBodyKeyPaths,
-                    responseHeadersKeyPaths,
-                    method,
-                    url,
-                    status,
-                    operations
+                    opShapeChanged: shapeChanged,
+                    opRequestBodyKeyPaths: requestBodyKeyPaths,
+                    opQueryParamsKeyPaths: queryParamsKeyPaths,
+                    opRequestHeadersKeyPaths: requestHeadersKeyPaths,
+                    opResponseBodyKeyPaths: responseBodyKeyPaths,
+                    opResponseHeadersKeyPaths: responseHeadersKeyPaths,
+                    opMethod: method,
+                    opUrl: url,
+                    opStatus: status,
+                    opOperations: operations
                 })
             }
         }
 
-        //saveData(swagger_id, modifiedObject, shapes)
+        saveData(swagger_id, modifiedObject, shapes)
     }
 }
 
@@ -95,7 +95,7 @@ async function saveData(swaggerId, modifiedObject, shapes) {
     const data = {
         swagger_id: swaggerId,
         updated_swagger: JSON.stringify(modifiedObject),
-        shapes: shapes.filter(shape => shape.shapeChanged || shape.operations.length > 0)
+        diffsInfo: shapes.filter(shape => shape.opShapeChanged || shape.opOperations.length > 0)
     };
 
     try {
