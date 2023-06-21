@@ -1,3 +1,4 @@
+"use strict"
 function parsePaths() {
     if (window.diffEditor) {
         const originalValue = diffEditor.getModel().original.getValue();
@@ -13,28 +14,80 @@ function parsePaths() {
             endpoints: [],
             fields: [],
         }
+        const shapes = []
+
+        console.log(catModified)
 
         for (const [key, originalVal] of Object.entries(catOriginal)) {
             const modifiedVal = catModified[key]
             if (!modifiedVal) continue
+
+            const operations = []
+            const requestBodyKeyPaths = modifiedVal.requestBodyKeyPaths.map(v => {
+                return { keyPath: v.keypath, ftype: v.type, fcategory: "request_body" }
+            })
+
+            const requestHeadersKeyPaths = modifiedVal.requestHeadersKeyPaths.map(v => {
+                return { keyPath: v.keypath, ftype: v.type, fcategory: "request_header" }
+            })
+
+            const queryParamsKeyPaths = modifiedVal.queryParamsKeyPaths.map(v => {
+                return { keyPath: v.keypath, ftype: v.type, fcategory: "query_param" }
+            })
+
+            const method = modifiedVal.method
+            const url = modifiedVal.url
+            let shapeChanged = false
             // compare request body
-            updateDBOb.fields.push(...getFieldsToOperate(originalVal.requestBodyKeyPaths, modifiedVal.requestBodyKeyPaths, originalVal.method, originalVal.url, "request_body"))
+            let info = getFieldsToOperate(originalVal.requestBodyKeyPaths, modifiedVal.requestBodyKeyPaths, originalVal.method, originalVal.url, "request_body")
+            shapeChanged = shapeChanged ? shapeChanged : info.updatesShape
+            operations.push(...info.ops)
+            // request headers
+            info = getFieldsToOperate(originalVal.requestHeadersKeyPaths, modifiedVal.requestHeadersKeyPaths, originalVal.method, originalVal.url, "request_header")
+            shapeChanged = shapeChanged ? shapeChanged : info.updatesShape
+            operations.push(...info.ops)
+            // query params
+            info = getFieldsToOperate(originalVal.queryParamsKeyPaths, modifiedVal.queryParamsKeyPaths, originalVal.method, originalVal.url, "query_param")
+            shapeChanged = shapeChanged ? shapeChanged : info.updatesShape
+            operations.push(...info.ops)
+
             // compare response bodies
             for (const [status, ogVal] of Object.entries(originalVal.response)) {
                 const mdVal = modifiedVal.response[status]
                 if (!mdVal) continue
-                updateDBOb.fields.push(...getFieldsToOperate(ogVal.responseBodyKeyPaths, mdVal.responseBodyKeyPaths, originalVal.method, originalVal.url, "response_body"))
-                updateDBOb.fields.push(...getFieldsToOperate(ogVal.responseHeadersKeyPaths, mdVal.responseHeadersKeyPaths, originalVal.method, originalVal.url, "response_header"))
+                const responseBodyKeyPaths = mdVal.responseBodyKeyPaths.map(v => {
+                    return { keyPath: v.keypath, ftype: v.type, fcategory: "response_body" }
+                })
+                const responseHeadersKeyPaths = mdVal.responseHeadersKeyPaths.map(v => {
+                    return { keyPath: v.keypath, ftype: v.type, fcategory: "response_header" }
+                })
+
+                info = getFieldsToOperate(ogVal.responseBodyKeyPaths, mdVal.responseBodyKeyPaths, originalVal.method, originalVal.url, "response_body")
+                shapeChanged = shapeChanged ? shapeChanged : info.updatesShape
+                operations.push(...info.ops)
+
+                info = getFieldsToOperate(ogVal.responseHeadersKeyPaths, mdVal.responseHeadersKeyPaths, originalVal.method, originalVal.url, "response_header")
+                shapeChanged = shapeChanged ? shapeChanged : info.updatesShape
+                operations.push(...info.ops)
+
+                shapes.push({
+                    shapeChanged,
+                    requestBodyKeyPaths,
+                    queryParamsKeyPaths,
+                    requestHeadersKeyPaths,
+                    responseBodyKeyPaths,
+                    responseHeadersKeyPaths,
+                    method,
+                    url,
+                    status,
+                    operations
+                })
             }
-            // compare request headers
-            updateDBOb.fields.push(...getFieldsToOperate(originalVal.requestHeadersKeyPaths, modifiedVal.requestHeadersKeyPaths, originalVal.method, originalVal.url, "request_header"))
-            // compare query params
-            updateDBOb.fields.push(...getFieldsToOperate(originalVal.queryParamsKeyPaths, modifiedVal.queryParamsKeyPaths, originalVal.method, originalVal.url, "query_param"))
-            // compare path params
-            updateDBOb.fields.push(...getFieldsToOperate(originalVal.pathParamsKeyPaths, modifiedVal.pathParamsKeyPaths, originalVal.method, originalVal.url, "path_param"))
         }
 
-        saveData(swagger_id, modifiedObject, updateDBOb)
+        console.log(shapes.filter(shape => shape.shapeChanged || shape.operations.length > 0))
+
+        //saveData(swagger_id, modifiedObject, updateDBOb)
     }
 }
 
@@ -66,24 +119,34 @@ async function saveData(swaggerId, modifiedObject, updateDBOb) {
     }
 }
 
-
 function getFieldsToOperate(ogPaths, mdPaths, method, url, category) {
     let ops = []
     let hasDeleted = false
+    let updatesShape = false
+
     ogPaths.forEach(path => {
         const t = mdPaths.find((v) => v.keypath === path.keypath)
         if (!t) {
             hasDeleted = true
+            updatesShape = true
             ops.push({
                 action: "delete", keypath: path.keypath, description: path.description, category: category,
                 url: url, method: method, ftype: path.type === "boolean" ? "bool" : path.type, format: path.format, example: path.example
             })
         } else {
             if (keyPathModified(path, t)) {
-                ops.push({
-                    action: "update", keypath: t.keypath, description: t.description, category: category, url: url,
-                    method: method, ftype: path.type === "boolean" ? "bool" : path.type, format: t.format, example: t.example,
-                })
+                if (path.type !== t.type) {
+                    updatesShape = true
+                    ops.push({
+                        action: "insert", keypath: t.keypath, description: t.description, category: category, url: url,
+                        method: method, ftype: path.type === "boolean" ? "bool" : path.type, format: t.format, example: t.example,
+                    })
+                } else {
+                    ops.push({
+                        action: "update", keypath: t.keypath, description: t.description, category: category, url: url,
+                        method: method, ftype: path.type === "boolean" ? "bool" : path.type, format: t.format, example: t.example,
+                    })
+                }
             }
         }
     })
@@ -92,6 +155,7 @@ function getFieldsToOperate(ogPaths, mdPaths, method, url, category) {
         mdPaths.forEach(path => {
             const t = ogPaths.find((v) => v.keypath === path.keypath)
             if (!t) {
+                updatesShape = true
                 ops.push({
                     action: "insert", keypath: path.keypath, description: path.description, category: category,
                     url: url, method: method, ftype: path.type === "boolean" ? "bool" : path.type, format: path.format, example: path.example
@@ -99,7 +163,7 @@ function getFieldsToOperate(ogPaths, mdPaths, method, url, category) {
             }
         })
     }
-    return ops
+    return { updatesShape, ops }
 }
 
 function keyPathModified(v1, v2) {
