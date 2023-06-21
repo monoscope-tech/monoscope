@@ -24,15 +24,15 @@ function parsePaths() {
 
             const operations = []
             const requestBodyKeyPaths = modifiedVal.requestBodyKeyPaths.map(v => {
-                return { keyPath: v.keypath, ftype: v.type, fcategory: "request_body" }
+                return { fkKeyPath: v.keypath, fkType: v.type, fkCategory: "request_body" }
             })
 
             const requestHeadersKeyPaths = modifiedVal.requestHeadersKeyPaths.map(v => {
-                return { keyPath: v.keypath, ftype: v.type, fcategory: "request_header" }
+                return { fkKeyPath: v.keypath, fkType: v.type, fkCategory: "request_header" }
             })
 
             const queryParamsKeyPaths = modifiedVal.queryParamsKeyPaths.map(v => {
-                return { keyPath: v.keypath, ftype: v.type, fcategory: "query_param" }
+                return { fkKeyPath: v.keypath, fkType: v.type, fkCategory: "query_param" }
             })
 
             const method = modifiedVal.method
@@ -56,10 +56,10 @@ function parsePaths() {
                 const mdVal = modifiedVal.response[status]
                 if (!mdVal) continue
                 const responseBodyKeyPaths = mdVal.responseBodyKeyPaths.map(v => {
-                    return { keyPath: v.keypath, ftype: v.type, fcategory: "response_body" }
+                    return { fkKeyPath: v.keypath, fkType: v.type, fkCategory: "response_body" }
                 })
                 const responseHeadersKeyPaths = mdVal.responseHeadersKeyPaths.map(v => {
-                    return { keyPath: v.keypath, ftype: v.type, fcategory: "response_header" }
+                    return { fkKeyPath: v.keypath, fkType: v.type, fkCategory: "response_header" }
                 })
 
                 info = getFieldsToOperate(ogVal.responseBodyKeyPaths, mdVal.responseBodyKeyPaths, originalVal.method, originalVal.url, "response_body")
