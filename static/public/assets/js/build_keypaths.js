@@ -85,19 +85,17 @@ function parsePaths() {
             }
         }
 
-        console.log(shapes.filter(shape => shape.shapeChanged || shape.operations.length > 0))
-
-        //saveData(swagger_id, modifiedObject, updateDBOb)
+        //saveData(swagger_id, modifiedObject, shapes)
     }
 }
 
 
-async function saveData(swaggerId, modifiedObject, updateDBOb) {
+async function saveData(swaggerId, modifiedObject, shapes) {
     const url = window.location.pathname + '/save';
     const data = {
         swagger_id: swaggerId,
         updated_swagger: JSON.stringify(modifiedObject),
-        operations: updateDBOb.fields
+        shapes: shapes.filter(shape => shape.shapeChanged || shape.operations.length > 0)
     };
 
     try {
