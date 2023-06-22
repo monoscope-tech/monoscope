@@ -9,7 +9,7 @@ import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
 import Data.Digest.XXHash
 import Data.Text qualified as T
-import Data.Time.LocalTime (getZonedTime)
+import Data.Time.LocalTime (ZonedTime, getZonedTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 
@@ -35,6 +35,7 @@ import Servant.Htmx (HXTrigger)
 
 import Models.Apis.Fields.Query qualified as Fields
 import Models.Apis.Formats qualified as Formats
+import Models.Apis.RequestDumps (RequestDump (fieldHashes, shapeHash))
 import Models.Apis.Shapes qualified as Shapes
 import Relude.Unsafe as Unsafe hiding (head)
 import RequestMessages (fieldsToFieldDTO)
@@ -93,10 +94,51 @@ data SaveSwaggerForm = SaveSwaggerForm
   deriving anyclass (FromJSON, ToJSON)
 
 getEndpointHash :: Projects.ProjectId -> Text -> Text -> Text
-getEndpointHash pid urlPath method = toText $ showHex (xxHash $ encodeUtf8 $ (UUID.toText pid.unProjectId) <> method <> urlPath) ""
+getEndpointHash pid urlPath method = toText $ showHex (xxHash $ encodeUtf8 $ (UUID.toText pid.unProjectId) <> T.toUpper method <> urlPath) ""
 
 getFieldHash :: Text -> Text -> Text -> Text -> Text
 getFieldHash enpHash fcategory keypath ftype = enpHash <> toText (showHex (xxHash $ encodeUtf8 (fcategory <> keypath <> ftype)) "")
+
+getShapeHash :: Text -> Text -> V.Vector Text -> V.Vector Text -> V.Vector Text -> V.Vector Text -> Text
+getShapeHash endpointHash statusCode responseBodyKP responseHeadersKP requestBodyKP queryParamsKP = shapeHash
+ where
+  comb = T.concat $ sort $ V.toList $ queryParamsKP <> responseHeadersKP <> requestBodyKP <> responseBodyKP
+  keyPathsHash = toText $ showHex (xxHash $ encodeUtf8 comb) ""
+  shapeHash = endpointHash <> statusCode <> keyPathsHash
+
+getShapeFromOpShape :: Projects.ProjectId -> ZonedTime -> OpShape -> Shapes.Shape
+getShapeFromOpShape pid curTime opShape =
+  Shapes.Shape
+    { id = Shapes.ShapeId UUID.nil
+    , projectId = pid
+    , createdAt = curTime
+    , updatedAt = curTime
+    , endpointHash = endpointHash
+    , queryParamsKeypaths = qpKP
+    , requestBodyKeypaths = rqBKP
+    , responseBodyKeypaths = rsBKP
+    , requestHeadersKeypaths = rqHKP
+    , responseHeadersKeypaths = rsHKP
+    , fieldHashes = fieldHashes
+    , hash = shapeHash
+    , statusCode = read $ toString opShape.opStatus
+    }
+ where
+  endpointHash = getEndpointHash pid opShape.opUrl opShape.opMethod
+  qpKP = V.map (\v -> v.fkKeyPath) opShape.opQueryParamsKeyPaths
+  rqHKP = V.map (\v -> v.fkKeyPath) opShape.opRequestHeadersKeyPaths
+  rqBKP = V.map (\v -> v.fkKeyPath) opShape.opRequestBodyKeyPaths
+  rsHKP = V.map (\v -> v.fkKeyPath) opShape.opResponseHeadersKeyPaths
+  rsBKP = V.map (\v -> v.fkKeyPath) opShape.opResponseBodyKeyPaths
+
+  shapeHash = getShapeHash endpointHash opShape.opStatus rsBKP rsHKP rqBKP qpKP
+
+  qpKPHashes = V.map (\v -> getFieldHash endpointHash v.fkCategory v.fkKeyPath v.fkType) opShape.opQueryParamsKeyPaths
+  rqHKPHashes = V.map (\v -> getFieldHash endpointHash v.fkCategory v.fkKeyPath v.fkType) opShape.opRequestHeadersKeyPaths
+  rqBKPHashes = V.map (\v -> getFieldHash endpointHash v.fkCategory v.fkKeyPath v.fkType) opShape.opRequestBodyKeyPaths
+  rsHKPHashes = V.map (\v -> getFieldHash endpointHash v.fkCategory v.fkKeyPath v.fkType) opShape.opResponseHeadersKeyPaths
+  rsBKPHashes = V.map (\v -> getFieldHash endpointHash v.fkCategory v.fkKeyPath v.fkType) opShape.opResponseBodyKeyPaths
+  fieldHashes = qpKPHashes <> rqHKPHashes <> rqBKPHashes <> rsHKPHashes <> rsBKPHashes
 
 documentationPutH :: Sessions.PersistentSession -> Projects.ProjectId -> SaveSwaggerForm -> DashboardM (Headers '[HXTrigger] (Html ()))
 documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id, diffsInfo} = do
@@ -112,14 +154,18 @@ documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id, diffsInf
         swaggerId <- Swaggers.SwaggerId <$> liftIO UUIDV4.nextRandom
         currentTime <- liftIO getZonedTime
         let swaggerToAdd = Swaggers.Swagger{id = swaggerId, projectId = pid, createdBy = sess.userId, createdAt = currentTime, updatedAt = currentTime, swaggerJson = value}
-        -- Swaggers.addSwagger swaggerToAdd
+        Swaggers.addSwagger swaggerToAdd
         pass
       _ -> do
-        -- forM_ operations $ \operation -> do
-        --   let endpointHash = getEndpointHash pid operation.url (T.toUpper operation.method)
-        --   let fieldHash = getFieldHash endpointHash operation.category operation.keypath operation.ftype
-        --   let keyPath = operation.keypath
-        --   let format = operation.format
+        currentTime <- liftIO getZonedTime
+        -- shapes that needs to be addded to db (on conflict do nothing)
+        let shapes = V.map (getShapeFromOpShape pid currentTime) (V.filter (\x -> x.opShapeChanged) diffsInfo)
+        forM_ diffsInfo $ \operation -> do
+          let endpointHash = getEndpointHash pid operation.opUrl (T.toUpper operation.opMethod)
+          let fieldHash = getFieldHash endpointHash operation.category operation.keypath operation.ftype
+          let keyPath = operation.keypath
+          let format = operation.format
+          pass
         --   case action operation of
         --     "insert" -> do
         --       let fCategory = fromMaybe Fields.FCRequestBody (parseFieldCategoryEnum operation.category)
