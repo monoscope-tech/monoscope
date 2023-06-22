@@ -1,20 +1,25 @@
 {-# LANGUAGE TemplateHaskell #-}
 
-module Models.Apis.Shapes (Shape (..), SwShape (..), ShapeId (..), shapeIdText, insertShapeQueryAndParam, shapesByEndpointHash) where
+module Models.Apis.Shapes (Shape (..), SwShape (..), ShapeId (..), shapeIdText, insertShapeQueryAndParam, insertShapes, shapesByEndpointHash) where
 
 import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
+import Data.Vector qualified as V
+
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), query)
+
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, Query, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
+import Database.PostgreSQL.Transact (DBT, executeMany)
 import Database.PostgreSQL.Transact qualified as PgT
+
 import Deriving.Aeson qualified as DAE
 import Models.Projects.Projects qualified as Projects
 import Optics.TH
@@ -25,7 +30,7 @@ import Web.HttpApiData (FromHttpApiData)
 newtype ShapeId = ShapeId {unShapeId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving
-    (AE.FromJSON, Eq, Ord, FromField, ToField, FromHttpApiData, Default)
+    (AE.FromJSON, AE.ToJSON, Eq, Ord, FromField, ToField, FromHttpApiData, Default)
     via UUID.UUID
 
 shapeIdText :: ShapeId -> Text
@@ -50,8 +55,8 @@ data Shape = Shape
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, Default)
-  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Shape
-  deriving (Entity) via (GenericEntity '[Schema "apis", TableName "fields", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Shape)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Shape
+  deriving (Entity) via (GenericEntity '[Schema "apis", TableName "shapes", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Shape)
   deriving (FromField) via Aeson Shape
 
 Optics.TH.makeFieldLabelsNoPrefix ''Shape
@@ -77,6 +82,18 @@ insertShapeQueryAndParam shape = (q, params)
     , MkDBField $ shape.hash
     , MkDBField $ shape.statusCode
     ]
+
+insertShapes :: Vector Shape -> DBT IO Int64
+insertShapes shapes = do
+  let insertQuery =
+        [sql|
+        INSERT INTO apis.shapes
+        (id, created_at, updated_at, project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash, status_code)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) 
+        ON CONFLICT (hash)
+        DO UPDATE SET request_headers_keypaths = EXCLUDED.request_headers_keypaths
+      |]
+  executeMany insertQuery (V.toList shapes)
 
 data SwShape = SwShape
   { swEndpointHash :: Text

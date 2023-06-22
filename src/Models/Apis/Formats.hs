@@ -7,6 +7,7 @@ module Models.Apis.Formats (
   formatsByFieldHash,
   formatsByFieldsHashes,
   insertFormatQueryAndParams,
+  insertFormats,
 ) where
 
 import Data.Aeson qualified as AE
@@ -22,7 +23,8 @@ import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
-import Database.PostgreSQL.Transact (DBT)
+import Database.PostgreSQL.Transact (DBT, executeMany)
+
 import Database.PostgreSQL.Transact qualified as PgT
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Fields.Types qualified as Fields
@@ -83,6 +85,18 @@ insertFormatQueryAndParams format = (q, params)
     , MkDBField $ format.hash
     , MkDBField (20 :: Int64) -- NOTE: max number of examples
     ]
+
+insertFormats :: Vector.Vector Format -> DBT IO Int64
+insertFormats formats = do
+  let q =
+        [sql| 
+      insert into apis.formats (id, created_at, updated_at, project_id, field_hash, field_type, field_format, examples, hash) VALUES (?,?,?,?,?,?,?,?,?)
+        ON CONFLICT (project_id, field_hash, field_format)
+        DO
+          UPDATE SET 
+            field_type= EXCLUDED.field_type, examples = ARRAY(SELECT DISTINCT e from unnest(apis.formats.examples || excluded.examples) as e order by e limit 20); 
+      |]
+  executeMany q (Vector.toList formats)
 
 data SwFormat = SwFormat
   { swFieldHash :: Text

@@ -1,4 +1,5 @@
 {-# LANGUAGE TupleSections #-}
+{-# OPTIONS_GHC -Wno-name-shadowing #-}
 
 module Pages.Endpoints.EndpointDetails (endpointDetailsH, fieldDetailsPartialH, fieldsToNormalized) where
 
@@ -7,14 +8,13 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Text (encodeToLazyText)
 import Data.Default (def)
 import Data.Map qualified as Map
-import Data.Text as T (breakOnAll, dropWhile, isInfixOf, isSuffixOf, replace, splitOn, toLower)
+import Data.Text as T (breakOnAll, dropWhile, isSuffixOf, splitOn, toLower)
 import Data.Time (UTCTime, ZonedTime, addUTCTime, defaultTimeLocale, formatTime, getCurrentTime, secondsToNominalDiffTime, utc, utcToZonedTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
-import Debug.Pretty.Simple
 import Fmt
 import Lucid
 import Lucid.Htmx
@@ -37,7 +37,6 @@ import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
 import Relude hiding (max, min)
 import Relude.Unsafe qualified as Unsafe
 import Text.Interpolation.Nyan (int, rmode')
-import Text.Pretty.Simple
 import Utils
 import Witch (from)
 
@@ -447,6 +446,7 @@ subSubSection title fieldsM =
 -- >>> let v3 = (def::Field){fieldCategory=FCResponseBody, keyPath=".k1.k2[*].x", key="x"}
 -- >>> fieldsToNormalized [v1]
 -- [("k1",Nothing),("k1.k2[*]",Just (Field {id = FieldId {unFieldId = 00000000-0000-0000-0000-000000000000}, createdAt = 2019-08-31 05:14:37.537084021 UTC, updatedAt = 2019-08-31 05:14:37.537084021 UTC, projectId = ProjectId {unProjectId = 00000000-0000-0000-0000-000000000000}, endpointHash = "", key = "k2[*]", fieldType = FTUnknown, fieldTypeOverride = Nothing, format = "", formatOverride = Nothing, description = "", keyPath = ".k1.k2[*]", fieldCategory = FCQueryParam, hash = ""}))]
+
 ---- >>> fieldsToNormalized [v2]
 ---- >>> fieldsToNormalized [v2]
 fieldsToNormalized :: [Fields.Field] -> [(Text, Maybe Fields.Field)]

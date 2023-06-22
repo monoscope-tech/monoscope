@@ -35,10 +35,8 @@ import Servant.Htmx (HXTrigger)
 
 import Models.Apis.Fields.Query qualified as Fields
 import Models.Apis.Formats qualified as Formats
-import Models.Apis.RequestDumps (RequestDump (fieldHashes, shapeHash))
 import Models.Apis.Shapes qualified as Shapes
 import Relude.Unsafe as Unsafe hiding (head)
-import RequestMessages (fieldsToFieldDTO)
 import Web.FormUrlEncoded (FromForm)
 
 data SwaggerForm = SwaggerForm
@@ -106,23 +104,25 @@ getShapeHash endpointHash statusCode responseBodyKP responseHeadersKP requestBod
   keyPathsHash = toText $ showHex (xxHash $ encodeUtf8 comb) ""
   shapeHash = endpointHash <> statusCode <> keyPathsHash
 
-getShapeFromOpShape :: Projects.ProjectId -> ZonedTime -> OpShape -> Shapes.Shape
-getShapeFromOpShape pid curTime opShape =
-  Shapes.Shape
-    { id = Shapes.ShapeId UUID.nil
-    , projectId = pid
-    , createdAt = curTime
-    , updatedAt = curTime
-    , endpointHash = endpointHash
-    , queryParamsKeypaths = qpKP
-    , requestBodyKeypaths = rqBKP
-    , responseBodyKeypaths = rsBKP
-    , requestHeadersKeypaths = rqHKP
-    , responseHeadersKeypaths = rsHKP
-    , fieldHashes = fieldHashes
-    , hash = shapeHash
-    , statusCode = read $ toString opShape.opStatus
-    }
+getShapeFromOpShape :: Projects.ProjectId -> ZonedTime -> OpShape -> IO Shapes.Shape
+getShapeFromOpShape pid curTime opShape = do
+  shapeId <- Shapes.ShapeId <$> liftIO UUIDV4.nextRandom
+  pure
+    Shapes.Shape
+      { id = shapeId
+      , projectId = pid
+      , createdAt = curTime
+      , updatedAt = curTime
+      , endpointHash = endpointHash
+      , queryParamsKeypaths = qpKP
+      , requestBodyKeypaths = rqBKP
+      , responseBodyKeypaths = rsBKP
+      , requestHeadersKeypaths = rqHKP
+      , responseHeadersKeypaths = rsHKP
+      , fieldHashes = fieldHashes
+      , hash = shapeHash
+      , statusCode = read $ toString opShape.opStatus
+      }
  where
   endpointHash = getEndpointHash pid opShape.opUrl opShape.opMethod
   qpKP = V.map (\v -> v.fkKeyPath) opShape.opQueryParamsKeyPaths
@@ -130,9 +130,7 @@ getShapeFromOpShape pid curTime opShape =
   rqBKP = V.map (\v -> v.fkKeyPath) opShape.opRequestBodyKeyPaths
   rsHKP = V.map (\v -> v.fkKeyPath) opShape.opResponseHeadersKeyPaths
   rsBKP = V.map (\v -> v.fkKeyPath) opShape.opResponseBodyKeyPaths
-
   shapeHash = getShapeHash endpointHash opShape.opStatus rsBKP rsHKP rqBKP qpKP
-
   qpKPHashes = V.map (\v -> getFieldHash endpointHash v.fkCategory v.fkKeyPath v.fkType) opShape.opQueryParamsKeyPaths
   rqHKPHashes = V.map (\v -> getFieldHash endpointHash v.fkCategory v.fkKeyPath v.fkType) opShape.opRequestHeadersKeyPaths
   rqBKPHashes = V.map (\v -> getFieldHash endpointHash v.fkCategory v.fkKeyPath v.fkType) opShape.opRequestBodyKeyPaths
@@ -140,11 +138,67 @@ getShapeFromOpShape pid curTime opShape =
   rsBKPHashes = V.map (\v -> getFieldHash endpointHash v.fkCategory v.fkKeyPath v.fkType) opShape.opResponseBodyKeyPaths
   fieldHashes = qpKPHashes <> rqHKPHashes <> rqBKPHashes <> rsHKPHashes <> rsBKPHashes
 
+getFieldAndFormatFromOpShape :: Projects.ProjectId -> ZonedTime -> FieldOperation -> IO (Fields.Field, Formats.Format)
+getFieldAndFormatFromOpShape pid t operation = do
+  let endpointHash = getEndpointHash pid operation.url operation.method
+      fCategory = fromMaybe Fields.FCRequestBody (parseFieldCategoryEnum operation.category)
+      fieldType = fromMaybe Fields.FTUnknown (parseFieldTypes operation.ftype)
+      fieldHash = getFieldHash endpointHash operation.category operation.keypath operation.ftype
+      keyPath = operation.keypath
+      format = operation.format
+      formatHash = fieldHash <> toText (showHex (xxHash $ encodeUtf8 format) "")
+
+  fieldID <- Fields.FieldId <$> liftIO UUIDV4.nextRandom
+  formatID <- Formats.FormatId <$> liftIO UUIDV4.nextRandom
+
+  let field =
+        Fields.Field
+          { createdAt = t
+          , updatedAt = t
+          , id = fieldID
+          , endpointHash = endpointHash
+          , projectId = pid
+          , key = snd $ T.breakOnEnd "." keyPath
+          , fieldType = fieldType
+          , fieldTypeOverride = Nothing
+          , format = format
+          , formatOverride = Just ""
+          , description = operation.description
+          , keyPath = keyPath
+          , fieldCategory = fCategory
+          , hash = fieldHash
+          }
+
+      lFormat =
+        Formats.Format
+          { id = formatID
+          , createdAt = t
+          , updatedAt = t
+          , projectId = pid
+          , fieldHash = fieldHash
+          , fieldType = fieldType
+          , fieldFormat = format
+          , examples = V.fromList [operation.example]
+          , hash = formatHash
+          }
+
+  return (field, lFormat)
+
+flattenVector :: [V.Vector FieldOperation] -> V.Vector FieldOperation
+flattenVector = V.concat
+
+monadToNorm :: Monad m => [m a] -> m [a]
+monadToNorm [] = pure []
+monadToNorm (x : xs) = do
+  v <- x
+  res <- monadToNorm xs
+  let comb = [v] <> res
+  pure comb
+
 documentationPutH :: Sessions.PersistentSession -> Projects.ProjectId -> SaveSwaggerForm -> DashboardM (Headers '[HXTrigger] (Html ()))
 documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id, diffsInfo} = do
   pool <- asks pool
   env <- asks env
-  print diffsInfo
   let value = case decodeStrict (encodeUtf8 updated_swagger) of
         Just val -> val
         Nothing -> error "Failed to parse JSON: "
@@ -159,66 +213,20 @@ documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id, diffsInf
       _ -> do
         currentTime <- liftIO getZonedTime
         -- shapes that needs to be addded to db (on conflict do nothing)
-        let shapes = V.map (getShapeFromOpShape pid currentTime) (V.filter (\x -> x.opShapeChanged) diffsInfo)
-        forM_ diffsInfo $ \operation -> do
-          let endpointHash = getEndpointHash pid operation.opUrl (T.toUpper operation.opMethod)
-          let fieldHash = getFieldHash endpointHash operation.category operation.keypath operation.ftype
-          let keyPath = operation.keypath
-          let format = operation.format
-          pass
-        --   case action operation of
-        --     "insert" -> do
-        --       let fCategory = fromMaybe Fields.FCRequestBody (parseFieldCategoryEnum operation.category)
-        --       let fieldType = fromMaybe Fields.FTUnknown (parseFieldTypes operation.ftype)
-        --       let formatHash = fieldHash <> toText (showHex (xxHash $ encodeUtf8 format) "")
+        shapes' <- liftIO $ monadToNorm $ V.toList (V.map (getShapeFromOpShape pid currentTime) (V.filter (\x -> x.opShapeChanged) diffsInfo))
+        let shapes = V.fromList shapes'
 
-        --       let newField =
-        --             Fields.Field
-        --               { createdAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
-        --               , updatedAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
-        --               , id = Fields.FieldId UUID.nil
-        --               , endpointHash = endpointHash
-        --               , projectId = pid
-        --               , key = snd $ T.breakOnEnd "." keyPath
-        --               , fieldType = fieldType
-        --               , fieldTypeOverride = Nothing
-        --               , format = format
-        --               , formatOverride = Nothing
-        --               , description = ""
-        --               , keyPath = keyPath
-        --               , fieldCategory = fCategory
-        --               , hash = fieldHash
-        --               }
+        let nestedOps = V.map (\x -> x.opOperations) diffsInfo
+        let ops = flattenVector (V.toList nestedOps)
+        fAndF' <- liftIO $ monadToNorm (V.toList (V.map (getFieldAndFormatFromOpShape pid currentTime) ops))
+        let fAndF = V.fromList fAndF'
+        let fields = V.map fst fAndF
+        let formats = V.map snd fAndF
 
-        --       let newFormat =
-        --             Formats.Format
-        --               { id = Formats.FormatId UUID.nil
-        --               , createdAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
-        --               , updatedAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
-        --               , projectId = pid
-        --               , fieldHash = fieldHash
-        --               , fieldType = fieldType
-        --               , fieldFormat = format
-        --               , examples = V.fromList []
-        --               , hash = formatHash
-        --               }
-
-        --       let (fieldQ, fieldP) = Fields.insertFieldQueryAndParams newField
-        --       let (formatQ, formatP) = Formats.insertFormatQueryAndParams newFormat
-        --       let query = fieldQ <> formatQ
-        --       let params = fieldP <> formatP
-
-        --       pass
-        --     "update" -> do
-        --       Fields.updateFieldByHash endpointHash fieldHash operation.description
-        --       pass
-        --     "delete" -> do
-        --       currentTime <- liftIO getZonedTime
-        --       Fields.deleteFieldByHash fieldHash currentTime
-        --       pass
-        --     _ -> liftIO $ putStrLn $ "Unsupported action: " ++ toString operation.action
-        -- Swaggers.updateSwagger swagger_id value
-
+        Formats.insertFormats formats
+        Fields.insertFields fields
+        Shapes.insertShapes shapes
+        Swaggers.updateSwagger swagger_id value
         pass
 
   let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Swagger Saved Successfully"]}|]
@@ -264,8 +272,8 @@ documentationGetH sess pid swagger_id = do
       (swaggerVal, swaggerValId) <- case (swaggers, currentSwagger) of
         (_, Just swg) -> do
           let sw = swg.swaggerJson
-          let id = show swg.id.swaggerId
-          pure (sw, id)
+          let idx = show swg.id.swaggerId
+          pure (sw, idx)
         ([], Nothing) -> do
           endpoints <- Endpoints.endpointsByProjectId pid
           let endpoint_hashes = V.map (\enp -> enp.hash) endpoints
@@ -281,8 +289,8 @@ documentationGetH sess pid swagger_id = do
         (val, Nothing) -> do
           let latest = V.head $ V.reverse swaggers
           let sw = latest.swaggerJson
-          let id = show latest.id.swaggerId
-          pure (sw, id)
+          let idx = show latest.id.swaggerId
+          pure (sw, idx)
       pure (project, V.reverse swaggers, swaggerVal, swaggerValId)
 
   let bwconf =

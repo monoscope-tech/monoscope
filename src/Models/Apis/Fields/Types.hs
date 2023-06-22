@@ -8,6 +8,7 @@ module Models.Apis.Fields.Types (
   SwField (..),
   fieldIdText,
   parseFieldCategoryEnum,
+  parseFieldTypes,
   groupFieldsByCategory,
   fieldTypeToText,
   fieldCategoryEnumToText,
