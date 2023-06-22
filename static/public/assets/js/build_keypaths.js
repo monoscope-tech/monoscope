@@ -94,7 +94,7 @@ function parsePaths() {
             endpoints.push({
                 endpoint_url: url,
                 endpoint_method: method,
-                host: modifiedObject.servers.length > 0 ? modifiedObject.servers[0] : "example.com"
+                endpoint_host: modifiedObject.servers.length > 0 ? modifiedObject.servers[0] : "example.com"
             })
 
             const operations = []
