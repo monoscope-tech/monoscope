@@ -15,6 +15,7 @@ function parsePaths() {
             fields: [],
         }
         const shapes = []
+        const endpoints = []
 
         console.log(catModified)
 
@@ -24,15 +25,15 @@ function parsePaths() {
 
             const operations = []
             const requestBodyKeyPaths = modifiedVal.requestBodyKeyPaths.map(v => {
-                return { fkKeyPath: v.keypath, fkType: v.type, fkCategory: "request_body" }
+                return fieldMap(v, "request_body")
             })
 
             const requestHeadersKeyPaths = modifiedVal.requestHeadersKeyPaths.map(v => {
-                return { fkKeyPath: v.keypath, fkType: v.type, fkCategory: "request_header" }
+                return fieldMap(v, "request_header")
             })
 
             const queryParamsKeyPaths = modifiedVal.queryParamsKeyPaths.map(v => {
-                return { fkKeyPath: v.keypath, fkType: v.type, fkCategory: "query_param" }
+                return fieldMap(v, "query_param")
             })
 
             const method = modifiedVal.method
@@ -56,10 +57,10 @@ function parsePaths() {
                 const mdVal = modifiedVal.response[status]
                 if (!mdVal) continue
                 const responseBodyKeyPaths = mdVal.responseBodyKeyPaths.map(v => {
-                    return { fkKeyPath: v.keypath, fkType: v.type, fkCategory: "response_body" }
+                    return fieldMap(v, "response_body")
                 })
                 const responseHeadersKeyPaths = mdVal.responseHeadersKeyPaths.map(v => {
-                    return { fkKeyPath: v.keypath, fkType: v.type, fkCategory: "response_header" }
+                    return fieldMap(v, "response_header")
                 })
 
                 info = getFieldsToOperate(ogVal.responseBodyKeyPaths, mdVal.responseBodyKeyPaths, originalVal.method, originalVal.url, "response_body")
@@ -85,18 +86,88 @@ function parsePaths() {
             }
         }
 
-        saveData(swagger_id, modifiedObject, shapes)
+        for (const [key, val] of Object.entries(catModified)) {
+            if (catOriginal[key]) continue
+            // we have new endpoint 
+            const method = val.method
+            const url = val.url
+            endpoints.push({
+                endpoint_url: url,
+                endpoint_method: method,
+                host: modifiedObject.servers.length > 0 ? modifiedObject.servers[0] : "example.com"
+            })
+
+            const operations = []
+            const requestBodyKeyPaths = val.requestBodyKeyPaths.map(v => {
+                return fieldMap(v, "request_body")
+            })
+            const requestHeadersKeyPaths = val.requestHeadersKeyPaths.map(v => {
+                return fieldMap(v, "request_header")
+            })
+            const queryParamsKeyPaths = val.queryParamsKeyPaths.map(v => {
+                return fieldMap(v, "query_param")
+            })
+            // Since it's a new endpoint, they operations will all be inserts
+            let info = getFieldsToOperate([], val.requestBodyKeyPaths, val.method, val.url, "request_body")
+            operations.push(...info.ops)
+            // request headers
+            info = getFieldsToOperate([], val.requestHeadersKeyPaths, val.method, val.url, "request_header")
+            operations.push(...info.ops)
+            // query params
+            info = getFieldsToOperate(val.queryParamsKeyPaths, val.queryParamsKeyPaths, val.method, val.url, "query_param")
+            operations.push(...info.ops)
+
+            for (const [status, respVal] of Object.entries(val.response)) {
+                const responseBodyKeyPaths = respVal.responseBodyKeyPaths.map(v => {
+                    return fieldMap(v, "response_body")
+                })
+                const responseHeadersKeyPaths = respVal.responseHeadersKeyPaths.map(v => {
+                    return fieldMap(v, "response_header")
+                })
+
+                info = getFieldsToOperate([], respVal.responseBodyKeyPaths, method, url, "response_body")
+                operations.push(...info.ops)
+
+                info = getFieldsToOperate([], respVal.responseHeadersKeyPaths, method, url, "response_header")
+                operations.push(...info.ops)
+
+                shapes.push({
+                    opShapeChanged: true,
+                    opRequestBodyKeyPaths: requestBodyKeyPaths,
+                    opQueryParamsKeyPaths: queryParamsKeyPaths,
+                    opRequestHeadersKeyPaths: requestHeadersKeyPaths,
+                    opResponseBodyKeyPaths: responseBodyKeyPaths,
+                    opResponseHeadersKeyPaths: responseHeadersKeyPaths,
+                    opMethod: method,
+                    opUrl: url,
+                    opStatus: status,
+                    opOperations: operations
+                })
+            }
+        }
+
+        saveData(swagger_id, modifiedObject, shapes, endpoints)
+    }
+}
+
+function fieldMap(v, category) {
+    return {
+        fkKeyPath: v.keypath,
+        fkType: v.type || "unkown",
+        fkCategory: category
     }
 }
 
 
-async function saveData(swaggerId, modifiedObject, shapes) {
+async function saveData(swaggerId, modifiedObject, shapes, endpoints) {
     const url = window.location.pathname + '/save';
     const data = {
         swagger_id: swaggerId,
         updated_swagger: JSON.stringify(modifiedObject),
+        endpoints,
         diffsInfo: shapes.filter(shape => shape.opShapeChanged || shape.opOperations.length > 0)
     };
+
 
     try {
         const response = await fetch(url, {
@@ -258,5 +329,5 @@ function getKeyPathsHelper(value, path) {
     } else if (value.type === "array") {
         return getKeyPathsHelper({ ...value.items, description: value.description || "" }, `${path}[*]`)
     }
-    return [{ ...value, keypath: path }]
+    return [{ type: value.type || "unknown", description: value.description || "", format: value.format || "", example: value.example || "", keypath: path }]
 }
