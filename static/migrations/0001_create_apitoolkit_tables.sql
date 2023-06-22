@@ -250,7 +250,6 @@ CREATE TABLE IF NOT EXISTS apis.fields
     updated_at          TIMESTAMP       WITH TIME ZONE       NOT               NULL    DEFAULT current_timestamp,
     project_id          uuid            NOT  NULL REFERENCES projects.projects (id)    ON      DELETE CASCADE,
     endpoint_hash       text            NOT  NULL,
-    deleted_at          TIMESTAMP       WITH TIME ZONE       NOT               NULL    DEFAULT current_timestamp,
     key                 text            NOT  NULL DEFAULT    ''::text,
     field_type          apis.field_type NOT  NULL DEFAULT    'unknown'::apis.field_type,
     field_type_override text,
