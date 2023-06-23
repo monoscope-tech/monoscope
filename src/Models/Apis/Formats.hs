@@ -86,7 +86,7 @@ insertFormatQueryAndParams format = (q, params)
     , MkDBField (20 :: Int64) -- NOTE: max number of examples
     ]
 
-insertFormats :: Vector.Vector Format -> DBT IO Int64
+insertFormats :: [Format] -> DBT IO Int64
 insertFormats formats = do
   let q =
         [sql| 
@@ -96,7 +96,7 @@ insertFormats formats = do
           UPDATE SET 
             field_type= EXCLUDED.field_type, examples = ARRAY(SELECT DISTINCT e from unnest(apis.formats.examples || excluded.examples) as e order by e limit 20); 
       |]
-  executeMany q (Vector.toList formats)
+  executeMany q formats
 
 data SwFormat = SwFormat
   { swFieldHash :: Text

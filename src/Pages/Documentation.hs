@@ -233,23 +233,17 @@ documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id, endpoint
     currentTime <- liftIO getZonedTime
 
     newEndpoints <- liftIO $ monadToNorm $ V.toList (V.map (getEndpointFromOpEndpoint pid) endpoints)
-    shapes' <- liftIO $ monadToNorm $ V.toList (V.map (getShapeFromOpShape pid currentTime) (V.filter (\x -> x.opShapeChanged) diffsInfo))
-    let shapes = V.fromList shapes'
+    shapes <- liftIO $ monadToNorm $ V.toList (V.map (getShapeFromOpShape pid currentTime) (V.filter (\x -> x.opShapeChanged) diffsInfo))
 
     let nestedOps = V.map (\x -> x.opOperations) diffsInfo
     let ops = flattenVector (V.toList nestedOps)
-    fAndF' <- liftIO $ monadToNorm (V.toList (V.map (getFieldAndFormatFromOpShape pid currentTime) ops))
-    let fAndF = V.fromList fAndF'
-    let fields = V.map fst fAndF
-    let formats = V.map snd fAndF
+    fAndF <- liftIO $ monadToNorm (V.toList (V.map (getFieldAndFormatFromOpShape pid currentTime) ops))
+    let fields = map fst fAndF
+    let formats = map snd fAndF
 
-    -- Formats.insertFormats formats
-    -- Fields.insertFields fields
-    -- Shapes.insertShapes shapes
-
-    -- let endpointsQueriesAndParams = map Endpoints.upsertEndpointQueryAndParam newEndpoints
-    -- let queries = foldr (++) (map fst endpointsQueriesAndParams) []
-    -- let params = map snd endpointsQueriesAndParams
+    Formats.insertFormats formats
+    Fields.insertFields fields
+    Shapes.insertShapes shapes
 
     rs <- Endpoints.insertEndpoints newEndpoints
     print rs
@@ -257,10 +251,10 @@ documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id, endpoint
       "" -> do
         swaggerId <- Swaggers.SwaggerId <$> liftIO UUIDV4.nextRandom
         let swaggerToAdd = Swaggers.Swagger{id = swaggerId, projectId = pid, createdBy = sess.userId, createdAt = currentTime, updatedAt = currentTime, swaggerJson = value}
-        -- Swaggers.addSwagger swaggerToAdd
+        Swaggers.addSwagger swaggerToAdd
         pass
       _ -> do
-        -- Swaggers.updateSwagger swagger_id value
+        Swaggers.updateSwagger swagger_id value
         pass
 
   let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Swagger Saved Successfully"]}|]

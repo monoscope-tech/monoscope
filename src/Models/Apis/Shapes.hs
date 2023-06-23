@@ -83,7 +83,7 @@ insertShapeQueryAndParam shape = (q, params)
     , MkDBField $ shape.statusCode
     ]
 
-insertShapes :: Vector Shape -> DBT IO Int64
+insertShapes :: [Shape] -> DBT IO Int64
 insertShapes shapes = do
   let insertQuery =
         [sql|
@@ -93,7 +93,7 @@ insertShapes shapes = do
         ON CONFLICT (hash)
         DO UPDATE SET request_headers_keypaths = EXCLUDED.request_headers_keypaths
       |]
-  executeMany insertQuery (V.toList shapes)
+  executeMany insertQuery shapes
 
 data SwShape = SwShape
   { swEndpointHash :: Text

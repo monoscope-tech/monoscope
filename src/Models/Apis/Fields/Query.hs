@@ -36,7 +36,7 @@ insertFieldQueryAndParams field = (q, params)
     , MkDBField $ field ^. #hash
     ]
 
-insertFields :: Vector Field -> DBT IO Int64
+insertFields :: [Field] -> DBT IO Int64
 insertFields fields = do
   let q =
         [sql| 
@@ -46,7 +46,7 @@ insertFields fields = do
         ON CONFLICT (hash)
         DO UPDATE SET field_type= EXCLUDED.field_type, description = EXCLUDED.description, format = EXCLUDED.format;
       |]
-  executeMany q (V.toList fields)
+  executeMany q fields
 
 fieldById :: FieldId -> DBT IO (Maybe Field)
 fieldById fid = selectById @Field (Only fid)
