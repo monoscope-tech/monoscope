@@ -113,23 +113,20 @@ getShapeHash endpointHash statusCode responseBodyKP responseHeadersKP requestBod
   keyPathsHash = toText $ showHex (xxHash $ encodeUtf8 comb) ""
   shapeHash = endpointHash <> statusCode <> keyPathsHash
 
-getEndpointFromOpEndpoint :: Projects.ProjectId -> OpEndpoint -> IO Endpoints.Endpoint
-getEndpointFromOpEndpoint pid opEndpoint = do
-  endpointId <- Endpoints.EndpointId <$> liftIO UUIDV4.nextRandom
-  currTime <- liftIO getZonedTime
+getEndpointFromOpEndpoint :: Projects.ProjectId -> OpEndpoint -> Endpoints.Endpoint
+getEndpointFromOpEndpoint pid opEndpoint =
   let endpointHash = getEndpointHash pid opEndpoint.endpointUrl opEndpoint.endpointMethod
-  pure
-    Endpoints.Endpoint
-      { id = endpointId
-      , createdAt = currTime
-      , updatedAt = currTime
-      , projectId = pid
-      , urlPath = opEndpoint.endpointUrl
-      , method = T.toUpper opEndpoint.endpointMethod
-      , urlParams = AE.Array []
-      , hosts = [opEndpoint.endpointHost]
-      , hash = endpointHash
-      }
+   in Endpoints.Endpoint
+        { id = Endpoints.EndpointId UUID.nil
+        , createdAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
+        , updatedAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
+        , projectId = pid
+        , urlPath = opEndpoint.endpointUrl
+        , method = T.toUpper opEndpoint.endpointMethod
+        , urlParams = AE.Array []
+        , hosts = [opEndpoint.endpointHost]
+        , hash = endpointHash
+        }
 
 getShapeFromOpShape :: Projects.ProjectId -> ZonedTime -> OpShape -> Shapes.Shape
 getShapeFromOpShape pid curTime opShape =
@@ -163,8 +160,8 @@ getShapeFromOpShape pid curTime opShape =
   rsBKPHashes = V.map (\v -> getFieldHash endpointHash v.fkCategory v.fkKeyPath v.fkType) opShape.opResponseBodyKeyPaths
   fieldHashes = qpKPHashes <> rqHKPHashes <> rqBKPHashes <> rsHKPHashes <> rsBKPHashes
 
-getFieldAndFormatFromOpShape :: Projects.ProjectId -> ZonedTime -> FieldOperation -> IO (Fields.Field, Formats.Format)
-getFieldAndFormatFromOpShape pid t operation = do
+getFieldAndFormatFromOpShape :: Projects.ProjectId -> FieldOperation -> (Fields.Field, Formats.Format)
+getFieldAndFormatFromOpShape pid operation =
   let endpointHash = getEndpointHash pid operation.url operation.method
       fCategory = fromMaybe Fields.FCRequestBody (parseFieldCategoryEnum operation.category)
       fieldType = fromMaybe Fields.FTUnknown (parseFieldTypes operation.ftype)
@@ -173,14 +170,11 @@ getFieldAndFormatFromOpShape pid t operation = do
       format = operation.format
       formatHash = fieldHash <> toText (showHex (xxHash $ encodeUtf8 format) "")
 
-  fieldID <- Fields.FieldId <$> liftIO UUIDV4.nextRandom
-  formatID <- Formats.FormatId <$> liftIO UUIDV4.nextRandom
-
-  let field =
+      field =
         Fields.Field
-          { createdAt = t
-          , updatedAt = t
-          , id = fieldID
+          { createdAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
+          , updatedAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
+          , id = Fields.FieldId UUID.nil
           , endpointHash = endpointHash
           , projectId = pid
           , key = snd $ T.breakOnEnd "." keyPath
@@ -196,9 +190,9 @@ getFieldAndFormatFromOpShape pid t operation = do
 
       lFormat =
         Formats.Format
-          { id = formatID
-          , createdAt = t
-          , updatedAt = t
+          { id = Formats.FormatId UUID.nil
+          , createdAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
+          , updatedAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
           , projectId = pid
           , fieldHash = fieldHash
           , fieldType = fieldType
@@ -206,19 +200,10 @@ getFieldAndFormatFromOpShape pid t operation = do
           , examples = V.fromList [operation.example]
           , hash = formatHash
           }
-
-  return (field, lFormat)
+   in (field, lFormat)
 
 flattenVector :: [V.Vector FieldOperation] -> V.Vector FieldOperation
 flattenVector = V.concat
-
-monadToNorm :: Monad m => [m a] -> m [a]
-monadToNorm [] = pure []
-monadToNorm (x : xs) = do
-  v <- x
-  res <- monadToNorm xs
-  let comb = [v] <> res
-  pure comb
 
 documentationPutH :: Sessions.PersistentSession -> Projects.ProjectId -> SaveSwaggerForm -> DashboardM (Headers '[HXTrigger] (Html ()))
 documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id, endpoints, diffsInfo} = do
@@ -230,21 +215,20 @@ documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id, endpoint
   res <- liftIO $ withPool pool $ do
     currentTime <- liftIO getZonedTime
 
-    newEndpoints <- liftIO $ monadToNorm $ V.toList (V.map (getEndpointFromOpEndpoint pid) endpoints)
+    let newEndpoints = V.toList $ V.map (getEndpointFromOpEndpoint pid) endpoints
     let shapes = V.toList (V.map (getShapeFromOpShape pid currentTime) (V.filter (\x -> x.opShapeChanged) diffsInfo))
 
     let nestedOps = V.map (\x -> x.opOperations) diffsInfo
     let ops = flattenVector (V.toList nestedOps)
-    fAndF <- liftIO $ monadToNorm (V.toList (V.map (getFieldAndFormatFromOpShape pid currentTime) ops))
+    let fAndF = V.toList (V.map (getFieldAndFormatFromOpShape pid) ops)
     let fields = map fst fAndF
     let formats = map snd fAndF
 
     Formats.insertFormats formats
     Fields.insertFields fields
     Shapes.insertShapes shapes
+    Endpoints.insertEndpoints newEndpoints
 
-    rs <- Endpoints.insertEndpoints newEndpoints
-    print rs
     case swagger_id of
       "" -> do
         swaggerId <- Swaggers.SwaggerId <$> liftIO UUIDV4.nextRandom

@@ -90,13 +90,24 @@ insertFormats :: [Format] -> DBT IO Int64
 insertFormats formats = do
   let q =
         [sql| 
-      insert into apis.formats (id, created_at, updated_at, project_id, field_hash, field_type, field_format, examples, hash) VALUES (?,?,?,?,?,?,?,?,?)
+      insert into apis.formats (project_id, field_hash, field_type, field_format, examples, hash) VALUES (?,?,?,?,?,?)
         ON CONFLICT (project_id, field_hash, field_format)
         DO
           UPDATE SET 
             field_type= EXCLUDED.field_type, examples = ARRAY(SELECT DISTINCT e from unnest(apis.formats.examples || excluded.examples) as e order by e limit 20); 
       |]
-  executeMany q formats
+  let params = map getFormatParams formats
+  executeMany q params
+
+getFormatParams :: Format -> (Projects.ProjectId, Text, Fields.FieldTypes, Text, Vector AE.Value, Text)
+getFormatParams format =
+  ( format.projectId
+  , format.fieldHash
+  , format.fieldType
+  , format.fieldFormat
+  , format.examples
+  , format.hash
+  )
 
 data SwFormat = SwFormat
   { swFieldHash :: Text
