@@ -83,9 +83,18 @@ data OpShape = OpShape
   deriving stock (Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
+data OpEndpoint = OpEndpoint
+  { endpointUrl :: Text
+  , endpointMethod :: Text
+  , endpointHost :: Text
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
 data SaveSwaggerForm = SaveSwaggerForm
   { updated_swagger :: Text
   , swagger_id :: Text
+  , endpoints :: V.Vector OpEndpoint
   , diffsInfo :: V.Vector OpShape
   }
   deriving stock (Show, Generic)
@@ -103,6 +112,24 @@ getShapeHash endpointHash statusCode responseBodyKP responseHeadersKP requestBod
   comb = T.concat $ sort $ V.toList $ queryParamsKP <> responseHeadersKP <> requestBodyKP <> responseBodyKP
   keyPathsHash = toText $ showHex (xxHash $ encodeUtf8 comb) ""
   shapeHash = endpointHash <> statusCode <> keyPathsHash
+
+getEndpointFromOpEndpoint :: Projects.ProjectId -> OpEndpoint -> IO Endpoints.Endpoint
+getEndpointFromOpEndpoint pid opEndpoint = do
+  endpointId <- Endpoints.EndpointId <$> liftIO UUIDV4.nextRandom
+  currTime <- liftIO getZonedTime
+  let endpointHash = getEndpointHash pid opEndpoint.endpointUrl opEndpoint.endpointMethod
+  pure
+    Endpoints.Endpoint
+      { id = endpointId
+      , createdAt = currTime
+      , updatedAt = currTime
+      , projectId = pid
+      , urlPath = opEndpoint.endpointUrl
+      , method = T.toUpper opEndpoint.endpointMethod
+      , urlParams = AE.Array []
+      , hosts = [opEndpoint.endpointHost]
+      , hash = endpointHash
+      }
 
 getShapeFromOpShape :: Projects.ProjectId -> ZonedTime -> OpShape -> IO Shapes.Shape
 getShapeFromOpShape pid curTime opShape = do
@@ -196,37 +223,44 @@ monadToNorm (x : xs) = do
   pure comb
 
 documentationPutH :: Sessions.PersistentSession -> Projects.ProjectId -> SaveSwaggerForm -> DashboardM (Headers '[HXTrigger] (Html ()))
-documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id, diffsInfo} = do
+documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id, endpoints, diffsInfo} = do
   pool <- asks pool
   env <- asks env
   let value = case decodeStrict (encodeUtf8 updated_swagger) of
         Just val -> val
         Nothing -> error "Failed to parse JSON: "
   res <- liftIO $ withPool pool $ do
+    currentTime <- liftIO getZonedTime
+
+    newEndpoints <- liftIO $ monadToNorm $ V.toList (V.map (getEndpointFromOpEndpoint pid) endpoints)
+    shapes' <- liftIO $ monadToNorm $ V.toList (V.map (getShapeFromOpShape pid currentTime) (V.filter (\x -> x.opShapeChanged) diffsInfo))
+    let shapes = V.fromList shapes'
+
+    let nestedOps = V.map (\x -> x.opOperations) diffsInfo
+    let ops = flattenVector (V.toList nestedOps)
+    fAndF' <- liftIO $ monadToNorm (V.toList (V.map (getFieldAndFormatFromOpShape pid currentTime) ops))
+    let fAndF = V.fromList fAndF'
+    let fields = V.map fst fAndF
+    let formats = V.map snd fAndF
+
+    -- Formats.insertFormats formats
+    -- Fields.insertFields fields
+    -- Shapes.insertShapes shapes
+
+    -- let endpointsQueriesAndParams = map Endpoints.upsertEndpointQueryAndParam newEndpoints
+    -- let queries = foldr (++) (map fst endpointsQueriesAndParams) []
+    -- let params = map snd endpointsQueriesAndParams
+
+    rs <- Endpoints.insertEndpoints newEndpoints
+    print rs
     case swagger_id of
       "" -> do
         swaggerId <- Swaggers.SwaggerId <$> liftIO UUIDV4.nextRandom
-        currentTime <- liftIO getZonedTime
         let swaggerToAdd = Swaggers.Swagger{id = swaggerId, projectId = pid, createdBy = sess.userId, createdAt = currentTime, updatedAt = currentTime, swaggerJson = value}
-        Swaggers.addSwagger swaggerToAdd
+        -- Swaggers.addSwagger swaggerToAdd
         pass
       _ -> do
-        currentTime <- liftIO getZonedTime
-        -- shapes that needs to be addded to db (on conflict do nothing)
-        shapes' <- liftIO $ monadToNorm $ V.toList (V.map (getShapeFromOpShape pid currentTime) (V.filter (\x -> x.opShapeChanged) diffsInfo))
-        let shapes = V.fromList shapes'
-
-        let nestedOps = V.map (\x -> x.opOperations) diffsInfo
-        let ops = flattenVector (V.toList nestedOps)
-        fAndF' <- liftIO $ monadToNorm (V.toList (V.map (getFieldAndFormatFromOpShape pid currentTime) ops))
-        let fAndF = V.fromList fAndF'
-        let fields = V.map fst fAndF
-        let formats = V.map snd fAndF
-
-        Formats.insertFormats formats
-        Fields.insertFields fields
-        Shapes.insertShapes shapes
-        Swaggers.updateSwagger swagger_id value
+        -- Swaggers.updateSwagger swagger_id value
         pass
 
   let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Swagger Saved Successfully"]}|]

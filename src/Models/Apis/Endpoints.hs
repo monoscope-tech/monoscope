@@ -1,4 +1,5 @@
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TemplateHaskell #-}
 
@@ -17,6 +18,7 @@ module Models.Apis.Endpoints (
   endpointToUrlPath,
   upsertEndpointQueryAndParam,
   endpointByHash,
+  insertEndpoints,
 ) where
 
 import Data.Aeson (FromJSON, ToJSON)
@@ -34,6 +36,7 @@ import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
+import Database.PostgreSQL.Transact (DBT, executeMany)
 import Database.PostgreSQL.Transact qualified as PgT
 import Deriving.Aeson qualified as DAE
 import Models.Projects.Projects qualified as Projects
@@ -225,3 +228,24 @@ endpointsByProjectId pid = query Select q (Only pid)
          FROM apis.endpoints
          WHERE project_id = ?
        |]
+
+insertEndpoints :: [Endpoint] -> DBT IO Int64
+insertEndpoints endpoints = do
+  let q =
+        [sql| 
+        INSERT INTO apis.endpoints
+        (project_id, url_path, url_params, method, hosts, hash)
+        VALUES (?,?,?,?,?,?) ON CONFLICT DO NOTHING;
+      |]
+  let params = map getEndpointParams endpoints
+  executeMany q params
+
+getEndpointParams :: Endpoint -> (Projects.ProjectId, Text, AE.Value, Text, Text, Text)
+getEndpointParams endpoint =
+  ( endpoint.projectId
+  , endpoint.urlPath
+  , endpoint.urlParams
+  , endpoint.method
+  , ""
+  , endpoint.hash
+  )
