@@ -4,7 +4,7 @@ module Models.Apis.Shapes (Shape (..), SwShape (..), ShapeId (..), shapeIdText, 
 
 import Data.Aeson qualified as AE
 import Data.Default (Default)
-import Data.Time (ZonedTime)
+import Data.Time (ZonedTime, getZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 
@@ -59,6 +59,15 @@ data Shape = Shape
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "shapes", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Shape)
   deriving (FromField) via Aeson Shape
 
+data ApprovedOn = ApprovedOn
+  { date :: ZonedTime
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (FromRow, ToRow, Default)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ApprovedOn
+  deriving (Entity) via (GenericEntity '[Schema "apis", TableName "shapes", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ApprovedOn)
+  deriving (FromField) via Aeson ApprovedOn
+
 Optics.TH.makeFieldLabelsNoPrefix ''Shape
 
 insertShapeQueryAndParam :: Shape -> (Query, [DBField])
@@ -85,15 +94,33 @@ insertShapeQueryAndParam shape = (q, params)
 
 insertShapes :: [Shape] -> DBT IO Int64
 insertShapes shapes = do
+  currTime <- liftIO getZonedTime
+  let app = ApprovedOn{date = currTime}
   let insertQuery =
         [sql|
         INSERT INTO apis.shapes
-        (id, created_at, updated_at, project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash, status_code)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) 
+        (approved_on, project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash, status_code)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) 
         ON CONFLICT (hash)
-        DO UPDATE SET request_headers_keypaths = EXCLUDED.request_headers_keypaths
+        DO UPDATE SET request_headers_keypaths = EXCLUDED.request_headers_keypaths, approved_on = EXCLUDED.approved_on
       |]
-  executeMany insertQuery shapes
+  let params = map (getShapeParams app) shapes
+  executeMany insertQuery params
+
+getShapeParams :: ApprovedOn -> Shape -> (ZonedTime, Projects.ProjectId, Text, Vector Text, Vector Text, Vector Text, Vector Text, Vector Text, Vector Text, Text, Int)
+getShapeParams app shape =
+  ( app.date
+  , shape.projectId
+  , shape.endpointHash
+  , shape.queryParamsKeypaths
+  , shape.requestBodyKeypaths
+  , shape.responseBodyKeypaths
+  , shape.requestHeadersKeypaths
+  , shape.responseBodyKeypaths
+  , shape.fieldHashes
+  , shape.hash
+  , shape.statusCode
+  )
 
 data SwShape = SwShape
   { swEndpointHash :: Text

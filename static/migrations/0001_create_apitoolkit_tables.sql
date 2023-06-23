@@ -210,6 +210,7 @@ CREATE TABLE IF NOT EXISTS apis.shapes
     id                        uuid      NOT  NULL DEFAULT    gen_random_uuid() PRIMARY KEY,
     created_at                TIMESTAMP WITH TIME ZONE       NOT               NULL    DEFAULT current_timestamp,
     updated_at                TIMESTAMP WITH TIME ZONE       NOT               NULL    DEFAULT current_timestamp,
+    approved_on               TIMESTAMP WITH TIME ZONE                                 DEFAULT NULL,
     project_id                uuid      NOT  NULL REFERENCES projects.projects (id)    ON      DELETE CASCADE,
     endpoint_hash             text      NOT  NULL,
     

@@ -131,25 +131,23 @@ getEndpointFromOpEndpoint pid opEndpoint = do
       , hash = endpointHash
       }
 
-getShapeFromOpShape :: Projects.ProjectId -> ZonedTime -> OpShape -> IO Shapes.Shape
-getShapeFromOpShape pid curTime opShape = do
-  shapeId <- Shapes.ShapeId <$> liftIO UUIDV4.nextRandom
-  pure
-    Shapes.Shape
-      { id = shapeId
-      , projectId = pid
-      , createdAt = curTime
-      , updatedAt = curTime
-      , endpointHash = endpointHash
-      , queryParamsKeypaths = qpKP
-      , requestBodyKeypaths = rqBKP
-      , responseBodyKeypaths = rsBKP
-      , requestHeadersKeypaths = rqHKP
-      , responseHeadersKeypaths = rsHKP
-      , fieldHashes = fieldHashes
-      , hash = shapeHash
-      , statusCode = read $ toString opShape.opStatus
-      }
+getShapeFromOpShape :: Projects.ProjectId -> ZonedTime -> OpShape -> Shapes.Shape
+getShapeFromOpShape pid curTime opShape =
+  Shapes.Shape
+    { id = Shapes.ShapeId UUID.nil
+    , projectId = pid
+    , createdAt = curTime
+    , updatedAt = curTime
+    , endpointHash = endpointHash
+    , queryParamsKeypaths = qpKP
+    , requestBodyKeypaths = rqBKP
+    , responseBodyKeypaths = rsBKP
+    , requestHeadersKeypaths = rqHKP
+    , responseHeadersKeypaths = rsHKP
+    , fieldHashes = fieldHashes
+    , hash = shapeHash
+    , statusCode = read $ toString opShape.opStatus
+    }
  where
   endpointHash = getEndpointHash pid opShape.opUrl opShape.opMethod
   qpKP = V.map (\v -> v.fkKeyPath) opShape.opQueryParamsKeyPaths
@@ -233,7 +231,7 @@ documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id, endpoint
     currentTime <- liftIO getZonedTime
 
     newEndpoints <- liftIO $ monadToNorm $ V.toList (V.map (getEndpointFromOpEndpoint pid) endpoints)
-    shapes <- liftIO $ monadToNorm $ V.toList (V.map (getShapeFromOpShape pid currentTime) (V.filter (\x -> x.opShapeChanged) diffsInfo))
+    let shapes = V.toList (V.map (getShapeFromOpShape pid currentTime) (V.filter (\x -> x.opShapeChanged) diffsInfo))
 
     let nestedOps = V.map (\x -> x.opOperations) diffsInfo
     let ops = flattenVector (V.toList nestedOps)
