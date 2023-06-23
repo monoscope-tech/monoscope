@@ -158,6 +158,9 @@ function fieldMap(v, category) {
     }
 }
 
+function transFormURL(url) {
+    return url.replaceAll("{", ":").replaceAll("}", "")
+}
 
 async function saveData(swaggerId, modifiedObject, shapes, endpoints) {
     const url = window.location.pathname + '/save';
@@ -246,7 +249,7 @@ function groupByFieldCategories(paths) {
     let hash = {}
     for (let [key, value] of Object.entries(paths)) {
         for (let [method, v] of Object.entries(value)) {
-            let ob = { url: key, method }
+            let ob = { url: transFormURL(key), method }
             const headersAndParams = parseHeadersAndParams(v.headers, v.parameters)
             ob.requestBodyKeyPaths = parseRequestBody(v.requestBody)
             ob.response = parseResponses(v.responses)
