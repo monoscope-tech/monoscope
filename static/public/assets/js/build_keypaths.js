@@ -10,14 +10,8 @@ function parsePaths() {
         const idTarget = document.querySelector("#save_swagger_input_id")
         const swagger_id = idTarget ? idTarget.value : ""
 
-        let updateDBOb = {
-            endpoints: [],
-            fields: [],
-        }
         const shapes = []
         const endpoints = []
-
-        console.log(catModified)
 
         for (const [key, originalVal] of Object.entries(catOriginal)) {
             const modifiedVal = catModified[key]
@@ -171,7 +165,6 @@ async function saveData(swaggerId, modifiedObject, shapes, endpoints) {
         diffsInfo: shapes.filter(shape => shape.opShapeChanged || shape.opOperations.length > 0)
     };
 
-
     try {
         const response = await fetch(url, {
             method: 'POST',
@@ -182,12 +175,21 @@ async function saveData(swaggerId, modifiedObject, shapes, endpoints) {
         });
 
         if (response.ok) {
-            console.log('Data sent successfully to the backend.');
+            const modal = document.getElementById('swaggerModal')
+            if (modal) {
+                modal.style.display = 'none';
+            }
+            if (window.monacoEditor) {
+                monacoEditor.setTheme('nightOwl')
+            }
+            setTimeout(() => {
+                alert("Swagger updated successfully")
+            }, 100);
         } else {
-            console.error('Error sending data to the backend:', response);
+            alert("Something went wrong")
         }
     } catch (error) {
-        console.error('Error sending data to the backend:', error);
+        alert("Something went wrong")
     }
 }
 
