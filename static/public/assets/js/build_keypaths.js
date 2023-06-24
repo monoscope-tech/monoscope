@@ -47,9 +47,12 @@ function parsePaths() {
             operations.push(...info.ops)
 
             // compare response bodies
-            for (const [status, ogVal] of Object.entries(originalVal.response)) {
-                const mdVal = modifiedVal.response[status]
-                if (!mdVal) continue
+            for (const [status, mdVal] of Object.entries(modifiedVal.response)) {
+                console.log(status)
+                let ogVal = originalVal.response[status]
+                if (!ogVal) {
+                    ogVal = { responseBodyKeyPaths: [], responseHeadersKeyPaths: [] }
+                }
                 const responseBodyKeyPaths = mdVal.responseBodyKeyPaths.map(v => {
                     return fieldMap(v, "response_body")
                 })
@@ -57,14 +60,13 @@ function parsePaths() {
                     return fieldMap(v, "response_header")
                 })
 
-                info = getFieldsToOperate(ogVal.responseBodyKeyPaths, mdVal.responseBodyKeyPaths, originalVal.method, originalVal.url, "response_body")
+                info = getFieldsToOperate(ogVal.responseBodyKeyPaths, mdVal.responseBodyKeyPaths, modifiedVal.method, modifiedVal.url, "response_body")
                 shapeChanged = shapeChanged ? shapeChanged : info.updatesShape
                 operations.push(...info.ops)
 
-                info = getFieldsToOperate(ogVal.responseHeadersKeyPaths, mdVal.responseHeadersKeyPaths, originalVal.method, originalVal.url, "response_header")
+                info = getFieldsToOperate(ogVal.responseHeadersKeyPaths, mdVal.responseHeadersKeyPaths, modifiedVal.method, modifiedVal.url, "response_header")
                 shapeChanged = shapeChanged ? shapeChanged : info.updatesShape
                 operations.push(...info.ops)
-
                 shapes.push({
                     opShapeChanged: shapeChanged,
                     opRequestBodyKeyPaths: requestBodyKeyPaths,
@@ -164,7 +166,7 @@ async function saveData(swaggerId, modifiedObject, shapes, endpoints) {
         endpoints,
         diffsInfo: shapes.filter(shape => shape.opShapeChanged || shape.opOperations.length > 0)
     };
-
+    console.log(shapes)
     try {
         const response = await fetch(url, {
             method: 'POST',
