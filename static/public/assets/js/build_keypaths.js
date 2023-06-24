@@ -48,7 +48,6 @@ function parsePaths() {
 
             // compare response bodies
             for (const [status, mdVal] of Object.entries(modifiedVal.response)) {
-                console.log(status)
                 let ogVal = originalVal.response[status]
                 if (!ogVal) {
                     ogVal = { responseBodyKeyPaths: [], responseHeadersKeyPaths: [] }
@@ -166,7 +165,6 @@ async function saveData(swaggerId, modifiedObject, shapes, endpoints) {
         endpoints,
         diffsInfo: shapes.filter(shape => shape.opShapeChanged || shape.opOperations.length > 0)
     };
-    console.log(shapes)
     try {
         const response = await fetch(url, {
             method: 'POST',
@@ -270,10 +268,11 @@ function parseResponses(responses) {
     }
     let ob = {}
     for (const [key, value] of Object.entries(responses)) {
-        for (const [k, v] of Object.entries(value.content)) {
+        for (const [contentType, v] of Object.entries(value.content)) {
+            let headers = value.headers ? value.headers.content ? value.headers.content.schema : {} : {}
             ob[key] = {
                 responseBodyKeyPaths: getKeyPaths(v.schema),
-                responseHeadersKeyPaths: getKeyPaths(value.headers.content.schema)
+                responseHeadersKeyPaths: getKeyPaths(headers)
             }
             break;
         }
@@ -306,7 +305,7 @@ function parseHeadersAndParams(headers, parameters) {
     parameters.forEach(param => {
         const v = param.schema
         v.description = param.description
-        const key = param.name + ".[]"
+        const key = param.name + ".[*]"
         v.keypath = key
         if (param.in === "query") {
             ob.queryParamsKeyPaths.push(v)
@@ -337,4 +336,33 @@ function getKeyPathsHelper(value, path) {
         return getKeyPathsHelper({ ...value.items, description: value.description || "" }, `${path}[*]`)
     }
     return [{ type: value.type || "unknown", description: value.description || "", format: value.format || "", example: value.example || "", keypath: path }]
+}
+
+
+function slideReqRes(action, type) {
+    let ind = document.querySelect("#current_indicator")
+    let curr = 1
+    let total = 1
+    if (ind) {
+        const tx = ind.innerText.split("/")
+        if (tx.length > 1) {
+            curr = Number(tx[0]) || 1
+            total = Number(tx[1]) || 1
+        }
+    }
+
+    if (curr === total && action === "next") return
+    if (curr === 0 && action === "prev") return
+    curr = action === "prev" ? curr - 1 : curr + 1
+    let fields = Array.from(document.querySelectorAll(".Response_fields"))
+    let t = document.querySelector(`#Response_${curr}`)
+    if (type === "Request") {
+        fields = Array.from(document.querySelectorAll(".Request_fields"))
+        t = document.querySelector(`#Request_${curr}`)
+    }
+    if (t) {
+        fields.forEach(field => field.classList.remove("show_fields"))
+        t.classList.add("show_fields")
+    }
+    ind.innerText = `${curr}/${total}`
 }

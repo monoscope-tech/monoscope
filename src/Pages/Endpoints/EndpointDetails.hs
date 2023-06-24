@@ -25,8 +25,11 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields qualified as Fields
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.RequestDumps qualified as RequestDumps
+import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
+
+import Models.Apis.Fields (FieldCategoryEnum)
 import NeatInterpolation
 import Optics.Core ((^.))
 import Pages.Anomalies.AnomalyList qualified as AnomaliesList
@@ -55,6 +58,16 @@ data ParamInput = ParamInput
   , currentPickerTxt :: Text
   , subPage :: Text
   }
+data ShapeWidthFields = ShapeWidthFields
+  { status :: Int
+  , fieldsMap :: Map FieldCategoryEnum [Fields.Field]
+  }
+
+getShapeFields :: Shapes.Shape -> Vector Fields.Field -> ShapeWidthFields
+getShapeFields shape fields = ShapeWidthFields{status = shape.statusCode, fieldsMap = fieldM}
+ where
+  matchedFields = Vector.filter (\field -> field.hash `Vector.elem` shape.fieldHashes) fields
+  fieldM = Fields.groupFieldsByCategory matchedFields
 
 subPageMenu :: [(Text, Text)]
 subPageMenu =
@@ -147,20 +160,23 @@ endpointDetailsH sess pid eid fromDStr toDStr sinceStr' subPageM = do
           let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
           (f, t)
 
-  (endpoint, enpStats, project, fieldsMap, reqLatenciesRolledByStepsLabeled, anomalies) <- liftIO $
+  (endpoint, enpStats, project, shapesWithFieldsMap, fieldsMap, reqLatenciesRolledByStepsLabeled, anomalies) <- liftIO $
     withPool pool $ do
       -- Should swap names betw enp and endpoint endpoint could be endpointStats
       endpoint <- Unsafe.fromJust <$> Endpoints.endpointById eid
       enpStats <- fromMaybe (def :: EndpointRequestStats) <$> Endpoints.endpointRequestStatsByEndpoint eid
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      fieldsMap <- Fields.groupFieldsByCategory <$> Fields.selectFields (endpoint.hash)
+      shapes <- Shapes.shapesByEndpointHash endpoint.hash
+      fields <- Fields.selectFields (endpoint.hash)
+      let fieldsMap = Fields.groupFieldsByCategory fields
+      let shapesWithFieldsMap = Vector.map (`getShapeFields` fields) shapes
 
       let maxV = round (enpStats.max) :: Int
       let steps = (maxV `quot` 100) :: Int
       let steps' = if steps == 0 then 100 else steps
       reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledBySteps maxV steps' pid (endpoint.urlPath) (endpoint.method)
       anomalies <- Anomalies.selectAnomalies pid (Just eid) (Just False) (Just False) Nothing
-      pure (endpoint, enpStats, project, fieldsMap, Vector.toList reqLatenciesRolledBySteps, anomalies)
+      pure (endpoint, enpStats, project, Vector.toList shapesWithFieldsMap, fieldsMap, Vector.toList reqLatenciesRolledBySteps, anomalies)
 
   let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
   let bwconf =
@@ -177,10 +193,10 @@ endpointDetailsH sess pid eid fromDStr toDStr sinceStr' subPageM = do
         Just a -> a
         Nothing -> maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD
   let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt, subPage = subPage}
-  pure $ bodyWrapper bwconf $ endpointDetails paramInput currTime endpoint enpStats fieldsMap reqLatenciesRolledByStepsJ anomalies (fromD, toD)
+  pure $ bodyWrapper bwconf $ endpointDetails paramInput currTime endpoint enpStats shapesWithFieldsMap fieldsMap reqLatenciesRolledByStepsJ anomalies (fromD, toD)
 
-endpointDetails :: ParamInput -> UTCTime -> Endpoints.Endpoint -> EndpointRequestStats -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> Vector Anomalies.AnomalyVM -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
-endpointDetails paramInput currTime endpoint endpointStats fieldsM reqLatenciesRolledByStepsJ anomalies dateRange = do
+endpointDetails :: ParamInput -> UTCTime -> Endpoints.Endpoint -> EndpointRequestStats -> [ShapeWidthFields] -> Map FieldCategoryEnum [Fields.Field] -> Text -> Vector Anomalies.AnomalyVM -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
+endpointDetails paramInput currTime endpoint endpointStats shapesWithFieldsMap fieldsM reqLatenciesRolledByStepsJ anomalies dateRange = do
   let currentURLSubPage = deleteParam "subpage" paramInput.currentURL
   div_ [class_ "w-full h-full overflow-hidden"] $ do
     div_ [class_ "w-[75%] inline-block p-5 h-full overflow-y-scroll"] $ do
@@ -211,7 +227,7 @@ endpointDetails paramInput currTime endpoint endpointStats fieldsM reqLatenciesR
               div_ [class_ "bg-blue-900 p-1 rounded-lg ml-2"] $ do
                 mIcon_ "whitedown" "text-white h-2 w-2 m-1"
       if paramInput.subPage == "api_docs"
-        then apiDocsSubPage fieldsM
+        then apiDocsSubPage shapesWithFieldsMap
         else apiOverviewSubPage paramInput currTime endpointStats fieldsM reqLatenciesRolledByStepsJ anomalies dateRange
 
     aside_
@@ -236,11 +252,11 @@ endpointDetails paramInput currTime endpoint endpointStats fieldsM reqLatenciesR
         end
         |]
 
-apiDocsSubPage :: Map Fields.FieldCategoryEnum [Fields.Field] -> Html ()
-apiDocsSubPage fieldsM = do
+apiDocsSubPage :: [ShapeWidthFields] -> Html ()
+apiDocsSubPage shapesWithFieldsMap = do
   div_ [class_ "space-y-16 pb-20", id_ "subpage"] $ do
-    reqResSection "Request" True fieldsM
-    reqResSection "Response" False fieldsM
+    reqResSection "Request" True shapesWithFieldsMap
+    reqResSection "Response" False shapesWithFieldsMap
 
 apiOverviewSubPage :: ParamInput -> UTCTime -> EndpointRequestStats -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> Vector Anomalies.AnomalyVM -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 apiOverviewSubPage paramInput currTime endpoint fieldsM reqLatenciesRolledByStepsJ anomalies dateRange = do
@@ -355,8 +371,8 @@ fmtDuration d
 -- NOTE: We could enable the fields cycling functionality using the groups of response list functionality on the endpoint.
 -- So we go through the list and in each request or response view, only show the fields that appear in the field list.
 -- We can enable a view to show all the request/response options.
-reqResSection :: Text -> Bool -> Map Fields.FieldCategoryEnum [Fields.Field] -> Html ()
-reqResSection title isRequest fieldsM =
+reqResSection :: Text -> Bool -> [ShapeWidthFields] -> Html ()
+reqResSection title isRequest shapesWithFieldsMap =
   section_ [class_ "space-y-3"] $ do
     div_ [class_ "flex justify-between mt-5"] $ do
       div_ [class_ "flex flex-row"] $ do
@@ -367,19 +383,56 @@ reqResSection title isRequest fieldsM =
             ]
         span_ [class_ "text-lg text-slate-800"] $ toHtml title
       div_ [class_ "flex flex-row mt-2"] $ do
-        img_ [src_ "/assets/svgs/leftarrow.svg", class_ " m-2"]
-        span_ [src_ " mx-4"] "1/1"
-        img_ [src_ "/assets/svgs/rightarrow.svg", class_ " m-2"]
+        let (prv, next) = if isRequest then ("slideReqRes('prev', 'Request')", "slideReqRes('next', 'Request')") else ("slideReqRes('prev', 'Response')", "slideReqRes('next', 'Response')")
+        img_ [src_ "/assets/svgs/leftarrow.svg", class_ " m-2 cursor-pointer", onclick_ prv]
+        let l = "1/" <> show (length shapesWithFieldsMap)
+        let id = "current_indicator_" <> title
+        span_ [src_ " mx-4", id_ id] l
+        img_ [src_ "/assets/svgs/rightarrow.svg", class_ "m-2 cursor-pointer", onclick_ next]
     div_ [class_ "bg-white border border-gray-100 rounded-xl py-10 px-5 space-y-6 reqResSubSection"] $
-      if isRequest
-        then do
-          subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam fieldsM)
-          subSubSection (title <> " Query Params") (Map.lookup Fields.FCQueryParam fieldsM)
-          subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader fieldsM)
-          subSubSection (title <> " Body") (Map.lookup Fields.FCRequestBody fieldsM)
-        else do
-          subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader fieldsM)
-          subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody fieldsM)
+      forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap) $ \(index, s) -> do
+        let sh = if index == 1 then title <> "_fields show_fields" else title <> "_fields"
+        div_ [class_ sh, id_ $ title <> "_" <> show index] $ do
+          span_ [] $ show s.status
+          if isRequest
+            then do
+              subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam s.fieldsMap)
+              subSubSection (title <> " Query Params") (Map.lookup Fields.FCQueryParam s.fieldsMap)
+              subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader s.fieldsMap)
+              subSubSection (title <> " Body") (Map.lookup Fields.FCRequestBody s.fieldsMap)
+            else do
+              subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader s.fieldsMap)
+              subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody s.fieldsMap)
+    script_
+      [text| 
+        function slideReqRes(action, type) {
+          let ind = document.querySelector("#current_indicator_" + type)
+          let curr = 1
+          let total = 1
+          if(ind) {
+              const tx = ind.innerText.split("/")
+              console.log(tx)
+              if(tx.length > 1) {
+                 curr = Number(tx[0]) || 1
+                 total = Number(tx[1]) || curr
+                }
+            }
+          if( curr === total && action === "next") return
+          if(curr === 1 && action === "prev") return 
+          curr = action === "prev" ? curr - 1 : curr + 1;
+          let fields = Array.from(document.querySelectorAll(".Response_fields"))
+          let t = document.querySelector("#Response_"+ curr)
+          if (type === "Request") {
+              fields = Array.from(document.querySelectorAll(".Request_fields"))
+              t = document.querySelector("#Request_" + curr)
+          }
+          if (t) {
+              fields.forEach(field => field.classList.remove("show_fields"))
+              t.classList.add("show_fields")
+          }
+          ind.innerText = curr + "/" + total
+        }
+      |]
 
 -- | subSubSection ..
 subSubSection :: Text -> Maybe [Fields.Field] -> Html ()

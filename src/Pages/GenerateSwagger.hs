@@ -62,11 +62,12 @@ data KeyPathGroup = KeyPathGroup
 convertQueryParamsToJSON :: [T.Text] -> [MergedFieldsAndFormats] -> Value
 convertQueryParamsToJSON params fields = paramsJSON
  where
-  mapFunc param = let f = find (\fld -> fld.field.fKeyPath == param) fields
-                      (des, t, ft, eg) = case f of 
-                        Just f -> (f.field.fDescription, fieldTypeToText f.format.swFieldType, f.field.fFormat, (V.head f.format.swExamples))
-                        Nothing -> ("", "string", "text", "")
-                  in object ["in" .= String "query", "name" .= T.takeWhile (/= '.') (T.dropWhile (== '.') param), "description" .= String des, "schema" .= object ["type" .= String t, "format" .= ft, "example" .= eg]]
+  mapFunc param =
+    let f = find (\fld -> fld.field.fKeyPath == param) fields
+        (des, t, ft, eg) = case f of
+          Just f -> (f.field.fDescription, fieldTypeToText f.format.swFieldType, f.field.fFormat, (V.head f.format.swExamples))
+          Nothing -> ("", "string", "text", "")
+     in object ["in" .= String "query", "name" .= T.takeWhile (/= '.') (T.dropWhile (== '.') param), "description" .= String des, "schema" .= object ["type" .= String t, "format" .= ft, "example" .= eg]]
   paramsJSON =
     let ar = V.fromList $ map mapFunc params
      in Array ar
@@ -121,20 +122,23 @@ convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
             then
               let field = find (\fi -> T.tail (parentPath <> "." <> grp) == fi.field.fKeyPath) categoryFields
                   (desc, t, ft, eg) = case field of
-                    Just f -> if fieldTypeToText f.format.swFieldType == "bool" 
-                                then (f.field.fDescription, "boolean", f.field.fFormat,  (V.head f.format.swExamples)) 
-                              else (f.field.fDescription, fieldTypeToText f.format.swFieldType, f.field.fFormat, (V.head f.format.swExamples))
-                    Nothing -> let newK = T.replace "[*]" ".[]" (T.tail parentPath <> "." <> grp)
-                                   newF = find (\fi -> newK == fi.field.fKeyPath) categoryFields
-                                   ob = case newF of
-                                    Just f -> if fieldTypeToText f.format.swFieldType == "bool" 
-                                                then (f.field.fDescription, "boolean",f.field.fFormat,  (V.head f.format.swExamples))
-                                              else (f.field.fDescription, fieldTypeToText f.format.swFieldType, f.field.fFormat, (V.head f.format.swExamples))
-                                    Nothing -> ("", "string","text", "")
-                                in ob
+                    Just f ->
+                      if fieldTypeToText f.format.swFieldType == "bool"
+                        then (f.field.fDescription, "boolean", f.field.fFormat, (V.head f.format.swExamples))
+                        else (f.field.fDescription, fieldTypeToText f.format.swFieldType, f.field.fFormat, (V.head f.format.swExamples))
+                    Nothing ->
+                      let newK = T.replace "[*]" ".[]" (T.tail parentPath <> "." <> grp)
+                          newF = find (\fi -> newK == fi.field.fKeyPath) categoryFields
+                          ob = case newF of
+                            Just f ->
+                              if fieldTypeToText f.format.swFieldType == "bool"
+                                then (f.field.fDescription, "boolean", f.field.fFormat, (V.head f.format.swExamples))
+                                else (f.field.fDescription, fieldTypeToText f.format.swFieldType, f.field.fFormat, (V.head f.format.swExamples))
+                            Nothing -> ("", "string", "text", "")
+                       in ob
                   (key, ob) =
                     if T.isSuffixOf "[*]" grp
-                      then (T.takeWhile (/= '[') grp, object ["description" .= String desc, "type" .= String "array", "items" .= object ["type" .= t,"format" .= ft, "example" .= eg]])
+                      then (T.takeWhile (/= '[') grp, object ["description" .= String desc, "type" .= String "array", "items" .= object ["type" .= t, "format" .= ft, "example" .= eg]])
                       else (grp, object ["description" .= String desc, "type" .= t, "format" .= ft, "example" .= eg])
                   validKey = if key == "" then "schema" else key
                in object [AEKey.fromText validKey .= ob]
@@ -233,18 +237,18 @@ groupEndpointsByUrlPath endpoints =
   constructMethodEntry mergedEndpoint =
     let rqShape = V.find (\shape -> length (V.filter (T.isPrefixOf "") shape.shape.swRequestBodyKeypaths) > 1) mergedEndpoint.shapes
         qShape = V.find (\shape -> length (V.filter (T.isPrefixOf "") shape.shape.swQueryParamsKeypaths) > 1) mergedEndpoint.shapes
-        endPointJSON = case (rqShape, qShape) of 
-            (Just rqS, Just qS) ->
-                  let rqProps = convertKeyPathsToJson (V.toList rqS.shape.swRequestBodyKeypaths) (fromMaybe [] (Map.lookup Field.FCRequestBody rqS.sField)) ""
-                      qParams = convertQueryParamsToJSON (V.toList qS.shape.swQueryParamsKeypaths) (fromMaybe [] (Map.lookup Field.FCQueryParam qS.sField))
-                   in AEKey.fromText (T.toLower $ method mergedEndpoint) .= object ["parameters" .= qParams, "responses" .= groupShapesByStatusCode (shapes mergedEndpoint), "requestBody" .= object ["content" .= object ["*/*" .= rqProps]]]
-            (Just rqS, Nothing) ->
-                  let rqProps = convertKeyPathsToJson (V.toList rqS.shape.swRequestBodyKeypaths) (fromMaybe [] (Map.lookup Field.FCRequestBody rqS.sField)) ""
-                   in AEKey.fromText (T.toLower $ method mergedEndpoint) .= object ["responses" .= groupShapesByStatusCode (shapes mergedEndpoint), "requestBody" .= object ["content" .= object ["*/*" .= rqProps]]]
-            (Nothing, Just qS) ->
-                let qParams = convertQueryParamsToJSON (V.toList qS.shape.swQueryParamsKeypaths) (fromMaybe [] (Map.lookup Field.FCQueryParam qS.sField))
-                in AEKey.fromText (T.toLower $ method mergedEndpoint) .= object ["parameters" .= qParams, "responses" .= groupShapesByStatusCode (shapes mergedEndpoint)]
-            (_,_) -> AEKey.fromText (T.toLower $ method mergedEndpoint) .= object ["responses" .= groupShapesByStatusCode (shapes mergedEndpoint)]
+        endPointJSON = case (rqShape, qShape) of
+          (Just rqS, Just qS) ->
+            let rqProps = convertKeyPathsToJson (V.toList rqS.shape.swRequestBodyKeypaths) (fromMaybe [] (Map.lookup Field.FCRequestBody rqS.sField)) ""
+                qParams = convertQueryParamsToJSON (V.toList qS.shape.swQueryParamsKeypaths) (fromMaybe [] (Map.lookup Field.FCQueryParam qS.sField))
+             in AEKey.fromText (T.toLower $ method mergedEndpoint) .= object ["parameters" .= qParams, "responses" .= groupShapesByStatusCode (shapes mergedEndpoint), "requestBody" .= object ["content" .= object ["*/*" .= rqProps]]]
+          (Just rqS, Nothing) ->
+            let rqProps = convertKeyPathsToJson (V.toList rqS.shape.swRequestBodyKeypaths) (fromMaybe [] (Map.lookup Field.FCRequestBody rqS.sField)) ""
+             in AEKey.fromText (T.toLower $ method mergedEndpoint) .= object ["responses" .= groupShapesByStatusCode (shapes mergedEndpoint), "requestBody" .= object ["content" .= object ["*/*" .= rqProps]]]
+          (Nothing, Just qS) ->
+            let qParams = convertQueryParamsToJSON (V.toList qS.shape.swQueryParamsKeypaths) (fromMaybe [] (Map.lookup Field.FCQueryParam qS.sField))
+             in AEKey.fromText (T.toLower $ method mergedEndpoint) .= object ["parameters" .= qParams, "responses" .= groupShapesByStatusCode (shapes mergedEndpoint)]
+          (_, _) -> AEKey.fromText (T.toLower $ method mergedEndpoint) .= object ["responses" .= groupShapesByStatusCode (shapes mergedEndpoint)]
      in endPointJSON
 
 groupShapesByStatusCode :: V.Vector MergedShapesAndFields -> AE.Value
@@ -273,12 +277,12 @@ generateSwagger projectTitle projectDescription endpoints shapes fields formats 
 generateGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM AE.Value
 generateGetH sess pid = do
   pool <- asks pool
-  swagger <- liftIO $
+  liftIO $
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
       endpoints <- Endpoints.endpointsByProjectId pid
       let endpoint_hashes = V.map (\enp -> enp.hash) endpoints
-      shapes <- Shapes.shapesByEndpointHash pid endpoint_hashes
+      shapes <- Shapes.shapesByEndpointHashes pid endpoint_hashes
       fields <- Fields.fieldsByEndpointHashes pid endpoint_hashes
       let field_hashes = V.map (\field -> field.fHash) fields
       formats <- Formats.formatsByFieldsHashes pid field_hashes
@@ -286,5 +290,4 @@ generateGetH sess pid = do
             (Just pr) -> (toText pr.title, toText pr.description)
             Nothing -> ("__APITOOLKIT", "Edit project description")
       let swagger = generateSwagger projectTitle projectDescription endpoints shapes fields formats
-      pure  swagger
-  pure $ swagger
+      pure swagger

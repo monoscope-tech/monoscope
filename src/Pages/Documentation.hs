@@ -33,6 +33,7 @@ import Relude
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
 
+import Data.List (nubBy)
 import Models.Apis.Fields.Query qualified as Fields
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.Shapes qualified as Shapes
@@ -135,6 +136,7 @@ getShapeFromOpShape pid curTime opShape =
     , projectId = pid
     , createdAt = curTime
     , updatedAt = curTime
+    , approvedOn = Just curTime
     , endpointHash = endpointHash
     , queryParamsKeypaths = qpKP
     , requestBodyKeypaths = rqBKP
@@ -214,16 +216,14 @@ documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id, endpoint
         Nothing -> error "Failed to parse JSON: "
   res <- liftIO $ withPool pool $ do
     currentTime <- liftIO getZonedTime
-
+    print diffsInfo
     let newEndpoints = V.toList $ V.map (getEndpointFromOpEndpoint pid) endpoints
     let shapes = V.toList (V.map (getShapeFromOpShape pid currentTime) (V.filter (\x -> x.opShapeChanged) diffsInfo))
-
     let nestedOps = V.map (\x -> x.opOperations) diffsInfo
     let ops = flattenVector (V.toList nestedOps)
     let fAndF = V.toList (V.map (getFieldAndFormatFromOpShape pid) ops)
-    let fields = map fst fAndF
-    let formats = map snd fAndF
-
+    let fields = nubBy (\x y -> x.hash == y.hash) (map fst fAndF) -- to prevent ON CONFLICT DO UPDATE command cannot affect row a second time
+    let formats = nubBy (\x y -> x.hash == y.hash) (map snd fAndF) -- to prevent ON CONFLICT DO UPDATE command cannot affect row a second time
     Formats.insertFormats formats
     Fields.insertFields fields
     Shapes.insertShapes shapes
@@ -287,7 +287,7 @@ documentationGetH sess pid swagger_id = do
         ([], Nothing) -> do
           endpoints <- Endpoints.endpointsByProjectId pid
           let endpoint_hashes = V.map (\enp -> enp.hash) endpoints
-          shapes <- Shapes.shapesByEndpointHash pid endpoint_hashes
+          shapes <- Shapes.shapesByEndpointHashes pid endpoint_hashes
           fields <- Fields.fieldsByEndpointHashes pid endpoint_hashes
           let field_hashes = V.map (\field -> field.fHash) fields
           formats <- Formats.formatsByFieldsHashes pid field_hashes
