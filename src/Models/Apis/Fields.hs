@@ -8,6 +8,8 @@ module Models.Apis.Fields (
   fieldIdText,
   fieldById,
   parseFieldCategoryEnum,
+  parseFieldTypes,
+  insertFields,
   groupFieldsByCategory,
   fieldTypeToText,
   fieldCategoryEnumToText,

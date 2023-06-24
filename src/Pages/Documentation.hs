@@ -1,36 +1,43 @@
+{-# OPTIONS_GHC -Wno-unused-do-bind #-}
+
 module Pages.Documentation (documentationGetH, documentationPostH, documentationPutH, SwaggerForm, SaveSwaggerForm) where
 
 import Config
-import Data.Aeson (decodeStrict, encode)
+import Data.Aeson (FromJSON, ToJSON, decodeStrict, encode)
+import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
-import Data.Time.LocalTime (getZonedTime)
+import Data.Digest.XXHash
+import Data.Text qualified as T
+import Data.Time.LocalTime (ZonedTime, getZonedTime)
+import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
+
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
+
 import Lucid
 import Lucid.Htmx
+import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.Fields (parseFieldCategoryEnum, parseFieldTypes)
+import Models.Apis.Fields qualified as Fields
 import Models.Projects.Projects qualified as Projects
 import Models.Projects.Swaggers qualified as Swaggers
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
+
+import Numeric (showHex)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pages.GenerateSwagger qualified as GenerateSwagger
 import Relude
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
-import Web.FormUrlEncoded (FromForm)
-import Pages.GenerateSwagger qualified as GenerateSwagger
-import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Fields qualified as Fields
 
+import Models.Apis.Fields.Query qualified as Fields
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.Shapes qualified as Shapes
-import Models.Apis.Fields (fieldTypeToText)
-import Models.Apis.Fields qualified as Field
-import Models.Apis.Fields.Query qualified as Fields
-
-
-
+import Relude.Unsafe as Unsafe hiding (head)
+import Web.FormUrlEncoded (FromForm)
 
 data SwaggerForm = SwaggerForm
   { swagger_json :: Text
@@ -39,31 +46,198 @@ data SwaggerForm = SwaggerForm
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
 
+data FieldOperation = FieldOperation
+  { action :: Text
+  , keypath :: Text
+  , url :: Text
+  , method :: Text
+  , description :: Text
+  , example :: AE.Value
+  , category :: Text
+  , ftype :: Text
+  , format :: Text
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+data KeyPathData = KeyPathData
+  { fkKeyPath :: Text
+  , fkCategory :: Text
+  , fkType :: Text
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+data OpShape = OpShape
+  { opOperations :: V.Vector FieldOperation
+  , opShapeChanged :: Bool
+  , opRequestBodyKeyPaths :: V.Vector KeyPathData
+  , opResponseBodyKeyPaths :: V.Vector KeyPathData
+  , opRequestHeadersKeyPaths :: V.Vector KeyPathData
+  , opResponseHeadersKeyPaths :: V.Vector KeyPathData
+  , opQueryParamsKeyPaths :: V.Vector KeyPathData
+  , opMethod :: Text
+  , opUrl :: Text
+  , opStatus :: Text
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+data OpEndpoint = OpEndpoint
+  { endpointUrl :: Text
+  , endpointMethod :: Text
+  , endpointHost :: Text
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
 data SaveSwaggerForm = SaveSwaggerForm
   { updated_swagger :: Text
   , swagger_id :: Text
+  , endpoints :: V.Vector OpEndpoint
+  , diffsInfo :: V.Vector OpShape
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromForm)
+  deriving anyclass (FromJSON, ToJSON)
+
+getEndpointHash :: Projects.ProjectId -> Text -> Text -> Text
+getEndpointHash pid urlPath method = toText $ showHex (xxHash $ encodeUtf8 $ (UUID.toText pid.unProjectId) <> T.toUpper method <> urlPath) ""
+
+getFieldHash :: Text -> Text -> Text -> Text -> Text
+getFieldHash enpHash fcategory keypath ftype = enpHash <> toText (showHex (xxHash $ encodeUtf8 (fcategory <> keypath <> ftype)) "")
+
+getShapeHash :: Text -> Text -> V.Vector Text -> V.Vector Text -> V.Vector Text -> V.Vector Text -> Text
+getShapeHash endpointHash statusCode responseBodyKP responseHeadersKP requestBodyKP queryParamsKP = shapeHash
+ where
+  comb = T.concat $ sort $ V.toList $ queryParamsKP <> responseHeadersKP <> requestBodyKP <> responseBodyKP
+  keyPathsHash = toText $ showHex (xxHash $ encodeUtf8 comb) ""
+  shapeHash = endpointHash <> statusCode <> keyPathsHash
+
+getEndpointFromOpEndpoint :: Projects.ProjectId -> OpEndpoint -> Endpoints.Endpoint
+getEndpointFromOpEndpoint pid opEndpoint =
+  let endpointHash = getEndpointHash pid opEndpoint.endpointUrl opEndpoint.endpointMethod
+   in Endpoints.Endpoint
+        { id = Endpoints.EndpointId UUID.nil
+        , createdAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
+        , updatedAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
+        , projectId = pid
+        , urlPath = opEndpoint.endpointUrl
+        , method = T.toUpper opEndpoint.endpointMethod
+        , urlParams = AE.Array []
+        , hosts = [opEndpoint.endpointHost]
+        , hash = endpointHash
+        }
+
+getShapeFromOpShape :: Projects.ProjectId -> ZonedTime -> OpShape -> Shapes.Shape
+getShapeFromOpShape pid curTime opShape =
+  Shapes.Shape
+    { id = Shapes.ShapeId UUID.nil
+    , projectId = pid
+    , createdAt = curTime
+    , updatedAt = curTime
+    , endpointHash = endpointHash
+    , queryParamsKeypaths = qpKP
+    , requestBodyKeypaths = rqBKP
+    , responseBodyKeypaths = rsBKP
+    , requestHeadersKeypaths = rqHKP
+    , responseHeadersKeypaths = rsHKP
+    , fieldHashes = fieldHashes
+    , hash = shapeHash
+    , statusCode = read $ toString opShape.opStatus
+    }
+ where
+  endpointHash = getEndpointHash pid opShape.opUrl opShape.opMethod
+  qpKP = V.map (\v -> v.fkKeyPath) opShape.opQueryParamsKeyPaths
+  rqHKP = V.map (\v -> v.fkKeyPath) opShape.opRequestHeadersKeyPaths
+  rqBKP = V.map (\v -> v.fkKeyPath) opShape.opRequestBodyKeyPaths
+  rsHKP = V.map (\v -> v.fkKeyPath) opShape.opResponseHeadersKeyPaths
+  rsBKP = V.map (\v -> v.fkKeyPath) opShape.opResponseBodyKeyPaths
+  shapeHash = getShapeHash endpointHash opShape.opStatus rsBKP rsHKP rqBKP qpKP
+  qpKPHashes = V.map (\v -> getFieldHash endpointHash v.fkCategory v.fkKeyPath v.fkType) opShape.opQueryParamsKeyPaths
+  rqHKPHashes = V.map (\v -> getFieldHash endpointHash v.fkCategory v.fkKeyPath v.fkType) opShape.opRequestHeadersKeyPaths
+  rqBKPHashes = V.map (\v -> getFieldHash endpointHash v.fkCategory v.fkKeyPath v.fkType) opShape.opRequestBodyKeyPaths
+  rsHKPHashes = V.map (\v -> getFieldHash endpointHash v.fkCategory v.fkKeyPath v.fkType) opShape.opResponseHeadersKeyPaths
+  rsBKPHashes = V.map (\v -> getFieldHash endpointHash v.fkCategory v.fkKeyPath v.fkType) opShape.opResponseBodyKeyPaths
+  fieldHashes = qpKPHashes <> rqHKPHashes <> rqBKPHashes <> rsHKPHashes <> rsBKPHashes
+
+getFieldAndFormatFromOpShape :: Projects.ProjectId -> FieldOperation -> (Fields.Field, Formats.Format)
+getFieldAndFormatFromOpShape pid operation =
+  let endpointHash = getEndpointHash pid operation.url operation.method
+      fCategory = fromMaybe Fields.FCRequestBody (parseFieldCategoryEnum operation.category)
+      fieldType = fromMaybe Fields.FTUnknown (parseFieldTypes operation.ftype)
+      fieldHash = getFieldHash endpointHash operation.category operation.keypath operation.ftype
+      keyPath = operation.keypath
+      format = operation.format
+      formatHash = fieldHash <> toText (showHex (xxHash $ encodeUtf8 format) "")
+
+      field =
+        Fields.Field
+          { createdAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
+          , updatedAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
+          , id = Fields.FieldId UUID.nil
+          , endpointHash = endpointHash
+          , projectId = pid
+          , key = snd $ T.breakOnEnd "." keyPath
+          , fieldType = fieldType
+          , fieldTypeOverride = Nothing
+          , format = format
+          , formatOverride = Just ""
+          , description = operation.description
+          , keyPath = keyPath
+          , fieldCategory = fCategory
+          , hash = fieldHash
+          }
+
+      lFormat =
+        Formats.Format
+          { id = Formats.FormatId UUID.nil
+          , createdAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
+          , updatedAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
+          , projectId = pid
+          , fieldHash = fieldHash
+          , fieldType = fieldType
+          , fieldFormat = format
+          , examples = V.fromList [operation.example]
+          , hash = formatHash
+          }
+   in (field, lFormat)
+
+flattenVector :: [V.Vector FieldOperation] -> V.Vector FieldOperation
+flattenVector = V.concat
 
 documentationPutH :: Sessions.PersistentSession -> Projects.ProjectId -> SaveSwaggerForm -> DashboardM (Headers '[HXTrigger] (Html ()))
-documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id} = do
+documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id, endpoints, diffsInfo} = do
   pool <- asks pool
   env <- asks env
   let value = case decodeStrict (encodeUtf8 updated_swagger) of
         Just val -> val
         Nothing -> error "Failed to parse JSON: "
   res <- liftIO $ withPool pool $ do
-        case swagger_id of 
-          "" -> do
-                swaggerId <- Swaggers.SwaggerId <$> liftIO UUIDV4.nextRandom
-                currentTime <- liftIO getZonedTime
-                let swaggerToAdd = Swaggers.Swagger{ id = swaggerId, projectId = pid, createdBy = sess.userId, createdAt = currentTime, updatedAt = currentTime, swaggerJson = value}
-                Swaggers.addSwagger swaggerToAdd
-                pass
-          _  -> do 
-                Swaggers.updateSwagger swagger_id value
-                pass
+    currentTime <- liftIO getZonedTime
+
+    let newEndpoints = V.toList $ V.map (getEndpointFromOpEndpoint pid) endpoints
+    let shapes = V.toList (V.map (getShapeFromOpShape pid currentTime) (V.filter (\x -> x.opShapeChanged) diffsInfo))
+
+    let nestedOps = V.map (\x -> x.opOperations) diffsInfo
+    let ops = flattenVector (V.toList nestedOps)
+    let fAndF = V.toList (V.map (getFieldAndFormatFromOpShape pid) ops)
+    let fields = map fst fAndF
+    let formats = map snd fAndF
+
+    Formats.insertFormats formats
+    Fields.insertFields fields
+    Shapes.insertShapes shapes
+    Endpoints.insertEndpoints newEndpoints
+
+    case swagger_id of
+      "" -> do
+        swaggerId <- Swaggers.SwaggerId <$> liftIO UUIDV4.nextRandom
+        let swaggerToAdd = Swaggers.Swagger{id = swaggerId, projectId = pid, createdBy = sess.userId, createdAt = currentTime, updatedAt = currentTime, swaggerJson = value}
+        Swaggers.addSwagger swaggerToAdd
+        pass
+      _ -> do
+        Swaggers.updateSwagger swagger_id value
+        pass
 
   let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Swagger Saved Successfully"]}|]
   pure $ addHeader hxTriggerData ""
@@ -104,30 +278,30 @@ documentationGetH sess pid swagger_id = do
       swaggers <- Swaggers.swaggersByProject pid
       currentSwagger <- case swagger_id of
         Just swId -> Swaggers.getSwaggerById swId
-        Nothing -> pure Nothing 
-      (swaggerVal, swaggerValId) <- case (swaggers, currentSwagger) of 
-                     (_, Just swg) ->  do
-                                    let sw = swg.swaggerJson
-                                    let id = show swg.id.swaggerId
-                                    pure (sw, id)
-                     ([], Nothing) ->  do
-                                    endpoints <- Endpoints.endpointsByProjectId pid
-                                    let endpoint_hashes = V.map (\enp -> enp.hash) endpoints
-                                    shapes <- Shapes.shapesByEndpointHash pid endpoint_hashes
-                                    fields <- Fields.fieldsByEndpointHashes pid endpoint_hashes
-                                    let field_hashes = V.map (\field -> field.fHash) fields
-                                    formats <- Formats.formatsByFieldsHashes pid field_hashes
-                                    let (projectTitle, projectDescription) = case project of
-                                          (Just pr) -> (toText pr.title, toText pr.description)
-                                          Nothing -> ("__APITOOLKIT", "Edit project description")
-                                    let gn = GenerateSwagger.generateSwagger projectTitle projectDescription endpoints shapes fields formats
-                                    pure (gn, "")
-                     (val, Nothing) -> do
-                                    let latest = V.head $ V.reverse swaggers
-                                    let sw = latest.swaggerJson
-                                    let id = show latest.id.swaggerId
-                                    pure (sw, id)
-      pure (project, V.reverse swaggers,swaggerVal, swaggerValId)
+        Nothing -> pure Nothing
+      (swaggerVal, swaggerValId) <- case (swaggers, currentSwagger) of
+        (_, Just swg) -> do
+          let sw = swg.swaggerJson
+          let idx = show swg.id.swaggerId
+          pure (sw, idx)
+        ([], Nothing) -> do
+          endpoints <- Endpoints.endpointsByProjectId pid
+          let endpoint_hashes = V.map (\enp -> enp.hash) endpoints
+          shapes <- Shapes.shapesByEndpointHash pid endpoint_hashes
+          fields <- Fields.fieldsByEndpointHashes pid endpoint_hashes
+          let field_hashes = V.map (\field -> field.fHash) fields
+          formats <- Formats.formatsByFieldsHashes pid field_hashes
+          let (projectTitle, projectDescription) = case project of
+                (Just pr) -> (toText pr.title, toText pr.description)
+                Nothing -> ("__APITOOLKIT", "Edit project description")
+          let gn = GenerateSwagger.generateSwagger projectTitle projectDescription endpoints shapes fields formats
+          pure (gn, "")
+        (val, Nothing) -> do
+          let latest = V.head $ V.reverse swaggers
+          let sw = latest.swaggerJson
+          let idx = show latest.id.swaggerId
+          pure (sw, idx)
+      pure (project, V.reverse swaggers, swaggerVal, swaggerValId)
 
   let bwconf =
         (def :: BWConfig)
@@ -143,33 +317,34 @@ documentationsPage pid swaggers swaggerID jsonString = do
     -- modal
     div_
       [ style_ "z-index:99999"
-      , class_ "fixed hidden pt-24 justify-center z-50 w-full p-4 bg-gray-500 bg-opacity-75 overflow-y-auto inset-0 h-full max-h-full"
+      , class_ "fixed pt-24 hidden justify-center z-50 w-full p-4 bg-gray-500 bg-opacity-75 overflow-y-auto inset-0 h-full max-h-full"
       , id_ "swaggerModal"
       , tabindex_ "-1"
       , onclick_ "closeModal(event)"
       ]
       $ do
         div_
-          [ class_ "relative w-[500px] max-h-full"
-          , style_ "width: min(90vw, 750px)"
+          [ class_ "relative max-h-full"
+          , style_ "width: min(90vw, 1000px)"
           ]
           $ do
             -- Modal content
-            form_
-              [ class_ "relative bg-white rounded-lg shadow"
-              , hxPost_ $ "/p/" <> pid.toText <> "/documentation"
+            div_
+              [ class_ "bg-white rounded-lg shadow w-full"
+              -- , hxPost_ $ "/p/" <> pid.toText <> "/documentation"
               ]
               $ do
-                div_ [class_ "flex items-start justify-between p-4 border-b rounded-t"] $ do
-                  h3_ [class_ "text-xl font-semibold text-gray-900 dark:text-white"] "Upload Swagger"
+                div_ [class_ "flex items-start justify-between p-6 space-x-2  border-b rounded-t"] $ do
+                  h3_ [class_ "text-xl font-semibold text-gray-900 dark:text-white"] "Save Swagger"
                 -- Modal body
-                div_ [class_ "p-6 space-y-6"] $ do
-                  input_ [type_ "hidden", name_ "from", value_ "docs"]
-                  textarea_ [style_ "height:65vh;resize:none", name_ "swagger_json", class_ "w-full border outline-none p-4 focus:outline-none focus:border-blue-200", placeholder_ "Paste swagger here"] ""
+                div_ [class_ "w-full"] $ do
+                  div_ [id_ "diff_editor_container", style_ "height:65vh; width:100%"] pass
+                -- input_ [type_ "hidden", name_ "from", value_ "docs"]
+                -- textarea_ [style_ "height:65vh;resize:none", name_ "swagger_json", class_ "w-full border outline-none p-4 focus:outline-none focus:border-blue-200", placeholder_ "Paste swagger here"] ""
                 -- Modal footer
                 div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] $ do
                   button_ [style_ "margin-right:50px", type_ "button", class_ "btn", onclick_ "closeModal(event)", id_ "close_btn"] "Close"
-                  button_ [type_ "sumbit", class_ "btn btn-primary"] "Upload"
+                  button_ [type_ "sumbit", class_ "btn btn-primary", onclick_ "parsePaths()"] "Confirm  & Save"
 
     -- page content
 
@@ -190,11 +365,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
             div_ [id_ "swagger_history_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] $ do
               swaggers & mapM_ \sw -> do
                 button_ [onclick_ "swaggerChanged(event)", class_ "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"] $ toHtml swaggerID
-
-        -- select_ [onchange_ "swaggerChanged(event)", id_ "swaggerSelect"] $ do
-        --   swaggers & mapM_ \sw -> do
-        --     option_ [value_ (show sw.id.swaggerId)] $ show sw.id.swaggerId
-        button_ [class_ "place-content-center text-md btn btn-primary", onclick_ "showModal()"] "Upload swagger"
+        button_ [class_ "place-content-center text-md btn btn-primary", onclick_ "showModal()"] "Save swagger"
 
       div_ [class_ "w-full", style_ "height: calc(100% - 60px)"] $ do
         div_ [id_ "columns_container", class_ "w-full h-full flex flex-row", style_ "height: calc(100% - 60px)"] $ do
@@ -222,11 +393,13 @@ documentationsPage pid swaggers swaggerID jsonString = do
                 form_ [hxPost_ $ "/p/" <> pid.toText <> "/documentation/save"] $ do
                   input_ [id_ "save_swagger_input_id", name_ "swagger_id", type_ "hidden", value_ (toText swaggerID)]
                   input_ [id_ "save_swagger_input_data", name_ "updated_swagger", type_ "hidden", value_ (toText jsonString)]
-                  button_ [type_ "submit", id_ "save_swagger_btn", class_ "bg-gray-200 text-sm py-2 px-4 rounded active:bg-green-600"] "Save"
+              --  button_ [type_ "submit", id_ "save_swagger_btn", class_ "bg-gray-200 text-sm py-2 px-4 rounded active:bg-green-600"] "Save"
               div_ [id_ "swaggerEditor", class_ "w-full overflow-y-auto", style_ "height: calc(100% - 40px)"] pass
             div_ [onmousedown_ "mouseDown(event)", id_ "editor_resizer", class_ "h-full bg-neutral-400", style_ "width: 2px; cursor: col-resize; background-color: rgb(209 213 219);"] pass
           div_ [id_ "details_container", class_ "flex-auto overflow-y-auto", style_ "width:30%; height:100%"] $ do
-            div_ [id_ "swagger-ui", class_ "h-full w-full overflow-aut"] pass
+            div_ [id_ "swagger-ui", class_ "relative h-full w-full bg-white overflow-auto"] pass
+          button_ [class_ "absolute z-10 p-2", style_ "right: 15px", onclick_ "fullscreen()", title_ "full screen"] $ do
+            img_ [src_ "/assets/svgs/fullscreen.svg", style_ "height:24px; width: 24px"]
   -- mainContent swaggers
 
   script_
@@ -234,6 +407,32 @@ documentationsPage pid swaggers swaggerID jsonString = do
 
           function showModal() { 
             document.getElementById('swaggerModal').style.display = 'flex'; 
+            const val = document.querySelector('#swaggerData').value
+            let json = JSON.parse(val)
+            const yamlData = jsyaml.dump(json)
+            const modifiedValue = window.editor.getValue()
+            monacoEditor.setTheme ('vs')
+            if(!window.diffEditor) {
+                window.diffEditor = monacoEditor.createDiffEditor(document.getElementById ('diff_editor_container'),{renderSideBySide: false})
+              }
+              
+            diffEditor.setModel({
+	         	   original: monaco.editor.createModel(yamlData, 'yaml'),
+	         	   modified: monaco.editor.createModel(modifiedValue, 'yaml'),
+	         });
+          }
+
+          function closeModal(event) {
+            if(event.target.id === 'close_btn' || event.target.id ==='swaggerModal') {
+               monacoEditor.setTheme ('nightOwl')
+               document.getElementById('swaggerModal').style.display = 'none';
+            }
+          }
+          
+          function toggleDiffEditorInline(event) {
+            if(window.diffEditor) {
+                 diffEditor.updateOptions({ renderSideBySide: !event.target.checked });
+              }
           }
 
           function toggleSwaggerHistory(event) {
@@ -246,6 +445,19 @@ documentationsPage pid swaggers swaggerID jsonString = do
                  container.style.display = 'block'
                 }
               }
+          }
+
+          function fullscreen() {
+             const fullscreenElement = document.getElementById('swagger-ui');
+             if (fullscreenElement.requestFullscreen) {
+               fullscreenElement.requestFullscreen();
+             } else if (fullscreenElement.mozRequestFullScreen) { // Firefox
+               fullscreenElement.mozRequestFullScreen();
+             } else if (fullscreenElement.webkitRequestFullscreen) { // Chrome, Safari and Opera
+               fullscreenElement.webkitRequestFullscreen();
+             } else if (fullscreenElement.msRequestFullscreen) { // IE/Edge
+               fullscreenElement.msRequestFullscreen();
+             }
           }
 
           function swaggerChanged(event) {
@@ -283,11 +495,6 @@ documentationsPage pid swaggers swaggerID jsonString = do
             //document.querySelector('#toggle_dropdown_container').style.display = 'none'
          })
         
-          function closeModal(event) {
-            if(event.target.id === 'close_btn' || event.target.id ==='swaggerModal') {
-               document.getElementById('swaggerModal').style.display = 'none';
-            }
-          }
 
        // function saveSwagger(event) {         
        //   const value = window.editor.getValue();
@@ -397,7 +604,6 @@ documentationsPage pid swaggers swaggerID jsonString = do
   script_
     [text|
       document.addEventListener('DOMContentLoaded', function(){
-        // Configuration for the monaco editor which the query editor is built on.
         require.config({ paths: { vs: '/assets/js/monaco/vs' } });
         require.config({ paths: { 'vs': 'https://unpkg.com/monaco-editor/min/vs' } });
 		  	require(['vs/editor/editor.main'], function () {
@@ -428,8 +634,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
              'editorWhitespace.foreground': '#404040'
            }
         });
-
-       monaco.editor.setTheme('nightOwl');
+       window.monacoEditor = monaco.editor
        const val = document.querySelector('#swaggerData').value
        let json = JSON.parse(val)
        const yamlData = jsyaml.dump(json)
@@ -440,15 +645,16 @@ documentationsPage pid swaggers swaggerID jsonString = do
             automaticLayout : true,
             fontSize: 14,
             lineHeight: 20,
-            lineNumbersMinChars: 3
+            lineNumbersMinChars: 3,
+            theme: 'nightOwl'
 		  		});
 		   });
-        // Monaco code suggestions https://github.com/microsoft/monaco-editor/issues/1850
       })
    |]
 
   script_ [src_ "https://unpkg.com/swagger-ui-dist@4.5.0/swagger-ui-bundle.js", crossorigin_ "true"] ("" :: Text)
   script_ [src_ "/assets/js/swagger_endpoints.js"] ("" :: Text)
+  script_ [src_ "/assets/js/build_keypaths.js"] ("" :: Text)
   script_ [src_ "https://unpkg.com/js-yaml/dist/js-yaml.min.js", crossorigin_ "true"] ("" :: Text)
   script_
     [text|

@@ -106,14 +106,14 @@ class SwaggerEndPointsUI {
                         }
                     }
                 },
-                this.elt("h4", { style: "font-size: 16px; font-weight: bold; text-transform: capitalize;" }, key),
+                this.elt("h4", { style: "font-size: 14px; font-weight: 600; color: rgb(75 85 99); text-transform: capitalize;" }, key),
                 this.elt("img", { class: "collpase-icon", src: "/assets/svgs/up_chevron.svg" })
             )
 
             const article = this.elt("article", {}, headerContainer)
             const pathsContainer = this.elt("div", { class: "subpaths-container" })
             for (const pathObj of pathsArray) {
-                const method = this.elt("div", { class: `text-sm font-bold`, style: "text-transform: uppercase; width: 70px" }, pathObj.method)
+                const method = this.elt("div", { class: `text-sm font-bold`, style: "text-transform: uppercase; width: 50px" }, pathObj.method)
                 const endpoint = this.elt(
                     "div",
                     {

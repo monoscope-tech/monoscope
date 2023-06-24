@@ -6,10 +6,10 @@ import Colog (LogAction)
 import Config (DashboardM, ctxToHandler, pool)
 import Config qualified
 import Data.Aeson (FromJSON)
+import Data.Aeson qualified as AE
 import Data.Aeson.Types (ToJSON)
 import Data.Pool (Pool)
 import Data.Time (ZonedTime)
-import Data.Aeson qualified as AE
 import Data.UUID qualified as UUID
 import DataSeeding qualified
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), queryOne, withPool)
@@ -101,8 +101,8 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "charts_html" :> "latency" :> QPT "id" :> QPT "endpoint_hash" :> QPI "num_slots" :> QPT "from" :> QPT "to" :> QPT "theme" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "documentation" :> QPT "swagger_id" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "documentation" :> ReqBody '[FormUrlEncoded] SwaggerForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-    :<|> "p" :> ProjectId :> "documentation" :> "save" :> ReqBody '[FormUrlEncoded] SaveSwaggerForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-    :<|> "p" :> ProjectId :> "generate_swagger" :> Get '[JSON] (AE.Value)
+    :<|> "p" :> ProjectId :> "documentation" :> "save" :> ReqBody '[JSON] SaveSwaggerForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
+    :<|> "p" :> ProjectId :> "generate_swagger" :> Get '[JSON] AE.Value
 
 type PublicAPI =
   "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
