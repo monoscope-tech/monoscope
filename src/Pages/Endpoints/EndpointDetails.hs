@@ -254,9 +254,48 @@ endpointDetails paramInput currTime endpoint endpointStats shapesWithFieldsMap f
 
 apiDocsSubPage :: [ShapeWidthFields] -> Html ()
 apiDocsSubPage shapesWithFieldsMap = do
-  div_ [class_ "space-y-16 pb-20", id_ "subpage"] $ do
+  div_ [class_ "space-y-8", id_ "subpage"] $ do
+    div_ [class_ "flex w-full justify-end mt-2"] $ do
+      let (prv, next) = ("slideReqRes('prev')", "slideReqRes('next')")
+      img_ [src_ "/assets/svgs/leftarrow.svg", class_ " m-2 cursor-pointer", onclick_ prv]
+      let l = "1/" <> show (length shapesWithFieldsMap)
+      let id = "current_indicator"
+      span_ [src_ " mx-4", id_ id] l
+      img_ [src_ "/assets/svgs/rightarrow.svg", class_ "m-2 cursor-pointer", onclick_ next]
     reqResSection "Request" True shapesWithFieldsMap
     reqResSection "Response" False shapesWithFieldsMap
+  script_
+    [text| 
+          function slideReqRes(action) {
+            let ind = document.querySelector("#current_indicator")
+            let curr = 1
+            let total = 1
+            if(ind) {
+                const tx = ind.innerText.split("/")
+                if(tx.length > 1) {
+                   curr = Number(tx[0]) || 1
+                   total = Number(tx[1]) || curr
+                  }
+              }
+              
+            if( curr === total && action === "next") return
+            if(curr === 1 && action === "prev") return 
+            curr = action === "prev" ? curr - 1 : curr + 1;
+            let fields = Array.from(document.querySelectorAll(".Response_fields"))
+            let t = document.querySelector("#Response_"+ curr)
+            let fieldsReq = Array.from(document.querySelectorAll(".Request_fields"))
+            let tReq = document.querySelector("#Request_" + curr)
+            if (t) {
+                fields.forEach(field => field.classList.remove("show_fields"))
+                t.classList.add("show_fields")
+            }
+            if(tReq) {
+                fieldsReq.forEach(field => field.classList.remove("show_fields"))
+                tReq.classList.add("show_fields")
+              }
+            ind.innerText = curr + "/" + total
+          }
+        |]
 
 apiOverviewSubPage :: ParamInput -> UTCTime -> EndpointRequestStats -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> Vector Anomalies.AnomalyVM -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 apiOverviewSubPage paramInput currTime endpoint fieldsM reqLatenciesRolledByStepsJ anomalies dateRange = do
@@ -382,14 +421,8 @@ reqResSection title isRequest shapesWithFieldsMap =
             , class_ "h-4 mr-3 mt-1 w-4"
             ]
         span_ [class_ "text-lg text-slate-800"] $ toHtml title
-      div_ [class_ "flex flex-row mt-2"] $ do
-        let (prv, next) = if isRequest then ("slideReqRes('prev', 'Request')", "slideReqRes('next', 'Request')") else ("slideReqRes('prev', 'Response')", "slideReqRes('next', 'Response')")
-        img_ [src_ "/assets/svgs/leftarrow.svg", class_ " m-2 cursor-pointer", onclick_ prv]
-        let l = "1/" <> show (length shapesWithFieldsMap)
-        let id = "current_indicator_" <> title
-        span_ [src_ " mx-4", id_ id] l
-        img_ [src_ "/assets/svgs/rightarrow.svg", class_ "m-2 cursor-pointer", onclick_ next]
-    div_ [class_ "bg-white border border-gray-100 rounded-xl py-10 px-5 space-y-6 reqResSubSection"] $
+
+    div_ [class_ "bg-white border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"] $
       forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap) $ \(index, s) -> do
         let sh = if index == 1 then title <> "_fields show_fields" else title <> "_fields"
         div_ [class_ sh, id_ $ title <> "_" <> show index] $ do
@@ -405,35 +438,6 @@ reqResSection title isRequest shapesWithFieldsMap =
             else do
               subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader s.fieldsMap)
               subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody s.fieldsMap)
-    script_
-      [text| 
-        function slideReqRes(action, type) {
-          let ind = document.querySelector("#current_indicator_" + type)
-          let curr = 1
-          let total = 1
-          if(ind) {
-              const tx = ind.innerText.split("/")
-              if(tx.length > 1) {
-                 curr = Number(tx[0]) || 1
-                 total = Number(tx[1]) || curr
-                }
-            }
-          if( curr === total && action === "next") return
-          if(curr === 1 && action === "prev") return 
-          curr = action === "prev" ? curr - 1 : curr + 1;
-          let fields = Array.from(document.querySelectorAll(".Response_fields"))
-          let t = document.querySelector("#Response_"+ curr)
-          if (type === "Request") {
-              fields = Array.from(document.querySelectorAll(".Request_fields"))
-              t = document.querySelector("#Request_" + curr)
-          }
-          if (t) {
-              fields.forEach(field => field.classList.remove("show_fields"))
-              t.classList.add("show_fields")
-          }
-          ind.innerText = curr + "/" + total
-        }
-      |]
 
 -- | subSubSection ..
 subSubSection :: Text -> Maybe [Fields.Field] -> Html ()
@@ -441,7 +445,7 @@ subSubSection title fieldsM =
   case fieldsM of
     Nothing -> ""
     Just fields -> do
-      div_ [class_ "space-y-1"] $ do
+      div_ [class_ "space-y-1 mb-4"] $ do
         div_ [class_ "flex flex-row items-center"] $ do
           img_
             [ src_ "/assets/svgs/cheveron-down.svg"
