@@ -337,32 +337,3 @@ function getKeyPathsHelper(value, path) {
     }
     return [{ type: value.type || "unknown", description: value.description || "", format: value.format || "", example: value.example || "", keypath: path }]
 }
-
-
-function slideReqRes(action, type) {
-    let ind = document.querySelect("#current_indicator")
-    let curr = 1
-    let total = 1
-    if (ind) {
-        const tx = ind.innerText.split("/")
-        if (tx.length > 1) {
-            curr = Number(tx[0]) || 1
-            total = Number(tx[1]) || 1
-        }
-    }
-
-    if (curr === total && action === "next") return
-    if (curr === 0 && action === "prev") return
-    curr = action === "prev" ? curr - 1 : curr + 1
-    let fields = Array.from(document.querySelectorAll(".Response_fields"))
-    let t = document.querySelector(`#Response_${curr}`)
-    if (type === "Request") {
-        fields = Array.from(document.querySelectorAll(".Request_fields"))
-        t = document.querySelector(`#Request_${curr}`)
-    }
-    if (t) {
-        fields.forEach(field => field.classList.remove("show_fields"))
-        t.classList.add("show_fields")
-    }
-    ind.innerText = `${curr}/${total}`
-}
