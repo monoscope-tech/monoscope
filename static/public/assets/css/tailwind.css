@@ -90,12 +90,11 @@
   @apply hover:bg-gray-100 py-3 px-2 w-full items-center justify-between;
 }
 
-.Request_fields {
-  display: none;
-}
+.Request_fields,
 .Response_fields {
   display: none;
 }
+
 .show_fields {
   display: block;
 }

@@ -393,7 +393,9 @@ reqResSection title isRequest shapesWithFieldsMap =
       forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap) $ \(index, s) -> do
         let sh = if index == 1 then title <> "_fields show_fields" else title <> "_fields"
         div_ [class_ sh, id_ $ title <> "_" <> show index] $ do
-          span_ [] $ show s.status
+          let prm = "px-2 py-1 rounded text-white text-sm "
+          let statusCls = if s.status < 400 then prm <> "bg-green-500" else prm <> "bg-red-500"
+          span_ [class_ statusCls] $ show s.status
           if isRequest
             then do
               subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam s.fieldsMap)
