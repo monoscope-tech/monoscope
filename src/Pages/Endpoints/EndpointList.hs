@@ -79,7 +79,7 @@ endpointList enps pid = do
         div_ [class_ "w-full flex flex-row m-3"] $ do
           div_ [class_ "flex rounded-xl bg-white py-2 px-3 flex-row w-3/4 border-solid border border-gray-200 h-10"] $ do
             img_ [src_ "/assets/svgs/search.svg", class_ "h-5 w-auto"]
-            input_ [type_ "text", class_ "dataTable-search w-full h-full p-2 text-sm text-gray-400 font-normal focus:outline-none", placeholder_ "Search endpoints..."]
+            input_ [type_ "text", oninput_ "search(event)", class_ "dataTable-search w-full h-full p-2 text-sm text-gray-400 font-normal focus:outline-none", placeholder_ "Search endpoints..."]
             img_ [src_ "/assets/svgs/filter.svg", class_ "h-5 w-auto self-end"]
           button_ [class_ "bg-blue-700/20 place-content-center py-2 px-4 w-28 mx-3 flex flex-row rounded-xl h-10"] $ do
             img_ [src_ "/assets/svgs/merge.svg", class_ "h-4 w-4 mt-1 "]
@@ -101,16 +101,16 @@ endpointList enps pid = do
               th_ [class_ "text-right"] "P50 LATENCY"
               th_ [class_ "text-right"] "P99 LATENCY"
               th_ [class_ "text-center"] ""
-          tbody_ $ do
+          tbody_ [id_ "table_body"] $ do
             enps & mapM_ \enp -> do
-              tr_ [class_ "border-b border-b-slate-50 py-2"] $ do
+              tr_ [class_ "endpoint_row border-b border-b-slate-50 py-2"] $ do
                 td_ [class_ "text-left pr-4 "] $ input_ [type_ "checkbox"]
                 td_ [class_ "text-right"] $ do
                   a_ [href_ ("/p/" <> enp.projectId.toText <> "/endpoints/" <> Endpoints.endpointIdText (enp.endpointId))] $ do
-                    span_ [class_ $ "endpoint endpoint-" <> toLower (enp.method)] $ toHtml $ enp.method
+                    span_ [class_ $ "endpoint endpoint-" <> toLower (enp.method), data_ "enp-urlMethod" (enp.method)] $ toHtml $ enp.method
                 td_ [class_ ""] $ do
                   a_ [href_ ("/p/" <> enp.projectId.toText <> "/endpoints/" <> Endpoints.endpointIdText (enp.endpointId))] $ do
-                    span_ [class_ " inconsolata text-base text-slate-700"] $ toHtml $ enp.urlPath
+                    span_ [class_ " inconsolata text-base text-slate-700", data_ "enp-urlPath" (enp.urlPath)] $ toHtml $ enp.urlPath
                 td_ [class_ " text-sm text-gray-400 font-normal text-center"] $ do
                   span_ $ toHtml @String $ fmt $ commaizeF (enp.totalRequests)
                 td_ [class_ " inconsolata text-base text-slate-700 text-right space-x-2"] $ do
@@ -136,6 +136,30 @@ endpointList enps pid = do
                document.getElementById('swaggerModal').style.display = 'none';
               }
              }
+
+          function search(event) {
+             const val = event.target.value.toLowerCase()
+             const rows = document.querySelectorAll(".endpoint_row")
+             if(rows) {
+                for(let row of Array.from(rows)) {
+                  const method = row.querySelector('[data-enp-urlMethod]');
+                  const path = row.querySelector('[data-enp-urlPath]');
+                  let methodData = ""
+                  let pathData = ""
+                  if(method) { 
+                      methodData = method.getAttribute('data-enp-urlMethod')
+                    }
+                  if(path) {
+                      pathData = path.getAttribute('data-enp-urlPath')
+                    }
+                  if(!(pathData.toLowerCase().includes(val) || methodData.toLowerCase().includes(val))) {
+                       row.style.display = "none"
+                    }else {
+                      row.style.display = ""
+                    }
+                }
+              }
+          }
          |]
 
 meter__ :: Double -> Html ()

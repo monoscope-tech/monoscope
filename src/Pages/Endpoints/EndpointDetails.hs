@@ -413,7 +413,6 @@ reqResSection title isRequest shapesWithFieldsMap =
           let total = 1
           if(ind) {
               const tx = ind.innerText.split("/")
-              console.log(tx)
               if(tx.length > 1) {
                  curr = Number(tx[0]) || 1
                  total = Number(tx[1]) || curr
