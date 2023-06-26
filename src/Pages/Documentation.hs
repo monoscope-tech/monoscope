@@ -382,7 +382,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
                 div_ [id_ "endpoint_paths_container", class_ "w-full"] pass
             div_ [onmousedown_ "mouseDown(event)", id_ "endpoints_resizer", class_ "h-full bg-neutral-400", style_ "width: 2px; cursor: col-resize; background-color: rgb(209 213 219)"] pass
           div_ [id_ "editor_container", class_ "flex flex-auto overflow-auto", style_ "width:40%; height:100%"] $ do
-            div_ [class_ "h-full", style_ "width: calc(100% - 2px"] $ do
+            div_ [class_ "h-full", style_ "width: calc(100% - 2px)"] $ do
               div_ [class_ "w-full flex gap-8 justify-end px-2 items-center", style_ "height:40px"] $ do
                 div_ [onclick_ "toggleFontSize(event)", class_ "relative"] $ do
                   button_ [id_ "toggle_font", class_ "font-semibold"] "Aa"

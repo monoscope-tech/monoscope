@@ -91,13 +91,16 @@
 }
 
 .Request_fields,
-.Response_fields,
-.status_codes {
+.Response_fields {
   display: none;
 }
 
 .show_fields {
   display: block;
+}
+
+.selected_shape {
+  @apply bg-blue-600 text-white;
 }
 
 @layer components {

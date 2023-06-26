@@ -257,13 +257,36 @@ apiDocsSubPage :: [ShapeWidthFields] -> Html ()
 apiDocsSubPage shapesWithFieldsMap = do
   div_ [class_ "space-y-8", id_ "subpage"] $ do
     div_ [class_ "flex w-full justify-between mt-2"] $ do
-      forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap) $ \(index, s) -> do
-        let prm = "px-2 py-1 rounded text-white text-sm "
-        let statusCls = if s.status < 400 then prm <> "bg-green-500" else prm <> "bg-red-500"
-        let sh = if index == 1 then "status_codes show_fields" else "status_codes"
-        div_ [class_ sh, id_ ("status_" <> show index)] $ do
-          span_ [class_ statusCls] $ show s.status
-          span_ [class_ "ml-2 text-sm text-gray-600"] $ toHtml s.hash
+      div_ [class_ "relative", style_ "width:220px"] $ do
+        button_
+          [ onclick_ "toggleShapesDropdown(event)"
+          , id_ "toggle_shapes_btn"
+          , data_ "current" "1"
+          , data_ "total" (show $ length shapesWithFieldsMap)
+          , class_ "w-full flex gap-2 text-gray-600 justify_between items-center cursor-pointer px-2 py-1 border rounded focus:ring-2 focus:ring-blue-200 active:ring-2 active:ring-blue-200"
+          ]
+          $ do
+            let fstH = viaNonEmpty head shapesWithFieldsMap
+            let (st, hs) = case fstH of
+                  Just s -> (s.status, s.hash)
+                  Nothing -> (0, "No shapes")
+            let prm = "px-2 py-1 rounded text-white text-sm "
+            let statusCls = if st < 400 then prm <> "bg-green-500" else prm <> "bg-red-500"
+            span_ [class_ statusCls] $ show st
+            span_ [class_ "ml-1 text-sm text-gray-600"] $ toHtml hs
+            img_ [src_ "/assets/svgs/select_chevron.svg", style_ "height:15px; width:15px"]
+        div_ [id_ "shapes_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] $ do
+          forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap) $ \(index, s) -> do
+            let prm = "px-2 py-1 rounded text-white text-sm "
+            let statusCls = if s.status < 400 then prm <> "bg-green-500" else prm <> "bg-red-500"
+            let sh = if index == 1 then "status_codes show_fields" else "status_codes"
+            let prm = "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"
+            button_ [class_ (prm <> sh), id_ ("status_" <> show index), onclick_ "selectShape(event)", data_ "pos" (show index), data_ "status" (show s.status), data_ "hash" s.hash] $ do
+              span_ [class_ statusCls] $ show s.status
+              span_ [class_ "ml-2 text-sm text-gray-600"] $ toHtml s.hash
+      -- swaggers & mapM_ \sw -> do
+      --   button_ [onclick_ "swaggerChanged(event)", class_ "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"] $ toHtml swaggerID
+
       div_ [class_ "flex items-center"] $ do
         let (prv, next) = ("slideReqRes('prev')", "slideReqRes('next')")
         img_ [src_ "/assets/svgs/leftarrow.svg", class_ " m-2 cursor-pointer", onclick_ prv]
@@ -275,8 +298,61 @@ apiDocsSubPage shapesWithFieldsMap = do
     reqResSection "Response" False shapesWithFieldsMap
   script_
     [text| 
+
+          function toggleShapesDropdown(event) {
+            event.stopPropagation()
+            const container = document.querySelector('#shapes_container')
+            if(container) {
+              if(container.style.display === 'block') {
+                  container.style.display = 'none'
+                }else {
+                 container.style.display = 'block'
+                }
+              }
+          }
+
+
+          function selectShape(event) {
+            const status = event.currentTarget.getAttribute("data-status")
+            const hash = event.currentTarget.getAttribute("data-hash")
+            const position = event.currentTarget.getAttribute("data-pos")
+            const mainButton = document.getElementById('toggle_shapes_btn'); 
+            const current = mainButton.getAttribute("data-current")
+            const total = mainButton.getAttribute("data-total")
+            const ind = document.querySelector("#current_indicator")
+
+            if(position === current) return
+            const spanElements = mainButton.querySelectorAll('span');
+            spanElements.forEach((span) => {
+              span.remove();
+            });
+            mainButton.setAttribute("data-current", position)
+            let cls = (status < "400") ?  "px-2 py-1 rounded text-white text-sm bg-green-500" : "px-2 py-1 rounded text-white text-sm  bg-red-500"
+            const statusInd = elt("span", {class: cls}, status)
+            const hashT = elt("span", {class: "ml-1 text-sm text-gray-600"}, hash)
+            mainButton.prepend(hashT)
+            mainButton.prepend(statusInd)
+            let curr = position
+            let fields = Array.from(document.querySelectorAll(".Response_fields"))
+            let t = document.querySelector("#Response_"+ curr)
+            let fieldsReq = Array.from(document.querySelectorAll(".Request_fields"))
+            let tReq = document.querySelector("#Request_" + curr)
+            if (t) {
+                fields.forEach(field => field.classList.remove("show_fields"))
+                t.classList.add("show_fields")
+            }
+            if(tReq) {
+                fieldsReq.forEach(field => field.classList.remove("show_fields"))
+                tReq.classList.add("show_fields")
+              }
+            ind.innerText = curr + "/" + total
+           
+          }
+
           function slideReqRes(action) {
             let ind = document.querySelector("#current_indicator")
+            const mainButton = document.getElementById ('toggle_shapes_btn')
+
             let curr = 1
             let total = 1
             if(ind) {
@@ -289,27 +365,61 @@ apiDocsSubPage shapesWithFieldsMap = do
             if( curr === total && action === "next") return
             if(curr === 1 && action === "prev") return 
             curr = action === "prev" ? curr - 1 : curr + 1;
+            mainButton.setAttribute ("data-current", curr)
+            const spanElements = mainButton.querySelectorAll('span');
+            spanElements.forEach((span) => {
+              span.remove();
+            });
+
             let fields = Array.from(document.querySelectorAll(".Response_fields"))
             let t = document.querySelector("#Response_"+ curr)
             let fieldsReq = Array.from(document.querySelectorAll(".Request_fields"))
             let tReq = document.querySelector("#Request_" + curr)
-            let statusCodes = Array.from(document.querySelectorAll(".status_codes"))
             let stC = document.querySelector("#status_" + curr)
+            const status = stC.getAttribute("data-status")
+            const hash = stC.getAttribute("data-hash")
+           
             if (t) {
                 fields.forEach(field => field.classList.remove("show_fields"))
                 t.classList.add("show_fields")
             }
+
             if(tReq) {
                 fieldsReq.forEach(field => field.classList.remove("show_fields"))
                 tReq.classList.add("show_fields")
               }
-            if(stC) {
-                   statusCodes.forEach(field => field.classList.remove("show_fields"))
-                   stC.classList.add("show_fields")
-               }
+               
+            let cls = (status < "400") ?  "px-2 py-1 rounded text-white text-sm bg-green-500" : "px-2 py-1 rounded text-white text-sm  bg-red-500"
+            const statusInd = elt("span", {class: cls}, status)
+            const hashT = elt("span", {class: "ml-1 text-sm text-gray-600"}, hash)
+            mainButton.prepend(hashT)
+            mainButton.prepend(statusInd)
+
             ind.innerText = curr + "/" + total
           }
-        |]
+
+          function elt(type, props, ...children) {
+              let dom = document.createElement(type);
+              if (props) {
+                  for (let prop in props) {
+                      if (prop === 'class') {
+                          dom.className = props[prop];
+                      } else if (prop.startsWith('on') && typeof props[prop] === 'function') {
+                          const eventName = prop.substring(2).toLowerCase();
+                          dom.addEventListener(eventName, props[prop]);
+                      } else {
+                          dom.setAttribute(prop, props[prop]);
+                      }
+                  }
+              }
+              for (let child of children) {
+                  if (typeof child != "string") dom.appendChild(child);
+                  else dom.appendChild(document.createTextNode(child));
+              }
+              return dom;
+          }
+
+     |]
 
 apiOverviewSubPage :: ParamInput -> UTCTime -> EndpointRequestStats -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> Vector Anomalies.AnomalyVM -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 apiOverviewSubPage paramInput currTime endpoint fieldsM reqLatenciesRolledByStepsJ anomalies dateRange = do
