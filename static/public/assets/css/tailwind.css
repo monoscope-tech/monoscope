@@ -91,7 +91,8 @@
 }
 
 .Request_fields,
-.Response_fields {
+.Response_fields,
+.status_codes {
   display: none;
 }
 

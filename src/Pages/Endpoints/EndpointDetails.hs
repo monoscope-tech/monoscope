@@ -60,11 +60,12 @@ data ParamInput = ParamInput
   }
 data ShapeWidthFields = ShapeWidthFields
   { status :: Int
+  , hash :: Text
   , fieldsMap :: Map FieldCategoryEnum [Fields.Field]
   }
 
 getShapeFields :: Shapes.Shape -> Vector Fields.Field -> ShapeWidthFields
-getShapeFields shape fields = ShapeWidthFields{status = shape.statusCode, fieldsMap = fieldM}
+getShapeFields shape fields = ShapeWidthFields{status = shape.statusCode, hash = shape.hash, fieldsMap = fieldM}
  where
   matchedFields = Vector.filter (\field -> field.hash `Vector.elem` shape.fieldHashes) fields
   fieldM = Fields.groupFieldsByCategory matchedFields
@@ -255,13 +256,21 @@ endpointDetails paramInput currTime endpoint endpointStats shapesWithFieldsMap f
 apiDocsSubPage :: [ShapeWidthFields] -> Html ()
 apiDocsSubPage shapesWithFieldsMap = do
   div_ [class_ "space-y-8", id_ "subpage"] $ do
-    div_ [class_ "flex w-full justify-end mt-2"] $ do
-      let (prv, next) = ("slideReqRes('prev')", "slideReqRes('next')")
-      img_ [src_ "/assets/svgs/leftarrow.svg", class_ " m-2 cursor-pointer", onclick_ prv]
-      let l = "1/" <> show (length shapesWithFieldsMap)
-      let id = "current_indicator"
-      span_ [src_ " mx-4", id_ id] l
-      img_ [src_ "/assets/svgs/rightarrow.svg", class_ "m-2 cursor-pointer", onclick_ next]
+    div_ [class_ "flex w-full justify-between mt-2"] $ do
+      forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap) $ \(index, s) -> do
+        let prm = "px-2 py-1 rounded text-white text-sm "
+        let statusCls = if s.status < 400 then prm <> "bg-green-500" else prm <> "bg-red-500"
+        let sh = if index == 1 then "status_codes show_fields" else "status_codes"
+        div_ [class_ sh, id_ ("status_" <> show index)] $ do
+          span_ [class_ statusCls] $ show s.status
+          span_ [class_ "ml-2 text-sm text-gray-600"] $ toHtml s.hash
+      div_ [class_ "flex items-center"] $ do
+        let (prv, next) = ("slideReqRes('prev')", "slideReqRes('next')")
+        img_ [src_ "/assets/svgs/leftarrow.svg", class_ " m-2 cursor-pointer", onclick_ prv]
+        let l = "1/" <> show (length shapesWithFieldsMap)
+        let id = "current_indicator"
+        span_ [src_ " mx-4", id_ id] l
+        img_ [src_ "/assets/svgs/rightarrow.svg", class_ "m-2 cursor-pointer", onclick_ next]
     reqResSection "Request" True shapesWithFieldsMap
     reqResSection "Response" False shapesWithFieldsMap
   script_
@@ -277,7 +286,6 @@ apiDocsSubPage shapesWithFieldsMap = do
                    total = Number(tx[1]) || curr
                   }
               }
-              
             if( curr === total && action === "next") return
             if(curr === 1 && action === "prev") return 
             curr = action === "prev" ? curr - 1 : curr + 1;
@@ -285,6 +293,8 @@ apiDocsSubPage shapesWithFieldsMap = do
             let t = document.querySelector("#Response_"+ curr)
             let fieldsReq = Array.from(document.querySelectorAll(".Request_fields"))
             let tReq = document.querySelector("#Request_" + curr)
+            let statusCodes = Array.from(document.querySelectorAll(".status_codes"))
+            let stC = document.querySelector("#status_" + curr)
             if (t) {
                 fields.forEach(field => field.classList.remove("show_fields"))
                 t.classList.add("show_fields")
@@ -293,6 +303,10 @@ apiDocsSubPage shapesWithFieldsMap = do
                 fieldsReq.forEach(field => field.classList.remove("show_fields"))
                 tReq.classList.add("show_fields")
               }
+            if(stC) {
+                   statusCodes.forEach(field => field.classList.remove("show_fields"))
+                   stC.classList.add("show_fields")
+               }
             ind.innerText = curr + "/" + total
           }
         |]
@@ -426,9 +440,6 @@ reqResSection title isRequest shapesWithFieldsMap =
       forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap) $ \(index, s) -> do
         let sh = if index == 1 then title <> "_fields show_fields" else title <> "_fields"
         div_ [class_ sh, id_ $ title <> "_" <> show index] $ do
-          let prm = "px-2 py-1 rounded text-white text-sm "
-          let statusCls = if s.status < 400 then prm <> "bg-green-500" else prm <> "bg-red-500"
-          span_ [class_ statusCls] $ show s.status
           if isRequest
             then do
               subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam s.fieldsMap)
