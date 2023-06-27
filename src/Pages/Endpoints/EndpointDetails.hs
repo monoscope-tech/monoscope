@@ -257,35 +257,35 @@ apiDocsSubPage :: [ShapeWidthFields] -> Html ()
 apiDocsSubPage shapesWithFieldsMap = do
   div_ [class_ "space-y-8", id_ "subpage"] $ do
     div_ [class_ "flex w-full justify-between mt-2"] $ do
-      div_ [class_ "relative", style_ "width:220px"] $ do
-        button_
-          [ onclick_ "toggleShapesDropdown(event)"
-          , id_ "toggle_shapes_btn"
-          , data_ "current" "1"
-          , data_ "total" (show $ length shapesWithFieldsMap)
-          , class_ "w-full flex gap-2 text-gray-600 justify_between items-center cursor-pointer px-2 py-1 border rounded focus:ring-2 focus:ring-blue-200 active:ring-2 active:ring-blue-200"
-          ]
-          $ do
-            let fstH = viaNonEmpty head shapesWithFieldsMap
-            let (st, hs) = case fstH of
-                  Just s -> (s.status, s.hash)
-                  Nothing -> (0, "No shapes")
-            let prm = "px-2 py-1 rounded text-white text-sm "
-            let statusCls = if st < 400 then prm <> "bg-green-500" else prm <> "bg-red-500"
-            span_ [class_ statusCls] $ show st
-            span_ [class_ "ml-1 text-sm text-gray-600"] $ toHtml hs
-            img_ [src_ "/assets/svgs/select_chevron.svg", style_ "height:15px; width:15px"]
-        div_ [id_ "shapes_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] $ do
-          forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap) $ \(index, s) -> do
-            let prm = "px-2 py-1 rounded text-white text-sm "
-            let statusCls = if s.status < 400 then prm <> "bg-green-500" else prm <> "bg-red-500"
-            let sh = if index == 1 then "status_codes show_fields" else "status_codes"
-            let prm = "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"
-            button_ [class_ (prm <> sh), id_ ("status_" <> show index), onclick_ "selectShape(event)", data_ "pos" (show index), data_ "status" (show s.status), data_ "hash" s.hash] $ do
-              span_ [class_ statusCls] $ show s.status
-              span_ [class_ "ml-2 text-sm text-gray-600"] $ toHtml s.hash
-      -- swaggers & mapM_ \sw -> do
-      --   button_ [onclick_ "swaggerChanged(event)", class_ "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"] $ toHtml swaggerID
+      div_ [class_ "flex items-center gap-2"] $ do
+        span_ [class_ "font-bold text-gray-700"] "Shapes:"
+        div_ [class_ "relative", style_ "width:220px"] $ do
+          button_
+            [ onclick_ "toggleShapesDropdown(event)"
+            , id_ "toggle_shapes_btn"
+            , data_ "current" "1"
+            , data_ "total" (show $ length shapesWithFieldsMap)
+            , class_ "w-full flex gap-2 text-gray-600 justify_between items-center cursor-pointer px-2 py-1 border rounded focus:ring-2 focus:ring-blue-200 active:ring-2 active:ring-blue-200"
+            ]
+            $ do
+              let fstH = viaNonEmpty head shapesWithFieldsMap
+              let (st, hs) = case fstH of
+                    Just s -> (s.status, s.hash)
+                    Nothing -> (0, "No shapes")
+              let prm = "px-2 py-1 rounded text-white text-sm "
+              let statusCls = if st < 400 then prm <> "bg-green-500" else prm <> "bg-red-500"
+              span_ [class_ statusCls] $ show st
+              span_ [class_ "ml-1 text-sm text-gray-600"] $ toHtml hs
+              img_ [src_ "/assets/svgs/select_chevron.svg", style_ "height:15px; width:15px"]
+          div_ [id_ "shapes_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] $ do
+            forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap) $ \(index, s) -> do
+              let prm = "px-2 py-1 rounded text-white text-sm "
+              let statusCls = if s.status < 400 then prm <> "bg-green-500" else prm <> "bg-red-500"
+              let sh = if index == 1 then "status_codes show_fields" else "status_codes"
+              let prm = "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"
+              button_ [class_ (prm <> sh), id_ ("status_" <> show index), onclick_ "selectShape(event)", data_ "pos" (show index), data_ "status" (show s.status), data_ "hash" s.hash] $ do
+                span_ [class_ statusCls] $ show s.status
+                span_ [class_ "ml-2 text-sm text-gray-600"] $ toHtml s.hash
 
       div_ [class_ "flex items-center"] $ do
         let (prv, next) = ("slideReqRes('prev')", "slideReqRes('next')")
