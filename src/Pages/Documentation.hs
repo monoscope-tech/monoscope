@@ -409,7 +409,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
             document.getElementById('swaggerModal').style.display = 'flex'; 
             const val = document.querySelector('#swaggerData').value
             let json = JSON.parse(val)
-            const yamlData = jsyaml.dump(json)
+            const yamlData = jsyaml.dump(json,{indent:4})
             const modifiedValue = window.editor.getValue()
             monacoEditor.setTheme ('vs')
             if(!window.diffEditor) {
@@ -637,7 +637,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
        window.monacoEditor = monaco.editor
        const val = document.querySelector('#swaggerData').value
        let json = JSON.parse(val)
-       const yamlData = jsyaml.dump(json)
+       const yamlData = jsyaml.dump(json,{indent:4})
 		   window.editor = monaco.editor.create(document.getElementById('swaggerEditor'), {
             value: yamlData,
 		  			language:'yaml',
