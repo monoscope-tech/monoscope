@@ -259,13 +259,13 @@ apiDocsSubPage shapesWithFieldsMap = do
     div_ [class_ "flex w-full justify-between mt-2"] $ do
       div_ [class_ "flex items-center gap-2"] $ do
         span_ [class_ "font-bold text-gray-700"] "Shapes:"
-        div_ [class_ "relative", style_ "width:220px"] $ do
+        div_ [class_ "relative flex items-center border rounded focus:ring-2 focus:ring-blue-200 active:ring-2 active:ring-blue-200", style_ "width:220px"] $ do
           button_
-            [ onclick_ "toggleShapesDropdown(event)"
+            [ [__| on click toggle .hidden on #shapes_container |]
             , id_ "toggle_shapes_btn"
             , data_ "current" "1"
             , data_ "total" (show $ length shapesWithFieldsMap)
-            , class_ "w-full flex gap-2 text-gray-600 justify_between items-center cursor-pointer px-2 py-1 border rounded focus:ring-2 focus:ring-blue-200 active:ring-2 active:ring-blue-200"
+            , class_ "w-full flex text-gray-600 justify_between items-center cursor-pointer px-2 py-1"
             ]
             $ do
               let fstH = viaNonEmpty head shapesWithFieldsMap
@@ -276,150 +276,82 @@ apiDocsSubPage shapesWithFieldsMap = do
               let statusCls = if st < 400 then prm <> "bg-green-500" else prm <> "bg-red-500"
               span_ [class_ statusCls] $ show st
               span_ [class_ "ml-1 text-sm text-gray-600"] $ toHtml hs
-              img_ [src_ "/assets/svgs/select_chevron.svg", style_ "height:15px; width:15px"]
+          img_ [src_ "/assets/svgs/select_chevron.svg", style_ "height:15px; width:15px"]
           div_ [id_ "shapes_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] $ do
             forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap) $ \(index, s) -> do
               let prm = "px-2 py-1 rounded text-white text-sm "
               let statusCls = if s.status < 400 then prm <> "bg-green-500" else prm <> "bg-red-500"
-              let sh = if index == 1 then "status_codes show_fields" else "status_codes"
               let prm = "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"
-              button_ [class_ (prm <> sh), id_ ("status_" <> show index), onclick_ "selectShape(event)", data_ "pos" (show index), data_ "status" (show s.status), data_ "hash" s.hash] $ do
-                span_ [class_ statusCls] $ show s.status
-                span_ [class_ "ml-2 text-sm text-gray-600"] $ toHtml s.hash
+              button_
+                [ class_ prm
+                , id_ ("status_" <> show index)
+                , [__|on click selectShape((me),(my @data-pos), (my @data-status), (my @data-hash)) |]
+                , data_ "pos" (show index)
+                , data_ "status" (show s.status)
+                , data_ "hash" s.hash
+                ]
+                $ do
+                  span_ [class_ statusCls] $ show s.status
+                  span_ [class_ "ml-2 text-sm text-gray-600"] $ toHtml s.hash
 
       div_ [class_ "flex items-center"] $ do
-        let (prv, next) = ("slideReqRes('prev')", "slideReqRes('next')")
-        img_ [src_ "/assets/svgs/leftarrow.svg", class_ " m-2 cursor-pointer", onclick_ prv]
+        img_
+          [ src_ "/assets/svgs/leftarrow.svg"
+          , class_ " m-2 cursor-pointer"
+          , [__|on click slideReqRes('prev') |]
+          ]
         let l = "1/" <> show (length shapesWithFieldsMap)
         let id = "current_indicator"
         span_ [src_ " mx-4", id_ id] l
-        img_ [src_ "/assets/svgs/rightarrow.svg", class_ "m-2 cursor-pointer", onclick_ next]
+        img_
+          [ src_ "/assets/svgs/rightarrow.svg"
+          , class_ "m-2 cursor-pointer"
+          , [__|on click slideReqRes('next') |]
+          ]
     reqResSection "Request" True shapesWithFieldsMap
     reqResSection "Response" False shapesWithFieldsMap
   script_
+    [type_ "text/hyperscript"]
     [text| 
-
-          function toggleShapesDropdown(event) {
-            event.stopPropagation()
-            const container = document.querySelector('#shapes_container')
-            if(container) {
-              if(container.style.display === 'block') {
-                  container.style.display = 'none'
-                }else {
-                 container.style.display = 'block'
-                }
-              }
-          }
-
-
-          function selectShape(event) {
-            const status = event.currentTarget.getAttribute("data-status")
-            const hash = event.currentTarget.getAttribute("data-hash")
-            const position = event.currentTarget.getAttribute("data-pos")
-            const mainButton = document.getElementById('toggle_shapes_btn'); 
-            const current = mainButton.getAttribute("data-current")
-            const total = mainButton.getAttribute("data-total")
-            const ind = document.querySelector("#current_indicator")
-
-            if(position === current) return
-            const spanElements = mainButton.querySelectorAll('span');
-            spanElements.forEach((span) => {
-              span.remove();
-            });
-            mainButton.setAttribute("data-current", position)
-            let cls = (status < "400") ?  "px-2 py-1 rounded text-white text-sm bg-green-500" : "px-2 py-1 rounded text-white text-sm  bg-red-500"
-            const statusInd = elt("span", {class: cls}, status)
-            const hashT = elt("span", {class: "ml-1 text-sm text-gray-600"}, hash)
-            mainButton.prepend(hashT)
-            mainButton.prepend(statusInd)
-            let curr = position
-            let fields = Array.from(document.querySelectorAll(".Response_fields"))
-            let t = document.querySelector("#Response_"+ curr)
-            let fieldsReq = Array.from(document.querySelectorAll(".Request_fields"))
-            let tReq = document.querySelector("#Request_" + curr)
-            if (t) {
-                fields.forEach(field => field.classList.remove("show_fields"))
-                t.classList.add("show_fields")
-            }
-            if(tReq) {
-                fieldsReq.forEach(field => field.classList.remove("show_fields"))
-                tReq.classList.add("show_fields")
-              }
-            ind.innerText = curr + "/" + total
-           
-          }
-
-          function slideReqRes(action) {
-            let ind = document.querySelector("#current_indicator")
-            const mainButton = document.getElementById ('toggle_shapes_btn')
-
-            let curr = 1
-            let total = 1
-            if(ind) {
-                const tx = ind.innerText.split("/")
-                if(tx.length > 1) {
-                   curr = Number(tx[0]) || 1
-                   total = Number(tx[1]) || curr
-                  }
-              }
-            if( curr === total && action === "next") return
-            if(curr === 1 && action === "prev") return 
-            curr = action === "prev" ? curr - 1 : curr + 1;
-            mainButton.setAttribute ("data-current", curr)
-            const spanElements = mainButton.querySelectorAll('span');
-            spanElements.forEach((span) => {
-              span.remove();
-            });
-
-            let fields = Array.from(document.querySelectorAll(".Response_fields"))
-            let t = document.querySelector("#Response_"+ curr)
-            let fieldsReq = Array.from(document.querySelectorAll(".Request_fields"))
-            let tReq = document.querySelector("#Request_" + curr)
-            let stC = document.querySelector("#status_" + curr)
-            const status = stC.getAttribute("data-status")
-            const hash = stC.getAttribute("data-hash")
-           
-            if (t) {
-                fields.forEach(field => field.classList.remove("show_fields"))
-                t.classList.add("show_fields")
-            }
-
-            if(tReq) {
-                fieldsReq.forEach(field => field.classList.remove("show_fields"))
-                tReq.classList.add("show_fields")
-              }
-               
-            let cls = (status < "400") ?  "px-2 py-1 rounded text-white text-sm bg-green-500" : "px-2 py-1 rounded text-white text-sm  bg-red-500"
-            const statusInd = elt("span", {class: cls}, status)
-            const hashT = elt("span", {class: "ml-1 text-sm text-gray-600"}, hash)
-            mainButton.prepend(hashT)
-            mainButton.prepend(statusInd)
-
-            ind.innerText = curr + "/" + total
-          }
-
-          function elt(type, props, ...children) {
-              let dom = document.createElement(type);
-              if (props) {
-                  for (let prop in props) {
-                      if (prop === 'class') {
-                          dom.className = props[prop];
-                      } else if (prop.startsWith('on') && typeof props[prop] === 'function') {
-                          const eventName = prop.substring(2).toLowerCase();
-                          dom.addEventListener(eventName, props[prop]);
-                      } else {
-                          dom.setAttribute(prop, props[prop]);
-                      }
-                  }
-              }
-              for (let child of children) {
-                  if (typeof child != "string") dom.appendChild(child);
-                  else dom.appendChild(document.createTextNode(child));
-              }
-              return dom;
-          }
-
-     |]
+        def selectShape(elem, position, status, hash)
+          set mainButton to #toggle_shapes_btn
+          set current to (mainButton @data-current)
+          set total to (mainButton @data-total)
+          set ind to #current_indicator
+          if position is current
+            exit
+          end
+          remove (<span/> in mainButton)
+          set (mainButton @data-current) to position 
+          append (<span /> in elem) as HTML to mainButton
+          toggle .hidden on .Response_fields
+          toggle .hidden on .Request_fields
+          put (position + "/" + total) into ind
+        end
+      
+        def slideReqRes(action)
+          set mainButton to #toggle_shapes_btn
+          set current to (mainButton @data-current)
+          set total to (mainButton @data-total)
+          set ind to #current_indicator
+          if (current is total and action is "next") or (current is "1" and action is "prev")
+            exit 
+          end
+          set position to current 
+          if action == "next" 
+            then set position to ((current as Int) + 1) 
+            else set position to ((current as Int) - 1)
+          end
+          set (mainButton @data-current) to position 
+          call document.querySelector("#status_" + position)
+          set elem to it
+          remove (<span/> in mainButton)
+          append (<span /> in elem) as HTML to mainButton
+          toggle .hidden on .Response_fields
+          toggle .hidden on .Request_fields
+          put (position + "/" + total) into ind
+        end
+        |]
 
 apiOverviewSubPage :: ParamInput -> UTCTime -> EndpointRequestStats -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> Vector Anomalies.AnomalyVM -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 apiOverviewSubPage paramInput currTime endpoint fieldsM reqLatenciesRolledByStepsJ anomalies dateRange = do
@@ -548,7 +480,7 @@ reqResSection title isRequest shapesWithFieldsMap =
 
     div_ [class_ "bg-white border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"] $
       forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap) $ \(index, s) -> do
-        let sh = if index == 1 then title <> "_fields show_fields" else title <> "_fields"
+        let sh = if index == 1 then title <> "_fields" else title <> "_fields hidden"
         div_ [class_ sh, id_ $ title <> "_" <> show index] $ do
           if isRequest
             then do

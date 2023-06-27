@@ -216,7 +216,6 @@ documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id, endpoint
         Nothing -> error "Failed to parse JSON: "
   res <- liftIO $ withPool pool $ do
     currentTime <- liftIO getZonedTime
-    print diffsInfo
     let newEndpoints = V.toList $ V.map (getEndpointFromOpEndpoint pid) endpoints
     let shapes = V.toList (V.map (getShapeFromOpShape pid currentTime) (V.filter (\x -> x.opShapeChanged) diffsInfo))
     let nestedOps = V.map (\x -> x.opOperations) diffsInfo
