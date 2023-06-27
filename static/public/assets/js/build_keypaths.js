@@ -5,8 +5,8 @@ function parsePaths() {
         const modifiedValue = diffEditor.getModel().modified.getValue();
         const originalObject = jsyaml.load(originalValue);
         const modifiedObject = jsyaml.load(modifiedValue)
-        const catOriginal = groupByFieldCategories(originalObject.paths)
-        const catModified = groupByFieldCategories(modifiedObject.paths)
+        const catOriginal = groupByFieldCategories(originalObject)
+        const catModified = groupByFieldCategories(modifiedObject)
         const idTarget = document.querySelector("#save_swagger_input_id")
         const swagger_id = idTarget ? idTarget.value : ""
 
@@ -140,8 +140,8 @@ function parsePaths() {
                 })
             }
         }
-
-        saveData(swagger_id, modifiedObject, shapes, endpoints)
+        console.log(shapes)
+        //saveData(swagger_id, modifiedObject, shapes, endpoints)
     }
 }
 
@@ -247,14 +247,16 @@ function keyPathModified(v1, v2) {
     return false
 }
 
-function groupByFieldCategories(paths) {
+function groupByFieldCategories(swagger) {
+    const paths = swagger.paths
+    const components = swagger.components
     let hash = {}
     for (let [key, value] of Object.entries(paths)) {
         for (let [method, v] of Object.entries(value)) {
             let ob = { url: transFormURL(key), method }
-            const headersAndParams = parseHeadersAndParams(v.headers, v.parameters)
-            ob.requestBodyKeyPaths = parseRequestBody(v.requestBody)
-            ob.response = parseResponses(v.responses)
+            const headersAndParams = parseHeadersAndParams(v.headers, v.parameters, components)
+            ob.requestBodyKeyPaths = parseRequestBody(v.requestBody, components)
+            ob.response = parseResponses(v.responses, components)
             ob = { ...ob, ...headersAndParams }
             hash[`${key}_${method}`] = ob
         }
@@ -262,16 +264,23 @@ function groupByFieldCategories(paths) {
     return hash
 }
 
-function parseResponses(responses) {
+function parseResponses(responses, components) {
     if (!responses) {
         return undefined
     }
     let ob = {}
     for (const [key, value] of Object.entries(responses)) {
+        if (!value.content) continue
         for (const [contentType, v] of Object.entries(value.content)) {
             let headers = value.headers ? value.headers.content ? value.headers.content.schema : {} : {}
+            let schema = v.schema
+            if (v.schema["$ref"]) {
+                schema = getComponent(v.schema["$ref"], components)
+            } else if (v.schema.type === "array" && v.schema.items["$ref"]) {
+                schema = { items: getComponent(v.schema.items["$ref"], components), type: "array", description: v.schema.description }
+            }
             ob[key] = {
-                responseBodyKeyPaths: getKeyPaths(v.schema),
+                responseBodyKeyPaths: getKeyPaths(schema),
                 responseHeadersKeyPaths: getKeyPaths(headers)
             }
             break;
@@ -280,18 +289,44 @@ function parseResponses(responses) {
     return ob
 }
 
-function parseRequestBody(body) {
-    if (!body || !body.content) {
+function parseRequestBody(body, components) {
+    if (!body) {
         return []
     }
-    const content = body.content
-    for (let [_, value] of Object.entries(content)) {
-        if (value && value.schema) {
-            return getKeyPaths(value.schema)
-        } else {
+    if (body["$ref"]) {
+        const ref = body["$ref"]
+        const refValue = getComponent(ref, components)
+        if (!refValue) {
             return []
+        } else {
+            return getKeyPaths(refValue)
         }
     }
+    if (body.content) {
+        const content = body.content
+        for (let [_, value] of Object.entries(content)) {
+            if (value && value.schema) {
+                return getKeyPaths(value.schema)
+            } else {
+                return []
+            }
+        }
+    }
+    return []
+}
+
+function getComponent(ref, components) {
+    const path = ref.split("/").slice(2)
+    let value = components
+    for (const segment of path) {
+        if (value && value.hasOwnProperty(segment)) {
+            value = value[segment];
+        } else {
+            value = undefined;
+            break;
+        }
+    }
+    return value;
 }
 
 function parseHeadersAndParams(headers, parameters) {
@@ -319,6 +354,7 @@ function parseHeadersAndParams(headers, parameters) {
 }
 
 function getKeyPaths(value) {
+    console.log(value)
     if (!value) {
         return []
     }
@@ -327,6 +363,7 @@ function getKeyPaths(value) {
 
 function getKeyPathsHelper(value, path) {
     if (value.type === "object") {
+        if (!value.properties) return []
         let paths = []
         for (const [key, val] of Object.entries(value.properties)) {
             paths.push(...getKeyPathsHelper(val, `${path}.${key}`))
