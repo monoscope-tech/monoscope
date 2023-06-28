@@ -91,7 +91,7 @@ insertFormats formats = do
   let q =
         [sql| 
       insert into apis.formats (project_id, field_hash, field_type, field_format, examples, hash) VALUES (?,?,?,?,?,?)
-        ON CONFLICT (project_id, field_hash, field_format)
+        ON CONFLICT (hash)
         DO
           UPDATE SET 
             field_type= EXCLUDED.field_type, examples = ARRAY(SELECT DISTINCT e from unnest(apis.formats.examples || excluded.examples) as e order by e limit 20); 

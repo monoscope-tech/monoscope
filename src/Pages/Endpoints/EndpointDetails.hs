@@ -25,8 +25,11 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields qualified as Fields
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.RequestDumps qualified as RequestDumps
+import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
+
+import Models.Apis.Fields (FieldCategoryEnum)
 import NeatInterpolation
 import Optics.Core ((^.))
 import Pages.Anomalies.AnomalyList qualified as AnomaliesList
@@ -55,6 +58,18 @@ data ParamInput = ParamInput
   , currentPickerTxt :: Text
   , subPage :: Text
   }
+data ShapeWidthFields = ShapeWidthFields
+  { status :: Int
+  , hash :: Text
+  , fieldsMap :: Map FieldCategoryEnum [Fields.Field]
+  }
+  deriving (Show)
+
+getShapeFields :: Shapes.Shape -> Vector Fields.Field -> ShapeWidthFields
+getShapeFields shape fields = ShapeWidthFields{status = shape.statusCode, hash = shape.hash, fieldsMap = fieldM}
+ where
+  matchedFields = Vector.filter (\field -> field.hash `Vector.elem` shape.fieldHashes) fields
+  fieldM = Fields.groupFieldsByCategory matchedFields
 
 subPageMenu :: [(Text, Text)]
 subPageMenu =
@@ -147,20 +162,23 @@ endpointDetailsH sess pid eid fromDStr toDStr sinceStr' subPageM = do
           let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
           (f, t)
 
-  (endpoint, enpStats, project, fieldsMap, reqLatenciesRolledByStepsLabeled, anomalies) <- liftIO $
+  (endpoint, enpStats, project, shapesWithFieldsMap, fieldsMap, reqLatenciesRolledByStepsLabeled, anomalies) <- liftIO $
     withPool pool $ do
       -- Should swap names betw enp and endpoint endpoint could be endpointStats
       endpoint <- Unsafe.fromJust <$> Endpoints.endpointById eid
       enpStats <- fromMaybe (def :: EndpointRequestStats) <$> Endpoints.endpointRequestStatsByEndpoint eid
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      fieldsMap <- Fields.groupFieldsByCategory <$> Fields.selectFields (endpoint.hash)
-
+      shapes <- Shapes.shapesByEndpointHash endpoint.hash
+      fields <- Fields.selectFields (endpoint.hash)
+      let fieldsMap = Fields.groupFieldsByCategory fields
+      let shapesWithFieldsMap = Vector.map (`getShapeFields` fields) shapes
+      print shapesWithFieldsMap
       let maxV = round (enpStats.max) :: Int
       let steps = (maxV `quot` 100) :: Int
       let steps' = if steps == 0 then 100 else steps
       reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledBySteps maxV steps' pid (endpoint.urlPath) (endpoint.method)
       anomalies <- Anomalies.selectAnomalies pid (Just eid) (Just False) (Just False) Nothing
-      pure (endpoint, enpStats, project, fieldsMap, Vector.toList reqLatenciesRolledBySteps, anomalies)
+      pure (endpoint, enpStats, project, Vector.toList shapesWithFieldsMap, fieldsMap, Vector.toList reqLatenciesRolledBySteps, anomalies)
 
   let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
   let bwconf =
@@ -177,10 +195,10 @@ endpointDetailsH sess pid eid fromDStr toDStr sinceStr' subPageM = do
         Just a -> a
         Nothing -> maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD
   let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt, subPage = subPage}
-  pure $ bodyWrapper bwconf $ endpointDetails paramInput currTime endpoint enpStats fieldsMap reqLatenciesRolledByStepsJ anomalies (fromD, toD)
+  pure $ bodyWrapper bwconf $ endpointDetails paramInput currTime endpoint enpStats shapesWithFieldsMap fieldsMap reqLatenciesRolledByStepsJ anomalies (fromD, toD)
 
-endpointDetails :: ParamInput -> UTCTime -> Endpoints.Endpoint -> EndpointRequestStats -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> Vector Anomalies.AnomalyVM -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
-endpointDetails paramInput currTime endpoint endpointStats fieldsM reqLatenciesRolledByStepsJ anomalies dateRange = do
+endpointDetails :: ParamInput -> UTCTime -> Endpoints.Endpoint -> EndpointRequestStats -> [ShapeWidthFields] -> Map FieldCategoryEnum [Fields.Field] -> Text -> Vector Anomalies.AnomalyVM -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
+endpointDetails paramInput currTime endpoint endpointStats shapesWithFieldsMap fieldsM reqLatenciesRolledByStepsJ anomalies dateRange = do
   let currentURLSubPage = deleteParam "subpage" paramInput.currentURL
   div_ [class_ "w-full h-full overflow-hidden"] $ do
     div_ [class_ "w-[75%] inline-block p-5 h-full overflow-y-scroll"] $ do
@@ -211,7 +229,7 @@ endpointDetails paramInput currTime endpoint endpointStats fieldsM reqLatenciesR
               div_ [class_ "bg-blue-900 p-1 rounded-lg ml-2"] $ do
                 mIcon_ "whitedown" "text-white h-2 w-2 m-1"
       if paramInput.subPage == "api_docs"
-        then apiDocsSubPage fieldsM
+        then apiDocsSubPage shapesWithFieldsMap
         else apiOverviewSubPage paramInput currTime endpointStats fieldsM reqLatenciesRolledByStepsJ anomalies dateRange
 
     aside_
@@ -236,11 +254,96 @@ endpointDetails paramInput currTime endpoint endpointStats fieldsM reqLatenciesR
         end
         |]
 
-apiDocsSubPage :: Map Fields.FieldCategoryEnum [Fields.Field] -> Html ()
-apiDocsSubPage fieldsM = do
-  div_ [class_ "space-y-16 pb-20", id_ "subpage"] $ do
-    reqResSection "Request" True fieldsM
-    reqResSection "Response" False fieldsM
+apiDocsSubPage :: [ShapeWidthFields] -> Html ()
+apiDocsSubPage shapesWithFieldsMap = do
+  div_ [class_ "space-y-8", id_ "subpage"] $ do
+    div_ [class_ "flex w-full justify-between mt-2"] $ do
+      div_ [class_ "flex items-center gap-2"] $ do
+        span_ [class_ "font-bold text-gray-700"] "Shapes:"
+        div_ [class_ "relative flex items-center border rounded focus:ring-2 focus:ring-blue-200 active:ring-2 active:ring-blue-200", style_ "width:220px"] $ do
+          button_
+            [ [__| on click toggle .hidden on #shapes_container |]
+            , id_ "toggle_shapes_btn"
+            , data_ "current" "1"
+            , data_ "total" (show $ length shapesWithFieldsMap)
+            , class_ "w-full flex text-gray-600 justify_between items-center cursor-pointer px-2 py-1"
+            ]
+            $ do
+              let fstH = viaNonEmpty head shapesWithFieldsMap
+              let (st, hs) = case fstH of
+                    Just s -> (s.status, s.hash)
+                    Nothing -> (0, "No shapes")
+              let prm = "px-2 py-1 rounded text-white text-sm "
+              let statusCls = if st < 400 then prm <> "bg-green-500" else prm <> "bg-red-500"
+              span_ [class_ statusCls] $ show st
+              span_ [class_ "ml-1 text-sm text-gray-600"] $ toHtml hs
+          img_ [src_ "/assets/svgs/select_chevron.svg", style_ "height:15px; width:15px"]
+          div_ [id_ "shapes_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] $ do
+            forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap) $ \(index, s) -> do
+              let prm = "px-2 py-1 rounded text-white text-sm "
+              let statusCls = if s.status < 400 then prm <> "bg-green-500" else prm <> "bg-red-500"
+              let prm = "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"
+              button_
+                [ class_ prm
+                , id_ ("status_" <> show index)
+                , [__|on click selectShape((me),(my @data-pos)) |]
+                , data_ "pos" (show index)
+                , data_ "status" (show s.status)
+                , data_ "hash" s.hash
+                ]
+                $ do
+                  span_ [class_ statusCls] $ show s.status
+                  span_ [class_ "ml-2 text-sm text-gray-600"] $ toHtml s.hash
+
+      div_ [class_ "flex items-center"] $ do
+        img_
+          [ src_ "/assets/svgs/leftarrow.svg"
+          , class_ " m-2 cursor-pointer"
+          , [__|on click slideReqRes('prev') |]
+          ]
+        let l = "1/" <> show (length shapesWithFieldsMap)
+        let id = "current_indicator"
+        span_ [src_ " mx-4", id_ id] l
+        img_
+          [ src_ "/assets/svgs/rightarrow.svg"
+          , class_ "m-2 cursor-pointer"
+          , [__|on click slideReqRes('next') |]
+          ]
+    reqResSection "Request" True shapesWithFieldsMap
+    reqResSection "Response" False shapesWithFieldsMap
+  script_
+    [type_ "text/hyperscript"]
+    [text| 
+        def selectShape(elem, position)
+          if position is (#toggle_shapes_btn @data-current)
+            exit
+          end
+          remove (<span/> in #toggle_shapes_btn)
+          set (#toggle_shapes_btn @data-current) to position 
+          append (<span /> in elem) as HTML to #toggle_shapes_btn
+          toggle .hidden on .Response_fields
+          toggle .hidden on .Request_fields
+          put (position + "/" + (#toggle_shapes_btn @data-total)) into #current_indicator
+        end
+      
+        def slideReqRes(action)
+          set current to (#toggle_shapes_btn @data-current)
+          if (current is (#toggle_shapes_btn @data-total) and action is "next") or (current is "1" and action is "prev")
+            exit 
+          end
+          if action == "next" 
+            then set position to ((current as Int) + 1) 
+            else set position to ((current as Int) - 1)
+          end
+          set (#toggle_shapes_btn @data-current) to position 
+          call document.querySelector("#status_" + position)
+          remove (<span/> in #toggle_shapes_btn)
+          append (<span /> in it) as HTML to #toggle_shapes_btn
+          toggle .hidden on .Response_fields
+          toggle .hidden on .Request_fields
+          put (position + "/" + (#toggle_shapes_btn @data-total)) into #current_indicator
+        end
+        |]
 
 apiOverviewSubPage :: ParamInput -> UTCTime -> EndpointRequestStats -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> Vector Anomalies.AnomalyVM -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 apiOverviewSubPage paramInput currTime endpoint fieldsM reqLatenciesRolledByStepsJ anomalies dateRange = do
@@ -355,8 +458,8 @@ fmtDuration d
 -- NOTE: We could enable the fields cycling functionality using the groups of response list functionality on the endpoint.
 -- So we go through the list and in each request or response view, only show the fields that appear in the field list.
 -- We can enable a view to show all the request/response options.
-reqResSection :: Text -> Bool -> Map Fields.FieldCategoryEnum [Fields.Field] -> Html ()
-reqResSection title isRequest fieldsM =
+reqResSection :: Text -> Bool -> [ShapeWidthFields] -> Html ()
+reqResSection title isRequest shapesWithFieldsMap =
   section_ [class_ "space-y-3"] $ do
     div_ [class_ "flex justify-between mt-5"] $ do
       div_ [class_ "flex flex-row"] $ do
@@ -366,20 +469,20 @@ reqResSection title isRequest fieldsM =
             , class_ "h-4 mr-3 mt-1 w-4"
             ]
         span_ [class_ "text-lg text-slate-800"] $ toHtml title
-      div_ [class_ "flex flex-row mt-2"] $ do
-        img_ [src_ "/assets/svgs/leftarrow.svg", class_ " m-2"]
-        span_ [src_ " mx-4"] "1/1"
-        img_ [src_ "/assets/svgs/rightarrow.svg", class_ " m-2"]
-    div_ [class_ "bg-white border border-gray-100 rounded-xl py-10 px-5 space-y-6 reqResSubSection"] $
-      if isRequest
-        then do
-          subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam fieldsM)
-          subSubSection (title <> " Query Params") (Map.lookup Fields.FCQueryParam fieldsM)
-          subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader fieldsM)
-          subSubSection (title <> " Body") (Map.lookup Fields.FCRequestBody fieldsM)
-        else do
-          subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader fieldsM)
-          subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody fieldsM)
+
+    div_ [class_ "bg-white border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"] $
+      forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap) $ \(index, s) -> do
+        let sh = if index == 1 then title <> "_fields" else title <> "_fields hidden"
+        div_ [class_ sh, id_ $ title <> "_" <> show index] $ do
+          if isRequest
+            then do
+              subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam s.fieldsMap)
+              subSubSection (title <> " Query Params") (Map.lookup Fields.FCQueryParam s.fieldsMap)
+              subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader s.fieldsMap)
+              subSubSection (title <> " Body") (Map.lookup Fields.FCRequestBody s.fieldsMap)
+            else do
+              subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader s.fieldsMap)
+              subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody s.fieldsMap)
 
 -- | subSubSection ..
 subSubSection :: Text -> Maybe [Fields.Field] -> Html ()
@@ -387,7 +490,7 @@ subSubSection title fieldsM =
   case fieldsM of
     Nothing -> ""
     Just fields -> do
-      div_ [class_ "space-y-1"] $ do
+      div_ [class_ "space-y-1 mb-4"] $ do
         div_ [class_ "flex flex-row items-center"] $ do
           img_
             [ src_ "/assets/svgs/cheveron-down.svg"

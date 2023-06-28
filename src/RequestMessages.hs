@@ -41,11 +41,11 @@ import Models.Apis.Fields.Types qualified as Fields (
   fieldCategoryEnumToText,
   fieldTypeToText,
  )
-import NeatInterpolation
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
+import NeatInterpolation
 import Numeric (showHex)
 import Optics.Core
 import Optics.TH
@@ -105,7 +105,6 @@ makeFieldLabelsNoPrefix ''RequestMessage
 --
 -- >>> redactJSON ["menu.[].id", "menu.[].names.[]"] [aesonQQ| {"menu":[{"id":"i1", "names":["John","okon"]}, {"id":"i2"}]} |]
 -- Object (fromList [("menu",Array [Object (fromList [("id",String "[REDACTED]"),("names",Array [String "[REDACTED]",String "[REDACTED]"])]),Object (fromList [("id",String "[REDACTED]")])])])
---
 redactJSON :: [Text] -> Value -> Value
 redactJSON paths' = redactJSON' (stripPrefixDot paths')
  where
@@ -196,8 +195,8 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
         | otherwise = do
             -- A shape is a deterministic representation of a request-response combination for a given endpoint.
             -- We usually expect multiple shapes per endpoint. Eg a shape for a success request-response and another for an error response.
-            -- Shapes are dependent on the endpoint, statusCode and the unique fields in that shape.  
-            let shape = Shapes.Shape (Shapes.ShapeId dumpID) (rM.timestamp) now projectId endpointHash queryParamsKP requestHeadersKP responseHeadersKP requestBodyKP responseBodyKP fieldHashes shapeHash rM.statusCode
+            -- Shapes are dependent on the endpoint, statusCode and the unique fields in that shape.
+            let shape = Shapes.Shape (Shapes.ShapeId dumpID) (rM.timestamp) now Nothing projectId endpointHash queryParamsKP requestHeadersKP responseHeadersKP requestBodyKP responseBodyKP fieldHashes shapeHash rM.statusCode
             Shapes.insertShapeQueryAndParam shape
 
   -- FIXME: This 1000 is added on the php sdk in a previous version and has been remove. This workaround code should be removed ASAP

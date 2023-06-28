@@ -33,6 +33,7 @@ import Relude
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
 
+import Data.List (nubBy)
 import Models.Apis.Fields.Query qualified as Fields
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.Shapes qualified as Shapes
@@ -135,6 +136,7 @@ getShapeFromOpShape pid curTime opShape =
     , projectId = pid
     , createdAt = curTime
     , updatedAt = curTime
+    , approvedOn = Just curTime
     , endpointHash = endpointHash
     , queryParamsKeypaths = qpKP
     , requestBodyKeypaths = rqBKP
@@ -214,16 +216,13 @@ documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id, endpoint
         Nothing -> error "Failed to parse JSON: "
   res <- liftIO $ withPool pool $ do
     currentTime <- liftIO getZonedTime
-
     let newEndpoints = V.toList $ V.map (getEndpointFromOpEndpoint pid) endpoints
     let shapes = V.toList (V.map (getShapeFromOpShape pid currentTime) (V.filter (\x -> x.opShapeChanged) diffsInfo))
-
     let nestedOps = V.map (\x -> x.opOperations) diffsInfo
     let ops = flattenVector (V.toList nestedOps)
     let fAndF = V.toList (V.map (getFieldAndFormatFromOpShape pid) ops)
-    let fields = map fst fAndF
-    let formats = map snd fAndF
-
+    let fields = nubBy (\x y -> x.hash == y.hash) (map fst fAndF) -- to prevent ON CONFLICT DO UPDATE command cannot affect row a second time
+    let formats = nubBy (\x y -> x.hash == y.hash) (map snd fAndF) -- to prevent ON CONFLICT DO UPDATE command cannot affect row a second time
     Formats.insertFormats formats
     Fields.insertFields fields
     Shapes.insertShapes shapes
@@ -287,7 +286,7 @@ documentationGetH sess pid swagger_id = do
         ([], Nothing) -> do
           endpoints <- Endpoints.endpointsByProjectId pid
           let endpoint_hashes = V.map (\enp -> enp.hash) endpoints
-          shapes <- Shapes.shapesByEndpointHash pid endpoint_hashes
+          shapes <- Shapes.shapesByEndpointHashes pid endpoint_hashes
           fields <- Fields.fieldsByEndpointHashes pid endpoint_hashes
           let field_hashes = V.map (\field -> field.fHash) fields
           formats <- Formats.formatsByFieldsHashes pid field_hashes
@@ -382,7 +381,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
                 div_ [id_ "endpoint_paths_container", class_ "w-full"] pass
             div_ [onmousedown_ "mouseDown(event)", id_ "endpoints_resizer", class_ "h-full bg-neutral-400", style_ "width: 2px; cursor: col-resize; background-color: rgb(209 213 219)"] pass
           div_ [id_ "editor_container", class_ "flex flex-auto overflow-auto", style_ "width:40%; height:100%"] $ do
-            div_ [class_ "h-full", style_ "width: calc(100% - 2px"] $ do
+            div_ [class_ "h-full", style_ "width: calc(100% - 2px)"] $ do
               div_ [class_ "w-full flex gap-8 justify-end px-2 items-center", style_ "height:40px"] $ do
                 div_ [onclick_ "toggleFontSize(event)", class_ "relative"] $ do
                   button_ [id_ "toggle_font", class_ "font-semibold"] "Aa"
@@ -409,7 +408,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
             document.getElementById('swaggerModal').style.display = 'flex'; 
             const val = document.querySelector('#swaggerData').value
             let json = JSON.parse(val)
-            const yamlData = jsyaml.dump(json)
+            const yamlData = jsyaml.dump(json,{indent:4})
             const modifiedValue = window.editor.getValue()
             monacoEditor.setTheme ('vs')
             if(!window.diffEditor) {
@@ -637,7 +636,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
        window.monacoEditor = monaco.editor
        const val = document.querySelector('#swaggerData').value
        let json = JSON.parse(val)
-       const yamlData = jsyaml.dump(json)
+       const yamlData = jsyaml.dump(json,{indent:4})
 		   window.editor = monaco.editor.create(document.getElementById('swaggerEditor'), {
             value: yamlData,
 		  			language:'yaml',

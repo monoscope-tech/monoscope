@@ -1,22 +1,22 @@
 {-# LANGUAGE TemplateHaskell #-}
 
-module Models.Apis.Shapes (Shape (..), SwShape (..), ShapeId (..), shapeIdText, insertShapeQueryAndParam, insertShapes, shapesByEndpointHash) where
+module Models.Apis.Shapes (Shape (..), SwShape (..), ShapeId (..), shapeIdText, insertShapeQueryAndParam, insertShapes, shapesByEndpointHashes, shapesByEndpointHash) where
 
 import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.Time (ZonedTime, getZonedTime)
 import Data.UUID qualified as UUID
-import Data.Vector qualified as V
 
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), query)
 
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
-import Database.PostgreSQL.Simple (FromRow, Query, ToRow)
+import Database.PostgreSQL.Simple (FromRow, Only (Only), Query, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
+
 import Database.PostgreSQL.Transact (DBT, executeMany)
 import Database.PostgreSQL.Transact qualified as PgT
 
@@ -42,6 +42,7 @@ data Shape = Shape
   { id :: ShapeId
   , createdAt :: ZonedTime
   , updatedAt :: ZonedTime
+  , approvedOn :: Maybe ZonedTime
   , projectId :: Projects.ProjectId
   , endpointHash :: Text
   , queryParamsKeypaths :: Vector Text
@@ -58,15 +59,6 @@ data Shape = Shape
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Shape
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "shapes", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Shape)
   deriving (FromField) via Aeson Shape
-
-data ApprovedOn = ApprovedOn
-  { date :: ZonedTime
-  }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, Default)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ApprovedOn
-  deriving (Entity) via (GenericEntity '[Schema "apis", TableName "shapes", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ApprovedOn)
-  deriving (FromField) via Aeson ApprovedOn
 
 Optics.TH.makeFieldLabelsNoPrefix ''Shape
 
@@ -92,10 +84,18 @@ insertShapeQueryAndParam shape = (q, params)
     , MkDBField $ shape.statusCode
     ]
 
+shapesByEndpointHash :: Text -> PgT.DBT IO (Vector Shape)
+shapesByEndpointHash endpointHash = query Select q (Only endpointHash)
+ where
+  q = [sql| 
+          SELECT id, created_at, updated_at, approved_on, project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, 
+          response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash, status_code
+          FROM apis.shapes WHERE endpoint_hash = ?
+      |]
+
 insertShapes :: [Shape] -> DBT IO Int64
 insertShapes shapes = do
   currTime <- liftIO getZonedTime
-  let app = ApprovedOn{date = currTime}
   let insertQuery =
         [sql|
         INSERT INTO apis.shapes
@@ -104,12 +104,12 @@ insertShapes shapes = do
         ON CONFLICT (hash)
         DO UPDATE SET request_headers_keypaths = EXCLUDED.request_headers_keypaths, approved_on = EXCLUDED.approved_on
       |]
-  let params = map (getShapeParams app) shapes
+  let params = map getShapeParams shapes
   executeMany insertQuery params
 
-getShapeParams :: ApprovedOn -> Shape -> (ZonedTime, Projects.ProjectId, Text, Vector Text, Vector Text, Vector Text, Vector Text, Vector Text, Vector Text, Text, Int)
-getShapeParams app shape =
-  ( app.date
+getShapeParams :: Shape -> (Maybe ZonedTime, Projects.ProjectId, Text, Vector Text, Vector Text, Vector Text, Vector Text, Vector Text, Vector Text, Text, Int)
+getShapeParams shape =
+  ( shape.approvedOn
   , shape.projectId
   , shape.endpointHash
   , shape.queryParamsKeypaths
@@ -139,8 +139,8 @@ data SwShape = SwShape
   deriving (FromField) via Aeson SwShape
   deriving anyclass (AE.ToJSON)
 
-shapesByEndpointHash :: Projects.ProjectId -> Vector Text -> PgT.DBT IO (Vector SwShape)
-shapesByEndpointHash pid hashes = query Select q (pid, hashes)
+shapesByEndpointHashes :: Projects.ProjectId -> Vector Text -> PgT.DBT IO (Vector SwShape)
+shapesByEndpointHashes pid hashes = query Select q (pid, hashes)
  where
   q =
     [sql|

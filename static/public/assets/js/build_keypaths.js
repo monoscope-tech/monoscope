@@ -47,9 +47,11 @@ function parsePaths() {
             operations.push(...info.ops)
 
             // compare response bodies
-            for (const [status, ogVal] of Object.entries(originalVal.response)) {
-                const mdVal = modifiedVal.response[status]
-                if (!mdVal) continue
+            for (const [status, mdVal] of Object.entries(modifiedVal.response)) {
+                let ogVal = originalVal.response[status]
+                if (!ogVal) {
+                    ogVal = { responseBodyKeyPaths: [], responseHeadersKeyPaths: [] }
+                }
                 const responseBodyKeyPaths = mdVal.responseBodyKeyPaths.map(v => {
                     return fieldMap(v, "response_body")
                 })
@@ -57,14 +59,13 @@ function parsePaths() {
                     return fieldMap(v, "response_header")
                 })
 
-                info = getFieldsToOperate(ogVal.responseBodyKeyPaths, mdVal.responseBodyKeyPaths, originalVal.method, originalVal.url, "response_body")
+                info = getFieldsToOperate(ogVal.responseBodyKeyPaths, mdVal.responseBodyKeyPaths, modifiedVal.method, modifiedVal.url, "response_body")
                 shapeChanged = shapeChanged ? shapeChanged : info.updatesShape
                 operations.push(...info.ops)
 
-                info = getFieldsToOperate(ogVal.responseHeadersKeyPaths, mdVal.responseHeadersKeyPaths, originalVal.method, originalVal.url, "response_header")
+                info = getFieldsToOperate(ogVal.responseHeadersKeyPaths, mdVal.responseHeadersKeyPaths, modifiedVal.method, modifiedVal.url, "response_header")
                 shapeChanged = shapeChanged ? shapeChanged : info.updatesShape
                 operations.push(...info.ops)
-
                 shapes.push({
                     opShapeChanged: shapeChanged,
                     opRequestBodyKeyPaths: requestBodyKeyPaths,
@@ -164,7 +165,6 @@ async function saveData(swaggerId, modifiedObject, shapes, endpoints) {
         endpoints,
         diffsInfo: shapes.filter(shape => shape.opShapeChanged || shape.opOperations.length > 0)
     };
-
     try {
         const response = await fetch(url, {
             method: 'POST',
@@ -268,10 +268,11 @@ function parseResponses(responses) {
     }
     let ob = {}
     for (const [key, value] of Object.entries(responses)) {
-        for (const [k, v] of Object.entries(value.content)) {
+        for (const [contentType, v] of Object.entries(value.content)) {
+            let headers = value.headers ? value.headers.content ? value.headers.content.schema : {} : {}
             ob[key] = {
                 responseBodyKeyPaths: getKeyPaths(v.schema),
-                responseHeadersKeyPaths: getKeyPaths(value.headers.content.schema)
+                responseHeadersKeyPaths: getKeyPaths(headers)
             }
             break;
         }
@@ -304,7 +305,7 @@ function parseHeadersAndParams(headers, parameters) {
     parameters.forEach(param => {
         const v = param.schema
         v.description = param.description
-        const key = param.name + ".[]"
+        const key = param.name + ".[*]"
         v.keypath = key
         if (param.in === "query") {
             ob.queryParamsKeyPaths.push(v)
