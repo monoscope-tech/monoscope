@@ -140,8 +140,7 @@ function parsePaths() {
                 })
             }
         }
-        console.log(shapes)
-        //saveData(swagger_id, modifiedObject, shapes, endpoints)
+        saveData(swagger_id, modifiedObject, shapes, endpoints)
     }
 }
 
@@ -306,7 +305,13 @@ function parseRequestBody(body, components) {
         const content = body.content
         for (let [_, value] of Object.entries(content)) {
             if (value && value.schema) {
-                return getKeyPaths(value.schema)
+                let schema = value.schema
+                if (schema["$ref"]) {
+                    schema = getComponent(schema["$ref"], components)
+                } else if (schema.type === "array" && v.schema.items["$ref"]) {
+                    schema = { items: getComponent(v.schema.items["$ref"], components), type: "array", description: schema.description }
+                }
+                return getKeyPaths(schema)
             } else {
                 return []
             }
@@ -329,9 +334,9 @@ function getComponent(ref, components) {
     return value;
 }
 
-function parseHeadersAndParams(headers, parameters) {
+function parseHeadersAndParams(headers, parameters, components) {
     let ob = {}
-    ob.requestHeadersKeyPaths = getKeyPaths(headers?.content?.schema || undefined)
+    ob.requestHeadersKeyPaths = getKeyPaths(headers?.content?.schema || { ...headers, type: "array" })
     ob.queryParamsKeyPaths = []
     ob.pathParamsKeyPaths = []
 
@@ -340,7 +345,7 @@ function parseHeadersAndParams(headers, parameters) {
     parameters.forEach(param => {
         const v = param.schema
         v.description = param.description
-        const key = param.name + ".[*]"
+        const key = param.name + "[*]"
         v.keypath = key
         if (param.in === "query") {
             ob.queryParamsKeyPaths.push(v)
@@ -354,7 +359,6 @@ function parseHeadersAndParams(headers, parameters) {
 }
 
 function getKeyPaths(value) {
-    console.log(value)
     if (!value) {
         return []
     }
