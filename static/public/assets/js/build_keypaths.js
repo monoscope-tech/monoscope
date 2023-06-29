@@ -109,7 +109,7 @@ function parsePaths() {
             info = getFieldsToOperate([], val.requestHeadersKeyPaths, val.method, val.url, "request_header")
             operations.push(...info.ops)
             // query params
-            info = getFieldsToOperate(val.queryParamsKeyPaths, val.queryParamsKeyPaths, val.method, val.url, "query_param")
+            info = getFieldsToOperate([], val.queryParamsKeyPaths, val.method, val.url, "query_param")
             operations.push(...info.ops)
 
             for (const [status, respVal] of Object.entries(val.response)) {
@@ -140,6 +140,7 @@ function parsePaths() {
                 })
             }
         }
+        //  console.log(modifiedObject, shapes, endpoints)
         saveData(swagger_id, modifiedObject, shapes, endpoints)
     }
 }
@@ -204,7 +205,7 @@ function getFieldsToOperate(ogPaths, mdPaths, method, url, category) {
             updatesShape = true
             ops.push({
                 action: "delete", keypath: path.keypath, description: path.description, category: category,
-                url: url, method: method, ftype: path.type === "boolean" ? "bool" : path.type, format: path.format, example: path.example
+                url: url, method: method, ftype: path.type, format: path.format, example: path.example
             })
         } else {
             if (keyPathModified(path, t)) {
@@ -212,12 +213,12 @@ function getFieldsToOperate(ogPaths, mdPaths, method, url, category) {
                     updatesShape = true
                     ops.push({
                         action: "insert", keypath: t.keypath, description: t.description, category: category, url: url,
-                        method: method, ftype: path.type === "boolean" ? "bool" : path.type, format: t.format, example: t.example,
+                        method: method, ftype: path.type, format: t.format, example: t.example,
                     })
                 } else {
                     ops.push({
                         action: "update", keypath: t.keypath, description: t.description, category: category, url: url,
-                        method: method, ftype: path.type === "boolean" ? "bool" : path.type, format: t.format, example: t.example,
+                        method: method, ftype: path.type, format: t.format, example: t.example,
                     })
                 }
             }
@@ -231,7 +232,7 @@ function getFieldsToOperate(ogPaths, mdPaths, method, url, category) {
                 updatesShape = true
                 ops.push({
                     action: "insert", keypath: path.keypath, description: path.description, category: category,
-                    url: url, method: method, ftype: path.type === "boolean" ? "bool" : path.type, format: path.format, example: path.example
+                    url: url, method: method, ftype: path.type, format: path.format, example: path.example
                 })
             }
         })
@@ -336,17 +337,16 @@ function getComponent(ref, components) {
 
 function parseHeadersAndParams(headers, parameters, components) {
     let ob = {}
-    ob.requestHeadersKeyPaths = getKeyPaths(headers?.content?.schema || { ...headers, type: "array" })
+    ob.requestHeadersKeyPaths = getKeyPaths(headers?.content?.schema || { properties: { ...headers }, type: "object" })
     ob.queryParamsKeyPaths = []
     ob.pathParamsKeyPaths = []
 
     if (!parameters || !Array.isArray(parameters)) return ob
 
     parameters.forEach(param => {
-        const v = param.schema
-        v.description = param.description
-        const key = param.name + "[*]"
-        v.keypath = key
+        const { type, format } = getTypeAndFormat(param.schema?.type, param.schema?.format)
+        const v = { ...param.schema, type, format, description: param.description || "", keypath: "." + param.name }
+        if (!param.name) return
         if (param.in === "query") {
             ob.queryParamsKeyPaths.push(v)
         } else if (param.in === "path") {
@@ -357,6 +357,37 @@ function parseHeadersAndParams(headers, parameters, components) {
     })
     return ob
 }
+
+function getTypeAndFormat(type, format) {
+    if (type && format) {
+        return { type, format };
+    }
+    if (type === "boolean") {
+        type = "bool";
+    }
+    if (!type && !format) {
+        return { type: "string", format: "text" };
+    }
+    if (!type) {
+        if (format.includes("int")) {
+            return { type: "number", format };
+        }
+
+        if (format.includes("bool")) {
+            return { type: "boolean", format };
+        }
+
+        return { type: "string", format };
+    }
+    if (type.includes("int")) {
+        return { type: "number", format: "int64" };
+    }
+    if (type === "bool") {
+        return { type, format: "boolean" };
+    }
+    return { type: "string", format: "text" };
+}
+
 
 function getKeyPaths(value) {
     if (!value) {
@@ -376,5 +407,9 @@ function getKeyPathsHelper(value, path) {
     } else if (value.type === "array") {
         return getKeyPathsHelper({ ...value.items, description: value.description || "" }, `${path}[*]`)
     }
-    return [{ type: value.type || "unknown", description: value.description || "", format: value.format || "", example: value.example || "", keypath: path }]
+    if (path === "") {
+        return []
+    }
+    const { type, format } = getTypeAndFormat(value.type, value.format)
+    return [{ type, description: value.description || "", format, example: value.example || "", keypath: path }]
 }

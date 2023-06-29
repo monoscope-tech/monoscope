@@ -63,6 +63,7 @@ data ShapeWidthFields = ShapeWidthFields
   , hash :: Text
   , fieldsMap :: Map FieldCategoryEnum [Fields.Field]
   }
+  deriving (Show)
 
 getShapeFields :: Shapes.Shape -> Vector Fields.Field -> ShapeWidthFields
 getShapeFields shape fields = ShapeWidthFields{status = shape.statusCode, hash = shape.hash, fieldsMap = fieldM}
@@ -170,8 +171,8 @@ endpointDetailsH sess pid eid fromDStr toDStr sinceStr' subPageM = do
       shapes <- Shapes.shapesByEndpointHash endpoint.hash
       fields <- Fields.selectFields (endpoint.hash)
       let fieldsMap = Fields.groupFieldsByCategory fields
+      print fieldsMap
       let shapesWithFieldsMap = Vector.map (`getShapeFields` fields) shapes
-
       let maxV = round (enpStats.max) :: Int
       let steps = (maxV `quot` 100) :: Int
       let steps' = if steps == 0 then 100 else steps
