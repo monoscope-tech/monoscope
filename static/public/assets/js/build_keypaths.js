@@ -148,7 +148,7 @@ function parsePaths() {
 function fieldMap(v, category) {
     return {
         fkKeyPath: v.keypath,
-        fkType: v.type || "unkown",
+        fkType: v.type || "text",
         fkCategory: category
     }
 }
@@ -165,6 +165,7 @@ async function saveData(swaggerId, modifiedObject, shapes, endpoints) {
         endpoints,
         diffsInfo: shapes.filter(shape => shape.opShapeChanged || shape.opOperations.length > 0)
     };
+    console.log(data.diffsInfo)
     try {
         const response = await fetch(url, {
             method: 'POST',
@@ -345,7 +346,7 @@ function parseHeadersAndParams(headers, parameters, components) {
 
     parameters.forEach(param => {
         const { type, format } = getTypeAndFormat(param.schema?.type, param.schema?.format)
-        const v = { ...param.schema, type, format, description: param.description || "", keypath: "." + param.name }
+        const v = { example: param.schema.example || "", type, format, description: param.description || "", keypath: "." + param.name }
         if (!param.name) return
         if (param.in === "query") {
             ob.queryParamsKeyPaths.push(v)
