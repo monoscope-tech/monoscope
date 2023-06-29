@@ -166,7 +166,7 @@ getFieldAndFormatFromOpShape :: Projects.ProjectId -> FieldOperation -> (Fields.
 getFieldAndFormatFromOpShape pid operation =
   let endpointHash = getEndpointHash pid operation.url operation.method
       fCategory = fromMaybe Fields.FCRequestBody (parseFieldCategoryEnum operation.category)
-      fieldType = fromMaybe Fields.FTUnknown (parseFieldTypes operation.ftype)
+      fieldType = fromMaybe Fields.FTString (parseFieldTypes operation.ftype)
       fieldHash = getFieldHash endpointHash operation.category operation.keypath operation.ftype
       keyPath = operation.keypath
       format = operation.format
