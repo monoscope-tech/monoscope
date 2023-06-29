@@ -140,7 +140,6 @@ function parsePaths() {
                 })
             }
         }
-        //  console.log(modifiedObject, shapes, endpoints)
         saveData(swagger_id, modifiedObject, shapes, endpoints)
     }
 }
@@ -165,7 +164,6 @@ async function saveData(swaggerId, modifiedObject, shapes, endpoints) {
         endpoints,
         diffsInfo: shapes.filter(shape => shape.opShapeChanged || shape.opOperations.length > 0)
     };
-    console.log(data.diffsInfo)
     try {
         const response = await fetch(url, {
             method: 'POST',
