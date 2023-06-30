@@ -286,7 +286,7 @@ apiDocsSubPage shapesWithFieldsMap = do
               button_
                 [ class_ prm
                 , id_ ("status_" <> show index)
-                , [__|on click selectShape((me),(my @data-pos), (my @data-status), (my @data-hash)) |]
+                , [__|on click selectShape((me),(my @data-pos)) |]
                 , data_ "pos" (show index)
                 , data_ "status" (show s.status)
                 , data_ "hash" s.hash
@@ -314,43 +314,34 @@ apiDocsSubPage shapesWithFieldsMap = do
   script_
     [type_ "text/hyperscript"]
     [text| 
-        def selectShape(elem, position, status, hash)
-          set mainButton to #toggle_shapes_btn
-          set current to (mainButton @data-current)
-          set total to (mainButton @data-total)
-          set ind to #current_indicator
-          if position is current
+        def selectShape(elem, position)
+          if position is (#toggle_shapes_btn @data-current)
             exit
           end
-          remove (<span/> in mainButton)
-          set (mainButton @data-current) to position 
-          append (<span /> in elem) as HTML to mainButton
+          remove (<span/> in #toggle_shapes_btn)
+          set (#toggle_shapes_btn @data-current) to position 
+          append (<span /> in elem) as HTML to #toggle_shapes_btn
           toggle .hidden on .Response_fields
           toggle .hidden on .Request_fields
-          put (position + "/" + total) into ind
+          put (position + "/" + (#toggle_shapes_btn @data-total)) into #current_indicator
         end
       
         def slideReqRes(action)
-          set mainButton to #toggle_shapes_btn
-          set current to (mainButton @data-current)
-          set total to (mainButton @data-total)
-          set ind to #current_indicator
-          if (current is total and action is "next") or (current is "1" and action is "prev")
+          set current to (#toggle_shapes_btn @data-current)
+          if (current is (#toggle_shapes_btn @data-total) and action is "next") or (current is "1" and action is "prev")
             exit 
           end
-          set position to current 
           if action == "next" 
             then set position to ((current as Int) + 1) 
             else set position to ((current as Int) - 1)
           end
-          set (mainButton @data-current) to position 
+          set (#toggle_shapes_btn @data-current) to position 
           call document.querySelector("#status_" + position)
-          set elem to it
-          remove (<span/> in mainButton)
-          append (<span /> in elem) as HTML to mainButton
+          remove (<span/> in #toggle_shapes_btn)
+          append (<span /> in it) as HTML to #toggle_shapes_btn
           toggle .hidden on .Response_fields
           toggle .hidden on .Request_fields
-          put (position + "/" + total) into ind
+          put (position + "/" + (#toggle_shapes_btn @data-total)) into #current_indicator
         end
         |]
 

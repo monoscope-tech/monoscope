@@ -219,8 +219,8 @@ createProjectBody sess envCfg isUpdate cp cpe =
         div_ [class_ "mt-5"] do 
           p_ [class_ "text-gray-400 mx-2 pb-2 font-light text-sm"] "Please select a plan"
           div_ [class_ "grid grid-cols-3 gap-4 border-1"] do
-            ([("Free", "20k", "$0", "1", cp.paymentPlan == "Free", "")
-              ,("Hobby", "250k", "$20", "3",  cp.paymentPlan == "Hobby", if envCfg.paddleSandbox then envCfg.paddleSandboxHobby else envCfg.paddleHobby)
+            -- ([("Free", "20k", "$0", "1", cp.paymentPlan == "Free", "")
+            ([("Hobby", "250k", "$20", "3",  cp.paymentPlan == "Hobby", if envCfg.paddleSandbox then envCfg.paddleSandboxHobby else envCfg.paddleHobby)
               ,("Startup", "500k", "$50", "5",  cp.paymentPlan == "Startup", if envCfg.paddleSandbox then envCfg.paddleSandboxStartup else envCfg.paddleStartup)
               ,("Growth", "5m", "$250", "10",  cp.paymentPlan == "Growth", if envCfg.paddleSandbox then envCfg.paddleSandboxGrowth else envCfg.paddleGrowth)
               ] :: [(Text, Text, Text, Text, Bool, Text)])  & mapM_ \(title, included, price, team, isSelected, paddleSubsCode)-> do
