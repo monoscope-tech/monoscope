@@ -145,7 +145,7 @@ getShapeFromOpShape pid curTime opShape =
     , responseHeadersKeypaths = rsHKP
     , fieldHashes = fieldHashes
     , hash = shapeHash
-    , statusCode = read $ toString opShape.opStatus
+    , statusCode = fromMaybe 0 (readMaybe (toString opShape.opStatus))
     }
  where
   endpointHash = getEndpointHash pid opShape.opUrl opShape.opMethod
@@ -217,7 +217,7 @@ documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id, endpoint
   res <- liftIO $ withPool pool $ do
     currentTime <- liftIO getZonedTime
     let newEndpoints = V.toList $ V.map (getEndpointFromOpEndpoint pid) endpoints
-    let shapes = V.toList (V.map (getShapeFromOpShape pid currentTime) (V.filter (\x -> x.opShapeChanged) diffsInfo))
+    let shapes = V.toList $ V.map (getShapeFromOpShape pid currentTime) diffsInfo
     let nestedOps = V.map (\x -> x.opOperations) diffsInfo
     let ops = flattenVector (V.toList nestedOps)
     let fAndF = V.toList (V.map (getFieldAndFormatFromOpShape pid) ops)

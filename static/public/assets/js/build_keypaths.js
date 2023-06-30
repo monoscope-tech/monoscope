@@ -162,7 +162,7 @@ async function saveData(swaggerId, modifiedObject, shapes, endpoints) {
         swagger_id: swaggerId,
         updated_swagger: JSON.stringify(modifiedObject),
         endpoints,
-        diffsInfo: shapes.filter(shape => shape.opShapeChanged || shape.opOperations.length > 0)
+        diffsInfo: shapes
     };
     try {
         const response = await fetch(url, {
@@ -268,21 +268,29 @@ function parseResponses(responses, components) {
         return undefined
     }
     let ob = {}
+
+    //key is status code
     for (const [key, value] of Object.entries(responses)) {
-        if (!value.content) continue
-        for (const [contentType, v] of Object.entries(value.content)) {
-            let headers = value.headers ? value.headers.content ? value.headers.content.schema : {} : {}
-            let schema = v.schema
-            if (v.schema["$ref"]) {
-                schema = getComponent(v.schema["$ref"], components)
-            } else if (v.schema.type === "array" && v.schema.items["$ref"]) {
-                schema = { items: getComponent(v.schema.items["$ref"], components), type: "array", description: v.schema.description }
-            }
+        if (!value.content) {
             ob[key] = {
-                responseBodyKeyPaths: getKeyPaths(schema),
-                responseHeadersKeyPaths: getKeyPaths(headers)
+                responseBodyKeyPaths: [],
+                responseHeadersKeyPaths: []
             }
-            break;
+        } else {
+            for (const [contentType, v] of Object.entries(value.content)) {
+                let headers = value.headers ? value.headers.content ? value.headers.content.schema : {} : {}
+                let schema = v.schema
+                if (v.schema["$ref"]) {
+                    schema = getComponent(v.schema["$ref"], components)
+                } else if (v.schema.type === "array" && v.schema.items["$ref"]) {
+                    schema = { items: getComponent(v.schema.items["$ref"], components), type: "array", description: v.schema.description }
+                }
+                ob[key] = {
+                    responseBodyKeyPaths: getKeyPaths(schema),
+                    responseHeadersKeyPaths: getKeyPaths(headers)
+                }
+                break;
+            }
         }
     }
     return ob
@@ -294,12 +302,23 @@ function parseRequestBody(body, components) {
     }
     if (body["$ref"]) {
         const ref = body["$ref"]
-        const refValue = getComponent(ref, components)
-        if (!refValue) {
-            return []
-        } else {
+        let refValue = getComponent(ref, components)
+        if (refValue) {
+            if (!refValue.properties && refValue.content) {
+                for (let [_, value] of Object.entries(refValue.content)) {
+                    if (value.schema) {
+                        if (value.schema["$ref"]) {
+                            refValue = getComponent(value.schema["$ref"], components)
+                        }
+                    } else {
+                        refValue = value.schema
+                    }
+                    break;
+                }
+            }
             return getKeyPaths(refValue)
         }
+        return []
     }
     if (body.content) {
         const content = body.content
@@ -308,6 +327,18 @@ function parseRequestBody(body, components) {
                 let schema = value.schema
                 if (schema["$ref"]) {
                     schema = getComponent(schema["$ref"], components)
+                    if (!schema.properties && schema.content) {
+                        for (let [_, value] of Object.entries(schema.content)) {
+                            if (value.schema) {
+                                if (value.schema["$ref"]) {
+                                    schema = getComponent(value.schema["$ref"], components)
+                                }
+                            } else {
+                                schema = value.schema
+                            }
+                            break;
+                        }
+                    }
                 } else if (schema.type === "array" && v.schema.items["$ref"]) {
                     schema = { items: getComponent(v.schema.items["$ref"], components), type: "array", description: schema.description }
                 }
