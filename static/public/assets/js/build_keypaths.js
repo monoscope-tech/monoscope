@@ -147,7 +147,7 @@ function parsePaths() {
 function fieldMap(v, category) {
     return {
         fkKeyPath: v.keypath,
-        fkType: v.type || "text",
+        fkType: getTypeAndFormat(v.type, v.format).type,
         fkCategory: category
     }
 }
@@ -164,6 +164,7 @@ async function saveData(swaggerId, modifiedObject, shapes, endpoints) {
         endpoints,
         diffsInfo: shapes.filter(shape => shape.opShapeChanged || shape.opOperations.length > 0)
     };
+
     try {
         const response = await fetch(url, {
             method: 'POST',
@@ -229,6 +230,7 @@ function getFieldsToOperate(ogPaths, mdPaths, method, url, category) {
             const t = ogPaths.find((v) => v.keypath === path.keypath)
             if (!t) {
                 updatesShape = true
+
                 ops.push({
                     action: "insert", keypath: path.keypath, description: path.description, category: category,
                     url: url, method: method, ftype: path.type, format: path.format, example: path.example
@@ -377,12 +379,17 @@ function parseHeadersAndParams(headers, parameters, components) {
 }
 
 function getTypeAndFormat(type, format) {
-    if (type && format) {
-        return { type, format };
-    }
     if (type === "boolean") {
         type = "bool";
     }
+    if (type === "integer") {
+        type = "number"
+    }
+
+    if (type && format) {
+        return { type, format };
+    }
+
     if (!type && !format) {
         return { type: "string", format: "text" };
     }
