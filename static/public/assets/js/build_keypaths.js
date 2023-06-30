@@ -5,8 +5,8 @@ function parsePaths() {
         const modifiedValue = diffEditor.getModel().modified.getValue();
         const originalObject = jsyaml.load(originalValue);
         const modifiedObject = jsyaml.load(modifiedValue)
-        const catOriginal = groupByFieldCategories(originalObject.paths)
-        const catModified = groupByFieldCategories(modifiedObject.paths)
+        const catOriginal = groupByFieldCategories(originalObject)
+        const catModified = groupByFieldCategories(modifiedObject)
         const idTarget = document.querySelector("#save_swagger_input_id")
         const swagger_id = idTarget ? idTarget.value : ""
 
@@ -109,7 +109,7 @@ function parsePaths() {
             info = getFieldsToOperate([], val.requestHeadersKeyPaths, val.method, val.url, "request_header")
             operations.push(...info.ops)
             // query params
-            info = getFieldsToOperate(val.queryParamsKeyPaths, val.queryParamsKeyPaths, val.method, val.url, "query_param")
+            info = getFieldsToOperate([], val.queryParamsKeyPaths, val.method, val.url, "query_param")
             operations.push(...info.ops)
 
             for (const [status, respVal] of Object.entries(val.response)) {
@@ -140,7 +140,6 @@ function parsePaths() {
                 })
             }
         }
-
         saveData(swagger_id, modifiedObject, shapes, endpoints)
     }
 }
@@ -148,7 +147,7 @@ function parsePaths() {
 function fieldMap(v, category) {
     return {
         fkKeyPath: v.keypath,
-        fkType: v.type || "unkown",
+        fkType: getTypeAndFormat(v.type, v.format).type,
         fkCategory: category
     }
 }
@@ -165,6 +164,7 @@ async function saveData(swaggerId, modifiedObject, shapes, endpoints) {
         endpoints,
         diffsInfo: shapes.filter(shape => shape.opShapeChanged || shape.opOperations.length > 0)
     };
+
     try {
         const response = await fetch(url, {
             method: 'POST',
@@ -205,7 +205,7 @@ function getFieldsToOperate(ogPaths, mdPaths, method, url, category) {
             updatesShape = true
             ops.push({
                 action: "delete", keypath: path.keypath, description: path.description, category: category,
-                url: url, method: method, ftype: path.type === "boolean" ? "bool" : path.type, format: path.format, example: path.example
+                url: url, method: method, ftype: path.type, format: path.format, example: path.example
             })
         } else {
             if (keyPathModified(path, t)) {
@@ -213,12 +213,12 @@ function getFieldsToOperate(ogPaths, mdPaths, method, url, category) {
                     updatesShape = true
                     ops.push({
                         action: "insert", keypath: t.keypath, description: t.description, category: category, url: url,
-                        method: method, ftype: path.type === "boolean" ? "bool" : path.type, format: t.format, example: t.example,
+                        method: method, ftype: path.type, format: t.format, example: t.example,
                     })
                 } else {
                     ops.push({
                         action: "update", keypath: t.keypath, description: t.description, category: category, url: url,
-                        method: method, ftype: path.type === "boolean" ? "bool" : path.type, format: t.format, example: t.example,
+                        method: method, ftype: path.type, format: t.format, example: t.example,
                     })
                 }
             }
@@ -230,9 +230,10 @@ function getFieldsToOperate(ogPaths, mdPaths, method, url, category) {
             const t = ogPaths.find((v) => v.keypath === path.keypath)
             if (!t) {
                 updatesShape = true
+
                 ops.push({
                     action: "insert", keypath: path.keypath, description: path.description, category: category,
-                    url: url, method: method, ftype: path.type === "boolean" ? "bool" : path.type, format: path.format, example: path.example
+                    url: url, method: method, ftype: path.type, format: path.format, example: path.example
                 })
             }
         })
@@ -247,14 +248,16 @@ function keyPathModified(v1, v2) {
     return false
 }
 
-function groupByFieldCategories(paths) {
+function groupByFieldCategories(swagger) {
+    const paths = swagger.paths
+    const components = swagger.components
     let hash = {}
     for (let [key, value] of Object.entries(paths)) {
         for (let [method, v] of Object.entries(value)) {
             let ob = { url: transFormURL(key), method }
-            const headersAndParams = parseHeadersAndParams(v.headers, v.parameters)
-            ob.requestBodyKeyPaths = parseRequestBody(v.requestBody)
-            ob.response = parseResponses(v.responses)
+            const headersAndParams = parseHeadersAndParams(v.headers, v.parameters, components)
+            ob.requestBodyKeyPaths = parseRequestBody(v.requestBody, components)
+            ob.response = parseResponses(v.responses, components)
             ob = { ...ob, ...headersAndParams }
             hash[`${key}_${method}`] = ob
         }
@@ -262,51 +265,108 @@ function groupByFieldCategories(paths) {
     return hash
 }
 
-function parseResponses(responses) {
+function parseResponses(responses, components) {
     if (!responses) {
         return undefined
     }
     let ob = {}
+
+    //key is status code
     for (const [key, value] of Object.entries(responses)) {
-        for (const [contentType, v] of Object.entries(value.content)) {
-            let headers = value.headers ? value.headers.content ? value.headers.content.schema : {} : {}
+        if (!value.content) {
             ob[key] = {
-                responseBodyKeyPaths: getKeyPaths(v.schema),
-                responseHeadersKeyPaths: getKeyPaths(headers)
+                responseBodyKeyPaths: [],
+                responseHeadersKeyPaths: []
             }
-            break;
+        } else {
+            for (const [contentType, v] of Object.entries(value.content)) {
+                let headers = value.headers ? value.headers.content ? value.headers.content.schema : {} : {}
+                let schema = v.schema
+                if (v.schema["$ref"]) {
+                    schema = getComponent(v.schema["$ref"], components)
+                } else if (v.schema.type === "array" && v.schema.items["$ref"]) {
+                    schema = { items: getComponent(v.schema.items["$ref"], components), type: "array", description: v.schema.description }
+                }
+                ob[key] = {
+                    responseBodyKeyPaths: getKeyPaths(schema),
+                    responseHeadersKeyPaths: getKeyPaths(headers)
+                }
+                break;
+            }
         }
     }
     return ob
 }
 
-function parseRequestBody(body) {
-    if (!body || !body.content) {
+function parseRequestBody(body, components) {
+    if (!body) {
         return []
     }
-    const content = body.content
-    for (let [_, value] of Object.entries(content)) {
-        if (value && value.schema) {
-            return getKeyPaths(value.schema)
-        } else {
-            return []
+    if (body["$ref"]) {
+        const ref = body["$ref"]
+        let refValue = getComponent(ref, components)
+        if (refValue) {
+            return getKeyPaths(refValue)
+        }
+        return []
+    }
+    if (body.content) {
+        const content = body.content
+        for (let [_, value] of Object.entries(content)) {
+            if (value && value.schema) {
+                let schema = value.schema
+                if (schema["$ref"]) {
+                    schema = getComponent(schema["$ref"], components)
+                } else if (schema.type === "array" && v.schema.items["$ref"]) {
+                    schema = { items: getComponent(v.schema.items["$ref"], components), type: "array", description: schema.description }
+                }
+                return getKeyPaths(schema)
+            } else {
+                return []
+            }
         }
     }
+    return []
 }
 
-function parseHeadersAndParams(headers, parameters) {
+function getComponent(ref, components) {
+    const path = ref.split("/").slice(2)
+    let value = components
+    for (const segment of path) {
+        if (value && value.hasOwnProperty(segment)) {
+            value = value[segment];
+        } else {
+            value = undefined;
+            break;
+        }
+    }
+
+    //If It's a ref to another ref
+    if (!value.properties && value.content) {
+        for (let [_, v] of Object.entries(value.content)) {
+            if (v.schema && v.schema["$ref"]) {
+                value = getComponent(v.schema["$ref"], components)
+            } else {
+                value = v.schema
+            }
+            break;
+        }
+    }
+    return value;
+}
+
+function parseHeadersAndParams(headers, parameters, components) {
     let ob = {}
-    ob.requestHeadersKeyPaths = getKeyPaths(headers?.content?.schema || undefined)
+    ob.requestHeadersKeyPaths = getKeyPaths(headers?.content?.schema || { properties: { ...headers }, type: "object" })
     ob.queryParamsKeyPaths = []
     ob.pathParamsKeyPaths = []
 
     if (!parameters || !Array.isArray(parameters)) return ob
 
     parameters.forEach(param => {
-        const v = param.schema
-        v.description = param.description
-        const key = param.name + ".[*]"
-        v.keypath = key
+        const { type, format } = getTypeAndFormat(param.schema?.type, param.schema?.format)
+        const v = { example: param.schema.example || "", type, format, description: param.description || "", keypath: "." + param.name }
+        if (!param.name) return
         if (param.in === "query") {
             ob.queryParamsKeyPaths.push(v)
         } else if (param.in === "path") {
@@ -318,6 +378,42 @@ function parseHeadersAndParams(headers, parameters) {
     return ob
 }
 
+function getTypeAndFormat(type, format) {
+    if (type === "boolean") {
+        type = "bool";
+    }
+    if (type === "integer") {
+        type = "number"
+    }
+
+    if (type && format) {
+        return { type, format };
+    }
+
+    if (!type && !format) {
+        return { type: "string", format: "text" };
+    }
+    if (!type) {
+        if (format.includes("int")) {
+            return { type: "number", format };
+        }
+
+        if (format.includes("bool")) {
+            return { type: "boolean", format };
+        }
+
+        return { type: "string", format };
+    }
+    if (type.includes("int")) {
+        return { type: "number", format: "int64" };
+    }
+    if (type === "bool") {
+        return { type, format: "boolean" };
+    }
+    return { type: "string", format: "text" };
+}
+
+
 function getKeyPaths(value) {
     if (!value) {
         return []
@@ -327,6 +423,7 @@ function getKeyPaths(value) {
 
 function getKeyPathsHelper(value, path) {
     if (value.type === "object") {
+        if (!value.properties) return []
         let paths = []
         for (const [key, val] of Object.entries(value.properties)) {
             paths.push(...getKeyPathsHelper(val, `${path}.${key}`))
@@ -335,5 +432,9 @@ function getKeyPathsHelper(value, path) {
     } else if (value.type === "array") {
         return getKeyPathsHelper({ ...value.items, description: value.description || "" }, `${path}[*]`)
     }
-    return [{ type: value.type || "unknown", description: value.description || "", format: value.format || "", example: value.example || "", keypath: path }]
+    if (path === "") {
+        return []
+    }
+    const { type, format } = getTypeAndFormat(value.type, value.format)
+    return [{ type, description: value.description || "", format, example: value.example || "", keypath: path }]
 }
