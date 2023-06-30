@@ -162,7 +162,7 @@ async function saveData(swaggerId, modifiedObject, shapes, endpoints) {
         swagger_id: swaggerId,
         updated_swagger: JSON.stringify(modifiedObject),
         endpoints,
-        diffsInfo: shapes
+        diffsInfo: shapes.filter(shape => shape.opShapeChanged || shape.opOperations.length > 0)
     };
     try {
         const response = await fetch(url, {
@@ -304,18 +304,6 @@ function parseRequestBody(body, components) {
         const ref = body["$ref"]
         let refValue = getComponent(ref, components)
         if (refValue) {
-            if (!refValue.properties && refValue.content) {
-                for (let [_, value] of Object.entries(refValue.content)) {
-                    if (value.schema) {
-                        if (value.schema["$ref"]) {
-                            refValue = getComponent(value.schema["$ref"], components)
-                        }
-                    } else {
-                        refValue = value.schema
-                    }
-                    break;
-                }
-            }
             return getKeyPaths(refValue)
         }
         return []
@@ -327,18 +315,6 @@ function parseRequestBody(body, components) {
                 let schema = value.schema
                 if (schema["$ref"]) {
                     schema = getComponent(schema["$ref"], components)
-                    if (!schema.properties && schema.content) {
-                        for (let [_, value] of Object.entries(schema.content)) {
-                            if (value.schema) {
-                                if (value.schema["$ref"]) {
-                                    schema = getComponent(value.schema["$ref"], components)
-                                }
-                            } else {
-                                schema = value.schema
-                            }
-                            break;
-                        }
-                    }
                 } else if (schema.type === "array" && v.schema.items["$ref"]) {
                     schema = { items: getComponent(v.schema.items["$ref"], components), type: "array", description: schema.description }
                 }
@@ -359,6 +335,18 @@ function getComponent(ref, components) {
             value = value[segment];
         } else {
             value = undefined;
+            break;
+        }
+    }
+
+    //If It's a ref to another ref
+    if (!value.properties && value.content) {
+        for (let [_, v] of Object.entries(value.content)) {
+            if (v.schema && v.schema["$ref"]) {
+                value = getComponent(v.schema["$ref"], components)
+            } else {
+                value = v.schema
+            }
             break;
         }
     }
