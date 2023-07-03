@@ -35,7 +35,7 @@ listProjectsGetH sess = do
 
 listProjectsBody :: Vector.Vector Projects.Project' -> Html ()
 listProjectsBody projects = do
-  section_ [id_ "main-content", class_ "p-6 pb-36"] $ do
+  section_ [id_ "main-content", class_ "container mx-auto p-6 pb-36"] $ do
     div_ [class_ "flex justify-between mb-6"] $ do
       h2_ [class_ "text-slate-700 text-2xl font-medium"] "Projects"
       a_ [class_ "btn btn-primary", href_ "/p/new"] "Create Project"
@@ -55,7 +55,7 @@ listProjectsBody projects = do
                         div_ [class_ "flex items-center text-sm text-gray-500"] $ do
                           small_ $ do
                             span_ "Created on "
-                            time_ [datetime_ $ fmt $  dateDashF project.createdAt] $ toHtml @Text $ fmt $ dateDashF project.createdAt
+                            time_ [datetime_ $ fmt $ dateDashF project.createdAt] $ toHtml @Text $ fmt $ dateDashF project.createdAt
                     div_ [class_ "mt-4 flex-shrink-0 sm:mt-0 sm:ml-5"] $ do
                       div_ [class_ "flex overflow-hidden -space-x-1"] $ do
                         project.usersDisplayImages & Vector.toList & mapM_ \imgSrc -> img_ [class_ "inline-block h-6 w-6 rounded-full ring-2 ring-white", src_ imgSrc, alt_ "Dries Vincent"]
