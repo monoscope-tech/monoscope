@@ -20,6 +20,12 @@
   }
 }
 
+.payment-radio-active {
+  @apply bg-blue-500;
+}
+.payment-radio-active > div {
+  display: block;
+}
 .endpoint-path-collapse > .subpaths-container {
   display: none;
 }

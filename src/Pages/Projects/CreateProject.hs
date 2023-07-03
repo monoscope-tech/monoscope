@@ -242,12 +242,17 @@ createProjectBody sess envCfg isUpdate cp cpe =
                         "_"
                         [text| on click set window.paymentPlan to $paddleSubsCode
                                            then set #paymentPlanEl.value to "$title"
-                                           then remove .border-blue-200 .shadow-lg from .payment-plans 
+                                           then remove .border-blue-200 .shadow-lg from .payment-plans
+                                           then remove .payment-radio-active from .payment-radio 
+                                           then add .payment-radio-active to (.payment-radio in me)
                                            then add .border-blue-200 .shadow-lg to me
                                            |]
                     ]
                     do
-                      h4_ [class_ "border-b border-b-1 text-xl font-medium text-gray-700 py-2 px-2"] $ toHtml title
+                      div_ [class_ "flex items-center justify-between border-b border-b-1 p-2"] do
+                        h4_ [class_ "text-xl font-medium text-gray-700"] $ toHtml title
+                        div_ [class_ "grid place-items-center h-6 w-6 bg-gray-200 border rounded-full payment-radio"] do
+                          div_ [class_ "bg-white h-3 w-3 hidden rounded-full"] ""
                       div_ [class_ "text-lg py-3"] do
                         span_ [class_ "text-2xl text-blue-700"] $ toHtml price
                         span_ [class_ "text-gray-500"] "/mo"
