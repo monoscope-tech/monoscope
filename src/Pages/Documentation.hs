@@ -366,8 +366,8 @@ documentationsPage pid swaggers swaggerID jsonString = do
                 button_ [onclick_ "swaggerChanged(event)", class_ "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"] $ toHtml swaggerID
         button_ [class_ "place-content-center text-md btn btn-primary", onclick_ "showModal()"] "Save swagger"
 
-      div_ [class_ "w-full", style_ "height: calc(100% - 60px)"] $ do
-        div_ [id_ "columns_container", class_ "w-full h-full flex flex-row", style_ "height: calc(100% - 60px)"] $ do
+      div_ [class_ "w-full h-full", style_ "height: calc(100% - 60px)"] $ do
+        div_ [id_ "columns_container", class_ "w-full h-full flex flex-row", style_ "height: 100%"] $ do
           -- loading indicator
           div_ [id_ "loading_indicator", class_ "fixed inset-0 flex justify-center bg-[rgba(0,0,0,0.4)] items-center", style_ "z-index:9999;"] $ do
             div_ [class_ "py-10 px-24 bg-white flex gap-2"] $ do

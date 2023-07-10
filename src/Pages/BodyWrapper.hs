@@ -139,9 +139,9 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child =
         body_ [class_ "text-gray-900"] $ do
           section_ [class_ "flex flex-row h-screen overflow-hidden"] $ do
             sideNav'
-            section_ [class_ "grow h-full overflow-y-hidden"] $ do
+            section_ [class_ "flex flex-col grow h-full overflow-y-hidden"] $ do
               navbar currUser
-              section_ [class_ "h-full overflow-y-auto"] $ do
+              section_ [class_ "flex-1 overflow-y-auto"] $ do
                 child
 
 projectsDropDown :: Projects.Project -> Vector.Vector Projects.Project -> Html ()
