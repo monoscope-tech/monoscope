@@ -194,7 +194,7 @@ processProjectPostForm sess cpRaw = do
 createProjectBody :: Sessions.PersistentSession -> EnvConfig -> Bool -> CreateProjectForm -> CreateProjectFormError -> Html ()
 createProjectBody sess envCfg isUpdate cp cpe =
   section_ [id_ "main-content", class_ "p-6"] $ do
-    div_ [class_ "max-w-4xl mx-auto"] $ do
+    div_ [class_ "mx-auto", style_ "max-width:800px"] $ do
       h2_ [class_ "text-slate-700 text-3xl font-medium mb-5"] $ toHtml @String $ if isUpdate then "Project Settings" else "Create Project"
       div_ [class_ "grid gap-5"] do
         form_ [class_ "col-span-1 relative px-10 border border-gray-200 py-10  bg-white rounded-3xl", hxPost_ "/p/new", hxTarget_ "#main-content", hxSwap_ "outerHTML", id_ "createUpdateBodyForm"] $ do
