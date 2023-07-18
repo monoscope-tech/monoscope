@@ -228,10 +228,10 @@ createProjectBody sess envCfg isUpdate cp cpe =
               "Please select a plan"
               span_ [class_ "text-red-400"] " *"
             div_ [class_ "grid grid-cols-3 gap-4 border-1"] do
-              -- ([("Free", "20k", "$0", "1", cp.paymentPlan == "Free", "")
-              ( [ ("Hobby", "250k", "$20", "3", cp.paymentPlan == "Hobby", if envCfg.paddleSandbox then envCfg.paddleSandboxHobby else envCfg.paddleHobby)
-                , ("Startup", "500k", "$50", "5", cp.paymentPlan == "Startup", if envCfg.paddleSandbox then envCfg.paddleSandboxStartup else envCfg.paddleStartup)
-                , ("Growth", "5m", "$250", "10", cp.paymentPlan == "Growth", if envCfg.paddleSandbox then envCfg.paddleSandboxGrowth else envCfg.paddleGrowth)
+              ( [ ("Free", "20k", "$0", "1", cp.paymentPlan == "Free", "")
+                , ("Hobby", "250k", "$10", "3", cp.paymentPlan == "Hobby", if envCfg.paddleSandbox then envCfg.paddleSandboxHobby else envCfg.paddleHobby)
+                , ("Startup", "1m", "$50", "5", cp.paymentPlan == "Startup", if envCfg.paddleSandbox then envCfg.paddleSandboxStartup else envCfg.paddleStartup)
+                , ("Growth", "10m", "$250", "10", cp.paymentPlan == "Growth", if envCfg.paddleSandbox then envCfg.paddleSandboxGrowth else envCfg.paddleGrowth)
                 ] ::
                   [(Text, Text, Text, Text, Bool, Text)]
                 )
