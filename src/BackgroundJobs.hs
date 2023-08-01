@@ -108,7 +108,7 @@ jobsRunner dbPool logger cfg job =
              in sendEmail cfg reciever subject body
         Anomalies.ATShape -> do
           shapes <- withPool dbPool $ getShapes pid $ T.take 8 targetHash
-          let targetFields = toList $ snd $ Unsafe.fromJust $ V.find (\a -> fst a == targetHash) shapes
+          let targetFields = maybe [] (toList . snd) (V.find (\a -> fst a == targetHash) shapes)
           updatedFieldFormats <- withPool dbPool $ getUpdatedFieldFormats pid (V.fromList targetFields)
           let otherFields = toList <$> toList (snd $ V.unzip $ V.filter (\a -> fst a /= targetHash) shapes)
           let newFields = filter (`notElem` foldl' union [] otherFields) targetFields
@@ -217,7 +217,7 @@ Apitoolkit team
                   where apm.timeB > NOW() - INTERVAL '1 days'
                   GROUP BY pp.id, pp.title, pm.user_id --, us.email
           |]
-      
+
 
 jobsWorkerInit :: Pool Connection -> LogAction IO String -> Config.EnvConfig -> IO ()
 jobsWorkerInit dbPool logger envConfig = startJobRunner $ mkConfig jobLogger "background_jobs" dbPool (MaxConcurrentJobs 1) (jobsRunner dbPool logger envConfig) id
