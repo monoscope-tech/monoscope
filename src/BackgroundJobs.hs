@@ -75,6 +75,7 @@ getUsersByProjectId pid = query Select q (Only pid)
 -- 2: [ ] how many were updated fields?
 -- 3. [x] how many were deleted params
 -- Send a notification email about the new anomaly (shape and endpoint etc)
+--
 
 jobsRunner :: Pool Connection -> LogAction IO String -> Config.EnvConfig -> Job -> IO ()
 jobsRunner dbPool logger cfg job =

@@ -114,6 +114,7 @@ type PublicAPI =
     -- so it doesnt need an exclusive robust authorization middleware solution.
     :<|> "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] ClientMetadata.ClientMetadata
     :<|> "status" :> Get '[JSON] Status
+    :<|> "ping" :> Get '[PlainText] Text
     :<|> Raw
 
 type API =
@@ -181,6 +182,7 @@ publicServer =
     :<|> authCallbackH
     :<|> ClientMetadata.clientMetadataH
     :<|> statusH
+    :<|> pingH
     :<|> serveDirectoryWebApp "./static/public"
 
 server :: ServerT API DashboardM
@@ -205,3 +207,7 @@ statusH = do
       { ping = "pong"
       , dbVersion = version
       }
+
+pingH :: DashboardM Text 
+pingH = do 
+  pure "pong"
