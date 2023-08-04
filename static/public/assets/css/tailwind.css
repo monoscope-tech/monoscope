@@ -97,9 +97,14 @@
 }
 
 @layer components {
+  :root { font-family: 'Inter', sans-serif; }
+  @supports (font-variation-settings: normal) {
+    :root { font-family: 'Inter var', sans-serif; }
+  }
   html {
     font-size: 14px;
-    font-family: 'Poppins', sans-serif;
+    font-family: 'Inter', sans-serif;
+    /* font-family: 'Poppins', sans-serif; */
     /* font-family: 'Roboto', sans-serif; */
     --white: 255 255 255;
   }

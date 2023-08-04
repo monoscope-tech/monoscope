@@ -59,9 +59,12 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child =
 
           link_ [rel_ "stylesheet", type_ "text/css", href_ "/assets/css/tailwind.min.css"]
           link_ [rel_ "stylesheet", type_ "text/css", href_ "/assets/css/thirdparty/notyf3.min.css"]
-          link_ [rel_ "preconnect", href_ "https://fonts.googleapis.com"]
-          link_ [rel_ "preconnect", href_ "https://fonts.gstatic.com", crossorigin_ "true"]
-          link_ [href_ "https://fonts.googleapis.com/css2?family=Inconsolata&family=Poppins:wght@400;500;600&display=swap", rel_ "stylesheet"]
+          -- link_ [rel_ "preconnect", href_ "https://fonts.googleapis.com"]
+          -- link_ [rel_ "preconnect", href_ "https://fonts.gstatic.com", crossorigin_ "true"]
+          -- link_ [rel_ "stylesheet", href_ "https://fonts.googleapis.com/css2?family=Inconsolata&family=Poppins:wght@400;500;600&display=swap"]
+          link_ [rel_ "preconnect", href_ "https://rsms.me/"]
+          link_ [rel_ "stylesheet", href_ "https://rsms.me/inter/inter.css"]
+
           link_ [rel_ "stylesheet", href_ "https://unpkg.com/swagger-ui-dist@4.5.0/swagger-ui.css"]
           -- SCRIPTS
           script_ [src_ "https://cdn.jsdelivr.net/npm/echarts@5.4.1/dist/echarts.min.js"] ("" :: Text)
