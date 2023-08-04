@@ -162,7 +162,7 @@ endpointDetailsH sess pid eid fromDStr toDStr sinceStr' subPageM = do
           let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
           (f, t)
 
-  (endpoint, enpStats, project, shapesWithFieldsMap, fieldsMap, reqLatenciesRolledByStepsLabeled, anomalies) <- liftIO $
+  (endpoint, enpStats, project, shapesWithFieldsMap, fieldsMap, reqLatenciesRolledByStepsLabeled) <- liftIO $
     withPool pool $ do
       -- Should swap names betw enp and endpoint endpoint could be endpointStats
       endpoint <- Unsafe.fromJust <$> Endpoints.endpointById eid
@@ -177,8 +177,7 @@ endpointDetailsH sess pid eid fromDStr toDStr sinceStr' subPageM = do
       let steps = (maxV `quot` 100) :: Int
       let steps' = if steps == 0 then 100 else steps
       reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledBySteps maxV steps' pid (endpoint.urlPath) (endpoint.method)
-      anomalies <- Anomalies.selectAnomalies pid (Just eid) (Just False) (Just False) Nothing
-      pure (endpoint, enpStats, project, Vector.toList shapesWithFieldsMap, fieldsMap, Vector.toList reqLatenciesRolledBySteps, anomalies)
+      pure (endpoint, enpStats, project, Vector.toList shapesWithFieldsMap, fieldsMap, Vector.toList reqLatenciesRolledBySteps)
 
   let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
   let bwconf =
@@ -195,10 +194,10 @@ endpointDetailsH sess pid eid fromDStr toDStr sinceStr' subPageM = do
         Just a -> a
         Nothing -> maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD
   let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt, subPage = subPage}
-  pure $ bodyWrapper bwconf $ endpointDetails paramInput currTime endpoint enpStats shapesWithFieldsMap fieldsMap reqLatenciesRolledByStepsJ anomalies (fromD, toD)
+  pure $ bodyWrapper bwconf $ endpointDetails paramInput currTime endpoint enpStats shapesWithFieldsMap fieldsMap reqLatenciesRolledByStepsJ (fromD, toD)
 
-endpointDetails :: ParamInput -> UTCTime -> Endpoints.Endpoint -> EndpointRequestStats -> [ShapeWidthFields] -> Map FieldCategoryEnum [Fields.Field] -> Text -> Vector Anomalies.AnomalyVM -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
-endpointDetails paramInput currTime endpoint endpointStats shapesWithFieldsMap fieldsM reqLatenciesRolledByStepsJ anomalies dateRange = do
+endpointDetails :: ParamInput -> UTCTime -> Endpoints.Endpoint -> EndpointRequestStats -> [ShapeWidthFields] -> Map FieldCategoryEnum [Fields.Field] -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
+endpointDetails paramInput currTime endpoint endpointStats shapesWithFieldsMap fieldsM reqLatenciesRolledByStepsJ dateRange = do
   let currentURLSubPage = deleteParam "subpage" paramInput.currentURL
   div_ [class_ "w-full h-full overflow-hidden"] $ do
     div_ [class_ "w-[75%] inline-block p-5 h-full overflow-y-scroll"] $ do
@@ -230,7 +229,7 @@ endpointDetails paramInput currTime endpoint endpointStats shapesWithFieldsMap f
                 mIcon_ "whitedown" "text-white h-2 w-2 m-1"
       if paramInput.subPage == "api_docs"
         then apiDocsSubPage shapesWithFieldsMap
-        else apiOverviewSubPage paramInput currTime endpointStats fieldsM reqLatenciesRolledByStepsJ anomalies dateRange
+        else apiOverviewSubPage paramInput currTime endpointStats fieldsM reqLatenciesRolledByStepsJ dateRange
 
     aside_
       [ class_ "w-[25%] inline-block h-full overflow-y-auto overflow-x-hidden bg-white border border-gray-200 p-5 xsticky xtop-0 "
@@ -345,8 +344,8 @@ apiDocsSubPage shapesWithFieldsMap = do
         end
         |]
 
-apiOverviewSubPage :: ParamInput -> UTCTime -> EndpointRequestStats -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> Vector Anomalies.AnomalyVM -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
-apiOverviewSubPage paramInput currTime endpoint fieldsM reqLatenciesRolledByStepsJ anomalies dateRange = do
+apiOverviewSubPage :: ParamInput -> UTCTime -> EndpointRequestStats -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
+apiOverviewSubPage paramInput currTime endpoint fieldsM reqLatenciesRolledByStepsJ dateRange = do
   let currentURLSearch = deleteParam "to" $ deleteParam "from" $ deleteParam "since" paramInput.currentURL
   div_ [class_ "space-y-16 pb-20", id_ "subpage"] $ do
     a_
@@ -372,7 +371,7 @@ apiOverviewSubPage paramInput currTime endpoint fieldsM reqLatenciesRolledByStep
         a_ [class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ", [__| on click toggle .hidden on #timepickerSidebar |]] "Custom date range"
       div_ [class_ "inline-block relative hidden", id_ "timepickerSidebar"] do
         div_ [id_ "startTime", class_ "hidden"] ""
-    section_ $ AnomaliesList.anomalyListSlider currTime (endpoint.projectId) (Just endpoint.endpointId) (Just anomalies)
+    section_ $ AnomaliesList.anomalyListSlider currTime (endpoint.projectId) (Just endpoint.endpointId) Nothing
     endpointStats endpoint reqLatenciesRolledByStepsJ dateRange
 
 endpointStats :: Endpoints.EndpointRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
