@@ -25,6 +25,8 @@ import Data.Time (ZonedTime, UTCTime, getCurrentTime, utcToZonedTime, utc, addUT
 import Lucid.Hyperscript (__)
 import Data.Default (def)
 import Data.Time.Format (defaultTimeLocale)
+import System.Clock
+import Fmt
 
 timePickerItems :: [(Text, Text)]
 timePickerItems =
@@ -62,16 +64,17 @@ dashboardGetH sess pid fromDStr toDStr sinceStr' = do
           let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
           (f, t)
 
-  (project, projectRequestStats, reqLatenciesRolledByStepsLabeled, anomalies) <- liftIO $
+  startTime <- liftIO $ getTime Monotonic
+  (project, projectRequestStats, reqLatenciesRolledByStepsLabeled) <- liftIO $
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+
       projectRequestStats <- fromMaybe (def :: Projects.ProjectRequestStats) <$> Projects.projectRequestStatsByProject pid 
       let maxV = round (projectRequestStats.p99) :: Int
       let steps' = (maxV `quot` 100) :: Int
       let steps = if steps' == 0 then 100 else steps'
       reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledByStepsForProject maxV steps pid (fromD, toD)
-      anomalies <- Anomalies.selectAnomalies pid Nothing (Just False) (Just False) Nothing
-      pure (project, projectRequestStats, Vector.toList reqLatenciesRolledBySteps, anomalies)
+      pure (project, projectRequestStats, Vector.toList reqLatenciesRolledBySteps)
 
   let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
   let bwconf =
@@ -84,10 +87,10 @@ dashboardGetH sess pid fromDStr toDStr sinceStr' = do
   let currentURL = "/p/" <> pid.toText <> "?&from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
   let currentPickerTxt = fromMaybe (maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD ) sinceStr
   let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt}
-  pure $ bodyWrapper bwconf $ dashboardPage paramInput currTime projectRequestStats reqLatenciesRolledByStepsJ anomalies (fromD, toD)
+  pure $ bodyWrapper bwconf $ dashboardPage paramInput currTime projectRequestStats reqLatenciesRolledByStepsJ (fromD, toD)
 
-dashboardPage :: ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Text -> Vector Anomalies.AnomalyVM -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
-dashboardPage paramInput currTime projectStats reqLatenciesRolledByStepsJ anomalies dateRange = do
+dashboardPage :: ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
+dashboardPage paramInput currTime projectStats reqLatenciesRolledByStepsJ dateRange = do
   let currentURL' = deleteParam "to" $ deleteParam "from" $ deleteParam "since" paramInput.currentURL
   section_ [class_ "p-8 container mx-auto px-4 space-y-12 pb-24"] $ do
     div_ [class_ "relative p-1 "] do
@@ -116,7 +119,7 @@ dashboardPage paramInput currTime projectStats reqLatenciesRolledByStepsJ anomal
             div_ [id_ "startTime", class_ "hidden"] ""
 
     -- button_ [class_ "", id_ "checkin", onclick_ "window.picker.show()"] "timepicker"
-    section_ $ AnomaliesList.anomalyListSlider currTime anomalies
+    section_ $ AnomaliesList.anomalyListSlider currTime (projectStats.projectId) Nothing Nothing 
     dStats projectStats reqLatenciesRolledByStepsJ dateRange
   script_
     [text|

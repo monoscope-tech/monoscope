@@ -28,6 +28,7 @@ import Lucid.Hyperscript
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
+import Models.Apis.Endpoints qualified as Endpoints
 import NeatInterpolation (text)
 import Optics.Core ((^.))
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
@@ -44,6 +45,12 @@ data AnomalyBulkForm = AnomalyBulk
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
+
+-- anomaliesSliderGetH :: Sessions::PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
+-- anomaliesSliderGetH sess pid = do
+--   pool <- asks pool
+--   anomalies <- Anomalies.selectAnomalies pid Nothing (Just False) (Just False) Nothing
+
 
 acknowlegeAnomalyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Anomalies.AnomalyId -> DashboardM (Html ())
 acknowlegeAnomalyGetH sess pid aid = do
@@ -92,8 +99,8 @@ data ParamInput = ParamInput
   , sort :: Text
   }
 
-anomalyListGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
-anomalyListGetH sess pid layoutM ackdM archivedM sortM hxRequestM hxBoostedM = do
+anomalyListGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Endpoints.EndpointId -> Maybe Text -> Maybe Text -> DashboardM (Html ())
+anomalyListGetH sess pid layoutM ackdM archivedM sortM endpointM hxRequestM hxBoostedM = do
   let textToBool a = a == "true"
   let ackd = textToBool <$> ackdM
   let archived = textToBool <$> archivedM
@@ -124,7 +131,7 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM hxRequestM hxBoostedM = d
           anomalyList paramInput pid currTime anomalies
 
   case (layoutM, hxRequestM, hxBoostedM) of
-    (Just "slider", Just "true", _) -> pure $ anomalyListSlider currTime anomalies
+    (Just "slider", Just "true", _) -> pure $ anomalyListSlider currTime pid endpointM (Just anomalies)
     (_, Just "true", Just "false") -> pure elementBelowTabs
     (_, Just "true", Nothing) -> pure  elementBelowTabs
     _ -> pure $ bodyWrapper bwconf $ anomalyListPage paramInput pid currTime anomalies
@@ -190,9 +197,21 @@ anomalyList paramInput pid currTime anomalies = form_ [class_ "col-span-5 bg-whi
     strong_ "No anomalies yet"
   mapM_ (renderAnomaly False currTime) anomalies
 
-anomalyListSlider :: UTCTime -> Vector Anomalies.AnomalyVM -> Html ()
-anomalyListSlider _ [] = ""
-anomalyListSlider currTime anomalies = do
+anomalyListSlider :: UTCTime -> Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe (Vector Anomalies.AnomalyVM) -> Html ()
+anomalyListSlider _ _ _ (Just []) = ""
+anomalyListSlider _ pid eid Nothing =  do
+  let pidT = pid.toText
+  div_ [hxGet_ $ "/p/"<>pid.toText<>"/anomalies?layout=slider"<>maybe "" (\x-> "&endpoint=" <> x.toText) eid , hxSwap_ "outerHTML", hxTrigger_ "load"] $ do
+    div_ [class_ "flex justify-between mt-5 pb-2"] $ do
+      div_ [class_ "flex flex-row"] $ do
+        img_
+          [ src_ "/assets/svgs/cheveron-down.svg"
+          , class_ "h-4 mr-3 mt-1 w-4"
+          , [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .parent-slider)|]
+          ]
+        span_ [class_ "text-lg text-slate-700"] "Ongoing Anomalies and Monitors"
+      div_ [class_ "flex flex-row mt-2"] "" 
+anomalyListSlider currTime _ _ (Just anomalies)= do
   let anomalyIds = replace "\"" "'" $ show $ fmap (Anomalies.anomalyIdText . (^. #id)) anomalies
   div_ $ do
     script_ [text| var rem = (x,y)=>((x%y)==0?1:(x%y)); |]

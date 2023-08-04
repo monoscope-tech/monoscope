@@ -5,12 +5,40 @@
 
 packages:
 - completed:
+    hackage: relude-1.2.0.0@sha256:e47f363d57e5551542cc567b68f375001f850732ebe9c226351c26e7af56f797,11937
+    pantry-tree:
+      sha256: 12a9754897804bd1834bddc36f2800cb453cfec9903ac8be83f4621ac4a26075
+      size: 4286
+  original:
+    hackage: relude-1.2.0.0
+- completed:
+    hackage: cache-0.1.3.0@sha256:b87d21d21946ad69ea99be03f40f7a9b8d2250d5047328fe7bff33373f4e8546,1717
+    pantry-tree:
+      sha256: c7ab409e16a9454d141cf938a72077459900e6616a523d6438817b666082871c
+      size: 388
+  original:
+    hackage: cache-0.1.3.0
+- completed:
+    hackage: postgres-options-0.2.0.0@sha256:5e2d6408ed3943f9a056b58106186397b9aa1424c56f1f26668305ce8ea2838f,1604
+    pantry-tree:
+      sha256: a9fb2bafbaca65c548916e9276ad129302e0b82b7cc9a5c74d3b359a7a77d598
+      size: 295
+  original:
+    hackage: postgres-options-0.2.0.0
+- completed:
     hackage: Unique-0.4.7.9@sha256:a7e154cf6d05169777a1e54aadab24fb3a6eae3ee167e5e77d7ba96d182436c7,2064
     pantry-tree:
       sha256: eb62502b1de8adee91f0feb104a36f87a21a9367f95295d4f12c73183a9b1e54
       size: 1366
   original:
     hackage: Unique-0.4.7.9@sha256:a7e154cf6d05169777a1e54aadab24fb3a6eae3ee167e5e77d7ba96d182436c7,2064
+- completed:
+    hackage: pg-entity-0.0.4.0@sha256:d856c6de76ec9fae20254e9b965fa4b6005681a8badb04d439cf1875095cfec6,3582
+    pantry-tree:
+      sha256: 425e58c15da7d99cd33d16831f0d611a43f67a56cd83ada16c121497c16f7baa
+      size: 1025
+  original:
+    hackage: pg-entity-0.0.4.0
 - completed:
     hackage: resource-pool-0.3.0.0@sha256:b47dca24af48001d8247cc8a38cd09f148e9b22d959b845bbdb43ebf47ab072a,1280
     pantry-tree:
@@ -232,19 +260,6 @@ packages:
     commit: 494098af1709d32b75b0be41157547ae7a2bd89d
     git: https://github.com/brendanhay/gogol.git
     subdir: lib/services/gogol-cloudtrace
-- completed:
-    commit: da682990e5f283ab809474901cb4348ac9dbcb05
-    git: https://github.com/tchoutri/pg-entity.git
-    name: pg-entity
-    pantry-tree:
-      sha256: cd47d51ede7a6cc39ac72eee15b952c923d7977463fe44ab6fe18c133da781eb
-      size: 2162
-    subdir: .
-    version: 0.0.4.2
-  original:
-    commit: da682990e5f283ab809474901cb4348ac9dbcb05
-    git: https://github.com/tchoutri/pg-entity.git
-    subdir: .
 - completed:
     commit: 60481132b229d22eda8efcd3392dd1df237bd968
     git: https://github.com/saurabhnanda/odd-jobs

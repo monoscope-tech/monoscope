@@ -40,6 +40,7 @@ import Database.PostgreSQL.Transact (DBT, executeMany)
 import Database.PostgreSQL.Transact qualified as PgT
 import Deriving.Aeson qualified as DAE
 import Models.Projects.Projects qualified as Projects
+import GHC.Records (HasField (getField))
 import Optics.TH (makeFieldLabelsNoPrefix)
 import Relude
 import Utils (DBField (MkDBField))
@@ -51,6 +52,9 @@ newtype EndpointId = EndpointId {unEndpointId :: UUID.UUID}
     (ToJSON, FromJSON, Eq, Ord, FromField, ToField, FromHttpApiData, Default)
     via UUID.UUID
   deriving anyclass (FromRow, ToRow)
+
+instance HasField "toText" EndpointId Text where
+  getField = UUID.toText . unEndpointId 
 
 endpointIdText :: EndpointId -> Text
 endpointIdText = UUID.toText . unEndpointId

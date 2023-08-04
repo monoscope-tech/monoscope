@@ -23,6 +23,7 @@ import Data.Default.Instances ()
 import Data.Time (CalendarDiffTime, ZonedTime, defaultTimeLocale, formatTime, diffUTCTime, zonedTimeToUTC)
 import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
 import Data.UUID qualified as UUID
+import Data.Vector qualified as V
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, queryOne)
 import Database.PostgreSQL.Entity.Types
@@ -173,6 +174,7 @@ select duration_steps, count(id)
 	GROUP BY duration_steps 
 	ORDER BY duration_steps;
       |]
+
 
 -- TODO: expand this into a view
 selectReqLatenciesRolledByStepsForProject :: Int -> Int -> Projects.ProjectId -> (Maybe ZonedTime, Maybe ZonedTime) -> DBT IO (Vector (Int, Int))
