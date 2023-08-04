@@ -6,6 +6,7 @@ import Colog (LogAction)
 import Data.Cache (Cache)
 import Data.Pool as Pool
 import Data.Text qualified as T
+import Data.Text.Lazy qualified as LT
 import Database.PostgreSQL.Simple (Connection)
 import Models.Projects.Projects qualified as Projects
 import Optics.TH
@@ -44,6 +45,7 @@ data EnvConfig = EnvConfig
   , paddleSandboxHobby :: Text
   , paddleHobby :: Text
   , orttoApiKey :: Text
+  , googleServiceAccountB64 :: LT.Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromEnv)
