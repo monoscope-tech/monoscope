@@ -1,7 +1,9 @@
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 module Server (app) where
 
+import GitHash
 import Colog (LogAction)
 import Config (DashboardM, ctxToHandler, pool)
 import Config qualified
@@ -193,6 +195,8 @@ server = protectedServer :<|> publicServer
 data Status = Status
   { ping :: Text
   , dbVersion :: Maybe Text
+  , gitHash :: Text
+  , gitCommitDate :: Text
   }
   deriving stock (Generic)
   deriving
@@ -204,10 +208,13 @@ statusH = do
   pool <- asks pool
   let query = [sql| select version(); |]
   version <- liftIO $ withPool pool $ queryOne Select query ()
+  let gi = $$tGitInfoCwd
   pure $
     Status
       { ping = "pong"
       , dbVersion = version
+      , gitHash = toText $ giHash gi
+      , gitCommitDate = toText $ giCommitDate gi
       }
 
 pingH :: DashboardM Text 

@@ -138,6 +138,7 @@ library
     , fakedata
     , fmt
     , generic-lens
+    , githash
     , gogol
     , gogol-core
     , gogol-pubsub
