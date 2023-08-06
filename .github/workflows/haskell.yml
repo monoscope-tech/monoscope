@@ -69,7 +69,7 @@ jobs:
 
 
       - name: Preset Image Name
-        run: echo "IMAGE_URL=$(echo gcr.io/past-3/apitoolkit:$(echo ${{ github.sha }})" >> $GITHUB_ENV
+        run: echo "IMAGE_URL=$(echo gcr.io/past-3/apitoolkit:${{ github.sha }})" >> $GITHUB_ENV
 
       - name: Deploy Image to CapRrover
         uses: caprover/deploy-from-github@v1.1.2
