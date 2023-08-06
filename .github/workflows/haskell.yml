@@ -73,7 +73,7 @@ jobs:
           server: "${{ secrets.CAPTAINROVER_SERVER }}"
           app: "${{ secrets.CAPTAINROVERAPP_NAME }}"
           token: "${{ secrets.CAPTAINROVER_APP_TOKEN }}"
-          image: gcr.io/past-3/apitoolkit:${{  github.sha }}
+          image: "gcr.io/past-3/apitoolkit:${{  github.sha }}"
 
       - name: Show Output
         run: echo ${{ steps.deploy.outputs.url }}
