@@ -63,7 +63,7 @@ jobs:
         uses: caprover/deploy-from-github@v1.1.2
         with:
           server: "${{ secrets.CAPTAINROVER_SERVER }}"
-          app: "${{ secrets.CAPTAINROVERAPP_NAME }}"
+          app: "${{ secrets.CAPTAINROVER_APP_NAME }}"
           token: "${{ secrets.CAPTAINROVER_APP_TOKEN }}"
           image: "${{ env.IMAGE_URL }}"
 
