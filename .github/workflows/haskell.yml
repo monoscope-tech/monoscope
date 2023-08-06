@@ -67,13 +67,17 @@ jobs:
       #     image: gcr.io/past-3/apitoolkit:${{  github.sha }}
       #     region: europe-west1
 
+
+      - name: Preset Image Name
+        run: echo "IMAGE_URL=$(echo gcr.io/past-3/apitoolkit:$(echo ${{ github.sha }} | cut -c1-7) | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
       - name: Deploy Image to CapRrover
         uses: caprover/deploy-from-github@v1.1.2
         with:
           server: "${{ secrets.CAPTAINROVER_SERVER }}"
           app: "${{ secrets.CAPTAINROVERAPP_NAME }}"
           token: "${{ secrets.CAPTAINROVER_APP_TOKEN }}"
-          image: "gcr.io/past-3/apitoolkit:${{  github.sha }}"
+          image: ${{ env.IMAGE_URL }}
 
       - name: Show Output
         run: echo ${{ steps.deploy.outputs.url }}
