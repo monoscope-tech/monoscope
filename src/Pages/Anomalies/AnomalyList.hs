@@ -39,6 +39,7 @@ import Servant.Htmx (HXTrigger)
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils
 import Web.FormUrlEncoded (FromForm)
+import Witch (from)
 
 data AnomalyBulkForm = AnomalyBulk
   { anomalyId :: [Text]
@@ -213,6 +214,7 @@ anomalyListSlider _ pid eid Nothing =  do
       div_ [class_ "flex flex-row mt-2"] "" 
 anomalyListSlider currTime _ _ (Just anomalies)= do
   let anomalyIds = replace "\"" "'" $ show $ fmap (Anomalies.anomalyIdText . (^. #id)) anomalies
+  let totalAnomaliesTxt = toText $ if length anomalies > 50 then "50+" else show (length anomalies)
   div_ $ do
     script_ [text| var rem = (x,y)=>((x%y)==0?1:(x%y)); |]
     script_
@@ -222,7 +224,7 @@ anomalyListSlider currTime _ _ (Just anomalies)= do
               set $$anomalyIds to $anomalyIds
 
           def setAnomalySliderPag()
-            set #anomalySliderPagination.innerHTML to ($$currentAnomaly+1)+'/'+$$anomalyIds.length
+            set #anomalySliderPagination.innerHTML to ($$currentAnomaly+1)+'/$totalAnomaliesTxt '
           end
          |]
     div_ [class_ "flex justify-between mt-5 pb-2"] $ do

@@ -194,6 +194,7 @@ selectAnomalies pid endpointM isAcknowleged isArchived sortM = query Select (Que
     Just "last_seen" -> "last_seen desc"
     _ -> "avm.created_at desc"
 
+  -- FIXME: optimize anomalies equation
   q =
     [text|
 SELECT avm.id, avm.created_at, avm.updated_at, avm.project_id, aan.acknowleged_at, aan.acknowleged_by, avm.anomaly_type, avm.action, avm.target_hash,
@@ -215,5 +216,7 @@ SELECT avm.id, avm.created_at, avm.updated_at, avm.project_id, aan.acknowleged_a
         AND avm.anomaly_type != 'field'
         AND rd.created_at > NOW() - interval '14 days'
     GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25
-    ORDER BY $orderBy;
+    ORDER BY $orderBy
+    limit 51;
       |]
+  -- TODO: notice the limit? We need to support pagination on the anomalies page

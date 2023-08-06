@@ -59,13 +59,21 @@ jobs:
           docker build -t gcr.io/past-3/apitoolkit:${{  github.sha }} -t gcr.io/past-3/apitoolkit:latest .
           docker push gcr.io/past-3/apitoolkit:${{  github.sha }}
           docker push gcr.io/past-3/apitoolkit:latest
-      - name: Deploy to Cloud Run
-        id: deploy
-        uses: google-github-actions/deploy-cloudrun@v0
+      # - name: Deploy to Cloud Run
+      #   id: deploy
+      #   uses: google-github-actions/deploy-cloudrun@v0
+      #   with:
+      #     service: apitoolkit
+      #     image: gcr.io/past-3/apitoolkit:${{  github.sha }}
+      #     region: europe-west1
+
+      - name: Deploy Image to CapRrover
+        uses: caprover/deploy-from-github@v1.1.2
         with:
-          service: apitoolkit
+          server: "${{ secrets.CAPTAINROVER_SERVER }}"
+          app: "${{ secrets.CAPTAINROVERAPP_NAME }}"
+          token: "${{ secrets.CAPTAINROVER_APP_TOKEN }}"
           image: gcr.io/past-3/apitoolkit:${{  github.sha }}
-          region: europe-west1
 
       - name: Show Output
         run: echo ${{ steps.deploy.outputs.url }}

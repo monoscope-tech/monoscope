@@ -59,9 +59,6 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child =
 
           link_ [rel_ "stylesheet", type_ "text/css", href_ "/assets/css/tailwind.min.css"]
           link_ [rel_ "stylesheet", type_ "text/css", href_ "/assets/css/thirdparty/notyf3.min.css"]
-          -- link_ [rel_ "preconnect", href_ "https://fonts.googleapis.com"]
-          -- link_ [rel_ "preconnect", href_ "https://fonts.gstatic.com", crossorigin_ "true"]
-          -- link_ [rel_ "stylesheet", href_ "https://fonts.googleapis.com/css2?family=Inconsolata&family=Poppins:wght@400;500;600&display=swap"]
           link_ [rel_ "preconnect", href_ "https://rsms.me/"]
           link_ [rel_ "stylesheet", href_ "https://rsms.me/inter/inter.css"]
 
