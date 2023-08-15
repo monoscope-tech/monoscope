@@ -192,7 +192,8 @@ processProjectPostForm sess cpRaw = do
 ----------------------------------------------------------------------------------------------------------
 -- createProjectBody is the core html view
 createProjectBody :: Sessions.PersistentSession -> EnvConfig -> Bool -> CreateProjectForm -> CreateProjectFormError -> Html ()
-createProjectBody sess envCfg isUpdate cp cpe =
+createProjectBody sess envCfg isUpdate cp cpe = do
+  let paymentPlan = if cp.paymentPlan == "" then "Hobby" else cp.paymentPlan
   section_ [id_ "main-content", class_ "p-6"] $ do
     div_ [class_ "mx-auto", style_ "max-width:800px"] $ do
       h2_ [class_ "text-slate-700 text-3xl font-medium mb-5"] $ toHtml @String $ if isUpdate then "Project Settings" else "Create Project"
@@ -200,7 +201,7 @@ createProjectBody sess envCfg isUpdate cp cpe =
         form_ [class_ "col-span-1 relative px-10 border border-gray-200 py-10  bg-white rounded-3xl", hxPost_ "/p/new", hxTarget_ "#main-content", hxSwap_ "outerHTML", id_ "createUpdateBodyForm"] $ do
           input_ [name_ "isUpdate", type_ "hidden", value_ $ if isUpdate then "true" else "false"]
           input_ [name_ "projectId", type_ "hidden", value_ $ cp.projectId]
-          input_ [name_ "paymentPlan", type_ "hidden", value_ $ cp.paymentPlan, id_ "paymentPlanEl"]
+          input_ [name_ "paymentPlan", type_ "hidden", value_ $ paymentPlan, id_ "paymentPlanEl"]
           div_ $ do
             label_ [class_ "text-gray-700 mx-2 text-sm"] do
               "Title"
@@ -228,10 +229,10 @@ createProjectBody sess envCfg isUpdate cp cpe =
               "Please select a plan"
               span_ [class_ "text-red-400"] " *"
             div_ [class_ "grid grid-cols-3 gap-4 border-1"] do
-              ( [ ("Free", "20k", "$0", "1", cp.paymentPlan == "Free", "")
-                , ("Hobby", "250k", "$10", "3", cp.paymentPlan == "Hobby", if envCfg.paddleSandbox then envCfg.paddleSandboxHobby else envCfg.paddleHobby)
-                , ("Startup", "1m", "$50", "5", cp.paymentPlan == "Startup", if envCfg.paddleSandbox then envCfg.paddleSandboxStartup else envCfg.paddleStartup)
-                , ("Growth", "10m", "$250", "10", cp.paymentPlan == "Growth", if envCfg.paddleSandbox then envCfg.paddleSandboxGrowth else envCfg.paddleGrowth)
+              ( [ --("Free", "20k", "$0", "1", cp.paymentPlan == "Free", "")
+                 ("Hobby", "250k", "$10", "3", paymentPlan == "Hobby", if envCfg.paddleSandbox then envCfg.paddleSandboxHobby else envCfg.paddleHobby)
+                , ("Startup", "1m", "$50", "5", paymentPlan == "Startup", if envCfg.paddleSandbox then envCfg.paddleSandboxStartup else envCfg.paddleStartup)
+                , ("Growth", "10m", "$250", "10", paymentPlan == "Growth", if envCfg.paddleSandbox then envCfg.paddleSandboxGrowth else envCfg.paddleGrowth)
                 ] ::
                   [(Text, Text, Text, Text, Bool, Text)]
                 )
