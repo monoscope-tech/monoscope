@@ -12,10 +12,11 @@ import Data.UUID qualified as UUID
 import Data.Vector (Vector, iforM_, (!?))
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
+import Fmt
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
-import Lucid.Svg (use_)
+import Lucid.Svg (onclick_, use_)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
@@ -24,7 +25,6 @@ import Optics.Core ((^.))
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Relude
 import System.Clock
-import Fmt
 
 -- $setup
 -- >>> import Relude
@@ -199,7 +199,7 @@ jsonValueToHtmlTree val = jsonValueToHtmlTree' ("", "", val)
       $ do
         span_ $ toHtml key
         span_ [class_ "text-blue-800"] ":"
-        span_ [class_ "text-blue-800 ml-2.5 log-item-field-value"] $ toHtml $ unwrapJsonPrimValue value
+        span_ [class_ "text-blue-800 ml-2.5 log-item-field-value", term "data-field-path" fullFieldPath'] $ toHtml $ unwrapJsonPrimValue value
 
   renderParentType :: Text -> Text -> Text -> Int -> Html () -> Html ()
   renderParentType opening closing key count child = div_ [class_ (if key == "" then "" else "collapsed")] $ do
@@ -236,7 +236,7 @@ jsonTreeAuxillaryCode pid = do
           , role_ "menuitem"
           , tabindex_ "-1"
           , id_ "menu-item-0"
-          , hxGet_ $ "/p/" <>  pid.toText <> "/log_explorer"
+          , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
           , hxPushUrl_ "true"
           , hxVals_ "js:{query:params().query,cols:toggleColumnToSummary(event)}"
           , hxSwap_ "innerHTML scroll:#log-item-table-body:top"
@@ -259,6 +259,18 @@ jsonTreeAuxillaryCode pid = do
                   end|]
           ]
           "Copy field value"
+        button_
+          [ class_ "cursor-pointer w-full text-left text-gray-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-gray-900"
+          , role_ "menuitem"
+          , tabindex_ "-1"
+          , id_ "menu-item-2"
+          , [__|on click 
+                    set filter_path to (previous .log-item-field-value) @data-field-path
+                    set filter_value to (previous  <.log-item-field-value/>)'s innerText
+                    window.editor.setValue(window.editor.getValue() + filter_path + "=" + filter_value)
+                  end|]
+          ]
+          "Filter by field"
 
   script_
     [type_ "text/hyperscript"]
