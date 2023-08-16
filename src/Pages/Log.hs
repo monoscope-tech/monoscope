@@ -16,7 +16,7 @@ import Fmt
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
-import Lucid.Svg (onclick_, use_)
+import Lucid.Svg (use_)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
@@ -165,8 +165,13 @@ logItemRows pid requests cols nextLogsURL = do
                     , [__|install LogItemMenuable|]
                     ]
                     $ toHtml colValue
-          span_ [class_ "mx-1 inline-block bg-green-100 green-800 px-3 rounded-xl monospace"] $ toHtml $ req ^. #method
-          span_ [class_ "mx-1 inline-block bg-slate-100 slate-900 px-3 rounded-xl monospace"] $ toHtml $ req ^. #urlPath
+          let cls = "mx-1 inline-block slate-900 px-3 rounded-xl monospace" :: Text
+          let method_cls = cls <> getMethodBgColor (req ^. #method)
+          span_ [class_ method_cls] $ toHtml $ req ^. #method
+          let status_cls = if req ^. #statusCode > 400 then cls <> " bg-red-100" else cls <> " bg-green-100"
+          span_ [class_ status_cls] $ show $ req ^. #statusCode
+          span_ [class_ $ cls <> " bg-gray-100"] $ toHtml $ req ^. #urlPath
+          span_ [class_ $ cls <> " bg-gray-100"] $ toHtml $ req ^. #rawUrl
           let rawUrl = req ^. #rawUrl
           let reqBody = decodeUtf8 $ AE.encode $ req ^. #requestBody
           let respBody = decodeUtf8 $ AE.encode $ req ^. #responseBody
@@ -175,6 +180,13 @@ logItemRows pid requests cols nextLogsURL = do
           p_ [class_ "inline-block"] $ toHtml $ T.take 300 [text| raw_url=$rawUrl request_body=$reqBody response_body=$respBody request_headers=$reqHeaders response_headers=$respHeaders|]
   a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ nextLogsURL] "LOAD MORE"
 
+getMethodBgColor :: Text -> Text
+getMethodBgColor method = case method of
+  "POST" -> " bg-green-100"
+  "PUT" -> " bg-orange-100"
+  "DELETE" -> " bg-red-100"
+  "PATCH" -> " bg-purple-100"
+  _ -> " bg-blue-100"
 apiLogItemView :: RequestDumps.RequestDumpLogItem -> Html ()
 apiLogItemView req =
   div_ [class_ "log-item-info border-l-blue-200 border-l-4"] $
@@ -241,8 +253,8 @@ jsonTreeAuxillaryCode pid = do
           , hxVals_ "js:{query:params().query,cols:toggleColumnToSummary(event)}"
           , hxSwap_ "innerHTML scroll:#log-item-table-body:top"
           , hxTarget_ "#log-item-table-body"
-          , [__|init 
-                  set fp to (closest <.log-item-field-parent/>)'s @data-field-path then 
+          , [__|init
+                  set fp to (closest @data-field-path)
                   if isFieldInSummary(fp) then set my innerHTML to 'Remove field from summary' end|]
           ]
           "Add field to Summary"
@@ -314,10 +326,12 @@ jsonTreeAuxillaryCode pid = do
       if (cols.includes(subject)) {
         return [...new Set(cols.filter(x=>x!=subject))].join(",");
       } 
-      return [...new Set(cols.concat(subject))].join(",");
+      cols.push(subject)
+      const new_cols = [... new Set (cols)].join (",")
+      return new_cols
     }
-    var isFieldInSummary = field=>params().cols.split(",").includes(field);
-    var getQueryFromEditor = ()=>window.editor.getValue();
+    var isFieldInSummary = field => params().cols.split(",").includes(field);
+    var getQueryFromEditor = () => window.editor.getValue();
 
     var execd = false
     document.addEventListener('DOMContentLoaded', function(){
