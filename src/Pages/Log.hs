@@ -168,10 +168,10 @@ logItemRows pid requests cols nextLogsURL = do
           let cls = "mx-1 inline-block slate-900 px-3 rounded-xl monospace" :: Text
           let method_cls = cls <> getMethodBgColor (req ^. #method)
           span_ [class_ method_cls] $ toHtml $ req ^. #method
-          let status_cls = if req ^. #statusCode > 400 then cls <> " bg-red-100" else cls <> " bg-green-100"
-          span_ [class_ status_cls] $ show $ req ^. #statusCode
           span_ [class_ $ cls <> " bg-gray-100"] $ toHtml $ req ^. #urlPath
           span_ [class_ $ cls <> " bg-gray-100"] $ toHtml $ req ^. #rawUrl
+          let status_cls = if req ^. #statusCode > 400 then cls <> " bg-red-100" else cls <> " bg-green-100"
+          span_ [class_ status_cls] $ show $ req ^. #statusCode
           let rawUrl = req ^. #rawUrl
           let reqBody = decodeUtf8 $ AE.encode $ req ^. #requestBody
           let respBody = decodeUtf8 $ AE.encode $ req ^. #responseBody
@@ -182,10 +182,10 @@ logItemRows pid requests cols nextLogsURL = do
 
 getMethodBgColor :: Text -> Text
 getMethodBgColor method = case method of
-  "POST" -> " bg-green-100"
-  "PUT" -> " bg-orange-100"
-  "DELETE" -> " bg-red-100"
-  "PATCH" -> " bg-purple-100"
+  "POST" -> " bg-pink-200"
+  "PUT" -> " bg-orange-200"
+  "DELETE" -> " bg-red-200"
+  "PATCH" -> " bg-purple-200"
   _ -> " bg-blue-100"
 apiLogItemView :: RequestDumps.RequestDumpLogItem -> Html ()
 apiLogItemView req =
