@@ -49,6 +49,7 @@ import Servant (
  )
 import Servant.Htmx
 import Web.FormUrlEncoded (FromForm)
+import Data.Text (toLower)
 
 data CreateProjectForm = CreateProjectForm
   { title :: Text
@@ -165,6 +166,7 @@ processProjectPostForm sess cpRaw = do
                 Just idX -> pure idX
 
             when (userId' /= currUserId) $ -- invite the users to the project (Usually as an email)
+               -- invite the users to the project (Usually as an email)
               liftIO $ do
                 _ <- withResource pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId' pid email (cp.title)
                 pass
@@ -192,15 +194,16 @@ processProjectPostForm sess cpRaw = do
 ----------------------------------------------------------------------------------------------------------
 -- createProjectBody is the core html view
 createProjectBody :: Sessions.PersistentSession -> EnvConfig -> Bool -> CreateProjectForm -> CreateProjectFormError -> Html ()
-createProjectBody sess envCfg isUpdate cp cpe =
-  section_ [id_ "main-content", class_ "p-6"] $ do
+createProjectBody sess envCfg isUpdate cp cpe = do
+  let paymentPlan = if cp.paymentPlan == "" then "Hobby" else cp.paymentPlan
+  section_ [id_ "main-content", class_ "p-3 py-5 sm:p-6"] $ do
     div_ [class_ "mx-auto", style_ "max-width:800px"] $ do
       h2_ [class_ "text-slate-700 text-3xl font-medium mb-5"] $ toHtml @String $ if isUpdate then "Project Settings" else "Create Project"
       div_ [class_ "grid gap-5"] do
-        form_ [class_ "col-span-1 relative px-10 border border-gray-200 py-10  bg-white rounded-3xl", hxPost_ "/p/new", hxTarget_ "#main-content", hxSwap_ "outerHTML", id_ "createUpdateBodyForm"] $ do
+        form_ [class_ "col-span-1 relative px-3 sm:px-10 border border-gray-200 py-10  bg-white rounded-3xl", hxPost_ "/p/new", hxTarget_ "#main-content", hxSwap_ "outerHTML", id_ "createUpdateBodyForm"] $ do
           input_ [name_ "isUpdate", type_ "hidden", value_ $ if isUpdate then "true" else "false"]
           input_ [name_ "projectId", type_ "hidden", value_ $ cp.projectId]
-          input_ [name_ "paymentPlan", type_ "hidden", value_ $ cp.paymentPlan, id_ "paymentPlanEl"]
+          input_ [name_ "paymentPlan", type_ "hidden", value_ $ paymentPlan, id_ "paymentPlanEl"]
           div_ $ do
             label_ [class_ "text-gray-700 mx-2 text-sm"] do
               "Title"
@@ -227,20 +230,23 @@ createProjectBody sess envCfg isUpdate cp cpe =
             p_ [class_ "text-gray-700 mx-2 pb-2 text-sm"] do
               "Please select a plan"
               span_ [class_ "text-red-400"] " *"
-            div_ [class_ "grid grid-cols-3 gap-4 border-1"] do
-              ( [ ("Free", "20k", "$0", "1", cp.paymentPlan == "Free", "")
-                , ("Hobby", "250k", "$10", "3", cp.paymentPlan == "Hobby", if envCfg.paddleSandbox then envCfg.paddleSandboxHobby else envCfg.paddleHobby)
-                , ("Startup", "1m", "$50", "5", cp.paymentPlan == "Startup", if envCfg.paddleSandbox then envCfg.paddleSandboxStartup else envCfg.paddleStartup)
-                , ("Growth", "10m", "$250", "10", cp.paymentPlan == "Growth", if envCfg.paddleSandbox then envCfg.paddleSandboxGrowth else envCfg.paddleGrowth)
+            div_ [class_ "grid md:grid-cols-3 gap-4 border-1"] do
+              ( [ --("Free", "20k", "$0", "1", cp.paymentPlan == "Free", "")
+                 ("Hobby", "250k", "$10", "3", paymentPlan == "Hobby", if envCfg.paddleSandbox then envCfg.paddleSandboxHobby else envCfg.paddleHobby)
+                , ("Startup", "1m", "$50", "5", paymentPlan == "Startup", if envCfg.paddleSandbox then envCfg.paddleSandboxStartup else envCfg.paddleStartup)
+                , ("Growth", "10m", "$250", "10", paymentPlan == "Growth", if envCfg.paddleSandbox then envCfg.paddleSandboxGrowth else envCfg.paddleGrowth)
                 ] ::
                   [(Text, Text, Text, Text, Bool, Text)]
                 )
                 & mapM_ \(title, included, price, team, isSelected, paddleSubsCode) -> do
+                  let isSelectedTxt = toLower $ show isSelected
                   a_
                     [ class_ $ "payment-plans cursor-pointer space-y-1 border border-1  block p-2 rounded-md  shadow-blue-100 " <> if isSelected then " border-blue-200 shadow-lg" else ""
                     , term
                         "_"
-                        [text| on click set window.paymentPlan to $paddleSubsCode
+                        [text| 
+                          init if $isSelectedTxt then set window.paymentPlan to $paddleSubsCode end 
+                          on click set window.paymentPlan to $paddleSubsCode
                                            then set #paymentPlanEl.value to "$title"
                                            then remove .border-blue-200 .shadow-lg from .payment-plans
                                            then remove .payment-radio-active from .payment-radio 
@@ -251,7 +257,7 @@ createProjectBody sess envCfg isUpdate cp cpe =
                     do
                       div_ [class_ "flex items-center justify-between border-b border-b-1 p-2"] do
                         h4_ [class_ "text-xl font-medium text-gray-700"] $ toHtml title
-                        div_ [class_ "grid place-items-center h-6 w-6 bg-gray-200 border rounded-full payment-radio"] do
+                        div_ [class_ $ "grid place-items-center h-6 w-6 bg-gray-200 border rounded-full payment-radio " <> if isSelected then "payment-radio-active" else ""] do
                           div_ [class_ "bg-white h-3 w-3 hidden rounded-full"] ""
                       div_ [class_ "text-lg py-3"] do
                         span_ [class_ "text-2xl text-blue-700"] $ toHtml price
@@ -265,7 +271,7 @@ createProjectBody sess envCfg isUpdate cp cpe =
                         small_ "max "
                         span_ $ toHtml team
                         small_ " team members"
-                      if (paddleSubsCode == "")
+                      if paddleSubsCode == ""
                         then do
                           div_ [class_ "flex gap-1 items-center"] do
                             img_ [class_ "h-3 w-3", src_ "/assets/svgs/checkmark_green.svg"]
@@ -319,11 +325,15 @@ createProjectBody sess envCfg isUpdate cp cpe =
           script_
             [type_ "text/javascript"]
             [text|
+            // NOTE: Default
+           //window.paymentPlan = "Hobby";
            $paddleSandbox 
            Paddle.Setup({ vendor: $paddleVendor });
  
            window.paymentAction = function(){
+             const paymentPlan = document.getElementById("paymentPlanEl").value; 
              console.log("PaymentPlan", document.getElementById("paymentPlanEl").value)
+             console.log("window.paymentPlan", window.paymentPlan)
              if (document.getElementById("paymentPlanEl").value == "Free"){
                htmx.trigger("#createUpdateBodyForm", "submit")
                return
@@ -335,7 +345,6 @@ createProjectBody sess envCfg isUpdate cp cpe =
              };
  
              window.onPaddleSuccess = function (x) {
-               console.log(x);
                htmx.trigger("#createUpdateBodyForm", "submit")
              };
              window.onPaddleClose = function () {
