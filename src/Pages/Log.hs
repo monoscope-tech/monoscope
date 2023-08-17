@@ -12,6 +12,7 @@ import Data.UUID qualified as UUID
 import Data.Vector (Vector, iforM_, (!?))
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
+import Fmt
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
@@ -24,7 +25,6 @@ import Optics.Core ((^.))
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Relude
 import System.Clock
-import Fmt
 
 -- $setup
 -- >>> import Relude
@@ -165,8 +165,13 @@ logItemRows pid requests cols nextLogsURL = do
                     , [__|install LogItemMenuable|]
                     ]
                     $ toHtml colValue
-          span_ [class_ "mx-1 inline-block bg-green-100 green-800 px-3 rounded-xl monospace"] $ toHtml $ req ^. #method
-          span_ [class_ "mx-1 inline-block bg-slate-100 slate-900 px-3 rounded-xl monospace"] $ toHtml $ req ^. #urlPath
+          let cls = "mx-1 inline-block slate-900 px-3 rounded-xl monospace" :: Text
+          let method_cls = cls <> getMethodBgColor (req ^. #method)
+          span_ [class_ method_cls] $ toHtml $ req ^. #method
+          span_ [class_ $ cls <> " bg-gray-100"] $ toHtml $ req ^. #urlPath
+          span_ [class_ $ cls <> " bg-gray-100"] $ toHtml $ req ^. #rawUrl
+          let status_cls = if req ^. #statusCode > 400 then cls <> " bg-red-100" else cls <> " bg-green-100"
+          span_ [class_ status_cls] $ show $ req ^. #statusCode
           let rawUrl = req ^. #rawUrl
           let reqBody = decodeUtf8 $ AE.encode $ req ^. #requestBody
           let respBody = decodeUtf8 $ AE.encode $ req ^. #responseBody
@@ -174,6 +179,13 @@ logItemRows pid requests cols nextLogsURL = do
           let respHeaders = decodeUtf8 $ AE.encode $ req ^. #responseHeaders
           p_ [class_ "inline-block"] $ toHtml $ T.take 300 [text| raw_url=$rawUrl request_body=$reqBody response_body=$respBody request_headers=$reqHeaders response_headers=$respHeaders|]
   a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ nextLogsURL] "LOAD MORE"
+
+getMethodBgColor :: Text -> Text
+getMethodBgColor "POST" = " bg-pink-200"
+getMethodBgColor "PUT" = " bg-orange-100"
+getMethodBgColor "DELETE" = " bg-red-100"
+getMethodBgColor "PATCH" = " bg-purple-100"
+getMethodBgColor _ = " bg-blue-100"
 
 apiLogItemView :: RequestDumps.RequestDumpLogItem -> Html ()
 apiLogItemView req =
@@ -199,7 +211,7 @@ jsonValueToHtmlTree val = jsonValueToHtmlTree' ("", "", val)
       $ do
         span_ $ toHtml key
         span_ [class_ "text-blue-800"] ":"
-        span_ [class_ "text-blue-800 ml-2.5 log-item-field-value"] $ toHtml $ unwrapJsonPrimValue value
+        span_ [class_ "text-blue-800 ml-2.5 log-item-field-value", term "data-field-path" fullFieldPath'] $ toHtml $ unwrapJsonPrimValue value
 
   renderParentType :: Text -> Text -> Text -> Int -> Html () -> Html ()
   renderParentType opening closing key count child = div_ [class_ (if key == "" then "" else "collapsed")] $ do
@@ -236,13 +248,13 @@ jsonTreeAuxillaryCode pid = do
           , role_ "menuitem"
           , tabindex_ "-1"
           , id_ "menu-item-0"
-          , hxGet_ $ "/p/" <>  pid.toText <> "/log_explorer"
+          , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
           , hxPushUrl_ "true"
           , hxVals_ "js:{query:params().query,cols:toggleColumnToSummary(event)}"
           , hxSwap_ "innerHTML scroll:#log-item-table-body:top"
           , hxTarget_ "#log-item-table-body"
-          , [__|init 
-                  set fp to (closest <.log-item-field-parent/>)'s @data-field-path then 
+          , [__|init
+                  set fp to (closest @data-field-path)
                   if isFieldInSummary(fp) then set my innerHTML to 'Remove field from summary' end|]
           ]
           "Add field to Summary"
@@ -259,6 +271,29 @@ jsonTreeAuxillaryCode pid = do
                   end|]
           ]
           "Copy field value"
+        button_
+          [ class_ "cursor-pointer w-full text-left text-gray-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-gray-900"
+          , role_ "menuitem"
+          , tabindex_ "-1"
+          , id_ "menu-item-2"
+          , [__|on click 
+                    set filter_path to (previous .log-item-field-value) @data-field-path
+                    set filter_value to (previous  <.log-item-field-value/>)'s innerText
+                    if window.editor.getValue().includes(filter_path) and window.editor.getValue().includes(filter_value)
+                       exit
+                    end
+                    if window.editor.getValue().toLowerCase().endsWith("and") or window.editor.getValue().toLowerCase().endsWith("or") then
+                       window.editor.setValue(window.editor.getValue() + " " + filter_path + "=" + filter_value)
+                      else 
+                        if window.editor.getValue().length == "" then
+                           window.editor.setValue (filter_path + "=" + filter_value)
+                        else
+                          window.editor.setValue (window.editor.getValue() + " AND " + filter_path + "=" + filter_value)
+                        end
+                    end
+                  end|]
+          ]
+          "Filter by field"
 
   script_
     [type_ "text/hyperscript"]
@@ -302,10 +337,12 @@ jsonTreeAuxillaryCode pid = do
       if (cols.includes(subject)) {
         return [...new Set(cols.filter(x=>x!=subject))].join(",");
       } 
-      return [...new Set(cols.concat(subject))].join(",");
+      cols.push(subject)
+      const new_cols = [... new Set (cols)].join (",")
+      return new_cols
     }
-    var isFieldInSummary = field=>params().cols.split(",").includes(field);
-    var getQueryFromEditor = ()=>window.editor.getValue();
+    var isFieldInSummary = field => params().cols.split(",").includes(field);
+    var getQueryFromEditor = () => window.editor.getValue();
 
     var execd = false
     document.addEventListener('DOMContentLoaded', function(){
