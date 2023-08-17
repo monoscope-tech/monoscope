@@ -166,6 +166,7 @@ processProjectPostForm sess cpRaw = do
                 Just idX -> pure idX
 
             when (userId' /= currUserId) $ -- invite the users to the project (Usually as an email)
+               -- invite the users to the project (Usually as an email)
               liftIO $ do
                 _ <- withResource pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId' pid email (cp.title)
                 pass
@@ -270,7 +271,7 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                         small_ "max "
                         span_ $ toHtml team
                         small_ " team members"
-                      if (paddleSubsCode == "")
+                      if paddleSubsCode == ""
                         then do
                           div_ [class_ "flex gap-1 items-center"] do
                             img_ [class_ "h-3 w-3", src_ "/assets/svgs/checkmark_green.svg"]
