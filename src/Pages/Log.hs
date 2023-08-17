@@ -181,12 +181,12 @@ logItemRows pid requests cols nextLogsURL = do
   a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ nextLogsURL] "LOAD MORE"
 
 getMethodBgColor :: Text -> Text
-getMethodBgColor method = case method of
-  "POST" -> " bg-pink-200"
-  "PUT" -> " bg-orange-200"
-  "DELETE" -> " bg-red-200"
-  "PATCH" -> " bg-purple-200"
-  _ -> " bg-blue-100"
+getMethodBgColor "POST" = " bg-pink-200"
+getMethodBgColor "PUT" = " bg-orange-100"
+getMethodBgColor "DELETE" = " bg-red-100"
+getMethodBgColor "PATCH" = " bg-purple-100"
+getMethodBgColor _ = " bg-blue-100"
+
 apiLogItemView :: RequestDumps.RequestDumpLogItem -> Html ()
 apiLogItemView req =
   div_ [class_ "log-item-info border-l-blue-200 border-l-4"] $
