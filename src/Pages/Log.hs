@@ -279,7 +279,18 @@ jsonTreeAuxillaryCode pid = do
           , [__|on click 
                     set filter_path to (previous .log-item-field-value) @data-field-path
                     set filter_value to (previous  <.log-item-field-value/>)'s innerText
-                    window.editor.setValue(window.editor.getValue() + filter_path + "=" + filter_value)
+                    if window.editor.getValue().includes(filter_path) and window.editor.getValue().includes(filter_value)
+                       exit
+                    end
+                    if window.editor.getValue().toLowerCase().endsWith("and") or window.editor.getValue().toLowerCase().endsWith("or") then
+                       window.editor.setValue(window.editor.getValue() + " " + filter_path + "=" + filter_value)
+                      else 
+                        if window.editor.getValue().length == "" then
+                           window.editor.setValue (filter_path + "=" + filter_value)
+                        else
+                          window.editor.setValue (window.editor.getValue() + " AND " + filter_path + "=" + filter_value)
+                        end
+                    end
                   end|]
           ]
           "Filter by field"
