@@ -16,16 +16,18 @@ module Models.Apis.RequestDumps (
   selectRequestDumpByProjectAndId,
   selectRequestDumpsByProjectForChart,
   bulkInsertRequestDumps,
+  getRequestDumpForReports,
 ) where
 
 import Control.Error (hush)
 import Data.Aeson qualified as AE
 import Data.Default.Instances ()
-import Data.Time (CalendarDiffTime, ZonedTime, defaultTimeLocale, formatTime, diffUTCTime, zonedTimeToUTC)
+import Data.Time (CalendarDiffTime, ZonedTime, defaultTimeLocale, diffUTCTime, formatTime, zonedTimeToUTC)
 import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
+import Data.Tuple.Extra (both)
 import Data.UUID qualified as UUID
-import Data.Vector qualified as V
 import Data.Vector (Vector)
+import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, queryOne)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
@@ -40,7 +42,6 @@ import Pkg.Parser
 import Relude hiding (many, some)
 import Utils (DBField (MkDBField), quoteTxt)
 import Witch (from)
-import Data.Tuple.Extra (both)
 
 -- request dumps are time series dumps representing each requests which we consume from our users.
 -- We use this field via the log explorer for exploring and searching traffic. And at the moment also use it for most time series analytics.
@@ -80,7 +81,27 @@ data RequestDump = RequestDump
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "request_dumps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] RequestDump)
 
-makeFieldLabelsNoPrefix ''RequestDump
+-- Fields to from request dump neccessary for generating performance reports
+data RequestForReport = RequestForReport
+  { id :: UUID.UUID
+  , createdAt :: ZonedTime
+  , projectId :: UUID.UUID
+  , host :: Text
+  , urlPath :: Text
+  , rawUrl :: Text
+  , method :: Text
+  , referer :: Text
+  , duration :: CalendarDiffTime
+  , statusCode :: Int
+  , endpointHash :: Text
+  }
+  deriving stock (Show, Generic, Eq)
+  deriving anyclass (ToRow, FromRow)
+  deriving
+    (Entity)
+    via (GenericEntity '[Schema "apis", TableName "request_dumps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] RequestForReport)
+
+makeFieldLabelsNoPrefix ''RequestForReport
 
 -- RequestDumpLogItem is used in the to query log items for the log query explorer on the dashboard. Each item here can be queried
 -- via the query language on said dashboard page.
@@ -116,7 +137,7 @@ requestDumpLogItemUrlPath pid rd = "/p/" <> pid.toText <> "/log_explorer/" <> UU
 requestDumpLogUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Text
 requestDumpLogUrlPath pid q cols fromM = [text|/p/$pidT/log_explorer?query=$queryT&cols=$colsT&from=$fromT|]
  where
-  pidT =  pid.toText
+  pidT = pid.toText
   queryT = fromMaybe "" q
   colsT = fromMaybe "" cols
   fromT = fromMaybe "" fromM
@@ -147,6 +168,18 @@ selectRequestDumpsByProjectForChart pid extraQuery = do
                 SELECT time_bucket('1 minute', created_at) as timeB,count(*)
                FROM apis.request_dumps where project_id=? $extraQueryParsed  GROUP BY timeB) ts|]
 
+getRequestDumpForReports :: Projects.ProjectId -> Text -> DBT IO (Vector RequestForReport)
+getRequestDumpForReports pid report_type = query Select (Query $ encodeUtf8 q) pid
+ where
+  report_interval = if report_type == "daily" then ("'24 hours'" :: Text) else "'7 days'"
+  q =
+    [text| 
+     SELECT id, created_at, project_id, host, url_path, raw_url, method,
+            referer, duration, status_code, endpoint_hash
+     FROM apis.request_dumps
+     WHERE project_id = ? AND created_at > NOW() - interval $report_interval
+    |]
+
 bulkInsertRequestDumps :: [RequestDump] -> DBT IO Int64
 bulkInsertRequestDumps = executeMany q
  where
@@ -176,7 +209,6 @@ select duration_steps, count(id)
 	ORDER BY duration_steps;
       |]
 
-
 -- TODO: expand this into a view
 selectReqLatenciesRolledByStepsForProject :: Int -> Int -> Projects.ProjectId -> (Maybe ZonedTime, Maybe ZonedTime) -> DBT IO (Vector (Int, Int))
 selectReqLatenciesRolledByStepsForProject maxv steps pid dateRange = query Select (Query $ encodeUtf8 q) (maxv, steps, steps, steps, pid)
@@ -195,20 +227,21 @@ select duration_steps, count(id)
 	ORDER BY duration_steps;
       |]
 
-latencyBy :: Projects.ProjectId -> Maybe Text -> Int-> (Maybe ZonedTime, Maybe ZonedTime) -> DBT IO Text
+latencyBy :: Projects.ProjectId -> Maybe Text -> Int -> (Maybe ZonedTime, Maybe ZonedTime) -> DBT IO Text
 latencyBy pid endpointHash numSlots dateRange@(fromT, toT) = do
-  let interval =  case dateRange of 
+  let interval = case dateRange of
         (Just a, Just b) -> diffUTCTime (zonedTimeToUTC b) (zonedTimeToUTC a)
-        _ -> 60*60*24*14 
+        _ -> 60 * 60 * 24 * 14
 
-  let intervalT = from @String @Text $ show  $ floor interval `div` (if numSlots == 0 then 1 else numSlots)
-  let dateRange' = both ( quoteTxt . from @String . formatTime defaultTimeLocale "%F %R" <$> ) dateRange 
-  let dateRangeStr =  case dateRange' of
-        (Nothing, Just b) -> "AND timeb BETWEEN NOW() AND " <>  b 
-        (Just a, Just b) -> "AND timeb BETWEEN " <>  a <> " AND " <>  b 
+  let intervalT = from @String @Text $ show $ floor interval `div` (if numSlots == 0 then 1 else numSlots)
+  let dateRange' = both (quoteTxt . from @String . formatTime defaultTimeLocale "%F %R" <$>) dateRange
+  let dateRangeStr = case dateRange' of
+        (Nothing, Just b) -> "AND timeb BETWEEN NOW() AND " <> b
+        (Just a, Just b) -> "AND timeb BETWEEN " <> a <> " AND " <> b
         _ -> ""
-  let (fromD, toD) = bimap (maybe "now() - INTERVAL '14 days'" ("TIMESTAMP " <> ))  (maybe "now()" ("TIMESTAMP " <>)) dateRange'
-  let q = [text| 
+  let (fromD, toD) = bimap (maybe "now() - INTERVAL '14 days'" ("TIMESTAMP " <>)) (maybe "now()" ("TIMESTAMP " <>)) dateRange'
+  let q =
+        [text| 
   with f as (  
     SELECT
             time_bucket_gapfill('$intervalT seconds', timeb, $fromD, $toD) time,
@@ -227,7 +260,6 @@ latencyBy pid endpointHash numSlots dateRange@(fromT, toT) = do
   |]
   (Only val) <- fromMaybe (Only "[]") <$> queryOne Select (Query $ encodeUtf8 q) pid
   pure val
-
 
 -- A throughput chart query for the request_dump table.
 -- daterange :: (Maybe Int, Maybe Int)?
@@ -255,17 +287,17 @@ throughputBy pid groupByM endpointHash shapeHash formatHash statusCodeGT numSlot
         | null condlist = mempty
         | otherwise = "AND " <> mconcat (intersperse " AND " condlist)
   let limit = maybe "" (("limit " <>) . show) limitM
-  let interval =  case dateRange of 
-          (Just a, Just b) -> diffUTCTime (zonedTimeToUTC b) (zonedTimeToUTC a)
-          _ -> 60*60*24*14 
+  let interval = case dateRange of
+        (Just a, Just b) -> diffUTCTime (zonedTimeToUTC b) (zonedTimeToUTC a)
+        _ -> 60 * 60 * 24 * 14
 
-  let intervalT = from @String @Text $ show  $ floor interval `div` (if numSlots == 0 then 1 else numSlots) 
-  let dateRange' = both ( quoteTxt . from @String . formatTime defaultTimeLocale "%F %R" <$> ) dateRange 
-  let dateRangeStr =  case dateRange' of
-        (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND " <>  b 
-        (Just a, Just b) -> "AND created_at BETWEEN " <>  a <> " AND " <>  b 
+  let intervalT = from @String @Text $ show $ floor interval `div` (if numSlots == 0 then 1 else numSlots)
+  let dateRange' = both (quoteTxt . from @String . formatTime defaultTimeLocale "%F %R" <$>) dateRange
+  let dateRangeStr = case dateRange' of
+        (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND " <> b
+        (Just a, Just b) -> "AND created_at BETWEEN " <> a <> " AND " <> b
         _ -> "AND created_at BETWEEN NOW() - INTERVAL '14 days' AND NOW()"
-  let (fromD, toD) = bimap (maybe "now() - INTERVAL '14 days'" ("TIMESTAMP " <> ) )  (maybe "now()" ("TIMESTAMP " <>)) dateRange'
+  let (fromD, toD) = bimap (maybe "now() - INTERVAL '14 days'" ("TIMESTAMP " <>)) (maybe "now()" ("TIMESTAMP " <>)) dateRange'
   let q =
         [text| WITH q as (SELECT time_bucket_gapfill('$intervalT seconds', created_at, $fromD,$toD) as timeB $groupByFields , COALESCE(COUNT(*), 0) total_count 
                   FROM apis.request_dumps 

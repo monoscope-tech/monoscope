@@ -17,21 +17,24 @@ import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query, withPool)
 import Database.PostgreSQL.Simple (Connection, Only (Only))
-import Database.PostgreSQL.Simple.FromRow (field, FromRow (fromRow))
+import Database.PostgreSQL.Simple.FromRow (FromRow (fromRow), field)
 import Database.PostgreSQL.Simple.SqlQQ
 import Database.PostgreSQL.Transact (DBT)
 import GHC.Generics
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.Fields qualified as Field
+import Models.Projects.Projects (Project)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
+
 import NeatInterpolation (text, trimming)
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), startJobRunner, throwParsePayload)
 import Pkg.Mail
+import Pkg.Ortto qualified as Ortto
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import qualified Pkg.Ortto as Ortto
 
 data BgJobs
   = InviteUserToProject Users.UserId Projects.ProjectId Text Text
@@ -125,7 +128,7 @@ jobsRunner dbPool logger cfg job =
               project <- Unsafe.fromJust <<$>> withPool dbPool $ Projects.projectById pid
               forM_ users \u ->
                 let projectTitle = project.title
-                    projectIdTxt =  pid.toText
+                    projectIdTxt = pid.toText
                     name = u.firstName
                     subject = [text| 🤖 APITOOLKIT: New Shape anomaly found for `$projectTitle` |]
                     body =
@@ -188,7 +191,7 @@ Apitoolkit team
        in sendEmail cfg reciever subject body
     CreatedProjectSuccessfully userId projectId reciever projectTitle' ->
       let projectTitle = projectTitle'
-          projectIdTxt =  projectId.toText
+          projectIdTxt = projectId.toText
           subject = [text| 🤖 APITOOLKIT: Project created successfully '$projectTitle' on apitoolkit.io |]
           body =
             toLText
@@ -207,10 +210,12 @@ Apitoolkit team
       projReqs <- withPool dbPool getProjectsReqsCount
       logger <& "📊  pushed ortto updates for " <> show (length projReqs) <> " companies"
       Ortto.pushedTrafficViaSdk cfg.orttoApiKey $ toList projReqs
-        where
-          getProjectsReqsCount :: DBT IO (Vector (Projects.ProjectId, Text, Int64, Users.UserId))
-          getProjectsReqsCount = query Select q ()
-            where q = [sql|SELECT pp.id, pp.title, CAST(SUM(total_count) AS integer), pm.user_id --, us.email
+     where
+      getProjectsReqsCount :: DBT IO (Vector (Projects.ProjectId, Text, Int64, Users.UserId))
+      getProjectsReqsCount = query Select q ()
+       where
+        q =
+          [sql|SELECT pp.id, pp.title, CAST(SUM(total_count) AS integer), pm.user_id --, us.email
                   FROM apis.project_requests_by_endpoint_per_min apm
                   JOIN projects.projects pp ON (id=project_id)
                   JOIN projects.project_members pm ON (pp.id = pm.project_id)
@@ -219,8 +224,58 @@ Apitoolkit team
                   GROUP BY pp.id, pp.title, pm.user_id --, us.email
           |]
 
-
 jobsWorkerInit :: Pool Connection -> LogAction IO String -> Config.EnvConfig -> IO ()
 jobsWorkerInit dbPool logger envConfig = startJobRunner $ mkConfig jobLogger "background_jobs" dbPool (MaxConcurrentJobs 1) (jobsRunner dbPool logger envConfig) id
  where
   jobLogger logLevel logEvent = logger <& show (logLevel, logEvent)
+
+dailyReportForProject :: Projects.ProjectId -> Text -> DBT IO ()
+dailyReportForProject pid report_type = do
+  anomalies <- Anomalies.getReportAnomalies pid report_type
+  count <- Anomalies.countAnomalies pid report_type
+  let anomaly_json = buildAnomalyJSON anomalies count
+  pass
+
+buildAnomalyJSON :: Vector Anomalies.AnomalyVM -> Int -> Aeson.Value
+buildAnomalyJSON anomalies total = Aeson.object ["anamalies" .= Aeson.Array (V.map buildjson anomalies), "anomalies_count" .= total]
+ where
+  buildjson :: Anomalies.AnomalyVM -> Aeson.Value
+  buildjson an = case an.anomalyType of
+    Anomalies.ATEndpoint ->
+      Aeson.object
+        [ "path_url" .= an.endpointUrlPath
+        , "method" .= an.endpointMethod
+        , "type" .= String "endpoint"
+        , "events_count" .= an.eventsCount14d
+        ]
+    Anomalies.ATShape ->
+      Aeson.object
+        [ "path_url" .= an.endpointUrlPath
+        , "method" .= an.endpointMethod
+        , "type" .= String "shape"
+        , "unique_field" .= an.shapeNewUniqueFields
+        , "update_fields" .= an.shapeUpdatedFieldFormats
+        , "deleted_field" .= an.shapeDeletedFields
+        , "events_count" .= an.eventsCount14d
+        ]
+    Anomalies.ATField ->
+      Aeson.object
+        [ "path_url" .= an.endpointUrlPath
+        , "method" .= an.endpointMethod
+        , "type" .= String "field"
+        , "key" .= an.fieldKey
+        , "key_path" .= an.fieldKeyPath
+        , "field_category" .= Field.fieldCategoryEnumToText (fromMaybe Field.FCRequestBody an.fieldCategory)
+        , "field_format" .= an.fieldFormat
+        , "events_count" .= an.eventsCount14d
+        ]
+    Anomalies.ATFormat ->
+      Aeson.object
+        [ "path_url" .= an.endpointUrlPath
+        , "method" .= an.endpointMethod
+        , "type" .= String "format"
+        , "format_type" .= an.formatType
+        , "format_examples" .= an.formatExamples
+        , "events_count" .= an.eventsCount14d
+        ]
+    Anomalies.ATUnknown -> Aeson.object ["type" .= String "unknown"]

@@ -15,14 +15,17 @@ import Control.Concurrent.Async
 import Control.Exception (try)
 import Control.Lens qualified as L
 import Control.Monad.Trans.Resource (runResourceT)
+import Data.ByteString.Lazy.Base64 qualified as LB64
 import Data.Cache
 import Data.Generics.Product (field)
 import Data.Pool as Pool
+import Data.Text.Lazy.Encoding qualified as LT
 import Database.PostgreSQL.Simple (Connection, close, connectPostgreSQL)
 import Database.PostgreSQL.Simple.Migration as Migrations
 import GHC.Generics ()
 import GHC.IO.Encoding hiding (close)
 import Gogol qualified as Google
+import Gogol.Auth.ApplicationDefault qualified as Google
 import Gogol.PubSub qualified as PubSub
 import Models.Projects.Projects qualified as Projects
 import Network.Wai.Handler.Warp (run)
@@ -35,9 +38,6 @@ import Relude
 import Server qualified
 import System.Clock
 import System.Envy (decodeEnv)
-import Gogol.Auth.ApplicationDefault qualified as Google
-import Data.ByteString.Lazy.Base64 qualified as LB64
-import Data.Text.Lazy.Encoding qualified as LT
 import Witch (from)
 
 startApp :: IO ()
@@ -86,7 +86,7 @@ startApp = do
         let ojStartArgs =
               OJCli.UIStartArgs
                 { uistartAuth = OJCli.AuthNone
-                  , uistartPort = 8081 
+                , uistartPort = 8081
                 }
 
         let ojLogger logLevel logEvent = logger <& show (logLevel, logEvent)
@@ -107,16 +107,16 @@ startApp = do
 -- acknoleges the list message in one request.
 pubsubService :: LogAction IO String -> Config.EnvConfig -> Pool.Pool Connection -> Cache Projects.ProjectId Projects.ProjectCache -> IO ()
 pubsubService logger envConfig conn projectCache = do
-  env <- case envConfig.googleServiceAccountB64 of 
-           "" -> Google.newEnv <&> (Google.envScopes L..~ pubSubScope)
-           sa -> do 
-             let credJSON =  either error id $ LB64.decodeBase64 (LT.encodeUtf8 sa)
-             let credsE = Google.fromJSONCredentials credJSON
-             let creds = either (error . toText) id credsE
-             -- let Right creds = credsE
-             managerG <- Google.newManager Google.tlsManagerSettings
-             Google.newEnvWith creds (\_ _ -> pass) managerG <&> (Google.envScopes L..~ pubSubScope)
-             
+  env <- case envConfig.googleServiceAccountB64 of
+    "" -> Google.newEnv <&> (Google.envScopes L..~ pubSubScope)
+    sa -> do
+      let credJSON = either error id $ LB64.decodeBase64 (LT.encodeUtf8 sa)
+      let credsE = Google.fromJSONCredentials credJSON
+      let creds = either (error . toText) id credsE
+      -- let Right creds = credsE
+      managerG <- Google.newManager Google.tlsManagerSettings
+      Google.newEnvWith creds (\_ _ -> pass) managerG <&> (Google.envScopes L..~ pubSubScope)
+
   let pullReq = PubSub.newPullRequest & field @"maxMessages" L.?~ fromIntegral (envConfig ^. #messagesPerPubsubPullBatch)
 
   forever $

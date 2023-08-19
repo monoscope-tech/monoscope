@@ -388,6 +388,18 @@ SELECT create_hypertable('apis.request_dumps', 'created_at');
 SELECT add_retention_policy('apis.request_dumps',INTERVAL '3 months',true);
 CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_project_id ON apis.request_dumps(project_id, created_at);
 
+
+CREATE TABLE IF NOT EXISTS apis.reports 
+(
+    id                        uuid      NOT  NULL DEFAULT    gen_random_uuid(),
+    created_at                TIMESTAMP WITH TIME ZONE       NOT               NULL DEFAULT current_timestamp,
+    updated_at                TIMESTAMP WITH TIME ZONE       NOT               NULL DEFAULT current_timestamp,
+    project_id                UUID      NOT  NULL REFERENCES projects.projects (id) ON      DELETE CASCADE,
+    user_id                   UUID      NOT  NULL REFERENCES users.users       (id) ON      DELETE CASCADE ON UPDATE CASCADE,
+    report_type               text      NOT  NULL DEFAULT    ''
+    report_json               jsonb     NOT  NULL DEFAULT    '{}'::jsonb,
+)
+
 -- Create a view that tracks endpoint related statistic points from the request dump table.
 DROP MATERIALIZED VIEW IF EXISTS apis.endpoint_request_stats;
 CREATE MATERIALIZED VIEW apis.endpoint_request_stats AS 

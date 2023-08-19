@@ -26,9 +26,11 @@ import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript
 import Models.Apis.Anomalies qualified as Anomalies
+import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.RequestDumps (RequestDump (RequestDump))
+import Models.Apis.RequestDumps qualified as RequestDump
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Models.Apis.Endpoints qualified as Endpoints
 import NeatInterpolation (text)
 import Optics.Core ((^.))
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
@@ -127,7 +129,7 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM endpointM hxRequestM hxBo
   case (layoutM, hxRequestM, hxBoostedM) of
     (Just "slider", Just "true", _) -> pure $ anomalyListSlider currTime pid endpointM (Just anomalies)
     (_, Just "true", Just "false") -> pure elementBelowTabs
-    (_, Just "true", Nothing) -> pure  elementBelowTabs
+    (_, Just "true", Nothing) -> pure elementBelowTabs
     _ -> pure $ bodyWrapper bwconf $ anomalyListPage paramInput pid currTime anomalies
 
 anomalyListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Anomalies.AnomalyVM -> Html ()
@@ -142,7 +144,7 @@ anomalyListPage paramInput pid currTime anomalies = div_ [class_ "container mx-a
 
 anomalyList :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Anomalies.AnomalyVM -> Html ()
 anomalyList paramInput pid currTime anomalies = form_ [class_ "col-span-5 bg-white divide-y ", id_ "anomalyListForm"] $ do
-  let bulkActionBase = "/p/" <>  pid.toText <> "/anomalies/bulk_actions"
+  let bulkActionBase = "/p/" <> pid.toText <> "/anomalies/bulk_actions"
   let currentURL' = deleteParam "sort" paramInput.currentURL
   let sortMenu =
         [ ("First Seen", "First time the issue occured", "first_seen")
@@ -193,9 +195,9 @@ anomalyList paramInput pid currTime anomalies = form_ [class_ "col-span-5 bg-whi
 
 anomalyListSlider :: UTCTime -> Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe (Vector Anomalies.AnomalyVM) -> Html ()
 anomalyListSlider _ _ _ (Just []) = ""
-anomalyListSlider _ pid eid Nothing =  do
+anomalyListSlider _ pid eid Nothing = do
   let pidT = pid.toText
-  div_ [hxGet_ $ "/p/"<>pid.toText<>"/anomalies?layout=slider"<>maybe "" (\x-> "&endpoint=" <> x.toText) eid , hxSwap_ "outerHTML", hxTrigger_ "load"] $ do
+  div_ [hxGet_ $ "/p/" <> pid.toText <> "/anomalies?layout=slider" <> maybe "" (\x -> "&endpoint=" <> x.toText) eid, hxSwap_ "outerHTML", hxTrigger_ "load"] $ do
     div_ [class_ "flex justify-between mt-5 pb-2"] $ do
       div_ [class_ "flex flex-row"] $ do
         img_
@@ -204,8 +206,8 @@ anomalyListSlider _ pid eid Nothing =  do
           , [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .parent-slider)|]
           ]
         span_ [class_ "text-lg text-slate-700"] "Ongoing Anomalies and Monitors"
-      div_ [class_ "flex flex-row mt-2"] "" 
-anomalyListSlider currTime _ _ (Just anomalies)= do
+      div_ [class_ "flex flex-row mt-2"] ""
+anomalyListSlider currTime _ _ (Just anomalies) = do
   let anomalyIds = replace "\"" "'" $ show $ fmap (Anomalies.anomalyIdText . (^. #id)) anomalies
   let totalAnomaliesTxt = toText $ if length anomalies > 50 then "50+" else show (length anomalies)
   div_ $ do
@@ -376,7 +378,7 @@ renderAnomaly hideByDefault currTime anomaly = do
 
 anomalyAcknowlegeButton :: Projects.ProjectId -> Anomalies.AnomalyId -> Bool -> Html ()
 anomalyAcknowlegeButton pid aid acked = do
-  let acknowlegeAnomalyEndpoint = "/p/" <>  pid.toText <> "/anomalies/" <> Anomalies.anomalyIdText aid <> if acked then "/unacknowlege" else "/acknowlege"
+  let acknowlegeAnomalyEndpoint = "/p/" <> pid.toText <> "/anomalies/" <> Anomalies.anomalyIdText aid <> if acked then "/unacknowlege" else "/acknowlege"
   a_
     [ class_ $
         "inline-block child-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
