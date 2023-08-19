@@ -39,19 +39,12 @@ import Servant.Htmx (HXTrigger)
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils
 import Web.FormUrlEncoded (FromForm)
-import Witch (from)
 
 data AnomalyBulkForm = AnomalyBulk
   { anomalyId :: [Text]
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
-
--- anomaliesSliderGetH :: Sessions::PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
--- anomaliesSliderGetH sess pid = do
---   pool <- asks pool
---   anomalies <- Anomalies.selectAnomalies pid Nothing (Just False) (Just False) Nothing
-
 
 acknowlegeAnomalyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Anomalies.AnomalyId -> DashboardM (Html ())
 acknowlegeAnomalyGetH sess pid aid = do

@@ -10,7 +10,6 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import NeatInterpolation
-import Pages.Charts.Charts qualified as Charts
 import Relude
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
@@ -75,6 +74,8 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child =
           script_ [src_ "/assets/js/thirdparty/instantpage5_1_0.js", type_ "module", defer_ "true"] ("" :: Text)
           script_ [src_ "/assets/js/monaco/vs/luxon.min.js", defer_ "true"] ("" :: Text)
           script_ [src_ "/assets/js/monaco/vs/loader.js", defer_ "true"] ("" :: Text)
+          script_ [src_ "/assets/js/charts.js"]("" :: Text)
+          script_ [src_ "/assets/js/main.js"]("" :: Text)
 
           -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/core@1.2.0/dist/index.umd.min.js"] ("" :: Text)
           -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/datetime@1.2.0/dist/index.umd.min.js"] ("" :: Text)
@@ -117,7 +118,6 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child =
                 });
               }
             |]
-          script_ Charts.chartInit
           script_
             [text|
             // Ortto apitoolkit capture code 

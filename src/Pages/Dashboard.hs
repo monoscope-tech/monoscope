@@ -4,12 +4,9 @@ import Config
 import Data.Aeson qualified as AE
 import Pages.Components (statBox)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
-import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
-import Fmt (fixedF, fmt)
 import Lucid
-import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
@@ -87,10 +84,10 @@ dashboardGetH sess pid fromDStr toDStr sinceStr' = do
   let currentURL = "/p/" <> pid.toText <> "?&from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
   let currentPickerTxt = fromMaybe (maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD ) sinceStr
   let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt}
-  pure $ bodyWrapper bwconf $ dashboardPage paramInput currTime projectRequestStats reqLatenciesRolledByStepsJ (fromD, toD)
+  pure $ bodyWrapper bwconf $ dashboardPage pid paramInput currTime projectRequestStats reqLatenciesRolledByStepsJ (fromD, toD)
 
-dashboardPage :: ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
-dashboardPage paramInput currTime projectStats reqLatenciesRolledByStepsJ dateRange = do
+dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
+dashboardPage pid paramInput currTime projectStats reqLatenciesRolledByStepsJ dateRange = do
   let currentURL' = deleteParam "to" $ deleteParam "from" $ deleteParam "since" paramInput.currentURL
   section_ [class_ "p-8 container mx-auto px-4 space-y-12 pb-24"] $ do
     div_ [class_ "relative p-1 "] do
@@ -120,7 +117,7 @@ dashboardPage paramInput currTime projectStats reqLatenciesRolledByStepsJ dateRa
 
     -- button_ [class_ "", id_ "checkin", onclick_ "window.picker.show()"] "timepicker"
     section_ $ AnomaliesList.anomalyListSlider currTime (projectStats.projectId) Nothing Nothing 
-    dStats projectStats reqLatenciesRolledByStepsJ dateRange
+    dStats pid projectStats reqLatenciesRolledByStepsJ dateRange
   script_
     [text|
     const picker = new easepick.create({
@@ -148,8 +145,8 @@ dashboardPage paramInput currTime projectStats reqLatenciesRolledByStepsJ dateRa
     window.picker = picker;
     |]
 
-dStats :: Projects.ProjectRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
-dStats projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledByStepsJ dateRange = do
+dStats :: Projects.ProjectId -> Projects.ProjectRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
+dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledByStepsJ dateRange = do
   let _ = min
   when (projReqStats.totalRequests == 0) do
     section_ [class_ "card-round p-5 sm:p-10 space-y-4 text-lg"] $ do
@@ -181,14 +178,14 @@ dStats projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledByStepsJ 
             select_ [] $ do
               option_ [class_ "text-2xl font-normal"] "Throughput by Status Code"
             div_ [class_ "h-64 "] do
-              Charts.throughput projReqStats.projectId "reqsByStatusCode" Nothing (Just Charts.GBStatusCode) 120 Nothing True dateRange Nothing
+              Charts.throughput pid "reqsByStatusCode" Nothing (Just Charts.GBStatusCode) 120 Nothing True dateRange Nothing
 
         div_ [class_ "flex-1 card-round p-3"] $ do
           div_ [class_ "p-4 space-y-6"] $ do
             select_ [] $ do
               option_ [class_ "text-2xl font-normal"] "Latency Percentiles"
             div_ [class_ "h-64 "] do
-              Charts.latency projReqStats.projectId "reqsLatencyPercentiles" Nothing 120 dateRange Nothing
+              Charts.latency pid "reqsLatencyPercentiles" Nothing 120 dateRange Nothing
 
       div_ [class_ "flex gap-5"] do
         div_ [class_ "flex-1 card-round p-3"] $ do
@@ -196,14 +193,14 @@ dStats projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledByStepsJ 
             select_ [] $ do
               option_ [class_ "text-2xl font-normal"] "Error Rates"
             div_ [class_ "h-64 "] do
-              Charts.throughput projReqStats.projectId "reqsErrorRates" (Just $ Charts.QBStatusCodeGT 400) (Just Charts.GBStatusCode) 120 Nothing True dateRange (Just "roma") 
+              Charts.throughput pid "reqsErrorRates" (Just $ Charts.QBStatusCodeGT 400) (Just Charts.GBStatusCode) 120 Nothing True dateRange (Just "roma") 
 
         div_ [class_ "flex-1 card-round p-3"] $ do
           div_ [class_ "p-4 space-y-6"] $ do
             select_ [] $ do
               option_ [class_ "text-2xl font-normal"] "Reqs Grouped by Endpoint"
             div_ [class_ "h-64 "] do
-              Charts.throughput projReqStats.projectId "reqsByEndpoints" Nothing (Just Charts.GBEndpoint) 120 Nothing True dateRange Nothing
+              Charts.throughput pid "reqsByEndpoints" Nothing (Just Charts.GBEndpoint) 120 Nothing True dateRange Nothing
 
 
       div_ [class_ "col-span-3 card-round py-3 px-6"] $ do

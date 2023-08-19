@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/htmx.org@1.9.4"></script>
+  <script src="https://unpkg.com/hyperscript.org@0.9.11"></script>
+  <base href="http://localhost:8080" />
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+  <script src="/assets/roma-echarts.js" defer="true"></script>
+
+  <script src="/assets/deps/uplot/uPlot.iife.min.js"></script>
+  <script src="/assets/deps/uplot/stacked.js"></script>
+  <link rel="stylesheet" href="/assets/deps/uplot/uPlot.min.css" />
+
+  <script src="/assets/js/charts.js"></script>
+  <script src="/assets/js/main.js"></script>
+
+</head>
+
+<body>
+  <h1>Preview and test charts in just html</h1>
+
+  <div class="h-96">
+    
+    <div class="w-60 h-16 px-3">
+      <div id="id-a5e24026200d03143c3" class="w-full h-full"
+        data-hx-get="/p/48fd83a9-cafc-40be-a37e-5efcf1fbd0c5/charts_html/throughput?id=a5e24026200d03143c3&amp;show_legend=false&amp;num_slots=14&amp;&amp;shape_hash=a5e24026200d03143c3&amp;from=&amp;to=&amp;theme="
+        data-hx-trigger="intersect" data-hx-swap="outerHTML"></div>
+    </div>
+
+    <!-- <div id="id-1" class="w-full h-full"
+      hx-get="/p/129a2fbe-49c9-4d55-8bea-c39aa15e6757/charts_html/throughput?id=reqsByEndpoints&show_legend=true&num_slots=120&&group_by=endpoint&from=2023-08-04T12:05:48.263939Z&to=2023-08-18T12:05:48.263939Z&theme="
+      hx-trigger="intersect" hx-swap="outerHTML">
+    </div> -->
+    <div id="id-1" class="w-full h-full"
+      hx-get="/p/48fd83a9-cafc-40be-a37e-5efcf1fbd0c5/charts_html/throughput?id=reqsByEndpoints&show_legend=true&num_slots=120&&group_by=endpoint&from=2023-08-04T12:05:48.263939Z&to=2023-08-18T12:05:48.263939Z&theme="
+      hx-trigger="intersect" hx-swap="outerHTML">
+    </div>
+
+
+
+    <div id="id-reqsByStatusCode" class="w-full h-full"
+      data-hx-get="/p/e47c61ce-808f-48ce-90c9-81f2ba4dbf4f/charts_html/throughput?id=reqsByStatusCode&show_legend=true&num_slots=120&amp;&amp;group_by=status_code&amp;from=2023-08-05T12:30:04.391669Z&amp;to=2023-08-19T12:30:04.391669Z&amp;theme="
+      data-hx-trigger="intersect" data-hx-swap="outerHTML"></div>:w-full
+
+    <div id="id-abc" class="w-full h-full"></div>
+
+
+
+  </div>
+
+</body>
+
+</html>

@@ -6,6 +6,7 @@ module Models.Apis.RequestDumps (
   RequestDump (..),
   RequestDumpLogItem,
   throughputBy,
+  throughputBy',
   latencyBy,
   requestDumpLogItemUrlPath,
   requestDumpLogUrlPath,
@@ -272,3 +273,42 @@ throughputBy pid groupByM endpointHash shapeHash formatHash statusCodeGT numSlot
               SELECT COALESCE(json_agg(json_build_array(timeB $groupByFinal, total_count)), '[]')::text from q; |]
   (Only val) <- fromMaybe (Only "[]") <$> queryOne Select (Query $ encodeUtf8 q) (MkDBField pid : paramList)
   pure val
+
+throughputBy' :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Maybe Int -> Maybe Text -> (Maybe ZonedTime, Maybe ZonedTime) -> DBT IO (Vector (Int, Int, String))
+throughputBy' pid groupByM endpointHash shapeHash formatHash statusCodeGT numSlots limitM extraQuery dateRange@(fromT, toT) = do
+  let extraQueryParsed = hush . parseQueryStringToWhereClause =<< extraQuery
+  let condlist =
+        catMaybes
+          [ " endpoint_hash=? " <$ endpointHash
+          , " shape_hash=? " <$ shapeHash
+          , " ?=ANY(format_hashes) " <$ formatHash
+          , " status_code>? " <$ statusCodeGT
+          , extraQueryParsed
+          ]
+  let groupBy' = fromMaybe @Text "" $ mappend " ," <$> groupByM
+  let (groupBy, groupByFields) = case groupByM of
+        Just "endpoint" -> (",method, url_path", ",method||' '||url_path as g")
+        Nothing -> ("", "")
+        _ -> (groupBy', groupBy' <> "::text as g")
+  let groupByFinal = maybe "" (const ",g") groupByM
+  let paramList = mapMaybe (MkDBField <$>) [endpointHash, shapeHash, formatHash, statusCodeGT]
+  let cond
+        | null condlist = mempty
+        | otherwise = "AND " <> mconcat (intersperse " AND " condlist)
+  let limit = maybe "" (("limit " <>) . show) limitM
+  let interval =  case dateRange of 
+          (Just a, Just b) -> diffUTCTime (zonedTimeToUTC b) (zonedTimeToUTC a)
+          _ -> 60*60*24*14 
+
+  let intervalT = from @String @Text $ show  $ floor interval `div` (if numSlots == 0 then 1 else numSlots) 
+  let dateRange' = both ( quoteTxt . from @String . formatTime defaultTimeLocale "%F %R" <$> ) dateRange 
+  let dateRangeStr =  case dateRange' of
+        (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND " <>  b 
+        (Just a, Just b) -> "AND created_at BETWEEN " <>  a <> " AND " <>  b 
+        _ -> "AND created_at BETWEEN NOW() - INTERVAL '14 days' AND NOW()"
+  -- let (fromD, toD) = bimap (maybe "now() - INTERVAL '14 days'" ("TIMESTAMP " <> ) )  (maybe "now()" ("TIMESTAMP " <>)) dateRange'
+  let q =
+        [text| SELECT extract(epoch from time_bucket('$intervalT seconds', created_at))::integer as timeB, COALESCE(COUNT(*), 0) total_count $groupByFields  
+                  FROM apis.request_dumps 
+                  WHERE project_id=? $cond $dateRangeStr GROUP BY timeB $groupBy $limit; |]
+  query Select (Query $ encodeUtf8 q) (MkDBField pid : paramList)
