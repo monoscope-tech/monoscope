@@ -7,28 +7,33 @@ module BackgroundJobs (jobsWorkerInit, BgJobs (..)) where
 -- few seconds in one of the jobs. Otherwise it is not really needed.
 import Colog (LogAction, (<&))
 import Config qualified
-import Control.Concurrent.Async (mapConcurrently)
-import Control.Monad (forM_)
 import Data.Aeson as Aeson
 import Data.CaseInsensitive qualified as CI
 import Data.List.Extra (intersect, union)
+import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
 import Data.Pool (Pool)
+import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (ZonedTime)
 import Data.Vector (Vector)
 import Data.Vector qualified as V
+
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query, withPool)
 import Database.PostgreSQL.Simple (Connection, Only (Only))
 import Database.PostgreSQL.Simple.FromRow (FromRow (fromRow), field)
 import Database.PostgreSQL.Simple.SqlQQ
-import Database.PostgreSQL.Transact (DBT, runDBT)
+import Database.PostgreSQL.Transact (DBT)
 import GHC.Generics
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields qualified as Field
-import Models.Projects.Projects (Project)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
+
+import Data.Scientific (Scientific)
+import Models.Apis.RequestDumps (EndpointPerf, RequestForReport)
+import Models.Apis.RequestDumps qualified as RequestDumps
 
 import NeatInterpolation (text, trimming)
 import OddJobs.ConfigBuilder (mkConfig)
@@ -46,6 +51,17 @@ data BgJobs
   | DailyOrttoSync
   | DailyReports
   deriving stock (Eq, Show, Generic)
+  deriving anyclass (ToJSON, FromJSON)
+
+data PerformanceReport = PerformanceReport
+  { urlPath :: Text
+  , method :: Text
+  , averageDuration :: Scientific
+  , durationDiff :: Integer
+  , durationDiffType :: Text
+  , durationDiffPct :: Scientific
+  }
+  deriving stock (Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
 
 getShapes :: Projects.ProjectId -> Text -> DBT IO (Vector (Text, Vector Text))
@@ -247,16 +263,35 @@ dailyReportForProject dbPool cfg pid = do
   users <- withPool dbPool $ getUsersByProjectId pid
   if not (null users)
     then do
-      let first_user = V.head users
+      let _first_user = V.head users
       anomalies <- withPool dbPool $ Anomalies.getReportAnomalies pid "daily"
       count <- withPool dbPool $ Anomalies.countAnomalies pid "daily"
+      endpoint_rp <- withPool dbPool $ RequestDumps.getRequestDumpForReports pid "weekly"
+      previous_day <- withPool dbPool $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid "weekly"
+      let perf_ins = getPerformanceInsight endpoint_rp previous_day
       let anomaly_json = buildAnomalyJSON anomalies count
-      sendEmail cfg "yousiph77@gmail.com" "Hello world" "Broooooooooo"
+      let rep_json = buildReportJSON anomalies count endpoint_rp previous_day
+      print rep_json
       pass
     else pass
 
+buildReportJSON :: Vector Anomalies.AnomalyVM -> Int -> Vector RequestForReport -> Vector EndpointPerf -> Aeson.Value
+buildReportJSON anomalies anm_total endpoints_perf previous_perf =
+  let anomalies_json = buildAnomalyJSON anomalies anm_total
+      perf_insight = getPerformanceInsight endpoints_perf previous_perf
+      perf_json = buildPerformanceJSON perf_insight
+      report_json = case anomalies_json of
+        Aeson.Object va -> case perf_json of
+          Aeson.Object vp -> Aeson.Object (va <> vp)
+          _ -> Aeson.object []
+        _ -> Aeson.object []
+   in report_json
+
+buildPerformanceJSON :: V.Vector PerformanceReport -> Aeson.Value
+buildPerformanceJSON pr = Aeson.object ["anomalies" .= pr]
+
 buildAnomalyJSON :: Vector Anomalies.AnomalyVM -> Int -> Aeson.Value
-buildAnomalyJSON anomalies total = Aeson.object ["anomalies" .= Aeson.Array (V.map buildjson anomalies), "anomalies_count" .= total]
+buildAnomalyJSON anomalies total = Aeson.object ["anomalies" .= V.map buildjson anomalies, "anomalies_count" .= total]
  where
   buildjson :: Anomalies.AnomalyVM -> Aeson.Value
   buildjson an = case an.anomalyType of
@@ -264,14 +299,14 @@ buildAnomalyJSON anomalies total = Aeson.object ["anomalies" .= Aeson.Array (V.m
       Aeson.object
         [ "path_url" .= an.endpointUrlPath
         , "method" .= an.endpointMethod
-        , "type" .= String "endpoint"
+        , "type" .= Anomalies.ATEndpoint
         , "events_count" .= an.eventsCount14d
         ]
     Anomalies.ATShape ->
       Aeson.object
         [ "path_url" .= an.endpointUrlPath
         , "method" .= an.endpointMethod
-        , "type" .= String "shape"
+        , "type" .= Anomalies.ATShape
         , "unique_field" .= an.shapeNewUniqueFields
         , "update_fields" .= an.shapeUpdatedFieldFormats
         , "deleted_field" .= an.shapeDeletedFields
@@ -281,7 +316,7 @@ buildAnomalyJSON anomalies total = Aeson.object ["anomalies" .= Aeson.Array (V.m
       Aeson.object
         [ "path_url" .= an.endpointUrlPath
         , "method" .= an.endpointMethod
-        , "type" .= String "field"
+        , "type" .= Anomalies.ATField
         , "key" .= an.fieldKey
         , "key_path" .= an.fieldKeyPath
         , "field_category" .= Field.fieldCategoryEnumToText (fromMaybe Field.FCRequestBody an.fieldCategory)
@@ -292,9 +327,41 @@ buildAnomalyJSON anomalies total = Aeson.object ["anomalies" .= Aeson.Array (V.m
       Aeson.object
         [ "path_url" .= an.endpointUrlPath
         , "method" .= an.endpointMethod
-        , "type" .= String "format"
+        , "type" .= Anomalies.ATFormat
         , "format_type" .= an.formatType
         , "format_examples" .= an.formatExamples
         , "events_count" .= an.eventsCount14d
         ]
     Anomalies.ATUnknown -> Aeson.object ["type" .= String "unknown"]
+
+getPerformanceInsight :: V.Vector RequestDumps.RequestForReport -> V.Vector RequestDumps.EndpointPerf -> V.Vector PerformanceReport
+getPerformanceInsight req_dumps previous_p =
+  let prMap = Map.fromList [(p.endpointHash, p.averageDuration) | p <- V.toList previous_p]
+      pin = V.map (mapFunc prMap) req_dumps
+      perfInfo = V.filter (\x -> x.durationDiffPct > 15 || x.durationDiffPct < -15) pin
+   in perfInfo
+
+mapFunc :: Map.Map Text Scientific -> RequestDumps.RequestForReport -> PerformanceReport
+mapFunc prMap rd =
+  case Map.lookup (rd.endpointHash) prMap of
+    Just prevDuration ->
+      let diff = rd.averageDuration - prevDuration
+          diffPct = (diff / prevDuration) * 100
+          diffType = if diff >= 0 then "up" else "down"
+       in PerformanceReport
+            { urlPath = rd.urlPath
+            , method = rd.method
+            , averageDuration = rd.averageDuration
+            , durationDiff = round diff
+            , durationDiffPct = diffPct
+            , durationDiffType = diffType
+            }
+    Nothing ->
+      PerformanceReport
+        { urlPath = rd.urlPath
+        , method = rd.method
+        , averageDuration = rd.averageDuration
+        , durationDiff = 0
+        , durationDiffPct = 0
+        , durationDiffType = "up"
+        }
