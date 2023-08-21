@@ -19,6 +19,7 @@ import Relude
 import Relude.Unsafe (read)
 import RequestMessages qualified
 import Servant (FromHttpApiData)
+import Models.Apis.RequestDumps qualified as RequestDumps
 
 newtype RedactedFieldId = RedactedFieldId {unRedactedFieldId :: UUID.UUID}
   deriving stock (Generic, Show)
@@ -31,7 +32,7 @@ redactedFieldIdText = UUID.toText . unRedactedFieldId
 
 data ConfiguredVia
   = Dashboard
-  | SDK RequestMessages.SDKTypes
+  | SDK RequestDumps.SDKTypes
   deriving stock (Generic, Show, Read)
   deriving (FromJSON, ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] ConfiguredVia
 

@@ -77,9 +77,7 @@ apiLogItem sess pid rdId createdAt = do
   afterProccessing <- liftIO $ getTime Monotonic
   let content = maybe (div_ "invalid log request ID") apiLogItemView logItemM
   endTime <- liftIO $ getTime Monotonic
-  liftIO $ putStrLn $ fmtLn $ " APILOG Item in ns DB Time " +| toNanoSecs (diffTimeSpec startTime afterProccessing) |+ ""
-  liftIO $ putStrLn $ fmtLn $ " APILOG Item in ns Processing time " +| toNanoSecs (diffTimeSpec afterProccessing endTime) |+ ""
-  liftIO $ putStrLn $ fmtLn $ " APILOG Item in ns Total Time" +| toNanoSecs (diffTimeSpec startTime endTime) |+ ""
+  liftIO $ putStrLn $ fmtLn $ " APILOG pipeline microsecs: queryDuration " +| (toNanoSecs (diffTimeSpec startTime afterProccessing)) `div` 1000 |+ " -> processingDuration " +| toNanoSecs (diffTimeSpec afterProccessing endTime)  `div` 1000 |+ " -> TotalDuration " +| toNanoSecs (diffTimeSpec startTime endTime)  `div` 1000 |+ ""
   pure content
 
 apiLogsPage :: Projects.ProjectId -> Int -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Text -> Text -> Text -> Html ()
@@ -198,7 +196,7 @@ jsonValueToHtmlTree :: AE.Value -> Html ()
 jsonValueToHtmlTree val = jsonValueToHtmlTree' ("", "", val)
  where
   jsonValueToHtmlTree' :: (Text, Text, AE.Value) -> Html ()
-  jsonValueToHtmlTree' (path, key, AE.Object v) = renderParentType "{" "}" key (length v) (AEK.toHashMapText v & HM.toList & mapM_ (\(kk, vv) -> jsonValueToHtmlTree' (path <> "." <> key, kk, vv)))
+  jsonValueToHtmlTree' (path, key, AE.Object v) = renderParentType "{" "}" key (length v) (AEK.toHashMapText v & HM.toList & sort & mapM_ (\(kk, vv) -> jsonValueToHtmlTree' (path <> "." <> key, kk, vv)))
   jsonValueToHtmlTree' (path, key, AE.Array v) = renderParentType "[" "]" key (length v) (iforM_ v \i item -> jsonValueToHtmlTree' (path <> "." <> key <> "." <> "[]", show i, item))
   jsonValueToHtmlTree' (path, key, value) = do
     let fullFieldPath = if T.isSuffixOf ".[]" path then path else path <> "." <> key

@@ -8,10 +8,10 @@ import Data.UUID.V4 qualified as UUIDV4
 import Models.Projects.Projects qualified as Projects
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import RequestMessages (SDKTypes (..))
 import RequestMessages qualified
 import Test.Hspec
 import NeatInterpolation
+import Models.Apis.RequestDumps (SDKTypes(GoGin))
 
 spec :: Spec
 spec = do

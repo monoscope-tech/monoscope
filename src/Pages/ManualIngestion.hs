@@ -19,6 +19,7 @@ import RequestMessages qualified
 import Utils
 import Web.FormUrlEncoded (FromForm)
 import NeatInterpolation
+import Models.Apis.RequestDumps qualified as RequestDumps
 
 data RequestMessageForm = RequestMessageForm
   { timestamp :: ZonedTime
@@ -55,7 +56,7 @@ reqMsgFormToReqMsg pid RequestMessageForm{urlPath, ..} = do
       , pathParams = pathParams'
       , requestBody = B64.encodeBase64 requestBody
       , responseBody = B64.encodeBase64 responseBody
-      , sdkType = RequestMessages.GoGin
+      , sdkType = RequestDumps.GoGin
       , rawUrl = urlPath
       , ..
       }

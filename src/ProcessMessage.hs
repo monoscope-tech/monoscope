@@ -12,11 +12,11 @@ import Data.Aeson (eitherDecode)
 import Data.Cache qualified as Cache
 import Data.Generics.Product (field)
 import Data.List (unzip4)
-import Data.Pool (Pool)
+import Data.Pool (Pool, withResource)
 import Data.Time.LocalTime (getZonedTime)
 import Data.UUID.V4 (nextRandom)
 import Database.PostgreSQL.Entity.DBT (withPool)
-import Database.PostgreSQL.Simple (Connection, Query)
+import Database.PostgreSQL.Simple (Connection, Query, formatMany)
 import Database.PostgreSQL.Transact (execute)
 import Gogol.Data.Base64 (_Base64)
 import Gogol.PubSub qualified as PubSub
@@ -27,6 +27,7 @@ import RequestMessages qualified
 import System.Clock
 import Utils (DBField, eitherStrToText)
 import Fmt
+import Database.PostgreSQL.Simple.SqlQQ (sql)
 
 {--
   Exploring how the inmemory cache could be shaped for performance, and low footprint ability to skip hitting the postgres database when not needed.
@@ -123,9 +124,7 @@ processMessages' logger' _ conn' msgs projectCache' = do
           pass
 
   endTime <- getTime Monotonic
-  liftIO $ putStrLn $ fmtLn $ " APILOG Item in ns DB Time " +| toNanoSecs (diffTimeSpec startTime afterProccessing) |+ ""
-  liftIO $ putStrLn $ fmtLn $ " APILOG Item in ns Processing time " +| toNanoSecs (diffTimeSpec afterProccessing endTime) |+ ""
-  liftIO $ putStrLn $ fmtLn $ " APILOG Item in ns Total Time" +| toNanoSecs (diffTimeSpec startTime endTime) |+ ""
+  liftIO $ putStrLn $ fmtLn $ " Process Message pipeline microsecs: queryDuration " +| (toNanoSecs (diffTimeSpec startTime afterProccessing)) `div` 1000 |+ " -> processingDuration " +| toNanoSecs (diffTimeSpec afterProccessing endTime)  `div` 1000 |+ " -> TotalDuration " +| toNanoSecs (diffTimeSpec startTime endTime)  `div` 1000 |+ ""
 
   case resp of
     Left err -> do
