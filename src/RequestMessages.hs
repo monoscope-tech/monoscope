@@ -124,7 +124,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
   let urlPath = RequestDumps.normalizeUrlPath (rM.sdkType) (rM.urlPath)
   let !endpointHash = from @String @Text $ showHex (xxHash $ encodeUtf8 $ UUID.toText (rM.projectId) <> method <> urlPath) ""
 
-  let redactFieldsList = Vector.toList (pjc.redactFieldslist) <> [".set-cookie"]
+  let redactFieldsList = Vector.toList (pjc.redactFieldslist) <> [".set-cookie", ".password"]
   reqBodyB64 <- B64.decodeBase64 $ encodeUtf8 $ rM.requestBody
   -- NB: At the moment we're discarding the error messages from when we're unable to parse the input
   -- We should log this inputs and maybe input them into the db as is. This is also a potential annomaly for our customers,
