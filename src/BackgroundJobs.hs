@@ -50,6 +50,7 @@ data BgJobs
     NewAnomaly Projects.ProjectId ZonedTime Text Text Text
   | DailyOrttoSync
   | DailyReports
+  | WeeklyReports
   deriving stock (Eq, Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
 
@@ -252,6 +253,11 @@ Apitoolkit team
       forM_ projects \p -> do
         dailyReportForProject dbPool cfg p
         pass
+    WeeklyReports -> do
+      projects <- withPool dbPool getAllProjects
+      forM_ projects \p -> do
+        weeklyReportForProject dbPool cfg p
+      pass
 
 jobsWorkerInit :: Pool Connection -> LogAction IO String -> Config.EnvConfig -> IO ()
 jobsWorkerInit dbPool logger envConfig = startJobRunner $ mkConfig jobLogger "background_jobs" dbPool (MaxConcurrentJobs 1) (jobsRunner dbPool logger envConfig) id
@@ -266,6 +272,23 @@ dailyReportForProject dbPool cfg pid = do
       let _first_user = V.head users
       anomalies <- withPool dbPool $ Anomalies.getReportAnomalies pid "daily"
       count <- withPool dbPool $ Anomalies.countAnomalies pid "daily"
+      endpoint_rp <- withPool dbPool $ RequestDumps.getRequestDumpForReports pid "daily"
+      previous_day <- withPool dbPool $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid "daily"
+      let perf_ins = getPerformanceInsight endpoint_rp previous_day
+      let anomaly_json = buildAnomalyJSON anomalies count
+      let rep_json = buildReportJSON anomalies count endpoint_rp previous_day
+      print rep_json
+      pass
+    else pass
+
+weeklyReportForProject :: Pool Connection -> Config.EnvConfig -> Projects.ProjectId -> IO ()
+weeklyReportForProject dbPool cfg pid = do
+  users <- withPool dbPool $ getUsersByProjectId pid
+  if not (null users)
+    then do
+      let _first_user = V.head users
+      anomalies <- withPool dbPool $ Anomalies.getReportAnomalies pid "weekly"
+      count <- withPool dbPool $ Anomalies.countAnomalies pid "weekly"
       endpoint_rp <- withPool dbPool $ RequestDumps.getRequestDumpForReports pid "weekly"
       previous_day <- withPool dbPool $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid "weekly"
       let perf_ins = getPerformanceInsight endpoint_rp previous_day
