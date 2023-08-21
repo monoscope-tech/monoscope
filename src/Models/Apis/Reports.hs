@@ -1,6 +1,6 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 
-module Models.Projects.Swaggers (
+module Models.Projects.Reports (
   Report (..),
   ReportId (..),
   addReport,
