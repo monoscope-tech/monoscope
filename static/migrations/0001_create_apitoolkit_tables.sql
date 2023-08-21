@@ -648,6 +648,8 @@ SELECT add_continuous_aggregate_policy('apis.project_requests_by_endpoint_per_mi
 -- so instead, we installed it into the default database and use a different function:
 -- SELECT cron.schedule_in_database('DailyOrttoSync', '0 8 * * *', $$INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued',  jsonb_build_object('tag', 'DailyOrttoSync')$$, 'apitoolkit-prod-eu');
 
+SELECT cron.schedule_in_database('DailyReports', '* * * * *', 'DailyReports', 'apitoolkit-prod-eu');
+
 -- This is for regular databases locally or if we migrate to a new database setup.
 -- SELECT cron.schedule('DailyOrttoSync', '0 8 * * *', $$INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued',  jsonb_build_object('tag', 'DailyOrttoSync')$$);
 -- useful query to view job details

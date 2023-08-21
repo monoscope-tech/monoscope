@@ -7,6 +7,8 @@ module BackgroundJobs (jobsWorkerInit, BgJobs (..)) where
 -- few seconds in one of the jobs. Otherwise it is not really needed.
 import Colog (LogAction, (<&))
 import Config qualified
+import Control.Concurrent.Async (mapConcurrently)
+import Control.Monad (forM_)
 import Data.Aeson as Aeson
 import Data.CaseInsensitive qualified as CI
 import Data.List.Extra (intersect, union)
@@ -19,7 +21,7 @@ import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, qu
 import Database.PostgreSQL.Simple (Connection, Only (Only))
 import Database.PostgreSQL.Simple.FromRow (FromRow (fromRow), field)
 import Database.PostgreSQL.Simple.SqlQQ
-import Database.PostgreSQL.Transact (DBT)
+import Database.PostgreSQL.Transact (DBT, runDBT)
 import GHC.Generics
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
@@ -42,6 +44,7 @@ data BgJobs
   | -- NewAnomaly Projects.ProjectId Anomalies.AnomalyTypes Anomalies.AnomalyActions TargetHash
     NewAnomaly Projects.ProjectId ZonedTime Text Text Text
   | DailyOrttoSync
+  | DailyReports
   deriving stock (Eq, Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
 
@@ -71,6 +74,11 @@ getUsersByProjectId pid = query Select q (Only pid)
   q =
     [sql| select u.id, u.created_at, u.updated_at, u.deleted_at, u.active, u.first_name, u.last_name, u.display_image_url, u.email
                     from users.users u join projects.project_members pm on (pm.user_id=u.id) where project_id=? |]
+
+getAllProjects :: DBT IO (Vector Projects.ProjectId)
+getAllProjects = query Select q (Only True)
+ where
+  q = [sql|SELECT id FROM projects.projects WHERE active=?|]
 
 -- TODO:
 -- Analyze shapes for
@@ -223,21 +231,32 @@ Apitoolkit team
                   where apm.timeB > NOW() - INTERVAL '1 days'
                   GROUP BY pp.id, pp.title, pm.user_id --, us.email
           |]
+    DailyReports -> do
+      projects <- withPool dbPool getAllProjects
+      forM_ projects \p -> do
+        dailyReportForProject dbPool cfg p
+        pass
 
 jobsWorkerInit :: Pool Connection -> LogAction IO String -> Config.EnvConfig -> IO ()
 jobsWorkerInit dbPool logger envConfig = startJobRunner $ mkConfig jobLogger "background_jobs" dbPool (MaxConcurrentJobs 1) (jobsRunner dbPool logger envConfig) id
  where
   jobLogger logLevel logEvent = logger <& show (logLevel, logEvent)
 
-dailyReportForProject :: Projects.ProjectId -> Text -> DBT IO ()
-dailyReportForProject pid report_type = do
-  anomalies <- Anomalies.getReportAnomalies pid report_type
-  count <- Anomalies.countAnomalies pid report_type
-  let anomaly_json = buildAnomalyJSON anomalies count
-  pass
+dailyReportForProject :: Pool Connection -> Config.EnvConfig -> Projects.ProjectId -> IO ()
+dailyReportForProject dbPool cfg pid = do
+  users <- withPool dbPool $ getUsersByProjectId pid
+  if not (null users)
+    then do
+      let first_user = V.head users
+      anomalies <- withPool dbPool $ Anomalies.getReportAnomalies pid "daily"
+      count <- withPool dbPool $ Anomalies.countAnomalies pid "daily"
+      let anomaly_json = buildAnomalyJSON anomalies count
+      sendEmail cfg "yousiph77@gmail.com" "Hello world" "Broooooooooo"
+      pass
+    else pass
 
 buildAnomalyJSON :: Vector Anomalies.AnomalyVM -> Int -> Aeson.Value
-buildAnomalyJSON anomalies total = Aeson.object ["anamalies" .= Aeson.Array (V.map buildjson anomalies), "anomalies_count" .= total]
+buildAnomalyJSON anomalies total = Aeson.object ["anomalies" .= Aeson.Array (V.map buildjson anomalies), "anomalies_count" .= total]
  where
   buildjson :: Anomalies.AnomalyVM -> Aeson.Value
   buildjson an = case an.anomalyType of
