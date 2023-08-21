@@ -30,6 +30,7 @@ import System.Random (RandomGen, getStdGen, randomRs)
 import Web.FormUrlEncoded (FromForm)
 import Faker.Verbs qualified
 import Faker.Vehicle qualified
+import Models.Apis.RequestDumps qualified as RequestDumps
 
 data FieldConfig = FieldConfig
   { name :: Text
@@ -117,7 +118,7 @@ parseConfigToRequestMessages pid input = do
               let host = "https://apitoolkit.io/"
               let projectId = Projects.unProjectId pid
               let timestamp = timestampV
-              let sdkType = RequestMessages.GoGin
+              let sdkType = RequestDumps.GoGin
 
               pathLog <- mapM fieldConfigToField (config.queryParams)
               pathParams <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField (config.pathParams)

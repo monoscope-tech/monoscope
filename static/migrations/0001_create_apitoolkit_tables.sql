@@ -655,4 +655,11 @@ SELECT cron.schedule_in_database('DailyReports', '* * * * *', 'DailyReports', 'a
 -- useful query to view job details
 -- select * from cron.job_run_details order by start_time desc limit 5;
 
+-- Introduce new duration_ns column and deprecate the old duration column
+alter table apis.request_dumps add column duration_ns BIGINT NOT NULL default 0;
+-- NOTE: I get an error: ERROR: attempted to lock invisible tuple when i try to run this
+-- So we would start with duration:0 for existing fields
+update apis.request_dumps set duration_ns=EXTRACT(epoch FROM duration)::BIGINT;
+alter table apis.request_dumps add column sdk_type TEXT NOT NULL default '';
+
 COMMIT;

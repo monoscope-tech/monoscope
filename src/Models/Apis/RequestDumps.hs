@@ -4,7 +4,9 @@
 
 module Models.Apis.RequestDumps (
   RequestDump (..),
+  SDKTypes (..),
   RequestDumpLogItem,
+  normalizeUrlPath,
   throughputBy,
   throughputBy',
   latencyBy,
@@ -27,11 +29,12 @@ import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
 import Data.Tuple.Extra (both)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
-import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, queryOne)
 import Database.PostgreSQL.Entity.Types
-import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
+import Database.PostgreSQL.Simple (FromRow, Only (Only), ResultError (ConversionFailed), ToRow)
+import Database.PostgreSQL.Simple.FromField (FromField (fromField), returnError)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Simple.ToField (ToField (toField))
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Database.PostgreSQL.Transact (DBT, executeMany)
 import Deriving.Aeson qualified as DAE
@@ -42,6 +45,33 @@ import Pkg.Parser
 import Relude hiding (many, some)
 import Utils (DBField (MkDBField), quoteTxt)
 import Witch (from)
+
+data SDKTypes = GoGin | GoBuiltIn | PhpLaravel | PhpSymfony | JsExpress | JsNest | JavaSpringBoot | DotNet
+  deriving stock (Show, Generic, Read, Eq)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SDKTypes
+
+instance ToField SDKTypes where
+  toField sdkType = toField @String (show sdkType)
+
+instance FromField SDKTypes where
+  fromField f mdata = do
+    str <- fromField f mdata
+    case readMaybe str of
+      Just sdkType -> return sdkType
+      Nothing -> return GoGin
+
+-- Nothing -> returnError ConversionFailed f ("Could not read SDKTypes: " ++ str)
+
+-- normalize URLPatg based off the SDKTypes. Should allow us have custom logic to parse and transform url paths into a form we are happy with, per library
+normalizeUrlPath :: SDKTypes -> Text -> Text
+normalizeUrlPath GoGin urlPath = urlPath
+normalizeUrlPath GoBuiltIn urlPath = urlPath
+normalizeUrlPath PhpLaravel urlPath = urlPath
+normalizeUrlPath PhpSymfony urlPath = urlPath
+normalizeUrlPath JsExpress urlPath = urlPath
+normalizeUrlPath JavaSpringBoot urlPath = urlPath
+normalizeUrlPath JsNest urlPath = urlPath
+normalizeUrlPath DotNet urlPath = urlPath
 
 -- request dumps are time series dumps representing each requests which we consume from our users.
 -- We use this field via the log explorer for exploring and searching traffic. And at the moment also use it for most time series analytics.
@@ -74,6 +104,8 @@ data RequestDump = RequestDump
   , shapeHash :: Text
   , formatHashes :: Vector Text
   , fieldHashes :: Vector Text
+  , durationNs :: Integer
+  , sdkType :: SDKTypes
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (ToRow, FromRow)
@@ -115,7 +147,7 @@ data RequestDumpLogItem = RequestDumpLogItem
   , referer :: Text
   , --
     pathParams :: AE.Value
-  , -- duration :: CalendarDiffTime,
+  , -- , duration :: CalendarDiffTime
     statusCode :: Int
   , --
     queryParams :: AE.Value
@@ -124,6 +156,8 @@ data RequestDumpLogItem = RequestDumpLogItem
   , requestHeaders :: AE.Value
   , responseHeaders :: AE.Value
   , fullCount :: Int
+  , durationNs :: Integer
+  , sdkType :: SDKTypes
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (ToRow, FromRow)
@@ -149,9 +183,9 @@ selectRequestDumpByProject pid extraQuery fromM = query Select (Query $ encodeUt
   extraQueryParsed = either error (\v -> if v == "" then "" else " AND " <> v) $ parseQueryStringToWhereClause extraQuery
   q =
     [text| SELECT id,created_at,host,url_path,method,raw_url,referer,
-                    path_params,status_code,query_params,
+                    path_params, status_code,query_params,
                     request_body,response_body,request_headers,response_headers,
-                    count(*) OVER() AS full_count
+                    count(*) OVER() AS full_count, duration_ns, sdk_type
              FROM apis.request_dumps where project_id=? and created_at<? |]
       <> extraQueryParsed
       <> " order by created_at desc limit 200;"
@@ -168,22 +202,13 @@ selectRequestDumpsByProjectForChart pid extraQuery = do
                 SELECT time_bucket('1 minute', created_at) as timeB,count(*)
                FROM apis.request_dumps where project_id=? $extraQueryParsed  GROUP BY timeB) ts|]
 
-getRequestDumpForReports :: Projects.ProjectId -> Text -> DBT IO (Vector RequestForReport)
-getRequestDumpForReports pid report_type = query Select (Query $ encodeUtf8 q) pid
- where
-  report_interval = if report_type == "daily" then ("'24 hours'" :: Text) else "'7 days'"
-  q =
-    [text| 
-     SELECT id, created_at, project_id, host, url_path, raw_url, method,
-            referer, duration, status_code, endpoint_hash
-     FROM apis.request_dumps
-     WHERE project_id = ? AND created_at > NOW() - interval $report_interval
-    |]
-
+-- bulkInsertRequestDumps :: [RequestDump] -> DBT IO Int64
+-- bulkInsertRequestDumps _ = pure 0
+--
 bulkInsertRequestDumps :: [RequestDump] -> DBT IO Int64
 bulkInsertRequestDumps = executeMany q
  where
-  q = [sql| INSERT INTO apis.request_dumps VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?); |]
+  q = [sql| INSERT INTO apis.request_dumps VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?); |]
 
 selectRequestDumpByProjectAndId :: Projects.ProjectId -> ZonedTime -> UUID.UUID -> DBT IO (Maybe RequestDumpLogItem)
 selectRequestDumpByProjectAndId pid createdAt rdId = queryOne Select q (createdAt, pid, rdId)
@@ -192,7 +217,7 @@ selectRequestDumpByProjectAndId pid createdAt rdId = queryOne Select q (createdA
     [sql|SELECT   id,created_at,host,url_path,method,raw_url,referer,
                     path_params,status_code,query_params,
                     request_body,response_body,request_headers,response_headers,
-                    0 AS full_count
+                    0 AS full_count, duration_ns, sdk_type
              FROM apis.request_dumps where created_at=? and project_id=? and id=? LIMIT 1|]
 
 selectReqLatenciesRolledBySteps :: Int -> Int -> Projects.ProjectId -> Text -> Text -> DBT IO (Vector (Int, Int))
@@ -283,9 +308,12 @@ throughputBy pid groupByM endpointHash shapeHash formatHash statusCodeGT numSlot
         _ -> (groupBy', groupBy' <> " as g")
   let groupByFinal = maybe "" (const ",g") groupByM
   let paramList = mapMaybe (MkDBField <$>) [endpointHash, shapeHash, formatHash, statusCodeGT]
+
+  let condlist' = filter (/= "") condlist
   let cond
-        | null condlist = mempty
-        | otherwise = "AND " <> mconcat (intersperse " AND " condlist)
+        | null condlist' = mempty
+        | otherwise = "AND " <> mconcat (intersperse " AND " condlist')
+
   let limit = maybe "" (("limit " <>) . show) limitM
   let interval = case dateRange of
         (Just a, Just b) -> diffUTCTime (zonedTimeToUTC b) (zonedTimeToUTC a)
@@ -324,19 +352,20 @@ throughputBy' pid groupByM endpointHash shapeHash formatHash statusCodeGT numSlo
         _ -> (groupBy', groupBy' <> "::text as g")
   let groupByFinal = maybe "" (const ",g") groupByM
   let paramList = mapMaybe (MkDBField <$>) [endpointHash, shapeHash, formatHash, statusCodeGT]
+  let condlist' = filter (/= "") condlist
   let cond
-        | null condlist = mempty
-        | otherwise = "AND " <> mconcat (intersperse " AND " condlist)
+        | null condlist' = mempty
+        | otherwise = "AND " <> mconcat (intersperse " AND " condlist')
   let limit = maybe "" (("limit " <>) . show) limitM
-  let interval =  case dateRange of 
-          (Just a, Just b) -> diffUTCTime (zonedTimeToUTC b) (zonedTimeToUTC a)
-          _ -> 60*60*24*14 
+  let interval = case dateRange of
+        (Just a, Just b) -> diffUTCTime (zonedTimeToUTC b) (zonedTimeToUTC a)
+        _ -> 60 * 60 * 24 * 14
 
-  let intervalT = from @String @Text $ show  $ floor interval `div` (if numSlots == 0 then 1 else numSlots) 
-  let dateRange' = both ( quoteTxt . from @String . formatTime defaultTimeLocale "%F %R" <$> ) dateRange 
-  let dateRangeStr =  case dateRange' of
-        (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND " <>  b 
-        (Just a, Just b) -> "AND created_at BETWEEN " <>  a <> " AND " <>  b 
+  let intervalT = from @String @Text $ show $ floor interval `div` (if numSlots == 0 then 1 else numSlots)
+  let dateRange' = both (quoteTxt . from @String . formatTime defaultTimeLocale "%F %R" <$>) dateRange
+  let dateRangeStr = case dateRange' of
+        (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND " <> b
+        (Just a, Just b) -> "AND created_at BETWEEN " <> a <> " AND " <> b
         _ -> "AND created_at BETWEEN NOW() - INTERVAL '14 days' AND NOW()"
   -- let (fromD, toD) = bimap (maybe "now() - INTERVAL '14 days'" ("TIMESTAMP " <> ) )  (maybe "now()" ("TIMESTAMP " <>)) dateRange'
   let q =

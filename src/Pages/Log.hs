@@ -77,9 +77,7 @@ apiLogItem sess pid rdId createdAt = do
   afterProccessing <- liftIO $ getTime Monotonic
   let content = maybe (div_ "invalid log request ID") apiLogItemView logItemM
   endTime <- liftIO $ getTime Monotonic
-  liftIO $ putStrLn $ fmtLn $ " APILOG Item in ns DB Time " +| toNanoSecs (diffTimeSpec startTime afterProccessing) |+ ""
-  liftIO $ putStrLn $ fmtLn $ " APILOG Item in ns Processing time " +| toNanoSecs (diffTimeSpec afterProccessing endTime) |+ ""
-  liftIO $ putStrLn $ fmtLn $ " APILOG Item in ns Total Time" +| toNanoSecs (diffTimeSpec startTime endTime) |+ ""
+  liftIO $ putStrLn $ fmtLn $ " APILOG pipeline microsecs: queryDuration " +| (toNanoSecs (diffTimeSpec startTime afterProccessing)) `div` 1000 |+ " -> processingDuration " +| toNanoSecs (diffTimeSpec afterProccessing endTime)  `div` 1000 |+ " -> TotalDuration " +| toNanoSecs (diffTimeSpec startTime endTime)  `div` 1000 |+ ""
   pure content
 
 apiLogsPage :: Projects.ProjectId -> Int -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Text -> Text -> Text -> Html ()
@@ -169,15 +167,14 @@ logItemRows pid requests cols nextLogsURL = do
           let method_cls = cls <> getMethodBgColor (req ^. #method)
           span_ [class_ method_cls] $ toHtml $ req ^. #method
           span_ [class_ $ cls <> " bg-gray-100"] $ toHtml $ req ^. #urlPath
-          span_ [class_ $ cls <> " bg-gray-100"] $ toHtml $ req ^. #rawUrl
           let status_cls = if req ^. #statusCode > 400 then cls <> " bg-red-100" else cls <> " bg-green-100"
           span_ [class_ status_cls] $ show $ req ^. #statusCode
-          let rawUrl = req ^. #rawUrl
+          span_ [class_ $ cls <> " bg-gray-50"] $ toHtml $ req ^. #rawUrl
           let reqBody = decodeUtf8 $ AE.encode $ req ^. #requestBody
           let respBody = decodeUtf8 $ AE.encode $ req ^. #responseBody
           let reqHeaders = decodeUtf8 $ AE.encode $ req ^. #requestHeaders
           let respHeaders = decodeUtf8 $ AE.encode $ req ^. #responseHeaders
-          p_ [class_ "inline-block"] $ toHtml $ T.take 300 [text| raw_url=$rawUrl request_body=$reqBody response_body=$respBody request_headers=$reqHeaders response_headers=$respHeaders|]
+          p_ [class_ "inline-block"] $ toHtml $ T.take 300 [text| request_body=$reqBody response_body=$respBody request_headers=$reqHeaders response_headers=$respHeaders|]
   a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ nextLogsURL] "LOAD MORE"
 
 getMethodBgColor :: Text -> Text
@@ -198,7 +195,7 @@ jsonValueToHtmlTree :: AE.Value -> Html ()
 jsonValueToHtmlTree val = jsonValueToHtmlTree' ("", "", val)
  where
   jsonValueToHtmlTree' :: (Text, Text, AE.Value) -> Html ()
-  jsonValueToHtmlTree' (path, key, AE.Object v) = renderParentType "{" "}" key (length v) (AEK.toHashMapText v & HM.toList & mapM_ (\(kk, vv) -> jsonValueToHtmlTree' (path <> "." <> key, kk, vv)))
+  jsonValueToHtmlTree' (path, key, AE.Object v) = renderParentType "{" "}" key (length v) (AEK.toHashMapText v & HM.toList & sort & mapM_ (\(kk, vv) -> jsonValueToHtmlTree' (path <> "." <> key, kk, vv)))
   jsonValueToHtmlTree' (path, key, AE.Array v) = renderParentType "[" "]" key (length v) (iforM_ v \i item -> jsonValueToHtmlTree' (path <> "." <> key <> "." <> "[]", show i, item))
   jsonValueToHtmlTree' (path, key, value) = do
     let fullFieldPath = if T.isSuffixOf ".[]" path then path else path <> "." <> key

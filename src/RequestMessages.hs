@@ -9,7 +9,6 @@ module RequestMessages (
   valueToFormatStr,
   valueToFields,
   redactJSON,
-  SDKTypes (..),
 ) where
 
 import Data.Aeson (Value)
@@ -61,10 +60,6 @@ import Witch (from)
 -- >>> import Data.Aeson.QQ (aesonQQ)
 -- >>> import Data.Aeson
 
-data SDKTypes = GoGin | GoBuiltIn | PhpLaravel | PhpSymfony | JsExpress | JsNest | JavaSpringBoot | DotNet
-  deriving stock (Show, Generic, Read)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SDKTypes
-
 -- | RequestMessage represents a message for a single request pulled from pubsub.
 data RequestMessage = RequestMessage
   { duration :: Int -- in nanoseconds
@@ -81,7 +76,7 @@ data RequestMessage = RequestMessage
   , requestHeaders :: AE.Value -- key value map of a key to a list of text values map[string][]string
   , responseBody :: Text
   , responseHeaders :: AE.Value -- key value map of a key to a list of text values map[string][]string
-  , sdkType :: SDKTypes -- convension should be <language>-<router library> eg: go-gin, go-builtin, js-express
+  , sdkType :: RequestDumps.SDKTypes -- convension should be <language>-<router library> eg: go-gin, go-builtin, js-express
   , statusCode :: Int
   , urlPath :: Text
   , timestamp :: ZonedTime
@@ -126,7 +121,7 @@ redactJSON paths' = redactJSON' (stripPrefixDot paths')
 requestMsgToDumpAndEndpoint :: Projects.ProjectCache -> RequestMessages.RequestMessage -> ZonedTime -> UUID.UUID -> Either Text (Query, [DBField], RequestDumps.RequestDump)
 requestMsgToDumpAndEndpoint pjc rM now dumpID = do
   let method = T.toUpper $ rM.method
-  let urlPath = normalizeUrlPath (rM.sdkType) (rM.urlPath)
+  let urlPath = RequestDumps.normalizeUrlPath (rM.sdkType) (rM.urlPath)
   let !endpointHash = from @String @Text $ showHex (xxHash $ encodeUtf8 $ UUID.toText (rM.projectId) <> method <> urlPath) ""
 
   let redactFieldsList = Vector.toList (pjc.redactFieldslist) <> [".set-cookie"]
@@ -201,7 +196,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
 
   -- FIXME: This 1000 is added on the php sdk in a previous version and has been remove. This workaround code should be removed ASAP
   let duration = case rM.sdkType of
-        PhpLaravel -> rM.duration `div` 1000
+        RequestDumps.PhpLaravel -> rM.duration `div` 1000
         _ -> rM.duration
 
   -- request dumps are time series dumps representing each requests which we consume from our users.
@@ -238,6 +233,8 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
           , shapeHash = shapeHash
           , formatHashes = formatHashes
           , fieldHashes = fieldHashes
+          , durationNs = fromIntegral duration
+          , sdkType = rM.sdkType
           }
 
   -- Build all fields and formats, unzip them as separate lists and append them to query and params
@@ -273,16 +270,6 @@ buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash =
     , hosts = [rM.host]
     , hash = endpointHash
     }
-
-normalizeUrlPath :: SDKTypes -> Text -> Text
-normalizeUrlPath GoGin urlPath = urlPath
-normalizeUrlPath GoBuiltIn urlPath = urlPath
-normalizeUrlPath PhpLaravel urlPath = urlPath
-normalizeUrlPath PhpSymfony urlPath = urlPath
-normalizeUrlPath JsExpress urlPath = urlPath
-normalizeUrlPath JavaSpringBoot urlPath = urlPath
-normalizeUrlPath JsNest urlPath = urlPath
-normalizeUrlPath DotNet urlPath = urlPath
 
 -- valueToFields takes an aeson object and converts it into a list of paths to
 -- each primitive value in the json and the values.
