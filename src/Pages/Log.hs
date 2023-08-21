@@ -167,15 +167,14 @@ logItemRows pid requests cols nextLogsURL = do
           let method_cls = cls <> getMethodBgColor (req ^. #method)
           span_ [class_ method_cls] $ toHtml $ req ^. #method
           span_ [class_ $ cls <> " bg-gray-100"] $ toHtml $ req ^. #urlPath
-          span_ [class_ $ cls <> " bg-gray-100"] $ toHtml $ req ^. #rawUrl
           let status_cls = if req ^. #statusCode > 400 then cls <> " bg-red-100" else cls <> " bg-green-100"
           span_ [class_ status_cls] $ show $ req ^. #statusCode
-          let rawUrl = req ^. #rawUrl
+          span_ [class_ $ cls <> " bg-gray-50"] $ toHtml $ req ^. #rawUrl
           let reqBody = decodeUtf8 $ AE.encode $ req ^. #requestBody
           let respBody = decodeUtf8 $ AE.encode $ req ^. #responseBody
           let reqHeaders = decodeUtf8 $ AE.encode $ req ^. #requestHeaders
           let respHeaders = decodeUtf8 $ AE.encode $ req ^. #responseHeaders
-          p_ [class_ "inline-block"] $ toHtml $ T.take 300 [text| raw_url=$rawUrl request_body=$reqBody response_body=$respBody request_headers=$reqHeaders response_headers=$respHeaders|]
+          p_ [class_ "inline-block"] $ toHtml $ T.take 300 [text| request_body=$reqBody response_body=$respBody request_headers=$reqHeaders response_headers=$respHeaders|]
   a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ nextLogsURL] "LOAD MORE"
 
 getMethodBgColor :: Text -> Text

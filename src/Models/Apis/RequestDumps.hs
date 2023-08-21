@@ -288,9 +288,12 @@ throughputBy pid groupByM endpointHash shapeHash formatHash statusCodeGT numSlot
         _ -> (groupBy', groupBy' <> " as g")
   let groupByFinal = maybe "" (const ",g") groupByM
   let paramList = mapMaybe (MkDBField <$>) [endpointHash, shapeHash, formatHash, statusCodeGT]
+
+  let condlist' = filter (/= "") condlist
   let cond
-        | null condlist = mempty
-        | otherwise = "AND " <> mconcat (intersperse " AND " condlist)
+        | null condlist' = mempty
+        | otherwise = "AND " <> mconcat (intersperse " AND " condlist')
+
   let limit = maybe "" (("limit " <>) . show) limitM
   let interval =  case dateRange of 
           (Just a, Just b) -> diffUTCTime (zonedTimeToUTC b) (zonedTimeToUTC a)
@@ -329,9 +332,10 @@ throughputBy' pid groupByM endpointHash shapeHash formatHash statusCodeGT numSlo
         _ -> (groupBy', groupBy' <> "::text as g")
   let groupByFinal = maybe "" (const ",g") groupByM
   let paramList = mapMaybe (MkDBField <$>) [endpointHash, shapeHash, formatHash, statusCodeGT]
+  let condlist' = filter (/= "") condlist
   let cond
-        | null condlist = mempty
-        | otherwise = "AND " <> mconcat (intersperse " AND " condlist)
+        | null condlist' = mempty
+        | otherwise = "AND " <> mconcat (intersperse " AND " condlist')
   let limit = maybe "" (("limit " <>) . show) limitM
   let interval =  case dateRange of 
           (Just a, Just b) -> diffUTCTime (zonedTimeToUTC b) (zonedTimeToUTC a)

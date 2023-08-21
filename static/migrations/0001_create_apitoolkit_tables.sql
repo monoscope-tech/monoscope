@@ -643,6 +643,9 @@ SELECT add_continuous_aggregate_policy('apis.project_requests_by_endpoint_per_mi
 
 -- Introduce new duration_ns column and deprecate the old duration column
 alter table apis.request_dumps add column duration_ns BIGINT NOT NULL default 0;
+-- NOTE: I get an error: ERROR: attempted to lock invisible tuple when i try to run this
+-- So we would start with duration:0 for existing fields
 update apis.request_dumps set duration_ns=EXTRACT(epoch FROM duration)::BIGINT;
 alter table apis.request_dumps add column sdk_type TEXT NOT NULL default '';
+
 COMMIT;
