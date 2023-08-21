@@ -6,6 +6,8 @@ module Models.Apis.RequestDumps (
   RequestDump (..),
   SDKTypes (..),
   RequestDumpLogItem,
+  EndpointPerf (..),
+  RequestForReport (..),
   normalizeUrlPath,
   throughputBy,
   throughputBy',
@@ -19,11 +21,13 @@ module Models.Apis.RequestDumps (
   selectRequestDumpsByProjectForChart,
   bulkInsertRequestDumps,
   getRequestDumpForReports,
+  getRequestDumpsForPreviousReportPeriod,
 ) where
 
 import Control.Error (hush)
 import Data.Aeson qualified as AE
 import Data.Default.Instances ()
+import Data.Scientific (Scientific)
 import Data.Time (CalendarDiffTime, ZonedTime, defaultTimeLocale, diffUTCTime, formatTime, zonedTimeToUTC)
 import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
 import Data.Tuple.Extra (both)
@@ -122,16 +126,24 @@ data RequestForReport = RequestForReport
   , urlPath :: Text
   , rawUrl :: Text
   , method :: Text
-  , referer :: Text
-  , duration :: CalendarDiffTime
-  , statusCode :: Int
   , endpointHash :: Text
+  , averageDuration :: Scientific
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (ToRow, FromRow)
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "request_dumps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] RequestForReport)
+
+data EndpointPerf = EndpointPerf
+  { endpointHash :: Text
+  , averageDuration :: Scientific
+  }
+  deriving stock (Show, Generic, Eq)
+  deriving anyclass (ToRow, FromRow)
+  deriving
+    (Entity)
+    via (GenericEntity '[Schema "apis", TableName "request_dumps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] EndpointPerf)
 
 makeFieldLabelsNoPrefix ''RequestForReport
 
@@ -175,6 +187,36 @@ requestDumpLogUrlPath pid q cols fromM = [text|/p/$pidT/log_explorer?query=$quer
   queryT = fromMaybe "" q
   colsT = fromMaybe "" cols
   fromT = fromMaybe "" fromM
+
+getRequestDumpForReports :: Projects.ProjectId -> Text -> DBT IO (Vector RequestForReport)
+getRequestDumpForReports pid report_type = query Select (Query $ encodeUtf8 q) pid
+ where
+  report_interval = if report_type == "daily" then ("'24 hours'" :: Text) else "'7 days'"
+  q =
+    [text| 
+     SELECT DISTINCT ON (endpoint_hash)
+        id, created_at, project_id, host, url_path, raw_url, method, endpoint_hash,
+        AVG(duration_ns) OVER (PARTITION BY endpoint_hash) AS average_duration
+     FROM
+        apis.request_dumps
+     WHERE
+        project_id = ? AND created_at > NOW() - interval $report_interval;
+    |]
+
+getRequestDumpsForPreviousReportPeriod :: Projects.ProjectId -> Text -> DBT IO (Vector EndpointPerf)
+getRequestDumpsForPreviousReportPeriod pid report_type = query Select (Query $ encodeUtf8 q) pid
+ where
+  (start, end) = if report_type == "daily" then ("'48 hours'" :: Text, "'24 hours'") else ("'14 days'", "'7 days'")
+  q =
+    [text| 
+     SELECT  endpoint_hash,
+        AVG(duration_ns) AS average_duration
+     FROM
+        apis.request_dumps
+     WHERE
+        project_id = ? AND created_at > NOW() - interval $start AND created_at < NOW() - interval $end
+     GROUP BY endpoint_hash;
+    |]
 
 selectRequestDumpByProject :: Projects.ProjectId -> Text -> Maybe Text -> DBT IO (Vector RequestDumpLogItem)
 selectRequestDumpByProject pid extraQuery fromM = query Select (Query $ encodeUtf8 q) (pid, fromT)
