@@ -66,92 +66,90 @@ function stackedChart(title, series, _data, interp, width = 800, height = 400) {
   opts.title = title;
   opts.width = width;
   opts.height = height;
-/*
-  Object.assign(opts.scales.x, {
-    ori: 1,
-    dir: -1,
-  });
-  Object.assign(opts.scales.y, {
-    ori: 0,
-    dir: 1,
-  });
-*/
+  /*
+    Object.assign(opts.scales.x, {
+      ori: 1,
+      dir: -1,
+    });
+    Object.assign(opts.scales.y, {
+      ori: 0,
+      dir: 1,
+    });
+  */
   return new uPlot(opts, data, document.body);
 }
 
-function throughputEChartTable(renderAt, categories,data, gb, showLegend, theme) {
+function throughputEChartTable(renderAt, categories, data, gb, showLegend, theme) {
   let backgroundStyle = {
     color: 'rgba(240,248,255, 0.4)'
   }
   const getSeriesData = (data) => {
-      return data.slice(1).map((seriesData, index) => {
-          return {
-              name: categories[index],
-              type: 'bar',
-              stack: "Endpoints",
-              showBackground: true,
-              backgroundStyle: backgroundStyle,
-              barWidth: '60%',
-              data: seriesData.map((value, dataIndex) =>[data[0][dataIndex] , value])
-          };
-      });
+    return data.slice(1).map((seriesData, index) => {
+      return {
+        name: categories[index],
+        type: 'bar',
+        stack: "Endpoints",
+        showBackground: true,
+        backgroundStyle: backgroundStyle,
+        barWidth: '60%',
+        data: seriesData.map((value, dataIndex) => [data[0][dataIndex] * 1000, value])
+      };
+    });
   };
-  
+
   const option = {
-      tooltip: {
-          trigger: 'axis',
-          axisPointer: {
-              type: 'shadow'
-          },
-          formatter: function (params) {
-            let result = '';
-            
-            params.forEach(param => {
-              console.log(param)
-                // Check if data (value) is not zero or null
-                if (param.value !== null && param.value[1] !== null) {
-                    result += `<div >
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: {
+        type: 'shadow'
+      },
+      formatter: function(params) {
+        let result = '';
+        params.forEach(param => {
+          // Check if data (value) is not zero or null
+          if (param.value !== null && param.value[1] !== null) {
+            result += `<div >
                     <div class="monospace flex flex-row space-between">
                                   <div class="flex-1">${param.marker}${param.seriesName}:</div>
                                   <strong class="shrink pl-3 font-bold">${param.value[1]}</strong>
                                 </div>
                           </div>`;
-                }
-            });
-            
-            return result;
-        }
-      },
-      legend: {
-          type: 'scroll',
-          top: 'bottom',
-          data: categories.slice(0, data.length - 1)
-      },
-      grid: {
-        width: '100%',
-        left: '0%',
-        top: '5%',
-        bottom: '9%',
-        containLabel: true
-      },
-      xAxis: {
-          type: 'time',
-          boundaryGap: [0, 0.01],
-      },
-      yAxis: {
-          type: 'value',
-          show: true,
-          min: 0
-      },
-      series: getSeriesData(data)
+          }
+        });
+
+        return result;
+      }
+    },
+    legend: {
+      type: 'scroll',
+      top: 'bottom',
+      data: categories.slice(0, data.length - 1)
+    },
+    grid: {
+      width: '100%',
+      left: '0%',
+      top: '5%',
+      bottom: '9%',
+      containLabel: true
+    },
+    xAxis: {
+      type: 'time',
+      boundaryGap: [0, 0.01],
+    },
+    yAxis: {
+      type: 'value',
+      show: true,
+      min: 0
+    },
+    series: getSeriesData(data)
   };
-  
+
   const myChart = echarts.init(document.getElementById(renderAt), theme);
   myChart.setOption(option);
 }
 
 function throughputEChartTable3(renderAt, categories, _data, gb, showLegend, theme) {
-  const series = categories.map(x=> ({type: 'bar', label:x, width:2}));
+  const series = categories.map(x => ({ type: 'bar', label: x, width: 2 }));
   series.unshift({});
   console.dir(series)
   // Prepend empty string for the header row
@@ -174,11 +172,11 @@ function throughputEChartTable3(renderAt, categories, _data, gb, showLegend, the
 }
 
 function throughputEChartTable2(renderAt, categories, _data, gb, showLegend, theme) {
-  const series = categories.map(_ => ({type: 'bar'})) ;
+  const series = categories.map(_ => ({ type: 'bar' }));
   console.dir(series)
   // Prepend empty string for the header row
   categories.unshift("");
-  
+
   const tableData = _data.map((row, index) => [categories[index], ...row]);
   console.table(tableData);
   let { opts, data } = getStackedOpts("Bars stacked", series, tableData, null);
@@ -190,11 +188,11 @@ function throughputEChartTable2(renderAt, categories, _data, gb, showLegend, the
 }
 
 function throughputEChartTable2(renderAt, categories, data, gb, showLegend, theme) {
-  const series = categories.map(_ => ({type: 'bar'})) ;
+  const series = categories.map(_ => ({ type: 'bar' }));
   console.dir(series)
   // Prepend empty string for the header row
   categories.unshift("");
-  
+
   const normalizedData = data.map((row, index) => [categories[index], ...row]);
   console.log(normalizedData)
 
@@ -203,7 +201,7 @@ function throughputEChartTable2(renderAt, categories, data, gb, showLegend, them
     dataset: {
       source: normalizedData
     },
-    legend: { show: showLegend, type: 'scroll', top: 'bottom', data: categories.slice(0, data.length - 1)},
+    legend: { show: showLegend, type: 'scroll', top: 'bottom', data: categories.slice(0, data.length - 1) },
     grid: {
       width: '100%',
       left: '0%',
@@ -214,8 +212,8 @@ function throughputEChartTable2(renderAt, categories, data, gb, showLegend, them
     tooltip: {
       trigger: 'axis',
     },
-    xAxis: { show: showLegend, type: 'time'},
-    yAxis: { show: showLegend, type: 'value'},
+    xAxis: { show: showLegend, type: 'time' },
+    yAxis: { show: showLegend, type: 'value' },
     series: series,
   };
   if (showLegend) {
