@@ -28,6 +28,8 @@ import System.Clock
 import Utils (DBField, eitherStrToText)
 import Fmt
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Text.Pretty.Simple (pShow)
+import Witch (from)
 
 {--
   Exploring how the inmemory cache could be shaped for performance, and low footprint ability to skip hitting the postgres database when not needed.
@@ -110,6 +112,8 @@ processMessages' logger' _ conn' msgs projectCache' = do
   let params' = concat params
 
   lefts processed & mapM_ \err -> logger' <& "ERROR: with processing request dump to queries; with original len "<> show messagesCount <>" err: " <> show err
+  unless (null  $ lefts processed) $ 
+    logger' <& "processed messages with errors. " <> (from @LText $ pShow msgs)
 
   afterProccessing <- getTime Monotonic
 

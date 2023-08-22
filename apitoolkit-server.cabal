@@ -152,6 +152,7 @@ library
     , lucid-svg
     , megaparsec
     , neat-interpolation
+    , network-uri
     , nyan-interpolation
     , odd-jobs
     , optics-core

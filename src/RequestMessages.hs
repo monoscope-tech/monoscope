@@ -120,8 +120,8 @@ redactJSON paths' = redactJSON' (stripPrefixDot paths')
 -- We can pass in a request, it's project cache object and inspect the generated sql and params.
 requestMsgToDumpAndEndpoint :: Projects.ProjectCache -> RequestMessages.RequestMessage -> ZonedTime -> UUID.UUID -> Either Text (Query, [DBField], RequestDumps.RequestDump)
 requestMsgToDumpAndEndpoint pjc rM now dumpID = do
-  let method = T.toUpper $ rM.method
-  let urlPath = RequestDumps.normalizeUrlPath (rM.sdkType) (rM.urlPath)
+  let method = T.toUpper rM.method
+  let urlPath = RequestDumps.normalizeUrlPath rM.sdkType rM.statusCode rM.method rM.urlPath
   let !endpointHash = from @String @Text $ showHex (xxHash $ encodeUtf8 $ UUID.toText (rM.projectId) <> method <> urlPath) ""
 
   let redactFieldsList = Vector.toList (pjc.redactFieldslist) <> [".set-cookie", ".password"]

@@ -153,6 +153,7 @@ library:
     - tmp-postgres
     - directory
     - githash
+    - network-uri
 
 executables:
   apitoolkit-server-exe:
