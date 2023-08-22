@@ -46,6 +46,7 @@ import Database.PostgreSQL.Simple.FromField (FromField (fromField), returnError)
 import Database.PostgreSQL.Simple.ToField (ToField (toField))
 import Network.URI (URI, parseURI, uriAuthority, uriPath, uriQuery)
 import Data.Text (unpack)
+import Data.Text qualified as T
 
 data SDKTypes = GoGin | GoBuiltIn | PhpLaravel | PhpSymfony | JsExpress | JsNest | JavaSpringBoot | DotNet
   deriving stock (Show, Generic, Read, Eq)
@@ -65,6 +66,8 @@ instance FromField SDKTypes where
 -- normalize URLPatg based off the SDKTypes. Should allow us have custom logic to parse and transform url paths into a form we are happy with, per library
 -- >>> normalizeUrlPath GoGin 200 "GET" "https://apitoolkit.io/abc/:bla?q=abc"
 -- "/abc/:bla"
+-- >>> normalizeUrlPath GoGin 200 "GET" "/abc/:bla?q=abc"
+-- ""
 --
 -- >>> normalizeUrlPath GoGin 404 "GET" "https://apitoolkit.io/abc/:bla?q=abc"
 -- ""
@@ -89,9 +92,13 @@ normalizeUrlPath DotNet statusCode _method urlPath =removeQueryParams statusCode
 -- removeQueryParams ...
 -- >>> removeQueryParams 200 "https://apitoolkit.io/abc/:bla?q=abc"
 --
+-- Function to remove the query parameter section from a URL
 removeQueryParams :: Int -> Text ->Text
 removeQueryParams 404 urlPath = ""
-removeQueryParams statusCode urlPath = maybe "" (toText . uriPath) (parseURI $ toString urlPath)
+removeQueryParams statusCode urlPath =
+    case T.break (== '?') urlPath of
+        (before, "")    -> before  -- No query parameters found
+        (before, after) -> before  -- Query parameters found, stripping them
 
 
 -- request dumps are time series dumps representing each requests which we consume from our users.
