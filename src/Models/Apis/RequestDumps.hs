@@ -63,7 +63,17 @@ instance FromField SDKTypes where
       -- Nothing -> returnError ConversionFailed f ("Could not read SDKTypes: " ++ str)
 
 -- normalize URLPatg based off the SDKTypes. Should allow us have custom logic to parse and transform url paths into a form we are happy with, per library
--- >>> normalizeUrlPath GoGin "https://apitoolkit.io/abc/:bla?q=abc"
+-- >>> normalizeUrlPath GoGin 200 "GET" "https://apitoolkit.io/abc/:bla?q=abc"
+-- "/abc/:bla"
+--
+-- >>> normalizeUrlPath GoGin 404 "GET" "https://apitoolkit.io/abc/:bla?q=abc"
+-- ""
+--
+-- >>> normalizeUrlPath JsExpress 200 "OPTIONS" "https://apitoolkit.io/abc/:bla?q=abc"
+-- ""
+-- >>> normalizeUrlPath JsExpress 200 "PATCH" "https://apitoolkit.io/abc/:bla?q=abc"
+-- "/abc/:bla"
+--
 normalizeUrlPath :: SDKTypes ->Int -> Text-> Text -> Text
 normalizeUrlPath GoGin statusCode _method urlPath =removeQueryParams statusCode urlPath
 normalizeUrlPath GoBuiltIn statusCode _method urlPath =removeQueryParams statusCode urlPath
@@ -76,6 +86,9 @@ normalizeUrlPath JavaSpringBoot statusCode _method urlPath =removeQueryParams st
 normalizeUrlPath JsNest statusCode _method urlPath =removeQueryParams statusCode urlPath
 normalizeUrlPath DotNet statusCode _method urlPath =removeQueryParams statusCode urlPath
 
+-- removeQueryParams ...
+-- >>> removeQueryParams 200 "https://apitoolkit.io/abc/:bla?q=abc"
+--
 removeQueryParams :: Int -> Text ->Text
 removeQueryParams 404 urlPath = ""
 removeQueryParams statusCode urlPath = maybe "" (toText . uriPath) (parseURI $ toString urlPath)

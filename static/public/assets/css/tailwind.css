@@ -16,7 +16,7 @@
   }
 
   .card-round {
-    @apply bg-white border border-slate-200 rounded-xl shadow-md  shadow-slate-200 overflow-hidden;
+    @apply bg-white border border-slate-200 rounded-xl shadow-md  shadow-slate-200 ;
   }
 }
 
