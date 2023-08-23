@@ -10,6 +10,8 @@ module Models.Apis.Reports (
 
 import Data.Aeson as Aeson
 import Data.Default (Default)
+import Data.Map (updateAt)
+import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity (Entity, insert, selectById, selectManyByField)
@@ -35,6 +37,8 @@ instance HasField "toText" ReportId Text where
 
 data Report = Report
   { id :: ReportId
+  , createdAt :: ZonedTime
+  , updatedAt :: ZonedTime
   , projectId :: Projects.ProjectId
   , reportType :: Text
   , reportJson :: Value

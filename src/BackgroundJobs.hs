@@ -311,7 +311,7 @@ buildReportJSON anomalies anm_total endpoints_perf previous_perf =
    in report_json
 
 buildPerformanceJSON :: V.Vector PerformanceReport -> Aeson.Value
-buildPerformanceJSON pr = Aeson.object ["anomalies" .= pr]
+buildPerformanceJSON pr = Aeson.object ["endpoints" .= pr]
 
 buildAnomalyJSON :: Vector Anomalies.AnomalyVM -> Int -> Aeson.Value
 buildAnomalyJSON anomalies total = Aeson.object ["anomalies" .= V.map buildjson anomalies, "anomalies_count" .= total]
