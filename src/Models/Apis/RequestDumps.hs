@@ -127,7 +127,7 @@ data RequestForReport = RequestForReport
   , rawUrl :: Text
   , method :: Text
   , endpointHash :: Text
-  , averageDuration :: Scientific
+  , averageDuration :: Integer
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (ToRow, FromRow)
@@ -137,7 +137,7 @@ data RequestForReport = RequestForReport
 
 data EndpointPerf = EndpointPerf
   { endpointHash :: Text
-  , averageDuration :: Scientific
+  , averageDuration :: Integer
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (ToRow, FromRow)
@@ -196,7 +196,7 @@ getRequestDumpForReports pid report_type = query Select (Query $ encodeUtf8 q) p
     [text| 
      SELECT DISTINCT ON (endpoint_hash)
         id, created_at, project_id, host, url_path, raw_url, method, endpoint_hash,
-        AVG(duration_ns) OVER (PARTITION BY endpoint_hash) AS average_duration
+        CAST (ROUND (AVG (duration_ns) OVER (PARTITION BY endpoint_hash)) AS BIGINT) AS average_duration
      FROM
         apis.request_dumps
      WHERE
@@ -210,7 +210,7 @@ getRequestDumpsForPreviousReportPeriod pid report_type = query Select (Query $ e
   q =
     [text| 
      SELECT  endpoint_hash,
-        AVG(duration_ns) AS average_duration
+        CAST (ROUND (AVG (duration_ns)) AS BIGINT) AS average_duration
      FROM
         apis.request_dumps
      WHERE

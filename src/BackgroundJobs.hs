@@ -57,10 +57,10 @@ data BgJobs
 data PerformanceReport = PerformanceReport
   { urlPath :: Text
   , method :: Text
-  , averageDuration :: Scientific
+  , averageDuration :: Integer
   , durationDiff :: Integer
   , durationDiffType :: Text
-  , durationDiffPct :: Scientific
+  , durationDiffPct :: Integer
   }
   deriving stock (Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
@@ -364,18 +364,18 @@ getPerformanceInsight req_dumps previous_p =
       perfInfo = V.filter (\x -> x.durationDiffPct > 15 || x.durationDiffPct < -15) pin
    in perfInfo
 
-mapFunc :: Map.Map Text Scientific -> RequestDumps.RequestForReport -> PerformanceReport
+mapFunc :: Map.Map Text Integer -> RequestDumps.RequestForReport -> PerformanceReport
 mapFunc prMap rd =
   case Map.lookup (rd.endpointHash) prMap of
     Just prevDuration ->
       let diff = rd.averageDuration - prevDuration
-          diffPct = (diff / prevDuration) * 100
+          diffPct = (diff `div` prevDuration) * 100
           diffType = if diff >= 0 then "up" else "down"
        in PerformanceReport
             { urlPath = rd.urlPath
             , method = rd.method
             , averageDuration = rd.averageDuration
-            , durationDiff = round diff
+            , durationDiff = diff
             , durationDiffPct = diffPct
             , durationDiffType = diffType
             }
