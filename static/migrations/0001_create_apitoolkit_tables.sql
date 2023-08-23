@@ -395,9 +395,8 @@ CREATE TABLE IF NOT EXISTS apis.reports
     created_at                TIMESTAMP WITH TIME ZONE       NOT               NULL DEFAULT current_timestamp,
     updated_at                TIMESTAMP WITH TIME ZONE       NOT               NULL DEFAULT current_timestamp,
     project_id                UUID      NOT  NULL REFERENCES projects.projects (id) ON      DELETE CASCADE,
-    user_id                   UUID      NOT  NULL REFERENCES users.users       (id) ON      DELETE CASCADE ON UPDATE CASCADE,
-    report_type               text      NOT  NULL DEFAULT    ''
-    report_json               jsonb     NOT  NULL DEFAULT    '{}'::jsonb,
+    report_type               text      NOT  NULL DEFAULT    '',
+    report_json               jsonb     NOT  NULL DEFAULT    '{}'::jsonb
 )
 
 -- Create a view that tracks endpoint related statistic points from the request dump table.

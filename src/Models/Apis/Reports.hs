@@ -1,6 +1,6 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 
-module Models.Projects.Reports (
+module Models.Apis.Reports (
   Report (..),
   ReportId (..),
   addReport,

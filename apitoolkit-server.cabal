@@ -65,6 +65,7 @@ library
       Pages.Projects.ListProjects
       Pages.Projects.ManageMembers
       Pages.RedactedFields
+      Pages.Reports
       Pkg.Mail
       Pkg.Ortto
       Pkg.Parser

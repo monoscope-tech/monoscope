@@ -1,9 +1,8 @@
-{-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 module Server (app) where
 
-import GitHash
 import Colog (LogAction)
 import Config (DashboardM, ctxToHandler, pool)
 import Config qualified
@@ -18,6 +17,7 @@ import Database.PostgreSQL.Entity.DBT (QueryNature (Select), queryOne, withPool)
 import Database.PostgreSQL.Simple (Connection)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Deriving.Aeson qualified as DAE
+import GitHash
 import Lucid
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
@@ -44,6 +44,7 @@ import Pages.Projects.ManageMembers (ManageMembersForm)
 import Pages.Projects.ManageMembers qualified as ManageMembers
 import Pages.RedactedFields (RedactFieldForm)
 import Pages.RedactedFields qualified as RedactedFields
+import Pages.Reports qualified as Reports
 import Relude
 import Servant
 import Servant.HTML.Lucid
@@ -67,7 +68,7 @@ type QPB a = QueryParam a Bool
 
 type QPI a = QueryParam a Int
 
-type QEID a =  QueryParam a Endpoints.EndpointId
+type QEID a = QueryParam a Endpoints.EndpointId
 
 type ProjectId = Capture "projectID" Projects.ProjectId
 
@@ -107,6 +108,7 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "documentation" :> ReqBody '[FormUrlEncoded] SwaggerForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "documentation" :> "save" :> ReqBody '[JSON] SaveSwaggerForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "generate_swagger" :> Get '[JSON] AE.Value
+    :<|> "p" :> ProjectId :> "reports" :> Get '[HTML] (Html ())
 
 type PublicAPI =
   "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
@@ -177,6 +179,7 @@ protectedServer sess =
     :<|> Documentation.documentationPostH sess
     :<|> Documentation.documentationPutH sess
     :<|> GenerateSwagger.generateGetH sess
+    :<|> Reports.reportsGetH sess
 
 publicServer :: ServerT PublicAPI DashboardM
 publicServer =
@@ -217,6 +220,6 @@ statusH = do
       , gitCommitDate = toText $ giCommitDate gi
       }
 
-pingH :: DashboardM Text 
-pingH = do 
+pingH :: DashboardM Text
+pingH = do
   pure "pong"
