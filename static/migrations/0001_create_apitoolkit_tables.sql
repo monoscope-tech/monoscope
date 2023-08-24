@@ -398,6 +398,9 @@ CREATE TABLE IF NOT EXISTS apis.reports
     report_type               text      NOT  NULL DEFAULT    '',
     report_json               jsonb     NOT  NULL DEFAULT    '{}'::jsonb
 )
+SELECT manage_updated_at('apis.reports');
+CREATE INDEX IF NOT EXISTS idx_reports_project_id ON apis.reports(project_id);
+
 
 -- Create a view that tracks endpoint related statistic points from the request dump table.
 DROP MATERIALIZED VIEW IF EXISTS apis.endpoint_request_stats;

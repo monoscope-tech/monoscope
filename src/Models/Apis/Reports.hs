@@ -8,23 +8,27 @@ module Models.Apis.Reports (
   getReportById,
 ) where
 
-import Data.Aeson as Aeson
 import Data.Default (Default)
-import Data.Map (updateAt)
+import Data.Default.Instances ()
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
-import Database.PostgreSQL.Entity (Entity, insert, selectById, selectManyByField)
-import Database.PostgreSQL.Entity.Internal.QQ (field)
-import Database.PostgreSQL.Entity.Types (CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
-import Database.PostgreSQL.Simple hiding (execute, query)
-import Database.PostgreSQL.Simple.FromField
-import Database.PostgreSQL.Simple.ToField
-import Database.PostgreSQL.Transact (DBT)
+import Database.PostgreSQL.Entity.DBT (QueryNature (..), query)
+import Database.PostgreSQL.Entity.Types
+import Database.PostgreSQL.Simple.SqlQQ (sql)
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
 import Relude
-import Servant (FromHttpApiData)
+import Web.HttpApiData (FromHttpApiData)
+
+import Data.Aeson as Aeson
+import Database.PostgreSQL.Entity (insert, selectById)
+
+import Database.PostgreSQL.Simple hiding (execute, query)
+
+import Database.PostgreSQL.Simple.FromField
+import Database.PostgreSQL.Simple.ToField
+import Database.PostgreSQL.Transact (DBT)
 
 newtype ReportId = ReportId {reportId :: UUID.UUID}
   deriving stock (Generic, Show)
@@ -56,4 +60,12 @@ getReportById :: Text -> DBT IO (Maybe Report)
 getReportById id' = selectById (Only id')
 
 reportHistoryByProject :: Projects.ProjectId -> DBT IO (Vector Report)
-reportHistoryByProject pid = selectManyByField [field| project_id |] pid
+reportHistoryByProject pid = query Select q (Only pid)
+ where
+  q =
+    [sql| SELECT * FROM apis.reports
+    WHERE project_id = ? 
+    ORDER BY created_at DESC
+  |]
+
+--   selectManyByField [field| project_id |] pid

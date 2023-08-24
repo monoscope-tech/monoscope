@@ -96,10 +96,10 @@ reportsGetH sess pid = do
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
       reports <- Reports.reportHistoryByProject pid
-      anomalies <- Anomalies.getReportAnomalies pid "daily"
-      count <- Anomalies.countAnomalies pid "daily"
-      endpoint_rp <- RequestDumps.getRequestDumpForReports pid "daily"
-      previous_p <- RequestDumps.getRequestDumpsForPreviousReportPeriod pid "daily"
+      anomalies <- Anomalies.getReportAnomalies pid "weekly"
+      count <- Anomalies.countAnomalies pid "weekly"
+      endpoint_rp <- RequestDumps.getRequestDumpForReports pid "weekly"
+      previous_p <- RequestDumps.getRequestDumpsForPreviousReportPeriod pid "weekly"
       let rep_json = buildReportJSON anomalies count endpoint_rp previous_p
       currentTime <- liftIO getZonedTime
       reportId <- Reports.ReportId <$> liftIO UUIDV4.nextRandom
@@ -110,9 +110,9 @@ reportsGetH sess pid = do
               , createdAt = currentTime
               , updatedAt = currentTime
               , projectId = pid
-              , reportType = "daily"
+              , reportType = "weekly"
               }
-      Reports.addReport report
+      -- Reports.addReport report
       pure (project, reports)
 
   let bwconf =
@@ -261,7 +261,7 @@ mapFunc prMap rd =
   case Map.lookup (rd.endpointHash) prMap of
     Just prevDuration ->
       let diff = rd.averageDuration - prevDuration
-          diffPct = round $ foo diff prevDuration * 100
+          diffPct = round $ divideIntegers diff prevDuration * 100
           diffType = if diff >= 0 then "up" else "down"
        in PerformanceReport
             { urlPath = rd.urlPath
@@ -280,5 +280,5 @@ mapFunc prMap rd =
         , durationDiffPct = 0
         , durationDiffType = "up"
         }
-foo :: Integer -> Integer -> Double
-foo a b = fromIntegral a / fromIntegral b
+divideIntegers :: Integer -> Integer -> Double
+divideIntegers a b = fromIntegral a / fromIntegral b
