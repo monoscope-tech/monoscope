@@ -194,7 +194,6 @@ anomalyList paramInput pid currTime anomalies = form_ [class_ "col-span-5 bg-whi
 anomalyListSlider :: UTCTime -> Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe (Vector Anomalies.AnomalyVM) -> Html ()
 anomalyListSlider _ _ _ (Just []) = ""
 anomalyListSlider _ pid eid Nothing =  do
-  let pidT = pid.toText
   div_ [hxGet_ $ "/p/"<>pid.toText<>"/anomalies?layout=slider"<>maybe "" (\x-> "&endpoint=" <> x.toText) eid , hxSwap_ "outerHTML", hxTrigger_ "load"] $ do
     div_ [class_ "flex justify-between mt-5 pb-2"] $ do
       div_ [class_ "flex flex-row"] $ do

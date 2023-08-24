@@ -324,6 +324,11 @@ createProjectBody sess envCfg isUpdate cp cpe = do
              console.log("PaymentPlan", document.getElementById("paymentPlanEl").value)
              console.log("window.paymentPlan", window.paymentPlan)
              if (document.getElementById("paymentPlanEl").value == "Free"){
+                // Free plan simple signup conversion
+                gtag('event', 'conversion', {
+                    'send_to': 'AW-11285541899/IUBqCKOA-8sYEIvoroUq',
+                });
+
                htmx.trigger("#createUpdateBodyForm", "submit")
                return
              }

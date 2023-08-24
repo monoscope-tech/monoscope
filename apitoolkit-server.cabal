@@ -65,6 +65,7 @@ library
       Pages.Projects.ManageMembers
       Pages.RedactedFields
       Pkg.ConvertKit
+      Pkg.Google
       Pkg.Mail
       Pkg.Ortto
       Pkg.Parser

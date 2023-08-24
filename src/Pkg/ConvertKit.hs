@@ -26,18 +26,20 @@ addUser apiKey email firstName lastName orgId orgName plan = do
 
 addUserOrganization :: Text -> Text -> Text ->Text -> Text-> IO ()
 addUserOrganization apiKey email orgID orgName orgPlan = do
-    -- created_project tag
-    r <- postWith
-          (defaults &  header "Content-Type" .~ ["application/json"])
-          "https://api.convertkit.com/v3/tags/4059942/subscribe"
-          [aesonQQ| {
-            "api_key": #{apiKey},
-            "email": #{email},
-            "fields": {
-              "organization_name": #{orgName},
-              "organization_plan": #{orgPlan},
-              "organization_id": #{orgID} 
-            } 
-          }
-        |]
-    pass
+  traceShowM "ADD USER TO ORG"
+  -- created_project tag
+  r <- postWith
+        (defaults &  header "Content-Type" .~ ["application/json"])
+        "https://api.convertkit.com/v3/tags/4059942/subscribe"
+        [aesonQQ| {
+          "api_key": #{apiKey},
+          "email": #{email},
+          "fields": {
+            "organization_name": #{orgName},
+            "organization_plan": #{orgPlan},
+            "organization_id": #{orgID} 
+          } 
+        }
+      |]
+  traceShowM $ r ^. responseBody
+  pass

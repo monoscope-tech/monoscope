@@ -110,7 +110,7 @@ function throughputEChartTable(renderAt, categories, data, gb, showLegend, theme
           if (param.value !== null && param.value[1] !== null) {
             result += `<div >
                             <div class="monospace flex flex-row space-between">
-                                <div class="flex-1">${param.marker}${param.seriesName}:</div>
+                                <div class="flex-1">${param.marker}${param.seriesName}</div>
                                 <strong class="shrink pl-3 font-bold">${param.value[1]}</strong>
                               </div>
                         </div>`;
