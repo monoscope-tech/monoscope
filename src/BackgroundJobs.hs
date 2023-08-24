@@ -10,10 +10,8 @@ import Config qualified
 import Data.Aeson as Aeson
 import Data.CaseInsensitive qualified as CI
 import Data.List.Extra (intersect, union)
-import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Pool (Pool)
-import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (ZonedTime)
 import Data.Vector (Vector)
@@ -31,13 +29,12 @@ import Models.Apis.Fields qualified as Field
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
 
-import Data.Scientific (Scientific)
 import Models.Apis.RequestDumps (EndpointPerf, RequestForReport)
 import Models.Apis.RequestDumps qualified as RequestDumps
-
 import NeatInterpolation (text, trimming)
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), startJobRunner, throwParsePayload)
+import Pages.Reports qualified as RP
 import Pkg.Mail
 import Pkg.Ortto qualified as Ortto
 import Relude
@@ -274,9 +271,9 @@ dailyReportForProject dbPool cfg pid = do
       count <- withPool dbPool $ Anomalies.countAnomalies pid "daily"
       endpoint_rp <- withPool dbPool $ RequestDumps.getRequestDumpForReports pid "daily"
       previous_day <- withPool dbPool $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid "daily"
-      let perf_ins = getPerformanceInsight endpoint_rp previous_day
-      let anomaly_json = buildAnomalyJSON anomalies count
-      let rep_json = buildReportJSON anomalies count endpoint_rp previous_day
+      let perf_ins = RP.getPerformanceInsight endpoint_rp previous_day
+      let anomaly_json = RP.buildAnomalyJSON anomalies count
+      let rep_json = RP.buildReportJSON anomalies count endpoint_rp previous_day
       print rep_json
       pass
     else pass
@@ -291,100 +288,9 @@ weeklyReportForProject dbPool cfg pid = do
       count <- withPool dbPool $ Anomalies.countAnomalies pid "weekly"
       endpoint_rp <- withPool dbPool $ RequestDumps.getRequestDumpForReports pid "weekly"
       previous_day <- withPool dbPool $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid "weekly"
-      let perf_ins = getPerformanceInsight endpoint_rp previous_day
-      let anomaly_json = buildAnomalyJSON anomalies count
-      let rep_json = buildReportJSON anomalies count endpoint_rp previous_day
+      let perf_ins = RP.getPerformanceInsight endpoint_rp previous_day
+      let anomaly_json = RP.buildAnomalyJSON anomalies count
+      let rep_json = RP.buildReportJSON anomalies count endpoint_rp previous_day
       print rep_json
       pass
     else pass
-
-buildReportJSON :: Vector Anomalies.AnomalyVM -> Int -> Vector RequestForReport -> Vector EndpointPerf -> Aeson.Value
-buildReportJSON anomalies anm_total endpoints_perf previous_perf =
-  let anomalies_json = buildAnomalyJSON anomalies anm_total
-      perf_insight = getPerformanceInsight endpoints_perf previous_perf
-      perf_json = buildPerformanceJSON perf_insight
-      report_json = case anomalies_json of
-        Aeson.Object va -> case perf_json of
-          Aeson.Object vp -> Aeson.Object (va <> vp)
-          _ -> Aeson.object []
-        _ -> Aeson.object []
-   in report_json
-
-buildPerformanceJSON :: V.Vector PerformanceReport -> Aeson.Value
-buildPerformanceJSON pr = Aeson.object ["endpoints" .= pr]
-
-buildAnomalyJSON :: Vector Anomalies.AnomalyVM -> Int -> Aeson.Value
-buildAnomalyJSON anomalies total = Aeson.object ["anomalies" .= V.map buildjson anomalies, "anomalies_count" .= total]
- where
-  buildjson :: Anomalies.AnomalyVM -> Aeson.Value
-  buildjson an = case an.anomalyType of
-    Anomalies.ATEndpoint ->
-      Aeson.object
-        [ "path_url" .= an.endpointUrlPath
-        , "method" .= an.endpointMethod
-        , "type" .= Anomalies.ATEndpoint
-        , "events_count" .= an.eventsCount14d
-        ]
-    Anomalies.ATShape ->
-      Aeson.object
-        [ "path_url" .= an.endpointUrlPath
-        , "method" .= an.endpointMethod
-        , "type" .= Anomalies.ATShape
-        , "unique_field" .= an.shapeNewUniqueFields
-        , "update_fields" .= an.shapeUpdatedFieldFormats
-        , "deleted_field" .= an.shapeDeletedFields
-        , "events_count" .= an.eventsCount14d
-        ]
-    Anomalies.ATField ->
-      Aeson.object
-        [ "path_url" .= an.endpointUrlPath
-        , "method" .= an.endpointMethod
-        , "type" .= Anomalies.ATField
-        , "key" .= an.fieldKey
-        , "key_path" .= an.fieldKeyPath
-        , "field_category" .= Field.fieldCategoryEnumToText (fromMaybe Field.FCRequestBody an.fieldCategory)
-        , "field_format" .= an.fieldFormat
-        , "events_count" .= an.eventsCount14d
-        ]
-    Anomalies.ATFormat ->
-      Aeson.object
-        [ "path_url" .= an.endpointUrlPath
-        , "method" .= an.endpointMethod
-        , "type" .= Anomalies.ATFormat
-        , "format_type" .= an.formatType
-        , "format_examples" .= an.formatExamples
-        , "events_count" .= an.eventsCount14d
-        ]
-    Anomalies.ATUnknown -> Aeson.object ["type" .= String "unknown"]
-
-getPerformanceInsight :: V.Vector RequestDumps.RequestForReport -> V.Vector RequestDumps.EndpointPerf -> V.Vector PerformanceReport
-getPerformanceInsight req_dumps previous_p =
-  let prMap = Map.fromList [(p.endpointHash, p.averageDuration) | p <- V.toList previous_p]
-      pin = V.map (mapFunc prMap) req_dumps
-      perfInfo = V.filter (\x -> x.durationDiffPct > 15 || x.durationDiffPct < -15) pin
-   in perfInfo
-
-mapFunc :: Map.Map Text Integer -> RequestDumps.RequestForReport -> PerformanceReport
-mapFunc prMap rd =
-  case Map.lookup (rd.endpointHash) prMap of
-    Just prevDuration ->
-      let diff = rd.averageDuration - prevDuration
-          diffPct = (diff `div` prevDuration) * 100
-          diffType = if diff >= 0 then "up" else "down"
-       in PerformanceReport
-            { urlPath = rd.urlPath
-            , method = rd.method
-            , averageDuration = rd.averageDuration
-            , durationDiff = diff
-            , durationDiffPct = diffPct
-            , durationDiffType = diffType
-            }
-    Nothing ->
-      PerformanceReport
-        { urlPath = rd.urlPath
-        , method = rd.method
-        , averageDuration = rd.averageDuration
-        , durationDiff = 0
-        , durationDiffPct = 0
-        , durationDiffType = "up"
-        }

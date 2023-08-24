@@ -1,7 +1,15 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
 {-# HLINT ignore "Use newtype instead of data" #-}
-module Pages.Reports (reportsGetH) where
+module Pages.Reports (
+  reportsGetH,
+  buildReportJSON,
+  buildPerformanceJSON,
+  buildAnomalyJSON,
+  getPerformanceInsight,
+  ReportAnomalyType (..),
+  PerformanceReport (..),
+) where
 
 import Config
 import Data.Default (def)
@@ -9,9 +17,8 @@ import Data.Default (def)
 import Database.PostgreSQL.Entity.DBT (withPool)
 
 import Data.Aeson as Aeson
-import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
-import Data.Time.LocalTime (getZonedTime)
+import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getZonedTime)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector (Vector)
 
@@ -28,7 +35,6 @@ import Models.Projects.Projects qualified as Projects
 import Models.Apis.RequestDumps (EndpointPerf, RequestForReport)
 import Models.Apis.RequestDumps qualified as RequestDumps
 
-import Data.HashMap.Lazy qualified as HM
 import Relude
 
 data PerformanceReport = PerformanceReport
@@ -93,23 +99,8 @@ reportsGetH sess pid = do
       anomalies <- Anomalies.getReportAnomalies pid "daily"
       count <- Anomalies.countAnomalies pid "daily"
       endpoint_rp <- RequestDumps.getRequestDumpForReports pid "daily"
-      previous_day <- RequestDumps.getRequestDumpsForPreviousReportPeriod pid "daily"
-      let rep_json = buildReportJSON anomalies count endpoint_rp previous_day
-      let nm = case rep_json of
-            Object v -> case KeyMap.lookup "anomalies" v of
-              Just endps -> Just endps
-              _ -> Nothing
-            _ -> Nothing
-      let end = case nm of
-            Just v -> eitherDecode (encode rep_json) :: Either String ReportData
-      -- let nm = case rep_json of
-      --       Object v -> case KeyMap.lookup "endpoints" v of
-      --         Just endps -> Just endps
-      --         _ -> Nothing
-      --       _ -> Nothing
-      -- print nm
-      -- let end = decode (encode nm) :: Maybe ReportData
-      print end
+      previous_p <- RequestDumps.getRequestDumpsForPreviousReportPeriod pid "daily"
+      let rep_json = buildReportJSON anomalies count endpoint_rp previous_p
       currentTime <- liftIO getZonedTime
       reportId <- Reports.ReportId <$> liftIO UUIDV4.nextRandom
       let report =
@@ -122,7 +113,6 @@ reportsGetH sess pid = do
               , reportType = "daily"
               }
       Reports.addReport report
-      -- print $ decode (encode rep_json)
       pure (project, reports)
 
   let bwconf =
@@ -135,8 +125,70 @@ reportsGetH sess pid = do
 
 reportsPage :: Projects.ProjectId -> Vector Reports.Report -> Html ()
 reportsPage pid reports =
-  div_ [class_ "container mx-auto  px-4 pt-10 pb-24"] $ do
-    h3_ [class_ "text-xl text-slate-700 flex place-items-center"] "Report History"
+  div_ [class_ "container mx-auto w-full flex flex-col px-4 pt-10 pb-24"] $ do
+    h3_ [class_ "text-xl text-slate-700 flex place-items-center font-bold pb-4 border-b"] "Report History"
+    div_ [class_ "mt-4 space-y-4"] $ do
+      forM_ reports $ \report -> do
+        div_ [class_ "mx-auto rounded-lg border max-w-[800px]"] $ do
+          div_ [class_ "bg-gray-100 px-4 py-3 flex justify-between"] $ do
+            h4_ [class_ "text-xl font-medium capitalize"] $ toHtml report.reportType <> " report"
+            span_ [] $ show $ localDay (zonedTimeToLocalTime report.createdAt)
+          div_ [class_ "px-4 py-3 space-y-8"] $ do
+            let end = decode (encode report.reportJson) :: Maybe ReportData
+            case end of
+              Just v -> do
+                div_ [class_ "anomalies"] $ do
+                  div_ [class_ "pb-3 border-b flex justify-between"] $ do
+                    h5_ [class_ "font-bold"] "Anomalies"
+                    div_ [class_ "flex gap-2"] do
+                      span_ [class_ "text-red-500 font-medium"] $ show v.anomaliesCount
+                      span_ [] "New anomalies"
+                  div_ [class_ "mt-2 space-y-2"] $ do
+                    forM_ v.anomalies $ \anomaly -> do
+                      case anomaly of
+                        ATEndpoint{endpointUrlPath, endpointMethod, eventsCount} -> do
+                          div_ [class_ "space-x-3 border-b pb-1"] do
+                            div_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
+                              img_ [class_ "inline w-4 h-4", src_ "/assets/svgs/endpoint.svg"]
+                              span_ [] "New Endpoint"
+                            small_ [] $ toHtml $ endpointMethod <> " " <> endpointUrlPath <> " " <> show eventsCount
+                        ATShape{endpointUrlPath, endpointMethod} -> do
+                          div_ [class_ "space-x-3 border-b pb-1"] do
+                            div_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
+                              img_ [class_ "inline w-4 h-4", src_ "/assets/svgs/anomalies/fields.svg"]
+                              span_ [] "New Request Shape"
+                            small_ [] $ toHtml $ endpointMethod <> "  " <> endpointUrlPath
+                        _ -> pass
+                div_ [] $ do
+                  div_ [class_ "pb-3 border-b flex justify-between"] $ do
+                    h5_ [class_ "font-bold"] "Performance"
+                    div_ [class_ "flex gap-2"] do
+                      span_ [class_ "font-medium"] $ show (length v.endpoints)
+                      span_ [] "affected endpoints"
+                  renderEndpointsTable (v.endpoints)
+              Nothing -> pass
+
+renderEndpointRow :: PerformanceReport -> Html ()
+renderEndpointRow endpoint = tr_ $ do
+  let (pcls, prc) =
+        if endpoint.durationDiffPct > 0
+          then ("text-red-500" :: Text, "+" <> show (durationDiffPct endpoint) <> "%" :: Text)
+          else ("text-green-500", show (durationDiffPct endpoint) <> "%")
+  let avg_dur_ms = (fromInteger (round $ ((fromInteger endpoint.averageDuration :: Double) / 1000000.0) * 100) :: Double) / 100
+  let dur_diff_ms = (fromInteger (round $ ((fromInteger endpoint.durationDiff :: Double) / 1000000.0) * 100) :: Double) / 100
+  td_ [class_ "px-6 py-2 border-b text-gray-500 text-sm"] $ toHtml $ method endpoint <> " " <> urlPath endpoint
+  td_ [class_ "px-6 py-2 border-b text-gray-500 text-sm"] $ show avg_dur_ms <> "ms"
+  td_ [class_ "px-6 py-2 border-b text-gray-500 text-sm"] $ show dur_diff_ms <> "ms"
+  td_ [class_ $ "px-6 py-2 border-b " <> pcls] $ toHtml prc
+
+renderEndpointsTable :: [PerformanceReport] -> Html ()
+renderEndpointsTable endpoints = table_ [class_ "table-auto w-full"] $ do
+  thead_ [class_ "text-xs text-left text-gray-700 uppercase bg-gray-100"] $ tr_ $ do
+    th_ [class_ "px-6 py-3"] "Endpoint"
+    th_ [class_ "px-6 py-3"] "Average duration"
+    th_ [class_ "px-6 py-3"] "Diff compared to prev."
+    th_ [class_ "px-6 py-3"] "Duration diff %"
+  tbody_ $ mapM_ renderEndpointRow endpoints
 
 buildReportJSON :: Vector Anomalies.AnomalyVM -> Int -> Vector RequestForReport -> Vector EndpointPerf -> Aeson.Value
 buildReportJSON anomalies anm_total endpoints_perf previous_perf =
@@ -209,7 +261,7 @@ mapFunc prMap rd =
   case Map.lookup (rd.endpointHash) prMap of
     Just prevDuration ->
       let diff = rd.averageDuration - prevDuration
-          diffPct = (diff `div` prevDuration) * 100
+          diffPct = round $ foo diff prevDuration * 100
           diffType = if diff >= 0 then "up" else "down"
        in PerformanceReport
             { urlPath = rd.urlPath
@@ -228,3 +280,5 @@ mapFunc prMap rd =
         , durationDiffPct = 0
         , durationDiffType = "up"
         }
+foo :: Integer -> Integer -> Double
+foo a b = fromIntegral a / fromIntegral b
