@@ -329,9 +329,23 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                     'send_to': 'AW-11285541899/IUBqCKOA-8sYEIvoroUq',
                 });
 
+                gtag('event', 'conversion', {
+                    'send_to': 'AW-11285541899/rf7NCKzf_9YYEIvoroUq',
+                    'value': 1.0,
+                    'currency': 'EUR',
+                    'transaction_id': '',
+                });
+
                htmx.trigger("#createUpdateBodyForm", "submit")
                return
              }
+
+              gtag('event', 'conversion', {
+                  'send_to': 'AW-11285541899/rf7NCKzf_9YYEIvoroUq',
+                  'value': 20.0,
+                  'currency': 'EUR',
+                  'transaction_id': '',
+              });
  
              const passthrough = {
                projectId: "$projectId",
