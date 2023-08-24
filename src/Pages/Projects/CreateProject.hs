@@ -19,6 +19,7 @@ import Data.Aeson (encode)
 import Data.Aeson.QQ (aesonQQ)
 import Data.CaseInsensitive (original)
 import Data.CaseInsensitive qualified as CI
+import Database.PostgreSQL.Transact (DBT)
 import Data.Default
 import Data.List.Extra (cons)
 import Data.List.Unique
@@ -40,7 +41,6 @@ import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Pkg.Ortto qualified as Ortto
 import Relude
 import Servant (
   Headers,
@@ -50,6 +50,8 @@ import Servant (
 import Servant.Htmx
 import Web.FormUrlEncoded (FromForm)
 import Data.Text (toLower)
+import Relude.Unsafe qualified as Unsafe
+import Pkg.ConvertKit qualified as ConvertKit
 
 data CreateProjectForm = CreateProjectForm
   { title :: Text
@@ -138,11 +140,9 @@ createProjectPostH sess createP = do
 processProjectPostForm :: Sessions.PersistentSession -> Valor.Valid CreateProjectForm -> DashboardM (Headers '[HXTrigger, HXRedirect] (Html ()))
 processProjectPostForm sess cpRaw = do
   envCfg <- asks env
-  let cp = Valor.unValid cpRaw
-  let currUserId = sess.userId
   pool <- asks pool
-  pid <- liftIO $ maybe (Projects.ProjectId <$> UUIDV4.nextRandom) pure $ Projects.projectIdFromText cp.projectId
-  orttoPID <- liftIO $ fromMaybe "" <$> Ortto.mergeOrganization (envCfg.orttoApiKey) pid cp.title cp.paymentPlan
+  let cp = Valor.unValid cpRaw
+  pid <- liftIO $ maybe (Projects.ProjectId <$> UUIDV4.nextRandom) pure (Projects.projectIdFromText cp.projectId)
   _ <-
     if cp.isUpdate
       then do
@@ -152,36 +152,25 @@ processProjectPostForm sess cpRaw = do
         let usersAndPermissions = zip (cp.emails) (cp.permissions) & uniq
         _ <- liftIO $ withPool pool $ do
           Projects.insertProject (createProjectFormToModel pid cp)
+          liftIO $ ConvertKit.addUserOrganization envCfg.convertkitApiKey (CI.original sess.user.getUser.email) pid.toText cp.title cp.paymentPlan
           newProjectMembers <- forM usersAndPermissions \(email, permission) -> do
-            userId' <-
-              Users.userIdByEmail email >>= \case
-                Nothing ->
-                  Users.createEmptyUser email >>= \case
-                    -- NEXT Trigger email sending
-                    Nothing -> error "duplicate email in createEmptyUser"
-                    Just idX -> do
-                      -- upload person to ortto. Person to be attributed to company in a next step
-                      _ <- liftIO $ Ortto.mergePerson (envCfg.orttoApiKey) idX "" "" email
-                      pure idX
-                Just idX -> pure idX
-
-            when (userId' /= currUserId) $ -- invite the users to the project (Usually as an email)
-               -- invite the users to the project (Usually as an email)
-              liftIO $ do
-                _ <- withResource pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId' pid email (cp.title)
-                pass
-
-            pure (email, permission, userId')
+            userId' <- runMaybeT $ MaybeT (Users.userIdByEmail email) <|> MaybeT (Users.createEmptyUser email)
+            let userId = Unsafe.fromJust userId'
+            liftIO $ ConvertKit.addUserOrganization envCfg.convertkitApiKey email pid.toText cp.title cp.paymentPlan
+            when (userId' /= Just sess.userId) $ do -- invite the users to the project (Usually as an email)
+              _ <- liftIO $ withResource pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId pid email (cp.title)
+              pass
+            pure (email, permission, userId)
 
           let projectMembers =
                 newProjectMembers
-                  & filter (\(_, _, id') -> id' /= currUserId)
+                  & filter (\(_, _, id') -> id' /= sess.userId)
                   & map (\(email, permission, id') -> ProjectMembers.CreateProjectMembers pid id' permission)
-                  & cons (ProjectMembers.CreateProjectMembers pid currUserId Projects.PAdmin)
-          _ <- ProjectMembers.insertProjectMembers projectMembers
-          liftIO $ Ortto.addToOrganization (envCfg.orttoApiKey) orttoPID $ currUserId : (thd3 <$> newProjectMembers)
+                  & cons (ProjectMembers.CreateProjectMembers pid sess.userId Projects.PAdmin)
+          ProjectMembers.insertProjectMembers projectMembers
+
         _ <- liftIO $ withResource pool \conn ->
-          createJob conn "background_jobs" $ BackgroundJobs.CreatedProjectSuccessfully currUserId pid (original $ sess.user.getUser.email) (cp.title)
+          createJob conn "background_jobs" $ BackgroundJobs.CreatedProjectSuccessfully sess.userId pid (original $ sess.user.getUser.email) (cp.title)
         pass
 
   let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Created Project Successfully"]}|]
