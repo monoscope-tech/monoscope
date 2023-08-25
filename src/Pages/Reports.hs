@@ -3,6 +3,7 @@
 {-# HLINT ignore "Use newtype instead of data" #-}
 module Pages.Reports (
   reportsGetH,
+  singleReportGetH,
   buildReportJSON,
   buildPerformanceJSON,
   buildAnomalyJSON,
@@ -89,6 +90,22 @@ data ReportData = ReportData
   deriving stock (Show, Generic)
   deriving anyclass (FromJSON)
 
+singleReportGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Reports.ReportId -> DashboardM (Html ())
+singleReportGetH sess pid rid = do
+  pool <- asks pool
+  (project, report) <- liftIO $
+    withPool pool $ do
+      project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+      report <- Reports.getReportById rid
+      pure (project, report)
+  let bwconf =
+        (def :: BWConfig)
+          { sessM = Just sess
+          , currProject = project
+          , pageTitle = "Reports"
+          }
+  pure $ bodyWrapper bwconf $ singleReportPage pid report
+
 reportsGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 reportsGetH sess pid = do
   pool <- asks pool
@@ -96,6 +113,7 @@ reportsGetH sess pid = do
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
       reports <- Reports.reportHistoryByProject pid
+      print reports
       anomalies <- Anomalies.getReportAnomalies pid "weekly"
       count <- Anomalies.countAnomalies pid "weekly"
       endpoint_rp <- RequestDumps.getRequestDumpForReports pid "weekly"
@@ -123,50 +141,65 @@ reportsGetH sess pid = do
           }
   pure $ bodyWrapper bwconf $ reportsPage pid reports
 
-reportsPage :: Projects.ProjectId -> Vector Reports.Report -> Html ()
+singleReportPage :: Projects.ProjectId -> Maybe Reports.Report -> Html ()
+singleReportPage pid report =
+  div_ [class_ "container mx-auto w-full flex flex-col px-4 pt-10 pb-24"] $ do
+    h3_ [class_ "text-xl text-slate-700 flex place-items-center font-bold pb-4 border-b"] "Anomaly and Performance Report"
+    case report of
+      Just report' -> do
+        div_ [class_ "mt-4 space-y-4"] do
+          div_ [class_ "mx-auto rounded-lg border max-w-[800px]"] $ do
+            div_ [class_ "bg-gray-100 px-4 py-3 flex justify-between"] $ do
+              h4_ [class_ "text-xl font-medium capitalize"] $ toHtml report'.reportType <> " report"
+              span_ [] $ show $ localDay (zonedTimeToLocalTime report'.createdAt)
+            div_ [class_ "px-4 py-3 space-y-8"] $ do
+              let rep_json = decode (encode report'.reportJson) :: Maybe ReportData
+              case rep_json of
+                Just v -> do
+                  div_ [class_ "anomalies"] $ do
+                    div_ [class_ "pb-3 border-b flex justify-between"] $ do
+                      h5_ [class_ "font-bold"] "Anomalies"
+                      div_ [class_ "flex gap-2"] do
+                        span_ [class_ "text-red-500 font-medium"] $ show v.anomaliesCount
+                        span_ [] "New anomalies"
+                    div_ [class_ "mt-2 space-y-2"] $ do
+                      forM_ v.anomalies $ \anomaly -> do
+                        case anomaly of
+                          ATEndpoint{endpointUrlPath, endpointMethod, eventsCount} -> do
+                            div_ [class_ "space-x-3 border-b pb-1"] do
+                              div_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
+                                img_ [class_ "inline w-4 h-4", src_ "/assets/svgs/endpoint.svg"]
+                                span_ [] "New Endpoint"
+                              small_ [] $ toHtml $ endpointMethod <> " " <> endpointUrlPath <> " " <> show eventsCount
+                          ATShape{endpointUrlPath, endpointMethod} -> do
+                            div_ [class_ "space-x-3 border-b pb-1"] do
+                              div_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
+                                img_ [class_ "inline w-4 h-4", src_ "/assets/svgs/anomalies/fields.svg"]
+                                span_ [] "New Request Shape"
+                              small_ [] $ toHtml $ endpointMethod <> "  " <> endpointUrlPath
+                          _ -> pass
+                  div_ [] $ do
+                    div_ [class_ "pb-3 border-b flex justify-between"] $ do
+                      h5_ [class_ "font-bold"] "Performance"
+                      div_ [class_ "flex gap-2"] do
+                        span_ [class_ "font-medium"] $ show (length v.endpoints)
+                        span_ [] "affected endpoints"
+                    renderEndpointsTable (v.endpoints)
+                Nothing -> pass
+      Nothing -> do
+        h3_ [] "Report Not Found"
+
+reportsPage :: Projects.ProjectId -> Vector Reports.ReportListItem -> Html ()
 reportsPage pid reports =
   div_ [class_ "container mx-auto w-full flex flex-col px-4 pt-10 pb-24"] $ do
     h3_ [class_ "text-xl text-slate-700 flex place-items-center font-bold pb-4 border-b"] "Report History"
     div_ [class_ "mt-4 space-y-4"] $ do
       forM_ reports $ \report -> do
         div_ [class_ "mx-auto rounded-lg border max-w-[800px]"] $ do
-          div_ [class_ "bg-gray-100 px-4 py-3 flex justify-between"] $ do
+          a_ [class_ "bg-gray-100 px-4 py-3 flex justify-between", href_ $ "/p/" <> show pid.unProjectId <> "/reports/" <> show report.id.reportId] $ do
             h4_ [class_ "text-xl font-medium capitalize"] $ toHtml report.reportType <> " report"
             span_ [] $ show $ localDay (zonedTimeToLocalTime report.createdAt)
-          div_ [class_ "px-4 py-3 space-y-8"] $ do
-            let end = decode (encode report.reportJson) :: Maybe ReportData
-            case end of
-              Just v -> do
-                div_ [class_ "anomalies"] $ do
-                  div_ [class_ "pb-3 border-b flex justify-between"] $ do
-                    h5_ [class_ "font-bold"] "Anomalies"
-                    div_ [class_ "flex gap-2"] do
-                      span_ [class_ "text-red-500 font-medium"] $ show v.anomaliesCount
-                      span_ [] "New anomalies"
-                  div_ [class_ "mt-2 space-y-2"] $ do
-                    forM_ v.anomalies $ \anomaly -> do
-                      case anomaly of
-                        ATEndpoint{endpointUrlPath, endpointMethod, eventsCount} -> do
-                          div_ [class_ "space-x-3 border-b pb-1"] do
-                            div_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
-                              img_ [class_ "inline w-4 h-4", src_ "/assets/svgs/endpoint.svg"]
-                              span_ [] "New Endpoint"
-                            small_ [] $ toHtml $ endpointMethod <> " " <> endpointUrlPath <> " " <> show eventsCount
-                        ATShape{endpointUrlPath, endpointMethod} -> do
-                          div_ [class_ "space-x-3 border-b pb-1"] do
-                            div_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
-                              img_ [class_ "inline w-4 h-4", src_ "/assets/svgs/anomalies/fields.svg"]
-                              span_ [] "New Request Shape"
-                            small_ [] $ toHtml $ endpointMethod <> "  " <> endpointUrlPath
-                        _ -> pass
-                div_ [] $ do
-                  div_ [class_ "pb-3 border-b flex justify-between"] $ do
-                    h5_ [class_ "font-bold"] "Performance"
-                    div_ [class_ "flex gap-2"] do
-                      span_ [class_ "font-medium"] $ show (length v.endpoints)
-                      span_ [] "affected endpoints"
-                  renderEndpointsTable (v.endpoints)
-              Nothing -> pass
+          div_ [class_ "px-4 py-3 space-y-8"] $ pass
 
 renderEndpointRow :: PerformanceReport -> Html ()
 renderEndpointRow endpoint = tr_ $ do

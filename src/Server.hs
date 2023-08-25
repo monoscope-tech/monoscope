@@ -22,6 +22,7 @@ import Lucid
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Types qualified as Fields (FieldId)
+import Models.Apis.Reports qualified as Reports
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Network.Wai (Request)
@@ -109,6 +110,7 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "documentation" :> "save" :> ReqBody '[JSON] SaveSwaggerForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "generate_swagger" :> Get '[JSON] AE.Value
     :<|> "p" :> ProjectId :> "reports" :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "reports" :> Capture "report_id" Reports.ReportId :> Get '[HTML] (Html ())
 
 type PublicAPI =
   "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
@@ -180,6 +182,7 @@ protectedServer sess =
     :<|> Documentation.documentationPutH sess
     :<|> GenerateSwagger.generateGetH sess
     :<|> Reports.reportsGetH sess
+    :<|> Reports.singleReportGetH sess
 
 publicServer :: ServerT PublicAPI DashboardM
 publicServer =

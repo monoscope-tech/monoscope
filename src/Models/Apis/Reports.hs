@@ -3,6 +3,7 @@
 module Models.Apis.Reports (
   Report (..),
   ReportId (..),
+  ReportListItem (..),
   addReport,
   reportHistoryByProject,
   getReportById,
@@ -53,17 +54,29 @@ data Report = Report
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "reports", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Report)
 
+data ReportListItem = ReportListItem
+  { id :: ReportId
+  , createdAt :: ZonedTime
+  , projectId :: Projects.ProjectId
+  , reportType :: Text
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (FromRow, ToRow)
+  deriving
+    (Entity)
+    via (GenericEntity '[Schema "apis", TableName "reports", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ReportListItem)
+
 addReport :: Report -> DBT IO ()
 addReport = insert @Report
 
-getReportById :: Text -> DBT IO (Maybe Report)
+getReportById :: ReportId -> DBT IO (Maybe Report)
 getReportById id' = selectById (Only id')
 
-reportHistoryByProject :: Projects.ProjectId -> DBT IO (Vector Report)
+reportHistoryByProject :: Projects.ProjectId -> DBT IO (Vector ReportListItem)
 reportHistoryByProject pid = query Select q (Only pid)
  where
   q =
-    [sql| SELECT * FROM apis.reports
+    [sql| SELECT id, created_at, project_id, report_type FROM apis.reports
     WHERE project_id = ? 
     ORDER BY created_at DESC
   |]
