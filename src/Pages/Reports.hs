@@ -19,15 +19,16 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 
 import Data.Aeson as Aeson
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getZonedTime)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector (Vector)
-
 import Data.Vector qualified as V
 import Lucid
 import Models.Apis.Reports qualified as Reports
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Text.Read qualified as TR
 
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Fields qualified as Field
@@ -106,30 +107,33 @@ singleReportGetH sess pid rid = do
           }
   pure $ bodyWrapper bwconf $ singleReportPage pid report
 
-reportsGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
-reportsGetH sess pid = do
+reportsGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> DashboardM (Html ())
+reportsGetH sess pid page = do
+  print page
   pool <- asks pool
   (project, reports) <- liftIO $
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      reports <- Reports.reportHistoryByProject pid
-      print reports
-      anomalies <- Anomalies.getReportAnomalies pid "weekly"
-      count <- Anomalies.countAnomalies pid "weekly"
-      endpoint_rp <- RequestDumps.getRequestDumpForReports pid "weekly"
-      previous_p <- RequestDumps.getRequestDumpsForPreviousReportPeriod pid "weekly"
-      let rep_json = buildReportJSON anomalies count endpoint_rp previous_p
-      currentTime <- liftIO getZonedTime
-      reportId <- Reports.ReportId <$> liftIO UUIDV4.nextRandom
-      let report =
-            Reports.Report
-              { id = reportId
-              , reportJson = rep_json
-              , createdAt = currentTime
-              , updatedAt = currentTime
-              , projectId = pid
-              , reportType = "weekly"
-              }
+      let p = toString (fromMaybe "0" page)
+      let skip = 20 * fromMaybe 0 (readMaybe p :: Maybe Int)
+
+      reports <- Reports.reportHistoryByProject pid skip
+      -- anomalies <- Anomalies.getReportAnomalies pid "weekly"
+      -- count <- Anomalies.countAnomalies pid "weekly"
+      -- endpoint_rp <- RequestDumps.getRequestDumpForReports pid "weekly"
+      -- previous_p <- RequestDumps.getRequestDumpsForPreviousReportPeriod pid "weekly"
+      -- let rep_json = buildReportJSON anomalies count endpoint_rp previous_p
+      -- currentTime <- liftIO getZonedTime
+      -- reportId <- Reports.ReportId <$> liftIO UUIDV4.nextRandom
+      -- let report =
+      --       Reports.Report
+      --         { id = reportId
+      --         , reportJson = rep_json
+      --         , createdAt = currentTime
+      --         , updatedAt = currentTime
+      --         , projectId = pid
+      --         , reportType = "weekly"
+      --         }
       -- Reports.addReport report
       pure (project, reports)
 

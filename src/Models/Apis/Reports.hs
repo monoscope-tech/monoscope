@@ -72,13 +72,14 @@ addReport = insert @Report
 getReportById :: ReportId -> DBT IO (Maybe Report)
 getReportById id' = selectById (Only id')
 
-reportHistoryByProject :: Projects.ProjectId -> DBT IO (Vector ReportListItem)
-reportHistoryByProject pid = query Select q (Only pid)
+reportHistoryByProject :: Projects.ProjectId -> Int -> DBT IO (Vector ReportListItem)
+reportHistoryByProject pid skip = query Select q (pid, skip)
  where
   q =
     [sql| SELECT id, created_at, project_id, report_type FROM apis.reports
     WHERE project_id = ? 
     ORDER BY created_at DESC
+    LIMIT 20 OFFSET ?;
   |]
 
 --   selectManyByField [field| project_id |] pid
