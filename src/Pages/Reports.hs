@@ -32,7 +32,7 @@ import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Fields qualified as Field
 import Models.Projects.Projects qualified as Projects
 
-import Models.Apis.RequestDumps (EndpointPerf, RequestForReport)
+import Models.Apis.RequestDumps (EndpointPerf, RequestForReport (endpointHash))
 import Models.Apis.RequestDumps qualified as RequestDumps
 
 import Relude
@@ -206,8 +206,20 @@ buildPerformanceJSON :: V.Vector PerformanceReport -> Aeson.Value
 buildPerformanceJSON pr = Aeson.object ["endpoints" .= pr]
 
 buildAnomalyJSON :: Vector Anomalies.AnomalyVM -> Int -> Aeson.Value
-buildAnomalyJSON anomalies total = Aeson.object ["anomalies" .= V.map buildjson anomalies, "anomaliesCount" .= total]
+buildAnomalyJSON anomalies total = Aeson.object ["anomalies" .= V.map buildjson filteredAnom, "anomaliesCount" .= total]
  where
+  endMap = createEndpointMap (V.toList anomalies) Map.empty
+  filteredAnom = V.filter (filterFunc endMap) anomalies
+
+  filterFunc :: Map Text Bool -> Anomalies.AnomalyVM -> Bool
+  filterFunc mp a = case a.anomalyType of
+    Anomalies.ATEndpoint -> True
+    _ ->
+      let ep_url = fromMaybe "" a.endpointUrlPath
+          method = fromMaybe "" a.endpointMethod
+          endpoint = method <> ep_url
+       in fromMaybe False (Map.lookup endpoint mp)
+
   buildjson :: Anomalies.AnomalyVM -> Aeson.Value
   buildjson an = case an.anomalyType of
     Anomalies.ATEndpoint ->
@@ -282,3 +294,14 @@ mapFunc prMap rd =
         }
 divideIntegers :: Integer -> Integer -> Double
 divideIntegers a b = fromIntegral a / fromIntegral b
+
+createEndpointMap :: [Anomalies.AnomalyVM] -> Map Text Bool -> Map Text Bool
+createEndpointMap [] mp = mp
+createEndpointMap (x : xs) mp =
+  case x.anomalyType of
+    Anomalies.ATEndpoint ->
+      let ep_url = fromMaybe "" x.endpointUrlPath
+          method = fromMaybe "" x.endpointMethod
+          endpoint = method <> ep_url
+       in createEndpointMap xs (Map.insert endpoint True mp)
+    _ -> createEndpointMap xs mp
