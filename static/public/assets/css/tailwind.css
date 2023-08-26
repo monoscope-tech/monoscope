@@ -230,3 +230,6 @@
 .endpoint-trace {
   @apply bg-purple-600;
 }
+.endpoint-patch {
+  @apply bg-amber-600;
+}

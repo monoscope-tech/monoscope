@@ -1,4 +1,4 @@
-module Pages.Endpoints.EndpointList (endpointListH) where
+module Pages.Endpoints.EndpointList (endpointListGetH) where
 
 import Config
 import Data.Default (def)
@@ -19,14 +19,34 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
+import Data.Time (UTCTime)
+import Servant.HTML.Lucid (HTML)
+import Data.Time.Clock (getCurrentTime)
+import Utils (deleteParam, mIcon_, textToBool)
+import Data.Tuple.Extra (fst3)
+import Pages.Charts.Charts qualified as Charts
+import Data.Text qualified as T
+import Models.Apis.Anomalies qualified as Anomalies
+import Pages.Anomalies.AnomalyList qualified as AnomalyList
+import Data.UUID qualified as UUID
 
-endpointListH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
-endpointListH sess pid = do
+
+data ParamInput = ParamInput
+  { currentURL :: Text
+  , archived :: Bool
+  , sort :: Text
+  , ackd :: Bool
+  }
+
+endpointListGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text ->  Maybe Text ->  Maybe Text  -> Maybe Text -> Maybe Text -> DashboardM (Html ())
+endpointListGetH sess pid layoutM ackdM archivedM sortM hxRequestM hxBoostedM hxCurrentURL= do
+  let ackd = maybe True textToBool ackdM
+  let archived = maybe False textToBool archivedM
   pool <- asks pool
   (project, endpointStats) <- liftIO $
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      endpointStats <- Endpoints.endpointRequestStatsByProject pid
+      endpointStats <- Endpoints.endpointRequestStatsByProject pid ackd archived
       pure (project, endpointStats)
 
   let bwconf =
@@ -35,125 +55,108 @@ endpointListH sess pid = do
           , currProject = project
           , pageTitle = "Endpoints"
           }
-  pure $ bodyWrapper bwconf $ endpointList endpointStats pid
 
-endpointList :: Vector Endpoints.EndpointRequestStats -> Projets.ProjectId -> Html ()
-endpointList enps pid = do
-  div_ [class_ "container mx-auto relative  px-4 pt-10 pb-24 h-full overflow-y-scroll"] $ do
-    -- modal
-    div_
-      [ style_ "z-index:99"
-      , class_ "fixed hidden pt-24 justify-center z-50 w-full p-4 bg-gray-500 bg-opacity-75 overflow-y-auto inset-0 h-full max-h-full"
-      , id_ "swaggerModal"
-      , tabindex_ "-1"
-      , onclick_ "closeModal(event)"
-      ]
-      $ do
-        div_
-          [ class_ "relative w-[500px] max-h-full"
-          , style_ "width: min(90vw, 750px)"
-          ]
-          $ do
-            -- Modal content
-            form_
-              [ class_ "relative bg-white rounded-lg shadow"
-              , hxPost_ $ "/p/" <> pid.toText <> "/documentation"
+  let currentURL = "/p/" <> pid.toText <> "/endpoints?layout=" <> fromMaybe "false" layoutM <> "&ackd=" <> fromMaybe "true" ackdM <> "&archived=" <> fromMaybe "false" archivedM
+  -- let currentURL =  fromMaybe "" hxCurrentURL
+  currTime <- liftIO getCurrentTime
+  let paramInput =
+        ParamInput
+          { currentURL = currentURL
+          , ackd = ackd
+          , archived = archived
+          -- , sort = fromMaybe "" sortM
+          , sort = ""
+          }
+  pure $ bodyWrapper bwconf $ endpointListPage paramInput pid currTime endpointStats
+
+
+endpointListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Endpoints.EndpointRequestStats -> Html ()
+endpointListPage paramInput pid currTime endpoints = div_ [class_ "container mx-auto  px-4 pt-10 pb-24"] $ do
+  h3_ [class_ "text-xl text-slate-700 flex place-items-center"] "Endpoints"
+  div_ [class_ "py-2 px-2 space-x-6 border-b border-slate-20 mt-6 mb-8 text-sm font-light", hxBoost_ "true"] do
+    let uri = deleteParam "archived" $ deleteParam "ackd" paramInput.currentURL
+    a_ [class_ $ "inline-block py-2 " <> if paramInput.ackd && not paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&ackd=true&archived=false"] "Active"
+    a_ [class_ $ "inline-block  py-2 " <> if not paramInput.ackd && not paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&ackd=false&archived=false"] "Inbox"
+    a_ [class_ $ "inline-block  py-2 " <> if paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&archived=true"] "Archived"
+  div_ [class_ "grid grid-cols-5 card-round", id_ "anomalyListBelowTab", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $ endpointList' paramInput currTime pid endpoints
+
+
+endpointList' :: ParamInput -> UTCTime  -> Projets.ProjectId -> Vector Endpoints.EndpointRequestStats -> Html ()
+endpointList' paramInput currTime pid enps = form_ [class_ "col-span-5 bg-white divide-y ", id_ "anomalyListForm"] $ do
+  let bulkActionBase = "/p/" <>  pid.toText <> "/anomalies/bulk_actions"
+  let currentURL' = deleteParam "sort" paramInput.currentURL
+  let sortMenu =
+        [ ("First Seen", "First time the issue occured", "first_seen")
+        , ("Last Seen", "Last time the issue occured", "last_seen")
+        , ("Events", "Number of events", "events")
+        ] ::
+          [(Text, Text, Text)]
+  let currentSortTitle = maybe "First Seen" fst3 $ find (\(_, _, identifier) -> identifier == paramInput.sort) sortMenu
+  div_
+    [class_ "flex py-3 gap-8 items-center  bg-gray-50"]
+    do
+      div_ [class_ "h-4 flex space-x-3 w-8"] do
+        a_ [class_ " w-2 h-full"] ""
+        input_ [term "aria-label" "Select Issue", type_ "checkbox"]
+      div_ [class_ " grow flex flex-row gap-2"] do
+        button_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/acknowlege", hxSwap_ "none"] "✓ acknowlege"
+        button_ [class_ "btn-sm bg-transparent space-x-1 border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/archive", hxSwap_ "none"] do
+          img_ [src_ "/assets/svgs/anomalies/archive.svg", class_ "h-4 w-4 inline-block"]
+          span_ "archive"
+      div_ [class_ "relative inline-block"] do
+        a_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl space-x-2", [__|on click toggle .hidden on #sortMenuDiv |]] do
+          mIcon_ "sort" "h-4 w-4"
+          span_ $ toHtml currentSortTitle
+        div_ [id_ "sortMenuDiv", hxBoost_ "true", class_ "p-1 hidden text-sm border border-black-30 absolute right-0 z-10 mt-2 w-72 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none", tabindex_ "-1"] do
+          sortMenu & mapM_ \(title, desc, identifier) -> do
+            let isActive = paramInput.sort == identifier || (paramInput.sort == "" && identifier == "first_seen")
+            a_
+              [ class_ $ "block flex flex-row px-3 py-2 hover:bg-blue-50 rounded-md cursor-pointer " <> (if isActive then " text-blue-800 " else "")
+              , href_ $ currentURL' <> "&sort=" <> identifier
               ]
-              $ do
-                div_ [class_ "flex items-center justify-between p-4 border-b rounded-t"] $ do
-                  h3_ [class_ "text-xl font-semibold text-gray-900 dark:text-white"] "Upload Swagger"
-                -- Modal body
-                div_ [class_ "p-6 space-y-6"] $ do
-                  input_ [type_ "hidden", name_ "from", value_ "endpoints"]
-                  textarea_ [name_ "swagger_json", style_ "height:65vh;resize:none", class_ "w-full border outline-none p-4 focus:outline-none focus:border-blue-200", placeholder_ "Paste swagger here"] ""
-                -- Modal footer
-                div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] $ do
-                  button_ [style_ "margin-right: 50px", type_ "button", class_ "btn mr-24", onclick_ "closeModal(event)", id_ "close_btn"] "Close"
-                  button_ [type_ "submit", class_ "btn btn-primary"] "Upload"
+              do
+                div_ [class_ "flex flex-col items-center justify-center px-3"] do
+                  if isActive then mIcon_ "checkmark4" "w-4 h-5" else mIcon_ "" "w-4 h-5"
+                div_ [class_ "grow space-y-1"] do
+                  span_ [class_ "block text-lg"] $ toHtml title
+                  span_ [class_ "block "] $ toHtml desc
 
-    -- page content
-    div_ [class_ "flex flex-col justify-between"] $ do
-      div_ [class_ "flex w-full justify-between my-3 px-2"] $ do
-        h3_ [class_ "text-xl text-slate-700 flex place-items-center"] "Endpoints"
-        button_ [class_ "place-content-center text-md btn btn-primary", onclick_ "showModal()"] "Upload swagger"
-      -- search
-      div_ [class_ "card-round p-5"] $ do
-        div_ [class_ "w-full flex flex-row m-3"] $ do
-          div_ [class_ "flex rounded-xl bg-white py-2 px-3 flex-row w-3/4 border-solid border border-gray-200 h-10"] $ do
-            img_ [src_ "/assets/svgs/search.svg", class_ "h-5 w-auto"]
-            input_
-              [ type_ "text"
-              , [__| on input show <tr/> in #table_body when its textContent.toLowerCase() contains my value.toLowerCase() |]
-              , class_ "dataTable-search w-full h-full p-2 text-sm text-gray-400 font-normal focus:outline-none"
-              , placeholder_ "Search endpoints..."
-              ]
-            img_ [src_ "/assets/svgs/filter.svg", class_ "h-5 w-auto self-end"]
-          button_ [class_ "bg-blue-700/20 place-content-center py-2 px-4 w-28 mx-3 flex flex-row rounded-xl h-10"] $ do
-            img_ [src_ "/assets/svgs/merge.svg", class_ "h-4 w-4 mt-1 "]
-            span_ [class_ "text-blue-600"] "Merge"
-          button_ [class_ "bg-transparent place-content-center py-2 px-4 w-28 mx-3 flex flex-row border-solid border border-gray-200 rounded-xl h-10"] $ do
-            span_ [class_ "text-sm text-slate-600 mr-1"] "Actions"
-            img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-3 w-3 mt-1 "]
-        -- table head
+      div_ [class_ "flex justify-center font-base w-60 content-between gap-14"] do
+        span_ "GRAPH"
+        div_ [class_ " space-x-2 font-base text-sm"] $ do
+          a_ [class_ "cursor-pointer"] "24h"
+          a_ [class_ "cursor-pointer font-bold text-base"] "14d"
+      div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "font-base"] "EVENTS"
 
-        table_ [class_ "table-auto w-full  mt-6", id_ "apitab", hxBoost_ "true"] $ do
-          thead_ $ do
-            tr_ [class_ "border-b border-b-slate-50 text-sm text-gray-400 font-normal "] $ do
-              th_ [class_ "text-left "] $ do
-                input_ [type_ "checkbox"]
-              th_ [style_ "width:7rem; min-width:7rem; max-width:7rem;"] ""
-              th_ [class_ ""] "ENDPOINTS"
-              th_ [class_ "text-center"] "REQUESTS"
-              th_ [class_ "text-right"] "TOTAL TIME"
-              th_ [class_ "text-right"] "P50 LATENCY"
-              th_ [class_ "text-right"] "P99 LATENCY"
-              th_ [class_ "text-center"] ""
-          tbody_ [id_ "table_body"] $ do
-            enps & mapM_ \enp -> do
-              tr_ [class_ "endpoint_row border-b border-b-slate-50 py-2"] $ do
-                td_ [class_ "text-left pr-4 "] $ input_ [type_ "checkbox"]
-                td_ [class_ "text-right"] $ do
-                  a_ [href_ ("/p/" <> enp.projectId.toText <> "/endpoints/" <> Endpoints.endpointIdText (enp.endpointId))] $ do
-                    span_ [class_ $ "endpoint endpoint-" <> toLower (enp.method), data_ "enp-urlMethod" (enp.method)] $ toHtml $ enp.method
-                td_ [class_ ""] $ do
-                  a_ [href_ ("/p/" <> enp.projectId.toText <> "/endpoints/" <> Endpoints.endpointIdText (enp.endpointId))] $ do
-                    span_ [class_ " inconsolata text-base text-slate-700", data_ "enp-urlPath" (enp.urlPath)] $ toHtml $ enp.urlPath
-                td_ [class_ " text-sm text-gray-400 font-normal text-center"] $ do
-                  span_ $ toHtml @String $ fmt $ commaizeF (enp.totalRequests)
-                td_ [class_ " inconsolata text-base text-slate-700 text-right space-x-2"] $ do
-                  span_ $ toHtml @String $ fmt $ fixedF 1 (enp.totalTime)
-                  -- convert from milliseconds
-                  div_ [class_ "w-10 inline-block", term "data-tippy-content" "enpoint total time vs project total"] $ meter__ $ ((enp.totalTime) / (enp.totalTimeProj)) * 100
-                td_ [class_ " text-sm text-gray-400 font-normal text-right space-x-2"] $ do
-                  span_ $ toHtml @Text $ fmt $ fixedF 2 (enp.p50) |+ " ms"
-                  div_ [class_ "w-10 inline-block", term "data-tippy-content" "p50 vs max"] $ meter__ $ ((enp.p50) / (enp.max)) * 100
-                td_ [class_ " text-sm text-gray-400 font-normal text-right space-x-2"] $ do
-                  span_ $ toHtml @Text $ fmt $ fixedF 2 (enp.p99) |+ " ms"
-                  div_ [class_ "w-10 inline-block", term "data-tippy-content" "p99 vs max"] $ meter__ $ ((enp.p99) / (enp.max)) * 100
-                td_ [class_ "text-right font-medium text-gray-400 "] $ do
-                  div_ [class_ "flex flex-row w-full justify-end gap-6"] $ do
-                    when (enp.ongoingAnomalies > 0) $ do
-                      img_ [class_ "px-3", term "data-tippy-content" "ongoing anomaly", src_ "/assets/svgs/alert-red.svg"]
-                    img_ [class_ "px-3", src_ "/assets/svgs/dots-vertical.svg"]
-  script_
-    [type_ "text/hyperscript"]
-    [text| 
-        def search()
-          set nxtElem to (next <[data-depth]/> from elem) then
-          if nxtElem's @data-depth is greater than level 
-            then toggle .hidden on nxtElem 
-            then collapseUntil(nxtElem, level)
-        end
-        |]
-  script_
-    [text|
-          function showModal() { document.getElementById('swaggerModal').style.display = 'flex'; }
-          function closeModal(event) {
-            if(event.target.id === 'close_btn' || event.target.id ==='swaggerModal') {
-               document.getElementById('swaggerModal').style.display = 'none';
-              }
-             }
-         |]
+  when (null enps) $ div_ [class_ "flex flex-col text-center justify-center items-center h-32"] $ do
+    strong_ "No endpoints yet."
+    p_ "Check Inbox to acknowlege new endpoints"
+  mapM_ (renderEndpoint (paramInput.ackd && not paramInput.archived) currTime) enps
+
+endpointAccentColor :: Bool -> Bool -> Text
+endpointAccentColor _ True = "bg-slate-400"
+endpointAccentColor True False = "bg-green-200"
+endpointAccentColor False False = "bg-red-800"
+
+renderEndpoint :: Bool ->  UTCTime  -> Endpoints.EndpointRequestStats -> Html ()
+renderEndpoint activePage currTime enp = do
+  div_ [class_ "flex py-4 gap-8 "] do
+    div_ [class_ "h-4 flex self-start space-x-3 w-8 " ] do
+      a_ [class_ $ endpointAccentColor (True {- isJust enp.acknowlegedAt -}) (True {- isJust enp.archivedAt -}) <> " w-2 h-full"] ""
+      input_ [term "aria-label" "Select Issue", type_ "checkbox", name_ "anomalyId", value_ (enp.endpointId.toText) ]
+    div_ [class_ "space-y-3 grow"] do
+      div_ [class_ "space-x-3"] do
+        a_ [class_ "inline-block font-bold text-blue-700 space-x-2", href_ ("/p/" <> enp.projectId.toText <> "/endpoints/" <> Endpoints.endpointIdText (enp.endpointId))] $ do
+          span_ [class_ $ "endpoint endpoint-" <> toLower (enp.method), data_ "enp-urlMethod" (enp.method)] $ toHtml $ enp.method
+          span_ [class_ " inconsolata text-base text-slate-700", data_ "enp-urlPath" (enp.urlPath)] $ toHtml $ if T.null enp.urlPath then "/" else T.take 150 $ enp.urlPath
+      unless activePage do
+        div_ [class_ "flex items-center gap-2 mt-5"] do
+          AnomalyList.anomalyArchiveButton enp.projectId (Anomalies.AnomalyId enp.anomalyId) (isJust enp.archivedAt)
+          AnomalyList.anomalyAcknowlegeButton enp.projectId (Anomalies.AnomalyId  enp.anomalyId) (isJust enp.acknowlegedAt)
+    div_ [class_ "flex items-center justify-center "] $ div_ [class_ "w-60 h-16 px-3"] $ Charts.throughput enp.projectId (enp.endpointId.toText) (Just $ Charts.QBEndpointHash enp.endpointHash) (Nothing) 14 Nothing False (Nothing, Nothing) Nothing
+    div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $ toHtml @String $ fmt $ commaizeF (enp.totalRequests)
+
+
 
 meter__ :: Double -> Html ()
 meter__ prcntg = div_ [class_ "shadow w-full bg-slate-200 h-2.5 "] $ do

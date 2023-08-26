@@ -7,6 +7,8 @@ module Pages.Anomalies.AnomalyList (
   unArchiveAnomalyGetH,
   anomalyListSlider,
   AnomalyBulkForm,
+  anomalyAcknowlegeButton, 
+  anomalyArchiveButton
 ) where
 
 import Config
@@ -95,14 +97,16 @@ data ParamInput = ParamInput
 
 anomalyListGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Endpoints.EndpointId -> Maybe Text -> Maybe Text -> DashboardM (Html ())
 anomalyListGetH sess pid layoutM ackdM archivedM sortM endpointM hxRequestM hxBoostedM = do
-  let textToBool a = a == "true"
   let ackd = textToBool <$> ackdM
   let archived = textToBool <$> archivedM
   pool <- asks pool
+  
+  let limit = maybe Nothing (\x -> if x == "slider" then (Just 51) else Nothing) layoutM
+
   (project, anomalies) <- liftIO $
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      anomalies <- Anomalies.selectAnomalies pid Nothing ackd archived sortM
+      anomalies <- Anomalies.selectAnomalies pid Nothing ackd archived sortM limit
       pure (project, anomalies)
   currTime <- liftIO getCurrentTime
   let bwconf =
