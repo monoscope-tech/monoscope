@@ -175,7 +175,7 @@ projectsDropDown currProject projects = do
           img_ [class_ "p-4", src_ "/assets/svgs/projects.svg"]
           div_ $ do
             strong_ [class_ "block"] $ toHtml $ currProject.title
-            small_ [class_ "block text-blue-800"] "_"
+            small_ [class_ "block text-blue-800"] $ toHtml currProject.paymentPlan
         nav_ [] $ do
           a_ [href_ [text| /p/$pidTxt/settings |], class_ "p-3 flex gap-3 rounded-2xl hover:bg-gray-100"] $ do
             img_ [src_ "/assets/svgs/settings.svg"]
@@ -241,7 +241,7 @@ sideNav sess project pageTitle menuItem = do
         $ do
           div_ [class_ "space-2 grow sd-hidden"] $ do
             strong_ [class_ "block text-slate-900"] $ toHtml $ project.title
-            small_ [class_ "block text-slate-900"] "_" -- Development?
+            small_ [class_ "block text-slate-900"] $ toHtml $ project.paymentPlan -- Development?
           div_ $ do
             img_ [src_ "/assets/svgs/up_chevron.svg"]
             img_ [src_ "/assets/svgs/down_chevron.svg"]
