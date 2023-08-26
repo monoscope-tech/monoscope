@@ -109,7 +109,7 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "documentation" :> ReqBody '[FormUrlEncoded] SwaggerForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "documentation" :> "save" :> ReqBody '[JSON] SaveSwaggerForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "generate_swagger" :> Get '[JSON] AE.Value
-    :<|> "p" :> ProjectId :> "reports" :> QPT "page" :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "reports" :> QPT "page" :> HXRequest :> HXBoosted :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "reports" :> Capture "report_id" Reports.ReportId :> Get '[HTML] (Html ())
 
 type PublicAPI =

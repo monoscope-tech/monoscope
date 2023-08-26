@@ -19,25 +19,23 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 
 import Data.Aeson as Aeson
 import Data.Map.Strict qualified as Map
-import Data.Text qualified as T
-import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getZonedTime)
-import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector (Vector)
-import Data.Vector qualified as V
 import Lucid
-import Models.Apis.Reports qualified as Reports
+import Lucid.Htmx
+import Models.Apis.RequestDumps qualified as RequestDumps
+import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Text.Read qualified as TR
+import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
+import Relude
+
+import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime))
+import Data.Vector qualified as V
+import Models.Apis.Reports qualified as Reports
 
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Fields qualified as Field
-import Models.Projects.Projects qualified as Projects
 
 import Models.Apis.RequestDumps (EndpointPerf, RequestForReport (endpointHash))
-import Models.Apis.RequestDumps qualified as RequestDumps
-
-import Relude
 
 data PerformanceReport = PerformanceReport
   { urlPath :: Text
@@ -107,17 +105,16 @@ singleReportGetH sess pid rid = do
           }
   pure $ bodyWrapper bwconf $ singleReportPage pid report
 
-reportsGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> DashboardM (Html ())
-reportsGetH sess pid page = do
+reportsGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
+reportsGetH sess pid page hxRequest hxBoosted = do
   print page
+  let p = toString (fromMaybe "0" page)
+  let pg = fromMaybe 0 (readMaybe p :: Maybe Int)
   pool <- asks pool
   (project, reports) <- liftIO $
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      let p = toString (fromMaybe "0" page)
-      let skip = 20 * fromMaybe 0 (readMaybe p :: Maybe Int)
-
-      reports <- Reports.reportHistoryByProject pid skip
+      reports <- Reports.reportHistoryByProject pid pg
       -- anomalies <- Anomalies.getReportAnomalies pid "weekly"
       -- count <- Anomalies.countAnomalies pid "weekly"
       -- endpoint_rp <- RequestDumps.getRequestDumpForReports pid "weekly"
@@ -136,14 +133,18 @@ reportsGetH sess pid page = do
       --         }
       -- Reports.addReport report
       pure (project, reports)
-
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = project
-          , pageTitle = "Reports"
-          }
-  pure $ bodyWrapper bwconf $ reportsPage pid reports
+  let nextUrl = "/p/" <> show pid.unProjectId <> "/reports?page=" <> show (pg + 1)
+  case (hxRequest, hxBoosted) of
+    (Just "true", Nothing) -> pure $ do
+      reportListItems pid reports nextUrl
+    _ -> do
+      let bwconf =
+            (def :: BWConfig)
+              { sessM = Just sess
+              , currProject = project
+              , pageTitle = "API Log Explorer"
+              }
+      pure $ bodyWrapper bwconf $ reportsPage pid reports nextUrl
 
 singleReportPage :: Projects.ProjectId -> Maybe Reports.Report -> Html ()
 singleReportPage pid report =
@@ -193,17 +194,25 @@ singleReportPage pid report =
       Nothing -> do
         h3_ [] "Report Not Found"
 
-reportsPage :: Projects.ProjectId -> Vector Reports.ReportListItem -> Html ()
-reportsPage pid reports =
+reportsPage :: Projects.ProjectId -> Vector Reports.ReportListItem -> Text -> Html ()
+reportsPage pid reports nextUrl =
   div_ [class_ "container mx-auto w-full flex flex-col px-4 pt-10 pb-24"] $ do
     h3_ [class_ "text-xl text-slate-700 flex place-items-center font-bold pb-4 border-b"] "Report History"
-    div_ [class_ "mt-4 space-y-4"] $ do
-      forM_ reports $ \report -> do
-        div_ [class_ "mx-auto rounded-lg border max-w-[800px]"] $ do
-          a_ [class_ "bg-gray-100 px-4 py-3 flex justify-between", href_ $ "/p/" <> show pid.unProjectId <> "/reports/" <> show report.id.reportId] $ do
-            h4_ [class_ "text-xl font-medium capitalize"] $ toHtml report.reportType <> " report"
-            span_ [] $ show $ localDay (zonedTimeToLocalTime report.createdAt)
-          div_ [class_ "px-4 py-3 space-y-8"] $ pass
+    div_ [class_ "mt-4"] $ do
+      reportListItems pid reports nextUrl
+
+reportListItems :: Projects.ProjectId -> Vector Reports.ReportListItem -> Text -> Html ()
+reportListItems pid reports nextUrl =
+  div_ [class_ "space-y-4"] do
+    forM_ reports $ \report -> do
+      div_ [class_ "mx-auto rounded-lg border max-w-[800px]"] $ do
+        a_ [class_ "bg-gray-100 px-4 py-3 flex justify-between", href_ $ "/p/" <> show pid.unProjectId <> "/reports/" <> show report.id.reportId] $ do
+          h4_ [class_ "text-xl font-medium capitalize"] $ toHtml report.reportType <> " report"
+          span_ [] $ show $ localDay (zonedTimeToLocalTime report.createdAt)
+        div_ [class_ "px-4 py-3 space-y-8"] pass
+    if length reports < 20
+      then pass
+      else a_ [class_ "max-w-[800px] mx-auto cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ nextUrl] "LOAD MORE"
 
 renderEndpointRow :: PerformanceReport -> Html ()
 renderEndpointRow endpoint = tr_ $ do

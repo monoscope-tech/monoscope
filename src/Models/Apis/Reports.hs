@@ -73,8 +73,9 @@ getReportById :: ReportId -> DBT IO (Maybe Report)
 getReportById id' = selectById (Only id')
 
 reportHistoryByProject :: Projects.ProjectId -> Int -> DBT IO (Vector ReportListItem)
-reportHistoryByProject pid skip = query Select q (pid, skip)
+reportHistoryByProject pid page = query Select q (pid, offset)
  where
+  offset = page * 20
   q =
     [sql| SELECT id, created_at, project_id, report_type FROM apis.reports
     WHERE project_id = ? 
