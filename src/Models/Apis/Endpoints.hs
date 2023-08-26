@@ -212,7 +212,8 @@ endpointRequestStatsByEndpoint eid = queryOne Select q (eid, eid)
                    ) ongoing_anomalies,
                   (SELECT count(*) from apis.anomalies 
                            where project_id=project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
-                   ) ongoing_anomalies_proj
+                   ) ongoing_anomalies_proj,
+                  null, null, '00000000-0000-0000-0000-000000000000'::uuid
               FROM apis.endpoint_request_stats WHERE endpoint_id=?|]
 
 endpointById :: EndpointId -> PgT.DBT IO (Maybe Endpoint)
