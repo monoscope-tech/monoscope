@@ -39,6 +39,7 @@ import SessionCookies (craftSessionCookie, emptySessionCookie)
 import Web.Cookie (SetCookie, parseCookies)
 import Prelude (lookup)
 import Pkg.Ortto qualified as Ortto
+import Pkg.ConvertKit qualified as ConvertKit
 
 -- | The context that will be made available to request handlers. We supply the
 -- "cookie-auth"-tagged request handler defined above, so that the 'HasServer' instance
@@ -130,7 +131,7 @@ authCallbackH codeM _ = do
         persistentSessId <- liftIO Sessions.newPersistentSessionId
         Sessions.insertSession persistentSessId userId (Sessions.SessionData Map.empty)
         pure (userId, persistentSessId)
-    _ <- liftIO $ Ortto.mergePerson  (envCfg ^. #orttoApiKey) userId firstName lastName email
+    _ <- liftIO $ ConvertKit.addUser (envCfg ^. #convertkitApiKey) email firstName lastName "" "" ""
     pure persistentSessId
 
   case resp of

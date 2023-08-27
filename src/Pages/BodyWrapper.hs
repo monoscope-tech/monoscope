@@ -74,8 +74,8 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child =
           script_ [src_ "/assets/js/thirdparty/instantpage5_1_0.js", type_ "module", defer_ "true"] ("" :: Text)
           script_ [src_ "/assets/js/monaco/vs/luxon.min.js", defer_ "true"] ("" :: Text)
           script_ [src_ "/assets/js/monaco/vs/loader.js", defer_ "true"] ("" :: Text)
-          script_ [src_ "/assets/js/charts.js"]("" :: Text)
-          script_ [src_ "/assets/js/main.js"]("" :: Text)
+          script_ [src_ "/assets/js/charts.js"] ("" :: Text)
+          script_ [src_ "/assets/js/main.js"] ("" :: Text)
 
           -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/core@1.2.0/dist/index.umd.min.js"] ("" :: Text)
           -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/datetime@1.2.0/dist/index.umd.min.js"] ("" :: Text)
@@ -118,23 +118,6 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child =
                 });
               }
             |]
-          script_
-            [text|
-            // Ortto apitoolkit capture code 
-            window.ap3c = window.ap3c || {};
-            var ap3c = window.ap3c;
-            ap3c.cmd = ap3c.cmd || [];
-            ap3c.cmd.push(function() {
-                ap3c.init('ZCp34YmuGHeQ46i4YXBpdG9vbGtpdA', 'https://capture-api.eu.autopilotapp.com/');
-                ap3c.track({v: 0});
-            });
-            ap3c.activity = function(act) { ap3c.act = (ap3c.act || []); ap3c.act.push(act); };
-            var s, t; s = document.createElement('script'); s.type = 'text/javascript'; s.src = "https://cdneu.net/app.js";
-            t = document.getElementsByTagName('script')[0]; t.parentNode.insertBefore(s, t);
-
-            // Track user on dashboard
-            ap3c.track({email: "$currUserEmail", skipNonExisting: true});
-          |]
 
         body_ [class_ "text-gray-900"] $ do
           section_ [class_ "flex flex-row h-screen overflow-hidden"] $ do
@@ -143,6 +126,27 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child =
               navbar currUser
               section_ [class_ "flex-1 overflow-y-auto"] $ do
                 child
+        script_ [async_ "true", src_ "https://www.googletagmanager.com/gtag/js?id=AW-11285541899"] (""::Text)
+        script_ [text|
+            window.dataLayer = window.dataLayer || [];
+            function gtag(){dataLayer.push(arguments);}
+            gtag('js', new Date());
+            gtag('config', 'AW-11285541899');
+
+
+            function gtag_report_conversion(url) {
+              var callback = function () {
+                if (typeof(url) != 'undefined') {
+                  window.location = url;
+                }
+              };
+              gtag('event', 'conversion', {
+                  'send_to': 'AW-11285541899/IUBqCKOA-8sYEIvoroUq',
+                  'event_callback': callback
+              });
+              return false;
+            }
+          |]
 
 projectsDropDown :: Projects.Project -> Vector.Vector Projects.Project -> Html ()
 projectsDropDown currProject projects = do
@@ -171,7 +175,7 @@ projectsDropDown currProject projects = do
           img_ [class_ "p-4", src_ "/assets/svgs/projects.svg"]
           div_ $ do
             strong_ [class_ "block"] $ toHtml $ currProject.title
-            small_ [class_ "block text-blue-800"] "Development"
+            small_ [class_ "block text-blue-800"] $ toHtml currProject.paymentPlan
         nav_ [] $ do
           a_ [href_ [text| /p/$pidTxt/settings |], class_ "p-3 flex gap-3 rounded-2xl hover:bg-gray-100"] $ do
             img_ [src_ "/assets/svgs/settings.svg"]
@@ -237,7 +241,7 @@ sideNav sess project pageTitle menuItem = do
         $ do
           div_ [class_ "space-2 grow sd-hidden"] $ do
             strong_ [class_ "block text-slate-900"] $ toHtml $ project.title
-            small_ [class_ "block text-slate-900"] "Development"
+            small_ [class_ "block text-slate-900"] $ toHtml $ project.paymentPlan -- Development?
           div_ $ do
             img_ [src_ "/assets/svgs/up_chevron.svg"]
             img_ [src_ "/assets/svgs/down_chevron.svg"]
@@ -301,7 +305,11 @@ navbar currUser = do
         ]
         $ do
           img_ [class_ "inline-block w-9 h-9 rounded-lg bg-gray-300", src_ (currUser.displayImageUrl)]
-          span_ [class_ "inline-block"] $ toHtml $ currUser.firstName <> " " <> currUser.lastName
+          span_ [class_ "inline-block"] $
+            toHtml $
+              if currUser.firstName /= "" || currUser.lastName /= ""
+                then currUser.firstName <> " " <> currUser.lastName
+                else CI.original currUser.email
           img_ [class_ "w-4 h-4 inline-block", src_ "/assets/svgs/down_caret.svg"]
 
       -- logout dropdown

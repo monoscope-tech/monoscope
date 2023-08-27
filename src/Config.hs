@@ -46,6 +46,8 @@ data EnvConfig = EnvConfig
   , paddleHobby :: Text
   , orttoApiKey :: Text
   , googleServiceAccountB64 :: LT.Text
+  , convertkitApiKey :: Text
+  , convertkitApiSecret :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromEnv)

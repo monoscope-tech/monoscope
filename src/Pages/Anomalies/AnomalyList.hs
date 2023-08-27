@@ -7,6 +7,8 @@ module Pages.Anomalies.AnomalyList (
   unArchiveAnomalyGetH,
   anomalyListSlider,
   AnomalyBulkForm,
+  anomalyAcknowlegeButton, 
+  anomalyArchiveButton
 ) where
 
 import Config
@@ -97,14 +99,16 @@ data ParamInput = ParamInput
 
 anomalyListGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Endpoints.EndpointId -> Maybe Text -> Maybe Text -> DashboardM (Html ())
 anomalyListGetH sess pid layoutM ackdM archivedM sortM endpointM hxRequestM hxBoostedM = do
-  let textToBool a = a == "true"
   let ackd = textToBool <$> ackdM
   let archived = textToBool <$> archivedM
   pool <- asks pool
+  
+  let limit = maybe Nothing (\x -> if x == "slider" then (Just 51) else Nothing) layoutM
+
   (project, anomalies) <- liftIO $
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      anomalies <- Anomalies.selectAnomalies pid Nothing ackd archived sortM
+      anomalies <- Anomalies.selectAnomalies pid Nothing ackd archived sortM limit
       pure (project, anomalies)
   currTime <- liftIO getCurrentTime
   let bwconf =
@@ -195,9 +199,8 @@ anomalyList paramInput pid currTime anomalies = form_ [class_ "col-span-5 bg-whi
 
 anomalyListSlider :: UTCTime -> Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe (Vector Anomalies.AnomalyVM) -> Html ()
 anomalyListSlider _ _ _ (Just []) = ""
-anomalyListSlider _ pid eid Nothing = do
-  let pidT = pid.toText
-  div_ [hxGet_ $ "/p/" <> pid.toText <> "/anomalies?layout=slider" <> maybe "" (\x -> "&endpoint=" <> x.toText) eid, hxSwap_ "outerHTML", hxTrigger_ "load"] $ do
+anomalyListSlider _ pid eid Nothing =  do
+  div_ [hxGet_ $ "/p/"<>pid.toText<>"/anomalies?layout=slider"<>maybe "" (\x-> "&endpoint=" <> x.toText) eid , hxSwap_ "outerHTML", hxTrigger_ "load"] $ do
     div_ [class_ "flex justify-between mt-5 pb-2"] $ do
       div_ [class_ "flex flex-row"] $ do
         img_

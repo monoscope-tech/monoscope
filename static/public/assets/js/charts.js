@@ -79,7 +79,7 @@ function stackedChart(title, series, _data, interp, width = 800, height = 400) {
   return new uPlot(opts, data, document.body);
 }
 
-function throughputEChartTable(renderAt, categories, data, gb, showLegend, theme) {
+function throughputEChartTable(renderAt, categories, data, gb, showLegend, theme, from, to) {
   let backgroundStyle = {
     color: 'rgba(240,248,255, 0.4)'
   }
@@ -109,14 +109,13 @@ function throughputEChartTable(renderAt, categories, data, gb, showLegend, theme
           // Check if data (value) is not zero or null
           if (param.value !== null && param.value[1] !== null) {
             result += `<div >
-                    <div class="monospace flex flex-row space-between">
-                                  <div class="flex-1">${param.marker}${param.seriesName}:</div>
-                                  <strong class="shrink pl-3 font-bold">${param.value[1]}</strong>
-                                </div>
-                          </div>`;
+                            <div class="monospace flex flex-row space-between">
+                                <div class="flex-1">${param.marker}${param.seriesName}</div>
+                                <strong class="shrink pl-3 font-bold">${param.value[1]}</strong>
+                              </div>
+                        </div>`;
           }
         });
-
         return result;
       }
     },
@@ -134,6 +133,8 @@ function throughputEChartTable(renderAt, categories, data, gb, showLegend, theme
     },
     xAxis: {
       type: 'time',
+      min: from, 
+      max: to,
       boundaryGap: [0, 0.01],
     },
     yAxis: {

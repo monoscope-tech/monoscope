@@ -31,7 +31,8 @@ import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), query, queryOne)
 import Database.PostgreSQL.Entity.Types
-import Database.PostgreSQL.Simple (FromRow, Only (Only), Query, ToRow)
+import Database.PostgreSQL.Simple.Types (Query (Query))
+import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -45,6 +46,7 @@ import Optics.TH (makeFieldLabelsNoPrefix)
 import Relude
 import Utils (DBField (MkDBField))
 import Web.HttpApiData (FromHttpApiData)
+import NeatInterpolation (text)
 
 newtype EndpointId = EndpointId {unEndpointId :: UUID.UUID}
   deriving stock (Generic, Show)
@@ -160,6 +162,9 @@ data EndpointRequestStats = EndpointRequestStats
   , totalRequestsProj :: Int
   , ongoingAnomalies :: Int
   , ongoingAnomaliesProj :: Int
+  , acknowlegedAt :: Maybe ZonedTime
+  , archivedAt :: Maybe ZonedTime
+  , anomalyId :: UUID.UUID 
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (FromRow, ToRow, Default)
@@ -167,23 +172,32 @@ data EndpointRequestStats = EndpointRequestStats
 
 -- FIXME: Include and return a boolean flag to show if fields that have annomalies.
 -- FIXME: return endpoint_hash as well.
-endpointRequestStatsByProject :: Projects.ProjectId -> PgT.DBT IO (Vector EndpointRequestStats)
-endpointRequestStatsByProject pid = query Select q (Only pid)
+endpointRequestStatsByProject :: Projects.ProjectId -> Bool -> Bool -> PgT.DBT IO (Vector EndpointRequestStats)
+endpointRequestStatsByProject pid ackd archived= query Select (Query $ encodeUtf8 q) (Only pid)
  where
+  ackdAt = if ackd && not archived then "AND ann.acknowleged_at IS NOT NULL AND ann.archived_at IS NULL " else "AND ann.acknowleged_at IS NULL "
+  archivedAt = if archived then "AND ann.archived_at IS NOT NULL " else " AND ann.archived_at IS NULL"
+  -- TODO This query to get the anomalies for the anomalies page might be too complex. 
+  -- Does it make sense yet to remove the call to endpoint_request_stats? since we're using async charts already
   q =
-    [sql| 
-      SELECT id endpoint_id, hash endpoint_hash, enp.project_id, enp.url_path, enp.method, coalesce(min,0),  coalesce(p50,0),  coalesce(p75,0),  coalesce(p90,0),  coalesce(p95,0),  coalesce(p99,0),  coalesce(max,0) , 
+    [text| 
+      SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, coalesce(min,0),  coalesce(p50,0),  coalesce(p75,0),  coalesce(p90,0),  coalesce(p95,0),  coalesce(p99,0),  coalesce(max,0) , 
          coalesce(total_time,0), coalesce(total_time_proj,0), coalesce(total_requests,0), coalesce(total_requests_proj,0),
          (SELECT count(*) from apis.anomalies_vm 
                  where project_id=enp.project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
          ) ongoing_anomalies,
         (SELECT count(*) from apis.anomalies_vm
                  where project_id=enp.project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
-        ) ongoing_anomalies_proj
+        ) ongoing_anomalies_proj,
+        ann.acknowleged_at, 
+        ann.archived_at, 
+        ann.id
      from apis.endpoints enp
      left join apis.endpoint_request_stats ers on (enp.id=ers.endpoint_id)
-     where enp.project_id=? order by total_requests DESC, url_path ASC
-                |]
+     left join apis.anomalies ann on (ann.anomaly_type='endpoint' AND target_hash=endpoint_hash)
+     where enp.project_id=? $ackdAt $archivedAt
+     order by total_requests DESC, url_path ASC
+  |]
 
 -- FIXME: return endpoint_hash as well.
 -- This would require tampering with the view.
@@ -198,7 +212,8 @@ endpointRequestStatsByEndpoint eid = queryOne Select q (eid, eid)
                    ) ongoing_anomalies,
                   (SELECT count(*) from apis.anomalies 
                            where project_id=project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
-                   ) ongoing_anomalies_proj
+                   ) ongoing_anomalies_proj,
+                  null, null, '00000000-0000-0000-0000-000000000000'::uuid
               FROM apis.endpoint_request_stats WHERE endpoint_id=?|]
 
 endpointById :: EndpointId -> PgT.DBT IO (Maybe Endpoint)

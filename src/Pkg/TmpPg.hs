@@ -1,4 +1,5 @@
 module Pkg.TmpPg (withSetup) where
+
 import Relude
 import Database.Postgres.Temp qualified as TmpPostgres
 import Data.Pool (Pool, createPool)

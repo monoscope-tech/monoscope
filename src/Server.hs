@@ -84,7 +84,7 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "delete" :> Get '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
     :<|> "p" :> ProjectId :> "manage_members" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "manage_members" :> ReqBody '[FormUrlEncoded] ManageMembersForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-    :<|> "p" :> ProjectId :> "endpoints" :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "endpoints" :> QPT "layout" :> QPT "ackd" :> QPT "archived" :> QPT "sort" :> HXRequest :> HXBoosted :> HXCurrentURL :>  Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "endpoints" :> Capture "endpoints_id" Endpoints.EndpointId :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "subpage" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "apis" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Api.GenerateAPIKeyForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
@@ -156,7 +156,7 @@ protectedServer sess =
     :<|> CreateProject.deleteProjectGetH sess
     :<|> ManageMembers.manageMembersGetH sess
     :<|> ManageMembers.manageMembersPostH sess
-    :<|> EndpointList.endpointListH sess
+    :<|> EndpointList.endpointListGetH sess
     :<|> EndpointDetails.endpointDetailsH sess
     :<|> Api.apiGetH sess
     :<|> Api.apiPostH sess

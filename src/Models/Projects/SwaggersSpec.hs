@@ -1,5 +1,4 @@
 {-# LANGUAGE OverloadedStrings #-}
-
 module Models.Projects.SwaggersSpec (spec) where
 
 import Data.Aeson (Value (..), object, (.=))

@@ -20,7 +20,9 @@
 # resolver:
 #   url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/18/18.yaml
 # resolver: nightly-2023-04-24
-resolver: lts-20.24
+# resolver: lts-21.8
+resolver: lts-20.26
+# resolver: nightly-2023-08-24
 # resolver: nightly-2023-08-02
 
 # User packages to be built.
@@ -33,6 +35,7 @@ resolver: lts-20.24
 #   - auto-update
 #   - wai
 packages:
+  # - https://github.com/jfischoff/postgres-options
   - .
 # Dependency packages to be pulled from upstream that are not in the resolver.
 # These entries can reference officially published versions as well as

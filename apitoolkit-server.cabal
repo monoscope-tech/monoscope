@@ -66,6 +66,8 @@ library
       Pages.Projects.ManageMembers
       Pages.RedactedFields
       Pages.Reports
+      Pkg.ConvertKit
+      Pkg.Google
       Pkg.Mail
       Pkg.Ortto
       Pkg.Parser
@@ -154,6 +156,7 @@ library
     , lucid-svg
     , megaparsec
     , neat-interpolation
+    , network-uri
     , nyan-interpolation
     , odd-jobs
     , optics-core
