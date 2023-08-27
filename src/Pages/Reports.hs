@@ -1,6 +1,7 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
-
 {-# HLINT ignore "Use newtype instead of data" #-}
+{-# OPTIONS_GHC -Wno-unused-do-bind #-}
+
 module Pages.Reports (
   reportsGetH,
   singleReportGetH,
@@ -28,13 +29,15 @@ import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Relude
 
-import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime))
+import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getZonedTime)
 import Data.Vector qualified as V
 import Models.Apis.Reports qualified as Reports
 
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Fields qualified as Field
 
+import Data.Text qualified as T
+import Data.UUID.V4 qualified as UUIDV4
 import Models.Apis.RequestDumps (EndpointPerf, RequestForReport (endpointHash))
 
 data PerformanceReport = PerformanceReport
@@ -57,22 +60,24 @@ data ReportAnomalyType
   | ATShape
       { endpointUrlPath :: Text
       , endpointMethod :: Text
+      , targetHash :: Text
       , newUniqueFields :: [Text]
       , updatedFieldFormats :: [Text]
       , deletedFields :: [Text]
       , eventsCount :: Int
       }
-  | ATField
+  | -- | ATField
+    --     { endpointUrlPath :: Text
+    --     , endpointMethod :: Text
+    --     , fieldKey :: Text
+    --     , fieldKeyPath :: Text
+    --     , fieldCategory :: Text
+    --     , fieldFormat :: Text
+    --     , eventsCount :: Int
+    --     }
+    ATFormat
       { endpointUrlPath :: Text
-      , endpointMethod :: Text
-      , fieldKey :: Text
       , fieldKeyPath :: Text
-      , fieldCategory :: Text
-      , fieldFormat :: Text
-      , eventsCount :: Int
-      }
-  | ATFormat
-      { endpointUrlPath :: Text
       , endpointMethod :: Text
       , formatType :: Text
       , formatExamples :: [Text]
@@ -115,23 +120,23 @@ reportsGetH sess pid page hxRequest hxBoosted = do
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
       reports <- Reports.reportHistoryByProject pid pg
-      -- anomalies <- Anomalies.getReportAnomalies pid "weekly"
-      -- count <- Anomalies.countAnomalies pid "weekly"
-      -- endpoint_rp <- RequestDumps.getRequestDumpForReports pid "weekly"
-      -- previous_p <- RequestDumps.getRequestDumpsForPreviousReportPeriod pid "weekly"
-      -- let rep_json = buildReportJSON anomalies count endpoint_rp previous_p
-      -- currentTime <- liftIO getZonedTime
-      -- reportId <- Reports.ReportId <$> liftIO UUIDV4.nextRandom
-      -- let report =
-      --       Reports.Report
-      --         { id = reportId
-      --         , reportJson = rep_json
-      --         , createdAt = currentTime
-      --         , updatedAt = currentTime
-      --         , projectId = pid
-      --         , reportType = "weekly"
-      --         }
-      -- Reports.addReport report
+      anomalies <- Anomalies.getReportAnomalies pid "weekly"
+      count <- Anomalies.countAnomalies pid "weekly"
+      endpoint_rp <- RequestDumps.getRequestDumpForReports pid "weekly"
+      previous_p <- RequestDumps.getRequestDumpsForPreviousReportPeriod pid "weekly"
+      let rep_json = buildReportJSON anomalies count endpoint_rp previous_p
+      currentTime <- liftIO getZonedTime
+      reportId <- Reports.ReportId <$> liftIO UUIDV4.nextRandom
+      let report =
+            Reports.Report
+              { id = reportId
+              , reportJson = rep_json
+              , createdAt = currentTime
+              , updatedAt = currentTime
+              , projectId = pid
+              , reportType = "weekly"
+              }
+      Reports.addReport report
       pure (project, reports)
   let nextUrl = "/p/" <> show pid.unProjectId <> "/reports?page=" <> show (pg + 1)
   case (hxRequest, hxBoosted) of
@@ -171,18 +176,44 @@ singleReportPage pid report =
                       forM_ v.anomalies $ \anomaly -> do
                         case anomaly of
                           ATEndpoint{endpointUrlPath, endpointMethod, eventsCount} -> do
-                            div_ [class_ "space-x-3 border-b pb-1"] do
-                              div_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
-                                img_ [class_ "inline w-4 h-4", src_ "/assets/svgs/endpoint.svg"]
-                                span_ [] "New Endpoint"
-                              small_ [] $ toHtml $ endpointMethod <> " " <> endpointUrlPath <> " " <> show eventsCount
-                          ATShape{endpointUrlPath, endpointMethod} -> do
-                            div_ [class_ "space-x-3 border-b pb-1"] do
-                              div_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
-                                img_ [class_ "inline w-4 h-4", src_ "/assets/svgs/anomalies/fields.svg"]
-                                span_ [] "New Request Shape"
-                              small_ [] $ toHtml $ endpointMethod <> "  " <> endpointUrlPath
+                            div_ [class_ "space-x-3 border-b pb-1 flex gap-4 items-center justify-between"] do
+                              div_ [class_ "flex items-center space-x-3 "] do
+                                div_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
+                                  img_ [class_ "inline w-4 h-4", src_ "/assets/svgs/endpoint.svg"]
+                                  span_ [] "New Endpoint"
+                                small_ [] $ toHtml $ endpointMethod <> " " <> endpointUrlPath <> " "
+                              small_ [] $ show eventsCount <> " requests"
+                          ATShape{endpointUrlPath, endpointMethod, newUniqueFields, updatedFieldFormats, deletedFields, targetHash, eventsCount} -> do
+                            div_ [class_ "border-b pb-1 flex items-center justify-between"] do
+                              div_ [class_ "flex items-center space-x-3 "] do
+                                div_ [class_ "inline-block font-bold text-blue-700 space-x-2 flex items-center"] do
+                                  img_ [class_ "inline w-4 h-4", src_ "/assets/svgs/anomalies/fields.svg"]
+                                  span_ [] "New Request Shape"
+                                div_ [class_ "flex flex-col"] do
+                                  small_ [] $ toHtml $ endpointMethod <> "  " <> endpointUrlPath
+                                  small_ [] $ toHtml $ "Signature: " <> targetHash
+                                shapeParameterStats_ (length newUniqueFields) (length updatedFieldFormats) (length deletedFields)
+                              small_ [] $ show eventsCount <> " requests"
+                          ATFormat{endpointUrlPath, endpointMethod, fieldKeyPath, formatType, formatExamples, eventsCount} -> do
+                            div_ [class_ "space-x-3 border-b pb-1 flex items-center justify-between"] do
+                              div_ [class_ "flex items-center"] do
+                                div_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
+                                  img_ [class_ "inline w-4 h-4", src_ "/assets/svgs/anomalies/fields.svg"]
+                                  span_ [] "Modified field"
+                                small_ [] $ toHtml $ fieldKeyPath <> " in " <> endpointMethod <> "  " <> endpointUrlPath
+                                div_ [class_ "text-sm"] do
+                                  div_ [] do
+                                    small_ "current format: "
+                                    span_ $ toHtml formatType
+                                  div_ do
+                                    small_ "previous formats: "
+                                    span_ "" -- TODO: Should be comma separated list of formats for that field.
+                                  div_ do
+                                    small_ "examples: "
+                                    small_ $ toHtml $ T.intercalate ", " formatExamples
+                              small_ [] $ show eventsCount <> " requests"
                           _ -> pass
+
                   div_ [] $ do
                     div_ [class_ "pb-3 border-b flex justify-between"] $ do
                       h5_ [class_ "font-bold"] "Performance"
@@ -193,6 +224,19 @@ singleReportPage pid report =
                 Nothing -> pass
       Nothing -> do
         h3_ [] "Report Not Found"
+
+shapeParameterStats_ :: Int -> Int -> Int -> Html ()
+shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "inline-block"] do
+  div_ [class_ "grid grid-cols-3 gap-2 text-center text-xs"] do
+    div_ [class_ "p-2 py-1 bg-emerald-100 text-emerald-900 border border-emerald-300"] do
+      div_ [class_ "text-base"] $ toHtml @String $ show newF
+      small_ [class_ "block"] "new fields"
+    div_ [class_ " p-2 py-1 bg-slate-100 text-slate-900 border border-slate-300"] do
+      div_ [class_ "text-base"] $ toHtml @String $ show updatedFF
+      small_ [class_ "block"] "updated fields"
+    div_ [class_ "p-2  py-1  bg-rose-100 text-rose-900 border border-rose-300"] do
+      div_ [class_ "text-base"] $ toHtml @String $ show deletedF
+      small_ [class_ "block"] "deleted fields"
 
 reportsPage :: Projects.ProjectId -> Vector Reports.ReportListItem -> Text -> Html ()
 reportsPage pid reports nextUrl =
@@ -279,33 +323,34 @@ buildAnomalyJSON anomalies total = Aeson.object ["anomalies" .= V.map buildjson 
       Aeson.object
         [ "endpointUrlPath" .= an.endpointUrlPath
         , "endpointMethod" .= an.endpointMethod
+        , "targetHash" .= an.targetHash
         , "tag" .= Anomalies.ATShape
         , "newUniqueFields" .= an.shapeNewUniqueFields
         , "updatedFieldFormats" .= an.shapeUpdatedFieldFormats
         , "deletedFields" .= an.shapeDeletedFields
         , "eventsCount" .= an.eventsCount14d
         ]
-    Anomalies.ATField ->
-      Aeson.object
-        [ "endpointUrlPath" .= an.endpointUrlPath
-        , "endpointMethod" .= an.endpointMethod
-        , "tag" .= Anomalies.ATField
-        , "key" .= an.fieldKey
-        , "keyPath" .= an.fieldKeyPath
-        , "fieldCategory" .= Field.fieldCategoryEnumToText (fromMaybe Field.FCRequestBody an.fieldCategory)
-        , "fieldFormat" .= an.fieldFormat
-        , "eventsCount" .= an.eventsCount14d
-        ]
+    -- Anomalies.ATField ->
+    --   Aeson.object
+    --     [ "endpointUrlPath" .= an.endpointUrlPath
+    --     , "endpointMethod" .= an.endpointMethod
+    --     , "tag" .= Anomalies.ATField
+    --     , "key" .= an.fieldKey
+    --     , "fieldCategory" .= Field.fieldCategoryEnumToText (fromMaybe Field.FCRequestBody an.fieldCategory)
+    --     , "fieldFormat" .= an.fieldFormat
+    --     , "eventsCount" .= an.eventsCount14d
+    --     ]
     Anomalies.ATFormat ->
       Aeson.object
         [ "endpointUrlPath" .= an.endpointUrlPath
         , "endpointMethod" .= an.endpointMethod
+        , "keyPath" .= an.fieldKeyPath
         , "tag" .= Anomalies.ATFormat
         , "formatType" .= an.formatType
         , "formatExamples" .= an.formatExamples
         , "eventsCount" .= an.eventsCount14d
         ]
-    Anomalies.ATUnknown -> Aeson.object ["anomaly_type" .= String "unknown"]
+    _ -> Aeson.object ["anomaly_type" .= String "unknown"]
 
 getPerformanceInsight :: V.Vector RequestDumps.RequestForReport -> V.Vector RequestDumps.EndpointPerf -> V.Vector PerformanceReport
 getPerformanceInsight req_dumps previous_p =
