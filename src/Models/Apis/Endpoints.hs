@@ -31,22 +31,22 @@ import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), query, queryOne)
 import Database.PostgreSQL.Entity.Types
-import Database.PostgreSQL.Simple.Types (Query (Query))
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
+import Database.PostgreSQL.Simple.Types (Query (Query))
 import Database.PostgreSQL.Transact (DBT, executeMany)
 import Database.PostgreSQL.Transact qualified as PgT
 import Deriving.Aeson qualified as DAE
-import Models.Projects.Projects qualified as Projects
 import GHC.Records (HasField (getField))
+import Models.Projects.Projects qualified as Projects
+import NeatInterpolation (text)
 import Optics.TH (makeFieldLabelsNoPrefix)
 import Relude
 import Utils (DBField (MkDBField))
 import Web.HttpApiData (FromHttpApiData)
-import NeatInterpolation (text)
 
 newtype EndpointId = EndpointId {unEndpointId :: UUID.UUID}
   deriving stock (Generic, Show)
@@ -56,7 +56,7 @@ newtype EndpointId = EndpointId {unEndpointId :: UUID.UUID}
   deriving anyclass (FromRow, ToRow)
 
 instance HasField "toText" EndpointId Text where
-  getField = UUID.toText . unEndpointId 
+  getField = UUID.toText . unEndpointId
 
 endpointIdText :: EndpointId -> Text
 endpointIdText = UUID.toText . unEndpointId
@@ -164,7 +164,7 @@ data EndpointRequestStats = EndpointRequestStats
   , ongoingAnomaliesProj :: Int
   , acknowlegedAt :: Maybe ZonedTime
   , archivedAt :: Maybe ZonedTime
-  , anomalyId :: UUID.UUID 
+  , anomalyId :: UUID.UUID
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (FromRow, ToRow, Default)
@@ -173,11 +173,11 @@ data EndpointRequestStats = EndpointRequestStats
 -- FIXME: Include and return a boolean flag to show if fields that have annomalies.
 -- FIXME: return endpoint_hash as well.
 endpointRequestStatsByProject :: Projects.ProjectId -> Bool -> Bool -> PgT.DBT IO (Vector EndpointRequestStats)
-endpointRequestStatsByProject pid ackd archived= query Select (Query $ encodeUtf8 q) (Only pid)
+endpointRequestStatsByProject pid ackd archived = query Select (Query $ encodeUtf8 q) (Only pid)
  where
   ackdAt = if ackd && not archived then "AND ann.acknowleged_at IS NOT NULL AND ann.archived_at IS NULL " else "AND ann.acknowleged_at IS NULL "
   archivedAt = if archived then "AND ann.archived_at IS NOT NULL " else " AND ann.archived_at IS NULL"
-  -- TODO This query to get the anomalies for the anomalies page might be too complex. 
+  -- TODO This query to get the anomalies for the anomalies page might be too complex.
   -- Does it make sense yet to remove the call to endpoint_request_stats? since we're using async charts already
   q =
     [text| 
@@ -195,7 +195,7 @@ endpointRequestStatsByProject pid ackd archived= query Select (Query $ encodeUtf
      from apis.endpoints enp
      left join apis.endpoint_request_stats ers on (enp.id=ers.endpoint_id)
      left join apis.anomalies ann on (ann.anomaly_type='endpoint' AND target_hash=endpoint_hash)
-     where enp.project_id=? $ackdAt $archivedAt
+     where enp.project_id=? and ann.id is not null $ackdAt $archivedAt
      order by total_requests DESC, url_path ASC
   |]
 
