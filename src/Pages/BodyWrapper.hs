@@ -119,7 +119,31 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child =
               }
             |]
 
-        body_ [class_ "text-gray-900"] $ do
+        body_ [class_ "text-gray-900 h-full w-full"] $ do
+          div_
+            [ style_ "z-index:99999"
+            , class_ "fixed pt-24 lg:hidden justify-center z-50 w-full p-4 bg-gray-300 overflow-y-auto inset-0 h-full max-h-full"
+            , tabindex_ "-1"
+            ]
+            $ do
+              div_
+                [ class_ "relative mx-auto max-h-full"
+                , style_ "width: min(90vw, 500px)"
+                ]
+                $ do
+                  -- Modal content
+                  div_
+                    [ class_ "bg-white rounded-lg shadow w-full"
+                    ]
+                    $ do
+                      div_ [class_ "flex items-start justify-between p-6 space-x-2  border-b rounded-t"] $ do
+                        h3_ [class_ "text-2xl font-bold text-gray-900"] "Desktop Only!"
+                      -- Modal body
+                      div_ [class_ "w-full"] $ do
+                        div_ [class_"p-6", style_ "height:50vh; width:100%"] $ do
+                          p_ [class_ "text-lg font-semibold"] "Currently, our app is specifically designed to be used on desktop browsers. We're diligently working on expanding its availability to other platforms, and we'll keep you updated as we make progress. In the meantime, we appreciate your understanding and look forward to bringing you an enhanced experience across various devices in the near future."
+                      -- Modal footer
+                      div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] pass
           section_ [class_ "flex flex-row h-screen overflow-hidden"] $ do
             sideNav'
             section_ [class_ "flex flex-col grow h-full overflow-y-hidden"] $ do
