@@ -147,7 +147,8 @@ renderEndpoint activePage currTime enp = do
   div_ [class_ "flex py-4 gap-8 "] do
     div_ [class_ "h-4 flex self-start space-x-3 w-8 "] do
       a_ [class_ $ endpointAccentColor (True {- isJust enp.acknowlegedAt -}) (True {- isJust enp.archivedAt -}) <> " w-2 h-full"] ""
-      input_ [term "aria-label" "Select Issue", type_ "checkbox", name_ "anomalyId", value_ (enp.endpointId.toText)]
+      let anomalyId = UUID.toText enp.anomalyId
+      input_ [term "aria-label" "Select Issue", type_ "checkbox", name_ "anomalyId", value_ anomalyId]
     div_ [class_ "space-y-3 grow"] do
       div_ [class_ "space-x-3"] do
         a_ [class_ "inline-block font-bold text-blue-700 space-x-2", href_ ("/p/" <> enp.projectId.toText <> "/endpoints/" <> Endpoints.endpointIdText (enp.endpointId))] $ do
