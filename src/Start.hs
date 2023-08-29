@@ -94,10 +94,10 @@ startApp = do
         let ojCfg = OJConfig.mkUIConfig ojLogger ojTable poolConn id
         asyncs <-
           sequence
-            [ --async (pubsubService logger envConfig poolConn projectCache)
-             async (run (Config.port envConfig) $ Server.app logger poolConn serverCtx)
-            -- , async $ BackgroundJobs.jobsWorkerInit poolConn logger envConfig
-            -- , async $ OJCli.defaultWebUI ojStartArgs ojCfg
+            [ -- async (pubsubService logger envConfig poolConn projectCache)
+              async (run (Config.port envConfig) $ Server.app logger poolConn serverCtx)
+            , async $ BackgroundJobs.jobsWorkerInit poolConn logger envConfig
+            , async $ OJCli.defaultWebUI ojStartArgs ojCfg
             ]
         _ <- waitAnyCancel asyncs
         pass
