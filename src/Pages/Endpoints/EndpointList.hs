@@ -16,20 +16,19 @@ import Models.Projects.Projects qualified as Projects
 import Models.Projects.Projects qualified as Projets
 import Models.Users.Sessions qualified as Sessions
 
-import NeatInterpolation (text)
-import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Relude
-import Data.Time (UTCTime)
-import Servant.HTML.Lucid (HTML)
-import Data.Time.Clock (getCurrentTime)
-import Utils (deleteParam, mIcon_, textToBool)
-import Data.Tuple.Extra (fst3)
-import Pages.Charts.Charts qualified as Charts
 import Data.Text qualified as T
-import Models.Apis.Anomalies qualified as Anomalies
-import Pages.Anomalies.AnomalyList qualified as AnomalyList
+import Data.Time (UTCTime)
+import Data.Time.Clock (getCurrentTime)
+import Data.Tuple.Extra (fst3)
 import Data.UUID qualified as UUID
-
+import Models.Apis.Anomalies qualified as Anomalies
+import NeatInterpolation (text)
+import Pages.Anomalies.AnomalyList qualified as AnomalyList
+import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pages.Charts.Charts qualified as Charts
+import Relude
+import Servant.HTML.Lucid (HTML)
+import Utils (deleteParam, mIcon_, textToBool)
 
 data ParamInput = ParamInput
   { currentURL :: Text
@@ -38,8 +37,8 @@ data ParamInput = ParamInput
   , ackd :: Bool
   }
 
-endpointListGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text ->  Maybe Text ->  Maybe Text  -> Maybe Text -> Maybe Text -> DashboardM (Html ())
-endpointListGetH sess pid layoutM ackdM archivedM sortM hxRequestM hxBoostedM hxCurrentURL= do
+endpointListGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
+endpointListGetH sess pid layoutM ackdM archivedM sortM hxRequestM hxBoostedM hxCurrentURL = do
   let ackd = maybe True textToBool ackdM
   let archived = maybe False textToBool archivedM
   pool <- asks pool
@@ -64,11 +63,17 @@ endpointListGetH sess pid layoutM ackdM archivedM sortM hxRequestM hxBoostedM hx
           { currentURL = currentURL
           , ackd = ackd
           , archived = archived
-          -- , sort = fromMaybe "" sortM
-          , sort = ""
+          , -- , sort = fromMaybe "" sortM
+            sort = ""
           }
-  pure $ bodyWrapper bwconf $ endpointListPage paramInput pid currTime endpointStats
+  let elementBelowTabs =
+        div_ [class_ "grid grid-cols-5 card-round", id_ "endpointListBelowTab", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $
+          endpointList' paramInput currTime pid endpointStats
 
+  case (layoutM, hxRequestM, hxBoostedM) of
+    (_, Just "true", Just "false") -> pure elementBelowTabs
+    (_, Just "true", Nothing) -> pure elementBelowTabs
+    _ -> pure $ bodyWrapper bwconf $ endpointListPage paramInput pid currTime endpointStats
 
 endpointListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Endpoints.EndpointRequestStats -> Html ()
 endpointListPage paramInput pid currTime endpoints = div_ [class_ "container mx-auto  px-4 pt-10 pb-24"] $ do
@@ -78,12 +83,11 @@ endpointListPage paramInput pid currTime endpoints = div_ [class_ "container mx-
     a_ [class_ $ "inline-block py-2 " <> if paramInput.ackd && not paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&ackd=true&archived=false"] "Active"
     a_ [class_ $ "inline-block  py-2 " <> if not paramInput.ackd && not paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&ackd=false&archived=false"] "Inbox"
     a_ [class_ $ "inline-block  py-2 " <> if paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&archived=true"] "Archived"
-  div_ [class_ "grid grid-cols-5 card-round", id_ "anomalyListBelowTab", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $ endpointList' paramInput currTime pid endpoints
+  div_ [class_ "grid grid-cols-5 card-round", id_ "endpointListBelowTab", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $ endpointList' paramInput currTime pid endpoints
 
-
-endpointList' :: ParamInput -> UTCTime  -> Projets.ProjectId -> Vector Endpoints.EndpointRequestStats -> Html ()
+endpointList' :: ParamInput -> UTCTime -> Projets.ProjectId -> Vector Endpoints.EndpointRequestStats -> Html ()
 endpointList' paramInput currTime pid enps = form_ [class_ "col-span-5 bg-white divide-y ", id_ "anomalyListForm"] $ do
-  let bulkActionBase = "/p/" <>  pid.toText <> "/anomalies/bulk_actions"
+  let bulkActionBase = "/p/" <> pid.toText <> "/anomalies/bulk_actions"
   let currentURL' = deleteParam "sort" paramInput.currentURL
   let sortMenu =
         [ ("First Seen", "First time the issue occured", "first_seen")
@@ -138,12 +142,12 @@ endpointAccentColor _ True = "bg-slate-400"
 endpointAccentColor True False = "bg-green-200"
 endpointAccentColor False False = "bg-red-800"
 
-renderEndpoint :: Bool ->  UTCTime  -> Endpoints.EndpointRequestStats -> Html ()
+renderEndpoint :: Bool -> UTCTime -> Endpoints.EndpointRequestStats -> Html ()
 renderEndpoint activePage currTime enp = do
   div_ [class_ "flex py-4 gap-8 "] do
-    div_ [class_ "h-4 flex self-start space-x-3 w-8 " ] do
+    div_ [class_ "h-4 flex self-start space-x-3 w-8 "] do
       a_ [class_ $ endpointAccentColor (True {- isJust enp.acknowlegedAt -}) (True {- isJust enp.archivedAt -}) <> " w-2 h-full"] ""
-      input_ [term "aria-label" "Select Issue", type_ "checkbox", name_ "anomalyId", value_ (enp.endpointId.toText) ]
+      input_ [term "aria-label" "Select Issue", type_ "checkbox", name_ "anomalyId", value_ (enp.endpointId.toText)]
     div_ [class_ "space-y-3 grow"] do
       div_ [class_ "space-x-3"] do
         a_ [class_ "inline-block font-bold text-blue-700 space-x-2", href_ ("/p/" <> enp.projectId.toText <> "/endpoints/" <> Endpoints.endpointIdText (enp.endpointId))] $ do
@@ -152,11 +156,9 @@ renderEndpoint activePage currTime enp = do
       unless activePage do
         div_ [class_ "flex items-center gap-2 mt-5"] do
           AnomalyList.anomalyArchiveButton enp.projectId (Anomalies.AnomalyId enp.anomalyId) (isJust enp.archivedAt)
-          AnomalyList.anomalyAcknowlegeButton enp.projectId (Anomalies.AnomalyId  enp.anomalyId) (isJust enp.acknowlegedAt)
+          AnomalyList.anomalyAcknowlegeButton enp.projectId (Anomalies.AnomalyId enp.anomalyId) (isJust enp.acknowlegedAt)
     div_ [class_ "flex items-center justify-center "] $ div_ [class_ "w-60 h-16 px-3"] $ Charts.throughput enp.projectId (enp.endpointId.toText) (Just $ Charts.QBEndpointHash enp.endpointHash) (Nothing) 14 Nothing False (Nothing, Nothing) Nothing
     div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $ toHtml @String $ fmt $ commaizeF (enp.totalRequests)
-
-
 
 meter__ :: Double -> Html ()
 meter__ prcntg = div_ [class_ "shadow w-full bg-slate-200 h-2.5 "] $ do
