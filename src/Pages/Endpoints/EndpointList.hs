@@ -96,46 +96,54 @@ endpointList' paramInput currTime pid enps = form_ [class_ "col-span-5 bg-white 
         ] ::
           [(Text, Text, Text)]
   let currentSortTitle = maybe "First Seen" fst3 $ find (\(_, _, identifier) -> identifier == paramInput.sort) sortMenu
-  div_
-    [class_ "flex py-3 gap-8 items-center  bg-gray-50"]
-    do
-      div_ [class_ "h-4 flex space-x-3 w-8"] do
-        a_ [class_ " w-2 h-full"] ""
-        input_ [term "aria-label" "Select Issue", type_ "checkbox"]
-      div_ [class_ " grow flex flex-row gap-2"] do
-        button_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/acknowlege", hxSwap_ "none"] "✓ acknowlege"
-        button_ [class_ "btn-sm bg-transparent space-x-1 border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/archive", hxSwap_ "none"] do
-          img_ [src_ "/assets/svgs/anomalies/archive.svg", class_ "h-4 w-4 inline-block"]
-          span_ "archive"
-      div_ [class_ "relative inline-block"] do
-        a_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl space-x-2", [__|on click toggle .hidden on #sortMenuDiv |]] do
-          mIcon_ "sort" "h-4 w-4"
-          span_ $ toHtml currentSortTitle
-        div_ [id_ "sortMenuDiv", hxBoost_ "true", class_ "p-1 hidden text-sm border border-black-30 absolute right-0 z-10 mt-2 w-72 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none", tabindex_ "-1"] do
-          sortMenu & mapM_ \(title, desc, identifier) -> do
-            let isActive = paramInput.sort == identifier || (paramInput.sort == "" && identifier == "first_seen")
-            a_
-              [ class_ $ "block flex flex-row px-3 py-2 hover:bg-blue-50 rounded-md cursor-pointer " <> (if isActive then " text-blue-800 " else "")
-              , href_ $ currentURL' <> "&sort=" <> identifier
-              ]
-              do
-                div_ [class_ "flex flex-col items-center justify-center px-3"] do
-                  if isActive then mIcon_ "checkmark4" "w-4 h-5" else mIcon_ "" "w-4 h-5"
-                div_ [class_ "grow space-y-1"] do
-                  span_ [class_ "block text-lg"] $ toHtml title
-                  span_ [class_ "block "] $ toHtml desc
+  div_ [class_ "flex py-3 gap-8 items-center  bg-gray-50"] do
+    div_ [class_ "h-4 flex space-x-3 w-8"] do
+      a_ [class_ " w-2 h-full"] ""
+      input_ [term "aria-label" "Select Issue", type_ "checkbox"]
+    div_ [class_ " grow flex flex-row gap-2"] do
+      button_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/acknowlege", hxSwap_ "none"] "✓ acknowlege"
+      button_ [class_ "btn-sm bg-transparent space-x-1 border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/archive", hxSwap_ "none"] do
+        img_ [src_ "/assets/svgs/anomalies/archive.svg", class_ "h-4 w-4 inline-block"]
+        span_ "archive"
+    div_ [class_ "relative inline-block"] do
+      a_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl space-x-2", [__|on click toggle .hidden on #sortMenuDiv |]] do
+        mIcon_ "sort" "h-4 w-4"
+        span_ $ toHtml currentSortTitle
+      div_ [id_ "sortMenuDiv", hxBoost_ "true", class_ "p-1 hidden text-sm border border-black-30 absolute right-0 z-10 mt-2 w-72 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none", tabindex_ "-1"] do
+        sortMenu & mapM_ \(title, desc, identifier) -> do
+          let isActive = paramInput.sort == identifier || (paramInput.sort == "" && identifier == "first_seen")
+          a_
+            [ class_ $ "block flex flex-row px-3 py-2 hover:bg-blue-50 rounded-md cursor-pointer " <> (if isActive then " text-blue-800 " else "")
+            , href_ $ currentURL' <> "&sort=" <> identifier
+            ]
+            do
+              div_ [class_ "flex flex-col items-center justify-center px-3"] do
+                if isActive then mIcon_ "checkmark4" "w-4 h-5" else mIcon_ "" "w-4 h-5"
+              div_ [class_ "grow space-y-1"] do
+                span_ [class_ "block text-lg"] $ toHtml title
+                span_ [class_ "block "] $ toHtml desc
 
-      div_ [class_ "flex justify-center font-base w-60 content-between gap-14"] do
-        span_ "GRAPH"
-        div_ [class_ " space-x-2 font-base text-sm"] $ do
-          a_ [class_ "cursor-pointer"] "24h"
-          a_ [class_ "cursor-pointer font-bold text-base"] "14d"
-      div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "font-base"] "EVENTS"
-
+    div_ [class_ "flex justify-center font-base w-60 content-between gap-14"] do
+      span_ "GRAPH"
+      div_ [class_ " space-x-2 font-base text-sm"] $ do
+        a_ [class_ "cursor-pointer"] "24h"
+        a_ [class_ "cursor-pointer font-bold text-base"] "14d"
+    div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "font-base"] "EVENTS"
+  div_ [class_ "w-full flex flex-row m-3"] $ do
+    div_ [class_ "flex w-full bg-white py-2 px-3 flex-row border-solid border border-gray-200 h-10"] $ do
+      img_ [src_ "/assets/svgs/search.svg", class_ "h-5 w-auto"]
+      input_
+        [ type_ "text"
+        , [__| on input show .endpoint_item in #endpoints_container when its textContent.toLowerCase() contains my value.toLowerCase() |]
+        , class_ "dataTable-search w-full h-full p-2 text-sm text-gray-400 font-normal focus:outline-none"
+        , placeholder_ "Search endpoints..."
+        ]
+      img_ [src_ "/assets/svgs/filter.svg", class_ "h-5 w-auto self-end"]
   when (null enps) $ div_ [class_ "flex flex-col text-center justify-center items-center h-32"] $ do
     strong_ "No endpoints yet."
     p_ "Check Inbox to acknowlege new endpoints"
-  mapM_ (renderEndpoint (paramInput.ackd && not paramInput.archived) currTime) enps
+  div_ [id_ "endpoints_container"] do
+    mapM_ (renderEndpoint (paramInput.ackd && not paramInput.archived) currTime) enps
 
 endpointAccentColor :: Bool -> Bool -> Text
 endpointAccentColor _ True = "bg-slate-400"
@@ -144,8 +152,8 @@ endpointAccentColor False False = "bg-red-800"
 
 renderEndpoint :: Bool -> UTCTime -> Endpoints.EndpointRequestStats -> Html ()
 renderEndpoint activePage currTime enp = do
-  div_ [class_ "flex py-4 gap-8 "] do
-    div_ [class_ "h-4 flex self-start space-x-3 w-8 "] do
+  div_ [class_ "flex py-4 gap-8 items-center endpoint_item"] do
+    div_ [class_ "h-4 flex space-x-3 w-8 "] do
       a_ [class_ $ endpointAccentColor (True {- isJust enp.acknowlegedAt -}) (True {- isJust enp.archivedAt -}) <> " w-2 h-full"] ""
       let anomalyId = UUID.toText enp.anomalyId
       input_ [term "aria-label" "Select Issue", type_ "checkbox", name_ "anomalyId", value_ anomalyId]
