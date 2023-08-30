@@ -7,8 +7,8 @@ module Pages.Anomalies.AnomalyList (
   unArchiveAnomalyGetH,
   anomalyListSlider,
   AnomalyBulkForm,
-  anomalyAcknowlegeButton, 
-  anomalyArchiveButton
+  anomalyAcknowlegeButton,
+  anomalyArchiveButton,
 ) where
 
 import Config
@@ -28,9 +28,9 @@ import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript
 import Models.Apis.Anomalies qualified as Anomalies
+import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Models.Apis.Endpoints qualified as Endpoints
 import NeatInterpolation (text)
 import Optics.Core ((^.))
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
@@ -52,7 +52,7 @@ acknowlegeAnomalyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Ano
 acknowlegeAnomalyGetH sess pid aid = do
   pool <- asks pool
   let q = [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where id=? |]
-  _ <- liftIO $ withPool pool $ execute Update q (sess.userId, aid)
+  r <- liftIO $ withPool pool $ execute Update q (sess.userId, aid)
   pure $ anomalyAcknowlegeButton pid aid True
 
 unAcknowlegeAnomalyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Anomalies.AnomalyId -> DashboardM (Html ())
@@ -81,7 +81,7 @@ unArchiveAnomalyGetH sess pid aid = do
 anomalyBulkActionsPostH :: Sessions.PersistentSession -> Projects.ProjectId -> Text -> AnomalyBulkForm -> DashboardM (Headers '[HXTrigger] (Html ()))
 anomalyBulkActionsPostH sess pid action items = do
   pool <- asks pool
-  _ <- case action of
+  v <- case action of
     "acknowlege" -> liftIO $ withPool pool $ execute Update [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) |] (sess.userId, Vector.fromList items.anomalyId)
     "archive" -> liftIO $ withPool pool $ execute Update [sql| update apis.anomalies set archived_at=NOW() where id=ANY(?::uuid[]) |] (Only $ Vector.fromList items.anomalyId)
     _ -> error $ "unhandled anomaly bulk action state " <> action
@@ -100,7 +100,7 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM endpointM hxRequestM hxBo
   let ackd = textToBool <$> ackdM
   let archived = textToBool <$> archivedM
   pool <- asks pool
-  
+
   let limit = maybe Nothing (\x -> if x == "slider" then (Just 51) else Nothing) layoutM
 
   (project, anomalies) <- liftIO $
@@ -131,7 +131,7 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM endpointM hxRequestM hxBo
   case (layoutM, hxRequestM, hxBoostedM) of
     (Just "slider", Just "true", _) -> pure $ anomalyListSlider currTime pid endpointM (Just anomalies)
     (_, Just "true", Just "false") -> pure elementBelowTabs
-    (_, Just "true", Nothing) -> pure  elementBelowTabs
+    (_, Just "true", Nothing) -> pure elementBelowTabs
     _ -> pure $ bodyWrapper bwconf $ anomalyListPage paramInput pid currTime anomalies
 
 anomalyListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Anomalies.AnomalyVM -> Html ()
@@ -146,7 +146,7 @@ anomalyListPage paramInput pid currTime anomalies = div_ [class_ "container mx-a
 
 anomalyList :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Anomalies.AnomalyVM -> Html ()
 anomalyList paramInput pid currTime anomalies = form_ [class_ "col-span-5 bg-white divide-y ", id_ "anomalyListForm"] $ do
-  let bulkActionBase = "/p/" <>  pid.toText <> "/anomalies/bulk_actions"
+  let bulkActionBase = "/p/" <> pid.toText <> "/anomalies/bulk_actions"
   let currentURL' = deleteParam "sort" paramInput.currentURL
   let sortMenu =
         [ ("First Seen", "First time the issue occured", "first_seen")
@@ -197,8 +197,8 @@ anomalyList paramInput pid currTime anomalies = form_ [class_ "col-span-5 bg-whi
 
 anomalyListSlider :: UTCTime -> Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe (Vector Anomalies.AnomalyVM) -> Html ()
 anomalyListSlider _ _ _ (Just []) = ""
-anomalyListSlider _ pid eid Nothing =  do
-  div_ [hxGet_ $ "/p/"<>pid.toText<>"/anomalies?layout=slider"<>maybe "" (\x-> "&endpoint=" <> x.toText) eid , hxSwap_ "outerHTML", hxTrigger_ "load"] $ do
+anomalyListSlider _ pid eid Nothing = do
+  div_ [hxGet_ $ "/p/" <> pid.toText <> "/anomalies?layout=slider" <> maybe "" (\x -> "&endpoint=" <> x.toText) eid, hxSwap_ "outerHTML", hxTrigger_ "load"] $ do
     div_ [class_ "flex justify-between mt-5 pb-2"] $ do
       div_ [class_ "flex flex-row"] $ do
         img_
@@ -207,8 +207,8 @@ anomalyListSlider _ pid eid Nothing =  do
           , [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .parent-slider)|]
           ]
         span_ [class_ "text-lg text-slate-700"] "Ongoing Anomalies and Monitors"
-      div_ [class_ "flex flex-row mt-2"] "" 
-anomalyListSlider currTime _ _ (Just anomalies)= do
+      div_ [class_ "flex flex-row mt-2"] ""
+anomalyListSlider currTime _ _ (Just anomalies) = do
   let anomalyIds = replace "\"" "'" $ show $ fmap (Anomalies.anomalyIdText . (^. #id)) anomalies
   let totalAnomaliesTxt = toText $ if length anomalies > 50 then "50+" else show (length anomalies)
   div_ $ do
@@ -379,7 +379,7 @@ renderAnomaly hideByDefault currTime anomaly = do
 
 anomalyAcknowlegeButton :: Projects.ProjectId -> Anomalies.AnomalyId -> Bool -> Html ()
 anomalyAcknowlegeButton pid aid acked = do
-  let acknowlegeAnomalyEndpoint = "/p/" <>  pid.toText <> "/anomalies/" <> Anomalies.anomalyIdText aid <> if acked then "/unacknowlege" else "/acknowlege"
+  let acknowlegeAnomalyEndpoint = "/p/" <> pid.toText <> "/anomalies/" <> Anomalies.anomalyIdText aid <> if acked then "/unacknowlege" else "/acknowlege"
   a_
     [ class_ $
         "inline-block child-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
