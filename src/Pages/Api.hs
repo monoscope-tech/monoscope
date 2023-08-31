@@ -22,8 +22,9 @@ import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
 import Web.FormUrlEncoded (FromForm)
 
-newtype GenerateAPIKeyForm = GenerateAPIKeyForm
+data GenerateAPIKeyForm = GenerateAPIKeyForm
   { title :: Text
+  , from :: Maybe Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
@@ -36,14 +37,16 @@ apiPostH sess pid apiKeyForm = do
   let encryptedKey = ProjectApiKeys.encryptAPIKey (encodeUtf8 $ env.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
   let encryptedKeyB64 = B64.encodeBase64 encryptedKey
   let keyPrefix = T.take 8 encryptedKeyB64
-
+  print (from apiKeyForm)
   pApiKey <- liftIO $ ProjectApiKeys.newProjectApiKeys pid projectKeyUUID (title apiKeyForm) keyPrefix
   apiKeys <- liftIO $
     withPool pool $ do
       ProjectApiKeys.insertProjectApiKey pApiKey
       ProjectApiKeys.projectApiKeysByProjectId pid
   let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Created API Key Successfully"]}|]
-  pure $ addHeader hxTriggerData $ mainContent pid apiKeys (Just (pApiKey, encryptedKeyB64))
+  case from apiKeyForm of
+    Just v -> pure $ addHeader hxTriggerData $ copyNewApiKey (Just (pApiKey, encryptedKeyB64))
+    Nothing -> pure $ addHeader hxTriggerData $ mainContent pid apiKeys (Just (pApiKey, encryptedKeyB64))
 
 -- | apiGetH renders the api keys list page which includes a modal for creating the apikeys.
 apiGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
@@ -115,6 +118,30 @@ apiKeysPage pid apiKeys = do
 
 mainContent :: Projects.ProjectId -> Vector ProjectApiKeys.ProjectApiKey -> Maybe (ProjectApiKeys.ProjectApiKey, Text) -> Html ()
 mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] $ do
+  copyNewApiKey newKeyM
+  div_ [class_ "flex flex-col"] $ do
+    div_ [class_ "-my-2 overflow-x-auto sm:-mx-6 lg:-mx-8"] $ do
+      div_ [class_ "py-2 align-middle inline-block min-w-full sm:px-6 lg:px-8"] $ do
+        div_ [class_ "shadow overflow-hidden border-b border-gray-200 sm:rounded-lg"] $ do
+          table_ [class_ "min-w-full divide-y divide-gray-200"] $ do
+            thead_ [class_ "bg-gray-50"] $ do
+              tr_ $ do
+                th_ [class_ "px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"] "Title"
+                th_ [class_ "px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"] "Key"
+                th_ [class_ "relative px-6 py-3"] $ do
+                  span_ [class_ "sr-only"] "Edit"
+            tbody_ [class_ "bg-white divide-y divide-gray-200"] $ do
+              apiKeys & mapM_ \apiKey -> do
+                tr_ $ do
+                  td_ [class_ "px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900"] $ toHtml $ apiKey.title
+                  td_ [class_ "px-6 py-4 whitespace-nowrap text-sm text-gray-500"] $ toHtml $ apiKey.keyPrefix <> "**********"
+                  td_ [class_ "px-6 py-4 whitespace-nowrap text-right text-sm font-medium"] $ do
+                    a_ [class_ "text-indigo-600 hover:text-indigo-900", href_ $ "/p/" <> pid.toText <> "/api/id/delete"] $ do
+                      img_ [src_ "/assets/svgs/revoke.svg", class_ "h-3 w-3 mr-2 inline-block"]
+                      span_ [class_ "text-slate-500"] "Revoke"
+
+copyNewApiKey :: Maybe (ProjectApiKeys.ProjectApiKey, Text) -> Html ()
+copyNewApiKey newKeyM =
   case newKeyM of
     Nothing -> ""
     Just (keyObj, newKey) -> do
@@ -133,9 +160,9 @@ mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] $ do
                   button_
                     [ type_ "button"
                     , class_ "bg-green-50 px-2 py-1.5 rounded-md text-sm font-medium text-green-800 hover:bg-green-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600"
-                    , [__| 
-                      on click 
-                        if 'clipboard' in window.navigator then 
+                    , [__|
+                      on click
+                        if 'clipboard' in window.navigator then
                           call navigator.clipboard.writeText(#newKey's innerText)
                           send successToast(value:['API Key has been added to the Clipboard']) to <body/>
                         end
@@ -148,23 +175,3 @@ mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] $ do
                     , [__|on click remove #apiFeedbackSection|]
                     ]
                     "Dismiss"
-  div_ [class_ "flex flex-col"] $ do
-    div_ [class_ "-my-2 overflow-x-auto sm:-mx-6 lg:-mx-8"] $ do
-      div_ [class_ "py-2 align-middle inline-block min-w-full sm:px-6 lg:px-8"] $ do
-        div_ [class_ "shadow overflow-hidden border-b border-gray-200 sm:rounded-lg"] $ do
-          table_ [class_ "min-w-full divide-y divide-gray-200"] $ do
-            thead_ [class_ "bg-gray-50"] $ do
-              tr_ $ do
-                th_ [class_ "px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"] "Title"
-                th_ [class_ "px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"] "Key"
-                th_ [class_ "relative px-6 py-3"] $ do
-                  span_ [class_ "sr-only"] "Edit"
-            tbody_ [class_ "bg-white divide-y divide-gray-200"] $ do
-              apiKeys & mapM_ \apiKey -> do
-                tr_ $ do
-                  td_ [class_ "px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900"] $ toHtml $ apiKey.title
-                  td_ [class_ "px-6 py-4 whitespace-nowrap text-sm text-gray-500"] $ toHtml $ apiKey.keyPrefix <> "**********"
-                  td_ [class_ "px-6 py-4 whitespace-nowrap text-right text-sm font-medium"] $ do
-                    a_ [class_ "text-indigo-600 hover:text-indigo-900", href_ $ "/p/" <>  pid.toText <> "/api/id/delete"] $ do
-                      img_ [src_ "/assets/svgs/revoke.svg", class_ "h-3 w-3 mr-2 inline-block"]
-                      span_ [class_ "text-slate-500"] "Revoke"

@@ -14,7 +14,8 @@ import Relude
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu pid =
-  [ ("Dashboard", "/p/" <> pid.toText <> "/", "#dashboard")
+  [ ("Get started", "/p/" <> pid.toText <> "/", "#onboarding")
+  , ("Dashboard", "/p/" <> pid.toText <> "/dashboard", "#dashboard")
   , ("Endpoints", "/p/" <> pid.toText <> "/endpoints", "#endpoint")
   , ("Anomalies", "/p/" <> pid.toText <> "/anomalies?ackd=false&archived=false", "#anomalies")
   , ("API Log Explorer", "/p/" <> pid.toText <> "/log_explorer", "#logs")
@@ -140,7 +141,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child =
                         h3_ [class_ "text-2xl font-bold text-gray-900"] "Desktop Only!"
                       -- Modal body
                       div_ [class_ "w-full"] $ do
-                        div_ [class_"p-6", style_ "height:50vh; width:100%"] $ do
+                        div_ [class_ "p-6", style_ "height:50vh; width:100%"] $ do
                           p_ [class_ "text-lg font-semibold"] "Currently, our app is specifically designed to be used on desktop browsers. We're diligently working on expanding its availability to other platforms, and we'll keep you updated as we make progress. In the meantime, we appreciate your understanding and look forward to bringing you an enhanced experience across various devices in the near future."
                       -- Modal footer
                       div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] pass
@@ -150,8 +151,9 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child =
               navbar currUser
               section_ [class_ "flex-1 overflow-y-auto"] $ do
                 child
-        script_ [async_ "true", src_ "https://www.googletagmanager.com/gtag/js?id=AW-11285541899"] (""::Text)
-        script_ [text|
+        script_ [async_ "true", src_ "https://www.googletagmanager.com/gtag/js?id=AW-11285541899"] ("" :: Text)
+        script_
+          [text|
             window.dataLayer = window.dataLayer || [];
             function gtag(){dataLayer.push(arguments);}
             gtag('js', new Date());
@@ -265,7 +267,8 @@ sideNav sess project pageTitle menuItem = do
         $ do
           div_ [class_ "space-2 grow sd-hidden"] $ do
             strong_ [class_ "block text-slate-900"] $ toHtml $ project.title
-            small_ [class_ "block text-slate-900"] $ toHtml $ project.paymentPlan -- Development?
+            small_ [class_ "block text-slate-900"] $ toHtml $ project.paymentPlan
+          -- Development?
           div_ $ do
             img_ [src_ "/assets/svgs/up_chevron.svg"]
             img_ [src_ "/assets/svgs/down_chevron.svg"]
