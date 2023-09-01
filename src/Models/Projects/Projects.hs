@@ -68,7 +68,7 @@ data Project = Project
   , -- NOTE: We used to have hosts under project, but now hosts should be gotten from the endpoints.
     -- NOTE: If there's heavy need and usage, we caould create a view. Otherwise, the project cache is best, if it meets our needs.
     paymentPlan :: Text
-  , questsions :: Maybe Value
+  , questions :: Maybe Value
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow)

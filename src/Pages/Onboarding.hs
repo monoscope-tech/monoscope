@@ -20,6 +20,7 @@ import Models.Users.Sessions qualified as Sessions
 import Lucid.Htmx (hxPost_, hxTarget_)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
+import Utils (redirect)
 
 onboardingGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 onboardingGetH sess pid = do
@@ -36,23 +37,43 @@ onboardingGetH sess pid = do
           , currProject = project
           , pageTitle = "Get started"
           }
-  pure $ bodyWrapper bwconf $ onboardingPage pid hasApikeys hasRequest
+  let ans = case project of
+        Nothing -> False
+        Just p -> case p.questions of
+          Just v -> True
+          _ -> False
 
-onboardingPage :: Projects.ProjectId -> Bool -> Bool -> Html ()
-onboardingPage pid hasApikey hasRequest = do
+  pure $ bodyWrapper bwconf $ onboardingPage pid hasApikeys hasRequest ans
+
+onboardingPage :: Projects.ProjectId -> Bool -> Bool -> Bool -> Html ()
+onboardingPage pid hasApikey hasRequest ans = do
   div_ [class_ "relative h-full"] $ do
-    surveyModal pid
+    if ans
+      then ""
+      else surveyModal pid
     div_ [class_ "flex flex-col h-full w-full gap-16"] $ do
       div_ [class_ "flex flex-col w-full mt-10 py-4 items-center gap-4"] $ do
         h3_ [class_ "text-slate-900 text-4xl font-bold"] "Complete the onboarding checklist"
         div_ [class_ "flex flex-col text-center gap-1"] do
           p_ [class_ "text-slate-700 text-[16px]"] "Complete the onboarding checklist below to fully set up APIToolkit."
           p_ [class_ "text-slate-700 text-[16px]"] "Once completed, you can dismiss getting started from the menu"
+        if not hasApikey
+          then do
+            generateApikey pid
+          else ""
+        if hasApikey && not hasRequest
+          then do
+            integrateApiToolkit
+          else ""
       div_ [class_ "w-full flex justify-center"] $ do
         div_ [class_ "flex flex-col w-[800px] rounded-2xl border border-2"] $ do
           div_ [class_ "w-full px-8 py-4 flex justify-between border-b border-b-2"] $ do
             h4_ [class_ "font-bold text-lg"] "Onboarding checklist"
-            span_ [class_ "text-slate-500"] "25% completed"
+            let p
+                  | hasApikey = if hasRequest then "100%" else "66%"
+                  | hasRequest = if hasApikey then "100%" else "66%"
+                  | otherwise = "33%"
+            span_ [class_ "text-slate-500"] $ p <> " completed"
           ul_ [class_ "px-3 py-4"] do
             li_ [class_ "flex items-center mx-4 py-4 border-b gap-6"] do
               img_ [src_ "/assets/svgs/check_complete.svg", class_ "h-6 w-6"]
@@ -122,16 +143,6 @@ onboardingPage pid hasApikey hasRequest = do
                       tabContentDotNet
                       tabContentFastify
 
-            -- <divclass="relative bg-slate-50 bg-no-repeat bg-cover  rounded-lg p-4 md:p-8 shadow-2xl">
-
-            li_ [class_ "flex items-center mx-4 py-4 border-b gap-6"] do
-              div_ [class_ "flex w-full items-center  gap-6"] do
-                img_ [src_ "/assets/svgs/check.svg", class_ "h-6 w-6"]
-                button_ [class_ "flex justify-between text-left w-full items-center"] do
-                  div_ [class_ "flex flex-col"] do
-                    p_ [class_ "font-semibold"] "Invite team members"
-                    span_ [class_ "text-slate-500"] "Inivte other users to collaborate on your project"
-                  img_ [src_ "/assets/svgs/down_chevron.svg", class_ "h-6 w-6"]
       div_ [class_ "w-full flex justify-center pb-16 mt-16"] $ do
         div_ [class_ "flex flex-col w-[800px] rounded-2xl border border-2"] $ do
           div_ [class_ "grid grid-cols-2 border-b px-8"] do
@@ -165,6 +176,51 @@ function changeTab(tabId) {
 
 }
   |]
+
+generateApikey :: Projects.ProjectId -> Html ()
+generateApikey pid =
+  div_ [class_ "w-[800px] bg-gray-200 mx-auto rounded-lg border-8 border-white shadow-lg mb-10"] do
+    div_ [class_ "w-full p-8"] do
+      div_ [class_ "flex w-full justify-center gap-4 items-center mb-10"] do
+        span_ [class_ "text-blue-500 font-light text-2xl"] "Next Up"
+        h3_ [class_ "font-bold text-2xl"] "Generate API Key"
+      div_ [id_ "main-content2"] do
+        form_
+          [ hxPost_ $ "/p/" <> pid.toText <> "/apis"
+          , class_ "flex items-end justify-center mx-8  pt-4 px-4 pb-20 text-center sm:block sm:p-0"
+          , hxTarget_ "#main-content2"
+          ]
+          $ do
+            div_ [class_ "bg-white rounded-lg px-4 pt-5 pb-4 text-left"] $ do
+              div_ [class_ "sm:flex sm:items-start"] $ do
+                div_ [class_ "mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left grow"] $ do
+                  h3_ [class_ "text-lg font-medium text-gray-900", id_ "modal-title"] "Enter API key title"
+                  div_ [class_ "mt-2 space-y-2"] $ do
+                    p_ [class_ "text-sm text-gray-500"] do
+                      "Please input a title for your API Key. You can find all API keys "
+                      a_ [href_ $ "/p/" <> pid.toText <> "/apis", class_ "text-blue-500"] "here"
+                    div_ $ do
+                      input_ [class_ "input-txt px-4 py-2  border w-full", type_ "text", placeholder_ "API Key Title", name_ "title", autofocus_]
+                      input_ [hidden_ "true", name_ "from", value_ "onboarding"]
+              div_ [class_ "mt-5 sm:mt-4 sm:flex sm:flex-row-reverse"] $ do
+                button_ [type_ "submit", class_ "w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 sm:ml-3 sm:w-auto sm:text-sm"] "Submit"
+
+integrateApiToolkit :: Html ()
+integrateApiToolkit =
+  div_ [class_ "w-[800px] bg-gray-200 mx-auto rounded-lg border-8 border-white shadow-lg mb-10"] do
+    div_ [class_ "w-full p-8 bg-gray-100  rounded"] do
+      div_ [class_ "flex w-full justify-center gap-4 items-center mb-2"] do
+        span_ [class_ "text-blue-500 font-light text-2xl"] "Next Up"
+        h3_ [class_ "font-bold text-2xl"] "Integrate APIToolkit"
+      div_ [class_ "pb-2"] do
+        div_ [class_ "font-bold text-center text-white border-b border-gray-200"] $ do
+          tabs
+        tabContentExpress
+        tabContentGin
+        tabContentLaravel
+        tabContentSymfony
+        tabContentDotNet
+        tabContentFastify
 
 tabContentExpress :: Html ()
 tabContentExpress =
@@ -507,7 +563,7 @@ surveyModal :: Projects.ProjectId -> Html ()
 surveyModal pid = do
   div_
     [ style_ "z-index:99999"
-    , class_ "fixed pt-24 justify-center z-50 w-full p-4 bg-gray-300 bg-opacity-75 overflow-y-auto inset-0 h-full max-h-full"
+    , class_ "fixed hidden pt-24 justify-center z-50 w-full p-4 bg-gray-300 bg-opacity-75 overflow-y-auto inset-0 h-full max-h-full"
     , id_ "surveyDialog"
     ]
     $ do
