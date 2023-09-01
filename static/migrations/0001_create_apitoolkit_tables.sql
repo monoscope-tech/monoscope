@@ -107,6 +107,7 @@ CREATE TABLE IF NOT EXISTS projects.projects
   payment_plan TEXT NOT NULL DEFAULT 'Free'
 );
 SELECT manage_updated_at('projects.projects');
+ALTER TABLE projects.projects ADD COLUMN questions JSONB DEFAULT NULL;
 
 -----------------------------------------------------------------------
 -- PROJECT MEMBERS table 

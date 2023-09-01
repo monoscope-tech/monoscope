@@ -64,6 +64,7 @@ library
       Pages.Projects.CreateProject
       Pages.Projects.ListProjects
       Pages.Projects.ManageMembers
+      Pages.Projects.Survey
       Pages.RedactedFields
       Pkg.ConvertKit
       Pkg.Google

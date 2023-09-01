@@ -7,9 +7,9 @@ import Data.Default (def)
 
 import Database.PostgreSQL.Entity.DBT (withPool)
 
+import Data.Text qualified as T
 import Lucid
 import Lucid.Hyperscript
-
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
@@ -41,6 +41,7 @@ onboardingGetH sess pid = do
 onboardingPage :: Projects.ProjectId -> Bool -> Bool -> Html ()
 onboardingPage pid hasApikey hasRequest = do
   div_ [class_ "relative h-full"] $ do
+    surveyModal pid
     div_ [class_ "flex flex-col h-full w-full gap-16"] $ do
       div_ [class_ "flex flex-col w-full mt-10 py-4 items-center gap-4"] $ do
         h3_ [class_ "text-slate-900 text-4xl font-bold"] "Complete the onboarding checklist"
@@ -474,5 +475,79 @@ tabs =
         ]
         "Fastify Js"
 
---   li_ [] "Generate API key"
---   li_ [] "Integrate API toolkit into your app"
+stackOptions :: [(T.Text, T.Text)]
+stackOptions =
+  [ ("expressjs", "Express.js")
+  , ("django", "Django")
+  , (".net", ".NET")
+  ]
+
+functionalityOptions :: [(T.Text, T.Text)]
+functionalityOptions =
+  [ ("monitoring", "API monitory")
+  , ("documentation", "Automative API documentation")
+  , ("anomaly_detection", "Anomaly detection")
+  ]
+
+dataLocationOptions :: [(T.Text, T.Text)]
+dataLocationOptions =
+  [ ("us", "US")
+  , ("asia", "Asia")
+  , ("eu", "EU")
+  ]
+
+foundUsFromOptions :: [(T.Text, T.Text)]
+foundUsFromOptions =
+  [ ("twitter", "Twitter")
+  , ("google", "Google")
+  , ("linkedin", "LinkedIn")
+  ]
+
+surveyModal :: Projects.ProjectId -> Html ()
+surveyModal pid = do
+  div_
+    [ style_ "z-index:99999"
+    , class_ "fixed pt-24 justify-center z-50 w-full p-4 bg-gray-300 bg-opacity-75 overflow-y-auto inset-0 h-full max-h-full"
+    , id_ "surveyDialog"
+    ]
+    $ do
+      div_ [class_ "relative mx-auto max-h-full", style_ "width: min(90vw, 500px)"] do
+        -- Modal content
+        div_ [class_ "bg-white rounded-lg shadow w-full"] do
+          div_ [class_ "flex items-start justify-between p-6 space-x-2  border-b rounded-t"] $ do
+            h3_ [class_ "text-2xl font-bold text-gray-900"] "Please complete the survey"
+          -- Modal body
+          form_
+            [ hxPost_ $ "/p/" <> pid.toText <> "/survey"
+            , hxTarget_ "#main-content"
+            , id_ "main-content"
+            , [__|on closeModal from body add .hidden to #surveyDialog then call me.reset()|]
+            ]
+            $ do
+              div_ [class_ "p-6 flex flex-col gap-4 overflow-y-auto", style_ "height:50vh; width:100%"] $ do
+                div_ [class_ "flex flex-col gap-2"] do
+                  label_ [Lucid.for_ "stack", class_ "font-bold"] "Which web framework do you use?"
+                  select_ [id_ "stack", name_ "stack", required_ "required"] $ do
+                    forM_ stackOptions $ \(value, label) ->
+                      option_ [value_ value] (toHtml label)
+                div_ [class_ "flex flex-col gap-2"] do
+                  label_ [class_ "font-bold"] "What APIToolkit features are you most interested in?"
+                  forM_ functionalityOptions $ \(value, label) -> do
+                    label_ [class_ "flex items-center justify-between gap-6 hover:bg-gray-100"] $ do
+                      label_ [] $ toHtml label
+                      input_ [type_ "checkbox", id_ value, name_ "functionality", value_ value]
+                div_ [class_ "flex flex-col gap-2"] do
+                  label_ [class_ "font-bold"] "Where would you prefer your data to be processed?"
+                  forM_ dataLocationOptions $ \(value, label) -> do
+                    label_ [class_ "flex items-center justify-between gap-6 hover:bg-gray-100"] $ do
+                      label_ [] $ toHtml label
+                      input_ [type_ "radio", id_ value, name_ "dataLocation", value_ value, required_ "required"]
+                div_ [class_ "flex flex-col gap-2"] do
+                  label_ [class_ "font-bold"] "How did you find APIToolkit"
+                  forM_ foundUsFromOptions $ \(value, label) -> do
+                    label_ [class_ "flex items-center justify-between gap-6 hover:bg-gray-100"] $ do
+                      toHtml label
+                      input_ [type_ "radio", id_ value, name_ "foundUsFrom", value_ value, required_ "required"]
+              -- Modal footer
+              div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] do
+                button_ [type_ "sumbit", class_ "btn btn-primary"] "Submit"

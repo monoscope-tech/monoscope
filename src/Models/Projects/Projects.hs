@@ -19,7 +19,7 @@ module Models.Projects.Projects (
   ProjectCache (..),
 ) where
 
-import Data.Aeson (FromJSON, ToJSON)
+import Data.Aeson (FromJSON, ToJSON, Value)
 import Data.Default
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
@@ -30,6 +30,7 @@ import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, queryOn
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
+import Database.PostgreSQL.Simple.Newtypes (Aeson)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact (DBT)
@@ -51,7 +52,7 @@ instance HasField "unwrap" ProjectId UUID.UUID where
   getField = coerce
 
 instance HasField "toText" ProjectId Text where
-  getField = UUID.toText . unProjectId 
+  getField = UUID.toText . unProjectId
 
 projectIdFromText :: Text -> Maybe ProjectId
 projectIdFromText pid = ProjectId <$> UUID.fromText pid
@@ -64,9 +65,10 @@ data Project = Project
   , active :: Bool
   , title :: Text
   , description :: Text
-  -- NOTE: We used to have hosts under project, but now hosts should be gotten from the endpoints.
-  -- NOTE: If there's heavy need and usage, we caould create a view. Otherwise, the project cache is best, if it meets our needs.
-  , paymentPlan :: Text
+  , -- NOTE: We used to have hosts under project, but now hosts should be gotten from the endpoints.
+    -- NOTE: If there's heavy need and usage, we caould create a view. Otherwise, the project cache is best, if it meets our needs.
+    paymentPlan :: Text
+  , questsions :: Maybe Value
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow)
@@ -87,9 +89,9 @@ data Project' = Project'
   , active :: Bool
   , title :: Text
   , description :: Text
-  -- NOTE: We used to have hosts under project, but now hosts should be gotten from the endpoints.
-  -- NOTE: If there's heavy need and usage, we caould create a view. Otherwise, the project cache is best, if it meets our needs.
-  , paymentPlan :: Text
+  , -- NOTE: We used to have hosts under project, but now hosts should be gotten from the endpoints.
+    -- NOTE: If there's heavy need and usage, we caould create a view. Otherwise, the project cache is best, if it meets our needs.
+    paymentPlan :: Text
   , usersDisplayImages :: Vector Text
   }
   deriving stock (Show, Generic)

@@ -43,6 +43,7 @@ import Pages.Projects.CreateProject qualified as CreateProject
 import Pages.Projects.ListProjects qualified as ListProjects
 import Pages.Projects.ManageMembers (ManageMembersForm)
 import Pages.Projects.ManageMembers qualified as ManageMembers
+import Pages.Projects.Survey qualified as Survey
 import Pages.RedactedFields (RedactFieldForm)
 import Pages.RedactedFields qualified as RedactedFields
 import Relude
@@ -109,6 +110,7 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "documentation" :> ReqBody '[FormUrlEncoded] SwaggerForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "documentation" :> "save" :> ReqBody '[JSON] SaveSwaggerForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "generate_swagger" :> Get '[JSON] AE.Value
+    :<|> "p" :> ProjectId :> "survey" :> ReqBody '[FormUrlEncoded] Survey.SurveyForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
 
 type PublicAPI =
   "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
@@ -180,6 +182,7 @@ protectedServer sess =
     :<|> Documentation.documentationPostH sess
     :<|> Documentation.documentationPutH sess
     :<|> GenerateSwagger.generateGetH sess
+    :<|> Survey.surveyPutH sess
 
 publicServer :: ServerT PublicAPI DashboardM
 publicServer =
