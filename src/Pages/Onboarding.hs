@@ -54,7 +54,7 @@ onboardingPage pid hasApikey hasRequest ans = do
     div_ [class_ "flex flex-col h-full w-full gap-16"] $ do
       div_ [class_ "flex flex-col w-full mt-10 py-4 items-center gap-4"] $ do
         h3_ [class_ "text-slate-900 text-4xl font-bold"] "Complete the onboarding checklist"
-        div_ [class_ "flex flex-col text-center gap-1"] do
+        div_ [class_ "flex flex-col text-center gap-1 mb-4"] do
           p_ [class_ "text-slate-700 text-[16px]"] "Complete the onboarding checklist below to fully set up APIToolkit."
           p_ [class_ "text-slate-700 text-[16px]"] "Once completed, you can dismiss getting started from the menu"
         if not hasApikey
@@ -135,28 +135,31 @@ onboardingPage pid hasApikey hasRequest ans = do
                   else do
                     div_ [class_ "pb-8"] do
                       div_ [class_ "font-bold text-center text-white border-b border-gray-200"] $ do
-                        tabs
-                      tabContentExpress
-                      tabContentGin
-                      tabContentLaravel
-                      tabContentSymfony
-                      tabContentDotNet
-                      tabContentFastify
+                        p_ [class_ "text-red-500 text-center py-16 text-center"] "Apitoolkit has not been integrated into your app"
+      --   tabs
+      -- tabContentExpress
+      -- tabContentGin
+      -- tabContentLaravel
+      -- tabContentSymfony
+      -- tabContentDotNet
+      -- tabContentFastify
 
       div_ [class_ "w-full flex justify-center pb-16 mt-16"] $ do
         div_ [class_ "flex flex-col w-[800px] rounded-2xl border border-2"] $ do
           div_ [class_ "grid grid-cols-2 border-b px-8"] do
-            div_ [class_ "flex flex-col gap-2 py-8 border-r"] do
+            div_ [class_ "flex flex-col gap-2 py-8"] do
               img_ [src_ "/assets/svgs/docs.svg", class_ "h-8 w-8"]
               h3_ [class_ "font-bold text-lg"] "Documentation"
               p_ [class_ "text-slate-700"] "Check out our documentation to learn more about using APIToolkit."
-              a_ [href_ "https://www.apitoolkit.io/docs", class_ "text-blue-500"] "Read the docs"
-            div_ [class_ "flex flex-col gap-2 py-4 border-l"] pass
-          div_ [class_ "px-8 py-16 flex items-center gap-6"] do
-            img_ [src_ "/assets/svgs/play.svg", class_ "h-14 w-14"]
-            div_ [] do
-              h3_ [class_ "font-bold text-lg text-blue-500"] "Watch Demo"
-              p_ [class_ "text-slate-500"] "Watch co-founder Antony briefly explain what apitoolkit is and how to use it to stay on top of your APIs."
+              a_ [href_ "https://www.apitoolkit.io/docs", class_ "text-blue-500 flex items-center gap-2"] do
+                img_ [src_ "/assets/svgs/link.svg", class_ "h-8 w-8"]
+                "Read the docs"
+  -- div_ [class_ "flex flex-col gap-2 py-4 border-l"] pass
+  -- div_ [class_ "px-8 py-16 flex items-center gap-6"] do
+  --   img_ [src_ "/assets/svgs/play.svg", class_ "h-14 w-14"]
+  --   div_ [] do
+  --     h3_ [class_ "font-bold text-lg text-blue-500"] "Watch Demo"
+  --     p_ [class_ "text-slate-500"] "Watch co-founder Antony briefly explain what apitoolkit is and how to use it to stay on top of your APIs."
   script_
     [text|
 
