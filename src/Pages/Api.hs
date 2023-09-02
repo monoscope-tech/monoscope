@@ -45,7 +45,7 @@ apiPostH sess pid apiKeyForm = do
       ProjectApiKeys.projectApiKeysByProjectId pid
   let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Created API Key Successfully"]}|]
   case from apiKeyForm of
-    Just v -> pure $ addHeader hxTriggerData $ copyNewApiKey (Just (pApiKey, encryptedKeyB64))
+    Just v -> pure $ addHeader hxTriggerData $ copyNewApiKey (Just (pApiKey, encryptedKeyB64)) True
     Nothing -> pure $ addHeader hxTriggerData $ mainContent pid apiKeys (Just (pApiKey, encryptedKeyB64))
 
 -- | apiGetH renders the api keys list page which includes a modal for creating the apikeys.
@@ -118,7 +118,7 @@ apiKeysPage pid apiKeys = do
 
 mainContent :: Projects.ProjectId -> Vector ProjectApiKeys.ProjectApiKey -> Maybe (ProjectApiKeys.ProjectApiKey, Text) -> Html ()
 mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] $ do
-  copyNewApiKey newKeyM
+  copyNewApiKey newKeyM False
   div_ [class_ "flex flex-col"] $ do
     div_ [class_ "-my-2 overflow-x-auto sm:-mx-6 lg:-mx-8"] $ do
       div_ [class_ "py-2 align-middle inline-block min-w-full sm:px-6 lg:px-8"] $ do
@@ -140,8 +140,8 @@ mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] $ do
                       img_ [src_ "/assets/svgs/revoke.svg", class_ "h-3 w-3 mr-2 inline-block"]
                       span_ [class_ "text-slate-500"] "Revoke"
 
-copyNewApiKey :: Maybe (ProjectApiKeys.ProjectApiKey, Text) -> Html ()
-copyNewApiKey newKeyM =
+copyNewApiKey :: Maybe (ProjectApiKeys.ProjectApiKey, Text) -> Bool -> Html ()
+copyNewApiKey newKeyM hasNext =
   case newKeyM of
     Nothing -> ""
     Just (keyObj, newKey) -> do
@@ -159,7 +159,7 @@ copyNewApiKey newKeyM =
                 div_ [class_ "-mx-2 -my-1.5 flex"] $ do
                   button_
                     [ type_ "button"
-                    , class_ "bg-green-50 px-2 py-1.5 rounded-md text-sm font-medium text-green-800 hover:bg-green-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600"
+                    , class_ "bg-green-500 px-2 py-1.5 text-white rounded-md text-sm font-medium text-green-800 hover:bg-green-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600"
                     , [__|
                       on click
                         if 'clipboard' in window.navigator then
@@ -169,9 +169,18 @@ copyNewApiKey newKeyM =
                         |]
                     ]
                     "Copy Key"
-                  button_
-                    [ type_ "button"
-                    , class_ "ml-3 bg-green-50 px-2 py-1.5 rounded-md text-sm font-medium text-green-800 hover:bg-green-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600"
-                    , [__|on click remove #apiFeedbackSection|]
-                    ]
-                    "Dismiss"
+                  if not hasNext
+                    then do
+                      button_
+                        [ type_ "button"
+                        , class_ "ml-3 bg-green-50 px-2 py-1.5 rounded-md text-sm font-medium text-green-800 hover:bg-green-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600"
+                        , [__|on click remove #apiFeedbackSection|]
+                        ]
+                        "Dismiss"
+                    else do
+                      button_
+                        [ type_ "button"
+                        , class_ "ml-6 font-medium px-2 py-1.5 rounded-md font-medium text-blue-500"
+                        , [__|on click call window.location.reload()|]
+                        ]
+                        "Next"

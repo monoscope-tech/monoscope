@@ -65,7 +65,8 @@ onboardingPage pid hasApikey hasRequest ans = do
         if hasApikey && not hasRequest
           then do
             integrateApiToolkit
-          else completedBanner pid
+          else ""
+        if hasApikey && hasRequest then completedBanner pid else ""
       div_ [class_ "w-full flex justify-center"] $ do
         div_ [class_ "flex flex-col w-[800px] rounded-2xl border border-2"] $ do
           div_ [class_ "w-full px-8 py-4 flex justify-between border-b border-b-2"] $ do
