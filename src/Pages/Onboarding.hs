@@ -56,7 +56,7 @@ onboardingPage pid hasApikey hasRequest ans = do
         h3_ [class_ "text-slate-900 text-4xl font-bold"] "Complete the onboarding checklist"
         div_ [class_ "flex flex-col text-center gap-1 mb-4"] do
           p_ [class_ "text-slate-700 text-[16px]"] "Complete the onboarding checklist below to fully set up APIToolkit."
-          p_ [class_ "text-slate-700 text-[16px]"] "Once completed, you can dismiss getting started from the menu"
+          p_ [class_ "text-slate-700 text-[16px]"] "Once completed, you can go to the dashboard to start using the platform"
         if not hasApikey
           then do
             generateApikey pid
@@ -64,7 +64,7 @@ onboardingPage pid hasApikey hasRequest ans = do
         if hasApikey && not hasRequest
           then do
             integrateApiToolkit
-          else ""
+          else completedBanner
       div_ [class_ "w-full flex justify-center"] $ do
         div_ [class_ "flex flex-col w-[800px] rounded-2xl border border-2"] $ do
           div_ [class_ "w-full px-8 py-4 flex justify-between border-b border-b-2"] $ do
@@ -147,19 +147,19 @@ onboardingPage pid hasApikey hasRequest ans = do
       div_ [class_ "w-full flex justify-center pb-16 mt-16"] $ do
         div_ [class_ "flex flex-col w-[800px] rounded-2xl border border-2"] $ do
           div_ [class_ "grid grid-cols-2 border-b px-8"] do
-            div_ [class_ "flex flex-col gap-2 py-8"] do
+            div_ [class_ "flex flex-col gap-2 py-8 border-r"] do
               img_ [src_ "/assets/svgs/docs.svg", class_ "h-8 w-8"]
               h3_ [class_ "font-bold text-lg"] "Documentation"
               p_ [class_ "text-slate-700"] "Check out our documentation to learn more about using APIToolkit."
               a_ [href_ "https://www.apitoolkit.io/docs", class_ "text-blue-500 flex items-center gap-2"] do
                 img_ [src_ "/assets/svgs/link.svg", class_ "h-8 w-8"]
                 "Read the docs"
-  -- div_ [class_ "flex flex-col gap-2 py-4 border-l"] pass
-  -- div_ [class_ "px-8 py-16 flex items-center gap-6"] do
-  --   img_ [src_ "/assets/svgs/play.svg", class_ "h-14 w-14"]
-  --   div_ [] do
-  --     h3_ [class_ "font-bold text-lg text-blue-500"] "Watch Demo"
-  --     p_ [class_ "text-slate-500"] "Watch co-founder Antony briefly explain what apitoolkit is and how to use it to stay on top of your APIs."
+            -- div_ [class_ "flex flex-col gap-2 py-4 border-l"] pass
+            div_ [class_ "px-8 py-16 flex items-center gap-6 border-l"] do
+              img_ [src_ "/assets/svgs/play.svg", class_ "h-14 w-14"]
+              a_ [href_ "https://calendly.com/tonyalaribe/30min", class_ "flex flex-col"] do
+                span_ [class_ "font-bold text-lg text-blue-500"] "Get Demo"
+                span_ [class_ "text-slate-500"] "Schedule a brief call with co-founder Antony to provide a concise overview of apitoolkit and guide him on its effective utilization for API management."
   script_
     [text|
 
@@ -224,6 +224,15 @@ integrateApiToolkit =
         tabContentSymfony
         tabContentDotNet
         tabContentFastify
+completedBanner :: Html ()
+completedBanner =
+  div_ [class_ "w-[800px] bg-gray-200 mx-auto rounded-lg border-8 border-white shadow-lg mb-10"] do
+    div_ [class_ "w-full p-8 bg-gray-100  rounded"] do
+      div_ [class_ "flex w-full justify-center gap-4 items-center mb-2"] do
+        span_ [class_ "text-blue-500 font-light text-2xl"] "Done"
+        h3_ [class_ "font-bold text-2xl"] "Onboarding Completed"
+      div_ [class_ "pb-2 flex justify-center mt-8"] do
+        img_ [src_ "/assets/svgs/check_complete.svg", class_ "h-24 w-24"]
 
 tabContentExpress :: Html ()
 tabContentExpress =
@@ -595,6 +604,7 @@ surveyModal pid = do
             ]
             $ do
               div_ [class_ "p-6 flex flex-col gap-4 overflow-y-auto", style_ "height:50vh; width:100%"] $ do
+                h3_ [class_ "text-green-500 text-lg text-center"] "Project has been created succesfully, but please complete this short survey before you continue"
                 div_ [class_ "flex flex-col gap-2"] do
                   label_ [Lucid.for_ "stack", class_ "font-bold"] "Which web framework do you use?"
                   select_ [id_ "stack", name_ "stack", required_ "required", class_ "px-4 py-2"] $ do
