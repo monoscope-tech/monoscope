@@ -542,7 +542,7 @@ stackOptions =
   , ("laravel", "PHP Laravel")
   , ("symfony", "PHP Symfony")
   , ("flask", "Flask")
-   , ("nest", "Nest Js")
+  , ("nest", "Nest Js")
   , ("springboot", "Springboot")
   , ("rails", "Ruby on rails")
   , ("django", "Django")
@@ -559,10 +559,9 @@ functionalityOptions =
 
 dataLocationOptions :: [(T.Text, T.Text)]
 dataLocationOptions =
-  [ 
-   ("asia", "Asia")
+  [ ("asia", "Asia")
   , ("eu", "EU")
-  ,("us", "US")
+  , ("us", "US")
   ]
 
 foundUsFromOptions :: [(T.Text, T.Text)]
@@ -578,7 +577,7 @@ surveyModal :: Projects.ProjectId -> Html ()
 surveyModal pid = do
   div_
     [ style_ "z-index:99999"
-    , class_ "fixed hidden pt-24 justify-center z-50 w-full p-4 bg-gray-300 bg-opacity-75 overflow-y-auto inset-0 h-full max-h-full"
+    , class_ "fixed pt-24 justify-center z-50 w-full p-4 bg-gray-300 bg-opacity-75 overflow-y-auto inset-0 h-full max-h-full"
     , id_ "surveyDialog"
     ]
     $ do
@@ -598,7 +597,7 @@ surveyModal pid = do
               div_ [class_ "p-6 flex flex-col gap-4 overflow-y-auto", style_ "height:50vh; width:100%"] $ do
                 div_ [class_ "flex flex-col gap-2"] do
                   label_ [Lucid.for_ "stack", class_ "font-bold"] "Which web framework do you use?"
-                  select_ [id_ "stack", name_ "stack", required_ "required"] $ do
+                  select_ [id_ "stack", name_ "stack", required_ "required", class_ "px-4 py-2"] $ do
                     forM_ stackOptions $ \(value, label) ->
                       option_ [value_ value] (toHtml label)
                 div_ [class_ "flex flex-col gap-2"] do
