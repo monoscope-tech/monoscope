@@ -22,8 +22,9 @@ import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
 import Web.FormUrlEncoded (FromForm)
 
-newtype GenerateAPIKeyForm = GenerateAPIKeyForm
+data GenerateAPIKeyForm = GenerateAPIKeyForm
   { title :: Text
+  , from :: Maybe Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
@@ -36,14 +37,15 @@ apiPostH sess pid apiKeyForm = do
   let encryptedKey = ProjectApiKeys.encryptAPIKey (encodeUtf8 $ env.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
   let encryptedKeyB64 = B64.encodeBase64 encryptedKey
   let keyPrefix = T.take 8 encryptedKeyB64
-
   pApiKey <- liftIO $ ProjectApiKeys.newProjectApiKeys pid projectKeyUUID (title apiKeyForm) keyPrefix
   apiKeys <- liftIO $
     withPool pool $ do
       ProjectApiKeys.insertProjectApiKey pApiKey
       ProjectApiKeys.projectApiKeysByProjectId pid
   let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Created API Key Successfully"]}|]
-  pure $ addHeader hxTriggerData $ mainContent pid apiKeys (Just (pApiKey, encryptedKeyB64))
+  case from apiKeyForm of
+    Just v -> pure $ addHeader hxTriggerData $ copyNewApiKey (Just (pApiKey, encryptedKeyB64)) True
+    Nothing -> pure $ addHeader hxTriggerData $ mainContent pid apiKeys (Just (pApiKey, encryptedKeyB64))
 
 -- | apiGetH renders the api keys list page which includes a modal for creating the apikeys.
 apiGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
@@ -115,39 +117,7 @@ apiKeysPage pid apiKeys = do
 
 mainContent :: Projects.ProjectId -> Vector ProjectApiKeys.ProjectApiKey -> Maybe (ProjectApiKeys.ProjectApiKey, Text) -> Html ()
 mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] $ do
-  case newKeyM of
-    Nothing -> ""
-    Just (keyObj, newKey) -> do
-      div_ [id_ "apiFeedbackSection", class_ "pb-8"] $ do
-        div_ [class_ "rounded-md bg-green-50 p-4"] $ do
-          div_ [class_ "flex"] $ do
-            div_ [class_ "flex-shrink-0"] $ do
-              img_ [class_ "h-5 w-5 text-green-400", src_ "/assets/svgs/check_circle.svg"]
-            div_ [class_ "ml-3"] $ do
-              h3_ [class_ "text-sm font-medium text-green-800"] "API Key was generated successfully"
-              div_ [class_ "mt-2 text-sm text-green-700"] $ do
-                p_ "Please copy the generated APIKey as you would not be able to view it anymore after this message."
-                strong_ [class_ "block pt-2", id_ "newKey"] $ toHtml newKey
-              div_ [class_ "mt-4"] $ do
-                div_ [class_ "-mx-2 -my-1.5 flex"] $ do
-                  button_
-                    [ type_ "button"
-                    , class_ "bg-green-50 px-2 py-1.5 rounded-md text-sm font-medium text-green-800 hover:bg-green-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600"
-                    , [__| 
-                      on click 
-                        if 'clipboard' in window.navigator then 
-                          call navigator.clipboard.writeText(#newKey's innerText)
-                          send successToast(value:['API Key has been added to the Clipboard']) to <body/>
-                        end
-                        |]
-                    ]
-                    "Copy Key"
-                  button_
-                    [ type_ "button"
-                    , class_ "ml-3 bg-green-50 px-2 py-1.5 rounded-md text-sm font-medium text-green-800 hover:bg-green-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600"
-                    , [__|on click remove #apiFeedbackSection|]
-                    ]
-                    "Dismiss"
+  copyNewApiKey newKeyM False
   div_ [class_ "flex flex-col"] $ do
     div_ [class_ "-my-2 overflow-x-auto sm:-mx-6 lg:-mx-8"] $ do
       div_ [class_ "py-2 align-middle inline-block min-w-full sm:px-6 lg:px-8"] $ do
@@ -165,6 +135,51 @@ mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] $ do
                   td_ [class_ "px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900"] $ toHtml $ apiKey.title
                   td_ [class_ "px-6 py-4 whitespace-nowrap text-sm text-gray-500"] $ toHtml $ apiKey.keyPrefix <> "**********"
                   td_ [class_ "px-6 py-4 whitespace-nowrap text-right text-sm font-medium"] $ do
-                    a_ [class_ "text-indigo-600 hover:text-indigo-900", href_ $ "/p/" <>  pid.toText <> "/api/id/delete"] $ do
+                    a_ [class_ "text-indigo-600 hover:text-indigo-900", href_ $ "/p/" <> pid.toText <> "/api/id/delete"] $ do
                       img_ [src_ "/assets/svgs/revoke.svg", class_ "h-3 w-3 mr-2 inline-block"]
                       span_ [class_ "text-slate-500"] "Revoke"
+
+copyNewApiKey :: Maybe (ProjectApiKeys.ProjectApiKey, Text) -> Bool -> Html ()
+copyNewApiKey newKeyM hasNext =
+  case newKeyM of
+    Nothing -> ""
+    Just (keyObj, newKey) -> do
+      div_ [id_ "apiFeedbackSection", class_ "pb-8"] $ do
+        div_ [class_ "rounded-md bg-green-50 p-4"] $ do
+          div_ [class_ "flex"] $ do
+            div_ [class_ "flex-shrink-0"] $ do
+              img_ [class_ "h-5 w-5 text-green-400", src_ "/assets/svgs/check_circle.svg"]
+            div_ [class_ "ml-3"] $ do
+              h3_ [class_ "text-sm font-medium text-green-800"] "API Key was generated successfully"
+              div_ [class_ "mt-2 text-sm text-green-700"] $ do
+                p_ "Please copy the generated APIKey as you would not be able to view it anymore after this message."
+                strong_ [class_ "block pt-2", id_ "newKey"] $ toHtml newKey
+              div_ [class_ "mt-4"] $ do
+                div_ [class_ "-mx-2 -my-1.5 flex"] $ do
+                  button_
+                    [ type_ "button"
+                    , class_ "bg-green-500 px-2 py-1.5 text-white rounded-md text-sm font-medium text-green-800 hover:bg-green-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600"
+                    , [__|
+                      on click
+                        if 'clipboard' in window.navigator then
+                          call navigator.clipboard.writeText(#newKey's innerText)
+                          send successToast(value:['API Key has been added to the Clipboard']) to <body/>
+                        end
+                        |]
+                    ]
+                    "Copy Key"
+                  if not hasNext
+                    then do
+                      button_
+                        [ type_ "button"
+                        , class_ "ml-3 bg-green-50 px-2 py-1.5 rounded-md text-sm font-medium text-green-800 hover:bg-green-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-600"
+                        , [__|on click remove #apiFeedbackSection|]
+                        ]
+                        "Dismiss"
+                    else do
+                      button_
+                        [ type_ "button"
+                        , class_ "ml-6 font-medium px-2 py-1.5 rounded-md font-medium text-blue-500"
+                        , [__|on click call window.location.reload()|]
+                        ]
+                        "Next"

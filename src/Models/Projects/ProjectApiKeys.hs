@@ -12,6 +12,7 @@ module Models.Projects.ProjectApiKeys (
   newProjectApiKeys,
   insertProjectApiKey,
   projectApiKeysByProjectId,
+  countProjectApiKeysByProjectId,
   getProjectApiKey,
 ) where
 
@@ -24,10 +25,10 @@ import Data.Time qualified as Time
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity
-import Database.PostgreSQL.Entity.DBT (QueryNature (Select), queryOne)
+import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, queryOne)
 import Database.PostgreSQL.Entity.Internal.QQ (field)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
-import Database.PostgreSQL.Simple (FromRow)
+import Database.PostgreSQL.Simple (FromRow, Only (Only))
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
@@ -75,6 +76,15 @@ insertProjectApiKey = insert @ProjectApiKey
 
 projectApiKeysByProjectId :: Projects.ProjectId -> DBT IO (Vector ProjectApiKey)
 projectApiKeysByProjectId = selectManyByField @ProjectApiKey [field| project_id |]
+
+countProjectApiKeysByProjectId :: Projects.ProjectId -> DBT IO Int
+countProjectApiKeysByProjectId pid = do
+  result <- query Select q pid
+  case result of
+    [Only count] -> return count
+    v -> return $ length v
+ where
+  q = [sql| SELECT count(*) FROM projects.project_api_keys WHERE project_id=? |]
 
 getProjectApiKey :: ProjectApiKeyId -> DBT IO (Maybe ProjectApiKey)
 getProjectApiKey = queryOne Select q

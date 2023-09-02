@@ -66,14 +66,7 @@ endpointListGetH sess pid layoutM ackdM archivedM sortM hxRequestM hxBoostedM hx
           , -- , sort = fromMaybe "" sortM
             sort = ""
           }
-  let elementBelowTabs =
-        div_ [class_ "grid grid-cols-5 card-round", id_ "endpointListBelowTab", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $
-          endpointList' paramInput currTime pid endpointStats
-
-  case (layoutM, hxRequestM, hxBoostedM) of
-    (_, Just "true", Just "false") -> pure elementBelowTabs
-    (_, Just "true", Nothing) -> pure elementBelowTabs
-    _ -> pure $ bodyWrapper bwconf $ endpointListPage paramInput pid currTime endpointStats
+  pure $ bodyWrapper bwconf $ endpointListPage paramInput pid currTime endpointStats
 
 endpointListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Endpoints.EndpointRequestStats -> Html ()
 endpointListPage paramInput pid currTime endpoints = div_ [class_ "container mx-auto  px-4 pt-10 pb-24"] $ do
@@ -83,7 +76,7 @@ endpointListPage paramInput pid currTime endpoints = div_ [class_ "container mx-
     a_ [class_ $ "inline-block py-2 " <> if paramInput.ackd && not paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&ackd=true&archived=false"] "Active"
     a_ [class_ $ "inline-block  py-2 " <> if not paramInput.ackd && not paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&ackd=false&archived=false"] "Inbox"
     a_ [class_ $ "inline-block  py-2 " <> if paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&archived=true"] "Archived"
-  div_ [class_ "grid grid-cols-5 card-round", id_ "endpointListBelowTab", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $ endpointList' paramInput currTime pid endpoints
+  div_ [class_ "grid grid-cols-5 card-round", id_ "anomalyListBelowTab", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $ endpointList' paramInput currTime pid endpoints
 
 endpointList' :: ParamInput -> UTCTime -> Projets.ProjectId -> Vector Endpoints.EndpointRequestStats -> Html ()
 endpointList' paramInput currTime pid enps = form_ [class_ "col-span-5 bg-white divide-y ", id_ "anomalyListForm"] $ do

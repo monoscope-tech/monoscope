@@ -1,9 +1,8 @@
-{-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 module Server (app) where
 
-import GitHash
 import Colog (LogAction)
 import Config (DashboardM, ctxToHandler, pool)
 import Config qualified
@@ -18,6 +17,7 @@ import Database.PostgreSQL.Entity.DBT (QueryNature (Select), queryOne, withPool)
 import Database.PostgreSQL.Simple (Connection)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Deriving.Aeson qualified as DAE
+import GitHash
 import Lucid
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
@@ -38,10 +38,12 @@ import Pages.GenerateSwagger qualified as GenerateSwagger
 import Pages.Log qualified as Log
 import Pages.ManualIngestion (RequestMessageForm)
 import Pages.ManualIngestion qualified as ManualIngestion
+import Pages.Onboarding qualified as Onboarding
 import Pages.Projects.CreateProject qualified as CreateProject
 import Pages.Projects.ListProjects qualified as ListProjects
 import Pages.Projects.ManageMembers (ManageMembersForm)
 import Pages.Projects.ManageMembers qualified as ManageMembers
+import Pages.Projects.Survey qualified as Survey
 import Pages.RedactedFields (RedactFieldForm)
 import Pages.RedactedFields qualified as RedactedFields
 import Relude
@@ -67,7 +69,7 @@ type QPB a = QueryParam a Bool
 
 type QPI a = QueryParam a Int
 
-type QEID a =  QueryParam a Endpoints.EndpointId
+type QEID a = QueryParam a Endpoints.EndpointId
 
 type ProjectId = Capture "projectID" Projects.ProjectId
 
@@ -77,12 +79,13 @@ type ProtectedAPI =
   UVerb 'GET '[HTML] GetOrRedirect
     :<|> "p" :> "new" :> Get '[HTML] (Html ()) -- p represents project
     :<|> "p" :> "new" :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
-    :<|> "p" :> ProjectId :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "dashboard" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "settings" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "delete" :> Get '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
     :<|> "p" :> ProjectId :> "manage_members" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "manage_members" :> ReqBody '[FormUrlEncoded] ManageMembersForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-    :<|> "p" :> ProjectId :> "endpoints" :> QPT "layout" :> QPT "ackd" :> QPT "archived" :> QPT "sort" :> HXRequest :> HXBoosted :> HXCurrentURL :>  Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "endpoints" :> QPT "layout" :> QPT "ackd" :> QPT "archived" :> QPT "sort" :> HXRequest :> HXBoosted :> HXCurrentURL :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "endpoints" :> Capture "endpoints_id" Endpoints.EndpointId :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "subpage" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "apis" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Api.GenerateAPIKeyForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
@@ -107,6 +110,7 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "documentation" :> ReqBody '[FormUrlEncoded] SwaggerForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "documentation" :> "save" :> ReqBody '[JSON] SaveSwaggerForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "generate_swagger" :> Get '[JSON] AE.Value
+    :<|> "p" :> ProjectId :> "survey" :> ReqBody '[FormUrlEncoded] Survey.SurveyForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
 
 type PublicAPI =
   "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
@@ -147,6 +151,7 @@ protectedServer sess =
   ListProjects.listProjectsGetH sess
     :<|> CreateProject.createProjectGetH sess
     :<|> CreateProject.createProjectPostH sess
+    :<|> Onboarding.onboardingGetH sess
     :<|> Dashboard.dashboardGetH sess
     :<|> CreateProject.projectSettingsGetH sess
     :<|> CreateProject.deleteProjectGetH sess
@@ -177,6 +182,7 @@ protectedServer sess =
     :<|> Documentation.documentationPostH sess
     :<|> Documentation.documentationPutH sess
     :<|> GenerateSwagger.generateGetH sess
+    :<|> Survey.surveyPutH sess
 
 publicServer :: ServerT PublicAPI DashboardM
 publicServer =
@@ -217,6 +223,6 @@ statusH = do
       , gitCommitDate = toText $ giCommitDate gi
       }
 
-pingH :: DashboardM Text 
-pingH = do 
+pingH :: DashboardM Text
+pingH = do
   pure "pong"
