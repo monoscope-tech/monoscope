@@ -37,7 +37,6 @@ apiPostH sess pid apiKeyForm = do
   let encryptedKey = ProjectApiKeys.encryptAPIKey (encodeUtf8 $ env.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
   let encryptedKeyB64 = B64.encodeBase64 encryptedKey
   let keyPrefix = T.take 8 encryptedKeyB64
-  print (from apiKeyForm)
   pApiKey <- liftIO $ ProjectApiKeys.newProjectApiKeys pid projectKeyUUID (title apiKeyForm) keyPrefix
   apiKeys <- liftIO $
     withPool pool $ do
