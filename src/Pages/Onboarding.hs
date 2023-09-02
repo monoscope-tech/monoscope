@@ -537,6 +537,14 @@ tabs =
 stackOptions :: [(T.Text, T.Text)]
 stackOptions =
   [ ("expressjs", "Express.js")
+  , ("gin", "Go Gin")
+  , ("fiber", "Go fiber")
+  , ("laravel", "PHP Laravel")
+  , ("symfony", "PHP Symfony")
+  , ("flask", "Flask")
+   , ("nest", "Nest Js")
+  , ("springboot", "Springboot")
+  , ("rails", "Ruby on rails")
   , ("django", "Django")
   , (".net", ".NET")
   ]
@@ -546,13 +554,15 @@ functionalityOptions =
   [ ("monitoring", "API monitory")
   , ("documentation", "Automative API documentation")
   , ("anomaly_detection", "Anomaly detection")
+  , ("testing", "Testing")
   ]
 
 dataLocationOptions :: [(T.Text, T.Text)]
 dataLocationOptions =
-  [ ("us", "US")
-  , ("asia", "Asia")
+  [ 
+   ("asia", "Asia")
   , ("eu", "EU")
+  ,("us", "US")
   ]
 
 foundUsFromOptions :: [(T.Text, T.Text)]
@@ -560,6 +570,8 @@ foundUsFromOptions =
   [ ("twitter", "Twitter")
   , ("google", "Google")
   , ("linkedin", "LinkedIn")
+  , ("reddit", "Reddit")
+  , ("other", "Other")
   ]
 
 surveyModal :: Projects.ProjectId -> Html ()
