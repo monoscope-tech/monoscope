@@ -563,9 +563,9 @@ stackOptions =
 
 functionalityOptions :: [(T.Text, T.Text)]
 functionalityOptions =
-  [ ("monitoring", "API monitory")
-  , ("documentation", "Automative API documentation")
-  , ("anomaly_detection", "Anomaly detection")
+  [ ("monitoring", "API Monitoring")
+  , ("documentation", "Automatic API Documentation")
+  , ("anomaly_detection", "Anomaly Detection")
   , ("testing", "Testing")
   ]
 
