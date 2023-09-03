@@ -231,10 +231,10 @@ completedBanner pid =
   div_ [class_ "w-[800px] bg-gray-200 mx-auto rounded-lg border-8 border-white shadow-lg mb-10"] do
     div_ [class_ "w-full px-8 py-12 bg-gray-100  rounded"] do
       div_ [class_ "flex w-full justify-center gap-4 items-center mb-2"] do
-        span_ [class_ "text-blue-500 font-light text-2xl"] "Done"
+        span_ [class_ "text-blue-500 pr-4 border-r border-r-2 border-r-blue-500 text-2xl"] "Done"
         h3_ [class_ "font-bold text-2xl"] "Onboarding Completed"
       div_ [class_ "pb-2 flex items-center mt-8 flex-col gap-4 text-blue-500 font-medium"] do
-        a_ [href_ $ "/p/" <> pid.toText <> "/dashboard"] "Go to the dashboard"
+        a_ [href_ $ "/p/" <> pid.toText <> "/"] "Go to the dashboard"
         img_ [src_ "/assets/svgs/check_complete.svg", class_ "h-24 w-24"]
 
 tabContentExpress :: Html ()
