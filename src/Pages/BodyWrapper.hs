@@ -14,8 +14,8 @@ import Relude
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu pid =
-  [ ("Get started", "/p/" <> pid.toText <> "/", "#onboarding")
-  , ("Dashboard", "/p/" <> pid.toText <> "/dashboard", "#dashboard")
+  [ ("Get started", "/p/" <> pid.toText <> "/onboarding", "#onboarding")
+  , ("Dashboard", "/p/" <> pid.toText <> "/", "#dashboard")
   , ("Endpoints", "/p/" <> pid.toText <> "/endpoints", "#endpoint")
   , ("Anomalies", "/p/" <> pid.toText <> "/anomalies?ackd=false&archived=false", "#anomalies")
   , ("API Log Explorer", "/p/" <> pid.toText <> "/log_explorer", "#logs")

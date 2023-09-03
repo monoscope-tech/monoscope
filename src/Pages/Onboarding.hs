@@ -187,7 +187,7 @@ generateApikey pid =
   div_ [class_ "w-[800px] bg-gray-200 mx-auto rounded-lg border-8 border-white shadow-lg mb-10"] do
     div_ [class_ "w-full p-8"] do
       div_ [class_ "flex w-full justify-center gap-4 items-center mb-10"] do
-        span_ [class_ "text-blue-500 font-light text-2xl"] "Next Up"
+        span_ [class_ "text-blue-500 pr-4 border-r border-r-2 border-r-blue-500 text-2xl"] "Next Up"
         h3_ [class_ "font-bold text-2xl"] "Generate API Key"
       div_ [id_ "main-content2"] do
         form_
@@ -215,7 +215,7 @@ integrateApiToolkit =
   div_ [class_ "w-[800px] bg-gray-200 mx-auto rounded-lg border-8 border-white shadow-lg mb-10"] do
     div_ [class_ "w-full p-8 bg-gray-100  rounded"] do
       div_ [class_ "flex w-full justify-center gap-4 items-center mb-2"] do
-        span_ [class_ "text-blue-500 font-light text-2xl"] "Next Up"
+        span_ [class_ "text-blue-500 pr-4 border-r border-r-2 border-r-blue-500 text-2xl"] "Next Up"
         h3_ [class_ "font-bold text-2xl"] "Integrate APIToolkit"
       div_ [class_ "pb-2"] do
         div_ [class_ "font-bold text-center text-white border-b border-gray-200"] $ do
