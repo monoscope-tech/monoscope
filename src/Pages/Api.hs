@@ -1,4 +1,4 @@
-module Pages.Api (apiGetH, apiPostH, GenerateAPIKeyForm (..)) where
+module Pages.Api (apiGetH, apiPostH, apiDeleteH, GenerateAPIKeyForm (..)) where
 
 import Config
 import Data.Aeson (encode)
@@ -13,9 +13,11 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript
+import Models.Projects.ProjectApiKeys (ProjectApiKey (ProjectApiKey))
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
+import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
 import Servant (Headers, addHeader)
@@ -46,6 +48,20 @@ apiPostH sess pid apiKeyForm = do
   case from apiKeyForm of
     Just v -> pure $ addHeader hxTriggerData $ copyNewApiKey (Just (pApiKey, encryptedKeyB64)) True
     Nothing -> pure $ addHeader hxTriggerData $ mainContent pid apiKeys (Just (pApiKey, encryptedKeyB64))
+
+apiDeleteH :: Sessions.PersistentSession -> Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> DashboardM (Headers '[HXTrigger] (Html ()))
+apiDeleteH sess pid keyid = do
+  pool <- asks pool
+  env <- asks env
+  res <- liftIO $
+    withPool pool $ do
+      ProjectApiKeys.revokeApiKey keyid
+
+  let hxTriggerData =
+        if res > 0
+          then decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Revoked API Key Successfully"]}|]
+          else decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Something went wrong"]}|]
+  pure $ addHeader hxTriggerData $ span_ ""
 
 -- | apiGetH renders the api keys list page which includes a modal for creating the apikeys.
 apiGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
@@ -131,13 +147,19 @@ mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] $ do
                   span_ [class_ "sr-only"] "Edit"
             tbody_ [class_ "bg-white divide-y divide-gray-200"] $ do
               apiKeys & mapM_ \apiKey -> do
-                tr_ $ do
+                tr_ [id_ apiKey.title] $ do
                   td_ [class_ "px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900"] $ toHtml $ apiKey.title
                   td_ [class_ "px-6 py-4 whitespace-nowrap text-sm text-gray-500"] $ toHtml $ apiKey.keyPrefix <> "**********"
                   td_ [class_ "px-6 py-4 whitespace-nowrap text-right text-sm font-medium"] $ do
-                    a_ [class_ "text-indigo-600 hover:text-indigo-900", href_ $ "/p/" <> pid.toText <> "/api/id/delete"] $ do
-                      img_ [src_ "/assets/svgs/revoke.svg", class_ "h-3 w-3 mr-2 inline-block"]
-                      span_ [class_ "text-slate-500"] "Revoke"
+                    button_
+                      [ class_ "text-indigo-600 hover:text-indigo-900"
+                      , hxDelete_ $ "/p/" <> pid.toText <> "/apis/" <> apiKey.id.toText
+                      , hxConfirm_ "Are you sure you want to revome this API Key?"
+                      , hxTarget_ $ "#" <> apiKey.title
+                      ]
+                      $ do
+                        img_ [src_ "/assets/svgs/revoke.svg", class_ "h-3 w-3 mr-2 inline-block"]
+                        span_ [class_ "text-slate-500"] "Revoke"
 
 copyNewApiKey :: Maybe (ProjectApiKeys.ProjectApiKey, Text) -> Bool -> Html ()
 copyNewApiKey newKeyM hasNext =

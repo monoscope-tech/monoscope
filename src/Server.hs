@@ -22,6 +22,8 @@ import Lucid
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Types qualified as Fields (FieldId)
+import Models.Projects.ProjectApiKeys (ProjectApiKey)
+import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Network.Wai (Request)
@@ -91,6 +93,7 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "endpoints" :> Capture "endpoints_id" Endpoints.EndpointId :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "subpage" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "apis" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Api.GenerateAPIKeyForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
+    :<|> "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Delete '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "manual_ingest" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "manual_ingest" :> ReqBody '[FormUrlEncoded] RequestMessageForm :> Post '[HTML] (Html ())
@@ -164,6 +167,7 @@ protectedServer sess =
     :<|> EndpointDetails.endpointDetailsH sess
     :<|> Api.apiGetH sess
     :<|> Api.apiPostH sess
+    :<|> Api.apiDeleteH sess
     :<|> EndpointDetails.fieldDetailsPartialH sess
     :<|> ManualIngestion.manualIngestGetH sess
     :<|> ManualIngestion.manualIngestPostH sess
