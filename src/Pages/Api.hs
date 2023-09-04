@@ -9,6 +9,7 @@ import Data.Text as T
 import Data.UUID as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector (Vector)
+import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import Lucid.Htmx
@@ -146,8 +147,8 @@ mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] $ do
                 th_ [class_ "relative px-6 py-3"] $ do
                   span_ [class_ "sr-only"] "Edit"
             tbody_ [class_ "bg-white divide-y divide-gray-200"] $ do
-              apiKeys & mapM_ \apiKey -> do
-                tr_ [id_ apiKey.title] $ do
+              V.indexed apiKeys & mapM_ \(i, apiKey) -> do
+                tr_ [id_ $ "key" <> show i] $ do
                   td_ [class_ "px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900"] $ toHtml $ apiKey.title
                   td_ [class_ "px-6 py-4 whitespace-nowrap text-sm text-gray-500"] $ toHtml $ apiKey.keyPrefix <> "**********"
                   td_ [class_ "px-6 py-4 whitespace-nowrap text-right text-sm font-medium"] $ do
@@ -155,7 +156,7 @@ mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] $ do
                       [ class_ "text-indigo-600 hover:text-indigo-900"
                       , hxDelete_ $ "/p/" <> pid.toText <> "/apis/" <> apiKey.id.toText
                       , hxConfirm_ "Are you sure you want to revome this API Key?"
-                      , hxTarget_ $ "#" <> apiKey.title
+                      , hxTarget_ $ "#key" <> show i
                       ]
                       $ do
                         img_ [src_ "/assets/svgs/revoke.svg", class_ "h-3 w-3 mr-2 inline-block"]
