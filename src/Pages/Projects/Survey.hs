@@ -20,7 +20,7 @@ import Relude
 import Web.FormUrlEncoded (FromForm)
 
 data SurveyForm = SurveyForm
-  { stack :: Text
+  { stack :: [Text]
   , functionality :: [Text]
   , dataLocation :: Text
   , foundUsFrom :: Text
@@ -33,8 +33,6 @@ surveyPutH sess pid survey = do
   pool <- asks pool
   env <- asks env
   let jsonBytes = encode survey
-  print survey
-  print jsonBytes
   res <- liftIO $ withPool pool $ execute Update [sql| update projects.projects set questions= ? where id=? |] (jsonBytes, pid)
   let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","successToast": ["Thanks for taking the survey"]}|]
   pure $ addHeader hxTriggerData ""
