@@ -12,6 +12,7 @@ import Relude
 import Servant
 import Text.Regex.TDFA ((=~))
 
+
 -- Added only for satisfying the tests
 instance Eq ZonedTime where
   (==) _ _ = True

@@ -49,7 +49,16 @@ import Relude hiding (many, some)
 import Utils (DBField (MkDBField), quoteTxt)
 import Witch (from)
 
-data SDKTypes = GoGin | GoBuiltIn | PhpLaravel | PhpSymfony | JsExpress | JsNest | JavaSpringBoot | DotNet
+data SDKTypes
+  = GoGin
+  | GoBuiltIn
+  | PhpLaravel
+  | PhpSymfony
+  | JsExpress
+  | JsNest
+  | JavaSpringBoot
+  | DotNet
+  | PythonFastApi
   deriving stock (Show, Generic, Read, Eq)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SDKTypes
 
@@ -90,6 +99,7 @@ normalizeUrlPath JsExpress statusCode _method urlPath = removeQueryParams status
 normalizeUrlPath JavaSpringBoot statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath JsNest statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath DotNet statusCode _method urlPath = removeQueryParams statusCode urlPath
+normalizeUrlPath PythonFastApi statusCode _method urlPath = removeQueryParams statusCode urlPath
 
 -- removeQueryParams ...
 -- >>> removeQueryParams 200 "https://apitoolkit.io/abc/:bla?q=abc"

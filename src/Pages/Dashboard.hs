@@ -31,6 +31,13 @@ import System.Clock
 import Text.Interpolation.Nyan
 import Utils (deleteParam, mIcon_)
 import Witch (from)
+import Data.Time (ZonedTime, UTCTime, getCurrentTime, utcToZonedTime, utc, addUTCTime, secondsToNominalDiffTime, formatTime)
+import Lucid.Hyperscript (__)
+import Data.Default (def)
+import Data.Time.Format (defaultTimeLocale)
+import System.Clock
+import Fmt
+import Pages.Charts.Charts qualified as C
 
 timePickerItems :: [(Text, Text)]
 timePickerItems =
@@ -161,7 +168,7 @@ dashboardPage pid paramInput currTime projectStats reqLatenciesRolledByStepsJ da
     |]
 
 dStats :: Projects.ProjectId -> Projects.ProjectRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
-dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledByStepsJ dateRange = do
+dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledByStepsJ dateRange@(from, to) = do
   let _ = min
   when (projReqStats.totalRequests == 0) do
     section_ [class_ "card-round p-5 sm:p-10 space-y-4 text-lg"] $ do
@@ -194,6 +201,7 @@ dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledBySte
               option_ [class_ "text-2xl font-normal"] "Throughput by Status Code"
             div_ [class_ "h-64 "] do
               Charts.throughput pid "reqsByStatusCode" Nothing (Just Charts.GBStatusCode) 120 Nothing True dateRange Nothing
+              Charts.lazy [C.PIdE pid, C.GByE C.GBStatusCode, C.SlotsE 120, C.ShowLegendE ]
 
         div_ [class_ "flex-1 card-round p-3"] $ do
           div_ [class_ "p-4 space-y-6"] $ do
