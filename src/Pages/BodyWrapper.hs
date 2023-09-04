@@ -123,7 +123,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child =
         body_ [class_ "text-gray-900 h-full w-full"] $ do
           div_
             [ style_ "z-index:99999"
-            , class_ "fixed pt-24 lg:hidden justify-center z-50 w-full p-4 bg-gray-300 overflow-y-auto inset-0 h-full max-h-full"
+            , class_ "fixed pt-24 sm:hidden justify-center z-50 w-full p-4 bg-gray-50 overflow-y-auto inset-0 h-full max-h-full"
             , tabindex_ "-1"
             ]
             $ do
@@ -134,15 +134,17 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child =
                 $ do
                   -- Modal content
                   div_
-                    [ class_ "bg-white rounded-lg shadow w-full"
+                    [ class_ "bg-white rounded-lg drop-shadow-md border-1 w-full"
                     ]
                     $ do
                       div_ [class_ "flex items-start justify-between p-6 space-x-2  border-b rounded-t"] $ do
-                        h3_ [class_ "text-2xl font-bold text-gray-900"] "Desktop Only!"
+                        h3_ [class_ "text-3xl font-bold text-gray-900"] "Only Desktop Browsers are Supported for now!"
                       -- Modal body
                       div_ [class_ "w-full"] $ do
-                        div_ [class_ "p-6", style_ "height:50vh; width:100%"] $ do
-                          p_ [class_ "text-lg font-semibold"] "Currently, our app is specifically designed to be used on desktop browsers. We're diligently working on expanding its availability to other platforms, and we'll keep you updated as we make progress. In the meantime, we appreciate your understanding and look forward to bringing you an enhanced experience across various devices in the near future."
+                        div_ [class_ "p-6 text-xl space-y-6", style_ "height:50vh; width:100%"] $ do
+                          p_ [class_ ""] "Due to the heavy visualization usecases we're solving, apitoolkit is not supported on mobile, and can only be used from a desktop browser at the moment."
+                          p_ [class_ ""] "We're diligently working on expanding its availability to other platforms, and we'll keep you updated as we make progress. "
+                          p_ [] "Don't hesitate to let us know if this is a very important feature for your team, then we can prioritize it"
                       -- Modal footer
                       div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] pass
           section_ [class_ "flex flex-row h-screen overflow-hidden"] $ do

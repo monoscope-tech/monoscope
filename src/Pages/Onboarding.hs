@@ -95,7 +95,7 @@ onboardingPage pid hasApikey hasRequest ans = do
                       p_ [class_ "font-semibold"] "Generate an API key"
                       span_ [class_ "text-slate-500"] "The API key is used to authenticate requests"
                     img_ [src_ "/assets/svgs/down_chevron.svg", class_ "h-6 w-6"]
-              div_ [class_ "bg-gray-100 hidden w-full py-16 px-24", id_ "addAPIKey"] do
+              div_ [class_ "bg-slate-100 hidden w-full py-16 px-24", id_ "addAPIKey"] do
                 if hasApikey
                   then do
                     p_ [class_ "text-green-500 text-center"] "You have generated an API key"
@@ -110,9 +110,9 @@ onboardingPage pid hasApikey hasRequest ans = do
                           div_ [class_ "bg-white rounded-lg px-4 pt-5 pb-4 text-left"] $ do
                             div_ [class_ "sm:flex sm:items-start"] $ do
                               div_ [class_ "mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left grow"] $ do
-                                h3_ [class_ "text-lg font-medium text-gray-900", id_ "modal-title"] "Enter API key title"
+                                h3_ [class_ "text-lg font-medium text-slate-900", id_ "modal-title"] "Enter API key title"
                                 div_ [class_ "mt-2 space-y-2"] $ do
-                                  p_ [class_ "text-sm text-gray-500"] do
+                                  p_ [class_ "text-sm text-slate-500"] do
                                     "Please input a title for your API Key. You can find all API keys "
                                     a_ [href_ $ "/p/" <> pid.toText <> "/apis", class_ "text-blue-500"] "here"
                                   div_ $ do
@@ -130,13 +130,13 @@ onboardingPage pid hasApikey hasRequest ans = do
                     p_ [class_ "font-semibold"] "Integrate APIToolkit to your app"
                     span_ [class_ "text-slate-500"] "Integrate apitoolkit using any of our SDKs to start sending request."
                   img_ [src_ "/assets/svgs/down_chevron.svg", class_ "h-6 w-6"]
-              div_ [class_ "hidden w-full bg-gray-100 mt-8", id_ "SDKs"] do
+              div_ [class_ "hidden w-full bg-slate-100 mt-8", id_ "SDKs"] do
                 if hasRequest
                   then do
                     p_ [class_ "text-green-500 text-center py-16 text-center"] "Apitoolkit has been integrated into your app"
                   else do
                     div_ [class_ "pb-8"] do
-                      div_ [class_ "font-bold text-center text-white border-b border-gray-200"] $ do
+                      div_ [class_ "font-bold text-center text-white border-b border-slate-200"] $ do
                         p_ [class_ "text-red-500 text-center py-16 text-center"] "Apitoolkit has not been integrated into your app"
       --   tabs
       -- tabContentExpress
@@ -184,7 +184,7 @@ function changeTab(tabId) {
 
 generateApikey :: Projects.ProjectId -> Html ()
 generateApikey pid =
-  div_ [class_ "w-[800px] bg-gray-200 mx-auto rounded-lg border-8 border-white shadow-lg mb-10"] do
+  div_ [class_ "w-[800px] bg-slate-200 mx-auto rounded-lg border-8 border-white shadow-lg mb-10"] do
     div_ [class_ "w-full p-8"] do
       div_ [class_ "flex w-full justify-center gap-4 items-center mb-10"] do
         span_ [class_ "text-blue-500 pr-4 border-r border-r-2 border-r-blue-500 text-2xl"] "Next Up"
@@ -199,9 +199,9 @@ generateApikey pid =
             div_ [class_ "bg-white rounded-lg px-4 pt-5 pb-4 text-left"] $ do
               div_ [class_ "sm:flex sm:items-start"] $ do
                 div_ [class_ "mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left grow"] $ do
-                  h3_ [class_ "text-lg font-medium text-gray-900", id_ "modal-title"] "Enter API key title"
+                  h3_ [class_ "text-lg font-medium text-slate-900", id_ "modal-title"] "Enter API key title"
                   div_ [class_ "mt-2 space-y-2"] $ do
-                    p_ [class_ "text-sm text-gray-500"] do
+                    p_ [class_ "text-sm text-slate-500"] do
                       "Please input a title for your API Key. You can find all API keys "
                       a_ [href_ $ "/p/" <> pid.toText <> "/apis", class_ "text-blue-500"] "here"
                     div_ $ do
@@ -212,13 +212,13 @@ generateApikey pid =
 
 integrateApiToolkit :: Html ()
 integrateApiToolkit =
-  div_ [class_ "w-[800px] bg-gray-200 mx-auto rounded-lg border-8 border-white shadow-lg mb-10"] do
-    div_ [class_ "w-full p-8 bg-gray-100  rounded"] do
+  div_ [class_ "w-[800px] bg-slate-200 mx-auto rounded-lg border-8 border-white shadow-lg mb-10"] do
+    div_ [class_ "w-full p-8 bg-slate-100  rounded"] do
       div_ [class_ "flex w-full justify-center gap-4 items-center mb-2"] do
         span_ [class_ "text-blue-500 pr-4 border-r border-r-2 border-r-blue-500 text-2xl"] "Next Up"
         h3_ [class_ "font-bold text-2xl"] "Integrate APIToolkit"
       div_ [class_ "pb-2"] do
-        div_ [class_ "font-bold text-center text-white border-b border-gray-200"] $ do
+        div_ [class_ "font-bold text-center text-white border-b border-slate-200"] $ do
           tabs
         tabContentExpress
         tabContentGin
@@ -228,8 +228,8 @@ integrateApiToolkit =
         tabContentFastify
 completedBanner :: Projectjs.ProjectId -> Html ()
 completedBanner pid =
-  div_ [class_ "w-[800px] bg-gray-200 mx-auto rounded-lg border-8 border-white shadow-lg mb-10"] do
-    div_ [class_ "w-full px-8 py-12 bg-gray-100  rounded"] do
+  div_ [class_ "w-[800px] bg-slate-200 mx-auto rounded-lg border-8 border-white shadow-lg mb-10"] do
+    div_ [class_ "w-full px-8 py-12 bg-slate-100  rounded"] do
       div_ [class_ "flex w-full justify-center gap-4 items-center mb-2"] do
         span_ [class_ "text-blue-500 pr-4 border-r border-r-2 border-r-blue-500 text-2xl"] "Done"
         h3_ [class_ "font-bold text-2xl"] "Onboarding Completed"
@@ -242,9 +242,9 @@ tabContentExpress =
   div_ [class_ "tab-content flex flex-col m-8", id_ "express_content"] $ do
     div_ [class_ "relative"] $ do
       div_ [class_ "mb-6"] do
-        h3_ [class_ "text-gray-900 font-medium text-lg mb-1"] "Installation"
-        p_ [class_ "w-full bg-gray-200 px-4 py-2 rounded text-lg"] "npm i apitoolkit-express"
-      h4_ [class_ "text-gray-900 font-medium text-lg my-2"] "Integrate into your app"
+        h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
+        p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded text-lg"] "npm i apitoolkit-express"
+      h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
       div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] dark:bg-slate-900/70 dark:backdrop-blur dark:ring-1 dark:ring-inset dark:ring-white/10"] $ do
         div_ [class_ "relative w-full flex flex-col"] $ do
           div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] $ do
@@ -279,9 +279,9 @@ tabContentGin =
   div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "gin_content"] $ do
     div_ [class_ "relative"] $ do
       div_ [class_ "mb-6"] do
-        h3_ [class_ "text-gray-900 font-medium text-lg mb-1"] "Installation"
-        p_ [class_ "w-full bg-gray-200 px-4 py-2 rounded text-lg"] "go get github.com/apitoolkit/apitoolkit-go"
-      h4_ [class_ "text-gray-900 font-medium text-lg my-2"] "Integrate into your app"
+        h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
+        p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded text-lg"] "go get github.com/apitoolkit/apitoolkit-go"
+      h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
       div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] dark:bg-slate-900/70 dark:backdrop-blur dark:ring-1 dark:ring-inset dark:ring-white/10"] $ do
         div_ [class_ "relative w-full flex flex-col"] $ do
           div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] $ do
@@ -323,11 +323,11 @@ tabContentLaravel =
   div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "laravel_content"] $ do
     div_ [class_ "relative"] $ do
       div_ [class_ "mb-6"] do
-        h3_ [class_ "text-gray-900 font-medium text-lg mb-1"] "Installation"
-        p_ [class_ "w-full bg-gray-200 px-4 py-2 rounded text-lg"] "composer require apitoolkit/apitoolkit-php"
-        h3_ [class_ "text-gray-900 font-medium text-lg mb-1 mt-4"] "Set up APITOOLKIT_KEY env variable"
-        p_ [class_ "w-full bg-gray-200 px-4 py-2 rounded text-lg"] "APITOOLKIT_KEY=<YOUR_API_KEY>"
-      h4_ [class_ "text-gray-900 font-medium text-lg my-2"] "Integrate into your app"
+        h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
+        p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded text-lg"] "composer require apitoolkit/apitoolkit-php"
+        h3_ [class_ "text-slate-900 font-medium text-lg mb-1 mt-4"] "Set up APITOOLKIT_KEY env variable"
+        p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded text-lg"] "APITOOLKIT_KEY=<YOUR_API_KEY>"
+      h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
       div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] dark:bg-slate-900/70 dark:backdrop-blur dark:ring-1 dark:ring-inset dark:ring-white/10"] $ do
         div_ [class_ "relative w-full flex flex-col"] $ do
           div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] $ do
@@ -363,11 +363,11 @@ tabContentSymfony =
   div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "symfony_content"] $ do
     div_ [class_ "relative"] $ do
       div_ [class_ "mb-6"] do
-        h3_ [class_ "text-gray-900 font-medium text-lg mb-1"] "Installation"
-        p_ [class_ "w-full bg-gray-200 px-4 py-2 rounded text-lg"] "composer require apitoolkit/apitoolkit-symfony"
-        h3_ [class_ "text-gray-900 font-medium text-lg mb-1 mt-4"] "Set up APITOOLKIT_KEY env variable"
-        p_ [class_ "w-full bg-gray-200 px-4 py-2 rounded text-lg"] "APITOOLKIT_KEY=<YOUR_API_KEY>"
-      h4_ [class_ "text-gray-900 font-medium text-lg my-2"] "Integrate into your app"
+        h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
+        p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded text-lg"] "composer require apitoolkit/apitoolkit-symfony"
+        h3_ [class_ "text-slate-900 font-medium text-lg mb-1 mt-4"] "Set up APITOOLKIT_KEY env variable"
+        p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded text-lg"] "APITOOLKIT_KEY=<YOUR_API_KEY>"
+      h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
       div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] dark:bg-slate-900/70 dark:backdrop-blur dark:ring-1 dark:ring-inset dark:ring-white/10"] $ do
         div_ [class_ "relative w-full flex flex-col"] $ do
           div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] $ do
@@ -397,9 +397,9 @@ tabContentDotNet =
   div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "net_content"] $ do
     div_ [class_ "relative"] $ do
       div_ [class_ "mb-6"] do
-        h3_ [class_ "text-gray-900 font-medium text-lg mb-1"] "Installation"
-        p_ [class_ "w-full bg-gray-200 px-4 py-2 rounded text-lg"] "dotnet add package ApiToolkit.Net"
-      h4_ [class_ "text-gray-900 font-medium text-lg my-2"] "Integrate into your app"
+        h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
+        p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded text-lg"] "dotnet add package ApiToolkit.Net"
+      h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
       div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] dark:bg-slate-900/70 dark:backdrop-blur dark:ring-1 dark:ring-inset dark:ring-white/10"] $ do
         div_ [class_ "relative w-full flex flex-col"] $ do
           div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] $ do
@@ -463,9 +463,9 @@ tabContentFastify =
     do
       div_ [class_ "relative"] $ do
         div_ [class_ "mb-6"] do
-          h3_ [class_ "text-gray-900 font-medium text-lg mb-1"] "Installation"
-          p_ [class_ "w-full bg-gray-200 px-4 py-2 rounded text-lg"] "npm install apitoolkit-fastify"
-        h4_ [class_ "text-gray-900 font-medium text-lg my-2"] "Integrate into your app"
+          h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
+          p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded text-lg"] "npm install apitoolkit-fastify"
+        h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
         div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] dark:bg-slate-900/70 dark:backdrop-blur dark:ring-1 dark:ring-inset dark:ring-white/10"] $ do
           div_ [class_ "relative w-full flex flex-col"] $ do
             div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] $ do
@@ -594,7 +594,7 @@ surveyModal :: Projects.ProjectId -> Html ()
 surveyModal pid = do
   div_
     [ style_ "z-index:99999"
-    , class_ "fixed pt-24 justify-center z-50 w-full p-4 bg-gray-300 bg-opacity-75 overflow-y-auto inset-0 h-full max-h-full"
+    , class_ "fixed pt-24 justify-center z-50 w-full p-4 bg-slate-300 bg-opacity-75 overflow-y-auto inset-0 h-full max-h-full text-lg"
     , id_ "surveyDialog"
     ]
     $ do
@@ -602,7 +602,7 @@ surveyModal pid = do
         -- Modal content
         div_ [class_ "bg-white rounded-lg shadow w-full"] do
           div_ [class_ "flex items-start justify-between p-6 space-x-2  border-b rounded-t"] $ do
-            h3_ [class_ "text-2xl font-bold text-gray-900"] "Please complete the survey"
+            h3_ [class_ "text-2xl font-bold text-slate-900"] "Next Step"
           -- Modal body
           form_
             [ hxPost_ $ "/p/" <> pid.toText <> "/survey"
@@ -612,36 +612,41 @@ surveyModal pid = do
             ]
             $ do
               div_ [class_ "p-6 flex flex-col gap-8 overflow-y-auto", style_ "height:50vh; width:100%"] $ do
-                h3_ [class_ "text-green-500 text-lg text-center"] "Project has been created succesfully, but please complete this short survey before you continue"
+                h3_ [class_ "text-navy-900 text-2xl "] "Help us give you the best experience by completing the following"
                 div_ [class_ "flex flex-col gap-2"] do
-                  span_ [class_ "font-bold"] "Which web framework do you use?"
-                  div_ [id_ "stack", name_ "stack", required_ "required", class_ "px-2 py-2 w-full max-h-[200px] overflow-y-scroll bg-gray-50"] $ do
-                    forM_ stackOptions $ \(value, label) ->
-                      label_ [class_ "flex items-center justify-between gap-6 hover:bg-gray-100"] $ do
-                        toHtml label
-                        input_ [type_ "checkbox", id_ value, name_ "stack", value_ value]
+                  span_ [class_ "font-semibold text-xl"] "What API/Web frameworks do you plan to integrate?"
+                  div_ [id_ "stack", name_ "stack", required_ "required", class_ "px-2 py-2"] $ do
+                    div_ [class_ "columns-2"] do
+                      forM_ stackOptions $ \(value, label) ->
+                        label_ [class_ "block hover:bg-slate-100 p-2"] $ do
+                          input_ [class_ "mr-3",type_ "checkbox", id_ value, name_ "stack", value_ value]
+                          toHtml label
                     div_ [class_ "flex flex-col gap-2"] $ do
                       label_ [class_ "font-medium mt-2"] "Other (specifiy)"
-                      input_ [type_ "text", name_ "stack", class_ "px-2 py-1 bg-gray-50 border border-gray-300 text-gray-900 focus:outline-none rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full"]
+                      input_ [type_ "text", name_ "stack", class_ "px-2 py-1 bg-slate-50 border border-gray-300 text-gray-900 focus:outline-none rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full"]
 
                 div_ [class_ "flex flex-col gap-2"] do
-                  label_ [class_ "font-bold"] "What APIToolkit features are you most interested in?"
-                  forM_ functionalityOptions $ \(value, label) -> do
-                    label_ [class_ "flex items-center justify-between gap-6 hover:bg-gray-100"] $ do
-                      toHtml label
-                      input_ [type_ "checkbox", id_ value, name_ "functionality", value_ value]
+                  label_ [class_ "font-semibold text-xl"] "What APIToolkit features are you most interested in?"
+                  div_ do
+                    forM_ functionalityOptions $ \(value, label) -> do
+                      label_ [class_ "block hover:bg-slate-100 p-2"] $ do
+                        input_ [class_ "mr-3",type_ "checkbox", id_ value, name_ "functionality", value_ value]
+                        toHtml label
                 div_ [class_ "flex flex-col gap-2"] do
                   label_ [class_ "font-bold"] "Where would you prefer your data to be processed?"
-                  forM_ dataLocationOptions $ \(value, label) -> do
-                    label_ [class_ "flex items-center justify-between gap-6 hover:bg-gray-100"] $ do
-                      toHtml label
-                      input_ [type_ "radio", id_ value, name_ "dataLocation", value_ value, required_ "required"]
+                  div_ [class_ "columns-3"] do
+                    forM_ dataLocationOptions $ \(value, label) -> do
+                      label_ [class_ "block hover:bg-slate-100 p-2"] $ do
+                        input_ [class_ "mr-3",type_ "radio", id_ value, name_ "dataLocation", value_ value, required_ "required"]
+                        toHtml label
                 div_ [class_ "flex flex-col gap-2"] do
-                  label_ [class_ "font-bold"] "How did you find APIToolkit"
-                  forM_ foundUsFromOptions $ \(value, label) -> do
-                    label_ [class_ "flex items-center justify-between gap-6 hover:bg-gray-100"] $ do
-                      toHtml label
-                      input_ [type_ "radio", id_ value, name_ "foundUsFrom", value_ value, required_ "required"]
+                  label_ [class_ "font-bold"] "How did you find APIToolkit?"
+                  div_ [class_ "columns-2"] do
+                    forM_ foundUsFromOptions $ \(value, label) -> do
+                      label_ [class_ "block hover:bg-slate-100 p-2"] $ do
+                        input_ [class_ "mr-3", type_ "radio", id_ value, name_ "foundUsFrom", value_ value, required_ "required"]
+                        toHtml label
+                      
               -- Modal footer
-              div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] do
-                button_ [type_ "sumbit", class_ "btn btn-primary"] "Submit"
+              div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-slate-200 rounded-b"] do
+                button_ [type_ "sumbit", class_ "btn-lg btn-indigo text-xl px-4 py-4"] "Submit"

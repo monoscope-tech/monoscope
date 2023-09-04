@@ -69,7 +69,7 @@ redactedFieldsPage pid redactedFields = do
   section_ [class_ "container mx-auto  px-4 py-10 overflow-hidden overflow-y-scroll"] $ do
     div_ [class_ "flex justify-between mb-6"] $ do
       h2_ [class_ "text-slate-700 text-2xl font-medium"] "Redacted Fields"
-      button_ [class_ "btn-indigo", [__|on click remove .hidden from #redactFieldDialog |]] "Add a field to Redact"
+      button_ [class_ "btn-sm btn-indigo", [__|on click remove .hidden from #redactFieldDialog |]] "Add a field to Redact"
     mainContent pid redactedFields
     div_
       [ class_ "hidden fixed z-30 inset-0 overflow-y-auto"
