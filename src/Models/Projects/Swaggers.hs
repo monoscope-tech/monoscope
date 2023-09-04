@@ -16,11 +16,11 @@ import Database.PostgreSQL.Simple.FromField
 import Database.PostgreSQL.Simple.SqlQQ
 import Database.PostgreSQL.Simple.ToField
 import Database.PostgreSQL.Transact (DBT)
+import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
 import Relude
 import Servant (FromHttpApiData)
-import GHC.Records (HasField (getField))
 
 newtype SwaggerId = SwaggerId {swaggerId :: UUID.UUID}
   deriving stock (Generic, Show)
@@ -29,7 +29,7 @@ newtype SwaggerId = SwaggerId {swaggerId :: UUID.UUID}
     via UUID.UUID
 
 instance HasField "toText" SwaggerId Text where
-  getField = UUID.toText . swaggerId 
+  getField = UUID.toText . swaggerId
 
 data Swagger = Swagger
   { id :: SwaggerId

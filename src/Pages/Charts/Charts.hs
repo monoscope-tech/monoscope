@@ -1,17 +1,23 @@
 {-# LANGUAGE DerivingVia #-}
 
-module Pages.Charts.Charts (chartsGetH, ChartType(..), throughput, latency, throughputEndpointHTML, latencyEndpointHTML,lazy, ChartExp(..), QueryBy (..), GroupBy (..)) where
+module Pages.Charts.Charts (chartsGetH, ChartType (..), throughput, latency, throughputEndpointHTML, latencyEndpointHTML, lazy, ChartExp (..), QueryBy (..), GroupBy (..)) where
 
 import Config (DashboardM, pool)
 import Data.Aeson qualified as AE
 import Data.List (groupBy, lookup)
+import Data.Text (toLower)
 import Data.Text qualified as T
 import Data.Time (UTCTime, ZonedTime, utc, utcToZonedTime, zonedTimeToUTC)
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.Traversable (for)
 import Data.Tuple.Extra (fst3, thd3)
 import Data.UUID qualified as UUID
-import Database.PostgreSQL.Entity.DBT (withPool, QueryNature (Select), query)
+import Data.UUID.V4 qualified as UUIDV4
+import Data.Vector (Vector)
+import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, withPool)
+import Database.PostgreSQL.Simple.Types (Query (Query))
+import Database.PostgreSQL.Transact (DBT)
+import Debug.Pretty.Simple (pTraceM, pTraceShowM)
 import Lucid
 import Lucid.Htmx
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -21,15 +27,9 @@ import NeatInterpolation (text)
 import Network.URI (escapeURIString, isUnescapedInURI, normalizeEscape, normalizePathSegments)
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import Witch (from)
-import Data.UUID.V4 qualified as UUIDV4
-import Debug.Pretty.Simple (pTraceShowM, pTraceM)
 import Servant (FromHttpApiData (..))
-import Database.PostgreSQL.Transact (DBT)
-import Data.Vector (Vector)
 import Utils (DBField (MkDBField))
-import Database.PostgreSQL.Simple.Types (Query(Query))
-import Data.Text (toLower)
+import Witch (from)
 
 transform :: [String] -> [(Int, Int, String)] -> [Maybe Int]
 transform fields tuples =
@@ -47,34 +47,32 @@ pivot' rows = do
   let ngrouped = map (transform headers) grouped
   (headers, ngrouped)
 
-
-
 queryReqDump :: [ChartExp] -> DBT IO (Vector (Int, Int, String))
 queryReqDump exps = do
   let (q, args) = buildReqDumpSQL exps
   query Select (Query $ encodeUtf8 q) args
 
-
 buildReqDumpSQL :: [ChartExp] -> (Text, [DBField])
 buildReqDumpSQL exps = (q, args)
-  where
-    (intervalT, groupByFields, gBy, queryBy, limit, projectId, fromE, toE) =
-      foldr go ("60", "", "", [], 1000, Nothing, Nothing, Nothing) exps
+ where
+  (intervalT, groupByFields, gBy, queryBy, limit, projectId, fromE, toE) =
+    foldr go ("60", "", "", [], 1000, Nothing, Nothing, Nothing) exps
 
-    go (SlotsE n) (_, gbF, gb, qb, l, p, f, t) = (show n, gbF, gb, qb, l, p, f, t)
-    go (GByE GBEndpoint) (i, _, gb, qb, l, p, f, t) = (i, ",method, url_path", ",method||' '||url_path as g", qb, l, p, f, t)
-    go (GByE GBStatusCode) (i, _, gb, qb, l, p, f, t) = (i, ",status_code", ",status_code::text", qb, l, p, f, t)
-    go (QByE qb) (i, gbF, gb, qbOld, l, p, f, t) = (i, gbF, gb, qb:qbOld, l, p, f, t)
-    go (TypeE _) options = options 
-    go (LimitE lm) (i, gbF, gb, qb, _, p, f, t) = (i, gbF, gb, qb, lm, p, f, t)
-    go (PIdE pid) (i, gbF, gb, qb, l, _, f, t) = (i, gbF, gb, qb, l, Just pid, f, t)
-    go (FromE zt) (i, gbF, gb, qb, l, p, _, t) = (i, gbF, gb, qb, l, p, Just $ show zt, t)
-    go (ToE zt) (i, gbF, gb, qb, l, p, f, _) = (i, gbF, gb, qb, l, p, f, Just $ show zt)
-    go _ acc = acc
+  go (SlotsE n) (_, gbF, gb, qb, l, p, f, t) = (show n, gbF, gb, qb, l, p, f, t)
+  go (GByE GBEndpoint) (i, _, gb, qb, l, p, f, t) = (i, ",method, url_path", ",method||' '||url_path as g", qb, l, p, f, t)
+  go (GByE GBStatusCode) (i, _, gb, qb, l, p, f, t) = (i, ",status_code", ",status_code::text", qb, l, p, f, t)
+  go (QByE qb) (i, gbF, gb, qbOld, l, p, f, t) = (i, gbF, gb, qb : qbOld, l, p, f, t)
+  go (TypeE _) options = options
+  go (LimitE lm) (i, gbF, gb, qb, _, p, f, t) = (i, gbF, gb, qb, lm, p, f, t)
+  go (PIdE pid) (i, gbF, gb, qb, l, _, f, t) = (i, gbF, gb, qb, l, Just pid, f, t)
+  go (FromE zt) (i, gbF, gb, qb, l, p, _, t) = (i, gbF, gb, qb, l, p, Just $ show zt, t)
+  go (ToE zt) (i, gbF, gb, qb, l, p, f, _) = (i, gbF, gb, qb, l, p, f, Just $ show zt)
+  go _ acc = acc
 
-    (qByTxtList, qByArgs) = unzip $ runQueryBySql <$> queryBy
+  (qByTxtList, qByArgs) = unzip $ runQueryBySql <$> queryBy
 
-    q = T.concat
+  q =
+    T.concat
       [ "SELECT extract(epoch from time_bucket('"
       , toText intervalT
       , " seconds', created_at))::integer as timeB, "
@@ -88,31 +86,32 @@ buildReqDumpSQL exps = (q, args)
       , " LIMIT " <> show limit
       ]
 
-    dateRangeStr = if isJust fromE || isJust toE
-                   then " AND created_at BETWEEN ? AND ?"
-                   else ""
+  dateRangeStr =
+    if isJust fromE || isJust toE
+      then " AND created_at BETWEEN ? AND ?"
+      else ""
 
-    args = catMaybes $ [MkDBField <$> projectId] ++ (Just . MkDBField <$> (join qByArgs)) ++ [MkDBField <$> fromE, MkDBField <$> toE]
+  args = catMaybes $ [MkDBField <$> projectId] ++ (Just . MkDBField <$> (join qByArgs)) ++ [MkDBField <$> fromE, MkDBField <$> toE]
 
-    -- >>> runQueryBy (QBEndpointHash "hash")
-    -- "endpoint_hash=hash"
-    runQueryBySql :: QueryBy -> (Text, [DBField])
-    runQueryBySql (QBEndpointHash t) = ("endpoint_hash=?", [MkDBField t])
-    runQueryBySql (QBShapeHash t) = ("shape_hash=?", [MkDBField t])
-    runQueryBySql (QBFormatHash t) = ("?=ANY(format_hashes)", [MkDBField t])
-    runQueryBySql (QBStatusCodeGT t) = ("status_code>?", [MkDBField t])
-    runQueryBySql (QBAnd a b) = let (txt1, arg1) = runQueryBySql a 
-                                    (txt2, arg2) = runQueryBySql b
-                                in (" ( " <> txt1 <> " AND " <> txt2 <> " ) ", arg1 ++ arg2) 
-
-
-
+  -- >>> runQueryBy (QBEndpointHash "hash")
+  -- "endpoint_hash=hash"
+  runQueryBySql :: QueryBy -> (Text, [DBField])
+  runQueryBySql (QBEndpointHash t) = ("endpoint_hash=?", [MkDBField t])
+  runQueryBySql (QBShapeHash t) = ("shape_hash=?", [MkDBField t])
+  runQueryBySql (QBFormatHash t) = ("?=ANY(format_hashes)", [MkDBField t])
+  runQueryBySql (QBStatusCodeGT t) = ("status_code>?", [MkDBField t])
+  runQueryBySql (QBAnd a b) =
+    let (txt1, arg1) = runQueryBySql a
+        (txt2, arg2) = runQueryBySql b
+     in (" ( " <> txt1 <> " AND " <> txt2 <> " ) ", arg1 ++ arg2)
 
 type M = Maybe
 
-chartsGetH ::Sessions.PersistentSession ->M Projects.ProjectId -> M ChartType ->M GroupBy ->M QueryBy ->M Int ->M Int ->M ZonedTime ->M ZonedTime ->M Text ->M Text ->M Bool ->DashboardM (Html ())
-chartsGetH _ pidM typeM groupByM queryByM slotsM limitsM fromM toM themeM idM showLegendM= do
-  let chartExps = catMaybes [ PIdE <$> pidM
+chartsGetH :: Sessions.PersistentSession -> M Projects.ProjectId -> M ChartType -> M GroupBy -> M QueryBy -> M Int -> M Int -> M ZonedTime -> M ZonedTime -> M Text -> M Text -> M Bool -> DashboardM (Html ())
+chartsGetH _ pidM typeM groupByM queryByM slotsM limitsM fromM toM themeM idM showLegendM = do
+  let chartExps =
+        catMaybes
+          [ PIdE <$> pidM
           , TypeE <$> typeM
           , GByE <$> groupByM
           , QByE <$> queryByM
@@ -122,8 +121,8 @@ chartsGetH _ pidM typeM groupByM queryByM slotsM limitsM fromM toM themeM idM sh
           , ToE <$> toM
           , Theme <$> themeM
           , IdE <$> idM
-          , showLegendM >>= (\x-> if x then Just ShowLegendE else Nothing)
-        ]
+          , showLegendM >>= (\x -> if x then Just ShowLegendE else Nothing)
+          ]
   pool <- asks pool
   chartData <- liftIO $ withPool pool $ queryReqDump chartExps
   let (headers, groupedData) = pivot' $ toList chartData
@@ -134,12 +133,11 @@ chartsGetH _ pidM typeM groupByM queryByM slotsM limitsM fromM toM themeM idM sh
   let groupByField = maybe "" show groupByM
   let showLegend = toLower $ show $ fromMaybe False showLegendM
   let chartThemeTxt = fromMaybe "" themeM
-  let fromDStr = maybe "" show fromM 
+  let fromDStr = maybe "" show fromM
   let toDStr = maybe "" show toM
 
   let scriptContent = [text| throughputEChartTable("$idAttr",$headersJSON, $groupedDataJSON, ["Endpoint"], $showLegend, "$chartThemeTxt", "$fromDStr", "$toDStr") |]
 
-  
   pure $ do
     div_ [id_ $ toText idAttr, class_ "w-full h-full"] ""
     script_ scriptContent
@@ -153,8 +151,7 @@ data QueryBy
   deriving stock (Show, Read)
 
 instance FromHttpApiData QueryBy where
-    parseQueryParam =  readEither . toString
-
+  parseQueryParam = readEither . toString
 
 data GroupBy
   = GBEndpoint
@@ -164,15 +161,13 @@ data GroupBy
 instance FromHttpApiData GroupBy where
   parseQueryParam = readEither . toString
 
-
 data ChartType
   = BarCT
   | LineCT
   deriving stock (Show, Read)
 
 instance FromHttpApiData ChartType where
-    parseQueryParam =  readEither . toString
-
+  parseQueryParam = readEither . toString
 
 data ChartExp
   = PIdE Projects.ProjectId
@@ -186,7 +181,7 @@ data ChartExp
   | Theme Text
   | IdE Text
   | ShowLegendE
-  deriving stock Show
+  deriving stock (Show)
 
 -- lazy Chart rendered based on a list of chart expressions
 -- >>> lazy [TypeE BarCT, GByE GBEndpoint]
@@ -224,7 +219,6 @@ lazy queries =
 ---------------------------- OLD functions
 --
 
-
 throughputEndpointHTML :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Bool -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
 throughputEndpointHTML _ pid idM groupBy_ endpointHash shapeHash formatHash statusCodeGT numSlotsM limitM showLegend_ fromDStrM toDStrM chartTheme = do
   pool <- asks pool
@@ -252,8 +246,6 @@ throughputEndpointHTML _ pid idM groupBy_ endpointHash shapeHash formatHash stat
     div_ [id_ $ "id-" <> entityId, class_ "w-full h-full"] ""
     script_ script
 
-
-
 latencyEndpointHTML :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
 latencyEndpointHTML _ pid idM endpointHash numSlotsM fromDStr toDStr chartTheme = do
   pool <- asks pool
@@ -265,7 +257,6 @@ latencyEndpointHTML _ pid idM endpointHash numSlotsM fromDStr toDStr chartTheme 
   pure $ do
     div_ [id_ $ "id-" <> entityId, class_ "w-full h-full"] ""
     script_ [text| latencyEChart("id-$entityId", $chartData, "$chartThemeTxt") |]
-
 
 -- TODO: Delete after migrating to new chart strategy
 -- >>> runQueryBy (QBEndpointHash "hash")
@@ -281,8 +272,6 @@ runQueryBy (QBAnd a b) = runQueryBy a <> "&" <> runQueryBy b
 runGroupBy :: GroupBy -> Text
 runGroupBy GBEndpoint = "group_by=endpoint"
 runGroupBy GBStatusCode = "group_by=status_code"
-
-
 
 -- This endpoint will return a throughput chart partial
 throughput :: Projects.ProjectId -> Text -> Maybe QueryBy -> Maybe GroupBy -> Int -> Maybe Int -> Bool -> (Maybe ZonedTime, Maybe ZonedTime) -> Maybe Text -> Html ()

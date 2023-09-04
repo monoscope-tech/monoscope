@@ -87,7 +87,8 @@ insertShapeQueryAndParam shape = (q, params)
 shapesByEndpointHash :: Text -> PgT.DBT IO (Vector Shape)
 shapesByEndpointHash endpointHash = query Select q (Only endpointHash)
  where
-  q = [sql| 
+  q =
+    [sql| 
           SELECT id, created_at, updated_at, approved_on, project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, 
           response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash, status_code
           FROM apis.shapes WHERE endpoint_hash = ?

@@ -17,7 +17,9 @@ import Data.Time.LocalTime (getZonedTime)
 import Data.UUID.V4 (nextRandom)
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (Connection, Query, formatMany)
+import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact (execute)
+import Fmt
 import Gogol.Data.Base64 (_Base64)
 import Gogol.PubSub qualified as PubSub
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -25,10 +27,8 @@ import Models.Projects.Projects qualified as Projects
 import Relude hiding (hoistMaybe)
 import RequestMessages qualified
 import System.Clock
-import Utils (DBField, eitherStrToText)
-import Fmt
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Text.Pretty.Simple (pShow)
+import Utils (DBField, eitherStrToText)
 import Witch (from)
 
 {--
@@ -111,8 +111,8 @@ processMessages' logger' _ conn' msgs projectCache' = do
   let query' = mconcat queries
   let params' = concat params
 
-  lefts processed & mapM_ \err -> logger' <& "ERROR: with processing request dump to queries; with original len "<> show messagesCount <>" err: " <> show err
-  unless (null  $ lefts processed) $ 
+  lefts processed & mapM_ \err -> logger' <& "ERROR: with processing request dump to queries; with original len " <> show messagesCount <> " err: " <> show err
+  unless (null $ lefts processed) $
     logger' <& "processed messages with errors. " <> (from @LText $ pShow msgs)
 
   afterProccessing <- getTime Monotonic
@@ -129,7 +129,7 @@ processMessages' logger' _ conn' msgs projectCache' = do
           pass
 
   endTime <- getTime Monotonic
-  liftIO $ putStrLn $ fmtLn $ "Process Message ("+| messagesCount |+") pipeline microsecs: queryDuration " +| (toNanoSecs (diffTimeSpec startTime afterProccessing)) `div` 1000 |+ " -> processingDuration " +| toNanoSecs (diffTimeSpec afterProccessing endTime)  `div` 1000 |+ " -> TotalDuration " +| toNanoSecs (diffTimeSpec startTime endTime)  `div` 1000 |+ ""
+  liftIO $ putStrLn $ fmtLn $ "Process Message (" +| messagesCount |+ ") pipeline microsecs: queryDuration " +| (toNanoSecs (diffTimeSpec startTime afterProccessing)) `div` 1000 |+ " -> processingDuration " +| toNanoSecs (diffTimeSpec afterProccessing endTime) `div` 1000 |+ " -> TotalDuration " +| toNanoSecs (diffTimeSpec startTime endTime) `div` 1000 |+ ""
 
   case resp of
     Left err -> do

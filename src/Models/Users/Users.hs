@@ -30,9 +30,9 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact qualified as PgT
 import Deriving.Aeson qualified as DAE
+import GHC.Records (HasField (getField))
 import Optics.TH
 import Relude
-import GHC.Records (HasField (getField))
 
 instance FromJSON (CI Text) where
   parseJSON = fmap CI.mk . parseJSON
@@ -51,7 +51,7 @@ newtype UserId = UserId {getUserId :: UUID.UUID}
   deriving anyclass (FromRow, ToRow)
 
 instance HasField "toText" UserId Text where
-  getField = UUID.toText . getUserId 
+  getField = UUID.toText . getUserId
 
 data User = User
   { id :: UserId

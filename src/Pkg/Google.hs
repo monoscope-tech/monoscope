@@ -1,7 +1,7 @@
 module Pkg.Google () where
 
--- trackConversion :: Text -> Int -> Text -> Text 
--- trackConversion apiKey conversionValue 
+-- trackConversion :: Text -> Int -> Text -> Text
+-- trackConversion apiKey conversionValue
 
 -- curl -X POST \
 --   'https://googleads.googleapis.com/v10/customers/[CUSTOMER_ID]/conversions:upload' \

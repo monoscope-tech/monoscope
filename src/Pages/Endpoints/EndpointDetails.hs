@@ -21,13 +21,13 @@ import Lucid.Htmx
 import Lucid.Hyperscript.QuasiQuoter
 import Models.Apis.Endpoints
 import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.Fields (FieldCategoryEnum)
 import Models.Apis.Fields qualified as Fields
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Models.Apis.Fields (FieldCategoryEnum)
 import NeatInterpolation
 import Optics.Core ((^.))
 import Pages.Anomalies.AnomalyList qualified as AnomaliesList

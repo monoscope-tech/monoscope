@@ -78,7 +78,7 @@ redactedFieldsPage pid redactedFields = do
       ]
       $ do
         form_
-          [ hxPost_ $ "/p/" <>  pid.toText <> "/redacted_fields"
+          [ hxPost_ $ "/p/" <> pid.toText <> "/redacted_fields"
           , class_ "flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0"
           , hxTarget_ "#main-content"
           , [__|on closeModal from body add .hidden to #redactFieldDialog then call me.reset()|]
@@ -141,6 +141,6 @@ mainContent pid redactedFields = do
                   td_ [class_ "px-6 py-4 whitespace-nowrap text-sm text-gray-500"] $ toHtml $ rf.description
                   td_ [class_ "px-6 py-4 whitespace-nowrap text-sm text-gray-500"] $ toHtml @String $ show $ rf.configuredVia
                   td_ [class_ "px-6 py-4 whitespace-nowrap text-right text-sm font-medium"] $ do
-                    a_ [class_ "text-indigo-600 hover:text-indigo-900", href_ $ "/p/" <>  pid.toText <> "/redacted_fields/delete"] $ do
+                    a_ [class_ "text-indigo-600 hover:text-indigo-900", href_ $ "/p/" <> pid.toText <> "/redacted_fields/delete"] $ do
                       img_ [src_ "/assets/svgs/revoke.svg", class_ "h-3 w-3 mr-2 inline-block"]
                       span_ [class_ "text-slate-500"] "Delete"

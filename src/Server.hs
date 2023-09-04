@@ -63,7 +63,7 @@ type GetRedirect = Verb 'GET 302
 instance MimeRender JSON ByteString where
   mimeRender _ = from @ByteString
 
-type QP a b = QueryParam a b 
+type QP a b = QueryParam a b
 
 type QPT a = QueryParam a Text
 
@@ -186,7 +186,7 @@ protectedServer sess =
     :<|> Documentation.documentationPutH sess
     :<|> GenerateSwagger.generateGetH sess
     :<|> Survey.surveyPutH sess
-    :<|> Charts.chartsGetH sess 
+    :<|> Charts.chartsGetH sess
 
 publicServer :: ServerT PublicAPI DashboardM
 publicServer =

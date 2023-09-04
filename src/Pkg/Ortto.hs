@@ -1,22 +1,23 @@
-module Pkg.Ortto (mergePerson, mergeOrganization, addToOrganization, pushedTrafficViaSdk) where 
-import Models.Projects.Projects qualified as Projects
-import Relude
+module Pkg.Ortto (mergePerson, mergeOrganization, addToOrganization, pushedTrafficViaSdk) where
+
+import Control.Lens ((.~), (^..), (^?))
+import Data.Aeson.Lens (key, nth, values, _String)
 import Data.Aeson.QQ (aesonQQ)
-import Network.Wreq (postWith, defaults, header, responseBody, putWith)
-import Control.Lens ((.~), (^?), (^..))
-import Data.Aeson.Lens (key, nth, _String, values)
-import Models.Users.Users qualified as Users
 import Data.List.Extra (chunksOf)
+import Models.Projects.Projects qualified as Projects
+import Models.Users.Users qualified as Users
+import Network.Wreq (defaults, header, postWith, putWith, responseBody)
+import Relude
 
 pushedTrafficViaSdk :: Text -> [(Projects.ProjectId, Text, Int64, Users.UserId)] -> IO ()
 pushedTrafficViaSdk orttoApiKey projectsList = do
   let chunks = chunksOf 50 projectsList -- Limit to 50 items per request
   forM_ chunks \chunk -> do
-    let activities = 
-          chunk & map \(pid, projectName, count, userId ) -> let 
-                                    pidText = pid.toText 
-                                    userIdText = userId.toText
-                      in [aesonQQ|
+    let activities =
+          chunk & map \(pid, projectName, count, userId) ->
+            let pidText = pid.toText
+                userIdText = userId.toText
+             in [aesonQQ|
                           {
                               "activity_id": "act:cm:pushed-traffic-via-sdk-24hrs",
                               "attributes": {
@@ -28,7 +29,8 @@ pushedTrafficViaSdk orttoApiKey projectsList = do
                               }
                           }
                         |]
-    let requestBody = [aesonQQ| {
+    let requestBody =
+          [aesonQQ| {
                 "async": true,
                 "activities": #{activities},
                 "merge_by": [
@@ -36,20 +38,22 @@ pushedTrafficViaSdk orttoApiKey projectsList = do
                 ]
               }
             |]
-    r <- postWith
-            (defaults & header "X-Api-Key" .~ [encodeUtf8 @Text @ByteString orttoApiKey] & header "Content-Type" .~ ["application/json"])
-            "https://api.eu.ap3api.com/v1/activities/create"
-            requestBody
+    r <-
+      postWith
+        (defaults & header "X-Api-Key" .~ [encodeUtf8 @Text @ByteString orttoApiKey] & header "Content-Type" .~ ["application/json"])
+        "https://api.eu.ap3api.com/v1/activities/create"
+        requestBody
     pass
   pass
 
-mergePerson :: Text -> Users.UserId -> Text -> Text -> Text-> IO (Maybe Text) 
+mergePerson :: Text -> Users.UserId -> Text -> Text -> Text -> IO (Maybe Text)
 mergePerson orttoApiKey userId' firstName lastName email = do
   let userId = userId'.toText
-  r <- postWith
-          (defaults & header "X-Api-Key" .~ [encodeUtf8 @Text @ByteString orttoApiKey] & header "Content-Type" .~ ["application/json"])
-          "https://api.eu.ap3api.com/v1/person/merge"
-          [aesonQQ| {
+  r <-
+    postWith
+      (defaults & header "X-Api-Key" .~ [encodeUtf8 @Text @ByteString orttoApiKey] & header "Content-Type" .~ ["application/json"])
+      "https://api.eu.ap3api.com/v1/person/merge"
+      [aesonQQ| {
             "people": [
               { 
                 "fields": {
@@ -68,13 +72,14 @@ mergePerson orttoApiKey userId' firstName lastName email = do
       |]
   pure $ r ^? responseBody . key "people" . nth 0 . key "person_id" . _String
 
-mergeOrganization :: Text -> Projects.ProjectId -> Text ->Text ->  IO (Maybe Text) 
-mergeOrganization orttoApiKey pid projectName paymentPlan= do
+mergeOrganization :: Text -> Projects.ProjectId -> Text -> Text -> IO (Maybe Text)
+mergeOrganization orttoApiKey pid projectName paymentPlan = do
   let projectIdText = pid.toText
-  r <- postWith
-    (defaults & header "X-Api-Key" .~ [encodeUtf8 @Text @ByteString orttoApiKey] & header "Content-Type" .~ ["application/json"])
-    "https://api.eu.ap3api.com/v1/organizations/merge"
-    [aesonQQ| {
+  r <-
+    postWith
+      (defaults & header "X-Api-Key" .~ [encodeUtf8 @Text @ByteString orttoApiKey] & header "Content-Type" .~ ["application/json"])
+      "https://api.eu.ap3api.com/v1/organizations/merge"
+      [aesonQQ| {
         "organizations": [
           { 
             "fields": {
@@ -92,11 +97,12 @@ mergeOrganization orttoApiKey pid projectName paymentPlan= do
   |]
   pure $ r ^? responseBody . key "organizations" . nth 0 . key "organization_id" . _String
 
-
-getPersonIDs :: Text -> [Users.UserId] ->  IO [Text] 
+getPersonIDs :: Text -> [Users.UserId] -> IO [Text]
 getPersonIDs orttoApiKey userIds' = do
   let userIds = (.toText) <$> userIds'
-  let subJSON =  userIds & map \userId->[aesonQQ|{
+  let subJSON =
+        userIds & map \userId ->
+          [aesonQQ|{
                   "$str::is": {
                     "field_id": "str::ei",
                     "value": #{userId}
@@ -104,10 +110,11 @@ getPersonIDs orttoApiKey userIds' = do
                 }
         |]
 
-  r <- postWith
-          (defaults & header "X-Api-Key" .~ [encodeUtf8 @Text @ByteString orttoApiKey] & header "Content-Type" .~ ["application/json"])
-          "https://api.eu.ap3api.com/v1/person/get"
-          [aesonQQ| {
+  r <-
+    postWith
+      (defaults & header "X-Api-Key" .~ [encodeUtf8 @Text @ByteString orttoApiKey] & header "Content-Type" .~ ["application/json"])
+      "https://api.eu.ap3api.com/v1/person/get"
+      [aesonQQ| {
             "limit": 100, 
             "offset": 0, 
             "fields": ["str::ei"], 
@@ -120,26 +127,27 @@ getPersonIDs orttoApiKey userIds' = do
 
 addToOrganization :: Text -> Text -> [Users.UserId] -> IO ()
 addToOrganization orttoApiKey pEI userIds = do
-  oUIDs <-  getPersonIDs orttoApiKey userIds
-  r <- putWith
-          (defaults & header "X-Api-Key" .~ [encodeUtf8 @Text @ByteString orttoApiKey] & header "Content-Type" .~ ["application/json"])
-          "https://api.eu.ap3api.com/v1/organizations/contacts/add"
-          [aesonQQ| {
+  oUIDs <- getPersonIDs orttoApiKey userIds
+  r <-
+    putWith
+      (defaults & header "X-Api-Key" .~ [encodeUtf8 @Text @ByteString orttoApiKey] & header "Content-Type" .~ ["application/json"])
+      "https://api.eu.ap3api.com/v1/organizations/contacts/add"
+      [aesonQQ| {
             "inclusion_ids": #{oUIDs},
             "organization_id": #{pEI}
           }
       |]
-  
-  pass
 
+  pass
 
 getOrganization :: Text -> Projects.ProjectId -> IO (Maybe Text)
 getOrganization orttoApiKey pid = do
   let projectIdText = pid.toText
-  r <- postWith
-    (defaults & header "X-Api-Key" .~ [encodeUtf8 @Text @ByteString orttoApiKey] & header "Content-Type" .~ ["application/json"])
-    "https://api.eu.ap3api.com/v1/organization/get"
-    [aesonQQ| {
+  r <-
+    postWith
+      (defaults & header "X-Api-Key" .~ [encodeUtf8 @Text @ByteString orttoApiKey] & header "Content-Type" .~ ["application/json"])
+      "https://api.eu.ap3api.com/v1/organization/get"
+      [aesonQQ| {
       "type": "organization",
       "filter": {
         "$str::is": {

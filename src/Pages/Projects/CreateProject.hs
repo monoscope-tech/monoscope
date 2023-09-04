@@ -19,17 +19,18 @@ import Data.Aeson (encode)
 import Data.Aeson.QQ (aesonQQ)
 import Data.CaseInsensitive (original)
 import Data.CaseInsensitive qualified as CI
-import Database.PostgreSQL.Transact (DBT)
 import Data.Default
 import Data.List.Extra (cons)
 import Data.List.Unique
 import Data.Pool (withResource)
+import Data.Text (toLower)
 import Data.Text qualified as T
 import Data.Tuple.Extra (thd3)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Valor (Valor, check1, failIf, validateM)
 import Data.Valor qualified as Valor
 import Database.PostgreSQL.Entity.DBT (withPool)
+import Database.PostgreSQL.Transact (DBT)
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript
@@ -41,7 +42,9 @@ import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pkg.ConvertKit qualified as ConvertKit
 import Relude
+import Relude.Unsafe qualified as Unsafe
 import Servant (
   Headers,
   addHeader,
@@ -49,9 +52,6 @@ import Servant (
  )
 import Servant.Htmx
 import Web.FormUrlEncoded (FromForm)
-import Data.Text (toLower)
-import Relude.Unsafe qualified as Unsafe
-import Pkg.ConvertKit qualified as ConvertKit
 
 data CreateProjectForm = CreateProjectForm
   { title :: Text
@@ -157,7 +157,8 @@ processProjectPostForm sess cpRaw = do
             userId' <- runMaybeT $ MaybeT (Users.userIdByEmail email) <|> MaybeT (Users.createEmptyUser email)
             let userId = Unsafe.fromJust userId'
             liftIO $ ConvertKit.addUserOrganization envCfg.convertkitApiKey email pid.toText cp.title cp.paymentPlan
-            when (userId' /= Just sess.userId) $ do -- invite the users to the project (Usually as an email)
+            when (userId' /= Just sess.userId) $ do
+              -- invite the users to the project (Usually as an email)
               _ <- liftIO $ withResource pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId pid email (cp.title)
               pass
             pure (email, permission, userId)

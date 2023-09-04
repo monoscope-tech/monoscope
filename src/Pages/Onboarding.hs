@@ -4,21 +4,17 @@ module Pages.Onboarding (onboardingGetH) where
 
 import Config
 import Data.Default (def)
-
-import Database.PostgreSQL.Entity.DBT (withPool)
-
 import Data.Text qualified as T
+import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
+import Lucid.Htmx (hxPost_, hxTarget_)
 import Lucid.Hyperscript
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
-import Models.Projects.Projects qualified as Projects
-import NeatInterpolation
-
-import Models.Users.Sessions qualified as Sessions
-
-import Lucid.Htmx (hxPost_, hxTarget_)
 import Models.Projects.Projects qualified as Projectjs
+import Models.Projects.Projects qualified as Projects
+import Models.Users.Sessions qualified as Sessions
+import NeatInterpolation
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
 import Utils (redirect)
@@ -226,6 +222,7 @@ integrateApiToolkit =
         tabContentSymfony
         tabContentDotNet
         tabContentFastify
+
 completedBanner :: Projectjs.ProjectId -> Html ()
 completedBanner pid =
   div_ [class_ "w-[800px] bg-slate-200 mx-auto rounded-lg border-8 border-white shadow-lg mb-10"] do
@@ -548,22 +545,34 @@ tabs =
 
 stackOptions :: [(T.Text, T.Text)]
 stackOptions =
-  [ ("expressjs", "Express.js")
-  , ("nest", "Nest Js")
-  , ("next", "Next Js")
-  , ("fastify", "Fastify")
-  , ("koa", "Koa")
-  , ("gin", "Go Gin")
-  , ("fiber", "Go Fiber")
-  , ("laravel", "Laravel")
-  , ("symfony", "Symfony")
-  , ("django", "Django")
-  , ("flask", "Flask")
-  , ("fastapi", "FastAPI")
-  , ("springboot", "Spring Boot")
-  , ("rails", "Ruby on Rails")
-  , ("phoenix", "Phoenix")
-  , (".net", "ASP.NET")
+  [ ("expressjs", "JS - Express.js")
+  , ("nest", "JS - Nest Js")
+  , ("next", "JS - Next Js")
+  , ("koa", "JS - Koa")
+  , ("sailsjs", "JS - Sailsjs")
+  , ("adonisjs", "JS - Adonisjs")
+  , ("fastify", "Python - Fastify")
+  , ("django", "Python - Django")
+  , ("go-native", "Golang - Native")
+  , ("gorilla-mux", "Golang - Gorilla Mux")
+  , ("gin", "Golang - Gin")
+  , ("fiber", "Golang - Fiber")
+  , ("beego", "Golang - Beego")
+  , ("laravel", "PHP - Laravel")
+  , ("lumen", "PHP - Lumen")
+  , ("symfony", "PHP - Symfony")
+  , ("cakePHP", "PHP - CakePHP")
+  , ("cakeigniter", "PHP - Codeigniter")
+  , ("flask", "Python - Flask")
+  , ("fastapi", "Python - FastAPI")
+  , ("springboot", "Java - Spring Boot")
+  , ("rails", "Ruby - Ruby on Rails")
+  , ("phoenix", "Elixir - Phoenix")
+  , (".net", "C# - ASP.NET")
+  , ("ihp-hs", "Haskell - IHP")
+  , ("actix", "Rust - Actix")
+  , ("rocket", "Rust - Rocket")
+  , ("scala-play", "Scala - Play")
   ]
 
 functionalityOptions :: [(T.Text, T.Text)]
@@ -619,7 +628,7 @@ surveyModal pid = do
                     div_ [class_ "columns-2"] do
                       forM_ stackOptions $ \(value, label) ->
                         label_ [class_ "block hover:bg-slate-100 p-2"] $ do
-                          input_ [class_ "mr-3",type_ "checkbox", id_ value, name_ "stack", value_ value]
+                          input_ [class_ "mr-3", type_ "checkbox", id_ value, name_ "stack", value_ value]
                           toHtml label
                     div_ [class_ "flex flex-col gap-2"] $ do
                       label_ [class_ "font-medium mt-2"] "Other (specifiy)"
@@ -630,14 +639,14 @@ surveyModal pid = do
                   div_ do
                     forM_ functionalityOptions $ \(value, label) -> do
                       label_ [class_ "block hover:bg-slate-100 p-2"] $ do
-                        input_ [class_ "mr-3",type_ "checkbox", id_ value, name_ "functionality", value_ value]
+                        input_ [class_ "mr-3", type_ "checkbox", id_ value, name_ "functionality", value_ value]
                         toHtml label
                 div_ [class_ "flex flex-col gap-2"] do
                   label_ [class_ "font-bold"] "Where would you prefer your data to be processed?"
                   div_ [class_ "columns-3"] do
                     forM_ dataLocationOptions $ \(value, label) -> do
                       label_ [class_ "block hover:bg-slate-100 p-2"] $ do
-                        input_ [class_ "mr-3",type_ "radio", id_ value, name_ "dataLocation", value_ value, required_ "required"]
+                        input_ [class_ "mr-3", type_ "radio", id_ value, name_ "dataLocation", value_ value, required_ "required"]
                         toHtml label
                 div_ [class_ "flex flex-col gap-2"] do
                   label_ [class_ "font-bold"] "How did you find APIToolkit?"
@@ -646,7 +655,7 @@ surveyModal pid = do
                       label_ [class_ "block hover:bg-slate-100 p-2"] $ do
                         input_ [class_ "mr-3", type_ "radio", id_ value, name_ "foundUsFrom", value_ value, required_ "required"]
                         toHtml label
-                      
+
               -- Modal footer
               div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-slate-200 rounded-b"] do
                 button_ [type_ "sumbit", class_ "btn-lg btn-indigo text-xl px-4 py-4"] "Submit"

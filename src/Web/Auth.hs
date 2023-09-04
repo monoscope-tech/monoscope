@@ -21,6 +21,8 @@ import Models.Users.Users qualified as Users
 import Network.Wai (Request (requestHeaders))
 import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
 import Optics.Operators ((^.))
+import Pkg.ConvertKit qualified as ConvertKit
+import Pkg.Ortto qualified as Ortto
 import Relude
 import Servant (
   Context (EmptyContext, (:.)),
@@ -38,8 +40,6 @@ import Servant.Server.Experimental.Auth (AuthHandler, mkAuthHandler)
 import SessionCookies (craftSessionCookie, emptySessionCookie)
 import Web.Cookie (SetCookie, parseCookies)
 import Prelude (lookup)
-import Pkg.Ortto qualified as Ortto
-import Pkg.ConvertKit qualified as ConvertKit
 
 -- | The context that will be made available to request handlers. We supply the
 -- "cookie-auth"-tagged request handler defined above, so that the 'HasServer' instance

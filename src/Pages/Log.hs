@@ -77,7 +77,7 @@ apiLogItem sess pid rdId createdAt = do
   afterProccessing <- liftIO $ getTime Monotonic
   let content = maybe (div_ "invalid log request ID") apiLogItemView logItemM
   endTime <- liftIO $ getTime Monotonic
-  liftIO $ putStrLn $ fmtLn $ " APILOG pipeline microsecs: queryDuration " +| (toNanoSecs (diffTimeSpec startTime afterProccessing)) `div` 1000 |+ " -> processingDuration " +| toNanoSecs (diffTimeSpec afterProccessing endTime)  `div` 1000 |+ " -> TotalDuration " +| toNanoSecs (diffTimeSpec startTime endTime)  `div` 1000 |+ ""
+  liftIO $ putStrLn $ fmtLn $ " APILOG pipeline microsecs: queryDuration " +| (toNanoSecs (diffTimeSpec startTime afterProccessing)) `div` 1000 |+ " -> processingDuration " +| toNanoSecs (diffTimeSpec afterProccessing endTime) `div` 1000 |+ " -> TotalDuration " +| toNanoSecs (diffTimeSpec startTime endTime) `div` 1000 |+ ""
   pure content
 
 apiLogsPage :: Projects.ProjectId -> Int -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Text -> Text -> Text -> Html ()

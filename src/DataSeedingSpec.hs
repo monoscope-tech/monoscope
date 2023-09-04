@@ -2,11 +2,11 @@ module DataSeedingSpec (spec) where
 
 import Data.UUID qualified as UUID
 import DataSeeding
+import Debug.Pretty.Simple (pTraceM, pTraceShowM)
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Relude
 import Test.Hspec
-import Debug.Pretty.Simple (pTraceM, pTraceShowM)
 
 spec :: Spec
 spec = do

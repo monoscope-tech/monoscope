@@ -17,7 +17,7 @@ import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query, withPool)
 import Database.PostgreSQL.Simple (Connection, Only (Only))
-import Database.PostgreSQL.Simple.FromRow (field, FromRow (fromRow))
+import Database.PostgreSQL.Simple.FromRow (FromRow (fromRow), field)
 import Database.PostgreSQL.Simple.SqlQQ
 import Database.PostgreSQL.Transact (DBT)
 import GHC.Generics
@@ -29,9 +29,9 @@ import NeatInterpolation (text, trimming)
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), startJobRunner, throwParsePayload)
 import Pkg.Mail
+import Pkg.Ortto qualified as Ortto
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import qualified Pkg.Ortto as Ortto
 
 data BgJobs
   = InviteUserToProject Users.UserId Projects.ProjectId Text Text
@@ -125,7 +125,7 @@ jobsRunner dbPool logger cfg job =
               project <- Unsafe.fromJust <<$>> withPool dbPool $ Projects.projectById pid
               forM_ users \u ->
                 let projectTitle = project.title
-                    projectIdTxt =  pid.toText
+                    projectIdTxt = pid.toText
                     name = u.firstName
                     subject = [text| 🤖 APITOOLKIT: New Shape anomaly found for `$projectTitle` |]
                     body =
@@ -188,7 +188,7 @@ Apitoolkit team
        in sendEmail cfg reciever subject body
     CreatedProjectSuccessfully userId projectId reciever projectTitle' ->
       let projectTitle = projectTitle'
-          projectIdTxt =  projectId.toText
+          projectIdTxt = projectId.toText
           subject = [text| 🤖 APITOOLKIT: Project created successfully '$projectTitle' on apitoolkit.io |]
           body =
             toLText
@@ -207,10 +207,12 @@ Apitoolkit team
       projReqs <- withPool dbPool getProjectsReqsCount
       logger <& "📊  pushed ortto updates for " <> show (length projReqs) <> " companies"
       Ortto.pushedTrafficViaSdk cfg.orttoApiKey $ toList projReqs
-        where
-          getProjectsReqsCount :: DBT IO (Vector (Projects.ProjectId, Text, Int64, Users.UserId))
-          getProjectsReqsCount = query Select q ()
-            where q = [sql|SELECT pp.id, pp.title, CAST(SUM(total_count) AS integer), pm.user_id --, us.email
+     where
+      getProjectsReqsCount :: DBT IO (Vector (Projects.ProjectId, Text, Int64, Users.UserId))
+      getProjectsReqsCount = query Select q ()
+       where
+        q =
+          [sql|SELECT pp.id, pp.title, CAST(SUM(total_count) AS integer), pm.user_id --, us.email
                   FROM apis.project_requests_by_endpoint_per_min apm
                   JOIN projects.projects pp ON (id=project_id)
                   JOIN projects.project_members pm ON (pp.id = pm.project_id)
@@ -218,7 +220,6 @@ Apitoolkit team
                   where apm.timeB > NOW() - INTERVAL '1 days'
                   GROUP BY pp.id, pp.title, pm.user_id --, us.email
           |]
-
 
 jobsWorkerInit :: Pool Connection -> LogAction IO String -> Config.EnvConfig -> IO ()
 jobsWorkerInit dbPool logger envConfig = startJobRunner $ mkConfig jobLogger "background_jobs" dbPool (MaxConcurrentJobs 1) (jobsRunner dbPool logger envConfig) id
