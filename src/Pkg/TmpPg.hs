@@ -18,7 +18,7 @@ migrate :: TmpPostgres.DB -> IO ()
 migrate db = do
   conn <- liftIO $ connectPostgreSQL (TmpPostgres.toConnectionString db)
   initializationRes <- Migration.runMigration conn Migration.defaultOptions MigrationInitialization
-  migrationRes <- Migration.runMigration conn Migration.defaultOptions $ MigrationDirectory (migrationsDir)
+  migrationRes <- Migration.runMigration conn Migration.defaultOptions $ MigrationDirectory migrationsDir
   -- Create a nil user and projects to make subsequent tests easier
   let q =
         [sql| INSERT into users.users (id, first_name, last_name, email) VALUES ('00000000-0000-0000-0000-000000000000', 'FN', 'LN', 'test@apitoolkit.io');

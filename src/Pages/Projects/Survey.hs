@@ -3,20 +3,16 @@
 module Pages.Projects.Survey (surveyPutH, SurveyForm) where
 
 import Config
-import Data.Aeson (FromJSON, ToJSON, decodeStrict, encode)
+import Data.Aeson (FromJSON, ToJSON, encode)
 import Data.Aeson.QQ (aesonQQ)
-import Database.PostgreSQL.Simple (Only (Only))
+import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute, withPool)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Lucid
-import Servant (Headers, addHeader)
-import Servant.Htmx (HXTrigger)
-
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-
-import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute, withPool)
 import Relude
-
+import Servant (Headers, addHeader)
+import Servant.Htmx (HXTrigger)
 import Web.FormUrlEncoded (FromForm)
 
 data SurveyForm = SurveyForm

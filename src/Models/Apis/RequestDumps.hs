@@ -24,7 +24,6 @@ module Models.Apis.RequestDumps (
 import Control.Error (hush)
 import Data.Aeson qualified as AE
 import Data.Default.Instances ()
-import Data.Text (unpack)
 import Data.Text qualified as T
 import Data.Time (CalendarDiffTime, ZonedTime, defaultTimeLocale, diffUTCTime, formatTime, zonedTimeToUTC)
 import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
@@ -33,8 +32,8 @@ import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, queryOne)
 import Database.PostgreSQL.Entity.Types
-import Database.PostgreSQL.Simple (FromRow, Only (Only), ResultError (ConversionFailed), ToRow)
-import Database.PostgreSQL.Simple.FromField (FromField (fromField), returnError)
+import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
+import Database.PostgreSQL.Simple.FromField (FromField (fromField))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField (toField))
 import Database.PostgreSQL.Simple.Types (Query (Query))
@@ -42,7 +41,6 @@ import Database.PostgreSQL.Transact (DBT, executeMany)
 import Deriving.Aeson qualified as DAE
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
-import Network.URI (URI, parseURI, uriAuthority, uriPath, uriQuery)
 import Optics.TH
 import Pkg.Parser
 import Relude hiding (many, some)
@@ -378,7 +376,6 @@ throughputBy' pid groupByM endpointHash shapeHash formatHash statusCodeGT numSlo
         Just "endpoint" -> (",method, url_path", ",method||' '||url_path as g")
         Nothing -> ("", "")
         _ -> (groupBy', groupBy' <> "::text as g")
-  let groupByFinal = maybe "" (const ",g") groupByM
   let paramList = mapMaybe (MkDBField <$>) [endpointHash, shapeHash, formatHash, statusCodeGT]
   let condlist' = filter (/= "") condlist
   let cond

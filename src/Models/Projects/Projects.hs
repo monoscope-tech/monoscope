@@ -42,7 +42,7 @@ import Relude
 import Web.HttpApiData
 
 newtype ProjectId = ProjectId {unProjectId :: UUID.UUID}
-  deriving stock (Generic, Show)
+  deriving stock (Generic, Show, Read)
   deriving
     (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default, Hashable)
     via UUID.UUID

@@ -3,31 +3,24 @@ module Pages.GenerateSwagger (generateGetH, generateSwagger) where
 import Config
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
-import Data.Default (def)
 import Data.List (groupBy)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
-import Lucid
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields qualified as Fields
 import Relude.Unsafe ((!!))
-
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.Shapes qualified as Shapes
-
 import Data.Aeson.Key qualified as AEKey
-
 import Data.Aeson
 import Models.Projects.Projects qualified as Projects
-
 import Models.Apis.Fields (fieldTypeToText)
 import Models.Apis.Fields qualified as Field
 import Models.Apis.Fields.Query qualified as Fields
 import Models.Users.Sessions qualified as Sessions
-import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
 
 data MergedEndpoint = MergedEndpoint
@@ -62,14 +55,14 @@ data KeyPathGroup = KeyPathGroup
 convertQueryParamsToJSON :: [T.Text] -> [MergedFieldsAndFormats] -> Value
 convertQueryParamsToJSON params fields = paramsJSON
  where
-  mapFunc param =
-    let f = find (\fld -> fld.field.fKeyPath == param) fields
-        (des, t, ft, eg) = case f of
-          Just f -> (f.field.fDescription, fieldTypeToText f.format.swFieldType, f.field.fFormat, (V.head f.format.swExamples))
+  mapQParamsFunc param =
+    let fieldM = find (\fld -> fld.field.fKeyPath == param) fields
+        (des, t, ft, eg) = case fieldM of
+          Just f -> (f.field.fDescription, fieldTypeToText f.format.swFieldType, f.field.fFormat, V.head f.format.swExamples)
           Nothing -> ("", "string", "text", "")
      in object ["in" .= String "query", "name" .= T.takeWhile (/= '.') (T.dropWhile (== '.') param), "description" .= String des, "schema" .= object ["type" .= String t, "format" .= ft, "example" .= eg]]
   paramsJSON =
-    let ar = V.fromList $ map mapFunc params
+    let ar = V.fromList $ map mapQParamsFunc params
      in Array ar
 
 processItem :: T.Text -> Map.Map T.Text KeyPathGroup -> Map.Map T.Text KeyPathGroup
@@ -124,18 +117,18 @@ convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
                   (desc, t, ft, eg) = case field of
                     Just f ->
                       if fieldTypeToText f.format.swFieldType == "bool"
-                        then (f.field.fDescription, "boolean", f.field.fFormat, (V.head f.format.swExamples))
-                        else (f.field.fDescription, fieldTypeToText f.format.swFieldType, f.field.fFormat, (V.head f.format.swExamples))
+                        then (f.field.fDescription, "boolean", f.field.fFormat, V.head f.format.swExamples)
+                        else (f.field.fDescription, fieldTypeToText f.format.swFieldType, f.field.fFormat, V.head f.format.swExamples)
                     Nothing ->
                       let newK = T.replace "[*]" ".[]" (T.tail parentPath <> "." <> grp)
                           newF = find (\fi -> newK == fi.field.fKeyPath) categoryFields
-                          ob = case newF of
+                          obj = case newF of
                             Just f ->
                               if fieldTypeToText f.format.swFieldType == "bool"
-                                then (f.field.fDescription, "boolean", f.field.fFormat, (V.head f.format.swExamples))
-                                else (f.field.fDescription, fieldTypeToText f.format.swFieldType, f.field.fFormat, (V.head f.format.swExamples))
+                                then (f.field.fDescription, "boolean", f.field.fFormat, V.head f.format.swExamples)
+                                else (f.field.fDescription, fieldTypeToText f.format.swFieldType, f.field.fFormat, V.head f.format.swExamples)
                             Nothing -> ("", "string", "text", "")
-                       in ob
+                       in obj
                   (key, ob) =
                     if T.isSuffixOf "[*]" grp
                       then (T.takeWhile (/= '[') grp, object ["description" .= String desc, "type" .= String "array", "items" .= object ["type" .= t, "format" .= ft, "example" .= eg]])
@@ -143,7 +136,7 @@ convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
                   validKey = if key == "" then "schema" else key
                in object [AEKey.fromText validKey .= ob]
             else
-              let (key, t) = if T.isSuffixOf "[*]" grp then (T.takeWhile (/= '[') grp, "array") else (grp, "object")
+              let (key, t) = if T.isSuffixOf "[*]" grp then (T.takeWhile (/= '[') grp, "array"::String) else (grp, "object")
                   validKey = if key == "" then "schema" else key
                   ob =
                     if t == "array"
@@ -281,10 +274,10 @@ generateGetH sess pid = do
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
       endpoints <- Endpoints.endpointsByProjectId pid
-      let endpoint_hashes = V.map (\enp -> enp.hash) endpoints
+      let endpoint_hashes = V.map (.hash) endpoints
       shapes <- Shapes.shapesByEndpointHashes pid endpoint_hashes
       fields <- Fields.fieldsByEndpointHashes pid endpoint_hashes
-      let field_hashes = V.map (\field -> field.fHash) fields
+      let field_hashes = V.map (.fHash) fields
       formats <- Formats.formatsByFieldsHashes pid field_hashes
       let (projectTitle, projectDescription) = case project of
             (Just pr) -> (toText pr.title, toText pr.description)

@@ -1,5 +1,4 @@
 {-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE UndecidableInstances #-}
 
 module Server (app) where
 
@@ -113,7 +112,7 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "documentation" :> "save" :> ReqBody '[JSON] SaveSwaggerForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "generate_swagger" :> Get '[JSON] AE.Value
     :<|> "p" :> ProjectId :> "survey" :> ReqBody '[FormUrlEncoded] Survey.SurveyForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-    :<|> "charts_html" :> QP "pid" Projects.ProjectId :> QP "type" Charts.ChartType :> QP "group_by" Charts.GroupBy :> QP "query_by" Charts.QueryBy :> QP "num_slots" Int :> QP "limit" Int :> QP "from" ZonedTime :> QP "to" ZonedTime :> QP "theme" Text :> QPT "id" :> QP "show_legend" Bool :> Get '[HTML] (Html ())
+    :<|> "charts_html" :> QP "type" Charts.ChartType :> QP "group_by" Charts.GroupBy :> QP "query_by" Charts.QueryBy :> QP "num_slots" Int :> QP "limit" Int :> QP "from" ZonedTime :> QP "to" ZonedTime :> QP "theme" Text :> QPT "id" :> QP "show_legend" Bool :> Get '[HTML] (Html ())
 
 type PublicAPI =
   "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
