@@ -46,7 +46,7 @@ onboardingPage :: Projects.ProjectId -> Bool -> Bool -> Bool -> Html ()
 onboardingPage pid hasApikey hasRequest ans = do
   div_ [class_ "relative h-full"] $ do
     if ans
-      then surveyModal pid
+      then ""
       else surveyModal pid
     div_ [class_ "flex flex-col h-full w-full gap-16"] $ do
       div_ [class_ "flex flex-col w-full mt-10 py-4 items-center gap-4"] $ do
