@@ -128,7 +128,7 @@ function throughputEChartTable(renderAt, categories, data, gb, showLegend, theme
       width: '100%',
       left: '0%',
       top: '5%',
-      bottom: '9%',
+      bottom: '13%',
       containLabel: true
     },
     xAxis: {
@@ -145,9 +145,7 @@ function throughputEChartTable(renderAt, categories, data, gb, showLegend, theme
     series: getSeriesData(data)
   };
 
-  console.log("Check formmater")
   console.log(option)
-  console.dir(option)
   const myChart = echarts.init(document.getElementById(renderAt), theme);
   myChart.setOption(option);
 }

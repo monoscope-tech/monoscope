@@ -4,10 +4,10 @@ module Pages.Charts.Charts (chartsGetH, ChartType (..), throughput, latency, thr
 
 import Config (DashboardM, pool)
 import Data.Aeson qualified as AE
-import Data.List (groupBy, lookup)
+import Data.List (groupBy, lookup, foldl)
 import Data.Text (toLower)
 import Data.Text qualified as T
-import Data.Time (UTCTime, ZonedTime, diffUTCTime, utc, utcToZonedTime, zonedTimeToUTC)
+import Data.Time (UTCTime, ZonedTime, diffUTCTime, utc, utcToZonedTime, zonedTimeToUTC, formatTime, defaultTimeLocale)
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.Tuple.Extra (fst3, thd3)
 import Data.UUID qualified as UUID
@@ -28,6 +28,8 @@ import Relude.Unsafe qualified as Unsafe
 import Servant (FromHttpApiData (..))
 import Utils (DBField (MkDBField))
 import Witch (from)
+import Debug.Pretty.Simple (pTrace, pTraceShow, pTraceShowM)
+import Control.Monad (foldM)
 
 transform :: [String] -> [(Int, Int, String)] -> [Maybe Int]
 transform fields tuples =
@@ -45,40 +47,34 @@ pivot' rows = do
   let ngrouped = map (transform headers) grouped
   (headers, ngrouped)
 
-queryReqDump :: [ChartExp] -> DBT IO (Vector (Int, Int, String))
-queryReqDump exps = do
-  let (q, args) = buildReqDumpSQL exps
-  query Select (Query $ encodeUtf8 q) args
-
 -- test the query generation
--- >>> buildReqDumpSQL [TypeE BarCT, GByE GBEndpoint, QByE (QBStatusCodeGT 201), QByE (QBAnd (QBShapeHash "hash") (QBFormatHash "hash"))]
--- ("SELECT extract(epoch from time_bucket('1209600 seconds', created_at))::integer as timeB, COALESCE(COUNT(*), 0) total_count ,method||' '||url_path as g FROM apis.request_dumps WHERE project_id=?  AND  GROUP BY timeB ,method, url_path LIMIT 1000",[MkDBField MkDBField 201,MkDBField MkDBField "hash",MkDBField MkDBField "hash"])
+-- >>> buildReqDumpSQL [TypeE BarCT, GByE GBEndpoint, QByE [QBStatusCodeGT 201, QBShapeHash "hash", QBFormatHash "hash"]]
+-- ("SELECT extract(epoch from time_bucket('3600 seconds', created_at))::integer as timeB, COALESCE(COUNT(*), 0) total_count ,method||' '||url_path as g FROM apis.request_dumps WHERE status_code>? AND shape_hash=? AND ?=ANY(format_hashes) GROUP BY timeB ,method, url_path LIMIT 1000",[MkDBField 201,MkDBField "hash",MkDBField "hash"])
+--
 --
 -- >>> import Data.Time.Format
--- >>> let from = parseTimeM True defaultTimeLocale "%Y-%m-%d %H:%M:%S %z" "2023-01-01 12:00:00 +0000" :: Maybe ZonedTime
--- >>> let to = parseTimeM True defaultTimeLocale "%Y-%m-%d %H:%M:%S %z" "2023-01-14 12:00:00 +0000" :: Maybe ZonedTime
+-- >>> let from = Unsafe.fromJust $ parseTimeM True defaultTimeLocale "%Y-%m-%d %H:%M:%S %z" "2023-01-01 12:00:00 +0000" :: ZonedTime
+-- >>> let to = Unsafe.fromJust $ parseTimeM True defaultTimeLocale "%Y-%m-%d %H:%M:%S %z" "2023-01-14 12:00:00 +0000" :: ZonedTime
 -- >>> let pid = Projects.ProjectId $ Unsafe.fromJust $ UUID.fromString "00000000-0000-0000-0000-000000000000"
--- >>> buildReqDumpSQL $ [GByE GBStatusCode, QByE $ QBAnd (QBPId pid) (QBStatusCodeGT 400) , SlotsE 120, ShowLegendE, Theme "roma"] ++ catMaybes [FromE <$> from, ToE <$> to]
--- ("SELECT extract(epoch from time_bucket('9360 seconds', created_at))::integer as timeB, COALESCE(COUNT(*), 0) total_count ,status_code::text as status_code FROM apis.request_dumps WHERE project_id=?  AND  created_at BETWEEN ? AND ?  GROUP BY timeB ,status_code LIMIT 1000",[MkDBField MkDBField ProjectId {unProjectId = 00000000-0000-0000-0000-000000000000},MkDBField MkDBField 400,MkDBField 2023-01-01 12:00:00 +0000,MkDBField 2023-01-14 12:00:00 +0000])
--- >>> buildReqDumpSQL $ [GByE GBStatusCode, QByE $ QBAnd (QBPId pid) (QBStatusCodeGT 400) , SlotsE 120, ShowLegendE, Theme "roma"] ++ catMaybes [FromE <$> from, ToE <$> to] 
-
+-- >>> buildReqDumpSQL $ [GByE GBStatusCode, QByE [QBPId pid, QBStatusCodeGT 400, QBFrom from, QBTo to] , SlotsE 10, ShowLegendE, Theme "roma"] 
+-- ("SELECT extract(epoch from time_bucket('112320 seconds', created_at))::integer as timeB, COALESCE(COUNT(*), 0) total_count ,status_code::text as status_code FROM apis.request_dumps WHERE project_id=? AND status_code>? AND created_at>=? AND created_at<? GROUP BY timeB ,status_code LIMIT 1000",[MkDBField ProjectId {unProjectId = 00000000-0000-0000-0000-000000000000},MkDBField 400,MkDBField 2023-01-01 12:00:00 +0000,MkDBField 2023-01-14 12:00:00 +0000])
+--
+--
+-- >>> buildReqDumpSQL $ [GByE GBStatusCode, QByE [QBPId pid, QBStatusCodeGT 400, QBFrom from, QBTo to] , SlotsE 120, ShowLegendE, Theme "roma"]
+-- ("SELECT extract(epoch from time_bucket('9360 seconds', created_at))::integer as timeB, COALESCE(COUNT(*), 0) total_count ,status_code::text as status_code FROM apis.request_dumps WHERE project_id=? AND status_code>? AND created_at>=? AND created_at<? GROUP BY timeB ,status_code LIMIT 1000",[MkDBField ProjectId {unProjectId = 00000000-0000-0000-0000-000000000000},MkDBField 400,MkDBField 2023-01-01 12:00:00 +0000,MkDBField 2023-01-14 12:00:00 +0000])
 -- 
-buildReqDumpSQL :: [ChartExp] -> (Text, [DBField])
-buildReqDumpSQL exps = (q, args)
+--
+buildReqDumpSQL :: [ChartExp] -> (Text, [DBField], Maybe ZonedTime, Maybe ZonedTime)
+buildReqDumpSQL exps = (q, join qByArgs, mFrom, mTo)
  where
-  (intervalT, groupByFields, gBy, queryBy, limit, projectId, fromE, toE) = foldr go (60 * 60 * 24 * 14, ""::Text, ""::Text, [], 1000, Nothing, Nothing, Nothing) exps
 
-  calcInterval numSlotsE' fromE' toE' = floor (diffUTCTime (zonedTimeToUTC toE') (zonedTimeToUTC fromE')) `div` numSlotsE'
-
-  go (SlotsE n) (_, gbF, gb, qb, l, p, Just f, Just t) = (calcInterval n f t, gbF, gb, qb, l, p, Just f, Just t)
-  go (SlotsE n) (_, gbF, gb, qb, l, p, f, t) = (n, gbF, gb, qb, l, p, f, t)
-  go (GByE GBEndpoint) (i, _, gb, qb, l, p, f, t) = (i, ",method, url_path", ",method||' '||url_path as g", qb, l, p, f, t)
-  go (GByE GBStatusCode) (i, _, gb, qb, l, p, f, t) = (i, ",status_code", ",status_code::text as status_code", qb, l, p, f, t)
-  go (QByE qb) (i, gbF, gb, qbOld, l, p, f, t) = (i, gbF, gb, qb : qbOld, l, p, f, t)
+  (slots, groupByFields, gBy, queryBy, limit) = foldr go (120, ""::Text, ""::Text, [], 1000) exps
+  go (SlotsE n) (_, gbF, gb, qb, l) = (n, gbF, gb, qb, l)
+  go (GByE GBEndpoint) (i, _, gb, qb, l) = (i, ",method, url_path", ",method||' '||url_path as g", qb, l)
+  go (GByE GBStatusCode) (i, _, gb, qb, l) = (i, ",status_code", ",status_code::text as status_code", qb, l)
+  go (QByE qb) (i, gbF, gb, qbOld, l) = (i, gbF, gb, qb ++ qbOld, l)
   go (TypeE _) options = options
-  go (LimitE lm) (i, gbF, gb, qb, _, p, f, t) = (i, gbF, gb, qb, lm, p, f, t)
-  go (FromE zt) (i, gbF, gb, qb, l, p, _, t) = (i, gbF, gb, qb, l, p, Just zt, t)
-  go (ToE zt) (i, gbF, gb, qb, l, p, f, _) = (i, gbF, gb, qb, l, p, f, Just zt)
+  go (LimitE lm) (i, gbF, gb, qb, _) = (i, gbF, gb, qb, lm)
   go _ acc = acc
 
   (qByTxtList, qByArgs) = unzip $ runQueryBySql <$> queryBy
@@ -86,24 +82,16 @@ buildReqDumpSQL exps = (q, args)
   q =
     T.concat
       [ "SELECT extract(epoch from time_bucket('"
-      , show intervalT
+      , show $ fromMaybe 3600 $ calculateIntervalFromQuery slots (mFrom, mTo) queryBy
       , " seconds', created_at))::integer as timeB, "
       , "COALESCE(COUNT(*), 0) total_count "
       , toText gBy
-      , " FROM apis.request_dumps WHERE "
-      , if not $ null qByTxtList then " AND " else "" <> T.intercalate " AND " qByTxtList
-      , dateRangeStr
+      , " FROM apis.request_dumps"
+      , if null qByTxtList then "" else " WHERE " <> T.intercalate " AND " qByTxtList
       , " GROUP BY timeB "
       , toText groupByFields
       , " LIMIT " <> show limit
       ]
-
-  dateRangeStr =
-    if isJust fromE || isJust toE
-      then " created_at BETWEEN ? AND ? "
-      else ""
-
-  args = catMaybes $ [MkDBField <$> projectId] ++ (Just . MkDBField <$> join qByArgs) ++ [MkDBField <$> fromE, MkDBField <$> toE]
 
   -- >>> runQueryBy (QBEndpointHash "hash")
   -- "endpoint_hash=hash"
@@ -113,15 +101,42 @@ buildReqDumpSQL exps = (q, args)
   runQueryBySql (QBShapeHash t) = ("shape_hash=?", [MkDBField t])
   runQueryBySql (QBFormatHash t) = ("?=ANY(format_hashes)", [MkDBField t])
   runQueryBySql (QBStatusCodeGT t) = ("status_code>?", [MkDBField t])
+  runQueryBySql (QBFrom t) = ("created_at>=?", [MkDBField t])
+  runQueryBySql (QBTo t) = ("created_at<?", [MkDBField t])
   runQueryBySql (QBAnd a b) =
     let (txt1, arg1) = runQueryBySql a
         (txt2, arg2) = runQueryBySql b
      in (" ( " <> txt1 <> " AND " <> txt2 <> " ) ", arg1 ++ arg2)
 
+
+  dateRangeFromQueryBy :: [QueryBy] -> (Maybe ZonedTime, Maybe ZonedTime)
+  dateRangeFromQueryBy queryList = foldl' goDateRange (Nothing, Nothing) queryList
+    where
+      goDateRange :: (Maybe ZonedTime, Maybe ZonedTime) -> QueryBy -> (Maybe ZonedTime, Maybe ZonedTime)
+      goDateRange acc@(Just _from, Just _to) _ = acc  -- Both from and to found, no need to continue
+      goDateRange acc@(mFrom, mTo) (QBAnd a b) =acc  -- TODO: support checking QBAnd for date range foldl' goDateRange (mFrom, mTo) [a, b]
+      goDateRange (mFrom, mTo) (QBFrom from_) = (Just from_, mTo)
+      goDateRange (mFrom, mTo) (QBTo to_) = (mFrom, Just to_)
+      goDateRange acc _ = acc  -- Ignore all other constructors
+
+  calcInterval numSlotsE' fromE' toE' = floor (diffUTCTime (zonedTimeToUTC toE') (zonedTimeToUTC fromE')) `div` numSlotsE'
+
+  (mFrom, mTo) = dateRangeFromQueryBy queryBy
+
+  calculateIntervalFromQuery :: Int -> (Maybe ZonedTime, Maybe ZonedTime) -> [QueryBy] -> Maybe Int
+  calculateIntervalFromQuery numSlots (mFrom', mTo') queryList = do
+    to_ <- mTo'
+    from_ <- mFrom'
+    return $ calcInterval numSlots from_ to_
+
 type M = Maybe
 
-chartsGetH :: Sessions.PersistentSession -> M ChartType -> M GroupBy -> M QueryBy -> M Int -> M Int -> M ZonedTime -> M ZonedTime -> M Text -> M Text -> M Bool -> DashboardM (Html ())
-chartsGetH _ typeM groupByM queryByM slotsM limitsM fromM toM themeM idM showLegendM = do
+formatZonedTimeAsUTC :: ZonedTime ->Text 
+formatZonedTimeAsUTC zonedTime =
+  toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" (zonedTimeToUTC zonedTime)
+
+chartsGetH :: Sessions.PersistentSession -> M ChartType -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> DashboardM (Html ())
+chartsGetH _ typeM groupByM queryByM slotsM limitsM themeM idM showLegendM = do
   let chartExps =
         catMaybes
           [ TypeE <$> typeM
@@ -129,14 +144,15 @@ chartsGetH _ typeM groupByM queryByM slotsM limitsM fromM toM themeM idM showLeg
           , QByE <$> queryByM
           , SlotsE <$> slotsM
           , LimitE <$> limitsM
-          , FromE <$> fromM
-          , ToE <$> toM
           , Theme <$> themeM
           , IdE <$> idM
           , showLegendM >>= (\x -> if x then Just ShowLegendE else Nothing)
           ]
   pool <- asks pool
-  chartData <- liftIO $ withPool pool $ queryReqDump chartExps
+
+  let (q, args, fromM, toM) = buildReqDumpSQL chartExps
+  chartData <- liftIO $ withPool pool $ query Select (Query $ encodeUtf8 q) args
+
   let (headers, groupedData) = pivot' $ toList chartData
   let headersJSON = decodeUtf8 $ AE.encode headers
   let groupedDataJSON = decodeUtf8 $ AE.encode $ transpose groupedData
@@ -144,8 +160,8 @@ chartsGetH _ typeM groupByM queryByM slotsM limitsM fromM toM themeM idM showLeg
   let idAttr = fromMaybe (UUID.toText randomID) idM
   let showLegend = toLower $ show $ fromMaybe False showLegendM
   let chartThemeTxt = fromMaybe "" themeM
-  let fromDStr = maybe "" show fromM
-  let toDStr = maybe "" show toM
+  let fromDStr = maybe "" formatZonedTimeAsUTC fromM
+  let toDStr = maybe "" formatZonedTimeAsUTC toM
 
   let scriptContent = [text| throughputEChartTable("$idAttr",$headersJSON, $groupedDataJSON, ["Endpoint"], $showLegend, "$chartThemeTxt", "$fromDStr", "$toDStr") |]
 
@@ -159,11 +175,17 @@ data QueryBy
   | QBShapeHash Text
   | QBFormatHash Text
   | QBStatusCodeGT Int
+  | QBFrom ZonedTime
+  | QBTo ZonedTime
   | QBAnd QueryBy QueryBy
   deriving stock (Show, Read)
 
 instance FromHttpApiData QueryBy where
   parseQueryParam :: Text -> Either Text QueryBy
+  parseQueryParam = readEither . toString
+
+instance FromHttpApiData [QueryBy] where
+  parseQueryParam :: Text -> Either Text [QueryBy]
   parseQueryParam = readEither . toString
 
 data GroupBy
@@ -185,13 +207,11 @@ instance FromHttpApiData ChartType where
   parseQueryParam = readEither . toString
 
 data ChartExp
-  =  TypeE ChartType
+  = TypeE ChartType
   | GByE GroupBy
-  | QByE QueryBy
+  | QByE [QueryBy]
   | SlotsE Int
   | LimitE Int
-  | FromE ZonedTime
-  | ToE ZonedTime
   | Theme Text
   | IdE Text
   | ShowLegendE
@@ -223,8 +243,6 @@ lazy queries =
   runChartExp (QByE qb) = "query_by=" <> show qb
   runChartExp (SlotsE limit) = "num_slots=" <> show limit
   runChartExp (LimitE limit) = "limit=" <> show limit
-  runChartExp (FromE fr) = "from=" <> (iso8601Show . zonedTimeToUTC) fr
-  runChartExp (ToE to) = "to=" <> (iso8601Show . zonedTimeToUTC) to
   runChartExp (Theme theme) = toString $ "theme=" <> theme
   runChartExp (IdE ide) = "id=" <> toString ide
   runChartExp ShowLegendE = "show_legend=true"
@@ -280,6 +298,8 @@ runQueryBy (QBEndpointHash t) = "endpoint_hash=" <> t
 runQueryBy (QBShapeHash t) = "shape_hash=" <> t
 runQueryBy (QBFormatHash t) = "format_hash=" <> t
 runQueryBy (QBStatusCodeGT t) = "status_code_gt=" <> show t
+runQueryBy (QBFrom t) = ""
+runQueryBy (QBTo t) = ""
 runQueryBy (QBAnd a b) = runQueryBy a <> "&" <> runQueryBy b
 
 -- TODO: Delete after migrating to new chart strategy

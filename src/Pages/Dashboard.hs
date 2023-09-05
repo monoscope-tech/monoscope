@@ -205,7 +205,7 @@ dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledBySte
         div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] $ do
           select_ [] $ option_ [class_ "text-2xl font-normal"] "Throughput by Status Code"
           div_ [class_ "h-64 "] do
-            Charts.lazy $ [C.QByE $ C.QBPId pid, C.GByE C.GBStatusCode, C.SlotsE 120, C.ShowLegendE] ++ catMaybes [C.FromE <$> fromD, C.ToE <$> toD]
+            Charts.lazy [C.QByE $ C.QBPId pid : catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBStatusCode, C.SlotsE 120, C.ShowLegendE]
 
         div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] $ do
           select_ [] $ option_ [class_ "text-2xl font-normal"] "Latency Percentiles"
@@ -216,12 +216,12 @@ dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledBySte
         div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] $ do
           select_ [] $ option_ [class_ "text-2xl font-normal"] "Error Rates"
           div_ [class_ "h-64 "] do
-            Charts.lazy $ [C.QByE $ C.QBPId pid, C.GByE C.GBStatusCode, C.QByE $ C.QBStatusCodeGT 400 , C.SlotsE 120, C.ShowLegendE, C.Theme "roma"] ++ catMaybes [C.FromE <$> fromD, C.ToE <$> toD]
+            Charts.lazy [C.QByE $ [C.QBPId pid, C.QBStatusCodeGT 400] ++ catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBStatusCode , C.SlotsE 120, C.ShowLegendE, C.Theme "roma"]
 
         div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] $ do
           select_ [] $ option_ [class_ "text-2xl font-normal"] "Reqs Grouped by Endpoint"
           div_ [class_ "h-64 "] do
-            Charts.lazy $ [C.QByE $ C.QBPId pid, C.GByE C.GBEndpoint, C.SlotsE 120, C.ShowLegendE] ++ catMaybes [C.FromE <$> fromD, C.ToE <$> toD]
+            Charts.lazy [C.QByE $ C.QBPId pid : catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBEndpoint, C.SlotsE 120, C.ShowLegendE]
 
       div_ [class_ "col-span-3 card-round py-3 px-6"] $ do
         div_ [class_ "p-4"] $ select_ [] $ do
