@@ -22,12 +22,10 @@ import Data.Time.Clock (getCurrentTime)
 import Data.Tuple.Extra (fst3)
 import Data.UUID qualified as UUID
 import Models.Apis.Anomalies qualified as Anomalies
-import NeatInterpolation (text)
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Charts.Charts qualified as Charts
 import Relude
-import Servant.HTML.Lucid (HTML)
 import Utils (deleteParam, mIcon_, textToBool)
 
 data ParamInput = ParamInput
