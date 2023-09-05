@@ -551,7 +551,7 @@ stackOptions =
   , ("koa", "JS - Koa")
   , ("sailsjs", "JS - Sailsjs")
   , ("adonisjs", "JS - Adonisjs")
-  , ("fastify", "Python - Fastify")
+  , ("fastify", "Js - Fastify")
   , ("django", "Python - Django")
   , ("go-native", "Golang - Native")
   , ("gorilla-mux", "Golang - Gorilla Mux")
@@ -631,7 +631,7 @@ surveyModal pid = do
                           input_ [class_ "mr-3", type_ "checkbox", id_ value, name_ "stack", value_ value]
                           toHtml label
                     div_ [class_ "flex flex-col gap-2"] $ do
-                      label_ [class_ "font-medium mt-2"] "Other (specifiy)"
+                      label_ [class_ "font-medium mt-2"] "Other (specify)"
                       input_ [type_ "text", name_ "stack", class_ "px-2 py-1 bg-slate-50 border border-gray-300 text-gray-900 focus:outline-none rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full"]
 
                 div_ [class_ "flex flex-col gap-2"] do
