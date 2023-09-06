@@ -22,7 +22,6 @@ import Network.Wai (Request (requestHeaders))
 import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
 import Optics.Operators ((^.))
 import Pkg.ConvertKit qualified as ConvertKit
-import Pkg.Ortto qualified as Ortto
 import Relude
 import Servant (
   Context (EmptyContext, (:.)),

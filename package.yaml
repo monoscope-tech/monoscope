@@ -57,6 +57,7 @@ default-extensions:
   - TypeOperators
   - UndecidableInstances
   - OverloadedRecordDot
+  - TemplateHaskell
   # - OverloadedRecordUpdate
   # - RebindableSyntax
 

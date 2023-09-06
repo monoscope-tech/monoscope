@@ -22,12 +22,10 @@ import Data.Time.Clock (getCurrentTime)
 import Data.Tuple.Extra (fst3)
 import Data.UUID qualified as UUID
 import Models.Apis.Anomalies qualified as Anomalies
-import NeatInterpolation (text)
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Charts.Charts qualified as Charts
 import Relude
-import Servant.HTML.Lucid (HTML)
 import Utils (deleteParam, mIcon_, textToBool)
 
 data ParamInput = ParamInput
@@ -147,7 +145,7 @@ renderEndpoint :: Bool -> UTCTime -> Endpoints.EndpointRequestStats -> Html ()
 renderEndpoint activePage currTime enp = do
   div_ [class_ "flex py-4 gap-8 items-center endpoint_item"] do
     div_ [class_ "h-4 flex space-x-3 w-8 "] do
-      a_ [class_ $ endpointAccentColor (True {- isJust enp.acknowlegedAt -}) (True {- isJust enp.archivedAt -}) <> " w-2 h-full"] ""
+      a_ [class_ $ endpointAccentColor True {- isJust enp.acknowlegedAt -} True {- isJust enp.archivedAt -} <> " w-2 h-full"] ""
       let anomalyId = UUID.toText enp.anomalyId
       input_ [term "aria-label" "Select Issue", type_ "checkbox", name_ "anomalyId", value_ anomalyId]
     div_ [class_ "space-y-3 grow"] do
@@ -159,7 +157,7 @@ renderEndpoint activePage currTime enp = do
         div_ [class_ "flex items-center gap-2 mt-5"] do
           AnomalyList.anomalyArchiveButton enp.projectId (Anomalies.AnomalyId enp.anomalyId) (isJust enp.archivedAt)
           AnomalyList.anomalyAcknowlegeButton enp.projectId (Anomalies.AnomalyId enp.anomalyId) (isJust enp.acknowlegedAt)
-    div_ [class_ "flex items-center justify-center "] $ div_ [class_ "w-60 h-16 px-3"] $ Charts.throughput enp.projectId (enp.endpointId.toText) (Just $ Charts.QBEndpointHash enp.endpointHash) (Nothing) 14 Nothing False (Nothing, Nothing) Nothing
+    div_ [class_ "flex items-center justify-center "] $ div_ [class_ "w-60 h-16 px-3"] $ Charts.throughput enp.projectId (enp.endpointId.toText) (Just $ Charts.QBEndpointHash enp.endpointHash) Nothing 14 Nothing False (Nothing, Nothing) Nothing
     div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $ toHtml @String $ fmt $ commaizeF (enp.totalRequests)
 
 meter__ :: Double -> Html ()

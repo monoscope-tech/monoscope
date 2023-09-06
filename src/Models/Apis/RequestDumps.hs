@@ -9,7 +9,6 @@ module Models.Apis.RequestDumps (
   normalizeUrlPath,
   throughputBy,
   throughputBy',
-  latencyBy,
   requestDumpLogItemUrlPath,
   requestDumpLogUrlPath,
   selectReqLatenciesRolledBySteps,
@@ -24,7 +23,6 @@ module Models.Apis.RequestDumps (
 import Control.Error (hush)
 import Data.Aeson qualified as AE
 import Data.Default.Instances ()
-import Data.Text (unpack)
 import Data.Text qualified as T
 import Data.Time (CalendarDiffTime, ZonedTime, defaultTimeLocale, diffUTCTime, formatTime, zonedTimeToUTC)
 import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
@@ -33,8 +31,8 @@ import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, queryOne)
 import Database.PostgreSQL.Entity.Types
-import Database.PostgreSQL.Simple (FromRow, Only (Only), ResultError (ConversionFailed), ToRow)
-import Database.PostgreSQL.Simple.FromField (FromField (fromField), returnError)
+import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
+import Database.PostgreSQL.Simple.FromField (FromField (fromField))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField (toField))
 import Database.PostgreSQL.Simple.Types (Query (Query))
@@ -42,7 +40,6 @@ import Database.PostgreSQL.Transact (DBT, executeMany)
 import Deriving.Aeson qualified as DAE
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
-import Network.URI (URI, parseURI, uriAuthority, uriPath, uriQuery)
 import Optics.TH
 import Pkg.Parser
 import Relude hiding (many, some)
@@ -56,9 +53,11 @@ data SDKTypes
   | PhpSymfony
   | JsExpress
   | JsNest
+  | JsFastify
   | JavaSpringBoot
   | DotNet
   | PythonFastApi
+  | PythonFlask
   deriving stock (Show, Generic, Read, Eq)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SDKTypes
 
@@ -100,6 +99,8 @@ normalizeUrlPath JavaSpringBoot statusCode _method urlPath = removeQueryParams s
 normalizeUrlPath JsNest statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath DotNet statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath PythonFastApi statusCode _method urlPath = removeQueryParams statusCode urlPath
+normalizeUrlPath PythonFlask statusCode _method urlPath = removeQueryParams statusCode urlPath
+normalizeUrlPath JsFastify statusCode _method urlPath = removeQueryParams statusCode urlPath
 
 -- removeQueryParams ...
 -- >>> removeQueryParams 200 "https://apitoolkit.io/abc/:bla?q=abc"
@@ -280,40 +281,6 @@ select duration_steps, count(id)
 	ORDER BY duration_steps;
       |]
 
-latencyBy :: Projects.ProjectId -> Maybe Text -> Int -> (Maybe ZonedTime, Maybe ZonedTime) -> DBT IO Text
-latencyBy pid endpointHash numSlots dateRange@(fromT, toT) = do
-  let interval = case dateRange of
-        (Just a, Just b) -> diffUTCTime (zonedTimeToUTC b) (zonedTimeToUTC a)
-        _ -> 60 * 60 * 24 * 14
-
-  let intervalT = from @String @Text $ show $ floor interval `div` (if numSlots == 0 then 1 else numSlots)
-  let dateRange' = both (quoteTxt . from @String . formatTime defaultTimeLocale "%F %R" <$>) dateRange
-  let dateRangeStr = case dateRange' of
-        (Nothing, Just b) -> "AND timeb BETWEEN NOW() AND " <> b
-        (Just a, Just b) -> "AND timeb BETWEEN " <> a <> " AND " <> b
-        _ -> ""
-  let (fromD, toD) = bimap (maybe "now() - INTERVAL '14 days'" ("TIMESTAMP " <>)) (maybe "now()" ("TIMESTAMP " <>)) dateRange'
-  let q =
-        [text| 
-  with f as (  
-    SELECT
-            time_bucket_gapfill('$intervalT seconds', timeb, $fromD, $toD) time,
-            approx_percentile(0.5, rollup(agg))/1000000 p50,
-            approx_percentile(0.75, rollup(agg))/1000000 p75,
-            approx_percentile(0.9, rollup(agg))/1000000 p90
-    from
-        apis.project_requests_by_endpoint_per_min
-    where
-        project_id = ?
-        $dateRangeStr
-    group by
-        time
-  ) 
-  SELECT COALESCE(json_agg(json_build_array(to_char(f.time, 'YYYY-DD-MM HH24:MI:SS'), f.p50, f.p75, f.p90)), '[]')::text  from f; 
-  |]
-  (Only val) <- fromMaybe (Only "[]") <$> queryOne Select (Query $ encodeUtf8 q) pid
-  pure val
-
 -- A throughput chart query for the request_dump table.
 -- daterange :: (Maybe Int, Maybe Int)?
 -- We have a requirement that the date range could either be an interval like now to 7 days ago, or be specific dates like day x to day y.
@@ -378,7 +345,6 @@ throughputBy' pid groupByM endpointHash shapeHash formatHash statusCodeGT numSlo
         Just "endpoint" -> (",method, url_path", ",method||' '||url_path as g")
         Nothing -> ("", "")
         _ -> (groupBy', groupBy' <> "::text as g")
-  let groupByFinal = maybe "" (const ",g") groupByM
   let paramList = mapMaybe (MkDBField <$>) [endpointHash, shapeHash, formatHash, statusCodeGT]
   let condlist' = filter (/= "") condlist
   let cond

@@ -115,6 +115,7 @@ library
       TypeOperators
       UndecidableInstances
       OverloadedRecordDot
+      TemplateHaskell
   ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches -Wno-missing-kind-signatures
   build-depends:
       HaskellNet
@@ -231,6 +232,7 @@ executable apitoolkit-server-exe
       TypeOperators
       UndecidableInstances
       OverloadedRecordDot
+      TemplateHaskell
   ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches -Wno-missing-kind-signatures -threaded -rtsopts -with-rtsopts=-N -hiedir=.hie -O2
   build-depends:
       apitoolkit-server
@@ -273,6 +275,7 @@ test-suite doctests
       TypeOperators
       UndecidableInstances
       OverloadedRecordDot
+      TemplateHaskell
   ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches -Wno-missing-kind-signatures -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
   build-depends:
       apitoolkit-server
@@ -319,6 +322,7 @@ test-suite tests
       TypeOperators
       UndecidableInstances
       OverloadedRecordDot
+      TemplateHaskell
   ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches -Wno-missing-kind-signatures
   build-depends:
       apitoolkit-server
