@@ -83,11 +83,11 @@ startApp = do
         logger <& "🚀 Starting server at port " <> show envConfig.port
         logger <& "\n"
 
-        let ojStartArgs =
-              OJCli.UIStartArgs
-                { uistartAuth = OJCli.AuthNone
-                , uistartPort = 8081
-                }
+        -- let ojStartArgs =
+        --       OJCli.UIStartArgs
+        --         { uistartAuth = OJCli.AuthNone
+        --         , uistartPort = 8081
+        --         }
 
         let ojLogger logLevel logEvent = logger <& show (logLevel, logEvent)
         let ojTable = "background_jobs" :: OJTypes.TableName
@@ -97,7 +97,7 @@ startApp = do
             [ async (pubsubService logger envConfig poolConn projectCache)
             , async (run (Config.port envConfig) $ Server.app logger poolConn serverCtx)
             , async $ BackgroundJobs.jobsWorkerInit poolConn logger envConfig
-            , async $ OJCli.defaultWebUI ojStartArgs ojCfg
+            -- , async $ OJCli.defaultWebUI ojStartArgs ojCfg
             ]
         _ <- waitAnyCancel asyncs
         pass
