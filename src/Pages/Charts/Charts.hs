@@ -1,13 +1,14 @@
 {-# LANGUAGE DerivingVia #-}
 
-module Pages.Charts.Charts (chartsGetH, ChartType (..), throughput, latency, throughputEndpointHTML, latencyEndpointHTML, lazy, ChartExp (..), QueryBy (..), GroupBy (..)) where
+module Pages.Charts.Charts (chartsGetH, ChartType (..), throughput, throughputEndpointHTML, lazy, ChartExp (..), QueryBy (..), GroupBy (..)) where
 
 import Config (DashboardM, pool)
+import Control.Monad (foldM)
 import Data.Aeson qualified as AE
-import Data.List (groupBy, lookup, foldl)
+import Data.List (foldl, groupBy, lookup)
 import Data.Text (toLower)
 import Data.Text qualified as T
-import Data.Time (UTCTime, ZonedTime, diffUTCTime, utc, utcToZonedTime, zonedTimeToUTC, formatTime, defaultTimeLocale)
+import Data.Time (UTCTime, ZonedTime, defaultTimeLocale, diffUTCTime, formatTime, utc, utcToZonedTime, zonedTimeToUTC)
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.Tuple.Extra (fst3, thd3)
 import Data.UUID qualified as UUID
@@ -16,6 +17,7 @@ import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, withPool)
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Database.PostgreSQL.Transact (DBT)
+import Debug.Pretty.Simple (pTrace, pTraceShow, pTraceShowM)
 import Lucid
 import Lucid.Htmx
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -28,8 +30,6 @@ import Relude.Unsafe qualified as Unsafe
 import Servant (FromHttpApiData (..))
 import Utils (DBField (MkDBField))
 import Witch (from)
-import Debug.Pretty.Simple (pTrace, pTraceShow, pTraceShowM)
-import Control.Monad (foldM)
 
 transform :: [String] -> [(Int, Int, String)] -> [Maybe Int]
 transform fields tuples =
@@ -56,30 +56,30 @@ pivot' rows = do
 -- >>> let from = Unsafe.fromJust $ parseTimeM True defaultTimeLocale "%Y-%m-%d %H:%M:%S %z" "2023-01-01 12:00:00 +0000" :: ZonedTime
 -- >>> let to = Unsafe.fromJust $ parseTimeM True defaultTimeLocale "%Y-%m-%d %H:%M:%S %z" "2023-01-14 12:00:00 +0000" :: ZonedTime
 -- >>> let pid = Projects.ProjectId $ Unsafe.fromJust $ UUID.fromString "00000000-0000-0000-0000-000000000000"
--- >>> buildReqDumpSQL $ [GByE GBStatusCode, QByE [QBPId pid, QBStatusCodeGT 400, QBFrom from, QBTo to] , SlotsE 10, ShowLegendE, Theme "roma"] 
+-- >>> buildReqDumpSQL $ [GByE GBStatusCode, QByE [QBPId pid, QBStatusCodeGT 400, QBFrom from, QBTo to] , SlotsE 10, ShowLegendE, Theme "roma"]
 -- ("SELECT extract(epoch from time_bucket('112320 seconds', created_at))::integer as timeB, COALESCE(COUNT(*), 0) total_count ,status_code::text as status_code FROM apis.request_dumps WHERE project_id=? AND status_code>? AND created_at>=? AND created_at<? GROUP BY timeB ,status_code LIMIT 1000",[MkDBField ProjectId {unProjectId = 00000000-0000-0000-0000-000000000000},MkDBField 400,MkDBField 2023-01-01 12:00:00 +0000,MkDBField 2023-01-14 12:00:00 +0000])
 --
 --
 -- >>> buildReqDumpSQL $ [GByE GBStatusCode, QByE [QBPId pid, QBStatusCodeGT 400, QBFrom from, QBTo to] , SlotsE 120, ShowLegendE, Theme "roma"]
 -- ("SELECT extract(epoch from time_bucket('9360 seconds', created_at))::integer as timeB, COALESCE(COUNT(*), 0) total_count ,status_code::text as status_code FROM apis.request_dumps WHERE project_id=? AND status_code>? AND created_at>=? AND created_at<? GROUP BY timeB ,status_code LIMIT 1000",[MkDBField ProjectId {unProjectId = 00000000-0000-0000-0000-000000000000},MkDBField 400,MkDBField 2023-01-01 12:00:00 +0000,MkDBField 2023-01-14 12:00:00 +0000])
--- 
+--
 --
 buildReqDumpSQL :: [ChartExp] -> (Text, [DBField], Maybe ZonedTime, Maybe ZonedTime)
 buildReqDumpSQL exps = (q, join qByArgs, mFrom, mTo)
  where
-
-  (slots, groupByFields, gBy, queryBy, limit) = foldr go (120, ""::Text, ""::Text, [], 1000) exps
-  go (SlotsE n) (_, gbF, gb, qb, l) = (n, gbF, gb, qb, l)
-  go (GByE GBEndpoint) (i, _, gb, qb, l) = (i, ",method, url_path", ",method||' '||url_path as g", qb, l)
-  go (GByE GBStatusCode) (i, _, gb, qb, l) = (i, ",status_code", ",status_code::text as status_code", qb, l)
-  go (QByE qb) (i, gbF, gb, qbOld, l) = (i, gbF, gb, qb ++ qbOld, l)
+  (slots, groupByFields, gBy, queryBy, limit, q) = foldr go (120, "" :: Text, "" :: Text, [], 1000, qDefault) exps
+  go (SlotsE n) (_, gbF, gb, qb, l, qd) = (n, gbF, gb, qb, l, qd)
+  go (GByE GBEndpoint) (i, _, gb, qb, l, qd) = (i, ",method, url_path", ",method||' '||url_path as g", qb, l, qd)
+  go (GByE GBStatusCode) (i, _, gb, qb, l, qd) = (i, ",status_code", ",status_code::text as status_code", qb, l, qd)
+  go (GByE GBDurationPercentile)  (i, gbF, gb, qb, l, qd) =  (i, gbF, gb, qb, l, qForDurationPercentile)
+  go (QByE qb) (i, gbF, gb, qbOld, l, qd) = (i, gbF, gb, qb ++ qbOld, l, qd)
   go (TypeE _) options = options
-  go (LimitE lm) (i, gbF, gb, qb, _) = (i, gbF, gb, qb, lm)
+  go (LimitE lm) (i, gbF, gb, qb, _, qd) = (i, gbF, gb, qb, lm, qd)
   go _ acc = acc
 
   (qByTxtList, qByArgs) = unzip $ runQueryBySql <$> queryBy
 
-  q =
+  qDefault =
     T.concat
       [ "SELECT extract(epoch from time_bucket('"
       , show $ fromMaybe 3600 $ calculateIntervalFromQuery slots (mFrom, mTo) queryBy
@@ -91,6 +91,23 @@ buildReqDumpSQL exps = (q, join qByArgs, mFrom, mTo)
       , " GROUP BY timeB "
       , toText groupByFields
       , " LIMIT " <> show limit
+      ]
+
+  qForDurationPercentile =
+    T.concat
+      [ "WITH Percentiles AS ( "
+      , "SELECT extract(epoch from time_bucket('"
+      , show $ fromMaybe 10080 $ calculateIntervalFromQuery slots (mFrom, mTo) queryBy
+      , " seconds', created_at))::integer as timeB, "
+      , "PERCENTILE_CONT(ARRAY[0.5, 0.75, 0.9]) WITHIN GROUP (ORDER BY duration_ns) as percentiles "
+      , "FROM apis.request_dumps "
+      , if null qByTxtList then "" else " WHERE " <> T.intercalate " AND " qByTxtList
+      , " GROUP BY timeB "
+      , ") SELECT timeB, "
+      , "(unnest(percentiles)/1000000)::integer as percentile_value, "
+      , "unnest(ARRAY['p50', 'p75', 'p90']) as percentile_type "
+      , "FROM Percentiles "
+      , "LIMIT " <> show limit
       ]
 
   -- >>> runQueryBy (QBEndpointHash "hash")
@@ -108,17 +125,15 @@ buildReqDumpSQL exps = (q, join qByArgs, mFrom, mTo)
         (txt2, arg2) = runQueryBySql b
      in (" ( " <> txt1 <> " AND " <> txt2 <> " ) ", arg1 ++ arg2)
 
-
   dateRangeFromQueryBy :: [QueryBy] -> (Maybe ZonedTime, Maybe ZonedTime)
   dateRangeFromQueryBy queryList = foldl' goDateRange (Nothing, Nothing) queryList
-    where
-      goDateRange :: (Maybe ZonedTime, Maybe ZonedTime) -> QueryBy -> (Maybe ZonedTime, Maybe ZonedTime)
-      goDateRange acc@(Just _from, Just _to) _ = acc  -- Both from and to found, no need to continue
-      goDateRange acc@(mFrom, mTo) (QBAnd a b) =acc  -- TODO: support checking QBAnd for date range foldl' goDateRange (mFrom, mTo) [a, b]
-      goDateRange (mFrom, mTo) (QBFrom from_) = (Just from_, mTo)
-      goDateRange (mFrom, mTo) (QBTo to_) = (mFrom, Just to_)
-      goDateRange acc _ = acc  -- Ignore all other constructors
-
+   where
+    goDateRange :: (Maybe ZonedTime, Maybe ZonedTime) -> QueryBy -> (Maybe ZonedTime, Maybe ZonedTime)
+    goDateRange acc@(Just _from, Just _to) _ = acc -- Both from and to found, no need to continue
+    goDateRange acc@(mFrom, mTo) (QBAnd a b) = acc -- TODO: support checking QBAnd for date range foldl' goDateRange (mFrom, mTo) [a, b]
+    goDateRange (mFrom, mTo) (QBFrom from_) = (Just from_, mTo)
+    goDateRange (mFrom, mTo) (QBTo to_) = (mFrom, Just to_)
+    goDateRange acc _ = acc -- Ignore all other constructors
   calcInterval numSlotsE' fromE' toE' = floor (diffUTCTime (zonedTimeToUTC toE') (zonedTimeToUTC fromE')) `div` numSlotsE'
 
   (mFrom, mTo) = dateRangeFromQueryBy queryBy
@@ -131,7 +146,7 @@ buildReqDumpSQL exps = (q, join qByArgs, mFrom, mTo)
 
 type M = Maybe
 
-formatZonedTimeAsUTC :: ZonedTime ->Text 
+formatZonedTimeAsUTC :: ZonedTime -> Text
 formatZonedTimeAsUTC zonedTime =
   toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" (zonedTimeToUTC zonedTime)
 
@@ -150,7 +165,9 @@ chartsGetH _ typeM groupByM queryByM slotsM limitsM themeM idM showLegendM = do
           ]
   pool <- asks pool
 
-  let (q, args, fromM, toM) = buildReqDumpSQL chartExps
+  let (q, args, fromM, toM) = case groupByM of
+        Just GBDurationPercentile -> buildReqDumpSQL chartExps
+        _ -> buildReqDumpSQL chartExps
   chartData <- liftIO $ withPool pool $ query Select (Query $ encodeUtf8 q) args
 
   let (headers, groupedData) = pivot' $ toList chartData
@@ -163,14 +180,18 @@ chartsGetH _ typeM groupByM queryByM slotsM limitsM themeM idM showLegendM = do
   let fromDStr = maybe "" formatZonedTimeAsUTC fromM
   let toDStr = maybe "" formatZonedTimeAsUTC toM
 
-  let scriptContent = [text| throughputEChartTable("$idAttr",$headersJSON, $groupedDataJSON, ["Endpoint"], $showLegend, "$chartThemeTxt", "$fromDStr", "$toDStr") |]
+  let cType = case fromMaybe BarCT typeM of
+            BarCT -> "bar"
+            LineCT -> "line"
+
+  let scriptContent = [text| throughputEChartTable("$idAttr",$headersJSON, $groupedDataJSON, ["Endpoint"], $showLegend, "$chartThemeTxt", "$fromDStr", "$toDStr", "$cType") |]
 
   pure $ do
     div_ [id_ $ toText idAttr, class_ "w-full h-full"] ""
     script_ scriptContent
 
 data QueryBy
-  = QBPId  Projects.ProjectId
+  = QBPId Projects.ProjectId
   | QBEndpointHash Text
   | QBShapeHash Text
   | QBFormatHash Text
@@ -191,6 +212,7 @@ instance FromHttpApiData [QueryBy] where
 data GroupBy
   = GBEndpoint
   | GBStatusCode
+  | GBDurationPercentile
   deriving stock (Show, Read)
 
 instance FromHttpApiData GroupBy where
@@ -277,18 +299,6 @@ throughputEndpointHTML _ pid idM groupBy_ endpointHash shapeHash formatHash stat
     div_ [id_ $ "id-" <> entityId, class_ "w-full h-full"] ""
     script_ script
 
-latencyEndpointHTML :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
-latencyEndpointHTML _ pid idM endpointHash numSlotsM fromDStr toDStr chartTheme = do
-  pool <- asks pool
-  let fromD = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromDStr) :: Maybe UTCTime)
-  let toD = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
-  chartData <- liftIO $ withPool pool $ RequestDumps.latencyBy pid endpointHash (fromMaybe 0 numSlotsM) (fromD, toD)
-  let chartThemeTxt = fromMaybe "" chartTheme
-  let entityId = fromMaybe "" idM
-  pure $ do
-    div_ [id_ $ "id-" <> entityId, class_ "w-full h-full"] ""
-    script_ [text| latencyEChart("id-$entityId", $chartData, "$chartThemeTxt") |]
-
 -- TODO: Delete after migrating to new chart strategy
 -- >>> runQueryBy (QBEndpointHash "hash")
 -- "endpoint_hash=hash"
@@ -306,6 +316,7 @@ runQueryBy (QBAnd a b) = runQueryBy a <> "&" <> runQueryBy b
 runGroupBy :: GroupBy -> Text
 runGroupBy GBEndpoint = "group_by=endpoint"
 runGroupBy GBStatusCode = "group_by=status_code"
+runGroupBy GBDurationPercentile = "group_by=duration_percentile"
 
 -- This endpoint will return a throughput chart partial
 throughput :: Projects.ProjectId -> Text -> Maybe QueryBy -> Maybe GroupBy -> Int -> Maybe Int -> Bool -> (Maybe ZonedTime, Maybe ZonedTime) -> Maybe Text -> Html ()
@@ -325,25 +336,6 @@ throughput pid elemID qByM gByM numSlots' limit' showLegend' (fromD, toD) chartT
     [ id_ $ "id-" <> elemID
     , class_ "w-full h-full"
     , hxGet_ [text| /p/$pidT/charts_html/throughput?id=$elemID&show_legend=$showLegend&num_slots=$numSlots&$limit&$queryStr&from=$fromDStr&to=$toDStr&theme=$theme |]
-    , hxTrigger_ "intersect"
-    , hxSwap_ "outerHTML"
-    ]
-    ""
-
-latency :: Projects.ProjectId -> Text -> Maybe QueryBy -> Int -> (Maybe ZonedTime, Maybe ZonedTime) -> Maybe Text -> Html ()
-latency pid elemID qByM numSlots' (fromD, toD) chartTheme = do
-  let pidT = pid.toText
-  let queryBy = runQueryBy <$> qByM
-  let queryStr = [queryBy] & catMaybes & T.intercalate "&"
-  let numSlots = show numSlots'
-  let fromDStr = from @String @Text $ maybe "" (iso8601Show . zonedTimeToUTC) fromD
-  let toDStr = from @String @Text $ maybe "" (iso8601Show . zonedTimeToUTC) toD
-  let theme = fromMaybe "" chartTheme
-
-  div_
-    [ id_ $ "id-" <> elemID
-    , class_ "w-full h-full"
-    , hxGet_ [text| /p/$pidT/charts_html/latency?id=$elemID&num_slots=$numSlots&$queryStr&from=$fromDStr&to=$toDStr&theme=$theme |]
     , hxTrigger_ "intersect"
     , hxSwap_ "outerHTML"
     ]
