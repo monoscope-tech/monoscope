@@ -53,11 +53,9 @@ data SDKTypes
   | PhpSymfony
   | JsExpress
   | JsNest
-  | JsFastify
   | JavaSpringBoot
   | DotNet
   | PythonFastApi
-  | PythonFlask
   deriving stock (Show, Generic, Read, Eq)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SDKTypes
 
@@ -99,8 +97,6 @@ normalizeUrlPath JavaSpringBoot statusCode _method urlPath = removeQueryParams s
 normalizeUrlPath JsNest statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath DotNet statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath PythonFastApi statusCode _method urlPath = removeQueryParams statusCode urlPath
-normalizeUrlPath PythonFlask statusCode _method urlPath = removeQueryParams statusCode urlPath
-normalizeUrlPath JsFastify statusCode _method urlPath = removeQueryParams statusCode urlPath
 
 -- removeQueryParams ...
 -- >>> removeQueryParams 200 "https://apitoolkit.io/abc/:bla?q=abc"
