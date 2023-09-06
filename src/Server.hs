@@ -1,5 +1,4 @@
 {-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE UndecidableInstances #-}
 
 module Server (app) where
 
@@ -107,13 +106,12 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "redacted_fields" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "redacted_fields" :> ReqBody '[FormUrlEncoded] RedactFieldForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "charts_html" :> "throughput" :> QPT "id" :> QPT "group_by" :> QPT "endpoint_hash" :> QPT "shape_hash" :> QPT "format_hash" :> QPT "status_code_gt" :> QPI "num_slots" :> QPI "limit" :> QPB "show_legend" :> QPT "from" :> QPT "to" :> QPT "theme" :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "charts_html" :> "latency" :> QPT "id" :> QPT "endpoint_hash" :> QPI "num_slots" :> QPT "from" :> QPT "to" :> QPT "theme" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "documentation" :> QPT "swagger_id" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "documentation" :> ReqBody '[FormUrlEncoded] SwaggerForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "documentation" :> "save" :> ReqBody '[JSON] SaveSwaggerForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "generate_swagger" :> Get '[JSON] AE.Value
     :<|> "p" :> ProjectId :> "survey" :> ReqBody '[FormUrlEncoded] Survey.SurveyForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-    :<|> "charts_html" :> QP "pid" Projects.ProjectId :> QP "type" Charts.ChartType :> QP "group_by" Charts.GroupBy :> QP "query_by" Charts.QueryBy :> QP "num_slots" Int :> QP "limit" Int :> QP "from" ZonedTime :> QP "to" ZonedTime :> QP "theme" Text :> QPT "id" :> QP "show_legend" Bool :> Get '[HTML] (Html ())
+    :<|> "charts_html" :> QP "chart_type" Charts.ChartType :> QP "group_by" Charts.GroupBy :> QP "query_by" [Charts.QueryBy] :> QP "num_slots" Int :> QP "limit" Int :> QP "theme" Text :> QPT "id" :> QP "show_legend" Bool :> Get '[HTML] (Html ())
 
 type PublicAPI =
   "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
@@ -180,7 +178,6 @@ protectedServer sess =
     :<|> RedactedFields.redactedFieldsGetH sess
     :<|> RedactedFields.redactedFieldsPostH sess
     :<|> Charts.throughputEndpointHTML sess
-    :<|> Charts.latencyEndpointHTML sess
     :<|> Documentation.documentationGetH sess
     :<|> Documentation.documentationPostH sess
     :<|> Documentation.documentationPutH sess

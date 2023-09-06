@@ -25,12 +25,10 @@ import Data.List.Unique
 import Data.Pool (withResource)
 import Data.Text (toLower)
 import Data.Text qualified as T
-import Data.Tuple.Extra (thd3)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Valor (Valor, check1, failIf, validateM)
 import Data.Valor qualified as Valor
 import Database.PostgreSQL.Entity.DBT (withPool)
-import Database.PostgreSQL.Transact (DBT)
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript
@@ -193,7 +191,7 @@ createProjectBody sess envCfg isUpdate cp cpe = do
         form_ [class_ "col-span-1 relative px-3 sm:px-10 border border-gray-200 py-10  bg-white rounded-3xl", hxPost_ "/p/new", hxTarget_ "#main-content", hxSwap_ "outerHTML", id_ "createUpdateBodyForm"] $ do
           input_ [name_ "isUpdate", type_ "hidden", value_ $ if isUpdate then "true" else "false"]
           input_ [name_ "projectId", type_ "hidden", value_ $ cp.projectId]
-          input_ [name_ "paymentPlan", type_ "hidden", value_ $ paymentPlan, id_ "paymentPlanEl"]
+          input_ [name_ "paymentPlan", type_ "hidden", value_ paymentPlan, id_ "paymentPlanEl"]
           div_ $ do
             label_ [class_ "text-gray-700 mx-2 text-sm"] do
               "Title"

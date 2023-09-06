@@ -149,11 +149,11 @@ getShapeFromOpShape pid curTime opShape =
     }
  where
   endpointHash = getEndpointHash pid opShape.opUrl opShape.opMethod
-  qpKP = V.map (\v -> v.fkKeyPath) opShape.opQueryParamsKeyPaths
-  rqHKP = V.map (\v -> v.fkKeyPath) opShape.opRequestHeadersKeyPaths
-  rqBKP = V.map (\v -> v.fkKeyPath) opShape.opRequestBodyKeyPaths
-  rsHKP = V.map (\v -> v.fkKeyPath) opShape.opResponseHeadersKeyPaths
-  rsBKP = V.map (\v -> v.fkKeyPath) opShape.opResponseBodyKeyPaths
+  qpKP = V.map (.fkKeyPath) opShape.opQueryParamsKeyPaths
+  rqHKP = V.map (.fkKeyPath) opShape.opRequestHeadersKeyPaths
+  rqBKP = V.map (.fkKeyPath) opShape.opRequestBodyKeyPaths
+  rsHKP = V.map (.fkKeyPath) opShape.opResponseHeadersKeyPaths
+  rsBKP = V.map (.fkKeyPath) opShape.opResponseBodyKeyPaths
   shapeHash = getShapeHash endpointHash opShape.opStatus rsBKP rsHKP rqBKP qpKP
   qpKPHashes = V.map (\v -> getFieldHash endpointHash v.fkCategory v.fkKeyPath v.fkType) opShape.opQueryParamsKeyPaths
   rqHKPHashes = V.map (\v -> getFieldHash endpointHash v.fkCategory v.fkKeyPath v.fkType) opShape.opRequestHeadersKeyPaths
@@ -217,8 +217,8 @@ documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id, endpoint
   res <- liftIO $ withPool pool $ do
     currentTime <- liftIO getZonedTime
     let newEndpoints = V.toList $ V.map (getEndpointFromOpEndpoint pid) endpoints
-    let shapes = V.toList (V.map (getShapeFromOpShape pid currentTime) (V.filter (\x -> x.opShapeChanged) diffsInfo))
-    let nestedOps = V.map (\x -> x.opOperations) diffsInfo
+    let shapes = V.toList (V.map (getShapeFromOpShape pid currentTime) (V.filter (.opShapeChanged) diffsInfo))
+    let nestedOps = V.map (.opOperations) diffsInfo
     let ops = flattenVector (V.toList nestedOps)
     let fAndF = V.toList (V.map (getFieldAndFormatFromOpShape pid) ops)
     let fields = nubBy (\x y -> x.hash == y.hash) (map fst fAndF) -- to prevent ON CONFLICT DO UPDATE command cannot affect row a second time
@@ -285,10 +285,10 @@ documentationGetH sess pid swagger_id = do
           pure (sw, idx)
         ([], Nothing) -> do
           endpoints <- Endpoints.endpointsByProjectId pid
-          let endpoint_hashes = V.map (\enp -> enp.hash) endpoints
+          let endpoint_hashes = V.map (.hash) endpoints
           shapes <- Shapes.shapesByEndpointHashes pid endpoint_hashes
           fields <- Fields.fieldsByEndpointHashes pid endpoint_hashes
-          let field_hashes = V.map (\field -> field.fHash) fields
+          let field_hashes = V.map (.fHash) fields
           formats <- Formats.formatsByFieldsHashes pid field_hashes
           let (projectTitle, projectDescription) = case project of
                 (Just pr) -> (toText pr.title, toText pr.description)

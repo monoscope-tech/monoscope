@@ -5,17 +5,13 @@ import Database.PostgreSQL.Entity (selectById)
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query)
 import Database.PostgreSQL.Simple (Only (Only), Query)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-
-import Data.Vector qualified as V
 import Database.PostgreSQL.Transact (DBT, executeMany)
 import Database.PostgreSQL.Transact qualified as PgT
 import Models.Projects.Projects qualified as Projects
-
 import Data.Time (ZonedTime)
 import Models.Apis.Fields.Types (Field, FieldCategoryEnum, FieldId, FieldTypes, SwField)
 import Models.Apis.Fields.Types qualified as FT
 import Optics.Core ((^.))
-
 import Relude
 import Utils (DBField (MkDBField))
 

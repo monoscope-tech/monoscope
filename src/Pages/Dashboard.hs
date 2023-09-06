@@ -2,15 +2,31 @@ module Pages.Dashboard (dashboardGetH) where
 
 import Config
 import Data.Aeson qualified as AE
-import Data.Default (def)
-import Data.Time (UTCTime, ZonedTime, addUTCTime, formatTime, getCurrentTime, secondsToNominalDiffTime, utc, utcToZonedTime)
-import Data.Time.Format (defaultTimeLocale)
+import Data.Default ( def, def )
+import Data.Time
+    ( UTCTime,
+      ZonedTime,
+      addUTCTime,
+      formatTime,
+      getCurrentTime,
+      secondsToNominalDiffTime,
+      utc,
+      utcToZonedTime,
+      UTCTime,
+      ZonedTime,
+      addUTCTime,
+      formatTime,
+      getCurrentTime,
+      secondsToNominalDiffTime,
+      utc,
+      utcToZonedTime )
+import Data.Time.Format ( defaultTimeLocale, defaultTimeLocale )
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Fmt
 import Lucid
-import Lucid.Hyperscript (__)
+import Lucid.Hyperscript ( __, __ )
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
@@ -19,23 +35,16 @@ import NeatInterpolation (text)
 import Pages.Anomalies.AnomalyList qualified as AnomaliesList
 import Pages.BodyWrapper
 import Pages.Charts.Charts qualified as Charts
-import Servant (Union, WithStatus (..), respond)
-import Utils (GetOrRedirect, redirect)
-
+import Servant
+    ( Union,
+      WithStatus(..),
+      respond )
+import Utils ( GetOrRedirect, redirect, deleteParam, mIcon_ )
 import Pages.Components (statBox)
-import Servant (Header, Headers, addHeader, noHeader)
-import Servant.Htmx (HXPush, HXRedirect, HXTrigger)
-
-import Data.Default (def)
-import Data.Time (UTCTime, ZonedTime, addUTCTime, formatTime, getCurrentTime, secondsToNominalDiffTime, utc, utcToZonedTime)
-import Data.Time.Format (defaultTimeLocale)
-import Fmt
-import Lucid.Hyperscript (__)
 import Pages.Charts.Charts qualified as C
 import Relude hiding (max, min)
 import System.Clock
 import Text.Interpolation.Nyan
-import Utils (deleteParam, mIcon_)
 import Witch (from)
 
 timePickerItems :: [(Text, Text)]
@@ -57,7 +66,7 @@ dashboardGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text 
 dashboardGetH sess pid fromDStr toDStr sinceStr' = do
   pool <- asks pool
   now <- liftIO getCurrentTime
-  let sinceStr = if (isNothing fromDStr && isNothing toDStr && isNothing sinceStr') || (fromDStr == Just "") then Just "14D" else sinceStr'
+  let sinceStr = if isNothing fromDStr && isNothing toDStr && isNothing sinceStr' || fromDStr == Just "" then Just "14D" else sinceStr'
 
   (hasApikeys, hasRequest) <- liftIO $
     withPool pool $ do
@@ -167,7 +176,7 @@ dashboardPage pid paramInput currTime projectStats reqLatenciesRolledByStepsJ da
     |]
 
 dStats :: Projects.ProjectId -> Projects.ProjectRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
-dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledByStepsJ dateRange@(from, to) = do
+dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledByStepsJ dateRange@(fromD, toD) = do
   let _ = min
   when (projReqStats.totalRequests == 0) do
     section_ [class_ "card-round p-5 sm:p-10 space-y-4 text-lg"] $ do
@@ -176,14 +185,13 @@ dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledBySte
       a_ [href_ "https://apitoolkit.io/docs/quickstarts/", class_ "btn-indigo btn-sm my-3 -ml-0 mt-6", target_ "_blank"] "Read the setup guide"
 
   section_ [class_ "space-y-3"] $ do
-    div_ [class_ "flex justify-between mt-4"] $ do
-      div_ [class_ "flex flex-row"] $ do
-        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]] $
-          img_
-            [ src_ "/assets/svgs/cheveron-down.svg"
-            , class_ "h-4 mr-3 mt-1 w-4"
-            ]
-        span_ [class_ "text-lg text-slate-700"] "Stats"
+    div_ [class_ "flex justify-between mt-4"] $ div_ [class_ "flex flex-row"] $ do
+      a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]] $
+        img_
+          [ src_ "/assets/svgs/cheveron-down.svg"
+          , class_ "h-4 mr-3 mt-1 w-4"
+          ]
+      span_ [class_ "text-lg text-slate-700"] "Stats"
 
     div_ [class_ "reqResSubSection space-y-5"] $ do
       div_ [class_ "grid grid-cols-5 gap-5"] $ do
@@ -194,41 +202,31 @@ dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledBySte
         statBox "Fields" "Total fields which are active now vs last week" projReqStats.totalFields (Just projReqStats.totalFieldsLastWeek)
 
       div_ [class_ "flex gap-5"] do
-        div_ [class_ "flex-1 card-round p-3"] $ do
-          div_ [class_ "p-4 space-y-6"] $ do
-            select_ [] $ do
-              option_ [class_ "text-2xl font-normal"] "Throughput by Status Code"
-            div_ [class_ "h-64 "] do
-              Charts.throughput pid "reqsByStatusCode" Nothing (Just Charts.GBStatusCode) 120 Nothing True dateRange Nothing
-              Charts.lazy [C.PIdE pid, C.GByE C.GBStatusCode, C.SlotsE 120, C.ShowLegendE]
+        div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] $ do
+          select_ [] $ option_ [class_ "text-2xl font-normal"] "Throughput by Status Code"
+          div_ [class_ "h-64 "] do
+            Charts.lazy [C.QByE $ C.QBPId pid : catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBStatusCode, C.SlotsE 120, C.ShowLegendE]
 
-        div_ [class_ "flex-1 card-round p-3"] $ do
-          div_ [class_ "p-4 space-y-6"] $ do
-            select_ [] $ do
-              option_ [class_ "text-2xl font-normal"] "Latency Percentiles"
-            div_ [class_ "h-64 "] do
-              Charts.latency pid "reqsLatencyPercentiles" Nothing 120 dateRange Nothing
+        div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] $ do
+          select_ [] $ option_ [class_ "text-2xl font-normal"] "Latency Percentiles"
+          div_ [class_ "h-64 "] do
+            Charts.lazy [C.QByE $ C.QBPId pid : catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBDurationPercentile, C.SlotsE 120, C.ShowLegendE, C.TypeE C.LineCT]
 
       div_ [class_ "flex gap-5"] do
-        div_ [class_ "flex-1 card-round p-3"] $ do
-          div_ [class_ "p-4 space-y-6"] $ do
-            select_ [] $ do
-              option_ [class_ "text-2xl font-normal"] "Error Rates"
-            div_ [class_ "h-64 "] do
-              Charts.throughput pid "reqsErrorRates" (Just $ Charts.QBStatusCodeGT 400) (Just Charts.GBStatusCode) 120 Nothing True dateRange (Just "roma")
+        div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] $ do
+          select_ [] $ option_ [class_ "text-2xl font-normal"] "Error Rates"
+          div_ [class_ "h-64 "] do
+            Charts.lazy [C.QByE $ [C.QBPId pid, C.QBStatusCodeGT 400] ++ catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBStatusCode , C.SlotsE 120, C.ShowLegendE, C.Theme "roma"]
 
-        div_ [class_ "flex-1 card-round p-3"] $ do
-          div_ [class_ "p-4 space-y-6"] $ do
-            select_ [] $ do
-              option_ [class_ "text-2xl font-normal"] "Reqs Grouped by Endpoint"
-            div_ [class_ "h-64 "] do
-              Charts.throughput pid "reqsByEndpoints" Nothing (Just Charts.GBEndpoint) 120 Nothing True dateRange Nothing
+        div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] $ do
+          select_ [] $ option_ [class_ "text-2xl font-normal"] "Reqs Grouped by Endpoint"
+          div_ [class_ "h-64 "] do
+            Charts.lazy [C.QByE $ C.QBPId pid : catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBEndpoint, C.SlotsE 120, C.ShowLegendE]
 
       div_ [class_ "col-span-3 card-round py-3 px-6"] $ do
-        div_ [class_ "p-4"] $ do
-          select_ [] $ do
-            option_ "Request Latency Distribution"
-            option_ "Avg Reqs per minute"
+        div_ [class_ "p-4"] $ select_ [] $ do
+          option_ "Request Latency Distribution"
+          option_ "Avg Reqs per minute"
         div_ [class_ "grid grid-cols-9  gap-8 w-full"] $ do
           div_ [id_ "reqsLatencyHistogram", class_ "col-span-7 h-72"] ""
           div_ [class_ "col-span-2 space-y-4 "] $ do

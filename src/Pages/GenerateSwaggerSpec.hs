@@ -2,7 +2,6 @@
 
 module Pages.GenerateSwaggerSpec (spec) where
 
-import Data.Aeson (decode, encode)
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ
 import Data.Vector qualified as V

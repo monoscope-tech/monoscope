@@ -79,7 +79,52 @@ function stackedChart(title, series, _data, interp, width = 800, height = 400) {
   return new uPlot(opts, data, document.body);
 }
 
-function throughputEChartTable(renderAt, categories, data, gb, showLegend, theme, from, to) {
+function defaultFormatter(params) {
+  let result = '';
+  if (params.length > 0) {
+    let dateV = params[0].axisValueLabel;
+    result += `<div>${dateV}</div>`
+  }
+  params.forEach(param => {
+    // Check if data (value) is not zero or null
+    if (param.value !== null && param.value[1] !== null) {
+      result += `<div >
+                            <div class="monospace flex flex-row space-between">
+                                <div class="flex-1">${param.marker}${param.seriesName}</div>
+                                <strong class="shrink pl-3 font-bold">${param.value[1]}</strong>
+                              </div>
+                        </div>`;
+    }
+  });
+  return result;
+}
+
+function durationFormatter(params) {
+  let result = '';
+  if (params.length > 0) {
+    let dateV = params[0].axisValueLabel;
+    result += `<div>${dateV}</div>`
+  }
+  params.forEach(param => {
+    let index = param.encode.y[0];
+    // Check if data (value) is not zero or null
+    if (param.value !== null && param.value[index] !== null) {
+      let prettyVal = `${Math.trunc(param.value[index])}ms`;
+      if (param.value[index] > 1000) {
+        prettyVal = `${Math.trunc(param.value[index] / 1000)}s`
+      }
+      result += `<div >
+                            <div class="monospace flex flex-row space-between">
+                                <div class="flex-1">${param.marker}${param.seriesName}</div>
+                                <strong class="shrink pl-3 font-bold">${prettyVal}</strong>
+                              </div>
+                        </div>`;
+    }
+  });
+  return result;
+}
+
+function throughputEChartTable(renderAt, categories, data, gb, showLegend, theme, from, to, chartType) {
   let backgroundStyle = {
     color: 'rgba(240,248,255, 0.4)'
   }
@@ -87,7 +132,7 @@ function throughputEChartTable(renderAt, categories, data, gb, showLegend, theme
     return data.slice(1).map((seriesData, index) => {
       return {
         name: categories[index],
-        type: 'bar',
+        type: chartType,
         stack: "Endpoints",
         showBackground: true,
         backgroundStyle: backgroundStyle,
@@ -97,27 +142,19 @@ function throughputEChartTable(renderAt, categories, data, gb, showLegend, theme
     });
   };
 
+  let fmter = defaultFormatter;
+  if (chartType == 'line') {
+    // Temporary workaround until js knows what kind of chart it is, or the units
+    fmter = durationFormatter
+  }
+
   const option = {
     tooltip: {
       trigger: 'axis',
       axisPointer: {
         type: 'shadow'
       },
-      formatter: function(params) {
-        let result = '';
-        params.forEach(param => {
-          // Check if data (value) is not zero or null
-          if (param.value !== null && param.value[1] !== null) {
-            result += `<div >
-                            <div class="monospace flex flex-row space-between">
-                                <div class="flex-1">${param.marker}${param.seriesName}</div>
-                                <strong class="shrink pl-3 font-bold">${param.value[1]}</strong>
-                              </div>
-                        </div>`;
-          }
-        });
-        return result;
-      }
+      formatter: fmter
     },
     legend: {
       type: 'scroll',
@@ -128,127 +165,66 @@ function throughputEChartTable(renderAt, categories, data, gb, showLegend, theme
       width: '100%',
       left: '0%',
       top: '5%',
-      bottom: '9%',
+      bottom: '13%',
       containLabel: true
     },
     xAxis: {
       type: 'time',
-      min: from, 
+      min: from,
       max: to,
       boundaryGap: [0, 0.01],
     },
     yAxis: {
       type: 'value',
       show: true,
-      min: 0
+      min: 0,
     },
     series: getSeriesData(data)
   };
 
-  console.log("Check formmater")
-  console.log(option)
-  console.dir(option)
+  if (chartType == 'line') {
+    option.yAxis.axisLabel = {
+      formatter: function(params) {
+        if (params >= 1000) {
+          return `${Math.trunc(params / 1000)}s`
+        }
+        return `${Math.trunc(params)}ms`
+      },
+      show: true,
+      position: 'inside'
+    }
+  }
+
+
   const myChart = echarts.init(document.getElementById(renderAt), theme);
   myChart.setOption(option);
 }
 
-function throughputEChartTable3(renderAt, categories, _data, gb, showLegend, theme) {
-  const series = categories.map(x => ({ type: 'bar', label: x, width: 2 }));
-  series.unshift({});
-  console.dir(series)
-  // Prepend empty string for the header row
-  categories.unshift("");
-  console.table(_data);
-  const tableData = _data.map((row, index) => [categories[index], ...row]);
-  console.table(tableData);
-
-  const opts = {
-    title: "My Chart",
-    id: "chart1",
-    class: "my-chart",
-    width: 800,
-    height: 600,
-    series: series
-  }
-  console.dir(opts)
-
-  return new uPlot(opts, _data, document.getElementById(renderAt));
-}
-
-function throughputEChartTable2(renderAt, categories, _data, gb, showLegend, theme) {
-  const series = categories.map(_ => ({ type: 'bar' }));
-  console.dir(series)
-  // Prepend empty string for the header row
-  categories.unshift("");
-
-  const tableData = _data.map((row, index) => [categories[index], ...row]);
-  console.table(tableData);
-  let { opts, data } = getStackedOpts("Bars stacked", series, tableData, null);
-  opts.title = "Bar Stacked";
-  opts.width = 1600;
-  opts.height = 400;
-  console.log("uPlot called")
-  return new uPlot(opts, data, document.getElementById(renderAt));
-}
-
-function throughputEChartTable2(renderAt, categories, data, gb, showLegend, theme) {
-  const series = categories.map(_ => ({ type: 'bar' }));
-  console.dir(series)
-  // Prepend empty string for the header row
-  categories.unshift("");
-
-  const normalizedData = data.map((row, index) => [categories[index], ...row]);
-  console.log(normalizedData)
-
-  const myChart = echarts.init(document.getElementById(renderAt), theme);
-  const option = {
-    dataset: {
-      source: normalizedData
-    },
-    legend: { show: showLegend, type: 'scroll', top: 'bottom', data: categories.slice(0, data.length - 1) },
-    grid: {
-      width: '100%',
-      left: '0%',
-      top: '5%',
-      bottom: '1.8%',
-      containLabel: true
-    },
-    tooltip: {
-      trigger: 'axis',
-    },
-    xAxis: { show: showLegend, type: 'time' },
-    yAxis: { show: showLegend, type: 'value' },
-    series: series,
-  };
-  if (showLegend) {
-    option.grid.bottom = '9%'
-  }
-  console.log(option)
-  myChart.setOption(option);
-}
-
-
-function latencyEChart(renderAt, data, theme) {
+function latencyEChart(renderAt, data, theme, from, to) {
   const showLegend = true;
   const option = {
     tooltip: {
-      trigger: 'axis'
+      trigger: 'axis',
+      formatter: durationFormatter
     },
     legend: { show: showLegend, type: 'scroll', top: 'bottom' },
     xAxis: {
-      type: 'category',
-      scale: true
+      type: 'time',
+      min: from,
+      max: to,
+      boundaryGap: [0, 0.01]
     },
     yAxis: {
       type: 'value',
       scale: true,
       boundaryGap: ['5%', '5%'],
+      min: 0,
       axisLabel: {
         formatter: function(params) {
           if (params > 1000) {
-            return `$${params / 1000}s`
+            return `${Math.trunc(params / 1000)}s`
           }
-          return `$${params}ms`
+          return `${Math.trunc(params)}ms`
         },
         show: true,
         position: 'inside'

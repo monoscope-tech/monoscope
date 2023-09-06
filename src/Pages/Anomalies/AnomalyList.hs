@@ -100,9 +100,7 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM endpointM hxRequestM hxBo
   let ackd = textToBool <$> ackdM
   let archived = textToBool <$> archivedM
   pool <- asks pool
-
-  let limit = maybe Nothing (\x -> if x == "slider" then (Just 51) else Nothing) layoutM
-
+  let limit = (\x -> if x == "slider" then Just 51 else Nothing) =<< layoutM
   (project, anomalies) <- liftIO $
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
