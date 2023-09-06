@@ -67,7 +67,7 @@ pivot' rows = do
 buildReqDumpSQL :: [ChartExp] -> (Text, [DBField], Maybe ZonedTime, Maybe ZonedTime)
 buildReqDumpSQL exps = (q, join qByArgs, mFrom, mTo)
  where
-  (slots, groupByFields, gBy, queryBy, limit, q) = foldr go (120, "" :: Text, "" :: Text, [], 1000, qDefault) exps
+  (slots, groupByFields, gBy, queryBy, limit, q) = foldr go (120, "" :: Text, "" :: Text, [], 10000, qDefault) exps
   go (SlotsE n) (_, gbF, gb, qb, l, qd) = (n, gbF, gb, qb, l, qd)
   go (GByE GBEndpoint) (i, _, gb, qb, l, qd) = (i, ",method, url_path", ",method||' '||url_path as g", qb, l, qd)
   go (GByE GBStatusCode) (i, _, gb, qb, l, qd) = (i, ",status_code", ",status_code::text as status_code", qb, l, qd)
