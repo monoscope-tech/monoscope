@@ -89,6 +89,8 @@ jobsRunner dbPool logger cfg job =
           endp <- withPool dbPool $ Endpoints.endpointByHash pid targetHash
           users <- withPool dbPool $ getUsersByProjectId pid
           project <- Unsafe.fromJust <<$>> withPool dbPool $ Projects.projectById pid
+          let enp = Unsafe.fromJust endp
+          let endpointPath = enp.method <> " " <> enp.urlPath
           forM_ users \u ->
             let projectTitle = project.title
                 projectIdTxt = pid.toText
@@ -99,7 +101,8 @@ jobsRunner dbPool logger cfg job =
                     [trimming|
           Hi $name,<br/>
 
-          <p>We detected a different API request shape to your endpoints than what you usually have..</p>
+          <p>We detected a new endpoint on ``$projectTitle`:</p>
+          <p><strong>$endpointPath</strong></p>
           <a href="https://app.apitoolkit.io/p/$projectIdTxt/anomalies">More details on the apitoolkit</a>
           <br/><br/>
           Regards,
