@@ -196,7 +196,7 @@ Apitoolkit team
     CreatedProjectSuccessfully userId projectId reciever projectTitle' ->
       let projectTitle = projectTitle'
           projectIdTxt = projectId.toText
-          subject = [text| 🤖 APITOOLKIT: Project created successfully '$projectTitle' on apitoolkit.io |]
+          subject = [text| 🤖 APITOOLKIT: Project created successfully '$projectTitle ' on apitoolkit.io |]
           body =
             toLText
               [trimming|
