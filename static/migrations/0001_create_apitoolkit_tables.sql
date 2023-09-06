@@ -389,6 +389,21 @@ SELECT create_hypertable('apis.request_dumps', 'created_at');
 SELECT add_retention_policy('apis.request_dumps',INTERVAL '3 months',true);
 CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_project_id ON apis.request_dumps(project_id, created_at);
 
+
+CREATE TABLE IF NOT EXISTS apis.reports 
+(
+    id                        uuid      NOT  NULL DEFAULT    gen_random_uuid(),
+    created_at                TIMESTAMP WITH TIME ZONE       NOT               NULL DEFAULT current_timestamp,
+    updated_at                TIMESTAMP WITH TIME ZONE       NOT               NULL DEFAULT current_timestamp,
+    project_id                UUID      NOT  NULL REFERENCES projects.projects (id) ON      DELETE CASCADE,
+    report_type               text      NOT  NULL DEFAULT    '',
+    report_json               jsonb     NOT  NULL DEFAULT    '{}'::jsonb,
+    PRIMARY KEY(id)
+);
+SELECT manage_updated_at('apis.reports');
+CREATE INDEX IF NOT EXISTS idx_reports_project_id ON apis.reports(project_id);
+
+
 -- Create a view that tracks endpoint related statistic points from the request dump table.
 DROP MATERIALIZED VIEW IF EXISTS apis.endpoint_request_stats;
 CREATE MATERIALIZED VIEW apis.endpoint_request_stats AS 
@@ -636,6 +651,8 @@ SELECT add_continuous_aggregate_policy('apis.project_requests_by_endpoint_per_mi
 -- cron doesn't work in the timescaledb database because its not the default database. 
 -- so instead, we installed it into the default database and use a different function:
 -- SELECT cron.schedule_in_database('DailyOrttoSync', '0 8 * * *', $$INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued',  jsonb_build_object('tag', 'DailyOrttoSync')$$, 'apitoolkit-prod-eu');
+
+SELECT cron.schedule_in_database('DailyReports', '* * * * *', 'DailyReports', 'apitoolkit-prod-eu');
 
 -- This is for regular databases locally or if we migrate to a new database setup.
 -- SELECT cron.schedule('DailyOrttoSync', '0 8 * * *', $$INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued',  jsonb_build_object('tag', 'DailyOrttoSync')$$);

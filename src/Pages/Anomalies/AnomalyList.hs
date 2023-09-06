@@ -29,6 +29,8 @@ import Lucid.Htmx
 import Lucid.Hyperscript
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.RequestDumps (RequestDump (RequestDump))
+import Models.Apis.RequestDumps qualified as RequestDump
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)

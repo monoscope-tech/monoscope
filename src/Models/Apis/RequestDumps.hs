@@ -6,6 +6,8 @@ module Models.Apis.RequestDumps (
   RequestDump (..),
   SDKTypes (..),
   RequestDumpLogItem,
+  EndpointPerf (..),
+  RequestForReport (..),
   normalizeUrlPath,
   throughputBy,
   throughputBy',
@@ -17,12 +19,15 @@ module Models.Apis.RequestDumps (
   selectRequestDumpByProjectAndId,
   selectRequestDumpsByProjectForChart,
   bulkInsertRequestDumps,
+  getRequestDumpForReports,
+  getRequestDumpsForPreviousReportPeriod,
   countRequestDumpByProject,
 ) where
 
 import Control.Error (hush)
 import Data.Aeson qualified as AE
 import Data.Default.Instances ()
+import Data.Scientific (Scientific)
 import Data.Text qualified as T
 import Data.Time (CalendarDiffTime, ZonedTime, defaultTimeLocale, diffUTCTime, formatTime, zonedTimeToUTC)
 import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
@@ -31,8 +36,8 @@ import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, queryOne)
 import Database.PostgreSQL.Entity.Types
-import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
-import Database.PostgreSQL.Simple.FromField (FromField (fromField))
+import Database.PostgreSQL.Simple (FromRow, Only (Only), ResultError (ConversionFailed), ToRow)
+import Database.PostgreSQL.Simple.FromField (FromField (fromField), returnError)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField (toField))
 import Database.PostgreSQL.Simple.Types (Query (Query))
@@ -153,7 +158,35 @@ data RequestDump = RequestDump
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "request_dumps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] RequestDump)
 
-makeFieldLabelsNoPrefix ''RequestDump
+-- Fields to from request dump neccessary for generating performance reports
+data RequestForReport = RequestForReport
+  { id :: UUID.UUID
+  , createdAt :: ZonedTime
+  , projectId :: UUID.UUID
+  , host :: Text
+  , urlPath :: Text
+  , rawUrl :: Text
+  , method :: Text
+  , endpointHash :: Text
+  , averageDuration :: Integer
+  }
+  deriving stock (Show, Generic, Eq)
+  deriving anyclass (ToRow, FromRow)
+  deriving
+    (Entity)
+    via (GenericEntity '[Schema "apis", TableName "request_dumps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] RequestForReport)
+
+data EndpointPerf = EndpointPerf
+  { endpointHash :: Text
+  , averageDuration :: Integer
+  }
+  deriving stock (Show, Generic, Eq)
+  deriving anyclass (ToRow, FromRow)
+  deriving
+    (Entity)
+    via (GenericEntity '[Schema "apis", TableName "request_dumps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] EndpointPerf)
+
+makeFieldLabelsNoPrefix ''RequestForReport
 
 -- RequestDumpLogItem is used in the to query log items for the log query explorer on the dashboard. Each item here can be queried
 -- via the query language on said dashboard page.
@@ -195,6 +228,36 @@ requestDumpLogUrlPath pid q cols fromM = [text|/p/$pidT/log_explorer?query=$quer
   queryT = fromMaybe "" q
   colsT = fromMaybe "" cols
   fromT = fromMaybe "" fromM
+
+getRequestDumpForReports :: Projects.ProjectId -> Text -> DBT IO (Vector RequestForReport)
+getRequestDumpForReports pid report_type = query Select (Query $ encodeUtf8 q) pid
+ where
+  report_interval = if report_type == "daily" then ("'24 hours'" :: Text) else "'7 days'"
+  q =
+    [text| 
+     SELECT DISTINCT ON (endpoint_hash)
+        id, created_at, project_id, host, url_path, raw_url, method, endpoint_hash,
+        CAST (ROUND (AVG (duration_ns) OVER (PARTITION BY endpoint_hash)) AS BIGINT) AS average_duration
+     FROM
+        apis.request_dumps
+     WHERE
+        project_id = ? AND created_at > NOW() - interval $report_interval;
+    |]
+
+getRequestDumpsForPreviousReportPeriod :: Projects.ProjectId -> Text -> DBT IO (Vector EndpointPerf)
+getRequestDumpsForPreviousReportPeriod pid report_type = query Select (Query $ encodeUtf8 q) pid
+ where
+  (start, end) = if report_type == "daily" then ("'48 hours'" :: Text, "'24 hours'") else ("'14 days'", "'7 days'")
+  q =
+    [text| 
+     SELECT  endpoint_hash,
+        CAST (ROUND (AVG (duration_ns)) AS BIGINT) AS average_duration
+     FROM
+        apis.request_dumps
+     WHERE
+        project_id = ? AND created_at > NOW() - interval $start AND created_at < NOW() - interval $end
+     GROUP BY endpoint_hash;
+    |]
 
 selectRequestDumpByProject :: Projects.ProjectId -> Text -> Maybe Text -> DBT IO (Vector RequestDumpLogItem)
 selectRequestDumpByProject pid extraQuery fromM = query Select (Query $ encodeUtf8 q) (pid, fromT)
@@ -280,6 +343,7 @@ select duration_steps, count(id)
 	GROUP BY duration_steps 
 	ORDER BY duration_steps;
       |]
+
 
 -- A throughput chart query for the request_dump table.
 -- daterange :: (Maybe Int, Maybe Int)?

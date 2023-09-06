@@ -1,4 +1,5 @@
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 module Server (app) where
 
@@ -21,6 +22,7 @@ import Lucid
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Types qualified as Fields (FieldId)
+import Models.Apis.Reports qualified as Reports
 import Models.Projects.ProjectApiKeys (ProjectApiKey)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
@@ -47,6 +49,7 @@ import Pages.Projects.ManageMembers qualified as ManageMembers
 import Pages.Projects.Survey qualified as Survey
 import Pages.RedactedFields (RedactFieldForm)
 import Pages.RedactedFields qualified as RedactedFields
+import Pages.Reports qualified as Reports
 import Relude
 import Servant
 import Servant.HTML.Lucid
@@ -113,6 +116,8 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "documentation" :> ReqBody '[FormUrlEncoded] SwaggerForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "documentation" :> "save" :> ReqBody '[JSON] SaveSwaggerForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "generate_swagger" :> Get '[JSON] AE.Value
+    :<|> "p" :> ProjectId :> "reports" :> QPT "page" :> HXRequest :> HXBoosted :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "reports" :> Capture "report_id" Reports.ReportId :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "survey" :> ReqBody '[FormUrlEncoded] Survey.SurveyForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "charts_html" :> QP "chart_type" Charts.ChartType :> QP "group_by" Charts.GroupBy :> QP "query_by" [Charts.QueryBy] :> QP "num_slots" Int :> QP "limit" Int :> QP "theme" Text :> QPT "id" :> QP "show_legend" Bool :> Get '[HTML] (Html ())
 
@@ -186,6 +191,8 @@ protectedServer sess =
     :<|> Documentation.documentationPostH sess
     :<|> Documentation.documentationPutH sess
     :<|> GenerateSwagger.generateGetH sess
+    :<|> Reports.reportsGetH sess
+    :<|> Reports.singleReportGetH sess
     :<|> Survey.surveyPutH sess
     :<|> Charts.chartsGetH sess
 

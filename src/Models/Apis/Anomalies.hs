@@ -8,9 +8,11 @@ module Models.Apis.Anomalies (
   AnomalyTypes (..),
   AnomalyId (..),
   parseAnomalyTypes,
+  getReportAnomalies,
   parseAnomalyActions,
   getAnomalyVM,
   anomalyIdText,
+  countAnomalies,
 ) where
 
 import Data.Aeson qualified as AE
@@ -21,7 +23,7 @@ import Data.Vector (Vector)
 import Database.PostgreSQL.Entity
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, queryOne)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
-import Database.PostgreSQL.Simple (FromRow)
+import Database.PostgreSQL.Simple (FromRow, Only (Only))
 import Database.PostgreSQL.Simple.FromField (FromField, ResultError (ConversionFailed, UnexpectedNull), fromField, returnError)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
@@ -225,3 +227,60 @@ SELECT avm.id, avm.created_at, avm.updated_at, avm.project_id, aan.acknowleged_a
       |]
 
 -- TODO: notice the limit? We need to support pagination on the anomalies page
+
+getReportAnomalies :: Projects.ProjectId -> Text -> DBT IO (Vector AnomalyVM)
+getReportAnomalies pid report_type = query Select (Query $ encodeUtf8 q) pid
+ where
+  report_interval = if report_type == "daily" then ("'24 hours'" :: Text) else "'7 days'"
+  q =
+    [text|
+  SELECT avm.id, avm.created_at, avm.updated_at, avm.project_id, aan.acknowleged_at, aan.acknowleged_by, avm.anomaly_type, avm.action, avm.target_hash,
+         avm.shape_id, avm.new_unique_fields, avm.deleted_fields, avm.updated_field_formats, 
+         avm.field_id, avm.field_key, avm.field_key_path, avm.field_category, avm.field_format, 
+         avm.format_id, avm.format_type, avm.format_examples, 
+         avm.endpoint_id, avm.endpoint_method, avm.endpoint_url_path, aan.archived_at,
+         count(rd.id) events, max(rd.created_at) last_seen
+      FROM
+          apis.anomalies_vm avm
+      JOIN apis.anomalies aan ON avm.id = aan.id
+      JOIN apis.request_dumps rd ON avm.project_id=rd.project_id 
+          AND (avm.target_hash=ANY(rd.format_hashes) AND avm.anomaly_type='format')
+          OR  (avm.target_hash=rd.shape_hash AND avm.anomaly_type='shape')
+          OR  (avm.target_hash=rd.endpoint_hash AND avm.anomaly_type='endpoint')
+      WHERE
+          avm.project_id = ? 
+          AND avm.anomaly_type != 'field'
+          AND rd.created_at > NOW() - interval $report_interval
+          AND aan.acknowleged_at IS NULL
+          AND aan.archived_at IS NULL
+      GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25
+      HAVING count(rd.id) > 5
+      limit 100;
+        |]
+
+countAnomalies :: Projects.ProjectId -> Text -> DBT IO Int
+countAnomalies pid report_type = do
+  result <- query Select (Query $ encodeUtf8 q) pid
+  case result of
+    [Only count] -> return count
+    v -> return $ length v
+ where
+  report_interval = if report_type == "daily" then ("'24 hours'" :: Text) else "'7 days'"
+  q =
+    [text|
+      SELECT COUNT(*) as anomaly_count
+      FROM
+          apis.anomalies_vm avm
+      JOIN apis.anomalies aan ON avm.id = aan.id
+      JOIN apis.request_dumps rd ON avm.project_id=rd.project_id 
+          AND (avm.target_hash=ANY(rd.format_hashes) AND avm.anomaly_type='format')
+          OR  (avm.target_hash=rd.shape_hash AND avm.anomaly_type='shape')
+          OR  (avm.target_hash=rd.endpoint_hash AND avm.anomaly_type='endpoint')
+      WHERE
+          avm.project_id = ? 
+          AND avm.anomaly_type != 'field'
+          AND rd.created_at > NOW() - interval $report_interval
+          AND aan.acknowleged_at IS NULL
+          AND aan.archived_at IS NULL
+      GROUP BY avm.target_hash;
+        |]
