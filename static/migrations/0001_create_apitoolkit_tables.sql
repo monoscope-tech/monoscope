@@ -397,8 +397,9 @@ CREATE TABLE IF NOT EXISTS apis.reports
     updated_at                TIMESTAMP WITH TIME ZONE       NOT               NULL DEFAULT current_timestamp,
     project_id                UUID      NOT  NULL REFERENCES projects.projects (id) ON      DELETE CASCADE,
     report_type               text      NOT  NULL DEFAULT    '',
-    report_json               jsonb     NOT  NULL DEFAULT    '{}'::jsonb
-)
+    report_json               jsonb     NOT  NULL DEFAULT    '{}'::jsonb,
+    PRIMARY KEY(id)
+);
 SELECT manage_updated_at('apis.reports');
 CREATE INDEX IF NOT EXISTS idx_reports_project_id ON apis.reports(project_id);
 
