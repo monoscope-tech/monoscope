@@ -5,13 +5,13 @@ import Data.Aeson.QQ
 import Data.ByteString.Base64 qualified as B64
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
+import Models.Apis.RequestDumps (SDKTypes (GoGin))
 import Models.Projects.Projects qualified as Projects
+import NeatInterpolation
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import RequestMessages qualified
 import Test.Hspec
-import NeatInterpolation
-import Models.Apis.RequestDumps (SDKTypes(GoGin))
 
 spec :: Spec
 spec = do
@@ -261,8 +261,8 @@ spec = do
               , statusCode = 203
               }
       let projectCache = Projects.ProjectCache{hosts = [], endpointHashes = ["abc"], shapeHashes = [], redactFieldslist = []}
-      let Right (query, params, _) = RequestMessages.requestMsgToDumpAndEndpoint projectCache requestMsg timestamp recId
-      traceShowM "In request Message Endpoint test ===BEGIN==="
-      traceShowM query
-      traceShowM "===END==="
+      let Right (_query, _params, _) = RequestMessages.requestMsgToDumpAndEndpoint projectCache requestMsg timestamp recId
+      -- traceShowM "In request Message Endpoint test ===BEGIN==="
+      -- traceShowM query
+      -- traceShowM "===END==="
       pass

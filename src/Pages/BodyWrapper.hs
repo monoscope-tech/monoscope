@@ -14,7 +14,8 @@ import Relude
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu pid =
-  [ ("Dashboard", "/p/" <> pid.toText <> "/", "#dashboard")
+  [ ("Get started", "/p/" <> pid.toText <> "/onboarding", "#onboarding")
+  , ("Dashboard", "/p/" <> pid.toText <> "/", "#dashboard")
   , ("Endpoints", "/p/" <> pid.toText <> "/endpoints", "#endpoint")
   , ("Anomalies", "/p/" <> pid.toText <> "/anomalies?ackd=false&archived=false", "#anomalies")
   , ("API Log Explorer", "/p/" <> pid.toText <> "/log_explorer", "#logs")
@@ -119,15 +120,42 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child =
               }
             |]
 
-        body_ [class_ "text-gray-900"] $ do
+        body_ [class_ "text-gray-900 h-full w-full"] $ do
+          div_
+            [ style_ "z-index:99999"
+            , class_ "fixed pt-24 sm:hidden justify-center z-50 w-full p-4 bg-gray-50 overflow-y-auto inset-0 h-full max-h-full"
+            , tabindex_ "-1"
+            ]
+            $ do
+              div_
+                [ class_ "relative mx-auto max-h-full"
+                , style_ "width: min(90vw, 500px)"
+                ]
+                $ do
+                  -- Modal content
+                  div_
+                    [ class_ "bg-white rounded-lg drop-shadow-md border-1 w-full"
+                    ]
+                    $ do
+                      div_ [class_ "flex items-start justify-between p-6 space-x-2  border-b rounded-t"] $ do
+                        h3_ [class_ "text-3xl font-bold text-gray-900"] "Only Desktop Browsers are Supported for now!"
+                      -- Modal body
+                      div_ [class_ "w-full"] $ do
+                        div_ [class_ "p-6 text-xl space-y-6", style_ "height:50vh; width:100%"] $ do
+                          p_ [class_ ""] "Due to the heavy visualization usecases we're solving, apitoolkit is not supported on mobile, and can only be used from a desktop browser at the moment."
+                          p_ [class_ ""] "We're diligently working on expanding its availability to other platforms, and we'll keep you updated as we make progress. "
+                          p_ [] "Don't hesitate to let us know if this is a very important feature for your team, then we can prioritize it"
+                      -- Modal footer
+                      div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] pass
           section_ [class_ "flex flex-row h-screen overflow-hidden"] $ do
             sideNav'
             section_ [class_ "flex flex-col grow h-full overflow-y-hidden"] $ do
               navbar currUser
               section_ [class_ "flex-1 overflow-y-auto"] $ do
                 child
-        script_ [async_ "true", src_ "https://www.googletagmanager.com/gtag/js?id=AW-11285541899"] (""::Text)
-        script_ [text|
+        script_ [async_ "true", src_ "https://www.googletagmanager.com/gtag/js?id=AW-11285541899"] ("" :: Text)
+        script_
+          [text|
             window.dataLayer = window.dataLayer || [];
             function gtag(){dataLayer.push(arguments);}
             gtag('js', new Date());
@@ -241,7 +269,8 @@ sideNav sess project pageTitle menuItem = do
         $ do
           div_ [class_ "space-2 grow sd-hidden"] $ do
             strong_ [class_ "block text-slate-900"] $ toHtml $ project.title
-            small_ [class_ "block text-slate-900"] $ toHtml $ project.paymentPlan -- Development?
+            small_ [class_ "block text-slate-900"] $ toHtml $ project.paymentPlan
+          -- Development?
           div_ $ do
             img_ [src_ "/assets/svgs/up_chevron.svg"]
             img_ [src_ "/assets/svgs/down_chevron.svg"]

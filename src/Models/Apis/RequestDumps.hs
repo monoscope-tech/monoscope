@@ -11,7 +11,6 @@ module Models.Apis.RequestDumps (
   normalizeUrlPath,
   throughputBy,
   throughputBy',
-  latencyBy,
   requestDumpLogItemUrlPath,
   requestDumpLogUrlPath,
   selectReqLatenciesRolledBySteps,
@@ -22,12 +21,14 @@ module Models.Apis.RequestDumps (
   bulkInsertRequestDumps,
   getRequestDumpForReports,
   getRequestDumpsForPreviousReportPeriod,
+  countRequestDumpByProject,
 ) where
 
 import Control.Error (hush)
 import Data.Aeson qualified as AE
 import Data.Default.Instances ()
 import Data.Scientific (Scientific)
+import Data.Text qualified as T
 import Data.Time (CalendarDiffTime, ZonedTime, defaultTimeLocale, diffUTCTime, formatTime, zonedTimeToUTC)
 import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
 import Data.Tuple.Extra (both)
@@ -49,14 +50,19 @@ import Pkg.Parser
 import Relude hiding (many, some)
 import Utils (DBField (MkDBField), quoteTxt)
 import Witch (from)
-import Data.Tuple.Extra (both)
-import Database.PostgreSQL.Simple.FromField (FromField (fromField), returnError)
-import Database.PostgreSQL.Simple.ToField (ToField (toField))
-import Network.URI (URI, parseURI, uriAuthority, uriPath, uriQuery)
-import Data.Text (unpack)
-import Data.Text qualified as T
 
-data SDKTypes = GoGin | GoBuiltIn | PhpLaravel | PhpSymfony | JsExpress | JsNest | JavaSpringBoot | DotNet
+data SDKTypes
+  = GoGin
+  | GoBuiltIn
+  | PhpLaravel
+  | PhpSymfony
+  | JsExpress
+  | JsNest
+  | JsFastify
+  | JavaSpringBoot
+  | DotNet
+  | PythonFastApi
+  | PythonFlask
   deriving stock (Show, Generic, Read, Eq)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SDKTypes
 
@@ -69,7 +75,8 @@ instance FromField SDKTypes where
     case readMaybe str of
       Just sdkType -> return sdkType
       Nothing -> return GoGin
-      -- Nothing -> returnError ConversionFailed f ("Could not read SDKTypes: " ++ str)
+
+-- Nothing -> returnError ConversionFailed f ("Could not read SDKTypes: " ++ str)
 
 -- normalize URLPatg based off the SDKTypes. Should allow us have custom logic to parse and transform url paths into a form we are happy with, per library
 -- >>> normalizeUrlPath GoGin 200 "GET" "https://apitoolkit.io/abc/:bla?q=abc"
@@ -85,29 +92,31 @@ instance FromField SDKTypes where
 -- >>> normalizeUrlPath JsExpress 200 "PATCH" "https://apitoolkit.io/abc/:bla?q=abc"
 -- "/abc/:bla"
 --
-normalizeUrlPath :: SDKTypes ->Int -> Text-> Text -> Text
-normalizeUrlPath GoGin statusCode _method urlPath =removeQueryParams statusCode urlPath
-normalizeUrlPath GoBuiltIn statusCode _method urlPath =removeQueryParams statusCode urlPath
-normalizeUrlPath PhpLaravel statusCode _method urlPath =removeQueryParams statusCode urlPath
-normalizeUrlPath PhpSymfony statusCode _method urlPath =removeQueryParams statusCode urlPath
+normalizeUrlPath :: SDKTypes -> Int -> Text -> Text -> Text
+normalizeUrlPath GoGin statusCode _method urlPath = removeQueryParams statusCode urlPath
+normalizeUrlPath GoBuiltIn statusCode _method urlPath = removeQueryParams statusCode urlPath
+normalizeUrlPath PhpLaravel statusCode _method urlPath = removeQueryParams statusCode urlPath
+normalizeUrlPath PhpSymfony statusCode _method urlPath = removeQueryParams statusCode urlPath
 -- NOTE: Temporary workaround due to storing complex paths in the urlPath, which should be unaccepted, and messes with our logic
 normalizeUrlPath JsExpress statusCode "OPTIONS" urlPath = ""
-normalizeUrlPath JsExpress statusCode _method urlPath =removeQueryParams statusCode urlPath
-normalizeUrlPath JavaSpringBoot statusCode _method urlPath =removeQueryParams statusCode urlPath
-normalizeUrlPath JsNest statusCode _method urlPath =removeQueryParams statusCode urlPath
-normalizeUrlPath DotNet statusCode _method urlPath =removeQueryParams statusCode urlPath
+normalizeUrlPath JsExpress statusCode _method urlPath = removeQueryParams statusCode urlPath
+normalizeUrlPath JavaSpringBoot statusCode _method urlPath = removeQueryParams statusCode urlPath
+normalizeUrlPath JsNest statusCode _method urlPath = removeQueryParams statusCode urlPath
+normalizeUrlPath DotNet statusCode _method urlPath = removeQueryParams statusCode urlPath
+normalizeUrlPath PythonFastApi statusCode _method urlPath = removeQueryParams statusCode urlPath
+normalizeUrlPath JsFastify statusCode _method urlPath = removeQueryParams statusCode urlPath
+normalizeUrlPath PythonFlask statusCode _method urlPath = removeQueryParams statusCode urlPath
 
 -- removeQueryParams ...
 -- >>> removeQueryParams 200 "https://apitoolkit.io/abc/:bla?q=abc"
 --
 -- Function to remove the query parameter section from a URL
-removeQueryParams :: Int -> Text ->Text
+removeQueryParams :: Int -> Text -> Text
 removeQueryParams 404 urlPath = ""
 removeQueryParams statusCode urlPath =
-    case T.break (== '?') urlPath of
-        (before, "")    -> before  -- No query parameters found
-        (before, after) -> before  -- Query parameters found, stripping them
-
+  case T.break (== '?') urlPath of
+    (before, "") -> before -- No query parameters found
+    (before, after) -> before -- Query parameters found, stripping them
 
 -- request dumps are time series dumps representing each requests which we consume from our users.
 -- We use this field via the log explorer for exploring and searching traffic. And at the moment also use it for most time series analytics.
@@ -264,6 +273,15 @@ selectRequestDumpByProject pid extraQuery fromM = query Select (Query $ encodeUt
       <> extraQueryParsed
       <> " order by created_at desc limit 200;"
 
+countRequestDumpByProject :: Projects.ProjectId -> DBT IO Int
+countRequestDumpByProject pid = do
+  result <- query Select q pid
+  case result of
+    [Only count] -> return count
+    v -> return $ length v
+ where
+  q = [sql| SELECT count(*) FROM apis.request_dumps WHERE project_id=? |]
+
 selectRequestDumpsByProjectForChart :: Projects.ProjectId -> Text -> DBT IO Text
 selectRequestDumpsByProjectForChart pid extraQuery = do
   (Only val) <- fromMaybe (Only "[]") <$> queryOne Select (Query $ encodeUtf8 q) (Only pid)
@@ -326,39 +344,6 @@ select duration_steps, count(id)
 	ORDER BY duration_steps;
       |]
 
-latencyBy :: Projects.ProjectId -> Maybe Text -> Int -> (Maybe ZonedTime, Maybe ZonedTime) -> DBT IO Text
-latencyBy pid endpointHash numSlots dateRange@(fromT, toT) = do
-  let interval =  case dateRange of
-        (Just a, Just b) -> diffUTCTime (zonedTimeToUTC b) (zonedTimeToUTC a)
-        _ -> 60*60*24*14
-
-  let intervalT = from @String @Text $ show  $ floor interval `div` (if numSlots == 0 then 1 else numSlots)
-  let dateRange' = both ( quoteTxt . from @String . formatTime defaultTimeLocale "%F %R" <$> ) dateRange
-  let dateRangeStr =  case dateRange' of
-        (Nothing, Just b) -> "AND timeb BETWEEN NOW() AND " <>  b
-        (Just a, Just b) -> "AND timeb BETWEEN " <>  a <> " AND " <>  b
-        _ -> ""
-  let (fromD, toD) = bimap (maybe "now() - INTERVAL '14 days'" ("TIMESTAMP " <>)) (maybe "now()" ("TIMESTAMP " <>)) dateRange'
-  let q =
-        [text| 
-  with f as (  
-    SELECT
-            time_bucket_gapfill('$intervalT seconds', timeb, $fromD, $toD) time,
-            approx_percentile(0.5, rollup(agg))/1000000 p50,
-            approx_percentile(0.75, rollup(agg))/1000000 p75,
-            approx_percentile(0.9, rollup(agg))/1000000 p90
-    from
-        apis.project_requests_by_endpoint_per_min
-    where
-        project_id = ?
-        $dateRangeStr
-    group by
-        time
-  ) 
-  SELECT COALESCE(json_agg(json_build_array(to_char(f.time, 'YYYY-DD-MM HH24:MI:SS'), f.p50, f.p75, f.p90)), '[]')::text  from f; 
-  |]
-  (Only val) <- fromMaybe (Only "[]") <$> queryOne Select (Query $ encodeUtf8 q) pid
-  pure val
 
 -- A throughput chart query for the request_dump table.
 -- daterange :: (Maybe Int, Maybe Int)?
@@ -389,15 +374,15 @@ throughputBy pid groupByM endpointHash shapeHash formatHash statusCodeGT numSlot
         | otherwise = "AND " <> mconcat (intersperse " AND " condlist')
 
   let limit = maybe "" (("limit " <>) . show) limitM
-  let interval =  case dateRange of
-          (Just a, Just b) -> diffUTCTime (zonedTimeToUTC b) (zonedTimeToUTC a)
-          _ -> 60*60*24*14
+  let interval = case dateRange of
+        (Just a, Just b) -> diffUTCTime (zonedTimeToUTC b) (zonedTimeToUTC a)
+        _ -> 60 * 60 * 24 * 14
 
-  let intervalT = from @String @Text $ show  $ floor interval `div` (if numSlots == 0 then 1 else numSlots)
-  let dateRange' = both ( quoteTxt . from @String . formatTime defaultTimeLocale "%F %R" <$> ) dateRange
-  let dateRangeStr =  case dateRange' of
-        (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND " <>  b
-        (Just a, Just b) -> "AND created_at BETWEEN " <>  a <> " AND " <>  b
+  let intervalT = from @String @Text $ show $ floor interval `div` (if numSlots == 0 then 1 else numSlots)
+  let dateRange' = both (quoteTxt . from @String . formatTime defaultTimeLocale "%F %R" <$>) dateRange
+  let dateRangeStr = case dateRange' of
+        (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND " <> b
+        (Just a, Just b) -> "AND created_at BETWEEN " <> a <> " AND " <> b
         _ -> "AND created_at BETWEEN NOW() - INTERVAL '14 days' AND NOW()"
   let (fromD, toD) = bimap (maybe "now() - INTERVAL '14 days'" ("TIMESTAMP " <>)) (maybe "now()" ("TIMESTAMP " <>)) dateRange'
   let q =
@@ -424,22 +409,21 @@ throughputBy' pid groupByM endpointHash shapeHash formatHash statusCodeGT numSlo
         Just "endpoint" -> (",method, url_path", ",method||' '||url_path as g")
         Nothing -> ("", "")
         _ -> (groupBy', groupBy' <> "::text as g")
-  let groupByFinal = maybe "" (const ",g") groupByM
   let paramList = mapMaybe (MkDBField <$>) [endpointHash, shapeHash, formatHash, statusCodeGT]
   let condlist' = filter (/= "") condlist
   let cond
         | null condlist' = mempty
         | otherwise = "AND " <> mconcat (intersperse " AND " condlist')
   let limit = maybe "" (("limit " <>) . show) limitM
-  let interval =  case dateRange of
-          (Just a, Just b) -> diffUTCTime (zonedTimeToUTC b) (zonedTimeToUTC a)
-          _ -> 60*60*24*14
+  let interval = case dateRange of
+        (Just a, Just b) -> diffUTCTime (zonedTimeToUTC b) (zonedTimeToUTC a)
+        _ -> 60 * 60 * 24 * 14
 
-  let intervalT = from @String @Text $ show  $ floor interval `div` (if numSlots == 0 then 1 else numSlots)
-  let dateRange' = both ( quoteTxt . from @String . formatTime defaultTimeLocale "%F %R" <$> ) dateRange
-  let dateRangeStr =  case dateRange' of
-        (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND " <>  b
-        (Just a, Just b) -> "AND created_at BETWEEN " <>  a <> " AND " <>  b
+  let intervalT = from @String @Text $ show $ floor interval `div` (if numSlots == 0 then 1 else numSlots)
+  let dateRange' = both (quoteTxt . from @String . formatTime defaultTimeLocale "%F %R" <$>) dateRange
+  let dateRangeStr = case dateRange' of
+        (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND " <> b
+        (Just a, Just b) -> "AND created_at BETWEEN " <> a <> " AND " <> b
         _ -> "AND created_at BETWEEN NOW() - INTERVAL '14 days' AND NOW()"
   -- let (fromD, toD) = bimap (maybe "now() - INTERVAL '14 days'" ("TIMESTAMP " <> ) )  (maybe "now()" ("TIMESTAMP " <>)) dateRange'
   let q =

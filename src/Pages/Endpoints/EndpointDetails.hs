@@ -21,17 +21,18 @@ import Lucid.Htmx
 import Lucid.Hyperscript.QuasiQuoter
 import Models.Apis.Endpoints
 import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.Fields (FieldCategoryEnum)
 import Models.Apis.Fields qualified as Fields
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Models.Apis.Fields (FieldCategoryEnum)
 import NeatInterpolation
 import Optics.Core ((^.))
 import Pages.Anomalies.AnomalyList qualified as AnomaliesList
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pages.Charts.Charts qualified as C
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components
 import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
@@ -372,7 +373,7 @@ apiOverviewSubPage paramInput currTime endpoint fieldsM reqLatenciesRolledByStep
     endpointStats endpoint reqLatenciesRolledByStepsJ dateRange
 
 endpointStats :: Endpoints.EndpointRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
-endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p99, max} reqLatenciesRolledByStepsJ dateRange =
+endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p99, max} reqLatenciesRolledByStepsJ dateRange@(fromD, toD) =
   section_ [class_ "space-y-3"] $ do
     div_ [class_ "flex justify-between mt-5"] $
       div_ [class_ "flex flex-row"] $ do
@@ -394,14 +395,14 @@ endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p
             select_ [] $ do
               option_ [class_ "text-2xl font-normal"] "Throughput by Status Code"
             div_ [class_ "h-64 "] do
-              Charts.throughput enpStats.projectId "reqsByStatusCode" (Just $ Charts.QBEndpointHash enpStats.endpointHash) (Just Charts.GBStatusCode) 120 Nothing True dateRange Nothing
+              Charts.lazy [C.QByE $ [C.QBPId enpStats.projectId, C.QBEndpointHash enpStats.endpointHash] ++ catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBStatusCode, C.SlotsE 120, C.ShowLegendE]
 
         div_ [class_ "flex-1 card-round p-3"] $ do
           div_ [class_ "p-4 space-y-6"] $ do
             select_ [] $ do
               option_ [class_ "text-2xl font-normal"] "Latency Percentiles"
             div_ [class_ "h-64 "] do
-              Charts.latency enpStats.projectId "reqsLatencyPercentiles" (Just $ Charts.QBEndpointHash enpStats.endpointHash) 120 dateRange Nothing
+              Charts.lazy [C.QByE $ [C.QBPId enpStats.projectId, C.QBEndpointHash enpStats.endpointHash] ++ catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBDurationPercentile, C.SlotsE 120, C.ShowLegendE, C.TypeE C.LineCT]
 
       div_ [class_ "flex gap-5"] do
         div_ [class_ "flex-1 card-round p-3"] $ do
@@ -409,14 +410,14 @@ endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p
             select_ [] $ do
               option_ [class_ "text-2xl font-normal"] "Error Rates"
             div_ [class_ "h-64 "] do
-              Charts.throughput enpStats.projectId "reqsErrorRates" (Just $ Charts.QBAnd (Charts.QBEndpointHash enpStats.endpointHash) (Charts.QBStatusCodeGT 400)) (Just Charts.GBStatusCode) 120 Nothing True dateRange (Just "roma")
+              Charts.lazy [C.QByE $ [C.QBPId enpStats.projectId, C.QBEndpointHash enpStats.endpointHash, Charts.QBStatusCodeGT 400] ++ catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBStatusCode, C.SlotsE 120, C.ShowLegendE, C.Theme "roma"]
 
         div_ [class_ "flex-1 card-round p-3"] $ do
           div_ [class_ "p-4 space-y-6"] $ do
             select_ [] $ do
               option_ [class_ "text-2xl font-normal"] "Reqs Grouped by Endpoint"
             div_ [class_ "h-64 "] do
-              Charts.throughput enpStats.projectId "reqsByEndpoints" (Just $ Charts.QBEndpointHash enpStats.endpointHash) (Just Charts.GBEndpoint) 120 Nothing True dateRange Nothing
+              Charts.lazy [C.QByE $ [C.QBPId enpStats.projectId, C.QBEndpointHash enpStats.endpointHash] ++ catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBEndpoint, C.SlotsE 120, C.ShowLegendE]
 
       div_ [class_ "col-span-3 bg-white   border border-gray-100  rounded-xl py-3 px-6"] $ do
         div_ [class_ "p-4"] $

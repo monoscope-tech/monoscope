@@ -114,6 +114,8 @@ jobsRunner dbPool logger cfg job =
           endp <- withPool dbPool $ Endpoints.endpointByHash pid targetHash
           users <- withPool dbPool $ getUsersByProjectId pid
           project <- Unsafe.fromJust <<$>> withPool dbPool $ Projects.projectById pid
+          let enp = Unsafe.fromJust endp
+          let endpointPath = enp.method <> " " <> enp.urlPath
           forM_ users \u ->
             let projectTitle = project.title
                 projectIdTxt = pid.toText
@@ -124,7 +126,8 @@ jobsRunner dbPool logger cfg job =
                     [trimming|
           Hi $name,<br/>
 
-          <p>We detected a different API request shape to your endpoints than what you usually have..</p>
+          <p>We detected a new endpoint on ``$projectTitle`:</p>
+          <p><strong>$endpointPath</strong></p>
           <a href="https://app.apitoolkit.io/p/$projectIdTxt/anomalies">More details on the apitoolkit</a>
           <br/><br/>
           Regards,
@@ -146,6 +149,8 @@ jobsRunner dbPool logger cfg job =
           case anomalyM of
             Nothing -> pass
             Just anomaly -> do
+              -- TODO: DOn't send any anomaly emails other than for email
+              error "retry later"
               users <- withPool dbPool $ getUsersByProjectId pid
               project <- Unsafe.fromJust <<$>> withPool dbPool $ Projects.projectById pid
               forM_ users \u ->
@@ -172,6 +177,8 @@ jobsRunner dbPool logger cfg job =
           case anomalyM of
             Nothing -> pass
             Just anomaly -> do
+              -- TODO: DOn't send any anomaly emails other than for email
+              error "retry later"
               users <- withPool dbPool $ getUsersByProjectId pid
               project <- Unsafe.fromJust <<$>> withPool dbPool $ Projects.projectById pid
               forM_ users \u ->
@@ -214,7 +221,7 @@ Apitoolkit team
     CreatedProjectSuccessfully userId projectId reciever projectTitle' ->
       let projectTitle = projectTitle'
           projectIdTxt = projectId.toText
-          subject = [text| 🤖 APITOOLKIT: Project created successfully '$projectTitle' on apitoolkit.io |]
+          subject = [text| 🤖 APITOOLKIT: Project created successfully '$projectTitle ' on apitoolkit.io |]
           body =
             toLText
               [trimming|
@@ -255,6 +262,7 @@ Apitoolkit team
       forM_ projects \p -> do
         weeklyReportForProject dbPool cfg p
       pass
+
 
 jobsWorkerInit :: Pool Connection -> LogAction IO String -> Config.EnvConfig -> IO ()
 jobsWorkerInit dbPool logger envConfig = startJobRunner $ mkConfig jobLogger "background_jobs" dbPool (MaxConcurrentJobs 1) (jobsRunner dbPool logger envConfig) id

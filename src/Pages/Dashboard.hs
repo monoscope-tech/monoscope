@@ -2,28 +2,50 @@ module Pages.Dashboard (dashboardGetH) where
 
 import Config
 import Data.Aeson qualified as AE
-import Pages.Components (statBox)
+import Data.Default ( def, def )
+import Data.Time
+    ( UTCTime,
+      ZonedTime,
+      addUTCTime,
+      formatTime,
+      getCurrentTime,
+      secondsToNominalDiffTime,
+      utc,
+      utcToZonedTime,
+      UTCTime,
+      ZonedTime,
+      addUTCTime,
+      formatTime,
+      getCurrentTime,
+      secondsToNominalDiffTime,
+      utc,
+      utcToZonedTime )
+import Data.Time.Format ( defaultTimeLocale, defaultTimeLocale )
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
+import Fmt
 import Lucid
+import Lucid.Hyperscript ( __, __ )
 import Models.Apis.RequestDumps qualified as RequestDumps
+import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.Anomalies.AnomalyList qualified as AnomaliesList
 import Pages.BodyWrapper
 import Pages.Charts.Charts qualified as Charts
+import Servant
+    ( Union,
+      WithStatus(..),
+      respond )
+import Utils ( GetOrRedirect, redirect, deleteParam, mIcon_ )
+import Pages.Components (statBox)
+import Pages.Charts.Charts qualified as C
 import Relude hiding (max, min)
-import Text.Interpolation.Nyan
-import Utils (deleteParam, mIcon_)
-import Witch (from)
-import Data.Time (ZonedTime, UTCTime, getCurrentTime, utcToZonedTime, utc, addUTCTime, secondsToNominalDiffTime, formatTime)
-import Lucid.Hyperscript (__)
-import Data.Default (def)
-import Data.Time.Format (defaultTimeLocale)
 import System.Clock
-import Fmt
+import Text.Interpolation.Nyan
+import Witch (from)
 
 timePickerItems :: [(Text, Text)]
 timePickerItems =
@@ -40,12 +62,17 @@ data ParamInput = ParamInput
   , currentPickerTxt :: Text
   }
 
-dashboardGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
+dashboardGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Union GetOrRedirect)
 dashboardGetH sess pid fromDStr toDStr sinceStr' = do
   pool <- asks pool
   now <- liftIO getCurrentTime
-  let sinceStr = if (isNothing fromDStr && isNothing toDStr && isNothing sinceStr' ) || (fromDStr == Just "")then Just "14D" else sinceStr'
+  let sinceStr = if isNothing fromDStr && isNothing toDStr && isNothing sinceStr' || fromDStr == Just "" then Just "14D" else sinceStr'
 
+  (hasApikeys, hasRequest) <- liftIO $
+    withPool pool $ do
+      apiKeys <- ProjectApiKeys.countProjectApiKeysByProjectId pid
+      requestDumps <- RequestDumps.countRequestDumpByProject pid
+      pure (apiKeys > 0, requestDumps > 0)
   -- TODO: Replace with a duration parser.
   let (fromD, toD) = case sinceStr of
         Just "1H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just $ utcToZonedTime utc now)
@@ -66,7 +93,7 @@ dashboardGetH sess pid fromDStr toDStr sinceStr' = do
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
 
-      projectRequestStats <- fromMaybe (def :: Projects.ProjectRequestStats) <$> Projects.projectRequestStatsByProject pid 
+      projectRequestStats <- fromMaybe (def :: Projects.ProjectRequestStats) <$> Projects.projectRequestStatsByProject pid
       let maxV = round (projectRequestStats.p99) :: Int
       let steps' = (maxV `quot` 100) :: Int
       let steps = if steps' == 0 then 100 else steps'
@@ -82,9 +109,11 @@ dashboardGetH sess pid fromDStr toDStr sinceStr' = do
           }
   currTime <- liftIO getCurrentTime
   let currentURL = "/p/" <> pid.toText <> "?&from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
-  let currentPickerTxt = fromMaybe (maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD ) sinceStr
+  let currentPickerTxt = fromMaybe (maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD) sinceStr
   let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt}
-  pure $ bodyWrapper bwconf $ dashboardPage pid paramInput currTime projectRequestStats reqLatenciesRolledByStepsJ (fromD, toD)
+  if not hasApikeys || not hasRequest
+    then respond $ WithStatus @302 $ redirect ("/p/" <> pid.toText <> "/onboarding")
+    else respond $ WithStatus @200 $ bodyWrapper bwconf $ dashboardPage pid paramInput currTime projectRequestStats reqLatenciesRolledByStepsJ (fromD, toD)
 
 dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 dashboardPage pid paramInput currTime projectStats reqLatenciesRolledByStepsJ dateRange = do
@@ -106,7 +135,8 @@ dashboardPage pid paramInput currTime projectStats reqLatenciesRolledByStepsJ da
         div_ [id_ "timepickerBox", class_ "hidden absolute z-10 mt-1  rounded-md flex"] do
           div_ [class_ "inline-block w-84 overflow-auto bg-white py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm"] do
             timePickerItems
-              & mapM_ \(val, title) -> a_
+              & mapM_ \(val, title) ->
+                a_
                   [ class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 "
                   , href_ $ currentURL' <> "&since=" <> val
                   ]
@@ -116,7 +146,7 @@ dashboardPage pid paramInput currTime projectStats reqLatenciesRolledByStepsJ da
             div_ [id_ "startTime", class_ "hidden"] ""
 
     -- button_ [class_ "", id_ "checkin", onclick_ "window.picker.show()"] "timepicker"
-    section_ $ AnomaliesList.anomalyListSlider currTime (projectStats.projectId) Nothing Nothing 
+    section_ $ AnomaliesList.anomalyListSlider currTime (projectStats.projectId) Nothing Nothing
     dStats pid projectStats reqLatenciesRolledByStepsJ dateRange
   script_
     [text|
@@ -146,7 +176,7 @@ dashboardPage pid paramInput currTime projectStats reqLatenciesRolledByStepsJ da
     |]
 
 dStats :: Projects.ProjectId -> Projects.ProjectRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
-dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledByStepsJ dateRange = do
+dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledByStepsJ dateRange@(fromD, toD) = do
   let _ = min
   when (projReqStats.totalRequests == 0) do
     section_ [class_ "card-round p-5 sm:p-10 space-y-4 text-lg"] $ do
@@ -155,59 +185,48 @@ dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledBySte
       a_ [href_ "https://apitoolkit.io/docs/quickstarts/", class_ "btn-indigo btn-sm my-3 -ml-0 mt-6", target_ "_blank"] "Read the setup guide"
 
   section_ [class_ "space-y-3"] $ do
-    div_ [class_ "flex justify-between mt-4"] $ do
-      div_ [class_ "flex flex-row"] $ do
-        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]] $
-          img_
-            [ src_ "/assets/svgs/cheveron-down.svg"
-            , class_ "h-4 mr-3 mt-1 w-4"
-            ]
-        span_ [class_ "text-lg text-slate-700"] "Stats"
+    div_ [class_ "flex justify-between mt-4"] $ div_ [class_ "flex flex-row"] $ do
+      a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]] $
+        img_
+          [ src_ "/assets/svgs/cheveron-down.svg"
+          , class_ "h-4 mr-3 mt-1 w-4"
+          ]
+      span_ [class_ "text-lg text-slate-700"] "Stats"
 
     div_ [class_ "reqResSubSection space-y-5"] $ do
       div_ [class_ "grid grid-cols-5 gap-5"] $ do
-        statBox "Requests" "Total requests in the last 2 weeks" (projReqStats.totalRequests) Nothing 
+        statBox "Requests" "Total requests in the last 2 weeks" (projReqStats.totalRequests) Nothing
         statBox "Anomalies" "Total anomalies still active this week vs last week" projReqStats.totalAnomalies (Just projReqStats.totalAnomaliesLastWeek)
         statBox "Endpoints" "Total endpoints now vs last week" projReqStats.totalEndpoints (Just projReqStats.totalEndpointsLastWeek)
         statBox "Signatures" "Total request signatures which are active now vs last week" projReqStats.totalShapes (Just projReqStats.totalShapesLastWeek)
         statBox "Fields" "Total fields which are active now vs last week" projReqStats.totalFields (Just projReqStats.totalFieldsLastWeek)
 
       div_ [class_ "flex gap-5"] do
-        div_ [class_ "flex-1 card-round p-3"] $ do
-          div_ [class_ "p-4 space-y-6"] $ do
-            select_ [] $ do
-              option_ [class_ "text-2xl font-normal"] "Throughput by Status Code"
-            div_ [class_ "h-64 "] do
-              Charts.throughput pid "reqsByStatusCode" Nothing (Just Charts.GBStatusCode) 120 Nothing True dateRange Nothing
+        div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] $ do
+          select_ [] $ option_ [class_ "text-2xl font-normal"] "Throughput by Status Code"
+          div_ [class_ "h-64 "] do
+            Charts.lazy [C.QByE $ C.QBPId pid : catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBStatusCode, C.SlotsE 120, C.ShowLegendE]
 
-        div_ [class_ "flex-1 card-round p-3"] $ do
-          div_ [class_ "p-4 space-y-6"] $ do
-            select_ [] $ do
-              option_ [class_ "text-2xl font-normal"] "Latency Percentiles"
-            div_ [class_ "h-64 "] do
-              Charts.latency pid "reqsLatencyPercentiles" Nothing 120 dateRange Nothing
+        div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] $ do
+          select_ [] $ option_ [class_ "text-2xl font-normal"] "Latency Percentiles"
+          div_ [class_ "h-64 "] do
+            Charts.lazy [C.QByE $ C.QBPId pid : catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBDurationPercentile, C.SlotsE 120, C.ShowLegendE, C.TypeE C.LineCT]
 
       div_ [class_ "flex gap-5"] do
-        div_ [class_ "flex-1 card-round p-3"] $ do
-          div_ [class_ "p-4 space-y-6"] $ do
-            select_ [] $ do
-              option_ [class_ "text-2xl font-normal"] "Error Rates"
-            div_ [class_ "h-64 "] do
-              Charts.throughput pid "reqsErrorRates" (Just $ Charts.QBStatusCodeGT 400) (Just Charts.GBStatusCode) 120 Nothing True dateRange (Just "roma") 
+        div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] $ do
+          select_ [] $ option_ [class_ "text-2xl font-normal"] "Error Rates"
+          div_ [class_ "h-64 "] do
+            Charts.lazy [C.QByE $ [C.QBPId pid, C.QBStatusCodeGT 400] ++ catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBStatusCode , C.SlotsE 120, C.ShowLegendE, C.Theme "roma"]
 
-        div_ [class_ "flex-1 card-round p-3"] $ do
-          div_ [class_ "p-4 space-y-6"] $ do
-            select_ [] $ do
-              option_ [class_ "text-2xl font-normal"] "Reqs Grouped by Endpoint"
-            div_ [class_ "h-64 "] do
-              Charts.throughput pid "reqsByEndpoints" Nothing (Just Charts.GBEndpoint) 120 Nothing True dateRange Nothing
-
+        div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] $ do
+          select_ [] $ option_ [class_ "text-2xl font-normal"] "Reqs Grouped by Endpoint"
+          div_ [class_ "h-64 "] do
+            Charts.lazy [C.QByE $ C.QBPId pid : catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBEndpoint, C.SlotsE 120, C.ShowLegendE]
 
       div_ [class_ "col-span-3 card-round py-3 px-6"] $ do
-        div_ [class_ "p-4"] $ do
-          select_ [] $ do
-            option_ "Request Latency Distribution"
-            option_ "Avg Reqs per minute"
+        div_ [class_ "p-4"] $ select_ [] $ do
+          option_ "Request Latency Distribution"
+          option_ "Avg Reqs per minute"
         div_ [class_ "grid grid-cols-9  gap-8 w-full"] $ do
           div_ [id_ "reqsLatencyHistogram", class_ "col-span-7 h-72"] ""
           div_ [class_ "col-span-2 space-y-4 "] $ do

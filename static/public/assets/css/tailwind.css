@@ -16,7 +16,7 @@
   }
 
   .card-round {
-    @apply bg-white border border-slate-200 rounded-xl shadow-md  shadow-slate-200 ;
+    @apply bg-white border border-slate-200 rounded-xl shadow-md  shadow-slate-200;
   }
 }
 
@@ -96,10 +96,50 @@
   @apply hover:bg-gray-100 py-3 px-2 w-full items-center justify-between;
 }
 
+.sdk_tab {
+  @apply inline-block text-gray-900 p-4 border-b-2 border-transparent rounded-t-lg hover:text-gray-600 hover:border-gray-300;
+}
+.sdk_tab_active {
+  color: rgb(37 99 235 / 1);
+  border-color: rgb(37 99 235 / 1);
+}
+
+.sdk_tab_active:hover {
+  color: rgb(37 99 235 / 1);
+  border-color: rgb(37 99 235 / 1);
+}
+
+.hljs-title {
+  color: #f22c3d;
+}
+
+.hljs-attr,
+.hljs-number {
+  color: #df3079;
+}
+.hljs-string {
+  color: #d8fa3c;
+}
+
+.hljs-keyword {
+  color: rgb(59 130 246);
+}
+
+.hljs-built_in {
+  color: pink;
+}
+.hljs-comment {
+  color: grey;
+}
+
 @layer components {
-  :root { font-family: 'Inter', sans-serif; }
+  :root {
+    font-family: 'Inter', sans-serif;
+  }
   @supports (font-variation-settings: normal) {
-    :root { font-family: 'Inter var', sans-serif; }
+    :root {
+      font-family: 'Inter var', sans-serif;
+    }
   }
   html {
     font-size: 14px;
@@ -129,12 +169,15 @@
   .btn-sm {
     @apply px-4 py-2  rounded inline-flex items-center border border-transparent rounded-md shadow-sm text-sm font-medium focus:outline-none focus:ring-2 focus:ring-offset-2 cursor-pointer;
   }
+  .btn-lg {
+    @apply px-5 py-3  rounded inline-flex items-center border border-transparent rounded-md shadow-sm text-sm font-medium focus:outline-none focus:ring-2 focus:ring-offset-2 cursor-pointer;
+  }
   .dataTable-search {
     @apply rounded;
   }
 
   .btn-indigo {
-    @apply btn-sm ml-3 text-white bg-indigo-600 hover:bg-indigo-700 focus:ring-indigo-500;
+    @apply ml-3 text-white bg-indigo-600 hover:bg-indigo-700 focus:ring-indigo-500;
   }
 
   .btn-yellow {

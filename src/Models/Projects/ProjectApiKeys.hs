@@ -12,6 +12,8 @@ module Models.Projects.ProjectApiKeys (
   newProjectApiKeys,
   insertProjectApiKey,
   projectApiKeysByProjectId,
+  countProjectApiKeysByProjectId,
+  revokeApiKey,
   getProjectApiKey,
 ) where
 
@@ -23,15 +25,16 @@ import Data.Time (ZonedTime)
 import Data.Time qualified as Time
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
+import Data.Vector qualified as V
 import Database.PostgreSQL.Entity
-import Database.PostgreSQL.Entity.DBT (QueryNature (Select), queryOne)
-import Database.PostgreSQL.Entity.Internal.QQ (field)
-import Database.PostgreSQL.Entity.Types (CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
-import Database.PostgreSQL.Simple (FromRow)
+import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, queryOne)
+import Database.PostgreSQL.Entity.Types
+import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import GHC.Records (HasField (getField))
+
 import Database.PostgreSQL.Simple.ToField (ToField)
-import Database.PostgreSQL.Simple.ToRow (ToRow)
 import Database.PostgreSQL.Transact (DBT)
 import Models.Projects.Projects qualified as Projects
 import Optics.TH
@@ -44,6 +47,9 @@ newtype ProjectApiKeyId = ProjectApiKeyId {unProjectApiKeyId :: UUID.UUID}
     (FromField, ToField, FromHttpApiData, Default)
     via UUID.UUID
   deriving anyclass (FromRow, ToRow)
+
+instance HasField "toText" ProjectApiKeyId Text where
+  getField = UUID.toText . unProjectApiKeyId
 
 data ProjectApiKey = ProjectApiKey
   { id :: ProjectApiKeyId
@@ -74,7 +80,25 @@ insertProjectApiKey :: ProjectApiKey -> DBT IO ()
 insertProjectApiKey = insert @ProjectApiKey
 
 projectApiKeysByProjectId :: Projects.ProjectId -> DBT IO (Vector ProjectApiKey)
-projectApiKeysByProjectId = selectManyByField @ProjectApiKey [field| project_id |]
+projectApiKeysByProjectId projectId = do
+  apiKeys <- selectManyByField @ProjectApiKey [field| project_id |] projectId
+  let filteredApiKeys = V.filter (isNothing . deletedAt) apiKeys
+  pure filteredApiKeys
+
+revokeApiKey :: ProjectApiKeyId -> DBT IO Int64
+revokeApiKey kid = do
+  execute Update q kid
+ where
+  q =
+    [sql| UPDATE projects.project_api_keys SET deleted_at=NOW(), active=false where id=?;|]
+countProjectApiKeysByProjectId :: Projects.ProjectId -> DBT IO Int
+countProjectApiKeysByProjectId pid = do
+  result <- query Select q pid
+  case result of
+    [Only count] -> return count
+    v -> return $ length v
+ where
+  q = [sql| SELECT count(*) FROM projects.project_api_keys WHERE project_id=? |]
 
 getProjectApiKey :: ProjectApiKeyId -> DBT IO (Maybe ProjectApiKey)
 getProjectApiKey = queryOne Select q

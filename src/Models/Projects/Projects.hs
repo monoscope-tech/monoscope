@@ -19,7 +19,7 @@ module Models.Projects.Projects (
   ProjectCache (..),
 ) where
 
-import Data.Aeson (FromJSON, ToJSON)
+import Data.Aeson (FromJSON, ToJSON, Value)
 import Data.Default
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
@@ -30,6 +30,7 @@ import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, queryOn
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
+import Database.PostgreSQL.Simple.Newtypes (Aeson)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact (DBT)
@@ -41,7 +42,7 @@ import Relude
 import Web.HttpApiData
 
 newtype ProjectId = ProjectId {unProjectId :: UUID.UUID}
-  deriving stock (Generic, Show)
+  deriving stock (Generic, Show, Read)
   deriving
     (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default, Hashable)
     via UUID.UUID
@@ -67,6 +68,7 @@ data Project = Project
   , -- NOTE: We used to have hosts under project, but now hosts should be gotten from the endpoints.
     -- NOTE: If there's heavy need and usage, we caould create a view. Otherwise, the project cache is best, if it meets our needs.
     paymentPlan :: Text
+  , questions :: Maybe Value
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow)
@@ -90,6 +92,7 @@ data Project' = Project'
   , -- NOTE: We used to have hosts under project, but now hosts should be gotten from the endpoints.
     -- NOTE: If there's heavy need and usage, we caould create a view. Otherwise, the project cache is best, if it meets our needs.
     paymentPlan :: Text
+  , questions :: Maybe Value
   , usersDisplayImages :: Vector Text
   }
   deriving stock (Show, Generic)

@@ -6,7 +6,6 @@ import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Relude
 import Test.Hspec
-import Debug.Pretty.Simple (pTraceM, pTraceShowM)
 
 spec :: Spec
 spec = do
@@ -63,5 +62,5 @@ spec = do
       children: []
               |]
       generated <- liftIO $ parseConfigToJson (Projects.ProjectId UUID.nil) (encodeUtf8 input)
-      pTraceShowM generated
+      -- pTraceShowM generated
       pending

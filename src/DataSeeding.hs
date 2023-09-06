@@ -15,8 +15,11 @@ import Deriving.Aeson qualified as DAE
 import Faker
 import Faker.Address (fullAddress)
 import Faker.Name qualified
+import Faker.Vehicle qualified
+import Faker.Verbs qualified
 import Lucid
 import Lucid.Htmx
+import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
@@ -28,9 +31,6 @@ import Relude.Unsafe ((!!))
 import RequestMessages qualified
 import System.Random (RandomGen, getStdGen, randomRs)
 import Web.FormUrlEncoded (FromForm)
-import Faker.Verbs qualified
-import Faker.Vehicle qualified
-import Models.Apis.RequestDumps qualified as RequestDumps
 
 data FieldConfig = FieldConfig
   { name :: Text

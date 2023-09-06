@@ -19,13 +19,12 @@ import Data.Aeson (encode)
 import Data.Aeson.QQ (aesonQQ)
 import Data.CaseInsensitive (original)
 import Data.CaseInsensitive qualified as CI
-import Database.PostgreSQL.Transact (DBT)
 import Data.Default
 import Data.List.Extra (cons)
 import Data.List.Unique
 import Data.Pool (withResource)
+import Data.Text (toLower)
 import Data.Text qualified as T
-import Data.Tuple.Extra (thd3)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Valor (Valor, check1, failIf, validateM)
 import Data.Valor qualified as Valor
@@ -41,7 +40,9 @@ import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pkg.ConvertKit qualified as ConvertKit
 import Relude
+import Relude.Unsafe qualified as Unsafe
 import Servant (
   Headers,
   addHeader,
@@ -49,9 +50,6 @@ import Servant (
  )
 import Servant.Htmx
 import Web.FormUrlEncoded (FromForm)
-import Data.Text (toLower)
-import Relude.Unsafe qualified as Unsafe
-import Pkg.ConvertKit qualified as ConvertKit
 
 data CreateProjectForm = CreateProjectForm
   { title :: Text
@@ -157,7 +155,8 @@ processProjectPostForm sess cpRaw = do
             userId' <- runMaybeT $ MaybeT (Users.userIdByEmail email) <|> MaybeT (Users.createEmptyUser email)
             let userId = Unsafe.fromJust userId'
             liftIO $ ConvertKit.addUserOrganization envCfg.convertkitApiKey email pid.toText cp.title cp.paymentPlan
-            when (userId' /= Just sess.userId) $ do -- invite the users to the project (Usually as an email)
+            when (userId' /= Just sess.userId) $ do
+              -- invite the users to the project (Usually as an email)
               _ <- liftIO $ withResource pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId pid email (cp.title)
               pass
             pure (email, permission, userId)
@@ -192,7 +191,7 @@ createProjectBody sess envCfg isUpdate cp cpe = do
         form_ [class_ "col-span-1 relative px-3 sm:px-10 border border-gray-200 py-10  bg-white rounded-3xl", hxPost_ "/p/new", hxTarget_ "#main-content", hxSwap_ "outerHTML", id_ "createUpdateBodyForm"] $ do
           input_ [name_ "isUpdate", type_ "hidden", value_ $ if isUpdate then "true" else "false"]
           input_ [name_ "projectId", type_ "hidden", value_ $ cp.projectId]
-          input_ [name_ "paymentPlan", type_ "hidden", value_ $ paymentPlan, id_ "paymentPlanEl"]
+          input_ [name_ "paymentPlan", type_ "hidden", value_ paymentPlan, id_ "paymentPlanEl"]
           div_ $ do
             label_ [class_ "text-gray-700 mx-2 text-sm"] do
               "Title"

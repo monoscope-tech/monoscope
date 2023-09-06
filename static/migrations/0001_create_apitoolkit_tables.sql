@@ -107,6 +107,7 @@ CREATE TABLE IF NOT EXISTS projects.projects
   payment_plan TEXT NOT NULL DEFAULT 'Free'
 );
 SELECT manage_updated_at('projects.projects');
+ALTER TABLE projects.projects ADD COLUMN questions JSONB DEFAULT NULL;
 
 -----------------------------------------------------------------------
 -- PROJECT MEMBERS table 
@@ -632,8 +633,8 @@ CREATE MATERIALIZED VIEW apis.project_requests_by_endpoint_per_min WITH (timesca
     project_id, endpoint_hash,
     method || ' ' || url_path endpoint_title,
     status_code, host, count(id) total_count,
-    percentile_agg(EXTRACT(epoch FROM duration)) as agg,
-    sum(EXTRACT(epoch FROM duration)) as total_time
+    percentile_agg(duration_ns) as agg,
+    sum(duration_ns) as total_time
   FROM
     apis.request_dumps
   GROUP BY project_id, timeB, endpoint_hash, method, url_path, status_code,host

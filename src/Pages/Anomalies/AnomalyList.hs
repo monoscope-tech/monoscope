@@ -7,8 +7,8 @@ module Pages.Anomalies.AnomalyList (
   unArchiveAnomalyGetH,
   anomalyListSlider,
   AnomalyBulkForm,
-  anomalyAcknowlegeButton, 
-  anomalyArchiveButton
+  anomalyAcknowlegeButton,
+  anomalyArchiveButton,
 ) where
 
 import Config
@@ -54,7 +54,7 @@ acknowlegeAnomalyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Ano
 acknowlegeAnomalyGetH sess pid aid = do
   pool <- asks pool
   let q = [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where id=? |]
-  _ <- liftIO $ withPool pool $ execute Update q (sess.userId, aid)
+  r <- liftIO $ withPool pool $ execute Update q (sess.userId, aid)
   pure $ anomalyAcknowlegeButton pid aid True
 
 unAcknowlegeAnomalyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Anomalies.AnomalyId -> DashboardM (Html ())
@@ -83,7 +83,7 @@ unArchiveAnomalyGetH sess pid aid = do
 anomalyBulkActionsPostH :: Sessions.PersistentSession -> Projects.ProjectId -> Text -> AnomalyBulkForm -> DashboardM (Headers '[HXTrigger] (Html ()))
 anomalyBulkActionsPostH sess pid action items = do
   pool <- asks pool
-  _ <- case action of
+  v <- case action of
     "acknowlege" -> liftIO $ withPool pool $ execute Update [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) |] (sess.userId, Vector.fromList items.anomalyId)
     "archive" -> liftIO $ withPool pool $ execute Update [sql| update apis.anomalies set archived_at=NOW() where id=ANY(?::uuid[]) |] (Only $ Vector.fromList items.anomalyId)
     _ -> error $ "unhandled anomaly bulk action state " <> action
@@ -102,9 +102,7 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM endpointM hxRequestM hxBo
   let ackd = textToBool <$> ackdM
   let archived = textToBool <$> archivedM
   pool <- asks pool
-  
-  let limit = maybe Nothing (\x -> if x == "slider" then (Just 51) else Nothing) layoutM
-
+  let limit = (\x -> if x == "slider" then Just 51 else Nothing) =<< layoutM
   (project, anomalies) <- liftIO $
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
@@ -199,8 +197,8 @@ anomalyList paramInput pid currTime anomalies = form_ [class_ "col-span-5 bg-whi
 
 anomalyListSlider :: UTCTime -> Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe (Vector Anomalies.AnomalyVM) -> Html ()
 anomalyListSlider _ _ _ (Just []) = ""
-anomalyListSlider _ pid eid Nothing =  do
-  div_ [hxGet_ $ "/p/"<>pid.toText<>"/anomalies?layout=slider"<>maybe "" (\x-> "&endpoint=" <> x.toText) eid , hxSwap_ "outerHTML", hxTrigger_ "load"] $ do
+anomalyListSlider _ pid eid Nothing = do
+  div_ [hxGet_ $ "/p/" <> pid.toText <> "/anomalies?layout=slider" <> maybe "" (\x -> "&endpoint=" <> x.toText) eid, hxSwap_ "outerHTML", hxTrigger_ "load"] $ do
     div_ [class_ "flex justify-between mt-5 pb-2"] $ do
       div_ [class_ "flex flex-row"] $ do
         img_

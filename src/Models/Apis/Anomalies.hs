@@ -23,11 +23,11 @@ import Data.Vector (Vector)
 import Database.PostgreSQL.Entity
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, queryOne)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
-import Database.PostgreSQL.Simple (Connection, FromRow, Only (Only))
+import Database.PostgreSQL.Simple (FromRow)
 import Database.PostgreSQL.Simple.FromField (FromField, ResultError (ConversionFailed, UnexpectedNull), fromField, returnError)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
-import Database.PostgreSQL.Simple.Types (Null (Null), Query (Query))
+import Database.PostgreSQL.Simple.Types (Query (Query))
 import Database.PostgreSQL.Transact (DBT)
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Endpoints qualified as Endpoints
@@ -175,8 +175,8 @@ getAnomalyVM pid hash = queryOne Select q (pid, hash)
  where
   q = [sql| SELECT *,0,now() FROM apis.anomalies_vm WHERE project_id=? AND target_hash=?|]
 
-selectAnomalies :: Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Int-> DBT IO (Vector AnomalyVM)
-selectAnomalies pid endpointM isAcknowleged isArchived sortM limitM= query Select (Query $ encodeUtf8 q) (MkDBField pid : paramList)
+selectAnomalies :: Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Int -> DBT IO (Vector AnomalyVM)
+selectAnomalies pid endpointM isAcknowleged isArchived sortM limitM = query Select (Query $ encodeUtf8 q) (MkDBField pid : paramList)
  where
   boolToNullSubQ a = if a then " not " else ""
   condlist =
@@ -196,7 +196,7 @@ selectAnomalies pid endpointM isAcknowleged isArchived sortM limitM= query Selec
     Just "last_seen" -> "last_seen desc"
     _ -> "avm.created_at desc"
 
-  limit = maybe "" (\x -> "limit "<> show x) limitM
+  limit = maybe "" (\x -> "limit " <> show x) limitM
 
   -- FIXME: optimize anomalies equation
   q =
@@ -220,7 +220,7 @@ SELECT avm.id, avm.created_at, avm.updated_at, avm.project_id, aan.acknowleged_a
         avm.project_id = ? 
         $cond
         AND avm.anomaly_type != 'field'
-        -- AND rd.created_at > NOW() - interval '14 days'
+        AND rd.created_at > NOW() - interval '14 days' 
     GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25
     ORDER BY $orderBy
     $limit;

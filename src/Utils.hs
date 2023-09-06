@@ -8,9 +8,10 @@ import Data.Time (ZonedTime)
 import Database.PostgreSQL.Simple.ToField (ToField (..))
 import Lucid (Html, href_)
 import Lucid.Svg (class_, svg_, use_)
-import Relude
+import Relude hiding (show)
 import Servant
 import Text.Regex.TDFA ((=~))
+import Prelude (show)
 
 -- Added only for satisfying the tests
 instance Eq ZonedTime where
@@ -27,7 +28,11 @@ type GetOrRedirect = '[WithStatus 200 (Html ()), WithStatus 302 (Headers '[Heade
 redirect :: Text -> Headers '[Header "Location" Text] NoContent
 redirect destination = addHeader destination NoContent
 
-data DBField = forall a. ToField a => MkDBField a
+data DBField = forall a. (ToField a, Show a) => MkDBField a
+
+instance Show DBField where
+  show (MkDBField a) = "MkDBField " ++ show a
+
 
 instance ToField DBField where
   toField (MkDBField a) = toField a

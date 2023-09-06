@@ -21,6 +21,9 @@ test:
 	stack test --ghc-options=-w
 
 fmt:
+	fourmolu --mode inplace $$(find . -name '*.hs')
+
+fmt-old:
 	ormolu --mode inplace $$(find . -name '*.hs')
 
 lint:
