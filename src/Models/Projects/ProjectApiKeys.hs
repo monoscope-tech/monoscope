@@ -80,10 +80,7 @@ insertProjectApiKey :: ProjectApiKey -> DBT IO ()
 insertProjectApiKey = insert @ProjectApiKey
 
 projectApiKeysByProjectId :: Projects.ProjectId -> DBT IO (Vector ProjectApiKey)
-projectApiKeysByProjectId projectId = do
-  apiKeys <- selectManyByField @ProjectApiKey [field| project_id |] projectId
-  let filteredApiKeys = V.filter (isNothing . deletedAt) apiKeys
-  pure filteredApiKeys
+projectApiKeysByProjectId projectId = do selectManyByField @ProjectApiKey [field| project_id |] projectId
 
 revokeApiKey :: ProjectApiKeyId -> DBT IO Int64
 revokeApiKey kid = do
