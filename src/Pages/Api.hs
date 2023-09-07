@@ -54,17 +54,17 @@ apiDeleteH :: Sessions.PersistentSession -> Projects.ProjectId -> ProjectApiKeys
 apiDeleteH sess pid keyid = do
   pool <- asks pool
   env <- asks env
-  res <- liftIO $
+  (res, apikeys) <- liftIO $
     withPool pool $ do
-      ProjectApiKeys.revokeApiKey keyid
+      del <- ProjectApiKeys.revokeApiKey keyid
+      apikeys <- ProjectApiKeys.projectApiKeysByProjectId pid
+      pure (del, apikeys)
 
   let hxTriggerData =
         if res > 0
           then decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Revoked API Key Successfully"]}|]
           else decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Something went wrong"]}|]
-  let content = button_ [class_ "text-indigo-600 hover:text-indigo-900"] $ do
-        span_ [class_ "text-slate-500"] "Revoked"
-  pure $ addHeader hxTriggerData content
+  pure $ addHeader hxTriggerData $ mainContent pid apikeys Nothing
 
 -- | apiGetH renders the api keys list page which includes a modal for creating the apikeys.
 apiGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
@@ -89,7 +89,7 @@ apiKeysPage pid apiKeys = do
   section_ [class_ "container mx-auto  px-4 py-10 overflow-hidden overflow-y-scroll"] $ do
     div_ [class_ "flex justify-between mb-6"] $ do
       h2_ [class_ "text-slate-700 text-2xl font-medium"] "API Keys"
-      button_ [class_ "btn-indigo", [__|on click remove .hidden from #generateApiKeyDialog |]] "Create an API Key"
+      button_ [class_ "btn-indigo p-2 rounded-lg", [__|on click remove .hidden from #generateApiKeyDialog |]] "Create an API Key"
     mainContent pid apiKeys Nothing
     div_
       [ class_ "hidden fixed z-30 inset-0 overflow-y-auto"
@@ -159,8 +159,8 @@ mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] $ do
                         button_
                           [ class_ "text-indigo-600 hover:text-indigo-900"
                           , hxDelete_ $ "/p/" <> pid.toText <> "/apis/" <> apiKey.id.toText
-                          , hxConfirm_ "Are you sure you want to revome this API Key?"
-                          , hxTarget_ $ "#key" <> show i
+                          , hxConfirm_ $ "Are you sure you want to revoke " <> apiKey.title <> " API Key?"
+                          , hxTarget_ "#main-content"
                           , id_ $ "key" <> show i
                           ]
                           $ do
