@@ -62,7 +62,9 @@ apiDeleteH sess pid keyid = do
         if res > 0
           then decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Revoked API Key Successfully"]}|]
           else decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Something went wrong"]}|]
-  pure $ addHeader hxTriggerData $ span_ ""
+  let content = button_ [class_ "text-indigo-600 hover:text-indigo-900"] $ do
+        span_ [class_ "text-slate-500"] "Revoked"
+  pure $ addHeader hxTriggerData content
 
 -- | apiGetH renders the api keys list page which includes a modal for creating the apikeys.
 apiGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
@@ -148,19 +150,27 @@ mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] $ do
                   span_ [class_ "sr-only"] "Edit"
             tbody_ [class_ "bg-white divide-y divide-gray-200"] $ do
               V.indexed apiKeys & mapM_ \(i, apiKey) -> do
-                tr_ [id_ $ "key" <> show i] $ do
+                tr_ [] $ do
                   td_ [class_ "px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900"] $ toHtml $ apiKey.title
                   td_ [class_ "px-6 py-4 whitespace-nowrap text-sm text-gray-500"] $ toHtml $ apiKey.keyPrefix <> "**********"
                   td_ [class_ "px-6 py-4 whitespace-nowrap text-right text-sm font-medium"] $ do
-                    button_
-                      [ class_ "text-indigo-600 hover:text-indigo-900"
-                      , hxDelete_ $ "/p/" <> pid.toText <> "/apis/" <> apiKey.id.toText
-                      , hxConfirm_ "Are you sure you want to revome this API Key?"
-                      , hxTarget_ $ "#key" <> show i
-                      ]
-                      $ do
-                        img_ [src_ "/assets/svgs/revoke.svg", class_ "h-3 w-3 mr-2 inline-block"]
-                        span_ [class_ "text-slate-500"] "Revoke"
+                    if apiKey.active
+                      then do
+                        button_
+                          [ class_ "text-indigo-600 hover:text-indigo-900"
+                          , hxDelete_ $ "/p/" <> pid.toText <> "/apis/" <> apiKey.id.toText
+                          , hxConfirm_ "Are you sure you want to revome this API Key?"
+                          , hxTarget_ $ "#key" <> show i
+                          , id_ $ "key" <> show i
+                          ]
+                          $ do
+                            img_ [src_ "/assets/svgs/revoke.svg", class_ "h-3 w-3 mr-2 inline-block"]
+                            span_ [class_ "text-slate-500"] "Revoke"
+                      else do
+                        button_
+                          [class_ "text-indigo-600 hover:text-indigo-900"]
+                          $ do
+                            span_ [class_ "text-slate-500"] "Revoked"
 
 copyNewApiKey :: Maybe (ProjectApiKeys.ProjectApiKey, Text) -> Bool -> Html ()
 copyNewApiKey newKeyM hasNext =
