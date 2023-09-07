@@ -263,6 +263,7 @@ Apitoolkit team
         weeklyReportForProject dbPool cfg p
       pass
 
+
 jobsWorkerInit :: Pool Connection -> LogAction IO String -> Config.EnvConfig -> IO ()
 jobsWorkerInit dbPool logger envConfig = startJobRunner $ mkConfig jobLogger "background_jobs" dbPool (MaxConcurrentJobs 1) (jobsRunner dbPool logger envConfig) id
  where
@@ -282,7 +283,7 @@ dailyReportForProject dbPool cfg pid = do
       let anomaly_json = RP.buildAnomalyJSON anomalies count
       let rep_json = RP.buildReportJSON anomalies count endpoint_rp previous_day
       print rep_json
-      sendEmail cfg "yousiph77@gmail.com" "Hello" "World"
+      -- sendEmail cfg "yousiph77@gmail.com" "Hello" "World"
     else pass
 
 weeklyReportForProject :: Pool Connection -> Config.EnvConfig -> Projects.ProjectId -> IO ()
