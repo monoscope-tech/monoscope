@@ -117,6 +117,10 @@
 .hljs-number {
   color: #df3079;
 }
+
+.hljs-deco {
+  color: rgb(34 197 94);
+}
 .hljs-string {
   color: #d8fa3c;
 }
