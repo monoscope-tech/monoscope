@@ -9,6 +9,7 @@ module Pages.Reports (
   buildPerformanceJSON,
   buildAnomalyJSON,
   getPerformanceInsight,
+  reportsPostH,
   ReportAnomalyType (..),
   PerformanceReport (..),
 ) where
@@ -28,6 +29,11 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Relude
+
+import Data.Aeson.QQ (aesonQQ)
+import Servant (Headers, addHeader)
+
+import Servant.Htmx (HXTrigger)
 
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getZonedTime)
 import Data.Vector qualified as V
@@ -66,16 +72,7 @@ data ReportAnomalyType
       , deletedFields :: [Text]
       , eventsCount :: Int
       }
-  | -- | ATField
-    --     { endpointUrlPath :: Text
-    --     , endpointMethod :: Text
-    --     , fieldKey :: Text
-    --     , fieldKeyPath :: Text
-    --     , fieldCategory :: Text
-    --     , fieldFormat :: Text
-    --     , eventsCount :: Int
-    --     }
-    ATFormat
+  | ATFormat
       { endpointUrlPath :: Text
       , fieldKeyPath :: Text
       , endpointMethod :: Text
@@ -93,6 +90,15 @@ data ReportData = ReportData
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromJSON)
+
+reportsPostH :: Sessions.PersistentSession -> Projects.ProjectId -> Text -> DashboardM (Headers '[HXTrigger] (Html ()))
+reportsPostH sess pid t = do
+  pool <- asks pool
+  apiKeys <- liftIO $
+    withPool pool $ do
+      Projects.updateProjectReportNotif pid t
+  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Report nofications updated Successfully"]}|]
+  pure $ addHeader hxTriggerData $ span_ [] ""
 
 singleReportGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Reports.ReportId -> DashboardM (Html ())
 singleReportGetH sess pid rid = do
@@ -112,7 +118,6 @@ singleReportGetH sess pid rid = do
 
 reportsGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
 reportsGetH sess pid page hxRequest hxBoosted = do
-  print page
   let p = toString (fromMaybe "0" page)
   let pg = fromMaybe 0 (readMaybe p :: Maybe Int)
   pool <- asks pool
@@ -120,23 +125,6 @@ reportsGetH sess pid page hxRequest hxBoosted = do
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
       reports <- Reports.reportHistoryByProject pid pg
-      anomalies <- Anomalies.getReportAnomalies pid "weekly"
-      count <- Anomalies.countAnomalies pid "weekly"
-      endpoint_rp <- RequestDumps.getRequestDumpForReports pid "weekly"
-      previous_p <- RequestDumps.getRequestDumpsForPreviousReportPeriod pid "weekly"
-      let rep_json = buildReportJSON anomalies count endpoint_rp previous_p
-      currentTime <- liftIO getZonedTime
-      reportId <- Reports.ReportId <$> liftIO UUIDV4.nextRandom
-      let report =
-            Reports.Report
-              { id = reportId
-              , reportJson = rep_json
-              , createdAt = currentTime
-              , updatedAt = currentTime
-              , projectId = pid
-              , reportType = "weekly"
-              }
-      Reports.addReport report
       pure (project, reports)
   let nextUrl = "/p/" <> show pid.unProjectId <> "/reports?page=" <> show (pg + 1)
   case (hxRequest, hxBoosted) of
@@ -149,7 +137,11 @@ reportsGetH sess pid page hxRequest hxBoosted = do
               , currProject = project
               , pageTitle = "API Log Explorer"
               }
-      pure $ bodyWrapper bwconf $ reportsPage pid reports nextUrl
+      let (daily, weekly) = case project of
+            Just proj -> (proj.dailyNotif, proj.weeklyNotif)
+            Nothing -> (False, False)
+
+      pure $ bodyWrapper bwconf $ reportsPage pid reports nextUrl daily weekly
 
 singleReportPage :: Projects.ProjectId -> Maybe Reports.Report -> Html ()
 singleReportPage pid report =
@@ -238,12 +230,37 @@ shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "inline-block"] do
       div_ [class_ "text-base"] $ toHtml @String $ show deletedF
       small_ [class_ "block"] "deleted fields"
 
-reportsPage :: Projects.ProjectId -> Vector Reports.ReportListItem -> Text -> Html ()
-reportsPage pid reports nextUrl =
+reportsPage :: Projects.ProjectId -> Vector Reports.ReportListItem -> Text -> Bool -> Bool -> Html ()
+reportsPage pid reports nextUrl daily weekly =
   div_ [class_ "container mx-auto w-full flex flex-col px-4 pt-10 pb-24"] $ do
-    h3_ [class_ "text-xl text-slate-700 flex place-items-center font-bold pb-4 border-b"] "Report History"
-    div_ [class_ "mt-4"] $ do
-      reportListItems pid reports nextUrl
+    h3_ [class_ "text-xl text-slate-700 flex place-items-center font-bold pb-4 border-b"] "Reports History"
+    div_ [class_ "mt-4 grid grid-cols-12 gap-4"] do
+      div_ [class_ "flex flex-col col-span-2 mt-16"] do
+        h5_ [class_ "text-lg font-semibold text-slate-700 pb-1"] "Email notifications:"
+        div_ [class_ "flex items-center justify-between w-[170px] hover:bg-gray-100"] do
+          label_ [class_ "inline-flex items-center w-full", Lucid.for_ "e-daily"] "Daily reports"
+          input_
+            [ type_ "checkbox"
+            , id_ "e-daily"
+            , name_ "daily-reports"
+            , if daily then checked_ else value_ "off"
+            , hxPost_ $ "/p/" <> show pid.unProjectId <> "/reports_notif/daily"
+            , hxTrigger_ "change"
+            , class_ "w-4 h-4 text-blue-600 bg-gray-100 rounded border-gray-300 focus:ring-blue-500"
+            ]
+        div_ [class_ "flex items-center justify-between w-[170px] hover:bg-gray-100"] do
+          label_ [class_ "inline-flex items-center w-full", Lucid.for_ "e-weekly"] "Weekly reports"
+          input_
+            [ type_ "checkbox"
+            , id_ "e-weekly"
+            , name_ "weekly-reports"
+            , if weekly then checked_ else value_ "off"
+            , hxPost_ $ "/p/" <> show pid.unProjectId <> "/reports_notif/weekly"
+            , hxTrigger_ "change"
+            , class_ "w-4 h-4 text-blue-600 bg-gray-100 rounded border-gray-300 focus:ring-blue-500"
+            ]
+      div_ [class_ "col-span-8"] $ do
+        reportListItems pid reports nextUrl
 
 reportListItems :: Projects.ProjectId -> Vector Reports.ReportListItem -> Text -> Html ()
 reportListItems pid reports nextUrl =
@@ -280,9 +297,9 @@ renderEndpointsTable endpoints = table_ [class_ "table-auto w-full"] $ do
     th_ [class_ "px-6 py-3"] "Duration diff %"
   tbody_ $ mapM_ renderEndpointRow endpoints
 
-buildReportJSON :: Vector Anomalies.AnomalyVM -> Int -> Vector RequestForReport -> Vector EndpointPerf -> Aeson.Value
-buildReportJSON anomalies anm_total endpoints_perf previous_perf =
-  let anomalies_json = buildAnomalyJSON anomalies anm_total
+buildReportJSON :: Vector Anomalies.AnomalyVM -> Vector RequestForReport -> Vector EndpointPerf -> Aeson.Value
+buildReportJSON anomalies endpoints_perf previous_perf =
+  let anomalies_json = buildAnomalyJSON anomalies (length anomalies)
       perf_insight = getPerformanceInsight endpoints_perf previous_perf
       perf_json = buildPerformanceJSON perf_insight
       report_json = case anomalies_json of
@@ -296,19 +313,19 @@ buildPerformanceJSON :: V.Vector PerformanceReport -> Aeson.Value
 buildPerformanceJSON pr = Aeson.object ["endpoints" .= pr]
 
 buildAnomalyJSON :: Vector Anomalies.AnomalyVM -> Int -> Aeson.Value
-buildAnomalyJSON anomalies total = Aeson.object ["anomalies" .= V.map buildjson filteredAnom, "anomaliesCount" .= total]
+buildAnomalyJSON anomalies total = Aeson.object ["anomalies" .= V.map buildjson anomalies, "anomaliesCount" .= total]
  where
-  endMap = createEndpointMap (V.toList anomalies) Map.empty
-  filteredAnom = V.filter (filterFunc endMap) anomalies
+  -- endMap = createEndpointMap (V.toList anomalies) Map.empty
+  -- filteredAnom = V.filter (filterFunc endMap) anomalies
 
-  filterFunc :: Map Text Bool -> Anomalies.AnomalyVM -> Bool
-  filterFunc mp a = case a.anomalyType of
-    Anomalies.ATEndpoint -> True
-    _ ->
-      let ep_url = fromMaybe "" a.endpointUrlPath
-          method = fromMaybe "" a.endpointMethod
-          endpoint = method <> ep_url
-       in fromMaybe False (Map.lookup endpoint mp)
+  -- filterFunc :: Map Text Bool -> Anomalies.AnomalyVM -> Bool
+  -- filterFunc mp a = case a.anomalyType of
+  --   Anomalies.ATEndpoint -> True
+  --   _ ->
+  --     let ep_url = fromMaybe "" a.endpointUrlPath
+  --         method = fromMaybe "" a.endpointMethod
+  --         endpoint = method <> ep_url
+  --      in fromMaybe False (Map.lookup endpoint mp)
 
   buildjson :: Anomalies.AnomalyVM -> Aeson.Value
   buildjson an = case an.anomalyType of
@@ -330,16 +347,6 @@ buildAnomalyJSON anomalies total = Aeson.object ["anomalies" .= V.map buildjson 
         , "deletedFields" .= an.shapeDeletedFields
         , "eventsCount" .= an.eventsCount14d
         ]
-    -- Anomalies.ATField ->
-    --   Aeson.object
-    --     [ "endpointUrlPath" .= an.endpointUrlPath
-    --     , "endpointMethod" .= an.endpointMethod
-    --     , "tag" .= Anomalies.ATField
-    --     , "key" .= an.fieldKey
-    --     , "fieldCategory" .= Field.fieldCategoryEnumToText (fromMaybe Field.FCRequestBody an.fieldCategory)
-    --     , "fieldFormat" .= an.fieldFormat
-    --     , "eventsCount" .= an.eventsCount14d
-    --     ]
     Anomalies.ATFormat ->
       Aeson.object
         [ "endpointUrlPath" .= an.endpointUrlPath

@@ -16,6 +16,7 @@ module Models.Projects.Projects (
   deleteProject,
   projectById,
   projectCacheById,
+  updateProjectReportNotif,
   ProjectCache (..),
 ) where
 
@@ -69,6 +70,8 @@ data Project = Project
     -- NOTE: If there's heavy need and usage, we caould create a view. Otherwise, the project cache is best, if it meets our needs.
     paymentPlan :: Text
   , questions :: Maybe Value
+  , dailyNotif :: Bool
+  , weeklyNotif :: Bool
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow)
@@ -194,6 +197,15 @@ updateProject cp = do
  where
   q =
     [sql| UPDATE projects.projects SET title=?, description=?, payment_plan=? where id=?;|]
+
+updateProjectReportNotif :: ProjectId -> Text -> DBT IO Int64
+updateProjectReportNotif pid report_type = do
+  execute Update q (Only pid)
+ where
+  q =
+    if report_type == "daily"
+      then [sql| UPDATE projects.projects SET daily_notif= CASE WHEN daily_notif =TRUE THEN FALSE ELSE TRUE END WHERE id=?;|]
+      else [sql| UPDATE projects.projects SET weekly_notif=CASE WHEN weekly_notif =TRUE THEN FALSE ELSE TRUE END WHERE id=?;|]
 
 deleteProject :: ProjectId -> DBT IO Int64
 deleteProject pid = do

@@ -9,11 +9,12 @@ import Colog (LogAction, (<&))
 import Config qualified
 import Data.Aeson as Aeson
 import Data.CaseInsensitive qualified as CI
-import Data.List.Extra (intersect, union)
+import Data.List.Extra (delete, intersect, union)
 import Data.Map.Strict qualified as Map
-import Data.Pool (Pool)
+import Data.Pool (Pool, withResource)
 import Data.Text qualified as T
-import Data.Time (ZonedTime)
+import Data.Time (UTCTime (utctDay), ZonedTime, getCurrentTime, getZonedTime)
+import Data.Time.Calendar
 import Data.Vector (Vector)
 import Data.Vector qualified as V
 
@@ -29,11 +30,14 @@ import Models.Apis.Fields qualified as Field
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
 
+import Data.Time.Calendar.OrdinalDate (mondayStartWeek)
+import Data.UUID.V4 qualified as UUIDV4
+import Models.Apis.Reports qualified as Reports
 import Models.Apis.RequestDumps (EndpointPerf, RequestForReport)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import NeatInterpolation (text, trimming)
 import OddJobs.ConfigBuilder (mkConfig)
-import OddJobs.Job (ConcurrencyControl (..), Job (..), startJobRunner, throwParsePayload)
+import OddJobs.Job (ConcurrencyControl (..), Job (..), createJob, startJobRunner, throwParsePayload)
 import Pages.Reports qualified as RP
 import Pkg.Mail
 import Pkg.Ortto qualified as Ortto
@@ -45,9 +49,9 @@ data BgJobs
   | CreatedProjectSuccessfully Users.UserId Projects.ProjectId Text Text
   | -- NewAnomaly Projects.ProjectId Anomalies.AnomalyTypes Anomalies.AnomalyActions TargetHash
     NewAnomaly Projects.ProjectId ZonedTime Text Text Text
-  | DailyOrttoSync
-  | DailyReports
-  | WeeklyReports
+  | DailyReports Projects.ProjectId
+  | WeeklyReports Projects.ProjectId
+  | DailyJob
   deriving stock (Eq, Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
 
@@ -92,7 +96,7 @@ getUsersByProjectId pid = query Select q (Only pid)
 getAllProjects :: DBT IO (Vector Projects.ProjectId)
 getAllProjects = query Select q (Only True)
  where
-  q = [sql|SELECT id FROM projects.projects WHERE active=?|]
+  q = [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL|]
 
 -- TODO:
 -- Analyze shapes for
@@ -235,34 +239,21 @@ Regards,<br/>
 Apitoolkit team
           |]
        in sendEmail cfg reciever subject body
-    DailyOrttoSync -> do
-      projReqs <- withPool dbPool getProjectsReqsCount
-      logger <& "📊  pushed ortto updates for " <> show (length projReqs) <> " companies"
-      Ortto.pushedTrafficViaSdk cfg.orttoApiKey $ toList projReqs
-     where
-      getProjectsReqsCount :: DBT IO (Vector (Projects.ProjectId, Text, Int64, Users.UserId))
-      getProjectsReqsCount = query Select q ()
-       where
-        q =
-          [sql|SELECT pp.id, pp.title, CAST(SUM(total_count) AS integer), pm.user_id --, us.email
-                  FROM apis.project_requests_by_endpoint_per_min apm
-                  JOIN projects.projects pp ON (id=project_id)
-                  JOIN projects.project_members pm ON (pp.id = pm.project_id)
-                  --JOIN users.users us on (pm.user_id = us.id)
-                  where apm.timeB > NOW() - INTERVAL '1 days'
-                  GROUP BY pp.id, pp.title, pm.user_id --, us.email
-          |]
-    DailyReports -> do
+    DailyJob -> do
       projects <- withPool dbPool getAllProjects
       forM_ projects \p -> do
-        dailyReportForProject dbPool cfg p
-        pass
-    WeeklyReports -> do
-      projects <- withPool dbPool getAllProjects
-      forM_ projects \p -> do
-        weeklyReportForProject dbPool cfg p
+        liftIO $ withResource dbPool \conn -> do
+          currentDay <- utctDay <$> getCurrentTime
+          if dayOfWeek currentDay == Friday
+            then createJob conn "background_jobs" $ BackgroundJobs.WeeklyReports p
+            else createJob conn "background_jobs" $ BackgroundJobs.DailyReports p
       pass
-
+    DailyReports pid -> do
+      dailyReportForProject dbPool cfg pid
+      pass
+    WeeklyReports pid -> do
+      weeklyReportForProject dbPool cfg pid
+      pass
 
 jobsWorkerInit :: Pool Connection -> LogAction IO String -> Config.EnvConfig -> IO ()
 jobsWorkerInit dbPool logger envConfig = startJobRunner $ mkConfig jobLogger "background_jobs" dbPool (MaxConcurrentJobs 1) (jobsRunner dbPool logger envConfig) id
@@ -274,16 +265,33 @@ dailyReportForProject dbPool cfg pid = do
   users <- withPool dbPool $ getUsersByProjectId pid
   if not (null users)
     then do
-      let _first_user = V.head users
-      anomalies <- withPool dbPool $ Anomalies.getReportAnomalies pid "daily"
-      count <- withPool dbPool $ Anomalies.countAnomalies pid "daily"
-      endpoint_rp <- withPool dbPool $ RequestDumps.getRequestDumpForReports pid "daily"
-      previous_day <- withPool dbPool $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid "daily"
-      let perf_ins = RP.getPerformanceInsight endpoint_rp previous_day
-      let anomaly_json = RP.buildAnomalyJSON anomalies count
-      let rep_json = RP.buildReportJSON anomalies count endpoint_rp previous_day
-      print rep_json
-      -- sendEmail cfg "yousiph77@gmail.com" "Hello" "World"
+      let first_user = V.head users
+      p <- withPool dbPool $ Projects.projectById pid
+      case p of
+        Nothing -> pass
+        Just pr -> do
+          anomalies <- withPool dbPool $ Anomalies.getReportAnomalies pid "daily"
+          count <- withPool dbPool $ Anomalies.countAnomalies pid "daily"
+          endpoint_rp <- withPool dbPool $ RequestDumps.getRequestDumpForReports pid "daily"
+          previous_day <- withPool dbPool $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid "daily"
+          let rep_json = RP.buildReportJSON anomalies endpoint_rp previous_day
+          currentTime <- liftIO getZonedTime
+          reportId <- Reports.ReportId <$> liftIO UUIDV4.nextRandom
+          let report =
+                Reports.Report
+                  { id = reportId
+                  , reportJson = rep_json
+                  , createdAt = currentTime
+                  , updatedAt = currentTime
+                  , projectId = pid
+                  , reportType = "daily"
+                  }
+          _ <- withPool dbPool $ Reports.addReport report
+          if pr.dailyNotif
+            then do
+              sendEmail cfg "yousiph77@gmail.com" "Hello" "World"
+              pass
+            else pass
     else pass
 
 weeklyReportForProject :: Pool Connection -> Config.EnvConfig -> Projects.ProjectId -> IO ()
@@ -291,14 +299,33 @@ weeklyReportForProject dbPool cfg pid = do
   users <- withPool dbPool $ getUsersByProjectId pid
   if not (null users)
     then do
-      let _first_user = V.head users
-      anomalies <- withPool dbPool $ Anomalies.getReportAnomalies pid "weekly"
-      count <- withPool dbPool $ Anomalies.countAnomalies pid "weekly"
-      endpoint_rp <- withPool dbPool $ RequestDumps.getRequestDumpForReports pid "weekly"
-      previous_day <- withPool dbPool $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid "weekly"
-      let perf_ins = RP.getPerformanceInsight endpoint_rp previous_day
-      let anomaly_json = RP.buildAnomalyJSON anomalies count
-      let rep_json = RP.buildReportJSON anomalies count endpoint_rp previous_day
-      print rep_json
-      pass
+      p <- withPool dbPool $ Projects.projectById pid
+      case p of
+        Nothing -> pass
+        Just pr -> do
+          let _first_user = V.head users
+          anomalies <- withPool dbPool $ Anomalies.getReportAnomalies pid "weekly"
+          count <- withPool dbPool $ Anomalies.countAnomalies pid "weekly"
+          endpoint_rp <- withPool dbPool $ RequestDumps.getRequestDumpForReports pid "weekly"
+          previous_day <- withPool dbPool $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid "weekly"
+          let rep_json = RP.buildReportJSON anomalies endpoint_rp previous_day
+          currentTime <- liftIO getZonedTime
+          reportId <- Reports.ReportId <$> liftIO UUIDV4.nextRandom
+          let report =
+                Reports.Report
+                  { id = reportId
+                  , reportJson = rep_json
+                  , createdAt = currentTime
+                  , updatedAt = currentTime
+                  , projectId = pid
+                  , reportType = "weekly"
+                  }
+          _ <- withPool dbPool $ Reports.addReport report
+          if pr.weeklyNotif
+            then do
+              sendEmail cfg "yousiph77@gmail.com" "Hello" "World"
+              pass
+            else pass
     else pass
+
+-- INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued',  jsonb_build_object('tag', 'DailyJob'));

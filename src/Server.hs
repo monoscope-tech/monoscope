@@ -119,6 +119,7 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "reports" :> QPT "page" :> HXRequest :> HXBoosted :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "reports" :> Capture "report_id" Reports.ReportId :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "survey" :> ReqBody '[FormUrlEncoded] Survey.SurveyForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
+    :<|> "p" :> ProjectId :> "reports_notif" :> Capture "report_type" Text :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "charts_html" :> QP "chart_type" Charts.ChartType :> QP "group_by" Charts.GroupBy :> QP "query_by" [Charts.QueryBy] :> QP "num_slots" Int :> QP "limit" Int :> QP "theme" Text :> QPT "id" :> QP "show_legend" Bool :> Get '[HTML] (Html ())
 
 type PublicAPI =
@@ -194,6 +195,7 @@ protectedServer sess =
     :<|> Reports.reportsGetH sess
     :<|> Reports.singleReportGetH sess
     :<|> Survey.surveyPutH sess
+    :<|> Reports.reportsPostH sess
     :<|> Charts.chartsGetH sess
 
 publicServer :: ServerT PublicAPI DashboardM
