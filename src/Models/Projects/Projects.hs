@@ -96,6 +96,8 @@ data Project' = Project'
     -- NOTE: If there's heavy need and usage, we caould create a view. Otherwise, the project cache is best, if it meets our needs.
     paymentPlan :: Text
   , questions :: Maybe Value
+  , dailyNotif :: Bool
+  , weeklyNotif :: Bool
   , usersDisplayImages :: Vector Text
   }
   deriving stock (Show, Generic)
