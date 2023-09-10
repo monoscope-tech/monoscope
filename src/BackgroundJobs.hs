@@ -18,6 +18,7 @@ import Data.Time.Calendar
 import Data.Vector (Vector)
 import Data.Vector qualified as V
 
+import Data.Text.Lazy qualified as LT
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query, withPool)
 import Database.PostgreSQL.Simple (Connection, Only (Only))
 import Database.PostgreSQL.Simple.FromRow (FromRow (fromRow), field)
@@ -32,6 +33,7 @@ import Models.Users.Users qualified as Users
 
 import Data.Time.Calendar.OrdinalDate (mondayStartWeek)
 import Data.UUID.V4 qualified as UUIDV4
+import Lucid (Html, renderText, style_, table_, tbody_, td_, th_, thead_, toHtml, tr_)
 import Models.Apis.Reports qualified as Reports
 import Models.Apis.RequestDumps (EndpointPerf, RequestForReport)
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -53,17 +55,6 @@ data BgJobs
   | WeeklyReports Projects.ProjectId
   | DailyJob
   deriving stock (Eq, Show, Generic)
-  deriving anyclass (ToJSON, FromJSON)
-
-data PerformanceReport = PerformanceReport
-  { urlPath :: Text
-  , method :: Text
-  , averageDuration :: Integer
-  , durationDiff :: Integer
-  , durationDiffType :: Text
-  , durationDiffPct :: Integer
-  }
-  deriving stock (Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
 
 getShapes :: Projects.ProjectId -> Text -> DBT IO (Vector (Text, Vector Text))
@@ -244,7 +235,7 @@ Apitoolkit team
       forM_ projects \p -> do
         liftIO $ withResource dbPool \conn -> do
           currentDay <- utctDay <$> getCurrentTime
-          if dayOfWeek currentDay == Friday
+          if dayOfWeek currentDay == Monday
             then createJob conn "background_jobs" $ BackgroundJobs.WeeklyReports p
             else createJob conn "background_jobs" $ BackgroundJobs.DailyReports p
       pass
@@ -289,7 +280,10 @@ dailyReportForProject dbPool cfg pid = do
           _ <- withPool dbPool $ Reports.addReport report
           if pr.dailyNotif
             then do
-              sendEmail cfg "yousiph77@gmail.com" "Hello" "World"
+              let body = renderText $ RP.reportEmail pid report
+              let projectTitle = pr.title
+              let subject = [text| 🤖 APITOOLKIT: Daily Report for `$projectTitle` |]
+              sendEmail cfg (CI.original first_user.email) subject body
               pass
             else pass
     else pass
@@ -303,12 +297,12 @@ weeklyReportForProject dbPool cfg pid = do
       case p of
         Nothing -> pass
         Just pr -> do
-          let _first_user = V.head users
+          let first_user = V.head users
           anomalies <- withPool dbPool $ Anomalies.getReportAnomalies pid "weekly"
           count <- withPool dbPool $ Anomalies.countAnomalies pid "weekly"
           endpoint_rp <- withPool dbPool $ RequestDumps.getRequestDumpForReports pid "weekly"
-          previous_day <- withPool dbPool $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid "weekly"
-          let rep_json = RP.buildReportJSON anomalies endpoint_rp previous_day
+          previous_week <- withPool dbPool $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid "weekly"
+          let rep_json = RP.buildReportJSON anomalies endpoint_rp previous_week
           currentTime <- liftIO getZonedTime
           reportId <- Reports.ReportId <$> liftIO UUIDV4.nextRandom
           let report =
@@ -323,7 +317,10 @@ weeklyReportForProject dbPool cfg pid = do
           _ <- withPool dbPool $ Reports.addReport report
           if pr.weeklyNotif
             then do
-              sendEmail cfg "yousiph77@gmail.com" "Hello" "World"
+              let body = renderText $ RP.reportEmail pid report
+              let projectTitle = pr.title
+              let subject = [text| 🤖 APITOOLKIT: Daily Report for `$projectTitle` |]
+              sendEmail cfg (CI.original first_user.email) subject body
               pass
             else pass
     else pass
