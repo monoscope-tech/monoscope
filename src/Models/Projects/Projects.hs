@@ -206,8 +206,8 @@ updateProjectReportNotif pid report_type = do
  where
   q =
     if report_type == "daily"
-      then [sql| UPDATE projects.projects SET daily_notif= CASE WHEN daily_notif =TRUE THEN FALSE ELSE TRUE END WHERE id=?;|]
-      else [sql| UPDATE projects.projects SET weekly_notif=CASE WHEN weekly_notif =TRUE THEN FALSE ELSE TRUE END WHERE id=?;|]
+      then [sql| UPDATE projects.projects SET daily_notif=(not daily_notif) WHERE id=?;|]
+      else [sql| UPDATE projects.projects SET weekly_notif=(not weekly_notif) WHERE id=?;|]
 
 deleteProject :: ProjectId -> DBT IO Int64
 deleteProject pid = do
