@@ -45,7 +45,6 @@ data BgJobs
   | CreatedProjectSuccessfully Users.UserId Projects.ProjectId Text Text
   | -- NewAnomaly Projects.ProjectId Anomalies.AnomalyTypes Anomalies.AnomalyActions TargetHash
     NewAnomaly Projects.ProjectId ZonedTime Text Text Text
-  | DailyOrttoSync
   | DailyReports
   | WeeklyReports
   deriving stock (Eq, Show, Generic)
@@ -235,23 +234,6 @@ Regards,<br/>
 Apitoolkit team
           |]
        in sendEmail cfg reciever subject body
-    DailyOrttoSync -> do
-      projReqs <- withPool dbPool getProjectsReqsCount
-      logger <& "📊  pushed ortto updates for " <> show (length projReqs) <> " companies"
-      Ortto.pushedTrafficViaSdk cfg.orttoApiKey $ toList projReqs
-     where
-      getProjectsReqsCount :: DBT IO (Vector (Projects.ProjectId, Text, Int64, Users.UserId))
-      getProjectsReqsCount = query Select q ()
-       where
-        q =
-          [sql|SELECT pp.id, pp.title, CAST(SUM(total_count) AS integer), pm.user_id --, us.email
-                  FROM apis.project_requests_by_endpoint_per_min apm
-                  JOIN projects.projects pp ON (id=project_id)
-                  JOIN projects.project_members pm ON (pp.id = pm.project_id)
-                  --JOIN users.users us on (pm.user_id = us.id)
-                  where apm.timeB > NOW() - INTERVAL '1 days'
-                  GROUP BY pp.id, pp.title, pm.user_id --, us.email
-          |]
     DailyReports -> do
       projects <- withPool dbPool getAllProjects
       forM_ projects \p -> do

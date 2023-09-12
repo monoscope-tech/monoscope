@@ -54,6 +54,8 @@ import Witch (from)
 data SDKTypes
   = GoGin
   | GoBuiltIn
+  | GoGorillaMux
+  | GoDefault
   | PhpLaravel
   | PhpSymfony
   | JsExpress
@@ -96,6 +98,8 @@ instance FromField SDKTypes where
 normalizeUrlPath :: SDKTypes -> Int -> Text -> Text -> Text
 normalizeUrlPath GoGin statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath GoBuiltIn statusCode _method urlPath = removeQueryParams statusCode urlPath
+normalizeUrlPath GoDefault statusCode _method urlPath = removeQueryParams statusCode urlPath
+normalizeUrlPath GoGorillaMux statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath PhpLaravel statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath PhpSymfony statusCode _method urlPath = removeQueryParams statusCode urlPath
 -- NOTE: Temporary workaround due to storing complex paths in the urlPath, which should be unaccepted, and messes with our logic
