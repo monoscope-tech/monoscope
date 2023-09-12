@@ -217,4 +217,9 @@
   <symbol xmlns="http://www.w3.org/2000/svg" height="22px" width="22px" viewBox="0 0 32 32" fill="currentColor"  id="onboarding">
   <path d="M2 5.5L3.21429 7L7.5 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path> <path d="M2 12.5L3.21429 14L7.5 10" stroke="#1C274C" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path> <path d="M2 19.5L3.21429 21L7.5 17" stroke="#1C274C" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path> <path d="M22 12H17M12 12H13.5" stroke="#1C274C" stroke-width="1.5" stroke-linecap="round"></path> <path d="M12 19H17M20.5 19H22" stroke="#1C274C" stroke-width="1.5" stroke-linecap="round"></path> <path d="M22 5L12 5" stroke="#1C274C" stroke-width="1.5" stroke-linecap="round"></path>
   </symbol>
+  <symbol xmlns="http://www.w3.org/2000/svg" height="20px" width="20px" viewBox="0 0 32 32" fill="currentColor"  id="reports">
+  <rect x="6.48" y="18" width="5.76" height="11.52" rx="1" ry="1"></rect>
+  <rect x="15.12" y="6.48" width="5.76" height="23.04" rx="1" ry="1"></rect>
+  <rect x="23.76" y="14.16" width="5.76" height="15.36" rx="1" ry="1"></rect>
+  </symbol>
 </svg>

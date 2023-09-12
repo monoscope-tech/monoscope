@@ -138,7 +138,7 @@ reportsGetH sess pid page hxRequest hxBoosted = do
             (def :: BWConfig)
               { sessM = Just sess
               , currProject = project
-              , pageTitle = "API Log Explorer"
+              , pageTitle = "Reports"
               }
       let (daily, weekly) = case project of
             Just proj -> (proj.dailyNotif, proj.weeklyNotif)

@@ -22,6 +22,7 @@ menu pid =
   , ("API Keys", "/p/" <> pid.toText <> "/apis", "#api")
   , ("Redacted Fields", "/p/" <> pid.toText <> "/redacted_fields", "#redacted")
   , ("Documentation", "/p/" <> pid.toText <> "/documentation", "#documentation")
+  , ("Reports", "/p/" <> pid.toText <> "/reports", "#reports")
   ]
 
 data BWConfig = BWConfig
