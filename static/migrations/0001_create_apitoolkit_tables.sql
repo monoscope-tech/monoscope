@@ -108,6 +108,8 @@ CREATE TABLE IF NOT EXISTS projects.projects
 );
 SELECT manage_updated_at('projects.projects');
 ALTER TABLE projects.projects ADD COLUMN questions JSONB DEFAULT NULL;
+ALTER TABLE projects.projects ADD COLUMN daily_notif BOOL DEFAULT TRUE,
+                              ADD COLUMN weekly_notif BOOL DEFAULT TRUE;
 
 -----------------------------------------------------------------------
 -- PROJECT MEMBERS table 
@@ -652,9 +654,7 @@ SELECT add_continuous_aggregate_policy('apis.project_requests_by_endpoint_per_mi
 -- so instead, we installed it into the default database and use a different function:
 -- SELECT cron.schedule_in_database('DailyOrttoSync', '0 8 * * *', $$INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued',  jsonb_build_object('tag', 'DailyOrttoSync')$$, 'apitoolkit-prod-eu');
 
-SELECT cron.schedule_in_database('DailyJob', '0 1 * * *', $$INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued',  jsonb_build_object('tag', 'DailyJob')$$, 'apitoolkit-prod-eu');
-
--- SELECT cron.schedule_in_database('DailyReports', '* * * * *', 'DailyReports', 'apitoolkit-prod-eu');
+SELECT cron.schedule_in_database('DailyReports', '* * * * *', 'DailyReports', 'tsdb');
 
 -- This is for regular databases locally or if we migrate to a new database setup.
 -- SELECT cron.schedule('DailyOrttoSync', '0 8 * * *', $$INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued',  jsonb_build_object('tag', 'DailyOrttoSync')$$);

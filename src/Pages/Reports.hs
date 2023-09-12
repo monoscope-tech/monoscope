@@ -9,6 +9,9 @@ module Pages.Reports (
   buildPerformanceJSON,
   buildAnomalyJSON,
   getPerformanceInsight,
+  renderEndpointsTable,
+  reportsPostH,
+  reportEmail,
   ReportAnomalyType (..),
   PerformanceReport (..),
 ) where
@@ -29,6 +32,11 @@ import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Relude
 
+import Data.Aeson.QQ (aesonQQ)
+import Servant (Headers, addHeader)
+
+import Servant.Htmx (HXTrigger)
+
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getZonedTime)
 import Data.Vector qualified as V
 import Models.Apis.Reports qualified as Reports
@@ -38,6 +46,7 @@ import Models.Apis.Fields qualified as Field
 
 import Data.Text qualified as T
 import Data.UUID.V4 qualified as UUIDV4
+import Lucid.Svg (color_)
 import Models.Apis.RequestDumps (EndpointPerf, RequestForReport (endpointHash))
 
 data PerformanceReport = PerformanceReport
@@ -66,16 +75,7 @@ data ReportAnomalyType
       , deletedFields :: [Text]
       , eventsCount :: Int
       }
-  | -- | ATField
-    --     { endpointUrlPath :: Text
-    --     , endpointMethod :: Text
-    --     , fieldKey :: Text
-    --     , fieldKeyPath :: Text
-    --     , fieldCategory :: Text
-    --     , fieldFormat :: Text
-    --     , eventsCount :: Int
-    --     }
-    ATFormat
+  | ATFormat
       { endpointUrlPath :: Text
       , fieldKeyPath :: Text
       , endpointMethod :: Text
@@ -93,6 +93,15 @@ data ReportData = ReportData
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromJSON)
+
+reportsPostH :: Sessions.PersistentSession -> Projects.ProjectId -> Text -> DashboardM (Headers '[HXTrigger] (Html ()))
+reportsPostH sess pid t = do
+  pool <- asks pool
+  apiKeys <- liftIO $
+    withPool pool $ do
+      Projects.updateProjectReportNotif pid t
+  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Report nofications updated Successfully"]}|]
+  pure $ addHeader hxTriggerData $ span_ [] ""
 
 singleReportGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Reports.ReportId -> DashboardM (Html ())
 singleReportGetH sess pid rid = do
@@ -112,7 +121,6 @@ singleReportGetH sess pid rid = do
 
 reportsGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
 reportsGetH sess pid page hxRequest hxBoosted = do
-  print page
   let p = toString (fromMaybe "0" page)
   let pg = fromMaybe 0 (readMaybe p :: Maybe Int)
   pool <- asks pool
@@ -120,23 +128,6 @@ reportsGetH sess pid page hxRequest hxBoosted = do
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
       reports <- Reports.reportHistoryByProject pid pg
-      anomalies <- Anomalies.getReportAnomalies pid "weekly"
-      count <- Anomalies.countAnomalies pid "weekly"
-      endpoint_rp <- RequestDumps.getRequestDumpForReports pid "weekly"
-      previous_p <- RequestDumps.getRequestDumpsForPreviousReportPeriod pid "weekly"
-      let rep_json = buildReportJSON anomalies count endpoint_rp previous_p
-      currentTime <- liftIO getZonedTime
-      reportId <- Reports.ReportId <$> liftIO UUIDV4.nextRandom
-      let report =
-            Reports.Report
-              { id = reportId
-              , reportJson = rep_json
-              , createdAt = currentTime
-              , updatedAt = currentTime
-              , projectId = pid
-              , reportType = "weekly"
-              }
-      Reports.addReport report
       pure (project, reports)
   let nextUrl = "/p/" <> show pid.unProjectId <> "/reports?page=" <> show (pg + 1)
   case (hxRequest, hxBoosted) of
@@ -147,9 +138,13 @@ reportsGetH sess pid page hxRequest hxBoosted = do
             (def :: BWConfig)
               { sessM = Just sess
               , currProject = project
-              , pageTitle = "API Log Explorer"
+              , pageTitle = "Reports"
               }
-      pure $ bodyWrapper bwconf $ reportsPage pid reports nextUrl
+      let (daily, weekly) = case project of
+            Just proj -> (proj.dailyNotif, proj.weeklyNotif)
+            Nothing -> (False, False)
+
+      pure $ bodyWrapper bwconf $ reportsPage pid reports nextUrl daily weekly
 
 singleReportPage :: Projects.ProjectId -> Maybe Reports.Report -> Html ()
 singleReportPage pid report =
@@ -238,12 +233,37 @@ shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "inline-block"] do
       div_ [class_ "text-base"] $ toHtml @String $ show deletedF
       small_ [class_ "block"] "deleted fields"
 
-reportsPage :: Projects.ProjectId -> Vector Reports.ReportListItem -> Text -> Html ()
-reportsPage pid reports nextUrl =
+reportsPage :: Projects.ProjectId -> Vector Reports.ReportListItem -> Text -> Bool -> Bool -> Html ()
+reportsPage pid reports nextUrl daily weekly =
   div_ [class_ "container mx-auto w-full flex flex-col px-4 pt-10 pb-24"] $ do
-    h3_ [class_ "text-xl text-slate-700 flex place-items-center font-bold pb-4 border-b"] "Report History"
-    div_ [class_ "mt-4"] $ do
-      reportListItems pid reports nextUrl
+    h3_ [class_ "text-xl text-slate-700 flex place-items-center font-bold pb-4 border-b"] "Reports History"
+    div_ [class_ "mt-4 grid grid-cols-12 gap-4"] do
+      div_ [class_ "flex flex-col col-span-2 mt-16"] do
+        h5_ [class_ "text-lg font-semibold text-slate-700 pb-1"] "Email notifications:"
+        div_ [class_ "flex items-center justify-between w-[170px] hover:bg-gray-100"] do
+          label_ [class_ "inline-flex items-center w-full", Lucid.for_ "e-daily"] "Daily reports"
+          input_
+            [ type_ "checkbox"
+            , id_ "e-daily"
+            , name_ "daily-reports"
+            , if daily then checked_ else value_ "off"
+            , hxPost_ $ "/p/" <> show pid.unProjectId <> "/reports_notif/daily"
+            , hxTrigger_ "change"
+            , class_ "w-4 h-4 text-blue-600 bg-gray-100 rounded border-gray-300 focus:ring-blue-500"
+            ]
+        div_ [class_ "flex items-center justify-between w-[170px] hover:bg-gray-100"] do
+          label_ [class_ "inline-flex items-center w-full", Lucid.for_ "e-weekly"] "Weekly reports"
+          input_
+            [ type_ "checkbox"
+            , id_ "e-weekly"
+            , name_ "weekly-reports"
+            , if weekly then checked_ else value_ "off"
+            , hxPost_ $ "/p/" <> show pid.unProjectId <> "/reports_notif/weekly"
+            , hxTrigger_ "change"
+            , class_ "w-4 h-4 text-blue-600 bg-gray-100 rounded border-gray-300 focus:ring-blue-500"
+            ]
+      div_ [class_ "col-span-8"] $ do
+        reportListItems pid reports nextUrl
 
 reportListItems :: Projects.ProjectId -> Vector Reports.ReportListItem -> Text -> Html ()
 reportListItems pid reports nextUrl =
@@ -280,9 +300,9 @@ renderEndpointsTable endpoints = table_ [class_ "table-auto w-full"] $ do
     th_ [class_ "px-6 py-3"] "Duration diff %"
   tbody_ $ mapM_ renderEndpointRow endpoints
 
-buildReportJSON :: Vector Anomalies.AnomalyVM -> Int -> Vector RequestForReport -> Vector EndpointPerf -> Aeson.Value
-buildReportJSON anomalies anm_total endpoints_perf previous_perf =
-  let anomalies_json = buildAnomalyJSON anomalies anm_total
+buildReportJSON :: Vector Anomalies.AnomalyVM -> Vector RequestForReport -> Vector EndpointPerf -> Aeson.Value
+buildReportJSON anomalies endpoints_perf previous_perf =
+  let anomalies_json = buildAnomalyJSON anomalies (length anomalies)
       perf_insight = getPerformanceInsight endpoints_perf previous_perf
       perf_json = buildPerformanceJSON perf_insight
       report_json = case anomalies_json of
@@ -296,19 +316,19 @@ buildPerformanceJSON :: V.Vector PerformanceReport -> Aeson.Value
 buildPerformanceJSON pr = Aeson.object ["endpoints" .= pr]
 
 buildAnomalyJSON :: Vector Anomalies.AnomalyVM -> Int -> Aeson.Value
-buildAnomalyJSON anomalies total = Aeson.object ["anomalies" .= V.map buildjson filteredAnom, "anomaliesCount" .= total]
+buildAnomalyJSON anomalies total = Aeson.object ["anomalies" .= V.map buildjson anomalies, "anomaliesCount" .= total]
  where
-  endMap = createEndpointMap (V.toList anomalies) Map.empty
-  filteredAnom = V.filter (filterFunc endMap) anomalies
+  -- endMap = createEndpointMap (V.toList anomalies) Map.empty
+  -- filteredAnom = V.filter (filterFunc endMap) anomalies
 
-  filterFunc :: Map Text Bool -> Anomalies.AnomalyVM -> Bool
-  filterFunc mp a = case a.anomalyType of
-    Anomalies.ATEndpoint -> True
-    _ ->
-      let ep_url = fromMaybe "" a.endpointUrlPath
-          method = fromMaybe "" a.endpointMethod
-          endpoint = method <> ep_url
-       in fromMaybe False (Map.lookup endpoint mp)
+  -- filterFunc :: Map Text Bool -> Anomalies.AnomalyVM -> Bool
+  -- filterFunc mp a = case a.anomalyType of
+  --   Anomalies.ATEndpoint -> True
+  --   _ ->
+  --     let ep_url = fromMaybe "" a.endpointUrlPath
+  --         method = fromMaybe "" a.endpointMethod
+  --         endpoint = method <> ep_url
+  --      in fromMaybe False (Map.lookup endpoint mp)
 
   buildjson :: Anomalies.AnomalyVM -> Aeson.Value
   buildjson an = case an.anomalyType of
@@ -330,16 +350,6 @@ buildAnomalyJSON anomalies total = Aeson.object ["anomalies" .= V.map buildjson 
         , "deletedFields" .= an.shapeDeletedFields
         , "eventsCount" .= an.eventsCount14d
         ]
-    -- Anomalies.ATField ->
-    --   Aeson.object
-    --     [ "endpointUrlPath" .= an.endpointUrlPath
-    --     , "endpointMethod" .= an.endpointMethod
-    --     , "tag" .= Anomalies.ATField
-    --     , "key" .= an.fieldKey
-    --     , "fieldCategory" .= Field.fieldCategoryEnumToText (fromMaybe Field.FCRequestBody an.fieldCategory)
-    --     , "fieldFormat" .= an.fieldFormat
-    --     , "eventsCount" .= an.eventsCount14d
-    --     ]
     Anomalies.ATFormat ->
       Aeson.object
         [ "endpointUrlPath" .= an.endpointUrlPath
@@ -396,3 +406,101 @@ createEndpointMap (x : xs) mp =
           endpoint = method <> ep_url
        in createEndpointMap xs (Map.insert endpoint True mp)
     _ -> createEndpointMap xs mp
+
+reportEmail :: Projects.ProjectId -> Reports.Report -> Html ()
+reportEmail pid report' =
+  div_ [style_ "margin-top: 1rem; color: black"] $ do
+    div_ [style_ "margin: 0 auto; border-radius: 0.375rem; border: 1px solid #e5e7eb; max-width: 800px;"] $ do
+      div_ [style_ "background-color: #f3f4f6; padding: 8px 10px;"] $ do
+        h4_ [style_ "font-size: 1.5rem; font-weight: bold; text-transform: capitalize; margin-bottom: 5px"] $ toHtml report'.reportType <> " report"
+        p_ [style_ ""] $ show $ localDay (zonedTimeToLocalTime report'.createdAt)
+        a_
+          [ href_ $ "https://app.apitoolkit.io/p/" <> show pid.unProjectId <> "/reports/" <> show report'.id.reportId
+          , style_ "background-color:#3b82f6; margin-top:20px; text-decoration: none; padding: .5em 1em; color: #FCFDFF; display:inline-block; border-radius:.4em; mso-padding-alt:0;text-underline-color:#005959"
+          ]
+          "View in browser"
+      div_ [style_ "padding: 1rem 1rem 2rem; gap: 2rem;"] $ do
+        let rep_json = decode (encode report'.reportJson) :: Maybe ReportData
+        case rep_json of
+          Just v -> do
+            div_ [style_ "margin-bottom: 2rem;"] $ do
+              div_ [style_ "width:100%;border-bottom: 1px solid #e5e7eb; padding-bottom: 0.5rem;"] $ do
+                h5_ [style_ "font-weight: bold; font-size: 18px"] "Anomalies"
+                div_ [style_ "display: inline;"] do
+                  span_ [style_ "color: #FF0000; font-weight: medium; margin-right: 0.5rem"] do
+                    if v.anomaliesCount < 11 then show v.anomaliesCount else "10+"
+                  span_ [style_ ""] "New anomalies"
+              div_ [style_ "margin-top: 1rem;"] $ do
+                forM_ v.anomalies $ \anomaly -> do
+                  case anomaly of
+                    ATEndpoint{endpointUrlPath, endpointMethod, eventsCount} -> do
+                      div_ [style_ "border-bottom: 1px solid #e5e7eb; margin-bottom: 1rem; padding-bottom: 0.25rem;"] $ do
+                        div_ [style_ "display: inline;"] $ do
+                          span_ [style_ "display: inline; font-weight: bold; color: #3b82f6; margin-right:10px"] "New Endpoint"
+                          p_ [style_ ""] $ toHtml $ endpointMethod <> " " <> endpointUrlPath <> " "
+                        p_ [style_ ""] $ show eventsCount <> " requests"
+                    ATShape{endpointUrlPath, endpointMethod, newUniqueFields, updatedFieldFormats, deletedFields, targetHash, eventsCount} -> do
+                      div_ [style_ "border-bottom: 1px solid #e5e7eb; margin-bottom: 1rem; padding-bottom: 0.25rem;"] $ do
+                        div_ [] $ do
+                          span_ [style_ "display: inline; font-weight: bold; color: #3b82f6; margin-right:5px"] "New Request Shape"
+                          div_ [style_ "display: flex; flex-direction: column; margin-right:5px"] $ do
+                            small_ [style_ ""] $ toHtml $ endpointMethod <> "  " <> endpointUrlPath
+                          -- Assuming shapeParameterStats_ is a custom function for displaying stats.
+                          p_ [style_ "display:block"] $ show (length newUniqueFields) <> " new fields"
+                          if not (null updatedFieldFormats)
+                            then do
+                              p_ [style_ "display:block"] $ show (length updatedFieldFormats) <> " updated fields"
+                            else pass
+                          if not (null updatedFieldFormats)
+                            then do
+                              p_ [style_ "display:block"] $ show (length deletedFields) <> " deleted fields"
+                            else pass
+                          p_ [style_ ""] $ show eventsCount <> " requests"
+                    ATFormat{endpointUrlPath, endpointMethod, fieldKeyPath, formatType, formatExamples, eventsCount} -> do
+                      div_ [style_ "border-bottom: 1px solid #e5e7eb;  margin-bottom: 1rem; padding-bottom: 0.25rem; display: flex; gap: 0.75rem; align-items: center; justify-content: space-between;"] $ do
+                        div_ [style_ "display: flex; align-items: center;"] $ do
+                          span_ [style_ "display: inline; font-weight: bold; color: #3b82f6;"] "Modified field"
+                          small_ [style_ ""] $ toHtml $ fieldKeyPath <> " in " <> endpointMethod <> "  " <> endpointUrlPath
+                          div_ [style_ "font-size: 0.875rem;"] $ do
+                            div_ [style_ ""] $ do
+                              small_ [style_ ""] "current format: "
+                              span_ [style_ "display: inline;"] $ toHtml formatType
+                            div_ [style_ ""] $ do
+                              small_ [style_ ""] "previous formats: "
+                              span_ [style_ "display: inline;"] "" -- TODO: Should be a comma-separated list of formats for that field.
+                            div_ [style_ ""] $ do
+                              small_ [style_ ""] "examples: "
+                              small_ [style_ ""] $ toHtml $ T.intercalate ", " formatExamples
+                        p_ [style_ ""] $ show eventsCount <> " requests"
+                    _ -> pass
+
+            div_ [style_ "width: 100%"] $ do
+              div_ [style_ "width:100%; border-bottom: 1px solid #e5e7eb; padding-bottom: 0.5rem; display:inline"] $ do
+                h5_ [style_ "font-weight: bold; font-size:18px; margin-bottom: 1rem"] "Performance"
+                renderEmailEndpointsTable (v.endpoints)
+          Nothing -> pass
+
+renderEmailEndpointRow :: PerformanceReport -> Html ()
+renderEmailEndpointRow endpoint = tr_ $ do
+  let (pcls, prc) =
+        if endpoint.durationDiffPct > 0
+          then ("red", "+" <> show (endpoint.durationDiffPct) <> "%" :: Text)
+          else ("green", show (endpoint.durationDiffPct) <> "%" :: Text)
+  let avg_dur_ms = (fromInteger (round $ ((fromInteger endpoint.averageDuration :: Double) / 1000000.0) * 100) :: Double) / 100
+  let dur_diff_ms = (fromInteger (round $ ((fromInteger endpoint.durationDiff :: Double) / 1000000.0) * 100) :: Double) / 100
+  let tdStyle = "padding: 0.75rem 1.5rem; border-bottom: 1px solid #e5e7eb; color: #6b7280; font-size: 14px;"
+  let pStyle = "padding: 0.75rem 1.5rem; border-bottom: 1px solid #e5e7eb;"
+
+  td_ [style_ tdStyle] $ toHtml $ endpoint.method <> " " <> endpoint.urlPath
+  td_ [style_ tdStyle] $ show avg_dur_ms <> "ms"
+  td_ [style_ tdStyle] $ show dur_diff_ms <> "ms"
+  td_ [color_ pcls, style_ pStyle] $ toHtml prc
+
+renderEmailEndpointsTable :: [PerformanceReport] -> Html ()
+renderEmailEndpointsTable endpoints = table_ [style_ "width: 100%; border-collapse: collapse;"] $ do
+  thead_ [style_ "text-align: left; text-transform: uppercase; font-size:12px; background-color: #f3f4f6;"] $ tr_ $ do
+    th_ [style_ "padding: 0.75rem 1.5rem;"] "Endpoint"
+    th_ [style_ "padding: 0.75rem 1.5rem;"] "Average latency"
+    th_ [style_ "padding: 0.75rem 1.5rem;"] "Change compared to prev."
+    th_ [style_ "padding: 0.75rem 1.5rem;"] "Latency change %"
+  tbody_ $ mapM_ renderEndpointRow endpoints

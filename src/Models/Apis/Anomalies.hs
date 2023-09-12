@@ -255,7 +255,7 @@ getReportAnomalies pid report_type = query Select (Query $ encodeUtf8 q) pid
           AND aan.archived_at IS NULL
       GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25
       HAVING count(rd.id) > 5
-      limit 100;
+      limit 11;
         |]
 
 countAnomalies :: Projects.ProjectId -> Text -> DBT IO Int
@@ -269,18 +269,17 @@ countAnomalies pid report_type = do
   q =
     [text|
       SELECT COUNT(*) as anomaly_count
-      FROM
-          apis.anomalies_vm avm
+      FROM apis.anomalies_vm avm
       JOIN apis.anomalies aan ON avm.id = aan.id
-      JOIN apis.request_dumps rd ON avm.project_id=rd.project_id 
-          AND (avm.target_hash=ANY(rd.format_hashes) AND avm.anomaly_type='format')
-          OR  (avm.target_hash=rd.shape_hash AND avm.anomaly_type='shape')
-          OR  (avm.target_hash=rd.endpoint_hash AND avm.anomaly_type='endpoint')
-      WHERE
-          avm.project_id = ? 
+      JOIN apis.request_dumps rd ON avm.project_id = rd.project_id 
+          AND (avm.target_hash = ANY(rd.format_hashes) AND avm.anomaly_type = 'format')
+          OR (avm.target_hash = rd.shape_hash AND avm.anomaly_type = 'shape')
+          OR (avm.target_hash = rd.endpoint_hash AND avm.anomaly_type = 'endpoint')
+      WHERE avm.project_id = ? 
           AND avm.anomaly_type != 'field'
           AND rd.created_at > NOW() - interval $report_interval
           AND aan.acknowleged_at IS NULL
           AND aan.archived_at IS NULL
-      GROUP BY avm.target_hash;
-        |]
+      GROUP BY avm.id -- Include the columns that define an anomaly
+      HAVING COUNT(rd.id) > 5;
+     |]
