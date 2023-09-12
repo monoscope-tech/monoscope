@@ -63,6 +63,7 @@ data SDKTypes
   | DotNet
   | PythonFastApi
   | PythonFlask
+  | PythonDjango
   deriving stock (Show, Generic, Read, Eq)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SDKTypes
 
@@ -106,6 +107,7 @@ normalizeUrlPath DotNet statusCode _method urlPath = removeQueryParams statusCod
 normalizeUrlPath PythonFastApi statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath JsFastify statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath PythonFlask statusCode _method urlPath = removeQueryParams statusCode urlPath
+normalizeUrlPath PythonDjango statusCode _method urlPath = removeQueryParams statusCode urlPath
 
 -- removeQueryParams ...
 -- >>> removeQueryParams 200 "https://apitoolkit.io/abc/:bla?q=abc"
@@ -343,7 +345,6 @@ select duration_steps, count(id)
 	GROUP BY duration_steps 
 	ORDER BY duration_steps;
       |]
-
 
 -- A throughput chart query for the request_dump table.
 -- daterange :: (Maybe Int, Maybe Int)?

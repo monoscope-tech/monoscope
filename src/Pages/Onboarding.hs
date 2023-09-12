@@ -221,6 +221,7 @@ integrateApiToolkit =
         tabContentLaravel
         tabContentFlask
         tabContentFastAPI
+        tabContentDjango
         tabContentSymfony
         tabContentDotNet
         tabContentFastify
@@ -609,9 +610,40 @@ tabContentFastAPI =
                       span_ [class_ "hljs-keyword"] "     return " >> "{" >> span_ [class_ "hljs-string"] "\"Hello\"" >> ": " >> span_ [class_ "hljs-string"] "\"Hello world\"}"
                       br_ []
 
+tabContentDjango :: Html ()
+tabContentDjango =
+  div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "django_content"] $
+    do
+      div_ [class_ "relative"] $ do
+        div_ [class_ "mb-6"] do
+          h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
+          p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "pip install apitoolkit-django"
+        h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app by adding APITOOLKIT_KEY and APIToolkit to the settings middleware list"
+        div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] $ do
+          div_ [class_ "relative w-full flex flex-col"] $ do
+            div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] $ do
+              div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] $ do
+                div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
+                div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
+                div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
+            div_ [class_ "relative min-h-0 flex-auto flex flex-col"] $ do
+              div_ [class_ "w-full flex-auto flex min-h-0 overflow-auto"] $ do
+                div_ [class_ "w-full relative flex-auto"] $ do
+                  pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] $ do
+                    div_ [class_ "hidden md:block text-slate-600 flex-none py-4 pr-4 text-right select-none", style_ "width:50px"] $ do
+                      "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15"
+                    code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"] do
+                      span_ [class_ "hljs-keyword"] "APITOOLKIT_KEY" >> " = " >> span_ [class_ "hljs-string"] "<YOUR_API_KEY> \n"
+                      br_ []
+                      span_ [class_ "hljs-keyword"] "MIDDLEWARE" >> " = [\n"
+                      span_ [] "   ...\n"
+                      span_ [class_ "hljs-string"] "    'apitoolkit.APIToolkit'" >> ",\n"
+                      span_ [] "   ...\n"
+                      span_ [] "]"
+
 tabs :: Html ()
 tabs =
-  ul_ [class_ "flex flex-nowrap overflow-x-auto justify-center gap-2"] $ do
+  ul_ [class_ "flex flex-nowrap overflow-x-auto gap-2"] $ do
     li_ [class_ "shrink-0"] $ do
       button_
         [ class_ "sdk_tab sdk_tab_active"
@@ -647,7 +679,13 @@ tabs =
         , id_ "fastapi"
         ]
         "FastAPI"
-
+    li_ [class_ "shrink-0"] $ do
+      button_
+        [ class_ "sdk_tab"
+        , onclick_ "changeTab('django')"
+        , id_ "django"
+        ]
+        "Django"
     li_ [class_ "shrink-0"] $ do
       button_
         [ class_ "sdk_tab"
