@@ -318,8 +318,12 @@ apiDocsSubPage shapesWithFieldsMap = do
           remove (<span/> in #toggle_shapes_btn)
           set (#toggle_shapes_btn @data-current) to position 
           append (<span /> in elem) as HTML to #toggle_shapes_btn
-          toggle .hidden on .Response_fields
-          toggle .hidden on .Request_fields
+          add .hidden to .Response_fields
+          add .hidden to .Request_fields
+          call document.querySelector ("#Request_" + position)
+          remove .hidden from it
+          call document.querySelector ("#Response_" + position)
+          remove .hidden from it
           put (position + "/" + (#toggle_shapes_btn @data-total)) into #current_indicator
         end
       
@@ -336,8 +340,12 @@ apiDocsSubPage shapesWithFieldsMap = do
           call document.querySelector("#status_" + position)
           remove (<span/> in #toggle_shapes_btn)
           append (<span /> in it) as HTML to #toggle_shapes_btn
-          toggle .hidden on .Response_fields
-          toggle .hidden on .Request_fields
+          add .hidden to .Response_fields
+          add .hidden to .Request_fields
+          call document.querySelector ("#Request_" + position)
+          remove .hidden from it
+          call document.querySelector ("#Response_" + position)
+          remove .hidden from it
           put (position + "/" + (#toggle_shapes_btn @data-total)) into #current_indicator
         end
         |]
