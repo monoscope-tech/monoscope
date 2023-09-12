@@ -262,7 +262,6 @@ dailyReportForProject dbPool cfg pid = do
         Nothing -> pass
         Just pr -> do
           anomalies <- withPool dbPool $ Anomalies.getReportAnomalies pid "daily"
-          count <- withPool dbPool $ Anomalies.countAnomalies pid "daily"
           endpoint_rp <- withPool dbPool $ RequestDumps.getRequestDumpForReports pid "daily"
           previous_day <- withPool dbPool $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid "daily"
           let rep_json = RP.buildReportJSON anomalies endpoint_rp previous_day
@@ -282,7 +281,7 @@ dailyReportForProject dbPool cfg pid = do
             then do
               let body = renderText $ RP.reportEmail pid report
               let projectTitle = pr.title
-              let subject = [text| 🤖 APITOOLKIT: Daily Report for `$projectTitle` |]
+              let subject = [text| APITOOLKIT: Daily Report for `$projectTitle` |]
               sendEmail cfg (CI.original first_user.email) subject body
               pass
             else pass
@@ -299,7 +298,6 @@ weeklyReportForProject dbPool cfg pid = do
         Just pr -> do
           let first_user = V.head users
           anomalies <- withPool dbPool $ Anomalies.getReportAnomalies pid "weekly"
-          count <- withPool dbPool $ Anomalies.countAnomalies pid "weekly"
           endpoint_rp <- withPool dbPool $ RequestDumps.getRequestDumpForReports pid "weekly"
           previous_week <- withPool dbPool $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid "weekly"
           let rep_json = RP.buildReportJSON anomalies endpoint_rp previous_week
@@ -319,7 +317,7 @@ weeklyReportForProject dbPool cfg pid = do
             then do
               let body = renderText $ RP.reportEmail pid report
               let projectTitle = pr.title
-              let subject = [text| 🤖 APITOOLKIT: Daily Report for `$projectTitle` |]
+              let subject = [text| APITOOLKIT: Daily Report for `$projectTitle` |]
               sendEmail cfg (CI.original first_user.email) subject body
               pass
             else pass

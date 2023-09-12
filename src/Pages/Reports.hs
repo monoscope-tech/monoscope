@@ -46,6 +46,7 @@ import Models.Apis.Fields qualified as Field
 
 import Data.Text qualified as T
 import Data.UUID.V4 qualified as UUIDV4
+import Lucid.Svg (color_)
 import Models.Apis.RequestDumps (EndpointPerf, RequestForReport (endpointHash))
 
 data PerformanceReport = PerformanceReport
@@ -408,50 +409,57 @@ createEndpointMap (x : xs) mp =
 
 reportEmail :: Projects.ProjectId -> Reports.Report -> Html ()
 reportEmail pid report' =
-  div_ [style_ "margin-top: 1rem; display: flex; flex-direction: column; gap: 1rem;"] $ do
+  div_ [style_ "margin-top: 1rem; color: black"] $ do
     div_ [style_ "margin: 0 auto; border-radius: 0.375rem; border: 1px solid #e5e7eb; max-width: 800px;"] $ do
-      div_ [style_ "background-color: #f3f4f6; padding: 1rem 1rem 0.75rem; display: flex; justify-content: space-between;"] $ do
-        h4_ [style_ "font-size: 1.5rem; font-weight: bold; text-transform: capitalize;"] $ toHtml report'.reportType <> " report"
-        span_ [style_ ""] $ show $ localDay (zonedTimeToLocalTime report'.createdAt)
-      div_ [style_ "padding: 1rem 1rem 2rem; display: flex; flex-direction: column; gap: 2rem;"] $ do
+      div_ [style_ "background-color: #f3f4f6; padding: 8px 10px;"] $ do
+        h4_ [style_ "font-size: 1.5rem; font-weight: bold; text-transform: capitalize; margin-bottom: 5px"] $ toHtml report'.reportType <> " report"
+        p_ [style_ ""] $ show $ localDay (zonedTimeToLocalTime report'.createdAt)
+        a_
+          [ href_ $ "https://app.apitoolkit.io/p/" <> show pid.unProjectId <> "/reports/" <> show report'.id.reportId
+          , style_ "background-color:#3b82f6; margin-top:20px; text-decoration: none; padding: .5em 1em; color: #FCFDFF; display:inline-block; border-radius:.4em; mso-padding-alt:0;text-underline-color:#005959"
+          ]
+          "View in browser"
+      div_ [style_ "padding: 1rem 1rem 2rem; gap: 2rem;"] $ do
         let rep_json = decode (encode report'.reportJson) :: Maybe ReportData
         case rep_json of
           Just v -> do
-            div_ [style_ ""] $ do
-              div_ [style_ "border-bottom: 1px solid #e5e7eb; padding-bottom: 0.5rem; display: flex; justify-content: space-between;"] $ do
-                h5_ [style_ "font-weight: bold;"] "Anomalies"
-                div_ [style_ "display: flex; gap: 0.5rem;"] do
-                  span_ [style_ "color: red; font-weight: medium;"] $ show v.anomaliesCount
+            div_ [style_ "margin-bottom: 2rem;"] $ do
+              div_ [style_ "width:100%;border-bottom: 1px solid #e5e7eb; padding-bottom: 0.5rem;"] $ do
+                h5_ [style_ "font-weight: bold; font-size: 18px"] "Anomalies"
+                div_ [style_ "display: inline;"] do
+                  span_ [style_ "color: #FF0000; font-weight: medium; margin-right: 0.5rem"] do
+                    if v.anomaliesCount < 11 then show v.anomaliesCount else "10+"
                   span_ [style_ ""] "New anomalies"
-              div_ [style_ "margin-top: 1rem; display: flex; flex-direction: column; gap: 1rem;"] $ do
+              div_ [style_ "margin-top: 1rem;"] $ do
                 forM_ v.anomalies $ \anomaly -> do
                   case anomaly of
                     ATEndpoint{endpointUrlPath, endpointMethod, eventsCount} -> do
-                      div_ [style_ "border-bottom: 1px solid #e5e7eb; padding-bottom: 0.25rem; display: flex; gap: 1rem; align-items: center; justify-content: space-between;"] $ do
-                        div_ [style_ "display: flex; gap: 0.75rem; align-items: center;"] $ do
-                          div_ [style_ "display: inline-block; font-weight: bold; color: #3b82f6; gap: 0.5rem; display: flex; align-items: center;"] $ do
-                            img_ [style_ "width: 1rem; height: 1rem; display: inline;", src_ "/assets/svgs/endpoint.svg"]
-                            span_ [style_ "display: inline;"] "New Endpoint"
-                          small_ [style_ ""] $ toHtml $ endpointMethod <> " " <> endpointUrlPath <> " "
-                        small_ [style_ ""] $ show eventsCount <> " requests"
+                      div_ [style_ "border-bottom: 1px solid #e5e7eb; margin-bottom: 1rem; padding-bottom: 0.25rem;"] $ do
+                        div_ [style_ "display: inline;"] $ do
+                          span_ [style_ "display: inline; font-weight: bold; color: #3b82f6; margin-right:10px"] "New Endpoint"
+                          p_ [style_ ""] $ toHtml $ endpointMethod <> " " <> endpointUrlPath <> " "
+                        p_ [style_ ""] $ show eventsCount <> " requests"
                     ATShape{endpointUrlPath, endpointMethod, newUniqueFields, updatedFieldFormats, deletedFields, targetHash, eventsCount} -> do
-                      div_ [style_ "border-bottom: 1px solid #e5e7eb; padding-bottom: 0.25rem; display: flex; align-items: center; justify-content: space-between;"] $ do
-                        div_ [style_ "display: flex; gap: 0.75rem; align-items: center;"] $ do
-                          div_ [style_ "display: inline-block; font-weight: bold; color: #3b82f6; gap: 0.5rem; display: flex; align-items: center;"] $ do
-                            img_ [style_ "width: 1rem; height: 1rem; display: inline;", src_ "/assets/svgs/anomalies/fields.svg"]
-                            span_ [style_ "display: inline;"] "New Request Shape"
-                          div_ [style_ "display: flex; flex-direction: column;"] $ do
+                      div_ [style_ "border-bottom: 1px solid #e5e7eb; margin-bottom: 1rem; padding-bottom: 0.25rem;"] $ do
+                        div_ [] $ do
+                          span_ [style_ "display: inline; font-weight: bold; color: #3b82f6; margin-right:5px"] "New Request Shape"
+                          div_ [style_ "display: flex; flex-direction: column; margin-right:5px"] $ do
                             small_ [style_ ""] $ toHtml $ endpointMethod <> "  " <> endpointUrlPath
-                            small_ [style_ ""] $ toHtml $ "Signature: " <> targetHash
                           -- Assuming shapeParameterStats_ is a custom function for displaying stats.
-                          shapeParameterStats_ (length newUniqueFields) (length updatedFieldFormats) (length deletedFields)
-                        small_ [style_ ""] $ show eventsCount <> " requests"
+                          p_ [style_ "display:block"] $ show (length newUniqueFields) <> " new fields"
+                          if not (null updatedFieldFormats)
+                            then do
+                              p_ [style_ "display:block"] $ show (length updatedFieldFormats) <> " updated fields"
+                            else pass
+                          if not (null updatedFieldFormats)
+                            then do
+                              p_ [style_ "display:block"] $ show (length deletedFields) <> " deleted fields"
+                            else pass
+                          p_ [style_ ""] $ show eventsCount <> " requests"
                     ATFormat{endpointUrlPath, endpointMethod, fieldKeyPath, formatType, formatExamples, eventsCount} -> do
-                      div_ [style_ "border-bottom: 1px solid #e5e7eb; padding-bottom: 0.25rem; display: flex; gap: 0.75rem; align-items: center; justify-content: space-between;"] $ do
+                      div_ [style_ "border-bottom: 1px solid #e5e7eb;  margin-bottom: 1rem; padding-bottom: 0.25rem; display: flex; gap: 0.75rem; align-items: center; justify-content: space-between;"] $ do
                         div_ [style_ "display: flex; align-items: center;"] $ do
-                          div_ [style_ "display: inline-block; font-weight: bold; color: #3b82f6; gap: 0.5rem; display: flex; align-items: center;"] $ do
-                            img_ [style_ "width: 1rem; height: 1rem; display: inline;", src_ "/assets/svgs/anomalies/fields.svg"]
-                            span_ [style_ "display: inline;"] "Modified field"
+                          span_ [style_ "display: inline; font-weight: bold; color: #3b82f6;"] "Modified field"
                           small_ [style_ ""] $ toHtml $ fieldKeyPath <> " in " <> endpointMethod <> "  " <> endpointUrlPath
                           div_ [style_ "font-size: 0.875rem;"] $ do
                             div_ [style_ ""] $ do
@@ -463,39 +471,36 @@ reportEmail pid report' =
                             div_ [style_ ""] $ do
                               small_ [style_ ""] "examples: "
                               small_ [style_ ""] $ toHtml $ T.intercalate ", " formatExamples
-                        small_ [style_ ""] $ show eventsCount <> " requests"
+                        p_ [style_ ""] $ show eventsCount <> " requests"
                     _ -> pass
 
-            div_ [style_ ""] $ do
-              div_ [style_ "border-bottom: 1px solid #e5e7eb; padding-bottom: 0.5rem; display: flex; justify-content: space-between;"] $ do
-                h5_ [style_ "font-weight: bold;"] "Performance"
-                div_ [class_ "flex gap-2"] do
-                  span_ [class_ "font-medium"] $ show (length v.endpoints)
-                  span_ [] "affected endpoints"
-              renderEmailEndpointsTable (v.endpoints)
+            div_ [style_ "width: 100%"] $ do
+              div_ [style_ "width:100%; border-bottom: 1px solid #e5e7eb; padding-bottom: 0.5rem; display:inline"] $ do
+                h5_ [style_ "font-weight: bold; font-size:18px; margin-bottom: 1rem"] "Performance"
+                renderEmailEndpointsTable (v.endpoints)
           Nothing -> pass
 
 renderEmailEndpointRow :: PerformanceReport -> Html ()
 renderEmailEndpointRow endpoint = tr_ $ do
   let (pcls, prc) =
         if endpoint.durationDiffPct > 0
-          then ("color: red; ", "+" <> show (endpoint.durationDiffPct) <> "%" :: Text)
-          else ("color: green; ", show (endpoint.durationDiffPct) <> "%" :: Text)
+          then ("red", "+" <> show (endpoint.durationDiffPct) <> "%" :: Text)
+          else ("green", show (endpoint.durationDiffPct) <> "%" :: Text)
   let avg_dur_ms = (fromInteger (round $ ((fromInteger endpoint.averageDuration :: Double) / 1000000.0) * 100) :: Double) / 100
   let dur_diff_ms = (fromInteger (round $ ((fromInteger endpoint.durationDiff :: Double) / 1000000.0) * 100) :: Double) / 100
-  let tdStyle = "padding: 0.75rem 1.5rem; border-bottom: 1px solid #e5e7eb; color: #6b7280; font-size: 0.875rem;"
+  let tdStyle = "padding: 0.75rem 1.5rem; border-bottom: 1px solid #e5e7eb; color: #6b7280; font-size: 14px;"
   let pStyle = "padding: 0.75rem 1.5rem; border-bottom: 1px solid #e5e7eb;"
 
   td_ [style_ tdStyle] $ toHtml $ endpoint.method <> " " <> endpoint.urlPath
   td_ [style_ tdStyle] $ show avg_dur_ms <> "ms"
   td_ [style_ tdStyle] $ show dur_diff_ms <> "ms"
-  td_ [style_ $ pStyle <> pcls] $ toHtml prc
+  td_ [color_ pcls, style_ pStyle] $ toHtml prc
 
 renderEmailEndpointsTable :: [PerformanceReport] -> Html ()
 renderEmailEndpointsTable endpoints = table_ [style_ "width: 100%; border-collapse: collapse;"] $ do
-  thead_ [style_ "text-align: left; text-transform: uppercase; background-color: #f3f4f6;"] $ tr_ $ do
+  thead_ [style_ "text-align: left; text-transform: uppercase; font-size:12px; background-color: #f3f4f6;"] $ tr_ $ do
     th_ [style_ "padding: 0.75rem 1.5rem;"] "Endpoint"
-    th_ [style_ "padding: 0.75rem 1.5rem;"] "Average duration"
-    th_ [style_ "padding: 0.75rem 1.5rem;"] "Diff compared to prev."
-    th_ [style_ "padding: 0.75rem 1.5rem;"] "Duration diff %"
+    th_ [style_ "padding: 0.75rem 1.5rem;"] "Average latency"
+    th_ [style_ "padding: 0.75rem 1.5rem;"] "Change compared to prev."
+    th_ [style_ "padding: 0.75rem 1.5rem;"] "Latency change %"
   tbody_ $ mapM_ renderEndpointRow endpoints
