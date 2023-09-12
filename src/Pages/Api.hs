@@ -64,9 +64,7 @@ apiDeleteH sess pid keyid = do
         if res > 0
           then decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Revoked API Key Successfully"]}|]
           else decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Something went wrong"]}|]
-  let content = button_ [class_ "text-indigo-600 hover:text-indigo-900"] $ do
-        span_ [class_ "text-slate-500"] "Revoked"
-  pure $ addHeader hxTriggerData content
+  pure $ addHeader hxTriggerData $ mainContent pid apikeys Nothing
 
 -- | apiGetH renders the api keys list page which includes a modal for creating the apikeys.
 apiGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
