@@ -89,6 +89,7 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
       , hxPushUrl_ "true"
       , hxVals_ "js:{query:getQueryFromEditor(), cols:params().cols}"
       , hxTarget_ "#log-item-table-body"
+      , id_ "log_explorer_form"
       ]
       $ do
         nav_ [class_ "flex flex-row p-2 content-end justify-between items-baseline border-slate-100"] $ do
@@ -282,11 +283,14 @@ jsonTreeAuxillaryCode pid = do
                     if window.editor.getValue().toLowerCase().endsWith("and") or window.editor.getValue().toLowerCase().endsWith("or") then
                        window.editor.setValue(window.editor.getValue() + " " + filter_path + "=" + filter_value)
                       else 
-                        if window.editor.getValue().length == "" then
+                        if window.editor.getValue().length == 0 then
                            window.editor.setValue (filter_path + "=" + filter_value)
                         else
                           window.editor.setValue (window.editor.getValue() + " AND " + filter_path + "=" + filter_value)
                         end
+                    end
+                    if window.editor.getValue() != "" then
+                      htmx.trigger("#log_explorer_form", "submit")
                     end
                   end|]
           ]
