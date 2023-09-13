@@ -46,34 +46,34 @@ import Prelude (lookup)
 genAuthServerContext :: LogAction IO String -> Pool Connection -> Context (AuthHandler Request Sessions.PersistentSession ': '[])
 genAuthServerContext logger dbConn = authHandler logger dbConn :. EmptyContext
 
-logoutH ::
-  DashboardM
-    ( Headers
-        '[Header "Location" Text, Header "Set-Cookie" SetCookie]
-        NoContent
-    )
+logoutH
+  :: DashboardM
+      ( Headers
+          '[Header "Location" Text, Header "Set-Cookie" SetCookie]
+          NoContent
+      )
 logoutH = do
   envCfg <- asks env
-  let redirectTo = envCfg ^. #auth0Domain <> "/v2/logout?client_id=" <> envCfg ^. #auth0ClientId <> "&returnTo=" <> envCfg ^. #auth0LogoutRedirect
+  let redirectTo = envCfg ^. #auth0Domain <> "/v2/logout?client_id=" <> envCfg ^. #auth0ClientId
   pure $ addHeader redirectTo $ addHeader emptySessionCookie NoContent
 
-loginRedirectH ::
-  DashboardM
-    ( Headers
-        '[Header "Location" Text, Header "Set-Cookie" SetCookie]
-        NoContent
-    )
+loginRedirectH
+  :: DashboardM
+      ( Headers
+          '[Header "Location" Text, Header "Set-Cookie" SetCookie]
+          NoContent
+      )
 loginRedirectH = do
   let redirectTo = "/login"
   pure $ addHeader redirectTo $ addHeader emptySessionCookie NoContent
 
 -- loginH
-loginH ::
-  DashboardM
-    ( Headers
-        '[Header "Location" Text, Header "Set-Cookie" SetCookie]
-        NoContent
-    )
+loginH
+  :: DashboardM
+      ( Headers
+          '[Header "Location" Text, Header "Set-Cookie" SetCookie]
+          NoContent
+      )
 loginH = do
   envCfg <- asks env
   stateVar <- liftIO $ UUID.toText <$> UUIDV4.nextRandom
@@ -83,14 +83,14 @@ loginH = do
 -- authCallbackH will accept a request with code and state, and use that code to queery auth- for an auth token, and then for user info
 -- it then uses this user info to check if we already have that user in our db. And if we have that user in the db,
 -- would simply create a new session. If we dont have the user (by that email), then create the user and still create a session with that user.
-authCallbackH ::
-  Maybe Text ->
-  Maybe Text -> -- state variable from auth0
-  DashboardM
-    ( Headers
-        '[Header "Location" Text, Header "Set-Cookie" SetCookie]
-        (Html ())
-    )
+authCallbackH
+  :: Maybe Text
+  -> Maybe Text -- state variable from auth0
+  -> DashboardM
+      ( Headers
+          '[Header "Location" Text, Header "Set-Cookie" SetCookie]
+          (Html ())
+      )
 authCallbackH codeM _ = do
   envCfg <- asks env
   pool <- asks pool
@@ -106,8 +106,8 @@ authCallbackH codeM _ = do
             , "client_secret" := envCfg ^. #auth0Secret
             , "code" := code
             , "redirect_uri" := envCfg ^. #auth0Callback
-            ] ::
-              [FormParam]
+            ]
+              :: [FormParam]
           )
     accessToken <- hoistEither $ note "invalid access_token in response" $ r L.^? responseBody . key "access_token" . _String
     let opts = defaults & header "Authorization" L..~ ["Bearer " <> encodeUtf8 @Text @ByteString accessToken]
