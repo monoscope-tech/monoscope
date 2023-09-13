@@ -20,6 +20,7 @@ data SurveyForm = SurveyForm
   , functionality :: [Text]
   , dataLocation :: Text
   , foundUsFrom :: Text
+  , phoneNumber :: Maybe Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm, ToJSON, FromJSON)

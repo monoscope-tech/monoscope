@@ -743,6 +743,7 @@ stackOptions =
 functionalityOptions :: [(T.Text, T.Text)]
 functionalityOptions =
   [ ("monitoring", "API Monitoring")
+  , ("log_explorer", "Log Explorer")
   , ("documentation", "Automatic API Documentation")
   , ("anomaly_detection", "Anomaly Detection")
   , ("testing", "Testing")
@@ -820,6 +821,10 @@ surveyModal pid = do
                       label_ [class_ "block hover:bg-slate-100 p-2"] $ do
                         input_ [class_ "mr-3", type_ "radio", id_ value, name_ "foundUsFrom", value_ value, required_ "required"]
                         toHtml label
+                div_ [class_ "flex flex-col gap-2 w-full"] do
+                  label_ [class_ "font-bold"] "Phone Number (Optional)?"
+                  div_ [class_ "w-full"] do
+                    input_ [class_ "px-2 py-1 bg-slate-50 border border-gray-300 text-gray-900 focus:outline-none rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full", type_ "text", name_ "phoneNumber"]
 
               -- Modal footer
               div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-slate-200 rounded-b"] do
