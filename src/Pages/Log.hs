@@ -16,13 +16,14 @@ import Fmt
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
-import Lucid.Svg (use_)
+import Lucid.Svg (d_, fill_, path_, use_, viewBox_)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Optics.Core ((^.))
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
+import Pkg.Components (loader)
 import Relude
 import System.Clock
 
@@ -176,6 +177,9 @@ logItemRows pid requests cols nextLogsURL = do
           let reqHeaders = decodeUtf8 $ AE.encode $ req ^. #requestHeaders
           let respHeaders = decodeUtf8 $ AE.encode $ req ^. #responseHeaders
           p_ [class_ "inline-block"] $ toHtml $ T.take 300 [text| request_body=$reqBody response_body=$respBody request_headers=$reqHeaders response_headers=$respHeaders|]
+    div_ [class_ "hidden w-full flex px-2 py-8 justify-center item-loading"] do
+      loader
+
   a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ nextLogsURL] "LOAD MORE"
 
 getMethodBgColor :: Text -> Text
@@ -320,7 +324,9 @@ jsonTreeAuxillaryCode pid = do
             remove .expanded-log from me
           else
             add .expanded-log to me
+            remove .hidden from next <.item-loading />
             fetch `$${@data-log-item-path}` as html then put it after me then
+             add .hidden to next <.item-loading />
             _hyperscript.processNode(next <.log-item-info />) then
           end 
       end
