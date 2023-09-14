@@ -1,6 +1,6 @@
 {-# OPTIONS_GHC -Wno-unused-do-bind #-}
 
-module Pages.Onboarding (onboardingGetH) where
+module Pages.Onboarding (onboardingGetH, surveyGetH) where
 
 import Config
 import Data.Default (def)
@@ -45,9 +45,6 @@ onboardingGetH sess pid = do
 onboardingPage :: Projects.ProjectId -> Bool -> Bool -> Bool -> Html ()
 onboardingPage pid hasApikey hasRequest ans = do
   div_ [class_ "relative h-full"] $ do
-    if ans
-      then ""
-      else surveyModal pid
     div_ [class_ "flex flex-col h-full w-full gap-16"] $ do
       div_ [class_ "flex flex-col w-full mt-10 py-4 items-center gap-4"] $ do
         h3_ [class_ "text-slate-900 text-4xl font-bold"] "Complete the onboarding checklist"
@@ -765,8 +762,23 @@ foundUsFromOptions =
   , ("other", "Other")
   ]
 
-surveyModal :: Projects.ProjectId -> Html ()
-surveyModal pid = do
+surveyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
+surveyGetH sess pid = do
+  pool <- asks pool
+  project <- liftIO $
+    withPool pool $ do
+      project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+      pure (project)
+  let bwconf =
+        (def :: BWConfig)
+          { sessM = Just sess
+          , currProject = project
+          , pageTitle = "Project about"
+          }
+  pure $ bodyWrapper bwconf $ aboutPage pid
+
+aboutPage :: Projects.ProjectId -> Html ()
+aboutPage pid = do
   div_
     [ style_ "z-index:99999"
     , class_ "fixed pt-24 justify-center z-50 w-full p-4 bg-slate-300 bg-opacity-75 overflow-y-auto inset-0 h-full max-h-full text-lg"

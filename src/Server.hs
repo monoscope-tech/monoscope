@@ -121,6 +121,7 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "survey" :> ReqBody '[FormUrlEncoded] Survey.SurveyForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "reports_notif" :> Capture "report_type" Text :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "charts_html" :> QP "chart_type" Charts.ChartType :> QP "group_by" Charts.GroupBy :> QP "query_by" [Charts.QueryBy] :> QP "num_slots" Int :> QP "limit" Int :> QP "theme" Text :> QPT "id" :> QP "show_legend" Bool :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "about_project" :> Get '[HTML] (Html ())
 
 type PublicAPI =
   "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
@@ -197,6 +198,7 @@ protectedServer sess =
     :<|> Survey.surveyPutH sess
     :<|> Reports.reportsPostH sess
     :<|> Charts.chartsGetH sess
+    :<|> Onboarding.surveyGetH sess
 
 publicServer :: ServerT PublicAPI DashboardM
 publicServer =
