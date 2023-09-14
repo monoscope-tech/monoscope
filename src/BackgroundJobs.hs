@@ -156,13 +156,13 @@ jobsRunner dbPool logger cfg job =
                     body =
                       toLText
                         [trimming|
-              Hi $name,<br/>
+Hi $name,<br/>
 
-              <p>We detected a different API request shape to your endpoints than what you usually have..</p>
-              <a href="https://app.apitoolkit.io/p/$projectIdTxt/anomalies">More details on the apitoolkit</a>
-              <br/><br/>
-              Regards,
-              Apitoolkit team
+<p>We detected a different API request shape to your endpoints than what you usually have..</p>
+<a href="https://app.apitoolkit.io/p/$projectIdTxt/anomalies">More details on the apitoolkit</a>
+<br/><br/>
+Regards,<br/>
+Apitoolkit team
                         |]
                     reciever = CI.original u.email
                  in sendEmail cfg reciever subject body
@@ -184,13 +184,13 @@ jobsRunner dbPool logger cfg job =
                     body =
                       toLText
                         [trimming|
-            Hi $name,<br/>
+Hi $name,<br/>
 
-            <p>We detected that a particular field on your API is returning a different format/type than what it usually gets.</p>
-            <a href="https://app.apitoolkit.io/p/$projectIdTxt/anomalies">More details on the apitoolkit</a>
-            <br/><br/>
-            Regards,
-            Apitoolkit team
+<p>We detected that a particular field on your API is returning a different format/type than what it usually gets.</p>
+<a href="https://app.apitoolkit.io/p/$projectIdTxt/anomalies">More details on the apitoolkit</a>
+<br/><br/>
+Regards,<br/>
+Apitoolkit team
                       |]
                     reciever = CI.original u.email
                  in sendEmail cfg reciever subject body
@@ -254,73 +254,57 @@ jobsWorkerInit dbPool logger envConfig = startJobRunner $ mkConfig jobLogger "ba
 dailyReportForProject :: Pool Connection -> Config.EnvConfig -> Projects.ProjectId -> IO ()
 dailyReportForProject dbPool cfg pid = do
   users <- withPool dbPool $ getUsersByProjectId pid
-  if not (null users)
-    then do
-      let first_user = V.head users
-      p <- withPool dbPool $ Projects.projectById pid
-      case p of
-        Nothing -> pass
-        Just pr -> do
-          anomalies <- withPool dbPool $ Anomalies.getReportAnomalies pid "daily"
-          endpoint_rp <- withPool dbPool $ RequestDumps.getRequestDumpForReports pid "daily"
-          previous_day <- withPool dbPool $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid "daily"
-          let rep_json = RP.buildReportJSON anomalies endpoint_rp previous_day
-          currentTime <- liftIO getZonedTime
-          reportId <- Reports.ReportId <$> liftIO UUIDV4.nextRandom
-          let report =
-                Reports.Report
-                  { id = reportId
-                  , reportJson = rep_json
-                  , createdAt = currentTime
-                  , updatedAt = currentTime
-                  , projectId = pid
-                  , reportType = "daily"
-                  }
-          _ <- withPool dbPool $ Reports.addReport report
-          if pr.dailyNotif
-            then do
-              let body = renderText $ RP.reportEmail pid report
-              let projectTitle = pr.title
-              let subject = [text| APITOOLKIT: Daily Report for `$projectTitle` |]
-              sendEmail cfg (CI.original first_user.email) subject body
-              pass
-            else pass
-    else pass
+  projectM <- withPool dbPool $ Projects.projectById pid
+  forM_ projectM \pr -> do 
+    users & mapM_ \user -> do 
+      anomalies <- withPool dbPool $ Anomalies.getReportAnomalies pid "daily"
+      endpoint_rp <- withPool dbPool $ RequestDumps.getRequestDumpForReports pid "daily"
+      previous_day <- withPool dbPool $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid "daily"
+      let rep_json = RP.buildReportJSON anomalies endpoint_rp previous_day
+      currentTime <- liftIO getZonedTime
+      reportId <- Reports.ReportId <$> liftIO UUIDV4.nextRandom
+      let report =
+            Reports.Report
+              { id = reportId
+              , reportJson = rep_json
+              , createdAt = currentTime
+              , updatedAt = currentTime
+              , projectId = pid
+              , reportType = "daily"
+              }
+      _ <- withPool dbPool $ Reports.addReport report
+      when pr.dailyNotif do
+          let body = renderText $ RP.reportEmail pid report
+          let projectTitle = pr.title
+          let subject = [text| APITOOLKIT: Daily Report for `$projectTitle` |]
+          sendEmail cfg (CI.original user.email) subject body
 
 weeklyReportForProject :: Pool Connection -> Config.EnvConfig -> Projects.ProjectId -> IO ()
 weeklyReportForProject dbPool cfg pid = do
   users <- withPool dbPool $ getUsersByProjectId pid
-  if not (null users)
-    then do
-      p <- withPool dbPool $ Projects.projectById pid
-      case p of
-        Nothing -> pass
-        Just pr -> do
-          let first_user = V.head users
-          anomalies <- withPool dbPool $ Anomalies.getReportAnomalies pid "weekly"
-          endpoint_rp <- withPool dbPool $ RequestDumps.getRequestDumpForReports pid "weekly"
-          previous_week <- withPool dbPool $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid "weekly"
-          let rep_json = RP.buildReportJSON anomalies endpoint_rp previous_week
-          currentTime <- liftIO getZonedTime
-          reportId <- Reports.ReportId <$> liftIO UUIDV4.nextRandom
-          let report =
-                Reports.Report
-                  { id = reportId
-                  , reportJson = rep_json
-                  , createdAt = currentTime
-                  , updatedAt = currentTime
-                  , projectId = pid
-                  , reportType = "weekly"
-                  }
-          _ <- withPool dbPool $ Reports.addReport report
-          if pr.weeklyNotif
-            then do
-              let body = renderText $ RP.reportEmail pid report
-              let projectTitle = pr.title
-              let subject = [text| APITOOLKIT: Daily Report for `$projectTitle` |]
-              sendEmail cfg (CI.original first_user.email) subject body
-              pass
-            else pass
-    else pass
+  projectM <- withPool dbPool $ Projects.projectById pid
+  forM_ projectM \pr -> do 
+    users & mapM_ \user -> do
+      anomalies <- withPool dbPool $ Anomalies.getReportAnomalies pid "weekly"
+      endpoint_rp <- withPool dbPool $ RequestDumps.getRequestDumpForReports pid "weekly"
+      previous_week <- withPool dbPool $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid "weekly"
+      let rep_json = RP.buildReportJSON anomalies endpoint_rp previous_week
+      currentTime <- liftIO getZonedTime
+      reportId <- Reports.ReportId <$> liftIO UUIDV4.nextRandom
+      let report =
+            Reports.Report
+              { id = reportId
+              , reportJson = rep_json
+              , createdAt = currentTime
+              , updatedAt = currentTime
+              , projectId = pid
+              , reportType = "weekly"
+              }
+      _ <- withPool dbPool $ Reports.addReport report
+      when pr.weeklyNotif do
+          let body = renderText $ RP.reportEmail pid report
+          let projectTitle = pr.title
+          let subject = [text| APITOOLKIT: Daily Report for `$projectTitle` |]
+          sendEmail cfg (CI.original user.email) subject body
 
 -- INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued',  jsonb_build_object('tag', 'DailyJob'));
