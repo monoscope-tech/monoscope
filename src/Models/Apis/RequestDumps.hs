@@ -27,7 +27,6 @@ module Models.Apis.RequestDumps (
 import Control.Error (hush)
 import Data.Aeson qualified as AE
 import Data.Default.Instances ()
-import Data.Scientific (Scientific)
 import Data.Text qualified as T
 import Data.Time (CalendarDiffTime, ZonedTime, defaultTimeLocale, diffUTCTime, formatTime, zonedTimeToUTC)
 import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
@@ -36,8 +35,8 @@ import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, queryOne)
 import Database.PostgreSQL.Entity.Types
-import Database.PostgreSQL.Simple (FromRow, Only (Only), ResultError (ConversionFailed), ToRow)
-import Database.PostgreSQL.Simple.FromField (FromField (fromField), returnError)
+import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
+import Database.PostgreSQL.Simple.FromField (FromField (fromField))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField (toField))
 import Database.PostgreSQL.Simple.Types (Query (Query))
