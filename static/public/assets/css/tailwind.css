@@ -136,6 +136,19 @@
   color: grey;
 }
 
+.htmx-indicator {
+  justify-content: center;
+  padding: 10px 5px;
+  display: none;
+}
+
+.htmx-request .query-indicator {
+  display: flex;
+}
+.htmx-request.query-indicator {
+  display: flex;
+}
+
 @layer components {
   :root {
     font-family: 'Inter', sans-serif;

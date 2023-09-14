@@ -91,6 +91,7 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
       , hxVals_ "js:{query:getQueryFromEditor(), cols:params().cols}"
       , hxTarget_ "#log-item-table-body"
       , id_ "log_explorer_form"
+      , hxIndicator_ "#query-indicator"
       ]
       $ do
         nav_ [class_ "flex flex-row p-2 content-end justify-between items-baseline border-slate-100"] $ do
@@ -124,7 +125,9 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
             span_ [class_ "font-normal inline-block py-1.5 p-1 px-2 w-8"] ""
             span_ [class_ "font-normal inline-block py-1.5 p-1 px-2 w-36"] "TIMESTAMP"
             span_ [class_ "font-normal inline-block py-1.5 p-1 px-2 grow"] "SUMMARY"
-        div_ [class_ " grow overflow-y-scroll h-full whitespace-nowrap text-sm divide-y overflow-x-hidden", id_ "log-item-table-body"] $
+        div_ [class_ "htmx-indicator query-indicator", id_ "query-indicator"] $ do
+          loader
+        div_ [class_ "grow overflow-y-scroll h-full whitespace-nowrap text-sm divide-y overflow-x-hidden", id_ "log-item-table-body"] $ do
           logItemRows pid requests cols nextLogsURL
 
 reqChart :: Text -> Bool -> Html ()
