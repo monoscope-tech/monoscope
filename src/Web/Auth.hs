@@ -54,7 +54,7 @@ logoutH
       )
 logoutH = do
   envCfg <- asks env
-  let redirectTo = envCfg ^. #auth0Domain <> "/v2/logout?client_id=" <> envCfg ^. #auth0ClientId
+  let redirectTo = envCfg ^. #auth0Domain <> "/v2/logout?client_id=" <> envCfg ^. #auth0ClientId <> "&returnTo=" <> envCfg ^. #auth0LogoutRedirect
   pure $ addHeader redirectTo $ addHeader emptySessionCookie NoContent
 
 loginRedirectH
