@@ -38,7 +38,6 @@ import Relude
 import Server qualified
 import System.Clock
 import System.Envy (decodeEnv)
-import Witch (from)
 
 startApp :: IO ()
 startApp = do

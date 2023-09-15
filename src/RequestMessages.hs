@@ -298,14 +298,28 @@ buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash =
 -- >>> valueToFields [aesonQQ|{"menu":[{"id":"text"},{"id":123}]}|]
 -- [(".menu[*].id",[String "text",Number 123.0])]
 --
+-- >>> valueToFields [aesonQQ|{"menu":[{"c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd":"text"},{"id":123}]}|]
+-- [(".menu[*].id",[Number 123.0]),(".menu[*].{uuid}",[String "text"])]
+--
 -- FIXME: value To Fields should use the redact fields list to actually redact fields
 valueToFields :: AE.Value -> [(Text, [AE.Value])]
 valueToFields value = dedupFields $ removeBlacklistedFields $ snd $ valueToFields' value ("", [])
  where
   valueToFields' :: AE.Value -> (Text, [(Text, AE.Value)]) -> (Text, [(Text, AE.Value)])
-  valueToFields' (AE.Object v) akk = AEK.toHashMapText v & HM.toList & foldl' (\(akkT, akkL) (k, val) -> (akkT, snd $ valueToFields' val (akkT <> "." <> k, akkL))) akk
+  valueToFields' (AE.Object v) akk =
+    AEK.toHashMapText v
+      & HM.toList
+      & foldl'
+        ( \(akkT, akkL) (k, val) -> (akkT, snd $ valueToFields' val (akkT <> "." <> normalizeKey k, akkL))
+        )
+        akk
   valueToFields' (AE.Array v) akk = foldl' (\(akkT, akkL) val -> (akkT, snd $ valueToFields' val (akkT <> "[*]", akkL))) akk v
   valueToFields' v (akk, l) = (akk, (akk, v) : l)
+
+  normalizeKey :: Text -> Text
+  normalizeKey key =
+    let result = valueToFormatStr key key
+     in if result == key then result else "{" <> result <> "}"
 
 -- debupFields would merge all fields in the list of tuples by the first item in the tupple.
 --
@@ -340,35 +354,39 @@ removeBlacklistedFields = map \(k, val) ->
     else (k, val)
 
 valueToFormat :: AE.Value -> Text
-valueToFormat (AET.String val) = valueToFormatStr val
+valueToFormat (AET.String val) = valueToFormatStr "text" val
 valueToFormat (AET.Number val) = valueToFormatNum val
 valueToFormat (AET.Bool _) = "bool"
 valueToFormat AET.Null = "null"
 valueToFormat (AET.Object _) = "object"
 valueToFormat (AET.Array _) = "array"
 
--- valueToFormatStr will take a string and try to find a format which matches that string best.
+-- | valueToFormatStr will take a string and try to find a format which matches that string best.
 -- At the moment it takes a text and returns a generic mask that represents the format of that text
 --
--- >>> valueToFormatStr "22/02/2022"
+-- >>> valueToFormatStr "text" "22/02/2022"
 -- "text"
 --
--- >>> valueToFormatStr "20-02-2022"
+-- >>> valueToFormatStr "text" "20-02-2022"
 -- "text"
 --
--- >>> valueToFormatStr "22.02.2022"
+-- >>> valueToFormatStr "text" "22.02.2022"
 -- "text"
 --
--- >>> valueToFormatStr "222"
+-- >>> valueToFormatStr "text" "222"
 -- "integer"
-valueToFormatStr :: Text -> Text
-valueToFormatStr val
+--
+-- >>> valueToFormatStr "text" "c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd"
+-- "uuid"
+valueToFormatStr :: Text -> Text -> Text
+valueToFormatStr otherwise' val
   | val =~ ([text|^[0-9]+$|] :: Text) = "integer"
   | val =~ ([text|^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)$|] :: Text) = "float"
   | val =~ ([text|^(0[1-9]|1[012])[- /.](0[1-9]|[12][0-9]|3[01])[- /.](19|20)\d\d$|] :: Text) = "mm/dd/yyyy"
   | val =~ ([text|^(0[1-9]|1[012])[- -.](0[1-9]|[12][0-9]|3[01])[- -.](19|20)\d\d$|] :: Text) = "mm-dd-yyyy"
   | val =~ ([text|^(0[1-9]|1[012])[- ..](0[1-9]|[12][0-9]|3[01])[- ..](19|20)\d\d$|] :: Text) = "mm.dd.yyyy"
-  | otherwise = "text"
+  | val =~ ([text|^[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}$|] :: Text) = "uuid"
+  | otherwise = otherwise'
 
 valueToFormatNum :: Scientific.Scientific -> Text
 valueToFormatNum val

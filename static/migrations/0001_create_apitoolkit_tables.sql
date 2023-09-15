@@ -328,14 +328,14 @@ DECLARE
 	anomaly_type apis.anomaly_type;
 	anomaly_action apis.anomaly_action;
 BEGIN
-    IF TG_WHEN <> 'AFTER' THEN
-        RAISE EXCEPTION 'apis.new_anomaly_proc() may only run as an AFTER trigger';
-    END IF;
-	anomaly_type := TG_ARGV[0];
-	anomaly_action := TG_ARGV[1];
-    INSERT INTO apis.anomalies (project_id, anomaly_type, action, target_hash) VALUES (NEW.project_id, anomaly_type, anomaly_action, NEW.hash);
-    INSERT INTO background_jobs (run_at, status, payload) VALUES (now() + INTERVAL '2 minutes', 'queued',  jsonb_build_object('tag', 'NewAnomaly', 'contents', json_build_array(NEW.project_id, NEW.created_at, anomaly_type::text, anomaly_action::text, NEW.hash)));
-    RETURN NULL;
+  IF TG_WHEN <> 'AFTER' THEN
+      RAISE EXCEPTION 'apis.new_anomaly_proc() may only run as an AFTER trigger';
+  END IF;
+  anomaly_type := TG_ARGV[0];
+  anomaly_action := TG_ARGV[1];
+  INSERT INTO apis.anomalies (project_id, anomaly_type, action, target_hash) VALUES (NEW.project_id, anomaly_type, anomaly_action, NEW.hash);
+  INSERT INTO background_jobs (run_at, status, payload) VALUES (now() + INTERVAL '5 minutes', 'queued',  jsonb_build_object('tag', 'NewAnomaly', 'contents', json_build_array(NEW.project_id, NEW.created_at, anomaly_type::text, anomaly_action::text, NEW.hash)));
+  RETURN NULL;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -412,7 +412,7 @@ CREATE MATERIALIZED VIEW apis.endpoint_request_stats AS
  WITH request_dump_stats as (
         SELECT
             project_id, url_path, method,
-	 		endpoint_hash,
+            endpoint_hash,
             percentile_agg(EXTRACT(epoch FROM duration)) as agg,
             sum(EXTRACT(epoch FROM duration))  as total_time,
             count(1)  as total_requests,

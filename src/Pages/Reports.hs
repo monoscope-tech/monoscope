@@ -472,7 +472,6 @@ reportEmail pid report' =
                               small_ [style_ ""] "examples: "
                               small_ [style_ ""] $ toHtml $ T.intercalate ", " formatExamples
                         p_ [style_ ""] $ show eventsCount <> " requests"
-                    _ -> pass
 
             div_ [style_ "width: 100%"] $ do
               div_ [style_ "width:100%; border-bottom: 1px solid #e5e7eb; padding-bottom: 0.5rem; display:inline"] $ do

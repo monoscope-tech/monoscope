@@ -9,16 +9,13 @@ import Colog (LogAction, (<&))
 import Config qualified
 import Data.Aeson as Aeson
 import Data.CaseInsensitive qualified as CI
-import Data.List.Extra (delete, intersect, union)
-import Data.Map.Strict qualified as Map
+import Data.List.Extra (intersect, union)
 import Data.Pool (Pool, withResource)
 import Data.Text qualified as T
 import Data.Time (UTCTime (utctDay), ZonedTime, getCurrentTime, getZonedTime)
 import Data.Time.Calendar
 import Data.Vector (Vector)
 import Data.Vector qualified as V
-
-import Data.Text.Lazy qualified as LT
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query, withPool)
 import Database.PostgreSQL.Simple (Connection, Only (Only))
 import Database.PostgreSQL.Simple.FromRow (FromRow (fromRow), field)
@@ -27,22 +24,17 @@ import Database.PostgreSQL.Transact (DBT)
 import GHC.Generics
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Fields qualified as Field
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
-
-import Data.Time.Calendar.OrdinalDate (mondayStartWeek)
 import Data.UUID.V4 qualified as UUIDV4
 import Lucid (Html, renderText, style_, table_, tbody_, td_, th_, thead_, toHtml, tr_)
 import Models.Apis.Reports qualified as Reports
-import Models.Apis.RequestDumps (EndpointPerf, RequestForReport)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import NeatInterpolation (text, trimming)
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), createJob, startJobRunner, throwParsePayload)
 import Pages.Reports qualified as RP
 import Pkg.Mail
-import Pkg.Ortto qualified as Ortto
 import Relude
 import Relude.Unsafe qualified as Unsafe
 
