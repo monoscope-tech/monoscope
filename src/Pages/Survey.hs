@@ -78,7 +78,7 @@ aboutPage pid = do
                   div_ [class_ "flex flex-col gap-2"] do
                     span_ [class_ "font-semibold text-xl"] "What API/Web frameworks do you plan to integrate?"
                     div_ [id_ "stack", name_ "stack", required_ "required", class_ "px-2 py-2"] $ do
-                      div_ [class_ "grid grid-cols-5 gap-3 space-y-2"] do
+                      div_ [class_ "grid grid-cols-5 gap-6 space-y-2"] do
                         forM_ stackOptions $ \(value, label, img) -> do
                           let bg = "url('/assets/framework-logos/" <> img <> "')"
                           div_
@@ -86,10 +86,10 @@ aboutPage pid = do
                             , style_ $ "background-image: " <> bg
                             ]
                             do
-                              label_ [class_ "block group p-2 h-[80px] hover:bg-slate-100 p-2"] $ do
+                              label_ [class_ "block group p-2 h-[80px] hover:bg-slate-100"] $ do
                                 input_ [class_ "mr-3", type_ "checkbox", id_ value, name_ "stack", value_ value]
                                 span_ [class_ "hidden group-hover:inline"] $ toHtml label
-                      div_ [class_ "flex flex-col gap-2"] $ do
+                      div_ [class_ "flex flex-col gap-2 mt-8"] $ do
                         label_ [class_ "font-medium mt-2"] "Other (specify)"
                         input_ [type_ "text", name_ "stack", class_ "px-2 py-1 bg-slate-50 border border-gray-300 text-gray-900 focus:outline-none rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full"]
 
