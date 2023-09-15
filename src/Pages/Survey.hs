@@ -1,18 +1,44 @@
-module Pages.Survey (surveyGetH) where
+module Pages.Survey (surveyGetH, surveyPutH, SurveyForm) where
 
 import Config
 import Data.Default (def)
 import Data.Text qualified as T
-import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
-import Lucid.Htmx (hxPost_, hxTarget_)
+import Lucid.Htmx (hxIndicator_, hxPost_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript
-import Lucid.Svg (d_, fill_, path_, stroke_, stroke_linecap_, stroke_linejoin_, stroke_width_, viewBox_)
-import Lucid.Svg qualified as A
+import Lucid.Svg (d_, fill_, path_, viewBox_)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
+
+import Data.Aeson (FromJSON, ToJSON, encode)
+import Data.Aeson.QQ (aesonQQ)
+import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute, withPool)
+import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Pkg.Components (loader)
+import Servant (Headers, addHeader)
+import Servant.Htmx (HXRedirect, HXTrigger)
+import Web.FormUrlEncoded (FromForm)
+
+data SurveyForm = SurveyForm
+  { stack :: [Text]
+  , functionality :: [Text]
+  , dataLocation :: Text
+  , foundUsFrom :: Text
+  , phoneNumber :: Maybe Text
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (FromForm, ToJSON, FromJSON)
+
+surveyPutH :: Sessions.PersistentSession -> Projects.ProjectId -> SurveyForm -> DashboardM (Headers '[HXTrigger, HXRedirect] (Html ()))
+surveyPutH sess pid survey = do
+  pool <- asks pool
+  env <- asks env
+  let jsonBytes = encode survey
+  res <- liftIO $ withPool pool $ execute Update [sql| update projects.projects set questions= ? where id=? |] (jsonBytes, pid)
+  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","successToast": ["Thanks for taking the survey"]}|]
+  pure $ addHeader hxTriggerData $ addHeader ("/p/" <> show pid.unProjectId <> "/onboarding") $ span_ [] ""
 
 surveyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 surveyGetH sess pid = do
@@ -36,17 +62,15 @@ aboutPage pid = do
     , id_ "surveyDialog"
     ]
     $ do
-      div_ [class_ "relative mx-auto pb-24", style_ "width: min(90vw, 900px)"] do
+      div_ [class_ "relative mx-auto pb-24", style_ "width: min(90vw, 1000px)"] do
         div_ [class_ "flex justify-between mb-8"] $ do
           progressSteps
         div_ [class_ "bg-white rounded-lg shadow w-full"] do
           div_ [class_ "flex items-start justify-between p-6 space-x-2 w-full  border-b rounded-t"] $ do
             form_
               [ hxPost_ $ "/p/" <> pid.toText <> "/survey"
-              , hxTarget_ "#main-content"
-              , id_ "main-content"
+              , hxSwap_ "none"
               , class_ "w-full"
-              , [__|on closeModal from body add .hidden to #surveyDialog then call me.reset()|]
               ]
               $ do
                 div_ [class_ "p-6 flex flex-col gap-8 overflow-y-auto", style_ "width:100%"] $ do
@@ -54,19 +78,24 @@ aboutPage pid = do
                   div_ [class_ "flex flex-col gap-2"] do
                     span_ [class_ "font-semibold text-xl"] "What API/Web frameworks do you plan to integrate?"
                     div_ [id_ "stack", name_ "stack", required_ "required", class_ "px-2 py-2"] $ do
-                      div_ [class_ "columns-3 space-y-2"] do
-                        forM_ stackOptions $ \(value, label, img) ->
-                          div_ [class_ "column border rounded-lg"] do
-                            label_ [class_ "block px-6 py-8 hover:bg-slate-100 p-2"] $ do
-                              input_ [class_ "mr-3", type_ "checkbox", id_ value, name_ "stack", value_ value]
-                              toHtml label
+                      div_ [class_ "grid grid-cols-5 gap-3 space-y-2"] do
+                        forM_ stackOptions $ \(value, label, img) -> do
+                          let bg = "url('/assets/framework-logos/" <> img <> "')"
+                          div_
+                            [ class_ $ "column border rounded-lg text-[14px] bg-center bg-contain bg-no-repeat " <> bg
+                            , style_ $ "background-image: " <> bg
+                            ]
+                            do
+                              label_ [class_ "block group p-2 h-[80px] hover:bg-slate-100 p-2"] $ do
+                                input_ [class_ "mr-3", type_ "checkbox", id_ value, name_ "stack", value_ value]
+                                span_ [class_ "hidden group-hover:inline"] $ toHtml label
                       div_ [class_ "flex flex-col gap-2"] $ do
                         label_ [class_ "font-medium mt-2"] "Other (specify)"
                         input_ [type_ "text", name_ "stack", class_ "px-2 py-1 bg-slate-50 border border-gray-300 text-gray-900 focus:outline-none rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full"]
 
                   div_ [class_ "flex flex-col gap-2"] do
                     label_ [class_ "font-bold"] "What APIToolkit features are you most interested in?"
-                    div_ do
+                    div_ [class_ "columns-3"] do
                       forM_ functionalityOptions $ \(value, label) -> do
                         label_ [class_ "block hover:bg-slate-100 p-2"] $ do
                           input_ [class_ "mr-3", type_ "checkbox", id_ value, name_ "functionality", value_ value]
@@ -80,7 +109,7 @@ aboutPage pid = do
                           toHtml label
                   div_ [class_ "flex flex-col gap-2"] do
                     label_ [class_ "font-bold"] "How did you find APIToolkit?"
-                    div_ [class_ "columns-2"] do
+                    div_ [class_ "columns-3"] do
                       forM_ foundUsFromOptions $ \(value, label) -> do
                         label_ [class_ "block hover:bg-slate-100 p-2"] $ do
                           input_ [class_ "mr-3", type_ "radio", id_ value, name_ "foundUsFrom", value_ value, required_ "required"]
@@ -92,37 +121,38 @@ aboutPage pid = do
 
                 div_ [class_ "flex w-full justify-end items-center px-6 space-x-2 mt-8"] do
                   button_ [type_ "sumbit", class_ "btn-lg btn-indigo text-xl px-4"] "Proceed"
+                  div_ [class_ "htmx-indicator query-indicator"] do
+                    loader
 
 stackOptions :: [(T.Text, T.Text, T.Text)]
 stackOptions =
-  [ ("expressjs", "JS - Express.js", "/assets/gradient.webp")
-  , ("nest", "JS - Nest Js", "/assets/gradient.webp")
-  , ("next", "JS - Next Js", "/assets/gradient.webp")
-  , ("koa", "JS - Koa", "/assets/gradient.webp")
-  , ("sailsjs", "JS - Sailsjs", "/assets/gradient.webp")
-  , ("adonisjs", "JS - Adonisjs", "/assets/gradient.webp")
-  , ("fastify", "Js - Fastify", "/assets/gradient.webp")
-  , ("django", "Python - Django", "/assets/gradient.webp")
-  , ("go-native", "Golang - Native", "/assets/gradient.webp")
-  , ("gorilla-mux", "Golang - Gorilla Mux", "/assets/gradient.webp")
-  , ("gin", "Golang - Gin", "/assets/gradient.webp")
-  , ("fiber", "Golang - Fiber", "/assets/gradient.webp")
-  , ("beego", "Golang - Beego", "/assets/gradient.webp")
-  , ("laravel", "PHP - Laravel", "/assets/gradient.webp")
-  , ("lumen", "PHP - Lumen", "/assets/gradient.webp")
-  , ("symfony", "PHP - Symfony", "/assets/gradient.webp")
-  , ("cakePHP", "PHP - CakePHP", "/assets/gradient.webp")
-  , ("cakeigniter", "PHP - Codeigniter", "/assets/gradient.webp")
-  , ("flask", "Python - Flask", "/assets/gradient.webp")
-  , ("fastapi", "Python - FastAPI", "/assets/gradient.webp")
-  , ("springboot", "Java - Spring Boot", "/assets/gradient.webp")
-  , ("rails", "Ruby - Ruby on Rails", "/assets/gradient.webp")
-  , ("phoenix", "Elixir - Phoenix", "/assets/gradient.webp")
-  , (".net", "C# - ASP.NET", "/assets/gradient.webp")
-  , ("ihp-hs", "Haskell - IHP", "/assets/gradient.webp")
-  , ("actix", "Rust - Actix", "/assets/gradient.webp")
-  , ("rocket", "Rust - Rocket", "/assets/gradient.webp")
-  , ("scala-play", "Scala - Play", "/assets/gradient.webp")
+  [ ("expressjs", "JS - Express.js", "express-logo.png")
+  , ("nest", "JS - Nest Js", "nestjs-logo.png")
+  , ("next", "JS - Next Js", "nextjs-logo.webp")
+  , ("koa", "JS - Koa", "koa-logo.png")
+  , ("sailsjs", "JS - Sailsjs", "sails-logo.png")
+  , ("adonisjs", "JS - Adonisjs", "adonis-logo.png")
+  , ("fastify", "Js - Fastify", "fastify-logo.png")
+  , ("django", "Python - Django", "django-logo.png")
+  , ("go-native", "Golang - Native", "go-logo.png")
+  , ("gorilla-mux", "Golang - Gorilla Mux", "mux-logo.png")
+  , ("gin", "Golang - Gin", "gin-logo.png")
+  , ("fiber", "Golang - Fiber", "fiber-logo.png")
+  , ("laravel", "PHP - Laravel", "laravel-logo.png")
+  , ("lumen", "PHP - Lumen", "lumen-logo.webp")
+  , ("symfony", "PHP - Symfony", "symfony-logo.png")
+  , ("cakePHP", "PHP - CakePHP", "cake-logo.jpg")
+  , ("codeigniter", "PHP - Codeigniter", "igniter-logo.png")
+  , ("flask", "Python - Flask", "flask-logo.png")
+  , ("fastapi", "Python - FastAPI", "fastapi-logo.png")
+  , ("springboot", "Java - Spring Boot", "spring-logo.png")
+  , ("rails", "Ruby - Ruby on Rails", "rails-logo.png")
+  , ("phoenix", "Elixir - Phoenix", "phoenix-logo.webp")
+  , (".net", "C# - ASP.NET", "net-logo.png")
+  , ("ihp-hs", "Haskell - IHP", "ihp-logo.svg")
+  , ("actix", "Rust - Actix", "actix-logo.png")
+  , ("rocket", "Rust - Rocket", "rocket-logo.webp")
+  , ("scala-play", "Scala - Play", "play-logo.png")
   ]
 
 functionalityOptions :: [(T.Text, T.Text)]
@@ -162,7 +192,7 @@ progressSteps = do
       span_ [class_ "flex items-center"] $ do
         svg_ [class_ "w-3.5 h-3.5 sm:w-4 sm:h-4 mr-2.5", style_ "aria-hidden: true", xmlns_ "http://www.w3.org/2000/svg", fill_ "currentColor", viewBox_ "0 0 20 20"] $ do
           path_ [d_ "M10 .5a9.5 9.5 0 1 0 9.5 9.5A9.51 9.51 0 0 0 10 .5Zm3.707 8.207-4 4a1 1 0 0 1-1.414 0l-2-2a1 1 0 0 1 1.414-1.414L9 10.586l3.293-3.293a1 1 0 0 1 1.414 1.414Z"]
-        "Your Stack"
+        "About project"
     li_ [class_ "flex items-center"] $ do
       span_ [class_ "mr-2"] ""
       "Integrate"
