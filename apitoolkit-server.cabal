@@ -68,6 +68,7 @@ library
       Pages.Projects.Survey
       Pages.RedactedFields
       Pages.Reports
+      Pages.Survey
       Pkg.Components
       Pkg.ConvertKit
       Pkg.Google

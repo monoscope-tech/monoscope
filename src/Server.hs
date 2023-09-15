@@ -50,6 +50,7 @@ import Pages.Projects.Survey qualified as Survey
 import Pages.RedactedFields (RedactFieldForm)
 import Pages.RedactedFields qualified as RedactedFields
 import Pages.Reports qualified as Reports
+import Pages.Survey qualified as Survey
 import Relude
 import Servant
 import Servant.HTML.Lucid
@@ -198,7 +199,7 @@ protectedServer sess =
     :<|> Survey.surveyPutH sess
     :<|> Reports.reportsPostH sess
     :<|> Charts.chartsGetH sess
-    :<|> Onboarding.surveyGetH sess
+    :<|> Survey.surveyGetH sess
 
 publicServer :: ServerT PublicAPI DashboardM
 publicServer =
