@@ -317,9 +317,9 @@ valueToFields value = dedupFields $ removeBlacklistedFields $ snd $ valueToField
   valueToFields' v (akk, l) = (akk, (akk, v) : l)
 
   normalizeKey :: Text -> Text
-  normalizeKey key =
-    let result = valueToFormatStr key key
-     in if result == key then result else "{" <> result <> "}"
+  normalizeKey key = case valueToFormatStr key of
+                        Just result -> "{" <> result <> "}"
+                        Nothing -> key
 
 -- debupFields would merge all fields in the list of tuples by the first item in the tupple.
 --
@@ -354,7 +354,7 @@ removeBlacklistedFields = map \(k, val) ->
     else (k, val)
 
 valueToFormat :: AE.Value -> Text
-valueToFormat (AET.String val) = valueToFormatStr "text" val
+valueToFormat (AET.String val) = fromMaybe "text" $ valueToFormatStr val
 valueToFormat (AET.Number val) = valueToFormatNum val
 valueToFormat (AET.Bool _) = "bool"
 valueToFormat AET.Null = "null"
@@ -364,29 +364,29 @@ valueToFormat (AET.Array _) = "array"
 -- | valueToFormatStr will take a string and try to find a format which matches that string best.
 -- At the moment it takes a text and returns a generic mask that represents the format of that text
 --
--- >>> valueToFormatStr "text" "22/02/2022"
--- "text"
+-- >>> valueToFormatStr "22/02/2022"
+-- Just "text"
 --
--- >>> valueToFormatStr "text" "20-02-2022"
--- "text"
+-- >>> valueToFormatStr "20-02-2022"
+-- Just "text"
 --
--- >>> valueToFormatStr "text" "22.02.2022"
--- "text"
+-- >>> valueToFormatStr "22.02.2022"
+-- Nothing 
 --
--- >>> valueToFormatStr "text" "222"
--- "integer"
+-- >>> valueToFormatStr "222"
+-- Just "integer"
 --
--- >>> valueToFormatStr "text" "c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd"
--- "uuid"
-valueToFormatStr :: Text -> Text -> Text
-valueToFormatStr otherwise' val
-  | val =~ ([text|^[0-9]+$|] :: Text) = "integer"
-  | val =~ ([text|^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)$|] :: Text) = "float"
-  | val =~ ([text|^(0[1-9]|1[012])[- /.](0[1-9]|[12][0-9]|3[01])[- /.](19|20)\d\d$|] :: Text) = "mm/dd/yyyy"
-  | val =~ ([text|^(0[1-9]|1[012])[- -.](0[1-9]|[12][0-9]|3[01])[- -.](19|20)\d\d$|] :: Text) = "mm-dd-yyyy"
-  | val =~ ([text|^(0[1-9]|1[012])[- ..](0[1-9]|[12][0-9]|3[01])[- ..](19|20)\d\d$|] :: Text) = "mm.dd.yyyy"
-  | val =~ ([text|^[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}$|] :: Text) = "uuid"
-  | otherwise = otherwise'
+-- >>> valueToFormatStr "c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd"
+-- Just "uuid"
+valueToFormatStr :: Text -> Maybe Text
+valueToFormatStr val
+  | val =~ ([text|^[0-9]+$|] :: Text) = Just "integer"
+  | val =~ ([text|^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)$|] :: Text) = Just "float"
+  | val =~ ([text|^(0[1-9]|1[012])[- /.](0[1-9]|[12][0-9]|3[01])[- /.](19|20)\d\d$|] :: Text) = Just "mm/dd/yyyy"
+  | val =~ ([text|^(0[1-9]|1[012])[- -.](0[1-9]|[12][0-9]|3[01])[- -.](19|20)\d\d$|] :: Text) = Just "mm-dd-yyyy"
+  | val =~ ([text|^(0[1-9]|1[012])[- ..](0[1-9]|[12][0-9]|3[01])[- ..](19|20)\d\d$|] :: Text) = Just "mm.dd.yyyy"
+  | val =~ ([text|^[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}$|] :: Text) = Just "uuid"
+  | otherwise =Nothing 
 
 valueToFormatNum :: Scientific.Scientific -> Text
 valueToFormatNum val
