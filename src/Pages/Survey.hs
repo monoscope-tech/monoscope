@@ -9,11 +9,13 @@ import Lucid.Hyperscript
 import Lucid.Svg (d_, fill_, path_, viewBox_)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
+import Models.Users.Users qualified as Users
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
 
-import Data.Aeson (FromJSON, ToJSON, encode)
+import Data.Aeson
 import Data.Aeson.QQ (aesonQQ)
+import Data.List ((!!))
 import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute, withPool)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Pkg.Components (loader)
@@ -27,18 +29,39 @@ data SurveyForm = SurveyForm
   , dataLocation :: Text
   , foundUsFrom :: Text
   , phoneNumber :: Maybe Text
+  , fullName :: Text
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromForm, ToJSON, FromJSON)
+  deriving anyclass (FromForm, FromJSON)
+
+instance ToJSON SurveyForm where
+  toJSON surveyForm =
+    object
+      [ "stack" .= filter (not . T.null) surveyForm.stack
+      , "functionality" .= filter (not . T.null) surveyForm.functionality
+      , "dataLocation" .= dataLocation surveyForm
+      , "foundUsFrom" .= foundUsFrom surveyForm
+      ]
 
 surveyPutH :: Sessions.PersistentSession -> Projects.ProjectId -> SurveyForm -> DashboardM (Headers '[HXTrigger, HXRedirect] (Html ()))
 surveyPutH sess pid survey = do
   pool <- asks pool
   env <- asks env
-  let jsonBytes = encode survey
-  res <- liftIO $ withPool pool $ execute Update [sql| update projects.projects set questions= ? where id=? |] (jsonBytes, pid)
-  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","successToast": ["Thanks for taking the survey"]}|]
-  pure $ addHeader hxTriggerData $ addHeader ("/p/" <> show pid.unProjectId <> "/onboarding") $ span_ [] ""
+  let nameArr = T.splitOn " " (fullName survey)
+  if length nameArr < 2
+    then do
+      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","errorToast": ["Invalid full name format"]}|]
+      pure $ addHeader hxTriggerData $ addHeader "" ""
+    else do
+      let jsonBytes = encode survey
+      let firstName = nameArr !! 0
+      let lastName = nameArr !! 1
+      let phoneNumber = survey.phoneNumber
+      res <- liftIO $ withPool pool $ execute Update [sql| update projects.projects set questions= ? where id=? |] (jsonBytes, pid)
+      u <- liftIO $ withPool pool $ execute Update [sql| update users.users set first_name= ?, last_name=?, phone_number=? where id=? |] (firstName, lastName, phoneNumber, sess.userId)
+      traceShowM u
+      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","successToast": ["Thanks for taking the survey"]}|]
+      pure $ addHeader hxTriggerData $ addHeader ("/p/" <> show pid.unProjectId <> "/onboarding") ""
 
 surveyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 surveyGetH sess pid = do
@@ -50,14 +73,17 @@ surveyGetH sess pid = do
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = project
-          , pageTitle = "Project about"
+          , pageTitle = "About project"
           }
-  pure $ bodyWrapper bwconf $ aboutPage pid
+  let user = sess.user.getUser
+  let full_name = user.firstName <> " " <> user.lastName
+  let phoneNumber = fromMaybe "" user.phoneNumber
+  pure $ bodyWrapper bwconf $ aboutPage pid full_name phoneNumber
 
-aboutPage :: Projects.ProjectId -> Html ()
-aboutPage pid = do
+aboutPage :: Projects.ProjectId -> Text -> Text -> Html ()
+aboutPage pid full_name phoneNumber = do
   div_
-    [ style_ "z-index:99999"
+    [ style_ "z-index:26"
     , class_ "fixed pt-16 justify-center z-50 w-full p-4 bg-white overflow-y-auto inset-0 h-full max-h-full text-lg"
     , id_ "surveyDialog"
     ]
@@ -75,6 +101,9 @@ aboutPage pid = do
               $ do
                 div_ [class_ "p-6 flex flex-col gap-8 overflow-y-auto", style_ "width:100%"] $ do
                   h3_ [class_ "text-navy-900 text-lg"] "Help us give you the best experience by completing the following"
+                  div_ [class_ "flex flex-col gap-2 mt-8"] $ do
+                    label_ [class_ "font-medium mt-2"] "Full name"
+                    input_ [type_ "text", name_ "fullName", required_ "required", value_ full_name, class_ "px-2 py-1 bg-slate-50 border border-gray-300 text-gray-900 focus:outline-none rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full"]
                   div_ [class_ "flex flex-col gap-2"] do
                     span_ [class_ "font-semibold text-xl"] "What API/Web frameworks do you plan to integrate?"
                     div_ [id_ "stack", name_ "stack", required_ "required", class_ "px-2 py-2"] $ do
@@ -115,9 +144,9 @@ aboutPage pid = do
                           input_ [class_ "mr-3", type_ "radio", id_ value, name_ "foundUsFrom", value_ value, required_ "required"]
                           toHtml label
                   div_ [class_ "flex flex-col gap-2 w-full"] do
-                    label_ [class_ "font-bold"] "Phone number"
+                    label_ [class_ "font-bold"] "What's your phone number?"
                     div_ [class_ "w-full"] do
-                      input_ [class_ "px-2 py-1 bg-slate-50 border border-gray-300 text-gray-900 focus:outline-none rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full", type_ "text", name_ "phoneNumber"]
+                      input_ [value_ phoneNumber, class_ "px-2 py-1 bg-slate-50 border border-gray-300 text-gray-900 focus:outline-none rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full", type_ "text", name_ "phoneNumber"]
 
                 div_ [class_ "flex w-full justify-end items-center px-6 space-x-2 mt-8"] do
                   button_ [type_ "sumbit", class_ "btn-lg btn-indigo text-xl px-4"] "Proceed"

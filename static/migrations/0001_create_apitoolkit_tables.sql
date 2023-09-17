@@ -75,6 +75,8 @@ CREATE TABLE IF NOT EXISTS users.users
   is_sudo           BOOL         NOT  NULL DEFAULT 'f'
 );
 SELECT manage_updated_at('users.users');
+ALTER TABLE users.users ADD COLUMN phone_number Text DEFAULT NULL;
+
 
 -----------------------------------------------------------------------
 -- PROJECT PERSISTENT SESSION 

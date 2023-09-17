@@ -63,6 +63,7 @@ data User = User
   , lastName :: Text
   , displayImageUrl :: Text
   , email :: CI Text
+  , phoneNumber :: Maybe Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, Default)
@@ -93,6 +94,7 @@ createUser firstName lastName picture email = do
       , lastName = lastName
       , displayImageUrl = picture
       , email = CI.mk email
+      , phoneNumber = Nothing
       }
 
 insertUser :: User -> PgT.DBT IO ()
