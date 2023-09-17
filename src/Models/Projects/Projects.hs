@@ -9,6 +9,7 @@ module Models.Projects.Projects (
   ProjectRequestStats (..),
   insertProject,
   projectIdFromText,
+  usersByProjectId,
   selectProjectsForUser,
   projectRequestStatsByProject,
   selectProjectForUser,
@@ -31,7 +32,6 @@ import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, queryOn
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
-import Database.PostgreSQL.Simple.Newtypes (Aeson)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact (DBT)
@@ -183,6 +183,16 @@ selectProjectForUser = queryOne Select q
           limit 1
       |]
 
+usersByProjectId :: ProjectId -> DBT IO (Vector Users.User)
+usersByProjectId pid = query Select q (Only pid)
+ where
+  q =
+    [sql| select u.id, u.created_at, u.updated_at, u.deleted_at, u.active, u.first_name, u.last_name, u.display_image_url, u.email
+                    from users.users u join projects.project_members pm on (pm.user_id=u.id) where project_id=? and active IS True |]
+
+
+
+
 editProjectGetH :: ProjectId -> DBT IO (V.Vector Project)
 editProjectGetH pid = query Select q (Only pid)
  where
@@ -214,7 +224,7 @@ deleteProject pid = do
   execute Update q pid
  where
   q =
-    [sql| UPDATE projects.projects SET deleted_at=NOW() where id=?;|]
+    [sql| UPDATE projects.projects SET deleted_at=NOW(), active=False where id=?;|]
 
 data ProjectRequestStats = ProjectRequestStats
   { projectId :: ProjectId

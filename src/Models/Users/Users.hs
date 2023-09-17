@@ -103,6 +103,7 @@ insertUser = insert @User
 userByEmail :: Text -> PgT.DBT IO (Maybe User)
 userByEmail email = selectOneByField @User [field| email |] (Only email)
 
+
 userIdByEmail :: Text -> PgT.DBT IO (Maybe UserId)
 userIdByEmail email = queryOne Select q (Only email)
  where

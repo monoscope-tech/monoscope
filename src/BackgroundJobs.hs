@@ -69,13 +69,6 @@ updateShapeCounts pid shapeHash newFields deletedFields updatedFields = execute 
  where
   q = [sql| update apis.shapes SET new_unique_fields=?, deleted_fields=?, updated_field_formats=? where project_id=? and hash=?|]
 
-getUsersByProjectId :: Projects.ProjectId -> DBT IO (Vector Users.User)
-getUsersByProjectId pid = query Select q (Only pid)
- where
-  q =
-    [sql| select u.id, u.created_at, u.updated_at, u.deleted_at, u.active, u.first_name, u.last_name, u.display_image_url, u.email
-                    from users.users u join projects.project_members pm on (pm.user_id=u.id) where project_id=? |]
-
 getAllProjects :: DBT IO (Vector Projects.ProjectId)
 getAllProjects = query Select q (Only True)
  where
@@ -99,7 +92,7 @@ jobsRunner dbPool logger cfg job =
       case anomalyType of
         Anomalies.ATEndpoint -> do
           endp <- withPool dbPool $ Endpoints.endpointByHash pid targetHash
-          users <- withPool dbPool $ getUsersByProjectId pid
+          users <- withPool dbPool $ Projects.usersByProjectId pid
           project <- Unsafe.fromJust <<$>> withPool dbPool $ Projects.projectById pid
           let enp = Unsafe.fromJust endp
           let endpointPath = enp.method <> " " <> enp.urlPath
@@ -138,7 +131,7 @@ jobsRunner dbPool logger cfg job =
             Just anomaly -> do
               -- TODO: DOn't send any anomaly emails other than for email
               error "retry later"
-              users <- withPool dbPool $ getUsersByProjectId pid
+              users <- withPool dbPool $ Projects.usersByProjectId pid
               project <- Unsafe.fromJust <<$>> withPool dbPool $ Projects.projectById pid
               forM_ users \u ->
                 let projectTitle = project.title
@@ -166,7 +159,7 @@ Apitoolkit team
             Just anomaly -> do
               -- TODO: DOn't send any anomaly emails other than for email
               error "retry later"
-              users <- withPool dbPool $ getUsersByProjectId pid
+              users <- withPool dbPool $ Projects.usersByProjectId pid
               project <- Unsafe.fromJust <<$>> withPool dbPool $ Projects.projectById pid
               forM_ users \u ->
                 let projectTitle = project.title
@@ -216,7 +209,10 @@ Hi,<br/>
 
 <p>You have been invited to the $projectTitle project on apitoolkit. 
 Please use the following link to activate your account and access the $projectTitle project.</p>
-<a href="app.apitoolkit.io/p/$projectIdTxt">Click Here to access the project</a>
+<a href="app.apitoolkit.io/p/$projectIdTxt">Click Here to access the project</a><br/><br/>.
+
+By the way, we know it can be difficult or confusing to integrate SDKs sometimes. So we're willing to assist. You can schedule a time here, and we can help with integrating: 
+<a href="https://calendar.google.com/calendar/u/0/appointments/schedules/AcZssZ21Q1uDPjHN4YPpM2lNBS0_Nwc16IQj-25e5WIoPOKEVsBBIWJgy3usCUS4d7MtQz7kiuzyBJLb">Click Here to Schedule</a>
 <br/><br/>
 Regards,<br/>
 Apitoolkit team
@@ -245,7 +241,7 @@ jobsWorkerInit dbPool logger envConfig = startJobRunner $ mkConfig jobLogger "ba
 
 dailyReportForProject :: Pool Connection -> Config.EnvConfig -> Projects.ProjectId -> IO ()
 dailyReportForProject dbPool cfg pid = do
-  users <- withPool dbPool $ getUsersByProjectId pid
+  users <- withPool dbPool $ Projects.usersByProjectId pid
   projectM <- withPool dbPool $ Projects.projectById pid
   forM_ projectM \pr -> do 
     users & mapM_ \user -> do 
@@ -266,14 +262,14 @@ dailyReportForProject dbPool cfg pid = do
               }
       _ <- withPool dbPool $ Reports.addReport report
       when pr.dailyNotif do
-          let body = renderText $ RP.reportEmail pid report
-          let projectTitle = pr.title
-          let subject = [text| APITOOLKIT: Daily Report for `$projectTitle` |]
-          sendEmail cfg (CI.original user.email) subject body
+        let body = renderText $ RP.reportEmail pid report
+        let projectTitle = pr.title
+        let subject = [text| APITOOLKIT: Daily Report for `$projectTitle` |]
+        sendEmail cfg (CI.original user.email) subject body
 
 weeklyReportForProject :: Pool Connection -> Config.EnvConfig -> Projects.ProjectId -> IO ()
 weeklyReportForProject dbPool cfg pid = do
-  users <- withPool dbPool $ getUsersByProjectId pid
+  users <- withPool dbPool $ Projects.usersByProjectId pid
   projectM <- withPool dbPool $ Projects.projectById pid
   forM_ projectM \pr -> do 
     users & mapM_ \user -> do
@@ -298,5 +294,3 @@ weeklyReportForProject dbPool cfg pid = do
           let projectTitle = pr.title
           let subject = [text| APITOOLKIT: Daily Report for `$projectTitle` |]
           sendEmail cfg (CI.original user.email) subject body
-
--- INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued',  jsonb_build_object('tag', 'DailyJob'));

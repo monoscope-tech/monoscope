@@ -191,7 +191,7 @@ dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledBySte
           [ src_ "/assets/svgs/cheveron-down.svg"
           , class_ "h-4 mr-3 mt-1 w-4"
           ]
-      span_ [class_ "text-lg text-slate-700"] "Stats"
+      span_ [class_ "text-lg text-slate-700"] "Analytics"
 
     div_ [class_ "reqResSubSection space-y-5"] $ do
       div_ [class_ "grid grid-cols-5 gap-5"] $ do
