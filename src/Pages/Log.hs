@@ -114,9 +114,16 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
           span_ [class_ "space-x-1"] $ do
             span_ [id_ "result-count"] $ show resultCount
             span_ " log entries"
-        a_ [class_ "cursor-pointer inline-block pr-3 space-x-2", hxGet_ resetLogsURL, hxTarget_ "#log-item-table-body", hxSwap_ "innerHTML scroll:#log-item-table-body:top"] $ do
-          svg_ [class_ "w-4 h-4 icon text-slate-500 inline-block"] $ use_ [href_ "/assets/svgs/sprite/sprite.svg#refresh"]
-          span_ [] "refresh"
+        a_
+          [ class_ "cursor-pointer inline-block pr-3 space-x-2"
+          , hxGet_ resetLogsURL
+          , hxTarget_ "#log-item-table-body"
+          , hxSwap_ "innerHTML scroll:#log-item-table-body:top"
+          , hxIndicator_ "#query-indicator"
+          ]
+          $ do
+            svg_ [class_ "w-4 h-4 icon text-slate-500 inline-block"] $ use_ [href_ "/assets/svgs/sprite/sprite.svg#refresh"]
+            span_ [] "refresh"
 
       jsonTreeAuxillaryCode pid
       div_ [class_ "table-fixed grow w-full min-w-full h-full divide-y flex flex-col monospace overflow-hidden"] $ do
@@ -258,6 +265,7 @@ jsonTreeAuxillaryCode pid = do
           , hxVals_ "js:{query:params().query,cols:toggleColumnToSummary(event)}"
           , hxSwap_ "innerHTML scroll:#log-item-table-body:top"
           , hxTarget_ "#log-item-table-body"
+          , hxIndicator_ "#query-indicator"
           , [__|init
                   set fp to (closest @data-field-path)
                   if isFieldInSummary(fp) then set my innerHTML to 'Remove field from summary' end|]
