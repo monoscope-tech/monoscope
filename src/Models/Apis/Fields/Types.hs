@@ -12,6 +12,7 @@ module Models.Apis.Fields.Types (
   groupFieldsByCategory,
   fieldTypeToText,
   fieldCategoryEnumToText,
+  textFieldTypeToText,
 ) where
 
 import Data.Aeson (FromJSON, ToJSON)
@@ -79,6 +80,15 @@ fieldTypeToText FTObject = "object"
 fieldTypeToText FTList = "list"
 fieldTypeToText FTNull = "null"
 fieldTypeToText FTUnknown = "unknown"
+
+textFieldTypeToText :: Text -> Text
+textFieldTypeToText "FTString" = "string"
+textFieldTypeToText "FTNumber" = "number"
+textFieldTypeToText "FTBool" = "bool"
+textFieldTypeToText "FTObject" = "object"
+textFieldTypeToText "FTList" = "list"
+textFieldTypeToText "FTNull" = "null"
+textFieldTypeToText _ = "unknown"
 
 parseFieldTypes :: (Eq s, IsString s) => s -> Maybe FieldTypes
 parseFieldTypes "string" = Just FTString

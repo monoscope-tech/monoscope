@@ -26,6 +26,7 @@ import Data.Map.Strict qualified as Map
 import Data.Vector (Vector)
 import Lucid
 import Lucid.Htmx
+import Models.Apis.Fields.Types (textFieldTypeToText)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
@@ -77,7 +78,7 @@ data ReportAnomalyType
       }
   | ATFormat
       { endpointUrlPath :: Text
-      , fieldKeyPath :: Text
+      , keyPath :: Text
       , endpointMethod :: Text
       , formatType :: Text
       , formatExamples :: [Text]
@@ -189,17 +190,17 @@ singleReportPage pid report =
                                   small_ [] $ toHtml $ "Signature: " <> targetHash
                                 shapeParameterStats_ (length newUniqueFields) (length updatedFieldFormats) (length deletedFields)
                               small_ [] $ show eventsCount <> " requests"
-                          ATFormat{endpointUrlPath, endpointMethod, fieldKeyPath, formatType, formatExamples, eventsCount} -> do
+                          ATFormat{endpointUrlPath, endpointMethod, keyPath, formatType, formatExamples, eventsCount} -> do
                             div_ [class_ "space-x-3 border-b pb-1 flex items-center justify-between"] do
-                              div_ [class_ "flex items-center"] do
-                                div_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
+                              div_ [class_ "flex items-center gap-2"] do
+                                div_ [class_ "inline-block font-bold text-blue-700 space-x-2 shrink-0"] do
                                   img_ [class_ "inline w-4 h-4", src_ "/assets/svgs/anomalies/fields.svg"]
-                                  span_ [] "Modified field"
-                                small_ [] $ toHtml $ fieldKeyPath <> " in " <> endpointMethod <> "  " <> endpointUrlPath
+                                  span_ [class_ "inline-block"] "Modified field"
+                                small_ [] $ toHtml $ keyPath <> " in " <> endpointMethod <> "  " <> endpointUrlPath
                                 div_ [class_ "text-sm"] do
                                   div_ [] do
                                     small_ "current format: "
-                                    span_ $ toHtml formatType
+                                    span_ $ toHtml $ textFieldTypeToText formatType
                                   div_ do
                                     small_ "previous formats: "
                                     span_ "" -- TODO: Should be comma separated list of formats for that field.
@@ -295,9 +296,9 @@ renderEndpointsTable :: [PerformanceReport] -> Html ()
 renderEndpointsTable endpoints = table_ [class_ "table-auto w-full"] $ do
   thead_ [class_ "text-xs text-left text-gray-700 uppercase bg-gray-100"] $ tr_ $ do
     th_ [class_ "px-6 py-3"] "Endpoint"
-    th_ [class_ "px-6 py-3"] "Average duration"
-    th_ [class_ "px-6 py-3"] "Diff compared to prev."
-    th_ [class_ "px-6 py-3"] "Duration diff %"
+    th_ [class_ "px-6 py-3"] "Average latency"
+    th_ [class_ "px-6 py-3"] "Change compared to prev."
+    th_ [class_ "px-6 py-3"] "latency change %"
   tbody_ $ mapM_ renderEndpointRow endpoints
 
 buildReportJSON :: Vector Anomalies.AnomalyVM -> Vector RequestForReport -> Vector EndpointPerf -> Aeson.Value
@@ -456,15 +457,15 @@ reportEmail pid report' =
                               p_ [style_ "display:block"] $ show (length deletedFields) <> " deleted fields"
                             else pass
                           p_ [style_ ""] $ show eventsCount <> " requests"
-                    ATFormat{endpointUrlPath, endpointMethod, fieldKeyPath, formatType, formatExamples, eventsCount} -> do
+                    ATFormat{endpointUrlPath, endpointMethod, keyPath, formatType, formatExamples, eventsCount} -> do
                       div_ [style_ "border-bottom: 1px solid #e5e7eb;  margin-bottom: 1rem; padding-bottom: 0.25rem; display: flex; gap: 0.75rem; align-items: center; justify-content: space-between;"] $ do
                         div_ [style_ "display: flex; align-items: center;"] $ do
                           span_ [style_ "display: inline; font-weight: bold; color: #3b82f6;"] "Modified field"
-                          small_ [style_ ""] $ toHtml $ fieldKeyPath <> " in " <> endpointMethod <> "  " <> endpointUrlPath
+                          small_ [style_ ""] $ toHtml $ keyPath <> " in " <> endpointMethod <> "  " <> endpointUrlPath
                           div_ [style_ "font-size: 0.875rem;"] $ do
                             div_ [style_ ""] $ do
                               small_ [style_ ""] "current format: "
-                              span_ [style_ "display: inline;"] $ toHtml formatType
+                              span_ [style_ "display: inline;"] $ toHtml $ textFieldTypeToText formatType
                             div_ [style_ ""] $ do
                               small_ [style_ ""] "previous formats: "
                               span_ [style_ "display: inline;"] "" -- TODO: Should be a comma-separated list of formats for that field.
