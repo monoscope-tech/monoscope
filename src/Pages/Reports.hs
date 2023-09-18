@@ -462,16 +462,15 @@ reportEmail pid report' =
                         div_ [style_ "display: flex; align-items: center;"] $ do
                           span_ [style_ "display: inline; font-weight: bold; color: #3b82f6;"] "Modified field"
                           small_ [style_ ""] $ toHtml $ keyPath <> " in " <> endpointMethod <> "  " <> endpointUrlPath
-                          div_ [style_ "font-size: 0.875rem;"] $ do
-                            div_ [style_ ""] $ do
-                              small_ [style_ ""] "current format: "
-                              span_ [style_ "display: inline;"] $ toHtml $ textFieldTypeToText formatType
-                            div_ [style_ ""] $ do
-                              small_ [style_ ""] "previous formats: "
-                              span_ [style_ "display: inline;"] "" -- TODO: Should be a comma-separated list of formats for that field.
-                            div_ [style_ ""] $ do
-                              small_ [style_ ""] "examples: "
-                              small_ [style_ ""] $ toHtml $ T.intercalate ", " formatExamples
+                        div_ [style_ "font-size: 0.875rem;"] $ do
+                          small_ [style_ ""] "current format: "
+                          span_ [style_ "display: inline;"] $ toHtml $ textFieldTypeToText formatType
+                        -- div_ [style_ ""] $ do
+                        --   small_ [style_ ""] "previous formats: "
+                        --   span_ [style_ "display: inline;"] ""  TODO: Should be a comma-separated list of formats for that field.
+                        div_ [style_ ""] $ do
+                          small_ [style_ ""] "examples: "
+                          small_ [style_ ""] $ toHtml $ T.intercalate ", " formatExamples
                         p_ [style_ ""] $ show eventsCount <> " requests"
 
             div_ [style_ "width: 100%"] $ do
