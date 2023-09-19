@@ -191,7 +191,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
             -- A shape is a deterministic representation of a request-response combination for a given endpoint.
             -- We usually expect multiple shapes per endpoint. Eg a shape for a success request-response and another for an error response.
             -- Shapes are dependent on the endpoint, statusCode and the unique fields in that shape.
-            let shape = Shapes.Shape (Shapes.ShapeId dumpID) (rM.timestamp) now Nothing projectId endpointHash queryParamsKP requestHeadersKP responseHeadersKP requestBodyKP responseBodyKP fieldHashes shapeHash rM.statusCode
+            let shape = Shapes.Shape (Shapes.ShapeId dumpID) (rM.timestamp) now Nothing projectId endpointHash queryParamsKP requestBodyKP responseBodyKP requestHeadersKP responseHeadersKP fieldHashes shapeHash rM.statusCode
             Shapes.insertShapeQueryAndParam shape
 
   -- FIXME: This 1000 is added on the php sdk in a previous version and has been remove. This workaround code should be removed ASAP
