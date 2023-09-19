@@ -140,7 +140,7 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
 reqChart :: Text -> Bool -> Html ()
 reqChart reqChartTxt hxOob = do
   div_ [id_ "reqsChartParent", class_ "p-5", hxSwapOob_ $ show hxOob] $ do
-    div_ [id_ "reqsChartsEC", class_ "", style_ "height:200px"] ""
+    div_ [id_ "reqsChartsEC", class_ "", style_ "height:100px"] ""
     script_
       [text| throughputEChart("reqsChartsEC", $reqChartTxt, [], true) |]
 

@@ -401,7 +401,7 @@ endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p
         div_ [class_ "flex-1 card-round p-3"] $ do
           div_ [class_ "p-4 space-y-6"] $ do
             select_ [] $ do
-              option_ [class_ "text-2xl font-normal"] "Throughput by Status Code"
+              option_ [class_ "text-2xl font-normal"] "Requests by Status Code"
             div_ [class_ "h-64 "] do
               Charts.lazy [C.QByE $ [C.QBPId enpStats.projectId, C.QBEndpointHash enpStats.endpointHash] ++ catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBStatusCode, C.SlotsE 120, C.ShowLegendE]
 
@@ -416,7 +416,7 @@ endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p
         div_ [class_ "flex-1 card-round p-3"] $ do
           div_ [class_ "p-4 space-y-6"] $ do
             select_ [] $ do
-              option_ [class_ "text-2xl font-normal"] "Error Rates"
+              option_ [class_ "text-2xl font-normal"] "Errors"
             div_ [class_ "h-64 "] do
               Charts.lazy [C.QByE $ [C.QBPId enpStats.projectId, C.QBEndpointHash enpStats.endpointHash, Charts.QBStatusCodeGT 400] ++ catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBStatusCode, C.SlotsE 120, C.ShowLegendE, C.Theme "roma"]
 
