@@ -2,31 +2,24 @@ module Pages.Dashboard (dashboardGetH) where
 
 import Config
 import Data.Aeson qualified as AE
-import Data.Default ( def, def )
-import Data.Time
-    ( UTCTime,
-      ZonedTime,
-      addUTCTime,
-      formatTime,
-      getCurrentTime,
-      secondsToNominalDiffTime,
-      utc,
-      utcToZonedTime,
-      UTCTime,
-      ZonedTime,
-      addUTCTime,
-      formatTime,
-      getCurrentTime,
-      secondsToNominalDiffTime,
-      utc,
-      utcToZonedTime )
-import Data.Time.Format ( defaultTimeLocale, defaultTimeLocale )
+import Data.Default (def)
+import Data.Time (
+  UTCTime,
+  ZonedTime,
+  addUTCTime,
+  formatTime,
+  getCurrentTime,
+  secondsToNominalDiffTime,
+  utc,
+  utcToZonedTime,
+ )
+import Data.Time.Format (defaultTimeLocale)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Fmt
 import Lucid
-import Lucid.Hyperscript ( __, __ )
+import Lucid.Hyperscript (__)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
@@ -34,17 +27,18 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.Anomalies.AnomalyList qualified as AnomaliesList
 import Pages.BodyWrapper
-import Pages.Charts.Charts qualified as Charts
-import Servant
-    ( Union,
-      WithStatus(..),
-      respond )
-import Utils ( GetOrRedirect, redirect, deleteParam, mIcon_ )
-import Pages.Components (statBox)
 import Pages.Charts.Charts qualified as C
+import Pages.Charts.Charts qualified as Charts
+import Pages.Components (statBox)
 import Relude hiding (max, min)
+import Servant (
+  Union,
+  WithStatus (..),
+  respond,
+ )
 import System.Clock
 import Text.Interpolation.Nyan
+import Utils (GetOrRedirect, deleteParam, mIcon_, redirect)
 import Witch (from)
 
 timePickerItems :: [(Text, Text)]
@@ -216,7 +210,7 @@ dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledBySte
         div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] $ do
           select_ [] $ option_ [class_ "text-2xl font-normal"] "Error"
           div_ [class_ "h-64 "] do
-            Charts.lazy [C.QByE $ [C.QBPId pid, C.QBStatusCodeGT 400] ++ catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBStatusCode , C.SlotsE 120, C.ShowLegendE, C.Theme "roma"]
+            Charts.lazy [C.QByE $ [C.QBPId pid, C.QBStatusCodeGT 400] ++ catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBStatusCode, C.SlotsE 120, C.ShowLegendE, C.Theme "roma"]
 
         div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] $ do
           select_ [] $ option_ [class_ "text-2xl font-normal"] "Reqs Grouped by Endpoint"

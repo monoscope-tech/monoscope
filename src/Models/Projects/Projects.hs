@@ -138,11 +138,11 @@ data CreateProject = CreateProject
 makeFieldLabelsNoPrefix ''CreateProject
 
 -- FIXME: We currently return an object with empty vectors when nothing was found.
-projectCacheById ::HasCallStack => ProjectId -> DBT IO (Maybe ProjectCache)
+projectCacheById :: HasCallStack => ProjectId -> DBT IO (Maybe ProjectCache)
 projectCacheById = queryOne Select q
- where
-  q =
-    [sql| select  coalesce(ARRAY_AGG(DISTINCT hosts ORDER BY hosts ASC),'{}') hosts, 
+  where
+    q =
+      [sql| select  coalesce(ARRAY_AGG(DISTINCT hosts ORDER BY hosts ASC),'{}') hosts, 
                     coalesce(ARRAY_AGG(DISTINCT endpoint_hashes ORDER BY endpoint_hashes ASC),'{}') endpoint_hashes, 
                     coalesce(ARRAY_AGG(DISTINCT shape_hashes ORDER BY shape_hashes ASC),'{}'::text[]) shape_hashes, 
                     coalesce(ARRAY_AGG(DISTINCT paths ORDER BY paths ASC),'{}') redacted_fields 
@@ -159,23 +159,23 @@ insertProject = insert @CreateProject
 
 projectById :: ProjectId -> DBT IO (Maybe Project)
 projectById = queryOne Select q
- where
-  q = [sql| select p.* from projects.projects p where id=?|]
+  where
+    q = [sql| select p.* from projects.projects p where id=?|]
 
 selectProjectsForUser :: Users.UserId -> DBT IO (V.Vector Project')
 selectProjectsForUser = query Select q
- where
-  q =
-    [sql| select pp.*,  ARRAY_AGG(us.display_image_url) OVER (PARTITION BY pp.id) from projects.projects as pp 
+  where
+    q =
+      [sql| select pp.*,  ARRAY_AGG(us.display_image_url) OVER (PARTITION BY pp.id) from projects.projects as pp 
                 join projects.project_members as ppm on (pp.id=ppm.project_id) 
                 join users.users as us on (us.id=ppm.user_id)
                 where ppm.user_id=? and pp.deleted_at IS NULL order by updated_at desc|]
 
 selectProjectForUser :: (Users.UserId, ProjectId) -> DBT IO (Maybe Project)
 selectProjectForUser = queryOne Select q
- where
-  q =
-    [sql| 
+  where
+    q =
+      [sql| 
         select pp.* from projects.projects as pp 
           join projects.project_members as ppm on (pp.id=ppm.project_id)
           join users.users uu on (uu.id=ppm.user_id OR uu.is_sudo is True)
@@ -185,19 +185,16 @@ selectProjectForUser = queryOne Select q
 
 usersByProjectId :: ProjectId -> DBT IO (Vector Users.User)
 usersByProjectId pid = query Select q (Only pid)
- where
-  q =
-    [sql| select u.id, u.created_at, u.updated_at, u.deleted_at, u.active, u.first_name, u.last_name, u.display_image_url, u.email
+  where
+    q =
+      [sql| select u.id, u.created_at, u.updated_at, u.deleted_at, u.active, u.first_name, u.last_name, u.display_image_url, u.email
                     from users.users u join projects.project_members pm on (pm.user_id=u.id) where project_id=? and active IS True |]
-
-
-
 
 editProjectGetH :: ProjectId -> DBT IO (V.Vector Project)
 editProjectGetH pid = query Select q (Only pid)
- where
-  q =
-    [sql|
+  where
+    q =
+      [sql|
         SELECT pp*, ppm* FROM projects.projects AS pp 
             INNER JOIN projects.project_members AS ppm
             ON pp.id = pid 
@@ -206,25 +203,25 @@ editProjectGetH pid = query Select q (Only pid)
 updateProject :: CreateProject -> DBT IO Int64
 updateProject cp = do
   execute Update q (cp.title, cp.description, cp.paymentPlan, cp.id)
- where
-  q =
-    [sql| UPDATE projects.projects SET title=?, description=?, payment_plan=? where id=?;|]
+  where
+    q =
+      [sql| UPDATE projects.projects SET title=?, description=?, payment_plan=? where id=?;|]
 
 updateProjectReportNotif :: ProjectId -> Text -> DBT IO Int64
 updateProjectReportNotif pid report_type = do
   execute Update q (Only pid)
- where
-  q =
-    if report_type == "daily"
-      then [sql| UPDATE projects.projects SET daily_notif=(not daily_notif) WHERE id=?;|]
-      else [sql| UPDATE projects.projects SET weekly_notif=(not weekly_notif) WHERE id=?;|]
+  where
+    q =
+      if report_type == "daily"
+        then [sql| UPDATE projects.projects SET daily_notif=(not daily_notif) WHERE id=?;|]
+        else [sql| UPDATE projects.projects SET weekly_notif=(not weekly_notif) WHERE id=?;|]
 
 deleteProject :: ProjectId -> DBT IO Int64
 deleteProject pid = do
   execute Update q pid
- where
-  q =
-    [sql| UPDATE projects.projects SET deleted_at=NOW(), active=False where id=?;|]
+  where
+    q =
+      [sql| UPDATE projects.projects SET deleted_at=NOW(), active=False where id=?;|]
 
 data ProjectRequestStats = ProjectRequestStats
   { projectId :: ProjectId

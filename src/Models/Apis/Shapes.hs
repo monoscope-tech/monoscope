@@ -64,31 +64,31 @@ Optics.TH.makeFieldLabelsNoPrefix ''Shape
 
 insertShapeQueryAndParam :: Shape -> (Query, [DBField])
 insertShapeQueryAndParam shape = (q, params)
- where
-  q =
-    [sql| 
+  where
+    q =
+      [sql| 
             INSERT INTO apis.shapes
             (project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash, status_code)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING; 
           |]
-  params =
-    [ MkDBField $ shape.projectId
-    , MkDBField $ shape.endpointHash
-    , MkDBField $ shape.queryParamsKeypaths
-    , MkDBField $ shape.requestBodyKeypaths
-    , MkDBField $ shape.responseBodyKeypaths
-    , MkDBField $ shape.requestHeadersKeypaths
-    , MkDBField $ shape.responseHeadersKeypaths
-    , MkDBField $ shape.fieldHashes
-    , MkDBField $ shape.hash
-    , MkDBField $ shape.statusCode
-    ]
+    params =
+      [ MkDBField $ shape.projectId
+      , MkDBField $ shape.endpointHash
+      , MkDBField $ shape.queryParamsKeypaths
+      , MkDBField $ shape.requestBodyKeypaths
+      , MkDBField $ shape.responseBodyKeypaths
+      , MkDBField $ shape.requestHeadersKeypaths
+      , MkDBField $ shape.responseHeadersKeypaths
+      , MkDBField $ shape.fieldHashes
+      , MkDBField $ shape.hash
+      , MkDBField $ shape.statusCode
+      ]
 
 shapesByEndpointHash :: Text -> PgT.DBT IO (Vector Shape)
 shapesByEndpointHash endpointHash = query Select q (Only endpointHash)
- where
-  q =
-    [sql| 
+  where
+    q =
+      [sql| 
           SELECT id, created_at, updated_at, approved_on, project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, 
           response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash, status_code
           FROM apis.shapes WHERE endpoint_hash = ?
@@ -142,9 +142,9 @@ data SwShape = SwShape
 
 shapesByEndpointHashes :: Projects.ProjectId -> Vector Text -> PgT.DBT IO (Vector SwShape)
 shapesByEndpointHashes pid hashes = query Select q (pid, hashes)
- where
-  q =
-    [sql|
+  where
+    q =
+      [sql|
       SELECT endpoint_hash sw_endpoint_hash, query_params_keypaths sw_query_params_keypaths, request_body_keypaths sw_request_body_keypaths,
              response_body_keypaths sw_response_body_keypaths, request_headers_keypaths sw_request_headers_keypaths, 
              response_headers_keypaths sw_response_headers_keypaths, hash sw_hash,status_code sw_status_code,field_hashes sw_field_hashes 

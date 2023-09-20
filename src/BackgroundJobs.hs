@@ -14,6 +14,7 @@ import Data.Pool (Pool, withResource)
 import Data.Text qualified as T
 import Data.Time (UTCTime (utctDay), ZonedTime, getCurrentTime, getZonedTime)
 import Data.Time.Calendar
+import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query, withPool)
@@ -22,14 +23,13 @@ import Database.PostgreSQL.Simple.FromRow (FromRow (fromRow), field)
 import Database.PostgreSQL.Simple.SqlQQ
 import Database.PostgreSQL.Transact (DBT)
 import GHC.Generics
+import Lucid (Html, renderText, style_, table_, tbody_, td_, th_, thead_, toHtml, tr_)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Projects.Projects qualified as Projects
-import Models.Users.Users qualified as Users
-import Data.UUID.V4 qualified as UUIDV4
-import Lucid (Html, renderText, style_, table_, tbody_, td_, th_, thead_, toHtml, tr_)
 import Models.Apis.Reports qualified as Reports
 import Models.Apis.RequestDumps qualified as RequestDumps
+import Models.Projects.Projects qualified as Projects
+import Models.Users.Users qualified as Users
 import NeatInterpolation (text, trimming)
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), createJob, startJobRunner, throwParsePayload)
@@ -51,28 +51,28 @@ data BgJobs
 
 getShapes :: Projects.ProjectId -> Text -> DBT IO (Vector (Text, Vector Text))
 getShapes pid enpHash = query Select q (pid, enpHash)
- where
-  q = [sql| select hash, field_hashes from apis.shapes where project_id=? and endpoint_hash=? |]
+  where
+    q = [sql| select hash, field_hashes from apis.shapes where project_id=? and endpoint_hash=? |]
 
 instance FromRow Text where
   fromRow = field
 
 getUpdatedFieldFormats :: Projects.ProjectId -> Vector Text -> DBT IO (Vector Text)
 getUpdatedFieldFormats pid fieldHashes = query Select q (pid, fieldHashes)
- where
-  q =
-    [sql| select fm.hash from apis.formats fm JOIN apis.fields fd ON (fm.project_id=fd.project_id AND fd.hash=fm.field_hash) 
+  where
+    q =
+      [sql| select fm.hash from apis.formats fm JOIN apis.fields fd ON (fm.project_id=fd.project_id AND fd.hash=fm.field_hash) 
                 where fm.project_id=? AND fm.created_at>(fd.created_at+interval '2 minutes') AND fm.field_hash=ANY(?) |]
 
 updateShapeCounts :: Projects.ProjectId -> Text -> Vector Text -> Vector Text -> Vector Text -> DBT IO Int64
 updateShapeCounts pid shapeHash newFields deletedFields updatedFields = execute Update q (newFields, deletedFields, updatedFields, pid, shapeHash)
- where
-  q = [sql| update apis.shapes SET new_unique_fields=?, deleted_fields=?, updated_field_formats=? where project_id=? and hash=?|]
+  where
+    q = [sql| update apis.shapes SET new_unique_fields=?, deleted_fields=?, updated_field_formats=? where project_id=? and hash=?|]
 
 getAllProjects :: DBT IO (Vector Projects.ProjectId)
 getAllProjects = query Select q (Only True)
- where
-  q = [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL|]
+  where
+    q = [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL|]
 
 -- TODO:
 -- Analyze shapes for
@@ -236,15 +236,15 @@ Apitoolkit team
 
 jobsWorkerInit :: Pool Connection -> LogAction IO String -> Config.EnvConfig -> IO ()
 jobsWorkerInit dbPool logger envConfig = startJobRunner $ mkConfig jobLogger "background_jobs" dbPool (MaxConcurrentJobs 1) (jobsRunner dbPool logger envConfig) id
- where
-  jobLogger logLevel logEvent = logger <& show (logLevel, logEvent)
+  where
+    jobLogger logLevel logEvent = logger <& show (logLevel, logEvent)
 
 dailyReportForProject :: Pool Connection -> Config.EnvConfig -> Projects.ProjectId -> IO ()
 dailyReportForProject dbPool cfg pid = do
   users <- withPool dbPool $ Projects.usersByProjectId pid
   projectM <- withPool dbPool $ Projects.projectById pid
-  forM_ projectM \pr -> do 
-    users & mapM_ \user -> do 
+  forM_ projectM \pr -> do
+    users & mapM_ \user -> do
       anomalies <- withPool dbPool $ Anomalies.getReportAnomalies pid "daily"
       endpoint_rp <- withPool dbPool $ RequestDumps.getRequestDumpForReports pid "daily"
       previous_day <- withPool dbPool $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid "daily"
@@ -271,7 +271,7 @@ weeklyReportForProject :: Pool Connection -> Config.EnvConfig -> Projects.Projec
 weeklyReportForProject dbPool cfg pid = do
   users <- withPool dbPool $ Projects.usersByProjectId pid
   projectM <- withPool dbPool $ Projects.projectById pid
-  forM_ projectM \pr -> do 
+  forM_ projectM \pr -> do
     users & mapM_ \user -> do
       anomalies <- withPool dbPool $ Anomalies.getReportAnomalies pid "weekly"
       endpoint_rp <- withPool dbPool $ RequestDumps.getRequestDumpForReports pid "weekly"
@@ -290,7 +290,7 @@ weeklyReportForProject dbPool cfg pid = do
               }
       _ <- withPool dbPool $ Reports.addReport report
       when pr.weeklyNotif do
-          let body = renderText $ RP.reportEmail pid report
-          let projectTitle = pr.title
-          let subject = [text| APITOOLKIT: Daily Report for `$projectTitle` |]
-          sendEmail cfg (CI.original user.email) subject body
+        let body = renderText $ RP.reportEmail pid report
+        let projectTitle = pr.title
+        let subject = [text| APITOOLKIT: Daily Report for `$projectTitle` |]
+        sendEmail cfg (CI.original user.email) subject body

@@ -5,8 +5,10 @@ module ProcessMessage (
 
 import Colog.Core (LogAction (..), (<&))
 import Config qualified
+import Control.Exception (SomeException, try)
 import Control.Lens ((^?), _Just)
-import Control.Monad.Trans.Except (except)
+import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans.Except (ExceptT, except, runExceptT, throwE)
 import Control.Monad.Trans.Except.Extra (handleIOExceptT)
 import Data.Aeson (eitherDecode)
 import Data.Cache qualified as Cache
@@ -27,12 +29,9 @@ import Models.Projects.Projects qualified as Projects
 import Relude hiding (hoistMaybe)
 import RequestMessages qualified
 import System.Clock
-import Text.Pretty.Simple (pShow)
+import Text.Pretty.Simple (pPrint, pPrintString, pShow)
 import Utils (DBField, eitherStrToText)
 import Witch (from)
-import Control.Exception (try, SomeException)
-import Control.Monad.Trans.Except (ExceptT, runExceptT, throwE, except)
-import Control.Monad.IO.Class (liftIO)
 
 {--
   Exploring how the inmemory cache could be shaped for performance, and low footprint ability to skip hitting the postgres database when not needed.
@@ -114,9 +113,12 @@ processMessages' logger' _ conn' msgs projectCache' = do
   let query' = mconcat queries
   let params' = concat params
 
-  lefts processed & mapM_ \err -> logger' <& "ERROR: with processing request dump to queries; with original len " <> show messagesCount <> " err: " <> show err
-  unless (null $ lefts processed) $
-    logger' <& "processed messages with errors. " <> (from @LText $ pShow msgs)
+  unless (null $ lefts processed) $ do
+    let leftMsgs = [(a, b) | (Left a, b) <- zip processed msgs]
+    forM_ leftMsgs \(a, b) ->
+      -- TODO: switch to using a proper logger setup.
+      -- logger' <& "Error processing Error: " <> pShow a <> "\n Original Msg:" <> pShow  b
+      putStrLn $ "ERROR: Error processing Error: " <> toString (pShow a) <> "\n Original Msg:" <> (toString . pShow) b
 
   afterProccessing <- getTime Monotonic
 
@@ -139,27 +141,32 @@ processMessages' logger' _ conn' msgs projectCache' = do
       logger' <& "error running generated request message based insert queries" <> toString err
       pure []
     Right _ -> pure rmAckIds
- where
-  projectCacheDefault :: Projects.ProjectCache
-  projectCacheDefault = Projects.ProjectCache{hosts = [], endpointHashes = [], shapeHashes = [], redactFieldslist = []}
+  where
+    projectCacheDefault :: Projects.ProjectCache
+    projectCacheDefault = Projects.ProjectCache{hosts = [], endpointHashes = [], shapeHashes = [], redactFieldslist = []}
 
-  processMessage :: HasCallStack => LogAction IO String -> Pool Connection -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> Either Text (Maybe Text, RequestMessages.RequestMessage) -> IO (Either Text (Maybe Text, Query, [DBField], RequestDumps.RequestDump))
-  processMessage logger conn projectCache recMsgEither = runExceptT do
-    (rmAckId, recMsg) <- except recMsgEither
-    recId <- liftIO nextRandom
-    timestamp <- liftIO getZonedTime
-    let pid = Projects.ProjectId (recMsg.projectId)
+    processMessage :: HasCallStack => LogAction IO String -> Pool Connection -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> Either Text (Maybe Text, RequestMessages.RequestMessage) -> IO (Either Text (Maybe Text, Query, [DBField], RequestDumps.RequestDump))
+    processMessage logger conn projectCache recMsgEither = runExceptT do
+      (rmAckId, recMsg) <- except recMsgEither
+      recId <- liftIO nextRandom
+      timestamp <- liftIO getZonedTime
+      let pid = Projects.ProjectId (recMsg.projectId)
 
-    -- We retrieve the projectCache object from the inmemory cache and if it doesn't exist,
-    -- we set the value in the db into the cache and return that.
-    -- This should help with our performance, since this project Cache is the only information we need in order to process
-    -- an apitoolkit requestmessage payload. So we're able to process payloads without hitting the database except for the actual db inserts.
-    projectCacheValE <- liftIO $ try (Cache.fetchWithCache projectCache pid \pid' -> do
-      mpjCache <- withPool conn $ Projects.projectCacheById pid'
-      pure $ fromMaybe projectCacheDefault mpjCache) :: ExceptT Text IO (Either SomeException Projects.ProjectCache)
+      -- We retrieve the projectCache object from the inmemory cache and if it doesn't exist,
+      -- we set the value in the db into the cache and return that.
+      -- This should help with our performance, since this project Cache is the only information we need in order to process
+      -- an apitoolkit requestmessage payload. So we're able to process payloads without hitting the database except for the actual db inserts.
+      projectCacheValE <-
+        liftIO $
+          try
+            ( Cache.fetchWithCache projectCache pid \pid' -> do
+                mpjCache <- withPool conn $ Projects.projectCacheById pid'
+                pure $ fromMaybe projectCacheDefault mpjCache
+            ) ::
+          ExceptT Text IO (Either SomeException Projects.ProjectCache)
 
-    case projectCacheValE of
-      Left e -> throwE $ "An error occurred while fetching project cache: " <> (toText $ show e)
-      Right projectCacheVal -> do
-        (query, params, reqDump) <- except $ RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId
-        pure (rmAckId, query, params, reqDump)
+      case projectCacheValE of
+        Left e -> throwE $ "An error occurred while fetching project cache: " <> (toText $ show e)
+        Right projectCacheVal -> do
+          (query, params, reqDump) <- except $ RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId
+          pure (rmAckId, query, params, reqDump)

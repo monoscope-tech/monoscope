@@ -95,9 +95,9 @@ data CreateProjectMembers = CreateProjectMembers
 
 insertProjectMembers :: [CreateProjectMembers] -> DBT IO Int64
 insertProjectMembers = PgT.executeMany q
- where
-  q =
-    [sql| INSERT INTO projects.project_members(project_id, user_id, permission) VALUES (?,?,?) |]
+  where
+    q =
+      [sql| INSERT INTO projects.project_members(project_id, user_id, permission) VALUES (?,?,?) |]
 
 data ProjectMemberVM = ProjectMemberVM
   { id :: UUID.UUID
@@ -112,9 +112,9 @@ makeFieldLabelsNoPrefix ''ProjectMemberVM
 
 selectActiveProjectMembers :: Projects.ProjectId -> DBT IO (Vector ProjectMemberVM)
 selectActiveProjectMembers = query Select q
- where
-  q =
-    [sql| SELECT pm.id, pm.user_id, pm.permission,us.email  from projects.project_members pm
+  where
+    q =
+      [sql| SELECT pm.id, pm.user_id, pm.permission,us.email  from projects.project_members pm
                    JOIN users.users us ON (pm.user_id=us.id)
                    WHERE pm.project_id=?::uuid and pm.active=TRUE;
                     
@@ -122,18 +122,18 @@ selectActiveProjectMembers = query Select q
 
 updateProjectMembersPermissons :: [(UUID.UUID, Permissions)] -> DBT IO ()
 updateProjectMembersPermissons vals = void $ executeMany q vals
- where
-  q =
-    [sql| UPDATE projects.project_members pm
+  where
+    q =
+      [sql| UPDATE projects.project_members pm
             SET permission = c.permission::projects.project_permissions
             FROM (VALUES (?,?)) as c(id, permission)
             WHERE pm.id::uuid = c.id::uuid; |]
 
 softDeleteProjectMembers :: [UUID.UUID] -> DBT IO ()
 softDeleteProjectMembers vals = void $ executeMany q (map Only vals)
- where
-  q =
-    [sql| UPDATE projects.project_members  pm
+  where
+    q =
+      [sql| UPDATE projects.project_members  pm
             SET active = FALSE
             FROM (VALUES (?)) as c(id)
             WHERE pm.id::uuid = c.id::uuid; |]

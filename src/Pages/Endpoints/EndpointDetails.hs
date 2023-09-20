@@ -66,9 +66,9 @@ data ShapeWidthFields = ShapeWidthFields
 
 getShapeFields :: Shapes.Shape -> Vector Fields.Field -> ShapeWidthFields
 getShapeFields shape fields = ShapeWidthFields{status = shape.statusCode, hash = shape.hash, fieldsMap = fieldM}
- where
-  matchedFields = Vector.filter (\field -> field.hash `Vector.elem` shape.fieldHashes) fields
-  fieldM = Fields.groupFieldsByCategory matchedFields
+  where
+    matchedFields = Vector.filter (\field -> field.hash `Vector.elem` shape.fieldHashes) fields
+    fieldM = Fields.groupFieldsByCategory matchedFields
 
 subPageMenu :: [(Text, Text)]
 subPageMenu =

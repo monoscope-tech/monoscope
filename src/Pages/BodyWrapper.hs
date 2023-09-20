@@ -20,8 +20,8 @@ menu pid =
   , ("Changes & Bugs", "/p/" <> pid.toText <> "/anomalies?ackd=false&archived=false", "#anomalies")
   , ("API Log Explorer", "/p/" <> pid.toText <> "/log_explorer", "#logs")
   , ("API Keys", "/p/" <> pid.toText <> "/apis", "#api")
-  -- , ("Redacted Fields", "/p/" <> pid.toText <> "/redacted_fields", "#redacted")
-  , ("Documentation", "/p/" <> pid.toText <> "/documentation", "#documentation")
+  , -- , ("Redacted Fields", "/p/" <> pid.toText <> "/redacted_fields", "#redacted")
+    ("Documentation", "/p/" <> pid.toText <> "/documentation", "#documentation")
   , ("Reports", "/p/" <> pid.toText <> "/reports", "#reports")
   ]
 

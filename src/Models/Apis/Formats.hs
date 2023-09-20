@@ -61,30 +61,30 @@ makeFieldLabelsNoPrefix ''Format
 
 formatsByFieldHash :: Text -> DBT IO (Vector.Vector Format)
 formatsByFieldHash fhash = query Select q (Only fhash)
- where
-  q = [sql| SELECT id,created_at,updated_at,project_id, field_hash,field_type,field_format,examples::json[], hash from apis.formats where field_hash=? |]
+  where
+    q = [sql| SELECT id,created_at,updated_at,project_id, field_hash,field_type,field_format,examples::json[], hash from apis.formats where field_hash=? |]
 
 -- TODO: explore using postgres values to handle bulking loading multiple fields and formats into the same insert query.
 insertFormatQueryAndParams :: Format -> (Query, [DBField])
 insertFormatQueryAndParams format = (q, params)
- where
-  q =
-    [sql| 
+  where
+    q =
+      [sql| 
       insert into apis.formats (project_id, field_hash, field_type, field_format, examples, hash) VALUES (?,?,?,?,?,?)
         ON CONFLICT (project_id, field_hash, field_format)
         DO
           UPDATE SET 
             examples = ARRAY(SELECT DISTINCT e from unnest(apis.formats.examples || excluded.examples) as e order by e limit ?); 
       |]
-  params =
-    [ MkDBField $ format.projectId
-    , MkDBField $ format.fieldHash
-    , MkDBField $ format.fieldType
-    , MkDBField $ format.fieldFormat
-    , MkDBField $ format.examples
-    , MkDBField $ format.hash
-    , MkDBField (20 :: Int64) -- NOTE: max number of examples
-    ]
+    params =
+      [ MkDBField $ format.projectId
+      , MkDBField $ format.fieldHash
+      , MkDBField $ format.fieldType
+      , MkDBField $ format.fieldFormat
+      , MkDBField $ format.examples
+      , MkDBField $ format.hash
+      , MkDBField (20 :: Int64) -- NOTE: max number of examples
+      ]
 
 insertFormats :: [Format] -> DBT IO Int64
 insertFormats formats = do
@@ -124,9 +124,9 @@ data SwFormat = SwFormat
 
 formatsByFieldsHashes :: Projects.ProjectId -> Vector Text -> PgT.DBT IO (Vector SwFormat)
 formatsByFieldsHashes pid fieldHashes = query Select q (pid, fieldHashes)
- where
-  q =
-    [sql|
+  where
+    q =
+      [sql|
           SELECT field_hash sw_field_hash,field_type sw_field_type, field_format sw_field_format, examples::json[] sw_examples, hash sw_hash
           FROM apis.formats
           WHERE project_id = ? AND  field_hash = ANY(?)

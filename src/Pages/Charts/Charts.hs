@@ -34,10 +34,10 @@ import Witch (from)
 transform :: [String] -> [(Int, Int, String)] -> [Maybe Int]
 transform fields tuples =
   Just timestamp : map getValue fields
- where
-  getValue field = lookup field (map swap_ tuples)
-  swap_ (_, a, b) = (b, a)
-  timestamp = fst3 $ Unsafe.head tuples
+  where
+    getValue field = lookup field (map swap_ tuples)
+    swap_ (_, a, b) = (b, a)
+    timestamp = fst3 $ Unsafe.head tuples
 
 pivot' :: [(Int, Int, String)] -> ([String], [[Maybe Int]])
 pivot' rows = do
@@ -66,83 +66,83 @@ pivot' rows = do
 --
 buildReqDumpSQL :: [ChartExp] -> (Text, [DBField], Maybe ZonedTime, Maybe ZonedTime)
 buildReqDumpSQL exps = (q, join qByArgs, mFrom, mTo)
- where
-  (slots, groupByFields, gBy, queryBy, limit, q) = foldr go (120, "" :: Text, "" :: Text, [], 10000, qDefault) exps
-  go (SlotsE n) (_, gbF, gb, qb, l, qd) = (n, gbF, gb, qb, l, qd)
-  go (GByE GBEndpoint) (i, _, gb, qb, l, qd) = (i, ",method, url_path", ",method||' '||url_path as g", qb, l, qd)
-  go (GByE GBStatusCode) (i, _, gb, qb, l, qd) = (i, ",status_code", ",status_code::text as status_code", qb, l, qd)
-  go (GByE GBDurationPercentile)  (i, gbF, gb, qb, l, qd) =  (i, gbF, gb, qb, l, qForDurationPercentile)
-  go (QByE qb) (i, gbF, gb, qbOld, l, qd) = (i, gbF, gb, qb ++ qbOld, l, qd)
-  go (TypeE _) options = options
-  go (LimitE lm) (i, gbF, gb, qb, _, qd) = (i, gbF, gb, qb, lm, qd)
-  go _ acc = acc
+  where
+    (slots, groupByFields, gBy, queryBy, limit, q) = foldr go (120, "" :: Text, "" :: Text, [], 10000, qDefault) exps
+    go (SlotsE n) (_, gbF, gb, qb, l, qd) = (n, gbF, gb, qb, l, qd)
+    go (GByE GBEndpoint) (i, _, gb, qb, l, qd) = (i, ",method, url_path", ",method||' '||url_path as g", qb, l, qd)
+    go (GByE GBStatusCode) (i, _, gb, qb, l, qd) = (i, ",status_code", ",status_code::text as status_code", qb, l, qd)
+    go (GByE GBDurationPercentile) (i, gbF, gb, qb, l, qd) = (i, gbF, gb, qb, l, qForDurationPercentile)
+    go (QByE qb) (i, gbF, gb, qbOld, l, qd) = (i, gbF, gb, qb ++ qbOld, l, qd)
+    go (TypeE _) options = options
+    go (LimitE lm) (i, gbF, gb, qb, _, qd) = (i, gbF, gb, qb, lm, qd)
+    go _ acc = acc
 
-  (qByTxtList, qByArgs) = unzip $ runQueryBySql <$> queryBy
+    (qByTxtList, qByArgs) = unzip $ runQueryBySql <$> queryBy
 
-  qDefault =
-    T.concat
-      [ "SELECT extract(epoch from time_bucket('"
-      , show $ fromMaybe 3600 $ calculateIntervalFromQuery slots (mFrom, mTo) queryBy
-      , " seconds', created_at))::integer as timeB, "
-      , "COALESCE(COUNT(*), 0) total_count "
-      , toText gBy
-      , " FROM apis.request_dumps"
-      , if null qByTxtList then "" else " WHERE " <> T.intercalate " AND " qByTxtList
-      , " GROUP BY timeB "
-      , toText groupByFields
-      , " LIMIT " <> show limit
-      ]
+    qDefault =
+      T.concat
+        [ "SELECT extract(epoch from time_bucket('"
+        , show $ fromMaybe 3600 $ calculateIntervalFromQuery slots (mFrom, mTo) queryBy
+        , " seconds', created_at))::integer as timeB, "
+        , "COALESCE(COUNT(*), 0) total_count "
+        , toText gBy
+        , " FROM apis.request_dumps"
+        , if null qByTxtList then "" else " WHERE " <> T.intercalate " AND " qByTxtList
+        , " GROUP BY timeB "
+        , toText groupByFields
+        , " LIMIT " <> show limit
+        ]
 
-  qForDurationPercentile =
-    T.concat
-      [ "WITH Percentiles AS ( "
-      , "SELECT extract(epoch from time_bucket('"
-      , show $ fromMaybe 10080 $ calculateIntervalFromQuery slots (mFrom, mTo) queryBy
-      , " seconds', created_at))::integer as timeB, "
-      , "PERCENTILE_CONT(ARRAY[0.5, 0.75, 0.9]) WITHIN GROUP (ORDER BY duration_ns) as percentiles "
-      , "FROM apis.request_dumps "
-      , if null qByTxtList then "" else " WHERE " <> T.intercalate " AND " qByTxtList
-      , " GROUP BY timeB "
-      , ") SELECT timeB, "
-      , "(unnest(percentiles)/1000000)::integer as percentile_value, "
-      , "unnest(ARRAY['p50', 'p75', 'p90']) as percentile_type "
-      , "FROM Percentiles "
-      , "LIMIT " <> show limit
-      ]
+    qForDurationPercentile =
+      T.concat
+        [ "WITH Percentiles AS ( "
+        , "SELECT extract(epoch from time_bucket('"
+        , show $ fromMaybe 10080 $ calculateIntervalFromQuery slots (mFrom, mTo) queryBy
+        , " seconds', created_at))::integer as timeB, "
+        , "PERCENTILE_CONT(ARRAY[0.5, 0.75, 0.9]) WITHIN GROUP (ORDER BY duration_ns) as percentiles "
+        , "FROM apis.request_dumps "
+        , if null qByTxtList then "" else " WHERE " <> T.intercalate " AND " qByTxtList
+        , " GROUP BY timeB "
+        , ") SELECT timeB, "
+        , "(unnest(percentiles)/1000000)::integer as percentile_value, "
+        , "unnest(ARRAY['p50', 'p75', 'p90']) as percentile_type "
+        , "FROM Percentiles "
+        , "LIMIT " <> show limit
+        ]
 
-  -- >>> runQueryBy (QBEndpointHash "hash")
-  -- "endpoint_hash=hash"
-  runQueryBySql :: QueryBy -> (Text, [DBField])
-  runQueryBySql (QBPId t) = ("project_id=?", [MkDBField t])
-  runQueryBySql (QBEndpointHash t) = ("endpoint_hash=?", [MkDBField t])
-  runQueryBySql (QBShapeHash t) = ("shape_hash=?", [MkDBField t])
-  runQueryBySql (QBFormatHash t) = ("?=ANY(format_hashes)", [MkDBField t])
-  runQueryBySql (QBStatusCodeGT t) = ("status_code>?", [MkDBField t])
-  runQueryBySql (QBFrom t) = ("created_at>=?", [MkDBField t])
-  runQueryBySql (QBTo t) = ("created_at<?", [MkDBField t])
-  runQueryBySql (QBAnd a b) =
-    let (txt1, arg1) = runQueryBySql a
-        (txt2, arg2) = runQueryBySql b
-     in (" ( " <> txt1 <> " AND " <> txt2 <> " ) ", arg1 ++ arg2)
+    -- >>> runQueryBy (QBEndpointHash "hash")
+    -- "endpoint_hash=hash"
+    runQueryBySql :: QueryBy -> (Text, [DBField])
+    runQueryBySql (QBPId t) = ("project_id=?", [MkDBField t])
+    runQueryBySql (QBEndpointHash t) = ("endpoint_hash=?", [MkDBField t])
+    runQueryBySql (QBShapeHash t) = ("shape_hash=?", [MkDBField t])
+    runQueryBySql (QBFormatHash t) = ("?=ANY(format_hashes)", [MkDBField t])
+    runQueryBySql (QBStatusCodeGT t) = ("status_code>?", [MkDBField t])
+    runQueryBySql (QBFrom t) = ("created_at>=?", [MkDBField t])
+    runQueryBySql (QBTo t) = ("created_at<?", [MkDBField t])
+    runQueryBySql (QBAnd a b) =
+      let (txt1, arg1) = runQueryBySql a
+          (txt2, arg2) = runQueryBySql b
+       in (" ( " <> txt1 <> " AND " <> txt2 <> " ) ", arg1 ++ arg2)
 
-  dateRangeFromQueryBy :: [QueryBy] -> (Maybe ZonedTime, Maybe ZonedTime)
-  dateRangeFromQueryBy queryList = foldl' goDateRange (Nothing, Nothing) queryList
-   where
-    goDateRange :: (Maybe ZonedTime, Maybe ZonedTime) -> QueryBy -> (Maybe ZonedTime, Maybe ZonedTime)
-    goDateRange acc@(Just _from, Just _to) _ = acc -- Both from and to found, no need to continue
-    goDateRange acc@(mFrom, mTo) (QBAnd a b) = acc -- TODO: support checking QBAnd for date range foldl' goDateRange (mFrom, mTo) [a, b]
-    goDateRange (mFrom, mTo) (QBFrom from_) = (Just from_, mTo)
-    goDateRange (mFrom, mTo) (QBTo to_) = (mFrom, Just to_)
-    goDateRange acc _ = acc -- Ignore all other constructors
-  calcInterval numSlotsE' fromE' toE' = floor (diffUTCTime (zonedTimeToUTC toE') (zonedTimeToUTC fromE')) `div` numSlotsE'
+    dateRangeFromQueryBy :: [QueryBy] -> (Maybe ZonedTime, Maybe ZonedTime)
+    dateRangeFromQueryBy queryList = foldl' goDateRange (Nothing, Nothing) queryList
+      where
+        goDateRange :: (Maybe ZonedTime, Maybe ZonedTime) -> QueryBy -> (Maybe ZonedTime, Maybe ZonedTime)
+        goDateRange acc@(Just _from, Just _to) _ = acc -- Both from and to found, no need to continue
+        goDateRange acc@(mFrom, mTo) (QBAnd a b) = acc -- TODO: support checking QBAnd for date range foldl' goDateRange (mFrom, mTo) [a, b]
+        goDateRange (mFrom, mTo) (QBFrom from_) = (Just from_, mTo)
+        goDateRange (mFrom, mTo) (QBTo to_) = (mFrom, Just to_)
+        goDateRange acc _ = acc -- Ignore all other constructors
+    calcInterval numSlotsE' fromE' toE' = floor (diffUTCTime (zonedTimeToUTC toE') (zonedTimeToUTC fromE')) `div` numSlotsE'
 
-  (mFrom, mTo) = dateRangeFromQueryBy queryBy
+    (mFrom, mTo) = dateRangeFromQueryBy queryBy
 
-  calculateIntervalFromQuery :: Int -> (Maybe ZonedTime, Maybe ZonedTime) -> [QueryBy] -> Maybe Int
-  calculateIntervalFromQuery numSlots (mFrom', mTo') queryList = do
-    to_ <- mTo'
-    from_ <- mFrom'
-    return $ calcInterval numSlots from_ to_
+    calculateIntervalFromQuery :: Int -> (Maybe ZonedTime, Maybe ZonedTime) -> [QueryBy] -> Maybe Int
+    calculateIntervalFromQuery numSlots (mFrom', mTo') queryList = do
+      to_ <- mTo'
+      from_ <- mFrom'
+      return $ calcInterval numSlots from_ to_
 
 type M = Maybe
 
@@ -181,8 +181,8 @@ chartsGetH _ typeM groupByM queryByM slotsM limitsM themeM idM showLegendM = do
   let toDStr = maybe "" formatZonedTimeAsUTC toM
 
   let cType = case fromMaybe BarCT typeM of
-            BarCT -> "bar"
-            LineCT -> "line"
+        BarCT -> "bar"
+        LineCT -> "line"
 
   let scriptContent = [text| throughputEChartTable("$idAttr",$headersJSON, $groupedDataJSON, ["Endpoint"], $showLegend, "$chartThemeTxt", "$fromDStr", "$toDStr", "$cType") |]
 
@@ -255,19 +255,19 @@ lazy queries =
     , class_ "w-full h-full"
     ]
     ""
- where
-  qParams :: Text
-  qParams = toText $ escapeURIString isUnescapedInURI $ intercalate "&" $ map runChartExp queries
+  where
+    qParams :: Text
+    qParams = toText $ escapeURIString isUnescapedInURI $ intercalate "&" $ map runChartExp queries
 
-  runChartExp :: ChartExp -> String
-  runChartExp (TypeE ct) = "chart_type=" <> show ct
-  runChartExp (GByE gb) = "group_by=" <> show gb
-  runChartExp (QByE qb) = "query_by=" <> show qb
-  runChartExp (SlotsE limit) = "num_slots=" <> show limit
-  runChartExp (LimitE limit) = "limit=" <> show limit
-  runChartExp (Theme theme) = toString $ "theme=" <> theme
-  runChartExp (IdE ide) = "id=" <> toString ide
-  runChartExp ShowLegendE = "show_legend=true"
+    runChartExp :: ChartExp -> String
+    runChartExp (TypeE ct) = "chart_type=" <> show ct
+    runChartExp (GByE gb) = "group_by=" <> show gb
+    runChartExp (QByE qb) = "query_by=" <> show qb
+    runChartExp (SlotsE limit) = "num_slots=" <> show limit
+    runChartExp (LimitE limit) = "limit=" <> show limit
+    runChartExp (Theme theme) = toString $ "theme=" <> theme
+    runChartExp (IdE ide) = "id=" <> toString ide
+    runChartExp ShowLegendE = "show_legend=true"
 
 ---------------------------- OLD functions
 --

@@ -1,5 +1,6 @@
 module Models.Apis.Fields.Query (fieldById, selectFields, insertFieldQueryAndParams, fieldsByEndpointHashes, insertFields, updateFieldByHash, deleteFieldByHash) where
 
+import Data.Time (ZonedTime)
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity (selectById)
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query)
@@ -7,31 +8,30 @@ import Database.PostgreSQL.Simple (Only (Only), Query)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact (DBT, executeMany)
 import Database.PostgreSQL.Transact qualified as PgT
-import Models.Projects.Projects qualified as Projects
-import Data.Time (ZonedTime)
 import Models.Apis.Fields.Types (Field, FieldCategoryEnum, FieldId, FieldTypes, SwField)
 import Models.Apis.Fields.Types qualified as FT
+import Models.Projects.Projects qualified as Projects
 import Optics.Core ((^.))
 import Relude
 import Utils (DBField (MkDBField))
 
 insertFieldQueryAndParams :: Field -> (Query, [DBField])
 insertFieldQueryAndParams field = (q, params)
- where
-  q =
-    [sql| insert into apis.fields (project_id, endpoint_hash, key, field_type, format, description, key_path, field_category, hash) 
+  where
+    q =
+      [sql| insert into apis.fields (project_id, endpoint_hash, key, field_type, format, description, key_path, field_category, hash) 
                     VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING; |]
-  params =
-    [ MkDBField $ field ^. #projectId
-    , MkDBField $ field ^. #endpointHash
-    , MkDBField $ field ^. #key
-    , MkDBField $ field ^. #fieldType
-    , MkDBField $ field ^. #format
-    , MkDBField $ field ^. #description
-    , MkDBField $ field ^. #keyPath
-    , MkDBField $ field ^. #fieldCategory
-    , MkDBField $ field ^. #hash
-    ]
+    params =
+      [ MkDBField $ field ^. #projectId
+      , MkDBField $ field ^. #endpointHash
+      , MkDBField $ field ^. #key
+      , MkDBField $ field ^. #fieldType
+      , MkDBField $ field ^. #format
+      , MkDBField $ field ^. #description
+      , MkDBField $ field ^. #keyPath
+      , MkDBField $ field ^. #fieldCategory
+      , MkDBField $ field ^. #hash
+      ]
 
 insertFields :: [Field] -> DBT IO Int64
 insertFields fields = do
@@ -66,9 +66,9 @@ fieldById fid = selectById @Field (Only fid)
 
 selectFields :: Text -> DBT IO (Vector Field)
 selectFields endpointHash = query Select q (Only endpointHash)
- where
-  q =
-    [sql| select id,created_at,updated_at,project_id,endpoint_hash,key,field_type,
+  where
+    q =
+      [sql| select id,created_at,updated_at,project_id,endpoint_hash,key,field_type,
                 field_type_override,format,format_override,description,key_path,field_category, hash
                 from apis.fields where endpoint_hash=? order by field_category, key |]
 
@@ -86,9 +86,9 @@ deleteFieldByHash fieldHash dTime = do
 
 fieldsByEndpointHashes :: Projects.ProjectId -> Vector Text -> PgT.DBT IO (Vector SwField)
 fieldsByEndpointHashes pid hashes = query Select q (pid, hashes)
- where
-  q =
-    [sql|
+  where
+    q =
+      [sql|
       SELECT  endpoint_hash f_endpoint_hash, key f_key, field_type f_field_type, format f_format,
              description f_description, key_path f_key_path, field_category f_field_category, hash f_hash
       FROM apis.fields

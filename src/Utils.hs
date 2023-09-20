@@ -33,7 +33,6 @@ data DBField = forall a. (ToField a, Show a) => MkDBField a
 instance Show DBField where
   show (MkDBField a) = "MkDBField " ++ show a
 
-
 instance ToField DBField where
   toField (MkDBField a) = toField a
 
@@ -46,9 +45,9 @@ mIcon_ mIcon classes = svg_ [class_ $ "inline-block icon " <> classes] $ use_ [h
 
 deleteParam :: Text -> Text -> Text
 deleteParam key url = if needle == "" then url else replace needle "" url
- where
-  needle = url =~ reg :: Text
-  reg = "&" <> key <> "(=[^&]*)?|^" <> key <> "(=[^&]*)?&?" :: Text
+  where
+    needle = url =~ reg :: Text
+    reg = "&" <> key <> "(=[^&]*)?|^" <> key <> "(=[^&]*)?&?" :: Text
 
 quoteTxt :: Text -> Text
 quoteTxt a = "'" <> a <> "'"

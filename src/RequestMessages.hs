@@ -102,15 +102,15 @@ makeFieldLabelsNoPrefix ''RequestMessage
 -- Object (fromList [("menu",Array [Object (fromList [("id",String "[REDACTED]"),("names",Array [String "[REDACTED]",String "[REDACTED]"])]),Object (fromList [("id",String "[REDACTED]")])])])
 redactJSON :: [Text] -> Value -> Value
 redactJSON paths' = redactJSON' (stripPrefixDot paths')
- where
-  redactJSON' paths (AET.String value) = if "" `elem` paths then AET.String "[REDACTED]" else AET.String value
-  redactJSON' paths (AET.Number value) = if "" `elem` paths then AET.String "[REDACTED]" else AET.Number value
-  redactJSON' paths AET.Null = AET.Null
-  redactJSON' paths (AET.Bool value) = AET.Bool value
-  redactJSON' paths (AET.Object objMap) = AET.Object $ AEK.fromHashMapText $ HM.mapWithKey (\k v -> redactJSON' (mapMaybe (\path -> T.stripPrefix (k <> ".") path <|> T.stripPrefix k path) paths) v) (AEK.toHashMapText objMap)
-  redactJSON' paths (AET.Array jsonList) = AET.Array $ Vector.map (redactJSON' (mapMaybe (\path -> T.stripPrefix "[]." path <|> T.stripPrefix "[]" path) paths)) jsonList
+  where
+    redactJSON' paths (AET.String value) = if "" `elem` paths then AET.String "[REDACTED]" else AET.String value
+    redactJSON' paths (AET.Number value) = if "" `elem` paths then AET.String "[REDACTED]" else AET.Number value
+    redactJSON' paths AET.Null = AET.Null
+    redactJSON' paths (AET.Bool value) = AET.Bool value
+    redactJSON' paths (AET.Object objMap) = AET.Object $ AEK.fromHashMapText $ HM.mapWithKey (\k v -> redactJSON' (mapMaybe (\path -> T.stripPrefix (k <> ".") path <|> T.stripPrefix k path) paths) v) (AEK.toHashMapText objMap)
+    redactJSON' paths (AET.Array jsonList) = AET.Array $ Vector.map (redactJSON' (mapMaybe (\path -> T.stripPrefix "[]." path <|> T.stripPrefix "[]" path) paths)) jsonList
 
-  stripPrefixDot = map (\p -> fromMaybe p (T.stripPrefix "." p))
+    stripPrefixDot = map (\p -> fromMaybe p (T.stripPrefix "." p))
 
 -- requestMsgToDumpAndEndpoint is a very improtant function designed to be run as a pure function
 -- which takes in a request and processes it returning an sql query and it's params which can be executed.
@@ -304,22 +304,22 @@ buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash =
 -- FIXME: value To Fields should use the redact fields list to actually redact fields
 valueToFields :: AE.Value -> [(Text, [AE.Value])]
 valueToFields value = dedupFields $ removeBlacklistedFields $ snd $ valueToFields' value ("", [])
- where
-  valueToFields' :: AE.Value -> (Text, [(Text, AE.Value)]) -> (Text, [(Text, AE.Value)])
-  valueToFields' (AE.Object v) akk =
-    AEK.toHashMapText v
-      & HM.toList
-      & foldl'
-        ( \(akkT, akkL) (k, val) -> (akkT, snd $ valueToFields' val (akkT <> "." <> normalizeKey k, akkL))
-        )
-        akk
-  valueToFields' (AE.Array v) akk = foldl' (\(akkT, akkL) val -> (akkT, snd $ valueToFields' val (akkT <> "[*]", akkL))) akk v
-  valueToFields' v (akk, l) = (akk, (akk, v) : l)
+  where
+    valueToFields' :: AE.Value -> (Text, [(Text, AE.Value)]) -> (Text, [(Text, AE.Value)])
+    valueToFields' (AE.Object v) akk =
+      AEK.toHashMapText v
+        & HM.toList
+        & foldl'
+          ( \(akkT, akkL) (k, val) -> (akkT, snd $ valueToFields' val (akkT <> "." <> normalizeKey k, akkL))
+          )
+          akk
+    valueToFields' (AE.Array v) akk = foldl' (\(akkT, akkL) val -> (akkT, snd $ valueToFields' val (akkT <> "[*]", akkL))) akk v
+    valueToFields' v (akk, l) = (akk, (akk, v) : l)
 
-  normalizeKey :: Text -> Text
-  normalizeKey key = case valueToFormatStr key of
-    Just result -> "{" <> result <> "}"
-    Nothing -> key
+    normalizeKey :: Text -> Text
+    normalizeKey key = case valueToFormatStr key of
+      Just result -> "{" <> result <> "}"
+      Nothing -> key
 
 -- debupFields would merge all fields in the list of tuples by the first item in the tupple.
 --
@@ -431,26 +431,26 @@ fieldsToFieldDTO fieldCategory projectID endpointHash (keyPath, val) =
       , hash = formatHash
       }
   )
- where
-  aeValueToFieldType :: AE.Value -> Fields.FieldTypes
-  aeValueToFieldType (AET.String _) = Fields.FTString
-  aeValueToFieldType (AET.Number _) = Fields.FTNumber
-  aeValueToFieldType AET.Null = Fields.FTNull
-  aeValueToFieldType (AET.Bool _) = Fields.FTBool
-  aeValueToFieldType (AET.Object _) = Fields.FTObject
-  aeValueToFieldType (AET.Array _) = Fields.FTList
+  where
+    aeValueToFieldType :: AE.Value -> Fields.FieldTypes
+    aeValueToFieldType (AET.String _) = Fields.FTString
+    aeValueToFieldType (AET.Number _) = Fields.FTNumber
+    aeValueToFieldType AET.Null = Fields.FTNull
+    aeValueToFieldType (AET.Bool _) = Fields.FTBool
+    aeValueToFieldType (AET.Object _) = Fields.FTObject
+    aeValueToFieldType (AET.Array _) = Fields.FTList
 
-  fieldType :: Fields.FieldTypes
-  fieldType = fromMaybe Fields.FTUnknown $ viaNonEmpty head $ aeValueToFieldType <$> val
+    fieldType :: Fields.FieldTypes
+    fieldType = fromMaybe Fields.FTUnknown $ viaNonEmpty head $ aeValueToFieldType <$> val
 
-  -- FIXME: We should rethink this value to format logic.
-  -- FIXME: Maybe it actually needs machine learning,
-  -- FIXME: or maybe it should operate on the entire list, and not just one value.
-  format = fromMaybe "" $ viaNonEmpty head $ valueToFormat <$> val
+    -- FIXME: We should rethink this value to format logic.
+    -- FIXME: Maybe it actually needs machine learning,
+    -- FIXME: or maybe it should operate on the entire list, and not just one value.
+    format = fromMaybe "" $ viaNonEmpty head $ valueToFormat <$> val
 
-  -- field hash is <hash of the endpoint> + <the hash of <field_category><key_path_str><field_type>> (No space or comma between data)
-  preFieldHash = Fields.fieldCategoryEnumToText fieldCategory <> keyPath <> Fields.fieldTypeToText fieldType
-  fieldHash' = from @String @Text $ showHex (xxHash $ encodeUtf8 preFieldHash) ""
-  fieldHash = endpointHash <> fieldHash'
-  formatHash' = from @String @Text $ showHex (xxHash $ encodeUtf8 format) ""
-  formatHash = fieldHash <> formatHash'
+    -- field hash is <hash of the endpoint> + <the hash of <field_category><key_path_str><field_type>> (No space or comma between data)
+    preFieldHash = Fields.fieldCategoryEnumToText fieldCategory <> keyPath <> Fields.fieldTypeToText fieldType
+    fieldHash' = from @String @Text $ showHex (xxHash $ encodeUtf8 preFieldHash) ""
+    fieldHash = endpointHash <> fieldHash'
+    formatHash' = from @String @Text $ showHex (xxHash $ encodeUtf8 format) ""
+    formatHash = fieldHash <> formatHash'

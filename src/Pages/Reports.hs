@@ -318,50 +318,50 @@ buildPerformanceJSON pr = Aeson.object ["endpoints" .= pr]
 
 buildAnomalyJSON :: Vector Anomalies.AnomalyVM -> Int -> Aeson.Value
 buildAnomalyJSON anomalies total = Aeson.object ["anomalies" .= V.map buildjson anomalies, "anomaliesCount" .= total]
- where
-  -- endMap = createEndpointMap (V.toList anomalies) Map.empty
-  -- filteredAnom = V.filter (filterFunc endMap) anomalies
+  where
+    -- endMap = createEndpointMap (V.toList anomalies) Map.empty
+    -- filteredAnom = V.filter (filterFunc endMap) anomalies
 
-  -- filterFunc :: Map Text Bool -> Anomalies.AnomalyVM -> Bool
-  -- filterFunc mp a = case a.anomalyType of
-  --   Anomalies.ATEndpoint -> True
-  --   _ ->
-  --     let ep_url = fromMaybe "" a.endpointUrlPath
-  --         method = fromMaybe "" a.endpointMethod
-  --         endpoint = method <> ep_url
-  --      in fromMaybe False (Map.lookup endpoint mp)
+    -- filterFunc :: Map Text Bool -> Anomalies.AnomalyVM -> Bool
+    -- filterFunc mp a = case a.anomalyType of
+    --   Anomalies.ATEndpoint -> True
+    --   _ ->
+    --     let ep_url = fromMaybe "" a.endpointUrlPath
+    --         method = fromMaybe "" a.endpointMethod
+    --         endpoint = method <> ep_url
+    --      in fromMaybe False (Map.lookup endpoint mp)
 
-  buildjson :: Anomalies.AnomalyVM -> Aeson.Value
-  buildjson an = case an.anomalyType of
-    Anomalies.ATEndpoint ->
-      Aeson.object
-        [ "endpointUrlPath" .= an.endpointUrlPath
-        , "endpointMethod" .= an.endpointMethod
-        , "tag" .= Anomalies.ATEndpoint
-        , "eventsCount" .= an.eventsCount14d
-        ]
-    Anomalies.ATShape ->
-      Aeson.object
-        [ "endpointUrlPath" .= an.endpointUrlPath
-        , "endpointMethod" .= an.endpointMethod
-        , "targetHash" .= an.targetHash
-        , "tag" .= Anomalies.ATShape
-        , "newUniqueFields" .= an.shapeNewUniqueFields
-        , "updatedFieldFormats" .= an.shapeUpdatedFieldFormats
-        , "deletedFields" .= an.shapeDeletedFields
-        , "eventsCount" .= an.eventsCount14d
-        ]
-    Anomalies.ATFormat ->
-      Aeson.object
-        [ "endpointUrlPath" .= an.endpointUrlPath
-        , "endpointMethod" .= an.endpointMethod
-        , "keyPath" .= an.fieldKeyPath
-        , "tag" .= Anomalies.ATFormat
-        , "formatType" .= an.formatType
-        , "formatExamples" .= an.formatExamples
-        , "eventsCount" .= an.eventsCount14d
-        ]
-    _ -> Aeson.object ["anomaly_type" .= String "unknown"]
+    buildjson :: Anomalies.AnomalyVM -> Aeson.Value
+    buildjson an = case an.anomalyType of
+      Anomalies.ATEndpoint ->
+        Aeson.object
+          [ "endpointUrlPath" .= an.endpointUrlPath
+          , "endpointMethod" .= an.endpointMethod
+          , "tag" .= Anomalies.ATEndpoint
+          , "eventsCount" .= an.eventsCount14d
+          ]
+      Anomalies.ATShape ->
+        Aeson.object
+          [ "endpointUrlPath" .= an.endpointUrlPath
+          , "endpointMethod" .= an.endpointMethod
+          , "targetHash" .= an.targetHash
+          , "tag" .= Anomalies.ATShape
+          , "newUniqueFields" .= an.shapeNewUniqueFields
+          , "updatedFieldFormats" .= an.shapeUpdatedFieldFormats
+          , "deletedFields" .= an.shapeDeletedFields
+          , "eventsCount" .= an.eventsCount14d
+          ]
+      Anomalies.ATFormat ->
+        Aeson.object
+          [ "endpointUrlPath" .= an.endpointUrlPath
+          , "endpointMethod" .= an.endpointMethod
+          , "keyPath" .= an.fieldKeyPath
+          , "tag" .= Anomalies.ATFormat
+          , "formatType" .= an.formatType
+          , "formatExamples" .= an.formatExamples
+          , "eventsCount" .= an.eventsCount14d
+          ]
+      _ -> Aeson.object ["anomaly_type" .= String "unknown"]
 
 getPerformanceInsight :: V.Vector RequestDumps.RequestForReport -> V.Vector RequestDumps.EndpointPerf -> V.Vector PerformanceReport
 getPerformanceInsight req_dumps previous_p =

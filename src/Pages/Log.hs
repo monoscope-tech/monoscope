@@ -208,36 +208,36 @@ apiLogItemView req =
 -- | jsonValueToHtmlTree takes an aeson json object and renders it as a collapsible html tree, with hyperscript for interactivity.
 jsonValueToHtmlTree :: AE.Value -> Html ()
 jsonValueToHtmlTree val = jsonValueToHtmlTree' ("", "", val)
- where
-  jsonValueToHtmlTree' :: (Text, Text, AE.Value) -> Html ()
-  jsonValueToHtmlTree' (path, key, AE.Object v) = renderParentType "{" "}" key (length v) (AEK.toHashMapText v & HM.toList & sort & mapM_ (\(kk, vv) -> jsonValueToHtmlTree' (path <> "." <> key, kk, vv)))
-  jsonValueToHtmlTree' (path, key, AE.Array v) = renderParentType "[" "]" key (length v) (iforM_ v \i item -> jsonValueToHtmlTree' (path <> "." <> key <> "." <> "[]", show i, item))
-  jsonValueToHtmlTree' (path, key, value) = do
-    let fullFieldPath = if T.isSuffixOf ".[]" path then path else path <> "." <> key
-    let fullFieldPath' = fromMaybe fullFieldPath $ T.stripPrefix ".." fullFieldPath
-    div_
-      [ class_ "relative log-item-field-parent"
-      , term "data-field-path" fullFieldPath'
-      ]
-      $ a_ [class_ "block hover:bg-blue-50 cursor-pointer pl-6 relative log-item-field-anchor ", [__|install LogItemMenuable|]]
-      $ do
-        span_ $ toHtml key
-        span_ [class_ "text-blue-800"] ":"
-        span_ [class_ "text-blue-800 ml-2.5 log-item-field-value", term "data-field-path" fullFieldPath'] $ toHtml $ unwrapJsonPrimValue value
+  where
+    jsonValueToHtmlTree' :: (Text, Text, AE.Value) -> Html ()
+    jsonValueToHtmlTree' (path, key, AE.Object v) = renderParentType "{" "}" key (length v) (AEK.toHashMapText v & HM.toList & sort & mapM_ (\(kk, vv) -> jsonValueToHtmlTree' (path <> "." <> key, kk, vv)))
+    jsonValueToHtmlTree' (path, key, AE.Array v) = renderParentType "[" "]" key (length v) (iforM_ v \i item -> jsonValueToHtmlTree' (path <> "." <> key <> "." <> "[]", show i, item))
+    jsonValueToHtmlTree' (path, key, value) = do
+      let fullFieldPath = if T.isSuffixOf ".[]" path then path else path <> "." <> key
+      let fullFieldPath' = fromMaybe fullFieldPath $ T.stripPrefix ".." fullFieldPath
+      div_
+        [ class_ "relative log-item-field-parent"
+        , term "data-field-path" fullFieldPath'
+        ]
+        $ a_ [class_ "block hover:bg-blue-50 cursor-pointer pl-6 relative log-item-field-anchor ", [__|install LogItemMenuable|]]
+        $ do
+          span_ $ toHtml key
+          span_ [class_ "text-blue-800"] ":"
+          span_ [class_ "text-blue-800 ml-2.5 log-item-field-value", term "data-field-path" fullFieldPath'] $ toHtml $ unwrapJsonPrimValue value
 
-  renderParentType :: Text -> Text -> Text -> Int -> Html () -> Html ()
-  renderParentType opening closing key count child = div_ [class_ (if key == "" then "" else "collapsed")] $ do
-    a_
-      [ class_ "inline-block cursor-pointer"
-      , [__|on click toggle .collapsed on the closest parent <div/>|]
-      ]
-      $ do
-        span_ [class_ "log-item-tree-chevron "] "▾"
-        span_ [] $ toHtml $ if key == "" then opening else key <> ": " <> opening
-    div_ [class_ "pl-5 children "] $ do
-      span_ [class_ "tree-children-count"] $ show count
-      div_ [class_ "tree-children"] child
-    span_ [class_ "pl-5 closing-token"] $ toHtml closing
+    renderParentType :: Text -> Text -> Text -> Int -> Html () -> Html ()
+    renderParentType opening closing key count child = div_ [class_ (if key == "" then "" else "collapsed")] $ do
+      a_
+        [ class_ "inline-block cursor-pointer"
+        , [__|on click toggle .collapsed on the closest parent <div/>|]
+        ]
+        $ do
+          span_ [class_ "log-item-tree-chevron "] "▾"
+          span_ [] $ toHtml $ if key == "" then opening else key <> ": " <> opening
+      div_ [class_ "pl-5 children "] $ do
+        span_ [class_ "tree-children-count"] $ show count
+        div_ [class_ "tree-children"] child
+      span_ [class_ "pl-5 closing-token"] $ toHtml closing
 
 -- >>> findValueByKeyInJSON ["key1", "key2"] [aesonQQ|{"kx":0, "key1":{"key2":"k2val"}}|]
 -- ["\"k2val\""]

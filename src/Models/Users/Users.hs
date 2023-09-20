@@ -103,23 +103,22 @@ insertUser = insert @User
 userByEmail :: Text -> PgT.DBT IO (Maybe User)
 userByEmail email = selectOneByField @User [field| email |] (Only email)
 
-
 userIdByEmail :: Text -> PgT.DBT IO (Maybe UserId)
 userIdByEmail email = queryOne Select q (Only email)
- where
-  q = [sql|select id from users.users where email=?|]
+  where
+    q = [sql|select id from users.users where email=?|]
 
 createEmptyUser :: Text -> PgT.DBT IO (Maybe UserId)
 createEmptyUser email = queryOne Insert q (Only email)
- where
-  q = [sql| insert into users.users (email, active) values (?, TRUE) on conflict do nothing returning id |]
+  where
+    q = [sql| insert into users.users (email, active) values (?, TRUE) on conflict do nothing returning id |]
 
 -- addUserToAllProjects is a hack for development to add the user to all projects
 addUserToAllProjects :: Text -> PgT.DBT IO Int64
 addUserToAllProjects email = execute Insert q values
- where
-  q =
-    [sql| insert into projects.project_members (active, project_id, permission, user_id)
+  where
+    q =
+      [sql| insert into projects.project_members (active, project_id, permission, user_id)
             select true::Boolean, id, 'admin'::projects.project_permissions, (select id from users.users where email=?) from projects.projects
             on conflict do nothing; |]
-  values = Only email
+    values = Only email
