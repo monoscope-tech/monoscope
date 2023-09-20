@@ -134,6 +134,6 @@ softDeleteProjectMembers vals = void $ executeMany q (map Only vals)
   where
     q =
       [sql| UPDATE projects.project_members  pm
-            SET active = FALSE
+            SET pm.active = FALSE
             FROM (VALUES (?)) as c(id)
             WHERE pm.id::uuid = c.id::uuid; |]
