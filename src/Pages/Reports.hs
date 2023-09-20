@@ -149,12 +149,12 @@ reportsGetH sess pid page hxRequest hxBoosted = do
 
 singleReportPage :: Projects.ProjectId -> Maybe Reports.Report -> Html ()
 singleReportPage pid report =
-  div_ [class_ "container mx-auto w-full flex flex-col px-4 pt-10 pb-24"] $ do
+  div_ [class_ "mx-auto w-full flex flex-col px-16 pt-10 pb-24"] $ do
     h3_ [class_ "text-xl text-slate-700 flex place-items-center font-bold pb-4 border-b"] "Anomaly and Performance Report"
     case report of
       Just report' -> do
         div_ [class_ "mt-4 space-y-4"] do
-          div_ [class_ "mx-auto rounded-lg border max-w-[800px]"] $ do
+          div_ [class_ "mx-auto rounded-lg border max-w-[1000px]"] $ do
             div_ [class_ "bg-gray-100 px-4 py-3 flex justify-between"] $ do
               h4_ [class_ "text-xl font-medium capitalize"] $ toHtml report'.reportType <> " report"
               span_ [] $ show $ localDay (zonedTimeToLocalTime report'.createdAt)
@@ -236,7 +236,7 @@ shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "inline-block"] do
 
 reportsPage :: Projects.ProjectId -> Vector Reports.ReportListItem -> Text -> Bool -> Bool -> Html ()
 reportsPage pid reports nextUrl daily weekly =
-  div_ [class_ "container mx-auto w-full flex flex-col px-4 pt-10 pb-24"] $ do
+  div_ [class_ "mx-auto w-full flex flex-col px-16 pt-10 pb-24"] $ do
     h3_ [class_ "text-xl text-slate-700 flex place-items-center font-bold pb-4 border-b"] "Reports History"
     div_ [class_ "mt-4 grid grid-cols-12 gap-4"] do
       div_ [class_ "flex flex-col col-span-2 mt-16"] do
@@ -270,7 +270,7 @@ reportListItems :: Projects.ProjectId -> Vector Reports.ReportListItem -> Text -
 reportListItems pid reports nextUrl =
   div_ [class_ "space-y-4"] do
     forM_ reports $ \report -> do
-      div_ [class_ "mx-auto rounded-lg border max-w-[800px]"] $ do
+      div_ [class_ "mx-auto rounded-lg border max-w-[1000px]"] $ do
         a_ [class_ "bg-gray-100 px-4 py-3 flex justify-between", href_ $ "/p/" <> show pid.unProjectId <> "/reports/" <> show report.id.reportId] $ do
           h4_ [class_ "text-xl font-medium capitalize"] $ toHtml report.reportType <> " report"
           span_ [] $ show $ localDay (zonedTimeToLocalTime report.createdAt)

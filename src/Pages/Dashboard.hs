@@ -112,7 +112,7 @@ dashboardGetH sess pid fromDStr toDStr sinceStr' = do
 dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 dashboardPage pid paramInput currTime projectStats reqLatenciesRolledByStepsJ dateRange = do
   let currentURL' = deleteParam "to" $ deleteParam "from" $ deleteParam "since" paramInput.currentURL
-  section_ [class_ "p-8 container mx-auto px-4 space-y-12 pb-24"] $ do
+  section_ [class_ "p-8  mx-auto px-16 w-full space-y-12 pb-24"] $ do
     div_ [class_ "relative p-1 "] do
       div_ [class_ "relative"] do
         a_

@@ -6,7 +6,7 @@
 module Models.Apis.RequestDumps (
   RequestDump (..),
   SDKTypes (..),
-  RequestDumpLogItem,
+  RequestDumpLogItem (..),
   EndpointPerf (..),
   RequestForReport (..),
   ATError (..),

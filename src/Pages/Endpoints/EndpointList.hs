@@ -67,7 +67,7 @@ endpointListGetH sess pid layoutM ackdM archivedM sortM hxRequestM hxBoostedM hx
   pure $ bodyWrapper bwconf $ endpointListPage paramInput pid currTime endpointStats
 
 endpointListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Endpoints.EndpointRequestStats -> Html ()
-endpointListPage paramInput pid currTime endpoints = div_ [class_ "container mx-auto  px-4 pt-10 pb-24"] $ do
+endpointListPage paramInput pid currTime endpoints = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24"] $ do
   h3_ [class_ "text-xl text-slate-700 flex place-items-center"] "Endpoints"
   div_ [class_ "py-2 px-2 space-x-6 border-b border-slate-20 mt-6 mb-8 text-sm font-light", hxBoost_ "true"] do
     let uri = deleteParam "archived" $ deleteParam "ackd" paramInput.currentURL
@@ -84,8 +84,8 @@ endpointList' paramInput currTime pid enps = form_ [class_ "col-span-5 bg-white 
         [ ("First Seen", "First time the issue occured", "first_seen")
         , ("Last Seen", "Last time the issue occured", "last_seen")
         , ("Events", "Number of events", "events")
-        ] ::
-          [(Text, Text, Text)]
+        ]
+          :: [(Text, Text, Text)]
   let currentSortTitle = maybe "First Seen" fst3 $ find (\(_, _, identifier) -> identifier == paramInput.sort) sortMenu
   div_ [class_ "flex py-3 gap-8 items-center  bg-gray-50"] do
     div_ [class_ "h-4 flex space-x-3 w-8"] do

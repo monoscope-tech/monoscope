@@ -135,7 +135,7 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM endpointM hxRequestM hxBo
     _ -> pure $ bodyWrapper bwconf $ anomalyListPage paramInput pid currTime anomalies
 
 anomalyListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Anomalies.AnomalyVM -> Html ()
-anomalyListPage paramInput pid currTime anomalies = div_ [class_ "container mx-auto  px-4 pt-10 pb-24"] $ do
+anomalyListPage paramInput pid currTime anomalies = div_ [class_ "w-full mx-auto  px-16 pt-10 pb-24"] $ do
   h3_ [class_ "text-xl text-slate-700 flex place-items-center"] "Anomalies"
   div_ [class_ "py-2 px-2 space-x-6 border-b border-slate-20 mt-6 mb-8 text-sm font-light", hxBoost_ "true"] do
     let uri = deleteParam "archived" $ deleteParam "ackd" paramInput.currentURL
@@ -152,8 +152,8 @@ anomalyList paramInput pid currTime anomalies = form_ [class_ "col-span-5 bg-whi
         [ ("First Seen", "First time the issue occured", "first_seen")
         , ("Last Seen", "Last time the issue occured", "last_seen")
         , ("Events", "Number of events", "events")
-        ] ::
-          [(Text, Text, Text)]
+        ]
+          :: [(Text, Text, Text)]
   let currentSortTitle = maybe "First Seen" fst3 $ find (\(_, _, identifier) -> identifier == paramInput.sort) sortMenu
   div_
     [class_ "flex py-3 gap-8 items-center  bg-gray-50"]

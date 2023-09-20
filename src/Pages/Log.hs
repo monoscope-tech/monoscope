@@ -1,4 +1,4 @@
-module Pages.Log (apiLog, apiLogItem) where
+module Pages.Log (apiLog, apiLogItem, expandAPIlogItem) where
 
 import Config
 import Data.Aeson qualified as AE
@@ -26,6 +26,7 @@ import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Pkg.Components (loader)
 import Relude
 import System.Clock
+import Utils (mIcon_)
 
 -- $setup
 -- >>> import Relude
@@ -76,16 +77,55 @@ apiLogItem sess pid rdId createdAt = do
   startTime <- liftIO $ getTime Monotonic
   logItemM <- liftIO $ withPool pool $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
   afterProccessing <- liftIO $ getTime Monotonic
-  let content = maybe (div_ "invalid log request ID") apiLogItemView logItemM
+  let content = case logItemM of
+        Just req -> apiLogItemView req (RequestDumps.requestDumpLogItemUrlPath pid req)
+        Nothing -> div_ "invalid log request ID"
   endTime <- liftIO $ getTime Monotonic
   liftIO $ putStrLn $ fmtLn $ " APILOG pipeline microsecs: queryDuration " +| (toNanoSecs (diffTimeSpec startTime afterProccessing)) `div` 1000 |+ " -> processingDuration " +| toNanoSecs (diffTimeSpec afterProccessing endTime) `div` 1000 |+ " -> TotalDuration " +| toNanoSecs (diffTimeSpec startTime endTime) `div` 1000 |+ ""
   pure content
 
+expandAPIlogItem :: Sessions.PersistentSession -> Projects.ProjectId -> UUID.UUID -> ZonedTime -> DashboardM (Html ())
+expandAPIlogItem sess pid rdId createdAt = do
+  pool <- asks pool
+  startTime <- liftIO $ getTime Monotonic
+  logItemM <- liftIO $ withPool pool $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
+  afterProccessing <- liftIO $ getTime Monotonic
+  let content = case logItemM of
+        Just req -> expandAPIlogItem' req (RequestDumps.requestDumpLogItemUrlPath pid req)
+        Nothing -> div_ [class_ "h-full flex flex-col justify-center items-center"] do
+          p_ [] "Request not found"
+  pure content
+
+expandAPIlogItem' :: RequestDumps.RequestDumpLogItem -> Text -> Html ()
+expandAPIlogItem' req url = do
+  div_ [class_ "flex flex-col h-full"] $ do
+    div_ [class_ "flex justify-between w-full"] do
+      div_ [] $ do
+        h4_ [class_ "text-sm text-slate-800 mb-2"] "STATUS"
+        div_ [class_ "flex border border-gray-200 m-1 rounded-xl p-2"] do
+          span_ [] $ show req.statusCode
+      div_ [class_ " "] $ do
+        h4_ [class_ "text-sm text-slate-800 mb-2"] "CREATION DATE"
+        div_ [class_ "flex border border-gray-200 m-1 rounded-xl p-2"] $ do
+          mIcon_ "calender" "h-4 mr-2 w-4"
+          span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" (req.createdAt)
+
 apiLogsPage :: Projects.ProjectId -> Int -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Text -> Text -> Text -> Html ()
 apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL = do
-  section_ [class_ "container mx-auto  px-2 py-2 pb-5 gap-2 flex flex-col h-[98%] overflow-hidden "] $ do
+  section_ [class_ "mx-auto px-10 py-2 pb-5 gap-2 flex flex-col h-[98%] overflow-hidden "] $ do
+    div_
+      [ style_ "z-index:26; width: min(90vw, 650px)"
+      , class_ "fixed hidden right-0 bg-white overflow-y-auto h-full border-l border-l-2 shadow"
+      , id_ "expand-log-modal"
+      ]
+      $ do
+        div_ [class_ "relative ml-auto h-full w-full", style_ ""] do
+          div_ [class_ "flex justify-end  w-full p-4 "] do
+            button_ [[__|on click add .hidden to #expand-log-modal then htmx.trigger()|]] do
+              img_ [class_ "h-8", src_ "/assets/svgs/close.svg"]
+          div_ [class_ "px-2", id_ "log-modal-content"] pass
     form_
-      [ class_ "card-round text-sm"
+      [ class_ "card-round w-full text-sm"
       , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
       , hxPushUrl_ "true"
       , hxVals_ "js:{query:getQueryFromEditor(), cols:params().cols}"
@@ -102,7 +142,7 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
         div_ $ do
           div_ [id_ "queryEditor", class_ "h-14"] ""
 
-    div_ [class_ "card-round grow divide-y flex flex-col pb-8 text-sm h-full overflow-y-hidden"] $ do
+    div_ [class_ "card-round w-full grow divide-y flex flex-col pb-8 text-sm h-full overflow-y-hidden"] $ do
       div_ [class_ "pl-3 py-1 space-x-5 flex flex-row justify-between"] $ do
         a_ [class_ "cursor-pointer inline-block pr-3 space-x-2 bg-blue-50 hover:bg-blue-100 blue-800 p-1 rounded-md", [__|on click toggle .hidden on #reqsChartParent|]] $ do
           img_ [src_ "/assets/svgs/cube-transparent.svg", class_ "w-4 inline-block"]
@@ -187,9 +227,9 @@ logItemRows pid requests cols nextLogsURL = do
           let reqHeaders = decodeUtf8 $ AE.encode $ req ^. #requestHeaders
           let respHeaders = decodeUtf8 $ AE.encode $ req ^. #responseHeaders
           p_ [class_ "inline-block"] $ toHtml $ T.take 300 [text| request_body=$reqBody response_body=$respBody request_headers=$reqHeaders response_headers=$respHeaders|]
+
     div_ [class_ "hidden w-full flex px-2 py-8 justify-center item-loading"] do
       loader
-
   a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ nextLogsURL] "LOAD MORE"
 
 getMethodBgColor :: Text -> Text
@@ -199,10 +239,19 @@ getMethodBgColor "DELETE" = " bg-red-100"
 getMethodBgColor "PATCH" = " bg-purple-100"
 getMethodBgColor _ = " bg-blue-100"
 
-apiLogItemView :: RequestDumps.RequestDumpLogItem -> Html ()
-apiLogItemView req =
+apiLogItemView :: RequestDumps.RequestDumpLogItem -> Text -> Html ()
+apiLogItemView req expandItemPath = do
   div_ [class_ "log-item-info border-l-blue-200 border-l-4"] $
     div_ [class_ "pl-4 py-1 ", colspan_ "3"] $ do
+      button_
+        [ class_ "p-2 text-blue-500"
+        , term "data-log-item-path" (expandItemPath <> "/detailed")
+        , [__|on click remove .hidden from #expand-log-modal then
+                fetch `${@data-log-item-path}` as html then put it into #log-modal-content
+                end
+          |]
+        ]
+        "expand"
       jsonValueToHtmlTree $ AE.toJSON req
 
 -- | jsonValueToHtmlTree takes an aeson json object and renders it as a collapsible html tree, with hyperscript for interactivity.
