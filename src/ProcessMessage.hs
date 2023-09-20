@@ -30,6 +30,9 @@ import System.Clock
 import Text.Pretty.Simple (pShow)
 import Utils (DBField, eitherStrToText)
 import Witch (from)
+import Control.Exception (try, SomeException)
+import Control.Monad.Trans.Except (ExceptT, runExceptT, throwE, except)
+import Control.Monad.IO.Class (liftIO)
 
 {--
   Exploring how the inmemory cache could be shaped for performance, and low footprint ability to skip hitting the postgres database when not needed.
@@ -90,7 +93,7 @@ import Witch (from)
 
     We could also maintain hashes of all the formats in the cache, and check each field format within this list.🤔
  --}
-processMessages :: LogAction IO String -> Config.EnvConfig -> Pool Connection -> [PubSub.ReceivedMessage] -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> IO [Maybe Text]
+processMessages :: HasCallStack => LogAction IO String -> Config.EnvConfig -> Pool Connection -> [PubSub.ReceivedMessage] -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> IO [Maybe Text]
 processMessages logger' env conn' msgs projectCache = do
   let msgs' =
         msgs & map \msg -> do
@@ -102,7 +105,7 @@ processMessages logger' env conn' msgs projectCache = do
     then pure []
     else processMessages' logger' env conn' msgs' projectCache
 
-processMessages' :: LogAction IO String -> Config.EnvConfig -> Pool Connection -> [Either Text (Maybe Text, RequestMessages.RequestMessage)] -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> IO [Maybe Text]
+processMessages' :: HasCallStack => LogAction IO String -> Config.EnvConfig -> Pool Connection -> [Either Text (Maybe Text, RequestMessages.RequestMessage)] -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> IO [Maybe Text]
 processMessages' logger' _ conn' msgs projectCache' = do
   startTime <- getTime Monotonic
   let messagesCount = length msgs
@@ -140,7 +143,7 @@ processMessages' logger' _ conn' msgs projectCache' = do
   projectCacheDefault :: Projects.ProjectCache
   projectCacheDefault = Projects.ProjectCache{hosts = [], endpointHashes = [], shapeHashes = [], redactFieldslist = []}
 
-  processMessage :: LogAction IO String -> Pool Connection -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> Either Text (Maybe Text, RequestMessages.RequestMessage) -> IO (Either Text (Maybe Text, Query, [DBField], RequestDumps.RequestDump))
+  processMessage :: HasCallStack => LogAction IO String -> Pool Connection -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> Either Text (Maybe Text, RequestMessages.RequestMessage) -> IO (Either Text (Maybe Text, Query, [DBField], RequestDumps.RequestDump))
   processMessage logger conn projectCache recMsgEither = runExceptT do
     (rmAckId, recMsg) <- except recMsgEither
     recId <- liftIO nextRandom
@@ -151,9 +154,12 @@ processMessages' logger' _ conn' msgs projectCache' = do
     -- we set the value in the db into the cache and return that.
     -- This should help with our performance, since this project Cache is the only information we need in order to process
     -- an apitoolkit requestmessage payload. So we're able to process payloads without hitting the database except for the actual db inserts.
-    projectCacheVal <- liftIO $ Cache.fetchWithCache projectCache pid \pid' -> do
+    projectCacheValE <- liftIO $ try (Cache.fetchWithCache projectCache pid \pid' -> do
       mpjCache <- withPool conn $ Projects.projectCacheById pid'
-      pure $ fromMaybe projectCacheDefault mpjCache
+      pure $ fromMaybe projectCacheDefault mpjCache) :: ExceptT Text IO (Either SomeException Projects.ProjectCache)
 
-    (query, params, reqDump) <- except $ RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId
-    pure (rmAckId, query, params, reqDump)
+    case projectCacheValE of
+      Left e -> throwE $ "An error occurred while fetching project cache: " <> (toText $ show e)
+      Right projectCacheVal -> do
+        (query, params, reqDump) <- except $ RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId
+        pure (rmAckId, query, params, reqDump)

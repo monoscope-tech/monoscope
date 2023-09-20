@@ -318,8 +318,8 @@ valueToFields value = dedupFields $ removeBlacklistedFields $ snd $ valueToField
 
   normalizeKey :: Text -> Text
   normalizeKey key = case valueToFormatStr key of
-                        Just result -> "{" <> result <> "}"
-                        Nothing -> key
+    Just result -> "{" <> result <> "}"
+    Nothing -> key
 
 -- debupFields would merge all fields in the list of tuples by the first item in the tupple.
 --
@@ -371,7 +371,7 @@ valueToFormat (AET.Array _) = "array"
 -- Just "text"
 --
 -- >>> valueToFormatStr "22.02.2022"
--- Nothing 
+-- Nothing
 --
 -- >>> valueToFormatStr "222"
 -- Just "integer"
@@ -386,7 +386,7 @@ valueToFormatStr val
   | val =~ ([text|^(0[1-9]|1[012])[- -.](0[1-9]|[12][0-9]|3[01])[- -.](19|20)\d\d$|] :: Text) = Just "mm-dd-yyyy"
   | val =~ ([text|^(0[1-9]|1[012])[- ..](0[1-9]|[12][0-9]|3[01])[- ..](19|20)\d\d$|] :: Text) = Just "mm.dd.yyyy"
   | val =~ ([text|^[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}$|] :: Text) = Just "uuid"
-  | otherwise =Nothing 
+  | otherwise = Nothing
 
 valueToFormatNum :: Scientific.Scientific -> Text
 valueToFormatNum val

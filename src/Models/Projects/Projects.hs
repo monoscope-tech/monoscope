@@ -138,13 +138,13 @@ data CreateProject = CreateProject
 makeFieldLabelsNoPrefix ''CreateProject
 
 -- FIXME: We currently return an object with empty vectors when nothing was found.
-projectCacheById :: ProjectId -> DBT IO (Maybe ProjectCache)
+projectCacheById ::HasCallStack => ProjectId -> DBT IO (Maybe ProjectCache)
 projectCacheById = queryOne Select q
  where
   q =
     [sql| select  coalesce(ARRAY_AGG(DISTINCT hosts ORDER BY hosts ASC),'{}') hosts, 
                     coalesce(ARRAY_AGG(DISTINCT endpoint_hashes ORDER BY endpoint_hashes ASC),'{}') endpoint_hashes, 
-                    coalesce(ARRAY_AGG(DISTINCT shape_hashes ORDER BY shape_hashes ASC),'{}') shape_hashes, 
+                    coalesce(ARRAY_AGG(DISTINCT shape_hashes ORDER BY shape_hashes ASC),'{}'::text[]) shape_hashes, 
                     coalesce(ARRAY_AGG(DISTINCT paths ORDER BY paths ASC),'{}') redacted_fields 
             from
               (select unnest(akeys(hosts)) hosts, e.hash endpoint_hashes, sh.hash shape_hashes, concat(rf.endpoint_hash,'<>', rf.field_category,'<>', rf.path) paths
