@@ -149,9 +149,9 @@ projectCacheById = queryOne Select q
             from
               (select unnest(akeys(hosts)) hosts, e.hash endpoint_hashes, sh.hash shape_hashes, concat(rf.endpoint_hash,'<>', rf.field_category,'<>', rf.path) paths
                 from apis.endpoints e
-                left join apis.shapes sh on sh.endpoint_hash = e.hash
-                left join projects.redacted_fields rf on rf.project_id = e.project_id
-                where e.project_id = ?
+                left join apis.shapes sh ON sh.endpoint_hash = e.hash
+                left join projects.redacted_fields rf ON rf.project_id = e.project_id
+                where e.project_id = ? AND sh.hash IS NOT null
                ) enp; |]
 
 insertProject :: CreateProject -> DBT IO ()
