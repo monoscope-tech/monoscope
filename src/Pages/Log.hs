@@ -3,6 +3,7 @@ module Pages.Log (apiLog, apiLogItem, expandAPIlogItem) where
 import Config
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEK
+import Data.ByteString.Lazy qualified as BS
 import Data.Default (def)
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
@@ -26,7 +27,7 @@ import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Pkg.Components (loader)
 import Relude
 import System.Clock
-import Utils (mIcon_)
+import Utils (getMethodColor, getStatusColor, mIcon_)
 
 -- $setup
 -- >>> import Relude
@@ -98,28 +99,127 @@ expandAPIlogItem sess pid rdId createdAt = do
 
 expandAPIlogItem' :: RequestDumps.RequestDumpLogItem -> Text -> Html ()
 expandAPIlogItem' req url = do
-  div_ [class_ "flex flex-col h-full"] $ do
-    div_ [class_ "flex justify-between w-full"] do
-      div_ [] $ do
-        h4_ [class_ "text-sm text-slate-800 mb-2"] "STATUS"
-        div_ [class_ "flex border border-gray-200 m-1 rounded-xl p-2"] do
-          span_ [] $ show req.statusCode
-      div_ [class_ " "] $ do
-        h4_ [class_ "text-sm text-slate-800 mb-2"] "CREATION DATE"
+  div_ [class_ "flex flex-col pb-[100px]"] $ do
+    div_ [class_ "w-full flex justify-between items-center gap-4"] do
+      let methodColor = "bg-" <> getMethodColor req.method
+      let statusColor = "text-" <> getStatusColor req.statusCode
+      div_ [class_ "flex gap-4 items-center"] do
+        div_ [class_ $ "text-white font-semibold px-2 py-1 rounded min-w-[70px] text-center " <> methodColor] $ toHtml req.method
+        div_ [class_ $ "text-lg font-bold px-2 " <> statusColor] $ show req.statusCode
         div_ [class_ "flex border border-gray-200 m-1 rounded-xl p-2"] $ do
           mIcon_ "calender" "h-4 mr-2 w-4"
           span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" (req.createdAt)
+      div_ [class_ "flex flex-col items-center"] do
+        button_ [] do
+          mIcon_ "calender" "h-8 w-8"
+        span_ [class_ "text-gray-500 font-semibold"] "Share"
+    -- url, endpoint, latency, request size, repsonse size
+    div_ [class_ "flex flex-col mt-4 p-4 justify-between w-full rounded-xl border"] do
+      div_ [class_ "text-lg mb-2"] do
+        span_ [class_ "text-gray-500 font-semibold"] "Endpoint: "
+        span_ [] $ toHtml req.urlPath
+      div_ [class_ "text-lg"] do
+        span_ [class_ "text-gray-500 font-semibold"] "URL: "
+        span_ [] $ toHtml req.rawUrl
+      div_ [class_ "flex gap-2 mt-4"] do
+        div_ [class_ "flex flex-col gap-1 px-4 min-w-[120px] py-3 border border-dashed border-gray-400 m-1 rounded"] $ do
+          div_ [class_ "flex gap-1 items-center"] do
+            mIcon_ "clock" "h-4 w-4 text-gray-400"
+            span_ [class_ "text-md font-bold"] $ show (req.durationNs `div` 1000) <> " ms"
+          p_ [class_ "text-gray-400 font-bold"] "Latency"
+        div_ [class_ "flex flex-col gap-1 px-4 min-w-[120px] py-3 border border-dashed border-gray-400 m-1 rounded"] $ do
+          div_ [class_ "flex gap-1 items-center"] do
+            mIcon_ "download4" "h-4 w-4 text-gray-400"
+            let reqSize = BS.length $ AE.encode req.requestBody
+            span_ [class_ "text-md font-bold"] $ show (reqSize - 2) <> " bytes"
+          p_ [class_ "text-gray-400 font-bold"] "Request size"
+        div_ [class_ "flex flex-col gap-1 px-4 min-w-[120px] py-3 border border-dashed border-gray-400 m-1 rounded"] $ do
+          div_ [class_ "flex gap-1 items-center"] do
+            mIcon_ "download4" "h-4 w-4 text-gray-400"
+            let respSize = BS.length $ AE.encode req.responseBody
+            span_ [class_ "text-md font-bold"] $ show (respSize - 2) <> " bytes"
+          p_ [class_ "text-gray-400 font-bold"] "Response size"
+        div_ [class_ "flex flex-col gap-1 px-4 min-w-[120px] py-3 border border-dashed border-gray-400 m-1 rounded"] $ do
+          div_ [class_ "flex gap-1 items-center"] do
+            mIcon_ "clock" "h-4 w-4 text-gray-400"
+            span_ [class_ "text-md font-bold"] $ show req.sdkType
+          p_ [class_ "text-gray-400 font-bold"] "Framework"
+    -- request details
+    div_ [class_ "border rounded-lg mt-8", id_ "request_detail_container"] do
+      div_ [class_ "flex w-full bg-gray-100 px-4 py-2 flex-col gap-2"] do
+        p_ [class_ "font-bold"] "Request Details"
+      ul_ [class_ "px-4 flex gap-8 font-semibold border-b text-gray-500"] do
+        li_ [] do
+          button_
+            [ class_ "sdk_tab sdk_tab_active"
+            , onclick_ "changeTab('req_body','request_detail_container')"
+            , id_ "req_body"
+            ]
+            "Body"
+        li_ [] do
+          button_
+            [ class_ "sdk_tab"
+            , onclick_ "changeTab('req_headers', 'request_detail_container')"
+            , id_ "req_headers"
+            ]
+            "Headers"
+        li_ [] do
+          button_
+            [ class_ "sdk_tab"
+            , onclick_ "changeTab('query_params', 'request_detail_container')"
+            , id_ "query_params"
+            ]
+            "Query Params"
+        li_ [] do
+          button_
+            [ class_ "sdk_tab"
+            , onclick_ "changeTab('path_params', 'request_detail_container')"
+            , id_ "path_params"
+            ]
+            "Path Params"
+      div_ [class_ "bg-gray-50 m-4  p-2 rounded-lg border tab-content", id_ "req_body_json"] do
+        jsonValueToHtmlTree req.requestBody
+      div_ [class_ "bg-gray-50 m-4 hidden p-2 rounded-lg border tab-content", id_ "req_headers_json"] do
+        jsonValueToHtmlTree req.requestHeaders
+      div_ [class_ "bg-gray-50 m-4 hidden p-2 rounded-lg border tab-content", id_ "query_params_json"] do
+        jsonValueToHtmlTree req.queryParams
+      div_ [class_ "bg-gray-50 m-4 hidden p-2 rounded-lg border tab-content", id_ "path_params_json"] do
+        jsonValueToHtmlTree req.pathParams
+
+    -- response details
+    div_ [class_ "border rounded-lg mt-8", id_ "reponse_detail_container"] do
+      div_ [class_ "flex w-full bg-gray-100 px-4 py-2 flex-col gap-2"] do
+        p_ [class_ "font-bold"] "Response Details"
+      ul_ [class_ "px-4 flex gap-8 font-semibold border-b text-gray-500"] do
+        li_ [] do
+          button_
+            [ class_ "sdk_tab sdk_tab_active"
+            , onclick_ "changeTab('res_body', 'reponse_detail_container')"
+            , id_ "res_body"
+            ]
+            "Body"
+        li_ [] do
+          button_
+            [ class_ "sdk_tab"
+            , onclick_ "changeTab('res_headers', 'reponse_detail_container')"
+            , id_ "res_headers"
+            ]
+            "Headers"
+      div_ [class_ "bg-gray-50 m-4  p-2 rounded-lg border tab-content", id_ "res_body_json"] do
+        jsonValueToHtmlTree req.responseBody
+      div_ [class_ "bg-gray-50 m-4 hidden p-2 rounded-lg border tab-content", id_ "res_headers_json"] do
+        jsonValueToHtmlTree req.responseHeaders
 
 apiLogsPage :: Projects.ProjectId -> Int -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Text -> Text -> Text -> Html ()
 apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL = do
   section_ [class_ "mx-auto px-10 py-2 pb-5 gap-2 flex flex-col h-[98%] overflow-hidden "] $ do
     div_
-      [ style_ "z-index:26; width: min(90vw, 650px)"
-      , class_ "fixed hidden right-0 bg-white overflow-y-auto h-full border-l border-l-2 shadow"
+      [ style_ "z-index:26; width: min(90vw, 800px)"
+      , class_ "fixed hidden right-0 bg-white overflow-y-scroll h-[calc(100%-60px)] border-l border-l-2 shadow"
       , id_ "expand-log-modal"
       ]
       $ do
-        div_ [class_ "relative ml-auto h-full w-full", style_ ""] do
+        div_ [class_ "relative ml-auto w-full", style_ ""] do
           div_ [class_ "flex justify-end  w-full p-4 "] do
             button_ [[__|on click add .hidden to #expand-log-modal then htmx.trigger()|]] do
               img_ [class_ "h-8", src_ "/assets/svgs/close.svg"]
@@ -176,7 +276,23 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
           loader
         div_ [class_ "grow overflow-y-scroll h-full whitespace-nowrap text-sm divide-y overflow-x-hidden", id_ "log-item-table-body"] $ do
           logItemRows pid requests cols nextLogsURL
+  script_
+    [text|
+function changeTab(tabId, parent) {
+  const p = document.getElementById(parent);
+  const tabLinks = p.querySelectorAll('.sdk_tab');
+  tabLinks.forEach(link => link.classList.remove('sdk_tab_active'));
+  const clickedTabLink = document.getElementById(tabId);
+  clickedTabLink.classList.add('sdk_tab_active')
+  const tabContents = p.querySelectorAll('.tab-content');
+  tabContents.forEach(content => content.classList.add("hidden"));
 
+  // Display the content of the clicked tab
+  const tabContent = document.getElementById(tabId + '_json');
+  tabContent.classList.remove("hidden")
+
+}
+  |]
 reqChart :: Text -> Bool -> Html ()
 reqChart reqChartTxt hxOob = do
   div_ [id_ "reqsChartParent", class_ "p-5", hxSwapOob_ $ show hxOob] $ do
