@@ -94,14 +94,14 @@ expandAPIlogItem sess pid rdId createdAt = do
   logItemM <- liftIO $ withPool pool $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
   afterProccessing <- liftIO $ getTime Monotonic
   let content = case logItemM of
-        Just req -> expandAPIlogItem' req
+        Just req -> expandAPIlogItem' req False
         Nothing -> div_ [class_ "h-full flex flex-col justify-center items-center"] do
           p_ [] "Request not found"
   pure content
 
-expandAPIlogItem' :: RequestDumps.RequestDumpLogItem -> Html ()
-expandAPIlogItem' req = do
-  div_ [class_ "flex flex-col pb-[100px]"] $ do
+expandAPIlogItem' :: RequestDumps.RequestDumpLogItem -> Bool -> Html ()
+expandAPIlogItem' req modal = do
+  div_ [class_ "flex flex-col w-full pb-[100px]"] $ do
     div_ [class_ "w-full flex flex-col gap-2 gap-4"] do
       let methodColor = "bg-" <> getMethodColor req.method
       let statusColor = "text-" <> getStatusColor req.statusCode
@@ -111,34 +111,37 @@ expandAPIlogItem' req = do
         div_ [class_ "flex border border-gray-200 m-1 rounded-xl p-2"] $ do
           mIcon_ "calender" "h-4 mr-2 w-4"
           span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" (req.createdAt)
-      div_
-        [ class_ "flex gap-2 px-4 items-center border border-dashed h-[50px]"
-        , id_ "copy_share_link"
-        ]
-        do
-          div_ [class_ "relative", style_ "width:150px", onblur_ "document.getElementById('expire_container').classList.add('hidden')"] $ do
-            button_
-              [ onclick_ "toggleExpireOptions(event)"
-              , id_ "toggle_expires_btn"
-              , class_ "w-full flex gap-2 text-gray-600 justify_between items-center cursor-pointer px-2 py-1 border rounded focus:ring-2 focus:ring-blue-200 active:ring-2 active:ring-blue-200"
-              ]
-              $ do
-                p_ [style_ "width: calc(100% - 25px)", class_ "text-sm truncate ..."] "Expires in: 1 hour"
-                img_ [src_ "/assets/svgs/select_chevron.svg", style_ "height:15px; width:15px"]
-            div_ [id_ "expire_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] $ do
-              ["1 hour", "2 hours", "8 hours"] & mapM_ \sw -> do
-                button_
-                  [ onclick_ "expireChanged(event)"
-                  , term "data-expire-value" sw
-                  , class_ "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"
-                  ]
-                  $ toHtml sw
-          button_
-            [ class_ "flex flex-col gap-1 bg-blue-500 px-2 py-1 rounded text-white"
-            , term "data-req-id" (show req.id)
-            , onclick_ "getShareLink(event)"
+      if modal
+        then do
+          div_
+            [ class_ "flex gap-2 px-4 items-center border border-dashed h-[50px]"
+            , id_ "copy_share_link"
             ]
-            "Get share link"
+            do
+              div_ [class_ "relative", style_ "width:150px", onblur_ "document.getElementById('expire_container').classList.add('hidden')"] $ do
+                button_
+                  [ onclick_ "toggleExpireOptions(event)"
+                  , id_ "toggle_expires_btn"
+                  , class_ "w-full flex gap-2 text-gray-600 justify_between items-center cursor-pointer px-2 py-1 border rounded focus:ring-2 focus:ring-blue-200 active:ring-2 active:ring-blue-200"
+                  ]
+                  $ do
+                    p_ [style_ "width: calc(100% - 25px)", class_ "text-sm truncate ..."] "Expires in: 1 hour"
+                    img_ [src_ "/assets/svgs/select_chevron.svg", style_ "height:15px; width:15px"]
+                div_ [id_ "expire_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] $ do
+                  ["1 hour", "2 hours", "8 hours"] & mapM_ \sw -> do
+                    button_
+                      [ onclick_ "expireChanged(event)"
+                      , term "data-expire-value" sw
+                      , class_ "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"
+                      ]
+                      $ toHtml sw
+              button_
+                [ class_ "flex flex-col gap-1 bg-blue-500 px-2 py-1 rounded text-white"
+                , term "data-req-id" (show req.id)
+                , onclick_ "getShareLink(event)"
+                ]
+                "Get share link"
+        else pass
 
     -- url, endpoint, latency, request size, repsonse size
     div_ [class_ "flex flex-col mt-4 p-4 justify-between w-full rounded-xl border"] do

@@ -31,6 +31,7 @@ import Gogol.Prelude (addHeader)
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Pages.Log qualified as Log
 
+import NeatInterpolation
 import Relude
 import Servant (Headers)
 import Servant.Htmx (HXTrigger)
@@ -100,18 +101,84 @@ shareLinkGetH sid = do
         (def :: BWConfig)
           { sessM = Nothing
           , currProject = Nothing
-          , pageTitle = "Data Seeding"
+          , pageTitle = "Share request log"
           }
 
   pure $ bodyWrapper bwconf $ sharePage req
 
 sharePage :: Maybe RequestDumps.RequestDumpLogItem -> Html ()
 sharePage req = do
-  section_ [class_ "h-full bg-blue-500"] do
+  nav_ [id_ "main-navbar", class_ "fixed z-20 top-0 w-full w-full px-6 py-4 border-b bg-white flex flex-row justify-between"] $ do
+    div_ [class_ "flex justify-between items-center gap-4 w-[1000px] mx-auto"] do
+      a_ [href_ "https://apitoolkit.io", class_ "flex items-center text-gray-500 hover:text-gray-700"] do
+        img_
+          [ class_ "h-12 sd-hidden"
+          , src_ "/assets/svgs/logo.svg"
+          ]
+        img_
+          [ class_ "h-12 w-10 hidden sd-show"
+          , src_ "/assets/svgs/logo_mini.svg"
+          ]
+  section_ [class_ "h-full mt-[80px] w-[1000px] flex flex-col items-center mx-auto"] do
+    h3_ [class_ "text-5xl text-left mb-16 w-full font-semibold my-8"] "Shared Request Log"
     case req of
-      Just r -> Log.expandAPIlogItem' r
+      Just r -> Log.expandAPIlogItem' r False
       Nothing -> div_ [] do
         h1_ [] "No Found"
+  script_
+    [text|
+function changeTab(tabId, parent) {
+  const p = document.getElementById(parent);
+  const tabLinks = p.querySelectorAll('.sdk_tab');
+  tabLinks.forEach(link => link.classList.remove('sdk_tab_active'));
+  const clickedTabLink = document.getElementById(tabId);
+  clickedTabLink.classList.add('sdk_tab_active')
+  const tabContents = p.querySelectorAll('.tab-content');
+  tabContents.forEach(content => content.classList.add("hidden"));
+
+  const tabContent = document.getElementById(tabId + '_json');
+  tabContent.classList.remove("hidden")
+
+}
+
+function toggleExpireOptions (event) {
+    event.preventDefault()
+    event.stopPropagation()
+    const container = document.querySelector('#expire_container')
+    if(container) {
+     container.classList.toggle('hidden')
+    }
+}
+
+function getShareLink(event) {
+  const reqId = event.target.getAttribute ("data-req-id")
+  document.querySelector('#req_id_input').value = reqId
+  htmx.trigger('#share_log_form','submit')
+}
+
+function expireChanged(event) {
+    event.preventDefault()
+    event.stopPropagation()
+    const current = document.querySelector('#toggle_expires_btn')
+    if(current && current.firstChild) {
+       current.firstChild.innerText = "Expires in: " + event.target.getAttribute("data-expire-value")
+       document.querySelector("#expire_input").value = event.target.getAttribute("data-expire-value")
+    }
+}
+  |]
+  style_
+    [text|
+    .tree-children {
+      display: block;
+    }
+    .tree-children-count { display: none; }
+    .collapsed .tree-children {
+      display: none !important; 
+    }
+    .collapsed .tree-children-count {display: inline !important;}
+    .collapsed .children {display: inline-block; padding-left:0}
+    .collapsed .closing-token {padding-left:0}
+  |]
 
 getRequest :: Text -> DBT IO (V.Vector RequestDumps.RequestDumpLogItem)
 getRequest rid = query Select q (Only rid)
