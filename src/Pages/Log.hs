@@ -1,4 +1,4 @@
-module Pages.Log (apiLog, apiLogItem, expandAPIlogItem) where
+module Pages.Log (apiLog, apiLogItem, expandAPIlogItem, expandAPIlogItem') where
 
 import Config
 import Data.Aeson qualified as AE
@@ -12,7 +12,8 @@ import Data.Time.Format (formatTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector, iforM_, (!?))
 import Data.Vector qualified as Vector
-import Database.PostgreSQL.Entity.DBT (withPool)
+import Database.PostgreSQL.Entity.DBT (QueryNature (Insert), execute, withPool)
+import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Fmt
 import Lucid
 import Lucid.Htmx
@@ -26,6 +27,7 @@ import Optics.Core ((^.))
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Pkg.Components (loader)
 import Relude
+
 import System.Clock
 import Utils (getMethodColor, getStatusColor, mIcon_)
 
@@ -92,15 +94,15 @@ expandAPIlogItem sess pid rdId createdAt = do
   logItemM <- liftIO $ withPool pool $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
   afterProccessing <- liftIO $ getTime Monotonic
   let content = case logItemM of
-        Just req -> expandAPIlogItem' req (RequestDumps.requestDumpLogItemUrlPath pid req)
+        Just req -> expandAPIlogItem' req
         Nothing -> div_ [class_ "h-full flex flex-col justify-center items-center"] do
           p_ [] "Request not found"
   pure content
 
-expandAPIlogItem' :: RequestDumps.RequestDumpLogItem -> Text -> Html ()
-expandAPIlogItem' req url = do
+expandAPIlogItem' :: RequestDumps.RequestDumpLogItem -> Html ()
+expandAPIlogItem' req = do
   div_ [class_ "flex flex-col pb-[100px]"] $ do
-    div_ [class_ "w-full flex justify-between items-center gap-4"] do
+    div_ [class_ "w-full flex flex-col gap-2 gap-4"] do
       let methodColor = "bg-" <> getMethodColor req.method
       let statusColor = "text-" <> getStatusColor req.statusCode
       div_ [class_ "flex gap-4 items-center"] do
@@ -109,10 +111,35 @@ expandAPIlogItem' req url = do
         div_ [class_ "flex border border-gray-200 m-1 rounded-xl p-2"] $ do
           mIcon_ "calender" "h-4 mr-2 w-4"
           span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" (req.createdAt)
-      div_ [class_ "flex flex-col items-center"] do
-        button_ [] do
-          mIcon_ "calender" "h-8 w-8"
-        span_ [class_ "text-gray-500 font-semibold"] "Share"
+      div_
+        [ class_ "flex gap-2 px-4 items-center border border-dashed h-[50px]"
+        , id_ "copy_share_link"
+        ]
+        do
+          div_ [class_ "relative", style_ "width:150px", onblur_ "document.getElementById('expire_container').classList.add('hidden')"] $ do
+            button_
+              [ onclick_ "toggleExpireOptions(event)"
+              , id_ "toggle_expires_btn"
+              , class_ "w-full flex gap-2 text-gray-600 justify_between items-center cursor-pointer px-2 py-1 border rounded focus:ring-2 focus:ring-blue-200 active:ring-2 active:ring-blue-200"
+              ]
+              $ do
+                p_ [style_ "width: calc(100% - 25px)", class_ "text-sm truncate ..."] "Expires in: 1 hour"
+                img_ [src_ "/assets/svgs/select_chevron.svg", style_ "height:15px; width:15px"]
+            div_ [id_ "expire_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] $ do
+              ["1 hour", "2 hours", "8 hours"] & mapM_ \sw -> do
+                button_
+                  [ onclick_ "expireChanged(event)"
+                  , term "data-expire-value" sw
+                  , class_ "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"
+                  ]
+                  $ toHtml sw
+          button_
+            [ class_ "flex flex-col gap-1 bg-blue-500 px-2 py-1 rounded text-white"
+            , term "data-req-id" (show req.id)
+            , onclick_ "getShareLink(event)"
+            ]
+            "Get share link"
+
     -- url, endpoint, latency, request size, repsonse size
     div_ [class_ "flex flex-col mt-4 p-4 justify-between w-full rounded-xl border"] do
       div_ [class_ "text-lg mb-2"] do
@@ -221,8 +248,18 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
       $ do
         div_ [class_ "relative ml-auto w-full", style_ ""] do
           div_ [class_ "flex justify-end  w-full p-4 "] do
-            button_ [[__|on click add .hidden to #expand-log-modal then htmx.trigger()|]] do
+            button_ [[__|on click add .hidden to #expand-log-modal|]] do
               img_ [class_ "h-8", src_ "/assets/svgs/close.svg"]
+          let postP = "/p/" <> pid.toText <> "/share/"
+          form_
+            [ hxPost_ postP
+            , hxSwap_ "innerHTML"
+            , hxTarget_ "#copy_share_link"
+            , id_ "share_log_form"
+            ]
+            do
+              input_ [type_ "hidden", value_ "1 hour", name_ "expiresIn", id_ "expire_input"]
+              input_ [type_ "hidden", value_ "", name_ "reqId", id_ "req_id_input"]
           div_ [class_ "px-2", id_ "log-modal-content"] pass
     form_
       [ class_ "card-round w-full text-sm"
@@ -287,10 +324,34 @@ function changeTab(tabId, parent) {
   const tabContents = p.querySelectorAll('.tab-content');
   tabContents.forEach(content => content.classList.add("hidden"));
 
-  // Display the content of the clicked tab
   const tabContent = document.getElementById(tabId + '_json');
   tabContent.classList.remove("hidden")
 
+}
+
+function toggleExpireOptions (event) {
+    event.preventDefault()
+    event.stopPropagation()
+    const container = document.querySelector('#expire_container')
+    if(container) {
+     container.classList.toggle('hidden')
+    }
+}
+
+function getShareLink(event) {
+  const reqId = event.target.getAttribute ("data-req-id")
+  document.querySelector('#req_id_input').value = reqId
+  htmx.trigger('#share_log_form','submit')
+}
+
+function expireChanged(event) {
+    event.preventDefault()
+    event.stopPropagation()
+    const current = document.querySelector('#toggle_expires_btn')
+    if(current && current.firstChild) {
+       current.firstChild.innerText = "Expires in: " + event.target.getAttribute("data-expire-value")
+       document.querySelector("#expire_input").value = event.target.getAttribute("data-expire-value")
+    }
 }
   |]
 reqChart :: Text -> Bool -> Html ()

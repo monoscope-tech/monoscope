@@ -35,60 +35,53 @@ data BWConfig = BWConfig
   deriving anyclass (Default)
 
 bodyWrapper :: BWConfig -> Html () -> Html ()
-bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child =
-  case sessM of
-    Nothing -> child
-    Just sess -> do
-      let currUser = Sessions.getUser (Sessions.user sess)
-          sideNav' = currProject & maybe "" \project -> sideNav sess project pageTitle menuItem
-      let currUserEmail = CI.original currUser.email
+bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child = do
+  doctypehtml_ $ do
+    head_ $ do
+      title_ $ toHtml pageTitle
+      meta_ [charset_ "UTF-8"]
+      meta_ [name_ "viewport", content_ "width=device-width, initial-scale=1.0"]
+      meta_ [httpEquiv_ "X-UA-Compatible", content_ "ie=edge"]
+      -- favicon items
+      link_ [rel_ "apple-touch-icon", sizes_ "180x180", href_ "/apple-touch-icon.png"]
+      link_ [rel_ "icon", type_ "image/png", sizes_ "32x32", href_ "/favicon-32x32.png"]
+      link_ [rel_ "icon", type_ "image/png", sizes_ "16x16", href_ "/favicon-16x16.png"]
+      link_ [rel_ "manifest", href_ "/site.webmanifest"]
+      link_ [rel_ "mask-icon", href_ "/safari-pinned-tab.svg", term "color" "#5bbad5"]
+      meta_ [name_ "msapplication-TileColor", content_ "#da532c"]
+      meta_ [name_ "theme-color", content_ "#ffffff"]
 
-      doctypehtml_ $ do
-        head_ $ do
-          title_ $ toHtml pageTitle
-          meta_ [charset_ "UTF-8"]
-          meta_ [name_ "viewport", content_ "width=device-width, initial-scale=1.0"]
-          meta_ [httpEquiv_ "X-UA-Compatible", content_ "ie=edge"]
-          -- favicon items
-          link_ [rel_ "apple-touch-icon", sizes_ "180x180", href_ "/apple-touch-icon.png"]
-          link_ [rel_ "icon", type_ "image/png", sizes_ "32x32", href_ "/favicon-32x32.png"]
-          link_ [rel_ "icon", type_ "image/png", sizes_ "16x16", href_ "/favicon-16x16.png"]
-          link_ [rel_ "manifest", href_ "/site.webmanifest"]
-          link_ [rel_ "mask-icon", href_ "/safari-pinned-tab.svg", term "color" "#5bbad5"]
-          meta_ [name_ "msapplication-TileColor", content_ "#da532c"]
-          meta_ [name_ "theme-color", content_ "#ffffff"]
+      link_ [rel_ "stylesheet", type_ "text/css", href_ "/assets/css/tailwind.min.css"]
+      link_ [rel_ "stylesheet", type_ "text/css", href_ "/assets/css/thirdparty/notyf3.min.css"]
+      link_ [rel_ "preconnect", href_ "https://rsms.me/"]
+      link_ [rel_ "stylesheet", href_ "https://rsms.me/inter/inter.css"]
 
-          link_ [rel_ "stylesheet", type_ "text/css", href_ "/assets/css/tailwind.min.css"]
-          link_ [rel_ "stylesheet", type_ "text/css", href_ "/assets/css/thirdparty/notyf3.min.css"]
-          link_ [rel_ "preconnect", href_ "https://rsms.me/"]
-          link_ [rel_ "stylesheet", href_ "https://rsms.me/inter/inter.css"]
+      link_ [rel_ "stylesheet", href_ "https://unpkg.com/swagger-ui-dist@4.5.0/swagger-ui.css"]
+      -- SCRIPTS
+      script_ [src_ "https://cdn.jsdelivr.net/npm/echarts@5.4.1/dist/echarts.min.js"] ("" :: Text)
+      script_ [src_ "/assets/roma-echarts.js", defer_ "true"] ("" :: Text)
+      script_ [src_ "/assets/js/thirdparty/notyf3.min.js", defer_ "true"] ("" :: Text)
+      script_ [src_ "/assets/js/thirdparty/htmx1_8_4.min.js", defer_ "true"] ("" :: Text)
+      script_ [src_ "/assets/js/thirdparty/_hyperscript_web0_9_5.min.js", defer_ "true"] ("" :: Text)
+      script_ [src_ "/assets/js/thirdparty/luxon.min.js", defer_ "true"] ("" :: Text)
+      script_ [src_ "/assets/js/thirdparty/popper2_11_4.min.js", defer_ "true"] ("" :: Text)
+      script_ [src_ "/assets/js/thirdparty/tippy6_3_7.umd.min.js", defer_ "true"] ("" :: Text)
+      script_ [src_ "/assets/js/thirdparty/instantpage5_1_0.js", type_ "module", defer_ "true"] ("" :: Text)
+      script_ [src_ "/assets/js/monaco/vs/luxon.min.js", defer_ "true"] ("" :: Text)
+      script_ [src_ "/assets/js/monaco/vs/loader.js", defer_ "true"] ("" :: Text)
+      script_ [src_ "/assets/js/charts.js"] ("" :: Text)
+      script_ [src_ "/assets/js/main.js"] ("" :: Text)
 
-          link_ [rel_ "stylesheet", href_ "https://unpkg.com/swagger-ui-dist@4.5.0/swagger-ui.css"]
-          -- SCRIPTS
-          script_ [src_ "https://cdn.jsdelivr.net/npm/echarts@5.4.1/dist/echarts.min.js"] ("" :: Text)
-          script_ [src_ "/assets/roma-echarts.js", defer_ "true"] ("" :: Text)
-          script_ [src_ "/assets/js/thirdparty/notyf3.min.js", defer_ "true"] ("" :: Text)
-          script_ [src_ "/assets/js/thirdparty/htmx1_8_4.min.js", defer_ "true"] ("" :: Text)
-          script_ [src_ "/assets/js/thirdparty/_hyperscript_web0_9_5.min.js", defer_ "true"] ("" :: Text)
-          script_ [src_ "/assets/js/thirdparty/luxon.min.js", defer_ "true"] ("" :: Text)
-          script_ [src_ "/assets/js/thirdparty/popper2_11_4.min.js", defer_ "true"] ("" :: Text)
-          script_ [src_ "/assets/js/thirdparty/tippy6_3_7.umd.min.js", defer_ "true"] ("" :: Text)
-          script_ [src_ "/assets/js/thirdparty/instantpage5_1_0.js", type_ "module", defer_ "true"] ("" :: Text)
-          script_ [src_ "/assets/js/monaco/vs/luxon.min.js", defer_ "true"] ("" :: Text)
-          script_ [src_ "/assets/js/monaco/vs/loader.js", defer_ "true"] ("" :: Text)
-          script_ [src_ "/assets/js/charts.js"] ("" :: Text)
-          script_ [src_ "/assets/js/main.js"] ("" :: Text)
+      -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/core@1.2.0/dist/index.umd.min.js"] ("" :: Text)
+      -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/datetime@1.2.0/dist/index.umd.min.js"] ("" :: Text)
+      -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/base-plugin@1.2.0/dist/index.umd.min.js"] ("" :: Text)
+      -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/range-plugin@1.2.0/dist/index.umd.min.js"] ("" :: Text)
+      -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/preset-plugin@1.2.0/dist/index.umd.min.js"] ("" :: Text)
+      -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/time-plugin@1.2.0/dist/index.umd.min.js"] ("" :: Text)
+      script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.0/dist/index.umd.min.js"] ("" :: Text)
 
-          -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/core@1.2.0/dist/index.umd.min.js"] ("" :: Text)
-          -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/datetime@1.2.0/dist/index.umd.min.js"] ("" :: Text)
-          -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/base-plugin@1.2.0/dist/index.umd.min.js"] ("" :: Text)
-          -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/range-plugin@1.2.0/dist/index.umd.min.js"] ("" :: Text)
-          -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/preset-plugin@1.2.0/dist/index.umd.min.js"] ("" :: Text)
-          -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/time-plugin@1.2.0/dist/index.umd.min.js"] ("" :: Text)
-          script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.0/dist/index.umd.min.js"] ("" :: Text)
-
-          script_
-            [text|
+      script_
+        [text|
               window.initialCloseSideMenu = localStorage.getItem('close-sidemenu');
               var currentISOTimeStringVar = ((new Date()).toISOString().split(".")[0])+"+00:00";
               document.addEventListener('DOMContentLoaded', function(){ 
@@ -120,43 +113,53 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child =
                 });
               }
             |]
-
-        body_ [class_ "text-gray-900 h-full w-full"] $ do
+    body_ [class_ "text-gray-900 h-full w-full"] $ do
+      div_
+        [ style_ "z-index:99999"
+        , class_ "fixed pt-24 sm:hidden justify-center z-50 w-full p-4 bg-gray-50 overflow-y-auto inset-0 h-full max-h-full"
+        , tabindex_ "-1"
+        ]
+        $ do
           div_
-            [ style_ "z-index:99999"
-            , class_ "fixed pt-24 sm:hidden justify-center z-50 w-full p-4 bg-gray-50 overflow-y-auto inset-0 h-full max-h-full"
-            , tabindex_ "-1"
+            [ class_ "relative mx-auto max-h-full"
+            , style_ "width: min(90vw, 500px)"
             ]
             $ do
+              -- Modal content
               div_
-                [ class_ "relative mx-auto max-h-full"
-                , style_ "width: min(90vw, 500px)"
+                [ class_ "bg-white rounded-lg drop-shadow-md border-1 w-full"
                 ]
                 $ do
-                  -- Modal content
-                  div_
-                    [ class_ "bg-white rounded-lg drop-shadow-md border-1 w-full"
-                    ]
-                    $ do
-                      div_ [class_ "flex items-start justify-between p-6 space-x-2  border-b rounded-t"] $ do
-                        h3_ [class_ "text-3xl font-bold text-gray-900"] "Only Desktop Browsers are Supported for now!"
-                      -- Modal body
-                      div_ [class_ "w-full"] $ do
-                        div_ [class_ "p-6 text-xl space-y-6", style_ "height:50vh; width:100%"] $ do
-                          p_ [class_ ""] "Due to the heavy visualization usecases we're solving, apitoolkit is not supported on mobile, and can only be used from a desktop browser at the moment."
-                          p_ [class_ ""] "We're diligently working on expanding its availability to other platforms, and we'll keep you updated as we make progress. "
-                          p_ [] "Don't hesitate to let us know if this is a very important feature for your team, then we can prioritize it"
-                      -- Modal footer
-                      div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] pass
-          section_ [class_ "flex flex-row h-screen overflow-hidden"] $ do
-            sideNav'
-            section_ [class_ "flex flex-col grow h-full overflow-y-hidden"] $ do
-              navbar currUser
-              section_ [class_ "flex-1 overflow-y-auto"] $ do
-                child
-        script_ [async_ "true", src_ "https://www.googletagmanager.com/gtag/js?id=AW-11285541899"] ("" :: Text)
-        script_
-          [text|
+                  div_ [class_ "flex items-start justify-between p-6 space-x-2  border-b rounded-t"] $ do
+                    h3_ [class_ "text-3xl font-bold text-gray-900"] "Only Desktop Browsers are Supported for now!"
+                  -- Modal body
+                  div_ [class_ "w-full"] $ do
+                    div_ [class_ "p-6 text-xl space-y-6", style_ "height:50vh; width:100%"] $ do
+                      p_ [class_ ""] "Due to the heavy visualization usecases we're solving, apitoolkit is not supported on mobile, and can only be used from a desktop browser at the moment."
+                      p_ [class_ ""] "We're diligently working on expanding its availability to other platforms, and we'll keep you updated as we make progress. "
+                      p_ [] "Don't hesitate to let us know if this is a very important feature for your team, then we can prioritize it"
+                  -- Modal footer
+                  div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] pass
+      case sessM of
+        Nothing -> do
+          section_ [class_ "flex flex-col grow h-full overflow-y-hidden"] $ do
+            -- navbar currUser
+            section_ [class_ "flex-1 overflow-y-auto"] $ do
+              child
+        Just sess ->
+          do
+            let currUser = Sessions.getUser (Sessions.user sess)
+                sideNav' = currProject & maybe "" \project -> sideNav sess project pageTitle menuItem
+            let currUserEmail = CI.original currUser.email
+            section_ [class_ "flex flex-row h-screen overflow-hidden"] $ do
+              sideNav'
+              section_ [class_ "flex flex-col grow h-full overflow-y-hidden"] $ do
+                navbar currUser
+                section_ [class_ "flex-1 overflow-y-auto"] $ do
+                  child
+      script_ [async_ "true", src_ "https://www.googletagmanager.com/gtag/js?id=AW-11285541899"] ("" :: Text)
+      script_
+        [text|
             window.dataLayer = window.dataLayer || [];
             function gtag(){dataLayer.push(arguments);}
             gtag('js', new Date());
@@ -176,7 +179,6 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child =
               return false;
             }
           |]
-
 projectsDropDown :: Projects.Project -> Vector.Vector Projects.Project -> Html ()
 projectsDropDown currProject projects = do
   let pidTxt = currProject.id.toText
