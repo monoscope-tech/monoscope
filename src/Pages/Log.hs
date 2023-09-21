@@ -94,7 +94,7 @@ expandAPIlogItem sess pid rdId createdAt = do
   logItemM <- liftIO $ withPool pool $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
   afterProccessing <- liftIO $ getTime Monotonic
   let content = case logItemM of
-        Just req -> expandAPIlogItem' req False
+        Just req -> expandAPIlogItem' req True
         Nothing -> div_ [class_ "h-full flex flex-col justify-center items-center"] do
           p_ [] "Request not found"
   pure content
@@ -128,7 +128,7 @@ expandAPIlogItem' req modal = do
                     p_ [style_ "width: calc(100% - 25px)", class_ "text-sm truncate ..."] "Expires in: 1 hour"
                     img_ [src_ "/assets/svgs/select_chevron.svg", style_ "height:15px; width:15px"]
                 div_ [id_ "expire_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] $ do
-                  ["1 hour", "2 hours", "8 hours"] & mapM_ \sw -> do
+                  ["1 hour", "8 hours", "1 day"] & mapM_ \sw -> do
                     button_
                       [ onclick_ "expireChanged(event)"
                       , term "data-expire-value" sw
@@ -156,24 +156,24 @@ expandAPIlogItem' req modal = do
           div_ [class_ "flex gap-1 items-center"] do
             mIcon_ "clock" "h-4 w-4 text-gray-400"
             span_ [class_ "text-md font-bold"] $ show (req.durationNs `div` 1000) <> " ms"
-          p_ [class_ "text-gray-400 font-bold"] "Latency"
+          p_ [class_ "text-gray-500"] "Latency"
         div_ [class_ "flex flex-col gap-1 px-4 min-w-[120px] py-3 border border-dashed border-gray-400 m-1 rounded"] $ do
           div_ [class_ "flex gap-1 items-center"] do
             mIcon_ "download4" "h-4 w-4 text-gray-400"
             let reqSize = BS.length $ AE.encode req.requestBody
             span_ [class_ "text-md font-bold"] $ show (reqSize - 2) <> " bytes"
-          p_ [class_ "text-gray-400 font-bold"] "Request size"
+          p_ [class_ "text-gray-500"] "Request size"
         div_ [class_ "flex flex-col gap-1 px-4 min-w-[120px] py-3 border border-dashed border-gray-400 m-1 rounded"] $ do
           div_ [class_ "flex gap-1 items-center"] do
             mIcon_ "download4" "h-4 w-4 text-gray-400"
             let respSize = BS.length $ AE.encode req.responseBody
             span_ [class_ "text-md font-bold"] $ show (respSize - 2) <> " bytes"
-          p_ [class_ "text-gray-400 font-bold"] "Response size"
+          p_ [class_ "text-gray-500"] "Response size"
         div_ [class_ "flex flex-col gap-1 px-4 min-w-[120px] py-3 border border-dashed border-gray-400 m-1 rounded"] $ do
           div_ [class_ "flex gap-1 items-center"] do
             mIcon_ "clock" "h-4 w-4 text-gray-400"
             span_ [class_ "text-md font-bold"] $ show req.sdkType
-          p_ [class_ "text-gray-400 font-bold"] "Framework"
+          p_ [class_ "text-gray-500"] "Framework"
     -- request details
     div_ [class_ "border rounded-lg mt-8", id_ "request_detail_container"] do
       div_ [class_ "flex w-full bg-gray-100 px-4 py-2 flex-col gap-2"] do
@@ -263,6 +263,8 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
             do
               input_ [type_ "hidden", value_ "1 hour", name_ "expiresIn", id_ "expire_input"]
               input_ [type_ "hidden", value_ "", name_ "reqId", id_ "req_id_input"]
+          div_ [id_ "log-modal-content-loader", class_ "bg-white rounded-log shadow p-4 absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2"] do
+            loader
           div_ [class_ "px-2", id_ "log-modal-content"] pass
     form_
       [ class_ "card-round w-full text-sm"
@@ -342,6 +344,7 @@ function toggleExpireOptions (event) {
 }
 
 function getShareLink(event) {
+  event.target.innerText = "Generating..."
   const reqId = event.target.getAttribute ("data-req-id")
   document.querySelector('#req_id_input').value = reqId
   htmx.trigger('#share_log_form','submit')
@@ -427,7 +430,9 @@ apiLogItemView req expandItemPath = do
         [ class_ "p-2 text-blue-500"
         , term "data-log-item-path" (expandItemPath <> "/detailed")
         , [__|on click remove .hidden from #expand-log-modal then
+                remove .hidden from #log-modal-content-loader
                 fetch `${@data-log-item-path}` as html then put it into #log-modal-content
+                add .hidden to #log-modal-content-loader
                 end
           |]
         ]
