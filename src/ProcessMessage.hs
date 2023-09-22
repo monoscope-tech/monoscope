@@ -9,7 +9,7 @@ import Control.Exception (SomeException, try)
 import Control.Lens ((^?), _Just)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT, except, runExceptT, throwE)
-import Control.Monad.Trans.Except.Extra (handleIOExceptT)
+import Control.Monad.Trans.Except.Extra (handleIOExceptT, handleExceptT)
 import Data.Aeson (eitherDecode)
 import Data.Cache qualified as Cache
 import Data.Generics.Product (field)
@@ -21,7 +21,6 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (Connection, Query, formatMany)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact (execute)
-import Debug.Pretty.Simple (pTraceShow, pTraceShowM)
 import Fmt
 import Gogol.Data.Base64 (_Base64)
 import Gogol.PubSub qualified as PubSub
@@ -100,12 +99,13 @@ processMessages logger' env conn' msgs projectCache = do
           let rmMsg = msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64
           let jsonByteStr = fromMaybe "{}" rmMsg
           recMsg <- eitherStrToText $ eitherDecode (fromStrict jsonByteStr)
-          pTraceShowM recMsg
-
           Right (msg.ackId, recMsg)
   if null msgs'
     then pure []
     else processMessages' logger' env conn' msgs' projectCache
+
+wrapTxtException :: Text -> SomeException -> Text
+wrapTxtException wrap e = " " <> wrap <> " : " <> (toText @String $  show e)
 
 processMessages' :: HasCallStack => LogAction IO String -> Config.EnvConfig -> Pool Connection -> [Either Text (Maybe Text, RequestMessages.RequestMessage)] -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> IO [Maybe Text]
 processMessages' logger' _ conn' msgs projectCache' = do
@@ -126,22 +126,19 @@ processMessages' logger' _ conn' msgs projectCache' = do
   afterProccessing <- getTime Monotonic
 
   when (null reqDumps) $ logger' <& "ERROR: Empty params/query for processMessages for request dumps; "
-  resp <- runExceptT $
-    handleIOExceptT (toText @String . show) $
-      withPool conn' $ do
-        unless (null params') $ do
-          _ <- execute query' params'
-          pass
-        unless (null reqDumps) $ do
-          _ <- RequestDumps.bulkInsertRequestDumps reqDumps
-          pass
+
+  resp <- withPool conn' $ runExceptT do 
+    unless (null params') $ 
+      handleExceptT (wrapTxtException $ "execute query " <> show query' ) $ void $ execute query' params' 
+    unless (null reqDumps) $ 
+      handleExceptT (wrapTxtException $ "bulkInsertReqDump => \n\t\t" <> show  reqDumps) $ void $  RequestDumps.bulkInsertRequestDumps reqDumps
 
   endTime <- getTime Monotonic
   liftIO $ putStrLn $ fmtLn $ "Process Message (" +| messagesCount |+ ") pipeline microsecs: queryDuration " +| (toNanoSecs (diffTimeSpec startTime afterProccessing)) `div` 1000 |+ " -> processingDuration " +| toNanoSecs (diffTimeSpec afterProccessing endTime) `div` 1000 |+ " -> TotalDuration " +| toNanoSecs (diffTimeSpec startTime endTime) `div` 1000 |+ ""
 
   case resp of
     Left err -> do
-      logger' <& "error running generated request message based insert queries" <> toString err
+      logger' <& "error executing RequestMessage derived Insert queries. \n" <> toString err
       pure []
     Right _ -> pure rmAckIds
   where
