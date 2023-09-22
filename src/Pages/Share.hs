@@ -62,7 +62,7 @@ shareLinkPostH sess pid reqForm = do
   currentTime <- liftIO getZonedTime
   let rid = reqForm.reqId
   let expIn = reqForm.expiresIn
-  let lis = ["1 hour", "2 hours", "8 hours"] :: [Text]
+  let lis = ["1 hour", "8 hours", "1 day"] :: [Text]
   if Relude.elem expIn lis
     then do
       inId <- liftIO UUIDV4.nextRandom
