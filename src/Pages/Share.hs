@@ -69,8 +69,8 @@ shareLinkPostH sess pid reqForm = do
       res <- liftIO $ withPool pool $ execute Insert [sql| INSERT INTO apis.share_requests VALUES (?,?,?,?, current_timestamp + interval ?,?) |] (inId, pid, currentTime, currentTime, expIn, rid)
       pure $ addHeader "" $ copyLink $ show inId
     else do
-      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","successToast": ["Thanks for taking the survey"]}|]
-      pure $ addHeader hxTriggerData $ div_ [class_ "mt-3"] ""
+      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","errorToast": ["Invalid expiry interval"]}|]
+      pure $ addHeader hxTriggerData $ getShareLink rid
 
 copyLink :: Text -> Html ()
 copyLink rid = do
@@ -207,3 +207,29 @@ getRequest rid = query Select q (Only rid)
       JOIN apis.request_dumps AS rd ON sr.request_dump_id = rd.id
       WHERE sr.id = ? AND sr.expired_at > current_timestamp;
     |]
+
+getShareLink :: UUID.UUID -> Html ()
+getShareLink rid = do
+  div_ [class_ "relative", style_ "width:150px", onblur_ "document.getElementById('expire_container').classList.add('hidden')"] $ do
+    button_
+      [ onclick_ "toggleExpireOptions(event)"
+      , id_ "toggle_expires_btn"
+      , class_ "w-full flex gap-2 text-gray-600 justify_between items-center cursor-pointer px-2 py-1 border rounded focus:ring-2 focus:ring-blue-200 active:ring-2 active:ring-blue-200"
+      ]
+      $ do
+        p_ [style_ "width: calc(100% - 25px)", class_ "text-sm truncate ..."] "Expires in: 1 hour"
+        img_ [src_ "/assets/svgs/select_chevron.svg", style_ "height:15px; width:15px"]
+    div_ [id_ "expire_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] $ do
+      ["1 hour", "8 hours", "1 day"] & mapM_ \sw -> do
+        button_
+          [ onclick_ "expireChanged(event)"
+          , term "data-expire-value" sw
+          , class_ "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"
+          ]
+          $ toHtml sw
+  button_
+    [ class_ "flex flex-col gap-1 bg-blue-500 px-2 py-1 rounded text-white"
+    , term "data-req-id" (show rid)
+    , onclick_ "getShareLink(event)"
+    ]
+    "Get share link"

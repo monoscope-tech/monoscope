@@ -427,7 +427,7 @@ apiLogItemView req expandItemPath = do
   div_ [class_ "log-item-info border-l-blue-200 border-l-4"] $
     div_ [class_ "pl-4 py-1 ", colspan_ "3"] $ do
       button_
-        [ class_ "p-2 text-blue-500"
+        [ class_ "px-2 rounded text-white bg-blue-500 text-sm font-semibold"
         , term "data-log-item-path" (expandItemPath <> "/detailed")
         , [__|on click remove .hidden from #expand-log-modal then
                 remove .hidden from #log-modal-content-loader
