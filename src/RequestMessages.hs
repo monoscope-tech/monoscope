@@ -11,7 +11,7 @@ module RequestMessages (
   redactJSON,
 ) where
 
-import Data.Aeson (Value)
+import Data.Aeson (ToJSON (toJSON), Value)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEK
 import Data.Aeson.QQ (aesonQQ)
@@ -207,7 +207,8 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
         RequestDumps.PhpLaravel -> rM.duration `div` 1000
         _ -> rM.duration
 
-  let errorsV = maybe V.empty V.fromList rM.errors
+  let errorsL = fromMaybe empty rM.errors
+      errorsJSONB = toJSON errorsL
       tagsV = maybe V.empty V.fromList rM.tags
 
   -- request dumps are time series dumps representing each requests which we consume from our users.
@@ -248,7 +249,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
           , sdkType = rM.sdkType
           , parentId = rM.parentId
           , serviceVersion = rM.serviceVersion
-          , errors = RequestDumps.ATErrors errorsV
+          , errors = errorsJSONB
           , tags = tagsV
           }
 

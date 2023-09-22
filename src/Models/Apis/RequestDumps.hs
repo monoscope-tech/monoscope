@@ -10,7 +10,6 @@ module Models.Apis.RequestDumps (
   EndpointPerf (..),
   RequestForReport (..),
   ATError (..),
-  ATErrors (..),
   normalizeUrlPath,
   throughputBy,
   throughputBy',
@@ -143,12 +142,6 @@ data ATError = ATError
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATError
   deriving (ToField, FromField) via Aeson ATError
 
-newtype ATErrors = ATErrors (Vector ATError)
-  deriving stock (Show, Generic, Eq)
-  deriving newtype (ToField, FromField)
-  deriving newtype
-    (AE.FromJSON, AE.ToJSON)
-
 --   via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATErrors
 -- deriving (ToField, FromField) via Aeson ATErrors
 
@@ -187,7 +180,7 @@ data RequestDump = RequestDump
   , sdkType :: SDKTypes
   , parentId :: Maybe UUID.UUID
   , serviceVersion :: Maybe Text
-  , errors :: ATErrors
+  , errors ::AE.Value -- Vector ATError 
   , tags :: Vector Text
   }
   deriving stock (Show, Generic, Eq)
@@ -249,6 +242,10 @@ data RequestDumpLogItem = RequestDumpLogItem
   , fullCount :: Int
   , durationNs :: Integer
   , sdkType :: SDKTypes
+  , parentId :: Maybe UUID.UUID
+  , serviceVersion :: Maybe Text -- allow users track deployments and versions (tags, commits, etc)
+  , errors :: AE.Value 
+  , tags :: Maybe (Vector Text)
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (ToRow, FromRow)
@@ -306,7 +303,8 @@ selectRequestDumpByProject pid extraQuery fromM = query Select (Query $ encodeUt
       [text| SELECT id,created_at,host,url_path,method,raw_url,referer,
                     path_params, status_code,query_params,
                     request_body,response_body,request_headers,response_headers,
-                    count(*) OVER() AS full_count, duration_ns, sdk_type
+                    count(*) OVER() AS full_count, duration_ns, sdk_type,
+                    parent_id, service_version, errors, tags
              FROM apis.request_dumps where project_id=? and created_at<? |]
         <> extraQueryParsed
         <> " order by created_at desc limit 200;"
@@ -346,8 +344,9 @@ selectRequestDumpByProjectAndId pid createdAt rdId = queryOne Select q (createdA
     q =
       [sql|SELECT   id,created_at,host,url_path,method,raw_url,referer,
                     path_params,status_code,query_params,
-                    request_body,response_body,request_headers,response_headers,
-                    0 AS full_count, duration_ns, sdk_type
+                    request_body,response_body,request_headers,response_headers, 
+                    0 AS full_count, duration_ns, sdk_type,
+                    parent_id, service_version, errors, tags
              FROM apis.request_dumps where created_at=? and project_id=? and id=? LIMIT 1|]
 
 selectReqLatenciesRolledBySteps :: Int -> Int -> Projects.ProjectId -> Text -> Text -> DBT IO (Vector (Int, Int))
