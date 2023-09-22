@@ -178,7 +178,7 @@ expandAPIlogItem' req modal = do
     div_ [class_ "border rounded-lg mt-8", id_ "request_detail_container"] do
       div_ [class_ "flex w-full bg-gray-100 px-4 py-2 flex-col gap-2"] do
         p_ [class_ "font-bold"] "Request Details"
-      ul_ [class_ "px-4 flex gap-8 font-semibold border-b text-gray-500"] do
+      ul_ [class_ "px-4 flex gap-10 border-b text-gray-500"] do
         li_ [] do
           button_
             [ class_ "sdk_tab sdk_tab_active"
@@ -220,7 +220,7 @@ expandAPIlogItem' req modal = do
     div_ [class_ "border rounded-lg mt-8", id_ "reponse_detail_container"] do
       div_ [class_ "flex w-full bg-gray-100 px-4 py-2 flex-col gap-2"] do
         p_ [class_ "font-bold"] "Response Details"
-      ul_ [class_ "px-4 flex gap-8 font-semibold border-b text-gray-500"] do
+      ul_ [class_ "px-4 flex gap-10 border-b text-gray-500"] do
         li_ [] do
           button_
             [ class_ "sdk_tab sdk_tab_active"
