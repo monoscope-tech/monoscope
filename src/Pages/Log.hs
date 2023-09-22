@@ -159,7 +159,7 @@ expandAPIlogItem' req modal = do
           p_ [class_ "text-gray-500"] "Latency"
         div_ [class_ "flex flex-col gap-1 px-4 min-w-[120px] py-3 border border-dashed border-gray-400 m-1 rounded"] $ do
           div_ [class_ "flex gap-1 items-center"] do
-            mIcon_ "download4" "h-4 w-4 text-gray-400"
+            mIcon_ "upload" "h-4 w-4 text-gray-400"
             let reqSize = BS.length $ AE.encode req.requestBody
             span_ [class_ "text-md font-bold"] $ show (reqSize - 2) <> " bytes"
           p_ [class_ "text-gray-500"] "Request size"
@@ -171,7 +171,7 @@ expandAPIlogItem' req modal = do
           p_ [class_ "text-gray-500"] "Response size"
         div_ [class_ "flex flex-col gap-1 px-4 min-w-[120px] py-3 border border-dashed border-gray-400 m-1 rounded"] $ do
           div_ [class_ "flex gap-1 items-center"] do
-            mIcon_ "clock" "h-4 w-4 text-gray-400"
+            mIcon_ "projects" "h-5 w-5 text-gray-400"
             span_ [class_ "text-md font-bold"] $ show req.sdkType
           p_ [class_ "text-gray-500"] "Framework"
     -- request details
@@ -207,13 +207,13 @@ expandAPIlogItem' req modal = do
             , id_ "path_params"
             ]
             "Path Params"
-      div_ [class_ "bg-gray-50 m-4  p-2 rounded-lg border tab-content", id_ "req_body_json"] do
+      div_ [class_ "bg-gray-50 m-4  p-2 rounded-lg border sdk_tab_content sdk_tab_content_active", id_ "req_body_json"] do
         jsonValueToHtmlTree req.requestBody
-      div_ [class_ "bg-gray-50 m-4 hidden p-2 rounded-lg border tab-content", id_ "req_headers_json"] do
+      div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg hidden border sdk_tab_content", id_ "req_headers_json"] do
         jsonValueToHtmlTree req.requestHeaders
-      div_ [class_ "bg-gray-50 m-4 hidden p-2 rounded-lg border tab-content", id_ "query_params_json"] do
+      div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg hidden border sdk_tab_content", id_ "query_params_json"] do
         jsonValueToHtmlTree req.queryParams
-      div_ [class_ "bg-gray-50 m-4 hidden p-2 rounded-lg border tab-content", id_ "path_params_json"] do
+      div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg hidden border sdk_tab_content", id_ "path_params_json"] do
         jsonValueToHtmlTree req.pathParams
 
     -- response details
@@ -235,9 +235,9 @@ expandAPIlogItem' req modal = do
             , id_ "res_headers"
             ]
             "Headers"
-      div_ [class_ "bg-gray-50 m-4  p-2 rounded-lg border tab-content", id_ "res_body_json"] do
+      div_ [class_ "bg-gray-50 m-4  p-2 rounded-lg border sdk_tab_content sdk_tab_content_active", id_ "res_body_json"] do
         jsonValueToHtmlTree req.responseBody
-      div_ [class_ "bg-gray-50 m-4 hidden p-2 rounded-lg border tab-content", id_ "res_headers_json"] do
+      div_ [class_ "bg-gray-50 m-4 p-2 hidden rounded-lg border sdk_tab_content", id_ "res_headers_json"] do
         jsonValueToHtmlTree req.responseHeaders
 
 apiLogsPage :: Projects.ProjectId -> Int -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Text -> Text -> Text -> Html ()
@@ -326,12 +326,14 @@ function changeTab(tabId, parent) {
   tabLinks.forEach(link => link.classList.remove('sdk_tab_active'));
   const clickedTabLink = document.getElementById(tabId);
   clickedTabLink.classList.add('sdk_tab_active')
-  const tabContents = p.querySelectorAll('.tab-content');
-  tabContents.forEach(content => content.classList.add("hidden"));
-
+  const tabContents = p.querySelectorAll('.sdk_tab_content');
+  tabContents.forEach(content => {
+    content.classList.add("hidden")
+    content.classList.remove ("sdk_tab_content_active")
+  });
   const tabContent = document.getElementById(tabId + '_json');
   tabContent.classList.remove("hidden")
-
+  setTimeout(()=>{tabContent.classList.add("sdk_tab_content_active")},10)
 }
 
 function toggleExpireOptions (event) {

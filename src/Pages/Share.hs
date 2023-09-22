@@ -133,12 +133,14 @@ function changeTab(tabId, parent) {
   tabLinks.forEach(link => link.classList.remove('sdk_tab_active'));
   const clickedTabLink = document.getElementById(tabId);
   clickedTabLink.classList.add('sdk_tab_active')
-  const tabContents = p.querySelectorAll('.tab-content');
-  tabContents.forEach(content => content.classList.add("hidden"));
-
+  const tabContents = p.querySelectorAll('.sdk_tab_content');
+  tabContents.forEach(content => {
+    content.classList.add("hidden")
+    content.classList.remove ("sdk_tab_content_active")
+  });
   const tabContent = document.getElementById(tabId + '_json');
   tabContent.classList.remove("hidden")
-
+  setTimeout(()=>{tabContent.classList.add("sdk_tab_content_active")},10)
 }
 
 function toggleExpireOptions (event) {
