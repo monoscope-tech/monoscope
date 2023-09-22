@@ -393,6 +393,12 @@ SELECT create_hypertable('apis.request_dumps', 'created_at');
 SELECT add_retention_policy('apis.request_dumps',INTERVAL '3 months',true);
 CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_project_id ON apis.request_dumps(project_id, created_at);
 
+ALTER TABLE apis.request_dumps 
+  ADD COLUMN parent_id uuid,
+  ADD COLUMN service_version text,
+  ADD COLUMN errors jsonb NOT NULL DEFAULT '{}'::jsonb,
+  ADD COLUMN tags text[] NOT NULL DEFAULT '{}'::text[];
+
 
 CREATE TABLE IF NOT EXISTS apis.reports 
 (

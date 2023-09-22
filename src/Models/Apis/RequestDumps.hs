@@ -10,6 +10,7 @@ module Models.Apis.RequestDumps (
   EndpointPerf (..),
   RequestForReport (..),
   ATError (..),
+  ATErrors (..),
   normalizeUrlPath,
   throughputBy,
   throughputBy',
@@ -142,11 +143,20 @@ data ATError = ATError
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATError
   deriving (ToField, FromField) via Aeson ATError
 
+newtype ATErrors = ATErrors (Vector ATError)
+  deriving stock (Show, Generic, Eq)
+  deriving newtype (ToField, FromField)
+  deriving newtype
+    (AE.FromJSON, AE.ToJSON)
+
+--   via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATErrors
+-- deriving (ToField, FromField) via Aeson ATErrors
+
 -- request dumps are time series dumps representing each requests which we consume from our users.
 -- We use this field via the log explorer for exploring and searching traffic. And at the moment also use it for most time series analytics.
 -- It's likely a good idea to stop relying on it for some of the time series analysis, to allow us easily support request sampling, but still support
 -- relatively accurate analytic counts.
--- NOTE: This record closely mirrors the order of fields in the table. Changing the orfer of fields here would break inserting and querying request dumps
+-- NOTE: This record closely mirrors the order of fields in the table. Changing the order of fields here would break inserting and querying request dumps
 data RequestDump = RequestDump
   { id :: UUID.UUID
   , createdAt :: ZonedTime
@@ -177,7 +187,7 @@ data RequestDump = RequestDump
   , sdkType :: SDKTypes
   , parentId :: Maybe UUID.UUID
   , serviceVersion :: Maybe Text
-  , errors :: Vector ATError
+  , errors :: ATErrors
   , tags :: Vector Text
   }
   deriving stock (Show, Generic, Eq)

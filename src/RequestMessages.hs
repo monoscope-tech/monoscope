@@ -248,7 +248,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
           , sdkType = rM.sdkType
           , parentId = rM.parentId
           , serviceVersion = rM.serviceVersion
-          , errors = errorsV
+          , errors = RequestDumps.ATErrors errorsV
           , tags = tagsV
           }
 
