@@ -197,23 +197,31 @@ dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledBySte
 
       div_ [class_ "flex gap-5"] do
         div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] $ do
-          select_ [] $ option_ [class_ "text-2xl font-normal"] "Requests by Status Code"
+          div_ [class_ "flex gap-4 items-center"] do
+            select_ [] $ option_ [class_ "text-2xl font-normal mr-4"] "Requests by Status Code"
+            span_ [class_ "inline-block", term "data-tippy-content" "HTTP status code distribution for all requests."] $ mIcon_ "info" "w-4 h-4"
           div_ [class_ "h-64 "] do
             Charts.lazy [C.QByE $ C.QBPId pid : catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBStatusCode, C.SlotsE 120, C.ShowLegendE]
 
         div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] $ do
-          select_ [] $ option_ [class_ "text-2xl font-normal"] "Latency Percentiles"
+          div_ [class_ "flex gap-4 items-center"] do
+            select_ [] $ option_ [class_ "text-2xl font-normal"] "Latency Percentiles"
+            span_ [class_ "inline-block", term "data-tippy-content" "Response time distribution at the 50th, 75th, and 90th percentiles"] $ mIcon_ "info" "w-4 h-4"
           div_ [class_ "h-64 "] do
             Charts.lazy [C.QByE $ C.QBPId pid : catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBDurationPercentile, C.SlotsE 120, C.ShowLegendE, C.TypeE C.LineCT]
 
       div_ [class_ "flex gap-5"] do
         div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] $ do
-          select_ [] $ option_ [class_ "text-2xl font-normal"] "Error"
+          div_ [class_ "flex gap-4 items-center"] do
+            select_ [] $ option_ [class_ "text-2xl font-normal"] "Error"
+            span_ [class_ "inline-block", term "data-tippy-content" "Requests with error status responses grouped by status code"] $ mIcon_ "info" "w-4 h-4"
           div_ [class_ "h-64 "] do
             Charts.lazy [C.QByE $ [C.QBPId pid, C.QBStatusCodeGT 400] ++ catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBStatusCode, C.SlotsE 120, C.ShowLegendE, C.Theme "roma"]
 
         div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] $ do
-          select_ [] $ option_ [class_ "text-2xl font-normal"] "Reqs Grouped by Endpoint"
+          div_ [class_ "flex gap-4 items-center"] do
+            select_ [] $ option_ [class_ "text-2xl font-normal"] "Reqs Grouped by Endpoint"
+            span_ [class_ "inline-block", term "data-tippy-content" "All requests grouped by endpoint"] $ mIcon_ "info" "w-4 h-4"
           div_ [class_ "h-64 "] do
             Charts.lazy [C.QByE $ C.QBPId pid : catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBEndpoint, C.SlotsE 120, C.ShowLegendE]
 
