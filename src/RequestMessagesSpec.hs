@@ -259,6 +259,11 @@ spec = do
                 requestBody = B64.encodeBase64 ""
               , responseBody = B64.encodeBase64 $ encodeUtf8 [text|{"key": "value"}|]
               , statusCode = 203
+              , msgId = Nothing
+              , parentId = Nothing
+              , serviceVersion = Nothing
+              , errors = Nothing
+              , tags = Nothing
               }
       let projectCache = Projects.ProjectCache{hosts = [], endpointHashes = ["abc"], shapeHashes = [], redactFieldslist = []}
       let Right (_query, _params, _) = RequestMessages.requestMsgToDumpAndEndpoint projectCache requestMsg timestamp recId

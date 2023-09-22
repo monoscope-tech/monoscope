@@ -58,6 +58,11 @@ reqMsgFormToReqMsg pid RequestMessageForm{urlPath, ..} = do
       , responseBody = B64.encodeBase64 responseBody
       , sdkType = RequestDumps.GoGin
       , rawUrl = urlPath
+      , msgId = Nothing
+      , parentId = Nothing
+      , serviceVersion = Nothing
+      , tags = Nothing
+      , errors = Nothing
       , ..
       }
 

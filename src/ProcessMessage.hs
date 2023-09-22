@@ -21,6 +21,7 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (Connection, Query, formatMany)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact (execute)
+import Debug.Pretty.Simple (pTraceShow, pTraceShowM)
 import Fmt
 import Gogol.Data.Base64 (_Base64)
 import Gogol.PubSub qualified as PubSub
@@ -99,6 +100,8 @@ processMessages logger' env conn' msgs projectCache = do
           let rmMsg = msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64
           let jsonByteStr = fromMaybe "{}" rmMsg
           recMsg <- eitherStrToText $ eitherDecode (fromStrict jsonByteStr)
+          pTraceShowM recMsg
+
           Right (msg.ackId, recMsg)
   if null msgs'
     then pure []
@@ -148,7 +151,6 @@ processMessages' logger' _ conn' msgs projectCache' = do
     processMessage :: HasCallStack => LogAction IO String -> Pool Connection -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> Either Text (Maybe Text, RequestMessages.RequestMessage) -> IO (Either Text (Maybe Text, Query, [DBField], RequestDumps.RequestDump))
     processMessage logger conn projectCache recMsgEither = runExceptT do
       (rmAckId, recMsg) <- except recMsgEither
-      recId <- liftIO nextRandom
       timestamp <- liftIO getZonedTime
       let pid = Projects.ProjectId (recMsg.projectId)
 
@@ -168,5 +170,6 @@ processMessages' logger' _ conn' msgs projectCache' = do
       case projectCacheValE of
         Left e -> throwE $ "An error occurred while fetching project cache: " <> (toText $ show e)
         Right projectCacheVal -> do
+          recId <- liftIO nextRandom
           (query, params, reqDump) <- except $ RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId
           pure (rmAckId, query, params, reqDump)

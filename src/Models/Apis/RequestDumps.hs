@@ -1,3 +1,4 @@
+{-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
@@ -8,6 +9,7 @@ module Models.Apis.RequestDumps (
   RequestDumpLogItem,
   EndpointPerf (..),
   RequestForReport (..),
+  ATError (..),
   normalizeUrlPath,
   throughputBy,
   throughputBy',
@@ -37,6 +39,7 @@ import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, queryOne)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField (fromField))
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField (toField))
 import Database.PostgreSQL.Simple.Types (Query (Query))
@@ -55,6 +58,7 @@ data SDKTypes
   | GoBuiltIn
   | GoGorillaMux
   | GoDefault
+  | GoOutgoing
   | PhpLaravel
   | PhpSymfony
   | JsExpress
@@ -95,6 +99,7 @@ instance FromField SDKTypes where
 -- "/abc/:bla"
 --
 normalizeUrlPath :: SDKTypes -> Int -> Text -> Text -> Text
+normalizeUrlPath GoOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath GoGin statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath GoBuiltIn statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath GoDefault statusCode _method urlPath = removeQueryParams statusCode urlPath
@@ -122,6 +127,20 @@ removeQueryParams statusCode urlPath =
   case T.break (== '?') urlPath of
     (before, "") -> before -- No query parameters found
     (before, after) -> before -- Query parameters found, stripping them
+
+data ATError = ATError
+  { when :: ZonedTime
+  , errorType :: Text
+  , rootErrorType :: Text
+  , message :: Text
+  , rootErrorMessage :: Text
+  , stackTrace :: Text
+  }
+  deriving stock (Show, Generic, Eq)
+  deriving
+    (AE.FromJSON, AE.ToJSON)
+    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATError
+  deriving (ToField, FromField) via Aeson ATError
 
 -- request dumps are time series dumps representing each requests which we consume from our users.
 -- We use this field via the log explorer for exploring and searching traffic. And at the moment also use it for most time series analytics.
@@ -156,6 +175,10 @@ data RequestDump = RequestDump
   , fieldHashes :: Vector Text
   , durationNs :: Integer
   , sdkType :: SDKTypes
+  , parentId :: Maybe UUID.UUID
+  , serviceVersion :: Maybe Text
+  , errors :: Vector ATError
+  , tags :: Vector Text
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (ToRow, FromRow)
@@ -305,7 +328,7 @@ selectRequestDumpsByProjectForChart pid extraQuery = do
 bulkInsertRequestDumps :: [RequestDump] -> DBT IO Int64
 bulkInsertRequestDumps = executeMany q
   where
-    q = [sql| INSERT INTO apis.request_dumps VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?); |]
+    q = [sql| INSERT INTO apis.request_dumps VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?); |]
 
 selectRequestDumpByProjectAndId :: Projects.ProjectId -> ZonedTime -> UUID.UUID -> DBT IO (Maybe RequestDumpLogItem)
 selectRequestDumpByProjectAndId pid createdAt rdId = queryOne Select q (createdAt, pid, rdId)

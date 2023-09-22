@@ -113,7 +113,7 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM endpointM hxRequestM hxBo
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = project
-          , pageTitle = "Anomalies"
+          , pageTitle = "Changes & Errors"
           }
   let currentURL = "/p/" <> pid.toText <> "/anomalies?layout=" <> fromMaybe "false" layoutM <> "&ackd=" <> fromMaybe "false" ackdM <> "&archived=" <> fromMaybe "false" archivedM
   let paramInput =

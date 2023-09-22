@@ -48,6 +48,7 @@ data EnvConfig = EnvConfig
   , googleServiceAccountB64 :: LT.Text
   , convertkitApiKey :: Text
   , convertkitApiSecret :: Text
+  , enableBackgroundJobs :: Bool
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromEnv)

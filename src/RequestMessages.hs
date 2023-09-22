@@ -25,6 +25,7 @@ import Data.Text qualified as T
 import Data.Time.Clock as Clock
 import Data.Time.LocalTime as Time
 import Data.UUID qualified as UUID
+import Data.Vector qualified as V
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Simple (Query)
 import Deriving.Aeson qualified as DAE
@@ -80,6 +81,11 @@ data RequestMessage = RequestMessage
   , statusCode :: Int
   , urlPath :: Text
   , timestamp :: ZonedTime
+  , msgId :: Maybe UUID.UUID -- This becomes the request_dump id.
+  , parentId :: Maybe UUID.UUID
+  , serviceVersion :: Maybe Text -- allow users track deployments and versions (tags, commits, etc)
+  , errors :: Maybe [RequestDumps.ATError]
+  , tags :: Maybe [Text]
   }
   deriving stock (Show, Generic)
   deriving
@@ -119,7 +125,11 @@ redactJSON paths' = redactJSON' (stripPrefixDot paths')
 -- Also, being a pure function means it's easier to test the request processing logic since we can unit test pure functions easily.
 -- We can pass in a request, it's project cache object and inspect the generated sql and params.
 requestMsgToDumpAndEndpoint :: Projects.ProjectCache -> RequestMessages.RequestMessage -> ZonedTime -> UUID.UUID -> Either Text (Query, [DBField], RequestDumps.RequestDump)
-requestMsgToDumpAndEndpoint pjc rM now dumpID = do
+requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
+  -- TODO: User dumpID and msgID to get correct ID
+  --
+  let dumpID = fromMaybe dumpIDOriginal rM.msgId
+
   let method = T.toUpper rM.method
   let urlPath = RequestDumps.normalizeUrlPath rM.sdkType rM.statusCode rM.method rM.urlPath
   let !endpointHash = from @String @Text $ showHex (xxHash $ encodeUtf8 $ UUID.toText (rM.projectId) <> method <> urlPath) ""
@@ -138,18 +148,16 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
   let respBody = redactJSON redactFieldsList $ fromRight [aesonQQ| {} |] $ AE.eitherDecodeStrict respBodyB64
 
   let pathParamFields = valueToFields $ redactJSON redactFieldsList $ rM.pathParams
-  let queryParamFields = valueToFields $ redactJSON redactFieldsList $ rM.queryParams
-  let reqHeaderFields = valueToFields $ redactJSON redactFieldsList $ rM.requestHeaders
-  let respHeaderFields = valueToFields $ redactJSON redactFieldsList $ rM.responseHeaders
-
-  let reqBodyFields = valueToFields reqBody
-  let respBodyFields = valueToFields respBody
-
-  let queryParamsKP = Vector.fromList $ map fst queryParamFields
-  let requestHeadersKP = Vector.fromList $ map fst reqHeaderFields
-  let responseHeadersKP = Vector.fromList $ map fst respHeaderFields
-  let requestBodyKP = Vector.fromList $ map fst reqBodyFields
-  let responseBodyKP = Vector.fromList $ map fst respBodyFields
+      queryParamFields = valueToFields $ redactJSON redactFieldsList $ rM.queryParams
+      reqHeaderFields = valueToFields $ redactJSON redactFieldsList $ rM.requestHeaders
+      respHeaderFields = valueToFields $ redactJSON redactFieldsList $ rM.responseHeaders
+      reqBodyFields = valueToFields reqBody
+      respBodyFields = valueToFields respBody
+      queryParamsKP = Vector.fromList $ map fst queryParamFields
+      requestHeadersKP = Vector.fromList $ map fst reqHeaderFields
+      responseHeadersKP = Vector.fromList $ map fst respHeaderFields
+      requestBodyKP = Vector.fromList $ map fst reqBodyFields
+      responseBodyKP = Vector.fromList $ map fst respBodyFields
 
   -- We calculate a hash that represents the request.
   -- We skip the request headers from this hash, since the source of the request like browsers might add or skip headers at will,
@@ -160,12 +168,12 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
   let projectId = Projects.ProjectId (rM.projectId)
 
   let pathParamsFieldsDTO = pathParamFields & map (fieldsToFieldDTO Fields.FCPathParam projectId endpointHash)
-  let queryParamsFieldsDTO = queryParamFields & map (fieldsToFieldDTO Fields.FCQueryParam projectId endpointHash)
-  let reqHeadersFieldsDTO = reqHeaderFields & map (fieldsToFieldDTO Fields.FCRequestHeader projectId endpointHash)
-  let respHeadersFieldsDTO = respHeaderFields & map (fieldsToFieldDTO Fields.FCResponseHeader projectId endpointHash)
-  let reqBodyFieldsDTO = reqBodyFields & map (fieldsToFieldDTO Fields.FCRequestBody projectId endpointHash)
-  let respBodyFieldsDTO = respBodyFields & map (fieldsToFieldDTO Fields.FCResponseBody projectId endpointHash)
-  let fieldsDTO =
+      queryParamsFieldsDTO = queryParamFields & map (fieldsToFieldDTO Fields.FCQueryParam projectId endpointHash)
+      reqHeadersFieldsDTO = reqHeaderFields & map (fieldsToFieldDTO Fields.FCRequestHeader projectId endpointHash)
+      respHeadersFieldsDTO = respHeaderFields & map (fieldsToFieldDTO Fields.FCResponseHeader projectId endpointHash)
+      reqBodyFieldsDTO = reqBodyFields & map (fieldsToFieldDTO Fields.FCRequestBody projectId endpointHash)
+      respBodyFieldsDTO = respBodyFields & map (fieldsToFieldDTO Fields.FCResponseBody projectId endpointHash)
+      fieldsDTO =
         pathParamsFieldsDTO
           <> queryParamsFieldsDTO
           <> reqHeadersFieldsDTO
@@ -198,6 +206,9 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
   let duration = case rM.sdkType of
         RequestDumps.PhpLaravel -> rM.duration `div` 1000
         _ -> rM.duration
+
+  let errorsV = maybe V.empty V.fromList rM.errors
+      tagsV = maybe V.empty V.fromList rM.tags
 
   -- request dumps are time series dumps representing each requests which we consume from our users.
   -- We use this field via the log explorer for exploring and searching traffic. And at the moment also use it for most time series analytics.
@@ -235,6 +246,10 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
           , fieldHashes = fieldHashes
           , durationNs = fromIntegral duration
           , sdkType = rM.sdkType
+          , parentId = rM.parentId
+          , serviceVersion = rM.serviceVersion
+          , errors = errorsV
+          , tags = tagsV
           }
 
   -- Build all fields and formats, unzip them as separate lists and append them to query and params

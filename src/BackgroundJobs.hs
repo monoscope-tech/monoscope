@@ -83,156 +83,157 @@ getAllProjects = query Select q (Only True)
 --
 
 jobsRunner :: Pool Connection -> LogAction IO String -> Config.EnvConfig -> Job -> IO ()
-jobsRunner dbPool logger cfg job =
-  throwParsePayload job >>= \case
-    NewAnomaly pid createdAt anomalyTypesT anomalyActionsT targetHash -> do
-      let anomalyType = Unsafe.fromJust $ Anomalies.parseAnomalyTypes anomalyTypesT
-      -- let anomalyAction = Unsafe.fromJust $ Anomalies.parseAnomalyActions anomalyActionsT
+jobsRunner dbPool logger cfg job = do
+  when (cfg.enableBackgroundJobs) do
+    throwParsePayload job >>= \case
+      NewAnomaly pid createdAt anomalyTypesT anomalyActionsT targetHash -> do
+        let anomalyType = Unsafe.fromJust $ Anomalies.parseAnomalyTypes anomalyTypesT
+        -- let anomalyAction = Unsafe.fromJust $ Anomalies.parseAnomalyActions anomalyActionsT
 
-      case anomalyType of
-        Anomalies.ATEndpoint -> do
-          endp <- withPool dbPool $ Endpoints.endpointByHash pid targetHash
-          users <- withPool dbPool $ Projects.usersByProjectId pid
-          project <- Unsafe.fromJust <<$>> withPool dbPool $ Projects.projectById pid
-          let enp = Unsafe.fromJust endp
-          let endpointPath = enp.method <> " " <> enp.urlPath
-          forM_ users \u ->
-            let projectTitle = project.title
-                projectIdTxt = pid.toText
-                name = u.firstName
-                subject = [text| 🤖 APITOOLKIT: New Endpoint detected for `$projectTitle` |]
-                body =
-                  toLText
-                    [trimming|
-          Hi $name,<br/>
+        case anomalyType of
+          Anomalies.ATEndpoint -> do
+            endp <- withPool dbPool $ Endpoints.endpointByHash pid targetHash
+            users <- withPool dbPool $ Projects.usersByProjectId pid
+            project <- Unsafe.fromJust <<$>> withPool dbPool $ Projects.projectById pid
+            let enp = Unsafe.fromJust endp
+            let endpointPath = enp.method <> " " <> enp.urlPath
+            forM_ users \u ->
+              let projectTitle = project.title
+                  projectIdTxt = pid.toText
+                  name = u.firstName
+                  subject = [text| 🤖 APITOOLKIT: New Endpoint detected for `$projectTitle` |]
+                  body =
+                    toLText
+                      [trimming|
+            Hi $name,<br/>
 
-          <p>We detected a new endpoint on ``$projectTitle`:</p>
-          <p><strong>$endpointPath</strong></p>
-          <a href="https://app.apitoolkit.io/p/$projectIdTxt/anomalies">More details on the apitoolkit</a>
-          <br/><br/>
-          Regards,
-          Apitoolkit team
-                    |]
-                reciever = CI.original u.email
-             in sendEmail cfg reciever subject body
-        Anomalies.ATShape -> do
-          shapes <- withPool dbPool $ getShapes pid $ T.take 8 targetHash
-          let targetFields = maybe [] (toList . snd) (V.find (\a -> fst a == targetHash) shapes)
-          updatedFieldFormats <- withPool dbPool $ getUpdatedFieldFormats pid (V.fromList targetFields)
-          let otherFields = toList <$> toList (snd $ V.unzip $ V.filter (\a -> fst a /= targetHash) shapes)
-          let newFields = filter (`notElem` foldl' union [] otherFields) targetFields
-          let deletedFields = filter (`notElem` targetFields) $ foldl' intersect (head $ [] :| otherFields) (tail $ [] :| otherFields)
-          -- Update the shape values in the database
-          _ <- withPool dbPool $ updateShapeCounts pid targetHash (V.fromList newFields) (V.fromList deletedFields) updatedFieldFormats
-          -- Send an email about the new shape anomaly but only if there was no endpoint anomaly logged
-          anomalyM <- withPool dbPool $ Anomalies.getAnomalyVM pid $ T.take 8 targetHash
-          case anomalyM of
-            Nothing -> pass
-            Just anomaly -> do
-              -- TODO: DOn't send any anomaly emails other than for email
-              error "retry later"
-              users <- withPool dbPool $ Projects.usersByProjectId pid
-              project <- Unsafe.fromJust <<$>> withPool dbPool $ Projects.projectById pid
-              forM_ users \u ->
-                let projectTitle = project.title
-                    projectIdTxt = pid.toText
-                    name = u.firstName
-                    subject = [text| 🤖 APITOOLKIT: New Shape anomaly found for `$projectTitle` |]
-                    body =
-                      toLText
-                        [trimming|
-Hi $name,<br/>
-
-<p>We detected a different API request shape to your endpoints than what you usually have..</p>
-<a href="https://app.apitoolkit.io/p/$projectIdTxt/anomalies">More details on the apitoolkit</a>
-<br/><br/>
-Regards,<br/>
-Apitoolkit team
-                        |]
-                    reciever = CI.original u.email
-                 in sendEmail cfg reciever subject body
-        Anomalies.ATFormat -> do
-          -- Send an email about the new shape anomaly but only if there was no endpoint anomaly logged
-          anomalyM <- withPool dbPool $ Anomalies.getAnomalyVM pid targetHash
-          case anomalyM of
-            Nothing -> pass
-            Just anomaly -> do
-              -- TODO: DOn't send any anomaly emails other than for email
-              error "retry later"
-              users <- withPool dbPool $ Projects.usersByProjectId pid
-              project <- Unsafe.fromJust <<$>> withPool dbPool $ Projects.projectById pid
-              forM_ users \u ->
-                let projectTitle = project.title
-                    projectIdTxt = pid.toText
-                    name = u.firstName
-                    subject = [text| 🤖 APITOOLKIT: New field format anomaly found for `$projectTitle` |]
-                    body =
-                      toLText
-                        [trimming|
-Hi $name,<br/>
-
-<p>We detected that a particular field on your API is returning a different format/type than what it usually gets.</p>
-<a href="https://app.apitoolkit.io/p/$projectIdTxt/anomalies">More details on the apitoolkit</a>
-<br/><br/>
-Regards,<br/>
-Apitoolkit team
+            <p>We detected a new endpoint on ``$projectTitle`:</p>
+            <p><strong>$endpointPath</strong></p>
+            <a href="https://app.apitoolkit.io/p/$projectIdTxt/anomalies">More details on the apitoolkit</a>
+            <br/><br/>
+            Regards,
+            Apitoolkit team
                       |]
-                    reciever = CI.original u.email
-                 in sendEmail cfg reciever subject body
-        Anomalies.ATField -> pass
-        Anomalies.ATUnknown -> pass
-    InviteUserToProject userId projectId reciever projectTitle' ->
-      let projectTitle = projectTitle'
-          projectIdTxt = projectId.toText
-          subject = [text| 🤖 APITOOLKIT: You've been invited to a project '$projectTitle' on apitoolkit.io |]
-          body =
-            toLText
-              [trimming|
-Hi,<br/>
+                  reciever = CI.original u.email
+               in sendEmail cfg reciever subject body
+          Anomalies.ATShape -> do
+            shapes <- withPool dbPool $ getShapes pid $ T.take 8 targetHash
+            let targetFields = maybe [] (toList . snd) (V.find (\a -> fst a == targetHash) shapes)
+            updatedFieldFormats <- withPool dbPool $ getUpdatedFieldFormats pid (V.fromList targetFields)
+            let otherFields = toList <$> toList (snd $ V.unzip $ V.filter (\a -> fst a /= targetHash) shapes)
+            let newFields = filter (`notElem` foldl' union [] otherFields) targetFields
+            let deletedFields = filter (`notElem` targetFields) $ foldl' intersect (head $ [] :| otherFields) (tail $ [] :| otherFields)
+            -- Update the shape values in the database
+            _ <- withPool dbPool $ updateShapeCounts pid targetHash (V.fromList newFields) (V.fromList deletedFields) updatedFieldFormats
+            -- Send an email about the new shape anomaly but only if there was no endpoint anomaly logged
+            anomalyM <- withPool dbPool $ Anomalies.getAnomalyVM pid $ T.take 8 targetHash
+            case anomalyM of
+              Nothing -> pass
+              Just anomaly -> do
+                -- TODO: DOn't send any anomaly emails other than for email
+                error "retry later"
+                users <- withPool dbPool $ Projects.usersByProjectId pid
+                project <- Unsafe.fromJust <<$>> withPool dbPool $ Projects.projectById pid
+                forM_ users \u ->
+                  let projectTitle = project.title
+                      projectIdTxt = pid.toText
+                      name = u.firstName
+                      subject = [text| 🤖 APITOOLKIT: New Shape anomaly found for `$projectTitle` |]
+                      body =
+                        toLText
+                          [trimming|
+  Hi $name,<br/>
 
-<p>You have been invited to the $projectTitle project on apitoolkit. 
-Please use the following link to activate your account and access the $projectTitle project.</p>
-<a href="https://app.apitoolkit.io/p/$projectIdTxt">Click Here</a>
-<br/><br/>
-Regards,
-Apitoolkit team
-          |]
-       in sendEmail cfg reciever subject body
-    CreatedProjectSuccessfully userId projectId reciever projectTitle' ->
-      let projectTitle = projectTitle'
-          projectIdTxt = projectId.toText
-          subject = [text| 🤖 APITOOLKIT: Project created successfully '$projectTitle ' on apitoolkit.io |]
-          body =
-            toLText
-              [trimming|
-Hi,<br/>
+  <p>We detected a different API request shape to your endpoints than what you usually have..</p>
+  <a href="https://app.apitoolkit.io/p/$projectIdTxt/anomalies">More details on the apitoolkit</a>
+  <br/><br/>
+  Regards,<br/>
+  Apitoolkit team
+                          |]
+                      reciever = CI.original u.email
+                   in sendEmail cfg reciever subject body
+          Anomalies.ATFormat -> do
+            -- Send an email about the new shape anomaly but only if there was no endpoint anomaly logged
+            anomalyM <- withPool dbPool $ Anomalies.getAnomalyVM pid targetHash
+            case anomalyM of
+              Nothing -> pass
+              Just anomaly -> do
+                -- TODO: DOn't send any anomaly emails other than for email
+                error "retry later"
+                users <- withPool dbPool $ Projects.usersByProjectId pid
+                project <- Unsafe.fromJust <<$>> withPool dbPool $ Projects.projectById pid
+                forM_ users \u ->
+                  let projectTitle = project.title
+                      projectIdTxt = pid.toText
+                      name = u.firstName
+                      subject = [text| 🤖 APITOOLKIT: New field format anomaly found for `$projectTitle` |]
+                      body =
+                        toLText
+                          [trimming|
+  Hi $name,<br/>
 
-<p>You have been invited to the $projectTitle project on apitoolkit. 
-Please use the following link to activate your account and access the $projectTitle project.</p>
-<a href="app.apitoolkit.io/p/$projectIdTxt">Click Here to access the project</a><br/><br/>.
+  <p>We detected that a particular field on your API is returning a different format/type than what it usually gets.</p>
+  <a href="https://app.apitoolkit.io/p/$projectIdTxt/anomalies">More details on the apitoolkit</a>
+  <br/><br/>
+  Regards,<br/>
+  Apitoolkit team
+                        |]
+                      reciever = CI.original u.email
+                   in sendEmail cfg reciever subject body
+          Anomalies.ATField -> pass
+          Anomalies.ATUnknown -> pass
+      InviteUserToProject userId projectId reciever projectTitle' ->
+        let projectTitle = projectTitle'
+            projectIdTxt = projectId.toText
+            subject = [text| 🤖 APITOOLKIT: You've been invited to a project '$projectTitle' on apitoolkit.io |]
+            body =
+              toLText
+                [trimming|
+  Hi,<br/>
 
-By the way, we know it can be difficult or confusing to integrate SDKs sometimes. So we're willing to assist. You can schedule a time here, and we can help with integrating: 
-<a href="https://calendar.google.com/calendar/u/0/appointments/schedules/AcZssZ21Q1uDPjHN4YPpM2lNBS0_Nwc16IQj-25e5WIoPOKEVsBBIWJgy3usCUS4d7MtQz7kiuzyBJLb">Click Here to Schedule</a>
-<br/><br/>
-Regards,<br/>
-Apitoolkit team
-          |]
-       in sendEmail cfg reciever subject body
-    DailyJob -> do
-      projects <- withPool dbPool getAllProjects
-      forM_ projects \p -> do
-        liftIO $ withResource dbPool \conn -> do
-          currentDay <- utctDay <$> getCurrentTime
-          if dayOfWeek currentDay == Monday
-            then createJob conn "background_jobs" $ BackgroundJobs.WeeklyReports p
-            else createJob conn "background_jobs" $ BackgroundJobs.DailyReports p
-      pass
-    DailyReports pid -> do
-      dailyReportForProject dbPool cfg pid
-      pass
-    WeeklyReports pid -> do
-      weeklyReportForProject dbPool cfg pid
-      pass
+  <p>You have been invited to the $projectTitle project on apitoolkit. 
+  Please use the following link to activate your account and access the $projectTitle project.</p>
+  <a href="https://app.apitoolkit.io/p/$projectIdTxt">Click Here</a>
+  <br/><br/>
+  Regards,
+  Apitoolkit team
+            |]
+         in sendEmail cfg reciever subject body
+      CreatedProjectSuccessfully userId projectId reciever projectTitle' ->
+        let projectTitle = projectTitle'
+            projectIdTxt = projectId.toText
+            subject = [text| 🤖 APITOOLKIT: Project created successfully '$projectTitle ' on apitoolkit.io |]
+            body =
+              toLText
+                [trimming|
+  Hi,<br/>
+
+  <p>You have been invited to the $projectTitle project on apitoolkit. 
+  Please use the following link to activate your account and access the $projectTitle project.</p>
+  <a href="app.apitoolkit.io/p/$projectIdTxt">Click Here to access the project</a><br/><br/>.
+
+  By the way, we know it can be difficult or confusing to integrate SDKs sometimes. So we're willing to assist. You can schedule a time here, and we can help with integrating: 
+  <a href="https://calendar.google.com/calendar/u/0/appointments/schedules/AcZssZ21Q1uDPjHN4YPpM2lNBS0_Nwc16IQj-25e5WIoPOKEVsBBIWJgy3usCUS4d7MtQz7kiuzyBJLb">Click Here to Schedule</a>
+  <br/><br/>
+  Regards,<br/>
+  Apitoolkit team
+            |]
+         in sendEmail cfg reciever subject body
+      DailyJob -> do
+        projects <- withPool dbPool getAllProjects
+        forM_ projects \p -> do
+          liftIO $ withResource dbPool \conn -> do
+            currentDay <- utctDay <$> getCurrentTime
+            if dayOfWeek currentDay == Monday
+              then createJob conn "background_jobs" $ BackgroundJobs.WeeklyReports p
+              else createJob conn "background_jobs" $ BackgroundJobs.DailyReports p
+        pass
+      DailyReports pid -> do
+        dailyReportForProject dbPool cfg pid
+        pass
+      WeeklyReports pid -> do
+        weeklyReportForProject dbPool cfg pid
+        pass
 
 jobsWorkerInit :: Pool Connection -> LogAction IO String -> Config.EnvConfig -> IO ()
 jobsWorkerInit dbPool logger envConfig = startJobRunner $ mkConfig jobLogger "background_jobs" dbPool (MaxConcurrentJobs 1) (jobsRunner dbPool logger envConfig) id
