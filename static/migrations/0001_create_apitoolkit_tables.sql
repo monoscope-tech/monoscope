@@ -462,7 +462,23 @@ CREATE MATERIALIZED VIEW apis.project_request_stats AS
           sum(EXTRACT(epoch FROM duration))  as total_time,
           count(1)  as total_requests
       FROM apis.request_dumps
-      where created_at > NOW() - interval '14' day
+      WHERE created_at > NOW() - interval '14' day
+      GROUP BY project_id
+    ),
+    current_week_requests as (
+      SELECT
+          project_id,
+          COUNT(*) AS request_count
+      FROM apis.request_dumps
+      WHERE created_at >= NOW() - interval '7 days'
+      GROUP BY project_id
+    ),
+    previous_week_requests as (
+      SELECT
+          project_id,
+          COUNT(*) AS request_count
+      FROM apis.request_dumps
+      WHERE created_at >= NOW() - interval '14 days' AND created_at < NOW() - interval '7 days'
       GROUP BY project_id
     )
   SELECT 	
@@ -483,10 +499,14 @@ CREATE MATERIALIZED VIEW apis.project_request_stats AS
     (select count(*) from apis.anomalies ann where rds.project_id=ann.project_id and ann.anomaly_type!='field') total_anomalies,
     (select count(*) from apis.anomalies ann where rds.project_id=ann.project_id and created_at<=NOW()::DATE-7) total_anomalies_last_week,
     (select count(*) from apis.anomalies ann where rds.project_id=ann.project_id) total_fields,
-    (select count(*) from apis.anomalies ann where rds.project_id=ann.project_id and created_at<=NOW()::DATE-7) total_fields_last_week
-  FROM request_dump_stats rds;
+    (select count(*) from apis.anomalies ann where rds.project_id=ann.project_id and created_at<=NOW()::DATE-7) total_fields_last_week,
+    CAST (coalesce((cw.request_count / (7 * 24 * 60)),0) AS INT) requests_per_min,
+    CAST (coalesce((pw.request_count / (7 * 24 * 60)),0) AS INT) requests_per_min_last_week
+  FROM request_dump_stats rds
+  LEFT JOIN current_week_requests cw ON rds.project_id = cw.project_id
+  LEFT JOIN previous_week_requests pw ON rds.project_id = pw.project_id;
+  
 CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_project_request_stats_project_id ON apis.project_request_stats(project_id);
-
 -- TODO: Create triggers to create new anomalies when new fields, 
 -- TODO: endpoints and shapes are created.
 
