@@ -65,6 +65,7 @@ data SDKTypes
   | JsNest
   | JsFastify
   | JavaSpringBoot
+  | JsAxiosOutgoing
   | DotNet
   | PythonFastApi
   | PythonFlask

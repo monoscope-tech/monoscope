@@ -120,7 +120,7 @@ endpointList' paramInput currTime pid enps = form_ [class_ "col-span-5 bg-white 
         a_ [class_ "cursor-pointer"] "24h"
         a_ [class_ "cursor-pointer font-bold text-base"] "14d"
     div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "font-base"] "EVENTS"
-  div_ [class_ "w-full flex flex-row m-3"] $ do
+  div_ [class_ "w-full flex flex-row p-3"] $ do
     div_ [class_ "flex w-full bg-white py-2 px-3 flex-row border-solid border border-gray-200 h-10"] $ do
       img_ [src_ "/assets/svgs/search.svg", class_ "h-5 w-auto"]
       input_

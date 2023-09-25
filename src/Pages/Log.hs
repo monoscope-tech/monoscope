@@ -242,7 +242,7 @@ expandAPIlogItem' req modal = do
 
 apiLogsPage :: Projects.ProjectId -> Int -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Text -> Text -> Text -> Html ()
 apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL = do
-  section_ [class_ "mx-auto px-10 py-2 pb-5 gap-2 flex flex-col h-[98%] overflow-hidden "] $ do
+  section_ [class_ "mx-auto px-10 py-2 gap-2 flex flex-col h-[98%] overflow-hidden "] $ do
     div_
       [ style_ "z-index:26; width: min(90vw, 800px)"
       , class_ "fixed hidden right-0 bg-white overflow-y-scroll h-[calc(100%-60px)] border-l border-l-2 shadow"
@@ -284,7 +284,7 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
         div_ $ do
           div_ [id_ "queryEditor", class_ "h-14"] ""
 
-    div_ [class_ "card-round w-full grow divide-y flex flex-col pb-8 text-sm h-full overflow-y-hidden"] $ do
+    div_ [class_ "card-round w-full grow divide-y flex flex-col text-sm h-full overflow-y-hidden overflow-x-hidden"] $ do
       div_ [class_ "pl-3 py-1 space-x-5 flex flex-row justify-between"] $ do
         a_ [class_ "cursor-pointer inline-block pr-3 space-x-2 bg-blue-50 hover:bg-blue-100 blue-800 p-1 rounded-md", [__|on click toggle .hidden on #reqsChartParent|]] $ do
           img_ [src_ "/assets/svgs/cube-transparent.svg", class_ "w-4 inline-block"]

@@ -113,7 +113,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child = do
                 });
               }
             |]
-    body_ [class_ "text-gray-900 h-full w-full"] $ do
+    body_ [class_ "text-gray-900 h-full w-full bg-white"] $ do
       div_
         [ style_ "z-index:99999"
         , class_ "fixed pt-24 sm:hidden justify-center z-50 w-full p-4 bg-gray-50 overflow-y-auto inset-0 h-full max-h-full"
@@ -239,15 +239,23 @@ projectsDropDown currProject projects = do
 sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Maybe Text -> Html ()
 sideNav sess project pageTitle menuItem = do
   aside_ [class_ "shrink-0 top-0 border-r-2 bg-white border-gray-200 h-screen overflow-hidden transition-all duration-1000 ease-in-out", id_ "side-nav-menu"] $ do
-    a_ [href_ "/", class_ "inline-block p-4 h-12"] $ do
-      img_
-        [ class_ "h-12 sd-hidden"
-        , src_ "/assets/svgs/logo.svg"
-        ]
-      img_
-        [ class_ "h-12 w-10 hidden sd-show"
-        , src_ "/assets/svgs/logo_mini.svg"
-        ]
+    script_
+      [text|
+           if (window.initialCloseSideMenu == 'true'){
+                 document.getElementById('side-nav-menu').classList.add('hidden-side-nav-menu');
+              }
+          |]
+
+    div_ [class_ "text-center"] do
+      a_ [href_ "/", class_ "inline-block px-2 py-2 h-12"] $ do
+        img_
+          [ class_ "h-12 sd-hidden"
+          , src_ "/assets/svgs/logo.svg"
+          ]
+        img_
+          [ class_ "h-12 w-10 hidden sd-show"
+          , src_ "/assets/svgs/logo_mini.svg"
+          ]
     div_ [class_ "py-4 px-4 transition-all  duration-1000 ease-in-out", id_ "side-nav-ctx-btn"] $ do
       a_
         [ class_ "flex flex-row bg-blue-50 hover:bg-blue-100 text-blue-900 block p-6 rounded-md cursor-pointer"
@@ -283,6 +291,8 @@ sideNav sess project pageTitle menuItem = do
       menu (project.id) & mapM_ \(mTitle, mUrl, mIcon) -> do
         a_
           [ href_ mUrl
+          , term "data-tippy-placement" "right"
+          , term "data-tippy-content" mTitle
           , class_ $
               "block flex gap-3 px-5 py-3 flex justify-center items-center hover:bg-blue-50 text-slate-800 "
                 <> ( if maybe (pageTitle == mTitle) (== mTitle) menuItem
@@ -291,12 +301,12 @@ sideNav sess project pageTitle menuItem = do
                    )
           ]
           $ do
-            svg_ [class_ "w-5 h-5 icon text-slate-500", term "data-tippy-placement" "right", term "data-tippy-content" mTitle] $ use_ [href_ $ "/assets/svgs/sprite/sprite.svg" <> mIcon]
+            svg_ [class_ "w-5 h-5 icon text-slate-500"] $ use_ [href_ $ "/assets/svgs/sprite/sprite.svg" <> mIcon]
             span_ [class_ "grow sd-hidden"] $ toHtml mTitle
 
 navbar :: Users.User -> Html ()
 navbar currUser = do
-  nav_ [id_ "main-navbar", class_ "sticky z-20 top-0 w-full w-full px-6 py-3 border-b bg-white flex flex-row justify-between"] $ do
+  nav_ [id_ "main-navbar", class_ "sticky z-20 top-0 w-full px-6 py-2 border-b bg-white flex flex-row justify-between"] $ do
     a_
       [ id_ "side_nav_toggler"
       , class_ "cursor-pointer flex items-center"

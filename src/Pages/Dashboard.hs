@@ -213,14 +213,14 @@ dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledBySte
       div_ [class_ "flex gap-5"] do
         div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] $ do
           div_ [class_ "flex gap-4 items-center"] do
-            select_ [] $ option_ [class_ "text-2xl font-normal"] "Error"
+            select_ [] $ option_ [class_ "text-2xl font-normal"] "Errors"
             span_ [class_ "inline-block", term "data-tippy-content" "Requests with error status responses grouped by status code"] $ mIcon_ "info" "w-4 h-4"
           div_ [class_ "h-64 "] do
             Charts.lazy [C.QByE $ [C.QBPId pid, C.QBStatusCodeGT 400] ++ catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBStatusCode, C.SlotsE 120, C.ShowLegendE, C.Theme "roma"]
 
         div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] $ do
           div_ [class_ "flex gap-4 items-center"] do
-            select_ [] $ option_ [class_ "text-2xl font-normal"] "Reqs Grouped by Endpoint"
+            select_ [] $ option_ [class_ "text-2xl font-normal"] "Requests by Endpoint"
             span_ [class_ "inline-block", term "data-tippy-content" "All requests grouped by endpoint"] $ mIcon_ "info" "w-4 h-4"
           div_ [class_ "h-64 "] do
             Charts.lazy [C.QByE $ C.QBPId pid : catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBEndpoint, C.SlotsE 120, C.ShowLegendE]

@@ -136,7 +136,7 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM endpointM hxRequestM hxBo
 
 anomalyListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Anomalies.AnomalyVM -> Html ()
 anomalyListPage paramInput pid currTime anomalies = div_ [class_ "w-full mx-auto  px-16 pt-10 pb-24"] $ do
-  h3_ [class_ "text-xl text-slate-700 flex place-items-center"] "Anomalies"
+  h3_ [class_ "text-xl text-slate-700 flex place-items-center"] "Changes & Errors"
   div_ [class_ "py-2 px-2 space-x-6 border-b border-slate-20 mt-6 mb-8 text-sm font-light", hxBoost_ "true"] do
     let uri = deleteParam "archived" $ deleteParam "ackd" paramInput.currentURL
     a_ [class_ $ "inline-block py-2 " <> if not paramInput.ackd && not paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&ackd=false&archived=false"] "Inbox"
