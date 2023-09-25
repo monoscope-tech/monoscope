@@ -99,19 +99,20 @@ data ParamInput = ParamInput
   , sort :: Text
   }
 
-anomalyListGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Endpoints.EndpointId -> Maybe Text -> Maybe Text -> DashboardM (Html ())
-anomalyListGetH sess pid layoutM ackdM archivedM sortM page endpointM hxRequestM hxBoostedM = do
+anomalyListGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Endpoints.EndpointId -> Maybe Text -> Maybe Text -> DashboardM (Html ())
+anomalyListGetH sess pid layoutM ackdM archivedM sortM page loadM endpointM hxRequestM hxBoostedM = do
   let ackd = textToBool <$> ackdM
   let archived = textToBool <$> archivedM
   pool <- asks pool
-  let limit = (\x -> if x == "slider" then Just 51 else Just 2) =<< layoutM
+  let fetchLimit = 21
+  let limit = maybe (Just fetchLimit) (\x -> if x == "slider" then Just 51 else Just fetchLimit) layoutM
   let pageInt = case page of
         Just p -> if limit == Just 51 then 0 else Unsafe.read (toString p)
         Nothing -> 0
   (project, anomalies) <- liftIO $
     withPool pool $ do
       project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      anomalies <- Anomalies.selectAnomalies pid Nothing ackd archived sortM limit (pageInt * 2)
+      anomalies <- Anomalies.selectAnomalies pid Nothing ackd archived sortM limit (pageInt * fetchLimit)
       pure (project, anomalies)
   currTime <- liftIO getCurrentTime
   let bwconf =
@@ -121,7 +122,7 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM page endpointM hxRequestM
           , pageTitle = "Changes & Errors"
           }
   let currentURL = "/p/" <> pid.toText <> "/anomalies?layout=" <> fromMaybe "false" layoutM <> "&ackd=" <> fromMaybe "false" ackdM <> "&archived=" <> fromMaybe "false" archivedM
-  let nextFetchUrl = (\x -> if x == "slider" then Just $ currentURL <> "&page=" <> show (pageInt + 1) else Nothing) =<< layoutM
+  let nextFetchUrl = maybe (Just $ currentURL <> "&load_more=true&page=" <> show (pageInt + 1)) (\x -> if x == "slider" then Nothing else Just $ currentURL <> "&load_more=true&page=" <> show (pageInt + 1)) layoutM
 
   let paramInput =
         ParamInput
@@ -134,11 +135,19 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM page endpointM hxRequestM
   let elementBelowTabs =
         div_ [class_ "grid grid-cols-5", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $
           anomalyList paramInput pid currTime anomalies nextFetchUrl
+  let anom = case nextFetchUrl of
+        Just url -> do
+          mapM_ (renderAnomaly False currTime) anomalies
+          if length anomalies > fetchLimit - 1
+            then a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] "LOAD MORE"
+            else ""
+        Nothing -> mapM_ (renderAnomaly False currTime) anomalies
 
-  case (layoutM, hxRequestM, hxBoostedM) of
-    (Just "slider", Just "true", _) -> pure $ anomalyListSlider currTime pid endpointM (Just anomalies)
-    (_, Just "true", Just "false") -> pure elementBelowTabs
-    (_, Just "true", Nothing) -> pure elementBelowTabs
+  case (layoutM, hxRequestM, hxBoostedM, loadM) of
+    (Just "slider", Just "true", _, _) -> pure $ anomalyListSlider currTime pid endpointM (Just anomalies)
+    (_, _, _, Just "true") -> pure anom
+    (_, Just "true", Just "false", _) -> pure elementBelowTabs
+    (_, Just "true", Nothing, _) -> pure elementBelowTabs
     _ -> pure $ bodyWrapper bwconf $ anomalyListPage paramInput pid currTime anomalies nextFetchUrl
 
 anomalyListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Anomalies.AnomalyVM -> Maybe Text -> Html ()
@@ -200,7 +209,13 @@ anomalyList paramInput pid currTime anomalies nextFetchUrl = form_ [class_ "col-
 
   when (null anomalies) $ div_ [class_ "flex text-center justify-center items-center h-32"] $ do
     strong_ "No anomalies yet"
-  mapM_ (renderAnomaly False currTime nextFetchUrl) anomalies
+  mapM_ (renderAnomaly False currTime) anomalies
+  case nextFetchUrl of
+    Just url ->
+      if length anomalies > 20
+        then a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] "LOAD MORE"
+        else ""
+    Nothing -> ""
 
 anomalyListSlider :: UTCTime -> Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe (Vector Anomalies.AnomalyVM) -> Html ()
 anomalyListSlider _ _ _ (Just []) = ""
@@ -263,7 +278,7 @@ anomalyListSlider currTime _ _ (Just anomalies) = do
       [ class_ "parent-slider"
       , [__|init setAnomalySliderPag() then show #{$anomalyIds[$currentAnomaly]} |]
       ]
-      $ mapM_ (renderAnomaly True currTime Nothing) anomalies
+      $ mapM_ (renderAnomaly True currTime) anomalies
 
 anomalyTimeline :: ZonedTime -> Maybe ZonedTime -> Html ()
 anomalyTimeline createdAt acknowlegedAt = small_ [class_ "inline-block  px-8 py-6 space-x-2"] $ case acknowlegedAt of
@@ -348,8 +363,8 @@ anomalyDisplayConfig anomaly = case anomaly.anomalyType of
   Anomalies.ATFormat -> ("Modified field", "/assets/svgs/anomalies/fields.svg")
   Anomalies.ATUnknown -> ("Unknown anomaly", "/assets/svgs/anomalies/fields.svg")
 
-renderAnomaly :: Bool -> UTCTime -> Maybe Text -> Anomalies.AnomalyVM -> Html ()
-renderAnomaly hideByDefault currTime nexturl anomaly = do
+renderAnomaly :: Bool -> UTCTime -> Anomalies.AnomalyVM -> Html ()
+renderAnomaly hideByDefault currTime anomaly = do
   let (anomalyTitle, icon) = anomalyDisplayConfig anomaly
   case anomaly.anomalyType of
     Anomalies.ATEndpoint -> do
