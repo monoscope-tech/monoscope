@@ -175,8 +175,8 @@ getAnomalyVM pid hash = queryOne Select q (pid, hash)
   where
     q = [sql| SELECT *,0,now() FROM apis.anomalies_vm WHERE project_id=? AND target_hash=?|]
 
-selectAnomalies :: Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Int -> DBT IO (Vector AnomalyVM)
-selectAnomalies pid endpointM isAcknowleged isArchived sortM limitM = query Select (Query $ encodeUtf8 q) (MkDBField pid : paramList)
+selectAnomalies :: Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Int -> Int -> DBT IO (Vector AnomalyVM)
+selectAnomalies pid endpointM isAcknowleged isArchived sortM limitM skipM = query Select (Query $ encodeUtf8 q) (MkDBField pid : paramList)
   where
     boolToNullSubQ a = if a then " not " else ""
     condlist =
@@ -197,6 +197,7 @@ selectAnomalies pid endpointM isAcknowleged isArchived sortM limitM = query Sele
       _ -> "avm.created_at desc"
 
     limit = maybe "" (\x -> "limit " <> show x) limitM
+    skip = "offset " <> show skipM <> " "
 
     -- FIXME: optimize anomalies equation
     q =
@@ -223,6 +224,7 @@ SELECT avm.id, avm.created_at, avm.updated_at, avm.project_id, aan.acknowleged_a
         AND rd.created_at > NOW() - interval '14 days' 
     GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25
     ORDER BY $orderBy
+    $skip
     $limit;
       |]
 
