@@ -86,32 +86,42 @@ manualIngestPostH sess pid reqMF = do
   logger <- asks logger
   pool <- asks pool
   env <- asks env
-  projectCache <- asks projectCache
-  project <-
-    liftIO $
-      withPool pool $
-        Projects.selectProjectForUser (Sessions.userId sess, pid)
-  case reqMsgFormToReqMsg (Projects.unProjectId pid) reqMF of
-    Left err -> liftIO $ logger <& "error parsing manualIngestPost req Message; " <> show err
-    Right reqM -> void $ liftIO $ ProcessMessage.processMessages' logger env pool [Right (Just "", reqM)] projectCache
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      projectCache <- asks projectCache
+      project <-
+        liftIO $
+          withPool pool $
+            Projects.selectProjectForUser (Sessions.userId sess, pid)
+      case reqMsgFormToReqMsg (Projects.unProjectId pid) reqMF of
+        Left err -> liftIO $ logger <& "error parsing manualIngestPost req Message; " <> show err
+        Right reqM -> void $ liftIO $ ProcessMessage.processMessages' logger env pool [Right (Just "", reqM)] projectCache
 
-  pure manualIngestPage
+      pure manualIngestPage
 
 manualIngestGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 manualIngestGetH sess pid = do
   pool <- asks pool
-  project <-
-    liftIO $
-      withPool pool $
-        Projects.selectProjectForUser (Sessions.userId sess, pid)
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      project <-
+        liftIO $
+          withPool pool $
+            Projects.selectProjectForUser (Sessions.userId sess, pid)
 
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = project
-          , pageTitle = "ManualIngest"
-          }
-  pure $ bodyWrapper bwconf manualIngestPage
+      let bwconf =
+            (def :: BWConfig)
+              { sessM = Just sess
+              , currProject = project
+              , pageTitle = "ManualIngest"
+              }
+      pure $ bodyWrapper bwconf manualIngestPage
 
 manualIngestPage :: Html ()
 manualIngestPage = do

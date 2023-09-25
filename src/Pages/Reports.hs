@@ -49,6 +49,7 @@ import Data.Text qualified as T
 import Data.UUID.V4 qualified as UUIDV4
 import Lucid.Svg (color_)
 import Models.Apis.RequestDumps (EndpointPerf, RequestForReport (endpointHash))
+import Utils
 
 data PerformanceReport = PerformanceReport
   { urlPath :: Text
@@ -98,54 +99,70 @@ data ReportData = ReportData
 reportsPostH :: Sessions.PersistentSession -> Projects.ProjectId -> Text -> DashboardM (Headers '[HXTrigger] (Html ()))
 reportsPostH sess pid t = do
   pool <- asks pool
-  apiKeys <- liftIO $
-    withPool pool $ do
-      Projects.updateProjectReportNotif pid t
-  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Report nofications updated Successfully"]}|]
-  pure $ addHeader hxTriggerData $ span_ [] ""
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Only project memebers can update reports notification settings"]}|]
+      pure $ addHeader hxTriggerData $ userNotMemeberPage sess
+    else do
+      apiKeys <- liftIO $
+        withPool pool $ do
+          Projects.updateProjectReportNotif pid t
+      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Report nofications updated Successfully"]}|]
+      pure $ addHeader hxTriggerData $ span_ [] ""
 
 singleReportGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Reports.ReportId -> DashboardM (Html ())
 singleReportGetH sess pid rid = do
   pool <- asks pool
-  (project, report) <- liftIO $
-    withPool pool $ do
-      project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      report <- Reports.getReportById rid
-      pure (project, report)
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = project
-          , pageTitle = "Reports"
-          }
-  pure $ bodyWrapper bwconf $ singleReportPage pid report
-
-reportsGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
-reportsGetH sess pid page hxRequest hxBoosted = do
-  let p = toString (fromMaybe "0" page)
-  let pg = fromMaybe 0 (readMaybe p :: Maybe Int)
-  pool <- asks pool
-  (project, reports) <- liftIO $
-    withPool pool $ do
-      project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      reports <- Reports.reportHistoryByProject pid pg
-      pure (project, reports)
-  let nextUrl = "/p/" <> show pid.unProjectId <> "/reports?page=" <> show (pg + 1)
-  case (hxRequest, hxBoosted) of
-    (Just "true", Nothing) -> pure $ do
-      reportListItems pid reports nextUrl
-    _ -> do
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      (project, report) <- liftIO $
+        withPool pool $ do
+          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+          report <- Reports.getReportById rid
+          pure (project, report)
       let bwconf =
             (def :: BWConfig)
               { sessM = Just sess
               , currProject = project
               , pageTitle = "Reports"
               }
-      let (daily, weekly) = case project of
-            Just proj -> (proj.dailyNotif, proj.weeklyNotif)
-            Nothing -> (False, False)
+      pure $ bodyWrapper bwconf $ singleReportPage pid report
 
-      pure $ bodyWrapper bwconf $ reportsPage pid reports nextUrl daily weekly
+reportsGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
+reportsGetH sess pid page hxRequest hxBoosted = do
+  let p = toString (fromMaybe "0" page)
+  let pg = fromMaybe 0 (readMaybe p :: Maybe Int)
+  pool <- asks pool
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      (project, reports) <- liftIO $
+        withPool pool $ do
+          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+          reports <- Reports.reportHistoryByProject pid pg
+          pure (project, reports)
+      let nextUrl = "/p/" <> show pid.unProjectId <> "/reports?page=" <> show (pg + 1)
+      case (hxRequest, hxBoosted) of
+        (Just "true", Nothing) -> pure $ do
+          reportListItems pid reports nextUrl
+        _ -> do
+          let bwconf =
+                (def :: BWConfig)
+                  { sessM = Just sess
+                  , currProject = project
+                  , pageTitle = "Reports"
+                  }
+          let (daily, weekly) = case project of
+                Just proj -> (proj.dailyNotif, proj.weeklyNotif)
+                Nothing -> (False, False)
+
+          pure $ bodyWrapper bwconf $ reportsPage pid reports nextUrl daily weekly
 
 singleReportPage :: Projects.ProjectId -> Maybe Reports.Report -> Html ()
 singleReportPage pid report =

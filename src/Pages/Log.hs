@@ -26,6 +26,7 @@ import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Pkg.Components (loader)
 import Relude
 import System.Clock
+import Utils
 
 -- $setup
 -- >>> import Relude
@@ -43,43 +44,53 @@ apiLog sess pid queryM cols' fromM hxRequestM hxBoostedM = do
         Just a -> Just a
 
   pool <- asks pool
-  (project, requests) <- liftIO $
-    withPool pool $ do
-      project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      requests <- RequestDumps.selectRequestDumpByProject pid query fromM'
-      pure (project, requests)
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      (project, requests) <- liftIO $
+        withPool pool $ do
+          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+          requests <- RequestDumps.selectRequestDumpByProject pid query fromM'
+          pure (project, requests)
 
-  reqChartTxt <- liftIO $ withPool pool $ RequestDumps.throughputBy pid Nothing Nothing Nothing Nothing Nothing (3 * 60) Nothing queryM (Nothing, Nothing)
-  let reqLastCreatedAtM = (^. #createdAt) <$> viaNonEmpty last (Vector.toList requests) -- FIXME: unoptimal implementation, converting from vector to list for last
-  let fromTempM = toText . formatTime defaultTimeLocale "%F %T" <$> reqLastCreatedAtM
-  let nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' fromTempM
+      reqChartTxt <- liftIO $ withPool pool $ RequestDumps.throughputBy pid Nothing Nothing Nothing Nothing Nothing (3 * 60) Nothing queryM (Nothing, Nothing)
+      let reqLastCreatedAtM = (^. #createdAt) <$> viaNonEmpty last (Vector.toList requests) -- FIXME: unoptimal implementation, converting from vector to list for last
+      let fromTempM = toText . formatTime defaultTimeLocale "%F %T" <$> reqLastCreatedAtM
+      let nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' fromTempM
 
-  let resultCount = maybe 0 (^. #fullCount) (requests !? 0)
-  case (hxRequestM, hxBoostedM) of
-    (Just "true", Nothing) -> pure $ do
-      span_ [id_ "result-count", hxSwapOob_ "outerHTML"] $ show resultCount
-      reqChart reqChartTxt True
-      logItemRows pid requests cols nextLogsURL
-    _ -> do
-      let bwconf =
-            (def :: BWConfig)
-              { sessM = Just sess
-              , currProject = project
-              , pageTitle = "API Log Explorer"
-              }
-      let resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing
-      pure $ bodyWrapper bwconf $ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL
+      let resultCount = maybe 0 (^. #fullCount) (requests !? 0)
+      case (hxRequestM, hxBoostedM) of
+        (Just "true", Nothing) -> pure $ do
+          span_ [id_ "result-count", hxSwapOob_ "outerHTML"] $ show resultCount
+          reqChart reqChartTxt True
+          logItemRows pid requests cols nextLogsURL
+        _ -> do
+          let bwconf =
+                (def :: BWConfig)
+                  { sessM = Just sess
+                  , currProject = project
+                  , pageTitle = "API Log Explorer"
+                  }
+          let resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing
+          pure $ bodyWrapper bwconf $ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL
 
 apiLogItem :: Sessions.PersistentSession -> Projects.ProjectId -> UUID.UUID -> ZonedTime -> DashboardM (Html ())
 apiLogItem sess pid rdId createdAt = do
   pool <- asks pool
-  startTime <- liftIO $ getTime Monotonic
-  logItemM <- liftIO $ withPool pool $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
-  afterProccessing <- liftIO $ getTime Monotonic
-  let content = maybe (div_ "invalid log request ID") apiLogItemView logItemM
-  endTime <- liftIO $ getTime Monotonic
-  liftIO $ putStrLn $ fmtLn $ " APILOG pipeline microsecs: queryDuration " +| (toNanoSecs (diffTimeSpec startTime afterProccessing)) `div` 1000 |+ " -> processingDuration " +| toNanoSecs (diffTimeSpec afterProccessing endTime) `div` 1000 |+ " -> TotalDuration " +| toNanoSecs (diffTimeSpec startTime endTime) `div` 1000 |+ ""
-  pure content
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      startTime <- liftIO $ getTime Monotonic
+      logItemM <- liftIO $ withPool pool $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
+      afterProccessing <- liftIO $ getTime Monotonic
+      let content = maybe (div_ "invalid log request ID") apiLogItemView logItemM
+      endTime <- liftIO $ getTime Monotonic
+      liftIO $ putStrLn $ fmtLn $ " APILOG pipeline microsecs: queryDuration " +| (toNanoSecs (diffTimeSpec startTime afterProccessing)) `div` 1000 |+ " -> processingDuration " +| toNanoSecs (diffTimeSpec afterProccessing endTime) `div` 1000 |+ " -> TotalDuration " +| toNanoSecs (diffTimeSpec startTime endTime) `div` 1000 |+ ""
+      pure content
 
 apiLogsPage :: Projects.ProjectId -> Int -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Text -> Text -> Text -> Html ()
 apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL = do

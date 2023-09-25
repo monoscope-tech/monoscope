@@ -55,42 +55,68 @@ data AnomalyBulkForm = AnomalyBulk
 acknowlegeAnomalyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Anomalies.AnomalyId -> DashboardM (Html ())
 acknowlegeAnomalyGetH sess pid aid = do
   pool <- asks pool
-  let q = [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where id=? |]
-  r <- liftIO $ withPool pool $ execute Update q (sess.userId, aid)
-  pure $ anomalyAcknowlegeButton pid aid True
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      let q = [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where id=? |]
+      r <- liftIO $ withPool pool $ execute Update q (sess.userId, aid)
+      pure $ anomalyAcknowlegeButton pid aid True
 
 unAcknowlegeAnomalyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Anomalies.AnomalyId -> DashboardM (Html ())
 unAcknowlegeAnomalyGetH sess pid aid = do
   pool <- asks pool
-  let q = [sql| update apis.anomalies set acknowleged_by=null, acknowleged_at=null where id=? |]
-  _ <- liftIO $ withPool pool $ execute Update q (Only aid)
-  pure $ anomalyAcknowlegeButton pid aid False
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      let q = [sql| update apis.anomalies set acknowleged_by=null, acknowleged_at=null where id=? |]
+      _ <- liftIO $ withPool pool $ execute Update q (Only aid)
+      pure $ anomalyAcknowlegeButton pid aid False
 
 archiveAnomalyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Anomalies.AnomalyId -> DashboardM (Html ())
 archiveAnomalyGetH sess pid aid = do
   pool <- asks pool
-  let q = [sql| update apis.anomalies set archived_at=NOW() where id=? |]
-  _ <- liftIO $ withPool pool $ execute Update q (Only aid)
-  pure $ anomalyArchiveButton pid aid True
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      let q = [sql| update apis.anomalies set archived_at=NOW() where id=? |]
+      _ <- liftIO $ withPool pool $ execute Update q (Only aid)
+      pure $ anomalyArchiveButton pid aid True
 
 unArchiveAnomalyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Anomalies.AnomalyId -> DashboardM (Html ())
 unArchiveAnomalyGetH sess pid aid = do
   pool <- asks pool
-  let q = [sql| update apis.anomalies set archived_at=null where id=? |]
-  _ <- liftIO $ withPool pool $ execute Update q (Only aid)
-  pure $ anomalyArchiveButton pid aid False
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      let q = [sql| update apis.anomalies set archived_at=null where id=? |]
+      _ <- liftIO $ withPool pool $ execute Update q (Only aid)
+      pure $ anomalyArchiveButton pid aid False
 
 -- When given a list of anomalyIDs and an action, said action would be applied to the anomalyIDs.
 -- Then a notification should be triggered, as well as an action to reload the anomaly List.
 anomalyBulkActionsPostH :: Sessions.PersistentSession -> Projects.ProjectId -> Text -> AnomalyBulkForm -> DashboardM (Headers '[HXTrigger] (Html ()))
 anomalyBulkActionsPostH sess pid action items = do
   pool <- asks pool
-  v <- case action of
-    "acknowlege" -> liftIO $ withPool pool $ execute Update [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) |] (sess.userId, Vector.fromList items.anomalyId)
-    "archive" -> liftIO $ withPool pool $ execute Update [sql| update apis.anomalies set archived_at=NOW() where id=ANY(?::uuid[]) |] (Only $ Vector.fromList items.anomalyId)
-    _ -> error $ "unhandled anomaly bulk action state " <> action
-  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"refreshMain": "", "successToast": [#{action <> "d anomalies Successfully"}]}|]
-  pure $ addHeader hxTriggerData ""
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"refreshMain": "", "errorToast": [#{action <> " anomalies not successfull."}]}|]
+      pure $ addHeader hxTriggerData ""
+    else do
+      v <- case action of
+        "acknowlege" -> liftIO $ withPool pool $ execute Update [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) |] (sess.userId, Vector.fromList items.anomalyId)
+        "archive" -> liftIO $ withPool pool $ execute Update [sql| update apis.anomalies set archived_at=NOW() where id=ANY(?::uuid[]) |] (Only $ Vector.fromList items.anomalyId)
+        _ -> error $ "unhandled anomaly bulk action state " <> action
+      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"refreshMain": "", "successToast": [#{action <> "d anomalies Successfully"}]}|]
+      pure $ addHeader hxTriggerData ""
 
 data ParamInput = ParamInput
   { currentURL :: Text
@@ -104,51 +130,56 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM page loadM endpointM hxRe
   let ackd = textToBool <$> ackdM
   let archived = textToBool <$> archivedM
   pool <- asks pool
-  let fetchLimit = 21
-  let limit = maybe (Just fetchLimit) (\x -> if x == "slider" then Just 51 else Just fetchLimit) layoutM
-  let pageInt = case page of
-        Just p -> if limit == Just 51 then 0 else Unsafe.read (toString p)
-        Nothing -> 0
-  (project, anomalies) <- liftIO $
-    withPool pool $ do
-      project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      anomalies <- Anomalies.selectAnomalies pid Nothing ackd archived sortM limit (pageInt * fetchLimit)
-      pure (project, anomalies)
-  currTime <- liftIO getCurrentTime
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = project
-          , pageTitle = "Changes & Errors"
-          }
-  let currentURL = "/p/" <> pid.toText <> "/anomalies?layout=" <> fromMaybe "false" layoutM <> "&ackd=" <> fromMaybe "false" ackdM <> "&archived=" <> fromMaybe "false" archivedM
-  let nextFetchUrl = maybe (Just $ currentURL <> "&load_more=true&page=" <> show (pageInt + 1)) (\x -> if x == "slider" then Nothing else Just $ currentURL <> "&load_more=true&page=" <> show (pageInt + 1)) layoutM
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      let fetchLimit = 21
+      let limit = maybe (Just fetchLimit) (\x -> if x == "slider" then Just 51 else Just fetchLimit) layoutM
+      let pageInt = case page of
+            Just p -> if limit == Just 51 then 0 else Unsafe.read (toString p)
+            Nothing -> 0
+      (project, anomalies) <- liftIO $
+        withPool pool $ do
+          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+          anomalies <- Anomalies.selectAnomalies pid Nothing ackd archived sortM limit (pageInt * fetchLimit)
+          pure (project, anomalies)
+      currTime <- liftIO getCurrentTime
+      let bwconf =
+            (def :: BWConfig)
+              { sessM = Just sess
+              , currProject = project
+              , pageTitle = "Changes & Errors"
+              }
+      let currentURL = "/p/" <> pid.toText <> "/anomalies?layout=" <> fromMaybe "false" layoutM <> "&ackd=" <> fromMaybe "false" ackdM <> "&archived=" <> fromMaybe "false" archivedM
+      let nextFetchUrl = maybe (Just $ currentURL <> "&load_more=true&page=" <> show (pageInt + 1)) (\x -> if x == "slider" then Nothing else Just $ currentURL <> "&load_more=true&page=" <> show (pageInt + 1)) layoutM
 
-  let paramInput =
-        ParamInput
-          { currentURL = currentURL
-          , ackd = fromMaybe False ackd
-          , archived = fromMaybe False archived
-          , sort = fromMaybe "" sortM
-          }
+      let paramInput =
+            ParamInput
+              { currentURL = currentURL
+              , ackd = fromMaybe False ackd
+              , archived = fromMaybe False archived
+              , sort = fromMaybe "" sortM
+              }
 
-  let elementBelowTabs =
-        div_ [class_ "grid grid-cols-5", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $
-          anomalyList paramInput pid currTime anomalies nextFetchUrl
-  let anom = case nextFetchUrl of
-        Just url -> do
-          mapM_ (renderAnomaly False currTime) anomalies
-          if length anomalies > fetchLimit - 1
-            then a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] "LOAD MORE"
-            else ""
-        Nothing -> mapM_ (renderAnomaly False currTime) anomalies
+      let elementBelowTabs =
+            div_ [class_ "grid grid-cols-5", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $
+              anomalyList paramInput pid currTime anomalies nextFetchUrl
+      let anom = case nextFetchUrl of
+            Just url -> do
+              mapM_ (renderAnomaly False currTime) anomalies
+              if length anomalies > fetchLimit - 1
+                then a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] "LOAD MORE"
+                else ""
+            Nothing -> mapM_ (renderAnomaly False currTime) anomalies
 
-  case (layoutM, hxRequestM, hxBoostedM, loadM) of
-    (Just "slider", Just "true", _, _) -> pure $ anomalyListSlider currTime pid endpointM (Just anomalies)
-    (_, _, _, Just "true") -> pure anom
-    (_, Just "true", Just "false", _) -> pure elementBelowTabs
-    (_, Just "true", Nothing, _) -> pure elementBelowTabs
-    _ -> pure $ bodyWrapper bwconf $ anomalyListPage paramInput pid currTime anomalies nextFetchUrl
+      case (layoutM, hxRequestM, hxBoostedM, loadM) of
+        (Just "slider", Just "true", _, _) -> pure $ anomalyListSlider currTime pid endpointM (Just anomalies)
+        (_, _, _, Just "true") -> pure anom
+        (_, Just "true", Just "false", _) -> pure elementBelowTabs
+        (_, Just "true", Nothing, _) -> pure elementBelowTabs
+        _ -> pure $ bodyWrapper bwconf $ anomalyListPage paramInput pid currTime anomalies nextFetchUrl
 
 anomalyListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Anomalies.AnomalyVM -> Maybe Text -> Html ()
 anomalyListPage paramInput pid currTime anomalies nextFetchUrl = div_ [class_ "container mx-auto  px-4 pt-10 pb-24"] $ do

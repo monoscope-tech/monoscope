@@ -23,6 +23,7 @@ import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
+import Utils
 import Web.FormUrlEncoded (FromForm)
 
 data GenerateAPIKeyForm = GenerateAPIKeyForm
@@ -36,53 +37,70 @@ apiPostH :: Sessions.PersistentSession -> Projects.ProjectId -> GenerateAPIKeyFo
 apiPostH sess pid apiKeyForm = do
   pool <- asks pool
   env <- asks env
-  projectKeyUUID <- liftIO UUIDV4.nextRandom
-  let encryptedKey = ProjectApiKeys.encryptAPIKey (encodeUtf8 $ env.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
-  let encryptedKeyB64 = B64.encodeBase64 encryptedKey
-  let keyPrefix = T.take 8 encryptedKeyB64
-  pApiKey <- liftIO $ ProjectApiKeys.newProjectApiKeys pid projectKeyUUID (title apiKeyForm) keyPrefix
-  apiKeys <- liftIO $
-    withPool pool $ do
-      ProjectApiKeys.insertProjectApiKey pApiKey
-      ProjectApiKeys.projectApiKeysByProjectId pid
-  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Created API Key Successfully"]}|]
-  case from apiKeyForm of
-    Just v -> pure $ addHeader hxTriggerData $ copyNewApiKey (Just (pApiKey, encryptedKeyB64)) True
-    Nothing -> pure $ addHeader hxTriggerData $ mainContent pid apiKeys (Just (pApiKey, encryptedKeyB64))
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Only project members can create API keys."]} |]
+      pure $ addHeader hxTriggerData $ ""
+    else do
+      projectKeyUUID <- liftIO UUIDV4.nextRandom
+      let encryptedKey = ProjectApiKeys.encryptAPIKey (encodeUtf8 $ env.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
+      let encryptedKeyB64 = B64.encodeBase64 encryptedKey
+      let keyPrefix = T.take 8 encryptedKeyB64
+      pApiKey <- liftIO $ ProjectApiKeys.newProjectApiKeys pid projectKeyUUID (title apiKeyForm) keyPrefix
+      apiKeys <- liftIO $
+        withPool pool $ do
+          ProjectApiKeys.insertProjectApiKey pApiKey
+          ProjectApiKeys.projectApiKeysByProjectId pid
+      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Created API Key Successfully"]}|]
+      case from apiKeyForm of
+        Just v -> pure $ addHeader hxTriggerData $ copyNewApiKey (Just (pApiKey, encryptedKeyB64)) True
+        Nothing -> pure $ addHeader hxTriggerData $ mainContent pid apiKeys (Just (pApiKey, encryptedKeyB64))
 
 apiDeleteH :: Sessions.PersistentSession -> Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> DashboardM (Headers '[HXTrigger] (Html ()))
 apiDeleteH sess pid keyid = do
   pool <- asks pool
   env <- asks env
-  (res, apikeys) <- liftIO $
-    withPool pool $ do
-      del <- ProjectApiKeys.revokeApiKey keyid
-      apikeys <- ProjectApiKeys.projectApiKeysByProjectId pid
-      pure (del, apikeys)
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Can not revoke API key."]}|]
+      pure $ addHeader hxTriggerData $ userNotMemeberPage sess
+    else do
+      (res, apikeys) <- liftIO $
+        withPool pool $ do
+          del <- ProjectApiKeys.revokeApiKey keyid
+          apikeys <- ProjectApiKeys.projectApiKeysByProjectId pid
+          pure (del, apikeys)
 
-  let hxTriggerData =
-        if res > 0
-          then decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Revoked API Key Successfully"]}|]
-          else decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Something went wrong"]}|]
-  pure $ addHeader hxTriggerData $ mainContent pid apikeys Nothing
+      let hxTriggerData =
+            if res > 0
+              then decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Revoked API Key Successfully"]}|]
+              else decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Something went wrong"]}|]
+      pure $ addHeader hxTriggerData $ mainContent pid apikeys Nothing
 
 -- | apiGetH renders the api keys list page which includes a modal for creating the apikeys.
 apiGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 apiGetH sess pid = do
   pool <- asks pool
-  (project, apiKeys) <- liftIO $
-    withPool pool $ do
-      project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      apiKeys <- ProjectApiKeys.projectApiKeysByProjectId pid
-      pure (project, apiKeys)
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      (project, apiKeys) <- liftIO $
+        withPool pool $ do
+          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+          apiKeys <- ProjectApiKeys.projectApiKeysByProjectId pid
+          pure (project, apiKeys)
 
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = project
-          , pageTitle = "API Keys"
-          }
-  pure $ bodyWrapper bwconf $ apiKeysPage pid apiKeys
+      let bwconf =
+            (def :: BWConfig)
+              { sessM = Just sess
+              , currProject = project
+              , pageTitle = "API Keys"
+              }
+      pure $ bodyWrapper bwconf $ apiKeysPage pid apiKeys
 
 apiKeysPage :: Projects.ProjectId -> Vector ProjectApiKeys.ProjectApiKey -> Html ()
 apiKeysPage pid apiKeys = do

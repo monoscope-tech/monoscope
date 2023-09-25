@@ -22,6 +22,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Relude
 import Relude.Unsafe ((!!))
+import Utils
 
 data MergedEndpoint = MergedEndpoint
   { urlPath :: Text
@@ -270,17 +271,22 @@ generateSwagger projectTitle projectDescription endpoints shapes fields formats 
 generateGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM AE.Value
 generateGetH sess pid = do
   pool <- asks pool
-  liftIO $
-    withPool pool $ do
-      project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      endpoints <- Endpoints.endpointsByProjectId pid
-      let endpoint_hashes = V.map (.hash) endpoints
-      shapes <- Shapes.shapesByEndpointHashes pid endpoint_hashes
-      fields <- Fields.fieldsByEndpointHashes pid endpoint_hashes
-      let field_hashes = V.map (.fHash) fields
-      formats <- Formats.formatsByFieldsHashes pid field_hashes
-      let (projectTitle, projectDescription) = case project of
-            (Just pr) -> (toText pr.title, toText pr.description)
-            Nothing -> ("__APITOOLKIT", "Edit project description")
-      let swagger = generateSwagger projectTitle projectDescription endpoints shapes fields formats
-      pure swagger
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ AE.object ["error" .= String "You are not a member of this project"]
+    else do
+      liftIO $
+        withPool pool $ do
+          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+          endpoints <- Endpoints.endpointsByProjectId pid
+          let endpoint_hashes = V.map (.hash) endpoints
+          shapes <- Shapes.shapesByEndpointHashes pid endpoint_hashes
+          fields <- Fields.fieldsByEndpointHashes pid endpoint_hashes
+          let field_hashes = V.map (.fHash) fields
+          formats <- Formats.formatsByFieldsHashes pid field_hashes
+          let (projectTitle, projectDescription) = case project of
+                (Just pr) -> (toText pr.title, toText pr.description)
+                Nothing -> ("__APITOOLKIT", "Edit project description")
+          let swagger = generateSwagger projectTitle projectDescription endpoints shapes fields formats
+          pure swagger
