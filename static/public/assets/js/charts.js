@@ -50,7 +50,7 @@ function throughputEChart(renderAt, data, gb, showLegend, theme) {
       trigger: 'axis',
     },
     xAxis: { show: showLegend, type: 'time', scale: true },
-    yAxis: { show: showLegend, scale: true },
+    yAxis: { show: showLegend, scale: true},
     series: series,
   };
   if (showLegend) {

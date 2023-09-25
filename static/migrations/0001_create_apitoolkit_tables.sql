@@ -679,4 +679,16 @@ alter table apis.request_dumps add column duration_ns BIGINT NOT NULL default 0;
 update apis.request_dumps set duration_ns=EXTRACT(epoch FROM duration)::BIGINT;
 alter table apis.request_dumps add column sdk_type TEXT NOT NULL default '';
 
+
+CREATE TABLE IF NOT EXISTS apis.share_requests
+ (               
+    id             UUID      NOT        NULL           DEFAULT           gen_random_uuid() PRIMARY KEY,
+    project_id     UUID      NOT        NULL           REFERENCES projects.projects (id)              ON      DELETE CASCADE,
+    created_at     TIMESTAMP WITH       TIME           ZONE       NOT               NULL              DEFAULT current_timestamp,
+    updated_at     TIMESTAMP WITH       TIME           ZONE       NOT               NULL              DEFAULT current_timestamp,
+    expired_at     TIMESTAMP WITH       TIME           ZONE       NOT               NULL              DEFAULT current_timestamp + INTERVAL '1 hour',
+    request_dump_id UUID      NOT        NULL          
+);
+CREATE INDEX IF NOT EXISTS idx_apis_share_requests_id ON apis.share_requests(id);
+
 COMMIT;
