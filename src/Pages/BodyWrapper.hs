@@ -11,6 +11,7 @@ import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import NeatInterpolation
 import Relude
+import Utils (faIcon_)
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu pid =
@@ -78,6 +79,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child =
           script_ [src_ "/assets/js/monaco/vs/loader.js", defer_ "true"] ("" :: Text)
           script_ [src_ "/assets/js/charts.js"] ("" :: Text)
           script_ [src_ "/assets/js/main.js"] ("" :: Text)
+          script_ [src_ "https://kit.fontawesome.com/e0cb5637ed.js", crossorigin_ "anonymous"] ("" :: Text)
 
           -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/core@1.2.0/dist/index.umd.min.js"] ("" :: Text)
           -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/datetime@1.2.0/dist/index.umd.min.js"] ("" :: Text)
@@ -309,10 +311,12 @@ navbar currUser = do
           |]
       ]
       $ do
-        img_ [class_ "w-4 h-4", src_ "/assets/svgs/hamburger_menu.svg"]
+        img_ [class_ "w-5 h-5", src_ "/assets/svgs/hamburger_menu.svg"]
     div_ [class_ "inline-block flex items-center"] $ do
-      a_ [class_ "inline-block p-2 px-3 align-middle"] $ img_ [class_ "w-5 h-5", src_ "/assets/svgs/search.svg"]
-      a_ [class_ "inline-block border-r-2 p-2 pr-5"] $ img_ [class_ "w-5 h-5", src_ "/assets/svgs/notifications_active.svg"]
+      a_ [class_ "inline-block p-2 px-3 align-middle"] $ do
+        faIcon_ "fa-magnifying-glass" "w-5 h-5 fa-regular fa-magnifying-glass" 
+      a_ [class_ "inline-block border-r-2 p-2 pr-5"] $ do 
+        faIcon_ "fa-bell" "w-5 h-5 fa-regular fa-solid fa-bell"
       a_
         [ class_ "cursor-pointer inline-block space-x-4 pl-4 relative "
         , [__| 
