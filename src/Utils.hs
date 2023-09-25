@@ -1,15 +1,24 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE RankNTypes #-}
 
-module Utils (eitherStrToText, GetOrRedirect, redirect, DBField (..), mIcon_, deleteParam, quoteTxt, textToBool) where
+module Utils (eitherStrToText, userIsProjectMember, userNotMemeberPage, GetOrRedirect, redirect, DBField (..), mIcon_, deleteParam, quoteTxt, textToBool) where
 
+import Data.Default (def)
 import Data.Text (replace)
 import Data.Time (ZonedTime)
+import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.ToField (ToField (..))
-import Lucid (Html, href_)
+
+import Database.PostgreSQL.Transact
+import Lucid (Html, div_, href_)
 import Lucid.Svg (class_, svg_, use_)
+import Models.Projects.Projects qualified as Projects
+import Models.Users.Sessions qualified as Session
+import Models.Users.Users qualified as Users
+import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude hiding (show)
 import Servant
+
 import Text.Regex.TDFA ((=~))
 import Prelude (show)
 
@@ -54,3 +63,21 @@ quoteTxt a = "'" <> a <> "'"
 
 textToBool :: Text -> Bool
 textToBool a = a == "true"
+
+userIsProjectMember :: Session.PersistentSession -> Projects.ProjectId -> DBT IO Bool
+userIsProjectMember sess pid = do
+  if sess.isSudo
+    then pure True
+    else do
+      user <- Projects.userByProjectId pid sess.userId
+      if V.length user == 0 then pure False else pure True
+
+userNotMemeberPage :: Session.PersistentSession -> Html ()
+userNotMemeberPage sess = bodyWrapper bwconf $ div_ [] ""
+  where
+    bwconf =
+      (def :: BWConfig)
+        { sessM = Just sess
+        , currProject = Nothing
+        , pageTitle = "Forbidden"
+        }
