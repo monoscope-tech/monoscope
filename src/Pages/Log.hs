@@ -200,8 +200,16 @@ logItemRows pid requests cols nextLogsURL = do
           p_ [class_ "inline-block"] $ toHtml $ T.take 300 [text| request_body=$reqBody response_body=$respBody request_headers=$reqHeaders response_headers=$respHeaders|]
     div_ [class_ "hidden w-full flex px-2 py-8 justify-center item-loading"] do
       loader
-
-  a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ nextLogsURL] "LOAD MORE"
+  a_
+    [ class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center"
+    , hxTrigger_ "click"
+    , hxSwap_ "outerHTML"
+    , hxGet_ nextLogsURL
+    ]
+    do
+      div_ [class_ "htmx-indicator query-indicator"] do
+        loader
+      "LOAD MORE"
 
 getMethodBgColor :: Text -> Text
 getMethodBgColor "POST" = " bg-pink-200"
