@@ -484,7 +484,7 @@ jsonValueToHtmlTree val = jsonValueToHtmlTree' ("", "", val)
     renderParentType opening closing key count child = div_ [class_ (if key == "" then "" else "collapsed")] $ do
       a_
         [ class_ "inline-block cursor-pointer"
-        , [__|on click toggle .collapsed on the closest parent <div/>|]
+        , onclick_ "this.parentNode.classList.toggle('collapsed')"
         ]
         $ do
           span_ [class_ "log-item-tree-chevron "] "▾"
