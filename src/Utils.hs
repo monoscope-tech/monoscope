@@ -44,8 +44,9 @@ mIcon_ :: Text -> Text -> Html ()
 mIcon_ mIcon classes = svg_ [class_ $ "inline-block icon " <> classes] $ use_ [href_ $ "/assets/svgs/symbol-defs.svg#icon-" <> mIcon]
 
 faIcon_ :: Text -> Text -> Html ()
-faIcon_ faIcon classes =
-  i_ [class_ classes, term "data-fa-symbol" faIcon] $ svg_ [] $ use_ [href_ $ "#" <> faIcon]
+faIcon_ faIcon classes = do
+  i_ [class_ classes, term "data-fa-symbol" faIcon] ""
+  svg_ [] $ use_ [href_ $ "#" <> faIcon]
 
 deleteParam :: Text -> Text -> Text
 deleteParam key url = if needle == "" then url else replace needle "" url
