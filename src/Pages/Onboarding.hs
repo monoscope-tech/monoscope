@@ -640,7 +640,7 @@ tabContentDjango =
 
 tabs :: Html ()
 tabs =
-  ul_ [class_ "flex flex-nowrap overflow-x-auto gap-2"] $ do
+  ul_ [class_ "flex flex-nowrap overflow-x-auto gap-6"] $ do
     li_ [class_ "shrink-0"] $ do
       button_
         [ class_ "sdk_tab sdk_tab_active"
