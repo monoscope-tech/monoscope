@@ -455,56 +455,85 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_endpoint_request_stats_endpoint_id ON
 -- Create a view that tracks project request related statistic points from the request dump table.
 DROP MATERIALIZED VIEW IF EXISTS apis.project_request_stats;
 CREATE MATERIALIZED VIEW apis.project_request_stats AS 
-  WITH request_dump_stats as (
+  WITH request_dump_stats AS (
       SELECT
           project_id,
           percentile_agg(EXTRACT(epoch FROM duration)) as agg,
-          sum(EXTRACT(epoch FROM duration))  as total_time,
-          count(1)  as total_requests
+          sum(EXTRACT(epoch FROM duration)) as total_time,
+          count(1) as total_requests
       FROM apis.request_dumps
       WHERE created_at > NOW() - interval '14' day
       GROUP BY project_id
-    ),
-    current_week_requests as (
+  ),
+  current_week_requests AS (
       SELECT
           project_id,
           COUNT(*) AS request_count
       FROM apis.request_dumps
       WHERE created_at >= NOW() - interval '7 days'
       GROUP BY project_id
-    ),
-    previous_week_requests as (
+  ),
+  previous_week_requests AS (
       SELECT
           project_id,
           COUNT(*) AS request_count
       FROM apis.request_dumps
       WHERE created_at >= NOW() - interval '14 days' AND created_at < NOW() - interval '7 days'
       GROUP BY project_id
-    )
+  ),
+  endpoints_stats AS (
+      SELECT 
+          project_id,
+          count(*) as total_endpoints,
+          count(*) FILTER (WHERE created_at <= NOW()::DATE - 7) as total_endpoints_last_week
+      FROM apis.endpoints
+      GROUP BY project_id
+  ),
+  shapes_stats AS (
+      SELECT
+          project_id,
+          count(*) as total_shapes,
+          count(*) FILTER (WHERE created_at <= NOW()::DATE - 7) as total_shapes_last_week
+      FROM apis.shapes
+      GROUP BY project_id
+  ),
+  anomalies_stats AS (
+      SELECT
+          project_id,
+          count(*) FILTER (WHERE anomaly_type != 'field') as total_anomalies,
+          count(*) FILTER (WHERE created_at <= NOW()::DATE - 7) as total_anomalies_last_week,
+          count(*) as total_fields,
+          count(*) FILTER (WHERE created_at <= NOW()::DATE - 7) as total_fields_last_week
+      FROM apis.anomalies
+      GROUP BY project_id
+  )
   SELECT 	
-    rds.project_id,
-    coalesce(approx_percentile(0,    agg)/1000000, 0) min,
-    coalesce(approx_percentile(0.50, agg)/1000000, 0) p50,
-    coalesce(approx_percentile(0.75, agg)/1000000, 0) p75,
-    coalesce(approx_percentile(0.90, agg)/1000000, 0) p90,
-    coalesce(approx_percentile(0.95, agg)/1000000, 0) p95,
-    coalesce(approx_percentile(0.99, agg)/1000000, 0) p99,
-    coalesce(approx_percentile(1,    agg)/1000000, 0) max,
-    CAST    (total_time/1000000   AS FLOAT8) total_time,
-    CAST    (total_requests       AS INT) total_requests,
-    (select count(*) from apis.endpoints enp where rds.project_id=enp.project_id) total_endpoints,
-    (select count(*) from apis.endpoints enp where rds.project_id=enp.project_id and created_at<=NOW()::DATE-7) total_endpoints_last_week,
-    (select count(*) from apis.shapes    sh  where rds.project_id=sh.project_id) total_shapes,
-    (select count(*) from apis.shapes    sh  where rds.project_id=sh.project_id and created_at<=NOW()::DATE-7) total_shapes_last_week,
-    (select count(*) from apis.anomalies ann where rds.project_id=ann.project_id and ann.anomaly_type!='field') total_anomalies,
-    (select count(*) from apis.anomalies ann where rds.project_id=ann.project_id and created_at<=NOW()::DATE-7) total_anomalies_last_week,
-    (select count(*) from apis.anomalies ann where rds.project_id=ann.project_id) total_fields,
-    (select count(*) from apis.anomalies ann where rds.project_id=ann.project_id and created_at<=NOW()::DATE-7) total_fields_last_week,
-    CAST (coalesce((cw.request_count / (7 * 24 * 60)),0) AS INT) requests_per_min,
-    CAST (coalesce((pw.request_count / (7 * 24 * 60)),0) AS INT) requests_per_min_last_week
+      rds.project_id,
+      coalesce(approx_percentile(0,    agg)/1000000, 0) min,
+      coalesce(approx_percentile(0.50, agg)/1000000, 0) p50,
+      coalesce(approx_percentile(0.75, agg)/1000000, 0) p75,
+      coalesce(approx_percentile(0.90, agg)/1000000, 0) p90,
+      coalesce(approx_percentile(0.95, agg)/1000000, 0) p95,
+      coalesce(approx_percentile(0.99, agg)/1000000, 0) p99,
+      coalesce(approx_percentile(1,    agg)/1000000, 0) max,
+      CAST (total_time/1000000 AS FLOAT8) total_time,
+      CAST (total_requests AS INT) total_requests,
+      coalesce(es.total_endpoints, 0) as total_endpoints,
+      coalesce(es.total_endpoints_last_week, 0) as total_endpoints_last_week,
+      coalesce(ss.total_shapes, 0) as total_shapes,
+      coalesce(ss.total_shapes_last_week, 0) as total_shapes_last_week,
+      coalesce(as.total_anomalies, 0) as total_anomalies,
+      coalesce(as.total_anomalies_last_week, 0) as total_anomalies_last_week,
+      coalesce(as.total_fields, 0) as total_fields,
+      coalesce(as.total_fields_last_week, 0) as total_fields_last_week,
+      CAST (coalesce(cw.request_count / (7 * 24 * 60), 0) AS INT) requests_per_min,
+      CAST (coalesce(pw.request_count / (7 * 24 * 60), 0) AS INT) requests_per_min_last_week
   FROM request_dump_stats rds
   LEFT JOIN current_week_requests cw ON rds.project_id = cw.project_id
-  LEFT JOIN previous_week_requests pw ON rds.project_id = pw.project_id;
+  LEFT JOIN previous_week_requests pw ON rds.project_id = pw.project_id
+  LEFT JOIN endpoints_stats es ON rds.project_id = es.project_id
+  LEFT JOIN shapes_stats ss ON rds.project_id = ss.project_id
+  LEFT JOIN anomalies_stats as ON rds.project_id = as.project_id;
   
 CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_project_request_stats_project_id ON apis.project_request_stats(project_id);
 -- TODO: Create triggers to create new anomalies when new fields, 
