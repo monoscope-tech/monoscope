@@ -522,10 +522,10 @@ CREATE MATERIALIZED VIEW apis.project_request_stats AS
       coalesce(es.total_endpoints_last_week, 0) as total_endpoints_last_week,
       coalesce(ss.total_shapes, 0) as total_shapes,
       coalesce(ss.total_shapes_last_week, 0) as total_shapes_last_week,
-      coalesce(as.total_anomalies, 0) as total_anomalies,
-      coalesce(as.total_anomalies_last_week, 0) as total_anomalies_last_week,
-      coalesce(as.total_fields, 0) as total_fields,
-      coalesce(as.total_fields_last_week, 0) as total_fields_last_week,
+      coalesce(ass.total_anomalies, 0) as total_anomalies,
+      coalesce(ass.total_anomalies_last_week, 0) as total_anomalies_last_week,
+      coalesce(ass.total_fields, 0) as total_fields,
+      coalesce(ass.total_fields_last_week, 0) as total_fields_last_week,
       CAST (coalesce(cw.request_count / (7 * 24 * 60), 0) AS INT) requests_per_min,
       CAST (coalesce(pw.request_count / (7 * 24 * 60), 0) AS INT) requests_per_min_last_week
   FROM request_dump_stats rds
@@ -533,7 +533,7 @@ CREATE MATERIALIZED VIEW apis.project_request_stats AS
   LEFT JOIN previous_week_requests pw ON rds.project_id = pw.project_id
   LEFT JOIN endpoints_stats es ON rds.project_id = es.project_id
   LEFT JOIN shapes_stats ss ON rds.project_id = ss.project_id
-  LEFT JOIN anomalies_stats as ON rds.project_id = as.project_id;
+  LEFT JOIN anomalies_stats ass ON rds.project_id = ass.project_id;
   
 CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_project_request_stats_project_id ON apis.project_request_stats(project_id);
 -- TODO: Create triggers to create new anomalies when new fields, 
