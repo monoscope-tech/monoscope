@@ -728,14 +728,6 @@ SELECT add_continuous_aggregate_policy('apis.project_requests_by_endpoint_per_mi
 -- useful query to view job details
 -- select * from cron.job_run_details order by start_time desc limit 5;
 
--- Introduce new duration_ns column and deprecate the old duration column
-alter table apis.request_dumps add column duration_ns BIGINT NOT NULL default 0;
--- NOTE: I get an error: ERROR: attempted to lock invisible tuple when i try to run this
--- So we would start with duration:0 for existing fields
-update apis.request_dumps set duration_ns=EXTRACT(epoch FROM duration)::BIGINT;
-alter table apis.request_dumps add column sdk_type TEXT NOT NULL default '';
-
-
 CREATE TABLE IF NOT EXISTS apis.share_requests
  (               
     id             UUID      NOT        NULL           DEFAULT           gen_random_uuid() PRIMARY KEY,
@@ -745,6 +737,6 @@ CREATE TABLE IF NOT EXISTS apis.share_requests
     expired_at     TIMESTAMP WITH       TIME           ZONE       NOT               NULL              DEFAULT current_timestamp + INTERVAL '1 hour',
     request_dump_id UUID      NOT        NULL          
 );
-CREATE INDEX IF NOT EXISTS idx_apis__id ON apis.share_requests(id);
+CREATE INDEX IF NOT EXISTS idx_apis_share_requests_id ON apis.share_requests(id);
 
 COMMIT;
