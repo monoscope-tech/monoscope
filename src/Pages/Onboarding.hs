@@ -17,30 +17,35 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
-import Utils (redirect)
+import Utils (userIsProjectMember, userNotMemeberPage)
 
 onboardingGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 onboardingGetH sess pid = do
   pool <- asks pool
-  (project, hasApikeys, hasRequest) <- liftIO $
-    withPool pool $ do
-      project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      apiKeys <- ProjectApiKeys.countProjectApiKeysByProjectId pid
-      requestDumps <- RequestDumps.countRequestDumpByProject pid
-      pure (project, apiKeys > 0, requestDumps > 0)
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = project
-          , pageTitle = "Get started"
-          }
-  let ans = case project of
-        Nothing -> False
-        Just p -> case p.questions of
-          Just v -> True
-          _ -> False
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      (project, hasApikeys, hasRequest) <- liftIO $
+        withPool pool $ do
+          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+          apiKeys <- ProjectApiKeys.countProjectApiKeysByProjectId pid
+          requestDumps <- RequestDumps.countRequestDumpByProject pid
+          pure (project, apiKeys > 0, requestDumps > 0)
+      let bwconf =
+            (def :: BWConfig)
+              { sessM = Just sess
+              , currProject = project
+              , pageTitle = "Get started"
+              }
+      let ans = case project of
+            Nothing -> False
+            Just p -> case p.questions of
+              Just v -> True
+              _ -> False
 
-  pure $ bodyWrapper bwconf $ onboardingPage pid hasApikeys hasRequest ans
+      pure $ bodyWrapper bwconf $ onboardingPage pid hasApikeys hasRequest ans
 
 onboardingPage :: Projects.ProjectId -> Bool -> Bool -> Bool -> Html ()
 onboardingPage pid hasApikey hasRequest ans = do

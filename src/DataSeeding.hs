@@ -30,6 +30,7 @@ import Relude
 import Relude.Unsafe ((!!))
 import RequestMessages qualified
 import System.Random (RandomGen, getStdGen, randomRs)
+import Utils
 import Web.FormUrlEncoded (FromForm)
 
 data FieldConfig = FieldConfig
@@ -155,37 +156,47 @@ data DataSeedingForm = DataSeedingForm
 dataSeedingPostH :: Sessions.PersistentSession -> Projects.ProjectId -> DataSeedingForm -> DashboardM (Html ())
 dataSeedingPostH sess pid form = do
   pool <- asks pool
-  logger <- asks logger
-  env <- asks env
-  projectCache <- asks projectCache
-  project <-
-    liftIO $
-      withPool pool $
-        Projects.selectProjectForUser (Sessions.userId sess, pid)
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      logger <- asks logger
+      env <- asks env
+      projectCache <- asks projectCache
+      project <-
+        liftIO $
+          withPool pool $
+            Projects.selectProjectForUser (Sessions.userId sess, pid)
 
-  respE <- liftIO $ parseConfigToRequestMessages pid (encodeUtf8 $ config form)
-  case respE of
-    Left err -> liftIO $ logger <& "ERROR processing req message " <> show err >> pure dataSeedingPage
-    Right resp -> do
-      let !seeds = resp & map (\x -> Right (Just "", x))
-      _ <- liftIO $ ProcessMessage.processMessages' logger env pool seeds projectCache
-      pure dataSeedingPage
+      respE <- liftIO $ parseConfigToRequestMessages pid (encodeUtf8 $ config form)
+      case respE of
+        Left err -> liftIO $ logger <& "ERROR processing req message " <> show err >> pure dataSeedingPage
+        Right resp -> do
+          let !seeds = resp & map (\x -> Right (Just "", x))
+          _ <- liftIO $ ProcessMessage.processMessages' logger env pool seeds projectCache
+          pure dataSeedingPage
 
 dataSeedingGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 dataSeedingGetH sess pid = do
   pool <- asks pool
-  project <-
-    liftIO $
-      withPool pool $
-        Projects.selectProjectForUser (Sessions.userId sess, pid)
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      project <-
+        liftIO $
+          withPool pool $
+            Projects.selectProjectForUser (Sessions.userId sess, pid)
 
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = project
-          , pageTitle = "Data Seeding"
-          }
-  pure $ bodyWrapper bwconf dataSeedingPage
+      let bwconf =
+            (def :: BWConfig)
+              { sessM = Just sess
+              , currProject = project
+              , pageTitle = "Data Seeding"
+              }
+      pure $ bodyWrapper bwconf dataSeedingPage
 
 dataSeedingPage :: Html ()
 dataSeedingPage = do

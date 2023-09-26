@@ -38,6 +38,7 @@ import Models.Apis.Fields.Query qualified as Fields
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.Shapes qualified as Shapes
 import Relude.Unsafe as Unsafe hiding (head)
+import Utils
 import Web.FormUrlEncoded (FromForm)
 
 data SwaggerForm = SwaggerForm
@@ -210,105 +211,122 @@ flattenVector = V.concat
 documentationPutH :: Sessions.PersistentSession -> Projects.ProjectId -> SaveSwaggerForm -> DashboardM (Headers '[HXTrigger] (Html ()))
 documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id, endpoints, diffsInfo} = do
   pool <- asks pool
-  env <- asks env
-  let value = case decodeStrict (encodeUtf8 updated_swagger) of
-        Just val -> val
-        Nothing -> error "Failed to parse JSON: "
-  res <- liftIO $ withPool pool $ do
-    currentTime <- liftIO getZonedTime
-    let newEndpoints = V.toList $ V.map (getEndpointFromOpEndpoint pid) endpoints
-    let shapes = V.toList (V.map (getShapeFromOpShape pid currentTime) (V.filter (.opShapeChanged) diffsInfo))
-    let nestedOps = V.map (.opOperations) diffsInfo
-    let ops = flattenVector (V.toList nestedOps)
-    let fAndF = V.toList (V.map (getFieldAndFormatFromOpShape pid) ops)
-    let fields = nubBy (\x y -> x.hash == y.hash) (map fst fAndF) -- to prevent ON CONFLICT DO UPDATE command cannot affect row a second time
-    let formats = nubBy (\x y -> x.hash == y.hash) (map snd fAndF) -- to prevent ON CONFLICT DO UPDATE command cannot affect row a second time
-    Formats.insertFormats formats
-    Fields.insertFields fields
-    Shapes.insertShapes shapes
-    Endpoints.insertEndpoints newEndpoints
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Only project memebers can update swagger"]}|]
+      pure $ addHeader hxTriggerData $ userNotMemeberPage sess
+    else do
+      env <- asks env
+      let value = case decodeStrict (encodeUtf8 updated_swagger) of
+            Just val -> val
+            Nothing -> error "Failed to parse JSON: "
+      res <- liftIO $ withPool pool $ do
+        currentTime <- liftIO getZonedTime
+        let newEndpoints = V.toList $ V.map (getEndpointFromOpEndpoint pid) endpoints
+        let shapes = V.toList (V.map (getShapeFromOpShape pid currentTime) (V.filter (.opShapeChanged) diffsInfo))
+        let nestedOps = V.map (.opOperations) diffsInfo
+        let ops = flattenVector (V.toList nestedOps)
+        let fAndF = V.toList (V.map (getFieldAndFormatFromOpShape pid) ops)
+        let fields = nubBy (\x y -> x.hash == y.hash) (map fst fAndF) -- to prevent ON CONFLICT DO UPDATE command cannot affect row a second time
+        let formats = nubBy (\x y -> x.hash == y.hash) (map snd fAndF) -- to prevent ON CONFLICT DO UPDATE command cannot affect row a second time
+        Formats.insertFormats formats
+        Fields.insertFields fields
+        Shapes.insertShapes shapes
+        Endpoints.insertEndpoints newEndpoints
 
-    case swagger_id of
-      "" -> do
-        swaggerId <- Swaggers.SwaggerId <$> liftIO UUIDV4.nextRandom
-        let swaggerToAdd = Swaggers.Swagger{id = swaggerId, projectId = pid, createdBy = sess.userId, createdAt = currentTime, updatedAt = currentTime, swaggerJson = value}
-        Swaggers.addSwagger swaggerToAdd
-        pass
-      _ -> do
-        Swaggers.updateSwagger swagger_id value
-        pass
+        case swagger_id of
+          "" -> do
+            swaggerId <- Swaggers.SwaggerId <$> liftIO UUIDV4.nextRandom
+            let swaggerToAdd = Swaggers.Swagger{id = swaggerId, projectId = pid, createdBy = sess.userId, createdAt = currentTime, updatedAt = currentTime, swaggerJson = value}
+            Swaggers.addSwagger swaggerToAdd
+            pass
+          _ -> do
+            Swaggers.updateSwagger swagger_id value
+            pass
 
-  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Swagger Saved Successfully"]}|]
-  pure $ addHeader hxTriggerData ""
+      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Swagger Saved Successfully"]}|]
+      pure $ addHeader hxTriggerData ""
 
 documentationPostH :: Sessions.PersistentSession -> Projects.ProjectId -> SwaggerForm -> DashboardM (Headers '[HXTrigger] (Html ()))
 documentationPostH sess pid SwaggerForm{swagger_json, from} = do
   pool <- asks pool
-  env <- asks env
-  swaggerId <- Swaggers.SwaggerId <$> liftIO UUIDV4.nextRandom
-  currentTime <- liftIO getZonedTime
-  let value = case decodeStrict (encodeUtf8 swagger_json) of
-        Just val -> val
-        Nothing -> error "Failed to parse JSON"
-  let swaggerToAdd =
-        Swaggers.Swagger
-          { id = swaggerId
-          , projectId = pid
-          , createdBy = sess.userId
-          , createdAt = currentTime
-          , updatedAt = currentTime
-          , swaggerJson = value
-          }
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Only project memebers can upload swagger"]}|]
+      pure $ addHeader hxTriggerData $ userNotMemeberPage sess
+    else do
+      env <- asks env
+      swaggerId <- Swaggers.SwaggerId <$> liftIO UUIDV4.nextRandom
+      currentTime <- liftIO getZonedTime
+      let value = case decodeStrict (encodeUtf8 swagger_json) of
+            Just val -> val
+            Nothing -> error "Failed to parse JSON"
+      let swaggerToAdd =
+            Swaggers.Swagger
+              { id = swaggerId
+              , projectId = pid
+              , createdBy = sess.userId
+              , createdAt = currentTime
+              , updatedAt = currentTime
+              , swaggerJson = value
+              }
 
-  swaggers <- liftIO $
-    withPool pool $ do
-      Swaggers.addSwagger swaggerToAdd
-      Swaggers.swaggersByProject pid
+      swaggers <- liftIO $
+        withPool pool $ do
+          Swaggers.addSwagger swaggerToAdd
+          Swaggers.swaggersByProject pid
 
-  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Swagger uploaded Successfully"]}|]
-  pure $ addHeader hxTriggerData ""
+      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Swagger uploaded Successfully"]}|]
+      pure $ addHeader hxTriggerData ""
 
 documentationGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> DashboardM (Html ())
 documentationGetH sess pid swagger_id = do
   pool <- asks pool
-  (project, swaggers, swagger, swaggerId) <- liftIO $
-    withPool pool $ do
-      project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      swaggers <- Swaggers.swaggersByProject pid
-      currentSwagger <- case swagger_id of
-        Just swId -> Swaggers.getSwaggerById swId
-        Nothing -> pure Nothing
-      (swaggerVal, swaggerValId) <- case (swaggers, currentSwagger) of
-        (_, Just swg) -> do
-          let sw = swg.swaggerJson
-          let idx = show swg.id.swaggerId
-          pure (sw, idx)
-        ([], Nothing) -> do
-          endpoints <- Endpoints.endpointsByProjectId pid
-          let endpoint_hashes = V.map (.hash) endpoints
-          shapes <- Shapes.shapesByEndpointHashes pid endpoint_hashes
-          fields <- Fields.fieldsByEndpointHashes pid endpoint_hashes
-          let field_hashes = V.map (.fHash) fields
-          formats <- Formats.formatsByFieldsHashes pid field_hashes
-          let (projectTitle, projectDescription) = case project of
-                (Just pr) -> (toText pr.title, toText pr.description)
-                Nothing -> ("__APITOOLKIT", "Edit project description")
-          let gn = GenerateSwagger.generateSwagger projectTitle projectDescription endpoints shapes fields formats
-          pure (gn, "")
-        (val, Nothing) -> do
-          let latest = V.head $ V.reverse swaggers
-          let sw = latest.swaggerJson
-          let idx = show latest.id.swaggerId
-          pure (sw, idx)
-      pure (project, V.reverse swaggers, swaggerVal, swaggerValId)
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      (project, swaggers, swagger, swaggerId) <- liftIO $
+        withPool pool $ do
+          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+          swaggers <- Swaggers.swaggersByProject pid
+          currentSwagger <- case swagger_id of
+            Just swId -> Swaggers.getSwaggerById swId
+            Nothing -> pure Nothing
+          (swaggerVal, swaggerValId) <- case (swaggers, currentSwagger) of
+            (_, Just swg) -> do
+              let sw = swg.swaggerJson
+              let idx = show swg.id.swaggerId
+              pure (sw, idx)
+            ([], Nothing) -> do
+              endpoints <- Endpoints.endpointsByProjectId pid
+              let endpoint_hashes = V.map (.hash) endpoints
+              shapes <- Shapes.shapesByEndpointHashes pid endpoint_hashes
+              fields <- Fields.fieldsByEndpointHashes pid endpoint_hashes
+              let field_hashes = V.map (.fHash) fields
+              formats <- Formats.formatsByFieldsHashes pid field_hashes
+              let (projectTitle, projectDescription) = case project of
+                    (Just pr) -> (toText pr.title, toText pr.description)
+                    Nothing -> ("__APITOOLKIT", "Edit project description")
+              let gn = GenerateSwagger.generateSwagger projectTitle projectDescription endpoints shapes fields formats
+              pure (gn, "")
+            (val, Nothing) -> do
+              let latest = V.head $ V.reverse swaggers
+              let sw = latest.swaggerJson
+              let idx = show latest.id.swaggerId
+              pure (sw, idx)
+          pure (project, V.reverse swaggers, swaggerVal, swaggerValId)
 
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = project
-          , pageTitle = "Documentation"
-          }
-  pure $ bodyWrapper bwconf $ documentationsPage pid swaggers swaggerId (decodeUtf8 (encode swagger))
+      let bwconf =
+            (def :: BWConfig)
+              { sessM = Just sess
+              , currProject = project
+              , pageTitle = "Documentation"
+              }
+      pure $ bodyWrapper bwconf $ documentationsPage pid swaggers swaggerId (decodeUtf8 (encode swagger))
 
 documentationsPage :: Projects.ProjectId -> V.Vector Swaggers.Swagger -> String -> String -> Html ()
 documentationsPage pid swaggers swaggerID jsonString = do

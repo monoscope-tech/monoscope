@@ -26,7 +26,7 @@ import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Charts.Charts qualified as Charts
 import Relude
-import Utils (deleteParam, mIcon_, textToBool)
+import Utils (deleteParam, mIcon_, textToBool, userIsProjectMember, userNotMemeberPage)
 
 data ParamInput = ParamInput
   { currentURL :: Text
@@ -40,31 +40,34 @@ endpointListGetH sess pid layoutM ackdM archivedM sortM hxRequestM hxBoostedM hx
   let ackd = maybe True textToBool ackdM
   let archived = maybe False textToBool archivedM
   pool <- asks pool
-  (project, endpointStats) <- liftIO $
-    withPool pool $ do
-      project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      endpointStats <- Endpoints.endpointRequestStatsByProject pid ackd archived
-      pure (project, endpointStats)
-
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = project
-          , pageTitle = "Endpoints"
-          }
-
-  let currentURL = "/p/" <> pid.toText <> "/endpoints?layout=" <> fromMaybe "false" layoutM <> "&ackd=" <> fromMaybe "true" ackdM <> "&archived=" <> fromMaybe "false" archivedM
-  -- let currentURL =  fromMaybe "" hxCurrentURL
-  currTime <- liftIO getCurrentTime
-  let paramInput =
-        ParamInput
-          { currentURL = currentURL
-          , ackd = ackd
-          , archived = archived
-          , -- , sort = fromMaybe "" sortM
-            sort = ""
-          }
-  pure $ bodyWrapper bwconf $ endpointListPage paramInput pid currTime endpointStats
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      (project, endpointStats) <- liftIO $
+        withPool pool $ do
+          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+          endpointStats <- Endpoints.endpointRequestStatsByProject pid ackd archived
+          pure (project, endpointStats)
+      let bwconf =
+            (def :: BWConfig)
+              { sessM = Just sess
+              , currProject = project
+              , pageTitle = "Endpoints"
+              }
+      let currentURL = "/p/" <> pid.toText <> "/endpoints?layout=" <> fromMaybe "false" layoutM <> "&ackd=" <> fromMaybe "true" ackdM <> "&archived=" <> fromMaybe "false" archivedM
+      -- let currentURL =  fromMaybe "" hxCurrentURL
+      currTime <- liftIO getCurrentTime
+      let paramInput =
+            ParamInput
+              { currentURL = currentURL
+              , ackd = ackd
+              , archived = archived
+              , -- , sort = fromMaybe "" sortM
+                sort = ""
+              }
+      pure $ bodyWrapper bwconf $ endpointListPage paramInput pid currTime endpointStats
 
 endpointListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Endpoints.EndpointRequestStats -> Html ()
 endpointListPage paramInput pid currTime endpoints = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24"] $ do

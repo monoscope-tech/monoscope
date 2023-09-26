@@ -20,6 +20,7 @@ import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
+import Utils
 import Web.FormUrlEncoded (FromForm)
 
 data RedactFieldForm = RedactFieldForm
@@ -33,36 +34,47 @@ data RedactFieldForm = RedactFieldForm
 redactedFieldsPostH :: Sessions.PersistentSession -> Projects.ProjectId -> RedactFieldForm -> DashboardM (Headers '[HXTrigger] (Html ()))
 redactedFieldsPostH sess pid RedactFieldForm{path, description, endpointHash} = do
   pool <- asks pool
-  env <- asks env
-  redactedFieldId <- RedactedFields.RedactedFieldId <$> liftIO UUIDV4.nextRandom
-  -- adding path, description, endpoints via record punning
-  let fieldToRedact = RedactedFields.RedactedField{id = redactedFieldId, projectId = pid, configuredVia = RedactedFields.Dashboard, ..}
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Only project members can redact fields"]}|]
+      pure $ addHeader hxTriggerData $ userNotMemeberPage sess
+    else do
+      env <- asks env
+      redactedFieldId <- RedactedFields.RedactedFieldId <$> liftIO UUIDV4.nextRandom
+      -- adding path, description, endpoints via record punning
+      let fieldToRedact = RedactedFields.RedactedField{id = redactedFieldId, projectId = pid, configuredVia = RedactedFields.Dashboard, ..}
 
-  redactedFields <- liftIO $
-    withPool pool $ do
-      RedactedFields.redactField fieldToRedact
-      RedactedFields.redactedFieldsByProject pid
+      redactedFields <- liftIO $
+        withPool pool $ do
+          RedactedFields.redactField fieldToRedact
+          RedactedFields.redactedFieldsByProject pid
 
-  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Submitted field to be redacted, Successfully"]}|]
-  pure $ addHeader hxTriggerData $ mainContent pid redactedFields
+      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Submitted field to be redacted, Successfully"]}|]
+      pure $ addHeader hxTriggerData $ mainContent pid redactedFields
 
 -- | redactedFieldsGetH renders the api keys list page which includes a modal for creating the apikeys.
 redactedFieldsGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 redactedFieldsGetH sess pid = do
   pool <- asks pool
-  (project, redactedFields) <- liftIO $
-    withPool pool $ do
-      project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      redactedFields <- RedactedFields.redactedFieldsByProject pid
-      pure (project, redactedFields)
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      (project, redactedFields) <- liftIO $
+        withPool pool $ do
+          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+          redactedFields <- RedactedFields.redactedFieldsByProject pid
+          pure (project, redactedFields)
 
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = project
-          , pageTitle = "Redacted Fields"
-          }
-  pure $ bodyWrapper bwconf $ redactedFieldsPage pid redactedFields
+      let bwconf =
+            (def :: BWConfig)
+              { sessM = Just sess
+              , currProject = project
+              , pageTitle = "Redacted Fields"
+              }
+      pure $ bodyWrapper bwconf $ redactedFieldsPage pid redactedFields
 
 redactedFieldsPage :: Projects.ProjectId -> Vector RedactedFields.RedactedField -> Html ()
 redactedFieldsPage pid redactedFields = do

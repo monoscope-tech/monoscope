@@ -79,14 +79,19 @@ subPageMenu =
 fieldDetailsPartialH :: Sessions.PersistentSession -> Projects.ProjectId -> Fields.FieldId -> DashboardM (Html ())
 fieldDetailsPartialH sess pid fid = do
   pool <- asks pool
-  (fieldsM, formats) <- liftIO $
-    withPool pool $ do
-      field <- Fields.fieldById fid
-      formats <- Formats.formatsByFieldHash (maybe "" (^. #hash) field)
-      pure (field, formats)
-  case fieldsM of
-    Nothing -> pure ""
-    Just field -> pure $ fieldDetailsView field formats
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      (fieldsM, formats) <- liftIO $
+        withPool pool $ do
+          field <- Fields.fieldById fid
+          formats <- Formats.formatsByFieldHash (maybe "" (^. #hash) field)
+          pure (field, formats)
+      case fieldsM of
+        Nothing -> pure ""
+        Just field -> pure $ fieldDetailsView field formats
 
 fieldDetailsView :: Fields.Field -> Vector Formats.Format -> Html ()
 fieldDetailsView field formats = do
@@ -143,56 +148,61 @@ aesonValueToText = toStrict . encodeToLazyText
 endpointDetailsH :: Sessions.PersistentSession -> Projects.ProjectId -> Endpoints.EndpointId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
 endpointDetailsH sess pid eid fromDStr toDStr sinceStr' subPageM = do
   pool <- asks pool
-  now <- liftIO getCurrentTime
-  let sinceStr = if (isNothing fromDStr && isNothing toDStr && isNothing sinceStr') || (fromDStr == Just "") then Just "14D" else sinceStr'
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      now <- liftIO getCurrentTime
+      let sinceStr = if (isNothing fromDStr && isNothing toDStr && isNothing sinceStr') || (fromDStr == Just "") then Just "14D" else sinceStr'
 
-  -- TODO: Replace with a duration parser.
-  let (fromD, toD) = case sinceStr of
-        Just "1H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just $ utcToZonedTime utc now)
-        Just "24H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just $ utcToZonedTime utc now)
-        Just "7D" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 7) now, Just $ utcToZonedTime utc now)
-        Just "14D" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 14) now, Just $ utcToZonedTime utc now)
-        Nothing -> do
-          let f = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromDStr) :: Maybe UTCTime)
-          let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
-          (f, t)
-        _ -> do
-          let f = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromDStr) :: Maybe UTCTime)
-          let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
-          (f, t)
+      -- TODO: Replace with a duration parser.
+      let (fromD, toD) = case sinceStr of
+            Just "1H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just $ utcToZonedTime utc now)
+            Just "24H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just $ utcToZonedTime utc now)
+            Just "7D" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 7) now, Just $ utcToZonedTime utc now)
+            Just "14D" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 14) now, Just $ utcToZonedTime utc now)
+            Nothing -> do
+              let f = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromDStr) :: Maybe UTCTime)
+              let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
+              (f, t)
+            _ -> do
+              let f = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromDStr) :: Maybe UTCTime)
+              let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
+              (f, t)
 
-  (endpoint, enpStats, project, shapesWithFieldsMap, fieldsMap, reqLatenciesRolledByStepsLabeled) <- liftIO $
-    withPool pool $ do
-      -- Should swap names betw enp and endpoint endpoint could be endpointStats
-      endpoint <- Unsafe.fromJust <$> Endpoints.endpointById eid
-      enpStats <- fromMaybe (def :: EndpointRequestStats) <$> Endpoints.endpointRequestStatsByEndpoint eid
-      project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      shapes <- Shapes.shapesByEndpointHash endpoint.hash
-      fields <- Fields.selectFields (endpoint.hash)
-      let fieldsMap = Fields.groupFieldsByCategory fields
-      let shapesWithFieldsMap = Vector.map (`getShapeFields` fields) shapes
-      let maxV = round (enpStats.max) :: Int
-      let steps = (maxV `quot` 100) :: Int
-      let steps' = if steps == 0 then 100 else steps
-      reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledBySteps maxV steps' pid (endpoint.urlPath) (endpoint.method)
-      pure (endpoint, enpStats, project, Vector.toList shapesWithFieldsMap, fieldsMap, Vector.toList reqLatenciesRolledBySteps)
+      (endpoint, enpStats, project, shapesWithFieldsMap, fieldsMap, reqLatenciesRolledByStepsLabeled) <- liftIO $
+        withPool pool $ do
+          -- Should swap names betw enp and endpoint endpoint could be endpointStats
+          endpoint <- Unsafe.fromJust <$> Endpoints.endpointById eid
+          enpStats <- fromMaybe (def :: EndpointRequestStats) <$> Endpoints.endpointRequestStatsByEndpoint eid
+          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+          shapes <- Shapes.shapesByEndpointHash endpoint.hash
+          fields <- Fields.selectFields (endpoint.hash)
+          let fieldsMap = Fields.groupFieldsByCategory fields
+          let shapesWithFieldsMap = Vector.map (`getShapeFields` fields) shapes
+          let maxV = round (enpStats.max) :: Int
+          let steps = (maxV `quot` 100) :: Int
+          let steps' = if steps == 0 then 100 else steps
+          reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledBySteps maxV steps' pid (endpoint.urlPath) (endpoint.method)
+          pure (endpoint, enpStats, project, Vector.toList shapesWithFieldsMap, fieldsMap, Vector.toList reqLatenciesRolledBySteps)
 
-  let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = project
-          , pageTitle = "Endpoint Details"
-          , menuItem = Just "Endpoints"
-          }
-  currTime <- liftIO getCurrentTime
-  let currentURL = "/p/" <> pid.toText <> "/endpoints/" <> Endpoints.endpointIdText eid <> "?from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
-  let subPage = fromMaybe "overview" subPageM
-  let currentPickerTxt = case sinceStr of
-        Just a -> a
-        Nothing -> maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD
-  let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt, subPage = subPage}
-  pure $ bodyWrapper bwconf $ endpointDetails paramInput currTime endpoint enpStats shapesWithFieldsMap fieldsMap reqLatenciesRolledByStepsJ (fromD, toD)
+      let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
+      let bwconf =
+            (def :: BWConfig)
+              { sessM = Just sess
+              , currProject = project
+              , pageTitle = "Endpoint Details"
+              , menuItem = Just "Endpoints"
+              }
+      currTime <- liftIO getCurrentTime
+      let currentURL = "/p/" <> pid.toText <> "/endpoints/" <> Endpoints.endpointIdText eid <> "?from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
+      let subPage = fromMaybe "overview" subPageM
+      let currentPickerTxt = case sinceStr of
+            Just a -> a
+            Nothing -> maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD
+      let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt, subPage = subPage}
+      pure $ bodyWrapper bwconf $ endpointDetails paramInput currTime endpoint enpStats shapesWithFieldsMap fieldsMap reqLatenciesRolledByStepsJ (fromD, toD)
 
 endpointDetails :: ParamInput -> UTCTime -> Endpoints.Endpoint -> EndpointRequestStats -> [ShapeWidthFields] -> Map FieldCategoryEnum [Fields.Field] -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 endpointDetails paramInput currTime endpoint endpointStats shapesWithFieldsMap fieldsM reqLatenciesRolledByStepsJ dateRange = do

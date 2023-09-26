@@ -38,7 +38,7 @@ import Servant (
  )
 import System.Clock
 import Text.Interpolation.Nyan
-import Utils (GetOrRedirect, deleteParam, mIcon_, redirect)
+import Utils (GetOrRedirect, deleteParam, mIcon_, redirect, userIsProjectMember, userNotMemeberPage)
 import Witch (from)
 
 timePickerItems :: [(Text, Text)]
@@ -59,55 +59,59 @@ data ParamInput = ParamInput
 dashboardGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Union GetOrRedirect)
 dashboardGetH sess pid fromDStr toDStr sinceStr' = do
   pool <- asks pool
-  now <- liftIO getCurrentTime
-  let sinceStr = if isNothing fromDStr && isNothing toDStr && isNothing sinceStr' || fromDStr == Just "" then Just "14D" else sinceStr'
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      respond $ WithStatus @200 $ userNotMemeberPage sess
+    else do
+      now <- liftIO getCurrentTime
+      let sinceStr = if isNothing fromDStr && isNothing toDStr && isNothing sinceStr' || fromDStr == Just "" then Just "14D" else sinceStr'
+      (hasApikeys, hasRequest) <- liftIO $
+        withPool pool $ do
+          apiKeys <- ProjectApiKeys.countProjectApiKeysByProjectId pid
+          requestDumps <- RequestDumps.countRequestDumpByProject pid
+          pure (apiKeys > 0, requestDumps > 0)
+      -- TODO: Replace with a duration parser.
+      let (fromD, toD) = case sinceStr of
+            Just "1H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just $ utcToZonedTime utc now)
+            Just "24H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just $ utcToZonedTime utc now)
+            Just "7D" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 7) now, Just $ utcToZonedTime utc now)
+            Just "14D" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 14) now, Just $ utcToZonedTime utc now)
+            Nothing -> do
+              let f = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromDStr) :: Maybe UTCTime)
+              let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
+              (f, t)
+            _ -> do
+              let f = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromDStr) :: Maybe UTCTime)
+              let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
+              (f, t)
 
-  (hasApikeys, hasRequest) <- liftIO $
-    withPool pool $ do
-      apiKeys <- ProjectApiKeys.countProjectApiKeysByProjectId pid
-      requestDumps <- RequestDumps.countRequestDumpByProject pid
-      pure (apiKeys > 0, requestDumps > 0)
-  -- TODO: Replace with a duration parser.
-  let (fromD, toD) = case sinceStr of
-        Just "1H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just $ utcToZonedTime utc now)
-        Just "24H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just $ utcToZonedTime utc now)
-        Just "7D" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 7) now, Just $ utcToZonedTime utc now)
-        Just "14D" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 14) now, Just $ utcToZonedTime utc now)
-        Nothing -> do
-          let f = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromDStr) :: Maybe UTCTime)
-          let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
-          (f, t)
-        _ -> do
-          let f = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromDStr) :: Maybe UTCTime)
-          let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
-          (f, t)
+      startTime <- liftIO $ getTime Monotonic
+      (project, projectRequestStats, reqLatenciesRolledByStepsLabeled) <- liftIO $
+        withPool pool $ do
+          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
 
-  startTime <- liftIO $ getTime Monotonic
-  (project, projectRequestStats, reqLatenciesRolledByStepsLabeled) <- liftIO $
-    withPool pool $ do
-      project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+          projectRequestStats <- fromMaybe (def :: Projects.ProjectRequestStats) <$> Projects.projectRequestStatsByProject pid
+          let maxV = round (projectRequestStats.p99) :: Int
+          let steps' = (maxV `quot` 100) :: Int
+          let steps = if steps' == 0 then 100 else steps'
+          reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledByStepsForProject maxV steps pid (fromD, toD)
+          pure (project, projectRequestStats, Vector.toList reqLatenciesRolledBySteps)
 
-      projectRequestStats <- fromMaybe (def :: Projects.ProjectRequestStats) <$> Projects.projectRequestStatsByProject pid
-      let maxV = round (projectRequestStats.p99) :: Int
-      let steps' = (maxV `quot` 100) :: Int
-      let steps = if steps' == 0 then 100 else steps'
-      reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledByStepsForProject maxV steps pid (fromD, toD)
-      pure (project, projectRequestStats, Vector.toList reqLatenciesRolledBySteps)
-
-  let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = project
-          , pageTitle = "Dashboard"
-          }
-  currTime <- liftIO getCurrentTime
-  let currentURL = "/p/" <> pid.toText <> "?&from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
-  let currentPickerTxt = fromMaybe (maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD) sinceStr
-  let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt}
-  if not hasApikeys || not hasRequest
-    then respond $ WithStatus @302 $ redirect ("/p/" <> pid.toText <> "/onboarding")
-    else respond $ WithStatus @200 $ bodyWrapper bwconf $ dashboardPage pid paramInput currTime projectRequestStats reqLatenciesRolledByStepsJ (fromD, toD)
+      let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
+      let bwconf =
+            (def :: BWConfig)
+              { sessM = Just sess
+              , currProject = project
+              , pageTitle = "Dashboard"
+              }
+      currTime <- liftIO getCurrentTime
+      let currentURL = "/p/" <> pid.toText <> "?&from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
+      let currentPickerTxt = fromMaybe (maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD) sinceStr
+      let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt}
+      if not hasApikeys || not hasRequest
+        then respond $ WithStatus @302 $ redirect ("/p/" <> pid.toText <> "/onboarding")
+        else respond $ WithStatus @200 $ bodyWrapper bwconf $ dashboardPage pid paramInput currTime projectRequestStats reqLatenciesRolledByStepsJ (fromD, toD)
 
 dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 dashboardPage pid paramInput currTime projectStats reqLatenciesRolledByStepsJ dateRange = do

@@ -49,6 +49,7 @@ import Servant (
   noHeader,
  )
 import Servant.Htmx
+import Utils
 import Web.FormUrlEncoded (FromForm)
 
 data CreateProjectForm = CreateProjectForm
@@ -119,10 +120,15 @@ projectSettingsGetH sess pid = do
 deleteProjectGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Headers '[HXTrigger, HXRedirect] (Html ()))
 deleteProjectGetH sess pid = do
   pool <- asks pool
-  _ <- liftIO $ withPool pool $ Projects.deleteProject pid
-
-  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Deleted Project Successfully"]}|]
-  pure $ addHeader hxTriggerData $ addHeader "/" $ span_ ""
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"errorToast": ["Only project members can perform this action."]}|]
+      pure $ addHeader hxTriggerData $ addHeader "/" $ span_ ""
+    else do
+      _ <- liftIO $ withPool pool $ Projects.deleteProject pid
+      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Deleted Project Successfully"]}|]
+      pure $ addHeader hxTriggerData $ addHeader "/" $ span_ ""
 
 ----------------------------------------------------------------------------------------------------------
 -- createProjectPostH is the handler for the create projects page form handling.
@@ -223,8 +229,8 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                 , ("Hobby", "250k", "$10", "3", paymentPlan == "Hobby", if envCfg.paddleSandbox then envCfg.paddleSandboxHobby else envCfg.paddleHobby)
                 , ("Startup", "1m", "$50", "5", paymentPlan == "Startup", if envCfg.paddleSandbox then envCfg.paddleSandboxStartup else envCfg.paddleStartup)
                 , ("Growth", "10m", "$250", "10", paymentPlan == "Growth", if envCfg.paddleSandbox then envCfg.paddleSandboxGrowth else envCfg.paddleGrowth)
-                ] ::
-                  [(Text, Text, Text, Text, Bool, Text)]
+                ]
+                  :: [(Text, Text, Text, Text, Bool, Text)]
                 )
                 & mapM_ \(title, included, price, team, isSelected, paddleSubsCode) -> do
                   let isSelectedTxt = toLower $ show isSelected

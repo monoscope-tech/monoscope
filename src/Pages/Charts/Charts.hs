@@ -28,7 +28,7 @@ import Network.URI (escapeURIString, isUnescapedInURI)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant (FromHttpApiData (..))
-import Utils (DBField (MkDBField))
+import Utils (DBField (MkDBField), userIsProjectMember, userNotMemeberPage)
 import Witch (from)
 
 transform :: [String] -> [(Int, Int, String)] -> [Maybe Int]
@@ -273,31 +273,36 @@ lazy queries =
 --
 
 throughputEndpointHTML :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Bool -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
-throughputEndpointHTML _ pid idM groupBy_ endpointHash shapeHash formatHash statusCodeGT numSlotsM limitM showLegend_ fromDStrM toDStrM chartTheme = do
+throughputEndpointHTML sess pid idM groupBy_ endpointHash shapeHash formatHash statusCodeGT numSlotsM limitM showLegend_ fromDStrM toDStrM chartTheme = do
   pool <- asks pool
-  let fromDStr = fromMaybe "" fromDStrM
-  let toDStr = fromMaybe "" toDStrM
-  let fromD = utcToZonedTime utc <$> (iso8601ParseM (from @Text fromDStr) :: Maybe UTCTime)
-  let toD = utcToZonedTime utc <$> (iso8601ParseM (from @Text toDStr) :: Maybe UTCTime)
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      let fromDStr = fromMaybe "" fromDStrM
+      let toDStr = fromMaybe "" toDStrM
+      let fromD = utcToZonedTime utc <$> (iso8601ParseM (from @Text fromDStr) :: Maybe UTCTime)
+      let toD = utcToZonedTime utc <$> (iso8601ParseM (from @Text toDStr) :: Maybe UTCTime)
 
-  let entityId = fromMaybe "" idM
-  let groupByField = maybe "" (\x -> "\"" <> x <> "\"") groupBy_
-  let showLegend = T.toLower $ show (Just True == showLegend_)
-  let chartThemeTxt = fromMaybe "" chartTheme
+      let entityId = fromMaybe "" idM
+      let groupByField = maybe "" (\x -> "\"" <> x <> "\"") groupBy_
+      let showLegend = T.toLower $ show (Just True == showLegend_)
+      let chartThemeTxt = fromMaybe "" chartTheme
 
-  script <- case groupBy_ of
-    Just _ -> do
-      chartData <- liftIO $ withPool pool $ RequestDumps.throughputBy' pid groupBy_ endpointHash shapeHash formatHash statusCodeGT (fromMaybe 0 numSlotsM) limitM Nothing (fromD, toD)
-      let (headers, groupedData) = pivot' $ toList chartData
-      let headersJSON = decodeUtf8 $ AE.encode headers
-      let groupedDataJSON = decodeUtf8 $ AE.encode $ transpose groupedData
-      pure [text| throughputEChartTable("id-$entityId",$headersJSON, $groupedDataJSON, [$groupByField], $showLegend, "$chartThemeTxt", "$fromDStr", "$toDStr") |]
-    Nothing -> do
-      chartData <- liftIO $ withPool pool $ RequestDumps.throughputBy pid groupBy_ endpointHash shapeHash formatHash statusCodeGT (fromMaybe 0 numSlotsM) limitM Nothing (fromD, toD)
-      pure [text| throughputEChart("id-$entityId", $chartData, [$groupByField], $showLegend, "$chartThemeTxt") |]
-  pure $ do
-    div_ [id_ $ "id-" <> entityId, class_ "w-full h-full"] ""
-    script_ script
+      script <- case groupBy_ of
+        Just _ -> do
+          chartData <- liftIO $ withPool pool $ RequestDumps.throughputBy' pid groupBy_ endpointHash shapeHash formatHash statusCodeGT (fromMaybe 0 numSlotsM) limitM Nothing (fromD, toD)
+          let (headers, groupedData) = pivot' $ toList chartData
+          let headersJSON = decodeUtf8 $ AE.encode headers
+          let groupedDataJSON = decodeUtf8 $ AE.encode $ transpose groupedData
+          pure [text| throughputEChartTable("id-$entityId",$headersJSON, $groupedDataJSON, [$groupByField], $showLegend, "$chartThemeTxt", "$fromDStr", "$toDStr") |]
+        Nothing -> do
+          chartData <- liftIO $ withPool pool $ RequestDumps.throughputBy pid groupBy_ endpointHash shapeHash formatHash statusCodeGT (fromMaybe 0 numSlotsM) limitM Nothing (fromD, toD)
+          pure [text| throughputEChart("id-$entityId", $chartData, [$groupByField], $showLegend, "$chartThemeTxt") |]
+      pure $ do
+        div_ [id_ $ "id-" <> entityId, class_ "w-full h-full"] ""
+        script_ script
 
 -- TODO: Delete after migrating to new chart strategy
 -- >>> runQueryBy (QBEndpointHash "hash")

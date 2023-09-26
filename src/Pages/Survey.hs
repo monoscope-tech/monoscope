@@ -21,6 +21,7 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Pkg.Components (loader)
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXRedirect, HXTrigger)
+import Utils
 import Web.FormUrlEncoded (FromForm)
 
 data SurveyForm = SurveyForm
@@ -46,38 +47,49 @@ instance ToJSON SurveyForm where
 surveyPutH :: Sessions.PersistentSession -> Projects.ProjectId -> SurveyForm -> DashboardM (Headers '[HXTrigger, HXRedirect] (Html ()))
 surveyPutH sess pid survey = do
   pool <- asks pool
-  env <- asks env
-  let nameArr = T.splitOn " " (fullName survey)
-  if length nameArr < 2
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
     then do
-      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","errorToast": ["Invalid full name format"]}|]
+      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Only project memebers can take the survey"]}|]
       pure $ addHeader hxTriggerData $ addHeader "" ""
     else do
-      let jsonBytes = encode survey
-      let firstName = nameArr !! 0
-      let lastName = nameArr !! 1
-      let phoneNumber = survey.phoneNumber
-      res <- liftIO $ withPool pool $ execute Update [sql| update projects.projects set questions= ? where id=? |] (jsonBytes, pid)
-      u <- liftIO $ withPool pool $ execute Update [sql| update users.users set first_name= ?, last_name=?, phone_number=? where id=? |] (firstName, lastName, phoneNumber, sess.userId)
-      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","successToast": ["Thanks for taking the survey"]}|]
-      pure $ addHeader hxTriggerData $ addHeader ("/p/" <> show pid.unProjectId <> "/onboarding") ""
+      env <- asks env
+      let nameArr = T.splitOn " " (fullName survey)
+      if length nameArr < 2
+        then do
+          let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","errorToast": ["Invalid full name format"]}|]
+          pure $ addHeader hxTriggerData $ addHeader "" ""
+        else do
+          let jsonBytes = encode survey
+          let firstName = nameArr !! 0
+          let lastName = nameArr !! 1
+          let phoneNumber = survey.phoneNumber
+          res <- liftIO $ withPool pool $ execute Update [sql| update projects.projects set questions= ? where id=? |] (jsonBytes, pid)
+          u <- liftIO $ withPool pool $ execute Update [sql| update users.users set first_name= ?, last_name=?, phone_number=? where id=? |] (firstName, lastName, phoneNumber, sess.userId)
+          let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","successToast": ["Thanks for taking the survey"]}|]
+          pure $ addHeader hxTriggerData $ addHeader ("/p/" <> show pid.unProjectId <> "/onboarding") ""
 
 surveyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 surveyGetH sess pid = do
   pool <- asks pool
-  project <- liftIO $
-    withPool pool $ do
-      Projects.selectProjectForUser (Sessions.userId sess, pid)
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = project
-          , pageTitle = "About project"
-          }
-  let user = sess.user.getUser
-  let full_name = user.firstName <> " " <> user.lastName
-  let phoneNumber = fromMaybe "" user.phoneNumber
-  pure $ bodyWrapper bwconf $ aboutPage pid full_name phoneNumber
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      project <- liftIO $
+        withPool pool $ do
+          Projects.selectProjectForUser (Sessions.userId sess, pid)
+      let bwconf =
+            (def :: BWConfig)
+              { sessM = Just sess
+              , currProject = project
+              , pageTitle = "About project"
+              }
+      let user = sess.user.getUser
+      let full_name = user.firstName <> " " <> user.lastName
+      let phoneNumber = fromMaybe "" user.phoneNumber
+      pure $ bodyWrapper bwconf $ aboutPage pid full_name phoneNumber
 
 aboutPage :: Projects.ProjectId -> Text -> Text -> Html ()
 aboutPage pid full_name phoneNumber = do
