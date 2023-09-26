@@ -38,6 +38,7 @@ import NeatInterpolation (text)
 import Optics.Core ((^.))
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Charts.Charts qualified as Charts
+import Pkg.Components (loader)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
@@ -135,7 +136,7 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM page loadM endpointM hxRe
     then do
       pure $ userNotMemeberPage sess
     else do
-      let fetchLimit = 21
+      let fetchLimit = 61
       let limit = maybe (Just fetchLimit) (\x -> if x == "slider" then Just 51 else Just fetchLimit) layoutM
       let pageInt = case page of
             Just p -> if limit == Just 51 then 0 else Unsafe.read (toString p)
@@ -170,7 +171,10 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM page loadM endpointM hxRe
             Just url -> do
               mapM_ (renderAnomaly False currTime) anomalies
               if length anomalies > fetchLimit - 1
-                then a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] "LOAD MORE"
+                then a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] do
+                  div_ [class_ "htmx-indicator query-indicator"] do
+                    loader
+                  "LOAD MORE"
                 else ""
             Nothing -> mapM_ (renderAnomaly False currTime) anomalies
 
@@ -243,8 +247,11 @@ anomalyList paramInput pid currTime anomalies nextFetchUrl = form_ [class_ "col-
   mapM_ (renderAnomaly False currTime) anomalies
   case nextFetchUrl of
     Just url ->
-      if length anomalies > 20
-        then a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] "LOAD MORE"
+      if length anomalies > 60
+        then a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] do
+          div_ [class_ "htmx-indicator query-indicator"] do
+            loader
+          "LOAD MORE"
         else ""
     Nothing -> ""
 
