@@ -57,5 +57,5 @@ swaggersByProject pid = selectManyByField [field| project_id |] pid
 updateSwagger :: Text -> Value -> DBT IO Int64
 updateSwagger swaggerId swaggerJson = do
   execute Update q (swaggerJson, swaggerId)
- where
-  q = [sql| UPDATE apis.swagger_jsons SET swagger_json=? WHERE id=? |]
+  where
+    q = [sql| UPDATE apis.swagger_jsons SET swagger_json=? WHERE id=? |]

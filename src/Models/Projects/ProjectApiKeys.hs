@@ -85,29 +85,29 @@ projectApiKeysByProjectId projectId = do selectManyByField @ProjectApiKey [field
 revokeApiKey :: ProjectApiKeyId -> DBT IO Int64
 revokeApiKey kid = do
   execute Update q kid
- where
-  q =
-    [sql| UPDATE projects.project_api_keys SET deleted_at=NOW(), active=false where id=?;|]
+  where
+    q =
+      [sql| UPDATE projects.project_api_keys SET deleted_at=NOW(), active=false where id=?;|]
 countProjectApiKeysByProjectId :: Projects.ProjectId -> DBT IO Int
 countProjectApiKeysByProjectId pid = do
   result <- query Select q pid
   case result of
     [Only count] -> return count
     v -> return $ length v
- where
-  q = [sql| SELECT count(*) FROM projects.project_api_keys WHERE project_id=? |]
+  where
+    q = [sql| SELECT count(*) FROM projects.project_api_keys WHERE project_id=? |]
 
 getProjectApiKey :: ProjectApiKeyId -> DBT IO (Maybe ProjectApiKey)
 getProjectApiKey = queryOne Select q
- where
-  q = [sql|select id, created_at, updated_at, deleted_at, active, project_id,  title, key_prefix from projects.project_api_keys where id=? and active=true |]
+  where
+    q = [sql|select id, created_at, updated_at, deleted_at, active, project_id,  title, key_prefix from projects.project_api_keys where id=? and active=true |]
 
 -- AES256 encryption
 encryptAPIKey :: ByteString -> ByteString -> ByteString
 encryptAPIKey key = ctrCombine ctx nullIV
- where
-  ctx :: AES256
-  ctx = throwCryptoError $ cipherInit key
+  where
+    ctx :: AES256
+    ctx = throwCryptoError $ cipherInit key
 
 -- | decryptAPIKey :: secretKey -> TextToDecrypt -> DecryptedText as bytestring
 decryptAPIKey :: ByteString -> ByteString -> ByteString

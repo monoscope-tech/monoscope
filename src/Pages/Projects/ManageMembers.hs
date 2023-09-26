@@ -168,6 +168,6 @@ projectMemberRow projMembersM =
       [ [__| on click remove the closest parent <div/> then halt |]
       ]
       $ img_ [src_ "/assets/svgs/delete.svg", class_ "cursor-pointer"]
- where
-  selectedIf :: ProjectMembers.Permissions -> ProjectMembers.Permissions -> [Attribute]
-  selectedIf a b = [selected_ "" | a == b]
+  where
+    selectedIf :: ProjectMembers.Permissions -> ProjectMembers.Permissions -> [Attribute]
+    selectedIf a b = [selected_ "" | a == b]

@@ -149,12 +149,12 @@ reportsGetH sess pid page hxRequest hxBoosted = do
 
 singleReportPage :: Projects.ProjectId -> Maybe Reports.Report -> Html ()
 singleReportPage pid report =
-  div_ [class_ "container mx-auto w-full flex flex-col px-4 pt-10 pb-24"] $ do
+  div_ [class_ "mx-auto w-full flex flex-col px-16 pt-10 pb-24"] $ do
     h3_ [class_ "text-xl text-slate-700 flex place-items-center font-bold pb-4 border-b"] "Anomaly and Performance Report"
     case report of
       Just report' -> do
         div_ [class_ "mt-4 space-y-4"] do
-          div_ [class_ "mx-auto rounded-lg border max-w-[800px]"] $ do
+          div_ [class_ "mx-auto rounded-lg border max-w-[1000px]"] $ do
             div_ [class_ "bg-gray-100 px-4 py-3 flex justify-between"] $ do
               h4_ [class_ "text-xl font-medium capitalize"] $ toHtml report'.reportType <> " report"
               span_ [] $ show $ localDay (zonedTimeToLocalTime report'.createdAt)
@@ -236,7 +236,7 @@ shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "inline-block"] do
 
 reportsPage :: Projects.ProjectId -> Vector Reports.ReportListItem -> Text -> Bool -> Bool -> Html ()
 reportsPage pid reports nextUrl daily weekly =
-  div_ [class_ "container mx-auto w-full flex flex-col px-4 pt-10 pb-24"] $ do
+  div_ [class_ "mx-auto w-full flex flex-col px-16 pt-10 pb-24"] $ do
     h3_ [class_ "text-xl text-slate-700 flex place-items-center font-bold pb-4 border-b"] "Reports History"
     div_ [class_ "mt-4 grid grid-cols-12 gap-4"] do
       div_ [class_ "flex flex-col col-span-2 mt-16"] do
@@ -270,7 +270,7 @@ reportListItems :: Projects.ProjectId -> Vector Reports.ReportListItem -> Text -
 reportListItems pid reports nextUrl =
   div_ [class_ "space-y-4"] do
     forM_ reports $ \report -> do
-      div_ [class_ "mx-auto rounded-lg border max-w-[800px]"] $ do
+      div_ [class_ "mx-auto rounded-lg border max-w-[1000px]"] $ do
         a_ [class_ "bg-gray-100 px-4 py-3 flex justify-between", href_ $ "/p/" <> show pid.unProjectId <> "/reports/" <> show report.id.reportId] $ do
           h4_ [class_ "text-xl font-medium capitalize"] $ toHtml report.reportType <> " report"
           span_ [] $ show $ localDay (zonedTimeToLocalTime report.createdAt)
@@ -318,50 +318,50 @@ buildPerformanceJSON pr = Aeson.object ["endpoints" .= pr]
 
 buildAnomalyJSON :: Vector Anomalies.AnomalyVM -> Int -> Aeson.Value
 buildAnomalyJSON anomalies total = Aeson.object ["anomalies" .= V.map buildjson anomalies, "anomaliesCount" .= total]
- where
-  -- endMap = createEndpointMap (V.toList anomalies) Map.empty
-  -- filteredAnom = V.filter (filterFunc endMap) anomalies
+  where
+    -- endMap = createEndpointMap (V.toList anomalies) Map.empty
+    -- filteredAnom = V.filter (filterFunc endMap) anomalies
 
-  -- filterFunc :: Map Text Bool -> Anomalies.AnomalyVM -> Bool
-  -- filterFunc mp a = case a.anomalyType of
-  --   Anomalies.ATEndpoint -> True
-  --   _ ->
-  --     let ep_url = fromMaybe "" a.endpointUrlPath
-  --         method = fromMaybe "" a.endpointMethod
-  --         endpoint = method <> ep_url
-  --      in fromMaybe False (Map.lookup endpoint mp)
+    -- filterFunc :: Map Text Bool -> Anomalies.AnomalyVM -> Bool
+    -- filterFunc mp a = case a.anomalyType of
+    --   Anomalies.ATEndpoint -> True
+    --   _ ->
+    --     let ep_url = fromMaybe "" a.endpointUrlPath
+    --         method = fromMaybe "" a.endpointMethod
+    --         endpoint = method <> ep_url
+    --      in fromMaybe False (Map.lookup endpoint mp)
 
-  buildjson :: Anomalies.AnomalyVM -> Aeson.Value
-  buildjson an = case an.anomalyType of
-    Anomalies.ATEndpoint ->
-      Aeson.object
-        [ "endpointUrlPath" .= an.endpointUrlPath
-        , "endpointMethod" .= an.endpointMethod
-        , "tag" .= Anomalies.ATEndpoint
-        , "eventsCount" .= an.eventsCount14d
-        ]
-    Anomalies.ATShape ->
-      Aeson.object
-        [ "endpointUrlPath" .= an.endpointUrlPath
-        , "endpointMethod" .= an.endpointMethod
-        , "targetHash" .= an.targetHash
-        , "tag" .= Anomalies.ATShape
-        , "newUniqueFields" .= an.shapeNewUniqueFields
-        , "updatedFieldFormats" .= an.shapeUpdatedFieldFormats
-        , "deletedFields" .= an.shapeDeletedFields
-        , "eventsCount" .= an.eventsCount14d
-        ]
-    Anomalies.ATFormat ->
-      Aeson.object
-        [ "endpointUrlPath" .= an.endpointUrlPath
-        , "endpointMethod" .= an.endpointMethod
-        , "keyPath" .= an.fieldKeyPath
-        , "tag" .= Anomalies.ATFormat
-        , "formatType" .= an.formatType
-        , "formatExamples" .= an.formatExamples
-        , "eventsCount" .= an.eventsCount14d
-        ]
-    _ -> Aeson.object ["anomaly_type" .= String "unknown"]
+    buildjson :: Anomalies.AnomalyVM -> Aeson.Value
+    buildjson an = case an.anomalyType of
+      Anomalies.ATEndpoint ->
+        Aeson.object
+          [ "endpointUrlPath" .= an.endpointUrlPath
+          , "endpointMethod" .= an.endpointMethod
+          , "tag" .= Anomalies.ATEndpoint
+          , "eventsCount" .= an.eventsCount14d
+          ]
+      Anomalies.ATShape ->
+        Aeson.object
+          [ "endpointUrlPath" .= an.endpointUrlPath
+          , "endpointMethod" .= an.endpointMethod
+          , "targetHash" .= an.targetHash
+          , "tag" .= Anomalies.ATShape
+          , "newUniqueFields" .= an.shapeNewUniqueFields
+          , "updatedFieldFormats" .= an.shapeUpdatedFieldFormats
+          , "deletedFields" .= an.shapeDeletedFields
+          , "eventsCount" .= an.eventsCount14d
+          ]
+      Anomalies.ATFormat ->
+        Aeson.object
+          [ "endpointUrlPath" .= an.endpointUrlPath
+          , "endpointMethod" .= an.endpointMethod
+          , "keyPath" .= an.fieldKeyPath
+          , "tag" .= Anomalies.ATFormat
+          , "formatType" .= an.formatType
+          , "formatExamples" .= an.formatExamples
+          , "eventsCount" .= an.eventsCount14d
+          ]
+      _ -> Aeson.object ["anomaly_type" .= String "unknown"]
 
 getPerformanceInsight :: V.Vector RequestDumps.RequestForReport -> V.Vector RequestDumps.EndpointPerf -> V.Vector PerformanceReport
 getPerformanceInsight req_dumps previous_p =

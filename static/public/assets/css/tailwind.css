@@ -97,11 +97,20 @@
 }
 
 .sdk_tab {
-  @apply inline-block text-gray-900 p-4 border-b-2 border-transparent rounded-t-lg hover:text-gray-600 hover:border-gray-300;
+  @apply inline-block text-gray-900 py-2 border-b-2 border-transparent rounded-t-lg hover:text-gray-600 hover:border-gray-300;
 }
 .sdk_tab_active {
   color: rgb(37 99 235 / 1);
   border-color: rgb(37 99 235 / 1);
+}
+
+.sdk_tab_content {
+  opacity: 0;
+  will-change: opacity;
+  transition: opacity 0.5s;
+}
+.sdk_tab_content_active {
+  opacity: 1;
 }
 
 .sdk_tab_active:hover {

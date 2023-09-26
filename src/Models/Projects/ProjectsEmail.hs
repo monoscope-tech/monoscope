@@ -38,9 +38,9 @@ contentMail :: T.Text
 contentMail =
   mailBody
     <> link
- where
-  mailBody = "ApiToolKit Mail Invite. Click on the link below"
-  link = "<a href =https://apitoolkit.io>"
+  where
+    mailBody = "ApiToolKit Mail Invite. Click on the link below"
+    link = "<a href =https://apitoolkit.io>"
 
 patternMatchMailContent :: Maybe T.Text -> Maybe (NonEmpty MailContent)
 patternMatchMailContent (Just txt) = Just (NonEmptyDataList.fromList [mailContentHtml txt])

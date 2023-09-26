@@ -89,34 +89,34 @@ endpointUrlPath pid eid = "/p/" <> pid.toText <> "/endpoints/" <> endpointIdText
 
 upsertEndpointQueryAndParam :: Endpoint -> (Query, [DBField])
 upsertEndpointQueryAndParam endpoint = (q, params)
- where
-  host = fromMaybe @Text "" ((endpoint.hosts) Vector.!? 0) -- Read the first item from head or default to empty string
-  q =
-    [sql|  
+  where
+    host = fromMaybe @Text "" ((endpoint.hosts) Vector.!? 0) -- Read the first item from head or default to empty string
+    q =
+      [sql|  
           INSERT INTO apis.endpoints (project_id, url_path, url_params, method, hosts, hash)
           VALUES(?, ?, ?, ?, $$ ? => null$$, ?) 
           ON CONFLICT (project_id, url_path, method) 
           DO 
              UPDATE SET hosts=endpoints.hosts||hstore(?, null); 
       |]
-  params =
-    [ MkDBField endpoint.projectId
-    , MkDBField endpoint.urlPath
-    , MkDBField endpoint.urlParams
-    , MkDBField endpoint.method
-    , MkDBField host
-    , MkDBField endpoint.hash
-    , MkDBField host
-    ]
+    params =
+      [ MkDBField endpoint.projectId
+      , MkDBField endpoint.urlPath
+      , MkDBField endpoint.urlParams
+      , MkDBField endpoint.method
+      , MkDBField host
+      , MkDBField endpoint.hash
+      , MkDBField host
+      ]
 
 -- FIXME: Delete this, as this function is deprecated and no longer in use.
 -- Updating hosts can be a specific functino that does just that.
 upsertEndpoints :: Endpoint -> PgT.DBT IO (Maybe EndpointId)
 upsertEndpoints endpoint = queryOne Insert q options
- where
-  host = fromMaybe "" ((endpoint.hosts) Vector.!? 0) -- Read the first item from head or default to empty string
-  q =
-    [sql|  
+  where
+    host = fromMaybe "" ((endpoint.hosts) Vector.!? 0) -- Read the first item from head or default to empty string
+    q =
+      [sql|  
         with e as (
           INSERT INTO apis.endpoints (project_id, url_path, url_params, method, hosts)
           VALUES(?, ?, ?, ?, $$ ? => null$$) 
@@ -130,17 +130,17 @@ upsertEndpoints endpoint = queryOne Insert q options
         UNION 
           SELECT id FROM apis.endpoints WHERE project_id=? AND url_path=? AND method=?;
       |]
-  options =
-    ( endpoint.projectId
-    , endpoint.urlPath
-    , endpoint.urlParams
-    , endpoint.method
-    , host
-    , host
-    , endpoint.projectId
-    , endpoint.urlPath
-    , endpoint.method
-    )
+    options =
+      ( endpoint.projectId
+      , endpoint.urlPath
+      , endpoint.urlParams
+      , endpoint.method
+      , host
+      , host
+      , endpoint.projectId
+      , endpoint.urlPath
+      , endpoint.method
+      )
 
 -- Based of a view which is generated every 5minutes.
 data EndpointRequestStats = EndpointRequestStats
@@ -174,13 +174,13 @@ data EndpointRequestStats = EndpointRequestStats
 -- FIXME: return endpoint_hash as well.
 endpointRequestStatsByProject :: Projects.ProjectId -> Bool -> Bool -> PgT.DBT IO (Vector EndpointRequestStats)
 endpointRequestStatsByProject pid ackd archived = query Select (Query $ encodeUtf8 q) (Only pid)
- where
-  ackdAt = if ackd && not archived then "AND ann.acknowleged_at IS NOT NULL AND ann.archived_at IS NULL " else "AND ann.acknowleged_at IS NULL "
-  archivedAt = if archived then "AND ann.archived_at IS NOT NULL " else " AND ann.archived_at IS NULL"
-  -- TODO This query to get the anomalies for the anomalies page might be too complex.
-  -- Does it make sense yet to remove the call to endpoint_request_stats? since we're using async charts already
-  q =
-    [text| 
+  where
+    ackdAt = if ackd && not archived then "AND ann.acknowleged_at IS NOT NULL AND ann.archived_at IS NULL " else "AND ann.acknowleged_at IS NULL "
+    archivedAt = if archived then "AND ann.archived_at IS NOT NULL " else " AND ann.archived_at IS NULL"
+    -- TODO This query to get the anomalies for the anomalies page might be too complex.
+    -- Does it make sense yet to remove the call to endpoint_request_stats? since we're using async charts already
+    q =
+      [text| 
       SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, coalesce(min,0),  coalesce(p50,0),  coalesce(p75,0),  coalesce(p90,0),  coalesce(p95,0),  coalesce(p99,0),  coalesce(max,0) , 
          coalesce(total_time,0), coalesce(total_time_proj,0), coalesce(total_requests,0), coalesce(total_requests_proj,0),
          (SELECT count(*) from apis.anomalies_vm 
@@ -203,9 +203,9 @@ endpointRequestStatsByProject pid ackd archived = query Select (Query $ encodeUt
 -- This would require tampering with the view.
 endpointRequestStatsByEndpoint :: EndpointId -> PgT.DBT IO (Maybe EndpointRequestStats)
 endpointRequestStatsByEndpoint eid = queryOne Select q (eid, eid)
- where
-  q =
-    [sql| SELECT endpoint_id, endpoint_hash, project_id, url_path, method, min, p50, p75, p90, p95, p99, max, 
+  where
+    q =
+      [sql| SELECT endpoint_id, endpoint_hash, project_id, url_path, method, min, p50, p75, p90, p95, p99, max, 
                    total_time, total_time_proj, total_requests, total_requests_proj,
                    (SELECT count(*) from apis.anomalies 
                            where endpoint_id=? AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
@@ -218,13 +218,13 @@ endpointRequestStatsByEndpoint eid = queryOne Select q (eid, eid)
 
 endpointById :: EndpointId -> PgT.DBT IO (Maybe Endpoint)
 endpointById eid = queryOne Select q (Only eid)
- where
-  q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, akeys(hosts), hash from apis.endpoints where id=? |]
+  where
+    q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, akeys(hosts), hash from apis.endpoints where id=? |]
 
 endpointByHash :: Projects.ProjectId -> Text -> PgT.DBT IO (Maybe Endpoint)
 endpointByHash pid hash = queryOne Select q (pid, hash)
- where
-  q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, akeys(hosts), hash from apis.endpoints where project_id=? AND hash=? |]
+  where
+    q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, akeys(hosts), hash from apis.endpoints where project_id=? AND hash=? |]
 
 data SwEndpoint = SwEndpoint
   { urlPath :: Text
@@ -240,9 +240,9 @@ data SwEndpoint = SwEndpoint
 
 endpointsByProjectId :: Projects.ProjectId -> PgT.DBT IO (Vector SwEndpoint)
 endpointsByProjectId pid = query Select q (Only pid)
- where
-  q =
-    [sql|
+  where
+    q =
+      [sql|
          SELECT url_path, url_params, method, akeys(hosts), hash
          FROM apis.endpoints
          WHERE project_id = ?

@@ -98,8 +98,8 @@ persistSession pool persistentSessionId userId = do
 
 insertSession :: PersistentSessionId -> UserId -> SessionData -> DBT IO ()
 insertSession pid userId sessionData = execute Insert q (pid, userId, sessionData) >> pass
- where
-  q = [sql| insert into users.persistent_sessions(id, user_id, session_data) VALUES (?, ?, ?) |]
+  where
+    q = [sql| insert into users.persistent_sessions(id, user_id, session_data) VALUES (?, ?, ?) |]
 
 deleteSession :: PersistentSessionId -> DBT IO ()
 deleteSession sessionId = delete @PersistentSession (Only sessionId)
@@ -107,9 +107,9 @@ deleteSession sessionId = delete @PersistentSession (Only sessionId)
 -- TODO: getting persistent session happens very frequently, so we should create a view for this, when our user base grows.
 getPersistentSession :: PersistentSessionId -> DBT IO (Maybe PersistentSession)
 getPersistentSession sessionId = queryOne Select q value
- where
-  q =
-    [sql| select ps.id, ps.created_at, ps.updated_at, ps.user_id, ps.session_data, row_to_json(u) as user, u.is_sudo,
+  where
+    q =
+      [sql| select ps.id, ps.created_at, ps.updated_at, ps.user_id, ps.session_data, row_to_json(u) as user, u.is_sudo,
         COALESCE(json_agg(pp.* ORDER BY pp.updated_at DESC) FILTER (WHERE pp.id is not NULL AND pp.deleted_at IS NULL),'[]') as projects
         from users.persistent_sessions as ps 
         left join users.users u on (u.id=ps.user_id)
@@ -117,7 +117,7 @@ getPersistentSession sessionId = queryOne Select q value
         left join projects.projects pp on (pp.id=ppm.project_id)
         where ps.id=?
         GROUP BY ps.created_at, ps.updated_at, ps.id, ps.user_id, ps.session_data, u.* ,u.is_sudo; |]
-  value = Only sessionId
+    value = Only sessionId
 
 lookup :: Text -> SessionData -> Maybe Text
 lookup key (SessionData sdMap) = Map.lookup key sdMap

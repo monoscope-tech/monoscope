@@ -1,7 +1,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE RankNTypes #-}
 
-module Utils (eitherStrToText, GetOrRedirect, redirect, DBField (..), mIcon_, faIcon_, deleteParam, quoteTxt, textToBool) where
+module Utils (eitherStrToText, GetOrRedirect, redirect, DBField (..), mIcon_, faIcon_, deleteParam, quoteTxt, textToBool, getMethodColor, getStatusColor) where
 
 import Data.Text (replace)
 import Data.Time (ZonedTime)
@@ -33,7 +33,6 @@ data DBField = forall a. (ToField a, Show a) => MkDBField a
 instance Show DBField where
   show (MkDBField a) = "MkDBField " ++ show a
 
-
 instance ToField DBField where
   toField (MkDBField a) = toField a
 
@@ -50,12 +49,26 @@ faIcon_ faIcon classes =
 
 deleteParam :: Text -> Text -> Text
 deleteParam key url = if needle == "" then url else replace needle "" url
- where
-  needle = url =~ reg :: Text
-  reg = "&" <> key <> "(=[^&]*)?|^" <> key <> "(=[^&]*)?&?" :: Text
+  where
+    needle = url =~ reg :: Text
+    reg = "&" <> key <> "(=[^&]*)?|^" <> key <> "(=[^&]*)?&?" :: Text
 
 quoteTxt :: Text -> Text
 quoteTxt a = "'" <> a <> "'"
 
 textToBool :: Text -> Bool
 textToBool a = a == "true"
+
+getMethodColor :: Text -> Text
+getMethodColor "POST" = "green-500"
+getMethodColor "PUT" = "orange-500"
+getMethodColor "DELETE" = "red-500"
+getMethodColor "PATCH" = "purple-500"
+getMethodColor _ = "blue-500"
+
+getStatusColor :: Int -> Text
+getStatusColor status
+  | status < 200 = "gray-500"
+  | status >= 200 && status < 300 = "green-500"
+  | status >= 300 && status < 400 = "yellow-500"
+  | otherwise = "red-500"

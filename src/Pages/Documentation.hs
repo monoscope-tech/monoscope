@@ -109,10 +109,10 @@ getFieldHash enpHash fcategory keypath ftype = enpHash <> toText (showHex (xxHas
 
 getShapeHash :: Text -> Text -> V.Vector Text -> V.Vector Text -> V.Vector Text -> V.Vector Text -> Text
 getShapeHash endpointHash statusCode responseBodyKP responseHeadersKP requestBodyKP queryParamsKP = shapeHash
- where
-  comb = T.concat $ sort $ V.toList $ queryParamsKP <> responseHeadersKP <> requestBodyKP <> responseBodyKP
-  keyPathsHash = toText $ showHex (xxHash $ encodeUtf8 comb) ""
-  shapeHash = endpointHash <> statusCode <> keyPathsHash
+  where
+    comb = T.concat $ sort $ V.toList $ queryParamsKP <> responseHeadersKP <> requestBodyKP <> responseBodyKP
+    keyPathsHash = toText $ showHex (xxHash $ encodeUtf8 comb) ""
+    shapeHash = endpointHash <> statusCode <> keyPathsHash
 
 getEndpointFromOpEndpoint :: Projects.ProjectId -> OpEndpoint -> Endpoints.Endpoint
 getEndpointFromOpEndpoint pid opEndpoint =
@@ -147,20 +147,20 @@ getShapeFromOpShape pid curTime opShape =
     , hash = shapeHash
     , statusCode = fromMaybe 0 (readMaybe (toString opShape.opStatus))
     }
- where
-  endpointHash = getEndpointHash pid opShape.opUrl opShape.opMethod
-  qpKP = V.map (.fkKeyPath) opShape.opQueryParamsKeyPaths
-  rqHKP = V.map (.fkKeyPath) opShape.opRequestHeadersKeyPaths
-  rqBKP = V.map (.fkKeyPath) opShape.opRequestBodyKeyPaths
-  rsHKP = V.map (.fkKeyPath) opShape.opResponseHeadersKeyPaths
-  rsBKP = V.map (.fkKeyPath) opShape.opResponseBodyKeyPaths
-  shapeHash = getShapeHash endpointHash opShape.opStatus rsBKP rsHKP rqBKP qpKP
-  qpKPHashes = V.map (\v -> getFieldHash endpointHash v.fkCategory v.fkKeyPath v.fkType) opShape.opQueryParamsKeyPaths
-  rqHKPHashes = V.map (\v -> getFieldHash endpointHash v.fkCategory v.fkKeyPath v.fkType) opShape.opRequestHeadersKeyPaths
-  rqBKPHashes = V.map (\v -> getFieldHash endpointHash v.fkCategory v.fkKeyPath v.fkType) opShape.opRequestBodyKeyPaths
-  rsHKPHashes = V.map (\v -> getFieldHash endpointHash v.fkCategory v.fkKeyPath v.fkType) opShape.opResponseHeadersKeyPaths
-  rsBKPHashes = V.map (\v -> getFieldHash endpointHash v.fkCategory v.fkKeyPath v.fkType) opShape.opResponseBodyKeyPaths
-  fieldHashes = qpKPHashes <> rqHKPHashes <> rqBKPHashes <> rsHKPHashes <> rsBKPHashes
+  where
+    endpointHash = getEndpointHash pid opShape.opUrl opShape.opMethod
+    qpKP = V.map (.fkKeyPath) opShape.opQueryParamsKeyPaths
+    rqHKP = V.map (.fkKeyPath) opShape.opRequestHeadersKeyPaths
+    rqBKP = V.map (.fkKeyPath) opShape.opRequestBodyKeyPaths
+    rsHKP = V.map (.fkKeyPath) opShape.opResponseHeadersKeyPaths
+    rsBKP = V.map (.fkKeyPath) opShape.opResponseBodyKeyPaths
+    shapeHash = getShapeHash endpointHash opShape.opStatus rsBKP rsHKP rqBKP qpKP
+    qpKPHashes = V.map (\v -> getFieldHash endpointHash v.fkCategory v.fkKeyPath v.fkType) opShape.opQueryParamsKeyPaths
+    rqHKPHashes = V.map (\v -> getFieldHash endpointHash v.fkCategory v.fkKeyPath v.fkType) opShape.opRequestHeadersKeyPaths
+    rqBKPHashes = V.map (\v -> getFieldHash endpointHash v.fkCategory v.fkKeyPath v.fkType) opShape.opRequestBodyKeyPaths
+    rsHKPHashes = V.map (\v -> getFieldHash endpointHash v.fkCategory v.fkKeyPath v.fkType) opShape.opResponseHeadersKeyPaths
+    rsBKPHashes = V.map (\v -> getFieldHash endpointHash v.fkCategory v.fkKeyPath v.fkType) opShape.opResponseBodyKeyPaths
+    fieldHashes = qpKPHashes <> rqHKPHashes <> rqBKPHashes <> rsHKPHashes <> rsBKPHashes
 
 getFieldAndFormatFromOpShape :: Projects.ProjectId -> FieldOperation -> (Fields.Field, Formats.Format)
 getFieldAndFormatFromOpShape pid operation =

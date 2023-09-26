@@ -66,9 +66,9 @@ data ShapeWidthFields = ShapeWidthFields
 
 getShapeFields :: Shapes.Shape -> Vector Fields.Field -> ShapeWidthFields
 getShapeFields shape fields = ShapeWidthFields{status = shape.statusCode, hash = shape.hash, fieldsMap = fieldM}
- where
-  matchedFields = Vector.filter (\field -> field.hash `Vector.elem` shape.fieldHashes) fields
-  fieldM = Fields.groupFieldsByCategory matchedFields
+  where
+    matchedFields = Vector.filter (\field -> field.hash `Vector.elem` shape.fieldHashes) fields
+    fieldM = Fields.groupFieldsByCategory matchedFields
 
 subPageMenu :: [(Text, Text)]
 subPageMenu =
@@ -393,15 +393,15 @@ endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p
         span_ [class_ "text-lg text-slate-800"] "Endpoint Stats"
     div_ [class_ "space-y-5 endpointStatsSubSection"] $ do
       div_ [class_ "grid grid-cols-3  gap-5"] $ do
-        statBox "Total Anomalies" "Total Anomalies for this endpoint this week vs total for the project" enpStats.ongoingAnomaliesProj (Just enpStats.ongoingAnomaliesProj)
-        statBox "Total Requests" "Total Requests on this endpoint this week vs total for the project" enpStats.totalRequests (Just enpStats.totalRequestsProj)
-        statBox "Total Time" "Total Time on this endpoint this week vs total for the project" enpStats.totalRequests (Just enpStats.totalRequestsProj)
+        statBox Nothing "Total Anomalies" "Total Anomalies for this endpoint this week vs total for the project" enpStats.ongoingAnomaliesProj (Just enpStats.ongoingAnomaliesProj)
+        statBox Nothing "Total Requests" "Total Requests on this endpoint this week vs total for the project" enpStats.totalRequests (Just enpStats.totalRequestsProj)
+        statBox Nothing "Total Time" "Total Time on this endpoint this week vs total for the project" enpStats.totalRequests (Just enpStats.totalRequestsProj)
 
       div_ [class_ "flex gap-5"] do
         div_ [class_ "flex-1 card-round p-3"] $ do
           div_ [class_ "p-4 space-y-6"] $ do
             select_ [] $ do
-              option_ [class_ "text-2xl font-normal"] "Throughput by Status Code"
+              option_ [class_ "text-2xl font-normal"] "Requests by Status Code"
             div_ [class_ "h-64 "] do
               Charts.lazy [C.QByE $ [C.QBPId enpStats.projectId, C.QBEndpointHash enpStats.endpointHash] ++ catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBStatusCode, C.SlotsE 120, C.ShowLegendE]
 
@@ -416,7 +416,7 @@ endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p
         div_ [class_ "flex-1 card-round p-3"] $ do
           div_ [class_ "p-4 space-y-6"] $ do
             select_ [] $ do
-              option_ [class_ "text-2xl font-normal"] "Error Rates"
+              option_ [class_ "text-2xl font-normal"] "Errors"
             div_ [class_ "h-64 "] do
               Charts.lazy [C.QByE $ [C.QBPId enpStats.projectId, C.QBEndpointHash enpStats.endpointHash, Charts.QBStatusCodeGT 400] ++ catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBStatusCode, C.SlotsE 120, C.ShowLegendE, C.Theme "roma"]
 

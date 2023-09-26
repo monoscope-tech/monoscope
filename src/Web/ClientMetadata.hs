@@ -16,6 +16,7 @@ import Optics.Core ((^.))
 import Relude
 import Relude.Unsafe ((!!))
 import Servant (err300, throwError)
+import Servant.Server (err401)
 
 data ClientMetadata = ClientMetadata
   { projectId :: Projects.ProjectId
@@ -29,38 +30,35 @@ data ClientMetadata = ClientMetadata
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ClientMetadata
 
 clientMetadataH :: Maybe Text -> DashboardM ClientMetadata
-clientMetadataH authTextM = do
-  case authTextM of
-    Nothing -> throwError err300
-    Just authTextB64 -> do
-      pool <- asks pool
-      env <- asks env
-      logger <- asks logger
+clientMetadataH Nothing = throwError err401
+clientMetadataH (Just authTextB64) = do
+  pool <- asks pool
+  env <- asks env
+  logger <- asks logger
 
-      let authTextE = B64.decodeBase64 (encodeUtf8 $ T.replace "Bearer " "" authTextB64)
-      case authTextE of
-        Left err -> liftIO (logger <& toString err) >> throwError err300
-        Right authText -> do
-          let decryptedKey = ProjectApiKeys.decryptAPIKey (encodeUtf8 $ env ^. #apiKeyEncryptionSecretKey) authText
-          case ProjectApiKeys.ProjectApiKeyId <$> UUID.fromASCIIBytes decryptedKey of
-            Nothing -> throwError err300
-            Just apiKeyUUID -> do
-              (pApiKey, project) <- liftIO $
-                withPool pool $ do
-                  pApiKeyM <- ProjectApiKeys.getProjectApiKey apiKeyUUID
-                  case pApiKeyM of
-                    Nothing -> error "no api key with given id"
-                    Just pApiKey -> do
-                      project <- Projects.projectById $ pApiKey.projectId
-                      pure (pApiKey, project)
+  let authTextE = B64.decodeBase64 (encodeUtf8 $ T.replace "Bearer " "" authTextB64)
+  case authTextE of
+    Left err -> liftIO (logger <& toString err) >> throwError err401
+    Right authText -> do
+      let decryptedKey = ProjectApiKeys.decryptAPIKey (encodeUtf8 $ env ^. #apiKeyEncryptionSecretKey) authText
+      case ProjectApiKeys.ProjectApiKeyId <$> UUID.fromASCIIBytes decryptedKey of
+        Nothing -> throwError err401
+        Just apiKeyUUID -> do
+          (pApiKey, project) <- liftIO $ withPool pool $ do
+            pApiKeyM <- ProjectApiKeys.getProjectApiKey apiKeyUUID
+            case pApiKeyM of
+              Nothing -> error "no api key with given id"
+              Just pApiKey -> do
+                project <- Projects.projectById $ pApiKey.projectId
+                pure (pApiKey, project)
 
-              pure $
-                ClientMetadata
-                  { projectId = pApiKey.projectId
-                  , pubsubProjectId = "past-3"
-                  , topicId = (env ^. #requestPubsubTopics) !! 0 -- apitoolkit-prod-default
-                  , pubsubPushServiceAccount = apitoolkitPusherServiceAccount
-                  }
+          pure $
+            ClientMetadata
+              { projectId = pApiKey.projectId
+              , pubsubProjectId = "past-3"
+              , topicId = (env ^. #requestPubsubTopics) !! 0 -- apitoolkit-prod-default
+              , pubsubPushServiceAccount = apitoolkitPusherServiceAccount
+              }
 
 apitoolkitPusherServiceAccount :: Value
 apitoolkitPusherServiceAccount =

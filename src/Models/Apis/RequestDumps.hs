@@ -1,3 +1,4 @@
+{-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
@@ -5,9 +6,10 @@
 module Models.Apis.RequestDumps (
   RequestDump (..),
   SDKTypes (..),
-  RequestDumpLogItem,
+  RequestDumpLogItem (..),
   EndpointPerf (..),
   RequestForReport (..),
+  ATError (..),
   normalizeUrlPath,
   throughputBy,
   throughputBy',
@@ -37,6 +39,7 @@ import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, queryOne)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField (fromField))
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField (toField))
 import Database.PostgreSQL.Simple.Types (Query (Query))
@@ -55,12 +58,14 @@ data SDKTypes
   | GoBuiltIn
   | GoGorillaMux
   | GoDefault
+  | GoOutgoing
   | PhpLaravel
   | PhpSymfony
   | JsExpress
   | JsNest
   | JsFastify
   | JavaSpringBoot
+  | JsAxiosOutgoing
   | DotNet
   | PythonFastApi
   | PythonFlask
@@ -95,6 +100,7 @@ instance FromField SDKTypes where
 -- "/abc/:bla"
 --
 normalizeUrlPath :: SDKTypes -> Int -> Text -> Text -> Text
+normalizeUrlPath GoOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath GoGin statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath GoBuiltIn statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath GoDefault statusCode _method urlPath = removeQueryParams statusCode urlPath
@@ -123,11 +129,28 @@ removeQueryParams statusCode urlPath =
     (before, "") -> before -- No query parameters found
     (before, after) -> before -- Query parameters found, stripping them
 
+data ATError = ATError
+  { when :: ZonedTime
+  , errorType :: Text
+  , rootErrorType :: Text
+  , message :: Text
+  , rootErrorMessage :: Text
+  , stackTrace :: Text
+  }
+  deriving stock (Show, Generic, Eq)
+  deriving
+    (AE.FromJSON, AE.ToJSON)
+    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATError
+  deriving (ToField, FromField) via Aeson ATError
+
+--   via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATErrors
+-- deriving (ToField, FromField) via Aeson ATErrors
+
 -- request dumps are time series dumps representing each requests which we consume from our users.
 -- We use this field via the log explorer for exploring and searching traffic. And at the moment also use it for most time series analytics.
 -- It's likely a good idea to stop relying on it for some of the time series analysis, to allow us easily support request sampling, but still support
 -- relatively accurate analytic counts.
--- NOTE: This record closely mirrors the order of fields in the table. Changing the orfer of fields here would break inserting and querying request dumps
+-- NOTE: This record closely mirrors the order of fields in the table. Changing the order of fields here would break inserting and querying request dumps
 data RequestDump = RequestDump
   { id :: UUID.UUID
   , createdAt :: ZonedTime
@@ -156,6 +179,10 @@ data RequestDump = RequestDump
   , fieldHashes :: Vector Text
   , durationNs :: Integer
   , sdkType :: SDKTypes
+  , parentId :: Maybe UUID.UUID
+  , serviceVersion :: Maybe Text
+  , errors ::AE.Value -- Vector ATError 
+  , tags :: Vector Text
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (ToRow, FromRow)
@@ -216,6 +243,10 @@ data RequestDumpLogItem = RequestDumpLogItem
   , fullCount :: Int
   , durationNs :: Integer
   , sdkType :: SDKTypes
+  , parentId :: Maybe UUID.UUID
+  , serviceVersion :: Maybe Text -- allow users track deployments and versions (tags, commits, etc)
+  , errors :: AE.Value 
+  , tags :: Maybe (Vector Text)
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (ToRow, FromRow)
@@ -228,18 +259,18 @@ requestDumpLogItemUrlPath pid rd = "/p/" <> pid.toText <> "/log_explorer/" <> UU
 
 requestDumpLogUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Text
 requestDumpLogUrlPath pid q cols fromM = [text|/p/$pidT/log_explorer?query=$queryT&cols=$colsT&from=$fromT|]
- where
-  pidT = pid.toText
-  queryT = fromMaybe "" q
-  colsT = fromMaybe "" cols
-  fromT = fromMaybe "" fromM
+  where
+    pidT = pid.toText
+    queryT = fromMaybe "" q
+    colsT = fromMaybe "" cols
+    fromT = fromMaybe "" fromM
 
 getRequestDumpForReports :: Projects.ProjectId -> Text -> DBT IO (Vector RequestForReport)
 getRequestDumpForReports pid report_type = query Select (Query $ encodeUtf8 q) pid
- where
-  report_interval = if report_type == "daily" then ("'24 hours'" :: Text) else "'7 days'"
-  q =
-    [text| 
+  where
+    report_interval = if report_type == "daily" then ("'24 hours'" :: Text) else "'7 days'"
+    q =
+      [text| 
      SELECT DISTINCT ON (endpoint_hash)
         id, created_at, project_id, host, url_path, raw_url, method, endpoint_hash,
         CAST (ROUND (AVG (duration_ns) OVER (PARTITION BY endpoint_hash)) AS BIGINT) AS average_duration
@@ -251,10 +282,10 @@ getRequestDumpForReports pid report_type = query Select (Query $ encodeUtf8 q) p
 
 getRequestDumpsForPreviousReportPeriod :: Projects.ProjectId -> Text -> DBT IO (Vector EndpointPerf)
 getRequestDumpsForPreviousReportPeriod pid report_type = query Select (Query $ encodeUtf8 q) pid
- where
-  (start, end) = if report_type == "daily" then ("'48 hours'" :: Text, "'24 hours'") else ("'14 days'", "'7 days'")
-  q =
-    [text| 
+  where
+    (start, end) = if report_type == "daily" then ("'48 hours'" :: Text, "'24 hours'") else ("'14 days'", "'7 days'")
+    q =
+      [text| 
      SELECT  endpoint_hash,
         CAST (ROUND (AVG (duration_ns)) AS BIGINT) AS average_duration
      FROM
@@ -266,17 +297,18 @@ getRequestDumpsForPreviousReportPeriod pid report_type = query Select (Query $ e
 
 selectRequestDumpByProject :: Projects.ProjectId -> Text -> Maybe Text -> DBT IO (Vector RequestDumpLogItem)
 selectRequestDumpByProject pid extraQuery fromM = query Select (Query $ encodeUtf8 q) (pid, fromT)
- where
-  fromT = fromMaybe "infinity" fromM
-  extraQueryParsed = either error (\v -> if v == "" then "" else " AND " <> v) $ parseQueryStringToWhereClause extraQuery
-  q =
-    [text| SELECT id,created_at,host,url_path,method,raw_url,referer,
+  where
+    fromT = fromMaybe "infinity" fromM
+    extraQueryParsed = either error (\v -> if v == "" then "" else " AND " <> v) $ parseQueryStringToWhereClause extraQuery
+    q =
+      [text| SELECT id,created_at,host,url_path,method,raw_url,referer,
                     path_params, status_code,query_params,
                     request_body,response_body,request_headers,response_headers,
-                    count(*) OVER() AS full_count, duration_ns, sdk_type
+                    count(*) OVER() AS full_count, duration_ns, sdk_type,
+                    parent_id, service_version, errors, tags
              FROM apis.request_dumps where project_id=? and created_at<? |]
-      <> extraQueryParsed
-      <> " order by created_at desc limit 200;"
+        <> extraQueryParsed
+        <> " order by created_at desc limit 200;"
 
 countRequestDumpByProject :: Projects.ProjectId -> DBT IO Int
 countRequestDumpByProject pid = do
@@ -284,17 +316,17 @@ countRequestDumpByProject pid = do
   case result of
     [Only count] -> return count
     v -> return $ length v
- where
-  q = [sql| SELECT count(*) FROM apis.request_dumps WHERE project_id=? |]
+  where
+    q = [sql| SELECT count(*) FROM apis.request_dumps WHERE project_id=? |]
 
 selectRequestDumpsByProjectForChart :: Projects.ProjectId -> Text -> DBT IO Text
 selectRequestDumpsByProjectForChart pid extraQuery = do
   (Only val) <- fromMaybe (Only "[]") <$> queryOne Select (Query $ encodeUtf8 q) (Only pid)
   pure val
- where
-  extraQueryParsed = either error (\v -> if v == "" then "" else " AND " <> v) $ parseQueryStringToWhereClause extraQuery
-  q =
-    [text| SELECT COALESCE(NULLIF(json_agg(json_build_array(timeB, count))::text, '[null]'), '[]')::text 
+  where
+    extraQueryParsed = either error (\v -> if v == "" then "" else " AND " <> v) $ parseQueryStringToWhereClause extraQuery
+    q =
+      [text| SELECT COALESCE(NULLIF(json_agg(json_build_array(timeB, count))::text, '[null]'), '[]')::text 
               from (
                 SELECT time_bucket('1 minute', created_at) as timeB,count(*)
                FROM apis.request_dumps where project_id=? $extraQueryParsed  GROUP BY timeB) ts|]
@@ -304,24 +336,25 @@ selectRequestDumpsByProjectForChart pid extraQuery = do
 --
 bulkInsertRequestDumps :: [RequestDump] -> DBT IO Int64
 bulkInsertRequestDumps = executeMany q
- where
-  q = [sql| INSERT INTO apis.request_dumps VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?); |]
+  where
+    q = [sql| INSERT INTO apis.request_dumps VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?); |]
 
 selectRequestDumpByProjectAndId :: Projects.ProjectId -> ZonedTime -> UUID.UUID -> DBT IO (Maybe RequestDumpLogItem)
 selectRequestDumpByProjectAndId pid createdAt rdId = queryOne Select q (createdAt, pid, rdId)
- where
-  q =
-    [sql|SELECT   id,created_at,host,url_path,method,raw_url,referer,
+  where
+    q =
+      [sql|SELECT   id,created_at,host,url_path,method,raw_url,referer,
                     path_params,status_code,query_params,
-                    request_body,response_body,request_headers,response_headers,
-                    0 AS full_count, duration_ns, sdk_type
+                    request_body,response_body,request_headers,response_headers, 
+                    0 AS full_count, duration_ns, sdk_type,
+                    parent_id, service_version, errors, tags
              FROM apis.request_dumps where created_at=? and project_id=? and id=? LIMIT 1|]
 
 selectReqLatenciesRolledBySteps :: Int -> Int -> Projects.ProjectId -> Text -> Text -> DBT IO (Vector (Int, Int))
 selectReqLatenciesRolledBySteps maxv steps pid urlPath method = query Select q (maxv, steps, steps, steps, pid, urlPath, method)
- where
-  q =
-    [sql| 
+  where
+    q =
+      [sql| 
 select duration_steps, count(id)
 	FROM generate_series(0, ?, ?) AS duration_steps
 	LEFT OUTER JOIN apis.request_dumps on (duration_steps = round((EXTRACT(epoch FROM duration)/1000000)/?)*? 
@@ -334,13 +367,13 @@ select duration_steps, count(id)
 -- TODO: expand this into a view
 selectReqLatenciesRolledByStepsForProject :: Int -> Int -> Projects.ProjectId -> (Maybe ZonedTime, Maybe ZonedTime) -> DBT IO (Vector (Int, Int))
 selectReqLatenciesRolledByStepsForProject maxv steps pid dateRange = query Select (Query $ encodeUtf8 q) (maxv, steps, steps, steps, pid)
- where
-  dateRangeStr = from @String $ case dateRange of
-    (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
-    (Just a, Just b) -> "AND created_at BETWEEN '" <> formatTime defaultTimeLocale "%F %R" a <> "' AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
-    _ -> ""
-  q =
-    [text| 
+  where
+    dateRangeStr = from @String $ case dateRange of
+      (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
+      (Just a, Just b) -> "AND created_at BETWEEN '" <> formatTime defaultTimeLocale "%F %R" a <> "' AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
+      _ -> ""
+    q =
+      [text| 
 select duration_steps, count(id)
 	FROM generate_series(0, ?, ?) AS duration_steps
 	LEFT OUTER JOIN apis.request_dumps on (duration_steps = round((EXTRACT(epoch FROM duration)/1000000)/?)*?

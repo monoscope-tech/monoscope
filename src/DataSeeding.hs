@@ -100,25 +100,30 @@ parseConfigToRequestMessages pid input = do
         generateWithSettings fakerSettings $
           configs & mapM \config -> do
             let startTimeUTC = zonedTimeToUTC (config.from)
-            let maxDiffTime = diffUTCTime (zonedTimeToUTC (config.to)) startTimeUTC
-            let timestamps = randomTimesBtwToAndFrom startTimeUTC (config.count) randGen maxDiffTime
-            let durations = take (config.count) $ randomRs (config.durationFrom, config.durationTo) randGen
-            let allowedStatusCodes = config.statusCodesOneof
-            let statusCodes = take (config.count) $ map (allowedStatusCodes !!) $ randomRs (0, length allowedStatusCodes - 1) randGen
+                maxDiffTime = diffUTCTime (zonedTimeToUTC (config.to)) startTimeUTC
+                timestamps = randomTimesBtwToAndFrom startTimeUTC (config.count) randGen maxDiffTime
+                durations = take (config.count) $ randomRs (config.durationFrom, config.durationTo) randGen
+                allowedStatusCodes = config.statusCodesOneof
+                statusCodes = take (config.count) $ map (allowedStatusCodes !!) $ randomRs (0, length allowedStatusCodes - 1) randGen
 
             zip3 timestamps durations statusCodes & mapM \(timestampV, duration', statusCode') -> do
               let duration = duration'
-              let statusCode = statusCode'
-              let method = config.method
-              let urlPath = config.path
-              let rawUrl = config.path
-              let protoMajor = 1
-              let protoMinor = 1
-              let referer = "https://google.com"
-              let host = "https://apitoolkit.io/"
-              let projectId = Projects.unProjectId pid
-              let timestamp = timestampV
-              let sdkType = RequestDumps.GoGin
+                  statusCode = statusCode'
+                  method = config.method
+                  urlPath = config.path
+                  rawUrl = config.path
+                  protoMajor = 1
+                  protoMinor = 1
+                  referer = "https://google.com"
+                  host = "https://apitoolkit.io/"
+                  projectId = Projects.unProjectId pid
+                  timestamp = timestampV
+                  sdkType = RequestDumps.GoGin
+                  msgId = Nothing
+                  parentId = Nothing
+                  serviceVersion = Nothing
+                  errors = Nothing
+                  tags = Nothing
 
               pathLog <- mapM fieldConfigToField (config.queryParams)
               pathParams <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField (config.pathParams)

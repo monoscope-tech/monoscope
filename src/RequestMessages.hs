@@ -11,7 +11,7 @@ module RequestMessages (
   redactJSON,
 ) where
 
-import Data.Aeson (Value)
+import Data.Aeson (ToJSON (toJSON), Value)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEK
 import Data.Aeson.QQ (aesonQQ)
@@ -25,6 +25,7 @@ import Data.Text qualified as T
 import Data.Time.Clock as Clock
 import Data.Time.LocalTime as Time
 import Data.UUID qualified as UUID
+import Data.Vector qualified as V
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Simple (Query)
 import Deriving.Aeson qualified as DAE
@@ -80,6 +81,11 @@ data RequestMessage = RequestMessage
   , statusCode :: Int
   , urlPath :: Text
   , timestamp :: ZonedTime
+  , msgId :: Maybe UUID.UUID -- This becomes the request_dump id.
+  , parentId :: Maybe UUID.UUID
+  , serviceVersion :: Maybe Text -- allow users track deployments and versions (tags, commits, etc)
+  , errors :: Maybe [RequestDumps.ATError]
+  , tags :: Maybe [Text]
   }
   deriving stock (Show, Generic)
   deriving
@@ -102,15 +108,15 @@ makeFieldLabelsNoPrefix ''RequestMessage
 -- Object (fromList [("menu",Array [Object (fromList [("id",String "[REDACTED]"),("names",Array [String "[REDACTED]",String "[REDACTED]"])]),Object (fromList [("id",String "[REDACTED]")])])])
 redactJSON :: [Text] -> Value -> Value
 redactJSON paths' = redactJSON' (stripPrefixDot paths')
- where
-  redactJSON' paths (AET.String value) = if "" `elem` paths then AET.String "[REDACTED]" else AET.String value
-  redactJSON' paths (AET.Number value) = if "" `elem` paths then AET.String "[REDACTED]" else AET.Number value
-  redactJSON' paths AET.Null = AET.Null
-  redactJSON' paths (AET.Bool value) = AET.Bool value
-  redactJSON' paths (AET.Object objMap) = AET.Object $ AEK.fromHashMapText $ HM.mapWithKey (\k v -> redactJSON' (mapMaybe (\path -> T.stripPrefix (k <> ".") path <|> T.stripPrefix k path) paths) v) (AEK.toHashMapText objMap)
-  redactJSON' paths (AET.Array jsonList) = AET.Array $ Vector.map (redactJSON' (mapMaybe (\path -> T.stripPrefix "[]." path <|> T.stripPrefix "[]" path) paths)) jsonList
+  where
+    redactJSON' paths (AET.String value) = if "" `elem` paths then AET.String "[REDACTED]" else AET.String value
+    redactJSON' paths (AET.Number value) = if "" `elem` paths then AET.String "[REDACTED]" else AET.Number value
+    redactJSON' paths AET.Null = AET.Null
+    redactJSON' paths (AET.Bool value) = AET.Bool value
+    redactJSON' paths (AET.Object objMap) = AET.Object $ AEK.fromHashMapText $ HM.mapWithKey (\k v -> redactJSON' (mapMaybe (\path -> T.stripPrefix (k <> ".") path <|> T.stripPrefix k path) paths) v) (AEK.toHashMapText objMap)
+    redactJSON' paths (AET.Array jsonList) = AET.Array $ Vector.map (redactJSON' (mapMaybe (\path -> T.stripPrefix "[]." path <|> T.stripPrefix "[]" path) paths)) jsonList
 
-  stripPrefixDot = map (\p -> fromMaybe p (T.stripPrefix "." p))
+    stripPrefixDot = map (\p -> fromMaybe p (T.stripPrefix "." p))
 
 -- requestMsgToDumpAndEndpoint is a very improtant function designed to be run as a pure function
 -- which takes in a request and processes it returning an sql query and it's params which can be executed.
@@ -119,7 +125,11 @@ redactJSON paths' = redactJSON' (stripPrefixDot paths')
 -- Also, being a pure function means it's easier to test the request processing logic since we can unit test pure functions easily.
 -- We can pass in a request, it's project cache object and inspect the generated sql and params.
 requestMsgToDumpAndEndpoint :: Projects.ProjectCache -> RequestMessages.RequestMessage -> ZonedTime -> UUID.UUID -> Either Text (Query, [DBField], RequestDumps.RequestDump)
-requestMsgToDumpAndEndpoint pjc rM now dumpID = do
+requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
+  -- TODO: User dumpID and msgID to get correct ID
+  --
+  let dumpID = fromMaybe dumpIDOriginal rM.msgId
+
   let method = T.toUpper rM.method
   let urlPath = RequestDumps.normalizeUrlPath rM.sdkType rM.statusCode rM.method rM.urlPath
   let !endpointHash = from @String @Text $ showHex (xxHash $ encodeUtf8 $ UUID.toText (rM.projectId) <> method <> urlPath) ""
@@ -138,18 +148,16 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
   let respBody = redactJSON redactFieldsList $ fromRight [aesonQQ| {} |] $ AE.eitherDecodeStrict respBodyB64
 
   let pathParamFields = valueToFields $ redactJSON redactFieldsList $ rM.pathParams
-  let queryParamFields = valueToFields $ redactJSON redactFieldsList $ rM.queryParams
-  let reqHeaderFields = valueToFields $ redactJSON redactFieldsList $ rM.requestHeaders
-  let respHeaderFields = valueToFields $ redactJSON redactFieldsList $ rM.responseHeaders
-
-  let reqBodyFields = valueToFields reqBody
-  let respBodyFields = valueToFields respBody
-
-  let queryParamsKP = Vector.fromList $ map fst queryParamFields
-  let requestHeadersKP = Vector.fromList $ map fst reqHeaderFields
-  let responseHeadersKP = Vector.fromList $ map fst respHeaderFields
-  let requestBodyKP = Vector.fromList $ map fst reqBodyFields
-  let responseBodyKP = Vector.fromList $ map fst respBodyFields
+      queryParamFields = valueToFields $ redactJSON redactFieldsList $ rM.queryParams
+      reqHeaderFields = valueToFields $ redactJSON redactFieldsList $ rM.requestHeaders
+      respHeaderFields = valueToFields $ redactJSON redactFieldsList $ rM.responseHeaders
+      reqBodyFields = valueToFields reqBody
+      respBodyFields = valueToFields respBody
+      queryParamsKP = Vector.fromList $ map fst queryParamFields
+      requestHeadersKP = Vector.fromList $ map fst reqHeaderFields
+      responseHeadersKP = Vector.fromList $ map fst respHeaderFields
+      requestBodyKP = Vector.fromList $ map fst reqBodyFields
+      responseBodyKP = Vector.fromList $ map fst respBodyFields
 
   -- We calculate a hash that represents the request.
   -- We skip the request headers from this hash, since the source of the request like browsers might add or skip headers at will,
@@ -160,12 +168,12 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
   let projectId = Projects.ProjectId (rM.projectId)
 
   let pathParamsFieldsDTO = pathParamFields & map (fieldsToFieldDTO Fields.FCPathParam projectId endpointHash)
-  let queryParamsFieldsDTO = queryParamFields & map (fieldsToFieldDTO Fields.FCQueryParam projectId endpointHash)
-  let reqHeadersFieldsDTO = reqHeaderFields & map (fieldsToFieldDTO Fields.FCRequestHeader projectId endpointHash)
-  let respHeadersFieldsDTO = respHeaderFields & map (fieldsToFieldDTO Fields.FCResponseHeader projectId endpointHash)
-  let reqBodyFieldsDTO = reqBodyFields & map (fieldsToFieldDTO Fields.FCRequestBody projectId endpointHash)
-  let respBodyFieldsDTO = respBodyFields & map (fieldsToFieldDTO Fields.FCResponseBody projectId endpointHash)
-  let fieldsDTO =
+      queryParamsFieldsDTO = queryParamFields & map (fieldsToFieldDTO Fields.FCQueryParam projectId endpointHash)
+      reqHeadersFieldsDTO = reqHeaderFields & map (fieldsToFieldDTO Fields.FCRequestHeader projectId endpointHash)
+      respHeadersFieldsDTO = respHeaderFields & map (fieldsToFieldDTO Fields.FCResponseHeader projectId endpointHash)
+      reqBodyFieldsDTO = reqBodyFields & map (fieldsToFieldDTO Fields.FCRequestBody projectId endpointHash)
+      respBodyFieldsDTO = respBodyFields & map (fieldsToFieldDTO Fields.FCResponseBody projectId endpointHash)
+      fieldsDTO =
         pathParamsFieldsDTO
           <> queryParamsFieldsDTO
           <> reqHeadersFieldsDTO
@@ -191,13 +199,17 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
             -- A shape is a deterministic representation of a request-response combination for a given endpoint.
             -- We usually expect multiple shapes per endpoint. Eg a shape for a success request-response and another for an error response.
             -- Shapes are dependent on the endpoint, statusCode and the unique fields in that shape.
-            let shape = Shapes.Shape (Shapes.ShapeId dumpID) (rM.timestamp) now Nothing projectId endpointHash queryParamsKP requestHeadersKP responseHeadersKP requestBodyKP responseBodyKP fieldHashes shapeHash rM.statusCode
+            let shape = Shapes.Shape (Shapes.ShapeId dumpID) (rM.timestamp) now Nothing projectId endpointHash queryParamsKP requestBodyKP responseBodyKP requestHeadersKP responseHeadersKP fieldHashes shapeHash rM.statusCode
             Shapes.insertShapeQueryAndParam shape
 
   -- FIXME: This 1000 is added on the php sdk in a previous version and has been remove. This workaround code should be removed ASAP
   let duration = case rM.sdkType of
         RequestDumps.PhpLaravel -> rM.duration `div` 1000
         _ -> rM.duration
+
+  let errorsL = fromMaybe empty rM.errors
+      errorsJSONB = toJSON errorsL
+      tagsV = maybe V.empty V.fromList rM.tags
 
   -- request dumps are time series dumps representing each requests which we consume from our users.
   -- We use this field via the log explorer for exploring and searching traffic. And at the moment also use it for most time series analytics.
@@ -235,6 +247,10 @@ requestMsgToDumpAndEndpoint pjc rM now dumpID = do
           , fieldHashes = fieldHashes
           , durationNs = fromIntegral duration
           , sdkType = rM.sdkType
+          , parentId = rM.parentId
+          , serviceVersion = rM.serviceVersion
+          , errors = errorsJSONB
+          , tags = tagsV
           }
 
   -- Build all fields and formats, unzip them as separate lists and append them to query and params
@@ -304,22 +320,22 @@ buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash =
 -- FIXME: value To Fields should use the redact fields list to actually redact fields
 valueToFields :: AE.Value -> [(Text, [AE.Value])]
 valueToFields value = dedupFields $ removeBlacklistedFields $ snd $ valueToFields' value ("", [])
- where
-  valueToFields' :: AE.Value -> (Text, [(Text, AE.Value)]) -> (Text, [(Text, AE.Value)])
-  valueToFields' (AE.Object v) akk =
-    AEK.toHashMapText v
-      & HM.toList
-      & foldl'
-        ( \(akkT, akkL) (k, val) -> (akkT, snd $ valueToFields' val (akkT <> "." <> normalizeKey k, akkL))
-        )
-        akk
-  valueToFields' (AE.Array v) akk = foldl' (\(akkT, akkL) val -> (akkT, snd $ valueToFields' val (akkT <> "[*]", akkL))) akk v
-  valueToFields' v (akk, l) = (akk, (akk, v) : l)
+  where
+    valueToFields' :: AE.Value -> (Text, [(Text, AE.Value)]) -> (Text, [(Text, AE.Value)])
+    valueToFields' (AE.Object v) akk =
+      AEK.toHashMapText v
+        & HM.toList
+        & foldl'
+          ( \(akkT, akkL) (k, val) -> (akkT, snd $ valueToFields' val (akkT <> "." <> normalizeKey k, akkL))
+          )
+          akk
+    valueToFields' (AE.Array v) akk = foldl' (\(akkT, akkL) val -> (akkT, snd $ valueToFields' val (akkT <> "[*]", akkL))) akk v
+    valueToFields' v (akk, l) = (akk, (akk, v) : l)
 
-  normalizeKey :: Text -> Text
-  normalizeKey key = case valueToFormatStr key of
-                        Just result -> "{" <> result <> "}"
-                        Nothing -> key
+    normalizeKey :: Text -> Text
+    normalizeKey key = case valueToFormatStr key of
+      Just result -> "{" <> result <> "}"
+      Nothing -> key
 
 -- debupFields would merge all fields in the list of tuples by the first item in the tupple.
 --
@@ -371,7 +387,7 @@ valueToFormat (AET.Array _) = "array"
 -- Just "text"
 --
 -- >>> valueToFormatStr "22.02.2022"
--- Nothing 
+-- Nothing
 --
 -- >>> valueToFormatStr "222"
 -- Just "integer"
@@ -386,7 +402,7 @@ valueToFormatStr val
   | val =~ ([text|^(0[1-9]|1[012])[- -.](0[1-9]|[12][0-9]|3[01])[- -.](19|20)\d\d$|] :: Text) = Just "mm-dd-yyyy"
   | val =~ ([text|^(0[1-9]|1[012])[- ..](0[1-9]|[12][0-9]|3[01])[- ..](19|20)\d\d$|] :: Text) = Just "mm.dd.yyyy"
   | val =~ ([text|^[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}$|] :: Text) = Just "uuid"
-  | otherwise =Nothing 
+  | otherwise = Nothing
 
 valueToFormatNum :: Scientific.Scientific -> Text
 valueToFormatNum val
@@ -431,26 +447,26 @@ fieldsToFieldDTO fieldCategory projectID endpointHash (keyPath, val) =
       , hash = formatHash
       }
   )
- where
-  aeValueToFieldType :: AE.Value -> Fields.FieldTypes
-  aeValueToFieldType (AET.String _) = Fields.FTString
-  aeValueToFieldType (AET.Number _) = Fields.FTNumber
-  aeValueToFieldType AET.Null = Fields.FTNull
-  aeValueToFieldType (AET.Bool _) = Fields.FTBool
-  aeValueToFieldType (AET.Object _) = Fields.FTObject
-  aeValueToFieldType (AET.Array _) = Fields.FTList
+  where
+    aeValueToFieldType :: AE.Value -> Fields.FieldTypes
+    aeValueToFieldType (AET.String _) = Fields.FTString
+    aeValueToFieldType (AET.Number _) = Fields.FTNumber
+    aeValueToFieldType AET.Null = Fields.FTNull
+    aeValueToFieldType (AET.Bool _) = Fields.FTBool
+    aeValueToFieldType (AET.Object _) = Fields.FTObject
+    aeValueToFieldType (AET.Array _) = Fields.FTList
 
-  fieldType :: Fields.FieldTypes
-  fieldType = fromMaybe Fields.FTUnknown $ viaNonEmpty head $ aeValueToFieldType <$> val
+    fieldType :: Fields.FieldTypes
+    fieldType = fromMaybe Fields.FTUnknown $ viaNonEmpty head $ aeValueToFieldType <$> val
 
-  -- FIXME: We should rethink this value to format logic.
-  -- FIXME: Maybe it actually needs machine learning,
-  -- FIXME: or maybe it should operate on the entire list, and not just one value.
-  format = fromMaybe "" $ viaNonEmpty head $ valueToFormat <$> val
+    -- FIXME: We should rethink this value to format logic.
+    -- FIXME: Maybe it actually needs machine learning,
+    -- FIXME: or maybe it should operate on the entire list, and not just one value.
+    format = fromMaybe "" $ viaNonEmpty head $ valueToFormat <$> val
 
-  -- field hash is <hash of the endpoint> + <the hash of <field_category><key_path_str><field_type>> (No space or comma between data)
-  preFieldHash = Fields.fieldCategoryEnumToText fieldCategory <> keyPath <> Fields.fieldTypeToText fieldType
-  fieldHash' = from @String @Text $ showHex (xxHash $ encodeUtf8 preFieldHash) ""
-  fieldHash = endpointHash <> fieldHash'
-  formatHash' = from @String @Text $ showHex (xxHash $ encodeUtf8 format) ""
-  formatHash = fieldHash <> formatHash'
+    -- field hash is <hash of the endpoint> + <the hash of <field_category><key_path_str><field_type>> (No space or comma between data)
+    preFieldHash = Fields.fieldCategoryEnumToText fieldCategory <> keyPath <> Fields.fieldTypeToText fieldType
+    fieldHash' = from @String @Text $ showHex (xxHash $ encodeUtf8 preFieldHash) ""
+    fieldHash = endpointHash <> fieldHash'
+    formatHash' = from @String @Text $ showHex (xxHash $ encodeUtf8 format) ""
+    formatHash = fieldHash <> formatHash'

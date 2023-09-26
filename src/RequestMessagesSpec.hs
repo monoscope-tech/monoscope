@@ -229,8 +229,8 @@ spec = do
 
   describe "Regex Formats Gen" $ do
     it "should get support string types" $ do
-      RequestMessages.valueToFormatStr  "123" `shouldBe` Just "integer"
-      RequestMessages.valueToFormatStr  "abc" `shouldBe` Nothing 
+      RequestMessages.valueToFormatStr "123" `shouldBe` Just "integer"
+      RequestMessages.valueToFormatStr "abc" `shouldBe` Nothing
 
   describe "requestMessageEndpoint" $ do
     it "should be able to convert simple request message to series on insert db commands" $ do
@@ -259,6 +259,11 @@ spec = do
                 requestBody = B64.encodeBase64 ""
               , responseBody = B64.encodeBase64 $ encodeUtf8 [text|{"key": "value"}|]
               , statusCode = 203
+              , msgId = Nothing
+              , parentId = Nothing
+              , serviceVersion = Nothing
+              , errors = Nothing
+              , tags = Nothing
               }
       let projectCache = Projects.ProjectCache{hosts = [], endpointHashes = ["abc"], shapeHashes = [], redactFieldslist = []}
       let Right (_query, _params, _) = RequestMessages.requestMsgToDumpAndEndpoint projectCache requestMsg timestamp recId
