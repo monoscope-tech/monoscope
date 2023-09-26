@@ -49,6 +49,7 @@ import Pages.Projects.ManageMembers qualified as ManageMembers
 import Pages.RedactedFields (RedactFieldForm)
 import Pages.RedactedFields qualified as RedactedFields
 import Pages.Reports qualified as Reports
+import Pages.Share qualified as Share
 import Pages.Survey qualified as Survey
 import Relude
 import Servant
@@ -101,6 +102,7 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "manual_ingest" :> ReqBody '[FormUrlEncoded] RequestMessageForm :> Post '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "log_explorer" :> QPT "query" :> QPT "cols" :> QPT "from" :> HXRequest :> HXBoosted :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" ZonedTime :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" ZonedTime :> "detailed" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "bulk_seed_and_ingest" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "bulk_seed_and_ingest" :> ReqBody '[FormUrlEncoded] DataSeeding.DataSeedingForm :> Post '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "anomalies" :> QPT "layout" :> QPT "ackd" :> QPT "archived" :> QPT "sort" :> QPT "page" :> QPT "load_more" :> QEID "endpoint" :> HXRequest :> HXBoosted :> Get '[HTML] (Html ())
@@ -122,6 +124,7 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "reports_notif" :> Capture "report_type" Text :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "charts_html" :> QP "chart_type" Charts.ChartType :> QP "group_by" Charts.GroupBy :> QP "query_by" [Charts.QueryBy] :> QP "num_slots" Int :> QP "limit" Int :> QP "theme" Text :> QPT "id" :> QP "show_legend" Bool :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "about_project" :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "share" :> ReqBody '[FormUrlEncoded] Share.ReqForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
 
 type PublicAPI =
   "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
@@ -134,6 +137,7 @@ type PublicAPI =
     :<|> "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] ClientMetadata.ClientMetadata
     :<|> "status" :> Get '[JSON] Status
     :<|> "ping" :> Get '[PlainText] Text
+    :<|> "share" :> "r" :> Capture "shareID" UUID.UUID :> Get '[HTML] (Html ())
     :<|> Raw
 
 type API =
@@ -178,6 +182,7 @@ protectedServer sess =
     :<|> ManualIngestion.manualIngestPostH sess
     :<|> Log.apiLog sess
     :<|> Log.apiLogItem sess
+    :<|> Log.expandAPIlogItem sess
     :<|> DataSeeding.dataSeedingGetH sess
     :<|> DataSeeding.dataSeedingPostH sess
     :<|> AnomalyList.anomalyListGetH sess
@@ -199,6 +204,7 @@ protectedServer sess =
     :<|> Reports.reportsPostH sess
     :<|> Charts.chartsGetH sess
     :<|> Survey.surveyGetH sess
+    :<|> Share.shareLinkPostH sess
 
 publicServer :: ServerT PublicAPI DashboardM
 publicServer =
@@ -209,6 +215,7 @@ publicServer =
     :<|> ClientMetadata.clientMetadataH
     :<|> statusH
     :<|> pingH
+    :<|> Share.shareLinkGetH
     :<|> serveDirectoryWebApp "./static/public"
 
 server :: ServerT API DashboardM

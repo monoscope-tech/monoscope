@@ -67,6 +67,7 @@ library
       Pages.Projects.ManageMembers
       Pages.RedactedFields
       Pages.Reports
+      Pages.Share
       Pages.Survey
       Pkg.Components
       Pkg.ConvertKit

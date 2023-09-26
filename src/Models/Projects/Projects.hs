@@ -249,6 +249,8 @@ data ProjectRequestStats = ProjectRequestStats
   , totalAnomaliesLastWeek :: Int
   , totalFields :: Int
   , totalFieldsLastWeek :: Int
+  , requestsPerMin :: Int
+  , requestsPerMinLastWeek :: Int
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (FromRow, ToRow, Default)

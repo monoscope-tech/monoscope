@@ -70,7 +70,7 @@ endpointListGetH sess pid layoutM ackdM archivedM sortM hxRequestM hxBoostedM hx
       pure $ bodyWrapper bwconf $ endpointListPage paramInput pid currTime endpointStats
 
 endpointListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Endpoints.EndpointRequestStats -> Html ()
-endpointListPage paramInput pid currTime endpoints = div_ [class_ "container mx-auto  px-4 pt-10 pb-24"] $ do
+endpointListPage paramInput pid currTime endpoints = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24"] $ do
   h3_ [class_ "text-xl text-slate-700 flex place-items-center"] "Endpoints"
   div_ [class_ "py-2 px-2 space-x-6 border-b border-slate-20 mt-6 mb-8 text-sm font-light", hxBoost_ "true"] do
     let uri = deleteParam "archived" $ deleteParam "ackd" paramInput.currentURL
@@ -123,7 +123,7 @@ endpointList' paramInput currTime pid enps = form_ [class_ "col-span-5 bg-white 
         a_ [class_ "cursor-pointer"] "24h"
         a_ [class_ "cursor-pointer font-bold text-base"] "14d"
     div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "font-base"] "EVENTS"
-  div_ [class_ "w-full flex flex-row m-3"] $ do
+  div_ [class_ "w-full flex flex-row p-3"] $ do
     div_ [class_ "flex w-full bg-white py-2 px-3 flex-row border-solid border border-gray-200 h-10"] $ do
       img_ [src_ "/assets/svgs/search.svg", class_ "h-5 w-auto"]
       input_

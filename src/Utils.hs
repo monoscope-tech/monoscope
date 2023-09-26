@@ -1,7 +1,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE RankNTypes #-}
 
-module Utils (eitherStrToText, userIsProjectMember, userNotMemeberPage, GetOrRedirect, redirect, DBField (..), mIcon_, deleteParam, quoteTxt, textToBool) where
+module Utils (eitherStrToText, userIsProjectMember, userNotMemeberPage, GetOrRedirect, redirect, DBField (..), mIcon_, deleteParam, quoteTxt, textToBool, getMethodColor, getStatusColor) where
 
 import Data.Default (def)
 import Data.Text (replace)
@@ -88,3 +88,17 @@ forbiddenPage =
     div_ [class_ "max-w-24 my-32 rounded-xl border p-8"] do
       h3_ [class_ "text-3xl mb-2 font-bold"] "Forbidden"
       p_ [class_ "max-w-prose text-gray-500"] "Only members of this project can access this page, make sure you are logged in to the right account and try again"
+
+getMethodColor :: Text -> Text
+getMethodColor "POST" = "green-500"
+getMethodColor "PUT" = "orange-500"
+getMethodColor "DELETE" = "red-500"
+getMethodColor "PATCH" = "purple-500"
+getMethodColor _ = "blue-500"
+
+getStatusColor :: Int -> Text
+getStatusColor status
+  | status < 200 = "gray-500"
+  | status >= 200 && status < 300 = "green-500"
+  | status >= 300 && status < 400 = "yellow-500"
+  | otherwise = "red-500"

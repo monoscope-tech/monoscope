@@ -116,7 +116,7 @@ dashboardGetH sess pid fromDStr toDStr sinceStr' = do
 dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 dashboardPage pid paramInput currTime projectStats reqLatenciesRolledByStepsJ dateRange = do
   let currentURL' = deleteParam "to" $ deleteParam "from" $ deleteParam "since" paramInput.currentURL
-  section_ [class_ "p-8 container mx-auto px-4 space-y-12 pb-24"] $ do
+  section_ [class_ "p-8  mx-auto px-16 w-full space-y-12 pb-24"] $ do
     div_ [class_ "relative p-1 "] do
       div_ [class_ "relative"] do
         a_
@@ -193,31 +193,39 @@ dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledBySte
 
     div_ [class_ "reqResSubSection space-y-5"] $ do
       div_ [class_ "grid grid-cols-5 gap-5"] $ do
-        statBox "Requests" "Total requests in the last 2 weeks" (projReqStats.totalRequests) Nothing
-        statBox "Anomalies" "Total anomalies still active this week vs last week" projReqStats.totalAnomalies (Just projReqStats.totalAnomaliesLastWeek)
-        statBox "Endpoints" "Total endpoints now vs last week" projReqStats.totalEndpoints (Just projReqStats.totalEndpointsLastWeek)
-        statBox "Signatures" "Total request signatures which are active now vs last week" projReqStats.totalShapes (Just projReqStats.totalShapesLastWeek)
-        statBox "Fields" "Total fields which are active now vs last week" projReqStats.totalFields (Just projReqStats.totalFieldsLastWeek)
+        statBox  (Just pid) "Requests" "Total requests in the last 2 weeks" (projReqStats.totalRequests) Nothing
+        statBox  (Just pid) "Anomalies" "Total anomalies still active this week vs last week" projReqStats.totalAnomalies (Just projReqStats.totalAnomaliesLastWeek)
+        statBox  (Just pid) "Endpoints" "Total endpoints now vs last week" projReqStats.totalEndpoints (Just projReqStats.totalEndpointsLastWeek)
+        statBox  (Just pid) "Signatures" "Total request signatures which are active now vs last week" projReqStats.totalShapes (Just projReqStats.totalShapesLastWeek)
+        statBox  (Just pid) "Requests per minutes" "Total requests per minute this week vs last week" projReqStats.requestsPerMin (Just projReqStats.requestsPerMinLastWeek)
 
       div_ [class_ "flex gap-5"] do
         div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] $ do
-          select_ [] $ option_ [class_ "text-2xl font-normal"] "Requests by Status Code"
+          div_ [class_ "flex gap-4 items-center"] do
+            select_ [] $ option_ [class_ "text-2xl font-normal mr-4"] "Requests by Status Code"
+            span_ [class_ "inline-block", term "data-tippy-content" "HTTP status code distribution for all requests."] $ mIcon_ "info" "w-4 h-4"
           div_ [class_ "h-64 "] do
             Charts.lazy [C.QByE $ C.QBPId pid : catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBStatusCode, C.SlotsE 120, C.ShowLegendE]
 
         div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] $ do
-          select_ [] $ option_ [class_ "text-2xl font-normal"] "Latency Percentiles"
+          div_ [class_ "flex gap-4 items-center"] do
+            select_ [] $ option_ [class_ "text-2xl font-normal"] "Latency Percentiles"
+            span_ [class_ "inline-block", term "data-tippy-content" "Response time distribution at the 50th, 75th, and 90th percentiles"] $ mIcon_ "info" "w-4 h-4"
           div_ [class_ "h-64 "] do
             Charts.lazy [C.QByE $ C.QBPId pid : catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBDurationPercentile, C.SlotsE 120, C.ShowLegendE, C.TypeE C.LineCT]
 
       div_ [class_ "flex gap-5"] do
         div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] $ do
-          select_ [] $ option_ [class_ "text-2xl font-normal"] "Error"
+          div_ [class_ "flex gap-4 items-center"] do
+            select_ [] $ option_ [class_ "text-2xl font-normal"] "Errors"
+            span_ [class_ "inline-block", term "data-tippy-content" "Requests with error status responses grouped by status code"] $ mIcon_ "info" "w-4 h-4"
           div_ [class_ "h-64 "] do
             Charts.lazy [C.QByE $ [C.QBPId pid, C.QBStatusCodeGT 400] ++ catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBStatusCode, C.SlotsE 120, C.ShowLegendE, C.Theme "roma"]
 
         div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] $ do
-          select_ [] $ option_ [class_ "text-2xl font-normal"] "Reqs Grouped by Endpoint"
+          div_ [class_ "flex gap-4 items-center"] do
+            select_ [] $ option_ [class_ "text-2xl font-normal"] "Requests by Endpoint"
+            span_ [class_ "inline-block", term "data-tippy-content" "All requests grouped by endpoint"] $ mIcon_ "info" "w-4 h-4"
           div_ [class_ "h-64 "] do
             Charts.lazy [C.QByE $ C.QBPId pid : catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBEndpoint, C.SlotsE 120, C.ShowLegendE]
 
