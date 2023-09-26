@@ -228,8 +228,6 @@ SELECT avm.id, avm.created_at, avm.updated_at, avm.project_id, aan.acknowleged_a
     $limit;
       |]
 
--- TODO: notice the limit? We need to support pagination on the anomalies page
-
 getReportAnomalies :: Projects.ProjectId -> Text -> DBT IO (Vector AnomalyVM)
 getReportAnomalies pid report_type = query Select (Query $ encodeUtf8 q) pid
   where
@@ -252,7 +250,7 @@ getReportAnomalies pid report_type = query Select (Query $ encodeUtf8 q) pid
       WHERE
           avm.project_id = ? 
           AND avm.anomaly_type != 'field'
-          AND rd.created_at > NOW() - interval $report_interval
+          AND aan.created_at > NOW() - interval $report_interval
           AND aan.acknowleged_at IS NULL
           AND aan.archived_at IS NULL
       GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25
