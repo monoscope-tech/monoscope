@@ -218,10 +218,12 @@ SELECT avm.id, avm.created_at, avm.updated_at, avm.project_id, aan.acknowleged_a
         OR  (avm.target_hash=rd.shape_hash AND avm.anomaly_type='shape')
         OR  (avm.target_hash=rd.endpoint_hash AND avm.anomaly_type='endpoint')
     WHERE
-        avm.project_id = ? 
-        $cond
+        rd.created_at > NOW() - interval '14 days'
+        AND avm.project_id = ? 
         AND avm.anomaly_type != 'field'
-        AND rd.created_at > NOW() - interval '14 days' 
+        $cond
+        
+        
     GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25
     ORDER BY $orderBy
     $skip

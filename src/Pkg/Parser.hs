@@ -94,7 +94,8 @@ operatorTable =
 binary :: Text -> (Expr -> Expr -> Expr) -> Operator Parser Expr
 binary name f = InfixL (f <$ symbol name)
 
--- >>> parseTest parseQuery "a.b=\"x\" AND (x=1 OR b!=2) "
+-- >>> parseQueryStringToWhereClause "a.b=\"x\" AND (x=1 OR b!=2) "
+-- Right "a->>'b'='x' AND (x=1 OR b!=2)"
 parseQuery :: Parser Expr
 parseQuery = pExpr <* eof
 
@@ -132,7 +133,7 @@ instance Display Expr where
 
 ----------------------------------------------------------------------------------
 -- Convert Query as string to a string capable of being
--- used int the where clause of an sql statement
+-- used in the where clause of an sql statement
 ----------------------------------------------------------------------------------
 parseQueryStringToWhereClause :: Text -> Either Text Text
 parseQueryStringToWhereClause q = if q == "" then Right "" else bimap (toText . errorBundlePretty) display (parse parseQuery "" q)

@@ -3,9 +3,8 @@
 module Pages.Charts.Charts (chartsGetH, ChartType (..), throughput, throughputEndpointHTML, lazy, ChartExp (..), QueryBy (..), GroupBy (..)) where
 
 import Config (DashboardM, pool)
-import Control.Monad (foldM)
 import Data.Aeson qualified as AE
-import Data.List (foldl, groupBy, lookup)
+import Data.List (groupBy, lookup)
 import Data.Text (toLower)
 import Data.Text qualified as T
 import Data.Time (UTCTime, ZonedTime, defaultTimeLocale, diffUTCTime, formatTime, utc, utcToZonedTime, zonedTimeToUTC)
@@ -13,11 +12,8 @@ import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.Tuple.Extra (fst3, thd3)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
-import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, withPool)
 import Database.PostgreSQL.Simple.Types (Query (Query))
-import Database.PostgreSQL.Transact (DBT)
-import Debug.Pretty.Simple (pTrace, pTraceShow, pTraceShowM)
 import Lucid
 import Lucid.Htmx
 import Models.Apis.RequestDumps qualified as RequestDumps
