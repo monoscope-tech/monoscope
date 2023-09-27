@@ -112,6 +112,7 @@ normalizeUrlPath JsExpress statusCode "OPTIONS" urlPath = ""
 normalizeUrlPath JsExpress statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath JavaSpringBoot statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath JsNest statusCode _method urlPath = removeQueryParams statusCode urlPath
+normalizeUrlPath JsAxiosOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath DotNet statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath PythonFastApi statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath JsFastify statusCode _method urlPath = removeQueryParams statusCode urlPath
@@ -181,7 +182,7 @@ data RequestDump = RequestDump
   , sdkType :: SDKTypes
   , parentId :: Maybe UUID.UUID
   , serviceVersion :: Maybe Text
-  , errors ::AE.Value -- Vector ATError 
+  , errors :: AE.Value -- Vector ATError
   , tags :: Vector Text
   }
   deriving stock (Show, Generic, Eq)
@@ -245,7 +246,7 @@ data RequestDumpLogItem = RequestDumpLogItem
   , sdkType :: SDKTypes
   , parentId :: Maybe UUID.UUID
   , serviceVersion :: Maybe Text -- allow users track deployments and versions (tags, commits, etc)
-  , errors :: AE.Value 
+  , errors :: AE.Value
   , tags :: Maybe (Vector Text)
   }
   deriving stock (Show, Generic, Eq)
