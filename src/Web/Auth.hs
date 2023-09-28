@@ -46,34 +46,34 @@ import Prelude (lookup)
 genAuthServerContext :: LogAction IO String -> Pool Connection -> Context (AuthHandler Request Sessions.PersistentSession ': '[])
 genAuthServerContext logger dbConn = authHandler logger dbConn :. EmptyContext
 
-logoutH ::
-  DashboardM
-    ( Headers
-        '[Header "Location" Text, Header "Set-Cookie" SetCookie]
-        NoContent
-    )
+logoutH
+  :: DashboardM
+      ( Headers
+          '[Header "Location" Text, Header "Set-Cookie" SetCookie]
+          NoContent
+      )
 logoutH = do
   envCfg <- asks env
   let redirectTo = envCfg ^. #auth0Domain <> "/v2/logout?client_id=" <> envCfg ^. #auth0ClientId <> "&returnTo=" <> envCfg ^. #auth0LogoutRedirect
   pure $ addHeader redirectTo $ addHeader emptySessionCookie NoContent
 
-loginRedirectH ::
-  DashboardM
-    ( Headers
-        '[Header "Location" Text, Header "Set-Cookie" SetCookie]
-        NoContent
-    )
+loginRedirectH
+  :: DashboardM
+      ( Headers
+          '[Header "Location" Text, Header "Set-Cookie" SetCookie]
+          NoContent
+      )
 loginRedirectH = do
   let redirectTo = "/login"
   pure $ addHeader redirectTo $ addHeader emptySessionCookie NoContent
 
 -- loginH
-loginH ::
-  DashboardM
-    ( Headers
-        '[Header "Location" Text, Header "Set-Cookie" SetCookie]
-        NoContent
-    )
+loginH
+  :: DashboardM
+      ( Headers
+          '[Header "Location" Text, Header "Set-Cookie" SetCookie]
+          NoContent
+      )
 loginH = do
   envCfg <- asks env
   stateVar <- liftIO $ UUID.toText <$> UUIDV4.nextRandom
@@ -83,14 +83,14 @@ loginH = do
 -- authCallbackH will accept a request with code and state, and use that code to queery auth- for an auth token, and then for user info
 -- it then uses this user info to check if we already have that user in our db. And if we have that user in the db,
 -- would simply create a new session. If we dont have the user (by that email), then create the user and still create a session with that user.
-authCallbackH ::
-  Maybe Text ->
-  Maybe Text -> -- state variable from auth0
-  DashboardM
-    ( Headers
-        '[Header "Location" Text, Header "Set-Cookie" SetCookie]
-        (Html ())
-    )
+authCallbackH
+  :: Maybe Text
+  -> Maybe Text -- state variable from auth0
+  -> DashboardM
+      ( Headers
+          '[Header "Location" Text, Header "Set-Cookie" SetCookie]
+          (Html ())
+      )
 authCallbackH codeM _ = do
   envCfg <- asks env
   pool <- asks pool
@@ -99,16 +99,16 @@ authCallbackH codeM _ = do
   resp <- runExceptT $ do
     code <- hoistEither $ note "invalid code " codeM
     r <-
-      liftIO $
-        post
+      liftIO
+        $ post
           (toString $ envCfg ^. #auth0Domain <> "/oauth/token")
           ( [ "grant_type" := ("authorization_code" :: String)
             , "client_id" := envCfg ^. #auth0ClientId
             , "client_secret" := envCfg ^. #auth0Secret
             , "code" := code
             , "redirect_uri" := envCfg ^. #auth0Callback
-            ] ::
-              [FormParam]
+            ]
+              :: [FormParam]
           )
     accessToken <- hoistEither $ note "invalid access_token in response" $ r L.^? responseBody . key "access_token" . _String
     let opts = defaults & header "Authorization" L..~ ["Bearer " <> encodeUtf8 @Text @ByteString accessToken]
@@ -119,8 +119,9 @@ authCallbackH codeM _ = do
     -- TODO: For users with no profile photos or empty profile photos, use gravatars as their profile photo
     -- https://en.gravatar.com/site/implement/images/
     let picture = fromMaybe "" $ resp L.^? responseBody . key "picture" . _String
-    (userId, persistentSessId) <- liftIO $
-      withPool pool $ do
+    (userId, persistentSessId) <- liftIO
+      $ withPool pool
+      $ do
         traceShowM "In before userbyemail"
         userM <- Users.userByEmail email
         traceShowM "In before userbyemail2"
@@ -139,14 +140,15 @@ authCallbackH codeM _ = do
 
   case resp of
     Left err -> putStrLn ("unable to process auth callback page " <> err) >> (throwError $ err302{errHeaders = [("Location", "/login?auth0_callback_failure")]}) >> pure (noHeader $ noHeader "")
-    Right persistentSessId -> pure $
-      addHeader "/" $
-        addHeader (craftSessionCookie persistentSessId True) $ do
-          html_ $ do
-            head_ $ do
-              meta_ [httpEquiv_ "refresh", content_ "1;url=/"]
-            body_ $ do
-              a_ [href_ "/"] "Continue to APIToolkit"
+    Right persistentSessId -> pure
+      $ addHeader "/"
+      $ addHeader (craftSessionCookie persistentSessId True)
+      $ do
+        html_ $ do
+          head_ $ do
+            meta_ [httpEquiv_ "refresh", content_ "1;url=/"]
+          body_ $ do
+            a_ [href_ "/"] "Continue to APIToolkit"
 
 --- | The auth handler wraps a function from Request -> Handler Account.
 --- We look for a token in the request headers that we expect to be in the cookie.

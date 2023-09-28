@@ -293,12 +293,12 @@ sideNav sess project pageTitle menuItem = do
           [ href_ mUrl
           , term "data-tippy-placement" "right"
           , term "data-tippy-content" mTitle
-          , class_ $
-              "block flex gap-3 px-5 py-3 flex justify-center items-center hover:bg-blue-50 text-slate-800 "
-                <> ( if maybe (pageTitle == mTitle) (== mTitle) menuItem
-                      then "bg-blue-50 border-l-4 border-blue-700"
-                      else ""
-                   )
+          , class_
+              $ "block flex gap-3 px-5 py-3 flex justify-center items-center hover:bg-blue-50 text-slate-800 "
+              <> ( if maybe (pageTitle == mTitle) (== mTitle) menuItem
+                    then "bg-blue-50 border-l-4 border-blue-700"
+                    else ""
+                 )
           ]
           $ do
             svg_ [class_ "w-5 h-5 icon text-slate-500"] $ use_ [href_ $ "/assets/svgs/sprite/sprite.svg" <> mIcon]
@@ -347,11 +347,11 @@ navbar currUser = do
         ]
         $ do
           img_ [class_ "inline-block w-9 h-9 rounded-lg bg-gray-300", src_ (currUser.displayImageUrl)]
-          span_ [class_ "inline-block"] $
-            toHtml $
-              if currUser.firstName /= "" || currUser.lastName /= ""
-                then currUser.firstName <> " " <> currUser.lastName
-                else CI.original currUser.email
+          span_ [class_ "inline-block"]
+            $ toHtml
+            $ if currUser.firstName /= "" || currUser.lastName /= ""
+              then currUser.firstName <> " " <> currUser.lastName
+              else CI.original currUser.email
           img_ [class_ "w-4 h-4 inline-block", src_ "/assets/svgs/down_caret.svg"]
 
       -- logout dropdown

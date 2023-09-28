@@ -27,8 +27,9 @@ onboardingGetH sess pid = do
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, hasApikeys, hasRequest) <- liftIO $
-        withPool pool $ do
+      (project, hasApikeys, hasRequest) <- liftIO
+        $ withPool pool
+        $ do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
           apiKeys <- ProjectApiKeys.countProjectApiKeysByProjectId pid
           requestDumps <- RequestDumps.countRequestDumpByProject pid
@@ -461,8 +462,8 @@ tabContentDotNet =
 
 tabContentFastify :: Html ()
 tabContentFastify =
-  div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "fastify_content"] $
-    do
+  div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "fastify_content"]
+    $ do
       div_ [class_ "relative"] $ do
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
@@ -503,8 +504,8 @@ tabContentFastify =
                       span_ [class_ ""] "});"
 tabContentFlask :: Html ()
 tabContentFlask =
-  div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "flask_content"] $
-    do
+  div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "flask_content"]
+    $ do
       div_ [class_ "relative"] $ do
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
@@ -560,8 +561,8 @@ tabContentFlask =
 
 tabContentFastAPI :: Html ()
 tabContentFastAPI =
-  div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "fastapi_content"] $
-    do
+  div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "fastapi_content"]
+    $ do
       div_ [class_ "relative"] $ do
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
@@ -614,8 +615,8 @@ tabContentFastAPI =
 
 tabContentDjango :: Html ()
 tabContentDjango =
-  div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "django_content"] $
-    do
+  div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "django_content"]
+    $ do
       div_ [class_ "relative"] $ do
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"

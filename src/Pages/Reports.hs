@@ -105,8 +105,9 @@ reportsPostH sess pid t = do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Only project memebers can update reports notification settings"]}|]
       pure $ addHeader hxTriggerData $ userNotMemeberPage sess
     else do
-      apiKeys <- liftIO $
-        withPool pool $ do
+      apiKeys <- liftIO
+        $ withPool pool
+        $ do
           Projects.updateProjectReportNotif pid t
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Report nofications updated Successfully"]}|]
       pure $ addHeader hxTriggerData $ span_ [] ""
@@ -119,8 +120,9 @@ singleReportGetH sess pid rid = do
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, report) <- liftIO $
-        withPool pool $ do
+      (project, report) <- liftIO
+        $ withPool pool
+        $ do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
           report <- Reports.getReportById rid
           pure (project, report)
@@ -142,8 +144,9 @@ reportsGetH sess pid page hxRequest hxBoosted = do
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, reports) <- liftIO $
-        withPool pool $ do
+      (project, reports) <- liftIO
+        $ withPool pool
+        $ do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
           reports <- Reports.reportHistoryByProject pid pg
           pure (project, reports)

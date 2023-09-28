@@ -72,7 +72,8 @@ pTerm =
     <|> try (LT <$> pSubject <* void (symbol "<") <*> pValues)
     <|> try (GTEq <$> pSubject <* void (symbol ">=") <*> pValues)
     <|> try (LTEq <$> pSubject <* void (symbol "<=") <*> pValues)
-    <|> Paren <$> parens pExpr
+    <|> Paren
+    <$> parens pExpr
 
 pExpr :: Parser Expr
 pExpr = makeExprParser pTerm operatorTable

@@ -66,8 +66,9 @@ dashboardGetH sess pid fromDStr toDStr sinceStr' = do
     else do
       now <- liftIO getCurrentTime
       let sinceStr = if isNothing fromDStr && isNothing toDStr && isNothing sinceStr' || fromDStr == Just "" then Just "14D" else sinceStr'
-      (hasApikeys, hasRequest) <- liftIO $
-        withPool pool $ do
+      (hasApikeys, hasRequest) <- liftIO
+        $ withPool pool
+        $ do
           apiKeys <- ProjectApiKeys.countProjectApiKeysByProjectId pid
           requestDumps <- RequestDumps.countRequestDumpByProject pid
           pure (apiKeys > 0, requestDumps > 0)
@@ -87,8 +88,9 @@ dashboardGetH sess pid fromDStr toDStr sinceStr' = do
               (f, t)
 
       startTime <- liftIO $ getTime Monotonic
-      (project, projectRequestStats, reqLatenciesRolledByStepsLabeled) <- liftIO $
-        withPool pool $ do
+      (project, projectRequestStats, reqLatenciesRolledByStepsLabeled) <- liftIO
+        $ withPool pool
+        $ do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
 
           projectRequestStats <- fromMaybe (def :: Projects.ProjectRequestStats) <$> Projects.projectRequestStatsByProject pid
@@ -184,8 +186,8 @@ dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledBySte
 
   section_ [class_ "space-y-3"] $ do
     div_ [class_ "flex justify-between mt-4"] $ div_ [class_ "flex flex-row"] $ do
-      a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]] $
-        img_
+      a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
+        $ img_
           [ src_ "/assets/svgs/cheveron-down.svg"
           , class_ "h-4 mr-3 mt-1 w-4"
           ]
@@ -193,11 +195,11 @@ dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledBySte
 
     div_ [class_ "reqResSubSection space-y-5"] $ do
       div_ [class_ "grid grid-cols-5 gap-5"] $ do
-        statBox  (Just pid) "Requests" "Total requests in the last 2 weeks" (projReqStats.totalRequests) Nothing
-        statBox  (Just pid) "Anomalies" "Total anomalies still active this week vs last week" projReqStats.totalAnomalies (Just projReqStats.totalAnomaliesLastWeek)
-        statBox  (Just pid) "Endpoints" "Total endpoints now vs last week" projReqStats.totalEndpoints (Just projReqStats.totalEndpointsLastWeek)
-        statBox  (Just pid) "Signatures" "Total request signatures which are active now vs last week" projReqStats.totalShapes (Just projReqStats.totalShapesLastWeek)
-        statBox  (Just pid) "Requests per minutes" "Total requests per minute this week vs last week" projReqStats.requestsPerMin (Just projReqStats.requestsPerMinLastWeek)
+        statBox (Just pid) "Requests" "Total requests in the last 2 weeks" (projReqStats.totalRequests) Nothing
+        statBox (Just pid) "Anomalies" "Total anomalies still active this week vs last week" projReqStats.totalAnomalies (Just projReqStats.totalAnomaliesLastWeek)
+        statBox (Just pid) "Endpoints" "Total endpoints now vs last week" projReqStats.totalEndpoints (Just projReqStats.totalEndpointsLastWeek)
+        statBox (Just pid) "Signatures" "Total request signatures which are active now vs last week" projReqStats.totalShapes (Just projReqStats.totalShapesLastWeek)
+        statBox (Just pid) "Requests per minutes" "Total requests per minute this week vs last week" projReqStats.requestsPerMin (Just projReqStats.requestsPerMinLastWeek)
 
       div_ [class_ "flex gap-5"] do
         div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] $ do

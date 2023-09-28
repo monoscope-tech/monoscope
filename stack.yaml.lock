@@ -19,12 +19,12 @@ packages:
   original:
     hackage: cache-0.1.3.0
 - completed:
-    hackage: postgres-options-0.2.0.0@sha256:5e2d6408ed3943f9a056b58106186397b9aa1424c56f1f26668305ce8ea2838f,1604
+    hackage: postgres-options-0.2.1.0@sha256:6b5c15a9a75bf0c25b7e7e7bc28d7ee597923ae02e3cfcd9a37ff1a5db951e48,1604
     pantry-tree:
-      sha256: a9fb2bafbaca65c548916e9276ad129302e0b82b7cc9a5c74d3b359a7a77d598
+      sha256: 324e87b2f957ef6cdf13ed23c97ab11e9cb4496fd1ed7433f65ef1d656dc5db7
       size: 295
   original:
-    hackage: postgres-options-0.2.0.0
+    hackage: postgres-options-0.2.1.0
 - completed:
     hackage: Unique-0.4.7.9@sha256:a7e154cf6d05169777a1e54aadab24fb3a6eae3ee167e5e77d7ba96d182436c7,2064
     pantry-tree:
@@ -40,12 +40,12 @@ packages:
   original:
     hackage: pg-entity-0.0.4.0
 - completed:
-    hackage: resource-pool-0.3.0.0@sha256:b47dca24af48001d8247cc8a38cd09f148e9b22d959b845bbdb43ebf47ab072a,1280
+    hackage: resource-pool-0.4.0.0@sha256:9c1e448a159875e21a7e68697feee2b61a4e584720974fa465a2fa1bc0776c73,1342
     pantry-tree:
-      sha256: 3f32d8e8bb2e68d5d28ed7fd8d960f6c3df95400dd43d68c9b26fdc342a2e9ea
+      sha256: 1008fbb9b6bd9d12925989f2708af612daa3a8ebf3a56763016231461d9e314f
       size: 406
   original:
-    hackage: resource-pool-0.3.0.0
+    hackage: resource-pool-0.4.0.0
 - completed:
     hackage: colourista-0.1.0.1@sha256:98353ee0e2f5d97d2148513f084c1cd37dfda03e48aa9dd7a017c9d9c0ba710e,3307
     pantry-tree:
@@ -196,8 +196,8 @@ packages:
     git: https://github.com/tonyalaribe/xxhash
     subdir: .
 - completed:
-    commit: 494098af1709d32b75b0be41157547ae7a2bd89d
-    git: https://github.com/brendanhay/gogol.git
+    commit: 2812d672c86ea283e53e6e0f213bcd6a65d7a345
+    git: https://github.com/m4dc4p/gogol.git
     name: gogol-core
     pantry-tree:
       sha256: c182f1a65a61166778b86b5e778c52f12e962f1f4f061656712cc8d2514675f8
@@ -205,90 +205,90 @@ packages:
     subdir: lib/gogol-core
     version: 1.0.0.0
   original:
-    commit: 494098af1709d32b75b0be41157547ae7a2bd89d
-    git: https://github.com/brendanhay/gogol.git
+    commit: 2812d672c86ea283e53e6e0f213bcd6a65d7a345
+    git: https://github.com/m4dc4p/gogol.git
     subdir: lib/gogol-core
 - completed:
-    commit: 494098af1709d32b75b0be41157547ae7a2bd89d
-    git: https://github.com/brendanhay/gogol.git
+    commit: 2812d672c86ea283e53e6e0f213bcd6a65d7a345
+    git: https://github.com/m4dc4p/gogol.git
     name: gogol
     pantry-tree:
-      sha256: 60a0adca351263e22d12dd279f4ed30f8c0308d660c15a048f7c3dac6c1a3704
+      sha256: 93899332c28213ed3db264c6da8577980d78cca694fc648fa7eae8e0de8524ce
       size: 1194
     subdir: lib/gogol
     version: 1.0.0.0
   original:
-    commit: 494098af1709d32b75b0be41157547ae7a2bd89d
-    git: https://github.com/brendanhay/gogol.git
+    commit: 2812d672c86ea283e53e6e0f213bcd6a65d7a345
+    git: https://github.com/m4dc4p/gogol.git
     subdir: lib/gogol
 - completed:
-    commit: 494098af1709d32b75b0be41157547ae7a2bd89d
-    git: https://github.com/brendanhay/gogol.git
+    commit: 2812d672c86ea283e53e6e0f213bcd6a65d7a345
+    git: https://github.com/m4dc4p/gogol.git
     name: gogol-pubsub
     pantry-tree:
-      sha256: 3d122fb15743eb434e195338f4520968078128bb499c392a3299f470745f36c8
-      size: 4278
+      sha256: 72c744c90fe905238e79c39176e9a3a6a580f3839af7a056dc6207f85593a293
+      size: 4631
     subdir: lib/services/gogol-pubsub
     version: 1.0.0.0
   original:
-    commit: 494098af1709d32b75b0be41157547ae7a2bd89d
-    git: https://github.com/brendanhay/gogol.git
+    commit: 2812d672c86ea283e53e6e0f213bcd6a65d7a345
+    git: https://github.com/m4dc4p/gogol.git
     subdir: lib/services/gogol-pubsub
 - completed:
-    commit: 494098af1709d32b75b0be41157547ae7a2bd89d
-    git: https://github.com/brendanhay/gogol.git
+    commit: 2812d672c86ea283e53e6e0f213bcd6a65d7a345
+    git: https://github.com/m4dc4p/gogol.git
     name: gogol-logging
     pantry-tree:
-      sha256: 59243a1ba6cbde8e0493f8c384a7031a2b4aaefdf6444d43e24d6213ab9f9aac
-      size: 15630
+      sha256: 6d903a732edfd7b27c1cbc00c296f2ea6bdd3c5f6564c526c1b3a2fbbe5cc8c2
+      size: 19371
     subdir: lib/services/gogol-logging
     version: 1.0.0.0
   original:
-    commit: 494098af1709d32b75b0be41157547ae7a2bd89d
-    git: https://github.com/brendanhay/gogol.git
+    commit: 2812d672c86ea283e53e6e0f213bcd6a65d7a345
+    git: https://github.com/m4dc4p/gogol.git
     subdir: lib/services/gogol-logging
 - completed:
-    commit: 494098af1709d32b75b0be41157547ae7a2bd89d
-    git: https://github.com/brendanhay/gogol.git
+    commit: 2812d672c86ea283e53e6e0f213bcd6a65d7a345
+    git: https://github.com/m4dc4p/gogol.git
     name: gogol-cloudtrace
     pantry-tree:
-      sha256: 5d59688b2be83e9b2531821a5c37977d7d245d4e7389ca7b0cace9dec71083b7
+      sha256: 8536a13f9c62ba5d2fd55d4a110463766f79051923615e419d458fde89d36131
       size: 740
     subdir: lib/services/gogol-cloudtrace
     version: 1.0.0.0
   original:
-    commit: 494098af1709d32b75b0be41157547ae7a2bd89d
-    git: https://github.com/brendanhay/gogol.git
+    commit: 2812d672c86ea283e53e6e0f213bcd6a65d7a345
+    git: https://github.com/m4dc4p/gogol.git
     subdir: lib/services/gogol-cloudtrace
 - completed:
-    commit: 60481132b229d22eda8efcd3392dd1df237bd968
+    commit: 51c74432a5bbb1599c439fc59eef89d3adcde1a2
     git: https://github.com/saurabhnanda/odd-jobs
     name: odd-jobs
     pantry-tree:
-      sha256: f2e4c0e1a540c85b1fa1c5134ec1a0f1d5b99cb2f1918f11ed07eff0baf12302
-      size: 3003
+      sha256: 6a97de7990c070c56a16c52b1240b3e6bf8d971d4c972d4fb560c7a963b8dbaf
+      size: 3016
     subdir: .
-    version: 0.2.2
+    version: 0.2.3
   original:
-    commit: 60481132b229d22eda8efcd3392dd1df237bd968
+    commit: 51c74432a5bbb1599c439fc59eef89d3adcde1a2
     git: https://github.com/saurabhnanda/odd-jobs
     subdir: .
 - completed:
-    commit: 92bf7825e90dddb9e77758f9819295ecffc0f420
+    commit: 893368e6010a87c3a2d33227af675b4fb8fe411f
     git: https://github.com/tonyalaribe/tmp-postgres
     name: tmp-postgres
     pantry-tree:
-      sha256: 2ad71c0271451fe1111d3a95b3d2b6ef5034c973e331836582a95b68d00f5427
+      sha256: 7a222e08cb994348632ea7436ff696635c1672e0ca8bbc996d073df7755f7cd6
       size: 1616
     subdir: .
     version: 1.35.0.0
   original:
-    commit: 92bf7825e90dddb9e77758f9819295ecffc0f420
+    commit: 893368e6010a87c3a2d33227af675b4fb8fe411f
     git: https://github.com/tonyalaribe/tmp-postgres
     subdir: .
 snapshots:
 - completed:
-    sha256: 5a59b2a405b3aba3c00188453be172b85893cab8ebc352b1ef58b0eae5d248a2
-    size: 650475
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/20/26.yaml
-  original: lts-20.26
+    sha256: ed939332c49fe1012b1dfb841f55df60603452efcbf3e36c3ea62bb8c1c427ac
+    size: 669536
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/nightly/2023/9/27.yaml
+  original: nightly-2023-09-27

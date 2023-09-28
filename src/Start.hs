@@ -118,8 +118,9 @@ pubsubService logger envConfig conn projectCache = do
 
   let pullReq = PubSub.newPullRequest & field @"maxMessages" L.?~ fromIntegral (envConfig ^. #messagesPerPubsubPullBatch)
 
-  forever $
-    runResourceT $ do
+  forever
+    $ runResourceT
+    $ do
       forM (envConfig ^. #requestPubsubTopics) \topic -> do
         let subscription = "projects/past-3/subscriptions/" <> topic <> "-sub"
         pullResp <- Google.send env $ PubSub.newPubSubProjectsSubscriptionsPull pullReq subscription

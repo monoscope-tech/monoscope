@@ -48,8 +48,9 @@ apiPostH sess pid apiKeyForm = do
       let encryptedKeyB64 = B64.encodeBase64 encryptedKey
       let keyPrefix = T.take 8 encryptedKeyB64
       pApiKey <- liftIO $ ProjectApiKeys.newProjectApiKeys pid projectKeyUUID (title apiKeyForm) keyPrefix
-      apiKeys <- liftIO $
-        withPool pool $ do
+      apiKeys <- liftIO
+        $ withPool pool
+        $ do
           ProjectApiKeys.insertProjectApiKey pApiKey
           ProjectApiKeys.projectApiKeysByProjectId pid
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Created API Key Successfully"]}|]
@@ -67,8 +68,9 @@ apiDeleteH sess pid keyid = do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Can not revoke API key."]}|]
       pure $ addHeader hxTriggerData $ userNotMemeberPage sess
     else do
-      (res, apikeys) <- liftIO $
-        withPool pool $ do
+      (res, apikeys) <- liftIO
+        $ withPool pool
+        $ do
           del <- ProjectApiKeys.revokeApiKey keyid
           apikeys <- ProjectApiKeys.projectApiKeysByProjectId pid
           pure (del, apikeys)
@@ -88,8 +90,9 @@ apiGetH sess pid = do
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, apiKeys) <- liftIO $
-        withPool pool $ do
+      (project, apiKeys) <- liftIO
+        $ withPool pool
+        $ do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
           apiKeys <- ProjectApiKeys.projectApiKeysByProjectId pid
           pure (project, apiKeys)

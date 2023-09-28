@@ -86,12 +86,12 @@ makeFieldLabelsNoPrefix ''PersistentSession
 newPersistentSessionId :: IO PersistentSessionId
 newPersistentSessionId = PersistentSessionId <$> UUID.nextRandom
 
-persistSession ::
-  (MonadIO m) =>
-  Pool Connection ->
-  PersistentSessionId ->
-  UserId ->
-  m PersistentSessionId
+persistSession
+  :: MonadIO m
+  => Pool Connection
+  -> PersistentSessionId
+  -> UserId
+  -> m PersistentSessionId
 persistSession pool persistentSessionId userId = do
   liftIO $ withPool pool $ insertSession persistentSessionId userId (SessionData Map.empty)
   pure persistentSessionId

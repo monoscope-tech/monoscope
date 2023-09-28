@@ -273,8 +273,9 @@ documentationPostH sess pid SwaggerForm{swagger_json, from} = do
               , swaggerJson = value
               }
 
-      swaggers <- liftIO $
-        withPool pool $ do
+      swaggers <- liftIO
+        $ withPool pool
+        $ do
           Swaggers.addSwagger swaggerToAdd
           Swaggers.swaggersByProject pid
 
@@ -289,8 +290,9 @@ documentationGetH sess pid swagger_id = do
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, swaggers, swagger, swaggerId) <- liftIO $
-        withPool pool $ do
+      (project, swaggers, swagger, swaggerId) <- liftIO
+        $ withPool pool
+        $ do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
           swaggers <- Swaggers.swaggersByProject pid
           currentSwagger <- case swagger_id of

@@ -45,8 +45,9 @@ redactedFieldsPostH sess pid RedactFieldForm{path, description, endpointHash} = 
       -- adding path, description, endpoints via record punning
       let fieldToRedact = RedactedFields.RedactedField{id = redactedFieldId, projectId = pid, configuredVia = RedactedFields.Dashboard, ..}
 
-      redactedFields <- liftIO $
-        withPool pool $ do
+      redactedFields <- liftIO
+        $ withPool pool
+        $ do
           RedactedFields.redactField fieldToRedact
           RedactedFields.redactedFieldsByProject pid
 
@@ -62,8 +63,9 @@ redactedFieldsGetH sess pid = do
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, redactedFields) <- liftIO $
-        withPool pool $ do
+      (project, redactedFields) <- liftIO
+        $ withPool pool
+        $ do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
           redactedFields <- RedactedFields.redactedFieldsByProject pid
           pure (project, redactedFields)
