@@ -184,10 +184,10 @@ function expireChanged(event) {
   |]
 
 getRequest :: Text -> DBT IO (V.Vector RequestDumps.RequestDumpLogItem)
-getRequest rid = query Select q (Only rid)
- where
-  q =
-    [sql|
+getRequest sid = query Select q (Only sid)
+  where
+    q =
+      [sql|
       SELECT
           rd.id AS id,
           rd.created_at AS created_at,
@@ -205,7 +205,11 @@ getRequest rid = query Select q (Only rid)
           rd.response_headers AS response_headers,
           COUNT(*) OVER() AS full_count,
           rd.duration_ns AS duration_ns,
-          rd.sdk_type AS sdk_type
+          rd.sdk_type AS sdk_type,
+          rd.parent_id AS parent_id,
+          rd.service_version as service_version,
+          rd.errors AS errors,
+          rd.tags AS tags
       FROM apis.share_requests AS sr
       JOIN apis.request_dumps AS rd ON sr.request_dump_id = rd.id
       WHERE sr.id = ? AND sr.expired_at > current_timestamp;
