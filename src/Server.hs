@@ -62,23 +62,32 @@ import Web.ClientMetadata qualified as ClientMetadata
 import Web.Cookie (SetCookie)
 import Witch (from)
 
+
 type GetRedirect = Verb 'GET 302
+
 
 -- When bystring is returned for json, simply return the bytestring
 instance MimeRender JSON ByteString where
   mimeRender _ = from @ByteString
 
+
 type QP a b = QueryParam a b
+
 
 type QPT a = QueryParam a Text
 
+
 type QPB a = QueryParam a Bool
+
 
 type QPI a = QueryParam a Int
 
+
 type QEID a = QueryParam a Endpoints.EndpointId
 
+
 type ProjectId = Capture "projectID" Projects.ProjectId
+
 
 --
 -- API Section
@@ -127,6 +136,7 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "about_project" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "share" :> ReqBody '[FormUrlEncoded] Share.ReqForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
 
+
 type PublicAPI =
   "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
     :<|> "to_login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
@@ -141,22 +151,28 @@ type PublicAPI =
     :<|> "share" :> "r" :> Capture "shareID" UUID.UUID :> Get '[HTML] (Html ())
     :<|> Raw
 
+
 type API =
   AuthProtect "apitoolkit_session" :> ProtectedAPI
     :<|> PublicAPI
 
+
 type instance AuthServerData (AuthProtect "apitoolkit_session") = Sessions.PersistentSession
+
 
 --
 --
 app :: LogAction IO String -> Pool Connection -> Config.AuthContext -> Application
 app logger dbConn ctx = serveWithContext api (genAuthServerContext logger dbConn) $ hoistServerWithContext api ctxProxy (ctxToHandler ctx) server
 
+
 api :: Proxy API
 api = Proxy
 
+
 ctxProxy :: Proxy '[AuthHandler Request Sessions.PersistentSession]
 ctxProxy = Proxy
+
 
 -- | Our API, where we provide all the author-supplied handlers for each end
 -- point. Note that 'privateDataFunc' is a function that takes 'Account' as an
@@ -208,6 +224,7 @@ protectedServer sess =
     :<|> Survey.surveyGetH sess
     :<|> Share.shareLinkPostH sess
 
+
 publicServer :: ServerT PublicAPI DashboardM
 publicServer =
   loginH
@@ -220,8 +237,10 @@ publicServer =
     :<|> Share.shareLinkGetH
     :<|> serveDirectoryWebApp "./static/public"
 
+
 server :: ServerT API DashboardM
 server = protectedServer :<|> publicServer
+
 
 data Status = Status
   { ping :: Text
@@ -234,19 +253,21 @@ data Status = Status
     (FromJSON, ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Status
 
+
 statusH :: DashboardM Status
 statusH = do
   pool <- asks pool
   let query = [sql| select version(); |]
   version <- liftIO $ withPool pool $ queryOne Select query ()
   let gi = $$tGitInfoCwd
-  pure $
-    Status
+  pure
+    $ Status
       { ping = "pong"
       , dbVersion = version
       , gitHash = toText $ giHash gi
       , gitCommitDate = toText $ giCommitDate gi
       }
+
 
 pingH :: DashboardM Text
 pingH = do

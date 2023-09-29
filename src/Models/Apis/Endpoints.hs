@@ -48,6 +48,7 @@ import Relude
 import Utils (DBField (MkDBField))
 import Web.HttpApiData (FromHttpApiData)
 
+
 newtype EndpointId = EndpointId {unEndpointId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving
@@ -55,11 +56,14 @@ newtype EndpointId = EndpointId {unEndpointId :: UUID.UUID}
     via UUID.UUID
   deriving anyclass (FromRow, ToRow)
 
+
 instance HasField "toText" EndpointId Text where
   getField = UUID.toText . unEndpointId
 
+
 endpointIdText :: EndpointId -> Text
 endpointIdText = UUID.toText . unEndpointId
+
 
 -- TODO: Introduce request header hashes and response header hashes
 data Endpoint = Endpoint
@@ -78,14 +82,18 @@ data Endpoint = Endpoint
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Endpoint
   deriving (FromField) via Aeson Endpoint
 
+
 makeFieldLabelsNoPrefix ''Endpoint
+
 
 -- | endpointToUrlPath builds an apitoolkit path link to the endpoint details page of that endpoint.
 endpointToUrlPath :: Endpoint -> Text
 endpointToUrlPath enp = endpointUrlPath (enp.projectId) (enp.id)
 
+
 endpointUrlPath :: Projects.ProjectId -> EndpointId -> Text
 endpointUrlPath pid eid = "/p/" <> pid.toText <> "/endpoints/" <> endpointIdText eid
+
 
 upsertEndpointQueryAndParam :: Endpoint -> (Query, [DBField])
 upsertEndpointQueryAndParam endpoint = (q, params)
@@ -108,6 +116,7 @@ upsertEndpointQueryAndParam endpoint = (q, params)
       , MkDBField endpoint.hash
       , MkDBField host
       ]
+
 
 -- FIXME: Delete this, as this function is deprecated and no longer in use.
 -- Updating hosts can be a specific functino that does just that.
@@ -142,6 +151,7 @@ upsertEndpoints endpoint = queryOne Insert q options
       , endpoint.method
       )
 
+
 -- Based of a view which is generated every 5minutes.
 data EndpointRequestStats = EndpointRequestStats
   { endpointId :: EndpointId
@@ -169,6 +179,7 @@ data EndpointRequestStats = EndpointRequestStats
   deriving stock (Show, Generic, Eq)
   deriving anyclass (FromRow, ToRow, Default)
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "endpoint_request_stats", PrimaryKey "endpoint_id", FieldModifiers '[CamelToSnake]] EndpointRequestStats)
+
 
 -- FIXME: Include and return a boolean flag to show if fields that have annomalies.
 -- FIXME: return endpoint_hash as well.
@@ -199,6 +210,7 @@ endpointRequestStatsByProject pid ackd archived = query Select (Query $ encodeUt
      order by total_requests DESC, url_path ASC
   |]
 
+
 -- FIXME: return endpoint_hash as well.
 -- This would require tampering with the view.
 endpointRequestStatsByEndpoint :: EndpointId -> PgT.DBT IO (Maybe EndpointRequestStats)
@@ -216,15 +228,18 @@ endpointRequestStatsByEndpoint eid = queryOne Select q (eid, eid)
                   null, null, '00000000-0000-0000-0000-000000000000'::uuid
               FROM apis.endpoint_request_stats WHERE endpoint_id=?|]
 
+
 endpointById :: EndpointId -> PgT.DBT IO (Maybe Endpoint)
 endpointById eid = queryOne Select q (Only eid)
   where
     q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, akeys(hosts), hash from apis.endpoints where id=? |]
 
+
 endpointByHash :: Projects.ProjectId -> Text -> PgT.DBT IO (Maybe Endpoint)
 endpointByHash pid hash = queryOne Select q (pid, hash)
   where
     q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, akeys(hosts), hash from apis.endpoints where project_id=? AND hash=? |]
+
 
 data SwEndpoint = SwEndpoint
   { urlPath :: Text
@@ -238,6 +253,7 @@ data SwEndpoint = SwEndpoint
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SwEndpoint
   deriving (FromField) via Aeson SwEndpoint
 
+
 endpointsByProjectId :: Projects.ProjectId -> PgT.DBT IO (Vector SwEndpoint)
 endpointsByProjectId pid = query Select q (Only pid)
   where
@@ -247,6 +263,7 @@ endpointsByProjectId pid = query Select q (Only pid)
          FROM apis.endpoints
          WHERE project_id = ?
        |]
+
 
 insertEndpoints :: [Endpoint] -> DBT IO Int64
 insertEndpoints endpoints = do
@@ -258,6 +275,7 @@ insertEndpoints endpoints = do
       |]
   let params = map getEndpointParams endpoints
   executeMany q params
+
 
 getEndpointParams :: Endpoint -> (Projects.ProjectId, Text, AE.Value, Text, Text, Text)
 getEndpointParams endpoint =

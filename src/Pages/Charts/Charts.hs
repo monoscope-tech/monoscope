@@ -3,9 +3,8 @@
 module Pages.Charts.Charts (chartsGetH, ChartType (..), throughput, throughputEndpointHTML, lazy, ChartExp (..), QueryBy (..), GroupBy (..)) where
 
 import Config (DashboardM, pool)
-import Control.Monad (foldM)
 import Data.Aeson qualified as AE
-import Data.List (foldl, groupBy, lookup)
+import Data.List (groupBy, lookup)
 import Data.Text (toLower)
 import Data.Text qualified as T
 import Data.Time (UTCTime, ZonedTime, defaultTimeLocale, diffUTCTime, formatTime, utc, utcToZonedTime, zonedTimeToUTC)
@@ -13,11 +12,8 @@ import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.Tuple.Extra (fst3, thd3)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
-import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, withPool)
 import Database.PostgreSQL.Simple.Types (Query (Query))
-import Database.PostgreSQL.Transact (DBT)
-import Debug.Pretty.Simple (pTrace, pTraceShow, pTraceShowM)
 import Lucid
 import Lucid.Htmx
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -31,6 +27,7 @@ import Servant (FromHttpApiData (..))
 import Utils (DBField (MkDBField), userIsProjectMember, userNotMemeberPage)
 import Witch (from)
 
+
 transform :: [String] -> [(Int, Int, String)] -> [Maybe Int]
 transform fields tuples =
   Just timestamp : map getValue fields
@@ -39,6 +36,7 @@ transform fields tuples =
     swap_ (_, a, b) = (b, a)
     timestamp = fst3 $ Unsafe.head tuples
 
+
 pivot' :: [(Int, Int, String)] -> ([String], [[Maybe Int]])
 pivot' rows = do
   let extractHeaders = ordNub . map thd3 . sortOn thd3
@@ -46,6 +44,7 @@ pivot' rows = do
   let grouped = groupBy (\a b -> fst3 a == fst3 b) $ sortOn fst3 rows
   let ngrouped = map (transform headers) grouped
   (headers, ngrouped)
+
 
 -- test the query generation
 -- >>> buildReqDumpSQL [TypeE BarCT, GByE GBEndpoint, QByE [QBStatusCodeGT 201, QBShapeHash "hash", QBFormatHash "hash"]]
@@ -144,11 +143,14 @@ buildReqDumpSQL exps = (q, join qByArgs, mFrom, mTo)
       from_ <- mFrom'
       return $ calcInterval numSlots from_ to_
 
+
 type M = Maybe
+
 
 formatZonedTimeAsUTC :: ZonedTime -> Text
 formatZonedTimeAsUTC zonedTime =
   toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" (zonedTimeToUTC zonedTime)
+
 
 chartsGetH :: Sessions.PersistentSession -> M ChartType -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> DashboardM (Html ())
 chartsGetH _ typeM groupByM queryByM slotsM limitsM themeM idM showLegendM = do
@@ -190,6 +192,7 @@ chartsGetH _ typeM groupByM queryByM slotsM limitsM themeM idM showLegendM = do
     div_ [id_ $ toText idAttr, class_ "w-full h-full"] ""
     script_ scriptContent
 
+
 data QueryBy
   = QBPId Projects.ProjectId
   | QBEndpointHash Text
@@ -201,13 +204,16 @@ data QueryBy
   | QBAnd QueryBy QueryBy
   deriving stock (Show, Read)
 
+
 instance FromHttpApiData QueryBy where
   parseQueryParam :: Text -> Either Text QueryBy
   parseQueryParam = readEither . toString
 
+
 instance FromHttpApiData [QueryBy] where
   parseQueryParam :: Text -> Either Text [QueryBy]
   parseQueryParam = readEither . toString
+
 
 data GroupBy
   = GBEndpoint
@@ -215,18 +221,22 @@ data GroupBy
   | GBDurationPercentile
   deriving stock (Show, Read)
 
+
 instance FromHttpApiData GroupBy where
   parseQueryParam :: Text -> Either Text GroupBy
   parseQueryParam = readEither . toString
+
 
 data ChartType
   = BarCT
   | LineCT
   deriving stock (Show, Read)
 
+
 instance FromHttpApiData ChartType where
   parseQueryParam :: Text -> Either Text ChartType
   parseQueryParam = readEither . toString
+
 
 data ChartExp
   = TypeE ChartType
@@ -238,6 +248,7 @@ data ChartExp
   | IdE Text
   | ShowLegendE
   deriving stock (Show)
+
 
 -- lazy Chart rendered based on a list of chart expressions
 -- >>> lazy [TypeE BarCT, GByE GBEndpoint]
@@ -268,6 +279,7 @@ lazy queries =
     runChartExp (Theme theme) = toString $ "theme=" <> theme
     runChartExp (IdE ide) = "id=" <> toString ide
     runChartExp ShowLegendE = "show_legend=true"
+
 
 ---------------------------- OLD functions
 --
@@ -304,6 +316,7 @@ throughputEndpointHTML sess pid idM groupBy_ endpointHash shapeHash formatHash s
         div_ [id_ $ "id-" <> entityId, class_ "w-full h-full"] ""
         script_ script
 
+
 -- TODO: Delete after migrating to new chart strategy
 -- >>> runQueryBy (QBEndpointHash "hash")
 -- "endpoint_hash=hash"
@@ -317,11 +330,13 @@ runQueryBy (QBFrom t) = ""
 runQueryBy (QBTo t) = ""
 runQueryBy (QBAnd a b) = runQueryBy a <> "&" <> runQueryBy b
 
+
 -- TODO: Delete after migrating to new chart strategy
 runGroupBy :: GroupBy -> Text
 runGroupBy GBEndpoint = "group_by=endpoint"
 runGroupBy GBStatusCode = "group_by=status_code"
 runGroupBy GBDurationPercentile = "group_by=duration_percentile"
+
 
 -- This endpoint will return a throughput chart partial
 throughput :: Projects.ProjectId -> Text -> Maybe QueryBy -> Maybe GroupBy -> Int -> Maybe Int -> Bool -> (Maybe ZonedTime, Maybe ZonedTime) -> Maybe Text -> Html ()

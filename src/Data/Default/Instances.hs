@@ -13,17 +13,21 @@ import Data.UUID qualified as UUID
 import Data.Vector (Vector, empty)
 import Relude.Unsafe qualified as Unsafe
 
+
 instance Default ZonedTime where
   def = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
   {-# INLINE def #-}
+
 
 instance Default UUID.UUID where
   def = UUID.nil
   {-# INLINE def #-}
 
+
 instance Default AET.Value where
   def = AET.emptyObject
   {-# INLINE def #-}
+
 
 -- Another option would be to use:
 --
@@ -38,12 +42,14 @@ instance (Default s, FoldCase s) => Default (CI s) where
   def = CI.mk def
   {-# INLINE def #-}
 
+
 -- $providedInstances
 --
 -- @
 -- instance ('Default' s, 'FoldCase' s) => 'Default' ('CI' s) where
 --     'def' = 'CI.mk' 'def'
 -- @
+
 
 ----- TEXT
 
@@ -52,10 +58,12 @@ instance Default Strict.Text where
   def = Strict.Text.empty
   {-# INLINE def #-}
 
+
 -- | @'def' = 'Lazy.Text.empty'@
 instance Default Lazy.Text where
   def = Lazy.Text.empty
   {-# INLINE def #-}
+
 
 ----- Vector
 instance Default (Vector a) where

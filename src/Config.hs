@@ -14,6 +14,7 @@ import Relude
 import Servant.Server (Handler)
 import System.Envy (FromEnv, Var, fromVar, toVar)
 
+
 data EnvConfig = EnvConfig
   { databaseUrl :: Text -- "DATABASE_URL"
   , port :: Int
@@ -53,12 +54,15 @@ data EnvConfig = EnvConfig
   deriving stock (Show, Generic)
   deriving anyclass (FromEnv)
 
+
 -- Support unmarshalling a coma separated text into a text list
 instance Var [Text] where
   fromVar = Just . T.splitOn "," . toText
   toVar = toString . T.intercalate ","
 
+
 makeFieldLabelsNoPrefix ''EnvConfig
+
 
 data AuthContext = AuthContext
   { env :: EnvConfig
@@ -67,7 +71,9 @@ data AuthContext = AuthContext
   , projectCache :: Cache Projects.ProjectId Projects.ProjectCache
   }
 
+
 type DashboardM = ReaderT AuthContext Handler
+
 
 ctxToHandler :: AuthContext -> DashboardM a -> Handler a
 ctxToHandler s x = runReaderT x s

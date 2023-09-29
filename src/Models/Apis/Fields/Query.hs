@@ -15,6 +15,7 @@ import Optics.Core ((^.))
 import Relude
 import Utils (DBField (MkDBField))
 
+
 insertFieldQueryAndParams :: Field -> (Query, [DBField])
 insertFieldQueryAndParams field = (q, params)
   where
@@ -33,6 +34,7 @@ insertFieldQueryAndParams field = (q, params)
       , MkDBField $ field ^. #hash
       ]
 
+
 insertFields :: [Field] -> DBT IO Int64
 insertFields fields = do
   let q =
@@ -45,6 +47,7 @@ insertFields fields = do
       |]
   let params = map getFieldParams fields
   executeMany q params
+
 
 getFieldParams :: FT.Field -> (Projects.ProjectId, Text, Text, FieldTypes, Maybe Text, Text, Maybe Text, Text, Text, FieldCategoryEnum, Text)
 getFieldParams field =
@@ -61,8 +64,10 @@ getFieldParams field =
   , field.hash
   )
 
+
 fieldById :: FieldId -> DBT IO (Maybe Field)
 fieldById fid = selectById @Field (Only fid)
+
 
 selectFields :: Text -> DBT IO (Vector Field)
 selectFields endpointHash = query Select q (Only endpointHash)
@@ -72,17 +77,20 @@ selectFields endpointHash = query Select q (Only endpointHash)
                 field_type_override,format,format_override,description,key_path,field_category, hash
                 from apis.fields where endpoint_hash=? order by field_category, key |]
 
+
 updateFieldByHash :: Text -> Text -> Text -> DBT IO Int64
 updateFieldByHash endpointHash fieldHash description = do
   let q =
         [sql| UPDATE apis.fields SET  description=? WHERE endpoint_hash=? AND hash=? |]
   execute Update q (description, endpointHash, fieldHash)
 
+
 deleteFieldByHash :: Text -> ZonedTime -> DBT IO Int64
 deleteFieldByHash fieldHash dTime = do
   let q =
         [sql| UPDATE apis.fields SET  deleted_at=? WHERE hash=? |]
   execute Update q (dTime, fieldHash)
+
 
 fieldsByEndpointHashes :: Projects.ProjectId -> Vector Text -> PgT.DBT IO (Vector SwField)
 fieldsByEndpointHashes pid hashes = query Select q (pid, hashes)

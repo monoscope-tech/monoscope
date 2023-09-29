@@ -34,11 +34,13 @@ import Relude
 import Relude.Unsafe ((!!))
 import Web.HttpApiData (FromHttpApiData)
 
+
 -- $setup
 -- >>> import Relude
 -- >>> import Data.Default
 -- >>> import Data.Vector hiding (fromList)
 -- >>> import Data.Vector qualified as Vector
+
 
 newtype FieldId = FieldId {unFieldId :: UUID.UUID}
   deriving stock (Generic, Show)
@@ -46,8 +48,10 @@ newtype FieldId = FieldId {unFieldId :: UUID.UUID}
     (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default)
     via UUID.UUID
 
+
 fieldIdText :: FieldId -> Text
 fieldIdText = UUID.toText . unFieldId
+
 
 data FieldTypes
   = FTUnknown
@@ -62,15 +66,19 @@ data FieldTypes
     (AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "FT", DAE.CamelToSnake]] FieldTypes
 
+
 instance FromJSON FieldTypes where
   parseJSON (AE.String v) = maybe empty pure (parseFieldTypes v)
   parseJSON _ = empty
 
+
 instance Default FieldTypes where
   def = FTUnknown
 
+
 instance ToField FieldTypes where
   toField = Escape . encodeUtf8 <$> fieldTypeToText
+
 
 fieldTypeToText :: FieldTypes -> Text
 fieldTypeToText FTString = "string"
@@ -81,6 +89,7 @@ fieldTypeToText FTList = "list"
 fieldTypeToText FTNull = "null"
 fieldTypeToText FTUnknown = "unknown"
 
+
 textFieldTypeToText :: Text -> Text
 textFieldTypeToText "FTString" = "string"
 textFieldTypeToText "FTNumber" = "number"
@@ -89,6 +98,7 @@ textFieldTypeToText "FTObject" = "object"
 textFieldTypeToText "FTList" = "list"
 textFieldTypeToText "FTNull" = "null"
 textFieldTypeToText _ = "unknown"
+
 
 parseFieldTypes :: (Eq s, IsString s) => s -> Maybe FieldTypes
 parseFieldTypes "string" = Just FTString
@@ -99,6 +109,7 @@ parseFieldTypes "list" = Just FTList
 parseFieldTypes "null" = Just FTNull
 parseFieldTypes _ = Nothing
 
+
 instance FromField FieldTypes where
   fromField f mdata =
     case mdata of
@@ -107,6 +118,7 @@ instance FromField FieldTypes where
         case parseFieldTypes bs of
           Just a -> pure a
           Nothing -> returnError ConversionFailed f $ "Conversion error: Expected 'field_type' enum, got " <> decodeUtf8 bs <> " instead."
+
 
 data FieldCategoryEnum
   = FCQueryParam
@@ -120,15 +132,19 @@ data FieldCategoryEnum
     (AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "FC", DAE.CamelToSnake]] FieldCategoryEnum
 
+
 instance FromJSON FieldCategoryEnum where
   parseJSON (AE.String v) = maybe empty pure (parseFieldCategoryEnum v)
   parseJSON _ = empty
 
+
 instance Default FieldCategoryEnum where
   def = FCQueryParam
 
+
 instance ToField FieldCategoryEnum where
   toField = Escape . encodeUtf8 <$> fieldCategoryEnumToText
+
 
 fieldCategoryEnumToText :: FieldCategoryEnum -> Text
 fieldCategoryEnumToText FCQueryParam = "query_param"
@@ -137,6 +153,7 @@ fieldCategoryEnumToText FCRequestHeader = "request_header"
 fieldCategoryEnumToText FCResponseHeader = "response_header"
 fieldCategoryEnumToText FCRequestBody = "request_body"
 fieldCategoryEnumToText FCResponseBody = "response_body"
+
 
 parseFieldCategoryEnum :: (Eq s, IsString s) => s -> Maybe FieldCategoryEnum
 parseFieldCategoryEnum "query_param" = Just FCQueryParam
@@ -147,6 +164,7 @@ parseFieldCategoryEnum "request_body" = Just FCRequestBody
 parseFieldCategoryEnum "response_body" = Just FCResponseBody
 parseFieldCategoryEnum _ = Nothing
 
+
 instance FromField FieldCategoryEnum where
   fromField f mdata =
     case mdata of
@@ -155,6 +173,7 @@ instance FromField FieldCategoryEnum where
         case parseFieldCategoryEnum bs of
           Just a -> pure a
           Nothing -> returnError ConversionFailed f $ "Conversion error: Expected 'field_type' enum, got " <> decodeUtf8 bs <> " instead."
+
 
 data Field = Field
   { id :: FieldId
@@ -184,6 +203,7 @@ data Field = Field
     (FromField)
     via Aeson Field
 
+
 data SwField = SwField
   { fEndpointHash :: Text
   , fKey :: Text
@@ -199,11 +219,14 @@ data SwField = SwField
   deriving (AE.ToJSON, AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SwField
   deriving (FromField) via Aeson SwField
 
+
 instance Ord Field where
   (<=) f1 f2 =
     (projectId f1 <= projectId f2)
       && (endpointHash f1 <= endpointHash f2)
-      && keyPath f1 <= keyPath f2
+      && keyPath f1
+      <= keyPath f2
+
 
 instance Eq Field where
   (==) f1 f2 =
@@ -211,7 +234,9 @@ instance Eq Field where
       && (endpointHash f1 == endpointHash f2)
       && (keyPath f1 == keyPath f2)
 
+
 makeFieldLabelsNoPrefix ''Field
+
 
 -- | NB: The GroupBy function has been merged into the vectors package.
 -- We should use that instead of converting to list, once that is available on hackage.

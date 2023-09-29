@@ -43,6 +43,7 @@ import Optics.TH
 import Relude
 import Web.HttpApiData
 
+
 newtype ProjectId = ProjectId {unProjectId :: UUID.UUID}
   deriving stock (Generic, Show, Read)
   deriving
@@ -50,14 +51,18 @@ newtype ProjectId = ProjectId {unProjectId :: UUID.UUID}
     via UUID.UUID
   deriving anyclass (FromRow, ToRow)
 
+
 instance HasField "unwrap" ProjectId UUID.UUID where
   getField = coerce
+
 
 instance HasField "toText" ProjectId Text where
   getField = UUID.toText . unProjectId
 
+
 projectIdFromText :: Text -> Maybe ProjectId
 projectIdFromText pid = ProjectId <$> UUID.fromText pid
+
 
 data Project = Project
   { id :: ProjectId
@@ -83,7 +88,9 @@ data Project = Project
     (Entity)
     via (GenericEntity '[Schema "projects", TableName "projects", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Project)
 
+
 makeFieldLabelsNoPrefix ''Project
+
 
 data Project' = Project'
   { id :: ProjectId
@@ -104,6 +111,7 @@ data Project' = Project'
   deriving stock (Show, Generic)
   deriving anyclass (FromRow)
 
+
 data ProjectCache = ProjectCache
   { -- We need this hosts to mirror all the hosts in the endpoints table, and could use this for validation purposes to skip inserting endpoints just because of hosts
     -- if endpoint exists but host is not in this list, then we have a query specifically for inserting hosts.
@@ -122,7 +130,9 @@ data ProjectCache = ProjectCache
   deriving stock (Show, Generic)
   deriving anyclass (FromRow)
 
+
 makeFieldLabelsNoPrefix ''ProjectCache
+
 
 data CreateProject = CreateProject
   { id :: ProjectId
@@ -136,7 +146,9 @@ data CreateProject = CreateProject
     (Entity)
     via (GenericEntity '[Schema "projects", TableName "projects", PrimaryKey "id", FieldModifiers '[CamelToSnake]] CreateProject)
 
+
 makeFieldLabelsNoPrefix ''CreateProject
+
 
 -- FIXME: We currently return an object with empty vectors when nothing was found.
 projectCacheById :: HasCallStack => ProjectId -> DBT IO (Maybe ProjectCache)
@@ -155,13 +167,16 @@ projectCacheById = queryOne Select q
                 where e.project_id = ? AND sh.hash IS NOT null
                ) enp; |]
 
+
 insertProject :: CreateProject -> DBT IO ()
 insertProject = insert @CreateProject
+
 
 projectById :: ProjectId -> DBT IO (Maybe Project)
 projectById = queryOne Select q
   where
     q = [sql| select p.* from projects.projects p where id=?|]
+
 
 selectProjectsForUser :: Users.UserId -> DBT IO (V.Vector Project')
 selectProjectsForUser = query Select q
@@ -171,6 +186,7 @@ selectProjectsForUser = query Select q
                 join projects.project_members as ppm on (pp.id=ppm.project_id) 
                 join users.users as us on (us.id=ppm.user_id)
                 where ppm.user_id=? and pp.deleted_at IS NULL order by updated_at desc|]
+
 
 selectProjectForUser :: (Users.UserId, ProjectId) -> DBT IO (Maybe Project)
 selectProjectForUser = queryOne Select q
@@ -184,6 +200,7 @@ selectProjectForUser = queryOne Select q
           limit 1
       |]
 
+
 usersByProjectId :: ProjectId -> DBT IO (Vector Users.User)
 usersByProjectId pid = query Select q (Only pid)
   where
@@ -191,8 +208,9 @@ usersByProjectId pid = query Select q (Only pid)
       [sql| select u.id, u.created_at, u.updated_at, u.deleted_at, u.active, u.first_name, u.last_name, u.display_image_url, u.email, u.phone_number
                 from users.users u join projects.project_members pm on (pm.user_id=u.id) where project_id=? and u.active IS True;|]
 
+
 userByProjectId :: ProjectId -> Users.UserId -> DBT IO (Vector Users.User)
-userByProjectId pid user_id = query Select q  (user_id, pid)
+userByProjectId pid user_id = query Select q (user_id, pid)
   where
     q =
       [sql| select u.id, u.created_at, u.updated_at, u.deleted_at, u.active, u.first_name, u.last_name, u.display_image_url, u.email, u.phone_number
@@ -207,12 +225,14 @@ editProjectGetH pid = query Select q (Only pid)
             ON pp.id = pid 
         WHERE ppm.project_id = pp.id;|]
 
+
 updateProject :: CreateProject -> DBT IO Int64
 updateProject cp = do
   execute Update q (cp.title, cp.description, cp.paymentPlan, cp.id)
   where
     q =
       [sql| UPDATE projects.projects SET title=?, description=?, payment_plan=? where id=?;|]
+
 
 updateProjectReportNotif :: ProjectId -> Text -> DBT IO Int64
 updateProjectReportNotif pid report_type = do
@@ -223,12 +243,14 @@ updateProjectReportNotif pid report_type = do
         then [sql| UPDATE projects.projects SET daily_notif=(not daily_notif) WHERE id=?;|]
         else [sql| UPDATE projects.projects SET weekly_notif=(not weekly_notif) WHERE id=?;|]
 
+
 deleteProject :: ProjectId -> DBT IO Int64
 deleteProject pid = do
   execute Update q pid
   where
     q =
       [sql| UPDATE projects.projects SET deleted_at=NOW(), active=False where id=?;|]
+
 
 data ProjectRequestStats = ProjectRequestStats
   { projectId :: ProjectId
@@ -255,6 +277,7 @@ data ProjectRequestStats = ProjectRequestStats
   deriving stock (Show, Generic, Eq)
   deriving anyclass (FromRow, ToRow, Default)
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "project_request_stats", PrimaryKey "project_id", FieldModifiers '[CamelToSnake]] ProjectRequestStats)
+
 
 projectRequestStatsByProject :: ProjectId -> DBT IO (Maybe ProjectRequestStats)
 projectRequestStatsByProject = selectById @ProjectRequestStats

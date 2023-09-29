@@ -52,6 +52,7 @@ import Servant.Htmx
 import Utils
 import Web.FormUrlEncoded (FromForm)
 
+
 data CreateProjectForm = CreateProjectForm
   { title :: Text
   , description :: Text
@@ -64,6 +65,7 @@ data CreateProjectForm = CreateProjectForm
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromForm, Default)
 
+
 data CreateProjectFormError = CreateProjectFormError
   { titleE :: Maybe [String]
   , descriptionE :: Maybe [String]
@@ -71,8 +73,10 @@ data CreateProjectFormError = CreateProjectFormError
   deriving stock (Eq, Show, Generic)
   deriving anyclass (Default)
 
+
 createProjectFormToModel :: Projects.ProjectId -> CreateProjectForm -> Projects.CreateProject
 createProjectFormToModel pid CreateProjectForm{..} = Projects.CreateProject{id = pid, ..}
+
 
 createProjectFormV :: Monad m => Valor CreateProjectForm m CreateProjectFormError
 createProjectFormV =
@@ -80,8 +84,10 @@ createProjectFormV =
     <$> check1 title (failIf ["name can't be empty"] T.null)
     <*> check1 description Valor.pass
 
+
 checkEmail :: Text -> Bool
 checkEmail = isJust . T.find (== '@')
+
 
 ----------------------------------------------------------------------------------------------------------
 -- createProjectGetH is the handler for the create projects page
@@ -94,6 +100,7 @@ createProjectGetH sess = do
           , pageTitle = "Endpoints"
           }
   pure $ bodyWrapper bwconf $ createProjectBody sess envCfg False (def @CreateProjectForm) (def @CreateProjectFormError)
+
 
 ----------------------------------------------------------------------------------------------------------
 projectSettingsGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
@@ -116,6 +123,7 @@ projectSettingsGetH sess pid = do
   let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just proj, pageTitle = "Settings"}
   pure $ bodyWrapper bwconf $ createProjectBody sess envCfg True createProj (def @CreateProjectFormError)
 
+
 ----------------------------------------------------------------------------------------------------------
 deleteProjectGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Headers '[HXTrigger, HXRedirect] (Html ()))
 deleteProjectGetH sess pid = do
@@ -130,6 +138,7 @@ deleteProjectGetH sess pid = do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Deleted Project Successfully"]}|]
       pure $ addHeader hxTriggerData $ addHeader "/" $ span_ ""
 
+
 ----------------------------------------------------------------------------------------------------------
 -- createProjectPostH is the handler for the create projects page form handling.
 -- It processes post requests and is expected to return a redirect header and a hyperscript event trigger header.
@@ -140,6 +149,7 @@ createProjectPostH sess createP = do
   case validationRes of
     Right cpe -> pure $ noHeader $ noHeader $ createProjectBody sess envCfg createP.isUpdate createP cpe
     Left cp -> processProjectPostForm sess cp
+
 
 processProjectPostForm :: Sessions.PersistentSession -> Valor.Valid CreateProjectForm -> DashboardM (Headers '[HXTrigger, HXRedirect] (Html ()))
 processProjectPostForm sess cpRaw = do
@@ -184,6 +194,7 @@ processProjectPostForm sess cpRaw = do
   if cp.isUpdate
     then pure $ addHeader hxTriggerDataUpdate $ noHeader bdy
     else pure $ addHeader hxTriggerData $ addHeader ("/p/" <> pid.toText <> "/about_project") bdy
+
 
 ----------------------------------------------------------------------------------------------------------
 -- createProjectBody is the core html view

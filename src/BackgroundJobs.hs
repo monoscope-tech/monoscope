@@ -38,6 +38,7 @@ import Pkg.Mail
 import Relude
 import Relude.Unsafe qualified as Unsafe
 
+
 data BgJobs
   = InviteUserToProject Users.UserId Projects.ProjectId Text Text
   | CreatedProjectSuccessfully Users.UserId Projects.ProjectId Text Text
@@ -49,13 +50,16 @@ data BgJobs
   deriving stock (Eq, Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
 
+
 getShapes :: Projects.ProjectId -> Text -> DBT IO (Vector (Text, Vector Text))
 getShapes pid enpHash = query Select q (pid, enpHash)
   where
     q = [sql| select hash, field_hashes from apis.shapes where project_id=? and endpoint_hash=? |]
 
+
 instance FromRow Text where
   fromRow = field
+
 
 getUpdatedFieldFormats :: Projects.ProjectId -> Vector Text -> DBT IO (Vector Text)
 getUpdatedFieldFormats pid fieldHashes = query Select q (pid, fieldHashes)
@@ -64,15 +68,18 @@ getUpdatedFieldFormats pid fieldHashes = query Select q (pid, fieldHashes)
       [sql| select fm.hash from apis.formats fm JOIN apis.fields fd ON (fm.project_id=fd.project_id AND fd.hash=fm.field_hash) 
                 where fm.project_id=? AND fm.created_at>(fd.created_at+interval '2 minutes') AND fm.field_hash=ANY(?) |]
 
+
 updateShapeCounts :: Projects.ProjectId -> Text -> Vector Text -> Vector Text -> Vector Text -> DBT IO Int64
 updateShapeCounts pid shapeHash newFields deletedFields updatedFields = execute Update q (newFields, deletedFields, updatedFields, pid, shapeHash)
   where
     q = [sql| update apis.shapes SET new_unique_fields=?, deleted_fields=?, updated_field_formats=? where project_id=? and hash=?|]
 
+
 getAllProjects :: DBT IO (Vector Projects.ProjectId)
 getAllProjects = query Select q (Only True)
   where
     q = [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL|]
+
 
 -- TODO:
 -- Analyze shapes for
@@ -235,10 +242,12 @@ jobsRunner dbPool logger cfg job = do
         weeklyReportForProject dbPool cfg pid
         pass
 
+
 jobsWorkerInit :: Pool Connection -> LogAction IO String -> Config.EnvConfig -> IO ()
 jobsWorkerInit dbPool logger envConfig = startJobRunner $ mkConfig jobLogger "background_jobs" dbPool (MaxConcurrentJobs 1) (jobsRunner dbPool logger envConfig) id
   where
     jobLogger logLevel logEvent = logger <& show (logLevel, logEvent)
+
 
 dailyReportForProject :: Pool Connection -> Config.EnvConfig -> Projects.ProjectId -> IO ()
 dailyReportForProject dbPool cfg pid = do
@@ -267,6 +276,7 @@ dailyReportForProject dbPool cfg pid = do
         let projectTitle = pr.title
         let subject = [text| APITOOLKIT: Daily Report for `$projectTitle` |]
         sendEmail cfg (CI.original user.email) subject body
+
 
 weeklyReportForProject :: Pool Connection -> Config.EnvConfig -> Projects.ProjectId -> IO ()
 weeklyReportForProject dbPool cfg pid = do

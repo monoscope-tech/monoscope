@@ -9,7 +9,7 @@ import Control.Exception (SomeException, try)
 import Control.Lens ((^?), _Just)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT, except, runExceptT, throwE)
-import Control.Monad.Trans.Except.Extra (handleIOExceptT, handleExceptT)
+import Control.Monad.Trans.Except.Extra (handleExceptT, handleIOExceptT)
 import Data.Aeson (eitherDecode)
 import Data.Cache qualified as Cache
 import Data.Generics.Product (field)
@@ -32,6 +32,7 @@ import System.Clock
 import Text.Pretty.Simple (pPrint, pPrintString, pShow)
 import Utils (DBField, eitherStrToText)
 import Witch (from)
+
 
 {--
   Exploring how the inmemory cache could be shaped for performance, and low footprint ability to skip hitting the postgres database when not needed.
@@ -104,8 +105,10 @@ processMessages logger' env conn' msgs projectCache = do
     then pure []
     else processMessages' logger' env conn' msgs' projectCache
 
+
 wrapTxtException :: Text -> SomeException -> Text
-wrapTxtException wrap e = " " <> wrap <> " : " <> (toText @String $  show e)
+wrapTxtException wrap e = " " <> wrap <> " : " <> (toText @String $ show e)
+
 
 processMessages' :: HasCallStack => LogAction IO String -> Config.EnvConfig -> Pool Connection -> [Either Text (Maybe Text, RequestMessages.RequestMessage)] -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> IO [Maybe Text]
 processMessages' logger' _ conn' msgs projectCache' = do
@@ -127,11 +130,15 @@ processMessages' logger' _ conn' msgs projectCache' = do
 
   when (null reqDumps) $ logger' <& "ERROR: Empty params/query for processMessages for request dumps; "
 
-  resp <- withPool conn' $ runExceptT do 
-    unless (null params') $ 
-      handleExceptT (wrapTxtException $ "execute query " <> show query' ) $ void $ execute query' params' 
-    unless (null reqDumps) $ 
-      handleExceptT (wrapTxtException $ "bulkInsertReqDump => \n\t\t" <> show  reqDumps) $ void $  RequestDumps.bulkInsertRequestDumps reqDumps
+  resp <- withPool conn' $ runExceptT do
+    unless (null params')
+      $ handleExceptT (wrapTxtException $ "execute query " <> show query')
+      $ void
+      $ execute query' params'
+    unless (null reqDumps)
+      $ handleExceptT (wrapTxtException $ "bulkInsertReqDump => \n\t\t" <> show reqDumps)
+      $ void
+      $ RequestDumps.bulkInsertRequestDumps reqDumps
 
   endTime <- getTime Monotonic
   liftIO $ putStrLn $ fmtLn $ "Process Message (" +| messagesCount |+ ") pipeline microsecs: queryDuration " +| (toNanoSecs (diffTimeSpec startTime afterProccessing)) `div` 1000 |+ " -> processingDuration " +| toNanoSecs (diffTimeSpec afterProccessing endTime) `div` 1000 |+ " -> TotalDuration " +| toNanoSecs (diffTimeSpec startTime endTime) `div` 1000 |+ ""
@@ -156,13 +163,13 @@ processMessages' logger' _ conn' msgs projectCache' = do
       -- This should help with our performance, since this project Cache is the only information we need in order to process
       -- an apitoolkit requestmessage payload. So we're able to process payloads without hitting the database except for the actual db inserts.
       projectCacheValE <-
-        liftIO $
-          try
+        liftIO
+          $ try
             ( Cache.fetchWithCache projectCache pid \pid' -> do
                 mpjCache <- withPool conn $ Projects.projectCacheById pid'
                 pure $ fromMaybe projectCacheDefault mpjCache
-            ) ::
-          ExceptT Text IO (Either SomeException Projects.ProjectCache)
+            )
+          :: ExceptT Text IO (Either SomeException Projects.ProjectCache)
 
       case projectCacheValE of
         Left e -> throwE $ "An error occurred while fetching project cache: " <> (toText $ show e)

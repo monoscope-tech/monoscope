@@ -15,10 +15,12 @@ import RequestMessages qualified
 import Relude
 import Test.Hspec
 
+
 projectTitle :: Text
 projectTitle = "Sample Project"
 projectDescription :: Text
 projectDescription = "Sample description"
+
 
 ----
 --- GENERAL STRUCTURE TEST
@@ -42,6 +44,7 @@ sampleEndpoints =
         , hash = "endpoint1_POST"
         }
     ]
+
 
 sampleShapes :: V.Vector Shapes.SwShape
 sampleShapes =
@@ -80,6 +83,7 @@ sampleShapes =
         , swStatusCode = 201
         }
     ]
+
 
 sampleFields :: V.Vector Fields.SwField
 sampleFields =
@@ -166,6 +170,7 @@ sampleFields =
         }
     ]
 
+
 sampleFormats :: V.Vector Formats.SwFormat
 sampleFormats =
   V.fromList
@@ -226,6 +231,7 @@ sampleFormats =
         , swHash = ""
         }
     ]
+
 
 expectedSwaggerJSON :: AE.Value
 expectedSwaggerJSON =
@@ -374,6 +380,7 @@ expectedSwaggerJSON =
     }
   |]
 
+
 ----
 --- HEADERS TEST
 ----
@@ -388,6 +395,7 @@ hSampleEndpoints =
         , hash = "endpoint1_GET"
         }
     ]
+
 
 hSampleShapes :: V.Vector Shapes.SwShape
 hSampleShapes =
@@ -404,6 +412,7 @@ hSampleShapes =
         , swStatusCode = 200
         }
     ]
+
 
 hSampleFields :: V.Vector Fields.SwField
 hSampleFields =
@@ -440,6 +449,7 @@ hSampleFields =
         }
     ]
 
+
 hSampleFormats :: V.Vector Formats.SwFormat
 hSampleFormats =
   V.fromList
@@ -465,6 +475,7 @@ hSampleFormats =
         , swHash = ""
         }
     ]
+
 
 hExpectedSwaggerJSON :: AE.Value
 hExpectedSwaggerJSON =
@@ -525,6 +536,7 @@ hExpectedSwaggerJSON =
     }
   |]
 
+
 -----
 --- ParametersTests
 ----
@@ -541,6 +553,7 @@ pSampleEndpoints =
         }
     ]
 
+
 pSampleShapes :: V.Vector Shapes.SwShape
 pSampleShapes =
   V.fromList
@@ -556,6 +569,7 @@ pSampleShapes =
         , swStatusCode = 200
         }
     ]
+
 
 pSampleFields :: V.Vector Fields.SwField
 pSampleFields =
@@ -592,6 +606,7 @@ pSampleFields =
         }
     ]
 
+
 pSampleFormats :: V.Vector Formats.SwFormat
 pSampleFormats =
   V.fromList
@@ -617,6 +632,7 @@ pSampleFormats =
         , swHash = ""
         }
     ]
+
 
 pExpectedSwaggerJSON :: AE.Value
 pExpectedSwaggerJSON =
@@ -675,6 +691,7 @@ pExpectedSwaggerJSON =
       }
     }
   |]
+
 
 spec :: Spec
 spec = describe "generateSwagger" $ do

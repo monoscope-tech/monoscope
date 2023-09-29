@@ -41,12 +41,14 @@ import Relude.Unsafe as Unsafe hiding (head)
 import Utils
 import Web.FormUrlEncoded (FromForm)
 
+
 data SwaggerForm = SwaggerForm
   { swagger_json :: Text
   , from :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
+
 
 data FieldOperation = FieldOperation
   { action :: Text
@@ -62,6 +64,7 @@ data FieldOperation = FieldOperation
   deriving stock (Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
+
 data KeyPathData = KeyPathData
   { fkKeyPath :: Text
   , fkCategory :: Text
@@ -69,6 +72,7 @@ data KeyPathData = KeyPathData
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
+
 
 data OpShape = OpShape
   { opOperations :: V.Vector FieldOperation
@@ -85,6 +89,7 @@ data OpShape = OpShape
   deriving stock (Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
+
 data OpEndpoint = OpEndpoint
   { endpointUrl :: Text
   , endpointMethod :: Text
@@ -92,6 +97,7 @@ data OpEndpoint = OpEndpoint
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
+
 
 data SaveSwaggerForm = SaveSwaggerForm
   { updated_swagger :: Text
@@ -102,11 +108,14 @@ data SaveSwaggerForm = SaveSwaggerForm
   deriving stock (Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
+
 getEndpointHash :: Projects.ProjectId -> Text -> Text -> Text
 getEndpointHash pid urlPath method = toText $ showHex (xxHash $ encodeUtf8 $ (UUID.toText pid.unProjectId) <> T.toUpper method <> urlPath) ""
 
+
 getFieldHash :: Text -> Text -> Text -> Text -> Text
 getFieldHash enpHash fcategory keypath ftype = enpHash <> toText (showHex (xxHash $ encodeUtf8 (fcategory <> keypath <> ftype)) "")
+
 
 getShapeHash :: Text -> Text -> V.Vector Text -> V.Vector Text -> V.Vector Text -> V.Vector Text -> Text
 getShapeHash endpointHash statusCode responseBodyKP responseHeadersKP requestBodyKP queryParamsKP = shapeHash
@@ -114,6 +123,7 @@ getShapeHash endpointHash statusCode responseBodyKP responseHeadersKP requestBod
     comb = T.concat $ sort $ V.toList $ queryParamsKP <> responseHeadersKP <> requestBodyKP <> responseBodyKP
     keyPathsHash = toText $ showHex (xxHash $ encodeUtf8 comb) ""
     shapeHash = endpointHash <> statusCode <> keyPathsHash
+
 
 getEndpointFromOpEndpoint :: Projects.ProjectId -> OpEndpoint -> Endpoints.Endpoint
 getEndpointFromOpEndpoint pid opEndpoint =
@@ -129,6 +139,7 @@ getEndpointFromOpEndpoint pid opEndpoint =
         , hosts = [opEndpoint.endpointHost]
         , hash = endpointHash
         }
+
 
 getShapeFromOpShape :: Projects.ProjectId -> ZonedTime -> OpShape -> Shapes.Shape
 getShapeFromOpShape pid curTime opShape =
@@ -162,6 +173,7 @@ getShapeFromOpShape pid curTime opShape =
     rsHKPHashes = V.map (\v -> getFieldHash endpointHash v.fkCategory v.fkKeyPath v.fkType) opShape.opResponseHeadersKeyPaths
     rsBKPHashes = V.map (\v -> getFieldHash endpointHash v.fkCategory v.fkKeyPath v.fkType) opShape.opResponseBodyKeyPaths
     fieldHashes = qpKPHashes <> rqHKPHashes <> rqBKPHashes <> rsHKPHashes <> rsBKPHashes
+
 
 getFieldAndFormatFromOpShape :: Projects.ProjectId -> FieldOperation -> (Fields.Field, Formats.Format)
 getFieldAndFormatFromOpShape pid operation =
@@ -205,8 +217,10 @@ getFieldAndFormatFromOpShape pid operation =
           }
    in (field, lFormat)
 
+
 flattenVector :: [V.Vector FieldOperation] -> V.Vector FieldOperation
 flattenVector = V.concat
+
 
 documentationPutH :: Sessions.PersistentSession -> Projects.ProjectId -> SaveSwaggerForm -> DashboardM (Headers '[HXTrigger] (Html ()))
 documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id, endpoints, diffsInfo} = do
@@ -248,6 +262,7 @@ documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id, endpoint
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Swagger Saved Successfully"]}|]
       pure $ addHeader hxTriggerData ""
 
+
 documentationPostH :: Sessions.PersistentSession -> Projects.ProjectId -> SwaggerForm -> DashboardM (Headers '[HXTrigger] (Html ()))
 documentationPostH sess pid SwaggerForm{swagger_json, from} = do
   pool <- asks pool
@@ -273,13 +288,15 @@ documentationPostH sess pid SwaggerForm{swagger_json, from} = do
               , swaggerJson = value
               }
 
-      swaggers <- liftIO $
-        withPool pool $ do
+      swaggers <- liftIO
+        $ withPool pool
+        $ do
           Swaggers.addSwagger swaggerToAdd
           Swaggers.swaggersByProject pid
 
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Swagger uploaded Successfully"]}|]
       pure $ addHeader hxTriggerData ""
+
 
 documentationGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> DashboardM (Html ())
 documentationGetH sess pid swagger_id = do
@@ -289,8 +306,9 @@ documentationGetH sess pid swagger_id = do
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, swaggers, swagger, swaggerId) <- liftIO $
-        withPool pool $ do
+      (project, swaggers, swagger, swaggerId) <- liftIO
+        $ withPool pool
+        $ do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
           swaggers <- Swaggers.swaggersByProject pid
           currentSwagger <- case swagger_id of
@@ -327,6 +345,7 @@ documentationGetH sess pid swagger_id = do
               , pageTitle = "Documentation"
               }
       pure $ bodyWrapper bwconf $ documentationsPage pid swaggers swaggerId (decodeUtf8 (encode swagger))
+
 
 documentationsPage :: Projects.ProjectId -> V.Vector Swaggers.Swagger -> String -> String -> Html ()
 documentationsPage pid swaggers swaggerID jsonString = do
@@ -710,6 +729,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
         });   
       };
     |]
+
 
 mainContent :: V.Vector Swaggers.Swagger -> Html ()
 mainContent swaggers = do

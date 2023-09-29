@@ -41,6 +41,7 @@ import Text.Interpolation.Nyan
 import Utils (GetOrRedirect, deleteParam, mIcon_, redirect, userIsProjectMember, userNotMemeberPage)
 import Witch (from)
 
+
 timePickerItems :: [(Text, Text)]
 timePickerItems =
   [ ("1H", "Last Hour")
@@ -49,12 +50,14 @@ timePickerItems =
   , ("14D", "Last 14 days")
   ]
 
+
 data ParamInput = ParamInput
   { currentURL :: Text
   , sinceStr :: Maybe Text
   , dateRange :: (Maybe ZonedTime, Maybe ZonedTime)
   , currentPickerTxt :: Text
   }
+
 
 dashboardGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Union GetOrRedirect)
 dashboardGetH sess pid fromDStr toDStr sinceStr' = do
@@ -66,8 +69,9 @@ dashboardGetH sess pid fromDStr toDStr sinceStr' = do
     else do
       now <- liftIO getCurrentTime
       let sinceStr = if isNothing fromDStr && isNothing toDStr && isNothing sinceStr' || fromDStr == Just "" then Just "14D" else sinceStr'
-      (hasApikeys, hasRequest) <- liftIO $
-        withPool pool $ do
+      (hasApikeys, hasRequest) <- liftIO
+        $ withPool pool
+        $ do
           apiKeys <- ProjectApiKeys.countProjectApiKeysByProjectId pid
           requestDumps <- RequestDumps.countRequestDumpByProject pid
           pure (apiKeys > 0, requestDumps > 0)
@@ -87,8 +91,9 @@ dashboardGetH sess pid fromDStr toDStr sinceStr' = do
               (f, t)
 
       startTime <- liftIO $ getTime Monotonic
-      (project, projectRequestStats, reqLatenciesRolledByStepsLabeled) <- liftIO $
-        withPool pool $ do
+      (project, projectRequestStats, reqLatenciesRolledByStepsLabeled) <- liftIO
+        $ withPool pool
+        $ do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
 
           projectRequestStats <- fromMaybe (def :: Projects.ProjectRequestStats) <$> Projects.projectRequestStatsByProject pid
@@ -112,6 +117,7 @@ dashboardGetH sess pid fromDStr toDStr sinceStr' = do
       if not hasApikeys || not hasRequest
         then respond $ WithStatus @302 $ redirect ("/p/" <> pid.toText <> "/onboarding")
         else respond $ WithStatus @200 $ bodyWrapper bwconf $ dashboardPage pid paramInput currTime projectRequestStats reqLatenciesRolledByStepsJ (fromD, toD)
+
 
 dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 dashboardPage pid paramInput currTime projectStats reqLatenciesRolledByStepsJ dateRange = do
@@ -173,6 +179,7 @@ dashboardPage pid paramInput currTime projectStats reqLatenciesRolledByStepsJ da
     window.picker = picker;
     |]
 
+
 dStats :: Projects.ProjectId -> Projects.ProjectRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledByStepsJ dateRange@(fromD, toD) = do
   let _ = min
@@ -184,8 +191,8 @@ dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledBySte
 
   section_ [class_ "space-y-3"] $ do
     div_ [class_ "flex justify-between mt-4"] $ div_ [class_ "flex flex-row"] $ do
-      a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]] $
-        img_
+      a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
+        $ img_
           [ src_ "/assets/svgs/cheveron-down.svg"
           , class_ "h-4 mr-3 mt-1 w-4"
           ]
@@ -193,11 +200,11 @@ dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledBySte
 
     div_ [class_ "reqResSubSection space-y-5"] $ do
       div_ [class_ "grid grid-cols-5 gap-5"] $ do
-        statBox  (Just pid) "Requests" "Total requests in the last 2 weeks" (projReqStats.totalRequests) Nothing
-        statBox  (Just pid) "Anomalies" "Total anomalies still active this week vs last week" projReqStats.totalAnomalies (Just projReqStats.totalAnomaliesLastWeek)
-        statBox  (Just pid) "Endpoints" "Total endpoints now vs last week" projReqStats.totalEndpoints (Just projReqStats.totalEndpointsLastWeek)
-        statBox  (Just pid) "Signatures" "Total request signatures which are active now vs last week" projReqStats.totalShapes (Just projReqStats.totalShapesLastWeek)
-        statBox  (Just pid) "Requests per minutes" "Total requests per minute this week vs last week" projReqStats.requestsPerMin (Just projReqStats.requestsPerMinLastWeek)
+        statBox (Just pid) "Requests" "Total requests in the last 2 weeks" (projReqStats.totalRequests) Nothing
+        statBox (Just pid) "Anomalies" "Total anomalies still active this week vs last week" projReqStats.totalAnomalies (Just projReqStats.totalAnomaliesLastWeek)
+        statBox (Just pid) "Endpoints" "Total endpoints now vs last week" projReqStats.totalEndpoints (Just projReqStats.totalEndpointsLastWeek)
+        statBox (Just pid) "Signatures" "Total request signatures which are active now vs last week" projReqStats.totalShapes (Just projReqStats.totalShapesLastWeek)
+        statBox (Just pid) "Requests per minutes" "Total requests per minute this week vs last week" projReqStats.requestsPerMin (Just projReqStats.requestsPerMinLastWeek)
 
       div_ [class_ "flex gap-5"] do
         div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] $ do
@@ -247,6 +254,7 @@ dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledBySte
               percentileRow "min" $ projReqStats.min
         script_ [int|| latencyHistogram('reqsLatencyHistogram',{p50:#{p50}, p75:#{p75}, p90:#{p90}, p95:#{p95}, p99:#{p99}, max:#{max}},  #{reqLatenciesRolledByStepsJ}) |]
 
+
 percentileRow :: Text -> Double -> Html ()
 percentileRow key p = do
   let (d, unit) = fmtDuration p
@@ -255,6 +263,7 @@ percentileRow key p = do
     span_ [class_ "inline-block font-mono"] $ do
       span_ [class_ "tabular-nums"] $ toHtml d
       span_ $ toHtml unit
+
 
 fmtDuration :: Double -> (Text, Text)
 fmtDuration d

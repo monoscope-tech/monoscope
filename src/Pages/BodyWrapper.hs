@@ -12,6 +12,7 @@ import Models.Users.Users qualified as Users
 import NeatInterpolation
 import Relude
 
+
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu pid =
   [ ("Get started", "/p/" <> pid.toText <> "/onboarding", "#onboarding")
@@ -25,6 +26,7 @@ menu pid =
   , ("Reports", "/p/" <> pid.toText <> "/reports", "#reports")
   ]
 
+
 data BWConfig = BWConfig
   { sessM :: Maybe Sessions.PersistentSession
   , currProject :: Maybe Projects.Project
@@ -33,6 +35,7 @@ data BWConfig = BWConfig
   }
   deriving stock (Show, Generic)
   deriving anyclass (Default)
+
 
 bodyWrapper :: BWConfig -> Html () -> Html ()
 bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child = do
@@ -236,6 +239,7 @@ projectsDropDown currProject projects = do
                   span_ [class_ "inline-block"] $ toHtml $ project.title
                 when (currProject.id == project.id) $ img_ [src_ "/assets/svgs/checkmark_blue.svg"]
 
+
 sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Maybe Text -> Html ()
 sideNav sess project pageTitle menuItem = do
   aside_ [class_ "shrink-0 top-0 border-r-2 bg-white border-gray-200 h-screen overflow-hidden transition-all duration-1000 ease-in-out", id_ "side-nav-menu"] $ do
@@ -293,16 +297,17 @@ sideNav sess project pageTitle menuItem = do
           [ href_ mUrl
           , term "data-tippy-placement" "right"
           , term "data-tippy-content" mTitle
-          , class_ $
-              "block flex gap-3 px-5 py-3 flex justify-center items-center hover:bg-blue-50 text-slate-800 "
-                <> ( if maybe (pageTitle == mTitle) (== mTitle) menuItem
-                      then "bg-blue-50 border-l-4 border-blue-700"
-                      else ""
-                   )
+          , class_
+              $ "block flex gap-3 px-5 py-3 flex justify-center items-center hover:bg-blue-50 text-slate-800 "
+              <> ( if maybe (pageTitle == mTitle) (== mTitle) menuItem
+                    then "bg-blue-50 border-l-4 border-blue-700"
+                    else ""
+                 )
           ]
           $ do
             svg_ [class_ "w-5 h-5 icon text-slate-500"] $ use_ [href_ $ "/assets/svgs/sprite/sprite.svg" <> mIcon]
             span_ [class_ "grow sd-hidden"] $ toHtml mTitle
+
 
 navbar :: Users.User -> Html ()
 navbar currUser = do
@@ -347,11 +352,11 @@ navbar currUser = do
         ]
         $ do
           img_ [class_ "inline-block w-9 h-9 rounded-lg bg-gray-300", src_ (currUser.displayImageUrl)]
-          span_ [class_ "inline-block"] $
-            toHtml $
-              if currUser.firstName /= "" || currUser.lastName /= ""
-                then currUser.firstName <> " " <> currUser.lastName
-                else CI.original currUser.email
+          span_ [class_ "inline-block"]
+            $ toHtml
+            $ if currUser.firstName /= "" || currUser.lastName /= ""
+              then currUser.firstName <> " " <> currUser.lastName
+              else CI.original currUser.email
           img_ [class_ "w-4 h-4 inline-block", src_ "/assets/svgs/down_caret.svg"]
 
       -- logout dropdown

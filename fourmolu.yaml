@@ -4,12 +4,12 @@ comma-style: leading
 import-export-style: diff-friendly
 indent-wheres: true 
 record-brace-space: false
-newlines-between-decls: 1
+newlines-between-decls: 2
 haddock-style: single-line
 haddock-style-module:
 let-style: auto
 in-style: right-align
 respectful: true
 fixities: []
-unicode: never
+unicode: detect 
 single-constraint-parens: never

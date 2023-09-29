@@ -41,6 +41,7 @@ import Optics.TH
 import Relude hiding (id)
 import Servant.API (FromHttpApiData)
 
+
 newtype ProjectApiKeyId = ProjectApiKeyId {unProjectApiKeyId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving
@@ -48,8 +49,10 @@ newtype ProjectApiKeyId = ProjectApiKeyId {unProjectApiKeyId :: UUID.UUID}
     via UUID.UUID
   deriving anyclass (FromRow, ToRow)
 
+
 instance HasField "toText" ProjectApiKeyId Text where
   getField = UUID.toText . unProjectApiKeyId
+
 
 data ProjectApiKey = ProjectApiKey
   { id :: ProjectApiKeyId
@@ -65,7 +68,9 @@ data ProjectApiKey = ProjectApiKey
   deriving anyclass (FromRow, ToRow)
   deriving (Entity) via (GenericEntity '[Schema "projects", TableName "project_api_keys", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ProjectApiKey)
 
+
 makeFieldLabelsNoPrefix ''ProjectApiKey
+
 
 newProjectApiKeys :: Projects.ProjectId -> UUID.UUID -> Text -> Text -> IO ProjectApiKey
 newProjectApiKeys projectId projectKeyUUID title keyPrefix = do
@@ -76,11 +81,14 @@ newProjectApiKeys projectId projectKeyUUID title keyPrefix = do
       id = ProjectApiKeyId projectKeyUUID
   pure $ ProjectApiKey{..}
 
+
 insertProjectApiKey :: ProjectApiKey -> DBT IO ()
 insertProjectApiKey = insert @ProjectApiKey
 
+
 projectApiKeysByProjectId :: Projects.ProjectId -> DBT IO (Vector ProjectApiKey)
 projectApiKeysByProjectId projectId = do selectManyByField @ProjectApiKey [field| project_id |] projectId
+
 
 revokeApiKey :: ProjectApiKeyId -> DBT IO Int64
 revokeApiKey kid = do
@@ -97,10 +105,12 @@ countProjectApiKeysByProjectId pid = do
   where
     q = [sql| SELECT count(*) FROM projects.project_api_keys WHERE project_id=? |]
 
+
 getProjectApiKey :: ProjectApiKeyId -> DBT IO (Maybe ProjectApiKey)
 getProjectApiKey = queryOne Select q
   where
     q = [sql|select id, created_at, updated_at, deleted_at, active, project_id,  title, key_prefix from projects.project_api_keys where id=? and active=true |]
+
 
 -- AES256 encryption
 encryptAPIKey :: ByteString -> ByteString -> ByteString
@@ -108,6 +118,7 @@ encryptAPIKey key = ctrCombine ctx nullIV
   where
     ctx :: AES256
     ctx = throwCryptoError $ cipherInit key
+
 
 -- | decryptAPIKey :: secretKey -> TextToDecrypt -> DecryptedText as bytestring
 decryptAPIKey :: ByteString -> ByteString -> ByteString

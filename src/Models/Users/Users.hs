@@ -34,14 +34,18 @@ import GHC.Records (HasField (getField))
 import Optics.TH
 import Relude
 
+
 instance FromJSON (CI Text) where
   parseJSON = fmap CI.mk . parseJSON
+
 
 instance ToJSON (CI Text) where
   toJSON = toJSON . CI.original
 
+
 instance Default Bool where
   def = False
+
 
 newtype UserId = UserId {getUserId :: UUID.UUID}
   deriving stock (Generic, Show, Eq)
@@ -50,8 +54,10 @@ newtype UserId = UserId {getUserId :: UUID.UUID}
     via UUID.UUID
   deriving anyclass (FromRow, ToRow)
 
+
 instance HasField "toText" UserId Text where
   getField = UUID.toText . getUserId
+
 
 data User = User
   { id :: UserId
@@ -74,17 +80,20 @@ data User = User
     (Entity)
     via (GenericEntity '[Schema "users", TableName "users", PrimaryKey "id", FieldModifiers '[CamelToSnake]] User)
 
+
 makeFieldLabelsNoPrefix ''User
+
 
 createUserId :: IO UserId
 createUserId = UserId <$> UUIDV4.nextRandom
+
 
 createUser :: Text -> Text -> Text -> Text -> IO User
 createUser firstName lastName picture email = do
   uid <- createUserId
   now <- getZonedTime
-  pure $
-    User
+  pure
+    $ User
       { id = uid
       , createdAt = now
       , updatedAt = now
@@ -97,21 +106,26 @@ createUser firstName lastName picture email = do
       , phoneNumber = Nothing
       }
 
+
 insertUser :: User -> PgT.DBT IO ()
 insertUser = insert @User
 
+
 userByEmail :: Text -> PgT.DBT IO (Maybe User)
 userByEmail email = selectOneByField @User [field| email |] (Only email)
+
 
 userIdByEmail :: Text -> PgT.DBT IO (Maybe UserId)
 userIdByEmail email = queryOne Select q (Only email)
   where
     q = [sql|select id from users.users where email=?|]
 
+
 createEmptyUser :: Text -> PgT.DBT IO (Maybe UserId)
 createEmptyUser email = queryOne Insert q (Only email)
   where
     q = [sql| insert into users.users (email, active) values (?, TRUE) on conflict do nothing returning id |]
+
 
 -- addUserToAllProjects is a hack for development to add the user to all projects
 addUserToAllProjects :: Text -> PgT.DBT IO Int64

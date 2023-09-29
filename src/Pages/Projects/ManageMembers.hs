@@ -31,12 +31,14 @@ import Servant.Htmx
 import Utils
 import Web.FormUrlEncoded (FromForm)
 
+
 data ManageMembersForm = ManageMembersForm
   { emails :: [Text]
   , permissions :: [ProjectMembers.Permissions]
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromForm)
+
 
 manageMembersPostH :: Sessions.PersistentSession -> Projects.ProjectId -> ManageMembersForm -> DashboardM (Headers '[HXTrigger] (Html ()))
 manageMembersPostH sess pid form = do
@@ -48,8 +50,9 @@ manageMembersPostH sess pid form = do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"errorToast": ["Only project members can update members list"]}|]
       pure $ addHeader hxTriggerData $ h3_ [] "Only members of this project can perform this action"
     else do
-      (project, projMembers) <- liftIO $
-        withPool pool $ do
+      (project, projMembers) <- liftIO
+        $ withPool pool
+        $ do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
           projMembers <- ProjectMembers.selectActiveProjectMembers pid
           pure (project, projMembers)
@@ -78,8 +81,8 @@ manageMembersPostH sess pid form = do
               & map (\a -> a ^. #id) -- We should not allow deleting the current user from the project
 
       -- Create new users and send notifications
-      newProjectMembers <- liftIO $
-        forM uAndPNew \(email, permission) -> do
+      newProjectMembers <- liftIO
+        $ forM uAndPNew \(email, permission) -> do
           userId' <- withPool pool $ do
             userIdM' <- Users.userIdByEmail email
             case userIdM' of
@@ -90,9 +93,9 @@ manageMembersPostH sess pid form = do
                   Just idX -> pure idX
               Just idX -> pure idX
 
-          when (userId' /= currUserId) $ -- invite the users to the project (Usually as an email)
-            void $
-              withResource pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId' pid email projectTitle
+          when (userId' /= currUserId)
+            $ void -- invite the users to the project (Usually as an email)
+            $ withResource pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId' pid email projectTitle
           pure (email, permission, userId')
 
       let projectMembers =
@@ -103,22 +106,23 @@ manageMembersPostH sess pid form = do
 
       -- Update existing contacts with updated permissions
       -- TODO: Send a notification via background job, about the users permission having been updated.
-      unless (null uAndPOldAndChanged) $
-        void $
-          liftIO $
-            withPool pool $
-              ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
+      unless (null uAndPOldAndChanged)
+        $ void
+        $ liftIO
+        $ withPool pool
+        $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
       -- soft delete project members with id
-      unless (null deletedUAndP) $
-        void $
-          liftIO $
-            withPool pool $
-              ProjectMembers.softDeleteProjectMembers deletedUAndP
+      unless (null deletedUAndP)
+        $ void
+        $ liftIO
+        $ withPool pool
+        $ ProjectMembers.softDeleteProjectMembers deletedUAndP
 
       projMembersLatest <- liftIO $ withPool pool $ ProjectMembers.selectActiveProjectMembers pid
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Updated Members List Successfully"]}|]
       pure $ addHeader hxTriggerData $ manageMembersBody projMembersLatest
+
 
 manageMembersGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 manageMembersGetH sess pid = do
@@ -128,13 +132,15 @@ manageMembersGetH sess pid = do
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, projMembers) <- liftIO $
-        withPool pool' $ do
+      (project, projMembers) <- liftIO
+        $ withPool pool'
+        $ do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
           projMembers <- ProjectMembers.selectActiveProjectMembers pid
           pure (project, projMembers)
       let bwconf = (def :: BWConfig){sessM = Just sess, pageTitle = "Settings", currProject = project}
       pure $ bodyWrapper bwconf $ manageMembersBody projMembers
+
 
 manageMembersBody :: Vector ProjectMembers.ProjectMemberVM -> Html ()
 manageMembersBody projMembers =
@@ -160,6 +166,7 @@ manageMembersBody projMembers =
               img_ [src_ "/assets/svgs/blue-plus.svg", class_ " mt-1 mx-2 w-3 h-3"]
               span_ [class_ "text-blue-700 font-medium text-sm "] "Add member"
         button_ [class_ "py-2 px-5 bg-blue-700 absolute m-5 bottom-0 right-0 text-[white] text-sm rounded-xl cursor-pointer", type_ "submit"] "Submit"
+
 
 projectMemberRow :: Maybe ProjectMembers.ProjectMemberVM -> Html ()
 projectMemberRow projMembersM =

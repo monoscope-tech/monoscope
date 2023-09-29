@@ -7,6 +7,7 @@ import NeatInterpolation (text)
 import Relude
 import Test.Hspec
 
+
 spec :: Spec
 spec = do
   describe "SeedingConfig" $ do

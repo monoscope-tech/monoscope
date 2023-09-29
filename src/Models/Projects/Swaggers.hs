@@ -22,14 +22,17 @@ import Models.Users.Users qualified as Users
 import Relude
 import Servant (FromHttpApiData)
 
+
 newtype SwaggerId = SwaggerId {swaggerId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving
     (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default)
     via UUID.UUID
 
+
 instance HasField "toText" SwaggerId Text where
   getField = UUID.toText . swaggerId
+
 
 data Swagger = Swagger
   { id :: SwaggerId
@@ -45,14 +48,18 @@ data Swagger = Swagger
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "swagger_jsons", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Swagger)
 
+
 addSwagger :: Swagger -> DBT IO ()
 addSwagger = insert @Swagger
+
 
 getSwaggerById :: Text -> DBT IO (Maybe Swagger)
 getSwaggerById id' = selectById (Only id')
 
+
 swaggersByProject :: Projects.ProjectId -> DBT IO (Vector Swagger)
 swaggersByProject pid = selectManyByField [field| project_id |] pid
+
 
 updateSwagger :: Text -> Value -> DBT IO Int64
 updateSwagger swaggerId swaggerJson = do

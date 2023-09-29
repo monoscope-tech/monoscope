@@ -18,6 +18,7 @@ import Relude.Unsafe ((!!))
 import Servant (err300, throwError)
 import Servant.Server (err401)
 
+
 data ClientMetadata = ClientMetadata
   { projectId :: Projects.ProjectId
   , topicId :: Text
@@ -28,6 +29,7 @@ data ClientMetadata = ClientMetadata
   deriving
     (ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ClientMetadata
+
 
 clientMetadataH :: Maybe Text -> DashboardM ClientMetadata
 clientMetadataH Nothing = throwError err401
@@ -52,13 +54,14 @@ clientMetadataH (Just authTextB64) = do
                 project <- Projects.projectById $ pApiKey.projectId
                 pure (pApiKey, project)
 
-          pure $
-            ClientMetadata
+          pure
+            $ ClientMetadata
               { projectId = pApiKey.projectId
               , pubsubProjectId = "past-3"
               , topicId = (env ^. #requestPubsubTopics) !! 0 -- apitoolkit-prod-default
               , pubsubPushServiceAccount = apitoolkitPusherServiceAccount
               }
+
 
 apitoolkitPusherServiceAccount :: Value
 apitoolkitPusherServiceAccount =
