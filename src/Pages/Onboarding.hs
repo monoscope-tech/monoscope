@@ -17,7 +17,7 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
-import Utils (redirect)
+import Utils (redirect, faIcon_)
 
 onboardingGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 onboardingGetH sess pid = do
@@ -70,8 +70,8 @@ onboardingPage pid hasApikey hasRequest ans = do
                   | otherwise = "33%"
             span_ [class_ "text-slate-500"] $ p <> " completed"
           ul_ [class_ "px-3 py-4"] do
-            li_ [class_ "flex items-center mx-4 py-4 border-b gap-6"] do
-              img_ [src_ "/assets/svgs/check_complete.svg", class_ "h-6 w-6"]
+            li_ [class_ "flex items-center mx-4 py-4 border-b gap-6 text-green"] do
+              faIcon_ "fa-circle-check" "fa-sharp fa-regular fa-circle-check" "h-6 w-6 text-green-700"
               button_ [class_ "flex flex-col"] do
                 p_ [class_ "font-semibold"] "Create an account"
                 span_ [class_ "text-slate-500"] "This is completed when you sign up"
@@ -87,7 +87,7 @@ onboardingPage pid hasApikey hasRequest ans = do
                     div_ [class_ "flex flex-col"] do
                       p_ [class_ "font-semibold"] "Generate an API key"
                       span_ [class_ "text-slate-500"] "The API key is used to authenticate requests"
-                    img_ [src_ "/assets/svgs/down_chevron.svg", class_ "h-6 w-6"]
+                    faIcon_ "fa-chevron-down" "fa-regular fa-chevron-down" "h-6 w-6"
               div_ [class_ "bg-slate-100 hidden w-full py-16 px-24", id_ "addAPIKey"] do
                 if hasApikey
                   then do
@@ -122,7 +122,7 @@ onboardingPage pid hasApikey hasRequest ans = do
                   div_ [class_ "flex flex-col"] do
                     p_ [class_ "font-semibold"] "Integrate APIToolkit to your app"
                     span_ [class_ "text-slate-500"] "Integrate apitoolkit using any of our SDKs to start sending request."
-                  img_ [src_ "/assets/svgs/down_chevron.svg", class_ "h-6 w-6"]
+                  faIcon_ "fa-chevron-down" "fa-regular fa-chevron-down" "h-6 w-6"
               div_ [class_ "hidden w-full bg-slate-100 mt-8", id_ "SDKs"] do
                 if hasRequest
                   then do
@@ -143,15 +143,15 @@ onboardingPage pid hasApikey hasRequest ans = do
         div_ [class_ "flex flex-col w-[800px] rounded-2xl border border-2"] $ do
           div_ [class_ "grid grid-cols-2 border-b px-8"] do
             div_ [class_ "flex flex-col gap-2 py-8 border-r"] do
-              img_ [src_ "/assets/svgs/docs.svg", class_ "h-8 w-8"]
+              faIcon_ "fa-file-lines" "fa-thin fa-file-lines" "h-8 w-8"
               h3_ [class_ "font-bold text-lg"] "Documentation"
               p_ [class_ "text-slate-700"] "Check out our documentation to learn more about using APIToolkit."
               a_ [href_ "https://www.apitoolkit.io/docs", class_ "text-blue-500 flex items-center gap-2"] do
-                img_ [src_ "/assets/svgs/link.svg", class_ "h-8 w-8"]
+                faIcon_ "fa-link-simple" "fa-sharp fa-regular fa-link-simple" "h-8 w-8 text-blue-500"
                 "Read the docs"
             -- div_ [class_ "flex flex-col gap-2 py-4 border-l"] pass
             div_ [class_ "px-8 py-16 flex items-center gap-6 border-l"] do
-              img_ [src_ "/assets/svgs/play.svg", class_ "h-14 w-14"]
+              faIcon_ "fa-circle-play" "fa-light fa-circle-play" "text-blue-500"
               a_ [href_ "https://calendly.com/tonyalaribe/30min", class_ "flex flex-col"] do
                 span_ [class_ "font-bold text-lg text-blue-500"] "Get Demo"
                 span_ [class_ "text-slate-500"] "Schedule a brief call with co-founder Antony to provide a concise overview of apitoolkit and guide him on its effective utilization for API management."
@@ -232,7 +232,7 @@ completedBanner pid =
         h3_ [class_ "font-bold text-2xl"] "Onboarding Completed"
       div_ [class_ "pb-2 flex items-center mt-8 flex-col gap-4 text-blue-500 font-medium"] do
         a_ [href_ $ "/p/" <> pid.toText <> "/"] "Go to the dashboard"
-        img_ [src_ "/assets/svgs/check_complete.svg", class_ "h-24 w-24"]
+        faIcon_ "fa-circle-check" "fa-sharp fa-regular fa-circle-check" "h-24 w-24 text-green-700"
 
 tabContentExpress :: Html ()
 tabContentExpress =

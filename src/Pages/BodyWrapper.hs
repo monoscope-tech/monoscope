@@ -323,12 +323,12 @@ navbar currUser = do
           |]
       ]
       $ do
-        img_ [class_ "w-5 h-5", src_ "/assets/svgs/hamburger_menu.svg"]
+        faIcon_ "fa-bars-sort" "fa-regular fa-bars-sort" "w-5 h-5 text-gray-500"
     div_ [class_ "inline-block flex items-center"] $ do
       a_ [class_ "inline-block p-2 px-3 align-middle"] $ do
         faIcon_ "fa-magnifying-glass" "fa-regular fa-magnifying-glass" "w-5 h-5 text-gray-500" 
       a_ [class_ "inline-block border-r-2 p-2 pr-5"] $ do 
-        faIcon_ "fa-bell" "w-5 h-5 fa-regular fa-solid fa-bell" "w-5 h-5 text-gray-500"
+        faIcon_ "fa-bell" "fa-regular fa-solid fa-bell" "w-5 h-5 text-gray-500"
       a_
         [ class_ "cursor-pointer inline-block space-x-4 pl-4 relative "
         , [__| 
