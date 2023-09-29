@@ -1,4 +1,4 @@
-module Pages.Log (apiLog, apiLogItem, expandAPIlogItem, expandAPIlogItem') where
+module Pages.Log (apiLog, apiLogItem, logItemRows, expandAPIlogItem, expandAPIlogItem') where
 
 import Config
 import Data.Aeson qualified as AE
@@ -273,7 +273,7 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
             do
               input_ [type_ "hidden", value_ "1 hour", name_ "expiresIn", id_ "expire_input"]
               input_ [type_ "hidden", value_ "", name_ "reqId", id_ "req_id_input"]
-          div_ [id_ "log-modal-content-loader", class_ "bg-white rounded-log shadow p-4 absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2"] do
+          div_ [id_ "log-modal-content-loader", class_ "bg-white rounded-lg shadow p-4 absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2"] do
             loader
           div_ [class_ "px-2", id_ "log-modal-content"] pass
     form_
@@ -502,7 +502,8 @@ findValueByKeyInJSON :: [Text] -> AE.Value -> [Text]
 findValueByKeyInJSON (x : path) (AE.Object obj) = concatMap (\(_, v) -> findValueByKeyInJSON path v) (AEK.toHashMapText obj & HM.toList & filter (\(k, _) -> k == x))
 findValueByKeyInJSON ("[]" : path) (AE.Array vals) = concatMap (findValueByKeyInJSON path) (Vector.toList vals)
 findValueByKeyInJSON [] value = [unwrapJsonPrimValue value]
-findValueByKeyInJSON _ _ = ["_"] 
+findValueByKeyInJSON _ _ = ["_"]
+
 -- findValueByKeyInJSON _ _ = error "findValueByKeyInJSON: case should be unreachable"
 
 -- TODO:
@@ -664,7 +665,8 @@ unwrapJsonPrimValue (AE.Bool False) = "true"
 unwrapJsonPrimValue (AE.String v) = "\"" <> toText v <> "\""
 unwrapJsonPrimValue (AE.Number v) = toText @String $ show v
 unwrapJsonPrimValue AE.Null = "null"
-unwrapJsonPrimValue (AE.Object _) = "{..}" 
-unwrapJsonPrimValue (AE.Array items) = "[" <> show (length items) <> "]" 
+unwrapJsonPrimValue (AE.Object _) = "{..}"
+unwrapJsonPrimValue (AE.Array items) = "[" <> show (length items) <> "]"
+
 -- unwrapJsonPrimValue (AE.Object _) = error "Impossible. unwrapJsonPrimValue should be for primitive types only. got object" -- should never be reached
 -- unwrapJsonPrimValue (AE.Array _) = error "Impossible. unwrapJsonPrimValue should be for primitive types only. got array" -- should never be reached

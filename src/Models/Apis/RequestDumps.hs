@@ -14,6 +14,7 @@ module Models.Apis.RequestDumps (
   throughputBy,
   throughputBy',
   requestDumpLogItemUrlPath,
+  selectAnomalyEvents,
   requestDumpLogUrlPath,
   selectReqLatenciesRolledBySteps,
   selectReqLatenciesRolledByStepsForProject,
@@ -45,6 +46,8 @@ import Database.PostgreSQL.Simple.ToField (ToField (toField))
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Database.PostgreSQL.Transact (DBT, executeMany)
 import Deriving.Aeson qualified as DAE
+import Models.Apis.Anomalies (AnomalyTypes)
+import Models.Apis.Anomalies qualified as Anomalies
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Optics.TH
@@ -382,6 +385,24 @@ select duration_steps, count(id)
 	GROUP BY duration_steps 
 	ORDER BY duration_steps;
       |]
+
+selectAnomalyEvents :: Projects.ProjectId -> Text -> AnomalyTypes -> DBT IO (Vector RequestDumpLogItem)
+selectAnomalyEvents pid targetHash anType = query Select (Query $ encodeUtf8 q) (pid, targetHash)
+  where
+    extraQuery :: Text
+    extraQuery = case anType of
+      Anomalies.ATEndpoint -> " endpoint_hash=?"
+      Anomalies.ATShape -> " shape_hash=?"
+      Anomalies.ATFormat -> " format_hashes=?"
+      _ -> error "Should never be reached"
+
+    q =
+      [text| SELECT id,created_at,host,url_path,method,raw_url,referer,
+                    path_params, status_code,query_params,
+                    request_body,response_body,request_headers,response_headers,
+                    count(*) OVER() AS full_count, duration_ns, sdk_type,
+                    parent_id, service_version, errors, tags
+             FROM apis.request_dumps where project_id=? and $extraQuery |]
 
 -- A throughput chart query for the request_dump table.
 -- daterange :: (Maybe Int, Maybe Int)?

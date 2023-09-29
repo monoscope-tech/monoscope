@@ -116,7 +116,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child = do
     body_ [class_ "text-gray-900 h-full w-full bg-white"] $ do
       div_
         [ style_ "z-index:99999"
-        , class_ "fixed pt-24 sm:hidden justify-center z-50 w-full p-4 bg-gray-50 overflow-y-auto inset-0 h-full max-h-full"
+        , class_ "fixed pt-24 hidden justify-center z-50 w-full p-4 bg-gray-50 overflow-y-auto inset-0 h-full max-h-full"
         , tabindex_ "-1"
         ]
         $ do
