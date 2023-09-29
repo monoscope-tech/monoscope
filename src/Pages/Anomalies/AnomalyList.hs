@@ -19,7 +19,7 @@ import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
 import Data.Text (replace)
 import Data.Text qualified as T
-import Data.Time (UTCTime, ZonedTime, defaultTimeLocale, formatTime, getCurrentTime, zonedTimeToUTC)
+import Data.Time (UTCTime, ZonedTime, defaultTimeLocale, formatTime, getCurrentTime, getTimeZone, zonedTimeToUTC)
 import Data.Tuple.Extra (fst3)
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
@@ -432,6 +432,7 @@ anomalyItem hideByDefault currTime anomaly icon title subTitle content = do
     div_ [class_ "flex items-center justify-center "] $ div_ [class_ "w-60 h-16 px-3"] $ Charts.throughput anomaly.projectId anomaly.targetHash chartQuery Nothing 14 Nothing False (Nothing, Nothing) Nothing
     div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $ show $ anomaly.eventsCount14d
 
+
 anomalyDetailsGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Text -> Maybe Text -> DashboardM (Html ())
 anomalyDetailsGetH sess pid targetHash hxBoostedM = do
   pool <- asks pool
@@ -440,8 +441,9 @@ anomalyDetailsGetH sess pid targetHash hxBoostedM = do
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, anomaly) <- liftIO $
-        withPool pool $ do
+      (project, anomaly) <- liftIO
+        $ withPool pool
+        $ do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
           anomaly <- Anomalies.getAnomalyVM pid targetHash
 
@@ -456,21 +458,23 @@ anomalyDetailsGetH sess pid targetHash hxBoostedM = do
         Just an -> do
           let chartQuery = Just $ anomaly2ChartQuery an.anomalyType an.targetHash
           events <- liftIO $ withPool pool $ RequestDump.selectAnomalyEvents pid an.targetHash an.anomalyType
+          currTime <- liftIO getCurrentTime
           case hxBoostedM of
-            Just _ -> pure $ anomalyDetailsPage an events chartQuery
+            Just _ -> pure $ anomalyDetailsPage an events chartQuery currTime True
             Nothing -> pure $ bodyWrapper bwconf $ div_ [class_ "w-full px-32"] do
               h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
-              anomalyDetailsPage an events chartQuery
+              anomalyDetailsPage an events chartQuery currTime False
         Nothing -> pure $ bodyWrapper bwconf $ h4_ [] "ANOMALY NOT FOUND"
 
-anomalyDetailsPage :: AnomalyVM -> Vector RequestDump.RequestDumpLogItem -> Maybe QueryBy -> Html ()
-anomalyDetailsPage anomaly requestsItems chartQuery = do
+
+anomalyDetailsPage :: AnomalyVM -> Vector RequestDump.RequestDumpLogItem -> Maybe QueryBy -> UTCTime -> Bool -> Html ()
+anomalyDetailsPage anomaly requestsItems chartQuery currTime modal = do
   div_ [class_ "w-full h-full"] do
     div_ [class_ "w-full"] do
-      div_ [class_ "flex items-center gap-10"] do
+      div_ [class_ "flex items-center justify-between gap-2 flex-wrap"] do
         case anomaly.anomalyType of
           Anomalies.ATEndpoint -> do
-            div_ [class_ "flex flex-col gap-6"] do
+            div_ [class_ "flex flex-col gap-4 shrink-0"] do
               a_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
                 img_ [src_ "/assets/svgs/endpoint.svg", class_ "inline w-6 h-6 -mt-1"]
                 span_ [class_ "text-2xl"] "New Endpoint"
@@ -479,14 +483,41 @@ anomalyDetailsPage anomaly requestsItems chartQuery = do
                 div_ [class_ $ "px-4 py-1 text-sm rounded-lg text-white font-semibold bg-" <> methodColor] $ toHtml $ fromMaybe "" anomaly.endpointMethod
                 span_ [] $ toHtml $ fromMaybe "" anomaly.endpointUrlPath
           _ -> ""
-        div_ [class_ "w-[300px] h-[100px]"] do
-          Charts.throughput anomaly.projectId anomaly.targetHash chartQuery Nothing 14 Nothing False (Nothing, Nothing) Nothing
+        div_ [class_ "flex items-center gap-6 shrink-0"] do
+          div_ [class_ "flex items-center gap-6 -mt-4"] do
+            div_ [class_ "flex flex-col gap-2"] do
+              h4_ [class_ "font-semibold"] "Events"
+              span_ [class_ "inline-block space-x-1"] $ show anomaly.eventsCount14d
+            div_ [class_ "flex flex-col gap-2"] do
+              h4_ [class_ "font-semibold"] "First seen"
+              span_ [class_ "inline-block space-x-1"] do
+                mIcon_ "clock" "w-3 h-3"
+                span_
+                  [ class_ "decoration-black underline ml-1"
+                  , term "data-tippy-content" $ "first seen: " <> show anomaly.createdAt
+                  ]
+                  $ toHtml
+                  $ prettyTimeAuto currTime
+                  $ zonedTimeToUTC anomaly.createdAt
+            div_ [class_ "flex flex-col gap-2"] do
+              h4_ [class_ "font-semibold"] "Last seen"
+              span_ [class_ "decoration-black underline", term "data-tippy-content" $ "last seen: " <> show anomaly.lastSeen] $ toHtml $ prettyTimeAuto currTime $ zonedTimeToUTC anomaly.lastSeen
+          div_ [class_ "w-[200px] h-[80px] mt-4 shrink-0"] do
+            Charts.throughput anomaly.projectId anomaly.targetHash chartQuery Nothing 14 Nothing False (Nothing, Nothing) Nothing
+    div_ [class_ "w-full flex items-center gap-4 mt-4 overflow-y-auto h-full"] do
+      anomalyArchiveButton anomaly.projectId anomaly.id (isJust anomaly.archivedAt)
+      anomalyAcknowlegeButton anomaly.projectId anomaly.id (isJust anomaly.acknowlegedAt)
+      when modal $ a_ [href_ $ "/p/" <> anomaly.projectId.toText <> "/anomaly/" <> anomaly.targetHash, term "data-tippy-content" "Go to page"] do
+        mIcon_ "enlarge" "w-3 h-3"
+
     div_ [class_ "mt-6 space-y-4"] do
-      div_ [class_ "py-2 border-b"] do
-        h3_ [class_ "font-semibold"] "All events"
+      div_ [class_ "flex items-center gap-6 py-2 border-b"] do
+        button_ [class_ ""] "Overview"
+        button_ [class_ ""] "All events"
       div_ [] do
         div_ [class_ "grow overflow-y-auto h-full whitespace-nowrap text-sm divide-y overflow-x-hidden", id_ "log-item-table-body"] $ do
           Log.logItemRows anomaly.projectId requestsItems [] ""
+
 
 anomaly2ChartQuery :: Anomalies.AnomalyTypes -> Text -> Charts.QueryBy
 anomaly2ChartQuery Anomalies.ATEndpoint = Charts.QBEndpointHash
