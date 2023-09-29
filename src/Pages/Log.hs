@@ -31,11 +31,13 @@ import Relude
 import System.Clock
 import Utils
 
+
 -- $setup
 -- >>> import Relude
 -- >>> import Data.Vector qualified as Vector
 -- >>> import Data.Aeson.QQ (aesonQQ)
 -- >>> import Data.Aeson
+
 
 apiLog :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
 apiLog sess pid queryM cols' fromM hxRequestM hxBoostedM = do
@@ -80,6 +82,7 @@ apiLog sess pid queryM cols' fromM hxRequestM hxBoostedM = do
           let resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing
           pure $ bodyWrapper bwconf $ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL
 
+
 apiLogItem :: Sessions.PersistentSession -> Projects.ProjectId -> UUID.UUID -> ZonedTime -> DashboardM (Html ())
 apiLogItem sess pid rdId createdAt = do
   pool <- asks pool
@@ -98,6 +101,7 @@ apiLogItem sess pid rdId createdAt = do
       liftIO $ putStrLn $ fmtLn $ " APILOG pipeline microsecs: queryDuration " +| (toNanoSecs (diffTimeSpec startTime afterProccessing)) `div` 1000 |+ " -> processingDuration " +| toNanoSecs (diffTimeSpec afterProccessing endTime) `div` 1000 |+ " -> TotalDuration " +| toNanoSecs (diffTimeSpec startTime endTime) `div` 1000 |+ ""
       pure content
 
+
 expandAPIlogItem :: Sessions.PersistentSession -> Projects.ProjectId -> UUID.UUID -> ZonedTime -> DashboardM (Html ())
 expandAPIlogItem sess pid rdId createdAt = do
   pool <- asks pool
@@ -109,6 +113,7 @@ expandAPIlogItem sess pid rdId createdAt = do
         Nothing -> div_ [class_ "h-full flex flex-col justify-center items-center"] do
           p_ [] "Request not found"
   pure content
+
 
 expandAPIlogItem' :: RequestDumps.RequestDumpLogItem -> Bool -> Html ()
 expandAPIlogItem' req modal = do
@@ -251,6 +256,7 @@ expandAPIlogItem' req modal = do
       div_ [class_ "bg-gray-50 m-4 p-2 hidden rounded-lg border sdk_tab_content", id_ "res_headers_json"] do
         jsonValueToHtmlTree req.responseHeaders
 
+
 apiLogsPage :: Projects.ProjectId -> Int -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Text -> Text -> Text -> Html ()
 apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL = do
   section_ [class_ "mx-auto px-10 py-2 gap-2 flex flex-col h-[98%] overflow-hidden "] $ do
@@ -380,6 +386,7 @@ reqChart reqChartTxt hxOob = do
     script_
       [text| throughputEChart("reqsChartsEC", $reqChartTxt, [], true) |]
 
+
 logItemRows :: Projects.ProjectId -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Text -> Html ()
 logItemRows pid requests cols nextLogsURL = do
   requests & traverse_ \req -> do
@@ -437,12 +444,14 @@ logItemRows pid requests cols nextLogsURL = do
         loader
       "LOAD MORE"
 
+
 getMethodBgColor :: Text -> Text
 getMethodBgColor "POST" = " bg-pink-200"
 getMethodBgColor "PUT" = " bg-orange-100"
 getMethodBgColor "DELETE" = " bg-red-100"
 getMethodBgColor "PATCH" = " bg-purple-100"
 getMethodBgColor _ = " bg-blue-100"
+
 
 apiLogItemView :: RequestDumps.RequestDumpLogItem -> Text -> Html ()
 apiLogItemView req expandItemPath = do
@@ -461,6 +470,7 @@ apiLogItemView req expandItemPath = do
         ]
         "expand"
       jsonValueToHtmlTree $ AE.toJSON req
+
 
 -- | jsonValueToHtmlTree takes an aeson json object and renders it as a collapsible html tree, with hyperscript for interactivity.
 jsonValueToHtmlTree :: AE.Value -> Html ()
@@ -496,6 +506,7 @@ jsonValueToHtmlTree val = jsonValueToHtmlTree' ("", "", val)
         div_ [class_ "tree-children"] child
       span_ [class_ "pl-5 closing-token"] $ toHtml closing
 
+
 -- >>> findValueByKeyInJSON ["key1", "key2"] [aesonQQ|{"kx":0, "key1":{"key2":"k2val"}}|]
 -- ["\"k2val\""]
 -- >>> findValueByKeyInJSON ["key1", "[]", "key2"] [aesonQQ|{"kx":0, "key1":[{"key2":"k2val"}]}|]
@@ -505,6 +516,7 @@ findValueByKeyInJSON (x : path) (AE.Object obj) = concatMap (\(_, v) -> findValu
 findValueByKeyInJSON ("[]" : path) (AE.Array vals) = concatMap (findValueByKeyInJSON path) (Vector.toList vals)
 findValueByKeyInJSON [] value = [unwrapJsonPrimValue value]
 findValueByKeyInJSON _ _ = ["_"]
+
 
 -- findValueByKeyInJSON _ _ = error "findValueByKeyInJSON: case should be unreachable"
 
@@ -660,6 +672,7 @@ jsonTreeAuxillaryCode pid = do
     .collapsed .children {display: inline-block; padding-left:0}
     .collapsed .closing-token {padding-left:0}
   |]
+
 
 unwrapJsonPrimValue :: AE.Value -> Text
 unwrapJsonPrimValue (AE.Bool True) = "true"

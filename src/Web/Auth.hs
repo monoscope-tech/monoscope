@@ -40,11 +40,13 @@ import SessionCookies (craftSessionCookie, emptySessionCookie)
 import Web.Cookie (SetCookie, parseCookies)
 import Prelude (lookup)
 
+
 -- | The context that will be made available to request handlers. We supply the
 -- "cookie-auth"-tagged request handler defined above, so that the 'HasServer' instance
 -- of 'AuthProtect' can extract the handler and run it on the request.
 genAuthServerContext :: LogAction IO String -> Pool Connection -> Context (AuthHandler Request Sessions.PersistentSession ': '[])
 genAuthServerContext logger dbConn = authHandler logger dbConn :. EmptyContext
+
 
 logoutH
   :: DashboardM
@@ -57,6 +59,7 @@ logoutH = do
   let redirectTo = envCfg ^. #auth0Domain <> "/v2/logout?client_id=" <> envCfg ^. #auth0ClientId <> "&returnTo=" <> envCfg ^. #auth0LogoutRedirect
   pure $ addHeader redirectTo $ addHeader emptySessionCookie NoContent
 
+
 loginRedirectH
   :: DashboardM
       ( Headers
@@ -66,6 +69,7 @@ loginRedirectH
 loginRedirectH = do
   let redirectTo = "/login"
   pure $ addHeader redirectTo $ addHeader emptySessionCookie NoContent
+
 
 -- loginH
 loginH
@@ -79,6 +83,7 @@ loginH = do
   stateVar <- liftIO $ UUID.toText <$> UUIDV4.nextRandom
   let redirectTo = envCfg ^. #auth0Domain <> "/authorize?response_type=code&client_id=" <> envCfg ^. #auth0ClientId <> "&redirect_uri=" <> envCfg ^. #auth0Callback <> "&state=" <> stateVar <> "&scope=openid profile email"
   pure $ addHeader redirectTo $ addHeader emptySessionCookie NoContent
+
 
 -- authCallbackH will accept a request with code and state, and use that code to queery auth- for an auth token, and then for user info
 -- it then uses this user info to check if we already have that user in our db. And if we have that user in the db,
@@ -150,6 +155,7 @@ authCallbackH codeM _ = do
           body_ $ do
             a_ [href_ "/"] "Continue to APIToolkit"
 
+
 --- | The auth handler wraps a function from Request -> Handler Account.
 --- We look for a token in the request headers that we expect to be in the cookie.
 --- The token is then passed to our `lookupAccount` function.
@@ -166,6 +172,7 @@ authHandler logger conn = mkAuthHandler handler
     handler req = either throw301 (lookupAccount conn) $ do
       cookie <- note "Missing cookie header" $ lookup "cookie" $ requestHeaders req
       note "Missing token in cookie" $ lookup "apitoolkit_session" $ parseCookies cookie
+
 
 -- We need to handle errors for the persistent session better and redirect if there's an error
 lookupAccount :: Pool Connection -> ByteString -> Handler Sessions.PersistentSession

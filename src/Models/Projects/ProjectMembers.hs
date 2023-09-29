@@ -35,25 +35,30 @@ import Relude
 import Servant (FromHttpApiData)
 import Web.HttpApiData (parseUrlPiece)
 
+
 data Permissions
   = PAdmin
   | PView
   | PEdit
   deriving stock (Eq, Generic, Show)
 
+
 instance FromHttpApiData Permissions where
   parseUrlPiece = note "Unable to parse" . parsePermissions
+
 
 instance ToField Permissions where
   toField PAdmin = Escape "admin"
   toField PView = Escape "view"
   toField PEdit = Escape "edit"
 
+
 parsePermissions :: (Eq s, IsString s) => s -> Maybe Permissions
 parsePermissions "admin" = Just PAdmin
 parsePermissions "view" = Just PView
 parsePermissions "edit" = Just PEdit
 parsePermissions _ = Nothing
+
 
 instance FromField Permissions where
   fromField f mdata =
@@ -63,6 +68,7 @@ instance FromField Permissions where
         case parsePermissions bs of
           Just a -> pure a
           Nothing -> returnError ConversionFailed f $ "Conversion error: Expected permission enum, got " <> decodeUtf8 bs <> " instead."
+
 
 data ProjectMembers = ProjectMembers
   { id :: UUID.UUID
@@ -80,7 +86,9 @@ data ProjectMembers = ProjectMembers
     (Entity)
     via (GenericEntity '[Schema "projects", TableName "project_members", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ProjectMembers)
 
+
 makeFieldLabelsNoPrefix ''ProjectMembers
+
 
 data CreateProjectMembers = CreateProjectMembers
   { projectId :: Projects.ProjectId
@@ -93,11 +101,13 @@ data CreateProjectMembers = CreateProjectMembers
     (Entity)
     via (GenericEntity '[Schema "projects", TableName "project_members", PrimaryKey "id", FieldModifiers '[CamelToSnake]] CreateProjectMembers)
 
+
 insertProjectMembers :: [CreateProjectMembers] -> DBT IO Int64
 insertProjectMembers = PgT.executeMany q
   where
     q =
       [sql| INSERT INTO projects.project_members(project_id, user_id, permission) VALUES (?,?,?) |]
+
 
 data ProjectMemberVM = ProjectMemberVM
   { id :: UUID.UUID
@@ -108,7 +118,9 @@ data ProjectMemberVM = ProjectMemberVM
   deriving stock (Show, Generic, Eq)
   deriving anyclass (FromRow)
 
+
 makeFieldLabelsNoPrefix ''ProjectMemberVM
+
 
 selectActiveProjectMembers :: Projects.ProjectId -> DBT IO (Vector ProjectMemberVM)
 selectActiveProjectMembers = query Select q
@@ -120,6 +132,7 @@ selectActiveProjectMembers = query Select q
                     
         |]
 
+
 updateProjectMembersPermissons :: [(UUID.UUID, Permissions)] -> DBT IO ()
 updateProjectMembersPermissons vals = void $ executeMany q vals
   where
@@ -128,6 +141,7 @@ updateProjectMembersPermissons vals = void $ executeMany q vals
             SET permission = c.permission::projects.project_permissions
             FROM (VALUES (?,?)) as c(id, permission)
             WHERE pm.id::uuid = c.id::uuid; |]
+
 
 softDeleteProjectMembers :: [UUID.UUID] -> DBT IO ()
 softDeleteProjectMembers vals = void $ executeMany q (map Only vals)

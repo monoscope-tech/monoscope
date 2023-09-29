@@ -24,6 +24,7 @@ import Servant.Htmx (HXRedirect, HXTrigger)
 import Utils
 import Web.FormUrlEncoded (FromForm)
 
+
 data SurveyForm = SurveyForm
   { stack :: [Text]
   , functionality :: [Text]
@@ -35,6 +36,7 @@ data SurveyForm = SurveyForm
   deriving stock (Show, Generic)
   deriving anyclass (FromForm, FromJSON)
 
+
 instance ToJSON SurveyForm where
   toJSON surveyForm =
     object
@@ -43,6 +45,7 @@ instance ToJSON SurveyForm where
       , "dataLocation" .= dataLocation surveyForm
       , "foundUsFrom" .= foundUsFrom surveyForm
       ]
+
 
 surveyPutH :: Sessions.PersistentSession -> Projects.ProjectId -> SurveyForm -> DashboardM (Headers '[HXTrigger, HXRedirect] (Html ()))
 surveyPutH sess pid survey = do
@@ -69,6 +72,7 @@ surveyPutH sess pid survey = do
           let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","successToast": ["Thanks for taking the survey"]}|]
           pure $ addHeader hxTriggerData $ addHeader ("/p/" <> show pid.unProjectId <> "/onboarding") ""
 
+
 surveyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 surveyGetH sess pid = do
   pool <- asks pool
@@ -91,6 +95,7 @@ surveyGetH sess pid = do
       let full_name = user.firstName <> " " <> user.lastName
       let phoneNumber = fromMaybe "" user.phoneNumber
       pure $ bodyWrapper bwconf $ aboutPage pid full_name phoneNumber
+
 
 aboutPage :: Projects.ProjectId -> Text -> Text -> Html ()
 aboutPage pid full_name phoneNumber = do
@@ -165,6 +170,7 @@ aboutPage pid full_name phoneNumber = do
                   div_ [class_ "htmx-indicator query-indicator"] do
                     loader
 
+
 stackOptions :: [(T.Text, T.Text, T.Text)]
 stackOptions =
   [ ("expressjs", "JS - Express.js", "express-logo.png")
@@ -196,6 +202,7 @@ stackOptions =
   , ("scala-play", "Scala - Play", "play-logo.png")
   ]
 
+
 functionalityOptions :: [(T.Text, T.Text)]
 functionalityOptions =
   [ ("monitoring", "API Monitoring")
@@ -205,12 +212,14 @@ functionalityOptions =
   , ("testing", "Testing")
   ]
 
+
 dataLocationOptions :: [(T.Text, T.Text)]
 dataLocationOptions =
   [ ("asia", "Asia")
   , ("eu", "EU")
   , ("us", "US")
   ]
+
 
 foundUsFromOptions :: [(T.Text, T.Text)]
 foundUsFromOptions =
@@ -220,6 +229,7 @@ foundUsFromOptions =
   , ("reddit", "Reddit")
   , ("other", "Other")
   ]
+
 
 progressSteps :: Html ()
 progressSteps = do

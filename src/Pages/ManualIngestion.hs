@@ -21,6 +21,7 @@ import RequestMessages qualified
 import Utils
 import Web.FormUrlEncoded (FromForm)
 
+
 data RequestMessageForm = RequestMessageForm
   { timestamp :: ZonedTime
   , host :: Text
@@ -40,6 +41,7 @@ data RequestMessageForm = RequestMessageForm
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
+
 
 reqMsgFormToReqMsg :: UUID.UUID -> RequestMessageForm -> Either Text RequestMessages.RequestMessage
 reqMsgFormToReqMsg pid RequestMessageForm{urlPath, ..} = do
@@ -65,6 +67,7 @@ reqMsgFormToReqMsg pid RequestMessageForm{urlPath, ..} = do
       , errors = Nothing
       , ..
       }
+
 
 -- TODO:
 -- - [x] Parse the time to the ZonedTime from string or default to current time.
@@ -102,6 +105,7 @@ manualIngestPostH sess pid reqMF = do
 
       pure manualIngestPage
 
+
 manualIngestGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 manualIngestGetH sess pid = do
   pool <- asks pool
@@ -122,6 +126,7 @@ manualIngestGetH sess pid = do
               , pageTitle = "ManualIngest"
               }
       pure $ bodyWrapper bwconf manualIngestPage
+
 
 manualIngestPage :: Html ()
 manualIngestPage = do
@@ -202,6 +207,7 @@ manualIngestPage = do
         queryParamsEditor.set(pathInitialJsonB)
     |]
 
+
 inputText :: Text -> Text -> Html ()
 inputText title name = do
   div_ $ do
@@ -212,6 +218,7 @@ inputText title name = do
       , id_ name
       , name_ name
       ]
+
 
 inputTextDatalist :: Text -> Text -> [Text] -> Html ()
 inputTextDatalist title name datalist = do
@@ -227,6 +234,7 @@ inputTextDatalist title name datalist = do
     datalist_ [id_ $ name <> "-list"] $ do
       datalist & mapM_ (\it -> option_ [value_ it] $ toHtml it)
 
+
 inputTextArea :: Text -> Text -> Html ()
 inputTextArea title name = do
   div_ $ do
@@ -237,6 +245,7 @@ inputTextArea title name = do
       , name_ name
       ]
       ""
+
 
 inputDatetime :: Text -> Html ()
 inputDatetime name = do
@@ -250,6 +259,7 @@ inputDatetime name = do
       , pattern_ "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}"
       ]
 
+
 inputInt :: Text -> Text -> Int -> Html ()
 inputInt title name value = do
   div_ $ do
@@ -262,6 +272,7 @@ inputInt title name value = do
       , value_ $ show value
       , lang_ "en-150"
       ]
+
 
 httpStatusCodes :: [(Text, Text)]
 httpStatusCodes =

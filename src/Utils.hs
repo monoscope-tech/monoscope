@@ -22,9 +22,11 @@ import Servant
 import Text.Regex.TDFA ((=~))
 import Prelude (show)
 
+
 -- Added only for satisfying the tests
 instance Eq ZonedTime where
   (==) _ _ = True
+
 
 -- | eitherStrToText helps to convert Either String a to Either Text a,
 -- to allow using both of them via do notation in the same monad.
@@ -32,25 +34,33 @@ eitherStrToText :: Either String a -> Either Text a
 eitherStrToText (Left str) = Left $ toText str
 eitherStrToText (Right a) = Right a
 
+
 type GetOrRedirect = '[WithStatus 200 (Html ()), WithStatus 302 (Headers '[Header "Location" Text] NoContent)]
+
 
 redirect :: Text -> Headers '[Header "Location" Text] NoContent
 redirect destination = addHeader destination NoContent
 
+
 data DBField = forall a. (ToField a, Show a) => MkDBField a
+
 
 instance Show DBField where
   show (MkDBField a) = "MkDBField " ++ show a
 
+
 instance ToField DBField where
   toField (MkDBField a) = toField a
+
 
 -- Useful Alternative abstractions
 (<?>) :: Alternative f => f a -> a -> f a
 (<?>) fa def = fa <|> pure def
 
+
 mIcon_ :: Text -> Text -> Html ()
 mIcon_ mIcon classes = svg_ [class_ $ "inline-block icon " <> classes] $ use_ [href_ $ "/assets/svgs/symbol-defs.svg#icon-" <> mIcon]
+
 
 deleteParam :: Text -> Text -> Text
 deleteParam key url = if needle == "" then url else replace needle "" url
@@ -58,11 +68,14 @@ deleteParam key url = if needle == "" then url else replace needle "" url
     needle = url =~ reg :: Text
     reg = "&" <> key <> "(=[^&]*)?|^" <> key <> "(=[^&]*)?&?" :: Text
 
+
 quoteTxt :: Text -> Text
 quoteTxt a = "'" <> a <> "'"
 
+
 textToBool :: Text -> Bool
 textToBool a = a == "true"
+
 
 userIsProjectMember :: Session.PersistentSession -> Projects.ProjectId -> DBT IO Bool
 userIsProjectMember sess pid = do
@@ -71,6 +84,7 @@ userIsProjectMember sess pid = do
     else do
       user <- Projects.userByProjectId pid sess.userId
       if V.length user == 0 then pure False else pure True
+
 
 userNotMemeberPage :: Session.PersistentSession -> Html ()
 userNotMemeberPage sess = bodyWrapper bwconf forbiddenPage
@@ -82,6 +96,7 @@ userNotMemeberPage sess = bodyWrapper bwconf forbiddenPage
         , pageTitle = "Forbidden"
         }
 
+
 forbiddenPage :: Html ()
 forbiddenPage =
   div_ [class_ "w-full flex justify-center"] do
@@ -89,12 +104,14 @@ forbiddenPage =
       h3_ [class_ "text-3xl mb-2 font-bold"] "Forbidden"
       p_ [class_ "max-w-prose text-gray-500"] "Only members of this project can access this page, make sure you are logged in to the right account and try again"
 
+
 getMethodColor :: Text -> Text
 getMethodColor "POST" = "green-500"
 getMethodColor "PUT" = "orange-500"
 getMethodColor "DELETE" = "red-500"
 getMethodColor "PATCH" = "purple-500"
 getMethodColor _ = "blue-500"
+
 
 getStatusColor :: Int -> Text
 getStatusColor status

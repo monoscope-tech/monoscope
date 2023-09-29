@@ -41,6 +41,7 @@ import Text.Interpolation.Nyan
 import Utils (GetOrRedirect, deleteParam, mIcon_, redirect, userIsProjectMember, userNotMemeberPage)
 import Witch (from)
 
+
 timePickerItems :: [(Text, Text)]
 timePickerItems =
   [ ("1H", "Last Hour")
@@ -49,12 +50,14 @@ timePickerItems =
   , ("14D", "Last 14 days")
   ]
 
+
 data ParamInput = ParamInput
   { currentURL :: Text
   , sinceStr :: Maybe Text
   , dateRange :: (Maybe ZonedTime, Maybe ZonedTime)
   , currentPickerTxt :: Text
   }
+
 
 dashboardGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Union GetOrRedirect)
 dashboardGetH sess pid fromDStr toDStr sinceStr' = do
@@ -115,6 +118,7 @@ dashboardGetH sess pid fromDStr toDStr sinceStr' = do
         then respond $ WithStatus @302 $ redirect ("/p/" <> pid.toText <> "/onboarding")
         else respond $ WithStatus @200 $ bodyWrapper bwconf $ dashboardPage pid paramInput currTime projectRequestStats reqLatenciesRolledByStepsJ (fromD, toD)
 
+
 dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 dashboardPage pid paramInput currTime projectStats reqLatenciesRolledByStepsJ dateRange = do
   let currentURL' = deleteParam "to" $ deleteParam "from" $ deleteParam "since" paramInput.currentURL
@@ -174,6 +178,7 @@ dashboardPage pid paramInput currTime projectStats reqLatenciesRolledByStepsJ da
     });
     window.picker = picker;
     |]
+
 
 dStats :: Projects.ProjectId -> Projects.ProjectRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledByStepsJ dateRange@(fromD, toD) = do
@@ -249,6 +254,7 @@ dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledBySte
               percentileRow "min" $ projReqStats.min
         script_ [int|| latencyHistogram('reqsLatencyHistogram',{p50:#{p50}, p75:#{p75}, p90:#{p90}, p95:#{p95}, p99:#{p99}, max:#{max}},  #{reqLatenciesRolledByStepsJ}) |]
 
+
 percentileRow :: Text -> Double -> Html ()
 percentileRow key p = do
   let (d, unit) = fmtDuration p
@@ -257,6 +263,7 @@ percentileRow key p = do
     span_ [class_ "inline-block font-mono"] $ do
       span_ [class_ "tabular-nums"] $ toHtml d
       span_ $ toHtml unit
+
 
 fmtDuration :: Double -> (Text, Text)
 fmtDuration d

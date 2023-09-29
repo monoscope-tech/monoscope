@@ -42,6 +42,7 @@ import Text.Interpolation.Nyan (int, rmode')
 import Utils
 import Witch (from)
 
+
 timePickerItems :: [(Text, Text)]
 timePickerItems =
   [ ("1H", "Last Hour")
@@ -49,6 +50,7 @@ timePickerItems =
   , ("7D", "Last 7 days")
   , ("14D", "Last 14 days")
   ]
+
 
 data ParamInput = ParamInput
   { currentURL :: Text
@@ -64,17 +66,20 @@ data ShapeWidthFields = ShapeWidthFields
   }
   deriving (Show)
 
+
 getShapeFields :: Shapes.Shape -> Vector Fields.Field -> ShapeWidthFields
 getShapeFields shape fields = ShapeWidthFields{status = shape.statusCode, hash = shape.hash, fieldsMap = fieldM}
   where
     matchedFields = Vector.filter (\field -> field.hash `Vector.elem` shape.fieldHashes) fields
     fieldM = Fields.groupFieldsByCategory matchedFields
 
+
 subPageMenu :: [(Text, Text)]
 subPageMenu =
   [ ("Overview", "overview")
   , ("API Docs", "api_docs")
   ]
+
 
 fieldDetailsPartialH :: Sessions.PersistentSession -> Projects.ProjectId -> Fields.FieldId -> DashboardM (Html ())
 fieldDetailsPartialH sess pid fid = do
@@ -93,6 +98,7 @@ fieldDetailsPartialH sess pid fid = do
       case fieldsM of
         Nothing -> pure ""
         Just field -> pure $ fieldDetailsView field formats
+
 
 fieldDetailsView :: Fields.Field -> Vector Formats.Format -> Html ()
 fieldDetailsView field formats = do
@@ -142,8 +148,10 @@ fieldDetailsView field formats = do
     h6_ [class_ "mt-5 text-sm text-slate-800 mb-2"] "DESCRIPTION"
     p_ [class_ "text-slate-800 text-sm"] $ toHtml $ field.description
 
+
 aesonValueToText :: AE.Value -> Text
 aesonValueToText = toStrict . encodeToLazyText
+
 
 -- | endpointDetailsH is the main handler for the endpoint details page.
 -- It reuses the fieldDetailsView as well, which is used for the side navigation on the page and also exposed un the fieldDetailsPartialH endpoint
@@ -207,6 +215,7 @@ endpointDetailsH sess pid eid fromDStr toDStr sinceStr' subPageM = do
       let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt, subPage = subPage}
       pure $ bodyWrapper bwconf $ endpointDetails paramInput currTime endpoint enpStats shapesWithFieldsMap fieldsMap reqLatenciesRolledByStepsJ (fromD, toD)
 
+
 endpointDetails :: ParamInput -> UTCTime -> Endpoints.Endpoint -> EndpointRequestStats -> [ShapeWidthFields] -> Map FieldCategoryEnum [Fields.Field] -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 endpointDetails paramInput currTime endpoint endpointStats shapesWithFieldsMap fieldsM reqLatenciesRolledByStepsJ dateRange = do
   let currentURLSubPage = deleteParam "subpage" paramInput.currentURL
@@ -263,6 +272,7 @@ endpointDetails paramInput currTime endpoint endpointStats shapesWithFieldsMap f
             then collapseUntil(nxtElem, level)
         end
         |]
+
 
 apiDocsSubPage :: [ShapeWidthFields] -> Html ()
 apiDocsSubPage shapesWithFieldsMap = do
@@ -363,6 +373,7 @@ apiDocsSubPage shapesWithFieldsMap = do
         end
         |]
 
+
 apiOverviewSubPage :: ParamInput -> UTCTime -> EndpointRequestStats -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 apiOverviewSubPage paramInput currTime endpoint fieldsM reqLatenciesRolledByStepsJ dateRange = do
   let currentURLSearch = deleteParam "to" $ deleteParam "from" $ deleteParam "since" paramInput.currentURL
@@ -392,6 +403,7 @@ apiOverviewSubPage paramInput currTime endpoint fieldsM reqLatenciesRolledByStep
         div_ [id_ "startTime", class_ "hidden"] ""
     section_ $ AnomaliesList.anomalyListSlider currTime (endpoint.projectId) (Just endpoint.endpointId) Nothing
     endpointStats endpoint reqLatenciesRolledByStepsJ dateRange
+
 
 endpointStats :: Endpoints.EndpointRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p99, max} reqLatenciesRolledByStepsJ dateRange@(fromD, toD) =
@@ -461,6 +473,7 @@ endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p
               percentileRow "min" $ enpStats.min
         script_ [int|| latencyHistogram('reqsLatencyHistogram',{p50:#{p50}, p75:#{p75}, p90:#{p90}, p95:#{p95}, p99:#{p99}, max:#{max}},  #{reqLatenciesRolledByStepsJ}) |]
 
+
 percentileRow :: Text -> Double -> Html ()
 percentileRow key p = do
   let (d, unit) = fmtDuration p
@@ -470,10 +483,12 @@ percentileRow key p = do
       span_ [class_ "tabular-nums"] $ toHtml d
       span_ $ toHtml unit
 
+
 fmtDuration :: Double -> (Text, Text)
 fmtDuration d
   | d > 1000 = (fmt $ fixedF 2 (d / 1000), "s")
   | otherwise = (fmt $ fixedF 0 d, "ms")
+
 
 -- NOTE: We could enable the fields cycling functionality using the groups of response list functionality on the endpoint.
 -- So we go through the list and in each request or response view, only show the fields that appear in the field list.
@@ -504,6 +519,7 @@ reqResSection title isRequest shapesWithFieldsMap =
             else do
               subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader s.fieldsMap)
               subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody s.fieldsMap)
+
 
 -- | subSubSection ..
 subSubSection :: Text -> Maybe [Fields.Field] -> Html ()
@@ -561,6 +577,7 @@ subSubSection title fieldsM =
                       span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ EndpointComponents.fieldTypeToDisplay $ field.fieldType
                       img_ [src_ "/assets/svgs/alert-red.svg", class_ " mr-8 ml-4 h-5"]
                       img_ [src_ "/assets/svgs/dots-vertical.svg", class_ "mx-5 h-5"]
+
 
 -- | fieldsToNormalized, gets a list of fields and returns a list of tuples with the keypath, and the field, sorted by the key path
 -- >>> import Models.Apis.Fields.Types

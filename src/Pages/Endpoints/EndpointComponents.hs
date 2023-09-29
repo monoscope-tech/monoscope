@@ -3,6 +3,7 @@ module Pages.Endpoints.EndpointComponents (fieldTypeToDisplay, fieldCategoryToDi
 import Lucid
 import Models.Apis.Fields qualified as Fields
 
+
 fieldTypeToDisplay :: Fields.FieldTypes -> Html ()
 fieldTypeToDisplay fieldType = case fieldType of
   Fields.FTUnknown -> span_ [class_ "px-2 rounded-xl bg-red-100 red-800 monospace"] "unknown"
@@ -12,6 +13,7 @@ fieldTypeToDisplay fieldType = case fieldType of
   Fields.FTObject -> span_ [class_ "px-2 rounded-xl bg-orange-100 orange-800 monospace"] "{obj}"
   Fields.FTList -> span_ [class_ "px-2 rounded-xl bg-stone-100 stone-800 monospace"] "[list]"
   Fields.FTNull -> span_ [class_ "px-2 rounded-xl bg-red-100 red-800 monospace"] "null"
+
 
 fieldCategoryToDisplay :: Fields.FieldCategoryEnum -> Html ()
 fieldCategoryToDisplay fieldType = case fieldType of

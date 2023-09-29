@@ -33,6 +33,7 @@ import Text.Pretty.Simple (pPrint, pPrintString, pShow)
 import Utils (DBField, eitherStrToText)
 import Witch (from)
 
+
 {--
   Exploring how the inmemory cache could be shaped for performance, and low footprint ability to skip hitting the postgres database when not needed.
 
@@ -104,8 +105,10 @@ processMessages logger' env conn' msgs projectCache = do
     then pure []
     else processMessages' logger' env conn' msgs' projectCache
 
+
 wrapTxtException :: Text -> SomeException -> Text
 wrapTxtException wrap e = " " <> wrap <> " : " <> (toText @String $ show e)
+
 
 processMessages' :: HasCallStack => LogAction IO String -> Config.EnvConfig -> Pool Connection -> [Either Text (Maybe Text, RequestMessages.RequestMessage)] -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> IO [Maybe Text]
 processMessages' logger' _ conn' msgs projectCache' = do

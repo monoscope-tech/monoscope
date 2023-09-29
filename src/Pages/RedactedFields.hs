@@ -23,6 +23,7 @@ import Servant.Htmx (HXTrigger)
 import Utils
 import Web.FormUrlEncoded (FromForm)
 
+
 data RedactFieldForm = RedactFieldForm
   { path :: Text
   , description :: Text
@@ -30,6 +31,7 @@ data RedactFieldForm = RedactFieldForm
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
+
 
 redactedFieldsPostH :: Sessions.PersistentSession -> Projects.ProjectId -> RedactFieldForm -> DashboardM (Headers '[HXTrigger] (Html ()))
 redactedFieldsPostH sess pid RedactFieldForm{path, description, endpointHash} = do
@@ -54,6 +56,7 @@ redactedFieldsPostH sess pid RedactFieldForm{path, description, endpointHash} = 
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Submitted field to be redacted, Successfully"]}|]
       pure $ addHeader hxTriggerData $ mainContent pid redactedFields
 
+
 -- | redactedFieldsGetH renders the api keys list page which includes a modal for creating the apikeys.
 redactedFieldsGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 redactedFieldsGetH sess pid = do
@@ -77,6 +80,7 @@ redactedFieldsGetH sess pid = do
               , pageTitle = "Redacted Fields"
               }
       pure $ bodyWrapper bwconf $ redactedFieldsPage pid redactedFields
+
 
 redactedFieldsPage :: Projects.ProjectId -> Vector RedactedFields.RedactedField -> Html ()
 redactedFieldsPage pid redactedFields = do
@@ -133,6 +137,7 @@ redactedFieldsPage pid redactedFields = do
                   , [__|on click add .hidden to #redactFieldDialog|]
                   ]
                   "Cancel"
+
 
 mainContent :: Projects.ProjectId -> Vector RedactedFields.RedactedField -> Html ()
 mainContent pid redactedFields = do

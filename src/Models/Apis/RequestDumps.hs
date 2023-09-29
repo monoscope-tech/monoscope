@@ -53,6 +53,7 @@ import Relude hiding (many, some)
 import Utils (DBField (MkDBField), quoteTxt)
 import Witch (from)
 
+
 data SDKTypes
   = GoGin
   | GoBuiltIn
@@ -73,8 +74,10 @@ data SDKTypes
   deriving stock (Show, Generic, Read, Eq)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SDKTypes
 
+
 instance ToField SDKTypes where
   toField sdkType = toField @String (show sdkType)
+
 
 instance FromField SDKTypes where
   fromField f mdata = do
@@ -82,6 +85,7 @@ instance FromField SDKTypes where
     case readMaybe str of
       Just sdkType -> return sdkType
       Nothing -> return GoGin
+
 
 -- Nothing -> returnError ConversionFailed f ("Could not read SDKTypes: " ++ str)
 
@@ -119,6 +123,7 @@ normalizeUrlPath JsFastify statusCode _method urlPath = removeQueryParams status
 normalizeUrlPath PythonFlask statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath PythonDjango statusCode _method urlPath = removeQueryParams statusCode urlPath
 
+
 -- removeQueryParams ...
 -- >>> removeQueryParams 200 "https://apitoolkit.io/abc/:bla?q=abc"
 --
@@ -129,6 +134,7 @@ removeQueryParams statusCode urlPath =
   case T.break (== '?') urlPath of
     (before, "") -> before -- No query parameters found
     (before, after) -> before -- Query parameters found, stripping them
+
 
 data ATError = ATError
   { when :: ZonedTime
@@ -143,6 +149,7 @@ data ATError = ATError
     (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATError
   deriving (ToField, FromField) via Aeson ATError
+
 
 --   via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATErrors
 -- deriving (ToField, FromField) via Aeson ATErrors
@@ -191,6 +198,7 @@ data RequestDump = RequestDump
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "request_dumps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] RequestDump)
 
+
 -- Fields to from request dump neccessary for generating performance reports
 data RequestForReport = RequestForReport
   { id :: UUID.UUID
@@ -209,6 +217,7 @@ data RequestForReport = RequestForReport
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "request_dumps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] RequestForReport)
 
+
 data EndpointPerf = EndpointPerf
   { endpointHash :: Text
   , averageDuration :: Integer
@@ -219,7 +228,9 @@ data EndpointPerf = EndpointPerf
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "request_dumps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] EndpointPerf)
 
+
 makeFieldLabelsNoPrefix ''RequestForReport
+
 
 -- RequestDumpLogItem is used in the to query log items for the log query explorer on the dashboard. Each item here can be queried
 -- via the query language on said dashboard page.
@@ -253,10 +264,13 @@ data RequestDumpLogItem = RequestDumpLogItem
   deriving anyclass (ToRow, FromRow)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestDumpLogItem
 
+
 makeFieldLabelsNoPrefix ''RequestDumpLogItem
+
 
 requestDumpLogItemUrlPath :: Projects.ProjectId -> RequestDumpLogItem -> Text
 requestDumpLogItemUrlPath pid rd = "/p/" <> pid.toText <> "/log_explorer/" <> UUID.toText rd.id <> "/" <> from @String (formatShow iso8601Format rd.createdAt)
+
 
 requestDumpLogUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Text
 requestDumpLogUrlPath pid q cols fromM = [text|/p/$pidT/log_explorer?query=$queryT&cols=$colsT&from=$fromT|]
@@ -265,6 +279,7 @@ requestDumpLogUrlPath pid q cols fromM = [text|/p/$pidT/log_explorer?query=$quer
     queryT = fromMaybe "" q
     colsT = fromMaybe "" cols
     fromT = fromMaybe "" fromM
+
 
 getRequestDumpForReports :: Projects.ProjectId -> Text -> DBT IO (Vector RequestForReport)
 getRequestDumpForReports pid report_type = query Select (Query $ encodeUtf8 q) pid
@@ -281,6 +296,7 @@ getRequestDumpForReports pid report_type = query Select (Query $ encodeUtf8 q) p
         project_id = ? AND created_at > NOW() - interval $report_interval;
     |]
 
+
 getRequestDumpsForPreviousReportPeriod :: Projects.ProjectId -> Text -> DBT IO (Vector EndpointPerf)
 getRequestDumpsForPreviousReportPeriod pid report_type = query Select (Query $ encodeUtf8 q) pid
   where
@@ -295,6 +311,7 @@ getRequestDumpsForPreviousReportPeriod pid report_type = query Select (Query $ e
         project_id = ? AND created_at > NOW() - interval $start AND created_at < NOW() - interval $end
      GROUP BY endpoint_hash;
     |]
+
 
 selectRequestDumpByProject :: Projects.ProjectId -> Text -> Maybe Text -> DBT IO (Vector RequestDumpLogItem)
 selectRequestDumpByProject pid extraQuery fromM = query Select (Query $ encodeUtf8 q) (pid, fromT)
@@ -311,6 +328,7 @@ selectRequestDumpByProject pid extraQuery fromM = query Select (Query $ encodeUt
         <> extraQueryParsed
         <> " order by created_at desc limit 200;"
 
+
 countRequestDumpByProject :: Projects.ProjectId -> DBT IO Int
 countRequestDumpByProject pid = do
   result <- query Select q pid
@@ -319,6 +337,7 @@ countRequestDumpByProject pid = do
     v -> return $ length v
   where
     q = [sql| SELECT count(*) FROM apis.request_dumps WHERE project_id=? |]
+
 
 selectRequestDumpsByProjectForChart :: Projects.ProjectId -> Text -> DBT IO Text
 selectRequestDumpsByProjectForChart pid extraQuery = do
@@ -332,6 +351,7 @@ selectRequestDumpsByProjectForChart pid extraQuery = do
                 SELECT time_bucket('1 minute', created_at) as timeB,count(*)
                FROM apis.request_dumps where project_id=? $extraQueryParsed  GROUP BY timeB) ts|]
 
+
 -- bulkInsertRequestDumps :: [RequestDump] -> DBT IO Int64
 -- bulkInsertRequestDumps _ = pure 0
 --
@@ -339,6 +359,7 @@ bulkInsertRequestDumps :: [RequestDump] -> DBT IO Int64
 bulkInsertRequestDumps = executeMany q
   where
     q = [sql| INSERT INTO apis.request_dumps VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?); |]
+
 
 selectRequestDumpByProjectAndId :: Projects.ProjectId -> ZonedTime -> UUID.UUID -> DBT IO (Maybe RequestDumpLogItem)
 selectRequestDumpByProjectAndId pid createdAt rdId = queryOne Select q (createdAt, pid, rdId)
@@ -350,6 +371,7 @@ selectRequestDumpByProjectAndId pid createdAt rdId = queryOne Select q (createdA
                     0 AS full_count, duration_ns, sdk_type,
                     parent_id, service_version, errors, tags
              FROM apis.request_dumps where created_at=? and project_id=? and id=? LIMIT 1|]
+
 
 selectReqLatenciesRolledBySteps :: Int -> Int -> Projects.ProjectId -> Text -> Text -> DBT IO (Vector (Int, Int))
 selectReqLatenciesRolledBySteps maxv steps pid urlPath method = query Select q (maxv, steps, steps, steps, pid, urlPath, method)
@@ -364,6 +386,7 @@ select duration_steps, count(id)
 	GROUP BY duration_steps 
 	ORDER BY duration_steps;
       |]
+
 
 -- TODO: expand this into a view
 selectReqLatenciesRolledByStepsForProject :: Int -> Int -> Projects.ProjectId -> (Maybe ZonedTime, Maybe ZonedTime) -> DBT IO (Vector (Int, Int))
@@ -382,6 +405,7 @@ select duration_steps, count(id)
 	GROUP BY duration_steps 
 	ORDER BY duration_steps;
       |]
+
 
 -- A throughput chart query for the request_dump table.
 -- daterange :: (Maybe Int, Maybe Int)?
@@ -430,6 +454,7 @@ throughputBy pid groupByM endpointHash shapeHash formatHash statusCodeGT numSlot
               SELECT COALESCE(json_agg(json_build_array(timeB $groupByFinal, total_count)), '[]')::text from q; |]
   (Only val) <- fromMaybe (Only "[]") <$> queryOne Select (Query $ encodeUtf8 q) (MkDBField pid : paramList)
   pure val
+
 
 throughputBy' :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Maybe Int -> Maybe Text -> (Maybe ZonedTime, Maybe ZonedTime) -> DBT IO (Vector (Int, Int, String))
 throughputBy' pid groupByM endpointHash shapeHash formatHash statusCodeGT numSlots limitM extraQuery dateRange@(fromT, toT) = do

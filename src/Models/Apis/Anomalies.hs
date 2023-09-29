@@ -46,14 +46,17 @@ import Relude hiding (id)
 import Utils
 import Web.HttpApiData (FromHttpApiData)
 
+
 newtype AnomalyId = AnomalyId {unAnomalyId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving
     (Eq, Ord, FromField, ToField, FromHttpApiData, Default)
     via UUID.UUID
 
+
 anomalyIdText :: AnomalyId -> Text
 anomalyIdText = UUID.toText . unAnomalyId
+
 
 data AnomalyTypes
   = ATUnknown
@@ -66,8 +69,10 @@ data AnomalyTypes
     (AE.ToJSON, AE.FromJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "FT", DAE.CamelToSnake]] AnomalyTypes
 
+
 instance Default AnomalyTypes where
   def = ATUnknown
+
 
 anomalyTypesToText :: AnomalyTypes -> Text
 anomalyTypesToText ATUnknown = "unknown"
@@ -76,8 +81,10 @@ anomalyTypesToText ATEndpoint = "endpoint"
 anomalyTypesToText ATShape = "shape"
 anomalyTypesToText ATFormat = "format"
 
+
 instance ToField AnomalyTypes where
   toField = Escape . encodeUtf8 <$> anomalyTypesToText
+
 
 parseAnomalyTypes :: (Eq s, IsString s) => s -> Maybe AnomalyTypes
 parseAnomalyTypes "unknown" = Just ATUnknown
@@ -86,6 +93,7 @@ parseAnomalyTypes "endpoint" = Just ATEndpoint
 parseAnomalyTypes "shape" = Just ATShape
 parseAnomalyTypes "format" = Just ATFormat
 parseAnomalyTypes _ = Nothing
+
 
 instance FromField AnomalyTypes where
   fromField f mdata =
@@ -96,6 +104,7 @@ instance FromField AnomalyTypes where
           Just a -> pure a
           Nothing -> returnError ConversionFailed f $ "Conversion error: Expected 'anomaly_type' enum, got " <> decodeUtf8 bs <> " instead."
 
+
 data AnomalyActions
   = AAUnknown
   | AACreated
@@ -104,20 +113,25 @@ data AnomalyActions
     (AE.ToJSON, AE.FromJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "FT", DAE.CamelToSnake]] AnomalyActions
 
+
 instance Default AnomalyActions where
   def = AAUnknown
+
 
 anomalyActionsToText :: AnomalyActions -> Text
 anomalyActionsToText AAUnknown = "unknown"
 anomalyActionsToText AACreated = "created"
 
+
 instance ToField AnomalyActions where
   toField = Escape . encodeUtf8 <$> anomalyActionsToText
+
 
 parseAnomalyActions :: (Eq s, IsString s) => s -> Maybe AnomalyActions
 parseAnomalyActions "unknown" = Just AAUnknown
 parseAnomalyActions "created" = Just AACreated
 parseAnomalyActions _ = Nothing
+
 
 instance FromField AnomalyActions where
   fromField f mdata =
@@ -127,6 +141,7 @@ instance FromField AnomalyActions where
         case parseAnomalyActions bs of
           Just a -> pure a
           Nothing -> returnError ConversionFailed f $ "Conversion error: Expected 'anomaly_actions' enum, got " <> decodeUtf8 bs <> " instead."
+
 
 data AnomalyVM = AnomalyVM
   { id :: AnomalyId
@@ -168,12 +183,15 @@ data AnomalyVM = AnomalyVM
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "anomalies_vm", PrimaryKey "id", FieldModifiers '[CamelToSnake]] AnomalyVM)
 
+
 makeFieldLabelsNoPrefix ''AnomalyVM
+
 
 getAnomalyVM :: Projects.ProjectId -> Text -> DBT IO (Maybe AnomalyVM)
 getAnomalyVM pid hash = queryOne Select q (pid, hash)
   where
     q = [sql| SELECT *,0,now() FROM apis.anomalies_vm WHERE project_id=? AND target_hash=?|]
+
 
 selectAnomalies :: Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Int -> Int -> DBT IO (Vector AnomalyVM)
 selectAnomalies pid endpointM isAcknowleged isArchived sortM limitM skipM = query Select (Query $ encodeUtf8 q) (MkDBField pid : paramList)
@@ -230,6 +248,7 @@ SELECT avm.id, avm.created_at, avm.updated_at, avm.project_id, aan.acknowleged_a
     $limit;
       |]
 
+
 getReportAnomalies :: Projects.ProjectId -> Text -> DBT IO (Vector AnomalyVM)
 getReportAnomalies pid report_type = query Select (Query $ encodeUtf8 q) pid
   where
@@ -259,6 +278,7 @@ getReportAnomalies pid report_type = query Select (Query $ encodeUtf8 q) pid
       HAVING count(rd.id) > 5
       limit 11;
         |]
+
 
 countAnomalies :: Projects.ProjectId -> Text -> DBT IO Int
 countAnomalies pid report_type = do

@@ -39,10 +39,12 @@ import Optics.TH
 import Relude
 import Web.HttpApiData
 
+
 newtype PersistentSessionId = PersistentSessionId {getPersistentSessionId :: UUID}
   deriving
     (Show, Eq, FromField, ToField, FromHttpApiData, ToHttpApiData, Default)
     via UUID
+
 
 newtype SessionData = SessionData {getSessionData :: Map Text Text}
   deriving stock (Show, Eq, Generic)
@@ -51,6 +53,7 @@ newtype SessionData = SessionData {getSessionData :: Map Text Text}
     via Aeson (Map Text Text)
   deriving anyclass (Default)
 
+
 newtype PSUser = PSUser {getUser :: Users.User}
   deriving stock (Show, Generic)
   deriving
@@ -58,12 +61,14 @@ newtype PSUser = PSUser {getUser :: Users.User}
     via Aeson Users.User
   deriving anyclass (Default)
 
+
 newtype PSProjects = PSProjects {getProjects :: Vector.Vector Projects.Project}
   deriving stock (Show, Generic)
   deriving
     (FromField)
     via Aeson (Vector.Vector Projects.Project)
   deriving anyclass (Default)
+
 
 data PersistentSession = PersistentSession
   { id :: PersistentSessionId
@@ -81,10 +86,13 @@ data PersistentSession = PersistentSession
     (Entity)
     via (GenericEntity '[Schema "users", TableName "persistent_sessions", PrimaryKey "id"] PersistentSession)
 
+
 makeFieldLabelsNoPrefix ''PersistentSession
+
 
 newPersistentSessionId :: IO PersistentSessionId
 newPersistentSessionId = PersistentSessionId <$> UUID.nextRandom
+
 
 persistSession
   :: MonadIO m
@@ -96,13 +104,16 @@ persistSession pool persistentSessionId userId = do
   liftIO $ withPool pool $ insertSession persistentSessionId userId (SessionData Map.empty)
   pure persistentSessionId
 
+
 insertSession :: PersistentSessionId -> UserId -> SessionData -> DBT IO ()
 insertSession pid userId sessionData = execute Insert q (pid, userId, sessionData) >> pass
   where
     q = [sql| insert into users.persistent_sessions(id, user_id, session_data) VALUES (?, ?, ?) |]
 
+
 deleteSession :: PersistentSessionId -> DBT IO ()
 deleteSession sessionId = delete @PersistentSession (Only sessionId)
+
 
 -- TODO: getting persistent session happens very frequently, so we should create a view for this, when our user base grows.
 getPersistentSession :: PersistentSessionId -> DBT IO (Maybe PersistentSession)
@@ -118,6 +129,7 @@ getPersistentSession sessionId = queryOne Select q value
         where ps.id=?
         GROUP BY ps.created_at, ps.updated_at, ps.id, ps.user_id, ps.session_data, u.* ,u.is_sudo; |]
     value = Only sessionId
+
 
 lookup :: Text -> SessionData -> Maybe Text
 lookup key (SessionData sdMap) = Map.lookup key sdMap

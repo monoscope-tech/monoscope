@@ -9,6 +9,7 @@ import Models.Users.Users qualified as Users
 import Network.Wreq (defaults, header, postWith, putWith, responseBody)
 import Relude
 
+
 pushedTrafficViaSdk :: Text -> [(Projects.ProjectId, Text, Int64, Users.UserId)] -> IO ()
 pushedTrafficViaSdk orttoApiKey projectsList = do
   let chunks = chunksOf 50 projectsList -- Limit to 50 items per request
@@ -46,6 +47,7 @@ pushedTrafficViaSdk orttoApiKey projectsList = do
     pass
   pass
 
+
 mergePerson :: Text -> Users.UserId -> Text -> Text -> Text -> IO (Maybe Text)
 mergePerson orttoApiKey userId' firstName lastName email = do
   let userId = userId'.toText
@@ -72,6 +74,7 @@ mergePerson orttoApiKey userId' firstName lastName email = do
       |]
   pure $ r ^? responseBody . key "people" . nth 0 . key "person_id" . _String
 
+
 mergeOrganization :: Text -> Projects.ProjectId -> Text -> Text -> IO (Maybe Text)
 mergeOrganization orttoApiKey pid projectName paymentPlan = do
   let projectIdText = pid.toText
@@ -96,6 +99,7 @@ mergeOrganization orttoApiKey pid projectName paymentPlan = do
       } 
   |]
   pure $ r ^? responseBody . key "organizations" . nth 0 . key "organization_id" . _String
+
 
 getPersonIDs :: Text -> [Users.UserId] -> IO [Text]
 getPersonIDs orttoApiKey userIds' = do
@@ -125,6 +129,7 @@ getPersonIDs orttoApiKey userIds' = do
       |]
   pure $ r ^.. responseBody . key "contacts" . values . key "id" . _String
 
+
 addToOrganization :: Text -> Text -> [Users.UserId] -> IO ()
 addToOrganization orttoApiKey pEI userIds = do
   oUIDs <- getPersonIDs orttoApiKey userIds
@@ -139,6 +144,7 @@ addToOrganization orttoApiKey pEI userIds = do
       |]
 
   pass
+
 
 getOrganization :: Text -> Projects.ProjectId -> IO (Maybe Text)
 getOrganization orttoApiKey pid = do

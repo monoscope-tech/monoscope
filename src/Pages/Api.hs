@@ -26,12 +26,14 @@ import Servant.Htmx (HXTrigger)
 import Utils
 import Web.FormUrlEncoded (FromForm)
 
+
 data GenerateAPIKeyForm = GenerateAPIKeyForm
   { title :: Text
   , from :: Maybe Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
+
 
 apiPostH :: Sessions.PersistentSession -> Projects.ProjectId -> GenerateAPIKeyForm -> DashboardM (Headers '[HXTrigger] (Html ()))
 apiPostH sess pid apiKeyForm = do
@@ -58,6 +60,7 @@ apiPostH sess pid apiKeyForm = do
         Just v -> pure $ addHeader hxTriggerData $ copyNewApiKey (Just (pApiKey, encryptedKeyB64)) True
         Nothing -> pure $ addHeader hxTriggerData $ mainContent pid apiKeys (Just (pApiKey, encryptedKeyB64))
 
+
 apiDeleteH :: Sessions.PersistentSession -> Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> DashboardM (Headers '[HXTrigger] (Html ()))
 apiDeleteH sess pid keyid = do
   pool <- asks pool
@@ -80,6 +83,7 @@ apiDeleteH sess pid keyid = do
               then decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Revoked API Key Successfully"]}|]
               else decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Something went wrong"]}|]
       pure $ addHeader hxTriggerData $ mainContent pid apikeys Nothing
+
 
 -- | apiGetH renders the api keys list page which includes a modal for creating the apikeys.
 apiGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
@@ -104,6 +108,7 @@ apiGetH sess pid = do
               , pageTitle = "API Keys"
               }
       pure $ bodyWrapper bwconf $ apiKeysPage pid apiKeys
+
 
 apiKeysPage :: Projects.ProjectId -> Vector ProjectApiKeys.ProjectApiKey -> Html ()
 apiKeysPage pid apiKeys = do
@@ -155,6 +160,7 @@ apiKeysPage pid apiKeys = do
                   ]
                   "Cancel"
 
+
 mainContent :: Projects.ProjectId -> Vector ProjectApiKeys.ProjectApiKey -> Maybe (ProjectApiKeys.ProjectApiKey, Text) -> Html ()
 mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] $ do
   copyNewApiKey newKeyM False
@@ -192,6 +198,7 @@ mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] $ do
                           [class_ "text-indigo-600 hover:text-indigo-900"]
                           $ do
                             span_ [class_ "text-slate-500"] "Revoked"
+
 
 copyNewApiKey :: Maybe (ProjectApiKeys.ProjectApiKey, Text) -> Bool -> Html ()
 copyNewApiKey newKeyM hasNext =

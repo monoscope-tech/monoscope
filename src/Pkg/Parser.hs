@@ -10,13 +10,17 @@ import Text.Megaparsec hiding (State)
 import Text.Megaparsec.Char
 import Text.Megaparsec.Char.Lexer qualified as L
 
+
 type Parser = Parsec Void Text
+
 
 data Values = Num Text | Str Text | Boolean Bool | Null
   deriving stock (Eq, Ord, Show)
 
+
 data Subject = Subject Text [Text]
   deriving stock (Eq, Ord, Show)
+
 
 data Expr
   = Eq Subject Values
@@ -30,6 +34,7 @@ data Expr
   | Or Expr Expr
   deriving stock (Eq, Ord, Show)
 
+
 sc :: Parser ()
 sc =
   L.space
@@ -37,13 +42,16 @@ sc =
     (L.skipLineComment "//") -- (3)
     (L.skipBlockComment "/*" "*/") -- (4)
 
+
 -- lexeme is a wrapper for lexemes that picks up all trailing white space using the supplied space consumer.
 lexeme :: Parser a -> Parser a
 lexeme = L.lexeme sc
 
+
 -- symbol is a parser that matches given text using string internally and then similarly picks up all trailing white space.
 symbol :: Text -> Parser Text
 symbol = L.symbol sc
+
 
 pSubject :: Parser Subject
 pSubject = do
@@ -52,8 +60,10 @@ pSubject = do
     (x : xs) -> pure $ Subject x xs
     _ -> error "unreachable step, empty subject in query unit expr parsing."
 
+
 parens :: Parser a -> Parser a
 parens = between (symbol "(") (symbol ")")
+
 
 pValues :: Parser Values
 pValues =
@@ -63,6 +73,7 @@ pValues =
     , Num . toText <$> some (digitChar <|> char '.')
     , Str . toText <$> (char '\"' *> manyTill L.charLiteral (char '\"'))
     ]
+
 
 pTerm :: Parser Expr
 pTerm =
@@ -75,8 +86,10 @@ pTerm =
     <|> Paren
     <$> parens pExpr
 
+
 pExpr :: Parser Expr
 pExpr = makeExprParser pTerm operatorTable
+
 
 operatorTable :: [[Operator Parser Expr]]
 operatorTable =
@@ -92,13 +105,16 @@ operatorTable =
     ]
   ]
 
+
 binary :: Text -> (Expr -> Expr -> Expr) -> Operator Parser Expr
 binary name f = InfixL (f <$ symbol name)
+
 
 -- >>> parseQueryStringToWhereClause "a.b=\"x\" AND (x=1 OR b!=2) "
 -- Right "a->>'b'='x' AND (x=1 OR b!=2)"
 parseQuery :: Parser Expr
 parseQuery = pExpr <* eof
+
 
 -------------------------------------------------------
 --
@@ -114,12 +130,14 @@ instance Display Subject where
     let val = x <> "->" <> T.intercalate "->" ys <> "->>" <> y
     displayPrec prec val
 
+
 instance Display Values where
   displayPrec prec (Num a) = displayBuilder a
   displayPrec prec (Str a) = displayBuilder $ "'" <> a <> "'"
   displayPrec prec (Boolean True) = "'true'"
   displayPrec prec (Boolean False) = "'false'"
   displayPrec prec Null = "null"
+
 
 instance Display Expr where
   displayPrec prec (Eq sub val) = displayParen (prec > 0) $ displayPrec prec sub <> displayPrec @Text prec "=" <> displayBuilder val
@@ -131,6 +149,7 @@ instance Display Expr where
   displayPrec prec (Paren u1) = displayParen True $ displayPrec prec u1
   displayPrec prec (And u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " AND " <> displayBuilder u2
   displayPrec prec (Or u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " OR " <> displayBuilder u2
+
 
 ----------------------------------------------------------------------------------
 -- Convert Query as string to a string capable of being

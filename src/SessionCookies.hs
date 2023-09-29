@@ -5,6 +5,7 @@ import Models.Users.Sessions qualified as Sessions
 import Relude
 import Web.Cookie
 
+
 -- | This function builds a cookie with the provided content
 craftSessionCookie
   :: Sessions.PersistentSessionId
@@ -22,6 +23,7 @@ craftSessionCookie (Sessions.PersistentSessionId content) rememberSession =
     , setCookieMaxAge = if rememberSession then Just 604800 else Nothing
     , setCookieSecure = True
     }
+
 
 emptySessionCookie :: SetCookie
 emptySessionCookie =

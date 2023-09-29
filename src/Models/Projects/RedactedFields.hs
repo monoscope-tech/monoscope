@@ -21,14 +21,17 @@ import Relude.Unsafe (read)
 import RequestMessages qualified
 import Servant (FromHttpApiData)
 
+
 newtype RedactedFieldId = RedactedFieldId {unRedactedFieldId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving
     (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default)
     via UUID.UUID
 
+
 redactedFieldIdText :: RedactedFieldId -> Text
 redactedFieldIdText = UUID.toText . unRedactedFieldId
+
 
 data ConfiguredVia
   = Dashboard
@@ -36,11 +39,14 @@ data ConfiguredVia
   deriving stock (Generic, Show, Read)
   deriving (FromJSON, ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] ConfiguredVia
 
+
 instance FromField ConfiguredVia where
   fromField f dat = read <$> fromField f dat
 
+
 instance ToField ConfiguredVia where
   toField = Escape . show
+
 
 -- FIXME: implement insert redacted fields to also store the hash of the endpoints.
 data RedactedField = RedactedField
@@ -57,11 +63,14 @@ data RedactedField = RedactedField
     (Entity)
     via (GenericEntity '[Schema "projects", TableName "redacted_fields", PrimaryKey "id", FieldModifiers '[CamelToSnake]] RedactedField)
 
+
 redactField :: RedactedField -> DBT IO ()
 redactField = insert @RedactedField
 
+
 redactedFieldById :: RedactedFieldId -> DBT IO (Maybe RedactedField)
 redactedFieldById id' = selectById (Only id')
+
 
 redactedFieldsByProject :: Projects.ProjectId -> DBT IO (Vector RedactedField)
 redactedFieldsByProject pid = selectManyByField [field| project_id |] pid

@@ -17,6 +17,7 @@ import Pkg.TmpPg qualified as TmpPg
 import Relude
 import Test.Hspec
 
+
 -- Helper function to create a Swagger value for testing
 createSwagger :: ProjectId -> UserId -> Value -> DBT.DBT IO Swagger
 createSwagger projectId createdBy swaggerJson = do
@@ -33,6 +34,7 @@ createSwagger projectId createdBy swaggerJson = do
           }
   addSwagger swagger
   pure swagger
+
 
 spec :: Spec
 spec = aroundAll TmpPg.withSetup $ describe "Models.Projects.Swaggers" $ do

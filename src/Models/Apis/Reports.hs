@@ -31,14 +31,17 @@ import Database.PostgreSQL.Simple.FromField
 import Database.PostgreSQL.Simple.ToField
 import Database.PostgreSQL.Transact (DBT)
 
+
 newtype ReportId = ReportId {reportId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving
     (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default)
     via UUID.UUID
 
+
 instance HasField "toText" ReportId Text where
   getField = UUID.toText . reportId
+
 
 data Report = Report
   { id :: ReportId
@@ -54,6 +57,7 @@ data Report = Report
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "reports", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Report)
 
+
 data ReportListItem = ReportListItem
   { id :: ReportId
   , createdAt :: ZonedTime
@@ -66,11 +70,14 @@ data ReportListItem = ReportListItem
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "reports", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ReportListItem)
 
+
 addReport :: Report -> DBT IO ()
 addReport = insert @Report
 
+
 getReportById :: ReportId -> DBT IO (Maybe Report)
 getReportById id' = selectById (Only id')
+
 
 reportHistoryByProject :: Projects.ProjectId -> Int -> DBT IO (Vector ReportListItem)
 reportHistoryByProject pid page = query Select q (pid, offset)

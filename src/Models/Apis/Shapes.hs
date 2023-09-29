@@ -27,14 +27,17 @@ import Relude
 import Utils (DBField (MkDBField))
 import Web.HttpApiData (FromHttpApiData)
 
+
 newtype ShapeId = ShapeId {unShapeId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving
     (AE.FromJSON, AE.ToJSON, Eq, Ord, FromField, ToField, FromHttpApiData, Default)
     via UUID.UUID
 
+
 shapeIdText :: ShapeId -> Text
 shapeIdText = UUID.toText . unShapeId
+
 
 -- A shape is a deterministic representation of a request-response combination for a given endpoint.
 -- We usually expect multiple shapes per endpoint. Eg a shape for a success request-response and another for an error response.
@@ -60,7 +63,9 @@ data Shape = Shape
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "shapes", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Shape)
   deriving (FromField) via Aeson Shape
 
+
 Optics.TH.makeFieldLabelsNoPrefix ''Shape
+
 
 insertShapeQueryAndParam :: Shape -> (Query, [DBField])
 insertShapeQueryAndParam shape = (q, params)
@@ -84,6 +89,7 @@ insertShapeQueryAndParam shape = (q, params)
       , MkDBField $ shape.statusCode
       ]
 
+
 shapesByEndpointHash :: Text -> PgT.DBT IO (Vector Shape)
 shapesByEndpointHash endpointHash = query Select q (Only endpointHash)
   where
@@ -93,6 +99,7 @@ shapesByEndpointHash endpointHash = query Select q (Only endpointHash)
           response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash, status_code
           FROM apis.shapes WHERE endpoint_hash = ?
       |]
+
 
 insertShapes :: [Shape] -> DBT IO Int64
 insertShapes shapes = do
@@ -108,6 +115,7 @@ insertShapes shapes = do
   let params = map getShapeParams shapes
   executeMany insertQuery params
 
+
 getShapeParams :: Shape -> (Maybe ZonedTime, Projects.ProjectId, Text, Vector Text, Vector Text, Vector Text, Vector Text, Vector Text, Vector Text, Text, Int)
 getShapeParams shape =
   ( shape.approvedOn
@@ -122,6 +130,7 @@ getShapeParams shape =
   , shape.hash
   , shape.statusCode
   )
+
 
 data SwShape = SwShape
   { swEndpointHash :: Text
@@ -139,6 +148,7 @@ data SwShape = SwShape
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SwShape
   deriving (FromField) via Aeson SwShape
   deriving anyclass (AE.ToJSON)
+
 
 shapesByEndpointHashes :: Projects.ProjectId -> Vector Text -> PgT.DBT IO (Vector SwShape)
 shapesByEndpointHashes pid hashes = query Select q (pid, hashes)

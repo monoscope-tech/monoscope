@@ -51,6 +51,7 @@ import Lucid.Svg (color_)
 import Models.Apis.RequestDumps (EndpointPerf, RequestForReport (endpointHash))
 import Utils
 
+
 data PerformanceReport = PerformanceReport
   { urlPath :: Text
   , method :: Text
@@ -61,6 +62,7 @@ data PerformanceReport = PerformanceReport
   }
   deriving stock (Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
+
 
 data ReportAnomalyType
   = ATEndpoint
@@ -88,6 +90,7 @@ data ReportAnomalyType
   deriving stock (Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
 
+
 data ReportData = ReportData
   { endpoints :: [PerformanceReport]
   , anomalies :: [ReportAnomalyType]
@@ -95,6 +98,7 @@ data ReportData = ReportData
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromJSON)
+
 
 reportsPostH :: Sessions.PersistentSession -> Projects.ProjectId -> Text -> DashboardM (Headers '[HXTrigger] (Html ()))
 reportsPostH sess pid t = do
@@ -111,6 +115,7 @@ reportsPostH sess pid t = do
           Projects.updateProjectReportNotif pid t
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Report nofications updated Successfully"]}|]
       pure $ addHeader hxTriggerData $ span_ [] ""
+
 
 singleReportGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Reports.ReportId -> DashboardM (Html ())
 singleReportGetH sess pid rid = do
@@ -133,6 +138,7 @@ singleReportGetH sess pid rid = do
               , pageTitle = "Reports"
               }
       pure $ bodyWrapper bwconf $ singleReportPage pid report
+
 
 reportsGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
 reportsGetH sess pid page hxRequest hxBoosted = do
@@ -166,6 +172,7 @@ reportsGetH sess pid page hxRequest hxBoosted = do
                 Nothing -> (False, False)
 
           pure $ bodyWrapper bwconf $ reportsPage pid reports nextUrl daily weekly
+
 
 singleReportPage :: Projects.ProjectId -> Maybe Reports.Report -> Html ()
 singleReportPage pid report =
@@ -241,6 +248,7 @@ singleReportPage pid report =
       Nothing -> do
         h3_ [] "Report Not Found"
 
+
 shapeParameterStats_ :: Int -> Int -> Int -> Html ()
 shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "inline-block"] do
   div_ [class_ "grid grid-cols-3 gap-2 text-center text-xs"] do
@@ -253,6 +261,7 @@ shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "inline-block"] do
     div_ [class_ "p-2  py-1  bg-rose-100 text-rose-900 border border-rose-300"] do
       div_ [class_ "text-base"] $ toHtml @String $ show deletedF
       small_ [class_ "block"] "deleted fields"
+
 
 reportsPage :: Projects.ProjectId -> Vector Reports.ReportListItem -> Text -> Bool -> Bool -> Html ()
 reportsPage pid reports nextUrl daily weekly =
@@ -286,6 +295,7 @@ reportsPage pid reports nextUrl daily weekly =
       div_ [class_ "col-span-8"] $ do
         reportListItems pid reports nextUrl
 
+
 reportListItems :: Projects.ProjectId -> Vector Reports.ReportListItem -> Text -> Html ()
 reportListItems pid reports nextUrl =
   div_ [class_ "space-y-4"] do
@@ -298,6 +308,7 @@ reportListItems pid reports nextUrl =
     if length reports < 20
       then pass
       else a_ [class_ "max-w-[800px] mx-auto cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ nextUrl] "LOAD MORE"
+
 
 renderEndpointRow :: PerformanceReport -> Html ()
 renderEndpointRow endpoint = tr_ $ do
@@ -312,6 +323,7 @@ renderEndpointRow endpoint = tr_ $ do
   td_ [class_ "px-6 py-2 border-b text-gray-500 text-sm"] $ show dur_diff_ms <> "ms"
   td_ [class_ $ "px-6 py-2 border-b " <> pcls] $ toHtml prc
 
+
 renderEndpointsTable :: [PerformanceReport] -> Html ()
 renderEndpointsTable endpoints = table_ [class_ "table-auto w-full"] $ do
   thead_ [class_ "text-xs text-left text-gray-700 uppercase bg-gray-100"] $ tr_ $ do
@@ -320,6 +332,7 @@ renderEndpointsTable endpoints = table_ [class_ "table-auto w-full"] $ do
     th_ [class_ "px-6 py-3"] "Change compared to prev."
     th_ [class_ "px-6 py-3"] "latency change %"
   tbody_ $ mapM_ renderEndpointRow endpoints
+
 
 buildReportJSON :: Vector Anomalies.AnomalyVM -> Vector RequestForReport -> Vector EndpointPerf -> Aeson.Value
 buildReportJSON anomalies endpoints_perf previous_perf =
@@ -333,8 +346,10 @@ buildReportJSON anomalies endpoints_perf previous_perf =
         _ -> Aeson.object []
    in report_json
 
+
 buildPerformanceJSON :: V.Vector PerformanceReport -> Aeson.Value
 buildPerformanceJSON pr = Aeson.object ["endpoints" .= pr]
+
 
 buildAnomalyJSON :: Vector Anomalies.AnomalyVM -> Int -> Aeson.Value
 buildAnomalyJSON anomalies total = Aeson.object ["anomalies" .= V.map buildjson anomalies, "anomaliesCount" .= total]
@@ -383,12 +398,14 @@ buildAnomalyJSON anomalies total = Aeson.object ["anomalies" .= V.map buildjson 
           ]
       _ -> Aeson.object ["anomaly_type" .= String "unknown"]
 
+
 getPerformanceInsight :: V.Vector RequestDumps.RequestForReport -> V.Vector RequestDumps.EndpointPerf -> V.Vector PerformanceReport
 getPerformanceInsight req_dumps previous_p =
   let prMap = Map.fromList [(p.endpointHash, p.averageDuration) | p <- V.toList previous_p]
       pin = V.map (mapFunc prMap) req_dumps
       perfInfo = V.filter (\x -> x.durationDiffPct > 15 || x.durationDiffPct < -15) pin
    in perfInfo
+
 
 mapFunc :: Map.Map Text Integer -> RequestDumps.RequestForReport -> PerformanceReport
 mapFunc prMap rd =
@@ -417,6 +434,7 @@ mapFunc prMap rd =
 divideIntegers :: Integer -> Integer -> Double
 divideIntegers a b = fromIntegral a / fromIntegral b
 
+
 createEndpointMap :: [Anomalies.AnomalyVM] -> Map Text Bool -> Map Text Bool
 createEndpointMap [] mp = mp
 createEndpointMap (x : xs) mp =
@@ -427,6 +445,7 @@ createEndpointMap (x : xs) mp =
           endpoint = method <> ep_url
        in createEndpointMap xs (Map.insert endpoint True mp)
     _ -> createEndpointMap xs mp
+
 
 reportEmail :: Projects.ProjectId -> Reports.Report -> Html ()
 reportEmail pid report' =
@@ -499,6 +518,7 @@ reportEmail pid report' =
                 renderEmailEndpointsTable (v.endpoints)
           Nothing -> pass
 
+
 renderEmailEndpointRow :: PerformanceReport -> Html ()
 renderEmailEndpointRow endpoint = tr_ $ do
   let (pcls, prc) =
@@ -514,6 +534,7 @@ renderEmailEndpointRow endpoint = tr_ $ do
   td_ [style_ tdStyle] $ show avg_dur_ms <> "ms"
   td_ [style_ tdStyle] $ show dur_diff_ms <> "ms"
   td_ [color_ pcls, style_ pStyle] $ toHtml prc
+
 
 renderEmailEndpointsTable :: [PerformanceReport] -> Html ()
 renderEmailEndpointsTable endpoints = table_ [style_ "width: 100%; border-collapse: collapse;"] $ do

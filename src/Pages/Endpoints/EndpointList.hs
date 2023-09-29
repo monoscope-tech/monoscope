@@ -28,12 +28,14 @@ import Pages.Charts.Charts qualified as Charts
 import Relude
 import Utils (deleteParam, mIcon_, textToBool, userIsProjectMember, userNotMemeberPage)
 
+
 data ParamInput = ParamInput
   { currentURL :: Text
   , archived :: Bool
   , sort :: Text
   , ackd :: Bool
   }
+
 
 endpointListGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
 endpointListGetH sess pid layoutM ackdM archivedM sortM hxRequestM hxBoostedM hxCurrentURL = do
@@ -70,6 +72,7 @@ endpointListGetH sess pid layoutM ackdM archivedM sortM hxRequestM hxBoostedM hx
               }
       pure $ bodyWrapper bwconf $ endpointListPage paramInput pid currTime endpointStats
 
+
 endpointListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Endpoints.EndpointRequestStats -> Html ()
 endpointListPage paramInput pid currTime endpoints = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24"] $ do
   h3_ [class_ "text-xl text-slate-700 flex place-items-center"] "Endpoints"
@@ -79,6 +82,7 @@ endpointListPage paramInput pid currTime endpoints = div_ [class_ "w-full mx-aut
     a_ [class_ $ "inline-block  py-2 " <> if not paramInput.ackd && not paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&ackd=false&archived=false"] "Inbox"
     a_ [class_ $ "inline-block  py-2 " <> if paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&archived=true"] "Archived"
   div_ [class_ "grid grid-cols-5 card-round", id_ "anomalyListBelowTab", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $ endpointList' paramInput currTime pid endpoints
+
 
 endpointList' :: ParamInput -> UTCTime -> Projets.ProjectId -> Vector Endpoints.EndpointRequestStats -> Html ()
 endpointList' paramInput currTime pid enps = form_ [class_ "col-span-5 bg-white divide-y ", id_ "anomalyListForm"] $ do
@@ -140,10 +144,12 @@ endpointList' paramInput currTime pid enps = form_ [class_ "col-span-5 bg-white 
   div_ [id_ "endpoints_container"] do
     mapM_ (renderEndpoint (paramInput.ackd && not paramInput.archived) currTime) enps
 
+
 endpointAccentColor :: Bool -> Bool -> Text
 endpointAccentColor _ True = "bg-slate-400"
 endpointAccentColor True False = "bg-green-200"
 endpointAccentColor False False = "bg-red-800"
+
 
 renderEndpoint :: Bool -> UTCTime -> Endpoints.EndpointRequestStats -> Html ()
 renderEndpoint activePage currTime enp = do
@@ -163,6 +169,7 @@ renderEndpoint activePage currTime enp = do
           AnomalyList.anomalyAcknowlegeButton enp.projectId (Anomalies.AnomalyId enp.anomalyId) (isJust enp.acknowlegedAt)
     div_ [class_ "flex items-center justify-center "] $ div_ [class_ "w-60 h-16 px-3"] $ Charts.throughput enp.projectId (enp.endpointId.toText) (Just $ Charts.QBEndpointHash enp.endpointHash) Nothing 14 Nothing False (Nothing, Nothing) Nothing
     div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $ toHtml @String $ fmt $ commaizeF (enp.totalRequests)
+
 
 meter__ :: Double -> Html ()
 meter__ prcntg = div_ [class_ "shadow w-full bg-slate-200 h-2.5 "] $ do

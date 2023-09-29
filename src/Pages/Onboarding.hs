@@ -19,6 +19,7 @@ import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
 import Utils (userIsProjectMember, userNotMemeberPage)
 
+
 onboardingGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 onboardingGetH sess pid = do
   pool <- asks pool
@@ -47,6 +48,7 @@ onboardingGetH sess pid = do
               _ -> False
 
       pure $ bodyWrapper bwconf $ onboardingPage pid hasApikeys hasRequest ans
+
 
 onboardingPage :: Projects.ProjectId -> Bool -> Bool -> Bool -> Html ()
 onboardingPage pid hasApikey hasRequest ans = do
@@ -181,6 +183,7 @@ function changeTab(tabId) {
 }
   |]
 
+
 generateApikey :: Projects.ProjectId -> Html ()
 generateApikey pid =
   div_ [class_ "w-[800px] bg-slate-200 mx-auto rounded-lg border-8 border-white shadow-lg mb-10"] do
@@ -209,6 +212,7 @@ generateApikey pid =
               div_ [class_ "mt-5 sm:mt-4 sm:flex sm:flex-row-reverse"] $ do
                 button_ [type_ "submit", class_ "w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 sm:ml-3 sm:w-auto sm:text-sm"] "Submit"
 
+
 integrateApiToolkit :: Html ()
 integrateApiToolkit =
   div_ [class_ "w-[800px] bg-slate-200 mx-auto rounded-lg border-8 border-white shadow-lg mb-10"] do
@@ -229,6 +233,7 @@ integrateApiToolkit =
         tabContentDotNet
         tabContentFastify
 
+
 completedBanner :: Projectjs.ProjectId -> Html ()
 completedBanner pid =
   div_ [class_ "w-[800px] bg-slate-200 mx-auto rounded-lg border-8 border-white shadow-lg mb-10"] do
@@ -239,6 +244,7 @@ completedBanner pid =
       div_ [class_ "pb-2 flex items-center mt-8 flex-col gap-4 text-blue-500 font-medium"] do
         a_ [href_ $ "/p/" <> pid.toText <> "/"] "Go to the dashboard"
         img_ [src_ "/assets/svgs/check_complete.svg", class_ "h-24 w-24"]
+
 
 tabContentExpress :: Html ()
 tabContentExpress =
@@ -276,6 +282,7 @@ tabContentExpress =
                     "});"
 
                     "    "
+
 
 tabContentGin :: Html ()
 tabContentGin =
@@ -321,6 +328,7 @@ tabContentGin =
                     "router." >> span_ [class_ "hljs-title"] "POST" >> "(" >> span_ [class_ "hljs-string"] "\"/:slug/test\"" >> ", " >> span_ [class_ "hljs-keyword"] "func" >> "(c *gin.Context)" >> " {" >> " c.String" >> "(" >> span_ [class_ "hljs-number"] "200" >> ", " >> span_ [class_ "hljs-string"] "\"ok\"" >> ")" >> " })" >> "\n"
                     span_ [class_ "hljs-comment"] "// Rest of your app..." >> "\n"
 
+
 tabContentLaravel :: Html ()
 tabContentLaravel =
   div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "laravel_content"] $ do
@@ -361,6 +369,7 @@ tabContentLaravel =
                     span_ [class_ ""] "    ];" >> "\n\n"
                     span_ [class_ "hljs-comment"] "    // ..." >> "\n" >> "}"
 
+
 tabContentSymfony :: Html ()
 tabContentSymfony =
   div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "symfony_content"] $ do
@@ -394,6 +403,7 @@ tabContentSymfony =
                     span_ [class_ "hljs-bullet"] "            -" >> " " >> span_ [class_ "hljs-attr"] "setCachePool:" >> " [" >> span_ [class_ "hljs-string"] "'@PutYourCachePoolServiceHere'" >> "]" >> "\n"
                     span_ [class_ "hljs-attr"] "        tags:" >> "\n"
                     span_ [class_ "hljs-bullet"] "            -" >> " { " >> span_ [class_ "hljs-attr"] "name:" >> " " >> span_ [class_ "hljs-string"] "'kernel.event_subscriber'" >> " }"
+
 
 tabContentDotNet :: Html ()
 tabContentDotNet =
@@ -459,6 +469,7 @@ tabContentDotNet =
                       >> "(context);"
                       >> "\n"
                     span_ [class_ ""] ");"
+
 
 tabContentFastify :: Html ()
 tabContentFastify =
@@ -559,6 +570,7 @@ tabContentFlask =
                       br_ []
                       span_ [] "app.run(debug=" >> span_ [class_ "hljs-keyword"] "True" >> ")"
 
+
 tabContentFastAPI :: Html ()
 tabContentFastAPI =
   div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "fastapi_content"]
@@ -613,6 +625,7 @@ tabContentFastAPI =
                       span_ [class_ "hljs-keyword"] "     return " >> "{" >> span_ [class_ "hljs-string"] "\"Hello\"" >> ": " >> span_ [class_ "hljs-string"] "\"Hello world\"}"
                       br_ []
 
+
 tabContentDjango :: Html ()
 tabContentDjango =
   div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "django_content"]
@@ -643,6 +656,7 @@ tabContentDjango =
                       span_ [class_ "hljs-string"] "    'apitoolkit.APIToolkit'" >> ",\n"
                       span_ [] "   ...\n"
                       span_ [] "]"
+
 
 tabs :: Html ()
 tabs =

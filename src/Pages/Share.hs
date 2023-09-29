@@ -36,12 +36,14 @@ import Relude
 import Servant (Headers)
 import Servant.Htmx (HXTrigger)
 
+
 data ReqForm = ReqForm
   { expiresIn :: Text
   , reqId :: UUID.UUID
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
+
 
 data Swagger = Swagger
   { id :: UUID.UUID
@@ -55,6 +57,7 @@ data Swagger = Swagger
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "swagger_jsons", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Swagger)
+
 
 shareLinkPostH :: Sessions.PersistentSession -> Projects.ProjectId -> ReqForm -> DashboardM (Headers '[HXTrigger] (Html ()))
 shareLinkPostH sess pid reqForm = do
@@ -71,6 +74,7 @@ shareLinkPostH sess pid reqForm = do
     else do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","errorToast": ["Invalid expiry interval"]}|]
       pure $ addHeader hxTriggerData $ getShareLink rid
+
 
 copyLink :: Text -> Html ()
 copyLink rid = do
@@ -92,6 +96,7 @@ copyLink rid = do
       ]
       "Copy URL"
 
+
 shareLinkGetH :: UUID.UUID -> DashboardM (Html ())
 shareLinkGetH sid = do
   pool <- asks pool
@@ -105,6 +110,7 @@ shareLinkGetH sid = do
           }
 
   pure $ bodyWrapper bwconf $ sharePage req
+
 
 sharePage :: Maybe RequestDumps.RequestDumpLogItem -> Html ()
 sharePage req = do
@@ -183,6 +189,7 @@ function expireChanged(event) {
     .collapsed .closing-token {padding-left:0}
   |]
 
+
 getRequest :: Text -> DBT IO (V.Vector RequestDumps.RequestDumpLogItem)
 getRequest sid = query Select q (Only sid)
   where
@@ -214,6 +221,7 @@ getRequest sid = query Select q (Only sid)
       JOIN apis.request_dumps AS rd ON sr.request_dump_id = rd.id
       WHERE sr.id = ? AND sr.expired_at > current_timestamp;
     |]
+
 
 getShareLink :: UUID.UUID -> Html ()
 getShareLink rid = do

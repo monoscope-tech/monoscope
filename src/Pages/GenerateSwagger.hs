@@ -24,6 +24,7 @@ import Relude
 import Relude.Unsafe ((!!))
 import Utils
 
+
 data MergedEndpoint = MergedEndpoint
   { urlPath :: Text
   , urlParams :: AE.Value
@@ -34,6 +35,7 @@ data MergedEndpoint = MergedEndpoint
   }
   deriving stock (Show, Generic)
 
+
 data MergedFieldsAndFormats = MergedFieldsAndFormats
   { field :: Fields.SwField
   , format :: Formats.SwFormat
@@ -41,17 +43,20 @@ data MergedFieldsAndFormats = MergedFieldsAndFormats
   deriving stock (Show, Generic)
   deriving anyclass (AE.ToJSON)
 
+
 data MergedShapesAndFields = MergedShapesAndFields
   { shape :: Shapes.SwShape
   , sField :: Map Fields.FieldCategoryEnum [MergedFieldsAndFormats]
   }
   deriving stock (Show, Generic)
 
+
 data KeyPathGroup = KeyPathGroup
   { subGoups :: [Text]
   , keyPath :: Text
   }
   deriving stock (Show, Generic)
+
 
 convertQueryParamsToJSON :: [T.Text] -> [MergedFieldsAndFormats] -> Value
 convertQueryParamsToJSON params fields = paramsJSON
@@ -65,6 +70,7 @@ convertQueryParamsToJSON params fields = paramsJSON
     paramsJSON =
       let ar = V.fromList $ map mapQParamsFunc params
        in Array ar
+
 
 processItem :: T.Text -> Map.Map T.Text KeyPathGroup -> Map.Map T.Text KeyPathGroup
 processItem item groups =
@@ -95,15 +101,18 @@ processItem item groups =
           val -> Map.insert root (KeyPathGroup{subGoups = [remainingItems], keyPath = "." <> root}) groups
    in updatedGroups
 
+
 processItems :: [T.Text] -> Map.Map T.Text KeyPathGroup -> Map.Map T.Text KeyPathGroup
 processItems [] groups = groups
 processItems (x : xs) groups = processItems xs updatedGroups
   where
     updatedGroups = processItem x groups
 
+
 mergeObjects :: Value -> Value -> Maybe Value
 mergeObjects (Object obj1) (Object obj2) = Just $ Object (obj1 <> obj2)
 mergeObjects _ _ = Nothing
+
 
 convertKeyPathsToJson :: [T.Text] -> [MergedFieldsAndFormats] -> Text -> Value
 convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
@@ -153,6 +162,7 @@ convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
     convertToJson' :: Map.Map T.Text KeyPathGroup -> Value
     convertToJson' grps = foldr processGroup objectValue (Map.toList grps)
 
+
 mergeEndpoints :: V.Vector Endpoints.SwEndpoint -> V.Vector Shapes.SwShape -> V.Vector Fields.SwField -> V.Vector Formats.SwFormat -> V.Vector MergedEndpoint
 mergeEndpoints endpoints shapes fields formats = V.map mergeEndpoint endpoints
   where
@@ -173,6 +183,7 @@ mergeEndpoints endpoints shapes fields formats = V.map mergeEndpoint endpoints
             , shapes = matchingShapes
             }
 
+
 findMatchingFormat :: Fields.SwField -> V.Vector Formats.SwFormat -> MergedFieldsAndFormats
 findMatchingFormat field formats =
   let fieldHash = field.fHash
@@ -191,6 +202,7 @@ findMatchingFormat field formats =
         , format = matchingFormat
         }
 
+
 findMatchingFields :: Shapes.SwShape -> V.Vector MergedFieldsAndFormats -> MergedShapesAndFields
 findMatchingFields shape fields =
   let fieldHashes = Shapes.swFieldHashes shape
@@ -204,9 +216,11 @@ findMatchingFields shape fields =
         , sField = groupedMap
         }
 
+
 -- For Servers part of the swagger
 getUniqueHosts :: Vector Endpoints.SwEndpoint -> Vector Value
 getUniqueHosts endpoints = V.fromList $ map (\h -> object ["url" .= String h]) $ sortNub $ concatMap (\endpoint -> V.toList endpoint.hosts) endpoints
+
 
 -- Make urlPaths openapi compartible
 specCompartiblePath :: Text -> Text
@@ -219,6 +233,7 @@ specCompartiblePath path = toText $ intercalate "/" modifiedSegments
       | x == ':' = "{" ++ xs ++ "}"
       | otherwise = segment
     modifySegment "" = ""
+
 
 groupEndpointsByUrlPath :: [MergedEndpoint] -> AE.Value
 groupEndpointsByUrlPath endpoints =
@@ -245,19 +260,23 @@ groupEndpointsByUrlPath endpoints =
             (_, _) -> AEKey.fromText (T.toLower $ method mergedEndpoint) .= object ["responses" .= groupShapesByStatusCode (shapes mergedEndpoint)]
        in endPointJSON
 
+
 groupShapesByStatusCode :: V.Vector MergedShapesAndFields -> AE.Value
 groupShapesByStatusCode shapes =
   object $ constructStatusCodeEntry (V.toList shapes)
 
+
 constructStatusCodeEntry :: [MergedShapesAndFields] -> [AET.Pair]
 constructStatusCodeEntry =
   map mapFunc
+
 
 mapFunc :: MergedShapesAndFields -> AET.Pair
 mapFunc mShape =
   let content = object ["*/*" .= convertKeyPathsToJson (V.toList mShape.shape.swResponseBodyKeypaths) (fromMaybe [] (Map.lookup Field.FCResponseBody mShape.sField)) ""]
       headers = object ["content" .= convertKeyPathsToJson (V.toList mShape.shape.swResponseHeadersKeypaths) (fromMaybe [] (Map.lookup Field.FCResponseHeader mShape.sField)) ""]
    in show mShape.shape.swStatusCode .= object ["description" .= String "", "headers" .= headers, "content" .= content]
+
 
 generateSwagger :: Text -> Text -> Vector Endpoints.SwEndpoint -> Vector Shapes.SwShape -> Vector Fields.SwField -> Vector Formats.SwFormat -> Value
 generateSwagger projectTitle projectDescription endpoints shapes fields formats = swagger
@@ -267,6 +286,7 @@ generateSwagger projectTitle projectDescription endpoints shapes fields formats 
     paths = groupEndpointsByUrlPath $ V.toList merged
     info = object ["description" .= String projectDescription, "title" .= String projectTitle, "version" .= String "1.0.0", "termsOfService" .= String "https://apitoolkit.io/terms-and-conditions/"]
     swagger = object ["openapi" .= String "3.0.0", "info" .= info, "servers" .= Array hosts, "paths" .= paths]
+
 
 generateGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM AE.Value
 generateGetH sess pid = do

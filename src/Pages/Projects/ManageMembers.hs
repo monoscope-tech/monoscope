@@ -31,12 +31,14 @@ import Servant.Htmx
 import Utils
 import Web.FormUrlEncoded (FromForm)
 
+
 data ManageMembersForm = ManageMembersForm
   { emails :: [Text]
   , permissions :: [ProjectMembers.Permissions]
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromForm)
+
 
 manageMembersPostH :: Sessions.PersistentSession -> Projects.ProjectId -> ManageMembersForm -> DashboardM (Headers '[HXTrigger] (Html ()))
 manageMembersPostH sess pid form = do
@@ -121,6 +123,7 @@ manageMembersPostH sess pid form = do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Updated Members List Successfully"]}|]
       pure $ addHeader hxTriggerData $ manageMembersBody projMembersLatest
 
+
 manageMembersGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 manageMembersGetH sess pid = do
   pool' <- asks pool
@@ -137,6 +140,7 @@ manageMembersGetH sess pid = do
           pure (project, projMembers)
       let bwconf = (def :: BWConfig){sessM = Just sess, pageTitle = "Settings", currProject = project}
       pure $ bodyWrapper bwconf $ manageMembersBody projMembers
+
 
 manageMembersBody :: Vector ProjectMembers.ProjectMemberVM -> Html ()
 manageMembersBody projMembers =
@@ -162,6 +166,7 @@ manageMembersBody projMembers =
               img_ [src_ "/assets/svgs/blue-plus.svg", class_ " mt-1 mx-2 w-3 h-3"]
               span_ [class_ "text-blue-700 font-medium text-sm "] "Add member"
         button_ [class_ "py-2 px-5 bg-blue-700 absolute m-5 bottom-0 right-0 text-[white] text-sm rounded-xl cursor-pointer", type_ "submit"] "Submit"
+
 
 projectMemberRow :: Maybe ProjectMembers.ProjectMemberVM -> Html ()
 projectMemberRow projMembersM =

@@ -55,11 +55,13 @@ import Text.Regex.TDFA ((=~))
 import Utils (DBField ())
 import Witch (from)
 
+
 -- $setup
 -- >>> import Relude
 -- >>> import Data.Vector qualified as Vector
 -- >>> import Data.Aeson.QQ (aesonQQ)
 -- >>> import Data.Aeson
+
 
 -- | RequestMessage represents a message for a single request pulled from pubsub.
 data RequestMessage = RequestMessage
@@ -92,7 +94,9 @@ data RequestMessage = RequestMessage
     (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestMessage
 
+
 makeFieldLabelsNoPrefix ''RequestMessage
+
 
 -- | Walk the JSON once, redact any fields which are in the list of json paths to be redacted.
 -- >>> redactJSON ["menu.id."] [aesonQQ| {"menu":{"id":"file", "name":"John"}} |]
@@ -117,6 +121,7 @@ redactJSON paths' = redactJSON' (stripPrefixDot paths')
     redactJSON' paths (AET.Array jsonList) = AET.Array $ Vector.map (redactJSON' (mapMaybe (\path -> T.stripPrefix "[]." path <|> T.stripPrefix "[]" path) paths)) jsonList
 
     stripPrefixDot = map (\p -> fromMaybe p (T.stripPrefix "." p))
+
 
 -- requestMsgToDumpAndEndpoint is a very improtant function designed to be run as a pure function
 -- which takes in a request and processes it returning an sql query and it's params which can be executed.
@@ -273,6 +278,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   let params = endpointP <> shapeP <> concat fieldsP <> concat formatsP
   pure (query, params, reqDumpP)
 
+
 buildEndpoint :: RequestMessages.RequestMessage -> ZonedTime -> UUID.UUID -> Projects.ProjectId -> Text -> Text -> Value -> Text -> Endpoints.Endpoint
 buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash =
   Endpoints.Endpoint
@@ -286,6 +292,7 @@ buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash =
     , hosts = [rM.host]
     , hash = endpointHash
     }
+
 
 -- valueToFields takes an aeson object and converts it into a list of paths to
 -- each primitive value in the json and the values.
@@ -337,6 +344,7 @@ valueToFields value = dedupFields $ removeBlacklistedFields $ snd $ valueToField
       Just result -> "{" <> result <> "}"
       Nothing -> key
 
+
 -- debupFields would merge all fields in the list of tuples by the first item in the tupple.
 --
 -- >>> dedupFields [(".menu[*]",String "xyz"),(".menu[*]",String "abc")]
@@ -354,6 +362,7 @@ dedupFields fields =
     & groupBy (\a b -> fst a == fst b)
     & map (foldl' (\(_, xs) (a, b) -> (a, b : xs)) ("", []))
 
+
 -- >>> removeBlacklistedFields [(".menu.password",String "xyz"),(".authorization",String "abc")]
 -- [(".menu.password",String "[REDACTED]"),(".authorization",String "[REDACTED]")]
 --
@@ -369,6 +378,7 @@ removeBlacklistedFields = map \(k, val) ->
     then (k, AE.String "[REDACTED]")
     else (k, val)
 
+
 valueToFormat :: AE.Value -> Text
 valueToFormat (AET.String val) = fromMaybe "text" $ valueToFormatStr val
 valueToFormat (AET.Number val) = valueToFormatNum val
@@ -376,6 +386,7 @@ valueToFormat (AET.Bool _) = "bool"
 valueToFormat AET.Null = "null"
 valueToFormat (AET.Object _) = "object"
 valueToFormat (AET.Array _) = "array"
+
 
 -- | valueToFormatStr will take a string and try to find a format which matches that string best.
 -- At the moment it takes a text and returns a generic mask that represents the format of that text
@@ -404,11 +415,13 @@ valueToFormatStr val
   | val =~ ([text|^[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}$|] :: Text) = Just "uuid"
   | otherwise = Nothing
 
+
 valueToFormatNum :: Scientific.Scientific -> Text
 valueToFormatNum val
   | Scientific.isFloating val = "float"
   | Scientific.isInteger val = "integer"
   | otherwise = "unknown"
+
 
 -- fieldsToFieldDTO processes a field from apitoolkit clients into a field and format record,
 -- which can then be converted into separate sql insert queries.

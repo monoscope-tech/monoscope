@@ -15,6 +15,7 @@ import Relude
 import Servant (Union, WithStatus (..), respond)
 import Utils (GetOrRedirect, redirect)
 
+
 listProjectsGetH :: Sessions.PersistentSession -> DashboardM (Union GetOrRedirect)
 listProjectsGetH sess = do
   pool <- asks pool
@@ -32,6 +33,7 @@ listProjectsGetH sess = do
   if null projects
     then respond $ WithStatus @302 $ redirect "/p/new"
     else respond $ WithStatus @200 page
+
 
 listProjectsBody :: Vector.Vector Projects.Project' -> Html ()
 listProjectsBody projects = do

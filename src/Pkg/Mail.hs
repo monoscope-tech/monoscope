@@ -9,6 +9,7 @@ import Network.HaskellNet.SMTP
 import Network.Mail.Mime
 import Relude
 
+
 sendEmail :: Config.EnvConfig -> Text -> Text -> LText -> IO ()
 sendEmail config reciever subject body = doSMTPPort (toString $ config.smtpHost) (toEnum $ config.smtpPort) $ \conn -> do
   authSucceed <- authenticate PLAIN (toString $ config.smtpUsername) (toString $ config.smtpPassword) conn
