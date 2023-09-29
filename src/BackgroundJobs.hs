@@ -91,7 +91,7 @@ getAllProjects = query Select q (Only True)
 
 jobsRunner :: Pool Connection -> LogAction IO String -> Config.EnvConfig -> Job -> IO ()
 jobsRunner dbPool logger cfg job = do
-  when (cfg.enableBackgroundJobs) do
+  when cfg.enableBackgroundJobs do
     throwParsePayload job >>= \case
       NewAnomaly pid createdAt anomalyTypesT anomalyActionsT targetHash -> do
         let anomalyType = Unsafe.fromJust $ Anomalies.parseAnomalyTypes anomalyTypesT

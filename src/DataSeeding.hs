@@ -111,12 +111,12 @@ parseConfigToRequestMessages pid input = do
         generateWithSettings fakerSettings
           $ configs
           & mapM \config -> do
-            let startTimeUTC = zonedTimeToUTC (config.from)
-                maxDiffTime = diffUTCTime (zonedTimeToUTC (config.to)) startTimeUTC
-                timestamps = randomTimesBtwToAndFrom startTimeUTC (config.count) randGen maxDiffTime
-                durations = take (config.count) $ randomRs (config.durationFrom, config.durationTo) randGen
+            let startTimeUTC = zonedTimeToUTC config.from
+                maxDiffTime = diffUTCTime (zonedTimeToUTC config.to) startTimeUTC
+                timestamps = randomTimesBtwToAndFrom startTimeUTC config.count randGen maxDiffTime
+                durations = take config.count $ randomRs (config.durationFrom, config.durationTo) randGen
                 allowedStatusCodes = config.statusCodesOneof
-                statusCodes = take (config.count) $ map (allowedStatusCodes !!) $ randomRs (0, length allowedStatusCodes - 1) randGen
+                statusCodes = take config.count $ map (allowedStatusCodes !!) $ randomRs (0, length allowedStatusCodes - 1) randGen
 
             zip3 timestamps durations statusCodes & mapM \(timestampV, duration', statusCode') -> do
               let duration = duration'
@@ -137,13 +137,13 @@ parseConfigToRequestMessages pid input = do
                   errors = Nothing
                   tags = Nothing
 
-              pathLog <- mapM fieldConfigToField (config.queryParams)
-              pathParams <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField (config.pathParams)
-              queryParams <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField (config.queryParams)
-              requestHeaders <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField (config.requestHeaders)
-              responseHeaders <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField (config.responseHeaders)
-              responseBody <- B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField (config.responseBody)
-              requestBody <- B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField (config.responseBody)
+              pathLog <- mapM fieldConfigToField config.queryParams
+              pathParams <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField config.pathParams
+              queryParams <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField config.queryParams
+              requestHeaders <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField config.requestHeaders
+              responseHeaders <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField config.responseHeaders
+              responseBody <- B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField config.responseBody
+              requestBody <- B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField config.responseBody
               pure RequestMessages.RequestMessage{..}
       pure $ Right $ concat resp
 

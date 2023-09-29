@@ -30,6 +30,8 @@
   - "-XFlexibleInstances"
   - "-XMultiParamTypeClasses"
   - "-XUndecidableInstances"
+  - "-XTemplateHaskell"
+  - "-XOverloadedRecordDot"
 - ignore:
     name: Use head
 - ignore:

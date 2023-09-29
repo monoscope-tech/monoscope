@@ -97,7 +97,7 @@ dashboardGetH sess pid fromDStr toDStr sinceStr' = do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
 
           projectRequestStats <- fromMaybe (def :: Projects.ProjectRequestStats) <$> Projects.projectRequestStatsByProject pid
-          let maxV = round (projectRequestStats.p99) :: Int
+          let maxV = round projectRequestStats.p99 :: Int
           let steps' = (maxV `quot` 100) :: Int
           let steps = if steps' == 0 then 100 else steps'
           reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledByStepsForProject maxV steps pid (fromD, toD)
@@ -150,7 +150,7 @@ dashboardPage pid paramInput currTime projectStats reqLatenciesRolledByStepsJ da
             div_ [id_ "startTime", class_ "hidden"] ""
 
     -- button_ [class_ "", id_ "checkin", onclick_ "window.picker.show()"] "timepicker"
-    section_ $ AnomaliesList.anomalyListSlider currTime (projectStats.projectId) Nothing Nothing
+    section_ $ AnomaliesList.anomalyListSlider currTime projectStats.projectId Nothing Nothing
     dStats pid projectStats reqLatenciesRolledByStepsJ dateRange
   script_
     [text|
@@ -200,7 +200,7 @@ dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledBySte
 
     div_ [class_ "reqResSubSection space-y-5"] $ do
       div_ [class_ "grid grid-cols-5 gap-5"] $ do
-        statBox (Just pid) "Requests" "Total requests in the last 2 weeks" (projReqStats.totalRequests) Nothing
+        statBox (Just pid) "Requests" "Total requests in the last 2 weeks" projReqStats.totalRequests Nothing
         statBox (Just pid) "Anomalies" "Total anomalies still active this week vs last week" projReqStats.totalAnomalies (Just projReqStats.totalAnomaliesLastWeek)
         statBox (Just pid) "Endpoints" "Total endpoints now vs last week" projReqStats.totalEndpoints (Just projReqStats.totalEndpointsLastWeek)
         statBox (Just pid) "Signatures" "Total request signatures which are active now vs last week" projReqStats.totalShapes (Just projReqStats.totalShapesLastWeek)
@@ -245,13 +245,13 @@ dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledBySte
           div_ [class_ "col-span-2 space-y-4 "] $ do
             span_ [class_ "block text-right"] "Latency Percentiles"
             ul_ [class_ "space-y-1 divide-y divide-slate-100"] $ do
-              percentileRow "max" $ projReqStats.max
-              percentileRow "p99" $ projReqStats.p99
-              percentileRow "p95" $ projReqStats.p95
-              percentileRow "p90" $ projReqStats.p90
-              percentileRow "p75" $ projReqStats.p75
-              percentileRow "p50" $ projReqStats.p50
-              percentileRow "min" $ projReqStats.min
+              percentileRow "max" projReqStats.max
+              percentileRow "p99" projReqStats.p99
+              percentileRow "p95" projReqStats.p95
+              percentileRow "p90" projReqStats.p90
+              percentileRow "p75" projReqStats.p75
+              percentileRow "p50" projReqStats.p50
+              percentileRow "min" projReqStats.min
         script_ [int|| latencyHistogram('reqsLatencyHistogram',{p50:#{p50}, p75:#{p75}, p90:#{p90}, p95:#{p95}, p99:#{p99}, max:#{max}},  #{reqLatenciesRolledByStepsJ}) |]
 
 

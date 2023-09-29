@@ -57,14 +57,14 @@ spec = aroundAll TmpPg.withSetup $ describe "Models.Projects.Swaggers" $ do
               }
       result <- withPool pool $ do
         _ <- addSwagger swagger
-        getSwaggerById (swaggerId.toText)
+        getSwaggerById swaggerId.toText
       (fromJust result).swaggerJson `shouldBe` swaggerJson'
 
   describe "getSwaggerById"
     $ it "should retrieve a Swagger by its ID"
     $ \pool -> do
       swagger <- withPool pool $ createSwagger (ProjectId UUID.nil) (UserId UUID.nil) swaggerJson'
-      result <- withPool pool $ getSwaggerById (swagger.id.toText)
+      result <- withPool pool $ getSwaggerById swagger.id.toText
       (fromJust result).swaggerJson `shouldBe` swagger.swaggerJson
 
   describe "swaggersByProject"
@@ -80,6 +80,6 @@ spec = aroundAll TmpPg.withSetup $ describe "Models.Projects.Swaggers" $ do
     $ it "should update the Swagger JSON of a Swagger"
     $ \pool -> do
       result <- withPool pool $ do
-        _ <- updateSwagger (swaggerId.toText) swaggerJson2
-        getSwaggerById (swaggerId.toText)
+        _ <- updateSwagger swaggerId.toText swaggerJson2
+        getSwaggerById swaggerId.toText
       (fromJust result).swaggerJson `shouldBe` swaggerJson2

@@ -98,7 +98,7 @@ apiLogItem sess pid rdId createdAt = do
             Just req -> apiLogItemView req (RequestDumps.requestDumpLogItemUrlPath pid req)
             Nothing -> div_ "invalid log request ID"
       endTime <- liftIO $ getTime Monotonic
-      liftIO $ putStrLn $ fmtLn $ " APILOG pipeline microsecs: queryDuration " +| (toNanoSecs (diffTimeSpec startTime afterProccessing)) `div` 1000 |+ " -> processingDuration " +| toNanoSecs (diffTimeSpec afterProccessing endTime) `div` 1000 |+ " -> TotalDuration " +| toNanoSecs (diffTimeSpec startTime endTime) `div` 1000 |+ ""
+      liftIO $ putStrLn $ fmtLn $ " APILOG pipeline microsecs: queryDuration " +| toNanoSecs (diffTimeSpec startTime afterProccessing) `div` 1000 |+ " -> processingDuration " +| toNanoSecs (diffTimeSpec afterProccessing endTime) `div` 1000 |+ " -> TotalDuration " +| toNanoSecs (diffTimeSpec startTime endTime) `div` 1000 |+ ""
       pure content
 
 
@@ -126,7 +126,7 @@ expandAPIlogItem' req modal = do
         div_ [class_ $ "text-lg font-bold px-2 " <> statusColor] $ show req.statusCode
         div_ [class_ "flex border border-gray-200 m-1 rounded-xl p-2"] $ do
           mIcon_ "calender" "h-4 mr-2 w-4"
-          span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" (req.createdAt)
+          span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" req.createdAt
       if modal
         then do
           div_

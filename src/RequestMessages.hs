@@ -137,10 +137,10 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
 
   let method = T.toUpper rM.method
   let urlPath = RequestDumps.normalizeUrlPath rM.sdkType rM.statusCode rM.method rM.urlPath
-  let !endpointHash = from @String @Text $ showHex (xxHash $ encodeUtf8 $ UUID.toText (rM.projectId) <> method <> urlPath) ""
+  let !endpointHash = from @String @Text $ showHex (xxHash $ encodeUtf8 $ UUID.toText rM.projectId <> method <> urlPath) ""
 
-  let redactFieldsList = Vector.toList (pjc.redactFieldslist) <> [".set-cookie", ".password"]
-  reqBodyB64 <- B64.decodeBase64 $ encodeUtf8 $ rM.requestBody
+  let redactFieldsList = Vector.toList pjc.redactFieldslist <> [".set-cookie", ".password"]
+  reqBodyB64 <- B64.decodeBase64 $ encodeUtf8 rM.requestBody
   -- NB: At the moment we're discarding the error messages from when we're unable to parse the input
   -- We should log this inputs and maybe input them into the db as is. This is also a potential annomaly for our customers,
   -- And would help us identity what request formats our customers are actually processing, which would help guide our new features.
@@ -149,13 +149,13 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   --       Left err -> traceShowM err >> []
   --       Right reqBody -> valueToFields reqBody
   let reqBody = redactJSON redactFieldsList $ fromRight [aesonQQ| {} |] $ AE.eitherDecodeStrict reqBodyB64
-  respBodyB64 <- B64.decodeBase64 $ encodeUtf8 $ rM.responseBody
+  respBodyB64 <- B64.decodeBase64 $ encodeUtf8 rM.responseBody
   let respBody = redactJSON redactFieldsList $ fromRight [aesonQQ| {} |] $ AE.eitherDecodeStrict respBodyB64
 
-  let pathParamFields = valueToFields $ redactJSON redactFieldsList $ rM.pathParams
-      queryParamFields = valueToFields $ redactJSON redactFieldsList $ rM.queryParams
-      reqHeaderFields = valueToFields $ redactJSON redactFieldsList $ rM.requestHeaders
-      respHeaderFields = valueToFields $ redactJSON redactFieldsList $ rM.responseHeaders
+  let pathParamFields = valueToFields $ redactJSON redactFieldsList rM.pathParams
+      queryParamFields = valueToFields $ redactJSON redactFieldsList rM.queryParams
+      reqHeaderFields = valueToFields $ redactJSON redactFieldsList rM.requestHeaders
+      respHeaderFields = valueToFields $ redactJSON redactFieldsList rM.responseHeaders
       reqBodyFields = valueToFields reqBody
       respBodyFields = valueToFields respBody
       queryParamsKP = Vector.fromList $ map fst queryParamFields
@@ -170,7 +170,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   let combinedKeyPathStr = T.concat $ sort $ Vector.toList $ queryParamsKP <> responseHeadersKP <> requestBodyKP <> responseBodyKP
   let !shapeHash' = from @String @Text $ showHex (xxHash $ encodeUtf8 combinedKeyPathStr) ""
   let shapeHash = endpointHash <> show rM.statusCode <> shapeHash' -- Include the endpoint hash and status code to make the shape hash unique by endpoint and status code.
-  let projectId = Projects.ProjectId (rM.projectId)
+  let projectId = Projects.ProjectId rM.projectId
 
   let pathParamsFieldsDTO = pathParamFields & map (fieldsToFieldDTO Fields.FCPathParam projectId endpointHash)
       queryParamsFieldsDTO = queryParamFields & map (fieldsToFieldDTO Fields.FCQueryParam projectId endpointHash)
@@ -195,16 +195,16 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   let urlParams = AET.emptyObject
 
   let (endpointQ, endpointP)
-        | endpointHash `elem` (pjc.endpointHashes) = ("", []) -- We have the endpoint cache in our db already. Skill adding
+        | endpointHash `elem` pjc.endpointHashes = ("", []) -- We have the endpoint cache in our db already. Skill adding
         | otherwise = Endpoints.upsertEndpointQueryAndParam $ buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash
 
   let (shapeQ, shapeP)
-        | shapeHash `elem` (pjc.shapeHashes) = ("", [])
+        | shapeHash `elem` pjc.shapeHashes = ("", [])
         | otherwise = do
             -- A shape is a deterministic representation of a request-response combination for a given endpoint.
             -- We usually expect multiple shapes per endpoint. Eg a shape for a success request-response and another for an error response.
             -- Shapes are dependent on the endpoint, statusCode and the unique fields in that shape.
-            let shape = Shapes.Shape (Shapes.ShapeId dumpID) (rM.timestamp) now Nothing projectId endpointHash queryParamsKP requestBodyKP responseBodyKP requestHeadersKP responseHeadersKP fieldHashes shapeHash rM.statusCode
+            let shape = Shapes.Shape (Shapes.ShapeId dumpID) rM.timestamp now Nothing projectId endpointHash queryParamsKP requestBodyKP responseBodyKP requestHeadersKP responseHeadersKP fieldHashes shapeHash rM.statusCode
             Shapes.insertShapeQueryAndParam shape
 
   -- FIXME: This 1000 is added on the php sdk in a previous version and has been remove. This workaround code should be removed ASAP
@@ -261,7 +261,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   -- Build all fields and formats, unzip them as separate lists and append them to query and params
   -- We don't border adding them if their shape exists, as we asume that we've already seen such before.
   let (fieldsQ, fieldsP)
-        | shapeHash `elem` (pjc.shapeHashes) = ([], [])
+        | shapeHash `elem` pjc.shapeHashes = ([], [])
         | otherwise = unzip $ map Fields.insertFieldQueryAndParams fields
 
   -- FIXME:
@@ -271,7 +271,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   -- The original plan was that we could skip the shape from the input into this function, but then that would mean
   -- also inserting the fields and the shape, when all we want to insert is just the example.
   let (formatsQ, formatsP)
-        | shapeHash `elem` (pjc.shapeHashes) = ([], [])
+        | shapeHash `elem` pjc.shapeHashes = ([], [])
         | otherwise = unzip $ map Formats.insertFormatQueryAndParams formats
 
   let query = endpointQ <> shapeQ <> mconcat fieldsQ <> mconcat formatsQ

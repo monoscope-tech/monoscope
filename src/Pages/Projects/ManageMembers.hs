@@ -62,7 +62,7 @@ manageMembersPostH sess pid form = do
       -- Insert the new emails and permissions.
       -- Update the permissions only of the existing emails.
 
-      let usersAndPermissions = zip (form.emails) (form.permissions) & uniq
+      let usersAndPermissions = zip form.emails form.permissions & uniq
       let uAndPOldAndChanged =
             mapMaybe
               ( \(email, permission) -> do

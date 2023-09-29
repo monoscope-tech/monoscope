@@ -51,7 +51,7 @@ clientMetadataH (Just authTextB64) = do
             case pApiKeyM of
               Nothing -> error "no api key with given id"
               Just pApiKey -> do
-                project <- Projects.projectById $ pApiKey.projectId
+                project <- Projects.projectById pApiKey.projectId
                 pure (pApiKey, project)
 
           pure
