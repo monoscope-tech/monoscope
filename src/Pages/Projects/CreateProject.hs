@@ -326,7 +326,7 @@ createProjectBody sess envCfg isUpdate cp cpe = do
           let paddleVendor = if envCfg.paddleSandbox then envCfg.paddleSandboxVendorId else envCfg.paddleVendorId
           let projectId = cp.projectId
           let userId = sess.userId.toText
-          let email = CI.original (sess.user.getUser).email
+          let email = CI.original sess.user.getUser.email
           script_
             [type_ "text/javascript"]
             [text|

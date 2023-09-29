@@ -20,7 +20,7 @@ listProjectsGetH :: Sessions.PersistentSession -> DashboardM (Union GetOrRedirec
 listProjectsGetH sess = do
   pool <- asks pool
   projects <-
-    liftIO $ withPool pool $ Projects.selectProjectsForUser (sess.userId)
+    liftIO $ withPool pool $ Projects.selectProjectsForUser sess.userId
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess

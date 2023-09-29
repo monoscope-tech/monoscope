@@ -12,7 +12,6 @@ module Pages.Anomalies.AnomalyList (
 ) where
 
 import Config
-import Control.Error qualified as T
 import Data.Aeson (encode)
 import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
@@ -30,8 +29,6 @@ import Lucid.Htmx
 import Lucid.Hyperscript
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.RequestDumps (RequestDump (RequestDump))
-import Models.Apis.RequestDumps qualified as RequestDump
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
@@ -48,7 +45,7 @@ import Utils
 import Web.FormUrlEncoded (FromForm)
 
 
-data AnomalyBulkForm = AnomalyBulk
+newtype AnomalyBulkForm = AnomalyBulk
   { anomalyId :: [Text]
   }
   deriving stock (Show, Generic)
