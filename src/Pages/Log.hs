@@ -433,7 +433,7 @@ logItemRows pid requests cols nextLogsURL = do
 
     div_ [class_ "hidden w-full flex px-2 py-8 justify-center item-loading"] do
       loader
-  a_
+  when (Vector.length requests > 199) $ a_
     [ class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center"
     , hxTrigger_ "click"
     , hxSwap_ "outerHTML"
