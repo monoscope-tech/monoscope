@@ -155,5 +155,7 @@ instance Display Expr where
 -- Convert Query as string to a string capable of being
 -- used in the where clause of an sql statement
 ----------------------------------------------------------------------------------
+-- >>> parseQueryStringToWhereClause "request_body.message!=\"blabla\" AND method=\"GET\""
+-- Right "request_body->>'message'!='blabla' AND method='GET'"
 parseQueryStringToWhereClause :: Text -> Either Text Text
 parseQueryStringToWhereClause q = if q == "" then Right "" else bimap (toText . errorBundlePretty) display (parse parseQuery "" q)
