@@ -538,7 +538,9 @@ anomalyDetailsPage anomaly requestsItems shapesWithFieldsMap fields chartQuery c
                 p_ [class_ "italic"] "in"
                 div_ [class_ $ "px-4 py-1 text-sm rounded-lg text-white font-semibold " <> methodColor] $ toHtml $ fromMaybe "" anomaly.endpointMethod
                 span_ [] $ toHtml $ fromMaybe "" anomaly.endpointUrlPath
-          _ -> ""
+              div_ [class_ "mt-4"] do
+                shapeParameterStats_ (length anomaly.shapeNewUniqueFields) (length anomaly.shapeDeletedFields) (length anomaly.shapeUpdatedFieldFormats)
+          _ -> pass
         div_ [class_ "flex items-center gap-6 shrink-0"] do
           div_ [class_ "flex items-center gap-6 -mt-4"] do
             div_ [class_ "flex flex-col gap-2"] do
@@ -609,8 +611,22 @@ anomalyDetailsPage anomaly requestsItems shapesWithFieldsMap fields chartQuery c
 
 
 endpointOverview :: Maybe (Vector Shapes.ShapeWithFields) -> Html ()
-endpointOverview shapesWithFieldsMap = do
+endpointOverview shapesWithFieldsMap =
   div_ [] do
+    -- div_ [class_ "flex justify-end items-center"] $ do
+    --   img_
+    --     [ src_ "/assets/svgs/leftarrow.svg"
+    --     , class_ " m-2 cursor-pointer"
+    --     , [__|on click slideReqRes('prev') |]
+    --     ]
+    --   let l = "1/" <> show (length shapesWithFieldsMap)
+    --   let id = "current_indicator"
+    --   span_ [src_ " mx-4", id_ id] l
+    --   img_
+    --     [ src_ "/assets/svgs/rightarrow.svg"
+    --     , class_ "m-2 cursor-pointer"
+    --     , [__|on click slideReqRes('next') |]
+    --     ]
     case shapesWithFieldsMap of
       Just s -> do
         reqResSection "Request" True (Vector.toList s)
@@ -627,7 +643,7 @@ requestShapeOverview fieldChanges = do
           let (fs, sn, th) = case f of
                 (xx, y, z) -> (xx, y, y)
           div_ [class_ "flex flex-col"] do
-            h3_ [class_ "text-green-500 py-1  w-fit font-semibold text-sm border-b border-b-green-500 mb-2"] "New Unique Fields"
+            h3_ [class_ "text-green-500 py-1  w-fit font-semibold border-b border-b-green-500 mb-2"] "New Unique Fields"
             div_ [class_ "px-2"] do
               p_ [class_ "hidden last:block"] "No new unique fields"
               subSubSection "Request Path Params" (Map.lookup Fields.FCPathParam fs)
@@ -637,7 +653,7 @@ requestShapeOverview fieldChanges = do
               subSubSection "Response Headers" (Map.lookup Fields.FCResponseHeader fs)
               subSubSection "Response Body" (Map.lookup Fields.FCResponseBody fs)
           div_ [class_ "flex flex-col"] do
-            h3_ [class_ "text-green-500 py-1 w-fit font-semibold text-sm border-b border-b-green-500 mb-2"] "Updated Fields"
+            h3_ [class_ "text-gray-500 py-1 w-fit font-semibold border-b border-b-gray-500 mb-2"] "Updated Fields"
             div_ [class_ "px-2"] do
               p_ [class_ "hidden last:block"] "No updated fields"
               subSubSection "Request Path Params" (Map.lookup Fields.FCPathParam sn)
@@ -647,7 +663,7 @@ requestShapeOverview fieldChanges = do
               subSubSection "Response Headers" (Map.lookup Fields.FCResponseHeader sn)
               subSubSection "Response Body" (Map.lookup Fields.FCResponseBody sn)
           div_ [class_ "flex flex-col"] do
-            h3_ [class_ "text-green-500 w-fit py-1 font-semibold text-sm border-b border-b-green-500 mb-2"] "Deleted Fields"
+            h3_ [class_ "text-red-500 w-fit py-1 font-semibold border-b border-b-red-500 mb-2"] "Deleted Fields"
             div_ [class_ "px-2"] do
               p_ [class_ "hidden last:block"] "No deleted fields"
               subSubSection "Request Path Params" (Map.lookup Fields.FCPathParam th)
