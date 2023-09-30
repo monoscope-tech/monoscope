@@ -1,6 +1,6 @@
 {-# LANGUAGE TemplateHaskell #-}
 
-module Models.Apis.Shapes (Shape (..), SwShape (..), ShapeId (..), shapeIdText, insertShapeQueryAndParam, insertShapes, shapesByEndpointHashes, shapesByEndpointHash) where
+module Models.Apis.Shapes (Shape (..), ShapeWithFields (..), SwShape (..), ShapeId (..), getShapeFields, shapeIdText, insertShapeQueryAndParam, insertShapes, shapesByEndpointHashes, shapesByEndpointHash) where
 
 import Data.Aeson qualified as AE
 import Data.Default (Default)
@@ -20,8 +20,12 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact (DBT, executeMany)
 import Database.PostgreSQL.Transact qualified as PgT
 
+import Data.Vector qualified as Vector
 import Deriving.Aeson qualified as DAE
+import Models.Apis.Fields.Types
+import Models.Apis.Fields.Types qualified as Fields
 import Models.Projects.Projects qualified as Projects
+import Models.Projects.Projects qualified as Projescts
 import Optics.TH
 import Relude
 import Utils (DBField (MkDBField))
@@ -37,6 +41,21 @@ newtype ShapeId = ShapeId {unShapeId :: UUID.UUID}
 
 shapeIdText :: ShapeId -> Text
 shapeIdText = UUID.toText . unShapeId
+
+
+data ShapeWithFields = ShapeWidthFields
+  { status :: Int
+  , sHash :: Text
+  , fieldsMap :: Map FieldCategoryEnum [Fields.Field]
+  }
+  deriving (Show)
+
+
+getShapeFields :: Shape -> Vector Fields.Field -> ShapeWithFields
+getShapeFields shape fields = ShapeWidthFields{status = shape.statusCode, sHash = shape.hash, fieldsMap = fieldM}
+  where
+    matchedFields = Vector.filter (\field -> field.hash `Vector.elem` shape.fieldHashes) fields
+    fieldM = Fields.groupFieldsByCategory matchedFields
 
 
 -- A shape is a deterministic representation of a request-response combination for a given endpoint.
@@ -90,14 +109,14 @@ insertShapeQueryAndParam shape = (q, params)
       ]
 
 
-shapesByEndpointHash :: Text -> PgT.DBT IO (Vector Shape)
-shapesByEndpointHash endpointHash = query Select q (Only endpointHash)
+shapesByEndpointHash :: Projescts.ProjectId -> Text -> PgT.DBT IO (Vector Shape)
+shapesByEndpointHash pid endpointHash = query Select q (pid, endpointHash)
   where
     q =
       [sql| 
           SELECT id, created_at, updated_at, approved_on, project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, 
           response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash, status_code
-          FROM apis.shapes WHERE endpoint_hash = ?
+          FROM apis.shapes WHERE project_id= ? AND endpoint_hash = ?
       |]
 
 

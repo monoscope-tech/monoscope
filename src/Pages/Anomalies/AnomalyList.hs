@@ -13,10 +13,11 @@ module Pages.Anomalies.AnomalyList (
 ) where
 
 import Config
-import Control.Error qualified as T
 import Data.Aeson (encode)
 import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
+import Data.Map qualified as Map
+import Data.Pool
 import Data.Text (replace)
 import Data.Text qualified as T
 import Data.Time (UTCTime, ZonedTime, defaultTimeLocale, formatTime, getCurrentTime, getTimeZone, zonedTimeToUTC)
@@ -24,7 +25,7 @@ import Data.Tuple.Extra (fst3)
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute, withPool)
-import Database.PostgreSQL.Simple (Only (Only))
+import Database.PostgreSQL.Simple (Connection, Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Lucid
 import Lucid.Htmx
@@ -32,8 +33,13 @@ import Lucid.Hyperscript
 import Models.Apis.Anomalies (AnomalyVM)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.Fields.Query qualified as Fields
+import Models.Apis.Fields.Types
+import Models.Apis.Fields.Types qualified as Fields
 import Models.Apis.RequestDumps (RequestDump (RequestDump))
 import Models.Apis.RequestDumps qualified as RequestDump
+import Models.Apis.Shapes (getShapeFields)
+import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
@@ -41,6 +47,7 @@ import Optics.Core ((^.))
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Charts.Charts (QueryBy)
 import Pages.Charts.Charts qualified as Charts
+import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
 import Pages.Log qualified as Log
 import Pkg.Components (loader)
 import Relude
@@ -221,6 +228,23 @@ anomalyListPage paramInput pid currTime anomalies nextFetchUrl = div_ [class_ "w
     a_ [class_ $ "inline-block  py-2 " <> if paramInput.ackd && not paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&ackd=true&archived=false"] "Acknowleged"
     a_ [class_ $ "inline-block  py-2 " <> if paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&archived=true"] "Archived"
   div_ [class_ "grid grid-cols-5 card-round", id_ "anomalyListBelowTab", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $ anomalyList paramInput pid currTime anomalies nextFetchUrl
+  script_
+    [text|
+      function changeTab(tabId) {
+        const tabLinks = document.querySelectorAll('.sdk_tab');
+        tabLinks.forEach(link => link.classList.remove('sdk_tab_active'));
+        const clickedTabLink = document.getElementById(tabId);
+        clickedTabLink.classList.add('sdk_tab_active')
+        const tabContents = document.querySelectorAll('.sdk_tab_content');
+        tabContents.forEach(content => {
+          content.classList.add("hidden")
+          content.classList.remove ("sdk_tab_content_active")
+        });
+        const tabContent = document.getElementById(tabId + '_content');
+        tabContent.classList.remove("hidden")
+        setTimeout(()=>{tabContent.classList.add("sdk_tab_content_active")},10)
+      }
+|]
 
 
 anomalyList :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Anomalies.AnomalyVM -> Maybe Text -> Html ()
@@ -446,7 +470,7 @@ anomalyDetailsGetH sess pid targetHash hxBoostedM = do
         $ do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
           anomaly <- Anomalies.getAnomalyVM pid targetHash
-
+          traceShowM anomaly
           pure (project, anomaly)
       let bwconf =
             (def :: BWConfig)
@@ -459,16 +483,38 @@ anomalyDetailsGetH sess pid targetHash hxBoostedM = do
           let chartQuery = Just $ anomaly2ChartQuery an.anomalyType an.targetHash
           events <- liftIO $ withPool pool $ RequestDump.selectAnomalyEvents pid an.targetHash an.anomalyType
           currTime <- liftIO getCurrentTime
+
+          -- for endpoint anomalies
+          shapes <- liftIO $ withPool pool $ Shapes.shapesByEndpointHash pid targetHash
+          fields <- liftIO $ withPool pool $ Fields.selectFields pid targetHash
+          let shapesWithFieldsMap = Vector.map (`getShapeFields` fields) shapes
+
+          -- for shape anomalies
+          anFields <- liftIO $ withPool pool do
+            newF <- Fields.selectFieldsByHashes pid an.shapeNewUniqueFields
+            let newFM = groupFieldsByCategory newF
+            updF <- Fields.selectFieldsByHashes pid an.shapeUpdatedFieldFormats
+            let updfM = groupFieldsByCategory updF
+            delF <- Fields.selectFieldsByHashes pid an.shapeDeletedFields
+            let delFM = groupFieldsByCategory delF
+            pure (newFM, updfM, delFM)
+
           case hxBoostedM of
-            Just _ -> pure $ anomalyDetailsPage an events chartQuery currTime True
+            Just _ -> case an.anomalyType of
+              Anomalies.ATEndpoint -> pure $ anomalyDetailsPage an events (Just shapesWithFieldsMap) Nothing chartQuery currTime True
+              Anomalies.ATShape -> pure $ anomalyDetailsPage an events Nothing (Just anFields) chartQuery currTime False
+              _ -> pure $ anomalyDetailsPage an events (Just shapesWithFieldsMap) Nothing chartQuery currTime False
             Nothing -> pure $ bodyWrapper bwconf $ div_ [class_ "w-full px-32"] do
               h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
-              anomalyDetailsPage an events chartQuery currTime False
+              case an.anomalyType of
+                Anomalies.ATEndpoint -> anomalyDetailsPage an events (Just shapesWithFieldsMap) Nothing chartQuery currTime True
+                Anomalies.ATShape -> anomalyDetailsPage an events Nothing (Just anFields) chartQuery currTime False
+                _ -> anomalyDetailsPage an events (Just shapesWithFieldsMap) Nothing chartQuery currTime False
         Nothing -> pure $ bodyWrapper bwconf $ h4_ [] "ANOMALY NOT FOUND"
 
 
-anomalyDetailsPage :: AnomalyVM -> Vector RequestDump.RequestDumpLogItem -> Maybe QueryBy -> UTCTime -> Bool -> Html ()
-anomalyDetailsPage anomaly requestsItems chartQuery currTime modal = do
+anomalyDetailsPage :: AnomalyVM -> Vector RequestDump.RequestDumpLogItem -> Maybe (Vector Shapes.ShapeWithFields) -> Maybe (Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field]) -> Maybe QueryBy -> UTCTime -> Bool -> Html ()
+anomalyDetailsPage anomaly requestsItems shapesWithFieldsMap fields chartQuery currTime modal = do
   div_ [class_ "w-full h-full"] do
     div_ [class_ "w-full"] do
       div_ [class_ "flex items-center justify-between gap-2 flex-wrap"] do
@@ -479,8 +525,18 @@ anomalyDetailsPage anomaly requestsItems chartQuery currTime modal = do
                 img_ [src_ "/assets/svgs/endpoint.svg", class_ "inline w-6 h-6 -mt-1"]
                 span_ [class_ "text-2xl"] "New Endpoint"
               div_ [class_ "flex items-center gap-3"] do
-                let methodColor = Utils.getMethodColor (fromMaybe "" anomaly.endpointMethod)
-                div_ [class_ $ "px-4 py-1 text-sm rounded-lg text-white font-semibold bg-" <> methodColor] $ toHtml $ fromMaybe "" anomaly.endpointMethod
+                let methodColor = Utils.getMethodBgColor (fromMaybe "" anomaly.endpointMethod)
+                div_ [class_ $ "px-4 py-1 text-sm rounded-lg text-white font-semibold " <> methodColor] $ toHtml $ fromMaybe "" anomaly.endpointMethod
+                span_ [] $ toHtml $ fromMaybe "" anomaly.endpointUrlPath
+          Anomalies.ATShape -> do
+            div_ [class_ "flex flex-col gap-4 shrink-0"] do
+              a_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
+                img_ [src_ "/assets/svgs/anomalies/fields.svg", class_ "inline w-6 h-6 -mt-1"]
+                span_ [class_ "text-2xl"] "New Request Shape"
+              div_ [class_ "flex items-center gap-3"] do
+                let methodColor = Utils.getMethodBgColor (fromMaybe "" anomaly.endpointMethod)
+                p_ [class_ "italic"] "in"
+                div_ [class_ $ "px-4 py-1 text-sm rounded-lg text-white font-semibold " <> methodColor] $ toHtml $ fromMaybe "" anomaly.endpointMethod
                 span_ [] $ toHtml $ fromMaybe "" anomaly.endpointUrlPath
           _ -> ""
         div_ [class_ "flex items-center gap-6 shrink-0"] do
@@ -511,12 +567,96 @@ anomalyDetailsPage anomaly requestsItems chartQuery currTime modal = do
         mIcon_ "enlarge" "w-3 h-3"
 
     div_ [class_ "mt-6 space-y-4"] do
-      div_ [class_ "flex items-center gap-6 py-2 border-b"] do
-        button_ [class_ ""] "Overview"
-        button_ [class_ ""] "All events"
+      div_ [class_ "flex items-center gap-10 font-semibold border-b"] do
+        button_
+          [ class_ "sdk_tab sdk_tab_active"
+          , onclick_ "changeTab('overview')"
+          , id_ "overview"
+          ]
+          "Overview"
+        button_
+          [ class_ "sdk_tab"
+          , onclick_ "changeTab('events')"
+          , id_ "events"
+          ]
+          "All events"
       div_ [] do
-        div_ [class_ "grow overflow-y-auto h-full whitespace-nowrap text-sm divide-y overflow-x-hidden", id_ "log-item-table-body"] $ do
+        div_ [class_ "w-full bg-white rounded-lg overflow-y-auto h-full sdk_tab_content sdk_tab_content_active", id_ "overview_content"] do
+          case anomaly.anomalyType of
+            Anomalies.ATEndpoint -> endpointOverview shapesWithFieldsMap
+            Anomalies.ATShape -> requestShapeOverview fields
+            -- Anomalies.ATFormat -> formatOverview fields
+            _ -> ""
+        div_ [class_ "grow overflow-y-auto h-full whitespace-nowrap text-sm divide-y overflow-x-hidden sdk_tab_content", id_ "events_content"] $ do
           Log.logItemRows anomaly.projectId requestsItems [] ""
+  script_
+    [text|
+      function changeTab(tabId) {
+        const tabLinks = document.querySelectorAll('.sdk_tab');
+        tabLinks.forEach(link => link.classList.remove('sdk_tab_active'));
+        const clickedTabLink = document.getElementById(tabId);
+        clickedTabLink.classList.add('sdk_tab_active')
+        const tabContents = document.querySelectorAll('.sdk_tab_content');
+        tabContents.forEach(content => {
+          content.classList.add("hidden")
+          content.classList.remove ("sdk_tab_content_active")
+        });
+        const tabContent = document.getElementById(tabId + '_content');
+        tabContent.classList.remove("hidden")
+        setTimeout(()=>{tabContent.classList.add("sdk_tab_content_active")},10)
+      }
+|]
+
+
+endpointOverview :: Maybe (Vector Shapes.ShapeWithFields) -> Html ()
+endpointOverview shapesWithFieldsMap = do
+  div_ [] do
+    case shapesWithFieldsMap of
+      Just s -> do
+        reqResSection "Request" True (Vector.toList s)
+        reqResSection "Response" False (Vector.toList s)
+      Nothing -> pass
+
+
+requestShapeOverview :: Maybe (Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field]) -> Html ()
+requestShapeOverview fieldChanges = do
+  div_ [class_ "flex flex-col gap-6"] $ do
+    case fieldChanges of
+      Just f ->
+        div_ [class_ "flex flex-col gap-6"] do
+          let (fs, sn, th) = case f of
+                (xx, y, z) -> (xx, y, y)
+          div_ [class_ "flex flex-col"] do
+            h3_ [class_ "text-green-500 py-1  w-fit font-semibold text-sm border-b border-b-green-500 mb-2"] "New Unique Fields"
+            div_ [class_ "px-2"] do
+              p_ [class_ "hidden last:block"] "No new unique fields"
+              subSubSection "Request Path Params" (Map.lookup Fields.FCPathParam fs)
+              subSubSection "Request Query Params" (Map.lookup Fields.FCQueryParam fs)
+              subSubSection "Request Headers" (Map.lookup Fields.FCRequestHeader fs)
+              subSubSection "Request Body" (Map.lookup Fields.FCRequestBody fs)
+              subSubSection "Response Headers" (Map.lookup Fields.FCResponseHeader fs)
+              subSubSection "Response Body" (Map.lookup Fields.FCResponseBody fs)
+          div_ [class_ "flex flex-col"] do
+            h3_ [class_ "text-green-500 py-1 w-fit font-semibold text-sm border-b border-b-green-500 mb-2"] "Updated Fields"
+            div_ [class_ "px-2"] do
+              p_ [class_ "hidden last:block"] "No updated fields"
+              subSubSection "Request Path Params" (Map.lookup Fields.FCPathParam sn)
+              subSubSection "Request Query Params" (Map.lookup Fields.FCQueryParam sn)
+              subSubSection "Request Headers" (Map.lookup Fields.FCRequestHeader sn)
+              subSubSection "Request Body" (Map.lookup Fields.FCRequestBody sn)
+              subSubSection "Response Headers" (Map.lookup Fields.FCResponseHeader sn)
+              subSubSection "Response Body" (Map.lookup Fields.FCResponseBody sn)
+          div_ [class_ "flex flex-col"] do
+            h3_ [class_ "text-green-500 w-fit py-1 font-semibold text-sm border-b border-b-green-500 mb-2"] "Deleted Fields"
+            div_ [class_ "px-2"] do
+              p_ [class_ "hidden last:block"] "No deleted fields"
+              subSubSection "Request Path Params" (Map.lookup Fields.FCPathParam th)
+              subSubSection "Request Query Params" (Map.lookup Fields.FCQueryParam th)
+              subSubSection "Request Headers" (Map.lookup Fields.FCRequestHeader th)
+              subSubSection "Request Body" (Map.lookup Fields.FCRequestBody th)
+              subSubSection "Response Headers" (Map.lookup Fields.FCResponseHeader th)
+              subSubSection "Response Body" (Map.lookup Fields.FCResponseBody th)
+      Nothing -> pass
 
 
 anomaly2ChartQuery :: Anomalies.AnomalyTypes -> Text -> Charts.QueryBy
@@ -599,3 +739,79 @@ anomalyArchiveButton pid aid archived = do
     , hxSwap_ "outerHTML"
     ]
     $ img_ [src_ "/assets/svgs/anomalies/archive.svg", class_ "h-4 w-4"]
+
+
+reqResSection :: Text -> Bool -> [Shapes.ShapeWithFields] -> Html ()
+reqResSection title isRequest shapesWithFieldsMap =
+  section_ [class_ "space-y-3"] $ do
+    div_ [class_ "flex justify-between mt-5"] $ do
+      div_ [class_ "flex flex-row"] $ do
+        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
+          $ img_
+            [ src_ "/assets/svgs/cheveron-down.svg"
+            , class_ "h-4 mr-3 mt-1 w-4"
+            ]
+        span_ [class_ "text-lg text-slate-800"] $ toHtml title
+
+    div_ [class_ "bg-white border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"]
+      $ forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap)
+      $ \(index, s) -> do
+        let sh = if index == 1 then title <> "_fields" else title <> "_fields hidden"
+        div_ [class_ sh, id_ $ title <> "_" <> show index] $ do
+          if isRequest
+            then do
+              subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam s.fieldsMap)
+              subSubSection (title <> " Query Params") (Map.lookup Fields.FCQueryParam s.fieldsMap)
+              subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader s.fieldsMap)
+              subSubSection (title <> " Body") (Map.lookup Fields.FCRequestBody s.fieldsMap)
+            else do
+              subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader s.fieldsMap)
+              subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody s.fieldsMap)
+
+
+-- | subSubSection ..
+subSubSection :: Text -> Maybe [Fields.Field] -> Html ()
+subSubSection title fieldsM =
+  case fieldsM of
+    Nothing -> ""
+    Just fields -> do
+      div_ [class_ "space-y-1 mb-4"] $ do
+        div_ [class_ "flex flex-row items-center"] $ do
+          img_
+            [ src_ "/assets/svgs/cheveron-down.svg"
+            , class_ "h-6 mr-3 w-6 p-1 cursor-pointer"
+            , [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .subSectionContent)|]
+            ]
+          div_ [class_ "px-4 rounded-xl w-full font-bold text-sm text-slate-900"] $ toHtml title
+        div_ [class_ "space-y-1 subSectionContent"] $ do
+          fieldsToNormalized fields & mapM_ \(key, fieldM) -> do
+            let segments = T.splitOn "." key
+            let depth = length segments
+            let depthPadding = "margin-left:" <> show (20 + (depth * 20)) <> "px"
+            let displayKey = last ("" :| segments)
+            case fieldM of
+              Nothing -> do
+                a_
+                  [ class_ "flex flex-row items-center"
+                  , style_ depthPadding
+                  , [__| on click toggle .neg-rotate-90 on <.chevron/> in me then collapseUntil((me), (my @data-depth))  |]
+                  ]
+                  $ do
+                    img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-6 w-6 mr-1 chevron cursor-pointer p-1"]
+                    div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full"] $ do
+                      span_ [class_ "text-sm text-slate-800 inline-flex items-center"] $ toHtml displayKey
+                      span_ [class_ "text-sm text-slate-600 inline-flex items-center ml-4"] $ do
+                        if "[*]" `T.isSuffixOf` key
+                          then EndpointComponents.fieldTypeToDisplay Fields.FTList
+                          else EndpointComponents.fieldTypeToDisplay Fields.FTObject
+              Just field -> do
+                a_
+                  [ class_ "flex flex-row cursor-pointer"
+                  , style_ depthPadding
+                  , term "data-depth" $ show depth
+                  ]
+                  $ do
+                    img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-4 mr-3 mt-4 w-4 ", style_ "visibility: hidden"]
+                    div_ [class_ "border-b flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full items-center"] $ do
+                      span_ [class_ "grow text-sm text-slate-800 inline-flex items-center"] $ toHtml displayKey
+                      span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ EndpointComponents.fieldTypeToDisplay $ field.fieldType

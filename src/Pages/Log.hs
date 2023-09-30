@@ -119,8 +119,8 @@ expandAPIlogItem' :: RequestDumps.RequestDumpLogItem -> Bool -> Html ()
 expandAPIlogItem' req modal = do
   div_ [class_ "flex flex-col w-full pb-[100px]"] $ do
     div_ [class_ "w-full flex flex-col gap-2 gap-4"] do
-      let methodColor = "bg-" <> getMethodColor req.method
-      let statusColor = "text-" <> getStatusColor req.statusCode
+      let methodColor = getMethodBgColor req.method
+      let statusColor = getStatusColor req.statusCode
       div_ [class_ "flex gap-4 items-center"] do
         div_ [class_ $ "text-white font-semibold px-2 py-1 rounded min-w-[70px] text-center " <> methodColor] $ toHtml req.method
         div_ [class_ $ "text-lg font-bold px-2 " <> statusColor] $ show req.statusCode
@@ -443,14 +443,6 @@ logItemRows pid requests cols nextLogsURL = do
       div_ [class_ "htmx-indicator query-indicator"] do
         loader
       "LOAD MORE"
-
-
-getMethodBgColor :: Text -> Text
-getMethodBgColor "POST" = " bg-pink-200"
-getMethodBgColor "PUT" = " bg-orange-100"
-getMethodBgColor "DELETE" = " bg-red-100"
-getMethodBgColor "PATCH" = " bg-purple-100"
-getMethodBgColor _ = " bg-blue-100"
 
 
 apiLogItemView :: RequestDumps.RequestDumpLogItem -> Text -> Html ()
