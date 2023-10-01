@@ -540,6 +540,16 @@ anomalyDetailsPage anomaly requestsItems shapesWithFieldsMap fields chartQuery c
                 span_ [] $ toHtml $ fromMaybe "" anomaly.endpointUrlPath
               div_ [class_ "mt-4"] do
                 shapeParameterStats_ (length anomaly.shapeNewUniqueFields) (length anomaly.shapeDeletedFields) (length anomaly.shapeUpdatedFieldFormats)
+          Anomalies.ATFormat -> do
+            div_ [class_ "flex flex-col gap-4 shrink-0"] do
+              a_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
+                img_ [src_ "/assets/svgs/anomalies/fields.svg", class_ "inline w-6 h-6 -mt-1"]
+                span_ [class_ "text-2xl"] "Modified field"
+              div_ [class_ "flex items-center gap-3"] do
+                let methodColor = Utils.getMethodBgColor (fromMaybe "" anomaly.endpointMethod)
+                p_ [class_ "italic"] "in"
+                div_ [class_ $ "px-4 py-1 text-sm rounded-lg text-white font-semibold " <> methodColor] $ toHtml $ fromMaybe "" anomaly.endpointMethod
+                span_ [] $ toHtml $ fromMaybe "" anomaly.endpointUrlPath
           _ -> pass
         div_ [class_ "flex items-center gap-6 shrink-0"] do
           div_ [class_ "flex items-center gap-6 -mt-4"] do
@@ -565,7 +575,7 @@ anomalyDetailsPage anomaly requestsItems shapesWithFieldsMap fields chartQuery c
     div_ [class_ "w-full flex items-center gap-4 mt-4 overflow-y-auto h-full"] do
       anomalyArchiveButton anomaly.projectId anomaly.id (isJust anomaly.archivedAt)
       anomalyAcknowlegeButton anomaly.projectId anomaly.id (isJust anomaly.acknowlegedAt)
-      when modal $ a_ [href_ $ "/p/" <> anomaly.projectId.toText <> "/anomaly/" <> anomaly.targetHash, term "data-tippy-content" "Go to page"] do
+      a_ [href_ $ "/p/" <> anomaly.projectId.toText <> "/anomaly/" <> anomaly.targetHash, term "data-tippy-content" "Go to page"] do
         mIcon_ "enlarge" "w-3 h-3"
 
     div_ [class_ "mt-6 space-y-4"] do
@@ -587,7 +597,7 @@ anomalyDetailsPage anomaly requestsItems shapesWithFieldsMap fields chartQuery c
           case anomaly.anomalyType of
             Anomalies.ATEndpoint -> endpointOverview shapesWithFieldsMap
             Anomalies.ATShape -> requestShapeOverview fields
-            -- Anomalies.ATFormat -> formatOverview fields
+            Anomalies.ATFormat -> anomalyFormatOverview anomaly
             _ -> ""
         div_ [class_ "grow overflow-y-auto h-full whitespace-nowrap text-sm divide-y overflow-x-hidden sdk_tab_content", id_ "events_content"] $ do
           Log.logItemRows anomaly.projectId requestsItems [] ""
@@ -705,6 +715,24 @@ requestShapeOverview fieldChanges = do
               subSubSection "Response Headers" (Map.lookup Fields.FCResponseHeader th)
               subSubSection "Response Body" (Map.lookup Fields.FCResponseBody th)
       Nothing -> pass
+anomalyFormatOverview :: AnomalyVM -> Html ()
+anomalyFormatOverview an =
+  div_ [class_ "flex flex-col gap-4 mt-6 text-gray-600"] do
+    div_ [class_ "flex gap-2"] do
+      span_ [class_ "font-semibold"] "Field format:"
+      span_ [] $ toHtml $ fieldTypeToText $ fromMaybe FTString an.formatType
+    div_ [class_ "flex gap-2"] do
+      span_ [class_ "font-semibold"] "Field Category:"
+      span_ [] $ toHtml $ fieldCategoryEnumToText $ fromMaybe FCRequestBody an.fieldCategory
+    div_ [class_ "flex gap-2"] do
+      span_ [class_ "font-semibold"] "Field Key Path:"
+      span_ [] $ toHtml $ fromMaybe "" an.fieldKeyPath
+    div_ [class_ "flex gap-2"] do
+      span_ [class_ "font-semibold"] "Field Key:"
+      span_ [] $ toHtml $ fromMaybe "" an.fieldKey
+    div_ [class_ "flex gap-2 items-center"] do
+      span_ [class_ "font-semibold"] "Examples:"
+      span_ $ toHtml $ maybe "" (T.intercalate ", " . Vector.toList) an.formatExamples
 
 
 anomaly2ChartQuery :: Anomalies.AnomalyTypes -> Text -> Charts.QueryBy

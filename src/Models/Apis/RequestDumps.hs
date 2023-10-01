@@ -36,6 +36,7 @@ import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
 import Data.Tuple.Extra (both)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
+import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, queryOne)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
@@ -409,6 +410,7 @@ select duration_steps, count(id)
 	ORDER BY duration_steps;
       |]
 
+
 selectAnomalyEvents :: Projects.ProjectId -> Text -> AnomalyTypes -> DBT IO (Vector RequestDumpLogItem)
 selectAnomalyEvents pid targetHash anType = query Select (Query $ encodeUtf8 q) (pid, targetHash)
   where
@@ -416,7 +418,7 @@ selectAnomalyEvents pid targetHash anType = query Select (Query $ encodeUtf8 q) 
     extraQuery = case anType of
       Anomalies.ATEndpoint -> " endpoint_hash=?"
       Anomalies.ATShape -> " shape_hash=?"
-      Anomalies.ATFormat -> " format_hashes=?"
+      Anomalies.ATFormat -> " ?=ANY(format_hashes)"
       _ -> error "Should never be reached"
 
     q =
@@ -425,7 +427,8 @@ selectAnomalyEvents pid targetHash anType = query Select (Query $ encodeUtf8 q) 
                     request_body,response_body,request_headers,response_headers,
                     count(*) OVER() AS full_count, duration_ns, sdk_type,
                     parent_id, service_version, errors, tags
-             FROM apis.request_dumps where project_id=? and $extraQuery |]
+             FROM apis.request_dumps where project_id=? and $extraQuery LIMIT 199; |]
+
 
 -- A throughput chart query for the request_dump table.
 -- daterange :: (Maybe Int, Maybe Int)?
