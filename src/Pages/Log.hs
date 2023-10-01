@@ -394,11 +394,7 @@ logItemRows pid requests cols nextLogsURL = do
     div_
       [ class_ "flex flex-row border-l-4 border-l-transparent divide-x space-x-4 hover:bg-blue-50 cursor-pointer"
       , term "data-log-item-path" logItemPath
-      , term
-          "_"
-          [text|
-            install LogItemExpandable
-        |]
+      , [__|on click LogItemExpandable(me)|]
       ]
       $ do
         div_ [class_ "flex-none inline-block p-1 px-2 w-8 flex justify-center align-middle"] $ do
@@ -451,7 +447,7 @@ apiLogItemView req expandItemPath = do
     $ div_ [class_ "pl-4 py-1 ", colspan_ "3"]
     $ do
       button_
-        [ class_ "px-2 rounded text-white bg-blue-500 text-sm font-semibold"
+        [ class_ "px-2 rounded text-white bg-blue-500 text-sm font-semibold expand-button"
         , term "data-log-item-path" (expandItemPath <> "/detailed")
         , [__|on click remove .hidden from #expand-log-modal then
                 remove .hidden from #log-modal-content-loader
@@ -591,8 +587,7 @@ jsonTreeAuxillaryCode pid = do
         end
       end
 
-      behavior LogItemExpandable
-        on click 
+      def LogItemExpandable(me)
           if I match <.expanded-log/> then 
             remove next <.log-item-info/> then 
             remove .expanded-log from me

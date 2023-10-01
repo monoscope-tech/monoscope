@@ -608,6 +608,38 @@ anomalyDetailsPage anomaly requestsItems shapesWithFieldsMap fields chartQuery c
         setTimeout(()=>{tabContent.classList.add("sdk_tab_content_active")},10)
       }
 |]
+  script_
+    [type_ "text/hyperscript"]
+    [text|
+      def LogItemExpandable(me)
+          if I match <.expanded-log/> then 
+            remove next <.log-item-info/> then 
+            remove .expanded-log from me
+          else
+            add .expanded-log to me
+            remove .hidden from next <.item-loading />
+            fetch `$${@data-log-item-path}` as html then put it after me then
+             add .hidden to next <.item-loading />
+            _hyperscript.processNode(next <.log-item-info />) then
+          end 
+      end
+    |]
+  style_
+    [text|
+    .tree-children {
+      display: block;
+    }
+    .expand-button {
+      display:none;
+    }
+    .tree-children-count { display: none; }
+    .collapsed .tree-children {
+      display: none !important; 
+    }
+    .collapsed .tree-children-count {display: inline !important;}
+    .collapsed .children {display: inline-block; padding-left:0}
+    .collapsed .closing-token {padding-left:0}
+  |]
 
 
 endpointOverview :: Maybe (Vector Shapes.ShapeWithFields) -> Html ()
