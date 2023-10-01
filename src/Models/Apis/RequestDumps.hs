@@ -427,7 +427,7 @@ selectAnomalyEvents pid targetHash anType = query Select (Query $ encodeUtf8 q) 
                     request_body,response_body,request_headers,response_headers,
                     count(*) OVER() AS full_count, duration_ns, sdk_type,
                     parent_id, service_version, errors, tags
-             FROM apis.request_dumps where project_id=? and $extraQuery LIMIT 199; |]
+             FROM apis.request_dumps where created_at > NOW() - interval '14' day AND project_id=? AND $extraQuery LIMIT 199; |]
 
 
 -- A throughput chart query for the request_dump table.

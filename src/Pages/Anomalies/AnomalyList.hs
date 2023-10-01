@@ -502,12 +502,12 @@ anomalyDetailsGetH sess pid targetHash hxBoostedM = do
           case hxBoostedM of
             Just _ -> case an.anomalyType of
               Anomalies.ATEndpoint -> pure $ anomalyDetailsPage an events (Just shapesWithFieldsMap) Nothing chartQuery currTime True
-              Anomalies.ATShape -> pure $ anomalyDetailsPage an events Nothing (Just anFields) chartQuery currTime False
-              _ -> pure $ anomalyDetailsPage an events (Just shapesWithFieldsMap) Nothing chartQuery currTime False
+              Anomalies.ATShape -> pure $ anomalyDetailsPage an events Nothing (Just anFields) chartQuery currTime True
+              _ -> pure $ anomalyDetailsPage an events (Just shapesWithFieldsMap) Nothing chartQuery currTime True
             Nothing -> pure $ bodyWrapper bwconf $ div_ [class_ "w-full px-32"] do
               h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
               case an.anomalyType of
-                Anomalies.ATEndpoint -> anomalyDetailsPage an events (Just shapesWithFieldsMap) Nothing chartQuery currTime True
+                Anomalies.ATEndpoint -> anomalyDetailsPage an events (Just shapesWithFieldsMap) Nothing chartQuery currTime False
                 Anomalies.ATShape -> anomalyDetailsPage an events Nothing (Just anFields) chartQuery currTime False
                 _ -> anomalyDetailsPage an events (Just shapesWithFieldsMap) Nothing chartQuery currTime False
         Nothing -> pure $ bodyWrapper bwconf $ h4_ [] "ANOMALY NOT FOUND"
@@ -551,7 +551,7 @@ anomalyDetailsPage anomaly requestsItems shapesWithFieldsMap fields chartQuery c
                 div_ [class_ $ "px-4 py-1 text-sm rounded-lg text-white font-semibold " <> methodColor] $ toHtml $ fromMaybe "" anomaly.endpointMethod
                 span_ [] $ toHtml $ fromMaybe "" anomaly.endpointUrlPath
           _ -> pass
-        div_ [class_ "flex items-center gap-6 shrink-0"] do
+        div_ [class_ "flex items-center gap-8 shrink-0 text-gray-600"] do
           div_ [class_ "flex items-center gap-6 -mt-4"] do
             div_ [class_ "flex flex-col gap-2"] do
               h4_ [class_ "font-semibold"] "Events"
@@ -573,10 +573,13 @@ anomalyDetailsPage anomaly requestsItems shapesWithFieldsMap fields chartQuery c
           div_ [class_ "w-[200px] h-[80px] mt-4 shrink-0"] do
             Charts.throughput anomaly.projectId anomaly.targetHash chartQuery Nothing 14 Nothing False (Nothing, Nothing) Nothing
     div_ [class_ "w-full flex items-center gap-4 mt-4 overflow-y-auto h-full"] do
-      anomalyArchiveButton anomaly.projectId anomaly.id (isJust anomaly.archivedAt)
-      anomalyAcknowlegeButton anomaly.projectId anomaly.id (isJust anomaly.acknowlegedAt)
-      a_ [href_ $ "/p/" <> anomaly.projectId.toText <> "/anomaly/" <> anomaly.targetHash, term "data-tippy-content" "Go to page"] do
-        mIcon_ "enlarge" "w-3 h-3"
+      if modal
+        then do
+          a_ [href_ $ "/p/" <> anomaly.projectId.toText <> "/anomaly/" <> anomaly.targetHash, term "data-tippy-content" "Go to page"] do
+            mIcon_ "enlarge" "w-3 h-3"
+        else do
+          anomalyArchiveButton anomaly.projectId anomaly.id (isJust anomaly.archivedAt)
+          anomalyAcknowlegeButton anomaly.projectId anomaly.id (isJust anomaly.acknowlegedAt)
 
     div_ [class_ "mt-6 space-y-4"] do
       div_ [class_ "flex items-center gap-10 font-semibold border-b"] do
