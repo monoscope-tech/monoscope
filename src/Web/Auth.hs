@@ -134,8 +134,8 @@ authCallbackH codeM _ = do
           Nothing -> do
             user <- liftIO $ Users.createUser firstName lastName picture email
             Users.insertUser user
-            pure (user.id)
-          Just user -> pure $ user.id
+            pure user.id
+          Just user -> pure user.id
         traceShowM "In before persistentSessId"
         persistentSessId <- liftIO Sessions.newPersistentSessionId
         Sessions.insertSession persistentSessId userId (Sessions.SessionData Map.empty)

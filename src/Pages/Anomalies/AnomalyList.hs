@@ -59,7 +59,7 @@ import Utils
 import Web.FormUrlEncoded (FromForm)
 
 
-data AnomalyBulkForm = AnomalyBulk
+newtype AnomalyBulkForm = AnomalyBulk
   { anomalyId :: [Text]
   }
   deriving stock (Show, Generic)
@@ -409,7 +409,7 @@ anomalyAccentColor False False = "bg-red-800"
 
 anomalyItem :: Bool -> UTCTime -> Anomalies.AnomalyVM -> Text -> Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
 anomalyItem hideByDefault currTime anomaly icon title subTitle content = do
-  let anomalyId = Anomalies.anomalyIdText (anomaly.id)
+  let anomalyId = Anomalies.anomalyIdText anomaly.id
   div_ [class_ $ "flex py-4 gap-8 " <> if hideByDefault then "card-round bg-white px-5" else "", style_ (if hideByDefault then "display:none" else ""), id_ anomalyId] do
     div_ [class_ $ "h-4 flex self-start space-x-3 w-8 " <> if hideByDefault then "hidden" else ""] do
       a_ [class_ $ anomalyAccentColor (isJust anomaly.acknowlegedAt) (isJust anomaly.archivedAt) <> " w-2 h-full"] ""

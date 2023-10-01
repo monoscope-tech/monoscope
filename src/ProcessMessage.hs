@@ -141,7 +141,7 @@ processMessages' logger' _ conn' msgs projectCache' = do
       $ RequestDumps.bulkInsertRequestDumps reqDumps
 
   endTime <- getTime Monotonic
-  liftIO $ putStrLn $ fmtLn $ "Process Message (" +| messagesCount |+ ") pipeline microsecs: queryDuration " +| (toNanoSecs (diffTimeSpec startTime afterProccessing)) `div` 1000 |+ " -> processingDuration " +| toNanoSecs (diffTimeSpec afterProccessing endTime) `div` 1000 |+ " -> TotalDuration " +| toNanoSecs (diffTimeSpec startTime endTime) `div` 1000 |+ ""
+  liftIO $ putStrLn $ fmtLn $ "Process Message (" +| messagesCount |+ ") pipeline microsecs: queryDuration " +| toNanoSecs (diffTimeSpec startTime afterProccessing) `div` 1000 |+ " -> processingDuration " +| toNanoSecs (diffTimeSpec afterProccessing endTime) `div` 1000 |+ " -> TotalDuration " +| toNanoSecs (diffTimeSpec startTime endTime) `div` 1000 |+ ""
 
   case resp of
     Left err -> do
@@ -156,7 +156,7 @@ processMessages' logger' _ conn' msgs projectCache' = do
     processMessage logger conn projectCache recMsgEither = runExceptT do
       (rmAckId, recMsg) <- except recMsgEither
       timestamp <- liftIO getZonedTime
-      let pid = Projects.ProjectId (recMsg.projectId)
+      let pid = Projects.ProjectId recMsg.projectId
 
       -- We retrieve the projectCache object from the inmemory cache and if it doesn't exist,
       -- we set the value in the db into the cache and return that.
@@ -172,7 +172,7 @@ processMessages' logger' _ conn' msgs projectCache' = do
           :: ExceptT Text IO (Either SomeException Projects.ProjectCache)
 
       case projectCacheValE of
-        Left e -> throwE $ "An error occurred while fetching project cache: " <> (toText $ show e)
+        Left e -> throwE $ "An error occurred while fetching project cache: " <> toText (show e)
         Right projectCacheVal -> do
           recId <- liftIO nextRandom
           (query, params, reqDump) <- except $ RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId

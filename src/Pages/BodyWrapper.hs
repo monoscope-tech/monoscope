@@ -208,7 +208,7 @@ projectsDropDown currProject projects = do
         div_ [class_ "flex mt-2 mb-4"] $ do
           img_ [class_ "p-4", src_ "/assets/svgs/projects.svg"]
           div_ $ do
-            strong_ [class_ "block"] $ toHtml $ currProject.title
+            strong_ [class_ "block"] $ toHtml currProject.title
             small_ [class_ "block text-blue-800"] $ toHtml currProject.paymentPlan
         nav_ [] $ do
           a_ [href_ [text| /p/$pidTxt/settings |], class_ "p-3 flex gap-3 rounded-2xl hover:bg-gray-100"] $ do
@@ -236,7 +236,7 @@ projectsDropDown currProject projects = do
               a_ [class_ "flex justify-between p-2", href_ $ "/p/" <> project.id.toText] $ do
                 div_ [class_ "space-x-3"] $ do
                   img_ [class_ "inline-block", src_ "/assets/svgs/projects.svg"]
-                  span_ [class_ "inline-block"] $ toHtml $ project.title
+                  span_ [class_ "inline-block"] $ toHtml project.title
                 when (currProject.id == project.id) $ img_ [src_ "/assets/svgs/checkmark_blue.svg"]
 
 
@@ -283,8 +283,8 @@ sideNav sess project pageTitle menuItem = do
         ]
         $ do
           div_ [class_ "space-2 grow sd-hidden"] $ do
-            strong_ [class_ "block text-slate-900"] $ toHtml $ project.title
-            small_ [class_ "block text-slate-900"] $ toHtml $ project.paymentPlan
+            strong_ [class_ "block text-slate-900"] $ toHtml project.title
+            small_ [class_ "block text-slate-900"] $ toHtml project.paymentPlan
           -- Development?
           div_ $ do
             img_ [src_ "/assets/svgs/up_chevron.svg"]
@@ -292,7 +292,7 @@ sideNav sess project pageTitle menuItem = do
       projectsDropDown project (Sessions.getProjects $ Sessions.projects sess)
     nav_ [class_ "mt-4"] $ do
       -- FIXME: reeanable hx-boost hxBoost_ "true"
-      menu (project.id) & mapM_ \(mTitle, mUrl, mIcon) -> do
+      menu project.id & mapM_ \(mTitle, mUrl, mIcon) -> do
         a_
           [ href_ mUrl
           , term "data-tippy-placement" "right"
@@ -351,7 +351,7 @@ navbar currUser = do
         |]
         ]
         $ do
-          img_ [class_ "inline-block w-9 h-9 rounded-lg bg-gray-300", src_ (currUser.displayImageUrl)]
+          img_ [class_ "inline-block w-9 h-9 rounded-lg bg-gray-300", src_ currUser.displayImageUrl]
           span_ [class_ "inline-block"]
             $ toHtml
             $ if currUser.firstName /= "" || currUser.lastName /= ""

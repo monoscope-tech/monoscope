@@ -125,7 +125,7 @@ buildReqDumpSQL exps = (q, join qByArgs, mFrom, mTo)
        in (" ( " <> txt1 <> " AND " <> txt2 <> " ) ", arg1 ++ arg2)
 
     dateRangeFromQueryBy :: [QueryBy] -> (Maybe ZonedTime, Maybe ZonedTime)
-    dateRangeFromQueryBy queryList = foldl' goDateRange (Nothing, Nothing) queryList
+    dateRangeFromQueryBy = foldl' goDateRange (Nothing, Nothing) 
       where
         goDateRange :: (Maybe ZonedTime, Maybe ZonedTime) -> QueryBy -> (Maybe ZonedTime, Maybe ZonedTime)
         goDateRange acc@(Just _from, Just _to) _ = acc -- Both from and to found, no need to continue

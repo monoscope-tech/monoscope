@@ -243,7 +243,7 @@ singleReportPage pid report =
                       div_ [class_ "flex gap-2"] do
                         span_ [class_ "font-medium"] $ show (length v.endpoints)
                         span_ [] "affected endpoints"
-                    renderEndpointsTable (v.endpoints)
+                    renderEndpointsTable v.endpoints
                 Nothing -> pass
       Nothing -> do
         h3_ [] "Report Not Found"
@@ -409,7 +409,7 @@ getPerformanceInsight req_dumps previous_p =
 
 mapFunc :: Map.Map Text Integer -> RequestDumps.RequestForReport -> PerformanceReport
 mapFunc prMap rd =
-  case Map.lookup (rd.endpointHash) prMap of
+  case Map.lookup rd.endpointHash prMap of
     Just prevDuration ->
       let diff = rd.averageDuration - prevDuration
           diffPct = round $ divideIntegers diff prevDuration * 100
@@ -515,7 +515,7 @@ reportEmail pid report' =
             div_ [style_ "width: 100%"] $ do
               div_ [style_ "width:100%; border-bottom: 1px solid #e5e7eb; padding-bottom: 0.5rem; display:inline"] $ do
                 h5_ [style_ "font-weight: bold; font-size:18px; margin-bottom: 1rem"] "Performance"
-                renderEmailEndpointsTable (v.endpoints)
+                renderEmailEndpointsTable v.endpoints
           Nothing -> pass
 
 
@@ -523,8 +523,8 @@ renderEmailEndpointRow :: PerformanceReport -> Html ()
 renderEmailEndpointRow endpoint = tr_ $ do
   let (pcls, prc) =
         if endpoint.durationDiffPct > 0
-          then ("red", "+" <> show (endpoint.durationDiffPct) <> "%" :: Text)
-          else ("green", show (endpoint.durationDiffPct) <> "%" :: Text)
+          then ("red", "+" <> show endpoint.durationDiffPct <> "%" :: Text)
+          else ("green", show endpoint.durationDiffPct <> "%" :: Text)
   let avg_dur_ms = (fromInteger (round $ ((fromInteger endpoint.averageDuration :: Double) / 1000000.0) * 100) :: Double) / 100
   let dur_diff_ms = (fromInteger (round $ ((fromInteger endpoint.durationDiff :: Double) / 1000000.0) * 100) :: Double) / 100
   let tdStyle = "padding: 0.75rem 1.5rem; border-bottom: 1px solid #e5e7eb; color: #6b7280; font-size: 14px;"

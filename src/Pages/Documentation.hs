@@ -110,7 +110,7 @@ data SaveSwaggerForm = SaveSwaggerForm
 
 
 getEndpointHash :: Projects.ProjectId -> Text -> Text -> Text
-getEndpointHash pid urlPath method = toText $ showHex (xxHash $ encodeUtf8 $ (UUID.toText pid.unProjectId) <> T.toUpper method <> urlPath) ""
+getEndpointHash pid urlPath method = toText $ showHex (xxHash $ encodeUtf8 $ UUID.toText pid.unProjectId <> T.toUpper method <> urlPath) ""
 
 
 getFieldHash :: Text -> Text -> Text -> Text -> Text
@@ -739,7 +739,7 @@ mainContent swaggers = do
         swaggers & mapM_ \rf -> do
           div_ [style_ "max-height:400px;", class_ "shadow overflow-y-auto border-b border-gray-200 mb-10 sm:rounded-lg"] $ do
             div_ $ do
-              p_ [style_ "white-space: pre-wrap; font-family: monospace;", class_ "raw_swagger px-6 py-4 text-sm font-medium text-gray-900"] $ toHtml $ encode $ rf.swaggerJson
+              p_ [style_ "white-space: pre-wrap; font-family: monospace;", class_ "raw_swagger px-6 py-4 text-sm font-medium text-gray-900"] $ toHtml $ encode rf.swaggerJson
   script_
     [text|
          for(let swagger of Array.from(document.querySelectorAll('.raw_swagger'))) {

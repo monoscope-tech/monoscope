@@ -95,17 +95,17 @@ fieldDetailsView field formats = do
   section_ [class_ "space-y-6"] $ do
     div_ $ do
       h6_ [class_ "text-slate-800 text-xs"] "FIELD NAME"
-      h3_ [class_ "text-lg text-slate-800"] $ toHtml $ field.key
+      h3_ [class_ "text-lg text-slate-800"] $ toHtml field.key
     div_ $ do
       h6_ [class_ "text-slate-800 text-xs"] "FIELD PATH"
-      h3_ [class_ "text-base text-slate-800 monospace"] $ toHtml $ field.keyPath
+      h3_ [class_ "text-base text-slate-800 monospace"] $ toHtml field.keyPath
     div_ [class_ "flex flex-row gap-6"] $ do
       div_ $ do
         h6_ [class_ "text-slate-800 text-xs"] "FIELD CATEGORY"
-        h4_ [class_ "text-base text-slate-800"] $ EndpointComponents.fieldCategoryToDisplay $ field.fieldCategory
+        h4_ [class_ "text-base text-slate-800"] $ EndpointComponents.fieldCategoryToDisplay field.fieldCategory
       div_ [class_ ""] $ do
         h6_ [class_ "text-slate-800 text-xs"] "FORMAT OVERRIDE"
-        h4_ [class_ "text-base text-slate-800"] $ toHtml $ fromMaybe "[unset]" (field.fieldTypeOverride)
+        h4_ [class_ "text-base text-slate-800"] $ toHtml $ fromMaybe "[unset]" field.fieldTypeOverride
     div_ $ do
       h5_ [class_ "text-sm text-slate-800"] "DETECTED FIELD FORMATS AND TYPES"
       div_ [class_ "space-y-2"]
@@ -115,10 +115,10 @@ fieldDetailsView field formats = do
             div_ [class_ "flex flex-row gap-9"] $ do
               div_ [class_ "space-y-2"] $ do
                 h6_ [class_ "text-slate-800 text-xs"] "TYPE"
-                h4_ [class_ "text-base text-slate-800"] $ EndpointComponents.fieldTypeToDisplay $ formatV.fieldType
+                h4_ [class_ "text-base text-slate-800"] $ EndpointComponents.fieldTypeToDisplay formatV.fieldType
               div_ [class_ "mx-5 space-y-2"] $ do
                 h6_ [class_ "text-slate-800 text-xs"] "FORMAT"
-                h4_ [class_ "text-base text-slate-800"] $ toHtml $ formatV.fieldFormat
+                h4_ [class_ "text-base text-slate-800"] $ toHtml formatV.fieldFormat
             h6_ [class_ "text-slate-600 mt-4 text-xs"] "EXAMPLE VALUES"
             ul_ [class_ "list-disc"] $ do
               formatV.examples & mapM_ \ex -> do
@@ -128,14 +128,14 @@ fieldDetailsView field formats = do
         h4_ [class_ "text-sm text-slate-800 mb-2"] "CREATION DATE"
         div_ [class_ "flex border border-gray-200 m-1 rounded-xl p-2"] $ do
           mIcon_ "calender" "h-4 mr-2 w-4"
-          span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" (field.createdAt)
+          span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" field.createdAt
       div_ [class_ " "] $ do
         h4_ [class_ "text-sm text-slate-800 mb-2"] "LAST CHANGE"
         div_ [class_ "flex border border-gray-200 m-1 justify-between rounded-xl p-2"] $ do
           mIcon_ "calender" "h-4 mr-2 w-4"
-          span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" (field.updatedAt)
+          span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" field.updatedAt
     h6_ [class_ "mt-5 text-sm text-slate-800 mb-2"] "DESCRIPTION"
-    p_ [class_ "text-slate-800 text-sm"] $ toHtml $ field.description
+    p_ [class_ "text-slate-800 text-sm"] $ toHtml field.description
 
 
 aesonValueToText :: AE.Value -> Text
@@ -181,10 +181,10 @@ endpointDetailsH sess pid eid fromDStr toDStr sinceStr' subPageM = do
           fields <- Fields.selectFields pid endpoint.hash
           let fieldsMap = Fields.groupFieldsByCategory fields
           let shapesWithFieldsMap = Vector.map (`getShapeFields` fields) shapes
-          let maxV = round (enpStats.max) :: Int
+          let maxV = round enpStats.max :: Int
           let steps = (maxV `quot` 100) :: Int
           let steps' = if steps == 0 then 100 else steps
-          reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledBySteps maxV steps' pid (endpoint.urlPath) (endpoint.method)
+          reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledBySteps maxV steps' pid endpoint.urlPath endpoint.method
           pure (endpoint, enpStats, project, Vector.toList shapesWithFieldsMap, fieldsMap, Vector.toList reqLatenciesRolledBySteps)
 
       let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
@@ -213,8 +213,8 @@ endpointDetails paramInput currTime endpoint endpointStats shapesWithFieldsMap f
       div_ [class_ "flex flex-row justify-between mb-10"] $ do
         div_ [class_ "flex flex-row place-items-center text-lg font-medium"] $ do
           h3_ [class_ "text-lg text-slate-800"] $ do
-            span_ [class_ $ "p-1 endpoint endpoint-" <> toLower (endpoint.method)] $ toHtml $ (endpoint.method) <> " "
-            strong_ [class_ "inconsolata text-xl"] $ toHtml (endpoint.urlPath)
+            span_ [class_ $ "p-1 endpoint endpoint-" <> toLower endpoint.method] $ toHtml $ endpoint.method <> " "
+            strong_ [class_ "inconsolata text-xl"] $ toHtml endpoint.urlPath
           img_ [src_ "/assets/svgs/cheveron-down.svg", class_ " h-4 w-4 m-2"]
         nav_ [class_ " space-x-4"] $ do
           subPageMenu
@@ -390,7 +390,7 @@ apiOverviewSubPage paramInput currTime endpoint fieldsM reqLatenciesRolledByStep
         a_ [class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ", [__| on click toggle .hidden on #timepickerSidebar |]] "Custom date range"
       div_ [class_ "inline-block relative hidden", id_ "timepickerSidebar"] do
         div_ [id_ "startTime", class_ "hidden"] ""
-    section_ $ AnomaliesList.anomalyListSlider currTime (endpoint.projectId) (Just endpoint.endpointId) Nothing
+    section_ $ AnomaliesList.anomalyListSlider currTime endpoint.projectId (Just endpoint.endpointId) Nothing
     endpointStats endpoint reqLatenciesRolledByStepsJ dateRange
 
 
@@ -453,13 +453,13 @@ endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p
           div_ [class_ "col-span-2 space-y-4 "] $ do
             strong_ [class_ "block text-right"] "Latency Percentiles"
             ul_ [class_ "space-y-1 divide-y divide-slate-100"] $ do
-              percentileRow "max" $ enpStats.max
-              percentileRow "p99" $ enpStats.p99
-              percentileRow "p95" $ enpStats.p95
-              percentileRow "p90" $ enpStats.p90
-              percentileRow "p75" $ enpStats.p75
-              percentileRow "p50" $ enpStats.p50
-              percentileRow "min" $ enpStats.min
+              percentileRow "max" enpStats.max
+              percentileRow "p99" enpStats.p99
+              percentileRow "p95" enpStats.p95
+              percentileRow "p90" enpStats.p90
+              percentileRow "p75" enpStats.p75
+              percentileRow "p50" enpStats.p50
+              percentileRow "min" enpStats.min
         script_ [int|| latencyHistogram('reqsLatencyHistogram',{p50:#{p50}, p75:#{p75}, p90:#{p90}, p95:#{p95}, p99:#{p99}, max:#{max}},  #{reqLatenciesRolledByStepsJ}) |]
 
 
@@ -552,7 +552,7 @@ subSubSection title fieldsM =
                           else EndpointComponents.fieldTypeToDisplay Fields.FTObject
               Just field -> do
                 a_
-                  [ hxGet_ $ "/p/" <> field.projectId.toText <> "/fields/" <> UUID.toText (Fields.unFieldId $ field.id)
+                  [ hxGet_ $ "/p/" <> field.projectId.toText <> "/fields/" <> UUID.toText (Fields.unFieldId field.id)
                   , hxTarget_ "#detailSidebar"
                   , class_ "flex flex-row cursor-pointer"
                   , style_ depthPadding
@@ -563,7 +563,7 @@ subSubSection title fieldsM =
                     div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full items-center"] $ do
                       input_ [type_ "checkbox", class_ " mr-12"]
                       span_ [class_ "grow text-sm text-slate-800 inline-flex items-center"] $ toHtml displayKey
-                      span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ EndpointComponents.fieldTypeToDisplay $ field.fieldType
+                      span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ EndpointComponents.fieldTypeToDisplay field.fieldType
                       img_ [src_ "/assets/svgs/alert-red.svg", class_ " mr-8 ml-4 h-5"]
                       img_ [src_ "/assets/svgs/dots-vertical.svg", class_ "mx-5 h-5"]
 

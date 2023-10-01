@@ -88,7 +88,7 @@ makeFieldLabelsNoPrefix ''Endpoint
 
 -- | endpointToUrlPath builds an apitoolkit path link to the endpoint details page of that endpoint.
 endpointToUrlPath :: Endpoint -> Text
-endpointToUrlPath enp = endpointUrlPath (enp.projectId) (enp.id)
+endpointToUrlPath enp = endpointUrlPath enp.projectId enp.id
 
 
 endpointUrlPath :: Projects.ProjectId -> EndpointId -> Text
@@ -98,7 +98,7 @@ endpointUrlPath pid eid = "/p/" <> pid.toText <> "/endpoints/" <> endpointIdText
 upsertEndpointQueryAndParam :: Endpoint -> (Query, [DBField])
 upsertEndpointQueryAndParam endpoint = (q, params)
   where
-    host = fromMaybe @Text "" ((endpoint.hosts) Vector.!? 0) -- Read the first item from head or default to empty string
+    host = fromMaybe @Text "" (endpoint.hosts Vector.!? 0) -- Read the first item from head or default to empty string
     q =
       [sql|  
           INSERT INTO apis.endpoints (project_id, url_path, url_params, method, hosts, hash)
@@ -123,7 +123,7 @@ upsertEndpointQueryAndParam endpoint = (q, params)
 upsertEndpoints :: Endpoint -> PgT.DBT IO (Maybe EndpointId)
 upsertEndpoints endpoint = queryOne Insert q options
   where
-    host = fromMaybe "" ((endpoint.hosts) Vector.!? 0) -- Read the first item from head or default to empty string
+    host = fromMaybe "" (endpoint.hosts Vector.!? 0) -- Read the first item from head or default to empty string
     q =
       [sql|  
         with e as (

@@ -96,16 +96,16 @@ insertShapeQueryAndParam shape = (q, params)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING; 
           |]
     params =
-      [ MkDBField $ shape.projectId
-      , MkDBField $ shape.endpointHash
-      , MkDBField $ shape.queryParamsKeypaths
-      , MkDBField $ shape.requestBodyKeypaths
-      , MkDBField $ shape.responseBodyKeypaths
-      , MkDBField $ shape.requestHeadersKeypaths
-      , MkDBField $ shape.responseHeadersKeypaths
-      , MkDBField $ shape.fieldHashes
-      , MkDBField $ shape.hash
-      , MkDBField $ shape.statusCode
+      [ MkDBField shape.projectId
+      , MkDBField shape.endpointHash
+      , MkDBField shape.queryParamsKeypaths
+      , MkDBField shape.requestBodyKeypaths
+      , MkDBField shape.responseBodyKeypaths
+      , MkDBField shape.requestHeadersKeypaths
+      , MkDBField shape.responseHeadersKeypaths
+      , MkDBField shape.fieldHashes
+      , MkDBField shape.hash
+      , MkDBField shape.statusCode
       ]
 
 

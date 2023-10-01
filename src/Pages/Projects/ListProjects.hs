@@ -20,9 +20,7 @@ listProjectsGetH :: Sessions.PersistentSession -> DashboardM (Union GetOrRedirec
 listProjectsGetH sess = do
   pool <- asks pool
   projects <-
-    if sess.isSudo
-      then liftIO $ withPool pool $ Projects.selectProjectsForUser (sess.userId)
-      else liftIO $ withPool pool $ Projects.selectProjectsForUser (sess.userId)
+    liftIO $ withPool pool $ Projects.selectProjectsForUser sess.userId
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess
@@ -51,8 +49,8 @@ listProjectsBody projects = do
                   div_ [class_ "min-w-0 flex-1 sm:flex sm:items-center sm:justify-between"] $ do
                     div_ [class_ "truncate"] $ do
                       div_ [class_ "text-sm"] $ do
-                        p_ [class_ "block font-medium text-indigo-600 truncate py-2"] $ toHtml $ project.title
-                        p_ [class_ "block flex-shrink-0 font-normal text-gray-500"] $ toHtml $ project.description
+                        p_ [class_ "block font-medium text-indigo-600 truncate py-2"] $ toHtml project.title
+                        p_ [class_ "block flex-shrink-0 font-normal text-gray-500"] $ toHtml project.description
                       div_ [class_ "mt-2 flex"] $ do
                         div_ [class_ "flex items-center text-sm text-gray-500"] $ do
                           small_ $ do

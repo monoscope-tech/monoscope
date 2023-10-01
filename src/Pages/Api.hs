@@ -43,10 +43,10 @@ apiPostH sess pid apiKeyForm = do
   if not isMember
     then do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Only project members can create API keys."]} |]
-      pure $ addHeader hxTriggerData $ ""
+      pure $ addHeader hxTriggerData ""
     else do
       projectKeyUUID <- liftIO UUIDV4.nextRandom
-      let encryptedKey = ProjectApiKeys.encryptAPIKey (encodeUtf8 $ env.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
+      let encryptedKey = ProjectApiKeys.encryptAPIKey (encodeUtf8 env.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
       let encryptedKeyB64 = B64.encodeBase64 encryptedKey
       let keyPrefix = T.take 8 encryptedKeyB64
       pApiKey <- liftIO $ ProjectApiKeys.newProjectApiKeys pid projectKeyUUID (title apiKeyForm) keyPrefix
@@ -178,7 +178,7 @@ mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] $ do
             tbody_ [class_ "bg-white divide-y divide-gray-200"] $ do
               V.indexed apiKeys & mapM_ \(i, apiKey) -> do
                 tr_ [] $ do
-                  td_ [class_ "px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900"] $ toHtml $ apiKey.title
+                  td_ [class_ "px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900"] $ toHtml apiKey.title
                   td_ [class_ "px-6 py-4 whitespace-nowrap text-sm text-gray-500"] $ toHtml $ apiKey.keyPrefix <> "**********"
                   td_ [class_ "px-6 py-4 whitespace-nowrap text-right text-sm font-medium"] $ do
                     if apiKey.active

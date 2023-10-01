@@ -82,12 +82,12 @@ insertFormatQueryAndParams format = (q, params)
             examples = ARRAY(SELECT DISTINCT e from unnest(apis.formats.examples || excluded.examples) as e order by e limit ?); 
       |]
     params =
-      [ MkDBField $ format.projectId
-      , MkDBField $ format.fieldHash
-      , MkDBField $ format.fieldType
-      , MkDBField $ format.fieldFormat
-      , MkDBField $ format.examples
-      , MkDBField $ format.hash
+      [ MkDBField format.projectId
+      , MkDBField format.fieldHash
+      , MkDBField format.fieldType
+      , MkDBField format.fieldFormat
+      , MkDBField format.examples
+      , MkDBField format.hash
       , MkDBField (20 :: Int64) -- NOTE: max number of examples
       ]
 
