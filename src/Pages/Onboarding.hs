@@ -77,8 +77,8 @@ onboardingPage pid hasApikey hasRequest ans = do
                 span_ [class_ "text-slate-500"] "This is completed when you sign up"
             li_ [class_ "flex flex-col items-center mx-4 py-4 border-b gap-6 text-green"] do
               div_ [class_ "flex w-full items-center gap-6"] do
-                let url = if hasApikey then "/assets/svgs/check_complete.svg" else "/assets/svgs/check.svg"
-                img_ [src_ url, class_ "h-6 w-6"]
+                let style = if hasApikey then "text-green-700" else "text-gray-300"
+                faIcon_ "fa-circle-check" "fa-sharp fa-regular fa-circle-check" $ "h-6 w-6 " <> style
                 button_
                   [ class_ "flex justify-between text-left w-full items-center"
                   , [__|on click toggle .hidden on #addAPIKey|]
@@ -116,8 +116,8 @@ onboardingPage pid hasApikey hasRequest ans = do
 
             li_ [class_ "mx-4 py-4 border-b"] do
               div_ [class_ "flex w-full items-center  gap-6"] do
-                let url = if hasRequest then "/assets/svgs/check_complete.svg" else "/assets/svgs/check.svg"
-                img_ [src_ url, class_ "h-6 w-6"]
+                let style = if hasRequest then "text-green-700" else "text-gray-300"
+                faIcon_ "fa-circle-check" "fa-sharp fa-regular fa-circle-check" $ "h-6 w-6 " <> style
                 button_ [class_ "flex justify-between text-left w-full items-center", [__|on click toggle .hidden on #SDKs|]] do
                   div_ [class_ "flex flex-col"] do
                     p_ [class_ "font-semibold"] "Integrate APIToolkit to your app"

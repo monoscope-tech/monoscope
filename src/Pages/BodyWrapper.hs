@@ -211,10 +211,10 @@ projectsDropDown currProject projects = do
             small_ [class_ "block text-blue-800"] $ toHtml currProject.paymentPlan
         nav_ [] $ do
           a_ [href_ [text| /p/$pidTxt/settings |], class_ "p-3 flex gap-3 rounded-2xl hover:bg-gray-100"] $ do
-            img_ [src_ "/assets/svgs/settings.svg"]
+            faIcon_ "fa-gear" "fa-sharp fa-regular fa-gear" ""
             span_ "Settings"
           a_ [href_ [text| /p/$pidTxt/manage_members |], class_ "p-3 flex gap-3 rounded hover:bg-gray-100"] $ do
-            img_ [src_ "/assets/svgs/add_user.svg"]
+            faIcon_ "fa-user-plus" "fa-light fa-user-plus" ""
             span_ "Manage members"
           a_ [class_ "hidden p-3 flex gap-3 rounded hover:bg-gray-100 "] $ do
             img_ [src_ "/assets/svgs/dollar.svg"]
@@ -223,12 +223,12 @@ projectsDropDown currProject projects = do
         div_ [class_ "flex justify-between content-center items-center py-5 mb-2 "] $ do
           a_ [href_ "/"] $ h3_ [class_ "text-xl"] "Switch projects"
           a_ [class_ "inline-block bg-blue-700 flex pl-3 pr-4 py-2 rounded-xl text-white space-x-2", href_ "/p/new"] $ do
-            img_ [class_ "bg-blue-800 p-2 rounded-lg", src_ "/assets/svgs/plus.svg"]
+            faIcon_ "fa-plus" "fa-sharp fa-regular fa-plus" "bg-blue-800 p-2 rounded-lg"
             span_ [class_ "inline-block px-1"] "Add"
         div_ $ do
           div_ [class_ "relative"] $ do
             div_ [class_ "absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none"] $ do
-              img_ [class_ "", src_ "/assets/svgs/search.svg"]
+              faIcon_ "fa-magnifying-glass" "fa-regular fa-magnifying-glass" "" 
             input_ [class_ "pl-12 w-full text-sm bg-gray-100 rounded-2xl border-0 p-3", placeholder_ "Search Projects"]
           div_ [class_ "space-y-2 py-4 text-sm"] $ do
             projects & mapM_ \project -> do
@@ -236,7 +236,7 @@ projectsDropDown currProject projects = do
                 div_ [class_ "space-x-3"] $ do
                   img_ [class_ "inline-block", src_ "/assets/svgs/projects.svg"]
                   span_ [class_ "inline-block"] $ toHtml $ project.title
-                when (currProject.id == project.id) $ img_ [src_ "/assets/svgs/checkmark_blue.svg"]
+                when (currProject.id == project.id) $ faIcon_ "fa-circle-check" "fa-sharp fa-regular fa-circle-check" "h-6 w-6 text-green-700"
 
 sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Maybe Text -> Html ()
 sideNav sess project pageTitle menuItem = do
@@ -285,8 +285,8 @@ sideNav sess project pageTitle menuItem = do
             small_ [class_ "block text-slate-900"] $ toHtml $ project.paymentPlan
           -- Development?
           div_ $ do
-            img_ [src_ "/assets/svgs/up_chevron.svg"]
-            img_ [src_ "/assets/svgs/down_chevron.svg"]
+            faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" " h-4 w-4 m-2"
+            faIcon_ "fa-chevron-up" "fa-light fa-chevron-up" " h-4 w-4 m-2"
       projectsDropDown project (Sessions.getProjects $ Sessions.projects sess)
     nav_ [class_ "mt-4"] $ do
       -- FIXME: reeanable hx-boost hxBoost_ "true"
