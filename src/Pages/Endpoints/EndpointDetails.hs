@@ -1,7 +1,7 @@
 {-# LANGUAGE TupleSections #-}
 {-# OPTIONS_GHC -Wno-name-shadowing #-}
 
-module Pages.Endpoints.EndpointDetails (endpointDetailsH, fieldDetailsPartialH, fieldsToNormalized) where
+module Pages.Endpoints.EndpointDetails (endpointDetailsH, fieldDetailsPartialH, fieldsToNormalized, endpointDetailsWithHashH) where
 
 import Config
 import Data.Aeson qualified as AE
@@ -38,6 +38,8 @@ import Pages.Components
 import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
 import Relude hiding (max, min)
 import Relude.Unsafe qualified as Unsafe
+import Servant (Headers, addHeader)
+import Servant.Htmx
 import Text.Interpolation.Nyan (int, rmode')
 import Utils
 import Witch (from)
@@ -151,6 +153,24 @@ fieldDetailsView field formats = do
 
 aesonValueToText :: AE.Value -> Text
 aesonValueToText = toStrict . encodeToLazyText
+
+
+-- /p/" <> pid.toText <> "/log_explorer/item/" <> endpoint_hash
+endpointDetailsWithHashH :: Sessions.PersistentSession -> Projects.ProjectId -> Text -> DashboardM (Headers '[HXRedirect] (Html ()))
+endpointDetailsWithHashH sess pid endpoint_hash = do
+  pool <- asks pool
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ addHeader "" $ userNotMemeberPage sess
+    else do
+      endpoint <- liftIO $ withPool pool $ Endpoints.endpointByHash pid endpoint_hash
+      case endpoint of
+        Just e -> do
+          let redirect_url = "/p/" <> pid.toText <> "/endpoints/" <> e.id.toText
+          pure $ addHeader redirect_url $ span_ ""
+        Nothing ->
+          pure $ addHeader "" $ span_ ""
 
 
 -- | endpointDetailsH is the main handler for the endpoint details page.

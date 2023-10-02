@@ -5,6 +5,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEK
 import Data.ByteString.Lazy qualified as BS
 import Data.Default (def)
+import Data.Digest.XXHash
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
 import Data.Time (ZonedTime, defaultTimeLocale)
@@ -18,11 +19,12 @@ import Fmt
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
-import Lucid.Svg (d_, fill_, path_, use_, viewBox_)
+import Lucid.Svg (d_, fill_, path_, title_, use_, viewBox_)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
+import Numeric (showHex)
 import Optics.Core ((^.))
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Pkg.Components (loader)
@@ -391,6 +393,8 @@ logItemRows :: Projects.ProjectId -> Vector RequestDumps.RequestDumpLogItem -> [
 logItemRows pid requests cols nextLogsURL = do
   requests & traverse_ \req -> do
     let logItemPath = RequestDumps.requestDumpLogItemUrlPath pid req
+    let endpoint_hash = toText $ showHex (xxHash $ encodeUtf8 $ UUID.toText pid.unProjectId <> T.toUpper req.method <> req.urlPath) ""
+    let logItemEndpointUrl = "/p/" <> pid.toText <> "/log_explorer/endpoint/" <> endpoint_hash
     div_
       [ class_ "flex flex-row border-l-4 border-l-transparent divide-x space-x-4 hover:bg-blue-50 cursor-pointer"
       , term "data-log-item-path" logItemPath
@@ -401,7 +405,9 @@ logItemRows pid requests cols nextLogsURL = do
         |]
       ]
       $ do
-        div_ [class_ "flex-none inline-block p-1 px-2 w-8 flex justify-center align-middle"] $ do
+        div_ [class_ "flex-none inline-block w-8 flex justify-between items-center"] $ do
+          a_ [hxGet_ logItemEndpointUrl, Lucid.title_ "To endpoint", onclick_ "noPropa(event)"] do
+            img_ [src_ "/assets/svgs/link.svg", class_ "w-3.5 mr-2", style_ "margin-right: 5px"]
           img_ [src_ "/assets/svgs/cheveron-right.svg", class_ "w-1.5 log-chevron"]
         div_ [class_ "flex-none inline-block p-1 px-2 w-36 overflow-hidden"] $ toHtml @String $ formatTime defaultTimeLocale "%F %T" (req ^. #createdAt)
         div_ [class_ "inline-block p-1 px-2 grow"] $ do
@@ -620,6 +626,9 @@ jsonTreeAuxillaryCode pid = do
     var params = () => new Proxy(new URLSearchParams(window.location.search), {
       get: (searchParams, prop) => searchParams.get(prop)??"",
     });
+    function noPropa(event) {
+      event.stopPropagation();
+    }
     var toggleColumnToSummary = (e)=>{
       const cols = (params().cols??"").split(",").filter(x=>x!="");
       const subject = e.target.closest('.log-item-field-parent').dataset.fieldPath; 
