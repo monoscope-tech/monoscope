@@ -1,7 +1,22 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE RankNTypes #-}
 
-module Utils (eitherStrToText, userIsProjectMember, userNotMemeberPage, GetOrRedirect, redirect, DBField (..), mIcon_, deleteParam, quoteTxt, textToBool, getMethodColor, getStatusColor) where
+module Utils (
+  eitherStrToText,
+  userIsProjectMember,
+  userNotMemeberPage,
+  GetOrRedirect,
+  redirect,
+  DBField (..),
+  mIcon_,
+  deleteParam,
+  quoteTxt,
+  textToBool,
+  getMethodColor,
+  getMethodBgColor,
+  getStatusColor,
+  getStatusBgColor,
+) where
 
 import Data.Default (def)
 import Data.Text (replace)
@@ -105,17 +120,33 @@ forbiddenPage =
       p_ [class_ "max-w-prose text-gray-500"] "Only members of this project can access this page, make sure you are logged in to the right account and try again"
 
 
+getMethodBgColor :: Text -> Text
+getMethodBgColor "POST" = "bg-green-500"
+getMethodBgColor "PUT" = "bg-orange-500"
+getMethodBgColor "DELETE" = "bg-red-500"
+getMethodBgColor "PATCH" = "bg-purple-500"
+getMethodBgColor _ = "bg-blue-500"
+
+
 getMethodColor :: Text -> Text
-getMethodColor "POST" = "green-500"
-getMethodColor "PUT" = "orange-500"
-getMethodColor "DELETE" = "red-500"
-getMethodColor "PATCH" = "purple-500"
-getMethodColor _ = "blue-500"
+getMethodColor "POST" = "text-green-500"
+getMethodColor "PUT" = "text-orange-500"
+getMethodColor "DELETE" = "text-red-500"
+getMethodColor "PATCH" = "text-purple-500"
+getMethodColor _ = "text-blue-500"
 
 
 getStatusColor :: Int -> Text
 getStatusColor status
-  | status < 200 = "gray-500"
-  | status >= 200 && status < 300 = "green-500"
-  | status >= 300 && status < 400 = "yellow-500"
-  | otherwise = "red-500"
+  | status < 200 = "text-gray-500"
+  | status >= 200 && status < 300 = "text-green-500"
+  | status >= 300 && status < 400 = "text-yellow-500"
+  | otherwise = "text-red-500"
+
+
+getStatusBgColor :: Int -> Text
+getStatusBgColor status
+  | status < 200 = "bg-gray-500"
+  | status >= 200 && status < 300 = "bg-green-500"
+  | status >= 300 && status < 400 = "bg-yellow-500"
+  | otherwise = "bg-red-500"

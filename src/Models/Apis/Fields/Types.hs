@@ -1,4 +1,5 @@
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TupleSections #-}
 
 module Models.Apis.Fields.Types (
   Field (..),
@@ -12,6 +13,7 @@ module Models.Apis.Fields.Types (
   groupFieldsByCategory,
   fieldTypeToText,
   fieldCategoryEnumToText,
+  fieldsToNormalized,
   textFieldTypeToText,
 ) where
 
@@ -19,6 +21,7 @@ import Data.Aeson (FromJSON, ToJSON)
 import Data.Aeson qualified as AE
 import Data.Default
 import Data.List (groupBy)
+import Data.Text qualified as T
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector as Vector (Vector, toList)
@@ -173,6 +176,18 @@ instance FromField FieldCategoryEnum where
         case parseFieldCategoryEnum bs of
           Just a -> pure a
           Nothing -> returnError ConversionFailed f $ "Conversion error: Expected 'field_type' enum, got " <> decodeUtf8 bs <> " instead."
+
+
+fieldsToNormalized :: [Field] -> [(Text, Maybe Field)]
+fieldsToNormalized =
+  sortNub . concatMap \field ->
+    map
+      ((,Nothing) . fst)
+      ( field.keyPath
+          & T.dropWhile (== '.')
+          & T.breakOnAll "."
+      )
+      & (++ [(T.dropWhile (== '.') $ field.keyPath, Just field)])
 
 
 data Field = Field
