@@ -399,6 +399,110 @@ ALTER TABLE apis.request_dumps
   ADD COLUMN errors jsonb NOT NULL DEFAULT '{}'::jsonb,
   ADD COLUMN tags text[] NOT NULL DEFAULT '{}'::text[];
 
+ALTER TABLE apis.request_dumps SET (timescaledb.compress, timescaledb.compress_orderby = 'created_at DESC', timescaledb.compress_segmentby = 'project_id');
+SELECT add_compression_policy('apis.request_dumps', INTERVAL '14d');
+
+-- Shapes aggregated by the min. 
+DROP MATERIALIZED VIEW IF EXISTS APIS.SHAPES_AGG_1MIN;
+CREATE MATERIALIZED VIEW APIS.SHAPES_AGG_1MIN WITH (TIMESCALEDB.CONTINUOUS) AS
+SELECT time_bucket(INTERVAL '1 minute', CREATED_AT) AS TIMEB,
+	PROJECT_ID,
+	SHAPE_HASH,
+	ENDPOINT_HASH,
+	PERCENTILE_AGG(DURATION_NS) PERCENTILE_AGG
+FROM APIS.REQUEST_DUMPS
+GROUP BY 1,2,3,4;
+SELECT add_continuous_aggregate_policy('apis.shapes_agg_1min',
+     start_offset => INTERVAL '14 days',
+     end_offset => INTERVAL '1 min',
+     schedule_interval => INTERVAL '1 min');
+CREATE INDEX IF NOT EXISTS idx_apis_shapes_agg_1min_pid_timeb ON apis.SHAPES_AGG_1MIN(project_id, timeb);
+CREATE INDEX IF NOT EXISTS idx_apis_shapes_agg_1min_pid_shape_hash_timeb ON apis.SHAPES_AGG_1MIN(project_id, shape_hash, timeb);
+
+-- Shapes aggregated by the hour. 
+DROP MATERIALIZED VIEW IF EXISTS APIS.SHAPES_AGG_1HR;
+CREATE MATERIALIZED VIEW APIS.SHAPES_AGG_1HR WITH (TIMESCALEDB.CONTINUOUS) AS
+SELECT time_bucket(INTERVAL '1 hour', timeb) AS TIMEB,
+	PROJECT_ID,
+	SHAPE_HASH,
+	ENDPOINT_HASH,
+	ROLLUP(PERCENTILE_AGG) PERCENTILE_AGG
+FROM APIS.SHAPES_AGG_1MIN
+GROUP BY 1,2,3,4;
+SELECT add_continuous_aggregate_policy('apis.shapes_agg_1hr',
+     start_offset => INTERVAL '1 month',
+     end_offset => INTERVAL '1 hour',
+     schedule_interval => INTERVAL '1 hour');
+CREATE INDEX IF NOT EXISTS idx_apis_shapes_agg_1hr_pid_timeb ON apis.SHAPES_AGG_1HR(project_id, timeb);
+CREATE INDEX IF NOT EXISTS idx_apis_shapes_agg_1hr_pid_shape_hash_timeb ON apis.SHAPES_AGG_1HR(project_id, shape_hash, timeb);
+
+
+-- Endpoint builds on top of shapes 1min 
+DROP MATERIALIZED VIEW IF EXISTS APIS.ENDPOINTS_AGG_1MIN;
+CREATE MATERIALIZED VIEW APIS.ENDPOINTS_AGG_1MIN WITH (TIMESCALEDB.CONTINUOUS) AS
+SELECT time_bucket(INTERVAL '1 minute', timeb) AS TIMEB,
+	PROJECT_ID,
+	ENDPOINT_HASH,
+	ROLLUP(PERCENTILE_AGG) PERCENTILE_AGG
+FROM APIS.SHAPES_AGG_1MIN
+GROUP BY 1,2,3;
+SELECT add_continuous_aggregate_policy('apis.endpoints_agg_1min',
+     start_offset => INTERVAL '14 days',
+     end_offset => INTERVAL '1 min',
+     schedule_interval => INTERVAL '1 min');
+CREATE INDEX IF NOT EXISTS idx_apis_endpoints_agg_1min_pid_timeb ON apis.ENDPOINTS_AGG_1MIN(project_id, timeb);
+CREATE INDEX IF NOT EXISTS idx_apis_endpoints_agg_1min_pid_endpoint_hash_timeb ON apis.ENDPOINTS_AGG_1MIN(project_id, endpoint_hash, timeb);
+
+
+-- Endpoint builds on top of shapes 1hr 
+DROP MATERIALIZED VIEW IF EXISTS APIS.ENDPOINTS_AGG_1HR;
+CREATE MATERIALIZED VIEW APIS.ENDPOINTS_AGG_1HR WITH (TIMESCALEDB.CONTINUOUS) AS
+SELECT time_bucket(INTERVAL '1 hour', timeb) AS TIMEB,
+	PROJECT_ID,
+	ENDPOINT_HASH,
+	ROLLUP(PERCENTILE_AGG) PERCENTILE_AGG
+FROM APIS.ENDPOINTS_AGG_1MIN
+GROUP BY 1,2,3;
+SELECT add_continuous_aggregate_policy('apis.endpoints_agg_1hr',
+     start_offset => INTERVAL '1 month',
+     end_offset => INTERVAL '1 hour',
+     schedule_interval => INTERVAL '1 hour');
+CREATE INDEX IF NOT EXISTS idx_apis_endpoints_agg_1hr_pid_timeb ON apis.ENDPOINTS_AGG_1HR(project_id, timeb);
+CREATE INDEX IF NOT EXISTS idx_apis_endpoints_agg_1hr_pid_endpoint_hash_timeb ON apis.ENDPOINTS_AGG_1HR(project_id, endpoint_hash, timeb);
+
+--- Allow querying by target hash to get the  
+--- We can have this target_hash agg table for hours and use it to derive two tables. One for 24hr and one for 14 days.
+
+CREATE MATERIALIZED VIEW apis.target_hash_agg_14days AS
+SELECT project_id, target_hash, sum(num_vals) from 
+(
+SELECT timeb, project_id, shape_hash as target_hash, num_vals(percentile_agg) num_vals
+	from apis.shapes_agg_1hr
+	where timeb >= NOW() - INTERVAL '14 days'
+UNION 
+SELECT timeb, project_id, endpoint_hash as target_hash, num_vals(percentile_agg) num_vals
+	from apis.endpoints_agg_1hr
+	where timeb >= NOW() - INTERVAL '14 days'
+) target_hash_agg_14
+group by project_id, target_hash;
+
+CREATE MATERIALIZED VIEW apis.target_hash_agg_24hr AS
+SELECT project_id, target_hash, sum(num_vals) sum from 
+(
+SELECT timeb, project_id, shape_hash as target_hash, num_vals(percentile_agg) num_vals
+	from apis.shapes_agg_1hr
+	where timeb >= NOW() - INTERVAL '24 hours'
+UNION 
+SELECT timeb, project_id, endpoint_hash as target_hash, num_vals(percentile_agg) num_vals
+	from apis.endpoints_agg_1hr
+	where timeb >= NOW() - INTERVAL '24 hours'
+) target_hash_agg_24h
+group by project_id, target_hash;
+
+
+-- ==========================================================================================================================
+--                    END OF REQUEST DUMP AND ITS CONTINUOUS AGGREGATES
+-- ==========================================================================================================================
 
 CREATE TABLE IF NOT EXISTS apis.reports 
 (
@@ -414,6 +518,7 @@ SELECT manage_updated_at('apis.reports');
 CREATE INDEX IF NOT EXISTS idx_reports_project_id ON apis.reports(project_id);
 
 
+-- TODO: rewrite this. This query is killing the database.
 -- Create a view that tracks endpoint related statistic points from the request dump table.
 DROP MATERIALIZED VIEW IF EXISTS apis.endpoint_request_stats;
 CREATE MATERIALIZED VIEW apis.endpoint_request_stats AS 
@@ -615,6 +720,8 @@ BEGIN
   RAISE NOTICE 'Executing action % with config %', job_id, config;
   REFRESH MATERIALIZED VIEW CONCURRENTLY apis.endpoint_request_stats;
   REFRESH MATERIALIZED VIEW CONCURRENTLY apis.project_request_stats;
+  REFRESH MATERIALIZED VIEW CONCURRENTLY apis.target_hash_agg_14days;
+  REFRESH MATERIALIZED VIEW CONCURRENTLY apis.target_hash_agg_24hrs;
 END
 $$;
 -- Refresh view every 5mins
@@ -683,28 +790,6 @@ CREATE TABLE IF NOT EXISTS projects.redacted_fields
 );
 SELECT manage_updated_at('projects.redacted_fields');
 CREATE INDEX IF NOT EXISTS idx_projects_redacted_fields_project_id ON projects.redacted_fields(project_id);
-
--- NEW project requests view that rounds up stats by 1minute
--- NOTE: Is this actually used?
-DROP MATERIALIZED VIEW  IF EXISTS apis.project_requests_by_endpoint_per_min;
-CREATE MATERIALIZED VIEW apis.project_requests_by_endpoint_per_min WITH (timescaledb.continuous)
-    AS SELECT
-    time_bucket('1 minute', created_at) as timeB,
-    project_id, endpoint_hash,
-    method || ' ' || url_path endpoint_title,
-    status_code, host, count(id) total_count,
-    percentile_agg(duration_ns) as agg,
-    sum(duration_ns) as total_time
-  FROM
-    apis.request_dumps
-  GROUP BY project_id, timeB, endpoint_hash, method, url_path, status_code,host
-  WITH NO DATA;
--- continuous aggregate policy to refresh every hour.
-SELECT add_continuous_aggregate_policy('apis.project_requests_by_endpoint_per_min',
-     start_offset => INTERVAL '2 months',
-     end_offset => INTERVAL '6 hours',
-     schedule_interval => INTERVAL '1 hour');
-
 
 
 -- cron doesn't work in the timescaledb database because its not the default database. 

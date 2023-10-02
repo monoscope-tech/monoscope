@@ -389,8 +389,8 @@ anomalyItem hideByDefault currTime anomaly icon title subTitle content = do
                 $ toHtml
                 $ prettyTimeAuto currTime
                 $ zonedTimeToUTC anomaly.createdAt
-              span_ "|"
-              span_ [class_ "decoration-black underline", term "data-tippy-content" $ "last seen: " <> show anomaly.lastSeen] $ toHtml $ prettyTimeAuto currTime $ zonedTimeToUTC anomaly.lastSeen
+          -- span_ "|"
+          -- span_ [class_ "decoration-black underline", term "data-tippy-content" $ "last seen: " <> show anomaly.lastSeen] $ toHtml $ prettyTimeAuto currTime $ zonedTimeToUTC anomaly.lastSeen
           div_ [class_ "flex items-center gap-2 mt-5"] do
             anomalyArchiveButton anomaly.projectId anomaly.id (isJust anomaly.archivedAt)
             anomalyAcknowlegeButton anomaly.projectId anomaly.id (isJust anomaly.acknowlegedAt)

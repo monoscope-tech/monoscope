@@ -40,6 +40,7 @@ import Models.Apis.Shapes qualified as Shapes
 import Relude.Unsafe as Unsafe hiding (head)
 import Utils
 import Web.FormUrlEncoded (FromForm)
+import Control.Monad (liftM)
 
 
 data SwaggerForm = SwaggerForm
@@ -303,23 +304,22 @@ documentationGetH sess pid swagger_id = do
   pool <- asks pool
   isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
   if not isMember
-    then do
-      pure $ userNotMemeberPage sess
+    then pure $ userNotMemeberPage sess
     else do
       (project, swaggers, swagger, swaggerId) <- liftIO
-        $ withPool pool
-        $ do
+        $ withPool pool do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
           swaggers <- Swaggers.swaggersByProject pid
-          currentSwagger <- case swagger_id of
-            Just swId -> Swaggers.getSwaggerById swId
-            Nothing -> pure Nothing
+          currentSwagger <- join <$> mapM Swaggers.getSwaggerById swagger_id
           (swaggerVal, swaggerValId) <- case (swaggers, currentSwagger) of
             (_, Just swg) -> do
               let sw = swg.swaggerJson
               let idx = show swg.id.swaggerId
               pure (sw, idx)
             ([], Nothing) -> do
+              -- TODO: We should generate this swagger in a worker. maybe at an interval? 
+              -- Or we can support a button to regenerate it 
+              -- Or we can trigger a background process specifically when a user loads a docs page.
               endpoints <- Endpoints.endpointsByProjectId pid
               let endpoint_hashes = V.map (.hash) endpoints
               shapes <- Shapes.shapesByEndpointHashes pid endpoint_hashes
@@ -327,12 +327,12 @@ documentationGetH sess pid swagger_id = do
               let field_hashes = V.map (.fHash) fields
               formats <- Formats.formatsByFieldsHashes pid field_hashes
               let (projectTitle, projectDescription) = case project of
-                    (Just pr) -> (toText pr.title, toText pr.description)
+                    (Just pr) -> (pr.title, pr.description)
                     Nothing -> ("__APITOOLKIT", "Edit project description")
               let gn = GenerateSwagger.generateSwagger projectTitle projectDescription endpoints shapes fields formats
               pure (gn, "")
-            (val, Nothing) -> do
-              let latest = V.head $ V.reverse swaggers
+            (swgrs, Nothing) -> do
+              let latest = V.head swgrs
               let sw = latest.swaggerJson
               let idx = show latest.id.swaggerId
               pure (sw, idx)

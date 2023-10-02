@@ -285,9 +285,9 @@ function latencyHistogram(renderAt, pc, data) {
       axisLabel: {
         formatter: function(params) {
           if (params > 1000) {
-            return `$${params / 1000}s`
+            return `${params / 1000}s`
           }
-          return `$${params}ms`
+          return `${params}ms`
         },
         show: true,
         position: 'inside'

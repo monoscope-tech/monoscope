@@ -58,7 +58,8 @@ getSwaggerById id' = selectById (Only id')
 
 
 swaggersByProject :: Projects.ProjectId -> DBT IO (Vector Swagger)
-swaggersByProject pid = selectManyByField [field| project_id |] pid
+swaggersByProject = query Select q
+  where q = [sql| select id, project_id, created_by, created_at, updated_at, swagger_json from apis.swagger_jsons where project_id=? order by created_at desc|]
 
 
 updateSwagger :: Text -> Value -> DBT IO Int64

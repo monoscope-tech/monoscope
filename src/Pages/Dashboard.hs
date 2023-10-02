@@ -68,7 +68,7 @@ dashboardGetH sess pid fromDStr toDStr sinceStr' = do
       respond $ WithStatus @200 $ userNotMemeberPage sess
     else do
       now <- liftIO getCurrentTime
-      let sinceStr = if isNothing fromDStr && isNothing toDStr && isNothing sinceStr' || fromDStr == Just "" then Just "14D" else sinceStr'
+      let sinceStr = if isNothing fromDStr && isNothing toDStr && isNothing sinceStr' || fromDStr == Just "" then Just "7D" else sinceStr'
       (hasApikeys, hasRequest) <- liftIO
         $ withPool pool
         $ do

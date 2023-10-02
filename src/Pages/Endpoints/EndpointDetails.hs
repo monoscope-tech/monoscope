@@ -164,7 +164,7 @@ endpointDetailsH sess pid eid fromDStr toDStr sinceStr' subPageM = do
       pure $ userNotMemeberPage sess
     else do
       now <- liftIO getCurrentTime
-      let sinceStr = if (isNothing fromDStr && isNothing toDStr && isNothing sinceStr') || (fromDStr == Just "") then Just "14D" else sinceStr'
+      let sinceStr = if (isNothing fromDStr && isNothing toDStr && isNothing sinceStr') || (fromDStr == Just "") then Just "7D" else sinceStr'
 
       -- TODO: Replace with a duration parser.
       let (fromD, toD) = case sinceStr of

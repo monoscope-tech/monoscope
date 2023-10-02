@@ -225,24 +225,19 @@ SELECT avm.id, avm.created_at, avm.updated_at, avm.project_id, aan.acknowleged_a
        avm.field_id, avm.field_key, avm.field_key_path, avm.field_category, avm.field_format, 
        avm.format_id, avm.format_type, avm.format_examples, 
        avm.endpoint_id, avm.endpoint_method, avm.endpoint_url_path, aan.archived_at,
-       -- count(rd.id) events, max(rd.created_at) last_seen
-       COUNT(CASE WHEN rd.created_at > NOW() - interval '14 days' THEN 1 ELSE NULL END) AS events,
-       MAX(CASE WHEN rd.created_at > NOW() - interval '14 days' THEN rd.created_at ELSE NULL END) AS last_seen
-    FROM
-        apis.anomalies_vm avm
+       (CASE 
+          WHEN avm.anomaly_type='format' THEN (select count(*) from apis.request_dumps rd where avm.target_hash=ANY(rd.format_hashes))
+          ELSE t_agg.sum
+       END)::integer events,
+       NOW()
+    FROM apis.anomalies_vm avm
     JOIN apis.anomalies aan ON avm.id = aan.id
-    RIGHT JOIN apis.request_dumps rd ON avm.project_id=rd.project_id 
-        AND (avm.target_hash=ANY(rd.format_hashes) AND avm.anomaly_type='format')
-        OR  (avm.target_hash=rd.shape_hash AND avm.anomaly_type='shape')
-        OR  (avm.target_hash=rd.endpoint_hash AND avm.anomaly_type='endpoint')
+    JOIN apis.target_hash_agg_14days t_agg ON (t_agg.target_hash=avm.target_hash )
     WHERE
-        rd.created_at > NOW() - interval '14 days'
-        AND avm.project_id = ? 
+        avm.project_id = ? 
         AND avm.anomaly_type != 'field'
         $cond
         
-        
-    GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25
     ORDER BY $orderBy
     $skip
     $limit;
