@@ -131,9 +131,10 @@ mergeObjects _ _ = Nothing
 convertKeyPathsToJson :: [T.Text] -> [MergedFieldsAndFormats] -> Text -> Value
 convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
   where
-    !() = trace (show items) ()
-    !() = trace (show categoryFields) ()
-    !() = trace (show parentPath) ()
+    -- Debug logs
+    -- !() = trace (show items) ()
+    -- !() = trace (show categoryFields) ()
+    -- !() = trace (show parentPath) ()
     groups = processItems items Map.empty
 
     safeTail :: T.Text -> T.Text
