@@ -406,7 +406,7 @@ logItemRows pid requests cols nextLogsURL = do
       ]
       $ do
         div_ [class_ "flex-none inline-block w-8 flex justify-between items-center"] $ do
-          a_ [hxGet_ logItemEndpointUrl, Lucid.title_ "To endpoint", onclick_ "noPropa(event)"] do
+          a_ [hxGet_ logItemEndpointUrl, term "data-tippy-content" "Go to endpoint", onclick_ "noPropa(event)"] do
             img_ [src_ "/assets/svgs/link.svg", class_ "w-3.5 mr-2", style_ "margin-right: 5px"]
           img_ [src_ "/assets/svgs/cheveron-right.svg", class_ "w-1.5 log-chevron"]
         div_ [class_ "flex-none inline-block p-1 px-2 w-36 overflow-hidden"] $ toHtml @String $ formatTime defaultTimeLocale "%F %T" (req ^. #createdAt)
