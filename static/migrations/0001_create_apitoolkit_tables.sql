@@ -112,7 +112,8 @@ SELECT manage_updated_at('projects.projects');
 ALTER TABLE projects.projects ADD COLUMN questions JSONB DEFAULT NULL;
 ALTER TABLE projects.projects ADD COLUMN daily_notif BOOL DEFAULT TRUE,
                               ADD COLUMN weekly_notif BOOL DEFAULT TRUE;
-
+ALTER TABLE projects.projects
+   ALTER COLUMN daily_notif SET DEFAULT FALSE;
 -----------------------------------------------------------------------
 -- PROJECT MEMBERS table 
 -- query patterns:

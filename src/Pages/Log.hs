@@ -1,4 +1,4 @@
-module Pages.Log (apiLog, apiLogItem, expandAPIlogItem, expandAPIlogItem') where
+module Pages.Log (apiLog, apiLogItem, logItemRows, expandAPIlogItem, expandAPIlogItem') where
 
 import Config
 import Data.Aeson qualified as AE
@@ -121,8 +121,8 @@ expandAPIlogItem' :: RequestDumps.RequestDumpLogItem -> Bool -> Html ()
 expandAPIlogItem' req modal = do
   div_ [class_ "flex flex-col w-full pb-[100px]"] $ do
     div_ [class_ "w-full flex flex-col gap-2 gap-4"] do
-      let methodColor = "bg-" <> getMethodColor req.method
-      let statusColor = "text-" <> getStatusColor req.statusCode
+      let methodColor = getMethodBgColor req.method
+      let statusColor = getStatusColor req.statusCode
       div_ [class_ "flex gap-4 items-center"] do
         div_ [class_ $ "text-white font-semibold px-2 py-1 rounded min-w-[70px] text-center " <> methodColor] $ toHtml req.method
         div_ [class_ $ "text-lg font-bold px-2 " <> statusColor] $ show req.statusCode
@@ -282,7 +282,7 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
             do
               input_ [type_ "hidden", value_ "1 hour", name_ "expiresIn", id_ "expire_input"]
               input_ [type_ "hidden", value_ "", name_ "reqId", id_ "req_id_input"]
-          div_ [id_ "log-modal-content-loader", class_ "bg-white rounded-log shadow p-4 absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2"] do
+          div_ [id_ "log-modal-content-loader", class_ "bg-white rounded-lg shadow p-4 absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2"] do
             loader
           div_ [class_ "px-2", id_ "log-modal-content"] pass
     form_
@@ -398,11 +398,7 @@ logItemRows pid requests cols nextLogsURL = do
     div_
       [ class_ "flex flex-row border-l-4 border-l-transparent divide-x space-x-4 hover:bg-blue-50 cursor-pointer"
       , term "data-log-item-path" logItemPath
-      , term
-          "_"
-          [text|
-            install LogItemExpandable
-        |]
+      , [__|on click LogItemExpandable(me)|]
       ]
       $ do
         div_ [class_ "flex-none inline-block w-8 flex justify-between items-center"] $ do
@@ -439,7 +435,7 @@ logItemRows pid requests cols nextLogsURL = do
 
     div_ [class_ "hidden w-full flex px-2 py-8 justify-center item-loading"] do
       loader
-  a_
+  when (Vector.length requests > 199) $ a_
     [ class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center"
     , hxTrigger_ "click"
     , hxSwap_ "outerHTML"
@@ -451,21 +447,13 @@ logItemRows pid requests cols nextLogsURL = do
       "LOAD MORE"
 
 
-getMethodBgColor :: Text -> Text
-getMethodBgColor "POST" = " bg-pink-200"
-getMethodBgColor "PUT" = " bg-orange-100"
-getMethodBgColor "DELETE" = " bg-red-100"
-getMethodBgColor "PATCH" = " bg-purple-100"
-getMethodBgColor _ = " bg-blue-100"
-
-
 apiLogItemView :: RequestDumps.RequestDumpLogItem -> Text -> Html ()
 apiLogItemView req expandItemPath = do
   div_ [class_ "log-item-info border-l-blue-200 border-l-4"]
     $ div_ [class_ "pl-4 py-1 ", colspan_ "3"]
     $ do
       button_
-        [ class_ "px-2 rounded text-white bg-blue-500 text-sm font-semibold"
+        [ class_ "px-2 rounded text-white bg-blue-500 text-sm font-semibold expand-button"
         , term "data-log-item-path" (expandItemPath <> "/detailed")
         , [__|on click remove .hidden from #expand-log-modal then
                 remove .hidden from #log-modal-content-loader
@@ -605,8 +593,7 @@ jsonTreeAuxillaryCode pid = do
         end
       end
 
-      behavior LogItemExpandable
-        on click 
+      def LogItemExpandable(me)
           if I match <.expanded-log/> then 
             remove next <.log-item-info/> then 
             remove .expanded-log from me

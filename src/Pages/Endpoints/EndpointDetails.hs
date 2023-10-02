@@ -23,8 +23,10 @@ import Models.Apis.Endpoints
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields (FieldCategoryEnum)
 import Models.Apis.Fields qualified as Fields
+import Models.Apis.Fields.Types
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.RequestDumps qualified as RequestDumps
+import Models.Apis.Shapes (getShapeFields)
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
@@ -61,19 +63,6 @@ data ParamInput = ParamInput
   , currentPickerTxt :: Text
   , subPage :: Text
   }
-data ShapeWidthFields = ShapeWidthFields
-  { status :: Int
-  , hash :: Text
-  , fieldsMap :: Map FieldCategoryEnum [Fields.Field]
-  }
-  deriving (Show)
-
-
-getShapeFields :: Shapes.Shape -> Vector Fields.Field -> ShapeWidthFields
-getShapeFields shape fields = ShapeWidthFields{status = shape.statusCode, hash = shape.hash, fieldsMap = fieldM}
-  where
-    matchedFields = Vector.filter (\field -> field.hash `Vector.elem` shape.fieldHashes) fields
-    fieldM = Fields.groupFieldsByCategory matchedFields
 
 
 subPageMenu :: [(Text, Text)]
@@ -208,8 +197,8 @@ endpointDetailsH sess pid eid fromDStr toDStr sinceStr' subPageM = do
           endpoint <- Unsafe.fromJust <$> Endpoints.endpointById eid
           enpStats <- fromMaybe (def :: EndpointRequestStats) <$> Endpoints.endpointRequestStatsByEndpoint eid
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-          shapes <- Shapes.shapesByEndpointHash endpoint.hash
-          fields <- Fields.selectFields endpoint.hash
+          shapes <- Shapes.shapesByEndpointHash pid endpoint.hash
+          fields <- Fields.selectFields pid endpoint.hash
           let fieldsMap = Fields.groupFieldsByCategory fields
           let shapesWithFieldsMap = Vector.map (`getShapeFields` fields) shapes
           let maxV = round enpStats.max :: Int
@@ -236,7 +225,7 @@ endpointDetailsH sess pid eid fromDStr toDStr sinceStr' subPageM = do
       pure $ bodyWrapper bwconf $ endpointDetails paramInput currTime endpoint enpStats shapesWithFieldsMap fieldsMap reqLatenciesRolledByStepsJ (fromD, toD)
 
 
-endpointDetails :: ParamInput -> UTCTime -> Endpoints.Endpoint -> EndpointRequestStats -> [ShapeWidthFields] -> Map FieldCategoryEnum [Fields.Field] -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
+endpointDetails :: ParamInput -> UTCTime -> Endpoints.Endpoint -> EndpointRequestStats -> [Shapes.ShapeWithFields] -> Map FieldCategoryEnum [Fields.Field] -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 endpointDetails paramInput currTime endpoint endpointStats shapesWithFieldsMap fieldsM reqLatenciesRolledByStepsJ dateRange = do
   let currentURLSubPage = deleteParam "subpage" paramInput.currentURL
   div_ [class_ "w-full h-full overflow-hidden"] $ do
@@ -294,7 +283,7 @@ endpointDetails paramInput currTime endpoint endpointStats shapesWithFieldsMap f
         |]
 
 
-apiDocsSubPage :: [ShapeWidthFields] -> Html ()
+apiDocsSubPage :: [Shapes.ShapeWithFields] -> Html ()
 apiDocsSubPage shapesWithFieldsMap = do
   div_ [class_ "space-y-8", id_ "subpage"] $ do
     div_ [class_ "flex w-full justify-between mt-2"] $ do
@@ -311,7 +300,7 @@ apiDocsSubPage shapesWithFieldsMap = do
             $ do
               let fstH = viaNonEmpty head shapesWithFieldsMap
               let (st, hs) = case fstH of
-                    Just s -> (s.status, s.hash)
+                    Just s -> (s.status, s.sHash)
                     Nothing -> (0, "No shapes")
               let prm = "px-2 py-1 rounded text-white text-sm "
               let statusCls = if st < 400 then prm <> "bg-green-500" else prm <> "bg-red-500"
@@ -329,11 +318,11 @@ apiDocsSubPage shapesWithFieldsMap = do
                 , [__|on click selectShape((me),(my @data-pos)) |]
                 , data_ "pos" (show index)
                 , data_ "status" (show s.status)
-                , data_ "hash" s.hash
+                , data_ "hash" s.sHash
                 ]
                 $ do
                   span_ [class_ statusCls] $ show s.status
-                  span_ [class_ "ml-2 text-sm text-gray-600"] $ toHtml s.hash
+                  span_ [class_ "ml-2 text-sm text-gray-600"] $ toHtml s.sHash
 
       div_ [class_ "flex items-center"] $ do
         img_
@@ -513,7 +502,7 @@ fmtDuration d
 -- NOTE: We could enable the fields cycling functionality using the groups of response list functionality on the endpoint.
 -- So we go through the list and in each request or response view, only show the fields that appear in the field list.
 -- We can enable a view to show all the request/response options.
-reqResSection :: Text -> Bool -> [ShapeWidthFields] -> Html ()
+reqResSection :: Text -> Bool -> [Shapes.ShapeWithFields] -> Html ()
 reqResSection title isRequest shapesWithFieldsMap =
   section_ [class_ "space-y-3"] $ do
     div_ [class_ "flex justify-between mt-5"] $ do
@@ -610,13 +599,13 @@ subSubSection title fieldsM =
 
 ---- >>> fieldsToNormalized [v2]
 ---- >>> fieldsToNormalized [v2]
-fieldsToNormalized :: [Fields.Field] -> [(Text, Maybe Fields.Field)]
-fieldsToNormalized =
-  sortNub . concatMap \field ->
-    map
-      ((,Nothing) . fst)
-      ( field.keyPath
-          & T.dropWhile (== '.')
-          & breakOnAll "."
-      )
-      & (++ [(T.dropWhile (== '.') field.keyPath, Just field)])
+-- fieldsToNormalized :: [Fields.Field] -> [(Text, Maybe Fields.Field)]
+-- fieldsToNormalized =
+--   sortNub . concatMap \field ->
+--     map
+--       ((,Nothing) . fst)
+--       ( field.keyPath
+--           & T.dropWhile (== '.')
+--           & breakOnAll "."
+--       )
+--       & (++ [(T.dropWhile (== '.') $ field.keyPath, Just field)])

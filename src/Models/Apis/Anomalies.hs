@@ -190,7 +190,28 @@ makeFieldLabelsNoPrefix ''AnomalyVM
 getAnomalyVM :: Projects.ProjectId -> Text -> DBT IO (Maybe AnomalyVM)
 getAnomalyVM pid hash = queryOne Select q (pid, hash)
   where
-    q = [sql| SELECT *,0,now() FROM apis.anomalies_vm WHERE project_id=? AND target_hash=?|]
+    q =
+      [sql| 
+    SELECT avm.id, avm.created_at, avm.updated_at, avm.project_id, aan.acknowleged_at, aan.acknowleged_by, avm.anomaly_type, avm.action, avm.target_hash,
+       avm.shape_id, avm.new_unique_fields, avm.deleted_fields, avm.updated_field_formats, 
+       avm.field_id, avm.field_key, avm.field_key_path, avm.field_category, avm.field_format, 
+       avm.format_id, avm.format_type, avm.format_examples, 
+       avm.endpoint_id, avm.endpoint_method, avm.endpoint_url_path, aan.archived_at,
+       -- count(rd.id) events, max(rd.created_at) last_seen
+       COUNT(CASE WHEN rd.created_at > NOW() - interval '14 days' THEN 1 ELSE NULL END) AS events,
+       MAX(CASE WHEN rd.created_at > NOW() - interval '14 days' THEN rd.created_at ELSE NULL END) AS last_seen
+    FROM
+        apis.anomalies_vm avm
+    JOIN apis.anomalies aan ON avm.id = aan.id
+    RIGHT JOIN apis.request_dumps rd ON avm.project_id=rd.project_id 
+        AND (avm.target_hash=ANY(rd.format_hashes) AND avm.anomaly_type='format')
+        OR  (avm.target_hash=rd.shape_hash AND avm.anomaly_type='shape')
+        OR  (avm.target_hash=rd.endpoint_hash AND avm.anomaly_type='endpoint')
+    WHERE
+         avm.project_id = ? AND
+         avm.target_hash = ?
+    GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25
+     |]
 
 
 selectAnomalies :: Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Int -> Int -> DBT IO (Vector AnomalyVM)
