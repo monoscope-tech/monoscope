@@ -274,7 +274,7 @@ dailyReportForProject dbPool cfg pid = do
       when pr.dailyNotif do
         let body = renderText $ RP.reportEmail pid report
         let projectTitle = pr.title
-        let subject = [text| APITOOLKIT: Daily Report for `$projectTitle` |]
+        let subject = [text| APITOOLKIT: Daily Report for $projectTitle |]
         sendEmail cfg (CI.original user.email) subject body
 
 
@@ -303,5 +303,5 @@ weeklyReportForProject dbPool cfg pid = do
       when pr.weeklyNotif do
         let body = renderText $ RP.reportEmail pid report
         let projectTitle = pr.title
-        let subject = [text| APITOOLKIT: Daily Report for `$projectTitle` |]
+        let subject = [text| APITOOLKIT: Weekly Report for `$projectTitle` |]
         sendEmail cfg (CI.original user.email) subject body
