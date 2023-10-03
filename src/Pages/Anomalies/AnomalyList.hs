@@ -279,6 +279,7 @@ anomalyList paramInput pid currTime anomalies nextFetchUrl = form_ [class_ "col-
             a_
               [ class_ $ "block flex flex-row px-3 py-2 hover:bg-blue-50 rounded-md cursor-pointer " <> (if isActive then " text-blue-800 " else "")
               , href_ $ currentURL' <> "&sort=" <> identifier
+              , hxIndicator_ "#sortLoader"
               ]
               do
                 div_ [class_ "flex flex-col items-center justify-center px-3"] do
@@ -293,6 +294,8 @@ anomalyList paramInput pid currTime anomalies nextFetchUrl = form_ [class_ "col-
           a_ [class_ "cursor-pointer"] "24h"
           a_ [class_ "cursor-pointer font-bold text-base"] "14d"
       div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "font-base"] "EVENTS"
+      div_ [class_ "p-12 fixed rounded-lg shadow  top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 htmx-indicator query-indicator", id_ "sortLoader"] do
+        loader
 
   when (null anomalies) $ div_ [class_ "flex text-center justify-center items-center h-32"] $ do
     strong_ "No anomalies yet"
