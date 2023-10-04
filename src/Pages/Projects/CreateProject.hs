@@ -301,7 +301,7 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                          _hyperscript.processNode(#inviteMemberSection) then halt |]
               ]
               $ do
-                faIcon_ "fa-plus" "fa-sharp fa-regular fa-plus" "mt-1 mx-2 w-3 h-3 text-blue-700"
+                faIcon_ "fa-plus" "fa-sharp fa-regular fa-plus" "mt-1 mx-2 w-5 h-5 text-blue-700"
                 span_ [class_ "text-blue-700 font-medium text-sm "] "Add member"
 
           -- START PADDLE payment

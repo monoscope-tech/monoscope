@@ -15,15 +15,15 @@ import Utils (faIcon_)
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu pid =
-  [ ("Get started", "/p/" <> pid.toText <> "/onboarding", "#onboarding")
-  , ("Dashboard", "/p/" <> pid.toText <> "/", "#dashboard")
-  , ("Endpoints", "/p/" <> pid.toText <> "/endpoints", "#endpoint")
-  , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies?ackd=false&archived=false", "#anomalies")
-  , ("API Log Explorer", "/p/" <> pid.toText <> "/log_explorer", "#logs")
-  , ("API Keys", "/p/" <> pid.toText <> "/apis", "#api")
+  [ ("Get started", "/p/" <> pid.toText <> "/onboarding", "fa-list-check")
+  , ("Dashboard", "/p/" <> pid.toText <> "/", "fa-qrcode")
+  , ("Endpoints", "/p/" <> pid.toText <> "/endpoints", "fa-arrow-up-arrow-down")
+  , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies?ackd=false&archived=false", "fa-octagon-exclamation")
+  , ("API Log Explorer", "/p/" <> pid.toText <> "/log_explorer", "fa-bars")
+  , ("API Keys", "/p/" <> pid.toText <> "/apis", "fa-key")
   , -- , ("Redacted Fields", "/p/" <> pid.toText <> "/redacted_fields", "#redacted")
-    ("Documentation", "/p/" <> pid.toText <> "/documentation", "#documentation")
-  , ("Reports", "/p/" <> pid.toText <> "/reports", "#reports")
+    ("Documentation", "/p/" <> pid.toText <> "/documentation", "fa-brackets-curly") 
+  , ("Reports", "/p/" <> pid.toText <> "/reports", "fa-chart-simple") 
   ]
 
 data BWConfig = BWConfig
@@ -223,7 +223,7 @@ projectsDropDown currProject projects = do
         div_ [class_ "flex justify-between content-center items-center py-5 mb-2 "] $ do
           a_ [href_ "/"] $ h3_ [class_ "text-xl"] "Switch projects"
           a_ [class_ "inline-block bg-blue-700 flex pl-3 pr-4 py-2 rounded-xl text-white space-x-2", href_ "/p/new"] $ do
-            faIcon_ "fa-plus" "fa-sharp fa-regular fa-plus" "h-3 w-3 bg-blue-800 rounded-lg"
+            faIcon_ "fa-plus" "fa-sharp fa-regular fa-plus" "h-5 w-5 bg-blue-800 rounded-lg"
             span_ [class_ "inline-block px-1"] "Add"
         div_ $ do
           div_ [class_ "relative"] $ do
@@ -290,7 +290,7 @@ sideNav sess project pageTitle menuItem = do
       projectsDropDown project (Sessions.getProjects $ Sessions.projects sess)
     nav_ [class_ "mt-4"] $ do
       -- FIXME: reeanable hx-boost hxBoost_ "true"
-      menu (project.id) & mapM_ \(mTitle, mUrl, mIcon) -> do
+      menu (project.id) & mapM_ \(mTitle, mUrl, faIcon) -> do
         a_
           [ href_ mUrl
           , term "data-tippy-placement" "right"
@@ -303,7 +303,7 @@ sideNav sess project pageTitle menuItem = do
                    )
           ]
           $ do
-            svg_ [class_ "w-5 h-5 icon text-slate-500"] $ use_ [href_ $ "/assets/svgs/sprite/sprite.svg" <> mIcon]
+            faIcon_ faIcon ("fa-regular " <> faIcon) "w-5 h-5 text-slate-500"
             span_ [class_ "grow sd-hidden"] $ toHtml mTitle
 
 navbar :: Users.User -> Html ()
@@ -380,5 +380,5 @@ navbar currUser = do
         $ do
           -- dropdown mainbody
           a_ [class_ "text-base p-2 flex gap-3 rounded hover:bg-gray-100", href_ "/logout"] $ do
-            img_ [src_ "/assets/svgs/add_user.svg"]
+            faIcon_ "fa-user-plus" "fa-light fa-user-plus" "h-5 w-5"
             span_ "Logout"
