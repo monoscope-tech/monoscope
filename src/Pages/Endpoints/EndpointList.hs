@@ -70,7 +70,13 @@ endpointListGetH sess pid layoutM ackdM archivedM sortM hxRequestM hxBoostedM hx
               , -- , sort = fromMaybe "" sortM
                 sort = ""
               }
-      pure $ bodyWrapper bwconf $ endpointListPage paramInput pid currTime endpointStats
+      let elementBelowTabs =
+            div_ [class_ "grid grid-cols-5", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"]
+              $ endpointList' paramInput currTime pid endpointStats
+      case (hxRequestM, hxBoostedM) of
+        (Just "true", Just "false") -> pure elementBelowTabs
+        (Just "true", Nothing) -> pure elementBelowTabs
+        _ -> pure $ bodyWrapper bwconf $ endpointListPage paramInput pid currTime endpointStats
 
 
 endpointListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Endpoints.EndpointRequestStats -> Html ()
