@@ -364,9 +364,9 @@ selectRequestDumpsByProjectForChart pid extraQuery = do
                FROM apis.request_dumps where project_id=? $extraQueryParsed  GROUP BY timeB) ts|]
 
 
--- bulkInsertRequestDumps :: [RequestDump] -> DBT IO Int64
--- bulkInsertRequestDumps _ = pure 0
---
+-- bulkInsertRequestDumps is a very import function because it's what inserts the request dumps into the database. 
+-- But it's tied to the literal database structure for performance purposes, so we need ot update this
+-- if we add or remove new columns to the database table.
 bulkInsertRequestDumps :: [RequestDump] -> DBT IO Int64
 bulkInsertRequestDumps = executeMany q
   where
