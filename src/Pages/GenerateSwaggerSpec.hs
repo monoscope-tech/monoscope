@@ -694,15 +694,15 @@ pExpectedSwaggerJSON =
 
 
 spec :: Spec
-spec = describe "generateSwagger" $ do
-  it "GENERAL: generates Swagger JSON matching the expected output" $ do
+spec = describe "generateSwagger" do
+  it "GENERAL: generates Swagger JSON matching the expected output" do
     let generatedSwaggerJSON = generateSwagger projectTitle projectDescription sampleEndpoints sampleShapes sampleFields sampleFormats
     RequestMessages.valueToFields generatedSwaggerJSON `shouldBe` RequestMessages.valueToFields expectedSwaggerJSON
   --- headers
-  it "HEADERS: generates swagger JSON matching expected output" $ do
+  it "HEADERS: generates swagger JSON matching expected output" do
     let hGeneratedSwaggerJSON = generateSwagger projectTitle projectDescription hSampleEndpoints hSampleShapes hSampleFields hSampleFormats
     RequestMessages.valueToFields hGeneratedSwaggerJSON `shouldBe` RequestMessages.valueToFields hExpectedSwaggerJSON
   -- parameters
-  it "PARAMETERS: generates swagger JSON matching expected output" $ do
+  it "PARAMETERS: generates swagger JSON matching expected output" do
     let pGeneratedSwaggerJSON = generateSwagger projectTitle projectDescription pSampleEndpoints pSampleShapes pSampleFields pSampleFormats
     RequestMessages.valueToFields pGeneratedSwaggerJSON `shouldBe` RequestMessages.valueToFields pExpectedSwaggerJSON

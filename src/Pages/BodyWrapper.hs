@@ -40,8 +40,8 @@ data BWConfig = BWConfig
 
 bodyWrapper :: BWConfig -> Html () -> Html ()
 bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child = do
-  doctypehtml_ $ do
-    head_ $ do
+  doctypehtml_ do
+    head_ do
       title_ $ toHtml pageTitle
       meta_ [charset_ "UTF-8"]
       meta_ [name_ "viewport", content_ "width=device-width, initial-scale=1.0"]
@@ -118,28 +118,28 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child = do
                 });
               }
             |]
-    body_ [class_ "text-gray-900 h-full w-full bg-white"] $ do
+    body_ [class_ "text-gray-900 h-full w-full bg-white"] do
       div_
         [ style_ "z-index:99999"
         , class_ "fixed pt-24 sm:hidden justify-center z-50 w-full p-4 bg-gray-50 overflow-y-auto inset-0 h-full max-h-full"
         , tabindex_ "-1"
         ]
-        $ do
+        do
           div_
             [ class_ "relative mx-auto max-h-full"
             , style_ "width: min(90vw, 500px)"
             ]
-            $ do
+            do
               -- Modal content
               div_
                 [ class_ "bg-white rounded-lg drop-shadow-md border-1 w-full"
                 ]
-                $ do
-                  div_ [class_ "flex items-start justify-between p-6 space-x-2  border-b rounded-t"] $ do
+                do
+                  div_ [class_ "flex items-start justify-between p-6 space-x-2  border-b rounded-t"] do
                     h3_ [class_ "text-3xl font-bold text-gray-900"] "Only Desktop Browsers are Supported for now!"
                   -- Modal body
-                  div_ [class_ "w-full"] $ do
-                    div_ [class_ "p-6 text-xl space-y-6", style_ "height:50vh; width:100%"] $ do
+                  div_ [class_ "w-full"] do
+                    div_ [class_ "p-6 text-xl space-y-6", style_ "height:50vh; width:100%"] do
                       p_ [class_ ""] "Due to the heavy visualization usecases we're solving, apitoolkit is not supported on mobile, and can only be used from a desktop browser at the moment."
                       p_ [class_ ""] "We're diligently working on expanding its availability to other platforms, and we'll keep you updated as we make progress. "
                       p_ [] "Don't hesitate to let us know if this is a very important feature for your team, then we can prioritize it"
@@ -147,20 +147,20 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child = do
                   div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] pass
       case sessM of
         Nothing -> do
-          section_ [class_ "flex flex-col grow h-full overflow-y-hidden"] $ do
+          section_ [class_ "flex flex-col grow h-full overflow-y-hidden"] do
             -- navbar currUser
-            section_ [class_ "flex-1 overflow-y-auto"] $ do
+            section_ [class_ "flex-1 overflow-y-auto"] do
               child
         Just sess ->
           do
             let currUser = Sessions.getUser (Sessions.user sess)
                 sideNav' = currProject & maybe "" \project -> sideNav sess project pageTitle menuItem
             let currUserEmail = CI.original currUser.email
-            section_ [class_ "flex flex-row h-screen overflow-hidden"] $ do
+            section_ [class_ "flex flex-row h-screen overflow-hidden"] do
               sideNav'
-              section_ [class_ "flex flex-col grow h-full overflow-y-hidden"] $ do
+              section_ [class_ "flex flex-col grow h-full overflow-y-hidden"] do
                 navbar currUser
-                section_ [class_ "flex-1 overflow-y-auto"] $ do
+                section_ [class_ "flex-1 overflow-y-auto"] do
                   child
       script_ [async_ "true", src_ "https://www.googletagmanager.com/gtag/js?id=AW-11285541899"] ("" :: Text)
       script_
@@ -205,38 +205,38 @@ projectsDropDown currProject projects = do
           end
           |]
     ]
-    $ do
-      div_ [class_ "p-2 pb-4 "] $ do
-        div_ [class_ "flex mt-2 mb-4"] $ do
+    do
+      div_ [class_ "p-2 pb-4 "] do
+        div_ [class_ "flex mt-2 mb-4"] do
           img_ [class_ "p-4", src_ "/assets/svgs/projects.svg"]
-          div_ $ do
+          div_ do
             strong_ [class_ "block"] $ toHtml currProject.title
             small_ [class_ "block text-blue-800"] $ toHtml currProject.paymentPlan
-        nav_ [] $ do
-          a_ [href_ [text| /p/$pidTxt/settings |], class_ "p-3 flex gap-3 rounded-2xl hover:bg-gray-100"] $ do
+        nav_ [] do
+          a_ [href_ [text| /p/$pidTxt/settings |], class_ "p-3 flex gap-3 rounded-2xl hover:bg-gray-100"] do
             faIcon_ "fa-gear" "fa-sharp fa-regular fa-gear" "h-5 w-5"
             span_ "Settings"
-          a_ [href_ [text| /p/$pidTxt/manage_members |], class_ "p-3 flex gap-3 rounded hover:bg-gray-100"] $ do
+          a_ [href_ [text| /p/$pidTxt/manage_members |], class_ "p-3 flex gap-3 rounded hover:bg-gray-100"] do
             faIcon_ "fa-user-plus" "fa-light fa-user-plus" "h-5 w-5"
             span_ "Manage members"
-          a_ [class_ "hidden p-3 flex gap-3 rounded hover:bg-gray-100 "] $ do
+          a_ [class_ "hidden p-3 flex gap-3 rounded hover:bg-gray-100 "] do
             img_ [src_ "/assets/svgs/dollar.svg"]
             span_ "Billing and usage"
-      div_ [class_ "border-t border-gray-100 p-2"] $ do
-        div_ [class_ "flex justify-between content-center items-center py-5 mb-2 "] $ do
+      div_ [class_ "border-t border-gray-100 p-2"] do
+        div_ [class_ "flex justify-between content-center items-center py-5 mb-2 "] do
           a_ [href_ "/"] $ h3_ [class_ "text-xl"] "Switch projects"
-          a_ [class_ "inline-block bg-blue-700 flex pl-3 pr-4 py-2 rounded-xl text-white space-x-2", href_ "/p/new"] $ do
+          a_ [class_ "inline-block bg-blue-700 flex pl-3 pr-4 py-2 rounded-xl text-white space-x-2", href_ "/p/new"] do
             faIcon_ "fa-plus" "fa-sharp fa-regular fa-plus" "h-5 w-5 bg-blue-800 rounded-lg"
             span_ [class_ "inline-block px-1"] "Add"
-        div_ $ do
-          div_ [class_ "relative"] $ do
-            div_ [class_ "absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none"] $ do
+        div_ do
+          div_ [class_ "relative"] do
+            div_ [class_ "absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none"] do
               faIcon_ "fa-magnifying-glass" "fa-regular fa-magnifying-glass" "h-6 w-4"
             input_ [class_ "pl-12 w-full text-sm bg-gray-100 rounded-2xl border-0 p-3", placeholder_ "Search Projects"]
-          div_ [class_ "space-y-2 py-4 text-sm"] $ do
+          div_ [class_ "space-y-2 py-4 text-sm"] do
             projects & mapM_ \project -> do
-              a_ [class_ "flex justify-between p-2", href_ $ "/p/" <> project.id.toText] $ do
-                div_ [class_ "space-x-3"] $ do
+              a_ [class_ "flex justify-between p-2", href_ $ "/p/" <> project.id.toText] do
+                div_ [class_ "space-x-3"] do
                   img_ [class_ "inline-block", src_ "/assets/svgs/projects.svg"]
                   span_ [class_ "inline-block"] $ toHtml $ project.title
                 when (currProject.id == project.id) $ faIcon_ "fa-circle-check" "fa-sharp fa-regular fa-circle-check" "h-6 w-6 text-green-700"
@@ -244,7 +244,7 @@ projectsDropDown currProject projects = do
 
 sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Maybe Text -> Html ()
 sideNav sess project pageTitle menuItem = do
-  aside_ [class_ "shrink-0 top-0 border-r-2 bg-white border-gray-200 h-screen overflow-hidden transition-all duration-1000 ease-in-out", id_ "side-nav-menu"] $ do
+  aside_ [class_ "shrink-0 top-0 border-r-2 bg-white border-gray-200 h-screen overflow-hidden transition-all duration-1000 ease-in-out", id_ "side-nav-menu"] do
     script_
       [text|
            if (window.initialCloseSideMenu == 'true'){
@@ -253,7 +253,7 @@ sideNav sess project pageTitle menuItem = do
           |]
 
     div_ [class_ "text-center"] do
-      a_ [href_ "/", class_ "inline-block px-2 py-2 h-12"] $ do
+      a_ [href_ "/", class_ "inline-block px-2 py-2 h-12"] do
         img_
           [ class_ "h-12 sd-hidden"
           , src_ "/assets/svgs/logo.svg"
@@ -262,7 +262,7 @@ sideNav sess project pageTitle menuItem = do
           [ class_ "h-12 w-10 hidden sd-show"
           , src_ "/assets/svgs/logo_mini.svg"
           ]
-    div_ [class_ "py-4 px-4 transition-all  duration-1000 ease-in-out", id_ "side-nav-ctx-btn"] $ do
+    div_ [class_ "py-4 px-4 transition-all  duration-1000 ease-in-out", id_ "side-nav-ctx-btn"] do
       a_
         [ class_ "flex flex-row bg-blue-50 hover:bg-blue-100 text-blue-900 block p-6 rounded-md cursor-pointer"
         , [__| 
@@ -283,17 +283,17 @@ sideNav sess project pageTitle menuItem = do
                 end
             |]
         ]
-        $ do
-          div_ [class_ "space-2 grow sd-hidden"] $ do
+        do
+          div_ [class_ "space-2 grow sd-hidden"] do
             strong_ [class_ "block text-slate-900"] $ toHtml project.title
             small_ [class_ "block text-slate-900"] $ toHtml project.paymentPlan
           -- Development?
-          div_ $ do
+          div_ do
             faIcon_ "fa-chevron-up" "fa-light fa-chevron-up" " h-4 w-4 m-2"
             faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" " h-4 w-4 m-2"
 
       projectsDropDown project (Sessions.getProjects $ Sessions.projects sess)
-    nav_ [class_ "mt-4"] $ do
+    nav_ [class_ "mt-4"] do
       -- FIXME: reeanable hx-boost hxBoost_ "true"
       menu (project.id) & mapM_ \(mTitle, mUrl, faIcon) -> do
         a_
@@ -307,14 +307,14 @@ sideNav sess project pageTitle menuItem = do
                     else ""
                  )
           ]
-          $ do
+          do
             faIcon_ faIcon ("fa-regular " <> faIcon) "w-5 h-5 text-slate-500"
             span_ [class_ "grow sd-hidden"] $ toHtml mTitle
 
 
 navbar :: Users.User -> Html ()
 navbar currUser = do
-  nav_ [id_ "main-navbar", class_ "sticky z-20 top-0 w-full px-6 py-2 border-b bg-white flex flex-row justify-between"] $ do
+  nav_ [id_ "main-navbar", class_ "sticky z-20 top-0 w-full px-6 py-2 border-b bg-white flex flex-row justify-between"] do
     a_
       [ id_ "side_nav_toggler"
       , class_ "cursor-pointer flex items-center"
@@ -328,12 +328,12 @@ navbar currUser = do
         end
           |]
       ]
-      $ do
+      do
         faIcon_ "fa-bars-sort" "fa-regular fa-bars-sort" "w-5 h-5 text-gray-500"
-    div_ [class_ "inline-block flex items-center"] $ do
-      a_ [class_ "inline-block p-2 px-3 align-middle"] $ do
+    div_ [class_ "inline-block flex items-center"] do
+      a_ [class_ "inline-block p-2 px-3 align-middle"] do
         faIcon_ "fa-magnifying-glass" "fa-regular fa-magnifying-glass" "w-5 h-5 text-gray-500"
-      a_ [class_ "inline-block border-r-2 p-2 pr-5"] $ do
+      a_ [class_ "inline-block border-r-2 p-2 pr-5"] do
         faIcon_ "fa-bell" "fa-regular fa-solid fa-bell" "w-5 h-5 text-gray-500"
       a_
         [ class_ "cursor-pointer inline-block space-x-4 pl-4 relative "
@@ -355,7 +355,7 @@ navbar currUser = do
             end
         |]
         ]
-        $ do
+        do
           img_ [class_ "inline-block w-9 h-9 rounded-lg bg-gray-300", src_ currUser.displayImageUrl]
           span_ [class_ "inline-block"]
             $ toHtml
@@ -383,8 +383,8 @@ navbar currUser = do
             end
             |]
         ]
-        $ do
+        do
           -- dropdown mainbody
-          a_ [class_ "text-base p-2 flex gap-3 rounded hover:bg-gray-100", href_ "/logout"] $ do
+          a_ [class_ "text-base p-2 flex gap-3 rounded hover:bg-gray-100", href_ "/logout"] do
             faIcon_ "fa-user-plus" "fa-light fa-user-plus" "h-5 w-5"
             span_ "Logout"

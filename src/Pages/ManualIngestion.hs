@@ -131,7 +131,7 @@ manualIngestGetH sess pid = do
 
 manualIngestPage :: Html ()
 manualIngestPage = do
-  section_ [id_ "mainContent", class_ "h-full overflow-scroll"] $ do
+  section_ [id_ "mainContent", class_ "h-full overflow-scroll"] do
     script_
       [ src_ "https://cdnjs.cloudflare.com/ajax/libs/jsoneditor/9.7.2/jsoneditor.min.js"
       , integrity_ "sha512-9T9AIzkTI9pg694MCTReaZ0vOimxuTKXA15Gin+AZ4eycmg85iEXGX811BAjyY+NOcDCdlA9k2u9SqVAyNqFkQ=="
@@ -139,8 +139,8 @@ manualIngestPage = do
       ]
       ("" :: Text)
     link_ [rel_ "stylesheet", type_ "text/css", href_ "https://cdnjs.cloudflare.com/ajax/libs/jsoneditor/9.7.2/jsoneditor.min.css"]
-    section_ [class_ "container mx-auto  px-4 py-10"] $ do
-      div_ [class_ "flex justify-between mb-6"] $ do
+    section_ [class_ "container mx-auto  px-4 py-10"] do
+      div_ [class_ "flex justify-between mb-6"] do
         h2_ [class_ "text-slate-700 text-2xl font-medium"] "API Keys"
       form_
         [ class_ "relative space-y-10 px-10 border border-gray-200 py-10  bg-white w-3/4 rounded-3xl"
@@ -156,7 +156,7 @@ manualIngestPage = do
                    responseHeaders: respHeadersEditor.getText(),
                    timestamp: (new Date(document.getElementById('timestamp').value)).toISOString()|]
         ]
-        $ do
+        do
           inputDatetime "timestamp"
           inputText "" "host"
           inputTextDatalist "" "method" ["GET", "POST", "PUT", "DELETE", "OPTION", "HEAD"]
@@ -172,7 +172,7 @@ manualIngestPage = do
           inputTextArea "" "requestBody"
           inputTextArea "" "responseBody"
           inputInt "" "statusCode" 200
-          div_ $ do
+          div_ do
             button_ [class_ "btn-sm btn-indigo", type_ "submit"] "Submit"
     script_ @Text
       [text|
@@ -211,7 +211,7 @@ manualIngestPage = do
 
 inputText :: Text -> Text -> Html ()
 inputText title name = do
-  div_ $ do
+  div_ do
     label_ [class_ "text-gray-400 mx-2  text-sm"] $ toHtml $ title <> " [" <> name <> "]"
     input_
       [ class_ "h-10 px-5 my-2 w-full text-sm bg-white text-black border-solid border border-gray-200 rounded-2xl  "
@@ -223,7 +223,7 @@ inputText title name = do
 
 inputTextDatalist :: Text -> Text -> [Text] -> Html ()
 inputTextDatalist title name datalist = do
-  div_ $ do
+  div_ do
     label_ [class_ "text-gray-400 mx-2  text-sm"] $ toHtml $ title <> " [" <> name <> "]"
     input_
       [ class_ "h-10 px-5 my-2 w-full text-sm bg-white text-black border-solid border border-gray-200 rounded-2xl  "
@@ -232,13 +232,13 @@ inputTextDatalist title name datalist = do
       , name_ name
       , list_ $ name <> "-list"
       ]
-    datalist_ [id_ $ name <> "-list"] $ do
+    datalist_ [id_ $ name <> "-list"] do
       datalist & mapM_ (\it -> option_ [value_ it] $ toHtml it)
 
 
 inputTextArea :: Text -> Text -> Html ()
 inputTextArea title name = do
-  div_ $ do
+  div_ do
     label_ [class_ "text-gray-400 mx-2  text-sm"] $ toHtml $ title <> " [" <> name <> "]"
     div_
       [ class_ "w-full text-sm bg-white text-black border-solid border border-gray-200 rounded-2xl"
@@ -250,7 +250,7 @@ inputTextArea title name = do
 
 inputDatetime :: Text -> Html ()
 inputDatetime name = do
-  div_ $ do
+  div_ do
     label_ [class_ "text-gray-400 mx-2  text-sm"] $ toHtml name
     input_
       [ class_ "h-10 px-5 my-2 w-full text-sm bg-white text-black border-solid border border-gray-200 rounded-2xl  "
@@ -263,7 +263,7 @@ inputDatetime name = do
 
 inputInt :: Text -> Text -> Int -> Html ()
 inputInt title name value = do
-  div_ $ do
+  div_ do
     label_ [class_ "text-gray-400 mx-2  text-sm"] $ toHtml $ title <> " [" <> name <> "]"
     input_
       [ class_ "h-10 px-5 my-2 w-full text-sm bg-white text-black border-solid border border-gray-200 rounded-2xl  "

@@ -217,9 +217,9 @@ dataSeedingGetH sess pid = do
 
 dataSeedingPage :: Html ()
 dataSeedingPage = do
-  section_ [id_ "mainContent", class_ "h-full overflow-scroll"] $ do
-    section_ [class_ "container mx-auto  px-4 py-10"] $ do
-      div_ [class_ "flex justify-between mb-6"] $ do
+  section_ [id_ "mainContent", class_ "h-full overflow-scroll"] do
+    section_ [class_ "container mx-auto  px-4 py-10"] do
+      div_ [class_ "flex justify-between mb-6"] do
         h2_ [class_ "text-slate-700 text-2xl font-medium"] "Bulk Seed Data via Config"
       form_
         [ class_ "relative space-y-10 px-10 border border-gray-200 py-10  bg-white w-3/4 rounded-3xl"
@@ -230,10 +230,10 @@ dataSeedingPage = do
             [text|js: config:editor.getValue() 
             |]
         ]
-        $ do
-          div_ [] $ do
+        do
+          div_ [] do
             label_ "Environment to run on"
-            select_ [name_ "environment"] $ do
+            select_ [name_ "environment"] do
               option_ "local"
           div_
             [id_ "configElement", name_ "config", class_ "editor w-full border border-gray-200 h-96"]
@@ -274,7 +274,7 @@ dataSeedingPage = do
       type_gen_format: "address"
       children: []
             |]
-          div_ $ do
+          div_ do
             button_ [type_ "submit", class_ "btn-sm btn-indigo"] "Submit"
 
     script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.14/ace.min.js"] ("" :: Text)

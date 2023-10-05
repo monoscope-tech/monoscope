@@ -35,7 +35,7 @@ onboardingGetH sess pid = do
     else do
       (project, hasApikeys, hasRequest) <- liftIO
         $ withPool pool
-        $ do
+        do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
           apiKeys <- ProjectApiKeys.countProjectApiKeysByProjectId pid
           requestDumps <- RequestDumps.countRequestDumpByProject pid
@@ -57,9 +57,9 @@ onboardingGetH sess pid = do
 
 onboardingPage :: Projects.ProjectId -> Bool -> Bool -> Bool -> Html ()
 onboardingPage pid hasApikey hasRequest ans = do
-  div_ [class_ "relative h-full"] $ do
-    div_ [class_ "flex flex-col h-full w-full gap-16"] $ do
-      div_ [class_ "flex flex-col w-full mt-10 py-4 items-center gap-4"] $ do
+  div_ [class_ "relative h-full"] do
+    div_ [class_ "flex flex-col h-full w-full gap-16"] do
+      div_ [class_ "flex flex-col w-full mt-10 py-4 items-center gap-4"] do
         h3_ [class_ "text-slate-900 text-4xl font-bold"] "Complete the onboarding checklist"
         div_ [class_ "flex flex-col text-center gap-1 mb-4"] do
           p_ [class_ "text-slate-700 text-[16px]"] "Complete the onboarding checklist below to fully set up APIToolkit."
@@ -73,9 +73,9 @@ onboardingPage pid hasApikey hasRequest ans = do
             integrateApiToolkit
           else ""
         if hasApikey && hasRequest then completedBanner pid else ""
-      div_ [class_ "w-full flex justify-center"] $ do
-        div_ [class_ "flex flex-col w-[800px] rounded-2xl border border-2"] $ do
-          div_ [class_ "w-full px-8 py-4 flex justify-between border-b border-b-2"] $ do
+      div_ [class_ "w-full flex justify-center"] do
+        div_ [class_ "flex flex-col w-[800px] rounded-2xl border border-2"] do
+          div_ [class_ "w-full px-8 py-4 flex justify-between border-b border-b-2"] do
             h4_ [class_ "font-bold text-lg"] "Onboarding checklist"
             let p
                   | hasApikey = if hasRequest then "100%" else "66%"
@@ -112,19 +112,19 @@ onboardingPage pid hasApikey hasRequest ans = do
                         , class_ "flex items-end justify-center  pt-4 px-4 pb-20 text-center sm:block sm:p-0"
                         , hxTarget_ "#main-content"
                         ]
-                        $ do
-                          div_ [class_ "bg-white rounded-lg px-4 pt-5 pb-4 text-left"] $ do
-                            div_ [class_ "sm:flex sm:items-start"] $ do
-                              div_ [class_ "mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left grow"] $ do
+                        do
+                          div_ [class_ "bg-white rounded-lg px-4 pt-5 pb-4 text-left"] do
+                            div_ [class_ "sm:flex sm:items-start"] do
+                              div_ [class_ "mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left grow"] do
                                 h3_ [class_ "text-lg font-medium text-slate-900", id_ "modal-title"] "Enter API key title"
-                                div_ [class_ "mt-2 space-y-2"] $ do
+                                div_ [class_ "mt-2 space-y-2"] do
                                   p_ [class_ "text-sm text-slate-500"] do
                                     "Please input a title for your API Key. You can find all API keys "
                                     a_ [href_ $ "/p/" <> pid.toText <> "/apis", class_ "text-blue-500"] "here"
-                                  div_ $ do
+                                  div_ do
                                     input_ [class_ "input-txt px-4 py-2  border w-full", type_ "text", placeholder_ "API Key Title", name_ "title", autofocus_]
                                     input_ [hidden_ "true", name_ "from", value_ "onboarding"]
-                            div_ [class_ "mt-5 sm:mt-4 sm:flex sm:flex-row-reverse"] $ do
+                            div_ [class_ "mt-5 sm:mt-4 sm:flex sm:flex-row-reverse"] do
                               button_ [type_ "submit", class_ "w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 sm:ml-3 sm:w-auto sm:text-sm"] "Submit"
 
             li_ [class_ "mx-4 py-4 border-b"] do
@@ -142,7 +142,7 @@ onboardingPage pid hasApikey hasRequest ans = do
                     p_ [class_ "text-green-500 text-center py-16 text-center"] "Apitoolkit has been integrated into your app"
                   else do
                     div_ [class_ "pb-8"] do
-                      div_ [class_ "font-bold text-center text-white border-b border-slate-200"] $ do
+                      div_ [class_ "font-bold text-center text-white border-b border-slate-200"] do
                         p_ [class_ "text-red-500 text-center py-16 text-center"] "Apitoolkit has not been integrated into your app"
       --   tabs
       -- tabContentExpress
@@ -152,8 +152,8 @@ onboardingPage pid hasApikey hasRequest ans = do
       -- tabContentDotNet
       -- tabContentFastify
 
-      div_ [class_ "w-full flex justify-center pb-16 mt-16"] $ do
-        div_ [class_ "flex flex-col w-[800px] rounded-2xl border border-2"] $ do
+      div_ [class_ "w-full flex justify-center pb-16 mt-16"] do
+        div_ [class_ "flex flex-col w-[800px] rounded-2xl border border-2"] do
           div_ [class_ "grid grid-cols-2 border-b px-8"] do
             div_ [class_ "flex flex-col gap-2 py-8 border-r"] do
               faIcon_ "fa-file-lines" "fa-thin fa-file-lines" "h-8 w-8"
@@ -202,19 +202,19 @@ generateApikey pid =
           , class_ "flex items-end justify-center mx-8  pt-4 px-4 pb-20 text-center sm:block sm:p-0"
           , hxTarget_ "#main-content2"
           ]
-          $ do
-            div_ [class_ "bg-white rounded-lg px-4 pt-5 pb-4 text-left"] $ do
-              div_ [class_ "sm:flex sm:items-start"] $ do
-                div_ [class_ "mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left grow"] $ do
+          do
+            div_ [class_ "bg-white rounded-lg px-4 pt-5 pb-4 text-left"] do
+              div_ [class_ "sm:flex sm:items-start"] do
+                div_ [class_ "mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left grow"] do
                   h3_ [class_ "text-lg font-medium text-slate-900", id_ "modal-title"] "Enter API key title"
-                  div_ [class_ "mt-2 space-y-2"] $ do
+                  div_ [class_ "mt-2 space-y-2"] do
                     p_ [class_ "text-sm text-slate-500"] do
                       "Please input a title for your API Key. You can find all API keys "
                       a_ [href_ $ "/p/" <> pid.toText <> "/apis", class_ "text-blue-500"] "here"
-                    div_ $ do
+                    div_ do
                       input_ [class_ "input-txt px-4 py-2  border w-full", type_ "text", placeholder_ "API Key Title", name_ "title", autofocus_]
                       input_ [hidden_ "true", name_ "from", value_ "onboarding"]
-              div_ [class_ "mt-5 sm:mt-4 sm:flex sm:flex-row-reverse"] $ do
+              div_ [class_ "mt-5 sm:mt-4 sm:flex sm:flex-row-reverse"] do
                 button_ [type_ "submit", class_ "w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 sm:ml-3 sm:w-auto sm:text-sm"] "Submit"
 
 
@@ -226,7 +226,7 @@ integrateApiToolkit =
         span_ [class_ "text-blue-500 pr-4 border-r border-r-2 border-r-blue-500 text-2xl"] "Next Up"
         h3_ [class_ "font-bold text-2xl"] "Integrate APIToolkit"
       div_ [class_ "pb-2"] do
-        div_ [class_ "font-bold text-center text-white border-b border-slate-200"] $ do
+        div_ [class_ "font-bold text-center text-white border-b border-slate-200"] do
           tabs
         tabContentExpress
         tabContentGin
@@ -253,26 +253,26 @@ completedBanner pid =
 
 tabContentExpress :: Html ()
 tabContentExpress =
-  div_ [class_ "tab-content flex flex-col m-8", id_ "express_content"] $ do
-    div_ [class_ "relative"] $ do
+  div_ [class_ "tab-content flex flex-col m-8", id_ "express_content"] do
+    div_ [class_ "relative"] do
       div_ [class_ "mb-6"] do
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
         p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "npm i apitoolkit-express"
       h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
-      div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] $ do
-        div_ [class_ "relative w-full flex flex-col"] $ do
-          div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] $ do
-            div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] $ do
+      div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
+        div_ [class_ "relative w-full flex flex-col"] do
+          div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] do
+            div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] do
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-          div_ [class_ "relative min-h-0 flex-auto flex flex-col"] $ do
-            div_ [class_ "w-full flex-auto flex min-h-0 overflow-auto"] $ do
-              div_ [class_ "w-full relative flex-auto"] $ do
-                pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] $ do
-                  div_ [class_ "hidden md:block text-slate-600 flex-none py-4 pr-4 text-right select-none", style_ "width:50px"] $ do
+          div_ [class_ "relative min-h-0 flex-auto flex flex-col"] do
+            div_ [class_ "w-full flex-auto flex min-h-0 overflow-auto"] do
+              div_ [class_ "w-full relative flex-auto"] do
+                pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] do
+                  div_ [class_ "hidden md:block text-slate-600 flex-none py-4 pr-4 text-right select-none", style_ "width:50px"] do
                     "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17"
-                  code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"] $ do
+                  code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"] do
                     span_ [class_ "hljs-keyword"] "import" >> " " >> span_ [class_ "hljs-title"] "express" >> " " >> span_ [class_ "hljs-keyword"] "from" >> " " >> span_ [class_ "hljs-string"] "'express';" >> "\n"
                     span_ [class_ "hljs-keyword"] "import" >> " " >> span_ [class_ "hljs-title"] "APIToolkit" >> " " >> span_ [class_ "hljs-keyword"] "from" >> " " >> span_ [class_ "hljs-string"] "'apitoolkit-express';" >> "\n\n"
                     span_ [class_ "hljs-keyword"] "const" >> " " >> span_ [class_ "hljs-title"] "app" >> " = " >> span_ [class_ "hljs-title"] "express" >> "();\n"
@@ -291,26 +291,26 @@ tabContentExpress =
 
 tabContentGin :: Html ()
 tabContentGin =
-  div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "gin_content"] $ do
-    div_ [class_ "relative"] $ do
+  div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "gin_content"] do
+    div_ [class_ "relative"] do
       div_ [class_ "mb-6"] do
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
         p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "go get github.com/apitoolkit/apitoolkit-go"
       h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
-      div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] $ do
-        div_ [class_ "relative w-full flex flex-col"] $ do
-          div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] $ do
-            div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] $ do
+      div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
+        div_ [class_ "relative w-full flex flex-col"] do
+          div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] do
+            div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] do
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-          div_ [class_ "relative min-h-0 flex-auto flex flex-col"] $ do
-            div_ [class_ "w-full flex-auto flex min-h-0 overflow-auto"] $ do
-              div_ [class_ "w-full relative flex-auto"] $ do
-                pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] $ do
-                  div_ [class_ "hidden md:block text-slate-600 flex-none py-4 pr-4 text-right select-none", style_ "width:50px"] $ do
+          div_ [class_ "relative min-h-0 flex-auto flex flex-col"] do
+            div_ [class_ "w-full flex-auto flex min-h-0 overflow-auto"] do
+              div_ [class_ "w-full relative flex-auto"] do
+                pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] do
+                  div_ [class_ "hidden md:block text-slate-600 flex-none py-4 pr-4 text-right select-none", style_ "width:50px"] do
                     "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n"
-                  code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"] $ do
+                  code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"] do
                     span_ [class_ "hljs-keyword"] "package" >> " " >> span_ [class_ "hljs-title"] "main" >> "\n\n"
                     span_ [class_ "hljs-keyword"] "import" >> " (" >> "\n"
                     span_ [class_ "hljs-comment"] "// Import the apitoolkit golang sdk" >> "\n"
@@ -336,28 +336,28 @@ tabContentGin =
 
 tabContentLaravel :: Html ()
 tabContentLaravel =
-  div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "laravel_content"] $ do
-    div_ [class_ "relative"] $ do
+  div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "laravel_content"] do
+    div_ [class_ "relative"] do
       div_ [class_ "mb-6"] do
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
         p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "composer require apitoolkit/apitoolkit-php"
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1 mt-4"] "Set up APITOOLKIT_KEY env variable"
         p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "APITOOLKIT_KEY=<YOUR_API_KEY>"
       h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
-      div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] $ do
-        div_ [class_ "relative w-full flex flex-col"] $ do
-          div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] $ do
-            div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] $ do
+      div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
+        div_ [class_ "relative w-full flex flex-col"] do
+          div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] do
+            div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] do
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-          div_ [class_ "relative min-h-0 flex-auto flex flex-col"] $ do
-            div_ [class_ "w-full flex-auto flex min-h-0 overflow-auto"] $ do
-              div_ [class_ "w-full relative flex-auto"] $ do
-                pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] $ do
-                  div_ [class_ "hidden md:block text-slate-600 flex-none py-4 pr-4 text-right select-none", style_ "width:50px"] $ do
+          div_ [class_ "relative min-h-0 flex-auto flex flex-col"] do
+            div_ [class_ "w-full flex-auto flex min-h-0 overflow-auto"] do
+              div_ [class_ "w-full relative flex-auto"] do
+                pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] do
+                  div_ [class_ "hidden md:block text-slate-600 flex-none py-4 pr-4 text-right select-none", style_ "width:50px"] do
                     "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n"
-                  code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"] $ do
+                  code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"] do
                     span_ [class_ "hljs-meta"] "<?php" >> "\n\n"
                     span_ [class_ "hljs-keyword"] "namespace" >> " " >> span_ [class_ "hljs-title"] "App" >> "\\" >> span_ [class_ "hljs-title"] "Http" >> ";" >> "\n\n"
                     span_ [class_ "hljs-keyword"] "use" >> " " >> span_ [class_ "hljs-title"] "Illuminate" >> "\\" >> span_ [class_ "hljs-title"] "Foundation" >> "\\" >> span_ [class_ "hljs-title"] "Http" >> "\\" >> span_ [class_ "hljs-title"] "Kernel" >> " " >> span_ [class_ "hljs-keyword"] "as" >> " " >> span_ [class_ "hljs-title"] "HttpKernel" >> ";" >> "\n\n"
@@ -377,28 +377,28 @@ tabContentLaravel =
 
 tabContentSymfony :: Html ()
 tabContentSymfony =
-  div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "symfony_content"] $ do
-    div_ [class_ "relative"] $ do
+  div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "symfony_content"] do
+    div_ [class_ "relative"] do
       div_ [class_ "mb-6"] do
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
         p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "composer require apitoolkit/apitoolkit-symfony"
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1 mt-4"] "Set up APITOOLKIT_KEY env variable"
         p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "APITOOLKIT_KEY=<YOUR_API_KEY>"
       h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
-      div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] $ do
-        div_ [class_ "relative w-full flex flex-col"] $ do
-          div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] $ do
-            div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] $ do
+      div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
+        div_ [class_ "relative w-full flex flex-col"] do
+          div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] do
+            div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] do
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-          div_ [class_ "relative min-h-0 flex-auto flex flex-col"] $ do
-            div_ [class_ "w-full flex-auto flex min-h-0 overflow-auto"] $ do
-              div_ [class_ "w-full relative flex-auto"] $ do
-                pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] $ do
-                  div_ [class_ "hidden md:block text-slate-600 flex-none py-4 pr-4 text-right select-none", style_ "width:50px"] $ do
+          div_ [class_ "relative min-h-0 flex-auto flex flex-col"] do
+            div_ [class_ "w-full flex-auto flex min-h-0 overflow-auto"] do
+              div_ [class_ "w-full relative flex-auto"] do
+                pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] do
+                  div_ [class_ "hidden md:block text-slate-600 flex-none py-4 pr-4 text-right select-none", style_ "width:50px"] do
                     "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11"
-                  code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"] $ do
+                  code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"] do
                     span_ [class_ "hljs-attr"] "services:" >> "\n"
                     span_ [class_ "hljs-string"] "    APIToolkit\\EventSubscriber\\APIToolkitService:" >> "\n"
                     span_ [class_ "hljs-attr"] "        arguments:" >> "\n"
@@ -412,24 +412,24 @@ tabContentSymfony =
 
 tabContentDotNet :: Html ()
 tabContentDotNet =
-  div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "net_content"] $ do
-    div_ [class_ "relative"] $ do
+  div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "net_content"] do
+    div_ [class_ "relative"] do
       div_ [class_ "mb-6"] do
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
         p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "dotnet add package ApiToolkit.Net"
       h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
-      div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] $ do
-        div_ [class_ "relative w-full flex flex-col"] $ do
-          div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] $ do
-            div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] $ do
+      div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
+        div_ [class_ "relative w-full flex flex-col"] do
+          div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] do
+            div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] do
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-          div_ [class_ "relative min-h-0 flex-auto flex flex-col"] $ do
-            div_ [class_ "w-full flex-auto flex min-h-0 overflow-auto"] $ do
-              div_ [class_ "w-full relative flex-auto"] $ do
-                pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] $ do
-                  div_ [class_ "hidden md:block text-slate-600 flex-none py-4 pr-4 text-right select-none", style_ "width:50px"] $ do
+          div_ [class_ "relative min-h-0 flex-auto flex flex-col"] do
+            div_ [class_ "w-full flex-auto flex min-h-0 overflow-auto"] do
+              div_ [class_ "w-full relative flex-auto"] do
+                pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] do
+                  div_ [class_ "hidden md:block text-slate-600 flex-none py-4 pr-4 text-right select-none", style_ "width:50px"] do
                     "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14"
                   code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"] do
                     span_ [class_ "hljs-keyword"] "var"
@@ -479,24 +479,24 @@ tabContentDotNet =
 tabContentFastify :: Html ()
 tabContentFastify =
   div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "fastify_content"]
-    $ do
-      div_ [class_ "relative"] $ do
+    do
+      div_ [class_ "relative"] do
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
           p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "npm install apitoolkit-fastify"
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
-        div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] $ do
-          div_ [class_ "relative w-full flex flex-col"] $ do
-            div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] $ do
-              div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] $ do
+        div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
+          div_ [class_ "relative w-full flex flex-col"] do
+            div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] do
+              div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] do
                 div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
                 div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
                 div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-            div_ [class_ "relative min-h-0 flex-auto flex flex-col"] $ do
-              div_ [class_ "w-full flex-auto flex min-h-0 overflow-auto"] $ do
-                div_ [class_ "w-full relative flex-auto"] $ do
-                  pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] $ do
-                    div_ [class_ "hidden md:block text-slate-600 flex-none py-4 pr-4 text-right select-none", style_ "width:50px"] $ do
+            div_ [class_ "relative min-h-0 flex-auto flex flex-col"] do
+              div_ [class_ "w-full flex-auto flex min-h-0 overflow-auto"] do
+                div_ [class_ "w-full relative flex-auto"] do
+                  pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] do
+                    div_ [class_ "hidden md:block text-slate-600 flex-none py-4 pr-4 text-right select-none", style_ "width:50px"] do
                       "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24"
                     code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"] do
                       span_ [class_ "hljs-keyword"] "import" >> span_ [class_ "hljs-title"] " APIToolkit " >> span_ [class_ "hljs-keyword"] "from" >> span_ [class_ "hljs-string"] " 'apitoolkit-fastify'" >> ";"
@@ -521,24 +521,24 @@ tabContentFastify =
 tabContentFlask :: Html ()
 tabContentFlask =
   div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "flask_content"]
-    $ do
-      div_ [class_ "relative"] $ do
+    do
+      div_ [class_ "relative"] do
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
           p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "pip install apitoolkit-flask"
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
-        div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] $ do
-          div_ [class_ "relative w-full flex flex-col"] $ do
-            div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] $ do
-              div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] $ do
+        div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
+          div_ [class_ "relative w-full flex flex-col"] do
+            div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] do
+              div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] do
                 div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
                 div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
                 div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-            div_ [class_ "relative min-h-0 flex-auto flex flex-col"] $ do
-              div_ [class_ "w-full flex-auto flex min-h-0 overflow-auto"] $ do
-                div_ [class_ "w-full relative flex-auto"] $ do
-                  pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] $ do
-                    div_ [class_ "hidden md:block text-slate-600 flex-none py-4 pr-4 text-right select-none", style_ "width:50px"] $ do
+            div_ [class_ "relative min-h-0 flex-auto flex flex-col"] do
+              div_ [class_ "w-full flex-auto flex min-h-0 overflow-auto"] do
+                div_ [class_ "w-full relative flex-auto"] do
+                  pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] do
+                    div_ [class_ "hidden md:block text-slate-600 flex-none py-4 pr-4 text-right select-none", style_ "width:50px"] do
                       "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24"
                     code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"] do
                       span_ [class_ "hljs-keyword"] "from" >> " flask " >> span_ [class_ "hljs-keyword"] "import " >> "Flask"
@@ -579,24 +579,24 @@ tabContentFlask =
 tabContentFastAPI :: Html ()
 tabContentFastAPI =
   div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "fastapi_content"]
-    $ do
-      div_ [class_ "relative"] $ do
+    do
+      div_ [class_ "relative"] do
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
           p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "pip install apitoolkit-fastapi"
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
-        div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] $ do
-          div_ [class_ "relative w-full flex flex-col"] $ do
-            div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] $ do
-              div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] $ do
+        div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
+          div_ [class_ "relative w-full flex flex-col"] do
+            div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] do
+              div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] do
                 div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
                 div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
                 div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-            div_ [class_ "relative min-h-0 flex-auto flex flex-col"] $ do
-              div_ [class_ "w-full flex-auto flex min-h-0 overflow-auto"] $ do
-                div_ [class_ "w-full relative flex-auto"] $ do
-                  pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] $ do
-                    div_ [class_ "hidden md:block text-slate-600 flex-none py-4 pr-4 text-right select-none", style_ "width:50px"] $ do
+            div_ [class_ "relative min-h-0 flex-auto flex flex-col"] do
+              div_ [class_ "w-full flex-auto flex min-h-0 overflow-auto"] do
+                div_ [class_ "w-full relative flex-auto"] do
+                  pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] do
+                    div_ [class_ "hidden md:block text-slate-600 flex-none py-4 pr-4 text-right select-none", style_ "width:50px"] do
                       "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24"
                     code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"] do
                       span_ [class_ "hljs-keyword"] "from" >> " fastapi " >> span_ [class_ "hljs-keyword"] "import " >> "FastAPI"
@@ -634,24 +634,24 @@ tabContentFastAPI =
 tabContentDjango :: Html ()
 tabContentDjango =
   div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "django_content"]
-    $ do
-      div_ [class_ "relative"] $ do
+    do
+      div_ [class_ "relative"] do
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
           p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "pip install apitoolkit-django"
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app by adding APITOOLKIT_KEY and APIToolkit to the settings middleware list"
-        div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] $ do
-          div_ [class_ "relative w-full flex flex-col"] $ do
-            div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] $ do
-              div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] $ do
+        div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
+          div_ [class_ "relative w-full flex flex-col"] do
+            div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] do
+              div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] do
                 div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
                 div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
                 div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-            div_ [class_ "relative min-h-0 flex-auto flex flex-col"] $ do
-              div_ [class_ "w-full flex-auto flex min-h-0 overflow-auto"] $ do
-                div_ [class_ "w-full relative flex-auto"] $ do
-                  pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] $ do
-                    div_ [class_ "hidden md:block text-slate-600 flex-none py-4 pr-4 text-right select-none", style_ "width:50px"] $ do
+            div_ [class_ "relative min-h-0 flex-auto flex flex-col"] do
+              div_ [class_ "w-full flex-auto flex min-h-0 overflow-auto"] do
+                div_ [class_ "w-full relative flex-auto"] do
+                  pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] do
+                    div_ [class_ "hidden md:block text-slate-600 flex-none py-4 pr-4 text-right select-none", style_ "width:50px"] do
                       "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15"
                     code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"] do
                       span_ [class_ "hljs-keyword"] "APITOOLKIT_KEY" >> " = " >> span_ [class_ "hljs-string"] "<YOUR_API_KEY> \n"
@@ -665,64 +665,64 @@ tabContentDjango =
 
 tabs :: Html ()
 tabs =
-  ul_ [class_ "flex flex-nowrap overflow-x-auto gap-6"] $ do
-    li_ [class_ "shrink-0"] $ do
+  ul_ [class_ "flex flex-nowrap overflow-x-auto gap-6"] do
+    li_ [class_ "shrink-0"] do
       button_
         [ class_ "sdk_tab sdk_tab_active"
         , onclick_ "changeTab('express')"
         , id_ "express"
         ]
         "Express Js"
-    li_ [class_ "shrink-0"] $ do
+    li_ [class_ "shrink-0"] do
       button_
         [ class_ "sdk_tab"
         , onclick_ "changeTab('gin')"
         , id_ "gin"
         ]
         "Go Gin"
-    li_ [class_ "shrink-0"] $ do
+    li_ [class_ "shrink-0"] do
       button_
         [ class_ "sdk_tab"
         , onclick_ "changeTab('laravel')"
         , id_ "laravel"
         ]
         "Laravel"
-    li_ [class_ "shrink-0"] $ do
+    li_ [class_ "shrink-0"] do
       button_
         [ class_ "sdk_tab"
         , onclick_ "changeTab('flask')"
         , id_ "flask"
         ]
         "Flask"
-    li_ [class_ "shrink-0"] $ do
+    li_ [class_ "shrink-0"] do
       button_
         [ class_ "sdk_tab"
         , onclick_ "changeTab('fastapi')"
         , id_ "fastapi"
         ]
         "FastAPI"
-    li_ [class_ "shrink-0"] $ do
+    li_ [class_ "shrink-0"] do
       button_
         [ class_ "sdk_tab"
         , onclick_ "changeTab('django')"
         , id_ "django"
         ]
         "Django"
-    li_ [class_ "shrink-0"] $ do
+    li_ [class_ "shrink-0"] do
       button_
         [ class_ "sdk_tab"
         , onclick_ "changeTab('symfony')"
         , id_ "symfony"
         ]
         "Symfony"
-    li_ [class_ "shrink-0"] $ do
+    li_ [class_ "shrink-0"] do
       button_
         [ class_ "sdk_tab"
         , onclick_ "changeTab('net')"
         , id_ "net"
         ]
         "C# .NET"
-    li_ [class_ "shrink-0"] $ do
+    li_ [class_ "shrink-0"] do
       button_
         [ class_ "sdk_tab"
         , onclick_ "changeTab('fastify')"

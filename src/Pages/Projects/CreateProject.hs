@@ -164,14 +164,14 @@ processProjectPostForm sess cpRaw = do
         pass
       else do
         let usersAndPermissions = zip cp.emails cp.permissions & uniq
-        _ <- liftIO $ withPool pool $ do
+        _ <- liftIO $ withPool pool do
           Projects.insertProject (createProjectFormToModel pid cp)
           liftIO $ ConvertKit.addUserOrganization envCfg.convertkitApiKey (CI.original sess.user.getUser.email) pid.toText cp.title cp.paymentPlan
           newProjectMembers <- forM usersAndPermissions \(email, permission) -> do
             userId' <- runMaybeT $ MaybeT (Users.userIdByEmail email) <|> MaybeT (Users.createEmptyUser email)
             let userId = Unsafe.fromJust userId'
             liftIO $ ConvertKit.addUserOrganization envCfg.convertkitApiKey email pid.toText cp.title cp.paymentPlan
-            when (userId' /= Just sess.userId) $ do
+            when (userId' /= Just sess.userId) do
               -- invite the users to the project (Usually as an email)
               _ <- liftIO $ withResource pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId pid email cp.title
               pass
@@ -201,15 +201,15 @@ processProjectPostForm sess cpRaw = do
 createProjectBody :: Sessions.PersistentSession -> EnvConfig -> Bool -> CreateProjectForm -> CreateProjectFormError -> Html ()
 createProjectBody sess envCfg isUpdate cp cpe = do
   let paymentPlan = if cp.paymentPlan == "" then "Hobby" else cp.paymentPlan
-  section_ [id_ "main-content", class_ "p-3 py-5 sm:p-6"] $ do
-    div_ [class_ "mx-auto", style_ "max-width:800px"] $ do
+  section_ [id_ "main-content", class_ "p-3 py-5 sm:p-6"] do
+    div_ [class_ "mx-auto", style_ "max-width:800px"] do
       h2_ [class_ "text-slate-700 text-3xl font-medium mb-5"] $ toHtml @String $ if isUpdate then "Project Settings" else "Create Project"
       div_ [class_ "grid gap-5"] do
-        form_ [class_ "col-span-1 relative px-3 sm:px-10 border border-gray-200 py-10  bg-white rounded-3xl", hxPost_ "/p/new", hxTarget_ "#main-content", hxSwap_ "outerHTML", id_ "createUpdateBodyForm"] $ do
+        form_ [class_ "col-span-1 relative px-3 sm:px-10 border border-gray-200 py-10  bg-white rounded-3xl", hxPost_ "/p/new", hxTarget_ "#main-content", hxSwap_ "outerHTML", id_ "createUpdateBodyForm"] do
           input_ [name_ "isUpdate", type_ "hidden", value_ $ if isUpdate then "true" else "false"]
           input_ [name_ "projectId", type_ "hidden", value_ cp.projectId]
           input_ [name_ "paymentPlan", type_ "hidden", value_ paymentPlan, id_ "paymentPlanEl"]
-          div_ $ do
+          div_ do
             label_ [class_ "text-gray-700 mx-2 text-sm"] do
               "Title"
               span_ [class_ "text-red-400"] " *"
@@ -298,13 +298,13 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                             img_ [class_ "h-3 w-3", src_ "/assets/svgs/checkmark_green.svg"]
                             small_ "API Live Traffic AI based validations"
 
-          div_ [class_ $ "mt-10 " <> if isUpdate then "hidden" else ""] $ do
+          div_ [class_ $ "mt-10 " <> if isUpdate then "hidden" else ""] do
             p_ [class_ "text-gray-400 mx-2 font-light text-sm"] "Invite a project member"
-            section_ [id_ "inviteMemberSection"] $ do
-              template_ [id_ "inviteTmpl"] $ do
-                div_ [class_ "flex flex-row space-x-2"] $ do
+            section_ [id_ "inviteMemberSection"] do
+              template_ [id_ "inviteTmpl"] do
+                div_ [class_ "flex flex-row space-x-2"] do
                   input_ [name_ "emails", class_ "w-2/3 h-10 px-5 my-2 w-full text-sm bg-white text-slate-700 font-light border-solid border border-gray-200 rounded-2xl border-0 ", placeholder_ "name@example.com"]
-                  select_ [name_ "permissions", class_ "w-1/3 h-10 px-5  my-2 w-full text-sm bg-white text-zinc-500 border-solid border border-gray-200 rounded-2xl border-0"] $ do
+                  select_ [name_ "permissions", class_ "w-1/3 h-10 px-5  my-2 w-full text-sm bg-white text-zinc-500 border-solid border border-gray-200 rounded-2xl border-0"] do
                     option_ [class_ "text-gray-500", value_ "edit"] "Can Edit"
                     option_ [class_ "text-gray-500", value_ "view"] "Can View"
                   button_
@@ -316,7 +316,7 @@ createProjectBody sess envCfg isUpdate cp cpe = do
               , [__| on click append #inviteTmpl.innerHTML to #inviteMemberSection then 
                          _hyperscript.processNode(#inviteMemberSection) then halt |]
               ]
-              $ do
+              do
                 faIcon_ "fa-plus" "fa-sharp fa-regular fa-plus" "mt-1 mx-2 w-5 h-5 text-blue-700"
                 span_ [class_ "text-blue-700 font-medium text-sm "] "Add member"
 

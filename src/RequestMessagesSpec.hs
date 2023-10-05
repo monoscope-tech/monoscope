@@ -16,8 +16,8 @@ import Test.Hspec
 
 spec :: Spec
 spec = do
-  describe "Process Messages" $ do
-    it "value to fields" $ do
+  describe "Process Messages" do
+    it "value to fields" do
       let exJSON =
             [aesonQQ| {
               "menu": {
@@ -39,7 +39,7 @@ spec = do
       RequestMessages.valueToFields exJSON `shouldBe` expectedResp
 
   -- Commented out until we fix and standardize durations handling.
-  -- it "should should process request messages" $ do
+  -- it "should should process request messages" do
   --   recId <- UUIDV4.nextRandom
   --   let timestamp = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
   --   let requestMsg =
@@ -143,7 +143,7 @@ spec = do
 
   --   resp `shouldBe` Right (respDump, respEndpoint, fields)
 
-  -- it "should should process request messages even with get request and empty request body" $ do
+  -- it "should should process request messages even with get request and empty request body" do
   --   recId <- UUIDV4.nextRandom
   --   -- timestamp <- Time.getZonedTime
   --   let timestamp = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
@@ -228,13 +228,13 @@ spec = do
 
   --   resp `shouldBe` Right (respDump, respEndpoint, fields)
 
-  describe "Regex Formats Gen" $ do
-    it "should get support string types" $ do
+  describe "Regex Formats Gen" do
+    it "should get support string types" do
       RequestMessages.valueToFormatStr "123" `shouldBe` Just "integer"
       RequestMessages.valueToFormatStr "abc" `shouldBe` Nothing
 
-  describe "requestMessageEndpoint" $ do
-    it "should be able to convert simple request message to series on insert db commands" $ do
+  describe "requestMessageEndpoint" do
+    it "should be able to convert simple request message to series on insert db commands" do
       recId <- UUIDV4.nextRandom
       -- timestamp <- Time.getZonedTime
       let timestamp = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"

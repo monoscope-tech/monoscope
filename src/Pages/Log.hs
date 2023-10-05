@@ -59,7 +59,7 @@ apiLog sess pid queryM cols' fromM hxRequestM hxBoostedM = do
     else do
       (project, requests) <- liftIO
         $ withPool pool
-        $ do
+        do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
           requests <- RequestDumps.selectRequestDumpByProject pid query fromM'
           pure (project, requests)
@@ -71,7 +71,7 @@ apiLog sess pid queryM cols' fromM hxRequestM hxBoostedM = do
 
       let resultCount = maybe 0 (^. #fullCount) (requests !? 0)
       case (hxRequestM, hxBoostedM) of
-        (Just "true", Nothing) -> pure $ do
+        (Just "true", Nothing) -> pure do
           span_ [id_ "result-count", hxSwapOob_ "outerHTML"] $ show resultCount
           reqChart reqChartTxt True
           logItemRows pid requests cols nextLogsURL
@@ -120,47 +120,45 @@ expandAPIlogItem sess pid rdId createdAt = do
 
 expandAPIlogItem' :: RequestDumps.RequestDumpLogItem -> Bool -> Html ()
 expandAPIlogItem' req modal = do
-  div_ [class_ "flex flex-col w-full pb-[100px]"] $ do
+  div_ [class_ "flex flex-col w-full pb-[100px]"] do
     div_ [class_ "w-full flex flex-col gap-2 gap-4"] do
       let methodColor = getMethodBgColor req.method
       let statusColor = getStatusColor req.statusCode
       div_ [class_ "flex gap-4 items-center"] do
         div_ [class_ $ "text-white font-semibold px-2 py-1 rounded min-w-[70px] text-center " <> methodColor] $ toHtml req.method
         div_ [class_ $ "text-lg font-bold px-2 " <> statusColor] $ show req.statusCode
-        div_ [class_ "flex border border-gray-200 m-1 rounded-xl p-2"] $ do
+        div_ [class_ "flex border border-gray-200 m-1 rounded-xl p-2"] do
           mIcon_ "calender" "h-4 mr-2 w-4"
           span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" req.createdAt
-      if modal
-        then do
-          div_
-            [ class_ "flex gap-2 px-4 items-center border border-dashed h-[50px]"
-            , id_ "copy_share_link"
-            ]
-            do
-              div_ [class_ "relative", style_ "width:150px", onblur_ "document.getElementById('expire_container').classList.add('hidden')"] $ do
-                button_
-                  [ onclick_ "toggleExpireOptions(event)"
-                  , id_ "toggle_expires_btn"
-                  , class_ "w-full flex gap-2 text-gray-600 justify_between items-center cursor-pointer px-2 py-1 border rounded focus:ring-2 focus:ring-blue-200 active:ring-2 active:ring-blue-200"
-                  ]
-                  $ do
-                    p_ [style_ "width: calc(100% - 25px)", class_ "text-sm truncate ..."] "Expires in: 1 hour"
-                    img_ [src_ "/assets/svgs/select_chevron.svg", style_ "height:15px; width:15px"]
-                div_ [id_ "expire_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] $ do
-                  ["1 hour", "8 hours", "1 day"] & mapM_ \sw -> do
-                    button_
-                      [ onclick_ "expireChanged(event)"
-                      , term "data-expire-value" sw
-                      , class_ "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"
-                      ]
-                      $ toHtml sw
+      when modal do
+        div_
+          [ class_ "flex gap-2 px-4 items-center border border-dashed h-[50px]"
+          , id_ "copy_share_link"
+          ]
+          do
+            div_ [class_ "relative", style_ "width:150px", onblur_ "document.getElementById('expire_container').classList.add('hidden')"] do
               button_
-                [ class_ "flex flex-col gap-1 bg-blue-500 px-2 py-1 rounded text-white"
-                , term "data-req-id" (show req.id)
-                , onclick_ "getShareLink(event)"
+                [ onclick_ "toggleExpireOptions(event)"
+                , id_ "toggle_expires_btn"
+                , class_ "w-full flex gap-2 text-gray-600 justify_between items-center cursor-pointer px-2 py-1 border rounded focus:ring-2 focus:ring-blue-200 active:ring-2 active:ring-blue-200"
                 ]
-                "Get share link"
-        else pass
+                do
+                  p_ [style_ "width: calc(100% - 25px)", class_ "text-sm truncate ..."] "Expires in: 1 hour"
+                  img_ [src_ "/assets/svgs/select_chevron.svg", style_ "height:15px; width:15px"]
+              div_ [id_ "expire_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] do
+                ["1 hour", "8 hours", "1 day"] & mapM_ \sw -> do
+                  button_
+                    [ onclick_ "expireChanged(event)"
+                    , term "data-expire-value" sw
+                    , class_ "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"
+                    ]
+                    $ toHtml sw
+            button_
+              [ class_ "flex flex-col gap-1 bg-blue-500 px-2 py-1 rounded text-white"
+              , term "data-req-id" (show req.id)
+              , onclick_ "getShareLink(event)"
+              ]
+              "Get share link"
 
     -- url, endpoint, latency, request size, repsonse size
     div_ [class_ "flex flex-col mt-4 p-4 justify-between w-full rounded-xl border"] do
@@ -171,24 +169,24 @@ expandAPIlogItem' req modal = do
         span_ [class_ "text-gray-500 font-semibold"] "URL: "
         span_ [] $ toHtml req.rawUrl
       div_ [class_ "flex gap-2 mt-4"] do
-        div_ [class_ "flex flex-col gap-1 px-4 min-w-[120px] py-3 border border-dashed border-gray-400 m-1 rounded"] $ do
+        div_ [class_ "flex flex-col gap-1 px-4 min-w-[120px] py-3 border border-dashed border-gray-400 m-1 rounded"] do
           div_ [class_ "flex gap-1 items-center"] do
             mIcon_ "clock" "h-4 w-4 text-gray-400"
             span_ [class_ "text-md font-bold"] $ show (req.durationNs `div` 1000) <> " ms"
           p_ [class_ "text-gray-500"] "Latency"
-        div_ [class_ "flex flex-col gap-1 px-4 min-w-[120px] py-3 border border-dashed border-gray-400 m-1 rounded"] $ do
+        div_ [class_ "flex flex-col gap-1 px-4 min-w-[120px] py-3 border border-dashed border-gray-400 m-1 rounded"] do
           div_ [class_ "flex gap-1 items-center"] do
             mIcon_ "upload" "h-4 w-4 text-gray-400"
             let reqSize = BS.length $ AE.encode req.requestBody
             span_ [class_ "text-md font-bold"] $ show (reqSize - 2) <> " bytes"
           p_ [class_ "text-gray-500"] "Request size"
-        div_ [class_ "flex flex-col gap-1 px-4 min-w-[120px] py-3 border border-dashed border-gray-400 m-1 rounded"] $ do
+        div_ [class_ "flex flex-col gap-1 px-4 min-w-[120px] py-3 border border-dashed border-gray-400 m-1 rounded"] do
           div_ [class_ "flex gap-1 items-center"] do
             mIcon_ "download4" "h-4 w-4 text-gray-400"
             let respSize = BS.length $ AE.encode req.responseBody
             span_ [class_ "text-md font-bold"] $ show (respSize - 2) <> " bytes"
           p_ [class_ "text-gray-500"] "Response size"
-        div_ [class_ "flex flex-col gap-1 px-4 min-w-[120px] py-3 border border-dashed border-gray-400 m-1 rounded"] $ do
+        div_ [class_ "flex flex-col gap-1 px-4 min-w-[120px] py-3 border border-dashed border-gray-400 m-1 rounded"] do
           div_ [class_ "flex gap-1 items-center"] do
             mIcon_ "projects" "h-5 w-5 text-gray-400"
             span_ [class_ "text-md font-bold"] $ show req.sdkType
@@ -262,13 +260,13 @@ expandAPIlogItem' req modal = do
 
 apiLogsPage :: Projects.ProjectId -> Int -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Text -> Text -> Text -> Html ()
 apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL = do
-  section_ [class_ "mx-auto px-10 py-2 gap-2 flex flex-col h-[98%] overflow-hidden "] $ do
+  section_ [class_ "mx-auto px-10 py-2 gap-2 flex flex-col h-[98%] overflow-hidden "] do
     div_
       [ style_ "z-index:26; width: min(90vw, 800px)"
       , class_ "fixed hidden right-0 bg-white overflow-y-scroll h-[calc(100%-60px)] border-l border-l-2 shadow"
       , id_ "expand-log-modal"
       ]
-      $ do
+      do
         div_ [class_ "relative ml-auto w-full", style_ ""] do
           div_ [class_ "flex justify-end  w-full p-4 "] do
             button_ [[__|on click add .hidden to #expand-log-modal|]] do
@@ -295,25 +293,25 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
       , id_ "log_explorer_form"
       , hxIndicator_ "#query-indicator"
       ]
-      $ do
-        nav_ [class_ "flex flex-row p-2 content-end justify-between items-baseline border-slate-100"] $ do
+      do
+        nav_ [class_ "flex flex-row p-2 content-end justify-between items-baseline border-slate-100"] do
           a_ [class_ "inline-block"] "Query"
           button_ [type_ "submit", class_ "cursor-pointer inline-block space-x-1 bg-blue-100 hover:bg-blue-200 blue-800 py-1 px-2 rounded-lg"] do
             img_ [src_ "/assets/svgs/sparkles.svg", class_ "w-3 h-3 inline-block"]
             span_ "Run query"
-        div_ $ do
+        div_ do
           div_ [id_ "queryEditor", class_ "h-14"] ""
 
-    div_ [class_ "card-round w-full grow divide-y flex flex-col text-sm h-full overflow-y-hidden overflow-x-hidden"] $ do
-      div_ [class_ "pl-3 py-1 space-x-5 flex flex-row justify-between"] $ do
-        a_ [class_ "cursor-pointer inline-block pr-3 space-x-2 bg-blue-50 hover:bg-blue-100 blue-800 p-1 rounded-md", [__|on click toggle .hidden on #reqsChartParent|]] $ do
+    div_ [class_ "card-round w-full grow divide-y flex flex-col text-sm h-full overflow-y-hidden overflow-x-hidden"] do
+      div_ [class_ "pl-3 py-1 space-x-5 flex flex-row justify-between"] do
+        a_ [class_ "cursor-pointer inline-block pr-3 space-x-2 bg-blue-50 hover:bg-blue-100 blue-800 p-1 rounded-md", [__|on click toggle .hidden on #reqsChartParent|]] do
           img_ [src_ "/assets/svgs/cube-transparent.svg", class_ "w-4 inline-block"]
           span_ [] "toggle chart"
       reqChart reqChartTxt False
-      div_ [class_ "pl-3 py-2 space-x-5 flex flex-row justify-between"] $ do
-        div_ [class_ "inline-block space-x-3"] $ do
+      div_ [class_ "pl-3 py-2 space-x-5 flex flex-row justify-between"] do
+        div_ [class_ "inline-block space-x-3"] do
           strong_ "Query results"
-          span_ [class_ "space-x-1"] $ do
+          span_ [class_ "space-x-1"] do
             span_ [id_ "result-count"] $ show resultCount
             span_ " log entries"
         a_
@@ -323,20 +321,20 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
           , hxSwap_ "innerHTML scroll:#log-item-table-body:top"
           , hxIndicator_ "#query-indicator"
           ]
-          $ do
+          do
             svg_ [class_ "w-4 h-4 icon text-slate-500 inline-block"] $ use_ [href_ "/assets/svgs/sprite/sprite.svg#refresh"]
             span_ [] "refresh"
 
       jsonTreeAuxillaryCode pid
-      div_ [class_ "table-fixed grow w-full min-w-full h-full divide-y flex flex-col monospace overflow-hidden"] $ do
-        div_ [class_ "text-xs bg-gray-100 gray-400"] $ do
-          div_ [class_ "flex flex-row text-left space-x-4"] $ do
+      div_ [class_ "table-fixed grow w-full min-w-full h-full divide-y flex flex-col monospace overflow-hidden"] do
+        div_ [class_ "text-xs bg-gray-100 gray-400"] do
+          div_ [class_ "flex flex-row text-left space-x-4"] do
             span_ [class_ "font-normal inline-block py-1.5 p-1 px-2 w-8"] ""
             span_ [class_ "font-normal inline-block py-1.5 p-1 px-2 w-36"] "TIMESTAMP"
             span_ [class_ "font-normal inline-block py-1.5 p-1 px-2 grow"] "SUMMARY"
-        div_ [class_ "htmx-indicator query-indicator", id_ "query-indicator"] $ do
+        div_ [class_ "htmx-indicator query-indicator", id_ "query-indicator"] do
           loader
-        div_ [class_ "grow overflow-y-scroll h-full whitespace-nowrap text-sm divide-y overflow-x-hidden", id_ "log-item-table-body"] $ do
+        div_ [class_ "grow overflow-y-scroll h-full whitespace-nowrap text-sm divide-y overflow-x-hidden", id_ "log-item-table-body"] do
           logItemRows pid requests cols nextLogsURL
   script_
     [text|
@@ -384,7 +382,7 @@ function expireChanged(event) {
   |]
 reqChart :: Text -> Bool -> Html ()
 reqChart reqChartTxt hxOob = do
-  div_ [id_ "reqsChartParent", class_ "p-5", hxSwapOob_ $ show hxOob] $ do
+  div_ [id_ "reqsChartParent", class_ "p-5", hxSwapOob_ $ show hxOob] do
     div_ [id_ "reqsChartsEC", class_ "", style_ "height:100px"] ""
     script_
       [text| throughputEChart("reqsChartsEC", $reqChartTxt, [], true) |]
@@ -401,20 +399,20 @@ logItemRows pid requests cols nextLogsURL = do
       , term "data-log-item-path" logItemPath
       , [__|on click LogItemExpandable(me)|]
       ]
-      $ do
-        div_ [class_ "flex-none inline-block w-8 flex justify-between items-center"] $ do
+      do
+        div_ [class_ "flex-none inline-block w-8 flex justify-between items-center"] do
           a_ [hxGet_ logItemEndpointUrl, term "data-tippy-content" "Go to endpoint", onclick_ "noPropa(event)"] do
             img_ [src_ "/assets/svgs/link.svg", class_ "w-3.5 mr-2", style_ "margin-right: 5px"]
           img_ [src_ "/assets/svgs/cheveron-right.svg", class_ "w-1.5 log-chevron"]
         div_ [class_ "flex-none inline-block p-1 px-2 w-36 overflow-hidden"] $ toHtml @String $ formatTime defaultTimeLocale "%F %T" (req ^. #createdAt)
-        div_ [class_ "inline-block p-1 px-2 grow"] $ do
+        div_ [class_ "inline-block p-1 px-2 grow"] do
           let reqJSON = AE.toJSON req
           let colValues = concatMap (\col -> findValueByKeyInJSON (T.splitOn "." col) reqJSON) cols
           -- FIXME: probably inefficient implementation and should be optimized
           zip cols colValues
             & traverse_
               \(col, colValue) ->
-                div_ [class_ "relative inline-block log-item-field-parent", term "data-field-path" col] $ do
+                div_ [class_ "relative inline-block log-item-field-parent", term "data-field-path" col] do
                   a_
                     [ class_ "cursor-pointer mx-1 inline-block bg-blue-100 hover:bg-blue-200 blue-900 px-3 rounded-xl monospace log-item-field-anchor log-item-field-value"
                     , term "data-field-path" col
@@ -452,7 +450,7 @@ apiLogItemView :: RequestDumps.RequestDumpLogItem -> Text -> Html ()
 apiLogItemView req expandItemPath = do
   div_ [class_ "log-item-info border-l-blue-200 border-l-4"]
     $ div_ [class_ "pl-4 py-1 ", colspan_ "3"]
-    $ do
+    do
       button_
         [ class_ "px-2 rounded text-white bg-blue-500 text-sm font-semibold expand-button"
         , term "data-log-item-path" (expandItemPath <> "/detailed")
@@ -482,21 +480,21 @@ jsonValueToHtmlTree val = jsonValueToHtmlTree' ("", "", val)
         , term "data-field-path" fullFieldPath'
         ]
         $ a_ [class_ "block hover:bg-blue-50 cursor-pointer pl-6 relative log-item-field-anchor ", [__|install LogItemMenuable|]]
-        $ do
+        do
           span_ $ toHtml key
           span_ [class_ "text-blue-800"] ":"
           span_ [class_ "text-blue-800 ml-2.5 log-item-field-value", term "data-field-path" fullFieldPath'] $ toHtml $ unwrapJsonPrimValue value
 
     renderParentType :: Text -> Text -> Text -> Int -> Html () -> Html ()
-    renderParentType opening closing key count child = div_ [class_ (if key == "" then "" else "collapsed")] $ do
+    renderParentType opening closing key count child = div_ [class_ (if key == "" then "" else "collapsed")] do
       a_
         [ class_ "inline-block cursor-pointer"
         , onclick_ "this.parentNode.classList.toggle('collapsed')"
         ]
-        $ do
+        do
           span_ [class_ "log-item-tree-chevron "] "▾"
           span_ [] $ toHtml $ if key == "" then opening else key <> ": " <> opening
-      div_ [class_ "pl-5 children "] $ do
+      div_ [class_ "pl-5 children "] do
         span_ [class_ "tree-children-count"] $ show count
         div_ [class_ "tree-children"] child
       span_ [class_ "pl-5 closing-token"] $ toHtml closing
@@ -518,9 +516,9 @@ findValueByKeyInJSON _ _ = ["_"]
 -- TODO:
 jsonTreeAuxillaryCode :: Projects.ProjectId -> Html ()
 jsonTreeAuxillaryCode pid = do
-  template_ [id_ "log-item-context-menu-tmpl"] $ do
-    div_ [id_ "log-item-context-menu", class_ "log-item-context-menu text-sm origin-top-right absolute left-0 mt-2 w-56 rounded-md shadow-md shadow-slate-300 bg-white ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 focus:outline-none z-10", role_ "menu", tabindex_ "-1"] $ do
-      div_ [class_ "py-1", role_ "none"] $ do
+  template_ [id_ "log-item-context-menu-tmpl"] do
+    div_ [id_ "log-item-context-menu", class_ "log-item-context-menu text-sm origin-top-right absolute left-0 mt-2 w-56 rounded-md shadow-md shadow-slate-300 bg-white ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 focus:outline-none z-10", role_ "menu", tabindex_ "-1"] do
+      div_ [class_ "py-1", role_ "none"] do
         a_
           [ class_ "cursor-pointer text-gray-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-gray-900"
           , role_ "menuitem"
