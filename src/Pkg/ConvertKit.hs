@@ -6,6 +6,7 @@ import Data.Aeson.QQ (aesonQQ)
 import Network.Wreq
 import Relude
 
+
 -- Function to add user to ConvertKit
 addUser :: Text -> Text -> Text -> Text -> Text -> Text -> Text -> IO ()
 addUser apiKey email firstName lastName orgId orgName plan = do
@@ -24,6 +25,7 @@ addUser apiKey email firstName lastName orgId orgName plan = do
         |]
   let subscriberId = r ^? responseBody . key "subscription" . key "subscriber" . key "id" . _String
   pass
+
 
 addUserOrganization :: Text -> Text -> Text -> Text -> Text -> IO ()
 addUserOrganization apiKey email orgID orgName orgPlan = do

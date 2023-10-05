@@ -16,31 +16,44 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pages.NonMember
 import Relude
-import Utils (redirect, faIcon_)
+import Utils (
+  faIcon_,
+  redirect,
+  userIsProjectMember,
+ )
+
 
 onboardingGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 onboardingGetH sess pid = do
   pool <- asks pool
-  (project, hasApikeys, hasRequest) <- liftIO $
-    withPool pool $ do
-      project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      apiKeys <- ProjectApiKeys.countProjectApiKeysByProjectId pid
-      requestDumps <- RequestDumps.countRequestDumpByProject pid
-      pure (project, apiKeys > 0, requestDumps > 0)
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = project
-          , pageTitle = "Get started"
-          }
-  let ans = case project of
-        Nothing -> False
-        Just p -> case p.questions of
-          Just v -> True
-          _ -> False
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      (project, hasApikeys, hasRequest) <- liftIO
+        $ withPool pool
+        $ do
+          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+          apiKeys <- ProjectApiKeys.countProjectApiKeysByProjectId pid
+          requestDumps <- RequestDumps.countRequestDumpByProject pid
+          pure (project, apiKeys > 0, requestDumps > 0)
+      let bwconf =
+            (def :: BWConfig)
+              { sessM = Just sess
+              , currProject = project
+              , pageTitle = "Get started"
+              }
+      let ans = case project of
+            Nothing -> False
+            Just p -> case p.questions of
+              Just v -> True
+              _ -> False
 
-  pure $ bodyWrapper bwconf $ onboardingPage pid hasApikeys hasRequest ans
+      pure $ bodyWrapper bwconf $ onboardingPage pid hasApikeys hasRequest ans
+
 
 onboardingPage :: Projects.ProjectId -> Bool -> Bool -> Bool -> Html ()
 onboardingPage pid hasApikey hasRequest ans = do
@@ -175,6 +188,7 @@ function changeTab(tabId) {
 }
   |]
 
+
 generateApikey :: Projects.ProjectId -> Html ()
 generateApikey pid =
   div_ [class_ "w-[800px] bg-slate-200 mx-auto rounded-lg border-8 border-white shadow-lg mb-10"] do
@@ -203,6 +217,7 @@ generateApikey pid =
               div_ [class_ "mt-5 sm:mt-4 sm:flex sm:flex-row-reverse"] $ do
                 button_ [type_ "submit", class_ "w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 sm:ml-3 sm:w-auto sm:text-sm"] "Submit"
 
+
 integrateApiToolkit :: Html ()
 integrateApiToolkit =
   div_ [class_ "w-[800px] bg-slate-200 mx-auto rounded-lg border-8 border-white shadow-lg mb-10"] do
@@ -223,6 +238,7 @@ integrateApiToolkit =
         tabContentDotNet
         tabContentFastify
 
+
 completedBanner :: Projectjs.ProjectId -> Html ()
 completedBanner pid =
   div_ [class_ "w-[800px] bg-slate-200 mx-auto rounded-lg border-8 border-white shadow-lg mb-10"] do
@@ -231,8 +247,10 @@ completedBanner pid =
         span_ [class_ "text-blue-500 pr-4 border-r border-r-2 border-r-blue-500 text-2xl"] "Done"
         h3_ [class_ "font-bold text-2xl"] "Onboarding Completed"
       div_ [class_ "pb-2 flex items-center mt-8 flex-col gap-4 text-blue-500 font-medium"] do
-        a_ [href_ $ "/p/" <> pid.toText <> "/"] "Go to the dashboard"
-        faIcon_ "fa-circle-check" "fa-sharp fa-regular fa-circle-check" "h-24 w-24 text-green-700"
+        a_ [href_ $ "/p/" <> pid.toText <> "/"] do
+          "Go to the dashboard"
+          faIcon_ "fa-circle-check" "fa-sharp fa-regular fa-circle-check" "h-24 w-24 text-green-700"
+
 
 tabContentExpress :: Html ()
 tabContentExpress =
@@ -270,6 +288,7 @@ tabContentExpress =
                     "});"
 
                     "    "
+
 
 tabContentGin :: Html ()
 tabContentGin =
@@ -315,6 +334,7 @@ tabContentGin =
                     "router." >> span_ [class_ "hljs-title"] "POST" >> "(" >> span_ [class_ "hljs-string"] "\"/:slug/test\"" >> ", " >> span_ [class_ "hljs-keyword"] "func" >> "(c *gin.Context)" >> " {" >> " c.String" >> "(" >> span_ [class_ "hljs-number"] "200" >> ", " >> span_ [class_ "hljs-string"] "\"ok\"" >> ")" >> " })" >> "\n"
                     span_ [class_ "hljs-comment"] "// Rest of your app..." >> "\n"
 
+
 tabContentLaravel :: Html ()
 tabContentLaravel =
   div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "laravel_content"] $ do
@@ -355,6 +375,7 @@ tabContentLaravel =
                     span_ [class_ ""] "    ];" >> "\n\n"
                     span_ [class_ "hljs-comment"] "    // ..." >> "\n" >> "}"
 
+
 tabContentSymfony :: Html ()
 tabContentSymfony =
   div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "symfony_content"] $ do
@@ -388,6 +409,7 @@ tabContentSymfony =
                     span_ [class_ "hljs-bullet"] "            -" >> " " >> span_ [class_ "hljs-attr"] "setCachePool:" >> " [" >> span_ [class_ "hljs-string"] "'@PutYourCachePoolServiceHere'" >> "]" >> "\n"
                     span_ [class_ "hljs-attr"] "        tags:" >> "\n"
                     span_ [class_ "hljs-bullet"] "            -" >> " { " >> span_ [class_ "hljs-attr"] "name:" >> " " >> span_ [class_ "hljs-string"] "'kernel.event_subscriber'" >> " }"
+
 
 tabContentDotNet :: Html ()
 tabContentDotNet =
@@ -454,10 +476,11 @@ tabContentDotNet =
                       >> "\n"
                     span_ [class_ ""] ");"
 
+
 tabContentFastify :: Html ()
 tabContentFastify =
-  div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "fastify_content"] $
-    do
+  div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "fastify_content"]
+    $ do
       div_ [class_ "relative"] $ do
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
@@ -498,8 +521,8 @@ tabContentFastify =
                       span_ [class_ ""] "});"
 tabContentFlask :: Html ()
 tabContentFlask =
-  div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "flask_content"] $
-    do
+  div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "flask_content"]
+    $ do
       div_ [class_ "relative"] $ do
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
@@ -553,10 +576,11 @@ tabContentFlask =
                       br_ []
                       span_ [] "app.run(debug=" >> span_ [class_ "hljs-keyword"] "True" >> ")"
 
+
 tabContentFastAPI :: Html ()
 tabContentFastAPI =
-  div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "fastapi_content"] $
-    do
+  div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "fastapi_content"]
+    $ do
       div_ [class_ "relative"] $ do
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
@@ -607,10 +631,11 @@ tabContentFastAPI =
                       span_ [class_ "hljs-keyword"] "     return " >> "{" >> span_ [class_ "hljs-string"] "\"Hello\"" >> ": " >> span_ [class_ "hljs-string"] "\"Hello world\"}"
                       br_ []
 
+
 tabContentDjango :: Html ()
 tabContentDjango =
-  div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "django_content"] $
-    do
+  div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "django_content"]
+    $ do
       div_ [class_ "relative"] $ do
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
@@ -637,6 +662,7 @@ tabContentDjango =
                       span_ [class_ "hljs-string"] "    'apitoolkit.APIToolkit'" >> ",\n"
                       span_ [] "   ...\n"
                       span_ [] "]"
+
 
 tabs :: Html ()
 tabs =

@@ -30,6 +30,7 @@ import Pages.BodyWrapper
 import Pages.Charts.Charts qualified as C
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (statBox)
+import Pages.NonMember
 import Relude hiding (max, min)
 import Servant (
   Union,
@@ -38,8 +39,9 @@ import Servant (
  )
 import System.Clock
 import Text.Interpolation.Nyan
-import Utils (GetOrRedirect, deleteParam, mIcon_, redirect, faIcon_)
+import Utils (GetOrRedirect, deleteParam, faIcon_, mIcon_, redirect, userIsProjectMember)
 import Witch (from)
+
 
 timePickerItems :: [(Text, Text)]
 timePickerItems =
@@ -49,6 +51,7 @@ timePickerItems =
   , ("14D", "Last 14 days")
   ]
 
+
 data ParamInput = ParamInput
   { currentURL :: Text
   , sinceStr :: Maybe Text
@@ -56,58 +59,66 @@ data ParamInput = ParamInput
   , currentPickerTxt :: Text
   }
 
+
 dashboardGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Union GetOrRedirect)
 dashboardGetH sess pid fromDStr toDStr sinceStr' = do
   pool <- asks pool
-  now <- liftIO getCurrentTime
-  let sinceStr = if isNothing fromDStr && isNothing toDStr && isNothing sinceStr' || fromDStr == Just "" then Just "14D" else sinceStr'
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      respond $ WithStatus @200 $ userNotMemeberPage sess
+    else do
+      now <- liftIO getCurrentTime
+      let sinceStr = if isNothing fromDStr && isNothing toDStr && isNothing sinceStr' || fromDStr == Just "" then Just "7D" else sinceStr'
+      (hasApikeys, hasRequest) <- liftIO
+        $ withPool pool
+        $ do
+          apiKeys <- ProjectApiKeys.countProjectApiKeysByProjectId pid
+          requestDumps <- RequestDumps.countRequestDumpByProject pid
+          pure (apiKeys > 0, requestDumps > 0)
+      -- TODO: Replace with a duration parser.
+      let (fromD, toD) = case sinceStr of
+            Just "1H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just $ utcToZonedTime utc now)
+            Just "24H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just $ utcToZonedTime utc now)
+            Just "7D" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 7) now, Just $ utcToZonedTime utc now)
+            Just "14D" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 14) now, Just $ utcToZonedTime utc now)
+            Nothing -> do
+              let f = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromDStr) :: Maybe UTCTime)
+              let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
+              (f, t)
+            _ -> do
+              let f = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromDStr) :: Maybe UTCTime)
+              let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
+              (f, t)
 
-  (hasApikeys, hasRequest) <- liftIO $
-    withPool pool $ do
-      apiKeys <- ProjectApiKeys.countProjectApiKeysByProjectId pid
-      requestDumps <- RequestDumps.countRequestDumpByProject pid
-      pure (apiKeys > 0, requestDumps > 0)
-  -- TODO: Replace with a duration parser.
-  let (fromD, toD) = case sinceStr of
-        Just "1H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just $ utcToZonedTime utc now)
-        Just "24H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just $ utcToZonedTime utc now)
-        Just "7D" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 7) now, Just $ utcToZonedTime utc now)
-        Just "14D" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 14) now, Just $ utcToZonedTime utc now)
-        Nothing -> do
-          let f = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromDStr) :: Maybe UTCTime)
-          let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
-          (f, t)
-        _ -> do
-          let f = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromDStr) :: Maybe UTCTime)
-          let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
-          (f, t)
+      startTime <- liftIO $ getTime Monotonic
+      (project, projectRequestStats, reqLatenciesRolledByStepsLabeled) <- liftIO
+        $ withPool pool
+        $ do
+          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
 
-  startTime <- liftIO $ getTime Monotonic
-  (project, projectRequestStats, reqLatenciesRolledByStepsLabeled) <- liftIO $
-    withPool pool $ do
-      project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+          projectRequestStats <- fromMaybe (def :: Projects.ProjectRequestStats) <$> Projects.projectRequestStatsByProject pid
+          let maxV = round projectRequestStats.p99 :: Int
+          let steps' = (maxV `quot` 100) :: Int
+          let steps = if steps' == 0 then 100 else steps'
+          reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledByStepsForProject maxV steps pid (fromD, toD)
+          pure (project, projectRequestStats, Vector.toList reqLatenciesRolledBySteps)
 
-      projectRequestStats <- fromMaybe (def :: Projects.ProjectRequestStats) <$> Projects.projectRequestStatsByProject pid
-      let maxV = round (projectRequestStats.p99) :: Int
-      let steps' = (maxV `quot` 100) :: Int
-      let steps = if steps' == 0 then 100 else steps'
-      reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledByStepsForProject maxV steps pid (fromD, toD)
-      pure (project, projectRequestStats, Vector.toList reqLatenciesRolledBySteps)
+      let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
+      let bwconf =
+            (def :: BWConfig)
+              { sessM = Just sess
+              , currProject = project
+              , pageTitle = "Dashboard"
+              }
+      currTime <- liftIO getCurrentTime
+      let currentURL = "/p/" <> pid.toText <> "?&from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
+      let currentPickerTxt = fromMaybe (maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD) sinceStr
+      let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt}
+      if not hasApikeys || not hasRequest
+        then respond $ WithStatus @302 $ redirect ("/p/" <> pid.toText <> "/onboarding")
+        else respond $ WithStatus @200 $ bodyWrapper bwconf $ dashboardPage pid paramInput currTime projectRequestStats reqLatenciesRolledByStepsJ (fromD, toD)
 
-  let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = project
-          , pageTitle = "Dashboard"
-          }
-  currTime <- liftIO getCurrentTime
-  let currentURL = "/p/" <> pid.toText <> "?&from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
-  let currentPickerTxt = fromMaybe (maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD) sinceStr
-  let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt}
-  if not hasApikeys || not hasRequest
-    then respond $ WithStatus @302 $ redirect ("/p/" <> pid.toText <> "/onboarding")
-    else respond $ WithStatus @200 $ bodyWrapper bwconf $ dashboardPage pid paramInput currTime projectRequestStats reqLatenciesRolledByStepsJ (fromD, toD)
 
 dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 dashboardPage pid paramInput currTime projectStats reqLatenciesRolledByStepsJ dateRange = do
@@ -137,7 +148,7 @@ dashboardPage pid paramInput currTime projectStats reqLatenciesRolledByStepsJ da
             div_ [id_ "startTime", class_ "hidden"] ""
 
     -- button_ [class_ "", id_ "checkin", onclick_ "window.picker.show()"] "timepicker"
-    section_ $ AnomaliesList.anomalyListSlider currTime (projectStats.projectId) Nothing Nothing
+    section_ $ AnomaliesList.anomalyListSlider currTime projectStats.projectId Nothing Nothing
     dStats pid projectStats reqLatenciesRolledByStepsJ dateRange
   script_
     [text|
@@ -166,6 +177,7 @@ dashboardPage pid paramInput currTime projectStats reqLatenciesRolledByStepsJ da
     window.picker = picker;
     |]
 
+
 dStats :: Projects.ProjectId -> Projects.ProjectRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledByStepsJ dateRange@(fromD, toD) = do
   let _ = min
@@ -177,17 +189,17 @@ dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledBySte
 
   section_ [class_ "space-y-3"] $ do
     div_ [class_ "flex justify-between mt-4"] $ div_ [class_ "flex flex-row"] $ do
-      a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]] $
-        faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 w-4 inline-block"
+      a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
+        $ faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 w-4 inline-block"
       span_ [class_ "text-lg text-slate-700"] "Analytics"
 
     div_ [class_ "reqResSubSection space-y-5"] $ do
       div_ [class_ "grid grid-cols-5 gap-5"] $ do
-        statBox  (Just pid) "Requests" "Total requests in the last 2 weeks" (projReqStats.totalRequests) Nothing
-        statBox  (Just pid) "Anomalies" "Total anomalies still active this week vs last week" projReqStats.totalAnomalies (Just projReqStats.totalAnomaliesLastWeek)
-        statBox  (Just pid) "Endpoints" "Total endpoints now vs last week" projReqStats.totalEndpoints (Just projReqStats.totalEndpointsLastWeek)
-        statBox  (Just pid) "Signatures" "Total request signatures which are active now vs last week" projReqStats.totalShapes (Just projReqStats.totalShapesLastWeek)
-        statBox  (Just pid) "Requests per minutes" "Total requests per minute this week vs last week" projReqStats.requestsPerMin (Just projReqStats.requestsPerMinLastWeek)
+        statBox (Just pid) "Requests" "Total requests in the last 2 weeks" projReqStats.totalRequests Nothing
+        statBox (Just pid) "Anomalies" "Total anomalies still active this week vs last week" projReqStats.totalAnomalies (Just projReqStats.totalAnomaliesLastWeek)
+        statBox (Just pid) "Endpoints" "Total endpoints now vs last week" projReqStats.totalEndpoints (Just projReqStats.totalEndpointsLastWeek)
+        statBox (Just pid) "Signatures" "Total request signatures which are active now vs last week" projReqStats.totalShapes (Just projReqStats.totalShapesLastWeek)
+        statBox (Just pid) "Requests per minutes" "Total requests per minute this week vs last week" projReqStats.requestsPerMin (Just projReqStats.requestsPerMinLastWeek)
 
       div_ [class_ "flex gap-5"] do
         div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] $ do
@@ -228,14 +240,15 @@ dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledBySte
           div_ [class_ "col-span-2 space-y-4 "] $ do
             span_ [class_ "block text-right"] "Latency Percentiles"
             ul_ [class_ "space-y-1 divide-y divide-slate-100"] $ do
-              percentileRow "max" $ projReqStats.max
-              percentileRow "p99" $ projReqStats.p99
-              percentileRow "p95" $ projReqStats.p95
-              percentileRow "p90" $ projReqStats.p90
-              percentileRow "p75" $ projReqStats.p75
-              percentileRow "p50" $ projReqStats.p50
-              percentileRow "min" $ projReqStats.min
+              percentileRow "max" projReqStats.max
+              percentileRow "p99" projReqStats.p99
+              percentileRow "p95" projReqStats.p95
+              percentileRow "p90" projReqStats.p90
+              percentileRow "p75" projReqStats.p75
+              percentileRow "p50" projReqStats.p50
+              percentileRow "min" projReqStats.min
         script_ [int|| latencyHistogram('reqsLatencyHistogram',{p50:#{p50}, p75:#{p75}, p90:#{p90}, p95:#{p95}, p99:#{p99}, max:#{max}},  #{reqLatenciesRolledByStepsJ}) |]
+
 
 percentileRow :: Text -> Double -> Html ()
 percentileRow key p = do
@@ -245,6 +258,7 @@ percentileRow key p = do
     span_ [class_ "inline-block font-mono"] $ do
       span_ [class_ "tabular-nums"] $ toHtml d
       span_ $ toHtml unit
+
 
 fmtDuration :: Double -> (Text, Text)
 fmtDuration d

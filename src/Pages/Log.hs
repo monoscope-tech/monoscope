@@ -1,10 +1,11 @@
-module Pages.Log (apiLog, apiLogItem, expandAPIlogItem, expandAPIlogItem') where
+module Pages.Log (apiLog, apiLogItem, logItemRows, expandAPIlogItem, expandAPIlogItem') where
 
 import Config
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEK
 import Data.ByteString.Lazy qualified as BS
 import Data.Default (def)
+import Data.Digest.XXHash
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
 import Data.Time (ZonedTime, defaultTimeLocale)
@@ -18,24 +19,28 @@ import Fmt
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
-import Lucid.Svg (d_, fill_, path_, use_, viewBox_)
+import Lucid.Svg (d_, fill_, path_, title_, use_, viewBox_)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
+import Numeric (showHex)
 import Optics.Core ((^.))
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
+import Pages.NonMember
 import Pkg.Components (loader)
 import Relude
 
 import System.Clock
-import Utils (getMethodColor, getStatusColor, mIcon_)
+import Utils
+
 
 -- $setup
 -- >>> import Relude
 -- >>> import Data.Vector qualified as Vector
 -- >>> import Data.Aeson.QQ (aesonQQ)
 -- >>> import Data.Aeson
+
 
 apiLog :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
 apiLog sess pid queryM cols' fromM hxRequestM hxBoostedM = do
@@ -47,45 +52,58 @@ apiLog sess pid queryM cols' fromM hxRequestM hxBoostedM = do
         Just a -> Just a
 
   pool <- asks pool
-  (project, requests) <- liftIO $
-    withPool pool $ do
-      project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      requests <- RequestDumps.selectRequestDumpByProject pid query fromM'
-      pure (project, requests)
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      (project, requests) <- liftIO
+        $ withPool pool
+        $ do
+          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+          requests <- RequestDumps.selectRequestDumpByProject pid query fromM'
+          pure (project, requests)
 
-  reqChartTxt <- liftIO $ withPool pool $ RequestDumps.throughputBy pid Nothing Nothing Nothing Nothing Nothing (3 * 60) Nothing queryM (Nothing, Nothing)
-  let reqLastCreatedAtM = (^. #createdAt) <$> viaNonEmpty last (Vector.toList requests) -- FIXME: unoptimal implementation, converting from vector to list for last
-  let fromTempM = toText . formatTime defaultTimeLocale "%F %T" <$> reqLastCreatedAtM
-  let nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' fromTempM
+      reqChartTxt <- liftIO $ withPool pool $ RequestDumps.throughputBy pid Nothing Nothing Nothing Nothing Nothing (3 * 60) Nothing queryM (Nothing, Nothing)
+      let reqLastCreatedAtM = (^. #createdAt) <$> viaNonEmpty last (Vector.toList requests) -- FIXME: unoptimal implementation, converting from vector to list for last
+      let fromTempM = toText . formatTime defaultTimeLocale "%F %T" <$> reqLastCreatedAtM
+      let nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' fromTempM
 
-  let resultCount = maybe 0 (^. #fullCount) (requests !? 0)
-  case (hxRequestM, hxBoostedM) of
-    (Just "true", Nothing) -> pure $ do
-      span_ [id_ "result-count", hxSwapOob_ "outerHTML"] $ show resultCount
-      reqChart reqChartTxt True
-      logItemRows pid requests cols nextLogsURL
-    _ -> do
-      let bwconf =
-            (def :: BWConfig)
-              { sessM = Just sess
-              , currProject = project
-              , pageTitle = "API Log Explorer"
-              }
-      let resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing
-      pure $ bodyWrapper bwconf $ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL
+      let resultCount = maybe 0 (^. #fullCount) (requests !? 0)
+      case (hxRequestM, hxBoostedM) of
+        (Just "true", Nothing) -> pure $ do
+          span_ [id_ "result-count", hxSwapOob_ "outerHTML"] $ show resultCount
+          reqChart reqChartTxt True
+          logItemRows pid requests cols nextLogsURL
+        _ -> do
+          let bwconf =
+                (def :: BWConfig)
+                  { sessM = Just sess
+                  , currProject = project
+                  , pageTitle = "API Log Explorer"
+                  }
+          let resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing
+          pure $ bodyWrapper bwconf $ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL
+
 
 apiLogItem :: Sessions.PersistentSession -> Projects.ProjectId -> UUID.UUID -> ZonedTime -> DashboardM (Html ())
 apiLogItem sess pid rdId createdAt = do
   pool <- asks pool
-  startTime <- liftIO $ getTime Monotonic
-  logItemM <- liftIO $ withPool pool $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
-  afterProccessing <- liftIO $ getTime Monotonic
-  let content = case logItemM of
-        Just req -> apiLogItemView req (RequestDumps.requestDumpLogItemUrlPath pid req)
-        Nothing -> div_ "invalid log request ID"
-  endTime <- liftIO $ getTime Monotonic
-  liftIO $ putStrLn $ fmtLn $ " APILOG pipeline microsecs: queryDuration " +| (toNanoSecs (diffTimeSpec startTime afterProccessing)) `div` 1000 |+ " -> processingDuration " +| toNanoSecs (diffTimeSpec afterProccessing endTime) `div` 1000 |+ " -> TotalDuration " +| toNanoSecs (diffTimeSpec startTime endTime) `div` 1000 |+ ""
-  pure content
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      startTime <- liftIO $ getTime Monotonic
+      logItemM <- liftIO $ withPool pool $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
+      afterProccessing <- liftIO $ getTime Monotonic
+      let content = case logItemM of
+            Just req -> apiLogItemView req (RequestDumps.requestDumpLogItemUrlPath pid req)
+            Nothing -> div_ "invalid log request ID"
+      endTime <- liftIO $ getTime Monotonic
+      liftIO $ putStrLn $ fmtLn $ " APILOG pipeline microsecs: queryDuration " +| toNanoSecs (diffTimeSpec startTime afterProccessing) `div` 1000 |+ " -> processingDuration " +| toNanoSecs (diffTimeSpec afterProccessing endTime) `div` 1000 |+ " -> TotalDuration " +| toNanoSecs (diffTimeSpec startTime endTime) `div` 1000 |+ ""
+      pure content
+
 
 expandAPIlogItem :: Sessions.PersistentSession -> Projects.ProjectId -> UUID.UUID -> ZonedTime -> DashboardM (Html ())
 expandAPIlogItem sess pid rdId createdAt = do
@@ -99,18 +117,19 @@ expandAPIlogItem sess pid rdId createdAt = do
           p_ [] "Request not found"
   pure content
 
+
 expandAPIlogItem' :: RequestDumps.RequestDumpLogItem -> Bool -> Html ()
 expandAPIlogItem' req modal = do
   div_ [class_ "flex flex-col w-full pb-[100px]"] $ do
     div_ [class_ "w-full flex flex-col gap-2 gap-4"] do
-      let methodColor = "bg-" <> getMethodColor req.method
-      let statusColor = "text-" <> getStatusColor req.statusCode
+      let methodColor = getMethodBgColor req.method
+      let statusColor = getStatusColor req.statusCode
       div_ [class_ "flex gap-4 items-center"] do
         div_ [class_ $ "text-white font-semibold px-2 py-1 rounded min-w-[70px] text-center " <> methodColor] $ toHtml req.method
         div_ [class_ $ "text-lg font-bold px-2 " <> statusColor] $ show req.statusCode
         div_ [class_ "flex border border-gray-200 m-1 rounded-xl p-2"] $ do
           mIcon_ "calender" "h-4 mr-2 w-4"
-          span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" (req.createdAt)
+          span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" req.createdAt
       if modal
         then do
           div_
@@ -240,6 +259,7 @@ expandAPIlogItem' req modal = do
       div_ [class_ "bg-gray-50 m-4 p-2 hidden rounded-lg border sdk_tab_content", id_ "res_headers_json"] do
         jsonValueToHtmlTree req.responseHeaders
 
+
 apiLogsPage :: Projects.ProjectId -> Int -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Text -> Text -> Text -> Html ()
 apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL = do
   section_ [class_ "mx-auto px-10 py-2 gap-2 flex flex-col h-[98%] overflow-hidden "] $ do
@@ -263,7 +283,7 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
             do
               input_ [type_ "hidden", value_ "1 hour", name_ "expiresIn", id_ "expire_input"]
               input_ [type_ "hidden", value_ "", name_ "reqId", id_ "req_id_input"]
-          div_ [id_ "log-modal-content-loader", class_ "bg-white rounded-log shadow p-4 absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2"] do
+          div_ [id_ "log-modal-content-loader", class_ "bg-white rounded-lg shadow p-4 absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2"] do
             loader
           div_ [class_ "px-2", id_ "log-modal-content"] pass
     form_
@@ -369,21 +389,22 @@ reqChart reqChartTxt hxOob = do
     script_
       [text| throughputEChart("reqsChartsEC", $reqChartTxt, [], true) |]
 
+
 logItemRows :: Projects.ProjectId -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Text -> Html ()
 logItemRows pid requests cols nextLogsURL = do
   requests & traverse_ \req -> do
     let logItemPath = RequestDumps.requestDumpLogItemUrlPath pid req
+    let endpoint_hash = toText $ showHex (xxHash $ encodeUtf8 $ UUID.toText pid.unProjectId <> T.toUpper req.method <> req.urlPath) ""
+    let logItemEndpointUrl = "/p/" <> pid.toText <> "/log_explorer/endpoint/" <> endpoint_hash
     div_
       [ class_ "flex flex-row border-l-4 border-l-transparent divide-x space-x-4 hover:bg-blue-50 cursor-pointer"
       , term "data-log-item-path" logItemPath
-      , term
-          "_"
-          [text|
-            install LogItemExpandable
-        |]
+      , [__|on click LogItemExpandable(me)|]
       ]
       $ do
-        div_ [class_ "flex-none inline-block p-1 px-2 w-8 flex justify-center align-middle"] $ do
+        div_ [class_ "flex-none inline-block w-8 flex justify-between items-center"] $ do
+          a_ [hxGet_ logItemEndpointUrl, term "data-tippy-content" "Go to endpoint", onclick_ "noPropa(event)"] do
+            img_ [src_ "/assets/svgs/link.svg", class_ "w-3.5 mr-2", style_ "margin-right: 5px"]
           img_ [src_ "/assets/svgs/cheveron-right.svg", class_ "w-1.5 log-chevron"]
         div_ [class_ "flex-none inline-block p-1 px-2 w-36 overflow-hidden"] $ toHtml @String $ formatTime defaultTimeLocale "%F %T" (req ^. #createdAt)
         div_ [class_ "inline-block p-1 px-2 grow"] $ do
@@ -415,21 +436,25 @@ logItemRows pid requests cols nextLogsURL = do
 
     div_ [class_ "hidden w-full flex px-2 py-8 justify-center item-loading"] do
       loader
-  a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ nextLogsURL] "LOAD MORE"
+  when (Vector.length requests > 199) $ a_
+    [ class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center"
+    , hxTrigger_ "click"
+    , hxSwap_ "outerHTML"
+    , hxGet_ nextLogsURL
+    ]
+    do
+      div_ [class_ "htmx-indicator query-indicator"] do
+        loader
+      "LOAD MORE"
 
-getMethodBgColor :: Text -> Text
-getMethodBgColor "POST" = " bg-pink-200"
-getMethodBgColor "PUT" = " bg-orange-100"
-getMethodBgColor "DELETE" = " bg-red-100"
-getMethodBgColor "PATCH" = " bg-purple-100"
-getMethodBgColor _ = " bg-blue-100"
 
 apiLogItemView :: RequestDumps.RequestDumpLogItem -> Text -> Html ()
 apiLogItemView req expandItemPath = do
-  div_ [class_ "log-item-info border-l-blue-200 border-l-4"] $
-    div_ [class_ "pl-4 py-1 ", colspan_ "3"] $ do
+  div_ [class_ "log-item-info border-l-blue-200 border-l-4"]
+    $ div_ [class_ "pl-4 py-1 ", colspan_ "3"]
+    $ do
       button_
-        [ class_ "px-2 rounded text-white bg-blue-500 text-sm font-semibold"
+        [ class_ "px-2 rounded text-white bg-blue-500 text-sm font-semibold expand-button"
         , term "data-log-item-path" (expandItemPath <> "/detailed")
         , [__|on click remove .hidden from #expand-log-modal then
                 remove .hidden from #log-modal-content-loader
@@ -440,6 +465,7 @@ apiLogItemView req expandItemPath = do
         ]
         "expand"
       jsonValueToHtmlTree $ AE.toJSON req
+
 
 -- | jsonValueToHtmlTree takes an aeson json object and renders it as a collapsible html tree, with hyperscript for interactivity.
 jsonValueToHtmlTree :: AE.Value -> Html ()
@@ -465,7 +491,7 @@ jsonValueToHtmlTree val = jsonValueToHtmlTree' ("", "", val)
     renderParentType opening closing key count child = div_ [class_ (if key == "" then "" else "collapsed")] $ do
       a_
         [ class_ "inline-block cursor-pointer"
-        , [__|on click toggle .collapsed on the closest parent <div/>|]
+        , onclick_ "this.parentNode.classList.toggle('collapsed')"
         ]
         $ do
           span_ [class_ "log-item-tree-chevron "] "▾"
@@ -475,6 +501,7 @@ jsonValueToHtmlTree val = jsonValueToHtmlTree' ("", "", val)
         div_ [class_ "tree-children"] child
       span_ [class_ "pl-5 closing-token"] $ toHtml closing
 
+
 -- >>> findValueByKeyInJSON ["key1", "key2"] [aesonQQ|{"kx":0, "key1":{"key2":"k2val"}}|]
 -- ["\"k2val\""]
 -- >>> findValueByKeyInJSON ["key1", "[]", "key2"] [aesonQQ|{"kx":0, "key1":[{"key2":"k2val"}]}|]
@@ -483,7 +510,10 @@ findValueByKeyInJSON :: [Text] -> AE.Value -> [Text]
 findValueByKeyInJSON (x : path) (AE.Object obj) = concatMap (\(_, v) -> findValueByKeyInJSON path v) (AEK.toHashMapText obj & HM.toList & filter (\(k, _) -> k == x))
 findValueByKeyInJSON ("[]" : path) (AE.Array vals) = concatMap (findValueByKeyInJSON path) (Vector.toList vals)
 findValueByKeyInJSON [] value = [unwrapJsonPrimValue value]
-findValueByKeyInJSON _ _ = error "findValueByKeyInJSON: case should be unreachable"
+findValueByKeyInJSON _ _ = ["_"]
+
+
+-- findValueByKeyInJSON _ _ = error "findValueByKeyInJSON: case should be unreachable"
 
 -- TODO:
 jsonTreeAuxillaryCode :: Projects.ProjectId -> Html ()
@@ -564,8 +594,7 @@ jsonTreeAuxillaryCode pid = do
         end
       end
 
-      behavior LogItemExpandable
-        on click 
+      def LogItemExpandable(me)
           if I match <.expanded-log/> then 
             remove next <.log-item-info/> then 
             remove .expanded-log from me
@@ -585,6 +614,9 @@ jsonTreeAuxillaryCode pid = do
     var params = () => new Proxy(new URLSearchParams(window.location.search), {
       get: (searchParams, prop) => searchParams.get(prop)??"",
     });
+    function noPropa(event) {
+      event.stopPropagation();
+    }
     var toggleColumnToSummary = (e)=>{
       const cols = (params().cols??"").split(",").filter(x=>x!="");
       const subject = e.target.closest('.log-item-field-parent').dataset.fieldPath; 
@@ -638,11 +670,15 @@ jsonTreeAuxillaryCode pid = do
     .collapsed .closing-token {padding-left:0}
   |]
 
+
 unwrapJsonPrimValue :: AE.Value -> Text
 unwrapJsonPrimValue (AE.Bool True) = "true"
 unwrapJsonPrimValue (AE.Bool False) = "true"
 unwrapJsonPrimValue (AE.String v) = "\"" <> toText v <> "\""
 unwrapJsonPrimValue (AE.Number v) = toText @String $ show v
 unwrapJsonPrimValue AE.Null = "null"
-unwrapJsonPrimValue (AE.Object _) = error "Impossible. unwrapJsonPrimValue should be for primitive types only" -- should never be reached
-unwrapJsonPrimValue (AE.Array _) = error "Impossible. unwrapJsonPrimValue should be for primitive types only" -- should never be reached
+unwrapJsonPrimValue (AE.Object _) = "{..}"
+unwrapJsonPrimValue (AE.Array items) = "[" <> show (length items) <> "]"
+
+-- unwrapJsonPrimValue (AE.Object _) = error "Impossible. unwrapJsonPrimValue should be for primitive types only. got object" -- should never be reached
+-- unwrapJsonPrimValue (AE.Array _) = error "Impossible. unwrapJsonPrimValue should be for primitive types only. got array" -- should never be reached

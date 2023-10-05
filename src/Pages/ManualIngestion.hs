@@ -15,11 +15,13 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pages.NonMember
 import ProcessMessage qualified
 import Relude
 import RequestMessages qualified
 import Utils
 import Web.FormUrlEncoded (FromForm)
+
 
 data RequestMessageForm = RequestMessageForm
   { timestamp :: ZonedTime
@@ -40,6 +42,7 @@ data RequestMessageForm = RequestMessageForm
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
+
 
 reqMsgFormToReqMsg :: UUID.UUID -> RequestMessageForm -> Either Text RequestMessages.RequestMessage
 reqMsgFormToReqMsg pid RequestMessageForm{urlPath, ..} = do
@@ -66,6 +69,7 @@ reqMsgFormToReqMsg pid RequestMessageForm{urlPath, ..} = do
       , ..
       }
 
+
 -- TODO:
 -- - [x] Parse the time to the ZonedTime from string or default to current time.
 -- - [x] use one of duration or durationMicroSecs and derive one from the other, or even get read of 1 of them from the expected input. We can always calculate one from the other
@@ -86,32 +90,44 @@ manualIngestPostH sess pid reqMF = do
   logger <- asks logger
   pool <- asks pool
   env <- asks env
-  projectCache <- asks projectCache
-  project <-
-    liftIO $
-      withPool pool $
-        Projects.selectProjectForUser (Sessions.userId sess, pid)
-  case reqMsgFormToReqMsg (Projects.unProjectId pid) reqMF of
-    Left err -> liftIO $ logger <& "error parsing manualIngestPost req Message; " <> show err
-    Right reqM -> void $ liftIO $ ProcessMessage.processMessages' logger env pool [Right (Just "", reqM)] projectCache
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      projectCache <- asks projectCache
+      project <-
+        liftIO
+          $ withPool pool
+          $ Projects.selectProjectForUser (Sessions.userId sess, pid)
+      case reqMsgFormToReqMsg (Projects.unProjectId pid) reqMF of
+        Left err -> liftIO $ logger <& "error parsing manualIngestPost req Message; " <> show err
+        Right reqM -> void $ liftIO $ ProcessMessage.processMessages' logger env pool [Right (Just "", reqM)] projectCache
 
-  pure manualIngestPage
+      pure manualIngestPage
+
 
 manualIngestGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 manualIngestGetH sess pid = do
   pool <- asks pool
-  project <-
-    liftIO $
-      withPool pool $
-        Projects.selectProjectForUser (Sessions.userId sess, pid)
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      project <-
+        liftIO
+          $ withPool pool
+          $ Projects.selectProjectForUser (Sessions.userId sess, pid)
 
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = project
-          , pageTitle = "ManualIngest"
-          }
-  pure $ bodyWrapper bwconf manualIngestPage
+      let bwconf =
+            (def :: BWConfig)
+              { sessM = Just sess
+              , currProject = project
+              , pageTitle = "ManualIngest"
+              }
+      pure $ bodyWrapper bwconf manualIngestPage
+
 
 manualIngestPage :: Html ()
 manualIngestPage = do
@@ -192,6 +208,7 @@ manualIngestPage = do
         queryParamsEditor.set(pathInitialJsonB)
     |]
 
+
 inputText :: Text -> Text -> Html ()
 inputText title name = do
   div_ $ do
@@ -202,6 +219,7 @@ inputText title name = do
       , id_ name
       , name_ name
       ]
+
 
 inputTextDatalist :: Text -> Text -> [Text] -> Html ()
 inputTextDatalist title name datalist = do
@@ -217,6 +235,7 @@ inputTextDatalist title name datalist = do
     datalist_ [id_ $ name <> "-list"] $ do
       datalist & mapM_ (\it -> option_ [value_ it] $ toHtml it)
 
+
 inputTextArea :: Text -> Text -> Html ()
 inputTextArea title name = do
   div_ $ do
@@ -227,6 +246,7 @@ inputTextArea title name = do
       , name_ name
       ]
       ""
+
 
 inputDatetime :: Text -> Html ()
 inputDatetime name = do
@@ -240,6 +260,7 @@ inputDatetime name = do
       , pattern_ "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}"
       ]
 
+
 inputInt :: Text -> Text -> Int -> Html ()
 inputInt title name value = do
   div_ $ do
@@ -252,6 +273,7 @@ inputInt title name value = do
       , value_ $ show value
       , lang_ "en-150"
       ]
+
 
 httpStatusCodes :: [(Text, Text)]
 httpStatusCodes =

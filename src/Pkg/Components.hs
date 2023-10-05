@@ -4,6 +4,7 @@ import Lucid
 import Lucid.Svg (d_, fill_, path_, viewBox_)
 import Relude
 
+
 loader :: Html ()
 loader =
   div_ [role_ "status"] do

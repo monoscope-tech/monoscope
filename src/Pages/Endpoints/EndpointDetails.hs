@@ -1,7 +1,7 @@
 {-# LANGUAGE TupleSections #-}
 {-# OPTIONS_GHC -Wno-name-shadowing #-}
 
-module Pages.Endpoints.EndpointDetails (endpointDetailsH, fieldDetailsPartialH, fieldsToNormalized) where
+module Pages.Endpoints.EndpointDetails (endpointDetailsH, fieldDetailsPartialH, fieldsToNormalized, endpointDetailsWithHashH) where
 
 import Config
 import Data.Aeson qualified as AE
@@ -23,8 +23,10 @@ import Models.Apis.Endpoints
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields (FieldCategoryEnum)
 import Models.Apis.Fields qualified as Fields
+import Models.Apis.Fields.Types
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.RequestDumps qualified as RequestDumps
+import Models.Apis.Shapes (getShapeFields)
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
@@ -36,11 +38,15 @@ import Pages.Charts.Charts qualified as C
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components
 import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
+import Pages.NonMember
 import Relude hiding (max, min)
 import Relude.Unsafe qualified as Unsafe
+import Servant (Headers, addHeader)
+import Servant.Htmx
 import Text.Interpolation.Nyan (int, rmode')
 import Utils
 import Witch (from)
+
 
 timePickerItems :: [(Text, Text)]
 timePickerItems =
@@ -50,6 +56,7 @@ timePickerItems =
   , ("14D", "Last 14 days")
   ]
 
+
 data ParamInput = ParamInput
   { currentURL :: Text
   , sinceStr :: Maybe Text
@@ -57,18 +64,7 @@ data ParamInput = ParamInput
   , currentPickerTxt :: Text
   , subPage :: Text
   }
-data ShapeWidthFields = ShapeWidthFields
-  { status :: Int
-  , hash :: Text
-  , fieldsMap :: Map FieldCategoryEnum [Fields.Field]
-  }
-  deriving (Show)
 
-getShapeFields :: Shapes.Shape -> Vector Fields.Field -> ShapeWidthFields
-getShapeFields shape fields = ShapeWidthFields{status = shape.statusCode, hash = shape.hash, fieldsMap = fieldM}
-  where
-    matchedFields = Vector.filter (\field -> field.hash `Vector.elem` shape.fieldHashes) fields
-    fieldM = Fields.groupFieldsByCategory matchedFields
 
 subPageMenu :: [(Text, Text)]
 subPageMenu =
@@ -76,17 +72,25 @@ subPageMenu =
   , ("API Docs", "api_docs")
   ]
 
+
 fieldDetailsPartialH :: Sessions.PersistentSession -> Projects.ProjectId -> Fields.FieldId -> DashboardM (Html ())
 fieldDetailsPartialH sess pid fid = do
   pool <- asks pool
-  (fieldsM, formats) <- liftIO $
-    withPool pool $ do
-      field <- Fields.fieldById fid
-      formats <- Formats.formatsByFieldHash (maybe "" (^. #hash) field)
-      pure (field, formats)
-  case fieldsM of
-    Nothing -> pure ""
-    Just field -> pure $ fieldDetailsView field formats
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      (fieldsM, formats) <- liftIO
+        $ withPool pool
+        $ do
+          field <- Fields.fieldById fid
+          formats <- Formats.formatsByFieldHash (maybe "" (^. #hash) field)
+          pure (field, formats)
+      case fieldsM of
+        Nothing -> pure ""
+        Just field -> pure $ fieldDetailsView field formats
+
 
 fieldDetailsView :: Fields.Field -> Vector Formats.Format -> Html ()
 fieldDetailsView field formats = do
@@ -94,29 +98,30 @@ fieldDetailsView field formats = do
   section_ [class_ "space-y-6"] $ do
     div_ $ do
       h6_ [class_ "text-slate-800 text-xs"] "FIELD NAME"
-      h3_ [class_ "text-lg text-slate-800"] $ toHtml $ field.key
+      h3_ [class_ "text-lg text-slate-800"] $ toHtml field.key
     div_ $ do
       h6_ [class_ "text-slate-800 text-xs"] "FIELD PATH"
-      h3_ [class_ "text-base text-slate-800 monospace"] $ toHtml $ field.keyPath
+      h3_ [class_ "text-base text-slate-800 monospace"] $ toHtml field.keyPath
     div_ [class_ "flex flex-row gap-6"] $ do
       div_ $ do
         h6_ [class_ "text-slate-800 text-xs"] "FIELD CATEGORY"
-        h4_ [class_ "text-base text-slate-800"] $ EndpointComponents.fieldCategoryToDisplay $ field.fieldCategory
+        h4_ [class_ "text-base text-slate-800"] $ EndpointComponents.fieldCategoryToDisplay field.fieldCategory
       div_ [class_ ""] $ do
         h6_ [class_ "text-slate-800 text-xs"] "FORMAT OVERRIDE"
-        h4_ [class_ "text-base text-slate-800"] $ toHtml $ fromMaybe "[unset]" (field.fieldTypeOverride)
+        h4_ [class_ "text-base text-slate-800"] $ toHtml $ fromMaybe "[unset]" field.fieldTypeOverride
     div_ $ do
       h5_ [class_ "text-sm text-slate-800"] "DETECTED FIELD FORMATS AND TYPES"
-      div_ [class_ "space-y-2"] $
-        formats & mapM_ \formatV -> do
+      div_ [class_ "space-y-2"]
+        $ formats
+        & mapM_ \formatV -> do
           div_ [class_ "border-l-slate-200 border-l-2 pl-2 py-2"] $ do
             div_ [class_ "flex flex-row gap-9"] $ do
               div_ [class_ "space-y-2"] $ do
                 h6_ [class_ "text-slate-800 text-xs"] "TYPE"
-                h4_ [class_ "text-base text-slate-800"] $ EndpointComponents.fieldTypeToDisplay $ formatV.fieldType
+                h4_ [class_ "text-base text-slate-800"] $ EndpointComponents.fieldTypeToDisplay formatV.fieldType
               div_ [class_ "mx-5 space-y-2"] $ do
                 h6_ [class_ "text-slate-800 text-xs"] "FORMAT"
-                h4_ [class_ "text-base text-slate-800"] $ toHtml $ formatV.fieldFormat
+                h4_ [class_ "text-base text-slate-800"] $ toHtml formatV.fieldFormat
             h6_ [class_ "text-slate-600 mt-4 text-xs"] "EXAMPLE VALUES"
             ul_ [class_ "list-disc"] $ do
               formatV.examples & mapM_ \ex -> do
@@ -126,75 +131,102 @@ fieldDetailsView field formats = do
         h4_ [class_ "text-sm text-slate-800 mb-2"] "CREATION DATE"
         div_ [class_ "flex border border-gray-200 m-1 rounded-xl p-2"] $ do
           mIcon_ "calender" "h-4 mr-2 w-4"
-          span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" (field.createdAt)
+          span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" field.createdAt
       div_ [class_ " "] $ do
         h4_ [class_ "text-sm text-slate-800 mb-2"] "LAST CHANGE"
         div_ [class_ "flex border border-gray-200 m-1 justify-between rounded-xl p-2"] $ do
           mIcon_ "calender" "h-4 mr-2 w-4"
-          span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" (field.updatedAt)
+          span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" field.updatedAt
     h6_ [class_ "mt-5 text-sm text-slate-800 mb-2"] "DESCRIPTION"
-    p_ [class_ "text-slate-800 text-sm"] $ toHtml $ field.description
+    p_ [class_ "text-slate-800 text-sm"] $ toHtml field.description
+
 
 aesonValueToText :: AE.Value -> Text
 aesonValueToText = toStrict . encodeToLazyText
+
+
+-- /p/" <> pid.toText <> "/log_explorer/item/" <> endpoint_hash
+endpointDetailsWithHashH :: Sessions.PersistentSession -> Projects.ProjectId -> Text -> DashboardM (Headers '[HXRedirect] (Html ()))
+endpointDetailsWithHashH sess pid endpoint_hash = do
+  pool <- asks pool
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ addHeader "" $ userNotMemeberPage sess
+    else do
+      endpoint <- liftIO $ withPool pool $ Endpoints.endpointByHash pid endpoint_hash
+      case endpoint of
+        Just e -> do
+          let redirect_url = "/p/" <> pid.toText <> "/endpoints/" <> e.id.toText
+          pure $ addHeader redirect_url $ span_ ""
+        Nothing ->
+          pure $ addHeader "" $ span_ ""
+
 
 -- | endpointDetailsH is the main handler for the endpoint details page.
 -- It reuses the fieldDetailsView as well, which is used for the side navigation on the page and also exposed un the fieldDetailsPartialH endpoint
 endpointDetailsH :: Sessions.PersistentSession -> Projects.ProjectId -> Endpoints.EndpointId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
 endpointDetailsH sess pid eid fromDStr toDStr sinceStr' subPageM = do
   pool <- asks pool
-  now <- liftIO getCurrentTime
-  let sinceStr = if (isNothing fromDStr && isNothing toDStr && isNothing sinceStr') || (fromDStr == Just "") then Just "14D" else sinceStr'
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      now <- liftIO getCurrentTime
+      let sinceStr = if (isNothing fromDStr && isNothing toDStr && isNothing sinceStr') || (fromDStr == Just "") then Just "7D" else sinceStr'
 
-  -- TODO: Replace with a duration parser.
-  let (fromD, toD) = case sinceStr of
-        Just "1H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just $ utcToZonedTime utc now)
-        Just "24H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just $ utcToZonedTime utc now)
-        Just "7D" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 7) now, Just $ utcToZonedTime utc now)
-        Just "14D" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 14) now, Just $ utcToZonedTime utc now)
-        Nothing -> do
-          let f = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromDStr) :: Maybe UTCTime)
-          let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
-          (f, t)
-        _ -> do
-          let f = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromDStr) :: Maybe UTCTime)
-          let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
-          (f, t)
+      -- TODO: Replace with a duration parser.
+      let (fromD, toD) = case sinceStr of
+            Just "1H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just $ utcToZonedTime utc now)
+            Just "24H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just $ utcToZonedTime utc now)
+            Just "7D" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 7) now, Just $ utcToZonedTime utc now)
+            Just "14D" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 14) now, Just $ utcToZonedTime utc now)
+            Nothing -> do
+              let f = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromDStr) :: Maybe UTCTime)
+              let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
+              (f, t)
+            _ -> do
+              let f = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromDStr) :: Maybe UTCTime)
+              let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
+              (f, t)
 
-  (endpoint, enpStats, project, shapesWithFieldsMap, fieldsMap, reqLatenciesRolledByStepsLabeled) <- liftIO $
-    withPool pool $ do
-      -- Should swap names betw enp and endpoint endpoint could be endpointStats
-      endpoint <- Unsafe.fromJust <$> Endpoints.endpointById eid
-      enpStats <- fromMaybe (def :: EndpointRequestStats) <$> Endpoints.endpointRequestStatsByEndpoint eid
-      project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      shapes <- Shapes.shapesByEndpointHash endpoint.hash
-      fields <- Fields.selectFields (endpoint.hash)
-      let fieldsMap = Fields.groupFieldsByCategory fields
-      let shapesWithFieldsMap = Vector.map (`getShapeFields` fields) shapes
-      let maxV = round (enpStats.max) :: Int
-      let steps = (maxV `quot` 100) :: Int
-      let steps' = if steps == 0 then 100 else steps
-      reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledBySteps maxV steps' pid (endpoint.urlPath) (endpoint.method)
-      pure (endpoint, enpStats, project, Vector.toList shapesWithFieldsMap, fieldsMap, Vector.toList reqLatenciesRolledBySteps)
+      (endpoint, enpStats, project, shapesWithFieldsMap, fieldsMap, reqLatenciesRolledByStepsLabeled) <- liftIO
+        $ withPool pool
+        $ do
+          -- Should swap names betw enp and endpoint endpoint could be endpointStats
+          endpoint <- Unsafe.fromJust <$> Endpoints.endpointById eid
+          enpStats <- fromMaybe (def :: EndpointRequestStats) <$> Endpoints.endpointRequestStatsByEndpoint eid
+          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+          shapes <- Shapes.shapesByEndpointHash pid endpoint.hash
+          fields <- Fields.selectFields pid endpoint.hash
+          let fieldsMap = Fields.groupFieldsByCategory fields
+          let shapesWithFieldsMap = Vector.map (`getShapeFields` fields) shapes
+          let maxV = round enpStats.max :: Int
+          let steps = (maxV `quot` 100) :: Int
+          let steps' = if steps == 0 then 100 else steps
+          reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledBySteps maxV steps' pid endpoint.urlPath endpoint.method
+          pure (endpoint, enpStats, project, Vector.toList shapesWithFieldsMap, fieldsMap, Vector.toList reqLatenciesRolledBySteps)
 
-  let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = project
-          , pageTitle = "Endpoint Details"
-          , menuItem = Just "Endpoints"
-          }
-  currTime <- liftIO getCurrentTime
-  let currentURL = "/p/" <> pid.toText <> "/endpoints/" <> Endpoints.endpointIdText eid <> "?from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
-  let subPage = fromMaybe "overview" subPageM
-  let currentPickerTxt = case sinceStr of
-        Just a -> a
-        Nothing -> maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD
-  let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt, subPage = subPage}
-  pure $ bodyWrapper bwconf $ endpointDetails paramInput currTime endpoint enpStats shapesWithFieldsMap fieldsMap reqLatenciesRolledByStepsJ (fromD, toD)
+      let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
+      let bwconf =
+            (def :: BWConfig)
+              { sessM = Just sess
+              , currProject = project
+              , pageTitle = "Endpoint Details"
+              , menuItem = Just "Endpoints"
+              }
+      currTime <- liftIO getCurrentTime
+      let currentURL = "/p/" <> pid.toText <> "/endpoints/" <> Endpoints.endpointIdText eid <> "?from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
+      let subPage = fromMaybe "overview" subPageM
+      let currentPickerTxt = case sinceStr of
+            Just a -> a
+            Nothing -> maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD
+      let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt, subPage = subPage}
+      pure $ bodyWrapper bwconf $ endpointDetails paramInput currTime endpoint enpStats shapesWithFieldsMap fieldsMap reqLatenciesRolledByStepsJ (fromD, toD)
 
-endpointDetails :: ParamInput -> UTCTime -> Endpoints.Endpoint -> EndpointRequestStats -> [ShapeWidthFields] -> Map FieldCategoryEnum [Fields.Field] -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
+
+endpointDetails :: ParamInput -> UTCTime -> Endpoints.Endpoint -> EndpointRequestStats -> [Shapes.ShapeWithFields] -> Map FieldCategoryEnum [Fields.Field] -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 endpointDetails paramInput currTime endpoint endpointStats shapesWithFieldsMap fieldsM reqLatenciesRolledByStepsJ dateRange = do
   let currentURLSubPage = deleteParam "subpage" paramInput.currentURL
   div_ [class_ "w-full h-full overflow-hidden"] $ do
@@ -210,9 +242,9 @@ endpointDetails paramInput currTime endpoint endpointStats shapesWithFieldsMap f
             & mapM_ \(title, slug) ->
               a_
                 [ href_ $ currentURLSubPage <> "&subpage=" <> slug
-                , class_ $
-                    "cursor-pointer px-3 py-2 font-medium text-sm rounded-md "
-                      <> if slug == paramInput.subPage then " bg-indigo-100 text-indigo-700 " else " text-gray-500 hover:text-gray-700"
+                , class_
+                    $ "cursor-pointer px-3 py-2 font-medium text-sm rounded-md "
+                    <> if slug == paramInput.subPage then " bg-indigo-100 text-indigo-700 " else " text-gray-500 hover:text-gray-700"
                 ]
                 $ toHtml title
 
@@ -251,7 +283,8 @@ endpointDetails paramInput currTime endpoint endpointStats shapesWithFieldsMap f
         end
         |]
 
-apiDocsSubPage :: [ShapeWidthFields] -> Html ()
+
+apiDocsSubPage :: [Shapes.ShapeWithFields] -> Html ()
 apiDocsSubPage shapesWithFieldsMap = do
   div_ [class_ "space-y-8", id_ "subpage"] $ do
     div_ [class_ "flex w-full justify-between mt-2"] $ do
@@ -268,7 +301,7 @@ apiDocsSubPage shapesWithFieldsMap = do
             $ do
               let fstH = viaNonEmpty head shapesWithFieldsMap
               let (st, hs) = case fstH of
-                    Just s -> (s.status, s.hash)
+                    Just s -> (s.status, s.sHash)
                     Nothing -> (0, "No shapes")
               let prm = "px-2 py-1 rounded text-white text-sm "
               let statusCls = if st < 400 then prm <> "bg-green-500" else prm <> "bg-red-500"
@@ -286,11 +319,11 @@ apiDocsSubPage shapesWithFieldsMap = do
                 , [__|on click selectShape((me),(my @data-pos)) |]
                 , data_ "pos" (show index)
                 , data_ "status" (show s.status)
-                , data_ "hash" s.hash
+                , data_ "hash" s.sHash
                 ]
                 $ do
                   span_ [class_ statusCls] $ show s.status
-                  span_ [class_ "ml-2 text-sm text-gray-600"] $ toHtml s.hash
+                  span_ [class_ "ml-2 text-sm text-gray-600"] $ toHtml s.sHash
 
       div_ [class_ "flex items-center"] $ do
         img_
@@ -350,6 +383,7 @@ apiDocsSubPage shapesWithFieldsMap = do
         end
         |]
 
+
 apiOverviewSubPage :: ParamInput -> UTCTime -> EndpointRequestStats -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 apiOverviewSubPage paramInput currTime endpoint fieldsM reqLatenciesRolledByStepsJ dateRange = do
   let currentURLSearch = deleteParam "to" $ deleteParam "from" $ deleteParam "since" paramInput.currentURL
@@ -374,14 +408,16 @@ apiOverviewSubPage paramInput currTime endpoint fieldsM reqLatenciesRolledByStep
         a_ [class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ", [__| on click toggle .hidden on #timepickerSidebar |]] "Custom date range"
       div_ [class_ "inline-block relative hidden", id_ "timepickerSidebar"] do
         div_ [id_ "startTime", class_ "hidden"] ""
-    section_ $ AnomaliesList.anomalyListSlider currTime (endpoint.projectId) (Just endpoint.endpointId) Nothing
+    section_ $ AnomaliesList.anomalyListSlider currTime endpoint.projectId (Just endpoint.endpointId) Nothing
     endpointStats endpoint reqLatenciesRolledByStepsJ dateRange
+
 
 endpointStats :: Endpoints.EndpointRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p99, max} reqLatenciesRolledByStepsJ dateRange@(fromD, toD) =
   section_ [class_ "space-y-3"] $ do
-    div_ [class_ "flex justify-between mt-5"] $
-      div_ [class_ "flex flex-row"] $ do
+    div_ [class_ "flex justify-between mt-5"]
+      $ div_ [class_ "flex flex-row"]
+      $ do
         img_
           [ src_ "/assets/svgs/cheveron-down.svg"
           , class_ "h-4 mr-3 mt-1 w-4 cursor-pointer"
@@ -425,8 +461,9 @@ endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p
               Charts.lazy [C.QByE $ [C.QBPId enpStats.projectId, C.QBEndpointHash enpStats.endpointHash] ++ catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBEndpoint, C.SlotsE 120, C.ShowLegendE]
 
       div_ [class_ "col-span-3 bg-white   border border-gray-100  rounded-xl py-3 px-6"] $ do
-        div_ [class_ "p-4"] $
-          select_ [] $ do
+        div_ [class_ "p-4"]
+          $ select_ []
+          $ do
             option_ "Request Latency Distribution"
             option_ "Avg Reqs per minute"
         div_ [class_ "grid grid-cols-9  gap-8 w-full"] $ do
@@ -434,14 +471,15 @@ endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p
           div_ [class_ "col-span-2 space-y-4 "] $ do
             strong_ [class_ "block text-right"] "Latency Percentiles"
             ul_ [class_ "space-y-1 divide-y divide-slate-100"] $ do
-              percentileRow "max" $ enpStats.max
-              percentileRow "p99" $ enpStats.p99
-              percentileRow "p95" $ enpStats.p95
-              percentileRow "p90" $ enpStats.p90
-              percentileRow "p75" $ enpStats.p75
-              percentileRow "p50" $ enpStats.p50
-              percentileRow "min" $ enpStats.min
+              percentileRow "max" enpStats.max
+              percentileRow "p99" enpStats.p99
+              percentileRow "p95" enpStats.p95
+              percentileRow "p90" enpStats.p90
+              percentileRow "p75" enpStats.p75
+              percentileRow "p50" enpStats.p50
+              percentileRow "min" enpStats.min
         script_ [int|| latencyHistogram('reqsLatencyHistogram',{p50:#{p50}, p75:#{p75}, p90:#{p90}, p95:#{p95}, p99:#{p99}, max:#{max}},  #{reqLatenciesRolledByStepsJ}) |]
+
 
 percentileRow :: Text -> Double -> Html ()
 percentileRow key p = do
@@ -452,25 +490,28 @@ percentileRow key p = do
       span_ [class_ "tabular-nums"] $ toHtml d
       span_ $ toHtml unit
 
+
 fmtDuration :: Double -> (Text, Text)
 fmtDuration d
   | d > 1000 = (fmt $ fixedF 2 (d / 1000), "s")
   | otherwise = (fmt $ fixedF 0 d, "ms")
 
+
 -- NOTE: We could enable the fields cycling functionality using the groups of response list functionality on the endpoint.
 -- So we go through the list and in each request or response view, only show the fields that appear in the field list.
 -- We can enable a view to show all the request/response options.
-reqResSection :: Text -> Bool -> [ShapeWidthFields] -> Html ()
+reqResSection :: Text -> Bool -> [Shapes.ShapeWithFields] -> Html ()
 reqResSection title isRequest shapesWithFieldsMap =
   section_ [class_ "space-y-3"] $ do
     div_ [class_ "flex justify-between mt-5"] $ do
       div_ [class_ "flex flex-row"] $ do
-        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]] $
-          faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 mr-3 mt-1 w-4"
+        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
+          $ faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 mr-3 mt-1 w-4"
         span_ [class_ "text-lg text-slate-800"] $ toHtml title
 
-    div_ [class_ "bg-white border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"] $
-      forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap) $ \(index, s) -> do
+    div_ [class_ "bg-white border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"]
+      $ forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap)
+      $ \(index, s) -> do
         let sh = if index == 1 then title <> "_fields" else title <> "_fields hidden"
         div_ [class_ sh, id_ $ title <> "_" <> show index] $ do
           if isRequest
@@ -482,6 +523,7 @@ reqResSection title isRequest shapesWithFieldsMap =
             else do
               subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader s.fieldsMap)
               subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody s.fieldsMap)
+
 
 -- | subSubSection ..
 subSubSection :: Text -> Maybe [Fields.Field] -> Html ()
@@ -525,7 +567,7 @@ subSubSection title fieldsM =
                           else EndpointComponents.fieldTypeToDisplay Fields.FTObject
               Just field -> do
                 a_
-                  [ hxGet_ $ "/p/" <> field.projectId.toText <> "/fields/" <> UUID.toText (Fields.unFieldId $ field.id)
+                  [ hxGet_ $ "/p/" <> field.projectId.toText <> "/fields/" <> UUID.toText (Fields.unFieldId field.id)
                   , hxTarget_ "#detailSidebar"
                   , class_ "flex flex-row cursor-pointer"
                   , style_ depthPadding
@@ -536,9 +578,10 @@ subSubSection title fieldsM =
                     div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full items-center"] $ do
                       input_ [type_ "checkbox", class_ " mr-12"]
                       span_ [class_ "grow text-sm text-slate-800 inline-flex items-center"] $ toHtml displayKey
-                      span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ EndpointComponents.fieldTypeToDisplay $ field.fieldType
+                      span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ EndpointComponents.fieldTypeToDisplay field.fieldType
                       img_ [src_ "/assets/svgs/alert-red.svg", class_ " mr-8 ml-4 h-5"]
                       img_ [src_ "/assets/svgs/dots-vertical.svg", class_ "mx-5 h-5"]
+
 
 -- | fieldsToNormalized, gets a list of fields and returns a list of tuples with the keypath, and the field, sorted by the key path
 -- >>> import Models.Apis.Fields.Types
@@ -551,13 +594,13 @@ subSubSection title fieldsM =
 
 ---- >>> fieldsToNormalized [v2]
 ---- >>> fieldsToNormalized [v2]
-fieldsToNormalized :: [Fields.Field] -> [(Text, Maybe Fields.Field)]
-fieldsToNormalized =
-  sortNub . concatMap \field ->
-    map
-      ((,Nothing) . fst)
-      ( field.keyPath
-          & T.dropWhile (== '.')
-          & breakOnAll "."
-      )
-      & (++ [(T.dropWhile (== '.') $ field.keyPath, Just field)])
+-- fieldsToNormalized :: [Fields.Field] -> [(Text, Maybe Fields.Field)]
+-- fieldsToNormalized =
+--   sortNub . concatMap \field ->
+--     map
+--       ((,Nothing) . fst)
+--       ( field.keyPath
+--           & T.dropWhile (== '.')
+--           & breakOnAll "."
+--       )
+--       & (++ [(T.dropWhile (== '.') $ field.keyPath, Just field)])

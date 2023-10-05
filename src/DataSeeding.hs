@@ -25,12 +25,15 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Optics.TH (makeFieldLabelsNoPrefix)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pages.NonMember
 import ProcessMessage qualified
 import Relude
 import Relude.Unsafe ((!!))
 import RequestMessages qualified
 import System.Random (RandomGen, getStdGen, randomRs)
+import Utils
 import Web.FormUrlEncoded (FromForm)
+
 
 data FieldConfig = FieldConfig
   { name :: Text
@@ -41,7 +44,9 @@ data FieldConfig = FieldConfig
   deriving stock (Show, Generic)
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] FieldConfig
 
+
 makeFieldLabelsNoPrefix ''FieldConfig
+
 
 data SeedConfig = SeedConfig
   { from :: ZonedTime
@@ -62,7 +67,9 @@ data SeedConfig = SeedConfig
   deriving stock (Show, Generic)
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SeedConfig
 
+
 makeFieldLabelsNoPrefix ''SeedConfig
+
 
 fieldConfigToField :: FieldConfig -> Fake (Text, AE.Value)
 fieldConfigToField fc = do
@@ -84,10 +91,15 @@ fieldConfigToField fc = do
       )
   pure (fc.name, val)
 
+
 randomTimesBtwToAndFrom :: RandomGen g => UTCTime -> Int -> g -> NominalDiffTime -> [ZonedTime]
 randomTimesBtwToAndFrom startTime countToReturn rg maxDiff =
-  take countToReturn $
-    utcToZonedTime utc . flip addUTCTime startTime . realToFrac <$> randomRs (0, truncate maxDiff :: Int) rg
+  take countToReturn
+    $ utcToZonedTime utc
+    . flip addUTCTime startTime
+    . realToFrac
+    <$> randomRs (0, truncate maxDiff :: Int) rg
+
 
 parseConfigToRequestMessages :: Projects.ProjectId -> ByteString -> IO (Either Yaml.ParseException [RequestMessages.RequestMessage])
 parseConfigToRequestMessages pid input = do
@@ -97,14 +109,15 @@ parseConfigToRequestMessages pid input = do
     Right configs -> do
       let fakerSettings = setRandomGen randGen defaultFakerSettings
       resp <-
-        generateWithSettings fakerSettings $
-          configs & mapM \config -> do
-            let startTimeUTC = zonedTimeToUTC (config.from)
-                maxDiffTime = diffUTCTime (zonedTimeToUTC (config.to)) startTimeUTC
-                timestamps = randomTimesBtwToAndFrom startTimeUTC (config.count) randGen maxDiffTime
-                durations = take (config.count) $ randomRs (config.durationFrom, config.durationTo) randGen
+        generateWithSettings fakerSettings
+          $ configs
+          & mapM \config -> do
+            let startTimeUTC = zonedTimeToUTC config.from
+                maxDiffTime = diffUTCTime (zonedTimeToUTC config.to) startTimeUTC
+                timestamps = randomTimesBtwToAndFrom startTimeUTC config.count randGen maxDiffTime
+                durations = take config.count $ randomRs (config.durationFrom, config.durationTo) randGen
                 allowedStatusCodes = config.statusCodesOneof
-                statusCodes = take (config.count) $ map (allowedStatusCodes !!) $ randomRs (0, length allowedStatusCodes - 1) randGen
+                statusCodes = take config.count $ map (allowedStatusCodes !!) $ randomRs (0, length allowedStatusCodes - 1) randGen
 
             zip3 timestamps durations statusCodes & mapM \(timestampV, duration', statusCode') -> do
               let duration = duration'
@@ -125,15 +138,16 @@ parseConfigToRequestMessages pid input = do
                   errors = Nothing
                   tags = Nothing
 
-              pathLog <- mapM fieldConfigToField (config.queryParams)
-              pathParams <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField (config.pathParams)
-              queryParams <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField (config.queryParams)
-              requestHeaders <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField (config.requestHeaders)
-              responseHeaders <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField (config.responseHeaders)
-              responseBody <- B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField (config.responseBody)
-              requestBody <- B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField (config.responseBody)
+              pathLog <- mapM fieldConfigToField config.queryParams
+              pathParams <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField config.pathParams
+              queryParams <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField config.queryParams
+              requestHeaders <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField config.requestHeaders
+              responseHeaders <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField config.responseHeaders
+              responseBody <- B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField config.responseBody
+              requestBody <- B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField config.responseBody
               pure RequestMessages.RequestMessage{..}
       pure $ Right $ concat resp
+
 
 parseConfigToJson :: Projects.ProjectId -> ByteString -> IO (Either Yaml.ParseException [ByteString])
 parseConfigToJson pid input = do
@@ -142,6 +156,7 @@ parseConfigToJson pid input = do
     Left err -> pure $ Left err
     Right resp -> do
       pure $ Right $ map (toStrict . AE.encode) resp
+
 
 --------------------------------------------------------------------------------------------------------
 
@@ -152,40 +167,53 @@ data DataSeedingForm = DataSeedingForm
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
 
+
 dataSeedingPostH :: Sessions.PersistentSession -> Projects.ProjectId -> DataSeedingForm -> DashboardM (Html ())
 dataSeedingPostH sess pid form = do
   pool <- asks pool
-  logger <- asks logger
-  env <- asks env
-  projectCache <- asks projectCache
-  project <-
-    liftIO $
-      withPool pool $
-        Projects.selectProjectForUser (Sessions.userId sess, pid)
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      logger <- asks logger
+      env <- asks env
+      projectCache <- asks projectCache
+      project <-
+        liftIO
+          $ withPool pool
+          $ Projects.selectProjectForUser (Sessions.userId sess, pid)
 
-  respE <- liftIO $ parseConfigToRequestMessages pid (encodeUtf8 $ config form)
-  case respE of
-    Left err -> liftIO $ logger <& "ERROR processing req message " <> show err >> pure dataSeedingPage
-    Right resp -> do
-      let !seeds = resp & map (\x -> Right (Just "", x))
-      _ <- liftIO $ ProcessMessage.processMessages' logger env pool seeds projectCache
-      pure dataSeedingPage
+      respE <- liftIO $ parseConfigToRequestMessages pid (encodeUtf8 $ config form)
+      case respE of
+        Left err -> liftIO $ logger <& "ERROR processing req message " <> show err >> pure dataSeedingPage
+        Right resp -> do
+          let !seeds = resp & map (\x -> Right (Just "", x))
+          _ <- liftIO $ ProcessMessage.processMessages' logger env pool seeds projectCache
+          pure dataSeedingPage
+
 
 dataSeedingGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 dataSeedingGetH sess pid = do
   pool <- asks pool
-  project <-
-    liftIO $
-      withPool pool $
-        Projects.selectProjectForUser (Sessions.userId sess, pid)
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      project <-
+        liftIO
+          $ withPool pool
+          $ Projects.selectProjectForUser (Sessions.userId sess, pid)
 
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = project
-          , pageTitle = "Data Seeding"
-          }
-  pure $ bodyWrapper bwconf dataSeedingPage
+      let bwconf =
+            (def :: BWConfig)
+              { sessM = Just sess
+              , currProject = project
+              , pageTitle = "Data Seeding"
+              }
+      pure $ bodyWrapper bwconf dataSeedingPage
+
 
 dataSeedingPage :: Html ()
 dataSeedingPage = do

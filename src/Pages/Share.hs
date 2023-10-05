@@ -36,12 +36,14 @@ import Relude
 import Servant (Headers)
 import Servant.Htmx (HXTrigger)
 
+
 data ReqForm = ReqForm
   { expiresIn :: Text
   , reqId :: UUID.UUID
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
+
 
 data Swagger = Swagger
   { id :: UUID.UUID
@@ -55,6 +57,7 @@ data Swagger = Swagger
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "swagger_jsons", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Swagger)
+
 
 shareLinkPostH :: Sessions.PersistentSession -> Projects.ProjectId -> ReqForm -> DashboardM (Headers '[HXTrigger] (Html ()))
 shareLinkPostH sess pid reqForm = do
@@ -71,6 +74,7 @@ shareLinkPostH sess pid reqForm = do
     else do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","errorToast": ["Invalid expiry interval"]}|]
       pure $ addHeader hxTriggerData $ getShareLink rid
+
 
 copyLink :: Text -> Html ()
 copyLink rid = do
@@ -92,6 +96,7 @@ copyLink rid = do
       ]
       "Copy URL"
 
+
 shareLinkGetH :: UUID.UUID -> DashboardM (Html ())
 shareLinkGetH sid = do
   pool <- asks pool
@@ -105,6 +110,7 @@ shareLinkGetH sid = do
           }
 
   pure $ bodyWrapper bwconf $ sharePage req
+
 
 sharePage :: Maybe RequestDumps.RequestDumpLogItem -> Html ()
 sharePage req = do
@@ -183,11 +189,12 @@ function expireChanged(event) {
     .collapsed .closing-token {padding-left:0}
   |]
 
+
 getRequest :: Text -> DBT IO (V.Vector RequestDumps.RequestDumpLogItem)
-getRequest rid = query Select q (Only rid)
- where
-  q =
-    [sql|
+getRequest sid = query Select q (Only sid)
+  where
+    q =
+      [sql|
       SELECT
           rd.id AS id,
           rd.created_at AS created_at,
@@ -205,11 +212,16 @@ getRequest rid = query Select q (Only rid)
           rd.response_headers AS response_headers,
           COUNT(*) OVER() AS full_count,
           rd.duration_ns AS duration_ns,
-          rd.sdk_type AS sdk_type
+          rd.sdk_type AS sdk_type,
+          rd.parent_id AS parent_id,
+          rd.service_version as service_version,
+          rd.errors AS errors,
+          rd.tags AS tags
       FROM apis.share_requests AS sr
       JOIN apis.request_dumps AS rd ON sr.request_dump_id = rd.id
       WHERE sr.id = ? AND sr.expired_at > current_timestamp;
     |]
+
 
 getShareLink :: UUID.UUID -> Html ()
 getShareLink rid = do

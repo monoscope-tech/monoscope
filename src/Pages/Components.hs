@@ -7,6 +7,7 @@ import Models.Projects.Projects (ProjectId)
 import Relude
 import Utils
 
+
 statBox :: Maybe ProjectId -> Text -> Text -> Int -> Maybe Int -> Html ()
 statBox pid title helpInfo val bckupValM = do
   let tl = getTargetPage title
@@ -30,6 +31,7 @@ statBox pid title helpInfo val bckupValM = do
             maybe "" (\bVal -> small_ $ toHtml @Text $ fmt ("/" +| commaizeF bVal)) bckupValM
           span_ $ toHtml title
         span_ [class_ "inline-block", term "data-tippy-content" helpInfo] $ mIcon_ "info" "w-4 h-4"
+
 
 getTargetPage :: Text -> Text
 getTargetPage "Requests" = "/log_explorer"

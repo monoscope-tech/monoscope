@@ -13,6 +13,7 @@ import NeatInterpolation
 import Relude
 import Utils (faIcon_)
 
+
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu pid =
   [ ("Get started", "/p/" <> pid.toText <> "/onboarding", "fa-list-check")
@@ -22,9 +23,10 @@ menu pid =
   , ("API Log Explorer", "/p/" <> pid.toText <> "/log_explorer", "fa-bars")
   , ("API Keys", "/p/" <> pid.toText <> "/apis", "fa-key")
   , -- , ("Redacted Fields", "/p/" <> pid.toText <> "/redacted_fields", "#redacted")
-    ("Documentation", "/p/" <> pid.toText <> "/documentation", "fa-brackets-curly") 
-  , ("Reports", "/p/" <> pid.toText <> "/reports", "fa-chart-simple") 
+    ("Documentation", "/p/" <> pid.toText <> "/documentation", "fa-brackets-curly")
+  , ("Reports", "/p/" <> pid.toText <> "/reports", "fa-chart-simple")
   ]
+
 
 data BWConfig = BWConfig
   { sessM :: Maybe Sessions.PersistentSession
@@ -34,6 +36,7 @@ data BWConfig = BWConfig
   }
   deriving stock (Show, Generic)
   deriving anyclass (Default)
+
 
 bodyWrapper :: BWConfig -> Html () -> Html ()
 bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child = do
@@ -207,7 +210,7 @@ projectsDropDown currProject projects = do
         div_ [class_ "flex mt-2 mb-4"] $ do
           img_ [class_ "p-4", src_ "/assets/svgs/projects.svg"]
           div_ $ do
-            strong_ [class_ "block"] $ toHtml $ currProject.title
+            strong_ [class_ "block"] $ toHtml currProject.title
             small_ [class_ "block text-blue-800"] $ toHtml currProject.paymentPlan
         nav_ [] $ do
           a_ [href_ [text| /p/$pidTxt/settings |], class_ "p-3 flex gap-3 rounded-2xl hover:bg-gray-100"] $ do
@@ -228,7 +231,7 @@ projectsDropDown currProject projects = do
         div_ $ do
           div_ [class_ "relative"] $ do
             div_ [class_ "absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none"] $ do
-              faIcon_ "fa-magnifying-glass" "fa-regular fa-magnifying-glass" "h-6 w-4" 
+              faIcon_ "fa-magnifying-glass" "fa-regular fa-magnifying-glass" "h-6 w-4"
             input_ [class_ "pl-12 w-full text-sm bg-gray-100 rounded-2xl border-0 p-3", placeholder_ "Search Projects"]
           div_ [class_ "space-y-2 py-4 text-sm"] $ do
             projects & mapM_ \project -> do
@@ -237,6 +240,7 @@ projectsDropDown currProject projects = do
                   img_ [class_ "inline-block", src_ "/assets/svgs/projects.svg"]
                   span_ [class_ "inline-block"] $ toHtml $ project.title
                 when (currProject.id == project.id) $ faIcon_ "fa-circle-check" "fa-sharp fa-regular fa-circle-check" "h-6 w-6 text-green-700"
+
 
 sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Maybe Text -> Html ()
 sideNav sess project pageTitle menuItem = do
@@ -281,8 +285,8 @@ sideNav sess project pageTitle menuItem = do
         ]
         $ do
           div_ [class_ "space-2 grow sd-hidden"] $ do
-            strong_ [class_ "block text-slate-900"] $ toHtml $ project.title
-            small_ [class_ "block text-slate-900"] $ toHtml $ project.paymentPlan
+            strong_ [class_ "block text-slate-900"] $ toHtml project.title
+            small_ [class_ "block text-slate-900"] $ toHtml project.paymentPlan
           -- Development?
           div_ $ do
             faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" " h-4 w-4 m-2"
@@ -295,16 +299,17 @@ sideNav sess project pageTitle menuItem = do
           [ href_ mUrl
           , term "data-tippy-placement" "right"
           , term "data-tippy-content" mTitle
-          , class_ $
-              "block flex gap-3 px-5 py-3 flex justify-center items-center hover:bg-blue-50 text-slate-800 "
-                <> ( if maybe (pageTitle == mTitle) (== mTitle) menuItem
-                      then "bg-blue-50 border-l-4 border-blue-700"
-                      else ""
-                   )
+          , class_
+              $ "block flex gap-3 px-5 py-3 flex justify-center items-center hover:bg-blue-50 text-slate-800 "
+              <> ( if maybe (pageTitle == mTitle) (== mTitle) menuItem
+                    then "bg-blue-50 border-l-4 border-blue-700"
+                    else ""
+                 )
           ]
           $ do
             faIcon_ faIcon ("fa-regular " <> faIcon) "w-5 h-5 text-slate-500"
             span_ [class_ "grow sd-hidden"] $ toHtml mTitle
+
 
 navbar :: Users.User -> Html ()
 navbar currUser = do
@@ -326,8 +331,8 @@ navbar currUser = do
         faIcon_ "fa-bars-sort" "fa-regular fa-bars-sort" "w-5 h-5 text-gray-500"
     div_ [class_ "inline-block flex items-center"] $ do
       a_ [class_ "inline-block p-2 px-3 align-middle"] $ do
-        faIcon_ "fa-magnifying-glass" "fa-regular fa-magnifying-glass" "w-5 h-5 text-gray-500" 
-      a_ [class_ "inline-block border-r-2 p-2 pr-5"] $ do 
+        faIcon_ "fa-magnifying-glass" "fa-regular fa-magnifying-glass" "w-5 h-5 text-gray-500"
+      a_ [class_ "inline-block border-r-2 p-2 pr-5"] $ do
         faIcon_ "fa-bell" "fa-regular fa-solid fa-bell" "w-5 h-5 text-gray-500"
       a_
         [ class_ "cursor-pointer inline-block space-x-4 pl-4 relative "
@@ -350,12 +355,12 @@ navbar currUser = do
         |]
         ]
         $ do
-          img_ [class_ "inline-block w-9 h-9 rounded-lg bg-gray-300", src_ (currUser.displayImageUrl)]
-          span_ [class_ "inline-block"] $
-            toHtml $
-              if currUser.firstName /= "" || currUser.lastName /= ""
-                then currUser.firstName <> " " <> currUser.lastName
-                else CI.original currUser.email
+          img_ [class_ "inline-block w-9 h-9 rounded-lg bg-gray-300", src_ currUser.displayImageUrl]
+          span_ [class_ "inline-block"]
+            $ toHtml
+            $ if currUser.firstName /= "" || currUser.lastName /= ""
+              then currUser.firstName <> " " <> currUser.lastName
+              else CI.original currUser.email
           img_ [class_ "w-4 h-4 inline-block", src_ "/assets/svgs/down_caret.svg"]
 
       -- logout dropdown

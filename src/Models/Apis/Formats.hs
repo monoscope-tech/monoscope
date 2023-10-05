@@ -34,11 +34,13 @@ import Relude
 import Servant (FromHttpApiData)
 import Utils (DBField (MkDBField))
 
+
 newtype FormatId = FormatId {unFormatId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving
     (Eq, Ord, FromField, ToField, FromHttpApiData, Default, AE.FromJSON)
     via UUID.UUID
+
 
 data Format = Format
   { id :: FormatId
@@ -57,12 +59,15 @@ data Format = Format
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "formats", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Format)
   deriving (FromField) via Aeson Format
 
+
 makeFieldLabelsNoPrefix ''Format
+
 
 formatsByFieldHash :: Text -> DBT IO (Vector.Vector Format)
 formatsByFieldHash fhash = query Select q (Only fhash)
   where
     q = [sql| SELECT id,created_at,updated_at,project_id, field_hash,field_type,field_format,examples::json[], hash from apis.formats where field_hash=? |]
+
 
 -- TODO: explore using postgres values to handle bulking loading multiple fields and formats into the same insert query.
 insertFormatQueryAndParams :: Format -> (Query, [DBField])
@@ -77,14 +82,15 @@ insertFormatQueryAndParams format = (q, params)
             examples = ARRAY(SELECT DISTINCT e from unnest(apis.formats.examples || excluded.examples) as e order by e limit ?); 
       |]
     params =
-      [ MkDBField $ format.projectId
-      , MkDBField $ format.fieldHash
-      , MkDBField $ format.fieldType
-      , MkDBField $ format.fieldFormat
-      , MkDBField $ format.examples
-      , MkDBField $ format.hash
+      [ MkDBField format.projectId
+      , MkDBField format.fieldHash
+      , MkDBField format.fieldType
+      , MkDBField format.fieldFormat
+      , MkDBField format.examples
+      , MkDBField format.hash
       , MkDBField (20 :: Int64) -- NOTE: max number of examples
       ]
+
 
 insertFormats :: [Format] -> DBT IO Int64
 insertFormats formats = do
@@ -99,6 +105,7 @@ insertFormats formats = do
   let params = map getFormatParams formats
   executeMany q params
 
+
 getFormatParams :: Format -> (Projects.ProjectId, Text, Fields.FieldTypes, Text, Vector AE.Value, Text)
 getFormatParams format =
   ( format.projectId
@@ -108,6 +115,7 @@ getFormatParams format =
   , format.examples
   , format.hash
   )
+
 
 data SwFormat = SwFormat
   { swFieldHash :: Text
@@ -121,6 +129,7 @@ data SwFormat = SwFormat
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SwFormat
   deriving (FromField) via Aeson SwFormat
   deriving anyclass (AE.ToJSON)
+
 
 formatsByFieldsHashes :: Projects.ProjectId -> Vector Text -> PgT.DBT IO (Vector SwFormat)
 formatsByFieldsHashes pid fieldHashes = query Select q (pid, fieldHashes)

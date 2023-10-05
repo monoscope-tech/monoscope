@@ -7,9 +7,8 @@ import Data.Default (Default)
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
-import Database.PostgreSQL.Entity (Entity, insert, selectById, selectManyByField)
+import Database.PostgreSQL.Entity (Entity, insert, selectById)
 import Database.PostgreSQL.Entity.DBT
-import Database.PostgreSQL.Entity.Internal.QQ (field)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple hiding (execute, query)
 import Database.PostgreSQL.Simple.FromField
@@ -22,14 +21,17 @@ import Models.Users.Users qualified as Users
 import Relude
 import Servant (FromHttpApiData)
 
+
 newtype SwaggerId = SwaggerId {swaggerId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving
     (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default)
     via UUID.UUID
 
+
 instance HasField "toText" SwaggerId Text where
   getField = UUID.toText . swaggerId
+
 
 data Swagger = Swagger
   { id :: SwaggerId
@@ -45,14 +47,20 @@ data Swagger = Swagger
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "swagger_jsons", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Swagger)
 
+
 addSwagger :: Swagger -> DBT IO ()
 addSwagger = insert @Swagger
+
 
 getSwaggerById :: Text -> DBT IO (Maybe Swagger)
 getSwaggerById id' = selectById (Only id')
 
+
 swaggersByProject :: Projects.ProjectId -> DBT IO (Vector Swagger)
-swaggersByProject pid = selectManyByField [field| project_id |] pid
+swaggersByProject = query Select q
+  where
+    q = [sql| select id, project_id, created_by, created_at, updated_at, swagger_json from apis.swagger_jsons where project_id=? order by created_at desc|]
+
 
 updateSwagger :: Text -> Value -> DBT IO Int64
 updateSwagger swaggerId swaggerJson = do

@@ -11,8 +11,10 @@ import Database.Postgres.Temp qualified as TmpPostgres
 import Relude
 import System.Directory (getFileSize, listDirectory)
 
+
 migrationsDir :: FilePath
 migrationsDir = "./static/migrations/"
+
 
 migrate :: TmpPostgres.DB -> IO ()
 migrate db = do
@@ -26,6 +28,7 @@ migrate db = do
           |]
   _ <- execute conn q ()
   pass
+
 
 -- Setup function that spins up a database with the db migrations already executed.
 -- source: https://jfischoff.github.io/blog/keeping-database-tests-fast.html

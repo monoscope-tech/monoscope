@@ -17,10 +17,13 @@ import Models.Projects.Projects qualified as Projects
 import Models.Projects.RedactedFields qualified as RedactedFields
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pages.NonMember
 import Relude
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
+import Utils
 import Web.FormUrlEncoded (FromForm)
+
 
 data RedactFieldForm = RedactFieldForm
   { path :: Text
@@ -30,39 +33,55 @@ data RedactFieldForm = RedactFieldForm
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
 
+
 redactedFieldsPostH :: Sessions.PersistentSession -> Projects.ProjectId -> RedactFieldForm -> DashboardM (Headers '[HXTrigger] (Html ()))
 redactedFieldsPostH sess pid RedactFieldForm{path, description, endpointHash} = do
   pool <- asks pool
-  env <- asks env
-  redactedFieldId <- RedactedFields.RedactedFieldId <$> liftIO UUIDV4.nextRandom
-  -- adding path, description, endpoints via record punning
-  let fieldToRedact = RedactedFields.RedactedField{id = redactedFieldId, projectId = pid, configuredVia = RedactedFields.Dashboard, ..}
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Only project members can redact fields"]}|]
+      pure $ addHeader hxTriggerData $ userNotMemeberPage sess
+    else do
+      env <- asks env
+      redactedFieldId <- RedactedFields.RedactedFieldId <$> liftIO UUIDV4.nextRandom
+      -- adding path, description, endpoints via record punning
+      let fieldToRedact = RedactedFields.RedactedField{id = redactedFieldId, projectId = pid, configuredVia = RedactedFields.Dashboard, ..}
 
-  redactedFields <- liftIO $
-    withPool pool $ do
-      RedactedFields.redactField fieldToRedact
-      RedactedFields.redactedFieldsByProject pid
+      redactedFields <- liftIO
+        $ withPool pool
+        $ do
+          RedactedFields.redactField fieldToRedact
+          RedactedFields.redactedFieldsByProject pid
 
-  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Submitted field to be redacted, Successfully"]}|]
-  pure $ addHeader hxTriggerData $ mainContent pid redactedFields
+      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Submitted field to be redacted, Successfully"]}|]
+      pure $ addHeader hxTriggerData $ mainContent pid redactedFields
+
 
 -- | redactedFieldsGetH renders the api keys list page which includes a modal for creating the apikeys.
 redactedFieldsGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 redactedFieldsGetH sess pid = do
   pool <- asks pool
-  (project, redactedFields) <- liftIO $
-    withPool pool $ do
-      project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      redactedFields <- RedactedFields.redactedFieldsByProject pid
-      pure (project, redactedFields)
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      (project, redactedFields) <- liftIO
+        $ withPool pool
+        $ do
+          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+          redactedFields <- RedactedFields.redactedFieldsByProject pid
+          pure (project, redactedFields)
 
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = project
-          , pageTitle = "Redacted Fields"
-          }
-  pure $ bodyWrapper bwconf $ redactedFieldsPage pid redactedFields
+      let bwconf =
+            (def :: BWConfig)
+              { sessM = Just sess
+              , currProject = project
+              , pageTitle = "Redacted Fields"
+              }
+      pure $ bodyWrapper bwconf $ redactedFieldsPage pid redactedFields
+
 
 redactedFieldsPage :: Projects.ProjectId -> Vector RedactedFields.RedactedField -> Html ()
 redactedFieldsPage pid redactedFields = do
@@ -120,6 +139,7 @@ redactedFieldsPage pid redactedFields = do
                   ]
                   "Cancel"
 
+
 mainContent :: Projects.ProjectId -> Vector RedactedFields.RedactedField -> Html ()
 mainContent pid redactedFields = do
   section_ [id_ "main-content", class_ "flex flex-col"] $ do
@@ -137,9 +157,9 @@ mainContent pid redactedFields = do
             tbody_ [class_ "bg-white divide-y divide-gray-200"] $ do
               redactedFields & mapM_ \rf -> do
                 tr_ $ do
-                  td_ [class_ "px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900"] $ toHtml $ rf.path
-                  td_ [class_ "px-6 py-4 whitespace-nowrap text-sm text-gray-500"] $ toHtml $ rf.description
-                  td_ [class_ "px-6 py-4 whitespace-nowrap text-sm text-gray-500"] $ toHtml @String $ show $ rf.configuredVia
+                  td_ [class_ "px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900"] $ toHtml rf.path
+                  td_ [class_ "px-6 py-4 whitespace-nowrap text-sm text-gray-500"] $ toHtml rf.description
+                  td_ [class_ "px-6 py-4 whitespace-nowrap text-sm text-gray-500"] $ toHtml @String $ show rf.configuredVia
                   td_ [class_ "px-6 py-4 whitespace-nowrap text-right text-sm font-medium"] $ do
                     a_ [class_ "text-indigo-600 hover:text-indigo-900", href_ $ "/p/" <> pid.toText <> "/redacted_fields/delete"] $ do
                       img_ [src_ "/assets/svgs/revoke.svg", class_ "h-3 w-3 mr-2 inline-block"]

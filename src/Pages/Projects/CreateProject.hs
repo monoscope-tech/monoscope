@@ -49,8 +49,9 @@ import Servant (
   noHeader,
  )
 import Servant.Htmx
+import Utils
 import Web.FormUrlEncoded (FromForm)
-import Utils (faIcon_)
+
 
 data CreateProjectForm = CreateProjectForm
   { title :: Text
@@ -64,6 +65,7 @@ data CreateProjectForm = CreateProjectForm
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromForm, Default)
 
+
 data CreateProjectFormError = CreateProjectFormError
   { titleE :: Maybe [String]
   , descriptionE :: Maybe [String]
@@ -71,8 +73,10 @@ data CreateProjectFormError = CreateProjectFormError
   deriving stock (Eq, Show, Generic)
   deriving anyclass (Default)
 
+
 createProjectFormToModel :: Projects.ProjectId -> CreateProjectForm -> Projects.CreateProject
 createProjectFormToModel pid CreateProjectForm{..} = Projects.CreateProject{id = pid, ..}
+
 
 createProjectFormV :: Monad m => Valor CreateProjectForm m CreateProjectFormError
 createProjectFormV =
@@ -80,8 +84,10 @@ createProjectFormV =
     <$> check1 title (failIf ["name can't be empty"] T.null)
     <*> check1 description Valor.pass
 
+
 checkEmail :: Text -> Bool
 checkEmail = isJust . T.find (== '@')
+
 
 ----------------------------------------------------------------------------------------------------------
 -- createProjectGetH is the handler for the create projects page
@@ -94,6 +100,7 @@ createProjectGetH sess = do
           , pageTitle = "Endpoints"
           }
   pure $ bodyWrapper bwconf $ createProjectBody sess envCfg False (def @CreateProjectForm) (def @CreateProjectFormError)
+
 
 ----------------------------------------------------------------------------------------------------------
 projectSettingsGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
@@ -116,14 +123,21 @@ projectSettingsGetH sess pid = do
   let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just proj, pageTitle = "Settings"}
   pure $ bodyWrapper bwconf $ createProjectBody sess envCfg True createProj (def @CreateProjectFormError)
 
+
 ----------------------------------------------------------------------------------------------------------
 deleteProjectGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Headers '[HXTrigger, HXRedirect] (Html ()))
 deleteProjectGetH sess pid = do
   pool <- asks pool
-  _ <- liftIO $ withPool pool $ Projects.deleteProject pid
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"errorToast": ["Only project members can perform this action."]}|]
+      pure $ addHeader hxTriggerData $ addHeader "/" $ span_ ""
+    else do
+      _ <- liftIO $ withPool pool $ Projects.deleteProject pid
+      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Deleted Project Successfully"]}|]
+      pure $ addHeader hxTriggerData $ addHeader "/" $ span_ ""
 
-  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Deleted Project Successfully"]}|]
-  pure $ addHeader hxTriggerData $ addHeader "/" $ span_ ""
 
 ----------------------------------------------------------------------------------------------------------
 -- createProjectPostH is the handler for the create projects page form handling.
@@ -135,6 +149,7 @@ createProjectPostH sess createP = do
   case validationRes of
     Right cpe -> pure $ noHeader $ noHeader $ createProjectBody sess envCfg createP.isUpdate createP cpe
     Left cp -> processProjectPostForm sess cp
+
 
 processProjectPostForm :: Sessions.PersistentSession -> Valor.Valid CreateProjectForm -> DashboardM (Headers '[HXTrigger, HXRedirect] (Html ()))
 processProjectPostForm sess cpRaw = do
@@ -148,7 +163,7 @@ processProjectPostForm sess cpRaw = do
         _ <- liftIO $ withPool pool $ Projects.updateProject (createProjectFormToModel pid cp)
         pass
       else do
-        let usersAndPermissions = zip (cp.emails) (cp.permissions) & uniq
+        let usersAndPermissions = zip cp.emails cp.permissions & uniq
         _ <- liftIO $ withPool pool $ do
           Projects.insertProject (createProjectFormToModel pid cp)
           liftIO $ ConvertKit.addUserOrganization envCfg.convertkitApiKey (CI.original sess.user.getUser.email) pid.toText cp.title cp.paymentPlan
@@ -158,7 +173,7 @@ processProjectPostForm sess cpRaw = do
             liftIO $ ConvertKit.addUserOrganization envCfg.convertkitApiKey email pid.toText cp.title cp.paymentPlan
             when (userId' /= Just sess.userId) $ do
               -- invite the users to the project (Usually as an email)
-              _ <- liftIO $ withResource pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId pid email (cp.title)
+              _ <- liftIO $ withResource pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId pid email cp.title
               pass
             pure (email, permission, userId)
 
@@ -170,7 +185,7 @@ processProjectPostForm sess cpRaw = do
           ProjectMembers.insertProjectMembers projectMembers
 
         _ <- liftIO $ withResource pool \conn ->
-          createJob conn "background_jobs" $ BackgroundJobs.CreatedProjectSuccessfully sess.userId pid (original $ sess.user.getUser.email) (cp.title)
+          createJob conn "background_jobs" $ BackgroundJobs.CreatedProjectSuccessfully sess.userId pid (original sess.user.getUser.email) cp.title
         pass
 
   let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Created Project Successfully"]}|]
@@ -179,6 +194,7 @@ processProjectPostForm sess cpRaw = do
   if cp.isUpdate
     then pure $ addHeader hxTriggerDataUpdate $ noHeader bdy
     else pure $ addHeader hxTriggerData $ addHeader ("/p/" <> pid.toText <> "/about_project") bdy
+
 
 ----------------------------------------------------------------------------------------------------------
 -- createProjectBody is the core html view
@@ -191,7 +207,7 @@ createProjectBody sess envCfg isUpdate cp cpe = do
       div_ [class_ "grid gap-5"] do
         form_ [class_ "col-span-1 relative px-3 sm:px-10 border border-gray-200 py-10  bg-white rounded-3xl", hxPost_ "/p/new", hxTarget_ "#main-content", hxSwap_ "outerHTML", id_ "createUpdateBodyForm"] $ do
           input_ [name_ "isUpdate", type_ "hidden", value_ $ if isUpdate then "true" else "false"]
-          input_ [name_ "projectId", type_ "hidden", value_ $ cp.projectId]
+          input_ [name_ "projectId", type_ "hidden", value_ cp.projectId]
           input_ [name_ "paymentPlan", type_ "hidden", value_ paymentPlan, id_ "paymentPlanEl"]
           div_ $ do
             label_ [class_ "text-gray-700 mx-2 text-sm"] do
@@ -224,8 +240,8 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                 , ("Hobby", "250k", "$10", "3", paymentPlan == "Hobby", if envCfg.paddleSandbox then envCfg.paddleSandboxHobby else envCfg.paddleHobby)
                 , ("Startup", "1m", "$50", "5", paymentPlan == "Startup", if envCfg.paddleSandbox then envCfg.paddleSandboxStartup else envCfg.paddleStartup)
                 , ("Growth", "10m", "$250", "10", paymentPlan == "Growth", if envCfg.paddleSandbox then envCfg.paddleSandboxGrowth else envCfg.paddleGrowth)
-                ] ::
-                  [(Text, Text, Text, Text, Bool, Text)]
+                ]
+                  :: [(Text, Text, Text, Text, Bool, Text)]
                 )
                 & mapM_ \(title, included, price, team, isSelected, paddleSubsCode) -> do
                   let isSelectedTxt = toLower $ show isSelected
@@ -310,7 +326,7 @@ createProjectBody sess envCfg isUpdate cp cpe = do
           let paddleVendor = if envCfg.paddleSandbox then envCfg.paddleSandboxVendorId else envCfg.paddleVendorId
           let projectId = cp.projectId
           let userId = sess.userId.toText
-          let email = CI.original $ (sess.user.getUser).email
+          let email = CI.original sess.user.getUser.email
           script_
             [type_ "text/javascript"]
             [text|

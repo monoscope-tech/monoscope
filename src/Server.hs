@@ -1,4 +1,3 @@
-{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE UndecidableInstances #-}
 
 module Server (app) where
@@ -62,23 +61,32 @@ import Web.ClientMetadata qualified as ClientMetadata
 import Web.Cookie (SetCookie)
 import Witch (from)
 
+
 type GetRedirect = Verb 'GET 302
+
 
 -- When bystring is returned for json, simply return the bytestring
 instance MimeRender JSON ByteString where
   mimeRender _ = from @ByteString
 
+
 type QP a b = QueryParam a b
+
 
 type QPT a = QueryParam a Text
 
+
 type QPB a = QueryParam a Bool
+
 
 type QPI a = QueryParam a Int
 
+
 type QEID a = QueryParam a Endpoints.EndpointId
 
+
 type ProjectId = Capture "projectID" Projects.ProjectId
+
 
 --
 -- API Section
@@ -103,14 +111,16 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "log_explorer" :> QPT "query" :> QPT "cols" :> QPT "from" :> HXRequest :> HXBoosted :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" ZonedTime :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" ZonedTime :> "detailed" :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "log_explorer" :> "endpoint" :> Capture "endpoint_hash" Text :> Get '[HTML] (Headers '[HXRedirect] (Html ()))
     :<|> "p" :> ProjectId :> "bulk_seed_and_ingest" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "bulk_seed_and_ingest" :> ReqBody '[FormUrlEncoded] DataSeeding.DataSeedingForm :> Post '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "anomalies" :> QPT "layout" :> QPT "ackd" :> QPT "archived" :> QPT "sort" :> QEID "endpoint" :> HXRequest :> HXBoosted :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "anomalies" :> QPT "layout" :> QPT "ackd" :> QPT "archived" :> QPT "sort" :> QPT "page" :> QPT "load_more" :> QEID "endpoint" :> HXRequest :> HXBoosted :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "anomalies" :> "bulk_actions" :> Capture "action" Text :> ReqBody '[FormUrlEncoded] AnomalyBulkForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "acknowlege" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "unacknowlege" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "archive" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "unarchive" :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "anomaly" :> Capture "targetHash" Text :> QPT "modal" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "redacted_fields" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "redacted_fields" :> ReqBody '[FormUrlEncoded] RedactFieldForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "charts_html" :> "throughput" :> QPT "id" :> QPT "group_by" :> QPT "endpoint_hash" :> QPT "shape_hash" :> QPT "format_hash" :> QPT "status_code_gt" :> QPI "num_slots" :> QPI "limit" :> QPB "show_legend" :> QPT "from" :> QPT "to" :> QPT "theme" :> Get '[HTML] (Html ())
@@ -126,6 +136,7 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "about_project" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "share" :> ReqBody '[FormUrlEncoded] Share.ReqForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
 
+
 type PublicAPI =
   "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
     :<|> "to_login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
@@ -140,22 +151,28 @@ type PublicAPI =
     :<|> "share" :> "r" :> Capture "shareID" UUID.UUID :> Get '[HTML] (Html ())
     :<|> Raw
 
+
 type API =
   AuthProtect "apitoolkit_session" :> ProtectedAPI
     :<|> PublicAPI
 
+
 type instance AuthServerData (AuthProtect "apitoolkit_session") = Sessions.PersistentSession
+
 
 --
 --
 app :: LogAction IO String -> Pool Connection -> Config.AuthContext -> Application
 app logger dbConn ctx = serveWithContext api (genAuthServerContext logger dbConn) $ hoistServerWithContext api ctxProxy (ctxToHandler ctx) server
 
+
 api :: Proxy API
 api = Proxy
 
+
 ctxProxy :: Proxy '[AuthHandler Request Sessions.PersistentSession]
 ctxProxy = Proxy
+
 
 -- | Our API, where we provide all the author-supplied handlers for each end
 -- point. Note that 'privateDataFunc' is a function that takes 'Account' as an
@@ -183,6 +200,7 @@ protectedServer sess =
     :<|> Log.apiLog sess
     :<|> Log.apiLogItem sess
     :<|> Log.expandAPIlogItem sess
+    :<|> EndpointDetails.endpointDetailsWithHashH sess
     :<|> DataSeeding.dataSeedingGetH sess
     :<|> DataSeeding.dataSeedingPostH sess
     :<|> AnomalyList.anomalyListGetH sess
@@ -191,6 +209,7 @@ protectedServer sess =
     :<|> AnomalyList.unAcknowlegeAnomalyGetH sess
     :<|> AnomalyList.archiveAnomalyGetH sess
     :<|> AnomalyList.unArchiveAnomalyGetH sess
+    :<|> AnomalyList.anomalyDetailsGetH sess
     :<|> RedactedFields.redactedFieldsGetH sess
     :<|> RedactedFields.redactedFieldsPostH sess
     :<|> Charts.throughputEndpointHTML sess
@@ -206,6 +225,7 @@ protectedServer sess =
     :<|> Survey.surveyGetH sess
     :<|> Share.shareLinkPostH sess
 
+
 publicServer :: ServerT PublicAPI DashboardM
 publicServer =
   loginH
@@ -218,8 +238,10 @@ publicServer =
     :<|> Share.shareLinkGetH
     :<|> serveDirectoryWebApp "./static/public"
 
+
 server :: ServerT API DashboardM
 server = protectedServer :<|> publicServer
+
 
 data Status = Status
   { ping :: Text
@@ -232,19 +254,21 @@ data Status = Status
     (FromJSON, ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Status
 
+
 statusH :: DashboardM Status
 statusH = do
   pool <- asks pool
   let query = [sql| select version(); |]
   version <- liftIO $ withPool pool $ queryOne Select query ()
   let gi = $$tGitInfoCwd
-  pure $
-    Status
+  pure
+    $ Status
       { ping = "pong"
       , dbVersion = version
       , gitHash = toText $ giHash gi
       , gitCommitDate = toText $ giCommitDate gi
       }
+
 
 pingH :: DashboardM Text
 pingH = do

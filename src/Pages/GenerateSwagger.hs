@@ -22,6 +22,8 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Relude
 import Relude.Unsafe ((!!))
+import Utils
+
 
 data MergedEndpoint = MergedEndpoint
   { urlPath :: Text
@@ -33,6 +35,7 @@ data MergedEndpoint = MergedEndpoint
   }
   deriving stock (Show, Generic)
 
+
 data MergedFieldsAndFormats = MergedFieldsAndFormats
   { field :: Fields.SwField
   , format :: Formats.SwFormat
@@ -40,17 +43,20 @@ data MergedFieldsAndFormats = MergedFieldsAndFormats
   deriving stock (Show, Generic)
   deriving anyclass (AE.ToJSON)
 
+
 data MergedShapesAndFields = MergedShapesAndFields
   { shape :: Shapes.SwShape
   , sField :: Map Fields.FieldCategoryEnum [MergedFieldsAndFormats]
   }
   deriving stock (Show, Generic)
 
+
 data KeyPathGroup = KeyPathGroup
   { subGoups :: [Text]
   , keyPath :: Text
   }
   deriving stock (Show, Generic)
+
 
 convertQueryParamsToJSON :: [T.Text] -> [MergedFieldsAndFormats] -> Value
 convertQueryParamsToJSON params fields = paramsJSON
@@ -64,6 +70,7 @@ convertQueryParamsToJSON params fields = paramsJSON
     paramsJSON =
       let ar = V.fromList $ map mapQParamsFunc params
        in Array ar
+
 
 processItem :: T.Text -> Map.Map T.Text KeyPathGroup -> Map.Map T.Text KeyPathGroup
 processItem item groups =
@@ -94,46 +101,58 @@ processItem item groups =
           val -> Map.insert root (KeyPathGroup{subGoups = [remainingItems], keyPath = "." <> root}) groups
    in updatedGroups
 
+
 processItems :: [T.Text] -> Map.Map T.Text KeyPathGroup -> Map.Map T.Text KeyPathGroup
 processItems [] groups = groups
 processItems (x : xs) groups = processItems xs updatedGroups
   where
     updatedGroups = processItem x groups
 
+
 mergeObjects :: Value -> Value -> Maybe Value
 mergeObjects (Object obj1) (Object obj2) = Just $ Object (obj1 <> obj2)
 mergeObjects _ _ = Nothing
 
+
+---------------------------------------------------------
+
+-- >>> import Models.Apis.Endpoints
+-- >>> import Models.Apis.Fields
+-- >>> import Models.Apis.Formats
+-- >>> import Data.Aeson.QQ
+-- >>> let items1 = [MergedFieldsAndFormats {field = SwField {fEndpointHash = "f65d8c5d", fKey = "Content-Type[*]", fFieldType = FTString, fFormat = "text", fDescription = "", fKeyPath = ".Content-Type[*]", fFieldCategory = FCResponseHeader, fHash = "f65d8c5d7c35c08"}, format = SwFormat {swFieldHash = "f65d8c5d7c35c08", swFieldType = FTString, swFieldFormat = "text", swExamples = [String "application/json; charset=utf-8"], swHash = "f65d8c5d7c35c0898dbff6b"}}]
+-- >>> let resp = convertKeyPathsToJson [".errors",".message",".status",".timestamp"] items1 "."
+-- >>> resp == [aesonQQ|{"schema":{"properties":{"errors":{"description":"","example":"","format":"text","type":"string"},"message":{"description":"","example":"","format":"text","type":"string"},"status":{"description":"","example":"","format":"text","type":"string"},"timestamp":{"description":"","example":"","format":"text","type":"string"}},"type":"object"}}|]
+-- True
+--
+-- >>> let items2 = [MergedFieldsAndFormats {field = SwField {fEndpointHash = "8401409d", fKey = "cache-control[*]", fFieldType = FTString, fFormat = "text", fDescription = "", fKeyPath = ".cache-control[*]", fFieldCategory = FCResponseHeader, fHash = "8401409d6e4ade5b"}, format = SwFormat {swFieldHash = "8401409d6e4ade5b", swFieldType = FTString, swFieldFormat = "text", swExamples = [String "no-cache, private"], swHash = "8401409d6e4ade5b98dbff6b"}},MergedFieldsAndFormats {field = SwField {fEndpointHash = "8401409d", fKey = "content-type[*]", fFieldType = FTString, fFormat = "text", fDescription = "", fKeyPath = ".content-type[*]", fFieldCategory = FCResponseHeader, fHash = "8401409d9db3dac0"}, format = SwFormat {swFieldHash = "8401409d9db3dac0", swFieldType = FTString, swFieldFormat = "text", swExamples = [String "application/json",String "application/json; charset=utf-8"], swHash = "8401409d9db3dac098dbff6b"}},MergedFieldsAndFormats {field = SwField {fEndpointHash = "8401409d", fKey = "date[*]", fFieldType = FTString, fFormat = "text", fDescription = "", fKeyPath = ".date[*]", fFieldCategory = FCResponseHeader, fHash = "8401409d3bcb4a44"}, format = SwFormat {swFieldHash = "8401409d3bcb4a44", swFieldType = FTString, swFieldFormat = "text", swExamples = [String "[CLIENT_REDACTED]"], swHash = "8401409d3bcb4a4498dbff6b"}},MergedFieldsAndFormats {field = SwField {fEndpointHash = "8401409d", fKey = "vary[*]", fFieldType = FTString, fFormat = "text", fDescription = "", fKeyPath = ".vary[*]", fFieldCategory = FCResponseHeader, fHash = "8401409dbca0c7da"}, format = SwFormat {swFieldHash = "8401409dbca0c7da", swFieldType = FTString, swFieldFormat = "text", swExamples = [String "Accept"], swHash = "8401409dbca0c7da98dbff6b"}},MergedFieldsAndFormats {field = SwField {fEndpointHash = "8401409d", fKey = "x-content-type-options[*]", fFieldType = FTString, fFormat = "text", fDescription = "", fKeyPath = ".x-content-type-options[*]", fFieldCategory = FCResponseHeader, fHash = "8401409d461f8ef6"}, format = SwFormat {swFieldHash = "8401409d461f8ef6", swFieldType = FTString, swFieldFormat = "text", swExamples = [String "nosniff"], swHash = "8401409d461f8ef698dbff6b"}},MergedFieldsAndFormats {field = SwField {fEndpointHash = "8401409d", fKey = "x-frame-options[*]", fFieldType = FTString, fFormat = "text", fDescription = "", fKeyPath = ".x-frame-options[*]", fFieldCategory = FCResponseHeader, fHash = "8401409d86002f95"}, format = SwFormat {swFieldHash = "8401409d86002f95", swFieldType = FTString, swFieldFormat = "text", swExamples = [String "deny"], swHash = "8401409d86002f9598dbff6b"}}]
+-- >>> let resp = convertKeyPathsToJson [""] items2 ""
+-- >>> resp == [aesonQQ| |]
+--
 convertKeyPathsToJson :: [T.Text] -> [MergedFieldsAndFormats] -> Text -> Value
 convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
   where
+    -- Debug logs
+    -- !() = trace (show items) ()
+    -- !() = trace (show categoryFields) ()
+    -- !() = trace (show parentPath) ()
     groups = processItems items Map.empty
+
+    safeTail :: T.Text -> T.Text
+    safeTail txt = if T.null txt then txt else T.tail txt
+
     processGroup :: (T.Text, KeyPathGroup) -> Value -> Value
     processGroup (grp, keypath) parsedValue =
       let updatedJson =
             if null keypath.subGoups
               then
-                let field = find (\fi -> T.tail (parentPath <> "." <> grp) == fi.field.fKeyPath) categoryFields
-                    (desc, t, ft, eg) = case field of
-                      Just f ->
-                        if fieldTypeToText f.format.swFieldType == "bool"
-                          then (f.field.fDescription, "boolean", f.field.fFormat, V.head f.format.swExamples)
-                          else (f.field.fDescription, fieldTypeToText f.format.swFieldType, f.field.fFormat, V.head f.format.swExamples)
-                      Nothing ->
-                        let newK = T.replace "[*]" ".[]" (T.tail parentPath <> "." <> grp)
-                            newF = find (\fi -> newK == fi.field.fKeyPath) categoryFields
-                            obj = case newF of
-                              Just f ->
-                                if fieldTypeToText f.format.swFieldType == "bool"
-                                  then (f.field.fDescription, "boolean", f.field.fFormat, V.head f.format.swExamples)
-                                  else (f.field.fDescription, fieldTypeToText f.format.swFieldType, f.field.fFormat, V.head f.format.swExamples)
-                              Nothing -> ("", "string", "text", "")
-                         in obj
-                    (key, ob) =
-                      if T.isSuffixOf "[*]" grp
-                        then (T.takeWhile (/= '[') grp, object ["description" .= String desc, "type" .= String "array", "items" .= object ["type" .= t, "format" .= ft, "example" .= eg]])
-                        else (grp, object ["description" .= String desc, "type" .= t, "format" .= ft, "example" .= eg])
-                    validKey = if key == "" then "schema" else key
+                let keyPath = safeTail (parentPath <> "." <> grp)
+                    field = find (\fi -> keyPath == fi.field.fKeyPath || T.replace "[*]" ".[]" keyPath == fi.field.fKeyPath) categoryFields
+                    (desc, t, ft, eg) = extractInfo field
+                    keyBase = if T.isSuffixOf "[*]" grp then T.takeWhile (/= '[') grp else grp
+                    validKey = if keyBase == "" then "schema" else keyBase
+                    obType = if T.isSuffixOf "[*]" grp then "array" else t
+                    ob = object ["description" .= String desc, "type" .= String obType, "format" .= ft, "example" .= eg]
                  in object [AEKey.fromText validKey .= ob]
               else
                 let (key, t) = if T.isSuffixOf "[*]" grp then (T.takeWhile (/= '[') grp, "array" :: String) else (grp, "object")
@@ -147,10 +166,20 @@ convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
             Just obj -> obj
             Nothing -> object []
        in updateMap
-    objectValue :: Value
-    objectValue = object []
+
     convertToJson' :: Map.Map T.Text KeyPathGroup -> Value
-    convertToJson' grps = foldr processGroup objectValue (Map.toList grps)
+    convertToJson' grps = foldr processGroup (object []) (Map.toList grps)
+
+
+-- Helper function to determine type and values
+extractInfo :: Maybe MergedFieldsAndFormats -> (Text, Text, Text, AE.Value)
+extractInfo Nothing = ("", "string", "text", "")
+extractInfo (Just f)
+  | fieldTypeToText (f.format.swFieldType) == "bool" = (f.field.fDescription, "boolean", f.field.fFormat, V.head f.format.swExamples)
+  | otherwise = (f.field.fDescription, fieldTypeToText f.format.swFieldType, f.field.fFormat, V.head f.format.swExamples)
+
+
+--------------------------------------------------------------------------------------------
 
 mergeEndpoints :: V.Vector Endpoints.SwEndpoint -> V.Vector Shapes.SwShape -> V.Vector Fields.SwField -> V.Vector Formats.SwFormat -> V.Vector MergedEndpoint
 mergeEndpoints endpoints shapes fields formats = V.map mergeEndpoint endpoints
@@ -172,6 +201,7 @@ mergeEndpoints endpoints shapes fields formats = V.map mergeEndpoint endpoints
             , shapes = matchingShapes
             }
 
+
 findMatchingFormat :: Fields.SwField -> V.Vector Formats.SwFormat -> MergedFieldsAndFormats
 findMatchingFormat field formats =
   let fieldHash = field.fHash
@@ -190,6 +220,7 @@ findMatchingFormat field formats =
         , format = matchingFormat
         }
 
+
 findMatchingFields :: Shapes.SwShape -> V.Vector MergedFieldsAndFormats -> MergedShapesAndFields
 findMatchingFields shape fields =
   let fieldHashes = Shapes.swFieldHashes shape
@@ -203,9 +234,11 @@ findMatchingFields shape fields =
         , sField = groupedMap
         }
 
+
 -- For Servers part of the swagger
 getUniqueHosts :: Vector Endpoints.SwEndpoint -> Vector Value
 getUniqueHosts endpoints = V.fromList $ map (\h -> object ["url" .= String h]) $ sortNub $ concatMap (\endpoint -> V.toList endpoint.hosts) endpoints
+
 
 -- Make urlPaths openapi compartible
 specCompartiblePath :: Text -> Text
@@ -218,6 +251,7 @@ specCompartiblePath path = toText $ intercalate "/" modifiedSegments
       | x == ':' = "{" ++ xs ++ "}"
       | otherwise = segment
     modifySegment "" = ""
+
 
 groupEndpointsByUrlPath :: [MergedEndpoint] -> AE.Value
 groupEndpointsByUrlPath endpoints =
@@ -244,19 +278,23 @@ groupEndpointsByUrlPath endpoints =
             (_, _) -> AEKey.fromText (T.toLower $ method mergedEndpoint) .= object ["responses" .= groupShapesByStatusCode (shapes mergedEndpoint)]
        in endPointJSON
 
+
 groupShapesByStatusCode :: V.Vector MergedShapesAndFields -> AE.Value
 groupShapesByStatusCode shapes =
   object $ constructStatusCodeEntry (V.toList shapes)
 
+
 constructStatusCodeEntry :: [MergedShapesAndFields] -> [AET.Pair]
 constructStatusCodeEntry =
   map mapFunc
+
 
 mapFunc :: MergedShapesAndFields -> AET.Pair
 mapFunc mShape =
   let content = object ["*/*" .= convertKeyPathsToJson (V.toList mShape.shape.swResponseBodyKeypaths) (fromMaybe [] (Map.lookup Field.FCResponseBody mShape.sField)) ""]
       headers = object ["content" .= convertKeyPathsToJson (V.toList mShape.shape.swResponseHeadersKeypaths) (fromMaybe [] (Map.lookup Field.FCResponseHeader mShape.sField)) ""]
    in show mShape.shape.swStatusCode .= object ["description" .= String "", "headers" .= headers, "content" .= content]
+
 
 generateSwagger :: Text -> Text -> Vector Endpoints.SwEndpoint -> Vector Shapes.SwShape -> Vector Fields.SwField -> Vector Formats.SwFormat -> Value
 generateSwagger projectTitle projectDescription endpoints shapes fields formats = swagger
@@ -267,20 +305,26 @@ generateSwagger projectTitle projectDescription endpoints shapes fields formats 
     info = object ["description" .= String projectDescription, "title" .= String projectTitle, "version" .= String "1.0.0", "termsOfService" .= String "https://apitoolkit.io/terms-and-conditions/"]
     swagger = object ["openapi" .= String "3.0.0", "info" .= info, "servers" .= Array hosts, "paths" .= paths]
 
+
 generateGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM AE.Value
 generateGetH sess pid = do
   pool <- asks pool
-  liftIO $
-    withPool pool $ do
-      project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      endpoints <- Endpoints.endpointsByProjectId pid
-      let endpoint_hashes = V.map (.hash) endpoints
-      shapes <- Shapes.shapesByEndpointHashes pid endpoint_hashes
-      fields <- Fields.fieldsByEndpointHashes pid endpoint_hashes
-      let field_hashes = V.map (.fHash) fields
-      formats <- Formats.formatsByFieldsHashes pid field_hashes
-      let (projectTitle, projectDescription) = case project of
-            (Just pr) -> (toText pr.title, toText pr.description)
-            Nothing -> ("__APITOOLKIT", "Edit project description")
-      let swagger = generateSwagger projectTitle projectDescription endpoints shapes fields formats
-      pure swagger
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ AE.object ["error" .= String "You are not a member of this project"]
+    else do
+      liftIO
+        $ withPool pool do
+          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+          endpoints <- Endpoints.endpointsByProjectId pid
+          let endpoint_hashes = V.map (.hash) endpoints
+          shapes <- Shapes.shapesByEndpointHashes pid endpoint_hashes
+          fields <- Fields.fieldsByEndpointHashes pid endpoint_hashes
+          let field_hashes = V.map (.fHash) fields
+          formats <- Formats.formatsByFieldsHashes pid field_hashes
+          let (projectTitle, projectDescription) = case project of
+                (Just pr) -> (toText pr.title, toText pr.description)
+                Nothing -> ("__APITOOLKIT", "Edit project description")
+          let swagger = generateSwagger projectTitle projectDescription endpoints shapes fields formats
+          pure swagger

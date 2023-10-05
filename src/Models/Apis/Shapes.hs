@@ -1,6 +1,6 @@
 {-# LANGUAGE TemplateHaskell #-}
 
-module Models.Apis.Shapes (Shape (..), SwShape (..), ShapeId (..), shapeIdText, insertShapeQueryAndParam, insertShapes, shapesByEndpointHashes, shapesByEndpointHash) where
+module Models.Apis.Shapes (Shape (..), ShapeWithFields (..), SwShape (..), ShapeId (..), getShapeFields, shapeIdText, insertShapeQueryAndParam, insertShapes, shapesByEndpointHashes, shapesByEndpointHash) where
 
 import Data.Aeson qualified as AE
 import Data.Default (Default)
@@ -20,12 +20,17 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact (DBT, executeMany)
 import Database.PostgreSQL.Transact qualified as PgT
 
+import Data.Vector qualified as Vector
 import Deriving.Aeson qualified as DAE
+import Models.Apis.Fields.Types
+import Models.Apis.Fields.Types qualified as Fields
 import Models.Projects.Projects qualified as Projects
+import Models.Projects.Projects qualified as Projescts
 import Optics.TH
 import Relude
 import Utils (DBField (MkDBField))
 import Web.HttpApiData (FromHttpApiData)
+
 
 newtype ShapeId = ShapeId {unShapeId :: UUID.UUID}
   deriving stock (Generic, Show)
@@ -33,8 +38,25 @@ newtype ShapeId = ShapeId {unShapeId :: UUID.UUID}
     (AE.FromJSON, AE.ToJSON, Eq, Ord, FromField, ToField, FromHttpApiData, Default)
     via UUID.UUID
 
+
 shapeIdText :: ShapeId -> Text
 shapeIdText = UUID.toText . unShapeId
+
+
+data ShapeWithFields = ShapeWidthFields
+  { status :: Int
+  , sHash :: Text
+  , fieldsMap :: Map FieldCategoryEnum [Fields.Field]
+  }
+  deriving (Show)
+
+
+getShapeFields :: Shape -> Vector Fields.Field -> ShapeWithFields
+getShapeFields shape fields = ShapeWidthFields{status = shape.statusCode, sHash = shape.hash, fieldsMap = fieldM}
+  where
+    matchedFields = Vector.filter (\field -> field.hash `Vector.elem` shape.fieldHashes) fields
+    fieldM = Fields.groupFieldsByCategory matchedFields
+
 
 -- A shape is a deterministic representation of a request-response combination for a given endpoint.
 -- We usually expect multiple shapes per endpoint. Eg a shape for a success request-response and another for an error response.
@@ -60,7 +82,9 @@ data Shape = Shape
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "shapes", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Shape)
   deriving (FromField) via Aeson Shape
 
+
 Optics.TH.makeFieldLabelsNoPrefix ''Shape
+
 
 insertShapeQueryAndParam :: Shape -> (Query, [DBField])
 insertShapeQueryAndParam shape = (q, params)
@@ -72,27 +96,29 @@ insertShapeQueryAndParam shape = (q, params)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING; 
           |]
     params =
-      [ MkDBField $ shape.projectId
-      , MkDBField $ shape.endpointHash
-      , MkDBField $ shape.queryParamsKeypaths
-      , MkDBField $ shape.requestBodyKeypaths
-      , MkDBField $ shape.responseBodyKeypaths
-      , MkDBField $ shape.requestHeadersKeypaths
-      , MkDBField $ shape.responseHeadersKeypaths
-      , MkDBField $ shape.fieldHashes
-      , MkDBField $ shape.hash
-      , MkDBField $ shape.statusCode
+      [ MkDBField shape.projectId
+      , MkDBField shape.endpointHash
+      , MkDBField shape.queryParamsKeypaths
+      , MkDBField shape.requestBodyKeypaths
+      , MkDBField shape.responseBodyKeypaths
+      , MkDBField shape.requestHeadersKeypaths
+      , MkDBField shape.responseHeadersKeypaths
+      , MkDBField shape.fieldHashes
+      , MkDBField shape.hash
+      , MkDBField shape.statusCode
       ]
 
-shapesByEndpointHash :: Text -> PgT.DBT IO (Vector Shape)
-shapesByEndpointHash endpointHash = query Select q (Only endpointHash)
+
+shapesByEndpointHash :: Projescts.ProjectId -> Text -> PgT.DBT IO (Vector Shape)
+shapesByEndpointHash pid endpointHash = query Select q (pid, endpointHash)
   where
     q =
       [sql| 
           SELECT id, created_at, updated_at, approved_on, project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, 
           response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash, status_code
-          FROM apis.shapes WHERE endpoint_hash = ?
+          FROM apis.shapes WHERE project_id= ? AND endpoint_hash = ?
       |]
+
 
 insertShapes :: [Shape] -> DBT IO Int64
 insertShapes shapes = do
@@ -108,6 +134,7 @@ insertShapes shapes = do
   let params = map getShapeParams shapes
   executeMany insertQuery params
 
+
 getShapeParams :: Shape -> (Maybe ZonedTime, Projects.ProjectId, Text, Vector Text, Vector Text, Vector Text, Vector Text, Vector Text, Vector Text, Text, Int)
 getShapeParams shape =
   ( shape.approvedOn
@@ -122,6 +149,7 @@ getShapeParams shape =
   , shape.hash
   , shape.statusCode
   )
+
 
 data SwShape = SwShape
   { swEndpointHash :: Text
@@ -139,6 +167,7 @@ data SwShape = SwShape
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SwShape
   deriving (FromField) via Aeson SwShape
   deriving anyclass (AE.ToJSON)
+
 
 shapesByEndpointHashes :: Projects.ProjectId -> Vector Text -> PgT.DBT IO (Vector SwShape)
 shapesByEndpointHashes pid hashes = query Select q (pid, hashes)

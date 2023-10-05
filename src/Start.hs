@@ -39,6 +39,7 @@ import Server qualified
 import System.Clock
 import System.Envy (decodeEnv)
 
+
 startApp :: IO ()
 startApp = do
   setLocaleEncoding utf8
@@ -95,11 +96,12 @@ startApp = do
           sequence
             [ async (pubsubService logger envConfig poolConn projectCache)
             , async (run (Config.port envConfig) $ Server.app logger poolConn serverCtx)
-            -- , async $ BackgroundJobs.jobsWorkerInit poolConn logger envConfig
+            , async $ BackgroundJobs.jobsWorkerInit poolConn logger envConfig
             -- , async $ OJCli.defaultWebUI ojStartArgs ojCfg
             ]
         _ <- waitAnyCancel asyncs
         pass
+
 
 -- pubsubService connects to the pubsub service and listens for  messages,
 -- then it calls the processMessage function to process the messages, and
@@ -118,8 +120,9 @@ pubsubService logger envConfig conn projectCache = do
 
   let pullReq = PubSub.newPullRequest & field @"maxMessages" L.?~ fromIntegral (envConfig ^. #messagesPerPubsubPullBatch)
 
-  forever $
-    runResourceT $ do
+  forever
+    $ runResourceT
+    $ do
       forM (envConfig ^. #requestPubsubTopics) \topic -> do
         let subscription = "projects/past-3/subscriptions/" <> topic <> "-sub"
         pullResp <- Google.send env $ PubSub.newPubSubProjectsSubscriptionsPull pullReq subscription
@@ -127,6 +130,7 @@ pubsubService logger envConfig conn projectCache = do
         msgIds <- liftIO $ processMessages logger envConfig conn messages projectCache
         let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just (catMaybes msgIds)
         unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env
+
 
 -- pubSubScope :: Proxy PubSub.Pubsub'FullControl
 pubSubScope :: Proxy '["https://www.googleapis.com/auth/pubsub"]
