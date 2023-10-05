@@ -240,7 +240,7 @@ anomalyListSlider currTime _ _ (Just anomalies) = do
                           show #{$anomalyIds[$currentAnomaly]} then 
                           setAnomalySliderPag()|]
           ]
-          $ faIcon_ "fa-arrow-left" "fa-regular fa-arrow-left" " m-2"
+          $ faIcon_ "fa-arrow-left" "fa-regular fa-arrow-left" "h-4 w-4"
         span_ [src_ " mx-4", id_ "anomalySliderPagination"] "1/1"
         a_
           [ class_ "cursor-pointer"
@@ -250,7 +250,7 @@ anomalyListSlider currTime _ _ (Just anomalies) = do
                           show #{$anomalyIds[$currentAnomaly]} then
                           setAnomalySliderPag()|]
           ]
-          $ faIcon_ "fa-arrow-right" "fa-regular fa-arrow-right" " m-2"
+          $ faIcon_ "fa-arrow-right" "fa-regular fa-arrow-right" "h-4 w-4"
 
     div_
       [ class_ "parent-slider"
