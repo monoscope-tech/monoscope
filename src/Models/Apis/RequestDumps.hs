@@ -322,6 +322,7 @@ selectRequestDumpByProject pid extraQuery fromM = do
   Only count <- fromMaybe (Only 0) <$> queryOne Select (Query $ encodeUtf8 qCount) (pid, fromT)
   pure (logItems, count)
   where
+    -- We only let people search within the 14 days time period
     fromT = fromMaybe "INTERVAL '14 days'" fromM
     extraQueryParsed = either error (\v -> if v == "" then "" else " AND " <> v) $ parseQueryStringToWhereClause extraQuery
     qCount = 
