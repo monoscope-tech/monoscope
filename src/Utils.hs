@@ -4,7 +4,6 @@
 module Utils (
   eitherStrToText,
   userIsProjectMember,
-  userNotMemeberPage,
   GetOrRedirect,
   redirect,
   DBField (..),
@@ -31,7 +30,6 @@ import Lucid.Svg (class_, svg_, use_)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Session
 import Models.Users.Users qualified as Users
-import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude hiding (show)
 import Servant
 
@@ -106,25 +104,6 @@ userIsProjectMember sess pid = do
     else do
       user <- Projects.userByProjectId pid sess.userId
       if V.length user == 0 then pure False else pure True
-
-
-userNotMemeberPage :: Session.PersistentSession -> Html ()
-userNotMemeberPage sess = bodyWrapper bwconf forbiddenPage
-  where
-    bwconf =
-      (def :: BWConfig)
-        { sessM = Just sess
-        , currProject = Nothing
-        , pageTitle = "Forbidden"
-        }
-
-
-forbiddenPage :: Html ()
-forbiddenPage =
-  div_ [class_ "w-full flex justify-center"] do
-    div_ [class_ "max-w-24 my-32 rounded-xl border p-8"] do
-      h3_ [class_ "text-3xl mb-2 font-bold"] "Forbidden"
-      p_ [class_ "max-w-prose text-gray-500"] "Only members of this project can access this page, make sure you are logged in to the right account and try again"
 
 
 getMethodBgColor :: Text -> Text

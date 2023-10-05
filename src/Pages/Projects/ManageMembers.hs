@@ -25,12 +25,12 @@ import Models.Users.Users qualified as Users
 import OddJobs.Job (createJob)
 import Optics.Core ((^.))
 import Pages.BodyWrapper
+import Pages.NonMember
 import Relude
 import Servant
 import Servant.Htmx
 import Utils
 import Web.FormUrlEncoded (FromForm)
-import Utils (faIcon_)
 
 
 data ManageMembersForm = ManageMembersForm

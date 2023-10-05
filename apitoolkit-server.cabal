@@ -61,6 +61,7 @@ library
       Pages.GenerateSwaggerSpec
       Pages.Log
       Pages.ManualIngestion
+      Pages.NonMember
       Pages.Onboarding
       Pages.Projects.CreateProject
       Pages.Projects.ListProjects

@@ -16,12 +16,12 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pages.NonMember
 import Relude
 import Utils (
   faIcon_,
   redirect,
   userIsProjectMember,
-  userNotMemeberPage,
  )
 
 
@@ -247,13 +247,9 @@ completedBanner pid =
         span_ [class_ "text-blue-500 pr-4 border-r border-r-2 border-r-blue-500 text-2xl"] "Done"
         h3_ [class_ "font-bold text-2xl"] "Onboarding Completed"
       div_ [class_ "pb-2 flex items-center mt-8 flex-col gap-4 text-blue-500 font-medium"] do
-        a_
-          [href_ $ "/p/" <> pid.toText <> "/"]
+        a_ [href_ $ "/p/" <> pid.toText <> "/"] do
           "Go to the dashboard"
-          faIcon_
-          "fa-circle-check"
-          "fa-sharp fa-regular fa-circle-check"
-          "h-24 w-24 text-green-700"
+          faIcon_ "fa-circle-check" "fa-sharp fa-regular fa-circle-check" "h-24 w-24 text-green-700"
 
 
 tabContentExpress :: Html ()

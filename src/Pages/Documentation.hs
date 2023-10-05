@@ -37,10 +37,11 @@ import Data.List (nubBy)
 import Models.Apis.Fields.Query qualified as Fields
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.Shapes qualified as Shapes
+import Pages.NonMember
 import Relude.Unsafe as Unsafe hiding (head)
 import Utils
+
 import Web.FormUrlEncoded (FromForm)
-import Control.Monad (liftM)
 
 
 data SwaggerForm = SwaggerForm
@@ -317,8 +318,8 @@ documentationGetH sess pid swagger_id = do
               let idx = show swg.id.swaggerId
               pure (sw, idx)
             ([], Nothing) -> do
-              -- TODO: We should generate this swagger in a worker. maybe at an interval? 
-              -- Or we can support a button to regenerate it 
+              -- TODO: We should generate this swagger in a worker. maybe at an interval?
+              -- Or we can support a button to regenerate it
               -- Or we can trigger a background process specifically when a user loads a docs page.
               endpoints <- Endpoints.endpointsByProjectId pid
               let endpoint_hashes = V.map (.hash) endpoints

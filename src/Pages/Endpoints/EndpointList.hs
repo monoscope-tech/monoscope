@@ -25,8 +25,9 @@ import Models.Apis.Anomalies qualified as Anomalies
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Charts.Charts qualified as Charts
+import Pages.NonMember
 import Relude
-import Utils (deleteParam, faIcon_, mIcon_, textToBool, userIsProjectMember, userNotMemeberPage)
+import Utils (deleteParam, faIcon_, mIcon_, textToBool, userIsProjectMember)
 
 
 data ParamInput = ParamInput

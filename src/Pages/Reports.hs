@@ -49,6 +49,7 @@ import Data.Text qualified as T
 import Data.UUID.V4 qualified as UUIDV4
 import Lucid.Svg (color_)
 import Models.Apis.RequestDumps (EndpointPerf, RequestForReport (endpointHash))
+import Pages.NonMember
 import Utils
 
 

@@ -49,6 +49,7 @@ import Pages.Charts.Charts (QueryBy)
 import Pages.Charts.Charts qualified as Charts
 import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
 import Pages.Log qualified as Log
+import Pages.NonMember
 import Pkg.Components (loader)
 import Relude
 import Relude.Unsafe qualified as Unsafe
