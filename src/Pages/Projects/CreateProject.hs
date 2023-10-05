@@ -51,7 +51,6 @@ import Servant (
 import Servant.Htmx
 import Utils
 import Web.FormUrlEncoded (FromForm)
-import Utils (faIcon_)
 
 
 data CreateProjectForm = CreateProjectForm

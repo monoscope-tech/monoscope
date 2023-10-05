@@ -14,17 +14,14 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript
-import Models.Projects.ProjectApiKeys (ProjectApiKey (ProjectApiKey))
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pages.NonMember
 import Relude
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
-import Pages.NonMember
-
 
 import Utils
 import Web.FormUrlEncoded (FromForm)
