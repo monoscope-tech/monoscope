@@ -13,13 +13,12 @@ import Data.Time.Format (formatTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector, iforM_, (!?))
 import Data.Vector qualified as Vector
-import Database.PostgreSQL.Entity.DBT (QueryNature (Insert), execute, withPool)
-import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Entity.DBT ( withPool)
 import Fmt
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
-import Lucid.Svg (d_, fill_, path_, title_, use_, viewBox_)
+import Lucid.Svg (use_)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
@@ -52,24 +51,24 @@ apiLog sess pid queryM cols' fromM hxRequestM hxBoostedM = do
         Just a -> Just a
 
   pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  isMember <- liftIO $ Database.PostgreSQL.Entity.DBT.withPool pool $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, requests) <- liftIO
-        $ withPool pool
-        do
+      (project, dbResp) <- liftIO
+        $ withPool pool do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-          requests <- RequestDumps.selectRequestDumpByProject pid query fromM'
-          pure (project, requests)
+          dbResp <- RequestDumps.selectRequestDumpByProject pid query fromM'
+          pure (project, dbResp)
 
-      reqChartTxt <- liftIO $ withPool pool $ RequestDumps.throughputBy pid Nothing Nothing Nothing Nothing Nothing (3 * 60) Nothing queryM (Nothing, Nothing)
+      let (requests, resultCount) = dbResp
+      reqChartTxt <- liftIO $ Database.PostgreSQL.Entity.DBT.withPool pool $ RequestDumps.throughputBy pid Nothing Nothing Nothing Nothing Nothing (3 * 60) Nothing queryM (Nothing, Nothing)
       let reqLastCreatedAtM = (^. #createdAt) <$> viaNonEmpty last (Vector.toList requests) -- FIXME: unoptimal implementation, converting from vector to list for last
       let fromTempM = toText . formatTime defaultTimeLocale "%F %T" <$> reqLastCreatedAtM
       let nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' fromTempM
 
-      let resultCount = maybe 0 (^. #fullCount) (requests !? 0)
+      -- let resultCount = maybe 0 (^. #fullCount) (requests !? 0)
       case (hxRequestM, hxBoostedM) of
         (Just "true", Nothing) -> pure do
           span_ [id_ "result-count", hxSwapOob_ "outerHTML"] $ show resultCount
@@ -89,13 +88,13 @@ apiLog sess pid queryM cols' fromM hxRequestM hxBoostedM = do
 apiLogItem :: Sessions.PersistentSession -> Projects.ProjectId -> UUID.UUID -> ZonedTime -> DashboardM (Html ())
 apiLogItem sess pid rdId createdAt = do
   pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  isMember <- liftIO $ Database.PostgreSQL.Entity.DBT.withPool pool $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
       startTime <- liftIO $ getTime Monotonic
-      logItemM <- liftIO $ withPool pool $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
+      logItemM <- liftIO $ Database.PostgreSQL.Entity.DBT.withPool pool $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
       afterProccessing <- liftIO $ getTime Monotonic
       let content = case logItemM of
             Just req -> apiLogItemView req (RequestDumps.requestDumpLogItemUrlPath pid req)
@@ -109,7 +108,7 @@ expandAPIlogItem :: Sessions.PersistentSession -> Projects.ProjectId -> UUID.UUI
 expandAPIlogItem sess pid rdId createdAt = do
   pool <- asks pool
   startTime <- liftIO $ getTime Monotonic
-  logItemM <- liftIO $ withPool pool $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
+  logItemM <- liftIO $ Database.PostgreSQL.Entity.DBT.withPool pool $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
   afterProccessing <- liftIO $ getTime Monotonic
   let content = case logItemM of
         Just req -> expandAPIlogItem' req True
@@ -146,7 +145,7 @@ expandAPIlogItem' req modal = do
                   p_ [style_ "width: calc(100% - 25px)", class_ "text-sm truncate ..."] "Expires in: 1 hour"
                   img_ [src_ "/assets/svgs/select_chevron.svg", style_ "height:15px; width:15px"]
               div_ [id_ "expire_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] do
-                ["1 hour", "8 hours", "1 day"] & mapM_ \sw -> do
+                forM_ (["1 hour", "8 hours", "1 day"]::[Text]) \sw -> do
                   button_
                     [ onclick_ "expireChanged(event)"
                     , term "data-expire-value" sw
