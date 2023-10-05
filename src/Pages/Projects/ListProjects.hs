@@ -13,7 +13,7 @@ import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
 import Servant (Union, WithStatus (..), respond)
-import Utils (GetOrRedirect, redirect, faIcon_)
+import Utils (GetOrRedirect, faIcon_, redirect)
 
 
 listProjectsGetH :: Sessions.PersistentSession -> DashboardM (Union GetOrRedirect)
