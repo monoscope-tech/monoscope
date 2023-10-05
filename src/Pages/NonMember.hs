@@ -1,7 +1,6 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE RankNTypes #-}
 
-
 module Pages.NonMember (userNotMemeberPage) where
 
 import Data.Default (Default (def))
@@ -9,6 +8,7 @@ import Lucid
 import Models.Users.Sessions qualified as Session
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
+
 
 userNotMemeberPage :: Session.PersistentSession -> Html ()
 userNotMemeberPage sess = bodyWrapper bwconf forbiddenPage
