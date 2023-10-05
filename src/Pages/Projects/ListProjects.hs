@@ -13,7 +13,7 @@ import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
 import Servant (Union, WithStatus (..), respond)
-import Utils (GetOrRedirect, redirect)
+import Utils (GetOrRedirect, redirect, faIcon_)
 
 
 listProjectsGetH :: Sessions.PersistentSession -> DashboardM (Union GetOrRedirect)
@@ -60,4 +60,4 @@ listProjectsBody projects = do
                       div_ [class_ "flex overflow-hidden -space-x-1"] $ do
                         project.usersDisplayImages & Vector.toList & mapM_ \imgSrc -> img_ [class_ "inline-block h-6 w-6 rounded-full ring-2 ring-white", src_ imgSrc, alt_ "Dries Vincent"]
                   div_ [class_ "ml-5 flex-shrink-0 text-gray-400"] $ do
-                    img_ [src_ "/assets/svgs/right_chevron.svg"]
+                    faIcon_ "fa-chevron-right" "fa-light fa-chevron-right" "h-3 w-3"

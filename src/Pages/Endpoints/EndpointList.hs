@@ -26,7 +26,7 @@ import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Charts.Charts qualified as Charts
 import Relude
-import Utils (deleteParam, mIcon_, textToBool, userIsProjectMember, userNotMemeberPage)
+import Utils (deleteParam, faIcon_, mIcon_, textToBool, userIsProjectMember, userNotMemeberPage)
 
 
 data ParamInput = ParamInput
@@ -108,7 +108,7 @@ endpointList' paramInput currTime pid enps = form_ [class_ "col-span-5 bg-white 
     div_ [class_ " grow flex flex-row gap-2"] do
       button_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/acknowlege", hxSwap_ "none"] "✓ acknowlege"
       button_ [class_ "btn-sm bg-transparent space-x-1 border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/archive", hxSwap_ "none"] do
-        img_ [src_ "/assets/svgs/anomalies/archive.svg", class_ "h-4 w-4 inline-block"]
+        faIcon_ "fa-inbox-full" "fa-sharp fa-light fa-inbox-full" "h-4 w-4 inline-block"
         span_ "archive"
     div_ [class_ "relative inline-block"] do
       a_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl space-x-2", [__|on click toggle .hidden on #sortMenuDiv |]] do
@@ -136,14 +136,14 @@ endpointList' paramInput currTime pid enps = form_ [class_ "col-span-5 bg-white 
     div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "font-base"] "EVENTS"
   div_ [class_ "w-full flex flex-row p-3"] $ do
     div_ [class_ "flex w-full bg-white py-2 px-3 flex-row border-solid border border-gray-200 h-10"] $ do
-      img_ [src_ "/assets/svgs/search.svg", class_ "h-5 w-auto"]
+      faIcon_ "fa-magnifying-glass" "fa-light fa-magnifying-glass" "h-5 w-auto"
       input_
         [ type_ "text"
         , [__| on input show .endpoint_item in #endpoints_container when its textContent.toLowerCase() contains my value.toLowerCase() |]
         , class_ "dataTable-search w-full h-full p-2 text-sm text-gray-400 font-normal focus:outline-none"
         , placeholder_ "Search endpoints..."
         ]
-      img_ [src_ "/assets/svgs/filter.svg", class_ "h-5 w-auto self-end"]
+      faIcon_ "fa-line-height" "fa-regular fa-line-height" "h-5 w-auto self-end"
   when (null enps) $ div_ [class_ "flex flex-col text-center justify-center items-center h-32"] $ do
     strong_ "No endpoints yet."
     p_ "Check Inbox to acknowlege new endpoints"

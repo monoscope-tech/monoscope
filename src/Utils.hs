@@ -9,6 +9,7 @@ module Utils (
   redirect,
   DBField (..),
   mIcon_,
+  faIcon_,
   deleteParam,
   quoteTxt,
   textToBool,
@@ -25,7 +26,7 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.ToField (ToField (..))
 
 import Database.PostgreSQL.Transact
-import Lucid (Html, div_, h3_, href_, p_)
+import Lucid (Html, div_, h3_, href_, i_, p_, term)
 import Lucid.Svg (class_, svg_, use_)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Session
@@ -75,6 +76,12 @@ instance ToField DBField where
 
 mIcon_ :: Text -> Text -> Html ()
 mIcon_ mIcon classes = svg_ [class_ $ "inline-block icon " <> classes] $ use_ [href_ $ "/assets/svgs/symbol-defs.svg#icon-" <> mIcon]
+
+
+faIcon_ :: Text -> Text -> Text -> Html ()
+faIcon_ faIcon faClasses classes = do
+  i_ [class_ faClasses, term "data-fa-symbol" faIcon] ""
+  svg_ [class_ classes] $ use_ [href_ $ "#" <> faIcon]
 
 
 deleteParam :: Text -> Text -> Text

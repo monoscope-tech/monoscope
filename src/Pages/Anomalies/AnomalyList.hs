@@ -267,7 +267,7 @@ anomalyList paramInput pid currTime anomalies nextFetchUrl = form_ [class_ "col-
       div_ [class_ " grow flex flex-row gap-2"] do
         button_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/acknowlege", hxSwap_ "none"] "✓ acknowlege"
         button_ [class_ "btn-sm bg-transparent space-x-1 border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/archive", hxSwap_ "none"] do
-          img_ [src_ "/assets/svgs/anomalies/archive.svg", class_ "h-4 w-4 inline-block"]
+          faIcon_ "fa-inbox-full" "fa-sharp fa-light fa-inbox-full" "h-4 w-4 inline-block"
           span_ "archive"
       div_ [class_ "relative inline-block"] do
         a_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl space-x-2", [__|on click toggle .hidden on #sortMenuDiv |]] do
@@ -356,7 +356,7 @@ anomalyListSlider currTime _ _ (Just anomalies) = do
                           show #{$anomalyIds[$currentAnomaly]} then 
                           setAnomalySliderPag()|]
           ]
-          $ img_ [src_ "/assets/svgs/leftarrow.svg", class_ " m-2"]
+          $ faIcon_ "fa-arrow-left" "fa-regular fa-arrow-left" " m-2"
         span_ [src_ " mx-4", id_ "anomalySliderPagination"] "1/1"
         a_
           [ class_ "cursor-pointer"
@@ -366,7 +366,7 @@ anomalyListSlider currTime _ _ (Just anomalies) = do
                           show #{$anomalyIds[$currentAnomaly]} then
                           setAnomalySliderPag()|]
           ]
-          $ img_ [src_ "/assets/svgs/rightarrow.svg", class_ " m-2"]
+          $ faIcon_ "fa-arrow-right" "fa-regular fa-arrow-right" " m-2"
 
     div_
       [ class_ "parent-slider"
@@ -820,7 +820,7 @@ anomalyArchiveButton pid aid archived = do
     , hxGet_ archiveAnomalyEndpoint
     , hxSwap_ "outerHTML"
     ]
-    $ img_ [src_ "/assets/svgs/anomalies/archive.svg", class_ "h-4 w-4"]
+    $ faIcon_ "fa-inbox-full" "fa-sharp fa-light fa-inbox-full" "h-4 w-4"
 
 
 reqResSection :: Text -> Bool -> [Shapes.ShapeWithFields] -> Html ()
