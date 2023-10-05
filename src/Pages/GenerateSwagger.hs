@@ -113,6 +113,7 @@ mergeObjects :: Value -> Value -> Maybe Value
 mergeObjects (Object obj1) (Object obj2) = Just $ Object (obj1 <> obj2)
 mergeObjects _ _ = Nothing
 
+
 ---------------------------------------------------------
 
 -- >>> import Models.Apis.Endpoints
@@ -145,14 +146,14 @@ convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
       let updatedJson =
             if null keypath.subGoups
               then
-                  let keyPath = safeTail (parentPath <> "." <> grp)
-                      field = find (\fi -> keyPath == fi.field.fKeyPath || T.replace "[*]" ".[]" keyPath == fi.field.fKeyPath) categoryFields
-                      (desc, t, ft, eg) = extractInfo field
-                      keyBase = if T.isSuffixOf "[*]" grp then T.takeWhile (/= '[') grp else grp
-                      validKey = if keyBase == "" then "schema" else keyBase
-                      obType = if T.isSuffixOf "[*]" grp then "array" else t
-                      ob = object ["description" .= String desc, "type" .= String obType, "format" .= ft, "example" .= eg]
-                  in object [AEKey.fromText validKey .= ob]
+                let keyPath = safeTail (parentPath <> "." <> grp)
+                    field = find (\fi -> keyPath == fi.field.fKeyPath || T.replace "[*]" ".[]" keyPath == fi.field.fKeyPath) categoryFields
+                    (desc, t, ft, eg) = extractInfo field
+                    keyBase = if T.isSuffixOf "[*]" grp then T.takeWhile (/= '[') grp else grp
+                    validKey = if keyBase == "" then "schema" else keyBase
+                    obType = if T.isSuffixOf "[*]" grp then "array" else t
+                    ob = object ["description" .= String desc, "type" .= String obType, "format" .= ft, "example" .= eg]
+                 in object [AEKey.fromText validKey .= ob]
               else
                 let (key, t) = if T.isSuffixOf "[*]" grp then (T.takeWhile (/= '[') grp, "array" :: String) else (grp, "object")
                     validKey = if key == "" then "schema" else key
@@ -169,14 +170,13 @@ convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
     convertToJson' :: Map.Map T.Text KeyPathGroup -> Value
     convertToJson' grps = foldr processGroup (object []) (Map.toList grps)
 
+
 -- Helper function to determine type and values
 extractInfo :: Maybe MergedFieldsAndFormats -> (Text, Text, Text, AE.Value)
 extractInfo Nothing = ("", "string", "text", "")
-extractInfo (Just f) 
-    | fieldTypeToText (f.format.swFieldType) == "bool" = (f.field.fDescription, "boolean", f.field.fFormat, V.head f.format.swExamples)
-    | otherwise = (f.field.fDescription, fieldTypeToText f.format.swFieldType, f.field.fFormat, V.head f.format.swExamples)
-
-
+extractInfo (Just f)
+  | fieldTypeToText (f.format.swFieldType) == "bool" = (f.field.fDescription, "boolean", f.field.fFormat, V.head f.format.swExamples)
+  | otherwise = (f.field.fDescription, fieldTypeToText f.format.swFieldType, f.field.fFormat, V.head f.format.swExamples)
 
 
 --------------------------------------------------------------------------------------------

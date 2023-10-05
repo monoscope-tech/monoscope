@@ -17,6 +17,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Projects.RedactedFields qualified as RedactedFields
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pages.NonMember
 import Relude
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)

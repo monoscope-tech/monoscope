@@ -7,9 +7,8 @@ import Data.Default (Default)
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
-import Database.PostgreSQL.Entity (Entity, insert, selectById, selectManyByField)
+import Database.PostgreSQL.Entity (Entity, insert, selectById)
 import Database.PostgreSQL.Entity.DBT
-import Database.PostgreSQL.Entity.Internal.QQ (field)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple hiding (execute, query)
 import Database.PostgreSQL.Simple.FromField
@@ -59,7 +58,8 @@ getSwaggerById id' = selectById (Only id')
 
 swaggersByProject :: Projects.ProjectId -> DBT IO (Vector Swagger)
 swaggersByProject = query Select q
-  where q = [sql| select id, project_id, created_by, created_at, updated_at, swagger_json from apis.swagger_jsons where project_id=? order by created_at desc|]
+  where
+    q = [sql| select id, project_id, created_by, created_at, updated_at, swagger_json from apis.swagger_jsons where project_id=? order by created_at desc|]
 
 
 updateSwagger :: Text -> Value -> DBT IO Int64

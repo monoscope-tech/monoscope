@@ -25,6 +25,7 @@ import Models.Users.Users qualified as Users
 import OddJobs.Job (createJob)
 import Optics.Core ((^.))
 import Pages.BodyWrapper
+import Pages.NonMember
 import Relude
 import Servant
 import Servant.Htmx
@@ -163,7 +164,7 @@ manageMembersBody projMembers =
                           _hyperscript.processNode(#inviteMemberSection) then halt |]
             ]
             $ do
-              img_ [src_ "/assets/svgs/blue-plus.svg", class_ " mt-1 mx-2 w-3 h-3"]
+              faIcon_ "fa-plus" "fa-sharp fa-regular fa-plus" "mt-1 mx-2 w-3 h-3 text-blue-700"
               span_ [class_ "text-blue-700 font-medium text-sm "] "Add member"
         button_ [class_ "py-2 px-5 bg-blue-700 absolute m-5 bottom-0 right-0 text-[white] text-sm rounded-xl cursor-pointer", type_ "submit"] "Submit"
 

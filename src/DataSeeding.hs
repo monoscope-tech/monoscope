@@ -25,6 +25,7 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Optics.TH (makeFieldLabelsNoPrefix)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pages.NonMember
 import ProcessMessage qualified
 import Relude
 import Relude.Unsafe ((!!))

@@ -18,10 +18,12 @@ import Data.Aeson.QQ (aesonQQ)
 import Data.List ((!!))
 import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute, withPool)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Pages.NonMember
 import Pkg.Components (loader)
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXRedirect, HXTrigger)
 import Utils
+
 import Web.FormUrlEncoded (FromForm)
 
 

@@ -11,19 +11,20 @@ import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import NeatInterpolation
 import Relude
+import Utils (faIcon_)
 
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu pid =
-  [ ("Get started", "/p/" <> pid.toText <> "/onboarding", "#onboarding")
-  , ("Dashboard", "/p/" <> pid.toText <> "/", "#dashboard")
-  , ("Endpoints", "/p/" <> pid.toText <> "/endpoints", "#endpoint")
-  , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies?ackd=false&archived=false", "#anomalies")
-  , ("API Log Explorer", "/p/" <> pid.toText <> "/log_explorer", "#logs")
-  , ("API Keys", "/p/" <> pid.toText <> "/apis", "#api")
+  [ ("Get started", "/p/" <> pid.toText <> "/onboarding", "fa-list-check")
+  , ("Dashboard", "/p/" <> pid.toText <> "/", "fa-qrcode")
+  , ("Endpoints", "/p/" <> pid.toText <> "/endpoints", "fa-arrow-up-arrow-down")
+  , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies?ackd=false&archived=false", "fa-octagon-exclamation")
+  , ("API Log Explorer", "/p/" <> pid.toText <> "/log_explorer", "fa-bars")
+  , ("API Keys", "/p/" <> pid.toText <> "/apis", "fa-key")
   , -- , ("Redacted Fields", "/p/" <> pid.toText <> "/redacted_fields", "#redacted")
-    ("Documentation", "/p/" <> pid.toText <> "/documentation", "#documentation")
-  , ("Reports", "/p/" <> pid.toText <> "/reports", "#reports")
+    ("Documentation", "/p/" <> pid.toText <> "/documentation", "fa-brackets-curly")
+  , ("Reports", "/p/" <> pid.toText <> "/reports", "fa-chart-simple")
   ]
 
 
@@ -74,6 +75,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child = do
       script_ [src_ "/assets/js/monaco/vs/loader.js", defer_ "true"] ("" :: Text)
       script_ [src_ "/assets/js/charts.js"] ("" :: Text)
       script_ [src_ "/assets/js/main.js"] ("" :: Text)
+      script_ [src_ "https://kit.fontawesome.com/e0cb5637ed.js", crossorigin_ "anonymous"] ("" :: Text)
 
       -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/core@1.2.0/dist/index.umd.min.js"] ("" :: Text)
       -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/datetime@1.2.0/dist/index.umd.min.js"] ("" :: Text)
@@ -212,10 +214,10 @@ projectsDropDown currProject projects = do
             small_ [class_ "block text-blue-800"] $ toHtml currProject.paymentPlan
         nav_ [] $ do
           a_ [href_ [text| /p/$pidTxt/settings |], class_ "p-3 flex gap-3 rounded-2xl hover:bg-gray-100"] $ do
-            img_ [src_ "/assets/svgs/settings.svg"]
+            faIcon_ "fa-gear" "fa-sharp fa-regular fa-gear" "h-5 w-5"
             span_ "Settings"
           a_ [href_ [text| /p/$pidTxt/manage_members |], class_ "p-3 flex gap-3 rounded hover:bg-gray-100"] $ do
-            img_ [src_ "/assets/svgs/add_user.svg"]
+            faIcon_ "fa-user-plus" "fa-light fa-user-plus" "h-5 w-5"
             span_ "Manage members"
           a_ [class_ "hidden p-3 flex gap-3 rounded hover:bg-gray-100 "] $ do
             img_ [src_ "/assets/svgs/dollar.svg"]
@@ -224,20 +226,20 @@ projectsDropDown currProject projects = do
         div_ [class_ "flex justify-between content-center items-center py-5 mb-2 "] $ do
           a_ [href_ "/"] $ h3_ [class_ "text-xl"] "Switch projects"
           a_ [class_ "inline-block bg-blue-700 flex pl-3 pr-4 py-2 rounded-xl text-white space-x-2", href_ "/p/new"] $ do
-            img_ [class_ "bg-blue-800 p-2 rounded-lg", src_ "/assets/svgs/plus.svg"]
+            faIcon_ "fa-plus" "fa-sharp fa-regular fa-plus" "h-5 w-5 bg-blue-800 rounded-lg"
             span_ [class_ "inline-block px-1"] "Add"
         div_ $ do
           div_ [class_ "relative"] $ do
             div_ [class_ "absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none"] $ do
-              img_ [class_ "", src_ "/assets/svgs/search.svg"]
+              faIcon_ "fa-magnifying-glass" "fa-regular fa-magnifying-glass" "h-6 w-4"
             input_ [class_ "pl-12 w-full text-sm bg-gray-100 rounded-2xl border-0 p-3", placeholder_ "Search Projects"]
           div_ [class_ "space-y-2 py-4 text-sm"] $ do
             projects & mapM_ \project -> do
               a_ [class_ "flex justify-between p-2", href_ $ "/p/" <> project.id.toText] $ do
                 div_ [class_ "space-x-3"] $ do
                   img_ [class_ "inline-block", src_ "/assets/svgs/projects.svg"]
-                  span_ [class_ "inline-block"] $ toHtml project.title
-                when (currProject.id == project.id) $ img_ [src_ "/assets/svgs/checkmark_blue.svg"]
+                  span_ [class_ "inline-block"] $ toHtml $ project.title
+                when (currProject.id == project.id) $ faIcon_ "fa-circle-check" "fa-sharp fa-regular fa-circle-check" "h-6 w-6 text-green-700"
 
 
 sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Maybe Text -> Html ()
@@ -287,12 +289,12 @@ sideNav sess project pageTitle menuItem = do
             small_ [class_ "block text-slate-900"] $ toHtml project.paymentPlan
           -- Development?
           div_ $ do
-            img_ [src_ "/assets/svgs/up_chevron.svg"]
-            img_ [src_ "/assets/svgs/down_chevron.svg"]
+            faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" " h-4 w-4 m-2"
+            faIcon_ "fa-chevron-up" "fa-light fa-chevron-up" " h-4 w-4 m-2"
       projectsDropDown project (Sessions.getProjects $ Sessions.projects sess)
     nav_ [class_ "mt-4"] $ do
       -- FIXME: reeanable hx-boost hxBoost_ "true"
-      menu project.id & mapM_ \(mTitle, mUrl, mIcon) -> do
+      menu (project.id) & mapM_ \(mTitle, mUrl, faIcon) -> do
         a_
           [ href_ mUrl
           , term "data-tippy-placement" "right"
@@ -305,7 +307,7 @@ sideNav sess project pageTitle menuItem = do
                  )
           ]
           $ do
-            svg_ [class_ "w-5 h-5 icon text-slate-500"] $ use_ [href_ $ "/assets/svgs/sprite/sprite.svg" <> mIcon]
+            faIcon_ faIcon ("fa-regular " <> faIcon) "w-5 h-5 text-slate-500"
             span_ [class_ "grow sd-hidden"] $ toHtml mTitle
 
 
@@ -326,10 +328,12 @@ navbar currUser = do
           |]
       ]
       $ do
-        img_ [class_ "w-4 h-4", src_ "/assets/svgs/hamburger_menu.svg"]
+        faIcon_ "fa-bars-sort" "fa-regular fa-bars-sort" "w-5 h-5 text-gray-500"
     div_ [class_ "inline-block flex items-center"] $ do
-      a_ [class_ "inline-block p-2 px-3 align-middle"] $ img_ [class_ "w-5 h-5", src_ "/assets/svgs/search.svg"]
-      a_ [class_ "inline-block border-r-2 p-2 pr-5"] $ img_ [class_ "w-5 h-5", src_ "/assets/svgs/notifications_active.svg"]
+      a_ [class_ "inline-block p-2 px-3 align-middle"] $ do
+        faIcon_ "fa-magnifying-glass" "fa-regular fa-magnifying-glass" "w-5 h-5 text-gray-500"
+      a_ [class_ "inline-block border-r-2 p-2 pr-5"] $ do
+        faIcon_ "fa-bell" "fa-regular fa-solid fa-bell" "w-5 h-5 text-gray-500"
       a_
         [ class_ "cursor-pointer inline-block space-x-4 pl-4 relative "
         , [__| 
@@ -381,5 +385,5 @@ navbar currUser = do
         $ do
           -- dropdown mainbody
           a_ [class_ "text-base p-2 flex gap-3 rounded hover:bg-gray-100", href_ "/logout"] $ do
-            img_ [src_ "/assets/svgs/add_user.svg"]
+            faIcon_ "fa-user-plus" "fa-light fa-user-plus" "h-5 w-5"
             span_ "Logout"

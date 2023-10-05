@@ -27,6 +27,7 @@ import NeatInterpolation (text)
 import Numeric (showHex)
 import Optics.Core ((^.))
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
+import Pages.NonMember
 import Pkg.Components (loader)
 import Relude
 

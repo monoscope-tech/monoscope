@@ -4,11 +4,11 @@
 module Utils (
   eitherStrToText,
   userIsProjectMember,
-  userNotMemeberPage,
   GetOrRedirect,
   redirect,
   DBField (..),
   mIcon_,
+  faIcon_,
   deleteParam,
   quoteTxt,
   textToBool,
@@ -18,19 +18,16 @@ module Utils (
   getStatusBgColor,
 ) where
 
-import Data.Default (def)
 import Data.Text (replace)
 import Data.Time (ZonedTime)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.ToField (ToField (..))
 
 import Database.PostgreSQL.Transact
-import Lucid (Html, div_, h3_, href_, p_)
+import Lucid (Html, href_, i_, term)
 import Lucid.Svg (class_, svg_, use_)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Session
-import Models.Users.Users qualified as Users
-import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude hiding (show)
 import Servant
 
@@ -77,6 +74,12 @@ mIcon_ :: Text -> Text -> Html ()
 mIcon_ mIcon classes = svg_ [class_ $ "inline-block icon " <> classes] $ use_ [href_ $ "/assets/svgs/symbol-defs.svg#icon-" <> mIcon]
 
 
+faIcon_ :: Text -> Text -> Text -> Html ()
+faIcon_ faIcon faClasses classes = do
+  i_ [class_ faClasses, term "data-fa-symbol" faIcon] ""
+  svg_ [class_ classes] $ use_ [href_ $ "#" <> faIcon]
+
+
 deleteParam :: Text -> Text -> Text
 deleteParam key url = if needle == "" then url else replace needle "" url
   where
@@ -99,25 +102,6 @@ userIsProjectMember sess pid = do
     else do
       user <- Projects.userByProjectId pid sess.userId
       if V.length user == 0 then pure False else pure True
-
-
-userNotMemeberPage :: Session.PersistentSession -> Html ()
-userNotMemeberPage sess = bodyWrapper bwconf forbiddenPage
-  where
-    bwconf =
-      (def :: BWConfig)
-        { sessM = Just sess
-        , currProject = Nothing
-        , pageTitle = "Forbidden"
-        }
-
-
-forbiddenPage :: Html ()
-forbiddenPage =
-  div_ [class_ "w-full flex justify-center"] do
-    div_ [class_ "max-w-24 my-32 rounded-xl border p-8"] do
-      h3_ [class_ "text-3xl mb-2 font-bold"] "Forbidden"
-      p_ [class_ "max-w-prose text-gray-500"] "Only members of this project can access this page, make sure you are logged in to the right account and try again"
 
 
 getMethodBgColor :: Text -> Text

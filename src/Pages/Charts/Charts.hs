@@ -21,10 +21,11 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Network.URI (escapeURIString, isUnescapedInURI)
+import Pages.NonMember
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant (FromHttpApiData (..))
-import Utils (DBField (MkDBField), userIsProjectMember, userNotMemeberPage)
+import Utils (DBField (MkDBField), userIsProjectMember)
 import Witch (from)
 
 
@@ -125,7 +126,7 @@ buildReqDumpSQL exps = (q, join qByArgs, mFrom, mTo)
        in (" ( " <> txt1 <> " AND " <> txt2 <> " ) ", arg1 ++ arg2)
 
     dateRangeFromQueryBy :: [QueryBy] -> (Maybe ZonedTime, Maybe ZonedTime)
-    dateRangeFromQueryBy = foldl' goDateRange (Nothing, Nothing) 
+    dateRangeFromQueryBy = foldl' goDateRange (Nothing, Nothing)
       where
         goDateRange :: (Maybe ZonedTime, Maybe ZonedTime) -> QueryBy -> (Maybe ZonedTime, Maybe ZonedTime)
         goDateRange acc@(Just _from, Just _to) _ = acc -- Both from and to found, no need to continue

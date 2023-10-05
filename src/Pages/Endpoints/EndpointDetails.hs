@@ -38,6 +38,7 @@ import Pages.Charts.Charts qualified as C
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components
 import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
+import Pages.NonMember
 import Relude hiding (max, min)
 import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
@@ -233,9 +234,9 @@ endpointDetails paramInput currTime endpoint endpointStats shapesWithFieldsMap f
       div_ [class_ "flex flex-row justify-between mb-10"] $ do
         div_ [class_ "flex flex-row place-items-center text-lg font-medium"] $ do
           h3_ [class_ "text-lg text-slate-800"] $ do
-            span_ [class_ $ "p-1 endpoint endpoint-" <> toLower endpoint.method] $ toHtml $ endpoint.method <> " "
-            strong_ [class_ "inconsolata text-xl"] $ toHtml endpoint.urlPath
-          img_ [src_ "/assets/svgs/cheveron-down.svg", class_ " h-4 w-4 m-2"]
+            span_ [class_ $ "p-1 endpoint endpoint-" <> toLower (endpoint.method)] $ toHtml $ (endpoint.method) <> " "
+            strong_ [class_ "inconsolata text-xl"] $ toHtml (endpoint.urlPath)
+          faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" " h-4 w-4 m-2"
         nav_ [class_ " space-x-4"] $ do
           subPageMenu
             & mapM_ \(title, slug) ->
@@ -250,7 +251,7 @@ endpointDetails paramInput currTime endpoint endpointStats shapesWithFieldsMap f
         div_ [class_ "flex flex-row hidden"] $ do
           a_ [href_ ""] $ do
             button_ [class_ "bg-white rounded-lg h-10 mt-1 "] $ do
-              img_ [src_ "/assets/svgs/filter.svg", class_ "h-6 w-6 m-2"]
+              faIcon_ "fa-line-height" "fa-regular fa-line-height" "h-6 w-6 m-2"
           a_ [href_ ""] $ do
             button_ [class_ "bg-blue-700 flex h-11 flex-row mx-2 px-3 rounded-xl py-2"] $ do
               h3_ [class_ "text-white text-sm text-bold mx-2 mt-1"] "Download Swagger"
@@ -394,10 +395,7 @@ apiOverviewSubPage paramInput currTime endpoint fieldsM reqLatenciesRolledByStep
       do
         mIcon_ "clock" "h-4 w-4"
         span_ [class_ "inline-block"] $ toHtml paramInput.currentPickerTxt
-        img_
-          [ src_ "/assets/svgs/cheveron-down.svg"
-          , class_ "h-4 w-4 inline-block"
-          ]
+        faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 w-4 inline-block"
     div_ [id_ "timepickerBox", class_ "hidden absolute z-10 mt-1  rounded-md flex"] do
       div_ [class_ "inline-block w-84 overflow-auto bg-white py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm"] do
         timePickerItems
@@ -508,10 +506,7 @@ reqResSection title isRequest shapesWithFieldsMap =
     div_ [class_ "flex justify-between mt-5"] $ do
       div_ [class_ "flex flex-row"] $ do
         a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
-          $ img_
-            [ src_ "/assets/svgs/cheveron-down.svg"
-            , class_ "h-4 mr-3 mt-1 w-4"
-            ]
+          $ faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 mr-3 mt-1 w-4"
         span_ [class_ "text-lg text-slate-800"] $ toHtml title
 
     div_ [class_ "bg-white border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"]
@@ -562,7 +557,7 @@ subSubSection title fieldsM =
                   , term "data-depth" $ show depth
                   ]
                   $ do
-                    img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-6 w-6 mr-1 chevron cursor-pointer p-1"]
+                    faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-6 w-6 mr-1 chevron cursor-pointer p-1"
                     div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full"] $ do
                       input_ [type_ "checkbox", class_ " mr-12"]
                       span_ [class_ "text-sm text-slate-800 inline-flex items-center"] $ toHtml displayKey

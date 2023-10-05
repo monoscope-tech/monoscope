@@ -30,6 +30,7 @@ import Pages.BodyWrapper
 import Pages.Charts.Charts qualified as C
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (statBox)
+import Pages.NonMember
 import Relude hiding (max, min)
 import Servant (
   Union,
@@ -38,7 +39,7 @@ import Servant (
  )
 import System.Clock
 import Text.Interpolation.Nyan
-import Utils (GetOrRedirect, deleteParam, mIcon_, redirect, userIsProjectMember, userNotMemeberPage)
+import Utils (GetOrRedirect, deleteParam, faIcon_, mIcon_, redirect, userIsProjectMember)
 import Witch (from)
 
 
@@ -132,10 +133,7 @@ dashboardPage pid paramInput currTime projectStats reqLatenciesRolledByStepsJ da
           do
             mIcon_ "clock" "h-4 w-4"
             span_ [class_ "inline-block"] $ toHtml paramInput.currentPickerTxt
-            img_
-              [ src_ "/assets/svgs/cheveron-down.svg"
-              , class_ "h-4 w-4 inline-block"
-              ]
+            faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 w-4 inline-block"
         div_ [id_ "timepickerBox", class_ "hidden absolute z-10 mt-1  rounded-md flex"] do
           div_ [class_ "inline-block w-84 overflow-auto bg-white py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm"] do
             timePickerItems
@@ -192,10 +190,7 @@ dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledBySte
   section_ [class_ "space-y-3"] $ do
     div_ [class_ "flex justify-between mt-4"] $ div_ [class_ "flex flex-row"] $ do
       a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
-        $ img_
-          [ src_ "/assets/svgs/cheveron-down.svg"
-          , class_ "h-4 mr-3 mt-1 w-4"
-          ]
+        $ faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 w-4 inline-block"
       span_ [class_ "text-lg text-slate-700"] "Analytics"
 
     div_ [class_ "reqResSubSection space-y-5"] $ do
