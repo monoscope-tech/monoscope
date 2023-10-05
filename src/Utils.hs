@@ -18,18 +18,16 @@ module Utils (
   getStatusBgColor,
 ) where
 
-import Data.Default (def)
 import Data.Text (replace)
 import Data.Time (ZonedTime)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.ToField (ToField (..))
 
 import Database.PostgreSQL.Transact
-import Lucid (Html, div_, h3_, href_, i_, p_, term)
+import Lucid (Html, href_, i_, term)
 import Lucid.Svg (class_, svg_, use_)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Session
-import Models.Users.Users qualified as Users
 import Relude hiding (show)
 import Servant
 
