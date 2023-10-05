@@ -348,7 +348,7 @@ anomalyListSlider currTime _ _ (Just anomalies) = do
           , [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .parent-slider)|]
           ]
         span_ [class_ "text-lg text-slate-700"] "Ongoing Anomalies and Monitors"
-      div_ [class_ "flex flex-row mt-2"] $ do
+      div_ [class_ "flex items-center gap-2 mt-2"] $ do
         a_
           [ class_ "cursor-pointer"
           , [__|on click hide #{$anomalyIds[$currentAnomaly]} then
