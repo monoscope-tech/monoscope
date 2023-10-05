@@ -289,8 +289,9 @@ sideNav sess project pageTitle menuItem = do
             small_ [class_ "block text-slate-900"] $ toHtml project.paymentPlan
           -- Development?
           div_ $ do
-            faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" " h-4 w-4 m-2"
             faIcon_ "fa-chevron-up" "fa-light fa-chevron-up" " h-4 w-4 m-2"
+            faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" " h-4 w-4 m-2"
+
       projectsDropDown project (Sessions.getProjects $ Sessions.projects sess)
     nav_ [class_ "mt-4"] $ do
       -- FIXME: reeanable hx-boost hxBoost_ "true"
