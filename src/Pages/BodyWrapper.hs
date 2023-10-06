@@ -296,17 +296,17 @@ sideNav sess project pageTitle menuItem = do
       projectsDropDown project (Sessions.getProjects $ Sessions.projects sess)
     nav_ [class_ "mt-4"] do
       -- FIXME: reeanable hx-boost hxBoost_ "true"
-      menu (project.id) & mapM_ \(mTitle, mUrl, faIcon) -> do
+      menu project.id & mapM_ \(mTitle, mUrl, faIcon) -> do
         let isActive =maybe (pageTitle == mTitle) (== mTitle) menuItem 
         a_
           [ href_ mUrl
           , term "data-tippy-placement" "right"
           , term "data-tippy-content" mTitle
           , class_
-              $ "block flex gap-3 px-5 py-3 flex justify-center items-center hover:bg-blue-50 text-slate-800 "
+              $ "block flex gap-3 px-5 py-3 flex justify-center items-center hover:bg-blue-50  "
               <> ( if isActive
                     then "bg-blue-50 text-blue-700 border-l-4 border-blue-700"
-                    else ""
+                    else " text-slate-800"
                  )
           ]
           do
