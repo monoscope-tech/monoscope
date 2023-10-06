@@ -335,7 +335,7 @@ selectRequestDumpByProject pid extraQuery fromM = do
                     path_params, status_code,query_params,
                     request_body,response_body,'{}'::jsonb,'{}'::jsonb,
                     duration_ns, sdk_type,
-                    parent_id, service_version, '{}'::jsonb, tags
+                    parent_id, service_version, jsonb_build_object('errors_length', JSONB_ARRAY_LENGTH(errors)), tags
              FROM apis.request_dumps where project_id=? and created_at > NOW() - interval '14 days' and created_at<? |]
         <> extraQueryParsed
         <> " order by created_at desc limit 200;"

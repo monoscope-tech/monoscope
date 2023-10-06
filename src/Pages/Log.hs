@@ -396,12 +396,16 @@ logItemRows :: Projects.ProjectId -> Vector RequestDumps.RequestDumpLogItem -> [
 logItemRows pid requests cols nextLogsURL = do
   requests & traverse_ \req -> do
     let hasErrors = case req.errors of
-          AE.Array a -> not (null a)
+          AE.Object a -> case AEK.lookup "errors_length" a of
+            Just v -> case v of
+              AE.Number n -> n > 0
+              _ -> False
+            Nothing -> False
           _ -> False
     let logItemPath = RequestDumps.requestDumpLogItemUrlPath pid req
     let endpoint_hash = toText $ showHex (xxHash $ encodeUtf8 $ UUID.toText pid.unProjectId <> T.toUpper req.method <> req.urlPath) ""
     let logItemEndpointUrl = "/p/" <> pid.toText <> "/log_explorer/endpoint/" <> endpoint_hash
-    let errorClass = if hasErrors then "border-l-red-200" else "border-l-transparent"
+    let errorClass = if hasErrors then "border-l-red-500" else "border-l-transparent"
     div_
       [ class_ $ "flex flex-row border-l-4 divide-x space-x-4 cursor-pointer " <> errorClass
       , term "data-log-item-path" logItemPath
