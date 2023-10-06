@@ -83,7 +83,7 @@ fieldDetailsPartialH sess pid fid = do
     else do
       (fieldsM, formats) <- liftIO
         $ withPool pool
-        $ do
+        do
           field <- Fields.fieldById fid
           formats <- Formats.formatsByFieldHash (maybe "" (^. #hash) field)
           pure (field, formats)
@@ -95,46 +95,46 @@ fieldDetailsPartialH sess pid fid = do
 fieldDetailsView :: Fields.Field -> Vector Formats.Format -> Html ()
 fieldDetailsView field formats = do
   img_ [src_ "/assets/svgs/ellipsis.svg", class_ "my-2 float-right"]
-  section_ [class_ "space-y-6"] $ do
-    div_ $ do
+  section_ [class_ "space-y-6"] do
+    div_ do
       h6_ [class_ "text-slate-800 text-xs"] "FIELD NAME"
       h3_ [class_ "text-lg text-slate-800"] $ toHtml field.key
-    div_ $ do
+    div_ do
       h6_ [class_ "text-slate-800 text-xs"] "FIELD PATH"
       h3_ [class_ "text-base text-slate-800 monospace"] $ toHtml field.keyPath
-    div_ [class_ "flex flex-row gap-6"] $ do
-      div_ $ do
+    div_ [class_ "flex flex-row gap-6"] do
+      div_ do
         h6_ [class_ "text-slate-800 text-xs"] "FIELD CATEGORY"
         h4_ [class_ "text-base text-slate-800"] $ EndpointComponents.fieldCategoryToDisplay field.fieldCategory
-      div_ [class_ ""] $ do
+      div_ [class_ ""] do
         h6_ [class_ "text-slate-800 text-xs"] "FORMAT OVERRIDE"
         h4_ [class_ "text-base text-slate-800"] $ toHtml $ fromMaybe "[unset]" field.fieldTypeOverride
-    div_ $ do
+    div_ do
       h5_ [class_ "text-sm text-slate-800"] "DETECTED FIELD FORMATS AND TYPES"
       div_ [class_ "space-y-2"]
         $ formats
         & mapM_ \formatV -> do
-          div_ [class_ "border-l-slate-200 border-l-2 pl-2 py-2"] $ do
-            div_ [class_ "flex flex-row gap-9"] $ do
-              div_ [class_ "space-y-2"] $ do
+          div_ [class_ "border-l-slate-200 border-l-2 pl-2 py-2"] do
+            div_ [class_ "flex flex-row gap-9"] do
+              div_ [class_ "space-y-2"] do
                 h6_ [class_ "text-slate-800 text-xs"] "TYPE"
                 h4_ [class_ "text-base text-slate-800"] $ EndpointComponents.fieldTypeToDisplay formatV.fieldType
-              div_ [class_ "mx-5 space-y-2"] $ do
+              div_ [class_ "mx-5 space-y-2"] do
                 h6_ [class_ "text-slate-800 text-xs"] "FORMAT"
                 h4_ [class_ "text-base text-slate-800"] $ toHtml formatV.fieldFormat
             h6_ [class_ "text-slate-600 mt-4 text-xs"] "EXAMPLE VALUES"
-            ul_ [class_ "list-disc"] $ do
+            ul_ [class_ "list-disc"] do
               formatV.examples & mapM_ \ex -> do
                 li_ [class_ "ml-10 text-slate-800 text-sm"] $ toHtml $ aesonValueToText ex
-    div_ [class_ "flex flex-row justify-between mt-10 "] $ do
-      div_ [class_ " "] $ do
+    div_ [class_ "flex flex-row justify-between mt-10 "] do
+      div_ [class_ " "] do
         h4_ [class_ "text-sm text-slate-800 mb-2"] "CREATION DATE"
-        div_ [class_ "flex border border-gray-200 m-1 rounded-xl p-2"] $ do
+        div_ [class_ "flex border border-gray-200 m-1 rounded-xl p-2"] do
           mIcon_ "calender" "h-4 mr-2 w-4"
           span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" field.createdAt
-      div_ [class_ " "] $ do
+      div_ [class_ " "] do
         h4_ [class_ "text-sm text-slate-800 mb-2"] "LAST CHANGE"
-        div_ [class_ "flex border border-gray-200 m-1 justify-between rounded-xl p-2"] $ do
+        div_ [class_ "flex border border-gray-200 m-1 justify-between rounded-xl p-2"] do
           mIcon_ "calender" "h-4 mr-2 w-4"
           span_ [class_ "text-xs"] $ toHtml $ formatTime defaultTimeLocale "%b %d, %Y %R" field.updatedAt
     h6_ [class_ "mt-5 text-sm text-slate-800 mb-2"] "DESCRIPTION"
@@ -193,7 +193,7 @@ endpointDetailsH sess pid eid fromDStr toDStr sinceStr' subPageM = do
 
       (endpoint, enpStats, project, shapesWithFieldsMap, fieldsMap, reqLatenciesRolledByStepsLabeled) <- liftIO
         $ withPool pool
-        $ do
+        do
           -- Should swap names betw enp and endpoint endpoint could be endpointStats
           endpoint <- Unsafe.fromJust <$> Endpoints.endpointById eid
           enpStats <- fromMaybe (def :: EndpointRequestStats) <$> Endpoints.endpointRequestStatsByEndpoint eid
@@ -229,33 +229,33 @@ endpointDetailsH sess pid eid fromDStr toDStr sinceStr' subPageM = do
 endpointDetails :: ParamInput -> UTCTime -> Endpoints.Endpoint -> EndpointRequestStats -> [Shapes.ShapeWithFields] -> Map FieldCategoryEnum [Fields.Field] -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 endpointDetails paramInput currTime endpoint endpointStats shapesWithFieldsMap fieldsM reqLatenciesRolledByStepsJ dateRange = do
   let currentURLSubPage = deleteParam "subpage" paramInput.currentURL
-  div_ [class_ "w-full h-full overflow-hidden"] $ do
-    div_ [class_ "w-[75%] inline-block p-5 h-full overflow-y-scroll"] $ do
-      div_ [class_ "flex flex-row justify-between mb-10"] $ do
-        div_ [class_ "flex flex-row place-items-center text-lg font-medium"] $ do
-          h3_ [class_ "text-lg text-slate-800"] $ do
+  div_ [class_ "w-full h-full overflow-hidden"] do
+    div_ [class_ "w-[75%] inline-block p-5 h-full overflow-y-scroll"] do
+      div_ [class_ "flex flex-row justify-between mb-10"] do
+        div_ [class_ "flex flex-row place-items-center text-lg font-medium"] do
+          h3_ [class_ "text-lg text-slate-800"] do
             span_ [class_ $ "p-1 endpoint endpoint-" <> toLower (endpoint.method)] $ toHtml $ (endpoint.method) <> " "
             strong_ [class_ "inconsolata text-xl"] $ toHtml (endpoint.urlPath)
           faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" " h-4 w-4 m-2"
-        nav_ [class_ " space-x-4"] $ do
+        nav_ [class_ " space-x-4"] do
           subPageMenu
             & mapM_ \(title, slug) ->
               a_
                 [ href_ $ currentURLSubPage <> "&subpage=" <> slug
                 , class_
                     $ "cursor-pointer px-3 py-2 font-medium text-sm rounded-md "
-                    <> if slug == paramInput.subPage then " bg-indigo-100 text-indigo-700 " else " text-gray-500 hover:text-gray-700"
+                    <> if slug == paramInput.subPage then " bg-indigo-100 text-indigo-700 " else " text-slate-500 hover:text-gray-700"
                 ]
                 $ toHtml title
 
-        div_ [class_ "flex flex-row hidden"] $ do
-          a_ [href_ ""] $ do
-            button_ [class_ "bg-white rounded-lg h-10 mt-1 "] $ do
+        div_ [class_ "flex flex-row hidden"] do
+          a_ [href_ ""] do
+            button_ [class_ "bg-white rounded-lg h-10 mt-1 "] do
               faIcon_ "fa-line-height" "fa-regular fa-line-height" "h-6 w-6 m-2"
-          a_ [href_ ""] $ do
-            button_ [class_ "bg-blue-700 flex h-11 flex-row mx-2 px-3 rounded-xl py-2"] $ do
+          a_ [href_ ""] do
+            button_ [class_ "bg-blue-700 flex h-11 flex-row mx-2 px-3 rounded-xl py-2"] do
               h3_ [class_ "text-white text-sm text-bold mx-2 mt-1"] "Download Swagger"
-              div_ [class_ "bg-blue-900 p-1 rounded-lg ml-2"] $ do
+              div_ [class_ "bg-blue-900 p-1 rounded-lg ml-2"] do
                 mIcon_ "whitedown" "text-white h-2 w-2 m-1"
       if paramInput.subPage == "api_docs"
         then apiDocsSubPage shapesWithFieldsMap
@@ -265,12 +265,12 @@ endpointDetails paramInput currTime endpoint endpointStats shapesWithFieldsMap f
       [ class_ "w-[25%] inline-block h-full overflow-y-auto overflow-x-hidden bg-white border border-gray-200 p-5 xsticky xtop-0 "
       , id_ "detailSidebar"
       ]
-      $ do
-        div_ [class_ "h-full flex flex-col items-center justify-center"] $ do
+      do
+        div_ [class_ "h-full flex flex-col items-center justify-center"] do
           img_ [class_ "w-36", src_ "/assets/svgs/tasks.svg"]
-          h3_ [class_ "mt-2 text-lg font-medium text-gray-900"] "Nothing selected"
-          p_ [class_ "mt-1 text-sm text-gray-500"] "Select a field or similar item on the left"
-          p_ [class_ "mt-1 text-sm text-gray-500"] "to view more details about it here."
+          h3_ [class_ "mt-2 text-lg font-medium text-slate-900"] "Nothing selected"
+          p_ [class_ "mt-1 text-sm text-slate-500"] "Select a field or similar item on the left"
+          p_ [class_ "mt-1 text-sm text-slate-500"] "to view more details about it here."
 
     script_
       [type_ "text/hyperscript"]
@@ -286,19 +286,19 @@ endpointDetails paramInput currTime endpoint endpointStats shapesWithFieldsMap f
 
 apiDocsSubPage :: [Shapes.ShapeWithFields] -> Html ()
 apiDocsSubPage shapesWithFieldsMap = do
-  div_ [class_ "space-y-8", id_ "subpage"] $ do
-    div_ [class_ "flex w-full justify-between mt-2"] $ do
-      div_ [class_ "flex items-center gap-2"] $ do
-        span_ [class_ "font-bold text-gray-700"] "Shapes:"
-        div_ [class_ "relative flex items-center border rounded focus:ring-2 focus:ring-blue-200 active:ring-2 active:ring-blue-200", style_ "width:220px"] $ do
+  div_ [class_ "space-y-8", id_ "subpage"] do
+    div_ [class_ "flex w-full justify-between mt-2"] do
+      div_ [class_ "flex items-center gap-2"] do
+        span_ [class_ "font-bold text-slate-700"] "Shapes:"
+        div_ [class_ "relative flex items-center border rounded focus:ring-2 focus:ring-blue-200 active:ring-2 active:ring-blue-200", style_ "width:220px"] do
           button_
             [ [__| on click toggle .hidden on #shapes_container |]
             , id_ "toggle_shapes_btn"
             , data_ "current" "1"
             , data_ "total" (show $ length shapesWithFieldsMap)
-            , class_ "w-full flex text-gray-600 justify_between items-center cursor-pointer px-2 py-1"
+            , class_ "w-full flex text-slate-600 justify_between items-center cursor-pointer px-2 py-1"
             ]
-            $ do
+            do
               let fstH = viaNonEmpty head shapesWithFieldsMap
               let (st, hs) = case fstH of
                     Just s -> (s.status, s.sHash)
@@ -306,9 +306,9 @@ apiDocsSubPage shapesWithFieldsMap = do
               let prm = "px-2 py-1 rounded text-white text-sm "
               let statusCls = if st < 400 then prm <> "bg-green-500" else prm <> "bg-red-500"
               span_ [class_ statusCls] $ show st
-              span_ [class_ "ml-1 text-sm text-gray-600"] $ toHtml hs
+              span_ [class_ "ml-1 text-sm text-slate-600"] $ toHtml hs
           img_ [src_ "/assets/svgs/select_chevron.svg", style_ "height:15px; width:15px"]
-          div_ [id_ "shapes_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] $ do
+          div_ [id_ "shapes_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] do
             forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap) $ \(index, s) -> do
               let prm = "px-2 py-1 rounded text-white text-sm "
               let statusCls = if s.status < 400 then prm <> "bg-green-500" else prm <> "bg-red-500"
@@ -321,11 +321,11 @@ apiDocsSubPage shapesWithFieldsMap = do
                 , data_ "status" (show s.status)
                 , data_ "hash" s.sHash
                 ]
-                $ do
+                do
                   span_ [class_ statusCls] $ show s.status
-                  span_ [class_ "ml-2 text-sm text-gray-600"] $ toHtml s.sHash
+                  span_ [class_ "ml-2 text-sm text-slate-600"] $ toHtml s.sHash
 
-      div_ [class_ "flex items-center"] $ do
+      div_ [class_ "flex items-center"] do
         img_
           [ src_ "/assets/svgs/leftarrow.svg"
           , class_ " m-2 cursor-pointer"
@@ -387,7 +387,7 @@ apiDocsSubPage shapesWithFieldsMap = do
 apiOverviewSubPage :: ParamInput -> UTCTime -> EndpointRequestStats -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 apiOverviewSubPage paramInput currTime endpoint fieldsM reqLatenciesRolledByStepsJ dateRange = do
   let currentURLSearch = deleteParam "to" $ deleteParam "from" $ deleteParam "since" paramInput.currentURL
-  div_ [class_ "space-y-16 pb-20", id_ "subpage"] $ do
+  div_ [class_ "space-y-16 pb-20", id_ "subpage"] do
     a_
       [ class_ "relative px-3 py-2 border border-1 border-black-200 space-x-2  inline-block relative cursor-pointer rounded-md"
       , [__| on click toggle .hidden on #timepickerBox|]
@@ -401,11 +401,11 @@ apiOverviewSubPage paramInput currTime endpoint fieldsM reqLatenciesRolledByStep
         timePickerItems
           & mapM_ \(val, title) ->
             a_
-              [ class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 "
+              [ class_ "block text-slate-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 "
               , href_ $ currentURLSearch <> "&since=" <> val
               ]
               $ toHtml title
-        a_ [class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ", [__| on click toggle .hidden on #timepickerSidebar |]] "Custom date range"
+        a_ [class_ "block text-slate-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ", [__| on click toggle .hidden on #timepickerSidebar |]] "Custom date range"
       div_ [class_ "inline-block relative hidden", id_ "timepickerSidebar"] do
         div_ [id_ "startTime", class_ "hidden"] ""
     section_ $ AnomaliesList.anomalyListSlider currTime endpoint.projectId (Just endpoint.endpointId) Nothing
@@ -414,63 +414,63 @@ apiOverviewSubPage paramInput currTime endpoint fieldsM reqLatenciesRolledByStep
 
 endpointStats :: Endpoints.EndpointRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p99, max} reqLatenciesRolledByStepsJ dateRange@(fromD, toD) =
-  section_ [class_ "space-y-3"] $ do
+  section_ [class_ "space-y-3"] do
     div_ [class_ "flex justify-between mt-5"]
       $ div_ [class_ "flex flex-row"]
-      $ do
+      do
         img_
           [ src_ "/assets/svgs/cheveron-down.svg"
           , class_ "h-4 mr-3 mt-1 w-4 cursor-pointer"
           , [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .endpointStatsSubSection)|]
           ]
         span_ [class_ "text-lg text-slate-800"] "Endpoint Stats"
-    div_ [class_ "space-y-5 endpointStatsSubSection"] $ do
-      div_ [class_ "grid grid-cols-3  gap-5"] $ do
+    div_ [class_ "space-y-5 endpointStatsSubSection"] do
+      div_ [class_ "grid grid-cols-3  gap-5"] do
         statBox Nothing "Total Anomalies" "Total Anomalies for this endpoint this week vs total for the project" enpStats.ongoingAnomaliesProj (Just enpStats.ongoingAnomaliesProj)
         statBox Nothing "Total Requests" "Total Requests on this endpoint this week vs total for the project" enpStats.totalRequests (Just enpStats.totalRequestsProj)
         statBox Nothing "Total Time" "Total Time on this endpoint this week vs total for the project" enpStats.totalRequests (Just enpStats.totalRequestsProj)
 
       div_ [class_ "flex gap-5"] do
-        div_ [class_ "flex-1 card-round p-3"] $ do
-          div_ [class_ "p-4 space-y-6"] $ do
-            select_ [] $ do
+        div_ [class_ "flex-1 card-round p-3"] do
+          div_ [class_ "p-4 space-y-6"] do
+            select_ [] do
               option_ [class_ "text-2xl font-normal"] "Requests by Status Code"
             div_ [class_ "h-64 "] do
               Charts.lazy [C.QByE $ [C.QBPId enpStats.projectId, C.QBEndpointHash enpStats.endpointHash] ++ catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBStatusCode, C.SlotsE 120, C.ShowLegendE]
 
-        div_ [class_ "flex-1 card-round p-3"] $ do
-          div_ [class_ "p-4 space-y-6"] $ do
-            select_ [] $ do
+        div_ [class_ "flex-1 card-round p-3"] do
+          div_ [class_ "p-4 space-y-6"] do
+            select_ [] do
               option_ [class_ "text-2xl font-normal"] "Latency Percentiles"
             div_ [class_ "h-64 "] do
               Charts.lazy [C.QByE $ [C.QBPId enpStats.projectId, C.QBEndpointHash enpStats.endpointHash] ++ catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBDurationPercentile, C.SlotsE 120, C.ShowLegendE, C.TypeE C.LineCT]
 
       div_ [class_ "flex gap-5"] do
-        div_ [class_ "flex-1 card-round p-3"] $ do
-          div_ [class_ "p-4 space-y-6"] $ do
-            select_ [] $ do
+        div_ [class_ "flex-1 card-round p-3"] do
+          div_ [class_ "p-4 space-y-6"] do
+            select_ [] do
               option_ [class_ "text-2xl font-normal"] "Errors"
             div_ [class_ "h-64 "] do
               Charts.lazy [C.QByE $ [C.QBPId enpStats.projectId, C.QBEndpointHash enpStats.endpointHash, Charts.QBStatusCodeGT 400] ++ catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBStatusCode, C.SlotsE 120, C.ShowLegendE, C.Theme "roma"]
 
-        div_ [class_ "flex-1 card-round p-3"] $ do
-          div_ [class_ "p-4 space-y-6"] $ do
-            select_ [] $ do
+        div_ [class_ "flex-1 card-round p-3"] do
+          div_ [class_ "p-4 space-y-6"] do
+            select_ [] do
               option_ [class_ "text-2xl font-normal"] "Reqs Grouped by Endpoint"
             div_ [class_ "h-64 "] do
               Charts.lazy [C.QByE $ [C.QBPId enpStats.projectId, C.QBEndpointHash enpStats.endpointHash] ++ catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBEndpoint, C.SlotsE 120, C.ShowLegendE]
 
-      div_ [class_ "col-span-3 bg-white   border border-gray-100  rounded-xl py-3 px-6"] $ do
+      div_ [class_ "col-span-3 bg-white   border border-gray-100  rounded-xl py-3 px-6"] do
         div_ [class_ "p-4"]
           $ select_ []
-          $ do
+          do
             option_ "Request Latency Distribution"
             option_ "Avg Reqs per minute"
-        div_ [class_ "grid grid-cols-9  gap-8 w-full"] $ do
+        div_ [class_ "grid grid-cols-9  gap-8 w-full"] do
           div_ [id_ "reqsLatencyHistogram", class_ "col-span-7 h-72"] ""
-          div_ [class_ "col-span-2 space-y-4 "] $ do
+          div_ [class_ "col-span-2 space-y-4 "] do
             strong_ [class_ "block text-right"] "Latency Percentiles"
-            ul_ [class_ "space-y-1 divide-y divide-slate-100"] $ do
+            ul_ [class_ "space-y-1 divide-y divide-slate-100"] do
               percentileRow "max" enpStats.max
               percentileRow "p99" enpStats.p99
               percentileRow "p95" enpStats.p95
@@ -484,9 +484,9 @@ endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p
 percentileRow :: Text -> Double -> Html ()
 percentileRow key p = do
   let (d, unit) = fmtDuration p
-  li_ [class_ "flex flex-row content-between justify-between"] $ do
+  li_ [class_ "flex flex-row content-between justify-between"] do
     span_ [class_ "inline-block"] $ toHtml key
-    span_ [class_ "inline-block font-mono"] $ do
+    span_ [class_ "inline-block font-mono"] do
       span_ [class_ "tabular-nums"] $ toHtml d
       span_ $ toHtml unit
 
@@ -502,9 +502,9 @@ fmtDuration d
 -- We can enable a view to show all the request/response options.
 reqResSection :: Text -> Bool -> [Shapes.ShapeWithFields] -> Html ()
 reqResSection title isRequest shapesWithFieldsMap =
-  section_ [class_ "space-y-3"] $ do
-    div_ [class_ "flex justify-between mt-5"] $ do
-      div_ [class_ "flex flex-row"] $ do
+  section_ [class_ "space-y-3"] do
+    div_ [class_ "flex justify-between mt-5"] do
+      div_ [class_ "flex flex-row"] do
         a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
           $ faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 mr-3 mt-1 w-4"
         span_ [class_ "text-lg text-slate-800"] $ toHtml title
@@ -513,7 +513,7 @@ reqResSection title isRequest shapesWithFieldsMap =
       $ forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap)
       $ \(index, s) -> do
         let sh = if index == 1 then title <> "_fields" else title <> "_fields hidden"
-        div_ [class_ sh, id_ $ title <> "_" <> show index] $ do
+        div_ [class_ sh, id_ $ title <> "_" <> show index] do
           if isRequest
             then do
               subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam s.fieldsMap)
@@ -531,15 +531,15 @@ subSubSection title fieldsM =
   case fieldsM of
     Nothing -> ""
     Just fields -> do
-      div_ [class_ "space-y-1 mb-4"] $ do
-        div_ [class_ "flex flex-row items-center"] $ do
+      div_ [class_ "space-y-1 mb-4"] do
+        div_ [class_ "flex flex-row items-center"] do
           img_
             [ src_ "/assets/svgs/cheveron-down.svg"
             , class_ "h-6 mr-3 w-6 p-1 cursor-pointer"
             , [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .subSectionContent)|]
             ]
           div_ [class_ "bg-gray-100 px-10 rounded-xl w-full p-4 text-sm text-slate-900 "] $ toHtml title
-        div_ [class_ "space-y-1 subSectionContent"] $ do
+        div_ [class_ "space-y-1 subSectionContent"] do
           -- pTraceShowM $ fields
           -- pTraceShowM "========================"
           -- pTraceShowM $ fieldsToNormalized fields
@@ -556,12 +556,12 @@ subSubSection title fieldsM =
                   , [__| on click toggle .neg-rotate-90 on <.chevron/> in me then collapseUntil((me), (my @data-depth))  |]
                   , term "data-depth" $ show depth
                   ]
-                  $ do
+                  do
                     faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-6 w-6 mr-1 chevron cursor-pointer p-1"
-                    div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full"] $ do
+                    div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full"] do
                       input_ [type_ "checkbox", class_ " mr-12"]
                       span_ [class_ "text-sm text-slate-800 inline-flex items-center"] $ toHtml displayKey
-                      span_ [class_ "text-sm text-slate-600 inline-flex items-center ml-4"] $ do
+                      span_ [class_ "text-sm text-slate-600 inline-flex items-center ml-4"] do
                         if "[*]" `isSuffixOf` key
                           then EndpointComponents.fieldTypeToDisplay Fields.FTList
                           else EndpointComponents.fieldTypeToDisplay Fields.FTObject
@@ -573,9 +573,9 @@ subSubSection title fieldsM =
                   , style_ depthPadding
                   , term "data-depth" $ show depth
                   ]
-                  $ do
+                  do
                     img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-4 mr-3 mt-4 w-4 ", style_ "visibility: hidden"]
-                    div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full items-center"] $ do
+                    div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full items-center"] do
                       input_ [type_ "checkbox", class_ " mr-12"]
                       span_ [class_ "grow text-sm text-slate-800 inline-flex items-center"] $ toHtml displayKey
                       span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ EndpointComponents.fieldTypeToDisplay field.fieldType

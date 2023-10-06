@@ -119,7 +119,7 @@ processMessages' logger' _ conn' msgs projectCache' = do
   let query' = mconcat queries
   let params' = concat params
 
-  unless (null $ lefts processed) $ do
+  unless (null $ lefts processed) do
     let leftMsgs = [(a, b) | (Left a, b) <- zip processed msgs]
     forM_ leftMsgs \(a, b) ->
       -- TODO: switch to using a proper logger setup.

@@ -101,7 +101,7 @@ authCallbackH codeM _ = do
   pool <- asks pool
   traceShowM "In authCallbackH"
 
-  resp <- runExceptT $ do
+  resp <- runExceptT do
     code <- hoistEither $ note "invalid code " codeM
     r <-
       liftIO
@@ -126,7 +126,7 @@ authCallbackH codeM _ = do
     let picture = fromMaybe "" $ resp L.^? responseBody . key "picture" . _String
     (userId, persistentSessId) <- liftIO
       $ withPool pool
-      $ do
+      do
         traceShowM "In before userbyemail"
         userM <- Users.userByEmail email
         traceShowM "In before userbyemail2"
@@ -148,11 +148,11 @@ authCallbackH codeM _ = do
     Right persistentSessId -> pure
       $ addHeader "/"
       $ addHeader (craftSessionCookie persistentSessId True)
-      $ do
-        html_ $ do
-          head_ $ do
+      do
+        html_ do
+          head_ do
             meta_ [httpEquiv_ "refresh", content_ "1;url=/"]
-          body_ $ do
+          body_ do
             a_ [href_ "/"] "Continue to APIToolkit"
 
 
@@ -169,7 +169,7 @@ authHandler logger conn = mkAuthHandler handler
       throwError $ err302{errHeaders = [("Location", "/to_login")]}
 
     handler :: Request -> Handler Sessions.PersistentSession
-    handler req = either throw301 (lookupAccount conn) $ do
+    handler req = either throw301 (lookupAccount conn) do
       cookie <- note "Missing cookie header" $ lookup "cookie" $ requestHeaders req
       note "Missing token in cookie" $ lookup "apitoolkit_session" $ parseCookies cookie
 
@@ -177,7 +177,7 @@ authHandler logger conn = mkAuthHandler handler
 -- We need to handle errors for the persistent session better and redirect if there's an error
 lookupAccount :: Pool Connection -> ByteString -> Handler Sessions.PersistentSession
 lookupAccount conn keyV = do
-  resp <- runExceptT $ do
+  resp <- runExceptT do
     pid <- hoistEither $ note @Text "unable to convert cookie value to persistent session UUID" (Sessions.PersistentSessionId <$> UUID.fromASCIIBytes keyV)
     presistentSess <- liftIO $ withPool conn $ Sessions.getPersistentSession pid
     hoistEither $ note "lookupAccount: invalid persistentID " presistentSess

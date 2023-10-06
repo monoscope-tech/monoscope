@@ -53,7 +53,7 @@ manageMembersPostH sess pid form = do
     else do
       (project, projMembers) <- liftIO
         $ withPool pool
-        $ do
+        do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
           projMembers <- ProjectMembers.selectActiveProjectMembers pid
           pure (project, projMembers)
@@ -84,7 +84,7 @@ manageMembersPostH sess pid form = do
       -- Create new users and send notifications
       newProjectMembers <- liftIO
         $ forM uAndPNew \(email, permission) -> do
-          userId' <- withPool pool $ do
+          userId' <- withPool pool do
             userIdM' <- Users.userIdByEmail email
             case userIdM' of
               Nothing -> do
@@ -135,7 +135,7 @@ manageMembersGetH sess pid = do
     else do
       (project, projMembers) <- liftIO
         $ withPool pool'
-        $ do
+        do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
           projMembers <- ProjectMembers.selectActiveProjectMembers pid
           pure (project, projMembers)
@@ -145,7 +145,7 @@ manageMembersGetH sess pid = do
 
 manageMembersBody :: Vector ProjectMembers.ProjectMemberVM -> Html ()
 manageMembersBody projMembers =
-  section_ [id_ "main-content", class_ "p-6"] $ do
+  section_ [id_ "main-content", class_ "p-6"] do
     h2_ [class_ "text-slate-700 text-2xl font-medium mb-5"] "Manage project members"
     form_
       [ class_ "relative px-10 border border-gray-200 py-10  bg-white w-1/2 rounded-3xl"
@@ -153,9 +153,9 @@ manageMembersBody projMembers =
       , hxTarget_ "#main-content"
       , hxSwap_ "outerHTML"
       ]
-      $ do
-        div_ [class_ "mt-6"] $ do
-          section_ [id_ "inviteMemberSection"] $ do
+      do
+        div_ [class_ "mt-6"] do
+          section_ [id_ "inviteMemberSection"] do
             mapM_ (projectMemberRow . Just) projMembers
             template_ [id_ "inviteTmpl"] $ projectMemberRow Nothing
           a_
@@ -163,7 +163,7 @@ manageMembersBody projMembers =
             , [__| on click append #inviteTmpl.innerHTML to #inviteMemberSection then 
                           _hyperscript.processNode(#inviteMemberSection) then halt |]
             ]
-            $ do
+            do
               faIcon_ "fa-plus" "fa-sharp fa-regular fa-plus" "mt-1 mx-2 w-3 h-3 text-blue-700"
               span_ [class_ "text-blue-700 font-medium text-sm "] "Add member"
         button_ [class_ "py-2 px-5 bg-blue-700 absolute m-5 bottom-0 right-0 text-[white] text-sm rounded-xl cursor-pointer", type_ "submit"] "Submit"
@@ -171,7 +171,7 @@ manageMembersBody projMembers =
 
 projectMemberRow :: Maybe ProjectMembers.ProjectMemberVM -> Html ()
 projectMemberRow projMembersM =
-  div_ [class_ "flex flex-row space-x-2"] $ do
+  div_ [class_ "flex flex-row space-x-2"] do
     input_
       [ name_ "emails"
       , class_ "w-2/3 h-10 px-5 my-2 w-full text-sm bg-white text-slate-700 font-light border-solid border border-gray-200 rounded-2xl border-0 "
@@ -179,7 +179,7 @@ projectMemberRow projMembersM =
       , value_ (maybe "" (original . (^. #email)) projMembersM)
       ]
     let permission = maybe ProjectMembers.PView (^. #permission) projMembersM
-    select_ [name_ "permissions", class_ "w-1/3 h-10 px-5  my-2 w-full text-sm bg-white text-zinc-500 border-solid border border-gray-200 rounded-2xl border-0"] $ do
+    select_ [name_ "permissions", class_ "w-1/3 h-10 px-5  my-2 w-full text-sm bg-white text-zinc-500 border-solid border border-gray-200 rounded-2xl border-0"] do
       option_ ([class_ "text-gray-500", value_ "admin"] <> selectedIf ProjectMembers.PAdmin permission) "Admin"
       option_ ([class_ "text-gray-500", value_ "edit"] <> selectedIf ProjectMembers.PEdit permission) "Can Edit"
       option_ ([class_ "text-gray-500", value_ "view"] <> selectedIf ProjectMembers.PView permission) "Can View"

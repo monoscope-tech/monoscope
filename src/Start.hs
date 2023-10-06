@@ -122,7 +122,7 @@ pubsubService logger envConfig conn projectCache = do
 
   forever
     $ runResourceT
-    $ do
+    do
       forM (envConfig ^. #requestPubsubTopics) \topic -> do
         let subscription = "projects/past-3/subscriptions/" <> topic <> "-sub"
         pullResp <- Google.send env $ PubSub.newPubSubProjectsSubscriptionsPull pullReq subscription

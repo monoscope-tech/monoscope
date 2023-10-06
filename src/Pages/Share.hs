@@ -79,8 +79,8 @@ shareLinkPostH sess pid reqForm = do
 copyLink :: Text -> Html ()
 copyLink rid = do
   let url = "https://app.apitoolkit.io/share/r/" <> rid
-  div_ [class_ "flex gap-2 items-center"] $ do
-    div_ [class_ "mt-2 text-sm text-green-700"] $ do
+  div_ [class_ "flex gap-2 items-center"] do
+    div_ [class_ "mt-2 text-sm text-green-700"] do
       p_ "Secure share url."
       strong_ [class_ "block pt-2 text-gray-500 truncate ...", id_ "shareURL"] $ toHtml url
     button_
@@ -114,7 +114,7 @@ shareLinkGetH sid = do
 
 sharePage :: Maybe RequestDumps.RequestDumpLogItem -> Html ()
 sharePage req = do
-  nav_ [id_ "main-navbar", class_ "fixed z-20 top-0 w-full w-full px-6 py-4 border-b bg-white flex flex-row justify-between"] $ do
+  nav_ [id_ "main-navbar", class_ "fixed z-20 top-0 w-full w-full px-6 py-4 border-b bg-white flex flex-row justify-between"] do
     div_ [class_ "flex justify-between items-center gap-4 w-[1000px] mx-auto"] do
       a_ [href_ "https://apitoolkit.io", class_ "flex items-center text-gray-500 hover:text-gray-700"] do
         img_
@@ -225,16 +225,16 @@ getRequest sid = query Select q (Only sid)
 
 getShareLink :: UUID.UUID -> Html ()
 getShareLink rid = do
-  div_ [class_ "relative", style_ "width:150px", onblur_ "document.getElementById('expire_container').classList.add('hidden')"] $ do
+  div_ [class_ "relative", style_ "width:150px", onblur_ "document.getElementById('expire_container').classList.add('hidden')"] do
     button_
       [ onclick_ "toggleExpireOptions(event)"
       , id_ "toggle_expires_btn"
       , class_ "w-full flex gap-2 text-gray-600 justify_between items-center cursor-pointer px-2 py-1 border rounded focus:ring-2 focus:ring-blue-200 active:ring-2 active:ring-blue-200"
       ]
-      $ do
+      do
         p_ [style_ "width: calc(100% - 25px)", class_ "text-sm truncate ..."] "Expires in: 1 hour"
         img_ [src_ "/assets/svgs/select_chevron.svg", style_ "height:15px; width:15px"]
-    div_ [id_ "expire_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] $ do
+    div_ [id_ "expire_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] do
       ["1 hour", "8 hours", "1 day"] & mapM_ \sw -> do
         button_
           [ onclick_ "expireChanged(event)"

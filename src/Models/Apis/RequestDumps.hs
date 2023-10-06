@@ -256,7 +256,6 @@ data RequestDumpLogItem = RequestDumpLogItem
   , responseBody :: AE.Value
   , requestHeaders :: AE.Value
   , responseHeaders :: AE.Value
-  , fullCount :: Int
   , durationNs :: Integer
   , sdkType :: SDKTypes
   , parentId :: Maybe UUID.UUID
@@ -317,18 +316,27 @@ getRequestDumpsForPreviousReportPeriod pid report_type = query Select (Query $ e
     |]
 
 
-selectRequestDumpByProject :: Projects.ProjectId -> Text -> Maybe Text -> DBT IO (Vector RequestDumpLogItem)
-selectRequestDumpByProject pid extraQuery fromM = query Select (Query $ encodeUtf8 q) (pid, fromT)
+selectRequestDumpByProject :: Projects.ProjectId -> Text -> Maybe Text -> DBT IO (Vector RequestDumpLogItem, Int)
+selectRequestDumpByProject pid extraQuery fromM = do 
+  logItems <- query Select (Query $ encodeUtf8 q) (pid, fromT)
+  Only count <- fromMaybe (Only 0) <$> queryOne Select (Query $ encodeUtf8 qCount) (pid, fromT)
+  pure (logItems, count)
   where
     fromT = fromMaybe "infinity" fromM
     extraQueryParsed = either error (\v -> if v == "" then "" else " AND " <> v) $ parseQueryStringToWhereClause extraQuery
+    -- We only let people search within the 14 days time period
+    qCount = 
+      [text| SELECT count(*) 
+             FROM apis.request_dumps where project_id=? and created_at > NOW() - interval '14 days' and created_at<? |]
+        <> extraQueryParsed
+        <> " limit 1;"
     q =
       [text| SELECT id,created_at,host,url_path,method,raw_url,referer,
                     path_params, status_code,query_params,
-                    request_body,response_body,request_headers,response_headers,
-                    count(*) OVER() AS full_count, duration_ns, sdk_type,
-                    parent_id, service_version, errors, tags
-             FROM apis.request_dumps where project_id=? and created_at<? |]
+                    request_body,response_body,'{}'::jsonb,'{}'::jsonb,
+                    duration_ns, sdk_type,
+                    parent_id, service_version, '{}'::jsonb, tags
+             FROM apis.request_dumps where project_id=? and created_at < NOW() - interval '14 days' and created_at<? |]
         <> extraQueryParsed
         <> " order by created_at desc limit 200;"
 
@@ -356,9 +364,9 @@ selectRequestDumpsByProjectForChart pid extraQuery = do
                FROM apis.request_dumps where project_id=? $extraQueryParsed  GROUP BY timeB) ts|]
 
 
--- bulkInsertRequestDumps :: [RequestDump] -> DBT IO Int64
--- bulkInsertRequestDumps _ = pure 0
---
+-- bulkInsertRequestDumps is a very import function because it's what inserts the request dumps into the database. 
+-- But it's tied to the literal database structure for performance purposes, so we need ot update this
+-- if we add or remove new columns to the database table.
 bulkInsertRequestDumps :: [RequestDump] -> DBT IO Int64
 bulkInsertRequestDumps = executeMany q
   where
@@ -372,7 +380,7 @@ selectRequestDumpByProjectAndId pid createdAt rdId = queryOne Select q (createdA
       [sql|SELECT   id,created_at,host,url_path,method,raw_url,referer,
                     path_params,status_code,query_params,
                     request_body,response_body,request_headers,response_headers, 
-                    0 AS full_count, duration_ns, sdk_type,
+                    duration_ns, sdk_type,
                     parent_id, service_version, errors, tags
              FROM apis.request_dumps where created_at=? and project_id=? and id=? LIMIT 1|]
 
@@ -425,7 +433,7 @@ selectAnomalyEvents pid targetHash anType = query Select (Query $ encodeUtf8 q) 
       [text| SELECT id,created_at,host,url_path,method,raw_url,referer,
                     path_params, status_code,query_params,
                     request_body,response_body,request_headers,response_headers,
-                    count(*) OVER() AS full_count, duration_ns, sdk_type,
+                    duration_ns, sdk_type,
                     parent_id, service_version, errors, tags
              FROM apis.request_dumps where created_at > NOW() - interval '14' day AND project_id=? AND $extraQuery LIMIT 199; |]
 
