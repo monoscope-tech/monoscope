@@ -72,7 +72,6 @@ apiLog sess pid queryM cols' fromM hxRequestM hxBoostedM = do
       let fromTempM = toText . formatTime defaultTimeLocale "%F %T" <$> reqLastCreatedAtM
       let nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' fromTempM
 
-      let resultCount = maybe 0 (^. #fullCount) (requests !? 0)
       integrated <- liftIO $ withPool pool $ hasIntegrated pid
       if not integrated
         then respond $ WithStatus @302 $ redirect ("/p/" <> pid.toText <> "/onboarding?redirected=true")
