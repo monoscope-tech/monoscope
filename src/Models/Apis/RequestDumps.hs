@@ -317,7 +317,7 @@ getRequestDumpsForPreviousReportPeriod pid report_type = query Select (Query $ e
 
 
 selectRequestDumpByProject :: Projects.ProjectId -> Text -> Maybe Text -> DBT IO (Vector RequestDumpLogItem, Int)
-selectRequestDumpByProject pid extraQuery fromM = do 
+selectRequestDumpByProject pid extraQuery fromM = do
   logItems <- query Select (Query $ encodeUtf8 q) (pid, fromT)
   Only count <- fromMaybe (Only 0) <$> queryOne Select (Query $ encodeUtf8 qCount) (pid, fromT)
   pure (logItems, count)
@@ -325,7 +325,7 @@ selectRequestDumpByProject pid extraQuery fromM = do
     fromT = fromMaybe "infinity" fromM
     extraQueryParsed = either error (\v -> if v == "" then "" else " AND " <> v) $ parseQueryStringToWhereClause extraQuery
     -- We only let people search within the 14 days time period
-    qCount = 
+    qCount =
       [text| SELECT count(*) 
              FROM apis.request_dumps where project_id=? and created_at > NOW() - interval '14 days' and created_at<? |]
         <> extraQueryParsed
@@ -336,7 +336,7 @@ selectRequestDumpByProject pid extraQuery fromM = do
                     request_body,response_body,'{}'::jsonb,'{}'::jsonb,
                     duration_ns, sdk_type,
                     parent_id, service_version, '{}'::jsonb, tags
-             FROM apis.request_dumps where project_id=? and created_at < NOW() - interval '14 days' and created_at<? |]
+             FROM apis.request_dumps where project_id=? and created_at > NOW() - interval '14 days' and created_at<? |]
         <> extraQueryParsed
         <> " order by created_at desc limit 200;"
 
@@ -364,7 +364,7 @@ selectRequestDumpsByProjectForChart pid extraQuery = do
                FROM apis.request_dumps where project_id=? $extraQueryParsed  GROUP BY timeB) ts|]
 
 
--- bulkInsertRequestDumps is a very import function because it's what inserts the request dumps into the database. 
+-- bulkInsertRequestDumps is a very import function because it's what inserts the request dumps into the database.
 -- But it's tied to the literal database structure for performance purposes, so we need ot update this
 -- if we add or remove new columns to the database table.
 bulkInsertRequestDumps :: [RequestDump] -> DBT IO Int64
