@@ -29,6 +29,7 @@ import Servant (
  )
 import Servant.Htmx (HXTrigger)
 
+import NeatInterpolation (text)
 import Utils
 import Web.FormUrlEncoded (FromForm)
 
@@ -187,7 +188,28 @@ mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] $ do
               V.indexed apiKeys & mapM_ \(i, apiKey) -> do
                 tr_ [] $ do
                   td_ [class_ "px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900"] $ toHtml apiKey.title
-                  td_ [class_ "px-6 py-4 whitespace-nowrap text-sm text-gray-500"] $ toHtml $ apiKey.keyPrefix <> "**********"
+                  td_ [class_ "px-6 py-4 whitespace-nowrap text-sm text-gray-500 w-[500px]"] do
+                    span_
+                      [class_ "mr-2 w-full"]
+                      $ toHtml
+                      $ T.take 8 apiKey.keyPrefix
+                      <> "*************************************************"
+                    button_
+                      [ class_ "text-blue-500"
+                      , term "data-key" apiKey.keyPrefix
+                      , term "data-prefix" (T.take 8 apiKey.keyPrefix <> "**************************************************")
+                      , [__| on click  if my innerText is "show" 
+                                           put  @data-key into previous <span/>
+                                           put "hide" into me
+                                           exit
+                                        end
+                                       if my innerText is "hide"
+                                           put  @data-prefix into previous <span/>
+                                        put "show" into me
+                                       end
+                            |]
+                      ]
+                      "show"
                   td_ [class_ "px-6 py-4 whitespace-nowrap text-right text-sm font-medium"] $ do
                     if apiKey.active
                       then do
