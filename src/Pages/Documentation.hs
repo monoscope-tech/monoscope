@@ -41,6 +41,11 @@ import Pages.NonMember
 import Relude.Unsafe as Unsafe hiding (head)
 import Utils
 
+import Servant (
+  Union,
+  WithStatus (..),
+  respond,
+ )
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -300,12 +305,12 @@ documentationPostH sess pid SwaggerForm{swagger_json, from} = do
       pure $ addHeader hxTriggerData ""
 
 
-documentationGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> DashboardM (Html ())
+documentationGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> DashboardM (Union GetOrRedirect)
 documentationGetH sess pid swagger_id = do
   pool <- asks pool
   isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
   if not isMember
-    then pure $ userNotMemeberPage sess
+    then respond $ WithStatus @200 $ userNotMemeberPage sess
     else do
       (project, swaggers, swagger, swaggerId) <- liftIO
         $ withPool pool do
@@ -345,7 +350,10 @@ documentationGetH sess pid swagger_id = do
               , currProject = project
               , pageTitle = "Documentation"
               }
-      pure $ bodyWrapper bwconf $ documentationsPage pid swaggers swaggerId (decodeUtf8 (encode swagger))
+      integrated <- liftIO $ withPool pool $ hasIntegrated pid
+      if not integrated
+        then respond $ WithStatus @302 $ redirect ("/p/" <> pid.toText <> "/onboarding?redirected=true")
+        else respond $ WithStatus @200 $ bodyWrapper bwconf $ documentationsPage pid swaggers swaggerId (decodeUtf8 (encode swagger))
 
 
 documentationsPage :: Projects.ProjectId -> V.Vector Swaggers.Swagger -> String -> String -> Html ()

@@ -30,6 +30,11 @@ import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Pages.NonMember
 import Pkg.Components (loader)
 import Relude
+import Servant (
+  Union,
+  WithStatus (..),
+  respond,
+ )
 
 import System.Clock
 import Utils
@@ -42,7 +47,7 @@ import Utils
 -- >>> import Data.Aeson
 
 
-apiLog :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
+apiLog :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Union GetOrRedirect)
 apiLog sess pid queryM cols' fromM hxRequestM hxBoostedM = do
   let cols = T.splitOn "," (fromMaybe "" cols')
   let query = fromMaybe "" queryM
@@ -54,8 +59,7 @@ apiLog sess pid queryM cols' fromM hxRequestM hxBoostedM = do
   pool <- asks pool
   isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
   if not isMember
-    then do
-      pure $ userNotMemeberPage sess
+    then respond $ WithStatus @200 $ userNotMemeberPage sess
     else do
       (project, requests) <- liftIO
         $ withPool pool
@@ -70,20 +74,23 @@ apiLog sess pid queryM cols' fromM hxRequestM hxBoostedM = do
       let nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' fromTempM
 
       let resultCount = maybe 0 (^. #fullCount) (requests !? 0)
-      case (hxRequestM, hxBoostedM) of
-        (Just "true", Nothing) -> pure $ do
-          span_ [id_ "result-count", hxSwapOob_ "outerHTML"] $ show resultCount
-          reqChart reqChartTxt True
-          logItemRows pid requests cols nextLogsURL
-        _ -> do
-          let bwconf =
-                (def :: BWConfig)
-                  { sessM = Just sess
-                  , currProject = project
-                  , pageTitle = "API Log Explorer"
-                  }
-          let resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing
-          pure $ bodyWrapper bwconf $ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL
+      integrated <- liftIO $ withPool pool $ hasIntegrated pid
+      if not integrated
+        then respond $ WithStatus @302 $ redirect ("/p/" <> pid.toText <> "/onboarding?redirected=true")
+        else case (hxRequestM, hxBoostedM) of
+          (Just "true", Nothing) -> respond $ WithStatus @200 $ do
+            span_ [id_ "result-count", hxSwapOob_ "outerHTML"] $ show resultCount
+            reqChart reqChartTxt True
+            logItemRows pid requests cols nextLogsURL
+          _ -> do
+            let bwconf =
+                  (def :: BWConfig)
+                    { sessM = Just sess
+                    , currProject = project
+                    , pageTitle = "API Log Explorer"
+                    }
+            let resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing
+            respond $ WithStatus @200 $ bodyWrapper bwconf $ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL
 
 
 apiLogItem :: Sessions.PersistentSession -> Projects.ProjectId -> UUID.UUID -> ZonedTime -> DashboardM (Html ())

@@ -53,7 +53,13 @@ import Pages.NonMember
 import Pkg.Components (loader)
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import Servant (Headers, addHeader)
+import Servant (
+  Headers,
+  Union,
+  WithStatus (..),
+  addHeader,
+  respond,
+ )
 import Servant.Htmx (HXTrigger)
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils
@@ -146,15 +152,14 @@ data ParamInput = ParamInput
   }
 
 
-anomalyListGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Endpoints.EndpointId -> Maybe Text -> Maybe Text -> DashboardM (Html ())
+anomalyListGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Endpoints.EndpointId -> Maybe Text -> Maybe Text -> DashboardM (Union GetOrRedirect)
 anomalyListGetH sess pid layoutM ackdM archivedM sortM page loadM endpointM hxRequestM hxBoostedM = do
   let ackd = textToBool <$> ackdM
   let archived = textToBool <$> archivedM
   pool <- asks pool
   isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
   if not isMember
-    then do
-      pure $ userNotMemeberPage sess
+    then respond $ WithStatus @200 $ userNotMemeberPage sess
     else do
       let fetchLimit = 61
       let limit = maybe (Just fetchLimit) (\x -> if x == "slider" then Just 51 else Just fetchLimit) layoutM
@@ -198,13 +203,15 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM page loadM endpointM hxRe
                   "LOAD MORE"
                 else ""
             Nothing -> mapM_ (renderAnomaly False currTime) anomalies
-
-      case (layoutM, hxRequestM, hxBoostedM, loadM) of
-        (Just "slider", Just "true", _, _) -> pure $ anomalyListSlider currTime pid endpointM (Just anomalies)
-        (_, _, _, Just "true") -> pure anom
-        (_, Just "true", Just "false", _) -> pure elementBelowTabs
-        (_, Just "true", Nothing, _) -> pure elementBelowTabs
-        _ -> pure $ bodyWrapper bwconf $ anomalyListPage paramInput pid currTime anomalies nextFetchUrl
+      integrated <- liftIO $ withPool pool $ hasIntegrated pid
+      if not integrated
+        then respond $ WithStatus @302 $ redirect ("/p/" <> pid.toText <> "/onboarding?redirected=true")
+        else case (layoutM, hxRequestM, hxBoostedM, loadM) of
+          (Just "slider", Just "true", _, _) -> respond $ WithStatus @200 $ anomalyListSlider currTime pid endpointM (Just anomalies)
+          (_, _, _, Just "true") -> respond $ WithStatus @200 anom
+          (_, Just "true", Just "false", _) -> respond $ WithStatus @200 $ bodyWrapper bwconf elementBelowTabs
+          (_, Just "true", Nothing, _) -> respond $ WithStatus @200 $ elementBelowTabs
+          _ -> respond $ WithStatus @200 $ bodyWrapper bwconf $ anomalyListPage paramInput pid currTime anomalies nextFetchUrl
 
 
 anomalyListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Anomalies.AnomalyVM -> Maybe Text -> Html ()

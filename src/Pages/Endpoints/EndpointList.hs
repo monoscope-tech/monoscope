@@ -27,7 +27,12 @@ import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Charts.Charts qualified as Charts
 import Pages.NonMember
 import Relude
-import Utils (deleteParam, faIcon_, mIcon_, textToBool, userIsProjectMember)
+import Servant (
+  Union,
+  WithStatus (..),
+  respond,
+ )
+import Utils (GetOrRedirect, deleteParam, faIcon_, hasIntegrated, mIcon_, redirect, textToBool, userIsProjectMember)
 
 
 data ParamInput = ParamInput
@@ -38,15 +43,14 @@ data ParamInput = ParamInput
   }
 
 
-endpointListGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
+endpointListGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Union GetOrRedirect)
 endpointListGetH sess pid layoutM ackdM archivedM sortM hxRequestM hxBoostedM hxCurrentURL = do
   let ackd = maybe True textToBool ackdM
   let archived = maybe False textToBool archivedM
   pool <- asks pool
   isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
   if not isMember
-    then do
-      pure $ userNotMemeberPage sess
+    then respond $ WithStatus @200 $ userNotMemeberPage sess
     else do
       (project, endpointStats) <- liftIO
         $ withPool pool
@@ -74,10 +78,13 @@ endpointListGetH sess pid layoutM ackdM archivedM sortM hxRequestM hxBoostedM hx
       let elementBelowTabs =
             div_ [class_ "grid grid-cols-5", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"]
               $ endpointList' paramInput currTime pid endpointStats
-      case (hxRequestM, hxBoostedM) of
-        (Just "true", Just "false") -> pure elementBelowTabs
-        (Just "true", Nothing) -> pure elementBelowTabs
-        _ -> pure $ bodyWrapper bwconf $ endpointListPage paramInput pid currTime endpointStats
+      integrated <- liftIO $ withPool pool $ hasIntegrated pid
+      if not integrated
+        then respond $ WithStatus @302 $ redirect ("/p/" <> pid.toText <> "/onboarding?redirected=true")
+        else case (hxRequestM, hxBoostedM) of
+          (Just "true", Just "false") -> respond $ WithStatus @200 $ bodyWrapper bwconf elementBelowTabs
+          (Just "true", Nothing) -> respond $ WithStatus @200 $ elementBelowTabs
+          _ -> respond $ WithStatus @200 $ bodyWrapper bwconf $ endpointListPage paramInput pid currTime endpointStats
 
 
 endpointListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Endpoints.EndpointRequestStats -> Html ()

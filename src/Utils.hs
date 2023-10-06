@@ -16,6 +16,7 @@ module Utils (
   getMethodBgColor,
   getStatusColor,
   getStatusBgColor,
+  hasIntegrated,
 ) where
 
 import Data.Text (replace)
@@ -23,7 +24,7 @@ import Data.Time (ZonedTime)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.ToField (ToField (..))
 
-import Database.PostgreSQL.Transact
+import Database.PostgreSQL.Transact hiding (query)
 import Lucid (Html, href_, i_, term)
 import Lucid.Svg (class_, svg_, use_)
 import Models.Projects.Projects qualified as Projects
@@ -31,6 +32,9 @@ import Models.Users.Sessions qualified as Session
 import Relude hiding (show)
 import Servant
 
+import Database.PostgreSQL.Entity.DBT
+import Database.PostgreSQL.Simple (Only (Only))
+import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Text.Regex.TDFA ((=~))
 import Prelude (show)
 
@@ -102,6 +106,16 @@ userIsProjectMember sess pid = do
     else do
       user <- Projects.userByProjectId pid sess.userId
       if V.length user == 0 then pure False else pure True
+
+
+hasIntegrated :: Projects.ProjectId -> DBT IO Bool
+hasIntegrated pid = do
+  result <- query Select q pid
+  case result of
+    [Only count] -> return $ count > (0 :: Integer)
+    v -> return $ not (null v)
+  where
+    q = [sql| SELECT count(*) FROM apis.request_dumps WHERE project_id=? |]
 
 
 getMethodBgColor :: Text -> Text

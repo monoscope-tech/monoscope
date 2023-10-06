@@ -50,6 +50,12 @@ import Data.UUID.V4 qualified as UUIDV4
 import Lucid.Svg (color_)
 import Models.Apis.RequestDumps (EndpointPerf, RequestForReport (endpointHash))
 import Pages.NonMember
+import Servant (
+  Union,
+  WithStatus (..),
+  respond,
+ )
+
 import Utils
 
 
@@ -141,15 +147,14 @@ singleReportGetH sess pid rid = do
       pure $ bodyWrapper bwconf $ singleReportPage pid report
 
 
-reportsGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
+reportsGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Union GetOrRedirect)
 reportsGetH sess pid page hxRequest hxBoosted = do
   let p = toString (fromMaybe "0" page)
   let pg = fromMaybe 0 (readMaybe p :: Maybe Int)
   pool <- asks pool
   isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
   if not isMember
-    then do
-      pure $ userNotMemeberPage sess
+    then respond $ WithStatus @200 $ userNotMemeberPage sess
     else do
       (project, reports) <- liftIO
         $ withPool pool
@@ -158,21 +163,22 @@ reportsGetH sess pid page hxRequest hxBoosted = do
           reports <- Reports.reportHistoryByProject pid pg
           pure (project, reports)
       let nextUrl = "/p/" <> show pid.unProjectId <> "/reports?page=" <> show (pg + 1)
-      case (hxRequest, hxBoosted) of
-        (Just "true", Nothing) -> pure $ do
-          reportListItems pid reports nextUrl
-        _ -> do
-          let bwconf =
-                (def :: BWConfig)
-                  { sessM = Just sess
-                  , currProject = project
-                  , pageTitle = "Reports"
-                  }
-          let (daily, weekly) = case project of
-                Just proj -> (proj.dailyNotif, proj.weeklyNotif)
-                Nothing -> (False, False)
-
-          pure $ bodyWrapper bwconf $ reportsPage pid reports nextUrl daily weekly
+      integrated <- liftIO $ withPool pool $ hasIntegrated pid
+      if not integrated
+        then respond $ WithStatus @302 $ redirect ("/p/" <> pid.toText <> "/onboarding?redirected=true")
+        else case (hxRequest, hxBoosted) of
+          (Just "true", Nothing) -> respond $ WithStatus @200 $ reportListItems pid reports nextUrl
+          _ -> do
+            let bwconf =
+                  (def :: BWConfig)
+                    { sessM = Just sess
+                    , currProject = project
+                    , pageTitle = "Reports"
+                    }
+            let (daily, weekly) = case project of
+                  Just proj -> (proj.dailyNotif, proj.weeklyNotif)
+                  Nothing -> (False, False)
+            respond $ WithStatus @200 $ bodyWrapper bwconf $ reportsPage pid reports nextUrl daily weekly
 
 
 singleReportPage :: Projects.ProjectId -> Maybe Reports.Report -> Html ()
