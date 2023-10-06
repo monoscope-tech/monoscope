@@ -62,7 +62,7 @@ onboardingPage pid apikey hasRequest ans redi ctb = do
   div_
     [ class_ "relative h-full"
     , hxGet_ $ "/p/" <> pid.toText <> "/onboarding?polling=True"
-    , hxTrigger_ "load delay:3s"
+    , hxTrigger_ "load delay:15s"
     , hxVals_ "js:{current_tab:getCurrentTab()}"
     , hxSwap_ "outerHTML"
     ]
