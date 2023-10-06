@@ -94,7 +94,7 @@ type ProtectedAPI =
   UVerb 'GET '[HTML] GetOrRedirect
     :<|> "p" :> "new" :> Get '[HTML] (Html ()) -- p represents project
     :<|> "p" :> "new" :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
-    :<|> "p" :> ProjectId :> "onboarding" :> QPB "polling" :> QPB "redirected" :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "onboarding" :> QPB "polling" :> QPB "redirected" :> QPT "current_tab" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> QPT "from" :> QPT "to" :> QPT "since" :> UVerb 'GET '[HTML] GetOrRedirect
     :<|> "p" :> ProjectId :> "settings" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "delete" :> Get '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
