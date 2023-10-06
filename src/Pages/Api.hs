@@ -193,11 +193,11 @@ mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] $ do
                       [class_ "mr-2 w-full"]
                       $ toHtml
                       $ T.take 8 apiKey.keyPrefix
-                      <> "*************************************************"
+                      <> "********************************************"
                     button_
                       [ class_ "text-blue-500"
                       , term "data-key" apiKey.keyPrefix
-                      , term "data-prefix" (T.take 8 apiKey.keyPrefix <> "**************************************************")
+                      , term "data-prefix" (T.take 8 apiKey.keyPrefix <> "********************************************")
                       , [__| on click  if my innerText is "show" 
                                            put  @data-key into previous <span/>
                                            put "hide" into me
