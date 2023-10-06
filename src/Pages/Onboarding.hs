@@ -8,7 +8,7 @@ import Data.Text qualified as T
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
-import Lucid.Htmx (hxPost_, hxTarget_)
+import Lucid.Htmx (hxGet_, hxPost_, hxSwap_, hxTarget_, hxTrigger_)
 import Lucid.Hyperscript
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
@@ -25,8 +25,8 @@ import Utils (
  )
 
 
-onboardingGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Bool -> DashboardM (Html ())
-onboardingGetH sess pid redirected = do
+onboardingGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Bool -> Maybe Bool -> DashboardM (Html ())
+onboardingGetH sess pid polling redirected = do
   pool <- asks pool
   isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
   if not isMember
@@ -52,13 +52,14 @@ onboardingGetH sess pid redirected = do
             Just p -> case p.questions of
               Just v -> True
               _ -> False
-
-      pure $ bodyWrapper bwconf $ onboardingPage pid apikey hasRequest ans (fromMaybe False redirected)
+      case polling of
+        Just _ -> pure $ onboardingPage pid apikey hasRequest ans (fromMaybe False redirected)
+        Nothing -> pure $ bodyWrapper bwconf $ onboardingPage pid apikey hasRequest ans (fromMaybe False redirected)
 
 
 onboardingPage :: Projects.ProjectId -> Text -> Bool -> Bool -> Bool -> Html ()
 onboardingPage pid apikey hasRequest ans redi = do
-  div_ [class_ "relative h-full"] $ do
+  div_ [class_ "relative h-full", hxGet_ $ "/p/" <> pid.toText <> "/onboarding?polling=True", hxTrigger_ "load delay:30s", hxSwap_ "outerHTML"] $ do
     when redi $ div_ [class_ "w-full text-center py-2 bg-yellow-500"] "You have to integrate APIToolkit in your app before you can start using the platform"
     div_ [class_ "flex flex-col h-full w-full gap-16"] $ do
       div_ [class_ "flex flex-col w-full mt-10 py-4 items-center gap-4"] $ do
@@ -138,7 +139,7 @@ onboardingPage pid apikey hasRequest ans redi = do
             -- div_ [class_ "flex flex-col gap-2 py-4 border-l"] pass
             div_ [class_ "px-8 py-16 flex items-center gap-6 border-l"] do
               faIcon_ "fa-circle-play" "fa-light fa-circle-play" "text-blue-500"
-              a_ [href_ "https://calendly.com/tonyalaribe/30min", class_ "flex flex-col"] do
+              a_ [href_ "https://calendar.app.google/EvPzCoVsLh5gqkAo8", target_ "_BLANK", class_ "flex flex-col"] do
                 span_ [class_ "font-bold text-lg text-blue-500"] "Get Demo"
                 span_ [class_ "text-slate-500"] "Schedule a brief call with co-founder Antony to provide a concise overview of apitoolkit and guide him on its effective utilization for API management."
   script_
@@ -152,10 +153,7 @@ function changeTab(tabId) {
   const tabContents = document.querySelectorAll('.tab-content');
   tabContents.forEach(content => content.classList.add("hidden"));
 
-  // Display the content of the clicked tab
-  console.log(tabId + "_content")
   const tabContent = document.getElementById(tabId + '_content');
-  console.log(tabContent)
   tabContent.classList.remove("hidden")
 
 }
@@ -212,7 +210,7 @@ integrateApiToolkit apikey =
         tabContentFastify apikey
       p_ [class_ "text-center font-medium text-gray-700  mt-8 flex gap-2 block font-bold"] do
         "Having trouble integrating APIToolkit?"
-        a_ [href_ "https://www.apitoolkit.io/docs/integrations", class_ "text-blue-500"] "Contact support"
+        a_ [href_ "https://calendar.app.google/EvPzCoVsLh5gqkAo8", target_ "_BLANK", class_ "text-blue-500"] "Contact support"
 
 
 completedBanner :: Projectjs.ProjectId -> Html ()
