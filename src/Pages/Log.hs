@@ -184,7 +184,7 @@ expandAPIlogItem' req modal = do
           div_ [class_ "flex gap-1 items-center"] do
             mIcon_ "projects" "h-5 w-5 text-slate-400"
             span_ [class_ "text-md font-bold"] $ show req.sdkType
-          p_ [class_ "text-gray-500"] "Framework"
+          p_ [class_ "text-slate-500"] "Framework"
     -- errors
     let numErrors = case req.errors of
           AE.Array a -> length a
@@ -195,7 +195,6 @@ expandAPIlogItem' req modal = do
         p_ [class_ "text-sm text-red-500 font-bold"] $ show numErrors
       div_ [class_ "px-4 flex gap-10 border-b text-gray-500"] do
         jsonValueToHtmlTree req.errors
-
     -- request details
     div_ [class_ "border rounded-lg mt-8", id_ "request_detail_container"] do
       div_ [class_ "flex w-full bg-gray-100 px-4 py-2 flex-col gap-2"] do
