@@ -193,6 +193,17 @@ expandAPIlogItem' req modal = do
             mIcon_ "projects" "h-5 w-5 text-gray-400"
             span_ [class_ "text-md font-bold"] $ show req.sdkType
           p_ [class_ "text-gray-500"] "Framework"
+    -- errors
+    let numErrors = case req.errors of
+          AE.Array a -> length a
+          _ -> 0
+    when (numErrors > 0) $ div_ [class_ "border rounded-lg mt-8"] do
+      div_ [class_ "flex w-full bg-gray-100 px-4 py-2 gap-4 items-center"] do
+        p_ [class_ "font-bold"] "Errors"
+        p_ [class_ "text-sm text-red-500 font-bold"] $ show numErrors
+      div_ [class_ "px-4 flex gap-10 border-b text-gray-500"] do
+        jsonValueToHtmlTree req.errors
+
     -- request details
     div_ [class_ "border rounded-lg mt-8", id_ "request_detail_container"] do
       div_ [class_ "flex w-full bg-gray-100 px-4 py-2 flex-col gap-2"] do
@@ -393,11 +404,15 @@ reqChart reqChartTxt hxOob = do
 logItemRows :: Projects.ProjectId -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Text -> Html ()
 logItemRows pid requests cols nextLogsURL = do
   requests & traverse_ \req -> do
+    let hasErrors = case req.errors of
+          AE.Array a -> not (null a)
+          _ -> False
     let logItemPath = RequestDumps.requestDumpLogItemUrlPath pid req
     let endpoint_hash = toText $ showHex (xxHash $ encodeUtf8 $ UUID.toText pid.unProjectId <> T.toUpper req.method <> req.urlPath) ""
     let logItemEndpointUrl = "/p/" <> pid.toText <> "/log_explorer/endpoint/" <> endpoint_hash
+    let errorClass = if hasErrors then "border-l-red-200" else "border-l-transparent"
     div_
-      [ class_ "flex flex-row border-l-4 border-l-transparent divide-x space-x-4 hover:bg-blue-50 cursor-pointer"
+      [ class_ $ "flex flex-row border-l-4 divide-x space-x-4 cursor-pointer " <> errorClass
       , term "data-log-item-path" logItemPath
       , [__|on click LogItemExpandable(me)|]
       ]
@@ -450,7 +465,11 @@ logItemRows pid requests cols nextLogsURL = do
 
 apiLogItemView :: RequestDumps.RequestDumpLogItem -> Text -> Html ()
 apiLogItemView req expandItemPath = do
-  div_ [class_ "log-item-info border-l-blue-200 border-l-4"]
+  let hasErrors = case req.errors of
+        AE.Array a -> not (null a)
+        _ -> False
+  let errorClass = if hasErrors then "border-l-red-200" else "border-l-blue-200"
+  div_ [class_ $ "log-item-info border-l-4 " <> errorClass]
     $ div_ [class_ "pl-4 py-1 ", colspan_ "3"]
     $ do
       button_
