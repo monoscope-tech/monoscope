@@ -46,7 +46,7 @@ clientMetadataH (Just authTextB64) = do
       case ProjectApiKeys.ProjectApiKeyId <$> UUID.fromASCIIBytes decryptedKey of
         Nothing -> throwError err401
         Just apiKeyUUID -> do
-          (pApiKey, project) <- liftIO $ withPool pool $ do
+          (pApiKey, project) <- liftIO $ withPool pool do
             pApiKeyM <- ProjectApiKeys.getProjectApiKey apiKeyUUID
             case pApiKeyM of
               Nothing -> error "no api key with given id"

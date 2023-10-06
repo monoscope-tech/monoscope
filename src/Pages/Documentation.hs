@@ -237,7 +237,7 @@ documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id, endpoint
       let value = case decodeStrict (encodeUtf8 updated_swagger) of
             Just val -> val
             Nothing -> error "Failed to parse JSON: "
-      res <- liftIO $ withPool pool $ do
+      res <- liftIO $ withPool pool do
         currentTime <- liftIO getZonedTime
         let newEndpoints = V.toList $ V.map (getEndpointFromOpEndpoint pid) endpoints
         let shapes = V.toList (V.map (getShapeFromOpShape pid currentTime) (V.filter (.opShapeChanged) diffsInfo))
@@ -292,7 +292,7 @@ documentationPostH sess pid SwaggerForm{swagger_json, from} = do
 
       swaggers <- liftIO
         $ withPool pool
-        $ do
+        do
           Swaggers.addSwagger swaggerToAdd
           Swaggers.swaggersByProject pid
 
@@ -350,7 +350,7 @@ documentationGetH sess pid swagger_id = do
 
 documentationsPage :: Projects.ProjectId -> V.Vector Swaggers.Swagger -> String -> String -> Html ()
 documentationsPage pid swaggers swaggerID jsonString = do
-  div_ [class_ "relative h-full"] $ do
+  div_ [class_ "relative h-full"] do
     -- modal
     div_
       [ style_ "z-index:99999"
@@ -359,83 +359,83 @@ documentationsPage pid swaggers swaggerID jsonString = do
       , tabindex_ "-1"
       , onclick_ "closeModal(event)"
       ]
-      $ do
+      do
         div_
           [ class_ "relative max-h-full"
           , style_ "width: min(90vw, 1000px)"
           ]
-          $ do
+          do
             -- Modal content
             div_
               [ class_ "bg-white rounded-lg shadow w-full"
               -- , hxPost_ $ "/p/" <> pid.toText <> "/documentation"
               ]
-              $ do
-                div_ [class_ "flex items-start justify-between p-6 space-x-2  border-b rounded-t"] $ do
+              do
+                div_ [class_ "flex items-start justify-between p-6 space-x-2  border-b rounded-t"] do
                   h3_ [class_ "text-xl font-semibold text-gray-900 dark:text-white"] "Save Swagger"
                 -- Modal body
-                div_ [class_ "w-full"] $ do
+                div_ [class_ "w-full"] do
                   div_ [id_ "diff_editor_container", style_ "height:65vh; width:100%"] pass
                 -- input_ [type_ "hidden", name_ "from", value_ "docs"]
                 -- textarea_ [style_ "height:65vh;resize:none", name_ "swagger_json", class_ "w-full border outline-none p-4 focus:outline-none focus:border-blue-200", placeholder_ "Paste swagger here"] ""
                 -- Modal footer
-                div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] $ do
+                div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] do
                   button_ [style_ "margin-right:50px", type_ "button", class_ "btn", onclick_ "closeModal(event)", id_ "close_btn"] "Close"
                   button_ [type_ "sumbit", class_ "btn btn-primary", onclick_ "parsePaths()"] "Confirm  & Save"
 
     -- page content
 
     input_ [id_ "swaggerData", type_ "hidden", value_ (toText jsonString)]
-    div_ [class_ "flex flex-col h-full w-full justify-between"] $ do
-      div_ [class_ "flex w-full bg-white border-b items-center justify-between px-2", style_ "top: 0; height:60px; position: sticky"] $ do
-        div_ [class_ "flex items-center gap-4"] $ do
+    div_ [class_ "flex flex-col h-full w-full justify-between"] do
+      div_ [class_ "flex w-full bg-white border-b items-center justify-between px-2", style_ "top: 0; height:60px; position: sticky"] do
+        div_ [class_ "flex items-center gap-4"] do
           h3_ [class_ "text-xl text-slate-700 text-2xl font-medium"] "Swagger"
-          div_ [class_ "relative", style_ "width:200px"] $ do
+          div_ [class_ "relative", style_ "width:200px"] do
             button_
               [ onclick_ "toggleSwaggerHistory(event)"
               , id_ "toggle_swagger_btn"
               , class_ "w-full flex gap-2 text-gray-600 justify_between items-center cursor-pointer px-2 py-1 border rounded focus:ring-2 focus:ring-blue-200 active:ring-2 active:ring-blue-200"
               ]
-              $ do
+              do
                 p_ [style_ "width: calc(100% - 25px)", class_ "truncate ..."] $ toHtml swaggerID
                 img_ [src_ "/assets/svgs/select_chevron.svg", style_ "height:15px; width:15px"]
-            div_ [id_ "swagger_history_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] $ do
+            div_ [id_ "swagger_history_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] do
               swaggers & mapM_ \sw -> do
                 button_ [onclick_ "swaggerChanged(event)", class_ "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"] $ toHtml swaggerID
         button_ [class_ "place-content-center text-md btn btn-primary", onclick_ "showModal()"] "Save swagger"
 
-      div_ [class_ "w-full h-full", style_ "height: calc(100% - 60px)"] $ do
-        div_ [id_ "columns_container", class_ "w-full h-full flex flex-row", style_ "height: 100%"] $ do
+      div_ [class_ "w-full h-full", style_ "height: calc(100% - 60px)"] do
+        div_ [id_ "columns_container", class_ "w-full h-full flex flex-row", style_ "height: 100%"] do
           -- loading indicator
-          div_ [id_ "loading_indicator", class_ "fixed inset-0 flex justify-center bg-[rgba(0,0,0,0.4)] items-center", style_ "z-index:9999;"] $ do
-            div_ [class_ "py-10 px-24 bg-white flex gap-2"] $ do
+          div_ [id_ "loading_indicator", class_ "fixed inset-0 flex justify-center bg-[rgba(0,0,0,0.4)] items-center", style_ "z-index:9999;"] do
+            div_ [class_ "py-10 px-24 bg-white flex gap-2"] do
               div_ [class_ "animate-spin h-5 w-5 mr-3 rounded-full border-t border-8 border-blue-500"] pass
               span_ "Loading..."
-          div_ [id_ "endpoints_container", class_ "flex flex-auto", style_ "width:30%; height:100%"] $ do
-            div_ [class_ "h-full overflow-auto", style_ "width: calc(100% - 2px)"] $ do
+          div_ [id_ "endpoints_container", class_ "flex flex-auto", style_ "width:30%; height:100%"] do
+            div_ [class_ "h-full overflow-auto", style_ "width: calc(100% - 2px)"] do
               div_ [id_ "info_tags_container", class_ "w-full"] pass
-              div_ [class_ "w-full"] $ do
+              div_ [class_ "w-full"] do
                 input_ [id_ "endpoints-search", type_ "text", class_ "w-full px-2 py-3 text-lg border-b border-t outline-none focus:outline-none", placeholder_ "Search.."]
                 div_ [id_ "endpoint_paths_container", class_ "w-full"] pass
             div_ [onmousedown_ "mouseDown(event)", id_ "endpoints_resizer", class_ "h-full bg-neutral-400", style_ "width: 2px; cursor: col-resize; background-color: rgb(209 213 219)"] pass
-          div_ [id_ "editor_container", class_ "flex flex-auto overflow-auto", style_ "width:40%; height:100%"] $ do
-            div_ [class_ "h-full", style_ "width: calc(100% - 2px)"] $ do
-              div_ [class_ "w-full flex gap-8 justify-end px-2 items-center", style_ "height:40px"] $ do
-                div_ [onclick_ "toggleFontSize(event)", class_ "relative"] $ do
+          div_ [id_ "editor_container", class_ "flex flex-auto overflow-auto", style_ "width:40%; height:100%"] do
+            div_ [class_ "h-full", style_ "width: calc(100% - 2px)"] do
+              div_ [class_ "w-full flex gap-8 justify-end px-2 items-center", style_ "height:40px"] do
+                div_ [onclick_ "toggleFontSize(event)", class_ "relative"] do
                   button_ [id_ "toggle_font", class_ "font-semibold"] "Aa"
-                  div_ [id_ "toggle_dropdown_container", class_ "absolute hidden flex flex-col justify-between bg-white shadow bottom-0 rounded-b overflow-hidden", style_ "bottom:-105px;left:-50px; height: 100px;width:100px; z-index:999"] $ do
+                  div_ [id_ "toggle_dropdown_container", class_ "absolute hidden flex flex-col justify-between bg-white shadow bottom-0 rounded-b overflow-hidden", style_ "bottom:-105px;left:-50px; height: 100px;width:100px; z-index:999"] do
                     span_ [id_ "toggle_sm", class_ "cursor-pointer text-sm w-full px-3 py-2 hover:bg-blue-100"] "Small"
                     span_ [id_ "toggle_md", class_ "font_toggle_active cursor-pointer w-full px-3 py-2 hover:bg-blue-100"] "Medium"
                     span_ [id_ "toggle_lg", class_ "cursor-pointer text-lg w-full px-3 py-2 hover:bg-blue-100"] "Large"
-                form_ [hxPost_ $ "/p/" <> pid.toText <> "/documentation/save"] $ do
+                form_ [hxPost_ $ "/p/" <> pid.toText <> "/documentation/save"] do
                   input_ [id_ "save_swagger_input_id", name_ "swagger_id", type_ "hidden", value_ (toText swaggerID)]
                   input_ [id_ "save_swagger_input_data", name_ "updated_swagger", type_ "hidden", value_ (toText jsonString)]
               --  button_ [type_ "submit", id_ "save_swagger_btn", class_ "bg-gray-200 text-sm py-2 px-4 rounded active:bg-green-600"] "Save"
               div_ [id_ "swaggerEditor", class_ "w-full overflow-y-auto", style_ "height: calc(100% - 40px)"] pass
             div_ [onmousedown_ "mouseDown(event)", id_ "editor_resizer", class_ "h-full bg-neutral-400", style_ "width: 2px; cursor: col-resize; background-color: rgb(209 213 219);"] pass
-          div_ [id_ "details_container", class_ "flex-auto overflow-y-auto", style_ "width:30%; height:100%"] $ do
+          div_ [id_ "details_container", class_ "flex-auto overflow-y-auto", style_ "width:30%; height:100%"] do
             div_ [id_ "swagger-ui", class_ "relative h-full w-full bg-white overflow-auto"] pass
-          button_ [class_ "absolute z-10 p-2", style_ "right: 15px", onclick_ "fullscreen()", title_ "full screen"] $ do
+          button_ [class_ "absolute z-10 p-2", style_ "right: 15px", onclick_ "fullscreen()", title_ "full screen"] do
             img_ [src_ "/assets/svgs/fullscreen.svg", style_ "height:24px; width: 24px"]
   -- mainContent swaggers
 
@@ -734,12 +734,12 @@ documentationsPage pid swaggers swaggerID jsonString = do
 
 mainContent :: V.Vector Swaggers.Swagger -> Html ()
 mainContent swaggers = do
-  section_ [id_ "main-content", class_ "flex flex-col"] $ do
-    div_ [class_ "-my-2 overflow-x-auto sm:-mx-6 lg:-mx-8"] $ do
-      div_ [class_ "flex flex-col py-2 align-middle inline-block w-full sm:px-6 lg:px-8"] $ do
+  section_ [id_ "main-content", class_ "flex flex-col"] do
+    div_ [class_ "-my-2 overflow-x-auto sm:-mx-6 lg:-mx-8"] do
+      div_ [class_ "flex flex-col py-2 align-middle inline-block w-full sm:px-6 lg:px-8"] do
         swaggers & mapM_ \rf -> do
-          div_ [style_ "max-height:400px;", class_ "shadow overflow-y-auto border-b border-gray-200 mb-10 sm:rounded-lg"] $ do
-            div_ $ do
+          div_ [style_ "max-height:400px;", class_ "shadow overflow-y-auto border-b border-gray-200 mb-10 sm:rounded-lg"] do
+            div_ do
               p_ [style_ "white-space: pre-wrap; font-family: monospace;", class_ "raw_swagger px-6 py-4 text-sm font-medium text-gray-900"] $ toHtml $ encode rf.swaggerJson
   script_
     [text|

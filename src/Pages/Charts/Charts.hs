@@ -189,7 +189,7 @@ chartsGetH _ typeM groupByM queryByM slotsM limitsM themeM idM showLegendM = do
 
   let scriptContent = [text| throughputEChartTable("$idAttr",$headersJSON, $groupedDataJSON, ["Endpoint"], $showLegend, "$chartThemeTxt", "$fromDStr", "$toDStr", "$cType") |]
 
-  pure $ do
+  pure do
     div_ [id_ $ toText idAttr, class_ "w-full h-full"] ""
     script_ scriptContent
 
@@ -313,7 +313,7 @@ throughputEndpointHTML sess pid idM groupBy_ endpointHash shapeHash formatHash s
         Nothing -> do
           chartData <- liftIO $ withPool pool $ RequestDumps.throughputBy pid groupBy_ endpointHash shapeHash formatHash statusCodeGT (fromMaybe 0 numSlotsM) limitM Nothing (fromD, toD)
           pure [text| throughputEChart("id-$entityId", $chartData, [$groupByField], $showLegend, "$chartThemeTxt") |]
-      pure $ do
+      pure do
         div_ [id_ $ "id-" <> entityId, class_ "w-full h-full"] ""
         script_ script
 
