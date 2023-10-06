@@ -17,14 +17,17 @@ import BackgroundJobs qualified
 import Config
 import Data.Aeson (encode)
 import Data.Aeson.QQ (aesonQQ)
+import Data.ByteString.Base64 qualified as B64
 import Data.CaseInsensitive (original)
 import Data.CaseInsensitive qualified as CI
+
 import Data.Default
 import Data.List.Extra (cons)
 import Data.List.Unique
 import Data.Pool (withResource)
 import Data.Text (toLower)
 import Data.Text qualified as T
+import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Valor (Valor, check1, failIf, validateM)
 import Data.Valor qualified as Valor
@@ -32,6 +35,7 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript
+import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMembers qualified as Projects
 import Models.Projects.Projects qualified as Projects
@@ -166,6 +170,13 @@ processProjectPostForm sess cpRaw = do
         let usersAndPermissions = zip cp.emails cp.permissions & uniq
         _ <- liftIO $ withPool pool $ do
           Projects.insertProject (createProjectFormToModel pid cp)
+          projectKeyUUID <- liftIO UUIDV4.nextRandom
+          let encryptedKey = ProjectApiKeys.encryptAPIKey (encodeUtf8 envCfg.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
+          let encryptedKeyB64 = B64.encodeBase64 encryptedKey
+          let keyPrefix = encryptedKeyB64
+          pApiKey <- liftIO $ ProjectApiKeys.newProjectApiKeys pid projectKeyUUID "auto-generated" keyPrefix
+          ProjectApiKeys.insertProjectApiKey pApiKey
+
           liftIO $ ConvertKit.addUserOrganization envCfg.convertkitApiKey (CI.original sess.user.getUser.email) pid.toText cp.title cp.paymentPlan
           newProjectMembers <- forM usersAndPermissions \(email, permission) -> do
             userId' <- runMaybeT $ MaybeT (Users.userIdByEmail email) <|> MaybeT (Users.createEmptyUser email)
