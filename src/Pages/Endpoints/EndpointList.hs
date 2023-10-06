@@ -53,8 +53,7 @@ endpointListGetH sess pid layoutM ackdM archivedM sortM hxRequestM hxBoostedM hx
     then respond $ WithStatus @200 $ userNotMemeberPage sess
     else do
       (project, endpointStats) <- liftIO
-        $ withPool pool
-        $ do
+        $ withPool pool do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
           endpointStats <- Endpoints.endpointRequestStatsByProject pid ackd archived
           pure (project, endpointStats)

@@ -90,16 +90,17 @@ dashboardGetH sess pid fromDStr toDStr sinceStr' = do
 
       startTime <- liftIO $ getTime Monotonic
       (project, projectRequestStats, reqLatenciesRolledByStepsLabeled) <- liftIO
-        $ withPool pool
-        $ do
-          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+        $ withPool
+          pool
+          do
+            project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
 
-          projectRequestStats <- fromMaybe (def :: Projects.ProjectRequestStats) <$> Projects.projectRequestStatsByProject pid
-          let maxV = round projectRequestStats.p99 :: Int
-          let steps' = (maxV `quot` 100) :: Int
-          let steps = if steps' == 0 then 100 else steps'
-          reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledByStepsForProject maxV steps pid (fromD, toD)
-          pure (project, projectRequestStats, Vector.toList reqLatenciesRolledBySteps)
+            projectRequestStats <- fromMaybe (def :: Projects.ProjectRequestStats) <$> Projects.projectRequestStatsByProject pid
+            let maxV = round projectRequestStats.p99 :: Int
+            let steps' = (maxV `quot` 100) :: Int
+            let steps = if steps' == 0 then 100 else steps'
+            reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledByStepsForProject maxV steps pid (fromD, toD)
+            pure (project, projectRequestStats, Vector.toList reqLatenciesRolledBySteps)
 
       let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
       let bwconf =
@@ -120,7 +121,7 @@ dashboardGetH sess pid fromDStr toDStr sinceStr' = do
 dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 dashboardPage pid paramInput currTime projectStats reqLatenciesRolledByStepsJ dateRange = do
   let currentURL' = deleteParam "to" $ deleteParam "from" $ deleteParam "since" paramInput.currentURL
-  section_ [class_ "p-8  mx-auto px-16 w-full space-y-12 pb-24"] $ do
+  section_ [class_ "p-8  mx-auto px-16 w-full space-y-12 pb-24"] do
     div_ [class_ "relative p-1 "] do
       div_ [class_ "relative"] do
         a_
@@ -179,19 +180,19 @@ dStats :: Projects.ProjectId -> Projects.ProjectRequestStats -> Text -> (Maybe Z
 dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledByStepsJ dateRange@(fromD, toD) = do
   let _ = min
   when (projReqStats.totalRequests == 0) do
-    section_ [class_ "card-round p-5 sm:p-10 space-y-4 text-lg"] $ do
+    section_ [class_ "card-round p-5 sm:p-10 space-y-4 text-lg"] do
       h2_ [class_ "text-2xl"] "Welcome onboard APIToolkit."
       p_ "You're currently not sending any data to apitoolkit from your backends yet. Here's a guide to get you setup for your tech stack."
       a_ [href_ "https://apitoolkit.io/docs/quickstarts/", class_ "btn-indigo btn-sm my-3 -ml-0 mt-6", target_ "_blank"] "Read the setup guide"
 
-  section_ [class_ "space-y-3"] $ do
-    div_ [class_ "flex justify-between mt-4"] $ div_ [class_ "flex flex-row"] $ do
+  section_ [class_ "space-y-3"] do
+    div_ [class_ "flex justify-between mt-4"] $ div_ [class_ "flex flex-row"] do
       a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
         $ faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 w-4 inline-block"
       span_ [class_ "text-lg text-slate-700"] "Analytics"
 
-    div_ [class_ "reqResSubSection space-y-5"] $ do
-      div_ [class_ "grid grid-cols-5 gap-5"] $ do
+    div_ [class_ "reqResSubSection space-y-5"] do
+      div_ [class_ "grid grid-cols-5 gap-5"] do
         statBox (Just pid) "Requests" "Total requests in the last 2 weeks" projReqStats.totalRequests Nothing
         statBox (Just pid) "Anomalies" "Total anomalies still active this week vs last week" projReqStats.totalAnomalies (Just projReqStats.totalAnomaliesLastWeek)
         statBox (Just pid) "Endpoints" "Total endpoints now vs last week" projReqStats.totalEndpoints (Just projReqStats.totalEndpointsLastWeek)
@@ -199,14 +200,14 @@ dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledBySte
         statBox (Just pid) "Requests per minutes" "Total requests per minute this week vs last week" projReqStats.requestsPerMin (Just projReqStats.requestsPerMinLastWeek)
 
       div_ [class_ "flex gap-5"] do
-        div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] $ do
+        div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] do
           div_ [class_ "flex gap-4 items-center"] do
             select_ [] $ option_ [class_ "text-2xl font-normal mr-4"] "Requests by Status Code"
             span_ [class_ "inline-block", term "data-tippy-content" "HTTP status code distribution for all requests."] $ mIcon_ "info" "w-4 h-4"
           div_ [class_ "h-64 "] do
             Charts.lazy [C.QByE $ C.QBPId pid : catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBStatusCode, C.SlotsE 120, C.ShowLegendE]
 
-        div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] $ do
+        div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] do
           div_ [class_ "flex gap-4 items-center"] do
             select_ [] $ option_ [class_ "text-2xl font-normal"] "Latency Percentiles"
             span_ [class_ "inline-block", term "data-tippy-content" "Response time distribution at the 50th, 75th, and 90th percentiles"] $ mIcon_ "info" "w-4 h-4"
@@ -214,29 +215,29 @@ dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledBySte
             Charts.lazy [C.QByE $ C.QBPId pid : catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBDurationPercentile, C.SlotsE 120, C.ShowLegendE, C.TypeE C.LineCT]
 
       div_ [class_ "flex gap-5"] do
-        div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] $ do
+        div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] do
           div_ [class_ "flex gap-4 items-center"] do
             select_ [] $ option_ [class_ "text-2xl font-normal"] "Errors"
             span_ [class_ "inline-block", term "data-tippy-content" "Requests with error status responses grouped by status code"] $ mIcon_ "info" "w-4 h-4"
           div_ [class_ "h-64 "] do
             Charts.lazy [C.QByE $ [C.QBPId pid, C.QBStatusCodeGT 400] ++ catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBStatusCode, C.SlotsE 120, C.ShowLegendE, C.Theme "roma"]
 
-        div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] $ do
+        div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] do
           div_ [class_ "flex gap-4 items-center"] do
             select_ [] $ option_ [class_ "text-2xl font-normal"] "Requests by Endpoint"
             span_ [class_ "inline-block", term "data-tippy-content" "All requests grouped by endpoint"] $ mIcon_ "info" "w-4 h-4"
           div_ [class_ "h-64 "] do
             Charts.lazy [C.QByE $ C.QBPId pid : catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBEndpoint, C.SlotsE 120, C.ShowLegendE]
 
-      div_ [class_ "col-span-3 card-round py-3 px-6"] $ do
-        div_ [class_ "p-4"] $ select_ [] $ do
+      div_ [class_ "col-span-3 card-round py-3 px-6"] do
+        div_ [class_ "p-4"] $ select_ [] do
           option_ "Request Latency Distribution"
           option_ "Avg Reqs per minute"
-        div_ [class_ "grid grid-cols-9  gap-8 w-full"] $ do
+        div_ [class_ "grid grid-cols-9  gap-8 w-full"] do
           div_ [id_ "reqsLatencyHistogram", class_ "col-span-7 h-72"] ""
-          div_ [class_ "col-span-2 space-y-4 "] $ do
+          div_ [class_ "col-span-2 space-y-4 "] do
             span_ [class_ "block text-right"] "Latency Percentiles"
-            ul_ [class_ "space-y-1 divide-y divide-slate-100"] $ do
+            ul_ [class_ "space-y-1 divide-y divide-slate-100"] do
               percentileRow "max" projReqStats.max
               percentileRow "p99" projReqStats.p99
               percentileRow "p95" projReqStats.p95
@@ -250,9 +251,9 @@ dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledBySte
 percentileRow :: Text -> Double -> Html ()
 percentileRow key p = do
   let (d, unit) = fmtDuration p
-  li_ [class_ "flex flex-row content-between justify-between"] $ do
+  li_ [class_ "flex flex-row content-between justify-between"] do
     span_ [class_ "inline-block"] $ toHtml key
-    span_ [class_ "inline-block font-mono"] $ do
+    span_ [class_ "inline-block font-mono"] do
       span_ [class_ "tabular-nums"] $ toHtml d
       span_ $ toHtml unit
 

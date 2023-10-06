@@ -168,7 +168,7 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM page loadM endpointM hxRe
             Nothing -> 0
       (project, anomalies) <- liftIO
         $ withPool pool
-        $ do
+        do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
           anomalies <- Anomalies.selectAnomalies pid Nothing ackd archived sortM limit (pageInt * fetchLimit)
           pure (project, anomalies)
@@ -215,13 +215,13 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM page loadM endpointM hxRe
 
 
 anomalyListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Anomalies.AnomalyVM -> Maybe Text -> Html ()
-anomalyListPage paramInput pid currTime anomalies nextFetchUrl = div_ [class_ "w-full mx-auto  px-16 pt-10 pb-24"] $ do
+anomalyListPage paramInput pid currTime anomalies nextFetchUrl = div_ [class_ "w-full mx-auto  px-16 pt-10 pb-24"] do
   div_
     [ style_ "z-index:26; width: min(90vw, 800px)"
     , class_ "fixed hidden right-0 top-[50px] bg-white overflow-y-scroll h-[calc(100%-50px)] border-l border-l-2 shadow"
     , id_ "expand-an-modal"
     ]
-    $ do
+    do
       div_ [class_ "relative ml-auto w-full", style_ ""] do
         div_ [class_ "flex justify-end  w-full p-4 "] do
           button_ [[__|on click add .hidden to #expand-an-modal|]] do
@@ -256,7 +256,7 @@ anomalyListPage paramInput pid currTime anomalies nextFetchUrl = div_ [class_ "w
 
 
 anomalyList :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Anomalies.AnomalyVM -> Maybe Text -> Html ()
-anomalyList paramInput pid currTime anomalies nextFetchUrl = form_ [class_ "col-span-5 bg-white divide-y ", id_ "anomalyListForm"] $ do
+anomalyList paramInput pid currTime anomalies nextFetchUrl = form_ [class_ "col-span-5 bg-white divide-y ", id_ "anomalyListForm"] do
   let bulkActionBase = "/p/" <> pid.toText <> "/anomalies/bulk_actions"
   let currentURL' = deleteParam "sort" paramInput.currentURL
   let sortMenu =
@@ -298,14 +298,14 @@ anomalyList paramInput pid currTime anomalies nextFetchUrl = form_ [class_ "col-
 
       div_ [class_ "flex justify-center font-base w-60 content-between gap-14"] do
         span_ "GRAPH"
-        div_ [class_ " space-x-2 font-base text-sm"] $ do
+        div_ [class_ " space-x-2 font-base text-sm"] do
           a_ [class_ "cursor-pointer"] "24h"
           a_ [class_ "cursor-pointer font-bold text-base"] "14d"
       div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "font-base"] "EVENTS"
       div_ [class_ "p-12 fixed rounded-lg shadow bg-white top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 htmx-indicator query-indicator", id_ "sortLoader"] do
         loader
 
-  when (null anomalies) $ div_ [class_ "flex text-center justify-center items-center h-32"] $ do
+  when (null anomalies) $ div_ [class_ "flex text-center justify-center items-center h-32"] do
     strong_ "No anomalies yet"
   mapM_ (renderAnomaly False currTime) anomalies
   case nextFetchUrl of
@@ -322,9 +322,9 @@ anomalyList paramInput pid currTime anomalies nextFetchUrl = form_ [class_ "col-
 anomalyListSlider :: UTCTime -> Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe (Vector Anomalies.AnomalyVM) -> Html ()
 anomalyListSlider _ _ _ (Just []) = ""
 anomalyListSlider _ pid eid Nothing = do
-  div_ [hxGet_ $ "/p/" <> pid.toText <> "/anomalies?layout=slider" <> maybe "" (\x -> "&endpoint=" <> x.toText) eid, hxSwap_ "outerHTML", hxTrigger_ "load"] $ do
-    div_ [class_ "flex justify-between mt-5 pb-2"] $ do
-      div_ [class_ "flex flex-row"] $ do
+  div_ [hxGet_ $ "/p/" <> pid.toText <> "/anomalies?layout=slider" <> maybe "" (\x -> "&endpoint=" <> x.toText) eid, hxSwap_ "outerHTML", hxTrigger_ "load"] do
+    div_ [class_ "flex justify-between mt-5 pb-2"] do
+      div_ [class_ "flex flex-row"] do
         img_
           [ src_ "/assets/svgs/cheveron-down.svg"
           , class_ "h-4 mr-3 mt-1 w-4"
@@ -335,7 +335,7 @@ anomalyListSlider _ pid eid Nothing = do
 anomalyListSlider currTime _ _ (Just anomalies) = do
   let anomalyIds = replace "\"" "'" $ show $ fmap (Anomalies.anomalyIdText . (^. #id)) anomalies
   let totalAnomaliesTxt = toText $ if length anomalies > 50 then "50+" else show (length anomalies)
-  div_ $ do
+  div_ do
     script_ [text| var rem = (x,y)=>((x%y)==0?1:(x%y)); |]
     script_
       [type_ "text/hyperscript"]
@@ -347,15 +347,15 @@ anomalyListSlider currTime _ _ (Just anomalies) = do
             set #anomalySliderPagination.innerHTML to ($$currentAnomaly+1)+'/$totalAnomaliesTxt '
           end
          |]
-    div_ [class_ "flex justify-between mt-5 pb-2"] $ do
-      div_ [class_ "flex flex-row"] $ do
+    div_ [class_ "flex justify-between mt-5 pb-2"] do
+      div_ [class_ "flex flex-row"] do
         img_
           [ src_ "/assets/svgs/cheveron-down.svg"
           , class_ "h-4 mr-3 mt-1 w-4"
           , [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .parent-slider)|]
           ]
         span_ [class_ "text-lg text-slate-700"] "Ongoing Anomalies and Monitors"
-      div_ [class_ "flex items-center gap-2 mt-2"] $ do
+      div_ [class_ "flex items-center gap-2 mt-2"] do
         a_
           [ class_ "cursor-pointer"
           , [__|on click hide #{$anomalyIds[$currentAnomaly]} then
@@ -478,7 +478,7 @@ anomalyDetailsGetH sess pid targetHash hxBoostedM = do
     else do
       (project, anomaly) <- liftIO
         $ withPool pool
-        $ do
+        do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
           anomaly <- Anomalies.getAnomalyVM pid targetHash
           traceShowM anomaly
@@ -536,8 +536,8 @@ anomalyDetailsPage anomaly requestsItems shapesWithFieldsMap fields chartQuery c
                 img_ [src_ "/assets/svgs/endpoint.svg", class_ "inline w-6 h-6 -mt-1"]
                 span_ [class_ "text-2xl"] "New Endpoint"
               div_ [class_ "flex items-center gap-3"] do
-                let methodColor = Utils.getMethodBgColor (fromMaybe "" anomaly.endpointMethod)
-                div_ [class_ $ "px-4 py-1 text-sm rounded-lg text-white font-semibold " <> methodColor] $ toHtml $ fromMaybe "" anomaly.endpointMethod
+                let methodColor = Utils.getMethodColor (fromMaybe "" anomaly.endpointMethod)
+                div_ [class_ $ "px-4 py-1 text-sm rounded-lg font-semibold " <> methodColor] $ toHtml $ fromMaybe "" anomaly.endpointMethod
                 span_ [] $ toHtml $ fromMaybe "" anomaly.endpointUrlPath
           Anomalies.ATShape -> do
             div_ [class_ "flex flex-col gap-4 shrink-0"] do
@@ -545,9 +545,9 @@ anomalyDetailsPage anomaly requestsItems shapesWithFieldsMap fields chartQuery c
                 img_ [src_ "/assets/svgs/anomalies/fields.svg", class_ "inline w-6 h-6 -mt-1"]
                 span_ [class_ "text-2xl"] "New Request Shape"
               div_ [class_ "flex items-center gap-3"] do
-                let methodColor = Utils.getMethodBgColor (fromMaybe "" anomaly.endpointMethod)
+                let methodColor = Utils.getMethodColor (fromMaybe "" anomaly.endpointMethod)
                 p_ [class_ "italic"] "in"
-                div_ [class_ $ "px-4 py-1 text-sm rounded-lg text-white font-semibold " <> methodColor] $ toHtml $ fromMaybe "" anomaly.endpointMethod
+                div_ [class_ $ "px-4 py-1 text-sm rounded-lg font-semibold " <> methodColor] $ toHtml $ fromMaybe "" anomaly.endpointMethod
                 span_ [] $ toHtml $ fromMaybe "" anomaly.endpointUrlPath
               div_ [class_ "mt-4"] do
                 shapeParameterStats_ (length anomaly.shapeNewUniqueFields) (length anomaly.shapeDeletedFields) (length anomaly.shapeUpdatedFieldFormats)
@@ -557,9 +557,9 @@ anomalyDetailsPage anomaly requestsItems shapesWithFieldsMap fields chartQuery c
                 img_ [src_ "/assets/svgs/anomalies/fields.svg", class_ "inline w-6 h-6 -mt-1"]
                 span_ [class_ "text-2xl"] "Modified field"
               div_ [class_ "flex items-center gap-3"] do
-                let methodColor = Utils.getMethodBgColor (fromMaybe "" anomaly.endpointMethod)
+                let methodColor = Utils.getMethodColor (fromMaybe "" anomaly.endpointMethod)
                 p_ [class_ "italic"] "in"
-                div_ [class_ $ "px-4 py-1 text-sm rounded-lg text-white font-semibold " <> methodColor] $ toHtml $ fromMaybe "" anomaly.endpointMethod
+                div_ [class_ $ "px-4 py-1 text-sm rounded-lg font-semibold " <> methodColor] $ toHtml $ fromMaybe "" anomaly.endpointMethod
                 span_ [] $ toHtml $ fromMaybe "" anomaly.endpointUrlPath
           _ -> pass
         div_ [class_ "flex items-center gap-8 shrink-0 text-gray-600"] do
@@ -613,7 +613,7 @@ anomalyDetailsPage anomaly requestsItems shapesWithFieldsMap fields chartQuery c
             Anomalies.ATShape -> requestShapeOverview fields
             Anomalies.ATFormat -> anomalyFormatOverview anomaly
             _ -> ""
-        div_ [class_ "grow overflow-y-auto h-full whitespace-nowrap text-sm divide-y overflow-x-hidden sdk_tab_content", id_ "events_content"] $ do
+        div_ [class_ "grow overflow-y-auto h-full whitespace-nowrap text-sm divide-y overflow-x-hidden sdk_tab_content", id_ "events_content"] do
           Log.logItemRows anomaly.projectId requestsItems [] ""
   script_
     [text|
@@ -669,7 +669,7 @@ anomalyDetailsPage anomaly requestsItems shapesWithFieldsMap fields chartQuery c
 endpointOverview :: Maybe (Vector Shapes.ShapeWithFields) -> Html ()
 endpointOverview shapesWithFieldsMap =
   div_ [] do
-    -- div_ [class_ "flex justify-end items-center"] $ do
+    -- div_ [class_ "flex justify-end items-center"] do
     --   img_
     --     [ src_ "/assets/svgs/leftarrow.svg"
     --     , class_ " m-2 cursor-pointer"
@@ -692,7 +692,7 @@ endpointOverview shapesWithFieldsMap =
 
 requestShapeOverview :: Maybe (Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field]) -> Html ()
 requestShapeOverview fieldChanges = do
-  div_ [class_ "flex flex-col gap-6"] $ do
+  div_ [class_ "flex flex-col gap-6"] do
     case fieldChanges of
       Just f ->
         div_ [class_ "flex flex-col gap-6"] do
@@ -833,9 +833,9 @@ anomalyArchiveButton pid aid archived = do
 
 reqResSection :: Text -> Bool -> [Shapes.ShapeWithFields] -> Html ()
 reqResSection title isRequest shapesWithFieldsMap =
-  section_ [class_ "space-y-3"] $ do
-    div_ [class_ "flex justify-between mt-5"] $ do
-      div_ [class_ "flex flex-row"] $ do
+  section_ [class_ "space-y-3"] do
+    div_ [class_ "flex justify-between mt-5"] do
+      div_ [class_ "flex flex-row"] do
         a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
           $ img_
             [ src_ "/assets/svgs/cheveron-down.svg"
@@ -847,7 +847,7 @@ reqResSection title isRequest shapesWithFieldsMap =
       $ forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap)
       $ \(index, s) -> do
         let sh = if index == 1 then title <> "_fields" else title <> "_fields hidden"
-        div_ [class_ sh, id_ $ title <> "_" <> show index] $ do
+        div_ [class_ sh, id_ $ title <> "_" <> show index] do
           if isRequest
             then do
               subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam s.fieldsMap)
@@ -865,15 +865,15 @@ subSubSection title fieldsM =
   case fieldsM of
     Nothing -> ""
     Just fields -> do
-      div_ [class_ "space-y-1 mb-4"] $ do
-        div_ [class_ "flex flex-row items-center"] $ do
+      div_ [class_ "space-y-1 mb-4"] do
+        div_ [class_ "flex flex-row items-center"] do
           img_
             [ src_ "/assets/svgs/cheveron-down.svg"
             , class_ "h-6 mr-3 w-6 p-1 cursor-pointer"
             , [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .subSectionContent)|]
             ]
           div_ [class_ "px-4 rounded-xl w-full font-bold text-sm text-slate-900"] $ toHtml title
-        div_ [class_ "space-y-1 subSectionContent"] $ do
+        div_ [class_ "space-y-1 subSectionContent"] do
           fieldsToNormalized fields & mapM_ \(key, fieldM) -> do
             let segments = T.splitOn "." key
             let depth = length segments
@@ -886,11 +886,11 @@ subSubSection title fieldsM =
                   , style_ depthPadding
                   , [__| on click toggle .neg-rotate-90 on <.chevron/> in me then collapseUntil((me), (my @data-depth))  |]
                   ]
-                  $ do
+                  do
                     img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-6 w-6 mr-1 chevron cursor-pointer p-1"]
-                    div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full"] $ do
+                    div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full"] do
                       span_ [class_ "text-sm text-slate-800 inline-flex items-center"] $ toHtml displayKey
-                      span_ [class_ "text-sm text-slate-600 inline-flex items-center ml-4"] $ do
+                      span_ [class_ "text-sm text-slate-600 inline-flex items-center ml-4"] do
                         if "[*]" `T.isSuffixOf` key
                           then EndpointComponents.fieldTypeToDisplay Fields.FTList
                           else EndpointComponents.fieldTypeToDisplay Fields.FTObject
@@ -900,8 +900,8 @@ subSubSection title fieldsM =
                   , style_ depthPadding
                   , term "data-depth" $ show depth
                   ]
-                  $ do
+                  do
                     img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-4 mr-3 mt-4 w-4 ", style_ "visibility: hidden"]
-                    div_ [class_ "border-b flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full items-center"] $ do
+                    div_ [class_ "border-b flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full items-center"] do
                       span_ [class_ "grow text-sm text-slate-800 inline-flex items-center"] $ toHtml displayKey
                       span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ EndpointComponents.fieldTypeToDisplay $ field.fieldType

@@ -10,8 +10,8 @@ import Test.Hspec
 
 spec :: Spec
 spec = do
-  describe "SeedingConfig" $ do
-    it "should parse simple config to obj" $ do
+  describe "SeedingConfig" do
+    it "should parse simple config to obj" do
       -- let timestamp = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
       let input =
             [text|
