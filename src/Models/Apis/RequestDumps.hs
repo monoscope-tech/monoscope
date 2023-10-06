@@ -322,21 +322,21 @@ selectRequestDumpByProject pid extraQuery fromM = do
   Only count <- fromMaybe (Only 0) <$> queryOne Select (Query $ encodeUtf8 qCount) (pid, fromT)
   pure (logItems, count)
   where
-    -- We only let people search within the 14 days time period
-    fromT = fromMaybe "INTERVAL '14 days'" fromM
+    fromT = fromMaybe "infinity" fromM
     extraQueryParsed = either error (\v -> if v == "" then "" else " AND " <> v) $ parseQueryStringToWhereClause extraQuery
+    -- We only let people search within the 14 days time period
     qCount = 
       [text| SELECT count(*) 
-             FROM apis.request_dumps where project_id=? and created_at<? |]
+             FROM apis.request_dumps where project_id=? and created_at > NOW() - interval '14 days' and created_at<? |]
         <> extraQueryParsed
         <> " limit 1;"
     q =
       [text| SELECT id,created_at,host,url_path,method,raw_url,referer,
                     path_params, status_code,query_params,
-                    request_body,response_body,request_headers,response_headers,
+                    request_body,response_body,'{}'::jsonb,'{}'::jsonb,
                     duration_ns, sdk_type,
-                    parent_id, service_version, errors, tags
-             FROM apis.request_dumps where project_id=? and created_at<? |]
+                    parent_id, service_version, '{}'::jsonb, tags
+             FROM apis.request_dumps where project_id=? and created_at < NOW() - interval '14 days' and created_at<? |]
         <> extraQueryParsed
         <> " order by created_at desc limit 200;"
 

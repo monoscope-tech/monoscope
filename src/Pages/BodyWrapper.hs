@@ -18,9 +18,10 @@ menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu pid =
   [ ("Get started", "/p/" <> pid.toText <> "/onboarding", "fa-list-check")
   , ("Dashboard", "/p/" <> pid.toText <> "/", "fa-qrcode")
-  , ("Endpoints", "/p/" <> pid.toText <> "/endpoints", "fa-arrow-up-arrow-down")
-  , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies?ackd=false&archived=false", "fa-octagon-exclamation")
-  , ("API Log Explorer", "/p/" <> pid.toText <> "/log_explorer", "fa-bars")
+  , ("Endpoints", "/p/" <> pid.toText <> "/endpoints", "fa-swap")
+  -- , ("Dependencies", "/p/" <> pid.toText <> "/outgoing", "fa-arrows-turn-right")
+  , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies?ackd=false&archived=false", "fa-bug")
+  , ("API Log Explorer", "/p/" <> pid.toText <> "/log_explorer", "fa-list-tree")
   , ("API Keys", "/p/" <> pid.toText <> "/apis", "fa-key")
   , -- , ("Redacted Fields", "/p/" <> pid.toText <> "/redacted_fields", "#redacted")
     ("Documentation", "/p/" <> pid.toText <> "/documentation", "fa-brackets-curly")
@@ -296,19 +297,20 @@ sideNav sess project pageTitle menuItem = do
     nav_ [class_ "mt-4"] do
       -- FIXME: reeanable hx-boost hxBoost_ "true"
       menu (project.id) & mapM_ \(mTitle, mUrl, faIcon) -> do
+        let isActive =maybe (pageTitle == mTitle) (== mTitle) menuItem 
         a_
           [ href_ mUrl
           , term "data-tippy-placement" "right"
           , term "data-tippy-content" mTitle
           , class_
               $ "block flex gap-3 px-5 py-3 flex justify-center items-center hover:bg-blue-50 text-slate-800 "
-              <> ( if maybe (pageTitle == mTitle) (== mTitle) menuItem
-                    then "bg-blue-50 border-l-4 border-blue-700"
+              <> ( if isActive
+                    then "bg-blue-50 text-blue-700 border-l-4 border-blue-700"
                     else ""
                  )
           ]
           do
-            faIcon_ faIcon ("fa-regular " <> faIcon) "w-5 h-5 text-slate-500"
+            faIcon_ faIcon ("fa-regular " <> faIcon) $ "w-5 h-5 " <>  if isActive then "text-blue-800 " else "text-slate-500 "
             span_ [class_ "grow sd-hidden"] $ toHtml mTitle
 
 

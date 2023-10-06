@@ -210,7 +210,7 @@ createProjectBody sess envCfg isUpdate cp cpe = do
           input_ [name_ "projectId", type_ "hidden", value_ cp.projectId]
           input_ [name_ "paymentPlan", type_ "hidden", value_ paymentPlan, id_ "paymentPlanEl"]
           div_ do
-            label_ [class_ "text-gray-700 mx-2 text-sm"] do
+            label_ [class_ "text-slate-700 mx-2 text-sm"] do
               "Title"
               span_ [class_ "text-red-400"] " *"
             input_
@@ -221,7 +221,7 @@ createProjectBody sess envCfg isUpdate cp cpe = do
               , value_ cp.title
               ]
           div_ [class_ "mt-5 "] do
-            label_ [class_ "text-gray-700 mx-2 text-sm"] "Description"
+            label_ [class_ "text-slate-700 mx-2 text-sm"] "Description"
             textarea_
               [ class_ " py-2 px-5 my-2 w-full text-sm bg-white text-black border-solid border border-gray-200 rounded-2xl border-1 "
               , rows_ "4"
@@ -232,7 +232,7 @@ createProjectBody sess envCfg isUpdate cp cpe = do
               $ toHtml cp.description
 
           div_ [class_ "mt-5"] do
-            p_ [class_ "text-gray-700 mx-2 pb-2 text-sm"] do
+            p_ [class_ "text-slate-700 mx-2 pb-2 text-sm"] do
               "Please select a plan"
               span_ [class_ "text-red-400"] " *"
             div_ [class_ "grid md:grid-cols-3 gap-4 border-1"] do
@@ -261,12 +261,12 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                     ]
                     do
                       div_ [class_ "flex items-center justify-between border-b border-b-1 p-2"] do
-                        h4_ [class_ "text-xl font-medium text-gray-700"] $ toHtml title
+                        h4_ [class_ "text-xl font-medium text-slate-700"] $ toHtml title
                         div_ [class_ $ "grid place-items-center h-6 w-6 bg-gray-200 border rounded-full payment-radio " <> if isSelected then "payment-radio-active" else ""] do
                           div_ [class_ "bg-white h-3 w-3 hidden rounded-full"] ""
                       div_ [class_ "text-lg py-3"] do
                         span_ [class_ "text-2xl text-blue-700"] $ toHtml price
-                        span_ [class_ "text-gray-500"] "/mo"
+                        span_ [class_ "text-slate-500"] "/mo"
                       div_ [class_ "flex items-center gap-1"] do
                         img_ [class_ "h-3 w-3", src_ "/assets/svgs/checkmark_green.svg"]
                         strong_ [] $ toHtml included
@@ -299,14 +299,14 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                             small_ "API Live Traffic AI based validations"
 
           div_ [class_ $ "mt-10 " <> if isUpdate then "hidden" else ""] do
-            p_ [class_ "text-gray-400 mx-2 font-light text-sm"] "Invite a project member"
+            p_ [class_ "text-slate-400 mx-2 font-light text-sm"] "Invite a project member"
             section_ [id_ "inviteMemberSection"] do
               template_ [id_ "inviteTmpl"] do
                 div_ [class_ "flex flex-row space-x-2"] do
                   input_ [name_ "emails", class_ "w-2/3 h-10 px-5 my-2 w-full text-sm bg-white text-slate-700 font-light border-solid border border-gray-200 rounded-2xl border-0 ", placeholder_ "name@example.com"]
                   select_ [name_ "permissions", class_ "w-1/3 h-10 px-5  my-2 w-full text-sm bg-white text-zinc-500 border-solid border border-gray-200 rounded-2xl border-0"] do
-                    option_ [class_ "text-gray-500", value_ "edit"] "Can Edit"
-                    option_ [class_ "text-gray-500", value_ "view"] "Can View"
+                    option_ [class_ "text-slate-500", value_ "edit"] "Can Edit"
+                    option_ [class_ "text-slate-500", value_ "view"] "Can View"
                   button_
                     [ [__| on click remove the closest parent <div/> then halt |]
                     ]

@@ -529,8 +529,8 @@ anomalyDetailsPage anomaly requestsItems shapesWithFieldsMap fields chartQuery c
                 img_ [src_ "/assets/svgs/endpoint.svg", class_ "inline w-6 h-6 -mt-1"]
                 span_ [class_ "text-2xl"] "New Endpoint"
               div_ [class_ "flex items-center gap-3"] do
-                let methodColor = Utils.getMethodBgColor (fromMaybe "" anomaly.endpointMethod)
-                div_ [class_ $ "px-4 py-1 text-sm rounded-lg text-white font-semibold " <> methodColor] $ toHtml $ fromMaybe "" anomaly.endpointMethod
+                let methodColor = Utils.getMethodColor (fromMaybe "" anomaly.endpointMethod)
+                div_ [class_ $ "px-4 py-1 text-sm rounded-lg font-semibold " <> methodColor] $ toHtml $ fromMaybe "" anomaly.endpointMethod
                 span_ [] $ toHtml $ fromMaybe "" anomaly.endpointUrlPath
           Anomalies.ATShape -> do
             div_ [class_ "flex flex-col gap-4 shrink-0"] do
@@ -538,9 +538,9 @@ anomalyDetailsPage anomaly requestsItems shapesWithFieldsMap fields chartQuery c
                 img_ [src_ "/assets/svgs/anomalies/fields.svg", class_ "inline w-6 h-6 -mt-1"]
                 span_ [class_ "text-2xl"] "New Request Shape"
               div_ [class_ "flex items-center gap-3"] do
-                let methodColor = Utils.getMethodBgColor (fromMaybe "" anomaly.endpointMethod)
+                let methodColor = Utils.getMethodColor (fromMaybe "" anomaly.endpointMethod)
                 p_ [class_ "italic"] "in"
-                div_ [class_ $ "px-4 py-1 text-sm rounded-lg text-white font-semibold " <> methodColor] $ toHtml $ fromMaybe "" anomaly.endpointMethod
+                div_ [class_ $ "px-4 py-1 text-sm rounded-lg font-semibold " <> methodColor] $ toHtml $ fromMaybe "" anomaly.endpointMethod
                 span_ [] $ toHtml $ fromMaybe "" anomaly.endpointUrlPath
               div_ [class_ "mt-4"] do
                 shapeParameterStats_ (length anomaly.shapeNewUniqueFields) (length anomaly.shapeDeletedFields) (length anomaly.shapeUpdatedFieldFormats)
@@ -550,9 +550,9 @@ anomalyDetailsPage anomaly requestsItems shapesWithFieldsMap fields chartQuery c
                 img_ [src_ "/assets/svgs/anomalies/fields.svg", class_ "inline w-6 h-6 -mt-1"]
                 span_ [class_ "text-2xl"] "Modified field"
               div_ [class_ "flex items-center gap-3"] do
-                let methodColor = Utils.getMethodBgColor (fromMaybe "" anomaly.endpointMethod)
+                let methodColor = Utils.getMethodColor (fromMaybe "" anomaly.endpointMethod)
                 p_ [class_ "italic"] "in"
-                div_ [class_ $ "px-4 py-1 text-sm rounded-lg text-white font-semibold " <> methodColor] $ toHtml $ fromMaybe "" anomaly.endpointMethod
+                div_ [class_ $ "px-4 py-1 text-sm rounded-lg font-semibold " <> methodColor] $ toHtml $ fromMaybe "" anomaly.endpointMethod
                 span_ [] $ toHtml $ fromMaybe "" anomaly.endpointUrlPath
           _ -> pass
         div_ [class_ "flex items-center gap-8 shrink-0 text-gray-600"] do

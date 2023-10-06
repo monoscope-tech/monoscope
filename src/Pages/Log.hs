@@ -68,7 +68,6 @@ apiLog sess pid queryM cols' fromM hxRequestM hxBoostedM = do
       let fromTempM = toText . formatTime defaultTimeLocale "%F %T" <$> reqLastCreatedAtM
       let nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' fromTempM
 
-      -- let resultCount = maybe 0 (^. #fullCount) (requests !? 0)
       case (hxRequestM, hxBoostedM) of
         (Just "true", Nothing) -> pure do
           span_ [id_ "result-count", hxSwapOob_ "outerHTML"] $ show resultCount
@@ -93,14 +92,10 @@ apiLogItem sess pid rdId createdAt = do
     then do
       pure $ userNotMemeberPage sess
     else do
-      startTime <- liftIO $ getTime Monotonic
       logItemM <- liftIO $ Database.PostgreSQL.Entity.DBT.withPool pool $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
-      afterProccessing <- liftIO $ getTime Monotonic
       let content = case logItemM of
             Just req -> apiLogItemView req (RequestDumps.requestDumpLogItemUrlPath pid req)
             Nothing -> div_ "invalid log request ID"
-      endTime <- liftIO $ getTime Monotonic
-      liftIO $ putStrLn $ fmtLn $ " APILOG pipeline microsecs: queryDuration " +| toNanoSecs (diffTimeSpec startTime afterProccessing) `div` 1000 |+ " -> processingDuration " +| toNanoSecs (diffTimeSpec afterProccessing endTime) `div` 1000 |+ " -> TotalDuration " +| toNanoSecs (diffTimeSpec startTime endTime) `div` 1000 |+ ""
       pure content
 
 
@@ -121,10 +116,10 @@ expandAPIlogItem' :: RequestDumps.RequestDumpLogItem -> Bool -> Html ()
 expandAPIlogItem' req modal = do
   div_ [class_ "flex flex-col w-full pb-[100px]"] do
     div_ [class_ "w-full flex flex-col gap-2 gap-4"] do
-      let methodColor = getMethodBgColor req.method
+      let methodColor = getMethodColor req.method
       let statusColor = getStatusColor req.statusCode
       div_ [class_ "flex gap-4 items-center"] do
-        div_ [class_ $ "text-white font-semibold px-2 py-1 rounded min-w-[70px] text-center " <> methodColor] $ toHtml req.method
+        div_ [class_ $ "font-semibold px-2 py-1 rounded min-w-[70px] text-center " <> methodColor] $ toHtml req.method
         div_ [class_ $ "text-lg font-bold px-2 " <> statusColor] $ show req.statusCode
         div_ [class_ "flex border border-gray-200 m-1 rounded-xl p-2"] do
           mIcon_ "calender" "h-4 mr-2 w-4"
@@ -139,7 +134,7 @@ expandAPIlogItem' req modal = do
               button_
                 [ onclick_ "toggleExpireOptions(event)"
                 , id_ "toggle_expires_btn"
-                , class_ "w-full flex gap-2 text-gray-600 justify_between items-center cursor-pointer px-2 py-1 border rounded focus:ring-2 focus:ring-blue-200 active:ring-2 active:ring-blue-200"
+                , class_ "w-full flex gap-2 text-slate-600 justify_between items-center cursor-pointer px-2 py-1 border rounded focus:ring-2 focus:ring-blue-200 active:ring-2 active:ring-blue-200"
                 ]
                 do
                   p_ [style_ "width: calc(100% - 25px)", class_ "text-sm truncate ..."] "Expires in: 1 hour"
@@ -162,39 +157,39 @@ expandAPIlogItem' req modal = do
     -- url, endpoint, latency, request size, repsonse size
     div_ [class_ "flex flex-col mt-4 p-4 justify-between w-full rounded-xl border"] do
       div_ [class_ "text-lg mb-2"] do
-        span_ [class_ "text-gray-500 font-semibold"] "Endpoint: "
+        span_ [class_ "text-slate-500 font-semibold"] "Endpoint: "
         span_ [] $ toHtml req.urlPath
       div_ [class_ "text-lg"] do
-        span_ [class_ "text-gray-500 font-semibold"] "URL: "
+        span_ [class_ "text-slate-500 font-semibold"] "URL: "
         span_ [] $ toHtml req.rawUrl
       div_ [class_ "flex gap-2 mt-4"] do
         div_ [class_ "flex flex-col gap-1 px-4 min-w-[120px] py-3 border border-dashed border-gray-400 m-1 rounded"] do
           div_ [class_ "flex gap-1 items-center"] do
-            mIcon_ "clock" "h-4 w-4 text-gray-400"
+            mIcon_ "clock" "h-4 w-4 text-slate-400"
             span_ [class_ "text-md font-bold"] $ show (req.durationNs `div` 1000) <> " ms"
-          p_ [class_ "text-gray-500"] "Latency"
+          p_ [class_ "text-slate-500"] "Latency"
         div_ [class_ "flex flex-col gap-1 px-4 min-w-[120px] py-3 border border-dashed border-gray-400 m-1 rounded"] do
           div_ [class_ "flex gap-1 items-center"] do
-            mIcon_ "upload" "h-4 w-4 text-gray-400"
+            mIcon_ "upload" "h-4 w-4 text-slate-400"
             let reqSize = BS.length $ AE.encode req.requestBody
             span_ [class_ "text-md font-bold"] $ show (reqSize - 2) <> " bytes"
-          p_ [class_ "text-gray-500"] "Request size"
+          p_ [class_ "text-slate-500"] "Request size"
         div_ [class_ "flex flex-col gap-1 px-4 min-w-[120px] py-3 border border-dashed border-gray-400 m-1 rounded"] do
           div_ [class_ "flex gap-1 items-center"] do
-            mIcon_ "download4" "h-4 w-4 text-gray-400"
+            mIcon_ "download4" "h-4 w-4 text-slate-400"
             let respSize = BS.length $ AE.encode req.responseBody
             span_ [class_ "text-md font-bold"] $ show (respSize - 2) <> " bytes"
-          p_ [class_ "text-gray-500"] "Response size"
+          p_ [class_ "text-slate-500"] "Response size"
         div_ [class_ "flex flex-col gap-1 px-4 min-w-[120px] py-3 border border-dashed border-gray-400 m-1 rounded"] do
           div_ [class_ "flex gap-1 items-center"] do
-            mIcon_ "projects" "h-5 w-5 text-gray-400"
+            mIcon_ "projects" "h-5 w-5 text-slate-400"
             span_ [class_ "text-md font-bold"] $ show req.sdkType
-          p_ [class_ "text-gray-500"] "Framework"
+          p_ [class_ "text-slate-500"] "Framework"
     -- request details
     div_ [class_ "border rounded-lg mt-8", id_ "request_detail_container"] do
       div_ [class_ "flex w-full bg-gray-100 px-4 py-2 flex-col gap-2"] do
         p_ [class_ "font-bold"] "Request Details"
-      ul_ [class_ "px-4 flex gap-10 border-b text-gray-500"] do
+      ul_ [class_ "px-4 flex gap-10 border-b text-slate-500"] do
         li_ [] do
           button_
             [ class_ "sdk_tab sdk_tab_active"
@@ -236,7 +231,7 @@ expandAPIlogItem' req modal = do
     div_ [class_ "border rounded-lg mt-8", id_ "reponse_detail_container"] do
       div_ [class_ "flex w-full bg-gray-100 px-4 py-2 flex-col gap-2"] do
         p_ [class_ "font-bold"] "Response Details"
-      ul_ [class_ "px-4 flex gap-10 border-b text-gray-500"] do
+      ul_ [class_ "px-4 flex gap-10 border-b text-slate-500"] do
         li_ [] do
           button_
             [ class_ "sdk_tab sdk_tab_active"
@@ -408,28 +403,22 @@ logItemRows pid requests cols nextLogsURL = do
           let reqJSON = AE.toJSON req
           let colValues = concatMap (\col -> findValueByKeyInJSON (T.splitOn "." col) reqJSON) cols
           -- FIXME: probably inefficient implementation and should be optimized
-          zip cols colValues
-            & traverse_
-              \(col, colValue) ->
-                div_ [class_ "relative inline-block log-item-field-parent", term "data-field-path" col] do
-                  a_
-                    [ class_ "cursor-pointer mx-1 inline-block bg-blue-100 hover:bg-blue-200 blue-900 px-3 rounded-xl monospace log-item-field-anchor log-item-field-value"
-                    , term "data-field-path" col
-                    , [__|install LogItemMenuable|]
-                    ]
-                    $ toHtml colValue
-          let cls = "mx-1 inline-block slate-900 px-3 rounded-xl monospace" :: Text
-          let method_cls = cls <> getMethodBgColor (req ^. #method)
-          span_ [class_ method_cls] $ toHtml $ req ^. #method
-          span_ [class_ $ cls <> " bg-gray-100"] $ toHtml $ req ^. #urlPath
-          let status_cls = if req ^. #statusCode > 400 then cls <> " bg-red-100" else cls <> " bg-green-100"
-          span_ [class_ status_cls] $ show $ req ^. #statusCode
-          span_ [class_ $ cls <> " bg-gray-50"] $ toHtml $ req ^. #rawUrl
-          let reqBody = decodeUtf8 $ AE.encode $ req ^. #requestBody
-          let respBody = decodeUtf8 $ AE.encode $ req ^. #responseBody
-          let reqHeaders = decodeUtf8 $ AE.encode $ req ^. #requestHeaders
-          let respHeaders = decodeUtf8 $ AE.encode $ req ^. #responseHeaders
-          p_ [class_ "inline-block"] $ toHtml $ T.take 300 [text| request_body=$reqBody response_body=$respBody request_headers=$reqHeaders response_headers=$respHeaders|]
+          forM_ (zip cols colValues) \(col, colValue) ->
+            div_ [class_ "relative inline-block log-item-field-parent", term "data-field-path" col] do
+              a_
+                [ class_ "cursor-pointer mx-1 inline-block bg-blue-100 hover:bg-blue-200 text-blue-900 px-3 rounded-lg monospace log-item-field-anchor log-item-field-value"
+                , term "data-field-path" col
+                , [__|install LogItemMenuable|]
+                ]
+                $ toHtml colValue
+          let cls = "mx-1 inline-block px-3 rounded-lg monospace " :: Text
+          span_ [class_ $ cls <> getMethodColor req.method] $ toHtml $ req.method
+          span_ [class_ $ cls <> " bg-gray-100 border border-gray-300 "] $ toHtml $ req.urlPath
+          span_ [class_  $ cls <> getStatusColor req.statusCode] $ show $ req.statusCode
+          span_ [class_ $ cls <> " bg-gray-50 border border-gray-300 "] $ toHtml $ req.rawUrl
+          let reqBody = decodeUtf8 $ AE.encode $ req.requestBody
+          let respBody = decodeUtf8 $ AE.encode $ req.responseBody
+          p_ [class_ "inline-block"] $ toHtml $ T.take 300 [text| request_body=$reqBody response_body=$respBody|]
 
     div_ [class_ "hidden w-full flex px-2 py-8 justify-center item-loading"] do
       loader
@@ -519,7 +508,7 @@ jsonTreeAuxillaryCode pid = do
     div_ [id_ "log-item-context-menu", class_ "log-item-context-menu text-sm origin-top-right absolute left-0 mt-2 w-56 rounded-md shadow-md shadow-slate-300 bg-white ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 focus:outline-none z-10", role_ "menu", tabindex_ "-1"] do
       div_ [class_ "py-1", role_ "none"] do
         a_
-          [ class_ "cursor-pointer text-gray-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-gray-900"
+          [ class_ "cursor-pointer text-slate-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-slate-900"
           , role_ "menuitem"
           , tabindex_ "-1"
           , id_ "menu-item-0"
@@ -535,7 +524,7 @@ jsonTreeAuxillaryCode pid = do
           ]
           "Add field to Summary"
         a_
-          [ class_ "cursor-pointer text-gray-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-gray-900"
+          [ class_ "cursor-pointer text-slate-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-slate-900"
           , role_ "menuitem"
           , tabindex_ "-1"
           , id_ "menu-item-1"
@@ -548,7 +537,7 @@ jsonTreeAuxillaryCode pid = do
           ]
           "Copy field value"
         button_
-          [ class_ "cursor-pointer w-full text-left text-gray-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-gray-900"
+          [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-slate-900"
           , role_ "menuitem"
           , tabindex_ "-1"
           , id_ "menu-item-2"

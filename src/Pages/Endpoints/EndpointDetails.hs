@@ -244,7 +244,7 @@ endpointDetails paramInput currTime endpoint endpointStats shapesWithFieldsMap f
                 [ href_ $ currentURLSubPage <> "&subpage=" <> slug
                 , class_
                     $ "cursor-pointer px-3 py-2 font-medium text-sm rounded-md "
-                    <> if slug == paramInput.subPage then " bg-indigo-100 text-indigo-700 " else " text-gray-500 hover:text-gray-700"
+                    <> if slug == paramInput.subPage then " bg-indigo-100 text-indigo-700 " else " text-slate-500 hover:text-gray-700"
                 ]
                 $ toHtml title
 
@@ -268,9 +268,9 @@ endpointDetails paramInput currTime endpoint endpointStats shapesWithFieldsMap f
       do
         div_ [class_ "h-full flex flex-col items-center justify-center"] do
           img_ [class_ "w-36", src_ "/assets/svgs/tasks.svg"]
-          h3_ [class_ "mt-2 text-lg font-medium text-gray-900"] "Nothing selected"
-          p_ [class_ "mt-1 text-sm text-gray-500"] "Select a field or similar item on the left"
-          p_ [class_ "mt-1 text-sm text-gray-500"] "to view more details about it here."
+          h3_ [class_ "mt-2 text-lg font-medium text-slate-900"] "Nothing selected"
+          p_ [class_ "mt-1 text-sm text-slate-500"] "Select a field or similar item on the left"
+          p_ [class_ "mt-1 text-sm text-slate-500"] "to view more details about it here."
 
     script_
       [type_ "text/hyperscript"]
@@ -289,14 +289,14 @@ apiDocsSubPage shapesWithFieldsMap = do
   div_ [class_ "space-y-8", id_ "subpage"] do
     div_ [class_ "flex w-full justify-between mt-2"] do
       div_ [class_ "flex items-center gap-2"] do
-        span_ [class_ "font-bold text-gray-700"] "Shapes:"
+        span_ [class_ "font-bold text-slate-700"] "Shapes:"
         div_ [class_ "relative flex items-center border rounded focus:ring-2 focus:ring-blue-200 active:ring-2 active:ring-blue-200", style_ "width:220px"] do
           button_
             [ [__| on click toggle .hidden on #shapes_container |]
             , id_ "toggle_shapes_btn"
             , data_ "current" "1"
             , data_ "total" (show $ length shapesWithFieldsMap)
-            , class_ "w-full flex text-gray-600 justify_between items-center cursor-pointer px-2 py-1"
+            , class_ "w-full flex text-slate-600 justify_between items-center cursor-pointer px-2 py-1"
             ]
             do
               let fstH = viaNonEmpty head shapesWithFieldsMap
@@ -306,7 +306,7 @@ apiDocsSubPage shapesWithFieldsMap = do
               let prm = "px-2 py-1 rounded text-white text-sm "
               let statusCls = if st < 400 then prm <> "bg-green-500" else prm <> "bg-red-500"
               span_ [class_ statusCls] $ show st
-              span_ [class_ "ml-1 text-sm text-gray-600"] $ toHtml hs
+              span_ [class_ "ml-1 text-sm text-slate-600"] $ toHtml hs
           img_ [src_ "/assets/svgs/select_chevron.svg", style_ "height:15px; width:15px"]
           div_ [id_ "shapes_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] do
             forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap) $ \(index, s) -> do
@@ -323,7 +323,7 @@ apiDocsSubPage shapesWithFieldsMap = do
                 ]
                 do
                   span_ [class_ statusCls] $ show s.status
-                  span_ [class_ "ml-2 text-sm text-gray-600"] $ toHtml s.sHash
+                  span_ [class_ "ml-2 text-sm text-slate-600"] $ toHtml s.sHash
 
       div_ [class_ "flex items-center"] do
         img_
@@ -401,11 +401,11 @@ apiOverviewSubPage paramInput currTime endpoint fieldsM reqLatenciesRolledByStep
         timePickerItems
           & mapM_ \(val, title) ->
             a_
-              [ class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 "
+              [ class_ "block text-slate-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 "
               , href_ $ currentURLSearch <> "&since=" <> val
               ]
               $ toHtml title
-        a_ [class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ", [__| on click toggle .hidden on #timepickerSidebar |]] "Custom date range"
+        a_ [class_ "block text-slate-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ", [__| on click toggle .hidden on #timepickerSidebar |]] "Custom date range"
       div_ [class_ "inline-block relative hidden", id_ "timepickerSidebar"] do
         div_ [id_ "startTime", class_ "hidden"] ""
     section_ $ AnomaliesList.anomalyListSlider currTime endpoint.projectId (Just endpoint.endpointId) Nothing
