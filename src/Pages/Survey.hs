@@ -96,11 +96,11 @@ surveyGetH sess pid = do
       let user = sess.user.getUser
       let full_name = user.firstName <> " " <> user.lastName
       let phoneNumber = fromMaybe "" user.phoneNumber
-      pure $ bodyWrapper bwconf $ aboutPage pid full_name phoneNumber
+      pure $ bodyWrapper bwconf $ surveyPage pid full_name phoneNumber
 
 
-aboutPage :: Projects.ProjectId -> Text -> Text -> Html ()
-aboutPage pid full_name phoneNumber = do
+surveyPage :: Projects.ProjectId -> Text -> Text -> Html ()
+surveyPage pid full_name phoneNumber = do
   div_
     [ style_ "z-index:26"
     , class_ "fixed pt-16 justify-center z-50 w-full p-4 bg-white overflow-y-auto inset-0 h-full max-h-full text-lg"
