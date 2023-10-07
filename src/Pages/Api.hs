@@ -23,6 +23,7 @@ import Relude
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
 
+import NeatInterpolation (text)
 import Utils
 import Web.FormUrlEncoded (FromForm)
 
@@ -48,13 +49,14 @@ apiPostH sess pid apiKeyForm = do
       projectKeyUUID <- liftIO UUIDV4.nextRandom
       let encryptedKey = ProjectApiKeys.encryptAPIKey (encodeUtf8 env.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
       let encryptedKeyB64 = B64.encodeBase64 encryptedKey
-      let keyPrefix = T.take 8 encryptedKeyB64
+      let keyPrefix = encryptedKeyB64
       pApiKey <- liftIO $ ProjectApiKeys.newProjectApiKeys pid projectKeyUUID (title apiKeyForm) keyPrefix
       apiKeys <- liftIO
-        $ withPool pool
-        do
-          ProjectApiKeys.insertProjectApiKey pApiKey
-          ProjectApiKeys.projectApiKeysByProjectId pid
+        $ withPool
+          pool
+          do
+            ProjectApiKeys.insertProjectApiKey pApiKey
+            ProjectApiKeys.projectApiKeysByProjectId pid
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Created API Key Successfully"]}|]
       case from apiKeyForm of
         Just v -> pure $ addHeader hxTriggerData $ copyNewApiKey (Just (pApiKey, encryptedKeyB64)) True
@@ -72,11 +74,12 @@ apiDeleteH sess pid keyid = do
       pure $ addHeader hxTriggerData $ userNotMemeberPage sess
     else do
       (res, apikeys) <- liftIO
-        $ withPool pool
-        do
-          del <- ProjectApiKeys.revokeApiKey keyid
-          apikeys <- ProjectApiKeys.projectApiKeysByProjectId pid
-          pure (del, apikeys)
+        $ withPool
+          pool
+          do
+            del <- ProjectApiKeys.revokeApiKey keyid
+            apikeys <- ProjectApiKeys.projectApiKeysByProjectId pid
+            pure (del, apikeys)
 
       let hxTriggerData =
             if res > 0
@@ -95,11 +98,12 @@ apiGetH sess pid = do
       pure $ userNotMemeberPage sess
     else do
       (project, apiKeys) <- liftIO
-        $ withPool pool
-        do
-          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-          apiKeys <- ProjectApiKeys.projectApiKeysByProjectId pid
-          pure (project, apiKeys)
+        $ withPool
+          pool
+          do
+            project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+            apiKeys <- ProjectApiKeys.projectApiKeysByProjectId pid
+            pure (project, apiKeys)
 
       let bwconf =
             (def :: BWConfig)
@@ -179,8 +183,29 @@ mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] do
               V.indexed apiKeys & mapM_ \(i, apiKey) -> do
                 tr_ [] do
                   td_ [class_ "px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900"] $ toHtml apiKey.title
-                  td_ [class_ "px-6 py-4 whitespace-nowrap text-sm text-gray-500"] $ toHtml $ apiKey.keyPrefix <> "**********"
-                  td_ [class_ "px-6 py-4 whitespace-nowrap text-right text-sm font-medium"] do
+                  td_ [class_ "px-6 py-4 whitespace-nowrap text-sm text-gray-500 w-[500px]"] do
+                    span_
+                      [class_ "mr-2 w-full"]
+                      $ toHtml
+                      $ T.take 8 apiKey.keyPrefix
+                      <> "********************************************"
+                    button_
+                      [ class_ "text-blue-500"
+                      , term "data-key" apiKey.keyPrefix
+                      , term "data-prefix" (T.take 8 apiKey.keyPrefix <> "********************************************")
+                      , [__| on click  if my innerText is "show" 
+                                           put  @data-key into previous <span/>
+                                           put "hide" into me
+                                           exit
+                                        end
+                                       if my innerText is "hide"
+                                           put  @data-prefix into previous <span/>
+                                        put "show" into me
+                                       end
+                            |]
+                      ]
+                      "show"
+                  td_ [class_ "px-6 py-4 whitespace-nowrap text-right text-sm font-medium"] $ do
                     if apiKey.active
                       then do
                         button_

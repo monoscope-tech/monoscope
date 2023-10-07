@@ -5,9 +5,10 @@ module Pages.Onboarding (onboardingGetH) where
 import Config
 import Data.Default (def)
 import Data.Text qualified as T
+import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
-import Lucid.Htmx (hxPost_, hxTarget_)
+import Lucid.Htmx (hxGet_, hxPost_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
@@ -25,166 +26,137 @@ import Utils (
  )
 
 
-onboardingGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
-onboardingGetH sess pid = do
+onboardingGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Bool -> Maybe Bool -> Maybe Text -> DashboardM (Html ())
+onboardingGetH sess pid polling redirected current_tab = do
   pool <- asks pool
   isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, hasApikeys, hasRequest) <- liftIO
-        $ withPool pool
-        do
-          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-          apiKeys <- ProjectApiKeys.countProjectApiKeysByProjectId pid
-          requestDumps <- RequestDumps.countRequestDumpByProject pid
-          pure (project, apiKeys > 0, requestDumps > 0)
+      (project, apikey, hasRequest) <- liftIO
+        $ withPool
+          pool
+          do
+            project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+            apiKeys <- ProjectApiKeys.projectApiKeysByProjectId pid
+            requestDumps <- RequestDumps.countRequestDumpByProject pid
+            let apikey = V.head apiKeys
+            pure (project, apikey.keyPrefix, requestDumps > 0)
       let bwconf =
             (def :: BWConfig)
               { sessM = Just sess
               , currProject = project
               , pageTitle = "Get started"
+              , hasIntegrated = Just hasRequest
               }
       let ans = case project of
             Nothing -> False
             Just p -> case p.questions of
               Just v -> True
               _ -> False
+      case polling of
+        Just _ -> pure $ onboardingPage pid apikey hasRequest ans (fromMaybe False redirected) (fromMaybe "express" current_tab)
+        Nothing -> pure $ bodyWrapper bwconf $ onboardingPage pid apikey hasRequest ans (fromMaybe False redirected) "express"
 
-      pure $ bodyWrapper bwconf $ onboardingPage pid hasApikeys hasRequest ans
 
+onboardingPage :: Projects.ProjectId -> Text -> Bool -> Bool -> Bool -> Text -> Html ()
+onboardingPage pid apikey hasRequest ans redi ctb = do
+  div_
+    [ class_ "relative h-full"
+    , hxGet_ $ "/p/" <> pid.toText <> "/onboarding?polling=True"
+    , hxTrigger_ "load delay:30s"
+    , hxVals_ "js:{current_tab:getCurrentTab()}"
+    , hxSwap_ "outerHTML"
+    ]
+    $ do
+      when redi $ div_ [class_ "w-full text-center py-2 bg-yellow-500"] "You have to integrate APIToolkit in your app before you can start using the platform"
+      div_ [class_ "flex flex-col h-full w-full gap-16"] $ do
+        div_ [class_ "text- center"]do
+          div_ [class_ "flex flex-col w-full mt-10 py-4 items-center gap-4"] $ do
+            h3_ [class_ "text-4xl font-bold"] "Ready, Set, Integrate!"
+            div_ [class_ "flex flex-col text-center gap-1 mb-4"] do
+              div_ [class_ " text-lg  max-w-prose"] do
+                p_ "To get the most from APIToolkit, integrate it into your project (Even just on your local or development machine). You can integrate an outgoing HTTP request client, or an entire server with incoming requests. "
+              p_ [class_ " text-lg"] "Finish up, then dash to your dashboard! 🚀"
+            if hasRequest then completedBanner pid else integrateApiToolkit apikey ctb
+        div_ [class_ "w-full flex justify-center"] $ do
+          div_ [class_ "flex flex-col w-[800px] rounded-2xl border border-2"] $ do
+            div_ [class_ "w-full px-8 py-4 flex justify-between border-b border-b-2"] $ do
+              h4_ [class_ "font-bold text-lg"] "Onboarding checklist"
+              let p
+                    | hasRequest = "100%"
+                    | otherwise = "66%"
+              span_ [class_ "text-slate-500"] $ p <> " completed"
+            ul_ [class_ "px-3 py-4"] do
+              li_ [class_ "flex items-center mx-4 py-4 border-b gap-6 text-green"] do
+                faIcon_ "fa-circle-check" "fa-sharp fa-regular fa-circle-check" "h-6 w-6 text-green-700"
+                button_ [class_ "flex flex-col"] do
+                  p_ [class_ "font-semibold"] "Create an account"
+                  span_ [class_ "text-slate-500"] "This is completed when you sign up"
+              li_ [class_ "flex flex-col items-center mx-4 py-4 border-b gap-6 text-green"] do
+                div_ [class_ "flex w-full items-center gap-6"] do
+                  faIcon_ "fa-circle-check" "fa-sharp fa-regular fa-circle-check" "h-6 w-6 text-green-700"
+                  button_
+                    [ class_ "flex justify-between text-left w-full items-center"
+                    , [__|on click toggle .hidden on #addAPIKey|]
+                    ]
+                    do
+                      div_ [class_ "flex flex-col"] do
+                        p_ [class_ "font-semibold"] "Generate an API key"
+                        span_ [class_ "text-slate-500"] "The API key is used to authenticate requests, Auto generated."
+                      faIcon_ "fa-chevron-down" "fa-regular fa-chevron-down" "h-6 w-6"
+                div_ [class_ "bg-slate-100 hidden w-full py-16 px-24", id_ "addAPIKey"] do
+                  p_ [class_ "text-green-500 text-center"] $ toHtml apikey
 
-onboardingPage :: Projects.ProjectId -> Bool -> Bool -> Bool -> Html ()
-onboardingPage pid hasApikey hasRequest ans = do
-  div_ [class_ "relative h-full"] do
-    div_ [class_ "flex flex-col h-full w-full gap-16"] do
-      div_ [class_ "flex flex-col w-full mt-10 py-4 items-center gap-4"] do
-        h3_ [class_ "text-slate-900 text-4xl font-bold"] "Complete the onboarding checklist"
-        div_ [class_ "flex flex-col text-center gap-1 mb-4"] do
-          p_ [class_ "text-slate-700 text-[16px]"] "Complete the onboarding checklist below to fully set up APIToolkit."
-          p_ [class_ "text-slate-700 text-[16px]"] "Once completed, you can go to the dashboard to start using the platform"
-        if not hasApikey
-          then do
-            generateApikey pid
-          else ""
-        if hasApikey && not hasRequest
-          then do
-            integrateApiToolkit
-          else ""
-        if hasApikey && hasRequest then completedBanner pid else ""
-      div_ [class_ "w-full flex justify-center"] do
-        div_ [class_ "flex flex-col w-[800px] rounded-2xl border border-2"] do
-          div_ [class_ "w-full px-8 py-4 flex justify-between border-b border-b-2"] do
-            h4_ [class_ "font-bold text-lg"] "Onboarding checklist"
-            let p
-                  | hasApikey = if hasRequest then "100%" else "66%"
-                  | hasRequest = if hasApikey then "100%" else "66%"
-                  | otherwise = "33%"
-            span_ [class_ "text-slate-500"] $ p <> " completed"
-          ul_ [class_ "px-3 py-4"] do
-            li_ [class_ "flex items-center mx-4 py-4 border-b gap-6 text-green"] do
-              faIcon_ "fa-circle-check" "fa-sharp fa-regular fa-circle-check" "h-6 w-6 text-green-700"
-              button_ [class_ "flex flex-col"] do
-                p_ [class_ "font-semibold"] "Create an account"
-                span_ [class_ "text-slate-500"] "This is completed when you sign up"
-            li_ [class_ "flex flex-col items-center mx-4 py-4 border-b gap-6 text-green"] do
-              div_ [class_ "flex w-full items-center gap-6"] do
-                let style = if hasApikey then "text-green-700" else "text-gray-300"
-                faIcon_ "fa-circle-check" "fa-sharp fa-regular fa-circle-check" $ "h-6 w-6 " <> style
-                button_
-                  [ class_ "flex justify-between text-left w-full items-center"
-                  , [__|on click toggle .hidden on #addAPIKey|]
-                  ]
-                  do
+              li_ [class_ "mx-4 py-4 border-b"] do
+                div_ [class_ "flex w-full items-center  gap-6"] do
+                  let style = if hasRequest then "text-green-700" else "text-gray-400 "
+                  faIcon_ "fa-circle-check" "fa-sharp fa-regular fa-circle-check" $ "h-6 w-6 " <> style
+                  button_ [class_ "flex justify-between text-left w-full items-center", [__|on click toggle .hidden on #SDKs|]] do
                     div_ [class_ "flex flex-col"] do
-                      p_ [class_ "font-semibold"] "Generate an API key"
-                      span_ [class_ "text-slate-500"] "The API key is used to authenticate requests"
+                      p_ [class_ "font-semibold"] "Integrate APIToolkit to your app"
+                      span_ [class_ "text-slate-500"] "Integrate apitoolkit using any of our SDKs to start sending request."
                     faIcon_ "fa-chevron-down" "fa-regular fa-chevron-down" "h-6 w-6"
-              div_ [class_ "bg-slate-100 hidden w-full py-16 px-24", id_ "addAPIKey"] do
-                if hasApikey
-                  then do
-                    p_ [class_ "text-green-500 text-center"] "You have generated an API key"
-                  else do
-                    div_ [id_ "main-content"] do
-                      form_
-                        [ hxPost_ $ "/p/" <> pid.toText <> "/apis"
-                        , class_ "flex items-end justify-center  pt-4 px-4 pb-20 text-center sm:block sm:p-0"
-                        , hxTarget_ "#main-content"
-                        ]
-                        do
-                          div_ [class_ "bg-white rounded-lg px-4 pt-5 pb-4 text-left"] do
-                            div_ [class_ "sm:flex sm:items-start"] do
-                              div_ [class_ "mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left grow"] do
-                                h3_ [class_ "text-lg font-medium text-slate-900", id_ "modal-title"] "Enter API key title"
-                                div_ [class_ "mt-2 space-y-2"] do
-                                  p_ [class_ "text-sm text-slate-500"] do
-                                    "Please input a title for your API Key. You can find all API keys "
-                                    a_ [href_ $ "/p/" <> pid.toText <> "/apis", class_ "text-blue-500"] "here"
-                                  div_ do
-                                    input_ [class_ "input-txt px-4 py-2  border w-full", type_ "text", placeholder_ "API Key Title", name_ "title", autofocus_]
-                                    input_ [hidden_ "true", name_ "from", value_ "onboarding"]
-                            div_ [class_ "mt-5 sm:mt-4 sm:flex sm:flex-row-reverse"] do
-                              button_ [type_ "submit", class_ "w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 sm:ml-3 sm:w-auto sm:text-sm"] "Submit"
+                div_ [class_ "w-full bg-slate-100 mt-8", id_ "SDKs"] do
+                  if hasRequest
+                    then do
+                      p_ [class_ "text-green-500 text-center py-16 text-center"]
+                        $ span_ "Apitoolkit has been integrated into your app"
+                    else do
+                      div_ [class_ "font-medium text-lg text-center border-b border-slate-200 py-16"] $ do
+                        a_ [class_ "block link underline text-slate-900 underline-offset-4", href_ "https://apitoolkit.io/docs/quickstarts/", target_ "BLANK"] "View Integration Quickstarts &  documentation on our Knowlege base."
+                        a_ [class_ "block link underline text-slate-900 underline-offset-4", href_ "https://calendar.app.google/EvPzCoVsLh5gqkAo8", target_ "BLANK"] "Need more help? Schedule a call with an Engineer."
+                        div_ [class_ " inline-block space-x-3 text-red-800"] do
+                          faIcon_ "fa-spinner" "fa-sharp fa-light fa-spinner " "fa-spin h-6 w-6 inline-block "
+                          span_ "Need help with integration? Follow the code examples to get started!"
 
-            li_ [class_ "mx-4 py-4 border-b"] do
-              div_ [class_ "flex w-full items-center  gap-6"] do
-                let style = if hasRequest then "text-green-700" else "text-gray-300"
-                faIcon_ "fa-circle-check" "fa-sharp fa-regular fa-circle-check" $ "h-6 w-6 " <> style
-                button_ [class_ "flex justify-between text-left w-full items-center", [__|on click toggle .hidden on #SDKs|]] do
-                  div_ [class_ "flex flex-col"] do
-                    p_ [class_ "font-semibold"] "Integrate APIToolkit to your app"
-                    span_ [class_ "text-slate-500"] "Integrate apitoolkit using any of our SDKs to start sending request."
-                  faIcon_ "fa-chevron-down" "fa-regular fa-chevron-down" "h-6 w-6"
-              div_ [class_ "hidden w-full bg-slate-100 mt-8", id_ "SDKs"] do
-                if hasRequest
-                  then do
-                    p_ [class_ "text-green-500 text-center py-16 text-center"] "Apitoolkit has been integrated into your app"
-                  else do
-                    div_ [class_ "pb-8"] do
-                      div_ [class_ "font-bold text-center text-white border-b border-slate-200"] do
-                        p_ [class_ "text-red-500 text-center py-16 text-center"] "Apitoolkit has not been integrated into your app"
-      --   tabs
-      -- tabContentExpress
-      -- tabContentGin
-      -- tabContentLaravel
-      -- tabContentSymfony
-      -- tabContentDotNet
-      -- tabContentFastify
-
-      div_ [class_ "w-full flex justify-center pb-16 mt-16"] do
-        div_ [class_ "flex flex-col w-[800px] rounded-2xl border border-2"] do
-          div_ [class_ "grid grid-cols-2 border-b px-8"] do
-            div_ [class_ "flex flex-col gap-2 py-8 border-r"] do
+        div_ [class_ "w-full flex justify-center pb-16 mt-16"] $ do
+          div_ [class_ "flex flex-col w-[800px] rounded-2xl border border-2 grid grid-cols-2 border-b "] $ do
+            a_ [class_ "flex flex-col gap-2 py-8 border-r px-8 hover:bg-blue-100 ", href_ "https://www.apitoolkit.io/docs", target_ "_BLANK"] do
               faIcon_ "fa-file-lines" "fa-thin fa-file-lines" "h-8 w-8"
               h3_ [class_ "font-bold text-lg"] "Documentation"
               p_ [class_ "text-slate-700"] "Check out our documentation to learn more about using APIToolkit."
-              a_ [href_ "https://www.apitoolkit.io/docs", class_ "text-blue-500 flex items-center gap-2"] do
+              span_ [href_ "https://www.apitoolkit.io/docs", class_ "text-blue-500 flex items-center gap-2"] do
                 faIcon_ "fa-link-simple" "fa-sharp fa-regular fa-link-simple" "h-8 w-8 text-blue-500"
                 "Read the docs"
-            -- div_ [class_ "flex flex-col gap-2 py-4 border-l"] pass
-            div_ [class_ "px-8 py-16 flex items-center gap-6 border-l"] do
-              faIcon_ "fa-circle-play" "fa-light fa-circle-play" "text-blue-500"
-              a_ [href_ "https://calendly.com/tonyalaribe/30min", class_ "flex flex-col"] do
-                span_ [class_ "font-bold text-lg text-blue-500"] "Get Demo"
-                span_ [class_ "text-slate-500"] "Schedule a brief call with co-founder Antony to provide a concise overview of apitoolkit and guide him on its effective utilization for API management."
+            a_ [class_ "block px-8 py-16 flex items-center gap-6 border-l hover:bg-blue-100 ", href_ "https://calendar.app.google/EvPzCoVsLh5gqkAo8", target_ "_BLANK"] do
+              faIcon_ "fa-circle-play" "fa-light fa-circle-play" "text-blue-500 h-14 w-14"
+              div_ [class_ "flex flex-col"] do
+                span_ [class_ "font-bold text-lg text-blue-700 space-x-3"] do
+                  span_ "Need Help?"
+                  span_ "Or a Demo?"
+                span_ [class_ "text-slate-500"] "Schedule a brief call with an Engineer."
   script_
     [text|
 
-function changeTab(tabId) {
-  const tabLinks = document.querySelectorAll('.sdk_tab');
-  tabLinks.forEach(link => link.classList.remove('sdk_tab_active'));
-  const clickedTabLink = document.getElementById(tabId);
-  clickedTabLink.classList.add('sdk_tab_active')
-  const tabContents = document.querySelectorAll('.tab-content');
-  tabContents.forEach(content => content.classList.add("hidden"));
-
-  // Display the content of the clicked tab
-  console.log(tabId + "_content")
-  const tabContent = document.getElementById(tabId + '_content');
-  console.log(tabContent)
-  tabContent.classList.remove("hidden")
-
+var getCurrentTab = () => {
+  const tab= document.querySelector(".sdk_tab_active")
+  if(tab) {
+    console.log(tab)
+    return tab.id
+    }
+  return 'express'
 }
   |]
 
@@ -218,25 +190,30 @@ generateApikey pid =
                 button_ [type_ "submit", class_ "w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 sm:ml-3 sm:w-auto sm:text-sm"] "Submit"
 
 
-integrateApiToolkit :: Html ()
-integrateApiToolkit =
+integrateApiToolkit :: Text -> Text -> Html ()
+integrateApiToolkit apikey current_tab =
   div_ [class_ "w-[800px] bg-slate-200 mx-auto rounded-lg border-8 border-white shadow-lg mb-10"] do
     div_ [class_ "w-full p-8 bg-slate-100  rounded"] do
       div_ [class_ "flex w-full justify-center gap-4 items-center mb-2"] do
-        span_ [class_ "text-blue-500 pr-4 border-r border-r-2 border-r-blue-500 text-2xl"] "Next Up"
+        span_ [class_ "text-blue-500 pr-4 border-r border-r-2 border-r-blue-500 font-bold"] "Next Up"
         h3_ [class_ "font-bold text-2xl"] "Integrate APIToolkit"
-      div_ [class_ "pb-2"] do
-        div_ [class_ "font-bold text-center text-white border-b border-slate-200"] do
-          tabs
-        tabContentExpress
-        tabContentGin
-        tabContentLaravel
-        tabContentFlask
-        tabContentFastAPI
-        tabContentDjango
-        tabContentSymfony
-        tabContentDotNet
-        tabContentFastify
+      div_ [class_ "pb-2 mt-5"] do
+        div_ [class_ "font-bold text-center text-white border-b border-slate-200"] $ do
+          tabs current_tab
+        tabContentExpress apikey current_tab
+        tabContentGin apikey current_tab
+        tabContentLaravel apikey current_tab
+        tabContentFlask apikey current_tab
+        tabContentFastAPI apikey current_tab
+        tabContentDjango apikey current_tab
+        tabContentSymfony apikey current_tab
+        tabContentDotNet apikey current_tab
+        tabContentFastify apikey current_tab
+      div_ [class_ "font-medium text-slate-700 mt-8 space-y-2 text-xl"] do
+        p_ [class_ "space-x-3"] do
+          span_ [class_""] "Having trouble integrating APIToolkit?"
+          a_ [href_ "https://calendar.app.google/EvPzCoVsLh5gqkAo8", target_ "_BLANK", class_ "text-blue-500"] "Contact support"
+        a_ [class_ "block link underline text-slate-900 underline-offset-4", href_ "https://apitoolkit.io/docs/quickstarts/", target_ "BLANK"] "View Integration Quickstarts &  documentation on our Knowlege base"
 
 
 completedBanner :: Projectjs.ProjectId -> Html ()
@@ -251,10 +228,13 @@ completedBanner pid =
         faIcon_ "fa-circle-check" "fa-sharp fa-regular fa-circle-check" "h-24 w-24 text-green-700"
 
 
-tabContentExpress :: Html ()
-tabContentExpress =
-  div_ [class_ "tab-content flex flex-col m-8", id_ "express_content"] do
-    div_ [class_ "relative"] do
+tabContentExpress :: Text -> Text -> Html ()
+tabContentExpress apikey current_tab =
+  div_ [class_ $ "tab-content flex flex-col m-8 " <> (if current_tab == "express" then "" else "hidden"), id_ "express_content"] $ do
+    div_ [class_ "relative"] $ do
+      div_ [class_ "mb-6 space-x-3"] do
+        strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
+        a_ [class_ "link underline text-lg", href_ "https://github.com/apitoolkit/apitoolkit-express", target_ "BLANK"] "github.com/apitoolkit/apitoolkit-express"
       div_ [class_ "mb-6"] do
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
         p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "npm i apitoolkit-express"
@@ -277,7 +257,7 @@ tabContentExpress =
                     span_ [class_ "hljs-keyword"] "import" >> " " >> span_ [class_ "hljs-title"] "APIToolkit" >> " " >> span_ [class_ "hljs-keyword"] "from" >> " " >> span_ [class_ "hljs-string"] "'apitoolkit-express';" >> "\n\n"
                     span_ [class_ "hljs-keyword"] "const" >> " " >> span_ [class_ "hljs-title"] "app" >> " = " >> span_ [class_ "hljs-title"] "express" >> "();\n"
                     span_ [class_ "hljs-keyword"] "const" >> " " >> span_ [class_ "hljs-title"] "port" >> " = " >> span_ [class_ "hljs-number"] "3000;" >> "\n\n"
-                    span_ [class_ "hljs-keyword"] "const" >> " " >> span_ [class_ "hljs-title"] "apitoolkitClient" >> " = " >> span_ [class_ "hljs-keyword"] "await" >> " " >> span_ [class_ "hljs-title"] "APIToolkit.NewClient" >> "({ " >> span_ [class_ "hljs-attr"] "apiKey" >> ": " >> span_ [class_ "hljs-string"] "'<API-KEY>'" >> " });" >> "\n"
+                    span_ [class_ "hljs-keyword"] "const" >> " " >> span_ [class_ "hljs-title"] "apitoolkitClient" >> " = " >> span_ [class_ "hljs-keyword"] "await" >> " " >> span_ [class_ "hljs-title"] "APIToolkit.NewClient" >> "({ " >> span_ [class_ "hljs-attr"] "apiKey" >> ": " >> span_ [class_ "hljs-string"] ("'" <> toHtml apikey <> "'") >> " });" >> "\n"
                     "app." >> span_ [class_ "hljs-title"] "use" >> "(" >> span_ [class_ "hljs-title"] "apitoolkitClient.expressMiddleware" >> ");" >> "\n\n"
                     "app." >> span_ [class_ "hljs-title"] "get" >> "(" >> span_ [class_ "hljs-string"] "'/'" >> ", " >> span_ [class_ "hljs-function"] "(" >> span_ [class_ "hljs-params"] "req, res" >> ") =>" >> " {" >> "\n"
                     "   res." >> span_ [class_ "hljs-title"] "send" >> "(" >> span_ [class_ "hljs-string"] "'Hello World!'" >> ");" >> "\n"
@@ -289,10 +269,13 @@ tabContentExpress =
                     "    "
 
 
-tabContentGin :: Html ()
-tabContentGin =
-  div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "gin_content"] do
-    div_ [class_ "relative"] do
+tabContentGin :: Text -> Text -> Html ()
+tabContentGin apikey current_tab =
+  div_ [class_ $ "tab-content flex flex-col m-8 " <> (if current_tab == "gin" then "" else "hidden"), id_ "gin_content"] $ do
+    div_ [class_ "relative"] $ do
+      div_ [class_ "mb-6 space-x-3"] do
+        strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
+        a_ [class_ "link underline text-lg", href_ "https://github.com/apitoolkit/apitoolkit-go", target_ "BLANK"] "github.com/apitoolkit/apitoolkit-go"
       div_ [class_ "mb-6"] do
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
         p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "go get github.com/apitoolkit/apitoolkit-go"
@@ -321,7 +304,7 @@ tabContentGin =
                     span_ [class_ "hljs-keyword"] "func" >> " " >> span_ [class_ "hljs-title"] "main" >> "()" >> " {" >> "\n"
                     span_ [class_ "hljs-variable"] "ctx" >> " := " >> span_ [class_ "hljs-title"] "context.Background" >> "()" >> "\n\n"
                     span_ [class_ "hljs-comment"] "// Initialize the client using your apitoolkit.io generated apikey" >> "\n"
-                    span_ [class_ "hljs-variable"] "apitoolkitClient, err" >> " := " >> span_ [class_ "hljs-title"] "apitoolkit.NewClient" >> "(ctx, apitoolkit.Config{APIKey: " >> span_ [class_ "hljs-string"] "\"<APIKEY>\"" >> "})" >> "\n"
+                    span_ [class_ "hljs-variable"] "apitoolkitClient, err" >> " := " >> span_ [class_ "hljs-title"] "apitoolkit.NewClient" >> "(ctx, apitoolkit.Config{APIKey: " >> span_ [class_ "hljs-string"] ("\"" <> toHtml apikey <> "\"") >> "})" >> "\n"
                     span_ [class_ "hljs-keyword"] "if" >> " err != " >> span_ [class_ "hljs-literal"] "nil" >> " {" >> "\n"
                     span_ [class_ "hljs-comment"] "    // Handle the error" >> "\n"
                     span_ [class_ "hljs-built_in"] "    panic" >> "(err)" >> "\n"
@@ -334,16 +317,19 @@ tabContentGin =
                     span_ [class_ "hljs-comment"] "// Rest of your app..." >> "\n"
 
 
-tabContentLaravel :: Html ()
-tabContentLaravel =
-  div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "laravel_content"] do
-    div_ [class_ "relative"] do
+tabContentLaravel :: Text -> Text -> Html ()
+tabContentLaravel apikey current_tab =
+  div_ [class_ $ "tab-content flex flex-col m-8 " <> (if current_tab == "laravel" then "" else "hidden"), id_ "laravel_content"] $ do
+    div_ [class_ "relative"] $ do
+      div_ [class_ "mb-6 space-x-3"] do
+        strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
+        a_ [class_ "link underline text-lg", href_ "https://github.com/apitoolkit/apitoolkit-laravel", target_ "BLANK"] "github.com/apitoolkit/apitoolkit-laravel"
       div_ [class_ "mb-6"] do
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
         p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "composer require apitoolkit/apitoolkit-php"
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1 mt-4"] "Set up APITOOLKIT_KEY env variable"
-        p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "APITOOLKIT_KEY=<YOUR_API_KEY>"
-      h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
+        p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] $ toHtml $ "APITOOLKIT_KEY=" <> apikey
+      h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Update into your app/Http/Kernel.php"
       div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
         div_ [class_ "relative w-full flex flex-col"] do
           div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] do
@@ -375,15 +361,18 @@ tabContentLaravel =
                     span_ [class_ "hljs-comment"] "    // ..." >> "\n" >> "}"
 
 
-tabContentSymfony :: Html ()
-tabContentSymfony =
-  div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "symfony_content"] do
-    div_ [class_ "relative"] do
+tabContentSymfony :: Text -> Text -> Html ()
+tabContentSymfony apikey current_tab =
+  div_ [class_ $ "tab-content flex flex-col m-8 " <> (if current_tab == "symfony" then "" else "hidden"), id_ "symfony_content"] $ do
+    div_ [class_ "relative"] $ do
+      div_ [class_ "mb-6 space-x-3"] do
+        strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
+        a_ [class_ "link underline text-lg", href_ "https://github.com/apitoolkit/apitoolkit-symfony", target_ "BLANK"] "github.com/apitoolkit/apitoolkit-symfony"
       div_ [class_ "mb-6"] do
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
         p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "composer require apitoolkit/apitoolkit-symfony"
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1 mt-4"] "Set up APITOOLKIT_KEY env variable"
-        p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "APITOOLKIT_KEY=<YOUR_API_KEY>"
+        p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] $ toHtml $ "APITOOLKIT_KEY=" <> apikey
       h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
       div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
         div_ [class_ "relative w-full flex flex-col"] do
@@ -410,10 +399,13 @@ tabContentSymfony =
                     span_ [class_ "hljs-bullet"] "            -" >> " { " >> span_ [class_ "hljs-attr"] "name:" >> " " >> span_ [class_ "hljs-string"] "'kernel.event_subscriber'" >> " }"
 
 
-tabContentDotNet :: Html ()
-tabContentDotNet =
-  div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "net_content"] do
-    div_ [class_ "relative"] do
+tabContentDotNet :: Text -> Text -> Html ()
+tabContentDotNet apikey current_tab =
+  div_ [class_ $ "tab-content flex flex-col m-8 " <> (if current_tab == "net" then "" else "hidden"), id_ "net_content"] $ do
+    div_ [class_ "relative"] $ do
+      div_ [class_ "mb-6 space-x-3"] do
+        strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
+        a_ [class_ "link underline text-lg", href_ "https://github.com/apitoolkit/apitoolkit-dotnet", target_ "BLANK"] "github.com/apitoolkit/apitoolkit-dotnet"
       div_ [class_ "mb-6"] do
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
         p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "dotnet add package ApiToolkit.Net"
@@ -449,7 +441,7 @@ tabContentDotNet =
                       >> "\n"
                       >> span_ [class_ "hljs-attr"] "    ApiKey"
                       >> " = "
-                      >> span_ [class_ "hljs-string"] "\"<Your_APIKey>\""
+                      >> span_ [class_ "hljs-string"] ("\"" <> toHtml apikey <> "\"")
                       >> "\n"
                       >> span_ [class_ "hljs-meta"] "};"
                       >> "\n"
@@ -476,11 +468,14 @@ tabContentDotNet =
                     span_ [class_ ""] ");"
 
 
-tabContentFastify :: Html ()
-tabContentFastify =
-  div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "fastify_content"]
-    do
-      div_ [class_ "relative"] do
+tabContentFastify :: Text -> Text -> Html ()
+tabContentFastify apikey current_tab =
+  div_ [class_ $ "tab-content flex flex-col m-8 " <> (if current_tab == "fastify" then "" else "hidden"), id_ "fastify_content"]
+    $ do
+      div_ [class_ "relative"] $ do
+        div_ [class_ "mb-6 space-x-3"] do
+          strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
+          a_ [class_ "link underline text-lg", href_ "https://github.com/apitoolkit/apitoolkit-fastify", target_ "BLANK"] "github.com/apitoolkit/apitoolkit-fastify"
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
           p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "npm install apitoolkit-fastify"
@@ -505,7 +500,7 @@ tabContentFastify =
                       span_ [class_ "hljs-comment"] "// Create and initialize an instance of the APIToolkit\n"
                       span_ [class_ "hljs-keyword"] "const" >> span_ [class_ "hljs-title"] " apittoolkitClient " >> span_ [class_ "hljs-keyword"] "= " >> span_ [class_ "hljs-keyword"] "await"
                       span_ [class_ "hljs-title"] " APIToolkit.NewClient" >> "({\n"
-                      span_ [class_ "hljs-attr"] "  apiKey" >> ": " >> span_ [class_ "hljs-string"] "<YOUR_API_KEY>" >> ",\n"
+                      span_ [class_ "hljs-attr"] "  apiKey" >> ": " >> span_ [class_ "hljs-string"] ("\"" <> toHtml apikey <> "\"") >> ",\n"
                       span_ [class_ "hljs-attr"] "  fastify" >> ": fastify\n" >> "});\n"
                       span_ [class_ "hljs-title function_"] "apitoolkitClient.init" >> "();\n"
                       span_ [class_ "hljs-comment"] "// Rest of your app \n"
@@ -518,11 +513,14 @@ tabContentFastify =
                       "     process." >> span_ [class_ "hljs-title"] "exit" >> "(1);\n"
                       span_ [class_ ""] "   }\n"
                       span_ [class_ ""] "});"
-tabContentFlask :: Html ()
-tabContentFlask =
-  div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "flask_content"]
-    do
-      div_ [class_ "relative"] do
+tabContentFlask :: Text -> Text -> Html ()
+tabContentFlask apikey current_tab =
+  div_ [class_ $ "tab-content flex flex-col m-8 " <> (if current_tab == "flask" then "" else "hidden"), id_ "flask_content"]
+    $ do
+      div_ [class_ "relative"] $ do
+        div_ [class_ "mb-6 space-x-3"] do
+          strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
+          a_ [class_ "link underline text-lg", href_ "https://github.com/apitoolkit/apitoolkit-flask", target_ "BLANK"] "github.com/apitoolkit/apitoolkit-flask"
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
           p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "pip install apitoolkit-flask"
@@ -543,12 +541,12 @@ tabContentFlask =
                     code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"] do
                       span_ [class_ "hljs-keyword"] "from" >> " flask " >> span_ [class_ "hljs-keyword"] "import " >> "Flask"
                       br_ []
-                      span_ [class_ "hljs-keyword"] "from" >> " apitoolkit " >> span_ [class_ "hljs-keyword"] "import " >> "APIToolkit"
+                      span_ [class_ "hljs-keyword"] "from" >> " apitoolkit_flask " >> span_ [class_ "hljs-keyword"] "import " >> "APIToolkit"
                       br_ []
                       span_ [class_ ""] "app = Flask(__name__)"
                       br_ []
                       br_ []
-                      span_ [class_ ""] "apitoolkit = APIToolkit(api_key=" >> span_ [class_ "hljs-string"] "<API_KEY>" >> ", debug=" >> span_ [class_ "hljs-keyword"] "True" >> ")"
+                      span_ [class_ ""] "apitoolkit = APIToolkit(api_key=" >> span_ [class_ "hljs-string"] ("\"" <> toHtml apikey <> "\"") >> ", debug=" >> span_ [class_ "hljs-keyword"] "True" >> ")"
                       br_ []
                       br_ []
                       span_ [class_ "hljs-deco"] "@app.before_request"
@@ -576,11 +574,14 @@ tabContentFlask =
                       span_ [] "app.run(debug=" >> span_ [class_ "hljs-keyword"] "True" >> ")"
 
 
-tabContentFastAPI :: Html ()
-tabContentFastAPI =
-  div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "fastapi_content"]
-    do
-      div_ [class_ "relative"] do
+tabContentFastAPI :: Text -> Text -> Html ()
+tabContentFastAPI apikey current_tab =
+  div_ [class_ $ "tab-content flex flex-col m-8 " <> (if current_tab == "fastapi" then "" else "hidden"), id_ "fastapi_content"]
+    $ do
+      div_ [class_ "relative"] $ do
+        div_ [class_ "mb-6 space-x-3"] do
+          strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
+          a_ [class_ "link underline text-lg", href_ "https://github.com/apitoolkit/apitoolkit-fastapi", target_ "BLANK"] "github.com/apitoolkit/apitoolkit-fastapi"
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
           p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "pip install apitoolkit-fastapi"
@@ -592,33 +593,22 @@ tabContentFastAPI =
                 div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
                 div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
                 div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-            div_ [class_ "relative min-h-0 flex-auto flex flex-col"] do
-              div_ [class_ "w-full flex-auto flex min-h-0 overflow-auto"] do
-                div_ [class_ "w-full relative flex-auto"] do
-                  pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] do
-                    div_ [class_ "hidden md:block text-slate-600 flex-none py-4 pr-4 text-right select-none", style_ "width:50px"] do
-                      "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24"
+            div_ [class_ "relative min-h-0 flex-auto flex flex-col"] $ do
+              div_ [class_ "w-full flex-auto flex min-h-0 overflow-auto"] $ do
+                div_ [class_ "w-full relative flex-auto"] $ do
+                  pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] $ do
+                    div_ [class_ "hidden md:block text-slate-600 flex-none py-4 pr-4 text-right select-none", style_ "width:50px"] $ do
+                      "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17"
                     code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"] do
                       span_ [class_ "hljs-keyword"] "from" >> " fastapi " >> span_ [class_ "hljs-keyword"] "import " >> "FastAPI"
                       br_ []
-                      span_ [class_ "hljs-keyword"] "from" >> " apitoolkit " >> span_ [class_ "hljs-keyword"] "import " >> "APIToolkit"
+                      span_ [class_ "hljs-keyword"] "from" >> " apitoolkit_fastapi " >> span_ [class_ "hljs-keyword"] "import " >> "APIToolkit"
                       br_ []
                       br_ []
                       span_ [class_ ""] "app = " >> span_ [class_ "hljs-title"] "FastAPI" >> "()"
                       br_ []
                       br_ []
-                      span_ [class_ ""] "apitoolkit = " >> span_ [class_ "hljs-title"] "APIToolkit" >> "()"
-                      br_ []
-                      br_ []
-                      span_ [class_ "hljs-deco"] "@app.on_event('startup')"
-                      br_ []
-                      span_ [class_ "hljs-keyword"] "async def" >> span_ [class_ "hljs-title"] " startup_event" >> "():"
-                      br_ []
-                      span_ [class_ "hljs-keyword"] "    await" >> " apitoolkit." >> span_ [class_ "hljs-title"] "initialize" >> "("
-                      br_ []
-                      span_ [class_ "hljs-string"] "     <API_KEY>" >> ", debug=" >> span_ [class_ "hljs-keyword"] "True"
-                      br_ []
-                      span_ [] "    )"
+                      span_ [class_ ""] "apitoolkit = " >> span_ [class_ "hljs-title"] "APIToolkit" >> "(api_key=" >> span_ [class_ "hljs-string"] ("\"" <> toHtml apikey <> "\"") >> ")"
                       br_ []
                       br_ []
                       "apitoolkit." >> span_ [class_ "hljs-title"] "middleware" >> "(" >> span_ [class_ "hljs-string"] "'http'" >> ")(apitoolkit.middleware)\n"
@@ -631,11 +621,15 @@ tabContentFastAPI =
                       br_ []
 
 
-tabContentDjango :: Html ()
-tabContentDjango =
-  div_ [class_ "tab-content flex flex-col m-8 hidden", id_ "django_content"]
-    do
-      div_ [class_ "relative"] do
+tabContentDjango :: Text -> Text -> Html ()
+tabContentDjango apikey current_tab =
+  div_ [class_ $ "tab-content flex flex-col m-8 " <> (if current_tab == "django" then "" else "hidden"), id_ "django_content"]
+    $ do
+      div_ [class_ "relative"] $ do
+        div_ [class_ "mb-6 space-x-3"] do
+          strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
+          a_ [class_ "link underline text-lg", href_ "https://github.com/apitoolkit/apitoolkit-django", target_ "BLANK"] "github.com/apitoolkit/apitoolkit-django"
+
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
           p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "pip install apitoolkit-django"
@@ -654,78 +648,85 @@ tabContentDjango =
                     div_ [class_ "hidden md:block text-slate-600 flex-none py-4 pr-4 text-right select-none", style_ "width:50px"] do
                       "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15"
                     code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"] do
-                      span_ [class_ "hljs-keyword"] "APITOOLKIT_KEY" >> " = " >> span_ [class_ "hljs-string"] "<YOUR_API_KEY> \n"
+                      span_ [class_ "hljs-keyword"] "APITOOLKIT_KEY" >> " = " >> span_ [class_ "hljs-string"] ("\"" <> toHtml apikey <> "\"") >> "\n"
                       br_ []
                       span_ [class_ "hljs-keyword"] "MIDDLEWARE" >> " = [\n"
-                      span_ [] "   ...\n"
-                      span_ [class_ "hljs-string"] "    'apitoolkit.APIToolkit'" >> ",\n"
-                      span_ [] "   ...\n"
+                      span_ [class_ "hljs-comment"] "# other middlewares\n"
+                      span_ [class_ "hljs-string"] "    'apitoolkit_django.APIToolkit'" >> ",\n"
                       span_ [] "]"
 
 
-tabs :: Html ()
-tabs =
-  ul_ [class_ "flex flex-nowrap overflow-x-auto gap-6"] do
-    li_ [class_ "shrink-0"] do
+tabs :: Text -> Html ()
+tabs current_tab =
+  ul_ [class_ "flex flex-nowrap overflow-x-auto gap-6 font-medium"] $ do
+    script_ [type_ "text/hyperscript"] [text|
+      behavior Navigatable(content)
+         on click remove .sdk_tab_active from .sdk_tab 
+            then add .sdk_tab_active to me 
+            then add .hidden to .tab-content 
+            then remove .hidden from content
+      end
+    |]
+    li_ [class_ "shrink-0"] $ do
       button_
-        [ class_ "sdk_tab sdk_tab_active"
-        , onclick_ "changeTab('express')"
+        [ class_ $ if current_tab == "express" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #express_content) |]
         , id_ "express"
         ]
         "Express Js"
     li_ [class_ "shrink-0"] do
       button_
-        [ class_ "sdk_tab"
-        , onclick_ "changeTab('gin')"
+        [ class_ $ if current_tab == "gin" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #gin_content) |]
         , id_ "gin"
         ]
         "Go Gin"
     li_ [class_ "shrink-0"] do
       button_
-        [ class_ "sdk_tab"
-        , onclick_ "changeTab('laravel')"
+        [ class_ $ if current_tab == "laravel" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #laravel_content) |]
         , id_ "laravel"
         ]
         "Laravel"
     li_ [class_ "shrink-0"] do
       button_
-        [ class_ "sdk_tab"
-        , onclick_ "changeTab('flask')"
+        [ class_ $ if current_tab == "flask" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #flask_content) |]
         , id_ "flask"
         ]
         "Flask"
     li_ [class_ "shrink-0"] do
       button_
-        [ class_ "sdk_tab"
-        , onclick_ "changeTab('fastapi')"
+        [ class_ $ if current_tab == "fastapi" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #fastapi_content) |]
         , id_ "fastapi"
         ]
         "FastAPI"
     li_ [class_ "shrink-0"] do
       button_
-        [ class_ "sdk_tab"
-        , onclick_ "changeTab('django')"
+        [ class_ $ if current_tab == "django" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #django_content) |]
         , id_ "django"
         ]
         "Django"
     li_ [class_ "shrink-0"] do
       button_
-        [ class_ "sdk_tab"
-        , onclick_ "changeTab('symfony')"
+        [ class_ $ if current_tab == "symfony" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #symfony_content) |]
         , id_ "symfony"
         ]
         "Symfony"
     li_ [class_ "shrink-0"] do
       button_
-        [ class_ "sdk_tab"
-        , onclick_ "changeTab('net')"
+        [ class_ $ if current_tab == "net" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #net_content) |]
         , id_ "net"
         ]
         "C# .NET"
     li_ [class_ "shrink-0"] do
       button_
-        [ class_ "sdk_tab"
-        , onclick_ "changeTab('fastify')"
+        [ class_ $ if current_tab == "fastify" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #fastify_content) |]
         , id_ "fastify"
         ]
         "Fastify Js"

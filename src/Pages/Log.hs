@@ -13,7 +13,7 @@ import Data.Time.Format (formatTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector, iforM_, (!?))
 import Data.Vector qualified as Vector
-import Database.PostgreSQL.Entity.DBT ( withPool)
+import Database.PostgreSQL.Entity.DBT (withPool)
 import Fmt
 import Lucid
 import Lucid.Htmx
@@ -69,7 +69,7 @@ apiLog sess pid queryM cols' fromM hxRequestM hxBoostedM = do
       let nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' fromTempM
 
       case (hxRequestM, hxBoostedM) of
-        (Just "true", Nothing) -> pure do
+        (Just "true", Nothing) -> pure $ do
           span_ [id_ "result-count", hxSwapOob_ "outerHTML"] $ show resultCount
           reqChart reqChartTxt True
           logItemRows pid requests cols nextLogsURL
@@ -140,7 +140,7 @@ expandAPIlogItem' req modal = do
                   p_ [style_ "width: calc(100% - 25px)", class_ "text-sm truncate ..."] "Expires in: 1 hour"
                   img_ [src_ "/assets/svgs/select_chevron.svg", style_ "height:15px; width:15px"]
               div_ [id_ "expire_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] do
-                forM_ (["1 hour", "8 hours", "1 day"]::[Text]) \sw -> do
+                forM_ (["1 hour", "8 hours", "1 day"] :: [Text]) \sw -> do
                   button_
                     [ onclick_ "expireChanged(event)"
                     , term "data-expire-value" sw
@@ -414,7 +414,7 @@ logItemRows pid requests cols nextLogsURL = do
           let cls = "mx-1 inline-block px-3 rounded-lg monospace " :: Text
           span_ [class_ $ cls <> getMethodColor req.method] $ toHtml $ req.method
           span_ [class_ $ cls <> " bg-gray-100 border border-gray-300 "] $ toHtml $ req.urlPath
-          span_ [class_  $ cls <> getStatusColor req.statusCode] $ show $ req.statusCode
+          span_ [class_ $ cls <> getStatusColor req.statusCode] $ show $ req.statusCode
           span_ [class_ $ cls <> " bg-gray-50 border border-gray-300 "] $ toHtml $ req.rawUrl
           let reqBody = decodeUtf8 $ AE.encode $ req.requestBody
           let respBody = decodeUtf8 $ AE.encode $ req.responseBody
@@ -437,20 +437,21 @@ logItemRows pid requests cols nextLogsURL = do
 apiLogItemView :: RequestDumps.RequestDumpLogItem -> Text -> Html ()
 apiLogItemView req expandItemPath = do
   div_ [class_ "log-item-info border-l-blue-200 border-l-4"]
-    $ div_ [class_ "pl-4 py-1 ", colspan_ "3"]
-    do
-      button_
-        [ class_ "px-2 rounded text-white bg-blue-500 text-sm font-semibold expand-button"
-        , term "data-log-item-path" (expandItemPath <> "/detailed")
-        , [__|on click remove .hidden from #expand-log-modal then
+    $ div_
+      [class_ "pl-4 py-1 ", colspan_ "3"]
+      do
+        button_
+          [ class_ "px-2 rounded text-white bg-blue-500 text-sm font-semibold expand-button"
+          , term "data-log-item-path" (expandItemPath <> "/detailed")
+          , [__|on click remove .hidden from #expand-log-modal then
                 remove .hidden from #log-modal-content-loader
                 fetch `${@data-log-item-path}` as html then put it into #log-modal-content
                 add .hidden to #log-modal-content-loader
                 end
           |]
-        ]
-        "expand"
-      jsonValueToHtmlTree $ AE.toJSON req
+          ]
+          "expand"
+        jsonValueToHtmlTree $ AE.toJSON req
 
 
 -- | jsonValueToHtmlTree takes an aeson json object and renders it as a collapsible html tree, with hyperscript for interactivity.
@@ -467,11 +468,12 @@ jsonValueToHtmlTree val = jsonValueToHtmlTree' ("", "", val)
         [ class_ "relative log-item-field-parent"
         , term "data-field-path" fullFieldPath'
         ]
-        $ a_ [class_ "block hover:bg-blue-50 cursor-pointer pl-6 relative log-item-field-anchor ", [__|install LogItemMenuable|]]
-        do
-          span_ $ toHtml key
-          span_ [class_ "text-blue-800"] ":"
-          span_ [class_ "text-blue-800 ml-2.5 log-item-field-value", term "data-field-path" fullFieldPath'] $ toHtml $ unwrapJsonPrimValue value
+        $ a_
+          [class_ "block hover:bg-blue-50 cursor-pointer pl-6 relative log-item-field-anchor ", [__|install LogItemMenuable|]]
+          do
+            span_ $ toHtml key
+            span_ [class_ "text-blue-800"] ":"
+            span_ [class_ "text-blue-800 ml-2.5 log-item-field-value", term "data-field-path" fullFieldPath'] $ toHtml $ unwrapJsonPrimValue value
 
     renderParentType :: Text -> Text -> Text -> Int -> Html () -> Html ()
     renderParentType opening closing key count child = div_ [class_ (if key == "" then "" else "collapsed")] do
