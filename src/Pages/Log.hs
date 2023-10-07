@@ -543,28 +543,17 @@ jsonTreeAuxillaryCode pid = do
           , role_ "menuitem"
           , tabindex_ "-1"
           , id_ "menu-item-2"
-          , [__|on click 
-                    set filter_path to (previous .log-item-field-value) @data-field-path
-                    set filter_value to (previous  <.log-item-field-value/>)'s innerText
-                    if window.editor.getValue().includes(filter_path) and window.editor.getValue().includes(filter_value)
-                       exit
-                    end
-                    if window.editor.getValue().toLowerCase().endsWith("and") or window.editor.getValue().toLowerCase().endsWith("or") then
-                       window.editor.setValue(window.editor.getValue() + " " + filter_path + "=" + filter_value)
-                      else 
-                        if window.editor.getValue().length == 0 then
-                           window.editor.setValue (filter_path + "=" + filter_value)
-                        else
-                          window.editor.setValue (window.editor.getValue() + " AND " + filter_path + "=" + filter_value)
-                        end
-                    end
-                    if window.editor.getValue() != "" then
-                      htmx.trigger("#log_explorer_form", "submit")
-                    end
-                  end|]
+          , [__|on click FieldFilter(me, " = ") |]
           ]
           "Filter by field"
-
+        button_
+          [ class_ "cursor-pointer w-full text-left text-slate-700 block px-4 py-1 text-sm hover:bg-gray-100 hover:text-slate-900"
+          , role_ "menuitem"
+          , tabindex_ "-1"
+          , id_ "menu-item-3"
+          , [__|on click FieldFilter(me, " != ") |]
+          ]
+          "Exclude field"
   script_
     [type_ "text/hyperscript"]
     [text|
@@ -581,6 +570,27 @@ jsonTreeAuxillaryCode pid = do
           halt
         end
       end
+      
+      def FieldFilter(me, operation)
+          set filter_path to (previous .log-item-field-value) @data-field-path
+          set filter_value to (previous  <.log-item-field-value/>)'s innerText
+          set editorVal to window.editor.getValue()
+          if editorVal.includes(filter_path) and editorVal.includes(filter_value)
+             exit
+          end
+          if editorVal.toLowerCase().endsWith("and") or editorVal.toLowerCase().endsWith("or") then
+             window.editor.setValue(editorVal + " " + filter_path + operation + filter_value)
+            else 
+              if editorVal.length == 0 then
+                 window.editor.setValue (filter_path + operation + filter_value)
+              else
+                window.editor.setValue (editorVal + " AND " + filter_path + operation + filter_value)
+              end
+          end
+          if window.editor.getValue() != "" then
+            htmx.trigger("#log_explorer_form", "submit")
+          end
+        end
 
       def LogItemExpandable(me)
           if I match <.expanded-log/> then 
