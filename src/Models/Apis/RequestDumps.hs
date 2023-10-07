@@ -260,6 +260,7 @@ data RequestDumpLogItem = RequestDumpLogItem
   , sdkType :: SDKTypes
   , parentId :: Maybe UUID.UUID
   , serviceVersion :: Maybe Text -- allow users track deployments and versions (tags, commits, etc)
+  , errorsCount :: Integer
   , errors :: AE.Value
   , tags :: Maybe (Vector Text)
   }
@@ -335,7 +336,7 @@ selectRequestDumpByProject pid extraQuery fromM = do
                     path_params, status_code,query_params,
                     request_body,response_body,'{}'::jsonb,'{}'::jsonb,
                     duration_ns, sdk_type,
-                    parent_id, service_version, '{}'::jsonb, tags
+                    parent_id, service_version, JSONB_ARRAY_LENGTH(errors) as errors_count, '{}'::jsonb, tags
              FROM apis.request_dumps where project_id=? and created_at > NOW() - interval '14 days' and created_at<? |]
         <> extraQueryParsed
         <> " order by created_at desc limit 200;"
@@ -381,7 +382,7 @@ selectRequestDumpByProjectAndId pid createdAt rdId = queryOne Select q (createdA
                     path_params,status_code,query_params,
                     request_body,response_body,request_headers,response_headers, 
                     duration_ns, sdk_type,
-                    parent_id, service_version, errors, tags
+                    parent_id, service_version, JSONB_ARRAY_LENGTH(errors) as errors_count, errors, tags
              FROM apis.request_dumps where created_at=? and project_id=? and id=? LIMIT 1|]
 
 
@@ -434,7 +435,7 @@ selectAnomalyEvents pid targetHash anType = query Select (Query $ encodeUtf8 q) 
                     path_params, status_code,query_params,
                     request_body,response_body,request_headers,response_headers,
                     duration_ns, sdk_type,
-                    parent_id, service_version, errors, tags
+                    parent_id, service_version, JSONB_ARRAY_LENGTH(errors) as errors_count, errors, tags
              FROM apis.request_dumps where created_at > NOW() - interval '14' day AND project_id=? AND $extraQuery LIMIT 199; |]
 
 

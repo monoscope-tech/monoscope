@@ -185,6 +185,13 @@ expandAPIlogItem' req modal = do
             mIcon_ "projects" "h-5 w-5 text-slate-400"
             span_ [class_ "text-md font-bold"] $ show req.sdkType
           p_ [class_ "text-slate-500"] "Framework"
+    -- errors
+    when (req.errorsCount > 0) $ div_ [class_ "border rounded-lg mt-8"] do
+      div_ [class_ "flex w-full bg-gray-100 px-4 py-2 gap-4 items-center"] do
+        p_ [class_ "font-bold"] "Errors"
+        p_ [class_ "text-sm text-red-500 font-bold"] $ show req.errorsCount
+      div_ [class_ "px-4 flex gap-10 border-b text-gray-500"] do
+        jsonValueToHtmlTree req.errors
     -- request details
     div_ [class_ "border rounded-lg mt-8", id_ "request_detail_container"] do
       div_ [class_ "flex w-full bg-gray-100 px-4 py-2 flex-col gap-2"] do
@@ -388,16 +395,18 @@ logItemRows pid requests cols nextLogsURL = do
     let logItemPath = RequestDumps.requestDumpLogItemUrlPath pid req
     let endpoint_hash = toText $ showHex (xxHash $ encodeUtf8 $ UUID.toText pid.unProjectId <> T.toUpper req.method <> req.urlPath) ""
     let logItemEndpointUrl = "/p/" <> pid.toText <> "/log_explorer/endpoint/" <> endpoint_hash
+    let errorClass = if req.errorsCount > 0 then "bg-red-500" else "bg-transparent"
     div_
-      [ class_ "flex flex-row border-l-4 border-l-transparent divide-x space-x-4 hover:bg-blue-50 cursor-pointer"
+      [ class_ "flex flex-row divide-x  cursor-pointer " 
       , term "data-log-item-path" logItemPath
       , [__|on click LogItemExpandable(me)|]
       ]
       do
-        div_ [class_ "flex-none inline-block w-8 flex justify-between items-center"] do
+        div_ [class_ "flex-none inline-block w-10 flex justify-between items-center"] do
+          a_ [class_ $ "inline-block w-1 h-full mr-1 " <> errorClass, term "data-tippy-content" $ show req.errorsCount <> " errors attached to this request"] ""
           a_ [hxGet_ logItemEndpointUrl, term "data-tippy-content" "Go to endpoint", onclick_ "noPropa(event)"] do
-            img_ [src_ "/assets/svgs/link.svg", class_ "w-3.5 mr-2", style_ "margin-right: 5px"]
-          img_ [src_ "/assets/svgs/cheveron-right.svg", class_ "w-1.5 log-chevron"]
+            img_ [src_ "/assets/svgs/link.svg", class_ "w-3.5 mr-2"]
+          img_ [src_ "/assets/svgs/cheveron-right.svg", class_ "w-1.5 log-chevron mr-2"]
         div_ [class_ "flex-none inline-block p-1 px-2 w-36 overflow-hidden"] $ toHtml @String $ formatTime defaultTimeLocale "%F %T" (req ^. #createdAt)
         div_ [class_ "inline-block p-1 px-2 grow"] do
           let reqJSON = AE.toJSON req
@@ -412,12 +421,12 @@ logItemRows pid requests cols nextLogsURL = do
                 ]
                 $ toHtml colValue
           let cls = "mx-1 inline-block px-3 rounded-lg monospace " :: Text
-          span_ [class_ $ cls <> getMethodColor req.method] $ toHtml $ req.method
-          span_ [class_ $ cls <> " bg-gray-100 border border-gray-300 "] $ toHtml $ req.urlPath
-          span_ [class_ $ cls <> getStatusColor req.statusCode] $ show $ req.statusCode
-          span_ [class_ $ cls <> " bg-gray-50 border border-gray-300 "] $ toHtml $ req.rawUrl
-          let reqBody = decodeUtf8 $ AE.encode $ req.requestBody
-          let respBody = decodeUtf8 $ AE.encode $ req.responseBody
+          span_ [class_ $ cls <> getMethodColor req.method] $ toHtml req.method
+          span_ [class_ $ cls <> " bg-gray-100 border border-gray-300 "] $ toHtml req.urlPath
+          span_ [class_ $ cls <> getStatusColor req.statusCode] $ show req.statusCode
+          span_ [class_ $ cls <> " bg-gray-50 border border-gray-300 "] $ toHtml req.rawUrl
+          let reqBody = decodeUtf8 $ AE.encode req.requestBody
+          let respBody = decodeUtf8 $ AE.encode req.responseBody
           p_ [class_ "inline-block"] $ toHtml $ T.take 300 [text| request_body=$reqBody response_body=$respBody|]
 
     div_ [class_ "hidden w-full flex px-2 py-8 justify-center item-loading"] do
@@ -436,7 +445,8 @@ logItemRows pid requests cols nextLogsURL = do
 
 apiLogItemView :: RequestDumps.RequestDumpLogItem -> Text -> Html ()
 apiLogItemView req expandItemPath = do
-  div_ [class_ "log-item-info border-l-blue-200 border-l-4"]
+  let errorClass = if req.errorsCount > 0 then "border-l-red-200" else "border-l-blue-200"
+  div_ [class_ $ "log-item-info border-l-4 " <> errorClass]
     $ div_
       [class_ "pl-4 py-1 ", colspan_ "3"]
       do
