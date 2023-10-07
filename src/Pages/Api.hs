@@ -194,17 +194,27 @@ mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] do
                       , term "data-key" apiKey.keyPrefix
                       , term "data-prefix" (T.take 8 apiKey.keyPrefix <> "********************************************")
                       , [__| on click  if my innerText is "show" 
-                                           put  @data-key into previous <span/>
-                                           put "hide" into me
-                                           exit
-                                        end
-                                       if my innerText is "hide"
-                                           put  @data-prefix into previous <span/>
-                                        put "show" into me
-                                       end
+                                 put  @data-key into previous <span/>
+                                 put "hide" into me
+                                 exit
+                              end
+                             if my innerText is "hide"
+                                 put  @data-prefix into previous <span/>
+                              put "show" into me
+                             end
                             |]
                       ]
                       "show"
+                    button_
+                      [ class_ "text-blue-500 ml-2"
+                      , term "data-key" apiKey.keyPrefix
+                      , [__| on click if 'clipboard' in window.navigator then
+                          call navigator.clipboard.writeText(my @data-key)
+                          send successToast(value:['API Key has been copied to the Clipboard']) to <body/>
+                        end
+                        |]
+                      ]
+                      "copy"
                   td_ [class_ "px-6 py-4 whitespace-nowrap text-right text-sm font-medium"] $ do
                     if apiKey.active
                       then do
@@ -237,8 +247,7 @@ copyNewApiKey newKeyM hasNext =
               img_ [class_ "h-5 w-5 text-green-400", src_ "/assets/svgs/check_circle.svg"]
             div_ [class_ "ml-3"] do
               h3_ [class_ "text-sm font-medium text-green-800"] "API Key was generated successfully"
-              div_ [class_ "mt-2 text-sm text-green-700"] do
-                p_ "Please copy the generated APIKey as you would not be able to view it anymore after this message."
+              div_ [class_ "mt-2 text-sm text-green-700 py-2"] do
                 strong_ [class_ "block pt-2", id_ "newKey"] $ toHtml newKey
               div_ [class_ "mt-4"] do
                 div_ [class_ "-mx-2 -my-1.5 flex"] do
