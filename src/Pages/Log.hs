@@ -68,7 +68,6 @@ apiLog sess pid queryM cols' fromM hxRequestM hxBoostedM = do
       let fromTempM = toText . formatTime defaultTimeLocale "%F %T" <$> reqLastCreatedAtM
       let nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' fromTempM
 
-      let resultCount = maybe 0 (^. #fullCount) (requests !? 0)
       case (hxRequestM, hxBoostedM) of
         (Just "true", Nothing) -> pure $ do
           span_ [id_ "result-count", hxSwapOob_ "outerHTML"] $ show resultCount

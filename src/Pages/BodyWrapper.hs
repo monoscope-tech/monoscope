@@ -19,8 +19,8 @@ menu pid =
   [ ("Get started", "/p/" <> pid.toText <> "/onboarding", "fa-list-check")
   , ("Dashboard", "/p/" <> pid.toText <> "/", "fa-qrcode")
   , ("Endpoints", "/p/" <> pid.toText <> "/endpoints", "fa-swap")
-  -- , ("Dependencies", "/p/" <> pid.toText <> "/outgoing", "fa-arrows-turn-right")
-  , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies?ackd=false&archived=false", "fa-bug")
+  , -- , ("Dependencies", "/p/" <> pid.toText <> "/outgoing", "fa-arrows-turn-right")
+    ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies?ackd=false&archived=false", "fa-bug")
   , ("API Log Explorer", "/p/" <> pid.toText <> "/log_explorer", "fa-list-tree")
   , ("API Keys", "/p/" <> pid.toText <> "/apis", "fa-key")
   , -- , ("Redacted Fields", "/p/" <> pid.toText <> "/redacted_fields", "#redacted")
@@ -34,13 +34,14 @@ data BWConfig = BWConfig
   , currProject :: Maybe Projects.Project
   , pageTitle :: Text
   , menuItem :: Maybe Text -- Use PageTitle if menuItem is not set
+  , hasIntegrated :: Maybe Bool
   }
   deriving stock (Show, Generic)
   deriving anyclass (Default)
 
 
 bodyWrapper :: BWConfig -> Html () -> Html ()
-bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child = do
+bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} child = do
   doctypehtml_ do
     head_ do
       title_ $ toHtml pageTitle
@@ -155,7 +156,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem} child = do
         Just sess ->
           do
             let currUser = Sessions.getUser (Sessions.user sess)
-                sideNav' = currProject & maybe "" \project -> sideNav sess project pageTitle menuItem
+                sideNav' = currProject & maybe "" \project -> sideNav sess project pageTitle menuItem hasIntegrated
             let currUserEmail = CI.original currUser.email
             section_ [class_ "flex flex-row h-screen overflow-hidden"] do
               sideNav'
@@ -243,8 +244,8 @@ projectsDropDown currProject projects = do
                 when (currProject.id == project.id) $ faIcon_ "fa-circle-check" "fa-sharp fa-regular fa-circle-check" "h-6 w-6 text-green-700"
 
 
-sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Maybe Text -> Html ()
-sideNav sess project pageTitle menuItem = do
+sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Maybe Text -> Maybe Bool -> Html ()
+sideNav sess project pageTitle menuItem hasIntegrated = do
   aside_ [class_ "shrink-0 top-0 border-r-2 bg-white border-gray-200 h-screen overflow-hidden transition-all duration-1000 ease-in-out", id_ "side-nav-menu"] do
     script_
       [text|
@@ -297,20 +298,18 @@ sideNav sess project pageTitle menuItem = do
     nav_ [class_ "mt-4"] do
       -- FIXME: reeanable hx-boost hxBoost_ "true"
       menu project.id & mapM_ \(mTitle, mUrl, faIcon) -> do
-        let isActive =maybe (pageTitle == mTitle) (== mTitle) menuItem 
+        let isActive = maybe (pageTitle == mTitle) (== mTitle) menuItem
+        let activeCls = if isActive then " bg-blue-50 text-blue-700 border-l-4 border-blue-700" else " text-slate-800"
+        let intG = fromMaybe True hasIntegrated
+        let intGCls = if intG || (mTitle == "Get started") then " hover:bg-blue-50" else " cursor-not-allowed"
         a_
-          [ href_ mUrl
+          [ if intG || (mTitle == "Get started") then href_ mUrl else term "data-integrate" ""
           , term "data-tippy-placement" "right"
-          , term "data-tippy-content" mTitle
-          , class_
-              $ "block flex gap-3 px-5 py-3 flex justify-center items-center hover:bg-blue-50  "
-              <> ( if isActive
-                    then "bg-blue-50 text-blue-700 border-l-4 border-blue-700"
-                    else " text-slate-800"
-                 )
+          , term "data-tippy-content" (if intG || (mTitle == "Get started") then mTitle else "Integration Required")
+          , class_ $ "block flex gap-3 px-5 py-3 flex justify-center items-center " <> activeCls <> intGCls
           ]
           do
-            faIcon_ faIcon ("fa-regular " <> faIcon) $ "w-5 h-5 " <>  if isActive then "text-blue-800 " else "text-slate-500 "
+            faIcon_ faIcon ("fa-regular " <> faIcon) $ "w-5 h-5 " <> if isActive then "text-blue-800 " else "text-slate-500 "
             span_ [class_ "grow sd-hidden"] $ toHtml mTitle
 
 

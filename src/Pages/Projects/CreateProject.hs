@@ -174,7 +174,7 @@ processProjectPostForm sess cpRaw = do
           let encryptedKey = ProjectApiKeys.encryptAPIKey (encodeUtf8 envCfg.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
           let encryptedKeyB64 = B64.encodeBase64 encryptedKey
           let keyPrefix = encryptedKeyB64
-          pApiKey <- liftIO $ ProjectApiKeys.newProjectApiKeys pid projectKeyUUID "auto-generated" keyPrefix
+          pApiKey <- liftIO $ ProjectApiKeys.newProjectApiKeys pid projectKeyUUID "Default API Key" keyPrefix
           ProjectApiKeys.insertProjectApiKey pApiKey
 
           liftIO $ ConvertKit.addUserOrganization envCfg.convertkitApiKey (CI.original sess.user.getUser.email) pid.toText cp.title cp.paymentPlan

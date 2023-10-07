@@ -48,6 +48,7 @@ onboardingGetH sess pid polling redirected current_tab = do
               { sessM = Just sess
               , currProject = project
               , pageTitle = "Get started"
+              , hasIntegrated = Just hasRequest
               }
       let ans = case project of
             Nothing -> False

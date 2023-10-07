@@ -14,7 +14,6 @@ module Utils (
   textToBool,
   getMethodColor,
   getStatusColor,
-  getStatusBgColor,
 ) where
 
 import Data.Text (replace)
