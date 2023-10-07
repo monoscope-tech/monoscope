@@ -69,7 +69,7 @@ apiLog sess pid queryM cols' fromM hxRequestM hxBoostedM = do
       let nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' fromTempM
 
       case (hxRequestM, hxBoostedM) of
-        (Just "true", Nothing) -> pure do
+        (Just "true", Nothing) -> pure $ do
           span_ [id_ "result-count", hxSwapOob_ "outerHTML"] $ show resultCount
           reqChart reqChartTxt True
           logItemRows pid requests cols nextLogsURL

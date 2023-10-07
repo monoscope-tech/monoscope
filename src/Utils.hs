@@ -102,6 +102,14 @@ userIsProjectMember sess pid = do
       if V.length user == 0 then pure False else pure True
 
 
+getMethodBgColor :: Text -> Text
+getMethodBgColor "POST" = "bg-green-500"
+getMethodBgColor "PUT" = "bg-orange-500"
+getMethodBgColor "DELETE" = "bg-red-500"
+getMethodBgColor "PATCH" = "bg-purple-500"
+getMethodBgColor _ = "bg-blue-500"
+
+
 getMethodColor :: Text -> Text
 getMethodColor "POST" = " text-green-950 bg-green-50 border border-green-200 "
 getMethodColor "PUT" = " text-orange-950 bg-orange-50 border border-orange-200 "

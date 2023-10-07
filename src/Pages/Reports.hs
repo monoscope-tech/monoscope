@@ -111,9 +111,10 @@ reportsPostH sess pid t = do
       pure $ addHeader hxTriggerData $ userNotMemeberPage sess
     else do
       apiKeys <- liftIO
-        $ withPool pool
-        do
-          Projects.updateProjectReportNotif pid t
+        $ withPool
+          pool
+          do
+            Projects.updateProjectReportNotif pid t
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Report nofications updated Successfully"]}|]
       pure $ addHeader hxTriggerData $ span_ [] ""
 
@@ -127,11 +128,12 @@ singleReportGetH sess pid rid = do
       pure $ userNotMemeberPage sess
     else do
       (project, report) <- liftIO
-        $ withPool pool
-        do
-          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-          report <- Reports.getReportById rid
-          pure (project, report)
+        $ withPool
+          pool
+          do
+            project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+            report <- Reports.getReportById rid
+            pure (project, report)
       let bwconf =
             (def :: BWConfig)
               { sessM = Just sess
@@ -152,14 +154,15 @@ reportsGetH sess pid page hxRequest hxBoosted = do
       pure $ userNotMemeberPage sess
     else do
       (project, reports) <- liftIO
-        $ withPool pool
-        do
-          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-          reports <- Reports.reportHistoryByProject pid pg
-          pure (project, reports)
+        $ withPool
+          pool
+          do
+            project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+            reports <- Reports.reportHistoryByProject pid pg
+            pure (project, reports)
       let nextUrl = "/p/" <> show pid.unProjectId <> "/reports?page=" <> show (pg + 1)
       case (hxRequest, hxBoosted) of
-        (Just "true", Nothing) -> pure do
+        (Just "true", Nothing) -> pure $ do
           reportListItems pid reports nextUrl
         _ -> do
           let bwconf =

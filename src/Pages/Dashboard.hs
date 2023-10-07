@@ -72,7 +72,7 @@ dashboardGetH sess pid fromDStr toDStr sinceStr' = do
       let sinceStr = if isNothing fromDStr && isNothing toDStr && isNothing sinceStr' || fromDStr == Just "" then Just "7D" else sinceStr'
       (hasApikeys, hasRequest) <- liftIO
         $ withPool pool
-        do
+        $ do
           apiKeys <- ProjectApiKeys.countProjectApiKeysByProjectId pid
           requestDumps <- RequestDumps.countRequestDumpByProject pid
           pure (apiKeys > 0, requestDumps > 0)
@@ -93,16 +93,17 @@ dashboardGetH sess pid fromDStr toDStr sinceStr' = do
 
       startTime <- liftIO $ getTime Monotonic
       (project, projectRequestStats, reqLatenciesRolledByStepsLabeled) <- liftIO
-        $ withPool pool
-        do
-          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+        $ withPool
+          pool
+          do
+            project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
 
-          projectRequestStats <- fromMaybe (def :: Projects.ProjectRequestStats) <$> Projects.projectRequestStatsByProject pid
-          let maxV = round projectRequestStats.p99 :: Int
-          let steps' = (maxV `quot` 100) :: Int
-          let steps = if steps' == 0 then 100 else steps'
-          reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledByStepsForProject maxV steps pid (fromD, toD)
-          pure (project, projectRequestStats, Vector.toList reqLatenciesRolledBySteps)
+            projectRequestStats <- fromMaybe (def :: Projects.ProjectRequestStats) <$> Projects.projectRequestStatsByProject pid
+            let maxV = round projectRequestStats.p99 :: Int
+            let steps' = (maxV `quot` 100) :: Int
+            let steps = if steps' == 0 then 100 else steps'
+            reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledByStepsForProject maxV steps pid (fromD, toD)
+            pure (project, projectRequestStats, Vector.toList reqLatenciesRolledBySteps)
 
       let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
       let bwconf =
