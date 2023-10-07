@@ -100,35 +100,35 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "delete" :> Get '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
     :<|> "p" :> ProjectId :> "manage_members" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "manage_members" :> ReqBody '[FormUrlEncoded] ManageMembersForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-    :<|> "p" :> ProjectId :> "endpoints" :> QPT "layout" :> QPT "ackd" :> QPT "archived" :> QPT "sort" :> HXRequest :> HXBoosted :> HXCurrentURL :> UVerb 'GET '[HTML] GetOrRedirect
+    :<|> "p" :> ProjectId :> "endpoints" :> QPT "layout" :> QPT "ackd" :> QPT "archived" :> QPT "sort" :> HXRequest :> HXBoosted :> HXCurrentURL :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "endpoints" :> Capture "endpoints_id" Endpoints.EndpointId :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "subpage" :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "apis" :> UVerb 'GET '[HTML] GetOrRedirect
+    :<|> "p" :> ProjectId :> "apis" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Api.GenerateAPIKeyForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Delete '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "manual_ingest" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "manual_ingest" :> ReqBody '[FormUrlEncoded] RequestMessageForm :> Post '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "log_explorer" :> QPT "query" :> QPT "cols" :> QPT "from" :> HXRequest :> HXBoosted :> UVerb 'GET '[HTML] GetOrRedirect
+    :<|> "p" :> ProjectId :> "log_explorer" :> QPT "query" :> QPT "cols" :> QPT "from" :> HXRequest :> HXBoosted :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" ZonedTime :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" ZonedTime :> "detailed" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "log_explorer" :> "endpoint" :> Capture "endpoint_hash" Text :> Get '[HTML] (Headers '[HXRedirect] (Html ()))
     :<|> "p" :> ProjectId :> "bulk_seed_and_ingest" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "bulk_seed_and_ingest" :> ReqBody '[FormUrlEncoded] DataSeeding.DataSeedingForm :> Post '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "anomalies" :> QPT "layout" :> QPT "ackd" :> QPT "archived" :> QPT "sort" :> QPT "page" :> QPT "load_more" :> QEID "endpoint" :> HXRequest :> HXBoosted :> UVerb 'GET '[HTML] GetOrRedirect
+    :<|> "p" :> ProjectId :> "anomalies" :> QPT "layout" :> QPT "ackd" :> QPT "archived" :> QPT "sort" :> QPT "page" :> QPT "load_more" :> QEID "endpoint" :> HXRequest :> HXBoosted :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "anomalies" :> "bulk_actions" :> Capture "action" Text :> ReqBody '[FormUrlEncoded] AnomalyBulkForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "acknowlege" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "unacknowlege" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "archive" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "unarchive" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "anomaly" :> Capture "targetHash" Text :> QPT "modal" :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "redacted_fields" :> UVerb 'GET '[HTML] GetOrRedirect
+    :<|> "p" :> ProjectId :> "redacted_fields" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "redacted_fields" :> ReqBody '[FormUrlEncoded] RedactFieldForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "charts_html" :> "throughput" :> QPT "id" :> QPT "group_by" :> QPT "endpoint_hash" :> QPT "shape_hash" :> QPT "format_hash" :> QPT "status_code_gt" :> QPI "num_slots" :> QPI "limit" :> QPB "show_legend" :> QPT "from" :> QPT "to" :> QPT "theme" :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "documentation" :> QPT "swagger_id" :> UVerb 'GET '[HTML] GetOrRedirect
+    :<|> "p" :> ProjectId :> "documentation" :> QPT "swagger_id" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "documentation" :> ReqBody '[FormUrlEncoded] SwaggerForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "documentation" :> "save" :> ReqBody '[JSON] SaveSwaggerForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "generate_swagger" :> Get '[JSON] AE.Value
-    :<|> "p" :> ProjectId :> "reports" :> QPT "page" :> HXRequest :> HXBoosted :> UVerb 'GET '[HTML] GetOrRedirect
+    :<|> "p" :> ProjectId :> "reports" :> QPT "page" :> HXRequest :> HXBoosted :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "reports" :> Capture "report_id" Reports.ReportId :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "survey" :> ReqBody '[FormUrlEncoded] Survey.SurveyForm :> Post '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
     :<|> "p" :> ProjectId :> "reports_notif" :> Capture "report_type" Text :> Post '[HTML] (Headers '[HXTrigger] (Html ()))

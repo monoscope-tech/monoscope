@@ -21,6 +21,7 @@ import Pages.NonMember
 import Relude
 import Utils (
   faIcon_,
+  redirect,
   userIsProjectMember,
  )
 
@@ -202,10 +203,10 @@ integrateApiToolkit :: Text -> Text -> Html ()
 integrateApiToolkit apikey current_tab =
   div_ [class_ "w-[800px] bg-slate-200 mx-auto rounded-lg border-8 border-white shadow-lg mb-10"] do
     div_ [class_ "w-full p-8 bg-slate-100  rounded"] do
-      div_ [class_ "flex w-full justify-center gap-4 items-center mb-8"] do
+      div_ [class_ "flex w-full justify-center gap-4 items-center mb-2"] do
         span_ [class_ "text-blue-500 pr-4 border-r border-r-2 border-r-blue-500 font-bold"] "Next Up"
         h3_ [class_ "font-bold text-2xl"] "Integrate APIToolkit"
-      div_ [class_ "pb-2"] do
+      div_ [class_ "pb-2 mt-5"] do
         div_ [class_ "font-bold text-center text-white border-b border-slate-200"] $ do
           tabs current_tab
         tabContentExpress apikey current_tab

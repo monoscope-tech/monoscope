@@ -21,6 +21,7 @@ import Fmt
 import Lucid
 import Lucid.Hyperscript (__)
 import Models.Apis.RequestDumps qualified as RequestDumps
+import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
@@ -64,15 +65,17 @@ dashboardGetH sess pid fromDStr toDStr sinceStr' = do
   pool <- asks pool
   isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
   if not isMember
-    then respond $ WithStatus @200 $ userNotMemeberPage sess
+    then do
+      respond $ WithStatus @200 $ userNotMemeberPage sess
     else do
       now <- liftIO getCurrentTime
       let sinceStr = if isNothing fromDStr && isNothing toDStr && isNothing sinceStr' || fromDStr == Just "" then Just "7D" else sinceStr'
-      hasRequest <- liftIO
+      (hasApikeys, hasRequest) <- liftIO
         $ withPool pool
         $ do
+          apiKeys <- ProjectApiKeys.countProjectApiKeysByProjectId pid
           requestDumps <- RequestDumps.countRequestDumpByProject pid
-          pure (requestDumps > 0)
+          pure (apiKeys > 0, requestDumps > 0)
       -- TODO: Replace with a duration parser.
       let (fromD, toD) = case sinceStr of
             Just "1H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just $ utcToZonedTime utc now)
@@ -113,8 +116,8 @@ dashboardGetH sess pid fromDStr toDStr sinceStr' = do
       let currentURL = "/p/" <> pid.toText <> "?&from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
       let currentPickerTxt = fromMaybe (maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD) sinceStr
       let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt}
-      if not hasRequest
-        then respond $ WithStatus @302 $ redirect ("/p/" <> pid.toText <> "/onboarding?redirected=true")
+      if not hasApikeys || not hasRequest
+        then respond $ WithStatus @302 $ redirect ("/p/" <> pid.toText <> "/onboarding")
         else respond $ WithStatus @200 $ bodyWrapper bwconf $ dashboardPage pid paramInput currTime projectRequestStats reqLatenciesRolledByStepsJ (fromD, toD)
 
 

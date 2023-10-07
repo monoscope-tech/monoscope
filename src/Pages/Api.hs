@@ -20,13 +20,7 @@ import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.NonMember
 import Relude
-import Servant (
-  Headers,
-  Union,
-  WithStatus (..),
-  addHeader,
-  respond,
- )
+import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
 
 import NeatInterpolation (text)
@@ -95,12 +89,13 @@ apiDeleteH sess pid keyid = do
 
 
 -- | apiGetH renders the api keys list page which includes a modal for creating the apikeys.
-apiGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Union GetOrRedirect)
+apiGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 apiGetH sess pid = do
   pool <- asks pool
   isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
   if not isMember
-    then respond $ WithStatus @200 $ userNotMemeberPage sess
+    then do
+      pure $ userNotMemeberPage sess
     else do
       (project, apiKeys) <- liftIO
         $ withPool
@@ -116,10 +111,7 @@ apiGetH sess pid = do
               , currProject = project
               , pageTitle = "API Keys"
               }
-      integrated <- liftIO $ withPool pool $ hasIntegrated pid
-      if not integrated
-        then respond $ WithStatus @302 $ redirect ("/p/" <> pid.toText <> "/onboarding?redirected=true")
-        else respond $ WithStatus @200 $ bodyWrapper bwconf $ apiKeysPage pid apiKeys
+      pure $ bodyWrapper bwconf $ apiKeysPage pid apiKeys
 
 
 apiKeysPage :: Projects.ProjectId -> Vector ProjectApiKeys.ProjectApiKey -> Html ()

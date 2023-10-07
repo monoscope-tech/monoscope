@@ -19,13 +19,7 @@ import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.NonMember
 import Relude
-import Servant (
-  Headers,
-  Union,
-  WithStatus (..),
-  addHeader,
-  respond,
- )
+import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
 import Utils
 import Web.FormUrlEncoded (FromForm)
@@ -65,12 +59,13 @@ redactedFieldsPostH sess pid RedactFieldForm{path, description, endpointHash} = 
 
 
 -- | redactedFieldsGetH renders the api keys list page which includes a modal for creating the apikeys.
-redactedFieldsGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Union GetOrRedirect)
+redactedFieldsGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
 redactedFieldsGetH sess pid = do
   pool <- asks pool
   isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
   if not isMember
-    then respond $ WithStatus @200 $ userNotMemeberPage sess
+    then do
+      pure $ userNotMemeberPage sess
     else do
       (project, redactedFields) <- liftIO
         $ withPool pool
@@ -85,7 +80,7 @@ redactedFieldsGetH sess pid = do
               , currProject = project
               , pageTitle = "Redacted Fields"
               }
-      respond $ WithStatus @200 $ bodyWrapper bwconf $ redactedFieldsPage pid redactedFields
+      pure $ bodyWrapper bwconf $ redactedFieldsPage pid redactedFields
 
 
 redactedFieldsPage :: Projects.ProjectId -> Vector RedactedFields.RedactedField -> Html ()
