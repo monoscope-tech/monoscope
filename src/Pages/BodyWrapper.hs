@@ -299,17 +299,17 @@ sideNav sess project pageTitle menuItem hasIntegrated = do
       -- FIXME: reeanable hx-boost hxBoost_ "true"
       menu project.id & mapM_ \(mTitle, mUrl, faIcon) -> do
         let isActive = maybe (pageTitle == mTitle) (== mTitle) menuItem
-        let activeCls = if isActive then " bg-blue-50 text-blue-700 border-l-4 border-blue-700" else " text-slate-800"
+        let activeCls = if isActive then " bg-blue-50 text-blue-700 border-l-4 border-blue-700" else " text-slate-900"
         let intG = fromMaybe True hasIntegrated
-        let intGCls = if intG || (mTitle == "Get started") then " hover:bg-blue-50" else " cursor-not-allowed"
+        let intGCls = if intG || (mTitle == "Get started") then " hover:bg-blue-50" else " cursor-not-allowed pointer-events-none "
         a_
-          [ if intG || (mTitle == "Get started") then href_ mUrl else term "data-integrate" ""
+          [ href_ mUrl
           , term "data-tippy-placement" "right"
-          , term "data-tippy-content" (if intG || (mTitle == "Get started") then mTitle else "Integration Required")
+          , term "data-tippy-content" (if intG || (mTitle == "Get started") then mTitle else "Our menus are shy. Help them come out by integrating the SDK.")
           , class_ $ "block flex gap-3 px-5 py-3 flex justify-center items-center " <> activeCls <> intGCls
           ]
           do
-            faIcon_ faIcon ("fa-regular " <> faIcon) $ "w-5 h-5 " <> if isActive then "text-blue-800 " else "text-slate-500 "
+            faIcon_ faIcon ("fa-regular " <> faIcon) $ "w-5 h-5 " <> if isActive then "text-blue-900 " else "text-slate-500 "
             span_ [class_ "grow sd-hidden"] $ toHtml mTitle
 
 
