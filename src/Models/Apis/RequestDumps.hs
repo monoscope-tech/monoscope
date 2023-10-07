@@ -435,7 +435,7 @@ selectAnomalyEvents pid targetHash anType = query Select (Query $ encodeUtf8 q) 
                     path_params, status_code,query_params,
                     request_body,response_body,request_headers,response_headers,
                     duration_ns, sdk_type,
-                    parent_id, service_version, JSONB_ARRAY_LENGTH(errors) as errors_count, errors, tags,
+                    parent_id, service_version, JSONB_ARRAY_LENGTH(errors) as errors_count, errors, tags
              FROM apis.request_dumps where created_at > NOW() - interval '14' day AND project_id=? AND $extraQuery LIMIT 199; |]
 
 

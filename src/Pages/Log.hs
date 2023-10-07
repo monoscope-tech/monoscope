@@ -405,7 +405,7 @@ logItemRows pid requests cols nextLogsURL = do
         div_ [class_ "flex-none inline-block w-10 flex justify-between items-center"] do
           a_ [class_ $ "inline-block w-1 h-full mr-1 " <> errorClass, term "data-tippy-content" $ show req.errorsCount <> " errors attached to this request"] ""
           a_ [hxGet_ logItemEndpointUrl, term "data-tippy-content" "Go to endpoint", onclick_ "noPropa(event)"] do
-            img_ [src_ "/assets/svgs/link.svg", class_ "w-3.5 mr-2", style_ "margin-right: 5px"]
+            img_ [src_ "/assets/svgs/link.svg", class_ "w-3.5 mr-2"]
           img_ [src_ "/assets/svgs/cheveron-right.svg", class_ "w-1.5 log-chevron mr-2"]
         div_ [class_ "flex-none inline-block p-1 px-2 w-36 overflow-hidden"] $ toHtml @String $ formatTime defaultTimeLocale "%F %T" (req ^. #createdAt)
         div_ [class_ "inline-block p-1 px-2 grow"] do
