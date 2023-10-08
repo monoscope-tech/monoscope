@@ -76,6 +76,7 @@ data Endpoint = Endpoint
   , method :: Text
   , hosts :: Vector.Vector Text
   , hash :: Text
+  , outgoing :: Bool
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (FromRow, ToRow, Default)
@@ -232,13 +233,13 @@ endpointRequestStatsByEndpoint eid = queryOne Select q (eid, eid)
 endpointById :: EndpointId -> PgT.DBT IO (Maybe Endpoint)
 endpointById eid = queryOne Select q (Only eid)
   where
-    q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, akeys(hosts), hash from apis.endpoints where id=? |]
+    q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, akeys(hosts), hash, outgoing from apis.endpoints where id=? |]
 
 
 endpointByHash :: Projects.ProjectId -> Text -> PgT.DBT IO (Maybe Endpoint)
 endpointByHash pid hash = queryOne Select q (pid, hash)
   where
-    q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, akeys(hosts), hash from apis.endpoints where project_id=? AND hash=? |]
+    q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, akeys(hosts), hash, outgoing from apis.endpoints where project_id=? AND hash=? |]
 
 
 data SwEndpoint = SwEndpoint

@@ -42,6 +42,7 @@ import Models.Apis.Fields.Types qualified as Fields (
   fieldTypeToText,
  )
 import Models.Apis.Formats qualified as Formats
+import Models.Apis.RequestDumps (SDKTypes (GoOutgoing, JsAxiosOutgoing))
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
@@ -193,10 +194,9 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   -- Since it foes into the endpoint, maybe it should be the keys and their type? I'm unsure.
   -- At the moment, if an endpoint exists, we don't insert it anymore. But then how do we deal with requests from new hosts?
   let urlParams = AET.emptyObject
-
   let (endpointQ, endpointP)
         | endpointHash `elem` pjc.endpointHashes = ("", []) -- We have the endpoint cache in our db already. Skill adding
-        | otherwise = Endpoints.upsertEndpointQueryAndParam $ buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash
+        | otherwise = Endpoints.upsertEndpointQueryAndParam $ buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash (isRequestOutgoing rM.sdkType)
 
   let (shapeQ, shapeP)
         | shapeHash `elem` pjc.shapeHashes = ("", [])
@@ -279,8 +279,14 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   pure (query, params, reqDumpP)
 
 
-buildEndpoint :: RequestMessages.RequestMessage -> ZonedTime -> UUID.UUID -> Projects.ProjectId -> Text -> Text -> Value -> Text -> Endpoints.Endpoint
-buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash =
+isRequestOutgoing :: SDKTypes -> Bool
+isRequestOutgoing GoOutgoing = True
+isRequestOutgoing JsAxiosOutgoing = True
+isRequestOutgoing _ = False
+
+
+buildEndpoint :: RequestMessages.RequestMessage -> ZonedTime -> UUID.UUID -> Projects.ProjectId -> Text -> Text -> Value -> Text -> Bool -> Endpoints.Endpoint
+buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash outgoing =
   Endpoints.Endpoint
     { createdAt = rM.timestamp
     , updatedAt = now
@@ -291,6 +297,7 @@ buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash =
     , method = method
     , hosts = [rM.host]
     , hash = endpointHash
+    , outgoing = outgoing
     }
 
 
