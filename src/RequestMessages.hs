@@ -138,7 +138,11 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
 
   let method = T.toUpper rM.method
   let urlPath = RequestDumps.normalizeUrlPath rM.sdkType rM.statusCode rM.method rM.urlPath
-  let !endpointHash = from @String @Text $ showHex (xxHash $ encodeUtf8 $ UUID.toText rM.projectId <> method <> urlPath) ""
+  let isOutgoing = isRequestOutgoing rM.sdkType
+  let !endpointHash =
+        if isOutgoing
+          then from @String @Text $ showHex (xxHash $ encodeUtf8 $ UUID.toText rM.projectId <> rM.host <> method <> urlPath) ""
+          else from @String @Text $ showHex (xxHash $ encodeUtf8 $ UUID.toText rM.projectId <> method <> urlPath) ""
 
   let redactFieldsList = Vector.toList pjc.redactFieldslist <> [".set-cookie", ".password"]
   reqBodyB64 <- B64.decodeBase64 $ encodeUtf8 rM.requestBody
@@ -196,7 +200,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   let urlParams = AET.emptyObject
   let (endpointQ, endpointP)
         | endpointHash `elem` pjc.endpointHashes = ("", []) -- We have the endpoint cache in our db already. Skill adding
-        | otherwise = Endpoints.upsertEndpointQueryAndParam $ buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash (isRequestOutgoing rM.sdkType)
+        | otherwise = Endpoints.upsertEndpointQueryAndParam $ buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash isOutgoing
 
   let (shapeQ, shapeP)
         | shapeHash `elem` pjc.shapeHashes = ("", [])
