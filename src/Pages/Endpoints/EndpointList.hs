@@ -38,8 +38,8 @@ data ParamInput = ParamInput
   }
 
 
-endpointListGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
-endpointListGetH sess pid layoutM ackdM archivedM sortM hxRequestM hxBoostedM hxCurrentURL = do
+endpointListGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
+endpointListGetH sess pid layoutM ackdM archivedM hostM sortM hxRequestM hxBoostedM hxCurrentURL = do
   let ackd = maybe True textToBool ackdM
   let archived = maybe False textToBool archivedM
   pool <- asks pool
@@ -51,7 +51,9 @@ endpointListGetH sess pid layoutM ackdM archivedM sortM hxRequestM hxBoostedM hx
       (project, endpointStats) <- liftIO
         $ withPool pool do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-          endpointStats <- Endpoints.endpointRequestStatsByProject pid ackd archived
+          endpointStats <- case hostM of
+            Just h -> Endpoints.dependencyEndpointsRequestStatsByProject pid h
+            Nothing -> Endpoints.endpointRequestStatsByProject pid ackd archived
           pure (project, endpointStats)
       let bwconf =
             (def :: BWConfig)
@@ -76,17 +78,31 @@ endpointListGetH sess pid layoutM ackdM archivedM sortM hxRequestM hxBoostedM hx
       case (hxRequestM, hxBoostedM) of
         (Just "true", Just "false") -> pure elementBelowTabs
         (Just "true", Nothing) -> pure elementBelowTabs
-        _ -> pure $ bodyWrapper bwconf $ endpointListPage paramInput pid currTime endpointStats
+        _ -> pure $ bodyWrapper bwconf $ endpointListPage paramInput pid currTime endpointStats hostM
 
 
-endpointListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Endpoints.EndpointRequestStats -> Html ()
-endpointListPage paramInput pid currTime endpoints = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24"] $ do
-  h3_ [class_ "text-xl text-slate-700 flex place-items-center"] "Endpoints"
+endpointListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Endpoints.EndpointRequestStats -> Maybe Text -> Html ()
+endpointListPage paramInput pid currTime endpoints hostM = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24"] $ do
+  h3_ [class_ "text-xl text-slate-700 flex gap-1 place-items-center"] do
+    case hostM of
+      Just h -> do
+        span_ [] "Endpoints for dependency: "
+        span_ [class_ "text-blue-500 font-bold"] $ toHtml h
+      Nothing -> "Endpoints"
   div_ [class_ "py-2 px-2 space-x-6 border-b border-slate-20 mt-6 mb-8 text-sm font-light", hxBoost_ "true"] do
     let uri = deleteParam "archived" $ deleteParam "ackd" paramInput.currentURL
+    let forHost = not (T.null $ fromMaybe "" hostM)
     a_ [class_ $ "inline-block py-2 " <> if paramInput.ackd && not paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&ackd=true&archived=false"] "Active"
-    a_ [class_ $ "inline-block  py-2 " <> if not paramInput.ackd && not paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&ackd=false&archived=false"] "Inbox"
-    a_ [class_ $ "inline-block  py-2 " <> if paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&archived=true"] "Archived"
+    a_
+      [ class_ $ "inline-block  py-2 " <> if not paramInput.ackd && not paramInput.archived then " font-bold text-black " else "" <> if forHost then " cursor-not-allowed" else ""
+      , href_ $ if forHost then "#" else uri <> "&ackd=false&archived=false"
+      ]
+      "Inbox"
+    a_
+      [ class_ $ "inline-block  py-2 " <> if paramInput.archived then " font-bold text-black " else "" <> if forHost then " cursor-not-allowed" else ""
+      , href_ $ if forHost then "#" else uri <> "&archived=true"
+      ]
+      "Archived"
   div_ [class_ "grid grid-cols-5 card-round", id_ "anomalyListBelowTab", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $ endpointList' paramInput currTime pid endpoints
 
 

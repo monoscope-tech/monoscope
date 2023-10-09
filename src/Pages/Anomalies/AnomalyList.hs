@@ -162,11 +162,12 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM page loadM endpointM hxRe
             Just p -> if limit == Just 51 then 0 else Unsafe.read (toString p)
             Nothing -> 0
       (project, anomalies) <- liftIO
-        $ withPool pool
-        do
-          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-          anomalies <- Anomalies.selectAnomalies pid Nothing ackd archived sortM limit (pageInt * fetchLimit)
-          pure (project, anomalies)
+        $ withPool
+          pool
+          do
+            project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+            anomalies <- Anomalies.selectAnomalies pid Nothing ackd archived sortM limit (pageInt * fetchLimit)
+            pure (project, anomalies)
       currTime <- liftIO getCurrentTime
       let bwconf =
             (def :: BWConfig)
@@ -470,12 +471,12 @@ anomalyDetailsGetH sess pid targetHash hxBoostedM = do
       pure $ userNotMemeberPage sess
     else do
       (project, anomaly) <- liftIO
-        $ withPool pool
-        do
-          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-          anomaly <- Anomalies.getAnomalyVM pid targetHash
-          traceShowM anomaly
-          pure (project, anomaly)
+        $ withPool
+          pool
+          do
+            project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+            anomaly <- Anomalies.getAnomalyVM pid targetHash
+            pure (project, anomaly)
       let bwconf =
             (def :: BWConfig)
               { sessM = Just sess

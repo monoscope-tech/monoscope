@@ -8,16 +8,19 @@ module Models.Apis.Endpoints (
   SwEndpoint (..),
   EndpointId (..),
   EndpointRequestStats (..),
+  Host (..),
   endpointsByProjectId,
   endpointUrlPath,
   upsertEndpoints,
   endpointRequestStatsByProject,
+  dependencyEndpointsRequestStatsByProject,
   endpointRequestStatsByEndpoint,
   endpointById,
   endpointIdText,
   endpointToUrlPath,
   upsertEndpointQueryAndParam,
   endpointByHash,
+  getDependencies,
   insertEndpoints,
 ) where
 
@@ -57,6 +60,9 @@ newtype EndpointId = EndpointId {unEndpointId :: UUID.UUID}
   deriving anyclass (FromRow, ToRow)
 
 
+newtype Host = Host {host :: Text}
+  deriving stock (Show, Generic, Eq)
+  deriving anyclass (FromRow, ToRow, Default)
 instance HasField "toText" EndpointId Text where
   getField = UUID.toText . unEndpointId
 
@@ -102,9 +108,9 @@ upsertEndpointQueryAndParam endpoint = (q, params)
     host = fromMaybe @Text "" (endpoint.hosts Vector.!? 0) -- Read the first item from head or default to empty string
     q =
       [sql|  
-          INSERT INTO apis.endpoints (project_id, url_path, url_params, method, hosts, hash)
-          VALUES(?, ?, ?, ?, $$ ? => null$$, ?) 
-          ON CONFLICT (project_id, url_path, method) 
+          INSERT INTO apis.endpoints (project_id, url_path, url_params, method, hosts, hash, outgoing)
+          VALUES(?, ?, ?, ?, $$ ? => null$$, ?, ?) 
+          ON CONFLICT (hash) 
           DO 
              UPDATE SET hosts=endpoints.hosts||hstore(?, null); 
       |]
@@ -115,6 +121,7 @@ upsertEndpointQueryAndParam endpoint = (q, params)
       , MkDBField endpoint.method
       , MkDBField host
       , MkDBField endpoint.hash
+      , MkDBField endpoint.outgoing
       , MkDBField host
       ]
 
@@ -212,6 +219,30 @@ endpointRequestStatsByProject pid ackd archived = query Select (Query $ encodeUt
   |]
 
 
+dependencyEndpointsRequestStatsByProject :: Projects.ProjectId -> Text -> PgT.DBT IO (Vector EndpointRequestStats)
+dependencyEndpointsRequestStatsByProject pid host = query Select (Query $ encodeUtf8 q) (pid, host)
+  where
+    q =
+      [text|
+      SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, coalesce(min,0),  coalesce(p50,0),  coalesce(p75,0),  coalesce(p90,0),  coalesce(p95,0),  coalesce(p99,0),  coalesce(max,0) , 
+         coalesce(total_time,0), coalesce(total_time_proj,0), coalesce(total_requests,0), coalesce(total_requests_proj,0),
+         (SELECT count(*) from apis.anomalies_vm 
+                 where project_id=enp.project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
+         ) ongoing_anomalies,
+        (SELECT count(*) from apis.anomalies_vm
+                 where project_id=enp.project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
+        ) ongoing_anomalies_proj,
+        ann.acknowleged_at, 
+        ann.archived_at, 
+        ann.id
+     from apis.endpoints enp
+     left join apis.endpoint_request_stats ers on (enp.id=ers.endpoint_id)
+     left join apis.anomalies ann on (ann.anomaly_type='endpoint' AND target_hash=endpoint_hash)
+     where enp.project_id=? and ann.id is not null AND enp.outgoing = 'true' AND enp.hosts ?? ?
+     order by total_requests DESC, url_path ASC
+    |]
+
+
 -- FIXME: return endpoint_hash as well.
 -- This would require tampering with the view.
 endpointRequestStatsByEndpoint :: EndpointId -> PgT.DBT IO (Maybe EndpointRequestStats)
@@ -287,3 +318,9 @@ getEndpointParams endpoint =
   , ""
   , endpoint.hash
   )
+
+
+getDependencies :: Projects.ProjectId -> PgT.DBT IO (Vector Host)
+getDependencies pid = query Select q (Only pid)
+  where
+    q = [sql| SELECT DISTINCT unnest(akeys(hosts)) FROM apis.endpoints where  project_id = ? AND outgoing='true' |]

@@ -41,6 +41,7 @@ import Pages.Log qualified as Log
 import Pages.ManualIngestion (RequestMessageForm)
 import Pages.ManualIngestion qualified as ManualIngestion
 import Pages.Onboarding qualified as Onboarding
+import Pages.Outgoing
 import Pages.Projects.CreateProject qualified as CreateProject
 import Pages.Projects.ListProjects qualified as ListProjects
 import Pages.Projects.ManageMembers (ManageMembersForm)
@@ -100,7 +101,7 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "delete" :> Get '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
     :<|> "p" :> ProjectId :> "manage_members" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "manage_members" :> ReqBody '[FormUrlEncoded] ManageMembersForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-    :<|> "p" :> ProjectId :> "endpoints" :> QPT "layout" :> QPT "ackd" :> QPT "archived" :> QPT "sort" :> HXRequest :> HXBoosted :> HXCurrentURL :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "endpoints" :> QPT "layout" :> QPT "ackd" :> QPT "archived" :> QPT "host" :> QPT "sort" :> HXRequest :> HXBoosted :> HXCurrentURL :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "endpoints" :> Capture "endpoints_id" Endpoints.EndpointId :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "subpage" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "apis" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Api.GenerateAPIKeyForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
@@ -135,6 +136,7 @@ type ProtectedAPI =
     :<|> "charts_html" :> QP "chart_type" Charts.ChartType :> QP "group_by" Charts.GroupBy :> QP "query_by" [Charts.QueryBy] :> QP "num_slots" Int :> QP "limit" Int :> QP "theme" Text :> QPT "id" :> QP "show_legend" Bool :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "about_project" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "share" :> ReqBody '[FormUrlEncoded] Share.ReqForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
+    :<|> "p" :> ProjectId :> "outgoing" :> Get '[HTML] (Html ())
 
 
 type PublicAPI =
@@ -224,6 +226,7 @@ protectedServer sess =
     :<|> Charts.chartsGetH sess
     :<|> Survey.surveyGetH sess
     :<|> Share.shareLinkPostH sess
+    :<|> outgoingGetH sess
 
 
 publicServer :: ServerT PublicAPI DashboardM
