@@ -214,7 +214,7 @@ endpointRequestStatsByProject pid ackd archived = query Select (Query $ encodeUt
      from apis.endpoints enp
      left join apis.endpoint_request_stats ers on (enp.id=ers.endpoint_id)
      left join apis.anomalies ann on (ann.anomaly_type='endpoint' AND target_hash=endpoint_hash)
-     where enp.project_id=? and ann.id is not null $ackdAt $archivedAt
+     where enp.project_id=? and enp.outgoing='false' and ann.id is not null $ackdAt $archivedAt
      order by total_requests DESC, url_path ASC
   |]
 
