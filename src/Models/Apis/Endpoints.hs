@@ -220,7 +220,7 @@ endpointRequestStatsByProject pid ackd archived = query Select (Query $ encodeUt
 
 
 dependencyEndpointsRequestStatsByProject :: Projects.ProjectId -> Text -> PgT.DBT IO (Vector EndpointRequestStats)
-dependencyEndpointsRequestStatsByProject pid host = query Select (Query $ encodeUtf8 q) (pid, host)
+dependencyEndpointsRequestStatsByProject pid host = query Select (Query $ encodeUtf8 q) (pid, host, "'" <> host <> "'")
   where
     q =
       [text|
@@ -238,7 +238,7 @@ dependencyEndpointsRequestStatsByProject pid host = query Select (Query $ encode
      from apis.endpoints enp
      left join apis.endpoint_request_stats ers on (enp.id=ers.endpoint_id)
      left join apis.anomalies ann on (ann.anomaly_type='endpoint' AND target_hash=endpoint_hash)
-     where enp.project_id=? and ann.id is not null AND enp.outgoing = 'true' AND enp.hosts ?? ?
+     where enp.project_id=? and ann.id is not null AND enp.outgoing = 'true' AND enp.hosts ?? ? OR enp.hosts ?? ?
      order by total_requests DESC, url_path ASC
     |]
 
