@@ -136,13 +136,16 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   --
   let dumpID = fromMaybe dumpIDOriginal rM.msgId
 
+  -- TODO: This is a temporary fix to add host in creating endoint hash
+  -- These are the projects that we have already created endpoints
+  let existing_projects = V.fromList ["129a2fbe-49c9-4d55-8bea-c39aa15e6757", "1748682d-eebd-4f9c-94cd-12ca70a8fc87", "48fd83a9-cafc-40be-a37e-5efcf1fbd0c5", "5ab9055b-57b7-4823-b605-96725ca4add0", "e47c61ce-808f-48ce-90c9-81f2ba4dbf4f", "ebed9d39-bb1e-4179-b48f-848881b4b803"] :: V.Vector Text
+
   let method = T.toUpper rM.method
   let urlPath = RequestDumps.normalizeUrlPath rM.sdkType rM.statusCode rM.method rM.urlPath
-  let isOutgoing = isRequestOutgoing rM.sdkType
   let !endpointHash =
-        if isOutgoing
-          then from @String @Text $ showHex (xxHash $ encodeUtf8 $ UUID.toText rM.projectId <> rM.host <> method <> urlPath) ""
-          else from @String @Text $ showHex (xxHash $ encodeUtf8 $ UUID.toText rM.projectId <> method <> urlPath) ""
+        if UUID.toText rM.projectId `V.elem` existing_projects
+          then from @String @Text $ showHex (xxHash $ encodeUtf8 $ UUID.toText rM.projectId <> method <> urlPath) ""
+          else from @String @Text $ showHex (xxHash $ encodeUtf8 $ UUID.toText rM.projectId <> rM.host <> method <> urlPath) ""
 
   let redactFieldsList = Vector.toList pjc.redactFieldslist <> [".set-cookie", ".password"]
   reqBodyB64 <- B64.decodeBase64 $ encodeUtf8 rM.requestBody
@@ -198,6 +201,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   -- Since it foes into the endpoint, maybe it should be the keys and their type? I'm unsure.
   -- At the moment, if an endpoint exists, we don't insert it anymore. But then how do we deal with requests from new hosts?
   let urlParams = AET.emptyObject
+  let isOutgoing = isRequestOutgoing rM.sdkType
   let (endpointQ, endpointP)
         | endpointHash `elem` pjc.endpointHashes = ("", []) -- We have the endpoint cache in our db already. Skill adding
         | otherwise = Endpoints.upsertEndpointQueryAndParam $ buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash isOutgoing
