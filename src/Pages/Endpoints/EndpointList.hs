@@ -21,6 +21,7 @@ import Data.Time (UTCTime)
 import Data.Time.Clock (getCurrentTime)
 import Data.Tuple.Extra (fst3)
 import Data.UUID qualified as UUID
+import Data.Vector qualified as V
 import Models.Apis.Anomalies qualified as Anomalies
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
@@ -38,8 +39,8 @@ data ParamInput = ParamInput
   }
 
 
-endpointListGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
-endpointListGetH sess pid layoutM ackdM archivedM hostM sortM hxRequestM hxBoostedM hxCurrentURL = do
+endpointListGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
+endpointListGetH sess pid layoutM ackdM archivedM hostM projectHostM sortM hxRequestM hxBoostedM hxCurrentURL = do
   let ackd = maybe True textToBool ackdM
   let archived = maybe False textToBool archivedM
   pool <- asks pool
@@ -48,13 +49,14 @@ endpointListGetH sess pid layoutM ackdM archivedM hostM sortM hxRequestM hxBoost
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, endpointStats) <- liftIO
+      (project, endpointStats, projHosts) <- liftIO
         $ withPool pool do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
           endpointStats <- case hostM of
             Just h -> Endpoints.dependencyEndpointsRequestStatsByProject pid h
-            Nothing -> Endpoints.endpointRequestStatsByProject pid ackd archived
-          pure (project, endpointStats)
+            Nothing -> Endpoints.endpointRequestStatsByProject pid ackd archived projectHostM
+          projHosts <- Endpoints.getProjectHosts pid
+          pure (project, endpointStats, projHosts)
       let bwconf =
             (def :: BWConfig)
               { sessM = Just sess
@@ -78,17 +80,39 @@ endpointListGetH sess pid layoutM ackdM archivedM hostM sortM hxRequestM hxBoost
       case (hxRequestM, hxBoostedM) of
         (Just "true", Just "false") -> pure elementBelowTabs
         (Just "true", Nothing) -> pure elementBelowTabs
-        _ -> pure $ bodyWrapper bwconf $ endpointListPage paramInput pid currTime endpointStats hostM
+        _ -> pure $ bodyWrapper bwconf $ endpointListPage paramInput pid currTime endpointStats projHosts hostM projectHostM
 
 
-endpointListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Endpoints.EndpointRequestStats -> Maybe Text -> Html ()
-endpointListPage paramInput pid currTime endpoints hostM = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24"] $ do
+endpointListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Endpoints.EndpointRequestStats -> Vector Endpoints.Host -> Maybe Text -> Maybe Text -> Html ()
+endpointListPage paramInput pid currTime endpoints hosts hostM pHostM = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24"] $ do
   h3_ [class_ "text-xl text-slate-700 flex gap-1 place-items-center"] do
     case hostM of
       Just h -> do
         span_ [] "Endpoints for dependency: "
         span_ [class_ "text-blue-500 font-bold"] $ toHtml h
       Nothing -> "Endpoints"
+  when (isNothing hostM) $ div_ [class_ "mt-8 flex  items-center gap-2"] do
+    span_ [class_ "font-bold"] "Host "
+    div_ [class_ "relative flex items-center border rounded focus:ring-2 focus:ring-blue-200 active:ring-2 active:ring-blue-200", style_ "width:220px"] do
+      button_
+        [ [__| on click toggle .hidden on #hosts_container |]
+        , data_ "current" "1"
+        , class_ "w-full flex text-slate-600 justify_between items-center cursor-pointer px-2 py-1"
+        ]
+        do
+          span_ [class_ "ml-1 text-sm text-slate-600"] $ toHtml $ fromMaybe "Select host" pHostM
+      img_ [src_ "/assets/svgs/select_chevron.svg", style_ "height:15px; width:15px"]
+      div_ [id_ "hosts_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] do
+        div_ [class_ "flex flex-col"] do
+          forM_ hosts $ \host -> do
+            let prm = "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"
+            a_
+              [ class_ prm
+              , href_ $ paramInput.currentURL <> "&project_host=" <> host.host
+              ]
+              do
+                span_ [class_ "ml-2 text-sm text-slate-600"] $ toHtml host.host
+
   div_ [class_ "py-2 px-2 space-x-6 border-b border-slate-20 mt-6 mb-8 text-sm font-light", hxBoost_ "true"] do
     let uri = deleteParam "archived" $ deleteParam "ackd" paramInput.currentURL
     let forHost = not (T.null $ fromMaybe "" hostM)

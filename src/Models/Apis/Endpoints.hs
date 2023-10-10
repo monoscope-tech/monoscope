@@ -20,7 +20,7 @@ module Models.Apis.Endpoints (
   endpointToUrlPath,
   upsertEndpointQueryAndParam,
   endpointByHash,
-  getDependencies,
+  getProjectHosts,
   insertEndpoints,
 ) where
 
@@ -191,11 +191,12 @@ data EndpointRequestStats = EndpointRequestStats
 
 -- FIXME: Include and return a boolean flag to show if fields that have annomalies.
 -- FIXME: return endpoint_hash as well.
-endpointRequestStatsByProject :: Projects.ProjectId -> Bool -> Bool -> PgT.DBT IO (Vector EndpointRequestStats)
-endpointRequestStatsByProject pid ackd archived = query Select (Query $ encodeUtf8 q) (Only pid)
+endpointRequestStatsByProject :: Projects.ProjectId -> Bool -> Bool -> Maybe Text -> PgT.DBT IO (Vector EndpointRequestStats)
+endpointRequestStatsByProject pid ackd archived pHostM = case pHostM of Just h -> query Select (Query $ encodeUtf8 q) (pid, h); Nothing -> query Select (Query $ encodeUtf8 q) (Only pid)
   where
     ackdAt = if ackd && not archived then "AND ann.acknowleged_at IS NOT NULL AND ann.archived_at IS NULL " else "AND ann.acknowleged_at IS NULL "
     archivedAt = if archived then "AND ann.archived_at IS NOT NULL " else " AND ann.archived_at IS NULL"
+    pHostQery = case pHostM of Just h -> " AND enp.hosts ?? ? "; Nothing -> ""
     -- TODO This query to get the anomalies for the anomalies page might be too complex.
     -- Does it make sense yet to remove the call to endpoint_request_stats? since we're using async charts already
     q =
@@ -214,7 +215,7 @@ endpointRequestStatsByProject pid ackd archived = query Select (Query $ encodeUt
      from apis.endpoints enp
      left join apis.endpoint_request_stats ers on (enp.id=ers.endpoint_id)
      left join apis.anomalies ann on (ann.anomaly_type='endpoint' AND target_hash=endpoint_hash)
-     where enp.project_id=? and enp.outgoing=false and ann.id is not null $ackdAt $archivedAt
+     where enp.project_id=? and enp.outgoing=false and ann.id is not null $ackdAt $archivedAt $pHostQery
      order by total_requests DESC, url_path ASC
   |]
 
@@ -238,7 +239,7 @@ dependencyEndpointsRequestStatsByProject pid host = query Select (Query $ encode
      from apis.endpoints enp
      left join apis.endpoint_request_stats ers on (enp.id=ers.endpoint_id)
      left join apis.anomalies ann on (ann.anomaly_type='endpoint' AND target_hash=endpoint_hash)
-     where enp.project_id=? and ann.id is not null AND enp.outgoing = true AND enp.hosts ?? ? OR enp.hosts ?? ?
+     where enp.project_id=? and enp.id is not null and ann.id is not null AND enp.outgoing = true AND enp.hosts ?? ? OR enp.hosts ?? ?
      order by total_requests DESC, url_path ASC
     |]
 
@@ -320,7 +321,7 @@ getEndpointParams endpoint =
   )
 
 
-getDependencies :: Projects.ProjectId -> PgT.DBT IO (Vector Host)
-getDependencies pid = query Select q (Only pid)
+getProjectHosts :: Projects.ProjectId -> PgT.DBT IO (Vector Host)
+getProjectHosts pid = query Select q (Only pid)
   where
-    q = [sql| SELECT DISTINCT unnest(akeys(hosts)) FROM apis.endpoints where  project_id = ? AND outgoing='true' |]
+    q = [sql| SELECT DISTINCT unnest(akeys(hosts)) FROM apis.endpoints where  project_id = ? AND outgoing=false |]
