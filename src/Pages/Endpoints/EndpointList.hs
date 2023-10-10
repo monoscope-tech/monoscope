@@ -116,15 +116,19 @@ endpointListPage paramInput pid currTime endpoints hosts hostM pHostM = div_ [cl
   div_ [class_ "py-2 px-2 space-x-6 border-b border-slate-20 mt-6 mb-8 text-sm font-light", hxBoost_ "true"] do
     let uri = deleteParam "archived" $ deleteParam "ackd" paramInput.currentURL
     let forHost = not (T.null $ fromMaybe "" hostM)
-    a_ [class_ $ "inline-block py-2 " <> if paramInput.ackd && not paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&ackd=true&archived=false"] "Active"
+    a_
+      [ class_ $ "inline-block py-2 " <> if paramInput.ackd && not paramInput.archived then " font-bold text-black " else ""
+      , href_ $ uri <> "&ackd=true&archived=false" <> maybe "" ("&project_host=" <>) pHostM
+      ]
+      "Active"
     a_
       [ class_ $ "inline-block  py-2 " <> if not paramInput.ackd && not paramInput.archived then " font-bold text-black " else "" <> if forHost then " cursor-not-allowed" else ""
-      , href_ $ if forHost then "#" else uri <> "&ackd=false&archived=false"
+      , href_ $ if forHost then "#" else uri <> "&ackd=false&archived=false" <> maybe "" ("&project_host=" <>) pHostM
       ]
       "Inbox"
     a_
       [ class_ $ "inline-block  py-2 " <> if paramInput.archived then " font-bold text-black " else "" <> if forHost then " cursor-not-allowed" else ""
-      , href_ $ if forHost then "#" else uri <> "&archived=true"
+      , href_ $ if forHost then "#" else uri <> "&archived=true" <> maybe "" ("&project_host=" <>) pHostM
       ]
       "Archived"
   div_ [class_ "grid grid-cols-5 card-round", id_ "anomalyListBelowTab", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $ endpointList' paramInput currTime pid endpoints
