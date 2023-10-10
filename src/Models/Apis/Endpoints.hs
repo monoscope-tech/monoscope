@@ -196,7 +196,7 @@ endpointRequestStatsByProject pid ackd archived pHostM = case pHostM of Just h -
   where
     ackdAt = if ackd && not archived then "AND ann.acknowleged_at IS NOT NULL AND ann.archived_at IS NULL " else "AND ann.acknowleged_at IS NULL "
     archivedAt = if archived then "AND ann.archived_at IS NOT NULL " else " AND ann.archived_at IS NULL"
-    pHostQery = case pHostM of Just h -> " AND enp.hosts ?? ? "; Nothing -> ""
+    pHostQery = case pHostM of Just h -> " AND enp.hosts ?? ?"; Nothing -> ""
     -- TODO This query to get the anomalies for the anomalies page might be too complex.
     -- Does it make sense yet to remove the call to endpoint_request_stats? since we're using async charts already
     q =
@@ -216,7 +216,7 @@ endpointRequestStatsByProject pid ackd archived pHostM = case pHostM of Just h -
      left join apis.endpoint_request_stats ers on (enp.id=ers.endpoint_id)
      left join apis.anomalies ann on (ann.anomaly_type='endpoint' AND target_hash=endpoint_hash)
      where enp.project_id=? and enp.outgoing=false and ann.id is not null $ackdAt $archivedAt $pHostQery
-     order by total_requests DESC, url_path ASC
+     order by total_requests DESC, url_path ASC;
   |]
 
 

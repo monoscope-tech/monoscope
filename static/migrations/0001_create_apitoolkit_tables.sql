@@ -414,6 +414,8 @@ ALTER TABLE apis.request_dumps
 ALTER TABLE apis.request_dumps SET (timescaledb.compress, timescaledb.compress_orderby = 'created_at DESC', timescaledb.compress_segmentby = 'project_id');
 SELECT add_compression_policy('apis.request_dumps', INTERVAL '14d');
 
+ALTER TABLE apis.request_dumps ADD COLUMN request_type TEXT NOT NULL DEFAULT 'Incoming';
+
 -- Shapes aggregated by the min. 
 DROP MATERIALIZED VIEW IF EXISTS APIS.SHAPES_AGG_1MIN;
 CREATE MATERIALIZED VIEW APIS.SHAPES_AGG_1MIN WITH (TIMESCALEDB.CONTINUOUS) AS

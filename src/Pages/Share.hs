@@ -217,6 +217,7 @@ getRequest sid = query Select q (Only sid)
           rd.service_version as service_version,
           rd.errors AS errors,
           rd.tags AS tags
+          rd.request_type as request_type,
       FROM apis.share_requests AS sr
       JOIN apis.request_dumps AS rd ON sr.request_dump_id = rd.id
       WHERE sr.id = ? AND sr.expired_at > current_timestamp;

@@ -43,6 +43,7 @@ import Models.Apis.Fields.Types qualified as Fields (
  )
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.RequestDumps (SDKTypes (GoOutgoing, JsAxiosOutgoing))
+import Models.Apis.RequestDumps qualified as RequestDump
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
@@ -264,6 +265,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
           , serviceVersion = rM.serviceVersion
           , errors = errorsJSONB
           , tags = tagsV
+          , requestType = RequestDump.getRequestType rM.sdkType
           }
 
   -- Build all fields and formats, unzip them as separate lists and append them to query and params
