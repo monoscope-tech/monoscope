@@ -41,8 +41,8 @@ onboardingGetH sess pid polling redirected current_tab = do
             project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
             apiKeys <- ProjectApiKeys.projectApiKeysByProjectId pid
             requestDumps <- RequestDumps.countRequestDumpByProject pid
-            let apikey = V.head apiKeys
-            pure (project, apikey.keyPrefix, requestDumps > 0)
+            let apikey = if V.null apiKeys then "<APIKEY>" else (V.head apiKeys).keyPrefix
+            pure (project, apikey, requestDumps > 0)
       let bwconf =
             (def :: BWConfig)
               { sessM = Just sess
