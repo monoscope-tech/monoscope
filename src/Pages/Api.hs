@@ -23,6 +23,7 @@ import Relude
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
 
+import Models.Apis.RequestDumps qualified as RequestDumps
 import NeatInterpolation (text)
 import Utils
 import Web.FormUrlEncoded (FromForm)
@@ -97,19 +98,22 @@ apiGetH sess pid = do
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, apiKeys) <- liftIO
+      (project, apiKeys, hasRequest) <- liftIO
         $ withPool
           pool
           do
             project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
             apiKeys <- ProjectApiKeys.projectApiKeysByProjectId pid
-            pure (project, apiKeys)
+            requestDumps <- RequestDumps.countRequestDumpByProject pid
+
+            pure (project, apiKeys, requestDumps > 0)
 
       let bwconf =
             (def :: BWConfig)
               { sessM = Just sess
               , currProject = project
               , pageTitle = "API Keys"
+              , hasIntegrated = Just hasRequest
               }
       pure $ bodyWrapper bwconf $ apiKeysPage pid apiKeys
 
