@@ -10,6 +10,7 @@ module Pages.Anomalies.AnomalyList (
   AnomalyBulkForm,
   anomalyAcknowlegeButton,
   anomalyArchiveButton,
+  anomalyEvents,
 ) where
 
 import Config
@@ -162,11 +163,12 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM page loadM endpointM hxRe
             Just p -> if limit == Just 51 then 0 else Unsafe.read (toString p)
             Nothing -> 0
       (project, anomalies) <- liftIO
-        $ withPool pool
-        do
-          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-          anomalies <- Anomalies.selectAnomalies pid Nothing ackd archived sortM limit (pageInt * fetchLimit)
-          pure (project, anomalies)
+        $ withPool
+          pool
+          do
+            project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+            anomalies <- Anomalies.selectAnomalies pid Nothing ackd archived sortM limit (pageInt * fetchLimit)
+            pure (project, anomalies)
       currTime <- liftIO getCurrentTime
       let bwconf =
             (def :: BWConfig)
@@ -229,23 +231,6 @@ anomalyListPage paramInput pid currTime anomalies nextFetchUrl = div_ [class_ "w
     a_ [class_ $ "inline-block  py-2 " <> if paramInput.ackd && not paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&ackd=true&archived=false"] "Acknowleged"
     a_ [class_ $ "inline-block  py-2 " <> if paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&archived=true"] "Archived"
   div_ [class_ "grid grid-cols-5 card-round", id_ "anomalyListBelowTab", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $ anomalyList paramInput pid currTime anomalies nextFetchUrl
-  script_
-    [text|
-      function changeTab(tabId) {
-        const tabLinks = document.querySelectorAll('.sdk_tab');
-        tabLinks.forEach(link => link.classList.remove('sdk_tab_active'));
-        const clickedTabLink = document.getElementById(tabId);
-        clickedTabLink.classList.add('sdk_tab_active')
-        const tabContents = document.querySelectorAll('.sdk_tab_content');
-        tabContents.forEach(content => {
-          content.classList.add("hidden")
-          content.classList.remove ("sdk_tab_content_active")
-        });
-        const tabContent = document.getElementById(tabId + '_content');
-        tabContent.classList.remove("hidden")
-        setTimeout(()=>{tabContent.classList.add("sdk_tab_content_active")},10)
-      }
-|]
 
 
 anomalyList :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Anomalies.AnomalyVM -> Maybe Text -> Html ()
@@ -450,6 +435,7 @@ anomalyItem hideByDefault currTime anomaly icon title subTitle content = do
               , [__|on click remove .hidden from #expand-an-modal then
                   remove .hidden from #an-modal-content-loader
                   fetch `${@data-an-url}` as html then put it into #an-modal-content
+                  _hyperscript.processNode(#expand-an-modal)
                   add .hidden to #an-modal-content-loader
                   end
                 |]
@@ -470,12 +456,12 @@ anomalyDetailsGetH sess pid targetHash hxBoostedM = do
       pure $ userNotMemeberPage sess
     else do
       (project, anomaly) <- liftIO
-        $ withPool pool
-        do
-          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-          anomaly <- Anomalies.getAnomalyVM pid targetHash
-          traceShowM anomaly
-          pure (project, anomaly)
+        $ withPool
+          pool
+          do
+            project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+            anomaly <- Anomalies.getAnomalyVM pid targetHash
+            pure (project, anomaly)
       let bwconf =
             (def :: BWConfig)
               { sessM = Just sess
@@ -485,7 +471,6 @@ anomalyDetailsGetH sess pid targetHash hxBoostedM = do
       case anomaly of
         Just an -> do
           let chartQuery = Just $ anomaly2ChartQuery an.anomalyType an.targetHash
-          events <- liftIO $ withPool pool $ RequestDump.selectAnomalyEvents pid an.targetHash an.anomalyType
           currTime <- liftIO getCurrentTime
 
           -- for endpoint anomalies
@@ -505,20 +490,20 @@ anomalyDetailsGetH sess pid targetHash hxBoostedM = do
 
           case hxBoostedM of
             Just _ -> case an.anomalyType of
-              Anomalies.ATEndpoint -> pure $ anomalyDetailsPage an events (Just shapesWithFieldsMap) Nothing chartQuery currTime True
-              Anomalies.ATShape -> pure $ anomalyDetailsPage an events Nothing (Just anFields) chartQuery currTime True
-              _ -> pure $ anomalyDetailsPage an events (Just shapesWithFieldsMap) Nothing chartQuery currTime True
+              Anomalies.ATEndpoint -> pure $ anomalyDetailsPage an (Just shapesWithFieldsMap) Nothing chartQuery currTime True
+              Anomalies.ATShape -> pure $ anomalyDetailsPage an Nothing (Just anFields) chartQuery currTime True
+              _ -> pure $ anomalyDetailsPage an (Just shapesWithFieldsMap) Nothing chartQuery currTime True
             Nothing -> pure $ bodyWrapper bwconf $ div_ [class_ "w-full px-32"] do
               h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
               case an.anomalyType of
-                Anomalies.ATEndpoint -> anomalyDetailsPage an events (Just shapesWithFieldsMap) Nothing chartQuery currTime False
-                Anomalies.ATShape -> anomalyDetailsPage an events Nothing (Just anFields) chartQuery currTime False
-                _ -> anomalyDetailsPage an events (Just shapesWithFieldsMap) Nothing chartQuery currTime False
+                Anomalies.ATEndpoint -> anomalyDetailsPage an (Just shapesWithFieldsMap) Nothing chartQuery currTime False
+                Anomalies.ATShape -> anomalyDetailsPage an Nothing (Just anFields) chartQuery currTime False
+                _ -> anomalyDetailsPage an (Just shapesWithFieldsMap) Nothing chartQuery currTime False
         Nothing -> pure $ bodyWrapper bwconf $ h4_ [] "ANOMALY NOT FOUND"
 
 
-anomalyDetailsPage :: AnomalyVM -> Vector RequestDump.RequestDumpLogItem -> Maybe (Vector Shapes.ShapeWithFields) -> Maybe (Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field]) -> Maybe QueryBy -> UTCTime -> Bool -> Html ()
-anomalyDetailsPage anomaly requestsItems shapesWithFieldsMap fields chartQuery currTime modal = do
+anomalyDetailsPage :: AnomalyVM -> Maybe (Vector Shapes.ShapeWithFields) -> Maybe (Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field]) -> Maybe QueryBy -> UTCTime -> Bool -> Html ()
+anomalyDetailsPage anomaly shapesWithFieldsMap fields chartQuery currTime modal = do
   div_ [class_ "w-full h-full"] do
     div_ [class_ "w-full"] do
       div_ [class_ "flex items-center justify-between gap-2 flex-wrap"] do
@@ -587,15 +572,32 @@ anomalyDetailsPage anomaly requestsItems shapesWithFieldsMap fields chartQuery c
 
     div_ [class_ "mt-6 space-y-4"] do
       div_ [class_ "flex items-center gap-10 font-semibold border-b"] do
+        let events_url = "/p/" <> anomaly.projectId.toText <> "/anomaly/events/" <> anomaly.targetHash <> "/" <> show anomaly.anomalyType
+        script_
+          [type_ "text/hyperscript"]
+          [text|
+          behavior Navigatable(content)
+             on click remove .sdk_tab_active from .sdk_tab 
+                then add .sdk_tab_active to me 
+                then add .hidden to .sdk_tab_content 
+                then remove .hidden from content
+                wait 10ms
+                then add .sdk_tab_content_active to content
+                if content is #events_content then
+                  fetch `$${@data-events-url}` as html then put it into #events_content
+                  _hyperscript.processNode(#events_content)
+          end
+        |]
         button_
           [ class_ "sdk_tab sdk_tab_active"
-          , onclick_ "changeTab('overview')"
+          , [__| install Navigatable(content: #overview_content) |]
           , id_ "overview"
           ]
           "Overview"
         button_
           [ class_ "sdk_tab"
-          , onclick_ "changeTab('events')"
+          , [__| install Navigatable(content: #events_content) |]
+          , term "data-events-url" events_url
           , id_ "events"
           ]
           "All events"
@@ -606,25 +608,7 @@ anomalyDetailsPage anomaly requestsItems shapesWithFieldsMap fields chartQuery c
             Anomalies.ATShape -> requestShapeOverview fields
             Anomalies.ATFormat -> anomalyFormatOverview anomaly
             _ -> ""
-        div_ [class_ "grow overflow-y-auto h-full whitespace-nowrap text-sm divide-y overflow-x-hidden sdk_tab_content", id_ "events_content"] do
-          Log.logItemRows anomaly.projectId requestsItems [] ""
-  script_
-    [text|
-      function changeTab(tabId) {
-        const tabLinks = document.querySelectorAll('.sdk_tab');
-        tabLinks.forEach(link => link.classList.remove('sdk_tab_active'));
-        const clickedTabLink = document.getElementById(tabId);
-        clickedTabLink.classList.add('sdk_tab_active')
-        const tabContents = document.querySelectorAll('.sdk_tab_content');
-        tabContents.forEach(content => {
-          content.classList.add("hidden")
-          content.classList.remove ("sdk_tab_content_active")
-        });
-        const tabContent = document.getElementById(tabId + '_content');
-        tabContent.classList.remove("hidden")
-        setTimeout(()=>{tabContent.classList.add("sdk_tab_content_active")},10)
-      }
-|]
+        div_ [class_ "grow overflow-y-auto h-full whitespace-nowrap text-sm divide-y overflow-x-hidden sdk_tab_content", id_ "events_content"] pass
   script_
     [type_ "text/hyperscript"]
     [text|
@@ -681,6 +665,14 @@ endpointOverview shapesWithFieldsMap =
         reqResSection "Request" True (Vector.toList s)
         reqResSection "Response" False (Vector.toList s)
       Nothing -> pass
+
+
+anomalyEvents :: Sessions.PersistentSession -> Projects.ProjectId -> Text -> Text -> DashboardM (Html ())
+anomalyEvents sess pid targetHash anomalyType = do
+  pool <- asks pool
+  events <- liftIO $ withPool pool $ RequestDump.selectAnomalyEvents pid targetHash (Anomalies.parseAnomalyRawTypes anomalyType)
+  pure $ div_ [class_ "w-full"] do
+    Log.logItemRows pid events [] ""
 
 
 requestShapeOverview :: Maybe (Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field]) -> Html ()

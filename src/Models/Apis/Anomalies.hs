@@ -13,6 +13,7 @@ module Models.Apis.Anomalies (
   getAnomalyVM,
   anomalyIdText,
   countAnomalies,
+  parseAnomalyRawTypes,
 ) where
 
 import Data.Aeson qualified as AE
@@ -43,6 +44,7 @@ import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
 import Optics.TH
 import Relude hiding (id)
+import Servant (FromHttpApiData (..))
 import Utils
 import Web.HttpApiData (FromHttpApiData)
 
@@ -93,6 +95,14 @@ parseAnomalyTypes "endpoint" = Just ATEndpoint
 parseAnomalyTypes "shape" = Just ATShape
 parseAnomalyTypes "format" = Just ATFormat
 parseAnomalyTypes _ = Nothing
+
+
+parseAnomalyRawTypes :: Text -> AnomalyTypes
+parseAnomalyRawTypes "ATField" = ATField
+parseAnomalyRawTypes "ATEndpoint" = ATEndpoint
+parseAnomalyRawTypes "ATShape" = ATShape
+parseAnomalyRawTypes "ATFormat" = ATFormat
+parseAnomalyRawTypes _ = ATUnknown
 
 
 instance FromField AnomalyTypes where

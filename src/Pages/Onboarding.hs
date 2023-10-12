@@ -657,7 +657,6 @@ tabContentDjango apikey current_tab =
                       span_ [class_ "hljs-string"] "    'apitoolkit_django.APIToolkit'" >> ",\n"
                       span_ [] "]"
 
-
 tabs :: Text -> Html ()
 tabs current_tab =
   ul_ [class_ "flex flex-nowrap overflow-x-auto gap-6 font-medium"] $ do
