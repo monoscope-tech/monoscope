@@ -583,9 +583,11 @@ anomalyDetailsPage anomaly shapesWithFieldsMap fields chartQuery currTime modal 
                 then remove .hidden from content
                 wait 10ms
                 then add .sdk_tab_content_active to content
-                if content is #events_content then
+                if content is #events_content and @data-events-fetched is "false" then
                   fetch `$${@data-events-url}` as html then put it into #events_content
                   _hyperscript.processNode(#events_content)
+                  set @data-events-fetched to "true"
+                end
           end
         |]
         button_
@@ -598,6 +600,7 @@ anomalyDetailsPage anomaly shapesWithFieldsMap fields chartQuery currTime modal 
           [ class_ "sdk_tab"
           , [__| install Navigatable(content: #events_content) |]
           , term "data-events-url" events_url
+          , term "data-events-fetched" "false"
           , id_ "events"
           ]
           "All events"
@@ -608,7 +611,10 @@ anomalyDetailsPage anomaly shapesWithFieldsMap fields chartQuery currTime modal 
             Anomalies.ATShape -> requestShapeOverview fields
             Anomalies.ATFormat -> anomalyFormatOverview anomaly
             _ -> ""
-        div_ [class_ "grow overflow-y-auto h-full whitespace-nowrap text-sm divide-y overflow-x-hidden sdk_tab_content", id_ "events_content"] pass
+        div_ [class_ "grow overflow-y-auto h-full whitespace-nowrap text-sm divide-y overflow-x-hidden sdk_tab_content", id_ "events_content"] do
+          div_ [class_ "w-full flex justify-center overflow-hidden"] do
+            loader
+
   script_
     [type_ "text/hyperscript"]
     [text|
