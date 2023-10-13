@@ -207,10 +207,8 @@ CREATE TABLE IF NOT EXISTS apis.endpoints
 SELECT manage_updated_at('apis.endpoints');
 CREATE INDEX IF NOT EXISTS idx_apis_endpoints_project_id ON apis.endpoints(project_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_endpoints_hash ON apis.endpoints(hash);
-ALTER TABLE apis.endpoints
-ADD COLUMN outgoing BOOLEAN DEFAULT FALSE;
-ALTER TABLE apis.endpoints DROP CONSTRAINT endpoints_project_url_method_key;
-ALTER TABLE apis.endpoints ADD CONSTRAINT endpoints_hash_key UNIQUE (hash);
+ALTER TABLE apis.endpoints ADD COLUMN outgoing BOOLEAN DEFAULT FALSE;
+ALTER TABLE apis.endpoints DROP CONSTRAINT endpoints_project_id_url_path_method_key;
 
 -----------------------------------------------------------------------
 -- SHAPES table 
