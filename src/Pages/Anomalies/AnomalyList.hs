@@ -23,6 +23,7 @@ import Data.Text (replace)
 import Data.Text qualified as T
 import Data.Time (UTCTime, ZonedTime, defaultTimeLocale, formatTime, getCurrentTime, getTimeZone, zonedTimeToUTC)
 import Data.Tuple.Extra (fst3)
+import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute, withPool)
@@ -488,22 +489,25 @@ anomalyDetailsGetH sess pid targetHash hxBoostedM = do
             let delFM = groupFieldsByCategory delF
             pure (newFM, updfM, delFM)
 
+          -- for formats
+          anFormats <- liftIO $ withPool pool $ Fields.getFieldsByEndpointKeyPathAndCategory pid (maybe "" (\x -> UUID.toText x.unEndpointId) an.endpointId) (fromMaybe "" an.fieldKeyPath) (fromMaybe FCRequestBody an.fieldCategory)
+          traceShowM anFormats
           case hxBoostedM of
             Just _ -> case an.anomalyType of
-              Anomalies.ATEndpoint -> pure $ anomalyDetailsPage an (Just shapesWithFieldsMap) Nothing chartQuery currTime True
-              Anomalies.ATShape -> pure $ anomalyDetailsPage an Nothing (Just anFields) chartQuery currTime True
-              _ -> pure $ anomalyDetailsPage an (Just shapesWithFieldsMap) Nothing chartQuery currTime True
+              Anomalies.ATEndpoint -> pure $ anomalyDetailsPage an (Just shapesWithFieldsMap) Nothing Nothing chartQuery currTime True
+              Anomalies.ATShape -> pure $ anomalyDetailsPage an Nothing (Just anFields) Nothing chartQuery currTime True
+              _ -> pure $ anomalyDetailsPage an (Just shapesWithFieldsMap) Nothing (Just anFormats) chartQuery currTime True
             Nothing -> pure $ bodyWrapper bwconf $ div_ [class_ "w-full px-32"] do
               h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
               case an.anomalyType of
-                Anomalies.ATEndpoint -> anomalyDetailsPage an (Just shapesWithFieldsMap) Nothing chartQuery currTime False
-                Anomalies.ATShape -> anomalyDetailsPage an Nothing (Just anFields) chartQuery currTime False
-                _ -> anomalyDetailsPage an (Just shapesWithFieldsMap) Nothing chartQuery currTime False
+                Anomalies.ATEndpoint -> anomalyDetailsPage an (Just shapesWithFieldsMap) Nothing Nothing chartQuery currTime False
+                Anomalies.ATShape -> anomalyDetailsPage an Nothing (Just anFields) Nothing chartQuery currTime False
+                _ -> anomalyDetailsPage an (Just shapesWithFieldsMap) Nothing (Just anFormats) chartQuery currTime False
         Nothing -> pure $ bodyWrapper bwconf $ h4_ [] "ANOMALY NOT FOUND"
 
 
-anomalyDetailsPage :: AnomalyVM -> Maybe (Vector Shapes.ShapeWithFields) -> Maybe (Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field]) -> Maybe QueryBy -> UTCTime -> Bool -> Html ()
-anomalyDetailsPage anomaly shapesWithFieldsMap fields chartQuery currTime modal = do
+anomalyDetailsPage :: AnomalyVM -> Maybe (Vector Shapes.ShapeWithFields) -> Maybe (Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field]) -> Maybe (Vector Text) -> Maybe QueryBy -> UTCTime -> Bool -> Html ()
+anomalyDetailsPage anomaly shapesWithFieldsMap fields prvFormatsM chartQuery currTime modal = do
   div_ [class_ "w-full h-full"] do
     div_ [class_ "w-full"] do
       div_ [class_ "flex items-center justify-between gap-2 flex-wrap"] do
@@ -609,7 +613,7 @@ anomalyDetailsPage anomaly shapesWithFieldsMap fields chartQuery currTime modal 
           case anomaly.anomalyType of
             Anomalies.ATEndpoint -> endpointOverview shapesWithFieldsMap
             Anomalies.ATShape -> requestShapeOverview fields
-            Anomalies.ATFormat -> anomalyFormatOverview anomaly
+            Anomalies.ATFormat -> anomalyFormatOverview anomaly (fromMaybe [] prvFormatsM)
             _ -> ""
         div_ [class_ "grow overflow-y-auto h-full whitespace-nowrap text-sm divide-y overflow-x-hidden sdk_tab_content", id_ "events_content"] do
           div_ [class_ "w-full flex justify-center overflow-hidden"] do
@@ -720,25 +724,52 @@ requestShapeOverview fieldChanges = do
               subSubSection "Response Headers" (Map.lookup Fields.FCResponseHeader th)
               subSubSection "Response Body" (Map.lookup Fields.FCResponseBody th)
       Nothing -> pass
-anomalyFormatOverview :: AnomalyVM -> Html ()
-anomalyFormatOverview an =
-  div_ [class_ "flex flex-col gap-4 mt-6 text-gray-600"] do
-    div_ [class_ "flex gap-2"] do
-      span_ [class_ "font-semibold"] "Field format:"
-      span_ [] $ toHtml $ fieldTypeToText $ fromMaybe FTString an.formatType
-    div_ [class_ "flex gap-2"] do
-      span_ [class_ "font-semibold"] "Field Category:"
-      span_ [] $ toHtml $ fieldCategoryEnumToText $ fromMaybe FCRequestBody an.fieldCategory
-    div_ [class_ "flex gap-2"] do
-      span_ [class_ "font-semibold"] "Field Key Path:"
-      span_ [] $ toHtml $ fromMaybe "" an.fieldKeyPath
-    div_ [class_ "flex gap-2"] do
-      span_ [class_ "font-semibold"] "Field Key:"
-      span_ [] $ toHtml $ fromMaybe "" an.fieldKey
-    div_ [class_ "flex gap-2 items-center"] do
-      span_ [class_ "font-semibold"] "Examples:"
-      span_ $ toHtml $ maybe "" (T.intercalate ", " . Vector.toList) an.formatExamples
+anomalyFormatOverview :: AnomalyVM -> Vector Text -> Html ()
+anomalyFormatOverview an prevFormats =
+  section_ [class_ "space-y-10"] do
+    div_ [class_ "flex items-center gap-6"] do
+      div_ do
+        h6_ [class_ "text-sm text-slate-800"] "FIELD NAME"
+        h3_ [class_ "text-base text-slate-800"] $ toHtml $ fromMaybe "" an.fieldKey
+      div_ do
+        h6_ [class_ "text-sm text-slate-800 "] "FIELD PATH"
+        h3_ [class_ "text-base text-slate-800 monospace"] $ toHtml $ fromMaybe "" an.fieldKeyPath
+      div_ do
+        h6_ [class_ "text-sm text-slate-800"] "FIELD CATEGORY"
+        h4_ [class_ "text-base text-slate-800"] $ EndpointComponents.fieldCategoryToDisplay $ fromMaybe FCRequestBody an.fieldCategory
+    div_ [class_ "flex items-center gap-6"] do
+      div_ do
+        h5_ [class_ "text-sm text-slate-800"] "NEW FIELD FORMAT"
+        h3_ [class_ "text-base text-slate-800 monospace"] $ toHtml $ fieldTypeToText $ fromMaybe FTString an.formatType
+      div_ do
+        h5_ [class_ "text-sm text-slate-800"] "PREVIOUS FIELD FORMATS"
+        ul_ [class_ "list-disc"] do
+          prevFormats & mapM_ \f -> do
+            li_ [class_ "ml-10 text-slate-800 text-sm"] $ toHtml f
+    div_ do
+      h6_ [class_ "text-slate-600 mt-4 text-sm"] "EXAMPLE VALUES"
+      ul_ [class_ "list-disc"] do
+        an.formatExamples & mapM_ \exs -> do
+          forM_ exs \ex -> do
+            li_ [class_ "ml-10 text-slate-800 text-sm"] $ toHtml ex
 
+
+-- div_ [class_ "flex flex-col gap-4 mt-6 text-gray-600"] do
+--   div_ [class_ "flex gap-2"] do
+--     span_ [class_ "font-semibold"] "Field format:"
+--     span_ [] $ toHtml $ fieldTypeToText $ fromMaybe FTString an.formatType
+--   div_ [class_ "flex gap-2"] do
+--     span_ [class_ "font-semibold"] "Field Category:"
+--     span_ [] $ toHtml $ fieldCategoryEnumToText $ fromMaybe FCRequestBody an.fieldCategory
+--   div_ [class_ "flex gap-2"] do
+--     span_ [class_ "font-semibold"] "Field Key Path:"
+--     span_ [] $ toHtml $ fromMaybe "" an.fieldKeyPath
+--   div_ [class_ "flex gap-2"] do
+--     span_ [class_ "font-semibold"] "Field Key:"
+--     span_ [] $ toHtml $ fromMaybe "" an.fieldKey
+--   div_ [class_ "flex gap-2 items-center"] do
+--     span_ [class_ "font-semibold"] "Examples:"
+--     span_ $ toHtml $ maybe "" (T.intercalate ", " . Vector.toList) an.formatExamples
 
 anomaly2ChartQuery :: Anomalies.AnomalyTypes -> Text -> Charts.QueryBy
 anomaly2ChartQuery Anomalies.ATEndpoint = Charts.QBEndpointHash

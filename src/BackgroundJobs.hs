@@ -57,10 +57,6 @@ getShapes pid enpHash = query Select q (pid, enpHash)
     q = [sql| select hash, field_hashes from apis.shapes where project_id=? and endpoint_hash=? |]
 
 
-instance FromRow Text where
-  fromRow = field
-
-
 getUpdatedFieldFormats :: Projects.ProjectId -> Vector Text -> DBT IO (Vector Text)
 getUpdatedFieldFormats pid fieldHashes = query Select q (pid, fieldHashes)
   where
