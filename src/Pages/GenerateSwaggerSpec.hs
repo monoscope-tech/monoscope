@@ -495,6 +495,9 @@ hExpectedSwaggerJSON =
           "get": {
             "responses": {
               "200": {
+                content: {
+                  "*/*": {}
+                },
                 "description": "",
                 "headers": {
                    "content": {

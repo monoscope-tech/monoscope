@@ -146,14 +146,14 @@ convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
       let updatedJson =
             if null keypath.subGoups
               then
-                let keyPath = safeTail (parentPath <> "." <> grp)
-                    field = find (\fi -> keyPath == fi.field.fKeyPath || T.replace "[*]" ".[]" keyPath == fi.field.fKeyPath) categoryFields
-                    (desc, t, ft, eg) = extractInfo field
-                    keyBase = if T.isSuffixOf "[*]" grp then T.takeWhile (/= '[') grp else grp
-                    validKey = if keyBase == "" then "schema" else keyBase
-                    obType = if T.isSuffixOf "[*]" grp then "array" else t
-                    ob = object ["description" .= String desc, "type" .= String obType, "format" .= ft, "example" .= eg]
-                 in object [AEKey.fromText validKey .= ob]
+                let field = find (\fi -> safeTail (parentPath <> "." <> grp) == fi.field.fKeyPath) categoryFields
+                    (desc, t, ft, eg) = extractInfo field categoryFields parentPath grp
+                    (key, ob) =
+                      if T.isSuffixOf "[*]" grp
+                        then (T.takeWhile (/= '[') grp, object ["description" .= String desc, "type" .= String "array", "items" .= object ["type" .= t, "format" .= ft, "example" .= eg]])
+                        else (grp, object ["description" .= String desc, "type" .= t, "format" .= ft, "example" .= eg])
+                    validKey = if key == "" then "schema" else key
+                 in object [AEKey.fromText validKey .= ob]                 
               else
                 let (key, t) = if T.isSuffixOf "[*]" grp then (T.takeWhile (/= '[') grp, "array" :: String) else (grp, "object")
                     validKey = if key == "" then "schema" else key
@@ -166,20 +166,26 @@ convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
             Just obj -> obj
             Nothing -> object []
        in updateMap
-
     convertToJson' :: Map.Map T.Text KeyPathGroup -> Value
     convertToJson' grps = foldr processGroup (object []) (Map.toList grps)
 
 
 -- Helper function to determine type and values
-extractInfo :: Maybe MergedFieldsAndFormats -> (Text, Text, Text, AE.Value)
-extractInfo Nothing = ("", "string", "text", "")
-extractInfo (Just f)
-  | fieldTypeToText (f.format.swFieldType) == "bool" = (f.field.fDescription, "boolean", f.field.fFormat, V.head f.format.swExamples)
+extractInfo :: Maybe MergedFieldsAndFormats -> [MergedFieldsAndFormats] -> Text -> Text -> (Text, Text, Text, AE.Value)
+extractInfo Nothing categoryFields parentPath grp =
+  let newK = T.replace "[*]" ".[]" (T.tail parentPath <> "." <> grp)
+      newF = find (\fi -> newK == fi.field.fKeyPath) categoryFields
+      ob = case newF of
+        Just f ->
+          if fieldTypeToText f.format.swFieldType == "bool"
+            then (f.field.fDescription, "boolean", f.field.fFormat, V.head f.format.swExamples)
+            else (f.field.fDescription, fieldTypeToText f.format.swFieldType, f.field.fFormat, V.head f.format.swExamples)
+        Nothing -> ("", "string", "text", "")
+   in ob
+extractInfo (Just f) _ _ _
+  | fieldTypeToText f.format.swFieldType == "bool" = (f.field.fDescription, "boolean", f.field.fFormat, V.head f.format.swExamples)
   | otherwise = (f.field.fDescription, fieldTypeToText f.format.swFieldType, f.field.fFormat, V.head f.format.swExamples)
 
-
---------------------------------------------------------------------------------------------
 
 mergeEndpoints :: V.Vector Endpoints.SwEndpoint -> V.Vector Shapes.SwShape -> V.Vector Fields.SwField -> V.Vector Formats.SwFormat -> V.Vector MergedEndpoint
 mergeEndpoints endpoints shapes fields formats = V.map mergeEndpoint endpoints
