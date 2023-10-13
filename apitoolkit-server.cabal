@@ -154,6 +154,7 @@ library
     , gogol-core
     , gogol-pubsub
     , hspec
+    , hspec-expectations-json
     , http-api-data
     , lens
     , lens-aeson

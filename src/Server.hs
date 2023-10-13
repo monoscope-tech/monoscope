@@ -22,7 +22,6 @@ import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Types qualified as Fields (FieldId)
 import Models.Apis.Reports qualified as Reports
-import Models.Projects.ProjectApiKeys (ProjectApiKey)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
