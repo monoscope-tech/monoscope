@@ -406,7 +406,7 @@ anomalyItem hideByDefault currTime anomaly icon title subTitle content = do
       input_ [term "aria-label" "Select Issue", type_ "checkbox", name_ "anomalyId", value_ anomalyId]
     div_ [class_ "space-y-3 grow"] do
       div_ [class_ "space-x-3"] do
-        a_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
+        a_ [href_ $ "/p/" <> anomaly.projectId.toText <> "/anomaly/" <> anomaly.targetHash, class_ "inline-block font-bold text-blue-700 space-x-2"] do
           img_ [src_ icon, class_ "inline w-4 h-4"]
           span_ $ toHtml title
         small_ [class_ "inline-block text-gray-800"] $ fromMaybe (toHtml @String "") subTitle
