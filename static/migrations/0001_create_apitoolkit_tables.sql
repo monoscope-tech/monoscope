@@ -423,7 +423,8 @@ SELECT time_bucket(INTERVAL '1 minute', CREATED_AT) AS TIMEB,
 	ENDPOINT_HASH,
 	PERCENTILE_AGG(DURATION_NS) PERCENTILE_AGG
 FROM APIS.REQUEST_DUMPS
-GROUP BY 1,2,3,4;
+GROUP BY 1,2,3,4
+WITH NO DATA;
 SELECT add_continuous_aggregate_policy('apis.shapes_agg_1min',
      start_offset => INTERVAL '14 days',
      end_offset => INTERVAL '1 min',
@@ -440,7 +441,8 @@ SELECT time_bucket(INTERVAL '1 hour', timeb) AS TIMEB,
 	ENDPOINT_HASH,
 	ROLLUP(PERCENTILE_AGG) PERCENTILE_AGG
 FROM APIS.SHAPES_AGG_1MIN
-GROUP BY 1,2,3,4;
+GROUP BY 1,2,3,4
+WITH NO DATA;
 SELECT add_continuous_aggregate_policy('apis.shapes_agg_1hr',
      start_offset => INTERVAL '1 month',
      end_offset => INTERVAL '1 hour',
@@ -457,7 +459,8 @@ SELECT time_bucket(INTERVAL '1 minute', timeb) AS TIMEB,
 	ENDPOINT_HASH,
 	ROLLUP(PERCENTILE_AGG) PERCENTILE_AGG
 FROM APIS.SHAPES_AGG_1MIN
-GROUP BY 1,2,3;
+GROUP BY 1,2,3
+WITH NO DATA;
 SELECT add_continuous_aggregate_policy('apis.endpoints_agg_1min',
      start_offset => INTERVAL '14 days',
      end_offset => INTERVAL '1 min',
@@ -474,7 +477,8 @@ SELECT time_bucket(INTERVAL '1 hour', timeb) AS TIMEB,
 	ENDPOINT_HASH,
 	ROLLUP(PERCENTILE_AGG) PERCENTILE_AGG
 FROM APIS.ENDPOINTS_AGG_1MIN
-GROUP BY 1,2,3;
+GROUP BY 1,2,3
+WITH NO DATA;
 SELECT add_continuous_aggregate_policy('apis.endpoints_agg_1hr',
      start_offset => INTERVAL '1 month',
      end_offset => INTERVAL '1 hour',

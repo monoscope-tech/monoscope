@@ -42,3 +42,5 @@ timescaledb-docker-tmp:
 
 update-service-worker:
 	workbox generateSW workbox-config.js
+
+.PHONY: all test fmt lint fix-lint lice-reload 
