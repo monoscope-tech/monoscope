@@ -491,7 +491,6 @@ anomalyDetailsGetH sess pid targetHash hxBoostedM = do
 
           -- for formats
           anFormats <- liftIO $ withPool pool $ Fields.getFieldsByEndpointKeyPathAndCategory pid (maybe "" (\x -> UUID.toText x.unEndpointId) an.endpointId) (fromMaybe "" an.fieldKeyPath) (fromMaybe FCRequestBody an.fieldCategory)
-          traceShowM anFormats
           case hxBoostedM of
             Just _ -> case an.anomalyType of
               Anomalies.ATEndpoint -> pure $ anomalyDetailsPage an (Just shapesWithFieldsMap) Nothing Nothing chartQuery currTime True
