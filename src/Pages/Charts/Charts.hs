@@ -120,6 +120,7 @@ buildReqDumpSQL exps = (q, join qByArgs, mFrom, mTo)
     runQueryBySql (QBStatusCodeGT t) = ("status_code>?", [MkDBField t])
     runQueryBySql (QBFrom t) = ("created_at>=?", [MkDBField t])
     runQueryBySql (QBTo t) = ("created_at<?", [MkDBField t])
+    runQueryBySql (QBHost t) = ("host=?", [MkDBField t])
     runQueryBySql (QBAnd a b) =
       let (txt1, arg1) = runQueryBySql a
           (txt2, arg2) = runQueryBySql b
@@ -202,6 +203,7 @@ data QueryBy
   | QBStatusCodeGT Int
   | QBFrom ZonedTime
   | QBTo ZonedTime
+  | QBHost Text
   | QBAnd QueryBy QueryBy
   deriving stock (Show, Read)
 
@@ -218,6 +220,7 @@ instance FromHttpApiData [QueryBy] where
 
 data GroupBy
   = GBEndpoint
+  | GBHost
   | GBStatusCode
   | GBDurationPercentile
   deriving stock (Show, Read)
@@ -293,6 +296,7 @@ throughputEndpointHTML sess pid idM groupBy_ endpointHash shapeHash formatHash s
     then do
       pure $ userNotMemeberPage sess
     else do
+      traceShowM groupBy_
       let fromDStr = fromMaybe "" fromDStrM
       let toDStr = fromMaybe "" toDStrM
       let fromD = utcToZonedTime utc <$> (iso8601ParseM (from @Text fromDStr) :: Maybe UTCTime)
@@ -329,6 +333,7 @@ runQueryBy (QBFormatHash t) = "format_hash=" <> t
 runQueryBy (QBStatusCodeGT t) = "status_code_gt=" <> show t
 runQueryBy (QBFrom t) = ""
 runQueryBy (QBTo t) = ""
+runQueryBy (QBHost t) = "host=" <> t
 runQueryBy (QBAnd a b) = runQueryBy a <> "&" <> runQueryBy b
 
 
@@ -337,6 +342,7 @@ runGroupBy :: GroupBy -> Text
 runGroupBy GBEndpoint = "group_by=endpoint"
 runGroupBy GBStatusCode = "group_by=status_code"
 runGroupBy GBDurationPercentile = "group_by=duration_percentile"
+runGroupBy GBHost = "group_by=host"
 
 
 -- This endpoint will return a throughput chart partial

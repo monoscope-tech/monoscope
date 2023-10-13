@@ -207,6 +207,10 @@ CREATE TABLE IF NOT EXISTS apis.endpoints
 SELECT manage_updated_at('apis.endpoints');
 CREATE INDEX IF NOT EXISTS idx_apis_endpoints_project_id ON apis.endpoints(project_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_endpoints_hash ON apis.endpoints(hash);
+ALTER TABLE apis.endpoints
+ADD COLUMN outgoing BOOLEAN DEFAULT FALSE;
+ALTER TABLE apis.endpoints DROP CONSTRAINT endpoints_project_url_method_key;
+ALTER TABLE apis.endpoints ADD CONSTRAINT endpoints_hash_key UNIQUE (hash);
 
 -----------------------------------------------------------------------
 -- SHAPES table 
@@ -409,6 +413,8 @@ ALTER TABLE apis.request_dumps
 
 ALTER TABLE apis.request_dumps SET (timescaledb.compress, timescaledb.compress_orderby = 'created_at DESC', timescaledb.compress_segmentby = 'project_id');
 SELECT add_compression_policy('apis.request_dumps', INTERVAL '14d');
+
+ALTER TABLE apis.request_dumps ADD COLUMN request_type TEXT NOT NULL DEFAULT 'Incoming';
 
 -- Shapes aggregated by the min. 
 DROP MATERIALIZED VIEW IF EXISTS APIS.SHAPES_AGG_1MIN;

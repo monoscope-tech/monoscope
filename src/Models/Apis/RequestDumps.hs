@@ -10,6 +10,7 @@ module Models.Apis.RequestDumps (
   EndpointPerf (..),
   RequestForReport (..),
   ATError (..),
+  HostEvents (..),
   normalizeUrlPath,
   throughputBy,
   throughputBy',
@@ -25,6 +26,8 @@ module Models.Apis.RequestDumps (
   getRequestDumpForReports,
   getRequestDumpsForPreviousReportPeriod,
   countRequestDumpByProject,
+  dependenciesAndEventsCount,
+  getRequestType,
 ) where
 
 import Control.Error (hush)
@@ -91,6 +94,26 @@ instance FromField SDKTypes where
       Nothing -> return GoGin
 
 
+data RequestTypes
+  = Incoming
+  | Outgoing
+  | Background
+  deriving stock (Show, Generic, Read, Eq)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestTypes
+
+
+instance ToField RequestTypes where
+  toField requestType = toField @String (show requestType)
+
+
+instance FromField RequestTypes where
+  fromField f mdata = do
+    str <- fromField f mdata
+    case readMaybe str of
+      Just requestType -> return requestType
+      Nothing -> return Incoming
+
+
 -- Nothing -> returnError ConversionFailed f ("Could not read SDKTypes: " ++ str)
 
 -- normalize URLPatg based off the SDKTypes. Should allow us have custom logic to parse and transform url paths into a form we are happy with, per library
@@ -126,6 +149,21 @@ normalizeUrlPath PythonFastApi statusCode _method urlPath = removeQueryParams st
 normalizeUrlPath JsFastify statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath PythonFlask statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath PythonDjango statusCode _method urlPath = removeQueryParams statusCode urlPath
+
+
+-- getRequestType ...
+-- >>> getRequestType GoGin
+-- Incoming
+-- >>> getRequestType GoOutgoing
+-- Outgoing
+-- >>> getRequestType JsAxiosOutgoing
+-- Outgoing
+
+getRequestType :: SDKTypes -> RequestTypes
+getRequestType sdkType
+  | T.isSuffixOf "Outgoing" (show sdkType) = Outgoing
+  | T.isSuffixOf "Background" (show sdkType) = Background
+  | otherwise = Incoming
 
 
 -- removeQueryParams ...
@@ -195,6 +233,7 @@ data RequestDump = RequestDump
   , serviceVersion :: Maybe Text
   , errors :: AE.Value -- Vector ATError
   , tags :: Vector Text
+  , requestType :: RequestTypes
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (ToRow, FromRow)
@@ -236,6 +275,17 @@ data EndpointPerf = EndpointPerf
 makeFieldLabelsNoPrefix ''RequestForReport
 
 
+data HostEvents = HostEvents
+  { host :: Text
+  , eventCount :: Integer
+  }
+  deriving stock (Show, Generic, Eq)
+  deriving anyclass (ToRow, FromRow)
+  deriving
+    (Entity)
+    via (GenericEntity '[Schema "apis", TableName "request_dumps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] EndpointPerf)
+
+
 -- RequestDumpLogItem is used in the to query log items for the log query explorer on the dashboard. Each item here can be queried
 -- via the query language on said dashboard page.
 data RequestDumpLogItem = RequestDumpLogItem
@@ -263,6 +313,7 @@ data RequestDumpLogItem = RequestDumpLogItem
   , errorsCount :: Integer
   , errors :: AE.Value
   , tags :: Maybe (Vector Text)
+  , requestType :: RequestTypes
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (ToRow, FromRow)
@@ -336,7 +387,7 @@ selectRequestDumpByProject pid extraQuery fromM = do
                     path_params, status_code,query_params,
                     request_body,response_body,'{}'::jsonb,'{}'::jsonb,
                     duration_ns, sdk_type,
-                    parent_id, service_version, JSONB_ARRAY_LENGTH(errors) as errors_count, '{}'::jsonb, tags
+                    parent_id, service_version, JSONB_ARRAY_LENGTH(errors) as errors_count, '{}'::jsonb, tags, request_type
              FROM apis.request_dumps where project_id=? and created_at > NOW() - interval '14 days' and created_at<? |]
         <> extraQueryParsed
         <> " order by created_at desc limit 200;"
@@ -371,7 +422,7 @@ selectRequestDumpsByProjectForChart pid extraQuery = do
 bulkInsertRequestDumps :: [RequestDump] -> DBT IO Int64
 bulkInsertRequestDumps = executeMany q
   where
-    q = [sql| INSERT INTO apis.request_dumps VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?); |]
+    q = [sql| INSERT INTO apis.request_dumps VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?); |]
 
 
 selectRequestDumpByProjectAndId :: Projects.ProjectId -> ZonedTime -> UUID.UUID -> DBT IO (Maybe RequestDumpLogItem)
@@ -382,7 +433,7 @@ selectRequestDumpByProjectAndId pid createdAt rdId = queryOne Select q (createdA
                     path_params,status_code,query_params,
                     request_body,response_body,request_headers,response_headers, 
                     duration_ns, sdk_type,
-                    parent_id, service_version, JSONB_ARRAY_LENGTH(errors) as errors_count, errors, tags
+                    parent_id, service_version, JSONB_ARRAY_LENGTH(errors) as errors_count, errors, tags, request_type
              FROM apis.request_dumps where created_at=? and project_id=? and id=? LIMIT 1|]
 
 
@@ -435,8 +486,20 @@ selectAnomalyEvents pid targetHash anType = query Select (Query $ encodeUtf8 q) 
                     path_params, status_code,query_params,
                     request_body,response_body,request_headers,response_headers,
                     duration_ns, sdk_type,
-                    parent_id, service_version, JSONB_ARRAY_LENGTH(errors) as errors_count, errors, tags
+                    parent_id, service_version, JSONB_ARRAY_LENGTH(errors) as errors_count, errors, tags, request_type
              FROM apis.request_dumps where created_at > NOW() - interval '14' day AND project_id=? AND $extraQuery LIMIT 199; |]
+
+
+dependenciesAndEventsCount :: Projects.ProjectId -> DBT IO (Vector HostEvents)
+dependenciesAndEventsCount = query Select q
+  where
+    q =
+      [sql|SELECT host, COUNT(*) AS eventsCount 
+           FROM apis.request_dumps
+           WHERE project_id= ? AND host != '' AND request_type = 'Outgoing' AND created_at > NOW() - interval '14' day
+           GROUP BY host
+           ORDER BY eventsCount DESC;
+           |]
 
 
 -- A throughput chart query for the request_dump table.

@@ -315,8 +315,9 @@ tabContentGin apikey current_tab =
                     span_ [class_ "hljs-comment"] "// Register with the corresponding middleware of your choice. For Gin router, we use the GinMiddleware method." >> "\n"
                     "router." >> span_ [class_ "hljs-title"] "Use" >> "(apitoolkitClient.GinMiddleware)" >> "\n\n"
                     span_ [class_ "hljs-comment"] "// Register your handlers as usual and run the gin server as usual." >> "\n"
-                    "router." >> span_ [class_ "hljs-title"] "POST" >> "(" >> span_ [class_ "hljs-string"] "\"/:slug/test\"" >> ", " >> span_ [class_ "hljs-keyword"] "func" >> "(c *gin.Context)" >> " {" >> " c.String" >> "(" >> span_ [class_ "hljs-number"] "200" >> ", " >> span_ [class_ "hljs-string"] "\"ok\"" >> ")" >> " })" >> "\n"
-                    span_ [class_ "hljs-comment"] "// Rest of your app..." >> "\n"
+                    "router." >> span_ [class_ "hljs-title"] "POST" >> "(" >> span_ [class_ "hljs-string"] "\"/:slug/test\"" >> ", " >> span_ [class_ "hljs-keyword"] "func" >> "(c *gin.Context)" >> " {" >> " c.String" >> "(" >> span_ [class_ "hljs-number"] "200" >> ", " >> span_ [class_ "hljs-string"] "\"ok\"" >> ")" >> " })" >> "\n\n"
+                    "router." >> span_ [class_ "hljs-title"] "Run" >> "(" >> span_ [class_ "hljs-string"] "\":8080\"" >> ")" >> "\n"
+                    span_ [] "}"
 
 
 tabContentLaravel :: Text -> Text -> Html ()
