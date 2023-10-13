@@ -485,6 +485,7 @@ CREATE INDEX IF NOT EXISTS idx_apis_endpoints_agg_1hr_pid_endpoint_hash_timeb ON
 --- Allow querying by target hash to get the  
 --- We can have this target_hash agg table for hours and use it to derive two tables. One for 24hr and one for 14 days.
 
+-- Both 24hrs and 14days tables are created to be used on the endpoints list events field and in the anomaly list as well, to show total count of event
 CREATE MATERIALIZED VIEW apis.target_hash_agg_14days AS
 SELECT project_id, target_hash, sum(num_vals) from 
 (
@@ -497,8 +498,9 @@ SELECT timeb, project_id, endpoint_hash as target_hash, num_vals(percentile_agg)
 	where timeb >= NOW() - INTERVAL '14 days'
 ) target_hash_agg_14
 group by project_id, target_hash;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_target_hash_agg_14days_uniq ON apis.target_hash_agg_14days(project_id, target_hash);
 
-CREATE MATERIALIZED VIEW apis.target_hash_agg_24hr AS
+CREATE MATERIALIZED VIEW apis.target_hash_agg_24hrs AS
 SELECT project_id, target_hash, sum(num_vals) sum from 
 (
 SELECT timeb, project_id, shape_hash as target_hash, num_vals(percentile_agg) num_vals
@@ -510,7 +512,7 @@ SELECT timeb, project_id, endpoint_hash as target_hash, num_vals(percentile_agg)
 	where timeb >= NOW() - INTERVAL '24 hours'
 ) target_hash_agg_24h
 group by project_id, target_hash;
-
+CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_target_hash_agg_24hrs_uniq ON apis.target_hash_agg_24hrs(project_id, target_hash);
 
 -- ==========================================================================================================================
 --                    END OF REQUEST DUMP AND ITS CONTINUOUS AGGREGATES
