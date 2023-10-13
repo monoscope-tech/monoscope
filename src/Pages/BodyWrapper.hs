@@ -19,8 +19,8 @@ menu pid =
   [ ("Get started", "/p/" <> pid.toText <> "/onboarding", "fa-list-check")
   , ("Dashboard", "/p/" <> pid.toText <> "/", "fa-qrcode")
   , ("Endpoints", "/p/" <> pid.toText <> "/endpoints", "fa-swap")
-  , -- , ("Dependencies", "/p/" <> pid.toText <> "/outgoing", "fa-arrows-turn-right")
-    ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies?ackd=false&archived=false", "fa-bug")
+  , ("Dependencies", "/p/" <> pid.toText <> "/outgoing", "fa-arrows-turn-right")
+  , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies?ackd=false&archived=false", "fa-bug")
   , ("API Log Explorer", "/p/" <> pid.toText <> "/log_explorer", "fa-list-tree")
   , ("API Keys", "/p/" <> pid.toText <> "/apis", "fa-key")
   , -- , ("Redacted Fields", "/p/" <> pid.toText <> "/redacted_fields", "#redacted")
@@ -301,11 +301,11 @@ sideNav sess project pageTitle menuItem hasIntegrated = do
         let isActive = maybe (pageTitle == mTitle) (== mTitle) menuItem
         let activeCls = if isActive then " bg-blue-50 text-blue-700 border-l-4 border-blue-700" else " text-slate-900"
         let intG = fromMaybe True hasIntegrated
-        let intGCls = if intG || (mTitle == "Get started") then " hover:bg-blue-50" else " cursor-not-allowed  "
+        let intGCls = if intG || (mTitle == "Get started" || mTitle == "API Keys") then " hover:bg-blue-50" else " cursor-not-allowed  "
         a_
-          [ if intG || (mTitle == "Get started") then href_ mUrl else href_ "#"
+          [ if intG || (mTitle == "Get started" || mTitle == "API Keys") then href_ mUrl else href_ "#"
           , term "data-tippy-placement" "right"
-          , term "data-tippy-content" (if intG || (mTitle == "Get started") then mTitle else "Our menus are shy. Help them come out by integrating the SDK.")
+          , term "data-tippy-content" (if intG || (mTitle == "Get started" || mTitle == "API Keys") then mTitle else "Our menus are shy. Help them come out by integrating the SDK.")
           , class_ $ "block flex gap-3 px-5 py-3 flex justify-center items-center " <> activeCls <> intGCls
           ]
           do

@@ -63,6 +63,7 @@ library
       Pages.ManualIngestion
       Pages.NonMember
       Pages.Onboarding
+      Pages.Outgoing
       Pages.Projects.CreateProject
       Pages.Projects.ListProjects
       Pages.Projects.ManageMembers

@@ -41,8 +41,8 @@ onboardingGetH sess pid polling redirected current_tab = do
             project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
             apiKeys <- ProjectApiKeys.projectApiKeysByProjectId pid
             requestDumps <- RequestDumps.countRequestDumpByProject pid
-            let apikey = V.head apiKeys
-            pure (project, apikey.keyPrefix, requestDumps > 0)
+            let apikey = if V.null apiKeys then "<APIKEY>" else (V.head apiKeys).keyPrefix
+            pure (project, apikey, requestDumps > 0)
       let bwconf =
             (def :: BWConfig)
               { sessM = Just sess
@@ -315,8 +315,9 @@ tabContentGin apikey current_tab =
                     span_ [class_ "hljs-comment"] "// Register with the corresponding middleware of your choice. For Gin router, we use the GinMiddleware method." >> "\n"
                     "router." >> span_ [class_ "hljs-title"] "Use" >> "(apitoolkitClient.GinMiddleware)" >> "\n\n"
                     span_ [class_ "hljs-comment"] "// Register your handlers as usual and run the gin server as usual." >> "\n"
-                    "router." >> span_ [class_ "hljs-title"] "POST" >> "(" >> span_ [class_ "hljs-string"] "\"/:slug/test\"" >> ", " >> span_ [class_ "hljs-keyword"] "func" >> "(c *gin.Context)" >> " {" >> " c.String" >> "(" >> span_ [class_ "hljs-number"] "200" >> ", " >> span_ [class_ "hljs-string"] "\"ok\"" >> ")" >> " })" >> "\n"
-                    span_ [class_ "hljs-comment"] "// Rest of your app..." >> "\n"
+                    "router." >> span_ [class_ "hljs-title"] "POST" >> "(" >> span_ [class_ "hljs-string"] "\"/:slug/test\"" >> ", " >> span_ [class_ "hljs-keyword"] "func" >> "(c *gin.Context)" >> " {" >> " c.String" >> "(" >> span_ [class_ "hljs-number"] "200" >> ", " >> span_ [class_ "hljs-string"] "\"ok\"" >> ")" >> " })" >> "\n\n"
+                    "router." >> span_ [class_ "hljs-title"] "Run" >> "(" >> span_ [class_ "hljs-string"] "\":8080\"" >> ")" >> "\n"
+                    span_ [] "}"
 
 
 tabContentLaravel :: Text -> Text -> Html ()

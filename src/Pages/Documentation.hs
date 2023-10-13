@@ -140,6 +140,7 @@ getEndpointFromOpEndpoint pid opEndpoint =
         , urlParams = AE.Array []
         , hosts = [opEndpoint.endpointHost]
         , hash = endpointHash
+        , outgoing = False
         }
 
 
@@ -291,10 +292,11 @@ documentationPostH sess pid SwaggerForm{swagger_json, from} = do
               }
 
       swaggers <- liftIO
-        $ withPool pool
-        do
-          Swaggers.addSwagger swaggerToAdd
-          Swaggers.swaggersByProject pid
+        $ withPool
+          pool
+          do
+            Swaggers.addSwagger swaggerToAdd
+            Swaggers.swaggersByProject pid
 
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Swagger uploaded Successfully"]}|]
       pure $ addHeader hxTriggerData ""

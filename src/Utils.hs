@@ -29,6 +29,8 @@ import Models.Users.Sessions qualified as Session
 import Relude hiding (show)
 import Servant
 
+import Models.Projects.ProjectMembers (ProjectMembers (ProjectMembers))
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Text.Regex.TDFA ((=~))
 import Prelude (show)
 
@@ -98,8 +100,8 @@ userIsProjectMember sess pid = do
   if sess.isSudo
     then pure True
     else do
-      user <- Projects.userByProjectId pid sess.userId
-      if V.length user == 0 then pure False else pure True
+      user <- ProjectMembers.selectProjectActiveMember pid sess.userId
+      case user of Nothing -> pure False; Just _ -> pure True
 
 
 getMethodBgColor :: Text -> Text
