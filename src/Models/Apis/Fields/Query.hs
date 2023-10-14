@@ -1,19 +1,36 @@
-module Models.Apis.Fields.Query (fieldById, selectFields, insertFieldQueryAndParams, fieldsByEndpointHashes, insertFields, updateFieldByHash, deleteFieldByHash, selectFieldsByHashes) where
+module Models.Apis.Fields.Query (
+  fieldById,
+  selectFields,
+  insertFieldQueryAndParams,
+  fieldsByEndpointHashes,
+  insertFields,
+  updateFieldByHash,
+  deleteFieldByHash,
+  selectFieldsByHashes,
+  getFieldsByEndpointKeyPathAndCategory,
+) where
 
 import Data.Time (ZonedTime)
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity (selectById)
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query)
 import Database.PostgreSQL.Simple (Only (Only), Query)
+import Database.PostgreSQL.Simple.FromRow
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact (DBT, executeMany)
 import Database.PostgreSQL.Transact qualified as PgT
+import Gogol.Prelude (Endpoints)
+import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Types (Field, FieldCategoryEnum, FieldId, FieldTypes, SwField)
 import Models.Apis.Fields.Types qualified as FT
 import Models.Projects.Projects qualified as Projects
 import Optics.Core ((^.))
 import Relude
 import Utils (DBField (MkDBField))
+
+
+instance FromRow Text where
+  fromRow = field
 
 
 insertFieldQueryAndParams :: Field -> (Query, [DBField])
@@ -84,6 +101,12 @@ selectFieldsByHashes pid fieldHashes = query Select q (pid, fieldHashes)
               field_type_override,format,format_override,description,key_path,field_category, hash
               FROM apis.fields WHERE project_id=? AND hash= ANY(?)  ORDER BY field_category, key 
           |]
+
+
+getFieldsByEndpointKeyPathAndCategory :: Projects.ProjectId -> Text -> Text -> FieldCategoryEnum -> DBT IO (Vector Text)
+getFieldsByEndpointKeyPathAndCategory pid endpointId keyPath fieldCategory = query Select q (pid, endpointId, keyPath, fieldCategory)
+  where
+    q = [sql|SELECT f.format from apis.endpoints enp JOIN apis.fields f on enp.hash = f.endpoint_hash where f.project_id=? AND enp.id=? AND f.key_path=? AND f.field_category=?  limit 4;|]
 
 
 updateFieldByHash :: Text -> Text -> Text -> DBT IO Int64

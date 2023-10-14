@@ -1,4 +1,3 @@
-
 module Pages.Outgoing (outgoingGetH) where
 
 import Config
@@ -52,4 +51,6 @@ outgoingPage pid hostsEvents = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24"] 
           -- div_ [class_ "w-[200px] h-[80px] mt-4 shrink-0"] pass
           -- Charts.throughput pid (host.host) (Just $ Charts.QBHost host.host) (Just Charts.GBHost) 14 Nothing False (Nothing, Nothing) Nothing
           div_ [] $ show host.eventCount
-          
+    when (null hostsEvents) $ div_ [class_ "flex flex-col text-center justify-center items-center h-32"] $ do
+      strong_ "No dependencies yet."
+      p_ "All dependencies' host names and number of events will be shown here."

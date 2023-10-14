@@ -296,7 +296,6 @@ throughputEndpointHTML sess pid idM groupBy_ endpointHash shapeHash formatHash s
     then do
       pure $ userNotMemeberPage sess
     else do
-      traceShowM groupBy_
       let fromDStr = fromMaybe "" fromDStrM
       let toDStr = fromMaybe "" toDStrM
       let fromD = utcToZonedTime utc <$> (iso8601ParseM (from @Text fromDStr) :: Maybe UTCTime)

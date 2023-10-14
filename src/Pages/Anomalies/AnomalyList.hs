@@ -10,6 +10,7 @@ module Pages.Anomalies.AnomalyList (
   AnomalyBulkForm,
   anomalyAcknowlegeButton,
   anomalyArchiveButton,
+  anomalyEvents,
 ) where
 
 import Config
@@ -22,6 +23,7 @@ import Data.Text (replace)
 import Data.Text qualified as T
 import Data.Time (UTCTime, ZonedTime, defaultTimeLocale, formatTime, getCurrentTime, getTimeZone, zonedTimeToUTC)
 import Data.Tuple.Extra (fst3)
+import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute, withPool)
@@ -230,23 +232,6 @@ anomalyListPage paramInput pid currTime anomalies nextFetchUrl = div_ [class_ "w
     a_ [class_ $ "inline-block  py-2 " <> if paramInput.ackd && not paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&ackd=true&archived=false"] "Acknowleged"
     a_ [class_ $ "inline-block  py-2 " <> if paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&archived=true"] "Archived"
   div_ [class_ "grid grid-cols-5 card-round", id_ "anomalyListBelowTab", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $ anomalyList paramInput pid currTime anomalies nextFetchUrl
-  script_
-    [text|
-      function changeTab(tabId) {
-        const tabLinks = document.querySelectorAll('.sdk_tab');
-        tabLinks.forEach(link => link.classList.remove('sdk_tab_active'));
-        const clickedTabLink = document.getElementById(tabId);
-        clickedTabLink.classList.add('sdk_tab_active')
-        const tabContents = document.querySelectorAll('.sdk_tab_content');
-        tabContents.forEach(content => {
-          content.classList.add("hidden")
-          content.classList.remove ("sdk_tab_content_active")
-        });
-        const tabContent = document.getElementById(tabId + '_content');
-        tabContent.classList.remove("hidden")
-        setTimeout(()=>{tabContent.classList.add("sdk_tab_content_active")},10)
-      }
-|]
 
 
 anomalyList :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Anomalies.AnomalyVM -> Maybe Text -> Html ()
@@ -421,7 +406,7 @@ anomalyItem hideByDefault currTime anomaly icon title subTitle content = do
       input_ [term "aria-label" "Select Issue", type_ "checkbox", name_ "anomalyId", value_ anomalyId]
     div_ [class_ "space-y-3 grow"] do
       div_ [class_ "space-x-3"] do
-        a_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
+        a_ [href_ $ "/p/" <> anomaly.projectId.toText <> "/anomaly/" <> anomaly.targetHash, class_ "inline-block font-bold text-blue-700 space-x-2"] do
           img_ [src_ icon, class_ "inline w-4 h-4"]
           span_ $ toHtml title
         small_ [class_ "inline-block text-gray-800"] $ fromMaybe (toHtml @String "") subTitle
@@ -451,6 +436,7 @@ anomalyItem hideByDefault currTime anomaly icon title subTitle content = do
               , [__|on click remove .hidden from #expand-an-modal then
                   remove .hidden from #an-modal-content-loader
                   fetch `${@data-an-url}` as html then put it into #an-modal-content
+                  _hyperscript.processNode(#expand-an-modal)
                   add .hidden to #an-modal-content-loader
                   end
                 |]
@@ -486,7 +472,6 @@ anomalyDetailsGetH sess pid targetHash hxBoostedM = do
       case anomaly of
         Just an -> do
           let chartQuery = Just $ anomaly2ChartQuery an.anomalyType an.targetHash
-          events <- liftIO $ withPool pool $ RequestDump.selectAnomalyEvents pid an.targetHash an.anomalyType
           currTime <- liftIO getCurrentTime
 
           -- for endpoint anomalies
@@ -504,22 +489,24 @@ anomalyDetailsGetH sess pid targetHash hxBoostedM = do
             let delFM = groupFieldsByCategory delF
             pure (newFM, updfM, delFM)
 
+          -- for formats
+          anFormats <- liftIO $ withPool pool $ Fields.getFieldsByEndpointKeyPathAndCategory pid (maybe "" (\x -> UUID.toText x.unEndpointId) an.endpointId) (fromMaybe "" an.fieldKeyPath) (fromMaybe FCRequestBody an.fieldCategory)
           case hxBoostedM of
             Just _ -> case an.anomalyType of
-              Anomalies.ATEndpoint -> pure $ anomalyDetailsPage an events (Just shapesWithFieldsMap) Nothing chartQuery currTime True
-              Anomalies.ATShape -> pure $ anomalyDetailsPage an events Nothing (Just anFields) chartQuery currTime True
-              _ -> pure $ anomalyDetailsPage an events (Just shapesWithFieldsMap) Nothing chartQuery currTime True
+              Anomalies.ATEndpoint -> pure $ anomalyDetailsPage an (Just shapesWithFieldsMap) Nothing Nothing chartQuery currTime True
+              Anomalies.ATShape -> pure $ anomalyDetailsPage an Nothing (Just anFields) Nothing chartQuery currTime True
+              _ -> pure $ anomalyDetailsPage an (Just shapesWithFieldsMap) Nothing (Just anFormats) chartQuery currTime True
             Nothing -> pure $ bodyWrapper bwconf $ div_ [class_ "w-full px-32"] do
               h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
               case an.anomalyType of
-                Anomalies.ATEndpoint -> anomalyDetailsPage an events (Just shapesWithFieldsMap) Nothing chartQuery currTime False
-                Anomalies.ATShape -> anomalyDetailsPage an events Nothing (Just anFields) chartQuery currTime False
-                _ -> anomalyDetailsPage an events (Just shapesWithFieldsMap) Nothing chartQuery currTime False
+                Anomalies.ATEndpoint -> anomalyDetailsPage an (Just shapesWithFieldsMap) Nothing Nothing chartQuery currTime False
+                Anomalies.ATShape -> anomalyDetailsPage an Nothing (Just anFields) Nothing chartQuery currTime False
+                _ -> anomalyDetailsPage an (Just shapesWithFieldsMap) Nothing (Just anFormats) chartQuery currTime False
         Nothing -> pure $ bodyWrapper bwconf $ h4_ [] "ANOMALY NOT FOUND"
 
 
-anomalyDetailsPage :: AnomalyVM -> Vector RequestDump.RequestDumpLogItem -> Maybe (Vector Shapes.ShapeWithFields) -> Maybe (Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field]) -> Maybe QueryBy -> UTCTime -> Bool -> Html ()
-anomalyDetailsPage anomaly requestsItems shapesWithFieldsMap fields chartQuery currTime modal = do
+anomalyDetailsPage :: AnomalyVM -> Maybe (Vector Shapes.ShapeWithFields) -> Maybe (Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field]) -> Maybe (Vector Text) -> Maybe QueryBy -> UTCTime -> Bool -> Html ()
+anomalyDetailsPage anomaly shapesWithFieldsMap fields prvFormatsM chartQuery currTime modal = do
   div_ [class_ "w-full h-full"] do
     div_ [class_ "w-full"] do
       div_ [class_ "flex items-center justify-between gap-2 flex-wrap"] do
@@ -588,15 +575,35 @@ anomalyDetailsPage anomaly requestsItems shapesWithFieldsMap fields chartQuery c
 
     div_ [class_ "mt-6 space-y-4"] do
       div_ [class_ "flex items-center gap-10 font-semibold border-b"] do
+        let events_url = "/p/" <> anomaly.projectId.toText <> "/anomaly/events/" <> anomaly.targetHash <> "/" <> show anomaly.anomalyType
+        script_
+          [type_ "text/hyperscript"]
+          [text|
+          behavior Navigatable(content)
+             on click remove .sdk_tab_active from .sdk_tab 
+                then add .sdk_tab_active to me 
+                then add .hidden to .sdk_tab_content 
+                then remove .hidden from content
+                wait 10ms
+                then add .sdk_tab_content_active to content
+                if content is #events_content and @data-events-fetched is "false" then
+                  fetch `$${@data-events-url}` as html then put it into #events_content
+                  _hyperscript.processNode(#events_content)
+                  set @data-events-fetched to "true"
+                end
+          end
+        |]
         button_
           [ class_ "sdk_tab sdk_tab_active"
-          , onclick_ "changeTab('overview')"
+          , [__| install Navigatable(content: #overview_content) |]
           , id_ "overview"
           ]
           "Overview"
         button_
           [ class_ "sdk_tab"
-          , onclick_ "changeTab('events')"
+          , [__| install Navigatable(content: #events_content) |]
+          , term "data-events-url" events_url
+          , term "data-events-fetched" "false"
           , id_ "events"
           ]
           "All events"
@@ -605,27 +612,12 @@ anomalyDetailsPage anomaly requestsItems shapesWithFieldsMap fields chartQuery c
           case anomaly.anomalyType of
             Anomalies.ATEndpoint -> endpointOverview shapesWithFieldsMap
             Anomalies.ATShape -> requestShapeOverview fields
-            Anomalies.ATFormat -> anomalyFormatOverview anomaly
+            Anomalies.ATFormat -> anomalyFormatOverview anomaly (fromMaybe [] prvFormatsM)
             _ -> ""
         div_ [class_ "grow overflow-y-auto h-full whitespace-nowrap text-sm divide-y overflow-x-hidden sdk_tab_content", id_ "events_content"] do
-          Log.logItemRows anomaly.projectId requestsItems [] ""
-  script_
-    [text|
-      function changeTab(tabId) {
-        const tabLinks = document.querySelectorAll('.sdk_tab');
-        tabLinks.forEach(link => link.classList.remove('sdk_tab_active'));
-        const clickedTabLink = document.getElementById(tabId);
-        clickedTabLink.classList.add('sdk_tab_active')
-        const tabContents = document.querySelectorAll('.sdk_tab_content');
-        tabContents.forEach(content => {
-          content.classList.add("hidden")
-          content.classList.remove ("sdk_tab_content_active")
-        });
-        const tabContent = document.getElementById(tabId + '_content');
-        tabContent.classList.remove("hidden")
-        setTimeout(()=>{tabContent.classList.add("sdk_tab_content_active")},10)
-      }
-|]
+          div_ [class_ "w-full flex justify-center overflow-hidden"] do
+            loader
+
   script_
     [type_ "text/hyperscript"]
     [text|
@@ -684,6 +676,14 @@ endpointOverview shapesWithFieldsMap =
       Nothing -> pass
 
 
+anomalyEvents :: Sessions.PersistentSession -> Projects.ProjectId -> Text -> Text -> DashboardM (Html ())
+anomalyEvents sess pid targetHash anomalyType = do
+  pool <- asks pool
+  events <- liftIO $ withPool pool $ RequestDump.selectAnomalyEvents pid targetHash (Anomalies.parseAnomalyRawTypes anomalyType)
+  pure $ div_ [class_ "w-full"] do
+    Log.logItemRows pid events [] ""
+
+
 requestShapeOverview :: Maybe (Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field]) -> Html ()
 requestShapeOverview fieldChanges = do
   div_ [class_ "flex flex-col gap-6"] do
@@ -723,25 +723,52 @@ requestShapeOverview fieldChanges = do
               subSubSection "Response Headers" (Map.lookup Fields.FCResponseHeader th)
               subSubSection "Response Body" (Map.lookup Fields.FCResponseBody th)
       Nothing -> pass
-anomalyFormatOverview :: AnomalyVM -> Html ()
-anomalyFormatOverview an =
-  div_ [class_ "flex flex-col gap-4 mt-6 text-gray-600"] do
-    div_ [class_ "flex gap-2"] do
-      span_ [class_ "font-semibold"] "Field format:"
-      span_ [] $ toHtml $ fieldTypeToText $ fromMaybe FTString an.formatType
-    div_ [class_ "flex gap-2"] do
-      span_ [class_ "font-semibold"] "Field Category:"
-      span_ [] $ toHtml $ fieldCategoryEnumToText $ fromMaybe FCRequestBody an.fieldCategory
-    div_ [class_ "flex gap-2"] do
-      span_ [class_ "font-semibold"] "Field Key Path:"
-      span_ [] $ toHtml $ fromMaybe "" an.fieldKeyPath
-    div_ [class_ "flex gap-2"] do
-      span_ [class_ "font-semibold"] "Field Key:"
-      span_ [] $ toHtml $ fromMaybe "" an.fieldKey
-    div_ [class_ "flex gap-2 items-center"] do
-      span_ [class_ "font-semibold"] "Examples:"
-      span_ $ toHtml $ maybe "" (T.intercalate ", " . Vector.toList) an.formatExamples
+anomalyFormatOverview :: AnomalyVM -> Vector Text -> Html ()
+anomalyFormatOverview an prevFormats =
+  section_ [class_ "space-y-10"] do
+    div_ [class_ "flex items-center gap-6"] do
+      div_ do
+        h6_ [class_ "text-sm text-slate-800"] "FIELD NAME"
+        h3_ [class_ "text-base text-slate-800"] $ toHtml $ fromMaybe "" an.fieldKey
+      div_ do
+        h6_ [class_ "text-sm text-slate-800 "] "FIELD PATH"
+        h3_ [class_ "text-base text-slate-800 monospace"] $ toHtml $ fromMaybe "" an.fieldKeyPath
+      div_ do
+        h6_ [class_ "text-sm text-slate-800"] "FIELD CATEGORY"
+        h4_ [class_ "text-base text-slate-800"] $ EndpointComponents.fieldCategoryToDisplay $ fromMaybe FCRequestBody an.fieldCategory
+    div_ [class_ "flex items-center gap-6"] do
+      div_ do
+        h5_ [class_ "text-sm text-slate-800"] "NEW FIELD FORMAT"
+        h3_ [class_ "text-base text-slate-800 monospace"] $ toHtml $ fieldTypeToText $ fromMaybe FTString an.formatType
+      div_ do
+        h5_ [class_ "text-sm text-slate-800"] "PREVIOUS FIELD FORMATS"
+        ul_ [class_ "list-disc"] do
+          prevFormats & mapM_ \f -> do
+            li_ [class_ "ml-10 text-slate-800 text-sm"] $ toHtml f
+    div_ do
+      h6_ [class_ "text-slate-600 mt-4 text-sm"] "EXAMPLE VALUES"
+      ul_ [class_ "list-disc"] do
+        an.formatExamples & mapM_ \exs -> do
+          forM_ exs \ex -> do
+            li_ [class_ "ml-10 text-slate-800 text-sm"] $ toHtml ex
 
+
+-- div_ [class_ "flex flex-col gap-4 mt-6 text-gray-600"] do
+--   div_ [class_ "flex gap-2"] do
+--     span_ [class_ "font-semibold"] "Field format:"
+--     span_ [] $ toHtml $ fieldTypeToText $ fromMaybe FTString an.formatType
+--   div_ [class_ "flex gap-2"] do
+--     span_ [class_ "font-semibold"] "Field Category:"
+--     span_ [] $ toHtml $ fieldCategoryEnumToText $ fromMaybe FCRequestBody an.fieldCategory
+--   div_ [class_ "flex gap-2"] do
+--     span_ [class_ "font-semibold"] "Field Key Path:"
+--     span_ [] $ toHtml $ fromMaybe "" an.fieldKeyPath
+--   div_ [class_ "flex gap-2"] do
+--     span_ [class_ "font-semibold"] "Field Key:"
+--     span_ [] $ toHtml $ fromMaybe "" an.fieldKey
+--   div_ [class_ "flex gap-2 items-center"] do
+--     span_ [class_ "font-semibold"] "Examples:"
+--     span_ $ toHtml $ maybe "" (T.intercalate ", " . Vector.toList) an.formatExamples
 
 anomaly2ChartQuery :: Anomalies.AnomalyTypes -> Text -> Charts.QueryBy
 anomaly2ChartQuery Anomalies.ATEndpoint = Charts.QBEndpointHash
