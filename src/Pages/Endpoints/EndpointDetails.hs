@@ -82,11 +82,12 @@ fieldDetailsPartialH sess pid fid = do
       pure $ userNotMemeberPage sess
     else do
       (fieldsM, formats) <- liftIO
-        $ withPool pool
-        do
-          field <- Fields.fieldById fid
-          formats <- Formats.formatsByFieldHash (maybe "" (^. #hash) field)
-          pure (field, formats)
+        $ withPool
+          pool
+          do
+            field <- Fields.fieldById fid
+            formats <- Formats.formatsByFieldHash (maybe "" (^. #hash) field)
+            pure (field, formats)
       case fieldsM of
         Nothing -> pure ""
         Just field -> pure $ fieldDetailsView field formats
@@ -192,21 +193,22 @@ endpointDetailsH sess pid eid fromDStr toDStr sinceStr' subPageM = do
               (f, t)
 
       (endpoint, enpStats, project, shapesWithFieldsMap, fieldsMap, reqLatenciesRolledByStepsLabeled) <- liftIO
-        $ withPool pool
-        do
-          -- Should swap names betw enp and endpoint endpoint could be endpointStats
-          endpoint <- Unsafe.fromJust <$> Endpoints.endpointById eid
-          enpStats <- fromMaybe (def :: EndpointRequestStats) <$> Endpoints.endpointRequestStatsByEndpoint eid
-          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-          shapes <- Shapes.shapesByEndpointHash pid endpoint.hash
-          fields <- Fields.selectFields pid endpoint.hash
-          let fieldsMap = Fields.groupFieldsByCategory fields
-          let shapesWithFieldsMap = Vector.map (`getShapeFields` fields) shapes
-          let maxV = round enpStats.max :: Int
-          let steps = (maxV `quot` 100) :: Int
-          let steps' = if steps == 0 then 100 else steps
-          reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledBySteps maxV steps' pid endpoint.urlPath endpoint.method
-          pure (endpoint, enpStats, project, Vector.toList shapesWithFieldsMap, fieldsMap, Vector.toList reqLatenciesRolledBySteps)
+        $ withPool
+          pool
+          do
+            -- Should swap names betw enp and endpoint endpoint could be endpointStats
+            endpoint <- Unsafe.fromJust <$> Endpoints.endpointById eid
+            enpStats <- fromMaybe (def :: EndpointRequestStats) <$> Endpoints.endpointRequestStatsByEndpoint eid
+            project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+            shapes <- Shapes.shapesByEndpointHash pid endpoint.hash
+            fields <- Fields.selectFields pid endpoint.hash
+            let fieldsMap = Fields.groupFieldsByCategory fields
+            let shapesWithFieldsMap = Vector.map (`getShapeFields` fields) shapes
+            let maxV = round enpStats.max :: Int
+            let steps = (maxV `quot` 100) :: Int
+            let steps' = if steps == 0 then 100 else steps
+            reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledBySteps maxV steps' pid endpoint.urlPath endpoint.method
+            pure (endpoint, enpStats, project, Vector.toList shapesWithFieldsMap, fieldsMap, Vector.toList reqLatenciesRolledBySteps)
 
       let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
       let bwconf =
@@ -398,13 +400,12 @@ apiOverviewSubPage paramInput currTime endpoint fieldsM reqLatenciesRolledByStep
         faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 w-4 inline-block"
     div_ [id_ "timepickerBox", class_ "hidden absolute z-10 mt-1  rounded-md flex"] do
       div_ [class_ "inline-block w-84 overflow-auto bg-white py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm"] do
-        timePickerItems
-          & mapM_ \(val, title) ->
-            a_
-              [ class_ "block text-slate-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 "
-              , href_ $ currentURLSearch <> "&since=" <> val
-              ]
-              $ toHtml title
+        forM_ timePickerItems \(val, title) ->
+          a_
+            [ class_ "block text-slate-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 "
+            , href_ $ currentURLSearch <> "&since=" <> val
+            ]
+            $ toHtml title
         a_ [class_ "block text-slate-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ", [__| on click toggle .hidden on #timepickerSidebar |]] "Custom date range"
       div_ [class_ "inline-block relative hidden", id_ "timepickerSidebar"] do
         div_ [id_ "startTime", class_ "hidden"] ""
@@ -416,14 +417,15 @@ endpointStats :: Endpoints.EndpointRequestStats -> Text -> (Maybe ZonedTime, May
 endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p99, max} reqLatenciesRolledByStepsJ dateRange@(fromD, toD) =
   section_ [class_ "space-y-3"] do
     div_ [class_ "flex justify-between mt-5"]
-      $ div_ [class_ "flex flex-row"]
-      do
-        img_
-          [ src_ "/assets/svgs/cheveron-down.svg"
-          , class_ "h-4 mr-3 mt-1 w-4 cursor-pointer"
-          , [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .endpointStatsSubSection)|]
-          ]
-        span_ [class_ "text-lg text-slate-800"] "Endpoint Stats"
+      $ div_
+        [class_ "flex flex-row"]
+        do
+          img_
+            [ src_ "/assets/svgs/cheveron-down.svg"
+            , class_ "h-4 mr-3 mt-1 w-4 cursor-pointer"
+            , [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .endpointStatsSubSection)|]
+            ]
+          span_ [class_ "text-lg text-slate-800"] "Endpoint Stats"
     div_ [class_ "space-y-5 endpointStatsSubSection"] do
       div_ [class_ "grid grid-cols-3  gap-5"] do
         statBox Nothing "Total Anomalies" "Total Anomalies for this endpoint this week vs total for the project" enpStats.ongoingAnomaliesProj (Just enpStats.ongoingAnomaliesProj)
@@ -462,10 +464,11 @@ endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p
 
       div_ [class_ "col-span-3 bg-white   border border-gray-100  rounded-xl py-3 px-6"] do
         div_ [class_ "p-4"]
-          $ select_ []
-          do
-            option_ "Request Latency Distribution"
-            option_ "Avg Reqs per minute"
+          $ select_
+            []
+            do
+              option_ "Request Latency Distribution"
+              option_ "Avg Reqs per minute"
         div_ [class_ "grid grid-cols-9  gap-8 w-full"] do
           div_ [id_ "reqsLatencyHistogram", class_ "col-span-7 h-72"] ""
           div_ [class_ "col-span-2 space-y-4 "] do
