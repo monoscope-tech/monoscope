@@ -395,7 +395,15 @@ removeBlacklistedFields = map \(k, val) ->
     then (k, AE.String "[REDACTED]")
     else (k, val)
 
-
+-- >>> valueToFormat (AET.String "22")  
+-- "integer"
+--
+-- >>> valueToFormat (AET.String "22.33")  
+-- "float"
+--
+-- >>> valueToFormat (AET.String "22/02/2022")  
+-- "text"
+--
 valueToFormat :: AE.Value -> Text
 valueToFormat (AET.String val) = fromMaybe "text" $ valueToFormatStr val
 valueToFormat (AET.Number val) = valueToFormatNum val
@@ -404,8 +412,7 @@ valueToFormat AET.Null = "null"
 valueToFormat (AET.Object _) = "object"
 valueToFormat (AET.Array _) = "array"
 
-
--- | valueToFormatStr will take a string and try to find a format which matches that string best.
+-- valueToFormatStr will take a string and try to find a format which matches that string best.
 -- At the moment it takes a text and returns a generic mask that represents the format of that text
 --
 -- >>> valueToFormatStr "22/02/2022"
@@ -422,17 +429,24 @@ valueToFormat (AET.Array _) = "array"
 --
 -- >>> valueToFormatStr "c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd"
 -- Just "uuid"
+--
+-- >>> valueToFormatStr "2023-10-14T10:29:38.64522Z"
+-- Just "YYYY-MM-DDThh:mm:ss.sTZD"
 valueToFormatStr :: Text -> Maybe Text
 valueToFormatStr val
   | val =~ ([text|^[0-9]+$|] :: Text) = Just "integer"
   | val =~ ([text|^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)$|] :: Text) = Just "float"
+  | val =~ ([text|^[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}$|] :: Text) = Just "uuid"
   | val =~ ([text|^(0[1-9]|1[012])[- /.](0[1-9]|[12][0-9]|3[01])[- /.](19|20)\d\d$|] :: Text) = Just "mm/dd/yyyy"
   | val =~ ([text|^(0[1-9]|1[012])[- -.](0[1-9]|[12][0-9]|3[01])[- -.](19|20)\d\d$|] :: Text) = Just "mm-dd-yyyy"
   | val =~ ([text|^(0[1-9]|1[012])[- ..](0[1-9]|[12][0-9]|3[01])[- ..](19|20)\d\d$|] :: Text) = Just "mm.dd.yyyy"
-  | val =~ ([text|^[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}$|] :: Text) = Just "uuid"
+  | val =~ ([text|^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(([+-]\d\d:\d\d)|Z)?$|] :: Text ) = Just "YYYY-MM-DDThh:mm:ss.sTZD"
   | otherwise = Nothing
 
-
+-- >>> valueToFormatNum 22.3
+-- "float"
+-- >>> valueToFormatNum 22
+-- "integer"
 valueToFormatNum :: Scientific.Scientific -> Text
 valueToFormatNum val
   | Scientific.isFloating val = "float"
