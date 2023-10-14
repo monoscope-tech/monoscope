@@ -575,7 +575,6 @@ anomalyDetailsPage anomaly shapesWithFieldsMap fields prvFormatsM chartQuery cur
 
     div_ [class_ "mt-6 space-y-4"] do
       div_ [class_ "flex items-center gap-10 font-semibold border-b"] do
-        let events_url = "/p/" <> anomaly.projectId.toText <> "/anomaly/events/" <> anomaly.targetHash <> "/" <> show anomaly.anomalyType
         script_
           [type_ "text/hyperscript"]
           [text|
@@ -586,11 +585,6 @@ anomalyDetailsPage anomaly shapesWithFieldsMap fields prvFormatsM chartQuery cur
                 then remove .hidden from content
                 wait 10ms
                 then add .sdk_tab_content_active to content
-                if content is #events_content and @data-events-fetched is "false" then
-                  fetch `$${@data-events-url}` as html then put it into #events_content
-                  _hyperscript.processNode(#events_content)
-                  set @data-events-fetched to "true"
-                end
           end
         |]
         button_
@@ -615,8 +609,10 @@ anomalyDetailsPage anomaly shapesWithFieldsMap fields prvFormatsM chartQuery cur
             Anomalies.ATFormat -> anomalyFormatOverview anomaly (fromMaybe [] prvFormatsM)
             _ -> ""
         div_ [class_ "grow overflow-y-auto h-full whitespace-nowrap text-sm divide-y overflow-x-hidden sdk_tab_content", id_ "events_content"] do
+          let events_url = "/p/" <> anomaly.projectId.toText <> "/anomaly/events/" <> anomaly.targetHash <> "/" <> show anomaly.anomalyType
           div_ [class_ "w-full flex justify-center overflow-hidden"] do
             loader
+          div_ [hxGet_ events_url, hxTrigger_ "intersect", hxSwap_ "outerHTML"] pass
 
   script_
     [type_ "text/hyperscript"]
