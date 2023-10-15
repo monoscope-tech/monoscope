@@ -236,8 +236,8 @@ endpointDetails paramInput currTime endpoint endpointStats shapesWithFieldsMap f
       div_ [class_ "flex flex-row justify-between mb-10"] do
         div_ [class_ "flex flex-row place-items-center text-lg font-medium"] do
           h3_ [class_ "text-lg text-slate-800"] do
-            span_ [class_ $ "p-1 endpoint endpoint-" <> toLower (endpoint.method)] $ toHtml $ (endpoint.method) <> " "
-            strong_ [class_ "inconsolata text-xl"] $ toHtml (endpoint.urlPath)
+            span_ [class_ $ "p-1 endpoint endpoint-" <> toLower endpoint.method] $ toHtml $ endpoint.method <> " "
+            strong_ [class_ "inconsolata text-xl"] $ toHtml endpoint.urlPath
           faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" " h-4 w-4 m-2"
         nav_ [class_ " space-x-4"] do
           subPageMenu

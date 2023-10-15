@@ -181,12 +181,12 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   let shapeHash = endpointHash <> show rM.statusCode <> shapeHash' -- Include the endpoint hash and status code to make the shape hash unique by endpoint and status code.
   let projectId = Projects.ProjectId rM.projectId
 
-  let pathParamsFieldsDTO = pathParamFields <&> (fieldsToFieldDTO Fields.FCPathParam projectId endpointHash)
-      queryParamsFieldsDTO = queryParamFields <&> (fieldsToFieldDTO Fields.FCQueryParam projectId endpointHash)
-      reqHeadersFieldsDTO = reqHeaderFields <&> (fieldsToFieldDTO Fields.FCRequestHeader projectId endpointHash)
-      respHeadersFieldsDTO = respHeaderFields <&> (fieldsToFieldDTO Fields.FCResponseHeader projectId endpointHash)
-      reqBodyFieldsDTO = reqBodyFields <&> (fieldsToFieldDTO Fields.FCRequestBody projectId endpointHash)
-      respBodyFieldsDTO = respBodyFields <&> (fieldsToFieldDTO Fields.FCResponseBody projectId endpointHash)
+  let pathParamsFieldsDTO = pathParamFields <&> fieldsToFieldDTO Fields.FCPathParam projectId endpointHash
+      queryParamsFieldsDTO = queryParamFields <&> fieldsToFieldDTO Fields.FCQueryParam projectId endpointHash
+      reqHeadersFieldsDTO = reqHeaderFields <&> fieldsToFieldDTO Fields.FCRequestHeader projectId endpointHash
+      respHeadersFieldsDTO = respHeaderFields <&> fieldsToFieldDTO Fields.FCResponseHeader projectId endpointHash
+      reqBodyFieldsDTO = reqBodyFields <&> fieldsToFieldDTO Fields.FCRequestBody projectId endpointHash
+      respBodyFieldsDTO = respBodyFields <&> fieldsToFieldDTO Fields.FCResponseBody projectId endpointHash
       fieldsDTO =
         pathParamsFieldsDTO
           <> queryParamsFieldsDTO

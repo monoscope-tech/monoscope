@@ -240,7 +240,7 @@ projectsDropDown currProject projects = do
               a_ [class_ "flex justify-between p-2", href_ $ "/p/" <> project.id.toText] do
                 div_ [class_ "space-x-3"] do
                   img_ [class_ "inline-block", src_ "/assets/svgs/projects.svg"]
-                  span_ [class_ "inline-block"] $ toHtml $ project.title
+                  span_ [class_ "inline-block"] $ toHtml project.title
                 when (currProject.id == project.id) $ faIcon_ "fa-circle-check" "fa-sharp fa-regular fa-circle-check" "h-6 w-6 text-green-700"
 
 
