@@ -4,7 +4,7 @@ import Config
 import Data.Default (def)
 import Data.Text qualified as T
 import Lucid
-import Lucid.Htmx (hxIndicator_, hxPost_, hxSwap_, hxTarget_)
+import Lucid.Htmx (hxPost_, hxSwap_)
 import Lucid.Hyperscript
 import Lucid.Svg (d_, fill_, path_, viewBox_)
 import Models.Projects.Projects qualified as Projects

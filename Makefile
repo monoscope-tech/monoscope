@@ -23,6 +23,9 @@ test:
 fmt:
 	fourmolu --mode inplace $$(find . -name '*.hs')
 
+fix-imports:
+	fix-imports $$(find ./src -name '*.hs') <$$(find ./src -name '*.hs')
+
 lint:
 	hlint src 
 

@@ -29,8 +29,6 @@ import Gogol.Auth.ApplicationDefault qualified as Google
 import Gogol.PubSub qualified as PubSub
 import Models.Projects.Projects qualified as Projects
 import Network.Wai.Handler.Warp (run)
-import OddJobs.ConfigBuilder qualified as OJConfig
-import OddJobs.Types qualified as OJTypes
 import Optics.Operators
 import ProcessMessage
 import Relude

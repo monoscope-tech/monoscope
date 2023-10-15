@@ -18,7 +18,6 @@ import Data.Aeson (encode)
 import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
 import Data.Map qualified as Map
-import Data.Pool
 import Data.Text (replace)
 import Data.Text qualified as T
 import Data.Time (UTCTime, ZonedTime, defaultTimeLocale, formatTime, getCurrentTime, getTimeZone, zonedTimeToUTC)
