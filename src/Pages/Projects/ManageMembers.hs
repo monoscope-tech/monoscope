@@ -52,11 +52,12 @@ manageMembersPostH sess pid form = do
       pure $ addHeader hxTriggerData $ h3_ [] "Only members of this project can perform this action"
     else do
       (project, projMembers) <- liftIO
-        $ withPool pool
-        do
-          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-          projMembers <- ProjectMembers.selectActiveProjectMembers pid
-          pure (project, projMembers)
+        $ withPool
+          pool
+          do
+            project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+            projMembers <- ProjectMembers.selectActiveProjectMembers pid
+            pure (project, projMembers)
 
       -- TODO:
       -- Separate the new emails from the old emails
@@ -134,11 +135,12 @@ manageMembersGetH sess pid = do
       pure $ userNotMemeberPage sess
     else do
       (project, projMembers) <- liftIO
-        $ withPool pool'
-        do
-          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-          projMembers <- ProjectMembers.selectActiveProjectMembers pid
-          pure (project, projMembers)
+        $ withPool
+          pool'
+          do
+            project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+            projMembers <- ProjectMembers.selectActiveProjectMembers pid
+            pure (project, projMembers)
       let bwconf = (def :: BWConfig){sessM = Just sess, pageTitle = "Settings", currProject = project}
       pure $ bodyWrapper bwconf $ manageMembersBody projMembers
 

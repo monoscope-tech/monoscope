@@ -51,22 +51,14 @@ startApp = do
     Left err -> logger <& "Error decoding env variables : " <> show err
     Right envConfig ->
       do
-        let createPgConnIO = PG.connectPostgreSQL $ encodeUtf8 (envConfig ^. #databaseUrl)
-        when (envConfig ^. #migrateAndInitializeOnStart) do
+        let createPgConnIO = PG.connectPostgreSQL $ encodeUtf8 envConfig.databaseUrl
+        when envConfig.migrateAndInitializeOnStart do
           conn <- createPgConnIO
           initializationRes <- Migrations.runMigration conn Migrations.defaultOptions MigrationInitialization
           logger <& "migration initialized " <> show initializationRes
-          migrationRes <- Migrations.runMigration conn Migrations.defaultOptions $ MigrationDirectory ((toString $ envConfig ^. #migrationsDir) :: FilePath)
+          migrationRes <- Migrations.runMigration conn Migrations.defaultOptions $ MigrationDirectory (toString envConfig.migrationsDir :: FilePath)
           logger <& "migration result: " <> show migrationRes
 
-        -- poolConn <-
-        --   Pool.createPool
-        --     createPgConnIO
-        --     close
-        --     5 -- stripes  (distinct sub-pools)
-        --     30 -- unused connections are kept open for 5 minutes (60*5) ~ Not sure if this is seconds or minutes
-        --     50 -- max 50 connections open per stripe
-        --     -- poolConn <- Pool.newPool Pool.PoolConfig {createResource = createPgConnIO, freeResource = close, poolCacheTTL = 60 * 10, poolMaxResources = 20}
         poolConn <- Pool.newPool $ Pool.defaultPoolConfig createPgConnIO PG.close (60*6) 250
         projectCache <- newCache (Just $ TimeSpec (60 * 60) 0) :: IO (Cache Projects.ProjectId Projects.ProjectCache) -- 60*60secs or 1 hour TTL
         let serverCtx =
@@ -122,7 +114,7 @@ pubsubService logger envConfig conn projectCache = do
   forever
     $ runResourceT
     do
-      forM (envConfig ^. #requestPubsubTopics) \topic -> do
+      forM envConfig.requestPubsubTopics \topic -> do
         let subscription = "projects/past-3/subscriptions/" <> topic <> "-sub"
         pullResp <- Google.send env $ PubSub.newPubSubProjectsSubscriptionsPull pullReq subscription
         let messages = (pullResp L.^. field @"receivedMessages") & fromMaybe []
