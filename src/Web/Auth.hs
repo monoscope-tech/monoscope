@@ -99,8 +99,6 @@ authCallbackH
 authCallbackH codeM _ = do
   envCfg <- asks env
   pool <- asks pool
-  traceShowM "In authCallbackH"
-
   resp <- runExceptT do
     code <- hoistEither $ note "invalid code " codeM
     r <-
@@ -127,16 +125,13 @@ authCallbackH codeM _ = do
     (userId, persistentSessId) <- liftIO
       $ withPool pool
       do
-        traceShowM "In before userbyemail"
         userM <- Users.userByEmail email
-        traceShowM "In before userbyemail2"
         userId <- case userM of
           Nothing -> do
             user <- liftIO $ Users.createUser firstName lastName picture email
             Users.insertUser user
             pure user.id
           Just user -> pure user.id
-        traceShowM "In before persistentSessId"
         persistentSessId <- liftIO Sessions.newPersistentSessionId
         Sessions.insertSession persistentSessId userId (Sessions.SessionData Map.empty)
         pure (userId, persistentSessId)
