@@ -232,7 +232,7 @@ selectAnomalies pid endpointM isAcknowleged isArchived sortM limitM skipM = quer
       catMaybes
         [ (\a -> " aan.acknowleged_at is" <> a <> " null ") <$> (boolToNullSubQ <$> isAcknowleged)
         , (\a -> " aan.archived_at is" <> a <> " null ") <$> (boolToNullSubQ <$> isArchived)
-        , "endpoint_id=?" <$ endpointM
+        , "avm.endpoint_id=?" <$ endpointM
         ]
     cond
       | null condlist = mempty

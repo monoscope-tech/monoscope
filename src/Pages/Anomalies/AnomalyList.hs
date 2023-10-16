@@ -167,7 +167,9 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM page loadM endpointM hxRe
           pool
           do
             project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-            anomalies <- Anomalies.selectAnomalies pid Nothing ackd archived sortM limit (pageInt * fetchLimit)
+            anomalies <- case layoutM of
+              Just _ -> Anomalies.selectAnomalies pid endpointM ackd archived sortM limit (pageInt * fetchLimit)
+              Nothing -> Anomalies.selectAnomalies pid Nothing ackd archived sortM limit (pageInt * fetchLimit)
             pure (project, anomalies)
       currTime <- liftIO getCurrentTime
       let bwconf =
@@ -435,8 +437,8 @@ anomalyItem hideByDefault currTime anomaly icon title subTitle content = do
               , [__|on click remove .hidden from #expand-an-modal then
                   remove .hidden from #an-modal-content-loader
                   fetch `${@data-an-url}` as html then put it into #an-modal-content
-                  _hyperscript.processNode(#expand-an-modal)
                   add .hidden to #an-modal-content-loader
+                  _hyperscript.processNode(#expand-an-modal)
                   end
                 |]
               ]
@@ -608,9 +610,9 @@ anomalyDetailsPage anomaly shapesWithFieldsMap fields prvFormatsM chartQuery cur
             _ -> ""
         div_ [class_ "grow overflow-y-auto h-full whitespace-nowrap text-sm divide-y overflow-x-hidden sdk_tab_content", id_ "events_content"] do
           let events_url = "/p/" <> anomaly.projectId.toText <> "/anomaly/events/" <> anomaly.targetHash <> "/" <> show anomaly.anomalyType
-          div_ [class_ "w-full flex justify-center overflow-hidden"] do
-            loader
-          div_ [hxGet_ events_url, hxTrigger_ "intersect", hxSwap_ "outerHTML"] pass
+          div_ [hxGet_ events_url, hxTrigger_ "intersect", hxSwap_ "outerHTML"] do
+            div_ [class_ "w-full flex justify-center overflow-hidden"] do
+              loader
 
   script_
     [type_ "text/hyperscript"]
