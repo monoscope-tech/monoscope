@@ -397,7 +397,7 @@ logItemRows pid requests cols nextLogsURL = do
     let logItemEndpointUrl = "/p/" <> pid.toText <> "/log_explorer/endpoint/" <> endpoint_hash
     let errorClass = if req.errorsCount > 0 then "bg-red-500" else "bg-transparent"
     div_
-      [ class_ "flex flex-row divide-x  cursor-pointer " 
+      [ class_ "flex flex-row divide-x  cursor-pointer "
       , term "data-log-item-path" logItemPath
       , [__|on click LogItemExpandable(me)|]
       ]

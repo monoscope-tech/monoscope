@@ -153,7 +153,7 @@ convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
                         then (T.takeWhile (/= '[') grp, object ["description" .= String desc, "type" .= String "array", "items" .= object ["type" .= t, "format" .= ft, "example" .= eg]])
                         else (grp, object ["description" .= String desc, "type" .= t, "format" .= ft, "example" .= eg])
                     validKey = if key == "" then "schema" else key
-                 in object [AEKey.fromText validKey .= ob]                 
+                 in object [AEKey.fromText validKey .= ob]
               else
                 let (key, t) = if T.isSuffixOf "[*]" grp then (T.takeWhile (/= '[') grp, "array" :: String) else (grp, "object")
                     validKey = if key == "" then "schema" else key

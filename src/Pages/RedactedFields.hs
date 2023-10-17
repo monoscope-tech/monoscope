@@ -49,10 +49,11 @@ redactedFieldsPostH sess pid RedactFieldForm{path, description, endpointHash} = 
       let fieldToRedact = RedactedFields.RedactedField{id = redactedFieldId, projectId = pid, configuredVia = RedactedFields.Dashboard, ..}
 
       redactedFields <- liftIO
-        $ withPool pool
-        do
-          RedactedFields.redactField fieldToRedact
-          RedactedFields.redactedFieldsByProject pid
+        $ withPool
+          pool
+          do
+            RedactedFields.redactField fieldToRedact
+            RedactedFields.redactedFieldsByProject pid
 
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Submitted field to be redacted, Successfully"]}|]
       pure $ addHeader hxTriggerData $ mainContent pid redactedFields
@@ -68,11 +69,12 @@ redactedFieldsGetH sess pid = do
       pure $ userNotMemeberPage sess
     else do
       (project, redactedFields) <- liftIO
-        $ withPool pool
-        do
-          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-          redactedFields <- RedactedFields.redactedFieldsByProject pid
-          pure (project, redactedFields)
+        $ withPool
+          pool
+          do
+            project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+            redactedFields <- RedactedFields.redactedFieldsByProject pid
+            pure (project, redactedFields)
 
       let bwconf =
             (def :: BWConfig)

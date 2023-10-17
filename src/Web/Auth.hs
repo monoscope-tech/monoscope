@@ -123,18 +123,19 @@ authCallbackH codeM _ = do
     -- https://en.gravatar.com/site/implement/images/
     let picture = fromMaybe "" $ resp L.^? responseBody . key "picture" . _String
     (userId, persistentSessId) <- liftIO
-      $ withPool pool
-      do
-        userM <- Users.userByEmail email
-        userId <- case userM of
-          Nothing -> do
-            user <- liftIO $ Users.createUser firstName lastName picture email
-            Users.insertUser user
-            pure user.id
-          Just user -> pure user.id
-        persistentSessId <- liftIO Sessions.newPersistentSessionId
-        Sessions.insertSession persistentSessId userId (Sessions.SessionData Map.empty)
-        pure (userId, persistentSessId)
+      $ withPool
+        pool
+        do
+          userM <- Users.userByEmail email
+          userId <- case userM of
+            Nothing -> do
+              user <- liftIO $ Users.createUser firstName lastName picture email
+              Users.insertUser user
+              pure user.id
+            Just user -> pure user.id
+          persistentSessId <- liftIO Sessions.newPersistentSessionId
+          Sessions.insertSession persistentSessId userId (Sessions.SessionData Map.empty)
+          pure (userId, persistentSessId)
     _ <- liftIO $ ConvertKit.addUser (envCfg ^. #convertkitApiKey) email firstName lastName "" "" ""
     pure persistentSessId
 
@@ -142,13 +143,14 @@ authCallbackH codeM _ = do
     Left err -> putStrLn ("unable to process auth callback page " <> err) >> (throwError $ err302{errHeaders = [("Location", "/login?auth0_callback_failure")]}) >> pure (noHeader $ noHeader "")
     Right persistentSessId -> pure
       $ addHeader "/"
-      $ addHeader (craftSessionCookie persistentSessId True)
-      do
-        html_ do
-          head_ do
-            meta_ [httpEquiv_ "refresh", content_ "1;url=/"]
-          body_ do
-            a_ [href_ "/"] "Continue to APIToolkit"
+      $ addHeader
+        (craftSessionCookie persistentSessId True)
+        do
+          html_ do
+            head_ do
+              meta_ [httpEquiv_ "refresh", content_ "1;url=/"]
+            body_ do
+              a_ [href_ "/"] "Continue to APIToolkit"
 
 
 --- | The auth handler wraps a function from Request -> Handler Account.

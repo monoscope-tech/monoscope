@@ -59,7 +59,7 @@ startApp = do
           migrationRes <- Migrations.runMigration conn Migrations.defaultOptions $ MigrationDirectory (toString envConfig.migrationsDir :: FilePath)
           logger <& "migration result: " <> show migrationRes
 
-        poolConn <- Pool.newPool $ Pool.defaultPoolConfig createPgConnIO PG.close (60*6) 250
+        poolConn <- Pool.newPool $ Pool.defaultPoolConfig createPgConnIO PG.close (60 * 6) 250
         projectCache <- newCache (Just $ TimeSpec (60 * 60) 0) :: IO (Cache Projects.ProjectId Projects.ProjectCache) -- 60*60secs or 1 hour TTL
         let serverCtx =
               Config.AuthContext
@@ -113,14 +113,14 @@ pubsubService logger envConfig conn projectCache = do
 
   forever
     $ runResourceT
-    do
-      forM envConfig.requestPubsubTopics \topic -> do
-        let subscription = "projects/past-3/subscriptions/" <> topic <> "-sub"
-        pullResp <- Google.send env $ PubSub.newPubSubProjectsSubscriptionsPull pullReq subscription
-        let messages = (pullResp L.^. field @"receivedMessages") & fromMaybe []
-        msgIds <- liftIO $ processMessages logger envConfig conn messages projectCache
-        let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just (catMaybes msgIds)
-        unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env
+      do
+        forM envConfig.requestPubsubTopics \topic -> do
+          let subscription = "projects/past-3/subscriptions/" <> topic <> "-sub"
+          pullResp <- Google.send env $ PubSub.newPubSubProjectsSubscriptionsPull pullReq subscription
+          let messages = (pullResp L.^. field @"receivedMessages") & fromMaybe []
+          msgIds <- liftIO $ processMessages logger envConfig conn messages projectCache
+          let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just (catMaybes msgIds)
+          unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env
 
 
 -- pubSubScope :: Proxy PubSub.Pubsub'FullControl

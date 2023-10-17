@@ -139,14 +139,9 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
 
   -- TODO: This is a temporary fix to add host in creating endoint hash
   -- These are the projects that we have already created endpoints
-  let existing_projects = V.fromList ["129a2fbe-49c9-4d55-8bea-c39aa15e6757", "1748682d-eebd-4f9c-94cd-12ca70a8fc87", "48fd83a9-cafc-40be-a37e-5efcf1fbd0c5", "5ab9055b-57b7-4823-b605-96725ca4add0", "e47c61ce-808f-48ce-90c9-81f2ba4dbf4f", "ebed9d39-bb1e-4179-b48f-848881b4b803"] :: V.Vector Text
-
   let method = T.toUpper rM.method
   let urlPath = RequestDumps.normalizeUrlPath rM.sdkType rM.statusCode rM.method rM.urlPath
-  let !endpointHash =
-        if UUID.toText rM.projectId `V.elem` existing_projects
-          then from @String @Text $ showHex (xxHash $ encodeUtf8 $ UUID.toText rM.projectId <> method <> urlPath) ""
-          else from @String @Text $ showHex (xxHash $ encodeUtf8 $ UUID.toText rM.projectId <> rM.host <> method <> urlPath) ""
+  let !endpointHash = from @String @Text $ showHex (xxHash $ encodeUtf8 $ UUID.toText rM.projectId <> rM.host <> method <> urlPath) ""
 
   let redactFieldsList = Vector.toList pjc.redactFieldslist <> [".set-cookie", ".password"]
   reqBodyB64 <- B64.decodeBase64 $ encodeUtf8 rM.requestBody
@@ -395,13 +390,14 @@ removeBlacklistedFields = map \(k, val) ->
     then (k, AE.String "[REDACTED]")
     else (k, val)
 
--- >>> valueToFormat (AET.String "22")  
+
+-- >>> valueToFormat (AET.String "22")
 -- "integer"
 --
--- >>> valueToFormat (AET.String "22.33")  
+-- >>> valueToFormat (AET.String "22.33")
 -- "float"
 --
--- >>> valueToFormat (AET.String "22/02/2022")  
+-- >>> valueToFormat (AET.String "22/02/2022")
 -- "text"
 --
 valueToFormat :: AE.Value -> Text
@@ -411,6 +407,7 @@ valueToFormat (AET.Bool _) = "bool"
 valueToFormat AET.Null = "null"
 valueToFormat (AET.Object _) = "object"
 valueToFormat (AET.Array _) = "array"
+
 
 -- valueToFormatStr will take a string and try to find a format which matches that string best.
 -- At the moment it takes a text and returns a generic mask that represents the format of that text
@@ -441,8 +438,9 @@ valueToFormatStr val
   | val =~ ([text|^(0[1-9]|1[012])[- /.](0[1-9]|[12][0-9]|3[01])[- /.](19|20)\d\d$|] :: Text) = Just "mm/dd/yyyy"
   | val =~ ([text|^(0[1-9]|1[012])[- -.](0[1-9]|[12][0-9]|3[01])[- -.](19|20)\d\d$|] :: Text) = Just "mm-dd-yyyy"
   | val =~ ([text|^(0[1-9]|1[012])[- ..](0[1-9]|[12][0-9]|3[01])[- ..](19|20)\d\d$|] :: Text) = Just "mm.dd.yyyy"
-  | val =~ ([text|^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(([+-]\d\d:\d\d)|Z)?$|] :: Text ) = Just "YYYY-MM-DDThh:mm:ss.sTZD"
+  | val =~ ([text|^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(([+-]\d\d:\d\d)|Z)?$|] :: Text) = Just "YYYY-MM-DDThh:mm:ss.sTZD"
   | otherwise = Nothing
+
 
 -- >>> valueToFormatNum 22.3
 -- "float"

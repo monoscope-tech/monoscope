@@ -71,7 +71,7 @@ spec = aroundAll TmpPg.withSetup $ describe "Models.Projects.Swaggers" $ do
         _ <- createSwagger (ProjectId UUID.nil) (UserId UUID.nil) swaggerJson1
         _ <- createSwagger (ProjectId UUID.nil) (UserId UUID.nil) swaggerJson2
         swaggersByProject (ProjectId UUID.nil)
-      map (^. #swaggerJson) (toList result) `shouldBe` [swaggerJson2,  swaggerJson1, swaggerJson', swaggerJson']
+      map (^. #swaggerJson) (toList result) `shouldBe` [swaggerJson2, swaggerJson1, swaggerJson', swaggerJson']
 
   describe "updateSwagger"
     $ it "should update the Swagger JSON of a Swagger" \pool -> do
