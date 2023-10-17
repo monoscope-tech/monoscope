@@ -212,6 +212,8 @@ integrateApiToolkit apikey current_tab =
         tabContentSymfony apikey current_tab
         tabContentDotNet apikey current_tab
         tabContentFastify apikey current_tab
+        tabContentEcho apikey current_tab
+        tabContentGorilla apikey current_tab
       div_ [class_ "font-medium text-slate-700 mt-8 space-y-2 text-xl"] do
         p_ [class_ "space-x-3"] do
           span_ [class_ ""] "Having trouble integrating APIToolkit?"
@@ -608,7 +610,7 @@ tabContentDjango apikey current_tab =
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
           p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "pip install apitoolkit-django"
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app by adding APITOOLKIT_KEY and APIToolkit to the settings middleware list"
-        div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[70vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
+        div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[0vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
           div_ [class_ "relative w-full flex flex-col"] do
             div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] do
               div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] do
@@ -632,6 +634,117 @@ tabContentDjango apikey current_tab =
                   <> "APITOOLKIT_REDACT_HEADERS = [\"Authorization\", \"Cookie\",\"Content-Length\", \"Content-Type\"] # optional\n"
                   <> "APITOOLKIT_REDACT_REQ_BODY = [\"$.password\", \"$.credit_card\"] # optional\n"
                   <> "APITOOLKIT_REDACT_RES_BODY = [\"$.credentials\", \"$.social_security_number\"] # optional\n"
+
+
+tabContentEcho :: Text -> Text -> Html ()
+tabContentEcho apikey current_tab =
+  div_ [class_ $ "tab-content flex flex-col m-8 " <> (if current_tab == "echo" then "" else "hidden"), id_ "echo_content"]
+    $ do
+      div_ [class_ "relative"] $ do
+        div_ [class_ "mb-6 space-x-3"] do
+          strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
+          a_ [class_ "link underline text-lg", href_ "https://github.com/apitoolkit/apitoolkit-go", target_ "BLANK"] "github.com/apitoolkit/apitoolkit-django"
+
+        div_ [class_ "mb-6"] do
+          h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
+          p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "go get github.com/apitoolkit/apitoolkit-go"
+        h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app by adding APITOOLKIT_KEY and APIToolkit to the settings middleware list"
+        div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[0vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
+          div_ [class_ "relative w-full flex flex-col"] do
+            div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] do
+              div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] do
+                div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
+                div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
+                div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
+            div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
+              pre_ [class_ "flex min-h-full text-lg leading-snug"] do
+                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-go atom-one-dark"]
+                  $ toHtml
+                  $ "package main\n"
+                  <> "\n"
+                  <> "import (\n"
+                  <> "    context\n"
+                  <> "    \"net/http\"\n"
+                  <> "\n"
+                  <> "    apitoolkit \"github.com/apitoolkit/apitoolkit-go\"\n"
+                  <> "    \"github.com/labstack/echo/v4\"\n"
+                  <> ")\n"
+                  <> "\n"
+                  <> "func main() {\n"
+                  <> "    ctx := context.Background()\n"
+                  <> "\n"
+                  <> "    // Initialize the client using your apitoolkit.io generated apikey\n"
+                  <> "    apitoolkitClient, err := apitoolkit.NewClient(ctx, apitoolkit.Config{APIKey: \""
+                  <> apikey
+                  <> "\"})\n"
+                  <> "    if err != nil {\n"
+                  <> "        panic(err)\n"
+                  <> "    }\n"
+                  <> "\n"
+                  <> "    e := echo.New()\n"
+                  <> "\n"
+                  <> "    // Register with the corresponding middleware of your choice.\n"
+                  <> "    // Assuming apitoolkit provides an EchoMiddleware function for the echo framework.\n"
+                  <> "    e.Use(apitoolkitClient.EchoMiddleware)\n"
+                  <> "\n"
+                  <> "    e.POST(\":/slug/test\", func(c echo.Context) error {\n"
+                  <> "        return c.String(http.StatusOK, \"ok\")\n"
+                  <> "    })\n"
+                  <> "\n"
+                  <> "    e.Start(\":8080\")\n"
+                  <> "}"
+
+
+tabContentGorilla :: Text -> Text -> Html ()
+tabContentGorilla apikey current_tab =
+  div_ [class_ $ "tab-content flex flex-col m-8 " <> (if current_tab == "gorilla" then "" else "hidden"), id_ "gorilla_content"]
+    $ do
+      div_ [class_ "relative"] $ do
+        div_ [class_ "mb-6 space-x-3"] do
+          strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
+          a_ [class_ "link underline text-lg", href_ "https://github.com/apitoolkit/apitoolkit-go", target_ "BLANK"] "github.com/apitoolkit/apitoolkit-go"
+
+        div_ [class_ "mb-6"] do
+          h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
+          p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "go get github.com/apitoolkit/apitoolkit-echo"
+        h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app by adding APITOOLKIT_KEY and APIToolkit to the settings middleware list"
+        div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[0vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
+          div_ [class_ "relative w-full flex flex-col"] do
+            div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] do
+              div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] do
+                div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
+                div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
+                div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
+            div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
+              pre_ [class_ "flex min-h-full text-lg leading-snug"] do
+                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-go atom-one-dark"]
+                  $ toHtml
+                  $ "package main\n"
+                  <> "import (\n"
+                  <> "    \"context\"\n"
+                  <> "    \"net/http\"\n"
+                  <> "    \"github.com/gorilla/mux\"\n"
+                  <> "    apitoolkit \"github.com/apitoolkit/apitoolkit-go\"\n"
+                  <> ")\n"
+                  <> "func main() {\n"
+                  <> "    ctx := context.Background()\n"
+                  <> "    // Initialize the client using your generated API key\n"
+                  <> "    apitoolkitClient, err := apitoolkit.NewClient(ctx, apitoolkit.Config{APIKey: \""
+                  <> apikey
+                  <> "\"})\n"
+                  <> "    if err != nil {\n"
+                  <> "        panic(err)\n"
+                  <> "    }\n"
+                  <> "    r := mux.NewRouter()\n"
+                  <> "    // Register middleware\n"
+                  <> "    r.Use(apitoolkitClient.GorillaMuxMiddleware)\n"
+                  <> "    r.HandleFunc(\"/{slug}/test\", func(w http.ResponseWriter, r *http.Request) {\n"
+                  <> "        w.WriteHeader(http.StatusOK)\n"
+                  <> "        w.Write([]byte(\"ok\"))\n"
+                  <> "    })\n"
+                  <> "    // Start the HTTP server on port 8080\n"
+                  <> "    http.ListenAndServe(\":8080\", r)\n"
+                  <> "}"
 
 
 tabs :: Text -> Html ()
@@ -691,6 +804,13 @@ tabs current_tab =
         "Django"
     li_ [class_ "shrink-0"] do
       button_
+        [ class_ $ if current_tab == "gorilla" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #gorilla_content) |]
+        , id_ "gorilla"
+        ]
+        "Go Gorilla"
+    li_ [class_ "shrink-0"] do
+      button_
         [ class_ $ if current_tab == "symfony" then "sdk_tab sdk_tab_active" else "sdk_tab"
         , [__| install Navigatable(content: #symfony_content) |]
         , id_ "symfony"
@@ -703,6 +823,13 @@ tabs current_tab =
         , id_ "net"
         ]
         "C# .NET"
+    li_ [class_ "shrink-0"] do
+      button_
+        [ class_ $ if current_tab == "gin" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #echo_content) |]
+        , id_ "echo"
+        ]
+        "Go Echo"
     li_ [class_ "shrink-0"] do
       button_
         [ class_ $ if current_tab == "fastify" then "sdk_tab sdk_tab_active" else "sdk_tab"
