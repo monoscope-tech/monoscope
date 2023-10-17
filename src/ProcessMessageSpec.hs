@@ -8,8 +8,10 @@ import Data.Aeson.Types (parseMaybe)
 import Data.Cache
 import Data.Default (Default (..))
 import Data.UUID qualified as UUID
-import Database.PostgreSQL.Entity.DBT (withPool)
+import Database.PostgreSQL.Entity.DBT (execute, withPool, QueryNature (Insert))
+import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Debug.Pretty.Simple (pTraceShowM)
+import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects (ProjectId (ProjectId))
 import Models.Projects.Projects qualified as Projects
@@ -91,11 +93,13 @@ msg2 =
         |]
 
 
+pid :: Projects.ProjectId
+pid = Projects.ProjectId UUID.nil
+
+
 spec :: Spec
 spec = aroundAll TmpPg.withSetup do
   describe "process request to db" do
-    -- The project cache will be reused by tests to simulate the real app situation
-    projectCache <- newCache (Just $ TimeSpec (60 * 60) 0) :: IO (Cache Projects.ProjectId Projects.ProjectCache) -- 60*60secs or 1 hour TTL
     it "should save the request" \pool -> do
       let reqMsg1 = Unsafe.fromJust $ convert msg1
       let reqMsg2 = Unsafe.fromJust $ convert msg2
@@ -103,16 +107,33 @@ spec = aroundAll TmpPg.withSetup do
             [ Right (Just "m1", reqMsg1)
             , Right (Just "m2", reqMsg2)
             ]
+      projectCache <- newCache (Just $ TimeSpec (60 * 60) 0) :: IO (Cache Projects.ProjectId Projects.ProjectCache) -- 60*60secs or 1 hour TTL
       resp <- processMessages' logStringStdout (def :: Config.EnvConfig) pool msgs projectCache
       resp `shouldBe` [Just "m1", Just "m2"]
 
     it "should be able to query request dumps that include the added requests" \pool -> do
-      (reqs, count) <- withPool pool $ RequestDumps.selectRequestDumpByProject (Projects.ProjectId UUID.nil) "" Nothing
+      (reqs, count) <- withPool pool $ RequestDumps.selectRequestDumpByProject pid "" Nothing
       count `shouldBe` 2 -- Since 2 were saved above.
       count `shouldBe` length reqs
 
+    it "We should expect 2 endpoints, albeit unacknowleged." \pool -> do
+      _ <-
+        withPool pool
+          $ execute
+            Insert
+            [sql|
+            REFRESH MATERIALIZED VIEW CONCURRENTLY apis.endpoint_request_stats;
+            REFRESH MATERIALIZED VIEW CONCURRENTLY apis.project_request_stats;
+            REFRESH MATERIALIZED VIEW CONCURRENTLY apis.target_hash_agg_14days;
+            REFRESH MATERIALIZED VIEW CONCURRENTLY apis.target_hash_agg_24hrs;
+        |] ()
+      endpoints <- withPool pool $ Endpoints.endpointRequestStatsByProject pid False False Nothing
+      length endpoints `shouldBe` 2 -- Two new endpoints from the last 2 requests
+      pTraceShowM endpoints
+      forM endpoints \enp -> do
+        ["/", "/api/v1/user/login"] `shouldContain` [enp.urlPath]
+      pass
 
--- it "We should expect 2 endpoints, albeit unacknowleged." \pool -> do
 
 convert :: Value -> Maybe RequestMessages.RequestMessage
 convert val = case fromJSON val of
