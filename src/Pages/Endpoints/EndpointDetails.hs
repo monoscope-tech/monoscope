@@ -306,13 +306,16 @@ shapesSubPage shapesList currentURL = do
               let statuscls = getStatusColor shape.statusCode
               span_ [class_ $ "px-3 py-1 " <> statuscls] $ show shape.statusCode
               span_ [class_ "text-sm text-gray-500"] $ toHtml shape.hash
-              div_ [class_ "text-sm text-gray-500 w-1/2 flex flex-col gap-1"] do
+              div_ [class_ "text-sm text-gray-500 w-3/2 flex flex-col gap-1"] do
                 p_ [class_ "space-x-2"] do
                   span_ [class_ ""] "Response Body:"
-                  span_ [] $ toHtml $ mconcat (intersperse " * " $ V.toList shape.responseBodyKeypaths)
+                  span_ [] $ toHtml $ mconcat (intersperse " • " $ V.toList shape.responseBodyKeypaths)
                 p_ [class_ "space-x-2"] do
                   span_ [class_ ""] "Request Body:"
-                  span_ [] $ toHtml $ mconcat (intersperse " * " $ V.toList shape.requestBodyKeypaths)
+                  span_ [] $ toHtml $ mconcat (intersperse " • " $ V.toList shape.requestBodyKeypaths)
+            div_ [] do
+              let chartQuery = Just $ Charts.QBShapeHash shape.hash
+              div_ [class_ "flex items-center justify-center "] $ div_ [class_ "w-60 h-16 px-3"] $ Charts.throughput shape.projectId shape.hash chartQuery Nothing 14 Nothing False (Nothing, Nothing) Nothing
 
 
 apiDocsSubPage :: [Shapes.ShapeWithFields] -> Maybe Text -> Html ()
