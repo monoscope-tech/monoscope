@@ -157,6 +157,6 @@ instance Display Expr where
 ----------------------------------------------------------------------------------
 -- >>> parseQueryStringToWhereClause "request_body.message!=\"blabla\" AND method=\"GET\""
 -- Right "request_body->>'message'!='blabla' AND method='GET'"
- -- >>> parseQueryStringToWhereClause "request_body.message!=\"blabla\" AND method=\"GET\""
+-- >>> parseQueryStringToWhereClause "request_body.message!=\"blabla\" AND method=\"GET\""
 parseQueryStringToWhereClause :: Text -> Either Text Text
 parseQueryStringToWhereClause q = if q == "" then Right "" else bimap (toText . errorBundlePretty) display (parse parseQuery "" q)

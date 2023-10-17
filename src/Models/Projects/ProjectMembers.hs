@@ -19,13 +19,12 @@ import Data.CaseInsensitive (CI)
 import Data.Default.Instances ()
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
-import Database.PostgreSQL.Entity.DBT
-    ( QueryNature(..),
-      execute,
-      query,
-      queryOne,
-      QueryNature(Select),
-      query )
+import Database.PostgreSQL.Entity.DBT (
+  QueryNature (..),
+  execute,
+  query,
+  queryOne,
+ )
 
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.Types

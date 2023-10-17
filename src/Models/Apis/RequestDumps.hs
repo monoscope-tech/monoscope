@@ -133,7 +133,7 @@ instance FromField RequestTypes where
 normalizeUrlPath :: SDKTypes -> Int -> Text -> Text -> Text
 normalizeUrlPath GoOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath GoGin statusCode _method urlPath = removeQueryParams statusCode urlPath
-normalizeUrlPath GoFiber statusCode _method urlPath = removeQueryParams statusCode urlPath 
+normalizeUrlPath GoFiber statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath GoBuiltIn statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath GoDefault statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath GoGorillaMux statusCode _method urlPath = removeQueryParams statusCode urlPath

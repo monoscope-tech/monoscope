@@ -19,6 +19,7 @@ import Data.UUID.V4 (nextRandom)
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (Connection, Query)
 import Database.PostgreSQL.Transact (execute)
+import Debug.Pretty.Simple (pTrace, pTraceShowM)
 import Fmt
 import Gogol.Data.Base64 (_Base64)
 import Gogol.PubSub qualified as PubSub
@@ -27,9 +28,8 @@ import Models.Projects.Projects qualified as Projects
 import Relude hiding (hoistMaybe)
 import RequestMessages qualified
 import System.Clock
-import Text.Pretty.Simple (pShow, pPrint)
+import Text.Pretty.Simple (pPrint, pShow)
 import Utils (DBField, eitherStrToText)
-import Debug.Pretty.Simple (pTrace, pTraceShowM)
 
 
 {--

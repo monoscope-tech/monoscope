@@ -4,6 +4,7 @@ module Config (EnvConfig (..), AuthContext (..), DashboardM, ctxToHandler) where
 
 import Colog (LogAction)
 import Data.Cache (Cache)
+import Data.Default (Default)
 import Data.Pool as Pool
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as LT
@@ -52,7 +53,7 @@ data EnvConfig = EnvConfig
   , enableBackgroundJobs :: Bool
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromEnv)
+  deriving anyclass (FromEnv, Default)
 
 
 -- Support unmarshalling a coma separated text into a text list
