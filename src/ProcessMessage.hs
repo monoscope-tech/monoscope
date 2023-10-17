@@ -27,8 +27,9 @@ import Models.Projects.Projects qualified as Projects
 import Relude hiding (hoistMaybe)
 import RequestMessages qualified
 import System.Clock
-import Text.Pretty.Simple (pShow)
+import Text.Pretty.Simple (pShow, pPrint)
 import Utils (DBField, eitherStrToText)
+import Debug.Pretty.Simple (pTrace, pTraceShowM)
 
 
 {--
@@ -94,6 +95,7 @@ processMessages :: LogAction IO String -> Config.EnvConfig -> Pool Connection ->
 processMessages logger' env conn' msgs projectCache = do
   let msgs' =
         msgs <&> \msg -> do
+          _ <- pTraceShowM msg.message
           let rmMsg = msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64
           let jsonByteStr = fromMaybe "{}" rmMsg
           recMsg <- eitherStrToText $ eitherDecode (fromStrict jsonByteStr)
@@ -110,7 +112,6 @@ wrapTxtException wrap e = " " <> wrap <> " : " <> (toText @String $ show e)
 processMessages' :: LogAction IO String -> Config.EnvConfig -> Pool Connection -> [Either Text (Maybe Text, RequestMessages.RequestMessage)] -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> IO [Maybe Text]
 processMessages' logger' _ conn' msgs projectCache' = do
   startTime <- getTime Monotonic
-  let messagesCount = length msgs
   processed <- mapM (processMessage logger' conn' projectCache') msgs
   let (rmAckIds, queries, params, reqDumps) = unzip4 $ rights processed
   let query' = mconcat queries
@@ -138,7 +139,7 @@ processMessages' logger' _ conn' msgs projectCache' = do
       $ RequestDumps.bulkInsertRequestDumps reqDumps
 
   endTime <- getTime Monotonic
-  liftIO $ putStrLn $ fmtLn $ "Process Message (" +| messagesCount |+ ") pipeline microsecs: queryDuration " +| toNanoSecs (diffTimeSpec startTime afterProccessing) `div` 1000 |+ " -> processingDuration " +| toNanoSecs (diffTimeSpec afterProccessing endTime) `div` 1000 |+ " -> TotalDuration " +| toNanoSecs (diffTimeSpec startTime endTime) `div` 1000 |+ ""
+  liftIO $ putStrLn $ fmtLn $ "Process Message (" +| length msgs |+ ") pipeline microsecs: queryDuration " +| toNanoSecs (diffTimeSpec startTime afterProccessing) `div` 1000 |+ " -> processingDuration " +| toNanoSecs (diffTimeSpec afterProccessing endTime) `div` 1000 |+ " -> TotalDuration " +| toNanoSecs (diffTimeSpec startTime endTime) `div` 1000 |+ ""
 
   case resp of
     Left err -> do

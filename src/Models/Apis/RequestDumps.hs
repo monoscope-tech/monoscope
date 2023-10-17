@@ -38,7 +38,6 @@ import Data.Time (CalendarDiffTime, ZonedTime, defaultTimeLocale, diffUTCTime, f
 import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
 import Data.Tuple.Extra (both)
 import Data.UUID qualified as UUID
-import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, queryOne)
 import Database.PostgreSQL.Entity.Types
@@ -227,14 +226,14 @@ data RequestDump = RequestDump
   , --
     endpointHash :: Text
   , shapeHash :: Text
-  , formatHashes :: Vector Text
-  , fieldHashes :: Vector Text
+  , formatHashes :: V.Vector Text
+  , fieldHashes :: V.Vector Text
   , durationNs :: Integer
   , sdkType :: SDKTypes
   , parentId :: Maybe UUID.UUID
   , serviceVersion :: Maybe Text
   , errors :: AE.Value -- Vector ATError
-  , tags :: Vector Text
+  , tags :: V.Vector Text
   , requestType :: RequestTypes
   }
   deriving stock (Show, Generic, Eq)
@@ -314,7 +313,7 @@ data RequestDumpLogItem = RequestDumpLogItem
   , serviceVersion :: Maybe Text -- allow users track deployments and versions (tags, commits, etc)
   , errorsCount :: Integer
   , errors :: AE.Value
-  , tags :: Maybe (Vector Text)
+  , tags :: Maybe (V.Vector Text)
   , requestType :: RequestTypes
   }
   deriving stock (Show, Generic, Eq)
@@ -338,7 +337,7 @@ requestDumpLogUrlPath pid q cols fromM = [text|/p/$pidT/log_explorer?query=$quer
     fromT = fromMaybe "" fromM
 
 
-getRequestDumpForReports :: Projects.ProjectId -> Text -> DBT IO (Vector RequestForReport)
+getRequestDumpForReports :: Projects.ProjectId -> Text -> DBT IO (V.Vector RequestForReport)
 getRequestDumpForReports pid report_type = query Select (Query $ encodeUtf8 q) pid
   where
     report_interval = if report_type == "daily" then ("'24 hours'" :: Text) else "'7 days'"
@@ -354,7 +353,7 @@ getRequestDumpForReports pid report_type = query Select (Query $ encodeUtf8 q) p
     |]
 
 
-getRequestDumpsForPreviousReportPeriod :: Projects.ProjectId -> Text -> DBT IO (Vector EndpointPerf)
+getRequestDumpsForPreviousReportPeriod :: Projects.ProjectId -> Text -> DBT IO (V.Vector EndpointPerf)
 getRequestDumpsForPreviousReportPeriod pid report_type = query Select (Query $ encodeUtf8 q) pid
   where
     (start, end) = if report_type == "daily" then ("'48 hours'" :: Text, "'24 hours'") else ("'14 days'", "'7 days'")
@@ -370,7 +369,7 @@ getRequestDumpsForPreviousReportPeriod pid report_type = query Select (Query $ e
     |]
 
 
-selectRequestDumpByProject :: Projects.ProjectId -> Text -> Maybe Text -> DBT IO (Vector RequestDumpLogItem, Int)
+selectRequestDumpByProject :: Projects.ProjectId -> Text -> Maybe Text -> DBT IO (V.Vector RequestDumpLogItem, Int)
 selectRequestDumpByProject pid extraQuery fromM = do
   logItems <- query Select (Query $ encodeUtf8 q) (pid, fromT)
   Only count <- fromMaybe (Only 0) <$> queryOne Select (Query $ encodeUtf8 qCount) (pid, fromT)
@@ -439,7 +438,7 @@ selectRequestDumpByProjectAndId pid createdAt rdId = queryOne Select q (createdA
              FROM apis.request_dumps where created_at=? and project_id=? and id=? LIMIT 1|]
 
 
-selectReqLatenciesRolledBySteps :: Int -> Int -> Projects.ProjectId -> Text -> Text -> DBT IO (Vector (Int, Int))
+selectReqLatenciesRolledBySteps :: Int -> Int -> Projects.ProjectId -> Text -> Text -> DBT IO (V.Vector (Int, Int))
 selectReqLatenciesRolledBySteps maxv steps pid urlPath method = query Select q (maxv, steps, steps, steps, pid, urlPath, method)
   where
     q =
@@ -455,7 +454,7 @@ select duration_steps, count(id)
 
 
 -- TODO: expand this into a view
-selectReqLatenciesRolledByStepsForProject :: Int -> Int -> Projects.ProjectId -> (Maybe ZonedTime, Maybe ZonedTime) -> DBT IO (Vector (Int, Int))
+selectReqLatenciesRolledByStepsForProject :: Int -> Int -> Projects.ProjectId -> (Maybe ZonedTime, Maybe ZonedTime) -> DBT IO (V.Vector (Int, Int))
 selectReqLatenciesRolledByStepsForProject maxv steps pid dateRange = query Select (Query $ encodeUtf8 q) (maxv, steps, steps, steps, pid)
   where
     dateRangeStr = from @String $ case dateRange of
@@ -473,7 +472,7 @@ select duration_steps, count(id)
       |]
 
 
-selectAnomalyEvents :: Projects.ProjectId -> Text -> AnomalyTypes -> DBT IO (Vector RequestDumpLogItem)
+selectAnomalyEvents :: Projects.ProjectId -> Text -> AnomalyTypes -> DBT IO (V.Vector RequestDumpLogItem)
 selectAnomalyEvents pid targetHash anType = query Select (Query $ encodeUtf8 q) (pid, targetHash)
   where
     extraQuery :: Text
@@ -492,7 +491,7 @@ selectAnomalyEvents pid targetHash anType = query Select (Query $ encodeUtf8 q) 
              FROM apis.request_dumps where created_at > NOW() - interval '14' day AND project_id=? AND $extraQuery LIMIT 199; |]
 
 
-dependenciesAndEventsCount :: Projects.ProjectId -> DBT IO (Vector HostEvents)
+dependenciesAndEventsCount :: Projects.ProjectId -> DBT IO (V.Vector HostEvents)
 dependenciesAndEventsCount = query Select q
   where
     q =
@@ -553,7 +552,7 @@ throughputBy pid groupByM endpointHash shapeHash formatHash statusCodeGT numSlot
   pure val
 
 
-throughputBy' :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Maybe Int -> Maybe Text -> (Maybe ZonedTime, Maybe ZonedTime) -> DBT IO (Vector (Int, Int, String))
+throughputBy' :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Maybe Int -> Maybe Text -> (Maybe ZonedTime, Maybe ZonedTime) -> DBT IO (V.Vector (Int, Int, String))
 throughputBy' pid groupByM endpointHash shapeHash formatHash statusCodeGT numSlots limitM extraQuery dateRange@(fromT, toT) = do
   let extraQueryParsed = hush . parseQueryStringToWhereClause =<< extraQuery
   let condlist =
