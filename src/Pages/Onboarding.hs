@@ -160,6 +160,7 @@ var getCurrentTab = () => {
     }
   return 'express'
 }
+hljs.highlightAll();
   |]
 
 
@@ -248,27 +249,28 @@ tabContentExpress apikey current_tab =
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-          div_ [class_ "relative min-h-0 flex-auto flex flex-col"] do
-            div_ [class_ "w-full flex-auto flex min-h-0 overflow-auto"] do
-              div_ [class_ "w-full relative flex-auto"] do
-                pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] do
-                  div_ [class_ "hidden md:block text-slate-600 flex-none py-4 pr-4 text-right select-none", style_ "width:50px"] do
-                    "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17"
-                  code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"] do
-                    span_ [class_ "hljs-keyword"] "import" >> " " >> span_ [class_ "hljs-title"] "express" >> " " >> span_ [class_ "hljs-keyword"] "from" >> " " >> span_ [class_ "hljs-string"] "'express';" >> "\n"
-                    span_ [class_ "hljs-keyword"] "import" >> " " >> span_ [class_ "hljs-title"] "APIToolkit" >> " " >> span_ [class_ "hljs-keyword"] "from" >> " " >> span_ [class_ "hljs-string"] "'apitoolkit-express';" >> "\n\n"
-                    span_ [class_ "hljs-keyword"] "const" >> " " >> span_ [class_ "hljs-title"] "app" >> " = " >> span_ [class_ "hljs-title"] "express" >> "();\n"
-                    span_ [class_ "hljs-keyword"] "const" >> " " >> span_ [class_ "hljs-title"] "port" >> " = " >> span_ [class_ "hljs-number"] "3000;" >> "\n\n"
-                    span_ [class_ "hljs-keyword"] "const" >> " " >> span_ [class_ "hljs-title"] "apitoolkitClient" >> " = " >> span_ [class_ "hljs-keyword"] "await" >> " " >> span_ [class_ "hljs-title"] "APIToolkit.NewClient" >> "({ " >> span_ [class_ "hljs-attr"] "apiKey" >> ": " >> span_ [class_ "hljs-string"] ("'" <> toHtml apikey <> "'") >> " });" >> "\n"
-                    "app." >> span_ [class_ "hljs-title"] "use" >> "(" >> span_ [class_ "hljs-title"] "apitoolkitClient.expressMiddleware" >> ");" >> "\n\n"
-                    "app." >> span_ [class_ "hljs-title"] "get" >> "(" >> span_ [class_ "hljs-string"] "'/'" >> ", " >> span_ [class_ "hljs-function"] "(" >> span_ [class_ "hljs-params"] "req, res" >> ") =>" >> " {" >> "\n"
-                    "   res." >> span_ [class_ "hljs-title"] "send" >> "(" >> span_ [class_ "hljs-string"] "'Hello World!'" >> ");" >> "\n"
-                    "});" >> "\n\n"
-                    "app." >> span_ [class_ "hljs-title"] "listen" >> "(" >> span_ [class_ "hljs-title"] "port" >> ", " >> span_ [class_ "hljs-function"] "()" >> " => {" >> "\n"
-                    "   console." >> span_ [class_ "hljs-title"] "log" >> "(" >> span_ [class_ "hljs-string"] "`Example app listening on port ${port}`" >> ");" >> "\n"
-                    "});"
-
-                    "    "
+          div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
+            pre_ [class_ "flex min-h-full text-lg leading-snug"] do
+              code_ [class_ "h-full hljs language-javascript atom-one-dark"]
+                $ toHtml
+                $ "import express from 'express';\n"
+                <> "import APIToolkit from 'apitoolkit-express';\n"
+                <> "\n"
+                <> "const app = express();\n"
+                <> "const port = 3000;\n"
+                <> "\n"
+                <> "const apitoolkitClient = await APIToolkit.NewClient({ apiKey: '"
+                <> apikey
+                <> "' });\n"
+                <> "app.use(apitoolkitClient.expressMiddleware);\n"
+                <> "\n"
+                <> "app.get('/', (req, res) => {\n"
+                <> "   res.send('Hello World!');\n"
+                <> "});\n"
+                <> "\n"
+                <> "app.listen(port, () => {\n"
+                <> "   console.log(`Example app listening on port ${port}`);\n"
+                <> "});"
 
 
 tabContentGin :: Text -> Text -> Html ()
@@ -289,35 +291,42 @@ tabContentGin apikey current_tab =
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-          div_ [class_ "relative min-h-0 flex-auto flex flex-col"] do
-            div_ [class_ "w-full flex-auto flex min-h-0 overflow-auto"] do
-              div_ [class_ "w-full relative flex-auto"] do
-                pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] do
-                  div_ [class_ "hidden md:block text-slate-600 flex-none py-4 pr-4 text-right select-none", style_ "width:50px"] do
-                    "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n"
-                  code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"] do
-                    span_ [class_ "hljs-keyword"] "package" >> " " >> span_ [class_ "hljs-title"] "main" >> "\n\n"
-                    span_ [class_ "hljs-keyword"] "import" >> " (" >> "\n"
-                    span_ [class_ "hljs-comment"] "// Import the apitoolkit golang sdk" >> "\n"
-                    span_ [class_ ""] "apitoolkit" >> " " >> span_ [class_ "hljs-string"] "\"github.com/apitoolkit/apitoolkit-go\"" >> "\n"
-                    span_ [class_ "hljs-string"] "\"context\"" >> "\n"
-                    span_ [class_ "hljs-string"] "\"github.com/gin-gonic/gin\"" >> "\n"
-                    span_ [class_ "hljs-keyword"] ")" >> "\n\n"
-                    span_ [class_ "hljs-keyword"] "func" >> " " >> span_ [class_ "hljs-title"] "main" >> "()" >> " {" >> "\n"
-                    span_ [class_ "hljs-variable"] "ctx" >> " := " >> span_ [class_ "hljs-title"] "context.Background" >> "()" >> "\n\n"
-                    span_ [class_ "hljs-comment"] "// Initialize the client using your apitoolkit.io generated apikey" >> "\n"
-                    span_ [class_ "hljs-variable"] "apitoolkitClient, err" >> " := " >> span_ [class_ "hljs-title"] "apitoolkit.NewClient" >> "(ctx, apitoolkit.Config{APIKey: " >> span_ [class_ "hljs-string"] ("\"" <> toHtml apikey <> "\"") >> "})" >> "\n"
-                    span_ [class_ "hljs-keyword"] "if" >> " err != " >> span_ [class_ "hljs-literal"] "nil" >> " {" >> "\n"
-                    span_ [class_ "hljs-comment"] "    // Handle the error" >> "\n"
-                    span_ [class_ "hljs-built_in"] "    panic" >> "(err)" >> "\n"
-                    span_ [class_ ""] "}" >> "\n\n"
-                    span_ [class_ "hljs-variable"] "router" >> " := " >> span_ [class_ "hljs-title"] "gin.New" >> "()" >> "\n\n"
-                    span_ [class_ "hljs-comment"] "// Register with the corresponding middleware of your choice. For Gin router, we use the GinMiddleware method." >> "\n"
-                    "router." >> span_ [class_ "hljs-title"] "Use" >> "(apitoolkitClient.GinMiddleware)" >> "\n\n"
-                    span_ [class_ "hljs-comment"] "// Register your handlers as usual and run the gin server as usual." >> "\n"
-                    "router." >> span_ [class_ "hljs-title"] "POST" >> "(" >> span_ [class_ "hljs-string"] "\"/:slug/test\"" >> ", " >> span_ [class_ "hljs-keyword"] "func" >> "(c *gin.Context)" >> " {" >> " c.String" >> "(" >> span_ [class_ "hljs-number"] "200" >> ", " >> span_ [class_ "hljs-string"] "\"ok\"" >> ")" >> " })" >> "\n\n"
-                    "router." >> span_ [class_ "hljs-title"] "Run" >> "(" >> span_ [class_ "hljs-string"] "\":8080\"" >> ")" >> "\n"
-                    span_ [] "}"
+          div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
+            pre_ [class_ "flex min-h-full text-lg leading-snug"] do
+              code_
+                [class_ "h-full hljs language-go atom-one-dark"]
+                $ toHtml
+                $ "package main\n"
+                <> "\n"
+                <> "import (\n"
+                <> "    // Import the apitoolkit golang sdk\n"
+                <> "    apitoolkit \"github.com/apitoolkit/apitoolkit-go\"\n"
+                <> "    context\n"
+                <> "    \"github.com/gin-gonic/gin\"\n"
+                <> ")\n"
+                <> "\n"
+                <> "func main() {\n"
+                <> "    ctx := context.Background()\n"
+                <> "\n"
+                <> "    // Initialize the client using your apitoolkit.io generated apikey\n"
+                <> "    apitoolkitClient, err := apitoolkit.NewClient(ctx, apitoolkit.Config{APIKey: \""
+                <> apikey
+                <> "\"})\n"
+                <> "    if err != nil {\n"
+                <> "        // Handle the error\n"
+                <> "        panic(err)\n"
+                <> "    }\n"
+                <> "\n"
+                <> "    router := gin.New()\n"
+                <> "\n"
+                <> "    // Register with the corresponding middleware of your choice. For Gin router, we use the GinMiddleware method.\n"
+                <> "    router.Use(apitoolkitClient.GinMiddleware)\n"
+                <> "\n"
+                <> "    // Register your handlers as usual and run the gin server as usual.\n"
+                <> "    router.POST(\":/slug/test\", func(c *gin.Context) { c.String(200, \"ok\") })\n"
+                <> "\n"
+                <> "    router.Run(\":8080\")\n"
+                <> "}"
 
 
 tabContentLaravel :: Text -> Text -> Html ()
@@ -340,28 +349,33 @@ tabContentLaravel apikey current_tab =
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-          div_ [class_ "relative min-h-0 flex-auto flex flex-col"] do
-            div_ [class_ "w-full flex-auto flex min-h-0 overflow-auto"] do
-              div_ [class_ "w-full relative flex-auto"] do
-                pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] do
-                  div_ [class_ "hidden md:block text-slate-600 flex-none py-4 pr-4 text-right select-none", style_ "width:50px"] do
-                    "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n"
-                  code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"] do
-                    span_ [class_ "hljs-meta"] "<?php" >> "\n\n"
-                    span_ [class_ "hljs-keyword"] "namespace" >> " " >> span_ [class_ "hljs-title"] "App" >> "\\" >> span_ [class_ "hljs-title"] "Http" >> ";" >> "\n\n"
-                    span_ [class_ "hljs-keyword"] "use" >> " " >> span_ [class_ "hljs-title"] "Illuminate" >> "\\" >> span_ [class_ "hljs-title"] "Foundation" >> "\\" >> span_ [class_ "hljs-title"] "Http" >> "\\" >> span_ [class_ "hljs-title"] "Kernel" >> " " >> span_ [class_ "hljs-keyword"] "as" >> " " >> span_ [class_ "hljs-title"] "HttpKernel" >> ";" >> "\n\n"
-                    span_ [class_ "hljs-class"] "class" >> " " >> span_ [class_ "hljs-title"] "Kernel" >> " " >> span_ [class_ "hljs-keyword"] "extends" >> " " >> span_ [class_ "hljs-title"] "HttpKernel" >> "\n" >> "    {\n"
-                    span_ [class_ "hljs-comment"] "    // ..." >> "\n\n"
-                    span_ [class_ "hljs-comment"] "    /**\n" >> span_ [class_ "hljs-comment"] "     * The application's route middleware groups.\n" >> span_ [class_ "hljs-comment"] "     *\n" >> span_ [class_ "hljs-comment"] "     * " >> span_ [class_ "hljs-comment"] "@var array" >> "\n" >> span_ [class_ "hljs-comment"] "     */" >> "\n"
-                    span_ [class_ "hljs-keyword"] "    protected" >> " " >> span_ [class_ "hljs-variable"] "$middlewareGroups" >> " = [\n"
-                    span_ [class_ "hljs-comment"] "        // ..." >> "\n\n"
-                    span_ [class_ "hljs-string"] "        'api'" >> " => [\n"
-                    span_ [class_ "hljs-comment"] "            // ..." >> "\n"
-                    span_ [class_ "hljs-title"] "            \\APIToolkit\\Http\\Middleware\\APIToolkit" >> "::" >> span_ [class_ "hljs-variable language_"] "class" >> "," >> "\n"
-                    span_ [class_ "hljs-comment"] "           // ..." >> "\n"
-                    span_ [class_ ""] "          ]," >> "\n"
-                    span_ [class_ ""] "    ];" >> "\n\n"
-                    span_ [class_ "hljs-comment"] "    // ..." >> "\n" >> "}"
+          div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
+            pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] do
+              code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-php atom-one-dark"]
+                $ "<?php\n"
+                <> "\n"
+                <> "namespace App\\Http;\\n"
+                <> "\n"
+                <> "use Illuminate\\Foundation\\Http\\Kernel as HttpKernel;\n"
+                <> "\n"
+                <> "class Kernel extends HttpKernel\n"
+                <> "    {\n"
+                <> "    // ...\n"
+                <> "    /**\n"
+                <> "     * The application's route middleware groups.\n"
+                <> "     *\n"
+                <> "     * @var array\n"
+                <> "     */\n"
+                <> "    protected $middlewareGroups = [\n"
+                <> "        // ...\n"
+                <> "        'api' => [\n"
+                <> "            // ...\n"
+                <> "            \\APIToolkit\\Http\\Middleware\\APIToolkit::class,\n"
+                <> "            // ...\n"
+                <> "        ],\n"
+                <> "    ];\n"
+                <> "    // ...\n"
+                <> "}"
 
 
 tabContentSymfony :: Text -> Text -> Html ()
@@ -384,22 +398,19 @@ tabContentSymfony apikey current_tab =
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-          div_ [class_ "relative min-h-0 flex-auto flex flex-col"] do
-            div_ [class_ "w-full flex-auto flex min-h-0 overflow-auto"] do
-              div_ [class_ "w-full relative flex-auto"] do
-                pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] do
-                  div_ [class_ "hidden md:block text-slate-600 flex-none py-4 pr-4 text-right select-none", style_ "width:50px"] do
-                    "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11"
-                  code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"] do
-                    span_ [class_ "hljs-attr"] "services:" >> "\n"
-                    span_ [class_ "hljs-string"] "    APIToolkit\\EventSubscriber\\APIToolkitService:" >> "\n"
-                    span_ [class_ "hljs-attr"] "        arguments:" >> "\n"
-                    span_ [class_ "hljs-string"] "            $apiKey:" >> " " >> span_ [class_ "hljs-string"] "'%env(APITOOLKIT_KEY)%'" >> "\n"
-                    span_ [class_ "hljs-comment"] "     # Optional:  if you want to cache login result add this cache pool instance via setter injection" >> "\n"
-                    span_ [class_ "hljs-attr"] "        calls:" >> "\n"
-                    span_ [class_ "hljs-bullet"] "            -" >> " " >> span_ [class_ "hljs-attr"] "setCachePool:" >> " [" >> span_ [class_ "hljs-string"] "'@PutYourCachePoolServiceHere'" >> "]" >> "\n"
-                    span_ [class_ "hljs-attr"] "        tags:" >> "\n"
-                    span_ [class_ "hljs-bullet"] "            -" >> " { " >> span_ [class_ "hljs-attr"] "name:" >> " " >> span_ [class_ "hljs-string"] "'kernel.event_subscriber'" >> " }"
+          div_ [class_ "relative min-h-0  h-full flex-auto flex flex-col"] do
+            pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] do
+              code_
+                [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"]
+                $ "services:\n"
+                <> "    APIToolkit\\EventSubscriber\\APIToolkitService:\n"
+                <> "        arguments:\n"
+                <> "            $apiKey: '%env(APITOOLKIT_KEY)%'\n"
+                <> "        # Optional: if you want to cache login result add this cache pool instance via setter injection\n"
+                <> "        calls:\n"
+                <> "            - setCachePool: ['@PutYourCachePoolServiceHere']\n"
+                <> "        tags:\n"
+                <> "            - { name: 'kernel.event_subscriber' }"
 
 
 tabContentDotNet :: Text -> Text -> Html ()
@@ -420,55 +431,23 @@ tabContentDotNet apikey current_tab =
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-          div_ [class_ "relative min-h-0 flex-auto flex flex-col"] do
-            div_ [class_ "w-full flex-auto flex min-h-0 overflow-auto"] do
-              div_ [class_ "w-full relative flex-auto"] do
-                pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] do
-                  div_ [class_ "hidden md:block text-slate-600 flex-none py-4 pr-4 text-right select-none", style_ "width:50px"] do
-                    "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14"
-                  code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"] do
-                    span_ [class_ "hljs-keyword"] "var"
-                      >> " "
-                      >> span_ [class_ "hljs-variable"] "config"
-                      >> " = "
-                      >> span_ [class_ "hljs-keyword"] "new"
-                      >> " Config"
-                      >> "\n"
-                      >> "{\n"
-                      >> span_ [class_ "hljs-attr"] "    Debug"
-                      >> " = "
-                      >> span_ [class_ "hljs-literal"] "true"
-                      >> ","
-                      >> " "
-                      >> span_ [class_ "hljs-comment"] "// Set debug flags to false in production"
-                      >> "\n"
-                      >> span_ [class_ "hljs-attr"] "    ApiKey"
-                      >> " = "
-                      >> span_ [class_ "hljs-string"] ("\"" <> toHtml apikey <> "\"")
-                      >> "\n"
-                      >> span_ [class_ "hljs-meta"] "};"
-                      >> "\n"
-                    span_ [class_ "hljs-keyword"] "var" >> " " >> span_ [class_ "hljs-variable"] "client" >> " = " >> span_ [class_ "hljs-keyword"] "await" >> " " >> span_ [class_ "hljs-title"] "APIToolkit.NewClientAsync" >> "(config);" >> "\n"
-                    span_ [class_ "hljs-comment"] "// Register the middleware to use the initialized client" >> "\n"
-                    "app."
-                      >> span_ [class_ "hljs-title"] "Use"
-                      >> "(async (context, next) =>"
-                      >> "\n"
-                      >> span_ [class_ "hljs-keyword"] "    var"
-                      >> " "
-                      >> span_ [class_ "hljs-variable"] "apiToolkit"
-                      >> " = "
-                      >> span_ [class_ "hljs-keyword"] "new"
-                      >> " "
-                      >> span_ [class_ "hljs-title"] "APIToolkit"
-                      >> "(next, client);"
-                      >> "\n"
-                      >> span_ [class_ "hljs-keyword"] "    await"
-                      >> " "
-                      >> span_ [class_ "hljs-variable"] "apiToolkit.InvokeAsync"
-                      >> "(context);"
-                      >> "\n"
-                    span_ [class_ ""] ");"
+          div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
+            pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] do
+              code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"]
+                $ toHtml
+                $ "var config = new Config\n"
+                <> "{\n"
+                <> "    Debug = true, // Set debug flags to false in production\n"
+                <> "    ApiKey = \""
+                <> apikey
+                <> "\"\n"
+                <> "};\n"
+                <> "var client = await APIToolkit.NewClientAsync(config);\n"
+                <> "// Register the middleware to use the initialized client\n"
+                <> "app.Use(async (context, next) =>\n"
+                <> "    var apiToolkit = new APIToolkit(next, client);\n"
+                <> "    await apiToolkit.InvokeAsync(context);\n"
+                <> ");"
 
 
 tabContentFastify :: Text -> Text -> Html ()
@@ -490,32 +469,34 @@ tabContentFastify apikey current_tab =
                 div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
                 div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
                 div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-            div_ [class_ "relative min-h-0 flex-auto flex flex-col"] do
-              div_ [class_ "w-full flex-auto flex min-h-0 overflow-auto"] do
-                div_ [class_ "w-full relative flex-auto"] do
-                  pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] do
-                    div_ [class_ "hidden md:block text-slate-600 flex-none py-4 pr-4 text-right select-none", style_ "width:50px"] do
-                      "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24"
-                    code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"] do
-                      span_ [class_ "hljs-keyword"] "import" >> span_ [class_ "hljs-title"] " APIToolkit " >> span_ [class_ "hljs-keyword"] "from" >> span_ [class_ "hljs-string"] " 'apitoolkit-fastify'" >> ";"
-                      "\n" >> span_ [class_ "hljs-keyword"] "import" >> span_ [class_ "hljs-title"] " Fastify " >> span_ [class_ "hljs-keyword"] "from" >> span_ [class_ "hljs-string"] " 'fastify'" >> ";"
-                      "\n" >> span_ [class_ "hljs-keyword"] "const" >> span_ [class_ "hljs-title"] " fastify " >> span_ [class_ "hljs-keyword"] "=" >> span_ [class_ "hljs-title"] " Fastify" >> span_ [class_ ""] "();\n"
-                      span_ [class_ "hljs-comment"] "// Create and initialize an instance of the APIToolkit\n"
-                      span_ [class_ "hljs-keyword"] "const" >> span_ [class_ "hljs-title"] " apittoolkitClient " >> span_ [class_ "hljs-keyword"] "= " >> span_ [class_ "hljs-keyword"] "await"
-                      span_ [class_ "hljs-title"] " APIToolkit.NewClient" >> "({\n"
-                      span_ [class_ "hljs-attr"] "  apiKey" >> ": " >> span_ [class_ "hljs-string"] ("\"" <> toHtml apikey <> "\"") >> ",\n"
-                      span_ [class_ "hljs-attr"] "  fastify" >> ": fastify\n" >> "});\n"
-                      span_ [class_ "hljs-title function_"] "apitoolkitClient.init" >> "();\n"
-                      span_ [class_ "hljs-comment"] "// Rest of your app \n"
-                      span_ [class_ "hljs-title"] "fastify.get" >> "(" >> span_ [class_ "hljs-string"] "'/hello'" >> ", " >> span_ [class_ "hljs-params"] "(request, reply)" >> span_ [class_ "hljs-keyword"] " => " >> "{\n"
-                      " reply." >> span_ [class_ "hljs-title"] "send" >> "({" >> span_ [class_ "hljs-attr"] "hello" >> ":" >> span_ [class_ "hljs-string"] "'world'" >> "})\n"
-                      span_ [] "});\n\n"
-                      "fastify." >> span_ [class_ "hljs-title"] "listen" >> "({" >> span_ [class_ "hljs-attr"] "port" >> ": " >> span_ [class_ "hljs-number"] "3000" >> "}, " >> span_ [class_ "hljs-keyword"] "function" >> span_ [class_ "hljs-params"] "(err, address) {\n"
-                      span_ [class_ "hljs-keyword"] "   if" >> span_ [class_ "hljs-params"] "(err) {\n"
-                      "     fastify." >> span_ [class_ "hljs-title"] "log.error" >> "(err); \n"
-                      "     process." >> span_ [class_ "hljs-title"] "exit" >> "(1);\n"
-                      span_ [class_ ""] "   }\n"
-                      span_ [class_ ""] "});"
+            div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
+              pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] do
+                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"]
+                  $ toHtml
+                  $ "import APIToolkit from 'apitoolkit-fastify';\n"
+                  <> "import Fastify from 'fastify';\n"
+                  <> "const fastify = Fastify();\n"
+                  <> "// Create and initialize an instance of the APIToolkit\n"
+                  <> "const apittoolkitClient = await APIToolkit.NewClient({\n"
+                  <> "  apiKey: \""
+                  <> apikey
+                  <> "\",\n"
+                  <> "  fastify: fastify\n"
+                  <> "});\n"
+                  <> "apitoolkitClient.init();\n"
+                  <> "// Rest of your app\n"
+                  <> "fastify.get('/hello', (request, reply) => {\n"
+                  <> " reply.send({hello:'world'})\n"
+                  <> "});\n"
+                  <> "\n"
+                  <> "fastify.listen({port: 3000}, function(err, address) {\n"
+                  <> "   if(err) {\n"
+                  <> "     fastify.log.error(err);\n"
+                  <> "     process.exit(1);\n"
+                  <> "   }\n"
+                  <> "});"
+
+
 tabContentFlask :: Text -> Text -> Html ()
 tabContentFlask apikey current_tab =
   div_ [class_ $ "tab-content flex flex-col m-8 " <> (if current_tab == "flask" then "" else "hidden"), id_ "flask_content"]
@@ -535,46 +516,33 @@ tabContentFlask apikey current_tab =
                 div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
                 div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
                 div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-            div_ [class_ "relative min-h-0 flex-auto flex flex-col"] do
-              div_ [class_ "w-full flex-auto flex min-h-0 overflow-auto"] do
-                div_ [class_ "w-full relative flex-auto"] do
-                  pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] do
-                    div_ [class_ "hidden md:block text-slate-600 flex-none py-4 pr-4 text-right select-none", style_ "width:50px"] do
-                      "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24"
-                    code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"] do
-                      span_ [class_ "hljs-keyword"] "from" >> " flask " >> span_ [class_ "hljs-keyword"] "import " >> "Flask"
-                      br_ []
-                      span_ [class_ "hljs-keyword"] "from" >> " apitoolkit_flask " >> span_ [class_ "hljs-keyword"] "import " >> "APIToolkit"
-                      br_ []
-                      span_ [class_ ""] "app = Flask(__name__)"
-                      br_ []
-                      br_ []
-                      span_ [class_ ""] "apitoolkit = APIToolkit(api_key=" >> span_ [class_ "hljs-string"] ("\"" <> toHtml apikey <> "\"") >> ", debug=" >> span_ [class_ "hljs-keyword"] "True" >> ")"
-                      br_ []
-                      br_ []
-                      span_ [class_ "hljs-deco"] "@app.before_request"
-                      br_ []
-                      span_ [class_ "hljs-keyword"] "def" >> span_ [class_ "hljs-title"] " before_request" >> "():"
-                      br_ []
-                      "    apitoolkit." >> span_ [class_ "hljs-title"] "beforeRequest" >> "()"
-                      br_ []
-                      br_ []
-                      span_ [class_ "hljs-deco"] "@app.after_request"
-                      br_ []
-                      span_ [class_ "hljs-keyword"] "def" >> span_ [class_ "hljs-title"] " after_request" >> span_ [class_ "hljs-params"] "(response):"
-                      br_ []
-                      "    apitoolkit." >> span_ [class_ "hljs-title"] "afterRequest" >> "(response)\n"
-                      span_ [class_ "hljs-keyword"] "         return " >> "response"
-                      br_ []
-                      br_ []
-                      span_ [class_ "hljs-deco"] "@app.route(/hello/<name>, methods=[GET,  POST])"
-                      br_ []
-                      span_ [class_ "hljs-keyword"] "def " >> span_ [class_ "hljs-title"] "sample_route" >> "(name):"
-                      br_ []
-                      span_ [class_ "hljs-keyword"] "         return " >> "{" >> span_ [class_ "hljs-string"] "\"Hello\"" >> ": " >> span_ [class_ "hljs-string"] "\"Hello \"" >> " + name }"
-                      br_ []
-                      br_ []
-                      span_ [] "app.run(debug=" >> span_ [class_ "hljs-keyword"] "True" >> ")"
+            div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
+              pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] do
+                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"]
+                  $ toHtml
+                  $ "from flask import Flask\n"
+                  <> "from apitoolkit_flask import APIToolkit\n"
+                  <> "\n"
+                  <> "app = Flask(__name__)\n"
+                  <> "\n"
+                  <> "apitoolkit = APIToolkit(api_key=\""
+                  <> apikey
+                  <> "\", debug=True)\n"
+                  <> "\n"
+                  <> "@app.before_request\n"
+                  <> "def before_request():\n"
+                  <> "    apitoolkit.beforeRequest()\n"
+                  <> "\n"
+                  <> "@app.after_request\n"
+                  <> "def after_request(response):\n"
+                  <> "    apitoolkit.afterRequest(response)\n"
+                  <> "    return response\n"
+                  <> "\n"
+                  <> "@app.route('/hello', methods=['GET', 'POST'])\n"
+                  <> "def sample_route(subject):\n"
+                  <> "    return {\"Hello\": \"World\"}\n"
+                  <> "\n"
+                  <> "app.run(debug=True)\n"
 
 
 tabContentFastAPI :: Text -> Text -> Html ()
@@ -596,32 +564,35 @@ tabContentFastAPI apikey current_tab =
                 div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
                 div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
                 div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-            div_ [class_ "relative min-h-0 flex-auto flex flex-col"] $ do
-              div_ [class_ "w-full flex-auto flex min-h-0 overflow-auto"] $ do
-                div_ [class_ "w-full relative flex-auto"] $ do
-                  pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] $ do
-                    div_ [class_ "hidden md:block text-slate-600 flex-none py-4 pr-4 text-right select-none", style_ "width:50px"] $ do
-                      "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17"
-                    code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"] do
-                      span_ [class_ "hljs-keyword"] "from" >> " fastapi " >> span_ [class_ "hljs-keyword"] "import " >> "FastAPI"
-                      br_ []
-                      span_ [class_ "hljs-keyword"] "from" >> " apitoolkit_fastapi " >> span_ [class_ "hljs-keyword"] "import " >> "APIToolkit"
-                      br_ []
-                      br_ []
-                      span_ [class_ ""] "app = " >> span_ [class_ "hljs-title"] "FastAPI" >> "()"
-                      br_ []
-                      br_ []
-                      span_ [class_ ""] "apitoolkit = " >> span_ [class_ "hljs-title"] "APIToolkit" >> "(api_key=" >> span_ [class_ "hljs-string"] ("\"" <> toHtml apikey <> "\"") >> ")"
-                      br_ []
-                      br_ []
-                      "apitoolkit." >> span_ [class_ "hljs-title"] "middleware" >> "(" >> span_ [class_ "hljs-string"] "'http'" >> ")(apitoolkit.middleware)\n"
-                      br_ []
-                      span_ [class_ "hljs-deco"] "@app.get(/)"
-                      br_ []
-                      span_ [class_ "hljs-keyword"] "def " >> span_ [class_ "hljs-title"] "read_root" >> "():"
-                      br_ []
-                      span_ [class_ "hljs-keyword"] "     return " >> "{" >> span_ [class_ "hljs-string"] "\"Hello\"" >> ": " >> span_ [class_ "hljs-string"] "\"Hello world\"}"
-                      br_ []
+            div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] $ do
+              pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] $ do
+                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"]
+                  $ toHtml
+                  $ "from fastapi import FastAPI\n"
+                  <> "from apitoolkit_fastapi import APIToolkit\n"
+                  <> "\n"
+                  <> "app = FastAPI()\n"
+                  <> "\n"
+                  <> "# A list of fields to redact from response body\n"
+                  <> "redact_res = [\"$.api_key\", \"$.password\"]\n"
+                  <> "# A list of fields to redact from request body\n"
+                  <> "redact_req = [\"$.credit-card.cvv\", \"$.credit-card.name\"]\n"
+                  <> "# A list of fields to redact from request and response headers\n"
+                  <> "redact_headers = [\"Authorization\", \"Cookie\"]\n"
+                  <> "\n"
+                  <> "# Initialize apitoolkit\n"
+                  <> "apitoolkit = APIToolkit(\n"
+                  <> "    api_key=\""
+                  <> apikey
+                  <> "\", debug=True, redact_response_body=redact_res,\n"
+                  <> "    redact_request_body=redact_req, redact_headers=redact_headers\n"
+                  <> ")\n"
+                  <> "\n"
+                  <> "app.middleware('http')(apitoolkit.middleware)\n"
+                  <> "\n"
+                  <> "@app.get(\"/\")\n"
+                  <> "def read_root():\n"
+                  <> "    return {\"Hello\": \"World\"}\n"
 
 
 tabContentDjango :: Text -> Text -> Html ()
@@ -644,19 +615,24 @@ tabContentDjango apikey current_tab =
                 div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
                 div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
                 div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-            div_ [class_ "relative min-h-0 flex-auto flex flex-col"] do
-              div_ [class_ "w-full flex-auto flex min-h-0 overflow-auto"] do
-                div_ [class_ "w-full relative flex-auto"] do
-                  pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] do
-                    div_ [class_ "hidden md:block text-slate-600 flex-none py-4 pr-4 text-right select-none", style_ "width:50px"] do
-                      "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15"
-                    code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"] do
-                      span_ [class_ "hljs-keyword"] "APITOOLKIT_KEY" >> " = " >> span_ [class_ "hljs-string"] ("\"" <> toHtml apikey <> "\"") >> "\n"
-                      br_ []
-                      span_ [class_ "hljs-keyword"] "MIDDLEWARE" >> " = [\n"
-                      span_ [class_ "hljs-comment"] "# other middlewares\n"
-                      span_ [class_ "hljs-string"] "    'apitoolkit_django.APIToolkit'" >> ",\n"
-                      span_ [] "]"
+            div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
+              pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] do
+                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"]
+                  $ toHtml
+                  $ "APITOOLKIT_KEY = \""
+                  <> apikey
+                  <> "\"\n"
+                  <> "\n"
+                  <> "MIDDLEWARE = [\n"
+                  <> "    ...,\n"
+                  <> "    'apitoolkit-django.APIToolkit',\n"
+                  <> "    ...,\n"
+                  <> "]\n"
+                  <> "\n"
+                  <> "APITOOLKIT_REDACT_HEADERS = [\"Authorization\", \"Cookie\",\"Content-Length\", \"Content-Type\"] # optional\n"
+                  <> "APITOOLKIT_REDACT_REQ_BODY = [\"$.password\", \"$.credit_card\"] # optional\n"
+                  <> "APITOOLKIT_REDACT_RES_BODY = [\"$.credentials\", \"$.social_security_number\"] # optional\n"
+
 
 tabs :: Text -> Html ()
 tabs current_tab =
