@@ -11,7 +11,6 @@ module Models.Apis.Endpoints (
   Host (..),
   endpointsByProjectId,
   endpointUrlPath,
-  upsertEndpoints,
   endpointRequestStatsByProject,
   dependencyEndpointsRequestStatsByProject,
   endpointRequestStatsByEndpoint,
@@ -124,40 +123,6 @@ upsertEndpointQueryAndParam endpoint = (q, params)
       , MkDBField endpoint.outgoing
       , MkDBField host
       ]
-
-
--- FIXME: Delete this, as this function is deprecated and no longer in use.
--- Updating hosts can be a specific functino that does just that.
-upsertEndpoints :: Endpoint -> PgT.DBT IO (Maybe EndpointId)
-upsertEndpoints endpoint = queryOne Insert q options
-  where
-    host = fromMaybe "" (endpoint.hosts Vector.!? 0) -- Read the first item from head or default to empty string
-    q =
-      [sql|  
-        with e as (
-          INSERT INTO apis.endpoints (project_id, url_path, url_params, method, hosts)
-          VALUES(?, ?, ?, ?, $$ ? => null$$) 
-          ON CONFLICT (project_id, url_path, method) 
-          DO 
-             UPDATE SET 
-               hosts=endpoints.hosts||hstore(?, null) 
-          RETURNING id 
-        )
-        SELECT id from e 
-        UNION 
-          SELECT id FROM apis.endpoints WHERE project_id=? AND url_path=? AND method=?;
-      |]
-    options =
-      ( endpoint.projectId
-      , endpoint.urlPath
-      , endpoint.urlParams
-      , endpoint.method
-      , host
-      , host
-      , endpoint.projectId
-      , endpoint.urlPath
-      , endpoint.method
-      )
 
 
 -- Based of a view which is generated every 5minutes.
