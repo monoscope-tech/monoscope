@@ -350,7 +350,7 @@ tabContentLaravel apikey current_tab =
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
           div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
-            pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] do
+            pre_ [class_ "flex min-h-full text-lg leading-snug"] do
               code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-php atom-one-dark"]
                 $ "<?php\n"
                 <> "\n"
@@ -399,9 +399,9 @@ tabContentSymfony apikey current_tab =
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
           div_ [class_ "relative min-h-0  h-full flex-auto flex flex-col"] do
-            pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] do
+            pre_ [class_ "flex min-h-full text-lg leading-snug"] do
               code_
-                [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"]
+                [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-php atom-one-dark"]
                 $ "services:\n"
                 <> "    APIToolkit\\EventSubscriber\\APIToolkitService:\n"
                 <> "        arguments:\n"
@@ -432,8 +432,8 @@ tabContentDotNet apikey current_tab =
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
               div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
           div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
-            pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] do
-              code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"]
+            pre_ [class_ "flex min-h-full text-lg leading-snug"] do
+              code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-csharp atom-one-dark"]
                 $ toHtml
                 $ "var config = new Config\n"
                 <> "{\n"
@@ -470,8 +470,8 @@ tabContentFastify apikey current_tab =
                 div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
                 div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
             div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
-              pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] do
-                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"]
+              pre_ [class_ "flex min-h-full text-lg leading-snug"] do
+                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-javascript atom-one-dark"]
                   $ toHtml
                   $ "import APIToolkit from 'apitoolkit-fastify';\n"
                   <> "import Fastify from 'fastify';\n"
@@ -517,8 +517,8 @@ tabContentFlask apikey current_tab =
                 div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
                 div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
             div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
-              pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] do
-                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"]
+              pre_ [class_ "flex min-h-full text-lg leading-snug"] do
+                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-python atom-one-dark"]
                   $ toHtml
                   $ "from flask import Flask\n"
                   <> "from apitoolkit_flask import APIToolkit\n"
@@ -565,8 +565,8 @@ tabContentFastAPI apikey current_tab =
                 div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
                 div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
             div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] $ do
-              pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] $ do
-                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"]
+              pre_ [class_ "flex min-h-full text-lg leading-snug"] $ do
+                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-python atom-one-dark"]
                   $ toHtml
                   $ "from fastapi import FastAPI\n"
                   <> "from apitoolkit_fastapi import APIToolkit\n"
@@ -608,7 +608,7 @@ tabContentDjango apikey current_tab =
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
           p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "pip install apitoolkit-django"
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app by adding APITOOLKIT_KEY and APIToolkit to the settings middleware list"
-        div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
+        div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[70vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
           div_ [class_ "relative w-full flex flex-col"] do
             div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] do
               div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] do
@@ -616,8 +616,8 @@ tabContentDjango apikey current_tab =
                 div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
                 div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
             div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
-              pre_ [class_ "flex min-h-full text-lg leading-snug", id_ "testkit-eg"] do
-                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto"]
+              pre_ [class_ "flex min-h-full text-lg leading-snug"] do
+                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-python atom-one-dark"]
                   $ toHtml
                   $ "APITOOLKIT_KEY = \""
                   <> apikey

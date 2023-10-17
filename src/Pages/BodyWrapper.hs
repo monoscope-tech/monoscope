@@ -61,8 +61,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
       link_ [rel_ "stylesheet", type_ "text/css", href_ "/assets/css/thirdparty/notyf3.min.css"]
       link_ [rel_ "preconnect", href_ "https://rsms.me/"]
       link_ [rel_ "stylesheet", href_ "https://rsms.me/inter/inter.css"]
-      link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/default.min.css"]
-      link_ [rel_ "sytlesheet", href_ "https://cdn.jsdelivr.net/npm/highlight.js@10.7.2/styles/atom-one-dark.min.css"]
+      link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/atom-one-dark.min.css"]
 
       link_ [rel_ "stylesheet", href_ "https://unpkg.com/swagger-ui-dist@4.5.0/swagger-ui.css"]
       -- SCRIPTS
@@ -83,6 +82,9 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
       script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"] ("" :: Text)
       script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"] ("" :: Text)
       script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/javascript.min.js"] ("" :: Text)
+      script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/php.min.js"] ("" :: Text)
+      script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/csharp.min.js"] ("" :: Text)
+      script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"] ("" :: Text)
 
       -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/core@1.2.0/dist/index.umd.min.js"] ("" :: Text)
       -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/datetime@1.2.0/dist/index.umd.min.js"] ("" :: Text)
