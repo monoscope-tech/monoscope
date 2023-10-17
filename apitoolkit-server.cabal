@@ -79,7 +79,6 @@ library
       Pkg.Parser
       Pkg.TmpPg
       ProcessMessage
-      ProcessMessageSpec
       RequestMessages
       RequestMessagesSpec
       Server
