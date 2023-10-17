@@ -747,7 +747,6 @@ tabContentGorilla apikey current_tab =
                   <> "}"
 
 
-
 tabs :: Text -> Html ()
 tabs current_tab =
   ul_ [class_ "flex flex-nowrap overflow-x-auto gap-6 font-medium"] $ do
