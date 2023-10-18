@@ -9,7 +9,7 @@ import Data.Aeson.Text (encodeToLazyText)
 import Data.Default (def)
 import Data.List (elemIndex)
 import Data.Map qualified as Map
-import Data.Text as T (breakOnAll, dropWhile, isSuffixOf, splitOn, take, toLower)
+import Data.Text as T (isSuffixOf, splitOn, toLower)
 import Data.Time (UTCTime, ZonedTime, addUTCTime, defaultTimeLocale, formatTime, getCurrentTime, secondsToNominalDiffTime, utc, utcToZonedTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.UUID qualified as UUID
@@ -23,7 +23,6 @@ import Lucid.Htmx
 import Lucid.Hyperscript.QuasiQuoter
 import Models.Apis.Endpoints
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Fields (FieldCategoryEnum)
 import Models.Apis.Fields qualified as Fields
 import Models.Apis.Fields.Types
 import Models.Apis.Formats qualified as Formats

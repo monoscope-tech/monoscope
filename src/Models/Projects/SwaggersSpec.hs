@@ -2,7 +2,7 @@
 
 module Models.Projects.SwaggersSpec (spec) where
 
-import Data.Aeson (Value (..), object, (.=))
+import Data.Aeson (Value (..))
 import Data.Maybe
 import Data.Time.LocalTime (getZonedTime)
 import Data.UUID qualified as UUID
@@ -16,6 +16,7 @@ import Optics.Core ((^.))
 import Pkg.TmpPg qualified as TmpPg
 import Relude
 import Test.Hspec
+import Data.Aeson.QQ (aesonQQ)
 
 
 -- Helper function to create a Swagger value for testing
@@ -35,13 +36,12 @@ createSwagger projectId createdBy swaggerJson = do
   addSwagger swagger
   pure swagger
 
-
 spec :: Spec
 spec = aroundAll TmpPg.withSetup $ describe "Models.Projects.Swaggers" $ do
   let swaggerId = SwaggerId UUID.nil
-  let swaggerJson' = object ["info" .= object ["title" .= "API"]]
-  let swaggerJson1 = object ["info" .= object ["title" .= "API 1"]]
-  let swaggerJson2 = object ["info" .= object ["title" .= "API 2"]]
+  let swaggerJson' = [aesonQQ| {"info": {"title": "API"}}|] 
+  let swaggerJson1 = [aesonQQ| {"info": {"title": "API 1"}}|]
+  let swaggerJson2 = [aesonQQ| {"info": {"title": "API 2"}}|]
   describe "addSwagger"
     $ it "should insert a new Swagger into the database" \pool -> do
       currentTime <- liftIO getZonedTime

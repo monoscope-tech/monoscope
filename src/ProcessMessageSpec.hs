@@ -2,18 +2,15 @@ module ProcessMessageSpec (spec) where
 
 import Colog (logStringStdout)
 import Config qualified
-import Data.Aeson (Result (Error, Success), Value, decode, eitherDecode, fromJSON)
+import Data.Aeson (Result (Error, Success), Value, fromJSON)
 import Data.Aeson.QQ (aesonQQ)
-import Data.Aeson.Types (parseMaybe)
 import Data.Cache
 import Data.Default (Default (..))
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Entity.DBT (QueryNature (Insert), execute, withPool)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Debug.Pretty.Simple (pTraceShowM)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.RequestDumps qualified as RequestDumps
-import Models.Projects.Projects (ProjectId (ProjectId))
 import Models.Projects.Projects qualified as Projects
 import Pkg.TmpPg qualified as TmpPg
 import ProcessMessage (processMessages')
@@ -38,6 +35,7 @@ import Test.Hspec
 --             )
 --         }
 
+msg1 :: Value
 msg1 =
   [aesonQQ|{"duration":476434,
                 "host":"172.31.29.11",
@@ -63,6 +61,7 @@ msg1 =
       |]
 
 
+msg2 :: Value
 msg2 =
   [aesonQQ|{"timestamp":"2023-10-16T21:47:41.45628582Z",
             "request_headers":{
@@ -130,7 +129,7 @@ spec = aroundAll TmpPg.withSetup do
             ()
       endpoints <- withPool pool $ Endpoints.endpointRequestStatsByProject pid False False Nothing
       length endpoints `shouldBe` 2 -- Two new endpoints from the last 2 requests
-      forM endpoints \enp -> do
+      forM_ endpoints \enp -> do
         ["/", "/api/v1/user/login"] `shouldContain` [enp.urlPath]
       pass
 
