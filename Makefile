@@ -21,10 +21,10 @@ test:
 	stack test --ghc-options=-w
 
 fmt:
-	fourmolu --mode inplace $$(find . -name '*.hs')
+	fourmolu --mode inplace $$(find ./src/ -name '*.hs')
 
-fmt-old:
-	ormolu --mode inplace $$(find . -name '*.hs')
+fix-imports:
+	fix-imports $$(find ./src -name '*.hs') <$$(find ./src -name '*.hs')
 
 lint:
 	hlint src 

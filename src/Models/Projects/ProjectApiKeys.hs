@@ -25,7 +25,6 @@ import Data.Time (ZonedTime)
 import Data.Time qualified as Time
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
-import Data.Vector qualified as V
 import Database.PostgreSQL.Entity
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, queryOne)
 import Database.PostgreSQL.Entity.Types

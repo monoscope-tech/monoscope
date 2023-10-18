@@ -20,7 +20,7 @@ import Data.Cache
 import Data.Generics.Product (field)
 import Data.Pool as Pool
 import Data.Text.Lazy.Encoding qualified as LT
-import Database.PostgreSQL.Simple (Connection, close, connectPostgreSQL)
+import Database.PostgreSQL.Simple qualified as PG
 import Database.PostgreSQL.Simple.Migration as Migrations
 import GHC.Generics ()
 import GHC.IO.Encoding hiding (close)
@@ -29,9 +29,6 @@ import Gogol.Auth.ApplicationDefault qualified as Google
 import Gogol.PubSub qualified as PubSub
 import Models.Projects.Projects qualified as Projects
 import Network.Wai.Handler.Warp (run)
-import OddJobs.Cli qualified as OJCli
-import OddJobs.ConfigBuilder qualified as OJConfig
-import OddJobs.Types qualified as OJTypes
 import Optics.Operators
 import ProcessMessage
 import Relude
@@ -54,22 +51,15 @@ startApp = do
     Left err -> logger <& "Error decoding env variables : " <> show err
     Right envConfig ->
       do
-        let createPgConnIO = connectPostgreSQL $ encodeUtf8 (envConfig ^. #databaseUrl)
-        when (envConfig ^. #migrateAndInitializeOnStart) do
+        let createPgConnIO = PG.connectPostgreSQL $ encodeUtf8 envConfig.databaseUrl
+        when envConfig.migrateAndInitializeOnStart do
           conn <- createPgConnIO
           initializationRes <- Migrations.runMigration conn Migrations.defaultOptions MigrationInitialization
           logger <& "migration initialized " <> show initializationRes
-          migrationRes <- Migrations.runMigration conn Migrations.defaultOptions $ MigrationDirectory ((toString $ envConfig ^. #migrationsDir) :: FilePath)
+          migrationRes <- Migrations.runMigration conn Migrations.defaultOptions $ MigrationDirectory (toString envConfig.migrationsDir :: FilePath)
           logger <& "migration result: " <> show migrationRes
 
-        poolConn <-
-          Pool.createPool
-            createPgConnIO
-            close
-            5 -- stripes  (distinct sub-pools)
-            30 -- unused connections are kept open for 5 minutes (60*5) ~ Not sure if this is seconds or minutes
-            50 -- max 50 connections open per stripe
-            -- poolConn <- Pool.newPool Pool.PoolConfig {createResource = createPgConnIO, freeResource = close, poolCacheTTL = 60 * 10, poolMaxResources = 20}
+        poolConn <- Pool.newPool $ Pool.defaultPoolConfig createPgConnIO PG.close (60 * 6) 250
         projectCache <- newCache (Just $ TimeSpec (60 * 60) 0) :: IO (Cache Projects.ProjectId Projects.ProjectCache) -- 60*60secs or 1 hour TTL
         let serverCtx =
               Config.AuthContext
@@ -89,9 +79,9 @@ startApp = do
         --         , uistartPort = 8081
         --         }
 
-        let ojLogger logLevel logEvent = logger <& show (logLevel, logEvent)
-        let ojTable = "background_jobs" :: OJTypes.TableName
-        let ojCfg = OJConfig.mkUIConfig ojLogger ojTable poolConn id
+        -- let ojLogger logLevel logEvent = logger <& show (logLevel, logEvent)
+        -- let ojTable = "background_jobs" :: OJTypes.TableName
+        -- let ojCfg = OJConfig.mkUIConfig ojLogger ojTable poolConn id
         asyncs <-
           sequence
             [ async (pubsubService logger envConfig poolConn projectCache)
@@ -100,13 +90,14 @@ startApp = do
             -- , async $ OJCli.defaultWebUI ojStartArgs ojCfg
             ]
         _ <- waitAnyCancel asyncs
+        _ <- Pool.destroyAllResources poolConn
         pass
 
 
 -- pubsubService connects to the pubsub service and listens for  messages,
 -- then it calls the processMessage function to process the messages, and
 -- acknoleges the list message in one request.
-pubsubService :: LogAction IO String -> Config.EnvConfig -> Pool.Pool Connection -> Cache Projects.ProjectId Projects.ProjectCache -> IO ()
+pubsubService :: LogAction IO String -> Config.EnvConfig -> Pool.Pool PG.Connection -> Cache Projects.ProjectId Projects.ProjectCache -> IO ()
 pubsubService logger envConfig conn projectCache = do
   env <- case envConfig.googleServiceAccountB64 of
     "" -> Google.newEnv <&> (Google.envScopes L..~ pubSubScope)
@@ -120,10 +111,10 @@ pubsubService logger envConfig conn projectCache = do
 
   let pullReq = PubSub.newPullRequest & field @"maxMessages" L.?~ fromIntegral (envConfig ^. #messagesPerPubsubPullBatch)
 
-  forever $
-    runResourceT
+  forever
+    $ runResourceT
       do
-        forM (envConfig ^. #requestPubsubTopics) \topic -> do
+        forM envConfig.requestPubsubTopics \topic -> do
           let subscription = "projects/past-3/subscriptions/" <> topic <> "-sub"
           pullResp <- Google.send env $ PubSub.newPubSubProjectsSubscriptionsPull pullReq subscription
           let messages = (pullResp L.^. field @"receivedMessages") & fromMaybe []

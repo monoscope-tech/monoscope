@@ -51,8 +51,8 @@ manageMembersPostH sess pid form = do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"errorToast": ["Only project members can update members list"]}|]
       pure $ addHeader hxTriggerData $ h3_ [] "Only members of this project can perform this action"
     else do
-      (project, projMembers) <- liftIO $
-        withPool
+      (project, projMembers) <- liftIO
+        $ withPool
           pool
           do
             project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
@@ -134,8 +134,8 @@ manageMembersGetH sess pid = do
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, projMembers) <- liftIO $
-        withPool
+      (project, projMembers) <- liftIO
+        $ withPool
           pool'
           do
             project <- Projects.selectProjectForUser (Sessions.userId sess, pid)

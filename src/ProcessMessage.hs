@@ -5,22 +5,21 @@ module ProcessMessage (
 
 import Colog.Core (LogAction (..), (<&))
 import Config qualified
-import Control.Exception (SomeException, try)
+import Control.Exception (try)
 import Control.Lens ((^?), _Just)
-import Control.Monad.IO.Class (liftIO)
-import Control.Monad.Trans.Except (ExceptT, except, runExceptT, throwE)
-import Control.Monad.Trans.Except.Extra (handleExceptT, handleIOExceptT)
+import Control.Monad.Trans.Except (except, throwE)
+import Control.Monad.Trans.Except.Extra (handleExceptT)
 import Data.Aeson (eitherDecode)
 import Data.Cache qualified as Cache
 import Data.Generics.Product (field)
 import Data.List (unzip4)
-import Data.Pool (Pool, withResource)
+import Data.Pool (Pool)
 import Data.Time.LocalTime (getZonedTime)
 import Data.UUID.V4 (nextRandom)
 import Database.PostgreSQL.Entity.DBT (withPool)
-import Database.PostgreSQL.Simple (Connection, Query, formatMany)
-import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Simple (Connection, Query)
 import Database.PostgreSQL.Transact (execute)
+import Debug.Pretty.Simple (pTrace, pTraceShowM)
 import Fmt
 import Gogol.Data.Base64 (_Base64)
 import Gogol.PubSub qualified as PubSub
@@ -29,9 +28,8 @@ import Models.Projects.Projects qualified as Projects
 import Relude hiding (hoistMaybe)
 import RequestMessages qualified
 import System.Clock
-import Text.Pretty.Simple (pPrint, pPrintString, pShow)
+import Text.Pretty.Simple (pPrint, pShow)
 import Utils (DBField, eitherStrToText)
-import Witch (from)
 
 
 {--
@@ -93,10 +91,11 @@ import Witch (from)
 
     We could also maintain hashes of all the formats in the cache, and check each field format within this list.🤔
  --}
-processMessages :: HasCallStack => LogAction IO String -> Config.EnvConfig -> Pool Connection -> [PubSub.ReceivedMessage] -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> IO [Maybe Text]
+processMessages :: LogAction IO String -> Config.EnvConfig -> Pool Connection -> [PubSub.ReceivedMessage] -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> IO [Maybe Text]
 processMessages logger' env conn' msgs projectCache = do
   let msgs' =
-        msgs & map \msg -> do
+        msgs <&> \msg -> do
+          _ <- pTraceShowM msg.message
           let rmMsg = msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64
           let jsonByteStr = fromMaybe "{}" rmMsg
           recMsg <- eitherStrToText $ eitherDecode (fromStrict jsonByteStr)
@@ -110,10 +109,9 @@ wrapTxtException :: Text -> SomeException -> Text
 wrapTxtException wrap e = " " <> wrap <> " : " <> (toText @String $ show e)
 
 
-processMessages' :: HasCallStack => LogAction IO String -> Config.EnvConfig -> Pool Connection -> [Either Text (Maybe Text, RequestMessages.RequestMessage)] -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> IO [Maybe Text]
+processMessages' :: LogAction IO String -> Config.EnvConfig -> Pool Connection -> [Either Text (Maybe Text, RequestMessages.RequestMessage)] -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> IO [Maybe Text]
 processMessages' logger' _ conn' msgs projectCache' = do
   startTime <- getTime Monotonic
-  let messagesCount = length msgs
   processed <- mapM (processMessage logger' conn' projectCache') msgs
   let (rmAckIds, queries, params, reqDumps) = unzip4 $ rights processed
   let query' = mconcat queries
@@ -141,7 +139,7 @@ processMessages' logger' _ conn' msgs projectCache' = do
           RequestDumps.bulkInsertRequestDumps reqDumps
 
   endTime <- getTime Monotonic
-  liftIO $ putStrLn $ fmtLn $ "Process Message (" +| messagesCount |+ ") pipeline microsecs: queryDuration " +| toNanoSecs (diffTimeSpec startTime afterProccessing) `div` 1000 |+ " -> processingDuration " +| toNanoSecs (diffTimeSpec afterProccessing endTime) `div` 1000 |+ " -> TotalDuration " +| toNanoSecs (diffTimeSpec startTime endTime) `div` 1000 |+ ""
+  liftIO $ putStrLn $ fmtLn $ "Process Message (" +| length msgs |+ ") pipeline microsecs: queryDuration " +| toNanoSecs (diffTimeSpec startTime afterProccessing) `div` 1000 |+ " -> processingDuration " +| toNanoSecs (diffTimeSpec afterProccessing endTime) `div` 1000 |+ " -> TotalDuration " +| toNanoSecs (diffTimeSpec startTime endTime) `div` 1000 |+ ""
 
   case resp of
     Left err -> do
@@ -152,7 +150,7 @@ processMessages' logger' _ conn' msgs projectCache' = do
     projectCacheDefault :: Projects.ProjectCache
     projectCacheDefault = Projects.ProjectCache{hosts = [], endpointHashes = [], shapeHashes = [], redactFieldslist = []}
 
-    processMessage :: HasCallStack => LogAction IO String -> Pool Connection -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> Either Text (Maybe Text, RequestMessages.RequestMessage) -> IO (Either Text (Maybe Text, Query, [DBField], RequestDumps.RequestDump))
+    processMessage :: LogAction IO String -> Pool Connection -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> Either Text (Maybe Text, RequestMessages.RequestMessage) -> IO (Either Text (Maybe Text, Query, [DBField], RequestDumps.RequestDump))
     processMessage logger conn projectCache recMsgEither = runExceptT do
       (rmAckId, recMsg) <- except recMsgEither
       timestamp <- liftIO getZonedTime

@@ -151,7 +151,7 @@ makeFieldLabelsNoPrefix ''CreateProject
 
 
 -- FIXME: We currently return an object with empty vectors when nothing was found.
-projectCacheById :: HasCallStack => ProjectId -> DBT IO (Maybe ProjectCache)
+projectCacheById :: ProjectId -> DBT IO (Maybe ProjectCache)
 projectCacheById = queryOne Select q
   where
     q =

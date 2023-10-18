@@ -119,33 +119,6 @@
   border-color: rgb(37 99 235 / 1);
 }
 
-.hljs-title {
-  color: #f22c3d;
-}
-
-.hljs-attr,
-.hljs-number {
-  color: #df3079;
-}
-
-.hljs-deco {
-  color: rgb(34 197 94);
-}
-.hljs-string {
-  color: #d8fa3c;
-}
-
-.hljs-keyword {
-  color: rgb(59 130 246);
-}
-
-.hljs-built_in {
-  color: pink;
-}
-.hljs-comment {
-  color: grey;
-}
-
 .htmx-indicator {
   justify-content: center;
   padding: 10px 5px;

@@ -155,6 +155,7 @@ library:
     - directory
     - githash
     - network-uri
+    - hspec-expectations-json
 
 executables:
   apitoolkit-server-exe:

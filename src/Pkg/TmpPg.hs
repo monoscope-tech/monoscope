@@ -1,7 +1,7 @@
 module Pkg.TmpPg (withSetup) where
 
 import Control.Exception (throwIO)
-import Data.Pool (Pool, createPool)
+import Data.Pool (Pool, defaultPoolConfig, newPool)
 import Database.PostgreSQL.Simple
 import Database.PostgreSQL.Simple.Migration (MigrationCommand (MigrationDirectory, MigrationInitialization))
 import Database.PostgreSQL.Simple.Migration qualified as Migration
@@ -46,4 +46,4 @@ withSetup f = do
     dirSize <- sum <$> (listDirectory migrationsDir >>= mapM (getFileSize . (migrationsDir <>)))
     migratedConfig <- throwE $ cacheAction ("./.tmp/postgres/" <> show dirSize) migrate combinedConfig
     withConfig migratedConfig $ \db ->
-      f =<< createPool (connectPostgreSQL $ toConnectionString db) close 2 60 10
+      f =<< newPool (defaultPoolConfig (connectPostgreSQL $ toConnectionString db) close 60 10)

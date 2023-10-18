@@ -79,6 +79,7 @@ library
       Pkg.Parser
       Pkg.TmpPg
       ProcessMessage
+      ProcessMessageSpec
       RequestMessages
       RequestMessagesSpec
       Server
@@ -154,6 +155,7 @@ library
     , gogol-core
     , gogol-pubsub
     , hspec
+    , hspec-expectations-json
     , http-api-data
     , lens
     , lens-aeson

@@ -187,7 +187,7 @@ fieldsToNormalized =
           & T.dropWhile (== '.')
           & T.breakOnAll "."
       )
-      & (++ [(T.dropWhile (== '.') $ field.keyPath, Just field)])
+      & (++ [(T.dropWhile (== '.') field.keyPath, Just field)])
 
 
 data Field = Field

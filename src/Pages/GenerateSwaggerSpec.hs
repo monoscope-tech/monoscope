@@ -14,6 +14,7 @@ import RequestMessages qualified
 
 import Relude
 import Test.Hspec
+import Test.Hspec.Expectations.Json
 
 
 projectTitle :: Text
@@ -494,6 +495,9 @@ hExpectedSwaggerJSON =
           "get": {
             "responses": {
               "200": {
+                content: {
+                  "*/*": {}
+                },
                 "description": "",
                 "headers": {
                    "content": {
@@ -701,7 +705,7 @@ spec = describe "generateSwagger" do
   --- headers
   it "HEADERS: generates swagger JSON matching expected output" do
     let hGeneratedSwaggerJSON = generateSwagger projectTitle projectDescription hSampleEndpoints hSampleShapes hSampleFields hSampleFormats
-    RequestMessages.valueToFields hGeneratedSwaggerJSON `shouldBe` RequestMessages.valueToFields hExpectedSwaggerJSON
+    hGeneratedSwaggerJSON `shouldBeJson` hExpectedSwaggerJSON
   -- parameters
   it "PARAMETERS: generates swagger JSON matching expected output" do
     let pGeneratedSwaggerJSON = generateSwagger projectTitle projectDescription pSampleEndpoints pSampleShapes pSampleFields pSampleFormats
