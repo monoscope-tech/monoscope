@@ -101,7 +101,7 @@ endpointListPage paramInput pid currTime endpoints hosts hostM pHostM = div_ [cl
         ]
         do
           span_ [class_ "ml-1 text-sm text-slate-600"] $ toHtml $ fromMaybe "Select host" pHostM
-      img_ [src_ "/assets/svgs/select_chevron.svg", style_ "height:15px; width:15px"]
+      faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 w-4"
       div_ [id_ "hosts_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] do
         div_ [class_ "flex flex-col"] do
           forM_ hosts $ \host -> do
