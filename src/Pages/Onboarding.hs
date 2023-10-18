@@ -246,10 +246,10 @@ tabContentExpress apikey current_tab =
       h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
       div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
         div_ [class_ "relative w-full flex flex-col"] do
-          contentHeader
+          contentHeader "express_code"
           div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
             pre_ [class_ "flex min-h-full text-lg leading-snug"] do
-              code_ [class_ "h-full hljs language-javascript atom-one-dark"]
+              code_ [class_ "h-full hljs language-javascript atom-one-dark", id_ "express_code"]
                 $ toHtml
                 $ "import express from 'express';\n"
                 <> "import APIToolkit from 'apitoolkit-express';\n"
@@ -284,11 +284,11 @@ tabContentGin apikey current_tab =
       h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
       div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
         div_ [class_ "relative w-full flex flex-col"] do
-          contentHeader
+          contentHeader "gin_code"
           div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
             pre_ [class_ "flex min-h-full text-lg leading-snug"] do
               code_
-                [class_ "h-full hljs language-go atom-one-dark"]
+                [class_ "h-full hljs language-go atom-one-dark", id_ "gin_code"]
                 $ toHtml
                 $ "package main\n"
                 <> "\n"
@@ -338,10 +338,10 @@ tabContentLaravel apikey current_tab =
       h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Update into your app/Http/Kernel.php"
       div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
         div_ [class_ "relative w-full flex flex-col"] do
-          contentHeader
+          contentHeader "laravel_code"
           div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
             pre_ [class_ "flex min-h-full text-lg leading-snug"] do
-              code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-php atom-one-dark"]
+              code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-php atom-one-dark", id_ "laravel_code"]
                 $ "<?php\n"
                 <> "\n"
                 <> "namespace App\\Http;\\n"
@@ -381,13 +381,13 @@ tabContentSymfony apikey current_tab =
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1 mt-4"] "Set up APITOOLKIT_KEY env variable"
         p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] $ toHtml $ "APITOOLKIT_KEY=" <> apikey
       h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
-      div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
+      div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem]"] do
         div_ [class_ "relative w-full flex flex-col"] do
-          contentHeader
+          contentHeader "symfony_code"
           div_ [class_ "relative min-h-0  h-full flex-auto flex flex-col"] do
             pre_ [class_ "flex min-h-full text-lg leading-snug"] do
               code_
-                [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-php atom-one-dark"]
+                [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-php atom-one-dark", id_ "symfony_code"]
                 $ "services:\n"
                 <> "    APIToolkit\\EventSubscriber\\APIToolkitService:\n"
                 <> "        arguments:\n"
@@ -412,10 +412,10 @@ tabContentDotNet apikey current_tab =
       h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
       div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
         div_ [class_ "relative w-full flex flex-col"] do
-          contentHeader
+          contentHeader "net_code"
           div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
             pre_ [class_ "flex min-h-full text-lg leading-snug"] do
-              code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-csharp atom-one-dark"]
+              code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-csharp atom-one-dark", id_ "net_code"]
                 $ toHtml
                 $ "var config = new Config\n"
                 <> "{\n"
@@ -446,10 +446,10 @@ tabContentFastify apikey current_tab =
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
         div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
           div_ [class_ "relative w-full flex flex-col"] do
-            contentHeader
+            contentHeader "fastify_code"
             div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
               pre_ [class_ "flex min-h-full text-lg leading-snug"] do
-                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-javascript atom-one-dark"]
+                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-javascript atom-one-dark", id_ "fastify_code"]
                   $ toHtml
                   $ "import APIToolkit from 'apitoolkit-fastify';\n"
                   <> "import Fastify from 'fastify';\n"
@@ -489,10 +489,10 @@ tabContentFlask apikey current_tab =
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
         div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
           div_ [class_ "relative w-full flex flex-col"] do
-            contentHeader
+            contentHeader "flask_code"
             div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
               pre_ [class_ "flex min-h-full text-lg leading-snug"] do
-                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-python atom-one-dark"]
+                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-python atom-one-dark", id_ "flask_code"]
                   $ toHtml
                   $ "from flask import Flask\n"
                   <> "from apitoolkit_flask import APIToolkit\n"
@@ -533,10 +533,10 @@ tabContentFastAPI apikey current_tab =
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
         div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
           div_ [class_ "relative w-full flex flex-col"] do
-            contentHeader
+            contentHeader "fastapi_code"
             div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] $ do
               pre_ [class_ "flex min-h-full text-lg leading-snug"] $ do
-                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-python atom-one-dark"]
+                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-python atom-one-dark", id_ "fastapi_code"]
                   $ toHtml
                   $ "from fastapi import FastAPI\n"
                   <> "from apitoolkit_fastapi import APIToolkit\n"
@@ -580,10 +580,10 @@ tabContentDjango apikey current_tab =
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app by adding APITOOLKIT_KEY and APIToolkit to the settings middleware list"
         div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[0vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
           div_ [class_ "relative w-full flex flex-col"] do
-            contentHeader
+            contentHeader "django_code"
             div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
               pre_ [class_ "flex min-h-full text-lg leading-snug"] do
-                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-python atom-one-dark"]
+                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-python atom-one-dark", id_ "django_code"]
                   $ toHtml
                   $ "APITOOLKIT_KEY = \""
                   <> apikey
@@ -615,10 +615,10 @@ tabContentEcho apikey current_tab =
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app by adding APITOOLKIT_KEY and APIToolkit to the settings middleware list"
         div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[0vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
           div_ [class_ "relative w-full flex flex-col"] do
-            contentHeader
+            contentHeader "echo_code"
             div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
               pre_ [class_ "flex min-h-full text-lg leading-snug"] do
-                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-go atom-one-dark"]
+                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-go atom-one-dark", id_ "echo_code"]
                   $ toHtml
                   $ "package main\n"
                   <> "\n"
@@ -670,10 +670,10 @@ tabContentGorilla apikey current_tab =
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app by adding APITOOLKIT_KEY and APIToolkit to the settings middleware list"
         div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[0vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
           div_ [class_ "relative w-full flex flex-col"] do
-            contentHeader
+            contentHeader "gorilla_code"
             div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
               pre_ [class_ "flex min-h-full text-lg leading-snug"] do
-                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-go atom-one-dark"]
+                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-go atom-one-dark", id_ "gorilla_code"]
                   $ toHtml
                   $ "package main\n"
                   <> "import (\n"
@@ -795,8 +795,8 @@ tabs current_tab =
         "Fastify Js"
 
 
-contentHeader :: Html ()
-contentHeader =
+contentHeader :: Text -> Html ()
+contentHeader target =
   div_ [class_ "flex-none border-b border-slate-500/30 flex justify-between items-center gap-4"] do
     div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] do
       div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
@@ -804,10 +804,12 @@ contentHeader =
       div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
     button_
       [ class_ "text-white text-sm font-bold mr-6"
+      , term "data-target" target
       , [__|
           on click
             if 'clipboard' in window.navigator then
-              call navigator.clipboard.writeText((closest code) innerText)
+              call document.getElementById(@data-target)
+              call navigator.clipboard.writeText(it's innerText)
               send successToast(value:['Copied']) to <body/>
             end
        |]
