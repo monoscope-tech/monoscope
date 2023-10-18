@@ -129,14 +129,14 @@ processMessages' logger' _ conn' msgs projectCache' = do
   when (null reqDumps) $ logger' <& "ERROR: Empty params/query for processMessages for request dumps; "
 
   resp <- withPool conn' $ runExceptT do
-    unless (null params')
-      $ handleExceptT (wrapTxtException $ "execute query " <> show query')
-      $ void
-      $ execute query' params'
-    unless (null reqDumps)
-      $ handleExceptT (wrapTxtException $ "bulkInsertReqDump => \n\t\t" <> show reqDumps)
-      $ void
-      $ RequestDumps.bulkInsertRequestDumps reqDumps
+    unless (null params') $
+      handleExceptT (wrapTxtException $ "execute query " <> show query') $
+        void $
+          execute query' params'
+    unless (null reqDumps) $
+      handleExceptT (wrapTxtException $ "bulkInsertReqDump => \n\t\t" <> show reqDumps) $
+        void $
+          RequestDumps.bulkInsertRequestDumps reqDumps
 
   endTime <- getTime Monotonic
   liftIO $ putStrLn $ fmtLn $ "Process Message (" +| length msgs |+ ") pipeline microsecs: queryDuration " +| toNanoSecs (diffTimeSpec startTime afterProccessing) `div` 1000 |+ " -> processingDuration " +| toNanoSecs (diffTimeSpec afterProccessing endTime) `div` 1000 |+ " -> TotalDuration " +| toNanoSecs (diffTimeSpec startTime endTime) `div` 1000 |+ ""
@@ -161,8 +161,8 @@ processMessages' logger' _ conn' msgs projectCache' = do
       -- This should help with our performance, since this project Cache is the only information we need in order to process
       -- an apitoolkit requestmessage payload. So we're able to process payloads without hitting the database except for the actual db inserts.
       projectCacheValE <-
-        liftIO
-          $ try
+        liftIO $
+          try
             ( Cache.fetchWithCache projectCache pid \pid' -> do
                 mpjCache <- withPool conn $ Projects.projectCacheById pid'
                 pure $ fromMaybe projectCacheDefault mpjCache
