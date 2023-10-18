@@ -357,7 +357,7 @@ apiDocsSubPage shapesWithFieldsMap shapeHashM = do
                 [ class_ prm
                 , id_ ("status_" <> show index)
                 , [__|on click selectShape((me),(my @data-pos)) |]
-                , data_ "pos" (show index)
+                , data_ "pos" (show targetIndex)
                 , data_ "status" (show s.status)
                 , data_ "hash" s.sHash
                 ]
