@@ -120,16 +120,16 @@ pubsubService logger envConfig conn projectCache = do
 
   let pullReq = PubSub.newPullRequest & field @"maxMessages" L.?~ fromIntegral (envConfig ^. #messagesPerPubsubPullBatch)
 
-  forever
-    $ runResourceT
-    do
-      forM (envConfig ^. #requestPubsubTopics) \topic -> do
-        let subscription = "projects/past-3/subscriptions/" <> topic <> "-sub"
-        pullResp <- Google.send env $ PubSub.newPubSubProjectsSubscriptionsPull pullReq subscription
-        let messages = (pullResp L.^. field @"receivedMessages") & fromMaybe []
-        msgIds <- liftIO $ processMessages logger envConfig conn messages projectCache
-        let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just (catMaybes msgIds)
-        unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env
+  forever $
+    runResourceT
+      do
+        forM (envConfig ^. #requestPubsubTopics) \topic -> do
+          let subscription = "projects/past-3/subscriptions/" <> topic <> "-sub"
+          pullResp <- Google.send env $ PubSub.newPubSubProjectsSubscriptionsPull pullReq subscription
+          let messages = (pullResp L.^. field @"receivedMessages") & fromMaybe []
+          msgIds <- liftIO $ processMessages logger envConfig conn messages projectCache
+          let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just (catMaybes msgIds)
+          unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env
 
 
 -- pubSubScope :: Proxy PubSub.Pubsub'FullControl

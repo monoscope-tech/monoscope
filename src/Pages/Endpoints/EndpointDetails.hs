@@ -81,12 +81,13 @@ fieldDetailsPartialH sess pid fid = do
     then do
       pure $ userNotMemeberPage sess
     else do
-      (fieldsM, formats) <- liftIO
-        $ withPool pool
-        do
-          field <- Fields.fieldById fid
-          formats <- Formats.formatsByFieldHash (maybe "" (^. #hash) field)
-          pure (field, formats)
+      (fieldsM, formats) <- liftIO $
+        withPool
+          pool
+          do
+            field <- Fields.fieldById fid
+            formats <- Formats.formatsByFieldHash (maybe "" (^. #hash) field)
+            pure (field, formats)
       case fieldsM of
         Nothing -> pure ""
         Just field -> pure $ fieldDetailsView field formats
@@ -111,21 +112,21 @@ fieldDetailsView field formats = do
         h4_ [class_ "text-base text-slate-800"] $ toHtml $ fromMaybe "[unset]" field.fieldTypeOverride
     div_ do
       h5_ [class_ "text-sm text-slate-800"] "DETECTED FIELD FORMATS AND TYPES"
-      div_ [class_ "space-y-2"]
-        $ formats
-        & mapM_ \formatV -> do
-          div_ [class_ "border-l-slate-200 border-l-2 pl-2 py-2"] do
-            div_ [class_ "flex flex-row gap-9"] do
-              div_ [class_ "space-y-2"] do
-                h6_ [class_ "text-slate-800 text-xs"] "TYPE"
-                h4_ [class_ "text-base text-slate-800"] $ EndpointComponents.fieldTypeToDisplay formatV.fieldType
-              div_ [class_ "mx-5 space-y-2"] do
-                h6_ [class_ "text-slate-800 text-xs"] "FORMAT"
-                h4_ [class_ "text-base text-slate-800"] $ toHtml formatV.fieldFormat
-            h6_ [class_ "text-slate-600 mt-4 text-xs"] "EXAMPLE VALUES"
-            ul_ [class_ "list-disc"] do
-              formatV.examples & mapM_ \ex -> do
-                li_ [class_ "ml-10 text-slate-800 text-sm"] $ toHtml $ aesonValueToText ex
+      div_ [class_ "space-y-2"] $
+        formats
+          & mapM_ \formatV -> do
+            div_ [class_ "border-l-slate-200 border-l-2 pl-2 py-2"] do
+              div_ [class_ "flex flex-row gap-9"] do
+                div_ [class_ "space-y-2"] do
+                  h6_ [class_ "text-slate-800 text-xs"] "TYPE"
+                  h4_ [class_ "text-base text-slate-800"] $ EndpointComponents.fieldTypeToDisplay formatV.fieldType
+                div_ [class_ "mx-5 space-y-2"] do
+                  h6_ [class_ "text-slate-800 text-xs"] "FORMAT"
+                  h4_ [class_ "text-base text-slate-800"] $ toHtml formatV.fieldFormat
+              h6_ [class_ "text-slate-600 mt-4 text-xs"] "EXAMPLE VALUES"
+              ul_ [class_ "list-disc"] do
+                formatV.examples & mapM_ \ex -> do
+                  li_ [class_ "ml-10 text-slate-800 text-sm"] $ toHtml $ aesonValueToText ex
     div_ [class_ "flex flex-row justify-between mt-10 "] do
       div_ [class_ " "] do
         h4_ [class_ "text-sm text-slate-800 mb-2"] "CREATION DATE"
@@ -191,22 +192,23 @@ endpointDetailsH sess pid eid fromDStr toDStr sinceStr' subPageM = do
               let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
               (f, t)
 
-      (endpoint, enpStats, project, shapesWithFieldsMap, fieldsMap, reqLatenciesRolledByStepsLabeled) <- liftIO
-        $ withPool pool
-        do
-          -- Should swap names betw enp and endpoint endpoint could be endpointStats
-          endpoint <- Unsafe.fromJust <$> Endpoints.endpointById eid
-          enpStats <- fromMaybe (def :: EndpointRequestStats) <$> Endpoints.endpointRequestStatsByEndpoint eid
-          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-          shapes <- Shapes.shapesByEndpointHash pid endpoint.hash
-          fields <- Fields.selectFields pid endpoint.hash
-          let fieldsMap = Fields.groupFieldsByCategory fields
-          let shapesWithFieldsMap = Vector.map (`getShapeFields` fields) shapes
-          let maxV = round enpStats.max :: Int
-          let steps = (maxV `quot` 100) :: Int
-          let steps' = if steps == 0 then 100 else steps
-          reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledBySteps maxV steps' pid endpoint.urlPath endpoint.method
-          pure (endpoint, enpStats, project, Vector.toList shapesWithFieldsMap, fieldsMap, Vector.toList reqLatenciesRolledBySteps)
+      (endpoint, enpStats, project, shapesWithFieldsMap, fieldsMap, reqLatenciesRolledByStepsLabeled) <- liftIO $
+        withPool
+          pool
+          do
+            -- Should swap names betw enp and endpoint endpoint could be endpointStats
+            endpoint <- Unsafe.fromJust <$> Endpoints.endpointById eid
+            enpStats <- fromMaybe (def :: EndpointRequestStats) <$> Endpoints.endpointRequestStatsByEndpoint eid
+            project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+            shapes <- Shapes.shapesByEndpointHash pid endpoint.hash
+            fields <- Fields.selectFields pid endpoint.hash
+            let fieldsMap = Fields.groupFieldsByCategory fields
+            let shapesWithFieldsMap = Vector.map (`getShapeFields` fields) shapes
+            let maxV = round enpStats.max :: Int
+            let steps = (maxV `quot` 100) :: Int
+            let steps' = if steps == 0 then 100 else steps
+            reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledBySteps maxV steps' pid endpoint.urlPath endpoint.method
+            pure (endpoint, enpStats, project, Vector.toList shapesWithFieldsMap, fieldsMap, Vector.toList reqLatenciesRolledBySteps)
 
       let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
       let bwconf =
@@ -242,9 +244,9 @@ endpointDetails paramInput currTime endpoint endpointStats shapesWithFieldsMap f
             & mapM_ \(title, slug) ->
               a_
                 [ href_ $ currentURLSubPage <> "&subpage=" <> slug
-                , class_
-                    $ "cursor-pointer px-3 py-2 font-medium text-sm rounded-md "
-                    <> if slug == paramInput.subPage then " bg-indigo-100 text-indigo-700 " else " text-slate-500 hover:text-gray-700"
+                , class_ $
+                    "cursor-pointer px-3 py-2 font-medium text-sm rounded-md "
+                      <> if slug == paramInput.subPage then " bg-indigo-100 text-indigo-700 " else " text-slate-500 hover:text-gray-700"
                 ]
                 $ toHtml title
 
@@ -415,15 +417,16 @@ apiOverviewSubPage paramInput currTime endpoint fieldsM reqLatenciesRolledByStep
 endpointStats :: Endpoints.EndpointRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p99, max} reqLatenciesRolledByStepsJ dateRange@(fromD, toD) =
   section_ [class_ "space-y-3"] do
-    div_ [class_ "flex justify-between mt-5"]
-      $ div_ [class_ "flex flex-row"]
-      do
-        img_
-          [ src_ "/assets/svgs/cheveron-down.svg"
-          , class_ "h-4 mr-3 mt-1 w-4 cursor-pointer"
-          , [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .endpointStatsSubSection)|]
-          ]
-        span_ [class_ "text-lg text-slate-800"] "Endpoint Stats"
+    div_ [class_ "flex justify-between mt-5"] $
+      div_
+        [class_ "flex flex-row"]
+        do
+          img_
+            [ src_ "/assets/svgs/cheveron-down.svg"
+            , class_ "h-4 mr-3 mt-1 w-4 cursor-pointer"
+            , [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .endpointStatsSubSection)|]
+            ]
+          span_ [class_ "text-lg text-slate-800"] "Endpoint Stats"
     div_ [class_ "space-y-5 endpointStatsSubSection"] do
       div_ [class_ "grid grid-cols-3  gap-5"] do
         statBox Nothing "Total Anomalies" "Total Anomalies for this endpoint this week vs total for the project" enpStats.ongoingAnomaliesProj (Just enpStats.ongoingAnomaliesProj)
@@ -461,11 +464,12 @@ endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p
               Charts.lazy [C.QByE $ [C.QBPId enpStats.projectId, C.QBEndpointHash enpStats.endpointHash] ++ catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBEndpoint, C.SlotsE 120, C.ShowLegendE]
 
       div_ [class_ "col-span-3 bg-white   border border-gray-100  rounded-xl py-3 px-6"] do
-        div_ [class_ "p-4"]
-          $ select_ []
-          do
-            option_ "Request Latency Distribution"
-            option_ "Avg Reqs per minute"
+        div_ [class_ "p-4"] $
+          select_
+            []
+            do
+              option_ "Request Latency Distribution"
+              option_ "Avg Reqs per minute"
         div_ [class_ "grid grid-cols-9  gap-8 w-full"] do
           div_ [id_ "reqsLatencyHistogram", class_ "col-span-7 h-72"] ""
           div_ [class_ "col-span-2 space-y-4 "] do
@@ -505,24 +509,24 @@ reqResSection title isRequest shapesWithFieldsMap =
   section_ [class_ "space-y-3"] do
     div_ [class_ "flex justify-between mt-5"] do
       div_ [class_ "flex flex-row"] do
-        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
-          $ faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 mr-3 mt-1 w-4"
+        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]] $
+          faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 mr-3 mt-1 w-4"
         span_ [class_ "text-lg text-slate-800"] $ toHtml title
 
-    div_ [class_ "bg-white border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"]
-      $ forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap)
-      $ \(index, s) -> do
-        let sh = if index == 1 then title <> "_fields" else title <> "_fields hidden"
-        div_ [class_ sh, id_ $ title <> "_" <> show index] do
-          if isRequest
-            then do
-              subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam s.fieldsMap)
-              subSubSection (title <> " Query Params") (Map.lookup Fields.FCQueryParam s.fieldsMap)
-              subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader s.fieldsMap)
-              subSubSection (title <> " Body") (Map.lookup Fields.FCRequestBody s.fieldsMap)
-            else do
-              subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader s.fieldsMap)
-              subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody s.fieldsMap)
+    div_ [class_ "bg-white border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"] $
+      forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap) $
+        \(index, s) -> do
+          let sh = if index == 1 then title <> "_fields" else title <> "_fields hidden"
+          div_ [class_ sh, id_ $ title <> "_" <> show index] do
+            if isRequest
+              then do
+                subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam s.fieldsMap)
+                subSubSection (title <> " Query Params") (Map.lookup Fields.FCQueryParam s.fieldsMap)
+                subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader s.fieldsMap)
+                subSubSection (title <> " Body") (Map.lookup Fields.FCRequestBody s.fieldsMap)
+              else do
+                subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader s.fieldsMap)
+                subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody s.fieldsMap)
 
 
 -- | subSubSection ..

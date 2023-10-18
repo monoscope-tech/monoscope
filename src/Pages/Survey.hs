@@ -83,10 +83,11 @@ surveyGetH sess pid = do
     then do
       pure $ userNotMemeberPage sess
     else do
-      project <- liftIO
-        $ withPool pool
-        do
-          Projects.selectProjectForUser (Sessions.userId sess, pid)
+      project <- liftIO $
+        withPool
+          pool
+          do
+            Projects.selectProjectForUser (Sessions.userId sess, pid)
       let bwconf =
             (def :: BWConfig)
               { sessM = Just sess

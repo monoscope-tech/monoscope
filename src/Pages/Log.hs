@@ -56,8 +56,8 @@ apiLog sess pid queryM cols' fromM hxRequestM hxBoostedM = do
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, dbResp) <- liftIO
-        $ withPool pool do
+      (project, dbResp) <- liftIO $
+        withPool pool do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
           dbResp <- RequestDumps.selectRequestDumpByProject pid query fromM'
           pure (project, dbResp)
@@ -397,7 +397,7 @@ logItemRows pid requests cols nextLogsURL = do
     let logItemEndpointUrl = "/p/" <> pid.toText <> "/log_explorer/endpoint/" <> endpoint_hash
     let errorClass = if req.errorsCount > 0 then "bg-red-500" else "bg-transparent"
     div_
-      [ class_ "flex flex-row divide-x  cursor-pointer " 
+      [ class_ "flex flex-row divide-x  cursor-pointer "
       , term "data-log-item-path" logItemPath
       , [__|on click LogItemExpandable(me)|]
       ]
@@ -446,8 +446,8 @@ logItemRows pid requests cols nextLogsURL = do
 apiLogItemView :: RequestDumps.RequestDumpLogItem -> Text -> Html ()
 apiLogItemView req expandItemPath = do
   let errorClass = if req.errorsCount > 0 then "border-l-red-200" else "border-l-blue-200"
-  div_ [class_ $ "log-item-info border-l-4 " <> errorClass]
-    $ div_
+  div_ [class_ $ "log-item-info border-l-4 " <> errorClass] $
+    div_
       [class_ "pl-4 py-1 ", colspan_ "3"]
       do
         button_

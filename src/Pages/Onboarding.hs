@@ -34,8 +34,8 @@ onboardingGetH sess pid polling redirected current_tab = do
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, apikey, hasRequest) <- liftIO
-        $ withPool
+      (project, apikey, hasRequest) <- liftIO $
+        withPool
           pool
           do
             project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
@@ -121,8 +121,8 @@ onboardingPage pid apikey hasRequest ans redi ctb = do
                 div_ [class_ "w-full bg-slate-100 mt-8", id_ "SDKs"] do
                   if hasRequest
                     then do
-                      p_ [class_ "text-green-500 text-center py-16 text-center"]
-                        $ span_ "Apitoolkit has been integrated into your app"
+                      p_ [class_ "text-green-500 text-center py-16 text-center"] $
+                        span_ "Apitoolkit has been integrated into your app"
                     else do
                       div_ [class_ "font-medium text-lg text-center border-b border-slate-200 py-16 space-y-2"] $ do
                         a_ [class_ "block link underline text-slate-900 underline-offset-4", href_ "https://apitoolkit.io/docs/quickstarts/", target_ "BLANK"] "View Integration Quickstarts &  documentation at our Knowledge base."
@@ -473,8 +473,8 @@ tabContentDotNet apikey current_tab =
 
 tabContentFastify :: Text -> Text -> Html ()
 tabContentFastify apikey current_tab =
-  div_ [class_ $ "tab-content flex flex-col m-8 " <> (if current_tab == "fastify" then "" else "hidden"), id_ "fastify_content"]
-    $ do
+  div_ [class_ $ "tab-content flex flex-col m-8 " <> (if current_tab == "fastify" then "" else "hidden"), id_ "fastify_content"] $
+    do
       div_ [class_ "relative"] $ do
         div_ [class_ "mb-6 space-x-3"] do
           strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
@@ -518,8 +518,8 @@ tabContentFastify apikey current_tab =
                       span_ [class_ ""] "});"
 tabContentFlask :: Text -> Text -> Html ()
 tabContentFlask apikey current_tab =
-  div_ [class_ $ "tab-content flex flex-col m-8 " <> (if current_tab == "flask" then "" else "hidden"), id_ "flask_content"]
-    $ do
+  div_ [class_ $ "tab-content flex flex-col m-8 " <> (if current_tab == "flask" then "" else "hidden"), id_ "flask_content"] $
+    do
       div_ [class_ "relative"] $ do
         div_ [class_ "mb-6 space-x-3"] do
           strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
@@ -579,8 +579,8 @@ tabContentFlask apikey current_tab =
 
 tabContentFastAPI :: Text -> Text -> Html ()
 tabContentFastAPI apikey current_tab =
-  div_ [class_ $ "tab-content flex flex-col m-8 " <> (if current_tab == "fastapi" then "" else "hidden"), id_ "fastapi_content"]
-    $ do
+  div_ [class_ $ "tab-content flex flex-col m-8 " <> (if current_tab == "fastapi" then "" else "hidden"), id_ "fastapi_content"] $
+    do
       div_ [class_ "relative"] $ do
         div_ [class_ "mb-6 space-x-3"] do
           strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
@@ -626,8 +626,8 @@ tabContentFastAPI apikey current_tab =
 
 tabContentDjango :: Text -> Text -> Html ()
 tabContentDjango apikey current_tab =
-  div_ [class_ $ "tab-content flex flex-col m-8 " <> (if current_tab == "django" then "" else "hidden"), id_ "django_content"]
-    $ do
+  div_ [class_ $ "tab-content flex flex-col m-8 " <> (if current_tab == "django" then "" else "hidden"), id_ "django_content"] $
+    do
       div_ [class_ "relative"] $ do
         div_ [class_ "mb-6 space-x-3"] do
           strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"

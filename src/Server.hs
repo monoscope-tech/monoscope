@@ -264,8 +264,8 @@ statusH = do
   let query = [sql| select version(); |]
   version <- liftIO $ withPool pool $ queryOne Select query ()
   let gi = $$tGitInfoCwd
-  pure
-    $ Status
+  pure $
+    Status
       { ping = "pong"
       , dbVersion = version
       , gitHash = toText $ giHash gi
