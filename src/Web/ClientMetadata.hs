@@ -54,8 +54,8 @@ clientMetadataH (Just authTextB64) = do
                 project <- Projects.projectById pApiKey.projectId
                 pure (pApiKey, project)
 
-          pure $
-            ClientMetadata
+          pure
+            $ ClientMetadata
               { projectId = pApiKey.projectId
               , pubsubProjectId = "past-3"
               , topicId = (env ^. #requestPubsubTopics) !! 0 -- apitoolkit-prod-default

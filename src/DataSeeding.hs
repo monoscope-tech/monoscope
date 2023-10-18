@@ -94,11 +94,11 @@ fieldConfigToField fc = do
 
 randomTimesBtwToAndFrom :: RandomGen g => UTCTime -> Int -> g -> NominalDiffTime -> [ZonedTime]
 randomTimesBtwToAndFrom startTime countToReturn rg maxDiff =
-  take countToReturn $
-    utcToZonedTime utc
-      . flip addUTCTime startTime
-      . realToFrac
-      <$> randomRs (0, truncate maxDiff :: Int) rg
+  take countToReturn
+    $ utcToZonedTime utc
+    . flip addUTCTime startTime
+    . realToFrac
+    <$> randomRs (0, truncate maxDiff :: Int) rg
 
 
 parseConfigToRequestMessages :: Projects.ProjectId -> ByteString -> IO (Either Yaml.ParseException [RequestMessages.RequestMessage])
@@ -109,43 +109,43 @@ parseConfigToRequestMessages pid input = do
     Right configs -> do
       let fakerSettings = setRandomGen randGen defaultFakerSettings
       resp <-
-        generateWithSettings fakerSettings $
-          configs
-            & mapM \config -> do
-              let startTimeUTC = zonedTimeToUTC config.from
-                  maxDiffTime = diffUTCTime (zonedTimeToUTC config.to) startTimeUTC
-                  timestamps = randomTimesBtwToAndFrom startTimeUTC config.count randGen maxDiffTime
-                  durations = take config.count $ randomRs (config.durationFrom, config.durationTo) randGen
-                  allowedStatusCodes = config.statusCodesOneof
-                  statusCodes = take config.count $ map (allowedStatusCodes !!) $ randomRs (0, length allowedStatusCodes - 1) randGen
+        generateWithSettings fakerSettings
+          $ configs
+          & mapM \config -> do
+            let startTimeUTC = zonedTimeToUTC config.from
+                maxDiffTime = diffUTCTime (zonedTimeToUTC config.to) startTimeUTC
+                timestamps = randomTimesBtwToAndFrom startTimeUTC config.count randGen maxDiffTime
+                durations = take config.count $ randomRs (config.durationFrom, config.durationTo) randGen
+                allowedStatusCodes = config.statusCodesOneof
+                statusCodes = take config.count $ map (allowedStatusCodes !!) $ randomRs (0, length allowedStatusCodes - 1) randGen
 
-              zip3 timestamps durations statusCodes & mapM \(timestampV, duration', statusCode') -> do
-                let duration = duration'
-                    statusCode = statusCode'
-                    method = config.method
-                    urlPath = config.path
-                    rawUrl = config.path
-                    protoMajor = 1
-                    protoMinor = 1
-                    referer = "https://google.com"
-                    host = "https://apitoolkit.io/"
-                    projectId = Projects.unProjectId pid
-                    timestamp = timestampV
-                    sdkType = RequestDumps.GoGin
-                    msgId = Nothing
-                    parentId = Nothing
-                    serviceVersion = Nothing
-                    errors = Nothing
-                    tags = Nothing
+            zip3 timestamps durations statusCodes & mapM \(timestampV, duration', statusCode') -> do
+              let duration = duration'
+                  statusCode = statusCode'
+                  method = config.method
+                  urlPath = config.path
+                  rawUrl = config.path
+                  protoMajor = 1
+                  protoMinor = 1
+                  referer = "https://google.com"
+                  host = "https://apitoolkit.io/"
+                  projectId = Projects.unProjectId pid
+                  timestamp = timestampV
+                  sdkType = RequestDumps.GoGin
+                  msgId = Nothing
+                  parentId = Nothing
+                  serviceVersion = Nothing
+                  errors = Nothing
+                  tags = Nothing
 
-                pathLog <- mapM fieldConfigToField config.queryParams
-                pathParams <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField config.pathParams
-                queryParams <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField config.queryParams
-                requestHeaders <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField config.requestHeaders
-                responseHeaders <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField config.responseHeaders
-                responseBody <- B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField config.responseBody
-                requestBody <- B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField config.responseBody
-                pure RequestMessages.RequestMessage{..}
+              pathLog <- mapM fieldConfigToField config.queryParams
+              pathParams <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField config.pathParams
+              queryParams <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField config.queryParams
+              requestHeaders <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField config.requestHeaders
+              responseHeaders <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField config.responseHeaders
+              responseBody <- B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField config.responseBody
+              requestBody <- B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField config.responseBody
+              pure RequestMessages.RequestMessage{..}
       pure $ Right $ concat resp
 
 
@@ -180,9 +180,9 @@ dataSeedingPostH sess pid form = do
       env <- asks env
       projectCache <- asks projectCache
       project <-
-        liftIO $
-          withPool pool $
-            Projects.selectProjectForUser (Sessions.userId sess, pid)
+        liftIO
+          $ withPool pool
+          $ Projects.selectProjectForUser (Sessions.userId sess, pid)
 
       respE <- liftIO $ parseConfigToRequestMessages pid (encodeUtf8 $ config form)
       case respE of
@@ -202,9 +202,9 @@ dataSeedingGetH sess pid = do
       pure $ userNotMemeberPage sess
     else do
       project <-
-        liftIO $
-          withPool pool $
-            Projects.selectProjectForUser (Sessions.userId sess, pid)
+        liftIO
+          $ withPool pool
+          $ Projects.selectProjectForUser (Sessions.userId sess, pid)
 
       let bwconf =
             (def :: BWConfig)
