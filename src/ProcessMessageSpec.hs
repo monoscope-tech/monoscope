@@ -8,7 +8,7 @@ import Data.Aeson.Types (parseMaybe)
 import Data.Cache
 import Data.Default (Default (..))
 import Data.UUID qualified as UUID
-import Database.PostgreSQL.Entity.DBT (execute, withPool, QueryNature (Insert))
+import Database.PostgreSQL.Entity.DBT (QueryNature (Insert), execute, withPool)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Debug.Pretty.Simple (pTraceShowM)
 import Models.Apis.Endpoints qualified as Endpoints
@@ -126,10 +126,10 @@ spec = aroundAll TmpPg.withSetup do
             REFRESH MATERIALIZED VIEW CONCURRENTLY apis.project_request_stats;
             REFRESH MATERIALIZED VIEW CONCURRENTLY apis.target_hash_agg_14days;
             REFRESH MATERIALIZED VIEW CONCURRENTLY apis.target_hash_agg_24hrs;
-        |] ()
+        |]
+            ()
       endpoints <- withPool pool $ Endpoints.endpointRequestStatsByProject pid False False Nothing
       length endpoints `shouldBe` 2 -- Two new endpoints from the last 2 requests
-      pTraceShowM endpoints
       forM endpoints \enp -> do
         ["/", "/api/v1/user/login"] `shouldContain` [enp.urlPath]
       pass
