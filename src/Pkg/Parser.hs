@@ -84,7 +84,7 @@ pTerm =
     <|> try (GTEq <$> pSubject <* void (symbol ">=") <*> pValues)
     <|> try (LTEq <$> pSubject <* void (symbol "<=") <*> pValues)
     <|> Paren
-    <$> parens pExpr
+      <$> parens pExpr
 
 
 pExpr :: Parser Expr

@@ -49,8 +49,8 @@ endpointListGetH sess pid layoutM ackdM archivedM hostM projectHostM sortM hxReq
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, endpointStats, projHosts) <- liftIO
-        $ withPool pool do
+      (project, endpointStats, projHosts) <- liftIO $
+        withPool pool do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
           endpointStats <- case hostM of
             Just h -> Endpoints.dependencyEndpointsRequestStatsByProject pid h
@@ -75,8 +75,8 @@ endpointListGetH sess pid layoutM ackdM archivedM hostM projectHostM sortM hxReq
                 sort = ""
               }
       let elementBelowTabs =
-            div_ [class_ "grid grid-cols-5", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"]
-              $ endpointList' paramInput currTime pid endpointStats
+            div_ [class_ "grid grid-cols-5", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $
+              endpointList' paramInput currTime pid endpointStats
       case (hxRequestM, hxBoostedM) of
         (Just "true", Just "false") -> pure elementBelowTabs
         (Just "true", Nothing) -> pure elementBelowTabs
@@ -101,7 +101,7 @@ endpointListPage paramInput pid currTime endpoints hosts hostM pHostM = div_ [cl
         ]
         do
           span_ [class_ "ml-1 text-sm text-slate-600"] $ toHtml $ fromMaybe "Select host" pHostM
-      img_ [src_ "/assets/svgs/select_chevron.svg", style_ "height:15px; width:15px"]
+      faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 w-4"
       div_ [id_ "hosts_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] do
         div_ [class_ "flex flex-col"] do
           forM_ hosts $ \host -> do

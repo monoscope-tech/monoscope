@@ -97,9 +97,9 @@ manualIngestPostH sess pid reqMF = do
     else do
       projectCache <- asks projectCache
       project <-
-        liftIO
-          $ withPool pool
-          $ Projects.selectProjectForUser (Sessions.userId sess, pid)
+        liftIO $
+          withPool pool $
+            Projects.selectProjectForUser (Sessions.userId sess, pid)
       case reqMsgFormToReqMsg (Projects.unProjectId pid) reqMF of
         Left err -> liftIO $ logger <& "error parsing manualIngestPost req Message; " <> show err
         Right reqM -> void $ liftIO $ ProcessMessage.processMessages' logger env pool [Right (Just "", reqM)] projectCache
@@ -116,9 +116,9 @@ manualIngestGetH sess pid = do
       pure $ userNotMemeberPage sess
     else do
       project <-
-        liftIO
-          $ withPool pool
-          $ Projects.selectProjectForUser (Sessions.userId sess, pid)
+        liftIO $
+          withPool pool $
+            Projects.selectProjectForUser (Sessions.userId sess, pid)
 
       let bwconf =
             (def :: BWConfig)

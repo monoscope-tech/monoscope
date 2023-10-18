@@ -114,21 +114,21 @@ fieldDetailsView field formats = do
         h4_ [class_ "text-base text-slate-800"] $ toHtml $ fromMaybe "[unset]" field.fieldTypeOverride
     div_ do
       h5_ [class_ "text-sm text-slate-800"] "DETECTED FIELD FORMATS AND TYPES"
-      div_ [class_ "space-y-2"]
-        $ formats
-        & mapM_ \formatV -> do
-          div_ [class_ "border-l-slate-200 border-l-2 pl-2 py-2"] do
-            div_ [class_ "flex flex-row gap-9"] do
-              div_ [class_ "space-y-2"] do
-                h6_ [class_ "text-slate-800 text-xs"] "TYPE"
-                h4_ [class_ "text-base text-slate-800"] $ EndpointComponents.fieldTypeToDisplay formatV.fieldType
-              div_ [class_ "mx-5 space-y-2"] do
-                h6_ [class_ "text-slate-800 text-xs"] "FORMAT"
-                h4_ [class_ "text-base text-slate-800"] $ toHtml formatV.fieldFormat
-            h6_ [class_ "text-slate-600 mt-4 text-xs"] "EXAMPLE VALUES"
-            ul_ [class_ "list-disc"] do
-              formatV.examples & mapM_ \ex -> do
-                li_ [class_ "ml-10 text-slate-800 text-sm"] $ toHtml $ aesonValueToText ex
+      div_ [class_ "space-y-2"] $
+        formats
+          & mapM_ \formatV -> do
+            div_ [class_ "border-l-slate-200 border-l-2 pl-2 py-2"] do
+              div_ [class_ "flex flex-row gap-9"] do
+                div_ [class_ "space-y-2"] do
+                  h6_ [class_ "text-slate-800 text-xs"] "TYPE"
+                  h4_ [class_ "text-base text-slate-800"] $ EndpointComponents.fieldTypeToDisplay formatV.fieldType
+                div_ [class_ "mx-5 space-y-2"] do
+                  h6_ [class_ "text-slate-800 text-xs"] "FORMAT"
+                  h4_ [class_ "text-base text-slate-800"] $ toHtml formatV.fieldFormat
+              h6_ [class_ "text-slate-600 mt-4 text-xs"] "EXAMPLE VALUES"
+              ul_ [class_ "list-disc"] do
+                formatV.examples & mapM_ \ex -> do
+                  li_ [class_ "ml-10 text-slate-800 text-sm"] $ toHtml $ aesonValueToText ex
     div_ [class_ "flex flex-row justify-between mt-10 "] do
       div_ [class_ " "] do
         h4_ [class_ "text-sm text-slate-800 mb-2"] "CREATION DATE"
@@ -249,9 +249,9 @@ endpointDetails paramInput currTime endpoint endpointStats shapesWithFieldsMap f
             & mapM_ \(title, slug) ->
               a_
                 [ href_ $ currentURLSubPage <> "&subpage=" <> slug
-                , class_
-                    $ "cursor-pointer px-3 py-2 font-medium text-sm rounded-md "
-                    <> if slug == paramInput.subPage then " bg-indigo-100 text-indigo-700 " else " text-slate-500 hover:text-gray-700"
+                , class_ $
+                    "cursor-pointer px-3 py-2 font-medium text-sm rounded-md "
+                      <> if slug == paramInput.subPage then " bg-indigo-100 text-indigo-700 " else " text-slate-500 hover:text-gray-700"
                 ]
                 $ toHtml title
 
@@ -275,7 +275,7 @@ endpointDetails paramInput currTime endpoint endpointStats shapesWithFieldsMap f
       ]
       do
         div_ [class_ "h-full flex flex-col items-center justify-center"] do
-          img_ [class_ "w-36", src_ "/assets/svgs/tasks.svg"]
+          faIcon_ "fa-clapperboard" "fa-light fa-clapperboard" "w-36"
           h3_ [class_ "mt-2 text-lg font-medium text-slate-900"] "Nothing selected"
           p_ [class_ "mt-1 text-sm text-slate-500"] "Select a field or similar item on the left"
           p_ [class_ "mt-1 text-sm text-slate-500"] "to view more details about it here."
@@ -346,7 +346,7 @@ apiDocsSubPage shapesWithFieldsMap shapeHashM = do
               let statusCls = if st < 400 then prm <> "bg-green-500" else prm <> "bg-red-500"
               span_ [class_ statusCls] $ show st
               span_ [class_ "ml-1 text-sm text-slate-600"] $ toHtml hs
-          img_ [src_ "/assets/svgs/select_chevron.svg", style_ "height:15px; width:15px"]
+          faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 w-4"
           div_ [id_ "shapes_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] do
             forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap) $ \(index, s) -> do
               let prm = "px-2 py-1 rounded text-white text-sm "
@@ -545,8 +545,8 @@ reqResSection title isRequest shapesWithFieldsMap targetIndex =
   section_ [class_ "space-y-3"] do
     div_ [class_ "flex justify-between mt-5"] do
       div_ [class_ "flex flex-row"] do
-        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
-          $ faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 mr-3 mt-1 w-4"
+        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]] $
+          faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 mr-3 mt-1 w-4"
         span_ [class_ "text-lg text-slate-800"] $ toHtml title
 
     div_ [class_ "bg-white border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"]
@@ -619,7 +619,7 @@ subSubSection title fieldsM =
                       input_ [type_ "checkbox", class_ " mr-12"]
                       span_ [class_ "grow text-sm text-slate-800 inline-flex items-center"] $ toHtml displayKey
                       span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ EndpointComponents.fieldTypeToDisplay field.fieldType
-                      img_ [src_ "/assets/svgs/alert-red.svg", class_ " mr-8 ml-4 h-5"]
+                      faIcon_ "fa-octagon-exclamation" "fa-thin fa-octagon-exclamation" " mr-8 ml-4 h-5 text-red-400"
                       img_ [src_ "/assets/svgs/dots-vertical.svg", class_ "mx-5 h-5"]
 
 
