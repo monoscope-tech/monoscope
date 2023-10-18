@@ -246,11 +246,7 @@ tabContentExpress apikey current_tab =
       h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
       div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
         div_ [class_ "relative w-full flex flex-col"] do
-          div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] do
-            div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] do
-              div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-              div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-              div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
+          contentHeader
           div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
             pre_ [class_ "flex min-h-full text-lg leading-snug"] do
               code_ [class_ "h-full hljs language-javascript atom-one-dark"]
@@ -288,11 +284,7 @@ tabContentGin apikey current_tab =
       h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
       div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
         div_ [class_ "relative w-full flex flex-col"] do
-          div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] do
-            div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] do
-              div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-              div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-              div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
+          contentHeader
           div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
             pre_ [class_ "flex min-h-full text-lg leading-snug"] do
               code_
@@ -346,11 +338,7 @@ tabContentLaravel apikey current_tab =
       h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Update into your app/Http/Kernel.php"
       div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
         div_ [class_ "relative w-full flex flex-col"] do
-          div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] do
-            div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] do
-              div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-              div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-              div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
+          contentHeader
           div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
             pre_ [class_ "flex min-h-full text-lg leading-snug"] do
               code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-php atom-one-dark"]
@@ -395,11 +383,7 @@ tabContentSymfony apikey current_tab =
       h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
       div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
         div_ [class_ "relative w-full flex flex-col"] do
-          div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] do
-            div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] do
-              div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-              div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-              div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
+          contentHeader
           div_ [class_ "relative min-h-0  h-full flex-auto flex flex-col"] do
             pre_ [class_ "flex min-h-full text-lg leading-snug"] do
               code_
@@ -428,11 +412,7 @@ tabContentDotNet apikey current_tab =
       h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
       div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
         div_ [class_ "relative w-full flex flex-col"] do
-          div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] do
-            div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] do
-              div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-              div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-              div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
+          contentHeader
           div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
             pre_ [class_ "flex min-h-full text-lg leading-snug"] do
               code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-csharp atom-one-dark"]
@@ -466,11 +446,7 @@ tabContentFastify apikey current_tab =
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
         div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
           div_ [class_ "relative w-full flex flex-col"] do
-            div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] do
-              div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] do
-                div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-                div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-                div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
+            contentHeader
             div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
               pre_ [class_ "flex min-h-full text-lg leading-snug"] do
                 code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-javascript atom-one-dark"]
@@ -513,11 +489,7 @@ tabContentFlask apikey current_tab =
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
         div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
           div_ [class_ "relative w-full flex flex-col"] do
-            div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] do
-              div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] do
-                div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-                div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-                div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
+            contentHeader
             div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
               pre_ [class_ "flex min-h-full text-lg leading-snug"] do
                 code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-python atom-one-dark"]
@@ -561,11 +533,7 @@ tabContentFastAPI apikey current_tab =
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
         div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
           div_ [class_ "relative w-full flex flex-col"] do
-            div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] do
-              div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] do
-                div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-                div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-                div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
+            contentHeader
             div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] $ do
               pre_ [class_ "flex min-h-full text-lg leading-snug"] $ do
                 code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-python atom-one-dark"]
@@ -612,11 +580,7 @@ tabContentDjango apikey current_tab =
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app by adding APITOOLKIT_KEY and APIToolkit to the settings middleware list"
         div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[0vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
           div_ [class_ "relative w-full flex flex-col"] do
-            div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] do
-              div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] do
-                div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-                div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-                div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
+            contentHeader
             div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
               pre_ [class_ "flex min-h-full text-lg leading-snug"] do
                 code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-python atom-one-dark"]
@@ -651,11 +615,7 @@ tabContentEcho apikey current_tab =
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app by adding APITOOLKIT_KEY and APIToolkit to the settings middleware list"
         div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[0vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
           div_ [class_ "relative w-full flex flex-col"] do
-            div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] do
-              div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] do
-                div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-                div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-                div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
+            contentHeader
             div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
               pre_ [class_ "flex min-h-full text-lg leading-snug"] do
                 code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-go atom-one-dark"]
@@ -710,11 +670,7 @@ tabContentGorilla apikey current_tab =
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app by adding APITOOLKIT_KEY and APIToolkit to the settings middleware list"
         div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[0vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
           div_ [class_ "relative w-full flex flex-col"] do
-            div_ [class_ "flex-none border-b border-slate-500/30 flex items-center gap-4"] do
-              div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] do
-                div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-                div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
-                div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
+            contentHeader
             div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
               pre_ [class_ "flex min-h-full text-lg leading-snug"] do
                 code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-go atom-one-dark"]
@@ -837,3 +793,23 @@ tabs current_tab =
         , id_ "fastify"
         ]
         "Fastify Js"
+
+
+contentHeader :: Html ()
+contentHeader =
+  div_ [class_ "flex-none border-b border-slate-500/30 flex justify-between items-center gap-4"] do
+    div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] do
+      div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
+      div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
+      div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
+    button_
+      [ class_ "text-white text-sm font-bold mr-6"
+      , [__|
+          on click
+            if 'clipboard' in window.navigator then
+              call navigator.clipboard.writeText((closest code) innerText)
+              send successToast(value:['Copied']) to <body/>
+            end
+       |]
+      ]
+      "Copy"
