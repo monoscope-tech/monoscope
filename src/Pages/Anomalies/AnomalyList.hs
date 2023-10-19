@@ -515,7 +515,7 @@ anomalyDetailsPage anomaly shapesWithFieldsMap fields prvFormatsM chartQuery cur
           Anomalies.ATEndpoint -> do
             div_ [class_ "flex flex-col gap-4 shrink-0"] do
               a_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
-                img_ [src_ "/assets/svgs/endpoint.svg", class_ "inline w-6 h-6 -mt-1"]
+                faIcon_ "fa-arrow-up-arrow-down" "fa-solid fa-arrow-up-arrow-down" "inline w-6 h-6 -mt-1"
                 span_ [class_ "text-2xl"] "New Endpoint"
               div_ [class_ "flex items-center gap-3"] do
                 let methodColor = Utils.getMethodColor (fromMaybe "" anomaly.endpointMethod)
@@ -853,11 +853,8 @@ reqResSection title isRequest shapesWithFieldsMap =
   section_ [class_ "space-y-3"] do
     div_ [class_ "flex justify-between mt-5"] do
       div_ [class_ "flex flex-row"] do
-        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
-          $ img_
-            [ src_ "/assets/svgs/cheveron-down.svg"
-            , class_ "h-4 mr-3 mt-1 w-4"
-            ]
+        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]] $
+          faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 mr-3 mt-1 w-4"
         span_ [class_ "text-lg text-slate-800"] $ toHtml title
 
     div_ [class_ "bg-white border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"]
@@ -904,7 +901,7 @@ subSubSection title fieldsM =
                   , [__| on click toggle .neg-rotate-90 on <.chevron/> in me then collapseUntil((me), (my @data-depth))  |]
                   ]
                   do
-                    img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-6 w-6 mr-1 chevron cursor-pointer p-1"]
+                    faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-6 w-6 mr-1 chevron cursor-pointer p-1"
                     div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full"] do
                       span_ [class_ "text-sm text-slate-800 inline-flex items-center"] $ toHtml displayKey
                       span_ [class_ "text-sm text-slate-600 inline-flex items-center ml-4"] do

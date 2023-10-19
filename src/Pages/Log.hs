@@ -137,7 +137,7 @@ expandAPIlogItem' req modal = do
                 ]
                 do
                   p_ [style_ "width: calc(100% - 25px)", class_ "text-sm truncate ..."] "Expires in: 1 hour"
-                  img_ [src_ "/assets/svgs/select_chevron.svg", style_ "height:15px; width:15px"]
+                  faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-3 w-3"
               div_ [id_ "expire_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] do
                 forM_ (["1 hour", "8 hours", "1 day"] :: [Text]) \sw -> do
                   button_
@@ -297,7 +297,7 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
         nav_ [class_ "flex flex-row p-2 content-end justify-between items-baseline border-slate-100"] do
           a_ [class_ "inline-block"] "Query"
           button_ [type_ "submit", class_ "cursor-pointer inline-block space-x-1 bg-blue-100 hover:bg-blue-200 blue-800 py-1 px-2 rounded-lg"] do
-            img_ [src_ "/assets/svgs/sparkles.svg", class_ "w-3 h-3 inline-block"]
+            faIcon_ "fa-sparkles" "fa-sharp fa-regular fa-sparkles" "h-3 w-3 inline-block"
             span_ "Run query"
         div_ do
           div_ [id_ "queryEditor", class_ "h-14"] ""
@@ -305,7 +305,7 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
     div_ [class_ "card-round w-full grow divide-y flex flex-col text-sm h-full overflow-y-hidden overflow-x-hidden"] do
       div_ [class_ "pl-3 py-1 space-x-5 flex flex-row justify-between"] do
         a_ [class_ "cursor-pointer inline-block pr-3 space-x-2 bg-blue-50 hover:bg-blue-100 blue-800 p-1 rounded-md", [__|on click toggle .hidden on #reqsChartParent|]] do
-          img_ [src_ "/assets/svgs/cube-transparent.svg", class_ "w-4 inline-block"]
+          faIcon_ "fa-chart-bar" "fa-regular fa-chart-bar" "h-3 w-3 inline-block"
           span_ [] "toggle chart"
       reqChart reqChartTxt False
       div_ [class_ "pl-3 py-2 space-x-5 flex flex-row justify-between"] do
@@ -404,8 +404,8 @@ logItemRows pid requests cols nextLogsURL = do
         div_ [class_ "flex-none inline-block w-10 flex justify-between items-center"] do
           a_ [class_ $ "inline-block w-1 h-full mr-1 " <> errorClass, term "data-tippy-content" $ show req.errorsCount <> " errors attached to this request"] ""
           a_ [hxGet_ logItemEndpointUrl, term "data-tippy-content" "Go to endpoint", onclick_ "noPropa(event)"] do
-            img_ [src_ "/assets/svgs/link.svg", class_ "w-3.5 mr-2"]
-          img_ [src_ "/assets/svgs/cheveron-right.svg", class_ "w-1.5 log-chevron mr-2"]
+            faIcon_ "fa-link" "fa-solid fa-link" "h-3 w-3 inline-block text-blue-700"
+          faIcon_ "fa-chevron-right" "fa-solid fa-chevron-right" "h-2 w-2 mr-2"
         div_ [class_ "flex-none inline-block p-1 px-2 w-36 overflow-hidden"] $ toHtml @String $ formatTime defaultTimeLocale "%F %T" (req ^. #createdAt)
         div_ [class_ "inline-block p-1 px-2 grow"] do
           let reqJSON = AE.toJSON req

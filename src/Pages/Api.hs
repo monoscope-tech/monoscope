@@ -149,10 +149,10 @@ apiKeysPage pid apiKeys = do
                   ]
                   do
                     span_ [class_ "sr-only"] "Close"
-                    img_ [class_ "h-6 w-6", src_ "/assets/svgs/close.svg"]
+                    faIcon_ "fa-xmark" "fa-light fa-xmark" "h-6 w-6" 
               div_ [class_ "sm:flex sm:items-start"] do
                 div_ [class_ "mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10"] do
-                  img_ [class_ "h-6 w-6 text-red-600", src_ "/assets/svgs/close.svg"]
+                  faIcon_ "fa-xmark" "fa-light fa-xmark" "h-6 w-6" 
                 div_ [class_ "mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left grow"] do
                   h3_ [class_ "text-lg leading-6 font-medium text-gray-900", id_ "modal-title"] "Generate an API Key"
                   div_ [class_ "mt-6 space-y-2"] do
@@ -230,7 +230,7 @@ mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] do
                           , id_ $ "key" <> show i
                           ]
                           do
-                            img_ [src_ "/assets/svgs/revoke.svg", class_ "h-3 w-3 mr-2 inline-block"]
+                            faIcon_ "fa-xmark" "fa-light fa-xmark" "h-3 w-3 mr-2 inline-block text-red-600" 
                             span_ [class_ "text-slate-500"] "Revoke"
                       else do
                         button_
@@ -248,7 +248,7 @@ copyNewApiKey newKeyM hasNext =
         div_ [class_ "rounded-md bg-green-50 p-4"] do
           div_ [class_ "flex"] do
             div_ [class_ "flex-shrink-0"] do
-              img_ [class_ "h-5 w-5 text-green-400", src_ "/assets/svgs/check_circle.svg"]
+              faIcon_ "fa-circle-check" "fa-sharp fa-regular fa-circle-check" "h-5 w-5 text-green-400"
             div_ [class_ "ml-3"] do
               h3_ [class_ "text-sm font-medium text-green-800"] "API Key was generated successfully"
               div_ [class_ "mt-2 text-sm text-green-700 py-2"] do

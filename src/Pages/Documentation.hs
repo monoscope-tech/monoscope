@@ -400,7 +400,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
               ]
               do
                 p_ [style_ "width: calc(100% - 25px)", class_ "truncate ..."] $ toHtml swaggerID
-                img_ [src_ "/assets/svgs/select_chevron.svg", style_ "height:15px; width:15px"]
+                faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-3 w-3"
             div_ [id_ "swagger_history_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] do
               swaggers & mapM_ \sw -> do
                 button_ [onclick_ "swaggerChanged(event)", class_ "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"] $ toHtml swaggerID
@@ -438,7 +438,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
           div_ [id_ "details_container", class_ "flex-auto overflow-y-auto", style_ "width:30%; height:100%"] do
             div_ [id_ "swagger-ui", class_ "relative h-full w-full bg-white overflow-auto"] pass
           button_ [class_ "absolute z-10 p-2", style_ "right: 15px", onclick_ "fullscreen()", title_ "full screen"] do
-            img_ [src_ "/assets/svgs/fullscreen.svg", style_ "height:24px; width: 24px"]
+            faIcon_ "fa-square-dashed" "fa-sharp fa-light fa-square-dashed" "h-5 w-5" 
   -- mainContent swaggers
 
   script_
