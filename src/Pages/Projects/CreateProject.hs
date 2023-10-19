@@ -279,34 +279,34 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                         span_ [class_ "text-2xl text-blue-700"] $ toHtml price
                         span_ [class_ "text-slate-500"] "/mo"
                       div_ [class_ "flex items-center gap-1"] do
-                        img_ [class_ "h-3 w-3", src_ "/assets/svgs/checkmark_green.svg"]
+                        faIcon_ "fa-check" "fa-light fa-check" "text-green-500 h-3 w-3"
                         strong_ [] $ toHtml included
                         small_ " Reqs/mo included"
                       div_ [class_ "flex items-center gap-1"] do
-                        img_ [class_ "h-3 w-3", src_ "/assets/svgs/checkmark_green.svg"]
+                        faIcon_ "fa-check" "fa-light fa-check" "text-green-500 h-3 w-3"
                         small_ "max "
                         span_ $ toHtml team
                         small_ " team members"
                       if paddleSubsCode == ""
                         then do
                           div_ [class_ "flex gap-1 items-center"] do
-                            img_ [class_ "h-3 w-3", src_ "/assets/svgs/checkmark_green.svg"]
+                            faIcon_ "fa-check" "fa-light fa-check" "text-green-500 h-3 w-3"
                             small_ "7days data retention"
                         else do
                           div_ [class_ "flex gap-1 items-center"] do
-                            img_ [class_ "h-3 w-3", src_ "/assets/svgs/checkmark_green.svg"]
+                            faIcon_ "fa-check" "fa-light fa-check" "text-green-500 h-3 w-3"
                             small_ "14days data retention"
                           div_ [class_ "flex gap-1 items-center"] do
-                            img_ [class_ "h-3 w-3", src_ "/assets/svgs/checkmark_green.svg"]
+                            faIcon_ "fa-check" "fa-light fa-check" "text-green-500 h-3 w-3"
                             small_ "API testing pipelines"
                           div_ [class_ "flex gap-1 items-center"] do
-                            img_ [class_ "h-3 w-3", src_ "/assets/svgs/checkmark_green.svg"]
+                            faIcon_ "fa-check" "fa-light fa-check" "text-green-500 h-3 w-3"
                             small_ "API Swagger/OpenAPI Hosting"
                           div_ [class_ "flex gap-1 items-center"] do
-                            img_ [class_ "h-3 w-3", src_ "/assets/svgs/checkmark_green.svg"]
+                            faIcon_ "fa-check" "fa-light fa-check" "text-green-500 h-3 w-3"
                             small_ "API Metrics Custom Monitors"
                           div_ [class_ "flex gap-1 items-center"] do
-                            img_ [class_ "h-3 w-3", src_ "/assets/svgs/checkmark_green.svg"]
+                            faIcon_ "fa-check" "fa-light fa-check" "text-green-500 h-3 w-3"
                             small_ "API Live Traffic AI based validations"
 
           div_ [class_ $ "mt-10 " <> if isUpdate then "hidden" else ""] do
@@ -328,7 +328,7 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                          _hyperscript.processNode(#inviteMemberSection) then halt |]
               ]
               do
-                faIcon_ "fa-plus" "fa-sharp fa-regular fa-plus" "mt-1 mx-2 w-5 h-5 text-blue-700"
+                faIcon_ "fa-plus" "fa-sharp fa-regular fa-plus" "mx-2 w-4 h-4 text-blue-700"
                 span_ [class_ "text-blue-700 font-medium text-sm "] "Add member"
 
           -- START PADDLE payment
