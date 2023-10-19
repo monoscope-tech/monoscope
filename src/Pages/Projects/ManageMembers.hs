@@ -188,7 +188,7 @@ projectMemberRow projMembersM =
     button_
       [ [__| on click remove the closest parent <div/> then halt |]
       ]
-      $ faIcon_ "fa-trash-can-plus" "fa-regular fa-trash-can-plus" "w-3 h-3 text-red-700" 
+      $ faIcon_ "fa-trash-can-plus" "fa-regular fa-trash-can-plus" "w-3 h-3 text-red-700"
   where
     selectedIf :: ProjectMembers.Permissions -> ProjectMembers.Permissions -> [Attribute]
     selectedIf a b = [selected_ "" | a == b]

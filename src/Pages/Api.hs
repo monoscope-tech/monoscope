@@ -149,10 +149,10 @@ apiKeysPage pid apiKeys = do
                   ]
                   do
                     span_ [class_ "sr-only"] "Close"
-                    faIcon_ "fa-xmark" "fa-light fa-xmark" "h-6 w-6" 
+                    faIcon_ "fa-xmark" "fa-light fa-xmark" "h-6 w-6"
               div_ [class_ "sm:flex sm:items-start"] do
                 div_ [class_ "mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10"] do
-                  faIcon_ "fa-xmark" "fa-light fa-xmark" "h-6 w-6" 
+                  faIcon_ "fa-xmark" "fa-light fa-xmark" "h-6 w-6"
                 div_ [class_ "mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left grow"] do
                   h3_ [class_ "text-lg leading-6 font-medium text-gray-900", id_ "modal-title"] "Generate an API Key"
                   div_ [class_ "mt-6 space-y-2"] do
@@ -230,7 +230,7 @@ mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] do
                           , id_ $ "key" <> show i
                           ]
                           do
-                            faIcon_ "fa-xmark" "fa-light fa-xmark" "h-3 w-3 mr-2 inline-block text-red-600" 
+                            faIcon_ "fa-xmark" "fa-light fa-xmark" "h-3 w-3 mr-2 inline-block text-red-600"
                             span_ [class_ "text-slate-500"] "Revoke"
                       else do
                         button_

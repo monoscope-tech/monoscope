@@ -438,7 +438,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
           div_ [id_ "details_container", class_ "flex-auto overflow-y-auto", style_ "width:30%; height:100%"] do
             div_ [id_ "swagger-ui", class_ "relative h-full w-full bg-white overflow-auto"] pass
           button_ [class_ "absolute z-10 p-2", style_ "right: 15px", onclick_ "fullscreen()", title_ "full screen"] do
-            faIcon_ "fa-square-dashed" "fa-sharp fa-light fa-square-dashed" "h-5 w-5" 
+            faIcon_ "fa-square-dashed" "fa-sharp fa-light fa-square-dashed" "h-5 w-5"
   -- mainContent swaggers
 
   script_

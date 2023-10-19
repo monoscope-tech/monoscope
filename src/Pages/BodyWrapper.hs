@@ -217,7 +217,7 @@ projectsDropDown currProject projects = do
     do
       div_ [class_ "p-2 pb-4 "] do
         div_ [class_ "flex mt-2 mb-4"] do
-          faIcon_ "fa-folders" "fa-sharp fa-light fa-folders" "h-5 w-5 mr-2" 
+          faIcon_ "fa-folders" "fa-sharp fa-light fa-folders" "h-5 w-5 mr-2"
           div_ do
             strong_ [class_ "block"] $ toHtml currProject.title
             small_ [class_ "block text-blue-800"] $ toHtml currProject.paymentPlan
@@ -246,7 +246,7 @@ projectsDropDown currProject projects = do
             projects & mapM_ \project -> do
               a_ [class_ "flex justify-between p-2", href_ $ "/p/" <> project.id.toText] do
                 div_ [class_ "space-x-3"] do
-                  faIcon_ "fa-folders" "fa-sharp fa-light fa-folders" "h-5 w-5 inline-block" 
+                  faIcon_ "fa-folders" "fa-sharp fa-light fa-folders" "h-5 w-5 inline-block"
                   span_ [class_ "inline-block"] $ toHtml project.title
                 when (currProject.id == project.id) $ faIcon_ "fa-circle-check" "fa-sharp fa-regular fa-circle-check" "h-6 w-6 text-green-700"
 
