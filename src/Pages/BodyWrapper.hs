@@ -85,6 +85,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
       script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/php.min.js"] ("" :: Text)
       script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/csharp.min.js"] ("" :: Text)
       script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"] ("" :: Text)
+      script_ [type_ "module", src_ "/assets/filtercomponent.js"] ("" :: Text)
 
       -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/core@1.2.0/dist/index.umd.min.js"] ("" :: Text)
       -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/datetime@1.2.0/dist/index.umd.min.js"] ("" :: Text)
@@ -179,7 +180,6 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
             gtag('js', new Date());
             gtag('config', 'AW-11285541899');
 
-
             function gtag_report_conversion(url) {
               var callback = function () {
                 if (typeof(url) != 'undefined') {
@@ -193,6 +193,8 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
               return false;
             }
           |]
+
+
 projectsDropDown :: Projects.Project -> Vector.Vector Projects.Project -> Html ()
 projectsDropDown currProject projects = do
   let pidTxt = currProject.id.toText

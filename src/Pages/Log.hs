@@ -29,6 +29,7 @@ import Pages.NonMember
 import Pkg.Components (loader)
 import Relude
 
+import Lucid.Base (TermRaw (termRaw, termRawWith))
 import System.Clock
 import Utils
 
@@ -300,7 +301,8 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
             faIcon_ "fa-sparkles" "fa-sharp fa-regular fa-sparkles" "h-3 w-3 inline-block"
             span_ "Run query"
         div_ do
-          div_ [id_ "queryEditor", class_ "h-14"] ""
+          div_ [id_ "queryEditor", class_ "h-14"] pass
+          termRaw "filter-element" []
 
     div_ [class_ "card-round w-full grow divide-y flex flex-col text-sm h-full overflow-y-hidden overflow-x-hidden"] do
       div_ [class_ "pl-3 py-1 space-x-5 flex flex-row justify-between"] do
