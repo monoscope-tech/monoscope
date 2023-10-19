@@ -11,10 +11,9 @@ import Data.Text qualified as T
 import Data.Time (ZonedTime, defaultTimeLocale)
 import Data.Time.Format (formatTime)
 import Data.UUID qualified as UUID
-import Data.Vector (Vector, iforM_, (!?))
+import Data.Vector (Vector, iforM_)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
-import Fmt
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
@@ -56,17 +55,17 @@ apiLog sess pid queryM cols' fromM hxRequestM hxBoostedM = do
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, dbResp) <- liftIO $
-        withPool pool do
+      (project, dbResp) <- liftIO
+        $ withPool pool do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
           dbResp <- RequestDumps.selectRequestDumpByProject pid query fromM'
           pure (project, dbResp)
 
-      let (requests, resultCount) = dbResp
       reqChartTxt <- liftIO $ Database.PostgreSQL.Entity.DBT.withPool pool $ RequestDumps.throughputBy pid Nothing Nothing Nothing Nothing Nothing (3 * 60) Nothing queryM (Nothing, Nothing)
-      let reqLastCreatedAtM = (^. #createdAt) <$> viaNonEmpty last (Vector.toList requests) -- FIXME: unoptimal implementation, converting from vector to list for last
-      let fromTempM = toText . formatTime defaultTimeLocale "%F %T" <$> reqLastCreatedAtM
-      let nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' fromTempM
+      let (requests, resultCount) = dbResp
+          reqLastCreatedAtM = (^. #createdAt) <$> viaNonEmpty last (Vector.toList requests) -- FIXME: unoptimal implementation, converting from vector to list for last
+          fromTempM = toText . formatTime defaultTimeLocale "%F %T" <$> reqLastCreatedAtM
+          nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' fromTempM
 
       case (hxRequestM, hxBoostedM) of
         (Just "true", Nothing) -> pure $ do
@@ -446,8 +445,8 @@ logItemRows pid requests cols nextLogsURL = do
 apiLogItemView :: RequestDumps.RequestDumpLogItem -> Text -> Html ()
 apiLogItemView req expandItemPath = do
   let errorClass = if req.errorsCount > 0 then "border-l-red-200" else "border-l-blue-200"
-  div_ [class_ $ "log-item-info border-l-4 " <> errorClass] $
-    div_
+  div_ [class_ $ "log-item-info border-l-4 " <> errorClass]
+    $ div_
       [class_ "pl-4 py-1 ", colspan_ "3"]
       do
         button_

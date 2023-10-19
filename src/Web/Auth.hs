@@ -102,8 +102,8 @@ authCallbackH codeM _ = do
   resp <- runExceptT do
     code <- hoistEither $ note "invalid code " codeM
     r <-
-      liftIO $
-        post
+      liftIO
+        $ post
           (toString $ envCfg ^. #auth0Domain <> "/oauth/token")
           ( [ "grant_type" := ("authorization_code" :: String)
             , "client_id" := envCfg ^. #auth0ClientId
