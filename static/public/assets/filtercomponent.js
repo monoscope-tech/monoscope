@@ -60,6 +60,10 @@ export class MyElement extends LitElement {
     this.showFilterSearch = false
   }
 
+  removeFilter(filter) {
+    this.filters = this.filters.filter(f => f != filter)
+  }
+
   render() {
     return html`
   <div class="relative w-full">
@@ -67,14 +71,14 @@ export class MyElement extends LitElement {
             <div class="flex gap-2">
              ${this.filters.map(
       (filter) => html`
-                   <button  type="button" class="bg-green-100 px-2 rounded-lg py-1">${filter} ${html`<span>remove</span>`}</button>
+                   <button  type="button" class="bg-green-50 text-sm font-bold px-2 text-green-500 rounded-lg py-1">${filter} ${html`<span class="ml-2 text-xs" @click=${() => this.removeFilter(filter)}>❌</span>`}</button>
                  `
     )}
          </div>
      ${this.filters.length == 0 ?
         html`<button type="button" @click=${() => this.showFilterSearch = true} class="text-gray-500" >Click to add filter...</button>`
         :
-        html`<button type="button" @click=${() => this.showFilterSearch = true}>Add</button>`
+        html`<button type="button" @click=${() => this.showFilterSearch = true} class="px-2 py-1 bg-gray-200 hover:bg-gray-100">Add</button>`
       }
     </div>
     ${this.showFilterSearch ? html`<filter-suggestions></filter-suggestions>` : null}
@@ -100,14 +104,17 @@ class Filter extends LitElement {
   number_operators = ["=", "!=", ">=", "<="]
 
   filterAutoComplete = {
-    "method": {
+    method: {
+      type: "string",
       operators: this.string_operators,
       values: [`"GET"`, `"POST"`, `"PUT"`, `"DELETE"`, `"PATCH"`, `"HEAD"`]
     },
-    "status_code": {
+    status_code: {
+      type: "number",
       operators: this.number_operators,
       values: [200, 201, 400, 404, 500, 300, 100]
     },
+    duration_ns: { type: "number" },
     "others": { operators: this.string_operators, values: [""] }
   }
 
@@ -120,17 +127,18 @@ class Filter extends LitElement {
     super()
     this.inputVal = ''
     this.matches = []
+    this.previous = "group"
   }
 
   render() {
     return html`
-        <div class="z-10 h-[500px] p-4 flex flex-col gap-2 shadow bg-white w-1/2 absolute left-0 -bottom-2 text-gray-500">
-          <input type="text" class="border px-4 py-2 rounded focus:ring-1" @input=${this.handleChange} .value=${this.inputVal} @change=${(e) => this.triggerCustomEvent(e.target.value)} />
+        <div class="z-10 h-[31.625rem] overflow-auto p-4 flex flex-col gap-2 shadow bg-white w-3/4 absolute left-1/2 -translate-x-1/2 -bottom-3 text-gray-500">
+          <input type="text" class="border px-4 py-2 rounded focus:ring-1" @input=${(event) => this.handleChange(event.target.value)} .value=${this.inputVal} @change=${(e) => this.triggerCustomEvent(e.target.value)} />
           <div>
-            <div class="flex flex-col gap-2 text-left">
+            <div class="flex flex-col text-left">
              ${this.matches.map(
       (match) => html`
-                   <button type="button" class="" @click=${() => this.autoCompleteInput(match)}>${match}</button>
+                   <button type="button" class="px-4 py-1 text-left hover:bg-gray-100" @click=${() => this.autoCompleteInput(match)}>${match}</button>
                  `
     )}
          </div>
@@ -144,8 +152,16 @@ class Filter extends LitElement {
   }
 
   autoCompleteInput(val) {
-    this.inputVal = val + " "
-    this.triggerCustomEvent(val)
+    this.inputVal = val
+    if (this.isValidFilter(val)) {
+      this.triggerCustomEvent(this.inputVal)
+      this.previous = "filter"
+    } else {
+      if (val == "and" || val == "or") {
+        this.previous = "group"
+      }
+      this.handleChange(val)
+    }
   }
 
   isValidFilter(filter) {
@@ -153,7 +169,6 @@ class Filter extends LitElement {
     if (parts.length !== 3) {
       return false;
     }
-
     const [field, operator, value] = parts;
     if (!field || !value) {
       return false
@@ -173,12 +188,17 @@ class Filter extends LitElement {
     this.dispatchEvent(event);
   }
 
-  handleChange(event) {
-    if (event.key === "Enter") {
-      this.triggerCustomEvent(event.target.value)
-      return
+  getField(filter) {
+    const parts = filter.trim().split(/\s*([=<>!]+)\s*/);
+    if (parts.length !== 3) {
+      return ""
     }
-    this.inputVal = event.target.value.trim()
+    const [field, operator, value] = parts;
+    return field
+  }
+
+  handleChange(val) {
+    this.inputVal = val.trim()
     let filters = this.filters.filter(v => v.startsWith(this.inputVal) || this.inputVal.startsWith(v))
     let auto_complete = []
     filters.forEach(filter => {
