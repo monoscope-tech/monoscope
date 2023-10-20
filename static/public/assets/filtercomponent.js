@@ -8,44 +8,6 @@ export class MyElement extends LitElement {
     showFilterSearch: {}
   };
 
-  static styles = css`
-    .filter_content_container {
-      width: 80%;
-      display: flex;
-      flex-direction: column;
-      border: 1px solid lightgrey;
-      height: 500px;
-      margine-inline: auto;
-    }
-
-    .filter_content_container > input {
-      padding: 8px 10px;
-      border: 1px solid black
-    }
-
-    .component_container {
-      position: relative;
-      width: 800px
-    }
-
-    .filter_container {
-      border: 1px solid grey;
-      display: flex;
-      align-items: center;
-      padding: 5px 8px;
-    }
-
-    .planet {
-      color: var(--planet-color, blue);
-    }
-    
-    .filter_list {
-      display: flex;
-      flex-gap: 5px;
-      align-items: center
-    }
-  `;
-
   constructor() {
     super();
     this.greeting = 'Hello';
@@ -67,18 +29,25 @@ export class MyElement extends LitElement {
   render() {
     return html`
   <div class="relative w-full">
-    <div class="flex gap-4 border border-1 border-slate-400 px-4 py-2 w-ful rounded">
+    <div class="flex items-center gap-2 m-2 border border-1 border-slate-400 px-4 py-2 w-ful rounded">
+           <i class="fa-regular fa-filter h-4 w-4 text-gray-500"></i>
             <div class="flex gap-2">
              ${this.filters.map(
       (filter) => html`
-                   <button  type="button" class="bg-green-50 text-sm font-bold px-2 text-green-500 rounded-lg py-1">${filter} ${html`<span class="ml-2 text-xs" @click=${() => this.removeFilter(filter)}>❌</span>`}</button>
-                 `
+                              <button  type="button" class="bg-green-50 text-sm font-bold px-2 text-green-500 rounded-lg py-1">
+                              ${filter} 
+                              ${html`<span class="ml-2 text-xs hover:bg-green-200 p-1 rounded-full" @click=${() => this.removeFilter(filter)}>
+                                     <i class="fa-sharp fa-xmark"></i>
+                              </span>`
+        }
+                              </button>
+                            `
     )}
          </div>
      ${this.filters.length == 0 ?
-        html`<button type="button" @click=${() => this.showFilterSearch = true} class="text-gray-500" >Click to add filter...</button>`
+        html`<button type="button" @click=${() => this.showFilterSearch = !this.showFilterSearch} class="text-gray-500" >Click to add filter...</button>`
         :
-        html`<button type="button" @click=${() => this.showFilterSearch = true} class="px-2 py-1 bg-gray-200 hover:bg-gray-100">Add</button>`
+        html`<button type="button" @click=${() => this.showFilterSearch = !this.showFilterSearch} class="px-2 py-2 border rounded text-gray-500 hover:bg-gray-100"><i class="fa-solid fa-plus"></i></button>`
       }
     </div>
     ${this.showFilterSearch ? html`<filter-suggestions></filter-suggestions>` : null}
@@ -132,13 +101,16 @@ class Filter extends LitElement {
 
   render() {
     return html`
-        <div class="z-10 h-[31.625rem] overflow-auto p-4 flex flex-col gap-2 shadow bg-white w-3/4 absolute left-1/2 -translate-x-1/2 -bottom-3 text-gray-500">
-          <input type="text" class="border px-4 py-2 rounded focus:ring-1" @input=${(event) => this.handleChange(event.target.value)} .value=${this.inputVal} @change=${(e) => this.triggerCustomEvent(e.target.value)} />
+        <div class="z-10 h-[31.625rem] overflow-auto p-4 flex flex-col gap-2 shadow bg-white w-1/2 absolute left-1/2 -translate-x-1/2 -bottom-3 text-gray-500">
+          <input type="text" class="border px-4 py-2 rounded focus:ring-1"
+              @input=${(event) => this.handleChange(event.target.value)} 
+              .value=${this.inputVal}
+              @change=${(e) => this.triggerCustomEvent(e.target.value)} />
           <div>
             <div class="flex flex-col text-left">
              ${this.matches.map(
       (match) => html`
-                   <button type="button" class="px-4 py-1 text-left hover:bg-gray-100" @click=${() => this.autoCompleteInput(match)}>${match}</button>
+                   <button type="button" class="px-4 py-1 text-base text-left hover:bg-gray-100" @click=${() => this.autoCompleteInput(match)}>${match}</button>
                  `
     )}
          </div>
