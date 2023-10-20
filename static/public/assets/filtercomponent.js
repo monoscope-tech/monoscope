@@ -15,15 +15,50 @@ export class MyElement extends LitElement {
     this.filters = []
     this.showFilterSearch = false
     this.addEventListener('add-filter', this.handleChildEvent)
+
+  }
+
+  getFieldAndValue(filter) {
+    const parts = filter.trim().split(/\s*([=<>!]+)\s*/);
+    if (parts.length !== 3) {
+      return []
+    }
+    const [field, operator, value] = parts;
+    return [field, operator, value]
   }
 
   handleChildEvent(event) {
-    this.filters = [...this.filters, event.detail.filter]
+    let joiner = "&"
+    const [newField, newOperator, value] = this.getFieldAndValue(event.detail.filter)
+    for (let filter of this.filters) {
+      const [field, operator, val] = this.getFieldAndValue(filter)
+      if (newField == field) {
+        joiner = "|"
+      }
+      if (newField === field && newOperator === operator && value === val) {
+        this.showFilterSearch = false
+        return
+      }
+    }
+    if (this.filters.length === 0) {
+      this.filters = [event.detail.filter]
+    } else {
+      this.filters = [...this.filters, joiner, event.detail.filter]
+    }
     this.showFilterSearch = false
   }
 
   removeFilter(filter) {
     this.filters = this.filters.filter(f => f != filter)
+  }
+  toggleJoinOperator(index) {
+    if (this.filters[index] === "&") {
+      this.filters[index] = "||"
+
+    } else {
+      this.filters[index] = "&"
+    }
+    this.filters = [...this.filters]
   }
 
   render() {
@@ -33,15 +68,18 @@ export class MyElement extends LitElement {
            <i class="fa-regular fa-filter h-4 w-4 text-gray-500"></i>
             <div class="flex flex-wrap gap-2">
              ${this.filters.map(
-      (filter) => html`
-                              <button  type="button" class="bg-green-50 shrink-0 text-sm font-bold px-2 text-green-500 rounded-lg py-1">
+      (filter, index) => html` ${filter === "&" || filter === "|" ?
+        html`<button type="button" @click=${() => this.toggleJoinOperator(index)} class="text-gray-500 bg-gray-100  px-2 py-1 rounded-full">
+        ${filter}
+        <i class="fa-solid fa-sliders-simple"></i>
+        </button>` :
+        html` <button  type="button" class="bg-green-50 shrink-0 text-sm font-bold px-2 text-green-500 rounded-lg py-1">
                               ${filter} 
                               ${html`<span class="ml-2 text-xs hover:bg-green-200 p-1 rounded-full" @click=${() => this.removeFilter(filter)}>
                                      <i class="fa-sharp fa-xmark"></i>
-                              </span>`
-        }
-                              </button>
-                            `
+                              </span>`}
+                              </button>`
+        } `
     )}
          </div>
      ${this.filters.length == 0 ?
@@ -65,8 +103,8 @@ customElements.define('filter-element', MyElement);
 
 class Filter extends LitElement {
   fields = [
-    "method", "request_body", "request_headers", "response_body", "response_headers",
-    "host", "url_path", "raw_url", "referer", "status_code", "query_params", "path_params"
+    "method", "status_code", "duration_ns", "request_body", "request_headers", "response_body", "response_headers",
+    "host", "url_path", "raw_url", "referer", "query_params", "path_params"
   ]
 
   string_operators = ["=", "!="]
@@ -83,7 +121,7 @@ class Filter extends LitElement {
       operators: this.number_operators,
       values: [200, 201, 400, 404, 500, 300, 100]
     },
-    duration_ns: { type: "number" },
+    duration_ns: { operators: this.number_operators, type: "number" },
     "others": { operators: this.string_operators, values: [""] }
   }
 
@@ -103,16 +141,21 @@ class Filter extends LitElement {
     return html`
         <div class="z-10 h-[31.625rem] overflow-auto p-4 flex flex-col gap-2 shadow bg-white w-2/3 absolute left-1/2 -translate-x-1/2 -bottom-3 text-gray-500">
           <input type="text" class="border px-4 py-2 rounded focus:ring-1"
-              @input=${(event) => this.handleChange(event.target.value)} 
+              @input=${(event) => {
+        this.handleChange(event.target.value)
+      }} 
               .value=${this.inputVal}
-              @change=${(e) => this.triggerCustomEvent(e.target.value)} />
+              @change=${(e) => {
+        e.preventDefault();
+        this.triggerCustomEvent(e.target.value)
+      }} />
           <div>
             <div class="flex flex-col text-left">
              ${this.matches.map(
-      (match) => html`
+        (match) => html`
                    <button type="button"  class="px-4 py-1 text-base text-left hover:bg-gray-100" @click=${() => this.autoCompleteInput(match)}>${match}</button>
                  `
-    )}
+      )}
          </div>
           </div>
         </div>
@@ -179,7 +222,7 @@ class Filter extends LitElement {
     let auto_complete = []
     filters.forEach(filter => {
       let target = filter
-      if (target !== "method" && target !== "status_code") {
+      if (target !== "method" && target !== "status_code" && target !== "duration_ns") {
         target = "others"
       }
       let target_info = this.filterAutoComplete[target]

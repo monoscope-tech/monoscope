@@ -15,6 +15,7 @@ import Data.Vector (Vector, iforM_)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
+import Lucid.Base
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Lucid.Svg (use_)
