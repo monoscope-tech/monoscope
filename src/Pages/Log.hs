@@ -297,12 +297,17 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
       do
         nav_ [class_ "flex flex-row p-2 content-end justify-between items-baseline border-slate-100"] do
           a_ [class_ "inline-block"] "Query"
-          button_ [type_ "submit", class_ "cursor-pointer inline-block space-x-1 bg-blue-100 hover:bg-blue-200 blue-800 py-1 px-2 rounded-lg"] do
-            faIcon_ "fa-sparkles" "fa-sharp fa-regular fa-sparkles" "h-3 w-3 inline-block"
-            span_ "Run query"
+          div_ [class_ "flex items-center gap-6 "] do
+            div_ [class_ "flex items-center gap-2"] do
+              span_ [] "Use Query Builder"
+              input_ [type_ "checkbox", [__| on click toggle .hidden on #queryEditor then toggle .hidden on queryBuilder |]]
+            button_ [type_ "submit", class_ "cursor-pointer inline-block space-x-1 bg-blue-100 hover:bg-blue-200 blue-800 py-1 px-2 rounded-lg"] do
+              faIcon_ "fa-sparkles" "fa-sharp fa-regular fa-sparkles" "h-3 w-3 inline-block"
+              span_ "Run query"
         div_ do
           div_ [id_ "queryEditor", class_ "h-14"] pass
-          termRaw "filter-element" []
+          div_ [id_ "queryBuilder", class_ "mb-4 hidden"] do
+            termRaw "filter-element" []
 
     div_ [class_ "card-round w-full grow divide-y flex flex-col text-sm h-full overflow-y-hidden overflow-x-hidden"] do
       div_ [class_ "pl-3 py-1 space-x-5 flex flex-row justify-between"] do

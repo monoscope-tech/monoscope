@@ -29,12 +29,12 @@ export class MyElement extends LitElement {
   render() {
     return html`
   <div class="relative w-full">
-    <div class="flex items-center gap-2 m-2 border border-1 border-slate-400 px-4 py-2 w-ful rounded">
+    <div class="flex items-center flex-wrap gap-2 m-2 border border-1 border-slate-400 px-4 py-2 w-ful rounded">
            <i class="fa-regular fa-filter h-4 w-4 text-gray-500"></i>
-            <div class="flex gap-2">
+            <div class="flex flex-wrap gap-2">
              ${this.filters.map(
       (filter) => html`
-                              <button  type="button" class="bg-green-50 text-sm font-bold px-2 text-green-500 rounded-lg py-1">
+                              <button  type="button" class="bg-green-50 shrink-0 text-sm font-bold px-2 text-green-500 rounded-lg py-1">
                               ${filter} 
                               ${html`<span class="ml-2 text-xs hover:bg-green-200 p-1 rounded-full" @click=${() => this.removeFilter(filter)}>
                                      <i class="fa-sharp fa-xmark"></i>
@@ -47,7 +47,7 @@ export class MyElement extends LitElement {
      ${this.filters.length == 0 ?
         html`<button type="button" @click=${() => this.showFilterSearch = !this.showFilterSearch} class="text-gray-500" >Click to add filter...</button>`
         :
-        html`<button type="button" @click=${() => this.showFilterSearch = !this.showFilterSearch} class="px-2 py-2 border rounded text-gray-500 hover:bg-gray-100"><i class="fa-solid fa-plus"></i></button>`
+        html`<button type="button" @click=${() => this.showFilterSearch = !this.showFilterSearch} class="px-2 py-1 border rounded text-gray-500 hover:bg-gray-100"><i class="fa-solid fa-plus"></i></button>`
       }
     </div>
     ${this.showFilterSearch ? html`<filter-suggestions></filter-suggestions>` : null}
@@ -64,7 +64,7 @@ customElements.define('filter-element', MyElement);
 
 
 class Filter extends LitElement {
-  filters = [
+  fields = [
     "method", "request_body", "request_headers", "response_body", "response_headers",
     "host", "url_path", "raw_url", "referer", "status_code", "query_params", "path_params"
   ]
@@ -95,13 +95,13 @@ class Filter extends LitElement {
   constructor() {
     super()
     this.inputVal = ''
-    this.matches = []
+    this.matches = this.fields
     this.previous = "group"
   }
 
   render() {
     return html`
-        <div class="z-10 h-[31.625rem] overflow-auto p-4 flex flex-col gap-2 shadow bg-white w-1/2 absolute left-1/2 -translate-x-1/2 -bottom-3 text-gray-500">
+        <div class="z-10 h-[31.625rem] overflow-auto p-4 flex flex-col gap-2 shadow bg-white w-2/3 absolute left-1/2 -translate-x-1/2 -bottom-3 text-gray-500">
           <input type="text" class="border px-4 py-2 rounded focus:ring-1"
               @input=${(event) => this.handleChange(event.target.value)} 
               .value=${this.inputVal}
@@ -110,7 +110,7 @@ class Filter extends LitElement {
             <div class="flex flex-col text-left">
              ${this.matches.map(
       (match) => html`
-                   <button type="button" class="px-4 py-1 text-base text-left hover:bg-gray-100" @click=${() => this.autoCompleteInput(match)}>${match}</button>
+                   <button type="button"  class="px-4 py-1 text-base text-left hover:bg-gray-100" @click=${() => this.autoCompleteInput(match)}>${match}</button>
                  `
     )}
          </div>
@@ -171,7 +171,11 @@ class Filter extends LitElement {
 
   handleChange(val) {
     this.inputVal = val.trim()
-    let filters = this.filters.filter(v => v.startsWith(this.inputVal) || this.inputVal.startsWith(v))
+    if (!this.inputVal) {
+      this.matches = this.fields
+      return
+    }
+    let filters = this.fields.filter(v => v.startsWith(this.inputVal) || this.inputVal.startsWith(v))
     let auto_complete = []
     filters.forEach(filter => {
       let target = filter
@@ -192,6 +196,7 @@ class Filter extends LitElement {
       }
 
     })
+
     this.matches = auto_complete
   }
 }
