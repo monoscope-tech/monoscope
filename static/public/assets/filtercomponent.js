@@ -28,12 +28,12 @@ export class MyElement extends LitElement {
   }
 
   handleChildEvent(event) {
-    let joiner = "&"
+    let joiner = "AND"
     const [newField, newOperator, value] = this.getFieldAndValue(event.detail.filter)
     for (let filter of this.filters) {
       const [field, operator, val] = this.getFieldAndValue(filter)
       if (newField == field) {
-        joiner = "|"
+        joiner = "OR"
       }
       if (newField === field && newOperator === operator && value === val) {
         this.showFilterSearch = false
@@ -52,11 +52,11 @@ export class MyElement extends LitElement {
     this.filters = this.filters.filter(f => f != filter)
   }
   toggleJoinOperator(index) {
-    if (this.filters[index] === "&") {
-      this.filters[index] = "|"
+    if (this.filters[index] === "AND") {
+      this.filters[index] = "OR"
 
     } else {
-      this.filters[index] = "&"
+      this.filters[index] = "AND"
     }
     this.filters = [...this.filters]
   }
@@ -68,7 +68,7 @@ export class MyElement extends LitElement {
            <i class="fa-regular fa-filter h-4 w-4 text-gray-500"></i>
             <div class="flex flex-wrap gap-2">
              ${this.filters.map(
-      (filter, index) => html` ${filter === "&" || filter === "|" ?
+      (filter, index) => html` ${filter === "AND" || filter === "OR" ?
         html`<button type="button" @click=${() => this.toggleJoinOperator(index)} class="text-gray-500 bg-gray-100  px-2 py-1 rounded-full">
         ${filter}
         <i class="fa-solid fa-sliders-simple"></i>
@@ -123,6 +123,7 @@ class Filter extends LitElement {
     },
     duration_ns: { operators: this.number_operators, type: "number" },
     url_path: { operators: this.string_operators, values: [] },
+    raw_url: { operators: this.string_operators, values: [] }
   }
 
   static properties = {
@@ -138,6 +139,7 @@ class Filter extends LitElement {
     if (builderContainer) {
       const url_paths = JSON.parse(builderContainer.dataset.url_paths)
       this.filterAutoComplete.url_path.values = (url_paths || []).sort()
+      this.filterAutoComplete.raw_url.values = (JSON.parse(builderContainer.dataset.raw_urls) || []).sort()
     }
   }
 
@@ -145,26 +147,21 @@ class Filter extends LitElement {
     return html`
         <div class="z-10 h-[31.625rem] overflow-auto p-4 flex flex-col gap-2 shadow bg-white w-2/3 absolute left-1/2 -translate-x-1/2 -bottom-3 text-gray-500">
           <input type="text" class="border px-4 py-2 rounded focus:ring-1"
-              @input=${(event) => {
-        this.handleChange(event.target.value)
-      }} 
+              @input=${(event) => { this.handleChange(event.target.value) }} 
               .value=${this.inputVal}
-              @change=${(e) => {
-        if (e.key === "Enter") {
-          this.triggerCustomEvent(e.target.value)
-        }
-      }} />
+              @change=${(e) => { this.triggerCustomEvent(e.target.value) }} 
+              />
           <div>
             <div class="flex flex-col text-left">
              ${this.matches.map(
-        (match) => html`
+      (match) => html`
                    <button type="button"  class="px-4 py-1 text-base text-left hover:bg-gray-100" @click=${(e) => {
-            e.stopPropagation()
-            e.preventDefault()
-            this.autoCompleteInput(match)
-          }}>${match}</button>
+          e.stopPropagation()
+          e.preventDefault()
+          this.autoCompleteInput(match)
+        }}>${match}</button>
                  `
-      )}
+    )}
          </div>
           </div>
         </div>

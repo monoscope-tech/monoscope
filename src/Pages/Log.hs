@@ -264,6 +264,10 @@ getUniqueUrlPaths :: Vector RequestDumps.RequestDumpLogItem -> [Text]
 getUniqueUrlPaths logs = ordNub . Vector.toList $ Vector.map (\r -> r.urlPath) logs
 
 
+getUniqueRawUrlPaths :: Vector RequestDumps.RequestDumpLogItem -> [Text]
+getUniqueRawUrlPaths logs = ordNub . Vector.toList $ Vector.map (\r -> r.rawUrl) logs
+
+
 apiLogsPage :: Projects.ProjectId -> Int -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Text -> Text -> Text -> Html ()
 apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL = do
   section_ [class_ "mx-auto px-10 py-2 gap-2 flex flex-col h-[98%] overflow-hidden "] do
@@ -313,7 +317,8 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
           div_ [id_ "queryEditor", class_ "h-14"] pass
           let url_paths = getUniqueUrlPaths requests
           let url_paths_json = decodeUtf8 $ AE.encode url_paths
-          div_ [id_ "queryBuilder", class_ "mb-4 hidden", term "data-url_paths" url_paths_json] do
+          let raw_url = decodeUtf8 $ AE.encode $ getUniqueRawUrlPaths requests
+          div_ [id_ "queryBuilder", class_ "mb-4 hidden", term "data-url_paths" url_paths_json, term "data-raw_urls" raw_url] do
             termRaw "filter-element" []
 
     div_ [class_ "card-round w-full grow divide-y flex flex-col text-sm h-full overflow-y-hidden overflow-x-hidden"] do
@@ -393,6 +398,11 @@ function expireChanged(event) {
        document.querySelector("#expire_input").value = event.target.getAttribute("data-expire-value")
     }
 }
+  document.getElementById("log_explorer_form").addEventListener("keydown", function (e) {
+            if (e.key === "Enter") {
+                e.preventDefault();
+            }
+        });
   |]
 reqChart :: Text -> Bool -> Html ()
 reqChart reqChartTxt hxOob = do
