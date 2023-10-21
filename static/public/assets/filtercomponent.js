@@ -53,7 +53,7 @@ export class MyElement extends LitElement {
   }
   toggleJoinOperator(index) {
     if (this.filters[index] === "&") {
-      this.filters[index] = "||"
+      this.filters[index] = "|"
 
     } else {
       this.filters[index] = "&"
@@ -103,8 +103,8 @@ customElements.define('filter-element', MyElement);
 
 class Filter extends LitElement {
   fields = [
-    "method", "status_code", "duration_ns", "request_body", "request_headers", "response_body", "response_headers",
-    "host", "url_path", "raw_url", "referer", "query_params", "path_params"
+    "method", "status_code", "url_path", "duration_ns", "request_body", "request_headers", "response_body", "response_headers",
+    "host", "raw_url", "referer", "query_params", "path_params"
   ]
 
   string_operators = ["=", "!="]
@@ -114,7 +114,7 @@ class Filter extends LitElement {
     method: {
       type: "string",
       operators: this.string_operators,
-      values: [`"GET"`, `"POST"`, `"PUT"`, `"DELETE"`, `"PATCH"`, `"HEAD"`]
+      values: ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD"]
     },
     status_code: {
       type: "number",
@@ -122,7 +122,7 @@ class Filter extends LitElement {
       values: [200, 201, 400, 404, 500, 300, 100]
     },
     duration_ns: { operators: this.number_operators, type: "number" },
-    "others": { operators: this.string_operators, values: [""] }
+    url_path: { operators: this.string_operators, values: [] },
   }
 
   static properties = {
@@ -134,7 +134,11 @@ class Filter extends LitElement {
     super()
     this.inputVal = ''
     this.matches = this.fields
-    this.previous = "group"
+    const builderContainer = document.getElementById("queryBuilder")
+    if (builderContainer) {
+      const url_paths = JSON.parse(builderContainer.dataset.url_paths)
+      this.filterAutoComplete.url_path.values = (url_paths || []).sort()
+    }
   }
 
   render() {
@@ -146,14 +150,19 @@ class Filter extends LitElement {
       }} 
               .value=${this.inputVal}
               @change=${(e) => {
-        e.preventDefault();
-        this.triggerCustomEvent(e.target.value)
+        if (e.key === "Enter") {
+          this.triggerCustomEvent(e.target.value)
+        }
       }} />
           <div>
             <div class="flex flex-col text-left">
              ${this.matches.map(
         (match) => html`
-                   <button type="button"  class="px-4 py-1 text-base text-left hover:bg-gray-100" @click=${() => this.autoCompleteInput(match)}>${match}</button>
+                   <button type="button"  class="px-4 py-1 text-base text-left hover:bg-gray-100" @click=${(e) => {
+            e.stopPropagation()
+            e.preventDefault()
+            this.autoCompleteInput(match)
+          }}>${match}</button>
                  `
       )}
          </div>
@@ -170,11 +179,7 @@ class Filter extends LitElement {
     this.inputVal = val
     if (this.isValidFilter(val)) {
       this.triggerCustomEvent(this.inputVal)
-      this.previous = "filter"
     } else {
-      if (val == "and" || val == "or") {
-        this.previous = "group"
-      }
       this.handleChange(val)
     }
   }
@@ -212,6 +217,16 @@ class Filter extends LitElement {
     return field
   }
 
+  getValue(filter) {
+    const parts = filter.replace(" ", "").trim().split(/\s*([=<>!]+)\s*/);
+    if (parts.length !== 3) {
+      return ""
+    }
+    const [field, operator, value] = parts;
+    return value
+
+  }
+
   handleChange(val) {
     this.inputVal = val.trim()
     if (!this.inputVal) {
@@ -222,10 +237,11 @@ class Filter extends LitElement {
     let auto_complete = []
     filters.forEach(filter => {
       let target = filter
-      if (target !== "method" && target !== "status_code" && target !== "duration_ns") {
-        target = "others"
-      }
+
       let target_info = this.filterAutoComplete[target]
+      if (!target_info) {
+        target_info = { operators: this.string_operators, values: [] }
+      }
 
       if (filter == this.inputVal.trim() || filter.length > this.inputVal.length) {
         for (let op of target_info.operators) {
@@ -233,11 +249,16 @@ class Filter extends LitElement {
         }
       } else {
         target_info.values.forEach(v => {
-          auto_complete.push(`${this.inputVal} ${v}`)
-
+          const valTyped = this.getValue(this.inputVal)
+          if (String(v).startsWith(valTyped)) {
+            if (target_info.type === "number") {
+              auto_complete.push(`${this.inputVal.replace(valTyped, "")} ${v}`)
+            } else {
+              auto_complete.push(`${this.inputVal.replace(valTyped, "")} "${v}"`)
+            }
+          }
         })
       }
-
     })
 
     this.matches = auto_complete

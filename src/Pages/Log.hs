@@ -260,6 +260,10 @@ expandAPIlogItem' req modal = do
         jsonValueToHtmlTree req.responseHeaders
 
 
+getUniqueUrlPaths :: Vector RequestDumps.RequestDumpLogItem -> [Text]
+getUniqueUrlPaths logs = ordNub . Vector.toList $ Vector.map (\r -> r.urlPath) logs
+
+
 apiLogsPage :: Projects.ProjectId -> Int -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Text -> Text -> Text -> Html ()
 apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL = do
   section_ [class_ "mx-auto px-10 py-2 gap-2 flex flex-col h-[98%] overflow-hidden "] do
@@ -307,7 +311,9 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
               span_ "Run query"
         div_ do
           div_ [id_ "queryEditor", class_ "h-14"] pass
-          div_ [id_ "queryBuilder", class_ "mb-4 hidden"] do
+          let url_paths = getUniqueUrlPaths requests
+          let url_paths_json = decodeUtf8 $ AE.encode url_paths
+          div_ [id_ "queryBuilder", class_ "mb-4 hidden", term "data-url_paths" url_paths_json] do
             termRaw "filter-element" []
 
     div_ [class_ "card-round w-full grow divide-y flex flex-col text-sm h-full overflow-y-hidden overflow-x-hidden"] do
