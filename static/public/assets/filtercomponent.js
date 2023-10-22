@@ -91,9 +91,9 @@ export class MyElement extends LitElement {
         ${filter}
         <i class="fa-solid fa-sliders-simple"></i>
         </button>` :
-        html` <button  type="button" class="bg-green-50 shrink-0 text-sm font-bold px-2 text-green-500 rounded-lg py-1">
+        html` <button  type="button" class="bg-blue-50 shrink-0 text-sm font-bold px-2 text-blue-500 rounded-lg py-1">
                               ${filter} 
-                              ${html`<span class="ml-2 text-xs hover:bg-green-200 p-1 rounded-full" @click=${() => this.removeFilter(filter)}>
+                              ${html`<span class="ml-2 text-xs hover:bg-blue-200 p-1 rounded-full" @click=${() => this.removeFilter(filter)}>
                                      <i class="fa-sharp fa-xmark"></i>
                               </span>`}
                               </button>`
@@ -163,7 +163,7 @@ class Filter extends LitElement {
 
   render() {
     return html`
-        <div class="z-10 h-[500px] overflow-auto p-4 flex flex-col gap-2 shadow bg-white w-2/3 absolute left-1/2 -translate-x-1/2 -bottom-3 text-gray-500">
+        <div class="z-10 h-[31.625rem] overflow-auto p-4 flex flex-col gap-2 shadow bg-white w-2/3 absolute left-1/2 -translate-x-1/2 -bottom-3 text-gray-500">
         <button class="ml-auto" @click=${(e) => this.dispatchEvent(new CustomEvent('close-search', { bubbles: true, composed: true }))}>
             <i class="h-6 w-6 fa-sharp fa-xmark"></i>
         </button>
