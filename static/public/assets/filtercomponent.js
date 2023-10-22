@@ -41,16 +41,33 @@ export class MyElement extends LitElement {
       }
     }
     if (this.filters.length === 0) {
-      this.filters = [event.detail.filter]
+      this.upadteFilters([event.detail.filter])
     } else {
-      this.filters = [...this.filters, joiner, event.detail.filter]
+      this.upadteFilters([...this.filters, joiner, event.detail.filter])
     }
     this.showFilterSearch = false
   }
 
-  removeFilter(filter) {
-    this.filters = this.filters.filter(f => f != filter)
+  upadteFilters(newVal) {
+    this.filters = newVal
+    const val = newVal.join(" ")
+    window.queryBuilderValue = val
+    window.editor.setValue(val)
+
   }
+
+  removeFilter(filter) {
+    const index = this.filters.indexOf(filter)
+    if (index > 0) {
+      this.filters[index - 1] = filter
+    } else {
+      if (this.filters.length > 0) {
+        this.filters[index + 1] = filter
+      }
+    }
+    this.upadteFilters(this.filters.filter(f => f != filter))
+  }
+
   toggleJoinOperator(index) {
     if (this.filters[index] === "AND") {
       this.filters[index] = "OR"
@@ -58,7 +75,7 @@ export class MyElement extends LitElement {
     } else {
       this.filters[index] = "AND"
     }
-    this.filters = [...this.filters]
+    this.upadteFilters([...this.filters])
   }
 
   render() {
@@ -149,19 +166,21 @@ class Filter extends LitElement {
           <input type="text" class="border px-4 py-2 rounded focus:ring-1"
               @input=${(event) => { this.handleChange(event.target.value) }} 
               .value=${this.inputVal}
-              @change=${(e) => { this.triggerCustomEvent(e.target.value) }} 
+              @change=${(e) => {
+        if (e.key === "Enter") {
+          this.triggerCustomEvent(e.target.value)
+        }
+      }} 
               />
           <div>
             <div class="flex flex-col text-left">
              ${this.matches.map(
-      (match) => html`
+        (match) => html`
                    <button type="button"  class="px-4 py-1 text-base text-left hover:bg-gray-100" @click=${(e) => {
-          e.stopPropagation()
-          e.preventDefault()
-          this.autoCompleteInput(match)
-        }}>${match}</button>
+            this.autoCompleteInput(match)
+          }}>${match}</button>
                  `
-    )}
+      )}
          </div>
           </div>
         </div>
@@ -247,7 +266,7 @@ class Filter extends LitElement {
       } else {
         target_info.values.forEach(v => {
           const valTyped = this.getValue(this.inputVal)
-          if (String(v).startsWith(valTyped)) {
+          if (String(v).startsWith(valTyped) || String(`"${v}`).startsWith(valTyped) || String(`"${v}"`).startsWith(valTyped)) {
             if (target_info.type === "number") {
               auto_complete.push(`${this.inputVal.replace(valTyped, "")} ${v}`)
             } else {

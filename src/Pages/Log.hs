@@ -309,7 +309,7 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
           div_ [class_ "flex items-center gap-6 "] do
             div_ [class_ "flex items-center gap-2"] do
               span_ [] "Use Query Builder"
-              input_ [type_ "checkbox", [__| on click toggle .hidden on #queryEditor then toggle .hidden on queryBuilder |]]
+              input_ [type_ "checkbox", id_ "toggleQueryEditor", [__| on click toggle .hidden on #queryEditor then toggle .hidden on queryBuilder |]]
             button_ [type_ "submit", class_ "cursor-pointer inline-block space-x-1 bg-blue-100 hover:bg-blue-200 blue-800 py-1 px-2 rounded-lg"] do
               faIcon_ "fa-sparkles" "fa-sharp fa-regular fa-sparkles" "h-3 w-3 inline-block"
               span_ "Run query"
@@ -659,8 +659,14 @@ jsonTreeAuxillaryCode pid = do
       return new_cols
     }
     var isFieldInSummary = field => params().cols.split(",").includes(field);
-    var getQueryFromEditor = () => window.editor.getValue();
-
+    var getQueryFromEditor = () => {
+     const toggler = document.getElementById("toggleQueryEditor")
+     if(toggler.checked) {
+       return window.queryBuilderValue
+      }else {
+       return window.editor.getValue();
+      }
+    }
     var execd = false
     document.addEventListener('DOMContentLoaded', function(){
       // Configuration for the monaco editor which the query editor is built on.
