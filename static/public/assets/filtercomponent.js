@@ -15,6 +15,7 @@ export class MyElement extends LitElement {
     this.filters = []
     this.showFilterSearch = false
     this.addEventListener('add-filter', this.handleChildEvent)
+    this.addEventListener('close-search', () => { this.showFilterSearch = false })
 
   }
 
@@ -138,7 +139,7 @@ class Filter extends LitElement {
       operators: this.number_operators,
       values: [200, 201, 400, 404, 500, 300, 100]
     },
-    duration_ns: { operators: this.number_operators, type: "number" },
+    duration_ns: { operators: this.number_operators, type: "number", values: [] },
     url_path: { operators: this.string_operators, values: [] },
     raw_url: { operators: this.string_operators, values: [] }
   }
@@ -162,29 +163,32 @@ class Filter extends LitElement {
 
   render() {
     return html`
-        <div class="z-10 h-[31.625rem] overflow-auto p-4 flex flex-col gap-2 shadow bg-white w-2/3 absolute left-1/2 -translate-x-1/2 -bottom-3 text-gray-500">
-          <input type="text" class="border px-4 py-2 rounded focus:ring-1"
+        <div class="z-10 h-[500px] overflow-auto p-4 flex flex-col gap-2 shadow bg-white w-2/3 absolute left-1/2 -translate-x-1/2 -bottom-3 text-gray-500">
+        <button class="ml-auto" @click=${(e) => this.dispatchEvent(new CustomEvent('close-search', { bubbles: true, composed: true }))}>
+            <i class="h-6 w-6 fa-sharp fa-xmark"></i>
+        </button>
+  <input type="text" class="border px-4 py-2 rounded focus:ring-1"
               @input=${(event) => { this.handleChange(event.target.value) }} 
-              .value=${this.inputVal}
-              @change=${(e) => {
+              .value = ${this.inputVal}
+             @keydown=${(e) => {
         if (e.key === "Enter") {
           this.triggerCustomEvent(e.target.value)
         }
-      }} 
-              />
-          <div>
-            <div class="flex flex-col text-left">
-             ${this.matches.map(
+      }
+      }
+/>
+  <div class="flex flex-col text-left">
+    ${this.matches.map(
         (match) => html`
                    <button type="button"  class="px-4 py-1 text-base text-left hover:bg-gray-100" @click=${(e) => {
             this.autoCompleteInput(match)
           }}>${match}</button>
                  `
       )}
-         </div>
-          </div>
-        </div>
-        `
+  </div>
+          </div >
+        </div >
+  `
   }
 
   createRenderRoot() {
@@ -261,12 +265,12 @@ class Filter extends LitElement {
 
       if (filter == this.inputVal.trim() || filter.length > this.inputVal.length) {
         for (let op of target_info.operators) {
-          auto_complete.push(`${filter} ${op}`)
+          auto_complete.push(`${filter} ${op} `)
         }
       } else {
         target_info.values.forEach(v => {
           const valTyped = this.getValue(this.inputVal)
-          if (String(v).startsWith(valTyped) || String(`"${v}`).startsWith(valTyped) || String(`"${v}"`).startsWith(valTyped)) {
+          if (String(v).startsWith(valTyped) || String(`"${v}`).startsWith(valTyped) || String(`"${v} "`).startsWith(valTyped)) {
             if (target_info.type === "number") {
               auto_complete.push(`${this.inputVal.replace(valTyped, "")} ${v}`)
             } else {
