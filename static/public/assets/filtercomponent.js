@@ -85,28 +85,27 @@ export class MyElement extends LitElement {
     <div class="flex items-center flex-wrap gap-2 m-2 border border-1 border-slate-400 px-4 py-2 w-ful rounded">
            <i class="fa-regular fa-filter h-4 w-4 text-gray-500"></i>
             <div class="flex flex-wrap gap-2">
-             ${this.filters.map(
-      (filter, index) => html` ${filter === "AND" || filter === "OR" ?
-        html`<button type="button" @click=${() => this.toggleJoinOperator(index)} class="text-gray-500 bg-gray-100  px-2 py-1 rounded-full">
+             ${this.filters.map((filter, index) => html` ${filter === "AND" || filter === "OR" ?
+      html`<button type="button" @click=${() => this.toggleJoinOperator(index)} class="text-gray-500 bg-gray-100  px-2 py-1 rounded-full">
         ${filter}
         <i class="fa-solid fa-sliders-simple"></i>
         </button>` :
-        html` <button  type="button" class="bg-blue-50 shrink-0 text-sm font-bold px-2 text-blue-500 rounded-lg py-1">
+      html` <button  type="button" class="bg-blue-50 shrink-0 text-sm font-bold px-2 text-blue-500 rounded-lg py-1">
                               ${filter} 
                               ${html`<span class="ml-2 text-xs hover:bg-blue-200 p-1 rounded-full" @click=${() => this.removeFilter(filter)}>
                                      <i class="fa-sharp fa-xmark"></i>
                               </span>`}
                               </button>`
-        } `
+      } `
     )}
          </div>
-     ${this.filters.length == 0 ?
+     ${this.showFilterSearch ? html`<filter-suggestions></filter-suggestions>` : this.filters.length == 0 ?
         html`<button type="button" @click=${() => this.showFilterSearch = !this.showFilterSearch} class="text-gray-500" >Click to add filter...</button>`
         :
         html`<button type="button" @click=${() => this.showFilterSearch = !this.showFilterSearch} class="px-2 py-1 border rounded text-gray-500 hover:bg-gray-100"><i class="fa-solid fa-plus"></i></button>`
       }
+      
     </div>
-    ${this.showFilterSearch ? html`<filter-suggestions></filter-suggestions>` : null}
   </div>
     `;
   }
@@ -159,15 +158,13 @@ class Filter extends LitElement {
       this.filterAutoComplete.url_path.values = (url_paths || []).sort()
       this.filterAutoComplete.raw_url.values = (JSON.parse(builderContainer.dataset.raw_urls) || []).sort()
     }
+
   }
 
   render() {
     return html`
-        <div class="z-10 h-[31.625rem] overflow-auto p-4 flex flex-col gap-2 shadow bg-white w-2/3 absolute left-1/2 -translate-x-1/2 -bottom-3 text-gray-500">
-        <button class="ml-auto" @click=${(e) => this.dispatchEvent(new CustomEvent('close-search', { bubbles: true, composed: true }))}>
-            <i class="h-6 w-6 fa-sharp fa-xmark"></i>
-        </button>
-  <input type="text" class="border px-4 py-2 rounded focus:ring-1"
+        <div class="relative  text-gray-500">
+         <input type="text" autofocus class="border px-2 py-1 w-max rounded-xl focus:ring-1"
               @input=${(event) => { this.handleChange(event.target.value) }} 
               .value = ${this.inputVal}
              @keydown=${(e) => {
@@ -177,7 +174,7 @@ class Filter extends LitElement {
       }
       }
 />
-  <div class="flex flex-col text-left">
+  <div class="flex flex-col h-[31.625rem] overflow-auto p-4 gap-2 text-left shadow bg-white w-[500px] absolute z-10 -bottom-3">
     ${this.matches.map(
         (match) => html`
                    <button type="button"  class="px-4 py-1 text-base text-left hover:bg-gray-100" @click=${(e) => {
