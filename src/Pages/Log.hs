@@ -15,6 +15,7 @@ import Data.Vector (Vector, iforM_)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
+import Lucid.Base
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Lucid.Svg (use_)
@@ -29,6 +30,7 @@ import Pages.NonMember
 import Pkg.Components (loader)
 import Relude
 
+import Lucid.Base (TermRaw (termRaw, termRawWith))
 import System.Clock
 import Utils
 
@@ -258,6 +260,14 @@ expandAPIlogItem' req modal = do
         jsonValueToHtmlTree req.responseHeaders
 
 
+getUniqueUrlPaths :: Vector RequestDumps.RequestDumpLogItem -> [Text]
+getUniqueUrlPaths logs = ordNub . Vector.toList $ Vector.map (\r -> r.urlPath) logs
+
+
+getUniqueRawUrlPaths :: Vector RequestDumps.RequestDumpLogItem -> [Text]
+getUniqueRawUrlPaths logs = ordNub . Vector.toList $ Vector.map (\r -> r.rawUrl) logs
+
+
 apiLogsPage :: Projects.ProjectId -> Int -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Text -> Text -> Text -> Html ()
 apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL = do
   section_ [class_ "mx-auto px-10 py-2 gap-2 flex flex-col h-[98%] overflow-hidden "] do
@@ -296,11 +306,20 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
       do
         nav_ [class_ "flex flex-row p-2 content-end justify-between items-baseline border-slate-100"] do
           a_ [class_ "inline-block"] "Query"
-          button_ [type_ "submit", class_ "cursor-pointer inline-block space-x-1 bg-blue-100 hover:bg-blue-200 blue-800 py-1 px-2 rounded-lg"] do
-            faIcon_ "fa-sparkles" "fa-sharp fa-regular fa-sparkles" "h-3 w-3 inline-block"
-            span_ "Run query"
+          div_ [class_ "flex items-center gap-6 "] do
+            div_ [class_ "flex items-center gap-2"] do
+              span_ [] "Use Query Builder"
+              input_ [type_ "checkbox", id_ "toggleQueryEditor", [__| on click toggle .hidden on #queryEditor then toggle .hidden on queryBuilder |]]
+            button_ [type_ "submit", class_ "cursor-pointer inline-block space-x-1 bg-blue-100 hover:bg-blue-200 blue-800 py-1 px-2 rounded-lg"] do
+              faIcon_ "fa-sparkles" "fa-sharp fa-regular fa-sparkles" "h-3 w-3 inline-block"
+              span_ "Run query"
         div_ do
-          div_ [id_ "queryEditor", class_ "h-14"] ""
+          div_ [id_ "queryEditor", class_ "h-14"] pass
+          let url_paths = getUniqueUrlPaths requests
+          let url_paths_json = decodeUtf8 $ AE.encode url_paths
+          let raw_url = decodeUtf8 $ AE.encode $ getUniqueRawUrlPaths requests
+          div_ [id_ "queryBuilder", class_ "mb-4 hidden", term "data-url_paths" url_paths_json, term "data-raw_urls" raw_url] do
+            termRaw "filter-element" []
 
     div_ [class_ "card-round w-full grow divide-y flex flex-col text-sm h-full overflow-y-hidden overflow-x-hidden"] do
       div_ [class_ "pl-3 py-1 space-x-5 flex flex-row justify-between"] do
@@ -379,6 +398,11 @@ function expireChanged(event) {
        document.querySelector("#expire_input").value = event.target.getAttribute("data-expire-value")
     }
 }
+  document.getElementById("log_explorer_form").addEventListener("keydown", function (e) {
+            if (e.key === "Enter") {
+                e.preventDefault();
+            }
+        });
   |]
 reqChart :: Text -> Bool -> Html ()
 reqChart reqChartTxt hxOob = do
@@ -635,8 +659,14 @@ jsonTreeAuxillaryCode pid = do
       return new_cols
     }
     var isFieldInSummary = field => params().cols.split(",").includes(field);
-    var getQueryFromEditor = () => window.editor.getValue();
-
+    var getQueryFromEditor = () => {
+     const toggler = document.getElementById("toggleQueryEditor")
+     if(toggler.checked) {
+       return window.queryBuilderValue
+      }else {
+       return window.editor.getValue();
+      }
+    }
     var execd = false
     document.addEventListener('DOMContentLoaded', function(){
       // Configuration for the monaco editor which the query editor is built on.
