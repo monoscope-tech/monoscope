@@ -177,13 +177,24 @@ class Filter extends LitElement {
   <div class="flex flex-col h-[31.625rem] overflow-auto p-4 gap-2 text-left shadow bg-white w-[500px] absolute z-10 -bottom-3">
     ${this.matches.map(
         (match) => html`
-                   <button type="button"  class="px-4 py-1 text-base text-left hover:bg-gray-100" 
+                   <button type="button"  class="match_buttons px-4 py-1 text-base text-left hover:bg-gray-100" 
                    @click=${(e) => {
             this.autoCompleteInput(match)
           }}
                     @keydown=${(e) => {
             if (e.key === "Enter") {
               this.autoCompleteInput(match)
+            }
+            if (e.key === 'Tab') {
+              e.preventDefault();
+              const buttons = document.querySelectorAll('.match_buttons');
+              const activeButton = document.activeElement;
+              const index = Array.from(buttons).indexOf(activeButton);
+
+              if (index !== -1) {
+                const nextIndex = (index + 1) % buttons.length;
+                buttons[nextIndex].focus();
+              }
             }
           }
           }
