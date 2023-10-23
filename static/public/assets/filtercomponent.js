@@ -16,7 +16,10 @@ export class MyElement extends LitElement {
     this.showFilterSearch = false
     this.addEventListener('add-filter', this.handleChildEvent)
     this.addEventListener('close-search', () => { this.showFilterSearch = false })
-
+    const body = document.querySelector('body')
+    body.addEventListener('click', () => {
+      this.showFilterSearch = false
+    })
   }
 
   getFieldAndValue(filter) {
@@ -81,7 +84,7 @@ export class MyElement extends LitElement {
 
   render() {
     return html`
-  <div class="relative w-full">
+  <div class="relative w-full" @click=${(e) => e.stopPropagation()}>
     <div class="flex items-center flex-wrap gap-2 m-2 border border-1 border-slate-400 px-4 py-2 w-ful rounded">
            <i class="fa-regular fa-filter h-4 w-4 text-gray-500"></i>
             <div class="flex flex-wrap gap-2">
@@ -98,13 +101,13 @@ export class MyElement extends LitElement {
                               </button>`
       } `
     )}
-         </div>
-     ${this.showFilterSearch ? html`<filter-suggestions></filter-suggestions>` : this.filters.length == 0 ?
+         ${this.showFilterSearch ? html`<filter-suggestions></filter-suggestions>` : this.filters.length == 0 ?
         html`<button type="button" @click=${() => this.showFilterSearch = !this.showFilterSearch} class="text-gray-500" >Click to add filter...</button>`
         :
         html`<button type="button" @click=${() => this.showFilterSearch = !this.showFilterSearch} class="px-2 py-1 border rounded text-gray-500 hover:bg-gray-100"><i class="fa-solid fa-plus"></i></button>`
       }
       
+         </div>
     </div>
   </div>
     `;
@@ -174,7 +177,7 @@ class Filter extends LitElement {
       }
       }
 />
-  <div class="flex flex-col h-[31.625rem] overflow-auto p-4 gap-2 text-left shadow bg-white w-[500px] absolute z-10 -bottom-3">
+  <div class="flex flex-col min-h-12 h-[31.625rem] border overflow-auto p-4 gap-2 text-left shadow bg-white w-96 left-1/2 -translate-x-1/2 absolute z-50 -bottom-3">
     ${this.matches.map(
         (match) => html`
                    <button type="button"  class="match_buttons px-4 py-1 text-base text-left hover:bg-gray-100" 
