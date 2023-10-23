@@ -177,9 +177,17 @@ class Filter extends LitElement {
   <div class="flex flex-col h-[31.625rem] overflow-auto p-4 gap-2 text-left shadow bg-white w-[500px] absolute z-10 -bottom-3">
     ${this.matches.map(
         (match) => html`
-                   <button type="button"  class="px-4 py-1 text-base text-left hover:bg-gray-100" @click=${(e) => {
+                   <button type="button"  class="px-4 py-1 text-base text-left hover:bg-gray-100" 
+                   @click=${(e) => {
             this.autoCompleteInput(match)
-          }}>${match}</button>
+          }}
+                    @keydown=${(e) => {
+            if (e.key === "Enter") {
+              this.autoCompleteInput(match)
+            }
+          }
+          }
+          >${match}</button>
                  `
       )}
   </div>
