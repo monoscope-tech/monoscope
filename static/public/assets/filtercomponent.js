@@ -76,7 +76,6 @@ export class MyElement extends LitElement {
   toggleJoinOperator(index) {
     if (this.filters[index] === "AND") {
       this.filters[index] = "OR"
-
     } else {
       this.filters[index] = "AND"
     }
@@ -178,7 +177,7 @@ class Filter extends LitElement {
       }
       }
 />
-  <div class="flex flex-col min-h-12 h-[31.625rem] border overflow-auto p-4 gap-2 text-left shadow bg-white w-96 left-1/2 -translate-x-1/2 absolute z-50 -bottom-3">
+  <div class="flex flex-col max-h-[500px] border overflow-auto p-4 gap-2 text-left shadow bg-white w-96 left-1/2 -translate-x-1/2 absolute z-50 -bottom-3">
     ${this.matches.map(
         (match) => html`
                    <button type="button"  class="match_buttons px-4 py-1 text-base text-left hover:bg-gray-100" 
