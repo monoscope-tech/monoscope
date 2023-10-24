@@ -65,12 +65,12 @@ dashboardGetH sess pid fromDStr toDStr sinceStr' = do
   pool <- asks pool
   now <- liftIO getCurrentTime
   let sinceStr = if isNothing fromDStr && isNothing toDStr && isNothing sinceStr' || fromDStr == Just "" then Just "7D" else sinceStr'
-  (hasApikeys, hasRequest) <- liftIO $
-    withPool pool $
-      do
-        apiKeys <- ProjectApiKeys.countProjectApiKeysByProjectId pid
-        requestDumps <- RequestDumps.countRequestDumpByProject pid
-        pure (apiKeys > 0, requestDumps > 0)
+  (hasApikeys, hasRequest) <- liftIO
+    $ withPool pool
+    $ do
+      apiKeys <- ProjectApiKeys.countProjectApiKeysByProjectId pid
+      requestDumps <- RequestDumps.countRequestDumpByProject pid
+      pure (apiKeys > 0, requestDumps > 0)
   -- TODO: Replace with a duration parser.
   let (fromD, toD) = case sinceStr of
         Just "1H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just $ utcToZonedTime utc now)
@@ -87,8 +87,8 @@ dashboardGetH sess pid fromDStr toDStr sinceStr' = do
           (f, t)
 
   startTime <- liftIO $ getTime Monotonic
-  (project, projectRequestStats, reqLatenciesRolledByStepsLabeled) <- liftIO $
-    withPool
+  (project, projectRequestStats, reqLatenciesRolledByStepsLabeled) <- liftIO
+    $ withPool
       pool
       do
         project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
@@ -185,8 +185,8 @@ dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledBySte
 
   section_ [class_ "space-y-3"] do
     div_ [class_ "flex justify-between mt-4"] $ div_ [class_ "flex flex-row"] do
-      a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]] $
-        faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 w-4 inline-block"
+      a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
+        $ faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 w-4 inline-block"
       span_ [class_ "text-lg text-slate-700"] "Analytics"
 
     div_ [class_ "reqResSubSection space-y-5"] do

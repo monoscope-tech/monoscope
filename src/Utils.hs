@@ -83,8 +83,8 @@ faIcon_ faIcon faClasses classes = do
 
 faIconWithAnchor_ :: Text -> Text -> Text -> Text -> Html ()
 faIconWithAnchor_ faIcon faClasses classes onClickAction = do
-  a_ [href_ "#", onclick_ onClickAction] $ -- You can replace "#" with the actual link
-    faIcon_ faIcon faClasses classes
+  a_ [href_ "#", onclick_ onClickAction]
+    $ faIcon_ faIcon faClasses classes -- You can replace "#" with the actual link
 
 
 deleteParam :: Text -> Text -> Text
