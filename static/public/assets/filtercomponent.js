@@ -56,8 +56,9 @@ export class MyElement extends LitElement {
     this.filters = newVal
     const val = newVal.join(" ")
     window.queryBuilderValue = val
-    window.editor.setValue(val)
-
+    if (window.editor) {
+      window.editor.setValue(val)
+    }
   }
 
   removeFilter(filter) {

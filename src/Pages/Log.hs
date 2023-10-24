@@ -309,18 +309,18 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
           div_ [class_ "flex items-center gap-6 "] do
             div_ [class_ "flex items-center gap-2"] do
               label_ [class_ "relative inline-flex items-center cursor-pointer"] do
-                input_ [type_ "checkbox", value_ "", class_ "sr-only peer", id_ "toggleQueryEditor", [__| on click toggle .hidden on #queryEditor then toggle .hidden on queryBuilder |]]
+                input_ [type_ "checkbox", value_ "", class_ "sr-only peer", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()"]
                 div_ [class_ "w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"] pass
-                span_ [class_ "ml-3 text-sm font-medium text-gray-900 dark:text-gray-300"] "Query Builder"
+                span_ [class_ "ml-3 text-sm font-medium text-gray-900 dark:text-gray-300"] "Use editor"
             button_ [type_ "submit", class_ "cursor-pointer inline-block space-x-1 bg-blue-100 hover:bg-blue-200 blue-800 py-1 px-2 rounded-lg"] do
               faIcon_ "fa-sparkles" "fa-sharp fa-regular fa-sparkles" "h-3 w-3 inline-block"
               span_ "Run query"
         div_ do
-          div_ [id_ "queryEditor", class_ "h-14"] pass
+          div_ [id_ "queryEditor", class_ "h-14 hidden"] pass
           let url_paths = getUniqueUrlPaths requests
           let url_paths_json = decodeUtf8 $ AE.encode url_paths
           let raw_url = decodeUtf8 $ AE.encode $ getUniqueRawUrlPaths requests
-          div_ [id_ "queryBuilder", class_ "mb-4 hidden", term "data-url_paths" url_paths_json, term "data-raw_urls" raw_url] do
+          div_ [id_ "queryBuilder", class_ "mb-4", term "data-url_paths" url_paths_json, term "data-raw_urls" raw_url] do
             termRaw "filter-element" []
 
     div_ [class_ "card-round w-full grow divide-y flex flex-col text-sm h-full overflow-y-hidden overflow-x-hidden"] do
@@ -669,6 +669,19 @@ jsonTreeAuxillaryCode pid = do
        return window.editor.getValue();
       }
     }
+
+    function toggleQueryBuilder() {
+     document.getElementById("queryBuilder").classList.toggle("hidden")
+     document.getElementById("queryEditor").classList.toggle("hidden")
+      if(!window.editor) {
+          window.editor = monacoEditor.editor.create(document.getElementById('queryEditor'), {
+          value: params().query || window.queryBuilderValue,
+					language:'hcl',
+          minimap:{enabled:false}
+				});
+      }
+    }
+
     var execd = false
     document.addEventListener('DOMContentLoaded', function(){
       // Configuration for the monaco editor which the query editor is built on.
@@ -685,13 +698,8 @@ jsonTreeAuxillaryCode pid = do
           }
         });
         monaco.editor.setTheme('apitoolkit');
-				window.editor = monaco.editor.create(document.getElementById('queryEditor'), {
-          value: params().query,
-					language:'hcl',
-          minimap:{enabled:false}
-				});
+        window.monacoEditor = monaco
 			});
-      // Monaco code suggestions https://github.com/microsoft/monaco-editor/issues/1850
     })
     |]
 
