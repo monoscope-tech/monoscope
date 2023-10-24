@@ -49,8 +49,8 @@ endpointListGetH sess pid layoutM ackdM archivedM hostM projectHostM sortM hxReq
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, endpointStats, projHosts) <- liftIO
-        $ withPool pool do
+      (project, endpointStats, projHosts) <- liftIO $
+        withPool pool do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
           endpointStats <- case hostM of
             Just h -> Endpoints.dependencyEndpointsRequestStatsByProject pid h
@@ -75,8 +75,8 @@ endpointListGetH sess pid layoutM ackdM archivedM hostM projectHostM sortM hxReq
                 sort = ""
               }
       let elementBelowTabs =
-            div_ [class_ "grid grid-cols-5", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"]
-              $ endpointList' paramInput currTime pid endpointStats
+            div_ [class_ "grid grid-cols-5", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $
+              endpointList' paramInput currTime pid endpointStats
       case (hxRequestM, hxBoostedM) of
         (Just "true", Just "false") -> pure elementBelowTabs
         (Just "true", Nothing) -> pure elementBelowTabs

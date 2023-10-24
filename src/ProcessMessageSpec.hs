@@ -117,8 +117,8 @@ spec = aroundAll TmpPg.withSetup do
 
     it "We should expect 2 endpoints, albeit unacknowleged." \pool -> do
       _ <-
-        withPool pool
-          $ execute
+        withPool pool $
+          execute
             Insert
             [sql|
             REFRESH MATERIALIZED VIEW CONCURRENTLY apis.endpoint_request_stats;

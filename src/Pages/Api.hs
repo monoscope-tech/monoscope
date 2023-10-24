@@ -52,8 +52,8 @@ apiPostH sess pid apiKeyForm = do
       let encryptedKeyB64 = B64.encodeBase64 encryptedKey
       let keyPrefix = encryptedKeyB64
       pApiKey <- liftIO $ ProjectApiKeys.newProjectApiKeys pid projectKeyUUID (title apiKeyForm) keyPrefix
-      apiKeys <- liftIO
-        $ withPool
+      apiKeys <- liftIO $
+        withPool
           pool
           do
             ProjectApiKeys.insertProjectApiKey pApiKey
@@ -74,8 +74,8 @@ apiDeleteH sess pid keyid = do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Can not revoke API key."]}|]
       pure $ addHeader hxTriggerData $ userNotMemeberPage sess
     else do
-      (res, apikeys) <- liftIO
-        $ withPool
+      (res, apikeys) <- liftIO $
+        withPool
           pool
           do
             del <- ProjectApiKeys.revokeApiKey keyid
@@ -98,8 +98,8 @@ apiGetH sess pid = do
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, apiKeys, hasRequest) <- liftIO
-        $ withPool
+      (project, apiKeys, hasRequest) <- liftIO $
+        withPool
           pool
           do
             project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
@@ -192,7 +192,7 @@ mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] do
                       [class_ "mr-2 w-full"]
                       $ toHtml
                       $ T.take 8 apiKey.keyPrefix
-                      <> "********************************************"
+                        <> "********************************************"
                     button_
                       [ class_ "text-blue-500"
                       , term "data-key" apiKey.keyPrefix
