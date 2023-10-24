@@ -9,6 +9,7 @@ module Utils (
   DBField (..),
   mIcon_,
   faIcon_,
+  faIconWithAnchor_,
   deleteParam,
   quoteTxt,
   textToBool,
@@ -22,7 +23,7 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.ToField (ToField (..))
 
 import Database.PostgreSQL.Transact
-import Lucid (Html, href_, i_, term)
+import Lucid (Html, a_, href_, i_, onclick_, term)
 import Lucid.Svg (class_, svg_, use_)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Session
@@ -78,6 +79,12 @@ faIcon_ :: Text -> Text -> Text -> Html ()
 faIcon_ faIcon faClasses classes = do
   i_ [class_ faClasses, term "data-fa-symbol" faIcon] ""
   svg_ [class_ classes] $ use_ [href_ $ "#" <> faIcon]
+
+
+faIconWithAnchor_ :: Text -> Text -> Text -> Text -> Html ()
+faIconWithAnchor_ faIcon faClasses classes onClickAction = do
+  a_ [href_ "#", onclick_ onClickAction] $ -- You can replace "#" with the actual link
+    faIcon_ faIcon faClasses classes
 
 
 deleteParam :: Text -> Text -> Text

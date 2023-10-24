@@ -320,8 +320,8 @@ generateGetH sess pid = do
     then do
       pure $ AE.object ["error" .= String "You are not a member of this project"]
     else do
-      liftIO
-        $ withPool pool do
+      liftIO $
+        withPool pool do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
           endpoints <- Endpoints.endpointsByProjectId pid
           let endpoint_hashes = V.map (.hash) endpoints

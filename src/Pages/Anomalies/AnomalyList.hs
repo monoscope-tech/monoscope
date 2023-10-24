@@ -162,8 +162,8 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM page loadM endpointM hxRe
       let pageInt = case page of
             Just p -> if limit == Just 51 then 0 else Unsafe.read (toString p)
             Nothing -> 0
-      (project, anomalies) <- liftIO
-        $ withPool
+      (project, anomalies) <- liftIO $
+        withPool
           pool
           do
             project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
@@ -190,8 +190,8 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM page loadM endpointM hxRe
               }
 
       let elementBelowTabs =
-            div_ [class_ "grid grid-cols-5", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"]
-              $ anomalyList paramInput pid currTime anomalies nextFetchUrl
+            div_ [class_ "grid grid-cols-5", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $
+              anomalyList paramInput pid currTime anomalies nextFetchUrl
       let anom = case nextFetchUrl of
             Just url -> do
               mapM_ (renderAnomaly False currTime) anomalies
@@ -305,11 +305,7 @@ anomalyListSlider _ pid eid Nothing = do
   div_ [hxGet_ $ "/p/" <> pid.toText <> "/anomalies?layout=slider" <> maybe "" (\x -> "&endpoint=" <> x.toText) eid, hxSwap_ "outerHTML", hxTrigger_ "load"] do
     div_ [class_ "flex justify-between mt-5 pb-2"] do
       div_ [class_ "flex flex-row"] do
-        img_
-          [ src_ "/assets/svgs/cheveron-down.svg"
-          , class_ "h-4 mr-3 mt-1 w-4"
-          , [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .parent-slider)|]
-          ]
+        faIconWithAnchor_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 mr-3 mt-1 w-4" "toggle .neg-rotate-90 on me then toggle .hidden on (next .parent-slider)"
         span_ [class_ "text-lg text-slate-700"] "Ongoing Anomalies and Monitors"
       div_ [class_ "flex flex-row mt-2"] ""
 anomalyListSlider currTime _ _ (Just anomalies) = do
@@ -329,11 +325,7 @@ anomalyListSlider currTime _ _ (Just anomalies) = do
          |]
     div_ [class_ "flex justify-between mt-5 pb-2"] do
       div_ [class_ "flex flex-row"] do
-        img_
-          [ src_ "/assets/svgs/cheveron-down.svg"
-          , class_ "h-4 mr-3 mt-1 w-4"
-          , [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .parent-slider)|]
-          ]
+        faIconWithAnchor_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 mr-3 mt-1 w-4" "toggle .neg-rotate-90 on me then toggle .hidden on (next .parent-slider)"
         span_ [class_ "text-lg text-slate-700"] "Ongoing Anomalies and Monitors"
       div_ [class_ "flex items-center gap-2 mt-2"] do
         a_
@@ -457,8 +449,8 @@ anomalyDetailsGetH sess pid targetHash hxBoostedM = do
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, anomaly) <- liftIO
-        $ withPool
+      (project, anomaly) <- liftIO $
+        withPool
           pool
           do
             project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
@@ -824,9 +816,9 @@ anomalyAcknowlegeButton :: Projects.ProjectId -> Anomalies.AnomalyId -> Bool -> 
 anomalyAcknowlegeButton pid aid acked = do
   let acknowlegeAnomalyEndpoint = "/p/" <> pid.toText <> "/anomalies/" <> Anomalies.anomalyIdText aid <> if acked then "/unacknowlege" else "/acknowlege"
   a_
-    [ class_
-        $ "inline-block child-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
-        <> (if acked then "bg-green-100 text-green-900" else "")
+    [ class_ $
+        "inline-block child-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
+          <> (if acked then "bg-green-100 text-green-900" else "")
     , term "data-tippy-content" "acknowlege anomaly"
     , hxGet_ acknowlegeAnomalyEndpoint
     , hxSwap_ "outerHTML"
@@ -838,9 +830,9 @@ anomalyArchiveButton :: Projects.ProjectId -> Anomalies.AnomalyId -> Bool -> Htm
 anomalyArchiveButton pid aid archived = do
   let archiveAnomalyEndpoint = "/p/" <> pid.toText <> "/anomalies/" <> Anomalies.anomalyIdText aid <> if archived then "/unarchive" else "/archive"
   a_
-    [ class_
-        $ "inline-block xchild-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
-        <> (if archived then " bg-green-100 text-green-900" else "")
+    [ class_ $
+        "inline-block xchild-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
+          <> (if archived then " bg-green-100 text-green-900" else "")
     , term "data-tippy-content" $ if archived then "unarchive" else "archive"
     , hxGet_ archiveAnomalyEndpoint
     , hxSwap_ "outerHTML"
@@ -853,24 +845,24 @@ reqResSection title isRequest shapesWithFieldsMap =
   section_ [class_ "space-y-3"] do
     div_ [class_ "flex justify-between mt-5"] do
       div_ [class_ "flex flex-row"] do
-        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
-          $ faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 mr-3 mt-1 w-4"
+        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]] $
+          faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 mr-3 mt-1 w-4"
         span_ [class_ "text-lg text-slate-800"] $ toHtml title
 
-    div_ [class_ "bg-white border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"]
-      $ forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap)
-      $ \(index, s) -> do
-        let sh = if index == 1 then title <> "_fields" else title <> "_fields hidden"
-        div_ [class_ sh, id_ $ title <> "_" <> show index] do
-          if isRequest
-            then do
-              subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam s.fieldsMap)
-              subSubSection (title <> " Query Params") (Map.lookup Fields.FCQueryParam s.fieldsMap)
-              subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader s.fieldsMap)
-              subSubSection (title <> " Body") (Map.lookup Fields.FCRequestBody s.fieldsMap)
-            else do
-              subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader s.fieldsMap)
-              subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody s.fieldsMap)
+    div_ [class_ "bg-white border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"] $
+      forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap) $
+        \(index, s) -> do
+          let sh = if index == 1 then title <> "_fields" else title <> "_fields hidden"
+          div_ [class_ sh, id_ $ title <> "_" <> show index] do
+            if isRequest
+              then do
+                subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam s.fieldsMap)
+                subSubSection (title <> " Query Params") (Map.lookup Fields.FCQueryParam s.fieldsMap)
+                subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader s.fieldsMap)
+                subSubSection (title <> " Body") (Map.lookup Fields.FCRequestBody s.fieldsMap)
+              else do
+                subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader s.fieldsMap)
+                subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody s.fieldsMap)
 
 
 -- | subSubSection ..
@@ -881,11 +873,7 @@ subSubSection title fieldsM =
     Just fields -> do
       div_ [class_ "space-y-1 mb-4"] do
         div_ [class_ "flex flex-row items-center"] do
-          img_
-            [ src_ "/assets/svgs/cheveron-down.svg"
-            , class_ "h-6 mr-3 w-6 p-1 cursor-pointer"
-            , [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .subSectionContent)|]
-            ]
+          faIconWithAnchor_ "fa-chevron-down" "fa-light fa-chevron-down" "h-6 mr-3 w-6 p-1 cursor-pointer" "toggle .neg-rotate-90 on me then toggle .hidden on (next .subSectionContent)"
           div_ [class_ "px-4 rounded-xl w-full font-bold text-sm text-slate-900"] $ toHtml title
         div_ [class_ "space-y-1 subSectionContent"] do
           fieldsToNormalized fields & mapM_ \(key, fieldM) -> do
@@ -915,7 +903,7 @@ subSubSection title fieldsM =
                   , term "data-depth" $ show depth
                   ]
                   do
-                    img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-4 mr-3 mt-4 w-4 ", style_ "visibility: hidden"]
+                    faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 mr-3 mt-4 w-4 invisible"
                     div_ [class_ "border-b flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full items-center"] do
                       span_ [class_ "grow text-sm text-slate-800 inline-flex items-center"] $ toHtml displayKey
                       span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ EndpointComponents.fieldTypeToDisplay field.fieldType

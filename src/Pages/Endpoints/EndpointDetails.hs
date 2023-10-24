@@ -83,8 +83,8 @@ fieldDetailsPartialH sess pid fid = do
     then do
       pure $ userNotMemeberPage sess
     else do
-      (fieldsM, formats) <- liftIO
-        $ withPool
+      (fieldsM, formats) <- liftIO $
+        withPool
           pool
           do
             field <- Fields.fieldById fid
@@ -114,21 +114,21 @@ fieldDetailsView field formats = do
         h4_ [class_ "text-base text-slate-800"] $ toHtml $ fromMaybe "[unset]" field.fieldTypeOverride
     div_ do
       h5_ [class_ "text-sm text-slate-800"] "DETECTED FIELD FORMATS AND TYPES"
-      div_ [class_ "space-y-2"]
-        $ formats
-        & mapM_ \formatV -> do
-          div_ [class_ "border-l-slate-200 border-l-2 pl-2 py-2"] do
-            div_ [class_ "flex flex-row gap-9"] do
-              div_ [class_ "space-y-2"] do
-                h6_ [class_ "text-slate-800 text-xs"] "TYPE"
-                h4_ [class_ "text-base text-slate-800"] $ EndpointComponents.fieldTypeToDisplay formatV.fieldType
-              div_ [class_ "mx-5 space-y-2"] do
-                h6_ [class_ "text-slate-800 text-xs"] "FORMAT"
-                h4_ [class_ "text-base text-slate-800"] $ toHtml formatV.fieldFormat
-            h6_ [class_ "text-slate-600 mt-4 text-xs"] "EXAMPLE VALUES"
-            ul_ [class_ "list-disc"] do
-              formatV.examples & mapM_ \ex -> do
-                li_ [class_ "ml-10 text-slate-800 text-sm"] $ toHtml $ aesonValueToText ex
+      div_ [class_ "space-y-2"] $
+        formats
+          & mapM_ \formatV -> do
+            div_ [class_ "border-l-slate-200 border-l-2 pl-2 py-2"] do
+              div_ [class_ "flex flex-row gap-9"] do
+                div_ [class_ "space-y-2"] do
+                  h6_ [class_ "text-slate-800 text-xs"] "TYPE"
+                  h4_ [class_ "text-base text-slate-800"] $ EndpointComponents.fieldTypeToDisplay formatV.fieldType
+                div_ [class_ "mx-5 space-y-2"] do
+                  h6_ [class_ "text-slate-800 text-xs"] "FORMAT"
+                  h4_ [class_ "text-base text-slate-800"] $ toHtml formatV.fieldFormat
+              h6_ [class_ "text-slate-600 mt-4 text-xs"] "EXAMPLE VALUES"
+              ul_ [class_ "list-disc"] do
+                formatV.examples & mapM_ \ex -> do
+                  li_ [class_ "ml-10 text-slate-800 text-sm"] $ toHtml $ aesonValueToText ex
     div_ [class_ "flex flex-row justify-between mt-10 "] do
       div_ [class_ " "] do
         h4_ [class_ "text-sm text-slate-800 mb-2"] "CREATION DATE"
@@ -193,8 +193,8 @@ endpointDetailsH sess pid eid fromDStr toDStr sinceStr' subPageM shapeHashM = do
               let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
               (f, t)
 
-      (endpoint, enpStats, project, shapesWithFieldsMap, fieldsMap, reqLatenciesRolledByStepsLabeled) <- liftIO
-        $ withPool
+      (endpoint, enpStats, project, shapesWithFieldsMap, fieldsMap, reqLatenciesRolledByStepsLabeled) <- liftIO $
+        withPool
           pool
           do
             -- Should swap names betw enp and endpoint endpoint could be endpointStats
@@ -211,8 +211,8 @@ endpointDetailsH sess pid eid fromDStr toDStr sinceStr' subPageM shapeHashM = do
             reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledBySteps maxV steps' pid endpoint.urlPath endpoint.method
             pure (endpoint, enpStats, project, Vector.toList shapesWithFieldsMap, fieldsMap, Vector.toList reqLatenciesRolledBySteps)
       let subPage = fromMaybe "overview" subPageM
-      shapesList <- liftIO
-        $ withPool pool do
+      shapesList <- liftIO $
+        withPool pool do
           if subPage == "shapes" then Shapes.shapesByEndpointHash pid endpoint.hash else pure []
 
       let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
@@ -249,9 +249,9 @@ endpointDetails paramInput currTime endpoint endpointStats shapesWithFieldsMap f
             & mapM_ \(title, slug) ->
               a_
                 [ href_ $ currentURLSubPage <> "&subpage=" <> slug
-                , class_
-                    $ "cursor-pointer px-3 py-2 font-medium text-sm rounded-md "
-                    <> if slug == paramInput.subPage then " bg-indigo-100 text-indigo-700 " else " text-slate-500 hover:text-gray-700"
+                , class_ $
+                    "cursor-pointer px-3 py-2 font-medium text-sm rounded-md "
+                      <> if slug == paramInput.subPage then " bg-indigo-100 text-indigo-700 " else " text-slate-500 hover:text-gray-700"
                 ]
                 $ toHtml title
 
@@ -365,19 +365,11 @@ apiDocsSubPage shapesWithFieldsMap shapeHashM = do
                   span_ [class_ "ml-2 text-sm text-slate-600"] $ toHtml s.sHash
 
       div_ [class_ "flex items-center"] do
-        img_
-          [ src_ "/assets/svgs/leftarrow.svg"
-          , class_ " m-2 cursor-pointer"
-          , [__|on click slideReqRes('prev') |]
-          ]
+        faIconWithAnchor_ "fa-arrow-left" "fa-light fa-arrow-left" "h-6 w-6 m-2 cursor-pointer" "slideReqRes('prev')"
         let l = show targetIndex <> "/" <> show (length shapesWithFieldsMap)
         let id = "current_indicator"
         span_ [src_ " mx-4", id_ id] l
-        img_
-          [ src_ "/assets/svgs/rightarrow.svg"
-          , class_ "m-2 cursor-pointer"
-          , [__|on click slideReqRes('next') |]
-          ]
+        faIconWithAnchor_ "fa-arrow-right" "fa-light fa-arrow-right" "h-6 w-6 m-2 cursor-pointer" "slideReqRes('next')"
     reqResSection "Request" True shapesWithFieldsMap targetIndex
     reqResSection "Response" False shapesWithFieldsMap targetIndex
   script_
@@ -453,15 +445,11 @@ apiOverviewSubPage paramInput currTime endpoint fieldsM reqLatenciesRolledByStep
 endpointStats :: Endpoints.EndpointRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p99, max} reqLatenciesRolledByStepsJ dateRange@(fromD, toD) =
   section_ [class_ "space-y-3"] do
-    div_ [class_ "flex justify-between mt-5"]
-      $ div_
+    div_ [class_ "flex justify-between mt-5"] $
+      div_
         [class_ "flex flex-row"]
         do
-          img_
-            [ src_ "/assets/svgs/cheveron-down.svg"
-            , class_ "h-4 mr-3 mt-1 w-4 cursor-pointer"
-            , [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .endpointStatsSubSection)|]
-            ]
+          faIconWithAnchor_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 mr-3 mt-1 w-4 cursor-pointer" "toggle .neg-rotate-90 on me then toggle .hidden on (next .endpointStatsSubSection)"
           span_ [class_ "text-lg text-slate-800"] "Endpoint Stats"
     div_ [class_ "space-y-5 endpointStatsSubSection"] do
       div_ [class_ "grid grid-cols-3  gap-5"] do
@@ -500,8 +488,8 @@ endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p
               Charts.lazy [C.QByE $ [C.QBPId enpStats.projectId, C.QBEndpointHash enpStats.endpointHash] ++ catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBEndpoint, C.SlotsE 120, C.ShowLegendE]
 
       div_ [class_ "col-span-3 bg-white   border border-gray-100  rounded-xl py-3 px-6"] do
-        div_ [class_ "p-4"]
-          $ select_
+        div_ [class_ "p-4"] $
+          select_
             []
             do
               option_ "Request Latency Distribution"
@@ -545,24 +533,24 @@ reqResSection title isRequest shapesWithFieldsMap targetIndex =
   section_ [class_ "space-y-3"] do
     div_ [class_ "flex justify-between mt-5"] do
       div_ [class_ "flex flex-row"] do
-        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
-          $ faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 mr-3 mt-1 w-4"
+        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]] $
+          faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 mr-3 mt-1 w-4"
         span_ [class_ "text-lg text-slate-800"] $ toHtml title
 
-    div_ [class_ "bg-white border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"]
-      $ forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap)
-      $ \(index, s) -> do
-        let sh = if index == targetIndex then title <> "_fields" else title <> "_fields hidden"
-        div_ [class_ sh, id_ $ title <> "_" <> show index] do
-          if isRequest
-            then do
-              subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam s.fieldsMap)
-              subSubSection (title <> " Query Params") (Map.lookup Fields.FCQueryParam s.fieldsMap)
-              subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader s.fieldsMap)
-              subSubSection (title <> " Body") (Map.lookup Fields.FCRequestBody s.fieldsMap)
-            else do
-              subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader s.fieldsMap)
-              subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody s.fieldsMap)
+    div_ [class_ "bg-white border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"] $
+      forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap) $
+        \(index, s) -> do
+          let sh = if index == targetIndex then title <> "_fields" else title <> "_fields hidden"
+          div_ [class_ sh, id_ $ title <> "_" <> show index] do
+            if isRequest
+              then do
+                subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam s.fieldsMap)
+                subSubSection (title <> " Query Params") (Map.lookup Fields.FCQueryParam s.fieldsMap)
+                subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader s.fieldsMap)
+                subSubSection (title <> " Body") (Map.lookup Fields.FCRequestBody s.fieldsMap)
+              else do
+                subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader s.fieldsMap)
+                subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody s.fieldsMap)
 
 
 -- | subSubSection ..
@@ -573,11 +561,7 @@ subSubSection title fieldsM =
     Just fields -> do
       div_ [class_ "space-y-1 mb-4"] do
         div_ [class_ "flex flex-row items-center"] do
-          img_
-            [ src_ "/assets/svgs/cheveron-down.svg"
-            , class_ "h-6 mr-3 w-6 p-1 cursor-pointer"
-            , [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .subSectionContent)|]
-            ]
+          faIconWithAnchor_ "fa-chevron-down" "fa-light fa-chevron-down" "h-6 mr-3 w-6 p-1 cursor-pointer" "toggle .neg-rotate-90 on me then toggle .hidden on (next .subSectionContent)"
           div_ [class_ "bg-gray-100 px-10 rounded-xl w-full p-4 text-sm text-slate-900 "] $ toHtml title
         div_ [class_ "space-y-1 subSectionContent"] do
           -- pTraceShowM $ fields
@@ -614,13 +598,13 @@ subSubSection title fieldsM =
                   , term "data-depth" $ show depth
                   ]
                   do
-                    img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-4 mr-3 mt-4 w-4 ", style_ "visibility: hidden"]
+                    faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 mr-3 mt-4 w-4 invisible"
                     div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full items-center"] do
                       input_ [type_ "checkbox", class_ " mr-12"]
                       span_ [class_ "grow text-sm text-slate-800 inline-flex items-center"] $ toHtml displayKey
                       span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ EndpointComponents.fieldTypeToDisplay field.fieldType
                       faIcon_ "fa-octagon-exclamation" "fa-thin fa-octagon-exclamation" " mr-8 ml-4 h-5 text-red-400"
-                      img_ [src_ "/assets/svgs/dots-vertical.svg", class_ "mx-5 h-5"]
+                      faIcon_ "fa-ellipsis-vertical" "fa-light fa-ellipsis-vertical" "mx-5 h-5"
 
 
 -- | fieldsToNormalized, gets a list of fields and returns a list of tuples with the keypath, and the field, sorted by the key path

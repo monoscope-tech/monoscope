@@ -365,12 +365,12 @@ navbar currUser = do
         ]
         do
           img_ [class_ "inline-block w-9 h-9 rounded-lg bg-gray-300", src_ currUser.displayImageUrl]
-          span_ [class_ "inline-block"]
-            $ toHtml
-            $ if currUser.firstName /= "" || currUser.lastName /= ""
-              then currUser.firstName <> " " <> currUser.lastName
-              else CI.original currUser.email
-          img_ [class_ "w-4 h-4 inline-block", src_ "/assets/svgs/down_caret.svg"]
+          span_ [class_ "inline-block"] $
+            toHtml $
+              if currUser.firstName /= "" || currUser.lastName /= ""
+                then currUser.firstName <> " " <> currUser.lastName
+                else CI.original currUser.email
+          faIcon_ "fa-caret-down" "fa-sharp fa-solid fa-caret-down" "w-4 h-4 inline-block"
 
       -- logout dropdown
       div_
