@@ -4,12 +4,15 @@
 module Pages.Endpoints.EndpointDetails (endpointDetailsH, fieldDetailsPartialH, fieldsToNormalized, endpointDetailsWithHashH) where
 
 import Config
+import Data.Aeson
 import Data.Aeson qualified as AE
+import Data.Aeson.Key qualified as AEKey
 import Data.Aeson.Text (encodeToLazyText)
 import Data.Default (def)
+
 import Data.List (elemIndex)
 import Data.Map qualified as Map
-import Data.Text as T (isSuffixOf, splitOn, toLower)
+import Data.Text as T (isSuffixOf, splitOn, takeWhile, toLower)
 import Data.Time (UTCTime, ZonedTime, addUTCTime, defaultTimeLocale, formatTime, getCurrentTime, secondsToNominalDiffTime, utc, utcToZonedTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.UUID qualified as UUID
@@ -266,7 +269,7 @@ endpointDetails paramInput currTime endpoint endpointStats shapesWithFieldsMap f
                 mIcon_ "whitedown" "text-white h-2 w-2 m-1"
       case paramInput.subPage of
         "api_docs" -> apiDocsSubPage shapesWithFieldsMap shapeHashM
-        "shapes" -> shapesSubPage shapesList paramInput.currentURL
+        "shapes" -> shapesSubPage endpoint.projectId shapesList shapesWithFieldsMap paramInput.currentURL
         _ -> apiOverviewSubPage paramInput currTime endpointStats fieldsM reqLatenciesRolledByStepsJ dateRange
 
     aside_
@@ -292,29 +295,31 @@ endpointDetails paramInput currTime endpoint endpointStats shapesWithFieldsMap f
         |]
 
 
-shapesSubPage :: Vector Shapes.Shape -> Text -> Html ()
-shapesSubPage shapesList currentURL = do
+shapesSubPage :: Projects.ProjectId -> Vector Shapes.Shape -> [Shapes.ShapeWithFields] -> Text -> Html ()
+shapesSubPage pid shapesList shapesWithFields currentURL = do
   div_ [class_ "space-y-8", id_ "subpage"] do
     div_ [class_ "flex flex-col justify-between mt-2 shadow mx-16 rounded-xl"] do
       div_ [class_ "w-full bg-gray-100 px-8 py-4"] do
         h3_ [class_ "font-semibold text-lg"] "Endpoint Shapes"
       div_ [class_ "flex flex-col items-center gap-4"] do
-        forM_ shapesList \shape -> do
+        forM_ shapesWithFields \shape -> do
           div_ [class_ "flex w-full p-8 items-center gap-4  hover:bg-gray-50"] do
-            a_ [href_ $ currentURL <> "&subpage=api_docs" <> "&shape=" <> shape.hash, class_ "w-full items-center gap-4 flex text-slate-700"] do
-              let statuscls = getStatusColor shape.statusCode
-              span_ [class_ $ "px-3 py-1 " <> statuscls] $ show shape.statusCode
-              span_ [class_ "text-sm text-gray-500"] $ toHtml shape.hash
+            a_ [href_ $ currentURL <> "&subpage=api_docs" <> "&shape=" <> shape.sHash, class_ "w-full items-center gap-4 flex text-slate-700"] do
+              let statuscls = getStatusColor shape.status
+              span_ [class_ $ "px-3 py-1 " <> statuscls] $ show shape.status
+              span_ [class_ "text-sm text-gray-500"] $ toHtml shape.sHash
+              let shapeJson =
+                    AE.object
+                      [ "request_headers" .= buildLeafJson (fromMaybe [] (Map.lookup Fields.FCRequestHeader shape.fieldsMap))
+                      , "response_headers" .= buildLeafJson (fromMaybe [] (Map.lookup Fields.FCResponseHeader shape.fieldsMap))
+                      , "query_params" .= buildLeafJson (fromMaybe [] (Map.lookup Fields.FCQueryParam shape.fieldsMap))
+                      , "path_params" .= buildLeafJson (fromMaybe [] (Map.lookup Fields.FCPathParam shape.fieldsMap))
+                      ]
               div_ [class_ "text-sm text-gray-500 w-3/2 flex flex-col gap-1"] do
-                p_ [class_ "space-x-2"] do
-                  span_ [class_ ""] "Request Body:"
-                  span_ [] $ toHtml $ mconcat (intersperse " • " $ V.toList shape.requestBodyKeypaths)
-                p_ [class_ "space-x-2"] do
-                  span_ [class_ ""] "Response Body:"
-                  span_ [] $ toHtml $ mconcat (intersperse " • " $ V.toList shape.responseBodyKeypaths)
+                show $ encode shapeJson
             div_ [] do
-              let chartQuery = Just $ Charts.QBShapeHash shape.hash
-              div_ [class_ "flex items-center justify-center "] $ div_ [class_ "w-60 h-16 px-3"] $ Charts.throughput shape.projectId shape.hash chartQuery Nothing 14 Nothing False (Nothing, Nothing) Nothing
+              let chartQuery = Just $ Charts.QBShapeHash shape.sHash
+              div_ [class_ "flex items-center justify-center "] $ div_ [class_ "w-60 h-16 px-3"] $ Charts.throughput pid shape.sHash chartQuery Nothing 14 Nothing False (Nothing, Nothing) Nothing
 
 
 apiDocsSubPage :: [Shapes.ShapeWithFields] -> Maybe Text -> Html ()
@@ -628,3 +633,11 @@ subSubSection title fieldsM =
 --           & breakOnAll "."
 --       )
 --       & (++ [(T.dropWhile (== '.') $ field.keyPath, Just field)])
+
+buildLeafJson :: [Fields.Field] -> AE.Value
+buildLeafJson = foldr (\f acc -> mergeObjects acc (object [AEKey.fromText f.key .= String "String"])) (AE.object [])
+
+
+mergeObjects :: Value -> Value -> Value
+mergeObjects (Object obj1) (Object obj2) = Object (obj1 <> obj2)
+mergeObjects _ _ = object []
