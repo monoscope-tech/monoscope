@@ -5,12 +5,12 @@
 
 packages:
 - completed:
-    hackage: relude-1.2.0.0@sha256:e47f363d57e5551542cc567b68f375001f850732ebe9c226351c26e7af56f797,11937
+    hackage: relude-1.2.1.0@sha256:be5e508cfce82d26d23d23ebe98a485b79293cc033d7b9ae4778614562958ea3,11979
     pantry-tree:
-      sha256: 12a9754897804bd1834bddc36f2800cb453cfec9903ac8be83f4621ac4a26075
+      sha256: 916edac8fb7a5f2cc2f2689e9c2b4862530749f4967b8b976f8932f87f73f406
       size: 4286
   original:
-    hackage: relude-1.2.0.0
+    hackage: relude-1.2.1.0
 - completed:
     hackage: cache-0.1.3.0@sha256:b87d21d21946ad69ea99be03f40f7a9b8d2250d5047328fe7bff33373f4e8546,1717
     pantry-tree:
@@ -288,7 +288,7 @@ packages:
     subdir: .
 snapshots:
 - completed:
-    sha256: ed939332c49fe1012b1dfb841f55df60603452efcbf3e36c3ea62bb8c1c427ac
-    size: 669536
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/nightly/2023/9/27.yaml
-  original: nightly-2023-09-27
+    sha256: 5511cf5b272ab1212409f41fd4d622f13371bf85c2075cff3481d9cfb197c8c9
+    size: 695331
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/nightly/2023/10/19.yaml
+  original: nightly-2023-10-19

@@ -372,7 +372,7 @@ navbar currUser = do
             $ if currUser.firstName /= "" || currUser.lastName /= ""
               then currUser.firstName <> " " <> currUser.lastName
               else CI.original currUser.email
-          img_ [class_ "w-4 h-4 inline-block", src_ "/assets/svgs/down_caret.svg"]
+          faIcon_ "fa-caret-down" "fa-sharp fa-solid fa-caret-down" "w-4 h-4 inline-block"
 
       -- logout dropdown
       div_
