@@ -51,8 +51,8 @@ manageMembersPostH sess pid form = do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"errorToast": ["Only project members can update members list"]}|]
       pure $ addHeader hxTriggerData $ h3_ [] "Only members of this project can perform this action"
     else do
-      (project, projMembers) <- liftIO $
-        withPool
+      (project, projMembers) <- liftIO
+        $ withPool
           pool
           do
             project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
@@ -83,8 +83,8 @@ manageMembersPostH sess pid form = do
               & map (\a -> a ^. #id) -- We should not allow deleting the current user from the project
 
       -- Create new users and send notifications
-      newProjectMembers <- liftIO $
-        forM uAndPNew \(email, permission) -> do
+      newProjectMembers <- liftIO
+        $ forM uAndPNew \(email, permission) -> do
           userId' <- withPool pool do
             userIdM' <- Users.userIdByEmail email
             case userIdM' of
@@ -95,9 +95,9 @@ manageMembersPostH sess pid form = do
                   Just idX -> pure idX
               Just idX -> pure idX
 
-          when (userId' /= currUserId) $
-            void $
-              withResource pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId' pid email projectTitle -- invite the users to the project (Usually as an email)
+          when (userId' /= currUserId)
+            $ void
+            $ withResource pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId' pid email projectTitle -- invite the users to the project (Usually as an email)
           pure (email, permission, userId')
 
       let projectMembers =
@@ -108,18 +108,18 @@ manageMembersPostH sess pid form = do
 
       -- Update existing contacts with updated permissions
       -- TODO: Send a notification via background job, about the users permission having been updated.
-      unless (null uAndPOldAndChanged) $
-        void $
-          liftIO $
-            withPool pool $
-              ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
+      unless (null uAndPOldAndChanged)
+        $ void
+        $ liftIO
+        $ withPool pool
+        $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
       -- soft delete project members with id
-      unless (null deletedUAndP) $
-        void $
-          liftIO $
-            withPool pool $
-              ProjectMembers.softDeleteProjectMembers deletedUAndP
+      unless (null deletedUAndP)
+        $ void
+        $ liftIO
+        $ withPool pool
+        $ ProjectMembers.softDeleteProjectMembers deletedUAndP
 
       projMembersLatest <- liftIO $ withPool pool $ ProjectMembers.selectActiveProjectMembers pid
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Updated Members List Successfully"]}|]
@@ -134,8 +134,8 @@ manageMembersGetH sess pid = do
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, projMembers) <- liftIO $
-        withPool
+      (project, projMembers) <- liftIO
+        $ withPool
           pool'
           do
             project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
