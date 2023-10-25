@@ -305,11 +305,7 @@ anomalyListSlider _ pid eid Nothing = do
   div_ [hxGet_ $ "/p/" <> pid.toText <> "/anomalies?layout=slider" <> maybe "" (\x -> "&endpoint=" <> x.toText) eid, hxSwap_ "outerHTML", hxTrigger_ "load"] do
     div_ [class_ "flex justify-between mt-5 pb-2"] do
       div_ [class_ "flex flex-row"] do
-        img_
-          [ src_ "/assets/svgs/cheveron-down.svg"
-          , class_ "h-4 mr-3 mt-1 w-4"
-          , [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .parent-slider)|]
-          ]
+        faIconWithAnchor_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 mr-3 mt-1 w-4" "toggle .neg-rotate-90 on me then toggle .hidden on (next .parent-slider)"
         span_ [class_ "text-lg text-slate-700"] "Ongoing Anomalies and Monitors"
       div_ [class_ "flex flex-row mt-2"] ""
 anomalyListSlider currTime _ _ (Just anomalies) = do
@@ -329,11 +325,7 @@ anomalyListSlider currTime _ _ (Just anomalies) = do
          |]
     div_ [class_ "flex justify-between mt-5 pb-2"] do
       div_ [class_ "flex flex-row"] do
-        img_
-          [ src_ "/assets/svgs/cheveron-down.svg"
-          , class_ "h-4 mr-3 mt-1 w-4"
-          , [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .parent-slider)|]
-          ]
+        faIconWithAnchor_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 mr-3 mt-1 w-4" "toggle .neg-rotate-90 on me then toggle .hidden on (next .parent-slider)"
         span_ [class_ "text-lg text-slate-700"] "Ongoing Anomalies and Monitors"
       div_ [class_ "flex items-center gap-2 mt-2"] do
         a_
@@ -881,11 +873,7 @@ subSubSection title fieldsM =
     Just fields -> do
       div_ [class_ "space-y-1 mb-4"] do
         div_ [class_ "flex flex-row items-center"] do
-          img_
-            [ src_ "/assets/svgs/cheveron-down.svg"
-            , class_ "h-6 mr-3 w-6 p-1 cursor-pointer"
-            , [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .subSectionContent)|]
-            ]
+          faIconWithAnchor_ "fa-chevron-down" "fa-light fa-chevron-down" "h-6 mr-3 w-6 p-1 cursor-pointer" "toggle .neg-rotate-90 on me then toggle .hidden on (next .subSectionContent)"
           div_ [class_ "px-4 rounded-xl w-full font-bold text-sm text-slate-900"] $ toHtml title
         div_ [class_ "space-y-1 subSectionContent"] do
           fieldsToNormalized fields & mapM_ \(key, fieldM) -> do
@@ -915,7 +903,7 @@ subSubSection title fieldsM =
                   , term "data-depth" $ show depth
                   ]
                   do
-                    img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-4 mr-3 mt-4 w-4 ", style_ "visibility: hidden"]
+                    faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 mr-3 mt-4 w-4 invisible"
                     div_ [class_ "border-b flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full items-center"] do
                       span_ [class_ "grow text-sm text-slate-800 inline-flex items-center"] $ toHtml displayKey
                       span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ EndpointComponents.fieldTypeToDisplay field.fieldType

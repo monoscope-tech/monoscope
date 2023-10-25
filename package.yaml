@@ -26,6 +26,8 @@ ghc-options:
   - -Wno-unused-top-binds
   - -Wno-unused-matches
   - -Wno-missing-kind-signatures
+  - -fwrite-ide-info
+  - -hiedir=.hie
   # - -fllvm
 
 default-extensions:
@@ -165,7 +167,7 @@ executables:
       - -threaded
       - -rtsopts
       - -with-rtsopts=-N
-      # - -fwrite-ide-info
+      - -fwrite-ide-info
       - -hiedir=.hie
       - -O2
     # - -fPIC

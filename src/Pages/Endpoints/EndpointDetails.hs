@@ -365,19 +365,11 @@ apiDocsSubPage shapesWithFieldsMap shapeHashM = do
                   span_ [class_ "ml-2 text-sm text-slate-600"] $ toHtml s.sHash
 
       div_ [class_ "flex items-center"] do
-        img_
-          [ src_ "/assets/svgs/leftarrow.svg"
-          , class_ " m-2 cursor-pointer"
-          , [__|on click slideReqRes('prev') |]
-          ]
+        faIconWithAnchor_ "fa-arrow-left" "fa-light fa-arrow-left" "h-6 w-6 m-2 cursor-pointer" "slideReqRes('prev')"
         let l = show targetIndex <> "/" <> show (length shapesWithFieldsMap)
         let id = "current_indicator"
         span_ [src_ " mx-4", id_ id] l
-        img_
-          [ src_ "/assets/svgs/rightarrow.svg"
-          , class_ "m-2 cursor-pointer"
-          , [__|on click slideReqRes('next') |]
-          ]
+        faIconWithAnchor_ "fa-arrow-right" "fa-light fa-arrow-right" "h-6 w-6 m-2 cursor-pointer" "slideReqRes('next')"
     reqResSection "Request" True shapesWithFieldsMap targetIndex
     reqResSection "Response" False shapesWithFieldsMap targetIndex
   script_
@@ -457,11 +449,7 @@ endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p
       div_
         [class_ "flex flex-row"]
         do
-          img_
-            [ src_ "/assets/svgs/cheveron-down.svg"
-            , class_ "h-4 mr-3 mt-1 w-4 cursor-pointer"
-            , [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .endpointStatsSubSection)|]
-            ]
+          faIconWithAnchor_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 mr-3 mt-1 w-4 cursor-pointer" "toggle .neg-rotate-90 on me then toggle .hidden on (next .endpointStatsSubSection)"
           span_ [class_ "text-lg text-slate-800"] "Endpoint Stats"
     div_ [class_ "space-y-5 endpointStatsSubSection"] do
       div_ [class_ "grid grid-cols-3  gap-5"] do
@@ -573,11 +561,7 @@ subSubSection title fieldsM =
     Just fields -> do
       div_ [class_ "space-y-1 mb-4"] do
         div_ [class_ "flex flex-row items-center"] do
-          img_
-            [ src_ "/assets/svgs/cheveron-down.svg"
-            , class_ "h-6 mr-3 w-6 p-1 cursor-pointer"
-            , [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .subSectionContent)|]
-            ]
+          faIconWithAnchor_ "fa-chevron-down" "fa-light fa-chevron-down" "h-6 mr-3 w-6 p-1 cursor-pointer" "toggle .neg-rotate-90 on me then toggle .hidden on (next .subSectionContent)"
           div_ [class_ "bg-gray-100 px-10 rounded-xl w-full p-4 text-sm text-slate-900 "] $ toHtml title
         div_ [class_ "space-y-1 subSectionContent"] do
           -- pTraceShowM $ fields
@@ -614,13 +598,13 @@ subSubSection title fieldsM =
                   , term "data-depth" $ show depth
                   ]
                   do
-                    img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-4 mr-3 mt-4 w-4 ", style_ "visibility: hidden"]
+                    faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 mr-3 mt-4 w-4 invisible"
                     div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full items-center"] do
                       input_ [type_ "checkbox", class_ " mr-12"]
                       span_ [class_ "grow text-sm text-slate-800 inline-flex items-center"] $ toHtml displayKey
                       span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ EndpointComponents.fieldTypeToDisplay field.fieldType
                       faIcon_ "fa-octagon-exclamation" "fa-thin fa-octagon-exclamation" " mr-8 ml-4 h-5 text-red-400"
-                      img_ [src_ "/assets/svgs/dots-vertical.svg", class_ "mx-5 h-5"]
+                      faIcon_ "fa-ellipsis-vertical" "fa-light fa-ellipsis-vertical" "mx-5 h-5"
 
 
 -- | fieldsToNormalized, gets a list of fields and returns a list of tuples with the keypath, and the field, sorted by the key path

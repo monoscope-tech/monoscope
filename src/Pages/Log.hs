@@ -661,12 +661,13 @@ jsonTreeAuxillaryCode pid = do
       return new_cols
     }
     var isFieldInSummary = field => params().cols.split(",").includes(field);
+    
     var getQueryFromEditor = () => {
      const toggler = document.getElementById("toggleQueryEditor")
      if(toggler.checked) {
-       return window.queryBuilderValue
+          return window.editor.getValue();
       }else {
-       return window.editor.getValue();
+          return window.queryBuilderValue
       }
     }
 
