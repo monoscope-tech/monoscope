@@ -131,7 +131,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
     body_ [class_ "text-gray-900 h-full w-full bg-white"] do
       div_
         [ style_ "z-index:99999"
-        , class_ "fixed pt-24 only_big_screen_modal justify-center z-50 w-full p-4 bg-gray-50 overflow-y-auto inset-0 h-full max-h-full"
+        , class_ "fixed pt-24 sm:hidden justify-center z-50 w-full p-4 bg-gray-50 overflow-y-auto inset-0 h-full max-h-full"
         , tabindex_ "-1"
         ]
         do
@@ -193,14 +193,6 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
               return false;
             }
           |]
-      style_
-        [text|
-         @media (min-width: 640px) {
-             .only_big_screen_modal {
-                 display: none;
-             }
-          }
-      |]
 
 
 projectsDropDown :: Projects.Project -> Vector.Vector Projects.Project -> Html ()
