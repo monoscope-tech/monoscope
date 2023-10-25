@@ -139,4 +139,4 @@ fieldsByEndpointHashes pid hashes = query Select q (pid, hashes)
 autoCompleteFields :: Projects.ProjectId -> FieldCategoryEnum -> Text -> DBT IO (Vector Text)
 autoCompleteFields pid fieldCategory pathPrefix = query Select q (pid, fieldCategory, pathPrefix <> "%")
   where
-    q = [sql|SELECT key_path from apis.fields WHERE project_id = ? AND field_category = ? AND key_path LIKE ?|]
+    q = [sql|SELECT DISTINCT key_path from apis.fields WHERE project_id = ? AND field_category = ? AND key_path <> ''  AND key_path LIKE ?|]

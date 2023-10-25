@@ -1,4 +1,4 @@
-import { LitElement, html, css } from 'https://cdn.jsdelivr.net/gh/lit/dist@3/core/lit-core.min.js';
+import { LitElement, html, ref, createRef } from 'https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js';
 export class MyElement extends LitElement {
 
   static properties = {
@@ -123,8 +123,8 @@ customElements.define('filter-element', MyElement);
 
 class Filter extends LitElement {
   fields = [
-    "method", "status_code", "url_path", "duration_ns", "request_body", "request_headers", "response_body", "response_headers",
-    "host", "raw_url", "referer", "query_params", "path_params"
+    "method", "status_code", "url_path", "duration_ns", "request_body", "request_header", "response_body", "response_header",
+    "host", "raw_url", "referer", "query_param", "path_param"
   ]
 
   string_operators = ["=", "!="]
@@ -149,12 +149,15 @@ class Filter extends LitElement {
   static properties = {
     matches: {},
     inputVal: {},
+    fetchAutocomplete: {},
   }
 
   constructor() {
     super()
     this.inputVal = ''
+    this.fetchAutocomplete = false
     this.matches = this.fields
+    this.projectId = window.location.pathname.split("/")[2]
     const builderContainer = document.getElementById("queryBuilder")
     if (builderContainer) {
       const url_paths = JSON.parse(builderContainer.dataset.url_paths)
@@ -163,12 +166,18 @@ class Filter extends LitElement {
     }
 
   }
+  inputRef = createRef();
 
   render() {
     return html`
         <div class="relative  text-gray-500">
-         <input type="text" autofocus class="border px-2 py-1 w-max rounded-xl focus:ring-1"
-              @input=${(event) => { this.handleChange(event.target.value) }} 
+         <input type="text" autofocus
+               ${ref(this.inputRef)}
+               class="border px-2 py-1 w-max rounded-xl focus:ring-1"
+              @input=${(event) => {
+        this.handleChange(event.target.value)
+        this.adjustInputWidthAndFocus()
+      }} 
               .value = ${this.inputVal}
              @keydown=${(e) => {
         if (e.key === "Enter") {
@@ -183,10 +192,12 @@ class Filter extends LitElement {
                    <button type="button"  class="match_buttons px-4 py-1 text-base text-left hover:bg-gray-100" 
                    @click=${(e) => {
             this.autoCompleteInput(match)
+            this.adjustInputWidthAndFocus()
           }}
                     @keydown=${(e) => {
             if (e.key === "Enter") {
               this.autoCompleteInput(match)
+              this.adjustInputWidthAndFocus()
             }
             if (e.key === 'Tab') {
               e.preventDefault();
@@ -212,6 +223,13 @@ class Filter extends LitElement {
 
   createRenderRoot() {
     return this
+  }
+
+  adjustInputWidthAndFocus() {
+    const input = this.inputRef.value
+    const inputWidth = Math.max((this.inputVal.length + 1) * 7, 200)
+    this.inputRef.value.style.width = `${inputWidth}px`
+    this.inputRef.value.focus()
   }
 
   autoCompleteInput(val) {
@@ -266,6 +284,22 @@ class Filter extends LitElement {
 
   }
 
+  needsAutoComplete(filter) {
+    const rootEnd = filter.indexOf(".")
+    if (rootEnd == -1) return { result: false, field: null, prefix: null }
+
+    const field = filter.substring(0, rootEnd)
+    const prefix = filter.substring(rootEnd + 1)
+    if (["request_body", "response_body", "request_header", "response_header", "query_param", "path_param"].includes(field)) {
+      return {
+        result: true,
+        field: field,
+        prefix: prefix
+      }
+    }
+    if (rootEnd == -1) return { result: false, field: null, prefix: null }
+  }
+
   handleChange(val) {
     this.inputVal = val.trim()
     if (!this.inputVal) {
@@ -276,10 +310,17 @@ class Filter extends LitElement {
     let auto_complete = []
     filters.forEach(filter => {
       let target = filter
-
       let target_info = this.filterAutoComplete[target]
       if (!target_info) {
-        target_info = { operators: this.string_operators, values: [] }
+        const key = this.needsAutoComplete(this.inputVal)
+        if (key.result) {
+          fetch(`/p/${this.projectId}/query_builder/autocomplete?category=${key.field}&prefix=.${key.prefix}`).then(res => res.json()).then(data => {
+            this.matches = data.map(d => key.field + d)
+          })
+          return
+        } else {
+          target_info = { operators: this.string_operators, values: [] }
+        }
       }
 
       if (filter == this.inputVal.trim() || filter.length > this.inputVal.length) {
