@@ -95,7 +95,6 @@ processMessages :: LogAction IO String -> Config.EnvConfig -> Pool Connection ->
 processMessages logger' env conn' msgs projectCache = do
   let msgs' =
         msgs <&> \msg -> do
-          _ <- pTraceShowM msg.message
           let rmMsg = msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64
           let jsonByteStr = fromMaybe "{}" rmMsg
           recMsg <- eitherStrToText $ eitherDecode (fromStrict jsonByteStr)
