@@ -166,6 +166,7 @@ class Filter extends LitElement {
     }
 
   }
+
   inputRef = createRef();
 
   render() {
