@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -Wno-partial-fields #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 {-# HLINT ignore "Use newtype instead of data" #-}
 {-# OPTIONS_GHC -Wno-unused-do-bind #-}
@@ -38,15 +39,13 @@ import Servant (Headers, addHeader)
 
 import Servant.Htmx (HXTrigger)
 
-import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getZonedTime)
+import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime))
 import Data.Vector qualified as V
 import Models.Apis.Reports qualified as Reports
 
 import Models.Apis.Anomalies qualified as Anomalies
-import Models.Apis.Fields qualified as Field
 
 import Data.Text qualified as T
-import Data.UUID.V4 qualified as UUIDV4
 import Lucid.Svg (color_)
 import Models.Apis.RequestDumps (EndpointPerf, RequestForReport (endpointHash))
 import Pages.NonMember
@@ -239,7 +238,6 @@ singleReportPage pid report =
                                     small_ "examples: "
                                     small_ $ toHtml $ T.intercalate ", " formatExamples
                               small_ [] $ show eventsCount <> " requests"
-                          _ -> pass
 
                   div_ [] do
                     div_ [class_ "pb-3 border-b flex justify-between"] do

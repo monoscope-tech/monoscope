@@ -267,7 +267,11 @@ spec = do
               , tags = Nothing
               }
       let projectCache = Projects.ProjectCache{hosts = [], endpointHashes = ["abc"], shapeHashes = [], redactFieldslist = []}
-      let Right (_query, _params, _) = RequestMessages.requestMsgToDumpAndEndpoint projectCache requestMsg timestamp recId
+      let result = RequestMessages.requestMsgToDumpAndEndpoint projectCache requestMsg timestamp recId
+      case result of
+        Left err -> error err
+        Right (query, params, _) -> pass
+
       -- traceShowM "In request Message Endpoint test ===BEGIN==="
       -- traceShowM query
       -- traceShowM "===END==="

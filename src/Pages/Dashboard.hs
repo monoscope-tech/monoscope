@@ -30,7 +30,6 @@ import Pages.BodyWrapper
 import Pages.Charts.Charts qualified as C
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (statBox)
-import Pages.NonMember
 import Relude hiding (max, min)
 import Servant (
   Union,
@@ -39,7 +38,7 @@ import Servant (
  )
 import System.Clock
 import Text.Interpolation.Nyan
-import Utils (GetOrRedirect, deleteParam, faIcon_, mIcon_, redirect, userIsProjectMember)
+import Utils (GetOrRedirect, deleteParam, faIcon_, mIcon_, redirect)
 import Witch (from)
 
 

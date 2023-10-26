@@ -20,13 +20,13 @@ import Data.Default (def)
 import Data.Map qualified as Map
 import Data.Text (replace)
 import Data.Text qualified as T
-import Data.Time (UTCTime, ZonedTime, defaultTimeLocale, formatTime, getCurrentTime, getTimeZone, zonedTimeToUTC)
+import Data.Time (UTCTime, ZonedTime, defaultTimeLocale, formatTime, getCurrentTime, zonedTimeToUTC)
 import Data.Tuple.Extra (fst3)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute, withPool)
-import Database.PostgreSQL.Simple (Connection, Only (Only))
+import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Lucid
 import Lucid.Htmx
@@ -37,7 +37,6 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Query qualified as Fields
 import Models.Apis.Fields.Types
 import Models.Apis.Fields.Types qualified as Fields
-import Models.Apis.RequestDumps (RequestDump (RequestDump))
 import Models.Apis.RequestDumps qualified as RequestDump
 import Models.Apis.Shapes (getShapeFields)
 import Models.Apis.Shapes qualified as Shapes
@@ -310,7 +309,7 @@ anomalyListSlider _ pid eid Nothing = do
       div_ [class_ "flex flex-row mt-2"] ""
 anomalyListSlider currTime _ _ (Just anomalies) = do
   let anomalyIds = replace "\"" "'" $ show $ fmap (Anomalies.anomalyIdText . (^. #id)) anomalies
-  let totalAnomaliesTxt = toText $ if length anomalies > 50 then "50+" else show (length anomalies)
+  let totalAnomaliesTxt = toText $ if length anomalies > 50 then ("50+" :: Text) else show (length anomalies)
   div_ do
     script_ [text| var rem = (x,y)=>((x%y)==0?1:(x%y)); |]
     script_

@@ -1,3 +1,5 @@
+{-# OPTIONS_GHC -Wno-name-shadowing #-}
+
 module Models.Apis.Fields.Query (
   fieldById,
   selectFields,
@@ -19,8 +21,6 @@ import Database.PostgreSQL.Simple.FromRow
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact (DBT, executeMany)
 import Database.PostgreSQL.Transact qualified as PgT
-import Gogol.Prelude (Endpoints)
-import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Types (Field, FieldCategoryEnum, FieldId, FieldTypes, SwField)
 import Models.Apis.Fields.Types qualified as FT
 import Models.Projects.Projects qualified as Projects

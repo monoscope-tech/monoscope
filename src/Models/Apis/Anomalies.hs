@@ -46,7 +46,6 @@ import Optics.TH
 import Relude hiding (id)
 import Servant (FromHttpApiData (..))
 import Utils
-import Web.HttpApiData (FromHttpApiData)
 
 
 newtype AnomalyId = AnomalyId {unAnomalyId :: UUID.UUID}
