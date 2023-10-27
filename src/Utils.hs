@@ -7,6 +7,7 @@ module Utils (
   GetOrRedirect,
   redirect,
   DBField (..),
+  faSprite_,
   mIcon_,
   faIcon_,
   faIconWithAnchor_,
@@ -74,6 +75,8 @@ instance ToField DBField where
 mIcon_ :: Text -> Text -> Html ()
 mIcon_ mIcon classes = svg_ [class_ $ "inline-block icon " <> classes] $ use_ [href_ $ "/assets/svgs/symbol-defs.svg#icon-" <> mIcon]
 
+faSprite_ :: Text -> Text -> Text -> Html ()
+faSprite_ mIcon faType classes = svg_ [class_ $ "inline-block icon " <> classes] $ use_ [href_ $ "/assets/svgs/fa-sprites/"<> faType <>".svg#" <> mIcon]
 
 faIcon_ :: Text -> Text -> Text -> Html ()
 faIcon_ faIcon faClasses classes = do

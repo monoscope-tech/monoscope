@@ -11,21 +11,21 @@ import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import NeatInterpolation
 import Relude
-import Utils (faIcon_)
+import Utils (faSprite_)
 
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu pid =
-  [ ("Get started", "/p/" <> pid.toText <> "/onboarding", "fa-list-check")
-  , ("Dashboard", "/p/" <> pid.toText <> "/", "fa-qrcode")
-  , ("Endpoints", "/p/" <> pid.toText <> "/endpoints", "fa-swap")
-  , ("Dependencies", "/p/" <> pid.toText <> "/outgoing", "fa-arrows-turn-right")
-  , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies?ackd=false&archived=false", "fa-bug")
-  , ("API Log Explorer", "/p/" <> pid.toText <> "/log_explorer", "fa-list-tree")
-  , ("API Keys", "/p/" <> pid.toText <> "/apis", "fa-key")
+  [ ("Get started", "/p/" <> pid.toText <> "/onboarding", "list-check")
+  , ("Dashboard", "/p/" <> pid.toText <> "/", "qrcode")
+  , ("Endpoints", "/p/" <> pid.toText <> "/endpoints", "swap")
+  , ("Dependencies", "/p/" <> pid.toText <> "/outgoing", "arrows-turn-right")
+  , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies?ackd=false&archived=false", "bug")
+  , ("API Log Explorer", "/p/" <> pid.toText <> "/log_explorer", "list-tree")
+  , ("API Keys", "/p/" <> pid.toText <> "/apis", "key")
   , -- , ("Redacted Fields", "/p/" <> pid.toText <> "/redacted_fields", "#redacted")
-    ("Documentation", "/p/" <> pid.toText <> "/documentation", "fa-brackets-curly")
-  , ("Reports", "/p/" <> pid.toText <> "/reports", "fa-chart-simple")
+    ("Documentation", "/p/" <> pid.toText <> "/documentation", "brackets-curly")
+  , ("Reports", "/p/" <> pid.toText <> "/reports", "chart-simple")
   ]
 
 
@@ -63,7 +63,6 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
       link_ [rel_ "stylesheet", href_ "https://rsms.me/inter/inter.css"]
       link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/atom-one-dark.min.css"]
 
-      link_ [rel_ "stylesheet", href_ "https://unpkg.com/swagger-ui-dist@4.5.0/swagger-ui.css"]
       -- SCRIPTS
       script_ [src_ "https://cdn.jsdelivr.net/npm/echarts@5.4.1/dist/echarts.min.js"] ("" :: Text)
       script_ [src_ "/assets/roma-echarts.js", defer_ "true"] ("" :: Text)
@@ -219,38 +218,38 @@ projectsDropDown currProject projects = do
     do
       div_ [class_ "p-2 pb-4 "] do
         div_ [class_ "flex mt-2 mb-4"] do
-          faIcon_ "fa-folders" "fa-sharp fa-light fa-folders" "h-5 w-5 mr-2"
+          faSprite_ "folders" "sharp-light" "h-5 w-5 mr-2"
           div_ do
             strong_ [class_ "block"] $ toHtml currProject.title
             small_ [class_ "block text-blue-800"] $ toHtml currProject.paymentPlan
         nav_ [] do
           a_ [href_ [text| /p/$pidTxt/settings |], class_ "p-3 flex gap-3 rounded-2xl hover:bg-gray-100"] do
-            faIcon_ "fa-gear" "fa-sharp fa-regular fa-gear" "h-5 w-5"
+            faSprite_ "gear" "sharp-regular" "h-5 w-5"
             span_ "Settings"
           a_ [href_ [text| /p/$pidTxt/manage_members |], class_ "p-3 flex gap-3 rounded hover:bg-gray-100"] do
-            faIcon_ "fa-user-plus" "fa-light fa-user-plus" "h-5 w-5"
+            faSprite_ "user-plus" "regular" "h-5 w-5"
             span_ "Manage members"
           a_ [class_ "hidden p-3 flex gap-3 rounded hover:bg-gray-100 "] do
-            img_ [src_ "/assets/svgs/dollar.svg"]
+            faSprite_ "dollar" "regular" "h-5 w-5"
             span_ "Billing and usage"
       div_ [class_ "border-t border-gray-100 p-2"] do
         div_ [class_ "flex justify-between content-center items-center py-5 mb-2 "] do
           a_ [href_ "/"] $ h3_ [class_ "text-xl"] "Switch projects"
           a_ [class_ "inline-block bg-blue-700 flex pl-3 pr-4 py-2 rounded-xl text-white space-x-2", href_ "/p/new"] do
-            faIcon_ "fa-plus" "fa-sharp fa-regular fa-plus" "h-5 w-5 bg-blue-800 rounded-lg"
+            faSprite_ "plus" "sharp-regular" "h-5 w-5 bg-blue-800 rounded-lg"
             span_ [class_ "inline-block px-1"] "Add"
         div_ do
           div_ [class_ "relative"] do
             div_ [class_ "absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none"] do
-              faIcon_ "fa-magnifying-glass" "fa-regular fa-magnifying-glass" "h-6 w-4"
+              faSprite_ "magnifying-glass" "regular" "h-6 w-4"
             input_ [class_ "pl-12 w-full text-sm bg-gray-100 rounded-2xl border-0 p-3", placeholder_ "Search Projects"]
           div_ [class_ "space-y-2 py-4 text-sm"] do
             projects & mapM_ \project -> do
               a_ [class_ "flex justify-between p-2", href_ $ "/p/" <> project.id.toText] do
                 div_ [class_ "space-x-3"] do
-                  faIcon_ "fa-folders" "fa-sharp fa-light fa-folders" "h-5 w-5 inline-block"
+                  faSprite_ "folders" "sharp-regular" "h-5 w-5 inline-block"
                   span_ [class_ "inline-block"] $ toHtml project.title
-                when (currProject.id == project.id) $ faIcon_ "fa-circle-check" "fa-sharp fa-regular fa-circle-check" "h-6 w-6 text-green-700"
+                when (currProject.id == project.id) $ faSprite_ "circle-check" "sharp-regular" "h-6 w-6 text-green-700"
 
 
 sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Maybe Text -> Maybe Bool -> Html ()
@@ -299,27 +298,27 @@ sideNav sess project pageTitle menuItem hasIntegrated = do
             strong_ [class_ "block text-slate-900"] $ toHtml project.title
             small_ [class_ "block text-slate-900"] $ toHtml project.paymentPlan
           -- Development?
-          div_ do
-            faIcon_ "fa-chevron-up" "fa-light fa-chevron-up" " h-4 w-4 m-2"
-            faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" " h-4 w-4 m-2"
+          div_ [class_ "flex flex-col"] do
+            faSprite_ "chevron-up" "light" " h-4 w-4 m-1"
+            faSprite_ "chevron-down" "light" " h-4 w-4 m-1"
 
       projectsDropDown project (Sessions.getProjects $ Sessions.projects sess)
     nav_ [class_ "mt-4"] do
       -- FIXME: reeanable hx-boost hxBoost_ "true"
       menu project.id & mapM_ \(mTitle, mUrl, faIcon) -> do
         let isActive = maybe (pageTitle == mTitle) (== mTitle) menuItem
-        let activeCls = if isActive then " bg-blue-50 text-blue-700 border-l-4 border-blue-700" else " text-slate-900"
+        let activeCls = if isActive then " bg-blue-50 text-blue-700 border-blue-700" else " border-transparent text-slate-900"
         let intG = fromMaybe True hasIntegrated
         let intGCls = if intG || (mTitle == "Get started" || mTitle == "API Keys") then " hover:bg-blue-50" else " cursor-not-allowed  "
         a_
           [ if intG || (mTitle == "Get started" || mTitle == "API Keys") then href_ mUrl else href_ "#"
           , term "data-tippy-placement" "right"
           , term "data-tippy-content" (if intG || (mTitle == "Get started" || mTitle == "API Keys") then mTitle else "Our menus are shy. Help them come out by integrating the SDK.")
-          , class_ $ "block flex gap-3 px-5 py-3 flex justify-center items-center " <> activeCls <> intGCls
+          , class_ $ " block flex gap-3 px-5 py-3 flex justify-center items-center border-l-4 " <> activeCls <> intGCls
           ]
           do
-            faIcon_ faIcon ("fa-regular " <> faIcon) $ "w-5 h-5 " <> if isActive then "text-blue-900 " else "text-slate-500 "
-            span_ [class_ "grow sd-hidden"] $ toHtml mTitle
+            faSprite_ faIcon "regular" $ "w-5 h-5 " <> if isActive then "text-blue-900 " else "text-slate-500 "
+            span_ [class_ "grow "] $ toHtml mTitle
 
 
 navbar :: Users.User -> Html ()
@@ -334,17 +333,17 @@ navbar currUser = do
           add .hidden-side-nav-menu to #side-nav-menu then 
           call localStorage.setItem('close-sidemenu', 'true')
         else remove  .hidden-side-nav-menu from #side-nav-menu then 
-             call localStorage.removeItem('close-sidemenu') 
+          call localStorage.removeItem('close-sidemenu') 
         end
-          |]
+        |]
       ]
       do
-        faIcon_ "fa-bars-sort" "fa-regular fa-bars-sort" "w-5 h-5 text-gray-500"
+        faSprite_ "bars-sort" "regular" "w-5 h-5 text-gray-500"
     div_ [class_ "inline-block flex items-center"] do
       a_ [class_ "inline-block p-2 px-3 align-middle"] do
-        faIcon_ "fa-magnifying-glass" "fa-regular fa-magnifying-glass" "w-5 h-5 text-gray-500"
+        faSprite_ "magnifying-glass" "regular" "w-5 h-5 text-gray-500"
       a_ [class_ "inline-block border-r-2 p-2 pr-5"] do
-        faIcon_ "fa-bell" "fa-regular fa-solid fa-bell" "w-5 h-5 text-gray-500"
+        faSprite_ "bell" "regular" "w-5 h-5 text-gray-500"
       a_
         [ class_ "cursor-pointer inline-block space-x-4 pl-4 relative "
         , [__| 
@@ -372,7 +371,7 @@ navbar currUser = do
             $ if currUser.firstName /= "" || currUser.lastName /= ""
               then currUser.firstName <> " " <> currUser.lastName
               else CI.original currUser.email
-          faIcon_ "fa-caret-down" "fa-sharp fa-solid fa-caret-down" "w-4 h-4 inline-block"
+          faSprite_ "caret-down" "sharp-solid" "w-4 h-4 inline-block"
 
       -- logout dropdown
       div_
@@ -396,5 +395,5 @@ navbar currUser = do
         do
           -- dropdown mainbody
           a_ [class_ "text-base p-2 flex gap-3 rounded hover:bg-gray-100", href_ "/logout"] do
-            faIcon_ "fa-user-plus" "fa-light fa-user-plus" "h-5 w-5"
+            faSprite_ "user-plus" "regular" "h-5 w-5"
             span_ "Logout"

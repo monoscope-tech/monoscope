@@ -7,5 +7,27 @@ module.exports = {
 	ignoreURLParametersMatching: [
 		/^utm_/,
 		/^fbclid$/
-	]
+	],
+  runtimeCaching: [
+    {
+      urlPattern: /https:\/\/kit\.fontawesome\.com\/e0cb5637ed\.js.*/,
+      handler: 'StaleWhileRevalidate'
+    },
+    {
+      urlPattern: /https:\/\/ka-p\.fontawesome\.com\/.*/,
+      handler: 'CacheFirst'
+    },
+    {
+      urlPattern: /https:\/\/rsms\.me\/.*/,
+      handler: 'CacheFirst'
+    },
+    {
+      urlPattern: /https:\/\/cdnjs\.cloudflare\.com\/.*/,
+      handler: 'CacheFirst'
+    },
+    {
+      urlPattern: /https:\/\/cdn\.jsdelivr\.net\/npm\/.*/,
+      handler: 'CacheFirst'
+    }
+  ]
 };

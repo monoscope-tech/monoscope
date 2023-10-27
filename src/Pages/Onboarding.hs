@@ -20,9 +20,9 @@ import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.NonMember
 import Relude
 import Utils (
-  faIcon_,
+  faSprite_,
   redirect,
-  userIsProjectMember,
+  userIsProjectMember, faIcon_,
  )
 
 
@@ -90,13 +90,13 @@ onboardingPage pid apikey hasRequest ans redi ctb = do
               span_ [class_ "text-slate-500"] $ p <> " completed"
             ul_ [class_ "px-3 py-4"] do
               li_ [class_ "flex items-center mx-4 py-4 border-b gap-6 text-green"] do
-                faIcon_ "fa-circle-check" "fa-sharp fa-regular fa-circle-check" "h-6 w-6 text-green-700"
+                faSprite_ "circle-check" "sharp-regular" "h-6 w-6 text-green-700"
                 button_ [class_ "flex flex-col"] do
                   p_ [class_ "font-semibold"] "Create an account"
                   span_ [class_ "text-slate-500"] "This is completed when you sign up"
               li_ [class_ "flex flex-col items-center mx-4 py-4 border-b gap-6 text-green"] do
                 div_ [class_ "flex w-full items-center gap-6"] do
-                  faIcon_ "fa-circle-check" "fa-sharp fa-regular fa-circle-check" "h-6 w-6 text-green-700"
+                  faSprite_ "circle-check" "sharp-regular" "h-6 w-6 text-green-700"
                   button_
                     [ class_ "flex justify-between text-left w-full items-center"
                     , [__|on click toggle .hidden on #addAPIKey|]
@@ -105,19 +105,19 @@ onboardingPage pid apikey hasRequest ans redi ctb = do
                       div_ [class_ "flex flex-col"] do
                         p_ [class_ "font-semibold"] "Generate an API key"
                         span_ [class_ "text-slate-500"] "The API key is used to authenticate requests, Auto generated."
-                      faIcon_ "fa-chevron-down" "fa-regular fa-chevron-down" "h-6 w-6"
+                      faSprite_ "chevron-down" "regular-chevron-down" "h-6 w-6"
                 div_ [class_ "bg-slate-100 hidden w-full py-16 px-24", id_ "addAPIKey"] do
                   p_ [class_ "text-green-500 text-center"] $ toHtml apikey
 
               li_ [class_ "mx-4 py-4 border-b"] do
                 div_ [class_ "flex w-full items-center  gap-6"] do
                   let style = if hasRequest then "text-green-700" else "text-gray-400 "
-                  faIcon_ "fa-circle-check" "fa-sharp fa-regular fa-circle-check" $ "h-6 w-6 " <> style
+                  faSprite_ "circle-check" "sharp-regular" $ "h-6 w-6 " <> style
                   button_ [class_ "flex justify-between text-left w-full items-center", [__|on click toggle .hidden on #SDKs|]] do
                     div_ [class_ "flex flex-col"] do
                       p_ [class_ "font-semibold"] "Integrate APIToolkit to your app"
                       span_ [class_ "text-slate-500"] "Integrate apitoolkit using any of our SDKs to start sending request."
-                    faIcon_ "fa-chevron-down" "fa-regular fa-chevron-down" "h-6 w-6"
+                    faSprite_ "chevron-down" "regular-chevron-down" "h-6 w-6"
                 div_ [class_ "w-full bg-slate-100 mt-8", id_ "SDKs"] do
                   if hasRequest
                     then do
@@ -136,14 +136,14 @@ onboardingPage pid apikey hasRequest ans redi ctb = do
         div_ [class_ "w-full flex justify-center pb-16 mt-16"] $ do
           div_ [class_ "flex flex-col w-[800px] rounded-2xl border border-2 grid grid-cols-2 border-b "] $ do
             a_ [class_ "flex flex-col gap-2 py-8 border-r px-8 hover:bg-blue-100 ", href_ "https://www.apitoolkit.io/docs", target_ "_BLANK"] do
-              faIcon_ "fa-file-lines" "fa-thin fa-file-lines" "h-8 w-8"
+              faSprite_ "file-lines" "thin" "h-8 w-8"
               h3_ [class_ "font-bold text-lg"] "Documentation"
               p_ [class_ "text-slate-700"] "Check out our documentation to learn more about using APIToolkit."
               span_ [href_ "https://www.apitoolkit.io/docs", class_ "text-blue-500 flex items-center gap-2"] do
-                faIcon_ "fa-link-simple" "fa-sharp fa-regular fa-link-simple" "h-8 w-8 text-blue-500"
+                faSprite_ "link-simple" "sharp-regular" "h-8 w-8 text-blue-500"
                 "Read the docs"
             a_ [class_ "block px-8 py-16 flex items-center gap-6 border-l hover:bg-blue-100 ", href_ "https://calendar.app.google/EvPzCoVsLh5gqkAo8", target_ "_BLANK"] do
-              faIcon_ "fa-circle-play" "fa-light fa-circle-play" "text-blue-500 h-14 w-14"
+              faSprite_ "circle-play" "light" "text-blue-500 h-14 w-14"
               div_ [class_ "flex flex-col"] do
                 span_ [class_ "font-bold text-lg text-blue-700 space-x-3"] do
                   span_ "Need Help?"
@@ -230,7 +230,7 @@ completedBanner pid =
         h3_ [class_ "font-bold text-2xl"] "Onboarding Completed"
       div_ [class_ "pb-2 flex items-center mt-8 flex-col gap-4 text-blue-500 font-medium"] do
         a_ [href_ $ "/p/" <> pid.toText <> "/"] "Go to the dashboard"
-        faIcon_ "fa-circle-check" "fa-sharp fa-regular fa-circle-check" "h-24 w-24 text-green-700"
+        faSprite_ "circle-check" "sharp-regular" "h-24 w-24 text-green-700"
 
 
 tabContentExpress :: Text -> Text -> Html ()

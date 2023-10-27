@@ -243,7 +243,7 @@ endpointDetails paramInput currTime endpoint endpointStats shapesWithFieldsMap f
           h3_ [class_ "text-lg text-slate-800"] do
             span_ [class_ $ "p-1 endpoint endpoint-" <> toLower endpoint.method] $ toHtml $ endpoint.method <> " "
             strong_ [class_ "inconsolata text-xl"] $ toHtml endpoint.urlPath
-          faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" " h-4 w-4 m-2"
+          faSprite_ "chevron-down" "light" " h-4 w-4 m-2"
         nav_ [class_ " space-x-4"] do
           subPageMenu
             & mapM_ \(title, slug) ->
@@ -258,7 +258,7 @@ endpointDetails paramInput currTime endpoint endpointStats shapesWithFieldsMap f
         div_ [class_ "flex flex-row hidden"] do
           a_ [href_ ""] do
             button_ [class_ "bg-white rounded-lg h-10 mt-1 "] do
-              faIcon_ "fa-line-height" "fa-regular fa-line-height" "h-6 w-6 m-2"
+              faSprite_ "line-height" "regular" "h-6 w-6 m-2"
           a_ [href_ ""] do
             button_ [class_ "bg-blue-700 flex h-11 flex-row mx-2 px-3 rounded-xl py-2"] do
               h3_ [class_ "text-white text-sm text-bold mx-2 mt-1"] "Download Swagger"
@@ -275,7 +275,7 @@ endpointDetails paramInput currTime endpoint endpointStats shapesWithFieldsMap f
       ]
       do
         div_ [class_ "h-full flex flex-col items-center justify-center"] do
-          faIcon_ "fa-clapperboard" "fa-light fa-clapperboard" "w-36"
+          faSprite_ "clapperboard" "light" "w-36 h-36"
           h3_ [class_ "mt-2 text-lg font-medium text-slate-900"] "Nothing selected"
           p_ [class_ "mt-1 text-sm text-slate-500"] "Select a field or similar item on the left"
           p_ [class_ "mt-1 text-sm text-slate-500"] "to view more details about it here."
@@ -346,7 +346,7 @@ apiDocsSubPage shapesWithFieldsMap shapeHashM = do
               let statusCls = if st < 400 then prm <> "bg-green-500" else prm <> "bg-red-500"
               span_ [class_ statusCls] $ show st
               span_ [class_ "ml-1 text-sm text-slate-600"] $ toHtml hs
-          faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 w-4"
+          faSprite_ "chevron-down" "light" "h-4 w-4"
           div_ [id_ "shapes_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] do
             forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap) $ \(index, s) -> do
               let prm = "px-2 py-1 rounded text-white text-sm "
@@ -426,7 +426,7 @@ apiOverviewSubPage paramInput currTime endpoint fieldsM reqLatenciesRolledByStep
       do
         mIcon_ "clock" "h-4 w-4"
         span_ [class_ "inline-block"] $ toHtml paramInput.currentPickerTxt
-        faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 w-4 inline-block"
+        faSprite_ "chevron-down" "light" "h-4 w-4 inline-block"
     div_ [id_ "timepickerBox", class_ "hidden absolute z-10 mt-1  rounded-md flex"] do
       div_ [class_ "inline-block w-84 overflow-auto bg-white py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm"] do
         forM_ timePickerItems \(val, title) ->
@@ -534,7 +534,7 @@ reqResSection title isRequest shapesWithFieldsMap targetIndex =
     div_ [class_ "flex justify-between mt-5"] do
       div_ [class_ "flex flex-row"] do
         a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
-          $ faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 mr-3 mt-1 w-4"
+          $ faSprite_ "chevron-down" "light" "h-4 mr-3 mt-1 w-4"
         span_ [class_ "text-lg text-slate-800"] $ toHtml title
 
     div_ [class_ "bg-white border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"]
@@ -581,7 +581,7 @@ subSubSection title fieldsM =
                   , term "data-depth" $ show depth
                   ]
                   do
-                    faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-6 w-6 mr-1 chevron cursor-pointer p-1"
+                    faSprite_ "chevron-down" "light" "h-6 w-6 mr-1 chevron cursor-pointer p-1"
                     div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full"] do
                       input_ [type_ "checkbox", class_ " mr-12"]
                       span_ [class_ "text-sm text-slate-800 inline-flex items-center"] $ toHtml displayKey
@@ -598,13 +598,13 @@ subSubSection title fieldsM =
                   , term "data-depth" $ show depth
                   ]
                   do
-                    faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 mr-3 mt-4 w-4 invisible"
+                    faSprite_ "chevron-down" "light" "h-4 mr-3 mt-4 w-4 invisible"
                     div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full items-center"] do
                       input_ [type_ "checkbox", class_ " mr-12"]
                       span_ [class_ "grow text-sm text-slate-800 inline-flex items-center"] $ toHtml displayKey
                       span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ EndpointComponents.fieldTypeToDisplay field.fieldType
-                      faIcon_ "fa-octagon-exclamation" "fa-thin fa-octagon-exclamation" " mr-8 ml-4 h-5 text-red-400"
-                      faIcon_ "fa-ellipsis-vertical" "fa-light fa-ellipsis-vertical" "mx-5 h-5"
+                      faSprite_ "octagon-exclamation" "regular" " mr-8 ml-4 h-5 text-red-400"
+                      faSprite_ "ellipsis-vertical" "light" "mx-5 h-5"
 
 
 -- | fieldsToNormalized, gets a list of fields and returns a list of tuples with the keypath, and the field, sorted by the key path

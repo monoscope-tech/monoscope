@@ -255,7 +255,7 @@ anomalyList paramInput pid currTime anomalies nextFetchUrl = form_ [class_ "col-
       div_ [class_ " grow flex flex-row gap-2"] do
         button_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/acknowlege", hxSwap_ "none"] "✓ acknowlege"
         button_ [class_ "btn-sm bg-transparent space-x-1 border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/archive", hxSwap_ "none"] do
-          faIcon_ "fa-inbox-full" "fa-sharp fa-light fa-inbox-full" "h-4 w-4 inline-block"
+          faSprite_ "inbox" "solid" "h-4 w-4 inline-block"
           span_ "archive"
       div_ [class_ "relative inline-block"] do
         a_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl space-x-2", [__|on click toggle .hidden on #sortMenuDiv |]] do
@@ -336,7 +336,7 @@ anomalyListSlider currTime _ _ (Just anomalies) = do
                           show #{$anomalyIds[$currentAnomaly]} then 
                           setAnomalySliderPag()|]
           ]
-          $ faIcon_ "fa-arrow-left" "fa-regular fa-arrow-left" "h-4 w-4"
+          $ faSprite_ "arrow-left" "regular" "h-4 w-4"
         span_ [src_ " mx-4", id_ "anomalySliderPagination"] "1/1"
         a_
           [ class_ "cursor-pointer"
@@ -346,7 +346,7 @@ anomalyListSlider currTime _ _ (Just anomalies) = do
                           show #{$anomalyIds[$currentAnomaly]} then
                           setAnomalySliderPag()|]
           ]
-          $ faIcon_ "fa-arrow-right" "fa-regular fa-arrow-right" "h-4 w-4"
+          $ faSprite_ "arrow-right" "regular" "h-4 w-4"
 
     div_
       [ class_ "parent-slider"
@@ -507,7 +507,7 @@ anomalyDetailsPage anomaly shapesWithFieldsMap fields prvFormatsM chartQuery cur
           Anomalies.ATEndpoint -> do
             div_ [class_ "flex flex-col gap-4 shrink-0"] do
               a_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
-                faIcon_ "fa-arrow-up-arrow-down" "fa-solid fa-arrow-up-arrow-down" "inline w-6 h-6 -mt-1"
+                faSprite_ "arrow-up-arrow-down" "solid" "inline w-6 h-6 -mt-1"
                 span_ [class_ "text-2xl"] "New Endpoint"
               div_ [class_ "flex items-center gap-3"] do
                 let methodColor = Utils.getMethodColor (fromMaybe "" anomaly.endpointMethod)
@@ -837,7 +837,7 @@ anomalyArchiveButton pid aid archived = do
     , hxGet_ archiveAnomalyEndpoint
     , hxSwap_ "outerHTML"
     ]
-    $ faIcon_ "fa-inbox-full" "fa-sharp fa-light fa-inbox-full" "h-4 w-4"
+    $ faSprite_ "inbox-full" "solid" "h-4 w-4"
 
 
 reqResSection :: Text -> Bool -> [Shapes.ShapeWithFields] -> Html ()
@@ -846,7 +846,7 @@ reqResSection title isRequest shapesWithFieldsMap =
     div_ [class_ "flex justify-between mt-5"] do
       div_ [class_ "flex flex-row"] do
         a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
-          $ faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 mr-3 mt-1 w-4"
+          $ faSprite_ "chevron-down" "light" "h-4 mr-3 mt-1 w-4"
         span_ [class_ "text-lg text-slate-800"] $ toHtml title
 
     div_ [class_ "bg-white border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"]
@@ -889,7 +889,7 @@ subSubSection title fieldsM =
                   , [__| on click toggle .neg-rotate-90 on <.chevron/> in me then collapseUntil((me), (my @data-depth))  |]
                   ]
                   do
-                    faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-6 w-6 mr-1 chevron cursor-pointer p-1"
+                    faSprite_ "chevron-down" "light" "h-6 w-6 mr-1 chevron cursor-pointer p-1"
                     div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full"] do
                       span_ [class_ "text-sm text-slate-800 inline-flex items-center"] $ toHtml displayKey
                       span_ [class_ "text-sm text-slate-600 inline-flex items-center ml-4"] do
@@ -903,7 +903,7 @@ subSubSection title fieldsM =
                   , term "data-depth" $ show depth
                   ]
                   do
-                    faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 mr-3 mt-4 w-4 invisible"
+                    faSprite_ "chevron-down" "light" "h-4 mr-3 mt-4 w-4 invisible"
                     div_ [class_ "border-b flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full items-center"] do
                       span_ [class_ "grow text-sm text-slate-800 inline-flex items-center"] $ toHtml displayKey
                       span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ EndpointComponents.fieldTypeToDisplay field.fieldType

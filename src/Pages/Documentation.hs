@@ -352,6 +352,7 @@ documentationGetH sess pid swagger_id = do
 
 documentationsPage :: Projects.ProjectId -> V.Vector Swaggers.Swagger -> String -> String -> Html ()
 documentationsPage pid swaggers swaggerID jsonString = do
+  link_ [rel_ "stylesheet", href_ "https://unpkg.com/swagger-ui-dist@4.5.0/swagger-ui.css"]
   div_ [class_ "relative h-full"] do
     -- modal
     div_

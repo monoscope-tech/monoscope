@@ -15,7 +15,6 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Projects.Projects qualified as Projets
 import Models.Users.Sessions qualified as Sessions
-
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.Clock (getCurrentTime)
@@ -28,7 +27,7 @@ import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Charts.Charts qualified as Charts
 import Pages.NonMember
 import Relude
-import Utils (deleteParam, faIcon_, mIcon_, textToBool, userIsProjectMember)
+import Utils (deleteParam, faIcon_, faSprite_, mIcon_, textToBool, userIsProjectMember)
 
 
 data ParamInput = ParamInput
@@ -152,7 +151,7 @@ endpointList' paramInput currTime pid enps = form_ [class_ "col-span-5 bg-white 
     div_ [class_ " grow flex flex-row gap-2"] do
       button_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/acknowlege", hxSwap_ "none"] "✓ acknowlege"
       button_ [class_ "btn-sm bg-transparent space-x-1 border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/archive", hxSwap_ "none"] do
-        faIcon_ "fa-inbox-full" "fa-sharp fa-light fa-inbox-full" "h-4 w-4 inline-block"
+        faSprite_ "fa-inbox" "solid" "h-4 w-4 inline-block"
         span_ "archive"
     div_ [class_ "relative inline-block"] do
       a_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl space-x-2", [__|on click toggle .hidden on #sortMenuDiv |]] do
