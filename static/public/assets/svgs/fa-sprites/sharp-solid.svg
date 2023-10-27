@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" style="display: none;">
-<symbol id="caret-down" viewBox="0 0 320 512">
-<path d="M320 240L160 384 0 240l0-48 320 0 0 48z"/>
-</symbol>
 <symbol id="caret-up" viewBox="0 0 320 512">
 <path d="M0 272L160 128 320 272v48H0V272z"/>
+</symbol>
+<symbol id="caret-down" viewBox="0 0 320 512">
+<path d="M320 240L160 384 0 240l0-48 320 0 0 48z"/>
 </symbol>
 </svg>

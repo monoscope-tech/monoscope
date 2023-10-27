@@ -255,7 +255,7 @@ anomalyList paramInput pid currTime anomalies nextFetchUrl = form_ [class_ "col-
       div_ [class_ " grow flex flex-row gap-2"] do
         button_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/acknowlege", hxSwap_ "none"] "✓ acknowlege"
         button_ [class_ "btn-sm bg-transparent space-x-1 border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/archive", hxSwap_ "none"] do
-          faSprite_ "inbox" "solid" "h-4 w-4 inline-block"
+          faSprite_ "inbox-full" "solid" "h-4 w-4 inline-block"
           span_ "archive"
       div_ [class_ "relative inline-block"] do
         a_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl space-x-2", [__|on click toggle .hidden on #sortMenuDiv |]] do
