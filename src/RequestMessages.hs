@@ -441,7 +441,6 @@ valueToFormatStr val
   | val =~ ([text|^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(([+-]\d\d:\d\d)|Z)?$|] :: Text) = Just "YYYY-MM-DDThh:mm:ss.sTZD"
   | otherwise = Nothing
 
-
 -- >>> valueToFormatNum 22.3
 -- "float"
 -- >>> valueToFormatNum 22
