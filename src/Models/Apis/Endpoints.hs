@@ -186,7 +186,7 @@ endpointRequestStatsByProject pid ackd archived pHostM = case pHostM of Just h -
 
 
 dependencyEndpointsRequestStatsByProject :: Projects.ProjectId -> Text -> PgT.DBT IO (Vector EndpointRequestStats)
-dependencyEndpointsRequestStatsByProject pid host = query Select (Query $ encodeUtf8 q) (pid, "'" <> host <> "'", host)
+dependencyEndpointsRequestStatsByProject pid host = query Select (Query $ encodeUtf8 q) (pid, host, "'" <> host <> "'")
   where
     q =
       [text|
