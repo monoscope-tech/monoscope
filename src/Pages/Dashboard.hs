@@ -143,7 +143,7 @@ dashboardPage pid paramInput currTime projectStats reqLatenciesRolledByStepsJ da
             div_ [id_ "startTime", class_ "hidden"] ""
 
     -- button_ [class_ "", id_ "checkin", onclick_ "window.picker.show()"] "timepicker"
-    section_ $ AnomaliesList.anomalyListSlider currTime projectStats.projectId Nothing Nothing
+    section_ $ AnomaliesList.anomalyListSlider currTime pid Nothing Nothing
     dStats pid projectStats reqLatenciesRolledByStepsJ dateRange
   script_
     [text|
