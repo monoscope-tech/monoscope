@@ -625,6 +625,9 @@ jsonTreeAuxillaryCode pid = do
   script_ [src_ "/assets/js/monaco/vs/loader.js", defer_ "true"] ("" :: Text)
   script_
     [text|
+    if(window.setQueryBuilderFromParams) {
+          window.setQueryBuilderFromParams()
+      }
     function filterByField(event, operation) {
        const target = event.target.parentNode.parentNode.parentNode
        const path = target.getAttribute('data-field-path');
@@ -651,6 +654,7 @@ jsonTreeAuxillaryCode pid = do
           if(window.editor) {
              window.editor.setValue(newVal)
             }
+          htmx.trigger("#log_explorer_form", "submit")
         }
     }
 
@@ -697,6 +701,7 @@ jsonTreeAuxillaryCode pid = do
 
     var execd = false
     document.addEventListener('DOMContentLoaded', function(){
+      window.setQueryBuilderFromParams()
       // Configuration for the monaco editor which the query editor is built on.
       require.config({ paths: { vs: '/assets/js/monaco/vs' } });
 			require(['vs/editor/editor.main'], function () {

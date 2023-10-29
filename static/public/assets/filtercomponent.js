@@ -12,12 +12,22 @@ export class MyElement extends LitElement {
     super();
     this.greeting = 'Hello';
     this.planet = 'World';
-    this.filters = []
     this.showFilterSearch = false
     this.addEventListener('add-filter', this.handleChildEvent)
     this.addEventListener('close-search', () => { this.showFilterSearch = false })
     const body = document.querySelector('body')
-    window.queryBuilderValue = this.filters.join(" ")
+    this.filters = []
+    window.setQueryBuilderFromParams = () => {
+      const urlSearchParams = new URLSearchParams(window.location.search);
+      const query = urlSearchParams.get("query")
+      if (query) {
+        const fls = query.split(/\s+AND\s+|\s+OR\s+/i).flatMap((element, index, array) => {
+          return index < array.length - 1 ? [element, 'AND'] : [element];
+        });
+        this.filters = fls
+      }
+    }
+
     window.setBuilderValue = (value, filter) => {
       if (this.isValidFilter(filter)) {
         this.handleChildEvent({ detail: { filter: filter } })
