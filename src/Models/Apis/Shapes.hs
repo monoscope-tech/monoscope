@@ -11,7 +11,7 @@ import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), query)
 
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
-import Database.PostgreSQL.Simple (FromRow, Only (Only), Query, ToRow)
+import Database.PostgreSQL.Simple (FromRow, Query, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -48,7 +48,7 @@ data ShapeWithFields = ShapeWidthFields
   , sHash :: Text
   , fieldsMap :: Map FieldCategoryEnum [Fields.Field]
   }
-  deriving (Show)
+  deriving stock (Generic, Show)
 
 
 getShapeFields :: Shape -> Vector Fields.Field -> ShapeWithFields

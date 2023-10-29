@@ -5,7 +5,6 @@ import Data.Default (Default)
 import Data.Vector qualified as Vector
 import Lucid
 import Lucid.Hyperscript
-import Lucid.Svg (use_)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
@@ -164,7 +163,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
           do
             let currUser = Sessions.getUser (Sessions.user sess)
                 sideNav' = currProject & maybe "" \project -> sideNav sess project pageTitle menuItem hasIntegrated
-            let currUserEmail = CI.original currUser.email
+            -- let currUserEmail = CI.original currUser.email
             section_ [class_ "flex flex-row h-screen overflow-hidden"] do
               sideNav'
               section_ [class_ "flex flex-col grow h-full overflow-y-hidden"] do

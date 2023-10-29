@@ -19,13 +19,13 @@ import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query, withPool)
 import Database.PostgreSQL.Simple (Connection, Only (Only))
-import Database.PostgreSQL.Simple.FromRow (FromRow (fromRow), field)
 import Database.PostgreSQL.Simple.SqlQQ
 import Database.PostgreSQL.Transact (DBT)
 import GHC.Generics
-import Lucid (Html, renderText, style_, table_, tbody_, td_, th_, thead_, toHtml, tr_)
+import Lucid
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.Fields qualified as Fields
 import Models.Apis.Reports qualified as Reports
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
@@ -33,6 +33,7 @@ import Models.Users.Users qualified as Users
 import NeatInterpolation (text, trimming)
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), createJob, startJobRunner, throwParsePayload)
+
 import Pages.Reports qualified as RP
 import Pkg.Mail
 import Relude
@@ -134,7 +135,7 @@ jobsRunner dbPool logger cfg job = do
               Nothing -> pass
               Just anomaly -> do
                 -- TODO: DOn't send any anomaly emails other than for email
-                error "retry later"
+                _ <- error "retry later"
                 users <- withPool dbPool $ Projects.usersByProjectId pid
                 project <- Unsafe.fromJust <<$>> withPool dbPool $ Projects.projectById pid
                 forM_ users \u ->
@@ -162,7 +163,7 @@ jobsRunner dbPool logger cfg job = do
               Nothing -> pass
               Just anomaly -> do
                 -- TODO: DOn't send any anomaly emails other than for email
-                error "retry later"
+                _ <- error "retry later"
                 users <- withPool dbPool $ Projects.usersByProjectId pid
                 project <- Unsafe.fromJust <<$>> withPool dbPool $ Projects.projectById pid
                 forM_ users \u ->

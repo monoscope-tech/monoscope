@@ -20,7 +20,6 @@ import Data.Time (UTCTime)
 import Data.Time.Clock (getCurrentTime)
 import Data.Tuple.Extra (fst3)
 import Data.UUID qualified as UUID
-import Data.Vector qualified as V
 import Models.Apis.Anomalies qualified as Anomalies
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)

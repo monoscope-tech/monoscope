@@ -19,7 +19,6 @@ import Data.UUID.V4 (nextRandom)
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (Connection, Query)
 import Database.PostgreSQL.Transact (execute)
-import Debug.Pretty.Simple (pTrace, pTraceShowM)
 import Fmt
 import Gogol.Data.Base64 (_Base64)
 import Gogol.PubSub qualified as PubSub
@@ -28,7 +27,7 @@ import Models.Projects.Projects qualified as Projects
 import Relude hiding (hoistMaybe)
 import RequestMessages qualified
 import System.Clock
-import Text.Pretty.Simple (pPrint, pShow)
+import Text.Pretty.Simple (pShow)
 import Utils (DBField, eitherStrToText)
 
 
@@ -169,7 +168,7 @@ processMessages' logger' _ conn' msgs projectCache' = do
           :: ExceptT Text IO (Either SomeException Projects.ProjectCache)
 
       case projectCacheValE of
-        Left e -> throwE $ "An error occurred while fetching project cache: " <> toText (show e)
+        Left e -> throwE $ "An error occurred while fetching project cache: " <> show e
         Right projectCacheVal -> do
           recId <- liftIO nextRandom
           (query, params, reqDump) <- except $ RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId
