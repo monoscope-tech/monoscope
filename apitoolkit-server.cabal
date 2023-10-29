@@ -49,6 +49,7 @@ library
       Models.Users.Users
       Pages.Anomalies.AnomalyList
       Pages.Api
+      Pages.AutoComplete
       Pages.BodyWrapper
       Pages.Charts.Charts
       Pages.Components

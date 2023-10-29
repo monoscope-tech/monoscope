@@ -29,6 +29,7 @@ import Network.Wai (Request)
 import Pages.Anomalies.AnomalyList (AnomalyBulkForm)
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.Api qualified as Api
+import Pages.AutoComplete qualified as AutoComplete
 import Pages.Charts.Charts qualified as Charts
 import Pages.Dashboard qualified as Dashboard
 import Pages.Documentation (SaveSwaggerForm, SwaggerForm)
@@ -137,6 +138,7 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "about_project" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "share" :> ReqBody '[FormUrlEncoded] Share.ReqForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "outgoing" :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "query_builder" :> "autocomplete" :> QPT "category" :> QPT "prefix" :> Get '[JSON] AE.Value
 
 
 type PublicAPI =
@@ -228,6 +230,7 @@ protectedServer sess =
     :<|> Survey.surveyGetH sess
     :<|> Share.shareLinkPostH sess
     :<|> outgoingGetH sess
+    :<|> AutoComplete.getH sess
 
 
 publicServer :: ServerT PublicAPI DashboardM
