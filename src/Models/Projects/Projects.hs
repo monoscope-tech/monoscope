@@ -78,6 +78,7 @@ data Project = Project
   , questions :: Maybe Value
   , dailyNotif :: Bool
   , weeklyNotif :: Bool
+  , timeZone :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow)
@@ -106,6 +107,7 @@ data Project' = Project'
   , questions :: Maybe Value
   , dailyNotif :: Bool
   , weeklyNotif :: Bool
+  , timeZone :: Text
   , usersDisplayImages :: Vector Text
   }
   deriving stock (Show, Generic)
@@ -139,6 +141,7 @@ data CreateProject = CreateProject
   , title :: Text
   , description :: Text
   , paymentPlan :: Text
+  , timeZone :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow)
@@ -228,10 +231,10 @@ editProjectGetH pid = query Select q (Only pid)
 
 updateProject :: CreateProject -> DBT IO Int64
 updateProject cp = do
-  execute Update q (cp.title, cp.description, cp.paymentPlan, cp.id)
+  execute Update q (cp.title, cp.description, cp.paymentPlan, cp.timeZone, cp.id)
   where
     q =
-      [sql| UPDATE projects.projects SET title=?, description=?, payment_plan=? where id=?;|]
+      [sql| UPDATE projects.projects SET title=?,  description=?, payment_plan=?, time_zone=? where id=?;|]
 
 
 updateProjectReportNotif :: ProjectId -> Text -> DBT IO Int64

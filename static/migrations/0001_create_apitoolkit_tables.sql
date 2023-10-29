@@ -114,6 +114,7 @@ ALTER TABLE projects.projects ADD COLUMN daily_notif BOOL DEFAULT TRUE,
                               ADD COLUMN weekly_notif BOOL DEFAULT TRUE;
 ALTER TABLE projects.projects
    ALTER COLUMN daily_notif SET DEFAULT FALSE;
+ALTER TABLE projects.projects ADD COLUMN time_zone TEXT DEFAULT 'UTC';
 -----------------------------------------------------------------------
 -- PROJECT MEMBERS table 
 -- query patterns:

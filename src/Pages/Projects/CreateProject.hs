@@ -65,6 +65,7 @@ data CreateProjectForm = CreateProjectForm
   , isUpdate :: Bool
   , projectId :: Text
   , paymentPlan :: Text
+  , timeZone :: Text
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromForm, Default)
@@ -121,6 +122,7 @@ projectSettingsGetH sess pid = do
           , isUpdate = True
           , projectId = pid.toText
           , paymentPlan = proj.paymentPlan
+          , timeZone = proj.timeZone
           }
   -- FIXME: Should be a value from the db
 
@@ -231,6 +233,11 @@ createProjectBody sess envCfg isUpdate cp cpe = do
               , name_ "title"
               , value_ cp.title
               ]
+          div_ [class_ "flex flex-col gap-1 mt-5"] do
+            label_ [class_ "text-slate-700 mx-2 text-sm"] do
+              "Timezone"
+            select_ [name_ "timeZone", id_ "timezone", class_ "px-4 py-2 border rounded-2xl"] do
+              option_ [value_ cp.timeZone] $ toHtml cp.timeZone
           div_ [class_ "mt-5 "] do
             label_ [class_ "text-slate-700 mx-2 text-sm"] "Description"
             textarea_
@@ -394,6 +401,15 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                successCallback: 'onPaddleSuccess',
              });
            };
+
+           const timezoneSelect = document.getElementById("timezone");
+           const timeZones = Intl.supportedValuesOf('timeZone');
+           timeZones.forEach((tz) => {
+             const option = document.createElement("option");
+             option.value = tz;
+             option.text = tz;
+             timezoneSelect.appendChild(option);
+           });
          |]
           -- END PADDLE payment
           div_ [class_ "p-5 text-right"] do
