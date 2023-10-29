@@ -625,14 +625,12 @@ jsonTreeAuxillaryCode pid = do
   script_ [src_ "/assets/js/monaco/vs/loader.js", defer_ "true"] ("" :: Text)
   script_
     [text|
-    window.queryBuilderValue = ''
     function filterByField(event, operation) {
        const target = event.target.parentNode.parentNode.parentNode
        const path = target.getAttribute('data-field-path');
        const value = target.getAttribute('data-field-value');
        const filter = path + ' ' + operation + ' ' + value
        let editorVal = '' 
-       console.log(window.queryBuilderValue)
        if(window.queryBuilderValue) {
         editorVal = window.queryBuilderValue
         }else if(window.editor) {
@@ -653,7 +651,6 @@ jsonTreeAuxillaryCode pid = do
           if(window.editor) {
              window.editor.setValue(newVal)
             }
-            htmx.trigger("#log_explorer_form", "submit")
         }
     }
 
