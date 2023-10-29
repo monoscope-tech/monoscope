@@ -4,17 +4,20 @@
 module Pages.Endpoints.EndpointDetails (endpointDetailsH, fieldDetailsPartialH, fieldsToNormalized, endpointDetailsWithHashH) where
 
 import Config
+import Data.Aeson
 import Data.Aeson qualified as AE
+import Data.Aeson.Key qualified as AEKey
 import Data.Aeson.Text (encodeToLazyText)
 import Data.Default (def)
+
 import Data.List (elemIndex)
 import Data.Map qualified as Map
-import Data.Text as T (isSuffixOf, splitOn, toLower)
+import Data.Text (isSuffixOf, splitOn, toLower)
+import Data.Text qualified as T
 import Data.Time (UTCTime, ZonedTime, addUTCTime, defaultTimeLocale, formatTime, getCurrentTime, secondsToNominalDiffTime, utc, utcToZonedTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
-import Data.Vector qualified as V
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Fmt
@@ -266,7 +269,7 @@ endpointDetails paramInput currTime endpoint endpointStats shapesWithFieldsMap f
                 mIcon_ "whitedown" "text-white h-2 w-2 m-1"
       case paramInput.subPage of
         "api_docs" -> apiDocsSubPage shapesWithFieldsMap shapeHashM
-        "shapes" -> shapesSubPage shapesList paramInput.currentURL
+        "shapes" -> shapesSubPage endpoint.projectId shapesList shapesWithFieldsMap paramInput.currentURL
         _ -> apiOverviewSubPage paramInput currTime endpointStats fieldsM reqLatenciesRolledByStepsJ dateRange
 
     aside_
@@ -292,29 +295,48 @@ endpointDetails paramInput currTime endpoint endpointStats shapesWithFieldsMap f
         |]
 
 
-shapesSubPage :: Vector Shapes.Shape -> Text -> Html ()
-shapesSubPage shapesList currentURL = do
+shapesSubPage :: Projects.ProjectId -> Vector Shapes.Shape -> [Shapes.ShapeWithFields] -> Text -> Html ()
+shapesSubPage pid shapesList shapesWithFields currentURL = do
   div_ [class_ "space-y-8", id_ "subpage"] do
     div_ [class_ "flex flex-col justify-between mt-2 shadow mx-16 rounded-xl"] do
       div_ [class_ "w-full bg-gray-100 px-8 py-4"] do
         h3_ [class_ "font-semibold text-lg"] "Endpoint Shapes"
       div_ [class_ "flex flex-col items-center gap-4"] do
-        forM_ shapesList \shape -> do
-          div_ [class_ "flex w-full p-8 items-center gap-4  hover:bg-gray-50"] do
-            a_ [href_ $ currentURL <> "&subpage=api_docs" <> "&shape=" <> shape.hash, class_ "w-full items-center gap-4 flex text-slate-700"] do
-              let statuscls = getStatusColor shape.statusCode
-              span_ [class_ $ "px-3 py-1 " <> statuscls] $ show shape.statusCode
-              span_ [class_ "text-sm text-gray-500"] $ toHtml shape.hash
-              div_ [class_ "text-sm text-gray-500 w-3/2 flex flex-col gap-1"] do
-                p_ [class_ "space-x-2"] do
-                  span_ [class_ ""] "Request Body:"
-                  span_ [] $ toHtml $ mconcat (intersperse " • " $ V.toList shape.requestBodyKeypaths)
-                p_ [class_ "space-x-2"] do
-                  span_ [class_ ""] "Response Body:"
-                  span_ [] $ toHtml $ mconcat (intersperse " • " $ V.toList shape.responseBodyKeypaths)
-            div_ [] do
-              let chartQuery = Just $ Charts.QBShapeHash shape.hash
-              div_ [class_ "flex items-center justify-center "] $ div_ [class_ "w-60 h-16 px-3"] $ Charts.throughput shape.projectId shape.hash chartQuery Nothing 14 Nothing False (Nothing, Nothing) Nothing
+        forM_ shapesWithFields \shape -> do
+          div_ [class_ "flex w-full p-8 items-start gap-4  hover:bg-gray-50"] do
+            a_ [href_ $ currentURL <> "&subpage=api_docs" <> "&shape=" <> shape.sHash, class_ "w-full items-start justify-between gap-10 flex text-slate-700"] do
+              let statuscls = getStatusColor shape.status
+              span_ [class_ $ "mt-10 px-3 py-1 " <> statuscls] $ show shape.status
+              span_ [class_ "mt-12 text-sm text-gray-500"] $ toHtml shape.sHash
+              let request_body_keypaths = (\f -> f.keyPath) <$> fromMaybe [] (Map.lookup Fields.FCRequestBody shape.fieldsMap)
+              let response_body_keypaths = (\f -> f.keyPath) <$> fromMaybe [] (Map.lookup Fields.FCResponseBody shape.fieldsMap)
+              let shapeJson =
+                    AE.object
+                      [ "response_headers" .= buildLeafJson (fromMaybe [] (Map.lookup Fields.FCResponseHeader shape.fieldsMap))
+                      , "query_params" .= buildLeafJson (fromMaybe [] (Map.lookup Fields.FCQueryParam shape.fieldsMap))
+                      , "path_params" .= buildLeafJson (fromMaybe [] (Map.lookup Fields.FCPathParam shape.fieldsMap))
+                      , "request_body" .= convertKeyPathsToJson request_body_keypaths (fromMaybe [] (Map.lookup Fields.FCRequestBody shape.fieldsMap)) ""
+                      , "response_body" .= convertKeyPathsToJson response_body_keypaths (fromMaybe [] (Map.lookup Fields.FCResponseBody shape.fieldsMap)) ""
+                      ]
+              let shapeJsonStr = aesonValueToText shapeJson
+              div_ [class_ "text-sm text-gray-500 p-4 bg-gray-100 whitespace-prerap w-2/3 h-[200px] overflow-auto flex flex-col gap-1 shape_json", style_ "font-family: monospace", term "data-json" shapeJsonStr] pass
+            div_ [class_ "mt-10"] do
+              let chartQuery = Just $ Charts.QBShapeHash shape.sHash
+              div_ [class_ "flex items-center justify-center "] $ div_ [class_ "w-60 h-16 px-3"] $ Charts.throughput pid shape.sHash chartQuery Nothing 14 Nothing False (Nothing, Nothing) Nothing
+  script_ [type_ "text/javascript"] ("" :: Text)
+  script_
+    [text|
+     const shapesJson = document.querySelectorAll('.shape_json')
+     shapesJson.forEach(shape => {
+      try {
+       const jsonData = shape.dataset.json
+       const newText = JSON.stringify(JSON.parse(jsonData), null ,4)
+       shape.innerText = newText
+      }catch(err) {
+        console.log(err)
+      }
+     })
+  |]
 
 
 apiDocsSubPage :: [Shapes.ShapeWithFields] -> Maybe Text -> Html ()
@@ -628,3 +650,94 @@ subSubSection title fieldsM =
 --           & breakOnAll "."
 --       )
 --       & (++ [(T.dropWhile (== '.') $ field.keyPath, Just field)])
+
+buildLeafJson :: [Fields.Field] -> AE.Value
+buildLeafJson = foldr (\f acc -> mergeObjects acc (object [AEKey.fromText f.key .= fieldTypeToText f.fieldType])) (AE.object [])
+
+
+mergeObjects :: Value -> Value -> Value
+mergeObjects (Object obj1) (Object obj2) = Object (obj1 <> obj2)
+mergeObjects _ _ = object []
+
+
+data KeyPathGroup = KeyPathGroup
+  { subGoups :: [Text]
+  , keyPath :: Text
+  }
+  deriving stock (Show, Generic)
+
+
+convertKeyPathsToJson :: [Text] -> [Fields.Field] -> Text -> Value
+convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
+  where
+    -- Debug logs
+    -- !() = trace (show items) ()
+    -- !() = trace (show categoryFields) ()
+    -- !() = trace (show parentPath) ()
+    groups = processItems items Map.empty
+
+    safeTail :: Text -> Text
+    safeTail txt = if T.null txt then txt else T.tail txt
+
+    processGroup :: (Text, KeyPathGroup) -> Value -> Value
+    processGroup (grp, keypath) parsedValue =
+      let updatedJson
+            | null keypath.subGoups =
+                let field = find (\fi -> safeTail (parentPath <> "." <> grp) == fi.keyPath) categoryFields
+                    t = extractInfo field categoryFields parentPath grp
+                 in object [AEKey.fromText grp .= t]
+            | T.null grp = convertKeyPathsToJson keypath.subGoups categoryFields (parentPath <> "." <> grp)
+            | otherwise =
+                let ob = object [AEKey.fromText grp .= convertKeyPathsToJson keypath.subGoups categoryFields (parentPath <> "." <> grp)]
+                 in ob
+       in mergeObjects updatedJson parsedValue
+    convertToJson' :: Map.Map T.Text KeyPathGroup -> Value
+    convertToJson' grps = foldr processGroup (object []) (Map.toList grps)
+
+
+processItem :: T.Text -> Map.Map T.Text KeyPathGroup -> Map.Map T.Text KeyPathGroup
+processItem item groups =
+  let splitItems = T.splitOn "." item
+      c = fromMaybe "" (viaNonEmpty head splitItems)
+
+      tmpRoot = T.dropWhile (== '.') c
+      -- newArr checks if it's a new arr identifier
+      newArr = T.isSuffixOf "[*]" tmpRoot
+      root
+        | newArr = tmpRoot
+        | length splitItems > 1 && fromMaybe "" (viaNonEmpty head (fromMaybe [] (viaNonEmpty tail splitItems))) == "[]" = tmpRoot <> "[*]"
+        | otherwise = tmpRoot
+      remainingItems
+        | newArr = T.intercalate "." $ fromMaybe [] (viaNonEmpty tail splitItems)
+        | length splitItems > 1 =
+            if fromMaybe "" (viaNonEmpty head (fromMaybe [] (viaNonEmpty tail splitItems))) == "[]"
+              then T.intercalate "." $ fromMaybe [] (viaNonEmpty tail (fromMaybe [] (viaNonEmpty tail splitItems)))
+              else T.intercalate "." $ fromMaybe [] (viaNonEmpty tail splitItems)
+        | otherwise = ""
+
+      updatedGroups = case Map.lookup root groups of
+        Just items -> case remainingItems of
+          "" -> groups
+          val -> Map.insert root (KeyPathGroup{subGoups = items.subGoups ++ [remainingItems], keyPath = items.keyPath <> "." <> root}) groups
+        Nothing -> case remainingItems of
+          "" -> Map.insert root (KeyPathGroup{subGoups = [], keyPath = "." <> root}) groups
+          val -> Map.insert root (KeyPathGroup{subGoups = [remainingItems], keyPath = "." <> root}) groups
+   in updatedGroups
+
+
+processItems :: [T.Text] -> Map.Map T.Text KeyPathGroup -> Map.Map T.Text KeyPathGroup
+processItems [] groups = groups
+processItems (x : xs) groups = processItems xs updatedGroups
+  where
+    updatedGroups = processItem x groups
+
+
+extractInfo :: Maybe Fields.Field -> [Fields.Field] -> Text -> Text -> Text
+extractInfo Nothing categoryFields parentPath grp =
+  let newK = T.tail parentPath <> "." <> grp
+      newF = find (\fi -> newK == fi.keyPath) categoryFields
+      ob = case newF of
+        Just f -> fieldTypeToText f.fieldType
+        Nothing -> "string"
+   in ob
+extractInfo (Just f) _ _ _ = fieldTypeToText f.fieldType
