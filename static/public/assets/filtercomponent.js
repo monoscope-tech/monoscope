@@ -17,6 +17,12 @@ export class MyElement extends LitElement {
     this.addEventListener('add-filter', this.handleChildEvent)
     this.addEventListener('close-search', () => { this.showFilterSearch = false })
     const body = document.querySelector('body')
+    window.queryBuilderValue = this.filters.join(" ")
+    window.setBuilderValue = (value, filter) => {
+      if (this.isValidFilter(filter)) {
+        this.handleChildEvent({ detail: { filter: filter } })
+      }
+    }
     body.addEventListener('click', () => {
       this.showFilterSearch = false
     })
@@ -44,6 +50,7 @@ export class MyElement extends LitElement {
         return
       }
     }
+
     if (this.filters.length === 0) {
       this.upadteFilters([event.detail.filter])
     } else {
@@ -71,6 +78,18 @@ export class MyElement extends LitElement {
       }
     }
     this.upadteFilters(this.filters.filter(f => f != filter))
+  }
+
+  isValidFilter(filter) {
+    const parts = filter.trim().split(/\s*([=<>!]+)\s*/);
+    if (parts.length !== 3) {
+      return false;
+    }
+    const [field, operator, value] = parts;
+    if (!field || !value) {
+      return false
+    }
+    return true;
   }
 
   toggleJoinOperator(index) {

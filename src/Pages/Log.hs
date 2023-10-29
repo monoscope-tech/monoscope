@@ -442,6 +442,7 @@ logItemRows pid requests cols nextLogsURL = do
               a_
                 [ class_ "cursor-pointer mx-1 inline-block bg-blue-100 hover:bg-blue-200 text-blue-900 px-3 rounded-lg monospace log-item-field-anchor log-item-field-value"
                 , term "data-field-path" col
+                , term "data-field-value" colValue
                 , [__|install LogItemMenuable|]
                 ]
                 $ toHtml colValue
@@ -502,6 +503,7 @@ jsonValueToHtmlTree val = jsonValueToHtmlTree' ("", "", val)
       div_
         [ class_ "relative log-item-field-parent"
         , term "data-field-path" fullFieldPath'
+        , term "data-field-value" $ unwrapJsonPrimValue value
         ]
         $ a_
           [class_ "block hover:bg-blue-50 cursor-pointer pl-6 relative log-item-field-anchor ", [__|install LogItemMenuable|]]
@@ -578,7 +580,7 @@ jsonTreeAuxillaryCode pid = do
           , role_ "menuitem"
           , tabindex_ "-1"
           , id_ "menu-item-2"
-          , [__|on click FieldFilter(me, " = ") |]
+          , onclick_ "filterByField(event, '=')"
           ]
           "Filter by field"
         button_
@@ -586,7 +588,7 @@ jsonTreeAuxillaryCode pid = do
           , role_ "menuitem"
           , tabindex_ "-1"
           , id_ "menu-item-3"
-          , [__|on click FieldFilter(me, " != ") |]
+          , onclick_ "filterByField(event, '!=')"
           ]
           "Exclude field"
   script_
@@ -605,27 +607,6 @@ jsonTreeAuxillaryCode pid = do
           halt
         end
       end
-      
-      def FieldFilter(me, operation)
-          set filter_path to (previous .log-item-field-value) @data-field-path
-          set filter_value to (previous  <.log-item-field-value/>)'s innerText
-          set editorVal to window.editor.getValue()
-          if editorVal.includes(filter_path) and editorVal.includes(filter_value)
-             exit
-          end
-          if editorVal.toLowerCase().endsWith("and") or editorVal.toLowerCase().endsWith("or") then
-             window.editor.setValue(editorVal + " " + filter_path + operation + filter_value)
-            else 
-              if editorVal.length == 0 then
-                 window.editor.setValue (filter_path + operation + filter_value)
-              else
-                window.editor.setValue (editorVal + " AND " + filter_path + operation + filter_value)
-              end
-          end
-          if window.editor.getValue() != "" then
-            htmx.trigger("#log_explorer_form", "submit")
-          end
-        end
 
       def LogItemExpandable(me)
           if I match <.expanded-log/> then 
@@ -644,6 +625,38 @@ jsonTreeAuxillaryCode pid = do
   script_ [src_ "/assets/js/monaco/vs/loader.js", defer_ "true"] ("" :: Text)
   script_
     [text|
+    window.queryBuilderValue = ''
+    function filterByField(event, operation) {
+       const target = event.target.parentNode.parentNode.parentNode
+       const path = target.getAttribute('data-field-path');
+       const value = target.getAttribute('data-field-value');
+       const filter = path + ' ' + operation + ' ' + value
+       let editorVal = '' 
+       console.log(window.queryBuilderValue)
+       if(window.queryBuilderValue) {
+        editorVal = window.queryBuilderValue
+        }else if(window.editor) {
+           editorVal = window.editor.getValue()
+        }
+       let newVal = ''
+       if (editorVal.toLowerCase().endsWith("and") || editorVal.toLowerCase().endsWith("or")) {
+           newVal = editorVal + " " + filter
+       }else {
+        if (editorVal.length == 0) {
+            newVal = filter
+          }else {
+            newVal = editorVal + " AND " + filter
+          }
+       }
+       if (newVal != "") {
+          window.setBuilderValue(newVal,filter)
+          if(window.editor) {
+             window.editor.setValue(newVal)
+            }
+            htmx.trigger("#log_explorer_form", "submit")
+        }
+    }
+
     var params = () => new Proxy(new URLSearchParams(window.location.search), {
       get: (searchParams, prop) => searchParams.get(prop)??"",
     });
@@ -670,6 +683,8 @@ jsonTreeAuxillaryCode pid = do
           return window.queryBuilderValue
       }
     }
+
+
 
     function toggleQueryBuilder() {
      document.getElementById("queryBuilder").classList.toggle("hidden")
