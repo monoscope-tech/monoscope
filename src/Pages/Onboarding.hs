@@ -20,9 +20,10 @@ import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.NonMember
 import Relude
 import Utils (
+  faIcon_,
   faSprite_,
   redirect,
-  userIsProjectMember, faIcon_,
+  userIsProjectMember,
  )
 
 
