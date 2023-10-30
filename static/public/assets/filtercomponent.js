@@ -28,11 +28,13 @@ export class MyElement extends LitElement {
       }
     }
 
-    window.setBuilderValue = (value, filter) => {
-      if (this.isValidFilter(filter)) {
-        this.handleChildEvent({ detail: { filter: filter } })
-      }
+    window.setBuilderValue = (value) => {
+      const fls = value.split(/\s+AND\s+|\s+OR\s+/i).flatMap((element, index, array) => {
+        return index < array.length - 1 ? [element, 'AND'] : [element];
+      });
+      this.upadteFilters(Array.from(new Set(fls)))
     }
+
     body.addEventListener('click', () => {
       this.showFilterSearch = false
     })
