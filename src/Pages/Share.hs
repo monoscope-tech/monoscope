@@ -210,16 +210,16 @@ getRequest sid = query Select q (Only sid)
           rd.response_body AS response_body,
           rd.request_headers AS request_headers,
           rd.response_headers AS response_headers,
-          COUNT(*) OVER() AS full_count,
           rd.duration_ns AS duration_ns,
           rd.sdk_type AS sdk_type,
           rd.parent_id AS parent_id,
           rd.service_version as service_version,
+          JSONB_ARRAY_LENGTH(rd.errors) as errors_count,
           rd.errors AS errors,
-          rd.tags AS tags
-          rd.request_type as request_type,
+          rd.tags AS tags,
+          rd.request_type as request_type
       FROM apis.share_requests AS sr
-      JOIN apis.request_dumps AS rd ON sr.request_dump_id = rd.id
+      JOIN apis.request_dumps rd ON sr.request_dump_id = rd.id
       WHERE sr.id = ? AND sr.expired_at > current_timestamp;
     |]
 
