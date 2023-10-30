@@ -61,6 +61,8 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
       link_ [rel_ "preconnect", href_ "https://rsms.me/"]
       link_ [rel_ "stylesheet", href_ "https://rsms.me/inter/inter.css"]
       link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/atom-one-dark.min.css"]
+      link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.63.0/codemirror.min.css"]
+      link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/theme/elegant.min.css"]
 
       -- SCRIPTS
       script_ [src_ "https://cdn.jsdelivr.net/npm/echarts@5.4.1/dist/echarts.min.js"] ("" :: Text)
@@ -72,7 +74,6 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
       script_ [src_ "/assets/js/thirdparty/popper2_11_4.min.js", defer_ "true"] ("" :: Text)
       script_ [src_ "/assets/js/thirdparty/tippy6_3_7.umd.min.js", defer_ "true"] ("" :: Text)
       script_ [src_ "/assets/js/thirdparty/instantpage5_1_0.js", type_ "module", defer_ "true"] ("" :: Text)
-      script_ [src_ "/assets/js/monaco/vs/luxon.min.js", defer_ "true"] ("" :: Text)
       script_ [src_ "/assets/js/monaco/vs/loader.js", defer_ "true"] ("" :: Text)
       script_ [src_ "/assets/js/charts.js"] ("" :: Text)
       script_ [src_ "/assets/js/main.js"] ("" :: Text)

@@ -316,7 +316,7 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
               faIcon_ "fa-sparkles" "fa-sharp fa-regular fa-sparkles" "h-3 w-3 inline-block"
               span_ "Run query"
         div_ do
-          div_ [id_ "queryEditor", class_ "h-14 hidden"] pass
+          div_ [id_ "queryEditor", class_ "h-14 hidden overflow-hidden"] pass
           let url_paths = getUniqueUrlPaths requests
           let url_paths_json = decodeUtf8 $ AE.encode url_paths
           let raw_url = decodeUtf8 $ AE.encode $ getUniqueRawUrlPaths requests
@@ -622,7 +622,9 @@ jsonTreeAuxillaryCode pid = do
       end
     |]
 
-  script_ [src_ "/assets/js/monaco/vs/loader.js", defer_ "true"] ("" :: Text)
+  script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.63.0/codemirror.min.js"] ("" :: Text)
+  script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/mode/javascript/javascript.min.js"] ("" :: Text)
+
   script_
     [text|
     if(window.setQueryBuilderFromParams) {
@@ -650,7 +652,7 @@ jsonTreeAuxillaryCode pid = do
           }
        }
        if (newVal != "") {
-          window.setBuilderValue(newVal,filter)
+          window.setBuilderValue(newVal)
           if(window.editor) {
              window.editor.setValue(newVal)
             }
@@ -685,39 +687,23 @@ jsonTreeAuxillaryCode pid = do
       }
     }
 
-
-
     function toggleQueryBuilder() {
      document.getElementById("queryBuilder").classList.toggle("hidden")
      document.getElementById("queryEditor").classList.toggle("hidden")
-      if(!window.editor) {
-          window.editor = monacoEditor.editor.create(document.getElementById('queryEditor'), {
-          value: params().query || window.queryBuilderValue,
-					language:'hcl',
-          minimap:{enabled:false}
-				});
-      }
+     if(!window.editor) {
+        var codeMirrorEditor = CodeMirror(document.getElementById('queryEditor'), {
+          value: params().query || window.queryBuilderValue || '',
+          mode:  "javascript",
+          theme: "elegant",
+          lineNumbers: true,
+        });
+        window.editor = codeMirrorEditor
+     }
     }
 
     var execd = false
     document.addEventListener('DOMContentLoaded', function(){
       window.setQueryBuilderFromParams()
-      // Configuration for the monaco editor which the query editor is built on.
-      require.config({ paths: { vs: '/assets/js/monaco/vs' } });
-			require(['vs/editor/editor.main'], function () {
-        monaco.editor.defineTheme('apitoolkit', {
-          base: 'vs',
-          inherit: true,
-          rules: [{ background: 'EDF9FA' }],
-          colors: {
-            'editor.foreground': '#000000',
-            'editor.background': '#f5f5f5',
-            'editorGutter.background': '#e8e8e8',
-          }
-        });
-        monaco.editor.setTheme('apitoolkit');
-        window.monacoEditor = monaco
-			});
     })
     |]
 
@@ -730,6 +716,10 @@ jsonTreeAuxillaryCode pid = do
     .collapsed .tree-children {
       display: none !important; 
     }
+    .CodeMirror {
+      font-family: Arial, monospace;
+      font-size: 16px;
+     }
     .collapsed .tree-children-count {display: inline !important;}
     .collapsed .children {display: inline-block; padding-left:0}
     .collapsed .closing-token {padding-left:0}

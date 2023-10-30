@@ -3,6 +3,11 @@ module Pages.Endpoints.EndpointList (endpointListGetH) where
 import Config
 import Data.Default (def)
 import Data.Text (toLower)
+import Data.Text qualified as T
+import Data.Time (UTCTime)
+import Data.Time.Clock (getCurrentTime)
+import Data.Tuple.Extra (fst3)
+import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (
   withPool,
@@ -11,16 +16,11 @@ import Fmt (commaizeF, fixedF, fmt, (+|), (|+))
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript.QuasiQuoter
+import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Projects.Projects qualified as Projets
 import Models.Users.Sessions qualified as Sessions
-import Data.Text qualified as T
-import Data.Time (UTCTime)
-import Data.Time.Clock (getCurrentTime)
-import Data.Tuple.Extra (fst3)
-import Data.UUID qualified as UUID
-import Models.Apis.Anomalies qualified as Anomalies
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Charts.Charts qualified as Charts
