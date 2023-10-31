@@ -316,12 +316,13 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
               faIcon_ "fa-sparkles" "fa-sharp fa-regular fa-sparkles" "h-3 w-3 inline-block"
               span_ "Run query"
         div_ do
-          div_ [id_ "queryEditor", class_ "h-14 hidden overflow-hidden"] pass
+          div_ [class_ "bg-gray-200"] do
+            div_ [id_ "queryEditor", class_ "h-14 hidden overflow-hidden bg-gray-200"] pass
           let url_paths = getUniqueUrlPaths requests
           let url_paths_json = decodeUtf8 $ AE.encode url_paths
           let raw_url = decodeUtf8 $ AE.encode $ getUniqueRawUrlPaths requests
           div_ [id_ "queryBuilder", class_ "mb-4", term "data-url_paths" url_paths_json, term "data-raw_urls" raw_url] do
-            termRaw "filter-element" []
+            termRaw "filter-element" [id_ "filterElement"] ("" :: Text)
 
     div_ [class_ "card-round w-full grow divide-y flex flex-col text-sm h-full overflow-y-hidden overflow-x-hidden"] do
       div_ [class_ "pl-3 py-1 space-x-5 flex flex-row justify-between"] do
@@ -627,9 +628,6 @@ jsonTreeAuxillaryCode pid = do
 
   script_
     [text|
-    if(window.setQueryBuilderFromParams) {
-          window.setQueryBuilderFromParams()
-      }
     function filterByField(event, operation) {
        const target = event.target.parentNode.parentNode.parentNode
        const path = target.getAttribute('data-field-path');
@@ -652,7 +650,10 @@ jsonTreeAuxillaryCode pid = do
           }
        }
        if (newVal != "") {
-          window.setBuilderValue(newVal)
+          const filterComp = document.querySelector('#filterElement')
+          if(filterComp) {
+               filterComp.setBuilderValue(newVal)
+            }
           if(window.editor) {
              window.editor.setValue(newVal)
             }
@@ -719,6 +720,7 @@ jsonTreeAuxillaryCode pid = do
     .CodeMirror {
       font-family: Arial, monospace;
       font-size: 16px;
+      background-color: rgb(243 244 246);
      }
     .collapsed .tree-children-count {display: inline !important;}
     .collapsed .children {display: inline-block; padding-left:0}
