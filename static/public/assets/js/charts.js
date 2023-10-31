@@ -2,6 +2,7 @@ function throughputEChart(renderAt, data, gb, showLegend, theme) {
   let backgroundStyle = {
     color: 'rgba(240,248,255, 0.4)'
   }
+
   let series = {
     name: "Throughput",
     type: 'bar',
@@ -34,32 +35,114 @@ function throughputEChart(renderAt, data, gb, showLegend, theme) {
       },
       data: v,
     }));
-  }
+    const myChart = echarts.init(document.getElementById(renderAt), theme);
+    const option = {
+      legend: { show: showLegend, type: 'scroll', top: 'bottom' },
+      grid: {
+        width: '100%',
+        left: '0%',
+        top: '5%',
+        bottom: '1.8%',
+        containLabel: true
+      },
+      tooltip: {
+        trigger: 'axis',
+      },
+      xAxis: { show: showLegend, type: 'time', scale: true },
+      yAxis: { show: showLegend, scale: true },
+      series: series,
+    };
+    if (showLegend) {
+      option.grid.bottom = '9%'
+    }
+    myChart.setOption(option);
 
-  const myChart = echarts.init(document.getElementById(renderAt), theme);
-  const option = {
-    legend: { show: showLegend, type: 'scroll', top: 'bottom' },
-    grid: {
-      width: '100%',
-      left: '0%',
-      top: '5%',
-      bottom: '1.8%',
-      containLabel: true
-    },
-    tooltip: {
-      trigger: 'axis',
-    },
-    xAxis: { show: showLegend, type: 'time', scale: true },
-    yAxis: { show: showLegend, scale: true},
-    series: series,
-  };
-  if (showLegend) {
-    option.grid.bottom = '9%'
+  } else {
+    const groupedData = {};
+    data.forEach(item => {
+      const [date, count, type] = item;
+      const dateObj = date
+
+      if (!groupedData[dateObj]) {
+        groupedData[dateObj] = { errors: 0, success: 0 };
+      }
+
+      if (type === "error") {
+        groupedData[dateObj].errors += count;
+      } else if (type === "success") {
+        groupedData[dateObj].success += count;
+      }
+    });
+    const dates = Object.keys(groupedData);
+    const errors = dates.map(date => groupedData[date].errors);
+    const success = dates.map(date => groupedData[date].success);
+
+    const myChart = echarts.init(document.getElementById(renderAt), theme);
+
+    const option = {
+      color: ['#ee6666', '#5470c6'],
+      legend: { show: showLegend, type: 'scroll', top: 'bottom' },
+      grid: {
+        width: '100%',
+        left: '0%',
+        top: '5%',
+        bottom: '1.8%',
+        containLabel: true
+      },
+      tooltip: {
+        trigger: 'axis',
+      },
+      xAxis: {
+        type: 'category',
+        data: dates,
+        axisLabel: {
+          interval: 24,
+          formatter: (value, index) => {
+            return value.split('T')[0].split('-')[2];
+          }
+        },
+        show: showLegend, scale: true
+      },
+      yAxis: {
+        type: 'value',
+        show: showLegend, scale: true
+      },
+      series: [
+        {
+          name: 'Errors',
+          type: 'bar',
+          stack: 'total',
+          showBackground: true,
+          backgroundStyle: backgroundStyle,
+          barWidth: '60%',
+          barMinHeight: "1",
+          encode: {
+            x: 'timestamp',
+            y: 'throughput',
+          },
+
+          data: errors,
+        },
+        {
+          name: 'Success',
+          type: 'bar',
+          showBackground: true,
+          backgroundStyle: backgroundStyle,
+          barWidth: '60%',
+          barMinHeight: "1",
+          encode: {
+            x: 'timestamp',
+            y: 'throughput',
+          },
+
+          stack: 'total',
+          data: success,
+        },
+      ],
+    };
+    myChart.setOption(option);
   }
-  console.log(option)
-  myChart.setOption(option);
 }
-
 
 function stackedChart(title, series, _data, interp, width = 800, height = 400) {
   let { opts, data } = getStackedOpts(title, series, _data, interp);
@@ -142,6 +225,9 @@ function throughputEChartTable(renderAt, categories, data, gb, showLegend, theme
     });
   };
 
+
+  console.log(getSeriesData(data))
+
   let fmter = defaultFormatter;
   if (chartType == 'line') {
     // Temporary workaround until js knows what kind of chart it is, or the units
@@ -184,7 +270,7 @@ function throughputEChartTable(renderAt, categories, data, gb, showLegend, theme
 
   if (chartType == 'line') {
     option.yAxis.axisLabel = {
-      formatter: function(params) {
+      formatter: function (params) {
         if (params >= 1000) {
           return `${Math.trunc(params / 1000)}s`
         }
@@ -220,7 +306,7 @@ function latencyEChart(renderAt, data, theme, from, to) {
       boundaryGap: ['5%', '5%'],
       min: 0,
       axisLabel: {
-        formatter: function(params) {
+        formatter: function (params) {
           if (params > 1000) {
             return `${Math.trunc(params / 1000)}s`
           }
@@ -283,7 +369,7 @@ function latencyHistogram(renderAt, pc, data) {
     xAxis: {
       show: true, type: 'value', scale: true, splitLine: { show: false },
       axisLabel: {
-        formatter: function(params) {
+        formatter: function (params) {
           if (params > 1000) {
             return `${params / 1000}s`
           }
