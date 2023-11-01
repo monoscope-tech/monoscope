@@ -554,7 +554,7 @@ throughputBy pid groupByM endpointHash shapeHash formatHash statusCodeGT numSlot
     GROUP BY timeB, status_category $groupBy
     $limit
 )
-SELECT COALESCE(json_agg(json_build_array(timeB $groupByFinal, total_count,  status_category)), '[]')::text from q;
+SELECT COALESCE(json_agg(json_build_array(timeB $groupByFinal, total_count, status_category)), '[]')::text from q;
  |]
   (Only val) <- fromMaybe (Only "[]") <$> queryOne Select (Query $ encodeUtf8 q) (MkDBField pid : paramList)
   pure val
