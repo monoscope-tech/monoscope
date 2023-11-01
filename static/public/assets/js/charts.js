@@ -60,16 +60,16 @@ function throughputEChart(renderAt, data, gb, showLegend, theme) {
   } else {
     const groupedData = {};
     data.forEach(item => {
-      const [date, count, type] = item;
+      const [date, count, status] = item;
       const dateObj = date
 
       if (!groupedData[dateObj]) {
         groupedData[dateObj] = { errors: 0, success: 0 };
       }
 
-      if (type === "error") {
+      if (status >= 400) {
         groupedData[dateObj].errors += count;
-      } else if (type === "success") {
+      } else {
         groupedData[dateObj].success += count;
       }
     });

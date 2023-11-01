@@ -547,14 +547,13 @@ throughputBy pid groupByM endpointHash shapeHash formatHash statusCodeGT numSlot
         [text| 
         WITH q as (
     SELECT time_bucket_gapfill('$intervalT seconds', created_at, $fromD, $toD) as timeB $groupByFields,
-           COALESCE(COUNT(*), 0) as total_count,
-           CASE WHEN status_code < 400 THEN 'success' ELSE 'error' END as status_category
+           COALESCE(COUNT(*), 0) as total_count, status_code
     FROM apis.request_dumps 
     WHERE project_id=? $cond $dateRangeStr
-    GROUP BY timeB, status_category $groupBy
+    GROUP BY timeB, status_code $groupBy 
     $limit
 )
-SELECT COALESCE(json_agg(json_build_array(timeB $groupByFinal, total_count, status_category)), '[]')::text from q;
+SELECT COALESCE(json_agg(json_build_array(timeB $groupByFinal, total_count, status_code)), '[]')::text from q;
  |]
   (Only val) <- fromMaybe (Only "[]") <$> queryOne Select (Query $ encodeUtf8 q) (MkDBField pid : paramList)
   pure val
