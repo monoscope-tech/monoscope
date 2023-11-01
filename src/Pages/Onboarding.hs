@@ -286,10 +286,10 @@ tabContentExpressCjs apikey current_tab =
       h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
       div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
         div_ [class_ "relative w-full flex flex-col"] do
-          contentHeader "express_code"
+          contentHeader "express_cjs_code"
           div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
             pre_ [class_ "flex min-h-full text-lg leading-snug"] do
-              code_ [class_ "h-full hljs language-javascript atom-one-dark", id_ "express_code"]
+              code_ [class_ "h-full hljs language-javascript atom-one-dark", id_ "express_cjs_code"]
                 $ toHtml
                 $ "const express = require('express');\n"
                 <> "const APIToolkit = require('apitoolkit-express').default;\n"
