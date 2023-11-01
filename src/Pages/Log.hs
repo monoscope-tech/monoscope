@@ -448,6 +448,8 @@ logItemRows pid requests cols nextLogsURL = do
                 ]
                 $ toHtml colValue
           let cls = "mx-1 inline-block px-3 rounded-lg monospace " :: Text
+          let (reqType, cl) = if show req.requestType == "Incoming" then ("In", "bg-gray-100") else ("Out", "bg-green-100")
+          span_ [class_ $ cls <> cl] $ reqType
           span_ [class_ $ cls <> getMethodColor req.method] $ toHtml req.method
           span_ [class_ $ cls <> " bg-gray-100 border border-gray-300 "] $ toHtml req.urlPath
           span_ [class_ $ cls <> getStatusColor req.statusCode] $ show req.statusCode
