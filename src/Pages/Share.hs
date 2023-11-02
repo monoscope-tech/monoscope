@@ -203,6 +203,7 @@ getRequest sid = query Select q (Only sid)
       SELECT
           rd.id AS id,
           rd.created_at AS created_at,
+          rd.project_id AS project_id,
           rd.host AS host,
           rd.url_path AS urlPath,
           rd.method AS method,
