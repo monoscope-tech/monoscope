@@ -197,7 +197,7 @@ expandAPIlogItem' pid req modal outgoingRequests = do
         jsonValueToHtmlTree req.errors
 
     -- outgoing request details
-    unless (null outgoingRequests) $ div_ [class_ "border rounded-lg mt-8", id_ "reponse_detail_container"] do
+    unless (null outgoingRequests) $ div_ [class_ "border rounded-lg mt-8"] do
       div_ [class_ "flex w-full bg-gray-100 px-4 py-2 flex-col gap-2"] do
         p_ [class_ "font-bold"] "Outgoing requests"
       div_ [class_ "grow overflow-y-auto py-2 px-1 max-h-[200px] whitespace-nowrap text-sm divide-y overflow-x-hidden"] do
