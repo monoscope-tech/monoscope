@@ -138,7 +138,7 @@ getEndpointFromOpEndpoint pid opEndpoint =
         , urlPath = opEndpoint.endpointUrl
         , method = T.toUpper opEndpoint.endpointMethod
         , urlParams = AE.Array []
-        , hosts = [opEndpoint.endpointHost]
+        , host = opEndpoint.endpointHost
         , hash = endpointHash
         , outgoing = False
         }

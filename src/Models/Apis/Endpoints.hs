@@ -79,7 +79,7 @@ data Endpoint = Endpoint
   , urlPath :: Text
   , urlParams :: AE.Value -- Key value map of key to the type. Needs a bit more figuring out.
   , method :: Text
-  , hosts :: Vector.Vector Text
+  , host :: Text
   , hash :: Text
   , outgoing :: Bool
   }
@@ -104,14 +104,13 @@ endpointUrlPath pid eid = "/p/" <> pid.toText <> "/endpoints/" <> endpointIdText
 upsertEndpointQueryAndParam :: Endpoint -> (Query, [DBField])
 upsertEndpointQueryAndParam endpoint = (q, params)
   where
-    host = fromMaybe @Text "" (endpoint.hosts Vector.!? 0) -- Read the first item from head or default to empty string
+    host = endpoint.host -- Read the first item from head or default to empty string
     q =
       [sql|  
-          INSERT INTO apis.endpoints (project_id, url_path, url_params, method, hosts, hash, outgoing)
-          VALUES(?, ?, ?, ?, $$ ? => null$$, ?, ?) 
+          INSERT INTO apis.endpoints (project_id, url_path, url_params, method, host, hash, outgoing)
+          VALUES(?, ?, ?, ?, ?, ?, ?) 
           ON CONFLICT (hash) 
-          DO 
-             UPDATE SET hosts=endpoints.hosts||hstore(?, null); 
+          DO  NOTHING;
       |]
     params =
       [ MkDBField endpoint.projectId
@@ -186,7 +185,7 @@ endpointRequestStatsByProject pid ackd archived pHostM = case pHostM of Just h -
 
 
 dependencyEndpointsRequestStatsByProject :: Projects.ProjectId -> Text -> PgT.DBT IO (Vector EndpointRequestStats)
-dependencyEndpointsRequestStatsByProject pid host = query Select (Query $ encodeUtf8 q) (pid, host, "'" <> host <> "'")
+dependencyEndpointsRequestStatsByProject pid host = query Select (Query $ encodeUtf8 q) (pid, host)
   where
     q =
       [text|
@@ -204,7 +203,7 @@ dependencyEndpointsRequestStatsByProject pid host = query Select (Query $ encode
      from apis.endpoints enp
      left join apis.endpoint_request_stats ers on (enp.id=ers.endpoint_id)
      left join apis.anomalies ann on (ann.anomaly_type='endpoint' AND target_hash=endpoint_hash)
-     where enp.project_id=? and enp.id is not null and ann.id is not null AND enp.outgoing = true AND enp.hosts ?? ? OR enp.hosts ?? ?
+     where enp.project_id=? and enp.id is not null and ann.id is not null AND enp.outgoing = true AND enp.host = ?
      order by total_requests DESC, url_path ASC
     |]
 
@@ -230,20 +229,20 @@ endpointRequestStatsByEndpoint eid = queryOne Select q (eid, eid)
 endpointById :: EndpointId -> PgT.DBT IO (Maybe Endpoint)
 endpointById eid = queryOne Select q (Only eid)
   where
-    q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, akeys(hosts), hash, outgoing from apis.endpoints where id=? |]
+    q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, host, hash, outgoing from apis.endpoints where id=? |]
 
 
 endpointByHash :: Projects.ProjectId -> Text -> PgT.DBT IO (Maybe Endpoint)
 endpointByHash pid hash = queryOne Select q (pid, hash)
   where
-    q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, akeys(hosts), hash, outgoing from apis.endpoints where project_id=? AND hash=? |]
+    q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, hosts, hash, outgoing from apis.endpoints where project_id=? AND hash=? |]
 
 
 data SwEndpoint = SwEndpoint
   { urlPath :: Text
   , urlParams :: AE.Value -- Key value map of key to the type. Needs a bit more figuring out.
   , method :: Text
-  , hosts :: Vector.Vector Text
+  , host :: Text
   , hash :: Text
   }
   deriving stock (Show, Generic, Eq)
@@ -257,7 +256,7 @@ endpointsByProjectId pid = query Select q (Only pid)
   where
     q =
       [sql|
-         SELECT url_path, url_params, method, akeys(hosts), hash
+         SELECT url_path, url_params, method, host, hash
          FROM apis.endpoints
          WHERE project_id = ?
        |]
@@ -268,7 +267,7 @@ insertEndpoints endpoints = do
   let q =
         [sql| 
         INSERT INTO apis.endpoints
-        (project_id, url_path, url_params, method, hosts, hash)
+        (project_id, url_path, url_params, method, host, hash)
         VALUES (?,?,?,?,?,?) ON CONFLICT DO NOTHING;
       |]
   let params = map getEndpointParams endpoints
@@ -289,4 +288,4 @@ getEndpointParams endpoint =
 getProjectHosts :: Projects.ProjectId -> PgT.DBT IO (Vector Host)
 getProjectHosts pid = query Select q (Only pid)
   where
-    q = [sql| SELECT DISTINCT unnest(akeys(hosts)) FROM apis.endpoints where  project_id = ? AND outgoing=false |]
+    q = [sql| SELECT DISTINCT host FROM apis.endpoints where  project_id = ? AND outgoing=false |]
