@@ -200,7 +200,7 @@ expandAPIlogItem' pid req modal outgoingRequests = do
     unless (null outgoingRequests) $ div_ [class_ "border rounded-lg mt-8"] do
       div_ [class_ "flex w-full bg-gray-100 px-4 py-2 flex-col gap-2"] do
         p_ [class_ "font-bold"] "Outgoing requests"
-      div_ [class_ "grow overflow-y-auto py-2 px-1 max-h-[200px] whitespace-nowrap text-sm divide-y overflow-x-hidden"] do
+      div_ [class_ "grow overflow-y-auto py-2 px-1 max-h-[500px] whitespace-nowrap text-sm divide-y overflow-x-hidden"] do
         logItemRows pid outgoingRequests [] ""
 
     -- request details
@@ -268,6 +268,36 @@ expandAPIlogItem' pid req modal outgoingRequests = do
         jsonValueToHtmlTree req.responseBody
       div_ [class_ "bg-gray-50 m-4 p-2 hidden rounded-lg border sdk_tab_content", id_ "res_headers_json"] do
         jsonValueToHtmlTree req.responseHeaders
+  script_
+    [type_ "text/hyperscript"]
+    [text|
+      behavior LogItemMenuable
+        on click
+          if I match <.with-context-menu/> then
+            remove <.log-item-context-menu /> then remove .with-context-menu from <.with-context-menu />
+          else
+            remove <.log-item-context-menu /> then remove .with-context-menu from <.with-context-menu /> then
+            get #log-item-context-menu-tmpl.innerHTML then put it after me then add .with-context-menu to me then 
+            _hyperscript.processNode(document.querySelector('.log-item-context-menu'))
+            htmx.process(document.querySelector('.log-item-context-menu'))
+          end
+          halt
+        end
+      end
+
+      def LogItemExpandable(me)
+          if I match <.expanded-log/> then 
+            remove next <.log-item-info/> then 
+            remove .expanded-log from me
+          else
+            add .expanded-log to me
+            remove .hidden from next <.item-loading />
+            fetch `$${@data-log-item-path}` as html then put it after me then
+             add .hidden to next <.item-loading />
+            _hyperscript.processNode(next <.log-item-info />) then
+          end 
+      end
+    |]
 
 
 getUniqueUrlPaths :: Vector RequestDumps.RequestDumpLogItem -> [Text]
