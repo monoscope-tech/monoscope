@@ -27,6 +27,7 @@ module Models.Apis.RequestDumps (
   getRequestDumpsForPreviousReportPeriod,
   countRequestDumpByProject,
   dependenciesAndEventsCount,
+  selectRequestDumpByProjectAndParentId,
   getRequestType,
 ) where
 
@@ -292,6 +293,7 @@ data HostEvents = HostEvents
 data RequestDumpLogItem = RequestDumpLogItem
   { id :: UUID.UUID
   , createdAt :: ZonedTime
+  , projectId :: Projects.ProjectId
   , host :: Text
   , urlPath :: Text
   , method :: Text
@@ -384,7 +386,7 @@ selectRequestDumpByProject pid extraQuery fromM = do
         <> extraQueryParsed
         <> " limit 1;"
     q =
-      [text| SELECT id,created_at,host,url_path,method,raw_url,referer,
+      [text| SELECT id,created_at,project_id,host,url_path,method,raw_url,referer,
                     path_params, status_code,query_params,
                     request_body,response_body,'{}'::jsonb,'{}'::jsonb,
                     duration_ns, sdk_type,
@@ -430,7 +432,7 @@ selectRequestDumpByProjectAndId :: Projects.ProjectId -> ZonedTime -> UUID.UUID 
 selectRequestDumpByProjectAndId pid createdAt rdId = queryOne Select q (createdAt, pid, rdId)
   where
     q =
-      [sql|SELECT   id,created_at,host,url_path,method,raw_url,referer,
+      [sql|SELECT   id,created_at,project_id, host,url_path,method,raw_url,referer,
                     path_params,status_code,query_params,
                     request_body,response_body,request_headers,response_headers, 
                     duration_ns, sdk_type,
@@ -483,7 +485,7 @@ selectAnomalyEvents pid targetHash anType = query Select (Query $ encodeUtf8 q) 
       _ -> error "Should never be reached"
 
     q =
-      [text| SELECT id,created_at,host,url_path,method,raw_url,referer,
+      [text| SELECT id,created_at, project_id,host,url_path,method,raw_url,referer,
                     path_params, status_code,query_params,
                     request_body,response_body,request_headers,response_headers,
                     duration_ns, sdk_type,
@@ -501,6 +503,20 @@ dependenciesAndEventsCount = query Select q
            GROUP BY host
            ORDER BY eventsCount DESC;
            |]
+
+
+selectRequestDumpByProjectAndParentId :: Projects.ProjectId -> UUID.UUID -> DBT IO (V.Vector RequestDumpLogItem)
+selectRequestDumpByProjectAndParentId pid parentId = query Select q (pid, parentId)
+  where
+    q =
+      [sql|
+     SELECT id,created_at,project_id,host,url_path,method,raw_url,referer,
+                    path_params, status_code,query_params,
+                    request_body,response_body,'{}'::jsonb,'{}'::jsonb,
+                    duration_ns, sdk_type,
+                    parent_id, service_version, JSONB_ARRAY_LENGTH(errors) as errors_count, '{}'::jsonb, tags, request_type
+             FROM apis.request_dumps where project_id=? and parent_id= ? LIMIT 199; 
+     |]
 
 
 -- A throughput chart query for the request_dump table.

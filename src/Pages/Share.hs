@@ -102,6 +102,11 @@ shareLinkGetH sid = do
   pool <- asks pool
   res <- liftIO $ withPool pool $ getRequest (show sid)
   let req = if V.length res > 0 then Just $ V.head res else Nothing
+  childRequets <- liftIO $ withPool pool do
+    case req of
+      Just r -> RequestDumps.selectRequestDumpByProjectAndParentId r.projectId r.id
+      Nothing -> pure []
+
   let bwconf =
         (def :: BWConfig)
           { sessM = Nothing
@@ -109,11 +114,11 @@ shareLinkGetH sid = do
           , pageTitle = "Share request log"
           }
 
-  pure $ bodyWrapper bwconf $ sharePage req
+  pure $ bodyWrapper bwconf $ sharePage req childRequets
 
 
-sharePage :: Maybe RequestDumps.RequestDumpLogItem -> Html ()
-sharePage req = do
+sharePage :: Maybe RequestDumps.RequestDumpLogItem -> V.Vector RequestDumps.RequestDumpLogItem -> Html ()
+sharePage req outgoing = do
   nav_ [id_ "main-navbar", class_ "fixed z-20 top-0 w-full w-full px-6 py-4 border-b bg-white flex flex-row justify-between"] do
     div_ [class_ "flex justify-between items-center gap-4 w-[1000px] mx-auto"] do
       a_ [href_ "https://apitoolkit.io", class_ "flex items-center text-gray-500 hover:text-gray-700"] do
@@ -128,7 +133,7 @@ sharePage req = do
   section_ [class_ "h-full mt-[80px] w-[1000px] flex flex-col items-center mx-auto"] do
     h3_ [class_ "text-5xl text-left mb-16 w-full font-semibold my-8"] "Shared Request Log"
     case req of
-      Just r -> Log.expandAPIlogItem' r False
+      Just r -> Log.expandAPIlogItem' r.projectId r False outgoing
       Nothing -> div_ [class_ "flex flex-col gap-4 mt-[80px] text-center"] do
         h1_ [class_ "font-bold text-3xl"] "Request Log Not Found"
         p_ [class_ "text-gray-500 text-xl"] "This shared request log URL does not exist or has expired"
