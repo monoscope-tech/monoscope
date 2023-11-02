@@ -524,6 +524,8 @@ apiLogItemView req expandItemPath = do
                 remove .hidden from #log-modal-content-loader
                 fetch `${@data-log-item-path}` as html then put it into #log-modal-content
                 add .hidden to #log-modal-content-loader
+                _hyperscript.processNode(document.querySelector('#log-modal-content'))
+                htmx.process(document.querySelector('#log-modal-content'))
                 end
           |]
           ]
