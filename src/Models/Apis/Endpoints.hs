@@ -298,7 +298,7 @@ getEndpointParams endpoint =
 getProjectHosts :: Projects.ProjectId -> PgT.DBT IO (Vector Host)
 getProjectHosts pid = query Select q (Only pid)
   where
-    q = [sql| SELECT DISTINCT host FROM apis.endpoints where  project_id = ? AND outgoing=false |]
+    q = [sql| SELECT DISTINCT host FROM apis.endpoints where  project_id = ? AND outgoing=false AND host!= '' |]
 
 
 dependenciesAndEventsCount :: Projects.ProjectId -> DBT IO (Vector HostEvents)
