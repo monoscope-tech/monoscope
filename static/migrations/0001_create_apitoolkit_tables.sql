@@ -213,6 +213,9 @@ ALTER TABLE apis.endpoints DROP CONSTRAINT endpoints_project_id_url_path_method_
 ALTER TABLE apis.endpoints ADD COLUMN host text NOT  NULL DEFAULT    ''::text;
 UPDATE apis.endpoints
 SET host = COALESCE(REPLACE((akeys(hosts))[1], '''', ''),'');
+
+-- we can hold on with this to make sure everything works
+-- after than we can drop the column
 ALTER TABLE apis.endpoints DROP COLUMN hosts;
 
 -----------------------------------------------------------------------
