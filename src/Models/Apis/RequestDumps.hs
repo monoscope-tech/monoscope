@@ -10,7 +10,6 @@ module Models.Apis.RequestDumps (
   EndpointPerf (..),
   RequestForReport (..),
   ATError (..),
-  HostEvents (..),
   normalizeUrlPath,
   throughputBy,
   throughputBy',
@@ -26,7 +25,6 @@ module Models.Apis.RequestDumps (
   getRequestDumpForReports,
   getRequestDumpsForPreviousReportPeriod,
   countRequestDumpByProject,
-  dependenciesAndEventsCount,
   getRequestType,
 ) where
 
@@ -276,17 +274,6 @@ data EndpointPerf = EndpointPerf
 makeFieldLabelsNoPrefix ''RequestForReport
 
 
-data HostEvents = HostEvents
-  { host :: Text
-  , eventCount :: Integer
-  }
-  deriving stock (Show, Generic, Eq)
-  deriving anyclass (ToRow, FromRow)
-  deriving
-    (Entity)
-    via (GenericEntity '[Schema "apis", TableName "request_dumps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] EndpointPerf)
-
-
 -- RequestDumpLogItem is used in the to query log items for the log query explorer on the dashboard. Each item here can be queried
 -- via the query language on said dashboard page.
 data RequestDumpLogItem = RequestDumpLogItem
@@ -489,18 +476,6 @@ selectAnomalyEvents pid targetHash anType = query Select (Query $ encodeUtf8 q) 
                     duration_ns, sdk_type,
                     parent_id, service_version, JSONB_ARRAY_LENGTH(errors) as errors_count, errors, tags, request_type
              FROM apis.request_dumps where created_at > NOW() - interval '14' day AND project_id=? AND $extraQuery LIMIT 199; |]
-
-
-dependenciesAndEventsCount :: Projects.ProjectId -> DBT IO (V.Vector HostEvents)
-dependenciesAndEventsCount = query Select q
-  where
-    q =
-      [sql|SELECT host, COUNT(*) AS eventsCount 
-           FROM apis.request_dumps
-           WHERE project_id= ? AND host != '' AND request_type = 'Outgoing' AND created_at > NOW() - interval '14' day
-           GROUP BY host
-           ORDER BY eventsCount DESC;
-           |]
 
 
 -- A throughput chart query for the request_dump table.

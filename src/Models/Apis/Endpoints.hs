@@ -9,6 +9,8 @@ module Models.Apis.Endpoints (
   EndpointId (..),
   EndpointRequestStats (..),
   Host (..),
+  HostEvents (..),
+  dependenciesAndEventsCount,
   endpointsByProjectId,
   endpointUrlPath,
   endpointRequestStatsByProject,
@@ -251,6 +253,14 @@ data SwEndpoint = SwEndpoint
   deriving (FromField) via Aeson SwEndpoint
 
 
+data HostEvents = HostEvents
+  { host :: Text
+  , eventCount :: Integer
+  }
+  deriving stock (Show, Generic, Eq)
+  deriving anyclass (ToRow, FromRow)
+
+
 endpointsByProjectId :: Projects.ProjectId -> PgT.DBT IO (Vector SwEndpoint)
 endpointsByProjectId pid = query Select q (Only pid)
   where
@@ -289,3 +299,22 @@ getProjectHosts :: Projects.ProjectId -> PgT.DBT IO (Vector Host)
 getProjectHosts pid = query Select q (Only pid)
   where
     q = [sql| SELECT DISTINCT host FROM apis.endpoints where  project_id = ? AND outgoing=false |]
+
+
+dependenciesAndEventsCount :: Projects.ProjectId -> DBT IO (Vector HostEvents)
+dependenciesAndEventsCount = query Select q
+  where
+    q =
+      [sql|SELECT DISTINCT ep.host, 
+                  (SELECT COUNT(*) 
+                   FROM apis.request_dumps rd 
+                   WHERE rd.host = ep.host 
+                     AND rd.request_type = 'Outgoing' 
+                     AND rd.created_at > NOW() - interval '14' day
+                  ) AS eventsCount
+           FROM apis.endpoints ep
+           WHERE ep.project_id = ? 
+             AND ep.host != '' 
+             AND ep.outgoing = true
+           ORDER BY eventsCount DESC;
+      |]
