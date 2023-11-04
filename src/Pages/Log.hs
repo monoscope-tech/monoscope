@@ -268,6 +268,15 @@ getUniqueRawUrlPaths :: Vector RequestDumps.RequestDumpLogItem -> [Text]
 getUniqueRawUrlPaths logs = ordNub . Vector.toList $ Vector.map (\r -> r.rawUrl) logs
 
 
+timePickerItems :: [(Text, Text)]
+timePickerItems =
+  [ ("1H", "Last Hour")
+  , ("24H", "Last 24 Hours")
+  , ("7D", "Last 7 days")
+  , ("14D", "Last 14 days")
+  ]
+
+
 apiLogsPage :: Projects.ProjectId -> Int -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Text -> Text -> Text -> Html ()
 apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL = do
   section_ [class_ "mx-auto px-10 py-2 gap-2 flex flex-col h-[98%] overflow-hidden "] do
@@ -306,13 +315,38 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
       do
         nav_ [class_ "flex flex-row p-2 content-end justify-between items-baseline border-slate-100"] do
           a_ [class_ "inline-block"] "Query"
-          div_ [class_ "flex items-center gap-6 "] do
-            div_ [class_ "flex items-center gap-2"] do
+          div_ [class_ "relative p-1 "] do
+            div_ [class_ "relative"] do
+              a_
+                [ class_ "relative px-3 py-2 border border-1 border-black-200 space-x-2  inline-block relative cursor-pointer rounded-md"
+                , [__| on click toggle .hidden on #timepickerBox|]
+                ]
+                do
+                  mIcon_ "clock" "h-4 w-4"
+                  span_ [class_ "inline-block"] $ toHtml "Last 7 days"
+                  faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 w-4 inline-block"
+              div_ [id_ "timepickerBox", class_ "hidden absolute z-10 mt-1  rounded-md flex"] do
+                div_ [class_ "inline-block w-84 overflow-auto bg-white py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm"] do
+                  timePickerItems
+                    & mapM_ \(val, title) ->
+                      a_
+                        [ class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 "
+                        ]
+                        $ toHtml title
+                  a_ [class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ", [__| on click toggle .hidden on #timepickerSidebar |]] "Custom date range"
+                div_ [class_ "inline-block relative hidden", id_ "timepickerSidebar"] do
+                  div_ [id_ "startTime", class_ "hidden"] ""
+          --- here
+          div_
+            [class_ "flex items-center gap-2"]
+            do
               label_ [class_ "relative inline-flex items-center cursor-pointer"] do
                 input_ [type_ "checkbox", value_ "", class_ "sr-only peer", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()"]
                 div_ [class_ "w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"] pass
                 span_ [class_ "ml-3 text-sm font-medium text-gray-900 dark:text-gray-300"] "Use editor"
-            button_ [type_ "submit", class_ "cursor-pointer inline-block space-x-1 bg-blue-100 hover:bg-blue-200 blue-800 py-1 px-2 rounded-lg"] do
+          button_
+            [type_ "submit", class_ "cursor-pointer inline-block space-x-1 bg-blue-100 hover:bg-blue-200 blue-800 py-1 px-2 rounded-lg"]
+            do
               faIcon_ "fa-sparkles" "fa-sharp fa-regular fa-sparkles" "h-3 w-3 inline-block"
               span_ "Run query"
         div_ do
@@ -448,6 +482,8 @@ logItemRows pid requests cols nextLogsURL = do
                 ]
                 $ toHtml colValue
           let cls = "mx-1 inline-block px-3 rounded-lg monospace " :: Text
+          let (c, t, tt) = if show req.requestType == "Outgoing" then ("bg-green-200", "OUT" :: Text, "Outgoing request") else ("bg-gray-200", "IN", "Incoming request")
+          span_ [class_ $ cls <> c, title_ tt] $ toHtml t
           span_ [class_ $ cls <> getMethodColor req.method] $ toHtml req.method
           span_ [class_ $ cls <> " bg-gray-100 border border-gray-300 "] $ toHtml req.urlPath
           span_ [class_ $ cls <> getStatusColor req.statusCode] $ show req.statusCode
