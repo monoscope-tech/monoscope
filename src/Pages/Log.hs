@@ -30,7 +30,6 @@ import Pages.NonMember
 import Pkg.Components (loader)
 import Relude
 
-import Lucid.Base (TermRaw (termRaw, termRawWith))
 import System.Clock
 import Utils
 
@@ -42,11 +41,23 @@ import Utils
 -- >>> import Data.Aeson
 
 
-apiLog :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
-apiLog sess pid queryM cols' fromM hxRequestM hxBoostedM = do
+apiLog :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
+apiLog sess pid queryM cols' cursorM sinceM fromM toM hxRequestM hxBoostedM = do
   let cols = T.splitOn "," (fromMaybe "" cols')
   let query = fromMaybe "" queryM
+  let cursorM' = case cursorM of
+        Nothing -> Nothing
+        Just "" -> Nothing
+        Just a -> Just a
   let fromM' = case fromM of
+        Nothing -> Nothing
+        Just "" -> Nothing
+        Just a -> Just a
+  let sinceM' = case sinceM of
+        Nothing -> Nothing
+        Just "" -> Nothing
+        Just a -> Just a
+  let toM' = case toM of
         Nothing -> Nothing
         Just "" -> Nothing
         Just a -> Just a
@@ -60,14 +71,14 @@ apiLog sess pid queryM cols' fromM hxRequestM hxBoostedM = do
       (project, dbResp) <- liftIO
         $ withPool pool do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-          dbResp <- RequestDumps.selectRequestDumpByProject pid query fromM'
+          dbResp <- RequestDumps.selectRequestDumpByProject pid query cursorM' sinceM' fromM' toM'
           pure (project, dbResp)
 
       reqChartTxt <- liftIO $ Database.PostgreSQL.Entity.DBT.withPool pool $ RequestDumps.throughputBy pid Nothing Nothing Nothing Nothing Nothing (3 * 60) Nothing queryM (Nothing, Nothing)
       let (requests, resultCount) = dbResp
           reqLastCreatedAtM = (^. #createdAt) <$> viaNonEmpty last (Vector.toList requests) -- FIXME: unoptimal implementation, converting from vector to list for last
-          fromTempM = toText . formatTime defaultTimeLocale "%F %T" <$> reqLastCreatedAtM
-          nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' fromTempM
+          cursorTempM = toText . formatTime defaultTimeLocale "%F %T" <$> reqLastCreatedAtM
+          nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' cursorTempM sinceM fromM toM
 
       case (hxRequestM, hxBoostedM) of
         (Just "true", Nothing) -> pure $ do
@@ -81,7 +92,7 @@ apiLog sess pid queryM cols' fromM hxRequestM hxBoostedM = do
                   , currProject = project
                   , pageTitle = "API Log Explorer"
                   }
-          let resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing
+          let resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing
           pure $ bodyWrapper bwconf $ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL
 
 
@@ -307,7 +318,7 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
       [ class_ "card-round w-full text-sm"
       , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
       , hxPushUrl_ "true"
-      , hxVals_ "js:{query:getQueryFromEditor(), cols:params().cols}"
+      , hxVals_ "js:{query:getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols}"
       , hxTarget_ "#log-item-table-body"
       , id_ "log_explorer_form"
       , hxIndicator_ "#query-indicator"
@@ -315,40 +326,44 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
       do
         nav_ [class_ "flex flex-row p-2 content-end justify-between items-baseline border-slate-100"] do
           a_ [class_ "inline-block"] "Query"
-          div_ [class_ "relative p-1 "] do
-            div_ [class_ "relative"] do
-              a_
-                [ class_ "relative px-3 py-2 border border-1 border-black-200 space-x-2  inline-block relative cursor-pointer rounded-md"
-                , [__| on click toggle .hidden on #timepickerBox|]
-                ]
-                do
-                  mIcon_ "clock" "h-4 w-4"
-                  span_ [class_ "inline-block"] $ toHtml "Last 7 days"
-                  faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 w-4 inline-block"
-              div_ [id_ "timepickerBox", class_ "hidden absolute z-10 mt-1  rounded-md flex"] do
-                div_ [class_ "inline-block w-84 overflow-auto bg-white py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm"] do
-                  timePickerItems
-                    & mapM_ \(val, title) ->
-                      a_
-                        [ class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 "
-                        ]
-                        $ toHtml title
-                  a_ [class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ", [__| on click toggle .hidden on #timepickerSidebar |]] "Custom date range"
-                div_ [class_ "inline-block relative hidden", id_ "timepickerSidebar"] do
-                  div_ [id_ "startTime", class_ "hidden"] ""
-          --- here
-          div_
-            [class_ "flex items-center gap-2"]
-            do
-              label_ [class_ "relative inline-flex items-center cursor-pointer"] do
-                input_ [type_ "checkbox", value_ "", class_ "sr-only peer", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()"]
-                div_ [class_ "w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"] pass
-                span_ [class_ "ml-3 text-sm font-medium text-gray-900 dark:text-gray-300"] "Use editor"
-          button_
-            [type_ "submit", class_ "cursor-pointer inline-block space-x-1 bg-blue-100 hover:bg-blue-200 blue-800 py-1 px-2 rounded-lg"]
-            do
-              faIcon_ "fa-sparkles" "fa-sharp fa-regular fa-sparkles" "h-3 w-3 inline-block"
-              span_ "Run query"
+          div_ [class_ "flex gap-10 items-center"] do
+            div_ [class_ "relative p-1 "] do
+              div_ [class_ "relative"] do
+                input_ [type_ "hidden", id_ "since_input"]
+                input_ [type_ "hidden", id_ "custom_range_input"]
+                a_
+                  [ class_ "relative px-3 py-2 border border-1 border-black-200 space-x-2  inline-block relative cursor-pointer rounded-md"
+                  , [__| on click toggle .hidden on #timepickerBox|]
+                  ]
+                  do
+                    mIcon_ "clock" "h-4 w-4"
+                    span_ [class_ "inline-block"] $ toHtml "Last 7 days"
+                    faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 w-4 inline-block"
+                div_ [id_ "timepickerBox", class_ "hidden absolute z-10 mt-1  rounded-md flex"] do
+                  div_ [class_ "inline-block w-84 overflow-auto bg-white py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm"] do
+                    timePickerItems
+                      & mapM_ \(val, title) ->
+                        a_
+                          [ class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 "
+                          , term "data-value" val
+                          , [__| on click set #custom_range_input's value to my @data-value then log my @data-value|]
+                          ]
+                          $ toHtml title
+                    a_ [class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ", [__| on click toggle .hidden on #timepickerSidebar |]] "Custom date range"
+                  div_ [class_ "inline-block relative hidden", id_ "timepickerSidebar"] do
+                    div_ [id_ "startTime", class_ "hidden"] ""
+            div_
+              [class_ "flex items-center gap-2"]
+              do
+                label_ [class_ "relative inline-flex items-center cursor-pointer"] do
+                  input_ [type_ "checkbox", value_ "", class_ "sr-only peer", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()"]
+                  div_ [class_ "w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"] pass
+                  span_ [class_ "ml-3 text-sm font-medium text-gray-900 dark:text-gray-300"] "Use editor"
+            button_
+              [type_ "submit", class_ "cursor-pointer inline-block space-x-1 bg-blue-100 hover:bg-blue-200 blue-800 py-1 px-2 rounded-lg"]
+              do
+                faIcon_ "fa-sparkles" "fa-sharp fa-regular fa-sparkles" "h-3 w-3 inline-block"
+                span_ "Run query"
         div_ do
           div_ [class_ "bg-gray-200"] do
             div_ [id_ "queryEditor", class_ "h-14 hidden overflow-hidden bg-gray-200"] pass
@@ -394,6 +409,32 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
           logItemRows pid requests cols nextLogsURL
   script_
     [text|
+    const picker = new easepick.create({
+      element: '#startTime',
+      css: [
+        'https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.0/dist/index.css',
+      ],
+      inline: true,
+      plugins: ['RangePlugin', 'TimePlugin'],
+      autoApply: false,
+      setup(picker) {
+        picker.on('select', (e) => {
+          const start = JSON.stringify(e.detail.start).slice(1, -1);
+          const end = JSON.stringify(e.detail.end).slice(1, -1);
+          const rangeInput = document.getElementById("custom_range_input")
+          rangeInput.value = start + "/" + end
+          console.log(rangeInput.value)
+          const url = new URL(window.location.href);
+          url.searchParams.set('x', true);
+          url.searchParams.set('from', start);
+          url.searchParams.set('to', end);
+          url.searchParams.delete('since');
+          // window.location.href = url.toString();
+        });
+      },
+    });
+    window.picker = picker;
+
 function changeTab(tabId, parent) {
   const p = document.getElementById(parent);
   const tabLinks = p.querySelectorAll('.sdk_tab');
@@ -720,8 +761,18 @@ jsonTreeAuxillaryCode pid = do
      if(toggler.checked) {
           return window.editor.getValue();
       }else {
-          return window.queryBuilderValue
+          return window.queryBuilderValue || "";
       }
+    }
+
+    function getTimeRange () {
+      const rangeInput = document.getElementById("custom_range_input")
+      const range = rangeInput.value.split("/")
+      console.log(range)
+      if (range.length == 2)  {
+         return {from: range[0], to: range[1], since: ''}
+        }
+      return {since: range[0], from: '', to: ''}
     }
 
     function toggleQueryBuilder() {

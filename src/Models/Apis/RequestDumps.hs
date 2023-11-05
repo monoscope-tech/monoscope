@@ -328,13 +328,16 @@ requestDumpLogItemUrlPath :: Projects.ProjectId -> RequestDumpLogItem -> Text
 requestDumpLogItemUrlPath pid rd = "/p/" <> pid.toText <> "/log_explorer/" <> UUID.toText rd.id <> "/" <> from @String (formatShow iso8601Format rd.createdAt)
 
 
-requestDumpLogUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Text
-requestDumpLogUrlPath pid q cols fromM = [text|/p/$pidT/log_explorer?query=$queryT&cols=$colsT&from=$fromT|]
+requestDumpLogUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Text
+requestDumpLogUrlPath pid q cols cursorM sinceM fromM toM = [text|/p/$pidT/log_explorer?query=$queryT&cols=$colsT&cursor=$cursorT&since=$sinceT&from=$fromT&to=$toT|]
   where
     pidT = pid.toText
     queryT = fromMaybe "" q
     colsT = fromMaybe "" cols
+    cursorT = fromMaybe "" cursorM
+    sinceT = fromMaybe "" sinceM
     fromT = fromMaybe "" fromM
+    toT = fromMaybe "" toM
 
 
 getRequestDumpForReports :: Projects.ProjectId -> Text -> DBT IO (V.Vector RequestForReport)
@@ -369,18 +372,28 @@ getRequestDumpsForPreviousReportPeriod pid report_type = query Select (Query $ e
     |]
 
 
-selectRequestDumpByProject :: Projects.ProjectId -> Text -> Maybe Text -> DBT IO (V.Vector RequestDumpLogItem, Int)
-selectRequestDumpByProject pid extraQuery fromM = do
-  logItems <- query Select (Query $ encodeUtf8 q) (pid, fromT)
-  Only count <- fromMaybe (Only 0) <$> queryOne Select (Query $ encodeUtf8 qCount) (pid, fromT)
+selectRequestDumpByProject :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DBT IO (V.Vector RequestDumpLogItem, Int)
+selectRequestDumpByProject pid extraQuery cursorM sinceM fromM toM = do
+  logItems <- query Select (Query $ encodeUtf8 q) (pid, cursorT)
+  Only count <- fromMaybe (Only 0) <$> queryOne Select (Query $ encodeUtf8 qCount) (pid, cursorT)
   pure (logItems, count)
   where
-    fromT = fromMaybe "infinity" fromM
+    cursorT = fromMaybe "infinity" cursorM
+    fromT = fromMaybe "-infinity" fromM
+    toT = fromMaybe "NOW()" toM
+    timeRangeQuery = case sinceM of
+      Just since -> case since of
+        "1H" -> " and created_at > NOW() - interval '1 hour'"
+        "1D" -> " and created_at > NOW() - interval '1 day'"
+        "7D" -> " and created_at > NOW() - interval '7 days'"
+        _ -> " and created_at > NOW() - interval '14 days'"
+      Nothing -> " and created_at BETWEEN " <> fromT <> " and " <> toT
     extraQueryParsed = either error (\v -> if v == "" then "" else " AND " <> v) $ parseQueryStringToWhereClause extraQuery
     -- We only let people search within the 14 days time period
     qCount =
       [text| SELECT count(*) 
              FROM apis.request_dumps where project_id=? and created_at > NOW() - interval '14 days' and created_at<? |]
+        <> timeRangeQuery
         <> extraQueryParsed
         <> " limit 1;"
     q =
@@ -390,6 +403,7 @@ selectRequestDumpByProject pid extraQuery fromM = do
                     duration_ns, sdk_type,
                     parent_id, service_version, JSONB_ARRAY_LENGTH(errors) as errors_count, '{}'::jsonb, tags, request_type
              FROM apis.request_dumps where project_id=? and created_at > NOW() - interval '14 days' and created_at<? |]
+        <> timeRangeQuery
         <> extraQueryParsed
         <> " order by created_at desc limit 200;"
 

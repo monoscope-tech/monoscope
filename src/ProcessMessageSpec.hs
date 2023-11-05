@@ -111,7 +111,7 @@ spec = aroundAll TmpPg.withSetup do
       resp `shouldBe` [Just "m1", Just "m2"]
 
     it "should be able to query request dumps that include the added requests" \pool -> do
-      (reqs, count) <- withPool pool $ RequestDumps.selectRequestDumpByProject pid "" Nothing
+      (reqs, count) <- withPool pool $ RequestDumps.selectRequestDumpByProject pid "" Nothing Nothing Nothing Nothing
       count `shouldBe` 2 -- Since 2 were saved above.
       count `shouldBe` length reqs
 
