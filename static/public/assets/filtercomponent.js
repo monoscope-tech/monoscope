@@ -24,7 +24,7 @@ export class MyElement extends LitElement {
         const fls = query.split(/\s+AND\s+|\s+OR\s+/i).flatMap((element, index, array) => {
           return index < array.length - 1 ? [element, 'AND'] : [element];
         });
-        this.filters = fls
+        this.upadteFilters(fls)
       }
     }
 
