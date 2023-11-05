@@ -155,7 +155,7 @@ customElements.define('filter-element', MyElement);
 class Filter extends LitElement {
   fields = [
     "method", "status_code", "url_path", "duration_ns", "request_body", "request_header", "response_body", "response_header",
-    "host", "raw_url", "referer", "query_param", "path_param"
+    "host", "raw_url", "referer", "query_param", "path_param", "request_type"
   ]
 
   string_operators = ["=", "!="]
@@ -171,6 +171,11 @@ class Filter extends LitElement {
       type: "number",
       operators: this.number_operators,
       values: [200, 201, 400, 404, 500, 300, 100]
+    },
+    request_type: {
+      type: "string",
+      operators: this.string_operators,
+      values: ["Outgoing", "Incoming"]
     },
     duration_ns: { operators: this.number_operators, type: "number", values: [] },
     url_path: { operators: this.string_operators, values: [] },
