@@ -419,20 +419,18 @@ logItemRows :: Projects.ProjectId -> Vector RequestDumps.RequestDumpLogItem -> [
 logItemRows pid requests cols nextLogsURL = do
   requests & traverse_ \req -> do
     let logItemPath = RequestDumps.requestDumpLogItemUrlPath pid req
-    let endpoint_hash = toText $ showHex (xxHash $ encodeUtf8 $ UUID.toText pid.unProjectId <> T.toUpper req.method <> req.urlPath) ""
+    let endpoint_hash = toText $ showHex (xxHash $ encodeUtf8 $ UUID.toText pid.unProjectId <> req.host <> T.toUpper req.method <> req.urlPath) ""
     let logItemEndpointUrl = "/p/" <> pid.toText <> "/log_explorer/endpoint/" <> endpoint_hash
-    let errorClass = if req.errorsCount > 0 then "bg-red-500" else "bg-transparent"
+    let errorClass = if req.errorsCount > 0 then "w-1 bg-red-500" else "bg-transparent"
     div_
       [ class_ "flex flex-row divide-x  cursor-pointer "
       , term "data-log-item-path" logItemPath
       , [__|on click LogItemExpandable(me)|]
       ]
       do
-        div_ [class_ "flex-none inline-block w-10 flex justify-between items-center"] do
-          a_ [class_ $ "inline-block w-1 h-full mr-1 " <> errorClass, term "data-tippy-content" $ show req.errorsCount <> " errors attached to this request"] ""
-          a_ [hxGet_ logItemEndpointUrl, term "data-tippy-content" "Go to endpoint", onclick_ "noPropa(event)"] do
-            faIcon_ "fa-link" "fa-solid fa-link" "h-3 w-3 inline-block text-blue-700"
-          faIcon_ "fa-chevron-right" "fa-solid fa-chevron-right" "h-2 w-2 mr-2"
+        div_ [class_ "flex-none inline-block w-8 flex justify-center items-center"] do
+          a_ [class_ $ "inline-block h-full" <> errorClass, term "data-tippy-content" $ show req.errorsCount <> " errors attached to this request"] ""
+          faIcon_ "fa-chevron-right" "fa-solid fa-chevron-right" "h-2 w-2 ml-2"
         div_ [class_ "flex-none inline-block p-1 px-2 w-36 overflow-hidden"] $ toHtml @String $ formatTime defaultTimeLocale "%F %T" (req ^. #createdAt)
         div_ [class_ "inline-block p-1 px-2 grow"] do
           let reqJSON = AE.toJSON req
@@ -449,7 +447,13 @@ logItemRows pid requests cols nextLogsURL = do
                 $ toHtml colValue
           let cls = "mx-1 inline-block px-3 rounded-lg monospace " :: Text
           span_ [class_ $ cls <> getMethodColor req.method] $ toHtml req.method
-          span_ [class_ $ cls <> " bg-gray-100 border border-gray-300 "] $ toHtml req.urlPath
+          a_
+            [ hxGet_ logItemEndpointUrl
+            , term "data-tippy-content" "Go to endpoint"
+            , onclick_ "noPropa(event)"
+            , class_ $ cls <> " bg-gray-100 border border-gray-300 "
+            ]
+            $ toHtml req.urlPath
           span_ [class_ $ cls <> getStatusColor req.statusCode] $ show req.statusCode
           span_ [class_ $ cls <> " bg-gray-50 border border-gray-300 "] $ toHtml req.rawUrl
           let reqBody = decodeUtf8 $ AE.encode req.requestBody
