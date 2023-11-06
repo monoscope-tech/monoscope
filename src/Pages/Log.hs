@@ -81,7 +81,6 @@ apiLog sess pid queryM cols' cursorM sinceM fromM toM hxRequestM hxBoostedM = do
           let f = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromM) :: Maybe UTCTime)
           let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toM) :: Maybe UTCTime)
           (f, t)
-  traceShowM (query, cols, cursorM', fromD, toD)
   pool <- asks pool
   isMember <- liftIO $ Database.PostgreSQL.Entity.DBT.withPool pool $ userIsProjectMember sess pid
   if not isMember
@@ -366,7 +365,7 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
                         a_
                           [ class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 "
                           , term "data-value" val
-                          , [__| on click set #custom_range_input's value to my @data-value then log my @data-value|]
+                          , [__| on click set #custom_range_input's value to my @data-value then log my @data-value then toggle .hidden on #timepickerBox then htmx.trigger("#log_explorer_form", "submit")|]
                           ]
                           $ toHtml title
                     a_ [class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ", [__| on click toggle .hidden on #timepickerSidebar |]] "Custom date range"
@@ -443,6 +442,8 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
           const end = JSON.stringify(e.detail.end).slice(1, -1);
           const rangeInput = document.getElementById("custom_range_input")
           rangeInput.value = start + "/" + end
+          document.getElementById("timepickerBox").classList.toggle("hidden")
+          htmx.trigger("#log_explorer_form", "submit")
         });
       },
     });
@@ -781,7 +782,6 @@ jsonTreeAuxillaryCode pid = do
     function getTimeRange () {
       const rangeInput = document.getElementById("custom_range_input")
       const range = rangeInput.value.split("/")
-      console.log(range)
       if (range.length == 2)  {
          return {from: range[0], to: range[1], since: ''}
         }
