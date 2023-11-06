@@ -457,7 +457,7 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL c
           const rangeInput = document.getElementById("custom_range_input")
           rangeInput.value = start + "/" + end
           document.getElementById("timepickerBox").classList.toggle("hidden")
-          document.getElementById("currentRange").innerText = start + " - " + end
+          document.getElementById("currentRange").innerText = start.split("T")[0] + " - " + end.split("T")[0]
           htmx.trigger("#log_explorer_form", "submit")
         });
       },
