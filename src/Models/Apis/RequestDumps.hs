@@ -375,8 +375,6 @@ getRequestDumpsForPreviousReportPeriod pid report_type = query Select (Query $ e
 
 selectRequestDumpByProject :: Projects.ProjectId -> Text -> Maybe Text -> Maybe ZonedTime -> Maybe ZonedTime -> DBT IO (V.Vector RequestDumpLogItem, Int)
 selectRequestDumpByProject pid extraQuery cursorM fromM toM = do
-  traceShowM fromM
-  traceShowM toM
   logItems <- query Select (Query $ encodeUtf8 q) (pid, cursorT)
   Only count <- fromMaybe (Only 0) <$> queryOne Select (Query $ encodeUtf8 qCount) (pid, cursorT)
   pure (logItems, count)

@@ -68,19 +68,29 @@ apiLog sess pid queryM cols' cursorM sinceM fromM toM hxRequestM hxBoostedM = do
         Just "" -> Nothing
         Just a -> Just a
   now <- liftIO getCurrentTime
-  let (fromD, toD) = case sinceM of
-        Just "1H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just $ utcToZonedTime utc now)
-        Just "24H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just $ utcToZonedTime utc now)
-        Just "7D" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 7) now, Just $ utcToZonedTime utc now)
-        Just "14D" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 14) now, Just $ utcToZonedTime utc now)
+  let (fromD, toD, currentRange) = case sinceM of
+        Just "1H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just $ utcToZonedTime utc now, Just "Last Hour")
+        Just "24H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just $ utcToZonedTime utc now, Just "Last 24 Hours")
+        Just "7D" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 7) now, Just $ utcToZonedTime utc now, Just "Last 7 Days")
+        Just "14D" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 14) now, Just $ utcToZonedTime utc now, Just "Last 14 Days")
         Nothing -> do
           let f = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromM) :: Maybe UTCTime)
           let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toM) :: Maybe UTCTime)
-          (f, t)
+          let start = toText . formatTime defaultTimeLocale "%F %T" <$> f
+          let end = toText . formatTime defaultTimeLocale "%F %T" <$> t
+          let range = case (start, end) of
+                (Just s, Just e) -> Just (s <> "-" <> e)
+                _ -> Nothing
+          (f, t, range)
         _ -> do
           let f = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromM) :: Maybe UTCTime)
           let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toM) :: Maybe UTCTime)
-          (f, t)
+          let start = toText . formatTime defaultTimeLocale "%F %T" <$> f
+          let end = toText . formatTime defaultTimeLocale "%F %T" <$> t
+          let range = case (start, end) of
+                (Just s, Just e) -> Just (s <> "-" <> e)
+                _ -> Nothing
+          (f, t, range)
   pool <- asks pool
   isMember <- liftIO $ Database.PostgreSQL.Entity.DBT.withPool pool $ userIsProjectMember sess pid
   if not isMember
@@ -112,7 +122,7 @@ apiLog sess pid queryM cols' cursorM sinceM fromM toM hxRequestM hxBoostedM = do
                   , pageTitle = "API Log Explorer"
                   }
           let resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing
-          pure $ bodyWrapper bwconf $ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL
+          pure $ bodyWrapper bwconf $ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL currentRange
 
 
 apiLogItem :: Sessions.PersistentSession -> Projects.ProjectId -> UUID.UUID -> ZonedTime -> DashboardM (Html ())
@@ -307,8 +317,8 @@ timePickerItems =
   ]
 
 
-apiLogsPage :: Projects.ProjectId -> Int -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Text -> Text -> Text -> Html ()
-apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL = do
+apiLogsPage :: Projects.ProjectId -> Int -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Text -> Text -> Text -> Maybe Text -> Html ()
+apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL currentRange = do
   section_ [class_ "mx-auto px-10 py-2 gap-2 flex flex-col h-[98%] overflow-hidden "] do
     div_
       [ style_ "z-index:26; width: min(90vw, 800px)"
@@ -351,12 +361,12 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
                 input_ [type_ "hidden", id_ "since_input"]
                 input_ [type_ "hidden", id_ "custom_range_input"]
                 a_
-                  [ class_ "relative px-3 py-2 border border-1 border-black-200 space-x-2  inline-block relative cursor-pointer rounded-md"
+                  [ class_ "relative px-3 py-2 border border-1 border-black-200 space-x-2 bg-blue-100 text-blue-500  inline-block relative cursor-pointer rounded-md"
                   , [__| on click toggle .hidden on #timepickerBox|]
                   ]
                   do
                     mIcon_ "clock" "h-4 w-4"
-                    span_ [class_ "inline-block"] $ toHtml "Last 7 days"
+                    span_ [class_ "inline-block", id_ "currentRange"] $ toHtml (fromMaybe "Last 14 Days" currentRange)
                     faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 w-4 inline-block"
                 div_ [id_ "timepickerBox", class_ "hidden absolute z-10 mt-1  rounded-md flex"] do
                   div_ [class_ "inline-block w-84 overflow-auto bg-white py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm"] do
@@ -365,7 +375,11 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
                         a_
                           [ class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 "
                           , term "data-value" val
-                          , [__| on click set #custom_range_input's value to my @data-value then log my @data-value then toggle .hidden on #timepickerBox then htmx.trigger("#log_explorer_form", "submit")|]
+                          , term "data-title" title
+                          , [__| on click set #custom_range_input's value to my @data-value then log my @data-value 
+                                         then toggle .hidden on #timepickerBox 
+                                         then set #currentRange's innerText to my @data-title
+                                         then htmx.trigger("#log_explorer_form", "submit")|]
                           ]
                           $ toHtml title
                     a_ [class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ", [__| on click toggle .hidden on #timepickerSidebar |]] "Custom date range"
@@ -443,6 +457,7 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
           const rangeInput = document.getElementById("custom_range_input")
           rangeInput.value = start + "/" + end
           document.getElementById("timepickerBox").classList.toggle("hidden")
+          document.getElementById("currentRange").innerText = start + " - " + end
           htmx.trigger("#log_explorer_form", "submit")
         });
       },
