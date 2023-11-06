@@ -12,14 +12,11 @@ import Data.Time (
   UTCTime,
   ZonedTime,
   addUTCTime,
-  defaultTimeLocale,
-  formatTime,
   getCurrentTime,
   secondsToNominalDiffTime,
   utc,
   utcToZonedTime,
  )
-import Data.Time.Format (defaultTimeLocale)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector, iforM_)
@@ -536,7 +533,7 @@ logItemRows pid requests cols nextLogsURL = do
           a_ [class_ $ "inline-block h-full" <> errorClass, term "data-tippy-content" $ show req.errorsCount <> " errors attached to this request"] ""
           faIcon_ "fa-chevron-right" "fa-solid fa-chevron-right" "h-2 w-2 ml-2"
         div_ [class_ "flex-none inline-block p-1 px-2 w-36 overflow-hidden"] $ toHtml @String $ formatTime defaultTimeLocale "%F %T" (req ^. #createdAt)
-        div_ [class_ "inline-block p-1 px-2 grow"] do
+        div_ [class_ "flex items-center p-1 px-2 grow"] do
           let reqJSON = AE.toJSON req
           let colValues = concatMap (\col -> findValueByKeyInJSON (T.splitOn "." col) reqJSON) cols
           -- FIXME: probably inefficient implementation and should be optimized
@@ -550,8 +547,12 @@ logItemRows pid requests cols nextLogsURL = do
                 ]
                 $ toHtml colValue
           let cls = "mx-1 inline-block px-3 rounded-lg monospace " :: Text
-          let (c, t, tt) = if show req.requestType == "Outgoing" then ("bg-green-200", "OUT" :: Text, "Outgoing request") else ("bg-gray-200", "IN", "Incoming request")
-          span_ [class_ $ cls <> c, title_ tt] $ toHtml t
+          let (c, tt) =
+                if show req.requestType == "Outgoing"
+                  then (faIcon_ "fa-arrow-up-right" "fa-solid fa-arrow-up-right" "h-4 w-4 text-green-500", "Outgoing request")
+                  else (faIcon_ "fa-arrow-down-left" "fa-solid fa-arrow-down-left" "h-4 w-4 text-gray-500", "Incoming request")
+          span_ [class_ $ "w-3 text-center mr-2", term "data-tippy-content" tt] do
+            c
           span_ [class_ $ cls <> getMethodColor req.method] $ toHtml req.method
           a_
             [ hxGet_ logItemEndpointUrl
