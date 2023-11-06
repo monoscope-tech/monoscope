@@ -35,6 +35,7 @@ import Data.Aeson qualified as AE
 import Data.Default.Instances ()
 import Data.Text qualified as T
 import Data.Time (CalendarDiffTime, ZonedTime, defaultTimeLocale, diffUTCTime, formatTime, zonedTimeToUTC)
+import Data.Time.Format
 import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
 import Data.Tuple.Extra (both)
 import Data.UUID qualified as UUID
@@ -372,28 +373,24 @@ getRequestDumpsForPreviousReportPeriod pid report_type = query Select (Query $ e
     |]
 
 
-selectRequestDumpByProject :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DBT IO (V.Vector RequestDumpLogItem, Int)
-selectRequestDumpByProject pid extraQuery cursorM sinceM fromM toM = do
+selectRequestDumpByProject :: Projects.ProjectId -> Text -> Maybe Text -> Maybe ZonedTime -> Maybe ZonedTime -> DBT IO (V.Vector RequestDumpLogItem, Int)
+selectRequestDumpByProject pid extraQuery cursorM fromM toM = do
+  traceShowM fromM
+  traceShowM toM
   logItems <- query Select (Query $ encodeUtf8 q) (pid, cursorT)
   Only count <- fromMaybe (Only 0) <$> queryOne Select (Query $ encodeUtf8 qCount) (pid, cursorT)
   pure (logItems, count)
   where
     cursorT = fromMaybe "infinity" cursorM
-    fromT = fromMaybe "-infinity" fromM
-    toT = fromMaybe "NOW()" toM
-    timeRangeQuery = case sinceM of
-      Just since -> case since of
-        "1H" -> " and created_at > NOW() - interval '1 hour'"
-        "1D" -> " and created_at > NOW() - interval '1 day'"
-        "7D" -> " and created_at > NOW() - interval '7 days'"
-        _ -> " and created_at > NOW() - interval '14 days'"
-      Nothing -> " and created_at BETWEEN " <> fromT <> " and " <> toT
+    dateRangeStr = from @String $ case (fromM, toM) of
+      (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
+      (Just a, Just b) -> "AND created_at BETWEEN '" <> formatTime defaultTimeLocale "%F %R" a <> "' AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
+      _ -> ""
     extraQueryParsed = either error (\v -> if v == "" then "" else " AND " <> v) $ parseQueryStringToWhereClause extraQuery
     -- We only let people search within the 14 days time period
     qCount =
       [text| SELECT count(*) 
-             FROM apis.request_dumps where project_id=? and created_at > NOW() - interval '14 days' and created_at<? |]
-        <> timeRangeQuery
+             FROM apis.request_dumps where project_id=? and created_at > NOW() - interval '14 days' and created_at<? $dateRangeStr |]
         <> extraQueryParsed
         <> " limit 1;"
     q =
@@ -402,8 +399,7 @@ selectRequestDumpByProject pid extraQuery cursorM sinceM fromM toM = do
                     request_body,response_body,'{}'::jsonb,'{}'::jsonb,
                     duration_ns, sdk_type,
                     parent_id, service_version, JSONB_ARRAY_LENGTH(errors) as errors_count, '{}'::jsonb, tags, request_type
-             FROM apis.request_dumps where project_id=? and created_at > NOW() - interval '14 days' and created_at<? |]
-        <> timeRangeQuery
+             FROM apis.request_dumps where project_id=? and created_at > NOW() - interval '14 days' and created_at<? $dateRangeStr |]
         <> extraQueryParsed
         <> " order by created_at desc limit 200;"
 

@@ -8,8 +8,19 @@ import Data.Default (def)
 import Data.Digest.XXHash
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
-import Data.Time (ZonedTime, defaultTimeLocale)
-import Data.Time.Format (formatTime)
+import Data.Time (
+  UTCTime,
+  ZonedTime,
+  addUTCTime,
+  defaultTimeLocale,
+  formatTime,
+  getCurrentTime,
+  secondsToNominalDiffTime,
+  utc,
+  utcToZonedTime,
+ )
+import Data.Time.Format (defaultTimeLocale)
+import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector, iforM_)
 import Data.Vector qualified as Vector
@@ -30,8 +41,11 @@ import Pages.NonMember
 import Pkg.Components (loader)
 import Relude
 
+import Data.Time.Clock (UTCTime)
+import Data.Time.Format
 import System.Clock
 import Utils
+import Witch (from)
 
 
 -- $setup
@@ -39,6 +53,10 @@ import Utils
 -- >>> import Data.Vector qualified as Vector
 -- >>> import Data.Aeson.QQ (aesonQQ)
 -- >>> import Data.Aeson
+
+
+parseTimestamp :: String -> Maybe ZonedTime
+parseTimestamp = parseTimeM True defaultTimeLocale "%Y-%m-%dT%H:%M:%S.%qZ"
 
 
 apiLog :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
@@ -49,19 +67,21 @@ apiLog sess pid queryM cols' cursorM sinceM fromM toM hxRequestM hxBoostedM = do
         Nothing -> Nothing
         Just "" -> Nothing
         Just a -> Just a
-  let fromM' = case fromM of
-        Nothing -> Nothing
-        Just "" -> Nothing
-        Just a -> Just a
-  let sinceM' = case sinceM of
-        Nothing -> Nothing
-        Just "" -> Nothing
-        Just a -> Just a
-  let toM' = case toM of
-        Nothing -> Nothing
-        Just "" -> Nothing
-        Just a -> Just a
-
+  now <- liftIO getCurrentTime
+  let (fromD, toD) = case sinceM of
+        Just "1H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just $ utcToZonedTime utc now)
+        Just "24H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just $ utcToZonedTime utc now)
+        Just "7D" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 7) now, Just $ utcToZonedTime utc now)
+        Just "14D" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 14) now, Just $ utcToZonedTime utc now)
+        Nothing -> do
+          let f = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromM) :: Maybe UTCTime)
+          let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toM) :: Maybe UTCTime)
+          (f, t)
+        _ -> do
+          let f = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromM) :: Maybe UTCTime)
+          let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toM) :: Maybe UTCTime)
+          (f, t)
+  traceShowM (query, cols, cursorM', fromD, toD)
   pool <- asks pool
   isMember <- liftIO $ Database.PostgreSQL.Entity.DBT.withPool pool $ userIsProjectMember sess pid
   if not isMember
@@ -71,10 +91,10 @@ apiLog sess pid queryM cols' cursorM sinceM fromM toM hxRequestM hxBoostedM = do
       (project, dbResp) <- liftIO
         $ withPool pool do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-          dbResp <- RequestDumps.selectRequestDumpByProject pid query cursorM' sinceM' fromM' toM'
+          dbResp <- RequestDumps.selectRequestDumpByProject pid query cursorM' fromD toD
           pure (project, dbResp)
 
-      reqChartTxt <- liftIO $ Database.PostgreSQL.Entity.DBT.withPool pool $ RequestDumps.throughputBy pid Nothing Nothing Nothing Nothing Nothing (3 * 60) Nothing queryM (Nothing, Nothing)
+      reqChartTxt <- liftIO $ Database.PostgreSQL.Entity.DBT.withPool pool $ RequestDumps.throughputBy pid Nothing Nothing Nothing Nothing Nothing (3 * 60) Nothing queryM (fromD, toD)
       let (requests, resultCount) = dbResp
           reqLastCreatedAtM = (^. #createdAt) <$> viaNonEmpty last (Vector.toList requests) -- FIXME: unoptimal implementation, converting from vector to list for last
           cursorTempM = toText . formatTime defaultTimeLocale "%F %T" <$> reqLastCreatedAtM
@@ -423,13 +443,6 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
           const end = JSON.stringify(e.detail.end).slice(1, -1);
           const rangeInput = document.getElementById("custom_range_input")
           rangeInput.value = start + "/" + end
-          console.log(rangeInput.value)
-          const url = new URL(window.location.href);
-          url.searchParams.set('x', true);
-          url.searchParams.set('from', start);
-          url.searchParams.set('to', end);
-          url.searchParams.delete('since');
-          // window.location.href = url.toString();
         });
       },
     });
