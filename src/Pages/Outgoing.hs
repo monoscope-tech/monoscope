@@ -26,7 +26,7 @@ outgoingGetH sess pid = do
     else do
       (project, hostsEvents) <- liftIO $ withPool pool do
         project <- Projects.projectById pid
-        hostsAndEvents <- RequestDump.dependenciesAndEventsCount pid
+        hostsAndEvents <- Endpoints.dependenciesAndEventsCount pid
         pure (project, hostsAndEvents)
       let bwconf =
             (def :: BWConfig)
@@ -37,7 +37,7 @@ outgoingGetH sess pid = do
       pure $ bodyWrapper bwconf $ outgoingPage pid hostsEvents
 
 
-outgoingPage :: Projects.ProjectId -> V.Vector RequestDump.HostEvents -> Html ()
+outgoingPage :: Projects.ProjectId -> V.Vector Endpoints.HostEvents -> Html ()
 outgoingPage pid hostsEvents = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24"] $ do
   h3_ [class_ "text-xl text-slate-700 flex place-items-center"] "Dependencies"
   div_ [class_ "mt-8 space-y-4 py-8 "] do

@@ -300,7 +300,7 @@ buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash outg
     , urlPath = urlPath
     , urlParams = urlParams
     , method = method
-    , hosts = [rM.host]
+    , host = rM.host
     , hash = endpointHash
     , outgoing = outgoing
     }

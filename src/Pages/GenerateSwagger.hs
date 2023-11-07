@@ -29,7 +29,7 @@ data MergedEndpoint = MergedEndpoint
   { urlPath :: Text
   , urlParams :: AE.Value
   , method :: Text
-  , hosts :: V.Vector Text
+  , host :: Text
   , hash :: Text
   , shapes :: V.Vector MergedShapesAndFields
   }
@@ -202,7 +202,7 @@ mergeEndpoints endpoints shapes fields formats = V.map mergeEndpoint endpoints
             { urlPath = path
             , urlParams = endpoint.urlParams
             , method = endpoint.method
-            , hosts = endpoint.hosts
+            , host = endpoint.host
             , hash = endpointHash
             , shapes = matchingShapes
             }
@@ -243,7 +243,7 @@ findMatchingFields shape fields =
 
 -- For Servers part of the swagger
 getUniqueHosts :: Vector Endpoints.SwEndpoint -> Vector Value
-getUniqueHosts endpoints = V.fromList $ map (\h -> object ["url" .= String h]) $ sortNub $ concatMap (\endpoint -> V.toList endpoint.hosts) endpoints
+getUniqueHosts endpoints = V.fromList $ map (\h -> object ["url" .= String h]) $ sortNub $ concatMap (\endpoint -> [endpoint.host]) endpoints
 
 
 -- Make urlPaths openapi compartible
