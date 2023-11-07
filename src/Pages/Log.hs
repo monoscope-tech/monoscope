@@ -563,6 +563,10 @@ logItemRows pid requests cols nextLogsURL = do
     let endpoint_hash = toText $ showHex (xxHash $ encodeUtf8 $ UUID.toText pid.unProjectId <> req.host <> T.toUpper req.method <> req.urlPath) ""
     let logItemEndpointUrl = "/p/" <> pid.toText <> "/log_explorer/endpoint/" <> endpoint_hash
     let errorClass = if req.errorsCount > 0 then "w-1 bg-red-500" else "bg-transparent"
+    let (requestTypeHtml_, requestTypeHover_) =
+          if show req.requestType == "Outgoing"
+            then (faIcon_ "fa-arrow-up-right" "fa-solid fa-arrow-up-right" "h-4 w-4 text-green-500", "Outgoing request")
+            else (faIcon_ "fa-arrow-down-left" "fa-solid fa-arrow-down-left" "h-4 w-4 text-gray-500", "Incoming request")
     div_
       [ class_ "flex flex-row divide-x  cursor-pointer "
       , term "data-log-item-path" logItemPath
@@ -574,6 +578,7 @@ logItemRows pid requests cols nextLogsURL = do
           faIcon_ "fa-chevron-right" "fa-solid fa-chevron-right" "h-2 w-2 ml-2"
         div_ [class_ "flex-none inline-block p-1 px-2 w-36 overflow-hidden"] $ toHtml @String $ formatTime defaultTimeLocale "%F %T" (req ^. #createdAt)
         div_ [class_ "flex items-center p-1 px-2 grow"] do
+          span_ [class_ "w-3 text-center mr-2", term "data-tippy-content" requestTypeHover_] requestTypeHtml_
           let reqJSON = AE.toJSON req
           let colValues = concatMap (\col -> findValueByKeyInJSON (T.splitOn "." col) reqJSON) cols
           -- FIXME: probably inefficient implementation and should be optimized
@@ -587,12 +592,6 @@ logItemRows pid requests cols nextLogsURL = do
                 ]
                 $ toHtml colValue
           let cls = "mx-1 inline-block px-3 rounded-lg monospace " :: Text
-          let (c, tt) =
-                if show req.requestType == "Outgoing"
-                  then (faIcon_ "fa-arrow-up-right" "fa-solid fa-arrow-up-right" "h-4 w-4 text-green-500", "Outgoing request")
-                  else (faIcon_ "fa-arrow-down-left" "fa-solid fa-arrow-down-left" "h-4 w-4 text-gray-500", "Incoming request")
-          span_ [class_ $ "w-3 text-center mr-2", term "data-tippy-content" tt] do
-            c
           span_ [class_ $ cls <> getMethodColor req.method] $ toHtml req.method
           a_
             [ hxGet_ logItemEndpointUrl

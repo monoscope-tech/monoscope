@@ -21,6 +21,7 @@ module Models.Apis.RequestDumps (
   selectRequestDumpByProject,
   selectRequestDumpByProjectAndId,
   selectRequestDumpsByProjectForChart,
+  selectRequestDumpByProjectAndParentId,
   bulkInsertRequestDumps,
   getRequestDumpForReports,
   getRequestDumpsForPreviousReportPeriod,
@@ -573,3 +574,16 @@ throughputBy' pid groupByM endpointHash shapeHash formatHash statusCodeGT numSlo
                   FROM apis.request_dumps 
                   WHERE project_id=? $cond $dateRangeStr GROUP BY timeB $groupBy $limit; |]
   query Select (Query $ encodeUtf8 q) (MkDBField pid : paramList)
+
+selectRequestDumpByProjectAndParentId :: Projects.ProjectId -> UUID.UUID -> DBT IO (V.Vector RequestDumpLogItem)
+selectRequestDumpByProjectAndParentId pid parentId = query Select q (pid, parentId)
+  where
+    q =
+      [sql|
+     SELECT id,created_at,project_id,host,url_path,method,raw_url,referer,
+                    path_params, status_code,query_params,
+                    request_body,response_body,'{}'::jsonb,'{}'::jsonb,
+                    duration_ns, sdk_type,
+                    parent_id, service_version, JSONB_ARRAY_LENGTH(errors) as errors_count, '{}'::jsonb, tags, request_type
+             FROM apis.request_dumps where project_id=? and parent_id= ? LIMIT 199; 
+     |]
