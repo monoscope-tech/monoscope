@@ -574,7 +574,7 @@ logItemRows pid requests cols nextLogsURL = do
       ]
       do
         div_ [class_ "flex-none inline-block w-8 flex justify-center items-center"] do
-          a_ [class_ $ "inline-block h-full" <> errorClass, term "data-tippy-content" $ show req.errorsCount <> " errors attached to this request"] ""
+          a_ [class_ $ "inline-block h-full " <> errorClass, term "data-tippy-content" $ show req.errorsCount <> " errors attached to this request"] ""
           faIcon_ "fa-chevron-right" "fa-solid fa-chevron-right" "h-2 w-2 ml-2"
         div_ [class_ "flex-none inline-block p-1 px-2 w-36 overflow-hidden"] $ toHtml @String $ formatTime defaultTimeLocale "%F %T" (req ^. #createdAt)
         div_ [class_ "flex items-center p-1 px-2 grow"] do
