@@ -175,7 +175,6 @@ dashboardPage pid paramInput currTime projectStats reqLatenciesRolledByStepsJ da
 
 dStats :: Projects.ProjectId -> Projects.ProjectRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledByStepsJ dateRange@(fromD, toD) = do
-  let _ = min
   when (projReqStats.totalRequests == 0) do
     section_ [class_ "card-round p-5 sm:p-10 space-y-4 text-lg"] do
       h2_ [class_ "text-2xl"] "Welcome onboard APIToolkit."
