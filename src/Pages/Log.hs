@@ -8,8 +8,16 @@ import Data.Default (def)
 import Data.Digest.XXHash
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
-import Data.Time (ZonedTime, defaultTimeLocale)
-import Data.Time.Format (formatTime)
+import Data.Time (
+  UTCTime,
+  ZonedTime,
+  addUTCTime,
+  getCurrentTime,
+  secondsToNominalDiffTime,
+  utc,
+  utcToZonedTime,
+ )
+import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector, iforM_)
 import Data.Vector qualified as Vector
@@ -30,9 +38,11 @@ import Pages.NonMember
 import Pkg.Components (loader)
 import Relude
 
-import Lucid.Base (TermRaw (termRaw, termRawWith))
+import Data.Time.Clock (UTCTime)
+import Data.Time.Format
 import System.Clock
 import Utils
+import Witch (from)
 
 
 -- $setup
@@ -42,17 +52,44 @@ import Utils
 -- >>> import Data.Aeson
 
 
-apiLog :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
-apiLog sess pid queryM cols' fromM hxRequestM hxBoostedM = do
+parseTimestamp :: String -> Maybe ZonedTime
+parseTimestamp = parseTimeM True defaultTimeLocale "%Y-%m-%dT%H:%M:%S.%qZ"
+
+
+apiLog :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
+apiLog sess pid queryM cols' cursorM sinceM fromM toM hxRequestM hxBoostedM = do
   let cols = T.splitOn "," (fromMaybe "" cols')
   let query = fromMaybe "" queryM
-  let fromM' = case fromM of
+  let cursorM' = case cursorM of
         Nothing -> Nothing
         Just "" -> Nothing
         Just a -> Just a
-
+  now <- liftIO getCurrentTime
+  let (fromD, toD, currentRange) = case sinceM of
+        Just "1H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just $ utcToZonedTime utc now, Just "Last Hour")
+        Just "24H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just $ utcToZonedTime utc now, Just "Last 24 Hours")
+        Just "7D" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 7) now, Just $ utcToZonedTime utc now, Just "Last 7 Days")
+        Just "14D" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 14) now, Just $ utcToZonedTime utc now, Just "Last 14 Days")
+        Nothing -> do
+          let f = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromM) :: Maybe UTCTime)
+          let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toM) :: Maybe UTCTime)
+          let start = toText . formatTime defaultTimeLocale "%F %T" <$> f
+          let end = toText . formatTime defaultTimeLocale "%F %T" <$> t
+          let range = case (start, end) of
+                (Just s, Just e) -> Just (s <> "-" <> e)
+                _ -> Nothing
+          (f, t, range)
+        _ -> do
+          let f = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromM) :: Maybe UTCTime)
+          let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toM) :: Maybe UTCTime)
+          let start = toText . formatTime defaultTimeLocale "%F %T" <$> f
+          let end = toText . formatTime defaultTimeLocale "%F %T" <$> t
+          let range = case (start, end) of
+                (Just s, Just e) -> Just (s <> "-" <> e)
+                _ -> Nothing
+          (f, t, range)
   pool <- asks pool
-  isMember <- liftIO $ Database.PostgreSQL.Entity.DBT.withPool pool $ userIsProjectMember sess pid
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
@@ -60,14 +97,14 @@ apiLog sess pid queryM cols' fromM hxRequestM hxBoostedM = do
       (project, dbResp) <- liftIO
         $ withPool pool do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-          dbResp <- RequestDumps.selectRequestDumpByProject pid query fromM'
+          dbResp <- RequestDumps.selectRequestDumpByProject pid query cursorM' fromD toD
           pure (project, dbResp)
 
-      reqChartTxt <- liftIO $ Database.PostgreSQL.Entity.DBT.withPool pool $ RequestDumps.throughputBy pid Nothing Nothing Nothing Nothing Nothing (3 * 60) Nothing queryM (Nothing, Nothing)
+      reqChartTxt <- liftIO $ withPool pool $ RequestDumps.throughputBy pid Nothing Nothing Nothing Nothing Nothing (3 * 60) Nothing queryM (fromD, toD)
       let (requests, resultCount) = dbResp
           reqLastCreatedAtM = (^. #createdAt) <$> viaNonEmpty last (Vector.toList requests) -- FIXME: unoptimal implementation, converting from vector to list for last
-          fromTempM = toText . formatTime defaultTimeLocale "%F %T" <$> reqLastCreatedAtM
-          nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' fromTempM
+          cursorTempM = toText . formatTime defaultTimeLocale "%F %T" <$> reqLastCreatedAtM
+          nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' cursorTempM sinceM fromM toM
 
       case (hxRequestM, hxBoostedM) of
         (Just "true", Nothing) -> pure $ do
@@ -81,19 +118,19 @@ apiLog sess pid queryM cols' fromM hxRequestM hxBoostedM = do
                   , currProject = project
                   , pageTitle = "API Log Explorer"
                   }
-          let resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing
-          pure $ bodyWrapper bwconf $ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL
+          let resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing
+          pure $ bodyWrapper bwconf $ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL currentRange
 
 
 apiLogItem :: Sessions.PersistentSession -> Projects.ProjectId -> UUID.UUID -> ZonedTime -> DashboardM (Html ())
 apiLogItem sess pid rdId createdAt = do
   pool <- asks pool
-  isMember <- liftIO $ Database.PostgreSQL.Entity.DBT.withPool pool $ userIsProjectMember sess pid
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
-      logItemM <- liftIO $ Database.PostgreSQL.Entity.DBT.withPool pool $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
+      logItemM <- liftIO $ withPool pool $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
       let content = case logItemM of
             Just req -> apiLogItemView req (RequestDumps.requestDumpLogItemUrlPath pid req)
             Nothing -> div_ "invalid log request ID"
@@ -104,17 +141,19 @@ expandAPIlogItem :: Sessions.PersistentSession -> Projects.ProjectId -> UUID.UUI
 expandAPIlogItem sess pid rdId createdAt = do
   pool <- asks pool
   startTime <- liftIO $ getTime Monotonic
-  logItemM <- liftIO $ Database.PostgreSQL.Entity.DBT.withPool pool $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
-  afterProccessing <- liftIO $ getTime Monotonic
+  (logItemM, childRequests) <- liftIO $ withPool pool do
+    logItem <- RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
+    childRequets <- RequestDumps.selectRequestDumpByProjectAndParentId pid rdId
+    pure (logItem, childRequets)
   let content = case logItemM of
-        Just req -> expandAPIlogItem' req True
+        Just req -> expandAPIlogItem' pid req True childRequests
         Nothing -> div_ [class_ "h-full flex flex-col justify-center items-center"] do
           p_ [] "Request not found"
   pure content
 
 
-expandAPIlogItem' :: RequestDumps.RequestDumpLogItem -> Bool -> Html ()
-expandAPIlogItem' req modal = do
+expandAPIlogItem' :: Projects.ProjectId -> RequestDumps.RequestDumpLogItem -> Bool -> Vector RequestDumps.RequestDumpLogItem -> Html ()
+expandAPIlogItem' pid req modal outgoingRequests = do
   div_ [class_ "flex flex-col w-full pb-[100px]"] do
     div_ [class_ "w-full flex flex-col gap-2 gap-4"] do
       let methodColor = getMethodColor req.method
@@ -193,6 +232,14 @@ expandAPIlogItem' req modal = do
         p_ [class_ "text-sm text-red-500 font-bold"] $ show req.errorsCount
       div_ [class_ "px-4 flex gap-10 border-b text-gray-500"] do
         jsonValueToHtmlTree req.errors
+
+    -- outgoing request details
+    unless (null outgoingRequests) $ div_ [class_ "border rounded-lg mt-8"] do
+      div_ [class_ "flex w-full bg-gray-100 px-4 py-2 flex-col gap-2"] do
+        p_ [class_ "font-bold"] "Outgoing requests"
+      div_ [class_ "grow overflow-y-auto py-2 px-1 max-h-[500px] whitespace-nowrap text-sm divide-y overflow-x-hidden"] do
+        logItemRows pid outgoingRequests [] ""
+
     -- request details
     div_ [class_ "border rounded-lg mt-8", id_ "request_detail_container"] do
       div_ [class_ "flex w-full bg-gray-100 px-4 py-2 flex-col gap-2"] do
@@ -258,6 +305,36 @@ expandAPIlogItem' req modal = do
         jsonValueToHtmlTree req.responseBody
       div_ [class_ "bg-gray-50 m-4 p-2 hidden rounded-lg border sdk_tab_content", id_ "res_headers_json"] do
         jsonValueToHtmlTree req.responseHeaders
+  script_
+    [type_ "text/hyperscript"]
+    [text|
+      behavior LogItemMenuable
+        on click
+          if I match <.with-context-menu/> then
+            remove <.log-item-context-menu /> then remove .with-context-menu from <.with-context-menu />
+          else
+            remove <.log-item-context-menu /> then remove .with-context-menu from <.with-context-menu /> then
+            get #log-item-context-menu-tmpl.innerHTML then put it after me then add .with-context-menu to me then 
+            _hyperscript.processNode(document.querySelector('.log-item-context-menu'))
+            htmx.process(document.querySelector('.log-item-context-menu'))
+          end
+          halt
+        end
+      end
+
+      def LogItemExpandable(me)
+          if I match <.expanded-log/> then 
+            remove next <.log-item-info/> then 
+            remove .expanded-log from me
+          else
+            add .expanded-log to me
+            remove .hidden from next <.item-loading />
+            fetch `$${@data-log-item-path}` as html then put it after me then
+             add .hidden to next <.item-loading />
+            _hyperscript.processNode(next <.log-item-info />) then
+          end 
+      end
+    |]
 
 
 getUniqueUrlPaths :: Vector RequestDumps.RequestDumpLogItem -> [Text]
@@ -268,8 +345,17 @@ getUniqueRawUrlPaths :: Vector RequestDumps.RequestDumpLogItem -> [Text]
 getUniqueRawUrlPaths logs = ordNub . Vector.toList $ Vector.map (\r -> r.rawUrl) logs
 
 
-apiLogsPage :: Projects.ProjectId -> Int -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Text -> Text -> Text -> Html ()
-apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL = do
+timePickerItems :: [(Text, Text)]
+timePickerItems =
+  [ ("1H", "Last Hour")
+  , ("24H", "Last 24 Hours")
+  , ("7D", "Last 7 days")
+  , ("14D", "Last 14 days")
+  ]
+
+
+apiLogsPage :: Projects.ProjectId -> Int -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Text -> Text -> Text -> Maybe Text -> Html ()
+apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL currentRange = do
   section_ [class_ "mx-auto px-10 py-2 gap-2 flex flex-col h-[98%] overflow-hidden "] do
     div_
       [ style_ "z-index:26; width: min(90vw, 800px)"
@@ -298,7 +384,7 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
       [ class_ "card-round w-full text-sm"
       , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
       , hxPushUrl_ "true"
-      , hxVals_ "js:{query:getQueryFromEditor(), cols:params().cols}"
+      , hxVals_ "js:{query:getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols}"
       , hxTarget_ "#log-item-table-body"
       , id_ "log_explorer_form"
       , hxIndicator_ "#query-indicator"
@@ -306,15 +392,48 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
       do
         nav_ [class_ "flex flex-row p-2 content-end justify-between items-baseline border-slate-100"] do
           a_ [class_ "inline-block"] "Query"
-          div_ [class_ "flex items-center gap-6 "] do
-            div_ [class_ "flex items-center gap-2"] do
-              label_ [class_ "relative inline-flex items-center cursor-pointer"] do
-                input_ [type_ "checkbox", value_ "", class_ "sr-only peer", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()"]
-                div_ [class_ "w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"] pass
-                span_ [class_ "ml-3 text-sm font-medium text-gray-900 dark:text-gray-300"] "Use editor"
-            button_ [type_ "submit", class_ "cursor-pointer inline-block space-x-1 bg-blue-100 hover:bg-blue-200 blue-800 py-1 px-2 rounded-lg"] do
-              faIcon_ "fa-sparkles" "fa-sharp fa-regular fa-sparkles" "h-3 w-3 inline-block"
-              span_ "Run query"
+          div_ [class_ "flex gap-10 items-center"] do
+            div_ [class_ "relative p-1 "] do
+              div_ [class_ "relative"] do
+                input_ [type_ "hidden", id_ "since_input"]
+                input_ [type_ "hidden", id_ "custom_range_input"]
+                a_
+                  [ class_ "relative px-3 py-2 border border-1 border-black-200 space-x-2 bg-blue-100 text-blue-500  inline-block relative cursor-pointer rounded-md"
+                  , [__| on click toggle .hidden on #timepickerBox|]
+                  ]
+                  do
+                    mIcon_ "clock" "h-4 w-4"
+                    span_ [class_ "inline-block", id_ "currentRange"] $ toHtml (fromMaybe "Last 14 Days" currentRange)
+                    faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 w-4 inline-block"
+                div_ [id_ "timepickerBox", class_ "hidden absolute z-10 mt-1  rounded-md flex"] do
+                  div_ [class_ "inline-block w-84 overflow-auto bg-white py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm"] do
+                    timePickerItems
+                      & mapM_ \(val, title) ->
+                        a_
+                          [ class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 "
+                          , term "data-value" val
+                          , term "data-title" title
+                          , [__| on click set #custom_range_input's value to my @data-value then log my @data-value 
+                                         then toggle .hidden on #timepickerBox 
+                                         then set #currentRange's innerText to my @data-title
+                                         then htmx.trigger("#log_explorer_form", "submit")|]
+                          ]
+                          $ toHtml title
+                    a_ [class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ", [__| on click toggle .hidden on #timepickerSidebar |]] "Custom date range"
+                  div_ [class_ "inline-block relative hidden", id_ "timepickerSidebar"] do
+                    div_ [id_ "startTime", class_ "hidden"] ""
+            div_
+              [class_ "flex items-center gap-2"]
+              do
+                label_ [class_ "relative inline-flex items-center cursor-pointer"] do
+                  input_ [type_ "checkbox", value_ "", class_ "sr-only peer", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()"]
+                  div_ [class_ "w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"] pass
+                  span_ [class_ "ml-3 text-sm font-medium text-gray-900 dark:text-gray-300"] "Use editor"
+            button_
+              [type_ "submit", class_ "cursor-pointer inline-block space-x-1 bg-blue-100 hover:bg-blue-200 blue-800 py-1 px-2 rounded-lg"]
+              do
+                faIcon_ "fa-sparkles" "fa-sharp fa-regular fa-sparkles" "h-3 w-3 inline-block"
+                span_ "Run query"
         div_ do
           div_ [class_ "bg-gray-200"] do
             div_ [id_ "queryEditor", class_ "h-14 hidden overflow-hidden bg-gray-200"] pass
@@ -360,6 +479,28 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL =
           logItemRows pid requests cols nextLogsURL
   script_
     [text|
+    const picker = new easepick.create({
+      element: '#startTime',
+      css: [
+        'https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.0/dist/index.css',
+      ],
+      inline: true,
+      plugins: ['RangePlugin', 'TimePlugin'],
+      autoApply: false,
+      setup(picker) {
+        picker.on('select', (e) => {
+          const start = JSON.stringify(e.detail.start).slice(1, -1);
+          const end = JSON.stringify(e.detail.end).slice(1, -1);
+          const rangeInput = document.getElementById("custom_range_input")
+          rangeInput.value = start + "/" + end
+          document.getElementById("timepickerBox").classList.toggle("hidden")
+          document.getElementById("currentRange").innerText = start.split("T")[0] + " - " + end.split("T")[0]
+          htmx.trigger("#log_explorer_form", "submit")
+        });
+      },
+    });
+    window.picker = picker;
+
 function changeTab(tabId, parent) {
   const p = document.getElementById(parent);
   const tabLinks = p.querySelectorAll('.sdk_tab');
@@ -422,6 +563,10 @@ logItemRows pid requests cols nextLogsURL = do
     let endpoint_hash = toText $ showHex (xxHash $ encodeUtf8 $ UUID.toText pid.unProjectId <> req.host <> T.toUpper req.method <> req.urlPath) ""
     let logItemEndpointUrl = "/p/" <> pid.toText <> "/log_explorer/endpoint/" <> endpoint_hash
     let errorClass = if req.errorsCount > 0 then "w-1 bg-red-500" else "bg-transparent"
+    let (requestTypeHtml_, requestTypeHover_) =
+          if show req.requestType == "Outgoing"
+            then (faIcon_ "fa-arrow-up-right" "fa-solid fa-arrow-up-right" "h-4 w-4 text-green-500", "Outgoing request")
+            else (faIcon_ "fa-arrow-down-left" "fa-solid fa-arrow-down-left" "h-4 w-4 text-gray-500", "Incoming request")
     div_
       [ class_ "flex flex-row divide-x  cursor-pointer "
       , term "data-log-item-path" logItemPath
@@ -429,10 +574,11 @@ logItemRows pid requests cols nextLogsURL = do
       ]
       do
         div_ [class_ "flex-none inline-block w-8 flex justify-center items-center"] do
-          a_ [class_ $ "inline-block h-full" <> errorClass, term "data-tippy-content" $ show req.errorsCount <> " errors attached to this request"] ""
+          a_ [class_ $ "inline-block h-full " <> errorClass, term "data-tippy-content" $ show req.errorsCount <> " errors attached to this request"] ""
           faIcon_ "fa-chevron-right" "fa-solid fa-chevron-right" "h-2 w-2 ml-2"
         div_ [class_ "flex-none inline-block p-1 px-2 w-36 overflow-hidden"] $ toHtml @String $ formatTime defaultTimeLocale "%F %T" (req ^. #createdAt)
-        div_ [class_ "inline-block p-1 px-2 grow"] do
+        div_ [class_ "flex items-center p-1 px-2 grow"] do
+          span_ [class_ "w-3 text-center mr-2", term "data-tippy-content" requestTypeHover_] requestTypeHtml_
           let reqJSON = AE.toJSON req
           let colValues = concatMap (\col -> findValueByKeyInJSON (T.splitOn "." col) reqJSON) cols
           -- FIXME: probably inefficient implementation and should be optimized
@@ -488,6 +634,8 @@ apiLogItemView req expandItemPath = do
                 remove .hidden from #log-modal-content-loader
                 fetch `${@data-log-item-path}` as html then put it into #log-modal-content
                 add .hidden to #log-modal-content-loader
+                _hyperscript.processNode(document.querySelector('#log-modal-content'))
+                htmx.process(document.querySelector('#log-modal-content'))
                 end
           |]
           ]
@@ -688,8 +836,17 @@ jsonTreeAuxillaryCode pid = do
      if(toggler.checked) {
           return window.editor.getValue();
       }else {
-          return window.queryBuilderValue
+          return window.queryBuilderValue || "";
       }
+    }
+
+    function getTimeRange () {
+      const rangeInput = document.getElementById("custom_range_input")
+      const range = rangeInput.value.split("/")
+      if (range.length == 2)  {
+         return {from: range[0], to: range[1], since: ''}
+        }
+      return {since: range[0], from: '', to: ''}
     }
 
     function toggleQueryBuilder() {

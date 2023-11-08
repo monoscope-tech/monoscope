@@ -34,14 +34,14 @@ sampleEndpoints =
         { urlPath = "/users"
         , urlParams = AE.Null
         , method = "GET"
-        , hosts = V.fromList ["localhost"]
+        , host = "localhost"
         , hash = "endpoint1_GET"
         }
     , Endpoints.SwEndpoint
         { urlPath = "/users"
         , urlParams = AE.Null
         , method = "POST"
-        , hosts = V.fromList ["localhost"]
+        , host = "localhost"
         , hash = "endpoint1_POST"
         }
     ]
@@ -392,7 +392,7 @@ hSampleEndpoints =
         { urlPath = "/headers"
         , urlParams = AE.Null
         , method = "GET"
-        , hosts = V.fromList ["localhost"]
+        , host = "localhost"
         , hash = "endpoint1_GET"
         }
     ]
@@ -552,7 +552,7 @@ pSampleEndpoints =
         { urlPath = "/headers"
         , urlParams = AE.Null
         , method = "GET"
-        , hosts = V.fromList ["localhost"]
+        , host = "localhost"
         , hash = "endpoint1_GET"
         }
     ]

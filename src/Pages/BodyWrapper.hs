@@ -18,7 +18,7 @@ menu pid =
   [ ("Get started", "/p/" <> pid.toText <> "/onboarding", "list-check")
   , ("Dashboard", "/p/" <> pid.toText <> "/", "qrcode")
   , ("Endpoints", "/p/" <> pid.toText <> "/endpoints", "swap")
-  , ("Dependencies", "/p/" <> pid.toText <> "/outgoing", "arrows-turn-right")
+  , ("Outbound Integrations", "/p/" <> pid.toText <> "/outgoing", "arrows-turn-right")
   , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies?ackd=false&archived=false", "bug")
   , ("API Log Explorer", "/p/" <> pid.toText <> "/log_explorer", "list-tree")
   , ("API Keys", "/p/" <> pid.toText <> "/apis", "key")

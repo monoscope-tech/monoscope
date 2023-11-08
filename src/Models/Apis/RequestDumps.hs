@@ -10,7 +10,6 @@ module Models.Apis.RequestDumps (
   EndpointPerf (..),
   RequestForReport (..),
   ATError (..),
-  HostEvents (..),
   normalizeUrlPath,
   throughputBy,
   throughputBy',
@@ -22,11 +21,11 @@ module Models.Apis.RequestDumps (
   selectRequestDumpByProject,
   selectRequestDumpByProjectAndId,
   selectRequestDumpsByProjectForChart,
+  selectRequestDumpByProjectAndParentId,
   bulkInsertRequestDumps,
   getRequestDumpForReports,
   getRequestDumpsForPreviousReportPeriod,
   countRequestDumpByProject,
-  dependenciesAndEventsCount,
   getRequestType,
 ) where
 
@@ -35,6 +34,7 @@ import Data.Aeson qualified as AE
 import Data.Default.Instances ()
 import Data.Text qualified as T
 import Data.Time (CalendarDiffTime, ZonedTime, defaultTimeLocale, diffUTCTime, formatTime, zonedTimeToUTC)
+import Data.Time.Format
 import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
 import Data.Tuple.Extra (both)
 import Data.UUID qualified as UUID
@@ -276,22 +276,12 @@ data EndpointPerf = EndpointPerf
 makeFieldLabelsNoPrefix ''RequestForReport
 
 
-data HostEvents = HostEvents
-  { host :: Text
-  , eventCount :: Integer
-  }
-  deriving stock (Show, Generic, Eq)
-  deriving anyclass (ToRow, FromRow)
-  deriving
-    (Entity)
-    via (GenericEntity '[Schema "apis", TableName "request_dumps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] EndpointPerf)
-
-
 -- RequestDumpLogItem is used in the to query log items for the log query explorer on the dashboard. Each item here can be queried
 -- via the query language on said dashboard page.
 data RequestDumpLogItem = RequestDumpLogItem
   { id :: UUID.UUID
   , createdAt :: ZonedTime
+  , projectId :: Projects.ProjectId
   , host :: Text
   , urlPath :: Text
   , method :: Text
@@ -328,13 +318,16 @@ requestDumpLogItemUrlPath :: Projects.ProjectId -> RequestDumpLogItem -> Text
 requestDumpLogItemUrlPath pid rd = "/p/" <> pid.toText <> "/log_explorer/" <> UUID.toText rd.id <> "/" <> from @String (formatShow iso8601Format rd.createdAt)
 
 
-requestDumpLogUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Text
-requestDumpLogUrlPath pid q cols fromM = [text|/p/$pidT/log_explorer?query=$queryT&cols=$colsT&from=$fromT|]
+requestDumpLogUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Text
+requestDumpLogUrlPath pid q cols cursorM sinceM fromM toM = [text|/p/$pidT/log_explorer?query=$queryT&cols=$colsT&cursor=$cursorT&since=$sinceT&from=$fromT&to=$toT|]
   where
     pidT = pid.toText
     queryT = fromMaybe "" q
     colsT = fromMaybe "" cols
+    cursorT = fromMaybe "" cursorM
+    sinceT = fromMaybe "" sinceM
     fromT = fromMaybe "" fromM
+    toT = fromMaybe "" toM
 
 
 getRequestDumpForReports :: Projects.ProjectId -> Text -> DBT IO (V.Vector RequestForReport)
@@ -369,27 +362,31 @@ getRequestDumpsForPreviousReportPeriod pid report_type = query Select (Query $ e
     |]
 
 
-selectRequestDumpByProject :: Projects.ProjectId -> Text -> Maybe Text -> DBT IO (V.Vector RequestDumpLogItem, Int)
-selectRequestDumpByProject pid extraQuery fromM = do
-  logItems <- query Select (Query $ encodeUtf8 q) (pid, fromT)
-  Only count <- fromMaybe (Only 0) <$> queryOne Select (Query $ encodeUtf8 qCount) (pid, fromT)
+selectRequestDumpByProject :: Projects.ProjectId -> Text -> Maybe Text -> Maybe ZonedTime -> Maybe ZonedTime -> DBT IO (V.Vector RequestDumpLogItem, Int)
+selectRequestDumpByProject pid extraQuery cursorM fromM toM = do
+  logItems <- query Select (Query $ encodeUtf8 q) (pid, cursorT)
+  Only count <- fromMaybe (Only 0) <$> queryOne Select (Query $ encodeUtf8 qCount) (pid, cursorT)
   pure (logItems, count)
   where
-    fromT = fromMaybe "infinity" fromM
+    cursorT = fromMaybe "infinity" cursorM
+    dateRangeStr = from @String $ case (fromM, toM) of
+      (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
+      (Just a, Just b) -> "AND created_at BETWEEN '" <> formatTime defaultTimeLocale "%F %R" a <> "' AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
+      _ -> ""
     extraQueryParsed = either error (\v -> if v == "" then "" else " AND " <> v) $ parseQueryStringToWhereClause extraQuery
     -- We only let people search within the 14 days time period
     qCount =
       [text| SELECT count(*) 
-             FROM apis.request_dumps where project_id=? and created_at > NOW() - interval '14 days' and created_at<? |]
+             FROM apis.request_dumps where project_id=? and created_at > NOW() - interval '14 days' and created_at<? $dateRangeStr |]
         <> extraQueryParsed
         <> " limit 1;"
     q =
-      [text| SELECT id,created_at,host,url_path,method,raw_url,referer,
+      [text| SELECT id,created_at,project_id,host,url_path,method,raw_url,referer,
                     path_params, status_code,query_params,
                     request_body,response_body,'{}'::jsonb,'{}'::jsonb,
                     duration_ns, sdk_type,
                     parent_id, service_version, JSONB_ARRAY_LENGTH(errors) as errors_count, '{}'::jsonb, tags, request_type
-             FROM apis.request_dumps where project_id=? and created_at > NOW() - interval '14 days' and created_at<? |]
+             FROM apis.request_dumps where project_id=? and created_at > NOW() - interval '14 days' and created_at<? $dateRangeStr |]
         <> extraQueryParsed
         <> " order by created_at desc limit 200;"
 
@@ -430,7 +427,7 @@ selectRequestDumpByProjectAndId :: Projects.ProjectId -> ZonedTime -> UUID.UUID 
 selectRequestDumpByProjectAndId pid createdAt rdId = queryOne Select q (createdAt, pid, rdId)
   where
     q =
-      [sql|SELECT   id,created_at,host,url_path,method,raw_url,referer,
+      [sql|SELECT   id,created_at,project_id, host,url_path,method,raw_url,referer,
                     path_params,status_code,query_params,
                     request_body,response_body,request_headers,response_headers, 
                     duration_ns, sdk_type,
@@ -483,25 +480,12 @@ selectAnomalyEvents pid targetHash anType = query Select (Query $ encodeUtf8 q) 
       _ -> error "Should never be reached"
 
     q =
-      [text| SELECT id,created_at,host,url_path,method,raw_url,referer,
+      [text| SELECT id,created_at, project_id,host,url_path,method,raw_url,referer,
                     path_params, status_code,query_params,
                     request_body,response_body,request_headers,response_headers,
                     duration_ns, sdk_type,
                     parent_id, service_version, JSONB_ARRAY_LENGTH(errors) as errors_count, errors, tags, request_type
              FROM apis.request_dumps where created_at > NOW() - interval '14' day AND project_id=? AND $extraQuery LIMIT 199; |]
-
-
-dependenciesAndEventsCount :: Projects.ProjectId -> DBT IO (V.Vector HostEvents)
-dependenciesAndEventsCount = query Select q
-  where
-    q =
-      [sql|SELECT host, COUNT(*) AS eventsCount 
-           FROM apis.request_dumps
-           WHERE project_id= ? AND host != '' AND request_type = 'Outgoing' AND created_at > NOW() - interval '14' day
-           GROUP BY host
-           ORDER BY eventsCount DESC;
-           |]
-
 
 -- A throughput chart query for the request_dump table.
 -- daterange :: (Maybe Int, Maybe Int)?
@@ -590,3 +574,16 @@ throughputBy' pid groupByM endpointHash shapeHash formatHash statusCodeGT numSlo
                   FROM apis.request_dumps 
                   WHERE project_id=? $cond $dateRangeStr GROUP BY timeB $groupBy $limit; |]
   query Select (Query $ encodeUtf8 q) (MkDBField pid : paramList)
+
+selectRequestDumpByProjectAndParentId :: Projects.ProjectId -> UUID.UUID -> DBT IO (V.Vector RequestDumpLogItem)
+selectRequestDumpByProjectAndParentId pid parentId = query Select q (pid, parentId)
+  where
+    q =
+      [sql|
+     SELECT id,created_at,project_id,host,url_path,method,raw_url,referer,
+                    path_params, status_code,query_params,
+                    request_body,response_body,'{}'::jsonb,'{}'::jsonb,
+                    duration_ns, sdk_type,
+                    parent_id, service_version, JSONB_ARRAY_LENGTH(errors) as errors_count, '{}'::jsonb, tags, request_type
+             FROM apis.request_dumps where project_id=? and parent_id= ? LIMIT 199; 
+     |]

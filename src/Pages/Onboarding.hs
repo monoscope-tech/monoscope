@@ -205,6 +205,7 @@ integrateApiToolkit apikey current_tab =
         div_ [class_ "font-bold text-center text-white border-b border-slate-200"] $ do
           tabs current_tab
         tabContentExpress apikey current_tab
+        tabContentExpressCjs apikey current_tab
         tabContentGin apikey current_tab
         tabContentLaravel apikey current_tab
         tabContentFlask apikey current_tab
@@ -253,7 +254,7 @@ tabContentExpress apikey current_tab =
               code_ [class_ "h-full hljs language-javascript atom-one-dark", id_ "express_code"]
                 $ toHtml
                 $ "import express from 'express';\n"
-                <> "import APIToolkit from 'apitoolkit-express';\n"
+                <> "import { APIToolkit } from 'apitoolkit-express';\n"
                 <> "\n"
                 <> "const app = express();\n"
                 <> "const port = 3000;\n"
@@ -270,6 +271,47 @@ tabContentExpress apikey current_tab =
                 <> "app.listen(port, () => {\n"
                 <> "   console.log(`Example app listening on port ${port}`);\n"
                 <> "});"
+
+
+tabContentExpressCjs :: Text -> Text -> Html ()
+tabContentExpressCjs apikey current_tab =
+  div_ [class_ $ "tab-content flex flex-col m-8 " <> (if current_tab == "express_cjs" then "" else "hidden"), id_ "express_cjs_content"] $ do
+    div_ [class_ "relative"] $ do
+      div_ [class_ "mb-6 space-x-3"] do
+        strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
+        a_ [class_ "link underline text-lg", href_ "https://github.com/apitoolkit/apitoolkit-express", target_ "BLANK"] "github.com/apitoolkit/apitoolkit-express"
+      div_ [class_ "mb-6"] do
+        h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
+        p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "npm i apitoolkit-express"
+      h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
+      div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
+        div_ [class_ "relative w-full flex flex-col"] do
+          contentHeader "express_cjs_code"
+          div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
+            pre_ [class_ "flex min-h-full text-lg leading-snug"] do
+              code_ [class_ "h-full hljs language-javascript atom-one-dark", id_ "express_cjs_code"]
+                $ toHtml
+                $ "const express = require('express');\n"
+                <> "const APIToolkit = require('apitoolkit-express').default;\n"
+                <> "\n"
+                <> "const app = express();\n"
+                <> "const port = 3000;\n"
+                <> "\n"
+                <> "(async function () {\n"
+                <> "   const apitoolkitClient = await APIToolkit.NewClient({ apiKey: '"
+                <> "   "
+                <> apikey
+                <> "' });\n"
+                <> "   app.use(apitoolkitClient.expressMiddleware);\n"
+                <> "\n"
+                <> "   app.get('/', (req, res) => {\n"
+                <> "      res.send('Hello World!');\n"
+                <> "   });\n"
+                <> "\n"
+                <> "   app.listen(port, () => {\n"
+                <> "      console.log(`Example app listening on port ${port}`);\n"
+                <> "   });\n"
+                <> "})();"
 
 
 tabContentGin :: Text -> Text -> Html ()
@@ -723,7 +765,14 @@ tabs current_tab =
         , [__| install Navigatable(content: #express_content) |]
         , id_ "express"
         ]
-        "Express Js"
+        "Express (ESM)"
+    li_ [class_ "shrink-0"] $ do
+      button_
+        [ class_ $ if current_tab == "express_cjs" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #express_cjs_content) |]
+        , id_ "express_cjs"
+        ]
+        "Express (CJS)"
     li_ [class_ "shrink-0"] do
       button_
         [ class_ $ if current_tab == "gin" then "sdk_tab sdk_tab_active" else "sdk_tab"
