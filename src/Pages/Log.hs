@@ -573,8 +573,22 @@ logItemRows pid requests cols nextLogsURL = do
       , [__|on click LogItemExpandable(me)|]
       ]
       do
-        div_ [class_ "flex-none inline-block w-8 flex justify-center items-center"] do
+        div_ [class_ "flex-none inline-block w-10 flex justify-start items-center"] do
           a_ [class_ $ "inline-block h-full " <> errorClass, term "data-tippy-content" $ show req.errorsCount <> " errors attached to this request"] ""
+          button_
+            [ class_ "ml-1 expand-button"
+            , term "data-log-item-path" (logItemPath <> "/detailed")
+            , [__|on click halt the event then remove .hidden from #expand-log-modal then
+                  remove .hidden from #log-modal-content-loader
+                  fetch `${@data-log-item-path}` as html then put it into #log-modal-content
+                  add .hidden to #log-modal-content-loader
+                  _hyperscript.processNode(document.querySelector('#log-modal-content'))
+                  htmx.process(document.querySelector('#log-modal-content'))
+                  end
+            |]
+            ]
+            do
+              faIcon_ "fa-up-right-and-down-left-from-center" "fa-solid fa-up-right-and-down-left-from-center" "h-3 w-3 text-blue-500"
           faIcon_ "fa-chevron-right" "fa-solid fa-chevron-right" "h-2 w-2 ml-2"
         div_ [class_ "flex-none inline-block p-1 px-2 w-36 overflow-hidden"] $ toHtml @String $ formatTime defaultTimeLocale "%F %T" (req ^. #createdAt)
         div_ [class_ "flex items-center p-1 px-2 grow"] do
