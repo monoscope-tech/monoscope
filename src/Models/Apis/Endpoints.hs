@@ -122,7 +122,6 @@ upsertEndpointQueryAndParam endpoint = (q, params)
       , MkDBField host
       , MkDBField endpoint.hash
       , MkDBField endpoint.outgoing
-      , MkDBField host
       ]
 
 
@@ -283,16 +282,16 @@ insertEndpoints endpoints = do
   let params = map getEndpointParams endpoints
   executeMany q params
 
-
-getEndpointParams :: Endpoint -> (Projects.ProjectId, Text, AE.Value, Text, Text, Text)
-getEndpointParams endpoint =
-  ( endpoint.projectId
-  , endpoint.urlPath
-  , endpoint.urlParams
-  , endpoint.method
-  , ""
-  , endpoint.hash
-  )
+  where
+    getEndpointParams :: Endpoint -> (Projects.ProjectId, Text, AE.Value, Text, Text, Text)
+    getEndpointParams endpoint =
+      ( endpoint.projectId
+      , endpoint.urlPath
+      , endpoint.urlParams
+      , endpoint.method
+      , endpoint.host
+      , endpoint.hash
+      )
 
 
 getProjectHosts :: Projects.ProjectId -> PgT.DBT IO (Vector Host)
