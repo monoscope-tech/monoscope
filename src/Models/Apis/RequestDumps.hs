@@ -78,6 +78,7 @@ data SDKTypes
   | PythonFastApi
   | PythonFlask
   | PythonDjango
+  | PythonOutgoing
   deriving stock (Show, Generic, Read, Eq)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SDKTypes
 
@@ -150,6 +151,7 @@ normalizeUrlPath PythonFastApi statusCode _method urlPath = removeQueryParams st
 normalizeUrlPath JsFastify statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath PythonFlask statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath PythonDjango statusCode _method urlPath = removeQueryParams statusCode urlPath
+normalizeUrlPath PythonOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
 
 
 -- getRequestType ...
@@ -487,6 +489,7 @@ selectAnomalyEvents pid targetHash anType = query Select (Query $ encodeUtf8 q) 
                     parent_id, service_version, JSONB_ARRAY_LENGTH(errors) as errors_count, errors, tags, request_type
              FROM apis.request_dumps where created_at > NOW() - interval '14' day AND project_id=? AND $extraQuery LIMIT 199; |]
 
+
 -- A throughput chart query for the request_dump table.
 -- daterange :: (Maybe Int, Maybe Int)?
 -- We have a requirement that the date range could either be an interval like now to 7 days ago, or be specific dates like day x to day y.
@@ -574,6 +577,7 @@ throughputBy' pid groupByM endpointHash shapeHash formatHash statusCodeGT numSlo
                   FROM apis.request_dumps 
                   WHERE project_id=? $cond $dateRangeStr GROUP BY timeB $groupBy $limit; |]
   query Select (Query $ encodeUtf8 q) (MkDBField pid : paramList)
+
 
 selectRequestDumpByProjectAndParentId :: Projects.ProjectId -> UUID.UUID -> DBT IO (V.Vector RequestDumpLogItem)
 selectRequestDumpByProjectAndParentId pid parentId = query Select q (pid, parentId)
