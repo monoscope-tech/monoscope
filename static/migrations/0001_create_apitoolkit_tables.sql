@@ -210,9 +210,9 @@ CREATE INDEX IF NOT EXISTS idx_apis_endpoints_project_id ON apis.endpoints(proje
 CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_endpoints_hash ON apis.endpoints(hash);
 ALTER TABLE apis.endpoints ADD COLUMN outgoing BOOLEAN DEFAULT FALSE;
 ALTER TABLE apis.endpoints DROP CONSTRAINT endpoints_project_id_url_path_method_key;
+
 ALTER TABLE apis.endpoints ADD COLUMN host text NOT  NULL DEFAULT    ''::text;
-UPDATE apis.endpoints
-SET host = COALESCE(REPLACE((akeys(hosts))[1], '''', ''),'');
+UPDATE apis.endpoints SET host = COALESCE(REPLACE((akeys(hosts))[1], '''', ''),'');
 
 -- we can hold on with this to make sure everything works
 -- after than we can drop the column
