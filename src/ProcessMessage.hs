@@ -120,7 +120,7 @@ processMessages' logger' _ conn' msgs projectCache' = do
     forM_ leftMsgs \(a, b) ->
       -- TODO: switch to using a proper logger setup.
       -- logger' <& "Error processing Error: " <> pShow a <> "\n Original Msg:" <> pShow  b
-      putStrLn $ "ERROR: Error processing Error: " <> toString (pShow a) <> "\n Original Msg:" <> (toString . pShow) b
+      logger' <&  "ERROR: Error processing Error: " <> show a <> "\n" 
 
   afterProccessing <- getTime Monotonic
 
@@ -137,7 +137,8 @@ processMessages' logger' _ conn' msgs projectCache' = do
       $ RequestDumps.bulkInsertRequestDumps reqDumps
 
   endTime <- getTime Monotonic
-  liftIO $ putStrLn $ fmtLn $ "Process Message (" +| length msgs |+ ") pipeline microsecs: queryDuration " +| toNanoSecs (diffTimeSpec startTime afterProccessing) `div` 1000 |+ " -> processingDuration " +| toNanoSecs (diffTimeSpec afterProccessing endTime) `div` 1000 |+ " -> TotalDuration " +| toNanoSecs (diffTimeSpec startTime endTime) `div` 1000 |+ ""
+  let msg = fmtLn @String $ "Process Message (" +| length msgs |+ ") pipeline microsecs: queryDuration " +| toNanoSecs (diffTimeSpec startTime afterProccessing) `div` 1000 |+ " -> processingDuration " +| toNanoSecs (diffTimeSpec afterProccessing endTime) `div` 1000 |+ " -> TotalDuration " +| toNanoSecs (diffTimeSpec startTime endTime) `div` 1000 |+ ""
+  logger' <& show msg
 
   case resp of
     Left err -> do
