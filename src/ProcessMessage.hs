@@ -120,7 +120,7 @@ processMessages' logger' _ conn' msgs projectCache' = do
     forM_ leftMsgs \(a, b) ->
       -- TODO: switch to using a proper logger setup.
       -- logger' <& "Error processing Error: " <> pShow a <> "\n Original Msg:" <> pShow  b
-      logger' <&  "ERROR: Error processing Error: " <> show a <> "\n" 
+      logger' <& "ERROR: Error processing Error: " <> show a <> "\n"
 
   afterProccessing <- getTime Monotonic
 
