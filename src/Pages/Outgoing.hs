@@ -46,11 +46,14 @@ outgoingPage pid hostsEvents = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24"] 
       h3_ [class_ "font-bold"] "Events"
     div_ [class_ "flex flex-col"] do
       forM_ hostsEvents $ \host -> do
-        a_ [href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> host.host, class_ "flex p-8 border border-t-transparent justify-between items-center hover:bg-gray-50"] $ do
-          span_ [class_ "p-2", href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> host.host] $ toHtml host.host
+        div_ [class_ "flex border border-t-transparent items-center"] do
+          a_ [href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> host.host, class_ "flex  w-full justify-between items-center p-8 hover:bg-gray-50"] $ do
+            span_ [class_ "p-2", href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> host.host] $ toHtml host.host
           -- div_ [class_ "w-[200px] h-[80px] mt-4 shrink-0"] pass
           -- Charts.throughput pid (host.host) (Just $ Charts.QBHost host.host) (Just Charts.GBHost) 14 Nothing False (Nothing, Nothing) Nothing
-          div_ [] $ show host.eventCount
+          div_ [class_ "shrink-0 flex items-center gap-10 p-8"] do
+            a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=host%20%3D%20" <> "\"" <> host.host <> "\"", class_ "p-2 shrink-0 pl-8 text-blue-500 hover:text-slate-600"] "View logs"
+            span_ [] $ show host.eventCount
     when (null hostsEvents) $ div_ [class_ "flex flex-col text-center justify-center items-center h-32"] $ do
       strong_ "No dependencies yet."
       p_ "All dependencies' host names and number of events will be shown here."
