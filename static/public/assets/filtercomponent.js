@@ -2,16 +2,12 @@ import { LitElement, html, ref, createRef } from 'https://cdn.jsdelivr.net/gh/li
 export class MyElement extends LitElement {
 
   static properties = {
-    greeting: {},
-    planet: {},
     filters: {},
     showFilterSearch: {}
   };
 
   constructor() {
     super();
-    this.greeting = 'Hello';
-    this.planet = 'World';
     this.showFilterSearch = false
     this.addEventListener('add-filter', this.handleChildEvent)
     this.addEventListener('close-search', () => { this.showFilterSearch = false })
@@ -155,7 +151,7 @@ customElements.define('filter-element', MyElement);
 class Filter extends LitElement {
   fields = [
     "method", "status_code", "url_path", "duration_ns", "request_body", "request_header", "response_body", "response_header",
-    "host", "raw_url", "referer", "query_param", "path_param", "request_type"
+    "host", "raw_url", "referer", "query_param", "path_param", "request_type", "service_version"
   ]
 
   string_operators = ["=", "!="]
@@ -165,12 +161,12 @@ class Filter extends LitElement {
     method: {
       type: "string",
       operators: this.string_operators,
-      values: ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD"]
+      values: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD', 'CONNECT', 'TRACE']
     },
     status_code: {
       type: "number",
       operators: this.number_operators,
-      values: [200, 201, 400, 404, 500, 300, 100]
+      values: [200, 201, 202, 203, 204, 300, 301, 302, 400, 401, 402, 403, 404, 405, 406, 500, 501, 502, 503, 504]
     },
     request_type: {
       type: "string",
@@ -178,8 +174,6 @@ class Filter extends LitElement {
       values: ["Outgoing", "Incoming"]
     },
     duration_ns: { operators: this.number_operators, type: "number", values: [] },
-    url_path: { operators: this.string_operators, values: [] },
-    raw_url: { operators: this.string_operators, values: [] }
   }
 
   static properties = {
@@ -196,9 +190,9 @@ class Filter extends LitElement {
     this.projectId = window.location.pathname.split("/")[2]
     const builderContainer = document.getElementById("queryBuilder")
     if (builderContainer) {
-      const url_paths = JSON.parse(builderContainer.dataset.url_paths)
-      this.filterAutoComplete.url_path.values = (url_paths || []).sort()
-      this.filterAutoComplete.raw_url.values = (JSON.parse(builderContainer.dataset.raw_urls) || []).sort()
+      // const url_paths = JSON.parse(builderContainer.dataset.url_paths)
+      // this.filterAutoComplete.url_path.values = (url_paths || []).sort()
+      // this.filterAutoComplete.raw_url.values = (JSON.parse(builderContainer.dataset.raw_urls) || []).sort()
     }
 
   }
@@ -307,8 +301,16 @@ class Filter extends LitElement {
     if (parts.length !== 3) {
       return ""
     }
-    const [field, operator, value] = parts;
-    return field
+    return parts[0]
+  }
+
+  getOperator(filter) {
+    const parts = filter.trim().split(/\s*([=<>!]+)\s*/);
+    if (parts.length !== 3) {
+      return ""
+    }
+    return parts[1]
+
   }
 
   getValue(filter) {
@@ -316,17 +318,30 @@ class Filter extends LitElement {
     if (parts.length !== 3) {
       return ""
     }
-    const [field, operator, value] = parts;
-    return value
-
+    return parts[2]
   }
 
   needsAutoComplete(filter) {
-    const rootEnd = filter.indexOf(".")
+    if (this.isValidFilter(filter)) {
+      const value = this.getValue(filter).replace(/^"|"$/g, '')
+      if (value.length < 2) return null
+      const field = this.getField(filter)
+      const operator = this.getOperator(filter)
+      if (["host", "referer", "raw_url", "url_path"].includes(field)) {
+        return { key: field, operator, prefix: value }
+      }
+    }
+    return null
+  }
+
+  needsAutoCompleteKeyPath(filter) {
+    let rootEnd = filter.indexOf(".");
     if (rootEnd == -1) return { result: false, field: null, prefix: null }
 
     const field = filter.substring(0, rootEnd)
     const prefix = filter.substring(rootEnd + 1)
+    if (prefix.length < 2) return { result: false, field: null, prefix: null }
+
     if (["request_body", "response_body", "request_header", "response_header", "query_param", "path_param"].includes(field)) {
       return {
         result: true,
@@ -349,14 +364,22 @@ class Filter extends LitElement {
       let target = filter
       let target_info = this.filterAutoComplete[target]
       if (!target_info) {
-        const key = this.needsAutoComplete(this.inputVal)
+        const key = this.needsAutoCompleteKeyPath(this.inputVal)
         if (key.result) {
           fetch(`/p/${this.projectId}/query_builder/autocomplete?category=${key.field}&prefix=.${key.prefix}`).then(res => res.json()).then(data => {
             this.matches = data.map(d => key.field + d)
           })
           return
         } else {
-          target_info = { operators: this.string_operators, values: [] }
+          const result = this.needsAutoComplete(this.inputVal)
+          if (result) {
+            fetch(`/p/${this.projectId}/query_builder/autocomplete?category=${result.key}&prefix=${result.prefix}`).then(res => res.json()).then(data => {
+              this.matches = data.map(d => `${result.key} ${result.operator} "${d}"`)
+            })
+            return
+          } else {
+            target_info = { operators: this.string_operators, values: [] }
+          }
         }
       }
 
@@ -367,7 +390,7 @@ class Filter extends LitElement {
       } else {
         target_info.values.forEach(v => {
           const valTyped = this.getValue(this.inputVal)
-          if (String(v).startsWith(valTyped) || String(`"${v}`).startsWith(valTyped) || String(`"${v} "`).startsWith(valTyped)) {
+          if (String(v).startsWith(valTyped) || `"${v}`.startsWith(valTyped) || `"${v} "`.startsWith(valTyped)) {
             if (target_info.type === "number") {
               auto_complete.push(`${this.inputVal.replace(valTyped, "")} ${v}`)
             } else {
