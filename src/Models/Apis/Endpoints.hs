@@ -32,7 +32,6 @@ import Data.Default.Instances ()
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
-import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), query, queryOne)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)

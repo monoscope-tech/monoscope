@@ -25,7 +25,7 @@ import GHC.Generics
 import Lucid
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Fields qualified as Fields
+import Models.Apis.Fields.Query ()
 import Models.Apis.Reports qualified as Reports
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects

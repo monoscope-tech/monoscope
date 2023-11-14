@@ -337,14 +337,6 @@ expandAPIlogItem' pid req modal outgoingRequests = do
     |]
 
 
-getUniqueUrlPaths :: Vector RequestDumps.RequestDumpLogItem -> [Text]
-getUniqueUrlPaths logs = ordNub . Vector.toList $ Vector.map (\r -> r.urlPath) logs
-
-
-getUniqueRawUrlPaths :: Vector RequestDumps.RequestDumpLogItem -> [Text]
-getUniqueRawUrlPaths logs = ordNub . Vector.toList $ Vector.map (\r -> r.rawUrl) logs
-
-
 timePickerItems :: [(Text, Text)]
 timePickerItems =
   [ ("1H", "Last Hour")
@@ -437,10 +429,7 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL c
         div_ do
           div_ [class_ "bg-gray-200"] do
             div_ [id_ "queryEditor", class_ "h-14 hidden overflow-hidden bg-gray-200"] pass
-          let url_paths = getUniqueUrlPaths requests
-          let url_paths_json = decodeUtf8 $ AE.encode url_paths
-          let raw_url = decodeUtf8 $ AE.encode $ getUniqueRawUrlPaths requests
-          div_ [id_ "queryBuilder", class_ "mb-4", term "data-url_paths" url_paths_json, term "data-raw_urls" raw_url] do
+          div_ [id_ "queryBuilder", class_ "mb-4"] do
             termRaw "filter-element" [id_ "filterElement"] ("" :: Text)
 
     div_ [class_ "card-round w-full grow divide-y flex flex-col text-sm h-full overflow-y-hidden overflow-x-hidden"] do

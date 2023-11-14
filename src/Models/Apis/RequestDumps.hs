@@ -27,13 +27,14 @@ module Models.Apis.RequestDumps (
   getRequestDumpsForPreviousReportPeriod,
   countRequestDumpByProject,
   getRequestType,
+  autoCompleteFromRequestDumps,
 ) where
 
 import Control.Error (hush)
 import Data.Aeson qualified as AE
 import Data.Default.Instances ()
 import Data.Text qualified as T
-import Data.Time (CalendarDiffTime, ZonedTime, defaultTimeLocale, diffUTCTime, formatTime, zonedTimeToUTC)
+import Data.Time (CalendarDiffTime, ZonedTime, diffUTCTime, zonedTimeToUTC)
 import Data.Time.Format
 import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
 import Data.Tuple.Extra (both)
@@ -43,6 +44,8 @@ import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, queryOne)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField (fromField))
+import Models.Apis.Fields.Query ()
+
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField (toField))
@@ -591,3 +594,9 @@ selectRequestDumpByProjectAndParentId pid parentId = query Select q (pid, parent
                     parent_id, service_version, JSONB_ARRAY_LENGTH(errors) as errors_count, '{}'::jsonb, tags, request_type
              FROM apis.request_dumps where project_id=? and parent_id= ? LIMIT 199; 
      |]
+
+
+autoCompleteFromRequestDumps :: Projects.ProjectId -> Text -> Text -> DBT IO (V.Vector Text)
+autoCompleteFromRequestDumps pid key prefix = query Select (Query $ encodeUtf8 q) (pid, prefix <> "%")
+  where
+    q = [text|SELECT DISTINCT $key from apis.request_dumps WHERE project_id = ? AND created_at > NOW() - interval '14' day AND $key <> ''  AND $key LIKE ?|]
