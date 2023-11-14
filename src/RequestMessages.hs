@@ -285,9 +285,9 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
 
 
 isRequestOutgoing :: SDKTypes -> Bool
-isRequestOutgoing GoOutgoing = True
-isRequestOutgoing JsAxiosOutgoing = True
-isRequestOutgoing _ = False
+isRequestOutgoing sdkType
+  | T.isSuffixOf "Outgoing" (show sdkType) = True
+  | otherwise = False
 
 
 buildEndpoint :: RequestMessages.RequestMessage -> ZonedTime -> UUID.UUID -> Projects.ProjectId -> Text -> Text -> Value -> Text -> Bool -> Endpoints.Endpoint
