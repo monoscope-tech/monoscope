@@ -50,6 +50,7 @@ import Pages.RedactedFields (RedactFieldForm)
 import Pages.RedactedFields qualified as RedactedFields
 import Pages.Reports qualified as Reports
 import Pages.Share qualified as Share
+import Pages.SlackInstall qualified as SlackInstall
 import Pages.Survey qualified as Survey
 import Relude
 import Servant
@@ -153,6 +154,7 @@ type PublicAPI =
     :<|> "status" :> Get '[JSON] Status
     :<|> "ping" :> Get '[PlainText] Text
     :<|> "share" :> "r" :> Capture "shareID" UUID.UUID :> Get '[HTML] (Html ())
+    :<|> "slack" :> "oauth" :> "callback" :> QPT "code" :> Get '[HTML] (Html ())
     :<|> Raw
 
 
@@ -243,6 +245,7 @@ publicServer =
     :<|> statusH
     :<|> pingH
     :<|> Share.shareLinkGetH
+    :<|> SlackInstall.getH
     :<|> serveDirectoryWebApp "./static/public"
 
 
