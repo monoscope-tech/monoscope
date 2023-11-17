@@ -19,7 +19,6 @@ import Relude.Unsafe qualified as Unsafe
 import RequestMessages qualified
 import System.Clock
 import Test.Hspec
-import Debug.Pretty.Simple (pTraceShow, pTraceShowM)
 import Data.Time (getCurrentTime, defaultTimeLocale, formatTime)
 
 

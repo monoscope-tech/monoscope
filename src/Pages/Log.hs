@@ -554,8 +554,8 @@ logItemRows pid requests cols nextLogsURL = do
     let errorClass = if req.errorsCount > 0 then "w-1 bg-red-500" else "bg-transparent"
     let (requestTypeHtml_, requestTypeHover_) =
           if show req.requestType == "Outgoing"
-            then (faIcon_ "fa-arrow-up-right" "fa-solid fa-arrow-up-right" "h-4 w-4 text-green-500", "Outgoing request")
-            else (faIcon_ "fa-arrow-down-left" "fa-solid fa-arrow-down-left" "h-4 w-4 text-gray-500", "Incoming request")
+            then (faIcon_ "fa-arrow-up-right" "fa-solid fa-arrow-up-right" "h-3 w-3 text-green-400", "Outgoing request")
+            else (faIcon_ "fa-arrow-down-left" "fa-solid fa-arrow-down-left" "h-3 w-3 text-gray-400", "Incoming request")
     div_
       [ class_ "flex flex-row divide-x  cursor-pointer "
       , term "data-log-item-path" logItemPath
@@ -577,8 +577,8 @@ logItemRows pid requests cols nextLogsURL = do
             |]
             ]
             do
-              faIcon_ "fa-up-right-and-down-left-from-center" "fa-solid fa-up-right-and-down-left-from-center" "h-3 w-3 text-blue-500"
-          faIcon_ "fa-chevron-right" "fa-solid fa-chevron-right" "h-2 w-2 ml-2"
+              faSprite_ "link" "solid" "h-3 w-3 text-blue-500"
+          faSprite_ "chevron-right" "solid" "h-2 w-2 ml-2"
         div_ [class_ "flex-none inline-block p-1 px-2 w-36 overflow-hidden"] $ toHtml @String $ formatTime defaultTimeLocale "%F %T" (req ^. #createdAt)
         div_ [class_ "flex items-center p-1 px-2 grow"] do
           span_ [class_ "w-3 text-center mr-2", term "data-tippy-content" requestTypeHover_] requestTypeHtml_
@@ -594,8 +594,8 @@ logItemRows pid requests cols nextLogsURL = do
                 , [__|install LogItemMenuable|]
                 ]
                 $ toHtml colValue
-          let cls = "mx-1 inline-block px-3 rounded-lg monospace " :: Text
-          span_ [class_ $ cls <> getMethodColor req.method] $ toHtml req.method
+          let cls = "mx-1 inline-block px-3 rounded-lg monospace min-w-[4rem] text-center " :: Text
+          span_ [class_ $ cls <> getMethodColor req.method] $ toHtml $ req.method
           a_
             [ hxGet_ logItemEndpointUrl
             , term "data-tippy-content" "Go to endpoint"
