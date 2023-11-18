@@ -22,7 +22,7 @@ module Models.Projects.Projects (
   ProjectCache (..),
 ) where
 
-import Data.Aeson (FromJSON, ToJSON, Value)
+import Data.Aeson (FromJSON (..), ToJSON (toJSON), Value (String))
 import Data.Default
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
@@ -31,10 +31,10 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Entity
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, queryOne)
 import Database.PostgreSQL.Entity.Types
-import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
-import Database.PostgreSQL.Simple.FromField (FromField)
+import Database.PostgreSQL.Simple (FromRow, Only (Only), ResultError (..), ToRow)
+import Database.PostgreSQL.Simple.FromField (FromField (fromField), returnError)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.ToField (ToField)
+import Database.PostgreSQL.Simple.ToField (Action (..), ToField (toField))
 import Database.PostgreSQL.Transact (DBT)
 import Deriving.Aeson qualified as DAE
 import GHC.Records (HasField (getField))
@@ -64,6 +64,40 @@ projectIdFromText :: Text -> Maybe ProjectId
 projectIdFromText pid = ProjectId <$> UUID.fromText pid
 
 
+data NotificationChannel
+  = NEmail
+  | NSlack
+  deriving stock (Eq, Generic, Show)
+
+
+instance ToJSON NotificationChannel where
+  toJSON NEmail = String "email"
+  toJSON NSlack = String "slack"
+
+
+instance FromJSON NotificationChannel where
+  parseJSON (String "email") = pure NEmail
+  parseJSON (String "slack") = pure NSlack
+  parseJSON _ = fail "Invalid NotificationChannel value"
+
+
+instance ToField NotificationChannel where
+  toField NEmail = Escape "email"
+  toField NSlack = Escape "slack"
+
+
+parsePermissions :: (Eq s, IsString s) => s -> NotificationChannel
+parsePermissions "slack" = NSlack
+parsePermissions _ = NEmail
+
+
+instance FromField NotificationChannel where
+  fromField f mdata =
+    case mdata of
+      Nothing -> returnError UnexpectedNull f ""
+      Just bs -> pure $ parsePermissions bs
+
+
 data Project = Project
   { id :: ProjectId
   , createdAt :: ZonedTime
@@ -79,6 +113,7 @@ data Project = Project
   , dailyNotif :: Bool
   , weeklyNotif :: Bool
   , timeZone :: Text
+  , notificationsChannel :: NotificationChannel
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow)
@@ -108,6 +143,7 @@ data Project' = Project'
   , dailyNotif :: Bool
   , weeklyNotif :: Bool
   , timeZone :: Text
+  , notificationsChannel :: NotificationChannel
   , usersDisplayImages :: Vector Text
   }
   deriving stock (Show, Generic)

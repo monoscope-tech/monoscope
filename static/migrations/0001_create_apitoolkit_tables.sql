@@ -115,6 +115,11 @@ ALTER TABLE projects.projects ADD COLUMN daily_notif BOOL DEFAULT TRUE,
 ALTER TABLE projects.projects
    ALTER COLUMN daily_notif SET DEFAULT FALSE;
 ALTER TABLE projects.projects ADD COLUMN time_zone TEXT DEFAULT 'UTC';
+
+CREATE TYPE notification_channel_enum AS ENUM ('email', 'slack');
+ALTER TABLE projects.projects
+ADD COLUMN notifications_channel notification_channel_enum DEFAULT 'email';
+
 -----------------------------------------------------------------------
 -- PROJECT MEMBERS table 
 -- query patterns:
@@ -843,4 +848,16 @@ CREATE TABLE IF NOT EXISTS apis.share_requests
 );
 CREATE INDEX IF NOT EXISTS idx_apis_share_requests_id ON apis.share_requests(id);
 
+
+CREATE TABLE IF NOT EXISTS apis.slack 
+(
+  id             UUID        NOT     NULL   DEFAULT        gen_random_uuid() PRIMARY KEY, 
+  project_id     UUID        NOT     NULL   REFERENCES projects.projects (id)              ON      DELETE CASCADE,
+  created_at     TIMESTAMP   WITH    TIME   ZONE       NOT               NULL              DEFAULT current_timestamp,
+  updated_at     TIMESTAMP   WITH    TIME   ZONE       NOT               NULL              DEFAULT current_timestamp,
+  access_token   TEXT        NOT     NULL   DEFAULT        '',
+);
+
 COMMIT;
+
+

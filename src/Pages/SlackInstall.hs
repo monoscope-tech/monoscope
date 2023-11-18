@@ -3,12 +3,14 @@
 module Pages.SlackInstall (getH) where
 
 import Config
-import Control.Lens ((.~), (?~), (^.))
+import Control.Lens ((.~), (^.))
 import Data.Aeson
-import Data.Aeson.QQ
+import Data.Default
 import Data.Text
 import Lucid
 import Network.Wreq
+import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
+import Pkg.Components (navBar)
 import Relude
 
 
@@ -43,7 +45,6 @@ exchangeCodeForToken clientId clientSecret redirectUri code = do
     let hds = header "Content-Type" .~ ["application/x-www-form-urlencoded; charset=utf-8"]
     response <- postWith (defaults & hds) "https://slack.com/api/oauth.v2.access" formData
     let responseBdy = response ^. responseBody
-    traceShowM responseBdy
     case decode responseBdy of
         Just token -> return $ Just token
         Nothing -> return Nothing
@@ -56,13 +57,26 @@ getH slack_code = do
     let client_secret = envCfg.slackClientSecret
     let redirect_uri = envCfg.slackRedirectUri
     token <- liftIO $ exchangeCodeForToken client_id client_secret redirect_uri (fromMaybe "" slack_code)
+    let bwconf =
+            (def :: BWConfig)
+                { sessM = Nothing
+                , currProject = Nothing
+                , pageTitle = "Slack Install"
+                }
+    pure $ bodyWrapper bwconf (maybe noTokenFound slackPage token)
 
-    pure $ slackPage (fromMaybe "" slack_code) token
 
-
-slackPage :: Text -> Maybe TokenResponse -> Html ()
-slackPage sid token = do
+slackPage :: TokenResponse -> Html ()
+slackPage token = do
+    navBar
     div_ [] do
-        h1_ [class_ "text-2xl font-bold"] "Slack Install"
-        p_ [class_ "mt-2 text-sm text-gray-600"] $ toHtml sid
+        h1_ [class_ "text-2xl font-bold"] "Select a project to link slack with"
         p_ [] $ show token
+
+
+noTokenFound :: Html ()
+noTokenFound = do
+    navBar
+    section_ [class_ "h-full mt-[80px] w-[1000px] flex flex-col items-center mx-auto"] do
+        h3_ [class_ "text-5xl font-semibold my-8"] "Token Not Found"
+        p_ [class_ "text-2xl"] "No slack access token found, reinstall the APIToolkit slack app to try again."
