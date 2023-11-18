@@ -51,6 +51,9 @@ data EnvConfig = EnvConfig
   , convertkitApiKey :: Text
   , convertkitApiSecret :: Text
   , enableBackgroundJobs :: Bool
+  , slackClientId :: Text
+  , slackClientSecret :: Text
+  , slackRedirectUri :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromEnv, Default)
