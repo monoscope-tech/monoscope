@@ -109,7 +109,16 @@ jobsRunner dbPool logger cfg job = do
               Projects.NSlack -> do
                 slackData <- withPool dbPool $ getProjectSlackData pid
                 case slackData of
-                  Just slackData' -> sendSlackMessage cfg slackData'.accessToken "Helloooo"
+                  Just slackData' -> do
+                    let projectTitle = project.title
+                    let projectIdTxt = pid.toText
+                    let message =
+                          [trimming| 🤖 **APITOOLKIT: New Endpoint detected for `$projectTitle`***
+                                  We detected a new endpoint on `$projectTitle`
+                                  **$endpointPath**
+                                  [More details on the apitoolkit]("https://app.apitoolkit.io/p/$projectIdTxt/anomalies")
+                         |]
+                    sendSlackMessage cfg slackData'.accessToken message
                   Nothing -> pass
               _ -> do
                 forM_ users \u ->
@@ -153,7 +162,15 @@ jobsRunner dbPool logger cfg job = do
                   Projects.NSlack -> do
                     slackData <- withPool dbPool $ getProjectSlackData pid
                     case slackData of
-                      Just slackData' -> sendSlackMessage cfg slackData'.accessToken "Helloooo"
+                      Just slackData' -> do
+                        let projectTitle = project.title
+                        let projectIdTxt = pid.toText
+                        let message =
+                              [trimming| 🤖 **APITOOLKIT: New Shape anomaly found for `$projectTitle`***
+                                      We detected a different API request shape to your endpoints than what you usually have..
+                                      [More details on the apitoolkit]("https://app.apitoolkit.io/p/$projectIdTxt/anomalies")
+                             |]
+                        sendSlackMessage cfg slackData'.accessToken message
                       Nothing -> pass
                   _ -> do
                     forM_ users \u ->
@@ -188,7 +205,15 @@ jobsRunner dbPool logger cfg job = do
                   Projects.NSlack -> do
                     slackData <- withPool dbPool $ getProjectSlackData pid
                     case slackData of
-                      Just slackData' -> sendSlackMessage cfg slackData'.accessToken "Helloooo"
+                      Just slackData' -> do
+                        let projectTitle = project.title
+                        let projectIdTxt = pid.toText
+                        let message =
+                              [trimming| 🤖 **APITOOLKIT: New field format anomaly found for `$projectTitle`***
+                                      We detected that a particular field on your API is returning a different format/type than what it usually gets.
+                                      [More details on the apitoolkit]("https://app.apitoolkit.io/p/$projectIdTxt/anomalies")
+                             |]
+                        sendSlackMessage cfg slackData'.accessToken message
                       Nothing -> pass
                   _ -> do
                     forM_ users \u ->
