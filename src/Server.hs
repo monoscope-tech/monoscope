@@ -140,6 +140,8 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "share" :> ReqBody '[FormUrlEncoded] Share.ReqForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "outgoing" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "query_builder" :> "autocomplete" :> QPT "category" :> QPT "prefix" :> Get '[JSON] AE.Value
+    :<|> "slack" :> "link-projects" :> QPT "code" :> Get '[HTML] (Html ())
+    :<|> "slack" :> "link-projects" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
 
 
 type PublicAPI =
@@ -233,6 +235,8 @@ protectedServer sess =
     :<|> Share.shareLinkPostH sess
     :<|> outgoingGetH sess
     :<|> AutoComplete.getH sess
+    :<|> SlackInstall.linkProjectsGetH sess
+    :<|> SlackInstall.postH sess
 
 
 publicServer :: ServerT PublicAPI DashboardM

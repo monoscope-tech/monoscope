@@ -856,6 +856,7 @@ CREATE TABLE IF NOT EXISTS apis.slack
   created_at     TIMESTAMP   WITH    TIME   ZONE       NOT               NULL              DEFAULT current_timestamp,
   updated_at     TIMESTAMP   WITH    TIME   ZONE       NOT               NULL              DEFAULT current_timestamp,
   access_token   TEXT        NOT     NULL   DEFAULT        '',
+  UNIQUE (project_id)
 );
 
 COMMIT;
