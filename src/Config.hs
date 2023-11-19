@@ -55,7 +55,7 @@ data EnvConfig = EnvConfig
   , slackClientSecret :: Text
   , slackRedirectUri :: Text
   , courierClientKey :: Text
-  , couerirApiKey :: Text
+  , courierApiKey :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromEnv, Default)

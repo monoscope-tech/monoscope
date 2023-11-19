@@ -1,3 +1,6 @@
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+
+{-# HLINT ignore "Use fewer imports" #-}
 module BackgroundJobs (jobsWorkerInit, BgJobs (..)) where
 
 -- This example is using these functions to introduce an artificial delay of a
@@ -28,6 +31,7 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Query ()
 import Models.Apis.Reports qualified as Reports
 import Models.Apis.RequestDumps qualified as RequestDumps
+import Models.Apis.Slack
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text, trimming)
@@ -102,31 +106,32 @@ jobsRunner dbPool logger cfg job = do
             project <- Unsafe.fromJust <<$>> withPool dbPool $ Projects.projectById pid
             let enp = Unsafe.fromJust endp
             let endpointPath = enp.method <> " " <> enp.urlPath
-            forM_ users \u ->
-              let projectTitle = project.title
-                  projectIdTxt = pid.toText
-                  name = u.firstName
-                  subject = [text| 🤖 APITOOLKIT: New Endpoint detected for `$projectTitle` |]
-                  body =
-                    toLText
-                      [trimming|
-            Hi $name,<br/>
-
-            <p>We detected a new endpoint on ``$projectTitle`:</p>
-            <p><strong>$endpointPath</strong></p>
-            <a href="https://app.apitoolkit.io/p/$projectIdTxt/anomalies">More details on the apitoolkit</a>
-            <br/><br/>
-            Regards,
-            Apitoolkit team
-                      |]
-                  reciever = CI.original u.email
-               in case project.notificationsChannel of
-                    Projects.NSlack -> do
-                      slackData <- withPool dbPool $ getProjectSlackData pid
-                      case slackData of
-                        Just slackData' -> sendSlackMessage cfg slackData' "Helloooo"
-                        Nothing -> sendEmail cfg reciever subject body
-                    _ -> sendEmail cfg reciever subject body
+            case project.notificationsChannel of
+              Projects.NSlack -> do
+                slackData <- withPool dbPool $ getProjectSlackData pid
+                case slackData of
+                  Just slackData' -> sendSlackMessage cfg slackData'.accessToken "Helloooo"
+                  Nothing -> pass
+              _ -> do
+                forM_ users \u ->
+                  let projectTitle = project.title
+                      projectIdTxt = pid.toText
+                      name = u.firstName
+                      subject = [text| 🤖 APITOOLKIT: New Endpoint detected for `$projectTitle` |]
+                      body =
+                        toLText
+                          [trimming|
+                  Hi $name,<br/>
+      
+                  <p>We detected a new endpoint on ``$projectTitle`:</p>
+                  <p><strong>$endpointPath</strong></p>
+                  <a href="https://app.apitoolkit.io/p/$projectIdTxt/anomalies">More details on the apitoolkit</a>
+                  <br/><br/>
+                  Regards,
+                  Apitoolkit team
+                            |]
+                      reciever = CI.original u.email
+                   in sendEmail cfg reciever subject body
           Anomalies.ATShape -> do
             shapes <- withPool dbPool $ getShapes pid $ T.take 8 targetHash
             let targetFields = maybe [] (toList . snd) (V.find (\a -> fst a == targetHash) shapes)
@@ -145,24 +150,31 @@ jobsRunner dbPool logger cfg job = do
                 _ <- error "retry later"
                 users <- withPool dbPool $ Projects.usersByProjectId pid
                 project <- Unsafe.fromJust <<$>> withPool dbPool $ Projects.projectById pid
-                forM_ users \u ->
-                  let projectTitle = project.title
-                      projectIdTxt = pid.toText
-                      name = u.firstName
-                      subject = [text| 🤖 APITOOLKIT: New Shape anomaly found for `$projectTitle` |]
-                      body =
-                        toLText
-                          [trimming|
-  Hi $name,<br/>
-
-  <p>We detected a different API request shape to your endpoints than what you usually have..</p>
-  <a href="https://app.apitoolkit.io/p/$projectIdTxt/anomalies">More details on the apitoolkit</a>
-  <br/><br/>
-  Regards,<br/>
-  Apitoolkit team
-                          |]
-                      reciever = CI.original u.email
-                   in sendEmail cfg reciever subject body
+                case project.notificationsChannel of
+                  Projects.NSlack -> do
+                    slackData <- withPool dbPool $ getProjectSlackData pid
+                    case slackData of
+                      Just slackData' -> sendSlackMessage cfg slackData'.accessToken "Helloooo"
+                      Nothing -> pass
+                  _ -> do
+                    forM_ users \u ->
+                      let projectTitle = project.title
+                          projectIdTxt = pid.toText
+                          name = u.firstName
+                          subject = [text| 🤖 APITOOLKIT: New Shape anomaly found for `$projectTitle` |]
+                          body =
+                            toLText
+                              [trimming|
+         Hi $name,<br/>
+       
+         <p>We detected a different API request shape to your endpoints than what you usually have..</p>
+         <a href="https://app.apitoolkit.io/p/$projectIdTxt/anomalies">More details on the apitoolkit</a>
+         <br/><br/>
+         Regards,<br/>
+         Apitoolkit team
+                                 |]
+                          reciever = CI.original u.email
+                       in sendEmail cfg reciever subject body
           Anomalies.ATFormat -> do
             -- Send an email about the new shape anomaly but only if there was no endpoint anomaly logged
             anomalyM <- withPool dbPool $ Anomalies.getAnomalyVM pid targetHash
@@ -173,24 +185,31 @@ jobsRunner dbPool logger cfg job = do
                 _ <- error "retry later"
                 users <- withPool dbPool $ Projects.usersByProjectId pid
                 project <- Unsafe.fromJust <<$>> withPool dbPool $ Projects.projectById pid
-                forM_ users \u ->
-                  let projectTitle = project.title
-                      projectIdTxt = pid.toText
-                      name = u.firstName
-                      subject = [text| 🤖 APITOOLKIT: New field format anomaly found for `$projectTitle` |]
-                      body =
-                        toLText
-                          [trimming|
-  Hi $name,<br/>
-
-  <p>We detected that a particular field on your API is returning a different format/type than what it usually gets.</p>
-  <a href="https://app.apitoolkit.io/p/$projectIdTxt/anomalies">More details on the apitoolkit</a>
-  <br/><br/>
-  Regards,<br/>
-  Apitoolkit team
-                        |]
-                      reciever = CI.original u.email
-                   in sendEmail cfg reciever subject body
+                case project.notificationsChannel of
+                  Projects.NSlack -> do
+                    slackData <- withPool dbPool $ getProjectSlackData pid
+                    case slackData of
+                      Just slackData' -> sendSlackMessage cfg slackData'.accessToken "Helloooo"
+                      Nothing -> pass
+                  _ -> do
+                    forM_ users \u ->
+                      let projectTitle = project.title
+                          projectIdTxt = pid.toText
+                          name = u.firstName
+                          subject = [text| 🤖 APITOOLKIT: New field format anomaly found for `$projectTitle` |]
+                          body =
+                            toLText
+                              [trimming|
+       Hi $name,<br/>
+     
+       <p>We detected that a particular field on your API is returning a different format/type than what it usually gets.</p>
+       <a href="https://app.apitoolkit.io/p/$projectIdTxt/anomalies">More details on the apitoolkit</a>
+       <br/><br/>
+       Regards,<br/>
+       Apitoolkit team
+                             |]
+                          reciever = CI.original u.email
+                       in sendEmail cfg reciever subject body
           Anomalies.ATField -> pass
           Anomalies.ATUnknown -> pass
       InviteUserToProject userId projectId reciever projectTitle' ->

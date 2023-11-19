@@ -30,6 +30,7 @@ import Gogol.PubSub qualified as PubSub
 import Models.Projects.Projects qualified as Projects
 import Network.Wai.Handler.Warp (run)
 import Optics.Operators
+import Pkg.Mail (sendSlackMessage)
 import ProcessMessage
 import Relude
 import Server qualified
@@ -72,7 +73,6 @@ startApp = do
         logger <& "\n"
         logger <& "🚀 Starting server at port " <> show envConfig.port
         logger <& "\n"
-
         -- let ojStartArgs =
         --       OJCli.UIStartArgs
         --         { uistartAuth = OJCli.AuthNone

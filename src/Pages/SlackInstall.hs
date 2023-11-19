@@ -1,8 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-{-# HLINT ignore "Use tuple-section" #-}
-
 module Pages.SlackInstall (getH, linkProjectsGetH, postH, LinkProjectsForm) where
 
 import Config

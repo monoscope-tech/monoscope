@@ -7,7 +7,7 @@ import Config qualified
 import Control.Lens ((.~))
 import Data.Aeson.QQ
 import Data.Text
-import Models.Apis.Slack (SlackData)
+import Models.Apis.Slack
 import Network.HaskellNet.SMTP
 import Network.Mail.Mime
 import Network.Wreq
@@ -31,14 +31,16 @@ sendEmail config reciever subject body = doSMTPPort (toString config.smtpHost) (
     else error "SMTP Authentication failed."
 
 
-sendSlackMessage :: Config.EnvConfig -> SlackData -> Text -> IO ()
-sendSlackMessage config slackData message = do
-  let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ ["Bearer " <> slackData.accessToken]
+sendSlackMessage :: Config.EnvConfig -> Text -> Text -> IO ()
+sendSlackMessage config accessToken message = do
+  let authToken = encodeUtf8 $ "Bearer " <> accessToken
+  let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [authToken]
   let payload =
         [aesonQQ| {
-                "channel": #{slackData.channel},
+                "channel": "C065UEFQL0J",
                 "text": #{message}
               }
             |]
   response <- postWith opts "https://slack.com/api/chat.postMessage" payload
+  traceShowM response
   pass
