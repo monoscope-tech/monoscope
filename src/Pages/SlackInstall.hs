@@ -21,6 +21,7 @@ import Lucid
 import Data.Aeson.QQ
 import Database.PostgreSQL.Simple (Only (Only))
 import Lucid.Htmx (hxPost_)
+import Models.Apis.Slack (insertAccessToken)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Session
 import Models.Users.Sessions qualified as Sessions
@@ -81,20 +82,10 @@ exchangeCodeForToken clientId clientSecret redirectUri code = do
 postH :: Session.PersistentSession -> LinkProjectsForm -> DashboardM (Headers '[HXTrigger] (Html ()))
 postH sess LinkProjectsForm{projects, accessCode} = do
     pool <- asks pool
-    traceShowM projects
-    let projectInserts = (\p -> (p, accessCode)) <$> projects
-    let q =
-            [sql| 
-               INSERT INTO apis.slack
-               (project_id, access_token)
-               VALUES (?,?)
-               ON CONFLICT (project_id)
-               DO UPDATE SET access_token = EXCLUDED.access_token 
-          |]
-    let q2 = [sql| update projects.projects set notifications_channel = 'slack' where id=ANY(?::uuid[])|]
+    let q = [sql| update projects.projects set notifications_channel = 'slack' where id=ANY(?::uuid[])|]
     n <- liftIO $ withPool pool do
-        _ <- DPT.executeMany q projectInserts
-        execute Update q2 (Only $ Vector.fromList projects)
+        _ <- insertAccessToken projects accessCode
+        execute Update q (Only $ Vector.fromList projects)
     let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Slack account linked to project(s),successfully"]} |]
     pure $ addHeader hxTriggerData $ span_ [] ""
 

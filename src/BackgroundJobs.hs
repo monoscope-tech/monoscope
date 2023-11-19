@@ -34,6 +34,7 @@ import NeatInterpolation (text, trimming)
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), createJob, startJobRunner, throwParsePayload)
 
+import Models.Apis.Slack (getProjectSlackData)
 import Pages.Reports qualified as RP
 import Pkg.Mail
 import Relude
@@ -119,7 +120,13 @@ jobsRunner dbPool logger cfg job = do
             Apitoolkit team
                       |]
                   reciever = CI.original u.email
-               in sendEmail cfg reciever subject body
+               in case project.notificationsChannel of
+                    Projects.NSlack -> do
+                      slackData <- withPool dbPool $ getProjectSlackData pid
+                      case slackData of
+                        Just slackData' -> sendSlackMessage cfg slackData' "Helloooo"
+                        Nothing -> sendEmail cfg reciever subject body
+                    _ -> sendEmail cfg reciever subject body
           Anomalies.ATShape -> do
             shapes <- withPool dbPool $ getShapes pid $ T.take 8 targetHash
             let targetFields = maybe [] (toList . snd) (V.find (\a -> fst a == targetHash) shapes)

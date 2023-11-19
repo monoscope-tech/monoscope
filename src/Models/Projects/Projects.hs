@@ -7,6 +7,7 @@ module Models.Projects.Projects (
   ProjectId (..),
   CreateProject (..),
   ProjectRequestStats (..),
+  NotificationChannel (..),
   insertProject,
   projectIdFromText,
   usersByProjectId,
