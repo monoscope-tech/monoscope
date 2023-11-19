@@ -12,7 +12,6 @@ import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Transact qualified as DPT
 import Fmt (dateDashF, fmt)
 import Lucid
 
@@ -22,9 +21,7 @@ import Lucid.Htmx (hxPost_)
 import Models.Apis.Slack (insertAccessToken)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Session
-import Models.Users.Sessions qualified as Sessions
 import Network.Wreq
-import Network.Wreq.Types (Link (Link))
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Pkg.Components (navBar)
 import Relude

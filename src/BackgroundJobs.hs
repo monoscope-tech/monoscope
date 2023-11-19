@@ -38,7 +38,6 @@ import NeatInterpolation (text, trimming)
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), createJob, startJobRunner, throwParsePayload)
 
-import Models.Apis.Slack (getProjectSlackData)
 import Pages.Reports qualified as RP
 import Pkg.Mail
 import Relude
