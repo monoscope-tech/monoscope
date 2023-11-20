@@ -459,10 +459,11 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
                 case notifChannel of
                   Projects.NEmail -> button_ [class_ "btn btn-primary", hxPost_ [text|/p/$pid/notifications-toggle/slack|], hxSwap_ "none"] "Use Slack"
                   _ -> pass
-              form_ [class_ "flex flex-col rounded-lg"] do
+              form_ [class_ "flex flex-col rounded-lg", hxPost_ [text|/p/$pid/slack/webhook|], hxSwap_ "none"] do
                 label_ [] "Slack webhook"
                 div_ [class_ "flex gap-2 items-center"] do
-                  input_ [value_ (maybe "" (\s -> s.webhookUrl) slackData), placeholder_ "https://hooks.slack.com/services/xxxxxxxxx/xxxxxxxx/xxxxxxxxxxx", name_ "slack", class_ "w-full p-2 my-2 text-sm bg-white text-slate-700 border rounded"]
+                  input_ [type_ "hidden", name_ "projects", value_ pid]
+                  input_ [value_ (maybe "" (\s -> s.webhookUrl) slackData), placeholder_ "https://hooks.slack.com/services/xxxxxxxxx/xxxxxxxx/xxxxxxxxxxx", name_ "webhookUrl", class_ "w-full p-2 my-2 text-sm bg-white text-slate-700 border rounded"]
                   button_ [class_ "text-white bg-blue-600 rounded-lg px-4 py-1 w-max"] "Save"
               p_ [class_ "my-6 text-sm text-gray-500"] "OR"
               button_ [class_ "text-blue-500"] "Connect Slack"

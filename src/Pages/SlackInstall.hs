@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module Pages.SlackInstall (getH, linkProjectsGetH, postH, LinkProjectsForm) where
+module Pages.SlackInstall (getH, linkProjectsGetH, postH, LinkProjectsForm, updateWebHook) where
 
 import Config
 import Control.Lens ((.~), (^.))
@@ -88,12 +88,18 @@ exchangeCodeForToken clientId clientSecret redirectUri code = do
     let hds = header "Content-Type" .~ ["application/x-www-form-urlencoded; charset=utf-8"]
     response <- postWith (defaults & hds) "https://slack.com/api/oauth.v2.access" formData
     let responseBdy = response ^. responseBody
-    traceShowM responseBdy
     case decode responseBdy of
         Just token -> do
-            traceShowM token
             return $ Just token
         Nothing -> return Nothing
+
+
+updateWebHook :: Session.PersistentSession -> Projects.ProjectId -> LinkProjectsForm -> DashboardM (Headers '[HXTrigger] (Html ()))
+updateWebHook sess pid LinkProjectsForm{projects, webhookUrl} = do
+    pool <- asks pool
+    _ <- liftIO $ withPool pool $ insertAccessToken [pid.toText] webhookUrl
+    let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Webhook url updated successfully"]} |]
+    pure $ addHeader hxTriggerData $ span_ [] "Projects linked successfully"
 
 
 postH :: Session.PersistentSession -> LinkProjectsForm -> DashboardM (Headers '[HXTrigger] (Html ()))

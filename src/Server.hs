@@ -143,6 +143,7 @@ type ProtectedAPI =
     :<|> "slack" :> "link-projects" :> QPT "code" :> Get '[HTML] (Html ())
     :<|> "slack" :> "link-projects" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "notifications-toggle" :> Capture "channel" Text :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
+    :<|> "p" :> ProjectId :> "slack" :> "webhook" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
 
 
 type PublicAPI =
@@ -239,6 +240,7 @@ protectedServer sess =
     :<|> SlackInstall.linkProjectsGetH sess
     :<|> SlackInstall.postH sess
     :<|> CreateProject.updateNotificationsChannel sess
+    :<|> SlackInstall.updateWebHook sess
 
 
 publicServer :: ServerT PublicAPI DashboardM
