@@ -35,6 +35,8 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript
+import Models.Apis.Slack
+import Models.Apis.Slack qualified as S
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMembers qualified as Projects
@@ -104,7 +106,7 @@ createProjectGetH sess = do
           { sessM = Just sess
           , pageTitle = "Endpoints"
           }
-  pure $ bodyWrapper bwconf $ createProjectBody sess envCfg False (def @CreateProjectForm) (def @CreateProjectFormError)
+  pure $ bodyWrapper bwconf $ createProjectBody sess envCfg False (def @CreateProjectForm) (def @CreateProjectFormError) Projects.NEmail Nothing
 
 
 ----------------------------------------------------------------------------------------------------------
@@ -124,10 +126,12 @@ projectSettingsGetH sess pid = do
           , paymentPlan = proj.paymentPlan
           , timeZone = proj.timeZone
           }
+  slackInfo <- liftIO $ withPool pool $ getProjectSlackData pid
+
   -- FIXME: Should be a value from the db
 
   let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just proj, pageTitle = "Settings"}
-  pure $ bodyWrapper bwconf $ createProjectBody sess envCfg True createProj (def @CreateProjectFormError)
+  pure $ bodyWrapper bwconf $ createProjectBody sess envCfg True createProj (def @CreateProjectFormError) proj.notificationsChannel slackInfo
 
 
 ----------------------------------------------------------------------------------------------------------
@@ -151,9 +155,10 @@ deleteProjectGetH sess pid = do
 createProjectPostH :: Sessions.PersistentSession -> CreateProjectForm -> DashboardM (Headers '[HXTrigger, HXRedirect] (Html ()))
 createProjectPostH sess createP = do
   envCfg <- asks env
+  pool <- asks pool
   validationRes <- validateM createProjectFormV createP
   case validationRes of
-    Right cpe -> pure $ noHeader $ noHeader $ createProjectBody sess envCfg createP.isUpdate createP cpe
+    Right cpe -> pure $ noHeader $ noHeader $ createProjectBody sess envCfg createP.isUpdate createP cpe Projects.NEmail Nothing
     Left cp -> processProjectPostForm sess cp
 
 
@@ -203,7 +208,7 @@ processProjectPostForm sess cpRaw = do
 
   let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Created Project Successfully"]}|]
   let hxTriggerDataUpdate = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Updated Project Successfully"]}|]
-  let bdy = createProjectBody sess envCfg cp.isUpdate cp (def @CreateProjectFormError)
+  let bdy = createProjectBody sess envCfg cp.isUpdate cp (def @CreateProjectFormError) Projects.NEmail Nothing
   if cp.isUpdate
     then pure $ addHeader hxTriggerDataUpdate $ noHeader bdy
     else pure $ addHeader hxTriggerData $ addHeader ("/p/" <> pid.toText <> "/about_project") bdy
@@ -211,8 +216,8 @@ processProjectPostForm sess cpRaw = do
 
 ----------------------------------------------------------------------------------------------------------
 -- createProjectBody is the core html view
-createProjectBody :: Sessions.PersistentSession -> EnvConfig -> Bool -> CreateProjectForm -> CreateProjectFormError -> Html ()
-createProjectBody sess envCfg isUpdate cp cpe = do
+createProjectBody :: Sessions.PersistentSession -> EnvConfig -> Bool -> CreateProjectForm -> CreateProjectFormError -> Projects.NotificationChannel -> Maybe SlackData -> Html ()
+createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
   let paymentPlan = if cp.paymentPlan == "" then "Hobby" else cp.paymentPlan
   section_ [id_ "main-content", class_ "p-3 py-5 sm:p-6"] do
     div_ [class_ "mx-auto", style_ "max-width:800px"] do
@@ -425,6 +430,34 @@ createProjectBody sess envCfg isUpdate cp cpe = do
               "Proceed"
 
       when isUpdate do
+        div_ [class_ "mt-10"] do
+          h2_ [class_ "text-slate-700 text-3xl font-medium mb-5"] "Project Notifications"
+          div_ [class_ "flex flex-col gap-4 border p-6 rounded-2xl"] do
+            p_ [] "Select a notification channel to receive updates on this project"
+            case notifChannel of
+              Projects.NSlack -> span_ [class_ "text-sm text-blue-500 font-bold"] "Current notifications channel is Slack"
+              _ -> span_ [class_ "text-sm text-blue-500 font-bold"] "Current notifications channel is Email"
+            div_ [class_ "bg-gray-100 p-6 rounded-lg"] do
+              div_ [class_ "flex justify-between items-center mb-6"] do
+                h3_ [class_ "text-2xl font-bold"] "Email"
+                case notifChannel of
+                  Projects.NSlack -> button_ [class_ "btn btn-primary"] "Use Email"
+                  _ -> pass
+              input_ [value_ "All users on this project", disabled_ "true", name_ "email", class_ "w-full p-2 my-2 text-sm bg-white text-slate-700 border rounded"]
+            div_ [class_ "bg-gray-100 p-6"] do
+              div_ [class_ "flex justify-between items-center mb-6"] do
+                h3_ [class_ "text-2xl font-bold"] "Slack"
+                case notifChannel of
+                  Projects.NEmail -> button_ [class_ "btn btn-primary"] "Use Slack"
+                  _ -> pass
+              form_ [class_ "flex flex-col rounded-lg"] do
+                label_ [] "Slack webhook"
+                div_ [class_ "flex gap-2 items-center"] do
+                  input_ [value_ (maybe "" (\s -> s.webhookUrl) slackData), placeholder_ "https://hooks.slack.com/services/xxxxxxxxx/xxxxxxxx/xxxxxxxxxxx", name_ "slack", class_ "w-full p-2 my-2 text-sm bg-white text-slate-700 border rounded"]
+                  button_ [class_ "text-white bg-blue-600 rounded-lg px-4 py-1 w-max"] "Save"
+              p_ [class_ "my-6 text-sm text-gray-500"] "OR"
+              button_ [class_ "text-blue-500"] "Connect Slack"
+
         div_ [class_ "col-span-1 h-full justify-center items-center w-full text-center pt-24"] do
           h2_ [class_ "text-red-800 font-medium pb-4"] "Delete project. This is dangerous and unreversable"
           let pid = cp.projectId

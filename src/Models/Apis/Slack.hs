@@ -17,7 +17,6 @@ import Relude
 data SlackData = SlackData
     { projectId :: Projects.ProjectId
     , webhookUrl :: Text
-    , channelId :: Text
     }
     deriving stock (Show, Generic, Eq)
     deriving anyclass (FromRow, ToRow)
@@ -39,4 +38,4 @@ insertAccessToken projects webhookUrl = executeMany q params
 getProjectSlackData :: Projects.ProjectId -> DBT IO (Maybe SlackData)
 getProjectSlackData pid = queryOne Select q (Only pid)
     where
-        q = [sql|SELECT project_id, webhook_url, channel_id FROM apis.slack WHERE project_id =? |]
+        q = [sql|SELECT project_id, webhook_url FROM apis.slack WHERE project_id =? |]
