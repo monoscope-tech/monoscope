@@ -15,8 +15,9 @@ import Relude
 
 
 data SlackData = SlackData
-    { projectId :: Text
-    , accessToken :: Text
+    { projectId :: Projects.ProjectId
+    , webhookUrl :: Text
+    , channelId :: Text
     }
     deriving stock (Show, Generic, Eq)
     deriving anyclass (FromRow, ToRow)
@@ -24,18 +25,18 @@ data SlackData = SlackData
 
 
 insertAccessToken :: [Text] -> Text -> DBT IO Int64
-insertAccessToken projects accessToken = executeMany q params
+insertAccessToken projects webhookUrl = executeMany q params
     where
         q =
             [sql|INSERT INTO apis.slack
-               (project_id, access_token)
+               (project_id, webhook_url)
                VALUES (?,?)
                ON CONFLICT (project_id)
-               DO UPDATE SET access_token = EXCLUDED.access_token |]
-        params = (\p -> (p, accessToken)) <$> projects
+               DO UPDATE SET webhook_url = EXCLUDED.webhook_url |]
+        params = (\p -> (p, webhookUrl)) <$> projects
 
 
 getProjectSlackData :: Projects.ProjectId -> DBT IO (Maybe SlackData)
 getProjectSlackData pid = queryOne Select q (Only pid)
     where
-        q = [sql|SELECT project_id, access_token FROM apis.slack WHERE project_id =? |]
+        q = [sql|SELECT project_id, webhook_url, channel_id FROM apis.slack WHERE project_id =? |]

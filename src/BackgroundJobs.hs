@@ -118,7 +118,7 @@ jobsRunner dbPool logger cfg job = do
                                   **$endpointPath**
                                   [More details on the apitoolkit]("https://app.apitoolkit.io/p/$projectIdTxt/anomalies")
                          |]
-                    sendSlackMessage cfg slackData'.accessToken message
+                    sendSlackMessage slackData'.webhookUrl message
                   Nothing -> pass
               _ -> do
                 forM_ users \u ->
@@ -170,7 +170,7 @@ jobsRunner dbPool logger cfg job = do
                                       We detected a different API request shape to your endpoints than what you usually have..
                                       [More details on the apitoolkit]("https://app.apitoolkit.io/p/$projectIdTxt/anomalies")
                              |]
-                        sendSlackMessage cfg slackData'.accessToken message
+                        sendSlackMessage slackData'.webhookUrl message
                       Nothing -> pass
                   _ -> do
                     forM_ users \u ->
@@ -213,7 +213,7 @@ jobsRunner dbPool logger cfg job = do
                                       We detected that a particular field on your API is returning a different format/type than what it usually gets.
                                       [More details on the apitoolkit]("https://app.apitoolkit.io/p/$projectIdTxt/anomalies")
                              |]
-                        sendSlackMessage cfg slackData'.accessToken message
+                        sendSlackMessage slackData'.webhookUrl message
                       Nothing -> pass
                   _ -> do
                     forM_ users \u ->

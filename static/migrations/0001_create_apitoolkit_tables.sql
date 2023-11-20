@@ -855,7 +855,7 @@ CREATE TABLE IF NOT EXISTS apis.slack
   project_id     UUID        NOT     NULL   REFERENCES projects.projects (id)              ON      DELETE CASCADE,
   created_at     TIMESTAMP   WITH    TIME   ZONE       NOT               NULL              DEFAULT current_timestamp,
   updated_at     TIMESTAMP   WITH    TIME   ZONE       NOT               NULL              DEFAULT current_timestamp,
-  access_token   TEXT        NOT     NULL   DEFAULT        '',
+  webhook_url   TEXT        NOT     NULL   DEFAULT        '',
   UNIQUE (project_id)
 );
 

@@ -18,7 +18,7 @@ import Lucid
 import Data.Aeson.QQ
 import Database.PostgreSQL.Simple (Only (Only))
 import Lucid.Htmx (hxPost_)
-import Models.Apis.Slack (insertAccessToken)
+import Models.Apis.Slack (SlackData (webhookUrl), insertAccessToken)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Session
 import Network.Wreq
@@ -32,16 +32,37 @@ import Web.FormUrlEncoded (FromForm)
 
 data LinkProjectsForm = LinkProjectsForm
     { projects :: [Text]
-    , accessCode :: Text
+    , webhookUrl :: Text
     }
     deriving stock (Show, Generic)
     deriving anyclass (FromForm)
 
 
+data IncomingWebhook = IncomingWebhook
+    { channel :: String
+    , channelId :: String
+    , configurationUrl :: String
+    , url :: String
+    }
+    deriving stock (Show, Generic)
+
+
+instance FromJSON IncomingWebhook where
+    parseJSON = withObject "IncomingWebhook" $ \v ->
+        IncomingWebhook
+            <$> v
+            .: "channel"
+            <*> v
+            .: "channel_id"
+            <*> v
+            .: "configuration_url"
+            <*> v
+            .: "url"
+
+
 data TokenResponse = TokenResponse
     { ok :: Bool
-    , tokenType :: String
-    , accessToken :: String
+    , incomingWebhook :: IncomingWebhook
     }
     deriving stock (Show, Generic)
 
@@ -52,9 +73,7 @@ instance FromJSON TokenResponse where
             <$> v
             .: "ok"
             <*> v
-            .: "token_type"
-            <*> v
-            .: "access_token"
+            .: "incoming_webhook"
 
 
 exchangeCodeForToken :: Text -> Text -> Text -> Text -> IO (Maybe TokenResponse)
@@ -69,17 +88,20 @@ exchangeCodeForToken clientId clientSecret redirectUri code = do
     let hds = header "Content-Type" .~ ["application/x-www-form-urlencoded; charset=utf-8"]
     response <- postWith (defaults & hds) "https://slack.com/api/oauth.v2.access" formData
     let responseBdy = response ^. responseBody
+    traceShowM responseBdy
     case decode responseBdy of
-        Just token -> return $ Just token
+        Just token -> do
+            traceShowM token
+            return $ Just token
         Nothing -> return Nothing
 
 
 postH :: Session.PersistentSession -> LinkProjectsForm -> DashboardM (Headers '[HXTrigger] (Html ()))
-postH sess LinkProjectsForm{projects, accessCode} = do
+postH sess LinkProjectsForm{projects, webhookUrl} = do
     pool <- asks pool
     let q = [sql| update projects.projects set notifications_channel = 'slack' where id=ANY(?::uuid[])|]
     n <- liftIO $ withPool pool do
-        _ <- insertAccessToken projects accessCode
+        _ <- insertAccessToken projects webhookUrl
         execute Update q (Only $ Vector.fromList projects)
     let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Slack account linked to project(s),successfully"]} |]
     pure $ addHeader hxTriggerData $ span_ [] "Projects linked successfully"
@@ -134,7 +156,7 @@ slackPage projects token = do
         section_ [class_ "w-full"] do
             div_ [class_ "bg-white shadow overflow-hidden sm:rounded-md"] do
                 form_ [hxPost_ "/slack/link-projects"] do
-                    input_ [type_ "hidden", name_ "accessCode", value_ $ toText token.accessToken]
+                    input_ [type_ "hidden", name_ "webhookUrl", value_ $ toText token.incomingWebhook.url]
                     ul_ [role_ "list", class_ "divide-y divide-gray-200"] do
                         projects & mapM_ \project -> do
                             li_ do

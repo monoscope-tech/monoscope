@@ -31,16 +31,13 @@ sendEmail config reciever subject body = doSMTPPort (toString config.smtpHost) (
     else error "SMTP Authentication failed."
 
 
-sendSlackMessage :: Config.EnvConfig -> Text -> Text -> IO ()
-sendSlackMessage config accessToken message = do
-  let authToken = encodeUtf8 $ "Bearer " <> accessToken
-  let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [authToken]
+sendSlackMessage :: Text -> Text -> IO ()
+sendSlackMessage webhookUrl message = do
+  let opts = defaults & header "Content-Type" .~ ["application/json"]
   let payload =
         [aesonQQ| {
-                "channel": "C065UEFQL0J",
                 "text": #{message}
               }
             |]
-  response <- postWith opts "https://slack.com/api/chat.postMessage" payload
-  traceShowM response
+  response <- postWith opts (toString webhookUrl) payload
   pass
