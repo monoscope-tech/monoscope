@@ -21,6 +21,7 @@ module Models.Projects.Projects (
   projectCacheById,
   updateProjectReportNotif,
   ProjectCache (..),
+  updateNotificationsChannel,
 ) where
 
 import Data.Aeson (FromJSON (..), ToJSON (toJSON), Value (String))
@@ -321,3 +322,9 @@ data ProjectRequestStats = ProjectRequestStats
 
 projectRequestStatsByProject :: ProjectId -> DBT IO (Maybe ProjectRequestStats)
 projectRequestStatsByProject = selectById @ProjectRequestStats
+
+
+updateNotificationsChannel :: ProjectId -> Text -> DBT IO Int64
+updateNotificationsChannel pid channel = execute Update q (channel, pid)
+  where
+    q = [sql| UPDATE projects.projects SET notifications_channel=? WHERE id=?;|]

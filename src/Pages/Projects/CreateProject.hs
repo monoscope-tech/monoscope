@@ -11,6 +11,7 @@ module Pages.Projects.CreateProject (
   CreateProjectFormError,
   projectSettingsGetH,
   deleteProjectGetH,
+  updateNotificationsChannel,
 ) where
 
 import BackgroundJobs qualified
@@ -36,7 +37,6 @@ import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript
 import Models.Apis.Slack
-import Models.Apis.Slack qualified as S
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMembers qualified as Projects
@@ -147,6 +147,14 @@ deleteProjectGetH sess pid = do
       _ <- liftIO $ withPool pool $ Projects.deleteProject pid
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Deleted Project Successfully"]}|]
       pure $ addHeader hxTriggerData $ addHeader "/" $ span_ ""
+
+
+updateNotificationsChannel :: Sessions.PersistentSession -> Projects.ProjectId -> Text -> DashboardM (Headers '[HXTrigger] (Html ()))
+updateNotificationsChannel sess pid channel = do
+  pool <- asks pool
+  _ <- liftIO $ withPool pool $ Projects.updateNotificationsChannel pid channel
+  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Updated Notifications Channel Successfully"]}|]
+  pure $ addHeader hxTriggerData $ span_ ""
 
 
 ----------------------------------------------------------------------------------------------------------
@@ -430,6 +438,7 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
               "Proceed"
 
       when isUpdate do
+        let pid = cp.projectId
         div_ [class_ "mt-10"] do
           h2_ [class_ "text-slate-700 text-3xl font-medium mb-5"] "Project Notifications"
           div_ [class_ "flex flex-col gap-4 border p-6 rounded-2xl"] do
@@ -441,14 +450,14 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
               div_ [class_ "flex justify-between items-center mb-6"] do
                 h3_ [class_ "text-2xl font-bold"] "Email"
                 case notifChannel of
-                  Projects.NSlack -> button_ [class_ "btn btn-primary"] "Use Email"
+                  Projects.NSlack -> button_ [class_ "btn btn-primary", hxPost_ [text|/p/$pid/notifications-toggle/email|], hxSwap_ "none"] "Use Email"
                   _ -> pass
               input_ [value_ "All users on this project", disabled_ "true", name_ "email", class_ "w-full p-2 my-2 text-sm bg-white text-slate-700 border rounded"]
             div_ [class_ "bg-gray-100 p-6"] do
               div_ [class_ "flex justify-between items-center mb-6"] do
                 h3_ [class_ "text-2xl font-bold"] "Slack"
                 case notifChannel of
-                  Projects.NEmail -> button_ [class_ "btn btn-primary"] "Use Slack"
+                  Projects.NEmail -> button_ [class_ "btn btn-primary", hxPost_ [text|/p/$pid/notifications-toggle/slack|], hxSwap_ "none"] "Use Slack"
                   _ -> pass
               form_ [class_ "flex flex-col rounded-lg"] do
                 label_ [] "Slack webhook"
@@ -460,7 +469,6 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
 
         div_ [class_ "col-span-1 h-full justify-center items-center w-full text-center pt-24"] do
           h2_ [class_ "text-red-800 font-medium pb-4"] "Delete project. This is dangerous and unreversable"
-          let pid = cp.projectId
           button_
             [ class_ "btn btn-sm bg-red-800 text-white shadow-md hover:bg-red-700 cursor-pointer rounded-md"
             , hxGet_ [text|/p/$pid/delete|]

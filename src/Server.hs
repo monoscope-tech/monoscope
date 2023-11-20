@@ -142,6 +142,7 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "query_builder" :> "autocomplete" :> QPT "category" :> QPT "prefix" :> Get '[JSON] AE.Value
     :<|> "slack" :> "link-projects" :> QPT "code" :> Get '[HTML] (Html ())
     :<|> "slack" :> "link-projects" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
+    :<|> "p" :> ProjectId :> "notifications-toggle" :> Capture "channel" Text :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
 
 
 type PublicAPI =
@@ -237,6 +238,7 @@ protectedServer sess =
     :<|> AutoComplete.getH sess
     :<|> SlackInstall.linkProjectsGetH sess
     :<|> SlackInstall.postH sess
+    :<|> CreateProject.updateNotificationsChannel sess
 
 
 publicServer :: ServerT PublicAPI DashboardM
