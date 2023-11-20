@@ -99,13 +99,13 @@ getH slack_code = do
 toLinkPage :: Text -> Html ()
 toLinkPage code = do
     navBar
-    section_ [class_ "h-full mt-[80px] w-[1000px] flex flex-col items-center mx-auto"] do
-        div_ [] do
+    section_ [class_ "h-full mt-[80px] w-[1000px] flex flex-col gap-6 items-center mx-auto"] do
+        div_ [class_ "mt-10"] do
             h1_ [class_ "text-2xl font-bold"] "Link Slack Account to a project to complete"
         section_ [] do
-            div_ [class_ "bg-white shadow overflow-hidden sm:rounded-md"] do
-                h3_ [] "You need to be logged in"
-                a_ [href_ $ "http://localhost:8080/slack/link-projects?code=" <> code] "Link a project(s)"
+            div_ [class_ "bg-white flex flex-col items-center sm:rounded-md"] do
+                h3_ [class_ "mb-6"] "Make sure you are logged in"
+                a_ [href_ $ "http://localhost:8080/slack/link-projects?code=" <> code, class_ "btn btn-primary"] "Link a project(s)"
 
 
 linkProjectsGetH :: Session.PersistentSession -> Maybe Text -> DashboardM (Html ())
@@ -152,7 +152,7 @@ slackPage projects token = do
                                                             time_ [datetime_ $ fmt $ dateDashF project.createdAt] $ toHtml @Text $ fmt $ dateDashF project.createdAt
                                         div_ [class_ "ml-5 flex-shrink-0 text-gray-400"] do
                                             input_ [type_ "checkbox", id_ project.id.toText, name_ "projects", value_ project.id.toText]
-                    button_ [class_ "rounded px-2 py-4 bg-blue-400 w-max my-4"] "Link"
+                        button_ [class_ "mx-2 mb-2 mt-6 btn btn-primary"] "Link Projects"
 
 
 noTokenFound :: Html ()
