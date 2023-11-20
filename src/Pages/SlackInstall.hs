@@ -82,7 +82,7 @@ postH sess LinkProjectsForm{projects, accessCode} = do
         _ <- insertAccessToken projects accessCode
         execute Update q (Only $ Vector.fromList projects)
     let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Slack account linked to project(s),successfully"]} |]
-    pure $ addHeader hxTriggerData $ span_ [] ""
+    pure $ addHeader hxTriggerData $ span_ [] "Projects linked successfully"
 
 
 getH :: Maybe Text -> DashboardM (Html ())
