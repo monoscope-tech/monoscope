@@ -159,6 +159,7 @@ type PublicAPI =
     :<|> "ping" :> Get '[PlainText] Text
     :<|> "share" :> "r" :> Capture "shareID" UUID.UUID :> Get '[HTML] (Html ())
     :<|> "slack" :> "oauth" :> "callback" :> QPT "code" :> Get '[HTML] (Html ())
+    :<|> "slack" :> "oauth" :> "callback" :> Capture "project_id" Projects.ProjectId :> QPT "code" :> Get '[HTML] (Html ())
     :<|> Raw
 
 
@@ -254,6 +255,7 @@ publicServer =
     :<|> pingH
     :<|> Share.shareLinkGetH
     :<|> SlackInstall.getH
+    :<|> SlackInstall.linkProjectGetH
     :<|> serveDirectoryWebApp "./static/public"
 
 

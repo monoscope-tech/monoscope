@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module Pages.SlackInstall (getH, linkProjectsGetH, postH, LinkProjectsForm, updateWebHook) where
+module Pages.SlackInstall (getH, linkProjectsGetH, linkProjectGetH, postH, LinkProjectsForm, updateWebHook) where
 
 import Config
 import Control.Lens ((.~), (^.))
@@ -24,6 +24,7 @@ import Models.Users.Sessions qualified as Session
 import Network.Wreq
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Pkg.Components (navBar)
+import Pkg.Mail (sendSlackMessage)
 import Relude
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
@@ -39,10 +40,10 @@ data LinkProjectsForm = LinkProjectsForm
 
 
 data IncomingWebhook = IncomingWebhook
-    { channel :: String
-    , channelId :: String
-    , configurationUrl :: String
-    , url :: String
+    { channel :: Text
+    , channelId :: Text
+    , configurationUrl :: Text
+    , url :: Text
     }
     deriving stock (Show, Generic)
 
@@ -155,6 +156,32 @@ linkProjectsGetH sess slack_code = do
     pure $ bodyWrapper bwconf (maybe noTokenFound (slackPage projects) token)
 
 
+linkProjectGetH :: Projects.ProjectId -> Maybe Text -> DashboardM (Html ())
+linkProjectGetH pid slack_code = do
+    envCfg <- asks env
+    pool <- asks pool
+    let client_id = envCfg.slackClientId
+    let client_secret = envCfg.slackClientSecret
+    let redirect_uri = envCfg.slackRedirectUri
+    token <- liftIO $ exchangeCodeForToken client_id client_secret redirect_uri (fromMaybe "" slack_code)
+    let q = [sql| update projects.projects set notifications_channel = 'slack' where id=ANY(?::uuid[])|]
+    let bwconf =
+            (def :: BWConfig)
+                { sessM = Nothing
+                , currProject = Nothing
+                , pageTitle = "Link a project"
+                }
+    project <- liftIO $ withPool pool $ Projects.projectById pid
+    case (token, project) of
+        (Just token', Just project') -> do
+            n <- liftIO $ withPool pool do
+                _ <- insertAccessToken [pid.toText] token'.incomingWebhook.url
+                execute Update q (Only $ Vector.fromList [pid.toText])
+            liftIO $ sendSlackMessage token'.incomingWebhook.url ("APIToolkit Bot has been linked to your project: " <> project'.title)
+            pure $ bodyWrapper bwconf installedSuccess
+        (_, _) -> pure $ bodyWrapper bwconf noTokenFound
+
+
 slackPage :: Vector Projects.Project' -> TokenResponse -> Html ()
 slackPage projects token = do
     main_ [class_ "w-[1000px] flex flex-col mt-8 items-center mx-auto"] do
@@ -189,3 +216,11 @@ noTokenFound = do
     section_ [class_ "h-full mt-[80px] w-[1000px] flex flex-col items-center mx-auto"] do
         h3_ [class_ "text-5xl font-semibold my-8"] "Token Not Found"
         p_ [class_ "text-2xl"] "No slack access token found, reinstall the APIToolkit slack app to try again."
+
+
+installedSuccess :: Html ()
+installedSuccess = do
+    navBar
+    section_ [class_ "h-full mt-[80px] w-[1000px] flex flex-col items-center mx-auto"] do
+        h3_ [class_ "text-5xl font-semibold my-8 text-green-500"] "APIToolkit Slack App Installed"
+        p_ [class_ "text-2xl"] "APIToolkit Bot Slack app has been connected to your project successfully. You can now recieve notifications on slack."
