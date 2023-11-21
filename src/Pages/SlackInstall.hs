@@ -84,6 +84,7 @@ exchangeCodeForToken clientId clientSecret redirectUri code = do
             [ "client_id" := clientId
             , "client_secret" := clientSecret
             , "code" := code
+            , "redirect_uri" := redirectUri
             ]
 
     let hds = header "Content-Type" .~ ["application/x-www-form-urlencoded; charset=utf-8"]
@@ -163,13 +164,13 @@ linkProjectGetH pid slack_code = do
     let client_id = envCfg.slackClientId
     let client_secret = envCfg.slackClientSecret
     let redirect_uri = envCfg.slackRedirectUri
-    token <- liftIO $ exchangeCodeForToken client_id client_secret redirect_uri (fromMaybe "" slack_code)
+    token <- liftIO $ exchangeCodeForToken client_id client_secret (redirect_uri <> pid.toText) (fromMaybe "" slack_code)
     let q = [sql| update projects.projects set notifications_channel = 'slack' where id=ANY(?::uuid[])|]
     let bwconf =
             (def :: BWConfig)
                 { sessM = Nothing
                 , currProject = Nothing
-                , pageTitle = "Link a project"
+                , pageTitle = "Slack app installed"
                 }
     project <- liftIO $ withPool pool $ Projects.projectById pid
     case (token, project) of
