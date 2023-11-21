@@ -109,10 +109,13 @@ jobsRunner dbPool logger cfg job = do
                 let projectTitle = project.title
                 let projectIdTxt = pid.toText
                 let message =
-                      [trimming| 🤖 **APITOOLKIT: New Endpoint detected for `$projectTitle`****
-                                  We detected a new endpoint on `$projectTitle`
-                                  **$endpointPath**
-                                  [More details on the apitoolkit]("https://app.apitoolkit.io/p/$projectIdTxt/anomalies")
+                      [trimming| 🤖 *New Endpoint Detected for `$projectTitle`*
+
+                                  We have detected a new endpoint on *$projectTitle*
+
+                                  Endpoint: `$endpointPath`
+
+                                  <https://app.apitoolkit.io/p/$projectIdTxt/anomalies|More details on the apitoolkit>
                          |]
                 sendSlackMessage dbPool pid message
               _ -> do
@@ -158,9 +161,11 @@ jobsRunner dbPool logger cfg job = do
                     let projectTitle = project.title
                     let projectIdTxt = pid.toText
                     let message =
-                          [trimming| 🤖 **APITOOLKIT: New Shape anomaly found for `$projectTitle`****
-                                      We detected a different API request shape to your endpoints than what you usually have..
-                                      [More details on the apitoolkit]("https://app.apitoolkit.io/p/$projectIdTxt/anomalies")
+                          [trimming| 🤖 *New Shape anomaly found for `$projectTitle`*
+
+                                      We detected a different API request shape to your endpoints than what you usually have
+
+                                      <https://app.apitoolkit.io/p/$projectIdTxt/anomalies|More details on the apitoolkit>
                              |]
                     sendSlackMessage dbPool pid message
                   _ -> do
@@ -197,9 +202,12 @@ jobsRunner dbPool logger cfg job = do
                     let projectTitle = project.title
                     let projectIdTxt = pid.toText
                     let message =
-                          [trimming| 🤖 **APITOOLKIT: New field format anomaly found for `$projectTitle`****
-                                      We detected that a particular field on your API is returning a different format/type than what it usually gets.
-                                      [More details on the apitoolkit]("https://app.apitoolkit.io/p/$projectIdTxt/anomalies")
+                          [trimming| 🤖 *New Field Format Anomaly Found for `$projectTitle`*
+
+                                     We detected that a particular field on your API is returning a different format/type than what it usually gets.
+
+                                     <https://app.apitoolkit.io/p/$projectIdTxt/anomalies|More details on the apitoolkit>
+
                              |]
                     sendSlackMessage dbPool pid message
                   _ -> do

@@ -41,7 +41,8 @@ sendSlackMessage pool pid message = do
   let opts = defaults & header "Content-Type" .~ ["application/json"]
   let payload =
         [aesonQQ| {
-                "text": #{message}
+                "text": #{message},
+                "type":"mrkdwn"
               }
             |]
   response <- postWith opts (toString (maybe "" (\s -> s.webhookUrl) slackData)) payload
