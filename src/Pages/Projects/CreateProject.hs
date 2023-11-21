@@ -37,6 +37,7 @@ import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript
 import Models.Apis.Slack
+import Models.Apis.Slack (getProjectSlackData)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMembers qualified as Projects
@@ -152,9 +153,21 @@ deleteProjectGetH sess pid = do
 updateNotificationsChannel :: Sessions.PersistentSession -> Projects.ProjectId -> Text -> DashboardM (Headers '[HXTrigger] (Html ()))
 updateNotificationsChannel sess pid channel = do
   pool <- asks pool
-  _ <- liftIO $ withPool pool $ Projects.updateNotificationsChannel pid channel
-  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Updated Notifications Channel Successfully"]}|]
-  pure $ addHeader hxTriggerData $ span_ ""
+  if channel == "slack"
+    then do
+      slackData <- liftIO $ withPool pool $ getProjectSlackData pid
+      case slackData of
+        Nothing -> do
+          let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"errorToast": ["You need to connect slack to this project first."]}|]
+          pure $ addHeader hxTriggerData $ span_ ""
+        Just _ -> do
+          _ <- liftIO $ withPool pool do Projects.updateNotificationsChannel pid channel
+          let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Updated Notifications Channel Successfully"]}|]
+          pure $ addHeader hxTriggerData $ span_ ""
+    else do
+      _ <- liftIO $ withPool pool do Projects.updateNotificationsChannel pid channel
+      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Updated Notifications Channel Successfully"]}|]
+      pure $ addHeader hxTriggerData $ span_ ""
 
 
 ----------------------------------------------------------------------------------------------------------
