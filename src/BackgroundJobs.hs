@@ -279,7 +279,6 @@ jobsRunner dbPool logger cfg job = do
         pass
       DailyReports pid -> do
         dailyReportForProject dbPool cfg pid
-        sendSlackMessage dbPool pid "Dail JObbb"
         pass
       WeeklyReports pid -> do
         weeklyReportForProject dbPool cfg pid
@@ -297,28 +296,40 @@ dailyReportForProject dbPool cfg pid = do
   users <- withPool dbPool $ Projects.usersByProjectId pid
   projectM <- withPool dbPool $ Projects.projectById pid
   forM_ projectM \pr -> do
-    users & mapM_ \user -> do
-      anomalies <- withPool dbPool $ Anomalies.getReportAnomalies pid "daily"
-      endpoint_rp <- withPool dbPool $ RequestDumps.getRequestDumpForReports pid "daily"
-      previous_day <- withPool dbPool $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid "daily"
-      let rep_json = RP.buildReportJSON anomalies endpoint_rp previous_day
-      currentTime <- liftIO getZonedTime
-      reportId <- Reports.ReportId <$> liftIO UUIDV4.nextRandom
-      let report =
-            Reports.Report
-              { id = reportId
-              , reportJson = rep_json
-              , createdAt = currentTime
-              , updatedAt = currentTime
-              , projectId = pid
-              , reportType = "daily"
-              }
-      _ <- withPool dbPool $ Reports.addReport report
-      when pr.dailyNotif do
-        let body = renderText $ RP.reportEmail pid report
+    anomalies <- withPool dbPool $ Anomalies.getReportAnomalies pid "daily"
+    endpoint_rp <- withPool dbPool $ RequestDumps.getRequestDumpForReports pid "daily"
+    previous_day <- withPool dbPool $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid "daily"
+    let rep_json = RP.buildReportJSON anomalies endpoint_rp previous_day
+    currentTime <- liftIO getZonedTime
+    reportId <- Reports.ReportId <$> liftIO UUIDV4.nextRandom
+    let report =
+          Reports.Report
+            { id = reportId
+            , reportJson = rep_json
+            , createdAt = currentTime
+            , updatedAt = currentTime
+            , projectId = pid
+            , reportType = "daily"
+            }
+    _ <- withPool dbPool $ Reports.addReport report
+    case pr.notificationsChannel of
+      Projects.NSlack -> do
         let projectTitle = pr.title
-        let subject = [text| APITOOLKIT: Daily Report for $projectTitle |]
-        sendEmail cfg (CI.original user.email) subject body
+        let pidText = pid.toText
+        let reportIdText = show report.id.reportId
+        let message =
+              [trimming| 🤖 *Daily Report for `$projectTitle`*
+
+                          <https://app.apitoolkit.io/p/$pidText/reports/$reportIdText|View today's report>
+                 |]
+        sendSlackMessage dbPool pid message
+      _ -> do
+        users & mapM_ \user -> do
+          when pr.dailyNotif do
+            let body = renderText $ RP.reportEmail pid report
+            let projectTitle = pr.title
+            let subject = [text| APITOOLKIT: Daily Report for $projectTitle |]
+            sendEmail cfg (CI.original user.email) subject body
 
 
 weeklyReportForProject :: Pool Connection -> Config.EnvConfig -> Projects.ProjectId -> IO ()
@@ -326,25 +337,37 @@ weeklyReportForProject dbPool cfg pid = do
   users <- withPool dbPool $ Projects.usersByProjectId pid
   projectM <- withPool dbPool $ Projects.projectById pid
   forM_ projectM \pr -> do
-    users & mapM_ \user -> do
-      anomalies <- withPool dbPool $ Anomalies.getReportAnomalies pid "weekly"
-      endpoint_rp <- withPool dbPool $ RequestDumps.getRequestDumpForReports pid "weekly"
-      previous_week <- withPool dbPool $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid "weekly"
-      let rep_json = RP.buildReportJSON anomalies endpoint_rp previous_week
-      currentTime <- liftIO getZonedTime
-      reportId <- Reports.ReportId <$> liftIO UUIDV4.nextRandom
-      let report =
-            Reports.Report
-              { id = reportId
-              , reportJson = rep_json
-              , createdAt = currentTime
-              , updatedAt = currentTime
-              , projectId = pid
-              , reportType = "weekly"
-              }
-      _ <- withPool dbPool $ Reports.addReport report
-      when pr.weeklyNotif do
-        let body = renderText $ RP.reportEmail pid report
+    anomalies <- withPool dbPool $ Anomalies.getReportAnomalies pid "weekly"
+    endpoint_rp <- withPool dbPool $ RequestDumps.getRequestDumpForReports pid "weekly"
+    previous_week <- withPool dbPool $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid "weekly"
+    let rep_json = RP.buildReportJSON anomalies endpoint_rp previous_week
+    currentTime <- liftIO getZonedTime
+    reportId <- Reports.ReportId <$> liftIO UUIDV4.nextRandom
+    let report =
+          Reports.Report
+            { id = reportId
+            , reportJson = rep_json
+            , createdAt = currentTime
+            , updatedAt = currentTime
+            , projectId = pid
+            , reportType = "weekly"
+            }
+    _ <- withPool dbPool $ Reports.addReport report
+    case pr.notificationsChannel of
+      Projects.NSlack -> do
         let projectTitle = pr.title
-        let subject = [text| APITOOLKIT: Weekly Report for `$projectTitle` |]
-        sendEmail cfg (CI.original user.email) subject body
+        let pidText = pid.toText
+        let reportIdText = show report.id.reportId
+        let message =
+              [trimming| 🤖 *Weekly Report for `$projectTitle`*
+
+                          <https://app.apitoolkit.io/p/$pidText/reports/$reportIdText|View this week's report>
+                 |]
+        sendSlackMessage dbPool pid message
+      _ -> do
+        users & mapM_ \user -> do
+          when pr.weeklyNotif do
+            let body = renderText $ RP.reportEmail pid report
+            let projectTitle = pr.title
+            let subject = [text| APITOOLKIT: Weekly Report for `$projectTitle` |]
+            sendEmail cfg (CI.original user.email) subject body
