@@ -97,7 +97,6 @@ jobsRunner dbPool logger cfg job = do
       NewAnomaly pid createdAt anomalyTypesT anomalyActionsT targetHash -> do
         let anomalyType = Unsafe.fromJust $ Anomalies.parseAnomalyTypes anomalyTypesT
         -- let anomalyAction = Unsafe.fromJust $ Anomalies.parseAnomalyActions anomalyActionsT
-
         case anomalyType of
           Anomalies.ATEndpoint -> do
             endp <- withPool dbPool $ Endpoints.endpointByHash pid targetHash
@@ -107,19 +106,15 @@ jobsRunner dbPool logger cfg job = do
             let endpointPath = enp.method <> " " <> enp.urlPath
             case project.notificationsChannel of
               Projects.NSlack -> do
-                slackData <- withPool dbPool $ getProjectSlackData pid
-                case slackData of
-                  Just slackData' -> do
-                    let projectTitle = project.title
-                    let projectIdTxt = pid.toText
-                    let message =
-                          [trimming| 🤖 **APITOOLKIT: New Endpoint detected for `$projectTitle`***
+                let projectTitle = project.title
+                let projectIdTxt = pid.toText
+                let message =
+                      [trimming| 🤖 **APITOOLKIT: New Endpoint detected for `$projectTitle`****
                                   We detected a new endpoint on `$projectTitle`
                                   **$endpointPath**
                                   [More details on the apitoolkit]("https://app.apitoolkit.io/p/$projectIdTxt/anomalies")
                          |]
-                    sendSlackMessage slackData'.webhookUrl message
-                  Nothing -> pass
+                sendSlackMessage dbPool pid message
               _ -> do
                 forM_ users \u ->
                   let projectTitle = project.title
@@ -160,18 +155,14 @@ jobsRunner dbPool logger cfg job = do
                 project <- Unsafe.fromJust <<$>> withPool dbPool $ Projects.projectById pid
                 case project.notificationsChannel of
                   Projects.NSlack -> do
-                    slackData <- withPool dbPool $ getProjectSlackData pid
-                    case slackData of
-                      Just slackData' -> do
-                        let projectTitle = project.title
-                        let projectIdTxt = pid.toText
-                        let message =
-                              [trimming| 🤖 **APITOOLKIT: New Shape anomaly found for `$projectTitle`***
+                    let projectTitle = project.title
+                    let projectIdTxt = pid.toText
+                    let message =
+                          [trimming| 🤖 **APITOOLKIT: New Shape anomaly found for `$projectTitle`****
                                       We detected a different API request shape to your endpoints than what you usually have..
                                       [More details on the apitoolkit]("https://app.apitoolkit.io/p/$projectIdTxt/anomalies")
                              |]
-                        sendSlackMessage slackData'.webhookUrl message
-                      Nothing -> pass
+                    sendSlackMessage dbPool pid message
                   _ -> do
                     forM_ users \u ->
                       let projectTitle = project.title
@@ -203,18 +194,14 @@ jobsRunner dbPool logger cfg job = do
                 project <- Unsafe.fromJust <<$>> withPool dbPool $ Projects.projectById pid
                 case project.notificationsChannel of
                   Projects.NSlack -> do
-                    slackData <- withPool dbPool $ getProjectSlackData pid
-                    case slackData of
-                      Just slackData' -> do
-                        let projectTitle = project.title
-                        let projectIdTxt = pid.toText
-                        let message =
-                              [trimming| 🤖 **APITOOLKIT: New field format anomaly found for `$projectTitle`***
+                    let projectTitle = project.title
+                    let projectIdTxt = pid.toText
+                    let message =
+                          [trimming| 🤖 **APITOOLKIT: New field format anomaly found for `$projectTitle`****
                                       We detected that a particular field on your API is returning a different format/type than what it usually gets.
                                       [More details on the apitoolkit]("https://app.apitoolkit.io/p/$projectIdTxt/anomalies")
                              |]
-                        sendSlackMessage slackData'.webhookUrl message
-                      Nothing -> pass
+                    sendSlackMessage dbPool pid message
                   _ -> do
                     forM_ users \u ->
                       let projectTitle = project.title
@@ -284,6 +271,7 @@ jobsRunner dbPool logger cfg job = do
         pass
       DailyReports pid -> do
         dailyReportForProject dbPool cfg pid
+        sendSlackMessage dbPool pid "Dail JObbb"
         pass
       WeeklyReports pid -> do
         weeklyReportForProject dbPool cfg pid

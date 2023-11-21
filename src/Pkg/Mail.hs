@@ -6,8 +6,12 @@ module Pkg.Mail (sendEmail, sendSlackMessage) where
 import Config qualified
 import Control.Lens ((.~))
 import Data.Aeson.QQ
+import Data.Pool
 import Data.Text
+import Database.PostgreSQL.Entity.DBT (withPool)
+import Database.PostgreSQL.Simple (Connection)
 import Models.Apis.Slack
+import Models.Projects.Projects qualified as Projects
 import Network.HaskellNet.SMTP
 import Network.Mail.Mime
 import Network.Wreq
@@ -31,13 +35,14 @@ sendEmail config reciever subject body = doSMTPPort (toString config.smtpHost) (
     else error "SMTP Authentication failed."
 
 
-sendSlackMessage :: Text -> Text -> IO ()
-sendSlackMessage webhookUrl message = do
+sendSlackMessage :: Pool Connection -> Projects.ProjectId -> Text -> IO ()
+sendSlackMessage pool pid message = do
+  slackData <- liftIO $ withPool pool $ getProjectSlackData pid
   let opts = defaults & header "Content-Type" .~ ["application/json"]
   let payload =
         [aesonQQ| {
                 "text": #{message}
               }
             |]
-  response <- postWith opts (toString webhookUrl) payload
+  response <- postWith opts (toString (maybe "" (\s -> s.webhookUrl) slackData)) payload
   pass

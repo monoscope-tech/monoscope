@@ -178,7 +178,7 @@ linkProjectGetH pid slack_code = do
             n <- liftIO $ withPool pool do
                 _ <- insertAccessToken [pid.toText] token'.incomingWebhook.url
                 execute Update q (Only $ Vector.fromList [pid.toText])
-            liftIO $ sendSlackMessage token'.incomingWebhook.url ("APIToolkit Bot has been linked to your project: " <> project'.title)
+            liftIO $ sendSlackMessage pool pid ("APIToolkit Bot has been linked to your project: " <> project'.title)
             pure $ bodyWrapper bwconf installedSuccess
         (_, _) -> pure $ bodyWrapper bwconf noTokenFound
 
