@@ -267,8 +267,8 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
               "Please select a plan"
               span_ [class_ "text-red-400"] " *"
             div_ [class_ "grid md:grid-cols-3 gap-4 border-1"] do
-              ( [ -- ("Free", "20k", "$0", "1", cp.paymentPlan == "Free", "''")
-                  ("Hobby", "250k", "$20", "3", paymentPlan == "Hobby", if envCfg.paddleSandbox then envCfg.paddleSandboxHobby else envCfg.paddleHobby)
+              ( [ ("Free", "20k", "$0", "1", cp.paymentPlan == "Free", "''")
+                , ("Hobby", "250k", "$20", "3", paymentPlan == "Hobby", if envCfg.paddleSandbox then envCfg.paddleSandboxHobby else envCfg.paddleHobby)
                 , ("Startup", "1m", "$50", "5", paymentPlan == "Startup", if envCfg.paddleSandbox then envCfg.paddleSandboxStartup else envCfg.paddleStartup)
                 , ("Growth", "10m", "$250", "10", paymentPlan == "Growth", if envCfg.paddleSandbox then envCfg.paddleSandboxGrowth else envCfg.paddleGrowth)
                 ]

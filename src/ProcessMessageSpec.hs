@@ -19,24 +19,11 @@ import Relude.Unsafe qualified as Unsafe
 import RequestMessages qualified
 import System.Clock
 import Test.Hspec
+import Data.Time (getCurrentTime, defaultTimeLocale, formatTime)
 
 
--- msg = PubsubMessage
---         { attributes = Nothing
---         , data' = Just
---             ( Base64
---                 { fromBase64 = "{"duration":476434,"host":"172.31.29.11","method":"GET","path_params":{},"project_id":"e36dd90e-ddcf-4d3b-a986-4de0bddcfcbb","proto_minor":1,"proto_major":1,"query_params":{},"raw_url":"/","referer":"","request_body":"e30=","request_headers":{"connection":["upgrade"],"host":["172.31.29.11"],"x-real-ip":["172.31.81.1"],"x-forwarded-for":["172.31.81.1"],"user-agent":["ELB-HealthChecker/2.0"],"accept-encoding":["gzip, compressed"]},"response_body":"V2VsY29tZSB0byBSZXRhaWxsb29w","response_headers":{"x-powered-by":["Express"],"vary":["Origin"],"access-control-allow-credentials":["true"],"content-type":["text/html; charset=utf-8"],"content-length":["21"],"etag":["W/\"15-2rFUmgZR2gmQik/+S8kDb7KSIZk\""]},"sdk_type":"JsExpress","status_code":200,"timestamp":"2023-10-16T19:34:31.513Z","url_path":"/","errors":[],"tags":[],"msg_id":"d3475081-0794-4700-a498-eccd623ae41f"}" }
---             )
---         , messageId = Just "8886167500690442"
---         , orderingKey = Nothing
---         , publishTime = Just
---             ( DateTime
---                 { unDateTime = 2023-10-16 19:34:31.543 UTC }
---             )
---         }
-
-msg1 :: Value
-msg1 =
+msg1 :: Text -> Value
+msg1 timestamp =
   [aesonQQ|{"duration":476434,
                 "host":"172.31.29.11",
                 "method":"GET",
@@ -55,15 +42,15 @@ msg1 =
                 },
                 "sdk_type":"JsExpress",
                 "status_code":200,
-                "timestamp":"2023-10-16T19:34:31.513Z",
+                "timestamp": #{timestamp},
                 "url_path":"/","errors":[],"tags":[],
                 "msg_id":"d3475081-0794-4700-a498-eccd623ae41f"} 
       |]
 
 
-msg2 :: Value
-msg2 =
-  [aesonQQ|{"timestamp":"2023-10-16T21:47:41.45628582Z",
+msg2 :: Text -> Value
+msg2 timestamp =
+  [aesonQQ|{"timestamp": #{timestamp},
             "request_headers":{
                 "Accept":["application/json, text/plain, */*"],
                 "Accept-Encoding":["gzip, deflate, br"],
@@ -100,8 +87,10 @@ spec :: Spec
 spec = aroundAll TmpPg.withSetup do
   describe "process request to db" do
     it "should save the request" \pool -> do
-      let reqMsg1 = Unsafe.fromJust $ convert msg1
-      let reqMsg2 = Unsafe.fromJust $ convert msg2
+      currentTime <- getCurrentTime
+      let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
+      let reqMsg1 = Unsafe.fromJust $ convert $ msg1 nowTxt
+      let reqMsg2 = Unsafe.fromJust $ convert $ msg2 nowTxt 
       let msgs =
             [ Right (Just "m1", reqMsg1)
             , Right (Just "m2", reqMsg2)
