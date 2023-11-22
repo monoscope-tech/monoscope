@@ -479,7 +479,7 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
                   input_ [value_ (maybe "" (\s -> s.webhookUrl) slackData), placeholder_ "https://hooks.slack.com/services/xxxxxxxxx/xxxxxxxx/xxxxxxxxxxx", name_ "webhookUrl", class_ "w-full p-2 my-2 text-sm bg-white text-slate-700 border rounded"]
                   button_ [class_ "text-white bg-blue-600 rounded-lg px-4 py-1 w-max"] "Save"
               span_ [class_ "my-6 text-sm text-gray-500"] "OR"
-              a_ [href_ $ "https://slack.com/oauth/v2/authorize?client_id=6211090672305.6200958370180&scope=chat:write,incoming-webhook&user_scope=&redirect_uri=" <> envCfg.slackRedirectUri <> pid, class_ "mt-4"] do
+              a_ [target_ "_blank", href_ $ "https://slack.com/oauth/v2/authorize?client_id=6211090672305.6200958370180&scope=chat:write,incoming-webhook&user_scope=&redirect_uri=" <> envCfg.slackRedirectUri <> pid, class_ "mt-4"] do
                 img_ [alt_ "Add to Slack", height_ "40", width_ "139", src_ "https://platform.slack-edge.com/img/add_to_slack.png", term "srcSet" "https://platform.slack-edge.com/img/add_to_slack.png 1x, https://platform.slack-edge.com/img/add_to_slack@2x.png 2x"]
 
         div_ [class_ "col-span-1 h-full justify-center items-center w-full text-center pt-24"] do

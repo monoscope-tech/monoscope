@@ -224,4 +224,4 @@ installedSuccess = do
   navBar
   section_ [class_ "h-full mt-[80px] w-[1000px] flex flex-col items-center mx-auto"] do
     h3_ [class_ "text-5xl font-semibold my-8 text-green-500"] "APIToolkit Slack App Installed"
-    p_ [class_ "text-2xl"] "APIToolkit Bot Slack app has been connected to your project successfully. You can now recieve notifications on slack."
+    p_ [class_ "text-2xl text-center"] "APIToolkit Bot Slack app has been connected to your project successfully. You can now recieve notifications on slack."
