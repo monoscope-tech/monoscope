@@ -6,6 +6,7 @@ import Data.Aeson (Result (Error, Success), Value, fromJSON)
 import Data.Aeson.QQ (aesonQQ)
 import Data.Cache
 import Data.Default (Default (..))
+import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Entity.DBT (QueryNature (Insert), execute, withPool)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -19,7 +20,6 @@ import Relude.Unsafe qualified as Unsafe
 import RequestMessages qualified
 import System.Clock
 import Test.Hspec
-import Data.Time (getCurrentTime, defaultTimeLocale, formatTime)
 
 
 msg1 :: Text -> Value
@@ -90,7 +90,7 @@ spec = aroundAll TmpPg.withSetup do
       currentTime <- getCurrentTime
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
       let reqMsg1 = Unsafe.fromJust $ convert $ msg1 nowTxt
-      let reqMsg2 = Unsafe.fromJust $ convert $ msg2 nowTxt 
+      let reqMsg2 = Unsafe.fromJust $ convert $ msg2 nowTxt
       let msgs =
             [ Right (Just "m1", reqMsg1)
             , Right (Just "m2", reqMsg2)
