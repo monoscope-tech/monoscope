@@ -14,7 +14,7 @@ import Text.Megaparsec.Char.Lexer qualified as L
 type Parser = Parsec Void Text
 
 
--- Values is an enum of the list of supported value types. 
+-- Values is an enum of the list of supported value types.
 -- Num is a text  that represents a float as float covers ints in a lot of cases. But its basically the json num type.
 data Values = Num Text | Str Text | Boolean Bool | Null
   deriving stock (Eq, Ord, Show)
@@ -64,21 +64,22 @@ pSubject = do
     (x : xs) -> pure $ Subject x xs
     _ -> error "unreachable step, empty subject in query unit expr parsing."
 
+
 -- -- A parser subject, but one which is a jsonpath.
 -- pSubjectJsonPath :: Parser Subject
 -- pSubjectJsonPath = do
 --   colKey <- toText <$> lexeme (some (alphaNumChar <|> oneOf @[] ['-', '_']))
 --   _ <- char '.'
-  -- remainingSegments <- many $ char '.' *> toText <$> some (alphaNumChar <|> oneOf @[] ['.', '-', '_'])
+-- remainingSegments <- many $ char '.' *> toText <$> some (alphaNumChar <|> oneOf @[] ['.', '-', '_'])
 
+-- sub <- toText <$> lexeme (some (alphaNumChar <|> oneOf @[] ['.', '-', '_']))
+-- case T.splitOn "." sub of
+--   (x : xs) -> pure $ Subject x xs
+--   _ -> error "unreachable step, empty subject in query unit expr parsing."
 
-  -- sub <- toText <$> lexeme (some (alphaNumChar <|> oneOf @[] ['.', '-', '_']))
-  -- case T.splitOn "." sub of
-  --   (x : xs) -> pure $ Subject x xs
-  --   _ -> error "unreachable step, empty subject in query unit expr parsing."
-
-sqParens :: Parser a -> Parser a 
+sqParens :: Parser a -> Parser a
 sqParens = between (symbol "[") (symbol "]")
+
 
 parens :: Parser a -> Parser a
 parens = between (symbol "(") (symbol ")")
@@ -131,7 +132,7 @@ binary name f = InfixL (f <$ symbol name)
 
 -- >>> parseQueryStringToWhereClause "a.b=\"x\" AND (x=1 OR b!=2) "
 -- Right "a->>'b'='x' AND (x=1 OR b!=2)"
--- >>> parseQueryStringToWhereClause "a.b[*].c=\"x\"" 
+-- >>> parseQueryStringToWhereClause "a.b[*].c=\"x\""
 -- Right "a->'b[*]'->>'c'='x'"
 parseQuery :: Parser Expr
 parseQuery = pExpr <* eof
@@ -150,8 +151,6 @@ instance Display Subject where
     let (y, ys) = (Unsafe.head z', reverse $ Unsafe.tail z')
     let val = x <> "->" <> T.intercalate "->" ys <> "->>" <> y
     displayPrec prec val
-
-
 
 
 -- instance Display Subject where
@@ -178,7 +177,6 @@ instance Display Subject where
 --       if T.null acc
 --         then x <> "->" <> "'" <> field <> "'"
 --         else "json_array_elements(" <> acc <> ")->" <> "'" <> field <> "'"
-
 
 instance Display Values where
   displayPrec prec (Num a) = displayBuilder a
