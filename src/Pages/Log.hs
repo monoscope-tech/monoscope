@@ -192,7 +192,7 @@ expandAPIlogItem' pid req modal outgoingRequests = do
               , term "data-req-id" (show req.id)
               , onclick_ "getShareLink(event)"
               ]
-              "Get share link"
+              "Get link"
 
     -- url, endpoint, latency, request size, repsonse size
     div_ [class_ "flex flex-col mt-4 p-4 justify-between w-full rounded-xl border"] do
@@ -627,23 +627,42 @@ apiLogItemView :: RequestDumps.RequestDumpLogItem -> Text -> Html ()
 apiLogItemView req expandItemPath = do
   let errorClass = if req.errorsCount > 0 then "border-l-red-200" else "border-l-blue-200"
   div_ [class_ $ "log-item-info border-l-4 " <> errorClass]
-    $ div_
-      [class_ "pl-4 py-1 ", colspan_ "3"]
-      do
+    $ div_ [class_ "pl-4 py-1 ", colspan_ "3"] do
+      div_ [class_ "flex items-center gap-2"] do
         button_
-          [ class_ "px-2 rounded text-white bg-blue-500 text-sm font-semibold expand-button"
+          [ class_ "px-4 rounded text-gray-600 border py-1 expand-button"
           , term "data-log-item-path" (expandItemPath <> "/detailed")
           , [__|on click remove .hidden from #expand-log-modal then
-                remove .hidden from #log-modal-content-loader
-                fetch `${@data-log-item-path}` as html then put it into #log-modal-content
-                add .hidden to #log-modal-content-loader
-                _hyperscript.processNode(document.querySelector('#log-modal-content'))
-                htmx.process(document.querySelector('#log-modal-content'))
-                end
-          |]
+                   remove .hidden from #log-modal-content-loader
+                   fetch `${@data-log-item-path}` as html then put it into #log-modal-content
+                   add .hidden to #log-modal-content-loader
+                   _hyperscript.processNode(document.querySelector('#log-modal-content'))
+                   htmx.process(document.querySelector('#log-modal-content'))
+                   end
+             |]
           ]
-          "expand"
-        jsonValueToHtmlTree $ AE.toJSON req
+          "Expand"
+        let reqJson = decodeUtf8 $ AE.encode $ AE.toJSON req
+        button_
+          [ class_ "px-4 rounded flex items-center gap-1 text-gray-600 border py-1"
+          , term "data-reqJson" reqJson
+          , [__|on click if 'clipboard' in window.navigator then
+                          call navigator.clipboard.writeText(my @data-reqJson)
+                          send successToast(value:['API Key has been copied to the Clipboard']) to <body/>
+                        end|]
+          ]
+          do
+            span_ [] "Copy"
+            faIcon_ "fa-copy" "fa-regular fa-copy" "h-4 w-4"
+        button_
+          [ class_ "px-4 flex items-center gap-1 rounded text-gray-600 border py-1"
+          , onclick_ "downloadJson(event)"
+          , term "data-reqJson" reqJson
+          ]
+          do
+            span_ [] "Download"
+            faIcon_ "fa-download" "fa-regular fa-download" "h-4 w-4"
+      jsonValueToHtmlTree $ AE.toJSON req
 
 
 -- | jsonValueToHtmlTree takes an aeson json object and renders it as a collapsible html tree, with hyperscript for interactivity.
@@ -783,6 +802,19 @@ jsonTreeAuxillaryCode pid = do
 
   script_
     [text|
+    function downloadJson(event) {
+         event.stopPropagation()
+         const json = event.currentTarget.dataset.reqjson
+         var blob = new Blob([json], { type: "application/json" });
+         var a = document.createElement("a");
+         a.href = URL.createObjectURL(blob);
+         a.download = "request-data-" + (new Date().toString()) + ".json";
+         a.textContent = "";
+         document.body.appendChild(a);
+         a.click();
+         document.body.removeChild(a); 
+       }
+
     function filterByField(event, operation) {
        const target = event.target.parentNode.parentNode.parentNode
        const path = target.getAttribute('data-field-path');
