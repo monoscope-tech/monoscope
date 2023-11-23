@@ -50,6 +50,7 @@ import Pages.RedactedFields (RedactFieldForm)
 import Pages.RedactedFields qualified as RedactedFields
 import Pages.Reports qualified as Reports
 import Pages.Share qualified as Share
+import Pages.SlackInstall qualified as SlackInstall
 import Pages.Survey qualified as Survey
 import Relude
 import Servant
@@ -139,6 +140,10 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "share" :> ReqBody '[FormUrlEncoded] Share.ReqForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "outgoing" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "query_builder" :> "autocomplete" :> QPT "category" :> QPT "prefix" :> Get '[JSON] AE.Value
+    :<|> "slack" :> "link-projects" :> QPT "code" :> Get '[HTML] (Html ())
+    :<|> "slack" :> "link-projects" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
+    :<|> "p" :> ProjectId :> "notifications-toggle" :> Capture "channel" Text :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
+    :<|> "p" :> ProjectId :> "slack" :> "webhook" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
 
 
 type PublicAPI =
@@ -153,6 +158,8 @@ type PublicAPI =
     :<|> "status" :> Get '[JSON] Status
     :<|> "ping" :> Get '[PlainText] Text
     :<|> "share" :> "r" :> Capture "shareID" UUID.UUID :> Get '[HTML] (Html ())
+    :<|> "slack" :> "oauth" :> "callback" :> QPT "code" :> Get '[HTML] (Html ())
+    :<|> "slack" :> "oauth" :> "callback" :> Capture "project_id" Projects.ProjectId :> QPT "code" :> Get '[HTML] (Html ())
     :<|> Raw
 
 
@@ -231,6 +238,10 @@ protectedServer sess =
     :<|> Share.shareLinkPostH sess
     :<|> outgoingGetH sess
     :<|> AutoComplete.getH sess
+    :<|> SlackInstall.linkProjectsGetH sess
+    :<|> SlackInstall.postH sess
+    :<|> CreateProject.updateNotificationsChannel sess
+    :<|> SlackInstall.updateWebHook sess
 
 
 publicServer :: ServerT PublicAPI DashboardM
@@ -243,6 +254,8 @@ publicServer =
     :<|> statusH
     :<|> pingH
     :<|> Share.shareLinkGetH
+    :<|> SlackInstall.getH
+    :<|> SlackInstall.linkProjectGetH
     :<|> serveDirectoryWebApp "./static/public"
 
 

@@ -21,8 +21,6 @@ import Web.FormUrlEncoded (FromForm)
 
 import Data.Aeson.QQ (aesonQQ)
 import Data.UUID.V4 qualified as UUIDV4
-import Data.Vector (Vector)
-import Data.Vector.Primitive (Vector (Vector))
 import Database.PostgreSQL.Entity.DBT
 import Database.PostgreSQL.Simple hiding (execute, query)
 import Database.PostgreSQL.Simple.SqlQQ
@@ -32,6 +30,7 @@ import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Pages.Log qualified as Log
 
 import NeatInterpolation
+import Pkg.Components (navBar)
 import Relude
 import Servant (Headers)
 import Servant.Htmx (HXTrigger)
@@ -119,17 +118,7 @@ shareLinkGetH sid = do
 
 sharePage :: Maybe RequestDumps.RequestDumpLogItem -> V.Vector RequestDumps.RequestDumpLogItem -> Html ()
 sharePage req outgoing = do
-  nav_ [id_ "main-navbar", class_ "fixed z-20 top-0 w-full w-full px-6 py-4 border-b bg-white flex flex-row justify-between"] do
-    div_ [class_ "flex justify-between items-center gap-4 w-[1000px] mx-auto"] do
-      a_ [href_ "https://apitoolkit.io", class_ "flex items-center text-gray-500 hover:text-gray-700"] do
-        img_
-          [ class_ "h-12 sd-hidden"
-          , src_ "/assets/svgs/logo.svg"
-          ]
-        img_
-          [ class_ "h-12 w-10 hidden sd-show"
-          , src_ "/assets/svgs/logo_mini.svg"
-          ]
+  navBar
   section_ [class_ "h-full mt-[80px] w-[1000px] flex flex-col items-center mx-auto"] do
     h3_ [class_ "text-5xl text-left mb-16 w-full font-semibold my-8"] "Shared Request Log"
     case req of

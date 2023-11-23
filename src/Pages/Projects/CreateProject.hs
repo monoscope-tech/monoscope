@@ -11,6 +11,7 @@ module Pages.Projects.CreateProject (
   CreateProjectFormError,
   projectSettingsGetH,
   deleteProjectGetH,
+  updateNotificationsChannel,
 ) where
 
 import BackgroundJobs qualified
@@ -35,6 +36,8 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript
+import Models.Apis.Slack
+import Models.Apis.Slack (getProjectSlackData)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMembers qualified as Projects
@@ -104,7 +107,7 @@ createProjectGetH sess = do
           { sessM = Just sess
           , pageTitle = "Endpoints"
           }
-  pure $ bodyWrapper bwconf $ createProjectBody sess envCfg False (def @CreateProjectForm) (def @CreateProjectFormError)
+  pure $ bodyWrapper bwconf $ createProjectBody sess envCfg False (def @CreateProjectForm) (def @CreateProjectFormError) Projects.NEmail Nothing
 
 
 ----------------------------------------------------------------------------------------------------------
@@ -124,10 +127,12 @@ projectSettingsGetH sess pid = do
           , paymentPlan = proj.paymentPlan
           , timeZone = proj.timeZone
           }
+  slackInfo <- liftIO $ withPool pool $ getProjectSlackData pid
+
   -- FIXME: Should be a value from the db
 
   let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just proj, pageTitle = "Settings"}
-  pure $ bodyWrapper bwconf $ createProjectBody sess envCfg True createProj (def @CreateProjectFormError)
+  pure $ bodyWrapper bwconf $ createProjectBody sess envCfg True createProj (def @CreateProjectFormError) proj.notificationsChannel slackInfo
 
 
 ----------------------------------------------------------------------------------------------------------
@@ -145,15 +150,36 @@ deleteProjectGetH sess pid = do
       pure $ addHeader hxTriggerData $ addHeader "/" $ span_ ""
 
 
+updateNotificationsChannel :: Sessions.PersistentSession -> Projects.ProjectId -> Text -> DashboardM (Headers '[HXTrigger] (Html ()))
+updateNotificationsChannel sess pid channel = do
+  pool <- asks pool
+  if channel == "slack"
+    then do
+      slackData <- liftIO $ withPool pool $ getProjectSlackData pid
+      case slackData of
+        Nothing -> do
+          let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"errorToast": ["You need to connect slack to this project first."]}|]
+          pure $ addHeader hxTriggerData $ span_ ""
+        Just _ -> do
+          _ <- liftIO $ withPool pool do Projects.updateNotificationsChannel pid channel
+          let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Updated Notifications Channel Successfully"]}|]
+          pure $ addHeader hxTriggerData $ span_ ""
+    else do
+      _ <- liftIO $ withPool pool do Projects.updateNotificationsChannel pid channel
+      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Updated Notifications Channel Successfully"]}|]
+      pure $ addHeader hxTriggerData $ span_ ""
+
+
 ----------------------------------------------------------------------------------------------------------
 -- createProjectPostH is the handler for the create projects page form handling.
 -- It processes post requests and is expected to return a redirect header and a hyperscript event trigger header.
 createProjectPostH :: Sessions.PersistentSession -> CreateProjectForm -> DashboardM (Headers '[HXTrigger, HXRedirect] (Html ()))
 createProjectPostH sess createP = do
   envCfg <- asks env
+  pool <- asks pool
   validationRes <- validateM createProjectFormV createP
   case validationRes of
-    Right cpe -> pure $ noHeader $ noHeader $ createProjectBody sess envCfg createP.isUpdate createP cpe
+    Right cpe -> pure $ noHeader $ noHeader $ createProjectBody sess envCfg createP.isUpdate createP cpe Projects.NEmail Nothing
     Left cp -> processProjectPostForm sess cp
 
 
@@ -203,7 +229,7 @@ processProjectPostForm sess cpRaw = do
 
   let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Created Project Successfully"]}|]
   let hxTriggerDataUpdate = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Updated Project Successfully"]}|]
-  let bdy = createProjectBody sess envCfg cp.isUpdate cp (def @CreateProjectFormError)
+  let bdy = createProjectBody sess envCfg cp.isUpdate cp (def @CreateProjectFormError) Projects.NEmail Nothing
   if cp.isUpdate
     then pure $ addHeader hxTriggerDataUpdate $ noHeader bdy
     else pure $ addHeader hxTriggerData $ addHeader ("/p/" <> pid.toText <> "/about_project") bdy
@@ -211,8 +237,8 @@ processProjectPostForm sess cpRaw = do
 
 ----------------------------------------------------------------------------------------------------------
 -- createProjectBody is the core html view
-createProjectBody :: Sessions.PersistentSession -> EnvConfig -> Bool -> CreateProjectForm -> CreateProjectFormError -> Html ()
-createProjectBody sess envCfg isUpdate cp cpe = do
+createProjectBody :: Sessions.PersistentSession -> EnvConfig -> Bool -> CreateProjectForm -> CreateProjectFormError -> Projects.NotificationChannel -> Maybe SlackData -> Html ()
+createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
   let paymentPlan = if cp.paymentPlan == "" then "Hobby" else cp.paymentPlan
   section_ [id_ "main-content", class_ "p-3 py-5 sm:p-6"] do
     div_ [class_ "mx-auto", style_ "max-width:800px"] do
@@ -425,9 +451,39 @@ createProjectBody sess envCfg isUpdate cp cpe = do
               "Proceed"
 
       when isUpdate do
+        let pid = cp.projectId
+        div_ [class_ "mt-10"] do
+          h2_ [class_ "text-slate-700 text-3xl font-medium mb-5"] "Project Notifications"
+          div_ [class_ "flex flex-col gap-4 border p-6 rounded-2xl"] do
+            p_ [] "Select a notification channel to receive updates on this project"
+            case notifChannel of
+              Projects.NSlack -> span_ [class_ "text-sm text-blue-500 font-bold"] "Current notifications channel is Slack"
+              _ -> span_ [class_ "text-sm text-blue-500 font-bold"] "Current notifications channel is Email"
+            div_ [class_ "bg-gray-100 p-6 rounded-lg"] do
+              div_ [class_ "flex justify-between items-center mb-6"] do
+                h3_ [class_ "text-2xl font-bold"] "Email"
+                case notifChannel of
+                  Projects.NSlack -> button_ [class_ "btn btn-primary", hxPost_ [text|/p/$pid/notifications-toggle/email|], hxSwap_ "none"] "Use Email"
+                  _ -> pass
+              input_ [value_ "All users on this project", disabled_ "true", name_ "email", class_ "w-full p-2 my-2 text-sm bg-white text-slate-700 border rounded"]
+            div_ [class_ "bg-gray-100 p-6"] do
+              div_ [class_ "flex justify-between items-center mb-6"] do
+                h3_ [class_ "text-2xl font-bold"] "Slack"
+                case notifChannel of
+                  Projects.NEmail -> button_ [class_ "btn btn-primary", hxPost_ [text|/p/$pid/notifications-toggle/slack|], hxSwap_ "none"] "Use Slack"
+                  _ -> pass
+              form_ [class_ "flex flex-col rounded-lg", hxPost_ [text|/p/$pid/slack/webhook|], hxSwap_ "none"] do
+                label_ [] "Slack webhook"
+                div_ [class_ "flex gap-2 items-center"] do
+                  input_ [type_ "hidden", name_ "projects", value_ pid]
+                  input_ [value_ (maybe "" (\s -> s.webhookUrl) slackData), placeholder_ "https://hooks.slack.com/services/xxxxxxxxx/xxxxxxxx/xxxxxxxxxxx", name_ "webhookUrl", class_ "w-full p-2 my-2 text-sm bg-white text-slate-700 border rounded"]
+                  button_ [class_ "text-white bg-blue-600 rounded-lg px-4 py-1 w-max"] "Save"
+              span_ [class_ "my-6 text-sm text-gray-500"] "OR"
+              a_ [target_ "_blank", href_ $ "https://slack.com/oauth/v2/authorize?client_id=6211090672305.6200958370180&scope=chat:write,incoming-webhook&user_scope=&redirect_uri=" <> envCfg.slackRedirectUri <> pid, class_ "mt-4"] do
+                img_ [alt_ "Add to Slack", height_ "40", width_ "139", src_ "https://platform.slack-edge.com/img/add_to_slack.png", term "srcSet" "https://platform.slack-edge.com/img/add_to_slack.png 1x, https://platform.slack-edge.com/img/add_to_slack@2x.png 2x"]
+
         div_ [class_ "col-span-1 h-full justify-center items-center w-full text-center pt-24"] do
           h2_ [class_ "text-red-800 font-medium pb-4"] "Delete project. This is dangerous and unreversable"
-          let pid = cp.projectId
           button_
             [ class_ "btn btn-sm bg-red-800 text-white shadow-md hover:bg-red-700 cursor-pointer rounded-md"
             , hxGet_ [text|/p/$pid/delete|]
