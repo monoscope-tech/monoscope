@@ -1,4 +1,4 @@
-module Pages.Endpoints.EndpointList (endpointListGetH) where
+module Pages.Endpoints.EndpointList (endpointListGetH, renderEndpoint) where
 
 import Config
 import Data.Default (def)

@@ -519,7 +519,7 @@ reportEmail pid report' =
                 h5_ [style_ "font-weight: bold; font-size:18px; margin-bottom: 1rem"] "Performance"
                 renderEmailEndpointsTable v.endpoints
           Nothing -> pass
-      a_ [href_ $ "https://app.apitoolkit.io/p/" <> show pid.unProjectId <> "/reports", style_ "width: 100%; text-align: center; color:#3b82f6; margin: 20px; padding-bottom:20px"] "Turn of email alerts"
+      a_ [href_ $ "https://app.apitoolkit.io/p/" <> show pid.unProjectId <> "/reports", style_ "width: 100%; text-align: center; color:#3b82f6; margin: 20px; padding-bottom:20px"] "Turn off email alerts"
       div_ [style_ "margin-top: 20px"] pass
 
 
