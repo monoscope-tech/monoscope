@@ -19,7 +19,9 @@ import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Fmt
 import Lucid
+import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
+import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
@@ -30,6 +32,7 @@ import Pages.BodyWrapper
 import Pages.Charts.Charts qualified as C
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (statBox)
+import Pages.Endpoints.EndpointList (renderEndpoint)
 import Relude hiding (max, min)
 import Servant (
   Union,
@@ -64,12 +67,13 @@ dashboardGetH sess pid fromDStr toDStr sinceStr' = do
   pool <- asks pool
   now <- liftIO getCurrentTime
   let sinceStr = if isNothing fromDStr && isNothing toDStr && isNothing sinceStr' || fromDStr == Just "" then Just "7D" else sinceStr'
-  (hasApikeys, hasRequest) <- liftIO
+  (hasApikeys, hasRequest, newEndpoints) <- liftIO
     $ withPool pool
     $ do
       apiKeys <- ProjectApiKeys.countProjectApiKeysByProjectId pid
       requestDumps <- RequestDumps.countRequestDumpByProject pid
-      pure (apiKeys > 0, requestDumps > 0)
+      newEndpoints <- Endpoints.endpointRequestStatsByProject pid False False Nothing
+      pure (apiKeys > 0, requestDumps > 0, newEndpoints)
   -- TODO: Replace with a duration parser.
   let (fromD, toD) = case sinceStr of
         Just "1H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just $ utcToZonedTime utc now)
@@ -112,13 +116,42 @@ dashboardGetH sess pid fromDStr toDStr sinceStr' = do
   let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt}
   if not hasApikeys || not hasRequest
     then respond $ WithStatus @302 $ redirect ("/p/" <> pid.toText <> "/onboarding")
-    else respond $ WithStatus @200 $ bodyWrapper bwconf $ dashboardPage pid paramInput currTime projectRequestStats reqLatenciesRolledByStepsJ (fromD, toD)
+    else respond $ WithStatus @200 $ bodyWrapper bwconf $ dashboardPage pid paramInput currTime projectRequestStats newEndpoints reqLatenciesRolledByStepsJ (fromD, toD)
 
 
-dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
-dashboardPage pid paramInput currTime projectStats reqLatenciesRolledByStepsJ dateRange = do
+dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Vector.Vector Endpoints.EndpointRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
+dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRolledByStepsJ dateRange = do
   let currentURL' = deleteParam "to" $ deleteParam "from" $ deleteParam "since" paramInput.currentURL
+  let bulkActionBase = "/p/" <> pid.toText <> "/anomalies/bulk_actions"
   section_ [class_ "p-8  mx-auto px-16 w-full space-y-12 pb-24"] do
+    unless (null newEndpoints) $ form_
+      [ style_ "z-index:99999"
+      , class_ "fixed pt-24 justify-center z-50 w-full p-4 bg-[rgba(0,0,0,0.2)] overflow-y-auto inset-0 h-full max-h-full"
+      , tabindex_ "-1"
+      , id_ "newEndpointsModal"
+      , hxPost_ $ bulkActionBase <> "/acknowlege"
+      , hxSwap_ "outerHTML"
+      ]
+      do
+        div_
+          [ class_ "relative mx-auto max-h-full"
+          , style_ "width: min(90vw, 800px)"
+          ]
+          do
+            -- Modal content
+            div_
+              [ class_ "bg-white rounded-lg drop-shadow-md border-1 w-full"
+              ]
+              do
+                div_ [class_ "flex items-start justify-between p-4 border-b rounded-t"] do
+                  h3_ [class_ "text-xl font-bold text-gray-900"] "New Endpoints Detected"
+                -- Modal body
+                div_ [class_ "w-full"] do
+                  div_ [class_ "p-4 text-xl space-y-6 overflow-y-auto", style_ "min-height:30vh;max-height:70vh; width:100%"] do
+                    mapM_ (renderEndpoint False currTime) newEndpoints
+                -- Modal footer
+                div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] do
+                  button_ [class_ "btn btn-primary"] "Acknowledge Selected"
     div_ [class_ "relative p-1 "] do
       div_ [class_ "relative"] do
         a_

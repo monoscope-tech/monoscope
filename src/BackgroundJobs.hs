@@ -131,13 +131,14 @@ jobsRunner dbPool logger cfg job = do
       
                   <p>We detected a new endpoint on ``$projectTitle`:</p>
                   <p><strong>$endpointPath</strong></p>
-                  <a href="https://app.apitoolkit.io/p/$projectIdTxt/anomalies">More details on the apitoolkit</a>
+                  <a href="https://app.apitoolkit.io/p/$projectIdTxt/anomalies/$targetHash">More details on the apitoolkit</a>
                   <br/><br/>
                   Regards,
                   Apitoolkit team
                             |]
                       reciever = CI.original u.email
                    in sendEmail cfg reciever subject body
+
           Anomalies.ATShape -> do
             shapes <- withPool dbPool $ getShapes pid $ T.take 8 targetHash
             let targetFields = maybe [] (toList . snd) (V.find (\a -> fst a == targetHash) shapes)
@@ -180,13 +181,14 @@ jobsRunner dbPool logger cfg job = do
          Hi $name,<br/>
        
          <p>We detected a different API request shape to your endpoints than what you usually have..</p>
-         <a href="https://app.apitoolkit.io/p/$projectIdTxt/anomalies">More details on the apitoolkit</a>
+         <a href="https://app.apitoolkit.io/p/$projectIdTxt/anomalies/$targetHash">More details on the apitoolkit</a>
          <br/><br/>
          Regards,<br/>
          Apitoolkit team
                                  |]
                           reciever = CI.original u.email
                        in sendEmail cfg reciever subject body
+
           Anomalies.ATFormat -> do
             -- Send an email about the new shape anomaly but only if there was no endpoint anomaly logged
             anomalyM <- withPool dbPool $ Anomalies.getAnomalyVM pid targetHash
@@ -222,7 +224,7 @@ jobsRunner dbPool logger cfg job = do
        Hi $name,<br/>
      
        <p>We detected that a particular field on your API is returning a different format/type than what it usually gets.</p>
-       <a href="https://app.apitoolkit.io/p/$projectIdTxt/anomalies">More details on the apitoolkit</a>
+       <a href="https://app.apitoolkit.io/p/$projectIdTxt/anomalies/$targetHash">More details on the apitoolkit</a>
        <br/><br/>
        Regards,<br/>
        Apitoolkit team
