@@ -208,7 +208,7 @@ getAnomalyVM pid hash = queryOne Select q (pid, hash)
        avm.endpoint_id, avm.endpoint_method, avm.endpoint_url_path, aan.archived_at,
        -- count(rd.id) events, max(rd.created_at) last_seen
        COUNT(CASE WHEN rd.created_at > NOW() - interval '14 days' THEN 1 ELSE NULL END) AS events,
-       MAX(CASE WHEN rd.created_at > NOW() - interval '14 days' THEN rd.created_at ELSE rd.created_at END) AS last_seen
+       MAX(rd.created_at) AS last_seen
     FROM
         apis.anomalies_vm avm
     JOIN apis.anomalies aan ON avm.id = aan.id
