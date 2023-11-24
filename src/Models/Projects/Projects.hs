@@ -115,7 +115,7 @@ data Project = Project
   , dailyNotif :: Bool
   , weeklyNotif :: Bool
   , timeZone :: Text
-  , notificationsChannel :: NotificationChannel
+  , notificationsChannel :: Vector NotificationChannel
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow)
@@ -145,7 +145,7 @@ data Project' = Project'
   , dailyNotif :: Bool
   , weeklyNotif :: Bool
   , timeZone :: Text
-  , notificationsChannel :: NotificationChannel
+  , notificationsChannel :: Vector NotificationChannel
   , usersDisplayImages :: Vector Text
   }
   deriving stock (Show, Generic)
@@ -324,7 +324,8 @@ projectRequestStatsByProject :: ProjectId -> DBT IO (Maybe ProjectRequestStats)
 projectRequestStatsByProject = selectById @ProjectRequestStats
 
 
-updateNotificationsChannel :: ProjectId -> Text -> DBT IO Int64
-updateNotificationsChannel pid channel = execute Update q (channel, pid)
+updateNotificationsChannel :: ProjectId -> [Text] -> DBT IO Int64
+updateNotificationsChannel pid channels = execute Update q (list, pid)
   where
-    q = [sql| UPDATE projects.projects SET notifications_channel=? WHERE id=?;|]
+    list = V.fromList channels
+    q = [sql| UPDATE projects.projects SET notifications_channel=?::notification_channel_enum[] WHERE id=?;|]
