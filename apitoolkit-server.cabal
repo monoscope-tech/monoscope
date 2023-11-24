@@ -38,6 +38,7 @@ library
       Models.Apis.Reports
       Models.Apis.RequestDumps
       Models.Apis.Shapes
+      Models.Apis.Slack
       Models.Projects.ProjectApiKeys
       Models.Projects.ProjectMembers
       Models.Projects.Projects
@@ -71,6 +72,7 @@ library
       Pages.RedactedFields
       Pages.Reports
       Pages.Share
+      Pages.SlackInstall
       Pages.Survey
       Pkg.Components
       Pkg.ConvertKit
