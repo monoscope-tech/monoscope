@@ -21,6 +21,7 @@ import Database.PostgreSQL.Simple (Only (Only))
 import Deriving.Aeson qualified as DAE
 import Lucid.Htmx (hxPost_)
 import Models.Apis.Slack (insertAccessToken)
+import Models.Projects.Projects (updateNotificationsChannel)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Session
 import Network.Wreq
@@ -90,10 +91,8 @@ updateWebHook sess pid LinkProjectsForm{projects, webhookUrl} = do
 postH :: Session.PersistentSession -> LinkProjectsForm -> DashboardM (Headers '[HXTrigger] (Html ()))
 postH sess LinkProjectsForm{projects, webhookUrl} = do
   pool <- asks pool
-  let q = [sql| update projects.projects set notifications_channel = 'slack' where id=ANY(?::uuid[])|]
   n <- liftIO $ withPool pool do
-    _ <- insertAccessToken projects webhookUrl
-    execute Update q (Only $ Vector.fromList projects)
+    insertAccessToken projects webhookUrl
   let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Slack account linked to project(s),successfully"]} |]
   pure $ addHeader hxTriggerData $ span_ [] "Projects linked successfully"
 
@@ -148,7 +147,6 @@ linkProjectGetH pid slack_code = do
   let client_secret = envCfg.slackClientSecret
   let redirect_uri = envCfg.slackRedirectUri
   token <- liftIO $ exchangeCodeForToken client_id client_secret (redirect_uri <> pid.toText) (fromMaybe "" slack_code)
-  let q = [sql| update projects.projects set notifications_channel = 'slack' where id=ANY(?::uuid[])|]
   let bwconf =
         (def :: BWConfig)
           { sessM = Nothing
@@ -159,8 +157,7 @@ linkProjectGetH pid slack_code = do
   case (token, project) of
     (Just token', Just project') -> do
       n <- liftIO $ withPool pool do
-        _ <- insertAccessToken [pid.toText] token'.incomingWebhook.url
-        execute Update q (Only $ Vector.fromList [pid.toText])
+        insertAccessToken [pid.toText] token'.incomingWebhook.url
       liftIO $ sendSlackMessage pool pid ("APIToolkit Bot has been linked to your project: " <> project'.title)
       pure $ bodyWrapper bwconf installedSuccess
     (_, _) -> pure $ bodyWrapper bwconf noTokenFound
