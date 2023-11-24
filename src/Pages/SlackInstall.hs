@@ -30,6 +30,7 @@ import Pkg.Mail (sendSlackMessage)
 import Relude
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
+import Utils (faIcon_)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -205,5 +206,7 @@ installedSuccess :: Html ()
 installedSuccess = do
   navBar
   section_ [class_ "h-full mt-[80px] w-[1000px] flex flex-col items-center mx-auto"] do
-    h3_ [class_ "text-5xl font-semibold my-8 text-green-500"] "APIToolkit Slack App Installed"
-    p_ [class_ "text-2xl text-center"] "APIToolkit Bot Slack app has been connected to your project successfully. You can now recieve notifications on slack."
+    div_ [class_ "flex flex-col border px-6 py-16 mt-16 rounded-2xl items-center"] do
+      faIcon_ "fa-check" "fa-regular fa-check" "h-10 w-10 text-green-500"
+      h3_ [class_ "text-3xl font-semibold my-8"] "APIToolkit Slack App Installed"
+      p_ [class_ "text-gray-600 text-center max-w-prose"] "APIToolkit Bot Slack app has been connected to your project successfully. You can now recieve notifications on slack."
