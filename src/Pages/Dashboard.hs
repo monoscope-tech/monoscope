@@ -151,8 +151,12 @@ dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRoll
                   div_ [class_ "p-4 text-xl space-y-6 overflow-y-auto", style_ "min-height:30vh;max-height:70vh; width:100%"] do
                     mapM_ (renderEndpoint False currTime) newEndpoints
                 -- Modal footer
-                div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] do
-                  button_ [class_ "btn btn-primary"] "Acknowledge Selected"
+                div_ [class_ "flex w-full justify-end items-center p-6 gap-4 space-x-2 border-t border-gray-200 rounded-b"] do
+                  button_
+                    [ class_ "btn btn-primary"
+                    , [__|on click set .endpoint_anomaly_input.checked to true then htmx.trigger("#newEndpointsModal", "submit")|]
+                    ]
+                    "Acknowledge All"
     div_ [class_ "relative p-1 "] do
       div_ [class_ "relative"] do
         a_
