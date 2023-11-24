@@ -126,7 +126,7 @@ dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRoll
   section_ [class_ "p-8  mx-auto px-16 w-full space-y-12 pb-24"] do
     unless (null newEndpoints) $ form_
       [ style_ "z-index:99999"
-      , class_ "fixed pt-24 justify-center z-50 w-full p-4 bg-[rgba(0,0,0,0.2)] overflow-y-auto inset-0 h-full max-h-full"
+      , class_ "fixed pt-24 justify-center z-50 hidden w-full p-4 bg-[rgba(0,0,0,0.2)] overflow-y-auto inset-0 h-full max-h-full"
       , tabindex_ "-1"
       , id_ "newEndpointsModal"
       , hxPost_ $ bulkActionBase <> "/acknowlege"
@@ -145,6 +145,7 @@ dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRoll
               do
                 div_ [class_ "flex items-start justify-between p-4 border-b rounded-t"] do
                   h3_ [class_ "text-xl font-bold text-gray-900"] "New Endpoints Detected"
+                  button_ [type_ "button", class_ "px-3 font-bold py-2 rounded bg-gray-200", onclick_ "closeNewEndpointsModal(event)"] "close"
                 -- Modal body
                 div_ [class_ "w-full"] do
                   div_ [class_ "p-4 text-xl space-y-6 overflow-y-auto", style_ "min-height:30vh;max-height:70vh; width:100%"] do
@@ -180,6 +181,18 @@ dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRoll
     dStats pid projectStats reqLatenciesRolledByStepsJ dateRange
   script_
     [text|
+
+    function closeNewEndpointsModal(event) {
+      document.getElementById("newEndpointsModal").classList.add("hidden")
+      sessionStorage.setItem('closedNewEndpointsModal', 'true')
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+       if(!sessionStorage.getItem('closedNewEndpointsModal')) {
+           document.getElementById("newEndpointsModal").classList.remove("hidden")
+        }
+    })
+    
     const picker = new easepick.create({
       element: '#startTime',
       css: [
