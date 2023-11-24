@@ -648,7 +648,7 @@ apiLogItemView req expandItemPath = do
           , term "data-reqJson" reqJson
           , [__|on click if 'clipboard' in window.navigator then
                           call navigator.clipboard.writeText(my @data-reqJson)
-                          send successToast(value:['API Key has been copied to the Clipboard']) to <body/>
+                          send successToast(value:['Request json has been copied to clipboard']) to <body/>
                         end|]
           ]
           do

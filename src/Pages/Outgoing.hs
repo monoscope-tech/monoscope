@@ -9,6 +9,8 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper
+import Pages.Charts.Charts (QueryBy (QBHost))
+import Pages.Charts.Charts qualified as Charts
 import Pages.NonMember
 import Relude
 import Utils
@@ -47,8 +49,8 @@ outgoingPage pid hostsEvents = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24"] 
         div_ [class_ "flex border border-t-transparent items-center"] do
           a_ [href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> host.host, class_ "flex  w-full justify-between items-center p-8 hover:bg-gray-50"] $ do
             span_ [class_ "p-2", href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> host.host] $ toHtml host.host
-          -- div_ [class_ "w-[200px] h-[80px] mt-4 shrink-0"] pass
-          -- Charts.throughput pid (host.host) (Just $ Charts.QBHost host.host) (Just Charts.GBHost) 14 Nothing False (Nothing, Nothing) Nothing
+          -- div_ [class_ "w-[200px] h-[80px] mt-4 shrink-0"] do
+          -- Charts.throughput pid host.host (Just (QBHost host.host)) Nothing 14 Nothing False (Nothing, Nothing) Nothing
           div_ [class_ "shrink-0 flex items-center gap-10 p-8"] do
             a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=host%20%3D%20" <> "\"" <> host.host <> "\"", class_ "p-2 shrink-0 pl-8 text-blue-500 hover:text-slate-600"] "View logs"
             span_ [] $ show host.eventCount

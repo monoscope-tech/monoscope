@@ -15,10 +15,12 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Fmt (dateDashF, fmt)
 import Lucid
 
+import Data.Aeson qualified as AE
 import Data.Aeson.QQ
 import Database.PostgreSQL.Simple (Only (Only))
+import Deriving.Aeson qualified as DAE
 import Lucid.Htmx (hxPost_)
-import Models.Apis.Slack (SlackData (webhookUrl), insertAccessToken)
+import Models.Apis.Slack (insertAccessToken)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Session
 import Network.Wreq
@@ -46,19 +48,7 @@ data IncomingWebhook = IncomingWebhook
   , url :: Text
   }
   deriving stock (Show, Generic)
-
-
-instance FromJSON IncomingWebhook where
-  parseJSON = withObject "IncomingWebhook" $ \v ->
-    IncomingWebhook
-      <$> v
-      .: "channel"
-      <*> v
-      .: "channel_id"
-      <*> v
-      .: "configuration_url"
-      <*> v
-      .: "url"
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] IncomingWebhook
 
 
 data TokenResponse = TokenResponse
@@ -66,15 +56,7 @@ data TokenResponse = TokenResponse
   , incomingWebhook :: IncomingWebhook
   }
   deriving stock (Show, Generic)
-
-
-instance FromJSON TokenResponse where
-  parseJSON = withObject "TokenResponse" $ \v ->
-    TokenResponse
-      <$> v
-      .: "ok"
-      <*> v
-      .: "incoming_webhook"
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] TokenResponse
 
 
 exchangeCodeForToken :: Text -> Text -> Text -> Text -> IO (Maybe TokenResponse)
@@ -135,7 +117,7 @@ toLinkPage code = do
     section_ [] do
       div_ [class_ "bg-white flex flex-col items-center sm:rounded-md"] do
         h3_ [class_ "mb-6"] "Make sure you are logged in"
-        a_ [href_ $ "http://localhost:8080/slack/link-projects?code=" <> code, class_ "btn btn-primary"] "Link a project(s)"
+        a_ [href_ $ "/slack/link-projects?code=" <> code, class_ "btn btn-primary"] "Link a project(s)"
 
 
 linkProjectsGetH :: Session.PersistentSession -> Maybe Text -> DashboardM (Html ())

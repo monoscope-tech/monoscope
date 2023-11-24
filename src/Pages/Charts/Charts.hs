@@ -330,9 +330,9 @@ runQueryBy (QBEndpointHash t) = "endpoint_hash=" <> t
 runQueryBy (QBShapeHash t) = "shape_hash=" <> t
 runQueryBy (QBFormatHash t) = "format_hash=" <> t
 runQueryBy (QBStatusCodeGT t) = "status_code_gt=" <> show t
+runQueryBy (QBHost t) = "host=" <> t
 runQueryBy (QBFrom t) = ""
 runQueryBy (QBTo t) = ""
-runQueryBy (QBHost t) = "host=" <> t
 runQueryBy (QBAnd a b) = runQueryBy a <> "&" <> runQueryBy b
 
 
