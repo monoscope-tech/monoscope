@@ -592,7 +592,7 @@ selectRequestDumpByProjectAndParentId pid parentId = query Select q (pid, parent
                     request_body,response_body,'{}'::jsonb,'{}'::jsonb,
                     duration_ns, sdk_type,
                     parent_id, service_version, JSONB_ARRAY_LENGTH(errors) as errors_count, '{}'::jsonb, tags, request_type
-             FROM apis.request_dumps where project_id=? and parent_id= ? LIMIT 199; 
+             FROM apis.request_dumps where project_id=? AND created_at > NOW() - interval '14' day AND parent_id= ? LIMIT 199; 
      |]
 
 
