@@ -111,7 +111,7 @@ jobsRunner dbPool logger cfg job = do
                   let projectTitle = project.title
                   let projectIdTxt = pid.toText
                   let message =
-                        [trimming| 🤖 *New Endpoint Detected for `$projectTitle`**
+                        [trimming| 🤖 *New Endpoint Detected for `$projectTitle`*
    
                                      We have detected a new endpoint on *$projectTitle*
    
@@ -164,7 +164,7 @@ jobsRunner dbPool logger cfg job = do
                       let projectTitle = project.title
                       let projectIdTxt = pid.toText
                       let message =
-                            [trimming| 🤖 *New Shape anomaly found for `$projectTitle`**
+                            [trimming| 🤖 *New Shape anomaly found for `$projectTitle`*
     
                                           We detected a different API request shape to your endpoints than what you usually have
     
@@ -206,7 +206,7 @@ jobsRunner dbPool logger cfg job = do
                       let projectTitle = project.title
                       let projectIdTxt = pid.toText
                       let message =
-                            [trimming| 🤖 *New Field Format Anomaly Found for `$projectTitle`**
+                            [trimming| 🤖 *New Field Format Anomaly Found for `$projectTitle`*
     
                                          We detected that a particular field on your API is returning a different format/type than what it usually gets.
     
@@ -324,7 +324,7 @@ dailyReportForProject dbPool cfg pid = do
             let pidText = pid.toText
             let reportIdText = show report.id.reportId
             let message =
-                  [trimming| 🤖 *Daily Report for `$projectTitle`***
+                  [trimming| 🤖 *Daily Report for `$projectTitle`*
           
                                     <https://app.apitoolkit.io/p/$pidText/reports/$reportIdText|View today's report>
                            |]
