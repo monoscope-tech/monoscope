@@ -82,6 +82,7 @@ data SDKTypes
   | PythonFlask
   | PythonDjango
   | PythonOutgoing
+  | JsAdonis
   deriving stock (Show, Generic, Read, Eq)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SDKTypes
 
@@ -155,6 +156,7 @@ normalizeUrlPath JsFastify statusCode _method urlPath = removeQueryParams status
 normalizeUrlPath PythonFlask statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath PythonDjango statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath PythonOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
+normalizeUrlPath JsAdonis statusCode _method urlPath = removeQueryParams statusCode urlPath
 
 
 -- getRequestType ...
