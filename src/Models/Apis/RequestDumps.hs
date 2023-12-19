@@ -84,6 +84,7 @@ data SDKTypes
   | PythonOutgoing
   | JsAdonis
   | PhpSlim
+  | GuzzleOutgoing
   deriving stock (Show, Generic, Read, Eq)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SDKTypes
 
@@ -159,6 +160,7 @@ normalizeUrlPath PythonDjango statusCode _method urlPath = removeQueryParams sta
 normalizeUrlPath PythonOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath JsAdonis statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath PhpSlim statusCode _method urlPath = removeQueryParams statusCode urlPath
+normalizeUrlPath GuzzleOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
 
 
 -- getRequestType ...
