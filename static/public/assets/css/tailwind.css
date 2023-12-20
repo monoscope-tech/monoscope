@@ -105,6 +105,15 @@
   border-color: rgb(37 99 235 / 1);
 }
 
+.show-log-modal {
+  display: flex;
+}
+
+.show-log-modal > div {
+  transition: all 1s;
+  width: min(90vw, 800px);
+}
+
 .sdk_tab_content {
   opacity: 0;
   will-change: opacity;

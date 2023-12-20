@@ -94,8 +94,8 @@ apiLog sess pid queryM cols' cursorM sinceM fromM toM hxRequestM hxBoostedM = do
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, dbResp) <- liftIO
-        $ withPool pool do
+      (project, dbResp) <- liftIO $
+        withPool pool do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
           dbResp <- RequestDumps.selectRequestDumpByProject pid query cursorM' fromD toD
           pure (project, dbResp)
@@ -348,30 +348,32 @@ timePickerItems =
 
 apiLogsPage :: Projects.ProjectId -> Int -> Vector RequestDumps.RequestDumpLogItem -> [Text] -> Text -> Text -> Text -> Maybe Text -> Html ()
 apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL currentRange = do
-  section_ [class_ "mx-auto px-10 py-2 gap-2 flex flex-col h-[98%] overflow-hidden "] do
+  section_ [class_ "mx-auto px-10 py-2 gap-2 flex flex-col  overflow-hidden "] do
     div_
-      [ style_ "z-index:26; width: min(90vw, 800px)"
-      , class_ "fixed hidden right-0 bg-white overflow-y-scroll h-[calc(100%-60px)] border-l border-l-2 shadow"
+      [ style_ "z-index:26"
+      , class_ "fixed hidden right-0 top-0 justify-end left-0 bottom-0 w-full bg-black bg-opacity-5"
+      , [__|on click remove .show-log-modal from #expand-log-modal|]
       , id_ "expand-log-modal"
       ]
       do
-        div_ [class_ "relative ml-auto w-full", style_ ""] do
-          div_ [class_ "flex justify-end  w-full p-4 "] do
-            button_ [[__|on click add .hidden to #expand-log-modal|]] do
-              img_ [class_ "h-8", src_ "/assets/svgs/close.svg"]
-          let postP = "/p/" <> pid.toText <> "/share/"
-          form_
-            [ hxPost_ postP
-            , hxSwap_ "innerHTML"
-            , hxTarget_ "#copy_share_link"
-            , id_ "share_log_form"
-            ]
-            do
-              input_ [type_ "hidden", value_ "1 hour", name_ "expiresIn", id_ "expire_input"]
-              input_ [type_ "hidden", value_ "", name_ "reqId", id_ "req_id_input"]
-          div_ [id_ "log-modal-content-loader", class_ "bg-white rounded-lg shadow p-4 absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2"] do
-            loader
-          div_ [class_ "px-2", id_ "log-modal-content"] pass
+        div_ [class_ "h-full bg-white border-l border-l-2 shadow pt-8 overflow-y-scroll w-0", style_ "transition: all 1s", [__|on click halt|]] do
+          div_ [class_ "relative ml-auto w-full", style_ ""] do
+            div_ [class_ "flex justify-end  w-full p-4 "] do
+              button_ [class_ "bg-gray-200 rounded-full p-2 text-gray-500 hover:bg-gray-300 hover:text-gray-700", [__|on click remove .show-log-modal from #expand-log-modal|]] do
+                faIcon_ "fa-close" "fa-regular fa-close" "h-4 w-4"
+            let postP = "/p/" <> pid.toText <> "/share/"
+            form_
+              [ hxPost_ postP
+              , hxSwap_ "innerHTML"
+              , hxTarget_ "#copy_share_link"
+              , id_ "share_log_form"
+              ]
+              do
+                input_ [type_ "hidden", value_ "1 hour", name_ "expiresIn", id_ "expire_input"]
+                input_ [type_ "hidden", value_ "", name_ "reqId", id_ "req_id_input"]
+            div_ [id_ "log-modal-content-loader", class_ "bg-white rounded-lg shadow p-4 absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2"] do
+              loader
+            div_ [class_ "px-2", id_ "log-modal-content"] pass
     form_
       [ class_ "card-round w-full text-sm"
       , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
@@ -626,13 +628,13 @@ logItemRows pid requests cols nextLogsURL = do
 apiLogItemView :: RequestDumps.RequestDumpLogItem -> Text -> Html ()
 apiLogItemView req expandItemPath = do
   let errorClass = if req.errorsCount > 0 then "border-l-red-200" else "border-l-blue-200"
-  div_ [class_ $ "log-item-info border-l-4 " <> errorClass]
-    $ div_ [class_ "pl-4 py-1 ", colspan_ "3"] do
+  div_ [class_ $ "log-item-info border-l-4 " <> errorClass] $
+    div_ [class_ "pl-4 py-1 ", colspan_ "3"] do
       div_ [class_ "flex items-center gap-2"] do
         button_
           [ class_ "px-4 rounded text-gray-600 border py-1 expand-button"
           , term "data-log-item-path" (expandItemPath <> "/detailed")
-          , [__|on click remove .hidden from #expand-log-modal then
+          , [__|on click add .show-log-modal to #expand-log-modal then
                    remove .hidden from #log-modal-content-loader
                    fetch `${@data-log-item-path}` as html then put it into #log-modal-content
                    add .hidden to #log-modal-content-loader
