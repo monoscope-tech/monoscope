@@ -371,7 +371,7 @@ apiLogsPage pid resultCount requests cols reqChartTxt nextLogsURL resetLogsURL c
               do
                 input_ [type_ "hidden", value_ "1 hour", name_ "expiresIn", id_ "expire_input"]
                 input_ [type_ "hidden", value_ "", name_ "reqId", id_ "req_id_input"]
-            div_ [id_ "log-modal-content-loader", class_ "bg-white rounded-lg shadow p-4 absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2"] do
+            div_ [id_ "log-modal-content-loader", class_ "bg-white rounded border p-4 z-50 absolute top-[50vh] left-1/2 -translate-x-1/2 -translate-y-1/2"] do
               loader
             div_ [class_ "px-2", id_ "log-modal-content"] pass
     form_
