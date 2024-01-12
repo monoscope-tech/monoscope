@@ -1,7 +1,9 @@
-module Pages.Testing (testingGetH) where
+module Pages.Testing (testingGetH, testingPostH, TestCollectionForm (..)) where
 
 import Config
 import Data.Default (def)
+import NeatInterpolation (text)
+
 import Lucid
 import Lucid.Hyperscript
 import Models.Projects.Projects qualified as Projects
@@ -21,7 +23,35 @@ import Servant (Headers, addHeader)
 import Servant.Htmx (HXRedirect, HXTrigger)
 import Utils
 
+import Lucid.Htmx (hxPost_, hxPut_)
 import Web.FormUrlEncoded (FromForm)
+
+
+data TestCollectionForm = TestCollectionForm
+  { collection_id :: Text
+  , title :: Text
+  , description :: Text
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (FromForm, FromJSON)
+
+
+testingPostH :: Sessions.PersistentSession -> Projects.ProjectId -> TestCollectionForm -> DashboardM (Headers '[HXTrigger] (Html ()))
+testingPostH sess pid collection = do
+  pool <- asks pool
+  traceShowM collection
+  project <- liftIO $
+    withPool
+      pool
+      do
+        Projects.selectProjectForUser (Sessions.userId sess, pid)
+  if collection.collection_id == ""
+    then do
+      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Collection added Successfully"]}|]
+      pure $ addHeader hxTriggerData $ testingPage pid
+    else do
+      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Collection updated Successfully"]}|]
+      pure $ addHeader hxTriggerData $ testingPage pid
 
 
 testingGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
@@ -41,7 +71,7 @@ testingGetH sess pid = do
             (def :: BWConfig)
               { sessM = Just sess
               , currProject = project
-              , pageTitle = "About project"
+              , pageTitle = "Testing"
               }
       pure $ bodyWrapper bwconf $ testingPage pid
 
@@ -49,7 +79,7 @@ testingGetH sess pid = do
 testingPage :: Projects.ProjectId -> Html ()
 testingPage pid = do
   div_ [class_ "w-full"] do
-    modal
+    modal pid
     div_ [class_ "w-full mt-4 max-w-6xl mx-auto"] do
       div_ [class_ "flex justify-between border-b py-2 items-center"] do
         h1_ [class_ "text-3xl font-bold"] "Test Collections"
@@ -109,8 +139,8 @@ collectionCard idd = do
           faIcon_ "fa-edit" "fa-light fa-edit" "h-6 w-6"
 
 
-modal :: Html ()
-modal = do
+modal :: Projects.ProjectId -> Html ()
+modal pid = do
   div_
     [ class_ "fixed inset-0 z-50 w-screen hidden overflow-y-auto bg-gray-300 bg-opacity-50"
     , id_ "col-modal"
@@ -118,39 +148,50 @@ modal = do
     ]
     $ do
       div_ [class_ "flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0"] $ do
-        div_ [class_ "relative transform overflow-hidden rounded-xl border shadow bg-white text-left transition-all my-8 w-full max-w-2xl", [__|on click halt|]] $ do
-          form_ [class_ "bg-white pb-4"] $ do
-            h3_ [class_ "text-2xl w-full px-6 py-4 border-b font-semibold leading-6 text-gray-700", id_ "modal-title"] "New Collection"
-            div_ [class_ "px-6 mt-4 items-start flex flex-col gap-5 text-gray-700"] $ do
-              input_ [type_ "hidden", id_ "collection_id", name_ "col_id"]
-              div_ [class_ "flex flex-col gap-1 w-full"] $ do
-                label_ [Lucid.for_ "title", class_ "text-sm font-semibold leading-none"] "Title"
-                input_
-                  [ type_ "text"
-                  , name_ "title"
-                  , id_ "title"
-                  , class_ "flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  , placeholder_ "Test Profile edit"
+        div_ [class_ "relative transform overflow-hidden rounded-xl border shadow bg-white text-left transition-all my-8 w-full max-w-2xl", onclick_ "noPropagation(event)"] do
+          form_
+            [ hxPost_ $ "/p/" <> pid.toText <> "/testing"
+            , class_ "w-full"
+            ]
+            $ do
+              div_ [class_ "bg-white pb-4"] $ do
+                h3_ [class_ "text-2xl w-full px-6 py-4 border-b font-semibold leading-6 text-gray-700", id_ "modal-title"] "New Collection"
+                div_ [class_ "px-6 mt-4 items-start flex flex-col gap-5 text-gray-700"] $ do
+                  input_ [type_ "hidden", id_ "collection_id", name_ "collection_id"]
+                  div_ [class_ "flex flex-col gap-1 w-full"] $ do
+                    label_ [Lucid.for_ "title", class_ "text-sm font-semibold leading-none"] "Title"
+                    input_
+                      [ type_ "text"
+                      , name_ "title"
+                      , id_ "title"
+                      , class_ "flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      , placeholder_ "Test Profile edit"
+                      ]
+                  div_ [class_ "flex flex-col gap-1 w-full"] $ do
+                    label_ [Lucid.for_ "desc", class_ "text-sm font-semibold leading-none"] "Description"
+                    textarea_
+                      [ type_ "text"
+                      , name_ "description"
+                      , id_ "desc"
+                      , class_ "flex h-16 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      , placeholder_ "Test Profile edit"
+                      ]
+                      ""
+              div_ [class_ "px-4 py-3 sm:flex sm:flex-row-reverse sm:px-6 border-t mt-4"] $ do
+                button_
+                  [ type_ "submit"
+                  , class_ "inline-flex w-full justify-center rounded-md bg-blue-500 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-600 sm:ml-3 sm:w-[100px]"
                   ]
-              div_ [class_ "flex flex-col gap-1 w-full"] $ do
-                label_ [Lucid.for_ "desc", class_ "text-sm font-semibold leading-none"] "Description"
-                textarea_
-                  [ type_ "text"
-                  , name_ "desc"
-                  , id_ "desc"
-                  , class_ "flex h-16 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  , placeholder_ "Test Profile edit"
+                  "Save"
+                button_
+                  [ type_ "button"
+                  , [__|on click add .hidden to #col-modal|]
+                  , class_ "mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 sm:mt-0 sm:w-[100px]"
                   ]
-                  ""
-          div_ [class_ "px-4 py-3 sm:flex sm:flex-row-reverse sm:px-6 border-t mt-4"] $ do
-            button_
-              [ type_ "button"
-              , class_ "inline-flex w-full justify-center rounded-md bg-blue-500 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-600 sm:ml-3 sm:w-[100px]"
-              ]
-              "Save"
-            button_
-              [ type_ "button"
-              , [__|on click add .hidden to #col-modal|]
-              , class_ "mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 sm:mt-0 sm:w-[100px]"
-              ]
-              "Cancel"
+                  "Cancel"
+      script_
+        [text|
+          function noPropagation(event) {
+      event.stopPropagation();
+    }
+      |]

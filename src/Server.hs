@@ -146,6 +146,7 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "notifications-channels" :> ReqBody '[FormUrlEncoded] CreateProject.NotifListForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "slack" :> "webhook" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "testing" :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "testing" :> ReqBody '[FormUrlEncoded] Testing.TestCollectionForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
 
 
 type PublicAPI =
@@ -245,6 +246,7 @@ protectedServer sess =
     :<|> CreateProject.updateNotificationsChannel sess
     :<|> SlackInstall.updateWebHook sess
     :<|> Testing.testingGetH sess
+    :<|> Testing.testingPostH sess
 
 
 publicServer :: ServerT PublicAPI DashboardM
