@@ -1,9 +1,4 @@
-import {
-  LitElement,
-  html,
-  ref,
-  createRef,
-} from 'https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js';
+import { LitElement, html, ref, createRef } from './js/thirdparty/lit.js';
 export class MyElement extends LitElement {
   static properties = {
     filters: {},

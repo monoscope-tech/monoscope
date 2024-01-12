@@ -56,7 +56,7 @@ data Collection = Collection
     , steps :: Value
     }
     deriving stock (Show, Generic)
-    deriving anyclass (FromRow, ToRow)
+    deriving anyclass (FromRow, ToRow, ToJSON, FromJSON)
     deriving
         (Entity)
         via (GenericEntity '[Schema "apis", TableName "testing", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Collection)

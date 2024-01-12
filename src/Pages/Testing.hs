@@ -24,8 +24,8 @@ import Data.Text qualified as T
 import Data.Time (getZonedTime)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
+import Lucid.Base
 import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_)
-import Models.Apis.Testing (CollectionListItem)
 import Models.Apis.Testing qualified as Testing
 import Web.FormUrlEncoded (FromForm)
 
@@ -117,7 +117,7 @@ testingPage pid colls = do
           collectionCard pid c
 
 
-collectionCard :: Projects.ProjectId -> CollectionListItem -> Html ()
+collectionCard :: Projects.ProjectId -> Testing.CollectionListItem -> Html ()
 collectionCard pid col = do
   div_ [class_ "rounded-xl border  p-4  flex flex-col gap-5 text-gray-700 h-full shadow hover:shadow-lg"] $ do
     a_ [href_ ("/p/" <> pid.toText <> "/testing/" <> col.id.toText)] $ do
@@ -242,4 +242,34 @@ collectionGetH sess pid col_id = do
 
 collectionPage :: Projects.ProjectId -> Maybe Testing.Collection -> Html ()
 collectionPage pid col = do
-  div_ [] $ "Hello" <> show col
+  div_ [] do
+    case col of
+      Just c -> do
+        let col_json = decodeUtf8 $ encode c
+        div_ [id_ "test-data", term "data-collection" col_json] do
+          termRaw "test-editor" [id_ "testEditorElement"] ("" :: Text)
+      Nothing -> do
+        h1_ [] "Not found"
+  script_ [type_ "module", src_ "/assets/testeditor.js"] ("" :: Text)
+  script_ [src_ "https://unpkg.com/js-yaml/dist/js-yaml.min.js", crossorigin_ "true"] ("" :: Text)
+  script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.63.0/codemirror.min.js"] ("" :: Text)
+  script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.63.0/mode/yaml/yaml.js"] ("" :: Text)
+  style_
+    [text|
+        .cm-content,
+        .cm-gutter {
+            min-height: 150px;
+        }
+        .CodeMirror {
+            height: 100%;
+        }
+        .cm-gutters {
+            margin: 1px;
+        }
+        .cm-scroller {
+            overflow: auto;
+        }
+        .cm-wrap {
+            border: 1px solid silver
+        }
+    |]
