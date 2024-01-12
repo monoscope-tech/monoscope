@@ -59,7 +59,7 @@ data Collection = Collection
     deriving anyclass (FromRow, ToRow)
     deriving
         (Entity)
-        via (GenericEntity '[Schema "apis", TableName "reports", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Collection)
+        via (GenericEntity '[Schema "apis", TableName "testing", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Collection)
 
 
 data CollectionListItem = ReportListItem

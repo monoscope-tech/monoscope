@@ -20,9 +20,12 @@ import Servant.Htmx (HXTrigger)
 import Utils
 
 import Data.Aeson qualified as Aeson
+import Data.Text qualified as T
 import Data.Time (getZonedTime)
 import Data.UUID.V4 qualified as UUIDV4
-import Lucid.Htmx (hxPost_)
+import Data.Vector qualified as V
+import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_)
+import Models.Apis.Testing (CollectionListItem)
 import Models.Apis.Testing qualified as Testing
 import Web.FormUrlEncoded (FromForm)
 
@@ -44,6 +47,7 @@ testingPostH sess pid collection = do
       pool
       do
         Projects.selectProjectForUser (Sessions.userId sess, pid)
+  traceShowM collection
   if collection.collection_id == ""
     then do
       currentTime <- liftIO getZonedTime
@@ -60,12 +64,14 @@ testingPostH sess pid collection = do
               , steps = Aeson.Array []
               }
       _ <- withPool pool do Testing.addCollection coll
+      cols <- withPool pool do Testing.getCollections pid
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Collection added Successfully"]}|]
-      pure $ addHeader hxTriggerData $ testingPage pid
+      pure $ addHeader hxTriggerData $ testingPage pid cols
     else do
       _ <- withPool pool do Testing.updateCollection pid collection.collection_id collection.title collection.description
+      cols <- withPool pool do Testing.getCollections pid
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Collection updated Successfully"]}|]
-      pure $ addHeader hxTriggerData $ testingPage pid
+      pure $ addHeader hxTriggerData $ testingPage pid cols
 
 
 testingGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
@@ -76,23 +82,26 @@ testingGetH sess pid = do
     then do
       pure $ userNotMemeberPage sess
     else do
-      project <- liftIO $
+      (project, colls) <- liftIO $
         withPool
           pool
           do
-            Projects.selectProjectForUser (Sessions.userId sess, pid)
+            project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+            colls <- Testing.getCollections pid
+            pure (project, colls)
+
       let bwconf =
             (def :: BWConfig)
               { sessM = Just sess
               , currProject = project
               , pageTitle = "Testing"
               }
-      pure $ bodyWrapper bwconf $ testingPage pid
+      pure $ bodyWrapper bwconf $ testingPage pid colls
 
 
-testingPage :: Projects.ProjectId -> Html ()
-testingPage pid = do
-  div_ [class_ "w-full"] do
+testingPage :: Projects.ProjectId -> V.Vector Testing.CollectionListItem -> Html ()
+testingPage pid colls = do
+  div_ [class_ "w-full", id_ "main"] do
     modal pid
     div_ [class_ "w-full mt-4 max-w-6xl mx-auto"] do
       div_ [class_ "flex justify-between border-b py-2 items-center"] do
@@ -105,44 +114,43 @@ testingPage pid = do
             faIcon_ "fa-plus" "fa-light fa-plus" "h-6 w-6"
             "Collection"
       div_ [class_ "w-full grid grid-cols-2 gap-4 mt-8"] do
-        collectionCard "one"
-        collectionCard "two"
-        collectionCard "three"
+        forM_ colls \c -> do
+          collectionCard c
 
 
-collectionCard :: Text -> Html ()
-collectionCard idd = do
-  div_ [class_ "rounded-xl border  p-4  flex flex-col gap-5 text-gray-700 h-full shadow"] $ do
-    a_ [href_ ("/p/testing/" <> "test_id")] $ do
+collectionCard :: CollectionListItem -> Html ()
+collectionCard col = do
+  div_ [class_ "rounded-xl border  p-4  flex flex-col gap-5 text-gray-700 h-full shadow hover:shadow-lg"] $ do
+    a_ [href_ ("/p/testing/" <> col.id.toText)] $ do
       div_ [class_ "flex flex-col gap-5"] $ do
         div_ [class_ "flex items-center justify-between"] $ do
           div_ [class_ "flex flex-col gap-1"] $ do
             span_ [class_ "text-sm font-medium"] "Created at"
-            span_ [class_ "text-xs text-gray-500"] "2023/10/22, 09:00"
+            span_ [class_ "text-xs text-gray-500"] $ toHtml $ T.take 19 $ toText $ show col.createdAt
           div_ [class_ "flex flex-col gap-1"] $ do
             span_ [class_ "text-sm font-medium"] "Last modified"
-            span_ [class_ "text-xs text-gray-500"] "2023/10/22, 09:00"
+            span_ [class_ "text-xs text-gray-500"] $ toHtml $ T.take 19 $ toText $ show col.updatedAt
         div_ [class_ "flex flex-col w-full gap-2"] $ do
-          h3_ [class_ "font-semibold tracking-tight text-xl"] "Testing user profile"
-          p_ [class_ "text-sm text-gray-500 break-words"] "user profile for making sure everything works"
+          h3_ [class_ "font-semibold tracking-tight text-xl"] $ toHtml col.title
+          p_ [class_ "text-sm text-gray-500 break-words"] $ toHtml col.description
           div_ [class_ "flex gap-2 items-center text-xs rounded py-1"] $ do
             span_ [class_ "font-bold"] "Last run"
-            span_ [class_ "text-gray-500"] "2023/10/22, 09:00"
+            span_ [class_ "text-gray-500"] $ ""
     div_ [class_ "text-sm flex items-center justify-between"] $ do
       div_ [class_ "flex gap-5 items-center"] $ do
         div_ [class_ "flex gap-2  rounded bg-gray-100 px-2 py-1"] $ do
           span_ "Steps"
-          span_ [class_ "text-blue-500 font-medium"] "12"
+          span_ [class_ "text-blue-500 font-medium"] $ show col.stepsCount
         div_ [class_ "flex gap-2 rounded bg-gray-100 px-2 py-1"] $ do
           span_ "Passed"
-          span_ [class_ "text-green-500 font-medium"] "10"
+          span_ [class_ "text-green-500 font-medium"] "-"
         div_ [class_ "flex gap-2 rounded bg-gray-100 px-2 py-1"] $ do
           span_ "Failed"
-          span_ [class_ "text-red-500 font-medium"] "2"
+          span_ [class_ "text-red-500 font-medium"] "-"
       button_
-        [ term "data-id" idd
-        , term "data-title" "Testing user profile"
-        , term "data-desc" "user profile for making sure everything works"
+        [ term "data-id" col.id.toText
+        , term "data-title" col.title
+        , term "data-desc" col.description
         , [__|on click remove .hidden from #col-modal 
                then set #collection_id's value to my @data-id
                then set #title's value to my @data-title 
@@ -166,6 +174,8 @@ modal pid = do
           form_
             [ hxPost_ $ "/p/" <> pid.toText <> "/testing"
             , class_ "w-full"
+            , hxTarget_ "#main"
+            , hxSwap_ "outerHTML"
             ]
             $ do
               div_ [class_ "bg-white pb-4"] $ do
