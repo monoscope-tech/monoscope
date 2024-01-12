@@ -8,22 +8,22 @@ import Lucid
 import Lucid.Hyperscript
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Models.Users.Users qualified as Users
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
 
 import Data.Aeson
 import Data.Aeson.QQ (aesonQQ)
-import Data.List ((!!))
-import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute, withPool)
-import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Entity.DBT (withPool)
 import Pages.NonMember
-import Pkg.Components (loader)
 import Servant (Headers, addHeader)
-import Servant.Htmx (HXRedirect, HXTrigger)
+import Servant.Htmx (HXTrigger)
 import Utils
 
-import Lucid.Htmx (hxPost_, hxPut_)
+import Data.Aeson qualified as Aeson
+import Data.Time (getZonedTime)
+import Data.UUID.V4 qualified as UUIDV4
+import Lucid.Htmx (hxPost_)
+import Models.Apis.Testing qualified as Testing
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -46,9 +46,24 @@ testingPostH sess pid collection = do
         Projects.selectProjectForUser (Sessions.userId sess, pid)
   if collection.collection_id == ""
     then do
+      currentTime <- liftIO getZonedTime
+      colId <- Testing.CollectionId <$> liftIO UUIDV4.nextRandom
+      let coll =
+            Testing.Collection
+              { id = colId
+              , createdAt = currentTime
+              , projectId = pid
+              , updatedAt = currentTime
+              , lastRun = Nothing
+              , title = collection.title
+              , description = collection.description
+              , steps = Aeson.Array []
+              }
+      _ <- withPool pool do Testing.addCollection coll
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Collection added Successfully"]}|]
       pure $ addHeader hxTriggerData $ testingPage pid
     else do
+      _ <- withPool pool do Testing.updateCollection pid collection.collection_id collection.title collection.description
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Collection updated Successfully"]}|]
       pure $ addHeader hxTriggerData $ testingPage pid
 

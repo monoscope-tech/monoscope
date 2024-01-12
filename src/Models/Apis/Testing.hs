@@ -6,6 +6,7 @@ module Models.Apis.Testing (
     CollectionListItem (..),
     addCollection,
     getCollections,
+    updateCollection,
     getCollectionById,
 ) where
 
@@ -48,11 +49,11 @@ data Collection = Collection
     { id :: CollectionId
     , createdAt :: ZonedTime
     , updatedAt :: ZonedTime
-    , last_run :: ZonedTime
+    , lastRun :: Maybe ZonedTime
     , projectId :: Projects.ProjectId
     , title :: Text
     , description :: Text
-    , step :: Value
+    , steps :: Value
     }
     deriving stock (Show, Generic)
     deriving anyclass (FromRow, ToRow)
@@ -82,7 +83,7 @@ addCollection :: Collection -> DBT IO ()
 addCollection = insert @Collection
 
 
-updateCollection :: Projects.ProjectId -> CollectionId -> Text -> Text -> DBT IO Int64
+updateCollection :: Projects.ProjectId -> Text -> Text -> Text -> DBT IO Int64
 updateCollection pid cid title description = do
     let q =
             [sql| UPDATE apis.testing SET title=?, description=? WHERE project_id=? AND id=? |]
