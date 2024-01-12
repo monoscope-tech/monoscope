@@ -4,48 +4,14 @@
 <head>
   <meta charset="utf-8">
   <title>easepick</title>
-  <script src="https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.0/dist/index.umd.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/luxon@3.2.1/build/global/luxon.min.js"></script>
+  <!-- <script src="https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.0/dist/index.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/luxon@3.2.1/build/global/luxon.min.js"></script> -->
+  <script type="module" src="./testkit.js"></script>
+
 </head>
 
 <body>
-  <input id="startTime" />
-  <input id="endTime" />
-  <div>
-    <input id="dpbt" type="hidden" />
-    <a id="dpbt" onclick="picker.show()">last 2weeks</button>
-  </div>
-  <script>
-    const picker = new easepick.create({
-      element: '#dpbt',
-      css: [
-        'https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.0/dist/index.css',
-      ],
-      plugins: ['RangePlugin', 'PresetPlugin', 'TimePlugin'],
-      autoApply: false,
-      setup(picker) {
-        picker.on('select', (e) => {
-          const start = JSON.stringify(e.detail.start).slice(1, -1);
-          const end = JSON.stringify(e.detail.end).slice(1, -1);
-          document.getElementById("startTime").value = start;
-          document.getElementById("endTime").value = end;
-
-          const url = new URL(window.location.href);
-          url.searchParams.set('from', start);
-          url.searchParams.set('to', end);
-          window.history.replaceState(null, null, url);
-
-          console.log(start);
-          console.log(luxon.DateTime.fromISO(start));
-        });
-      },
-    });
-    window.picker = picker;
-
-
-  </script>
-
-
+  <h1>Hello world</h1>
 </body>
 
 </html>

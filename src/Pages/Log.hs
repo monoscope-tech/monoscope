@@ -94,8 +94,8 @@ apiLog sess pid queryM cols' cursorM sinceM fromM toM hxRequestM hxBoostedM = do
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, dbResp) <- liftIO $
-        withPool pool do
+      (project, dbResp) <- liftIO
+        $ withPool pool do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
           dbResp <- RequestDumps.selectRequestDumpByProject pid query cursorM' fromD toD
           pure (project, dbResp)
@@ -628,8 +628,8 @@ logItemRows pid requests cols nextLogsURL = do
 apiLogItemView :: RequestDumps.RequestDumpLogItem -> Text -> Html ()
 apiLogItemView req expandItemPath = do
   let errorClass = if req.errorsCount > 0 then "border-l-red-200" else "border-l-blue-200"
-  div_ [class_ $ "log-item-info border-l-4 " <> errorClass] $
-    div_ [class_ "pl-4 py-1 ", colspan_ "3"] do
+  div_ [class_ $ "log-item-info border-l-4 " <> errorClass]
+    $ div_ [class_ "pl-4 py-1 ", colspan_ "3"] do
       div_ [class_ "flex items-center gap-2"] do
         button_
           [ class_ "px-4 rounded text-gray-600 border py-1 expand-button"

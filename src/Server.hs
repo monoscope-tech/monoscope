@@ -52,6 +52,7 @@ import Pages.Reports qualified as Reports
 import Pages.Share qualified as Share
 import Pages.SlackInstall qualified as SlackInstall
 import Pages.Survey qualified as Survey
+import Pages.Testing qualified as Testing
 import Relude
 import Servant
 import Servant.HTML.Lucid
@@ -144,6 +145,7 @@ type ProtectedAPI =
     :<|> "slack" :> "link-projects" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "notifications-channels" :> ReqBody '[FormUrlEncoded] CreateProject.NotifListForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "slack" :> "webhook" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
+    :<|> "p" :> ProjectId :> "testing" :> Get '[HTML] (Html ())
 
 
 type PublicAPI =
@@ -242,6 +244,7 @@ protectedServer sess =
     :<|> SlackInstall.postH sess
     :<|> CreateProject.updateNotificationsChannel sess
     :<|> SlackInstall.updateWebHook sess
+    :<|> Testing.testingGetH sess
 
 
 publicServer :: ServerT PublicAPI DashboardM
