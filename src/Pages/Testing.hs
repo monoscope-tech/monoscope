@@ -55,19 +55,19 @@ testingPage pid = do
         h1_ [class_ "text-3xl font-bold"] "Test Collections"
         button_
           [ class_ "text-white rounded bg-blue-500 px-4 py-2 flex items-center gap-2"
-          , [__|on click remove .hidden from #col-modal|]
+          , [__|on click remove .hidden from #col-modal then set #collection_id's value to ""|]
           ]
           do
             faIcon_ "fa-plus" "fa-light fa-plus" "h-6 w-6"
             "Collection"
       div_ [class_ "w-full grid grid-cols-2 gap-4 mt-8"] do
-        collectionCard
-        collectionCard
-        collectionCard
+        collectionCard "one"
+        collectionCard "two"
+        collectionCard "three"
 
 
-collectionCard :: Html ()
-collectionCard = do
+collectionCard :: Text -> Html ()
+collectionCard idd = do
   div_ [class_ "rounded-xl border  p-4  flex flex-col gap-5 text-gray-700 h-full shadow"] $ do
     a_ [href_ ("/p/testing/" <> "test_id")] $ do
       div_ [class_ "flex flex-col gap-5"] $ do
@@ -95,11 +95,18 @@ collectionCard = do
         div_ [class_ "flex gap-2 rounded bg-gray-100 px-2 py-1"] $ do
           span_ "Failed"
           span_ [class_ "text-red-500 font-medium"] "2"
-      button_ [[__|on click remove .hidden from #col-modal|]] do
-        faIcon_ "fa-edit" "fa-light fa-edit" "h-6 w-6"
-
-
-data EditCol = EditCol {title :: Text, description :: Text}
+      button_
+        [ term "data-id" idd
+        , term "data-title" "Testing user profile"
+        , term "data-desc" "user profile for making sure everything works"
+        , [__|on click remove .hidden from #col-modal 
+               then set #collection_id's value to my @data-id
+               then set #title's value to my @data-title 
+               then set #desc's value to my @data-desc
+               |]
+        ]
+        do
+          faIcon_ "fa-edit" "fa-light fa-edit" "h-6 w-6"
 
 
 modal :: Html ()
@@ -114,10 +121,10 @@ modal = do
         div_ [class_ "relative transform overflow-hidden rounded-xl border shadow bg-white text-left transition-all my-8 w-full max-w-2xl", [__|on click halt|]] $ do
           form_ [class_ "bg-white pb-4"] $ do
             h3_ [class_ "text-2xl w-full px-6 py-4 border-b font-semibold leading-6 text-gray-700", id_ "modal-title"] "New Collection"
-            div_ [class_ "px-6 mt-4 items-start flex flex-col gap-5 text-gray-600"] $ do
+            div_ [class_ "px-6 mt-4 items-start flex flex-col gap-5 text-gray-700"] $ do
               input_ [type_ "hidden", id_ "collection_id", name_ "col_id"]
               div_ [class_ "flex flex-col gap-1 w-full"] $ do
-                label_ [Lucid.for_ "title", class_ "text-sm font-medium leading-none"] "Title"
+                label_ [Lucid.for_ "title", class_ "text-sm font-semibold leading-none"] "Title"
                 input_
                   [ type_ "text"
                   , name_ "title"
@@ -126,7 +133,7 @@ modal = do
                   , placeholder_ "Test Profile edit"
                   ]
               div_ [class_ "flex flex-col gap-1 w-full"] $ do
-                label_ [Lucid.for_ "desc", class_ "text-sm font-medium leading-none"] "Description"
+                label_ [Lucid.for_ "desc", class_ "text-sm font-semibold leading-none"] "Description"
                 textarea_
                   [ type_ "text"
                   , name_ "desc"
