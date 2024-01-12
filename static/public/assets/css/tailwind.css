@@ -20,6 +20,10 @@
   }
 }
 
+:root, [data-theme] {
+   --backgroundPrimary: #fff;
+}
+
 .payment-radio-active {
   @apply bg-blue-500;
 }

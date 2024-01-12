@@ -31,10 +31,9 @@ import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import GHC.Records (HasField (getField))
-
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact (DBT)
+import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
 import Optics.TH
 import Relude hiding (id)
