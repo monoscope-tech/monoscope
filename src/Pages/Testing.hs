@@ -39,7 +39,6 @@ data TestCollectionForm = TestCollectionForm
 testingPostH :: Sessions.PersistentSession -> Projects.ProjectId -> TestCollectionForm -> DashboardM (Headers '[HXTrigger] (Html ()))
 testingPostH sess pid collection = do
   pool <- asks pool
-  traceShowM collection
   project <- liftIO $
     withPool
       pool
