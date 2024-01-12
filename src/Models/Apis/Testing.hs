@@ -34,7 +34,7 @@ import Database.PostgreSQL.Simple.ToField
 import Database.PostgreSQL.Transact (DBT)
 
 
-newtype CollectionId = CollectionId {reportId :: UUID.UUID}
+newtype CollectionId = CollectionId {collectionId :: UUID.UUID}
     deriving stock (Generic, Show)
     deriving
         (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default)
@@ -42,7 +42,7 @@ newtype CollectionId = CollectionId {reportId :: UUID.UUID}
 
 
 instance HasField "toText" CollectionId Text where
-    getField = UUID.toText . reportId
+    getField = UUID.toText . collectionId
 
 
 data Collection = Collection

@@ -22,6 +22,7 @@ import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Types qualified as Fields (FieldId)
 import Models.Apis.Reports qualified as Reports
+import Models.Apis.Testing qualified as TestingM
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
@@ -147,6 +148,7 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "slack" :> "webhook" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "testing" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "testing" :> ReqBody '[FormUrlEncoded] Testing.TestCollectionForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
+    :<|> "p" :> ProjectId :> "testing" :> Capture "collection_id" TestingM.CollectionId :> Get '[HTML] (Html ())
 
 
 type PublicAPI =
@@ -247,6 +249,7 @@ protectedServer sess =
     :<|> SlackInstall.updateWebHook sess
     :<|> Testing.testingGetH sess
     :<|> Testing.testingPostH sess
+    :<|> Testing.collectionGetH sess
 
 
 publicServer :: ServerT PublicAPI DashboardM

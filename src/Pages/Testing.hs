@@ -1,4 +1,4 @@
-module Pages.Testing (testingGetH, testingPostH, TestCollectionForm (..)) where
+module Pages.Testing (testingGetH, testingPostH, collectionGetH, TestCollectionForm (..)) where
 
 import Config
 import Data.Default (def)
@@ -47,7 +47,6 @@ testingPostH sess pid collection = do
       pool
       do
         Projects.selectProjectForUser (Sessions.userId sess, pid)
-  traceShowM collection
   if collection.collection_id == ""
     then do
       currentTime <- liftIO getZonedTime
@@ -103,7 +102,7 @@ testingPage :: Projects.ProjectId -> V.Vector Testing.CollectionListItem -> Html
 testingPage pid colls = do
   div_ [class_ "w-full", id_ "main"] do
     modal pid
-    div_ [class_ "w-full mt-4 max-w-6xl mx-auto"] do
+    div_ [class_ "w-full mt-4 max-w-7xl mx-auto"] do
       div_ [class_ "flex justify-between border-b py-2 items-center"] do
         h1_ [class_ "text-3xl font-bold"] "Test Collections"
         button_
@@ -113,15 +112,15 @@ testingPage pid colls = do
           do
             faIcon_ "fa-plus" "fa-light fa-plus" "h-6 w-6"
             "Collection"
-      div_ [class_ "w-full grid grid-cols-2 gap-4 mt-8"] do
+      div_ [class_ "w-full grid grid-cols-2 gap-8 mt-8"] do
         forM_ colls \c -> do
-          collectionCard c
+          collectionCard pid c
 
 
-collectionCard :: CollectionListItem -> Html ()
-collectionCard col = do
+collectionCard :: Projects.ProjectId -> CollectionListItem -> Html ()
+collectionCard pid col = do
   div_ [class_ "rounded-xl border  p-4  flex flex-col gap-5 text-gray-700 h-full shadow hover:shadow-lg"] $ do
-    a_ [href_ ("/p/testing/" <> col.id.toText)] $ do
+    a_ [href_ ("/p/" <> pid.toText <> "/testing/" <> col.id.toText)] $ do
       div_ [class_ "flex flex-col gap-5"] $ do
         div_ [class_ "flex items-center justify-between"] $ do
           div_ [class_ "flex flex-col gap-1"] $ do
@@ -132,7 +131,7 @@ collectionCard col = do
             span_ [class_ "text-xs text-gray-500"] $ toHtml $ T.take 19 $ toText $ show col.updatedAt
         div_ [class_ "flex flex-col w-full gap-2"] $ do
           h3_ [class_ "font-semibold tracking-tight text-xl"] $ toHtml col.title
-          p_ [class_ "text-sm text-gray-500 break-words"] $ toHtml col.description
+          p_ [class_ "text-sm text-gray-500 break-words max-w-4xl"] $ toHtml col.description
           div_ [class_ "flex gap-2 items-center text-xs rounded py-1"] $ do
             span_ [class_ "font-bold"] "Last run"
             span_ [class_ "text-gray-500"] $ ""
@@ -219,3 +218,28 @@ modal pid = do
       event.stopPropagation();
     }
       |]
+
+
+collectionGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Testing.CollectionId -> DashboardM (Html ())
+collectionGetH sess pid col_id = do
+  pool <- asks pool
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      collection <- withPool pool $ Testing.getCollectionById col_id
+      project <- withPool pool $ Projects.selectProjectForUser (Sessions.userId sess, pid)
+
+      let bwconf =
+            (def :: BWConfig)
+              { sessM = Just sess
+              , currProject = project
+              , pageTitle = "Testing"
+              }
+      pure $ bodyWrapper bwconf $ collectionPage pid collection
+
+
+collectionPage :: Projects.ProjectId -> Maybe Testing.Collection -> Html ()
+collectionPage pid col = do
+  div_ [] $ "Hello" <> show col
