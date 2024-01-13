@@ -27,25 +27,13 @@ export class Collection extends LitElement {
       const { step, ind } = event.detail.data;
       this.collection.steps[ind] = step;
       this.collection = { ...this.collection };
-      const index = this.collections.findIndex(
-        (col) => col.id === this.collection.id
-      );
-      if (index < 0) return;
-      this.collections[index] = this.collection;
-      localStorage.setItem('collection', JSON.stringify(this.collections));
+      this.showNewStepModal = false;
     });
   }
 
   handleAddStep(event) {
     const step = event.detail.data;
     this.collection.steps.push(step);
-    this.collection = { ...this.collection };
-    const ind = this.collections.findIndex(
-      (col) => col.id === this.collection.id
-    );
-    if (ind < 0) return;
-    this.collections[ind] = this.collection;
-    localStorage.setItem('collection', JSON.stringify(this.collections));
     this.showNewStepModal = false;
   }
 
@@ -80,7 +68,7 @@ export class Collection extends LitElement {
                       const editor = CodeMirror(
                         document.getElementById('test-editor'),
                         {
-                          value: 'name: jon doe',
+                          value: yamlData,
                           mode: 'yaml',
                           lineNumbers: true,
                           theme: 'dracula',
@@ -354,6 +342,7 @@ class NewStepModal extends LitElement {
     asserts: {},
     currentTab: {},
     exports: {},
+    errors: {},
   };
   staticMethods = ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'HEAD', 'OPTIONS'];
   constructor() {
@@ -361,6 +350,7 @@ class NewStepModal extends LitElement {
     this.methods = this.staticMethods;
     this.method = '';
     this.url = '';
+    this.errors = [];
     this.title = '';
     this.params = [['', '']];
     this.headers = [['', '']];
@@ -413,6 +403,42 @@ class NewStepModal extends LitElement {
       this.exports = [...data];
     });
   }
+  validateStep(asserts, method, url, title) {
+    let errors = [];
+    if (title.trim() === '') {
+      errors.push("Title can't not be empty");
+    }
+    if (!method || !this.staticMethods.includes(method.toUpperCase())) {
+      errors.push('Invalid method');
+    }
+    if (!url || url.trim() === '') {
+      errors.push('Invalid url');
+    }
+
+    const allAsserts = [
+      'exists',
+      'number',
+      'string',
+      'boolean',
+      'ok',
+      'empty',
+      'notEmpty',
+    ];
+    if (asserts) {
+      asserts = asserts.filter((kv) => kv[0] && kv[1]);
+      asserts.forEach((assert) => {
+        if (!allAsserts.includes(assert)) {
+          errors.push(`${assert}: is not a valid assertion`);
+        }
+      });
+    }
+    return errors;
+  }
+
+  sanitize(step) {
+    delete step['method'];
+    delete step['url'];
+  }
 
   buildStep() {
     const asserts = this.twoDtoObject(this.asserts);
@@ -420,6 +446,8 @@ class NewStepModal extends LitElement {
     const exports = this.twoDtoObject(this.exports);
     const params = this.twoDtoObject(this.params);
     const stepObject = {
+      method: this.method,
+      url: this.url,
       [this.method]: this.url,
       title: this.title,
       asserts,
@@ -429,6 +457,17 @@ class NewStepModal extends LitElement {
       json: this.body.current === 'json' ? this.body.json : undefined,
       body: this.body.current != 'json' ? this.body.url : undefined,
     };
+    let errs = this.validateStep(
+      this.asserts,
+      this.method,
+      this.url,
+      this.title
+    );
+    if (errs.length > 0) {
+      this.errors = errs;
+      return;
+    }
+    this.sanitize(stepObject);
     const event = new CustomEvent('add-step', {
       detail: {
         data: stepObject,
@@ -440,7 +479,7 @@ class NewStepModal extends LitElement {
   }
 
   twoDtoObject(array2D) {
-    array2D = array2D.filter((kv) => kv[0] && kv[1] && kv[0] != ',');
+    array2D = array2D.filter((kv) => kv[0] && kv[1]);
     if (array2D.length === 0) return undefined;
     const resultObject = array2D.reduce((obj, [key, val]) => {
       obj[key] = val;
@@ -483,6 +522,20 @@ class NewStepModal extends LitElement {
               <div
                 class="px-6 py-4 items-start flex flex-col gap-5 text-gray-700 h-[60vh] overflow-y-auto"
               >
+                ${this.errors.length > 0
+                  ? html`<div>
+                      <button
+                        @click=${() => (this.errors = [])}
+                        class="text-red-700"
+                      >
+                        x
+                      </button>
+                      ${this.errors.map(
+                        (err) =>
+                          html`<p class="text-red-500 text-sm">${err}</p>`
+                      )}
+                    </div>`
+                  : null}
                 <div class="flex flex-col gap-1 w-full">
                   <label for="title" class="text-sm font-medium leading-none"
                     >Title</label
