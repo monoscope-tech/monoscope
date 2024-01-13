@@ -63,9 +63,7 @@ export class Collection extends LitElement {
         <h4 class="text-3xl font-medium text-gray-800">
           ${this.collection.title}
         </h4>
-        <p class="text-gray-500 max-w-xl text-sm">
-          ${this.collection.description}
-        </p>
+        <p class="text-gray-500 max-w-xl">${this.collection.description}</p>
         <div class="flex justify-between w-1/2 items-center mt-auto pr-3">
           <h6 class="font-medium text-2xl text-gray-600">Steps</h6>
           <div class="flex gap-8 items-center">
@@ -130,6 +128,14 @@ export class Collection extends LitElement {
                 (step, ind) =>
                   html`<step-element .data=${step} ind=${ind}></step-element>`
               )}
+              ${this.collection.steps?.length === 0
+                ? html`<div
+                    class="self-center text-center text-lg max-w-lg mt-10 font-medium text-gray-700"
+                  >
+                    This collection has no test steps, click the plus button to
+                    add test steps
+                  </div>`
+                : null}
               <button
                 class="bg-blue-500 px-2 py-1 self-center h-10 w-10 text-2xl rounded-full text-white active:ring-1"
                 @click=${() => (this.showNewStepModal = true)}
@@ -137,7 +143,11 @@ export class Collection extends LitElement {
                 +
               </button>
             </div>`}
-        <div class="h-full p-3 overflow-y-scroll"></div>
+        <div class="h-full p-3 overflow-y-scroll">
+          <h3 class="mt-10 w-full text-center">
+            Run test to see the results appear here
+          </h3>
+        </div>
       </div>
     </div>`;
   }
@@ -269,13 +279,30 @@ class Step extends LitElement {
       </button>
       ${this.showDetails
         ? html`<div class="bg-white p-3 w-full flex flex-col gap-4">
-            <div class="flex gap-1 items-center mt-2 text-sm text-gray-500">
+            <div class="flex gap-1 items-center mt-2 text-gray-500">
               <span class=${'font-semibold ' + this.getMethodColor()}
                 >${this.getMethodUrl(this.data)[0]}</span
               >
               <span>${this.getMethodUrl(this.data)[1]}</span>
             </div>
-
+            ${this.data.json
+              ? html`
+                  <div class="w-full">
+                    <h6 class="mb-1 font-medium text-gray-800">Body (json)</h6>
+                    <div class="font-mono text-sm bg-gray-100 p-3 rounded-lg">
+                      ${this.data.json}
+                    </div>
+                  </div>
+                `
+              : null}
+            ${this.data.body
+              ? html`
+                  <key-val
+                    .data=${this.data.body}
+                    stitle="Body (url-encoded)"
+                  ></key-val>
+                `
+              : null}
             ${this.data.headers
               ? html`<key-val
                   .data=${this.data.headers}
@@ -289,10 +316,10 @@ class Step extends LitElement {
                 ></key-val>`
               : null}
             ${this.data.asserts
-              ? html`<key-val
+              ? html`<asserts-val
                   .data=${this.data.asserts}
                   stitle="Asserts"
-                ></key-val>`
+                ></asserts-val>`
               : null}
             ${this.data.exports
               ? html`<key-val
@@ -348,6 +375,44 @@ class KeyVal extends LitElement {
 }
 customElements.define('key-val', KeyVal);
 
+class AssertsVal extends LitElement {
+  static properties = {
+    stitle: { type: String },
+    data: {},
+  };
+  constructor() {
+    super();
+    this.data = {};
+    this.stitle = '';
+  }
+
+  render() {
+    return html`
+      <div class="w-full">
+        <h6 class="mb-1 font-medium text-gray-800">${this.stitle}</h6>
+        <div class="w-full flex flex-col gap-1">
+          ${this.data.map(
+            (kv) => html`<div class="flex gap-4 items-center w-full">
+              <span
+                class="text-sm w-full border border-dashed text-gray-700 px-2 p-1 rounded-lg"
+                >${kv[0]}</span
+              >
+              <span
+                class="text-sm w-full border border-dashed px-2 py-0.5 text-gray-500 rounded-lg"
+                >${kv[1]}</span
+              >
+            </div>`
+          )}
+        </div>
+      </div>
+    `;
+  }
+  createRenderRoot() {
+    return this;
+  }
+}
+customElements.define('asserts-val', AssertsVal);
+
 class NewStepModal extends LitElement {
   static properties = {
     method: {},
@@ -399,9 +464,11 @@ class NewStepModal extends LitElement {
     });
     this.addEventListener('update-body', (event) => {
       const data = event.detail.data;
-      const last = data.url[data.length - 1];
-      if (last[0] && last[1]) {
-        data.url.push(['', '']);
+      if (data.current !== 'json') {
+        const last = data.url[data.url.length - 1];
+        if (!last || (last[0] && last[1])) {
+          data.url.push(['', '']);
+        }
       }
       this.body = { ...data };
     });
@@ -460,21 +527,26 @@ class NewStepModal extends LitElement {
   }
 
   buildStep() {
-    const asserts = this.twoDtoObject(this.asserts);
+    const asserts = this.asserts
+      .filter((a) => a[0] && a[1])
+      .map((assert) => {
+        return { [assert[0]]: assert[1] };
+      });
     const headers = this.twoDtoObject(this.headers);
     const exports = this.twoDtoObject(this.exports);
     const params = this.twoDtoObject(this.params);
+    const body = this.twoDtoObject(this.body.url);
     const stepObject = {
       method: this.method,
       url: this.url,
       [this.method]: this.url,
       title: this.title,
-      asserts,
+      asserts: asserts.length > 0 ? asserts : undefined,
       exports,
       headers,
       params,
       json: this.body.current === 'json' ? this.body.json : undefined,
-      body: this.body.current != 'json' ? this.body.url : undefined,
+      body: this.body.current != 'json' ? body : undefined,
     };
     let errs = this.validateStep(
       this.asserts,
@@ -498,6 +570,7 @@ class NewStepModal extends LitElement {
   }
 
   twoDtoObject(array2D) {
+    if (!array2D) return undefined;
     array2D = array2D.filter((kv) => kv[0] && kv[1]);
     if (array2D.length === 0) return undefined;
     const resultObject = array2D.reduce((obj, [key, val]) => {
@@ -897,6 +970,7 @@ class BodyElement extends LitElement {
         }}
       >
         <option value="json">json</option>
+        <option value="url">url-encoded</option>
       </select>
       <div class="mt-2 flex flex-col gap-2">
         ${this.body.current === 'json'
