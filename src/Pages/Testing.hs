@@ -1,4 +1,4 @@
-module Pages.Testing (testingGetH, testingPostH, collectionGetH, TestCollectionForm (..)) where
+module Pages.Testing (testingGetH, testingPostH, testingPutH, collectionGetH, TestCollectionForm (..)) where
 
 import Config
 import Data.Default (def)
@@ -27,6 +27,8 @@ import Data.Vector qualified as V
 import Lucid.Base
 import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_)
 import Models.Apis.Testing qualified as Testing
+import Models.Users.Sessions qualified as Session
+import Network.Wreq.Session (Session)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -37,6 +39,26 @@ data TestCollectionForm = TestCollectionForm
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm, FromJSON)
+
+
+-- data CollectionStep = CollectionStep
+--   {
+--     title :: Text,
+
+--   }
+--   deriving stock (Show, Generic)
+--   deriving anyclass (FromJSON, ToJSON)
+
+testingPutH :: Session.PersistentSession -> Projects.ProjectId -> Testing.CollectionId -> Value -> DashboardM (Html ())
+testingPutH sess pid cid steps = do
+  pool <- asks pool
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      _ <- withPool pool $ Testing.updateCollectionSteps cid steps
+      pure ""
 
 
 testingPostH :: Sessions.PersistentSession -> Projects.ProjectId -> TestCollectionForm -> DashboardM (Headers '[HXTrigger] (Html ()))
@@ -256,20 +278,7 @@ collectionPage pid col = do
   script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.63.0/mode/yaml/yaml.js"] ("" :: Text)
   style_
     [text|
-        .cm-content,
-        .cm-gutter {
-            min-height: 150px;
-        }
         .CodeMirror {
             height: 100%;
-        }
-        .cm-gutters {
-            margin: 1px;
-        }
-        .cm-scroller {
-            overflow: auto;
-        }
-        .cm-wrap {
-            border: 1px solid silver
         }
     |]

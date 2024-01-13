@@ -7,6 +7,7 @@ module Models.Apis.Testing (
     addCollection,
     getCollections,
     updateCollection,
+    updateCollectionSteps,
     getCollectionById,
 ) where
 
@@ -102,3 +103,10 @@ getCollections pid = query Select q (Only pid)
     WHERE project_id = ? 
     ORDER BY created_at DESC;
   |]
+
+
+updateCollectionSteps :: CollectionId -> Value -> DBT IO Int64
+updateCollectionSteps cid steps = do
+    let q =
+            [sql| UPDATE apis.testing SET steps=? WHERE id=? |]
+    execute Update q (steps, cid)

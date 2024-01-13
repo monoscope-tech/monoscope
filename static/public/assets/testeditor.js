@@ -23,17 +23,36 @@ export class Collection extends LitElement {
       this.showNewStepModal = false;
     });
 
-    this.addEventListener('edit-step', (event) => {
+    this.addEventListener('edit-step', async (event) => {
       const { step, ind } = event.detail.data;
       this.collection.steps[ind] = step;
-      this.collection = { ...this.collection };
-      this.showNewStepModal = false;
+      await this.saveSteps();
     });
   }
 
-  handleAddStep(event) {
+  async handleAddStep(event) {
     const step = event.detail.data;
     this.collection.steps.push(step);
+    await this.saveSteps(this.collection.steps);
+  }
+
+  async saveSteps() {
+    const response = await fetch(
+      `/p/${this.pid}/testing/${this.col_id}/update_steps`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(this.collection.steps),
+      }
+    );
+
+    if (!response.ok) {
+      alert('Something went wrong');
+      return;
+    }
+    this.collection = { ...this.collection };
     this.showNewStepModal = false;
   }
 
@@ -427,8 +446,8 @@ class NewStepModal extends LitElement {
     if (asserts) {
       asserts = asserts.filter((kv) => kv[0] && kv[1]);
       asserts.forEach((assert) => {
-        if (!allAsserts.includes(assert)) {
-          errors.push(`${assert}: is not a valid assertion`);
+        if (!allAsserts.includes(assert[0])) {
+          errors.push(`${assert[0]}: is not a valid assertion`);
         }
       });
     }
