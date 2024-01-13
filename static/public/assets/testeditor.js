@@ -28,12 +28,19 @@ export class Collection extends LitElement {
       this.collection.steps[ind] = step;
       await this.saveSteps();
     });
+
+    this.addEventListener('delete-step', async (event) => {
+      const step_index = event.detail.step;
+      const steps = this.collection.steps;
+      this.collection.steps = steps.filter((s, ind) => step_index !== ind);
+      await this.saveSteps();
+    });
   }
 
   async handleAddStep(event) {
     const step = event.detail.data;
     this.collection.steps.push(step);
-    await this.saveSteps(this.collection.steps);
+    await this.saveSteps();
   }
 
   async saveSteps() {
@@ -54,6 +61,12 @@ export class Collection extends LitElement {
     }
     this.collection = { ...this.collection };
     this.showNewStepModal = false;
+    const event = new CustomEvent('successToast', {
+      detail: {
+        value: ['Steps updated successfully'],
+      },
+    });
+    document.querySelector('body').dispatchEvent(event);
   }
 
   render() {
@@ -79,7 +92,7 @@ export class Collection extends LitElement {
                 @click=${() => {
                   if (!this.showCode) {
                     const yamlData = jsyaml.dump(this.collection.steps, {
-                      indent: 4,
+                      indent: 2,
                     });
                     setTimeout(() => {
                       const editor = CodeMirror(
@@ -98,9 +111,18 @@ export class Collection extends LitElement {
                     if (window.testEditor) {
                       const val = window.testEditor.getValue();
                       const data = jsyaml.load(val);
+                      data.map((step) => {
+                        if (step.json) {
+                          step.json =
+                            typeof step.json === 'string'
+                              ? step.json
+                              : JSON.stringify(step.json);
+                        }
+                      });
                       this.collection.steps = data;
                     }
                     this.showCode = false;
+                    this.saveSteps();
                   }
                 }}
               />
@@ -200,6 +222,17 @@ class Step extends LitElement {
     }
     return arr;
   }
+
+  getAssertEntries(val) {
+    if (!val) {
+      return [['', '']];
+    }
+    const arr = val.map((v) => Object.entries(v)[0]);
+    if (arr.length === 0) {
+      return [['', '']];
+    }
+    return arr;
+  }
   getMethodUrl(data) {
     const methods = [
       'GET',
@@ -240,7 +273,7 @@ class Step extends LitElement {
             title=${this.data.title}
             url=${this.getMethodUrl(this.data)[1]}
             method=${this.getMethodUrl(this.data)[0]}
-            .asserts=${this.getEntries(this.data.asserts)}
+            .asserts=${this.getAssertEntries(this.data.asserts)}
             .headers=${this.getEntries(this.data.headers)}
             .exports=${this.getEntries(this.data.exports)}
             .params=${this.getEntries(this.data.params)}
@@ -391,18 +424,19 @@ class AssertsVal extends LitElement {
       <div class="w-full">
         <h6 class="mb-1 font-medium text-gray-800">${this.stitle}</h6>
         <div class="w-full flex flex-col gap-1">
-          ${this.data.map(
-            (kv) => html`<div class="flex gap-4 items-center w-full">
+          ${this.data.map((as) => {
+            const kv = Object.entries(as);
+            return html`<div class="flex gap-4 items-center w-full">
               <span
                 class="text-sm w-full border border-dashed text-gray-700 px-2 p-1 rounded-lg"
-                >${kv[0]}</span
+                >${kv[0][0]}</span
               >
               <span
                 class="text-sm w-full border border-dashed px-2 py-0.5 text-gray-500 rounded-lg"
-                >${kv[1]}</span
+                >${kv[0][1]}</span
               >
-            </div>`
-          )}
+            </div>`;
+          })}
         </div>
       </div>
     `;
