@@ -31,8 +31,8 @@ export class Collection extends LitElement {
 
     this.addEventListener('delete-step', async (event) => {
       const step_index = event.detail.step;
-      const steps = this.collection.steps;
-      this.collection.steps = steps.filter((s, ind) => step_index !== ind);
+      this.collection.steps[step_index] = undefined;
+      this.collection.steps = this.collection.steps.filter((s) => !!s);
       await this.saveSteps();
     });
   }
@@ -291,7 +291,21 @@ class Step extends LitElement {
         <button @click=${() => (this.editModal = true)}>
           <i class="fa fa-regular fa-edit" aria-hidden="true"></i>
         </button>
-        <button class="text-red-500">
+        <button
+          class="text-red-500"
+          @click=${() => {
+            if (confirm('Are you sure you want to delete this step')) {
+              const e = new CustomEvent('delete-step', {
+                detail: {
+                  step: this.ind,
+                },
+                bubbles: true,
+                composed: true,
+              });
+              this.dispatchEvent(e);
+            }
+          }}
+        >
           <i class="fa fa-trash" aria-hidden="true"></i>
         </button>
       </div>
@@ -698,7 +712,9 @@ class NewStepModal extends LitElement {
                         }}
                         class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                       />
-                      <span class="rotate-90 absolute right-2 top-2">></span>
+                      <span class="absolute right-2 top-2">
+                        <i class="fa fa-chevron-down"></i>
+                      </span>
                       ${this.showMethods
                         ? html` <div
                             class="w-full flex flex-col left-0 shadow-md rounded-lg bg-white z-10 absolute top-[100%]"
@@ -1178,7 +1194,9 @@ class CustomSelect extends LitElement {
           }}
           class="flex h-7 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         />
-        <span class="rotate-90 absolute right-2 top-1">></span>
+        <span class="absolute right-2 top-1">
+          <i class="fa fa-chevron-down"></i>
+        </span>
         ${this.showOptions
           ? html` <div
               class="w-full flex flex-col left-0 z-10 shadow-md rounded-lg bg-white absolute top-[100%] max-h-96 overflow-y-auto"
