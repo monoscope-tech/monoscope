@@ -70,105 +70,120 @@ export class Collection extends LitElement {
   }
 
   render() {
-    return html`<div class="w-full px-16">
-      ${this.showNewStepModal ? html`<step-modal></step-modal>` : null}
-      <div class="flex flex-col gap-2 h-48 border-b pt-8">
-        <h4 class="text-3xl font-medium text-gray-800">
-          ${this.collection.title}
-        </h4>
-        <p class="text-gray-500 max-w-xl">${this.collection.description}</p>
-        <div class="flex justify-between w-1/2 items-center mt-auto pr-3">
-          <h6 class="font-medium text-2xl text-gray-600">Steps</h6>
-          <div class="flex gap-8 items-center">
-            <button title="run all" class="text-blue-500 text-3xl">
-              <i class="fa fa-play" aria-hidden="true"></i>
-            </button>
-
-            <label class="relative inline-flex items-center cursor-pointer" x>
-              <input
-                type="checkbox"
-                value=""
-                class="sr-only peer"
-                @click=${() => {
-                  if (!this.showCode) {
-                    const yamlData = jsyaml.dump(this.collection.steps, {
-                      indent: 2,
-                    });
-                    setTimeout(() => {
-                      const editor = CodeMirror(
-                        document.getElementById('test-editor'),
-                        {
-                          value: yamlData,
-                          mode: 'yaml',
-                          lineNumbers: true,
-                          theme: 'dracula',
-                        }
-                      );
-                      window.testEditor = editor;
-                    });
-                    this.showCode = true;
-                  } else {
-                    if (window.testEditor) {
-                      const val = window.testEditor.getValue();
-                      const data = jsyaml.load(val);
-                      data.map((step) => {
-                        if (step.json) {
-                          step.json =
-                            typeof step.json === 'string'
-                              ? step.json
-                              : JSON.stringify(step.json);
-                        }
-                      });
-                      this.collection.steps = data;
-                    }
-                    this.showCode = false;
-                    this.saveSteps();
-                  }
-                }}
-              />
-              <div
-                class="w-9 h-3 bg-gray-200 peer-focus:outline-none peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full after:content-[''] after:absolute after:top-[0] after:start-[0] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"
-              ></div>
-              <span
-                class="ms-3 text-sm font-medium text-gray-900 dark:text-gray-300"
-                >Code</span
+    return html` 
+    ${this.showNewStepModal ? html`<step-modal></step-modal>` : null}
+    <div class="w-full grid grid-cols-9 h-[calc(100vh-50px)]">
+        <div class="flex flex-col gap-2 col-span-2 h-full px-4 pt-8 border-r">
+          <h4 class="text-3xl font-medium text-gray-800">
+            ${this.collection.title}
+          </h4>
+          <p class="text-gray-500 max-w-xl">${this.collection.description}</p>
+          <div
+            class="flex justify-between items-center"
+          >
+            <div class="flex gap-8 items-center">
+              <button
+                title="run all"
+                class="bg-blue-500 text-white gap-2 flex items-center rounded px-3 py-1"
               >
-            </label>
+                Run all
+                <i class="fa fa-play" aria-hidden="true"></i>
+              </button>
+            </div>
           </div>
         </div>
-      </div>
-      <div class="w-full grid grid-cols-2 h-[calc(100vh-220px)]">
-        ${this.showCode
-          ? html`<div
-              id="test-editor"
-              class="w-full h-full overflow-y-hidden border-r"
-            ></div>`
-          : html` <div
-              class="flex flex-col overflow-y-auto border-r pr-3 h-full gap-4 py-3"
-            >
-              ${this.collection.steps?.map(
-                (step, ind) =>
-                  html`<step-element .data=${step} ind=${ind}></step-element>`
-              )}
-              ${this.collection.steps?.length === 0
-                ? html`<div
-                    class="self-center text-center text-lg max-w-lg mt-10 font-medium text-gray-700"
-                  >
-                    This collection has no test steps, click the plus button to
-                    add test steps
-                  </div>`
-                : null}
-              <button
-                class="bg-blue-500 px-2 py-1 self-center h-10 w-10 text-2xl rounded-full text-white active:ring-1"
-                @click=${() => (this.showNewStepModal = true)}
+        <div class="flex flex-col col-span-4 gap-4 h-full overflow-y-hidden border-r">
+          <div class="flex justify-between items-center w-full pt-3 px-4">
+            <h3 class="text-gray-700 font-medium text-2xl">Steps</h3>
+              <label class="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  value=""
+                  class="sr-only peer"
+                  @click=${() => {
+                    if (!this.showCode) {
+                      const yamlData = jsyaml.dump(this.collection.steps, {
+                        indent: 2,
+                      });
+                      setTimeout(() => {
+                        const editor = CodeMirror(
+                          document.getElementById('test-editor'),
+                          {
+                            value: yamlData,
+                            mode: 'yaml',
+                            lineNumbers: true,
+                            theme: 'dracula',
+                          }
+                        );
+                        window.testEditor = editor;
+                      });
+                      this.showCode = true;
+                    } else {
+                      if (window.testEditor) {
+                        const val = window.testEditor.getValue();
+                        const data = jsyaml.load(val);
+                        data.map((step) => {
+                          if (step.json) {
+                            step.json =
+                              typeof step.json === 'string'
+                                ? step.json
+                                : JSON.stringify(step.json);
+                          }
+                        });
+                        this.collection.steps = data;
+                      }
+                      this.showCode = false;
+                      this.saveSteps();
+                    }
+                  }}
+                />
+                <div
+                  class="w-9 h-3 bg-gray-200 peer-focus:outline-none peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full after:content-[''] after:absolute after:top-[0] after:start-[0] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"
+                ></div>
+                <span
+                  class="ms-3 text-sm font-medium text-gray-900 dark:text-gray-300"
+                  >Code</span
+                >
+              </label>
+          </div>
+        ${
+          this.showCode
+            ? html`<div
+                id="test-editor"
+                class="w-full h-full overflow-y-hidden border-t"
+              ></div>`
+            : html` <div
+                class="flex flex-col overflow-y-auto px-2 h-full gap-4 py-3 border-t"
               >
-                +
-              </button>
-            </div>`}
-        <div class="h-full p-3 overflow-y-scroll">
-          <h3 class="mt-10 w-full text-center">
-            Run test to see the results appear here
-          </h3>
+                ${this.collection.steps?.map(
+                  (step, ind) =>
+                    html`<step-element .data=${step} ind=${ind}></step-element>`
+                )}
+                ${this.collection.steps?.length === 0
+                  ? html`<div
+                      class="self-center text-center flex flex-col gap-2 items-center max-w-md my-24 mb-10 text-gray-700"
+                    >
+                      <i class="text-5xl fa-solid fa-empty-set"></i>
+                      This collection has no test steps, click the plus button
+                      to add test steps
+                    </div>`
+                  : null}
+                <button
+                  class="bg-blue-500 px-2 py-1 self-center h-10 w-10 text-2xl rounded-full text-white active:ring-1"
+                  @click=${() => (this.showNewStepModal = true)}
+                >
+                  +
+                </button>
+              </div>`
+        }
+        </div>
+        <div class="h-full p-3 col-span-3 overflow-y-scroll">
+          <div class="mt-24 max-w-md  mx-auto flex flex-col gap-2 text-center">
+            <i class="fal fa-list-alt text-5xl"></i>
+            <span class="text-gray-700"
+              >Run test to see the results appear here</span
+            >
+          </div>
         </div>
       </div>
     </div>`;
@@ -285,7 +300,7 @@ class Step extends LitElement {
       <div
         class="absolute text-gray-600 bg-gray-50 px-4  flex items-center gap-3 right-2 translate-y-1/2"
       >
-        <button class="text-blue-500 text-xl">
+        <button class="text-blue-500 text-lg">
           <i class="fa fa-play" aria-hidden="true"></i>
         </button>
         <button @click=${() => (this.editModal = true)}>
@@ -840,7 +855,7 @@ class NewStepModal extends LitElement {
                 }}
                 class="mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 sm:mt-0 sm:w-[100px]"
               >
-                Cancel
+                Close
               </button>
             </div>
           </div>
