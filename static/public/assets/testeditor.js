@@ -113,16 +113,7 @@ export class Collection extends LitElement {
           </h4>
           <p class="text-gray-500 max-w-xl">${this.collection.description}</p>
           <div class="flex flex-col gap-10 mt-10">
-            <div class="rounded-lg border w-96 flex flex-col text-gray-700">
-              <h6 class="p-2 font-semibold border-b bg-gray-100">
-                Configurations
-              </h6>
-              <div class="p-2 flex flex-col gap-2">
-                <button class="self-center text-blue-500 font-medium">
-                  <i class="fa fa-plus"></i>
-                </button>
-              </div>
-            </div>
+            <config-element></config-element>
             <div class="rounded-lg border w-96 flex flex-col text-gray-700">
               <h6 class="p-2 font-semibold border-b bg-gray-100">Scheduling</h6>
               <div class="p-2 w-full flex flex-col gap-2">
@@ -209,6 +200,85 @@ export class Collection extends LitElement {
 }
 
 customElements.define('test-editor', Collection);
+
+class Config extends LitElement {
+  static properties = {
+    showConfigModal: {},
+  };
+  render() {
+    return html` <div
+      class="rounded-lg border w-96 flex flex-col text-gray-700"
+    >
+      <h6 class="p-2 font-semibold border-b bg-gray-100">Configurations</h6>
+      <div class="p-2 flex flex-col gap-2">
+        <button
+          class="self-center text-blue-500 font-medium"
+          @click=${() => (this.showConfigModal = true)}
+        >
+          <i class="fa fa-plus"></i>
+        </button>
+      </div>
+      ${!this.showConfigModal
+        ? html`
+            <div
+              class="fixed inset-0 z-50 w-screen overflow-y-auto bg-gray-300 bg-opacity-50"
+              id="modal-bg"
+              @click=${(e) => {
+                this.showConfigModal = false;
+              }}
+            >
+              <div
+                class="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0"
+              >
+                <div
+                  class="relative transform overflow-hidden rounded-lg bg-white shadow-sm text-left transition-all  w-full max-w-2xl"
+                  @click=${(e) => {
+                    e.stopPropagation();
+                  }}
+                >
+                  <div class="w-full">
+                    <h3
+                      class="text-lg  w-full px-6 py-4 border-b font-semibold leading-6 text-gray-700"
+                      id="modal-title"
+                    >
+                      Add config
+                    </h3>
+                    <div class="flex flex-col gap-4 p-6">
+                      <div class="flex flex-col gap-1 relative">
+                        <label for="var-name" class="font-medium leading-none"
+                          >Variable name</label
+                        >
+                        <input
+                          class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                          name="var-name"
+                          placeholder="Variable name"
+                        />
+                      </div>
+                      <div class="w-full flex flex-col gap-1">
+                        <label for="var-value" class="font-medium leading-none"
+                          >Variable value</label
+                        >
+                        <input
+                          class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                          name="var-value"
+                          placeholder="Variable value"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          `
+        : null}
+    </div>`;
+  }
+  createRenderRoot() {
+    return this;
+  }
+}
+
+customElements.define('config-element', Config);
 
 class Step extends LitElement {
   static properties = {
