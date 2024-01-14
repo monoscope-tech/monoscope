@@ -68,20 +68,77 @@ export class Collection extends LitElement {
     });
     document.querySelector('body').dispatchEvent(event);
   }
+  toggleCode() {
+    if (!this.showCode) {
+      const yamlData = jsyaml.dump(this.collection.steps, {
+        indent: 2,
+      });
+      setTimeout(() => {
+        const editor = CodeMirror(document.getElementById('test-editor'), {
+          value: yamlData,
+          mode: 'yaml',
+          lineNumbers: true,
+          theme: 'dracula',
+        });
+        window.testEditor = editor;
+      });
+      this.showCode = true;
+    } else {
+      if (window.testEditor) {
+        const val = window.testEditor.getValue();
+        const data = jsyaml.load(val);
+        data.map((step) => {
+          if (step.json) {
+            step.json =
+              typeof step.json === 'string'
+                ? step.json
+                : JSON.stringify(step.json);
+          }
+        });
+        this.collection.steps = data;
+      }
+      this.showCode = false;
+      this.saveSteps();
+    }
+  }
 
   render() {
-    return html` 
-    ${this.showNewStepModal ? html`<step-modal></step-modal>` : null}
-    <div class="w-full grid grid-cols-9 h-[calc(100vh-50px)]">
-        <div class="flex flex-col gap-2 col-span-2 h-full px-4 pt-8 border-r">
+    return html` ${this.showNewStepModal
+        ? html`<step-modal></step-modal>`
+        : null}
+      <div class="w-full grid grid-cols-8 h-[calc(100vh-50px)]">
+        <div class="flex flex-col gap-3 col-span-2 h-full px-4 pt-8 border-r">
           <h4 class="text-3xl font-medium text-gray-800">
             ${this.collection.title}
           </h4>
           <p class="text-gray-500 max-w-xl">${this.collection.description}</p>
-          <div
-            class="flex justify-between items-center"
-          >
-            <div class="flex gap-8 items-center">
+          <div class="flex flex-col gap-10 mt-10">
+            <div class="rounded-lg border w-96 flex flex-col text-gray-700">
+              <h6 class="p-2 font-semibold border-b bg-gray-100">
+                Configurations
+              </h6>
+              <div class="p-2 flex flex-col gap-2">
+                <button class="self-center text-blue-500 font-medium">
+                  <i class="fa fa-plus"></i>
+                </button>
+              </div>
+            </div>
+            <div class="rounded-lg border w-96 flex flex-col text-gray-700">
+              <h6 class="p-2 font-semibold border-b bg-gray-100">Scheduling</h6>
+              <div class="p-2 w-full flex flex-col gap-2">
+                <button class="self-center text-blue-500 font-bold">
+                  <i class="fa fa-plus"></i>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div
+          class="flex flex-col col-span-3 gap-4 h-full overflow-y-hidden border-r"
+        >
+          <div class="flex justify-between items-center w-full pt-3 px-4">
+            <h3 class="text-gray-700 font-medium text-2xl">Steps</h3>
+            <div class="flex gap-2">
               <button
                 title="run all"
                 class="bg-blue-500 text-white gap-2 flex items-center rounded px-3 py-1"
@@ -89,65 +146,25 @@ export class Collection extends LitElement {
                 Run all
                 <i class="fa fa-play" aria-hidden="true"></i>
               </button>
-            </div>
-          </div>
-        </div>
-        <div class="flex flex-col col-span-4 gap-4 h-full overflow-y-hidden border-r">
-          <div class="flex justify-between items-center w-full pt-3 px-4">
-            <h3 class="text-gray-700 font-medium text-2xl">Steps</h3>
               <label class="relative inline-flex items-center cursor-pointer">
                 <input
                   type="checkbox"
                   value=""
                   class="sr-only peer"
-                  @click=${() => {
-                    if (!this.showCode) {
-                      const yamlData = jsyaml.dump(this.collection.steps, {
-                        indent: 2,
-                      });
-                      setTimeout(() => {
-                        const editor = CodeMirror(
-                          document.getElementById('test-editor'),
-                          {
-                            value: yamlData,
-                            mode: 'yaml',
-                            lineNumbers: true,
-                            theme: 'dracula',
-                          }
-                        );
-                        window.testEditor = editor;
-                      });
-                      this.showCode = true;
-                    } else {
-                      if (window.testEditor) {
-                        const val = window.testEditor.getValue();
-                        const data = jsyaml.load(val);
-                        data.map((step) => {
-                          if (step.json) {
-                            step.json =
-                              typeof step.json === 'string'
-                                ? step.json
-                                : JSON.stringify(step.json);
-                          }
-                        });
-                        this.collection.steps = data;
-                      }
-                      this.showCode = false;
-                      this.saveSteps();
-                    }
-                  }}
+                  @click=${() => this.toggleCode()}
                 />
                 <div
-                  class="w-9 h-3 bg-gray-200 peer-focus:outline-none peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full after:content-[''] after:absolute after:top-[0] after:start-[0] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"
+                  class="w-9 h-3 bg-gray-200 peer-focus:outline-none peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full after:content-[''] after:absolute after:top-[5px] after:start-[0] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"
                 ></div>
                 <span
                   class="ms-3 text-sm font-medium text-gray-900 dark:text-gray-300"
-                  >Code</span
+                >
+                  Code</span
                 >
               </label>
+            </div>
           </div>
-        ${
-          this.showCode
+          ${this.showCode
             ? html`<div
                 id="test-editor"
                 class="w-full h-full overflow-y-hidden border-t"
@@ -174,8 +191,7 @@ export class Collection extends LitElement {
                 >
                   +
                 </button>
-              </div>`
-        }
+              </div>`}
         </div>
         <div class="h-full p-3 col-span-3 overflow-y-scroll">
           <div class="mt-24 max-w-md  mx-auto flex flex-col gap-2 text-center">
@@ -185,8 +201,7 @@ export class Collection extends LitElement {
             >
           </div>
         </div>
-      </div>
-    </div>`;
+      </div>`;
   }
   createRenderRoot() {
     return this;

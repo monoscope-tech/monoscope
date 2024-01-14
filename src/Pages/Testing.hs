@@ -141,7 +141,7 @@ testingPage pid colls = do
 
 collectionCard :: Projects.ProjectId -> Testing.CollectionListItem -> Html ()
 collectionCard pid col = do
-  div_ [class_ "rounded-xl border  p-4  flex flex-col gap-5 text-gray-700 h-full shadow hover:shadow-lg"] $ do
+  div_ [class_ "rounded-xl border p-4 flex flex-col gap-5 text-gray-700 h-full shadow hover:shadow-lg"] $ do
     a_ [href_ ("/p/" <> pid.toText <> "/testing/" <> col.id.toText)] $ do
       div_ [class_ "flex flex-col gap-5"] $ do
         div_ [class_ "flex items-center justify-between"] $ do
