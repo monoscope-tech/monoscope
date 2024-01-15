@@ -2,6 +2,7 @@
 module Pkg.Parser (parseQueryStringToWhereClause) where
 
 import Control.Monad.Combinators.Expr
+import Data.Foldable (foldl)
 import Data.Text qualified as T
 import Data.Text.Display (Display, display, displayBuilder, displayParen, displayPrec)
 import Relude hiding (GT, LT, many, some)
@@ -68,21 +69,22 @@ symbol = L.symbol sc
 
 
 -- >>> parse pSubject "" "key"
--- Right (Subject "key" [FieldKey ""])
+-- Right (Subject "key" [])
 -- >>> parse pSubject "" "key.abc[1]"
--- Right (Subject "key" [FieldKey "",ArrayIndex "abc" 1])
+-- Right (Subject "key" [ArrayIndex "abc" 1])
 -- >>> parse pSubject "" "key.abc[*]"
--- Right (Subject "key" [FieldKey "",ArrayWildcard "abc"])
+-- Right (Subject "key" [ArrayWildcard "abc"])
 -- >>> parse pSubject "" "key.abc[*].xyz"
--- Right (Subject "key" [FieldKey "",ArrayWildcard "abc",FieldKey "xyz"])
+-- Right (Subject "key" [ArrayWildcard "abc",FieldKey "xyz"])
 -- >>> parse pSubject "" "abc[*].xyz"
 -- Right (Subject "abc" [ArrayWildcard "",FieldKey "xyz"])
 -- >>> parse pSubject "" "abc[1].xyz.cde[*]"
 -- Right (Subject "abc" [ArrayIndex "" 1,FieldKey "xyz",ArrayWildcard "cde"])
+-- >>> parse pSubject "" "request_body.message.tags[*].name"
+-- Right (Subject "request_body" [FieldKey "message",ArrayWildcard "tags",FieldKey "name"])
 pSubject :: Parser Subject
 pSubject = do
-  primaryKey <- toText <$> some (alphaNumChar <|> oneOf ("-_" :: [Char]))
-  firstField <- optional $ pSquareBracketKey ""
+  (primaryKey, firstField) <- pPrimaryKey
   fields <- many $ char '.' *> pFieldKey
   return $ Subject primaryKey $ maybeToList firstField ++ fields
 
@@ -95,8 +97,21 @@ pSubject = do
 -- Right (ArrayWildcard "abc")
 pFieldKey :: Parser FieldKey
 pFieldKey = do
-  key <- toText <$> some (alphaNumChar <|> oneOf ("-_" :: [Char]))
-  pSquareBracketKey key
+  key <- toText <$> some (alphaNumChar <|> oneOf ("-_" :: String))
+  try (pSquareBracketKey key) <|> pure (FieldKey key)
+
+
+-- >>> parse ( pPrimaryKey ) "" "abc[1]"
+-- Right ("abc",Just (ArrayIndex "" 1))
+-- >>> parse ( pPrimaryKey ) "" "abc[*]"
+-- Right ("abc",Just (ArrayWildcard ""))
+-- >>> parse ( pPrimaryKey ) "" "abc"
+-- Right ("abc",Nothing)
+pPrimaryKey :: Parser (Text, Maybe FieldKey)
+pPrimaryKey = do
+  key <- toText <$> some (alphaNumChar <|> oneOf ("-_" :: String))
+  fKey <- optional $ pSquareBracketKey ""
+  pure (key, fKey)
 
 
 -- >>> parse (pSquareBracketKey "") "" "[1]"
@@ -105,16 +120,19 @@ pFieldKey = do
 -- Right (ArrayWildcard "key")
 pSquareBracketKey :: Text -> Parser FieldKey
 pSquareBracketKey key = do
-  arrayAccess <- optional $ sqParens (try (Right <$> num) <|> Left <$> star)
-  case arrayAccess of
-    Just (Left ()) -> pure $ ArrayWildcard key
-    Just (Right idx) -> pure $ ArrayIndex key idx
-    Nothing -> pure $ FieldKey key
+  arrayAcess <- sqParens num
+  pure $ ArrayIndex key arrayAcess
   where
+    -- arrayAccess <- sqParens (try (Right <$> num) <|> Left <$> star)
+    -- case arrayAccess of
+    --   Left () -> pure $ ArrayWildcard key
+    --   Right idx -> pure $ ArrayIndex key idx
+
     num :: Parser Int
     num = Unsafe.read <$> some digitChar
-    star = char '*' >> pass
 
+
+-- star = char '*' >> pass
 
 sqParens :: Parser a -> Parser a
 sqParens = between (symbol "[") (symbol "]")
@@ -136,14 +154,13 @@ pValues =
 
 pTerm :: Parser Expr
 pTerm =
-  try (Eq <$> pSubject <* void (symbol "=") <*> pValues)
+  (Paren <$> parens pExpr)
+    <|> try (Eq <$> pSubject <* void (symbol "=") <*> pValues)
     <|> try (NotEq <$> pSubject <* void (symbol "!=") <*> pValues)
     <|> try (GT <$> pSubject <* void (symbol ">") <*> pValues)
     <|> try (LT <$> pSubject <* void (symbol "<") <*> pValues)
     <|> try (GTEq <$> pSubject <* void (symbol ">=") <*> pValues)
     <|> try (LTEq <$> pSubject <* void (symbol "<=") <*> pValues)
-    <|> Paren
-    <$> parens pExpr
 
 
 pExpr :: Parser Expr
@@ -169,13 +186,6 @@ binary :: Text -> (Expr -> Expr -> Expr) -> Operator Parser Expr
 binary name f = InfixL (f <$ symbol name)
 
 
--- >>> parseQueryStringToWhereClause "a.b=\"x\" AND (x=1 OR b!=2) "
--- Right "a->>'b'='x' AND (x=1 OR b!=2)"
--- >>> parseQueryStringToWhereClause "a.b[*].c=\"x\""
--- Right "a->'b[*]'->>'c'='x'"
--- >>> parseQueryStringToWhereClause "a.b.c=\"xyz\""
--- Right "a->'b'->>'c'='xyz'"
-
 -- parse parseQuery "" "request_body.v1.v2 = \"abc\""
 -- Eq(Subject "request_body" [FieldKey "v1", FieldKey "v2"]) (Str "abc").
 parseQuery :: Parser Expr
@@ -185,8 +195,8 @@ parseQuery = pExpr <* eof
 -- TODO:
 --
 --  - Query arrays
---  - - query real numbers
---  - - wildcard query
+--  - - query real numbers [x]
+--  - - wildcard query [x]
 --  - Group by
 --  - Aggregate by / rollup
 --  -
@@ -196,42 +206,27 @@ parseQuery = pExpr <* eof
 -- SQL Where clause segment interpreter
 --
 -------------------------------------------------------
--- instance Display Subject where
---   displayPrec prec (Subject x []) = displayPrec prec x
---   displayPrec prec (Subject x [y]) = displayPrec prec $ x <> "->>" <> "'" <> y <> "'"
---   displayPrec prec (Subject x z) = do
---     let z' = reverse $ map (\a -> "'" <> a <> "'") z
---     let (y, ys) = (Unsafe.head z', reverse $ Unsafe.tail z')
---     let val = x <> "->" <> T.intercalate "->" ys <> "->>" <> y
---     displayPrec prec val
 
+-- >>> display (Subject "request_body" [FieldKey "message"])
+-- "request_body->>'message'"
+-- >>> display (Subject "errors" [ArrayIndex "" 0, FieldKey "message"])
+-- "errors->0->>'message'"
+-- >>> display (Subject "errors" [ArrayWildcard "", ArrayIndex "message" 0, FieldKey "details"])
+-- "jsonb_array_elements(errors)->'message'->0->>'details'"
+-- >>> display (Subject "abc" [ArrayWildcard "",FieldKey "xyz"])
+-- "jsonb_array_elements(abc)->>'xyz'"
+-- >>> display (Subject "request_body" [FieldKey "message", ArrayWildcard "tags", FieldKey "name"])
+-- "jsonb_array_elements(request_body->>'message'->'tags')->>'name'"
 instance Display Subject where
   displayPrec prec (Subject x []) = displayPrec prec x
-  displayPrec prec (Subject x ys) = do
-    let (fields, jsonPaths) = foldr processField ([], False) ys
-    let val =
-          if jsonPaths
-            then buildJsonArrayElements x fields
-            else x <> "->" <> T.intercalate "->" fields
-    displayPrec prec val
-
-
--- Process each field to detect and handle JSON array path
-processField :: Text -> ([Text], Bool) -> ([Text], Bool)
-processField field (acc, jsonPathDetected) =
-  if T.isSuffixOf "[]" field
-    then (T.dropEnd 2 field : acc, True)
-    else (field : acc, jsonPathDetected)
-
-
--- Build the query with json_array_elements
-buildJsonArrayElements :: Text -> [Text] -> Text
-buildJsonArrayElements x fields = foldr applyJsonArrayElements "" fields
-  where
-    applyJsonArrayElements field acc =
-      if T.null acc
-        then x <> "->" <> "'" <> field <> "'"
-        else "json_array_elements(" <> acc <> ")->" <> "'" <> field <> "'"
+  displayPrec prec (Subject x (y : ys)) = displayPrec prec $ foldl buildQuery (buildQuery x y) ys
+    where
+      buildQuery :: Text -> FieldKey -> Text
+      buildQuery acc (FieldKey key) = acc <> "->>'" <> key <> "'"
+      buildQuery acc (ArrayIndex "" idx) = acc <> "->" <> show idx
+      buildQuery acc (ArrayIndex key idx) = acc <> "->'" <> key <> "'->" <> show idx
+      buildQuery acc (ArrayWildcard "") = "jsonb_array_elements(" <> acc <> ")"
+      buildQuery acc (ArrayWildcard key) = "jsonb_array_elements(" <> acc <> "->'" <> key <> "')"
 
 
 instance Display Values where
@@ -263,6 +258,6 @@ instance Display Expr where
 -- >>> parseQueryStringToWhereClause "request_body.message!=\"blabla\" AND method=\"GET\""
 -- Right "request_body->>'message'!='blabla' AND method='GET'"
 -- >>> parseQueryStringToWhereClause "request_body.message.tags[*].name!=\"blabla\" AND method=\"GET\""
--- Left "1:26:\n  |\n1 | request_body.message.tags[*].name!=\"blabla\" AND method=\"GET\"\n  |                          ^^\nunexpected \"[*\"\nexpecting \"!=\", \"<=\", \">=\", '<', '=', '>', or alphanumeric character\n"
+-- Right "jsonb_array_elements(request_body->>'message'->'tags')->>'name'!='blabla' AND method='GET'"
 parseQueryStringToWhereClause :: Text -> Either Text Text
 parseQueryStringToWhereClause q = if q == "" then Right "" else bimap (toText . errorBundlePretty) display (parse parseQuery "" q)
