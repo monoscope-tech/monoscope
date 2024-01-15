@@ -257,12 +257,12 @@ class SettingsModal extends LitElement {
               class="text-lg  w-full px-6 py-4 border-b font-semibold leading-6 text-gray-700"
               id="modal-title"
             >
-              Add config
+              Settings
             </h3>
             <div class="flex flex-col gap-4 p-6">
-              <div class="flex flex-col gap-10 mt-10">
+              <div class="flex flex-col gap-10">
                 <config-element .config=${this.config || {}}></config-element>
-                <div class="rounded-lg border w-96 flex flex-col text-gray-700">
+                <div class="rounded-lg border flex flex-col text-gray-700">
                   <h6 class="p-2 font-semibold border-b bg-gray-100">
                     Scheduling
                   </h6>
@@ -362,7 +362,7 @@ class ConfigModal extends LitElement {
   render() {
     return html`
       <div
-        class="fixed inset-0 z-50 w-screen overflow-y-auto bg-gray-300 bg-opacity-50"
+        class="fixed inset-0 z-50 w-full px-6 overflow-y-auto bg-gray-300 bg-opacity-30"
         id="modal-bg"
         @click=${(e) => this.closeModal()}
       >
