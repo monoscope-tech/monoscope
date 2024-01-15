@@ -6,6 +6,7 @@ export class Collection extends LitElement {
     showNewStepModal: {},
     showCode: {},
     config: {},
+    showSettings: {},
   };
   collections = [];
   pid = '';
@@ -19,6 +20,7 @@ export class Collection extends LitElement {
     const dataStore = document.getElementById('test-data').dataset.collection;
     this.collection = JSON.parse(dataStore);
     this.showCode = false;
+    this.showSettings = false;
     this.addEventListener('add-step', this.handleAddStep);
     this.addEventListener('close-modal', () => {
       this.showNewStepModal = false;
@@ -40,6 +42,9 @@ export class Collection extends LitElement {
     this.addEventListener('update-config', (event) => {
       this.collection.config = event.detail.config;
       this.updateCollection('config', this.collection.config);
+    });
+    this.addEventListener('close-settings', () => {
+      this.showSettings = false;
     });
   }
 
@@ -120,28 +125,28 @@ export class Collection extends LitElement {
     return html` ${this.showNewStepModal
         ? html`<step-modal></step-modal>`
         : null}
-      <div class="w-full grid grid-cols-8 h-[calc(100vh-50px)]">
+      <div class="w-full grid grid-cols-9 h-[calc(100vh-50px)]">
         <div class="flex flex-col gap-3 col-span-2 h-full px-4 pt-8 border-r">
           <h4 class="text-3xl font-medium text-gray-800">
             ${this.collection.title}
           </h4>
           <p class="text-gray-500 max-w-xl">${this.collection.description}</p>
-          <div class="flex flex-col gap-10 mt-10">
-            <config-element
-              .config=${this.collection.config || {}}
-            ></config-element>
-            <div class="rounded-lg border w-96 flex flex-col text-gray-700">
-              <h6 class="p-2 font-semibold border-b bg-gray-100">Scheduling</h6>
-              <div class="p-2 w-full flex flex-col gap-2">
-                <button class="self-center text-blue-500 font-bold">
-                  <i class="fa fa-plus"></i>
-                </button>
-              </div>
-            </div>
+          <div>
+            <button
+              class="self-center text-blue-500 font-bold"
+              @click=${() => (this.showSettings = true)}
+            >
+              <i class="fa-solid fa-gear"></i>
+            </button>
           </div>
+          ${this.showSettings
+            ? html`<settings-modal
+                .config=${this.collection.config}
+              ></settings-modal>`
+            : null}
         </div>
         <div
-          class="flex flex-col col-span-3 gap-4 h-full overflow-y-hidden border-r"
+          class="flex flex-col col-span-4 gap-4 h-full overflow-y-hidden border-r"
         >
           <div class="flex justify-between items-center w-full pt-3 px-4">
             <h3 class="text-gray-700 font-medium text-2xl">Steps</h3>
@@ -217,6 +222,70 @@ export class Collection extends LitElement {
 
 customElements.define('test-editor', Collection);
 
+class SettingsModal extends LitElement {
+  static properties = {
+    config: {},
+  };
+  constructor() {
+    super();
+    this.config = {};
+  }
+  closeModal() {
+    this.dispatchEvent(
+      new CustomEvent('close-settings', { bubbles: true, composed: true })
+    );
+  }
+  render() {
+    return html` <div
+      class="fixed inset-0 z-50 w-screen overflow-y-auto bg-gray-300 bg-opacity-50"
+      id="modal-bg"
+      @click=${(e) => {
+        this.closeModal();
+      }}
+    >
+      <div
+        class="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0"
+      >
+        <div
+          class="relative transform overflow-hidden rounded-lg bg-white shadow-sm text-left transition-all  w-full max-w-2xl"
+          @click=${(e) => {
+            e.stopPropagation();
+          }}
+        >
+          <div class="w-full">
+            <h3
+              class="text-lg  w-full px-6 py-4 border-b font-semibold leading-6 text-gray-700"
+              id="modal-title"
+            >
+              Add config
+            </h3>
+            <div class="flex flex-col gap-4 p-6">
+              <div class="flex flex-col gap-10 mt-10">
+                <config-element .config=${this.config || {}}></config-element>
+                <div class="rounded-lg border w-96 flex flex-col text-gray-700">
+                  <h6 class="p-2 font-semibold border-b bg-gray-100">
+                    Scheduling
+                  </h6>
+                  <div class="p-2 w-full flex flex-col gap-2">
+                    <button class="self-center text-blue-500 font-bold">
+                      <i class="fa fa-plus"></i>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }
+  createRenderRoot() {
+    return this;
+  }
+}
+
+customElements.define('settings-modal', SettingsModal);
+
 class Config extends LitElement {
   static properties = {
     showConfigModal: {},
@@ -231,9 +300,7 @@ class Config extends LitElement {
     });
   }
   render() {
-    return html` <div
-      class="rounded-lg border w-96 flex flex-col text-gray-700"
-    >
+    return html` <div class="rounded-lg border flex flex-col text-gray-700">
       <h6 class="p-2 font-semibold border-b bg-gray-100">Configurations</h6>
       <div class="p-2 flex flex-col gap-2">
         <key-val .data=${this.config}></key-val>
