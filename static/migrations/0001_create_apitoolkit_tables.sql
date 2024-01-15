@@ -867,12 +867,14 @@ CREATE TABLE IF NOT EXISTS apis.testing
   project_id         UUID        NOT     NULL   REFERENCES projects.projects (id)              ON      DELETE CASCADE,
   last_run           TIMESTAMP   WITH    TIME   ZONE       DEFAULT NULL,
   title              TEXT        NOT     NULL   DEFAULT        '',
-  description   TEXT        NOT     NULL   DEFAULT        '',
+  description        TEXT        NOT     NULL   DEFAULT        '',
   steps              jsonb       NOT     NULL   DEFAULT    '[]'::jsonb,
+  config             jsonb       NOT     NULL   DEFAULT     '{}'::jsonb
   UNIQUE (id)
 );
 SELECT manage_updated_at('apis.testing');
 create index if not exists idx_apis_testing_project_Id on apis.testing(project_id); 
+ALTER TABLE apis.testing ADD COLUMN config  jsonb DEFAULT '{}'::jsonb
 
 COMMIT;
 

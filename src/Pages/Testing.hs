@@ -49,16 +49,24 @@ data TestCollectionForm = TestCollectionForm
 --   deriving stock (Show, Generic)
 --   deriving anyclass (FromJSON, ToJSON)
 
-testingPutH :: Session.PersistentSession -> Projects.ProjectId -> Testing.CollectionId -> Value -> DashboardM (Html ())
-testingPutH sess pid cid steps = do
+testingPutH :: Session.PersistentSession -> Projects.ProjectId -> Testing.CollectionId -> Text -> Value -> DashboardM (Html ())
+testingPutH sess pid cid action steps = do
   pool <- asks pool
   isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
-      _ <- withPool pool $ Testing.updateCollectionSteps cid steps
-      pure ""
+      case action of
+        "update_steps" -> do
+          _ <- withPool pool $ Testing.updateCollectionSteps cid steps
+          pure ""
+        "update_config" -> do
+          _ <- withPool pool $ Testing.updateCollectionConfig cid steps
+          pure ""
+        _ -> do
+          _ <- withPool pool $ Testing.updateCollectionSteps cid steps
+          pure ""
 
 
 testingPostH :: Sessions.PersistentSession -> Projects.ProjectId -> TestCollectionForm -> DashboardM (Headers '[HXTrigger] (Html ()))
@@ -83,6 +91,7 @@ testingPostH sess pid collection = do
               , title = collection.title
               , description = collection.description
               , steps = Aeson.Array []
+              , config = Aeson.object []
               }
       _ <- withPool pool do Testing.addCollection coll
       cols <- withPool pool do Testing.getCollections pid

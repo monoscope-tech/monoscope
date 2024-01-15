@@ -18,7 +18,6 @@ export class Collection extends LitElement {
     this.col_id = segs[4];
     const dataStore = document.getElementById('test-data').dataset.collection;
     this.collection = JSON.parse(dataStore);
-    this.config = this.collection.config;
     this.showCode = false;
     this.addEventListener('add-step', this.handleAddStep);
     this.addEventListener('close-modal', () => {
@@ -28,51 +27,60 @@ export class Collection extends LitElement {
     this.addEventListener('edit-step', async (event) => {
       const { step, ind } = event.detail.data;
       this.collection.steps[ind] = step;
-      await this.saveSteps();
+      await this.updateCollection('steps', this.collection.steps);
     });
 
     this.addEventListener('delete-step', async (event) => {
       const step_index = event.detail.step;
       this.collection.steps[step_index] = undefined;
       this.collection.steps = this.collection.steps.filter((s) => !!s);
-      await this.saveSteps();
+      await this.updateCollection('steps', this.collection.steps);
     });
+
     this.addEventListener('update-config', (event) => {
-      this.config = event.detail.config;
-      this.collection.config = this.config;
+      this.collection.config = event.detail.config;
+      this.updateCollection('config', this.collection.config);
     });
   }
 
   async handleAddStep(event) {
     const step = event.detail.data;
     this.collection.steps.push(step);
-    await this.saveSteps();
+    await this.updateCollection('steps', this.collection.steps);
   }
 
-  async saveSteps() {
-    const response = await fetch(
-      `/p/${this.pid}/testing/${this.col_id}/update_steps`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(this.collection.steps),
-      }
-    );
-
-    if (!response.ok) {
-      alert('Something went wrong');
-      return;
-    }
-    this.collection = { ...this.collection };
-    this.showNewStepModal = false;
-    const event = new CustomEvent('successToast', {
+  async updateCollection(action, value) {
+    const errorEvent = new CustomEvent('errorToast', {
       detail: {
-        value: ['Steps updated successfully'],
+        value: [`Something went wrong`],
       },
     });
-    document.querySelector('body').dispatchEvent(event);
+    try {
+      const response = await fetch(
+        `/p/${this.pid}/testing/${this.col_id}/update_${action}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(value),
+        }
+      );
+      if (!response.ok) {
+        document.querySelector('body').dispatchEvent(errorEvent);
+        return;
+      }
+      this.collection = { ...this.collection };
+      this.showNewStepModal = false;
+      const event = new CustomEvent('successToast', {
+        detail: {
+          value: [`${action} updated successfully`],
+        },
+      });
+      document.querySelector('body').dispatchEvent(event);
+    } catch (error) {
+      document.querySelector('body').dispatchEvent(errorEvent);
+    }
   }
   toggleCode() {
     if (!this.showCode) {
@@ -120,7 +128,7 @@ export class Collection extends LitElement {
           <p class="text-gray-500 max-w-xl">${this.collection.description}</p>
           <div class="flex flex-col gap-10 mt-10">
             <config-element
-              .config=${this.config || { hello: 'world' }}
+              .config=${this.collection.config || {}}
             ></config-element>
             <div class="rounded-lg border w-96 flex flex-col text-gray-700">
               <h6 class="p-2 font-semibold border-b bg-gray-100">Scheduling</h6>

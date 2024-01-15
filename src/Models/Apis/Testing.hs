@@ -8,6 +8,7 @@ module Models.Apis.Testing (
     getCollections,
     updateCollection,
     updateCollectionSteps,
+    updateCollectionConfig,
     getCollectionById,
 ) where
 
@@ -55,6 +56,7 @@ data Collection = Collection
     , title :: Text
     , description :: Text
     , steps :: Value
+    , config :: Value
     }
     deriving stock (Show, Generic)
     deriving anyclass (FromRow, ToRow, ToJSON, FromJSON)
@@ -110,3 +112,10 @@ updateCollectionSteps cid steps = do
     let q =
             [sql| UPDATE apis.testing SET steps=? WHERE id=? |]
     execute Update q (steps, cid)
+
+
+updateCollectionConfig :: CollectionId -> Value -> DBT IO Int64
+updateCollectionConfig cid config = do
+    let q =
+            [sql| UPDATE apis.testing SET config=? WHERE id=? |]
+    execute Update q (config, cid)
