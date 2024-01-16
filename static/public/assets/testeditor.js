@@ -131,6 +131,20 @@ export class Collection extends LitElement {
             ${this.collection.title}
           </h4>
           <p class="text-gray-500 max-w-xl">${this.collection.description}</p>
+          <div class="text-gray-700 text-sm">
+            <div class="flex gap-2 items-center">
+              <span>Created:</span>
+              <span class="font-semibold"
+                >${new Date(this.collection.createdAt).toLocaleString()}</span
+              >
+            </div>
+            <div class="flex gap-2 items-center">
+              <span>Last modified:</span>
+              <span class="font-semibold"
+                >${new Date(this.collection.updatedAt).toLocaleString()}</span
+              >
+            </div>
+          </div>
           <div>
             <button
               class="self-center text-blue-500  text-xl font-bold"
@@ -290,6 +304,14 @@ class SettingsModal extends LitElement {
                     </label>
                   </div>
                   <div class="p-2 w-full flex flex-col gap-2">
+                    <select class="px-2 py-1 rounded m-4">
+                      <option>Every 5 minutes</option>
+                      <option>Every 10 minutes</option>
+                      <option>Every 15 minutes</option>
+                      <option>Every 30 minutes</option>
+                      <option>Every hour</option>
+                      <option>Every day</option>
+                    </select>
                     <button class="self-center text-blue-500 font-bold">
                       <i class="fa fa-plus"></i>
                     </button>
