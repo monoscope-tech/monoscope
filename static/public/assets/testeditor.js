@@ -133,10 +133,11 @@ export class Collection extends LitElement {
           <p class="text-gray-500 max-w-xl">${this.collection.description}</p>
           <div>
             <button
-              class="self-center text-blue-500 font-bold"
+              class="self-center text-blue-500  text-xl font-bold"
               @click=${() => (this.showSettings = true)}
             >
               <i class="fa-solid fa-gear"></i>
+              settings
             </button>
           </div>
           ${this.showSettings
@@ -259,13 +260,35 @@ class SettingsModal extends LitElement {
             >
               Settings
             </h3>
-            <div class="flex flex-col gap-4 p-6">
+            <div
+              class="flex min-h-[30vh] max-h-[70vh] overflow-y-auto flex-col gap-4 p-6"
+            >
               <div class="flex flex-col gap-10">
                 <config-element .config=${this.config || {}}></config-element>
                 <div class="rounded-lg border flex flex-col text-gray-700">
-                  <h6 class="p-2 font-semibold border-b bg-gray-100">
-                    Scheduling
-                  </h6>
+                  <div
+                    class="w-full flex p-2 border-b items-center justify-between  bg-gray-100"
+                  >
+                    <h6 class="font-semibold">Scheduling</h6>
+                    <label
+                      class="relative inline-flex items-center cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        value=""
+                        class="sr-only peer"
+                        @click=${() => this.toggleCode()}
+                      />
+                      <div
+                        class="w-9 h-3 bg-gray-200 peer-focus:outline-none peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full after:content-[''] after:absolute after:top-0 after:start-[0] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"
+                      ></div>
+                      <span
+                        class="ms-3 text-sm font-medium text-gray-900 dark:text-gray-300"
+                      >
+                        on</span
+                      >
+                    </label>
+                  </div>
                   <div class="p-2 w-full flex flex-col gap-2">
                     <button class="self-center text-blue-500 font-bold">
                       <i class="fa fa-plus"></i>
@@ -303,7 +326,36 @@ class Config extends LitElement {
     return html` <div class="rounded-lg border flex flex-col text-gray-700">
       <h6 class="p-2 font-semibold border-b bg-gray-100">Configurations</h6>
       <div class="p-2 flex flex-col gap-2">
-        <key-val .data=${this.config}></key-val>
+        <div class="w-full flex flex-col gap-1">
+          ${Object.entries(this.config).map(
+            (kv) => html`<div class="flex gap-2 items-center w-full">
+              <span
+                class="text-sm w-full border border-dashed text-gray-700 px-2 p-1 rounded-lg"
+                >${kv[0]}</span
+              >
+              <span
+                class="text-sm w-full border border-dashed px-2 py-0.5 text-gray-500 rounded-lg"
+                >${kv[1]}</span
+              >
+              <button
+                class="text-sm text-red-500 font-medium"
+                @click=${() => {
+                  const conf = { ...this.config };
+                  delete conf[kv[0]];
+                  this.dispatchEvent(
+                    new CustomEvent('update-config', {
+                      detail: { config: conf },
+                      bubbles: true,
+                      composed: true,
+                    })
+                  );
+                }}
+              >
+                <i class="fa fa-trash"></i>
+              </button>
+            </div>`
+          )}
+        </div>
         <button
           class="self-center text-blue-500 font-medium"
           @click=${() => (this.showConfigModal = true)}
@@ -522,7 +574,9 @@ class Step extends LitElement {
     }
   }
   render() {
-    return html`<article class="border rounded-lg overflow-hidden relative">
+    return html`<article
+      class="border rounded-lg group overflow-hidden relative"
+    >
       ${this.editModal
         ? html`<step-modal
             title=${this.data.title}
@@ -538,8 +592,9 @@ class Step extends LitElement {
           ></step-modal>`
         : null}
       <div
-        class="absolute text-gray-600 bg-gray-50 px-4  flex items-center gap-3 right-2 translate-y-1/2"
+        class="absolute text-gray-600 bg-gray-50 px-4  hidden  group-hover:flex items-center gap-3 right-2 translate-y-1/2"
       >
+        <button>View results</button>
         <button class="text-blue-500 text-lg">
           <i class="fa fa-play" aria-hidden="true"></i>
         </button>
@@ -565,19 +620,22 @@ class Step extends LitElement {
         </button>
       </div>
       <button
-        class="text-left bg-gray-50 p-3 w-full flex flex-col"
+        class="text-left bg-gray-50 p-3 w-full flex gap-3"
         @click=${(e) => (this.showDetails = !this.showDetails)}
       >
-        <div class="flex items-center gap-3">
+        <span
+          class="bg-green-500 mt-[6px] h-3 w-3 rounded-full"
+          title="passed"
+        ></span>
+        <div class="flex flex-col gap-1">
           <span class="text-gray-600 font-medium">${this.data.title}</span>
-          <!-- <div class="flex gap-1 items-center text-xs text-gray-500">
-            <span class="font-bold text-green-500"
+          <div class="flex gap-1 text-xs text-gray-500">
+            <span class=${'font-bold ' + this.getMethodColor()}
               >${this.getMethodUrl(this.data)[0]}</span
             >
             <span>${this.getMethodUrl(this.data)[1]}</span>
-          </div> -->
+          </div>
         </div>
-        <span class="text-green-500 text-xs">passed</span>
       </button>
       ${this.showDetails
         ? html`<div class="bg-white p-3 w-full flex flex-col gap-4">
