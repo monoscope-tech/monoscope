@@ -10,6 +10,7 @@ module Models.Apis.Testing (
     updateCollectionSteps,
     updateCollectionConfig,
     getCollectionById,
+    updateSchedule,
 ) where
 
 import Data.Default (Default)
@@ -122,3 +123,10 @@ updateCollectionConfig cid config = do
     let q =
             [sql| UPDATE apis.testing SET config=? WHERE id=? |]
     execute Update q (config, cid)
+
+
+updateSchedule :: CollectionId -> Maybe Text -> Bool -> DBT IO Int64
+updateSchedule cid schedule isScheduled = do
+    let q =
+            [sql| UPDATE apis.testing SET schedule=?, is_scheduled=? WHERE id=? |]
+    execute Update q (schedule, isScheduled, cid)

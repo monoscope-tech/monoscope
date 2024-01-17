@@ -28,7 +28,6 @@ import Lucid.Base
 import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_)
 import Models.Apis.Testing qualified as Testing
 import Models.Users.Sessions qualified as Session
-import Network.Wreq.Session (Session)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -49,6 +48,14 @@ data TestCollectionForm = TestCollectionForm
 --   deriving stock (Show, Generic)
 --   deriving anyclass (FromJSON, ToJSON)
 
+data ScheduleForm = ScheduleForm
+  { schedule :: Maybe Text
+  , isScheduled :: Bool
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (FromForm, FromJSON)
+
+
 testingPutH :: Session.PersistentSession -> Projects.ProjectId -> Testing.CollectionId -> Text -> Value -> DashboardM (Html ())
 testingPutH sess pid cid action steps = do
   pool <- asks pool
@@ -64,8 +71,15 @@ testingPutH sess pid cid action steps = do
         "update_config" -> do
           _ <- withPool pool $ Testing.updateCollectionConfig cid steps
           pure ""
+        "update_schedule" -> do
+          let sch = decode (encode steps) :: Maybe ScheduleForm
+          case sch of
+            Just s -> do
+              _ <- withPool pool $ Testing.updateSchedule cid s.schedule s.isScheduled
+              pure ""
+            Nothing -> do
+              pure ""
         _ -> do
-          _ <- withPool pool $ Testing.updateCollectionSteps cid steps
           pure ""
 
 

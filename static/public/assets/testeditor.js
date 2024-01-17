@@ -19,6 +19,7 @@ export class Collection extends LitElement {
     this.col_id = segs[4];
     const dataStore = document.getElementById('test-data').dataset.collection;
     this.collection = JSON.parse(dataStore);
+    console.log(this.collection);
     this.showCode = false;
     this.showSettings = false;
     this.addEventListener('add-step', this.handleAddStep);
@@ -42,6 +43,14 @@ export class Collection extends LitElement {
     this.addEventListener('update-config', (event) => {
       this.collection.config = event.detail.config;
       this.updateCollection('config', this.collection.config);
+    });
+    this.addEventListener('update-schedule', (event) => {
+      this.collection.schedule = event.detail.schedule;
+      this.collection.isScheduled = event.detail.isScheduled;
+      this.updateCollection('schedule', {
+        schedule: this.collection.schedule,
+        isScheduled: this.collection.isScheduled,
+      });
     });
     this.addEventListener('close-settings', () => {
       this.showSettings = false;
@@ -157,6 +166,8 @@ export class Collection extends LitElement {
           ${this.showSettings
             ? html`<settings-modal
                 .config=${this.collection.config}
+                .schedule=${this.collection.schedule}
+                .isScheduled=${this.collection.isScheduled}
               ></settings-modal>`
             : null}
         </div>
@@ -240,16 +251,44 @@ customElements.define('test-editor', Collection);
 class SettingsModal extends LitElement {
   static properties = {
     config: {},
+    schedule: { type: String },
+    isScheduled: { type: Boolean },
+    changed: { type: Boolean },
   };
   constructor() {
     super();
     this.config = {};
+    this.schedule = '*/30 * * * *';
+    this.isScheduled = true;
+    this.changed = false;
   }
+
   closeModal() {
     this.dispatchEvent(
       new CustomEvent('close-settings', { bubbles: true, composed: true })
     );
   }
+
+  updateColl() {
+    if (!this.changed) return;
+    this.dispatchEvent(
+      new CustomEvent('update-schedule', {
+        detail: {
+          schedule: this.schedule,
+          isScheduled: this.isScheduled,
+        },
+        bubbles: true,
+        composed: true,
+      })
+    );
+    this.changed = false;
+  }
+
+  handleScheduleChange(e) {
+    this.schedule = e.target.value;
+    this.changed = true;
+  }
+
   render() {
     return html` <div
       class="fixed inset-0 z-50 w-screen overflow-y-auto bg-gray-300 bg-opacity-50"
@@ -284,14 +323,20 @@ class SettingsModal extends LitElement {
                     class="w-full flex p-2 border-b items-center justify-between  bg-gray-100"
                   >
                     <h6 class="font-semibold">Scheduling</h6>
+                  </div>
+                  <div class="p-3 w-full flex flex-col gap-3">
                     <label
-                      class="relative inline-flex items-center cursor-pointer"
+                      class="relative inline-flex items-center cursor-pointer w-max"
                     >
                       <input
                         type="checkbox"
                         value=""
                         class="sr-only peer"
-                        @click=${() => this.toggleCode()}
+                        .checked=${this.isScheduled}
+                        @click=${(e) => {
+                          this.isScheduled = e.target.checked;
+                          this.changed = true;
+                        }}
                       />
                       <div
                         class="w-9 h-3 bg-gray-200 peer-focus:outline-none peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full after:content-[''] after:absolute after:top-0 after:start-[0] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"
@@ -302,18 +347,31 @@ class SettingsModal extends LitElement {
                         on</span
                       >
                     </label>
-                  </div>
-                  <div class="p-2 w-full flex flex-col gap-2">
-                    <select class="px-2 py-1 rounded m-4">
-                      <option>Every 5 minutes</option>
-                      <option>Every 10 minutes</option>
-                      <option>Every 15 minutes</option>
-                      <option>Every 30 minutes</option>
-                      <option>Every hour</option>
-                      <option>Every day</option>
-                    </select>
-                    <button class="self-center text-blue-500 font-bold">
-                      <i class="fa fa-plus"></i>
+                    <div class="flex items-center gap-4">
+                      <select
+                        class="px-2 py-2 w-full rounded"
+                        .value=${this.schedule}
+                        @change=${this.handleScheduleChange}
+                      >
+                        <option value="*/5 * * * *">Every 5 minutes</option>
+                        <option value="*/10 * * * *">Every 10 minutes</option>
+                        <option value="*/15 * * * *">Every 15 minutes</option>
+                        <option value="*/30 * * * *">Every 30 minutes</option>
+                        <option value="0 * * * *">Every hour</option>
+                        <option value="0 0 * * *">Every day</option>
+                      </select>
+                    </div>
+
+                    <button
+                      @click=${() => this.updateColl()}
+                      class=${'px-4 py-1 text-white rounded ' +
+                      `${
+                        this.changed
+                          ? 'bg-blue-500 hover:bg-blue-600 active:ring-1'
+                          : 'bg-blue-200'
+                      }`}
+                    >
+                      Save
                     </button>
                   </div>
                 </div>
