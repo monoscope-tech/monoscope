@@ -874,8 +874,9 @@ CREATE TABLE IF NOT EXISTS apis.testing
 );
 SELECT manage_updated_at('apis.testing');
 create index if not exists idx_apis_testing_project_Id on apis.testing(project_id); 
-ALTER TABLE apis.testing ADD COLUMN config  jsonb DEFAULT '{}'::jsonb
-
+ALTER TABLE apis.testing ADD COLUMN config       jsonb DEFAULT '{}'::jsonb;
+ALTER TABLE apis.testing ADD COLUMN schedule     TEXT  DEFAULT NULL;
+ALTER TABLE apis.testing ADD COLUMN is_scheduled BOOL  NOT  NULL   DEFAULT 'f'
 COMMIT;
 
 

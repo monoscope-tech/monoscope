@@ -57,6 +57,8 @@ data Collection = Collection
     , description :: Text
     , steps :: Value
     , config :: Value
+    , schedule :: Maybe Text
+    , isScheduled :: Bool
     }
     deriving stock (Show, Generic)
     deriving anyclass (FromRow, ToRow, ToJSON, FromJSON)
@@ -70,10 +72,11 @@ data CollectionListItem = ReportListItem
     , createdAt :: ZonedTime
     , updatedAt :: ZonedTime
     , projectId :: Projects.ProjectId
-    , last_run :: Maybe ZonedTime
+    , lastRun :: Maybe ZonedTime
     , title :: Text
     , description :: Text
     , stepsCount :: Int
+    , schedule :: Maybe Text
     }
     deriving stock (Show, Generic)
     deriving anyclass (FromRow, ToRow)
@@ -101,7 +104,7 @@ getCollections :: Projects.ProjectId -> DBT IO (Vector CollectionListItem)
 getCollections pid = query Select q (Only pid)
     where
         q =
-            [sql| SELECT id, created_at, updated_at, project_id, last_run, title, description, jsonb_array_length(steps) as steps_count FROM apis.testing
+            [sql| SELECT id, created_at, updated_at, project_id, last_run, title, description, jsonb_array_length(steps) as steps_count, schedule FROM apis.testing
     WHERE project_id = ? 
     ORDER BY created_at DESC;
   |]

@@ -92,6 +92,8 @@ testingPostH sess pid collection = do
               , description = collection.description
               , steps = Aeson.Array []
               , config = Aeson.object []
+              , schedule = Nothing
+              , isScheduled = False
               }
       _ <- withPool pool do Testing.addCollection coll
       cols <- withPool pool do Testing.getCollections pid
@@ -163,9 +165,13 @@ collectionCard pid col = do
         div_ [class_ "flex flex-col w-full gap-2"] $ do
           h3_ [class_ "font-semibold tracking-tight text-xl"] $ toHtml col.title
           p_ [class_ "text-sm text-gray-500 break-words max-w-4xl"] $ toHtml col.description
-          div_ [class_ "flex gap-2 items-center text-xs rounded py-1"] $ do
-            span_ [class_ "font-bold"] "Last run"
-            span_ [class_ "text-gray-500"] $ ""
+          div_ [class_ "flex justify-between items-center"] do
+            div_ [class_ "flex gap-2 items-center text-xs rounded py-1"] $ do
+              span_ [class_ "font-bold"] "Last run"
+              span_ [class_ "text-gray-500"] $ toHtml $ maybe "-" (T.take 19 . toText . show) col.lastRun
+            div_ [class_ "flex gap-2 items-center text-xs rounded py-1"] $ do
+              span_ [class_ "font-bold"] "Schedule"
+              span_ [class_ "text-gray-500"] $ toHtml $ maybe "-" (T.take 19 . toText . show) col.lastRun
     div_ [class_ "text-sm flex items-center justify-between"] $ do
       div_ [class_ "flex gap-5 items-center"] $ do
         div_ [class_ "flex gap-2  rounded bg-gray-100 px-2 py-1"] $ do
