@@ -62,6 +62,7 @@ library
       Pages.GenerateSwagger
       Pages.GenerateSwaggerSpec
       Pages.Log
+      Pages.LogExplorer.LogItem
       Pages.ManualIngestion
       Pages.NonMember
       Pages.Onboarding
@@ -80,6 +81,9 @@ library
       Pkg.Mail
       Pkg.Ortto
       Pkg.Parser
+      Pkg.Parser.Expr
+      Pkg.Parser.Stats
+      Pkg.Parser.Types
       Pkg.TmpPg
       ProcessMessage
       ProcessMessageSpec
@@ -129,6 +133,7 @@ library
   ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches -Wno-missing-kind-signatures -fwrite-ide-info -hiedir=.hie
   build-depends:
       HaskellNet
+    , PyF
     , Unique
     , aeson
     , aeson-qq

@@ -18,21 +18,20 @@ module Utils (
   getStatusColor,
 ) where
 
+import Data.Aeson qualified as AE
 import Data.Text (replace)
 import Data.Time (ZonedTime)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.ToField (ToField (..))
-
 import Database.PostgreSQL.Transact
 import Lucid (Html, a_, href_, i_, onclick_, term)
 import Lucid.Svg (class_, svg_, use_)
+import Models.Projects.ProjectMembers (ProjectMembers (ProjectMembers))
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Session
 import Relude hiding (show)
 import Servant
-
-import Models.Projects.ProjectMembers (ProjectMembers (ProjectMembers))
-import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Text.Regex.TDFA ((=~))
 import Prelude (show)
 
@@ -139,3 +138,16 @@ getStatusColor status
   | status >= 200 && status < 300 = "text-green-800 bg-green-50 border border-green-200"
   | status >= 300 && status < 400 = "text-amber-800 bg-yellow-50 border border-yellow-200"
   | otherwise = "text-red-800 bg-red-50 border border-red-200"
+
+
+unwrapJsonPrimValue :: AE.Value -> Text
+unwrapJsonPrimValue (AE.Bool True) = "true"
+unwrapJsonPrimValue (AE.Bool False) = "true"
+unwrapJsonPrimValue (AE.String v) = "\"" <> toText v <> "\""
+unwrapJsonPrimValue (AE.Number v) = toText @String $ show v
+unwrapJsonPrimValue AE.Null = "null"
+unwrapJsonPrimValue (AE.Object _) = "{..}"
+unwrapJsonPrimValue (AE.Array items) = "[" <> toText (show (length items)) <> "]"
+
+-- unwrapJsonPrimValue (AE.Object _) = error "Impossible. unwrapJsonPrimValue should be for primitive types only. got object" -- should never be reached
+-- unwrapJsonPrimValue (AE.Array _) = error "Impossible. unwrapJsonPrimValue should be for primitive types only. got array" -- should never be reached

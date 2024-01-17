@@ -101,6 +101,7 @@ library:
     - extra
     - fakedata
     - fmt
+    - PyF
     - generic-lens
     - gogol
     - gogol-core

@@ -1,263 +1,193 @@
 -- Parser implemented with help and code from: https://markkarpov.com/tutorial/megaparsec.html
-module Pkg.Parser (parseQueryStringToWhereClause) where
+module Pkg.Parser (parseQueryStringToWhereClause, parseQueryToComponents, defSqlQueryCfg, SqlQueryCfg(..), listToColNames) where
 
 import Control.Monad.Combinators.Expr
+import Data.Default (Default (def))
 import Data.Foldable (foldl)
 import Data.Text qualified as T
 import Data.Text.Display (Display, display, displayBuilder, displayParen, displayPrec)
+import Data.Text.Lazy.Builder (Builder)
+import Data.Time (CalendarDiffTime, ZonedTime, diffUTCTime, zonedTimeToUTC)
+import Data.Time.Format
+import Models.Projects.Projects qualified as Projects
+import Pkg.Parser.Expr
+import Pkg.Parser.Stats
+import Pkg.Parser.Types
+import PyF
 import Relude hiding (GT, LT, many, some)
-import Relude.Unsafe qualified as Unsafe
 import Text.Megaparsec hiding (State)
 import Text.Megaparsec.Char
 import Text.Megaparsec.Char.Lexer qualified as L
+import Witch (from)
 
 
 -- Example queries
 -- request_body.v1.v2 = "abc" AND (request_body.v3.v4 = 123 OR request_body.v5[].v6=ANY[1,2,3] OR request_body[1].v7 OR NOT request_body[-1].v8 )
--- request_body[1].v7 |> {.v7, .v8} |>
+-- request_body[1].v7 | {.v7, .v8} |
+--
 
-type Parser = Parsec Void Text
-
-
--- Values is an enum of the list of supported value types.
--- Num is a text  that represents a float as float covers ints in a lot of cases. But its basically the json num type.
-data Values = Num Text | Str Text | Boolean Bool | Null | List [Values]
-  deriving stock (Eq, Ord, Show)
-
-
--- A subject consists of the primary key, and then the list of fields keys which are delimited by a .
--- To support jsonpath, we will have more powerfule field keys, so instead of a text array, we could have an enum field key type?
-data Subject = Subject Text [FieldKey]
-  deriving stock (Eq, Ord, Show)
-
-
-data FieldKey = FieldKey Text | ArrayIndex Text Int | ArrayWildcard Text
-  deriving stock (Eq, Ord, Show)
-
-
-data Expr
-  = Eq Subject Values
-  | NotEq Subject Values
-  | GT Subject Values
-  | LT Subject Values
-  | GTEq Subject Values
-  | LTEq Subject Values
-  | Paren Expr
-  | And Expr Expr
-  | Or Expr Expr
-  | Not Expr
-  | FunctionCall String [Expr] -- For functions like ANY
-  deriving stock (Eq, Ord, Show)
-
-
-sc :: Parser ()
-sc =
-  L.space
-    space1 -- (2)
-    (L.skipLineComment "//") -- (3)
-    (L.skipBlockComment "/*" "*/") -- (4)
-
-
--- lexeme is a wrapper for lexemes that picks up all trailing white space using the supplied space consumer.
-lexeme :: Parser a -> Parser a
-lexeme = L.lexeme sc
-
-
--- symbol is a parser that matches given text using string internally and then similarly picks up all trailing white space.
-symbol :: Text -> Parser Text
-symbol = L.symbol sc
-
-
--- >>> parse pSubject "" "key"
--- Right (Subject "key" [])
--- >>> parse pSubject "" "key.abc[1]"
--- Right (Subject "key" [ArrayIndex "abc" 1])
--- >>> parse pSubject "" "key.abc[*]"
--- Right (Subject "key" [ArrayWildcard "abc"])
--- >>> parse pSubject "" "key.abc[*].xyz"
--- Right (Subject "key" [ArrayWildcard "abc",FieldKey "xyz"])
--- >>> parse pSubject "" "abc[*].xyz"
--- Right (Subject "abc" [ArrayWildcard "",FieldKey "xyz"])
--- >>> parse pSubject "" "abc[1].xyz.cde[*]"
--- Right (Subject "abc" [ArrayIndex "" 1,FieldKey "xyz",ArrayWildcard "cde"])
--- >>> parse pSubject "" "request_body.message.tags[*].name"
--- Right (Subject "request_body" [FieldKey "message",ArrayWildcard "tags",FieldKey "name"])
-pSubject :: Parser Subject
-pSubject = do
-  (primaryKey, firstField) <- pPrimaryKey
-  fields <- many $ char '.' *> pFieldKey
-  return $ Subject primaryKey $ maybeToList firstField ++ fields
-
-
--- >>> parse pFieldKey "" "key.abc[1]"
--- Right (FieldKey "key")
--- >>> parse pFieldKey "" "abc[1]"
--- Right (ArrayIndex "abc" 1)
--- >>> parse pFieldKey "" "abc[*]"
--- Right (ArrayWildcard "abc")
-pFieldKey :: Parser FieldKey
-pFieldKey = do
-  key <- toText <$> some (alphaNumChar <|> oneOf ("-_" :: String))
-  try (pSquareBracketKey key) <|> pure (FieldKey key)
-
-
--- >>> parse ( pPrimaryKey ) "" "abc[1]"
--- Right ("abc",Just (ArrayIndex "" 1))
--- >>> parse ( pPrimaryKey ) "" "abc[*]"
--- Right ("abc",Just (ArrayWildcard ""))
--- >>> parse ( pPrimaryKey ) "" "abc"
--- Right ("abc",Nothing)
-pPrimaryKey :: Parser (Text, Maybe FieldKey)
-pPrimaryKey = do
-  key <- toText <$> some (alphaNumChar <|> oneOf ("-_" :: String))
-  fKey <- optional $ pSquareBracketKey ""
-  pure (key, fKey)
-
-
--- >>> parse (pSquareBracketKey "") "" "[1]"
--- Right (ArrayIndex "" 1)
--- >>> parse (pSquareBracketKey "key") "" "[*]"
--- Right (ArrayWildcard "key")
-pSquareBracketKey :: Text -> Parser FieldKey
-pSquareBracketKey key = do
-  arrayAcess <- sqParens num
-  pure $ ArrayIndex key arrayAcess
-  where
-    -- arrayAccess <- sqParens (try (Right <$> num) <|> Left <$> star)
-    -- case arrayAccess of
-    --   Left () -> pure $ ArrayWildcard key
-    --   Right idx -> pure $ ArrayIndex key idx
-
-    num :: Parser Int
-    num = Unsafe.read <$> some digitChar
-
-
--- star = char '*' >> pass
-
-sqParens :: Parser a -> Parser a
-sqParens = between (symbol "[") (symbol "]")
-
-
-parens :: Parser a -> Parser a
-parens = between (symbol "(") (symbol ")")
-
-
-pValues :: Parser Values
-pValues =
+pSection :: Parser Section
+pSection =
   choice @[]
-    [ Null <$ string "null"
-    , Boolean <$> (True <$ string "true" <|> False <$ string "false" <|> False <$ string "FALSE" <|> True <$ string "TRUE")
-    , Num . toText <$> some (digitChar <|> char '.')
-    , Str . toText <$> (char '\"' *> manyTill L.charLiteral (char '\"'))
+    [ pStatsSection
+    , Search <$> pExpr
     ]
 
 
-pTerm :: Parser Expr
-pTerm =
-  (Paren <$> parens pExpr)
-    <|> try (Eq <$> pSubject <* void (symbol "=") <*> pValues)
-    <|> try (NotEq <$> pSubject <* void (symbol "!=") <*> pValues)
-    <|> try (GT <$> pSubject <* void (symbol ">") <*> pValues)
-    <|> try (LT <$> pSubject <* void (symbol "<") <*> pValues)
-    <|> try (GTEq <$> pSubject <* void (symbol ">=") <*> pValues)
-    <|> try (LTEq <$> pSubject <* void (symbol "<=") <*> pValues)
+parseQuery :: Parser [Section]
+parseQuery = sepBy pSection (char '|')
 
 
-pExpr :: Parser Expr
-pExpr = makeExprParser pTerm operatorTable
+data QueryComponents = QueryComponents
+  { whereClause :: Maybe Text
+  , groupByClause :: [Text]
+  , select :: [Text]
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (Default)
 
 
-operatorTable :: [[Operator Parser Expr]]
-operatorTable =
-  [
-    [ binary " AND " And
-    , binary "AND" And
-    , binary " OR " Or
-    , binary "OR" Or
-    , binary " and " And
-    , binary "and" And
-    , binary " or " Or
-    , binary "or" Or
-    ]
-  ]
+sectionsToComponents :: [Section] -> QueryComponents
+sectionsToComponents = foldl' applySectionToComponent (def :: QueryComponents)
 
 
-binary :: Text -> (Expr -> Expr -> Expr) -> Operator Parser Expr
-binary name f = InfixL (f <$ symbol name)
+applySectionToComponent :: QueryComponents -> Section -> QueryComponents
+applySectionToComponent qc (Search expr) = qc{whereClause = Just $ display expr}
+applySectionToComponent qc (StatsCommand agg Nothing) = qc{select = qc.select <> map display agg}
+applySectionToComponent qc (StatsCommand agg (Just (ByClause fields))) =
+  qc
+    { select = qc.select <> map display agg
+    , groupByClause = qc.groupByClause <> map display fields
+    }
 
 
--- parse parseQuery "" "request_body.v1.v2 = \"abc\""
--- Eq(Subject "request_body" [FieldKey "v1", FieldKey "v2"]) (Str "abc").
-parseQuery :: Parser Expr
-parseQuery = pExpr <* eof
+----------------------------------------------------------------------------------
+
+data SqlQueryCfg = SqlQueryCfg
+  { pid :: Projects.ProjectId
+  , dateRange :: (Maybe ZonedTime, Maybe ZonedTime)
+  , cursorM :: Maybe ZonedTime
+  , defaultSelect :: [Text]
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (Default)
 
 
--- TODO:
+sqlFromQueryComponents :: SqlQueryCfg -> QueryComponents -> Text
+sqlFromQueryComponents sqlCfg qc =
+  let
+    fmtTime = formatTime defaultTimeLocale "%F %R"
+    cursorT = maybe "" (\c -> " AND " <> fmtTime c) sqlCfg.cursorM
+    selectClause = T.intercalate "," $ if null qc.select then sqlCfg.defaultSelect else qc.select
+    whereClause = maybe "" (" AND " <>) qc.whereClause
+    groupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause
+    dateRangeStr = case sqlCfg.dateRange of
+      (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND '" <> fmtTime b <> "'"
+      (Just a, Just b) -> "AND created_at BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
+      _ -> ""
+   in
+    [fmt|SELECT row_to_json(t) FROM ( SELECT {selectClause} FROM apis.request_dumps 
+          WHERE project_id='{sqlCfg.pid.toText}'::uuid  and created_at > NOW() - interval '14 days' {cursorT} {dateRangeStr} {whereClause}
+          {groupByClause} ORDER BY created_at desc limit 200 ) t|]
+
+
+-----------------------------------------------------------------------------------
+
+-- Add more cases as needed, e.g., for List
+
+----------------------------------------------------------------------------------
+-- Convert Query as string to a string capable of being
+-- used in the where clause of an sql statement
+----------------------------------------------------------------------------------
+-- >>> parseQueryStringToWhereClause "request_body.message!=\"blabla\" AND method==\"GET\""
+-- Right "request_body->>'message'!='blabla' AND method=='GET'"
 --
---  - Query arrays
---  - - query real numbers [x]
---  - - wildcard query [x]
---  - Group by
---  - Aggregate by / rollup
---  -
-
--------------------------------------------------------
+-- >>> parseQueryStringToWhereClause "request_body.message!=\"blabla\" AND method==\"GET\""
+-- Right "request_body->>'message'!='blabla' AND method=='GET'"
 --
--- SQL Where clause segment interpreter
+-- >>> parseQueryStringToWhereClause "request_body.message.tags[*].name!=\"blabla\" AND method==\"GET\""
+-- Right "jsonb_path_exists(request_body, '$.\"message\"[*].\"name\" ?? (@ != \"blabla\")') AND method=='GET'"
 --
--------------------------------------------------------
-
--- >>> display (Subject "request_body" [FieldKey "message"])
--- "request_body->>'message'"
--- >>> display (Subject "errors" [ArrayIndex "" 0, FieldKey "message"])
--- "errors->0->>'message'"
--- >>> display (Subject "errors" [ArrayWildcard "", ArrayIndex "message" 0, FieldKey "details"])
--- "jsonb_array_elements(errors)->'message'->0->>'details'"
--- >>> display (Subject "abc" [ArrayWildcard "",FieldKey "xyz"])
--- "jsonb_array_elements(abc)->>'xyz'"
--- >>> display (Subject "request_body" [FieldKey "message", ArrayWildcard "tags", FieldKey "name"])
--- "jsonb_array_elements(request_body->>'message'->'tags')->>'name'"
-instance Display Subject where
-  displayPrec prec (Subject x []) = displayPrec prec x
-  displayPrec prec (Subject x (y : ys)) = displayPrec prec $ foldl buildQuery (buildQuery x y) ys
-    where
-      buildQuery :: Text -> FieldKey -> Text
-      buildQuery acc (FieldKey key) = acc <> "->>'" <> key <> "'"
-      buildQuery acc (ArrayIndex "" idx) = acc <> "->" <> show idx
-      buildQuery acc (ArrayIndex key idx) = acc <> "->'" <> key <> "'->" <> show idx
-      buildQuery acc (ArrayWildcard "") = "jsonb_array_elements(" <> acc <> ")"
-      buildQuery acc (ArrayWildcard key) = "jsonb_array_elements(" <> acc <> "->'" <> key <> "')"
-
-
-instance Display Values where
-  displayPrec prec (Num a) = displayBuilder a
-  displayPrec prec (Str a) = displayBuilder $ "'" <> a <> "'"
-  displayPrec prec (Boolean True) = "'true'"
-  displayPrec prec (Boolean False) = "'false'"
-  displayPrec prec Null = "null"
-
-
-instance Display Expr where
-  displayPrec prec (Eq sub val) = displayParen (prec > 0) $ displayPrec prec sub <> displayPrec @Text prec "=" <> displayBuilder val
-  displayPrec prec (NotEq sub val) = displayParen (prec > 0) $ displayPrec prec sub <> displayPrec @Text prec "!=" <> displayBuilder val
-  displayPrec prec (GT sub val) = displayParen (prec > 0) $ displayPrec prec sub <> displayPrec @Text prec ">" <> displayBuilder val
-  displayPrec prec (LT sub val) = displayParen (prec > 0) $ displayPrec prec sub <> displayPrec @Text prec "<" <> displayBuilder val
-  displayPrec prec (GTEq sub val) = displayParen (prec > 0) $ displayPrec prec sub <> displayPrec @Text prec ">=" <> displayBuilder val
-  displayPrec prec (LTEq sub val) = displayParen (prec > 0) $ displayPrec prec sub <> displayPrec @Text prec "<=" <> displayBuilder val
-  displayPrec prec (Paren u1) = displayParen True $ displayPrec prec u1
-  displayPrec prec (And u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " AND " <> displayBuilder u2
-  displayPrec prec (Or u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " OR " <> displayBuilder u2
+-- >>> parseQueryStringToWhereClause "errors[*].error_type==\"Exception\""
+-- Right "jsonb_path_exists(errors, '$[*].\"error_type\" ?? (@ == \"Exception\")')"
+--
+-- >>> parseQueryStringToWhereClause "errors==[]"
+-- Right "errors==ARRAY[]"
+--
+-- >>> parseQueryStringToWhereClause "errors[*].error_type==[]" -- works with empty array but not otherwise. Right "jsonb_path_exists(errors, '$[*].\"error_type\" ?? (@ == {} )')"
+-- Right "jsonb_path_exists(errors, '$[*].\"error_type\" ?? (@ == {} )')"
+--
+-- >>> parseQueryStringToWhereClause "errors[*].error_type=~/^ab.*c/"
+-- Right "jsonb_path_exists(errors, '$[*].\"error_type\" ?? (@ like_regex \"^ab.*c\")')"
+parseQueryStringToWhereClause :: Text -> Either Text Text
+parseQueryStringToWhereClause q =
+  if q == ""
+    then Right ""
+    else
+      bimap
+        (toText . errorBundlePretty)
+        (\x -> fromMaybe "" (sectionsToComponents x).whereClause)
+        (parse parseQuery "" q)
 
 
 ----------------------------------------------------------------------------------
 -- Convert Query as string to a string capable of being
 -- used in the where clause of an sql statement
 ----------------------------------------------------------------------------------
--- >>> parseQueryStringToWhereClause "request_body.message!=\"blabla\" AND method=\"GET\""
--- Right "request_body->>'message'!='blabla' AND method='GET'"
--- >>> parseQueryStringToWhereClause "request_body.message!=\"blabla\" AND method=\"GET\""
--- Right "request_body->>'message'!='blabla' AND method='GET'"
--- >>> parseQueryStringToWhereClause "request_body.message.tags[*].name!=\"blabla\" AND method=\"GET\""
--- Right "jsonb_array_elements(request_body->>'message'->'tags')->>'name'!='blabla' AND method='GET'"
-parseQueryStringToWhereClause :: Text -> Either Text Text
-parseQueryStringToWhereClause q = if q == "" then Right "" else bimap (toText . errorBundlePretty) display (parse parseQuery "" q)
+-- >>> parseQueryToComponents (defSqlQueryCfg defPid) "request_body.message!=\"blabla\" AND method==\"GET\""
+-- Right "SELECT id,created_at,host,status_code,LEFT(\n        CONCAT(\n            'request_body=', COALESCE(request_body, 'null'), \n            ' response_body=', COALESCE(response_body, 'null')\n        ),\n        255\n    ) AS rest FROM apis.request_dumps \n          WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid  and created_at > NOW() - interval '14 days'    AND request_body->>'message'!='blabla' AND method=='GET'\n           ORDER BY created_at desc limit 200"
+--
+-- >>> parseQueryToComponents (defSqlQueryCfg defPid) "request_body.message!=\"blabla\" AND method==\"GET\""
+-- Right "SELECT id,created_at,host,status_code,LEFT(\n        CONCAT(\n            'request_body=', COALESCE(request_body, 'null'), \n            ' response_body=', COALESCE(response_body, 'null')\n        ),\n        255\n    ) AS rest FROM apis.request_dumps \n          WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid  and created_at > NOW() - interval '14 days'    AND request_body->>'message'!='blabla' AND method=='GET'\n           ORDER BY created_at desc limit 200"
+--
+-- >>> parseQueryToComponents (defSqlQueryCfg defPid) "request_body.message.tags[*].name!=\"blabla\" AND method==\"GET\""
+-- Right "SELECT id,created_at,host,status_code,LEFT(\n        CONCAT(\n            'request_body=', COALESCE(request_body, 'null'), \n            ' response_body=', COALESCE(response_body, 'null')\n        ),\n        255\n    ) AS rest FROM apis.request_dumps \n          WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid  and created_at > NOW() - interval '14 days'    AND jsonb_path_exists(request_body, '$.\"message\"[*].\"name\" ?? (@ != \"blabla\")') AND method=='GET'\n           ORDER BY created_at desc limit 200"
+--
+-- >>> parseQueryToComponents (defSqlQueryCfg defPid) "errors[*].error_type==\"Exception\""
+-- Right "SELECT id,created_at,host,status_code,LEFT(\n        CONCAT(\n            'request_body=', COALESCE(request_body, 'null'), \n            ' response_body=', COALESCE(response_body, 'null')\n        ),\n        255\n    ) AS rest FROM apis.request_dumps \n          WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid  and created_at > NOW() - interval '14 days'    AND jsonb_path_exists(errors, '$[*].\"error_type\" ?? (@ == \"Exception\")')\n           ORDER BY created_at desc limit 200"
+--
+-- >>> parseQueryToComponents (defSqlQueryCfg defPid) "errors==[]"
+-- Right "SELECT id,created_at,host,status_code,LEFT(\n        CONCAT(\n            'request_body=', COALESCE(request_body, 'null'), \n            ' response_body=', COALESCE(response_body, 'null')\n        ),\n        255\n    ) AS rest FROM apis.request_dumps \n          WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid  and created_at > NOW() - interval '14 days'    AND errors==ARRAY[]\n           ORDER BY created_at desc limit 200"
+--
+-- >>> parseQueryToComponents (defSqlQueryCfg defPid) "errors[*].error_type==[]" -- works with empty array but not otherwise. Right "jsonb_path_exists(errors, '$[*].\"error_type\" ?? (@ == {} )')"
+-- Right "SELECT id,created_at,host,status_code,LEFT(\n        CONCAT(\n            'request_body=', COALESCE(request_body, 'null'), \n            ' response_body=', COALESCE(response_body, 'null')\n        ),\n        255\n    ) AS rest FROM apis.request_dumps \n          WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid  and created_at > NOW() - interval '14 days'    AND jsonb_path_exists(errors, '$[*].\"error_type\" ?? (@ == {} )')\n           ORDER BY created_at desc limit 200"
+--
+-- >>> parseQueryToComponents (defSqlQueryCfg defPid) "errors[*].error_type=~/^ab.*c/"
+-- Right "SELECT id,created_at,host,status_code,LEFT(\n        CONCAT(\n            'request_body=', COALESCE(request_body, 'null'), \n            ' response_body=', COALESCE(response_body, 'null')\n        ),\n        255\n    ) AS rest FROM apis.request_dumps \n          WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid  and created_at > NOW() - interval '14 days'    AND jsonb_path_exists(errors, '$[*].\"error_type\" ?? (@ like_regex \"^ab.*c\")')\n           ORDER BY created_at desc limit 200"
+parseQueryToComponents :: SqlQueryCfg -> Text -> Either Text Text
+parseQueryToComponents sqlCfg q =
+  bimap
+    (toText . errorBundlePretty)
+    (sqlFromQueryComponents sqlCfg . sectionsToComponents)
+    (parse parseQuery "" q)
+
+
+defPid :: Projects.ProjectId
+defPid = def :: Projects.ProjectId
+
+
+defSqlQueryCfg :: Projects.ProjectId -> SqlQueryCfg
+defSqlQueryCfg pid =
+  SqlQueryCfg
+    { pid = pid
+    , cursorM = Nothing
+    , dateRange = (Nothing, Nothing)
+    , defaultSelect =
+        [ "id::text as id"
+        , "created_at"
+        , "host"
+        , "status_code"
+        , "JSONB_ARRAY_LENGTH(errors) as errors_count"
+        , [fmt|LEFT(
+        CONCAT(
+            'request_body=', COALESCE(request_body, 'null'), 
+            ' response_body=', COALESCE(response_body, 'null')
+        ),
+        255
+    ) as rest|]
+        ]
+    }
+
+-- >>> listToColNames ["id", "JSONB_ARRAY_LENGTH(errors) as errors_count"]
+listToColNames :: [Text] -> [Text]
+listToColNames = map \x-> T.strip $ last  $ "" :| T.splitOn "as" x

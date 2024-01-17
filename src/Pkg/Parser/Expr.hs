@@ -1,0 +1,335 @@
+module Pkg.Parser.Expr where
+
+
+import Control.Monad.Combinators.Expr
+import Data.Foldable (foldl)
+import Data.Text.Display (Display, display, displayBuilder, displayParen, displayPrec)
+import Data.Text.Lazy.Builder (Builder)
+import Relude hiding (GT, LT, many, some, Sum)
+import Text.Megaparsec hiding (State)
+import Text.Megaparsec.Char
+import Text.Megaparsec.Char.Lexer qualified as L
+import Pkg.Parser.Types
+
+
+-- Example queries
+-- request_body.v1.v2 = "abc" AND (request_body.v3.v4 = 123 OR request_body.v5[].v6=ANY[1,2,3] OR request_body[1].v7 OR NOT request_body[-1].v8 )
+-- request_body[1].v7 | {.v7, .v8} |
+
+
+
+
+-- >>> parse pSubject "" "key"
+-- Right (Subject "key" [FieldKey ""])
+-- >>> parse pSubject "" "key.abc[1]"
+-- Right (Subject "key" [FieldKey "",ArrayIndex "abc" 1])
+-- >>> parse pSubject "" "key.abc[*]"
+-- Right (Subject "key" [FieldKey "",ArrayWildcard "abc"])
+-- >>> parse pSubject "" "key.abc[*].xyz"
+-- Right (Subject "key" [FieldKey "",ArrayWildcard "abc",FieldKey "xyz"])
+-- >>> parse pSubject "" "abc[*].xyz"
+-- Right (Subject "abc" [ArrayWildcard "",FieldKey "xyz"])
+-- >>> parse pSubject "" "abc[1].xyz.cde[*]"
+-- Right (Subject "abc" [ArrayIndex "" 1,FieldKey "xyz",ArrayWildcard "cde"])
+-- >>> parse pSubject "" "request_body.message.tags[*].name"
+-- Right (Subject "request_body" [FieldKey "",FieldKey "message",ArrayWildcard "tags",FieldKey "name"])
+pSubject :: Parser Subject
+pSubject = do
+  (primaryKey, firstField) <- pPrimaryKey
+  fields <- many $ char '.' *> pFieldKey
+  return $ Subject primaryKey $ maybeToList firstField ++ fields
+
+
+
+
+-- >>> parse pFieldKey "" "key.abc[1]"
+-- Right (FieldKey "key")
+--
+-- >>> parse pFieldKey "" "abc[1]"
+-- Right (ArrayIndex "abc" 1)
+--
+-- >>> parse pFieldKey "" "abc[*]"
+-- Right (ArrayWildcard "abc")
+pFieldKey :: Parser FieldKey
+pFieldKey = do
+  key <- toText <$> some (alphaNumChar <|> oneOf ("-_" :: String))
+  try (pSquareBracketKey key) <|> pure (FieldKey key)
+
+
+-- >>> parse ( pPrimaryKey ) "" "abc[1]"
+-- Right ("abc",Just (ArrayIndex "" 1))
+--
+-- >>> parse ( pPrimaryKey ) "" "abc[*]"
+-- Right ("abc",Just (ArrayWildcard ""))
+--
+-- >>> parse ( pPrimaryKey ) "" "abc"
+-- Right ("abc",Nothing)
+pPrimaryKey :: Parser (Text, Maybe FieldKey)
+pPrimaryKey = do
+  key <- toText <$> some (alphaNumChar <|> oneOf ("-_" :: String))
+  fKey <- optional $ pSquareBracketKey ""
+  pure (key, fKey)
+
+
+-- | pSquareBracketKey parses an array element, usually an index with an integer within the bracket
+-- or an asterisk indicating a wildcard
+--
+-- >>> parse (pSquareBracketKey "") "" "[1]"
+-- Right (ArrayIndex "" 1)
+--
+-- >>> parse (pSquareBracketKey "key") "" "[*]"
+-- Right (ArrayWildcard "key")
+pSquareBracketKey :: Text -> Parser FieldKey
+pSquareBracketKey key = sqParens (arrayWildcard <|> arrayIndex)
+  where
+    arrayWildcard = ArrayWildcard key <$ char '*'
+    arrayIndex = ArrayIndex key <$> L.decimal
+
+
+sqParens :: Parser a -> Parser a
+sqParens = between (symbol "[") (symbol "]")
+
+
+parens :: Parser a -> Parser a
+parens = between (symbol "(") (symbol ")")
+
+
+-- | parse values into our internal AST representation. Int, Str, Num, Bool, List, etc
+--
+-- Examples:
+--
+-- >>> parse pValues "" "[1,2,3]"
+-- Right (List [Num "1",Num "2",Num "3"])
+--
+-- >>> parse pValues "" "[true,false]"
+-- Right (List [Boolean True,Boolean False])
+--
+-- >>> parse pValues "" "[\"as\",1,2]"
+-- Right (List [Str "as",Num "1",Num "2"])
+--
+-- >>> parse pValues "" "[\"as\",\"b\"]"
+-- Right (List [Str "as",Str "b"])
+pValues :: Parser Values
+pValues =
+  choice @[]
+    [ Null <$ string "null"
+    , Boolean <$> (True <$ string "true" <|> False <$ string "false" <|> False <$ string "FALSE" <|> True <$ string "TRUE")
+    , Num . toText <$> some (digitChar <|> char '.')
+    , Str . toText <$> (char '\"' *> manyTill L.charLiteral (char '\"'))
+    , List <$> sqParens (pValues `sepBy` char ',')
+    ]
+
+
+-- | pTerm is the main entry point that desides what tree lines to decend
+pTerm :: Parser Expr
+pTerm =
+  (Paren <$> parens pExpr)
+    <|> try (Eq <$> pSubject <* void (symbol "==") <*> pValues)
+    <|> try (NotEq <$> pSubject <* void (symbol "!=") <*> pValues)
+    <|> try (GT <$> pSubject <* void (symbol ">") <*> pValues)
+    <|> try (LT <$> pSubject <* void (symbol "<") <*> pValues)
+    <|> try (GTEq <$> pSubject <* void (symbol ">=") <*> pValues)
+    <|> try (LTEq <$> pSubject <* void (symbol "<=") <*> pValues)
+    <|> try regexParser
+
+-- >>> parse regexParser "" "abc=~/abc.*/"
+-- Right (Regex (Subject "abc" []) "abc.*")
+regexParser :: Parser Expr
+regexParser = do
+  subj <- pSubject
+  void $ symbol "=~"
+  regexStr <- char '/' *> manyTill L.charLiteral (char '/')
+  pure $ Regex subj (toText regexStr)
+
+
+pExpr :: Parser Expr
+pExpr = makeExprParser pTerm operatorTable
+
+
+operatorTable :: [[Operator Parser Expr]]
+operatorTable =
+  [
+    [ binary " AND " And
+    , binary "AND" And
+    , binary " OR " Or
+    , binary "OR" Or
+    , binary " and " And
+    , binary "and" And
+    , binary " or " Or
+    , binary "or" Or
+    ]
+  ]
+
+
+binary :: Text -> (Expr -> Expr -> Expr) -> Operator Parser Expr
+binary name f = InfixL (f <$ symbol name)
+
+
+-- TODO:
+--
+--  - Query arrays
+--  - - query real numbers [x]
+--  - - wildcard query [x]
+--  - - array values [x]
+--  - - regex [x]
+--  - Group by [~]
+--  - Aggregate by / rollup [~]
+--  -
+
+-- Core problem to solve is metrics. Metrics can be any of these values, 
+-- but must be aggregated over a timeline 
+-- Suporting a splunk like query style. 
+-- https://chat.openai.com/share/cc9553fd-1e02-482b-a01f-427ca755d977
+--
+-- stats 
+-- timechart 
+-- fields 
+-- where condition for alerts. 
+--
+
+
+-------------------------------------------------------
+--
+-- SQL Where clause segment interpreter
+--
+-------------------------------------------------------
+
+-- Helper function to detect if Subject contains an ArrayWildcard
+subjectHasWildcard :: Subject -> Bool
+subjectHasWildcard (Subject _ keys) = any isArrayWildcard keys
+  where
+    isArrayWildcard (ArrayWildcard _) = True
+    isArrayWildcard _ = False
+
+
+-- >>> display (Subject "request_body" [FieldKey "message"])
+-- "request_body->>'message'"
+--
+-- >>> display (Subject "errors" [ArrayIndex "" 0, FieldKey "message"])
+-- "errors->0->>'message'"
+instance Display Subject where
+  displayPrec prec (Subject x []) = displayPrec prec x
+  displayPrec prec (Subject x (y : ys)) = displayPrec prec $ foldl buildQuery (buildQuery x y) ys
+    where
+      buildQuery :: Text -> FieldKey -> Text
+      buildQuery acc (FieldKey key) = acc <> "->>'" <> key <> "'"
+      buildQuery acc (ArrayIndex "" idx) = acc <> "->" <> show idx
+      buildQuery acc (ArrayIndex key idx) = acc <> "->'" <> key <> "'->" <> show idx
+      buildQuery acc (ArrayWildcard _) = error "buildQuery for ArrayWildcard should be unreachable"
+
+
+-- >>> display (List [Str "a"])
+-- "ARRAY['a']"
+--
+-- >>> display (List [Num "2"])
+-- "ARRAY[2]"
+instance Display Values where
+  displayPrec prec (Num a) = displayBuilder a
+  displayPrec prec (Str a) = displayBuilder $ "'" <> a <> "'"
+  displayPrec prec (Boolean True) = "'true'"
+  displayPrec prec (Boolean False) = "'false'"
+  displayPrec prec Null = "null"
+  displayPrec prec (List vs) =
+    let arrayElements = mconcat . intersperse "," . map (displayBuilder . display) $ vs
+     in "ARRAY[" <> arrayElements <> "]"
+
+
+-- | Render the expr ast to a value. Start with Eq only, for supporting jsonpath
+--
+-- >>> display (Eq (Subject "request_body" [FieldKey "message"]) (Str "val"))
+-- "request_body->>'message'=='val'"
+--
+-- >>> display (Eq (Subject "errors" [ArrayIndex "" 0, FieldKey "message"]) (Str "val"))
+-- "errors->0->>'message'=='val'"
+--
+-- >>> display (Eq (Subject "abc" [ArrayWildcard "",FieldKey "xyz"]) (Str "val"))
+-- "jsonb_path_exists(abc, '$[*].\"xyz\" ?? (@ == \"val\")')"
+--
+-- >>> display (Eq (Subject "errors" [ArrayWildcard "", ArrayIndex "message" 0, FieldKey "details"]) (Str "details"))
+-- "jsonb_path_exists(errors, '$[*][0].\"details\" ?? (@ == \"details\")')"
+--
+-- >>> display (Subject "abc" [ArrayWildcard "",FieldKey "xyz"])
+-- buildQuery for ArrayWildcard should be unreachable
+--
+-- >>> display (Subject "request_body" [FieldKey "message", ArrayWildcard "tags", FieldKey "name"])
+-- buildQuery for ArrayWildcard should be unreachable
+--
+-- >>> display (Subject "abc" [ArrayWildcard "",FieldKey "xyz"])
+-- buildQuery for ArrayWildcard should be unreachable
+--
+-- >>> display (Subject "request_body" [FieldKey "message", ArrayWildcard "tags", FieldKey "name"])
+-- buildQuery for ArrayWildcard should be unreachable
+--
+-- >>> display (Regex (Subject "request_body" [FieldKey "msg"]) "^abc.*") 
+-- "jsonb_path_exists(request_body, '$.\"msg\" ?? (@ like_regex \"^abc.*\")')"
+instance Display Expr where
+  displayPrec prec expr@(Eq sub val) = displayExprHelper "==" prec sub val
+  displayPrec prec (NotEq sub val) = displayExprHelper "!=" prec sub val
+  displayPrec prec (GT sub val) = displayExprHelper ">" prec sub val
+  displayPrec prec (LT sub val) = displayExprHelper "<" prec sub val
+  displayPrec prec (GTEq sub val) = displayExprHelper ">=" prec sub val
+  displayPrec prec (LTEq sub val) = displayExprHelper "<=" prec sub val
+  displayPrec prec (Paren u1) = displayParen True $ displayPrec prec u1
+  displayPrec prec (And u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " AND " <> displayBuilder u2
+  displayPrec prec (Or u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " OR " <> displayBuilder u2
+  displayPrec prec (Regex sub val) = displayPrec prec $ jsonPathQuery "like_regex" sub (Str val) 
+
+
+-- Helper function to handle the common display logic
+displayExprHelper :: Text -> Int -> Subject -> Values -> Builder
+displayExprHelper op prec sub val =
+  displayParen (prec > 0)
+    $ if subjectHasWildcard sub
+      then displayPrec prec (jsonPathQuery op sub val)
+      else displayPrec prec sub <> displayPrec @Text prec op <> displayBuilder val
+
+
+-- | Generate PostgreSQL JSONPath queries from AST with specified operator
+--
+-- Examples:
+--
+-- >>> jsonPathQuery "==" (Subject "data" [FieldKey "name"]) (Str "John Doe")
+-- "jsonb_path_exists(data, '$.\"name\" ? (@ == \"John Doe\")')"
+--
+-- >>> jsonPathQuery "!=" (Subject "users" [ArrayIndex "" 1, FieldKey "age"]) (Num "30")
+-- "jsonb_path_exists(users, '$[1].\"age\" ? (@ != 30)')"
+--
+-- >>> jsonPathQuery "!=" (Subject "settings" [ArrayWildcard "", FieldKey "enabled"]) (Boolean True)
+-- "jsonb_path_exists(settings, '$[*].\"enabled\" ? (@ != true)')"
+--
+-- >>> jsonPathQuery "<" (Subject "user" [FieldKey "profile", FieldKey "address", FieldKey "zipcode"]) Null
+-- "jsonb_path_exists(user, '$.user.\"profile\".\"address\".\"zipcode\" ? (@ < null)')"
+--
+-- >>> jsonPathQuery ">" (Subject "orders" [ArrayIndex "" 0, ArrayWildcard "", FieldKey "status"]) (Str "pending")
+-- "jsonb_path_exists(orders, '$[0][*].\"status\" ? (@ > \"pending\")')"
+jsonPathQuery :: Text -> Subject -> Values -> Text
+jsonPathQuery op (Subject base keys) val =
+  "jsonb_path_exists(" <> base <> ", '" <> "$" <> buildPath keys <> buildCondition op val <> "')"
+  where
+    buildPath :: [FieldKey] -> Text
+    buildPath [] = ""
+    buildPath (FieldKey key : rest) = ".\"" <> key <> "\"" <> buildPath rest
+    buildPath (ArrayIndex _ idx : rest) = "[" <> show idx <> "]" <> buildPath rest
+    buildPath (ArrayWildcard _ : rest) = "[*]" <> buildPath rest
+
+    buildCondition :: Text -> Values -> Text
+    buildCondition oper (Num n) = " ?? (@ " <> oper <> " " <> n <> ")"
+    buildCondition oper (Str s) = " ?? (@ " <> oper <> " \"" <> s <> "\")"
+    buildCondition oper (Boolean b) = " ?? (@ " <> oper <> " " <> show b <> ")"
+    buildCondition oper Null = " ?? (@ " <> oper <> " null)"
+    buildCondition oper (List xs) = " ?? (@ " <> oper <> " {" <> (mconcat . intersperse "," . map display) xs <> "} )"
+
+
+
+instance Display AggFunction where
+  displayPrec prec (Count sub alias) = displayBuilder $ "count(" <> display sub <> ")"
+  displayPrec prec (Sum sub alias) = displayBuilder $ "sum(" <> display sub <> ")"
+  displayPrec prec (Avg sub alias) = displayBuilder $ "avg(" <> display sub <> ")"
+  displayPrec prec (Min sub alias) = displayBuilder $ "min(" <> display sub <> ")"
+  displayPrec prec (Max sub alias) = displayBuilder $ "max(" <> display sub <> ")"
+  displayPrec prec (Median sub alias) = displayBuilder $ "median(" <> display sub <> ")"
+  displayPrec prec (Stdev sub alias) = displayBuilder $ "stdev(" <> display sub <> ")"
+  displayPrec prec (Range sub alias) = displayBuilder $ "range(" <> display sub <> ")"
+  displayPrec prec (Plain sub alias) = displayBuilder $ "" <> display sub <> ""
+
+

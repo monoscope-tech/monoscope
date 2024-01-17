@@ -13,6 +13,7 @@ module Models.Apis.RequestDumps (
   normalizeUrlPath,
   throughputBy,
   throughputBy',
+  selectLogTable,
   requestDumpLogItemUrlPath,
   selectAnomalyEvents,
   requestDumpLogUrlPath,
@@ -40,17 +41,22 @@ import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
 import Data.Tuple.Extra (both)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, queryOne)
+import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, queryOne, queryOne_, query_)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
-import Database.PostgreSQL.Simple.FromField (FromField (fromField))
+import Database.PostgreSQL.Simple.FromField (FromField (fromField), fromJSONField)
 import Models.Apis.Fields.Query ()
 
+import Data.Aeson (Value)
+import Data.Aeson.KeyMap (toHashMapText)
+import Data.HashMap.Strict qualified as HM
+import Database.PostgreSQL.Simple.FromRow (FromRow (fromRow))
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField (toField))
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Database.PostgreSQL.Transact (DBT, executeMany)
+import Debug.Pretty.Simple (pTraceShow, pTraceShowM)
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Anomalies (AnomalyTypes)
 import Models.Apis.Anomalies qualified as Anomalies
@@ -365,6 +371,28 @@ getRequestDumpsForPreviousReportPeriod pid report_type = query Select (Query $ e
         project_id = ? AND created_at > NOW() - interval $start AND created_at < NOW() - interval $end
      GROUP BY endpoint_hash;
     |]
+
+
+selectLogTable :: Projects.ProjectId -> Text -> Maybe ZonedTime -> (Maybe ZonedTime, Maybe ZonedTime) -> DBT IO (Either Text (V.Vector (HM.HashMap Text Value), Int))
+selectLogTable pid extraQuery cursorM dateRange = do
+  let resp = parseQueryToComponents ((defSqlQueryCfg pid){cursorM, dateRange}) extraQuery
+  case resp of
+    Left x -> pure $ Left x
+    Right q -> do
+      logItems <- queryToValues q
+      let logItemsMap = V.mapMaybe convertValueToMap logItems
+      -- Only count <- fromMaybe (Only 0) <$> queryOne_ Select (Query $ encodeUtf8 q)
+      pure $ Right (logItemsMap, 0)
+
+
+convertValueToMap :: Only Value -> Maybe (HM.HashMap Text Value)
+convertValueToMap (Only val) = case val of
+  AE.Object obj -> Just $ toHashMapText obj
+  _ -> Nothing
+
+
+queryToValues :: Text -> DBT IO (V.Vector (Only Value))
+queryToValues q = query_ Select (Query $ encodeUtf8 q)
 
 
 selectRequestDumpByProject :: Projects.ProjectId -> Text -> Maybe Text -> Maybe ZonedTime -> Maybe ZonedTime -> DBT IO (V.Vector RequestDumpLogItem, Int)
