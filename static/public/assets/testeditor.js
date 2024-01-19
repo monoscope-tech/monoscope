@@ -19,7 +19,6 @@ export class Collection extends LitElement {
     this.col_id = segs[4];
     const dataStore = document.getElementById('test-data').dataset.collection;
     this.collection = JSON.parse(dataStore);
-    console.log(this.collection);
     this.showCode = false;
     this.showSettings = false;
     this.addEventListener('add-step', this.handleAddStep);

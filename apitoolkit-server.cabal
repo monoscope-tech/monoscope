@@ -214,6 +214,8 @@ executable apitoolkit-server-exe
   main-is: Main.hs
   hs-source-dirs:
       app
+  extra-lib-dirs: target/release, target/debug
+  extra-libraries:     testkit
   default-extensions:
       BangPatterns
       BlockArguments
