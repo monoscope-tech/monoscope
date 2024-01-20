@@ -133,7 +133,7 @@ export class Collection extends LitElement {
     return html` ${this.showNewStepModal
         ? html`<step-modal></step-modal>`
         : null}
-      <div class="w-full grid grid-cols-9 h-[calc(100vh-50px)]">
+      <div class="w-full grid grid-cols-11 h-[calc(100vh-50px)]">
         <div class="flex flex-col gap-3 col-span-2 h-full px-4 pt-8 border-r">
           <h4 class="text-3xl font-medium text-gray-800">
             ${this.collection.title}
@@ -171,7 +171,7 @@ export class Collection extends LitElement {
             : null}
         </div>
         <div
-          class="flex flex-col col-span-4 gap-4 h-full overflow-y-hidden border-r"
+          class="flex flex-col col-span-5 gap-4 h-full overflow-y-hidden border-r"
         >
           <div class="flex justify-between items-center w-full pt-3 px-4">
             <h3 class="text-gray-700 font-medium text-2xl">Steps</h3>
@@ -230,7 +230,7 @@ export class Collection extends LitElement {
                 </button>
               </div>`}
         </div>
-        <div class="h-full p-3 col-span-3 overflow-y-scroll">
+        <div class="h-full p-3 col-span-4 overflow-y-scroll">
           <div class="mt-24 max-w-md  mx-auto flex flex-col gap-2 text-center">
             <i class="fal fa-list-alt text-5xl"></i>
             <span class="text-gray-700"
