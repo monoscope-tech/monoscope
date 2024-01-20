@@ -3,6 +3,7 @@
     "tailwindcss": "^3.4.1"
   },
   "dependencies": {
+    "prettier": "^3.2.4",
     "rippleui": "^1.12.1",
     "workbox-cli": "^6.5.4"
   }

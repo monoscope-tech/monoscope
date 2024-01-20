@@ -407,32 +407,33 @@ class Config extends LitElement {
       <div class="p-2 flex flex-col gap-2">
         <div class="w-full flex flex-col gap-1">
           ${Object.entries(this.config).map(
-            (kv) => html`<div class="flex gap-2 items-center w-full">
-              <span
-                class="text-sm w-full border border-dashed text-gray-700 px-2 p-1 rounded-lg"
-                >${kv[0]}</span
-              >
-              <span
-                class="text-sm w-full border border-dashed px-2 py-0.5 text-gray-500 rounded-lg"
-                >${kv[1]}</span
-              >
-              <button
-                class="text-sm text-red-500 font-medium"
-                @click=${() => {
-                  const conf = { ...this.config };
-                  delete conf[kv[0]];
-                  this.dispatchEvent(
-                    new CustomEvent('update-config', {
-                      detail: { config: conf },
-                      bubbles: true,
-                      composed: true,
-                    })
-                  );
-                }}
-              >
-                <i class="fa fa-trash"></i>
-              </button>
-            </div>`
+            (kv) =>
+              html`<div class="flex gap-2 items-center w-full">
+                <span
+                  class="text-sm w-full border border-dashed text-gray-700 px-2 p-1 rounded-lg"
+                  >${kv[0]}</span
+                >
+                <span
+                  class="text-sm w-full border border-dashed px-2 py-0.5 text-gray-500 rounded-lg"
+                  >${kv[1]}</span
+                >
+                <button
+                  class="text-sm text-red-500 font-medium"
+                  @click=${() => {
+                    const conf = { ...this.config };
+                    delete conf[kv[0]];
+                    this.dispatchEvent(
+                      new CustomEvent('update-config', {
+                        detail: { config: conf },
+                        bubbles: true,
+                        composed: true,
+                      })
+                    );
+                  }}
+                >
+                  <i class="fa fa-trash"></i>
+                </button>
+              </div>`
           )}
         </div>
         <button
@@ -793,16 +794,17 @@ class KeyVal extends LitElement {
         <h6 class="mb-1 font-medium text-gray-800">${this.stitle}</h6>
         <div class="w-full flex flex-col gap-1">
           ${Object.entries(this.data).map(
-            (kv) => html`<div class="flex gap-4 items-center w-full">
-              <span
-                class="text-sm w-full border border-dashed text-gray-700 px-2 p-1 rounded-lg"
-                >${kv[0]}</span
-              >
-              <span
-                class="text-sm w-full border border-dashed px-2 py-0.5 text-gray-500 rounded-lg"
-                >${kv[1]}</span
-              >
-            </div>`
+            (kv) =>
+              html`<div class="flex gap-4 items-center w-full">
+                <span
+                  class="text-sm w-full border border-dashed text-gray-700 px-2 p-1 rounded-lg"
+                  >${kv[0]}</span
+                >
+                <span
+                  class="text-sm w-full border border-dashed px-2 py-0.5 text-gray-500 rounded-lg"
+                  >${kv[1]}</span
+                >
+              </div>`
           )}
         </div>
       </div>
@@ -1055,17 +1057,18 @@ class NewStepModal extends LitElement {
                 class="px-6 py-4 items-start flex flex-col gap-5 text-gray-700 h-[60vh] overflow-y-auto"
               >
                 ${this.errors.length > 0
-                  ? html`<div>
+                  ? html`<div
+                      class="flex flex-col gap-1 bg-red-50 w-full p-4 rounded-lg"
+                    >
+                      ${this.errors.map(
+                        (err) => html`<p class="text-red-500">${err}</p>`
+                      )}
                       <button
                         @click=${() => (this.errors = [])}
                         class="text-red-700"
                       >
-                        x
+                        <i class="fa fa-close"></i>
                       </button>
-                      ${this.errors.map(
-                        (err) =>
-                          html`<p class="text-red-500 text-sm">${err}</p>`
-                      )}
                     </div>`
                   : null}
                 <div class="flex flex-col gap-1 w-full">
@@ -1185,10 +1188,12 @@ class NewStepModal extends LitElement {
                           eventName="update-params"
                         ></params-element>`
                       : this.currentTab === 'Headers'
-                      ? html`<headers-element
-                          .headers=${this.headers}
-                        ></headers-element>`
-                      : html`<body-element .body=${this.body}></body-element>`}
+                        ? html`<headers-element
+                            .headers=${this.headers}
+                          ></headers-element>`
+                        : html`<body-element
+                            .body=${this.body}
+                          ></body-element>`}
                   </div>
                 </div>
                 <div class="w-full">
@@ -1345,34 +1350,35 @@ class Headers extends LitElement {
   render() {
     return html`<div class="flex flex-col gap-2">
       ${this.headers.map(
-        (p, ind) => html`<div class="flex gap-2">
-          <custom-select
-            .val=${p[0]}
-            .target=${ind}
-            .options=${this.allHeaders}
-            placeholder=${'header'}
-            eventName=${'update-header'}
-          ></custom-select>
-          <input
-            class="flex h-7 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            placeholder="value"
-            .value=${p[1]}
-            @keyup=${(e) => {
-              this.headers[ind][1] = e.target.value;
-              this.sendEvent(this.headers);
-            }}
-          />
-          <button
-            class="text-red-500 rounded shrink-0"
-            @click=${(e) => {
-              if (this.headers.length === 1) return;
-              this.headers = this.headers.filter((v, i) => i != ind);
-              this.sendEvent(this.headers);
-            }}
-          >
-            <i class="fa fa-trash" aria-hidden="true"></i>
-          </button>
-        </div>`
+        (p, ind) =>
+          html`<div class="flex gap-2">
+            <custom-select
+              .val=${p[0]}
+              .target=${ind}
+              .options=${this.allHeaders}
+              placeholder=${'header'}
+              eventName=${'update-header'}
+            ></custom-select>
+            <input
+              class="flex h-7 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              placeholder="value"
+              .value=${p[1]}
+              @keyup=${(e) => {
+                this.headers[ind][1] = e.target.value;
+                this.sendEvent(this.headers);
+              }}
+            />
+            <button
+              class="text-red-500 rounded shrink-0"
+              @click=${(e) => {
+                if (this.headers.length === 1) return;
+                this.headers = this.headers.filter((v, i) => i != ind);
+                this.sendEvent(this.headers);
+              }}
+            >
+              <i class="fa fa-trash" aria-hidden="true"></i>
+            </button>
+          </div>`
       )}
     </div>`;
   }
@@ -1426,26 +1432,27 @@ class BodyElement extends LitElement {
               placeholder="json request body"
             ></textarea>`
           : this.body.url.map(
-              (p, ind) => html`<div class="flex gap-2">
-                <input
-                  class="flex h-7 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  placeholder="key"
-                  .value=${p[0]}
-                  @keyup=${(e) => {
-                    this.body.url[ind][0] = e.target.value;
-                    this.sendEvent(this.body);
-                  }}
-                />
-                <input
-                  class="flex h-7 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  placeholder="value"
-                  .value=${p[1]}
-                  @keyup=${(e) => {
-                    this.body.url[ind][1] = e.target.value;
-                    this.sendEvent(this.body);
-                  }}
-                />
-              </div>`
+              (p, ind) =>
+                html`<div class="flex gap-2">
+                  <input
+                    class="flex h-7 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    placeholder="key"
+                    .value=${p[0]}
+                    @keyup=${(e) => {
+                      this.body.url[ind][0] = e.target.value;
+                      this.sendEvent(this.body);
+                    }}
+                  />
+                  <input
+                    class="flex h-7 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    placeholder="value"
+                    .value=${p[1]}
+                    @keyup=${(e) => {
+                      this.body.url[ind][1] = e.target.value;
+                      this.sendEvent(this.body);
+                    }}
+                  />
+                </div>`
             )}
       </div>
     </div>`;
@@ -1498,34 +1505,35 @@ class AssertsElement extends LitElement {
       </h6>
       <div class="flex flex-col gap-2">
         ${this.asserts.map(
-          (p, ind) => html`<div class="flex gap-2 w-full">
-            <custom-select
-              .val=${p[0]}
-              .target=${ind}
-              .options=${this.allAsserts}
-              placeholder=${'assert'}
-              eventName=${'update-assert'}
-            ></custom-select>
-            <input
-              class="flex h-7 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              placeholder="jsonpath expression"
-              .value=${p[1]}
-              @keyup=${(e) => {
-                this.asserts[ind][1] = e.target.value;
-                this.sendEvent(this.asserts);
-              }}
-            />
-            <button
-              class="text-red-500 rounded shrink-0"
-              @click=${(e) => {
-                if (this.asserts.length === 1) return;
-                this.asserts = this.asserts.filter((v, i) => i != ind);
-                this.sendEvent(this.asserts);
-              }}
-            >
-              <i class="fa fa-trash" aria-hidden="true"></i>
-            </button>
-          </div>`
+          (p, ind) =>
+            html`<div class="flex gap-2 w-full">
+              <custom-select
+                .val=${p[0]}
+                .target=${ind}
+                .options=${this.allAsserts}
+                placeholder=${'assert'}
+                eventName=${'update-assert'}
+              ></custom-select>
+              <input
+                class="flex h-7 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                placeholder="jsonpath expression"
+                .value=${p[1]}
+                @keyup=${(e) => {
+                  this.asserts[ind][1] = e.target.value;
+                  this.sendEvent(this.asserts);
+                }}
+              />
+              <button
+                class="text-red-500 rounded shrink-0"
+                @click=${(e) => {
+                  if (this.asserts.length === 1) return;
+                  this.asserts = this.asserts.filter((v, i) => i != ind);
+                  this.sendEvent(this.asserts);
+                }}
+              >
+                <i class="fa fa-trash" aria-hidden="true"></i>
+              </button>
+            </div>`
         )}
       </div>
     </div>`;
