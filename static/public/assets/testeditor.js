@@ -832,9 +832,20 @@ class AssertsVal extends LitElement {
       <div class="w-full">
         <h6 class="mb-1 font-medium text-gray-800">${this.stitle}</h6>
         <div class="w-full flex flex-col gap-1">
-          ${this.data.map((as) => {
+          ${this.data.map((as, i) => {
             const kv = Object.entries(as);
-            return html`<div class="flex gap-4 items-center w-full">
+            return html`<div class="flex gap-2 items-center w-full">
+              ${i % 2 === 0
+                ? html`
+                    <span class="text-green-500 font-bold">
+                      <i class="fa-solid fa-circle-check"></i>
+                    </span>
+                  `
+                : html`
+                    <span class="text-red-500 font-bold">
+                      <i class="fa-solid fa-circle-xmark"></i>
+                    </span>
+                  `}
               <span
                 class="text-sm w-full border border-dashed text-gray-700 px-2 p-1 rounded-lg"
                 >${kv[0][0]}</span
