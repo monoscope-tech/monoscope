@@ -82,6 +82,7 @@ library
       Pkg.Ortto
       Pkg.Parser
       Pkg.Parser.Expr
+      Pkg.Parser.ExprSpec
       Pkg.Parser.Stats
       Pkg.Parser.Types
       Pkg.TmpPg

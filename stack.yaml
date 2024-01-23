@@ -66,18 +66,34 @@ extra-deps:
   - servant-htmx-0.1.0.2@sha256:cdafd3165d28694ec4bf81fff3b87b4721415293d75a394a97c26d0d4d57e38c,1817
   - text-display-0.0.2.0@sha256:e96a1082f8f362032797f80e901d969b56a6dd7b43d1cb03e9654b08508da8e8,1818
   - transformers-except-0.1.2@sha256:2ff895fd65ec9e45cbe839ef5b66e26b7d9f3fe561148993293a41e14491e625,1548
-  - chronos-1.1.4@sha256:7ba7df7496a880ca4b898ca2cd5ebbf9ee8408fb93e95f8011d2a68c6faf655d,3677
+  # - chronos-1.1.5.1@sha256:2e70ffed34f8e43951862c3151589568f90028868d1c88b0292b988ade9d318e,3833
   - timing-convenience-0.1@sha256:7ff807a9a9e5596f2b18d45c5a01aefb91d4a98f6a1008d183b5c550f68f7cb7,2092
   # - typerep-map-0.3.3.0@sha256:20510efab770158414ac7828d1eca063d795bcc724ac634dd13bc7a50b476f42,4681
   - daemons-0.3.0@sha256:356edaf06a8cf5e9f19685f9ce793ad6d2b6bce2e55379f6b2aff1b0c07a633f,3178
   - nyan-interpolation-core-0.9.0.1@sha256:1bda0e90d2045eb18c905f905082f4098829c1bdcbc4012663686a1c503b4ded,4067
   - nyan-interpolation-0.9@sha256:8cf238be4c04746e4e9eabb34001c990c23e5837a19eb8652c584e57e92ecb41,3797
+  - HaskellNet-0.6.1.2@sha256:a880046501c8b035002ac2dbf597e6d416552bd04b499719997a67407602afc8,2583
+  - bytebuild-0.3.14.0@sha256:3b5c17a8e923ade6c71e12584a3cd662705e3d0499fc0cd7c16e29524729f55d,3539
+  - bytesmith-0.3.10.0@sha256:1fd4998c649f4264407cb30ec29104ec0f9bd4a47368a1f2beaf9694e08e87d3,2046
+  - byteslice-0.2.11.1@sha256:8331f4b18a2f05122470938e92d3ce659f16cb588dae45160d93fa0103c4a248,2627
+  - envy-2.1.2.0@sha256:831a8dc0db2b9dca9671dc757af0d75d81579d4bc7edc9f4d275ffd67df750bb,1743
+  - postgresql-migration-0.2.1.7@sha256:7b511be780305beb7940c99476911de47231a448f4eee5b50cbe40bdac63b3e8,4978
+  - fakedata-1.0.3@sha256:75630f6b9665965b4b551239ffcf89e4f879f93d235b18d4b249b0ed50513d0d,24593
+  - run-st-0.1.3.2@sha256:c5dad13132d69294ea3bec3418a0f5593ede6fb5b071f463316d09e118fdbc38,870
+  - string-random-0.1.4.3@sha256:4b3092568889e00b419093a1938f14a67743844bc86476ee5cb6f8827dc40545,2172
+  - contiguous-0.6.4.0@sha256:30d28d17b3ca2a9eecb753f6e38f7bc0d0a4d3afd6d76ca79931b9c167b68c39,1861
+  - primitive-unlifted-2.1.0.0@sha256:4a6fb2fc5836b18b217b814931472a0b1a84df03b45955b236c80291f1f46893,2326
   # - git: https://github.com/jfischoff/postgres-options
   #   commit: 45bafb2092bc7a7b3c561608295294d562313dd3
   #   subdirs: 
   #     - .
   - git: https://github.com/kowainik/typerep-map
     commit: 5787946c3c89c9b608f4d5308d2a27cc9a27761f
+    subdirs:
+      - .
+  - git: https://github.com/andrewthad/chronos
+    branch: chessai/ghc981
+    commit: b199bf6df1453af95832c2d2f9f0ef48c3622caa
     subdirs:
       - .
   - git: https://github.com/co-log/co-log
@@ -105,7 +121,7 @@ extra-deps:
       - lib/services/gogol-logging
       - lib/services/gogol-cloudtrace
   - git: https://github.com/saurabhnanda/odd-jobs
-    commit: 51c74432a5bbb1599c439fc59eef89d3adcde1a2 
+    commit: 411d5d0aaeeb96d4b72d0a434b9d2b53c88c2eae 
     subdirs:
       - .
   - git: https://github.com/tonyalaribe/tmp-postgres

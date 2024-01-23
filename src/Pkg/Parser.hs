@@ -2,15 +2,10 @@
 module Pkg.Parser (parseQueryStringToWhereClause, parseQueryToComponents, defSqlQueryCfg, SqlQueryCfg (..),QueryComponents (..), listToColNames) where
 
 import Control.Error (hush)
-import Control.Monad.Combinators.Expr
 import Data.Default (Default (def))
-import Data.Foldable (foldl)
 import Data.Text qualified as T
-import Data.Text.Display (Display, display, displayBuilder, displayParen, displayPrec)
-import Data.Text.Lazy.Builder (Builder)
-import Data.Time (CalendarDiffTime, ZonedTime, diffUTCTime, zonedTimeToUTC)
+import Data.Text.Display (display)
 import Data.Time.Clock (UTCTime)
-import Data.Time.Format
 import Data.Time.Format.ISO8601 (iso8601Show)
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
@@ -21,8 +16,6 @@ import PyF
 import Relude hiding (GT, LT, many, some)
 import Text.Megaparsec hiding (State)
 import Text.Megaparsec.Char
-import Text.Megaparsec.Char.Lexer qualified as L
-import Witch (from)
 
 
 -- Example queries

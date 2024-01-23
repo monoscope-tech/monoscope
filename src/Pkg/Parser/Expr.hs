@@ -104,13 +104,13 @@ parens = between (symbol "(") (symbol ")")
 -- >>> parseTest pValues "[1,2,3]"
 -- Right (List [Num "1",Num "2",Num "3"])
 --
--- >>> parse pValues "" "[true,false]"
+-- >>> parseTest pValues "[true,false]"
 -- Right (List [Boolean True,Boolean False])
 --
--- >>> parse pValues "" "[\"as\",1,2]"
+-- >>> parseTest pValues "[\"as\",1,2]"
 -- Right (List [Str "as",Num "1",Num "2"])
 --
--- >>> parse pValues "" "[\"as\",\"b\"]"
+-- >>> parseTest pValues "[\"as\",\"b\"]"
 -- Right (List [Str "as",Str "b"])
 pValues :: Parser Values
 pValues =
@@ -124,15 +124,20 @@ pValues =
 
 
 -- | pTerm is the main entry point that desides what tree lines to decend
+--
+-- Exampes: 
+--
+-- >>> parseTest pTerm "abc != \"GET\""
+--
 pTerm :: Parser Expr
 pTerm =
   (Paren <$> parens pExpr)
-    <|> try (Eq <$> pSubject <* void (symbol "==") <*> pValues)
-    <|> try (NotEq <$> pSubject <* void (symbol "!=") <*> pValues)
-    <|> try (GT <$> pSubject <* void (symbol ">") <*> pValues)
-    <|> try (LT <$> pSubject <* void (symbol "<") <*> pValues)
-    <|> try (GTEq <$> pSubject <* void (symbol ">=") <*> pValues)
-    <|> try (LTEq <$> pSubject <* void (symbol "<=") <*> pValues)
+    <|> try (Eq <$> pSubject <* space <* void (symbol "==") <* space <*> pValues)
+    <|> try (NotEq <$> pSubject <* space <* void (symbol "!=") <* space <*> pValues)
+    <|> try (GT <$> pSubject <* space <* void (symbol ">") <* space <*> pValues)
+    <|> try (LT <$> pSubject <* space <* void (symbol "<") <* space <*> pValues)
+    <|> try (GTEq <$> pSubject <* space <* void (symbol ">=") <* space <*> pValues)
+    <|> try (LTEq <$> pSubject <* space <* void (symbol "<=") <* space <*> pValues)
     <|> try regexParser
 
 
@@ -141,7 +146,9 @@ pTerm =
 regexParser :: Parser Expr
 regexParser = do
   subj <- pSubject
+  space
   void $ symbol "=~"
+  space
   regexStr <- char '/' *> manyTill L.charLiteral (char '/')
   pure $ Regex subj (toText regexStr)
 
@@ -221,7 +228,7 @@ instance Display Subject where
   displayPrec prec (Subject entire x (y : ys)) =
     displayPrec prec $ buildQuerySequence x (y : ys) <> " as " <> normalizeKeyPath entire
     where
-      normalizeKeyPath txt = T.toLower $ T.replace "]" "•" $ T.replace "[" "•" $ T.replace "." "•" txt
+      normalizeKeyPath txt = T.toLower $ T.replace "]" "❳" $ T.replace "[" "❲" $ T.replace "." "•" txt
 
       buildQuerySequence :: Text -> [FieldKey] -> Text
       buildQuerySequence acc [] = acc

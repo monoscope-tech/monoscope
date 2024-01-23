@@ -192,23 +192,6 @@ expandAPIlogItem' pid req modal outgoingRequests = do
         jsonValueToHtmlTree req.responseBody
       div_ [class_ "bg-gray-50 m-4 p-2 hidden rounded-lg border sdk_tab_content", id_ "res_headers_json"] do
         jsonValueToHtmlTree req.responseHeaders
-  -- script_
-  --   [type_ "text/hyperscript"]
-  --   [text|
-  --     behavior LogItemMenuable
-  --       on click
-  --         if I match <.with-context-menu/> then
-  --           remove <.log-item-context-menu /> then remove .with-context-menu from <.with-context-menu />
-  --         else
-  --           remove <.log-item-context-menu /> then remove .with-context-menu from <.with-context-menu /> then
-  --           get #log-item-context-menu-tmpl.innerHTML then put it after me then add .with-context-menu to me then 
-  --           _hyperscript.processNode(document.querySelector('.log-item-context-menu'))
-  --           htmx.process(document.querySelector('.log-item-context-menu'))
-  --         end
-  --         halt
-  --       end
-  --     end
-  --   |]
   script_
     [text|
 
@@ -317,9 +300,9 @@ jsonValueToHtmlTree val = jsonValueToHtmlTree' ("", "", val)
   where
     jsonValueToHtmlTree' :: (Text, Text, AE.Value) -> Html ()
     jsonValueToHtmlTree' (path, key, AE.Object v) = renderParentType "{" "}" key (length v) (AEK.toHashMapText v & HM.toList & sort & mapM_ (\(kk, vv) -> jsonValueToHtmlTree' (path <> "." <> key, kk, vv)))
-    jsonValueToHtmlTree' (path, key, AE.Array v) = renderParentType "[" "]" key (length v) (iforM_ v \i item -> jsonValueToHtmlTree' (path <> "." <> key <> "." <> "[]", show i, item))
+    jsonValueToHtmlTree' (path, key, AE.Array v) = renderParentType "[" "]" key (length v) (iforM_ v \i item -> jsonValueToHtmlTree' (path <> "." <> key <> "[*]", show i, item))
     jsonValueToHtmlTree' (path, key, value) = do
-      let fullFieldPath = if T.isSuffixOf ".[]" path then path else path <> "." <> key
+      let fullFieldPath = if T.isSuffixOf ".[*]" path then path else path <> "." <> key
       let fullFieldPath' = fromMaybe fullFieldPath $ T.stripPrefix ".." fullFieldPath
       div_
         [ class_ "relative log-item-field-parent"
