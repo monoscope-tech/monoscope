@@ -68,7 +68,10 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
       script_ [src_ "https://cdn.jsdelivr.net/npm/echarts@5.4.1/dist/echarts.min.js"] ("" :: Text)
       script_ [src_ "/assets/roma-echarts.js", defer_ "true"] ("" :: Text)
       script_ [src_ "/assets/js/thirdparty/notyf3.min.js", defer_ "true"] ("" :: Text)
-      script_ [src_ "/assets/js/thirdparty/htmx1_8_4.min.js", defer_ "true"] ("" :: Text)
+      script_ [src_ "/assets/js/thirdparty/htmx1_9_10.min.js", defer_ "true"] ("" :: Text)
+      script_ [src_ "/assets/deps/htmx/multi-swap.js", defer_ "true"] ("" :: Text)
+      script_ [src_ "/assets/deps/htmx/preload.js", defer_ "true"] ("" :: Text)
+      script_ [src_ "https://unpkg.com/htmx.org/dist/ext/debug.js", defer_ "true"] (""::Text)
       script_ [src_ "/assets/js/thirdparty/_hyperscript_web0_9_5.min.js", defer_ "true"] ("" :: Text)
       script_ [src_ "/assets/js/thirdparty/luxon.min.js", defer_ "true"] ("" :: Text)
       script_ [src_ "/assets/js/thirdparty/popper2_11_4.min.js", defer_ "true"] ("" :: Text)
@@ -84,6 +87,8 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
       script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/php.min.js"] ("" :: Text)
       script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/csharp.min.js"] ("" :: Text)
       script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/python.min.js"] ("" :: Text)
+      script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.63.0/codemirror.min.js"] ("" :: Text)
+      script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/mode/javascript/javascript.min.js"] ("" :: Text)
       script_ [type_ "module", src_ "/assets/filtercomponent.js"] ("" :: Text)
 
       -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/core@1.2.0/dist/index.umd.min.js"] ("" :: Text)
@@ -127,7 +132,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
                 });
               }
             |]
-    body_ [class_ "text-gray-900 h-full w-full bg-white"] do
+    body_ [class_ "text-gray-900 h-full w-full bg-white fixed", term "data-theme" "winter", term "hx-ext" "multi-swap,preload"] do
       div_
         [ style_ "z-index:99999"
         , class_ "fixed pt-24 sm:hidden justify-center z-50 w-full p-4 bg-gray-50 overflow-y-auto inset-0 h-full max-h-full"
@@ -156,7 +161,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
                   div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] pass
       case sessM of
         Nothing -> do
-          section_ [class_ "flex flex-col grow h-full overflow-y-hidden"] do
+          section_ [class_ "flex flex-col grow  h-screen overflow-y-hidden"] do
             -- navbar currUser
             section_ [class_ "flex-1 overflow-y-auto"] do
               child
@@ -167,9 +172,9 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
             -- let currUserEmail = CI.original currUser.email
             section_ [class_ "flex flex-row h-screen overflow-hidden"] do
               sideNav'
-              section_ [class_ "flex flex-col grow h-full overflow-y-hidden"] do
+              section_ [class_ "flex flex-col grow h-screen overflow-y-hidden"] do
                 navbar currUser
-                section_ [class_ "flex-1 overflow-y-auto"] do
+                section_ [class_ "flex-1 overflow-y-hidden"] do
                   child
       script_ [async_ "true", src_ "https://www.googletagmanager.com/gtag/js?id=AW-11285541899"] ("" :: Text)
       script_

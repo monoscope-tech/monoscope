@@ -1,6 +1,7 @@
 -- Parser implemented with help and code from: https://markkarpov.com/tutorial/megaparsec.html
-module Pkg.Parser (parseQueryStringToWhereClause, parseQueryToComponents, defSqlQueryCfg, SqlQueryCfg(..), listToColNames) where
+module Pkg.Parser (parseQueryStringToWhereClause, parseQueryToComponents, defSqlQueryCfg, SqlQueryCfg (..),QueryComponents (..), listToColNames) where
 
+import Control.Error (hush)
 import Control.Monad.Combinators.Expr
 import Data.Default (Default (def))
 import Data.Foldable (foldl)
@@ -8,7 +9,10 @@ import Data.Text qualified as T
 import Data.Text.Display (Display, display, displayBuilder, displayParen, displayPrec)
 import Data.Text.Lazy.Builder (Builder)
 import Data.Time (CalendarDiffTime, ZonedTime, diffUTCTime, zonedTimeToUTC)
+import Data.Time.Clock (UTCTime)
 import Data.Time.Format
+import Data.Time.Format.ISO8601 (iso8601Show)
+import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
 import Pkg.Parser.Expr
 import Pkg.Parser.Stats
@@ -42,6 +46,11 @@ data QueryComponents = QueryComponents
   { whereClause :: Maybe Text
   , groupByClause :: [Text]
   , select :: [Text]
+  , finalColumns :: [Text]
+  -- A query which can be run to retrieve the count 
+  , countQuery :: Text
+  -- final generated sql query
+  , finalSqlQuery :: Text 
   }
   deriving stock (Show, Generic)
   deriving anyclass (Default)
@@ -65,30 +74,42 @@ applySectionToComponent qc (StatsCommand agg (Just (ByClause fields))) =
 
 data SqlQueryCfg = SqlQueryCfg
   { pid :: Projects.ProjectId
-  , dateRange :: (Maybe ZonedTime, Maybe ZonedTime)
-  , cursorM :: Maybe ZonedTime
+  , dateRange :: (Maybe UTCTime, Maybe UTCTime)
+  , cursorM :: Maybe UTCTime
+  , projectedColsByUser :: [Text] -- cols selected explicitly by user
   , defaultSelect :: [Text]
   }
   deriving stock (Show, Generic)
   deriving anyclass (Default)
 
 
-sqlFromQueryComponents :: SqlQueryCfg -> QueryComponents -> Text
+sqlFromQueryComponents :: SqlQueryCfg -> QueryComponents -> (Text, QueryComponents)
 sqlFromQueryComponents sqlCfg qc =
   let
-    fmtTime = formatTime defaultTimeLocale "%F %R"
-    cursorT = maybe "" (\c -> " AND " <> fmtTime c) sqlCfg.cursorM
-    selectClause = T.intercalate "," $ if null qc.select then sqlCfg.defaultSelect else qc.select
+    fmtTime = toText . iso8601Show
+    cursorT = maybe "" (\c -> " AND created_at<'" <> fmtTime c <> "' ") sqlCfg.cursorM
+    -- Handle the Either error case correctly not hushing it.
+    projectedColsProcessed = mapMaybe (\col -> display <$> hush (parse pSubject "" col)) sqlCfg.projectedColsByUser
+    selectedCols = if null qc.select then projectedColsProcessed <> sqlCfg.defaultSelect else qc.select
+    selectClause = T.intercalate "," selectedCols
     whereClause = maybe "" (" AND " <>) qc.whereClause
     groupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause
     dateRangeStr = case sqlCfg.dateRange of
       (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND '" <> fmtTime b <> "'"
       (Just a, Just b) -> "AND created_at BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
       _ -> ""
+
+    finalSqlQuery =
+      [fmt|SELECT row_to_json(t) FROM ( SELECT {selectClause} FROM apis.request_dumps 
+           WHERE project_id='{sqlCfg.pid.toText}'::uuid  and created_at > NOW() - interval '14 days' {cursorT} {dateRangeStr} {whereClause}
+           {groupByClause} ORDER BY created_at desc limit 200 ) t|]
+
+    countQuery = 
+      [fmt|SELECT count(*) FROM apis.request_dumps 
+           WHERE project_id='{sqlCfg.pid.toText}'::uuid  and created_at > NOW() - interval '14 days' {cursorT} {dateRangeStr} {whereClause}
+           {groupByClause} limit 1|]
    in
-    [fmt|SELECT row_to_json(t) FROM ( SELECT {selectClause} FROM apis.request_dumps 
-          WHERE project_id='{sqlCfg.pid.toText}'::uuid  and created_at > NOW() - interval '14 days' {cursorT} {dateRangeStr} {whereClause}
-          {groupByClause} ORDER BY created_at desc limit 200 ) t|]
+    (finalSqlQuery, qc{finalColumns = listToColNames selectedCols, countQuery, finalSqlQuery })
 
 
 -----------------------------------------------------------------------------------
@@ -154,7 +175,7 @@ parseQueryStringToWhereClause q =
 --
 -- >>> parseQueryToComponents (defSqlQueryCfg defPid) "errors[*].error_type=~/^ab.*c/"
 -- Right "SELECT id,created_at,host,status_code,LEFT(\n        CONCAT(\n            'request_body=', COALESCE(request_body, 'null'), \n            ' response_body=', COALESCE(response_body, 'null')\n        ),\n        255\n    ) AS rest FROM apis.request_dumps \n          WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid  and created_at > NOW() - interval '14 days'    AND jsonb_path_exists(errors, '$[*].\"error_type\" ?? (@ like_regex \"^ab.*c\")')\n           ORDER BY created_at desc limit 200"
-parseQueryToComponents :: SqlQueryCfg -> Text -> Either Text Text
+parseQueryToComponents :: SqlQueryCfg -> Text -> Either Text (Text, QueryComponents)
 parseQueryToComponents sqlCfg q =
   bimap
     (toText . errorBundlePretty)
@@ -172,22 +193,32 @@ defSqlQueryCfg pid =
     { pid = pid
     , cursorM = Nothing
     , dateRange = (Nothing, Nothing)
+    , projectedColsByUser = []
     , defaultSelect =
         [ "id::text as id"
-        , "created_at"
+        , [fmt|to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as created_at|]
+        , "request_type"
         , "host"
         , "status_code"
+        , "method"
+        , "url_path"
         , "JSONB_ARRAY_LENGTH(errors) as errors_count"
         , [fmt|LEFT(
         CONCAT(
-            'request_body=', COALESCE(request_body, 'null'), 
-            ' response_body=', COALESCE(response_body, 'null')
+            'url=', COALESCE(raw_url, 'null'),
+            ' response_body=', COALESCE(response_body, 'null'),
+            ' request_body=', COALESCE(request_body, 'null') 
         ),
         255
     ) as rest|]
         ]
     }
 
+
 -- >>> listToColNames ["id", "JSONB_ARRAY_LENGTH(errors) as errors_count"]
 listToColNames :: [Text] -> [Text]
-listToColNames = map \x-> T.strip $ last  $ "" :| T.splitOn "as" x
+listToColNames = map \x -> T.strip $ last $ "" :| T.splitOn "as" x
+
+
+instance HasField "toColNames" QueryComponents [Text] where
+  getField qc = qc.finalColumns

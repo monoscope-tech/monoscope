@@ -1,45 +1,48 @@
 module Pkg.Parser.Expr where
 
-
 import Control.Monad.Combinators.Expr
 import Data.Foldable (foldl)
+import Data.Text qualified as T
 import Data.Text.Display (Display, display, displayBuilder, displayParen, displayPrec)
 import Data.Text.Lazy.Builder (Builder)
-import Relude hiding (GT, LT, many, some, Sum)
+import Pkg.Parser.Types
+import Relude hiding (GT, LT, Sum, many, some)
+import Relude.Unsafe qualified as Unsafe
 import Text.Megaparsec hiding (State)
 import Text.Megaparsec.Char
 import Text.Megaparsec.Char.Lexer qualified as L
-import Pkg.Parser.Types
 
 
 -- Example queries
 -- request_body.v1.v2 = "abc" AND (request_body.v3.v4 = 123 OR request_body.v5[].v6=ANY[1,2,3] OR request_body[1].v7 OR NOT request_body[-1].v8 )
 -- request_body[1].v7 | {.v7, .v8} |
 
+-- >>> request_body="jfdshkjfds" | stat field1, field2 by field3
 
-
-
--- >>> parse pSubject "" "key"
--- Right (Subject "key" [FieldKey ""])
--- >>> parse pSubject "" "key.abc[1]"
--- Right (Subject "key" [FieldKey "",ArrayIndex "abc" 1])
--- >>> parse pSubject "" "key.abc[*]"
--- Right (Subject "key" [FieldKey "",ArrayWildcard "abc"])
--- >>> parse pSubject "" "key.abc[*].xyz"
--- Right (Subject "key" [FieldKey "",ArrayWildcard "abc",FieldKey "xyz"])
--- >>> parse pSubject "" "abc[*].xyz"
--- Right (Subject "abc" [ArrayWildcard "",FieldKey "xyz"])
--- >>> parse pSubject "" "abc[1].xyz.cde[*]"
--- Right (Subject "abc" [ArrayIndex "" 1,FieldKey "xyz",ArrayWildcard "cde"])
--- >>> parse pSubject "" "request_body.message.tags[*].name"
--- Right (Subject "request_body" [FieldKey "",FieldKey "message",ArrayWildcard "tags",FieldKey "name"])
+-- >>> parseTest pSubject "key"
+-- Subject "key" [FieldKey ""]
+-- >>> parseTest pSubject "key.abc[1]"
+-- Subject "key" [FieldKey "",ArrayIndex "abc" 1]
+-- >>> parseTest pSubject "key.abc[*]"
+-- Subject "key" [FieldKey "",ArrayWildcard "abc"]
+-- >>> parseTest pSubject "key.abc[*].xyz"
+-- Subject "key.abc[*].xyz" "key" [FieldKey "",ArrayWildcard "abc",FieldKey "xyz"]
+-- >>> parseTest pSubject "abc[*].xyz"
+-- Subject "abc[*].xyz" "abc" [ArrayWildcard "",FieldKey "xyz"]
+-- >>> parseTest pSubject "abc[1].xyz.cde[*]"
+-- Subject "abc[1].xyz.cde[*]" "abc" [ArrayIndex "" 1,FieldKey "xyz",ArrayWildcard "cde"]
+-- >>> parseTest pSubject "request_body.message.tags[*].name"
+-- Subject "request_body.message.tags[*].name" "request_body" [FieldKey "",FieldKey "message",ArrayWildcard "tags",FieldKey "name"]
 pSubject :: Parser Subject
 pSubject = do
+  startPos <- getOffset
+  restOfInputToProcess <- getInput
   (primaryKey, firstField) <- pPrimaryKey
   fields <- many $ char '.' *> pFieldKey
-  return $ Subject primaryKey $ maybeToList firstField ++ fields
-
-
+  endPos <- getOffset
+  let entireLength = endPos - startPos
+  let entire = T.take entireLength restOfInputToProcess
+  return $ Subject entire primaryKey $ maybeToList firstField ++ fields
 
 
 -- >>> parse pFieldKey "" "key.abc[1]"
@@ -98,7 +101,7 @@ parens = between (symbol "(") (symbol ")")
 --
 -- Examples:
 --
--- >>> parse pValues "" "[1,2,3]"
+-- >>> parseTest pValues "[1,2,3]"
 -- Right (List [Num "1",Num "2",Num "3"])
 --
 -- >>> parse pValues "" "[true,false]"
@@ -131,6 +134,7 @@ pTerm =
     <|> try (GTEq <$> pSubject <* void (symbol ">=") <*> pValues)
     <|> try (LTEq <$> pSubject <* void (symbol "<=") <*> pValues)
     <|> try regexParser
+
 
 -- >>> parse regexParser "" "abc=~/abc.*/"
 -- Right (Regex (Subject "abc" []) "abc.*")
@@ -176,17 +180,16 @@ binary name f = InfixL (f <$ symbol name)
 --  - Aggregate by / rollup [~]
 --  -
 
--- Core problem to solve is metrics. Metrics can be any of these values, 
--- but must be aggregated over a timeline 
--- Suporting a splunk like query style. 
+-- Core problem to solve is metrics. Metrics can be any of these values,
+-- but must be aggregated over a timeline
+-- Suporting a splunk like query style.
 -- https://chat.openai.com/share/cc9553fd-1e02-482b-a01f-427ca755d977
 --
--- stats 
--- timechart 
--- fields 
--- where condition for alerts. 
+-- stats
+-- timechart
+-- fields
+-- where condition for alerts.
 --
-
 
 -------------------------------------------------------
 --
@@ -196,27 +199,46 @@ binary name f = InfixL (f <$ symbol name)
 
 -- Helper function to detect if Subject contains an ArrayWildcard
 subjectHasWildcard :: Subject -> Bool
-subjectHasWildcard (Subject _ keys) = any isArrayWildcard keys
+subjectHasWildcard (Subject _ _ keys) = any isArrayWildcard keys
   where
     isArrayWildcard (ArrayWildcard _) = True
     isArrayWildcard _ = False
 
 
 -- >>> display (Subject "request_body" [FieldKey "message"])
--- "request_body->>'message'"
+-- "request_body->>'message' as message"
+--
+-- >>> display (Subject "request_body" [FieldKey "message", FieldKey "value"])
+-- "request_body->'message'->>'value' as value"
 --
 -- >>> display (Subject "errors" [ArrayIndex "" 0, FieldKey "message"])
--- "errors->0->>'message'"
+-- "errors->0->>'message' as message"
+--
+-- >>> display (Subject "errors" [ArrayIndex "" 0, FieldKey "message"])
+-- "errors->0->>'message' as message"
 instance Display Subject where
-  displayPrec prec (Subject x []) = displayPrec prec x
-  displayPrec prec (Subject x (y : ys)) = displayPrec prec $ foldl buildQuery (buildQuery x y) ys
+  displayPrec prec (Subject entire x []) = displayPrec prec x
+  displayPrec prec (Subject entire x (y : ys)) =
+    displayPrec prec $ buildQuerySequence x (y : ys) <> " as " <> normalizeKeyPath entire
     where
-      buildQuery :: Text -> FieldKey -> Text
-      buildQuery acc (FieldKey key) = acc <> "->>'" <> key <> "'"
-      buildQuery acc (ArrayIndex "" idx) = acc <> "->" <> show idx
-      buildQuery acc (ArrayIndex key idx) = acc <> "->'" <> key <> "'->" <> show idx
-      buildQuery acc (ArrayWildcard _) = error "buildQuery for ArrayWildcard should be unreachable"
+      normalizeKeyPath txt = T.toLower $ T.replace "]" "•" $ T.replace "[" "•" $ T.replace "." "•" txt
 
+      buildQuerySequence :: Text -> [FieldKey] -> Text
+      buildQuerySequence acc [] = acc
+      buildQuerySequence acc [lastKey] = buildQuery acc lastKey True
+      buildQuerySequence acc (key : rest) = buildQuerySequence (buildQuery acc key False) rest
+
+      buildQuery :: Text -> FieldKey -> Bool -> Text
+      buildQuery acc (FieldKey key) isLast = acc <> separator isLast <> key <> "'"
+      buildQuery acc (ArrayWildcard key) isLast = acc <> separator isLast <> key <> "'"
+      buildQuery acc (ArrayIndex "" idx) isLast = acc <> separatorInt isLast <> show idx
+      buildQuery acc (ArrayIndex key idx) isLast = acc <> separator False <> key <> "'" <> separatorInt isLast <> show idx
+
+      separator isLast = if isLast then "->>'" else "->'"
+      separatorInt isLast = if isLast then "->>" else "->"
+
+
+-- ArrayWildcard handling is marked as unreachable, assuming it's not used in your context.
 
 -- >>> display (List [Str "a"])
 -- "ARRAY['a']"
@@ -260,7 +282,7 @@ instance Display Values where
 -- >>> display (Subject "request_body" [FieldKey "message", ArrayWildcard "tags", FieldKey "name"])
 -- buildQuery for ArrayWildcard should be unreachable
 --
--- >>> display (Regex (Subject "request_body" [FieldKey "msg"]) "^abc.*") 
+-- >>> display (Regex (Subject "request_body" [FieldKey "msg"]) "^abc.*")
 -- "jsonb_path_exists(request_body, '$.\"msg\" ?? (@ like_regex \"^abc.*\")')"
 instance Display Expr where
   displayPrec prec expr@(Eq sub val) = displayExprHelper "==" prec sub val
@@ -272,7 +294,7 @@ instance Display Expr where
   displayPrec prec (Paren u1) = displayParen True $ displayPrec prec u1
   displayPrec prec (And u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " AND " <> displayBuilder u2
   displayPrec prec (Or u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " OR " <> displayBuilder u2
-  displayPrec prec (Regex sub val) = displayPrec prec $ jsonPathQuery "like_regex" sub (Str val) 
+  displayPrec prec (Regex sub val) = displayPrec prec $ jsonPathQuery "like_regex" sub (Str val)
 
 
 -- Helper function to handle the common display logic
@@ -303,7 +325,7 @@ displayExprHelper op prec sub val =
 -- >>> jsonPathQuery ">" (Subject "orders" [ArrayIndex "" 0, ArrayWildcard "", FieldKey "status"]) (Str "pending")
 -- "jsonb_path_exists(orders, '$[0][*].\"status\" ? (@ > \"pending\")')"
 jsonPathQuery :: Text -> Subject -> Values -> Text
-jsonPathQuery op (Subject base keys) val =
+jsonPathQuery op (Subject entire base keys) val =
   "jsonb_path_exists(" <> base <> ", '" <> "$" <> buildPath keys <> buildCondition op val <> "')"
   where
     buildPath :: [FieldKey] -> Text
@@ -320,7 +342,6 @@ jsonPathQuery op (Subject base keys) val =
     buildCondition oper (List xs) = " ?? (@ " <> oper <> " {" <> (mconcat . intersperse "," . map display) xs <> "} )"
 
 
-
 instance Display AggFunction where
   displayPrec prec (Count sub alias) = displayBuilder $ "count(" <> display sub <> ")"
   displayPrec prec (Sum sub alias) = displayBuilder $ "sum(" <> display sub <> ")"
@@ -331,5 +352,3 @@ instance Display AggFunction where
   displayPrec prec (Stdev sub alias) = displayBuilder $ "stdev(" <> display sub <> ")"
   displayPrec prec (Range sub alias) = displayBuilder $ "range(" <> display sub <> ")"
   displayPrec prec (Plain sub alias) = displayBuilder $ "" <> display sub <> ""
-
-

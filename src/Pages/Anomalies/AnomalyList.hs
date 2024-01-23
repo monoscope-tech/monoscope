@@ -48,7 +48,6 @@ import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Charts.Charts (QueryBy)
 import Pages.Charts.Charts qualified as Charts
 import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
-import Pages.Log qualified as Log
 import Pages.NonMember
 import Pkg.Components (loader)
 import Relude
@@ -605,22 +604,6 @@ anomalyDetailsPage anomaly shapesWithFieldsMap fields prvFormatsM chartQuery cur
             div_ [class_ "w-full flex justify-center overflow-hidden"] do
               loader
 
-  script_
-    [type_ "text/hyperscript"]
-    [text|
-      def LogItemExpandable(me)
-          if I match <.expanded-log/> then 
-            remove next <.log-item-info/> then 
-            remove .expanded-log from me
-          else
-            add .expanded-log to me
-            remove .hidden from next <.item-loading />
-            fetch `$${@data-log-item-path}` as html then put it after me then
-             add .hidden to next <.item-loading />
-            _hyperscript.processNode(next <.log-item-info />) then
-          end 
-      end
-    |]
   style_
     [text|
     .tree-children {
@@ -667,8 +650,9 @@ anomalyEvents :: Sessions.PersistentSession -> Projects.ProjectId -> Text -> Tex
 anomalyEvents sess pid targetHash anomalyType = do
   pool <- asks pool
   events <- liftIO $ withPool pool $ RequestDump.selectAnomalyEvents pid targetHash (Anomalies.parseAnomalyRawTypes anomalyType)
-  pure $ div_ [class_ "w-full"] do
-    Log.logItemRows pid events [] ""
+  pure ""
+  -- pure $ div_ [class_ "w-full"] do
+  --   Log.logItemRows pid events [] ""
 
 
 requestShapeOverview :: Maybe (Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field]) -> Html ()

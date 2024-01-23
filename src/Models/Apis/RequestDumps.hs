@@ -35,7 +35,7 @@ import Control.Error (hush)
 import Data.Aeson qualified as AE
 import Data.Default.Instances ()
 import Data.Text qualified as T
-import Data.Time (CalendarDiffTime, ZonedTime, diffUTCTime, zonedTimeToUTC)
+import Data.Time (CalendarDiffTime, ZonedTime, diffUTCTime, zonedTimeToUTC, utcToZonedTime, utc)
 import Data.Time.Format
 import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
 import Data.Tuple.Extra (both)
@@ -67,6 +67,7 @@ import Pkg.Parser
 import Relude hiding (many, some)
 import Utils (DBField (MkDBField), quoteTxt)
 import Witch (from)
+import Data.Time.Clock (UTCTime)
 
 
 data SDKTypes
@@ -329,8 +330,18 @@ requestDumpLogItemUrlPath :: Projects.ProjectId -> RequestDumpLogItem -> Text
 requestDumpLogItemUrlPath pid rd = "/p/" <> pid.toText <> "/log_explorer/" <> UUID.toText rd.id <> "/" <> from @String (formatShow iso8601Format rd.createdAt)
 
 
-requestDumpLogUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Text
-requestDumpLogUrlPath pid q cols cursorM sinceM fromM toM = [text|/p/$pidT/log_explorer?query=$queryT&cols=$colsT&cursor=$cursorT&since=$sinceT&from=$fromT&to=$toT|]
+requestDumpLogUrlPath
+  :: Projects.ProjectId
+  -> Maybe Text
+  -> Maybe Text
+  -> Maybe Text
+  -> Maybe Text
+  -> Maybe Text
+  -> Maybe Text
+  -> Maybe Text 
+  -> Text
+requestDumpLogUrlPath pid q cols cursorM sinceM fromM toM layoutM = 
+  [text|/p/$pidT/log_explorer?query=$queryT&cols=$colsT&cursor=$cursorT&since=$sinceT&from=$fromT&to=$toT&layout=$layoutT|]
   where
     pidT = pid.toText
     queryT = fromMaybe "" q
@@ -339,6 +350,7 @@ requestDumpLogUrlPath pid q cols cursorM sinceM fromM toM = [text|/p/$pidT/log_e
     sinceT = fromMaybe "" sinceM
     fromT = fromMaybe "" fromM
     toT = fromMaybe "" toM
+    layoutT = fromMaybe "" layoutM
 
 
 getRequestDumpForReports :: Projects.ProjectId -> Text -> DBT IO (V.Vector RequestForReport)
@@ -373,16 +385,16 @@ getRequestDumpsForPreviousReportPeriod pid report_type = query Select (Query $ e
     |]
 
 
-selectLogTable :: Projects.ProjectId -> Text -> Maybe ZonedTime -> (Maybe ZonedTime, Maybe ZonedTime) -> DBT IO (Either Text (V.Vector (HM.HashMap Text Value), Int))
-selectLogTable pid extraQuery cursorM dateRange = do
-  let resp = parseQueryToComponents ((defSqlQueryCfg pid){cursorM, dateRange}) extraQuery
+selectLogTable :: Projects.ProjectId -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> DBT IO (Either Text (V.Vector (HM.HashMap Text Value), [Text], Int))
+selectLogTable pid extraQuery cursorM dateRange projectedColsByUser= do
+  let resp = parseQueryToComponents ((defSqlQueryCfg pid){cursorM, dateRange, projectedColsByUser}) extraQuery
   case resp of
     Left x -> pure $ Left x
-    Right q -> do
+    Right (q, queryComponents) -> do
       logItems <- queryToValues q
+      Only count <- fromMaybe (Only 0) <$> queryCount queryComponents.countQuery 
       let logItemsMap = V.mapMaybe convertValueToMap logItems
-      -- Only count <- fromMaybe (Only 0) <$> queryOne_ Select (Query $ encodeUtf8 q)
-      pure $ Right (logItemsMap, 0)
+      pure $ Right (logItemsMap, queryComponents.toColNames, count)
 
 
 convertValueToMap :: Only Value -> Maybe (HM.HashMap Text Value)
@@ -393,6 +405,9 @@ convertValueToMap (Only val) = case val of
 
 queryToValues :: Text -> DBT IO (V.Vector (Only Value))
 queryToValues q = query_ Select (Query $ encodeUtf8 q)
+
+queryCount :: Text -> DBT IO (Maybe (Only Int))
+queryCount q = queryOne_ Select (Query $ encodeUtf8 q)
 
 
 selectRequestDumpByProject :: Projects.ProjectId -> Text -> Maybe Text -> Maybe ZonedTime -> Maybe ZonedTime -> DBT IO (V.Vector RequestDumpLogItem, Int)
@@ -456,16 +471,17 @@ bulkInsertRequestDumps = executeMany q
     q = [sql| INSERT INTO apis.request_dumps VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING; |]
 
 
-selectRequestDumpByProjectAndId :: Projects.ProjectId -> ZonedTime -> UUID.UUID -> DBT IO (Maybe RequestDumpLogItem)
-selectRequestDumpByProjectAndId pid createdAt rdId = queryOne Select q (createdAt, pid, rdId)
+selectRequestDumpByProjectAndId :: Projects.ProjectId -> UTCTime -> UUID.UUID -> DBT IO (Maybe RequestDumpLogItem)
+selectRequestDumpByProjectAndId pid createdAt rdId = queryOne Select q (createdAt, createdAt, pid, rdId)
   where
+    createdAtZ = utcToZonedTime utc createdAt
     q =
       [sql|SELECT   id,created_at,project_id, host,url_path,method,raw_url,referer,
                     path_params,status_code,query_params,
                     request_body,response_body,request_headers,response_headers, 
                     duration_ns, sdk_type,
                     parent_id, service_version, JSONB_ARRAY_LENGTH(errors) as errors_count, errors, tags, request_type
-             FROM apis.request_dumps where created_at=? and project_id=? and id=? LIMIT 1|]
+             FROM apis.request_dumps where (created_at BETWEEN (TIMESTAMP ? - INTERVAL '1 day') AND (TIMESTAMP ? + INTERVAL '1 day'))  and project_id=? and id=? LIMIT 1|]
 
 
 selectReqLatenciesRolledBySteps :: Int -> Int -> Projects.ProjectId -> Text -> Text -> DBT IO (V.Vector (Int, Int))

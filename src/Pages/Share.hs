@@ -22,7 +22,6 @@ import Database.PostgreSQL.Simple.SqlQQ
 import Database.PostgreSQL.Transact (DBT)
 import Gogol.Prelude (addHeader)
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
-import Pages.Log qualified as Log
 import Pages.LogExplorer.LogItem qualified as LogItem
 import NeatInterpolation
 import Pkg.Components (navBar)

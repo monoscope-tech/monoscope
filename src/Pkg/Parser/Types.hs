@@ -25,7 +25,7 @@ data Values = Num Text | Str Text | Boolean Bool | Null | List [Values]
 
 -- A subject consists of the primary key, and then the list of fields keys which are delimited by a .
 -- To support jsonpath, we will have more powerfule field keys, so instead of a text array, we could have an enum field key type?
-data Subject = Subject Text [FieldKey]
+data Subject = Subject Text Text [FieldKey]
   deriving stock (Eq, Ord, Show)
 
 

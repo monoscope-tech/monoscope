@@ -1,55 +1,30 @@
 module Pages.LogExplorer.LogItem where
 
 import Lucid
-import Lucid.Htmx
 import Models.Projects.Projects qualified as Projects
 import Config
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEK
 import Data.ByteString.Lazy qualified as BS
-import Data.Default (def)
-import Data.Digest.XXHash
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
-import Data.Time (
-  UTCTime,
-  ZonedTime,
-  addUTCTime,
-  getCurrentTime,
-  secondsToNominalDiffTime,
-  utc,
-  utcToZonedTime,
- )
-import Data.Time.Format.ISO8601 (iso8601ParseM)
+import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector, iforM_)
-import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
-import Lucid
-import Lucid.Base
-import Lucid.Htmx
 import Lucid.Hyperscript (__)
-import Lucid.Svg (use_)
 import Models.Apis.RequestDumps qualified as RequestDumps
-import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
-import Numeric (showHex)
-import Optics.Core ((^.))
-import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Pages.NonMember
-import Pkg.Components (loader)
 import Relude
-
-import Data.Time.Clock (UTCTime)
 import Data.Time.Format
 import System.Clock
 import Utils
-import Witch (from)
 
 
 
-expandAPIlogItemH :: Sessions.PersistentSession -> Projects.ProjectId -> UUID.UUID -> ZonedTime -> DashboardM (Html ())
+expandAPIlogItemH :: Sessions.PersistentSession -> Projects.ProjectId -> UUID.UUID -> UTCTime -> DashboardM (Html ())
 expandAPIlogItemH sess pid rdId createdAt = do
   pool <- asks pool
   startTime <- liftIO $ getTime Monotonic
@@ -149,8 +124,8 @@ expandAPIlogItem' pid req modal outgoingRequests = do
     unless (null outgoingRequests) $ div_ [class_ "border rounded-lg mt-8"] do
       div_ [class_ "flex w-full bg-gray-100 px-4 py-2 flex-col gap-2"] do
         p_ [class_ "font-bold"] "Outgoing requests"
-      div_ [class_ "grow overflow-y-auto py-2 px-1 max-h-[500px] whitespace-nowrap text-sm divide-y overflow-x-hidden"] do
-        logItemRows pid outgoingRequests [] ""
+      div_ [class_ "grow overflow-y-auto py-2 px-1 max-h-[500px] whitespace-nowrap text-sm divide-y overflow-x-hidden"] ""
+        -- Log.logItemRows_ pid outgoingRequests [] ""
 
     -- request details
     div_ [class_ "border rounded-lg mt-8", id_ "request_detail_container"] do
@@ -217,39 +192,72 @@ expandAPIlogItem' pid req modal outgoingRequests = do
         jsonValueToHtmlTree req.responseBody
       div_ [class_ "bg-gray-50 m-4 p-2 hidden rounded-lg border sdk_tab_content", id_ "res_headers_json"] do
         jsonValueToHtmlTree req.responseHeaders
+  -- script_
+  --   [type_ "text/hyperscript"]
+  --   [text|
+  --     behavior LogItemMenuable
+  --       on click
+  --         if I match <.with-context-menu/> then
+  --           remove <.log-item-context-menu /> then remove .with-context-menu from <.with-context-menu />
+  --         else
+  --           remove <.log-item-context-menu /> then remove .with-context-menu from <.with-context-menu /> then
+  --           get #log-item-context-menu-tmpl.innerHTML then put it after me then add .with-context-menu to me then 
+  --           _hyperscript.processNode(document.querySelector('.log-item-context-menu'))
+  --           htmx.process(document.querySelector('.log-item-context-menu'))
+  --         end
+  --         halt
+  --       end
+  --     end
+  --   |]
   script_
-    [type_ "text/hyperscript"]
     [text|
-      behavior LogItemMenuable
-        on click
-          if I match <.with-context-menu/> then
-            remove <.log-item-context-menu /> then remove .with-context-menu from <.with-context-menu />
-          else
-            remove <.log-item-context-menu /> then remove .with-context-menu from <.with-context-menu /> then
-            get #log-item-context-menu-tmpl.innerHTML then put it after me then add .with-context-menu to me then 
-            _hyperscript.processNode(document.querySelector('.log-item-context-menu'))
-            htmx.process(document.querySelector('.log-item-context-menu'))
-          end
-          halt
-        end
-      end
 
-      def LogItemExpandable(me)
-          if I match <.expanded-log/> then 
-            remove next <.log-item-info/> then 
-            remove .expanded-log from me
-          else
-            add .expanded-log to me
-            remove .hidden from next <.item-loading />
-            fetch `$${@data-log-item-path}` as html then put it after me then
-             add .hidden to next <.item-loading />
-            _hyperscript.processNode(next <.log-item-info />) then
-          end 
-      end
-    |]
+function changeTab(tabId, parent) {
+  const p = document.getElementById(parent);
+  const tabLinks = p.querySelectorAll('.sdk_tab');
+  tabLinks.forEach(link => link.classList.remove('sdk_tab_active'));
+  const clickedTabLink = document.getElementById(tabId);
+  clickedTabLink.classList.add('sdk_tab_active')
+  const tabContents = p.querySelectorAll('.sdk_tab_content');
+  tabContents.forEach(content => {
+    content.classList.add("hidden")
+    content.classList.remove ("sdk_tab_content_active")
+  });
+  const tabContent = document.getElementById(tabId + '_json');
+  tabContent.classList.remove("hidden")
+  setTimeout(()=>{tabContent.classList.add("sdk_tab_content_active")},10)
+}
+
+function toggleExpireOptions (event) {
+    event.preventDefault()
+    event.stopPropagation()
+    const container = document.querySelector('#expire_container')
+    if(container) {
+     container.classList.toggle('hidden')
+    }
+}
+
+function getShareLink(event) {
+  event.target.innerText = "Generating..."
+  const reqId = event.target.getAttribute ("data-req-id")
+  document.querySelector('#req_id_input').value = reqId
+  htmx.trigger('#share_log_form','submit')
+}
+
+function expireChanged(event) {
+    event.preventDefault()
+    event.stopPropagation()
+    const current = document.querySelector('#toggle_expires_btn')
+    if(current && current.firstChild) {
+       current.firstChild.innerText = "Expires in: " + event.target.getAttribute("data-expire-value")
+       document.querySelector("#expire_input").value = event.target.getAttribute("data-expire-value")
+    }
+}
+
+  |]
 
 
-apiLogItemH :: Sessions.PersistentSession -> Projects.ProjectId -> UUID.UUID -> ZonedTime -> DashboardM (Html ())
+apiLogItemH :: Sessions.PersistentSession -> Projects.ProjectId -> UUID.UUID -> UTCTime -> DashboardM (Html ())
 apiLogItemH sess pid rdId createdAt = do
   pool <- asks pool
   isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
@@ -266,9 +274,6 @@ apiLogItemH sess pid rdId createdAt = do
 
 apiLogItemView :: RequestDumps.RequestDumpLogItem -> Text -> Html ()
 apiLogItemView req expandItemPath = do
-  let errorClass = if req.errorsCount > 0 then "border-l-red-200" else "border-l-blue-200"
-  div_ [class_ $ "log-item-info border-l-4 " <> errorClass]
-    $ div_ [class_ "pl-4 py-1 ", colspan_ "3"] do
       div_ [class_ "flex items-center gap-2"] do
         button_
           [ class_ "px-4 rounded text-gray-600 border py-1 expand-button"

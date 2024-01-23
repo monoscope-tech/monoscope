@@ -16,6 +16,9 @@ module Utils (
   textToBool,
   getMethodColor,
   getStatusColor,
+  unwrapJsonPrimValue,
+  lookupMapText, 
+  lookupMapInt
 ) where
 
 import Data.Aeson qualified as AE
@@ -34,6 +37,9 @@ import Relude hiding (show)
 import Servant
 import Text.Regex.TDFA ((=~))
 import Prelude (show)
+import Data.Aeson (Value)
+import Data.HashMap.Strict qualified as HM
+import Data.Scientific (toBoundedInteger)
 
 
 -- Added only for satisfying the tests
@@ -123,14 +129,22 @@ getMethodBgColor "PATCH" = "bg-purple-500"
 getMethodBgColor _ = "bg-blue-500"
 
 
-getMethodColor :: Text -> Text
-getMethodColor "POST" = " text-green-950 bg-green-50 border border-green-200 "
-getMethodColor "PUT" = " text-orange-950 bg-orange-50 border border-orange-200 "
-getMethodColor "DELETE" = " text-red-950 bg-red-50 border border-red-200 "
-getMethodColor "PATCH" = " text-purple-950 bg-purple-50 border border-purple-200 "
-getMethodColor "GET" = " text-blue-950 bg-blue-50 border border-blue-200 "
-getMethodColor _ = " text-blue-950 bg-blue-50 border border-blue-200 "
+-- getMethodColor :: Text -> Text
+-- getMethodColor "POST" = " text-green-950 bg-green-50 border border-green-200 "
+-- getMethodColor "PUT" = " text-orange-950 bg-orange-50 border border-orange-200 "
+-- getMethodColor "DELETE" = " text-red-950 bg-red-50 border border-red-200 "
+-- getMethodColor "PATCH" = " text-purple-950 bg-purple-50 border border-purple-200 "
+-- getMethodColor "GET" = " text-blue-950 bg-blue-50 border border-blue-200 "
+-- getMethodColor _ = " text-blue-950 bg-blue-50 border border-blue-200 "
 
+
+getMethodColor :: Text -> Text
+getMethodColor "POST" = " badge badge-warning "
+getMethodColor "PUT" = " badge badge-info "
+getMethodColor "DELETE" = " badge badge-error "
+getMethodColor "PATCH" = " badge badge-info "
+getMethodColor "GET" = " badge badge-success "
+getMethodColor _ = " badge badge-outline "
 
 getStatusColor :: Int -> Text
 getStatusColor status
@@ -151,3 +165,18 @@ unwrapJsonPrimValue (AE.Array items) = "[" <> toText (show (length items)) <> "]
 
 -- unwrapJsonPrimValue (AE.Object _) = error "Impossible. unwrapJsonPrimValue should be for primitive types only. got object" -- should never be reached
 -- unwrapJsonPrimValue (AE.Array _) = error "Impossible. unwrapJsonPrimValue should be for primitive types only. got array" -- should never be reached
+
+
+
+lookupMapText :: Text -> HashMap Text Value -> Maybe Text
+lookupMapText key hashMap = case HM.lookup key hashMap of
+  Just (AE.String textValue) -> Just textValue -- Extract text from Value if it's a String
+  _ -> Nothing
+
+
+lookupMapInt :: Text -> HashMap Text Value -> Int
+lookupMapInt key hashMap = case HM.lookup key hashMap of
+  Just (AE.Number val) -> fromMaybe 0 $ toBoundedInteger val -- Extract text from Value if it's a String
+  _ -> 0
+
+

@@ -238,6 +238,9 @@
 .expanded-log {
   @apply border-l-blue-200 bg-blue-50;
 }
+.expanded-log .status-indicator {
+    @apply bg-blue-200;
+  }
 .expanded-log .log-chevron {
   @apply rotate-90;
 }
@@ -280,3 +283,22 @@
 .endpoint-patch {
   @apply bg-amber-600;
 }
+
+
+
+/* ======= CODEMIRROR */
+.tree-children {
+  display: block;
+}
+.tree-children-count { display: none; }
+.collapsed .tree-children {
+  display: none !important; 
+}
+.CodeMirror {
+  font-family: Arial, monospace;
+  font-size: 16px;
+  background-color: rgb(243 244 246);
+ }
+.collapsed .tree-children-count {display: inline !important;}
+.collapsed .children {display: inline-block; padding-left:0}
+.collapsed .closing-token {padding-left:0}
