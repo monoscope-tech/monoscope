@@ -7,6 +7,7 @@ export class Collection extends LitElement {
     showCode: {},
     config: {},
     showSettings: {},
+    runningAllTests: { type: Boolean },
   };
   collections = [];
   pid = '';
@@ -18,9 +19,15 @@ export class Collection extends LitElement {
     this.pid = segs[2];
     this.col_id = segs[4];
     const dataStore = document.getElementById('test-data').dataset.collection;
+    const steps = JSON.parse(
+      document.getElementById('test-data').dataset.steps
+    );
     this.collection = JSON.parse(dataStore);
+    this.collection.steps = steps.map((step) => step.step_data);
+    console.log(this.collection);
     this.showCode = false;
     this.showSettings = false;
+    this.runningAllTests = false;
     this.addEventListener('add-step', this.handleAddStep);
     this.addEventListener('close-modal', () => {
       this.showNewStepModal = false;
@@ -58,8 +65,28 @@ export class Collection extends LitElement {
 
   async handleAddStep(event) {
     const step = event.detail.data;
-    this.collection.steps.push(step);
-    await this.updateCollection('steps', this.collection.steps);
+    try {
+      const response = await fetch(`/p/${this.pid}/${this.col_id}/add-step`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(stepData),
+      });
+      if (!response.ok) {
+        document.querySelector('body').dispatchEvent(errorEvent);
+        return;
+      }
+      this.collection = {
+        ...this.collection,
+        steps: [...this.collection.steps, step],
+      };
+      this.showNewStepModal = false;
+      const event = new CustomEvent('successToast', {
+        detail: {
+          value: [`${action} updated successfully`],
+        },
+      });
+      document.querySelector('body').dispatchEvent(event);
+    } catch (err) {}
   }
 
   async updateCollection(action, value) {
@@ -95,6 +122,7 @@ export class Collection extends LitElement {
       document.querySelector('body').dispatchEvent(errorEvent);
     }
   }
+
   toggleCode() {
     if (!this.showCode) {
       const yamlData = jsyaml.dump(this.collection.steps, {
@@ -126,6 +154,24 @@ export class Collection extends LitElement {
       }
       this.showCode = false;
       this.saveSteps();
+    }
+  }
+
+  async runAllTests() {
+    this.runningAllTests = true;
+    try {
+      const response = await fetch(
+        `/p/${this.pid}/testing/${this.col_id}/run_all`,
+        {
+          method: 'POST',
+        }
+      );
+      if (response.ok) {
+        const json = await response.json();
+      }
+    } catch (error) {
+    } finally {
+      this.runningAllTests = false;
     }
   }
 
@@ -179,6 +225,7 @@ export class Collection extends LitElement {
               <button
                 title="run all"
                 class="bg-blue-500 text-white gap-2 flex items-center rounded px-3 py-1"
+                @click=${() => runAllTests()}
               >
                 Run all
                 <i class="fa fa-play" aria-hidden="true"></i>

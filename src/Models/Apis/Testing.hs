@@ -4,10 +4,14 @@ module Models.Apis.Testing (
     Collection (..),
     CollectionId (..),
     CollectionListItem (..),
+    CollectionStepId (..),
+    CollectionStep (..),
     addCollection,
+    addCollectionStep,
     getCollections,
     updateCollection,
     updateCollectionConfig,
+    getCollectionSteps,
     getCollectionById,
     updateSchedule,
 ) where
@@ -65,10 +69,10 @@ data CollectionStep = CollectionStep
     { id :: CollectionStepId
     , createdAt :: ZonedTime
     , updatedAt :: ZonedTime
-    , lastRun :: ZonedTime
+    , lastRun :: Maybe ZonedTime
     , projectId :: Projects.ProjectId
     , colId :: CollectionId
-    , step_data :: Value
+    , stepData :: Value
     }
     deriving stock (Show, Generic)
     deriving anyclass (FromRow, ToRow, ToJSON, FromJSON)
@@ -137,7 +141,7 @@ insertSteps pid cid steps = do
         getStepParams step =
             ( pid
             , cid
-            , step.step_data
+            , step.stepData
             )
 
 
@@ -171,6 +175,12 @@ getCollections pid = query Select q (Only pid)
                   GROUP BY t.id
                   ORDER BY t.updated_at DESC;
   |]
+
+
+getCollectionSteps :: CollectionId -> DBT IO (Vector CollectionStep)
+getCollectionSteps cid = query Select q (Only cid)
+    where
+        q = [sql| SELECT * FROM apis.test_steps WHERE collection_id =? |]
 
 
 updateCollectionConfig :: CollectionId -> Value -> DBT IO Int64

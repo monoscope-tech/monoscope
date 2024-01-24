@@ -150,6 +150,7 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "testing" :> ReqBody '[FormUrlEncoded] Testing.TestCollectionForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "testing" :> Capture "collection_id" TestingM.CollectionId :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "testing" :> Capture "collection_id" TestingM.CollectionId :> Capture "action" Text :> ReqBody '[JSON] AE.Value :> Post '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "testing" :> Capture "collection_id" TestingM.CollectionId :> ReqBody '[JSON] AE.Value :> Post '[HTML] (Html ())
 
 
 type PublicAPI =
@@ -252,6 +253,7 @@ protectedServer sess =
     :<|> Testing.testingPostH sess
     :<|> Testing.collectionGetH sess
     :<|> Testing.testingPutH sess
+    :<|> Testing.collectionStepPostH sess
 
 
 publicServer :: ServerT PublicAPI DashboardM

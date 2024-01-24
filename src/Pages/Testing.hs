@@ -1,4 +1,11 @@
-module Pages.Testing (testingGetH, testingPostH, testingPutH, collectionGetH, TestCollectionForm (..)) where
+module Pages.Testing (
+  testingGetH,
+  testingPostH,
+  testingPutH,
+  collectionGetH,
+  TestCollectionForm (..),
+  collectionStepPostH,
+) where
 
 import Config
 import Control.Exception
@@ -270,6 +277,30 @@ modal pid = do
       |]
 
 
+collectionStepPostH :: Sessions.PersistentSession -> Projects.ProjectId -> Testing.CollectionId -> Value -> DashboardM (Html ())
+collectionStepPostH sess pid cid step_val = do
+  pool <- asks pool
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      currentTime <- liftIO getZonedTime
+      step_id <- Testing.CollectionStepId <$> liftIO UUIDV4.nextRandom
+      let newStep =
+            Testing.CollectionStep
+              { id = step_id
+              , createdAt = currentTime
+              , updatedAt = currentTime
+              , lastRun = Nothing
+              , projectId = pid
+              , colId = cid
+              , stepData = step_val
+              }
+      _ <- withPool pool $ Testing.addCollectionStep newStep
+      pure ""
+
+
 -- Import the foreign function from the Rust library
 foreign import ccall unsafe "haskell_binding" haskellBinding :: Int
 
@@ -284,33 +315,35 @@ collectionGetH sess pid col_id = do
     else do
       collection <- withPool pool $ Testing.getCollectionById col_id
       project <- withPool pool $ Projects.selectProjectForUser (Sessions.userId sess, pid)
-      _ <- case collection of
-        Just c -> do
-          let col_json = decodeUtf8 $ encode c
-          v <- liftIO $ withCString col_json $ \c_str -> do
-            traceShowM c_str
-            -- let bs = haskellBinding
-            -- traceShowM bs
-            pure ""
-          pure ("" :: String)
-        Nothing -> do
-          pure ""
+      collection_steps <- withPool pool $ Testing.getCollectionSteps col_id
+      -- _ <- case collection of
+      --   Just c -> do
+      --     let col_json = decodeUtf8 $ encode c
+      --     v <- liftIO $ withCString col_json $ \c_str -> do
+      --       traceShowM c_str
+      --       -- let bs = haskellBinding
+      --       -- traceShowM bs
+      --       pure ""
+      --     pure ("" :: String)
+      --   Nothing -> do
+      --     pure ""
       let bwconf =
             (def :: BWConfig)
               { sessM = Just sess
               , currProject = project
               , pageTitle = "Testing"
               }
-      pure $ bodyWrapper bwconf $ collectionPage pid collection
+      pure $ bodyWrapper bwconf $ collectionPage pid collection collection_steps
 
 
-collectionPage :: Projects.ProjectId -> Maybe Testing.Collection -> Html ()
-collectionPage pid col = do
+collectionPage :: Projects.ProjectId -> Maybe Testing.Collection -> V.Vector Testing.CollectionStep -> Html ()
+collectionPage pid col steps = do
   div_ [] do
     case col of
       Just c -> do
         let col_json = decodeUtf8 $ encode c
-        div_ [id_ "test-data", term "data-collection" col_json] do
+        let steps_json = decodeUtf8 $ encode steps
+        div_ [id_ "test-data", term "data-collection" col_json, term "data-steps" steps_json] do
           termRaw "test-editor" [id_ "testEditorElement"] ("" :: Text)
       Nothing -> do
         h1_ [] "Not found"
