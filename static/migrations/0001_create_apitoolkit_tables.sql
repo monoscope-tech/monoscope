@@ -868,15 +868,39 @@ CREATE TABLE IF NOT EXISTS apis.testing
   last_run           TIMESTAMP   WITH    TIME   ZONE       DEFAULT NULL,
   title              TEXT        NOT     NULL   DEFAULT        '',
   description        TEXT        NOT     NULL   DEFAULT        '',
-  steps              jsonb       NOT     NULL   DEFAULT    '[]'::jsonb,
-  config             jsonb       NOT     NULL   DEFAULT     '{}'::jsonb
-  UNIQUE (id)
+  config             jsonb       NOT     NULL   DEFAULT     '{}'::jsonb,
+  schedule     TEXT  DEFAULT NULL,
+  is_scheduled BOOL  NOT  NULL   DEFAULT 'f'
 );
 SELECT manage_updated_at('apis.testing');
 create index if not exists idx_apis_testing_project_Id on apis.testing(project_id); 
-ALTER TABLE apis.testing ADD COLUMN config       jsonb DEFAULT '{}'::jsonb;
-ALTER TABLE apis.testing ADD COLUMN schedule     TEXT  DEFAULT NULL;
-ALTER TABLE apis.testing ADD COLUMN is_scheduled BOOL  NOT  NULL   DEFAULT 'f'
+
+CREATE TABLE IF NOT EXISTS apis.test_steps 
+(
+  id                 UUID        NOT     NULL   DEFAULT        gen_random_uuid() PRIMARY KEY, 
+  created_at         TIMESTAMP   WITH    TIME   ZONE           NOT               NULL              DEFAULT current_timestamp,
+  updated_at         TIMESTAMP   WITH    TIME   ZONE           NOT               NULL              DEFAULT current_timestamp,
+  last_run           TIMESTAMP   WITH    TIME   ZONE           DEFAULT NULL,
+  project_id         UUID        NOT     NULL   REFERENCES     projects.projects (id)              ON      DELETE CASCADE,
+  collection_id      UUID        NOT     NULL   REFERENCES     apis.testing (id)                   ON      DELETE CASCADE,
+  step_data          jsonb       NOT     NULL   DEFAULT        '{}'::jsonb
+);
+SELECT manage_updated_at('apis.test_steps');
+create index if not exists idx_apis_test_steps_id on apis.testing(id); 
+
+CREATE TABLE IF NOT EXISTS apis.test_results
+(
+  id                 UUID        NOT     NULL   DEFAULT        gen_random_uuid() PRIMARY KEY, 
+  created_at         TIMESTAMP   WITH    TIME   ZONE           NOT               NULL              DEFAULT current_timestamp,
+  updated_at         TIMESTAMP   WITH    TIME   ZONE           NOT               NULL              DEFAULT current_timestamp,
+  project_id         UUID        NOT     NULL   REFERENCES     projects.projects (id)              ON      DELETE CASCADE,
+  collection_id      UUID        NOT     NULL   REFERENCES     apis.testing (id)                   ON  DELETE CASCADE,
+  step_id            UUID        NOT     NULL   REFERENCES     apis.test_steps (id)                ON      DELETE CASCADE,
+  result_data        jsonb       NOT     NULL   DEFAULT        '{}'::jsonb
+);
+SELECT manage_updated_at('apis.test_results');
+create index if not exists idx_apis_test_results_id on apis.test_steps(id); 
+
 COMMIT;
 
 
