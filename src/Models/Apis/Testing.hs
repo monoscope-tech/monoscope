@@ -7,7 +7,6 @@ module Models.Apis.Testing (
     addCollection,
     getCollections,
     updateCollection,
-    updateCollectionSteps,
     updateCollectionConfig,
     getCollectionById,
     updateSchedule,
@@ -20,6 +19,8 @@ import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query)
+import Database.PostgreSQL.Transact (DBT, executeMany)
+
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import GHC.Records (HasField (getField))
@@ -30,11 +31,12 @@ import Web.HttpApiData (FromHttpApiData)
 import Data.Aeson as Aeson
 import Database.PostgreSQL.Entity (insert, selectById, update)
 
-import Database.PostgreSQL.Simple hiding (execute, query)
+import Database.PostgreSQL.Simple hiding (execute, executeMany, query)
 
+import Data.Aeson qualified as AE
+import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.FromField
 import Database.PostgreSQL.Simple.ToField
-import Database.PostgreSQL.Transact (DBT)
 
 
 newtype CollectionId = CollectionId {collectionId :: UUID.UUID}
@@ -48,6 +50,33 @@ instance HasField "toText" CollectionId Text where
     getField = UUID.toText . collectionId
 
 
+newtype CollectionStepId = CollectionStepId {collectionStepId :: UUID.UUID}
+    deriving stock (Generic, Show)
+    deriving
+        (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default)
+        via UUID.UUID
+
+
+instance HasField "toText" CollectionStepId Text where
+    getField = UUID.toText . collectionStepId
+
+
+data CollectionStep = CollectionStep
+    { id :: CollectionStepId
+    , createdAt :: ZonedTime
+    , updatedAt :: ZonedTime
+    , lastRun :: ZonedTime
+    , projectId :: Projects.ProjectId
+    , colId :: CollectionId
+    , step_data :: Value
+    }
+    deriving stock (Show, Generic)
+    deriving anyclass (FromRow, ToRow, ToJSON, FromJSON)
+    deriving
+        (Entity)
+        via (GenericEntity '[Schema "apis", TableName "test_steps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Collection)
+
+
 data Collection = Collection
     { id :: CollectionId
     , createdAt :: ZonedTime
@@ -56,7 +85,6 @@ data Collection = Collection
     , projectId :: Projects.ProjectId
     , title :: Text
     , description :: Text
-    , steps :: Value
     , config :: Value
     , schedule :: Maybe Text
     , isScheduled :: Bool
@@ -90,6 +118,36 @@ addCollection :: Collection -> DBT IO ()
 addCollection = insert @Collection
 
 
+addCollectionStep :: CollectionStep -> DBT IO ()
+addCollectionStep = insert @CollectionStep
+
+
+insertSteps :: Projects.ProjectId -> CollectionId -> Vector CollectionStep -> DBT IO Int64
+insertSteps pid cid steps = do
+    let q =
+            [sql| 
+        INSERT INTO apis.test_steps
+        (project_id, collection_id, step_data)
+        VALUES (?,?,?) ON CONFLICT DO NOTHING;
+      |]
+    let params = V.map getStepParams steps
+    executeMany q (V.toList params)
+    where
+        getStepParams :: CollectionStep -> (Projects.ProjectId, CollectionId, AE.Value)
+        getStepParams step =
+            ( pid
+            , cid
+            , step.step_data
+            )
+
+
+updateStep :: CollectionId -> CollectionStepId -> AE.Value -> DBT IO Int64
+updateStep cid sid step_data = do
+    let q =
+            [sql| UPDATE apis.test_steps SET step_data=? WHERE collection_id = ? AND id=?  |]
+    execute Update q (step_data, cid, sid)
+
+
 updateCollection :: Projects.ProjectId -> Text -> Text -> Text -> DBT IO Int64
 updateCollection pid cid title description = do
     let q =
@@ -105,17 +163,14 @@ getCollections :: Projects.ProjectId -> DBT IO (Vector CollectionListItem)
 getCollections pid = query Select q (Only pid)
     where
         q =
-            [sql| SELECT id, created_at, updated_at, project_id, last_run, title, description, jsonb_array_length(steps) as steps_count, schedule FROM apis.testing
-    WHERE project_id = ? 
-    ORDER BY created_at DESC;
+            [sql| SELECT t.id id , t.created_at created_at , t.updated_at updated_at, t.project_id project_id, t.last_run last_run, 
+                  t.title title, t.description description, COUNT(ts.id) as steps_count, t.schedule schedule
+                  FROM  apis.testing t
+                  LEFT JOIN apis.test_steps ts ON t.id = ts.collection_id
+                  WHERE t.project_id = ?
+                  GROUP BY t.id
+                  ORDER BY t.updated_at DESC;
   |]
-
-
-updateCollectionSteps :: CollectionId -> Value -> DBT IO Int64
-updateCollectionSteps cid steps = do
-    let q =
-            [sql| UPDATE apis.testing SET steps=? WHERE id=? |]
-    execute Update q (steps, cid)
 
 
 updateCollectionConfig :: CollectionId -> Value -> DBT IO Int64

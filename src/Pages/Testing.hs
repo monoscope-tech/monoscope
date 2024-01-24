@@ -1,8 +1,12 @@
 module Pages.Testing (testingGetH, testingPostH, testingPutH, collectionGetH, TestCollectionForm (..)) where
 
 import Config
+import Control.Exception
 import Data.Default (def)
+import Foreign.C.String
+import Foreign.C.Types
 import NeatInterpolation (text)
+import System.IO.Error
 
 import Lucid
 import Lucid.Hyperscript
@@ -65,9 +69,6 @@ testingPutH sess pid cid action steps = do
       pure $ userNotMemeberPage sess
     else do
       case action of
-        "update_steps" -> do
-          _ <- withPool pool $ Testing.updateCollectionSteps cid steps
-          pure ""
         "update_config" -> do
           _ <- withPool pool $ Testing.updateCollectionConfig cid steps
           pure ""
@@ -104,7 +105,6 @@ testingPostH sess pid collection = do
               , lastRun = Nothing
               , title = collection.title
               , description = collection.description
-              , steps = Aeson.Array []
               , config = Aeson.object []
               , schedule = Nothing
               , isScheduled = False
@@ -135,7 +135,6 @@ testingGetH sess pid = do
             project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
             colls <- Testing.getCollections pid
             pure (project, colls)
-
       let bwconf =
             (def :: BWConfig)
               { sessM = Just sess
@@ -271,6 +270,10 @@ modal pid = do
       |]
 
 
+-- Import the foreign function from the Rust library
+foreign import ccall unsafe "haskell_binding" haskellBinding :: Int
+
+
 collectionGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Testing.CollectionId -> DashboardM (Html ())
 collectionGetH sess pid col_id = do
   pool <- asks pool
@@ -281,7 +284,17 @@ collectionGetH sess pid col_id = do
     else do
       collection <- withPool pool $ Testing.getCollectionById col_id
       project <- withPool pool $ Projects.selectProjectForUser (Sessions.userId sess, pid)
-
+      _ <- case collection of
+        Just c -> do
+          let col_json = decodeUtf8 $ encode c
+          v <- liftIO $ withCString col_json $ \c_str -> do
+            traceShowM c_str
+            -- let bs = haskellBinding
+            -- traceShowM bs
+            pure ""
+          pure ("" :: String)
+        Nothing -> do
+          pure ""
       let bwconf =
             (def :: BWConfig)
               { sessM = Just sess
@@ -311,3 +324,20 @@ collectionPage pid col = do
             height: 100%;
         }
     |]
+
+-- runTestH :: Sessions.PersistentSession -> Projects.ProjectId -> Testing.CollectionId -> DashboardM (Html ())
+-- runTestH sess pid col_id = do
+--   pool <- asks pool
+--   collection <- withPool pool $ Testing.getCollectionById col_id
+--   _ <- case collection of
+--     Just c -> do
+--       let col_json = decodeUtf8 $ encode c
+--       v <- liftIO $ withCString col_json $ \c_str -> do
+--         traceShowM c_str
+--         bs <- haskellBinding c_str
+--         traceShowM bs
+--         pure bs
+--       pure ("" :: String)
+--     Nothing -> do
+--       pure ""
+--   pure $ div_ [] "s"
