@@ -162,8 +162,8 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM page loadM endpointM hxRe
       let pageInt = case page of
             Just p -> if limit == Just 51 then 0 else Unsafe.read (toString p)
             Nothing -> 0
-      (project, anomalies) <- liftIO
-        $ withPool
+      (project, anomalies) <- liftIO $
+        withPool
           pool
           do
             project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
@@ -190,8 +190,8 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM page loadM endpointM hxRe
               }
 
       let elementBelowTabs =
-            div_ [class_ "grid grid-cols-5", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"]
-              $ anomalyList paramInput pid currTime anomalies nextFetchUrl
+            div_ [class_ "grid grid-cols-5", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $
+              anomalyList paramInput pid currTime anomalies nextFetchUrl
       let anom = case nextFetchUrl of
             Just url -> do
               mapM_ (renderAnomaly False currTime) anomalies
@@ -214,18 +214,20 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM page loadM endpointM hxRe
 anomalyListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Anomalies.AnomalyVM -> Maybe Text -> Html ()
 anomalyListPage paramInput pid currTime anomalies nextFetchUrl = div_ [class_ "w-full mx-auto  px-16 pt-10 pb-24"] do
   div_
-    [ style_ "z-index:26; width: min(90vw, 800px)"
-    , class_ "fixed hidden right-0 top-[50px] bg-white overflow-y-scroll h-[calc(100%-50px)] border-l border-l-2 shadow"
+    [ style_ "z-index:26"
+    , class_ "fixed hidden right-0 top-0 justify-end left-0 bottom-0 w-full bg-black bg-opacity-5"
     , id_ "expand-an-modal"
+    , [__|on click add .hidden to #expand-an-modal|]
     ]
     do
-      div_ [class_ "relative ml-auto w-full", style_ ""] do
-        div_ [class_ "flex justify-end  w-full p-4 "] do
-          button_ [[__|on click add .hidden to #expand-an-modal|]] do
-            img_ [class_ "h-8", src_ "/assets/svgs/close.svg"]
-        div_ [id_ "an-modal-content-loader", class_ "bg-white rounded-lg shadow p-4 absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2"] do
-          loader
-        div_ [class_ "px-2", id_ "an-modal-content"] pass
+      div_ [class_ "h-full bg-white border-l ml-auto shadow pt-8 overflow-y-scroll", style_ "width:min(90vw, 800px);transition: all 1s", [__|on click halt|]] do
+        div_ [class_ "relative w-full", style_ ""] do
+          div_ [class_ "flex justify-end  w-full p-4 "] do
+            button_ [class_ "bg-gray-200 rounded-full p-2 text-gray-500 hover:bg-gray-300 hover:text-gray-700", [__|on click add .hidden to #expand-an-modal|]] do
+              faIcon_ "fa-close" "fa-regular fa-close" "h-4 w-4"
+          div_ [id_ "an-modal-content-loader", class_ "bg-white rounded z-50 border p-4 absolute top-[40vh] left-1/2 -translate-x-1/2 -translate-y-1/2"] do
+            loader
+          div_ [class_ "px-2", id_ "an-modal-content"] pass
   h3_ [class_ "text-xl text-slate-700 flex place-items-center"] "Changes & Errors"
   div_ [class_ "py-2 px-2 space-x-6 border-b border-slate-20 mt-6 mb-8 text-sm font-light", hxBoost_ "true"] do
     let uri = deleteParam "archived" $ deleteParam "ackd" paramInput.currentURL
@@ -437,8 +439,8 @@ anomalyDetailsGetH sess pid targetHash hxBoostedM = do
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, anomaly) <- liftIO
-        $ withPool
+      (project, anomaly) <- liftIO $
+        withPool
           pool
           do
             project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
@@ -454,35 +456,39 @@ anomalyDetailsGetH sess pid targetHash hxBoostedM = do
         Just an -> do
           let chartQuery = Just $ anomaly2ChartQuery an.anomalyType an.targetHash
           currTime <- liftIO getCurrentTime
-
-          -- for endpoint anomalies
-          shapes <- liftIO $ withPool pool $ Shapes.shapesByEndpointHash pid targetHash
-          fields <- liftIO $ withPool pool $ Fields.selectFields pid targetHash
-          let shapesWithFieldsMap = Vector.map (`getShapeFields` fields) shapes
-
-          -- for shape anomalies
-          anFields <- liftIO $ withPool pool do
-            newF <- Fields.selectFieldsByHashes pid an.shapeNewUniqueFields
-            let newFM = groupFieldsByCategory newF
-            updF <- Fields.selectFieldsByHashes pid an.shapeUpdatedFieldFormats
-            let updfM = groupFieldsByCategory updF
-            delF <- Fields.selectFieldsByHashes pid an.shapeDeletedFields
-            let delFM = groupFieldsByCategory delF
-            pure (newFM, updfM, delFM)
-
-          -- for formats
-          anFormats <- liftIO $ withPool pool $ Fields.getFieldsByEndpointKeyPathAndCategory pid (maybe "" (\x -> UUID.toText x.unEndpointId) an.endpointId) (fromMaybe "" an.fieldKeyPath) (fromMaybe FCRequestBody an.fieldCategory)
-          case hxBoostedM of
-            Just _ -> case an.anomalyType of
-              Anomalies.ATEndpoint -> pure $ anomalyDetailsPage an (Just shapesWithFieldsMap) Nothing Nothing chartQuery currTime True
-              Anomalies.ATShape -> pure $ anomalyDetailsPage an Nothing (Just anFields) Nothing chartQuery currTime True
-              _ -> pure $ anomalyDetailsPage an (Just shapesWithFieldsMap) Nothing (Just anFormats) chartQuery currTime True
-            Nothing -> pure $ bodyWrapper bwconf $ div_ [class_ "w-full px-32"] do
-              h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
-              case an.anomalyType of
-                Anomalies.ATEndpoint -> anomalyDetailsPage an (Just shapesWithFieldsMap) Nothing Nothing chartQuery currTime False
-                Anomalies.ATShape -> anomalyDetailsPage an Nothing (Just anFields) Nothing chartQuery currTime False
-                _ -> anomalyDetailsPage an (Just shapesWithFieldsMap) Nothing (Just anFormats) chartQuery currTime False
+          case an.anomalyType of
+            Anomalies.ATEndpoint -> do
+              -- for endpoint anomalies
+              shapes <- liftIO $ withPool pool $ Shapes.shapesByEndpointHash pid targetHash
+              fields <- liftIO $ withPool pool $ Fields.selectFields pid targetHash
+              let shapesWithFieldsMap = Vector.map (`getShapeFields` fields) shapes
+              case hxBoostedM of
+                Just _ -> pure $ anomalyDetailsPage an (Just shapesWithFieldsMap) Nothing Nothing chartQuery currTime True
+                Nothing -> do
+                  pure $ bodyWrapper bwconf $ div_ [class_ "w-full px-32"] do
+                    h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
+                    anomalyDetailsPage an (Just shapesWithFieldsMap) Nothing Nothing chartQuery currTime False
+            Anomalies.ATShape -> do
+              newF <- liftIO $ withPool pool $ Fields.selectFieldsByHashes pid an.shapeNewUniqueFields
+              let newFM = groupFieldsByCategory newF
+              updF <- liftIO $ withPool pool $ Fields.selectFieldsByHashes pid an.shapeUpdatedFieldFormats
+              let updfM = groupFieldsByCategory updF
+              delF <- liftIO $ withPool pool $ Fields.selectFieldsByHashes pid an.shapeDeletedFields
+              let delFM = groupFieldsByCategory delF
+              let anFields = (newFM, updfM, delFM)
+              case hxBoostedM of
+                Just _ -> pure $ anomalyDetailsPage an Nothing (Just anFields) Nothing chartQuery currTime True
+                Nothing -> pure $ bodyWrapper bwconf $ div_ [class_ "w-full px-32"] do
+                  h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
+                  anomalyDetailsPage an Nothing (Just anFields) Nothing chartQuery currTime False
+            _ -> do
+              anFormats <- liftIO $ withPool pool $ Fields.getFieldsByEndpointKeyPathAndCategory pid (maybe "" (\x -> UUID.toText x.unEndpointId) an.endpointId) (fromMaybe "" an.fieldKeyPath) (fromMaybe FCRequestBody an.fieldCategory)
+              case hxBoostedM of
+                Just _ -> do
+                  pure $ anomalyDetailsPage an Nothing Nothing (Just anFormats) chartQuery currTime True
+                Nothing -> pure $ bodyWrapper bwconf $ div_ [class_ "w-full px-32"] do
+                  h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
+                  anomalyDetailsPage an Nothing Nothing (Just anFormats) chartQuery currTime False
         Nothing -> pure $ bodyWrapper bwconf $ h4_ [] "ANOMALY NOT FOUND"
 
 
@@ -734,9 +740,9 @@ anomalyAcknowlegeButton :: Projects.ProjectId -> Anomalies.AnomalyId -> Bool -> 
 anomalyAcknowlegeButton pid aid acked = do
   let acknowlegeAnomalyEndpoint = "/p/" <> pid.toText <> "/anomalies/" <> Anomalies.anomalyIdText aid <> if acked then "/unacknowlege" else "/acknowlege"
   a_
-    [ class_
-        $ "inline-block child-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
-        <> (if acked then "bg-green-100 text-green-900" else "")
+    [ class_ $
+        "inline-block child-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
+          <> (if acked then "bg-green-100 text-green-900" else "")
     , term "data-tippy-content" "acknowlege anomaly"
     , hxGet_ acknowlegeAnomalyEndpoint
     , hxSwap_ "outerHTML"
@@ -748,9 +754,9 @@ anomalyArchiveButton :: Projects.ProjectId -> Anomalies.AnomalyId -> Bool -> Htm
 anomalyArchiveButton pid aid archived = do
   let archiveAnomalyEndpoint = "/p/" <> pid.toText <> "/anomalies/" <> Anomalies.anomalyIdText aid <> if archived then "/unarchive" else "/archive"
   a_
-    [ class_
-        $ "inline-block xchild-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
-        <> (if archived then " bg-green-100 text-green-900" else "")
+    [ class_ $
+        "inline-block xchild-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
+          <> (if archived then " bg-green-100 text-green-900" else "")
     , term "data-tippy-content" $ if archived then "unarchive" else "archive"
     , hxGet_ archiveAnomalyEndpoint
     , hxSwap_ "outerHTML"
@@ -763,24 +769,24 @@ reqResSection title isRequest shapesWithFieldsMap =
   section_ [class_ "space-y-3"] do
     div_ [class_ "flex justify-between mt-5"] do
       div_ [class_ "flex flex-row"] do
-        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
-          $ faSprite_ "chevron-down" "light" "h-4 mr-3 mt-1 w-4"
+        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]] $
+          faSprite_ "chevron-down" "light" "h-4 mr-3 mt-1 w-4"
         span_ [class_ "text-lg text-slate-800"] $ toHtml title
 
-    div_ [class_ "bg-white border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"]
-      $ forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap)
-      $ \(index, s) -> do
-        let sh = if index == 1 then title <> "_fields" else title <> "_fields hidden"
-        div_ [class_ sh, id_ $ title <> "_" <> show index] do
-          if isRequest
-            then do
-              subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam s.fieldsMap)
-              subSubSection (title <> " Query Params") (Map.lookup Fields.FCQueryParam s.fieldsMap)
-              subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader s.fieldsMap)
-              subSubSection (title <> " Body") (Map.lookup Fields.FCRequestBody s.fieldsMap)
-            else do
-              subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader s.fieldsMap)
-              subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody s.fieldsMap)
+    div_ [class_ "bg-white border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"] $
+      forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap) $
+        \(index, s) -> do
+          let sh = if index == 1 then title <> "_fields" else title <> "_fields hidden"
+          div_ [class_ sh, id_ $ title <> "_" <> show index] do
+            if isRequest
+              then do
+                subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam s.fieldsMap)
+                subSubSection (title <> " Query Params") (Map.lookup Fields.FCQueryParam s.fieldsMap)
+                subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader s.fieldsMap)
+                subSubSection (title <> " Body") (Map.lookup Fields.FCRequestBody s.fieldsMap)
+              else do
+                subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader s.fieldsMap)
+                subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody s.fieldsMap)
 
 
 -- | subSubSection ..

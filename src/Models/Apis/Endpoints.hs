@@ -299,13 +299,15 @@ getProjectHosts pid = query Select q (Only pid)
 
 
 dependenciesAndEventsCount :: Projects.ProjectId -> DBT IO (Vector HostEvents)
-dependenciesAndEventsCount = query Select q
+dependenciesAndEventsCount pid = query Select q (pid, pid)
   where
     q =
       [sql|SELECT DISTINCT ep.host, 
                   (SELECT COUNT(*) 
                    FROM apis.request_dumps rd 
-                   WHERE rd.host = ep.host 
+                   WHERE 
+                     rd.project_id =?
+                     AND rd.host = ep.host 
                      AND rd.request_type = 'Outgoing' 
                      AND rd.created_at > NOW() - interval '14' day
                   ) AS eventsCount

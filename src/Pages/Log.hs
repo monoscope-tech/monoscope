@@ -204,8 +204,9 @@ apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
   section_ [class_ "mx-auto px-10 py-2 gap-2 flex flex-col h-[98%] overflow-hidden ", id_ "apiLogsPage"] do
     div_
-      [ style_ "z-index:26; width: min(90vw, 800px)"
-      , class_ "fixed hidden right-0 bg-white overflow-y-scroll h-[calc(100%-60px)] border-l border-l-2 shadow"
+      [ style_ "z-index:26"
+      , class_ "fixed hidden right-0 top-0 justify-end left-0 bottom-0 w-full bg-black bg-opacity-5"
+      , [__|on click remove .show-log-modal from #expand-log-modal|]
       , id_ "expand-log-modal"
       ]
       do
@@ -355,6 +356,48 @@ logTableHeadingWrapper_ pid title child = td_
 
 isLogEvent :: [Text] -> Bool
 isLogEvent cols = all (`elem` cols) ["id", "created_at"]
+
+apiLogItemView :: RequestDumps.RequestDumpLogItem -> Text -> Html ()
+apiLogItemView req expandItemPath = do
+  let errorClass = if req.errorsCount > 0 then "border-l-red-200" else "border-l-blue-200"
+  div_ [class_ $ "log-item-info border-l-4 " <> errorClass] $
+    div_ [class_ "pl-4 py-1 ", colspan_ "3"] do
+      div_ [class_ "flex items-center gap-2"] do
+        button_
+          [ class_ "px-4 rounded text-gray-600 border py-1 expand-button"
+          , term "data-log-item-path" (expandItemPath <> "/detailed")
+          , [__|on click add .show-log-modal to #expand-log-modal then
+                   remove .hidden from #log-modal-content-loader
+                   fetch `${@data-log-item-path}` as html then put it into #log-modal-content
+                   add .hidden to #log-modal-content-loader
+                   _hyperscript.processNode(document.querySelector('#log-modal-content'))
+                   htmx.process(document.querySelector('#log-modal-content'))
+                   end
+             |]
+          ]
+          "Expand"
+        let reqJson = decodeUtf8 $ AE.encode $ AE.toJSON req
+        button_
+          [ class_ "px-4 rounded flex items-center gap-1 text-gray-600 border py-1"
+          , term "data-reqJson" reqJson
+          , [__|on click if 'clipboard' in window.navigator then
+                          call navigator.clipboard.writeText(my @data-reqJson)
+                          send successToast(value:['Request json has been copied to clipboard']) to <body/>
+                        end|]
+          ]
+          do
+            span_ [] "Copy"
+            faIcon_ "fa-copy" "fa-regular fa-copy" "h-4 w-4"
+        button_
+          [ class_ "px-4 flex items-center gap-1 rounded text-gray-600 border py-1"
+          , onclick_ "downloadJson(event)"
+          , term "data-reqJson" reqJson
+          ]
+          do
+            span_ [] "Download"
+            faIcon_ "fa-download" "fa-regular fa-download" "h-4 w-4"
+      jsonValueToHtmlTree $ AE.toJSON req
+
 
 
 logItemCol_ :: Projects.ProjectId -> HashMap Text Value -> Text -> Html ()

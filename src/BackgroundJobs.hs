@@ -111,13 +111,13 @@ jobsRunner dbPool logger cfg job = do
                   let projectTitle = project.title
                   let projectIdTxt = pid.toText
                   let message =
-                        [trimming| 🤖 *New Endpoint Detected for `$projectTitle`**
+                        [trimming| 🤖 *New Endpoint Detected for `$projectTitle`*
    
                                      We have detected a new endpoint on *$projectTitle*
    
                                      Endpoint: `$endpointPath`
    
-                                     <https://app.apitoolkit.io/p/$projectIdTxt/anomalies|More details on the apitoolkit>
+                                     <https://app.apitoolkit.io/p/$projectIdTxt/anomaly/$targetHash|More details on the apitoolkit>
                             |]
                   sendSlackMessage dbPool pid message
                 _ -> do
@@ -133,7 +133,7 @@ jobsRunner dbPool logger cfg job = do
          
                      <p>We detected a new endpoint on ``$projectTitle`:</p>
                      <p><strong>$endpointPath</strong></p>
-                     <a href="https://app.apitoolkit.io/p/$projectIdTxt/anomalies/$targetHash">More details on the apitoolkit</a>
+                     <a href="https://app.apitoolkit.io/p/$projectIdTxt/anomaly/$targetHash">More details on the apitoolkit</a>
                      <br/><br/>
                      Regards,
                      Apitoolkit team
@@ -164,11 +164,11 @@ jobsRunner dbPool logger cfg job = do
                       let projectTitle = project.title
                       let projectIdTxt = pid.toText
                       let message =
-                            [trimming| 🤖 *New Shape anomaly found for `$projectTitle`**
+                            [trimming| 🤖 *New Shape anomaly found for `$projectTitle`*
     
                                           We detected a different API request shape to your endpoints than what you usually have
     
-                                          <https://app.apitoolkit.io/p/$projectIdTxt/anomalies|More details on the apitoolkit>
+                                          <https://app.apitoolkit.io/p/$projectIdTxt/anomaly/$targetHash|More details on the apitoolkit>
                                  |]
                       sendSlackMessage dbPool pid message
                     _ -> do
@@ -183,7 +183,7 @@ jobsRunner dbPool logger cfg job = do
          Hi $name,<br/>
        
          <p>We detected a different API request shape to your endpoints than what you usually have..</p>
-         <a href="https://app.apitoolkit.io/p/$projectIdTxt/anomalies/$targetHash">More details on the apitoolkit</a>
+         <a href="https://app.apitoolkit.io/p/$projectIdTxt/anomaly/$targetHash">More details on the apitoolkit</a>
          <br/><br/>
          Regards,<br/>
          Apitoolkit team
@@ -206,11 +206,11 @@ jobsRunner dbPool logger cfg job = do
                       let projectTitle = project.title
                       let projectIdTxt = pid.toText
                       let message =
-                            [trimming| 🤖 *New Field Format Anomaly Found for `$projectTitle`**
+                            [trimming| 🤖 *New Field Format Anomaly Found for `$projectTitle`*
     
                                          We detected that a particular field on your API is returning a different format/type than what it usually gets.
     
-                                         <https://app.apitoolkit.io/p/$projectIdTxt/anomalies|More details on the apitoolkit>
+                                         <https://app.apitoolkit.io/p/$projectIdTxt/anomaly/$targetHash|More details on the apitoolkit>
     
                                  |]
                       sendSlackMessage dbPool pid message
@@ -226,7 +226,7 @@ jobsRunner dbPool logger cfg job = do
        Hi $name,<br/>
      
        <p>We detected that a particular field on your API is returning a different format/type than what it usually gets.</p>
-       <a href="https://app.apitoolkit.io/p/$projectIdTxt/anomalies/$targetHash">More details on the apitoolkit</a>
+       <a href="https://app.apitoolkit.io/p/$projectIdTxt/anomaly/$targetHash">More details on the apitoolkit</a>
        <br/><br/>
        Regards,<br/>
        Apitoolkit team
@@ -324,7 +324,7 @@ dailyReportForProject dbPool cfg pid = do
             let pidText = pid.toText
             let reportIdText = show report.id.reportId
             let message =
-                  [trimming| 🤖 *Daily Report for `$projectTitle`***
+                  [trimming| 🤖 *Daily Report for `$projectTitle`*
           
                                     <https://app.apitoolkit.io/p/$pidText/reports/$reportIdText|View today's report>
                            |]

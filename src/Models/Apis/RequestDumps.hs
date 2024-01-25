@@ -89,6 +89,9 @@ data SDKTypes
   | PythonFlask
   | PythonDjango
   | PythonOutgoing
+  | JsAdonis
+  | PhpSlim
+  | GuzzleOutgoing
   deriving stock (Show, Generic, Read, Eq)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SDKTypes
 
@@ -162,6 +165,9 @@ normalizeUrlPath JsFastify statusCode _method urlPath = removeQueryParams status
 normalizeUrlPath PythonFlask statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath PythonDjango statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath PythonOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
+normalizeUrlPath JsAdonis statusCode _method urlPath = removeQueryParams statusCode urlPath
+normalizeUrlPath PhpSlim statusCode _method urlPath = removeQueryParams statusCode urlPath
+normalizeUrlPath GuzzleOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
 
 
 -- getRequestType ...
@@ -619,7 +625,7 @@ selectRequestDumpByProjectAndParentId pid parentId = query Select q (pid, parent
                     request_body,response_body,'{}'::jsonb,'{}'::jsonb,
                     duration_ns, sdk_type,
                     parent_id, service_version, JSONB_ARRAY_LENGTH(errors) as errors_count, '{}'::jsonb, tags, request_type
-             FROM apis.request_dumps where project_id=? and parent_id= ? LIMIT 199; 
+             FROM apis.request_dumps where project_id=? AND created_at > NOW() - interval '14' day AND parent_id= ? LIMIT 199; 
      |]
 
 
