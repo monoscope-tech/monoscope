@@ -168,27 +168,24 @@ chartsGetH _ typeM groupByM queryByM slotsM limitsM themeM idM showLegendM = do
           , showLegendM >>= (\x -> if x then Just ShowLegendE else Nothing)
           ]
   pool <- asks pool
-
+  randomID <- liftIO UUIDV4.nextRandom
   let (q, args, fromM, toM) = case groupByM of
         Just GBDurationPercentile -> buildReqDumpSQL chartExps
         _ -> buildReqDumpSQL chartExps
   chartData <- liftIO $ withPool pool $ query Select (Query $ encodeUtf8 q) args
 
   let (headers, groupedData) = pivot' $ toList chartData
-  let headersJSON = decodeUtf8 $ AE.encode headers
-  let groupedDataJSON = decodeUtf8 $ AE.encode $ transpose groupedData
-  randomID <- liftIO UUIDV4.nextRandom
-  let idAttr = fromMaybe (UUID.toText randomID) idM
-  let showLegend = toLower $ show $ fromMaybe False showLegendM
-  let chartThemeTxt = fromMaybe "" themeM
-  let fromDStr = maybe "" formatZonedTimeAsUTC fromM
-  let toDStr = maybe "" formatZonedTimeAsUTC toM
-
-  let cType = case fromMaybe BarCT typeM of
+      headersJSON = decodeUtf8 $ AE.encode headers
+      groupedDataJSON = decodeUtf8 $ AE.encode $ transpose groupedData
+      idAttr = fromMaybe (UUID.toText randomID) idM
+      showLegend = toLower $ show $ fromMaybe False showLegendM
+      chartThemeTxt = fromMaybe "" themeM
+      fromDStr = maybe "" formatZonedTimeAsUTC fromM
+      toDStr = maybe "" formatZonedTimeAsUTC toM
+      cType = case fromMaybe BarCT typeM of
         BarCT -> "bar"
         LineCT -> "line"
-
-  let scriptContent = [text| throughputEChartTable("$idAttr",$headersJSON, $groupedDataJSON, ["Endpoint"], $showLegend, "$chartThemeTxt", "$fromDStr", "$toDStr", "$cType") |]
+      scriptContent = [text| throughputEChartTable("$idAttr",$headersJSON, $groupedDataJSON, ["Endpoint"], $showLegend, "$chartThemeTxt", "$fromDStr", "$toDStr", "$cType") |]
 
   pure do
     div_ [id_ $ toText idAttr, class_ "w-full h-full"] ""

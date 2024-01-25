@@ -9,7 +9,7 @@ import Data.Aeson (FromJSON)
 import Data.Aeson qualified as AE
 import Data.Aeson.Types (ToJSON)
 import Data.Pool (Pool)
-import Data.Time (ZonedTime)
+import Data.Time (ZonedTime, UTCTime)
 import Data.UUID qualified as UUID
 import DataSeeding qualified
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), queryOne, withPool)
@@ -62,6 +62,7 @@ import Web.Auth (authCallbackH, genAuthServerContext, loginH, loginRedirectH, lo
 import Web.ClientMetadata qualified as ClientMetadata
 import Web.Cookie (SetCookie)
 import Witch (from)
+import Pages.LogExplorer.LogItem qualified as LogItem 
 
 
 type GetRedirect = Verb 'GET 302
@@ -76,6 +77,8 @@ type QP a b = QueryParam a b
 
 
 type QPT a = QueryParam a Text
+
+type QPU a = QueryParam a UTCTime 
 
 
 type QPB a = QueryParam a Bool
@@ -110,9 +113,9 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "manual_ingest" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "manual_ingest" :> ReqBody '[FormUrlEncoded] RequestMessageForm :> Post '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "log_explorer" :> QPT "query" :> QPT "cols" :> QPT "cursor" :> QPT "since" :> QPT "from" :> QPT "to" :> HXRequest :> HXBoosted :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" ZonedTime :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" ZonedTime :> "detailed" :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "log_explorer" :> QPT "query" :> QPT "cols" :> QPU "cursor" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "layout" :> HXRequest :> HXBoosted :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> Get '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> "detailed" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "log_explorer" :> "endpoint" :> Capture "endpoint_hash" Text :> Get '[HTML] (Headers '[HXRedirect] (Html ()))
     :<|> "p" :> ProjectId :> "bulk_seed_and_ingest" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "bulk_seed_and_ingest" :> ReqBody '[FormUrlEncoded] DataSeeding.DataSeedingForm :> Post '[HTML] (Html ())
@@ -123,7 +126,6 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "archive" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "unarchive" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "anomaly" :> Capture "targetHash" Text :> QPT "modal" :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "anomaly" :> "events" :> Capture "targetHash" Text :> Capture "anomlayType" Text :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "redacted_fields" :> Get '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "redacted_fields" :> ReqBody '[FormUrlEncoded] RedactFieldForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
     :<|> "p" :> ProjectId :> "charts_html" :> "throughput" :> QPT "id" :> QPT "group_by" :> QPT "endpoint_hash" :> QPT "shape_hash" :> QPT "format_hash" :> QPT "status_code_gt" :> QPI "num_slots" :> QPI "limit" :> QPB "show_legend" :> QPT "from" :> QPT "to" :> QPT "theme" :> Get '[HTML] (Html ())
@@ -208,9 +210,9 @@ protectedServer sess =
     :<|> EndpointDetails.fieldDetailsPartialH sess
     :<|> ManualIngestion.manualIngestGetH sess
     :<|> ManualIngestion.manualIngestPostH sess
-    :<|> Log.apiLog sess
-    :<|> Log.apiLogItem sess
-    :<|> Log.expandAPIlogItem sess
+    :<|> Log.apiLogH sess
+    :<|> LogItem.apiLogItemH sess
+    :<|> LogItem.expandAPIlogItemH sess
     :<|> EndpointDetails.endpointDetailsWithHashH sess
     :<|> DataSeeding.dataSeedingGetH sess
     :<|> DataSeeding.dataSeedingPostH sess
@@ -221,7 +223,6 @@ protectedServer sess =
     :<|> AnomalyList.archiveAnomalyGetH sess
     :<|> AnomalyList.unArchiveAnomalyGetH sess
     :<|> AnomalyList.anomalyDetailsGetH sess
-    :<|> AnomalyList.anomalyEvents sess
     :<|> RedactedFields.redactedFieldsGetH sess
     :<|> RedactedFields.redactedFieldsPostH sess
     :<|> Charts.throughputEndpointHTML sess

@@ -6,19 +6,15 @@ import Data.Default (def)
 import Data.Text
 import Data.Time (ZonedTime, getZonedTime)
 import Data.UUID qualified as UUID
-
 import Data.Vector qualified as V
-
 import Lucid.Hyperscript (__)
 import Models.Apis.RequestDumps qualified as RequestDumps
-
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Lucid
+import Lucid.Htmx
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-
 import Web.FormUrlEncoded (FromForm)
-
 import Data.Aeson.QQ (aesonQQ)
 import Data.UUID.V4 qualified as UUIDV4
 import Database.PostgreSQL.Entity.DBT
@@ -27,13 +23,14 @@ import Database.PostgreSQL.Simple.SqlQQ
 import Database.PostgreSQL.Transact (DBT)
 import Gogol.Prelude (addHeader)
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
-import Pages.Log qualified as Log
-
+import Pages.LogExplorer.LogItem qualified as LogItem
 import NeatInterpolation
 import Pkg.Components (navBar)
 import Relude
 import Servant (Headers)
+import Network.URI (escapeURIString, isUnreserved, isUnescapedInURI)
 import Servant.Htmx (HXTrigger)
+import PyF
 
 
 data ReqForm = ReqForm
@@ -122,27 +119,15 @@ sharePage req outgoing = do
   section_ [class_ "h-full mt-[80px] w-[1000px] flex flex-col items-center mx-auto"] do
     h3_ [class_ "text-5xl text-left mb-16 w-full font-semibold my-8"] "Shared Request Log"
     case req of
-      Just r -> Log.expandAPIlogItem' r.projectId r False outgoing
+      Just r -> do
+        let escapedQueryPartial = toText $ escapeURIString isUnescapedInURI $ toString $ [fmt|parent_id=="{UUID.toText r.id}"|] 
+        let events_url = "/p/" <> r.projectId.toText <> "/log_explorer?layout=resultTable&query=" <> escapedQueryPartial
+        div_ [hxGet_ events_url, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
       Nothing -> div_ [class_ "flex flex-col gap-4 mt-[80px] text-center"] do
         h1_ [class_ "font-bold text-3xl"] "Request Log Not Found"
         p_ [class_ "text-gray-500 text-xl"] "This shared request log URL does not exist or has expired"
   script_
     [text|
-function changeTab(tabId, parent) {
-  const p = document.getElementById(parent);
-  const tabLinks = p.querySelectorAll('.sdk_tab');
-  tabLinks.forEach(link => link.classList.remove('sdk_tab_active'));
-  const clickedTabLink = document.getElementById(tabId);
-  clickedTabLink.classList.add('sdk_tab_active')
-  const tabContents = p.querySelectorAll('.sdk_tab_content');
-  tabContents.forEach(content => {
-    content.classList.add("hidden")
-    content.classList.remove ("sdk_tab_content_active")
-  });
-  const tabContent = document.getElementById(tabId + '_json');
-  tabContent.classList.remove("hidden")
-  setTimeout(()=>{tabContent.classList.add("sdk_tab_content_active")},10)
-}
 
 function toggleExpireOptions (event) {
     event.preventDefault()
@@ -151,12 +136,6 @@ function toggleExpireOptions (event) {
     if(container) {
      container.classList.toggle('hidden')
     }
-}
-
-function getShareLink(event) {
-  const reqId = event.target.getAttribute ("data-req-id")
-  document.querySelector('#req_id_input').value = reqId
-  htmx.trigger('#share_log_form','submit')
 }
 
 function expireChanged(event) {
@@ -168,19 +147,6 @@ function expireChanged(event) {
        document.querySelector("#expire_input").value = event.target.getAttribute("data-expire-value")
     }
 }
-  |]
-  style_
-    [text|
-    .tree-children {
-      display: block;
-    }
-    .tree-children-count { display: none; }
-    .collapsed .tree-children {
-      display: none !important; 
-    }
-    .collapsed .tree-children-count {display: inline !important;}
-    .collapsed .children {display: inline-block; padding-left:0}
-    .collapsed .closing-token {padding-left:0}
   |]
 
 
@@ -241,6 +207,6 @@ getShareLink rid = do
   button_
     [ class_ "flex flex-col gap-1 bg-blue-500 px-2 py-1 rounded text-white"
     , term "data-req-id" (show rid)
-    , onclick_ "getShareLink(event)"
+    , [__|on click set #req_id_input.value to my @data-req-id then call #share_log_form.requestSubmit() |]
     ]
     "Get share link"

@@ -99,8 +99,10 @@ library:
     - envy
     - errors
     - extra
+    - lucid-aria
     - fakedata
     - fmt
+    - PyF
     - generic-lens
     - gogol
     - gogol-core
@@ -169,8 +171,8 @@ executables:
       - -with-rtsopts=-N
       - -fwrite-ide-info
       - -hiedir=.hie
-      - -O2
-    # - -fPIC
+      # - -O2
+      # - -fPIC
     dependencies:
       - apitoolkit-server
       - relude >=1.1.0.0

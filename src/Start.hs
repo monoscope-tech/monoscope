@@ -31,7 +31,6 @@ import Models.Apis.Slack (SlackData (SlackData, webhookUrl))
 import Models.Projects.Projects qualified as Projects
 import Network.Wai.Handler.Warp (run)
 import Optics.Operators
-import Pkg.Mail (sendSlackMessage)
 import ProcessMessage
 import Relude
 import Server qualified
