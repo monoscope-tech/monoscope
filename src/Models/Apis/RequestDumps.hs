@@ -1,8 +1,8 @@
 {-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE StrictData #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 module Models.Apis.RequestDumps (
   RequestDump (..),
@@ -32,10 +32,14 @@ module Models.Apis.RequestDumps (
 ) where
 
 import Control.Error (hush)
+import Data.Aeson (Value)
 import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap (toHashMapText)
 import Data.Default.Instances ()
+import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
-import Data.Time (CalendarDiffTime, ZonedTime, diffUTCTime, zonedTimeToUTC, utcToZonedTime, utc)
+import Data.Time (CalendarDiffTime, ZonedTime, diffUTCTime, utc, utcToZonedTime, zonedTimeToUTC)
+import Data.Time.Clock (UTCTime)
 import Data.Time.Format
 import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
 import Data.Tuple.Extra (both)
@@ -45,10 +49,6 @@ import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, queryOne, qu
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField (fromField), fromJSONField)
-import Models.Apis.Fields.Query ()
-import Data.Aeson (Value)
-import Data.Aeson.KeyMap (toHashMapText)
-import Data.HashMap.Strict qualified as HM
 import Database.PostgreSQL.Simple.FromRow (FromRow (fromRow))
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -60,6 +60,7 @@ import Debug.Pretty.Simple (pTraceShow, pTraceShowM)
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Anomalies (AnomalyTypes)
 import Models.Apis.Anomalies qualified as Anomalies
+import Models.Apis.Fields.Query ()
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Optics.TH
@@ -67,7 +68,6 @@ import Pkg.Parser
 import Relude hiding (many, some)
 import Utils (DBField (MkDBField), quoteTxt)
 import Witch (from)
-import Data.Time.Clock (UTCTime)
 
 
 data SDKTypes
@@ -344,9 +344,9 @@ requestDumpLogUrlPath
   -> Maybe Text
   -> Maybe Text
   -> Maybe Text
-  -> Maybe Text 
+  -> Maybe Text
   -> Text
-requestDumpLogUrlPath pid q cols cursorM sinceM fromM toM layoutM = 
+requestDumpLogUrlPath pid q cols cursorM sinceM fromM toM layoutM =
   [text|/p/$pidT/log_explorer?query=$queryT&cols=$colsT&cursor=$cursorT&since=$sinceT&from=$fromT&to=$toT&layout=$layoutT|]
   where
     pidT = pid.toText
@@ -392,13 +392,13 @@ getRequestDumpsForPreviousReportPeriod pid report_type = query Select (Query $ e
 
 
 selectLogTable :: Projects.ProjectId -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> DBT IO (Either Text (V.Vector (HM.HashMap Text Value), [Text], Int))
-selectLogTable pid extraQuery cursorM dateRange projectedColsByUser= do
+selectLogTable pid extraQuery cursorM dateRange projectedColsByUser = do
   let resp = parseQueryToComponents ((defSqlQueryCfg pid){cursorM, dateRange, projectedColsByUser}) extraQuery
   case resp of
     Left x -> pure $ Left x
     Right (q, queryComponents) -> do
       logItems <- queryToValues q
-      Only count <- fromMaybe (Only 0) <$> queryCount queryComponents.countQuery 
+      Only count <- fromMaybe (Only 0) <$> queryCount queryComponents.countQuery
       let logItemsMap = V.mapMaybe convertValueToMap logItems
       pure $ Right (logItemsMap, queryComponents.toColNames, count)
 
@@ -411,6 +411,7 @@ convertValueToMap (Only val) = case val of
 
 queryToValues :: Text -> DBT IO (V.Vector (Only Value))
 queryToValues q = V.fromList <$> DBT.query_ (Query $ encodeUtf8 q)
+
 
 queryCount :: Text -> DBT IO (Maybe (Only Int))
 queryCount q = DBT.queryOne_ (Query $ encodeUtf8 q)
@@ -524,15 +525,14 @@ select duration_steps, count(id)
       |]
 
 
-
 -- A throughput chart query for the request_dump table.
 -- daterange :: (Maybe Int, Maybe Int)?
 -- We have a requirement that the date range could either be an interval like now to 7 days ago, or be specific dates like day x to day y.
 -- Now thinking about it, it might be easier to calculate 7days ago into a specific date than dealing with integer day ranges.
 throughputBy :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Maybe Int -> Maybe Text -> (Maybe ZonedTime, Maybe ZonedTime) -> DBT IO Text
 throughputBy pid groupByM endpointHash shapeHash formatHash statusCodeGT numSlots limitM extraQuery dateRange@(fromT, toT) = do
-  -- Replace any jsonpath ? with its escaped version, so its not mistaken as a variable for interpolation 
-  let extraQueryParsed =  (T.replace "?" "??") <$> (hush . parseQueryStringToWhereClause =<< extraQuery)
+  -- Replace any jsonpath ? with its escaped version, so its not mistaken as a variable for interpolation
+  let extraQueryParsed = (T.replace "?" "??") <$> (hush . parseQueryStringToWhereClause =<< extraQuery)
   let condlist =
         catMaybes
           [ " endpoint_hash=? " <$ endpointHash

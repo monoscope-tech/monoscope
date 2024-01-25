@@ -17,11 +17,14 @@ module Utils (
   getMethodColor,
   getStatusColor,
   unwrapJsonPrimValue,
-  lookupMapText, 
-  lookupMapInt
+  lookupMapText,
+  lookupMapInt,
 ) where
 
+import Data.Aeson (Value)
 import Data.Aeson qualified as AE
+import Data.HashMap.Strict qualified as HM
+import Data.Scientific (toBoundedInteger)
 import Data.Text (replace)
 import Data.Time (ZonedTime)
 import Data.Vector qualified as V
@@ -37,9 +40,6 @@ import Relude hiding (show)
 import Servant
 import Text.Regex.TDFA ((=~))
 import Prelude (show)
-import Data.Aeson (Value)
-import Data.HashMap.Strict qualified as HM
-import Data.Scientific (toBoundedInteger)
 
 
 -- Added only for satisfying the tests
@@ -137,7 +137,6 @@ getMethodBgColor _ = "bg-blue-500"
 -- getMethodColor "GET" = " text-blue-950 bg-blue-50 border border-blue-200 "
 -- getMethodColor _ = " text-blue-950 bg-blue-50 border border-blue-200 "
 
-
 getMethodColor :: Text -> Text
 getMethodColor "POST" = " badge badge-warning "
 getMethodColor "PUT" = " badge badge-info "
@@ -145,6 +144,7 @@ getMethodColor "DELETE" = " badge badge-error "
 getMethodColor "PATCH" = " badge badge-info "
 getMethodColor "GET" = " badge badge-success "
 getMethodColor _ = " badge badge-outline "
+
 
 getStatusColor :: Int -> Text
 getStatusColor status
@@ -163,10 +163,9 @@ unwrapJsonPrimValue AE.Null = "null"
 unwrapJsonPrimValue (AE.Object _) = "{..}"
 unwrapJsonPrimValue (AE.Array items) = "[" <> toText (show (length items)) <> "]"
 
+
 -- unwrapJsonPrimValue (AE.Object _) = error "Impossible. unwrapJsonPrimValue should be for primitive types only. got object" -- should never be reached
 -- unwrapJsonPrimValue (AE.Array _) = error "Impossible. unwrapJsonPrimValue should be for primitive types only. got array" -- should never be reached
-
-
 
 lookupMapText :: Text -> HashMap Text Value -> Maybe Text
 lookupMapText key hashMap = case HM.lookup key hashMap of
@@ -178,5 +177,3 @@ lookupMapInt :: Text -> HashMap Text Value -> Int
 lookupMapInt key hashMap = case HM.lookup key hashMap of
   Just (AE.Number val) -> fromMaybe 0 $ toBoundedInteger val -- Extract text from Value if it's a String
   _ -> 0
-
-

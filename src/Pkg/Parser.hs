@@ -1,5 +1,5 @@
 -- Parser implemented with help and code from: https://markkarpov.com/tutorial/megaparsec.html
-module Pkg.Parser (parseQueryStringToWhereClause, parseQueryToComponents, defSqlQueryCfg, SqlQueryCfg (..),QueryComponents (..), listToColNames) where
+module Pkg.Parser (parseQueryStringToWhereClause, parseQueryToComponents, defSqlQueryCfg, SqlQueryCfg (..), QueryComponents (..), listToColNames) where
 
 import Control.Error (hush)
 import Data.Default (Default (def))
@@ -40,10 +40,10 @@ data QueryComponents = QueryComponents
   , groupByClause :: [Text]
   , select :: [Text]
   , finalColumns :: [Text]
-  -- A query which can be run to retrieve the count 
-  , countQuery :: Text
-  -- final generated sql query
-  , finalSqlQuery :: Text 
+  , -- A query which can be run to retrieve the count
+    countQuery :: Text
+  , -- final generated sql query
+    finalSqlQuery :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (Default)
@@ -97,12 +97,12 @@ sqlFromQueryComponents sqlCfg qc =
            WHERE project_id='{sqlCfg.pid.toText}'::uuid  and created_at > NOW() - interval '14 days' {cursorT} {dateRangeStr} {whereClause}
            {groupByClause} ORDER BY created_at desc limit 200 ) t|]
 
-    countQuery = 
+    countQuery =
       [fmt|SELECT count(*) FROM apis.request_dumps 
            WHERE project_id='{sqlCfg.pid.toText}'::uuid  and created_at > NOW() - interval '14 days' {cursorT} {dateRangeStr} {whereClause}
            {groupByClause} limit 1|]
    in
-    (finalSqlQuery, qc{finalColumns = listToColNames selectedCols, countQuery, finalSqlQuery })
+    (finalSqlQuery, qc{finalColumns = listToColNames selectedCols, countQuery, finalSqlQuery})
 
 
 -----------------------------------------------------------------------------------

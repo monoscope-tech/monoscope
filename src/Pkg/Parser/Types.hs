@@ -64,18 +64,16 @@ data AggFunction
     Plain Subject (Maybe String)
   deriving stock (Show)
 
+
 -- Define an optional 'by' clause
 data ByClause = ByClause [Subject] -- List of fields to group by
   deriving stock (Show)
 
 
-
-
-
 data Section
   = Search Expr
-  -- Define the AST for the 'stats' command
-  | StatsCommand [AggFunction] (Maybe ByClause)
+  | -- Define the AST for the 'stats' command
+    StatsCommand [AggFunction] (Maybe ByClause)
   deriving stock (Show)
 
 

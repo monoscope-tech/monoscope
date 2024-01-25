@@ -2,35 +2,35 @@ module Pages.Share (ReqForm, shareLinkPostH, shareLinkGetH) where
 
 import Config
 import Data.Aeson as Aeson
+import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
 import Data.Text
 import Data.Time (ZonedTime, getZonedTime)
 import Data.UUID qualified as UUID
-import Data.Vector qualified as V
-import Lucid.Hyperscript (__)
-import Models.Apis.RequestDumps qualified as RequestDumps
-import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
-import Lucid
-import Lucid.Htmx
-import Models.Projects.Projects qualified as Projects
-import Models.Users.Sessions qualified as Sessions
-import Web.FormUrlEncoded (FromForm)
-import Data.Aeson.QQ (aesonQQ)
 import Data.UUID.V4 qualified as UUIDV4
+import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT
+import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple hiding (execute, query)
 import Database.PostgreSQL.Simple.SqlQQ
 import Database.PostgreSQL.Transact (DBT)
 import Gogol.Prelude (addHeader)
+import Lucid
+import Lucid.Htmx
+import Lucid.Hyperscript (__)
+import Models.Apis.RequestDumps qualified as RequestDumps
+import Models.Projects.Projects qualified as Projects
+import Models.Users.Sessions qualified as Sessions
+import NeatInterpolation
+import Network.URI (escapeURIString, isUnescapedInURI, isUnreserved)
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Pages.LogExplorer.LogItem qualified as LogItem
-import NeatInterpolation
 import Pkg.Components (navBar)
+import PyF
 import Relude
 import Servant (Headers)
-import Network.URI (escapeURIString, isUnreserved, isUnescapedInURI)
 import Servant.Htmx (HXTrigger)
-import PyF
+import Web.FormUrlEncoded (FromForm)
 
 
 data ReqForm = ReqForm
@@ -120,7 +120,7 @@ sharePage req outgoing = do
     h3_ [class_ "text-5xl text-left mb-16 w-full font-semibold my-8"] "Shared Request Log"
     case req of
       Just r -> do
-        let escapedQueryPartial = toText $ escapeURIString isUnescapedInURI $ toString $ [fmt|parent_id=="{UUID.toText r.id}"|] 
+        let escapedQueryPartial = toText $ escapeURIString isUnescapedInURI $ toString $ [fmt|parent_id=="{UUID.toText r.id}"|]
         let events_url = "/p/" <> r.projectId.toText <> "/log_explorer?layout=resultTable&query=" <> escapedQueryPartial
         div_ [hxGet_ events_url, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
       Nothing -> div_ [class_ "flex flex-col gap-4 mt-[80px] text-center"] do

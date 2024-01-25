@@ -2,6 +2,8 @@ module Pages.Log where
 
 import Config
 import Data.Aeson (Value)
+import Data.Aeson qualified as AE
+import Data.Containers.ListUtils (nubOrd)
 import Data.Default (def)
 import Data.HashMap.Strict qualified as HM
 import Data.List (elemIndex)
@@ -15,7 +17,6 @@ import Data.Time (
   utc,
   utcToZonedTime,
  )
-import Data.Containers.ListUtils (nubOrd)
 import Data.Time.Format
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector (Vector)
@@ -23,7 +24,6 @@ import Data.Vector qualified as V
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
-import Data.Aeson qualified as AE
 import Lucid.Base
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
@@ -81,14 +81,12 @@ apiLogH sess pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoo
       (project, Right tableAsMaps) <- liftIO
         $ withPool pool do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-          tableAsMaps <- RequestDumps.selectLogTable pid query cursorM' (fromD, toD) summaryCols 
+          tableAsMaps <- RequestDumps.selectLogTable pid query cursorM' (fromD, toD) summaryCols
           pure (project, tableAsMaps)
-
-
 
       reqChartTxt <- liftIO $ withPool pool $ RequestDumps.throughputBy pid Nothing Nothing Nothing Nothing Nothing (3 * 60) Nothing queryM (utcToZonedTime utc <$> fromD, utcToZonedTime utc <$> toD)
       let (requestMaps, colNames, requestsCount) = tableAsMaps
-          curatedColNames = nubOrd $ curateCols summaryCols colNames 
+          curatedColNames = nubOrd $ curateCols summaryCols colNames
           reqLastCreatedAtM = (\r -> lookupMapText "created_at" r) =<< (requestMaps V.!? (V.length requestMaps - 1)) -- FIXME: unoptimal implementation, converting from vector to list for last
           nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore")
           resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing
@@ -97,7 +95,7 @@ apiLogH sess pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoo
       case (layoutM, hxRequestM, hxBoostedM) of
         (Just "loadmore", _, _) -> pure $ logItemRows_ pid requestMaps curatedColNames nextLogsURL
         (Just "resultTable", _, _) -> pure $ resultTable_ page
-        (Just "all", _, _) -> pure $ do 
+        (Just "all", _, _) -> pure $ do
           reqChart_ page.reqChartTxt False
           resultTable_ page
         _ -> do
@@ -164,10 +162,10 @@ logQueryBox_ pid currentRange =
                   a_ [class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ", [__| on click toggle .hidden on #timepickerSidebar |]] "Custom date range"
                 div_ [class_ "inline-block relative hidden", id_ "timepickerSidebar"] do
                   div_ [id_ "startTime", class_ "hidden"] ""
-          div_ $ div_ [class_ "form-control"] $  label_ [class_ "label cursor-pointer space-x-2"] do
+          div_ $ div_ [class_ "form-control"] $ label_ [class_ "label cursor-pointer space-x-2"] do
             input_ [type_ "checkbox", class_ "toggle", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()"]
             span_ [class_ "label-text"] "Use editor"
-                
+
           button_
             [type_ "submit", class_ "btn btn-sm btn-success"]
             do
@@ -268,7 +266,7 @@ curateCols summaryCols cols = sortBy sortAccordingly filteredCols
   where
     defaultSummaryPaths = ["errors_count", "host", "status_code", "method", "url_path", "request_type"]
     isLogEventB = isLogEvent cols
-    filteredCols = filter (\c -> not isLogEventB || (c `notElem` defaultSummaryPaths || c `elem` summaryCols )) cols
+    filteredCols = filter (\c -> not isLogEventB || (c `notElem` defaultSummaryPaths || c `elem` summaryCols)) cols
 
     sortAccordingly :: Text -> Text -> Ordering
     sortAccordingly a b
@@ -329,7 +327,7 @@ logTableHeading_ pid True "created_at" = logTableHeadingWrapper_ pid "created_at
 logTableHeading_ pid isLogEventB col = logTableHeadingWrapper_ pid col $ toHtml $ Unsafe.last $ T.splitOn "•" col
 
 
-logTableHeadingWrapper_ ::Projects.ProjectId -> Text -> Html () -> Html ()
+logTableHeadingWrapper_ :: Projects.ProjectId -> Text -> Html () -> Html ()
 logTableHeadingWrapper_ pid title child = td_
   [ class_ "bg-base-200 cursor-pointer p-0 m-0 "
   , term "data-tip" title
@@ -340,14 +338,19 @@ logTableHeadingWrapper_ pid title child = td_
       div_ [tabindex_ "0", role_ "button", class_ "py-2 px-3 block"] child
       ul_ [tabindex_ "0", class_ "dropdown-content z-[1] menu p-2 shadow bg-base-100 rounded-box min-w-[15rem]"] do
         li_ [class_ "underline underline-offset-2"] $ toHtml title
-        li_ $ a_ [hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
-          , hxPushUrl_ "true"
-          , hxVals_ $ "js:{query:params().query,cols:removeNamedColumnToSummary('" <> title <> "'),layout:'resultTable'}"
-          , hxTarget_ "#resultTable" ]$ "Hide column"
+        li_
+          $ a_
+            [ hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
+            , hxPushUrl_ "true"
+            , hxVals_ $ "js:{query:params().query,cols:removeNamedColumnToSummary('" <> title <> "'),layout:'resultTable'}"
+            , hxTarget_ "#resultTable"
+            ]
+          $ "Hide column"
 
 
 isLogEvent :: [Text] -> Bool
 isLogEvent cols = all (`elem` cols) ["id", "created_at"]
+
 
 logItemCol_ :: Projects.ProjectId -> HashMap Text Value -> Text -> Html ()
 logItemCol_ pid reqMap "id" = do
@@ -443,7 +446,6 @@ jsonTreeAuxillaryCode pid = do
           , onclick_ "filterByField(event, '!=')"
           ]
           "Exclude field"
-
 
   script_
     [text|

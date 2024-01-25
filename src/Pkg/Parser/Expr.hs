@@ -127,10 +127,9 @@ pValues =
 
 -- | pTerm is the main entry point that desides what tree lines to decend
 --
--- Exampes: 
+-- Exampes:
 --
 -- >>> parseTest pTerm "abc != \"GET\""
---
 pTerm :: Parser Expr
 pTerm =
   (Paren <$> parens pExpr)
@@ -342,9 +341,9 @@ jsonPathQuery op' (Subject entire base keys) val =
     buildPath :: [FieldKey] -> Text
     buildPath [] = ""
     buildPath (FieldKey key : rest) = ".\"" <> key <> "\"" <> buildPath rest
-    buildPath (ArrayIndex "" idx : rest) =  "[" <> show idx <> "]" <> buildPath rest
+    buildPath (ArrayIndex "" idx : rest) = "[" <> show idx <> "]" <> buildPath rest
     buildPath (ArrayIndex key idx : rest) = "." <> key <> "[" <> show idx <> "]" <> buildPath rest
-    buildPath (ArrayWildcard "" : rest) =  "[*]" <> buildPath rest
+    buildPath (ArrayWildcard "" : rest) = "[*]" <> buildPath rest
     buildPath (ArrayWildcard key : rest) = "." <> key <> "[*]" <> buildPath rest
 
     buildCondition :: Text -> Values -> Text

@@ -22,7 +22,6 @@ import Text.Megaparsec.Char.Lexer qualified as L
 -- Syntax: <aggregate-function>"("<field> [AS <field>] ) ["," <aggregate-function> "("<field> [AS <field>] ) ]...
 -- for example ... | stats sum(bytes) AS 'sum of bytes'.
 
-
 -- | Handles different aggregation functions and their optional aliases.
 --
 -- >>> parseTest aggFunctionParser "count(field)"
@@ -94,7 +93,7 @@ byClauseParser = ByClause <$> (string "by" *> space *> sepBy pSubject (char ',')
 --
 -- >>> parseTest pStatsSection "stats max(field) by field1,field2"
 -- StatsCommand [Max (FieldName "field") Nothing] (Just (ByClause [FieldName "field1", FieldName "field2"]))
-pStatsSection :: Parser Section 
+pStatsSection :: Parser Section
 pStatsSection = do
   _ <- string "stats"
   space

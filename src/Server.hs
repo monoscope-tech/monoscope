@@ -9,7 +9,7 @@ import Data.Aeson (FromJSON)
 import Data.Aeson qualified as AE
 import Data.Aeson.Types (ToJSON)
 import Data.Pool (Pool)
-import Data.Time (ZonedTime, UTCTime)
+import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import DataSeeding qualified
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), queryOne, withPool)
@@ -38,6 +38,7 @@ import Pages.Endpoints.EndpointDetails qualified as EndpointDetails
 import Pages.Endpoints.EndpointList qualified as EndpointList
 import Pages.GenerateSwagger qualified as GenerateSwagger
 import Pages.Log qualified as Log
+import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.ManualIngestion (RequestMessageForm)
 import Pages.ManualIngestion qualified as ManualIngestion
 import Pages.Onboarding qualified as Onboarding
@@ -62,7 +63,6 @@ import Web.Auth (authCallbackH, genAuthServerContext, loginH, loginRedirectH, lo
 import Web.ClientMetadata qualified as ClientMetadata
 import Web.Cookie (SetCookie)
 import Witch (from)
-import Pages.LogExplorer.LogItem qualified as LogItem 
 
 
 type GetRedirect = Verb 'GET 302
@@ -78,7 +78,8 @@ type QP a b = QueryParam a b
 
 type QPT a = QueryParam a Text
 
-type QPU a = QueryParam a UTCTime 
+
+type QPU a = QueryParam a UTCTime
 
 
 type QPB a = QueryParam a Bool
