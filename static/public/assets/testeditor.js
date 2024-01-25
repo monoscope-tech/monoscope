@@ -1,18 +1,13 @@
 import { LitElement, html, ref, createRef } from './js/thirdparty/lit.js';
+import {
+  METHODS,
+  PostConfig,
+  getEvent,
+  triggerToastEvent,
+  ASSERTS,
+  validateYaml,
+} from './testeditor-utils.js';
 
-const PostConfig = {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-};
-
-function getEvent(eventName, value) {
-  const event = new CustomEvent(eventName, {
-    detail: value,
-    bubbles: true,
-    composed: true,
-  });
-  return event;
-}
 export class Collection extends LitElement {
   static properties = {
     collection: {},
@@ -73,9 +68,9 @@ export class Collection extends LitElement {
         const event = getEvent('successToast', {
           value: ['Step edited successfully'],
         });
-        document.querySelector('body').dispatchEvent(event);
+        triggerToastEvent(event);
       } catch (err) {
-        document.querySelector('body').dispatchEvent(errorEvent);
+        triggerToastEvent(errorEvent);
       }
     });
 
@@ -104,9 +99,9 @@ export class Collection extends LitElement {
         const event = getEvent('successToast', {
           value: ['Step edited successfully'],
         });
-        document.querySelector('body').dispatchEvent(event);
+        triggerToastEvent(event);
       } catch (err) {
-        document.querySelector('body').dispatchEvent(errorEvent);
+        triggerToastEvent(errorEvent);
       }
     });
 
@@ -149,9 +144,9 @@ export class Collection extends LitElement {
       const event = getEvent('successToast', {
         value: ['Step added successfully'],
       });
-      document.querySelector('body').dispatchEvent(event);
+      triggerToastEvent(event);
     } catch (err) {
-      document.querySelector('body').dispatchEvent(errorEvent);
+      triggerToastEvent(errorEvent);
     }
   }
 
@@ -173,9 +168,9 @@ export class Collection extends LitElement {
       const event = getEvent('successToast', {
         value: [`${action} updated successfully`],
       });
-      document.querySelector('body').dispatchEvent(event);
-    } catch (error) {
-      document.querySelector('body').dispatchEvent(errorEvent);
+      triggerToastEvent(event);
+    } catch (err) {
+      triggerToastEvent(errorEvent);
     }
   }
 
@@ -197,19 +192,13 @@ export class Collection extends LitElement {
     } else {
       if (window.testEditor) {
         const val = window.testEditor.getValue();
-        const data = jsyaml.load(val);
-        data.map((step) => {
-          if (step.json) {
-            step.json =
-              typeof step.json === 'string'
-                ? step.json
-                : JSON.stringify(step.json);
-          }
-        });
-        this.collection.steps = data;
+        const data = validateYaml(val);
+        if (data) {
+          const current = this.collection.steps;
+          this.collection.steps = data;
+        }
       }
       this.showCode = false;
-      this.saveSteps();
     }
   }
 
@@ -722,17 +711,8 @@ class Step extends LitElement {
     return arr;
   }
   getMethodUrl(data) {
-    const methods = [
-      'GET',
-      'POST',
-      'PATCH',
-      'PUT',
-      'DELETE',
-      'HEAD',
-      'OPTIONS',
-    ];
     for (let key in data) {
-      if (methods.includes(key.toUpperCase())) {
+      if (METHODS.includes(key.toUpperCase())) {
         return [key.toUpperCase(), data[key]];
       }
     }
@@ -880,19 +860,19 @@ customElements.define('step-element', Step);
 
 class KeyVal extends LitElement {
   static properties = {
-    stitle: { type: String },
+    sTitle: { type: String },
     data: {},
   };
   constructor() {
     super();
     this.data = {};
-    this.stitle = '';
+    this.sTitle = '';
   }
 
   render() {
     return html`
       <div class="w-full">
-        <h6 class="mb-1 font-medium text-gray-800">${this.stitle}</h6>
+        <h6 class="mb-1 font-medium text-gray-800">${this.sTitle}</h6>
         <div class="w-full flex flex-col gap-1">
           ${Object.entries(this.data).map(
             (kv) =>
@@ -982,7 +962,7 @@ class NewStepModal extends LitElement {
     exports: {},
     errors: {},
   };
-  staticMethods = ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'HEAD', 'OPTIONS'];
+  staticMethods = METHODS;
   constructor() {
     super();
     this.methods = this.staticMethods;
@@ -1055,19 +1035,10 @@ class NewStepModal extends LitElement {
       errors.push('Invalid url');
     }
 
-    const allAsserts = [
-      'exists',
-      'number',
-      'string',
-      'boolean',
-      'ok',
-      'empty',
-      'notEmpty',
-    ];
     if (asserts) {
       asserts = asserts.filter((kv) => kv[0] && kv[1]);
       asserts.forEach((assert) => {
-        if (!allAsserts.includes(assert[0])) {
+        if (!ASSERTS.includes(assert[0])) {
           errors.push(`${assert[0]}: is not a valid assertion`);
         }
       });
@@ -1581,20 +1552,11 @@ class AssertsElement extends LitElement {
     showAsserts: { state: true },
     assertComp: {},
   };
-  allAsserts = [
-    'exists',
-    'number',
-    'string',
-    'boolean',
-    'ok',
-    'empty',
-    'notEmpty',
-  ];
   constructor() {
     super();
     this.asserts = [['', '']];
     this.showAsserts = false;
-    this.assertsComp = this.allAsserts;
+    this.assertsComp = ASSERTS;
     this.addEventListener('update-assert', (event) => {
       const { val, target } = event.detail;
       this.asserts[target][0] = val;
@@ -1622,7 +1584,7 @@ class AssertsElement extends LitElement {
               <custom-select
                 .val=${p[0]}
                 .target=${ind}
-                .options=${this.allAsserts}
+                .options=${ASSERTS}
                 placeholder=${'assert'}
                 eventName=${'update-assert'}
               ></custom-select>
