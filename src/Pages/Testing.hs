@@ -5,6 +5,7 @@ module Pages.Testing (
   collectionGetH,
   TestCollectionForm (..),
   collectionStepPostH,
+  collectionStepPutH,
 ) where
 
 import Config
@@ -294,11 +295,18 @@ collectionStepPostH sess pid cid step_val = do
               , updatedAt = currentTime
               , lastRun = Nothing
               , projectId = pid
-              , colId = cid
+              , collectionId = cid
               , stepData = step_val
               }
       _ <- withPool pool $ Testing.addCollectionStep newStep
       pure ""
+
+
+collectionStepPutH :: Sessions.PersistentSession -> Projects.ProjectId -> Testing.CollectionStepId -> Value -> DashboardM (Html ())
+collectionStepPutH sess pid csid value = do
+  pool <- asks pool
+  _ <- withPool pool $ Testing.updateCollectionStep csid value
+  pure ""
 
 
 -- Import the foreign function from the Rust library

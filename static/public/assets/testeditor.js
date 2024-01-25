@@ -1,5 +1,18 @@
 import { LitElement, html, ref, createRef } from './js/thirdparty/lit.js';
 
+const PostConfig = {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+};
+
+function getEvent(eventName, value) {
+  const event = new CustomEvent(eventName, {
+    detail: value,
+    bubbles: true,
+    composed: true,
+  });
+  return event;
+}
 export class Collection extends LitElement {
   static properties = {
     collection: {},
@@ -22,12 +35,15 @@ export class Collection extends LitElement {
     const steps = JSON.parse(
       document.getElementById('test-data').dataset.steps
     );
+
     this.collection = JSON.parse(dataStore);
-    this.collection.steps = steps.map((step) => step.step_data);
-    console.log(this.collection);
+    this.collection.steps = steps.map((step) => {
+      return { id: step.id, lastRun: step.lastRun, ...step.stepData };
+    });
     this.showCode = false;
     this.showSettings = false;
     this.runningAllTests = false;
+
     this.addEventListener('add-step', this.handleAddStep);
     this.addEventListener('close-modal', () => {
       this.showNewStepModal = false;
@@ -35,15 +51,63 @@ export class Collection extends LitElement {
 
     this.addEventListener('edit-step', async (event) => {
       const { step, ind } = event.detail.data;
-      this.collection.steps[ind] = step;
-      await this.updateCollection('steps', this.collection.steps);
+      const target = this.collection.steps[ind];
+      const targetId = target.id;
+      const lastRun = target.lastRun;
+      const errorEvent = getEvent('errorToast', {
+        value: ['Something went wrong'],
+      });
+      try {
+        const response = await fetch(
+          `/p/${this.pid}/testing/step/${targetId}`,
+          { ...PostConfig, body: JSON.stringify(step) }
+        );
+        if (!response.ok) {
+          document.querySelector('body').dispatchEvent(errorEvent);
+          return;
+        }
+
+        this.collection.steps[ind] = { id: targetId, lastRun, ...step };
+        this.collection = { ...this.collection };
+        this.showNewStepModal = false;
+        const event = getEvent('successToast', {
+          value: ['Step edited successfully'],
+        });
+        document.querySelector('body').dispatchEvent(event);
+      } catch (err) {
+        document.querySelector('body').dispatchEvent(errorEvent);
+      }
     });
 
     this.addEventListener('delete-step', async (event) => {
       const step_index = event.detail.step;
-      this.collection.steps[step_index] = undefined;
-      this.collection.steps = this.collection.steps.filter((s) => !!s);
-      await this.updateCollection('steps', this.collection.steps);
+      const target = this.collection.steps[step_index];
+      const targetId = target.id;
+      const errorEvent = getEvent('errorToast', {
+        value: ['Something went wrong'],
+      });
+
+      try {
+        const response = await fetch(
+          `/p/${this.pid}/testing/step/${targetId}`,
+          { method: 'DELETE' }
+        );
+        if (!response.ok) {
+          document.querySelector('body').dispatchEvent(errorEvent);
+          return;
+        }
+        this.collection.steps = this.collection.steps.filter(
+          (s) => s.id !== targetId
+        );
+        this.collection = { ...this.collection };
+        this.showNewStepModal = false;
+        const event = getEvent('successToast', {
+          value: ['Step edited successfully'],
+        });
+        document.querySelector('body').dispatchEvent(event);
+      } catch (err) {
+        document.querySelector('body').dispatchEvent(errorEvent);
+      }
     });
 
     this.addEventListener('update-config', (event) => {
@@ -65,12 +129,14 @@ export class Collection extends LitElement {
 
   async handleAddStep(event) {
     const step = event.detail.data;
+    const errorEvent = getEvent('errorToast', {
+      value: ['Something went wrong'],
+    });
     try {
-      const response = await fetch(`/p/${this.pid}/${this.col_id}/add-step`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(stepData),
-      });
+      const response = await fetch(
+        `/p/${this.pid}/testing/add_step/${this.col_id}`,
+        { ...PostConfig, body: JSON.stringify(step) }
+      );
       if (!response.ok) {
         document.querySelector('body').dispatchEvent(errorEvent);
         return;
@@ -80,31 +146,23 @@ export class Collection extends LitElement {
         steps: [...this.collection.steps, step],
       };
       this.showNewStepModal = false;
-      const event = new CustomEvent('successToast', {
-        detail: {
-          value: [`${action} updated successfully`],
-        },
+      const event = getEvent('successToast', {
+        value: ['Step added successfully'],
       });
       document.querySelector('body').dispatchEvent(event);
-    } catch (err) {}
+    } catch (err) {
+      document.querySelector('body').dispatchEvent(errorEvent);
+    }
   }
 
   async updateCollection(action, value) {
-    const errorEvent = new CustomEvent('errorToast', {
-      detail: {
-        value: [`Something went wrong`],
-      },
+    const errorEvent = getEvent('errorToast', {
+      value: ['Something went wrong'],
     });
     try {
       const response = await fetch(
         `/p/${this.pid}/testing/${this.col_id}/update_${action}`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(value),
-        }
+        { ...PostConfig, body: JSON.stringify(value) }
       );
       if (!response.ok) {
         document.querySelector('body').dispatchEvent(errorEvent);
@@ -112,10 +170,8 @@ export class Collection extends LitElement {
       }
       this.collection = { ...this.collection };
       this.showNewStepModal = false;
-      const event = new CustomEvent('successToast', {
-        detail: {
-          value: [`${action} updated successfully`],
-        },
+      const event = getEvent('successToast', {
+        value: [`${action} updated successfully`],
       });
       document.querySelector('body').dispatchEvent(event);
     } catch (error) {
@@ -162,9 +218,7 @@ export class Collection extends LitElement {
     try {
       const response = await fetch(
         `/p/${this.pid}/testing/${this.col_id}/run_all`,
-        {
-          method: 'POST',
-        }
+        { method: 'POST' }
       );
       if (response.ok) {
         const json = await response.json();
@@ -1622,11 +1676,7 @@ class CustomSelect extends LitElement {
     this.placeholder = 'key';
   }
   sendEvent(data) {
-    const event = new CustomEvent(this.eventName, {
-      detail: { val: data, target: this.target },
-      bubbles: true,
-      composed: true,
-    });
+    const event = getEvent(this.eventName, { val: data, target: this.target });
     this.dispatchEvent(event);
   }
 

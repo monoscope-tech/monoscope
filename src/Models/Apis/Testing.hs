@@ -11,6 +11,7 @@ module Models.Apis.Testing (
     getCollections,
     updateCollection,
     updateCollectionConfig,
+    updateCollectionStep,
     getCollectionSteps,
     getCollectionById,
     updateSchedule,
@@ -51,7 +52,7 @@ newtype CollectionId = CollectionId {collectionId :: UUID.UUID}
 
 
 instance HasField "toText" CollectionId Text where
-    getField = UUID.toText . collectionId
+    getField colid = UUID.toText colid.collectionId
 
 
 newtype CollectionStepId = CollectionStepId {collectionStepId :: UUID.UUID}
@@ -71,14 +72,14 @@ data CollectionStep = CollectionStep
     , updatedAt :: ZonedTime
     , lastRun :: Maybe ZonedTime
     , projectId :: Projects.ProjectId
-    , colId :: CollectionId
+    , collectionId :: CollectionId
     , stepData :: Value
     }
     deriving stock (Show, Generic)
     deriving anyclass (FromRow, ToRow, ToJSON, FromJSON)
     deriving
         (Entity)
-        via (GenericEntity '[Schema "apis", TableName "test_steps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Collection)
+        via (GenericEntity '[Schema "apis", TableName "test_steps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] CollectionStep)
 
 
 data Collection = Collection
@@ -189,6 +190,18 @@ updateCollectionConfig cid config = do
             [sql| UPDATE apis.testing SET config=? WHERE id=? |]
     execute Update q (config, cid)
 
+
+updateCollectionStep :: CollectionStepId -> Value -> DBT IO Int64
+updateCollectionStep csid val = do
+    let q =
+            [sql| UPDATE apis.test_steps SET step_data=? WHERE id=? |]
+    execute Update q (val, csid)
+
+
+-- deleteCollectionStep :: CollectionStepId -> DBT IO Int64
+-- deleteCollectionStep csid = do
+--     let q = [sql| DELETE FROM apis.test_steps WHERE id=? |]
+--     execute Delete q csid
 
 updateSchedule :: CollectionId -> Maybe Text -> Bool -> DBT IO Int64
 updateSchedule cid schedule isScheduled = do
