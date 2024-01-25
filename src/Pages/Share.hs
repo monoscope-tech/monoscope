@@ -128,21 +128,6 @@ sharePage req outgoing = do
         p_ [class_ "text-gray-500 text-xl"] "This shared request log URL does not exist or has expired"
   script_
     [text|
-function changeTab(tabId, parent) {
-  const p = document.getElementById(parent);
-  const tabLinks = p.querySelectorAll('.sdk_tab');
-  tabLinks.forEach(link => link.classList.remove('sdk_tab_active'));
-  const clickedTabLink = document.getElementById(tabId);
-  clickedTabLink.classList.add('sdk_tab_active')
-  const tabContents = p.querySelectorAll('.sdk_tab_content');
-  tabContents.forEach(content => {
-    content.classList.add("hidden")
-    content.classList.remove ("sdk_tab_content_active")
-  });
-  const tabContent = document.getElementById(tabId + '_json');
-  tabContent.classList.remove("hidden")
-  setTimeout(()=>{tabContent.classList.add("sdk_tab_content_active")},10)
-}
 
 function toggleExpireOptions (event) {
     event.preventDefault()
@@ -162,19 +147,6 @@ function expireChanged(event) {
        document.querySelector("#expire_input").value = event.target.getAttribute("data-expire-value")
     }
 }
-  |]
-  style_
-    [text|
-    .tree-children {
-      display: block;
-    }
-    .tree-children-count { display: none; }
-    .collapsed .tree-children {
-      display: none !important; 
-    }
-    .collapsed .tree-children-count {display: inline !important;}
-    .collapsed .children {display: inline-block; padding-left:0}
-    .collapsed .closing-token {padding-left:0}
   |]
 
 

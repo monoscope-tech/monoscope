@@ -24,6 +24,8 @@ import Data.Time.Format
 import System.Clock
 import Utils
 import PyF
+import Lucid.Aria qualified as Aria
+import Pages.Components qualified as Components
 
 
 
@@ -131,85 +133,39 @@ expandAPIlogItem' pid req modal  = do
     div_ [class_ "border rounded-lg mt-8", id_ "request_detail_container"] do
       div_ [class_ "flex w-full bg-gray-100 px-4 py-2 flex-col gap-2"] do
         p_ [class_ "font-bold"] "Request Details"
-      ul_ [class_ "px-4 flex gap-10 border-b text-slate-500"] do
-        li_ [] do
-          button_
-            [ class_ "sdk_tab sdk_tab_active"
-            , onclick_ "changeTab('req_body','request_detail_container')"
-            , id_ "req_body"
-            ]
-            "Body"
-        li_ [] do
-          button_
-            [ class_ "sdk_tab"
-            , onclick_ "changeTab('req_headers', 'request_detail_container')"
-            , id_ "req_headers"
-            ]
-            "Headers"
-        li_ [] do
-          button_
-            [ class_ "sdk_tab"
-            , onclick_ "changeTab('query_params', 'request_detail_container')"
-            , id_ "query_params"
-            ]
-            "Query Params"
-        li_ [] do
-          button_
-            [ class_ "sdk_tab"
-            , onclick_ "changeTab('path_params', 'request_detail_container')"
-            , id_ "path_params"
-            ]
-            "Path Params"
-      div_ [class_ "bg-gray-50 m-4  p-2 rounded-lg border sdk_tab_content sdk_tab_content_active", id_ "req_body_json"] do
-        jsonValueToHtmlTree req.requestBody
-      div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg hidden border sdk_tab_content", id_ "req_headers_json"] do
-        jsonValueToHtmlTree req.requestHeaders
-      div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg hidden border sdk_tab_content", id_ "query_params_json"] do
-        jsonValueToHtmlTree req.queryParams
-      div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg hidden border sdk_tab_content", id_ "path_params_json"] do
-        jsonValueToHtmlTree req.pathParams
+
+      div_ [class_ "tabs tabs-bordered", role_ "tablist"] do
+        input_ [type_ "radio", name_ "req-details-tab", role_ "tab", Aria.label_ "Body", class_ "tab", checked_]
+        div_ [class_ "tab-content", role_ "tabpanel"] $ div_ [class_ "bg-gray-50 m-4  p-2 rounded-lg border", id_ "req_body_json"] 
+          $ jsonValueToHtmlTree req.requestBody
+
+        input_ [type_ "radio", name_ "req-details-tab", role_ "tab", Aria.label_ "Headers", class_ "tab"]
+        div_ [class_ "tab-content", role_ "tabpanel"] $ div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border", id_ "req_headers_json"] 
+          $ jsonValueToHtmlTree req.requestHeaders
+
+        input_ [type_ "radio", name_ "req-details-tab", role_ "tab", Aria.label_ "Query Params", class_ "tab"]
+        div_ [class_ "tab-content", role_ "tabpanel"] $ div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border", id_ "query_params_json"]
+          $ jsonValueToHtmlTree req.queryParams
+
+        input_ [type_ "radio", name_ "req-details-tab", role_ "tab", Aria.label_ "Path Params", class_ "tab"]
+        div_ [class_ "tab-content", role_ "tabpanel"] $ div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border", id_ "path_params_json"] 
+          $ jsonValueToHtmlTree req.pathParams
 
     -- response details
     div_ [class_ "border rounded-lg mt-8", id_ "reponse_detail_container"] do
       div_ [class_ "flex w-full bg-gray-100 px-4 py-2 flex-col gap-2"] do
         p_ [class_ "font-bold"] "Response Details"
-      ul_ [class_ "px-4 flex gap-10 border-b text-slate-500"] do
-        li_ [] do
-          button_
-            [ class_ "sdk_tab sdk_tab_active"
-            , onclick_ "changeTab('res_body', 'reponse_detail_container')"
-            , id_ "res_body"
-            ]
-            "Body"
-        li_ [] do
-          button_
-            [ class_ "sdk_tab"
-            , onclick_ "changeTab('res_headers', 'reponse_detail_container')"
-            , id_ "res_headers"
-            ]
-            "Headers"
-      div_ [class_ "bg-gray-50 m-4  p-2 rounded-lg border sdk_tab_content sdk_tab_content_active", id_ "res_body_json"] do
-        jsonValueToHtmlTree req.responseBody
-      div_ [class_ "bg-gray-50 m-4 p-2 hidden rounded-lg border sdk_tab_content", id_ "res_headers_json"] do
-        jsonValueToHtmlTree req.responseHeaders
+
+      div_ [class_ "tabs tabs-bordered", role_ "tablist"] do 
+        input_ [type_ "radio", name_ "resp-details-tab", role_ "tab", Aria.label_ "Body", class_ "tab", checked_]
+        div_ [class_ "tab-content", role_ "tabpanel"] $ div_ [class_ "bg-gray-50 m-4  p-2 rounded-lg border", id_ "res_body_json"] 
+          $ jsonValueToHtmlTree req.responseBody
+
+        input_ [type_ "radio", name_ "resp-details-tab", role_ "tab", Aria.label_ "Headers", class_ "tab"]
+        div_ [class_ "tab-content", role_ "tabpanel"] $ div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border", id_ "res_headers_json"] 
+          $ jsonValueToHtmlTree req.responseHeaders
   script_
     [text|
-
-function changeTab(tabId, parent) {
-  const p = document.getElementById(parent);
-  const tabLinks = p.querySelectorAll('.sdk_tab');
-  tabLinks.forEach(link => link.classList.remove('sdk_tab_active'));
-  const clickedTabLink = document.getElementById(tabId);
-  clickedTabLink.classList.add('sdk_tab_active')
-  const tabContents = p.querySelectorAll('.sdk_tab_content');
-  tabContents.forEach(content => {
-    content.classList.add("hidden")
-    content.classList.remove ("sdk_tab_content_active")
-  });
-  const tabContent = document.getElementById(tabId + '_json');
-  tabContent.classList.remove("hidden")
-  setTimeout(()=>{tabContent.classList.add("sdk_tab_content_active")},10)
-}
 
 function toggleExpireOptions (event) {
     event.preventDefault()
@@ -251,39 +207,23 @@ apiLogItemH sess pid rdId createdAt = do
 apiLogItemView :: RequestDumps.RequestDumpLogItem -> Text -> Html ()
 apiLogItemView req expandItemPath = do
       div_ [class_ "flex items-center gap-2"] do
-        button_
-          [ class_ "px-4 rounded text-gray-600 border py-1 expand-button"
-          , term "data-log-item-path" (expandItemPath <> "/detailed")
-          , [__|on click remove .hidden from #expand-log-modal then
-                   remove .hidden from #log-modal-content-loader
-                   fetch `${@data-log-item-path}` as html then put it into #log-modal-content
-                   add .hidden to #log-modal-content-loader
-                   _hyperscript.processNode(document.querySelector('#log-modal-content'))
-                   htmx.process(document.querySelector('#log-modal-content'))
-                   end
-             |]
-          ]
-          "Expand"
+        Components.drawerWithURLContent_ "expand-log-drawer" (expandItemPath <> "/detailed") $ span_ [class_ "btn btn-sm btn-outline"] ("Expand" >> faIcon_ "fa-expand" "fa-regular fa-expand" "h-3 w-3") 
         let reqJson = decodeUtf8 $ AE.encode $ AE.toJSON req
         button_
-          [ class_ "px-4 rounded flex items-center gap-1 text-gray-600 border py-1"
+          [ class_ "btn btn-sm btn-outline"
           , term "data-reqJson" reqJson
           , [__|on click if 'clipboard' in window.navigator then
-                          call navigator.clipboard.writeText(my @data-reqJson)
-                          send successToast(value:['Request json has been copied to clipboard']) to <body/>
-                        end|]
+                  call navigator.clipboard.writeText(my @data-reqJson)
+                  send successToast(value:['Request json has been copied to clipboard']) to <body/>
+                end|]
           ]
-          do
-            span_ [] "Copy"
-            faIcon_ "fa-copy" "fa-regular fa-copy" "h-4 w-4"
+          $ span_ [] "Copy" >> faIcon_ "fa-copy" "fa-regular fa-copy" "h-3 w-3"
         button_
-          [ class_ "px-4 flex items-center gap-1 rounded text-gray-600 border py-1"
+          [ class_ "btn btn-sm btn-outline"
           , onclick_ "downloadJson(event)"
           , term "data-reqJson" reqJson
           ]
-          do
-            span_ [] "Download"
-            faIcon_ "fa-download" "fa-regular fa-download" "h-4 w-4"
+          $ span_ [] "Download" >> faIcon_ "fa-arrow-down-to-line" "fa-regular fa-arrow-down-to-line" "h-3 w-3"
       jsonValueToHtmlTree $ AE.toJSON req
 
 

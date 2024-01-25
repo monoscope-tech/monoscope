@@ -99,6 +99,7 @@ library:
     - envy
     - errors
     - extra
+    - lucid-aria
     - fakedata
     - fmt
     - PyF

@@ -169,6 +169,7 @@ library
     , lens
     , lens-aeson
     , lucid
+    , lucid-aria
     , lucid-htmx
     , lucid-hyperscript
     , lucid-svg

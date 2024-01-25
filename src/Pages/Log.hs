@@ -148,13 +148,13 @@ logQueryBox_ pid currentRange =
               input_ [type_ "hidden", id_ "since_input"]
               input_ [type_ "hidden", id_ "custom_range_input"]
               a_
-                [ class_ "relative px-3 py-2 border border-1 border-black-200 space-x-2 bg-blue-100 text-blue-500  inline-block relative cursor-pointer rounded-md"
+                [ class_ "relative btn btn-sm btn-outline"
                 , [__| on click toggle .hidden on #timepickerBox|]
                 ]
                 do
                   mIcon_ "clock" "h-4 w-4"
                   span_ [class_ "inline-block", id_ "currentRange"] $ toHtml (fromMaybe "Last 14 Days" currentRange)
-                  faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 w-4 inline-block"
+                  faIcon_ "fa-chevron-down" "fa-solid fa-chevron-down" "h-3 w-3 inline-block"
               div_ [id_ "timepickerBox", class_ "hidden absolute z-10 mt-1  rounded-md flex"] do
                 div_ [class_ "inline-block w-84 overflow-auto bg-white py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm"] do
                   timePickerItems
@@ -172,15 +172,12 @@ logQueryBox_ pid currentRange =
                   a_ [class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ", [__| on click toggle .hidden on #timepickerSidebar |]] "Custom date range"
                 div_ [class_ "inline-block relative hidden", id_ "timepickerSidebar"] do
                   div_ [id_ "startTime", class_ "hidden"] ""
-          div_
-            [class_ "flex items-center gap-2"]
-            do
-              label_ [class_ "relative inline-flex items-center cursor-pointer"] do
-                input_ [type_ "checkbox", value_ "", class_ "sr-only peer", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()"]
-                div_ [class_ "w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"] pass
-                span_ [class_ "ml-3 text-sm font-medium text-gray-900 dark:text-gray-300"] "Use editor"
+          div_ $ div_ [class_ "form-control"] $  label_ [class_ "label cursor-pointer space-x-2"] do
+            input_ [type_ "checkbox", class_ "toggle", id_ "toggleQueryEditor", onclick_ "toggleQueryBuilder()"]
+            span_ [class_ "label-text"] "Use editor"
+                
           button_
-            [type_ "submit", class_ "cursor-pointer inline-block space-x-1 bg-blue-100 hover:bg-blue-200 blue-800 py-1 px-2 rounded-lg"]
+            [type_ "submit", class_ "btn btn-sm btn-success"]
             do
               faIcon_ "fa-sparkles" "fa-sharp fa-regular fa-sparkles" "h-3 w-3 inline-block"
               span_ "Run query"
@@ -225,9 +222,6 @@ apiLogsPage page = do
             do
               input_ [type_ "hidden", value_ "1 hour", name_ "expiresIn", id_ "expire_input"]
               input_ [type_ "hidden", value_ "", name_ "reqId", id_ "req_id_input"]
-          div_ [id_ "log-modal-content-loader", class_ "bg-white rounded-lg shadow p-4 absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2"] do
-            loader
-          div_ [class_ "px-2", id_ "log-modal-content"] pass
     logQueryBox_ page.pid page.currentRange
 
     div_ [class_ "card-round w-full grow divide-y flex flex-col text-sm h-full overflow-y-hidden overflow-x-hidden"] do
@@ -457,24 +451,7 @@ jsonTreeAuxillaryCode pid = do
           , onclick_ "filterByField(event, '!=')"
           ]
           "Exclude field"
-  script_
-    [type_ "text/hyperscript"]
-    [text|
-      behavior LogItemMenuable
-        on click
-          if I match <.with-context-menu/> then
-            remove <.log-item-context-menu /> then remove .with-context-menu from <.with-context-menu />
-          else
-            remove <.log-item-context-menu /> then remove .with-context-menu from <.with-context-menu /> then
-            get #log-item-context-menu-tmpl.innerHTML then put it after me then add .with-context-menu to me then 
-            _hyperscript.processNode(document.querySelector('.log-item-context-menu'))
-            htmx.process(document.querySelector('.log-item-context-menu'))
-          end
-          halt
-        end
-      end
 
-    |]
 
   script_
     [text|

@@ -36,6 +36,7 @@ import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Query qualified as Fields
 import Models.Apis.Fields.Types
+import Pages.Components qualified as Components
 import Models.Apis.Fields.Types qualified as Fields
 import Models.Apis.RequestDumps qualified as RequestDump
 import Models.Apis.Shapes (getShapeFields)
@@ -57,6 +58,7 @@ import Servant.Htmx (HXTrigger)
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils
 import Web.FormUrlEncoded (FromForm)
+import Lucid.Aria qualified as Aria
 
 
 newtype AnomalyBulkForm = AnomalyBulk
@@ -419,21 +421,8 @@ anomalyItem hideByDefault currTime anomaly icon title subTitle content = do
           div_ [class_ "flex items-center gap-2 mt-5"] do
             anomalyArchiveButton anomaly.projectId anomaly.id (isJust anomaly.archivedAt)
             anomalyAcknowlegeButton anomaly.projectId anomaly.id (isJust anomaly.acknowlegedAt)
-            button_
-              [ class_ "inline-block xchild-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100"
-              , type_ "button"
-              , term "data-an-url" $ "/p/" <> anomaly.projectId.toText <> "/anomaly/" <> anomaly.targetHash <> "?modal=True"
-              , term "data-tippy-content" "Expand"
-              , [__|on click remove .hidden from #expand-an-modal then
-                  remove .hidden from #an-modal-content-loader
-                  fetch `${@data-an-url}` as html then put it into #an-modal-content
-                  add .hidden to #an-modal-content-loader
-                  _hyperscript.processNode(#expand-an-modal)
-                  htmx.process(#expand-an-modal)
-                  end
-                |]
-              ]
-              $ mIcon_ "enlarge" "w-3 h-3"
+            let modalEndpoint = "/p/" <> anomaly.projectId.toText <> "/anomaly/" <> anomaly.targetHash <> "?modal=True"
+            Components.drawerWithURLContent_ "expand-log-drawer" modalEndpoint $ span_ [class_ "inline-block xchild-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100"] (mIcon_ "enlarge" "w-3 h-3")
         fromMaybe (toHtml @String "") content
     let chartQuery = Just $ anomaly2ChartQuery anomaly.anomalyType anomaly.targetHash
     div_ [class_ "flex items-center justify-center "] $ div_ [class_ "w-60 h-16 px-3"] $ Charts.throughput anomaly.projectId anomaly.targetHash chartQuery Nothing 14 Nothing False (Nothing, Nothing) Nothing
@@ -499,7 +488,7 @@ anomalyDetailsGetH sess pid targetHash hxBoostedM = do
 
 anomalyDetailsPage :: AnomalyVM -> Maybe (Vector Shapes.ShapeWithFields) -> Maybe (Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field]) -> Maybe (Vector Text) -> Maybe QueryBy -> UTCTime -> Bool -> Html ()
 anomalyDetailsPage anomaly shapesWithFieldsMap fields prvFormatsM chartQuery currTime modal = do
-  div_ [class_ "w-full h-full"] do
+  div_ [class_ "w-full "] do
     div_ [class_ "w-full"] do
       div_ [class_ "flex items-center justify-between gap-2 flex-wrap"] do
         case anomaly.anomalyType of
@@ -556,71 +545,31 @@ anomalyDetailsPage anomaly shapesWithFieldsMap fields prvFormatsM chartQuery cur
               span_ [class_ "decoration-black underline", term "data-tippy-content" $ "last seen: " <> show anomaly.lastSeen] $ toHtml $ prettyTimeAuto currTime $ zonedTimeToUTC anomaly.lastSeen
           div_ [class_ "w-[200px] h-[80px] mt-4 shrink-0"] do
             Charts.throughput anomaly.projectId anomaly.targetHash chartQuery Nothing 14 Nothing False (Nothing, Nothing) Nothing
-    div_ [class_ "w-full flex items-center gap-4 mt-4 overflow-y-auto h-full"] do
+    div_ [class_ "w-full flex items-center gap-4 mt-4 overflow-y-auto "] do
       if modal
         then do
           a_ [href_ $ "/p/" <> anomaly.projectId.toText <> "/anomaly/" <> anomaly.targetHash, term "data-tippy-content" "Go to page"] do
-            mIcon_ "enlarge" "w-3 h-3"
+            "Anomaly Page" >> mIcon_ "enlarge" "w-3 h-3"
         else do
           anomalyArchiveButton anomaly.projectId anomaly.id (isJust anomaly.archivedAt)
           anomalyAcknowlegeButton anomaly.projectId anomaly.id (isJust anomaly.acknowlegedAt)
 
     div_ [class_ "mt-6 space-y-4"] do
-      div_ [class_ "flex items-center gap-10 font-semibold border-b"] do
-        script_
-          [type_ "text/hyperscript"]
-          [text|
-          behavior Navigatable(content)
-             on click remove .sdk_tab_active from .sdk_tab 
-                then add .sdk_tab_active to me 
-                then add .hidden to .sdk_tab_content 
-                then remove .hidden from content
-                wait 10ms
-                then add .sdk_tab_content_active to content
-          end
-        |]
-        button_
-          [ class_ "sdk_tab sdk_tab_active"
-          , [__| install Navigatable(content: #overview_content) |]
-          , id_ "overview"
-          ]
-          "Overview"
-        button_
-          [ class_ "sdk_tab"
-          , [__| install Navigatable(content: #events_content) |]
-          , term "data-events-fetched" "false"
-          , id_ "events"
-          ]
-          "All events"
-      div_ [] do
-        div_ [class_ "w-full bg-white rounded-lg overflow-y-auto h-full sdk_tab_content sdk_tab_content_active", id_ "overview_content"] do
+      div_ [class_ "tabs tabs-bordered", role_ "tablist"] do
+        input_ [type_ "radio", name_ "anomaly-events-tabs", role_ "tab", class_ "tab", Aria.label_ "Overview", checked_]
+        div_ [role_ "tabpanel", class_ "tab-content w-full bg-white rounded-lg overflow-y-auto h-full", id_ "overview_content"] do
           case anomaly.anomalyType of
             Anomalies.ATEndpoint -> endpointOverview shapesWithFieldsMap
             Anomalies.ATShape -> requestShapeOverview fields
             Anomalies.ATFormat -> anomalyFormatOverview anomaly (fromMaybe [] prvFormatsM)
             _ -> ""
-        div_ [class_ "grow overflow-y-auto h-full whitespace-nowrap text-sm divide-y overflow-x-hidden sdk_tab_content", id_ "events_content"] do
+
+        input_ [type_ "radio", name_ "anomaly-events-tabs", role_ "tab", class_ "tab", Aria.label_ "Events"]
+        div_ [role_ "tabpanel", class_ "tab-content grow overflow-y-auto h-full whitespace-nowrap text-sm divide-y overflow-x-hidden ", id_ "events_content"] do
           let anomalyQueryPartial = buildQueryForAnomaly anomaly.anomalyType anomaly.targetHash
           let escapedQueryPartial = toText $ escapeURIString isUnescapedInURI $ toString anomalyQueryPartial
           let events_url = "/p/" <> (UUID.toText $ Projects.unProjectId $ anomaly.projectId) <> "/log_explorer?layout=resultTable&query=" <> escapedQueryPartial
           div_ [hxGet_ events_url, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
-
-  style_
-    [text|
-    .tree-children {
-      display: block;
-    }
-    .expand-button {
-      display:none;
-    }
-    .tree-children-count { display: none; }
-    .collapsed .tree-children {
-      display: none !important; 
-    }
-    .collapsed .tree-children-count {display: inline !important;}
-    .collapsed .children {display: inline-block; padding-left:0}
-    .collapsed .closing-token {padding-left:0}
-  |]
 
 
 buildQueryForAnomaly :: Anomalies.AnomalyTypes -> Text -> Text 
@@ -634,20 +583,6 @@ buildQueryForAnomaly Anomalies.ATUnknown hash = ""
 endpointOverview :: Maybe (Vector Shapes.ShapeWithFields) -> Html ()
 endpointOverview shapesWithFieldsMap =
   div_ [] do
-    -- div_ [class_ "flex justify-end items-center"] do
-    --   img_
-    --     [ src_ "/assets/svgs/leftarrow.svg"
-    --     , class_ " m-2 cursor-pointer"
-    --     , [__|on click slideReqRes('prev') |]
-    --     ]
-    --   let l = "1/" <> show (length shapesWithFieldsMap)
-    --   let id = "current_indicator"
-    --   span_ [src_ " mx-4", id_ id] l
-    --   img_
-    --     [ src_ "/assets/svgs/rightarrow.svg"
-    --     , class_ "m-2 cursor-pointer"
-    --     , [__|on click slideReqRes('next') |]
-    --     ]
     case shapesWithFieldsMap of
       Just s -> do
         reqResSection "Request" True (Vector.toList s)
