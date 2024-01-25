@@ -123,7 +123,7 @@ dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.Project
 dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRolledByStepsJ dateRange = do
   let currentURL' = deleteParam "to" $ deleteParam "from" $ deleteParam "since" paramInput.currentURL
   let bulkActionBase = "/p/" <> pid.toText <> "/anomalies/bulk_actions"
-  section_ [class_ "p-8  mx-auto px-16 w-full space-y-12 pb-24"] do
+  section_ [class_ "p-8  mx-auto px-16 w-full space-y-12 pb-24 overflow-y-scroll"] do
     unless (null newEndpoints) $ form_
       [ style_ "z-index:99999"
       , class_ "fixed pt-24 justify-center z-50 hidden w-full p-4 bg-[rgba(0,0,0,0.2)] overflow-y-auto inset-0 h-full max-h-full"

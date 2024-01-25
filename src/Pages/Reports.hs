@@ -19,9 +19,7 @@ module Pages.Reports (
 
 import Config
 import Data.Default (def)
-
 import Database.PostgreSQL.Entity.DBT (withPool)
-
 import Data.Aeson as Aeson
 import Data.Map.Strict qualified as Map
 import Data.Vector (Vector)
@@ -33,18 +31,13 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Relude
-
 import Data.Aeson.QQ (aesonQQ)
 import Servant (Headers, addHeader)
-
 import Servant.Htmx (HXTrigger)
-
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime))
 import Data.Vector qualified as V
 import Models.Apis.Reports qualified as Reports
-
 import Models.Apis.Anomalies qualified as Anomalies
-
 import Data.Text qualified as T
 import Lucid.Svg (color_)
 import Models.Apis.RequestDumps (EndpointPerf, RequestForReport (endpointHash))
@@ -179,7 +172,7 @@ reportsGetH sess pid page hxRequest hxBoosted = do
 
 singleReportPage :: Projects.ProjectId -> Maybe Reports.Report -> Html ()
 singleReportPage pid report =
-  div_ [class_ "mx-auto w-full flex flex-col px-16 pt-10 pb-24"] do
+  div_ [class_ "mx-auto w-full flex flex-col px-16 pt-10 pb-24  overflow-y-scroll h-full"] do
     h3_ [class_ "text-xl text-slate-700 flex place-items-center font-bold pb-4 border-b"] "Anomaly and Performance Report"
     case report of
       Just report' -> do
@@ -267,7 +260,7 @@ shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "inline-block"] do
 
 reportsPage :: Projects.ProjectId -> Vector Reports.ReportListItem -> Text -> Bool -> Bool -> Html ()
 reportsPage pid reports nextUrl daily weekly =
-  div_ [class_ "mx-auto w-full flex flex-col px-16 pt-10 pb-24"] do
+  div_ [class_ "mx-auto w-full flex flex-col px-16 pt-10 pb-24  overflow-y-scroll h-full"] do
     h3_ [class_ "text-xl text-slate-700 flex place-items-center font-bold pb-4 border-b"] "Reports History"
     div_ [class_ "mt-4 grid grid-cols-12 gap-4"] do
       div_ [class_ "flex flex-col col-span-2 mt-16"] do

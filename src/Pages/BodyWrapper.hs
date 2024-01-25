@@ -163,7 +163,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
         Nothing -> do
           section_ [class_ "flex flex-col grow  h-screen overflow-y-hidden"] do
             -- navbar currUser
-            section_ [class_ "flex-1 overflow-y-auto"] do
+            section_ [class_ "flex-1 overflow-y-auto "] do
               child
         Just sess ->
           do
@@ -174,7 +174,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
               sideNav'
               section_ [class_ "flex flex-col grow h-screen overflow-y-hidden"] do
                 navbar currUser
-                section_ [class_ "flex-1 overflow-y-hidden"] do
+                section_ [class_ "flex-1 overflow-y-hidden h-full grow"] do
                   child
       script_ [async_ "true", src_ "https://www.googletagmanager.com/gtag/js?id=AW-11285541899"] ("" :: Text)
       script_

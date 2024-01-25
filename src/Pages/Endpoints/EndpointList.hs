@@ -82,7 +82,7 @@ endpointListGetH sess pid layoutM ackdM archivedM hostM projectHostM sortM hxReq
 
 
 endpointListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Endpoints.EndpointRequestStats -> Vector Endpoints.Host -> Maybe Text -> Maybe Text -> Html ()
-endpointListPage paramInput pid currTime endpoints hosts hostM pHostM = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24"] $ do
+endpointListPage paramInput pid currTime endpoints hosts hostM pHostM = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24 overflow-y-scroll h-full"] $ do
   h3_ [class_ "text-xl text-slate-700 flex gap-1 place-items-center"] do
     case hostM of
       Just h -> do

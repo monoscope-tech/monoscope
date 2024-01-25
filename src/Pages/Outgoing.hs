@@ -39,7 +39,7 @@ outgoingGetH sess pid = do
 
 
 outgoingPage :: Projects.ProjectId -> V.Vector Endpoints.HostEvents -> Html ()
-outgoingPage pid hostsEvents = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24"] $ do
+outgoingPage pid hostsEvents = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24  overflow-y-scroll h-full"] $ do
   h3_ [class_ "text-xl text-slate-700 flex place-items-center"] "Outbound Integrations"
   div_ [class_ "mt-8 mx-auto space-y-4 max-w-[1000px]"] do
     div_ [class_ "flex px-8 w-full justify-between"] do

@@ -212,7 +212,7 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM page loadM endpointM hxRe
 
 
 anomalyListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Anomalies.AnomalyVM -> Maybe Text -> Html ()
-anomalyListPage paramInput pid currTime anomalies nextFetchUrl = div_ [class_ "w-full mx-auto  px-16 pt-10 pb-24"] do
+anomalyListPage paramInput pid currTime anomalies nextFetchUrl = div_ [class_ "w-full mx-auto  px-16 pt-10 pb-24  overflow-y-scroll h-full"] do
   div_
     [ style_ "z-index:26"
     , class_ "fixed hidden right-0 top-0 justify-end left-0 bottom-0 w-full bg-black bg-opacity-5"
@@ -494,7 +494,7 @@ anomalyDetailsGetH sess pid targetHash hxBoostedM = do
 
 anomalyDetailsPage :: AnomalyVM -> Maybe (Vector Shapes.ShapeWithFields) -> Maybe (Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field]) -> Maybe (Vector Text) -> Maybe QueryBy -> UTCTime -> Bool -> Html ()
 anomalyDetailsPage anomaly shapesWithFieldsMap fields prvFormatsM chartQuery currTime modal = do
-  div_ [class_ "w-full "] do
+  div_ [class_ "w-full overflow-y-scroll h-full"] do
     div_ [class_ "w-full"] do
       div_ [class_ "flex items-center justify-between gap-2 flex-wrap"] do
         case anomaly.anomalyType of
