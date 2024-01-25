@@ -6,6 +6,7 @@ import {
   triggerToastEvent,
   ASSERTS,
   validateYaml,
+  getDeletedUpdatedAndNewSteps,
 } from './testeditor-utils.js';
 
 export class Collection extends LitElement {
@@ -14,6 +15,7 @@ export class Collection extends LitElement {
     showNewStepModal: {},
     showCode: {},
     config: {},
+    codeHasChanges: { type: Boolean },
     showSettings: {},
     runningAllTests: { type: Boolean },
   };
@@ -199,6 +201,23 @@ export class Collection extends LitElement {
         }
       }
       this.showCode = false;
+    }
+  }
+
+  async saveCode() {
+    if (!this.codeHasChanges) return;
+    if (window.testEditor) {
+      const val = window.testEditor.getValue();
+      const data = validateYaml(val);
+      if (data) {
+        const operations = getDeletedUpdatedAndNewSteps(
+          this.collection.steps,
+          data
+        );
+        // TODO: save updates (DELETE, UPDATED, AND NEW)
+        this.collection.steps = data;
+        this.codeHasChanges = false;
+      }
     }
   }
 
