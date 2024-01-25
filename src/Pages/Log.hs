@@ -23,6 +23,7 @@ import Data.Vector qualified as V
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Lucid
+import Data.Aeson qualified as AE
 import Lucid.Base
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
@@ -55,8 +56,6 @@ apiLogH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> May
 apiLogH sess pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoostedM = do
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
   let query = fromMaybe "" queryM
-  traceShowM "Query"
-  traceShowM query
   now <- liftIO getCurrentTime
   let (fromD, toD, currentRange) = case sinceM of
         Just "1H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just now, Just "Last Hour")
@@ -83,8 +82,6 @@ apiLogH sess pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoo
         $ withPool pool do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
           tableAsMaps <- RequestDumps.selectLogTable pid query cursorM' (fromD, toD) summaryCols 
-          traceShowM "Parse result"
-          traceShowM tableAsMaps
           pure (project, tableAsMaps)
 
 
@@ -96,11 +93,6 @@ apiLogH sess pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoo
           nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore")
           resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing
           page = ApiLogsPageData{pid, resultCount = requestsCount, requestMaps, cols = curatedColNames, reqChartTxt, nextLogsURL, resetLogsURL, currentRange}
-
-      traceShowM "=== Cols"
-      traceShowM summaryCols 
-      traceShowM "=== colNames returned from table"
-      traceShowM colNames 
 
       case (layoutM, hxRequestM, hxBoostedM) of
         (Just "loadmore", _, _) -> pure $ logItemRows_ pid requestMaps curatedColNames nextLogsURL
@@ -356,49 +348,6 @@ logTableHeadingWrapper_ pid title child = td_
 
 isLogEvent :: [Text] -> Bool
 isLogEvent cols = all (`elem` cols) ["id", "created_at"]
-
-apiLogItemView :: RequestDumps.RequestDumpLogItem -> Text -> Html ()
-apiLogItemView req expandItemPath = do
-  let errorClass = if req.errorsCount > 0 then "border-l-red-200" else "border-l-blue-200"
-  div_ [class_ $ "log-item-info border-l-4 " <> errorClass] $
-    div_ [class_ "pl-4 py-1 ", colspan_ "3"] do
-      div_ [class_ "flex items-center gap-2"] do
-        button_
-          [ class_ "px-4 rounded text-gray-600 border py-1 expand-button"
-          , term "data-log-item-path" (expandItemPath <> "/detailed")
-          , [__|on click add .show-log-modal to #expand-log-modal then
-                   remove .hidden from #log-modal-content-loader
-                   fetch `${@data-log-item-path}` as html then put it into #log-modal-content
-                   add .hidden to #log-modal-content-loader
-                   _hyperscript.processNode(document.querySelector('#log-modal-content'))
-                   htmx.process(document.querySelector('#log-modal-content'))
-                   end
-             |]
-          ]
-          "Expand"
-        let reqJson = decodeUtf8 $ AE.encode $ AE.toJSON req
-        button_
-          [ class_ "px-4 rounded flex items-center gap-1 text-gray-600 border py-1"
-          , term "data-reqJson" reqJson
-          , [__|on click if 'clipboard' in window.navigator then
-                          call navigator.clipboard.writeText(my @data-reqJson)
-                          send successToast(value:['Request json has been copied to clipboard']) to <body/>
-                        end|]
-          ]
-          do
-            span_ [] "Copy"
-            faIcon_ "fa-copy" "fa-regular fa-copy" "h-4 w-4"
-        button_
-          [ class_ "px-4 flex items-center gap-1 rounded text-gray-600 border py-1"
-          , onclick_ "downloadJson(event)"
-          , term "data-reqJson" reqJson
-          ]
-          do
-            span_ [] "Download"
-            faIcon_ "fa-download" "fa-regular fa-download" "h-4 w-4"
-      jsonValueToHtmlTree $ AE.toJSON req
-
-
 
 logItemCol_ :: Projects.ProjectId -> HashMap Text Value -> Text -> Html ()
 logItemCol_ pid reqMap "id" = do

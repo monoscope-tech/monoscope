@@ -554,8 +554,8 @@ anomalyDetailsPage anomaly shapesWithFieldsMap fields prvFormatsM chartQuery cur
     div_ [class_ "w-full flex items-center gap-4 mt-4 overflow-y-auto "] do
       if modal
         then do
-          a_ [href_ $ "/p/" <> anomaly.projectId.toText <> "/anomaly/" <> anomaly.targetHash, term "data-tippy-content" "Go to page"] do
-            "Anomaly Page" >> mIcon_ "enlarge" "w-3 h-3"
+          a_ [href_ $ "/p/" <> anomaly.projectId.toText <> "/anomaly/" <> anomaly.targetHash, term "data-tippy-content" "Go to page", class_ "btn btn-sm btn-outline "] do
+            "Expand Page" >> mIcon_ "enlarge" "w-3 h-3"
         else do
           anomalyArchiveButton anomaly.projectId anomaly.id (isJust anomaly.archivedAt)
           anomalyAcknowlegeButton anomaly.projectId anomaly.id (isJust anomaly.acknowlegedAt)
