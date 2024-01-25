@@ -93,9 +93,9 @@ apiLogH sess pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoo
           page = ApiLogsPageData{pid, resultCount = requestsCount, requestMaps, cols = curatedColNames, reqChartTxt, nextLogsURL, resetLogsURL, currentRange}
 
       case (layoutM, hxRequestM, hxBoostedM) of
-        (Just "loadmore", _, _) -> pure $ logItemRows_ pid requestMaps curatedColNames nextLogsURL
-        (Just "resultTable", _, _) -> pure $ resultTable_ page
-        (Just "all", _, _) -> pure $ do
+        (Just "loadmore", Just "true", _) -> pure $ logItemRows_ pid requestMaps curatedColNames nextLogsURL
+        (Just "resultTable", Just "true", _) -> pure $ resultTable_ page
+        (Just "all", Just "true", _) -> pure $ do
           reqChart_ page.reqChartTxt False
           resultTable_ page
         _ -> do
