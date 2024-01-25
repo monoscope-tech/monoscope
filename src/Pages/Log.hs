@@ -83,6 +83,8 @@ apiLogH sess pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoo
         $ withPool pool do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
           tableAsMaps <- RequestDumps.selectLogTable pid query cursorM' (fromD, toD) summaryCols 
+          traceShowM "Parse result"
+          traceShowM tableAsMaps
           pure (project, tableAsMaps)
 
 
@@ -101,9 +103,9 @@ apiLogH sess pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoo
       traceShowM colNames 
 
       case (layoutM, hxRequestM, hxBoostedM) of
-        (Just "loadmore", Just "true", _) -> pure $ logItemRows_ pid requestMaps curatedColNames nextLogsURL
-        (Just "resultTable", Just "true", _) -> pure $ resultTable_ page
-        (Just "all", Just "true", _) -> pure $ do 
+        (Just "loadmore", _, _) -> pure $ logItemRows_ pid requestMaps curatedColNames nextLogsURL
+        (Just "resultTable", _, _) -> pure $ resultTable_ page
+        (Just "all", _, _) -> pure $ do 
           reqChart_ page.reqChartTxt False
           resultTable_ page
         _ -> do
@@ -349,7 +351,7 @@ logTableHeadingWrapper_ pid title child = td_
     [class_ "dropdown"]
     do
       div_ [tabindex_ "0", role_ "button", class_ "py-2 px-3 block"] child
-      ul_ [tabindex_ "0", class_ "dropdown-content z-[1] menu p-2 shadow bg-base-100 rounded-box "] do
+      ul_ [tabindex_ "0", class_ "dropdown-content z-[1] menu p-2 shadow bg-base-100 rounded-box min-w-[15rem]"] do
         li_ [class_ "underline underline-offset-2"] $ toHtml title
         li_ $ a_ [hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
           , hxPushUrl_ "true"
@@ -444,7 +446,7 @@ jsonTreeAuxillaryCode pid = do
           , role_ "menuitem"
           , tabindex_ "-1"
           , id_ "menu-item-2"
-          , onclick_ "filterByField(event, '=')"
+          , onclick_ "filterByField(event, '==')"
           ]
           "Filter by field"
         button_

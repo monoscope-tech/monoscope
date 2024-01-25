@@ -1,12 +1,14 @@
 module Pages.LogExplorer.LogItem where
 
 import Lucid
+import Lucid.Htmx
 import Models.Projects.Projects qualified as Projects
 import Config
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEK
 import Data.ByteString.Lazy qualified as BS
 import Data.HashMap.Strict qualified as HM
+import Network.URI (escapeURIString, isUnreserved, isUnescapedInURI)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
@@ -21,26 +23,23 @@ import Relude
 import Data.Time.Format
 import System.Clock
 import Utils
+import PyF
 
 
 
 expandAPIlogItemH :: Sessions.PersistentSession -> Projects.ProjectId -> UUID.UUID -> UTCTime -> DashboardM (Html ())
 expandAPIlogItemH sess pid rdId createdAt = do
   pool <- asks pool
-  startTime <- liftIO $ getTime Monotonic
-  (logItemM, childRequests) <- liftIO $ withPool pool do
-    logItem <- RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
-    childRequets <- RequestDumps.selectRequestDumpByProjectAndParentId pid rdId
-    pure (logItem, childRequets)
+  logItemM <- liftIO $ withPool pool $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
   let content = case logItemM of
-        Just req -> expandAPIlogItem' pid req True childRequests
+        Just req -> expandAPIlogItem' pid req True 
         Nothing -> div_ [class_ "h-full flex flex-col justify-center items-center"] do
           p_ [] "Request not found"
   pure content
 
 
-expandAPIlogItem' :: Projects.ProjectId -> RequestDumps.RequestDumpLogItem -> Bool -> Vector RequestDumps.RequestDumpLogItem -> Html ()
-expandAPIlogItem' pid req modal outgoingRequests = do
+expandAPIlogItem' :: Projects.ProjectId -> RequestDumps.RequestDumpLogItem -> Bool -> Html ()
+expandAPIlogItem' pid req modal  = do
   div_ [class_ "flex flex-col w-full pb-[100px]"] do
     div_ [class_ "w-full flex flex-col gap-2 gap-4"] do
       let methodColor = getMethodColor req.method
@@ -77,7 +76,7 @@ expandAPIlogItem' pid req modal outgoingRequests = do
             button_
               [ class_ "flex flex-col gap-1 bg-blue-500 px-2 py-1 rounded text-white"
               , term "data-req-id" (show req.id)
-              , onclick_ "getShareLink(event)"
+              , [__|on click set #req_id_input.value to my @data-req-id then call #share_log_form.requestSubmit() |]
               ]
               "Get link"
 
@@ -121,11 +120,12 @@ expandAPIlogItem' pid req modal outgoingRequests = do
         jsonValueToHtmlTree req.errors
 
     -- outgoing request details
-    unless (null outgoingRequests) $ div_ [class_ "border rounded-lg mt-8"] do
-      div_ [class_ "flex w-full bg-gray-100 px-4 py-2 flex-col gap-2"] do
-        p_ [class_ "font-bold"] "Outgoing requests"
-      div_ [class_ "grow overflow-y-auto py-2 px-1 max-h-[500px] whitespace-nowrap text-sm divide-y overflow-x-hidden"] ""
-        -- Log.logItemRows_ pid outgoingRequests [] ""
+    div_ [class_ "flex w-full bg-gray-100 px-4 py-2 flex-col gap-2"] do
+      p_ [class_ "font-bold"] "Outgoing requests"
+    div_ [class_ "grow overflow-y-auto py-2 px-1 max-h-[500px] whitespace-nowrap text-sm divide-y overflow-x-hidden"] do
+        let escapedQueryPartial = toText $ escapeURIString isUnescapedInURI $ toString $ [fmt|parent_id=="{UUID.toText req.id}"|] 
+        let events_url = "/p/" <> pid.toText <> "/log_explorer?layout=resultTable&query=" <> escapedQueryPartial
+        div_ [hxGet_ events_url, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
 
     -- request details
     div_ [class_ "border rounded-lg mt-8", id_ "request_detail_container"] do
@@ -220,13 +220,6 @@ function toggleExpireOptions (event) {
     }
 }
 
-function getShareLink(event) {
-  event.target.innerText = "Generating..."
-  const reqId = event.target.getAttribute ("data-req-id")
-  document.querySelector('#req_id_input').value = reqId
-  htmx.trigger('#share_log_form','submit')
-}
-
 function expireChanged(event) {
     event.preventDefault()
     event.stopPropagation()
@@ -302,7 +295,7 @@ jsonValueToHtmlTree val = jsonValueToHtmlTree' ("", "", val)
     jsonValueToHtmlTree' (path, key, AE.Object v) = renderParentType "{" "}" key (length v) (AEK.toHashMapText v & HM.toList & sort & mapM_ (\(kk, vv) -> jsonValueToHtmlTree' (path <> "." <> key, kk, vv)))
     jsonValueToHtmlTree' (path, key, AE.Array v) = renderParentType "[" "]" key (length v) (iforM_ v \i item -> jsonValueToHtmlTree' (path <> "." <> key <> "[*]", show i, item))
     jsonValueToHtmlTree' (path, key, value) = do
-      let fullFieldPath = if T.isSuffixOf ".[*]" path then path else path <> "." <> key
+      let fullFieldPath = if T.isSuffixOf "[*]" path then path else path <> "." <> key
       let fullFieldPath' = fromMaybe fullFieldPath $ T.stripPrefix ".." fullFieldPath
       div_
         [ class_ "relative log-item-field-parent"

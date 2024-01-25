@@ -52,7 +52,7 @@ outgoingPage pid hostsEvents = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24"] 
           -- div_ [class_ "w-[200px] h-[80px] mt-4 shrink-0"] do
           -- Charts.throughput pid host.host (Just (QBHost host.host)) Nothing 14 Nothing False (Nothing, Nothing) Nothing
           div_ [class_ "shrink-0 flex items-center gap-10 p-8"] do
-            a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=host%20%3D%20" <> "\"" <> host.host <> "\"", class_ "p-2 shrink-0 pl-8 text-blue-500 hover:text-slate-600"] "View logs"
+            a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=host%3D%3D" <> "\"" <> host.host <> "\"", class_ "p-2 shrink-0 pl-8 text-blue-500 hover:text-slate-600"] "View logs"
             span_ [] $ show host.eventCount
     when (null hostsEvents) $ div_ [class_ "flex flex-col text-center justify-center items-center h-32"] $ do
       strong_ "No dependencies yet."

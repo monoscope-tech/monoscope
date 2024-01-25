@@ -117,10 +117,10 @@ processMessages' logger' _ conn' msgs projectCache' = do
 
   unless (null $ lefts processed) do
     let leftMsgs = [(a, b) | (Left a, b) <- zip processed msgs]
-    forM_ leftMsgs \(a, b) ->
+    forM_ leftMsgs \(a, b) -> do
       -- TODO: switch to using a proper logger setup.
       -- logger' <& "Error processing Error: " <> pShow a <> "\n Original Msg:" <> pShow  b
-      logger' <& "ERROR: Error processing Error: " <> show a <> "\n"
+      logger' <& "ERROR: Error processing Error: " <> show a <> "\n Original Msg:" <> show b
 
   afterProccessing <- getTime Monotonic
 

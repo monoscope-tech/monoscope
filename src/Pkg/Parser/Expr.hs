@@ -19,20 +19,22 @@ import Text.Megaparsec.Char.Lexer qualified as L
 
 -- >>> request_body="jfdshkjfds" | stat field1, field2 by field3
 
--- >>> parseTest pSubject "key"
--- Subject "key" [FieldKey ""]
--- >>> parseTest pSubject "key.abc[1]"
--- Subject "key" [FieldKey "",ArrayIndex "abc" 1]
--- >>> parseTest pSubject "key.abc[*]"
--- Subject "key" [FieldKey "",ArrayWildcard "abc"]
--- >>> parseTest pSubject "key.abc[*].xyz"
--- Subject "key.abc[*].xyz" "key" [FieldKey "",ArrayWildcard "abc",FieldKey "xyz"]
--- >>> parseTest pSubject "abc[*].xyz"
--- Subject "abc[*].xyz" "abc" [ArrayWildcard "",FieldKey "xyz"]
--- >>> parseTest pSubject "abc[1].xyz.cde[*]"
--- Subject "abc[1].xyz.cde[*]" "abc" [ArrayIndex "" 1,FieldKey "xyz",ArrayWildcard "cde"]
--- >>> parseTest pSubject "request_body.message.tags[*].name"
--- Subject "request_body.message.tags[*].name" "request_body" [FieldKey "",FieldKey "message",ArrayWildcard "tags",FieldKey "name"]
+-- >>> parse pSubject "" "key"
+-- Right (Subject "key" "key" [])
+-- >>> parse pSubject "" "key.abc[1]"
+-- Right (Subject "key.abc[1]" "key" [ArrayIndex "abc" 1])
+-- >>> parse pSubject "" "key.abc[*]"
+-- Right (Subject "key.abc[*]" "key" [ArrayWildcard "abc"])
+-- >>> parse pSubject "" "key.abc[*].xyz"
+-- Right (Subject "key.abc[*].xyz" "key" [ArrayWildcard "abc",FieldKey "xyz"])
+-- >>> parse pSubject "" "abc[*].xyz"
+-- Right (Subject "abc[*].xyz" "abc" [ArrayWildcard "",FieldKey "xyz"])
+-- >>> parse pSubject "" "abc[1].xyz.cde[*]"
+-- Right (Subject "abc[1].xyz.cde[*]" "abc" [ArrayIndex "" 1,FieldKey "xyz",ArrayWildcard "cde"])
+-- >>> parse pSubject "" "request_body.message.tags[*].name"
+-- Right (Subject "request_body.message.tags[*].name" "request_body" [FieldKey "message",ArrayWildcard "tags",FieldKey "name"])
+-- >>> parse pSubject "" "request_body.roles[*]"
+-- Right (Subject "request_body.roles[*]" "request_body" [ArrayWildcard "roles"])
 pSubject :: Parser Subject
 pSubject = do
   startPos <- getOffset
@@ -212,16 +214,16 @@ subjectHasWildcard (Subject _ _ keys) = any isArrayWildcard keys
     isArrayWildcard _ = False
 
 
--- >>> display (Subject "request_body" [FieldKey "message"])
+-- >>> display (Subject "" "request_body" [FieldKey "message"])
 -- "request_body->>'message' as message"
 --
--- >>> display (Subject "request_body" [FieldKey "message", FieldKey "value"])
+-- >>> display (Subject "" "request_body" [FieldKey "message", FieldKey "value"])
 -- "request_body->'message'->>'value' as value"
 --
--- >>> display (Subject "errors" [ArrayIndex "" 0, FieldKey "message"])
+-- >>> display (Subject "" "errors" [ArrayIndex "" 0, FieldKey "message"])
 -- "errors->0->>'message' as message"
 --
--- >>> display (Subject "errors" [ArrayIndex "" 0, FieldKey "message"])
+-- >>> display (Subject "" "errors" [ArrayIndex "" 0, FieldKey "message"])
 -- "errors->0->>'message' as message"
 instance Display Subject where
   displayPrec prec (Subject entire x []) = displayPrec prec x
@@ -265,34 +267,34 @@ instance Display Values where
 
 -- | Render the expr ast to a value. Start with Eq only, for supporting jsonpath
 --
--- >>> display (Eq (Subject "request_body" [FieldKey "message"]) (Str "val"))
+-- >>> display (Eq (Subject "" "request_body" [FieldKey "message"]) (Str "val"))
 -- "request_body->>'message'=='val'"
 --
--- >>> display (Eq (Subject "errors" [ArrayIndex "" 0, FieldKey "message"]) (Str "val"))
+-- >>> display (Eq (Subject "" "errors" [ArrayIndex "" 0, FieldKey "message"]) (Str "val"))
 -- "errors->0->>'message'=='val'"
 --
--- >>> display (Eq (Subject "abc" [ArrayWildcard "",FieldKey "xyz"]) (Str "val"))
--- "jsonb_path_exists(abc, '$[*].\"xyz\" ?? (@ == \"val\")')"
+-- >>> display (Eq (Subject "" "abc" [ArrayWildcard "",FieldKey "xyz"]) (Str "val"))
+-- "jsonb_path_exists(abc, $$$[*].\"xyz\" ?? (@ == \"val\")$$)"
 --
--- >>> display (Eq (Subject "errors" [ArrayWildcard "", ArrayIndex "message" 0, FieldKey "details"]) (Str "details"))
--- "jsonb_path_exists(errors, '$[*][0].\"details\" ?? (@ == \"details\")')"
+-- >>> display (Eq (Subject "" "errors" [ArrayWildcard "", ArrayIndex "message" 0, FieldKey "details"]) (Str "details"))
+-- "jsonb_path_exists(errors, $$$[*][0].\"details\" ?? (@ == \"details\")$$)"
 --
--- >>> display (Subject "abc" [ArrayWildcard "",FieldKey "xyz"])
+-- >>> display (Subject "" "abc" [ArrayWildcard "",FieldKey "xyz"])
 -- buildQuery for ArrayWildcard should be unreachable
 --
--- >>> display (Subject "request_body" [FieldKey "message", ArrayWildcard "tags", FieldKey "name"])
+-- >>> display (Subject "" "request_body" [FieldKey "message", ArrayWildcard "tags", FieldKey "name"])
 -- buildQuery for ArrayWildcard should be unreachable
 --
--- >>> display (Subject "abc" [ArrayWildcard "",FieldKey "xyz"])
+-- >>> display (Subject "" "abc" [ArrayWildcard "",FieldKey "xyz"])
 -- buildQuery for ArrayWildcard should be unreachable
 --
--- >>> display (Subject "request_body" [FieldKey "message", ArrayWildcard "tags", FieldKey "name"])
+-- >>> display (Subject "" "request_body" [FieldKey "message", ArrayWildcard "tags", FieldKey "name"])
 -- buildQuery for ArrayWildcard should be unreachable
 --
--- >>> display (Regex (Subject "request_body" [FieldKey "msg"]) "^abc.*")
+-- >>> display (Regex (Subject "" "request_body" [FieldKey "msg"]) "^abc.*")
 -- "jsonb_path_exists(request_body, '$.\"msg\" ?? (@ like_regex \"^abc.*\")')"
 instance Display Expr where
-  displayPrec prec expr@(Eq sub val) = displayExprHelper "==" prec sub val
+  displayPrec prec expr@(Eq sub val) = displayExprHelper "=" prec sub val
   displayPrec prec (NotEq sub val) = displayExprHelper "!=" prec sub val
   displayPrec prec (GT sub val) = displayExprHelper ">" prec sub val
   displayPrec prec (LT sub val) = displayExprHelper "<" prec sub val
@@ -317,36 +319,40 @@ displayExprHelper op prec sub val =
 --
 -- Examples:
 --
--- >>> jsonPathQuery "==" (Subject "data" [FieldKey "name"]) (Str "John Doe")
--- "jsonb_path_exists(data, '$.\"name\" ? (@ == \"John Doe\")')"
+-- >>> jsonPathQuery "==" (Subject "" "data" [FieldKey "name"]) (Str "John Doe")
+-- "jsonb_path_exists(data, $$$.\"name\" ? (@ == \"John Doe\")$$)"
 --
--- >>> jsonPathQuery "!=" (Subject "users" [ArrayIndex "" 1, FieldKey "age"]) (Num "30")
--- "jsonb_path_exists(users, '$[1].\"age\" ? (@ != 30)')"
+-- >>> jsonPathQuery "!=" (Subject "" "users" [ArrayIndex "" 1, FieldKey "age"]) (Num "30")
+-- "jsonb_path_exists(users, $$$[1].\"age\" ? (@ != 30)$$)"
 --
--- >>> jsonPathQuery "!=" (Subject "settings" [ArrayWildcard "", FieldKey "enabled"]) (Boolean True)
--- "jsonb_path_exists(settings, '$[*].\"enabled\" ? (@ != true)')"
+-- >>> jsonPathQuery "!=" (Subject "" "settings" [ArrayWildcard "", FieldKey "enabled"]) (Boolean True)
+-- "jsonb_path_exists(settings, $$$[*].\"enabled\" ? (@ != True)$$)"
 --
--- >>> jsonPathQuery "<" (Subject "user" [FieldKey "profile", FieldKey "address", FieldKey "zipcode"]) Null
--- "jsonb_path_exists(user, '$.user.\"profile\".\"address\".\"zipcode\" ? (@ < null)')"
+-- >>> jsonPathQuery "<" (Subject "" "user" [FieldKey "profile", FieldKey "address", FieldKey "zipcode"]) Null
+-- "jsonb_path_exists(user, $$$.\"profile\".\"address\".\"zipcode\" ? (@ < null)$$)"
 --
--- >>> jsonPathQuery ">" (Subject "orders" [ArrayIndex "" 0, ArrayWildcard "", FieldKey "status"]) (Str "pending")
--- "jsonb_path_exists(orders, '$[0][*].\"status\" ? (@ > \"pending\")')"
+-- >>> jsonPathQuery ">" (Subject "" "orders" [ArrayIndex "" 0, ArrayWildcard "val", FieldKey "status"]) (Str "pending")
+-- "jsonb_path_exists(orders, $$$[0].val[*].\"status\" ? (@ > \"pending\")$$)"
 jsonPathQuery :: Text -> Subject -> Values -> Text
-jsonPathQuery op (Subject entire base keys) val =
-  "jsonb_path_exists(" <> base <> ", '" <> "$" <> buildPath keys <> buildCondition op val <> "')"
+jsonPathQuery op' (Subject entire base keys) val =
+  "jsonb_path_exists(" <> base <> ", $$" <> "$" <> buildPath keys <> buildCondition op val <> "$$)"
   where
+    op = if op' == "=" then "==" else "="
+
     buildPath :: [FieldKey] -> Text
     buildPath [] = ""
     buildPath (FieldKey key : rest) = ".\"" <> key <> "\"" <> buildPath rest
-    buildPath (ArrayIndex _ idx : rest) = "[" <> show idx <> "]" <> buildPath rest
-    buildPath (ArrayWildcard _ : rest) = "[*]" <> buildPath rest
+    buildPath (ArrayIndex "" idx : rest) =  "[" <> show idx <> "]" <> buildPath rest
+    buildPath (ArrayIndex key idx : rest) = "." <> key <> "[" <> show idx <> "]" <> buildPath rest
+    buildPath (ArrayWildcard "" : rest) =  "[*]" <> buildPath rest
+    buildPath (ArrayWildcard key : rest) = "." <> key <> "[*]" <> buildPath rest
 
     buildCondition :: Text -> Values -> Text
-    buildCondition oper (Num n) = " ?? (@ " <> oper <> " " <> n <> ")"
-    buildCondition oper (Str s) = " ?? (@ " <> oper <> " \"" <> s <> "\")"
-    buildCondition oper (Boolean b) = " ?? (@ " <> oper <> " " <> show b <> ")"
-    buildCondition oper Null = " ?? (@ " <> oper <> " null)"
-    buildCondition oper (List xs) = " ?? (@ " <> oper <> " {" <> (mconcat . intersperse "," . map display) xs <> "} )"
+    buildCondition oper (Num n) = " ? (@ " <> oper <> " " <> n <> ")"
+    buildCondition oper (Str s) = " ? (@ " <> oper <> " \"" <> s <> "\")"
+    buildCondition oper (Boolean b) = " ? (@ " <> oper <> " " <> show b <> ")"
+    buildCondition oper Null = " ? (@ " <> oper <> " null)"
+    buildCondition oper (List xs) = " ? (@ " <> oper <> " {" <> (mconcat . intersperse "," . map display) xs <> "} )"
 
 
 instance Display AggFunction where

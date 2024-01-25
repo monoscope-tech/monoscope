@@ -114,10 +114,10 @@ sqlFromQueryComponents sqlCfg qc =
 -- used in the where clause of an sql statement
 ----------------------------------------------------------------------------------
 -- >>> parseQueryStringToWhereClause "request_body.message!=\"blabla\" AND method==\"GET\""
--- Right "request_body->>'message'!='blabla' AND method=='GET'"
+-- Right "request_body->>'message' as request_body\8226message!='blabla' AND method=='GET'"
 --
 -- >>> parseQueryStringToWhereClause "request_body.message!=\"blabla\" AND method==\"GET\""
--- Right "request_body->>'message'!='blabla' AND method=='GET'"
+-- Right "request_body->>'message' as request_body\8226message!='blabla' AND method=='GET'"
 --
 -- >>> parseQueryStringToWhereClause "request_body.message.tags[*].name!=\"blabla\" AND method==\"GET\""
 -- Right "jsonb_path_exists(request_body, '$.\"message\"[*].\"name\" ?? (@ != \"blabla\")') AND method=='GET'"
@@ -133,6 +133,12 @@ sqlFromQueryComponents sqlCfg qc =
 --
 -- >>> parseQueryStringToWhereClause "errors[*].error_type=~/^ab.*c/"
 -- Right "jsonb_path_exists(errors, '$[*].\"error_type\" ?? (@ like_regex \"^ab.*c\")')"
+--
+-- >>> parseQueryStringToWhereClause "response_body.roles[*] == \"user\""
+-- Right "jsonb_path_exists(response_body, '$[*] ?? (@ == \"user\")')"
+--
+-- >>> parseQueryStringToWhereClause "field_hashes[*]==\"42dd8b6020091ea9c01\""
+--
 parseQueryStringToWhereClause :: Text -> Either Text Text
 parseQueryStringToWhereClause q =
   if q == ""

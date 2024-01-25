@@ -10,12 +10,12 @@ module Pages.Anomalies.AnomalyList (
   AnomalyBulkForm,
   anomalyAcknowlegeButton,
   anomalyArchiveButton,
-  anomalyEvents,
 ) where
 
 import Config
 import Data.Aeson (encode)
 import Data.Aeson.QQ (aesonQQ)
+import Network.URI (escapeURIString, isUnreserved, isUnescapedInURI)
 import Data.Default (def)
 import Data.Map qualified as Map
 import Data.Text (replace)
@@ -429,6 +429,7 @@ anomalyItem hideByDefault currTime anomaly icon title subTitle content = do
                   fetch `${@data-an-url}` as html then put it into #an-modal-content
                   add .hidden to #an-modal-content-loader
                   _hyperscript.processNode(#expand-an-modal)
+                  htmx.process(#expand-an-modal)
                   end
                 |]
               ]
@@ -599,10 +600,10 @@ anomalyDetailsPage anomaly shapesWithFieldsMap fields prvFormatsM chartQuery cur
             Anomalies.ATFormat -> anomalyFormatOverview anomaly (fromMaybe [] prvFormatsM)
             _ -> ""
         div_ [class_ "grow overflow-y-auto h-full whitespace-nowrap text-sm divide-y overflow-x-hidden sdk_tab_content", id_ "events_content"] do
-          let events_url = "/p/" <> anomaly.projectId.toText <> "/anomaly/events/" <> anomaly.targetHash <> "/" <> show anomaly.anomalyType
-          div_ [hxGet_ events_url, hxTrigger_ "intersect", hxSwap_ "outerHTML"] do
-            div_ [class_ "w-full flex justify-center overflow-hidden"] do
-              loader
+          let anomalyQueryPartial = buildQueryForAnomaly anomaly.anomalyType anomaly.targetHash
+          let escapedQueryPartial = toText $ escapeURIString isUnescapedInURI $ toString anomalyQueryPartial
+          let events_url = "/p/" <> (UUID.toText $ Projects.unProjectId $ anomaly.projectId) <> "/log_explorer?layout=resultTable&query=" <> escapedQueryPartial
+          div_ [hxGet_ events_url, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
 
   style_
     [text|
@@ -620,6 +621,14 @@ anomalyDetailsPage anomaly shapesWithFieldsMap fields prvFormatsM chartQuery cur
     .collapsed .children {display: inline-block; padding-left:0}
     .collapsed .closing-token {padding-left:0}
   |]
+
+
+buildQueryForAnomaly :: Anomalies.AnomalyTypes -> Text -> Text 
+buildQueryForAnomaly Anomalies.ATEndpoint hash = "endpoint_hash==\"" <> hash <> "\""
+buildQueryForAnomaly Anomalies.ATShape hash = "shape_hash==\"" <> hash <> "\""
+buildQueryForAnomaly Anomalies.ATFormat hash = "format_hashes[*]==\"" <> hash <> "\""
+buildQueryForAnomaly Anomalies.ATField hash = "field[*]==\"" <> hash <> "\""
+buildQueryForAnomaly Anomalies.ATUnknown hash = "" 
 
 
 endpointOverview :: Maybe (Vector Shapes.ShapeWithFields) -> Html ()
@@ -644,15 +653,6 @@ endpointOverview shapesWithFieldsMap =
         reqResSection "Request" True (Vector.toList s)
         reqResSection "Response" False (Vector.toList s)
       Nothing -> pass
-
-
-anomalyEvents :: Sessions.PersistentSession -> Projects.ProjectId -> Text -> Text -> DashboardM (Html ())
-anomalyEvents sess pid targetHash anomalyType = do
-  pool <- asks pool
-  events <- liftIO $ withPool pool $ RequestDump.selectAnomalyEvents pid targetHash (Anomalies.parseAnomalyRawTypes anomalyType)
-  pure ""
-  -- pure $ div_ [class_ "w-full"] do
-  --   Log.logItemRows pid events [] ""
 
 
 requestShapeOverview :: Maybe (Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field]) -> Html ()

@@ -2,6 +2,7 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE StrictData #-}
 
 module Models.Apis.RequestDumps (
   RequestDump (..),
@@ -15,7 +16,6 @@ module Models.Apis.RequestDumps (
   throughputBy',
   selectLogTable,
   requestDumpLogItemUrlPath,
-  selectAnomalyEvents,
   requestDumpLogUrlPath,
   selectReqLatenciesRolledBySteps,
   selectReqLatenciesRolledByStepsForProject,
@@ -46,7 +46,6 @@ import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField (fromField), fromJSONField)
 import Models.Apis.Fields.Query ()
-
 import Data.Aeson (Value)
 import Data.Aeson.KeyMap (toHashMapText)
 import Data.HashMap.Strict qualified as HM
@@ -55,7 +54,8 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField (toField))
 import Database.PostgreSQL.Simple.Types (Query (Query))
-import Database.PostgreSQL.Transact (DBT, executeMany)
+import Database.PostgreSQL.Transact (DBT, executeMany, getConnection)
+import Database.PostgreSQL.Transact qualified as DBT
 import Debug.Pretty.Simple (pTraceShow, pTraceShowM)
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Anomalies (AnomalyTypes)
@@ -404,10 +404,10 @@ convertValueToMap (Only val) = case val of
 
 
 queryToValues :: Text -> DBT IO (V.Vector (Only Value))
-queryToValues q = query_ Select (Query $ encodeUtf8 q)
+queryToValues q = V.fromList <$> DBT.query_ (Query $ encodeUtf8 q)
 
 queryCount :: Text -> DBT IO (Maybe (Only Int))
-queryCount q = queryOne_ Select (Query $ encodeUtf8 q)
+queryCount q = DBT.queryOne_ (Query $ encodeUtf8 q)
 
 
 selectRequestDumpByProject :: Projects.ProjectId -> Text -> Maybe Text -> Maybe ZonedTime -> Maybe ZonedTime -> DBT IO (V.Vector RequestDumpLogItem, Int)
@@ -489,7 +489,7 @@ selectReqLatenciesRolledBySteps maxv steps pid urlPath method = query Select q (
   where
     q =
       [sql| 
-select duration_steps, count(id)
+SELECT duration_steps, count(id)
 	FROM generate_series(0, ?, ?) AS duration_steps
 	LEFT OUTER JOIN apis.request_dumps on (duration_steps = round((EXTRACT(epoch FROM duration)/1000000)/?)*? 
     AND created_at > NOW() - interval '14' day
@@ -518,24 +518,6 @@ select duration_steps, count(id)
       |]
 
 
-selectAnomalyEvents :: Projects.ProjectId -> Text -> AnomalyTypes -> DBT IO (V.Vector RequestDumpLogItem)
-selectAnomalyEvents pid targetHash anType = query Select (Query $ encodeUtf8 q) (pid, targetHash)
-  where
-    extraQuery :: Text
-    extraQuery = case anType of
-      Anomalies.ATEndpoint -> " endpoint_hash=?"
-      Anomalies.ATShape -> " shape_hash=?"
-      Anomalies.ATFormat -> " ?=ANY(format_hashes)"
-      _ -> error "Should never be reached"
-
-    q =
-      [text| SELECT id,created_at, project_id,host,url_path,method,raw_url,referer,
-                    path_params, status_code,query_params,
-                    request_body,response_body,request_headers,response_headers,
-                    duration_ns, sdk_type,
-                    parent_id, service_version, JSONB_ARRAY_LENGTH(errors) as errors_count, errors, tags, request_type
-             FROM apis.request_dumps where created_at > NOW() - interval '14' day AND project_id=? AND $extraQuery LIMIT 199; |]
-
 
 -- A throughput chart query for the request_dump table.
 -- daterange :: (Maybe Int, Maybe Int)?
@@ -543,7 +525,8 @@ selectAnomalyEvents pid targetHash anType = query Select (Query $ encodeUtf8 q) 
 -- Now thinking about it, it might be easier to calculate 7days ago into a specific date than dealing with integer day ranges.
 throughputBy :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Maybe Int -> Maybe Text -> (Maybe ZonedTime, Maybe ZonedTime) -> DBT IO Text
 throughputBy pid groupByM endpointHash shapeHash formatHash statusCodeGT numSlots limitM extraQuery dateRange@(fromT, toT) = do
-  let extraQueryParsed = hush . parseQueryStringToWhereClause =<< extraQuery
+  -- Replace any jsonpath ? with its escaped version, so its not mistaken as a variable for interpolation 
+  let extraQueryParsed =  (T.replace "?" "??") <$> (hush . parseQueryStringToWhereClause =<< extraQuery)
   let condlist =
         catMaybes
           [ " endpoint_hash=? " <$ endpointHash
