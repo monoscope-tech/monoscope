@@ -142,6 +142,6 @@ export function getDeletedUpdatedAndNewSteps(steps, newSteps) {
     const newStep = newSteps.find((s) => s.id === step.id);
     return newStep && JSON.stringify(step) !== JSON.stringify(newStep);
   });
-  const newSteps = newSteps.filter((step) => !step.id);
+  const addedSteps = newSteps.filter((step) => !step.id);
   return { deletedSteps, updatedSteps, newSteps };
 }

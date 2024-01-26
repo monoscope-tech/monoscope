@@ -15,9 +15,9 @@ export class Collection extends LitElement {
     showNewStepModal: {},
     showCode: {},
     config: {},
-    codeHasChanges: { type: Boolean },
+    codeHasChanges: {},
     showSettings: {},
-    runningAllTests: { type: Boolean },
+    runningAllTests: {},
   };
   collections = [];
   pid = '';
@@ -37,9 +37,11 @@ export class Collection extends LitElement {
     this.collection.steps = steps.map((step) => {
       return { id: step.id, lastRun: step.lastRun, ...step.stepData };
     });
+
     this.showCode = false;
     this.showSettings = false;
     this.runningAllTests = false;
+    this.codeHasChanges = false;
 
     this.addEventListener('add-step', this.handleAddStep);
     this.addEventListener('close-modal', () => {
@@ -181,6 +183,7 @@ export class Collection extends LitElement {
       const yamlData = jsyaml.dump(this.collection.steps, {
         indent: 2,
       });
+
       setTimeout(() => {
         const editor = CodeMirror(document.getElementById('test-editor'), {
           value: yamlData,
@@ -188,19 +191,22 @@ export class Collection extends LitElement {
           lineNumbers: true,
           theme: 'dracula',
         });
+        editor.on('change', () => {
+          this.codeHasChanges = true;
+        });
         window.testEditor = editor;
       });
       this.showCode = true;
     } else {
-      if (window.testEditor) {
-        const val = window.testEditor.getValue();
-        const data = validateYaml(val);
-        if (data) {
-          const current = this.collection.steps;
-          this.collection.steps = data;
-        }
+      if (
+        this.codeHasChanges &&
+        confirm('You have unsaved changes. unsaved changes they will be lost')
+      ) {
+        this.codeHasChanges = false;
+        this.showCode = false;
+      } else {
+        this.showCode = false;
       }
-      this.showCode = false;
     }
   }
 
@@ -214,7 +220,23 @@ export class Collection extends LitElement {
           this.collection.steps,
           data
         );
-        // TODO: save updates (DELETE, UPDATED, AND NEW)
+        try {
+          const response = await fetch(
+            `/p/${this.pid}/testing/save_from_code/${this.col_id}/`,
+            { method: 'POST', body: JSON.stringify(operations) }
+          );
+          if (response.ok) {
+            const event = getEvent('successToast', {
+              value: ['Save successfully'],
+            });
+            triggerToastEvent(event);
+          }
+        } catch (error) {
+          const errEvent = getEvent('errorToast', {
+            value: ['Something went wrong'],
+          });
+          triggerToastEvent(errEvent);
+        }
         this.collection.steps = data;
         this.codeHasChanges = false;
       }
@@ -283,7 +305,7 @@ export class Collection extends LitElement {
         >
           <div class="flex justify-between items-center w-full pt-3 px-4">
             <h3 class="text-gray-700 font-medium text-2xl">Steps</h3>
-            <div class="flex gap-2">
+            <div class="flex gap-4">
               <button
                 title="run all"
                 class="bg-blue-500 text-white gap-2 flex items-center rounded px-3 py-1"
@@ -298,6 +320,7 @@ export class Collection extends LitElement {
                   value=""
                   class="sr-only peer"
                   @click=${() => this.toggleCode()}
+                  .checked=${this.showCode}
                 />
                 <div
                   class="w-9 h-3 bg-gray-200 peer-focus:outline-none peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full after:content-[''] after:absolute after:top-[5px] after:start-[0] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"
@@ -308,6 +331,15 @@ export class Collection extends LitElement {
                   Code</span
                 >
               </label>
+              ${this.codeHasChanges
+                ? html`<button
+                    title="save code"
+                    class="bg-blue-500 text-white gap-2 flex items-center rounded px-3 py-1"
+                    @click=${() => this.saveCode()}
+                  >
+                    Save
+                  </button>`
+                : null}
             </div>
           </div>
           ${this.showCode
