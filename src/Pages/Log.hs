@@ -356,7 +356,7 @@ logItemCol_ :: Projects.ProjectId -> HashMap Text Value -> Text -> Html ()
 logItemCol_ pid reqMap "id" = do
   let (status, errCount, errClass) = errorClass False reqMap
   let logItemPath = requestDumpLogItemUrlPath pid reqMap
-  div_ [class_ "grid grid-cols-3 gap-4 items-center"] do
+  div_ [class_ "grid grid-cols-3 gap-4 items-center max-w-3"] do
     a_ [class_ $ "col-span-1 shrink-0 inline-block h-full w-1 " <> errClass, term "data-tip" $ show errCount <> " errors attached to this request; status " <> show status] " "
     button_
       [ class_ "col-span-1"
