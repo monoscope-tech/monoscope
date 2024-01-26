@@ -152,6 +152,7 @@ type ProtectedAPI =
     :<|> "p" :> ProjectId :> "testing" :> Capture "collection_id" TestingM.CollectionId :> Capture "action" Text :> ReqBody '[JSON] AE.Value :> Post '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "testing" :> "add_step" :> Capture "collection_id" TestingM.CollectionId :> ReqBody '[JSON] AE.Value :> Post '[HTML] (Html ())
     :<|> "p" :> ProjectId :> "testing" :> "step" :> Capture "step_id" TestingM.CollectionStepId :> ReqBody '[JSON] AE.Value :> Post '[HTML] (Html ())
+    :<|> "p" :> ProjectId :> "testing" :> "save_from_code" :> Capture "collection_id" TestingM.CollectionId :> ReqBody '[JSON] Testing.CodeOperationsForm :> Post '[HTML] (Html ())
 
 
 type PublicAPI =
@@ -256,6 +257,7 @@ protectedServer sess =
     :<|> Testing.testingPutH sess
     :<|> Testing.collectionStepPostH sess
     :<|> Testing.collectionStepPutH sess
+    :<|> Testing.saveStepsFromCodePostH sess
 
 
 publicServer :: ServerT PublicAPI DashboardM

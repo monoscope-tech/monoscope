@@ -6,6 +6,8 @@ module Pages.Testing (
   TestCollectionForm (..),
   collectionStepPostH,
   collectionStepPutH,
+  saveStepsFromCodePostH,
+  CodeOperationsForm (..),
 ) where
 
 import Config
@@ -31,9 +33,12 @@ import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
 import Utils
 
+import Data.Aeson qualified as AE
 import Data.Aeson qualified as Aeson
 import Data.Text qualified as T
 import Data.Time (getZonedTime)
+import Data.Time.LocalTime (ZonedTime)
+import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Lucid.Base
@@ -356,7 +361,7 @@ collectionPage pid col steps = do
       Nothing -> do
         h1_ [] "Not found"
   script_ [type_ "module", src_ "/assets/testeditor.js"] ("" :: Text)
-  script_ [src_ "https://unpkg.com/js-yaml/dist/js-yaml.min.js", crossorigin_ "true"] ("" :: Text)
+  script_ [src_ "/assets/js/thirdparty/jsyaml.min.js", crossorigin_ "true"] ("" :: Text)
   script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.63.0/codemirror.min.js"] ("" :: Text)
   script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.63.0/mode/yaml/yaml.js"] ("" :: Text)
   style_
@@ -365,6 +370,43 @@ collectionPage pid col steps = do
             height: 100%;
         }
     |]
+
+
+data CodeOperationsForm = CodeOperationsForm
+  { addedSteps :: V.Vector AE.Value
+  , deletedSteps :: V.Vector Testing.CollectionStepId
+  , updatedSteps :: V.Vector AE.Value
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+
+getStep :: Projects.ProjectId -> Testing.CollectionId -> ZonedTime -> AE.Value -> Testing.CollectionStep
+getStep pid col_id cr step_val =
+  Testing.CollectionStep
+    { id = Testing.CollectionStepId UUID.nil
+    , createdAt = cr
+    , updatedAt = cr
+    , projectId = pid
+    , collectionId = col_id
+    , lastRun = Nothing
+    , stepData = step_val
+    }
+
+
+saveStepsFromCodePostH :: Sessions.PersistentSession -> Projects.ProjectId -> Testing.CollectionId -> CodeOperationsForm -> DashboardM (Html ())
+saveStepsFromCodePostH sess pid col_id operations = do
+  pool <- asks pool
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      _ <- withPool pool $ Testing.deleteCollectionSteps (V.toList operations.deletedSteps)
+      currentTime <- liftIO getZonedTime
+      let added = map (getStep pid col_id currentTime) (V.toList operations.addedSteps)
+      _ <- withPool pool $ Testing.insertSteps pid col_id added
+      pure ""
 
 -- runTestH :: Sessions.PersistentSession -> Projects.ProjectId -> Testing.CollectionId -> DashboardM (Html ())
 -- runTestH sess pid col_id = do

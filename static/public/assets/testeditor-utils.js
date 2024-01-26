@@ -86,7 +86,7 @@ function isValidAssert(asserts) {
   if (!Array.isArray(asserts)) {
     return false;
   }
-  for (const item of input) {
+  for (const item of asserts) {
     if (typeof item !== 'object' || item === null || Array.isArray(item)) {
       return false;
     }
@@ -104,7 +104,7 @@ function isValidAssert(asserts) {
 
 export function validateYaml(yaml) {
   try {
-    const data = jsyaml.load(val);
+    const data = jsyaml.load(yaml);
     if (!Array.isArray(data)) {
       triggerToastEvent(
         getEvent('errorToast', { value: ['Array of steps expected'] })
@@ -128,6 +128,7 @@ export function validateYaml(yaml) {
     });
     return data;
   } catch (error) {
+    console.log(error);
     const event = getEvent('errorToast', { value: ['Invalid yaml'] });
     triggerToastEvent(event);
     return undefined;
@@ -143,5 +144,5 @@ export function getDeletedUpdatedAndNewSteps(steps, newSteps) {
     return newStep && JSON.stringify(step) !== JSON.stringify(newStep);
   });
   const addedSteps = newSteps.filter((step) => !step.id);
-  return { deletedSteps, updatedSteps, newSteps };
+  return { deletedSteps, updatedSteps, addedSteps };
 }

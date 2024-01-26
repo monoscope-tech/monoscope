@@ -10,10 +10,12 @@ module Models.Apis.Testing (
     addCollectionStep,
     getCollections,
     updateCollection,
+    insertSteps,
     updateCollectionConfig,
     updateCollectionStep,
     getCollectionSteps,
     getCollectionById,
+    deleteCollectionSteps,
     updateSchedule,
 ) where
 
@@ -127,7 +129,7 @@ addCollectionStep :: CollectionStep -> DBT IO ()
 addCollectionStep = insert @CollectionStep
 
 
-insertSteps :: Projects.ProjectId -> CollectionId -> Vector CollectionStep -> DBT IO Int64
+insertSteps :: Projects.ProjectId -> CollectionId -> [CollectionStep] -> DBT IO Int64
 insertSteps pid cid steps = do
     let q =
             [sql| 
@@ -135,8 +137,8 @@ insertSteps pid cid steps = do
         (project_id, collection_id, step_data)
         VALUES (?,?,?) ON CONFLICT DO NOTHING;
       |]
-    let params = V.map getStepParams steps
-    executeMany q (V.toList params)
+    let params = map getStepParams steps
+    executeMany q params
     where
         getStepParams :: CollectionStep -> (Projects.ProjectId, CollectionId, AE.Value)
         getStepParams step =
@@ -198,10 +200,11 @@ updateCollectionStep csid val = do
     execute Update q (val, csid)
 
 
--- deleteCollectionStep :: CollectionStepId -> DBT IO Int64
--- deleteCollectionStep csid = do
---     let q = [sql| DELETE FROM apis.test_steps WHERE id=? |]
---     execute Delete q csid
+deleteCollectionSteps :: [CollectionStepId] -> DBT IO Int64
+deleteCollectionSteps csid = do
+    let q = [sql| DELETE FROM apis.test_steps WHERE id IN ? |]
+    execute Delete q csid
+
 
 updateSchedule :: CollectionId -> Maybe Text -> Bool -> DBT IO Int64
 updateSchedule cid schedule isScheduled = do
