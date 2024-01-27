@@ -220,10 +220,11 @@ export class Collection extends LitElement {
           this.collection.steps,
           data
         );
+        console.log(operations);
         try {
           const response = await fetch(
             `/p/${this.pid}/testing/save_from_code/${this.col_id}/`,
-            { method: 'POST', body: JSON.stringify(operations) }
+            { body: JSON.stringify(operations), ...PostConfig }
           );
           if (response.ok) {
             const event = getEvent('successToast', {

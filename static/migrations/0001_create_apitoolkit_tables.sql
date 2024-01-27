@@ -880,6 +880,7 @@ CREATE TABLE IF NOT EXISTS apis.test_steps
   id                 UUID        NOT     NULL   DEFAULT        gen_random_uuid() PRIMARY KEY, 
   created_at         TIMESTAMP   WITH    TIME   ZONE           NOT               NULL              DEFAULT current_timestamp,
   updated_at         TIMESTAMP   WITH    TIME   ZONE           NOT               NULL              DEFAULT current_timestamp,
+  deleted_at         TIMESTAMP   WITH    TIME   ZONE     DEFAULT  NULL
   last_run           TIMESTAMP   WITH    TIME   ZONE           DEFAULT NULL,
   project_id         UUID        NOT     NULL   REFERENCES     projects.projects (id)              ON      DELETE CASCADE,
   collection_id      UUID        NOT     NULL   REFERENCES     apis.testing (id)                   ON      DELETE CASCADE,

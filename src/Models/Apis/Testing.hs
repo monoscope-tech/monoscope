@@ -36,12 +36,11 @@ import Relude
 import Web.HttpApiData (FromHttpApiData)
 
 import Data.Aeson as Aeson
-import Database.PostgreSQL.Entity (insert, selectById, update)
-
-import Database.PostgreSQL.Simple hiding (execute, executeMany, query)
+import Database.PostgreSQL.Entity (insert, selectById)
 
 import Data.Aeson qualified as AE
 import Data.Vector qualified as V
+import Database.PostgreSQL.Simple hiding (execute, executeMany, query)
 import Database.PostgreSQL.Simple.FromField
 import Database.PostgreSQL.Simple.ToField
 
@@ -183,7 +182,11 @@ getCollections pid = query Select q (Only pid)
 getCollectionSteps :: CollectionId -> DBT IO (Vector CollectionStep)
 getCollectionSteps cid = query Select q (Only cid)
     where
-        q = [sql| SELECT * FROM apis.test_steps WHERE collection_id =? |]
+        q =
+            [sql| SELECT id, created_at, updated_at, last_run, project_id, collection_id, step_data 
+                  FROM apis.test_steps 
+                  WHERE collection_id =? AND deleted_at IS NULL 
+                |]
 
 
 updateCollectionConfig :: CollectionId -> Value -> DBT IO Int64
@@ -200,10 +203,10 @@ updateCollectionStep csid val = do
     execute Update q (val, csid)
 
 
-deleteCollectionSteps :: [CollectionStepId] -> DBT IO Int64
-deleteCollectionSteps csid = do
-    let q = [sql| DELETE FROM apis.test_steps WHERE id IN ? |]
-    execute Delete q csid
+deleteCollectionSteps :: Vector Text -> ZonedTime -> DBT IO Int64
+deleteCollectionSteps csid time = do
+    let q = [sql| UPDATE apis.test_steps SET deleted_at=? WHERE id=ANY(array_remove(?, '')::uuid[]) |]
+    execute Update q (time, csid)
 
 
 updateSchedule :: CollectionId -> Maybe Text -> Bool -> DBT IO Int64

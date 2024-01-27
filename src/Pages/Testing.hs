@@ -374,7 +374,7 @@ collectionPage pid col steps = do
 
 data CodeOperationsForm = CodeOperationsForm
   { addedSteps :: V.Vector AE.Value
-  , deletedSteps :: V.Vector Testing.CollectionStepId
+  , deletedSteps :: V.Vector Text
   , updatedSteps :: V.Vector AE.Value
   }
   deriving stock (Show, Generic)
@@ -402,8 +402,8 @@ saveStepsFromCodePostH sess pid col_id operations = do
     then do
       pure $ userNotMemeberPage sess
     else do
-      _ <- withPool pool $ Testing.deleteCollectionSteps (V.toList operations.deletedSteps)
       currentTime <- liftIO getZonedTime
+      _ <- withPool pool $ Testing.deleteCollectionSteps operations.deletedSteps currentTime
       let added = map (getStep pid col_id currentTime) (V.toList operations.addedSteps)
       _ <- withPool pool $ Testing.insertSteps pid col_id added
       pure ""

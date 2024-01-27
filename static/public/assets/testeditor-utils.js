@@ -136,9 +136,9 @@ export function validateYaml(yaml) {
 }
 
 export function getDeletedUpdatedAndNewSteps(steps, newSteps) {
-  const deletedSteps = steps.filter(
-    (step) => !newSteps.some((s) => s.id === step.id)
-  );
+  const deletedSteps = steps
+    .filter((step) => !newSteps.some((s) => s.id === step.id))
+    .map((step) => step.id);
   const updatedSteps = steps.filter((step) => {
     const newStep = newSteps.find((s) => s.id === step.id);
     return newStep && JSON.stringify(step) !== JSON.stringify(newStep);
