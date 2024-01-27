@@ -16,6 +16,7 @@ module Models.Apis.Testing (
     getCollectionSteps,
     getCollectionById,
     deleteCollectionSteps,
+    deleteCollectionStep,
     updateSchedule,
 ) where
 
@@ -203,10 +204,16 @@ updateCollectionStep csid val = do
     execute Update q (val, csid)
 
 
-deleteCollectionSteps :: Vector Text -> ZonedTime -> DBT IO Int64
-deleteCollectionSteps csid time = do
-    let q = [sql| UPDATE apis.test_steps SET deleted_at=? WHERE id=ANY(array_remove(?, '')::uuid[]) |]
-    execute Update q (time, csid)
+deleteCollectionSteps :: Vector Text -> DBT IO Int64
+deleteCollectionSteps csid = do
+    let q = [sql| UPDATE apis.test_steps SET deleted_at=now() WHERE id=ANY(array_remove(?, '')::uuid[]) |]
+    execute Update q (Only csid)
+
+
+deleteCollectionStep :: CollectionStepId -> DBT IO Int64
+deleteCollectionStep csid = do
+    let q = [sql| UPDATE apis.test_steps SET deleted_at=now() WHERE id=? |]
+    execute Update q (Only csid)
 
 
 updateSchedule :: CollectionId -> Maybe Text -> Bool -> DBT IO Int64

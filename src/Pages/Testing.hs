@@ -7,6 +7,7 @@ module Pages.Testing (
   collectionStepPostH,
   collectionStepPutH,
   saveStepsFromCodePostH,
+  deleteStepH,
   CodeOperationsForm (..),
 ) where
 
@@ -411,12 +412,24 @@ saveStepsFromCodePostH sess pid col_id operations = do
       pure $ userNotMemeberPage sess
     else do
       currentTime <- liftIO getZonedTime
-      _ <- withPool pool $ Testing.deleteCollectionSteps operations.deletedSteps currentTime
+      _ <- withPool pool $ Testing.deleteCollectionSteps operations.deletedSteps
       let added = map (getStep pid col_id currentTime) (V.toList operations.addedSteps)
       _ <- withPool pool $ Testing.insertSteps pid col_id added
       forM_ operations.updatedSteps \s -> do
         _ <- withPool pool $ Testing.updateCollectionStep s.stepId s.stepData
         pass
+      pure ""
+
+
+deleteStepH :: Sessions.PersistentSession -> Projects.ProjectId -> Testing.CollectionStepId -> DashboardM (Html ())
+deleteStepH sess pid step_id = do
+  pool <- asks pool
+  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      pure $ userNotMemeberPage sess
+    else do
+      _ <- withPool pool $ Testing.deleteCollectionStep step_id
       pure ""
 
 -- runTestH :: Sessions.PersistentSession -> Projects.ProjectId -> Testing.CollectionId -> DashboardM (Html ())
