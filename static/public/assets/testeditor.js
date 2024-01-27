@@ -220,13 +220,14 @@ export class Collection extends LitElement {
           this.collection.steps,
           data
         );
-        console.log(operations);
         try {
           const response = await fetch(
             `/p/${this.pid}/testing/save_from_code/${this.col_id}/`,
             { body: JSON.stringify(operations), ...PostConfig }
           );
           if (response.ok) {
+            this.collection.steps = data;
+            this.codeHasChanges = false;
             const event = getEvent('successToast', {
               value: ['Save successfully'],
             });
@@ -238,8 +239,6 @@ export class Collection extends LitElement {
           });
           triggerToastEvent(errEvent);
         }
-        this.collection.steps = data;
-        this.codeHasChanges = false;
       }
     }
   }

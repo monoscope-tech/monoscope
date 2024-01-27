@@ -128,7 +128,6 @@ export function validateYaml(yaml) {
     });
     return data;
   } catch (error) {
-    console.log(error);
     const event = getEvent('errorToast', { value: ['Invalid yaml'] });
     triggerToastEvent(event);
     return undefined;
@@ -139,10 +138,19 @@ export function getDeletedUpdatedAndNewSteps(steps, newSteps) {
   const deletedSteps = steps
     .filter((step) => !newSteps.some((s) => s.id === step.id))
     .map((step) => step.id);
-  const updatedSteps = steps.filter((step) => {
-    const newStep = newSteps.find((s) => s.id === step.id);
-    return newStep && JSON.stringify(step) !== JSON.stringify(newStep);
-  });
   const addedSteps = newSteps.filter((step) => !step.id);
+  const updatedSteps = newSteps
+    .filter((step) => {
+      const updatedStep = steps.find((s) => s.id === step.id);
+      return (
+        updatedStep && JSON.stringify(step) !== JSON.stringify(updatedStep)
+      );
+    })
+    .map((step) => {
+      const id = step.id;
+      delete step.id;
+      delete step.lastRun;
+      return { stepId: id, stepData: step };
+    });
   return { deletedSteps, updatedSteps, addedSteps };
 }

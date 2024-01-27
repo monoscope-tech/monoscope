@@ -372,10 +372,18 @@ collectionPage pid col steps = do
     |]
 
 
+data UpdatedStep = UpdatedStep
+  { stepId :: Testing.CollectionStepId
+  , stepData :: AE.Value
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+
 data CodeOperationsForm = CodeOperationsForm
   { addedSteps :: V.Vector AE.Value
   , deletedSteps :: V.Vector Text
-  , updatedSteps :: V.Vector AE.Value
+  , updatedSteps :: [UpdatedStep]
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
@@ -406,6 +414,9 @@ saveStepsFromCodePostH sess pid col_id operations = do
       _ <- withPool pool $ Testing.deleteCollectionSteps operations.deletedSteps currentTime
       let added = map (getStep pid col_id currentTime) (V.toList operations.addedSteps)
       _ <- withPool pool $ Testing.insertSteps pid col_id added
+      forM_ operations.updatedSteps \s -> do
+        _ <- withPool pool $ Testing.updateCollectionStep s.stepId s.stepData
+        pass
       pure ""
 
 -- runTestH :: Sessions.PersistentSession -> Projects.ProjectId -> Testing.CollectionId -> DashboardM (Html ())
