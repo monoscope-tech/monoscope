@@ -98,27 +98,15 @@ import Witch (from)
 -- --
 -- -- API Section
 -- type ProtectedAPI =
---     :<|> "p" :> ProjectId :> QPT "from" :> QPT "to" :> QPT "since" :> UVerb 'GET '[HTML] GetOrRedirect
---     :<|> "p" :> ProjectId :> "delete" :> Get '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
---     :<|> "p" :> ProjectId :> "endpoints" :> QPT "layout" :> QPT "ackd" :> QPT "archived" :> QPT "host" :> QPT "project_host" :> QPT "sort" :> HXRequest :> HXBoosted :> HXCurrentURL :> Get '[HTML] (Html ())
---     :<|> "p" :> ProjectId :> "endpoints" :> Capture "endpoints_id" Endpoints.EndpointId :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "subpage" :> QPT "shape" :> Get '[HTML] (Html ())
---     :<|> "p" :> ProjectId :> "apis" :> Get '[HTML] (Html ())
---     :<|> "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Api.GenerateAPIKeyForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
---     :<|> "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Delete '[HTML] (Headers '[HXTrigger] (Html ()))
---     :<|> "p" :> ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> Get '[HTML] (Html ())
---     :<|> "p" :> ProjectId :> "manual_ingest" :> Get '[HTML] (Html ())
---     :<|> "p" :> ProjectId :> "manual_ingest" :> ReqBody '[FormUrlEncoded] RequestMessageForm :> Post '[HTML] (Html ())
---     :<|> "p" :> ProjectId :> "log_explorer" :> "endpoint" :> Capture "endpoint_hash" Text :> Get '[HTML] (Headers '[HXRedirect] (Html ()))
---     :<|> "p" :> ProjectId :> "bulk_seed_and_ingest" :> Get '[HTML] (Html ())
---     :<|> "p" :> ProjectId :> "bulk_seed_and_ingest" :> ReqBody '[FormUrlEncoded] DataSeeding.DataSeedingForm :> Post '[HTML] (Html ())
+--     :<|> 
+--     :<|> 
+--     :<|> 
+--     :<|> 
 --     :<|> "p" :> ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "unarchive" :> Get '[HTML] (Html ())
 --     :<|> "p" :> ProjectId :> "anomaly" :> Capture "targetHash" Text :> QPT "modal" :> Get '[HTML] (Html ())
 --     :<|> "p" :> ProjectId :> "redacted_fields" :> Get '[HTML] (Html ())
 --     :<|> "p" :> ProjectId :> "redacted_fields" :> ReqBody '[FormUrlEncoded] RedactFieldForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
 --     :<|> "p" :> ProjectId :> "charts_html" :> "throughput" :> QPT "id" :> QPT "group_by" :> QPT "endpoint_hash" :> QPT "shape_hash" :> QPT "format_hash" :> QPT "status_code_gt" :> QPI "num_slots" :> QPI "limit" :> QPB "show_legend" :> QPT "from" :> QPT "to" :> QPT "theme" :> Get '[HTML] (Html ())
---     :<|> "p" :> ProjectId :> "documentation" :> QPT "swagger_id" :> Get '[HTML] (Html ())
---     :<|> "p" :> ProjectId :> "documentation" :> ReqBody '[FormUrlEncoded] SwaggerForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
---     :<|> "p" :> ProjectId :> "documentation" :> "save" :> ReqBody '[JSON] SaveSwaggerForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
 --     :<|> "p" :> ProjectId :> "generate_swagger" :> Get '[JSON] AE.Value
 --     :<|> "p" :> ProjectId :> "reports" :> QPT "page" :> HXRequest :> HXBoosted :> Get '[HTML] (Html ())
 --     :<|> "p" :> ProjectId :> "reports" :> Capture "report_id" Reports.ReportId :> Get '[HTML] (Html ())
@@ -157,42 +145,9 @@ import Witch (from)
 -- -- that is taken care of by supplying context
 -- protectedServer :: Sessions.PersistentSession -> ServerT ProtectedAPI DashboardM
 -- protectedServer sess =
---   ListProjects.listProjectsGetH sess
---     :<|> CreateProject.createProjectGetH sess
---     :<|> CreateProject.createProjectPostH sess
---     :<|> Onboarding.onboardingGetH sess
---     :<|> Dashboard.dashboardGetH sess
---     :<|> CreateProject.projectSettingsGetH sess
---     :<|> CreateProject.deleteProjectGetH sess
---     :<|> ManageMembers.manageMembersGetH sess
---     :<|> ManageMembers.manageMembersPostH sess
---     :<|> EndpointList.endpointListGetH sess
---     :<|> EndpointDetails.endpointDetailsH sess
---     :<|> Api.apiGetH sess
---     :<|> Api.apiPostH sess
---     :<|> Api.apiDeleteH sess
---     :<|> EndpointDetails.fieldDetailsPartialH sess
---     :<|> ManualIngestion.manualIngestGetH sess
---     :<|> ManualIngestion.manualIngestPostH sess
---     :<|> Log.apiLogH sess
---     :<|> LogItem.apiLogItemH sess
---     :<|> LogItem.expandAPIlogItemH sess
---     :<|> EndpointDetails.endpointDetailsWithHashH sess
---     :<|> DataSeeding.dataSeedingGetH sess
---     :<|> DataSeeding.dataSeedingPostH sess
---     :<|> AnomalyList.anomalyListGetH sess
---     :<|> AnomalyList.anomalyBulkActionsPostH sess
---     :<|> AnomalyList.acknowlegeAnomalyGetH sess
---     :<|> AnomalyList.unAcknowlegeAnomalyGetH sess
---     :<|> AnomalyList.archiveAnomalyGetH sess
---     :<|> AnomalyList.unArchiveAnomalyGetH sess
---     :<|> AnomalyList.anomalyDetailsGetH sess
 --     :<|> RedactedFields.redactedFieldsGetH sess
 --     :<|> RedactedFields.redactedFieldsPostH sess
 --     :<|> Charts.throughputEndpointHTML sess
---     :<|> Documentation.documentationGetH sess
---     :<|> Documentation.documentationPostH sess
---     :<|> Documentation.documentationPutH sess
 --     :<|> GenerateSwagger.generateGetH sess
 --     :<|> Reports.reportsGetH sess
 --     :<|> Reports.singleReportGetH sess
@@ -205,7 +160,6 @@ import Witch (from)
 --     :<|> AutoComplete.getH sess
 --     :<|> SlackInstall.linkProjectsGetH sess
 --     :<|> SlackInstall.postH sess
---     :<|> CreateProject.updateNotificationsChannel sess
 --     :<|> SlackInstall.updateWebHook sess
 
 

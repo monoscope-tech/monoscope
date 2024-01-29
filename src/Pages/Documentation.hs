@@ -29,19 +29,20 @@ import NeatInterpolation (text)
 import Numeric (showHex)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.GenerateSwagger qualified as GenerateSwagger
-import Relude
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
-
 import Data.List (nubBy)
 import Models.Apis.Fields.Query qualified as Fields
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.Shapes qualified as Shapes
 import Pages.NonMember
-import Relude.Unsafe as Unsafe hiding (head)
 import Utils
-
 import Web.FormUrlEncoded (FromForm)
+import Relude hiding (ask, asks)
+import System.Types
+import Effectful.Reader.Static (ask, asks)
+import Effectful.PostgreSQL.Transact.Effect
+import Relude.Unsafe qualified as Unsafe
 
 
 data SwaggerForm = SwaggerForm
@@ -225,10 +226,17 @@ flattenVector :: [V.Vector FieldOperation] -> V.Vector FieldOperation
 flattenVector = V.concat
 
 
-documentationPutH :: Sessions.PersistentSession -> Projects.ProjectId -> SaveSwaggerForm -> DashboardM (Headers '[HXTrigger] (Html ()))
-documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id, endpoints, diffsInfo} = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+documentationPutH :: Projects.ProjectId -> SaveSwaggerForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
+documentationPutH pid SaveSwaggerForm{updated_swagger, swagger_id, endpoints, diffsInfo} = do
+ 
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+  let currUserId = sess.userId
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Only project memebers can update swagger"]}|]
@@ -238,7 +246,7 @@ documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id, endpoint
       let value = case decodeStrict (encodeUtf8 updated_swagger) of
             Just val -> val
             Nothing -> error "Failed to parse JSON: "
-      res <- liftIO $ withPool pool do
+      res <- dbtToEff do
         currentTime <- liftIO getZonedTime
         let newEndpoints = V.toList $ V.map (getEndpointFromOpEndpoint pid) endpoints
         let shapes = V.toList (V.map (getShapeFromOpShape pid currentTime) (V.filter (.opShapeChanged) diffsInfo))
@@ -266,10 +274,18 @@ documentationPutH sess pid SaveSwaggerForm{updated_swagger, swagger_id, endpoint
       pure $ addHeader hxTriggerData ""
 
 
-documentationPostH :: Sessions.PersistentSession -> Projects.ProjectId -> SwaggerForm -> DashboardM (Headers '[HXTrigger] (Html ()))
-documentationPostH sess pid SwaggerForm{swagger_json, from} = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+documentationPostH :: Projects.ProjectId -> SwaggerForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
+documentationPostH  pid SwaggerForm{swagger_json, from} = do
+ 
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+  let currUserId = sess.userId
+
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Only project memebers can upload swagger"]}|]
@@ -291,10 +307,7 @@ documentationPostH sess pid SwaggerForm{swagger_json, from} = do
               , swaggerJson = value
               }
 
-      swaggers <- liftIO
-        $ withPool
-          pool
-          do
+      swaggers <- dbtToEff do
             Swaggers.addSwagger swaggerToAdd
             Swaggers.swaggersByProject pid
 
@@ -302,15 +315,22 @@ documentationPostH sess pid SwaggerForm{swagger_json, from} = do
       pure $ addHeader hxTriggerData ""
 
 
-documentationGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> DashboardM (Html ())
-documentationGetH sess pid swagger_id = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+documentationGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (Html ())
+documentationGetH pid swagger_id = do
+ 
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+  let currUserId = sess.userId
+
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then pure $ userNotMemeberPage sess
     else do
-      (project, swaggers, swagger, swaggerId) <- liftIO
-        $ withPool pool do
+      (project, swaggers, swagger, swaggerId) <- dbtToEff do 
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
           swaggers <- Swaggers.swaggersByProject pid
           currentSwagger <- join <$> mapM Swaggers.getSwaggerById swagger_id

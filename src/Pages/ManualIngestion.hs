@@ -17,7 +17,11 @@ import NeatInterpolation
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.NonMember
 import ProcessMessage qualified
-import Relude
+import Relude hiding (ask, asks)
+import System.Types
+import Effectful.Reader.Static (ask, asks)
+import Effectful.PostgreSQL.Transact.Effect
+import Relude.Unsafe qualified as Unsafe
 import RequestMessages qualified
 import Utils
 import Web.FormUrlEncoded (FromForm)
@@ -85,40 +89,49 @@ reqMsgFormToReqMsg pid RequestMessageForm{urlPath, ..} = do
 -- - preload the form wiht the data from the last submitted and persisted request dump from the database.
 -- - [x] document how to access this page from within the github readme.
 -- - [FUTURE] If we ever have a super admin, it should be possible to access this page directly from there for any given company.
-manualIngestPostH :: Sessions.PersistentSession -> Projects.ProjectId -> RequestMessageForm -> DashboardM (Html ())
-manualIngestPostH sess pid reqMF = do
+manualIngestPostH ::  Projects.ProjectId -> RequestMessageForm -> ATAuthCtx (Html ())
+manualIngestPostH pid reqMF = do
+
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let env = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+  let currUserId = sess.userId
+
+
   logger <- asks logger
-  pool <- asks pool
-  env <- asks env
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
       projectCache <- asks projectCache
-      project <-
-        liftIO
-          $ withPool pool
-          $ Projects.selectProjectForUser (Sessions.userId sess, pid)
+      project <- dbtToEff $ Projects.selectProjectForUser (Sessions.userId sess, pid)
       case reqMsgFormToReqMsg (Projects.unProjectId pid) reqMF of
         Left err -> liftIO $ logger <& "error parsing manualIngestPost req Message; " <> show err
-        Right reqM -> void $ liftIO $ ProcessMessage.processMessages' logger env pool [Right (Just "", reqM)] projectCache
+        Right reqM -> void $ liftIO $ ProcessMessage.processMessages' logger env appCtx.pool [Right (Just "", reqM)] projectCache
 
       pure manualIngestPage
 
 
-manualIngestGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
-manualIngestGetH sess pid = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+manualIngestGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
+manualIngestGetH pid = do
+
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let env = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+  let currUserId = sess.userId
+
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
-      project <-
-        liftIO
-          $ withPool pool
-          $ Projects.selectProjectForUser (Sessions.userId sess, pid)
+      project <- dbtToEff $ Projects.selectProjectForUser (Sessions.userId sess, pid)
 
       let bwconf =
             (def :: BWConfig)

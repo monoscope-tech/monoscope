@@ -3,6 +3,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module Models.Projects.ProjectApiKeys (
   ProjectApiKey (..),
@@ -42,9 +43,7 @@ import Servant.API (FromHttpApiData)
 
 newtype ProjectApiKeyId = ProjectApiKeyId {unProjectApiKeyId :: UUID.UUID}
   deriving stock (Generic, Show)
-  deriving
-    (FromField, ToField, FromHttpApiData, Default)
-    via UUID.UUID
+  deriving newtype (FromField, ToField, FromHttpApiData, Default, NFData)
   deriving anyclass (FromRow, ToRow)
 
 
@@ -63,7 +62,7 @@ data ProjectApiKey = ProjectApiKey
   , keyPrefix :: Text
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow)
+  deriving anyclass (FromRow, ToRow, NFData)
   deriving (Entity) via (GenericEntity '[Schema "projects", TableName "project_api_keys", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ProjectApiKey)
 
 
@@ -94,6 +93,7 @@ revokeApiKey kid = do
   where
     q =
       [sql| UPDATE projects.project_api_keys SET deleted_at=NOW(), active=false where id=?;|]
+
 countProjectApiKeysByProjectId :: Projects.ProjectId -> DBT IO Int
 countProjectApiKeysByProjectId pid = do
   result <- query Select q pid

@@ -33,7 +33,7 @@ import Pages.Charts.Charts qualified as C
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (statBox)
 import Pages.Endpoints.EndpointList (renderEndpoint)
-import Relude hiding (max, min)
+import Relude hiding (max, min, ask, asks)
 import Servant (
   Union,
   WithStatus (..),
@@ -43,6 +43,12 @@ import System.Clock
 import Text.Interpolation.Nyan
 import Utils (GetOrRedirect, deleteParam, faIcon_, mIcon_, redirect)
 import Witch (from)
+import System.Types
+import Effectful.Reader.Static (ask, asks)
+import Effectful.PostgreSQL.Transact.Effect
+import Relude.Unsafe qualified as Unsafe
+
+
 
 
 timePickerItems :: [(Text, Text)]
@@ -62,14 +68,20 @@ data ParamInput = ParamInput
   }
 
 
-dashboardGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Union GetOrRedirect)
-dashboardGetH sess pid fromDStr toDStr sinceStr' = do
-  pool <- asks pool
+dashboardGetH ::  Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Union GetOrRedirect)
+dashboardGetH  pid fromDStr toDStr sinceStr' = do
+ 
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+  let currUserId = sess.userId
+
+
   now <- liftIO getCurrentTime
   let sinceStr = if isNothing fromDStr && isNothing toDStr && isNothing sinceStr' || fromDStr == Just "" then Just "7D" else sinceStr'
-  (hasApikeys, hasRequest, newEndpoints) <- liftIO
-    $ withPool pool
-    $ do
+  (hasApikeys, hasRequest, newEndpoints) <- dbtToEff do
       apiKeys <- ProjectApiKeys.countProjectApiKeysByProjectId pid
       requestDumps <- RequestDumps.countRequestDumpByProject pid
       newEndpoints <- Endpoints.endpointRequestStatsByProject pid False False Nothing
@@ -90,10 +102,7 @@ dashboardGetH sess pid fromDStr toDStr sinceStr' = do
           (f, t)
 
   startTime <- liftIO $ getTime Monotonic
-  (project, projectRequestStats, reqLatenciesRolledByStepsLabeled) <- liftIO
-    $ withPool
-      pool
-      do
+  (project, projectRequestStats, reqLatenciesRolledByStepsLabeled) <- dbtToEff do
         project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
 
         projectRequestStats <- fromMaybe (def :: Projects.ProjectRequestStats) <$> Projects.projectRequestStatsByProject pid

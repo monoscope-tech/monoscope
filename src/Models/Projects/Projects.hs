@@ -319,7 +319,7 @@ data ProjectRequestStats = ProjectRequestStats
   , requestsPerMinLastWeek :: Int
   }
   deriving stock (Show, Generic, Eq)
-  deriving anyclass (FromRow, ToRow, Default)
+  deriving anyclass (FromRow, ToRow, Default, NFData)
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "project_request_stats", PrimaryKey "project_id", FieldModifiers '[CamelToSnake]] ProjectRequestStats)
 
 
