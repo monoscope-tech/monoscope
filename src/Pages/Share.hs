@@ -1,6 +1,6 @@
 module Pages.Share (ReqForm, shareLinkPostH, shareLinkGetH) where
 
-import Config
+import System.Config
 import Data.Aeson as Aeson
 import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)

@@ -2,7 +2,7 @@
 
 module Pages.Documentation (documentationGetH, documentationPostH, documentationPutH, SwaggerForm, SaveSwaggerForm) where
 
-import Config
+import System.Config
 import Data.Aeson (FromJSON, ToJSON, decodeStrict, encode)
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)

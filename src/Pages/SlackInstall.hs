@@ -3,7 +3,7 @@
 
 module Pages.SlackInstall (getH, linkProjectsGetH, linkProjectGetH, postH, LinkProjectsForm, updateWebHook) where
 
-import Config
+import System.Config
 import Control.Lens ((.~), (^.))
 import Data.Aeson
 import Data.Default

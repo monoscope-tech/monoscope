@@ -1,10 +1,10 @@
 {-# LANGUAGE UndecidableInstances #-}
 
-module Server (app) where
+module Server  where
 
 import Colog (LogAction)
-import Config (DashboardM, ctxToHandler, pool)
-import Config qualified
+import System.Config (DashboardM, ctxToHandler, pool)
+import System.Config qualified as Config
 import Data.Aeson (FromJSON)
 import Data.Aeson qualified as AE
 import Data.Aeson.Types (ToJSON)
@@ -59,239 +59,202 @@ import Servant.HTML.Lucid
 import Servant.Htmx
 import Servant.Server.Experimental.Auth (AuthHandler, AuthServerData)
 import Utils
-import Web.Auth (authCallbackH, genAuthServerContext, loginH, loginRedirectH, logoutH)
+-- import Web.Auth (authCallbackH, genAuthServerContext, loginH, loginRedirectH, logoutH)
+import Web.Auth (authCallbackH, loginH, loginRedirectH, logoutH)
 import Web.ClientMetadata qualified as ClientMetadata
 import Web.Cookie (SetCookie)
 import Witch (from)
 
 
-type GetRedirect = Verb 'GET 302
+-- type GetRedirect = Verb 'GET 302
 
 
--- When bystring is returned for json, simply return the bytestring
-instance MimeRender JSON ByteString where
-  mimeRender _ = from @ByteString
+-- -- When bystring is returned for json, simply return the bytestring
+-- instance MimeRender JSON ByteString where
+--   mimeRender _ = from @ByteString
 
 
-type QP a b = QueryParam a b
+-- type QP a b = QueryParam a b
 
 
-type QPT a = QueryParam a Text
+-- type QPT a = QueryParam a Text
 
 
-type QPU a = QueryParam a UTCTime
+-- type QPU a = QueryParam a UTCTime
 
 
-type QPB a = QueryParam a Bool
+-- type QPB a = QueryParam a Bool
 
 
-type QPI a = QueryParam a Int
+-- type QPI a = QueryParam a Int
 
 
-type QEID a = QueryParam a Endpoints.EndpointId
+-- type QEID a = QueryParam a Endpoints.EndpointId
 
 
-type ProjectId = Capture "projectID" Projects.ProjectId
+-- type ProjectId = Capture "projectID" Projects.ProjectId
 
 
---
--- API Section
-type ProtectedAPI =
-  UVerb 'GET '[HTML] GetOrRedirect
-    :<|> "p" :> "new" :> Get '[HTML] (Html ()) -- p represents project
-    :<|> "p" :> "new" :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
-    :<|> "p" :> ProjectId :> "onboarding" :> QPB "polling" :> QPB "redirected" :> QPT "current_tab" :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> QPT "from" :> QPT "to" :> QPT "since" :> UVerb 'GET '[HTML] GetOrRedirect
-    :<|> "p" :> ProjectId :> "settings" :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "delete" :> Get '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
-    :<|> "p" :> ProjectId :> "manage_members" :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "manage_members" :> ReqBody '[FormUrlEncoded] ManageMembersForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-    :<|> "p" :> ProjectId :> "endpoints" :> QPT "layout" :> QPT "ackd" :> QPT "archived" :> QPT "host" :> QPT "project_host" :> QPT "sort" :> HXRequest :> HXBoosted :> HXCurrentURL :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "endpoints" :> Capture "endpoints_id" Endpoints.EndpointId :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "subpage" :> QPT "shape" :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "apis" :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Api.GenerateAPIKeyForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-    :<|> "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Delete '[HTML] (Headers '[HXTrigger] (Html ()))
-    :<|> "p" :> ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "manual_ingest" :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "manual_ingest" :> ReqBody '[FormUrlEncoded] RequestMessageForm :> Post '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "log_explorer" :> QPT "query" :> QPT "cols" :> QPU "cursor" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "layout" :> HXRequest :> HXBoosted :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> "detailed" :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "log_explorer" :> "endpoint" :> Capture "endpoint_hash" Text :> Get '[HTML] (Headers '[HXRedirect] (Html ()))
-    :<|> "p" :> ProjectId :> "bulk_seed_and_ingest" :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "bulk_seed_and_ingest" :> ReqBody '[FormUrlEncoded] DataSeeding.DataSeedingForm :> Post '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "anomalies" :> QPT "layout" :> QPT "ackd" :> QPT "archived" :> QPT "sort" :> QPT "page" :> QPT "load_more" :> QEID "endpoint" :> HXRequest :> HXBoosted :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "anomalies" :> "bulk_actions" :> Capture "action" Text :> ReqBody '[FormUrlEncoded] AnomalyBulkForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-    :<|> "p" :> ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "acknowlege" :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "unacknowlege" :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "archive" :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "unarchive" :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "anomaly" :> Capture "targetHash" Text :> QPT "modal" :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "redacted_fields" :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "redacted_fields" :> ReqBody '[FormUrlEncoded] RedactFieldForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-    :<|> "p" :> ProjectId :> "charts_html" :> "throughput" :> QPT "id" :> QPT "group_by" :> QPT "endpoint_hash" :> QPT "shape_hash" :> QPT "format_hash" :> QPT "status_code_gt" :> QPI "num_slots" :> QPI "limit" :> QPB "show_legend" :> QPT "from" :> QPT "to" :> QPT "theme" :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "documentation" :> QPT "swagger_id" :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "documentation" :> ReqBody '[FormUrlEncoded] SwaggerForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-    :<|> "p" :> ProjectId :> "documentation" :> "save" :> ReqBody '[JSON] SaveSwaggerForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-    :<|> "p" :> ProjectId :> "generate_swagger" :> Get '[JSON] AE.Value
-    :<|> "p" :> ProjectId :> "reports" :> QPT "page" :> HXRequest :> HXBoosted :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "reports" :> Capture "report_id" Reports.ReportId :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "survey" :> ReqBody '[FormUrlEncoded] Survey.SurveyForm :> Post '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
-    :<|> "p" :> ProjectId :> "reports_notif" :> Capture "report_type" Text :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-    :<|> "charts_html" :> QP "chart_type" Charts.ChartType :> QP "group_by" Charts.GroupBy :> QP "query_by" [Charts.QueryBy] :> QP "num_slots" Int :> QP "limit" Int :> QP "theme" Text :> QPT "id" :> QP "show_legend" Bool :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "about_project" :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "share" :> ReqBody '[FormUrlEncoded] Share.ReqForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-    :<|> "p" :> ProjectId :> "outgoing" :> Get '[HTML] (Html ())
-    :<|> "p" :> ProjectId :> "query_builder" :> "autocomplete" :> QPT "category" :> QPT "prefix" :> Get '[JSON] AE.Value
-    :<|> "slack" :> "link-projects" :> QPT "code" :> Get '[HTML] (Html ())
-    :<|> "slack" :> "link-projects" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-    :<|> "p" :> ProjectId :> "notifications-channels" :> ReqBody '[FormUrlEncoded] CreateProject.NotifListForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-    :<|> "p" :> ProjectId :> "slack" :> "webhook" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
+-- --
+-- -- API Section
+-- type ProtectedAPI =
+--     :<|> "p" :> ProjectId :> QPT "from" :> QPT "to" :> QPT "since" :> UVerb 'GET '[HTML] GetOrRedirect
+--     :<|> "p" :> ProjectId :> "delete" :> Get '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
+--     :<|> "p" :> ProjectId :> "endpoints" :> QPT "layout" :> QPT "ackd" :> QPT "archived" :> QPT "host" :> QPT "project_host" :> QPT "sort" :> HXRequest :> HXBoosted :> HXCurrentURL :> Get '[HTML] (Html ())
+--     :<|> "p" :> ProjectId :> "endpoints" :> Capture "endpoints_id" Endpoints.EndpointId :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "subpage" :> QPT "shape" :> Get '[HTML] (Html ())
+--     :<|> "p" :> ProjectId :> "apis" :> Get '[HTML] (Html ())
+--     :<|> "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Api.GenerateAPIKeyForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
+--     :<|> "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Delete '[HTML] (Headers '[HXTrigger] (Html ()))
+--     :<|> "p" :> ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> Get '[HTML] (Html ())
+--     :<|> "p" :> ProjectId :> "manual_ingest" :> Get '[HTML] (Html ())
+--     :<|> "p" :> ProjectId :> "manual_ingest" :> ReqBody '[FormUrlEncoded] RequestMessageForm :> Post '[HTML] (Html ())
+--     :<|> "p" :> ProjectId :> "log_explorer" :> "endpoint" :> Capture "endpoint_hash" Text :> Get '[HTML] (Headers '[HXRedirect] (Html ()))
+--     :<|> "p" :> ProjectId :> "bulk_seed_and_ingest" :> Get '[HTML] (Html ())
+--     :<|> "p" :> ProjectId :> "bulk_seed_and_ingest" :> ReqBody '[FormUrlEncoded] DataSeeding.DataSeedingForm :> Post '[HTML] (Html ())
+--     :<|> "p" :> ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "unarchive" :> Get '[HTML] (Html ())
+--     :<|> "p" :> ProjectId :> "anomaly" :> Capture "targetHash" Text :> QPT "modal" :> Get '[HTML] (Html ())
+--     :<|> "p" :> ProjectId :> "redacted_fields" :> Get '[HTML] (Html ())
+--     :<|> "p" :> ProjectId :> "redacted_fields" :> ReqBody '[FormUrlEncoded] RedactFieldForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
+--     :<|> "p" :> ProjectId :> "charts_html" :> "throughput" :> QPT "id" :> QPT "group_by" :> QPT "endpoint_hash" :> QPT "shape_hash" :> QPT "format_hash" :> QPT "status_code_gt" :> QPI "num_slots" :> QPI "limit" :> QPB "show_legend" :> QPT "from" :> QPT "to" :> QPT "theme" :> Get '[HTML] (Html ())
+--     :<|> "p" :> ProjectId :> "documentation" :> QPT "swagger_id" :> Get '[HTML] (Html ())
+--     :<|> "p" :> ProjectId :> "documentation" :> ReqBody '[FormUrlEncoded] SwaggerForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
+--     :<|> "p" :> ProjectId :> "documentation" :> "save" :> ReqBody '[JSON] SaveSwaggerForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
+--     :<|> "p" :> ProjectId :> "generate_swagger" :> Get '[JSON] AE.Value
+--     :<|> "p" :> ProjectId :> "reports" :> QPT "page" :> HXRequest :> HXBoosted :> Get '[HTML] (Html ())
+--     :<|> "p" :> ProjectId :> "reports" :> Capture "report_id" Reports.ReportId :> Get '[HTML] (Html ())
+--     :<|> "p" :> ProjectId :> "survey" :> ReqBody '[FormUrlEncoded] Survey.SurveyForm :> Post '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
+--     :<|> "p" :> ProjectId :> "reports_notif" :> Capture "report_type" Text :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
+--     :<|> "charts_html" :> QP "chart_type" Charts.ChartType :> QP "group_by" Charts.GroupBy :> QP "query_by" [Charts.QueryBy] :> QP "num_slots" Int :> QP "limit" Int :> QP "theme" Text :> QPT "id" :> QP "show_legend" Bool :> Get '[HTML] (Html ())
+--     :<|> "p" :> ProjectId :> "about_project" :> Get '[HTML] (Html ())
+--     :<|> "p" :> ProjectId :> "share" :> ReqBody '[FormUrlEncoded] Share.ReqForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
+--     :<|> "p" :> ProjectId :> "outgoing" :> Get '[HTML] (Html ())
+--     :<|> "p" :> ProjectId :> "query_builder" :> "autocomplete" :> QPT "category" :> QPT "prefix" :> Get '[JSON] AE.Value
+--     :<|> "slack" :> "link-projects" :> QPT "code" :> Get '[HTML] (Html ())
+--     :<|> "slack" :> "link-projects" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
+--     :<|> "p" :> ProjectId :> "slack" :> "webhook" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
 
 
-type PublicAPI =
-  "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
-    :<|> "to_login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
-    :<|> "logout" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
-    :<|> "auth_callback" :> QPT "code" :> QPT "state" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] (Html ()))
-    -- on the client metadata endpoint we will be passing the authorization token directly to the handler,
-    -- and perfoming all the auth logic at the handler level. This is because the clients will only call this endpoint,
-    -- so it doesnt need an exclusive robust authorization middleware solution.
-    :<|> "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] ClientMetadata.ClientMetadata
-    :<|> "status" :> Get '[JSON] Status
-    :<|> "ping" :> Get '[PlainText] Text
-    :<|> "share" :> "r" :> Capture "shareID" UUID.UUID :> Get '[HTML] (Html ())
-    :<|> "slack" :> "oauth" :> "callback" :> QPT "code" :> Get '[HTML] (Html ())
-    :<|> "slack" :> "oauth" :> "callback" :> Capture "project_id" Projects.ProjectId :> QPT "code" :> Get '[HTML] (Html ())
-    :<|> Raw
+-- type PublicAPI =
+--   "login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
+--     :<|> "to_login" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
+--     :<|> "logout" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
+--     :<|> "auth_callback" :> QPT "code" :> QPT "state" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] (Html ()))
+--     -- on the client metadata endpoint we will be passing the authorization token directly to the handler,
+--     -- and perfoming all the auth logic at the handler level. This is because the clients will only call this endpoint,
+--     -- so it doesnt need an exclusive robust authorization middleware solution.
+--     :<|> "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] ClientMetadata.ClientMetadata
+--     :<|> "status" :> Get '[JSON] Status
+--     :<|> "ping" :> Get '[PlainText] Text
+--     :<|> "share" :> "r" :> Capture "shareID" UUID.UUID :> Get '[HTML] (Html ())
+--     :<|> "slack" :> "oauth" :> "callback" :> QPT "code" :> Get '[HTML] (Html ())
+--     :<|> "slack" :> "oauth" :> "callback" :> Capture "project_id" Projects.ProjectId :> QPT "code" :> Get '[HTML] (Html ())
+--     :<|> Raw
 
 
-type API =
-  AuthProtect "apitoolkit_session" :> ProtectedAPI
-    :<|> PublicAPI
+-- -- | Our API, where we provide all the author-supplied handlers for each end
+-- -- point. Note that 'privateDataFunc' is a function that takes 'Account' as an
+-- -- argument. We don't worry about the authentication instrumentation here,
+-- -- that is taken care of by supplying context
+-- protectedServer :: Sessions.PersistentSession -> ServerT ProtectedAPI DashboardM
+-- protectedServer sess =
+--   ListProjects.listProjectsGetH sess
+--     :<|> CreateProject.createProjectGetH sess
+--     :<|> CreateProject.createProjectPostH sess
+--     :<|> Onboarding.onboardingGetH sess
+--     :<|> Dashboard.dashboardGetH sess
+--     :<|> CreateProject.projectSettingsGetH sess
+--     :<|> CreateProject.deleteProjectGetH sess
+--     :<|> ManageMembers.manageMembersGetH sess
+--     :<|> ManageMembers.manageMembersPostH sess
+--     :<|> EndpointList.endpointListGetH sess
+--     :<|> EndpointDetails.endpointDetailsH sess
+--     :<|> Api.apiGetH sess
+--     :<|> Api.apiPostH sess
+--     :<|> Api.apiDeleteH sess
+--     :<|> EndpointDetails.fieldDetailsPartialH sess
+--     :<|> ManualIngestion.manualIngestGetH sess
+--     :<|> ManualIngestion.manualIngestPostH sess
+--     :<|> Log.apiLogH sess
+--     :<|> LogItem.apiLogItemH sess
+--     :<|> LogItem.expandAPIlogItemH sess
+--     :<|> EndpointDetails.endpointDetailsWithHashH sess
+--     :<|> DataSeeding.dataSeedingGetH sess
+--     :<|> DataSeeding.dataSeedingPostH sess
+--     :<|> AnomalyList.anomalyListGetH sess
+--     :<|> AnomalyList.anomalyBulkActionsPostH sess
+--     :<|> AnomalyList.acknowlegeAnomalyGetH sess
+--     :<|> AnomalyList.unAcknowlegeAnomalyGetH sess
+--     :<|> AnomalyList.archiveAnomalyGetH sess
+--     :<|> AnomalyList.unArchiveAnomalyGetH sess
+--     :<|> AnomalyList.anomalyDetailsGetH sess
+--     :<|> RedactedFields.redactedFieldsGetH sess
+--     :<|> RedactedFields.redactedFieldsPostH sess
+--     :<|> Charts.throughputEndpointHTML sess
+--     :<|> Documentation.documentationGetH sess
+--     :<|> Documentation.documentationPostH sess
+--     :<|> Documentation.documentationPutH sess
+--     :<|> GenerateSwagger.generateGetH sess
+--     :<|> Reports.reportsGetH sess
+--     :<|> Reports.singleReportGetH sess
+--     :<|> Survey.surveyPutH sess
+--     :<|> Reports.reportsPostH sess
+--     :<|> Charts.chartsGetH sess
+--     :<|> Survey.surveyGetH sess
+--     :<|> Share.shareLinkPostH sess
+--     :<|> outgoingGetH sess
+--     :<|> AutoComplete.getH sess
+--     :<|> SlackInstall.linkProjectsGetH sess
+--     :<|> SlackInstall.postH sess
+--     :<|> CreateProject.updateNotificationsChannel sess
+--     :<|> SlackInstall.updateWebHook sess
 
 
-type instance AuthServerData (AuthProtect "apitoolkit_session") = Sessions.PersistentSession
+-- publicServer :: ServerT PublicAPI DashboardM
+-- publicServer =
+--   loginH
+--     :<|> loginRedirectH
+--     :<|> logoutH
+--     :<|> authCallbackH
+--     :<|> ClientMetadata.clientMetadataH
+--     :<|> statusH
+--     :<|> pingH
+--     :<|> Share.shareLinkGetH
+--     :<|> SlackInstall.getH
+--     :<|> SlackInstall.linkProjectGetH
+--     :<|> serveDirectoryWebApp "./static/public"
 
 
---
---
-app :: LogAction IO String -> Pool Connection -> Config.AuthContext -> Application
-app logger dbConn ctx = serveWithContext api (genAuthServerContext logger dbConn) $ hoistServerWithContext api ctxProxy (ctxToHandler ctx) server
+-- server :: ServerT API DashboardM
+-- server = protectedServer :<|> publicServer
 
 
-api :: Proxy API
-api = Proxy
+-- data Status = Status
+--   { ping :: Text
+--   , dbVersion :: Maybe Text
+--   , gitHash :: Text
+--   , gitCommitDate :: Text
+--   }
+--   deriving stock (Generic)
+--   deriving
+--     (FromJSON, ToJSON)
+--     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Status
 
 
-ctxProxy :: Proxy '[AuthHandler Request Sessions.PersistentSession]
-ctxProxy = Proxy
+-- statusH :: DashboardM Status
+-- statusH = do
+--   pool <- asks pool
+--   let query = [sql| select version(); |]
+--   version <- liftIO $ withPool pool $ queryOne Select query ()
+--   let gi = $$tGitInfoCwd
+--   pure
+--     Status
+--       { ping = "pong"
+--       , dbVersion = version
+--       , gitHash = toText $ giHash gi
+--       , gitCommitDate = toText $ giCommitDate gi
+--       }
 
 
--- | Our API, where we provide all the author-supplied handlers for each end
--- point. Note that 'privateDataFunc' is a function that takes 'Account' as an
--- argument. We don't worry about the authentication instrumentation here,
--- that is taken care of by supplying context
-protectedServer :: Sessions.PersistentSession -> ServerT ProtectedAPI DashboardM
-protectedServer sess =
-  ListProjects.listProjectsGetH sess
-    :<|> CreateProject.createProjectGetH sess
-    :<|> CreateProject.createProjectPostH sess
-    :<|> Onboarding.onboardingGetH sess
-    :<|> Dashboard.dashboardGetH sess
-    :<|> CreateProject.projectSettingsGetH sess
-    :<|> CreateProject.deleteProjectGetH sess
-    :<|> ManageMembers.manageMembersGetH sess
-    :<|> ManageMembers.manageMembersPostH sess
-    :<|> EndpointList.endpointListGetH sess
-    :<|> EndpointDetails.endpointDetailsH sess
-    :<|> Api.apiGetH sess
-    :<|> Api.apiPostH sess
-    :<|> Api.apiDeleteH sess
-    :<|> EndpointDetails.fieldDetailsPartialH sess
-    :<|> ManualIngestion.manualIngestGetH sess
-    :<|> ManualIngestion.manualIngestPostH sess
-    :<|> Log.apiLogH sess
-    :<|> LogItem.apiLogItemH sess
-    :<|> LogItem.expandAPIlogItemH sess
-    :<|> EndpointDetails.endpointDetailsWithHashH sess
-    :<|> DataSeeding.dataSeedingGetH sess
-    :<|> DataSeeding.dataSeedingPostH sess
-    :<|> AnomalyList.anomalyListGetH sess
-    :<|> AnomalyList.anomalyBulkActionsPostH sess
-    :<|> AnomalyList.acknowlegeAnomalyGetH sess
-    :<|> AnomalyList.unAcknowlegeAnomalyGetH sess
-    :<|> AnomalyList.archiveAnomalyGetH sess
-    :<|> AnomalyList.unArchiveAnomalyGetH sess
-    :<|> AnomalyList.anomalyDetailsGetH sess
-    :<|> RedactedFields.redactedFieldsGetH sess
-    :<|> RedactedFields.redactedFieldsPostH sess
-    :<|> Charts.throughputEndpointHTML sess
-    :<|> Documentation.documentationGetH sess
-    :<|> Documentation.documentationPostH sess
-    :<|> Documentation.documentationPutH sess
-    :<|> GenerateSwagger.generateGetH sess
-    :<|> Reports.reportsGetH sess
-    :<|> Reports.singleReportGetH sess
-    :<|> Survey.surveyPutH sess
-    :<|> Reports.reportsPostH sess
-    :<|> Charts.chartsGetH sess
-    :<|> Survey.surveyGetH sess
-    :<|> Share.shareLinkPostH sess
-    :<|> outgoingGetH sess
-    :<|> AutoComplete.getH sess
-    :<|> SlackInstall.linkProjectsGetH sess
-    :<|> SlackInstall.postH sess
-    :<|> CreateProject.updateNotificationsChannel sess
-    :<|> SlackInstall.updateWebHook sess
-
-
-publicServer :: ServerT PublicAPI DashboardM
-publicServer =
-  loginH
-    :<|> loginRedirectH
-    :<|> logoutH
-    :<|> authCallbackH
-    :<|> ClientMetadata.clientMetadataH
-    :<|> statusH
-    :<|> pingH
-    :<|> Share.shareLinkGetH
-    :<|> SlackInstall.getH
-    :<|> SlackInstall.linkProjectGetH
-    :<|> serveDirectoryWebApp "./static/public"
-
-
-server :: ServerT API DashboardM
-server = protectedServer :<|> publicServer
-
-
-data Status = Status
-  { ping :: Text
-  , dbVersion :: Maybe Text
-  , gitHash :: Text
-  , gitCommitDate :: Text
-  }
-  deriving stock (Generic)
-  deriving
-    (FromJSON, ToJSON)
-    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Status
-
-
-statusH :: DashboardM Status
-statusH = do
-  pool <- asks pool
-  let query = [sql| select version(); |]
-  version <- liftIO $ withPool pool $ queryOne Select query ()
-  let gi = $$tGitInfoCwd
-  pure
-    Status
-      { ping = "pong"
-      , dbVersion = version
-      , gitHash = toText $ giHash gi
-      , gitCommitDate = toText $ giCommitDate gi
-      }
-
-
-pingH :: DashboardM Text
-pingH = do
-  pure "pong"
+-- pingH :: DashboardM Text
+-- pingH = do
+--   pure "pong"

@@ -1,6 +1,6 @@
 module Pages.Outgoing (outgoingGetH) where
 
-import Config
+import System.Config
 import Data.Default (def)
 import Data.Text qualified as T
 import Data.Vector qualified as V

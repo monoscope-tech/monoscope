@@ -47,6 +47,20 @@ packages:
   original:
     hackage: resource-pool-0.4.0.0
 - completed:
+    hackage: log-effectful-1.0.0.0@sha256:126f328c9325c10998289378191dc69e55b5ffdc37a7845f2d0ee57f6f13392e,2433
+    pantry-tree:
+      sha256: e22a70263da683f2a289c9e514fd4ef32dcc3cc9b54d1c6fe04299736cc88493
+      size: 325
+  original:
+    hackage: log-effectful-1.0.0.0@sha256:126f328c9325c10998289378191dc69e55b5ffdc37a7845f2d0ee57f6f13392e,2433
+- completed:
+    hackage: monad-time-effectful-1.0.0.0@sha256:4994617545bb4b25ba01eaf2bdb1c2c74f7cefab36945af8eb92dca9842fc4b6,1528
+    pantry-tree:
+      sha256: ca2ac18b97169e7734e190d2a0175ae1f6de7a2d2f355514250ab2625de36942
+      size: 279
+  original:
+    hackage: monad-time-effectful-1.0.0.0@sha256:4994617545bb4b25ba01eaf2bdb1c2c74f7cefab36945af8eb92dca9842fc4b6,1528
+- completed:
     hackage: lucid-aria-0.1.0.1@sha256:d4f37b67a28f2e38eb3cf9fca4cbed5dcc6bf335c880113c618ca50fa933cd40,920
     pantry-tree:
       sha256: 86dc56b3e719f1cd436a3efad829cfd0fa75a29c8bdbbb9e866ec8d2ea96cac7
@@ -207,6 +221,26 @@ packages:
       size: 1796
   original:
     hackage: primitive-unlifted-2.1.0.0@sha256:4a6fb2fc5836b18b217b814931472a0b1a84df03b45955b236c80291f1f46893,2326
+- completed:
+    hackage: wai-log-0.4.0.1@sha256:0b4b57ae218cf5ec59523c8cf405802a588d4e299436b5a663a6001ea34bb7e6,1583
+    pantry-tree:
+      sha256: 5c7291eaeb35ed9fb2c77a29ed2bc8b3e63c44247522e91ba426418cac66459d
+      size: 412
+  original:
+    hackage: wai-log-0.4.0.1@sha256:0b4b57ae218cf5ec59523c8cf405802a588d4e299436b5a663a6001ea34bb7e6,1583
+- completed:
+    commit: d296ec54cbdfd2e7b3a822cdb759daf761d6f24b
+    git: https://github.com/Kleidukos/pg-transact-effectful
+    name: pg-transact-effectful
+    pantry-tree:
+      sha256: 6e4593afa2c947c090b3cac4016a329eca0432247119bb2d95547879081cfb4f
+      size: 964
+    subdir: .
+    version: 0.0.1.0
+  original:
+    commit: d296ec54cbdfd2e7b3a822cdb759daf761d6f24b
+    git: https://github.com/Kleidukos/pg-transact-effectful
+    subdir: .
 - completed:
     commit: 5787946c3c89c9b608f4d5308d2a27cc9a27761f
     git: https://github.com/kowainik/typerep-map

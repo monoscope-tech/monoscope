@@ -1,6 +1,6 @@
 module Pages.Dashboard (dashboardGetH) where
 
-import Config
+import System.Config
 import Data.Aeson qualified as AE
 import Data.Default (def)
 import Data.Time (

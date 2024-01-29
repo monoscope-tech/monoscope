@@ -1,6 +1,6 @@
 module Pages.Endpoints.EndpointList (endpointListGetH, renderEndpoint) where
 
-import Config
+import System.Config
 import Data.Default (def)
 import Data.Text (toLower)
 import Data.Text qualified as T

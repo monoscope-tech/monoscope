@@ -3,7 +3,7 @@
 module DataSeeding (parseConfigToJson, dataSeedingGetH, dataSeedingPostH, DataSeedingForm) where
 
 import Colog ((<&))
-import Config (DashboardM, env, logger, pool, projectCache)
+import System.Config (DashboardM, env, logger, pool, projectCache)
 import Data.Aeson qualified as AE
 import Data.ByteString.Base64 qualified as B64
 import Data.Default (def)

@@ -1,6 +1,6 @@
 module Pages.LogExplorer.LogItem where
 
-import Config
+import System.Config
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEK
 import Data.ByteString.Lazy qualified as BS
@@ -23,15 +23,29 @@ import Network.URI (escapeURIString, isUnescapedInURI, isUnreserved)
 import Pages.Components qualified as Components
 import Pages.NonMember
 import PyF
-import Relude
 import System.Clock
 import Utils
+import Relude hiding (ask, asks)
+import System.Types
+import Effectful.Reader.Static (ask, asks)
+import Effectful.PostgreSQL.Transact.Effect
+import Relude.Unsafe qualified as Unsafe
 
 
-expandAPIlogItemH :: Sessions.PersistentSession -> Projects.ProjectId -> UUID.UUID -> UTCTime -> DashboardM (Html ())
-expandAPIlogItemH sess pid rdId createdAt = do
-  pool <- asks pool
-  logItemM <- liftIO $ withPool pool $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
+
+
+expandAPIlogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATAuthCtx (Html ())
+expandAPIlogItemH  pid rdId createdAt = do
+ 
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+  let currUserId = sess.userId
+
+
+  logItemM <- dbtToEff $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
   let content = case logItemM of
         Just req -> expandAPIlogItem' pid req True
         Nothing -> div_ [class_ "h-full flex flex-col justify-center items-center"] do
@@ -194,15 +208,24 @@ function expireChanged(event) {
   |]
 
 
-apiLogItemH :: Sessions.PersistentSession -> Projects.ProjectId -> UUID.UUID -> UTCTime -> DashboardM (Html ())
-apiLogItemH sess pid rdId createdAt = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+apiLogItemH ::  Projects.ProjectId -> UUID.UUID -> UTCTime -> ATAuthCtx (Html ())
+apiLogItemH pid rdId createdAt = do
+
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+  let currUserId = sess.userId
+
+
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
-      logItemM <- liftIO $ withPool pool $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
+      logItemM <- dbtToEff $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
       let content = case logItemM of
             Just req -> apiLogItemView req (RequestDumps.requestDumpLogItemUrlPath pid req)
             Nothing -> div_ "invalid log request ID"

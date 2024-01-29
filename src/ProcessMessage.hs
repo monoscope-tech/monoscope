@@ -4,7 +4,7 @@ module ProcessMessage (
 ) where
 
 import Colog.Core (LogAction (..), (<&))
-import Config qualified
+import System.Config qualified as Config
 import Control.Exception (try)
 import Control.Lens ((^?), _Just)
 import Control.Monad.Trans.Except (except, throwE)

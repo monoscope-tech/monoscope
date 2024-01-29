@@ -46,6 +46,7 @@ default-extensions:
   - LambdaCase
   - MultiParamTypeClasses
   - NamedFieldPuns
+  - FlexibleContexts
   - NoImplicitPrelude
   - OverloadedLabels
   - OverloadedLists
@@ -78,13 +79,25 @@ description: Please see the README on GitHub at <https://github.com/githubuser/a
 library:
   source-dirs: src
   dependencies:
+    - colourista
+    - effectful
+    - effectful-core
+    - monad-time-effectful
+    - monad-time
+    - wai-log
+    - pg-transact-effectful
+    - log-base
+    - log-effectful
     - HaskellNet
     - Unique
     - aeson
     - aeson-qq
     - async
     - base
+    - bytestring
     - base64
+    - mtl
+    - http-types
     - cache >= 0.1.3.0
     - case-insensitive
     - clock
@@ -92,6 +105,7 @@ library:
     - co-log-core
     - containers
     - cookie
+    - safe-exceptions
     - cryptonite
     - data-default
     - deriving-aeson

@@ -1,4 +1,5 @@
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 module Models.Projects.Projects (
@@ -51,6 +52,7 @@ newtype ProjectId = ProjectId {unProjectId :: UUID.UUID}
   deriving
     (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default, Hashable)
     via UUID.UUID
+  deriving newtype (NFData)
   deriving anyclass (FromRow, ToRow)
 
 
@@ -70,6 +72,7 @@ data NotificationChannel
   = NEmail
   | NSlack
   deriving stock (Eq, Generic, Show)
+  deriving anyclass (NFData)
 
 
 instance ToJSON NotificationChannel where
@@ -118,7 +121,7 @@ data Project = Project
   , notificationsChannel :: Vector NotificationChannel
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromRow)
+  deriving anyclass (FromRow, NFData)
   deriving
     (FromJSON, ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Project

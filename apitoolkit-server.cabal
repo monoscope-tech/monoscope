@@ -25,7 +25,6 @@ source-repository head
 library
   exposed-modules:
       BackgroundJobs
-      Config
       Data.Default.Instances
       DataSeeding
       DataSeedingSpec
@@ -48,6 +47,7 @@ library
       Models.Projects.SwaggersSpec
       Models.Users.Sessions
       Models.Users.Users
+      Network.Wai.Middleware.Heartbeat
       Pages.Anomalies.AnomalyList
       Pages.Api
       Pages.AutoComplete
@@ -94,9 +94,15 @@ library
       SessionCookies
       Spec
       Start
+      System.Config
+      System.Logging
+      System.Server
+      System.Types
       Utils
       Web.Auth
       Web.ClientMetadata
+      Web.Error
+      Web.Routes
   other-modules:
       Paths_apitoolkit_server
   hs-source-dirs:
@@ -117,6 +123,7 @@ library
       LambdaCase
       MultiParamTypeClasses
       NamedFieldPuns
+      FlexibleContexts
       NoImplicitPrelude
       OverloadedLabels
       OverloadedLists
@@ -141,11 +148,13 @@ library
     , async
     , base
     , base64
+    , bytestring
     , cache >=0.1.3.0
     , case-insensitive
     , clock
     , co-log
     , co-log-core
+    , colourista
     , containers
     , cookie
     , cryptonite
@@ -153,6 +162,8 @@ library
     , deriving-aeson
     , directory
     , dotenv
+    , effectful
+    , effectful-core
     , envy
     , errors
     , extra
@@ -166,14 +177,20 @@ library
     , hspec
     , hspec-expectations-json
     , http-api-data
+    , http-types
     , lens
     , lens-aeson
+    , log-base
+    , log-effectful
     , lucid
     , lucid-aria
     , lucid-htmx
     , lucid-hyperscript
     , lucid-svg
     , megaparsec
+    , monad-time
+    , monad-time-effectful
+    , mtl
     , neat-interpolation
     , network-uri
     , nyan-interpolation
@@ -183,6 +200,7 @@ library
     , parser-combinators
     , pg-entity
     , pg-transact
+    , pg-transact-effectful
     , postgresql-migration
     , postgresql-simple
     , pretty-relative-time
@@ -192,6 +210,7 @@ library
     , relude >=1.2.0.0
     , resource-pool
     , resourcet
+    , safe-exceptions
     , scientific
     , sendgrid-v3 >=0.3.0.0
     , servant
@@ -210,6 +229,7 @@ library
     , valor >=1.0.0.0
     , vector
     , wai
+    , wai-log
     , warp
     , witch
     , wreq
@@ -237,6 +257,7 @@ executable apitoolkit-server-exe
       LambdaCase
       MultiParamTypeClasses
       NamedFieldPuns
+      FlexibleContexts
       NoImplicitPrelude
       OverloadedLabels
       OverloadedLists
@@ -280,6 +301,7 @@ test-suite doctests
       LambdaCase
       MultiParamTypeClasses
       NamedFieldPuns
+      FlexibleContexts
       NoImplicitPrelude
       OverloadedLabels
       OverloadedLists
@@ -327,6 +349,7 @@ test-suite tests
       LambdaCase
       MultiParamTypeClasses
       NamedFieldPuns
+      FlexibleContexts
       NoImplicitPrelude
       OverloadedLabels
       OverloadedLists

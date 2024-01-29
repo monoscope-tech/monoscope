@@ -93,6 +93,7 @@ data SDKTypes
   | PhpSlim
   | GuzzleOutgoing
   deriving stock (Show, Generic, Read, Eq)
+  deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SDKTypes
 
 
@@ -113,6 +114,7 @@ data RequestTypes
   | Outgoing
   | Background
   deriving stock (Show, Generic, Read, Eq)
+  deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestTypes
 
 
@@ -206,6 +208,7 @@ data ATError = ATError
   , stackTrace :: Text
   }
   deriving stock (Show, Generic, Eq)
+  deriving anyclass (NFData)
   deriving
     (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATError
@@ -255,7 +258,7 @@ data RequestDump = RequestDump
   , requestType :: RequestTypes
   }
   deriving stock (Show, Generic, Eq)
-  deriving anyclass (ToRow, FromRow)
+  deriving anyclass (ToRow, FromRow, NFData)
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "request_dumps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] RequestDump)
@@ -274,7 +277,7 @@ data RequestForReport = RequestForReport
   , averageDuration :: Integer
   }
   deriving stock (Show, Generic, Eq)
-  deriving anyclass (ToRow, FromRow)
+  deriving anyclass (ToRow, FromRow, NFData)
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "request_dumps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] RequestForReport)
@@ -285,7 +288,7 @@ data EndpointPerf = EndpointPerf
   , averageDuration :: Integer
   }
   deriving stock (Show, Generic, Eq)
-  deriving anyclass (ToRow, FromRow)
+  deriving anyclass (ToRow, FromRow, NFData)
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "request_dumps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] EndpointPerf)
@@ -325,7 +328,7 @@ data RequestDumpLogItem = RequestDumpLogItem
   , requestType :: RequestTypes
   }
   deriving stock (Show, Generic, Eq)
-  deriving anyclass (ToRow, FromRow)
+  deriving anyclass (ToRow, FromRow, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestDumpLogItem
 
 

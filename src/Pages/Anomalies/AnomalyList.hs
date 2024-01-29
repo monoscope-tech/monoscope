@@ -12,7 +12,7 @@ module Pages.Anomalies.AnomalyList (
   anomalyArchiveButton,
 ) where
 
-import Config
+import System.Config
 import Data.Aeson (encode)
 import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
@@ -52,13 +52,16 @@ import Pages.Components qualified as Components
 import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
 import Pages.NonMember
 import Pkg.Components (loader)
-import Relude
-import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils
 import Web.FormUrlEncoded (FromForm)
+import Relude hiding (ask, asks)
+import System.Types
+import Effectful.Reader.Static (ask, asks)
+import Effectful.PostgreSQL.Transact.Effect
+import Relude.Unsafe qualified as Unsafe
 
 
 newtype AnomalyBulkForm = AnomalyBulk
@@ -68,72 +71,108 @@ newtype AnomalyBulkForm = AnomalyBulk
   deriving anyclass (FromForm)
 
 
-acknowlegeAnomalyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Anomalies.AnomalyId -> DashboardM (Html ())
-acknowlegeAnomalyGetH sess pid aid = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+acknowlegeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (Html ())
+acknowlegeAnomalyGetH pid aid = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+  let currUserId = sess.userId
+
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
       let q = [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where id=? |]
-      r <- liftIO $ withPool pool $ execute Update q (sess.userId, aid)
+      r <- dbtToEff $ execute Update q (sess.userId, aid)
       pure $ anomalyAcknowlegeButton pid aid True
 
 
-unAcknowlegeAnomalyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Anomalies.AnomalyId -> DashboardM (Html ())
-unAcknowlegeAnomalyGetH sess pid aid = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+unAcknowlegeAnomalyGetH ::  Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (Html ())
+unAcknowlegeAnomalyGetH  pid aid = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+  let currUserId = sess.userId
+
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
       let q = [sql| update apis.anomalies set acknowleged_by=null, acknowleged_at=null where id=? |]
-      _ <- liftIO $ withPool pool $ execute Update q (Only aid)
+      _ <- dbtToEff $ execute Update q (Only aid)
       pure $ anomalyAcknowlegeButton pid aid False
 
 
-archiveAnomalyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Anomalies.AnomalyId -> DashboardM (Html ())
-archiveAnomalyGetH sess pid aid = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+archiveAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (Html ())
+archiveAnomalyGetH  pid aid = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+  let currUserId = sess.userId
+
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
       let q = [sql| update apis.anomalies set archived_at=NOW() where id=? |]
-      _ <- liftIO $ withPool pool $ execute Update q (Only aid)
+      _ <- dbtToEff $ execute Update q (Only aid)
       pure $ anomalyArchiveButton pid aid True
 
 
-unArchiveAnomalyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Anomalies.AnomalyId -> DashboardM (Html ())
-unArchiveAnomalyGetH sess pid aid = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+unArchiveAnomalyGetH ::  Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (Html ())
+unArchiveAnomalyGetH pid aid = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+  let currUserId = sess.userId
+
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
       let q = [sql| update apis.anomalies set archived_at=null where id=? |]
-      _ <- liftIO $ withPool pool $ execute Update q (Only aid)
+      _ <- dbtToEff $ execute Update q (Only aid)
       pure $ anomalyArchiveButton pid aid False
 
 
 -- When given a list of anomalyIDs and an action, said action would be applied to the anomalyIDs.
 -- Then a notification should be triggered, as well as an action to reload the anomaly List.
-anomalyBulkActionsPostH :: Sessions.PersistentSession -> Projects.ProjectId -> Text -> AnomalyBulkForm -> DashboardM (Headers '[HXTrigger] (Html ()))
-anomalyBulkActionsPostH sess pid action items = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+anomalyBulkActionsPostH ::  Projects.ProjectId -> Text -> AnomalyBulkForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
+anomalyBulkActionsPostH pid action items = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+  let currUserId = sess.userId
+
+
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"refreshMain": "", "errorToast": [#{action <> " anomalies not successfull."}]}|]
       pure $ addHeader hxTriggerData ""
     else do
       v <- case action of
-        "acknowlege" -> liftIO $ withPool pool $ execute Update [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) |] (sess.userId, Vector.fromList items.anomalyId)
-        "archive" -> liftIO $ withPool pool $ execute Update [sql| update apis.anomalies set archived_at=NOW() where id=ANY(?::uuid[]) |] (Only $ Vector.fromList items.anomalyId)
+        "acknowlege" -> dbtToEff $ execute Update [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) |] (sess.userId, Vector.fromList items.anomalyId)
+        "archive" -> dbtToEff $ execute Update [sql| update apis.anomalies set archived_at=NOW() where id=ANY(?::uuid[]) |] (Only $ Vector.fromList items.anomalyId)
         _ -> error $ "unhandled anomaly bulk action state " <> action
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"refreshMain": "", "successToast": [#{action <> "d anomalies Successfully"}]}|]
       pure $ addHeader hxTriggerData ""
@@ -147,12 +186,20 @@ data ParamInput = ParamInput
   }
 
 
-anomalyListGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Endpoints.EndpointId -> Maybe Text -> Maybe Text -> DashboardM (Html ())
-anomalyListGetH sess pid layoutM ackdM archivedM sortM page loadM endpointM hxRequestM hxBoostedM = do
+anomalyListGetH ::  Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Endpoints.EndpointId -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
+anomalyListGetH pid layoutM ackdM archivedM sortM page loadM endpointM hxRequestM hxBoostedM = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+  let currUserId = sess.userId
+
+
+
   let ackd = textToBool <$> ackdM
   let archived = textToBool <$> archivedM
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
@@ -162,10 +209,7 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM page loadM endpointM hxRe
       let pageInt = case page of
             Just p -> if limit == Just 51 then 0 else Unsafe.read (toString p)
             Nothing -> 0
-      (project, anomalies) <- liftIO
-        $ withPool
-          pool
-          do
+      (project, anomalies) <- dbtToEff do
             project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
             anomalies <- case layoutM of
               Just _ -> Anomalies.selectAnomalies pid endpointM ackd archived sortM limit (pageInt * fetchLimit)
@@ -431,18 +475,23 @@ anomalyItem hideByDefault currTime anomaly icon title subTitle content = do
     div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $ show anomaly.eventsCount14d
 
 
-anomalyDetailsGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Text -> Maybe Text -> DashboardM (Html ())
+anomalyDetailsGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (Html ())
 anomalyDetailsGetH sess pid targetHash hxBoostedM = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+  let currUserId = sess.userId
+
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, anomaly) <- liftIO
-        $ withPool
-          pool
-          do
+      (project, anomaly) <- dbtToEff do
             project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
             anomaly <- Anomalies.getAnomalyVM pid targetHash
             pure (project, anomaly)
@@ -459,8 +508,8 @@ anomalyDetailsGetH sess pid targetHash hxBoostedM = do
           case an.anomalyType of
             Anomalies.ATEndpoint -> do
               -- for endpoint anomalies
-              shapes <- liftIO $ withPool pool $ Shapes.shapesByEndpointHash pid targetHash
-              fields <- liftIO $ withPool pool $ Fields.selectFields pid targetHash
+              shapes <- dbtToEff $ Shapes.shapesByEndpointHash pid targetHash
+              fields <- dbtToEff $ Fields.selectFields pid targetHash
               let shapesWithFieldsMap = Vector.map (`getShapeFields` fields) shapes
               case hxBoostedM of
                 Just _ -> pure $ anomalyDetailsPage an (Just shapesWithFieldsMap) Nothing Nothing chartQuery currTime True
@@ -469,11 +518,11 @@ anomalyDetailsGetH sess pid targetHash hxBoostedM = do
                     h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
                     anomalyDetailsPage an (Just shapesWithFieldsMap) Nothing Nothing chartQuery currTime False
             Anomalies.ATShape -> do
-              newF <- liftIO $ withPool pool $ Fields.selectFieldsByHashes pid an.shapeNewUniqueFields
+              newF <- dbtToEff $ Fields.selectFieldsByHashes pid an.shapeNewUniqueFields
               let newFM = groupFieldsByCategory newF
-              updF <- liftIO $ withPool pool $ Fields.selectFieldsByHashes pid an.shapeUpdatedFieldFormats
+              updF <- dbtToEff $ Fields.selectFieldsByHashes pid an.shapeUpdatedFieldFormats
               let updfM = groupFieldsByCategory updF
-              delF <- liftIO $ withPool pool $ Fields.selectFieldsByHashes pid an.shapeDeletedFields
+              delF <- dbtToEff $ Fields.selectFieldsByHashes pid an.shapeDeletedFields
               let delFM = groupFieldsByCategory delF
               let anFields = (newFM, updfM, delFM)
               case hxBoostedM of
@@ -482,7 +531,7 @@ anomalyDetailsGetH sess pid targetHash hxBoostedM = do
                   h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
                   anomalyDetailsPage an Nothing (Just anFields) Nothing chartQuery currTime False
             _ -> do
-              anFormats <- liftIO $ withPool pool $ Fields.getFieldsByEndpointKeyPathAndCategory pid (maybe "" (\x -> UUID.toText x.unEndpointId) an.endpointId) (fromMaybe "" an.fieldKeyPath) (fromMaybe FCRequestBody an.fieldCategory)
+              anFormats <- dbtToEff $ Fields.getFieldsByEndpointKeyPathAndCategory pid (maybe "" (\x -> UUID.toText x.unEndpointId) an.endpointId) (fromMaybe "" an.fieldKeyPath) (fromMaybe FCRequestBody an.fieldCategory)
               case hxBoostedM of
                 Just _ -> do
                   pure $ anomalyDetailsPage an Nothing Nothing (Just anFormats) chartQuery currTime True

@@ -17,7 +17,7 @@ module Pages.Reports (
   PerformanceReport (..),
 ) where
 
-import Config
+import System.Config
 import Data.Default (def)
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Data.Aeson as Aeson

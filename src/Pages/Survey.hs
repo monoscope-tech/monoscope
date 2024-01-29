@@ -1,6 +1,6 @@
 module Pages.Survey (surveyGetH, surveyPutH, SurveyForm) where
 
-import Config
+import System.Config
 import Data.Default (def)
 import Data.Text qualified as T
 import Lucid

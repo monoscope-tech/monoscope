@@ -1,4 +1,5 @@
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 module Models.Users.Users (
@@ -8,11 +9,15 @@ module Models.Users.Users (
   userIdByEmail,
   createUserId,
   insertUser,
+  userById,
   userByEmail,
   createEmptyUser,
   addUserToAllProjects,
 ) where
 
+
+import Effectful
+import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Data.Aeson (FromJSON (parseJSON), ToJSON (toJSON))
 import Data.CaseInsensitive (CI)
 import Data.CaseInsensitive qualified as CI
@@ -53,6 +58,7 @@ newtype UserId = UserId {getUserId :: UUID.UUID}
     (Ord, ToJSON, FromJSON, FromField, ToField, Default)
     via UUID.UUID
   deriving anyclass (FromRow, ToRow)
+  deriving newtype (NFData)
 
 
 instance HasField "toText" UserId Text where
@@ -72,7 +78,7 @@ data User = User
   , phoneNumber :: Maybe Text
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, Default)
+  deriving anyclass (FromRow, ToRow, Default, NFData)
   deriving
     (FromJSON, ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] User
@@ -110,6 +116,8 @@ createUser firstName lastName picture email = do
 insertUser :: User -> PgT.DBT IO ()
 insertUser = insert @User
 
+userById :: DB :> es => UserId -> Eff es (Maybe User)
+userById userId = dbtToEff $ selectById (Only userId)
 
 userByEmail :: Text -> PgT.DBT IO (Maybe User)
 userByEmail email = selectOneByField @User [field| email |] (Only email)

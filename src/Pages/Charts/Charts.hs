@@ -2,7 +2,7 @@
 
 module Pages.Charts.Charts (chartsGetH, ChartType (..), throughput, throughputEndpointHTML, lazy, ChartExp (..), QueryBy (..), GroupBy (..)) where
 
-import Config (DashboardM, pool)
+import System.Config (DashboardM, pool)
 import Data.Aeson qualified as AE
 import Data.List (groupBy, lookup)
 import Data.Text (toLower)

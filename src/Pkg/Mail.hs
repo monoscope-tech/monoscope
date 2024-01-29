@@ -3,7 +3,7 @@
 {-# HLINT ignore "Use safeToEnum" #-}
 module Pkg.Mail (sendEmail, sendSlackMessage) where
 
-import Config qualified
+import System.Config qualified as Config
 import Control.Lens ((.~))
 import Data.Aeson.QQ
 import Data.Pool

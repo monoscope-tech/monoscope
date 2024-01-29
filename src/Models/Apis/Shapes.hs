@@ -1,4 +1,5 @@
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module Models.Apis.Shapes (Shape (..), ShapeWithFields (..), SwShape (..), ShapeId (..), getShapeFields, shapeIdText, insertShapeQueryAndParam, insertShapes, shapesByEndpointHashes, shapesByEndpointHash) where
 
@@ -34,6 +35,7 @@ import Web.HttpApiData (FromHttpApiData)
 
 newtype ShapeId = ShapeId {unShapeId :: UUID.UUID}
   deriving stock (Generic, Show)
+  deriving newtype (NFData)
   deriving
     (AE.FromJSON, AE.ToJSON, Eq, Ord, FromField, ToField, FromHttpApiData, Default)
     via UUID.UUID
@@ -49,6 +51,7 @@ data ShapeWithFields = ShapeWidthFields
   , fieldsMap :: Map FieldCategoryEnum [Fields.Field]
   }
   deriving stock (Generic, Show)
+  deriving anyclass (NFData)
 
 
 getShapeFields :: Shape -> Vector Fields.Field -> ShapeWithFields
@@ -77,7 +80,7 @@ data Shape = Shape
   , statusCode :: Int
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, Default)
+  deriving anyclass (FromRow, ToRow, Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Shape
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "shapes", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Shape)
   deriving (FromField) via Aeson Shape
@@ -163,7 +166,7 @@ data SwShape = SwShape
   , swFieldHashes :: Vector Text
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, Default)
+  deriving anyclass (FromRow, ToRow, Default, NFData)
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SwShape
   deriving (FromField) via Aeson SwShape
   deriving anyclass (AE.ToJSON)

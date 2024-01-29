@@ -1,7 +1,7 @@
 module Web.ClientMetadata (ClientMetadata, clientMetadataH) where
 
 import Colog ((<&))
-import Config (AuthContext (env, logger, pool), DashboardM)
+import System.Config (AuthContext (env, logger, pool), DashboardM)
 import Data.Aeson (Value)
 import Data.Aeson.QQ (aesonQQ)
 import Data.Aeson.Types (ToJSON)

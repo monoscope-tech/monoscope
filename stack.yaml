@@ -59,6 +59,8 @@ extra-deps:
   # - co-log-0.5.0.0
   # - co-log-core-0.3.1.0
   - resource-pool-0.4.0.0
+  - log-effectful-1.0.0.0@sha256:126f328c9325c10998289378191dc69e55b5ffdc37a7845f2d0ee57f6f13392e,2433
+  - monad-time-effectful-1.0.0.0@sha256:4994617545bb4b25ba01eaf2bdb1c2c74f7cefab36945af8eb92dca9842fc4b6,1528
   - lucid-aria-0.1.0.1@sha256:d4f37b67a28f2e38eb3cf9fca4cbed5dcc6bf335c880113c618ca50fa933cd40,920
   - colourista-0.1.0.1@sha256:98353ee0e2f5d97d2148513f084c1cd37dfda03e48aa9dd7a017c9d9c0ba710e,3307
   - lucid-htmx-0.1.0.6@sha256:83d9eed5ff74778a2dfc3f320a66b08592a2880abca28d75747a0513a39bd871,1528
@@ -84,10 +86,15 @@ extra-deps:
   - string-random-0.1.4.3@sha256:4b3092568889e00b419093a1938f14a67743844bc86476ee5cb6f8827dc40545,2172
   - contiguous-0.6.4.0@sha256:30d28d17b3ca2a9eecb753f6e38f7bc0d0a4d3afd6d76ca79931b9c167b68c39,1861
   - primitive-unlifted-2.1.0.0@sha256:4a6fb2fc5836b18b217b814931472a0b1a84df03b45955b236c80291f1f46893,2326
+  - wai-log-0.4.0.1@sha256:0b4b57ae218cf5ec59523c8cf405802a588d4e299436b5a663a6001ea34bb7e6,1583
   # - git: https://github.com/jfischoff/postgres-options
   #   commit: 45bafb2092bc7a7b3c561608295294d562313dd3
   #   subdirs: 
   #     - .
+  - git: https://github.com/Kleidukos/pg-transact-effectful 
+    commit: d296ec54cbdfd2e7b3a822cdb759daf761d6f24b
+    subdirs:
+      - .
   - git: https://github.com/kowainik/typerep-map
     commit: 5787946c3c89c9b608f4d5308d2a27cc9a27761f
     subdirs:

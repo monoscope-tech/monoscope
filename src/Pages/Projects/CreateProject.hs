@@ -16,13 +16,14 @@ module Pages.Projects.CreateProject (
 ) where
 
 import BackgroundJobs qualified
-import Config
+import System.Config
 import Data.Aeson (encode)
 import Data.Aeson.QQ (aesonQQ)
 import Data.ByteString.Base64 qualified as B64
 import Data.CaseInsensitive (original)
 import Data.CaseInsensitive qualified as CI
-
+import Effectful.Reader.Static (ask, asks)
+import Effectful.PostgreSQL.Transact.Effect
 import Data.Default
 import Data.List.Extra (cons)
 import Data.List.Unique
@@ -52,7 +53,7 @@ import NeatInterpolation (text)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pkg.ConvertKit qualified as ConvertKit
-import Relude
+import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import Servant (
   Headers,
@@ -62,6 +63,7 @@ import Servant (
 import Servant.Htmx
 import Utils
 import Web.FormUrlEncoded (FromForm)
+import System.Types
 
 
 data CreateProjectForm = CreateProjectForm
@@ -103,23 +105,26 @@ checkEmail = isJust . T.find (== '@')
 
 ----------------------------------------------------------------------------------------------------------
 -- createProjectGetH is the handler for the create projects page
-createProjectGetH :: Sessions.PersistentSession -> DashboardM (Html ())
-createProjectGetH sess = do
-  envCfg <- asks env
+createProjectGetH :: ATAuthCtx (Html ())
+createProjectGetH  = do
+  appCtx <- ask @AuthContext
+  sess <- Sessions.getSession 
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess
+          { sessM = sess.persistentSession
           , pageTitle = "Endpoints"
           }
-  pure $ bodyWrapper bwconf $ createProjectBody sess envCfg False (def @CreateProjectForm) (def @CreateProjectFormError) Nothing Nothing
+  pure $ bodyWrapper bwconf $ createProjectBody (Unsafe.fromJust sess.persistentSession) appCtx.config False (def @CreateProjectForm) (def @CreateProjectFormError) Nothing Nothing
 
 
 ----------------------------------------------------------------------------------------------------------
-projectSettingsGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
-projectSettingsGetH sess pid = do
-  pool <- asks pool
-  envCfg <- asks env
-  Just proj <- liftIO $ withPool pool $ Projects.selectProjectForUser (sess.userId, pid)
+projectSettingsGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
+projectSettingsGetH  pid = do
+  appCtx <- ask @AuthContext
+  sess <- Sessions.getSession
+  let pSess = Unsafe.fromJust sess.persistentSession
+  projM <- dbtToEff $ Projects.selectProjectForUser (pSess.userId, pid)
+  let proj = Unsafe.fromJust projM
   let createProj =
         CreateProjectForm
           { title = proj.title
@@ -131,25 +136,23 @@ projectSettingsGetH sess pid = do
           , paymentPlan = proj.paymentPlan
           , timeZone = proj.timeZone
           }
-  slackInfo <- liftIO $ withPool pool $ getProjectSlackData pid
+  slackInfo <- dbtToEff $ getProjectSlackData pid
 
-  -- FIXME: Should be a value from the db
-
-  let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just proj, pageTitle = "Settings"}
-  pure $ bodyWrapper bwconf $ createProjectBody sess envCfg True createProj (def @CreateProjectFormError) (Just proj.notificationsChannel) slackInfo
+  let bwconf = (def :: BWConfig){sessM = sess.persistentSession, currProject = projM, pageTitle = "Settings"}
+  pure $ bodyWrapper bwconf $ createProjectBody pSess appCtx.config True createProj (def @CreateProjectFormError) (Just proj.notificationsChannel) slackInfo
 
 
 ----------------------------------------------------------------------------------------------------------
-deleteProjectGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Headers '[HXTrigger, HXRedirect] (Html ()))
-deleteProjectGetH sess pid = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+deleteProjectGetH :: Projects.ProjectId -> ATAuthCtx (Headers '[HXTrigger, HXRedirect] (Html ()))
+deleteProjectGetH  pid = do
+  sess <- Sessions.getSession
+  isMember <- dbtToEff $ userIsProjectMember (Unsafe.fromJust sess.persistentSession) pid
   if not isMember
     then do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"errorToast": ["Only project members can perform this action."]}|]
       pure $ addHeader hxTriggerData $ addHeader "/" $ span_ ""
     else do
-      _ <- liftIO $ withPool pool $ Projects.deleteProject pid
+      _ <- dbtToEff $ Projects.deleteProject pid
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Deleted Project Successfully"]}|]
       pure $ addHeader hxTriggerData $ addHeader "/" $ span_ ""
 
@@ -161,22 +164,21 @@ data NotifListForm = NotifListForm
   deriving anyclass (FromForm)
 
 
-updateNotificationsChannel :: Sessions.PersistentSession -> Projects.ProjectId -> NotifListForm -> DashboardM (Headers '[HXTrigger] (Html ()))
-updateNotificationsChannel sess pid NotifListForm{notificationsChannel} = do
-  pool <- asks pool
+updateNotificationsChannel :: Projects.ProjectId -> NotifListForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
+updateNotificationsChannel pid NotifListForm{notificationsChannel} = do
   if "slack" `elem` notificationsChannel
     then do
-      slackData <- liftIO $ withPool pool $ getProjectSlackData pid
+      slackData <- dbtToEff $ getProjectSlackData pid
       case slackData of
         Nothing -> do
           let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"errorToast": ["You need to connect slack to this project first."]}|]
           pure $ addHeader hxTriggerData $ span_ ""
         Just _ -> do
-          _ <- liftIO $ withPool pool do Projects.updateNotificationsChannel pid notificationsChannel
+          _ <- dbtToEff do Projects.updateNotificationsChannel pid notificationsChannel
           let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Updated Notifications Channels Successfully"]}|]
           pure $ addHeader hxTriggerData $ span_ ""
     else do
-      _ <- liftIO $ withPool pool do Projects.updateNotificationsChannel pid notificationsChannel
+      _ <- dbtToEff do Projects.updateNotificationsChannel pid notificationsChannel
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Updated Notifications Channels Successfully"]}|]
       pure $ addHeader hxTriggerData $ span_ ""
 
@@ -184,30 +186,35 @@ updateNotificationsChannel sess pid NotifListForm{notificationsChannel} = do
 ----------------------------------------------------------------------------------------------------------
 -- createProjectPostH is the handler for the create projects page form handling.
 -- It processes post requests and is expected to return a redirect header and a hyperscript event trigger header.
-createProjectPostH :: Sessions.PersistentSession -> CreateProjectForm -> DashboardM (Headers '[HXTrigger, HXRedirect] (Html ()))
-createProjectPostH sess createP = do
-  envCfg <- asks env
-  pool <- asks pool
+createProjectPostH :: CreateProjectForm -> ATAuthCtx (Headers '[HXTrigger, HXRedirect] (Html ()))
+createProjectPostH createP = do
+  appCtx <- ask @AuthContext
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+  
   validationRes <- validateM createProjectFormV createP
   case validationRes of
-    Right cpe -> pure $ noHeader $ noHeader $ createProjectBody sess envCfg createP.isUpdate createP cpe Nothing Nothing
-    Left cp -> processProjectPostForm sess cp
+    Right cpe -> pure $ noHeader $ noHeader $ createProjectBody sess appCtx.config createP.isUpdate createP cpe Nothing Nothing
+    Left cp -> processProjectPostForm cp
 
 
-processProjectPostForm :: Sessions.PersistentSession -> Valor.Valid CreateProjectForm -> DashboardM (Headers '[HXTrigger, HXRedirect] (Html ()))
-processProjectPostForm sess cpRaw = do
-  envCfg <- asks env
-  pool <- asks pool
+processProjectPostForm :: Valor.Valid CreateProjectForm -> ATAuthCtx (Headers '[HXTrigger, HXRedirect] (Html ()))
+processProjectPostForm cpRaw = do
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+
   let cp = Valor.unValid cpRaw
   pid <- liftIO $ maybe (Projects.ProjectId <$> UUIDV4.nextRandom) pure (Projects.projectIdFromText cp.projectId)
   _ <-
     if cp.isUpdate
       then do
-        _ <- liftIO $ withPool pool $ Projects.updateProject (createProjectFormToModel pid cp)
+        _ <- dbtToEff $ Projects.updateProject (createProjectFormToModel pid cp)
         pass
       else do
         let usersAndPermissions = zip cp.emails cp.permissions & uniq
-        _ <- liftIO $ withPool pool do
+        _ <- dbtToEff do
           Projects.insertProject (createProjectFormToModel pid cp)
           projectKeyUUID <- liftIO UUIDV4.nextRandom
           let encryptedKey = ProjectApiKeys.encryptAPIKey (encodeUtf8 envCfg.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
@@ -223,7 +230,7 @@ processProjectPostForm sess cpRaw = do
             liftIO $ ConvertKit.addUserOrganization envCfg.convertkitApiKey email pid.toText cp.title cp.paymentPlan
             when (userId' /= Just sess.userId) do
               -- invite the users to the project (Usually as an email)
-              _ <- liftIO $ withResource pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId pid email cp.title
+              _ <- liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId pid email cp.title
               pass
             pure (email, permission, userId)
 
@@ -234,7 +241,7 @@ processProjectPostForm sess cpRaw = do
                   & cons (ProjectMembers.CreateProjectMembers pid sess.userId Projects.PAdmin)
           ProjectMembers.insertProjectMembers projectMembers
 
-        _ <- liftIO $ withResource pool \conn ->
+        _ <- liftIO $ withResource appCtx.pool \conn ->
           createJob conn "background_jobs" $ BackgroundJobs.CreatedProjectSuccessfully sess.userId pid (original sess.user.getUser.email) cp.title
         pass
 

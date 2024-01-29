@@ -1,6 +1,6 @@
 module Pages.Log where
 
-import Config
+import System.Config
 import Data.Aeson (Value)
 import Data.Aeson qualified as AE
 import Data.Containers.ListUtils (nubOrd)
@@ -8,6 +8,7 @@ import Data.Default (def)
 import Data.HashMap.Strict qualified as HM
 import Data.List (elemIndex)
 import Data.Text qualified as T
+import Control.Error (hush)
 import Data.Time (
   UTCTime,
   ZonedTime,
@@ -35,10 +36,13 @@ import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Pages.NonMember
 import Pkg.Components (loader)
-import Relude
-import Relude.Unsafe qualified as Unsafe
 import Utils
 import Witch (from)
+import Relude hiding (ask, asks)
+import System.Types
+import Effectful.Reader.Static (ask, asks)
+import Effectful.PostgreSQL.Transact.Effect
+import Relude.Unsafe qualified as Unsafe
 
 
 -- $setup
@@ -52,8 +56,17 @@ parseTimestamp :: String -> Maybe ZonedTime
 parseTimestamp = parseTimeM True defaultTimeLocale "%Y-%m-%dT%H:%M:%S.%qZ"
 
 
-apiLogH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
-apiLogH sess pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoostedM = do
+apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
+apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoostedM = do
+ 
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+  let currUserId = sess.userId
+
+
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
   let query = fromMaybe "" queryM
   now <- liftIO getCurrentTime
@@ -71,20 +84,20 @@ apiLogH sess pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoo
                 (Just s, Just e) -> Just (s <> "-" <> e)
                 _ -> Nothing
           (f, t, range)
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
       -- Temporary option, using Right to unwrap. Should handle Left
-      (project, Right tableAsMaps) <- liftIO
-        $ withPool pool do
+      (project, tableAsMapsE) <- dbtToEff do
           project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
           tableAsMaps <- RequestDumps.selectLogTable pid query cursorM' (fromD, toD) summaryCols
           pure (project, tableAsMaps)
 
-      reqChartTxt <- liftIO $ withPool pool $ RequestDumps.throughputBy pid Nothing Nothing Nothing Nothing Nothing (3 * 60) Nothing queryM (utcToZonedTime utc <$> fromD, utcToZonedTime utc <$> toD)
+      let tableAsMaps = Unsafe.fromJust $ hush $ tableAsMapsE
+
+      reqChartTxt <- dbtToEff $ RequestDumps.throughputBy pid Nothing Nothing Nothing Nothing Nothing (3 * 60) Nothing queryM (utcToZonedTime utc <$> fromD, utcToZonedTime utc <$> toD)
       let (requestMaps, colNames, requestsCount) = tableAsMaps
           curatedColNames = nubOrd $ curateCols summaryCols colNames
           reqLastCreatedAtM = (\r -> lookupMapText "created_at" r) =<< (requestMaps V.!? (V.length requestMaps - 1)) -- FIXME: unoptimal implementation, converting from vector to list for last

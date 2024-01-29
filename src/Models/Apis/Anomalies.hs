@@ -1,5 +1,6 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module Models.Apis.Anomalies (
   selectAnomalies,
@@ -50,6 +51,7 @@ import Utils
 
 newtype AnomalyId = AnomalyId {unAnomalyId :: UUID.UUID}
   deriving stock (Generic, Show)
+  deriving newtype (NFData)
   deriving
     (Eq, Ord, FromField, ToField, FromHttpApiData, Default)
     via UUID.UUID
@@ -66,6 +68,7 @@ data AnomalyTypes
   | ATShape
   | ATFormat
   deriving stock (Eq, Generic, Show)
+  deriving anyclass (NFData)
   deriving
     (AE.ToJSON, AE.FromJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "FT", DAE.CamelToSnake]] AnomalyTypes
@@ -118,6 +121,7 @@ data AnomalyActions
   = AAUnknown
   | AACreated
   deriving stock (Show, Eq, Generic)
+  deriving anyclass (NFData)
   deriving
     (AE.ToJSON, AE.FromJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "FT", DAE.CamelToSnake]] AnomalyActions
@@ -187,7 +191,7 @@ data AnomalyVM = AnomalyVM
   , lastSeen :: ZonedTime
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromRow, Default)
+  deriving anyclass (FromRow, Default, NFData)
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "anomalies_vm", PrimaryKey "id", FieldModifiers '[CamelToSnake]] AnomalyVM)

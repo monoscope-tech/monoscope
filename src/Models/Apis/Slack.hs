@@ -17,7 +17,7 @@ data SlackData = SlackData
   , webhookUrl :: Text
   }
   deriving stock (Show, Generic, Eq)
-  deriving anyclass (FromRow, ToRow)
+  deriving anyclass (FromRow, ToRow, NFData)
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SlackData
 
 

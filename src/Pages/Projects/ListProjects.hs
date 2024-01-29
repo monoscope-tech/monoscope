@@ -2,30 +2,34 @@ module Pages.Projects.ListProjects (
   listProjectsGetH,
 ) where
 
-import Config
+import System.Config
 import Data.Default (def)
-import Data.Vector qualified as Vector
+import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Fmt
 import Lucid
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Relude
+import Relude hiding (ask, asks)
+import Effectful.Reader.Static (ask, asks)
 import Servant (Union, WithStatus (..), respond)
 import Utils (GetOrRedirect, faIcon_, redirect)
+import System.Types
+import Models.Users.Users
 
 
-listProjectsGetH :: Sessions.PersistentSession -> DashboardM (Union GetOrRedirect)
-listProjectsGetH sess = do
+listProjectsGetH :: ATAuthCtx (Union GetOrRedirect)
+listProjectsGetH = do
   pool <- asks pool
-  projects <-
-    liftIO $ withPool pool $ Projects.selectProjectsForUser sess.userId
+  sess <- Sessions.getSession
+  projects <- liftIO $ withPool pool $ Projects.selectProjectsForUser (sess.user.id)
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess
+          { sessM = sess.persistentSession
           , pageTitle = "Projects List"
           }
+
   let page = bodyWrapper bwconf $ listProjectsBody projects
   -- Redirect to the create projects page if there's no project under the logged in user
   if null projects
@@ -33,9 +37,9 @@ listProjectsGetH sess = do
     else respond $ WithStatus @200 page
 
 
-listProjectsBody :: Vector.Vector Projects.Project' -> Html ()
+listProjectsBody :: V.Vector Projects.Project' -> Html ()
 listProjectsBody projects = do
-  section_ [id_ "main-content", class_ "container mx-auto p-6 pb-36"] do
+  section_ [id_ "main-content", class_ "container mx-auto p-6 pb-36 overflow-y-scroll  h-full"] do
     div_ [class_ "flex justify-between mb-6"] do
       h2_ [class_ "text-slate-700 text-2xl font-medium"] "Projects"
       a_ [class_ "btn btn-primary", href_ "/p/new"] "Create Project"
@@ -58,6 +62,6 @@ listProjectsBody projects = do
                             time_ [datetime_ $ fmt $ dateDashF project.createdAt] $ toHtml @Text $ fmt $ dateDashF project.createdAt
                     div_ [class_ "mt-4 flex-shrink-0 sm:mt-0 sm:ml-5"] do
                       div_ [class_ "flex overflow-hidden -space-x-1"] do
-                        project.usersDisplayImages & Vector.toList & mapM_ \imgSrc -> img_ [class_ "inline-block h-6 w-6 rounded-full ring-2 ring-white", src_ imgSrc, alt_ "Dries Vincent"]
+                        project.usersDisplayImages & V.toList & mapM_ \imgSrc -> img_ [class_ "inline-block h-6 w-6 rounded-full ring-2 ring-white", src_ imgSrc, alt_ "Dries Vincent"]
                   div_ [class_ "ml-5 flex-shrink-0 text-gray-400"] do
                     faIcon_ "fa-chevron-right" "fa-light fa-chevron-right" "h-3 w-3"

@@ -3,7 +3,7 @@
 
 module Pages.Endpoints.EndpointDetails (endpointDetailsH, fieldDetailsPartialH, fieldsToNormalized, endpointDetailsWithHashH) where
 
-import Config
+import System.Config
 import Data.Aeson
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey

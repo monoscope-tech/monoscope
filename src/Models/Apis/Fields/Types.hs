@@ -1,5 +1,6 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module Models.Apis.Fields.Types (
   Field (..),
@@ -47,6 +48,7 @@ import Web.HttpApiData (FromHttpApiData)
 
 newtype FieldId = FieldId {unFieldId :: UUID.UUID}
   deriving stock (Generic, Show)
+  deriving newtype (NFData)
   deriving
     (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default)
     via UUID.UUID
@@ -65,6 +67,7 @@ data FieldTypes
   | FTList
   | FTNull
   deriving stock (Eq, Generic, Show)
+  deriving anyclass (NFData)
   deriving
     (AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "FT", DAE.CamelToSnake]] FieldTypes
@@ -131,6 +134,7 @@ data FieldCategoryEnum
   | FCRequestBody
   | FCResponseBody
   deriving stock (Eq, Generic, Show, Ord)
+  deriving anyclass (NFData)
   deriving
     (AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "FC", DAE.CamelToSnake]] FieldCategoryEnum
@@ -207,7 +211,7 @@ data Field = Field
   , hash :: Text
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, Default)
+  deriving anyclass (FromRow, ToRow, Default, NFData)
   deriving
     (AE.ToJSON, AE.FromJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Field
@@ -230,7 +234,7 @@ data SwField = SwField
   , fHash :: Text
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, Default)
+  deriving anyclass (FromRow, ToRow, Default, NFData)
   deriving (AE.ToJSON, AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SwField
   deriving (FromField) via Aeson SwField
 
