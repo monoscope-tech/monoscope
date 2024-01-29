@@ -49,10 +49,7 @@ import Web.HttpApiData
 
 newtype ProjectId = ProjectId {unProjectId :: UUID.UUID}
   deriving stock (Generic, Show, Read)
-  deriving
-    (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default, Hashable)
-    via UUID.UUID
-  deriving newtype (NFData)
+  deriving newtype (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default, Hashable, NFData)
   deriving anyclass (FromRow, ToRow)
 
 
@@ -133,6 +130,7 @@ data Project = Project
 makeFieldLabelsNoPrefix ''Project
 
 
+-- FIXME: Why was this record created? And not the regular projects record?
 data Project' = Project'
   { id :: ProjectId
   , createdAt :: ZonedTime
@@ -152,7 +150,7 @@ data Project' = Project'
   , usersDisplayImages :: Vector Text
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromRow)
+  deriving anyclass (FromRow, NFData)
 
 
 data ProjectCache = ProjectCache

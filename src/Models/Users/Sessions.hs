@@ -1,17 +1,17 @@
-{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 module Models.Users.Sessions (
   PersistentSessionId (..),
   PersistentSession (..),
-  Session(..),
-  craftSessionCookie, 
+  Session (..),
+  craftSessionCookie,
   SessionData (..),
   PSUser (..),
   PSProjects (..),
-  addCookie, 
+  addCookie,
   emptySessionCookie,
   getSession,
   persistSession,
@@ -27,21 +27,21 @@ import Data.Default
 import Data.Map.Strict qualified as Map
 import Data.Pool
 import Data.Text
-import Database.PostgreSQL.Entity (Entity, delete, insert, selectById)
 import Data.Time
 import Data.UUID
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity
+import Database.PostgreSQL.Entity (Entity, delete, insert, selectById)
+import Database.PostgreSQL.Entity.DBT (QueryNature (..))
 import Database.PostgreSQL.Entity.DBT qualified as DBT
-import Database.PostgreSQL.Entity.DBT (QueryNature(..))
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple hiding (execute)
 import Database.PostgreSQL.Simple.FromField
 import Database.PostgreSQL.Simple.Newtypes
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField
-import Database.PostgreSQL.Transact hiding (execute, queryOne, DB)
+import Database.PostgreSQL.Transact hiding (DB, execute, queryOne)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users (UserId)
 import Models.Users.Users qualified as Users
@@ -53,7 +53,7 @@ import Data.Default (Default (..))
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text.Display
-import Data.Time (UTCTime,utc, utcToZonedTime)
+import Data.Time (UTCTime, utc, utcToZonedTime)
 import Data.UUID (UUID)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
@@ -69,9 +69,9 @@ import Effectful.Reader.Static (Reader, asks)
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import GHC.Generics
+import Models.Users.Users qualified as Users
 import Relude
 import Servant (AuthProtect, FromHttpApiData (..), Header, Headers, ServerError, ToHttpApiData, addHeader, getResponse)
-import Models.Users.Users qualified as Users
 import Web.Cookie (
   SetCookie (
     setCookieHttpOnly,
@@ -87,13 +87,13 @@ import Web.Cookie (
  )
 
 
-
 newtype PersistentSessionId = PersistentSessionId {getPersistentSessionId :: UUID}
   deriving
     (Show, Eq, FromField, ToField, FromHttpApiData, ToHttpApiData, Default)
     via UUID
   deriving newtype (NFData)
   deriving (Display) via ShowInstance UUID
+
 
 newtype SessionData = SessionData {getSessionData :: Map Text Text}
   deriving stock (Show, Eq, Generic)
@@ -187,7 +187,6 @@ lookup :: Text -> SessionData -> Maybe Text
 lookup key (SessionData sdMap) = Map.lookup key sdMap
 
 
-
 getSession
   :: Effectful.Reader.Static.Reader (Headers '[Header "Set-Cookie" SetCookie] Session) :> es
   => Eff es Session
@@ -235,14 +234,12 @@ deleteCookie = addHeader emptySessionCookie
 
 data Session = Session
   { sessionId :: PersistentSessionId
-  , persistentSession :: Maybe PersistentSession 
+  , persistentSession :: Maybe PersistentSession
   , user :: Users.User
   , requestID :: Text
   , isSidebarClosed :: Bool
   }
   deriving stock (Generic, Show)
-
-
 
 
 newPersistentSession' :: Time :> es => Users.UserId -> PersistentSessionId -> Eff es PersistentSession

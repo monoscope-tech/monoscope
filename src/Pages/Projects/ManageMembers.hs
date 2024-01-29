@@ -5,7 +5,6 @@ module Pages.Projects.ManageMembers (
 ) where
 
 import BackgroundJobs qualified
-import System.Config
 import Data.Aeson (encode)
 import Data.Aeson.QQ (aesonQQ)
 import Data.CaseInsensitive (original)
@@ -15,11 +14,12 @@ import Data.Pool (withResource)
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
+import Effectful.PostgreSQL.Transact.Effect
+import Effectful.Reader.Static (ask, asks)
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript
 import Models.Projects.ProjectMembers qualified as ProjectMembers
-import System.Types
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
@@ -28,11 +28,11 @@ import Optics.Core ((^.))
 import Pages.BodyWrapper
 import Pages.NonMember
 import Relude hiding (ask, asks)
-import Effectful.Reader.Static (ask, asks)
-import Effectful.PostgreSQL.Transact.Effect
 import Relude.Unsafe qualified as Unsafe
 import Servant
 import Servant.Htmx
+import System.Config
+import System.Types
 import Utils
 import Web.FormUrlEncoded (FromForm)
 
@@ -47,7 +47,6 @@ data ManageMembersForm = ManageMembersForm
 
 manageMembersPostH :: Projects.ProjectId -> ManageMembersForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
 manageMembersPostH pid form = do
-  
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
@@ -62,9 +61,9 @@ manageMembersPostH pid form = do
       pure $ addHeader hxTriggerData $ h3_ [] "Only members of this project can perform this action"
     else do
       (project, projMembers) <- dbtToEff do
-            project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-            projMembers <- ProjectMembers.selectActiveProjectMembers pid
-            pure (project, projMembers)
+        project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+        projMembers <- ProjectMembers.selectActiveProjectMembers pid
+        pure (project, projMembers)
 
       -- TODO:
       -- Separate the new emails from the old emails
@@ -91,20 +90,21 @@ manageMembersPostH pid form = do
 
       -- Create new users and send notifications
       newProjectMembers <- forM uAndPNew \(email, permission) -> do
-          userId' <- dbtToEff do
-            userIdM' <- Users.userIdByEmail email
-            case userIdM' of
-              Nothing -> do
-                idM' <- Users.createEmptyUser email -- NEXT Trigger email sending
-                case idM' of
-                  Nothing -> error "duplicate email in createEmptyUser"
-                  Just idX -> pure idX
-              Just idX -> pure idX
+        userId' <- dbtToEff do
+          userIdM' <- Users.userIdByEmail email
+          case userIdM' of
+            Nothing -> do
+              idM' <- Users.createEmptyUser email -- NEXT Trigger email sending
+              case idM' of
+                Nothing -> error "duplicate email in createEmptyUser"
+                Just idX -> pure idX
+            Just idX -> pure idX
 
-          when (userId' /= currUserId)
-            $ void
-            $ liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId' pid email projectTitle -- invite the users to the project (Usually as an email)
-          pure (email, permission, userId')
+        when (userId' /= currUserId)
+          $ void
+          $ liftIO
+          $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId' pid email projectTitle -- invite the users to the project (Usually as an email)
+        pure (email, permission, userId')
 
       let projectMembers =
             newProjectMembers
@@ -115,12 +115,14 @@ manageMembersPostH pid form = do
       -- Update existing contacts with updated permissions
       -- TODO: Send a notification via background job, about the users permission having been updated.
       unless (null uAndPOldAndChanged)
-        $ void . dbtToEff
+        $ void
+        . dbtToEff
         $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
       -- soft delete project members with id
       unless (null deletedUAndP)
-        $ void . dbtToEff
+        $ void
+        . dbtToEff
         $ ProjectMembers.softDeleteProjectMembers deletedUAndP
 
       projMembersLatest <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
@@ -142,9 +144,9 @@ manageMembersGetH pid = do
       pure $ userNotMemeberPage sess
     else do
       (project, projMembers) <- dbtToEff do
-            project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-            projMembers <- ProjectMembers.selectActiveProjectMembers pid
-            pure (project, projMembers)
+        project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+        projMembers <- ProjectMembers.selectActiveProjectMembers pid
+        pure (project, projMembers)
       let bwconf = (def :: BWConfig){sessM = Just sess, pageTitle = "Settings", currProject = project}
       pure $ bodyWrapper bwconf $ manageMembersBody projMembers
 

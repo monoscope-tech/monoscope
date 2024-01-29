@@ -1,8 +1,8 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module Models.Apis.Endpoints (
   Endpoint (..),
@@ -62,6 +62,7 @@ newtype EndpointId = EndpointId {unEndpointId :: UUID.UUID}
 newtype Host = Host {host :: Text}
   deriving stock (Show, Generic, Eq)
   deriving anyclass (FromRow, ToRow, Default, NFData)
+
 
 instance HasField "toText" EndpointId Text where
   getField = UUID.toText . unEndpointId

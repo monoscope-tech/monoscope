@@ -123,6 +123,7 @@ library
       LambdaCase
       MultiParamTypeClasses
       NamedFieldPuns
+      GeneralizedNewtypeDeriving
       FlexibleContexts
       NoImplicitPrelude
       OverloadedLabels
@@ -257,6 +258,7 @@ executable apitoolkit-server-exe
       LambdaCase
       MultiParamTypeClasses
       NamedFieldPuns
+      GeneralizedNewtypeDeriving
       FlexibleContexts
       NoImplicitPrelude
       OverloadedLabels
@@ -301,6 +303,7 @@ test-suite doctests
       LambdaCase
       MultiParamTypeClasses
       NamedFieldPuns
+      GeneralizedNewtypeDeriving
       FlexibleContexts
       NoImplicitPrelude
       OverloadedLabels
@@ -349,6 +352,7 @@ test-suite tests
       LambdaCase
       MultiParamTypeClasses
       NamedFieldPuns
+      GeneralizedNewtypeDeriving
       FlexibleContexts
       NoImplicitPrelude
       OverloadedLabels

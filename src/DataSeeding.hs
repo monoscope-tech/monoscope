@@ -3,7 +3,6 @@
 module DataSeeding (parseConfigToJson, dataSeedingGetH, dataSeedingPostH, DataSeedingForm) where
 
 import Colog ((<&))
-import System.Config (DashboardM, env, logger, pool, projectCache, AuthContext(..))
 import Data.Aeson qualified as AE
 import Data.ByteString.Base64 qualified as B64
 import Data.Default (def)
@@ -12,6 +11,8 @@ import Data.Time (NominalDiffTime, UTCTime, ZonedTime, addUTCTime, diffUTCTime, 
 import Data.Yaml qualified as Yaml
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Deriving.Aeson qualified as DAE
+import Effectful.PostgreSQL.Transact.Effect
+import Effectful.Reader.Static (ask, asks)
 import Faker
 import Faker.Address (fullAddress)
 import Faker.Name qualified
@@ -29,16 +30,13 @@ import Pages.NonMember
 import ProcessMessage qualified
 import Relude hiding (ask, asks)
 import Relude.Unsafe ((!!))
+import Relude.Unsafe qualified as Unsafe
 import RequestMessages qualified
+import System.Config (AuthContext (..), DashboardM, env, logger, pool, projectCache)
 import System.Random (RandomGen, getStdGen, randomRs)
+import System.Types
 import Utils
 import Web.FormUrlEncoded (FromForm)
-import System.Types
-import Effectful.Reader.Static (ask, asks)
-import Effectful.PostgreSQL.Transact.Effect
-import Relude.Unsafe qualified as Unsafe
-
-
 
 
 data FieldConfig = FieldConfig
@@ -175,15 +173,13 @@ data DataSeedingForm = DataSeedingForm
 
 
 dataSeedingPostH :: Projects.ProjectId -> DataSeedingForm -> ATAuthCtx (Html ())
-dataSeedingPostH  pid form = do
-
+dataSeedingPostH pid form = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
   let env = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
   let currUserId = sess.userId
-
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
@@ -205,7 +201,6 @@ dataSeedingPostH  pid form = do
 
 dataSeedingGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
 dataSeedingGetH pid = do
-
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
   let env = appCtx.config

@@ -1,6 +1,5 @@
 module Pages.Share (ReqForm, shareLinkPostH, shareLinkGetH) where
 
-import System.Config
 import Data.Aeson as Aeson
 import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
@@ -14,6 +13,8 @@ import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, G
 import Database.PostgreSQL.Simple hiding (execute, query)
 import Database.PostgreSQL.Simple.SqlQQ
 import Database.PostgreSQL.Transact (DBT)
+import Effectful.PostgreSQL.Transact.Effect
+import Effectful.Reader.Static (ask, asks)
 import Gogol.Prelude (addHeader)
 import Lucid
 import Lucid.Htmx
@@ -27,9 +28,12 @@ import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pkg.Components (navBar)
 import PyF
-import Relude
+import Relude hiding (ask, asks)
+import Relude.Unsafe qualified as Unsafe
 import Servant (Headers)
 import Servant.Htmx (HXTrigger)
+import System.Config
+import System.Types
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -55,9 +59,14 @@ data Swagger = Swagger
     via (GenericEntity '[Schema "apis", TableName "swagger_jsons", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Swagger)
 
 
-shareLinkPostH :: Sessions.PersistentSession -> Projects.ProjectId -> ReqForm -> DashboardM (Headers '[HXTrigger] (Html ()))
-shareLinkPostH sess pid reqForm = do
-  pool <- asks pool
+shareLinkPostH :: Projects.ProjectId -> ReqForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
+shareLinkPostH pid reqForm = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+
   currentTime <- liftIO getZonedTime
   let rid = reqForm.reqId
   let expIn = reqForm.expiresIn
@@ -65,7 +74,7 @@ shareLinkPostH sess pid reqForm = do
   if Relude.elem expIn lis
     then do
       inId <- liftIO UUIDV4.nextRandom
-      res <- liftIO $ withPool pool $ execute Insert [sql| INSERT INTO apis.share_requests VALUES (?,?,?,?, current_timestamp + interval ?,?) |] (inId, pid, currentTime, currentTime, expIn, rid)
+      res <- dbtToEff $ execute Insert [sql| INSERT INTO apis.share_requests VALUES (?,?,?,?, current_timestamp + interval ?,?) |] (inId, pid, currentTime, currentTime, expIn, rid)
       pure $ addHeader "" $ copyLink $ show inId
     else do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","errorToast": ["Invalid expiry interval"]}|]
@@ -93,12 +102,11 @@ copyLink rid = do
       "Copy URL"
 
 
-shareLinkGetH :: UUID.UUID -> DashboardM (Html ())
+shareLinkGetH :: UUID.UUID -> ATBaseCtx (Html ())
 shareLinkGetH sid = do
-  pool <- asks pool
-  res <- liftIO $ withPool pool $ getRequest (show sid)
+  res <- dbtToEff $ getRequest (show sid)
   let req = if V.length res > 0 then Just $ V.head res else Nothing
-  childRequets <- liftIO $ withPool pool do
+  childRequets <- dbtToEff do
     case req of
       Just r -> RequestDumps.selectRequestDumpByProjectAndParentId r.projectId r.id
       Nothing -> pure []

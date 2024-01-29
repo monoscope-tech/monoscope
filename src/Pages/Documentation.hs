@@ -2,7 +2,6 @@
 
 module Pages.Documentation (documentationGetH, documentationPostH, documentationPutH, SwaggerForm, SaveSwaggerForm) where
 
-import System.Config
 import Data.Aeson (FromJSON, ToJSON, decodeStrict, encode)
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
@@ -12,6 +11,7 @@ import Data.Text qualified as T
 import Data.Time.LocalTime (ZonedTime, getZonedTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
+import System.Config
 
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
@@ -26,23 +26,23 @@ import Models.Projects.Swaggers qualified as Swaggers
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 
-import Numeric (showHex)
-import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Pages.GenerateSwagger qualified as GenerateSwagger
-import Servant (Headers, addHeader)
-import Servant.Htmx (HXTrigger)
 import Data.List (nubBy)
+import Effectful.PostgreSQL.Transact.Effect
+import Effectful.Reader.Static (ask, asks)
 import Models.Apis.Fields.Query qualified as Fields
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.Shapes qualified as Shapes
+import Numeric (showHex)
+import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pages.GenerateSwagger qualified as GenerateSwagger
 import Pages.NonMember
+import Relude hiding (ask, asks)
+import Relude.Unsafe qualified as Unsafe
+import Servant (Headers, addHeader)
+import Servant.Htmx (HXTrigger)
+import System.Types
 import Utils
 import Web.FormUrlEncoded (FromForm)
-import Relude hiding (ask, asks)
-import System.Types
-import Effectful.Reader.Static (ask, asks)
-import Effectful.PostgreSQL.Transact.Effect
-import Relude.Unsafe qualified as Unsafe
 
 
 data SwaggerForm = SwaggerForm
@@ -228,7 +228,6 @@ flattenVector = V.concat
 
 documentationPutH :: Projects.ProjectId -> SaveSwaggerForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
 documentationPutH pid SaveSwaggerForm{updated_swagger, swagger_id, endpoints, diffsInfo} = do
- 
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
@@ -275,15 +274,13 @@ documentationPutH pid SaveSwaggerForm{updated_swagger, swagger_id, endpoints, di
 
 
 documentationPostH :: Projects.ProjectId -> SwaggerForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
-documentationPostH  pid SwaggerForm{swagger_json, from} = do
- 
+documentationPostH pid SwaggerForm{swagger_json, from} = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
   let currUserId = sess.userId
-
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
@@ -308,8 +305,8 @@ documentationPostH  pid SwaggerForm{swagger_json, from} = do
               }
 
       swaggers <- dbtToEff do
-            Swaggers.addSwagger swaggerToAdd
-            Swaggers.swaggersByProject pid
+        Swaggers.addSwagger swaggerToAdd
+        Swaggers.swaggersByProject pid
 
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Swagger uploaded Successfully"]}|]
       pure $ addHeader hxTriggerData ""
@@ -317,7 +314,6 @@ documentationPostH  pid SwaggerForm{swagger_json, from} = do
 
 documentationGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (Html ())
 documentationGetH pid swagger_id = do
- 
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
@@ -325,41 +321,40 @@ documentationGetH pid swagger_id = do
   let sess = Unsafe.fromJust sess'.persistentSession
   let currUserId = sess.userId
 
-
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then pure $ userNotMemeberPage sess
     else do
-      (project, swaggers, swagger, swaggerId) <- dbtToEff do 
-          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-          swaggers <- Swaggers.swaggersByProject pid
-          currentSwagger <- join <$> mapM Swaggers.getSwaggerById swagger_id
-          (swaggerVal, swaggerValId) <- case (swaggers, currentSwagger) of
-            (_, Just swg) -> do
-              let sw = swg.swaggerJson
-              let idx = show swg.id.swaggerId
-              pure (sw, idx)
-            ([], Nothing) -> do
-              -- TODO: We should generate this swagger in a worker. maybe at an interval?
-              -- Or we can support a button to regenerate it
-              -- Or we can trigger a background process specifically when a user loads a docs page.
-              endpoints <- Endpoints.endpointsByProjectId pid
-              let endpoint_hashes = V.map (.hash) endpoints
-              shapes <- Shapes.shapesByEndpointHashes pid endpoint_hashes
-              fields <- Fields.fieldsByEndpointHashes pid endpoint_hashes
-              let field_hashes = V.map (.fHash) fields
-              formats <- Formats.formatsByFieldsHashes pid field_hashes
-              let (projectTitle, projectDescription) = case project of
-                    (Just pr) -> (pr.title, pr.description)
-                    Nothing -> ("__APITOOLKIT", "Edit project description")
-              let gn = GenerateSwagger.generateSwagger projectTitle projectDescription endpoints shapes fields formats
-              pure (gn, "")
-            (swgrs, Nothing) -> do
-              let latest = V.head swgrs
-              let sw = latest.swaggerJson
-              let idx = show latest.id.swaggerId
-              pure (sw, idx)
-          pure (project, V.reverse swaggers, swaggerVal, swaggerValId)
+      (project, swaggers, swagger, swaggerId) <- dbtToEff do
+        project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+        swaggers <- Swaggers.swaggersByProject pid
+        currentSwagger <- join <$> mapM Swaggers.getSwaggerById swagger_id
+        (swaggerVal, swaggerValId) <- case (swaggers, currentSwagger) of
+          (_, Just swg) -> do
+            let sw = swg.swaggerJson
+            let idx = show swg.id.swaggerId
+            pure (sw, idx)
+          ([], Nothing) -> do
+            -- TODO: We should generate this swagger in a worker. maybe at an interval?
+            -- Or we can support a button to regenerate it
+            -- Or we can trigger a background process specifically when a user loads a docs page.
+            endpoints <- Endpoints.endpointsByProjectId pid
+            let endpoint_hashes = V.map (.hash) endpoints
+            shapes <- Shapes.shapesByEndpointHashes pid endpoint_hashes
+            fields <- Fields.fieldsByEndpointHashes pid endpoint_hashes
+            let field_hashes = V.map (.fHash) fields
+            formats <- Formats.formatsByFieldsHashes pid field_hashes
+            let (projectTitle, projectDescription) = case project of
+                  (Just pr) -> (pr.title, pr.description)
+                  Nothing -> ("__APITOOLKIT", "Edit project description")
+            let gn = GenerateSwagger.generateSwagger projectTitle projectDescription endpoints shapes fields formats
+            pure (gn, "")
+          (swgrs, Nothing) -> do
+            let latest = V.head swgrs
+            let sw = latest.swaggerJson
+            let idx = show latest.id.swaggerId
+            pure (sw, idx)
+        pure (project, V.reverse swaggers, swaggerVal, swaggerValId)
 
       let bwconf =
             (def :: BWConfig)

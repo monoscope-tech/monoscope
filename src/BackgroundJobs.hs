@@ -10,7 +10,6 @@ module BackgroundJobs (jobsWorkerInit, BgJobs (..)) where
 -- This example is using these functions to introduce an artificial delay of a
 -- few seconds in one of the jobs. Otherwise it is not really needed.
 import Colog (LogAction, (<&))
-import System.Config qualified as Config
 import Data.Aeson as Aeson
 import Data.CaseInsensitive qualified as CI
 import Data.List.Extra (intersect, union)
@@ -38,6 +37,7 @@ import Models.Users.Users qualified as Users
 import NeatInterpolation (text, trimming)
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), createJob, startJobRunner, throwParsePayload)
+import System.Config qualified as Config
 
 import Pages.Reports qualified as RP
 import Pkg.Mail

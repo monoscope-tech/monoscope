@@ -16,7 +16,7 @@ import System.Config
 renderError
   :: forall (es :: [Effect]) (a :: Type)
    . Error ServerError :> es
-  =>  AuthContext
+  => AuthContext
   -> Status
   -> Eff es a
 renderError env status = do

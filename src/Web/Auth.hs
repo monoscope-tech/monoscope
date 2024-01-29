@@ -1,12 +1,17 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE RankNTypes #-}
 
-module Web.Auth (logoutH, loginRedirectH, loginH, authCallbackH, 
-  authHandler, APItoolkitAuthContext) where
+module Web.Auth (
+  logoutH,
+  loginRedirectH,
+  loginH,
+  authCallbackH,
+  authHandler,
+  APItoolkitAuthContext,
+) where
 
 import Colog (LogAction)
 import Colog.Core ((<&))
-import System.Config (DashboardM, env, pool)
 import Control.Error (note)
 import Control.Lens qualified as L
 import Data.Aeson.Lens (key, _String)
@@ -16,6 +21,7 @@ import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (Connection)
+import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Lucid (Html)
 import Lucid.Html5
 import Models.Users.Sessions qualified as Sessions
@@ -24,8 +30,7 @@ import Network.Wai (Request (requestHeaders))
 import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
 import Optics.Operators ((^.))
 import Pkg.ConvertKit qualified as ConvertKit
-import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
-import Relude hiding (asks, ask)
+import Relude hiding (ask, asks)
 import Servant (
   Context (EmptyContext, (:.)),
   Handler,
@@ -39,9 +44,9 @@ import Servant (
  )
 import Servant.Server.Experimental.Auth (AuthHandler, mkAuthHandler)
 import SessionCookies (craftSessionCookie, emptySessionCookie)
+import System.Config (DashboardM, env, pool)
 import Web.Cookie (SetCookie, parseCookies)
 import Prelude (lookup)
-
 
 import Control.Lens ((.~), (^?))
 import Control.Monad.Except qualified as T
@@ -64,6 +69,8 @@ import Effectful.Reader.Static (ask, asks)
 import Log (Logger)
 import Lucid (Html)
 import Lucid.Html5
+import Models.Users.Sessions qualified as Sessions
+import Models.Users.Users qualified as Users
 import Network.HTTP.Types (hCookie)
 import Network.Wai
 import Network.Wreq (defaults, getWith, post)
@@ -71,12 +78,10 @@ import Network.Wreq qualified as Wreq
 import Network.Wreq.Lens (responseBody)
 import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
-import Servant qualified 
+import Servant qualified
 import Servant.API (Header, Headers, NoContent (NoContent), addHeader)
 import Servant.Server
 import Servant.Server.Experimental.Auth (AuthHandler, mkAuthHandler)
-import Models.Users.Sessions qualified as Sessions 
-import Models.Users.Users qualified as Users
 import System.Config
 import System.Logging qualified as Logging
 import System.Types
@@ -110,7 +115,7 @@ authHandler logger env =
           Just (user, userSession) -> do
             pure (user, userSession.id)
       let sessionCookie = Sessions.craftSessionCookie sessionId False
-      pure $ Sessions.addCookie sessionCookie (Sessions.Session{persistentSession=mbPersistentSession, ..})
+      pure $ Sessions.addCookie sessionCookie (Sessions.Session{persistentSession = mbPersistentSession, ..})
 
 
 getCookies :: Request -> Cookies
@@ -180,9 +185,8 @@ effToHandler computation = do
   either T.throwError pure v
 
 
-
 logoutH
-  :: ATBaseCtx 
+  :: ATBaseCtx
       ( Headers
           '[Header "Location" Text, Header "Set-Cookie" SetCookie]
           NoContent
@@ -194,7 +198,7 @@ logoutH = do
 
 
 loginRedirectH
-  :: ATBaseCtx 
+  :: ATBaseCtx
       ( Headers
           '[Header "Location" Text, Header "Set-Cookie" SetCookie]
           NoContent
@@ -206,7 +210,7 @@ loginRedirectH = do
 
 -- loginH
 loginH
-  :: ATBaseCtx 
+  :: ATBaseCtx
       ( Headers
           '[Header "Location" Text, Header "Set-Cookie" SetCookie]
           NoContent
@@ -224,7 +228,7 @@ loginH = do
 authCallbackH
   :: Maybe Text
   -> Maybe Text -- state variable from auth0
-  -> ATBaseCtx 
+  -> ATBaseCtx
       ( Headers
           '[Header "Location" Text, Header "Set-Cookie" SetCookie]
           (Html ())
@@ -284,7 +288,6 @@ authCallbackH codeM _ = do
               meta_ [httpEquiv_ "refresh", content_ "1;url=/"]
             body_ do
               a_ [href_ "/"] "Continue to APIToolkit"
-
 
 
 -- We need to handle errors for the persistent session better and redirect if there's an error

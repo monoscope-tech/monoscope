@@ -16,14 +16,11 @@ module Pages.Projects.CreateProject (
 ) where
 
 import BackgroundJobs qualified
-import System.Config
 import Data.Aeson (encode)
 import Data.Aeson.QQ (aesonQQ)
 import Data.ByteString.Base64 qualified as B64
 import Data.CaseInsensitive (original)
 import Data.CaseInsensitive qualified as CI
-import Effectful.Reader.Static (ask, asks)
-import Effectful.PostgreSQL.Transact.Effect
 import Data.Default
 import Data.List.Extra (cons)
 import Data.List.Unique
@@ -38,6 +35,8 @@ import Data.Vector qualified as V
 import Data.Vector.Generic qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple.Notification (Notification (notificationChannel))
+import Effectful.PostgreSQL.Transact.Effect
+import Effectful.Reader.Static (ask, asks)
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript
@@ -61,9 +60,10 @@ import Servant (
   noHeader,
  )
 import Servant.Htmx
+import System.Config
+import System.Types
 import Utils
 import Web.FormUrlEncoded (FromForm)
-import System.Types
 
 
 data CreateProjectForm = CreateProjectForm
@@ -106,9 +106,9 @@ checkEmail = isJust . T.find (== '@')
 ----------------------------------------------------------------------------------------------------------
 -- createProjectGetH is the handler for the create projects page
 createProjectGetH :: ATAuthCtx (Html ())
-createProjectGetH  = do
+createProjectGetH = do
   appCtx <- ask @AuthContext
-  sess <- Sessions.getSession 
+  sess <- Sessions.getSession
   let bwconf =
         (def :: BWConfig)
           { sessM = sess.persistentSession
@@ -119,7 +119,7 @@ createProjectGetH  = do
 
 ----------------------------------------------------------------------------------------------------------
 projectSettingsGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
-projectSettingsGetH  pid = do
+projectSettingsGetH pid = do
   appCtx <- ask @AuthContext
   sess <- Sessions.getSession
   let pSess = Unsafe.fromJust sess.persistentSession
@@ -144,7 +144,7 @@ projectSettingsGetH  pid = do
 
 ----------------------------------------------------------------------------------------------------------
 deleteProjectGetH :: Projects.ProjectId -> ATAuthCtx (Headers '[HXTrigger, HXRedirect] (Html ()))
-deleteProjectGetH  pid = do
+deleteProjectGetH pid = do
   sess <- Sessions.getSession
   isMember <- dbtToEff $ userIsProjectMember (Unsafe.fromJust sess.persistentSession) pid
   if not isMember
@@ -191,7 +191,7 @@ createProjectPostH createP = do
   appCtx <- ask @AuthContext
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
-  
+
   validationRes <- validateM createProjectFormV createP
   case validationRes of
     Right cpe -> pure $ noHeader $ noHeader $ createProjectBody sess appCtx.config createP.isUpdate createP cpe Nothing Nothing

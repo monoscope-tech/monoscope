@@ -1,22 +1,22 @@
-{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 module System.Config (EnvConfig (..), AuthContext (..), DashboardM, ctxToHandler, getAppContext, configToEnv, DeploymentEnv (..)) where
 
 import Colog (LogAction, logStringStdout)
+import Data.Cache
 import Data.Cache (Cache)
 import Data.Default (Default)
 import Data.Pool as Pool
 import Data.Text qualified as T
-import System.Clock
 import Data.Text.Lazy qualified as LT
 import Database.PostgreSQL.Simple (Connection)
 import Models.Projects.Projects qualified as Projects
 import Optics.TH
 import Relude
 import Servant.Server (Handler)
+import System.Clock
 import System.Envy (FromEnv, Var, fromVar, toVar)
-import Data.Cache
 
 import Colourista.IO (blueMessage)
 import Configuration.Dotenv qualified as Dotenv
@@ -94,8 +94,8 @@ data AuthContext = AuthContext
   { env :: EnvConfig
   , pool :: Pool.Pool Connection
   , jobsPool :: Pool.Pool Connection
-  -- TODO: remove
-  , logger :: LogAction IO String
+  , -- TODO: remove
+    logger :: LogAction IO String
   , projectCache :: Cache Projects.ProjectId Projects.ProjectCache
   , config :: EnvConfig
   }
@@ -104,13 +104,13 @@ data AuthContext = AuthContext
 -- TODO: remove
 type DashboardM = ReaderT AuthContext Handler
 
+
 -- TODO: remove
 ctxToHandler :: AuthContext -> DashboardM a -> Handler a
 ctxToHandler s x = runReaderT x s
 
+
 -- ===============
-
-
 
 data DeploymentEnv = Prod | Staging
   deriving stock (Read, Show, Generic)
@@ -135,7 +135,7 @@ configToEnv config = do
   jobsPool <- liftIO $ Pool.newPool $ Pool.defaultPoolConfig createPgConnIO PG.close (60 * 6) 250
   projectCache <- liftIO $ newCache (Just $ TimeSpec (60 * 60) 0) -- :: m (Cache Projects.ProjectId Projects.ProjectCache) -- 60*60secs or 1 hour TTL
   pure
-   AuthContext 
+    AuthContext
       { pool = pool
       , jobsPool = jobsPool
       , env = config
@@ -145,7 +145,7 @@ configToEnv config = do
       }
 
 
-getAppContext :: Eff '[Fail, IOE] AuthContext 
+getAppContext :: Eff '[Fail, IOE] AuthContext
 getAppContext = do
   _ <- liftIO (try (Dotenv.loadFile Dotenv.defaultConfig) :: IO (Either SomeException ()))
   configE <- liftIO (decodeEnv :: IO (Either String EnvConfig))

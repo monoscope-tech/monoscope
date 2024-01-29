@@ -3,7 +3,6 @@
 {-# HLINT ignore "Use safeToEnum" #-}
 module Pkg.Mail (sendEmail, sendSlackMessage) where
 
-import System.Config qualified as Config
 import Control.Lens ((.~))
 import Data.Aeson.QQ
 import Data.Pool
@@ -16,6 +15,7 @@ import Network.HaskellNet.SMTP
 import Network.Mail.Mime
 import Network.Wreq
 import Relude
+import System.Config qualified as Config
 
 
 sendEmail :: Config.EnvConfig -> Text -> Text -> LText -> IO ()

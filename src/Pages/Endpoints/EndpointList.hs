@@ -1,6 +1,5 @@
 module Pages.Endpoints.EndpointList (endpointListGetH, renderEndpoint) where
 
-import System.Config
 import Data.Default (def)
 import Data.Text (toLower)
 import Data.Text qualified as T
@@ -12,6 +11,8 @@ import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (
   withPool,
  )
+import Effectful.PostgreSQL.Transact.Effect
+import Effectful.Reader.Static (ask, asks)
 import Fmt (commaizeF, fixedF, fmt, (+|), (|+))
 import Lucid
 import Lucid.Htmx
@@ -26,13 +27,10 @@ import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Charts.Charts qualified as Charts
 import Pages.NonMember
 import Relude hiding (ask, asks)
-import Utils (deleteParam, faIcon_, faSprite_, mIcon_, textToBool, userIsProjectMember)
-import System.Types
-import Effectful.Reader.Static (ask, asks)
-import Effectful.PostgreSQL.Transact.Effect
 import Relude.Unsafe qualified as Unsafe
-
-
+import System.Config
+import System.Types
+import Utils (deleteParam, faIcon_, faSprite_, mIcon_, textToBool, userIsProjectMember)
 
 
 data ParamInput = ParamInput
@@ -43,8 +41,8 @@ data ParamInput = ParamInput
   }
 
 
-endpointListGetH ::  Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
-endpointListGetH  pid layoutM ackdM archivedM hostM projectHostM sortM hxRequestM hxBoostedM hxCurrentURL = do
+endpointListGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
+endpointListGetH pid layoutM ackdM archivedM hostM projectHostM sortM hxRequestM hxBoostedM hxCurrentURL = do
   let ackd = maybe True textToBool ackdM
   let archived = maybe False textToBool archivedM
 
@@ -61,12 +59,12 @@ endpointListGetH  pid layoutM ackdM archivedM hostM projectHostM sortM hxRequest
       pure $ userNotMemeberPage sess
     else do
       (project, endpointStats, projHosts) <- dbtToEff do
-          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-          endpointStats <- case hostM of
-            Just h -> Endpoints.dependencyEndpointsRequestStatsByProject pid h
-            Nothing -> Endpoints.endpointRequestStatsByProject pid ackd archived projectHostM
-          projHosts <- Endpoints.getProjectHosts pid
-          pure (project, endpointStats, projHosts)
+        project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+        endpointStats <- case hostM of
+          Just h -> Endpoints.dependencyEndpointsRequestStatsByProject pid h
+          Nothing -> Endpoints.endpointRequestStatsByProject pid ackd archived projectHostM
+        projHosts <- Endpoints.getProjectHosts pid
+        pure (project, endpointStats, projHosts)
       let bwconf =
             (def :: BWConfig)
               { sessM = Just sess

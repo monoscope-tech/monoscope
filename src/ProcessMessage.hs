@@ -4,7 +4,6 @@ module ProcessMessage (
 ) where
 
 import Colog.Core (LogAction (..), (<&))
-import System.Config qualified as Config
 import Control.Exception (try)
 import Control.Lens ((^?), _Just)
 import Control.Monad.Trans.Except (except, throwE)
@@ -27,6 +26,7 @@ import Models.Projects.Projects qualified as Projects
 import Relude hiding (hoistMaybe)
 import RequestMessages qualified
 import System.Clock
+import System.Config qualified as Config
 import Text.Pretty.Simple (pShow)
 import Utils (DBField, eitherStrToText)
 

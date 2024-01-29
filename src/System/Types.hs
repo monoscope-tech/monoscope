@@ -15,17 +15,18 @@ import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB)
 import Effectful.Reader.Static (Reader)
 import Effectful.Time (Time)
+import Models.Users.Sessions qualified as Sessions
 import Relude
 import Servant (AuthProtect, Header, Headers, ServerError)
 import Servant.Server.Experimental.Auth (AuthServerData)
+import System.Config
 import Web.Cookie
-import System.Config 
-import Models.Users.Sessions qualified as Sessions
+
 
 type ATBaseCtx :: Type -> Type
 type ATBaseCtx =
   Eff
-    '[ Effectful.Reader.Static.Reader AuthContext 
+    '[ Effectful.Reader.Static.Reader AuthContext
      , DB
      , Time
      , Log
@@ -37,7 +38,7 @@ type ATBaseCtx =
 type ATAuthCtx =
   Eff
     '[ Effectful.Reader.Static.Reader (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
-     , Effectful.Reader.Static.Reader AuthContext 
+     , Effectful.Reader.Static.Reader AuthContext
      , DB
      , Time
      , Log

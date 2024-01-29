@@ -2,11 +2,12 @@
 
 module Pages.Onboarding (onboardingGetH) where
 
-import System.Config
 import Data.Default (def)
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
+import Effectful.PostgreSQL.Transact.Effect
+import Effectful.Reader.Static (ask, asks)
 import Lucid
 import Lucid.Htmx (hxGet_, hxPost_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript
@@ -19,10 +20,9 @@ import NeatInterpolation
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.NonMember
 import Relude hiding (ask, asks)
-import System.Types
-import Effectful.Reader.Static (ask, asks)
-import Effectful.PostgreSQL.Transact.Effect
 import Relude.Unsafe qualified as Unsafe
+import System.Config
+import System.Types
 import Utils (
   faIcon_,
   faSprite_,
@@ -39,18 +39,17 @@ onboardingGetH pid polling redirected current_tab = do
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
 
-
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
       (project, apikey, hasRequest) <- dbtToEff do
-            project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-            apiKeys <- ProjectApiKeys.projectApiKeysByProjectId pid
-            requestDumps <- RequestDumps.countRequestDumpByProject pid
-            let apikey = if V.null apiKeys then "<APIKEY>" else (V.head apiKeys).keyPrefix
-            pure (project, apikey, requestDumps > 0)
+        project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+        apiKeys <- ProjectApiKeys.projectApiKeysByProjectId pid
+        requestDumps <- RequestDumps.countRequestDumpByProject pid
+        let apikey = if V.null apiKeys then "<APIKEY>" else (V.head apiKeys).keyPrefix
+        pure (project, apikey, requestDumps > 0)
       let bwconf =
             (def :: BWConfig)
               { sessM = Just sess

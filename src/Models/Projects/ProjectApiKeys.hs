@@ -1,9 +1,9 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module Models.Projects.ProjectApiKeys (
   ProjectApiKey (..),
@@ -93,6 +93,7 @@ revokeApiKey kid = do
   where
     q =
       [sql| UPDATE projects.project_api_keys SET deleted_at=NOW(), active=false where id=?;|]
+
 
 countProjectApiKeysByProjectId :: Projects.ProjectId -> DBT IO Int
 countProjectApiKeysByProjectId pid = do

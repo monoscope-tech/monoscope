@@ -15,9 +15,6 @@ module Models.Users.Users (
   addUserToAllProjects,
 ) where
 
-
-import Effectful
-import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Data.Aeson (FromJSON (parseJSON), ToJSON (toJSON))
 import Data.CaseInsensitive (CI)
 import Data.CaseInsensitive qualified as CI
@@ -35,6 +32,8 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact qualified as PgT
 import Deriving.Aeson qualified as DAE
+import Effectful
+import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import GHC.Records (HasField (getField))
 import Optics.TH
 import Relude
@@ -116,8 +115,10 @@ createUser firstName lastName picture email = do
 insertUser :: User -> PgT.DBT IO ()
 insertUser = insert @User
 
+
 userById :: DB :> es => UserId -> Eff es (Maybe User)
 userById userId = dbtToEff $ selectById (Only userId)
+
 
 userByEmail :: Text -> PgT.DBT IO (Maybe User)
 userByEmail email = selectOneByField @User [field| email |] (Only email)

@@ -1,6 +1,6 @@
 module Pages.Log where
 
-import System.Config
+import Control.Error (hush)
 import Data.Aeson (Value)
 import Data.Aeson qualified as AE
 import Data.Containers.ListUtils (nubOrd)
@@ -8,7 +8,6 @@ import Data.Default (def)
 import Data.HashMap.Strict qualified as HM
 import Data.List (elemIndex)
 import Data.Text qualified as T
-import Control.Error (hush)
 import Data.Time (
   UTCTime,
   ZonedTime,
@@ -24,6 +23,8 @@ import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
+import Effectful.PostgreSQL.Transact.Effect
+import Effectful.Reader.Static (ask, asks)
 import Lucid
 import Lucid.Base
 import Lucid.Htmx
@@ -36,13 +37,12 @@ import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Pages.NonMember
 import Pkg.Components (loader)
+import Relude hiding (ask, asks)
+import Relude.Unsafe qualified as Unsafe
+import System.Config
+import System.Types
 import Utils
 import Witch (from)
-import Relude hiding (ask, asks)
-import System.Types
-import Effectful.Reader.Static (ask, asks)
-import Effectful.PostgreSQL.Transact.Effect
-import Relude.Unsafe qualified as Unsafe
 
 
 -- $setup
@@ -58,14 +58,12 @@ parseTimestamp = parseTimeM True defaultTimeLocale "%Y-%m-%dT%H:%M:%S.%qZ"
 
 apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
 apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoostedM = do
- 
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
   let currUserId = sess.userId
-
 
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
   let query = fromMaybe "" queryM
@@ -91,9 +89,9 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoostedM
     else do
       -- Temporary option, using Right to unwrap. Should handle Left
       (project, tableAsMapsE) <- dbtToEff do
-          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-          tableAsMaps <- RequestDumps.selectLogTable pid query cursorM' (fromD, toD) summaryCols
-          pure (project, tableAsMaps)
+        project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+        tableAsMaps <- RequestDumps.selectLogTable pid query cursorM' (fromD, toD) summaryCols
+        pure (project, tableAsMaps)
 
       let tableAsMaps = Unsafe.fromJust $ hush $ tableAsMapsE
 

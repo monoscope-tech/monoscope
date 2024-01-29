@@ -168,7 +168,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
               child
         Just sess ->
           do
-            let currUser =  (sess.user.getUser)
+            let currUser = (sess.user.getUser)
                 sideNav' = currProject & maybe "" \project -> sideNav sess project pageTitle menuItem hasIntegrated
             -- let currUserEmail = CI.original currUser.email
             section_ [class_ "flex flex-row h-screen overflow-hidden"] do

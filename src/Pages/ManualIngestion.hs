@@ -1,13 +1,14 @@
 module Pages.ManualIngestion (RequestMessageForm (..), manualIngestGetH, manualIngestPostH) where
 
 import Colog.Core ((<&))
-import System.Config
 import Data.Aeson (Value, eitherDecodeStrict)
 import Data.Default (def)
 import Data.Text.Encoding.Base64 qualified as B64
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Entity.DBT (withPool)
+import Effectful.PostgreSQL.Transact.Effect
+import Effectful.Reader.Static (ask, asks)
 import Lucid
 import Lucid.Htmx
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -18,11 +19,10 @@ import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.NonMember
 import ProcessMessage qualified
 import Relude hiding (ask, asks)
-import System.Types
-import Effectful.Reader.Static (ask, asks)
-import Effectful.PostgreSQL.Transact.Effect
 import Relude.Unsafe qualified as Unsafe
 import RequestMessages qualified
+import System.Config
+import System.Types
 import Utils
 import Web.FormUrlEncoded (FromForm)
 
@@ -89,16 +89,14 @@ reqMsgFormToReqMsg pid RequestMessageForm{urlPath, ..} = do
 -- - preload the form wiht the data from the last submitted and persisted request dump from the database.
 -- - [x] document how to access this page from within the github readme.
 -- - [FUTURE] If we ever have a super admin, it should be possible to access this page directly from there for any given company.
-manualIngestPostH ::  Projects.ProjectId -> RequestMessageForm -> ATAuthCtx (Html ())
+manualIngestPostH :: Projects.ProjectId -> RequestMessageForm -> ATAuthCtx (Html ())
 manualIngestPostH pid reqMF = do
-
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
   let env = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
   let currUserId = sess.userId
-
 
   logger <- asks logger
   isMember <- dbtToEff $ userIsProjectMember sess pid
@@ -117,14 +115,12 @@ manualIngestPostH pid reqMF = do
 
 manualIngestGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
 manualIngestGetH pid = do
-
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
   let env = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
   let currUserId = sess.userId
-
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember

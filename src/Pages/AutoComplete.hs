@@ -1,21 +1,30 @@
 module Pages.AutoComplete (getH) where
 
-import System.Config
 import Data.Aeson
 import Data.Aeson qualified as AE
 import Database.PostgreSQL.Entity.DBT (withPool)
+import Effectful.PostgreSQL.Transact.Effect
+import Effectful.Reader.Static (ask, asks)
 import Models.Apis.Fields (parseFieldCategoryEnum)
 import Models.Apis.Fields.Query (autoCompleteFields)
 import Models.Apis.RequestDumps (autoCompleteFromRequestDumps)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Relude
+import Relude hiding (ask, asks)
+import Relude.Unsafe qualified as Unsafe
+import System.Config
+import System.Types
 
 
-getH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> DashboardM AE.Value
-getH sess pid fcategory prefix = do
-  pool <- asks pool
-  fields <- liftIO $ withPool pool do
+getH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> ATAuthCtx AE.Value
+getH pid fcategory prefix = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+
+  fields <- dbtToEff do
     case (fcategory, prefix) of
       (Just c, Just p) -> case category of
         Just cat -> autoCompleteFields pid cat p

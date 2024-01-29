@@ -9,7 +9,6 @@ module Start (
 
 import BackgroundJobs qualified
 import Colog.Core (LogAction (..), logStringStdout, (<&))
-import System.Config qualified
 import Configuration.Dotenv as Dotenv
 import Control.Concurrent.Async
 import Control.Exception (try)
@@ -33,13 +32,14 @@ import Network.Wai.Handler.Warp (run)
 import Optics.Operators
 import ProcessMessage
 import Relude
-import System.Server qualified as Server
 import System.Clock
+import System.Config qualified
 import System.Envy (decodeEnv)
+import System.Server qualified as Server
+
 
 startApp :: IO ()
-startApp = Server.runAPItoolkit 
-
+startApp = Server.runAPItoolkit
 
 -- startApp :: IO ()
 -- startApp = do
@@ -96,7 +96,6 @@ startApp = Server.runAPItoolkit
 --         _ <- Pool.destroyAllResources poolConn
 --         pass
 
-
 -- -- pubsubService connects to the pubsub service and listens for  messages,
 -- -- then it calls the processMessage function to process the messages, and
 -- -- acknoleges the list message in one request.
@@ -124,7 +123,6 @@ startApp = Server.runAPItoolkit
 --           msgIds <- liftIO $ processMessages logger envConfig conn messages projectCache
 --           let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just (catMaybes msgIds)
 --           unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env
-
 
 -- -- pubSubScope :: Proxy PubSub.Pubsub'FullControl
 -- pubSubScope :: Proxy '["https://www.googleapis.com/auth/pubsub"]

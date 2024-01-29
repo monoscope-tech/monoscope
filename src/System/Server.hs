@@ -31,13 +31,12 @@ import Servant.Server (Handler, ServerError)
 import Servant.Server.Generic (genericServeTWithContext)
 import System.Config
 import System.Logging qualified as Logging
-import Web.Routes qualified as Routes
 import System.Types
-
+import Web.Routes qualified as Routes
 
 
 runAPItoolkit :: IO ()
-runAPItoolkit  =
+runAPItoolkit =
   Safe.bracket
     (getAppContext & runFailIO & runEff)
     (runEff . shutdownTalstack)
@@ -68,7 +67,7 @@ runServer appLogger env = do
 
 mkServer
   :: Log.Logger
-  -> AuthContext 
+  -> AuthContext
   -> Servant.Application
 mkServer logger env = do
   genericServeTWithContext

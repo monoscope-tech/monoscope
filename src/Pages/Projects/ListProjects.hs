@@ -2,21 +2,21 @@ module Pages.Projects.ListProjects (
   listProjectsGetH,
 ) where
 
-import System.Config
 import Data.Default (def)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
+import Effectful.Reader.Static (ask, asks)
 import Fmt
 import Lucid
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
+import Models.Users.Users
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude hiding (ask, asks)
-import Effectful.Reader.Static (ask, asks)
 import Servant (Union, WithStatus (..), respond)
-import Utils (GetOrRedirect, faIcon_, redirect)
+import System.Config
 import System.Types
-import Models.Users.Users
+import Utils (GetOrRedirect, faIcon_, redirect)
 
 
 listProjectsGetH :: ATAuthCtx (Union GetOrRedirect)

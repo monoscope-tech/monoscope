@@ -2,7 +2,6 @@
 
 module Pages.Charts.Charts (chartsGetH, ChartType (..), throughput, throughputEndpointHTML, lazy, ChartExp (..), QueryBy (..), GroupBy (..)) where
 
-import System.Config (DashboardM, pool)
 import Data.Aeson qualified as AE
 import Data.List (groupBy, lookup)
 import Data.Text (toLower)
@@ -14,6 +13,8 @@ import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, withPool)
 import Database.PostgreSQL.Simple.Types (Query (Query))
+import Effectful.PostgreSQL.Transact.Effect
+import Effectful.Reader.Static (ask, asks)
 import Lucid
 import Lucid.Htmx
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -22,9 +23,12 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Network.URI (escapeURIString, isUnescapedInURI)
 import Pages.NonMember
-import Relude
+import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import Servant (FromHttpApiData (..))
+import System.Config
+import System.Config (DashboardM, pool)
+import System.Types
 import Utils (DBField (MkDBField), userIsProjectMember)
 import Witch (from)
 
@@ -154,8 +158,14 @@ formatZonedTimeAsUTC zonedTime =
   toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" (zonedTimeToUTC zonedTime)
 
 
-chartsGetH :: Sessions.PersistentSession -> M ChartType -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> DashboardM (Html ())
-chartsGetH _ typeM groupByM queryByM slotsM limitsM themeM idM showLegendM = do
+chartsGetH :: M ChartType -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> ATAuthCtx (Html ())
+chartsGetH typeM groupByM queryByM slotsM limitsM themeM idM showLegendM = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+
   let chartExps =
         catMaybes
           [ TypeE <$> typeM
@@ -167,12 +177,11 @@ chartsGetH _ typeM groupByM queryByM slotsM limitsM themeM idM showLegendM = do
           , IdE <$> idM
           , showLegendM >>= (\x -> if x then Just ShowLegendE else Nothing)
           ]
-  pool <- asks pool
   randomID <- liftIO UUIDV4.nextRandom
   let (q, args, fromM, toM) = case groupByM of
         Just GBDurationPercentile -> buildReqDumpSQL chartExps
         _ -> buildReqDumpSQL chartExps
-  chartData <- liftIO $ withPool pool $ query Select (Query $ encodeUtf8 q) args
+  chartData <- dbtToEff $ query Select (Query $ encodeUtf8 q) args
 
   let (headers, groupedData) = pivot' $ toList chartData
       headersJSON = decodeUtf8 $ AE.encode headers
@@ -285,10 +294,15 @@ lazy queries =
 ---------------------------- OLD functions
 --
 
-throughputEndpointHTML :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Bool -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
-throughputEndpointHTML sess pid idM groupBy_ endpointHash shapeHash formatHash statusCodeGT numSlotsM limitM showLegend_ fromDStrM toDStrM chartTheme = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+throughputEndpointHTML :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Bool -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
+throughputEndpointHTML pid idM groupBy_ endpointHash shapeHash formatHash statusCodeGT numSlotsM limitM showLegend_ fromDStrM toDStrM chartTheme = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
@@ -305,13 +319,13 @@ throughputEndpointHTML sess pid idM groupBy_ endpointHash shapeHash formatHash s
 
       script <- case groupBy_ of
         Just _ -> do
-          chartData <- liftIO $ withPool pool $ RequestDumps.throughputBy' pid groupBy_ endpointHash shapeHash formatHash statusCodeGT (fromMaybe 0 numSlotsM) limitM Nothing (fromD, toD)
+          chartData <- dbtToEff $ RequestDumps.throughputBy' pid groupBy_ endpointHash shapeHash formatHash statusCodeGT (fromMaybe 0 numSlotsM) limitM Nothing (fromD, toD)
           let (headers, groupedData) = pivot' $ toList chartData
           let headersJSON = decodeUtf8 $ AE.encode headers
           let groupedDataJSON = decodeUtf8 $ AE.encode $ transpose groupedData
           pure [text| throughputEChartTable("id-$entityId",$headersJSON, $groupedDataJSON, [$groupByField], $showLegend, "$chartThemeTxt", "$fromDStr", "$toDStr") |]
         Nothing -> do
-          chartData <- liftIO $ withPool pool $ RequestDumps.throughputBy pid groupBy_ endpointHash shapeHash formatHash statusCodeGT (fromMaybe 0 numSlotsM) limitM Nothing (fromD, toD)
+          chartData <- dbtToEff $ RequestDumps.throughputBy pid groupBy_ endpointHash shapeHash formatHash statusCodeGT (fromMaybe 0 numSlotsM) limitM Nothing (fromD, toD)
           pure [text| throughputEChart("id-$entityId", $chartData, [$groupByField], $showLegend, "$chartThemeTxt") |]
       pure do
         div_ [id_ $ "id-" <> entityId, class_ "w-full h-full"] ""

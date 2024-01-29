@@ -1,6 +1,5 @@
 module Pages.LogExplorer.LogItem where
 
-import System.Config
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEK
 import Data.ByteString.Lazy qualified as BS
@@ -11,6 +10,8 @@ import Data.Time.Format
 import Data.UUID qualified as UUID
 import Data.Vector (Vector, iforM_)
 import Database.PostgreSQL.Entity.DBT (withPool)
+import Effectful.PostgreSQL.Transact.Effect
+import Effectful.Reader.Static (ask, asks)
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx
@@ -23,27 +24,22 @@ import Network.URI (escapeURIString, isUnescapedInURI, isUnreserved)
 import Pages.Components qualified as Components
 import Pages.NonMember
 import PyF
-import System.Clock
-import Utils
 import Relude hiding (ask, asks)
-import System.Types
-import Effectful.Reader.Static (ask, asks)
-import Effectful.PostgreSQL.Transact.Effect
 import Relude.Unsafe qualified as Unsafe
-
-
+import System.Clock
+import System.Config
+import System.Types
+import Utils
 
 
 expandAPIlogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATAuthCtx (Html ())
-expandAPIlogItemH  pid rdId createdAt = do
- 
+expandAPIlogItemH pid rdId createdAt = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
   let currUserId = sess.userId
-
 
   logItemM <- dbtToEff $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
   let content = case logItemM of
@@ -208,17 +204,14 @@ function expireChanged(event) {
   |]
 
 
-apiLogItemH ::  Projects.ProjectId -> UUID.UUID -> UTCTime -> ATAuthCtx (Html ())
+apiLogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATAuthCtx (Html ())
 apiLogItemH pid rdId createdAt = do
-
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
   let currUserId = sess.userId
-
-
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember

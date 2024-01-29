@@ -1,7 +1,6 @@
 module ProcessMessageSpec (spec) where
 
 import Colog (logStringStdout)
-import System.Config qualified as Config
 import Data.Aeson (Result (Error, Success), Value, fromJSON)
 import Data.Aeson.QQ (aesonQQ)
 import Data.Cache
@@ -19,6 +18,7 @@ import Relude
 import Relude.Unsafe qualified as Unsafe
 import RequestMessages qualified
 import System.Clock
+import System.Config qualified as Config
 import Test.Hspec
 
 

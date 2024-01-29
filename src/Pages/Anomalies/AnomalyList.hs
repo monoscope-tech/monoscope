@@ -12,7 +12,6 @@ module Pages.Anomalies.AnomalyList (
   anomalyArchiveButton,
 ) where
 
-import System.Config
 import Data.Aeson (encode)
 import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
@@ -27,6 +26,8 @@ import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute, withPool)
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Effectful.PostgreSQL.Transact.Effect
+import Effectful.Reader.Static (ask, asks)
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx
@@ -52,16 +53,15 @@ import Pages.Components qualified as Components
 import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
 import Pages.NonMember
 import Pkg.Components (loader)
+import Relude hiding (ask, asks)
+import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
+import System.Config
+import System.Types
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils
 import Web.FormUrlEncoded (FromForm)
-import Relude hiding (ask, asks)
-import System.Types
-import Effectful.Reader.Static (ask, asks)
-import Effectful.PostgreSQL.Transact.Effect
-import Relude.Unsafe qualified as Unsafe
 
 
 newtype AnomalyBulkForm = AnomalyBulk
@@ -80,7 +80,6 @@ acknowlegeAnomalyGetH pid aid = do
   let sess = Unsafe.fromJust sess'.persistentSession
   let currUserId = sess.userId
 
-
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
@@ -91,15 +90,14 @@ acknowlegeAnomalyGetH pid aid = do
       pure $ anomalyAcknowlegeButton pid aid True
 
 
-unAcknowlegeAnomalyGetH ::  Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (Html ())
-unAcknowlegeAnomalyGetH  pid aid = do
+unAcknowlegeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (Html ())
+unAcknowlegeAnomalyGetH pid aid = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
   let currUserId = sess.userId
-
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
@@ -112,14 +110,13 @@ unAcknowlegeAnomalyGetH  pid aid = do
 
 
 archiveAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (Html ())
-archiveAnomalyGetH  pid aid = do
+archiveAnomalyGetH pid aid = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
   let currUserId = sess.userId
-
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
@@ -131,7 +128,7 @@ archiveAnomalyGetH  pid aid = do
       pure $ anomalyArchiveButton pid aid True
 
 
-unArchiveAnomalyGetH ::  Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (Html ())
+unArchiveAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (Html ())
 unArchiveAnomalyGetH pid aid = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
@@ -139,7 +136,6 @@ unArchiveAnomalyGetH pid aid = do
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
   let currUserId = sess.userId
-
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
@@ -153,7 +149,7 @@ unArchiveAnomalyGetH pid aid = do
 
 -- When given a list of anomalyIDs and an action, said action would be applied to the anomalyIDs.
 -- Then a notification should be triggered, as well as an action to reload the anomaly List.
-anomalyBulkActionsPostH ::  Projects.ProjectId -> Text -> AnomalyBulkForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
+anomalyBulkActionsPostH :: Projects.ProjectId -> Text -> AnomalyBulkForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
 anomalyBulkActionsPostH pid action items = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
@@ -161,8 +157,6 @@ anomalyBulkActionsPostH pid action items = do
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
   let currUserId = sess.userId
-
-
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
@@ -186,7 +180,7 @@ data ParamInput = ParamInput
   }
 
 
-anomalyListGetH ::  Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Endpoints.EndpointId -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
+anomalyListGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Endpoints.EndpointId -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
 anomalyListGetH pid layoutM ackdM archivedM sortM page loadM endpointM hxRequestM hxBoostedM = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
@@ -194,8 +188,6 @@ anomalyListGetH pid layoutM ackdM archivedM sortM page loadM endpointM hxRequest
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
   let currUserId = sess.userId
-
-
 
   let ackd = textToBool <$> ackdM
   let archived = textToBool <$> archivedM
@@ -210,11 +202,11 @@ anomalyListGetH pid layoutM ackdM archivedM sortM page loadM endpointM hxRequest
             Just p -> if limit == Just 51 then 0 else Unsafe.read (toString p)
             Nothing -> 0
       (project, anomalies) <- dbtToEff do
-            project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-            anomalies <- case layoutM of
-              Just _ -> Anomalies.selectAnomalies pid endpointM ackd archived sortM limit (pageInt * fetchLimit)
-              Nothing -> Anomalies.selectAnomalies pid Nothing ackd archived sortM limit (pageInt * fetchLimit)
-            pure (project, anomalies)
+        project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+        anomalies <- case layoutM of
+          Just _ -> Anomalies.selectAnomalies pid endpointM ackd archived sortM limit (pageInt * fetchLimit)
+          Nothing -> Anomalies.selectAnomalies pid Nothing ackd archived sortM limit (pageInt * fetchLimit)
+        pure (project, anomalies)
       currTime <- liftIO getCurrentTime
       let bwconf =
             (def :: BWConfig)
@@ -475,9 +467,8 @@ anomalyItem hideByDefault currTime anomaly icon title subTitle content = do
     div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $ show anomaly.eventsCount14d
 
 
-anomalyDetailsGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (Html ())
-anomalyDetailsGetH sess pid targetHash hxBoostedM = do
-
+anomalyDetailsGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (Html ())
+anomalyDetailsGetH pid targetHash hxBoostedM = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
@@ -485,16 +476,15 @@ anomalyDetailsGetH sess pid targetHash hxBoostedM = do
   let sess = Unsafe.fromJust sess'.persistentSession
   let currUserId = sess.userId
 
-
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
       (project, anomaly) <- dbtToEff do
-            project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-            anomaly <- Anomalies.getAnomalyVM pid targetHash
-            pure (project, anomaly)
+        project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+        anomaly <- Anomalies.getAnomalyVM pid targetHash
+        pure (project, anomaly)
       let bwconf =
             (def :: BWConfig)
               { sessM = Just sess

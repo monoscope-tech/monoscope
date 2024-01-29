@@ -1,10 +1,11 @@
 module Pages.Outgoing (outgoingGetH) where
 
-import System.Config
 import Data.Default (def)
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT
+import Effectful.PostgreSQL.Transact.Effect
+import Effectful.Reader.Static (ask, asks)
 import Lucid
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
@@ -13,19 +14,27 @@ import Pages.BodyWrapper
 import Pages.Charts.Charts (QueryBy (QBHost))
 import Pages.Charts.Charts qualified as Charts
 import Pages.NonMember
-import Relude
+import Relude hiding (ask, asks)
+import Relude.Unsafe qualified as Unsafe
+import System.Config
+import System.Types
 import Utils
 
 
-outgoingGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
-outgoingGetH sess pid = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+outgoingGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
+outgoingGetH pid = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, hostsEvents) <- liftIO $ withPool pool do
+      (project, hostsEvents) <- dbtToEff do
         project <- Projects.projectById pid
         hostsAndEvents <- Endpoints.dependenciesAndEventsCount pid
         pure (project, hostsAndEvents)

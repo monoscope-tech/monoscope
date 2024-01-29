@@ -46,6 +46,7 @@ default-extensions:
   - LambdaCase
   - MultiParamTypeClasses
   - NamedFieldPuns
+  - GeneralizedNewtypeDeriving 
   - FlexibleContexts
   - NoImplicitPrelude
   - OverloadedLabels

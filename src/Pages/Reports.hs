@@ -17,31 +17,35 @@ module Pages.Reports (
   PerformanceReport (..),
 ) where
 
-import System.Config
-import Data.Default (def)
-import Database.PostgreSQL.Entity.DBT (withPool)
 import Data.Aeson as Aeson
+import Data.Aeson.QQ (aesonQQ)
+import Data.Default (def)
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
+import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime))
 import Data.Vector (Vector)
+import Data.Vector qualified as V
+import Database.PostgreSQL.Entity.DBT (withPool)
+import Effectful.PostgreSQL.Transact.Effect
+import Effectful.Reader.Static (ask, asks)
 import Lucid
 import Lucid.Htmx
+import Lucid.Svg (color_)
+import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Fields.Types (textFieldTypeToText)
+import Models.Apis.Reports qualified as Reports
+import Models.Apis.RequestDumps (EndpointPerf, RequestForReport (endpointHash))
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
-import Relude
-import Data.Aeson.QQ (aesonQQ)
+import Pages.NonMember
+import Relude hiding (ask, asks)
+import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
-import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime))
-import Data.Vector qualified as V
-import Models.Apis.Reports qualified as Reports
-import Models.Apis.Anomalies qualified as Anomalies
-import Data.Text qualified as T
-import Lucid.Svg (color_)
-import Models.Apis.RequestDumps (EndpointPerf, RequestForReport (endpointHash))
-import Pages.NonMember
+import System.Config
+import System.Types
 import Utils
 
 
@@ -93,39 +97,43 @@ data ReportData = ReportData
   deriving anyclass (FromJSON)
 
 
-reportsPostH :: Sessions.PersistentSession -> Projects.ProjectId -> Text -> DashboardM (Headers '[HXTrigger] (Html ()))
-reportsPostH sess pid t = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+reportsPostH :: Projects.ProjectId -> Text -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
+reportsPostH pid t = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Only project memebers can update reports notification settings"]}|]
       pure $ addHeader hxTriggerData $ userNotMemeberPage sess
     else do
-      apiKeys <- liftIO
-        $ withPool
-          pool
-          do
-            Projects.updateProjectReportNotif pid t
+      apiKeys <- dbtToEff do
+        Projects.updateProjectReportNotif pid t
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Report nofications updated Successfully"]}|]
       pure $ addHeader hxTriggerData $ span_ [] ""
 
 
-singleReportGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Reports.ReportId -> DashboardM (Html ())
-singleReportGetH sess pid rid = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+singleReportGetH :: Projects.ProjectId -> Reports.ReportId -> ATAuthCtx (Html ())
+singleReportGetH pid rid = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, report) <- liftIO
-        $ withPool
-          pool
-          do
-            project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-            report <- Reports.getReportById rid
-            pure (project, report)
+      (project, report) <- dbtToEff do
+        project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+        report <- Reports.getReportById rid
+        pure (project, report)
       let bwconf =
             (def :: BWConfig)
               { sessM = Just sess
@@ -135,23 +143,26 @@ singleReportGetH sess pid rid = do
       pure $ bodyWrapper bwconf $ singleReportPage pid report
 
 
-reportsGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
-reportsGetH sess pid page hxRequest hxBoosted = do
+reportsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
+reportsGetH pid page hxRequest hxBoosted = do
   let p = toString (fromMaybe "0" page)
   let pg = fromMaybe 0 (readMaybe p :: Maybe Int)
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, reports) <- liftIO
-        $ withPool
-          pool
-          do
-            project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-            reports <- Reports.reportHistoryByProject pid pg
-            pure (project, reports)
+      (project, reports) <- dbtToEff do
+        project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+        reports <- Reports.reportHistoryByProject pid pg
+        pure (project, reports)
       let nextUrl = "/p/" <> show pid.unProjectId <> "/reports?page=" <> show (pg + 1)
       case (hxRequest, hxBoosted) of
         (Just "true", Nothing) -> pure $ do
