@@ -16,6 +16,7 @@ import PyF
 import Relude hiding (GT, LT, many, some)
 import Text.Megaparsec hiding (State)
 import Text.Megaparsec.Char
+import Relude.Unsafe qualified as Unsafe
 
 
 -- Example queries
@@ -84,7 +85,7 @@ sqlFromQueryComponents sqlCfg qc =
     -- Handle the Either error case correctly not hushing it.
     projectedColsProcessed = mapMaybe (\col -> display <$> hush (parse pSubject "" col)) sqlCfg.projectedColsByUser
     selectedCols = if null qc.select then projectedColsProcessed <> sqlCfg.defaultSelect else qc.select
-    selectClause = T.intercalate "," selectedCols
+    selectClause = T.intercalate "," $ colsNoAsClause $ selectedCols
     whereClause = maybe "" (" AND " <>) qc.whereClause
     groupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause
     dateRangeStr = case sqlCfg.dateRange of
@@ -93,9 +94,9 @@ sqlFromQueryComponents sqlCfg qc =
       _ -> ""
 
     finalSqlQuery =
-      [fmt|SELECT row_to_json(t) FROM ( SELECT {selectClause} FROM apis.request_dumps 
+      [fmt|SELECT json_build_array({selectClause}) FROM apis.request_dumps 
            WHERE project_id='{sqlCfg.pid.toText}'::uuid  and created_at > NOW() - interval '14 days' {cursorT} {dateRangeStr} {whereClause}
-           {groupByClause} ORDER BY created_at desc limit 200 ) t|]
+           {groupByClause} ORDER BY created_at desc limit 200 |]
 
     countQuery =
       [fmt|SELECT count(*) FROM apis.request_dumps 
@@ -215,8 +216,15 @@ defSqlQueryCfg pid =
 
 
 -- >>> listToColNames ["id", "JSONB_ARRAY_LENGTH(errors) as errors_count"]
+-- ["id","errors_count"]
 listToColNames :: [Text] -> [Text]
 listToColNames = map \x -> T.strip $ last $ "" :| T.splitOn "as" x
+
+-- >>> colsNoAsClause ["id", "JSONB_ARRAY_LENGTH(errors) as errors_count"]
+-- ["id","JSONB_ARRAY_LENGTH(errors)"]
+colsNoAsClause :: [Text] -> [Text]
+colsNoAsClause = map \x -> T.strip $ Unsafe.head $ T.splitOn "as" x
+
 
 
 instance HasField "toColNames" QueryComponents [Text] where

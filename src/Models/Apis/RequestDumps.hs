@@ -394,16 +394,17 @@ getRequestDumpsForPreviousReportPeriod pid report_type = query Select (Query $ e
     |]
 
 
-selectLogTable :: Projects.ProjectId -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> DBT IO (Either Text (V.Vector (HM.HashMap Text Value), [Text], Int))
+selectLogTable :: Projects.ProjectId -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> DBT IO (Either Text (V.Vector (V.Vector Value), [Text], Int))
 selectLogTable pid extraQuery cursorM dateRange projectedColsByUser = do
   let resp = parseQueryToComponents ((defSqlQueryCfg pid){cursorM, dateRange, projectedColsByUser}) extraQuery
+  pTraceShowM resp
   case resp of
     Left x -> pure $ Left x
     Right (q, queryComponents) -> do
       logItems <- queryToValues q
       Only count <- fromMaybe (Only 0) <$> queryCount queryComponents.countQuery
-      let logItemsMap = V.mapMaybe convertValueToMap logItems
-      pure $ Right (logItemsMap, queryComponents.toColNames, count)
+      let logItemsV = V.mapMaybe valueToVector logItems
+      pure $ Right (logItemsV, queryComponents.toColNames, count)
 
 
 convertValueToMap :: Only Value -> Maybe (HM.HashMap Text Value)
@@ -411,6 +412,10 @@ convertValueToMap (Only val) = case val of
   AE.Object obj -> Just $ toHashMapText obj
   _ -> Nothing
 
+valueToVector :: Only Value -> Maybe (V.Vector Value)
+valueToVector (Only val) = case val of
+  AE.Array arr -> Just arr
+  _ -> Nothing 
 
 queryToValues :: Text -> DBT IO (V.Vector (Only Value))
 queryToValues q = V.fromList <$> DBT.query_ (Query $ encodeUtf8 q)

@@ -49,11 +49,11 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
       meta_ [name_ "viewport", content_ "width=device-width, initial-scale=1.0"]
       meta_ [httpEquiv_ "X-UA-Compatible", content_ "ie=edge"]
       -- favicon items
-      link_ [rel_ "apple-touch-icon", sizes_ "180x180", href_ "/apple-touch-icon.png"]
-      link_ [rel_ "icon", type_ "image/png", sizes_ "32x32", href_ "/favicon-32x32.png"]
-      link_ [rel_ "icon", type_ "image/png", sizes_ "16x16", href_ "/favicon-16x16.png"]
-      link_ [rel_ "manifest", href_ "/site.webmanifest"]
-      link_ [rel_ "mask-icon", href_ "/safari-pinned-tab.svg", term "color" "#5bbad5"]
+      link_ [rel_ "apple-touch-icon", sizes_ "180x180", href_ "/public/apple-touch-icon.png"]
+      link_ [rel_ "icon", type_ "image/png", sizes_ "32x32", href_ "/public/favicon-32x32.png"]
+      link_ [rel_ "icon", type_ "image/png", sizes_ "16x16", href_ "/public/favicon-16x16.png"]
+      link_ [rel_ "manifest", href_ "/public/site.webmanifest"]
+      link_ [rel_ "mask-icon", href_ "/public/safari-pinned-tab.svg", term "color" "#5bbad5"]
       meta_ [name_ "msapplication-TileColor", content_ "#da532c"]
       meta_ [name_ "theme-color", content_ "#ffffff"]
 
@@ -127,7 +127,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
 
               if("serviceWorker" in navigator) {
                   window.addEventListener("load", () => {
-                    navigator.serviceWorker.register("/sw.js").then(swReg => {}).catch(err => {
+                    navigator.serviceWorker.register("/public/sw.js").then(swReg => {}).catch(err => {
                         console.error('Service Worker Error', err);
                     });
                 });
