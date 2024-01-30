@@ -63,7 +63,7 @@ import Web.Auth (APItoolkitAuthContext, authHandler)
 import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie)
 import Web.Error
-
+import Web.ClientMetadata qualified as ClientMetadata
 
 type QPT a = QueryParam a Text
 type GetRedirect = Verb 'GET 302
@@ -82,6 +82,7 @@ data Routes mode = Routes
   , shareLinkGet :: mode :- "share" :> "r" :> Capture "shareID" UUID.UUID :> Get '[HTML] (Html ())
   , slackInstallGet :: mode :- "slack" :> "oauth" :> "callback" :> QPT "code" :> Get '[HTML] (Html ())
   , slackLinkProjectGet :: mode :- "slack" :> "oauth" :> "callback" :> Capture "project_id" Projects.ProjectId :> QPT "code" :> Get '[HTML] (Html ())
+  , clientMetadata :: mode :- "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] ClientMetadata.ClientMetadata
   }
   deriving stock (Generic)
 
@@ -102,6 +103,7 @@ server pool =
     , shareLinkGet = Share.shareLinkGetH
     , slackInstallGet = SlackInstall.getH
     , slackLinkProjectGet = SlackInstall.linkProjectGetH
+    , clientMetadata = ClientMetadata.clientMetadataH
     , cookieProtected = \sessionWithCookies ->
         Servant.hoistServerWithContext
           (Proxy @(Servant.NamedRoutes CookieProtectedRoutes))
