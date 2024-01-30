@@ -1,5 +1,6 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TemplateHaskell #-}
 
@@ -54,15 +55,15 @@ import Web.HttpApiData (FromHttpApiData)
 
 newtype EndpointId = EndpointId {unEndpointId :: UUID.UUID}
   deriving stock (Generic, Show)
-  deriving
-    (ToJSON, FromJSON, Eq, Ord, FromField, ToField, FromHttpApiData, Default)
-    via UUID.UUID
+  deriving newtype (ToJSON, FromJSON, Eq, Ord, FromField, ToField, FromHttpApiData, Default, NFData)
   deriving anyclass (FromRow, ToRow)
 
 
 newtype Host = Host {host :: Text}
   deriving stock (Show, Generic, Eq)
-  deriving anyclass (FromRow, ToRow, Default)
+  deriving anyclass (FromRow, ToRow, Default, NFData)
+
+
 instance HasField "toText" EndpointId Text where
   getField = UUID.toText . unEndpointId
 
@@ -85,7 +86,7 @@ data Endpoint = Endpoint
   , outgoing :: Bool
   }
   deriving stock (Show, Generic, Eq)
-  deriving anyclass (FromRow, ToRow, Default)
+  deriving anyclass (FromRow, ToRow, Default, NFData)
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Endpoint
   deriving (FromField) via Aeson Endpoint
 
@@ -149,7 +150,7 @@ data EndpointRequestStats = EndpointRequestStats
   , anomalyId :: UUID.UUID
   }
   deriving stock (Show, Generic, Eq)
-  deriving anyclass (FromRow, ToRow, Default)
+  deriving anyclass (FromRow, ToRow, Default, NFData)
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "endpoint_request_stats", PrimaryKey "endpoint_id", FieldModifiers '[CamelToSnake]] EndpointRequestStats)
 
 
@@ -246,7 +247,7 @@ data SwEndpoint = SwEndpoint
   , hash :: Text
   }
   deriving stock (Show, Generic, Eq)
-  deriving anyclass (FromRow, ToRow, Default)
+  deriving anyclass (FromRow, ToRow, Default, NFData)
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SwEndpoint
   deriving (FromField) via Aeson SwEndpoint
 
@@ -256,7 +257,7 @@ data HostEvents = HostEvents
   , eventCount :: Integer
   }
   deriving stock (Show, Generic, Eq)
-  deriving anyclass (ToRow, FromRow)
+  deriving anyclass (ToRow, FromRow, NFData)
 
 
 endpointsByProjectId :: Projects.ProjectId -> PgT.DBT IO (Vector SwEndpoint)

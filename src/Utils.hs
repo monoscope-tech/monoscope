@@ -16,23 +16,28 @@ module Utils (
   textToBool,
   getMethodColor,
   getStatusColor,
+  unwrapJsonPrimValue,
+  lookupMapText,
+  lookupMapInt,
 ) where
 
+import Data.Aeson (Value)
+import Data.Aeson qualified as AE
+import Data.HashMap.Strict qualified as HM
+import Data.Scientific (toBoundedInteger)
 import Data.Text (replace)
 import Data.Time (ZonedTime)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.ToField (ToField (..))
-
 import Database.PostgreSQL.Transact
 import Lucid (Html, a_, href_, i_, onclick_, term)
 import Lucid.Svg (class_, svg_, use_)
+import Models.Projects.ProjectMembers (ProjectMembers (ProjectMembers))
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Session
 import Relude hiding (show)
 import Servant
-
-import Models.Projects.ProjectMembers (ProjectMembers (ProjectMembers))
-import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Text.Regex.TDFA ((=~))
 import Prelude (show)
 
@@ -124,13 +129,21 @@ getMethodBgColor "PATCH" = "bg-purple-500"
 getMethodBgColor _ = "bg-blue-500"
 
 
+-- getMethodColor :: Text -> Text
+-- getMethodColor "POST" = " text-green-950 bg-green-50 border border-green-200 "
+-- getMethodColor "PUT" = " text-orange-950 bg-orange-50 border border-orange-200 "
+-- getMethodColor "DELETE" = " text-red-950 bg-red-50 border border-red-200 "
+-- getMethodColor "PATCH" = " text-purple-950 bg-purple-50 border border-purple-200 "
+-- getMethodColor "GET" = " text-blue-950 bg-blue-50 border border-blue-200 "
+-- getMethodColor _ = " text-blue-950 bg-blue-50 border border-blue-200 "
+
 getMethodColor :: Text -> Text
-getMethodColor "POST" = " text-green-950 bg-green-50 border border-green-200 "
-getMethodColor "PUT" = " text-orange-950 bg-orange-50 border border-orange-200 "
-getMethodColor "DELETE" = " text-red-950 bg-red-50 border border-red-200 "
-getMethodColor "PATCH" = " text-purple-950 bg-purple-50 border border-purple-200 "
-getMethodColor "GET" = " text-blue-950 bg-blue-50 border border-blue-200 "
-getMethodColor _ = " text-blue-950 bg-blue-50 border border-blue-200 "
+getMethodColor "POST" = " badge badge-warning "
+getMethodColor "PUT" = " badge badge-info "
+getMethodColor "DELETE" = " badge badge-error "
+getMethodColor "PATCH" = " badge badge-info "
+getMethodColor "GET" = " badge badge-success "
+getMethodColor _ = " badge badge-outline "
 
 
 getStatusColor :: Int -> Text
@@ -139,3 +152,28 @@ getStatusColor status
   | status >= 200 && status < 300 = "text-green-800 bg-green-50 border border-green-200"
   | status >= 300 && status < 400 = "text-amber-800 bg-yellow-50 border border-yellow-200"
   | otherwise = "text-red-800 bg-red-50 border border-red-200"
+
+
+unwrapJsonPrimValue :: AE.Value -> Text
+unwrapJsonPrimValue (AE.Bool True) = "true"
+unwrapJsonPrimValue (AE.Bool False) = "true"
+unwrapJsonPrimValue (AE.String v) = "\"" <> toText v <> "\""
+unwrapJsonPrimValue (AE.Number v) = toText @String $ show v
+unwrapJsonPrimValue AE.Null = "null"
+unwrapJsonPrimValue (AE.Object _) = "{..}"
+unwrapJsonPrimValue (AE.Array items) = "[" <> toText (show (length items)) <> "]"
+
+
+-- unwrapJsonPrimValue (AE.Object _) = error "Impossible. unwrapJsonPrimValue should be for primitive types only. got object" -- should never be reached
+-- unwrapJsonPrimValue (AE.Array _) = error "Impossible. unwrapJsonPrimValue should be for primitive types only. got array" -- should never be reached
+
+lookupMapText :: Text -> HashMap Text Value -> Maybe Text
+lookupMapText key hashMap = case HM.lookup key hashMap of
+  Just (AE.String textValue) -> Just textValue -- Extract text from Value if it's a String
+  _ -> Nothing
+
+
+lookupMapInt :: Text -> HashMap Text Value -> Int
+lookupMapInt key hashMap = case HM.lookup key hashMap of
+  Just (AE.Number val) -> fromMaybe 0 $ toBoundedInteger val -- Extract text from Value if it's a String
+  _ -> 0

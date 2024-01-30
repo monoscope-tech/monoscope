@@ -25,7 +25,6 @@ source-repository head
 library
   exposed-modules:
       BackgroundJobs
-      Config
       Data.Default.Instances
       DataSeeding
       DataSeedingSpec
@@ -48,6 +47,7 @@ library
       Models.Projects.SwaggersSpec
       Models.Users.Sessions
       Models.Users.Users
+      Network.Wai.Middleware.Heartbeat
       Pages.Anomalies.AnomalyList
       Pages.Api
       Pages.AutoComplete
@@ -62,6 +62,7 @@ library
       Pages.GenerateSwagger
       Pages.GenerateSwaggerSpec
       Pages.Log
+      Pages.LogExplorer.LogItem
       Pages.ManualIngestion
       Pages.NonMember
       Pages.Onboarding
@@ -80,18 +81,27 @@ library
       Pkg.Mail
       Pkg.Ortto
       Pkg.Parser
+      Pkg.Parser.Expr
+      Pkg.Parser.ExprSpec
+      Pkg.Parser.Stats
+      Pkg.Parser.Types
       Pkg.TmpPg
       ProcessMessage
       ProcessMessageSpec
       RequestMessages
       RequestMessagesSpec
-      Server
       SessionCookies
       Spec
       Start
+      System.Config
+      System.Logging
+      System.Server
+      System.Types
       Utils
       Web.Auth
       Web.ClientMetadata
+      Web.Error
+      Web.Routes
   other-modules:
       Paths_apitoolkit_server
   hs-source-dirs:
@@ -112,6 +122,8 @@ library
       LambdaCase
       MultiParamTypeClasses
       NamedFieldPuns
+      GeneralizedNewtypeDeriving
+      FlexibleContexts
       NoImplicitPrelude
       OverloadedLabels
       OverloadedLists
@@ -129,17 +141,20 @@ library
   ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches -Wno-missing-kind-signatures -fwrite-ide-info -hiedir=.hie
   build-depends:
       HaskellNet
+    , PyF
     , Unique
     , aeson
     , aeson-qq
     , async
     , base
     , base64
+    , bytestring
     , cache >=0.1.3.0
     , case-insensitive
     , clock
     , co-log
     , co-log-core
+    , colourista
     , containers
     , cookie
     , cryptonite
@@ -147,6 +162,8 @@ library
     , deriving-aeson
     , directory
     , dotenv
+    , effectful
+    , effectful-core
     , envy
     , errors
     , extra
@@ -160,13 +177,20 @@ library
     , hspec
     , hspec-expectations-json
     , http-api-data
+    , http-types
     , lens
     , lens-aeson
+    , log-base
+    , log-effectful
     , lucid
+    , lucid-aria
     , lucid-htmx
     , lucid-hyperscript
     , lucid-svg
     , megaparsec
+    , monad-time
+    , monad-time-effectful
+    , mtl
     , neat-interpolation
     , network-uri
     , nyan-interpolation
@@ -176,6 +200,7 @@ library
     , parser-combinators
     , pg-entity
     , pg-transact
+    , pg-transact-effectful
     , postgresql-migration
     , postgresql-simple
     , pretty-relative-time
@@ -185,6 +210,7 @@ library
     , relude >=1.2.0.0
     , resource-pool
     , resourcet
+    , safe-exceptions
     , scientific
     , sendgrid-v3 >=0.3.0.0
     , servant
@@ -203,6 +229,7 @@ library
     , valor >=1.0.0.0
     , vector
     , wai
+    , wai-log
     , warp
     , witch
     , wreq
@@ -230,6 +257,8 @@ executable apitoolkit-server-exe
       LambdaCase
       MultiParamTypeClasses
       NamedFieldPuns
+      GeneralizedNewtypeDeriving
+      FlexibleContexts
       NoImplicitPrelude
       OverloadedLabels
       OverloadedLists
@@ -244,7 +273,7 @@ executable apitoolkit-server-exe
       UndecidableInstances
       OverloadedRecordDot
       TemplateHaskell
-  ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches -Wno-missing-kind-signatures -fwrite-ide-info -hiedir=.hie -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie -O2
+  ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches -Wno-missing-kind-signatures -fwrite-ide-info -hiedir=.hie -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
   build-depends:
       apitoolkit-server
     , relude >=1.1.0.0
@@ -273,6 +302,8 @@ test-suite doctests
       LambdaCase
       MultiParamTypeClasses
       NamedFieldPuns
+      GeneralizedNewtypeDeriving
+      FlexibleContexts
       NoImplicitPrelude
       OverloadedLabels
       OverloadedLists
@@ -320,6 +351,8 @@ test-suite tests
       LambdaCase
       MultiParamTypeClasses
       NamedFieldPuns
+      GeneralizedNewtypeDeriving
+      FlexibleContexts
       NoImplicitPrelude
       OverloadedLabels
       OverloadedLists

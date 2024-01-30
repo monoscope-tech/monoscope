@@ -1,5 +1,6 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
@@ -31,10 +32,9 @@ import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import GHC.Records (HasField (getField))
-
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact (DBT)
+import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
 import Optics.TH
 import Relude hiding (id)
@@ -43,9 +43,7 @@ import Servant.API (FromHttpApiData)
 
 newtype ProjectApiKeyId = ProjectApiKeyId {unProjectApiKeyId :: UUID.UUID}
   deriving stock (Generic, Show)
-  deriving
-    (FromField, ToField, FromHttpApiData, Default)
-    via UUID.UUID
+  deriving newtype (FromField, ToField, FromHttpApiData, Default, NFData)
   deriving anyclass (FromRow, ToRow)
 
 
@@ -64,7 +62,7 @@ data ProjectApiKey = ProjectApiKey
   , keyPrefix :: Text
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow)
+  deriving anyclass (FromRow, ToRow, NFData)
   deriving (Entity) via (GenericEntity '[Schema "projects", TableName "project_api_keys", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ProjectApiKey)
 
 
@@ -95,6 +93,8 @@ revokeApiKey kid = do
   where
     q =
       [sql| UPDATE projects.project_api_keys SET deleted_at=NOW(), active=false where id=?;|]
+
+
 countProjectApiKeysByProjectId :: Projects.ProjectId -> DBT IO Int
 countProjectApiKeysByProjectId pid = do
   result <- query Select q pid

@@ -1,4 +1,5 @@
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module Models.Apis.Reports (
   Report (..),
@@ -34,9 +35,7 @@ import Database.PostgreSQL.Transact (DBT)
 
 newtype ReportId = ReportId {reportId :: UUID.UUID}
   deriving stock (Generic, Show)
-  deriving
-    (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default)
-    via UUID.UUID
+  deriving newtype (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default, NFData)
 
 
 instance HasField "toText" ReportId Text where
@@ -52,7 +51,7 @@ data Report = Report
   , reportJson :: Value
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow)
+  deriving anyclass (FromRow, ToRow, NFData)
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "reports", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Report)
@@ -65,7 +64,7 @@ data ReportListItem = ReportListItem
   , reportType :: Text
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow)
+  deriving anyclass (FromRow, ToRow, NFData)
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "reports", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ReportListItem)

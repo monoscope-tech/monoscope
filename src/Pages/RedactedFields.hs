@@ -2,7 +2,6 @@
 
 module Pages.RedactedFields (redactedFieldsGetH, redactedFieldsPostH, RedactFieldForm (..)) where
 
-import Config
 import Data.Aeson (encode)
 import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
@@ -10,6 +9,8 @@ import Data.Text as T
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (withPool)
+import Effectful.PostgreSQL.Transact.Effect
+import Effectful.Reader.Static (ask, asks)
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript
@@ -18,9 +19,12 @@ import Models.Projects.RedactedFields qualified as RedactedFields
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.NonMember
-import Relude
+import Relude hiding (ask, asks)
+import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
+import System.Config
+import System.Types
 import Utils
 import Web.FormUrlEncoded (FromForm)
 
@@ -34,10 +38,15 @@ data RedactFieldForm = RedactFieldForm
   deriving anyclass (FromForm)
 
 
-redactedFieldsPostH :: Sessions.PersistentSession -> Projects.ProjectId -> RedactFieldForm -> DashboardM (Headers '[HXTrigger] (Html ()))
-redactedFieldsPostH sess pid RedactFieldForm{path, description, endpointHash} = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+redactedFieldsPostH :: Projects.ProjectId -> RedactFieldForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
+redactedFieldsPostH pid RedactFieldForm{path, description, endpointHash} = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Only project members can redact fields"]}|]
@@ -48,33 +57,32 @@ redactedFieldsPostH sess pid RedactFieldForm{path, description, endpointHash} = 
       -- adding path, description, endpoints via record punning
       let fieldToRedact = RedactedFields.RedactedField{id = redactedFieldId, projectId = pid, configuredVia = RedactedFields.Dashboard, ..}
 
-      redactedFields <- liftIO
-        $ withPool
-          pool
-          do
-            RedactedFields.redactField fieldToRedact
-            RedactedFields.redactedFieldsByProject pid
+      redactedFields <- dbtToEff do
+        RedactedFields.redactField fieldToRedact
+        RedactedFields.redactedFieldsByProject pid
 
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Submitted field to be redacted, Successfully"]}|]
       pure $ addHeader hxTriggerData $ mainContent pid redactedFields
 
 
 -- | redactedFieldsGetH renders the api keys list page which includes a modal for creating the apikeys.
-redactedFieldsGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
-redactedFieldsGetH sess pid = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+redactedFieldsGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
+redactedFieldsGetH pid = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, redactedFields) <- liftIO
-        $ withPool
-          pool
-          do
-            project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-            redactedFields <- RedactedFields.redactedFieldsByProject pid
-            pure (project, redactedFields)
+      (project, redactedFields) <- dbtToEff do
+        project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+        redactedFields <- RedactedFields.redactedFieldsByProject pid
+        pure (project, redactedFields)
 
       let bwconf =
             (def :: BWConfig)

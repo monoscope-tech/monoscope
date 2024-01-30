@@ -1,4 +1,5 @@
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module Models.Projects.Swaggers (Swagger (..), SwaggerId (..), addSwagger, swaggersByProject, updateSwagger, getSwaggerById) where
 
@@ -24,9 +25,7 @@ import Servant (FromHttpApiData)
 
 newtype SwaggerId = SwaggerId {swaggerId :: UUID.UUID}
   deriving stock (Generic, Show)
-  deriving
-    (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default)
-    via UUID.UUID
+  deriving newtype (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default, NFData)
 
 
 instance HasField "toText" SwaggerId Text where
@@ -42,7 +41,7 @@ data Swagger = Swagger
   , swaggerJson :: Value
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow)
+  deriving anyclass (FromRow, ToRow, NFData)
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "swagger_jsons", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Swagger)

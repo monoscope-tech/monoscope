@@ -1,3 +1,4 @@
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 module Models.Apis.Formats (
@@ -37,9 +38,7 @@ import Utils (DBField (MkDBField))
 
 newtype FormatId = FormatId {unFormatId :: UUID.UUID}
   deriving stock (Generic, Show)
-  deriving
-    (Eq, Ord, FromField, ToField, FromHttpApiData, Default, AE.FromJSON)
-    via UUID.UUID
+  deriving newtype (Eq, Ord, FromField, ToField, FromHttpApiData, Default, AE.FromJSON, NFData)
 
 
 data Format = Format
@@ -54,7 +53,7 @@ data Format = Format
   , hash :: Text
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow)
+  deriving anyclass (FromRow, ToRow, NFData)
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Format
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "formats", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Format)
   deriving (FromField) via Aeson Format
@@ -125,7 +124,7 @@ data SwFormat = SwFormat
   , swHash :: Text
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow)
+  deriving anyclass (FromRow, ToRow, NFData)
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SwFormat
   deriving (FromField) via Aeson SwFormat
   deriving anyclass (AE.ToJSON)

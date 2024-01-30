@@ -20,6 +20,10 @@
   }
 }
 
+:root, [data-theme] {
+   --backgroundPrimary: #fff;
+}
+
 .payment-radio-active {
   @apply bg-blue-500;
 }
@@ -96,37 +100,6 @@
   @apply hover:bg-gray-100 py-3 px-2 w-full items-center justify-between;
 }
 
-.sdk_tab {
-  @apply inline-block text-gray-700 py-2 border-b-2 border-transparent rounded-t-lg hover:text-gray-600 hover:border-gray-300;
-}
-.sdk_tab_active {
-  color: rgb(37 99 235 / 1);
-  font: bold;
-  border-color: rgb(37 99 235 / 1);
-}
-
-.show-log-modal {
-  display: flex;
-}
-
-.show-log-modal > div {
-  transition: all 1s;
-  width: min(90vw, 800px);
-}
-
-.sdk_tab_content {
-  opacity: 0;
-  will-change: opacity;
-  transition: opacity 0.5s;
-}
-.sdk_tab_content_active {
-  opacity: 1;
-}
-
-.sdk_tab_active:hover {
-  color: rgb(37 99 235 / 1);
-  border-color: rgb(37 99 235 / 1);
-}
 
 .htmx-indicator {
   justify-content: center;
@@ -175,12 +148,6 @@
     fill: currentColor;
   }
 
-  .btn-sm {
-    @apply px-4 py-2  rounded inline-flex items-center border border-transparent rounded-md shadow-sm text-sm font-medium focus:outline-none focus:ring-2 focus:ring-offset-2 cursor-pointer;
-  }
-  .btn-lg {
-    @apply px-5 py-3  rounded inline-flex items-center border border-transparent rounded-md shadow-sm text-sm font-medium focus:outline-none focus:ring-2 focus:ring-offset-2 cursor-pointer;
-  }
   .dataTable-search {
     @apply rounded;
   }
@@ -204,12 +171,6 @@
   /* Added because using - in class name prefix via hyperscript doesnt work*/
   .neg-rotate-90 {
     @apply -rotate-90;
-  }
-
-  .toggle {
-    height: 9px;
-    width: 9px;
-    display: inline-block;
   }
 
   .parent-hover .child-hover {
@@ -243,6 +204,9 @@
 .expanded-log {
   @apply border-l-blue-200 bg-blue-50;
 }
+.expanded-log .status-indicator {
+    @apply bg-blue-200;
+  }
 .expanded-log .log-chevron {
   @apply rotate-90;
 }
@@ -285,3 +249,27 @@
 .endpoint-patch {
   @apply bg-amber-600;
 }
+
+
+.btn {
+  @apply justify-center items-center leading-none;
+}
+
+/* ======= CODEMIRROR */
+.tree-children {
+  display: block;
+}
+.tree-children-count { display: none; }
+.collapsed .tree-children {
+  display: none !important; 
+}
+.expand-button {display:none;} /* TODO: check if this should be deleted */
+
+.CodeMirror {
+  font-family: Arial, monospace;
+  font-size: 16px;
+  background-color: rgb(243 244 246);
+ }
+.collapsed .tree-children-count {display: inline !important;}
+.collapsed .children {display: inline-block; padding-left:0}
+.collapsed .closing-token {padding-left:0}

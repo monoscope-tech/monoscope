@@ -3,7 +3,6 @@
 module DataSeeding (parseConfigToJson, dataSeedingGetH, dataSeedingPostH, DataSeedingForm) where
 
 import Colog ((<&))
-import Config (DashboardM, env, logger, pool, projectCache)
 import Data.Aeson qualified as AE
 import Data.ByteString.Base64 qualified as B64
 import Data.Default (def)
@@ -12,6 +11,8 @@ import Data.Time (NominalDiffTime, UTCTime, ZonedTime, addUTCTime, diffUTCTime, 
 import Data.Yaml qualified as Yaml
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Deriving.Aeson qualified as DAE
+import Effectful.PostgreSQL.Transact.Effect
+import Effectful.Reader.Static (ask, asks)
 import Faker
 import Faker.Address (fullAddress)
 import Faker.Name qualified
@@ -27,10 +28,13 @@ import Optics.TH (makeFieldLabelsNoPrefix)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.NonMember
 import ProcessMessage qualified
-import Relude
+import Relude hiding (ask, asks)
 import Relude.Unsafe ((!!))
+import Relude.Unsafe qualified as Unsafe
 import RequestMessages qualified
+import System.Config (AuthContext (..), DashboardM, env, logger, pool, projectCache)
 import System.Random (RandomGen, getStdGen, randomRs)
+import System.Types
 import Utils
 import Web.FormUrlEncoded (FromForm)
 
@@ -106,25 +110,25 @@ parseConfigToRequestMessages pid input = do
   randGen <- getStdGen
   case (Yaml.decodeEither' input :: Either Yaml.ParseException [SeedConfig]) of
     Left err -> pure $ Left err
-    Right configs -> do
+    Right cfgs -> do
       let fakerSettings = setRandomGen randGen defaultFakerSettings
       resp <-
         generateWithSettings fakerSettings
-          $ configs
-          & mapM \config -> do
-            let startTimeUTC = zonedTimeToUTC config.from
-                maxDiffTime = diffUTCTime (zonedTimeToUTC config.to) startTimeUTC
-                timestamps = randomTimesBtwToAndFrom startTimeUTC config.count randGen maxDiffTime
-                durations = take config.count $ randomRs (config.durationFrom, config.durationTo) randGen
-                allowedStatusCodes = config.statusCodesOneof
-                statusCodes = take config.count $ map (allowedStatusCodes !!) $ randomRs (0, length allowedStatusCodes - 1) randGen
+          $ cfgs
+          & mapM \cfg -> do
+            let startTimeUTC = zonedTimeToUTC cfg.from
+                maxDiffTime = diffUTCTime (zonedTimeToUTC cfg.to) startTimeUTC
+                timestamps = randomTimesBtwToAndFrom startTimeUTC cfg.count randGen maxDiffTime
+                durations = take cfg.count $ randomRs (cfg.durationFrom, cfg.durationTo) randGen
+                allowedStatusCodes = cfg.statusCodesOneof
+                statusCodes = take cfg.count $ map (allowedStatusCodes !!) $ randomRs (0, length allowedStatusCodes - 1) randGen
 
             zip3 timestamps durations statusCodes & mapM \(timestampV, duration', statusCode') -> do
               let duration = duration'
                   statusCode = statusCode'
-                  method = config.method
-                  urlPath = config.path
-                  rawUrl = config.path
+                  method = cfg.method
+                  urlPath = cfg.path
+                  rawUrl = cfg.path
                   protoMajor = 1
                   protoMinor = 1
                   referer = "https://google.com"
@@ -138,13 +142,13 @@ parseConfigToRequestMessages pid input = do
                   errors = Nothing
                   tags = Nothing
 
-              pathLog <- mapM fieldConfigToField config.queryParams
-              pathParams <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField config.pathParams
-              queryParams <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField config.queryParams
-              requestHeaders <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField config.requestHeaders
-              responseHeaders <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField config.responseHeaders
-              responseBody <- B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField config.responseBody
-              requestBody <- B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField config.responseBody
+              pathLog <- mapM fieldConfigToField cfg.queryParams
+              pathParams <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField cfg.pathParams
+              queryParams <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField cfg.queryParams
+              requestHeaders <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField cfg.requestHeaders
+              responseHeaders <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField cfg.responseHeaders
+              responseBody <- B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField cfg.responseBody
+              requestBody <- B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField cfg.responseBody
               pure RequestMessages.RequestMessage{..}
       pure $ Right $ concat resp
 
@@ -168,43 +172,47 @@ data DataSeedingForm = DataSeedingForm
   deriving anyclass (FromForm)
 
 
-dataSeedingPostH :: Sessions.PersistentSession -> Projects.ProjectId -> DataSeedingForm -> DashboardM (Html ())
-dataSeedingPostH sess pid form = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+dataSeedingPostH :: Projects.ProjectId -> DataSeedingForm -> ATAuthCtx (Html ())
+dataSeedingPostH pid form = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let env = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+  let currUserId = sess.userId
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
       logger <- asks logger
-      env <- asks env
       projectCache <- asks projectCache
-      project <-
-        liftIO
-          $ withPool pool
-          $ Projects.selectProjectForUser (Sessions.userId sess, pid)
+      project <- dbtToEff $ Projects.selectProjectForUser (Sessions.userId sess, pid)
 
-      respE <- liftIO $ parseConfigToRequestMessages pid (encodeUtf8 $ config form)
+      respE <- liftIO $ parseConfigToRequestMessages pid (encodeUtf8 $ form.config)
       case respE of
         Left err -> liftIO $ logger <& "ERROR processing req message " <> show err >> pure dataSeedingPage
         Right resp -> do
           let !seeds = resp & map (\x -> Right (Just "", x))
-          _ <- liftIO $ ProcessMessage.processMessages' logger env pool seeds projectCache
+          _ <- liftIO $ ProcessMessage.processMessages' logger env appCtx.pool seeds projectCache
           pure dataSeedingPage
 
 
-dataSeedingGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
-dataSeedingGetH sess pid = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+dataSeedingGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
+dataSeedingGetH pid = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let env = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
-      project <-
-        liftIO
-          $ withPool pool
-          $ Projects.selectProjectForUser (Sessions.userId sess, pid)
+      project <- dbtToEff $ Projects.selectProjectForUser (Sessions.userId sess, pid)
 
       let bwconf =
             (def :: BWConfig)

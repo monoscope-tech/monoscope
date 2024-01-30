@@ -48,6 +48,7 @@ data Permissions
   | PView
   | PEdit
   deriving stock (Eq, Generic, Show)
+  deriving anyclass (NFData)
 
 
 instance FromHttpApiData Permissions where
@@ -88,7 +89,7 @@ data ProjectMembers = ProjectMembers
   , permission :: Permissions
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow)
+  deriving anyclass (FromRow, ToRow, NFData)
   deriving
     (Entity)
     via (GenericEntity '[Schema "projects", TableName "project_members", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ProjectMembers)
@@ -103,7 +104,7 @@ data CreateProjectMembers = CreateProjectMembers
   , permission :: Permissions
   }
   deriving stock (Show, Generic, Eq)
-  deriving anyclass (FromRow, ToRow)
+  deriving anyclass (FromRow, ToRow, NFData)
   deriving
     (Entity)
     via (GenericEntity '[Schema "projects", TableName "project_members", PrimaryKey "id", FieldModifiers '[CamelToSnake]] CreateProjectMembers)
@@ -123,7 +124,7 @@ data ProjectMemberVM = ProjectMemberVM
   , email :: CI Text
   }
   deriving stock (Show, Generic, Eq)
-  deriving anyclass (FromRow)
+  deriving anyclass (FromRow, NFData)
 
 
 makeFieldLabelsNoPrefix ''ProjectMemberVM

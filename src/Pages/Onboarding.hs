@@ -2,11 +2,12 @@
 
 module Pages.Onboarding (onboardingGetH) where
 
-import Config
 import Data.Default (def)
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
+import Effectful.PostgreSQL.Transact.Effect
+import Effectful.Reader.Static (ask, asks)
 import Lucid
 import Lucid.Htmx (hxGet_, hxPost_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript
@@ -18,7 +19,10 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.NonMember
-import Relude
+import Relude hiding (ask, asks)
+import Relude.Unsafe qualified as Unsafe
+import System.Config
+import System.Types
 import Utils (
   faIcon_,
   faSprite_,
@@ -27,23 +31,25 @@ import Utils (
  )
 
 
-onboardingGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Bool -> Maybe Bool -> Maybe Text -> DashboardM (Html ())
-onboardingGetH sess pid polling redirected current_tab = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+onboardingGetH :: Projects.ProjectId -> Maybe Bool -> Maybe Bool -> Maybe Text -> ATAuthCtx (Html ())
+onboardingGetH pid polling redirected current_tab = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, apikey, hasRequest) <- liftIO
-        $ withPool
-          pool
-          do
-            project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-            apiKeys <- ProjectApiKeys.projectApiKeysByProjectId pid
-            requestDumps <- RequestDumps.countRequestDumpByProject pid
-            let apikey = if V.null apiKeys then "<APIKEY>" else (V.head apiKeys).keyPrefix
-            pure (project, apikey, requestDumps > 0)
+      (project, apikey, hasRequest) <- dbtToEff do
+        project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+        apiKeys <- ProjectApiKeys.projectApiKeysByProjectId pid
+        requestDumps <- RequestDumps.countRequestDumpByProject pid
+        let apikey = if V.null apiKeys then "<APIKEY>" else (V.head apiKeys).keyPrefix
+        pure (project, apikey, requestDumps > 0)
       let bwconf =
             (def :: BWConfig)
               { sessM = Just sess

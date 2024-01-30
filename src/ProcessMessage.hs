@@ -4,7 +4,6 @@ module ProcessMessage (
 ) where
 
 import Colog.Core (LogAction (..), (<&))
-import Config qualified
 import Control.Exception (try)
 import Control.Lens ((^?), _Just)
 import Control.Monad.Trans.Except (except, throwE)
@@ -27,6 +26,7 @@ import Models.Projects.Projects qualified as Projects
 import Relude hiding (hoistMaybe)
 import RequestMessages qualified
 import System.Clock
+import System.Config qualified as Config
 import Text.Pretty.Simple (pShow)
 import Utils (DBField, eitherStrToText)
 
@@ -117,10 +117,10 @@ processMessages' logger' _ conn' msgs projectCache' = do
 
   unless (null $ lefts processed) do
     let leftMsgs = [(a, b) | (Left a, b) <- zip processed msgs]
-    forM_ leftMsgs \(a, b) ->
+    forM_ leftMsgs \(a, b) -> do
       -- TODO: switch to using a proper logger setup.
       -- logger' <& "Error processing Error: " <> pShow a <> "\n Original Msg:" <> pShow  b
-      logger' <& "ERROR: Error processing Error: " <> show a <> "\n"
+      logger' <& "ERROR: Error processing Error: " <> show a <> "\n Original Msg:" <> show b
 
   afterProccessing <- getTime Monotonic
 

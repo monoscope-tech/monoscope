@@ -1,4 +1,5 @@
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module Models.Projects.RedactedFields (RedactedField (..), RedactedFieldId (..), ConfiguredVia (..), redactField, redactedFieldById, redactedFieldsByProject) where
 
@@ -22,10 +23,8 @@ import Servant (FromHttpApiData)
 
 
 newtype RedactedFieldId = RedactedFieldId {unRedactedFieldId :: UUID.UUID}
-  deriving stock (Generic, Show)
-  deriving
-    (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default)
-    via UUID.UUID
+  deriving stock (Generic, Show, Eq, Ord)
+  deriving newtype (ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default, NFData)
 
 
 redactedFieldIdText :: RedactedFieldId -> Text
@@ -36,6 +35,7 @@ data ConfiguredVia
   = Dashboard
   | SDK RequestDumps.SDKTypes
   deriving stock (Generic, Show, Read)
+  deriving anyclass (NFData)
   deriving (FromJSON, ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] ConfiguredVia
 
 
@@ -57,7 +57,7 @@ data RedactedField = RedactedField
   , endpointHash :: Maybe Text
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow)
+  deriving anyclass (FromRow, ToRow, NFData)
   deriving
     (Entity)
     via (GenericEntity '[Schema "projects", TableName "redacted_fields", PrimaryKey "id", FieldModifiers '[CamelToSnake]] RedactedField)

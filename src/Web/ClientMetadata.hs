@@ -1,7 +1,6 @@
 module Web.ClientMetadata (ClientMetadata, clientMetadataH) where
 
 import Colog ((<&))
-import Config (AuthContext (env, logger, pool), DashboardM)
 import Data.Aeson (Value)
 import Data.Aeson.QQ (aesonQQ)
 import Data.Aeson.Types (ToJSON)
@@ -17,6 +16,7 @@ import Relude
 import Relude.Unsafe ((!!))
 import Servant (err300, throwError)
 import Servant.Server (err401)
+import System.Config (AuthContext (env, logger, pool), DashboardM)
 
 
 data ClientMetadata = ClientMetadata
