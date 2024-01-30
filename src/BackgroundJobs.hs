@@ -1,7 +1,5 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-{-# HLINT ignore "Use fewer imports" #-}
-{-# HLINT ignore "Use lambda-case" #-}
 module BackgroundJobs (jobsWorkerInit, BgJobs (..)) where
 
 -- This example is using these functions to introduce an artificial delay of a
@@ -24,6 +22,7 @@ import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, qu
 import Database.PostgreSQL.Simple (Connection, Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ
 import Database.PostgreSQL.Transact (DBT)
+import Log qualified
 import GHC.Generics
 import Lucid
 import Models.Apis.Anomalies qualified as Anomalies
@@ -36,9 +35,8 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text, trimming)
 import OddJobs.ConfigBuilder (mkConfig)
-import OddJobs.Job (ConcurrencyControl (..), Job (..), createJob, startJobRunner, throwParsePayload)
+import OddJobs.Job (ConcurrencyControl (..), Job (..), createJob, startJobRunner, throwParsePayload, LogEvent, LogLevel)
 import System.Config qualified as Config
-
 import Pages.Reports qualified as RP
 import Pkg.Mail
 import Relude
@@ -91,7 +89,7 @@ getAllProjects = query Select q (Only True)
 -- Send a notification email about the new anomaly (shape and endpoint etc)
 --
 
-jobsRunner :: Pool Connection -> LogAction IO String -> Config.EnvConfig -> Job -> IO ()
+jobsRunner :: Pool Connection -> Log.Logger -> Config.EnvConfig -> Job -> IO ()
 jobsRunner dbPool logger cfg job = do
   when cfg.enableBackgroundJobs do
     throwParsePayload job >>= \case
@@ -289,10 +287,12 @@ jobsRunner dbPool logger cfg job = do
         pass
 
 
-jobsWorkerInit :: Pool Connection -> LogAction IO String -> Config.EnvConfig -> IO ()
+jobsWorkerInit :: Pool Connection -> Log.Logger -> Config.EnvConfig -> IO ()
 jobsWorkerInit dbPool logger envConfig = startJobRunner $ mkConfig jobLogger "background_jobs" dbPool (MaxConcurrentJobs 1) (jobsRunner dbPool logger envConfig) id
   where
-    jobLogger logLevel logEvent = logger <& show (logLevel, logEvent)
+    jobLogger :: LogLevel -> LogEvent -> IO ()
+    jobLogger logLevel logEvent = Log.runLogT "OddJobs" logger Log.LogAttention   $ Log.logAttention "" (show (logLevel, logEvent)) -- logger show (logLevel, logEvent)
+    -- jobLogger logLevel logEvent = print show (logLevel, logEvent) -- logger show (logLevel, logEvent)
 
 
 dailyReportForProject :: Pool Connection -> Config.EnvConfig -> Projects.ProjectId -> IO ()

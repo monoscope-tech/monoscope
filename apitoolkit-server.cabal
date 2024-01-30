@@ -90,7 +90,6 @@ library
       ProcessMessageSpec
       RequestMessages
       RequestMessagesSpec
-      Server
       SessionCookies
       Spec
       Start
