@@ -108,10 +108,6 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoostedM
                 , colIdxMap
                 , reqChartTxt, nextLogsURL, resetLogsURL, currentRange}
 
-      traceShowM ("SUMMARY COLS", summaryCols)
-      traceShowM ("colNames forom tableAsVec", colNames)
-      traceShowM ("curatedColNames", curatedColNames)
-
       case (layoutM, hxRequestM, hxBoostedM) of
         (Just "loadmore", Just "true", _) -> pure $ logItemRows_ pid requestVecs curatedColNames colIdxMap nextLogsURL
         (Just "resultTable", Just "true", _) -> pure $ resultTable_ page
