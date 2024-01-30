@@ -62,13 +62,6 @@ runAPItoolkit =
 
 runServer :: (Concurrent :> es, IOE :> es) => Log.Logger -> AuthContext -> Eff es ()
 runServer appLogger env = do
-  let bgJobWorker = BackgroundJobs.jobsWorkerInit env.jobsPool appLogger env.config
-  void $ forkIO $ unsafeEff_ $ Safe.withException bgJobWorker (logException (env.config.environment) appLogger)
-
-  -- void $ forkIO $ (pubsubService appLogger env.config env.pool env.projectCache)
-
-  void $ forkIO $ unsafeEff_ $ runBackground appLogger env $ pubsubService 
-
   loggingMiddleware <- Logging.runLog (show env.config.environment) appLogger WaiLog.mkLogMiddleware
   let server = mkServer appLogger env
   let warpSettings =
@@ -82,6 +75,7 @@ runServer appLogger env = do
         . loggingMiddleware
         . const
         $ server
+  let bgJobWorker = BackgroundJobs.jobsWorkerInit env.jobsPool appLogger env.config
 
   -- let ojStartArgs =
   --       OJCli.UIStartArgs
@@ -94,8 +88,7 @@ runServer appLogger env = do
   -- let ojCfg = OJConfig.mkUIConfig ojLogger ojTable poolConn id
   asyncs <- liftIO $ sequence [async $  runSettings warpSettings wrappedServer
                       , async $  Safe.withException bgJobWorker (logException (env.config.environment) appLogger)
-                      -- , async (run (Config.port envConfig) $ Server.app logger poolConn serverCtx)
-                      -- , async $ BackgroundJobs.jobsWorkerInit poolConn logger envConfig
+                      , async $ runBackground appLogger env $ pubsubService 
                       -- , async $ OJCli.defaultWebUI ojStartArgs ojCfg
                       ]
   _ <- liftIO $ waitAnyCancel asyncs
