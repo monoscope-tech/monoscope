@@ -22,8 +22,8 @@ import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, qu
 import Database.PostgreSQL.Simple (Connection, Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ
 import Database.PostgreSQL.Transact (DBT)
-import Log qualified
 import GHC.Generics
+import Log qualified
 import Lucid
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
@@ -35,12 +35,12 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text, trimming)
 import OddJobs.ConfigBuilder (mkConfig)
-import OddJobs.Job (ConcurrencyControl (..), Job (..), createJob, startJobRunner, throwParsePayload, LogEvent, LogLevel)
-import System.Config qualified as Config
+import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, startJobRunner, throwParsePayload)
 import Pages.Reports qualified as RP
 import Pkg.Mail
 import Relude
 import Relude.Unsafe qualified as Unsafe
+import System.Config qualified as Config
 
 
 data BgJobs
@@ -291,7 +291,7 @@ jobsWorkerInit :: Pool Connection -> Log.Logger -> Config.EnvConfig -> IO ()
 jobsWorkerInit dbPool logger envConfig = startJobRunner $ mkConfig jobLogger "background_jobs" dbPool (MaxConcurrentJobs 1) (jobsRunner dbPool logger envConfig) id
   where
     jobLogger :: LogLevel -> LogEvent -> IO ()
-    jobLogger logLevel logEvent = Log.runLogT "OddJobs" logger Log.LogAttention   $ Log.logAttention "" (show (logLevel, logEvent)) -- logger show (logLevel, logEvent)
+    jobLogger logLevel logEvent = Log.runLogT "OddJobs" logger Log.LogAttention $ Log.logAttention "" (show (logLevel, logEvent)) -- logger show (logLevel, logEvent)
     -- jobLogger logLevel logEvent = print show (logLevel, logEvent) -- logger show (logLevel, logEvent)
 
 

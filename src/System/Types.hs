@@ -11,24 +11,22 @@ module System.Types (
   runBackground,
 ) where
 
+import Data.Pool as Pool (Pool)
+import Database.PostgreSQL.Simple
 import Effectful
 import Effectful.Error.Static (Error)
 import Effectful.Log (Log)
-import Database.PostgreSQL.Simple
-import Effectful.PostgreSQL.Transact.Effect (DB)
+import Effectful.PostgreSQL.Transact.Effect (DB, runDB)
 import Effectful.Reader.Static (Reader, runReader)
-import Effectful.Time (Time)
-import Data.Pool as Pool (Pool)
+import Effectful.Time (Time, runTime)
+import Log qualified
 import Models.Users.Sessions qualified as Sessions
 import Relude
 import Servant (AuthProtect, Header, Headers, ServerError)
 import Servant.Server.Experimental.Auth (AuthServerData)
 import System.Config
-import Effectful.PostgreSQL.Transact.Effect (runDB)
 import System.Logging qualified as Logging
 import Web.Cookie
-import Effectful.Time (runTime)
-import Log qualified
 
 
 type ATBaseCtx :: Type -> Type
@@ -41,6 +39,7 @@ type ATBaseCtx =
      , Error ServerError
      , IOE
      ]
+
 
 type ATAuthCtx :: Type -> Type
 type ATAuthCtx =
@@ -65,13 +64,14 @@ type ATBackgroundCtx =
      , IOE
      ]
 
-runBackground :: Log.Logger -> AuthContext-> ATBackgroundCtx a -> IO a
+
+runBackground :: Log.Logger -> AuthContext -> ATBackgroundCtx a -> IO a
 runBackground logger appCtx process =
-   process 
-    & Effectful.Reader.Static.runReader appCtx 
+  process
+    & Effectful.Reader.Static.runReader appCtx
     & runDB appCtx.jobsPool
     & runTime
-    & Logging.runLog ("background-job:"<> show appCtx.config.environment) logger
+    & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger
     & runEff
 
 
