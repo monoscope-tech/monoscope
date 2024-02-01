@@ -9,6 +9,7 @@ CREATE EXTENSION IF NOT EXISTS hstore;
 CREATE EXTENSION IF NOT EXISTS tablefunc;
 -- CREATE EXTENSION IF NOT EXISTS pg_cron;
 
+
 -- create schemas
 CREATE SCHEMA IF NOT EXISTS users;
 CREATE SCHEMA IF NOT EXISTS projects;
@@ -117,8 +118,7 @@ ALTER TABLE projects.projects ADD COLUMN time_zone TEXT DEFAULT 'UTC';
 
 CREATE TYPE notification_channel_enum AS ENUM ('email', 'slack');
 ALTER TABLE projects.projects
-ADD COLUMN notifications_channel notification_channel_enum[] DEFAULT ARRAY['email']::notification_channel_enum[];
-
+ADD COLUMN notifications_channel notification_channel_enum DEFAULT 'email';
 
 -----------------------------------------------------------------------
 -- PROJECT MEMBERS table 
@@ -230,9 +230,9 @@ ALTER TABLE apis.endpoints DROP COLUMN hosts;
 CREATE TABLE IF NOT EXISTS apis.shapes
 (
     id                        uuid      NOT  NULL DEFAULT    gen_random_uuid() PRIMARY KEY,
-    created_at                TIMESTAMP       NOT               NULL    DEFAULT current_timestamp,
-    updated_at                TIMESTAMP       NOT               NULL    DEFAULT current_timestamp,
-    approved_on               TIMESTAMP                                 DEFAULT NULL,
+    created_at                TIMESTAMP WITH TIME ZONE       NOT               NULL    DEFAULT current_timestamp,
+    updated_at                TIMESTAMP WITH TIME ZONE       NOT               NULL    DEFAULT current_timestamp,
+    approved_on               TIMESTAMP WITH TIME ZONE                                 DEFAULT NULL,
     project_id                uuid      NOT  NULL REFERENCES projects.projects (id)    ON      DELETE CASCADE,
     endpoint_hash             text      NOT  NULL,
     
@@ -376,8 +376,8 @@ CREATE TRIGGER shapes_created_anomaly AFTER INSERT ON apis.shapes FOR EACH ROW E
 CREATE TABLE IF NOT EXISTS apis.request_dumps
 (
     id                        uuid      NOT  NULL DEFAULT    gen_random_uuid(),
-    created_at                TIMESTAMP        NOT               NULL DEFAULT current_timestamp,
-    updated_at                TIMESTAMP        NOT               NULL DEFAULT current_timestamp,
+    created_at                TIMESTAMP WITH TIME ZONE       NOT               NULL DEFAULT current_timestamp,
+    updated_at                TIMESTAMP WITH TIME ZONE       NOT               NULL DEFAULT current_timestamp,
     project_id                uuid      NOT  NULL REFERENCES projects.projects (id) ON      DELETE CASCADE,
     host                      text      NOT  NULL DEFAULT    '',
     url_path                  text      NOT  NULL DEFAULT    '',
