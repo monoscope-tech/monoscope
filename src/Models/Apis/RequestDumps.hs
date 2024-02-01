@@ -92,6 +92,7 @@ data SDKTypes
   | JsAdonis
   | PhpSlim
   | GuzzleOutgoing
+  | ElixirPhoenix
   deriving stock (Show, Generic, Read, Eq)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SDKTypes
@@ -170,6 +171,7 @@ normalizeUrlPath PythonOutgoing statusCode _method urlPath = removeQueryParams s
 normalizeUrlPath JsAdonis statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath PhpSlim statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath GuzzleOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
+normalizeUrlPath ElixirPhoenix statusCode _method urlPath = removeQueryParams statusCode urlPath
 
 
 -- getRequestType ...
@@ -225,8 +227,8 @@ data ATError = ATError
 -- NOTE: This record closely mirrors the order of fields in the table. Changing the order of fields here would break inserting and querying request dumps
 data RequestDump = RequestDump
   { id :: UUID.UUID
-  , createdAt :: UTCTime 
-  , updatedAt :: UTCTime 
+  , createdAt :: UTCTime
+  , updatedAt :: UTCTime
   , projectId :: UUID.UUID
   , host :: Text
   , urlPath :: Text
@@ -411,10 +413,12 @@ convertValueToMap (Only val) = case val of
   AE.Object obj -> Just $ toHashMapText obj
   _ -> Nothing
 
+
 valueToVector :: Only Value -> Maybe (V.Vector Value)
 valueToVector (Only val) = case val of
   AE.Array arr -> Just arr
-  _ -> Nothing 
+  _ -> Nothing
+
 
 queryToValues :: Text -> DBT IO (V.Vector (Only Value))
 queryToValues q = V.fromList <$> DBT.query_ (Query $ encodeUtf8 q)
