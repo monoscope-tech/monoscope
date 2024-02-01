@@ -30,7 +30,7 @@ import Data.Aeson (FromJSON, ToJSON)
 import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.Default.Instances ()
-import Data.Time (ZonedTime)
+import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), query, queryOne)
@@ -75,8 +75,8 @@ endpointIdText = UUID.toText . unEndpointId
 -- TODO: Introduce request header hashes and response header hashes
 data Endpoint = Endpoint
   { id :: EndpointId
-  , createdAt :: ZonedTime
-  , updatedAt :: ZonedTime
+  , createdAt :: UTCTime 
+  , updatedAt :: UTCTime
   , projectId :: Projects.ProjectId
   , urlPath :: Text
   , urlParams :: AE.Value -- Key value map of key to the type. Needs a bit more figuring out.
@@ -145,8 +145,8 @@ data EndpointRequestStats = EndpointRequestStats
   , totalRequestsProj :: Int
   , ongoingAnomalies :: Int
   , ongoingAnomaliesProj :: Int
-  , acknowlegedAt :: Maybe ZonedTime
-  , archivedAt :: Maybe ZonedTime
+  , acknowlegedAt :: Maybe UTCTime
+  , archivedAt :: Maybe UTCTime
   , anomalyId :: UUID.UUID
   }
   deriving stock (Show, Generic, Eq)

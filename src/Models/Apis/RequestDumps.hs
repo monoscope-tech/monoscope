@@ -225,8 +225,8 @@ data ATError = ATError
 -- NOTE: This record closely mirrors the order of fields in the table. Changing the order of fields here would break inserting and querying request dumps
 data RequestDump = RequestDump
   { id :: UUID.UUID
-  , createdAt :: ZonedTime
-  , updatedAt :: ZonedTime
+  , createdAt :: UTCTime 
+  , updatedAt :: UTCTime 
   , projectId :: UUID.UUID
   , host :: Text
   , urlPath :: Text

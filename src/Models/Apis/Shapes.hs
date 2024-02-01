@@ -5,7 +5,7 @@ module Models.Apis.Shapes (Shape (..), ShapeWithFields (..), SwShape (..), Shape
 
 import Data.Aeson qualified as AE
 import Data.Default (Default)
-import Data.Time (ZonedTime, getZonedTime)
+import Data.Time (ZonedTime, getZonedTime, UTCTime)
 import Data.UUID qualified as UUID
 
 import Data.Vector (Vector)
@@ -65,9 +65,9 @@ getShapeFields shape fields = ShapeWidthFields{status = shape.statusCode, sHash 
 -- We usually expect multiple shapes per endpoint. Eg a shape for a success request-response and another for an error response.
 data Shape = Shape
   { id :: ShapeId
-  , createdAt :: ZonedTime
-  , updatedAt :: ZonedTime
-  , approvedOn :: Maybe ZonedTime
+  , createdAt :: UTCTime
+  , updatedAt :: UTCTime
+  , approvedOn :: Maybe UTCTime 
   , projectId :: Projects.ProjectId
   , endpointHash :: Text
   , queryParamsKeypaths :: Vector Text
@@ -138,7 +138,7 @@ insertShapes shapes = do
   executeMany insertQuery params
 
 
-getShapeParams :: Shape -> (Maybe ZonedTime, Projects.ProjectId, Text, Vector Text, Vector Text, Vector Text, Vector Text, Vector Text, Vector Text, Text, Int)
+getShapeParams :: Shape -> (Maybe UTCTime, Projects.ProjectId, Text, Vector Text, Vector Text, Vector Text, Vector Text, Vector Text, Vector Text, Text, Int)
 getShapeParams shape =
   ( shape.approvedOn
   , shape.projectId

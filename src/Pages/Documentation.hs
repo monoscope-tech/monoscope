@@ -8,14 +8,13 @@ import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
 import Data.Digest.XXHash
 import Data.Text qualified as T
-import Data.Time.LocalTime (ZonedTime, getZonedTime)
+import Data.Time.LocalTime (ZonedTime, getZonedTime, utcToZonedTime, utc)
+import Data.Time.Clock (UTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import System.Config
-
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
-
 import Lucid
 import Lucid.Htmx
 import Models.Apis.Endpoints qualified as Endpoints
@@ -25,7 +24,6 @@ import Models.Projects.Projects qualified as Projects
 import Models.Projects.Swaggers qualified as Swaggers
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
-
 import Data.List (nubBy)
 import Effectful.PostgreSQL.Transact.Effect
 import Effectful.Reader.Static (ask, asks)
@@ -39,6 +37,7 @@ import Pages.NonMember
 import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
+import Effectful.Time qualified as Time
 import Servant.Htmx (HXTrigger)
 import System.Types
 import Utils
@@ -145,7 +144,7 @@ getEndpointFromOpEndpoint pid opEndpoint =
         }
 
 
-getShapeFromOpShape :: Projects.ProjectId -> ZonedTime -> OpShape -> Shapes.Shape
+getShapeFromOpShape :: Projects.ProjectId -> UTCTime -> OpShape -> Shapes.Shape
 getShapeFromOpShape pid curTime opShape =
   Shapes.Shape
     { id = Shapes.ShapeId UUID.nil
@@ -242,11 +241,11 @@ documentationPutH pid SaveSwaggerForm{updated_swagger, swagger_id, endpoints, di
       pure $ addHeader hxTriggerData $ userNotMemeberPage sess
     else do
       env <- asks env
+      currentTime <- Time.currentTime
       let value = case decodeStrict (encodeUtf8 updated_swagger) of
             Just val -> val
             Nothing -> error "Failed to parse JSON: "
       res <- dbtToEff do
-        currentTime <- liftIO getZonedTime
         let newEndpoints = V.toList $ V.map (getEndpointFromOpEndpoint pid) endpoints
         let shapes = V.toList (V.map (getShapeFromOpShape pid currentTime) (V.filter (.opShapeChanged) diffsInfo))
         let nestedOps = V.map (.opOperations) diffsInfo
@@ -262,7 +261,7 @@ documentationPutH pid SaveSwaggerForm{updated_swagger, swagger_id, endpoints, di
         case swagger_id of
           "" -> do
             swaggerId <- Swaggers.SwaggerId <$> liftIO UUIDV4.nextRandom
-            let swaggerToAdd = Swaggers.Swagger{id = swaggerId, projectId = pid, createdBy = sess.userId, createdAt = currentTime, updatedAt = currentTime, swaggerJson = value}
+            let swaggerToAdd = Swaggers.Swagger{id = swaggerId, projectId = pid, createdBy = sess.userId, createdAt = utcToZonedTime utc currentTime, updatedAt = utcToZonedTime utc currentTime, swaggerJson = value}
             Swaggers.addSwagger swaggerToAdd
             pass
           _ -> do
