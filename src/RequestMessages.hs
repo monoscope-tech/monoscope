@@ -131,11 +131,12 @@ redactJSON paths' = redactJSON' (stripPrefixDot paths')
 -- from the google cloud pub sub, and to concatenate their queries so that only a single database call is needed for a batch.
 -- Also, being a pure function means it's easier to test the request processing logic since we can unit test pure functions easily.
 -- We can pass in a request, it's project cache object and inspect the generated sql and params.
-requestMsgToDumpAndEndpoint :: Projects.ProjectCache -> RequestMessages.RequestMessage -> ZonedTime -> UUID.UUID -> Either Text (Query, [DBField], RequestDumps.RequestDump)
+requestMsgToDumpAndEndpoint :: Projects.ProjectCache -> RequestMessages.RequestMessage -> UTCTime -> UUID.UUID -> Either Text (Query, [DBField], RequestDumps.RequestDump)
 requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   -- TODO: User dumpID and msgID to get correct ID
   --
   let dumpID = fromMaybe dumpIDOriginal rM.msgId
+  let timestampUTC = zonedTimeToUTC rM.timestamp 
 
   -- TODO: This is a temporary fix to add host in creating endoint hash
   -- These are the projects that we have already created endpoints
@@ -208,7 +209,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
             -- A shape is a deterministic representation of a request-response combination for a given endpoint.
             -- We usually expect multiple shapes per endpoint. Eg a shape for a success request-response and another for an error response.
             -- Shapes are dependent on the endpoint, statusCode and the unique fields in that shape.
-            let shape = Shapes.Shape (Shapes.ShapeId dumpID) rM.timestamp now Nothing projectId endpointHash queryParamsKP requestBodyKP responseBodyKP requestHeadersKP responseHeadersKP fieldHashes shapeHash rM.statusCode
+            let shape = Shapes.Shape (Shapes.ShapeId dumpID) timestampUTC now Nothing projectId endpointHash queryParamsKP requestBodyKP responseBodyKP requestHeadersKP responseHeadersKP fieldHashes shapeHash rM.statusCode
             Shapes.insertShapeQueryAndParam shape
 
   -- FIXME: This 1000 is added on the php sdk in a previous version and has been remove. This workaround code should be removed ASAP
@@ -230,7 +231,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   let reqDumpP =
         RequestDumps.RequestDump
           { id = dumpID
-          , createdAt = rM.timestamp
+          , createdAt = timestampUTC 
           , updatedAt = now
           , projectId = rM.projectId
           , host = rM.host
@@ -290,10 +291,10 @@ isRequestOutgoing sdkType
   | otherwise = False
 
 
-buildEndpoint :: RequestMessages.RequestMessage -> ZonedTime -> UUID.UUID -> Projects.ProjectId -> Text -> Text -> Value -> Text -> Bool -> Endpoints.Endpoint
+buildEndpoint :: RequestMessages.RequestMessage -> UTCTime -> UUID.UUID -> Projects.ProjectId -> Text -> Text -> Value -> Text -> Bool -> Endpoints.Endpoint
 buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash outgoing =
   Endpoints.Endpoint
-    { createdAt = rM.timestamp
+    { createdAt = zonedTimeToUTC rM.timestamp
     , updatedAt = now
     , id = Endpoints.EndpointId dumpID
     , projectId = projectId

@@ -12,11 +12,19 @@ import Deriving.Aeson qualified as DAE
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Optics.Core ((^.))
-import Relude
 import Relude.Unsafe ((!!))
-import Servant (err300, throwError)
+import Models.Users.Sessions qualified as Sessions
+import Servant (err300)
+import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
 import Servant.Server (err401)
 import System.Config (AuthContext (env, logger, pool), DashboardM)
+import System.Clock
+import System.Config
+import System.Types
+import Relude hiding (ask, asks, max, min)
+import Relude.Unsafe qualified as Unsafe
+import Effectful.PostgreSQL.Transact.Effect
+import Effectful.Reader.Static (ask, asks)
 
 
 data ClientMetadata = ClientMetadata
@@ -31,22 +39,25 @@ data ClientMetadata = ClientMetadata
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ClientMetadata
 
 
-clientMetadataH :: Maybe Text -> DashboardM ClientMetadata
+clientMetadataH :: Maybe Text -> ATBaseCtx ClientMetadata
 clientMetadataH Nothing = throwError err401
 clientMetadataH (Just authTextB64) = do
-  pool <- asks pool
-  env <- asks env
-  logger <- asks logger
+
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+
+
 
   let authTextE = B64.decodeBase64 (encodeUtf8 $ T.replace "Bearer " "" authTextB64)
   case authTextE of
-    Left err -> liftIO (logger <& toString err) >> throwError err401
+    Left err -> liftIO (appCtx.logger <& toString err) >> throwError err401
     Right authText -> do
-      let decryptedKey = ProjectApiKeys.decryptAPIKey (encodeUtf8 $ env ^. #apiKeyEncryptionSecretKey) authText
+      let decryptedKey = ProjectApiKeys.decryptAPIKey (encodeUtf8 $ appCtx.config.apiKeyEncryptionSecretKey) authText
       case ProjectApiKeys.ProjectApiKeyId <$> UUID.fromASCIIBytes decryptedKey of
         Nothing -> throwError err401
         Just apiKeyUUID -> do
-          (pApiKey, project) <- liftIO $ withPool pool do
+          (pApiKey, project) <- dbtToEff do
             pApiKeyM <- ProjectApiKeys.getProjectApiKey apiKeyUUID
             case pApiKeyM of
               Nothing -> error "no api key with given id"
@@ -58,7 +69,7 @@ clientMetadataH (Just authTextB64) = do
             $ ClientMetadata
               { projectId = pApiKey.projectId
               , pubsubProjectId = "past-3"
-              , topicId = (env ^. #requestPubsubTopics) !! 0 -- apitoolkit-prod-default
+              , topicId = (appCtx.config.requestPubsubTopics) !! 0 -- apitoolkit-prod-default
               , pubsubPushServiceAccount = apitoolkitPusherServiceAccount
               }
 

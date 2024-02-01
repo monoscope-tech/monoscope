@@ -19,7 +19,7 @@ import Data.Time (
  )
 import Data.Time.Format
 import Data.Time.Format.ISO8601 (iso8601ParseM)
-import Data.Vector (Vector)
+import Data.Vector (Vector, (!))
 import Data.Vector qualified as V
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
@@ -88,23 +88,28 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoostedM
       pure $ userNotMemeberPage sess
     else do
       -- Temporary option, using Right to unwrap. Should handle Left
-      (project, tableAsMapsE) <- dbtToEff do
+      (project, tableAsVecE) <- dbtToEff do
         project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-        tableAsMaps <- RequestDumps.selectLogTable pid query cursorM' (fromD, toD) summaryCols
-        pure (project, tableAsMaps)
+        tableAsVecE <- RequestDumps.selectLogTable pid query cursorM' (fromD, toD) summaryCols
+        pure (project, tableAsVecE)
 
-      let tableAsMaps = Unsafe.fromJust $ hush $ tableAsMapsE
+      -- FIXME: we're silently ignoring parse errors and the likes.
+      let tableAsVec = Unsafe.fromJust $ hush $ tableAsVecE
 
       reqChartTxt <- dbtToEff $ RequestDumps.throughputBy pid Nothing Nothing Nothing Nothing Nothing (3 * 60) Nothing queryM (utcToZonedTime utc <$> fromD, utcToZonedTime utc <$> toD)
-      let (requestMaps, colNames, requestsCount) = tableAsMaps
+      let (requestVecs, colNames, requestsCount) = tableAsVec 
           curatedColNames = nubOrd $ curateCols summaryCols colNames
-          reqLastCreatedAtM = (\r -> lookupMapText "created_at" r) =<< (requestMaps V.!? (V.length requestMaps - 1)) -- FIXME: unoptimal implementation, converting from vector to list for last
+          colIdxMap = listToIndexHashMap colNames
+          reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "created_at") =<< (requestVecs V.!? (V.length requestVecs - 1)) 
           nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore")
           resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing
-          page = ApiLogsPageData{pid, resultCount = requestsCount, requestMaps, cols = curatedColNames, reqChartTxt, nextLogsURL, resetLogsURL, currentRange}
+          page = ApiLogsPageData{pid, resultCount = requestsCount
+                , requestVecs, cols = curatedColNames
+                , colIdxMap
+                , reqChartTxt, nextLogsURL, resetLogsURL, currentRange}
 
       case (layoutM, hxRequestM, hxBoostedM) of
-        (Just "loadmore", Just "true", _) -> pure $ logItemRows_ pid requestMaps curatedColNames nextLogsURL
+        (Just "loadmore", Just "true", _) -> pure $ logItemRows_ pid requestVecs curatedColNames colIdxMap nextLogsURL
         (Just "resultTable", Just "true", _) -> pure $ resultTable_ page
         (Just "all", Just "true", _) -> pure $ do
           reqChart_ page.reqChartTxt False
@@ -192,8 +197,9 @@ logQueryBox_ pid currentRange =
 data ApiLogsPageData = ApiLogsPageData
   { pid :: Projects.ProjectId
   , resultCount :: Int
-  , requestMaps :: V.Vector (HashMap Text Value)
+  , requestVecs :: V.Vector (V.Vector Value)
   , cols :: [Text]
+  , colIdxMap :: HM.HashMap Text Int
   , reqChartTxt :: Text
   , nextLogsURL :: Text
   , resetLogsURL :: Text
@@ -269,7 +275,7 @@ resultTable_ page = table_ [class_ " table table-sm table-pin-rows table-pin-col
   -- height:1px fixes the cell minimum heights somehow.
   let isLogEventB = isLogEvent page.cols
   thead_ $ tr_ $ forM_ page.cols $ logTableHeading_ page.pid isLogEventB
-  tbody_ [id_ "log-item-table-body"] $ logItemRows_ page.pid page.requestMaps page.cols page.nextLogsURL
+  tbody_ [id_ "log-item-table-body"] $ logItemRows_ page.pid page.requestVecs page.cols page.colIdxMap page.nextLogsURL
 
 
 curateCols :: [Text] -> [Text] -> [Text]
@@ -290,13 +296,13 @@ curateCols summaryCols cols = sortBy sortAccordingly filteredCols
       | otherwise = comparing (`elemIndex` filteredCols) a b
 
 
-logItemRows_ :: Projects.ProjectId -> Vector (HashMap Text Value) -> [Text] -> Text -> Html ()
-logItemRows_ pid requests curatedCols nextLogsURL = do
-  forM_ requests \reqMap -> do
-    let logItemPath = requestDumpLogItemUrlPath pid reqMap
-    let (_, errCount, errClass) = errorClass True reqMap
+logItemRows_ :: Projects.ProjectId -> V.Vector (V.Vector Value) -> [Text] -> HM.HashMap Text Int -> Text -> Html ()
+logItemRows_ pid requests curatedCols colIdxMap nextLogsURL = do
+  forM_ requests \reqVec -> do
+    let logItemPath = requestDumpLogItemUrlPath pid reqVec colIdxMap
+    let (_, errCount, errClass) = errorClass True reqVec colIdxMap
     tr_ [class_ "cursor-pointer ", [__|on click toggle .hidden on next <tr/> then toggle .expanded-log on me|]]
-      $ forM_ curatedCols (td_ . logItemCol_ pid reqMap)
+      $ forM_ curatedCols (td_ . logItemCol_ pid reqVec colIdxMap)
     tr_ [class_ "hidden"] $ do
       -- used for when a row is expanded.
       td_ $ a_ [class_ $ "inline-block h-full  " <> errClass, term "data-tip" $ show errCount <> " errors attached to this request"] ""
@@ -316,10 +322,10 @@ logItemRows_ pid requests curatedCols nextLogsURL = do
         span_ [class_ "inline-block"] "LOAD MORE " >> span_ [class_ "htmx-indicator loading loading-dots loading-lg inline-block pl-3"] loader
 
 
-errorClass :: Bool -> HashMap Text Value -> (Int, Int, Text)
-errorClass expandedSection reqMap =
-  let errCount = lookupMapInt "errors_count" reqMap
-      status = lookupMapInt "status_code" reqMap
+errorClass :: Bool -> V.Vector Value -> HM.HashMap Text Int -> (Int, Int, Text)
+errorClass expandedSection reqVec colIdxMap =
+  let errCount = lookupVecIntByKey reqVec colIdxMap "errors_count"
+      status = lookupVecIntByKey reqVec colIdxMap "status_code" 
    in ( status
       , errCount
       , if errCount > 0 || status >= 400
@@ -363,10 +369,10 @@ isLogEvent :: [Text] -> Bool
 isLogEvent cols = all (`elem` cols) ["id", "created_at"]
 
 
-logItemCol_ :: Projects.ProjectId -> HashMap Text Value -> Text -> Html ()
-logItemCol_ pid reqMap "id" = do
-  let (status, errCount, errClass) = errorClass False reqMap
-  let logItemPath = requestDumpLogItemUrlPath pid reqMap
+logItemCol_ :: Projects.ProjectId -> V.Vector Value -> HM.HashMap Text Int -> Text -> Html ()
+logItemCol_ pid reqVec colIdxMap "id" = do
+  let (status, errCount, errClass) = errorClass False reqVec colIdxMap
+  let logItemPath = requestDumpLogItemUrlPath pid reqVec colIdxMap
   div_ [class_ "grid grid-cols-3 gap-4 items-center max-w-3"] do
     a_ [class_ $ "col-span-1 shrink-0 inline-block h-full w-1 " <> errClass, term "data-tip" $ show errCount <> " errors attached to this request; status " <> show status] " "
     button_
@@ -377,19 +383,20 @@ logItemCol_ pid reqMap "id" = do
       ]
       $ faSprite_ "link" "solid" "h-3 w-3 text-blue-500"
     faSprite_ "chevron-right" "solid" "h-3 w-3 col-span-1 ml-1 text-gray-500 chevron log-chevron "
-logItemCol_ _ reqMap "created_at" = span_ [class_ "font-mono whitespace-nowrap", term "data-tip" "timestamp"] $ toHtml $ fromMaybe "" $ lookupMapText "created_at" reqMap
-logItemCol_ _ reqMap "status_code" = span_ [class_ $ "badge " <> getStatusColor (lookupMapInt "status_code" reqMap), term "data-tip" "status"] $ toHtml $ show $ lookupMapInt "status_code" reqMap
-logItemCol_ _ reqMap "method" = span_ [class_ $ "min-w-[4rem] badge " <> maybe "badge-ghost" getMethodColor (lookupMapText "method" reqMap)] $ toHtml $ fromMaybe "/" $ lookupMapText "method" reqMap
-logItemCol_ pid reqMap key@"rest" = div_ [class_ "space-x-2 whitespace-nowrap max-w-8xl overflow-x-hidden "] do
-  if lookupMapText "request_type" reqMap == Just "Incoming"
+logItemCol_ _ reqVec colIdxMap "created_at" = span_ [class_ "font-mono whitespace-nowrap", term "data-tip" "timestamp"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey  reqVec colIdxMap "created_at"
+logItemCol_ _ reqVec colIdxMap "status_code" = span_ [class_ $ "badge " <> getStatusColor (lookupVecIntByKey reqVec colIdxMap "status_code"), term "data-tip" "status"] $ toHtml $ show $ lookupVecIntByKey  reqVec colIdxMap "status_code"
+logItemCol_ _ reqVec colIdxMap "method" = span_ [class_ $ "min-w-[4rem] badge " <> maybe "badge-ghost" getMethodColor (lookupVecTextByKey reqVec colIdxMap  "method") ] $ toHtml $ fromMaybe "/" $ lookupVecTextByKey reqVec colIdxMap  "method"
+logItemCol_ pid reqVec colIdxMap key@"rest" = div_ [class_ "space-x-2 whitespace-nowrap max-w-8xl overflow-x-hidden "] do
+  if lookupVecTextByKey reqVec colIdxMap "request_type" == Just "Incoming"
     then span_ [class_ "text-center w-3 inline-flex", term "data-tip" "Incoming Request"] $ faIcon_ "fa-arrow-down-left" "fa-solid fa-arrow-down-left" "h-3 w-3 text-gray-400"
     else span_ [class_ "text-center w-3 inline-flex", term "data-tip" "Outgoing Request"] $ faIcon_ "fa-arrow-up-right" "fa-solid fa-arrow-up-right" "h-3 w-3 text-green-500"
-  logItemCol_ pid reqMap "status_code"
-  logItemCol_ pid reqMap "method"
-  span_ [class_ "badge badge-ghost", term "data-tip" "URL Path"] $ toHtml $ fromMaybe "" $ lookupMapText "url_path" reqMap
-  span_ [class_ "badge badge-ghost", term "data-tip" "Host"] $ toHtml $ fromMaybe "" $ lookupMapText "host" reqMap
-  span_ [] $ toHtml $ maybe "" unwrapJsonPrimValue (HM.lookup key reqMap)
-logItemCol_ _ reqMap key = div_ [class_ "xwhitespace-nowrap xoverflow-x-hidden max-w-lg", term "data-tip" key] $ toHtml $ maybe "" unwrapJsonPrimValue (HM.lookup key reqMap)
+  logItemCol_ pid reqVec colIdxMap "status_code"
+  logItemCol_ pid reqVec colIdxMap "method"
+  span_ [class_ "badge badge-ghost", term "data-tip" "URL Path"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec  colIdxMap  "url_path"
+  span_ [class_ "badge badge-ghost", term "data-tip" "Host"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey  reqVec colIdxMap  "host"
+  span_ [] $ toHtml $ maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)
+logItemCol_ _ reqVec colIdxMap key = div_ [class_ "xwhitespace-nowrap xoverflow-x-hidden max-w-lg", term "data-tip" key] 
+                                        $ toHtml $ maybe "" unwrapJsonPrimValue  (lookupVecByKey reqVec colIdxMap key)
 
 
 reqChart_ :: Text -> Bool -> Html ()
@@ -400,10 +407,10 @@ reqChart_ reqChartTxt hxOob = do
       [text| throughputEChart("reqsChartsEC", $reqChartTxt, [], true) |]
 
 
-requestDumpLogItemUrlPath :: Projects.ProjectId -> HashMap Text Value -> Maybe Text
-requestDumpLogItemUrlPath pid rd = do
-  rdId <- lookupMapText "id" rd
-  rdCreatedAt <- lookupMapText "created_at" rd
+requestDumpLogItemUrlPath :: Projects.ProjectId -> V.Vector Value -> HM.HashMap Text Int-> Maybe Text
+requestDumpLogItemUrlPath pid rd colIdxMap = do
+  rdId <- lookupVecTextByKey rd colIdxMap "id"
+  rdCreatedAt <- lookupVecTextByKey rd colIdxMap "created_at" 
   pure $ "/p/" <> pid.toText <> "/log_explorer/" <> rdId <> "/" <> rdCreatedAt
 
 
