@@ -1,6 +1,7 @@
 module Pages.LogExplorer.LogItem where
 
-import Data.Aeson qualified as AE
+import Data.Aeson qualified as AE 
+import Data.Aeson ((.=))
 import Data.Aeson.KeyMap qualified as AEK
 import Data.ByteString.Lazy qualified as BS
 import Data.HashMap.Strict qualified as HM
@@ -8,10 +9,8 @@ import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.Format
 import Data.UUID qualified as UUID
-import Data.Vector (Vector, iforM_)
-import Database.PostgreSQL.Entity.DBT (withPool)
+import Data.Vector (iforM_)
 import Effectful.PostgreSQL.Transact.Effect
-import Effectful.Reader.Static (ask, asks)
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx
@@ -20,16 +19,16 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
-import Network.URI (escapeURIString, isUnescapedInURI, isUnreserved)
+import Network.URI (escapeURIString, isUnescapedInURI)
 import Pages.Components qualified as Components
 import Pages.NonMember
 import PyF
 import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
-import System.Clock
 import System.Config
 import System.Types
 import Utils
+import Effectful.Reader.Static (ask)
 
 
 expandAPIlogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATAuthCtx (Html ())
@@ -208,10 +207,8 @@ apiLogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATAuthCtx (Html ())
 apiLogItemH pid rdId createdAt = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
-  let currUserId = sess.userId
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
@@ -247,7 +244,33 @@ apiLogItemView req expandItemPath = do
       ]
       $ span_ [] "Download"
       >> faIcon_ "fa-arrow-down-to-line" "fa-regular fa-arrow-down-to-line" "h-3 w-3"
-  jsonValueToHtmlTree $ AE.toJSON req
+  jsonValueToHtmlTree $ selectiveToJson req
+
+-- Function to selectively convert RequestDumpLogItem to JSON
+selectiveToJson :: RequestDumps.RequestDumpLogItem -> AE.Value
+selectiveToJson req = AE.object $ concat
+  [ ["created_at" .= req.createdAt]
+  , ["duration_ns" .= req.durationNs]
+  , ["errors" .= req.errors]
+  , ["host" .= req.host]
+  , ["method" .= req.method]
+  , ["parent_id" .= req.parentId]
+  , ["path_params" .= req.pathParams]
+  , ["query_params" .= req.queryParams]
+  , ["raw_url" .= req.rawUrl]
+  , ["referer" .= req.referer]
+  , ["request_body" .= req.requestBody]
+  , ["request_headers" .= req.requestHeaders]
+  , ["request_type" .= req.requestType]
+  , ["response_body" .= req.responseBody]
+  , ["response_headers" .= req.responseHeaders]
+  , ["sdk_type" .= req.sdkType]
+  , ["service_version" .=  req.serviceVersion]
+  , ["status_code" .= req.statusCode]
+  , ["tags" .= req.tags]
+  , ["url_path" .=  req.urlPath]
+  ]
+	
 
 
 -- | jsonValueToHtmlTree takes an aeson json object and renders it as a collapsible html tree, with hyperscript for interactivity.
