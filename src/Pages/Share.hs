@@ -128,9 +128,7 @@ sharePage req outgoing = do
     h3_ [class_ "text-5xl text-left mb-16 w-full font-semibold my-8"] "Shared Request Log"
     case req of
       Just r -> do
-        let escapedQueryPartial = toText $ escapeURIString isUnescapedInURI $ toString $ [fmt|parent_id=="{UUID.toText r.id}"|]
-        let events_url = "/p/" <> r.projectId.toText <> "/log_explorer?layout=resultTable&query=" <> escapedQueryPartial
-        div_ [hxGet_ events_url, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
+        LogItem.expandAPIlogItem' r.projectId r False
       Nothing -> div_ [class_ "flex flex-col gap-4 mt-[80px] text-center"] do
         h1_ [class_ "font-bold text-3xl"] "Request Log Not Found"
         p_ [class_ "text-gray-500 text-xl"] "This shared request log URL does not exist or has expired"
