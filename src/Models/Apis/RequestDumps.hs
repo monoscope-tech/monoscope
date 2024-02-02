@@ -490,7 +490,7 @@ bulkInsertRequestDumps = executeMany q
 
 
 selectRequestDumpByProjectAndId :: Projects.ProjectId -> UTCTime -> UUID.UUID -> DBT IO (Maybe RequestDumpLogItem)
-selectRequestDumpByProjectAndId pid createdAt rdId = queryOne Select q (createdAt, createdAt, pid, rdId)
+selectRequestDumpByProjectAndId pid createdAt rdId = queryOne Select q (createdAt, pid, rdId)
   where
     createdAtZ = utcToZonedTime utc createdAt
     q =
@@ -499,7 +499,7 @@ selectRequestDumpByProjectAndId pid createdAt rdId = queryOne Select q (createdA
                     request_body,response_body,request_headers,response_headers, 
                     duration_ns, sdk_type,
                     parent_id, service_version, JSONB_ARRAY_LENGTH(errors) as errors_count, errors, tags, request_type
-             FROM apis.request_dumps where (created_at BETWEEN (TIMESTAMP ? - INTERVAL '1 day') AND (TIMESTAMP ? + INTERVAL '1 day'))  and project_id=? and id=? LIMIT 1|]
+             FROM apis.request_dumps where (created_at=?)  and project_id=? and id=? LIMIT 1|]
 
 
 selectReqLatenciesRolledBySteps :: Int -> Int -> Projects.ProjectId -> Text -> Text -> DBT IO (V.Vector (Int, Int))

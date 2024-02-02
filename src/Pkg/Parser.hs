@@ -196,7 +196,7 @@ defSqlQueryCfg pid =
     , projectedColsByUser = []
     , defaultSelect =
         [ "id::text as id"
-        , [fmt|to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as created_at|]
+        , [fmt|to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at|]
         , "request_type"
         , "host"
         , "status_code"

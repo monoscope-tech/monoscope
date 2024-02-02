@@ -15,12 +15,11 @@ import Data.Time (
 import Data.Time.Format (defaultTimeLocale)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as Vector
-import Database.PostgreSQL.Entity.DBT (withPool)
 import Effectful.PostgreSQL.Transact.Effect
-import Effectful.Reader.Static (ask, asks)
+import Effectful.Reader.Static (ask)
 import Fmt
 import Lucid
-import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_)
+import Lucid.Htmx (hxPost_, hxSwap_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.RequestDumps qualified as RequestDumps
