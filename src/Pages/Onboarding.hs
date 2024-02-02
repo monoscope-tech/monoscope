@@ -70,7 +70,7 @@ onboardingGetH pid polling redirected current_tab = do
 onboardingPage :: Projects.ProjectId -> Text -> Bool -> Bool -> Bool -> Text -> Html ()
 onboardingPage pid apikey hasRequest ans redi ctb = do
   div_
-    [ class_ "relative h-full"
+    [ class_ "relative h-full overflow-y-scroll  w-full"
     , hxGet_ $ "/p/" <> pid.toText <> "/onboarding?polling=True"
     , hxTrigger_ "load delay:30s"
     , hxVals_ "js:{current_tab:getCurrentTab()}"

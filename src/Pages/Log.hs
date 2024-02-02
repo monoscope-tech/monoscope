@@ -2,7 +2,6 @@ module Pages.Log where
 
 import Control.Error (hush)
 import Data.Aeson (Value)
-import Data.Aeson qualified as AE
 import Data.Containers.ListUtils (nubOrd)
 import Data.Default (def)
 import Data.HashMap.Strict qualified as HM
@@ -10,7 +9,6 @@ import Data.List (elemIndex)
 import Data.Text qualified as T
 import Data.Time (
   UTCTime,
-  ZonedTime,
   addUTCTime,
   getCurrentTime,
   secondsToNominalDiffTime,
@@ -18,13 +16,11 @@ import Data.Time (
   utcToZonedTime,
  )
 import Data.Time.Format
+import Effectful.Reader.Static (ask, asks)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
-import Data.Vector (Vector, (!))
 import Data.Vector qualified as V
 import Data.Vector qualified as Vector
-import Database.PostgreSQL.Entity.DBT (withPool)
 import Effectful.PostgreSQL.Transact.Effect
-import Effectful.Reader.Static (ask, asks)
 import Lucid
 import Lucid.Base
 import Lucid.Htmx
@@ -52,18 +48,13 @@ import Witch (from)
 -- >>> import Data.Aeson
 
 
-parseTimestamp :: String -> Maybe ZonedTime
-parseTimestamp = parseTimeM True defaultTimeLocale "%Y-%m-%dT%H:%M:%S.%qZ"
-
 
 apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
 apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoostedM = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
-  let currUserId = sess.userId
 
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
   let query = fromMaybe "" queryM
