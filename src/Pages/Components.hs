@@ -50,4 +50,4 @@ drawerWithURLContent_ drawerId url trigger = div_ [class_ "drawer drawer-end inl
     label_ [Lucid.for_ drawerId, Aria.label_ "close modal", class_ "w-full drawer-overlay grow flex-1"] ""
     div_ [style_ "width: min(90vw, 850px) ", class_ "bg-white h-full p-5 clear-both"] do
       label_ [Lucid.for_ drawerId, Aria.label_ "close modal", class_ "float-right p-3 rounded-full hover:bg-gray-100 text-xl"] "x"
-      div_ [hxGet_ url, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
+      div_ [hxGet_ url, hxTrigger_ "intersect once", hxSwap_ "innerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""

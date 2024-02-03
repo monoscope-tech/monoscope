@@ -364,7 +364,7 @@ logItemCol_ :: Projects.ProjectId -> V.Vector Value -> HM.HashMap Text Int -> Te
 logItemCol_ pid reqVec colIdxMap "id" = do
   let (status, errCount, errClass) = errorClass False reqVec colIdxMap
   let logItemPath = requestDumpLogItemUrlPath pid reqVec colIdxMap
-  div_ [class_ "grid grid-cols-3 gap-4 items-center max-w-3"] do
+  div_ [class_ "grid grid-cols-3 gap-4 items-center max-w-8"] do
     a_ [class_ $ "col-span-1 shrink-0 inline-block h-full w-1 " <> errClass, term "data-tip" $ show errCount <> " errors attached to this request; status " <> show status] " "
     button_
       [ class_ "col-span-1"

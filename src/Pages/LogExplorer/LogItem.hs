@@ -224,8 +224,12 @@ apiLogItemH pid rdId createdAt = do
 
 apiLogItemView :: RequestDumps.RequestDumpLogItem -> Text -> Html ()
 apiLogItemView req expandItemPath = do
+  traceShowM req
   div_ [class_ "flex items-center gap-2"] do
-    Components.drawerWithURLContent_ "expand-log-drawer" (expandItemPath <> "/detailed") $ span_ [class_ "btn btn-sm btn-outline"] ("Expand" >> faIcon_ "fa-expand" "fa-regular fa-expand" "h-3 w-3")
+    Components.drawerWithURLContent_ 
+      ("expand-log-drawer-" <> UUID.toText req.id ) 
+      (expandItemPath <> "/detailed") 
+      $ span_ [class_ "btn btn-sm btn-outline"] ("Expand" >> faIcon_ "fa-expand" "fa-regular fa-expand" "h-3 w-3")
     let reqJson = decodeUtf8 $ AE.encode $ AE.toJSON req
     button_
       [ class_ "btn btn-sm btn-outline"
