@@ -35,10 +35,7 @@ expandAPIlogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATAuthCtx (Ht
 expandAPIlogItemH pid rdId createdAt = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
   sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-  let currUserId = sess.userId
 
   logItemM <- dbtToEff $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
   let content = case logItemM of
@@ -180,7 +177,6 @@ expandAPIlogItem' pid req modal = do
             jsonValueToHtmlTree req.responseHeaders
   script_
     [text|
-
 function toggleExpireOptions (event) {
     event.preventDefault()
     event.stopPropagation()
@@ -224,7 +220,6 @@ apiLogItemH pid rdId createdAt = do
 
 apiLogItemView :: RequestDumps.RequestDumpLogItem -> Text -> Html ()
 apiLogItemView req expandItemPath = do
-  traceShowM req
   div_ [class_ "flex items-center gap-2"] do
     Components.drawerWithURLContent_ 
       ("expand-log-drawer-" <> UUID.toText req.id ) 
