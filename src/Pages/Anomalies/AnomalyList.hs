@@ -471,10 +471,8 @@ anomalyDetailsGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (Htm
 anomalyDetailsGetH pid targetHash hxBoostedM = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
-  let currUserId = sess.userId
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
@@ -504,7 +502,7 @@ anomalyDetailsGetH pid targetHash hxBoostedM = do
               case hxBoostedM of
                 Just _ -> pure $ anomalyDetailsPage an (Just shapesWithFieldsMap) Nothing Nothing chartQuery currTime True
                 Nothing -> do
-                  pure $ bodyWrapper bwconf $ div_ [class_ "w-full px-32"] do
+                  pure $ bodyWrapper bwconf $ div_ [class_ "w-full px-32 overflow-y-scroll h-full"] do
                     h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
                     anomalyDetailsPage an (Just shapesWithFieldsMap) Nothing Nothing chartQuery currTime False
             Anomalies.ATShape -> do
@@ -517,7 +515,7 @@ anomalyDetailsGetH pid targetHash hxBoostedM = do
               let anFields = (newFM, updfM, delFM)
               case hxBoostedM of
                 Just _ -> pure $ anomalyDetailsPage an Nothing (Just anFields) Nothing chartQuery currTime True
-                Nothing -> pure $ bodyWrapper bwconf $ div_ [class_ "w-full px-32"] do
+                Nothing -> pure $ bodyWrapper bwconf $ div_ [class_ "w-full px-32 overflow-y-scroll h-full"] do
                   h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
                   anomalyDetailsPage an Nothing (Just anFields) Nothing chartQuery currTime False
             _ -> do
@@ -525,7 +523,7 @@ anomalyDetailsGetH pid targetHash hxBoostedM = do
               case hxBoostedM of
                 Just _ -> do
                   pure $ anomalyDetailsPage an Nothing Nothing (Just anFormats) chartQuery currTime True
-                Nothing -> pure $ bodyWrapper bwconf $ div_ [class_ "w-full px-32"] do
+                Nothing -> pure $ bodyWrapper bwconf $ div_ [class_ "w-full px-32 overflow-y-scroll h-full"] do
                   h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
                   anomalyDetailsPage an Nothing Nothing (Just anFormats) chartQuery currTime False
         Nothing -> pure $ bodyWrapper bwconf $ h4_ [] "ANOMALY NOT FOUND"
