@@ -7,29 +7,29 @@ import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
 import Data.Digest.XXHash
+import Data.List (nubBy)
 import Data.Text qualified as T
-import Data.Time.LocalTime (ZonedTime, getZonedTime, utcToZonedTime, utc)
 import Data.Time.Clock (UTCTime)
+import Data.Time.LocalTime (ZonedTime, getZonedTime, utc, utcToZonedTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
-import System.Config
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
+import Effectful.PostgreSQL.Transact.Effect
+import Effectful.Reader.Static (ask, asks)
+import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Htmx
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields (parseFieldCategoryEnum, parseFieldTypes)
 import Models.Apis.Fields qualified as Fields
+import Models.Apis.Fields.Query qualified as Fields
+import Models.Apis.Formats qualified as Formats
+import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Projects.Swaggers qualified as Swaggers
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
-import Data.List (nubBy)
-import Effectful.PostgreSQL.Transact.Effect
-import Effectful.Reader.Static (ask, asks)
-import Models.Apis.Fields.Query qualified as Fields
-import Models.Apis.Formats qualified as Formats
-import Models.Apis.Shapes qualified as Shapes
 import Numeric (showHex)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.GenerateSwagger qualified as GenerateSwagger
@@ -37,8 +37,8 @@ import Pages.NonMember
 import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
-import Effectful.Time qualified as Time
 import Servant.Htmx (HXTrigger)
+import System.Config
 import System.Types
 import Utils
 import Web.FormUrlEncoded (FromForm)

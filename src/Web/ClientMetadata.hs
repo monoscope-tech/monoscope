@@ -9,22 +9,22 @@ import Data.Text qualified as T
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Deriving.Aeson qualified as DAE
-import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
-import Models.Projects.Projects qualified as Projects
-import Optics.Core ((^.))
-import Relude.Unsafe ((!!))
-import Models.Users.Sessions qualified as Sessions
-import Servant (err300)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
-import Servant.Server (err401)
-import System.Config (AuthContext (env, logger, pool), DashboardM)
-import System.Clock
-import System.Config
-import System.Types
-import Relude hiding (ask, asks, max, min)
-import Relude.Unsafe qualified as Unsafe
 import Effectful.PostgreSQL.Transact.Effect
 import Effectful.Reader.Static (ask, asks)
+import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
+import Models.Projects.Projects qualified as Projects
+import Models.Users.Sessions qualified as Sessions
+import Optics.Core ((^.))
+import Relude hiding (ask, asks, max, min)
+import Relude.Unsafe ((!!))
+import Relude.Unsafe qualified as Unsafe
+import Servant (err300)
+import Servant.Server (err401)
+import System.Clock
+import System.Config
+import System.Config (AuthContext (env, logger, pool), DashboardM)
+import System.Types
 
 
 data ClientMetadata = ClientMetadata
@@ -42,12 +42,9 @@ data ClientMetadata = ClientMetadata
 clientMetadataH :: Maybe Text -> ATBaseCtx ClientMetadata
 clientMetadataH Nothing = throwError err401
 clientMetadataH (Just authTextB64) = do
-
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
-
-
 
   let authTextE = B64.decodeBase64 (encodeUtf8 $ T.replace "Bearer " "" authTextB64)
   case authTextE of

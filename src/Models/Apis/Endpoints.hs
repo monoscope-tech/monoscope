@@ -75,7 +75,7 @@ endpointIdText = UUID.toText . unEndpointId
 -- TODO: Introduce request header hashes and response header hashes
 data Endpoint = Endpoint
   { id :: EndpointId
-  , createdAt :: UTCTime 
+  , createdAt :: UTCTime
   , updatedAt :: UTCTime
   , projectId :: Projects.ProjectId
   , urlPath :: Text

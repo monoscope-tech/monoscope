@@ -186,6 +186,7 @@ lookupMapInt key hashMap = case HM.lookup key hashMap of
   Just (AE.Number val) -> fromMaybe 0 $ toBoundedInteger val -- Extract text from Value if it's a String
   _ -> 0
 
+
 lookupVecText :: V.Vector Value -> Int -> Maybe Text
 lookupVecText vec idx = case vec V.!? idx of
   Just (AE.String textValue) -> Just textValue -- Extract text from Value if it's a String
@@ -199,14 +200,16 @@ lookupVecInt vec idx = case vec V.!? idx of
 
 
 lookupVecTextByKey :: V.Vector Value -> HM.HashMap Text Int -> Text -> Maybe Text
-lookupVecTextByKey vec colIdxMap key = HM.lookup key colIdxMap  >>= lookupVecText vec 
+lookupVecTextByKey vec colIdxMap key = HM.lookup key colIdxMap >>= lookupVecText vec
 
 
-lookupVecIntByKey :: V.Vector Value ->  HM.HashMap Text Int  -> Text -> Int
-lookupVecIntByKey  vec colIdxMap key = (HM.lookup key colIdxMap  >>= Just . lookupVecInt vec ) & fromMaybe 0
+lookupVecIntByKey :: V.Vector Value -> HM.HashMap Text Int -> Text -> Int
+lookupVecIntByKey vec colIdxMap key = (HM.lookup key colIdxMap >>= Just . lookupVecInt vec) & fromMaybe 0
 
-lookupVecByKey :: V.Vector Value ->  HM.HashMap Text Int  -> Text -> Maybe Value
-lookupVecByKey  vec colIdxMap key = (HM.lookup key colIdxMap  >>= (\x -> vec V.!? x ))
 
-listToIndexHashMap ::(Hashable a) => [a] -> HM.HashMap a Int
-listToIndexHashMap list = HM.fromList [(x, i) | (x, i) <- zip list [0..]]
+lookupVecByKey :: V.Vector Value -> HM.HashMap Text Int -> Text -> Maybe Value
+lookupVecByKey vec colIdxMap key = (HM.lookup key colIdxMap >>= (\x -> vec V.!? x))
+
+
+listToIndexHashMap :: Hashable a => [a] -> HM.HashMap a Int
+listToIndexHashMap list = HM.fromList [(x, i) | (x, i) <- zip list [0 ..]]

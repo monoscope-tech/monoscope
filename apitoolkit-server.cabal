@@ -116,6 +116,7 @@ library
       DerivingVia
       DisambiguateRecordFields
       ExtendedDefaultRules
+      MultiWayIf
       FlexibleInstances
       ImportQualifiedPost
       InstanceSigs
@@ -251,6 +252,7 @@ executable apitoolkit-server-exe
       DerivingVia
       DisambiguateRecordFields
       ExtendedDefaultRules
+      MultiWayIf
       FlexibleInstances
       ImportQualifiedPost
       InstanceSigs
@@ -296,6 +298,7 @@ test-suite doctests
       DerivingVia
       DisambiguateRecordFields
       ExtendedDefaultRules
+      MultiWayIf
       FlexibleInstances
       ImportQualifiedPost
       InstanceSigs
@@ -345,6 +348,7 @@ test-suite tests
       DerivingVia
       DisambiguateRecordFields
       ExtendedDefaultRules
+      MultiWayIf
       FlexibleInstances
       ImportQualifiedPost
       InstanceSigs
