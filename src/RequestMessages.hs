@@ -136,7 +136,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   -- TODO: User dumpID and msgID to get correct ID
   --
   let dumpID = fromMaybe dumpIDOriginal rM.msgId
-  let timestampUTC = zonedTimeToUTC rM.timestamp 
+  let timestampUTC = zonedTimeToUTC rM.timestamp
 
   -- TODO: This is a temporary fix to add host in creating endoint hash
   -- These are the projects that we have already created endpoints
@@ -231,7 +231,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   let reqDumpP =
         RequestDumps.RequestDump
           { id = dumpID
-          , createdAt = timestampUTC 
+          , createdAt = timestampUTC
           , updatedAt = now
           , projectId = rM.projectId
           , host = rM.host

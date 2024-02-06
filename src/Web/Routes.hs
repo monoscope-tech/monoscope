@@ -61,9 +61,10 @@ import System.Types
 import Utils
 import Web.Auth (APItoolkitAuthContext, authHandler)
 import Web.Auth qualified as Auth
+import Web.ClientMetadata qualified as ClientMetadata
 import Web.Cookie (SetCookie)
 import Web.Error
-import Web.ClientMetadata qualified as ClientMetadata
+
 
 type QPT a = QueryParam a Text
 type GetRedirect = Verb 'GET 302
@@ -93,7 +94,7 @@ server
 server pool =
   Routes
     { assets = Servant.serveDirectoryWebApp "./static/public/assets"
-    , public =  Servant.serveDirectoryWebApp "./static/public"
+    , public = Servant.serveDirectoryWebApp "./static/public"
     , ping = pingH
     , status = statusH
     , login = Auth.loginH

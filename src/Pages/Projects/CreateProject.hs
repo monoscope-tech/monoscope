@@ -258,7 +258,7 @@ processProjectPostForm cpRaw = do
 createProjectBody :: Sessions.PersistentSession -> EnvConfig -> Bool -> CreateProjectForm -> CreateProjectFormError -> Maybe (V.Vector Projects.NotificationChannel) -> Maybe SlackData -> Html ()
 createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
   let paymentPlan = if cp.paymentPlan == "" then "Hobby" else cp.paymentPlan
-  section_ [id_ "main-content", class_ "p-3 py-5 sm:p-6"] do
+  section_ [id_ "main-content", class_ "p-3 py-5 sm:p-6 overflow-y-scroll h-full"] do
     div_ [class_ "mx-auto", style_ "max-width:800px"] do
       h2_ [class_ "text-slate-700 text-3xl font-medium mb-5"] $ toHtml @String $ if isUpdate then "Project Settings" else "Create Project"
       div_ [class_ "grid gap-5"] do
@@ -313,13 +313,13 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
                         "_"
                         [text| 
                           init if $isSelectedTxt then set window.paymentPlan to $paddleSubsCode end 
-                          on click set window.paymentPlan to $paddleSubsCode
-                                           then set #paymentPlanEl.value to "$title"
-                                           then remove .border-blue-200 .shadow-lg from .payment-plans
-                                           then remove .payment-radio-active from .payment-radio 
-                                           then add .payment-radio-active to (.payment-radio in me)
-                                           then add .border-blue-200 .shadow-lg to me
-                                           |]
+                          on click  set window.paymentPlan to $paddleSubsCode
+                               then set #paymentPlanEl.value to "$title"
+                               then remove .border-blue-200 .shadow-lg from .payment-plans
+                               then remove .payment-radio-active from .payment-radio 
+                               then add .payment-radio-active to (.payment-radio in me)
+                               then add .border-blue-200 .shadow-lg to me
+                               |]
                     ]
                     do
                       div_ [class_ "flex items-center justify-between border-b border-b-1 p-2"] do

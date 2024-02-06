@@ -75,10 +75,8 @@ acknowlegeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx 
 acknowlegeAnomalyGetH pid aid = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
-  let currUserId = sess.userId
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
@@ -94,10 +92,8 @@ unAcknowlegeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCt
 unAcknowlegeAnomalyGetH pid aid = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
-  let currUserId = sess.userId
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
@@ -113,10 +109,8 @@ archiveAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (Ht
 archiveAnomalyGetH pid aid = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
-  let currUserId = sess.userId
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
@@ -132,10 +126,8 @@ unArchiveAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (
 unArchiveAnomalyGetH pid aid = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
-  let currUserId = sess.userId
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
@@ -153,10 +145,8 @@ anomalyBulkActionsPostH :: Projects.ProjectId -> Text -> AnomalyBulkForm -> ATAu
 anomalyBulkActionsPostH pid action items = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
-  let currUserId = sess.userId
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
@@ -184,10 +174,8 @@ anomalyListGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text 
 anomalyListGetH pid layoutM ackdM archivedM sortM page loadM endpointM hxRequestM hxBoostedM = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
-  let currUserId = sess.userId
 
   let ackd = textToBool <$> ackdM
   let archived = textToBool <$> archivedM
@@ -471,10 +459,8 @@ anomalyDetailsGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (Htm
 anomalyDetailsGetH pid targetHash hxBoostedM = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
-  let currUserId = sess.userId
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
@@ -504,7 +490,7 @@ anomalyDetailsGetH pid targetHash hxBoostedM = do
               case hxBoostedM of
                 Just _ -> pure $ anomalyDetailsPage an (Just shapesWithFieldsMap) Nothing Nothing chartQuery currTime True
                 Nothing -> do
-                  pure $ bodyWrapper bwconf $ div_ [class_ "w-full px-32"] do
+                  pure $ bodyWrapper bwconf $ div_ [class_ "w-full px-32 overflow-y-scroll h-full"] do
                     h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
                     anomalyDetailsPage an (Just shapesWithFieldsMap) Nothing Nothing chartQuery currTime False
             Anomalies.ATShape -> do
@@ -517,7 +503,7 @@ anomalyDetailsGetH pid targetHash hxBoostedM = do
               let anFields = (newFM, updfM, delFM)
               case hxBoostedM of
                 Just _ -> pure $ anomalyDetailsPage an Nothing (Just anFields) Nothing chartQuery currTime True
-                Nothing -> pure $ bodyWrapper bwconf $ div_ [class_ "w-full px-32"] do
+                Nothing -> pure $ bodyWrapper bwconf $ div_ [class_ "w-full px-32 overflow-y-scroll h-full"] do
                   h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
                   anomalyDetailsPage an Nothing (Just anFields) Nothing chartQuery currTime False
             _ -> do
@@ -525,7 +511,7 @@ anomalyDetailsGetH pid targetHash hxBoostedM = do
               case hxBoostedM of
                 Just _ -> do
                   pure $ anomalyDetailsPage an Nothing Nothing (Just anFormats) chartQuery currTime True
-                Nothing -> pure $ bodyWrapper bwconf $ div_ [class_ "w-full px-32"] do
+                Nothing -> pure $ bodyWrapper bwconf $ div_ [class_ "w-full px-32 overflow-y-scroll h-full"] do
                   h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
                   anomalyDetailsPage an Nothing Nothing (Just anFormats) chartQuery currTime False
         Nothing -> pure $ bodyWrapper bwconf $ h4_ [] "ANOMALY NOT FOUND"
@@ -533,7 +519,7 @@ anomalyDetailsGetH pid targetHash hxBoostedM = do
 
 anomalyDetailsPage :: AnomalyVM -> Maybe (Vector Shapes.ShapeWithFields) -> Maybe (Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field]) -> Maybe (Vector Text) -> Maybe QueryBy -> UTCTime -> Bool -> Html ()
 anomalyDetailsPage anomaly shapesWithFieldsMap fields prvFormatsM chartQuery currTime modal = do
-  div_ [class_ "w-full overflow-y-scroll h-full"] do
+  div_ [class_ "w-full "] do
     div_ [class_ "w-full"] do
       div_ [class_ "flex items-center justify-between gap-2 flex-wrap"] do
         case anomaly.anomalyType of
@@ -602,7 +588,7 @@ anomalyDetailsPage anomaly shapesWithFieldsMap fields prvFormatsM chartQuery cur
     div_ [class_ "mt-6 space-y-4"] do
       div_ [class_ "tabs tabs-bordered", role_ "tablist"] do
         input_ [type_ "radio", name_ "anomaly-events-tabs", role_ "tab", class_ "tab", Aria.label_ "Overview", checked_]
-        div_ [role_ "tabpanel", class_ "tab-content w-full bg-white rounded-lg overflow-y-auto h-full", id_ "overview_content"] do
+        div_ [role_ "tabpanel", class_ "tab-content w-full bg-white rounded-lg overflow-x-hidden", id_ "overview_content"] do
           case anomaly.anomalyType of
             Anomalies.ATEndpoint -> endpointOverview shapesWithFieldsMap
             Anomalies.ATShape -> requestShapeOverview fields
@@ -610,7 +596,7 @@ anomalyDetailsPage anomaly shapesWithFieldsMap fields prvFormatsM chartQuery cur
             _ -> ""
 
         input_ [type_ "radio", name_ "anomaly-events-tabs", role_ "tab", class_ "tab", Aria.label_ "Events"]
-        div_ [role_ "tabpanel", class_ "tab-content grow overflow-y-auto h-full whitespace-nowrap text-sm divide-y overflow-x-hidden ", id_ "events_content"] do
+        div_ [role_ "tabpanel", class_ "tab-content grow whitespace-nowrap text-sm divide-y overflow-x-hidden ", id_ "events_content"] do
           let anomalyQueryPartial = buildQueryForAnomaly anomaly.anomalyType anomaly.targetHash
           let escapedQueryPartial = toText $ escapeURIString isUnescapedInURI $ toString anomalyQueryPartial
           let events_url = "/p/" <> (UUID.toText $ Projects.unProjectId $ anomaly.projectId) <> "/log_explorer?layout=resultTable&query=" <> escapedQueryPartial

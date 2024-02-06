@@ -13,9 +13,9 @@ import Data.Cache qualified as Cache
 import Data.Generics.Product (field)
 import Data.List (unzip4)
 import Data.Pool (Pool)
+import Data.Time.Clock (getCurrentTime)
 import Data.Time.LocalTime (getZonedTime)
 import Data.UUID.V4 (nextRandom)
-import Data.Time.Clock (getCurrentTime)
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (Connection, Query)
 import Database.PostgreSQL.Transact (execute)
@@ -153,7 +153,7 @@ processMessages' logger' _ conn' msgs projectCache' = do
     processMessage :: LogAction IO String -> Pool Connection -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> Either Text (Maybe Text, RequestMessages.RequestMessage) -> IO (Either Text (Maybe Text, Query, [DBField], RequestDumps.RequestDump))
     processMessage logger conn projectCache recMsgEither = runExceptT do
       (rmAckId, recMsg) <- except recMsgEither
-      timestamp <- liftIO getCurrentTime 
+      timestamp <- liftIO getCurrentTime
       let pid = Projects.ProjectId recMsg.projectId
 
       -- We retrieve the projectCache object from the inmemory cache and if it doesn't exist,

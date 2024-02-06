@@ -208,7 +208,7 @@ integrateApiToolkit apikey current_tab =
         span_ [class_ "text-blue-500 pr-4 border-r border-r-2 border-r-blue-500 font-bold"] "Next Up"
         h3_ [class_ "font-bold text-2xl"] "Integrate APIToolkit"
       div_ [class_ "pb-2 mt-5"] do
-        div_ [class_ "font-bold text-center text-white border-b border-slate-200"] $ do
+        div_ [class_ "font-bold text-center  border-b border-slate-200"] $ do
           tabs current_tab
         tabContentExpress apikey current_tab
         tabContentExpressCjs apikey current_tab
@@ -859,7 +859,7 @@ contentHeader target =
       div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
       div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
     button_
-      [ class_ "text-white text-sm font-bold mr-6"
+      [ class_ "text-black text-sm font-bold mr-6"
       , term "data-target" target
       , [__|
           on click

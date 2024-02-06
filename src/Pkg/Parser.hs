@@ -14,9 +14,9 @@ import Pkg.Parser.Stats
 import Pkg.Parser.Types
 import PyF
 import Relude hiding (GT, LT, many, some)
+import Relude.Unsafe qualified as Unsafe
 import Text.Megaparsec hiding (State)
 import Text.Megaparsec.Char
-import Relude.Unsafe qualified as Unsafe
 
 
 -- Example queries
@@ -220,11 +220,11 @@ defSqlQueryCfg pid =
 listToColNames :: [Text] -> [Text]
 listToColNames = map \x -> T.strip $ last $ "" :| T.splitOn "as" x
 
+
 -- >>> colsNoAsClause ["id", "JSONB_ARRAY_LENGTH(errors) as errors_count"]
 -- ["id","JSONB_ARRAY_LENGTH(errors)"]
 colsNoAsClause :: [Text] -> [Text]
 colsNoAsClause = map \x -> T.strip $ Unsafe.head $ T.splitOn "as" x
-
 
 
 instance HasField "toColNames" QueryComponents [Text] where

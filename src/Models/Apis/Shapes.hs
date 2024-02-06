@@ -5,7 +5,7 @@ module Models.Apis.Shapes (Shape (..), ShapeWithFields (..), SwShape (..), Shape
 
 import Data.Aeson qualified as AE
 import Data.Default (Default)
-import Data.Time (ZonedTime, getZonedTime, UTCTime)
+import Data.Time (UTCTime, ZonedTime, getZonedTime)
 import Data.UUID qualified as UUID
 
 import Data.Vector (Vector)
@@ -67,7 +67,7 @@ data Shape = Shape
   { id :: ShapeId
   , createdAt :: UTCTime
   , updatedAt :: UTCTime
-  , approvedOn :: Maybe UTCTime 
+  , approvedOn :: Maybe UTCTime
   , projectId :: Projects.ProjectId
   , endpointHash :: Text
   , queryParamsKeypaths :: Vector Text
