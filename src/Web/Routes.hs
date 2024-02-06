@@ -20,6 +20,7 @@ import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Types qualified as Fields (FieldId)
 import Models.Apis.Reports qualified as ReportsM
+import Models.Apis.Testing qualified as TestingM
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (notFound404)
@@ -47,6 +48,7 @@ import Pages.Reports qualified as Reports
 import Pages.Share qualified as Share
 import Pages.SlackInstall qualified as SlackInstall
 import Pages.Survey qualified as Survey
+import Pages.Testing qualified as Testing
 import Relude
 import Servant (AuthProtect, Capture, Context (..), Delete, FormUrlEncoded, Get, Header, Headers, JSON, NoContent, Patch, PlainText, Post, QueryFlag, QueryParam, ReqBody, StdMethod (GET), Verb, (:>))
 import Servant qualified
@@ -169,6 +171,14 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , chartsGet :: mode :- "charts_html" :> QP "chart_type" Charts.ChartType :> QP "group_by" Charts.GroupBy :> QP "query_by" [Charts.QueryBy] :> QP "num_slots" Int :> QP "limit" Int :> QP "theme" Text :> QPT "id" :> QP "show_legend" Bool :> Get '[HTML] (Html ())
   , surveyPut :: mode :- "p" :> ProjectId :> "survey" :> ReqBody '[FormUrlEncoded] Survey.SurveyForm :> Post '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
   , surveyGet :: mode :- "p" :> ProjectId :> "about_project" :> Get '[HTML] (Html ())
+  , collectionsGet :: mode :- "p" :> ProjectId :> "testing" :> Get '[HTML] (Html ())
+  , newCollectionPost :: mode :- "p" :> ProjectId :> "testing" :> ReqBody '[FormUrlEncoded] Testing.TestCollectionForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
+  , collectionGet :: mode :- "p" :> ProjectId :> "testing" :> Capture "collection_id" TestingM.CollectionId :> Get '[HTML] (Html ())
+  , collectionPut :: mode :- "p" :> ProjectId :> "testing" :> Capture "collection_id" TestingM.CollectionId :> Capture "action" Text :> ReqBody '[JSON] AE.Value :> Post '[HTML] (Html ())
+  , collectionStepPost :: mode :- "p" :> ProjectId :> "testing" :> "add_step" :> Capture "collection_id" TestingM.CollectionId :> ReqBody '[JSON] AE.Value :> Post '[HTML] (Html ())
+  , collectionStepPut :: mode :- "p" :> ProjectId :> "testing" :> "step" :> Capture "step_id" TestingM.CollectionStepId :> ReqBody '[JSON] AE.Value :> Post '[HTML] (Html ())
+  , saveFromCodePost :: mode :- "p" :> ProjectId :> "testing" :> "save_from_code" :> Capture "collection_id" TestingM.CollectionId :> ReqBody '[JSON] Testing.CodeOperationsForm :> Post '[HTML] (Html ())
+  , deleteCollectionStep :: mode :- "p" :> ProjectId :> "testing" :> "step" :> Capture "step_id" TestingM.CollectionStepId :> Delete '[HTML] (Html ())
   }
   deriving stock (Generic)
 
@@ -227,6 +237,14 @@ cookieProtectedServer =
     , chartsGet = Charts.chartsGetH
     , surveyPut = Survey.surveyPutH
     , surveyGet = Survey.surveyGetH
+    , collectionsGet = Testing.testingGetH
+    , newCollectionPost = Testing.testingPostH
+    , collectionGet = Testing.collectionGetH
+    , collectionPut = Testing.testingPutH
+    , collectionStepPost = Testing.collectionStepPostH
+    , collectionStepPut = Testing.collectionStepPutH
+    , saveFromCodePost = Testing.saveStepsFromCodePostH
+    , deleteCollectionStep = Testing.deleteStepH
     }
 
 

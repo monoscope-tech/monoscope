@@ -49,7 +49,7 @@ import Database.PostgreSQL.Simple.ToField
 newtype CollectionId = CollectionId {collectionId :: UUID.UUID}
     deriving stock (Generic, Show)
     deriving
-        (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default)
+        (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default, NFData)
         via UUID.UUID
 
 
@@ -60,7 +60,7 @@ instance HasField "toText" CollectionId Text where
 newtype CollectionStepId = CollectionStepId {collectionStepId :: UUID.UUID}
     deriving stock (Generic, Show)
     deriving
-        (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default)
+        (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default, NFData)
         via UUID.UUID
 
 
@@ -78,7 +78,7 @@ data CollectionStep = CollectionStep
     , stepData :: Value
     }
     deriving stock (Show, Generic)
-    deriving anyclass (FromRow, ToRow, ToJSON, FromJSON)
+    deriving anyclass (FromRow, ToRow, ToJSON, FromJSON, NFData)
     deriving
         (Entity)
         via (GenericEntity '[Schema "apis", TableName "test_steps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] CollectionStep)
@@ -97,7 +97,7 @@ data Collection = Collection
     , isScheduled :: Bool
     }
     deriving stock (Show, Generic)
-    deriving anyclass (FromRow, ToRow, ToJSON, FromJSON)
+    deriving anyclass (FromRow, ToRow, ToJSON, FromJSON, NFData)
     deriving
         (Entity)
         via (GenericEntity '[Schema "apis", TableName "testing", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Collection)
@@ -115,7 +115,7 @@ data CollectionListItem = ReportListItem
     , schedule :: Maybe Text
     }
     deriving stock (Show, Generic)
-    deriving anyclass (FromRow, ToRow)
+    deriving anyclass (FromRow, ToRow, NFData)
     deriving
         (Entity)
         via (GenericEntity '[Schema "apis", TableName "testing", PrimaryKey "id", FieldModifiers '[CamelToSnake]] CollectionListItem)

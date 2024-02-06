@@ -11,20 +11,21 @@ module Pages.Testing (
   CodeOperationsForm (..),
 ) where
 
-import Config
 import Control.Exception
 import Data.Default (def)
 import Foreign.C.String
 import Foreign.C.Types
 import NeatInterpolation (text)
+import System.Config
 import System.IO.Error
+import System.Types
 
 import Lucid
 import Lucid.Hyperscript
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Relude
+import Relude hiding (ask, asks)
 
 import Data.Aeson
 import Data.Aeson.QQ (aesonQQ)
@@ -42,10 +43,12 @@ import Data.Time.LocalTime (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
+import Effectful.PostgreSQL.Transact.Effect
+import Effectful.Reader.Static (ask, asks)
 import Lucid.Base
 import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_)
 import Models.Apis.Testing qualified as Testing
-import Models.Users.Sessions qualified as Session
+import Relude.Unsafe qualified as Unsafe
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -74,23 +77,26 @@ data ScheduleForm = ScheduleForm
   deriving anyclass (FromForm, FromJSON)
 
 
-testingPutH :: Session.PersistentSession -> Projects.ProjectId -> Testing.CollectionId -> Text -> Value -> DashboardM (Html ())
-testingPutH sess pid cid action steps = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+testingPutH :: Projects.ProjectId -> Testing.CollectionId -> Text -> Value -> ATAuthCtx (Html ())
+testingPutH pid cid action steps = do
+  appConf <- ask @AuthContext
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
       case action of
         "update_config" -> do
-          _ <- withPool pool $ Testing.updateCollectionConfig cid steps
+          _ <- dbtToEff $ Testing.updateCollectionConfig cid steps
           pure ""
         "update_schedule" -> do
           let sch = decode (encode steps) :: Maybe ScheduleForm
           case sch of
             Just s -> do
-              _ <- withPool pool $ Testing.updateSchedule cid s.schedule s.isScheduled
+              _ <- dbtToEff $ Testing.updateSchedule cid s.schedule s.isScheduled
               pure ""
             Nothing -> do
               pure ""
@@ -98,14 +104,12 @@ testingPutH sess pid cid action steps = do
           pure ""
 
 
-testingPostH :: Sessions.PersistentSession -> Projects.ProjectId -> TestCollectionForm -> DashboardM (Headers '[HXTrigger] (Html ()))
-testingPostH sess pid collection = do
-  pool <- asks pool
-  project <- liftIO $
-    withPool
-      pool
-      do
-        Projects.selectProjectForUser (Sessions.userId sess, pid)
+testingPostH :: Projects.ProjectId -> TestCollectionForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
+testingPostH pid collection = do
+  appConf <- ask @AuthContext
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+  project <- dbtToEff $ Projects.selectProjectForUser (Sessions.userId sess, pid)
   if collection.collection_id == ""
     then do
       currentTime <- liftIO getZonedTime
@@ -123,32 +127,31 @@ testingPostH sess pid collection = do
               , schedule = Nothing
               , isScheduled = False
               }
-      _ <- withPool pool do Testing.addCollection coll
-      cols <- withPool pool do Testing.getCollections pid
+      _ <- dbtToEff $ Testing.addCollection coll
+      cols <- dbtToEff $ Testing.getCollections pid
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Collection added Successfully"]}|]
       pure $ addHeader hxTriggerData $ testingPage pid cols
     else do
-      _ <- withPool pool do Testing.updateCollection pid collection.collection_id collection.title collection.description
-      cols <- withPool pool do Testing.getCollections pid
+      _ <- dbtToEff $ Testing.updateCollection pid collection.collection_id collection.title collection.description
+      cols <- dbtToEff $ Testing.getCollections pid
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Collection updated Successfully"]}|]
       pure $ addHeader hxTriggerData $ testingPage pid cols
 
 
-testingGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
-testingGetH sess pid = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+testingGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
+testingGetH pid = do
+  appConf <- ask @AuthContext
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, colls) <- liftIO $
-        withPool
-          pool
-          do
-            project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-            colls <- Testing.getCollections pid
-            pure (project, colls)
+      (project, colls) <- dbtToEff do
+        project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+        colls <- Testing.getCollections pid
+        pure (project, colls)
       let bwconf =
             (def :: BWConfig)
               { sessM = Just sess
@@ -284,10 +287,12 @@ modal pid = do
       |]
 
 
-collectionStepPostH :: Sessions.PersistentSession -> Projects.ProjectId -> Testing.CollectionId -> Value -> DashboardM (Html ())
-collectionStepPostH sess pid cid step_val = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+collectionStepPostH :: Projects.ProjectId -> Testing.CollectionId -> Value -> ATAuthCtx (Html ())
+collectionStepPostH pid cid step_val = do
+  appConf <- ask @AuthContext
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
@@ -304,14 +309,15 @@ collectionStepPostH sess pid cid step_val = do
               , collectionId = cid
               , stepData = step_val
               }
-      _ <- withPool pool $ Testing.addCollectionStep newStep
+      _ <- dbtToEff $ Testing.addCollectionStep newStep
       pure ""
 
 
-collectionStepPutH :: Sessions.PersistentSession -> Projects.ProjectId -> Testing.CollectionStepId -> Value -> DashboardM (Html ())
-collectionStepPutH sess pid csid value = do
-  pool <- asks pool
-  _ <- withPool pool $ Testing.updateCollectionStep csid value
+collectionStepPutH :: Projects.ProjectId -> Testing.CollectionStepId -> Value -> ATAuthCtx (Html ())
+collectionStepPutH pid csid value = do
+  appConf <- ask @AuthContext
+  sess' <- Sessions.getSession
+  _ <- dbtToEff $ Testing.updateCollectionStep csid value
   pure ""
 
 
@@ -319,17 +325,19 @@ collectionStepPutH sess pid csid value = do
 foreign import ccall unsafe "haskell_binding" haskellBinding :: Int
 
 
-collectionGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Testing.CollectionId -> DashboardM (Html ())
-collectionGetH sess pid col_id = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+collectionGetH :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (Html ())
+collectionGetH pid col_id = do
+  appConf <- ask @AuthContext
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
-      collection <- withPool pool $ Testing.getCollectionById col_id
-      project <- withPool pool $ Projects.selectProjectForUser (Sessions.userId sess, pid)
-      collection_steps <- withPool pool $ Testing.getCollectionSteps col_id
+      collection <- dbtToEff $ Testing.getCollectionById col_id
+      project <- dbtToEff $ Projects.selectProjectForUser (Sessions.userId sess, pid)
+      collection_steps <- dbtToEff $ Testing.getCollectionSteps col_id
       -- _ <- case collection of
       --   Just c -> do
       --     let col_json = decodeUtf8 $ encode c
@@ -403,33 +411,37 @@ getStep pid col_id cr step_val =
     }
 
 
-saveStepsFromCodePostH :: Sessions.PersistentSession -> Projects.ProjectId -> Testing.CollectionId -> CodeOperationsForm -> DashboardM (Html ())
-saveStepsFromCodePostH sess pid col_id operations = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+saveStepsFromCodePostH :: Projects.ProjectId -> Testing.CollectionId -> CodeOperationsForm -> ATAuthCtx (Html ())
+saveStepsFromCodePostH pid col_id operations = do
+  appConf <- ask @AuthContext
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
       currentTime <- liftIO getZonedTime
-      _ <- withPool pool $ Testing.deleteCollectionSteps operations.deletedSteps
+      _ <- dbtToEff $ Testing.deleteCollectionSteps operations.deletedSteps
       let added = map (getStep pid col_id currentTime) (V.toList operations.addedSteps)
-      _ <- withPool pool $ Testing.insertSteps pid col_id added
+      _ <- dbtToEff $ Testing.insertSteps pid col_id added
       forM_ operations.updatedSteps \s -> do
-        _ <- withPool pool $ Testing.updateCollectionStep s.stepId s.stepData
+        _ <- dbtToEff $ Testing.updateCollectionStep s.stepId s.stepData
         pass
       pure ""
 
 
-deleteStepH :: Sessions.PersistentSession -> Projects.ProjectId -> Testing.CollectionStepId -> DashboardM (Html ())
-deleteStepH sess pid step_id = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+deleteStepH :: Projects.ProjectId -> Testing.CollectionStepId -> ATAuthCtx (Html ())
+deleteStepH pid step_id = do
+  appConf <- ask @AuthContext
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
-      _ <- withPool pool $ Testing.deleteCollectionStep step_id
+      _ <- dbtToEff $ Testing.deleteCollectionStep step_id
       pure ""
 
 -- runTestH :: Sessions.PersistentSession -> Projects.ProjectId -> Testing.CollectionId -> DashboardM (Html ())
