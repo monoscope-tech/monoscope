@@ -308,7 +308,7 @@ export class Collection extends LitElement {
             <div class="flex gap-4">
               <button
                 title="run all"
-                class="bg-blue-500 text-white gap-2 flex items-center rounded px-3 py-1"
+                class="btn btn-sm btn-success"
                 @click=${() => runAllTests()}
               >
                 Run all
@@ -318,13 +318,10 @@ export class Collection extends LitElement {
                 <input
                   type="checkbox"
                   value=""
-                  class="sr-only peer"
+                  class="toggle"
                   @click=${() => this.toggleCode()}
                   .checked=${this.showCode}
                 />
-                <div
-                  class="w-9 h-3 bg-gray-200 peer-focus:outline-none peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full after:content-[''] after:absolute after:top-[5px] after:start-[0] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"
-                ></div>
                 <span
                   class="ms-3 text-sm font-medium text-gray-900 dark:text-gray-300"
                 >
@@ -364,10 +361,10 @@ export class Collection extends LitElement {
                     </div>`
                   : null}
                 <button
-                  class="bg-blue-500 px-2 py-1 self-center h-10 w-10 text-2xl rounded-full text-white active:ring-1"
+                  class="btn btn-circle btn-success self-center"
                   @click=${() => (this.showNewStepModal = true)}
                 >
-                  +
+                  <i class="fa-solid fa-plus"></i>
                 </button>
               </div>`}
         </div>
@@ -431,14 +428,14 @@ class SettingsModal extends LitElement {
 
   render() {
     return html` <div
-      class="fixed inset-0 z-50 w-screen overflow-y-auto bg-gray-300 bg-opacity-50"
+      class="modal"
       id="modal-bg"
       @click=${(e) => {
         this.closeModal();
       }}
     >
       <div
-        class="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0"
+        class="modal-box"
       >
         <div
           class="relative transform overflow-hidden rounded-lg bg-white shadow-sm text-left transition-all  w-full max-w-2xl"
@@ -504,11 +501,11 @@ class SettingsModal extends LitElement {
 
                     <button
                       @click=${() => this.updateColl()}
-                      class=${'px-4 py-1 text-white rounded ' +
+                      class=${'btn btn-sm ' +
                       `${
                         this.changed
-                          ? 'bg-blue-500 hover:bg-blue-600 active:ring-1'
-                          : 'bg-blue-200'
+                          ? 'btn-success'
+                          : 'btn-disabled'
                       }`}
                     >
                       Save
@@ -683,13 +680,13 @@ class ConfigModal extends LitElement {
               </div>
               <div class="flex w-full justify-end gap-4 px-6 py-4 border-t">
                 <button
-                  class="border rounded px-4 py-1"
+                  class="btn btn-sm btn-outline"
                   @click=${() => this.closeModal()}
                 >
                   Close
                 </button>
                 <button
-                  class="bg-blue-500 px-5 py-1 self-center rounded text-white active:ring-1"
+                  class="btn btn-sm btn-success"
                   @click=${() => this.saveConfig()}
                 >
                   Save
@@ -1355,7 +1352,7 @@ class NewStepModal extends LitElement {
                 @click=${(e) => {
                   this.buildStep();
                 }}
-                class="inline-flex w-full justify-center rounded-md bg-blue-500 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-600 sm:ml-3 sm:w-[100px]"
+                class="btn btn-success sm:ml-3 sm:w-[100px]"
               >
                 Save
               </button>
@@ -1369,7 +1366,7 @@ class NewStepModal extends LitElement {
                   });
                   this.dispatchEvent(event);
                 }}
-                class="mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 sm:mt-0 sm:w-[100px]"
+                class="btn btn-outline"
               >
                 Close
               </button>
