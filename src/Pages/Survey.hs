@@ -1,6 +1,5 @@
 module Pages.Survey (surveyGetH, surveyPutH, SurveyForm) where
 
-import Config
 import Data.Default (def)
 import Data.Text qualified as T
 import Lucid
@@ -11,19 +10,25 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Relude
+import System.Config
 
 import Data.Aeson
 import Data.Aeson.QQ (aesonQQ)
 import Data.List ((!!))
 import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute, withPool)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Effectful.PostgreSQL.Transact.Effect
+import Effectful.Reader.Static (ask, asks)
+import Models.Users.Sessions qualified as Sessions
 import Pages.NonMember
 import Pkg.Components (loader)
+import Relude hiding (ask, asks)
+import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXRedirect, HXTrigger)
+import System.Config
+import System.Types
 import Utils
-
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -49,10 +54,15 @@ instance ToJSON SurveyForm where
       ]
 
 
-surveyPutH :: Sessions.PersistentSession -> Projects.ProjectId -> SurveyForm -> DashboardM (Headers '[HXTrigger, HXRedirect] (Html ()))
-surveyPutH sess pid survey = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+surveyPutH :: Projects.ProjectId -> SurveyForm -> ATAuthCtx (Headers '[HXTrigger, HXRedirect] (Html ()))
+surveyPutH pid survey = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Only project memebers can take the survey"]}|]
@@ -69,25 +79,26 @@ surveyPutH sess pid survey = do
           let firstName = nameArr !! 0
           let lastName = nameArr !! 1
           let phoneNumber = survey.phoneNumber
-          res <- liftIO $ withPool pool $ execute Update [sql| update projects.projects set questions= ? where id=? |] (jsonBytes, pid)
-          u <- liftIO $ withPool pool $ execute Update [sql| update users.users set first_name= ?, last_name=?, phone_number=? where id=? |] (firstName, lastName, phoneNumber, sess.userId)
+          res <- dbtToEff $ execute Update [sql| update projects.projects set questions= ? where id=? |] (jsonBytes, pid)
+          u <- dbtToEff $ execute Update [sql| update users.users set first_name= ?, last_name=?, phone_number=? where id=? |] (firstName, lastName, phoneNumber, sess.userId)
           let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","successToast": ["Thanks for taking the survey"]}|]
           pure $ addHeader hxTriggerData $ addHeader ("/p/" <> show pid.unProjectId <> "/onboarding") ""
 
 
-surveyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
-surveyGetH sess pid = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+surveyGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
+surveyGetH pid = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
-      project <- liftIO
-        $ withPool
-          pool
-          do
-            Projects.selectProjectForUser (Sessions.userId sess, pid)
+      project <- dbtToEff $ Projects.selectProjectForUser (Sessions.userId sess, pid)
       let bwconf =
             (def :: BWConfig)
               { sessM = Just sess

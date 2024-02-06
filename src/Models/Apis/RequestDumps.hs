@@ -1,6 +1,7 @@
 {-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE StrictData #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 module Models.Apis.RequestDumps (
@@ -13,8 +14,8 @@ module Models.Apis.RequestDumps (
   normalizeUrlPath,
   throughputBy,
   throughputBy',
+  selectLogTable,
   requestDumpLogItemUrlPath,
-  selectAnomalyEvents,
   requestDumpLogUrlPath,
   selectReqLatenciesRolledBySteps,
   selectReqLatenciesRolledByStepsForProject,
@@ -31,29 +32,35 @@ module Models.Apis.RequestDumps (
 ) where
 
 import Control.Error (hush)
+import Data.Aeson (Value)
 import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap (toHashMapText)
 import Data.Default.Instances ()
+import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
-import Data.Time (CalendarDiffTime, ZonedTime, diffUTCTime, zonedTimeToUTC)
+import Data.Time (CalendarDiffTime, ZonedTime, diffUTCTime, utc, utcToZonedTime, zonedTimeToUTC)
+import Data.Time.Clock (UTCTime)
 import Data.Time.Format
 import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
 import Data.Tuple.Extra (both)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, queryOne)
+import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, queryOne, queryOne_, query_)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
-import Database.PostgreSQL.Simple.FromField (FromField (fromField))
-import Models.Apis.Fields.Query ()
-
+import Database.PostgreSQL.Simple.FromField (FromField (fromField), fromJSONField)
+import Database.PostgreSQL.Simple.FromRow (FromRow (fromRow))
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField (toField))
 import Database.PostgreSQL.Simple.Types (Query (Query))
-import Database.PostgreSQL.Transact (DBT, executeMany)
+import Database.PostgreSQL.Transact (DBT, executeMany, getConnection)
+import Database.PostgreSQL.Transact qualified as DBT
+import Debug.Pretty.Simple (pTraceShow, pTraceShowM)
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Anomalies (AnomalyTypes)
 import Models.Apis.Anomalies qualified as Anomalies
+import Models.Apis.Fields.Query ()
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Optics.TH
@@ -85,7 +92,9 @@ data SDKTypes
   | JsAdonis
   | PhpSlim
   | GuzzleOutgoing
+  | ElixirPhoenix
   deriving stock (Show, Generic, Read, Eq)
+  deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SDKTypes
 
 
@@ -106,6 +115,7 @@ data RequestTypes
   | Outgoing
   | Background
   deriving stock (Show, Generic, Read, Eq)
+  deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestTypes
 
 
@@ -161,6 +171,7 @@ normalizeUrlPath PythonOutgoing statusCode _method urlPath = removeQueryParams s
 normalizeUrlPath JsAdonis statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath PhpSlim statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath GuzzleOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
+normalizeUrlPath ElixirPhoenix statusCode _method urlPath = removeQueryParams statusCode urlPath
 
 
 -- getRequestType ...
@@ -199,6 +210,7 @@ data ATError = ATError
   , stackTrace :: Text
   }
   deriving stock (Show, Generic, Eq)
+  deriving anyclass (NFData)
   deriving
     (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATError
@@ -215,8 +227,8 @@ data ATError = ATError
 -- NOTE: This record closely mirrors the order of fields in the table. Changing the order of fields here would break inserting and querying request dumps
 data RequestDump = RequestDump
   { id :: UUID.UUID
-  , createdAt :: ZonedTime
-  , updatedAt :: ZonedTime
+  , createdAt :: UTCTime
+  , updatedAt :: UTCTime
   , projectId :: UUID.UUID
   , host :: Text
   , urlPath :: Text
@@ -248,7 +260,7 @@ data RequestDump = RequestDump
   , requestType :: RequestTypes
   }
   deriving stock (Show, Generic, Eq)
-  deriving anyclass (ToRow, FromRow)
+  deriving anyclass (ToRow, FromRow, NFData)
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "request_dumps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] RequestDump)
@@ -267,7 +279,7 @@ data RequestForReport = RequestForReport
   , averageDuration :: Integer
   }
   deriving stock (Show, Generic, Eq)
-  deriving anyclass (ToRow, FromRow)
+  deriving anyclass (ToRow, FromRow, NFData)
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "request_dumps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] RequestForReport)
@@ -278,7 +290,7 @@ data EndpointPerf = EndpointPerf
   , averageDuration :: Integer
   }
   deriving stock (Show, Generic, Eq)
-  deriving anyclass (ToRow, FromRow)
+  deriving anyclass (ToRow, FromRow, NFData)
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "request_dumps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] EndpointPerf)
@@ -318,7 +330,7 @@ data RequestDumpLogItem = RequestDumpLogItem
   , requestType :: RequestTypes
   }
   deriving stock (Show, Generic, Eq)
-  deriving anyclass (ToRow, FromRow)
+  deriving anyclass (ToRow, FromRow, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestDumpLogItem
 
 
@@ -329,8 +341,18 @@ requestDumpLogItemUrlPath :: Projects.ProjectId -> RequestDumpLogItem -> Text
 requestDumpLogItemUrlPath pid rd = "/p/" <> pid.toText <> "/log_explorer/" <> UUID.toText rd.id <> "/" <> from @String (formatShow iso8601Format rd.createdAt)
 
 
-requestDumpLogUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Text
-requestDumpLogUrlPath pid q cols cursorM sinceM fromM toM = [text|/p/$pidT/log_explorer?query=$queryT&cols=$colsT&cursor=$cursorT&since=$sinceT&from=$fromT&to=$toT|]
+requestDumpLogUrlPath
+  :: Projects.ProjectId
+  -> Maybe Text
+  -> Maybe Text
+  -> Maybe Text
+  -> Maybe Text
+  -> Maybe Text
+  -> Maybe Text
+  -> Maybe Text
+  -> Text
+requestDumpLogUrlPath pid q cols cursorM sinceM fromM toM layoutM =
+  [text|/p/$pidT/log_explorer?query=$queryT&cols=$colsT&cursor=$cursorT&since=$sinceT&from=$fromT&to=$toT&layout=$layoutT|]
   where
     pidT = pid.toText
     queryT = fromMaybe "" q
@@ -339,6 +361,7 @@ requestDumpLogUrlPath pid q cols cursorM sinceM fromM toM = [text|/p/$pidT/log_e
     sinceT = fromMaybe "" sinceM
     fromT = fromMaybe "" fromM
     toT = fromMaybe "" toM
+    layoutT = fromMaybe "" layoutM
 
 
 getRequestDumpForReports :: Projects.ProjectId -> Text -> DBT IO (V.Vector RequestForReport)
@@ -371,6 +394,38 @@ getRequestDumpsForPreviousReportPeriod pid report_type = query Select (Query $ e
         project_id = ? AND created_at > NOW() - interval $start AND created_at < NOW() - interval $end
      GROUP BY endpoint_hash;
     |]
+
+
+selectLogTable :: Projects.ProjectId -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> DBT IO (Either Text (V.Vector (V.Vector Value), [Text], Int))
+selectLogTable pid extraQuery cursorM dateRange projectedColsByUser = do
+  let resp = parseQueryToComponents ((defSqlQueryCfg pid){cursorM, dateRange, projectedColsByUser}) extraQuery
+  case resp of
+    Left x -> pure $ Left x
+    Right (q, queryComponents) -> do
+      logItems <- queryToValues q
+      Only count <- fromMaybe (Only 0) <$> queryCount queryComponents.countQuery
+      let logItemsV = V.mapMaybe valueToVector logItems
+      pure $ Right (logItemsV, queryComponents.toColNames, count)
+
+
+convertValueToMap :: Only Value -> Maybe (HM.HashMap Text Value)
+convertValueToMap (Only val) = case val of
+  AE.Object obj -> Just $ toHashMapText obj
+  _ -> Nothing
+
+
+valueToVector :: Only Value -> Maybe (V.Vector Value)
+valueToVector (Only val) = case val of
+  AE.Array arr -> Just arr
+  _ -> Nothing
+
+
+queryToValues :: Text -> DBT IO (V.Vector (Only Value))
+queryToValues q = V.fromList <$> DBT.query_ (Query $ encodeUtf8 q)
+
+
+queryCount :: Text -> DBT IO (Maybe (Only Int))
+queryCount q = DBT.queryOne_ (Query $ encodeUtf8 q)
 
 
 selectRequestDumpByProject :: Projects.ProjectId -> Text -> Maybe Text -> Maybe ZonedTime -> Maybe ZonedTime -> DBT IO (V.Vector RequestDumpLogItem, Int)
@@ -434,16 +489,17 @@ bulkInsertRequestDumps = executeMany q
     q = [sql| INSERT INTO apis.request_dumps VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING; |]
 
 
-selectRequestDumpByProjectAndId :: Projects.ProjectId -> ZonedTime -> UUID.UUID -> DBT IO (Maybe RequestDumpLogItem)
+selectRequestDumpByProjectAndId :: Projects.ProjectId -> UTCTime -> UUID.UUID -> DBT IO (Maybe RequestDumpLogItem)
 selectRequestDumpByProjectAndId pid createdAt rdId = queryOne Select q (createdAt, pid, rdId)
   where
+    createdAtZ = utcToZonedTime utc createdAt
     q =
       [sql|SELECT   id,created_at,project_id, host,url_path,method,raw_url,referer,
                     path_params,status_code,query_params,
                     request_body,response_body,request_headers,response_headers, 
                     duration_ns, sdk_type,
                     parent_id, service_version, JSONB_ARRAY_LENGTH(errors) as errors_count, errors, tags, request_type
-             FROM apis.request_dumps where created_at=? and project_id=? and id=? LIMIT 1|]
+             FROM apis.request_dumps where (created_at=?)  and project_id=? and id=? LIMIT 1|]
 
 
 selectReqLatenciesRolledBySteps :: Int -> Int -> Projects.ProjectId -> Text -> Text -> DBT IO (V.Vector (Int, Int))
@@ -451,7 +507,7 @@ selectReqLatenciesRolledBySteps maxv steps pid urlPath method = query Select q (
   where
     q =
       [sql| 
-select duration_steps, count(id)
+SELECT duration_steps, count(id)
 	FROM generate_series(0, ?, ?) AS duration_steps
 	LEFT OUTER JOIN apis.request_dumps on (duration_steps = round((EXTRACT(epoch FROM duration)/1000000)/?)*? 
     AND created_at > NOW() - interval '14' day
@@ -480,32 +536,14 @@ select duration_steps, count(id)
       |]
 
 
-selectAnomalyEvents :: Projects.ProjectId -> Text -> AnomalyTypes -> DBT IO (V.Vector RequestDumpLogItem)
-selectAnomalyEvents pid targetHash anType = query Select (Query $ encodeUtf8 q) (pid, targetHash)
-  where
-    extraQuery :: Text
-    extraQuery = case anType of
-      Anomalies.ATEndpoint -> " endpoint_hash=?"
-      Anomalies.ATShape -> " shape_hash=?"
-      Anomalies.ATFormat -> " ?=ANY(format_hashes)"
-      _ -> error "Should never be reached"
-
-    q =
-      [text| SELECT id,created_at, project_id,host,url_path,method,raw_url,referer,
-                    path_params, status_code,query_params,
-                    request_body,response_body,request_headers,response_headers,
-                    duration_ns, sdk_type,
-                    parent_id, service_version, JSONB_ARRAY_LENGTH(errors) as errors_count, errors, tags, request_type
-             FROM apis.request_dumps where created_at > NOW() - interval '14' day AND project_id=? AND $extraQuery LIMIT 199; |]
-
-
 -- A throughput chart query for the request_dump table.
 -- daterange :: (Maybe Int, Maybe Int)?
 -- We have a requirement that the date range could either be an interval like now to 7 days ago, or be specific dates like day x to day y.
 -- Now thinking about it, it might be easier to calculate 7days ago into a specific date than dealing with integer day ranges.
 throughputBy :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Maybe Int -> Maybe Text -> (Maybe ZonedTime, Maybe ZonedTime) -> DBT IO Text
 throughputBy pid groupByM endpointHash shapeHash formatHash statusCodeGT numSlots limitM extraQuery dateRange@(fromT, toT) = do
-  let extraQueryParsed = hush . parseQueryStringToWhereClause =<< extraQuery
+  -- Replace any jsonpath ? with its escaped version, so its not mistaken as a variable for interpolation
+  let extraQueryParsed = (T.replace "?" "??") <$> (hush . parseQueryStringToWhereClause =<< extraQuery)
   let condlist =
         catMaybes
           [ " endpoint_hash=? " <$ endpointHash

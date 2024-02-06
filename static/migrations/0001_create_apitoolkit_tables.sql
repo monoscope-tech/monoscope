@@ -9,6 +9,7 @@ CREATE EXTENSION IF NOT EXISTS hstore;
 CREATE EXTENSION IF NOT EXISTS tablefunc;
 -- CREATE EXTENSION IF NOT EXISTS pg_cron;
 
+
 -- create schemas
 CREATE SCHEMA IF NOT EXISTS users;
 CREATE SCHEMA IF NOT EXISTS projects;
@@ -117,8 +118,7 @@ ALTER TABLE projects.projects ADD COLUMN time_zone TEXT DEFAULT 'UTC';
 
 CREATE TYPE notification_channel_enum AS ENUM ('email', 'slack');
 ALTER TABLE projects.projects
-ADD COLUMN notifications_channel notification_channel_enum[] DEFAULT ARRAY['email']::notification_channel_enum[];
-
+ADD COLUMN notifications_channel notification_channel_enum DEFAULT 'email';
 
 -----------------------------------------------------------------------
 -- PROJECT MEMBERS table 

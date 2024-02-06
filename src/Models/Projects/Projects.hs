@@ -1,4 +1,5 @@
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 module Models.Projects.Projects (
@@ -48,9 +49,7 @@ import Web.HttpApiData
 
 newtype ProjectId = ProjectId {unProjectId :: UUID.UUID}
   deriving stock (Generic, Show, Read)
-  deriving
-    (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default, Hashable)
-    via UUID.UUID
+  deriving newtype (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default, Hashable, NFData)
   deriving anyclass (FromRow, ToRow)
 
 
@@ -70,6 +69,7 @@ data NotificationChannel
   = NEmail
   | NSlack
   deriving stock (Eq, Generic, Show)
+  deriving anyclass (NFData)
 
 
 instance ToJSON NotificationChannel where
@@ -118,7 +118,7 @@ data Project = Project
   , notificationsChannel :: Vector NotificationChannel
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromRow)
+  deriving anyclass (FromRow, NFData)
   deriving
     (FromJSON, ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Project
@@ -130,6 +130,7 @@ data Project = Project
 makeFieldLabelsNoPrefix ''Project
 
 
+-- FIXME: Why was this record created? And not the regular projects record?
 data Project' = Project'
   { id :: ProjectId
   , createdAt :: ZonedTime
@@ -149,7 +150,7 @@ data Project' = Project'
   , usersDisplayImages :: Vector Text
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromRow)
+  deriving anyclass (FromRow, NFData)
 
 
 data ProjectCache = ProjectCache
@@ -316,7 +317,7 @@ data ProjectRequestStats = ProjectRequestStats
   , requestsPerMinLastWeek :: Int
   }
   deriving stock (Show, Generic, Eq)
-  deriving anyclass (FromRow, ToRow, Default)
+  deriving anyclass (FromRow, ToRow, Default, NFData)
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "project_request_stats", PrimaryKey "project_id", FieldModifiers '[CamelToSnake]] ProjectRequestStats)
 
 

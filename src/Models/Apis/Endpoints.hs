@@ -1,5 +1,6 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TemplateHaskell #-}
 
@@ -29,7 +30,7 @@ import Data.Aeson (FromJSON, ToJSON)
 import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.Default.Instances ()
-import Data.Time (ZonedTime)
+import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), query, queryOne)
@@ -54,15 +55,15 @@ import Web.HttpApiData (FromHttpApiData)
 
 newtype EndpointId = EndpointId {unEndpointId :: UUID.UUID}
   deriving stock (Generic, Show)
-  deriving
-    (ToJSON, FromJSON, Eq, Ord, FromField, ToField, FromHttpApiData, Default)
-    via UUID.UUID
+  deriving newtype (ToJSON, FromJSON, Eq, Ord, FromField, ToField, FromHttpApiData, Default, NFData)
   deriving anyclass (FromRow, ToRow)
 
 
 newtype Host = Host {host :: Text}
   deriving stock (Show, Generic, Eq)
-  deriving anyclass (FromRow, ToRow, Default)
+  deriving anyclass (FromRow, ToRow, Default, NFData)
+
+
 instance HasField "toText" EndpointId Text where
   getField = UUID.toText . unEndpointId
 
@@ -74,8 +75,8 @@ endpointIdText = UUID.toText . unEndpointId
 -- TODO: Introduce request header hashes and response header hashes
 data Endpoint = Endpoint
   { id :: EndpointId
-  , createdAt :: ZonedTime
-  , updatedAt :: ZonedTime
+  , createdAt :: UTCTime
+  , updatedAt :: UTCTime
   , projectId :: Projects.ProjectId
   , urlPath :: Text
   , urlParams :: AE.Value -- Key value map of key to the type. Needs a bit more figuring out.
@@ -85,7 +86,7 @@ data Endpoint = Endpoint
   , outgoing :: Bool
   }
   deriving stock (Show, Generic, Eq)
-  deriving anyclass (FromRow, ToRow, Default)
+  deriving anyclass (FromRow, ToRow, Default, NFData)
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Endpoint
   deriving (FromField) via Aeson Endpoint
 
@@ -144,12 +145,12 @@ data EndpointRequestStats = EndpointRequestStats
   , totalRequestsProj :: Int
   , ongoingAnomalies :: Int
   , ongoingAnomaliesProj :: Int
-  , acknowlegedAt :: Maybe ZonedTime
-  , archivedAt :: Maybe ZonedTime
+  , acknowlegedAt :: Maybe UTCTime
+  , archivedAt :: Maybe UTCTime
   , anomalyId :: UUID.UUID
   }
   deriving stock (Show, Generic, Eq)
-  deriving anyclass (FromRow, ToRow, Default)
+  deriving anyclass (FromRow, ToRow, Default, NFData)
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "endpoint_request_stats", PrimaryKey "endpoint_id", FieldModifiers '[CamelToSnake]] EndpointRequestStats)
 
 
@@ -246,7 +247,7 @@ data SwEndpoint = SwEndpoint
   , hash :: Text
   }
   deriving stock (Show, Generic, Eq)
-  deriving anyclass (FromRow, ToRow, Default)
+  deriving anyclass (FromRow, ToRow, Default, NFData)
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SwEndpoint
   deriving (FromField) via Aeson SwEndpoint
 
@@ -256,7 +257,7 @@ data HostEvents = HostEvents
   , eventCount :: Integer
   }
   deriving stock (Show, Generic, Eq)
-  deriving anyclass (ToRow, FromRow)
+  deriving anyclass (ToRow, FromRow, NFData)
 
 
 endpointsByProjectId :: Projects.ProjectId -> PgT.DBT IO (Vector SwEndpoint)

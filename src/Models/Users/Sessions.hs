@@ -1,11 +1,19 @@
+{-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 module Models.Users.Sessions (
   PersistentSessionId (..),
   PersistentSession (..),
+  Session (..),
+  craftSessionCookie,
   SessionData (..),
   PSUser (..),
   PSProjects (..),
+  addCookie,
+  emptySessionCookie,
+  getSession,
   persistSession,
   insertSession,
   deleteSession,
@@ -24,14 +32,16 @@ import Data.UUID
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, queryOne, withPool)
+import Database.PostgreSQL.Entity (Entity, delete, insert, selectById)
+import Database.PostgreSQL.Entity.DBT (QueryNature (..))
+import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple hiding (execute)
 import Database.PostgreSQL.Simple.FromField
 import Database.PostgreSQL.Simple.Newtypes
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField
-import Database.PostgreSQL.Transact hiding (execute, queryOne)
+import Database.PostgreSQL.Transact hiding (DB, execute, queryOne)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users (UserId)
 import Models.Users.Users qualified as Users
@@ -39,11 +49,50 @@ import Optics.TH
 import Relude
 import Web.HttpApiData
 
+import Data.Default (Default (..))
+import Data.Map.Strict qualified as Map
+import Data.Text (Text)
+import Data.Text.Display
+import Data.Time (UTCTime, utc, utcToZonedTime)
+import Data.UUID (UUID)
+import Data.UUID qualified as UUID
+import Data.UUID.V4 qualified as UUID
+import Database.PostgreSQL.Entity (Entity, delete, insert, selectById)
+import Database.PostgreSQL.Entity.Types (GenericEntity, Schema, TableName)
+import Database.PostgreSQL.Simple
+import Database.PostgreSQL.Simple.FromField (FromField)
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
+import Database.PostgreSQL.Simple.ToField (ToField)
+import Effectful
+import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
+import Effectful.Reader.Static (Reader, asks)
+import Effectful.Time (Time)
+import Effectful.Time qualified as Time
+import GHC.Generics
+import Models.Users.Users qualified as Users
+import Relude
+import Servant (AuthProtect, FromHttpApiData (..), Header, Headers, ServerError, ToHttpApiData, addHeader, getResponse)
+import Web.Cookie (
+  SetCookie (
+    setCookieHttpOnly,
+    setCookieMaxAge,
+    setCookieName,
+    setCookiePath,
+    setCookieSameSite,
+    setCookieSecure,
+    setCookieValue
+  ),
+  defaultSetCookie,
+  sameSiteLax,
+ )
+
 
 newtype PersistentSessionId = PersistentSessionId {getPersistentSessionId :: UUID}
   deriving
     (Show, Eq, FromField, ToField, FromHttpApiData, ToHttpApiData, Default)
     via UUID
+  deriving newtype (NFData)
+  deriving (Display) via ShowInstance UUID
 
 
 newtype SessionData = SessionData {getSessionData :: Map Text Text}
@@ -51,23 +100,26 @@ newtype SessionData = SessionData {getSessionData :: Map Text Text}
   deriving
     (FromField, ToField)
     via Aeson (Map Text Text)
+  deriving newtype (NFData)
   deriving anyclass (Default)
 
 
 newtype PSUser = PSUser {getUser :: Users.User}
   deriving stock (Show, Generic)
   deriving
-    (FromField)
+    (FromField, ToField)
     via Aeson Users.User
+  deriving newtype (NFData)
   deriving anyclass (Default)
 
 
 newtype PSProjects = PSProjects {getProjects :: Vector.Vector Projects.Project}
   deriving stock (Show, Generic)
   deriving
-    (FromField)
+    (FromField, ToField)
     via Aeson (Vector.Vector Projects.Project)
   deriving anyclass (Default)
+  deriving newtype (NFData)
 
 
 data PersistentSession = PersistentSession
@@ -81,7 +133,7 @@ data PersistentSession = PersistentSession
   , projects :: PSProjects
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromRow, Default)
+  deriving anyclass (FromRow, ToRow, Default, NFData)
   deriving
     (Entity)
     via (GenericEntity '[Schema "users", TableName "persistent_sessions", PrimaryKey "id"] PersistentSession)
@@ -101,12 +153,12 @@ persistSession
   -> UserId
   -> m PersistentSessionId
 persistSession pool persistentSessionId userId = do
-  liftIO $ withPool pool $ insertSession persistentSessionId userId (SessionData Map.empty)
+  liftIO $ DBT.withPool pool $ insertSession persistentSessionId userId (SessionData Map.empty)
   pure persistentSessionId
 
 
 insertSession :: PersistentSessionId -> UserId -> SessionData -> DBT IO ()
-insertSession pid userId sessionData = execute Insert q (pid, userId, sessionData) >> pass
+insertSession pid userId sessionData = DBT.execute Insert q (pid, userId, sessionData) >> pass
   where
     q = [sql| insert into users.persistent_sessions(id, user_id, session_data) VALUES (?, ?, ?) |]
 
@@ -117,7 +169,7 @@ deleteSession sessionId = delete @PersistentSession (Only sessionId)
 
 -- TODO: getting persistent session happens very frequently, so we should create a view for this, when our user base grows.
 getPersistentSession :: PersistentSessionId -> DBT IO (Maybe PersistentSession)
-getPersistentSession sessionId = queryOne Select q value
+getPersistentSession sessionId = DBT.queryOne Select q value
   where
     q =
       [sql| select ps.id, ps.created_at, ps.updated_at, ps.user_id, ps.session_data, row_to_json(u) as user, u.is_sudo,
@@ -133,3 +185,87 @@ getPersistentSession sessionId = queryOne Select q value
 
 lookup :: Text -> SessionData -> Maybe Text
 lookup key (SessionData sdMap) = Map.lookup key sdMap
+
+
+getSession
+  :: Effectful.Reader.Static.Reader (Headers '[Header "Set-Cookie" SetCookie] Session) :> es
+  => Eff es Session
+getSession = Effectful.Reader.Static.asks (getResponse @'[Header "Set-Cookie" SetCookie])
+
+
+-- | This function builds a cookie with the provided content
+craftSessionCookie
+  :: PersistentSessionId
+  -- ^ Cookie content
+  -> Bool
+  -- ^ Remember the cookie for 1 week
+  -> SetCookie
+craftSessionCookie (PersistentSessionId content) rememberSession =
+  defaultSetCookie
+    { setCookieValue = UUID.toASCIIBytes content
+    , setCookieName = "apitoolkit_session"
+    , setCookiePath = Just "/"
+    , setCookieHttpOnly = True
+    , setCookieSameSite = Just sameSiteLax
+    , setCookieMaxAge = if rememberSession then Just 604800 else Nothing
+    , setCookieSecure = True
+    }
+
+
+emptySessionCookie :: SetCookie
+emptySessionCookie =
+  defaultSetCookie
+    { setCookieName = "apitoolkit_session"
+    , setCookieValue = ""
+    , setCookieMaxAge = Just 0
+    }
+
+
+addCookie
+  :: SetCookie
+  -> a
+  -> Headers '[Header "Set-Cookie" SetCookie] a
+addCookie = addHeader
+
+
+deleteCookie :: a -> Headers '[Header "Set-Cookie" SetCookie] a
+deleteCookie = addHeader emptySessionCookie
+
+
+data Session = Session
+  { sessionId :: PersistentSessionId
+  , persistentSession :: Maybe PersistentSession
+  , user :: Users.User
+  , requestID :: Text
+  , isSidebarClosed :: Bool
+  }
+  deriving stock (Generic, Show)
+
+
+newPersistentSession' :: Time :> es => Users.UserId -> PersistentSessionId -> Eff es PersistentSession
+newPersistentSession' userId persistentSessionId = do
+  createdAt <- utcToZonedTime utc <$> Time.currentTime
+  pure $ (def :: PersistentSession){userId, id = persistentSessionId, createdAt = createdAt, updatedAt = createdAt}
+
+
+persistSession'
+  :: (DB :> es, Time :> es)
+  => PersistentSessionId
+  -> Users.UserId
+  -> Eff es PersistentSessionId
+persistSession' persistentSessionId userId = do
+  persistentSession <- newPersistentSession' userId persistentSessionId
+  insertSession' persistentSession
+  pure persistentSession.id
+
+
+insertSession' :: DB :> es => PersistentSession -> Eff es ()
+insertSession' = dbtToEff . insert @PersistentSession
+
+
+deleteSession' :: DB :> es => PersistentSessionId -> Eff es ()
+deleteSession' sessionId = dbtToEff $ delete @PersistentSession (Only sessionId)
+
+
+getPersistentSession' :: DB :> es => PersistentSessionId -> Eff es (Maybe PersistentSession)
+getPersistentSession' sessionId = dbtToEff $ selectById @PersistentSession (Only sessionId)

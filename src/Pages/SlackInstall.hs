@@ -3,7 +3,6 @@
 
 module Pages.SlackInstall (getH, linkProjectsGetH, linkProjectGetH, postH, LinkProjectsForm, updateWebHook) where
 
-import Config
 import Control.Lens ((.~), (^.))
 import Data.Aeson
 import Data.Default
@@ -14,23 +13,29 @@ import Database.PostgreSQL.Entity.DBT
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Fmt (dateDashF, fmt)
 import Lucid
+import System.Config
 
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ
 import Database.PostgreSQL.Simple (Only (Only))
 import Deriving.Aeson qualified as DAE
+import Effectful.PostgreSQL.Transact.Effect
+import Effectful.Reader.Static (ask, asks)
 import Lucid.Htmx (hxPost_)
 import Models.Apis.Slack (insertAccessToken)
 import Models.Projects.Projects (updateNotificationsChannel)
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Sessions qualified as Session
+import Models.Users.Sessions qualified as Sessions
 import Network.Wreq
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Pkg.Components (navBar)
 import Pkg.Mail (sendSlackMessage)
-import Relude
+import Relude hiding (ask, asks)
+import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
+import System.Config
+import System.Types
 import Utils (faIcon_)
 import Web.FormUrlEncoded (FromForm)
 
@@ -80,24 +85,33 @@ exchangeCodeForToken clientId clientSecret redirectUri code = do
     Nothing -> return Nothing
 
 
-updateWebHook :: Session.PersistentSession -> Projects.ProjectId -> LinkProjectsForm -> DashboardM (Headers '[HXTrigger] (Html ()))
-updateWebHook sess pid LinkProjectsForm{projects, webhookUrl} = do
-  pool <- asks pool
-  _ <- liftIO $ withPool pool $ insertAccessToken [pid.toText] webhookUrl
+updateWebHook :: Projects.ProjectId -> LinkProjectsForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
+updateWebHook pid LinkProjectsForm{projects, webhookUrl} = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+
+  _ <- dbtToEff $ insertAccessToken [pid.toText] webhookUrl
   let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Webhook url updated successfully"]} |]
   pure $ addHeader hxTriggerData $ span_ [] "Projects linked successfully"
 
 
-postH :: Session.PersistentSession -> LinkProjectsForm -> DashboardM (Headers '[HXTrigger] (Html ()))
-postH sess LinkProjectsForm{projects, webhookUrl} = do
-  pool <- asks pool
-  n <- liftIO $ withPool pool do
-    insertAccessToken projects webhookUrl
+postH :: LinkProjectsForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
+postH LinkProjectsForm{projects, webhookUrl} = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+
+  _ <- dbtToEff $ insertAccessToken projects webhookUrl
   let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Slack account linked to project(s),successfully"]} |]
   pure $ addHeader hxTriggerData $ span_ [] "Projects linked successfully"
 
 
-getH :: Maybe Text -> DashboardM (Html ())
+getH :: Maybe Text -> ATBaseCtx (Html ())
 getH slack_code = do
   let bwconf =
         (def :: BWConfig)
@@ -120,11 +134,15 @@ toLinkPage code = do
         a_ [href_ $ "/slack/link-projects?code=" <> code, class_ "btn btn-primary"] "Link a project(s)"
 
 
-linkProjectsGetH :: Session.PersistentSession -> Maybe Text -> DashboardM (Html ())
-linkProjectsGetH sess slack_code = do
-  envCfg <- asks env
-  pool <- asks pool
-  projects <- liftIO $ withPool pool $ Projects.selectProjectsForUser sess.userId
+linkProjectsGetH :: Maybe Text -> ATAuthCtx (Html ())
+linkProjectsGetH slack_code = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+
+  projects <- dbtToEff $ Projects.selectProjectsForUser sess.userId
   let client_id = envCfg.slackClientId
   let client_secret = envCfg.slackClientSecret
   let redirect_uri = envCfg.slackRedirectUri
@@ -139,7 +157,7 @@ linkProjectsGetH sess slack_code = do
   pure $ bodyWrapper bwconf (maybe noTokenFound (slackPage projects) token)
 
 
-linkProjectGetH :: Projects.ProjectId -> Maybe Text -> DashboardM (Html ())
+linkProjectGetH :: Projects.ProjectId -> Maybe Text -> ATBaseCtx (Html ())
 linkProjectGetH pid slack_code = do
   envCfg <- asks env
   pool <- asks pool

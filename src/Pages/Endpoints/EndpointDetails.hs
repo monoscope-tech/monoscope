@@ -3,12 +3,12 @@
 
 module Pages.Endpoints.EndpointDetails (endpointDetailsH, fieldDetailsPartialH, fieldsToNormalized, endpointDetailsWithHashH) where
 
-import Config
 import Data.Aeson
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey
 import Data.Aeson.Text (encodeToLazyText)
 import Data.Default (def)
+import System.Config
 
 import Data.List (elemIndex)
 import Data.Map qualified as Map
@@ -20,6 +20,8 @@ import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
+import Effectful.PostgreSQL.Transact.Effect
+import Effectful.Reader.Static (ask, asks)
 import Fmt
 import Lucid
 import Lucid.Htmx
@@ -43,10 +45,11 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Components
 import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
 import Pages.NonMember
-import Relude hiding (max, min)
+import Relude hiding (ask, asks, max, min)
 import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx
+import System.Types
 import Text.Interpolation.Nyan (int, rmode')
 import Utils
 import Witch (from)
@@ -78,21 +81,24 @@ subPageMenu =
   ]
 
 
-fieldDetailsPartialH :: Sessions.PersistentSession -> Projects.ProjectId -> Fields.FieldId -> DashboardM (Html ())
-fieldDetailsPartialH sess pid fid = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+fieldDetailsPartialH :: Projects.ProjectId -> Fields.FieldId -> ATAuthCtx (Html ())
+fieldDetailsPartialH pid fid = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let env = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+  let currUserId = sess.userId
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
-      (fieldsM, formats) <- liftIO
-        $ withPool
-          pool
-          do
-            field <- Fields.fieldById fid
-            formats <- Formats.formatsByFieldHash (maybe "" (^. #hash) field)
-            pure (field, formats)
+      (fieldsM, formats) <- dbtToEff do
+        field <- Fields.fieldById fid
+        formats <- Formats.formatsByFieldHash (maybe "" (^. #hash) field)
+        pure (field, formats)
       case fieldsM of
         Nothing -> pure ""
         Just field -> pure $ fieldDetailsView field formats
@@ -152,15 +158,21 @@ aesonValueToText = toStrict . encodeToLazyText
 
 
 -- /p/" <> pid.toText <> "/log_explorer/item/" <> endpoint_hash
-endpointDetailsWithHashH :: Sessions.PersistentSession -> Projects.ProjectId -> Text -> DashboardM (Headers '[HXRedirect] (Html ()))
-endpointDetailsWithHashH sess pid endpoint_hash = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+endpointDetailsWithHashH :: Projects.ProjectId -> Text -> ATAuthCtx (Headers '[HXRedirect] (Html ()))
+endpointDetailsWithHashH pid endpoint_hash = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let env = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+  let currUserId = sess.userId
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ addHeader "" $ userNotMemeberPage sess
     else do
-      endpoint <- liftIO $ withPool pool $ Endpoints.endpointByHash pid endpoint_hash
+      endpoint <- dbtToEff $ Endpoints.endpointByHash pid endpoint_hash
       case endpoint of
         Just e -> do
           let redirect_url = "/p/" <> pid.toText <> "/endpoints/" <> e.id.toText
@@ -171,10 +183,16 @@ endpointDetailsWithHashH sess pid endpoint_hash = do
 
 -- | endpointDetailsH is the main handler for the endpoint details page.
 -- It reuses the fieldDetailsView as well, which is used for the side navigation on the page and also exposed un the fieldDetailsPartialH endpoint
-endpointDetailsH :: Sessions.PersistentSession -> Projects.ProjectId -> Endpoints.EndpointId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Html ())
-endpointDetailsH sess pid eid fromDStr toDStr sinceStr' subPageM shapeHashM = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+endpointDetailsH :: Projects.ProjectId -> Endpoints.EndpointId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
+endpointDetailsH pid eid fromDStr toDStr sinceStr' subPageM shapeHashM = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let env = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+  let currUserId = sess.userId
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
@@ -196,27 +214,23 @@ endpointDetailsH sess pid eid fromDStr toDStr sinceStr' subPageM shapeHashM = do
               let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
               (f, t)
 
-      (endpoint, enpStats, project, shapesWithFieldsMap, fieldsMap, reqLatenciesRolledByStepsLabeled) <- liftIO
-        $ withPool
-          pool
-          do
-            -- Should swap names betw enp and endpoint endpoint could be endpointStats
-            endpoint <- Unsafe.fromJust <$> Endpoints.endpointById eid
-            enpStats <- fromMaybe (def :: EndpointRequestStats) <$> Endpoints.endpointRequestStatsByEndpoint eid
-            project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-            shapes <- Shapes.shapesByEndpointHash pid endpoint.hash
-            fields <- Fields.selectFields pid endpoint.hash
-            let fieldsMap = Fields.groupFieldsByCategory fields
-            let shapesWithFieldsMap = Vector.map (`getShapeFields` fields) shapes
-            let maxV = round enpStats.max :: Int
-            let steps = (maxV `quot` 100) :: Int
-            let steps' = if steps == 0 then 100 else steps
-            reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledBySteps maxV steps' pid endpoint.urlPath endpoint.method
-            pure (endpoint, enpStats, project, Vector.toList shapesWithFieldsMap, fieldsMap, Vector.toList reqLatenciesRolledBySteps)
+      (endpoint, enpStats, project, shapesWithFieldsMap, fieldsMap, reqLatenciesRolledByStepsLabeled) <- dbtToEff do
+        -- Should swap names betw enp and endpoint endpoint could be endpointStats
+        endpoint <- Unsafe.fromJust <$> Endpoints.endpointById eid
+        enpStats <- fromMaybe (def :: EndpointRequestStats) <$> Endpoints.endpointRequestStatsByEndpoint eid
+        project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+        shapes <- Shapes.shapesByEndpointHash pid endpoint.hash
+        fields <- Fields.selectFields pid endpoint.hash
+        let fieldsMap = Fields.groupFieldsByCategory fields
+        let shapesWithFieldsMap = Vector.map (`getShapeFields` fields) shapes
+        let maxV = round enpStats.max :: Int
+        let steps = (maxV `quot` 100) :: Int
+        let steps' = if steps == 0 then 100 else steps
+        reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledBySteps maxV steps' pid endpoint.urlPath endpoint.method
+        pure (endpoint, enpStats, project, Vector.toList shapesWithFieldsMap, fieldsMap, Vector.toList reqLatenciesRolledBySteps)
       let subPage = fromMaybe "overview" subPageM
-      shapesList <- liftIO
-        $ withPool pool do
-          if subPage == "shapes" then Shapes.shapesByEndpointHash pid endpoint.hash else pure []
+      shapesList <- dbtToEff do
+        if subPage == "shapes" then Shapes.shapesByEndpointHash pid endpoint.hash else pure []
 
       let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
       let bwconf =

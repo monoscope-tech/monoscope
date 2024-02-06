@@ -1,6 +1,5 @@
 module Pages.Api (apiGetH, apiPostH, apiDeleteH, GenerateAPIKeyForm (..)) where
 
-import Config
 import Data.Aeson (encode)
 import Data.Aeson.QQ (aesonQQ)
 import Data.ByteString.Base64 qualified as B64
@@ -19,12 +18,17 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.NonMember
-import Relude
+import Relude hiding (ask, asks)
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
+import System.Config
 
+import Effectful.PostgreSQL.Transact.Effect
+import Effectful.Reader.Static (ask, asks)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import NeatInterpolation (text)
+import Relude.Unsafe qualified as Unsafe
+import System.Types
 import Utils
 import Web.FormUrlEncoded (FromForm)
 
@@ -37,11 +41,16 @@ data GenerateAPIKeyForm = GenerateAPIKeyForm
   deriving anyclass (FromForm)
 
 
-apiPostH :: Sessions.PersistentSession -> Projects.ProjectId -> GenerateAPIKeyForm -> DashboardM (Headers '[HXTrigger] (Html ()))
-apiPostH sess pid apiKeyForm = do
-  pool <- asks pool
-  env <- asks env
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+apiPostH :: Projects.ProjectId -> GenerateAPIKeyForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
+apiPostH pid apiKeyForm = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let env = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+  let currUserId = sess.userId
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Only project members can create API keys."]} |]
@@ -52,35 +61,34 @@ apiPostH sess pid apiKeyForm = do
       let encryptedKeyB64 = B64.encodeBase64 encryptedKey
       let keyPrefix = encryptedKeyB64
       pApiKey <- liftIO $ ProjectApiKeys.newProjectApiKeys pid projectKeyUUID (title apiKeyForm) keyPrefix
-      apiKeys <- liftIO
-        $ withPool
-          pool
-          do
-            ProjectApiKeys.insertProjectApiKey pApiKey
-            ProjectApiKeys.projectApiKeysByProjectId pid
+      apiKeys <- dbtToEff do
+        ProjectApiKeys.insertProjectApiKey pApiKey
+        ProjectApiKeys.projectApiKeysByProjectId pid
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Created API Key Successfully"]}|]
       case from apiKeyForm of
         Just v -> pure $ addHeader hxTriggerData $ copyNewApiKey (Just (pApiKey, encryptedKeyB64)) True
         Nothing -> pure $ addHeader hxTriggerData $ mainContent pid apiKeys (Just (pApiKey, encryptedKeyB64))
 
 
-apiDeleteH :: Sessions.PersistentSession -> Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> DashboardM (Headers '[HXTrigger] (Html ()))
-apiDeleteH sess pid keyid = do
-  pool <- asks pool
-  env <- asks env
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+apiDeleteH :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
+apiDeleteH pid keyid = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let env = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+  let currUserId = sess.userId
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Can not revoke API key."]}|]
       pure $ addHeader hxTriggerData $ userNotMemeberPage sess
     else do
-      (res, apikeys) <- liftIO
-        $ withPool
-          pool
-          do
-            del <- ProjectApiKeys.revokeApiKey keyid
-            apikeys <- ProjectApiKeys.projectApiKeysByProjectId pid
-            pure (del, apikeys)
+      (res, apikeys) <- dbtToEff do
+        del <- ProjectApiKeys.revokeApiKey keyid
+        apikeys <- ProjectApiKeys.projectApiKeysByProjectId pid
+        pure (del, apikeys)
 
       let hxTriggerData =
             if res > 0
@@ -90,23 +98,26 @@ apiDeleteH sess pid keyid = do
 
 
 -- | apiGetH renders the api keys list page which includes a modal for creating the apikeys.
-apiGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
-apiGetH sess pid = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+apiGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
+apiGetH pid = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let env = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+  let currUserId = sess.userId
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, apiKeys, hasRequest) <- liftIO
-        $ withPool
-          pool
-          do
-            project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-            apiKeys <- ProjectApiKeys.projectApiKeysByProjectId pid
-            requestDumps <- RequestDumps.countRequestDumpByProject pid
+      (project, apiKeys, hasRequest) <- dbtToEff do
+        project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+        apiKeys <- ProjectApiKeys.projectApiKeysByProjectId pid
+        requestDumps <- RequestDumps.countRequestDumpByProject pid
 
-            pure (project, apiKeys, requestDumps > 0)
+        pure (project, apiKeys, requestDumps > 0)
 
       let bwconf =
             (def :: BWConfig)

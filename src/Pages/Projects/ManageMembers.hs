@@ -5,7 +5,6 @@ module Pages.Projects.ManageMembers (
 ) where
 
 import BackgroundJobs qualified
-import Config
 import Data.Aeson (encode)
 import Data.Aeson.QQ (aesonQQ)
 import Data.CaseInsensitive (original)
@@ -15,6 +14,8 @@ import Data.Pool (withResource)
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
+import Effectful.PostgreSQL.Transact.Effect
+import Effectful.Reader.Static (ask, asks)
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript
@@ -26,9 +27,12 @@ import OddJobs.Job (createJob)
 import Optics.Core ((^.))
 import Pages.BodyWrapper
 import Pages.NonMember
-import Relude
+import Relude hiding (ask, asks)
+import Relude.Unsafe qualified as Unsafe
 import Servant
 import Servant.Htmx
+import System.Config
+import System.Types
 import Utils
 import Web.FormUrlEncoded (FromForm)
 
@@ -41,23 +45,25 @@ data ManageMembersForm = ManageMembersForm
   deriving anyclass (FromForm)
 
 
-manageMembersPostH :: Sessions.PersistentSession -> Projects.ProjectId -> ManageMembersForm -> DashboardM (Headers '[HXTrigger] (Html ()))
-manageMembersPostH sess pid form = do
+manageMembersPostH :: Projects.ProjectId -> ManageMembersForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
+manageMembersPostH pid form = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
   let currUserId = sess.userId
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"errorToast": ["Only project members can update members list"]}|]
       pure $ addHeader hxTriggerData $ h3_ [] "Only members of this project can perform this action"
     else do
-      (project, projMembers) <- liftIO
-        $ withPool
-          pool
-          do
-            project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-            projMembers <- ProjectMembers.selectActiveProjectMembers pid
-            pure (project, projMembers)
+      (project, projMembers) <- dbtToEff do
+        project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+        projMembers <- ProjectMembers.selectActiveProjectMembers pid
+        pure (project, projMembers)
 
       -- TODO:
       -- Separate the new emails from the old emails
@@ -83,64 +89,64 @@ manageMembersPostH sess pid form = do
               & map (\a -> a ^. #id) -- We should not allow deleting the current user from the project
 
       -- Create new users and send notifications
-      newProjectMembers <- liftIO
-        $ forM uAndPNew \(email, permission) -> do
-          userId' <- withPool pool do
-            userIdM' <- Users.userIdByEmail email
-            case userIdM' of
-              Nothing -> do
-                idM' <- Users.createEmptyUser email -- NEXT Trigger email sending
-                case idM' of
-                  Nothing -> error "duplicate email in createEmptyUser"
-                  Just idX -> pure idX
-              Just idX -> pure idX
+      newProjectMembers <- forM uAndPNew \(email, permission) -> do
+        userId' <- dbtToEff do
+          userIdM' <- Users.userIdByEmail email
+          case userIdM' of
+            Nothing -> do
+              idM' <- Users.createEmptyUser email -- NEXT Trigger email sending
+              case idM' of
+                Nothing -> error "duplicate email in createEmptyUser"
+                Just idX -> pure idX
+            Just idX -> pure idX
 
-          when (userId' /= currUserId)
-            $ void
-            $ withResource pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId' pid email projectTitle -- invite the users to the project (Usually as an email)
-          pure (email, permission, userId')
+        when (userId' /= currUserId)
+          $ void
+          $ liftIO
+          $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId' pid email projectTitle -- invite the users to the project (Usually as an email)
+        pure (email, permission, userId')
 
       let projectMembers =
             newProjectMembers
               & filter (\(_, _, id') -> id' /= currUserId)
               & map (\(email, permission, id') -> ProjectMembers.CreateProjectMembers pid id' permission)
-      _ <- liftIO $ withPool pool $ ProjectMembers.insertProjectMembers projectMembers -- insert new project members
+      _ <- dbtToEff $ ProjectMembers.insertProjectMembers projectMembers -- insert new project members
 
       -- Update existing contacts with updated permissions
       -- TODO: Send a notification via background job, about the users permission having been updated.
       unless (null uAndPOldAndChanged)
         $ void
-        $ liftIO
-        $ withPool pool
+        . dbtToEff
         $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
       -- soft delete project members with id
       unless (null deletedUAndP)
         $ void
-        $ liftIO
-        $ withPool pool
+        . dbtToEff
         $ ProjectMembers.softDeleteProjectMembers deletedUAndP
 
-      projMembersLatest <- liftIO $ withPool pool $ ProjectMembers.selectActiveProjectMembers pid
+      projMembersLatest <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Updated Members List Successfully"]}|]
       pure $ addHeader hxTriggerData $ manageMembersBody projMembersLatest
 
 
-manageMembersGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM (Html ())
-manageMembersGetH sess pid = do
-  pool' <- asks pool
-  isMember <- liftIO $ withPool pool' $ userIsProjectMember sess pid
+manageMembersGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
+manageMembersGetH pid = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, projMembers) <- liftIO
-        $ withPool
-          pool'
-          do
-            project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-            projMembers <- ProjectMembers.selectActiveProjectMembers pid
-            pure (project, projMembers)
+      (project, projMembers) <- dbtToEff do
+        project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+        projMembers <- ProjectMembers.selectActiveProjectMembers pid
+        pure (project, projMembers)
       let bwconf = (def :: BWConfig){sessM = Just sess, pageTitle = "Settings", currProject = project}
       pure $ bodyWrapper bwconf $ manageMembersBody projMembers
 

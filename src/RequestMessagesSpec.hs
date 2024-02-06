@@ -3,6 +3,8 @@ module RequestMessagesSpec (spec) where
 import Data.Aeson as AE
 import Data.Aeson.QQ
 import Data.ByteString.Base64 qualified as B64
+import Data.Time.Clock (UTCTime)
+import Data.Time.LocalTime (utc, utcToZonedTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Models.Apis.RequestDumps (SDKTypes (GoGin))
@@ -237,10 +239,10 @@ spec = do
     it "should be able to convert simple request message to series on insert db commands" do
       recId <- UUIDV4.nextRandom
       -- timestamp <- Time.getZonedTime
-      let timestamp = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
+      let timestamp = Unsafe.read "2019-08-31 05:14:37.537084021 UTC" :: UTCTime
       let requestMsg =
             RequestMessages.RequestMessage
-              { timestamp = timestamp
+              { timestamp = (utcToZonedTime utc timestamp)
               , projectId = UUID.nil
               , sdkType = GoGin
               , host = "http://apitoolkit.io"

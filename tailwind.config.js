@@ -1,5 +1,8 @@
 module.exports = {
-  content: ['./src/**/*.{html,js,hs}', './static/public/assets/*.js'],
+  content: ["./src/**/*.{html,js,hs}"],
+  daisyui: {
+    themes: ["light", "dark", "winter", "dim"],
+  },
   theme: {
     extend: {
       fontFamily: {
@@ -8,8 +11,5 @@ module.exports = {
       },
     },
   },
-  plugins: [require('rippleui')],
-  rippleui: {
-    removeThemes: ['dark'],
-  },
-};
+  plugins: [require("daisyui"), require("@tailwindcss/typography")],
+}

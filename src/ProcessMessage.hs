@@ -4,7 +4,6 @@ module ProcessMessage (
 ) where
 
 import Colog.Core (LogAction (..), (<&))
-import Config qualified
 import Control.Exception (try)
 import Control.Lens ((^?), _Just)
 import Control.Monad.Trans.Except (except, throwE)
@@ -14,6 +13,7 @@ import Data.Cache qualified as Cache
 import Data.Generics.Product (field)
 import Data.List (unzip4)
 import Data.Pool (Pool)
+import Data.Time.Clock (getCurrentTime)
 import Data.Time.LocalTime (getZonedTime)
 import Data.UUID.V4 (nextRandom)
 import Database.PostgreSQL.Entity.DBT (withPool)
@@ -27,6 +27,7 @@ import Models.Projects.Projects qualified as Projects
 import Relude hiding (hoistMaybe)
 import RequestMessages qualified
 import System.Clock
+import System.Config qualified as Config
 import Text.Pretty.Simple (pShow)
 import Utils (DBField, eitherStrToText)
 
@@ -117,10 +118,10 @@ processMessages' logger' _ conn' msgs projectCache' = do
 
   unless (null $ lefts processed) do
     let leftMsgs = [(a, b) | (Left a, b) <- zip processed msgs]
-    forM_ leftMsgs \(a, b) ->
+    forM_ leftMsgs \(a, b) -> do
       -- TODO: switch to using a proper logger setup.
       -- logger' <& "Error processing Error: " <> pShow a <> "\n Original Msg:" <> pShow  b
-      logger' <& "ERROR: Error processing Error: " <> show a <> "\n"
+      logger' <& "ERROR: Error processing Error: " <> show a <> "\n Original Msg:" <> show b
 
   afterProccessing <- getTime Monotonic
 
@@ -152,7 +153,7 @@ processMessages' logger' _ conn' msgs projectCache' = do
     processMessage :: LogAction IO String -> Pool Connection -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> Either Text (Maybe Text, RequestMessages.RequestMessage) -> IO (Either Text (Maybe Text, Query, [DBField], RequestDumps.RequestDump))
     processMessage logger conn projectCache recMsgEither = runExceptT do
       (rmAckId, recMsg) <- except recMsgEither
-      timestamp <- liftIO getZonedTime
+      timestamp <- liftIO getCurrentTime
       let pid = Projects.ProjectId recMsg.projectId
 
       -- We retrieve the projectCache object from the inmemory cache and if it doesn't exist,

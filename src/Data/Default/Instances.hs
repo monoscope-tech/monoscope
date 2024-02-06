@@ -8,13 +8,18 @@ import Data.Text qualified as Strict (Text)
 import Data.Text qualified as Strict.Text (empty)
 import Data.Text.Lazy qualified as Lazy (Text)
 import Data.Text.Lazy qualified as Lazy.Text (empty)
-import Data.Time (ZonedTime)
+import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector, empty)
 import Relude.Unsafe qualified as Unsafe
 
 
 instance Default ZonedTime where
+  def = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
+  {-# INLINE def #-}
+
+
+instance Default UTCTime where
   def = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
   {-# INLINE def #-}
 

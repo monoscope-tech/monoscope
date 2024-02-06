@@ -5,6 +5,8 @@
   "dependencies": {
     "prettier": "^3.2.4",
     "rippleui": "^1.12.1",
+    "@tailwindcss/typography": "^0.5.10",
+    "daisyui": "^4.6.1",
     "workbox-cli": "^6.5.4"
   }
 }

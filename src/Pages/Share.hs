@@ -1,39 +1,40 @@
 module Pages.Share (ReqForm, shareLinkPostH, shareLinkGetH) where
 
-import Config
 import Data.Aeson as Aeson
+import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
 import Data.Text
 import Data.Time (ZonedTime, getZonedTime)
 import Data.UUID qualified as UUID
-
-import Data.Vector qualified as V
-
-import Lucid.Hyperscript (__)
-import Models.Apis.RequestDumps qualified as RequestDumps
-
-import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
-import Lucid
-import Models.Projects.Projects qualified as Projects
-import Models.Users.Sessions qualified as Sessions
-
-import Web.FormUrlEncoded (FromForm)
-
-import Data.Aeson.QQ (aesonQQ)
 import Data.UUID.V4 qualified as UUIDV4
+import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT
+import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple hiding (execute, query)
 import Database.PostgreSQL.Simple.SqlQQ
 import Database.PostgreSQL.Transact (DBT)
+import Effectful.PostgreSQL.Transact.Effect
+import Effectful.Reader.Static (ask, asks)
 import Gogol.Prelude (addHeader)
-import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
-import Pages.Log qualified as Log
-
+import Lucid
+import Lucid.Htmx
+import Lucid.Hyperscript (__)
+import Models.Apis.RequestDumps qualified as RequestDumps
+import Models.Projects.Projects qualified as Projects
+import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation
+import Network.URI (escapeURIString, isUnescapedInURI, isUnreserved)
+import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
+import Pages.LogExplorer.LogItem qualified as LogItem
 import Pkg.Components (navBar)
-import Relude
+import PyF
+import Relude hiding (ask, asks)
+import Relude.Unsafe qualified as Unsafe
 import Servant (Headers)
 import Servant.Htmx (HXTrigger)
+import System.Config
+import System.Types
+import Web.FormUrlEncoded (FromForm)
 
 
 data ReqForm = ReqForm
@@ -58,9 +59,14 @@ data Swagger = Swagger
     via (GenericEntity '[Schema "apis", TableName "swagger_jsons", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Swagger)
 
 
-shareLinkPostH :: Sessions.PersistentSession -> Projects.ProjectId -> ReqForm -> DashboardM (Headers '[HXTrigger] (Html ()))
-shareLinkPostH sess pid reqForm = do
-  pool <- asks pool
+shareLinkPostH :: Projects.ProjectId -> ReqForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
+shareLinkPostH pid reqForm = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+
   currentTime <- liftIO getZonedTime
   let rid = reqForm.reqId
   let expIn = reqForm.expiresIn
@@ -68,7 +74,7 @@ shareLinkPostH sess pid reqForm = do
   if Relude.elem expIn lis
     then do
       inId <- liftIO UUIDV4.nextRandom
-      res <- liftIO $ withPool pool $ execute Insert [sql| INSERT INTO apis.share_requests VALUES (?,?,?,?, current_timestamp + interval ?,?) |] (inId, pid, currentTime, currentTime, expIn, rid)
+      res <- dbtToEff $ execute Insert [sql| INSERT INTO apis.share_requests VALUES (?,?,?,?, current_timestamp + interval ?,?) |] (inId, pid, currentTime, currentTime, expIn, rid)
       pure $ addHeader "" $ copyLink $ show inId
     else do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","errorToast": ["Invalid expiry interval"]}|]
@@ -96,12 +102,11 @@ copyLink rid = do
       "Copy URL"
 
 
-shareLinkGetH :: UUID.UUID -> DashboardM (Html ())
+shareLinkGetH :: UUID.UUID -> ATBaseCtx (Html ())
 shareLinkGetH sid = do
-  pool <- asks pool
-  res <- liftIO $ withPool pool $ getRequest (show sid)
+  res <- dbtToEff $ getRequest (show sid)
   let req = if V.length res > 0 then Just $ V.head res else Nothing
-  childRequets <- liftIO $ withPool pool do
+  childRequets <- dbtToEff do
     case req of
       Just r -> RequestDumps.selectRequestDumpByProjectAndParentId r.projectId r.id
       Nothing -> pure []
@@ -122,27 +127,13 @@ sharePage req outgoing = do
   section_ [class_ "h-full mt-[80px] w-[1000px] flex flex-col items-center mx-auto"] do
     h3_ [class_ "text-5xl text-left mb-16 w-full font-semibold my-8"] "Shared Request Log"
     case req of
-      Just r -> Log.expandAPIlogItem' r.projectId r False outgoing
+      Just r -> do
+        LogItem.expandAPIlogItem' r.projectId r False
       Nothing -> div_ [class_ "flex flex-col gap-4 mt-[80px] text-center"] do
         h1_ [class_ "font-bold text-3xl"] "Request Log Not Found"
         p_ [class_ "text-gray-500 text-xl"] "This shared request log URL does not exist or has expired"
   script_
     [text|
-function changeTab(tabId, parent) {
-  const p = document.getElementById(parent);
-  const tabLinks = p.querySelectorAll('.sdk_tab');
-  tabLinks.forEach(link => link.classList.remove('sdk_tab_active'));
-  const clickedTabLink = document.getElementById(tabId);
-  clickedTabLink.classList.add('sdk_tab_active')
-  const tabContents = p.querySelectorAll('.sdk_tab_content');
-  tabContents.forEach(content => {
-    content.classList.add("hidden")
-    content.classList.remove ("sdk_tab_content_active")
-  });
-  const tabContent = document.getElementById(tabId + '_json');
-  tabContent.classList.remove("hidden")
-  setTimeout(()=>{tabContent.classList.add("sdk_tab_content_active")},10)
-}
 
 function toggleExpireOptions (event) {
     event.preventDefault()
@@ -151,12 +142,6 @@ function toggleExpireOptions (event) {
     if(container) {
      container.classList.toggle('hidden')
     }
-}
-
-function getShareLink(event) {
-  const reqId = event.target.getAttribute ("data-req-id")
-  document.querySelector('#req_id_input').value = reqId
-  htmx.trigger('#share_log_form','submit')
 }
 
 function expireChanged(event) {
@@ -168,19 +153,6 @@ function expireChanged(event) {
        document.querySelector("#expire_input").value = event.target.getAttribute("data-expire-value")
     }
 }
-  |]
-  style_
-    [text|
-    .tree-children {
-      display: block;
-    }
-    .tree-children-count { display: none; }
-    .collapsed .tree-children {
-      display: none !important; 
-    }
-    .collapsed .tree-children-count {display: inline !important;}
-    .collapsed .children {display: inline-block; padding-left:0}
-    .collapsed .closing-token {padding-left:0}
   |]
 
 
@@ -241,6 +213,6 @@ getShareLink rid = do
   button_
     [ class_ "flex flex-col gap-1 bg-blue-500 px-2 py-1 rounded text-white"
     , term "data-req-id" (show rid)
-    , onclick_ "getShareLink(event)"
+    , [__|on click set #req_id_input.value to my @data-req-id then call #share_log_form.requestSubmit() |]
     ]
     "Get share link"

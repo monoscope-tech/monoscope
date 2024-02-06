@@ -1,10 +1,11 @@
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 module Models.Apis.Shapes (Shape (..), ShapeWithFields (..), SwShape (..), ShapeId (..), getShapeFields, shapeIdText, insertShapeQueryAndParam, insertShapes, shapesByEndpointHashes, shapesByEndpointHash) where
 
 import Data.Aeson qualified as AE
 import Data.Default (Default)
-import Data.Time (ZonedTime, getZonedTime)
+import Data.Time (UTCTime, ZonedTime, getZonedTime)
 import Data.UUID qualified as UUID
 
 import Data.Vector (Vector)
@@ -34,6 +35,7 @@ import Web.HttpApiData (FromHttpApiData)
 
 newtype ShapeId = ShapeId {unShapeId :: UUID.UUID}
   deriving stock (Generic, Show)
+  deriving newtype (NFData)
   deriving
     (AE.FromJSON, AE.ToJSON, Eq, Ord, FromField, ToField, FromHttpApiData, Default)
     via UUID.UUID
@@ -49,6 +51,7 @@ data ShapeWithFields = ShapeWidthFields
   , fieldsMap :: Map FieldCategoryEnum [Fields.Field]
   }
   deriving stock (Generic, Show)
+  deriving anyclass (NFData)
 
 
 getShapeFields :: Shape -> Vector Fields.Field -> ShapeWithFields
@@ -62,9 +65,9 @@ getShapeFields shape fields = ShapeWidthFields{status = shape.statusCode, sHash 
 -- We usually expect multiple shapes per endpoint. Eg a shape for a success request-response and another for an error response.
 data Shape = Shape
   { id :: ShapeId
-  , createdAt :: ZonedTime
-  , updatedAt :: ZonedTime
-  , approvedOn :: Maybe ZonedTime
+  , createdAt :: UTCTime
+  , updatedAt :: UTCTime
+  , approvedOn :: Maybe UTCTime
   , projectId :: Projects.ProjectId
   , endpointHash :: Text
   , queryParamsKeypaths :: Vector Text
@@ -77,7 +80,7 @@ data Shape = Shape
   , statusCode :: Int
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, Default)
+  deriving anyclass (FromRow, ToRow, Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Shape
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "shapes", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Shape)
   deriving (FromField) via Aeson Shape
@@ -135,7 +138,7 @@ insertShapes shapes = do
   executeMany insertQuery params
 
 
-getShapeParams :: Shape -> (Maybe ZonedTime, Projects.ProjectId, Text, Vector Text, Vector Text, Vector Text, Vector Text, Vector Text, Vector Text, Text, Int)
+getShapeParams :: Shape -> (Maybe UTCTime, Projects.ProjectId, Text, Vector Text, Vector Text, Vector Text, Vector Text, Vector Text, Vector Text, Text, Int)
 getShapeParams shape =
   ( shape.approvedOn
   , shape.projectId
@@ -163,7 +166,7 @@ data SwShape = SwShape
   , swFieldHashes :: Vector Text
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, Default)
+  deriving anyclass (FromRow, ToRow, Default, NFData)
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SwShape
   deriving (FromField) via Aeson SwShape
   deriving anyclass (AE.ToJSON)

@@ -1,6 +1,5 @@
 module Pages.Dashboard (dashboardGetH) where
 
-import Config
 import Data.Aeson qualified as AE
 import Data.Default (def)
 import Data.Time (
@@ -16,10 +15,11 @@ import Data.Time (
 import Data.Time.Format (defaultTimeLocale)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as Vector
-import Database.PostgreSQL.Entity.DBT (withPool)
+import Effectful.PostgreSQL.Transact.Effect
+import Effectful.Reader.Static (ask)
 import Fmt
 import Lucid
-import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_)
+import Lucid.Htmx (hxPost_, hxSwap_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -33,13 +33,16 @@ import Pages.Charts.Charts qualified as C
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (statBox)
 import Pages.Endpoints.EndpointList (renderEndpoint)
-import Relude hiding (max, min)
+import Relude hiding (ask, asks, max, min)
+import Relude.Unsafe qualified as Unsafe
 import Servant (
   Union,
   WithStatus (..),
   respond,
  )
 import System.Clock
+import System.Config
+import System.Types
 import Text.Interpolation.Nyan
 import Utils (GetOrRedirect, deleteParam, faIcon_, mIcon_, redirect)
 import Witch (from)
@@ -62,18 +65,22 @@ data ParamInput = ParamInput
   }
 
 
-dashboardGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> DashboardM (Union GetOrRedirect)
-dashboardGetH sess pid fromDStr toDStr sinceStr' = do
-  pool <- asks pool
+dashboardGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Union GetOrRedirect)
+dashboardGetH pid fromDStr toDStr sinceStr' = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+  let currUserId = sess.userId
+
   now <- liftIO getCurrentTime
   let sinceStr = if isNothing fromDStr && isNothing toDStr && isNothing sinceStr' || fromDStr == Just "" then Just "7D" else sinceStr'
-  (hasApikeys, hasRequest, newEndpoints) <- liftIO
-    $ withPool pool
-    $ do
-      apiKeys <- ProjectApiKeys.countProjectApiKeysByProjectId pid
-      requestDumps <- RequestDumps.countRequestDumpByProject pid
-      newEndpoints <- Endpoints.endpointRequestStatsByProject pid False False Nothing
-      pure (apiKeys > 0, requestDumps > 0, newEndpoints)
+  (hasApikeys, hasRequest, newEndpoints) <- dbtToEff do
+    apiKeys <- ProjectApiKeys.countProjectApiKeysByProjectId pid
+    requestDumps <- RequestDumps.countRequestDumpByProject pid
+    newEndpoints <- Endpoints.endpointRequestStatsByProject pid False False Nothing
+    pure (apiKeys > 0, requestDumps > 0, newEndpoints)
   -- TODO: Replace with a duration parser.
   let (fromD, toD) = case sinceStr of
         Just "1H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just $ utcToZonedTime utc now)
@@ -90,18 +97,15 @@ dashboardGetH sess pid fromDStr toDStr sinceStr' = do
           (f, t)
 
   startTime <- liftIO $ getTime Monotonic
-  (project, projectRequestStats, reqLatenciesRolledByStepsLabeled) <- liftIO
-    $ withPool
-      pool
-      do
-        project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+  (project, projectRequestStats, reqLatenciesRolledByStepsLabeled) <- dbtToEff do
+    project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
 
-        projectRequestStats <- fromMaybe (def :: Projects.ProjectRequestStats) <$> Projects.projectRequestStatsByProject pid
-        let maxV = round projectRequestStats.p99 :: Int
-        let steps' = (maxV `quot` 100) :: Int
-        let steps = if steps' == 0 then 100 else steps'
-        reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledByStepsForProject maxV steps pid (fromD, toD)
-        pure (project, projectRequestStats, Vector.toList reqLatenciesRolledBySteps)
+    projectRequestStats <- fromMaybe (def :: Projects.ProjectRequestStats) <$> Projects.projectRequestStatsByProject pid
+    let maxV = round projectRequestStats.p99 :: Int
+    let steps' = (maxV `quot` 100) :: Int
+    let steps = if steps' == 0 then 100 else steps'
+    reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledByStepsForProject maxV steps pid (fromD, toD)
+    pure (project, projectRequestStats, Vector.toList reqLatenciesRolledBySteps)
 
   let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
   let bwconf =
@@ -123,7 +127,7 @@ dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.Project
 dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRolledByStepsJ dateRange = do
   let currentURL' = deleteParam "to" $ deleteParam "from" $ deleteParam "since" paramInput.currentURL
   let bulkActionBase = "/p/" <> pid.toText <> "/anomalies/bulk_actions"
-  section_ [class_ "p-8  mx-auto px-16 w-full space-y-12 pb-24"] do
+  section_ [class_ "p-8  mx-auto px-16 w-full space-y-12 pb-24 overflow-y-scroll  h-full"] do
     unless (null newEndpoints) $ form_
       [ style_ "z-index:99999"
       , class_ "fixed pt-24 justify-center z-50 hidden w-full p-4 bg-[rgba(0,0,0,0.2)] overflow-y-auto inset-0 h-full max-h-full"

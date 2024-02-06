@@ -10,10 +10,8 @@ module Pages.Anomalies.AnomalyList (
   AnomalyBulkForm,
   anomalyAcknowlegeButton,
   anomalyArchiveButton,
-  anomalyEvents,
 ) where
 
-import Config
 import Data.Aeson (encode)
 import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
@@ -28,7 +26,10 @@ import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute, withPool)
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Effectful.PostgreSQL.Transact.Effect
+import Effectful.Reader.Static (ask, asks)
 import Lucid
+import Lucid.Aria qualified as Aria
 import Lucid.Htmx
 import Lucid.Hyperscript
 import Models.Apis.Anomalies (AnomalyVM)
@@ -43,18 +44,21 @@ import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
+import Network.URI (escapeURIString, isUnescapedInURI, isUnreserved)
 import Optics.Core ((^.))
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Charts.Charts (QueryBy)
 import Pages.Charts.Charts qualified as Charts
+import Pages.Components qualified as Components
 import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
-import Pages.Log qualified as Log
 import Pages.NonMember
 import Pkg.Components (loader)
-import Relude
+import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
+import System.Config
+import System.Types
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils
 import Web.FormUrlEncoded (FromForm)
@@ -67,72 +71,92 @@ newtype AnomalyBulkForm = AnomalyBulk
   deriving anyclass (FromForm)
 
 
-acknowlegeAnomalyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Anomalies.AnomalyId -> DashboardM (Html ())
-acknowlegeAnomalyGetH sess pid aid = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+acknowlegeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (Html ())
+acknowlegeAnomalyGetH pid aid = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
       let q = [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where id=? |]
-      r <- liftIO $ withPool pool $ execute Update q (sess.userId, aid)
+      r <- dbtToEff $ execute Update q (sess.userId, aid)
       pure $ anomalyAcknowlegeButton pid aid True
 
 
-unAcknowlegeAnomalyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Anomalies.AnomalyId -> DashboardM (Html ())
-unAcknowlegeAnomalyGetH sess pid aid = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+unAcknowlegeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (Html ())
+unAcknowlegeAnomalyGetH pid aid = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
       let q = [sql| update apis.anomalies set acknowleged_by=null, acknowleged_at=null where id=? |]
-      _ <- liftIO $ withPool pool $ execute Update q (Only aid)
+      _ <- dbtToEff $ execute Update q (Only aid)
       pure $ anomalyAcknowlegeButton pid aid False
 
 
-archiveAnomalyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Anomalies.AnomalyId -> DashboardM (Html ())
-archiveAnomalyGetH sess pid aid = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+archiveAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (Html ())
+archiveAnomalyGetH pid aid = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
       let q = [sql| update apis.anomalies set archived_at=NOW() where id=? |]
-      _ <- liftIO $ withPool pool $ execute Update q (Only aid)
+      _ <- dbtToEff $ execute Update q (Only aid)
       pure $ anomalyArchiveButton pid aid True
 
 
-unArchiveAnomalyGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Anomalies.AnomalyId -> DashboardM (Html ())
-unArchiveAnomalyGetH sess pid aid = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+unArchiveAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (Html ())
+unArchiveAnomalyGetH pid aid = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
       let q = [sql| update apis.anomalies set archived_at=null where id=? |]
-      _ <- liftIO $ withPool pool $ execute Update q (Only aid)
+      _ <- dbtToEff $ execute Update q (Only aid)
       pure $ anomalyArchiveButton pid aid False
 
 
 -- When given a list of anomalyIDs and an action, said action would be applied to the anomalyIDs.
 -- Then a notification should be triggered, as well as an action to reload the anomaly List.
-anomalyBulkActionsPostH :: Sessions.PersistentSession -> Projects.ProjectId -> Text -> AnomalyBulkForm -> DashboardM (Headers '[HXTrigger] (Html ()))
-anomalyBulkActionsPostH sess pid action items = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+anomalyBulkActionsPostH :: Projects.ProjectId -> Text -> AnomalyBulkForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
+anomalyBulkActionsPostH pid action items = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"refreshMain": "", "errorToast": [#{action <> " anomalies not successfull."}]}|]
       pure $ addHeader hxTriggerData ""
     else do
       v <- case action of
-        "acknowlege" -> liftIO $ withPool pool $ execute Update [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) |] (sess.userId, Vector.fromList items.anomalyId)
-        "archive" -> liftIO $ withPool pool $ execute Update [sql| update apis.anomalies set archived_at=NOW() where id=ANY(?::uuid[]) |] (Only $ Vector.fromList items.anomalyId)
+        "acknowlege" -> dbtToEff $ execute Update [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) |] (sess.userId, Vector.fromList items.anomalyId)
+        "archive" -> dbtToEff $ execute Update [sql| update apis.anomalies set archived_at=NOW() where id=ANY(?::uuid[]) |] (Only $ Vector.fromList items.anomalyId)
         _ -> error $ "unhandled anomaly bulk action state " <> action
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"refreshMain": "", "successToast": [#{action <> "d anomalies Successfully"}]}|]
       pure $ addHeader hxTriggerData ""
@@ -146,12 +170,16 @@ data ParamInput = ParamInput
   }
 
 
-anomalyListGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Endpoints.EndpointId -> Maybe Text -> Maybe Text -> DashboardM (Html ())
-anomalyListGetH sess pid layoutM ackdM archivedM sortM page loadM endpointM hxRequestM hxBoostedM = do
+anomalyListGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Endpoints.EndpointId -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
+anomalyListGetH pid layoutM ackdM archivedM sortM page loadM endpointM hxRequestM hxBoostedM = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+
   let ackd = textToBool <$> ackdM
   let archived = textToBool <$> archivedM
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
@@ -161,15 +189,12 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM page loadM endpointM hxRe
       let pageInt = case page of
             Just p -> if limit == Just 51 then 0 else Unsafe.read (toString p)
             Nothing -> 0
-      (project, anomalies) <- liftIO
-        $ withPool
-          pool
-          do
-            project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-            anomalies <- case layoutM of
-              Just _ -> Anomalies.selectAnomalies pid endpointM ackd archived sortM limit (pageInt * fetchLimit)
-              Nothing -> Anomalies.selectAnomalies pid Nothing ackd archived sortM limit (pageInt * fetchLimit)
-            pure (project, anomalies)
+      (project, anomalies) <- dbtToEff do
+        project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+        anomalies <- case layoutM of
+          Just _ -> Anomalies.selectAnomalies pid endpointM ackd archived sortM limit (pageInt * fetchLimit)
+          Nothing -> Anomalies.selectAnomalies pid Nothing ackd archived sortM limit (pageInt * fetchLimit)
+        pure (project, anomalies)
       currTime <- liftIO getCurrentTime
       let bwconf =
             (def :: BWConfig)
@@ -189,8 +214,8 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM page loadM endpointM hxRe
               }
 
       let elementBelowTabs =
-            div_ [class_ "grid grid-cols-5", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"]
-              $ anomalyList paramInput pid currTime anomalies nextFetchUrl
+            div_ [class_ "grid grid-cols-5", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $
+              anomalyList paramInput pid currTime anomalies nextFetchUrl
       let anom = case nextFetchUrl of
             Just url -> do
               mapM_ (renderAnomaly False currTime) anomalies
@@ -211,7 +236,7 @@ anomalyListGetH sess pid layoutM ackdM archivedM sortM page loadM endpointM hxRe
 
 
 anomalyListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Anomalies.AnomalyVM -> Maybe Text -> Html ()
-anomalyListPage paramInput pid currTime anomalies nextFetchUrl = div_ [class_ "w-full mx-auto  px-16 pt-10 pb-24"] do
+anomalyListPage paramInput pid currTime anomalies nextFetchUrl = div_ [class_ "w-full mx-auto  px-16 pt-10 pb-24  overflow-y-scroll h-full"] do
   div_
     [ style_ "z-index:26"
     , class_ "fixed hidden right-0 top-0 justify-end left-0 bottom-0 w-full bg-black bg-opacity-5"
@@ -422,41 +447,30 @@ anomalyItem hideByDefault currTime anomaly icon title subTitle content = do
           div_ [class_ "flex items-center gap-2 mt-5"] do
             anomalyArchiveButton anomaly.projectId anomaly.id (isJust anomaly.archivedAt)
             anomalyAcknowlegeButton anomaly.projectId anomaly.id (isJust anomaly.acknowlegedAt)
-            button_
-              [ class_ "inline-block xchild-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100"
-              , type_ "button"
-              , term "data-an-url" $ "/p/" <> anomaly.projectId.toText <> "/anomaly/" <> anomaly.targetHash <> "?modal=True"
-              , term "data-tippy-content" "Expand"
-              , [__|on click remove .hidden from #expand-an-modal then
-                  remove .hidden from #an-modal-content-loader
-                  fetch `${@data-an-url}` as html then put it into #an-modal-content
-                  add .hidden to #an-modal-content-loader
-                  _hyperscript.processNode(#expand-an-modal)
-                  end
-                |]
-              ]
-              $ mIcon_ "enlarge" "w-3 h-3"
+            let modalEndpoint = "/p/" <> anomaly.projectId.toText <> "/anomaly/" <> anomaly.targetHash <> "?modal=True"
+            Components.drawerWithURLContent_ "expand-log-drawer" modalEndpoint $ span_ [class_ "inline-block xchild-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100"] (mIcon_ "enlarge" "w-3 h-3")
         fromMaybe (toHtml @String "") content
     let chartQuery = Just $ anomaly2ChartQuery anomaly.anomalyType anomaly.targetHash
     div_ [class_ "flex items-center justify-center "] $ div_ [class_ "w-60 h-16 px-3"] $ Charts.throughput anomaly.projectId anomaly.targetHash chartQuery Nothing 14 Nothing False (Nothing, Nothing) Nothing
     div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $ show anomaly.eventsCount14d
 
 
-anomalyDetailsGetH :: Sessions.PersistentSession -> Projects.ProjectId -> Text -> Maybe Text -> DashboardM (Html ())
-anomalyDetailsGetH sess pid targetHash hxBoostedM = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+anomalyDetailsGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (Html ())
+anomalyDetailsGetH pid targetHash hxBoostedM = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, anomaly) <- liftIO
-        $ withPool
-          pool
-          do
-            project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-            anomaly <- Anomalies.getAnomalyVM pid targetHash
-            pure (project, anomaly)
+      (project, anomaly) <- dbtToEff do
+        project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+        anomaly <- Anomalies.getAnomalyVM pid targetHash
+        pure (project, anomaly)
       let bwconf =
             (def :: BWConfig)
               { sessM = Just sess
@@ -470,34 +484,34 @@ anomalyDetailsGetH sess pid targetHash hxBoostedM = do
           case an.anomalyType of
             Anomalies.ATEndpoint -> do
               -- for endpoint anomalies
-              shapes <- liftIO $ withPool pool $ Shapes.shapesByEndpointHash pid targetHash
-              fields <- liftIO $ withPool pool $ Fields.selectFields pid targetHash
+              shapes <- dbtToEff $ Shapes.shapesByEndpointHash pid targetHash
+              fields <- dbtToEff $ Fields.selectFields pid targetHash
               let shapesWithFieldsMap = Vector.map (`getShapeFields` fields) shapes
               case hxBoostedM of
                 Just _ -> pure $ anomalyDetailsPage an (Just shapesWithFieldsMap) Nothing Nothing chartQuery currTime True
                 Nothing -> do
-                  pure $ bodyWrapper bwconf $ div_ [class_ "w-full px-32"] do
+                  pure $ bodyWrapper bwconf $ div_ [class_ "w-full px-32 overflow-y-scroll h-full"] do
                     h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
                     anomalyDetailsPage an (Just shapesWithFieldsMap) Nothing Nothing chartQuery currTime False
             Anomalies.ATShape -> do
-              newF <- liftIO $ withPool pool $ Fields.selectFieldsByHashes pid an.shapeNewUniqueFields
+              newF <- dbtToEff $ Fields.selectFieldsByHashes pid an.shapeNewUniqueFields
               let newFM = groupFieldsByCategory newF
-              updF <- liftIO $ withPool pool $ Fields.selectFieldsByHashes pid an.shapeUpdatedFieldFormats
+              updF <- dbtToEff $ Fields.selectFieldsByHashes pid an.shapeUpdatedFieldFormats
               let updfM = groupFieldsByCategory updF
-              delF <- liftIO $ withPool pool $ Fields.selectFieldsByHashes pid an.shapeDeletedFields
+              delF <- dbtToEff $ Fields.selectFieldsByHashes pid an.shapeDeletedFields
               let delFM = groupFieldsByCategory delF
               let anFields = (newFM, updfM, delFM)
               case hxBoostedM of
                 Just _ -> pure $ anomalyDetailsPage an Nothing (Just anFields) Nothing chartQuery currTime True
-                Nothing -> pure $ bodyWrapper bwconf $ div_ [class_ "w-full px-32"] do
+                Nothing -> pure $ bodyWrapper bwconf $ div_ [class_ "w-full px-32 overflow-y-scroll h-full"] do
                   h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
                   anomalyDetailsPage an Nothing (Just anFields) Nothing chartQuery currTime False
             _ -> do
-              anFormats <- liftIO $ withPool pool $ Fields.getFieldsByEndpointKeyPathAndCategory pid (maybe "" (\x -> UUID.toText x.unEndpointId) an.endpointId) (fromMaybe "" an.fieldKeyPath) (fromMaybe FCRequestBody an.fieldCategory)
+              anFormats <- dbtToEff $ Fields.getFieldsByEndpointKeyPathAndCategory pid (maybe "" (\x -> UUID.toText x.unEndpointId) an.endpointId) (fromMaybe "" an.fieldKeyPath) (fromMaybe FCRequestBody an.fieldCategory)
               case hxBoostedM of
                 Just _ -> do
                   pure $ anomalyDetailsPage an Nothing Nothing (Just anFormats) chartQuery currTime True
-                Nothing -> pure $ bodyWrapper bwconf $ div_ [class_ "w-full px-32"] do
+                Nothing -> pure $ bodyWrapper bwconf $ div_ [class_ "w-full px-32 overflow-y-scroll h-full"] do
                   h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
                   anomalyDetailsPage an Nothing Nothing (Just anFormats) chartQuery currTime False
         Nothing -> pure $ bodyWrapper bwconf $ h4_ [] "ANOMALY NOT FOUND"
@@ -505,7 +519,7 @@ anomalyDetailsGetH sess pid targetHash hxBoostedM = do
 
 anomalyDetailsPage :: AnomalyVM -> Maybe (Vector Shapes.ShapeWithFields) -> Maybe (Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field]) -> Maybe (Vector Text) -> Maybe QueryBy -> UTCTime -> Bool -> Html ()
 anomalyDetailsPage anomaly shapesWithFieldsMap fields prvFormatsM chartQuery currTime modal = do
-  div_ [class_ "w-full h-full"] do
+  div_ [class_ "w-full "] do
     div_ [class_ "w-full"] do
       div_ [class_ "flex items-center justify-between gap-2 flex-wrap"] do
         case anomaly.anomalyType of
@@ -562,119 +576,49 @@ anomalyDetailsPage anomaly shapesWithFieldsMap fields prvFormatsM chartQuery cur
               span_ [class_ "decoration-black underline", term "data-tippy-content" $ "last seen: " <> show anomaly.lastSeen] $ toHtml $ prettyTimeAuto currTime $ zonedTimeToUTC anomaly.lastSeen
           div_ [class_ "w-[200px] h-[80px] mt-4 shrink-0"] do
             Charts.throughput anomaly.projectId anomaly.targetHash chartQuery Nothing 14 Nothing False (Nothing, Nothing) Nothing
-    div_ [class_ "w-full flex items-center gap-4 mt-4 overflow-y-auto h-full"] do
+    div_ [class_ "w-full flex items-center gap-4 mt-4 overflow-y-auto "] do
       if modal
         then do
-          a_ [href_ $ "/p/" <> anomaly.projectId.toText <> "/anomaly/" <> anomaly.targetHash, term "data-tippy-content" "Go to page"] do
-            mIcon_ "enlarge" "w-3 h-3"
+          a_ [href_ $ "/p/" <> anomaly.projectId.toText <> "/anomaly/" <> anomaly.targetHash, term "data-tippy-content" "Go to page", class_ "btn btn-sm btn-outline "] do
+            "Expand Page" >> mIcon_ "enlarge" "w-3 h-3"
         else do
           anomalyArchiveButton anomaly.projectId anomaly.id (isJust anomaly.archivedAt)
           anomalyAcknowlegeButton anomaly.projectId anomaly.id (isJust anomaly.acknowlegedAt)
 
     div_ [class_ "mt-6 space-y-4"] do
-      div_ [class_ "flex items-center gap-10 font-semibold border-b"] do
-        script_
-          [type_ "text/hyperscript"]
-          [text|
-          behavior Navigatable(content)
-             on click remove .sdk_tab_active from .sdk_tab 
-                then add .sdk_tab_active to me 
-                then add .hidden to .sdk_tab_content 
-                then remove .hidden from content
-                wait 10ms
-                then add .sdk_tab_content_active to content
-          end
-        |]
-        button_
-          [ class_ "sdk_tab sdk_tab_active"
-          , [__| install Navigatable(content: #overview_content) |]
-          , id_ "overview"
-          ]
-          "Overview"
-        button_
-          [ class_ "sdk_tab"
-          , [__| install Navigatable(content: #events_content) |]
-          , term "data-events-fetched" "false"
-          , id_ "events"
-          ]
-          "All events"
-      div_ [] do
-        div_ [class_ "w-full bg-white rounded-lg overflow-y-auto h-full sdk_tab_content sdk_tab_content_active", id_ "overview_content"] do
+      div_ [class_ "tabs tabs-bordered", role_ "tablist"] do
+        input_ [type_ "radio", name_ "anomaly-events-tabs", role_ "tab", class_ "tab", Aria.label_ "Overview", checked_]
+        div_ [role_ "tabpanel", class_ "tab-content w-full bg-white rounded-lg overflow-x-hidden", id_ "overview_content"] do
           case anomaly.anomalyType of
             Anomalies.ATEndpoint -> endpointOverview shapesWithFieldsMap
             Anomalies.ATShape -> requestShapeOverview fields
             Anomalies.ATFormat -> anomalyFormatOverview anomaly (fromMaybe [] prvFormatsM)
             _ -> ""
-        div_ [class_ "grow overflow-y-auto h-full whitespace-nowrap text-sm divide-y overflow-x-hidden sdk_tab_content", id_ "events_content"] do
-          let events_url = "/p/" <> anomaly.projectId.toText <> "/anomaly/events/" <> anomaly.targetHash <> "/" <> show anomaly.anomalyType
-          div_ [hxGet_ events_url, hxTrigger_ "intersect", hxSwap_ "outerHTML"] do
-            div_ [class_ "w-full flex justify-center overflow-hidden"] do
-              loader
 
-  script_
-    [type_ "text/hyperscript"]
-    [text|
-      def LogItemExpandable(me)
-          if I match <.expanded-log/> then 
-            remove next <.log-item-info/> then 
-            remove .expanded-log from me
-          else
-            add .expanded-log to me
-            remove .hidden from next <.item-loading />
-            fetch `$${@data-log-item-path}` as html then put it after me then
-             add .hidden to next <.item-loading />
-            _hyperscript.processNode(next <.log-item-info />) then
-          end 
-      end
-    |]
-  style_
-    [text|
-    .tree-children {
-      display: block;
-    }
-    .expand-button {
-      display:none;
-    }
-    .tree-children-count { display: none; }
-    .collapsed .tree-children {
-      display: none !important; 
-    }
-    .collapsed .tree-children-count {display: inline !important;}
-    .collapsed .children {display: inline-block; padding-left:0}
-    .collapsed .closing-token {padding-left:0}
-  |]
+        input_ [type_ "radio", name_ "anomaly-events-tabs", role_ "tab", class_ "tab", Aria.label_ "Events"]
+        div_ [role_ "tabpanel", class_ "tab-content grow whitespace-nowrap text-sm divide-y overflow-x-hidden ", id_ "events_content"] do
+          let anomalyQueryPartial = buildQueryForAnomaly anomaly.anomalyType anomaly.targetHash
+          let escapedQueryPartial = toText $ escapeURIString isUnescapedInURI $ toString anomalyQueryPartial
+          let events_url = "/p/" <> (UUID.toText $ Projects.unProjectId $ anomaly.projectId) <> "/log_explorer?layout=resultTable&query=" <> escapedQueryPartial
+          div_ [hxGet_ events_url, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
+
+
+buildQueryForAnomaly :: Anomalies.AnomalyTypes -> Text -> Text
+buildQueryForAnomaly Anomalies.ATEndpoint hash = "endpoint_hash==\"" <> hash <> "\""
+buildQueryForAnomaly Anomalies.ATShape hash = "shape_hash==\"" <> hash <> "\""
+buildQueryForAnomaly Anomalies.ATFormat hash = "format_hashes[*]==\"" <> hash <> "\""
+buildQueryForAnomaly Anomalies.ATField hash = "field[*]==\"" <> hash <> "\""
+buildQueryForAnomaly Anomalies.ATUnknown hash = ""
 
 
 endpointOverview :: Maybe (Vector Shapes.ShapeWithFields) -> Html ()
 endpointOverview shapesWithFieldsMap =
   div_ [] do
-    -- div_ [class_ "flex justify-end items-center"] do
-    --   img_
-    --     [ src_ "/assets/svgs/leftarrow.svg"
-    --     , class_ " m-2 cursor-pointer"
-    --     , [__|on click slideReqRes('prev') |]
-    --     ]
-    --   let l = "1/" <> show (length shapesWithFieldsMap)
-    --   let id = "current_indicator"
-    --   span_ [src_ " mx-4", id_ id] l
-    --   img_
-    --     [ src_ "/assets/svgs/rightarrow.svg"
-    --     , class_ "m-2 cursor-pointer"
-    --     , [__|on click slideReqRes('next') |]
-    --     ]
     case shapesWithFieldsMap of
       Just s -> do
         reqResSection "Request" True (Vector.toList s)
         reqResSection "Response" False (Vector.toList s)
       Nothing -> pass
-
-
-anomalyEvents :: Sessions.PersistentSession -> Projects.ProjectId -> Text -> Text -> DashboardM (Html ())
-anomalyEvents sess pid targetHash anomalyType = do
-  pool <- asks pool
-  events <- liftIO $ withPool pool $ RequestDump.selectAnomalyEvents pid targetHash (Anomalies.parseAnomalyRawTypes anomalyType)
-  pure $ div_ [class_ "w-full"] do
-    Log.logItemRows pid events [] ""
 
 
 requestShapeOverview :: Maybe (Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field]) -> Html ()
@@ -821,9 +765,9 @@ anomalyAcknowlegeButton :: Projects.ProjectId -> Anomalies.AnomalyId -> Bool -> 
 anomalyAcknowlegeButton pid aid acked = do
   let acknowlegeAnomalyEndpoint = "/p/" <> pid.toText <> "/anomalies/" <> Anomalies.anomalyIdText aid <> if acked then "/unacknowlege" else "/acknowlege"
   a_
-    [ class_
-        $ "inline-block child-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
-        <> (if acked then "bg-green-100 text-green-900" else "")
+    [ class_ $
+        "inline-block child-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
+          <> (if acked then "bg-green-100 text-green-900" else "")
     , term "data-tippy-content" "acknowlege anomaly"
     , hxGet_ acknowlegeAnomalyEndpoint
     , hxSwap_ "outerHTML"
@@ -835,9 +779,9 @@ anomalyArchiveButton :: Projects.ProjectId -> Anomalies.AnomalyId -> Bool -> Htm
 anomalyArchiveButton pid aid archived = do
   let archiveAnomalyEndpoint = "/p/" <> pid.toText <> "/anomalies/" <> Anomalies.anomalyIdText aid <> if archived then "/unarchive" else "/archive"
   a_
-    [ class_
-        $ "inline-block xchild-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
-        <> (if archived then " bg-green-100 text-green-900" else "")
+    [ class_ $
+        "inline-block xchild-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
+          <> (if archived then " bg-green-100 text-green-900" else "")
     , term "data-tippy-content" $ if archived then "unarchive" else "archive"
     , hxGet_ archiveAnomalyEndpoint
     , hxSwap_ "outerHTML"
@@ -850,24 +794,24 @@ reqResSection title isRequest shapesWithFieldsMap =
   section_ [class_ "space-y-3"] do
     div_ [class_ "flex justify-between mt-5"] do
       div_ [class_ "flex flex-row"] do
-        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
-          $ faSprite_ "chevron-down" "light" "h-4 mr-3 mt-1 w-4"
+        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]] $
+          faSprite_ "chevron-down" "light" "h-4 mr-3 mt-1 w-4"
         span_ [class_ "text-lg text-slate-800"] $ toHtml title
 
-    div_ [class_ "bg-white border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"]
-      $ forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap)
-      $ \(index, s) -> do
-        let sh = if index == 1 then title <> "_fields" else title <> "_fields hidden"
-        div_ [class_ sh, id_ $ title <> "_" <> show index] do
-          if isRequest
-            then do
-              subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam s.fieldsMap)
-              subSubSection (title <> " Query Params") (Map.lookup Fields.FCQueryParam s.fieldsMap)
-              subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader s.fieldsMap)
-              subSubSection (title <> " Body") (Map.lookup Fields.FCRequestBody s.fieldsMap)
-            else do
-              subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader s.fieldsMap)
-              subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody s.fieldsMap)
+    div_ [class_ "bg-white border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"] $
+      forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap) $
+        \(index, s) -> do
+          let sh = if index == 1 then title <> "_fields" else title <> "_fields hidden"
+          div_ [class_ sh, id_ $ title <> "_" <> show index] do
+            if isRequest
+              then do
+                subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam s.fieldsMap)
+                subSubSection (title <> " Query Params") (Map.lookup Fields.FCQueryParam s.fieldsMap)
+                subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader s.fieldsMap)
+                subSubSection (title <> " Body") (Map.lookup Fields.FCRequestBody s.fieldsMap)
+              else do
+                subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader s.fieldsMap)
+                subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody s.fieldsMap)
 
 
 -- | subSubSection ..

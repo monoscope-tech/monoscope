@@ -16,7 +16,7 @@ jobs:
       - uses: freckle/stack-cache-action@main
       - uses: haskell/actions/setup@v1
         with:
-          ghc-version: 9.6.2 # "8.10.7" # Exact version of ghc to use
+          ghc-version: 9.8.1 # "8.10.7" # Exact version of ghc to use
           # cabal-version: 'latest'. Omitted, but defalts to 'latest'
           enable-stack: true
           stack-version: "latest"
@@ -34,12 +34,14 @@ jobs:
       # - run: stack install --local-bin-path=. --ghc-options '-optl-static -fPIC'
       - run: stack install --local-bin-path=. 
       # - run: stack test
-      - name: Build tailwindcss
-        run: |-
-          # curl -LJO https://github.com/tailwindlabs/tailwindcss/releases/download/v3.0.23/tailwindcss-linux-x64
-          curl -LJO https://github.com/Siumauricio/rippleui/releases/download/v1.9.1/tailwindcss-linux-x64
-          chmod +x tailwindcss-linux-x64
-          ./tailwindcss-linux-x64 -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css
+
+      - name: Setup node env
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+      - run: npm install
+      - run: npx tailwindcss  -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css
+
 
       - name: Login to Container Registry
         uses: docker/login-action@v2

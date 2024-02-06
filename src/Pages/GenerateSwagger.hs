@@ -1,6 +1,5 @@
 module Pages.GenerateSwagger (generateGetH, generateSwagger) where
 
-import Config
 import Data.Aeson
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey
@@ -11,6 +10,8 @@ import Data.Text qualified as T
 import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
+import Effectful.PostgreSQL.Transact.Effect
+import Effectful.Reader.Static (ask, asks)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields (fieldTypeToText)
 import Models.Apis.Fields qualified as Field
@@ -20,8 +21,11 @@ import Models.Apis.Formats qualified as Formats
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Relude
+import Relude hiding (ask, asks)
 import Relude.Unsafe ((!!))
+import Relude.Unsafe qualified as Unsafe
+import System.Config
+import System.Types
 import Utils
 
 
@@ -312,25 +316,28 @@ generateSwagger projectTitle projectDescription endpoints shapes fields formats 
     swagger = object ["openapi" .= String "3.0.0", "info" .= info, "servers" .= Array hosts, "paths" .= paths]
 
 
-generateGetH :: Sessions.PersistentSession -> Projects.ProjectId -> DashboardM AE.Value
-generateGetH sess pid = do
-  pool <- asks pool
-  isMember <- liftIO $ withPool pool $ userIsProjectMember sess pid
+generateGetH :: Projects.ProjectId -> ATAuthCtx AE.Value
+generateGetH pid = do
+  -- TODO: temporary, to work with current logic
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
       pure $ AE.object ["error" .= String "You are not a member of this project"]
-    else do
-      liftIO
-        $ withPool pool do
-          project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-          endpoints <- Endpoints.endpointsByProjectId pid
-          let endpoint_hashes = V.map (.hash) endpoints
-          shapes <- Shapes.shapesByEndpointHashes pid endpoint_hashes
-          fields <- Fields.fieldsByEndpointHashes pid endpoint_hashes
-          let field_hashes = V.map (.fHash) fields
-          formats <- Formats.formatsByFieldsHashes pid field_hashes
-          let (projectTitle, projectDescription) = case project of
-                (Just pr) -> (toText pr.title, toText pr.description)
-                Nothing -> ("__APITOOLKIT", "Edit project description")
-          let swagger = generateSwagger projectTitle projectDescription endpoints shapes fields formats
-          pure swagger
+    else dbtToEff do
+      project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
+      endpoints <- Endpoints.endpointsByProjectId pid
+      let endpoint_hashes = V.map (.hash) endpoints
+      shapes <- Shapes.shapesByEndpointHashes pid endpoint_hashes
+      fields <- Fields.fieldsByEndpointHashes pid endpoint_hashes
+      let field_hashes = V.map (.fHash) fields
+      formats <- Formats.formatsByFieldsHashes pid field_hashes
+      let (projectTitle, projectDescription) = case project of
+            (Just pr) -> (toText pr.title, toText pr.description)
+            Nothing -> ("__APITOOLKIT", "Edit project description")
+      let swagger = generateSwagger projectTitle projectDescription endpoints shapes fields formats
+      pure swagger
