@@ -41,6 +41,7 @@ jobs:
           node-version: 18
       - run: npm install
       - run: npx tailwindcss  -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css
+      - run: postcss-cli ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css
 
 
       - name: Login to Container Registry

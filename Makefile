@@ -1,7 +1,7 @@
 css-start:
 	npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --watch
 post-css:
-   npx postcss-cli ./static/public/assets/css/tailwind.min.css -o ./static/public/assets/css/tailwind.min.css
+	npx postcss-cli ./static/public/assets/css/tailwind.css  -o ./static/public/assets/css/tailwind.min.css
 run:
 	stack run
 
