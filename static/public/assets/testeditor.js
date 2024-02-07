@@ -285,20 +285,21 @@ export class Collection extends LitElement {
           </div>
           <div>
             <button
-              class="self-center text-blue-500  text-xl font-bold"
-              @click=${() => (this.showSettings = true)}
+              class="btn"
+              @click=${() => {
+                document.getElementById('settings_modal').showModal();
+              }}
             >
               <i class="fa-solid fa-gear"></i>
               settings
             </button>
           </div>
-          ${this.showSettings
-            ? html`<settings-modal
-                .config=${this.collection.config}
-                .schedule=${this.collection.schedule}
-                .isScheduled=${this.collection.isScheduled}
-              ></settings-modal>`
-            : null}
+          <settings-modal
+            .config=${this.collection.config}
+            .schedule=${this.collection.schedule}
+            .isScheduled=${this.collection.isScheduled}
+          >
+          </settings-modal>
         </div>
         <div
           class="flex flex-col col-span-5 gap-4 h-full overflow-y-hidden border-r"
@@ -425,99 +426,80 @@ class SettingsModal extends LitElement {
     this.schedule = e.target.value;
     this.changed = true;
   }
-
   render() {
-    return html` <div
-      class="modal"
-      id="modal-bg"
-      @click=${(e) => {
-        this.closeModal();
-      }}
-    >
-      <div
-        class="modal-box"
-      >
-        <div
-          class="relative transform overflow-hidden rounded-lg bg-white shadow-sm text-left transition-all  w-full max-w-2xl"
-          @click=${(e) => {
-            e.stopPropagation();
-          }}
+    return html`<dialog id="settings_modal" class="modal">
+      <div class="modal-box">
+        <h3
+          class="text-lg w-full py-3 mb-4 border-b font-semibold leading-6 text-gray-700"
         >
-          <div class="w-full">
-            <h3
-              class="text-lg  w-full px-6 py-4 border-b font-semibold leading-6 text-gray-700"
-              id="modal-title"
-            >
-              Settings
-            </h3>
+          Settings
+        </h3>
+        <div class="flex flex-col gap-10">
+          <config-element .config=${this.config || {}}></config-element>
+          <div class="rounded-lg border flex flex-col text-gray-700">
             <div
-              class="flex min-h-[30vh] max-h-[70vh] overflow-y-auto flex-col gap-4 p-6"
+              class="w-full flex p-2 border-b items-center justify-between  bg-gray-100"
             >
-              <div class="flex flex-col gap-10">
-                <config-element .config=${this.config || {}}></config-element>
-                <div class="rounded-lg border flex flex-col text-gray-700">
-                  <div
-                    class="w-full flex p-2 border-b items-center justify-between  bg-gray-100"
-                  >
-                    <h6 class="font-semibold">Scheduling</h6>
-                  </div>
-                  <div class="p-3 w-full flex flex-col gap-3">
-                    <label
-                      class="relative inline-flex items-center cursor-pointer w-max"
-                    >
-                      <input
-                        type="checkbox"
-                        value=""
-                        class="sr-only peer"
-                        .checked=${this.isScheduled}
-                        @click=${(e) => {
-                          this.isScheduled = e.target.checked;
-                          this.changed = true;
-                        }}
-                      />
-                      <div
-                        class="w-9 h-3 bg-gray-200 peer-focus:outline-none peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full after:content-[''] after:absolute after:top-0 after:start-[0] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"
-                      ></div>
-                      <span
-                        class="ms-3 text-sm font-medium text-gray-900 dark:text-gray-300"
-                      >
-                        on</span
-                      >
-                    </label>
-                    <div class="flex items-center gap-4">
-                      <select
-                        class="px-2 py-2 w-full rounded"
-                        .value=${this.schedule}
-                        @change=${this.handleScheduleChange}
-                      >
-                        <option value="*/5 * * * *">Every 5 minutes</option>
-                        <option value="*/10 * * * *">Every 10 minutes</option>
-                        <option value="*/15 * * * *">Every 15 minutes</option>
-                        <option value="*/30 * * * *">Every 30 minutes</option>
-                        <option value="0 * * * *">Every hour</option>
-                        <option value="0 0 * * *">Every day</option>
-                      </select>
-                    </div>
-
-                    <button
-                      @click=${() => this.updateColl()}
-                      class=${'btn btn-sm ' +
-                      `${
-                        this.changed
-                          ? 'btn-success'
-                          : 'btn-disabled'
-                      }`}
-                    >
-                      Save
-                    </button>
-                  </div>
-                </div>
+              <h6 class="font-semibold">Scheduling</h6>
+            </div>
+            <div class="p-3 w-full flex flex-col gap-3">
+              <label
+                class="relative inline-flex items-center cursor-pointer w-max"
+              >
+                <input
+                  type="checkbox"
+                  value=""
+                  class="sr-only peer"
+                  .checked=${this.isScheduled}
+                  @click=${(e) => {
+                    this.isScheduled = e.target.checked;
+                    this.changed = true;
+                  }}
+                />
+                <div
+                  class="w-9 h-3 bg-gray-200 peer-focus:outline-none peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full after:content-[''] after:absolute after:top-0 after:start-[0] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"
+                ></div>
+                <span
+                  class="ms-3 text-sm font-medium text-gray-900 dark:text-gray-300"
+                >
+                  on</span
+                >
+              </label>
+              <div class="flex items-center gap-4">
+                <select
+                  class="px-2 py-2 w-full rounded"
+                  .value=${this.schedule}
+                  @change=${this.handleScheduleChange}
+                >
+                  <option value="*/5 * * * *">Every 5 minutes</option>
+                  <option value="*/10 * * * *">Every 10 minutes</option>
+                  <option value="*/15 * * * *">Every 15 minutes</option>
+                  <option value="*/30 * * * *">Every 30 minutes</option>
+                  <option value="0 * * * *">Every hour</option>
+                  <option value="0 0 * * *">Every day</option>
+                </select>
               </div>
+
+              <button
+                @click=${() => this.updateColl()}
+                class=${'btn btn-sm ' +
+                `${this.changed ? 'btn-success' : 'btn-disabled'}`}
+              >
+                Save
+              </button>
             </div>
           </div>
         </div>
+        <div class="modal-action">
+          <form method="dialog">
+            <button class="btn">Close</button>
+          </form>
+        </div>
       </div>
-    </div>`;
+      <form method="dialog" class="modal-backdrop">
+        <button>Close</button>
+      </form>
+    </dialog> `;
   }
   createRenderRoot() {
     return this;
