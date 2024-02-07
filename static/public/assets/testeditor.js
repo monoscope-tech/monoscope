@@ -448,16 +448,13 @@ class SettingsModal extends LitElement {
                 <input
                   type="checkbox"
                   value=""
-                  class="sr-only peer"
+                  class="toggle "
                   .checked=${this.isScheduled}
                   @click=${(e) => {
                     this.isScheduled = e.target.checked;
                     this.changed = true;
                   }}
                 />
-                <div
-                  class="w-9 h-3 bg-gray-200 peer-focus:outline-none peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full after:content-[''] after:absolute after:top-0 after:start-[0] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"
-                ></div>
                 <span
                   class="ms-3 text-sm font-medium text-gray-900 dark:text-gray-300"
                 >
