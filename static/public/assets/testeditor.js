@@ -260,124 +260,123 @@ export class Collection extends LitElement {
   }
 
   render() {
-    return html` ${this.showNewStepModal
-        ? html`<step-modal></step-modal>`
-        : null}
-      <div class="w-full grid grid-cols-11 h-[calc(100vh-50px)]">
-        <div class="flex flex-col gap-3 col-span-2 h-full px-4 pt-8 border-r">
-          <h4 class="text-3xl font-medium text-gray-800">
-            ${this.collection.title}
-          </h4>
-          <p class="text-gray-500 max-w-xl">${this.collection.description}</p>
-          <div class="text-gray-700 text-sm">
-            <div class="flex gap-2 items-center">
-              <span>Created:</span>
-              <span class="font-semibold"
-                >${new Date(this.collection.createdAt).toLocaleString()}</span
-              >
-            </div>
-            <div class="flex gap-2 items-center">
-              <span>Last modified:</span>
-              <span class="font-semibold"
-                >${new Date(this.collection.updatedAt).toLocaleString()}</span
-              >
-            </div>
-          </div>
-          <div>
-            <button
-              class="btn"
-              @click=${() => {
-                document.getElementById('settings_modal').showModal();
-              }}
+    return html` <div class="w-full grid grid-cols-11 h-[calc(100vh-50px)]">
+      <div class="flex flex-col gap-3 col-span-2 h-full px-4 pt-8 border-r">
+        <h4 class="text-3xl font-medium text-gray-800">
+          ${this.collection.title}
+        </h4>
+        <p class="text-gray-500 max-w-xl">${this.collection.description}</p>
+        <div class="text-gray-700 text-sm">
+          <div class="flex gap-2 items-center">
+            <span>Created:</span>
+            <span class="font-semibold"
+              >${new Date(this.collection.createdAt).toLocaleString()}</span
             >
-              <i class="fa-solid fa-gear"></i>
-              settings
-            </button>
           </div>
-          <settings-modal
-            .config=${this.collection.config}
-            .schedule=${this.collection.schedule}
-            .isScheduled=${this.collection.isScheduled}
+          <div class="flex gap-2 items-center">
+            <span>Last modified:</span>
+            <span class="font-semibold"
+              >${new Date(this.collection.updatedAt).toLocaleString()}</span
+            >
+          </div>
+        </div>
+        <div>
+          <button
+            class="btn"
+            @click=${() => {
+              document.getElementById('settings_modal').showModal();
+            }}
           >
-          </settings-modal>
+            <i class="fa-solid fa-gear"></i>
+            settings
+          </button>
         </div>
-        <div
-          class="flex flex-col col-span-5 gap-4 h-full overflow-y-hidden border-r"
+        <settings-modal
+          .config=${this.collection.config}
+          .schedule=${this.collection.schedule}
+          .isScheduled=${this.collection.isScheduled}
         >
-          <div class="flex justify-between items-center w-full pt-3 px-4">
-            <h3 class="text-gray-700 font-medium text-2xl">Steps</h3>
-            <div class="flex gap-4">
-              <button
-                title="run all"
-                class="btn btn-sm btn-success"
-                @click=${() => runAllTests()}
-              >
-                Run all
-                <i class="fa fa-play" aria-hidden="true"></i>
-              </button>
-              <label class="relative inline-flex items-center cursor-pointer">
-                <input
-                  type="checkbox"
-                  value=""
-                  class="toggle"
-                  @click=${() => this.toggleCode()}
-                  .checked=${this.showCode}
-                />
-                <span
-                  class="ms-3 text-sm font-medium text-gray-900 dark:text-gray-300"
-                >
-                  Code</span
-                >
-              </label>
-              ${this.codeHasChanges
-                ? html`<button
-                    title="save code"
-                    class="bg-blue-500 text-white gap-2 flex items-center rounded px-3 py-1"
-                    @click=${() => this.saveCode()}
-                  >
-                    Save
-                  </button>`
-                : null}
-            </div>
-          </div>
-          ${this.showCode
-            ? html`<div
-                id="test-editor"
-                class="w-full h-full overflow-y-hidden border-t"
-              ></div>`
-            : html` <div
-                class="flex flex-col overflow-y-auto px-2 h-full gap-4 py-3 border-t"
-              >
-                ${this.collection.steps?.map(
-                  (step, ind) =>
-                    html`<step-element .data=${step} ind=${ind}></step-element>`
-                )}
-                ${this.collection.steps?.length === 0
-                  ? html`<div
-                      class="self-center text-center flex flex-col gap-2 items-center max-w-md my-24 mb-10 text-gray-700"
-                    >
-                      <i class="text-5xl fa-solid fa-empty-set"></i>
-                      This collection has no test steps, click the plus button
-                      to add test steps
-                    </div>`
-                  : null}
-                <button
-                  class="btn btn-circle btn-success self-center"
-                  @click=${() => (this.showNewStepModal = true)}
-                >
-                  <i class="fa-solid fa-plus"></i>
-                </button>
-              </div>`}
-        </div>
-        <div class="h-full p-3 col-span-4 overflow-y-scroll">
-          <div class="mt-24 max-w-md  mx-auto flex flex-col gap-2 text-center">
-            <i class="fal fa-list-alt text-5xl"></i>
-            <span class="text-gray-700"
-              >Run test to see the results appear here</span
+        </settings-modal>
+      </div>
+      <div
+        class="flex flex-col col-span-5 gap-4 h-full overflow-y-hidden border-r"
+      >
+        <div class="flex justify-between items-center w-full pt-3 px-4">
+          <h3 class="text-gray-700 font-medium text-2xl">Steps</h3>
+          <div class="flex gap-4">
+            <button
+              title="run all"
+              class="btn btn-sm btn-success"
+              @click=${() => runAllTests()}
             >
+              Run all
+              <i class="fa fa-play" aria-hidden="true"></i>
+            </button>
+            <label class="relative inline-flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                value=""
+                class="toggle"
+                @click=${() => this.toggleCode()}
+                .checked=${this.showCode}
+              />
+              <span
+                class="ms-3 text-sm font-medium text-gray-900 dark:text-gray-300"
+              >
+                Code</span
+              >
+            </label>
+            ${this.codeHasChanges
+              ? html`<button
+                  title="save code"
+                  class="bg-blue-500 text-white gap-2 flex items-center rounded px-3 py-1"
+                  @click=${() => this.saveCode()}
+                >
+                  Save
+                </button>`
+              : null}
           </div>
         </div>
-      </div>`;
+        ${this.showCode
+          ? html`<div
+              id="test-editor"
+              class="w-full h-full overflow-y-hidden border-t"
+            ></div>`
+          : html` <div
+              class="flex flex-col overflow-y-auto px-2 h-full gap-4 py-3 border-t"
+            >
+              ${this.collection.steps?.map(
+                (step, ind) =>
+                  html`<step-element .data=${step} ind=${ind}></step-element>`
+              )}
+              ${this.collection.steps?.length === 0
+                ? html`<div
+                    class="self-center text-center flex flex-col gap-2 items-center max-w-md my-24 mb-10 text-gray-700"
+                  >
+                    <i class="text-5xl fa-solid fa-empty-set"></i>
+                    This collection has no test steps, click the plus button to
+                    add test steps
+                  </div>`
+                : null}
+              <button
+                class="btn btn-circle btn-success self-center"
+                @click=${() =>
+                  document.getElementById('step_modal').showModal()}
+              >
+                <i class="fa-solid fa-plus"></i>
+              </button>
+              <step-modal></step-modal>
+            </div>`}
+      </div>
+      <div class="h-full p-3 col-span-4 overflow-y-scroll">
+        <div class="mt-24 max-w-md  mx-auto flex flex-col gap-2 text-center">
+          <i class="fal fa-list-alt text-5xl"></i>
+          <span class="text-gray-700"
+            >Run test to see the results appear here</span
+          >
+        </div>
+      </div>
+    </div>`;
   }
   createRenderRoot() {
     return this;
@@ -768,20 +767,19 @@ class Step extends LitElement {
     return html`<article
       class="border rounded-lg group overflow-hidden relative"
     >
-      ${this.editModal
-        ? html`<step-modal
-            title=${this.data.title}
-            url=${this.getMethodUrl(this.data)[1]}
-            method=${this.getMethodUrl(this.data)[0]}
-            .asserts=${this.getAssertEntries(this.data.asserts)}
-            .headers=${this.getEntries(this.data.headers)}
-            .exports=${this.getEntries(this.data.exports)}
-            .params=${this.getEntries(this.data.params)}
-            .body=${this.data.json
-              ? { current: 'json', json: this.data.json }
-              : { current: 'form-data', url: this.getEntries(this.data.body) }}
-          ></step-modal>`
-        : null}
+      <step-modal
+        title=${this.data.title}
+        modal_id=${`edit_modal_${this.ind}`}
+        url=${this.getMethodUrl(this.data)[1]}
+        method=${this.getMethodUrl(this.data)[0]}
+        .asserts=${this.getAssertEntries(this.data.asserts)}
+        .headers=${this.getEntries(this.data.headers)}
+        .exports=${this.getEntries(this.data.exports)}
+        .params=${this.getEntries(this.data.params)}
+        .body=${this.data.json
+          ? { current: 'json', json: this.data.json }
+          : { current: 'form-data', url: this.getEntries(this.data.body) }}
+      ></step-modal>
       <div
         class="absolute text-gray-600 bg-gray-50 px-4  hidden  group-hover:flex items-center gap-3 right-2 translate-y-1/2"
       >
@@ -789,7 +787,10 @@ class Step extends LitElement {
         <button class="text-blue-500 text-lg">
           <i class="fa fa-play" aria-hidden="true"></i>
         </button>
-        <button @click=${() => (this.editModal = true)}>
+        <button
+          @click=${() =>
+            document.getElementById(`edit_modal_${this.ind}`).showModal()}
+        >
           <i class="fa fa-regular fa-edit" aria-hidden="true"></i>
         </button>
         <button
@@ -991,6 +992,7 @@ class NewStepModal extends LitElement {
     currentTab: {},
     exports: {},
     errors: {},
+    modal_id: {},
   };
   staticMethods = METHODS;
   constructor() {
@@ -1005,6 +1007,7 @@ class NewStepModal extends LitElement {
     this.asserts = [['', '']];
     this.body = { current: 'json', json: '', url: [['', '']] };
     this.exports = [['', '']];
+    this.modal_id = 'step_modal';
     this.showMethods = false;
     this.currentTab = 'Params';
     document.addEventListener('click', () => {
@@ -1137,225 +1140,186 @@ class NewStepModal extends LitElement {
 
   render() {
     return html`
-      <div
-        class="fixed inset-0 z-50 w-screen overflow-y-auto bg-gray-300 bg-opacity-50"
-        id="modal-bg"
-        @click=${(e) => {
-          const event = new CustomEvent('close-modal', {
-            detail: {},
-            bubbles: true,
-            composed: true,
-          });
-          this.dispatchEvent(event);
-        }}
-      >
-        <div
-          class="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0"
-        >
-          <div
-            class="relative transform overflow-hidden rounded-lg bg-white text-left transition-all  w-full max-w-2xl"
-            @click=${(e) => {
-              e.stopPropagation();
-              this.showMethods = false;
-            }}
+      <dialog class="modal" id=${this.modal_id}>
+        <div class="modal-box w-3/4 max-w-3xl">
+          <h3
+            class="text-lg w-full py-4 border-b font-semibold leading-6 text-gray-700"
+            id="modal-title"
           >
-            <div class="bg-white">
-              <h3
-                class="text-lg  w-full px-6 py-4 border-b font-semibold leading-6 text-gray-700"
-                id="modal-title"
-              >
-                Step details
-              </h3>
-              <div
-                class="px-6 py-4 items-start flex flex-col gap-5 text-gray-700 h-[60vh] overflow-y-auto"
-              >
-                ${this.errors.length > 0
-                  ? html`<div
-                      class="flex flex-col gap-1 bg-red-50 w-full p-4 rounded-lg"
-                    >
-                      ${this.errors.map(
-                        (err) => html`<p class="text-red-500">${err}</p>`
-                      )}
-                      <button
-                        @click=${() => (this.errors = [])}
-                        class="text-red-700"
-                      >
-                        <i class="fa fa-close"></i>
-                      </button>
-                    </div>`
-                  : null}
-                <div class="flex flex-col gap-1 w-full">
-                  <label for="title" class="text-sm font-medium leading-none"
-                    >Title</label
+            Step details
+          </h3>
+          <div
+            class="py-4 items-start flex flex-col gap-5 text-gray-700 h-[60vh] overflow-y-auto"
+          >
+            ${this.errors.length > 0
+              ? html`<div
+                  class="flex flex-col gap-1 bg-red-50 w-full p-4 rounded-lg"
+                >
+                  ${this.errors.map(
+                    (err) => html`<p class="text-red-500">${err}</p>`
+                  )}
+                  <button
+                    @click=${() => (this.errors = [])}
+                    class="text-red-700"
                   >
+                    <i class="fa fa-close"></i>
+                  </button>
+                </div>`
+              : null}
+            <div class="flex flex-col gap-1 w-full">
+              <label for="title" class="text-sm font-medium leading-none"
+                >Title</label
+              >
+              <input
+                .value=${this.title}
+                class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                @keyup=${(e) => (this.title = e.target.value)}
+                placeholder="Test Profile edit"
+              />
+            </div>
+            <div class="flex  mt-2 gap-2 w-full">
+              <div class="flex flex-col gap-1 relative">
+                <label for="title" class="text-sm font-medium leading-none"
+                  >Method</label
+                >
+                <div class="relative" @click=${(e) => e.stopPropagation()}>
                   <input
-                    .value=${this.title}
+                    placeholder="method"
+                    .value=${this.method}
+                    @focus=${() => (this.showMethods = true)}
+                    @keyup=${(e) => {
+                      this.method = e.target.value;
+                      let matched = this.methods.filter((method) =>
+                        method
+                          .toLowerCase()
+                          .startsWith(e.target.value.toLowerCase())
+                      );
+                      if (matched.length > 0 && e.target.value.length > 0) {
+                        this.methods = matched;
+                      } else {
+                        this.methods = this.staticMethods;
+                      }
+                    }}
                     class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                    @keyup=${(e) => (this.title = e.target.value)}
-                    placeholder="Test Profile edit"
                   />
-                </div>
-                <div class="flex  mt-2 gap-2 w-full">
-                  <div class="flex flex-col gap-1 relative">
-                    <label for="title" class="text-sm font-medium leading-none"
-                      >Method</label
-                    >
-                    <div class="relative" @click=${(e) => e.stopPropagation()}>
-                      <input
-                        placeholder="method"
-                        .value=${this.method}
-                        @focus=${() => (this.showMethods = true)}
-                        @keyup=${(e) => {
-                          this.method = e.target.value;
-                          let matched = this.methods.filter((method) =>
-                            method
-                              .toLowerCase()
-                              .startsWith(e.target.value.toLowerCase())
-                          );
-                          if (matched.length > 0 && e.target.value.length > 0) {
-                            this.methods = matched;
-                          } else {
-                            this.methods = this.staticMethods;
-                          }
-                        }}
-                        class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                      />
-                      <span class="absolute right-2 top-2">
-                        <i class="fa fa-chevron-down"></i>
-                      </span>
-                      ${this.showMethods
-                        ? html` <div
-                            class="w-full flex flex-col left-0 shadow-md rounded-lg bg-white z-10 absolute top-[100%]"
-                          >
-                            ${this.methods.map(
-                              (method) =>
-                                html`<button
-                                  class="px-4 py-2 text-left w-full hover:bg-gray-200 text-sm"
-                                  @click=${(e) => {
-                                    this.method = method;
-                                    this.showMethods = false;
-                                  }}
-                                >
-                                  ${method}
-                                </button>`
-                            )}
-                          </div>`
-                        : null}
-                    </div>
-                  </div>
-                  <div class="flex flex-col gap-1 relative w-full">
-                    <label for="title" class="text-sm font-medium leading-none"
-                      >URL</label
-                    >
-                    <input
-                      placeholder="Request URL"
-                      .value=${this.url}
-                      @input=${(e) => (this.url = e.target.value)}
-                      class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                    />
-                  </div>
-                </div>
-                <div class="w-full mt-2">
-                  <nav class="w-full">
-                    <ul
-                      class="flex gap-10 text-sm font-medium border-b w-full items-center text-gray-500"
-                    >
-                      <li>
-                        <button
-                          @click=${() => (this.currentTab = 'Params')}
-                          class="py-2 ${this.currentTab === 'Params'
-                            ? 'border-b border-b-blue-500 text-blue-500 font-medium'
-                            : ''}"
-                        >
-                          Params
-                        </button>
-                      </li>
-                      <li>
-                        <button
-                          @click=${() => (this.currentTab = 'Headers')}
-                          class="py-2 ${this.currentTab === 'Headers'
-                            ? 'border-b border-b-blue-500 text-blue-500 font-medium'
-                            : ''}"
-                        >
-                          Headers
-                        </button>
-                      </li>
-                      ${this.method !== 'GET'
-                        ? html`<li>
-                            <button
-                              @click=${() => (this.currentTab = 'Body')}
-                              class="py-2 ${this.currentTab === 'Body'
-                                ? 'border-b border-b-blue-500 text-blue-500 font-medium'
-                                : ''}"
+                  <span class="absolute right-2 top-2">
+                    <i class="fa fa-chevron-down"></i>
+                  </span>
+                  ${this.showMethods
+                    ? html` <div
+                        class="w-full flex flex-col left-0 shadow-md rounded-lg bg-white z-10 absolute top-[100%]"
+                      >
+                        ${this.methods.map(
+                          (method) =>
+                            html`<button
+                              class="px-4 py-2 text-left w-full hover:bg-gray-200 text-sm"
+                              @click=${(e) => {
+                                this.method = method;
+                                this.showMethods = false;
+                              }}
                             >
-                              Body
-                            </button>
-                          </li>`
-                        : null}
-                    </ul>
-                  </nav>
-                  <div class="py-3">
-                    ${this.currentTab === 'Params'
-                      ? html`<params-element
-                          .params=${this.params}
-                          eventName="update-params"
-                        ></params-element>`
-                      : this.currentTab === 'Headers'
-                        ? html`<headers-element
-                            .headers=${this.headers}
-                          ></headers-element>`
-                        : html`<body-element
-                            .body=${this.body}
-                          ></body-element>`}
-                  </div>
-                </div>
-                <div class="w-full">
-                  <assert-element .asserts=${this.asserts}></assert-element>
-                </div>
-                <div class="w-full">
-                  <h6
-                    class="text-sm font-medium mb-2 w-full items-center text-gray-500"
-                  >
-                    Exports
-                  </h6>
-                  <params-element
-                    .params=${this.exports}
-                    eventName="update-exports"
-                  ></params-element>
+                              ${method}
+                            </button>`
+                        )}
+                      </div>`
+                    : null}
                 </div>
               </div>
+              <div class="flex flex-col gap-1 relative w-full">
+                <label for="title" class="text-sm font-medium leading-none"
+                  >URL</label
+                >
+                <input
+                  placeholder="Request URL"
+                  .value=${this.url}
+                  @input=${(e) => (this.url = e.target.value)}
+                  class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                />
+              </div>
             </div>
-
-            <div
-              class=" px-4 py-3 sm:flex sm:flex-row-reverse sm:px-6 border-t"
-            >
-              <button
-                type="button"
-                @click=${(e) => {
-                  this.buildStep();
-                }}
-                class="btn btn-success sm:ml-3 sm:w-[100px]"
+            <div class="w-full mt-2">
+              <nav class="w-full">
+                <ul
+                  class="flex gap-10 text-sm font-medium border-b w-full items-center text-gray-500"
+                >
+                  <li>
+                    <button
+                      @click=${() => (this.currentTab = 'Params')}
+                      class="py-2 ${this.currentTab === 'Params'
+                        ? 'border-b border-b-blue-500 text-blue-500 font-medium'
+                        : ''}"
+                    >
+                      Params
+                    </button>
+                  </li>
+                  <li>
+                    <button
+                      @click=${() => (this.currentTab = 'Headers')}
+                      class="py-2 ${this.currentTab === 'Headers'
+                        ? 'border-b border-b-blue-500 text-blue-500 font-medium'
+                        : ''}"
+                    >
+                      Headers
+                    </button>
+                  </li>
+                  ${this.method !== 'GET'
+                    ? html`<li>
+                        <button
+                          @click=${() => (this.currentTab = 'Body')}
+                          class="py-2 ${this.currentTab === 'Body'
+                            ? 'border-b border-b-blue-500 text-blue-500 font-medium'
+                            : ''}"
+                        >
+                          Body
+                        </button>
+                      </li>`
+                    : null}
+                </ul>
+              </nav>
+              <div class="py-3">
+                ${this.currentTab === 'Params'
+                  ? html`<params-element
+                      .params=${this.params}
+                      eventName="update-params"
+                    ></params-element>`
+                  : this.currentTab === 'Headers'
+                    ? html`<headers-element
+                        .headers=${this.headers}
+                      ></headers-element>`
+                    : html`<body-element .body=${this.body}></body-element>`}
+              </div>
+            </div>
+            <div class="w-full">
+              <assert-element .asserts=${this.asserts}></assert-element>
+            </div>
+            <div class="w-full">
+              <h6
+                class="text-sm font-medium mb-2 w-full items-center text-gray-500"
               >
-                Save
-              </button>
-              <button
-                type="button"
-                @click=${() => {
-                  const event = new CustomEvent('close-modal', {
-                    detail: {},
-                    bubbles: true,
-                    composed: true,
-                  });
-                  this.dispatchEvent(event);
-                }}
-                class="btn btn-outline"
-              >
-                Close
-              </button>
+                Exports
+              </h6>
+              <params-element
+                .params=${this.exports}
+                eventName="update-exports"
+              ></params-element>
             </div>
           </div>
+          <form method="dialog" class="modal-action">
+            <button
+              type="button"
+              @click=${(e) => {
+                this.buildStep();
+              }}
+              class="btn btn-success w-40"
+            >
+              Save
+            </button>
+          </form>
         </div>
-      </div>
+        <form method="dialog" class="modal-backdrop">
+          <button>close</button>
+        </form>
+      </dialog>
     `;
   }
 
