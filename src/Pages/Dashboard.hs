@@ -19,7 +19,7 @@ import Effectful.PostgreSQL.Transact.Effect
 import Effectful.Reader.Static (ask)
 import Fmt
 import Lucid
-import Lucid.Htmx (hxPost_, hxSwap_)
+import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -128,39 +128,30 @@ dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRoll
   let currentURL' = deleteParam "to" $ deleteParam "from" $ deleteParam "since" paramInput.currentURL
   let bulkActionBase = "/p/" <> pid.toText <> "/anomalies/bulk_actions"
   section_ [class_ "p-8  mx-auto px-16 w-full space-y-12 pb-24 overflow-y-scroll  h-full"] do
-    unless (null newEndpoints) $ form_
-      [ style_ "z-index:99999"
-      , class_ "fixed pt-24 justify-center z-50 hidden w-full p-4 bg-[rgba(0,0,0,0.2)] overflow-y-auto inset-0 h-full max-h-full"
-      , tabindex_ "-1"
-      , id_ "newEndpointsModal"
-      , hxPost_ $ bulkActionBase <> "/acknowlege"
-      , hxSwap_ "outerHTML"
-      ]
-      do
-        div_
-          [ class_ "relative mx-auto max-h-full"
-          , style_ "width: min(90vw, 800px)"
-          ]
-          do
-            -- Modal content
-            div_
-              [ class_ "bg-white rounded-lg drop-shadow-md border-1 w-full"
-              ]
-              do
-                div_ [class_ "flex items-start justify-between p-4 border-b rounded-t"] do
-                  h3_ [class_ "text-xl font-bold text-gray-900"] "New Endpoints Detected"
-                  button_ [type_ "button", class_ "px-3 font-bold py-2 rounded bg-gray-200", onclick_ "closeNewEndpointsModal(event)"] "close"
-                -- Modal body
-                div_ [class_ "w-full"] do
-                  div_ [class_ "p-4 text-xl space-y-6 overflow-y-auto", style_ "min-height:30vh;max-height:70vh; width:100%"] do
-                    mapM_ (renderEndpoint False currTime) newEndpoints
-                -- Modal footer
-                div_ [class_ "flex w-full justify-end items-center p-6 gap-4 space-x-2 border-t border-gray-200 rounded-b"] do
-                  button_
-                    [ class_ "btn btn-primary"
-                    , [__|on click set .endpoint_anomaly_input.checked to true then htmx.trigger("#newEndpointsModal", "submit")|]
-                    ]
-                    "Acknowledge All"
+    unless (null newEndpoints) $
+      div_ [id_ "modalContainer"] do
+        input_ [type_ "checkbox", id_ "newEndpointsModal", class_ "modal-toggle"]
+        div_ [class_ "modal", role_ "dialog", hxSwap_ "outerHTML"] do
+          form_
+            [ class_ "modal-box w-1/2 max-w-5xl"
+            , hxPost_ $ bulkActionBase <> "/acknowlege"
+            , id_ "endpointsForm"
+            ]
+            do
+              div_ [class_ "flex items-start justify-between"] do
+                h3_ [class_ "text-xl font-bold text-gray-900"] "New Endpoints Detected"
+                button_ [type_ "button", class_ "btn", onclick_ "closeNewEndpointsModal(event)"] "close"
+              div_ [class_ "w-full"] do
+                div_ [class_ "text-xl space-y-6 overflow-y-auto", style_ "min-height:30vh;max-height:70vh; width:100%"] do
+                  mapM_ (renderEndpoint False currTime) newEndpoints
+              div_ [class_ "flex w-full justify-end items-center p-6 gap-4 space-x-2 border-t border-gray-200 rounded-b"] do
+                button_
+                  [ class_ "btn btn-primary"
+                  , [__|on click set .endpoint_anomaly_input.checked to true then htmx.trigger("#endpointsForm", "submit")|]
+                  ]
+                  "Acknowledge All"
+          label_ [class_ "modal-backdrop", Lucid.for_ "newEndpointsModal"] "Close"
+
     div_ [class_ "relative p-1 "] do
       div_ [class_ "relative"] do
         a_
@@ -191,13 +182,13 @@ dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRoll
     [text|
 
     function closeNewEndpointsModal(event) {
-      document.getElementById("newEndpointsModal").classList.add("hidden")
+      document.getElementById("newEndpointsModal").checked = false
       sessionStorage.setItem('closedNewEndpointsModal', 'true')
     }
 
     document.addEventListener('DOMContentLoaded', function() {
        if(!sessionStorage.getItem('closedNewEndpointsModal')) {
-           document.getElementById("newEndpointsModal").classList.remove("hidden")
+           document.getElementById("newEndpointsModal").checked = true
         }
     })
     
@@ -237,8 +228,8 @@ dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledBySte
 
   section_ [class_ "space-y-3"] do
     div_ [class_ "flex justify-between mt-4"] $ div_ [class_ "flex flex-row"] do
-      a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
-        $ faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 w-4 mr-3 inline-block"
+      a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]] $
+        faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 w-4 mr-3 inline-block"
       span_ [class_ "text-lg text-slate-700"] "Analytics"
 
     div_ [class_ "reqResSubSection space-y-5"] do
