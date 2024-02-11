@@ -205,8 +205,8 @@ class Filter extends LitElement {
     'service_version',
   ];
 
-  string_operators = ['=', '!='];
-  number_operators = ['=', '!=', '>=', '<='];
+  string_operators = ['==', '!='];
+  number_operators = ['==', '>', '<', '!=', '>=', '<='];
 
   filterAutoComplete = {
     method: {
