@@ -138,9 +138,10 @@ dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRoll
             , id_ "endpointsForm"
             ]
             do
-              div_ [class_ "flex items-start justify-between"] do
+              div_ [class_ "flex items-start py-2 border-b justify-between"] do
                 h3_ [class_ "text-xl font-bold text-gray-900"] "New Endpoints Detected"
-                button_ [type_ "button", class_ "btn", onclick_ "closeNewEndpointsModal(event)"] "close"
+                button_ [type_ "button", class_ "btn btn btn-sm btn-circle btn-ghost text-xl", onclick_ "closeNewEndpointsModal(event)"] do
+                  faIcon_ "fa-close" "fa-light fa-close" "h-4 w-4 inline-block"
               div_ [class_ "w-full"] do
                 div_ [class_ "text-xl space-y-6 overflow-y-auto", style_ "min-height:30vh;max-height:70vh; width:100%"] do
                   mapM_ (renderEndpoint False currTime) newEndpoints
