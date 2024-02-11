@@ -141,7 +141,7 @@ logQueryBox_ pid currentRange =
     , hxTarget_ "#resultTable"
     , hxSwap_ "outerHTML"
     , id_ "log_explorer_form"
-    -- , hxIndicator_ "#query-indicator"
+    , hxIndicator_ "#run-query-indicator"
     ]
     do
       nav_ [class_ "flex flex-row p-2 content-end justify-between items-baseline border-slate-100"] do
@@ -183,6 +183,7 @@ logQueryBox_ pid currentRange =
           button_
             [type_ "submit", class_ "btn btn-sm btn-success"]
             do
+              span_ [id_ "run-query-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-md"] ""
               faIcon_ "fa-sparkles" "fa-sharp fa-regular fa-sparkles" "h-3 w-3 inline-block"
               span_ "Run query"
       div_ do
