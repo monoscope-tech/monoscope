@@ -232,8 +232,8 @@ apiLogsPage page = do
 
     div_ [class_ "card-round w-full grow divide-y flex flex-col text-sm h-full overflow-y-hidden overflow-x-hidden"] do
       div_ [class_ "flex-1 "] do
-        div_ [class_ "pl-3 py-1 flex flex-row justify-between"]
-          $ a_ [class_ "cursor-pointer inline-block pr-3 space-x-2 bg-blue-50 hover:bg-blue-100 blue-800 p-1 rounded-md", [__|on click toggle .hidden on #reqsChartParent|]] do
+        div_ [class_ "pl-3 py-1 flex flex-row justify-between"] $
+          a_ [class_ "cursor-pointer inline-block pr-3 space-x-2 bg-blue-50 hover:bg-blue-100 blue-800 p-1 rounded-md", [__|on click toggle .hidden on #reqsChartParent|]] do
             faIcon_ "fa-chart-bar" "fa-regular fa-chart-bar" "h-3 w-3 inline-block"
             span_ [] "toggle chart"
         reqChart_ page.reqChartTxt False
@@ -243,10 +243,10 @@ apiLogsPage page = do
 
 resultTableAndMeta_ :: ApiLogsPageData -> Html ()
 resultTableAndMeta_ page = do
-  div_ [class_ "flex-1 pl-3 py-2 space-x-5 flex flex-row justify-between"]
-    $ resultTableMetaRow_ page
-  section_ [class_ "grow relative overflow-y-scroll h-full"]
-    $ resultTable_ page
+  div_ [class_ "flex-1 pl-3 py-2 space-x-5 flex flex-row justify-between"] $
+    resultTableMetaRow_ page
+  section_ [class_ "grow relative overflow-y-scroll h-full"] do
+    resultTable_ page
 
 
 resultTableMetaRow_ :: ApiLogsPageData -> Html ()
@@ -257,13 +257,14 @@ resultTableMetaRow_ page = do
       span_ [id_ "resultCount"] $ show page.resultCount
       span_ " log entries"
   a_
-    [ class_ "cursor-pointer inline-block pr-3 space-x-2"
+    [ class_ "cursor-pointer flex gap-2 items-center pr-3"
     , hxGet_ page.resetLogsURL
     , hxTarget_ "#log-item-table-body"
     , hxSwap_ "innerHTML scroll:#log-item-table-body:top"
-    -- , hxIndicator_ "#query-indicator"
+    , hxIndicator_ "#refresh-indicator"
     ]
     do
+      span_ [id_ "refresh-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-md"] ""
       svg_ [class_ "w-4 h-4 icon text-slate-500 inline-block"] $ use_ [href_ "/assets/svgs/sprite/sprite.svg#refresh"]
       span_ [] "refresh"
 
@@ -299,39 +300,41 @@ logItemRows_ pid requests curatedCols colIdxMap nextLogsURL = do
   forM_ requests \reqVec -> do
     let logItemPath = requestDumpLogItemUrlPath pid reqVec colIdxMap
     let (_, errCount, errClass) = errorClass True reqVec colIdxMap
-    tr_ [class_ "cursor-pointer ", [__|on click toggle .hidden on next <tr/> then toggle .expanded-log on me|]]
-      $ forM_ curatedCols (td_ . logItemCol_ pid reqVec colIdxMap)
+    tr_ [class_ "cursor-pointer ", [__|on click toggle .hidden on next <tr/> then toggle .expanded-log on me|]] $
+      forM_ curatedCols (td_ . logItemCol_ pid reqVec colIdxMap)
     tr_ [class_ "hidden"] $ do
       -- used for when a row is expanded.
       td_ $ a_ [class_ $ "inline-block h-full  " <> errClass, term "data-tip" $ show errCount <> " errors attached to this request"] ""
       td_ [colspan_ $ show $ length curatedCols - 1] $ div_ [hxGet_ $ fromMaybe "" logItemPath, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
-  when (Vector.length requests > 199)
-    $ tr_
-    $ td_ [colspan_ $ show $ length curatedCols]
-    $ a_
-      [ class_ "cursor-pointer inline-flex justify-center py-1 px-56 ml-36 blue-800 bg-blue-100 hover:bg-blue-200 text-center "
-      , hxTrigger_ "click"
-      , hxSwap_ "outerHTML"
-      , hxGet_ nextLogsURL
-      , hxTarget_ "closest tr"
-      -- , hxIndicator_ "next .htmx-indicator"
-      ]
-      do
-        span_ [class_ "inline-block"] "LOAD MORE " >> span_ [class_ "htmx-indicator loading loading-dots loading-lg inline-block pl-3"] loader
+  when (Vector.length requests > 199) $
+    tr_ $
+      td_ [colspan_ $ show $ length curatedCols] $
+        a_
+          [ class_ "cursor-pointer inline-flex justify-center py-1 px-56 ml-36 blue-800 bg-blue-100 hover:bg-blue-200 text-center "
+          , hxTrigger_ "click"
+          , hxSwap_ "outerHTML"
+          , hxGet_ nextLogsURL
+          , hxTarget_ "closest tr"
+          -- , hxIndicator_ "next .htmx-indicator"
+          ]
+          do
+            span_ [class_ "inline-block"] "LOAD MORE " >> span_ [class_ "htmx-indicator loading loading-dots loading-lg inline-block pl-3"] loader
 
 
 errorClass :: Bool -> V.Vector Value -> HM.HashMap Text Int -> (Int, Int, Text)
 errorClass expandedSection reqVec colIdxMap =
   let errCount = lookupVecIntByKey reqVec colIdxMap "errors_count"
       status = lookupVecIntByKey reqVec colIdxMap "status_code"
-      errClass = if | errCount > 0 -> " w-1 bg-red-500 "
-                    | status >= 400 -> " w-1 bg-warning "
-                    | expandedSection -> " w-1 bg-blue-200 "
-                    | otherwise -> " w-1 bg-transparent status-indicator "
-
+      errClass =
+        if
+          | errCount > 0 -> " w-1 bg-red-500 "
+          | status >= 400 -> " w-1 bg-warning "
+          | expandedSection -> " w-1 bg-blue-200 "
+          | otherwise -> " w-1 bg-transparent status-indicator "
    in ( status
       , errCount
-      , errClass )
+      , errClass
+      )
 
 
 logTableHeading_ :: Projects.ProjectId -> Bool -> Text -> Html ()
@@ -393,9 +396,9 @@ logItemCol_ pid reqVec colIdxMap key@"rest" = div_ [class_ "space-x-2 whitespace
   span_ [class_ "badge badge-ghost", term "data-tip" "Host"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "host"
   span_ [] $ toHtml $ maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)
 logItemCol_ _ reqVec colIdxMap key =
-  div_ [class_ "xwhitespace-nowrap xoverflow-x-hidden max-w-lg", term "data-tip" key]
-    $ toHtml
-    $ maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)
+  div_ [class_ "xwhitespace-nowrap xoverflow-x-hidden max-w-lg", term "data-tip" key] $
+    toHtml $
+      maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)
 
 
 reqChart_ :: Text -> Bool -> Html ()
