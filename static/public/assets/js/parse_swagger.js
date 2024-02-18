@@ -413,6 +413,33 @@ function getTypeAndFormat(type, format) {
     return { type: "string", format: "text" };
 }
 
+function resolveRefs(data, components) {
+    if (Array.isArray(data)) {
+        return data.map(item => resolveRefs(item, components));
+    } else if (typeof data === 'object' && data !== null) {
+        if ('$ref' in data) {
+            const refPath = data.$ref.replace('#/components/', '');
+            const refComponents = refPath.split('/');
+            let referencedData = components;
+
+            for (const refComponent of refComponents) {
+                referencedData = referencedData[refComponent];
+            }
+            return resolveRefs(referencedData, components);
+        } else {
+            const resolvedData = {};
+            for (const key in data) {
+                resolvedData[key] = resolveRefs(data[key], components);
+            }
+
+            return resolvedData;
+        }
+    } else {
+        return data;
+    }
+}
+
+
 
 function getKeyPaths(value) {
     if (!value) {
@@ -438,3 +465,6 @@ function getKeyPathsHelper(value, path) {
     const { type, format } = getTypeAndFormat(value.type, value.format)
     return [{ type, description: value.description || "", format, example: value.example || "", keypath: path }]
 }
+
+
+exports.default  = {resolveRefs}
