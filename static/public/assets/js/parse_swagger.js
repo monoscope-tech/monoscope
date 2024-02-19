@@ -235,7 +235,8 @@ async function saveData(swaggerId, modifiedObject, shapes, endpoints) {
       (shape) => shape.opShapeChanged || shape.opOperations.length > 0
     ),
   };
-
+  console.log(shapes, endpoints);
+  return;
   try {
     const response = await fetch(url, {
       method: "POST",
@@ -558,6 +559,53 @@ function getKeyPathsHelper(value, path) {
       keypath: path,
     },
   ];
+}
+
+function resolveAllOf(data) {
+  if (typeof data === "object" && data !== null) {
+    if ("allOf" in data) {
+      const mergedData = {};
+
+      data.allOf.forEach((obj) => {
+        const resolvedObj = resolveAllOf(obj);
+        Object.assign(mergedData, resolvedObj);
+      });
+
+      return mergedData;
+    } else {
+      const resolvedData = {};
+
+      for (const key in data) {
+        resolvedData[key] = resolveAllOf(data[key]);
+      }
+
+      return resolvedData;
+    }
+  } else {
+    return data;
+  }
+}
+
+function hasOneOfOrAnyOf(content) {
+  if (typeof content === "object" && content !== null) {
+    if ("oneOf" in content || "anyOf" in content) {
+      return true;
+    } else if ("schema" in content && typeof content.schema === "object") {
+      return hasOneOfOrAnyOf(content.schema);
+    } else if (
+      "properties" in content &&
+      typeof content.properties === "object"
+    ) {
+      for (const key in content.properties) {
+        if (hasOneOfOrAnyOf(content.properties[key])) {
+          return true;
+        }
+      }
+    } else if ("items" in content && typeof content.items === "object") {
+      return hasOneOfOrAnyOf(content.items);
+    }
+  }
+  return false;
 }
 
 exports.default = {

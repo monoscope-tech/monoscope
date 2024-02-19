@@ -708,7 +708,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
 
   script_ [src_ "https://unpkg.com/swagger-ui-dist@4.5.0/swagger-ui-bundle.js", crossorigin_ "true"] ("" :: Text)
   script_ [src_ "/assets/js/swagger_endpoints.js"] ("" :: Text)
-  script_ [src_ "/assets/js/build_keypaths.js"] ("" :: Text)
+  script_ [src_ "/assets/js/parse_swagger.js"] ("" :: Text)
   script_ [src_ "https://unpkg.com/js-yaml/dist/js-yaml.min.js", crossorigin_ "true"] ("" :: Text)
   script_
     [text|

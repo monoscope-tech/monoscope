@@ -1,4 +1,4 @@
-const { resolveRefs, parseHeadersAndParams } =
+const { resolveRefs, parseHeadersAndParams, parseRequestBody } =
   require("./parse_swagger.js").default;
 
 it("Should resolve all refs", () => {
@@ -177,4 +177,79 @@ it("should recursively resolve all refs", () => {
     },
   };
   expect(resolveRefs(data, components)).toMatchObject(expectedData);
+});
+
+it("should test requestBodies", () => {
+  const data = {
+    content: {
+      "application/json": {
+        schema: {
+          $ref: "#/components/schemas/Cat",
+        },
+      },
+    },
+  };
+  const component = {
+    schemas: {
+      Cat: {
+        type: "object",
+        properties: {
+          hunts: {
+            type: "boolean",
+          },
+          age: {
+            type: "integer",
+          },
+          tags: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                breed: {
+                  type: "string",
+                  example: "bob cat",
+                  description: "what?",
+                  format: "bandicut",
+                },
+                category: {
+                  type: "string",
+                  example: "big cats",
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+  const expectedData = [
+    {
+      type: "bool",
+      description: "",
+      format: "boolean",
+      example: "",
+      keypath: ".hunts",
+    },
+    {
+      type: "number",
+      format: "int64",
+      description: "",
+      example: "",
+      keypath: ".age",
+    },
+    {
+      type: "string",
+      format: "bandicut",
+      description: "what?",
+      example: "bob cat",
+      keypath: ".tags[*].breed",
+    },
+    {
+      type: "string",
+      format: "text",
+      description: "",
+      keypath: ".tags[*].category",
+    },
+  ];
+  expect(parseRequestBody(data, component)).toMatchObject(expectedData);
 });
