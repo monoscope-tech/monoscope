@@ -4,6 +4,9 @@ on:
   push:
     branches: [ master ]
 
+env:
+  LANG: C.UTF-8
+
 jobs:
   runhaskell:
     name: Build and test 
