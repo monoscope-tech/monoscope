@@ -379,6 +379,7 @@ function parseResponses(responses, components) {
     return undefined;
   }
   responses = resolveRefs(responses, components);
+  responses = resolveAllOf(responses);
   let ob = {};
 
   //key is status code
@@ -422,6 +423,7 @@ function parseRequestBody(body, components) {
     return [];
   }
   body = resolveRefs(body, components);
+  body = resolveAllOf(body);
   if (body.content) {
     const content = body.content;
     for (let [_, value] of Object.entries(content)) {
@@ -447,6 +449,7 @@ function parseHeadersAndParams(headers, parameters, components) {
 
   if (!parameters || !Array.isArray(parameters)) return ob;
   parameters = resolveRefs(parameters, components);
+  parameters = resolveAllOf(parameters);
   parameters.forEach((param) => {
     const { type, format } = getTypeAndFormat(
       param.schema?.type,
@@ -569,22 +572,29 @@ function getKeyPathsHelper(value, path) {
 
 function resolveAllOf(data) {
   if (typeof data === "object" && data !== null) {
-    if ("allOf" in data) {
-      const mergedData = {};
-
+    if ("allOf" in data && Array.isArray(data["allOf"])) {
+      let mergedData = {};
       data.allOf.forEach((obj) => {
         const resolvedObj = resolveAllOf(obj);
+        if (resolvedObj.properties) {
+          mergedData = {
+            ...mergedData,
+            properties: { ...mergedData.properties, ...resolvedObj.properties },
+          };
+          delete resolvedObj.properties;
+        }
         Object.assign(mergedData, resolvedObj);
       });
-
       return mergedData;
     } else {
-      const resolvedData = {};
-
-      for (const key in data) {
-        resolvedData[key] = resolveAllOf(data[key]);
+      let resolvedData = {};
+      if (Array.isArray(data)) {
+        resolvedData = data.map((val) => resolveAllOf(val));
+      } else {
+        for (const key in data) {
+          resolvedData[key] = resolveAllOf(data[key]);
+        }
       }
-
       return resolvedData;
     }
   } else {
@@ -596,18 +606,11 @@ function hasOneOfOrAnyOf(content) {
   if (typeof content === "object" && content !== null) {
     if ("oneOf" in content || "anyOf" in content) {
       return true;
-    } else if ("schema" in content && typeof content.schema === "object") {
+    } else if ("schema" in content) {
       return hasOneOfOrAnyOf(content.schema);
-    } else if (
-      "properties" in content &&
-      typeof content.properties === "object"
-    ) {
-      for (const key in content.properties) {
-        if (hasOneOfOrAnyOf(content.properties[key])) {
-          return true;
-        }
-      }
-    } else if ("items" in content && typeof content.items === "object") {
+    } else if ("properties" in content) {
+      return hasOneOfOrAnyOf(content.properties);
+    } else if ("items" in content) {
       return hasOneOfOrAnyOf(content.items);
     }
   }
@@ -627,4 +630,6 @@ exports.default = {
   parseHeadersAndParams,
   parseRequestBody,
   parseResponses,
+  resolveAllOf,
+  hasOneOfOrAnyOf,
 };

@@ -1,5 +1,11 @@
-const { resolveRefs, parseHeadersAndParams, parseRequestBody, parseResponses } =
-  require("./parse_swagger.js").default;
+const {
+  resolveRefs,
+  parseHeadersAndParams,
+  parseRequestBody,
+  hasOneOfOrAnyOf,
+  parseResponses,
+  resolveAllOf,
+} = require("./parse_swagger.js").default;
 
 it("Should resolve all refs", () => {
   const components = {
@@ -402,4 +408,120 @@ it("should parse responses", () => {
   expect(parseResponses(response, component)).toMatchObject({
     200: expectedData,
   });
+});
+
+it("Should resolve allOf", () => {
+  const data = {
+    schemas: {
+      Dog: {
+        allOf: [
+          {
+            type: "object",
+            properties: {
+              pet_type: {
+                type: "string",
+              },
+            },
+          },
+          {
+            type: "object",
+            properties: {
+              bark: {
+                type: "boolean",
+              },
+              breed: {
+                type: "string",
+                enum: ["Dingo", "Husky", "Retriever", "Shepherd"],
+              },
+            },
+          },
+        ],
+      },
+    },
+  };
+
+  const expectedData = {
+    schemas: {
+      Dog: {
+        type: "object",
+        properties: {
+          pet_type: {
+            type: "string",
+          },
+          bark: {
+            type: "boolean",
+          },
+          breed: {
+            type: "string",
+            enum: ["Dingo", "Husky", "Retriever", "Shepherd"],
+          },
+        },
+      },
+    },
+  };
+  expect(resolveAllOf(data)).toMatchObject(expectedData);
+});
+
+it("should check anyOf or oneOf", () => {
+  const data = {
+    schema: {
+      oneOf: [
+        {
+          $ref: "#/components/schemas/Cat",
+        },
+        {
+          $ref: "#/components/schemas/Dog",
+        },
+      ],
+    },
+  };
+  const data2 = {
+    schema: {
+      type: "object",
+      properties: {
+        anyOf: [
+          {
+            $ref: "#/components/schemas/Cat",
+          },
+          {
+            $ref: "#/components/schemas/Dog",
+          },
+        ],
+      },
+    },
+  };
+  const data3 = {
+    schema: {
+      type: "array",
+      items: {
+        anyOf: [
+          {
+            $ref: "#/components/schemas/Cat",
+          },
+          {
+            $ref: "#/components/schemas/Dog",
+          },
+        ],
+      },
+    },
+  };
+  const data4 = {
+    schema: {
+      type: "array",
+      items: {
+        anyOoof: [
+          {
+            $ref: "#/components/schemas/Cat",
+          },
+          {
+            $ref: "#/components/schemas/Dog",
+          },
+        ],
+      },
+    },
+  };
+  expect(hasOneOfOrAnyOf(data)).toBe(true);
+  expect(hasOneOfOrAnyOf(data2)).toBe(true);
+  expect(hasOneOfOrAnyOf(data3)).toBe(true);
+  expect(hasOneOfOrAnyOf(data4)).toBe(false);
 });
