@@ -392,12 +392,18 @@ function parseResponses(responses, components) {
       let headers = value.headers
         ? value.headers.content
           ? value.headers.content.schema
-          : {}
-        : {};
+          : undefined
+        : undefined;
       if (!headers) {
         headers = value.headers;
       }
-      const headersKeypaths = getKeyPaths(headers);
+      for (let [header, value] of Object.entries(headers)) {
+        headers[header] = mapHeaders(value);
+      }
+      const headersKeypaths = getKeyPaths({
+        properties: { ...headers },
+        type: "object",
+      });
       for (const [contentType, v] of Object.entries(value.content)) {
         let schema = v.schema;
         ob[key] = {
@@ -606,6 +612,14 @@ function hasOneOfOrAnyOf(content) {
     }
   }
   return false;
+}
+
+function mapHeaders(header) {
+  if (!header.hasOwnProperty("content"))
+    return header.schema ? header.schema : header;
+  for (let [contentType, value] of Object.entries(header.content)) {
+    return value.schema;
+  }
 }
 
 exports.default = {

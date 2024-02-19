@@ -1,4 +1,4 @@
-const { resolveRefs, parseHeadersAndParams, parseRequestBody } =
+const { resolveRefs, parseHeadersAndParams, parseRequestBody, parseResponses } =
   require("./parse_swagger.js").default;
 
 it("Should resolve all refs", () => {
@@ -179,7 +179,7 @@ it("should recursively resolve all refs", () => {
   expect(resolveRefs(data, components)).toMatchObject(expectedData);
 });
 
-it("should test requestBodies", () => {
+it("should parse requestBodies", () => {
   const data = {
     content: {
       "application/json": {
@@ -252,4 +252,154 @@ it("should test requestBodies", () => {
     },
   ];
   expect(parseRequestBody(data, component)).toMatchObject(expectedData);
+});
+
+it("should parse responses", () => {
+  const response = {
+    200: {
+      headers: {
+        "Access-Control-Allow-Headers": {
+          content: {
+            "text/plain": {
+              schema: {
+                type: "string",
+                example: "X-Requested-With,content-type,authorization",
+              },
+              example: "X-Requested-With,content-type,authorization",
+            },
+          },
+        },
+
+        "Content-Length": {
+          content: {
+            "text/plain": {
+              schema: {
+                type: "string",
+                example: "11083",
+              },
+              example: "11083",
+            },
+          },
+        },
+      },
+      content: {
+        "application/json": {
+          schema: {
+            $ref: "#/components/schemas/GetAuthbyid",
+          },
+        },
+      },
+      description: "OK",
+    },
+  };
+  const component = {
+    schemas: {
+      GetAuthbyid: {
+        type: "object",
+        properties: {
+          status: {
+            type: "string",
+          },
+          data: {
+            $ref: "#/components/schemas/Data",
+          },
+        },
+      },
+      Data: {
+        title: "Data",
+        type: "object",
+        properties: {
+          pagination: {
+            $ref: "#/components/schemas/Pagination",
+          },
+          auths: {
+            description: "",
+            type: "array",
+            items: {
+              $ref: "#/components/schemas/Auth",
+            },
+          },
+        },
+      },
+      Pagination: {
+        type: "object",
+        properties: {
+          limit: {
+            format: "int32",
+            type: "integer",
+          },
+        },
+      },
+      Auth: {
+        type: "object",
+        properties: {
+          validated: {
+            type: "boolean",
+          },
+          id: {
+            type: "string",
+          },
+        },
+      },
+    },
+  };
+  // {
+  //   type,
+  //   description: value.description || "",
+  //   format,
+  //   example: value.example || "",
+  //   keypath: path,
+  // },
+
+  expectedData = {
+    responseBodyKeyPaths: [
+      {
+        keypath: ".status",
+        type: "string",
+        format: "text",
+        example: "",
+        description: "",
+      },
+      {
+        keypath: ".data.pagination.limit",
+        type: "number",
+        format: "int32",
+        example: "",
+        description: "",
+      },
+      {
+        keypath: ".data.auths[*].validated",
+        type: "bool",
+        format: "boolean",
+        example: "",
+        description: "",
+      },
+      {
+        keypath: ".data.auths[*].id",
+        type: "string",
+        format: "text",
+        example: "",
+        description: "",
+      },
+    ],
+    responseHeadersKeyPaths: [
+      {
+        keypath: ".Access-Control-Allow-Headers",
+        type: "string",
+        format: "text",
+        example: "X-Requested-With,content-type,authorization",
+        description: "",
+      },
+      {
+        keypath: ".Content-Length",
+        type: "string",
+        format: "text",
+        example: "11083",
+        description: "",
+      },
+    ],
+  };
+  expect(parseResponses(response, component)).toMatchObject({
+    200: expectedData,
+  });
 });
