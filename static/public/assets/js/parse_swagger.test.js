@@ -609,3 +609,88 @@ it("should get anyof and oneof values", () => {
   expect(getAnyOfOrOneOfValues(data)).toMatchObject(expectedData);
   expect(getAnyOfOrOneOfValues(data2)).toMatchObject(exD);
 });
+
+it("should parse request body with anyof or oneof", () => {
+  const data = {
+    content: {
+      "application/json": {
+        schema: {
+          anyOf: [
+            {
+              $ref: "#/components/schemas/PetByAge",
+            },
+            {
+              $ref: "#/components/schemas/PetByType",
+            },
+          ],
+        },
+      },
+    },
+  };
+  const component = {
+    schemas: {
+      PetByAge: {
+        type: "object",
+        properties: {
+          age: {
+            type: "integer",
+          },
+          nickname: {
+            type: "string",
+          },
+        },
+        required: ["age"],
+      },
+      PetByType: {
+        type: "object",
+        properties: {
+          pet_type: {
+            type: "string",
+            enum: ["Cat", "Dog"],
+          },
+          hunts: {
+            type: "boolean",
+          },
+        },
+        required: ["pet_type"],
+      },
+    },
+  };
+
+  const expectedData = [
+    [
+      {
+        type: "number",
+        description: "",
+        format: "int64",
+        example: "",
+        keypath: ".age",
+      },
+      {
+        type: "string",
+        description: "",
+        format: "text",
+        example: "",
+        keypath: ".nickname",
+      },
+    ],
+    [
+      {
+        type: "string",
+        description: "",
+        format: "text",
+        example: "",
+        keypath: ".pet_type",
+      },
+      {
+        type: "bool",
+        description: "",
+        format: "boolean",
+        example: "",
+        keypath: ".hunts",
+      },
+    ],
+  ];
+
+  expect(parseRequestBody(data, component)).toMatchObject(expectedData);
+});

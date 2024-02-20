@@ -545,6 +545,7 @@ function resolveRefs(data, components) {
       const refComponents = refPath.split("/");
       let referencedData = components;
       for (const refComponent of refComponents) {
+        console.log(referencedData);
         referencedData = referencedData[refComponent];
       }
       return resolveRefs(referencedData, components);
