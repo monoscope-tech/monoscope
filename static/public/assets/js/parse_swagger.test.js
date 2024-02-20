@@ -230,33 +230,35 @@ it("should parse requestBodies", () => {
     },
   };
   const expectedData = [
-    {
-      type: "bool",
-      description: "",
-      format: "boolean",
-      example: "",
-      keypath: ".hunts",
-    },
-    {
-      type: "number",
-      format: "int64",
-      description: "",
-      example: "",
-      keypath: ".age",
-    },
-    {
-      type: "string",
-      format: "bandicut",
-      description: "what?",
-      example: "bob cat",
-      keypath: ".tags[*].breed",
-    },
-    {
-      type: "string",
-      format: "text",
-      description: "",
-      keypath: ".tags[*].category",
-    },
+    [
+      {
+        type: "bool",
+        description: "",
+        format: "boolean",
+        example: "",
+        keypath: ".hunts",
+      },
+      {
+        type: "number",
+        format: "int64",
+        description: "",
+        example: "",
+        keypath: ".age",
+      },
+      {
+        type: "string",
+        format: "bandicut",
+        description: "what?",
+        example: "bob cat",
+        keypath: ".tags[*].breed",
+      },
+      {
+        type: "string",
+        format: "text",
+        description: "",
+        keypath: ".tags[*].category",
+      },
+    ],
   ];
   expect(parseRequestBody(data, component)).toMatchObject(expectedData);
 });
@@ -350,44 +352,39 @@ it("should parse responses", () => {
       },
     },
   };
-  // {
-  //   type,
-  //   description: value.description || "",
-  //   format,
-  //   example: value.example || "",
-  //   keypath: path,
-  // },
 
   expectedData = {
     responseBodyKeyPaths: [
-      {
-        keypath: ".status",
-        type: "string",
-        format: "text",
-        example: "",
-        description: "",
-      },
-      {
-        keypath: ".data.pagination.limit",
-        type: "number",
-        format: "int32",
-        example: "",
-        description: "",
-      },
-      {
-        keypath: ".data.auths[*].validated",
-        type: "bool",
-        format: "boolean",
-        example: "",
-        description: "",
-      },
-      {
-        keypath: ".data.auths[*].id",
-        type: "string",
-        format: "text",
-        example: "",
-        description: "",
-      },
+      [
+        {
+          keypath: ".status",
+          type: "string",
+          format: "text",
+          example: "",
+          description: "",
+        },
+        {
+          keypath: ".data.pagination.limit",
+          type: "number",
+          format: "int32",
+          example: "",
+          description: "",
+        },
+        {
+          keypath: ".data.auths[*].validated",
+          type: "bool",
+          format: "boolean",
+          example: "",
+          description: "",
+        },
+        {
+          keypath: ".data.auths[*].id",
+          type: "string",
+          format: "text",
+          example: "",
+          description: "",
+        },
+      ],
     ],
     responseHeadersKeyPaths: [
       {

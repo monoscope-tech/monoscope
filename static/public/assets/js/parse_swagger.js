@@ -35,16 +35,7 @@ function parsePaths() {
       const method = modifiedVal.method;
       const url = modifiedVal.url;
       let shapeChanged = false;
-      // compare request body
-      let info = getFieldsToOperate(
-        originalVal.requestBodyKeyPaths,
-        modifiedVal.requestBodyKeyPaths,
-        originalVal.method,
-        originalVal.url,
-        "request_body"
-      );
-      shapeChanged = shapeChanged ? shapeChanged : info.updatesShape;
-      operations.push(...info.ops);
+
       // request headers
       info = getFieldsToOperate(
         originalVal.requestHeadersKeyPaths,
@@ -55,6 +46,8 @@ function parsePaths() {
       );
       shapeChanged = shapeChanged ? shapeChanged : info.updatesShape;
       operations.push(...info.ops);
+      // end request headers
+
       // query params
       info = getFieldsToOperate(
         originalVal.queryParamsKeyPaths,
@@ -65,6 +58,7 @@ function parsePaths() {
       );
       shapeChanged = shapeChanged ? shapeChanged : info.updatesShape;
       operations.push(...info.ops);
+      // end query params
 
       // compare response bodies
       for (const [status, mdVal] of Object.entries(modifiedVal.response)) {
@@ -72,24 +66,11 @@ function parsePaths() {
         if (!ogVal) {
           ogVal = { responseBodyKeyPaths: [], responseHeadersKeyPaths: [] };
         }
+
+        // response headers
         const responseBodyKeyPaths = mdVal.responseBodyKeyPaths.map((v) => {
           return fieldMap(v, "response_body");
         });
-        const responseHeadersKeyPaths = mdVal.responseHeadersKeyPaths.map(
-          (v) => {
-            return fieldMap(v, "response_header");
-          }
-        );
-
-        info = getFieldsToOperate(
-          ogVal.responseBodyKeyPaths,
-          mdVal.responseBodyKeyPaths,
-          modifiedVal.method,
-          modifiedVal.url,
-          "response_body"
-        );
-        shapeChanged = shapeChanged ? shapeChanged : info.updatesShape;
-        operations.push(...info.ops);
 
         info = getFieldsToOperate(
           ogVal.responseHeadersKeyPaths,
@@ -100,17 +81,47 @@ function parsePaths() {
         );
         shapeChanged = shapeChanged ? shapeChanged : info.updatesShape;
         operations.push(...info.ops);
-        shapes.push({
-          opShapeChanged: shapeChanged,
-          opRequestBodyKeyPaths: requestBodyKeyPaths,
-          opQueryParamsKeyPaths: queryParamsKeyPaths,
-          opRequestHeadersKeyPaths: requestHeadersKeyPaths,
-          opResponseBodyKeyPaths: responseBodyKeyPaths,
-          opResponseHeadersKeyPaths: responseHeadersKeyPaths,
-          opMethod: method,
-          opUrl: url,
-          opStatus: status,
-          opOperations: operations,
+        // end response headers
+
+        // response body keypaths
+        mdVal.responseBodyKeyPaths.forEach((responseKeyPaths, ind) => {
+          info = getFieldsToOperate(
+            ogVal.responseBodyKeyPaths[ind] || [],
+            responseKeyPaths,
+            modifiedVal.method,
+            modifiedVal.url,
+            "response_body"
+          );
+          shapeChanged = shapeChanged ? shapeChanged : info.updatesShape;
+          operations.push(...info.ops);
+          // end response body key paths
+
+          modifiedVal.requestBodyKeyPaths.forEach((reqBodyKeyPaths, ind) => {
+            // compare request body
+            let info = getFieldsToOperate(
+              originalVal.requestBodyKeyPaths[ind] || [],
+              reqBodyKeyPaths,
+              originalVal.method,
+              originalVal.url,
+              "request_body"
+            );
+            shapeChanged = shapeChanged ? shapeChanged : info.updatesShape;
+            operations.push(...info.ops);
+            // end request body
+
+            shapes.push({
+              opShapeChanged: shapeChanged,
+              opRequestBodyKeyPaths: requestBodyKeyPaths,
+              opQueryParamsKeyPaths: queryParamsKeyPaths,
+              opRequestHeadersKeyPaths: requestHeadersKeyPaths,
+              opResponseBodyKeyPaths: responseBodyKeyPaths,
+              opResponseHeadersKeyPaths: responseHeadersKeyPaths,
+              opMethod: method,
+              opUrl: url,
+              opStatus: status,
+              opOperations: operations,
+            });
+          });
         });
       }
     }
@@ -407,10 +418,19 @@ function parseResponses(responses, components) {
       });
       for (const [contentType, v] of Object.entries(value.content)) {
         let schema = v.schema;
-        ob[key] = {
-          responseBodyKeyPaths: getKeyPaths(schema),
-          responseHeadersKeyPaths: headersKeypaths,
-        };
+        if (hasOneOfOrAnyOf(schema)) {
+          const allValues = getAnyOfOrOneOfValues(schema);
+          ob[key] = {
+            responseBodyKeyPaths: allValues.map((val) => getKeyPaths(val)),
+            responseHeadersKeyPaths: headersKeypaths,
+          };
+          break;
+        } else {
+          ob[key] = {
+            responseBodyKeyPaths: [getKeyPaths(schema)],
+            responseHeadersKeyPaths: headersKeypaths,
+          };
+        }
         break;
       }
     }
@@ -431,10 +451,11 @@ function parseRequestBody(body, components) {
     for (let [_, value] of Object.entries(content)) {
       if (value && value.schema) {
         if (hasOneOfOrAnyOf(value)) {
+          const allValues = getAnyOfOrOneOfValues(value.schema);
           return allValues.map((val) => getKeyPaths(val));
         } else {
           let schema = value.schema;
-          return getKeyPaths(schema);
+          return [getKeyPaths(schema)];
         }
       } else {
         return [];
