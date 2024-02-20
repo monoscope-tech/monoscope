@@ -5,6 +5,7 @@ const {
   hasOneOfOrAnyOf,
   parseResponses,
   resolveAllOf,
+  getAnyOfOrOneOfValues,
 } = require("./parse_swagger.js").default;
 
 it("Should resolve all refs", () => {
@@ -524,4 +525,90 @@ it("should check anyOf or oneOf", () => {
   expect(hasOneOfOrAnyOf(data2)).toBe(true);
   expect(hasOneOfOrAnyOf(data3)).toBe(true);
   expect(hasOneOfOrAnyOf(data4)).toBe(false);
+});
+
+it("should get anyof and oneof values", () => {
+  const data = {
+    anyOf: [
+      {
+        type: "object",
+        properties: {
+          age: {
+            type: "integer",
+          },
+          nickname: {
+            type: "string",
+          },
+        },
+        required: ["age"],
+      },
+      {
+        type: "object",
+        properties: {
+          pet_type: {
+            type: "string",
+            enum: ["Cat", "Dog"],
+          },
+          hunts: {
+            type: "boolean",
+          },
+        },
+        required: ["pet_type"],
+      },
+    ],
+  };
+  expectedData = data.anyOf;
+
+  const data2 = {
+    type: "object",
+    properties: {
+      oneOf: [
+        {
+          age: {
+            type: "integer",
+          },
+          nickname: {
+            type: "string",
+          },
+        },
+        {
+          pet_type: {
+            type: "string",
+            enum: ["Cat", "Dog"],
+          },
+          hunts: {
+            type: "boolean",
+          },
+        },
+      ],
+    },
+    required: ["age", "pet_type"],
+  };
+  const exD = [
+    {
+      type: "object",
+      properties: {
+        age: {
+          type: "integer",
+        },
+        nickname: {
+          type: "string",
+        },
+      },
+    },
+    {
+      type: "object",
+      properties: {
+        pet_type: {
+          type: "string",
+          enum: ["Cat", "Dog"],
+        },
+        hunts: {
+          type: "boolean",
+        },
+      },
+    },
+  ];
+  expect(getAnyOfOrOneOfValues(data)).toMatchObject(expectedData);
+  expect(getAnyOfOrOneOfValues(data2)).toMatchObject(exD);
 });

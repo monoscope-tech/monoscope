@@ -424,12 +424,18 @@ function parseRequestBody(body, components) {
   }
   body = resolveRefs(body, components);
   body = resolveAllOf(body);
+
   if (body.content) {
     const content = body.content;
+    // _ is content type
     for (let [_, value] of Object.entries(content)) {
       if (value && value.schema) {
-        let schema = value.schema;
-        return getKeyPaths(schema);
+        if (hasOneOfOrAnyOf(value)) {
+          return allValues.map((val) => getKeyPaths(val));
+        } else {
+          let schema = value.schema;
+          return getKeyPaths(schema);
+        }
       } else {
         return [];
       }
@@ -625,6 +631,37 @@ function mapHeaders(header) {
   }
 }
 
+function getAnyOfOrOneOfValues(value) {
+  const properties = value.properties || {};
+  const items = value.items || {};
+
+  if (value.anyOf) {
+    return value.anyOf;
+  }
+
+  if (value.oneOf) {
+    return value.oneOf;
+  }
+
+  if (properties.anyOf) {
+    return properties.anyOf.map((val) => ({ type: "object", properties: val }));
+  }
+
+  if (properties.oneOf) {
+    return properties.oneOf.map((val) => ({ type: "object", properties: val }));
+  }
+
+  if (items.anyOf) {
+    return items.anyOf.map((val) => ({ type: "array", items: val }));
+  }
+
+  if (items.oneOf) {
+    return items.oneOf.map((val) => ({ type: "array", items: val }));
+  }
+
+  return [];
+}
+
 exports.default = {
   resolveRefs,
   parseHeadersAndParams,
@@ -632,4 +669,5 @@ exports.default = {
   parseResponses,
   resolveAllOf,
   hasOneOfOrAnyOf,
+  getAnyOfOrOneOfValues,
 };
