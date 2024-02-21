@@ -14,7 +14,6 @@ module Models.Apis.Anomalies
     getAnomalyVM,
     anomalyIdText,
     countAnomalies,
-    insertAnomalies,
     parseAnomalyRawTypes,
   )
 where
@@ -316,14 +315,3 @@ countAnomalies pid report_type = do
       GROUP BY avm.id -- Include the columns that define an anomaly
       HAVING COUNT(rd.id) > 5;
      |]
-
-insertAnomalies :: [(Projects.ProjectId, AnomalyTypes, Text, Text, UTCTime)] -> DBT IO Int64
-insertAnomalies anomalies = do
-  let q =
-        [sql| 
-        INSERT INTO apis.anomalies
-        (project_id, anomaly_type, action, target_hash, acknowleged_at)
-        VALUES (?,?,?,?,?) ON CONFLICT (target_hash)
-        DO UPDATE SET acknowleged_at = EXCLUDED.acknowleged_at
-      |]
-  executeMany q anomalies
