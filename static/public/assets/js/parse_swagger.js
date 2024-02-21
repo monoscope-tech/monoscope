@@ -439,7 +439,7 @@ function parseResponses(responses, components) {
       if (!headers) {
         headers = value.headers;
       }
-      for (let [header, value] of Object.entries(headers)) {
+      for (let [header, value] of Object.entries(headers || {})) {
         headers[header] = mapHeaders(value);
       }
       const headersKeypaths = getKeyPaths({
@@ -498,9 +498,16 @@ function parseRequestBody(body, components) {
 function parseHeadersAndParams(headers, parameters, components) {
   let ob = {};
   headers = resolveRefs(headers, components);
-  ob.requestHeadersKeyPaths = getKeyPaths(
-    headers?.content?.schema || { properties: { ...headers }, type: "object" }
-  );
+  headers = headers?.content?.schema ? headers.content.schema : headers;
+
+  for (let [header, value] of Object.entries(headers || {})) {
+    headers[header] = mapHeaders(value);
+  }
+
+  ob.requestHeadersKeyPaths = getKeyPaths({
+    properties: { ...headers },
+    type: "object",
+  });
   ob.queryParamsKeyPaths = [];
   ob.pathParamsKeyPaths = [];
 
@@ -575,7 +582,6 @@ function resolveRefs(data, components) {
       const refComponents = refPath.split("/");
       let referencedData = components;
       for (const refComponent of refComponents) {
-        console.log(referencedData);
         referencedData = referencedData[refComponent];
       }
       return resolveRefs(referencedData, components);
