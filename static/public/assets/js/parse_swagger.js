@@ -281,6 +281,13 @@ function transFormURL(url) {
 
 async function saveData(swaggerId, modifiedObject, shapes, endpoints) {
   const url = window.location.pathname + "/save";
+  shapes.forEach((shape) => {
+    shape.opOperations = shape.opOperations.map((op) => {
+      op.host = getHostFromUrl(modifiedObject.servers);
+      return op;
+    });
+    return shape;
+  });
   const data = {
     swagger_id: swaggerId,
     updated_swagger: JSON.stringify(modifiedObject),
@@ -317,7 +324,7 @@ async function saveData(swaggerId, modifiedObject, shapes, endpoints) {
   }
 }
 
-function getFieldsToOperate(ogPaths, mdPaths, method, url, category, servers) {
+function getFieldsToOperate(ogPaths, mdPaths, method, url, category) {
   let ops = [];
   let hasDeleted = false;
   let updatesShape = false;
@@ -337,7 +344,6 @@ function getFieldsToOperate(ogPaths, mdPaths, method, url, category, servers) {
         ftype: path.type,
         format: path.format,
         example: path.example,
-        host: getHostFromUrl(servers),
       });
     } else {
       if (keyPathModified(path, t)) {
@@ -353,7 +359,6 @@ function getFieldsToOperate(ogPaths, mdPaths, method, url, category, servers) {
             ftype: path.type,
             format: t.format,
             example: t.example,
-            host: getHostFromUrl(servers),
           });
         } else {
           ops.push({
@@ -366,7 +371,6 @@ function getFieldsToOperate(ogPaths, mdPaths, method, url, category, servers) {
             ftype: path.type,
             format: t.format,
             example: t.example,
-            host: getHostFromUrl(servers),
           });
         }
       }
@@ -389,7 +393,6 @@ function getFieldsToOperate(ogPaths, mdPaths, method, url, category, servers) {
           ftype: path.type,
           format: path.format,
           example: path.example,
-          host: getHostFromUrl(servers),
         });
       }
     });
