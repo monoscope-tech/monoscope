@@ -253,11 +253,11 @@ documentationPutH pid SaveSwaggerForm{updated_swagger, swagger_id, endpoints, di
         let fAndF = V.toList (V.map (getFieldAndFormatFromOpShape pid) ops)
         let fields = nubBy (\x y -> x.hash == y.hash) (map fst fAndF) -- to prevent ON CONFLICT DO UPDATE command cannot affect row a second time
         let formats = nubBy (\x y -> x.hash == y.hash) (map snd fAndF) -- to prevent ON CONFLICT DO UPDATE command cannot affect row a second time
+        let shapesSet = nubBy (\x y -> x.hash == y.hash) shapes
         Formats.insertFormats formats
         Fields.insertFields fields
-        Shapes.insertShapes shapes
+        Shapes.insertShapes shapesSet
         Endpoints.insertEndpoints newEndpoints
-
         case swagger_id of
           "" -> do
             swaggerId <- Swaggers.SwaggerId <$> liftIO UUIDV4.nextRandom
@@ -463,7 +463,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
             document.getElementById('swaggerModal').style.display = 'flex'; 
             const val = document.querySelector('#swaggerData').value
             let json = JSON.parse(val)
-            const yamlData = jsyaml.dump(json,{indent:4})
+            const yamlData = jsyaml.dump(json,{indent:2})
             const modifiedValue = window.editor.getValue()
             monacoEditor.setTheme ('vs')
             if(!window.diffEditor) {
@@ -691,7 +691,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
        window.monacoEditor = monaco.editor
        const val = document.querySelector('#swaggerData').value
        let json = JSON.parse(val)
-       const yamlData = jsyaml.dump(json,{indent:4})
+       const yamlData = jsyaml.dump(json,{indent:2})
 		   window.editor = monaco.editor.create(document.getElementById('swaggerEditor'), {
             value: yamlData,
 		  			language:'yaml',
