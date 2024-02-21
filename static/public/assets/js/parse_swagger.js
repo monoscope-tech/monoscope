@@ -89,6 +89,7 @@ function parsePaths() {
           opMethod: method,
           opUrl: url,
           opStatus: status,
+          opHost: getHostFromUrl(modifiedObject.servers),
           opResponseBodyKeyPaths: [],
         };
 
@@ -134,15 +135,13 @@ function parsePaths() {
     for (const [key, val] of Object.entries(catModified)) {
       if (catOriginal[key]) continue;
       // we have new endpoint
+
       const method = val.method;
       const url = val.url;
       endpoints.push({
         endpointUrl: url,
         endpointMethod: method,
-        endpointHost:
-          modifiedObject.servers.length > 0
-            ? modifiedObject.servers[0].url
-            : "example.com",
+        endpointHost: getHostFromUrl(modifiedObject.servers),
       });
 
       const operations = [];
@@ -195,6 +194,7 @@ function parsePaths() {
           opResponseHeadersKeyPaths: responseHeadersKeyPaths,
           opMethod: method,
           opUrl: url,
+          opHost: getHostFromUrl(modifiedObject.servers),
           opStatus: status,
           opResponseBodyKeyPaths: [],
         };
@@ -230,6 +230,17 @@ function parsePaths() {
       }
     }
     saveData(swagger_id, modifiedObject, shapes, endpoints);
+  }
+}
+
+function getHostFromUrl(servers) {
+  const url = servers.length > 0 ? servers[0].url : "";
+
+  try {
+    const urlObject = new URL(url);
+    return urlObject.host;
+  } catch (error) {
+    return "";
   }
 }
 
@@ -306,7 +317,7 @@ async function saveData(swaggerId, modifiedObject, shapes, endpoints) {
   }
 }
 
-function getFieldsToOperate(ogPaths, mdPaths, method, url, category) {
+function getFieldsToOperate(ogPaths, mdPaths, method, url, category, servers) {
   let ops = [];
   let hasDeleted = false;
   let updatesShape = false;
@@ -326,6 +337,7 @@ function getFieldsToOperate(ogPaths, mdPaths, method, url, category) {
         ftype: path.type,
         format: path.format,
         example: path.example,
+        host: getHostFromUrl(servers),
       });
     } else {
       if (keyPathModified(path, t)) {
@@ -341,6 +353,7 @@ function getFieldsToOperate(ogPaths, mdPaths, method, url, category) {
             ftype: path.type,
             format: t.format,
             example: t.example,
+            host: getHostFromUrl(servers),
           });
         } else {
           ops.push({
@@ -353,6 +366,7 @@ function getFieldsToOperate(ogPaths, mdPaths, method, url, category) {
             ftype: path.type,
             format: t.format,
             example: t.example,
+            host: getHostFromUrl(servers),
           });
         }
       }
@@ -375,6 +389,7 @@ function getFieldsToOperate(ogPaths, mdPaths, method, url, category) {
           ftype: path.type,
           format: path.format,
           example: path.example,
+          host: getHostFromUrl(servers),
         });
       }
     });
