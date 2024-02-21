@@ -18,9 +18,6 @@ function parsePaths() {
       if (!modifiedVal) continue;
 
       const operations = [];
-      const requestBodyKeyPaths = modifiedVal.requestBodyKeyPaths.map((v) => {
-        return fieldMap(v, "request_body");
-      });
 
       const requestHeadersKeyPaths = modifiedVal.requestHeadersKeyPaths.map(
         (v) => {
@@ -37,7 +34,7 @@ function parsePaths() {
       let shapeChanged = false;
 
       // request headers
-      info = getFieldsToOperate(
+      let info = getFieldsToOperate(
         originalVal.requestHeadersKeyPaths,
         modifiedVal.requestHeadersKeyPaths,
         originalVal.method,
@@ -68,9 +65,11 @@ function parsePaths() {
         }
 
         // response headers
-        const responseBodyKeyPaths = mdVal.responseBodyKeyPaths.map((v) => {
-          return fieldMap(v, "response_body");
-        });
+        const responseHeadersKeyPaths = mdVal.responseHeadersKeyPaths.map(
+          (v) => {
+            return fieldMap(v, "response_body");
+          }
+        );
 
         info = getFieldsToOperate(
           ogVal.responseHeadersKeyPaths,
@@ -83,46 +82,51 @@ function parsePaths() {
         operations.push(...info.ops);
         // end response headers
 
-        // response body keypaths
-        mdVal.responseBodyKeyPaths.forEach((responseKeyPaths, ind) => {
-          info = getFieldsToOperate(
-            ogVal.responseBodyKeyPaths[ind] || [],
-            responseKeyPaths,
-            modifiedVal.method,
-            modifiedVal.url,
-            "response_body"
-          );
-          shapeChanged = shapeChanged ? shapeChanged : info.updatesShape;
-          operations.push(...info.ops);
-          // end response body key paths
+        const shapeSoFar = {
+          opQueryParamsKeyPaths: queryParamsKeyPaths,
+          opRequestHeadersKeyPaths: requestHeadersKeyPaths,
+          opResponseHeadersKeyPaths: responseHeadersKeyPaths,
+          opMethod: method,
+          opUrl: url,
+          opStatus: status,
+        };
 
-          modifiedVal.requestBodyKeyPaths.forEach((reqBodyKeyPaths, ind) => {
-            // compare request body
-            let info = getFieldsToOperate(
-              originalVal.requestBodyKeyPaths[ind] || [],
-              reqBodyKeyPaths,
-              originalVal.method,
-              originalVal.url,
-              "request_body"
+        // response body keypaths
+        if (mdVal.responseBodyKeyPaths.length === 0) {
+          shapeSoFar.opOperations = operations;
+          shapes.push(
+            ...finalizeShapeWithRequestBody(
+              modifiedVal.requestBodyKeyPaths,
+              shapeSoFar
+            )
+          );
+        } else {
+          mdVal.responseBodyKeyPaths.forEach((responseKeyPaths, ind) => {
+            const responseBodyKeyPaths = responseKeyPaths.map((v) => {
+              return fieldMap(v, "response_body");
+            });
+
+            info = getFieldsToOperate(
+              ogVal.responseBodyKeyPaths[ind] || [],
+              responseKeyPaths,
+              modifiedVal.method,
+              modifiedVal.url,
+              "response_body"
             );
             shapeChanged = shapeChanged ? shapeChanged : info.updatesShape;
             operations.push(...info.ops);
-            // end request body
-
-            shapes.push({
-              opShapeChanged: shapeChanged,
-              opRequestBodyKeyPaths: requestBodyKeyPaths,
-              opQueryParamsKeyPaths: queryParamsKeyPaths,
-              opRequestHeadersKeyPaths: requestHeadersKeyPaths,
-              opResponseBodyKeyPaths: responseBodyKeyPaths,
-              opResponseHeadersKeyPaths: responseHeadersKeyPaths,
-              opMethod: method,
-              opUrl: url,
-              opStatus: status,
-              opOperations: operations,
-            });
+            // end response body key paths
+            shapeSoFar.opResponseBodyKeyPaths = responseBodyKeyPaths;
+            shapeSoFar.opShapeChanged = shapeChanged;
+            shapeSoFar.opOperations = operations;
+            shapes.push(
+              ...finalizeShapeWithRequestBody(
+                modifiedVal.requestBodyKeyPaths,
+                shapeSoFar
+              )
+            );
           });
-        });
+        }
       }
     }
 
@@ -141,26 +145,16 @@ function parsePaths() {
       });
 
       const operations = [];
-      const requestBodyKeyPaths = val.requestBodyKeyPaths.map((v) => {
-        return fieldMap(v, "request_body");
-      });
       const requestHeadersKeyPaths = val.requestHeadersKeyPaths.map((v) => {
         return fieldMap(v, "request_header");
       });
       const queryParamsKeyPaths = val.queryParamsKeyPaths.map((v) => {
         return fieldMap(v, "query_param");
       });
+
       // Since it's a new endpoint, they operations will all be inserts
-      let info = getFieldsToOperate(
-        [],
-        val.requestBodyKeyPaths,
-        val.method,
-        val.url,
-        "request_body"
-      );
-      operations.push(...info.ops);
       // request headers
-      info = getFieldsToOperate(
+      let info = getFieldsToOperate(
         [],
         val.requestHeadersKeyPaths,
         val.method,
@@ -179,23 +173,11 @@ function parsePaths() {
       operations.push(...info.ops);
 
       for (const [status, respVal] of Object.entries(val.response)) {
-        const responseBodyKeyPaths = respVal.responseBodyKeyPaths.map((v) => {
-          return fieldMap(v, "response_body");
-        });
         const responseHeadersKeyPaths = respVal.responseHeadersKeyPaths.map(
           (v) => {
             return fieldMap(v, "response_header");
           }
         );
-
-        info = getFieldsToOperate(
-          [],
-          respVal.responseBodyKeyPaths,
-          method,
-          url,
-          "response_body"
-        );
-        operations.push(...info.ops);
 
         info = getFieldsToOperate(
           [],
@@ -205,23 +187,71 @@ function parsePaths() {
           "response_header"
         );
         operations.push(...info.ops);
-
-        shapes.push({
+        const shapeSoFar = {
           opShapeChanged: true,
-          opRequestBodyKeyPaths: requestBodyKeyPaths,
           opQueryParamsKeyPaths: queryParamsKeyPaths,
           opRequestHeadersKeyPaths: requestHeadersKeyPaths,
-          opResponseBodyKeyPaths: responseBodyKeyPaths,
           opResponseHeadersKeyPaths: responseHeadersKeyPaths,
           opMethod: method,
           opUrl: url,
           opStatus: status,
-          opOperations: operations,
-        });
+        };
+        if (respVal.responseBodyKeyPaths.length === 0) {
+          shapeSoFar.opOperations = operations;
+          shapes.push(
+            ...finalizeShapeWithRequestBody(val.requestBodyKeyPaths, shapeSoFar)
+          );
+        } else {
+          respVal.responseBodyKeyPaths.forEach((resKeyPath) => {
+            const responseBodyKeyPaths = resKeyPath.map((v) => {
+              return fieldMap(v, "response_body");
+            });
+
+            info = getFieldsToOperate(
+              [],
+              resKeyPath,
+              method,
+              url,
+              "response_body"
+            );
+            operations.push(...info.ops);
+            shapeSoFar.opResponseBodyKeyPaths = responseBodyKeyPaths;
+            shapeSoFar.opOperations = operations;
+            shapes.push(
+              ...finalizeShapeWithRequestBody(
+                val.requestBodyKeyPaths,
+                shapeSoFar
+              )
+            );
+          });
+        }
       }
     }
     saveData(swagger_id, modifiedObject, shapes, endpoints);
   }
+}
+
+function finalizeShapeWithRequestBody(requestBodyKeyPaths2D, shapeSoFar) {
+  const shapes = [];
+  requestBodyKeyPaths2D.forEach((reqBodyKeyPath) => {
+    const requestBodyKeyPaths = reqBodyKeyPath.map((v) => {
+      return fieldMap(v, "request_body");
+    });
+    let info = getFieldsToOperate(
+      [],
+      reqBodyKeyPath,
+      shapeSoFar.opMethod,
+      shapeSoFar.opUrl,
+      "request_body"
+    );
+
+    shapes.push({
+      ...shapeSoFar,
+      opOperations: [...shapeSoFar.opOperations, ...info.ops],
+      opRequestBodyKeyPaths: requestBodyKeyPaths,
+    });
+  });
+  return shapes;
 }
 
 function fieldMap(v, category) {
@@ -246,8 +276,6 @@ async function saveData(swaggerId, modifiedObject, shapes, endpoints) {
       (shape) => shape.opShapeChanged || shape.opOperations.length > 0
     ),
   };
-  console.log(shapes, endpoints);
-  return;
   try {
     const response = await fetch(url, {
       method: "POST",
@@ -684,12 +712,12 @@ function getAnyOfOrOneOfValues(value) {
   return [];
 }
 
-exports.default = {
-  resolveRefs,
-  parseHeadersAndParams,
-  parseRequestBody,
-  parseResponses,
-  resolveAllOf,
-  hasOneOfOrAnyOf,
-  getAnyOfOrOneOfValues,
-};
+// exports.default = {
+//   resolveRefs,
+//   parseHeadersAndParams,
+//   parseRequestBody,
+//   parseResponses,
+//   resolveAllOf,
+//   hasOneOfOrAnyOf,
+//   getAnyOfOrOneOfValues,
+// };
