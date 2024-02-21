@@ -20,6 +20,7 @@ import Effectful.Reader.Static (ask, asks)
 import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Htmx
+import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields (parseFieldCategoryEnum, parseFieldTypes)
 import Models.Apis.Fields qualified as Fields
@@ -242,6 +243,11 @@ documentationPutH pid SaveSwaggerForm {updated_swagger, swagger_id, endpoints, d
         let fields = nubBy (\x y -> x.hash == y.hash) (map fst fAndF) -- to prevent ON CONFLICT DO UPDATE command cannot affect row a second time
         let formats = nubBy (\x y -> x.hash == y.hash) (map snd fAndF) -- to prevent ON CONFLICT DO UPDATE command cannot affect row a second time
         let shapesSet = nubBy (\x y -> x.hash == y.hash) shapes
+        let formatAnomalies = map (\f -> (pid, Anomalies.ATFormat, "" :: Text, f.hash, currentTime)) formats
+        let shapeAnomalies = map (\s -> (pid, Anomalies.ATShape, "" :: Text, s.hash, currentTime)) shapesSet
+        let endpointAnomalies = map (\e -> (pid, Anomalies.ATEndpoint, "" :: Text, e.hash, currentTime)) newEndpoints
+        let anomalies = formatAnomalies ++ shapeAnomalies ++ endpointAnomalies
+        _ <- Anomalies.insertAnomalies anomalies
         Formats.insertFormats formats
         Fields.insertFields fields
         Shapes.insertShapes shapesSet

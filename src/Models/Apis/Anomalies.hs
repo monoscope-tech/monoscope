@@ -14,12 +14,14 @@ module Models.Apis.Anomalies
     getAnomalyVM,
     anomalyIdText,
     countAnomalies,
+    insertAnomalies,
     parseAnomalyRawTypes,
   )
 where
 
 import Data.Aeson qualified as AE
 import Data.Default (Default, def)
+import Data.Time
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
@@ -315,7 +317,7 @@ countAnomalies pid report_type = do
       HAVING COUNT(rd.id) > 5;
      |]
 
-insertAnomalies :: [(Projects.ProjectId, AnomalyTypes, Text, Text, ZonedTime)] -> DBT IO Int64
+insertAnomalies :: [(Projects.ProjectId, AnomalyTypes, Text, Text, UTCTime)] -> DBT IO Int64
 insertAnomalies anomalies = do
   let q =
         [sql| 
