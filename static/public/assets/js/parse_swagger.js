@@ -89,6 +89,7 @@ function parsePaths() {
           opMethod: method,
           opUrl: url,
           opStatus: status,
+          opResponseBodyKeyPaths: [],
         };
 
         // response body keypaths
@@ -195,6 +196,7 @@ function parsePaths() {
           opMethod: method,
           opUrl: url,
           opStatus: status,
+          opResponseBodyKeyPaths: [],
         };
         if (respVal.responseBodyKeyPaths.length === 0) {
           shapeSoFar.opOperations = operations;
