@@ -2,20 +2,21 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module Models.Apis.Anomalies (
-  selectAnomalies,
-  AnomalyVM (..),
-  AnomalyActions (..),
-  AnomalyTypes (..),
-  AnomalyId (..),
-  parseAnomalyTypes,
-  getReportAnomalies,
-  parseAnomalyActions,
-  getAnomalyVM,
-  anomalyIdText,
-  countAnomalies,
-  parseAnomalyRawTypes,
-) where
+module Models.Apis.Anomalies
+  ( selectAnomalies,
+    AnomalyVM (..),
+    AnomalyActions (..),
+    AnomalyTypes (..),
+    AnomalyId (..),
+    parseAnomalyTypes,
+    getReportAnomalies,
+    parseAnomalyActions,
+    getAnomalyVM,
+    anomalyIdText,
+    countAnomalies,
+    parseAnomalyRawTypes,
+  )
+where
 
 import Data.Aeson qualified as AE
 import Data.Default (Default, def)
@@ -30,14 +31,14 @@ import Database.PostgreSQL.Simple.FromField (FromField, ResultError (ConversionF
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
 import Database.PostgreSQL.Simple.Types (Query (Query))
-import Database.PostgreSQL.Transact (DBT)
+import Database.PostgreSQL.Transact (DBT, executeMany)
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Fields.Types qualified as Fields (
-  FieldCategoryEnum,
-  FieldId,
-  FieldTypes,
- )
+import Models.Apis.Fields.Types qualified as Fields
+  ( FieldCategoryEnum,
+    FieldId,
+    FieldTypes,
+  )
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
@@ -48,7 +49,6 @@ import Relude hiding (id)
 import Servant (FromHttpApiData (..))
 import Utils
 
-
 newtype AnomalyId = AnomalyId {unAnomalyId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving newtype (NFData)
@@ -56,10 +56,8 @@ newtype AnomalyId = AnomalyId {unAnomalyId :: UUID.UUID}
     (Eq, Ord, FromField, ToField, FromHttpApiData, Default)
     via UUID.UUID
 
-
 anomalyIdText :: AnomalyId -> Text
 anomalyIdText = UUID.toText . unAnomalyId
-
 
 data AnomalyTypes
   = ATUnknown
@@ -73,10 +71,8 @@ data AnomalyTypes
     (AE.ToJSON, AE.FromJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "FT", DAE.CamelToSnake]] AnomalyTypes
 
-
 instance Default AnomalyTypes where
   def = ATUnknown
-
 
 anomalyTypesToText :: AnomalyTypes -> Text
 anomalyTypesToText ATUnknown = "unknown"
@@ -85,10 +81,8 @@ anomalyTypesToText ATEndpoint = "endpoint"
 anomalyTypesToText ATShape = "shape"
 anomalyTypesToText ATFormat = "format"
 
-
 instance ToField AnomalyTypes where
   toField = Escape . encodeUtf8 <$> anomalyTypesToText
-
 
 parseAnomalyTypes :: (Eq s, IsString s) => s -> Maybe AnomalyTypes
 parseAnomalyTypes "unknown" = Just ATUnknown
@@ -98,14 +92,12 @@ parseAnomalyTypes "shape" = Just ATShape
 parseAnomalyTypes "format" = Just ATFormat
 parseAnomalyTypes _ = Nothing
 
-
 parseAnomalyRawTypes :: Text -> AnomalyTypes
 parseAnomalyRawTypes "ATField" = ATField
 parseAnomalyRawTypes "ATEndpoint" = ATEndpoint
 parseAnomalyRawTypes "ATShape" = ATShape
 parseAnomalyRawTypes "ATFormat" = ATFormat
 parseAnomalyRawTypes _ = ATUnknown
-
 
 instance FromField AnomalyTypes where
   fromField f mdata =
@@ -116,7 +108,6 @@ instance FromField AnomalyTypes where
           Just a -> pure a
           Nothing -> returnError ConversionFailed f $ "Conversion error: Expected 'anomaly_type' enum, got " <> decodeUtf8 bs <> " instead."
 
-
 data AnomalyActions
   = AAUnknown
   | AACreated
@@ -126,25 +117,20 @@ data AnomalyActions
     (AE.ToJSON, AE.FromJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "FT", DAE.CamelToSnake]] AnomalyActions
 
-
 instance Default AnomalyActions where
   def = AAUnknown
-
 
 anomalyActionsToText :: AnomalyActions -> Text
 anomalyActionsToText AAUnknown = "unknown"
 anomalyActionsToText AACreated = "created"
 
-
 instance ToField AnomalyActions where
   toField = Escape . encodeUtf8 <$> anomalyActionsToText
-
 
 parseAnomalyActions :: (Eq s, IsString s) => s -> Maybe AnomalyActions
 parseAnomalyActions "unknown" = Just AAUnknown
 parseAnomalyActions "created" = Just AACreated
 parseAnomalyActions _ = Nothing
-
 
 instance FromField AnomalyActions where
   fromField f mdata =
@@ -155,40 +141,39 @@ instance FromField AnomalyActions where
           Just a -> pure a
           Nothing -> returnError ConversionFailed f $ "Conversion error: Expected 'anomaly_actions' enum, got " <> decodeUtf8 bs <> " instead."
 
-
 data AnomalyVM = AnomalyVM
-  { id :: AnomalyId
-  , createdAt :: ZonedTime
-  , updatedAt :: ZonedTime
-  , projectId :: Projects.ProjectId
-  , acknowlegedAt :: Maybe ZonedTime
-  , acknowlegedBy :: Maybe Users.UserId
-  , anomalyType :: AnomalyTypes
-  , action :: AnomalyActions
-  , targetHash :: Text
-  , --
-    shapeId :: Maybe Shapes.ShapeId
-  , shapeNewUniqueFields :: Vector Text
-  , shapeDeletedFields :: Vector Text
-  , shapeUpdatedFieldFormats :: Vector Text
-  , --
-    fieldId :: Maybe Fields.FieldId
-  , fieldKey :: Maybe Text
-  , fieldKeyPath :: Maybe Text
-  , fieldCategory :: Maybe Fields.FieldCategoryEnum
-  , fieldFormat :: Maybe Text
-  , --
-    formatId :: Maybe Formats.FormatId
-  , formatType :: Maybe Fields.FieldTypes -- fieldFormat in the formats table
-  , formatExamples :: Maybe (Vector Text)
-  , --
-    endpointId :: Maybe Endpoints.EndpointId
-  , endpointMethod :: Maybe Text
-  , endpointUrlPath :: Maybe Text
-  , --
-    archivedAt :: Maybe ZonedTime
-  , eventsCount14d :: Int
-  , lastSeen :: ZonedTime
+  { id :: AnomalyId,
+    createdAt :: ZonedTime,
+    updatedAt :: ZonedTime,
+    projectId :: Projects.ProjectId,
+    acknowlegedAt :: Maybe ZonedTime,
+    acknowlegedBy :: Maybe Users.UserId,
+    anomalyType :: AnomalyTypes,
+    action :: AnomalyActions,
+    targetHash :: Text,
+    --
+    shapeId :: Maybe Shapes.ShapeId,
+    shapeNewUniqueFields :: Vector Text,
+    shapeDeletedFields :: Vector Text,
+    shapeUpdatedFieldFormats :: Vector Text,
+    --
+    fieldId :: Maybe Fields.FieldId,
+    fieldKey :: Maybe Text,
+    fieldKeyPath :: Maybe Text,
+    fieldCategory :: Maybe Fields.FieldCategoryEnum,
+    fieldFormat :: Maybe Text,
+    --
+    formatId :: Maybe Formats.FormatId,
+    formatType :: Maybe Fields.FieldTypes, -- fieldFormat in the formats table
+    formatExamples :: Maybe (Vector Text),
+    --
+    endpointId :: Maybe Endpoints.EndpointId,
+    endpointMethod :: Maybe Text,
+    endpointUrlPath :: Maybe Text,
+    --
+    archivedAt :: Maybe ZonedTime,
+    eventsCount14d :: Int,
+    lastSeen :: ZonedTime
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, Default, NFData)
@@ -196,9 +181,7 @@ data AnomalyVM = AnomalyVM
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "anomalies_vm", PrimaryKey "id", FieldModifiers '[CamelToSnake]] AnomalyVM)
 
-
 makeFieldLabelsNoPrefix ''AnomalyVM
-
 
 getAnomalyVM :: Projects.ProjectId -> Text -> DBT IO (Maybe AnomalyVM)
 getAnomalyVM pid hash = queryOne Select q (pid, hash)
@@ -226,16 +209,15 @@ getAnomalyVM pid hash = queryOne Select q (pid, hash)
     GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25
      |]
 
-
 selectAnomalies :: Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Int -> Int -> DBT IO (Vector AnomalyVM)
 selectAnomalies pid endpointM isAcknowleged isArchived sortM limitM skipM = query Select (Query $ encodeUtf8 q) (MkDBField pid : paramList)
   where
     boolToNullSubQ a = if a then " not " else ""
     condlist =
       catMaybes
-        [ (\a -> " aan.acknowleged_at is" <> a <> " null ") <$> (boolToNullSubQ <$> isAcknowleged)
-        , (\a -> " aan.archived_at is" <> a <> " null ") <$> (boolToNullSubQ <$> isArchived)
-        , "avm.endpoint_id=?" <$ endpointM
+        [ (\a -> " aan.acknowleged_at is" <> a <> " null ") <$> (boolToNullSubQ <$> isAcknowleged),
+          (\a -> " aan.archived_at is" <> a <> " null ") <$> (boolToNullSubQ <$> isArchived),
+          "avm.endpoint_id=?" <$ endpointM
         ]
     cond
       | null condlist = mempty
@@ -277,7 +259,6 @@ SELECT avm.id, avm.created_at, avm.updated_at, avm.project_id, aan.acknowleged_a
     $limit;
       |]
 
-
 getReportAnomalies :: Projects.ProjectId -> Text -> DBT IO (Vector AnomalyVM)
 getReportAnomalies pid report_type = query Select (Query $ encodeUtf8 q) pid
   where
@@ -308,7 +289,6 @@ getReportAnomalies pid report_type = query Select (Query $ encodeUtf8 q) pid
       limit 11;
         |]
 
-
 countAnomalies :: Projects.ProjectId -> Text -> DBT IO Int
 countAnomalies pid report_type = do
   result <- query Select (Query $ encodeUtf8 q) pid
@@ -334,3 +314,14 @@ countAnomalies pid report_type = do
       GROUP BY avm.id -- Include the columns that define an anomaly
       HAVING COUNT(rd.id) > 5;
      |]
+
+insertAnomalies :: [(Projects.ProjectId, AnomalyTypes, Text, Text, ZonedTime)] -> DBT IO Int64
+insertAnomalies anomalies = do
+  let q =
+        [sql| 
+        INSERT INTO apis.anomalies
+        (project_id, anomaly_type, action, target_hash, acknowleged_at)
+        VALUES (?,?,?,?,?) ON CONFLICT (target_hash)
+        DO UPDATE SET acknowleged_at = EXCLUDED.acknowleged_at
+      |]
+  executeMany q anomalies
