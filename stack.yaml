@@ -87,8 +87,6 @@ extra-deps:
   - contiguous-0.6.4.0@sha256:30d28d17b3ca2a9eecb753f6e38f7bc0d0a4d3afd6d76ca79931b9c167b68c39,1861
   - primitive-unlifted-2.1.0.0@sha256:4a6fb2fc5836b18b217b814931472a0b1a84df03b45955b236c80291f1f46893,2326
   - wai-log-0.4.0.1@sha256:0b4b57ae218cf5ec59523c8cf405802a588d4e299436b5a663a6001ea34bb7e6,1583
-  - MemoTrie-0.6.11@sha256:edda47de940a047237c395a85ac3216db6d25888002293853d7eebd01beb5da6,1516
-  - newtype-generics-0.6.2@sha256:81cbf377241a186ac210bb60417ac3a23ea576257b01ec7be7051790b225daeb,2053
 
   # - git: https://github.com/jfischoff/postgres-options
   #   commit: 45bafb2092bc7a7b3c561608295294d562313dd3
