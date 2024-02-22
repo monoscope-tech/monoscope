@@ -83,6 +83,7 @@ function parsePaths() {
         // end response headers
 
         const shapeSoFar = {
+          opShapeChanged: shapeChanged,
           opQueryParamsKeyPaths: queryParamsKeyPaths,
           opRequestHeadersKeyPaths: requestHeadersKeyPaths,
           opResponseHeadersKeyPaths: responseHeadersKeyPaths,
@@ -257,9 +258,11 @@ function finalizeShapeWithRequestBody(requestBodyKeyPaths2D, shapeSoFar) {
       shapeSoFar.opUrl,
       "request_body"
     );
+    const shapeChanged = shapeSoFar.opShapeChanged ? true : info.updatesShape;
 
     shapes.push({
       ...shapeSoFar,
+      opShapeChanged: shapeChanged,
       opOperations: [...shapeSoFar.opOperations, ...info.ops],
       opRequestBodyKeyPaths: requestBodyKeyPaths,
     });
