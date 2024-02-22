@@ -117,8 +117,9 @@ ALTER TABLE projects.projects
 ALTER TABLE projects.projects ADD COLUMN time_zone TEXT DEFAULT 'UTC';
 
 CREATE TYPE notification_channel_enum AS ENUM ('email', 'slack');
-ALTER TABLE projects.projects
-ADD COLUMN notifications_channel notification_channel_enum DEFAULT 'email';
+ALTER TABLE projects.projects 
+ADD COLUMN notifications_channel notification_channel_enum[] DEFAULT ARRAY['email']::notification_channel_enum[];
+
 
 -----------------------------------------------------------------------
 -- PROJECT MEMBERS table 

@@ -24,7 +24,8 @@ module Models.Apis.Endpoints (
   endpointByHash,
   getProjectHosts,
   insertEndpoints,
-) where
+)
+where
 
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Aeson qualified as AE
@@ -165,23 +166,33 @@ endpointRequestStatsByProject pid ackd archived pHostM = case pHostM of Just h -
     -- TODO This query to get the anomalies for the anomalies page might be too complex.
     -- Does it make sense yet to remove the call to endpoint_request_stats? since we're using async charts already
     q =
-      [text| 
-      SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, coalesce(min,0),  coalesce(p50,0),  coalesce(p75,0),  coalesce(p90,0),  coalesce(p95,0),  coalesce(p99,0),  coalesce(max,0) , 
-         coalesce(total_time,0), coalesce(total_time_proj,0), coalesce(total_requests,0), coalesce(total_requests_proj,0),
-         (SELECT count(*) from apis.anomalies_vm 
-                 where project_id=enp.project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
-         ) ongoing_anomalies,
-        (SELECT count(*) from apis.anomalies_vm
-                 where project_id=enp.project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
-        ) ongoing_anomalies_proj,
-        ann.acknowleged_at, 
-        ann.archived_at, 
-        ann.id
-     from apis.endpoints enp
-     left join apis.endpoint_request_stats ers on (enp.id=ers.endpoint_id)
-     left join apis.anomalies ann on (ann.anomaly_type='endpoint' AND target_hash=endpoint_hash)
-     where enp.project_id=? and enp.outgoing=false and ann.id is not null $ackdAt $archivedAt $pHostQery
-     order by total_requests DESC, url_path ASC;
+      [text| SELECT  enp.id AS endpoint_id,  enp.hash AS endpoint_hash,  enp.project_id,  enp.url_path,  enp.method,  COALESCE(min, 0),   COALESCE(p50, 0),   COALESCE(p75, 0),   COALESCE(p90, 0),   COALESCE(p95, 0),   COALESCE(p99, 0),   COALESCE(max, 0),  
+            COALESCE(total_time, 0), COALESCE(total_time_proj, 0), COALESCE(total_requests, 0), COALESCE(total_requests_proj, 0),
+            (SELECT count(*) from apis.anomalies_vm 
+                     where project_id=enp.project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
+             ) ongoing_anomalies,
+            (SELECT count(*) from apis.anomalies_vm
+                     where project_id=enp.project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
+            ) ongoing_anomalies_proj,
+             ann.acknowleged_at, 
+             ann.archived_at, 
+             ann.id
+           FROM 
+               apis.endpoints enp
+           LEFT JOIN 
+               apis.endpoint_request_stats ers ON (enp.id = ers.endpoint_id)
+           LEFT JOIN 
+               apis.anomalies ann ON (ann.anomaly_type = 'endpoint' AND ann.target_hash = enp.hash)
+           WHERE 
+               enp.project_id = ? 
+               AND enp.outgoing = false 
+               AND ann.id IS NOT NULL 
+               $ackdAt 
+               $archivedAt 
+               $pHostQery
+           ORDER BY 
+               total_requests DESC, 
+               url_path ASC;
   |]
 
 

@@ -15,10 +15,12 @@ module Models.Apis.Anomalies (
   anomalyIdText,
   countAnomalies,
   parseAnomalyRawTypes,
-) where
+)
+where
 
 import Data.Aeson qualified as AE
 import Data.Default (Default, def)
+import Data.Time
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
@@ -30,7 +32,7 @@ import Database.PostgreSQL.Simple.FromField (FromField, ResultError (ConversionF
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
 import Database.PostgreSQL.Simple.Types (Query (Query))
-import Database.PostgreSQL.Transact (DBT)
+import Database.PostgreSQL.Transact (DBT, executeMany)
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Types qualified as Fields (

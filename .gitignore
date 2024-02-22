@@ -16,3 +16,4 @@ gha-creds-*.json
 **/*/.DS_Store
 .tmp/
 testkit
+coverage

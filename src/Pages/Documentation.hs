@@ -20,6 +20,7 @@ import Effectful.Reader.Static (ask, asks)
 import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Htmx
+import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields (parseFieldCategoryEnum, parseFieldTypes)
 import Models.Apis.Fields qualified as Fields
@@ -62,6 +63,7 @@ data FieldOperation = FieldOperation
   , category :: Text
   , ftype :: Text
   , format :: Text
+  , host :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
@@ -87,6 +89,7 @@ data OpShape = OpShape
   , opMethod :: Text
   , opUrl :: Text
   , opStatus :: Text
+  , opHost :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
@@ -111,8 +114,8 @@ data SaveSwaggerForm = SaveSwaggerForm
   deriving anyclass (FromJSON, ToJSON)
 
 
-getEndpointHash :: Projects.ProjectId -> Text -> Text -> Text
-getEndpointHash pid urlPath method = toText $ showHex (xxHash $ encodeUtf8 $ UUID.toText pid.unProjectId <> T.toUpper method <> urlPath) ""
+getEndpointHash :: Projects.ProjectId -> Text -> Text -> Text -> Text
+getEndpointHash pid host urlPath method = toText $ showHex (xxHash $ encodeUtf8 $ UUID.toText pid.unProjectId <> host <> T.toUpper method <> urlPath) ""
 
 
 getFieldHash :: Text -> Text -> Text -> Text -> Text
@@ -129,7 +132,7 @@ getShapeHash endpointHash statusCode responseBodyKP responseHeadersKP requestBod
 
 getEndpointFromOpEndpoint :: Projects.ProjectId -> OpEndpoint -> Endpoints.Endpoint
 getEndpointFromOpEndpoint pid opEndpoint =
-  let endpointHash = getEndpointHash pid opEndpoint.endpointUrl opEndpoint.endpointMethod
+  let endpointHash = getEndpointHash pid opEndpoint.endpointHost opEndpoint.endpointUrl opEndpoint.endpointMethod
    in Endpoints.Endpoint
         { id = Endpoints.EndpointId UUID.nil
         , createdAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
@@ -163,7 +166,7 @@ getShapeFromOpShape pid curTime opShape =
     , statusCode = fromMaybe 0 (readMaybe (toString opShape.opStatus))
     }
   where
-    endpointHash = getEndpointHash pid opShape.opUrl opShape.opMethod
+    endpointHash = getEndpointHash pid opShape.opHost opShape.opUrl opShape.opMethod
     qpKP = V.map (.fkKeyPath) opShape.opQueryParamsKeyPaths
     rqHKP = V.map (.fkKeyPath) opShape.opRequestHeadersKeyPaths
     rqBKP = V.map (.fkKeyPath) opShape.opRequestBodyKeyPaths
@@ -180,7 +183,7 @@ getShapeFromOpShape pid curTime opShape =
 
 getFieldAndFormatFromOpShape :: Projects.ProjectId -> FieldOperation -> (Fields.Field, Formats.Format)
 getFieldAndFormatFromOpShape pid operation =
-  let endpointHash = getEndpointHash pid operation.url operation.method
+  let endpointHash = getEndpointHash pid operation.host operation.url operation.method
       fCategory = fromMaybe Fields.FCRequestBody (parseFieldCategoryEnum operation.category)
       fieldType = fromMaybe Fields.FTString (parseFieldTypes operation.ftype)
       fieldHash = getFieldHash endpointHash operation.category operation.keypath operation.ftype
@@ -253,11 +256,11 @@ documentationPutH pid SaveSwaggerForm{updated_swagger, swagger_id, endpoints, di
         let fAndF = V.toList (V.map (getFieldAndFormatFromOpShape pid) ops)
         let fields = nubBy (\x y -> x.hash == y.hash) (map fst fAndF) -- to prevent ON CONFLICT DO UPDATE command cannot affect row a second time
         let formats = nubBy (\x y -> x.hash == y.hash) (map snd fAndF) -- to prevent ON CONFLICT DO UPDATE command cannot affect row a second time
+        let shapesSet = nubBy (\x y -> x.hash == y.hash) shapes
         Formats.insertFormats formats
         Fields.insertFields fields
-        Shapes.insertShapes shapes
+        Shapes.insertShapes shapesSet
         Endpoints.insertEndpoints newEndpoints
-
         case swagger_id of
           "" -> do
             swaggerId <- Swaggers.SwaggerId <$> liftIO UUIDV4.nextRandom
@@ -463,7 +466,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
             document.getElementById('swaggerModal').style.display = 'flex'; 
             const val = document.querySelector('#swaggerData').value
             let json = JSON.parse(val)
-            const yamlData = jsyaml.dump(json,{indent:4})
+            const yamlData = jsyaml.dump(json,{indent:2})
             const modifiedValue = window.editor.getValue()
             monacoEditor.setTheme ('vs')
             if(!window.diffEditor) {
@@ -691,7 +694,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
        window.monacoEditor = monaco.editor
        const val = document.querySelector('#swaggerData').value
        let json = JSON.parse(val)
-       const yamlData = jsyaml.dump(json,{indent:4})
+       const yamlData = jsyaml.dump(json,{indent:2})
 		   window.editor = monaco.editor.create(document.getElementById('swaggerEditor'), {
             value: yamlData,
 		  			language:'yaml',
@@ -708,7 +711,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
 
   script_ [src_ "https://unpkg.com/swagger-ui-dist@4.5.0/swagger-ui-bundle.js", crossorigin_ "true"] ("" :: Text)
   script_ [src_ "/assets/js/swagger_endpoints.js"] ("" :: Text)
-  script_ [src_ "/assets/js/build_keypaths.js"] ("" :: Text)
+  script_ [src_ "/assets/js/parse_swagger.js"] ("" :: Text)
   script_ [src_ "https://unpkg.com/js-yaml/dist/js-yaml.min.js", crossorigin_ "true"] ("" :: Text)
   script_
     [text|
