@@ -12,23 +12,22 @@ class SwaggerEndPointsUI {
       const paths = this.json.paths;
       for (const path in paths) {
         const startWord = path.split("/")[1];
-        if (startWord) {
-          if (!this.paths[startWord]) {
-            this.paths[startWord] = [];
+        const methods = paths[path];
+        for (const method in methods) {
+          let tag = methods[method].tags[0] || startWord;
+          let opId = methods[method].operationId;
+          let modifiedPath = path.replaceAll(/[^a-zA-Z0-9]/g, "_");
+          let targetId = opId
+            ? `operations-${tag}-${opId}`
+            : `operations-default-${method}${modifiedPath}`;
+          if (!this.paths[tag]) {
+            this.paths[tag] = [];
           }
-          const methods = paths[path];
-          for (const method in methods) {
-            let opId = methods[method].operationId;
-            let modifiedPath = path.replaceAll(/[^a-zA-Z0-9]/g, "_");
-            let targetId = opId
-              ? `operations-${startWord}-${opId}`
-              : `operations-default-${method}${modifiedPath}`;
-            this.paths[startWord].push({
-              path: path,
-              method: method,
-              operationId: targetId,
-            });
-          }
+          this.paths[tag].push({
+            path: path,
+            method: method,
+            operationId: targetId,
+          });
         }
       }
     }
@@ -360,8 +359,8 @@ class SwaggerEndPointsUI {
             this.elt(
               "div",
               { class: "text-sm flex items-center gap-2" },
-              this.elt("span", { class: "text-gray-800" }, server.description),
-              this.elt("span", { class: "text-gray-600" }, server.url)
+              this.elt("span", { class: "text-gray-700" }, server.description),
+              this.elt("span", { class: "text-gray-500" }, server.url)
             )
           );
         });
