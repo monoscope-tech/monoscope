@@ -1,4 +1,17 @@
 "use strict";
+function saveSwagger() {
+  try {
+    parsePaths();
+  } catch (error) {
+    console.log(error);
+    const errorEvent = new CustomEvent("errorToast", {
+      detail: { value: ["Something went wrong"] },
+      bubbles: true,
+      composed: true,
+    });
+    document.querySelector("body").dispatchEvent(errorEvent);
+  }
+}
 function parsePaths() {
   if (window.diffEditor) {
     const originalValue = diffEditor.getModel().original.getValue();
@@ -283,6 +296,12 @@ function transFormURL(url) {
 }
 
 async function saveData(swaggerId, modifiedObject, shapes, endpoints) {
+  const errorEvent = new CustomEvent("errorToast", {
+    detail: { value: ["Something went wrong"] },
+    bubbles: true,
+    composed: true,
+  });
+
   const url = window.location.pathname + "/save";
   shapes.forEach((shape) => {
     shape.opOperations = shape.opOperations.map((op) => {
@@ -300,6 +319,7 @@ async function saveData(swaggerId, modifiedObject, shapes, endpoints) {
     ),
   };
   try {
+    document.querySelector("#save_swagger_loader").classList.remove("hidden");
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -317,13 +337,20 @@ async function saveData(swaggerId, modifiedObject, shapes, endpoints) {
         monacoEditor.setTheme("nightOwl");
       }
       setTimeout(() => {
-        alert("Swagger updated successfully");
+        const event = new CustomEvent("successToast", {
+          detail: { value: ["Swagger updated successfully"] },
+          bubbles: true,
+          composed: true,
+        });
+        document.querySelector("body").dispatchEvent(event);
       }, 100);
     } else {
-      alert("Something went wrong");
+      document.querySelector("body").dispatchEvent(errorEvent);
     }
   } catch (error) {
-    alert("Something went wrong");
+    document.querySelector("body").dispatchEvent(errorEvent);
+  } finally {
+    document.querySelector("#save_swagger_loader").classList.add("hidden");
   }
 }
 

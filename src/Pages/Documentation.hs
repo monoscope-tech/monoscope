@@ -401,7 +401,9 @@ documentationsPage pid swaggers swaggerID jsonString = do
                 -- Modal footer
                 div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] do
                   button_ [style_ "margin-right:50px", type_ "button", class_ "btn", onclick_ "closeModal(event)", id_ "close_btn"] "Close"
-                  button_ [type_ "sumbit", class_ "btn btn-primary", onclick_ "parsePaths()"] "Confirm  & Save"
+                  button_ [type_ "sumbit", class_ "btn btn-primary flex items-center gap-1", onclick_ "saveSwagger()"] do 
+                     span_ [] "Confirm  & Save"
+                     span_ [class_ "loading loading-dots loading-lg inline-block pl-3 hidden", id_ "save_swagger_loader"] ""
 
     -- page content
 
