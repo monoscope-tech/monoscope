@@ -278,7 +278,7 @@ projectsDropDown currProject projects = do
 
 sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Maybe Text -> Maybe Bool -> Html ()
 sideNav sess project pageTitle menuItem hasIntegrated = do
-  aside_ [class_ "shrink-0 top-0 border-r-2 bg-white border-gray-200 h-screen overflow-hidden transition-all duration-1000 ease-in-out", id_ "side-nav-menu"] do
+  aside_ [class_ "shrink-0 top-0 border-r-2 bg-white border-gray-200 w-16 h-screen overflow-hidden transition-all duration-200 ease-in-out", id_ "side-nav-menu"] do
     script_
       [text|
            if (window.initialCloseSideMenu == 'true'){
@@ -338,11 +338,11 @@ sideNav sess project pageTitle menuItem hasIntegrated = do
           [ if intG || (mTitle == "Get started" || mTitle == "API Keys") then href_ mUrl else href_ "#"
           , term "data-tippy-placement" "right"
           , term "data-tippy-content" (if intG || (mTitle == "Get started" || mTitle == "API Keys") then mTitle else "Our menus are shy. Help them come out by integrating the SDK.")
-          , class_ $ " block flex gap-3 px-5 py-3 flex justify-center items-center border-l-4 " <> activeCls <> intGCls
+          , class_ $ " block flex gap-3 px-5 py-3 flex no-wrap shrink-0 items-center border-l-4 " <> activeCls <> intGCls
           ]
           do
-            faSprite_ faIcon "regular" $ "w-5 h-5 " <> if isActive then "text-blue-900 " else "text-slate-500 "
-            span_ [class_ "grow "] $ toHtml mTitle
+            faSprite_ faIcon "regular" $ "w-5 h-5 shrink-0" <> if isActive then "text-blue-900 " else "text-slate-500 "
+            span_ [class_ "sd-hidden "] $ toHtml mTitle
 
 
 navbar :: Users.User -> Html ()
