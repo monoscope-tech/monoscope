@@ -85,7 +85,11 @@ data OpShape = OpShape
     opMethod :: Text,
     opUrl :: Text,
     opStatus :: Text,
-    opHost :: Text
+    opHost :: Text,
+    reqDescription :: Text,
+    resDescription :: Text,
+    reqHeaderDescription :: Text,
+    resHeaderDescription :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
@@ -154,7 +158,9 @@ getShapeFromOpShape pid curTime opShape =
       responseHeadersKeypaths = rsHKP,
       fieldHashes = fieldHashes,
       hash = shapeHash,
-      statusCode = fromMaybe 0 (readMaybe (toString opShape.opStatus))
+      statusCode = fromMaybe 0 (readMaybe (toString opShape.opStatus)),
+      responseDescription = opShape.resDescription,
+      requestDescription = opShape.reqDescription
     }
   where
     endpointHash = getEndpointHash pid opShape.opHost opShape.opUrl opShape.opMethod

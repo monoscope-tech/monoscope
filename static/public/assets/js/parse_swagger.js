@@ -111,6 +111,8 @@ function parsePaths() {
           opStatus: status,
           opHost: getHostFromUrl(modifiedObject.servers),
           opResponseBodyKeyPaths: [],
+          resDescription: mdVal.respDescription,
+          reqDescription: modifiedVal.request.description,
         };
 
         // response body keypaths
@@ -118,7 +120,7 @@ function parsePaths() {
           shapeSoFar.opOperations = operations;
           shapes.push(
             ...finalizeShapeWithRequestBody(
-              modifiedVal.requestBodyKeyPaths,
+              modifiedVal.request.requestBodyKeyPaths,
               shapeSoFar
             )
           );
@@ -143,7 +145,7 @@ function parsePaths() {
             shapeSoFar.opOperations = operations;
             shapes.push(
               ...finalizeShapeWithRequestBody(
-                modifiedVal.requestBodyKeyPaths,
+                modifiedVal.request.requestBodyKeyPaths,
                 shapeSoFar
               )
             );
@@ -218,11 +220,16 @@ function parsePaths() {
           opHost: getHostFromUrl(modifiedObject.servers),
           opStatus: status,
           opResponseBodyKeyPaths: [],
+          resDescription: respVal.description,
+          reqDescription: val.request.description,
         };
         if (respVal.responseBodyKeyPaths.length === 0) {
           shapeSoFar.opOperations = operations;
           shapes.push(
-            ...finalizeShapeWithRequestBody(val.requestBodyKeyPaths, shapeSoFar)
+            ...finalizeShapeWithRequestBody(
+              val.request.requestBodyKeyPaths,
+              shapeSoFar
+            )
           );
         } else {
           respVal.responseBodyKeyPaths.forEach((resKeyPath) => {
@@ -242,7 +249,7 @@ function parsePaths() {
             shapeSoFar.opOperations = operations;
             shapes.push(
               ...finalizeShapeWithRequestBody(
-                val.requestBodyKeyPaths,
+                val.request.requestBodyKeyPaths,
                 shapeSoFar
               )
             );
@@ -464,7 +471,7 @@ function groupByFieldCategories(swagger) {
         v.parameters,
         components
       );
-      ob.requestBodyKeyPaths = parseRequestBody(v.requestBody, components);
+      ob.request = parseRequestBody(v.requestBody, components);
       ob.response = parseResponses(v.responses, components);
       ob = { ...ob, ...headersAndParams };
       hashMap[`${key}_${method}`] = ob;
@@ -487,6 +494,7 @@ function parseResponses(responses, components) {
       ob[key] = {
         responseBodyKeyPaths: [],
         responseHeadersKeyPaths: [],
+        respDescription: value.description || "",
       };
     } else {
       let headers = value.headers
@@ -511,12 +519,14 @@ function parseResponses(responses, components) {
           ob[key] = {
             responseBodyKeyPaths: allValues.map((val) => getKeyPaths(val)),
             responseHeadersKeyPaths: headersKeypaths,
+            respDescription: value.description || "",
           };
           break;
         } else {
           ob[key] = {
             responseBodyKeyPaths: [getKeyPaths(schema)],
             responseHeadersKeyPaths: headersKeypaths,
+            respDescription: value.description || "",
           };
         }
         break;
@@ -543,14 +553,23 @@ function parseRequestBody(body, components) {
           return allValues.map((val) => getKeyPaths(val));
         } else {
           let schema = value.schema;
-          return [getKeyPaths(schema)];
+          return {
+            reqBodyKeypaths: [getKeyPaths(schema)],
+            reqDescription: body.description || "",
+          };
         }
       } else {
-        return [];
+        return {
+          reqBodyKeypaths: [],
+          reqDescription: body.description || "",
+        };
       }
     }
   }
-  return [];
+  return {
+    reqBodyKeypaths: [],
+    description: body.description || "",
+  };
 }
 
 function parseHeadersAndParams(headers, parameters, components) {

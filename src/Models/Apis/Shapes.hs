@@ -7,21 +7,17 @@ import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.Time (UTCTime, ZonedTime, getZonedTime)
 import Data.UUID qualified as UUID
-
 import Data.Vector (Vector)
+import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), query)
-
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, Query, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
-
 import Database.PostgreSQL.Transact (DBT, executeMany)
 import Database.PostgreSQL.Transact qualified as PgT
-
-import Data.Vector qualified as Vector
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Fields.Types
 import Models.Apis.Fields.Types qualified as Fields
@@ -32,7 +28,6 @@ import Relude
 import Utils (DBField (MkDBField))
 import Web.HttpApiData (FromHttpApiData)
 
-
 newtype ShapeId = ShapeId {unShapeId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving newtype (NFData)
@@ -40,44 +35,42 @@ newtype ShapeId = ShapeId {unShapeId :: UUID.UUID}
     (AE.FromJSON, AE.ToJSON, Eq, Ord, FromField, ToField, FromHttpApiData, Default)
     via UUID.UUID
 
-
 shapeIdText :: ShapeId -> Text
 shapeIdText = UUID.toText . unShapeId
 
-
 data ShapeWithFields = ShapeWidthFields
-  { status :: Int
-  , sHash :: Text
-  , fieldsMap :: Map FieldCategoryEnum [Fields.Field]
+  { status :: Int,
+    sHash :: Text,
+    fieldsMap :: Map FieldCategoryEnum [Fields.Field]
   }
   deriving stock (Generic, Show)
   deriving anyclass (NFData)
 
-
 getShapeFields :: Shape -> Vector Fields.Field -> ShapeWithFields
-getShapeFields shape fields = ShapeWidthFields{status = shape.statusCode, sHash = shape.hash, fieldsMap = fieldM}
+getShapeFields shape fields = ShapeWidthFields {status = shape.statusCode, sHash = shape.hash, fieldsMap = fieldM}
   where
     matchedFields = Vector.filter (\field -> field.hash `Vector.elem` shape.fieldHashes) fields
     fieldM = Fields.groupFieldsByCategory matchedFields
 
-
 -- A shape is a deterministic representation of a request-response combination for a given endpoint.
 -- We usually expect multiple shapes per endpoint. Eg a shape for a success request-response and another for an error response.
 data Shape = Shape
-  { id :: ShapeId
-  , createdAt :: UTCTime
-  , updatedAt :: UTCTime
-  , approvedOn :: Maybe UTCTime
-  , projectId :: Projects.ProjectId
-  , endpointHash :: Text
-  , queryParamsKeypaths :: Vector Text
-  , requestBodyKeypaths :: Vector Text
-  , responseBodyKeypaths :: Vector Text
-  , requestHeadersKeypaths :: Vector Text
-  , responseHeadersKeypaths :: Vector Text
-  , fieldHashes :: Vector Text
-  , hash :: Text
-  , statusCode :: Int
+  { id :: ShapeId,
+    createdAt :: UTCTime,
+    updatedAt :: UTCTime,
+    approvedOn :: Maybe UTCTime,
+    projectId :: Projects.ProjectId,
+    endpointHash :: Text,
+    queryParamsKeypaths :: Vector Text,
+    requestBodyKeypaths :: Vector Text,
+    responseBodyKeypaths :: Vector Text,
+    requestHeadersKeypaths :: Vector Text,
+    responseHeadersKeypaths :: Vector Text,
+    fieldHashes :: Vector Text,
+    hash :: Text,
+    statusCode :: Int,
+    responseDescription :: Text,
+    requestDescription :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, Default, NFData)
@@ -85,9 +78,7 @@ data Shape = Shape
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "shapes", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Shape)
   deriving (FromField) via Aeson Shape
 
-
 Optics.TH.makeFieldLabelsNoPrefix ''Shape
-
 
 insertShapeQueryAndParam :: Shape -> (Query, [DBField])
 insertShapeQueryAndParam shape = (q, params)
@@ -95,22 +86,23 @@ insertShapeQueryAndParam shape = (q, params)
     q =
       [sql| 
             INSERT INTO apis.shapes
-            (project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash, status_code)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING; 
+            (project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash, status_code, request_description, response_description)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING; 
           |]
     params =
-      [ MkDBField shape.projectId
-      , MkDBField shape.endpointHash
-      , MkDBField shape.queryParamsKeypaths
-      , MkDBField shape.requestBodyKeypaths
-      , MkDBField shape.responseBodyKeypaths
-      , MkDBField shape.requestHeadersKeypaths
-      , MkDBField shape.responseHeadersKeypaths
-      , MkDBField shape.fieldHashes
-      , MkDBField shape.hash
-      , MkDBField shape.statusCode
+      [ MkDBField shape.projectId,
+        MkDBField shape.endpointHash,
+        MkDBField shape.queryParamsKeypaths,
+        MkDBField shape.requestBodyKeypaths,
+        MkDBField shape.responseBodyKeypaths,
+        MkDBField shape.requestHeadersKeypaths,
+        MkDBField shape.responseHeadersKeypaths,
+        MkDBField shape.fieldHashes,
+        MkDBField shape.hash,
+        MkDBField shape.statusCode,
+        MkDBField "",
+        MkDBField ""
       ]
-
 
 shapesByEndpointHash :: Projescts.ProjectId -> Text -> PgT.DBT IO (Vector Shape)
 shapesByEndpointHash pid endpointHash = query Select q (pid, endpointHash)
@@ -122,55 +114,53 @@ shapesByEndpointHash pid endpointHash = query Select q (pid, endpointHash)
           FROM apis.shapes WHERE project_id= ? AND endpoint_hash = ?
       |]
 
-
 insertShapes :: [Shape] -> DBT IO Int64
 insertShapes shapes = do
   currTime <- liftIO getZonedTime
   let insertQuery =
         [sql|
         INSERT INTO apis.shapes
-        (approved_on, project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash, status_code)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) 
+        (approved_on, project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash, status_code, request_description, response_description)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) 
         ON CONFLICT (hash)
         DO UPDATE SET request_headers_keypaths = EXCLUDED.request_headers_keypaths, approved_on = EXCLUDED.approved_on
       |]
   let params = map getShapeParams shapes
   executeMany insertQuery params
 
-
-getShapeParams :: Shape -> (Maybe UTCTime, Projects.ProjectId, Text, Vector Text, Vector Text, Vector Text, Vector Text, Vector Text, Vector Text, Text, Int)
+getShapeParams :: Shape -> (Maybe UTCTime, Projects.ProjectId, Text, Vector Text, Vector Text, Vector Text, Vector Text, Vector Text, Vector Text, Text, Int, Text, Text)
 getShapeParams shape =
-  ( shape.approvedOn
-  , shape.projectId
-  , shape.endpointHash
-  , shape.queryParamsKeypaths
-  , shape.requestBodyKeypaths
-  , shape.responseBodyKeypaths
-  , shape.requestHeadersKeypaths
-  , shape.responseBodyKeypaths
-  , shape.fieldHashes
-  , shape.hash
-  , shape.statusCode
+  ( shape.approvedOn,
+    shape.projectId,
+    shape.endpointHash,
+    shape.queryParamsKeypaths,
+    shape.requestBodyKeypaths,
+    shape.responseBodyKeypaths,
+    shape.requestHeadersKeypaths,
+    shape.responseBodyKeypaths,
+    shape.fieldHashes,
+    shape.hash,
+    shape.statusCode,
+    shape.responseDescription,
+    shape.requestDescription
   )
 
-
 data SwShape = SwShape
-  { swEndpointHash :: Text
-  , swQueryParamsKeypaths :: Vector Text
-  , swRequestHeadersKeypaths :: Vector Text
-  , swResponseHeadersKeypaths :: Vector Text
-  , swRequestBodyKeypaths :: Vector Text
-  , swResponseBodyKeypaths :: Vector Text
-  , swHash :: Text
-  , swStatusCode :: Int
-  , swFieldHashes :: Vector Text
+  { swEndpointHash :: Text,
+    swQueryParamsKeypaths :: Vector Text,
+    swRequestHeadersKeypaths :: Vector Text,
+    swResponseHeadersKeypaths :: Vector Text,
+    swRequestBodyKeypaths :: Vector Text,
+    swResponseBodyKeypaths :: Vector Text,
+    swHash :: Text,
+    swStatusCode :: Int,
+    swFieldHashes :: Vector Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, Default, NFData)
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SwShape
   deriving (FromField) via Aeson SwShape
   deriving anyclass (AE.ToJSON)
-
 
 shapesByEndpointHashes :: Projects.ProjectId -> Vector Text -> PgT.DBT IO (Vector SwShape)
 shapesByEndpointHashes pid hashes = query Select q (pid, hashes)
