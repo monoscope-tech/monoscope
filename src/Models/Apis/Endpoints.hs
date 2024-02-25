@@ -4,27 +4,27 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module Models.Apis.Endpoints (
-  Endpoint (..),
-  SwEndpoint (..),
-  EndpointId (..),
-  EndpointRequestStats (..),
-  Host (..),
-  HostEvents (..),
-  dependenciesAndEventsCount,
-  endpointsByProjectId,
-  endpointUrlPath,
-  endpointRequestStatsByProject,
-  dependencyEndpointsRequestStatsByProject,
-  endpointRequestStatsByEndpoint,
-  endpointById,
-  endpointIdText,
-  endpointToUrlPath,
-  upsertEndpointQueryAndParam,
-  endpointByHash,
-  getProjectHosts,
-  insertEndpoints,
-)
+module Models.Apis.Endpoints
+  ( Endpoint (..),
+    SwEndpoint (..),
+    EndpointId (..),
+    EndpointRequestStats (..),
+    Host (..),
+    HostEvents (..),
+    dependenciesAndEventsCount,
+    endpointsByProjectId,
+    endpointUrlPath,
+    endpointRequestStatsByProject,
+    dependencyEndpointsRequestStatsByProject,
+    endpointRequestStatsByEndpoint,
+    endpointById,
+    endpointIdText,
+    endpointToUrlPath,
+    upsertEndpointQueryAndParam,
+    endpointByHash,
+    getProjectHosts,
+    insertEndpoints,
+  )
 where
 
 import Data.Aeson (FromJSON, ToJSON)
@@ -53,56 +53,48 @@ import Relude
 import Utils (DBField (MkDBField))
 import Web.HttpApiData (FromHttpApiData)
 
-
 newtype EndpointId = EndpointId {unEndpointId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving newtype (ToJSON, FromJSON, Eq, Ord, FromField, ToField, FromHttpApiData, Default, NFData)
   deriving anyclass (FromRow, ToRow)
 
-
 newtype Host = Host {host :: Text}
   deriving stock (Show, Generic, Eq)
   deriving anyclass (FromRow, ToRow, Default, NFData)
 
-
 instance HasField "toText" EndpointId Text where
   getField = UUID.toText . unEndpointId
-
 
 endpointIdText :: EndpointId -> Text
 endpointIdText = UUID.toText . unEndpointId
 
-
 -- TODO: Introduce request header hashes and response header hashes
 data Endpoint = Endpoint
-  { id :: EndpointId
-  , createdAt :: UTCTime
-  , updatedAt :: UTCTime
-  , projectId :: Projects.ProjectId
-  , urlPath :: Text
-  , urlParams :: AE.Value -- Key value map of key to the type. Needs a bit more figuring out.
-  , method :: Text
-  , host :: Text
-  , hash :: Text
-  , outgoing :: Bool
+  { id :: EndpointId,
+    createdAt :: UTCTime,
+    updatedAt :: UTCTime,
+    projectId :: Projects.ProjectId,
+    urlPath :: Text,
+    urlParams :: AE.Value, -- Key value map of key to the type. Needs a bit more figuring out.
+    method :: Text,
+    host :: Text,
+    hash :: Text,
+    outgoing :: Bool,
+    description :: Text
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (FromRow, ToRow, Default, NFData)
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Endpoint
   deriving (FromField) via Aeson Endpoint
 
-
 makeFieldLabelsNoPrefix ''Endpoint
-
 
 -- | endpointToUrlPath builds an apitoolkit path link to the endpoint details page of that endpoint.
 endpointToUrlPath :: Endpoint -> Text
 endpointToUrlPath enp = endpointUrlPath enp.projectId enp.id
 
-
 endpointUrlPath :: Projects.ProjectId -> EndpointId -> Text
 endpointUrlPath pid eid = "/p/" <> pid.toText <> "/endpoints/" <> endpointIdText eid
-
 
 upsertEndpointQueryAndParam :: Endpoint -> (Query, [DBField])
 upsertEndpointQueryAndParam endpoint = (q, params)
@@ -116,44 +108,42 @@ upsertEndpointQueryAndParam endpoint = (q, params)
           DO  NOTHING;
       |]
     params =
-      [ MkDBField endpoint.projectId
-      , MkDBField endpoint.urlPath
-      , MkDBField endpoint.urlParams
-      , MkDBField endpoint.method
-      , MkDBField host
-      , MkDBField endpoint.hash
-      , MkDBField endpoint.outgoing
+      [ MkDBField endpoint.projectId,
+        MkDBField endpoint.urlPath,
+        MkDBField endpoint.urlParams,
+        MkDBField endpoint.method,
+        MkDBField host,
+        MkDBField endpoint.hash,
+        MkDBField endpoint.outgoing
       ]
-
 
 -- Based of a view which is generated every 5minutes.
 data EndpointRequestStats = EndpointRequestStats
-  { endpointId :: EndpointId
-  , endpointHash :: Text
-  , projectId :: Projects.ProjectId
-  , urlPath :: Text
-  , method :: Text
-  , min :: Double
-  , p50 :: Double
-  , p75 :: Double
-  , p90 :: Double
-  , p95 :: Double
-  , p99 :: Double
-  , max :: Double
-  , totalTime :: Double
-  , totalTimeProj :: Double
-  , totalRequests :: Int
-  , totalRequestsProj :: Int
-  , ongoingAnomalies :: Int
-  , ongoingAnomaliesProj :: Int
-  , acknowlegedAt :: Maybe UTCTime
-  , archivedAt :: Maybe UTCTime
-  , anomalyId :: UUID.UUID
+  { endpointId :: EndpointId,
+    endpointHash :: Text,
+    projectId :: Projects.ProjectId,
+    urlPath :: Text,
+    method :: Text,
+    min :: Double,
+    p50 :: Double,
+    p75 :: Double,
+    p90 :: Double,
+    p95 :: Double,
+    p99 :: Double,
+    max :: Double,
+    totalTime :: Double,
+    totalTimeProj :: Double,
+    totalRequests :: Int,
+    totalRequestsProj :: Int,
+    ongoingAnomalies :: Int,
+    ongoingAnomaliesProj :: Int,
+    acknowlegedAt :: Maybe UTCTime,
+    archivedAt :: Maybe UTCTime,
+    anomalyId :: UUID.UUID
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (FromRow, ToRow, Default, NFData)
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "endpoint_request_stats", PrimaryKey "endpoint_id", FieldModifiers '[CamelToSnake]] EndpointRequestStats)
-
 
 -- FIXME: Include and return a boolean flag to show if fields that have annomalies.
 -- FIXME: return endpoint_hash as well.
@@ -166,7 +156,7 @@ endpointRequestStatsByProject pid ackd archived pHostM = case pHostM of Just h -
     -- TODO This query to get the anomalies for the anomalies page might be too complex.
     -- Does it make sense yet to remove the call to endpoint_request_stats? since we're using async charts already
     q =
-      [text| SELECT  enp.id AS endpoint_id,  enp.hash AS endpoint_hash,  enp.project_id,  enp.url_path,  enp.method,  COALESCE(min, 0),   COALESCE(p50, 0),   COALESCE(p75, 0),   COALESCE(p90, 0),   COALESCE(p95, 0),   COALESCE(p99, 0),   COALESCE(max, 0),  
+      [text| SELECT  enp.id AS endpoint_id,  enp.hash AS endpoint_hash,  enp.project_id,  enp.url_path,  enp.method, COALESCE(min, 0),   COALESCE(p50, 0),   COALESCE(p75, 0),   COALESCE(p90, 0),   COALESCE(p95, 0),   COALESCE(p99, 0),   COALESCE(max, 0),  
             COALESCE(total_time, 0), COALESCE(total_time_proj, 0), COALESCE(total_requests, 0), COALESCE(total_requests_proj, 0),
             (SELECT count(*) from apis.anomalies_vm 
                      where project_id=enp.project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
@@ -195,7 +185,6 @@ endpointRequestStatsByProject pid ackd archived pHostM = case pHostM of Just h -
                url_path ASC;
   |]
 
-
 dependencyEndpointsRequestStatsByProject :: Projects.ProjectId -> Text -> PgT.DBT IO (Vector EndpointRequestStats)
 dependencyEndpointsRequestStatsByProject pid host = query Select (Query $ encodeUtf8 q) (pid, host)
   where
@@ -219,7 +208,6 @@ dependencyEndpointsRequestStatsByProject pid host = query Select (Query $ encode
      order by total_requests DESC, url_path ASC
     |]
 
-
 -- FIXME: return endpoint_hash as well.
 -- This would require tampering with the view.
 endpointRequestStatsByEndpoint :: EndpointId -> PgT.DBT IO (Maybe EndpointRequestStats)
@@ -237,39 +225,34 @@ endpointRequestStatsByEndpoint eid = queryOne Select q (eid, eid)
                   null, null, '00000000-0000-0000-0000-000000000000'::uuid
               FROM apis.endpoint_request_stats WHERE endpoint_id=?|]
 
-
 endpointById :: EndpointId -> PgT.DBT IO (Maybe Endpoint)
 endpointById eid = queryOne Select q (Only eid)
   where
-    q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, host, hash, outgoing from apis.endpoints where id=? |]
-
+    q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, host, hash, outgoing, description from apis.endpoints where id=? |]
 
 endpointByHash :: Projects.ProjectId -> Text -> PgT.DBT IO (Maybe Endpoint)
 endpointByHash pid hash = queryOne Select q (pid, hash)
   where
-    q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, host, hash, outgoing from apis.endpoints where project_id=? AND hash=? |]
-
+    q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, host, hash, outgoing, description from apis.endpoints where project_id=? AND hash=? |]
 
 data SwEndpoint = SwEndpoint
-  { urlPath :: Text
-  , urlParams :: AE.Value -- Key value map of key to the type. Needs a bit more figuring out.
-  , method :: Text
-  , host :: Text
-  , hash :: Text
+  { urlPath :: Text,
+    urlParams :: AE.Value, -- Key value map of key to the type. Needs a bit more figuring out.
+    method :: Text,
+    host :: Text,
+    hash :: Text
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (FromRow, ToRow, Default, NFData)
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SwEndpoint
   deriving (FromField) via Aeson SwEndpoint
 
-
 data HostEvents = HostEvents
-  { host :: Text
-  , eventCount :: Integer
+  { host :: Text,
+    eventCount :: Integer
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (ToRow, FromRow, NFData)
-
 
 endpointsByProjectId :: Projects.ProjectId -> PgT.DBT IO (Vector SwEndpoint)
 endpointsByProjectId pid = query Select q (Only pid)
@@ -281,34 +264,33 @@ endpointsByProjectId pid = query Select q (Only pid)
          WHERE project_id = ?
        |]
 
-
 insertEndpoints :: [Endpoint] -> DBT IO Int64
 insertEndpoints endpoints = do
   let q =
         [sql| 
         INSERT INTO apis.endpoints
-        (project_id, url_path, url_params, method, host, hash)
-        VALUES (?,?,?,?,?,?) ON CONFLICT DO NOTHING;
+        (project_id, url_path, url_params, method, host, hash, description)
+        VALUES (?,?,?,?,?,?,?) ON CONFLICT (hash) DO UPDATE SET
+         description = CASE WHEN EXCLUDED.description <> '' THEN EXCLUDED.description ELSE apis.endpoints.description END;
       |]
   let params = map getEndpointParams endpoints
   executeMany q params
   where
-    getEndpointParams :: Endpoint -> (Projects.ProjectId, Text, AE.Value, Text, Text, Text)
+    getEndpointParams :: Endpoint -> (Projects.ProjectId, Text, AE.Value, Text, Text, Text, Text)
     getEndpointParams endpoint =
-      ( endpoint.projectId
-      , endpoint.urlPath
-      , endpoint.urlParams
-      , endpoint.method
-      , endpoint.host
-      , endpoint.hash
+      ( endpoint.projectId,
+        endpoint.urlPath,
+        endpoint.urlParams,
+        endpoint.method,
+        endpoint.host,
+        endpoint.hash,
+        endpoint.description
       )
-
 
 getProjectHosts :: Projects.ProjectId -> PgT.DBT IO (Vector Host)
 getProjectHosts pid = query Select q (Only pid)
   where
     q = [sql| SELECT DISTINCT host FROM apis.endpoints where  project_id = ? AND outgoing=false AND host!= '' |]
-
 
 dependenciesAndEventsCount :: Projects.ProjectId -> DBT IO (Vector HostEvents)
 dependenciesAndEventsCount pid = query Select q (pid, pid)

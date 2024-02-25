@@ -223,6 +223,7 @@ UPDATE apis.endpoints SET host = COALESCE(REPLACE((akeys(hosts))[1], '''', ''),'
 -- we can hold on with this to make sure everything works
 -- after than we can drop the column
 ALTER TABLE apis.endpoints DROP COLUMN hosts;
+ALTER TABLE apis.endpoints ADD COLUMN description TEXT NOT NULL DEFAULT ''::TEXT;
 
 -----------------------------------------------------------------------
 -- SHAPES table 
@@ -260,6 +261,10 @@ CREATE TABLE IF NOT EXISTS apis.shapes
 SELECT manage_updated_at('apis.shapes');
 CREATE INDEX IF NOT EXISTS idx_apis_shapes_project_id ON apis.shapes(project_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_shapes_hash ON apis.shapes(hash);
+ALTER TABLE apis.shapes ADD COLUMN response_description TEXT NOT NULL DEFAULT ''::TEXT;
+ALTER TABLE apis.shapes ADD COLUMN request_description TEXT NOT NULL DEFAULT ''::TEXT;
+ALTER TABLE apis.shapes ADD COLUMN request_headers_description TEXT NOT NULL DEFAULT ''::TEXT;
+ALTER TABLE apis.shapes ADD COLUMN response_headers_description TEXT NOT NULL DEFAULT ''::TEXT;
 
 -----------------------------------------------------------------------
 -- FIELDS table 

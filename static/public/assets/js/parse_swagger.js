@@ -29,9 +29,19 @@ function parsePaths() {
     for (const [key, originalVal] of Object.entries(catOriginal)) {
       const modifiedVal = catModified[key];
       if (!modifiedVal) continue;
-
       const operations = [];
+      const method = modifiedVal.method;
+      const url = modifiedVal.url;
+      let shapeChanged = false;
 
+      if (originalVal.description !== modifiedVal.description) {
+        endpoints.push({
+          endpointUrl: url,
+          endpointMethod: method,
+          endpointDescription: modifiedVal.description,
+          endpointHost: getHostFromUrl(modifiedObject.servers),
+        });
+      }
       const requestHeadersKeyPaths = modifiedVal.requestHeadersKeyPaths.map(
         (v) => {
           return fieldMap(v, "request_header");
@@ -41,10 +51,6 @@ function parsePaths() {
       const queryParamsKeyPaths = modifiedVal.queryParamsKeyPaths.map((v) => {
         return fieldMap(v, "query_param");
       });
-
-      const method = modifiedVal.method;
-      const url = modifiedVal.url;
-      let shapeChanged = false;
 
       // request headers
       let info = getFieldsToOperate(
@@ -155,6 +161,7 @@ function parsePaths() {
       endpoints.push({
         endpointUrl: url,
         endpointMethod: method,
+        endpointDescription: val.description || "",
         endpointHost: getHostFromUrl(modifiedObject.servers),
       });
 
@@ -249,7 +256,6 @@ function parsePaths() {
 
 function getHostFromUrl(servers) {
   const url = servers.length > 0 ? servers[0].url : "";
-
   try {
     const urlObject = new URL(url);
     return urlObject.host;
@@ -445,10 +451,14 @@ function keyPathModified(v1, v2) {
 function groupByFieldCategories(swagger) {
   const paths = swagger.paths;
   const components = swagger.components;
-  let hash = {};
+  let hashMap = {};
   for (let [key, value] of Object.entries(paths)) {
     for (let [method, v] of Object.entries(value)) {
-      let ob = { url: transFormURL(key), method };
+      let ob = {
+        url: transFormURL(key),
+        method,
+        description: v.description || "",
+      };
       const headersAndParams = parseHeadersAndParams(
         v.headers,
         v.parameters,
@@ -457,10 +467,10 @@ function groupByFieldCategories(swagger) {
       ob.requestBodyKeyPaths = parseRequestBody(v.requestBody, components);
       ob.response = parseResponses(v.responses, components);
       ob = { ...ob, ...headersAndParams };
-      hash[`${key}_${method}`] = ob;
+      hashMap[`${key}_${method}`] = ob;
     }
   }
-  return hash;
+  return hashMap;
 }
 
 function parseResponses(responses, components) {

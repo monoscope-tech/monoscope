@@ -304,6 +304,7 @@ buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash outg
     , host = rM.host
     , hash = endpointHash
     , outgoing = outgoing
+    , description = ""::Text
     }
 
 
