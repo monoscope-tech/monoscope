@@ -294,7 +294,8 @@ CREATE TABLE IF NOT EXISTS apis.fields
 SELECT manage_updated_at('apis.fields');
 CREATE INDEX IF NOT EXISTS idx_apis_fields_project_id ON apis.fields(project_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_fields_hash ON apis.fields(hash);
-
+ALTER TABLE apis.fields ADD COLUMN is_enum BOOL NOT NULL DEFAULT 'f';
+ALTER TABLE apis.fields ADD COLUMN is_required BOOL NOT NULL DEFAULT 'f';
 
 -----------------------------------------------------------------------
 -- FORMATS table 

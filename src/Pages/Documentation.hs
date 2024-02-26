@@ -57,11 +57,13 @@ data FieldOperation = FieldOperation
     url :: Text,
     method :: Text,
     description :: Text,
-    example :: AE.Value,
+    examples :: V.Vector AE.Value,
     category :: Text,
     ftype :: Text,
     format :: Text,
-    host :: Text
+    host :: Text,
+    isEnum :: Bool,
+    isRequired :: Bool
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
@@ -200,7 +202,9 @@ getFieldAndFormatFromOpShape pid operation =
             description = operation.description,
             keyPath = keyPath,
             fieldCategory = fCategory,
-            hash = fieldHash
+            hash = fieldHash,
+            isEnum = operation.isEnum,
+            isRequired = operation.isRequired
           }
 
       lFormat =
@@ -212,7 +216,7 @@ getFieldAndFormatFromOpShape pid operation =
             fieldHash = fieldHash,
             fieldType = fieldType,
             fieldFormat = format,
-            examples = V.fromList [operation.example],
+            examples = operation.examples,
             hash = formatHash
           }
    in (field, lFormat)

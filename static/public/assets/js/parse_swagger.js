@@ -385,7 +385,9 @@ function getFieldsToOperate(ogPaths, mdPaths, method, url, category) {
         method: method,
         ftype: path.type,
         format: path.format,
-        example: path.example,
+        examples: path.examples,
+        isEnum: path.isEnum,
+        isRequired: path.isRequired,
       });
     } else {
       if (keyPathModified(path, t)) {
@@ -400,7 +402,9 @@ function getFieldsToOperate(ogPaths, mdPaths, method, url, category) {
             method: method,
             ftype: path.type,
             format: t.format,
-            example: t.example,
+            examples: t.examples,
+            isEnum: path.isEnum,
+            isRequired: path.isRequired,
           });
         } else {
           ops.push({
@@ -412,7 +416,9 @@ function getFieldsToOperate(ogPaths, mdPaths, method, url, category) {
             method: method,
             ftype: path.type,
             format: t.format,
-            example: t.example,
+            examples: t.examples,
+            isEnum: path.isEnum,
+            isRequired: path.isRequired,
           });
         }
       }
@@ -434,7 +440,9 @@ function getFieldsToOperate(ogPaths, mdPaths, method, url, category) {
           method: method,
           ftype: path.type,
           format: path.format,
-          example: path.example,
+          examples: path.examples,
+          isEnum: path.isEnum,
+          isRequired: path.isRequired,
         });
       }
     });
@@ -685,33 +693,52 @@ function getKeyPaths(value) {
   if (!value) {
     return [];
   }
-  return getKeyPathsHelper(value, "");
+  return getKeyPathsHelper(value, "", value.required || []);
 }
 
-function getKeyPathsHelper(value, path) {
+function getKeyPathsHelper(value, path, requiredFields) {
   if (value.type === "object") {
     if (!value.properties) return [];
     let paths = [];
     for (const [key, val] of Object.entries(value.properties)) {
-      paths.push(...getKeyPathsHelper(val, `${path}.${key}`));
+      paths.push(...getKeyPathsHelper(val, `${path}.${key}`, requiredFields));
     }
     return paths;
   } else if (value.type === "array") {
     return getKeyPathsHelper(
       { ...value.items, description: value.description || "" },
-      `${path}[*]`
+      `${path}[*]`,
+      requiredFields
     );
   }
   if (path === "") {
     return [];
   }
   const { type, format } = getTypeAndFormat(value.type, value.format);
+  let examples = [];
+  let isEnum = !!value.enum;
+  let isRequired = !!value.required;
+  if (value.enum && Array.isArray(value.enum)) {
+    examples = value.enum;
+  } else if (value.example) {
+    examples = [value.example];
+  }
+  if (requiredFields.length > 0 && isRequired == false) {
+    const keys = path.split(".");
+    // requred from request body schema only supports top level properties
+    // eg .name, .age etc
+    if (keys.length === 2) {
+      isRequired = requiredFields.includes(keys[1]);
+    }
+  }
   return [
     {
+      isEnum,
+      isRequired,
       type,
       description: value.description || "",
       format,
-      example: value.example || "",
+      examples: examples,
       keypath: path,
     },
   ];

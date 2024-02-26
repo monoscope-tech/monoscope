@@ -479,7 +479,9 @@ fieldsToFieldDTO fieldCategory projectID endpointHash (keyPath, val) =
         description = "",
         keyPath = keyPath,
         fieldCategory = fieldCategory,
-        hash = fieldHash
+        hash = fieldHash,
+        isEnum = False,
+        isRequired = False
       },
     Formats.Format
       { id = Formats.FormatId UUID.nil,
