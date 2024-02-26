@@ -41,13 +41,22 @@ shapeIdText = UUID.toText . unShapeId
 data ShapeWithFields = ShapeWidthFields
   { status :: Int,
     sHash :: Text,
-    fieldsMap :: Map FieldCategoryEnum [Fields.Field]
+    fieldsMap :: Map FieldCategoryEnum [Fields.Field],
+    reqDescription :: Text,
+    resDescription :: Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (NFData)
 
 getShapeFields :: Shape -> Vector Fields.Field -> ShapeWithFields
-getShapeFields shape fields = ShapeWidthFields {status = shape.statusCode, sHash = shape.hash, fieldsMap = fieldM}
+getShapeFields shape fields =
+  ShapeWidthFields
+    { status = shape.statusCode,
+      sHash = shape.hash,
+      fieldsMap = fieldM,
+      reqDescription = shape.requestDescription,
+      resDescription = shape.responseDescription
+    }
   where
     matchedFields = Vector.filter (\field -> field.hash `Vector.elem` shape.fieldHashes) fields
     fieldM = Fields.groupFieldsByCategory matchedFields
@@ -110,7 +119,7 @@ shapesByEndpointHash pid endpointHash = query Select q (pid, endpointHash)
     q =
       [sql| 
           SELECT id, created_at, updated_at, approved_on, project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, 
-          response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash, status_code
+          response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash, status_code, request_description, response_description
           FROM apis.shapes WHERE project_id= ? AND endpoint_hash = ?
       |]
 
@@ -123,7 +132,7 @@ insertShapes shapes = do
         (approved_on, project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash, status_code, request_description, response_description)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) 
         ON CONFLICT (hash)
-        DO UPDATE SET request_headers_keypaths = EXCLUDED.request_headers_keypaths, approved_on = EXCLUDED.approved_on
+        DO UPDATE SET request_headers_keypaths = EXCLUDED.request_headers_keypaths, approved_on = EXCLUDED.approved_on, request_description = EXCLUDED.request_description, response_description = EXCLUDED.response_description
       |]
   let params = map getShapeParams shapes
   executeMany insertQuery params

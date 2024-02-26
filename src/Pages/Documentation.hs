@@ -87,9 +87,7 @@ data OpShape = OpShape
     opStatus :: Text,
     opHost :: Text,
     reqDescription :: Text,
-    resDescription :: Text,
-    reqHeaderDescription :: Text,
-    resHeaderDescription :: Text
+    resDescription :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromJSON, ToJSON)

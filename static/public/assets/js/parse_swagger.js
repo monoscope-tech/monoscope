@@ -114,13 +114,12 @@ function parsePaths() {
           resDescription: mdVal.respDescription,
           reqDescription: modifiedVal.request.description,
         };
-
         // response body keypaths
         if (mdVal.responseBodyKeyPaths.length === 0) {
           shapeSoFar.opOperations = operations;
           shapes.push(
             ...finalizeShapeWithRequestBody(
-              modifiedVal.request.requestBodyKeyPaths,
+              modifiedVal.request.requestBodyKeypaths,
               shapeSoFar
             )
           );
@@ -145,7 +144,7 @@ function parsePaths() {
             shapeSoFar.opOperations = operations;
             shapes.push(
               ...finalizeShapeWithRequestBody(
-                modifiedVal.request.requestBodyKeyPaths,
+                modifiedVal.request.requestBodyKeypaths,
                 shapeSoFar
               )
             );
@@ -227,7 +226,7 @@ function parsePaths() {
           shapeSoFar.opOperations = operations;
           shapes.push(
             ...finalizeShapeWithRequestBody(
-              val.request.requestBodyKeyPaths,
+              val.request.requestBodyKeypaths,
               shapeSoFar
             )
           );
@@ -249,7 +248,7 @@ function parsePaths() {
             shapeSoFar.opOperations = operations;
             shapes.push(
               ...finalizeShapeWithRequestBody(
-                val.request.requestBodyKeyPaths,
+                val.request.requestBodyKeypaths,
                 shapeSoFar
               )
             );
@@ -482,7 +481,11 @@ function groupByFieldCategories(swagger) {
 
 function parseResponses(responses, components) {
   if (!responses) {
-    return undefined;
+    return {
+      responseBodyKeyPaths: [],
+      responseHeadersKeyPaths: [],
+      respDescription: "",
+    };
   }
   responses = resolveRefs(responses, components);
   responses = resolveAllOf(responses);
@@ -538,7 +541,10 @@ function parseResponses(responses, components) {
 
 function parseRequestBody(body, components) {
   if (!body) {
-    return [];
+    return {
+      requestBodyKeypaths: [],
+      description: "",
+    };
   }
   body = resolveRefs(body, components);
   body = resolveAllOf(body);
@@ -554,20 +560,20 @@ function parseRequestBody(body, components) {
         } else {
           let schema = value.schema;
           return {
-            reqBodyKeypaths: [getKeyPaths(schema)],
-            reqDescription: body.description || "",
+            requestBodyKeypaths: [getKeyPaths(schema)],
+            description: body.description || "",
           };
         }
       } else {
         return {
-          reqBodyKeypaths: [],
-          reqDescription: body.description || "",
+          requestBodyKeypaths: [],
+          description: body.description || "",
         };
       }
     }
   }
   return {
-    reqBodyKeypaths: [],
+    requestBodyKeypaths: [],
     description: body.description || "",
   };
 }
