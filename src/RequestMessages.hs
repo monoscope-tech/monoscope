@@ -193,14 +193,17 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   --- FIXME: why are we not using the actual url params?
   -- Since it foes into the endpoint, maybe it should be the keys and their type? I'm unsure.
   -- At the moment, if an endpoint exists, we don't insert it anymore. But then how do we deal with requests from new hosts?
+  let status = rM.statusCode
   let urlParams = AET.emptyObject
   let isOutgoing = isRequestOutgoing rM.sdkType
   let (endpointQ, endpointP)
         | endpointHash `elem` pjc.endpointHashes = ("", []) -- We have the endpoint cache in our db already. Skill adding
+        | status == 404 = ("", [])
         | otherwise = Endpoints.upsertEndpointQueryAndParam $ buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash isOutgoing
 
   let (shapeQ, shapeP)
         | shapeHash `elem` pjc.shapeHashes = ("", [])
+        | status == 404 = ("", [])
         | otherwise =
             do
               -- A shape is a deterministic representation of a request-response combination for a given endpoint.
@@ -280,6 +283,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   -- We don't border adding them if their shape exists, as we asume that we've already seen such before.
   let (fieldsQ, fieldsP)
         | shapeHash `elem` pjc.shapeHashes = ([], [])
+        | status == 404 = ([], [])
         | otherwise = unzip $ map Fields.insertFieldQueryAndParams fields
 
   -- FIXME:
@@ -290,6 +294,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   -- also inserting the fields and the shape, when all we want to insert is just the example.
   let (formatsQ, formatsP)
         | shapeHash `elem` pjc.shapeHashes = ([], [])
+        | status == 404 = ([], [])
         | otherwise = unzip $ map Formats.insertFormatQueryAndParams formats
 
   let query = endpointQ <> shapeQ <> mconcat fieldsQ <> mconcat formatsQ
