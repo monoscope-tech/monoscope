@@ -240,7 +240,8 @@ data SwEndpoint = SwEndpoint
     urlParams :: AE.Value, -- Key value map of key to the type. Needs a bit more figuring out.
     method :: Text,
     host :: Text,
-    hash :: Text
+    hash :: Text,
+    description :: Text
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (FromRow, ToRow, Default, NFData)
@@ -259,7 +260,7 @@ endpointsByProjectId pid = query Select q (Only pid)
   where
     q =
       [sql|
-         SELECT url_path, url_params, method, host, hash
+         SELECT url_path, url_params, method, host, hash, description
          FROM apis.endpoints enp 
          INNER JOIN 
          apis.anomalies ann ON (ann.anomaly_type = 'endpoint' AND ann.target_hash = enp.hash)

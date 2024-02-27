@@ -213,7 +213,9 @@ data SwField = SwField
     fDescription :: Text,
     fKeyPath :: Text,
     fFieldCategory :: FieldCategoryEnum,
-    fHash :: Text
+    fHash :: Text,
+    fIsEnum :: Bool,
+    fIsRequired :: Bool
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, Default, NFData)

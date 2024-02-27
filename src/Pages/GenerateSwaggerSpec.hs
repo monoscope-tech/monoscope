@@ -10,18 +10,16 @@ import Models.Apis.Fields qualified as Fields
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.Shapes qualified as Shapes
 import Pages.GenerateSwagger
-import RequestMessages qualified
-
 import Relude
+import RequestMessages qualified
 import Test.Hspec
 import Test.Hspec.Expectations.Json
 
-
 projectTitle :: Text
 projectTitle = "Sample Project"
+
 projectDescription :: Text
 projectDescription = "Sample description"
-
 
 ----
 --- GENERAL STRUCTURE TEST
@@ -31,208 +29,222 @@ sampleEndpoints :: V.Vector Endpoints.SwEndpoint
 sampleEndpoints =
   V.fromList
     [ Endpoints.SwEndpoint
-        { urlPath = "/users"
-        , urlParams = AE.Null
-        , method = "GET"
-        , host = "localhost"
-        , hash = "endpoint1_GET"
-        }
-    , Endpoints.SwEndpoint
-        { urlPath = "/users"
-        , urlParams = AE.Null
-        , method = "POST"
-        , host = "localhost"
-        , hash = "endpoint1_POST"
+        { urlPath = "/users",
+          urlParams = AE.Null,
+          method = "GET",
+          host = "localhost",
+          hash = "endpoint1_GET",
+          description = ""
+        },
+      Endpoints.SwEndpoint
+        { urlPath = "/users",
+          urlParams = AE.Null,
+          method = "POST",
+          host = "localhost",
+          hash = "endpoint1_POST",
+          description = ""
         }
     ]
-
 
 sampleShapes :: V.Vector Shapes.SwShape
 sampleShapes =
   V.fromList
     [ Shapes.SwShape
-        { swEndpointHash = "endpoint1_GET"
-        , swFieldHashes = V.fromList ["field1", "field2", "field8"]
-        , swRequestBodyKeypaths = V.fromList []
-        , swResponseBodyKeypaths = V.fromList [".users[*].name", ".users[*].age", ".key.end"]
-        , swResponseHeadersKeypaths = V.fromList []
-        , swRequestHeadersKeypaths = V.fromList []
-        , swQueryParamsKeypaths = V.fromList []
-        , swHash = "shap1"
-        , swStatusCode = 200
-        }
-    , Shapes.SwShape
-        { swEndpointHash = "endpoint1_POST"
-        , swFieldHashes = V.fromList ["field3", "field4", "field5", "field6", "field7"]
-        , swRequestBodyKeypaths = V.fromList [".name", ".age", ".weight"]
-        , swResponseBodyKeypaths = V.fromList [".message", ".type"]
-        , swResponseHeadersKeypaths = V.fromList []
-        , swRequestHeadersKeypaths = V.fromList []
-        , swQueryParamsKeypaths = V.fromList []
-        , swHash = "shap2"
-        , swStatusCode = 401
-        }
-    , Shapes.SwShape
-        { swEndpointHash = "endpoint1_POST"
-        , swFieldHashes = V.fromList ["field3", "field4", "field5", "field6", "field7"]
-        , swRequestBodyKeypaths = V.fromList [".name", ".age", ".weight"]
-        , swResponseBodyKeypaths = V.fromList [".message", ".type"]
-        , swResponseHeadersKeypaths = V.fromList []
-        , swRequestHeadersKeypaths = V.fromList []
-        , swQueryParamsKeypaths = V.fromList []
-        , swHash = "shap3"
-        , swStatusCode = 201
+        { swEndpointHash = "endpoint1_GET",
+          swFieldHashes = V.fromList ["field1", "field2", "field8"],
+          swRequestBodyKeypaths = V.fromList [],
+          swResponseBodyKeypaths = V.fromList [".users[*].name", ".users[*].age", ".key.end"],
+          swResponseHeadersKeypaths = V.fromList [],
+          swRequestHeadersKeypaths = V.fromList [],
+          swQueryParamsKeypaths = V.fromList [],
+          swHash = "shap1",
+          swStatusCode = 200
+        },
+      Shapes.SwShape
+        { swEndpointHash = "endpoint1_POST",
+          swFieldHashes = V.fromList ["field3", "field4", "field5", "field6", "field7"],
+          swRequestBodyKeypaths = V.fromList [".name", ".age", ".weight"],
+          swResponseBodyKeypaths = V.fromList [".message", ".type"],
+          swResponseHeadersKeypaths = V.fromList [],
+          swRequestHeadersKeypaths = V.fromList [],
+          swQueryParamsKeypaths = V.fromList [],
+          swHash = "shap2",
+          swStatusCode = 401
+        },
+      Shapes.SwShape
+        { swEndpointHash = "endpoint1_POST",
+          swFieldHashes = V.fromList ["field3", "field4", "field5", "field6", "field7"],
+          swRequestBodyKeypaths = V.fromList [".name", ".age", ".weight"],
+          swResponseBodyKeypaths = V.fromList [".message", ".type"],
+          swResponseHeadersKeypaths = V.fromList [],
+          swRequestHeadersKeypaths = V.fromList [],
+          swQueryParamsKeypaths = V.fromList [],
+          swHash = "shap3",
+          swStatusCode = 201
         }
     ]
-
 
 sampleFields :: V.Vector Fields.SwField
 sampleFields =
   V.fromList
     [ Fields.SwField
-        { fHash = "field1"
-        , fFieldCategory = Fields.FCResponseBody
-        , fKeyPath = ".users[*].name"
-        , fDescription = ""
-        , fEndpointHash = "endpoint1_GET"
-        , fKey = "key"
-        , fFieldType = Fields.FTString
-        , fFormat = "text"
-        }
-    , Fields.SwField
-        { fHash = "field2"
-        , fFieldCategory = Fields.FCResponseBody
-        , fKeyPath = ".users[*].age"
-        , fDescription = ""
-        , fEndpointHash = "endpoint1_GET"
-        , fKey = "key"
-        , fFieldType = Fields.FTNumber
-        , fFormat = "integer"
-        }
-    , Fields.SwField
-        { fHash = "field3"
-        , fFieldCategory = Fields.FCRequestBody
-        , fKeyPath = ".name"
-        , fDescription = ""
-        , fEndpointHash = "endpoint1_POST"
-        , fKey = "key"
-        , fFieldType = Fields.FTString
-        , fFormat = "text"
-        }
-    , Fields.SwField
-        { fHash = "field4"
-        , fFieldCategory = Fields.FCRequestBody
-        , fKeyPath = ".age"
-        , fDescription = ""
-        , fEndpointHash = "endpoint1_POST"
-        , fKey = "key"
-        , fFieldType = Fields.FTNumber
-        , fFormat = "integer"
-        }
-    , Fields.SwField
-        { fHash = "field5"
-        , fFieldCategory = Fields.FCRequestBody
-        , fKeyPath = ".weight"
-        , fDescription = ""
-        , fEndpointHash = "endpoint1_POST"
-        , fKey = "key"
-        , fFieldType = Fields.FTNumber
-        , fFormat = "integer"
-        }
-    , Fields.SwField
-        { fHash = "field6"
-        , fFieldCategory = Fields.FCResponseBody
-        , fKeyPath = ".message"
-        , fDescription = ""
-        , fEndpointHash = "endpoint1_POST"
-        , fKey = "key"
-        , fFieldType = Fields.FTString
-        , fFormat = "text"
-        }
-    , Fields.SwField
-        { fHash = "field7"
-        , fFieldCategory = Fields.FCResponseBody
-        , fKeyPath = ".type"
-        , fDescription = ""
-        , fEndpointHash = "endpoint1_POST"
-        , fKey = "key"
-        , fFieldType = Fields.FTString
-        , fFormat = "text"
-        }
-    , Fields.SwField
-        { fHash = "field8"
-        , fFieldCategory = Fields.FCResponseBody
-        , fKeyPath = ".key.end"
-        , fDescription = ""
-        , fEndpointHash = "endpoint1_GET"
-        , fKey = "key"
-        , fFieldType = Fields.FTString
-        , fFormat = "text"
+        { fHash = "field1",
+          fFieldCategory = Fields.FCResponseBody,
+          fKeyPath = ".users[*].name",
+          fDescription = "",
+          fEndpointHash = "endpoint1_GET",
+          fKey = "key",
+          fFieldType = Fields.FTString,
+          fFormat = "text",
+          fIsEnum = False,
+          fIsRequired = False
+        },
+      Fields.SwField
+        { fHash = "field2",
+          fFieldCategory = Fields.FCResponseBody,
+          fKeyPath = ".users[*].age",
+          fDescription = "",
+          fEndpointHash = "endpoint1_GET",
+          fKey = "key",
+          fFieldType = Fields.FTNumber,
+          fFormat = "integer",
+          fIsEnum = False,
+          fIsRequired = False
+        },
+      Fields.SwField
+        { fHash = "field3",
+          fFieldCategory = Fields.FCRequestBody,
+          fKeyPath = ".name",
+          fDescription = "",
+          fEndpointHash = "endpoint1_POST",
+          fKey = "key",
+          fFieldType = Fields.FTString,
+          fFormat = "text",
+          fIsEnum = False,
+          fIsRequired = False
+        },
+      Fields.SwField
+        { fHash = "field4",
+          fFieldCategory = Fields.FCRequestBody,
+          fKeyPath = ".age",
+          fDescription = "",
+          fEndpointHash = "endpoint1_POST",
+          fKey = "key",
+          fFieldType = Fields.FTNumber,
+          fFormat = "integer",
+          fIsEnum = False,
+          fIsRequired = False
+        },
+      Fields.SwField
+        { fHash = "field5",
+          fFieldCategory = Fields.FCRequestBody,
+          fKeyPath = ".weight",
+          fDescription = "",
+          fEndpointHash = "endpoint1_POST",
+          fKey = "key",
+          fFieldType = Fields.FTNumber,
+          fFormat = "integer",
+          fIsEnum = False,
+          fIsRequired = False
+        },
+      Fields.SwField
+        { fHash = "field6",
+          fFieldCategory = Fields.FCResponseBody,
+          fKeyPath = ".message",
+          fDescription = "",
+          fEndpointHash = "endpoint1_POST",
+          fKey = "key",
+          fFieldType = Fields.FTString,
+          fFormat = "text",
+          fIsEnum = False,
+          fIsRequired = False
+        },
+      Fields.SwField
+        { fHash = "field7",
+          fFieldCategory = Fields.FCResponseBody,
+          fKeyPath = ".type",
+          fDescription = "",
+          fEndpointHash = "endpoint1_POST",
+          fKey = "key",
+          fFieldType = Fields.FTString,
+          fFormat = "text",
+          fIsEnum = False,
+          fIsRequired = False
+        },
+      Fields.SwField
+        { fHash = "field8",
+          fFieldCategory = Fields.FCResponseBody,
+          fKeyPath = ".key.end",
+          fDescription = "",
+          fEndpointHash = "endpoint1_GET",
+          fKey = "key",
+          fFieldType = Fields.FTString,
+          fFormat = "text",
+          fIsEnum = False,
+          fIsRequired = False
         }
     ]
-
 
 sampleFormats :: V.Vector Formats.SwFormat
 sampleFormats =
   V.fromList
     [ Formats.SwFormat
-        { swFieldHash = "field1"
-        , swFieldFormat = "text"
-        , swFieldType = Fields.FTString
-        , swExamples = ["jon"]
-        , swHash = ""
-        }
-    , Formats.SwFormat
-        { swFieldHash = "field2"
-        , swFieldFormat = "integer"
-        , swFieldType = Fields.FTNumber
-        , swExamples = ["18"]
-        , swHash = ""
-        }
-    , Formats.SwFormat
-        { swFieldHash = "field3"
-        , swFieldFormat = "text"
-        , swFieldType = Fields.FTString
-        , swExamples = ["jon"]
-        , swHash = ""
-        }
-    , Formats.SwFormat
-        { swFieldHash = "field4"
-        , swFieldFormat = "integer"
-        , swFieldType = Fields.FTNumber
-        , swExamples = ["18"]
-        , swHash = ""
-        }
-    , Formats.SwFormat
-        { swFieldHash = "field5"
-        , swFieldFormat = "integer"
-        , swFieldType = Fields.FTNumber
-        , swExamples = ["75"]
-        , swHash = ""
-        }
-    , Formats.SwFormat
-        { swFieldHash = "field6"
-        , swFieldFormat = "text"
-        , swFieldType = Fields.FTString
-        , swExamples = ["hello"]
-        , swHash = ""
-        }
-    , Formats.SwFormat
-        { swFieldHash = "field7"
-        , swFieldFormat = "text"
-        , swFieldType = Fields.FTString
-        , swExamples = ["SUCCESS"]
-        , swHash = ""
-        }
-    , Formats.SwFormat
-        { swFieldHash = "field8"
-        , swFieldFormat = "text"
-        , swFieldType = Fields.FTString
-        , swExamples = ["no"]
-        , swHash = ""
+        { swFieldHash = "field1",
+          swFieldFormat = "text",
+          swFieldType = Fields.FTString,
+          swExamples = ["jon"],
+          swHash = ""
+        },
+      Formats.SwFormat
+        { swFieldHash = "field2",
+          swFieldFormat = "integer",
+          swFieldType = Fields.FTNumber,
+          swExamples = ["18"],
+          swHash = ""
+        },
+      Formats.SwFormat
+        { swFieldHash = "field3",
+          swFieldFormat = "text",
+          swFieldType = Fields.FTString,
+          swExamples = ["jon"],
+          swHash = ""
+        },
+      Formats.SwFormat
+        { swFieldHash = "field4",
+          swFieldFormat = "integer",
+          swFieldType = Fields.FTNumber,
+          swExamples = ["18"],
+          swHash = ""
+        },
+      Formats.SwFormat
+        { swFieldHash = "field5",
+          swFieldFormat = "integer",
+          swFieldType = Fields.FTNumber,
+          swExamples = ["75"],
+          swHash = ""
+        },
+      Formats.SwFormat
+        { swFieldHash = "field6",
+          swFieldFormat = "text",
+          swFieldType = Fields.FTString,
+          swExamples = ["hello"],
+          swHash = ""
+        },
+      Formats.SwFormat
+        { swFieldHash = "field7",
+          swFieldFormat = "text",
+          swFieldType = Fields.FTString,
+          swExamples = ["SUCCESS"],
+          swHash = ""
+        },
+      Formats.SwFormat
+        { swFieldHash = "field8",
+          swFieldFormat = "text",
+          swFieldType = Fields.FTString,
+          swExamples = ["no"],
+          swHash = ""
         }
     ]
-
 
 expectedSwaggerJSON :: AE.Value
 expectedSwaggerJSON =
@@ -381,7 +393,6 @@ expectedSwaggerJSON =
     }
   |]
 
-
 ----
 --- HEADERS TEST
 ----
@@ -389,94 +400,97 @@ hSampleEndpoints :: V.Vector Endpoints.SwEndpoint
 hSampleEndpoints =
   V.fromList
     [ Endpoints.SwEndpoint
-        { urlPath = "/headers"
-        , urlParams = AE.Null
-        , method = "GET"
-        , host = "localhost"
-        , hash = "endpoint1_GET"
+        { urlPath = "/headers",
+          urlParams = AE.Null,
+          method = "GET",
+          host = "localhost",
+          hash = "endpoint1_GET",
+          description = ""
         }
     ]
-
 
 hSampleShapes :: V.Vector Shapes.SwShape
 hSampleShapes =
   V.fromList
     [ Shapes.SwShape
-        { swEndpointHash = "endpoint1_GET"
-        , swFieldHashes = V.fromList ["field1", "field2", "field3"]
-        , swRequestBodyKeypaths = V.fromList []
-        , swResponseBodyKeypaths = V.fromList []
-        , swResponseHeadersKeypaths = V.fromList [".Access-Control-Allow-Credentials.[]", ".Access-Control-Allow-Methods.[]", ".Content-Length"]
-        , swRequestHeadersKeypaths = V.fromList []
-        , swQueryParamsKeypaths = V.fromList []
-        , swHash = "shape1"
-        , swStatusCode = 200
+        { swEndpointHash = "endpoint1_GET",
+          swFieldHashes = V.fromList ["field1", "field2", "field3"],
+          swRequestBodyKeypaths = V.fromList [],
+          swResponseBodyKeypaths = V.fromList [],
+          swResponseHeadersKeypaths = V.fromList [".Access-Control-Allow-Credentials.[]", ".Access-Control-Allow-Methods.[]", ".Content-Length"],
+          swRequestHeadersKeypaths = V.fromList [],
+          swQueryParamsKeypaths = V.fromList [],
+          swHash = "shape1",
+          swStatusCode = 200
         }
     ]
-
 
 hSampleFields :: V.Vector Fields.SwField
 hSampleFields =
   V.fromList
     [ Fields.SwField
-        { fHash = "field1"
-        , fFieldCategory = Fields.FCResponseHeader
-        , fKeyPath = ".Access-Control-Allow-Credentials.[]"
-        , fDescription = "Sample header 1"
-        , fEndpointHash = "endpoint1_GET"
-        , fKey = "header1"
-        , fFieldType = Fields.FTString
-        , fFormat = "text"
-        }
-    , Fields.SwField
-        { fHash = "field2"
-        , fFieldCategory = Fields.FCResponseHeader
-        , fKeyPath = ".Access-Control-Allow-Methods.[]"
-        , fDescription = "Sample header 2"
-        , fEndpointHash = "endpoint1_GET"
-        , fKey = "header2"
-        , fFieldType = Fields.FTString
-        , fFormat = "text"
-        }
-    , Fields.SwField
-        { fHash = "field3"
-        , fFieldCategory = Fields.FCResponseHeader
-        , fKeyPath = ".Content-Length"
-        , fDescription = "Sample header 3"
-        , fEndpointHash = "endpoint1_GET"
-        , fKey = "header3"
-        , fFieldType = Fields.FTNumber
-        , fFormat = "integer"
+        { fHash = "field1",
+          fFieldCategory = Fields.FCResponseHeader,
+          fKeyPath = ".Access-Control-Allow-Credentials.[]",
+          fDescription = "Sample header 1",
+          fEndpointHash = "endpoint1_GET",
+          fKey = "header1",
+          fFieldType = Fields.FTString,
+          fFormat = "text",
+          fIsEnum = False,
+          fIsRequired = False
+        },
+      Fields.SwField
+        { fHash = "field2",
+          fFieldCategory = Fields.FCResponseHeader,
+          fKeyPath = ".Access-Control-Allow-Methods.[]",
+          fDescription = "Sample header 2",
+          fEndpointHash = "endpoint1_GET",
+          fKey = "header2",
+          fFieldType = Fields.FTString,
+          fFormat = "text",
+          fIsEnum = False,
+          fIsRequired = False
+        },
+      Fields.SwField
+        { fHash = "field3",
+          fFieldCategory = Fields.FCResponseHeader,
+          fKeyPath = ".Content-Length",
+          fDescription = "Sample header 3",
+          fEndpointHash = "endpoint1_GET",
+          fKey = "header3",
+          fFieldType = Fields.FTNumber,
+          fFormat = "integer",
+          fIsEnum = False,
+          fIsRequired = False
         }
     ]
-
 
 hSampleFormats :: V.Vector Formats.SwFormat
 hSampleFormats =
   V.fromList
     [ Formats.SwFormat
-        { swFieldHash = "field1"
-        , swFieldFormat = "text"
-        , swFieldType = Fields.FTString
-        , swExamples = ["header 1"]
-        , swHash = ""
-        }
-    , Formats.SwFormat
-        { swFieldHash = "field2"
-        , swFieldFormat = "text"
-        , swFieldType = Fields.FTString
-        , swExamples = ["header 2"]
-        , swHash = ""
-        }
-    , Formats.SwFormat
-        { swFieldHash = "field3"
-        , swFieldFormat = "integer"
-        , swFieldType = Fields.FTNumber
-        , swExamples = ["header 3"]
-        , swHash = ""
+        { swFieldHash = "field1",
+          swFieldFormat = "text",
+          swFieldType = Fields.FTString,
+          swExamples = ["header 1"],
+          swHash = ""
+        },
+      Formats.SwFormat
+        { swFieldHash = "field2",
+          swFieldFormat = "text",
+          swFieldType = Fields.FTString,
+          swExamples = ["header 2"],
+          swHash = ""
+        },
+      Formats.SwFormat
+        { swFieldHash = "field3",
+          swFieldFormat = "integer",
+          swFieldType = Fields.FTNumber,
+          swExamples = ["header 3"],
+          swHash = ""
         }
     ]
-
 
 hExpectedSwaggerJSON :: AE.Value
 hExpectedSwaggerJSON =
@@ -540,7 +554,6 @@ hExpectedSwaggerJSON =
     }
   |]
 
-
 -----
 --- ParametersTests
 ----
@@ -549,94 +562,97 @@ pSampleEndpoints :: V.Vector Endpoints.SwEndpoint
 pSampleEndpoints =
   V.fromList
     [ Endpoints.SwEndpoint
-        { urlPath = "/headers"
-        , urlParams = AE.Null
-        , method = "GET"
-        , host = "localhost"
-        , hash = "endpoint1_GET"
+        { urlPath = "/headers",
+          urlParams = AE.Null,
+          method = "GET",
+          host = "localhost",
+          hash = "endpoint1_GET",
+          description = ""
         }
     ]
-
 
 pSampleShapes :: V.Vector Shapes.SwShape
 pSampleShapes =
   V.fromList
     [ Shapes.SwShape
-        { swEndpointHash = "endpoint1_GET"
-        , swFieldHashes = V.fromList ["field1", "field2", "field3"]
-        , swRequestBodyKeypaths = V.fromList []
-        , swResponseBodyKeypaths = V.fromList []
-        , swResponseHeadersKeypaths = V.fromList []
-        , swRequestHeadersKeypaths = V.fromList []
-        , swQueryParamsKeypaths = V.fromList ["from.[]", "page.[]", "ref.[]"]
-        , swHash = "shape1"
-        , swStatusCode = 200
+        { swEndpointHash = "endpoint1_GET",
+          swFieldHashes = V.fromList ["field1", "field2", "field3"],
+          swRequestBodyKeypaths = V.fromList [],
+          swResponseBodyKeypaths = V.fromList [],
+          swResponseHeadersKeypaths = V.fromList [],
+          swRequestHeadersKeypaths = V.fromList [],
+          swQueryParamsKeypaths = V.fromList ["from.[]", "page.[]", "ref.[]"],
+          swHash = "shape1",
+          swStatusCode = 200
         }
     ]
-
 
 pSampleFields :: V.Vector Fields.SwField
 pSampleFields =
   V.fromList
     [ Fields.SwField
-        { fHash = "field1"
-        , fFieldCategory = Fields.FCQueryParam
-        , fKeyPath = "from.[]"
-        , fDescription = "Sample param 1"
-        , fEndpointHash = "endpoint1_GET"
-        , fKey = "header1"
-        , fFieldType = Fields.FTString
-        , fFormat = "text"
-        }
-    , Fields.SwField
-        { fHash = "field2"
-        , fFieldCategory = Fields.FCQueryParam
-        , fKeyPath = "page.[]"
-        , fDescription = "Sample param 2"
-        , fEndpointHash = "endpoint1_GET"
-        , fKey = "header2"
-        , fFieldType = Fields.FTString
-        , fFormat = "text"
-        }
-    , Fields.SwField
-        { fHash = "field3"
-        , fFieldCategory = Fields.FCQueryParam
-        , fKeyPath = "ref.[]"
-        , fDescription = "Sample param 3"
-        , fEndpointHash = "endpoint1_GET"
-        , fKey = "header3"
-        , fFieldType = Fields.FTString
-        , fFormat = "text"
+        { fHash = "field1",
+          fFieldCategory = Fields.FCQueryParam,
+          fKeyPath = "from.[]",
+          fDescription = "Sample param 1",
+          fEndpointHash = "endpoint1_GET",
+          fKey = "header1",
+          fFieldType = Fields.FTString,
+          fFormat = "text",
+          fIsEnum = False,
+          fIsRequired = False
+        },
+      Fields.SwField
+        { fHash = "field2",
+          fFieldCategory = Fields.FCQueryParam,
+          fKeyPath = "page.[]",
+          fDescription = "Sample param 2",
+          fEndpointHash = "endpoint1_GET",
+          fKey = "header2",
+          fFieldType = Fields.FTString,
+          fFormat = "text",
+          fIsEnum = False,
+          fIsRequired = False
+        },
+      Fields.SwField
+        { fHash = "field3",
+          fFieldCategory = Fields.FCQueryParam,
+          fKeyPath = "ref.[]",
+          fDescription = "Sample param 3",
+          fEndpointHash = "endpoint1_GET",
+          fKey = "header3",
+          fFieldType = Fields.FTString,
+          fFormat = "text",
+          fIsEnum = False,
+          fIsRequired = False
         }
     ]
-
 
 pSampleFormats :: V.Vector Formats.SwFormat
 pSampleFormats =
   V.fromList
     [ Formats.SwFormat
-        { swFieldHash = "field1"
-        , swFieldFormat = "text"
-        , swFieldType = Fields.FTString
-        , swExamples = ["/home"]
-        , swHash = ""
-        }
-    , Formats.SwFormat
-        { swFieldHash = "field2"
-        , swFieldFormat = "text"
-        , swFieldType = Fields.FTString
-        , swExamples = ["2"]
-        , swHash = ""
-        }
-    , Formats.SwFormat
-        { swFieldHash = "field3"
-        , swFieldFormat = "text"
-        , swFieldType = Fields.FTString
-        , swExamples = ["me"]
-        , swHash = ""
+        { swFieldHash = "field1",
+          swFieldFormat = "text",
+          swFieldType = Fields.FTString,
+          swExamples = ["/home"],
+          swHash = ""
+        },
+      Formats.SwFormat
+        { swFieldHash = "field2",
+          swFieldFormat = "text",
+          swFieldType = Fields.FTString,
+          swExamples = ["2"],
+          swHash = ""
+        },
+      Formats.SwFormat
+        { swFieldHash = "field3",
+          swFieldFormat = "text",
+          swFieldType = Fields.FTString,
+          swExamples = ["me"],
+          swHash = ""
         }
     ]
-
 
 pExpectedSwaggerJSON :: AE.Value
 pExpectedSwaggerJSON =
@@ -695,7 +711,6 @@ pExpectedSwaggerJSON =
       }
     }
   |]
-
 
 spec :: Spec
 spec = describe "generateSwagger" do
