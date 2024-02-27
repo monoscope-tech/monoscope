@@ -260,7 +260,7 @@ documentationPutH pid SaveSwaggerForm {updated_swagger, swagger_id, endpoints, d
         case swagger_id of
           "" -> do
             swaggerId <- Swaggers.SwaggerId <$> liftIO UUIDV4.nextRandom
-            let swaggerToAdd = Swaggers.Swagger {id = swaggerId, projectId = pid, createdBy = sess.userId, createdAt = utcToZonedTime utc currentTime, updatedAt = utcToZonedTime utc currentTime, swaggerJson = value}
+            let swaggerToAdd = Swaggers.Swagger {id = swaggerId, projectId = pid, createdBy = Just sess.userId, createdAt = utcToZonedTime utc currentTime, updatedAt = utcToZonedTime utc currentTime, swaggerJson = value}
             Swaggers.addSwagger swaggerToAdd
             pass
           _ -> do
@@ -295,15 +295,14 @@ documentationPostH pid SwaggerForm {swagger_json, from} = do
             Swaggers.Swagger
               { id = swaggerId,
                 projectId = pid,
-                createdBy = sess.userId,
+                createdBy = Just sess.userId,
                 createdAt = currentTime,
                 updatedAt = currentTime,
                 swaggerJson = value
               }
 
-      swaggers <- dbtToEff do
+      _ <- dbtToEff do
         Swaggers.addSwagger swaggerToAdd
-        Swaggers.swaggersByProject pid
 
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Swagger uploaded Successfully"]}|]
       pure $ addHeader hxTriggerData ""

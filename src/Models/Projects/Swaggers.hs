@@ -22,23 +22,20 @@ import Models.Users.Users qualified as Users
 import Relude
 import Servant (FromHttpApiData)
 
-
 newtype SwaggerId = SwaggerId {swaggerId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving newtype (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default, NFData)
 
-
 instance HasField "toText" SwaggerId Text where
   getField = UUID.toText . swaggerId
 
-
 data Swagger = Swagger
-  { id :: SwaggerId
-  , projectId :: Projects.ProjectId
-  , createdBy :: Users.UserId
-  , createdAt :: ZonedTime
-  , updatedAt :: ZonedTime
-  , swaggerJson :: Value
+  { id :: SwaggerId,
+    projectId :: Projects.ProjectId,
+    createdBy :: Maybe Users.UserId,
+    createdAt :: ZonedTime,
+    updatedAt :: ZonedTime,
+    swaggerJson :: Value
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, NFData)
@@ -46,20 +43,16 @@ data Swagger = Swagger
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "swagger_jsons", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Swagger)
 
-
 addSwagger :: Swagger -> DBT IO ()
 addSwagger = insert @Swagger
 
-
 getSwaggerById :: Text -> DBT IO (Maybe Swagger)
 getSwaggerById id' = selectById (Only id')
-
 
 swaggersByProject :: Projects.ProjectId -> DBT IO (Vector Swagger)
 swaggersByProject = query Select q
   where
     q = [sql| select id, project_id, created_by, created_at, updated_at, swagger_json from apis.swagger_jsons where project_id=? order by created_at desc|]
-
 
 updateSwagger :: Text -> Value -> DBT IO Int64
 updateSwagger swaggerId swaggerJson = do

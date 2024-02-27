@@ -27,21 +27,25 @@ import Log qualified
 import Lucid
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Fields.Query ()
+import Models.Apis.Fields qualified as Fields
+import Models.Apis.Fields.Query qualified as FieldsQ
+import Models.Apis.Formats qualified as Formats
 import Models.Apis.Reports qualified as Reports
 import Models.Apis.RequestDumps qualified as RequestDumps
+import Models.Apis.Shapes qualified as Shapes
 import Models.Apis.Slack
 import Models.Projects.Projects qualified as Projects
+import Models.Projects.Swaggers qualified as Swaggers
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text, trimming)
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, startJobRunner, throwParsePayload)
+import Pages.GenerateSwagger (generateSwagger)
 import Pages.Reports qualified as RP
 import Pkg.Mail
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import System.Config qualified as Config
-
 
 data BgJobs
   = InviteUserToProject Users.UserId Projects.ProjectId Text Text
@@ -51,15 +55,14 @@ data BgJobs
   | DailyReports Projects.ProjectId
   | WeeklyReports Projects.ProjectId
   | DailyJob
+  | GenSwagger Projects.ProjectId
   deriving stock (Eq, Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
-
 
 getShapes :: Projects.ProjectId -> Text -> DBT IO (Vector (Text, Vector Text))
 getShapes pid enpHash = query Select q (pid, enpHash)
   where
     q = [sql| select hash, field_hashes from apis.shapes where project_id=? and endpoint_hash=? |]
-
 
 getUpdatedFieldFormats :: Projects.ProjectId -> Vector Text -> DBT IO (Vector Text)
 getUpdatedFieldFormats pid fieldHashes = query Select q (pid, fieldHashes)
@@ -68,18 +71,15 @@ getUpdatedFieldFormats pid fieldHashes = query Select q (pid, fieldHashes)
       [sql| select fm.hash from apis.formats fm JOIN apis.fields fd ON (fm.project_id=fd.project_id AND fd.hash=fm.field_hash) 
                 where fm.project_id=? AND fm.created_at>(fd.created_at+interval '2 minutes') AND fm.field_hash=ANY(?) |]
 
-
 updateShapeCounts :: Projects.ProjectId -> Text -> Vector Text -> Vector Text -> Vector Text -> DBT IO Int64
 updateShapeCounts pid shapeHash newFields deletedFields updatedFields = execute Update q (newFields, deletedFields, updatedFields, pid, shapeHash)
   where
     q = [sql| update apis.shapes SET new_unique_fields=?, deleted_fields=?, updated_field_formats=? where project_id=? and hash=?|]
 
-
 getAllProjects :: DBT IO (Vector Projects.ProjectId)
 getAllProjects = query Select q (Only True)
   where
     q = [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL|]
-
 
 -- TODO:
 -- Analyze shapes for
@@ -285,7 +285,32 @@ jobsRunner dbPool logger cfg job = do
       WeeklyReports pid -> do
         weeklyReportForProject dbPool cfg pid
         pass
-
+      GenSwagger pid -> do
+        projectM <- withPool dbPool $ Projects.projectById pid
+        case projectM of
+          Nothing -> pass
+          Just project -> do
+            endpoints <- withPool dbPool $ Endpoints.endpointsByProjectId pid
+            let endpoint_hashes = V.map (.hash) endpoints
+            shapes <- withPool dbPool $ Shapes.shapesByEndpointHashes pid endpoint_hashes
+            fields <- withPool dbPool $ FieldsQ.fieldsByEndpointHashes pid endpoint_hashes
+            let field_hashes = V.map (.fHash) fields
+            formats <- withPool dbPool $ Formats.formatsByFieldsHashes pid field_hashes
+            let (projectTitle, projectDescription) = (toText project.title, toText project.description)
+            let swagger = generateSwagger projectTitle projectDescription endpoints shapes fields formats
+            swaggerId <- Swaggers.SwaggerId <$> liftIO UUIDV4.nextRandom
+            currentTime <- liftIO getZonedTime
+            let swaggerToAdd =
+                  Swaggers.Swagger
+                    { id = swaggerId,
+                      projectId = pid,
+                      createdBy = Nothing,
+                      createdAt = currentTime,
+                      updatedAt = currentTime,
+                      swaggerJson = swagger
+                    }
+            _ <- withPool dbPool $ Swaggers.addSwagger swaggerToAdd
+            pass
 
 jobsWorkerInit :: Pool Connection -> Log.Logger -> Config.EnvConfig -> IO ()
 jobsWorkerInit dbPool logger envConfig = startJobRunner $ mkConfig jobLogger "background_jobs" dbPool (MaxConcurrentJobs 1) (jobsRunner dbPool logger envConfig) id
@@ -293,7 +318,6 @@ jobsWorkerInit dbPool logger envConfig = startJobRunner $ mkConfig jobLogger "ba
     jobLogger :: LogLevel -> LogEvent -> IO ()
     jobLogger logLevel logEvent = Log.runLogT "OddJobs" logger Log.LogAttention $ Log.logAttention "" (show (logLevel, logEvent)) -- logger show (logLevel, logEvent)
     -- jobLogger logLevel logEvent = print show (logLevel, logEvent) -- logger show (logLevel, logEvent)
-
 
 dailyReportForProject :: Pool Connection -> Config.EnvConfig -> Projects.ProjectId -> IO ()
 dailyReportForProject dbPool cfg pid = do
@@ -308,12 +332,12 @@ dailyReportForProject dbPool cfg pid = do
     reportId <- Reports.ReportId <$> liftIO UUIDV4.nextRandom
     let report =
           Reports.Report
-            { id = reportId
-            , reportJson = rep_json
-            , createdAt = currentTime
-            , updatedAt = currentTime
-            , projectId = pid
-            , reportType = "daily"
+            { id = reportId,
+              reportJson = rep_json,
+              createdAt = currentTime,
+              updatedAt = currentTime,
+              projectId = pid,
+              reportType = "daily"
             }
     _ <- withPool dbPool $ Reports.addReport report
     when pr.dailyNotif do
@@ -336,7 +360,6 @@ dailyReportForProject dbPool cfg pid = do
               let subject = [text| APITOOLKIT: Daily Report for $projectTitle |]
               sendEmail cfg (CI.original user.email) subject body
 
-
 weeklyReportForProject :: Pool Connection -> Config.EnvConfig -> Projects.ProjectId -> IO ()
 weeklyReportForProject dbPool cfg pid = do
   users <- withPool dbPool $ Projects.usersByProjectId pid
@@ -350,12 +373,12 @@ weeklyReportForProject dbPool cfg pid = do
     reportId <- Reports.ReportId <$> liftIO UUIDV4.nextRandom
     let report =
           Reports.Report
-            { id = reportId
-            , reportJson = rep_json
-            , createdAt = currentTime
-            , updatedAt = currentTime
-            , projectId = pid
-            , reportType = "weekly"
+            { id = reportId,
+              reportJson = rep_json,
+              createdAt = currentTime,
+              updatedAt = currentTime,
+              projectId = pid,
+              reportType = "weekly"
             }
     _ <- withPool dbPool $ Reports.addReport report
     when pr.weeklyNotif do

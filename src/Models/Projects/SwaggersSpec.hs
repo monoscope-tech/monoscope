@@ -18,7 +18,6 @@ import Pkg.TmpPg qualified as TmpPg
 import Relude
 import Test.Hspec
 
-
 -- Helper function to create a Swagger value for testing
 createSwagger :: ProjectId -> UserId -> Value -> DBT.DBT IO Swagger
 createSwagger projectId createdBy swaggerJson = do
@@ -26,16 +25,15 @@ createSwagger projectId createdBy swaggerJson = do
   randUUID <- liftIO UUIDV4.nextRandom
   let swagger =
         Swagger
-          { Models.Projects.Swaggers.id = SwaggerId randUUID
-          , projectId = projectId
-          , createdBy = createdBy
-          , createdAt = currentTime
-          , updatedAt = currentTime
-          , swaggerJson = swaggerJson
+          { Models.Projects.Swaggers.id = SwaggerId randUUID,
+            projectId = projectId,
+            createdBy = Just createdBy,
+            createdAt = currentTime,
+            updatedAt = currentTime,
+            swaggerJson = swaggerJson
           }
   addSwagger swagger
   pure swagger
-
 
 spec :: Spec
 spec = aroundAll TmpPg.withSetup $ describe "Models.Projects.Swaggers" $ do
@@ -48,12 +46,12 @@ spec = aroundAll TmpPg.withSetup $ describe "Models.Projects.Swaggers" $ do
       currentTime <- liftIO getZonedTime
       let swagger =
             Swagger
-              { Models.Projects.Swaggers.id = swaggerId
-              , projectId = ProjectId UUID.nil
-              , createdBy = UserId UUID.nil
-              , createdAt = currentTime
-              , updatedAt = currentTime
-              , swaggerJson = swaggerJson'
+              { Models.Projects.Swaggers.id = swaggerId,
+                projectId = ProjectId UUID.nil,
+                createdBy = Just (UserId UUID.nil),
+                createdAt = currentTime,
+                updatedAt = currentTime,
+                swaggerJson = swaggerJson'
               }
       result <- withPool pool $ do
         _ <- addSwagger swagger
