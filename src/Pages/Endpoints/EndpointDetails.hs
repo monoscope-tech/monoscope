@@ -115,6 +115,12 @@ fieldDetailsView field formats = do
       div_ [class_ ""] do
         h6_ [class_ "text-slate-800 text-xs"] "FORMAT OVERRIDE"
         h4_ [class_ "text-base text-slate-800"] $ toHtml $ fromMaybe "[unset]" field.fieldTypeOverride
+    div_ [class_ "flex flex-row gap-6"] do
+      when field.isRequired do
+        span_ [class_ "px-2 rounded-xl bg-red-100 text-red-800 monospace"] "required"
+      when field.isEnum do
+        span_ [class_ "px-2 rounded-xl bg-green-100 text-green-800 monospace"] "enum"
+
     div_ do
       h5_ [class_ "text-sm text-slate-800"] "DETECTED FIELD FORMATS AND TYPES"
       div_ [class_ "space-y-2"]
@@ -128,7 +134,7 @@ fieldDetailsView field formats = do
               div_ [class_ "mx-5 space-y-2"] do
                 h6_ [class_ "text-slate-800 text-xs"] "FORMAT"
                 h4_ [class_ "text-base text-slate-800"] $ toHtml formatV.fieldFormat
-            h6_ [class_ "text-slate-600 mt-4 text-xs"] "EXAMPLE VALUES"
+            h6_ [class_ "text-slate-600 mt-4 text-xs"] $ if field.isEnum then "ENUM VALUES" else "EXAMPLE VALUES"
             ul_ [class_ "list-disc"] do
               formatV.examples & mapM_ \ex -> do
                 li_ [class_ "ml-10 text-slate-800 text-sm"] $ toHtml $ aesonValueToText ex
@@ -623,7 +629,9 @@ subSubSection title fieldsM descriptionM =
                     faSprite_ "chevron-down" "light" "h-4 mr-3 mt-4 w-4 invisible"
                     div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full items-center"] do
                       input_ [type_ "checkbox", class_ " mr-12"]
-                      span_ [class_ "grow text-sm text-slate-800 inline-flex items-center"] $ toHtml displayKey
+                      div_ [class_ "flex gap-2 items-center grow"] do
+                        span_ [class_ "text-sm text-slate-800 inline-flex items-center"] $ toHtml displayKey
+                        when field.isRequired do span_ [class_ "text-red-500", term "data-tippy-content" "required field"] "*"
                       span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ EndpointComponents.fieldTypeToDisplay field.fieldType
                       faSprite_ "octagon-exclamation" "regular" " mr-8 ml-4 h-5 text-red-400"
                       faSprite_ "ellipsis-vertical" "light" "mx-5 h-5"
