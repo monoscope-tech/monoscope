@@ -271,7 +271,7 @@ expectedSwaggerJSON =
               "200": {
                 "description": "",
                 "content": {
-                  "*/*": {
+                  "application/json": {
                     "schema": {
                       "type": "object",
                       "properties": {
@@ -318,7 +318,7 @@ expectedSwaggerJSON =
               "401": { 
                 "description": "",
                 "content": {
-                  "*/*":  {
+                  "application/json":  {
                     "schema": {
                       "type": "object",
                       "properties": {
@@ -342,7 +342,7 @@ expectedSwaggerJSON =
               "201": {
                 "description": "",
                 "content": {
-                  "*/*": {
+                  "application/json": {
                     "schema": {
                       "type": "object",
                       "properties": {
@@ -366,7 +366,7 @@ expectedSwaggerJSON =
             },
              "requestBody": {
                "content": {
-                 "*/*": {
+                 "application/json": {
                    "schema": {
                      "type": "object",
                       "properties": {
@@ -518,7 +518,7 @@ hExpectedSwaggerJSON =
             "responses": {
               "200": {
                 content: {
-                  "*/*": {}
+                  "application/json": {}
                 },
                 "description": "",
                 "headers": {
