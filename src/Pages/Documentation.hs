@@ -2,7 +2,7 @@
 
 module Pages.Documentation (documentationGetH, documentationPostH, documentationPutH, SwaggerForm, SaveSwaggerForm) where
 
-import Data.Aeson (FromJSON, ToJSON, decodeStrict, encode)
+import Data.Aeson
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
@@ -330,20 +330,18 @@ documentationGetH pid swagger_id = do
             let idx = show swg.id.swaggerId
             pure (sw, idx)
           ([], Nothing) -> do
-            -- TODO: We should generate this swagger in a worker. maybe at an interval?
-            -- Or we can support a button to regenerate it
-            -- Or we can trigger a background process specifically when a user loads a docs page.
-            endpoints <- Endpoints.endpointsByProjectId pid
-            let endpoint_hashes = V.map (.hash) endpoints
-            shapes <- Shapes.shapesByEndpointHashes pid endpoint_hashes
-            fields <- Fields.fieldsByEndpointHashes pid endpoint_hashes
-            let field_hashes = V.map (.fHash) fields
-            formats <- Formats.formatsByFieldsHashes pid field_hashes
             let (projectTitle, projectDescription) = case project of
                   (Just pr) -> (pr.title, pr.description)
                   Nothing -> ("__APITOOLKIT", "Edit project description")
-            let gn = GenerateSwagger.generateSwagger projectTitle projectDescription endpoints shapes fields formats
-            pure (gn, "")
+            let info =
+                  object
+                    [ "description" .= AE.String projectDescription,
+                      "title" .= AE.String "No swagger generated for this project,upload your own swagger or acknowledge endpoints and shapes to trigger swagger generation",
+                      "version" .= AE.String "1.0.0",
+                      "termsOfService" .= AE.String "https://apitoolkit.io/terms-and-conditions/"
+                    ]
+            let swagger = object ["openapi" .= AE.String "3.0.0", "info" .= info, "servers" .= Array [], "paths" .= object []]
+            pure (swagger, "")
           (swgrs, Nothing) -> do
             let latest = V.head swgrs
             let sw = latest.swaggerJson
