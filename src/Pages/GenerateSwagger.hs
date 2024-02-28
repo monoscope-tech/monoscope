@@ -157,33 +157,36 @@ convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
                               [ "description" .= String desc,
                                 "type" .= String "array",
                                 "items"
-                                  .= object
-                                    [ "type" .= t,
-                                      "format" .= ft,
-                                      if is_enum
-                                        then "enum" .= examples
-                                        else
-                                          if V.length examples > 0
-                                            then "example" .= V.head examples
-                                            else "example" .= AE.Null,
-                                      "required" .= is_required
-                                    ]
+                                  .= ( object
+                                         $ [ "type" .= t,
+                                             "format" .= ft
+                                           ]
+                                         ++ if is_enum
+                                           then ["enum" .= examples]
+                                           else
+                                             if V.length examples > 0
+                                               then ["example" .= V.head examples]
+                                               else
+                                                 []
+                                                   ++ if is_required then ["required" .= is_required] else []
+                                     )
                               ]
                           )
                         else
                           ( grp,
                             object
-                              [ "description" .= String desc,
-                                "type" .= t,
-                                "format" .= ft,
-                                if is_enum
-                                  then "enum" .= examples
-                                  else
-                                    if V.length examples > 0
-                                      then "example" .= V.head examples
-                                      else "example" .= AE.Null,
-                                "required" .= is_required
-                              ]
+                              $ [ "description" .= String desc,
+                                  "type" .= t,
+                                  "format" .= ft
+                                ]
+                              ++ if is_enum
+                                then ["enum" .= examples]
+                                else
+                                  if V.length examples > 0
+                                    then ["example" .= V.head examples]
+                                    else
+                                      []
+                                        ++ if is_required then ["required" .= is_required] else []
                           )
                     validKey = if key == "" then "schema" else key
                  in object [AEKey.fromText validKey .= ob]
