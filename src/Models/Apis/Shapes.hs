@@ -146,7 +146,7 @@ getShapeParams shape =
     shape.requestBodyKeypaths,
     shape.responseBodyKeypaths,
     shape.requestHeadersKeypaths,
-    shape.responseBodyKeypaths,
+    shape.responseHeadersKeypaths,
     shape.fieldHashes,
     shape.hash,
     shape.statusCode,
