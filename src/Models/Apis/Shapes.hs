@@ -150,8 +150,8 @@ getShapeParams shape =
     shape.fieldHashes,
     shape.hash,
     shape.statusCode,
-    shape.responseDescription,
-    shape.requestDescription
+    shape.requestDescription,
+    shape.responseDescription
   )
 
 data SwShape = SwShape
