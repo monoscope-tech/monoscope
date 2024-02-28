@@ -264,7 +264,7 @@ endpointsByProjectId pid = query Select q (Only pid)
          FROM apis.endpoints enp 
          INNER JOIN 
          apis.anomalies ann ON (ann.anomaly_type = 'endpoint' AND ann.target_hash = enp.hash)
-         WHERE project_id = ? AND ann.acknowleged_at IS NOT NULL
+         WHERE enp.project_id = ? AND ann.acknowleged_at IS NOT NULL
        |]
 
 insertEndpoints :: [Endpoint] -> DBT IO Int64

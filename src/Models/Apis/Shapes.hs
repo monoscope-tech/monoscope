@@ -181,8 +181,8 @@ shapesByEndpointHashes pid hashes = query Select q (pid, hashes)
       SELECT endpoint_hash sw_endpoint_hash, query_params_keypaths sw_query_params_keypaths, request_body_keypaths sw_request_body_keypaths,
              response_body_keypaths sw_response_body_keypaths, request_headers_keypaths sw_request_headers_keypaths, 
              response_headers_keypaths sw_response_headers_keypaths, hash sw_hash,status_code sw_status_code,field_hashes sw_field_hashes,
-             requestion_description sw_request_description, response_description sw_response_description
+             request_description sw_request_description, response_description sw_response_description
       FROM apis.shapes sh
       INNER JOIN apis.anomalies ann ON (ann.anomaly_type = 'shape' AND  ann.target_hash = sh.hash)
-      WHERE project_id = ? AND endpoint_hash = ANY(?)
+      WHERE sh.project_id = ? AND endpoint_hash = ANY(?)
     |]
