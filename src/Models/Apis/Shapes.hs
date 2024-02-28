@@ -157,10 +157,10 @@ getShapeParams shape =
 data SwShape = SwShape
   { swEndpointHash :: Text,
     swQueryParamsKeypaths :: Vector Text,
-    swRequestHeadersKeypaths :: Vector Text,
-    swResponseHeadersKeypaths :: Vector Text,
     swRequestBodyKeypaths :: Vector Text,
     swResponseBodyKeypaths :: Vector Text,
+    swRequestHeadersKeypaths :: Vector Text,
+    swResponseHeadersKeypaths :: Vector Text,
     swHash :: Text,
     swStatusCode :: Int,
     swFieldHashes :: Vector Text,
