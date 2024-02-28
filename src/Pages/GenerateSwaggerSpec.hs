@@ -58,7 +58,9 @@ sampleShapes =
           swRequestHeadersKeypaths = V.fromList [],
           swQueryParamsKeypaths = V.fromList [],
           swHash = "shap1",
-          swStatusCode = 200
+          swStatusCode = 200,
+          swRequestDescription = "",
+          swResponseDescription = ""
         },
       Shapes.SwShape
         { swEndpointHash = "endpoint1_POST",
@@ -69,7 +71,9 @@ sampleShapes =
           swRequestHeadersKeypaths = V.fromList [],
           swQueryParamsKeypaths = V.fromList [],
           swHash = "shap2",
-          swStatusCode = 401
+          swStatusCode = 401,
+          swRequestDescription = "",
+          swResponseDescription = ""
         },
       Shapes.SwShape
         { swEndpointHash = "endpoint1_POST",
@@ -80,7 +84,9 @@ sampleShapes =
           swRequestHeadersKeypaths = V.fromList [],
           swQueryParamsKeypaths = V.fromList [],
           swHash = "shap3",
-          swStatusCode = 201
+          swStatusCode = 201,
+          swRequestDescription = "",
+          swResponseDescription = ""
         }
     ]
 
@@ -421,7 +427,9 @@ hSampleShapes =
           swRequestHeadersKeypaths = V.fromList [],
           swQueryParamsKeypaths = V.fromList [],
           swHash = "shape1",
-          swStatusCode = 200
+          swStatusCode = 200,
+          swRequestDescription = "",
+          swResponseDescription = ""
         }
     ]
 
@@ -583,7 +591,9 @@ pSampleShapes =
           swRequestHeadersKeypaths = V.fromList [],
           swQueryParamsKeypaths = V.fromList ["from.[]", "page.[]", "ref.[]"],
           swHash = "shape1",
-          swStatusCode = 200
+          swStatusCode = 200,
+          swRequestDescription = "",
+          swResponseDescription = ""
         }
     ]
 

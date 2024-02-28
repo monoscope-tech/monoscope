@@ -301,14 +301,35 @@ groupEndpointsByUrlPath endpoints =
             (Just rqS, Just qS) ->
               let rqProps = convertKeyPathsToJson (V.toList rqS.shape.swRequestBodyKeypaths) (fromMaybe [] (Map.lookup Field.FCRequestBody rqS.sField)) ""
                   qParams = convertQueryParamsToJSON (V.toList qS.shape.swQueryParamsKeypaths) (fromMaybe [] (Map.lookup Field.FCQueryParam qS.sField))
-               in AEKey.fromText (T.toLower $ method mergedEndpoint) .= object ["description" .= description mergedEndpoint, "parameters" .= qParams, "responses" .= groupShapesByStatusCode (shapes mergedEndpoint), "requestBody" .= object ["content" .= object ["*/*" .= rqProps]]]
+               in AEKey.fromText (T.toLower $ method mergedEndpoint)
+                    .= object
+                      [ "description" .= description mergedEndpoint,
+                        "parameters" .= qParams,
+                        "responses" .= groupShapesByStatusCode (shapes mergedEndpoint),
+                        "requestBody" .= object ["description" .= rqS.shape.swRequestDescription, "content" .= object ["application/json" .= rqProps]]
+                      ]
             (Just rqS, Nothing) ->
               let rqProps = convertKeyPathsToJson (V.toList rqS.shape.swRequestBodyKeypaths) (fromMaybe [] (Map.lookup Field.FCRequestBody rqS.sField)) ""
-               in AEKey.fromText (T.toLower $ method mergedEndpoint) .= object ["description" .= description mergedEndpoint, "responses" .= groupShapesByStatusCode (shapes mergedEndpoint), "requestBody" .= object ["content" .= object ["*/*" .= rqProps]]]
+               in AEKey.fromText (T.toLower $ method mergedEndpoint)
+                    .= object
+                      [ "description" .= description mergedEndpoint,
+                        "responses" .= groupShapesByStatusCode (shapes mergedEndpoint),
+                        "requestBody" .= object ["description" .= rqS.shape.swRequestDescription, "content" .= object ["application/json" .= rqProps]]
+                      ]
             (Nothing, Just qS) ->
               let qParams = convertQueryParamsToJSON (V.toList qS.shape.swQueryParamsKeypaths) (fromMaybe [] (Map.lookup Field.FCQueryParam qS.sField))
-               in AEKey.fromText (T.toLower $ method mergedEndpoint) .= object ["description" .= description mergedEndpoint, "parameters" .= qParams, "responses" .= groupShapesByStatusCode (shapes mergedEndpoint)]
-            (_, _) -> AEKey.fromText (T.toLower $ method mergedEndpoint) .= object ["description" .= description mergedEndpoint, "responses" .= groupShapesByStatusCode (shapes mergedEndpoint)]
+               in AEKey.fromText (T.toLower $ method mergedEndpoint)
+                    .= object
+                      [ "description" .= description mergedEndpoint,
+                        "parameters" .= qParams,
+                        "responses" .= groupShapesByStatusCode (shapes mergedEndpoint)
+                      ]
+            (_, _) ->
+              AEKey.fromText (T.toLower $ method mergedEndpoint)
+                .= object
+                  [ "description" .= description mergedEndpoint,
+                    "responses" .= groupShapesByStatusCode (shapes mergedEndpoint)
+                  ]
        in endPointJSON
 
 groupShapesByStatusCode :: V.Vector MergedShapesAndFields -> AE.Value
@@ -323,7 +344,7 @@ mapFunc :: MergedShapesAndFields -> AET.Pair
 mapFunc mShape =
   let content = object ["application/json" .= convertKeyPathsToJson (V.toList mShape.shape.swResponseBodyKeypaths) (fromMaybe [] (Map.lookup Field.FCResponseBody mShape.sField)) ""]
       headers = object ["content" .= convertKeyPathsToJson (V.toList mShape.shape.swResponseHeadersKeypaths) (fromMaybe [] (Map.lookup Field.FCResponseHeader mShape.sField)) ""]
-   in show mShape.shape.swStatusCode .= object ["description" .= String "", "headers" .= headers, "content" .= content]
+   in show mShape.shape.swStatusCode .= object ["description" .= mShape.shape.swResponseDescription, "headers" .= headers, "content" .= content]
 
 generateSwagger :: Text -> Text -> Vector Endpoints.SwEndpoint -> Vector Shapes.SwShape -> Vector Fields.SwField -> Vector Formats.SwFormat -> Value
 generateSwagger projectTitle projectDescription endpoints shapes fields formats = swagger
