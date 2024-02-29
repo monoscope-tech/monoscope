@@ -9,6 +9,7 @@ import Control.Lens ((^?), _Just)
 import Control.Monad.Trans.Except (except, throwE)
 import Control.Monad.Trans.Except.Extra (handleExceptT)
 import Data.Aeson (eitherDecode)
+import Data.Aeson.Types
 import Data.Cache qualified as Cache
 import Data.Generics.Product (field)
 import Data.List (unzip4)
@@ -19,6 +20,7 @@ import Data.UUID.V4 (nextRandom)
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (Connection, Query)
 import Database.PostgreSQL.Transact (execute)
+import Debug.Pretty.Simple
 import Fmt
 import Gogol.Data.Base64 (_Base64)
 import Gogol.PubSub qualified as PubSub
@@ -32,8 +34,7 @@ import System.Config qualified as Config
 import System.Types (ATBackgroundCtx)
 import Text.Pretty.Simple (pShow)
 import Utils (DBField, eitherStrToText)
-import Debug.Pretty.Simple
-import Data.Aeson.Types
+
 
 {--
   Exploring how the inmemory cache could be shaped for performance, and low footprint ability to skip hitting the postgres database when not needed.
@@ -95,15 +96,13 @@ import Data.Aeson.Types
     We could also maintain hashes of all the formats in the cache, and check each field format within this list.🤔
  --}
 processMessages :: Config.EnvConfig -> Pool Connection -> [PubSub.ReceivedMessage] -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> ATBackgroundCtx [Maybe Text]
-processMessages  env conn' msgs projectCache = do
+processMessages env conn' msgs projectCache = do
   let msgs' =
         msgs <&> \msg -> do
           let rmMsg = msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64
           let jsonByteStr = fromMaybe "{}" rmMsg
           recMsg <- eitherStrToText $ eitherDecode (fromStrict jsonByteStr)
           Right (msg.ackId, recMsg)
-
-  
 
   unless (null $ lefts msgs') do
     let leftMsgs = [(a, b) | (Left a, b) <- zip msgs' msgs]
@@ -112,9 +111,7 @@ processMessages  env conn' msgs projectCache = do
       -- logger' <& "Error processing Error: " <> pShow a <> "\n Original Msg:" <> pShow  b
       -- logger' <& "ERROR: Error parsing json msgs Error: " <> show a <> "\n Original Msg:" <> show b
       -- -- [("Error", a), ("OriginalMsg", b)]
-      Log.logAttention "Error parsing json msgs" (object ["Error" .= a, "OriginalMsg" .= b]) 
-      
-
+      Log.logAttention "Error parsing json msgs" (object ["Error" .= a, "OriginalMsg" .= b])
 
   if null msgs'
     then pure []
@@ -167,10 +164,11 @@ processMessages' _ conn' msgs projectCache' = do
     projectCacheDefault :: Projects.ProjectCache
     projectCacheDefault = Projects.ProjectCache{hosts = [], endpointHashes = [], shapeHashes = [], redactFieldslist = []}
 
-    processMessage :: Pool Connection 
-                   -> Cache.Cache Projects.ProjectId Projects.ProjectCache 
-                   -> (Maybe Text, RequestMessages.RequestMessage) 
-                   -> ATBackgroundCtx (Either Text (Maybe Text, Query, [DBField], RequestDumps.RequestDump))
+    processMessage
+      :: Pool Connection
+      -> Cache.Cache Projects.ProjectId Projects.ProjectCache
+      -> (Maybe Text, RequestMessages.RequestMessage)
+      -> ATBackgroundCtx (Either Text (Maybe Text, Query, [DBField], RequestDumps.RequestDump))
     processMessage conn projectCache (rmAckId, recMsg) = runExceptT do
       timestamp <- liftIO getCurrentTime
       let pid = Projects.ProjectId recMsg.projectId

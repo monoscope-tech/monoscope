@@ -155,6 +155,7 @@ data EndpointRequestStats = EndpointRequestStats
   deriving anyclass (FromRow, ToRow, Default, NFData)
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "endpoint_request_stats", PrimaryKey "endpoint_id", FieldModifiers '[CamelToSnake]] EndpointRequestStats)
 
+
 -- FIXME: Include and return a boolean flag to show if fields that have annomalies.
 -- FIXME: return endpoint_hash as well.
 endpointRequestStatsByProject :: Projects.ProjectId -> Bool -> Bool -> Maybe Text -> PgT.DBT IO (Vector EndpointRequestStats)

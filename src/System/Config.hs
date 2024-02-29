@@ -75,6 +75,7 @@ data EnvConfig = EnvConfig
   , courierApiKey :: Text
   , environment :: Text
   , loggingDestination :: Logging.LoggingDestination
+  , enablePubsubService :: Bool
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromEnv, Default)
