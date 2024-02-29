@@ -125,7 +125,7 @@ pubsubService = do
           let subscription = "projects/past-3/subscriptions/" <> topic <> "-sub"
           pullResp <- Google.send env $ PubSub.newPubSubProjectsSubscriptionsPull pullReq subscription
           let messages = (pullResp L.^. field @"receivedMessages") & fromMaybe []
-          msgIds <- liftIO $ processMessages appCtx.logger envConfig appCtx.jobsPool messages appCtx.projectCache
+          msgIds <- lift $ processMessages envConfig appCtx.jobsPool messages appCtx.projectCache
           let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just (catMaybes msgIds)
           unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env
 

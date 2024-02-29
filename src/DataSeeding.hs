@@ -127,12 +127,12 @@ parseConfigToRequestMessages pid input = do
               let duration = duration'
                   statusCode = statusCode'
                   method = cfg.method
-                  urlPath = cfg.path
+                  urlPath = Just cfg.path
                   rawUrl = cfg.path
                   protoMajor = 1
                   protoMinor = 1
                   referer = "https://google.com"
-                  host = "https://apitoolkit.io/"
+                  host = Just "https://apitoolkit.io/"
                   projectId = Projects.unProjectId pid
                   timestamp = timestampV
                   sdkType = RequestDumps.GoGin
@@ -174,29 +174,31 @@ data DataSeedingForm = DataSeedingForm
 
 dataSeedingPostH :: Projects.ProjectId -> DataSeedingForm -> ATAuthCtx (Html ())
 dataSeedingPostH pid form = do
-  -- TODO: temporary, to work with current logic
-  appCtx <- ask @AuthContext
-  let env = appCtx.config
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-  let currUserId = sess.userId
+  pure ""
+  -- FIXME: commented out as processMessages is in a diff monad as well, and is not used much atm
+--   -- TODO: temporary, to work with current logic
+--   appCtx <- ask @AuthContext
+--   let env = appCtx.config
+--   sess' <- Sessions.getSession
+--   let sess = Unsafe.fromJust sess'.persistentSession
+--   let currUserId = sess.userId
 
-  isMember <- dbtToEff $ userIsProjectMember sess pid
-  if not isMember
-    then do
-      pure $ userNotMemeberPage sess
-    else do
-      logger <- asks logger
-      projectCache <- asks projectCache
-      project <- dbtToEff $ Projects.selectProjectForUser (Sessions.userId sess, pid)
+--   isMember <- dbtToEff $ userIsProjectMember sess pid
+--   if not isMember
+--     then do
+--       pure $ userNotMemeberPage sess
+--     else do
+--       logger <- asks logger
+--       projectCache <- asks projectCache
+--       project <- dbtToEff $ Projects.selectProjectForUser (Sessions.userId sess, pid)
 
-      respE <- liftIO $ parseConfigToRequestMessages pid (encodeUtf8 $ form.config)
-      case respE of
-        Left err -> liftIO $ logger <& "ERROR processing req message " <> show err >> pure dataSeedingPage
-        Right resp -> do
-          let !seeds = resp & map (\x -> Right (Just "", x))
-          _ <- liftIO $ ProcessMessage.processMessages' logger env appCtx.pool seeds projectCache
-          pure dataSeedingPage
+--       respE <- liftIO $ parseConfigToRequestMessages pid (encodeUtf8 $ form.config)
+--       case respE of
+--         Left err -> liftIO $ logger <& "ERROR processing req message " <> show err >> pure dataSeedingPage
+--         Right resp -> do
+--           let !seeds = resp & map (\x -> (Just "", x))
+--           _ <- liftIO $ ProcessMessage.processMessages' logger env appCtx.pool seeds projectCache
+--           pure dataSeedingPage
 
 
 dataSeedingGetH :: Projects.ProjectId -> ATAuthCtx (Html ())

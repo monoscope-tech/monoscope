@@ -22,15 +22,18 @@ import Database.PostgreSQL.Transact (execute)
 import Fmt
 import Gogol.Data.Base64 (_Base64)
 import Gogol.PubSub qualified as PubSub
+import Log qualified
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Relude hiding (hoistMaybe)
 import RequestMessages qualified
 import System.Clock
 import System.Config qualified as Config
+import System.Types (ATBackgroundCtx)
 import Text.Pretty.Simple (pShow)
 import Utils (DBField, eitherStrToText)
-
+import Debug.Pretty.Simple
+import Data.Aeson.Types
 
 {--
   Exploring how the inmemory cache could be shaped for performance, and low footprint ability to skip hitting the postgres database when not needed.
@@ -91,27 +94,41 @@ import Utils (DBField, eitherStrToText)
 
     We could also maintain hashes of all the formats in the cache, and check each field format within this list.🤔
  --}
-processMessages :: LogAction IO String -> Config.EnvConfig -> Pool Connection -> [PubSub.ReceivedMessage] -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> IO [Maybe Text]
-processMessages logger' env conn' msgs projectCache = do
+processMessages :: Config.EnvConfig -> Pool Connection -> [PubSub.ReceivedMessage] -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> ATBackgroundCtx [Maybe Text]
+processMessages  env conn' msgs projectCache = do
   let msgs' =
         msgs <&> \msg -> do
           let rmMsg = msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64
           let jsonByteStr = fromMaybe "{}" rmMsg
           recMsg <- eitherStrToText $ eitherDecode (fromStrict jsonByteStr)
           Right (msg.ackId, recMsg)
+
+  
+
+  unless (null $ lefts msgs') do
+    let leftMsgs = [(a, b) | (Left a, b) <- zip msgs' msgs]
+    forM_ leftMsgs \(a, b) -> do
+      -- TODO: switch to using a proper logger setup.
+      -- logger' <& "Error processing Error: " <> pShow a <> "\n Original Msg:" <> pShow  b
+      -- logger' <& "ERROR: Error parsing json msgs Error: " <> show a <> "\n Original Msg:" <> show b
+      -- -- [("Error", a), ("OriginalMsg", b)]
+      Log.logAttention "Error parsing json msgs" (object ["Error" .= a, "OriginalMsg" .= b]) 
+      
+
+
   if null msgs'
     then pure []
-    else processMessages' logger' env conn' msgs' projectCache
+    else processMessages' env conn' (rights msgs') projectCache
 
 
 wrapTxtException :: Text -> SomeException -> Text
 wrapTxtException wrap e = " " <> wrap <> " : " <> (toText @String $ show e)
 
 
-processMessages' :: LogAction IO String -> Config.EnvConfig -> Pool Connection -> [Either Text (Maybe Text, RequestMessages.RequestMessage)] -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> IO [Maybe Text]
-processMessages' logger' _ conn' msgs projectCache' = do
-  startTime <- getTime Monotonic
-  processed <- mapM (processMessage logger' conn' projectCache') msgs
+processMessages' :: Config.EnvConfig -> Pool Connection -> [(Maybe Text, RequestMessages.RequestMessage)] -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> ATBackgroundCtx [Maybe Text]
+processMessages' _ conn' msgs projectCache' = do
+  startTime <- liftIO $ getTime Monotonic
+  processed <- mapM (processMessage conn' projectCache') msgs
   let (rmAckIds, queries, params, reqDumps) = unzip4 $ rights processed
   let query' = mconcat queries
   let params' = concat params
@@ -120,12 +137,12 @@ processMessages' logger' _ conn' msgs projectCache' = do
     let leftMsgs = [(a, b) | (Left a, b) <- zip processed msgs]
     forM_ leftMsgs \(a, b) -> do
       -- TODO: switch to using a proper logger setup.
-      -- logger' <& "Error processing Error: " <> pShow a <> "\n Original Msg:" <> pShow  b
-      logger' <& "ERROR: Error processing Error: " <> show a <> "\n Original Msg:" <> show b
+      Log.logAttention "Error parsing json msgs" (object ["Error" .= a, "OriginalMsg" .= b])
 
-  afterProccessing <- getTime Monotonic
+  afterProccessing <- liftIO $ getTime Monotonic
 
-  when (null reqDumps) $ logger' <& "ERROR: Empty params/query for processMessages for request dumps; "
+  when (null reqDumps) do
+    Log.logAttention_ "Empty params/query for processMessages for request dumps; "
 
   resp <- withPool conn' $ runExceptT do
     unless (null params')
@@ -137,22 +154,24 @@ processMessages' logger' _ conn' msgs projectCache' = do
       $ void
       $ RequestDumps.bulkInsertRequestDumps reqDumps
 
-  endTime <- getTime Monotonic
+  endTime <- liftIO $ getTime Monotonic
   let msg = fmtLn @String $ "Process Message (" +| length msgs |+ ") pipeline microsecs: queryDuration " +| toNanoSecs (diffTimeSpec startTime afterProccessing) `div` 1000 |+ " -> processingDuration " +| toNanoSecs (diffTimeSpec afterProccessing endTime) `div` 1000 |+ " -> TotalDuration " +| toNanoSecs (diffTimeSpec startTime endTime) `div` 1000 |+ ""
-  logger' <& show msg
+  Log.logInfo_ (show msg)
 
   case resp of
     Left err -> do
-      logger' <& "error executing RequestMessage derived Insert queries. \n" <> toString err
+      Log.logAttention "error executing RequestMessage derived Insert queries. \n" err
       pure []
     Right _ -> pure rmAckIds
   where
     projectCacheDefault :: Projects.ProjectCache
     projectCacheDefault = Projects.ProjectCache{hosts = [], endpointHashes = [], shapeHashes = [], redactFieldslist = []}
 
-    processMessage :: LogAction IO String -> Pool Connection -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> Either Text (Maybe Text, RequestMessages.RequestMessage) -> IO (Either Text (Maybe Text, Query, [DBField], RequestDumps.RequestDump))
-    processMessage logger conn projectCache recMsgEither = runExceptT do
-      (rmAckId, recMsg) <- except recMsgEither
+    processMessage :: Pool Connection 
+                   -> Cache.Cache Projects.ProjectId Projects.ProjectCache 
+                   -> (Maybe Text, RequestMessages.RequestMessage) 
+                   -> ATBackgroundCtx (Either Text (Maybe Text, Query, [DBField], RequestDumps.RequestDump))
+    processMessage conn projectCache (rmAckId, recMsg) = runExceptT do
       timestamp <- liftIO getCurrentTime
       let pid = Projects.ProjectId recMsg.projectId
 
@@ -167,7 +186,7 @@ processMessages' logger' _ conn' msgs projectCache' = do
                 mpjCache <- withPool conn $ Projects.projectCacheById pid'
                 pure $ fromMaybe projectCacheDefault mpjCache
             )
-          :: ExceptT Text IO (Either SomeException Projects.ProjectCache)
+          :: ExceptT Text ATBackgroundCtx (Either SomeException Projects.ProjectCache)
 
       case projectCacheValE of
         Left e -> throwE $ "An error occurred while fetching project cache: " <> show e
