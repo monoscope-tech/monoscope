@@ -34,6 +34,7 @@ import System.Config qualified as Config
 import System.Types (ATBackgroundCtx)
 import Text.Pretty.Simple (pShow)
 import Utils (DBField, eitherStrToText)
+import qualified Data.ByteString as B
 
 
 {--
@@ -100,7 +101,7 @@ processMessages env conn' msgs projectCache = do
   let msgs' =
         msgs <&> \msg -> do
           let rmMsg = msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64
-          let jsonByteStr = fromMaybe "{}" rmMsg
+          let jsonByteStr = removeNullChars $ fromMaybe "{}" rmMsg
           recMsg <- eitherStrToText $ eitherDecode (fromStrict jsonByteStr)
           Right (msg.ackId, recMsg)
 
@@ -117,6 +118,9 @@ processMessages env conn' msgs projectCache = do
     then pure []
     else processMessages' env conn' (rights msgs') projectCache
 
+-- Function to remove all occurrences of \u0000 from a Text
+removeNullChars :: B.ByteString ->B.ByteString  
+removeNullChars = B.filter (/= 0)
 
 wrapTxtException :: Text -> SomeException -> Text
 wrapTxtException wrap e = " " <> wrap <> " : " <> (toText @String $ show e)
