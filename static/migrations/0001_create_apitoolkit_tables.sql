@@ -180,7 +180,6 @@ CREATE TABLE IF NOT EXISTS apis.swagger_jsons
 
 SELECT manage_updated_at('apis.swagger_jsons');
 CREATE INDEX IF NOT EXISTS idx_swagger_jsons_project_id ON apis.swagger_jsons(project_id);
-ALTER TABLE apis.swagger_jsons
 
 -----------------------------------------------------------------------
 -- ENDPOINTS table 
