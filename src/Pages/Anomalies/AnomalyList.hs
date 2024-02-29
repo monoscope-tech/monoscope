@@ -87,7 +87,7 @@ acknowlegeAnomalyGetH pid aid = do
     else do
       let q = [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where id=? |]
       r <- dbtToEff $ execute Update q (sess.userId, aid)
-      _ <- liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.GenSwagger pid
+      _ <- liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.GenSwagger pid sess.userId
       pure $ anomalyAcknowlegeButton pid aid True
 
 unAcknowlegeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (Html ())
@@ -156,7 +156,7 @@ anomalyBulkActionsPostH pid action items = do
       _ <- case action of
         "acknowlege" -> do
           _ <- dbtToEff $ execute Update [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) |] (sess.userId, Vector.fromList items.anomalyId)
-          _ <- liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.GenSwagger pid
+          _ <- liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.GenSwagger pid sess.userId
           pass
         "archive" -> do
           _ <- dbtToEff $ execute Update [sql| update apis.anomalies set archived_at=NOW() where id=ANY(?::uuid[]) |] (Only $ Vector.fromList items.anomalyId)

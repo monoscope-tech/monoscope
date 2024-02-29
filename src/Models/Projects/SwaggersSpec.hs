@@ -27,7 +27,7 @@ createSwagger projectId createdBy swaggerJson = do
         Swagger
           { Models.Projects.Swaggers.id = SwaggerId randUUID,
             projectId = projectId,
-            createdBy = Just createdBy,
+            createdBy = createdBy,
             createdAt = currentTime,
             updatedAt = currentTime,
             swaggerJson = swaggerJson
@@ -48,7 +48,7 @@ spec = aroundAll TmpPg.withSetup $ describe "Models.Projects.Swaggers" $ do
             Swagger
               { Models.Projects.Swaggers.id = swaggerId,
                 projectId = ProjectId UUID.nil,
-                createdBy = Just (UserId UUID.nil),
+                createdBy = UserId UUID.nil,
                 createdAt = currentTime,
                 updatedAt = currentTime,
                 swaggerJson = swaggerJson'

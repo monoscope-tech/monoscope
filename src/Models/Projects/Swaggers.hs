@@ -32,7 +32,7 @@ instance HasField "toText" SwaggerId Text where
 data Swagger = Swagger
   { id :: SwaggerId,
     projectId :: Projects.ProjectId,
-    createdBy :: Maybe Users.UserId,
+    createdBy :: Users.UserId,
     createdAt :: ZonedTime,
     updatedAt :: ZonedTime,
     swaggerJson :: Value

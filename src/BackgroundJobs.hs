@@ -55,7 +55,7 @@ data BgJobs
   | DailyReports Projects.ProjectId
   | WeeklyReports Projects.ProjectId
   | DailyJob
-  | GenSwagger Projects.ProjectId
+  | GenSwagger Projects.ProjectId Users.UserId
   deriving stock (Eq, Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
 
@@ -285,7 +285,7 @@ jobsRunner dbPool logger cfg job = do
       WeeklyReports pid -> do
         weeklyReportForProject dbPool cfg pid
         pass
-      GenSwagger pid -> do
+      GenSwagger pid uid -> do
         projectM <- withPool dbPool $ Projects.projectById pid
         case projectM of
           Nothing -> pass
@@ -304,7 +304,7 @@ jobsRunner dbPool logger cfg job = do
                   Swaggers.Swagger
                     { id = swaggerId,
                       projectId = pid,
-                      createdBy = Nothing,
+                      createdBy = uid,
                       createdAt = currentTime,
                       updatedAt = currentTime,
                       swaggerJson = swagger
