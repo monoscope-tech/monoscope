@@ -269,7 +269,6 @@ expectedSwaggerJSON =
           "get": {
             "responses": {
               "200": {
-                "description": "",
                 "content": {
                   "application/json": {
                     "schema": {
@@ -314,9 +313,9 @@ expectedSwaggerJSON =
             }
           },
           "post": {
+            "description": "",
             "responses": {
               "401": { 
-                "description": "",
                 "content": {
                   "application/json":  {
                     "schema": {
@@ -340,7 +339,6 @@ expectedSwaggerJSON =
                 }
               },
               "201": {
-                "description": "",
                 "content": {
                   "application/json": {
                     "schema": {
@@ -520,7 +518,6 @@ hExpectedSwaggerJSON =
                 content: {
                   "application/json": {}
                 },
-                "description": "",
                 "headers": {
                    "content": {
                       "schema": {
@@ -713,7 +710,6 @@ pExpectedSwaggerJSON =
             ],
             "responses": {
               "200": {
-                "description": ""
               }
             }
           }
