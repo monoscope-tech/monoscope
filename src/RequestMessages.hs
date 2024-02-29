@@ -3,13 +3,13 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module RequestMessages
-  ( RequestMessage (..),
-    requestMsgToDumpAndEndpoint,
-    valueToFormatStr,
-    valueToFields,
-    redactJSON,
-  )
+module RequestMessages (
+  RequestMessage (..),
+  requestMsgToDumpAndEndpoint,
+  valueToFormatStr,
+  valueToFields,
+  redactJSON,
+)
 where
 
 import Data.Aeson (ToJSON (toJSON), Value)
@@ -31,17 +31,17 @@ import Data.Vector qualified as Vector
 import Database.PostgreSQL.Simple (Query)
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Fields.Query qualified as Fields
-  ( insertFieldQueryAndParams,
-  )
-import Models.Apis.Fields.Types qualified as Fields
-  ( Field (..),
-    FieldCategoryEnum (..),
-    FieldId (FieldId),
-    FieldTypes (..),
-    fieldCategoryEnumToText,
-    fieldTypeToText,
-  )
+import Models.Apis.Fields.Query qualified as Fields (
+  insertFieldQueryAndParams,
+ )
+import Models.Apis.Fields.Types qualified as Fields (
+  Field (..),
+  FieldCategoryEnum (..),
+  FieldId (FieldId),
+  FieldTypes (..),
+  fieldCategoryEnumToText,
+  fieldTypeToText,
+ )
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.RequestDumps (SDKTypes (GoOutgoing, JsAxiosOutgoing))
 import Models.Apis.RequestDumps qualified as RequestDump
@@ -58,44 +58,48 @@ import Text.Regex.TDFA ((=~))
 import Utils (DBField ())
 import Witch (from)
 
+
 -- $setup
 -- >>> import Relude
 -- >>> import Data.Vector qualified as Vector
 -- >>> import Data.Aeson.QQ (aesonQQ)
 -- >>> import Data.Aeson
 
+
 -- | RequestMessage represents a message for a single request pulled from pubsub.
 data RequestMessage = RequestMessage
-  { duration :: Int, -- in nanoseconds
-    host :: Text,
-    method :: Text,
-    pathParams :: AE.Value, --- key value map of the params to their values in the original urlpath.
-    projectId :: UUID.UUID,
-    protoMajor :: Int,
-    protoMinor :: Int,
-    queryParams :: AE.Value, -- key value map of a key to a list of text values map[string][]string
-    rawUrl :: Text, -- raw request uri: path?query combination
-    referer :: Text,
-    requestBody :: Text,
-    requestHeaders :: AE.Value, -- key value map of a key to a list of text values map[string][]string
-    responseBody :: Text,
-    responseHeaders :: AE.Value, -- key value map of a key to a list of text values map[string][]string
-    sdkType :: RequestDumps.SDKTypes, -- convension should be <language>-<router library> eg: go-gin, go-builtin, js-express
-    statusCode :: Int,
-    urlPath :: Text,
-    timestamp :: ZonedTime,
-    msgId :: Maybe UUID.UUID, -- This becomes the request_dump id.
-    parentId :: Maybe UUID.UUID,
-    serviceVersion :: Maybe Text, -- allow users track deployments and versions (tags, commits, etc)
-    errors :: Maybe [RequestDumps.ATError],
-    tags :: Maybe [Text]
+  { duration :: Int -- in nanoseconds
+  , host :: Text
+  , method :: Text
+  , pathParams :: AE.Value --- key value map of the params to their values in the original urlpath.
+  , projectId :: UUID.UUID
+  , protoMajor :: Int
+  , protoMinor :: Int
+  , queryParams :: AE.Value -- key value map of a key to a list of text values map[string][]string
+  , rawUrl :: Text -- raw request uri: path?query combination
+  , referer :: Text
+  , requestBody :: Text
+  , requestHeaders :: AE.Value -- key value map of a key to a list of text values map[string][]string
+  , responseBody :: Text
+  , responseHeaders :: AE.Value -- key value map of a key to a list of text values map[string][]string
+  , sdkType :: RequestDumps.SDKTypes -- convension should be <language>-<router library> eg: go-gin, go-builtin, js-express
+  , statusCode :: Int
+  , urlPath :: Text
+  , timestamp :: ZonedTime
+  , msgId :: Maybe UUID.UUID -- This becomes the request_dump id.
+  , parentId :: Maybe UUID.UUID
+  , serviceVersion :: Maybe Text -- allow users track deployments and versions (tags, commits, etc)
+  , errors :: Maybe [RequestDumps.ATError]
+  , tags :: Maybe [Text]
   }
   deriving stock (Show, Generic)
   deriving
     (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestMessage
 
+
 makeFieldLabelsNoPrefix ''RequestMessage
+
 
 -- | Walk the JSON once, redact any fields which are in the list of json paths to be redacted.
 -- >>> redactJSON ["menu.id."] [aesonQQ| {"menu":{"id":"file", "name":"John"}} |]
@@ -120,6 +124,7 @@ redactJSON paths' = redactJSON' (stripPrefixDot paths')
     redactJSON' paths (AET.Array jsonList) = AET.Array $ Vector.map (redactJSON' (mapMaybe (\path -> T.stripPrefix "[]." path <|> T.stripPrefix "[]" path) paths)) jsonList
 
     stripPrefixDot = map (\p -> fromMaybe p (T.stripPrefix "." p))
+
 
 -- requestMsgToDumpAndEndpoint is a very improtant function designed to be run as a pure function
 -- which takes in a request and processes it returning an sql query and it's params which can be executed.
@@ -211,22 +216,22 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
               -- Shapes are dependent on the endpoint, statusCode and the unique fields in that shape.
               let shape =
                     Shapes.Shape
-                      { id = Shapes.ShapeId dumpID,
-                        createdAt = timestampUTC,
-                        updatedAt = now,
-                        approvedOn = Nothing,
-                        projectId = projectId,
-                        endpointHash = endpointHash,
-                        queryParamsKeypaths = queryParamsKP,
-                        requestBodyKeypaths = requestBodyKP,
-                        responseBodyKeypaths = responseBodyKP,
-                        requestHeadersKeypaths = requestHeadersKP,
-                        responseHeadersKeypaths = responseHeadersKP,
-                        fieldHashes = fieldHashes,
-                        hash = shapeHash,
-                        statusCode = rM.statusCode,
-                        responseDescription = "",
-                        requestDescription = ""
+                      { id = Shapes.ShapeId dumpID
+                      , createdAt = timestampUTC
+                      , updatedAt = now
+                      , approvedOn = Nothing
+                      , projectId = projectId
+                      , endpointHash = endpointHash
+                      , queryParamsKeypaths = queryParamsKP
+                      , requestBodyKeypaths = requestBodyKP
+                      , responseBodyKeypaths = responseBodyKP
+                      , requestHeadersKeypaths = requestHeadersKP
+                      , responseHeadersKeypaths = responseHeadersKP
+                      , fieldHashes = fieldHashes
+                      , hash = shapeHash
+                      , statusCode = rM.statusCode
+                      , responseDescription = ""
+                      , requestDescription = ""
                       }
               Shapes.insertShapeQueryAndParam shape
 
@@ -245,38 +250,38 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   -- let reqDumpP = RequestDumps.RequestDump rM dumpID now method urlPath reqBody respBody queryParamsKP requestHeadersKP responseHeadersKP requestBodyKP responseBodyKP endpointHash shapeHash formatHashes fieldHashes
   let reqDumpP =
         RequestDumps.RequestDump
-          { id = dumpID,
-            createdAt = timestampUTC,
-            updatedAt = now,
-            projectId = rM.projectId,
-            host = rM.host,
-            urlPath = urlPath,
-            rawUrl = rM.rawUrl,
-            pathParams = rM.pathParams,
-            method = method,
-            referer = rM.referer,
-            protoMajor = rM.protoMajor,
-            protoMinor = rM.protoMinor,
-            duration = calendarTimeTime $ secondsToNominalDiffTime $ fromIntegral duration,
-            statusCode = rM.statusCode,
-            --
-            queryParams = rM.queryParams,
-            requestBody = reqBody,
-            responseBody = respBody,
-            requestHeaders = rM.requestHeaders,
-            responseHeaders = rM.responseHeaders,
-            --
-            endpointHash = endpointHash,
-            shapeHash = shapeHash,
-            formatHashes = formatHashes,
-            fieldHashes = fieldHashes,
-            durationNs = fromIntegral duration,
-            sdkType = rM.sdkType,
-            parentId = rM.parentId,
-            serviceVersion = rM.serviceVersion,
-            errors = errorsJSONB,
-            tags = tagsV,
-            requestType = RequestDump.getRequestType rM.sdkType
+          { id = dumpID
+          , createdAt = timestampUTC
+          , updatedAt = now
+          , projectId = rM.projectId
+          , host = rM.host
+          , urlPath = urlPath
+          , rawUrl = rM.rawUrl
+          , pathParams = rM.pathParams
+          , method = method
+          , referer = rM.referer
+          , protoMajor = rM.protoMajor
+          , protoMinor = rM.protoMinor
+          , duration = calendarTimeTime $ secondsToNominalDiffTime $ fromIntegral duration
+          , statusCode = rM.statusCode
+          , --
+            queryParams = rM.queryParams
+          , requestBody = reqBody
+          , responseBody = respBody
+          , requestHeaders = rM.requestHeaders
+          , responseHeaders = rM.responseHeaders
+          , --
+            endpointHash = endpointHash
+          , shapeHash = shapeHash
+          , formatHashes = formatHashes
+          , fieldHashes = fieldHashes
+          , durationNs = fromIntegral duration
+          , sdkType = rM.sdkType
+          , parentId = rM.parentId
+          , serviceVersion = rM.serviceVersion
+          , errors = errorsJSONB
+          , tags = tagsV
+          , requestType = RequestDump.getRequestType rM.sdkType
           }
 
   -- Build all fields and formats, unzip them as separate lists and append them to query and params
@@ -301,26 +306,29 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   let params = endpointP <> shapeP <> concat fieldsP <> concat formatsP
   pure (query, params, reqDumpP)
 
+
 isRequestOutgoing :: SDKTypes -> Bool
 isRequestOutgoing sdkType
   | T.isSuffixOf "Outgoing" (show sdkType) = True
   | otherwise = False
 
+
 buildEndpoint :: RequestMessages.RequestMessage -> UTCTime -> UUID.UUID -> Projects.ProjectId -> Text -> Text -> Value -> Text -> Bool -> Endpoints.Endpoint
 buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash outgoing =
   Endpoints.Endpoint
-    { createdAt = zonedTimeToUTC rM.timestamp,
-      updatedAt = now,
-      id = Endpoints.EndpointId dumpID,
-      projectId = projectId,
-      urlPath = urlPath,
-      urlParams = urlParams,
-      method = method,
-      host = rM.host,
-      hash = endpointHash,
-      outgoing = outgoing,
-      description = "" :: Text
+    { createdAt = zonedTimeToUTC rM.timestamp
+    , updatedAt = now
+    , id = Endpoints.EndpointId dumpID
+    , projectId = projectId
+    , urlPath = urlPath
+    , urlParams = urlParams
+    , method = method
+    , host = rM.host
+    , hash = endpointHash
+    , outgoing = outgoing
+    , description = "" :: Text
     }
+
 
 -- valueToFields takes an aeson object and converts it into a list of paths to
 -- each primitive value in the json and the values.
@@ -372,6 +380,7 @@ valueToFields value = dedupFields $ removeBlacklistedFields $ snd $ valueToField
       Just result -> "{" <> result <> "}"
       Nothing -> key
 
+
 -- debupFields would merge all fields in the list of tuples by the first item in the tupple.
 --
 -- >>> dedupFields [(".menu[*]",String "xyz"),(".menu[*]",String "abc")]
@@ -389,6 +398,7 @@ dedupFields fields =
     & groupBy (\a b -> fst a == fst b)
     & map (foldl' (\(_, xs) (a, b) -> (a, b : xs)) ("", []))
 
+
 -- >>> removeBlacklistedFields [(".menu.password",String "xyz"),(".authorization",String "abc")]
 -- [(".menu.password",String "[REDACTED]"),(".authorization",String "[REDACTED]")]
 --
@@ -397,12 +407,13 @@ dedupFields fields =
 removeBlacklistedFields :: [(Text, AE.Value)] -> [(Text, AE.Value)]
 removeBlacklistedFields = map \(k, val) ->
   if or @[]
-    [ T.isSuffixOf "password" (T.toLower k),
-      T.isSuffixOf "authorization" (T.toLower k),
-      T.isSuffixOf "cookie" (T.toLower k)
+    [ T.isSuffixOf "password" (T.toLower k)
+    , T.isSuffixOf "authorization" (T.toLower k)
+    , T.isSuffixOf "cookie" (T.toLower k)
     ]
     then (k, AE.String "[REDACTED]")
     else (k, val)
+
 
 -- >>> valueToFormat (AET.String "22")
 -- "integer"
@@ -420,6 +431,7 @@ valueToFormat (AET.Bool _) = "bool"
 valueToFormat AET.Null = "null"
 valueToFormat (AET.Object _) = "object"
 valueToFormat (AET.Array _) = "array"
+
 
 -- valueToFormatStr will take a string and try to find a format which matches that string best.
 -- At the moment it takes a text and returns a generic mask that represents the format of that text
@@ -453,6 +465,7 @@ valueToFormatStr val
   | val =~ ([text|^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(([+-]\d\d:\d\d)|Z)?$|] :: Text) = Just "YYYY-MM-DDThh:mm:ss.sTZD"
   | otherwise = Nothing
 
+
 -- >>> valueToFormatNum 22.3
 -- "float"
 -- >>> valueToFormatNum 22
@@ -463,43 +476,44 @@ valueToFormatNum val
   | Scientific.isInteger val = "integer"
   | otherwise = "unknown"
 
+
 -- fieldsToFieldDTO processes a field from apitoolkit clients into a field and format record,
 -- which can then be converted into separate sql insert queries.
 fieldsToFieldDTO :: Fields.FieldCategoryEnum -> Projects.ProjectId -> Text -> (Text, [AE.Value]) -> (Fields.Field, Formats.Format)
 fieldsToFieldDTO fieldCategory projectID endpointHash (keyPath, val) =
   ( Fields.Field
-      { createdAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC",
-        updatedAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC",
-        id = Fields.FieldId UUID.nil,
-        endpointHash = endpointHash,
-        projectId = projectID,
-        key = snd $ T.breakOnEnd "." keyPath,
-        -- FIXME: We're discarding the field values of the others, if theer was more than 1 value.
+      { createdAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
+      , updatedAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
+      , id = Fields.FieldId UUID.nil
+      , endpointHash = endpointHash
+      , projectId = projectID
+      , key = snd $ T.breakOnEnd "." keyPath
+      , -- FIXME: We're discarding the field values of the others, if theer was more than 1 value.
         -- FIXME: We should instead take all the fields into consideration
         -- FIXME: when generating the field types and formats
-        fieldType = fieldType,
-        fieldTypeOverride = Nothing,
-        format = format,
-        formatOverride = Nothing,
-        description = "",
-        keyPath = keyPath,
-        fieldCategory = fieldCategory,
-        hash = fieldHash,
-        isEnum = False,
-        isRequired = False
-      },
-    Formats.Format
-      { id = Formats.FormatId UUID.nil,
-        createdAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC",
-        updatedAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC",
-        projectId = projectID,
-        fieldHash = fieldHash,
-        fieldType = fieldType,
-        fieldFormat = format,
-        -- NOTE: A trailing question, is whether to store examples into a separate table.
+        fieldType = fieldType
+      , fieldTypeOverride = Nothing
+      , format = format
+      , formatOverride = Nothing
+      , description = ""
+      , keyPath = keyPath
+      , fieldCategory = fieldCategory
+      , hash = fieldHash
+      , isEnum = False
+      , isRequired = False
+      }
+  , Formats.Format
+      { id = Formats.FormatId UUID.nil
+      , createdAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
+      , updatedAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
+      , projectId = projectID
+      , fieldHash = fieldHash
+      , fieldType = fieldType
+      , fieldFormat = format
+      , -- NOTE: A trailing question, is whether to store examples into a separate table.
         -- It requires some more of a cost benefit analysis.
-        examples = Vector.fromList val,
-        hash = formatHash
+        examples = Vector.fromList val
+      , hash = formatHash
       }
   )
   where
