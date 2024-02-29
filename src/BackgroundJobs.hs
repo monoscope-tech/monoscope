@@ -27,15 +27,20 @@ import Log qualified
 import Lucid
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Fields.Query ()
+import Models.Apis.Fields qualified as Fields
+import Models.Apis.Fields.Query qualified as FieldsQ
+import Models.Apis.Formats qualified as Formats
 import Models.Apis.Reports qualified as Reports
 import Models.Apis.RequestDumps qualified as RequestDumps
+import Models.Apis.Shapes qualified as Shapes
 import Models.Apis.Slack
 import Models.Projects.Projects qualified as Projects
+import Models.Projects.Swaggers qualified as Swaggers
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text, trimming)
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, startJobRunner, throwParsePayload)
+import Pages.GenerateSwagger (generateSwagger)
 import Pages.Reports qualified as RP
 import Pkg.Mail
 import Relude
@@ -51,6 +56,7 @@ data BgJobs
   | DailyReports Projects.ProjectId
   | WeeklyReports Projects.ProjectId
   | DailyJob
+  | GenSwagger Projects.ProjectId Users.UserId
   deriving stock (Eq, Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
 
@@ -285,6 +291,32 @@ jobsRunner dbPool logger cfg job = do
       WeeklyReports pid -> do
         weeklyReportForProject dbPool cfg pid
         pass
+      GenSwagger pid uid -> do
+        projectM <- withPool dbPool $ Projects.projectById pid
+        case projectM of
+          Nothing -> pass
+          Just project -> do
+            endpoints <- withPool dbPool $ Endpoints.endpointsByProjectId pid
+            let endpoint_hashes = V.map (.hash) endpoints
+            shapes <- withPool dbPool $ Shapes.shapesByEndpointHashes pid endpoint_hashes
+            fields <- withPool dbPool $ FieldsQ.fieldsByEndpointHashes pid endpoint_hashes
+            let field_hashes = V.map (.fHash) fields
+            formats <- withPool dbPool $ Formats.formatsByFieldsHashes pid field_hashes
+            let (projectTitle, projectDescription) = (toText project.title, toText project.description)
+            let swagger = generateSwagger projectTitle projectDescription endpoints shapes fields formats
+            swaggerId <- Swaggers.SwaggerId <$> liftIO UUIDV4.nextRandom
+            currentTime <- liftIO getZonedTime
+            let swaggerToAdd =
+                  Swaggers.Swagger
+                    { id = swaggerId
+                    , projectId = pid
+                    , createdBy = uid
+                    , createdAt = currentTime
+                    , updatedAt = currentTime
+                    , swaggerJson = swagger
+                    }
+            _ <- withPool dbPool $ Swaggers.addSwagger swaggerToAdd
+            pass
 
 
 jobsWorkerInit :: Pool Connection -> Log.Logger -> Config.EnvConfig -> IO ()

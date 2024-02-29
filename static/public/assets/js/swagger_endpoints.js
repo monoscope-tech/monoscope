@@ -14,7 +14,11 @@ class SwaggerEndPointsUI {
         const startWord = path.split("/")[1];
         const methods = paths[path];
         for (const method in methods) {
-          let tag = methods[method].tags[0] || startWord;
+          let tag = startWord;
+          let tags = methods[method].tags;
+          if (Array.isArray(tags) && tags.length > 0) {
+            tag = tags[0];
+          }
           let opId = methods[method].operationId;
           let modifiedPath = path.replaceAll(/[^a-zA-Z0-9]/g, "_");
           let targetId = opId
@@ -359,8 +363,12 @@ class SwaggerEndPointsUI {
             this.elt(
               "div",
               { class: "text-sm flex items-center gap-2" },
-              this.elt("span", { class: "text-gray-700" }, server.description),
-              this.elt("span", { class: "text-gray-500" }, server.url)
+              this.elt(
+                "span",
+                { class: "text-gray-700" },
+                server.description || ""
+              ),
+              this.elt("span", { class: "text-gray-500" }, server.url || "")
             )
           );
         });

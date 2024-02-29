@@ -10,12 +10,15 @@ module Pages.Anomalies.AnomalyList (
   AnomalyBulkForm,
   anomalyAcknowlegeButton,
   anomalyArchiveButton,
-) where
+)
+where
 
+import BackgroundJobs qualified
 import Data.Aeson (encode)
 import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
 import Data.Map qualified as Map
+import Data.Pool (withResource)
 import Data.Text (replace)
 import Data.Text qualified as T
 import Data.Time (UTCTime, ZonedTime, defaultTimeLocale, formatTime, getCurrentTime, zonedTimeToUTC)
@@ -45,6 +48,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Network.URI (escapeURIString, isUnescapedInURI, isUnreserved)
+import OddJobs.Job (createJob)
 import Optics.Core ((^.))
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Charts.Charts (QueryBy)
@@ -85,6 +89,7 @@ acknowlegeAnomalyGetH pid aid = do
     else do
       let q = [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where id=? |]
       r <- dbtToEff $ execute Update q (sess.userId, aid)
+      _ <- liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.GenSwagger pid sess.userId
       pure $ anomalyAcknowlegeButton pid aid True
 
 
@@ -154,9 +159,14 @@ anomalyBulkActionsPostH pid action items = do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"refreshMain": "", "errorToast": [#{action <> " anomalies not successfull."}]}|]
       pure $ addHeader hxTriggerData ""
     else do
-      v <- case action of
-        "acknowlege" -> dbtToEff $ execute Update [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) |] (sess.userId, Vector.fromList items.anomalyId)
-        "archive" -> dbtToEff $ execute Update [sql| update apis.anomalies set archived_at=NOW() where id=ANY(?::uuid[]) |] (Only $ Vector.fromList items.anomalyId)
+      _ <- case action of
+        "acknowlege" -> do
+          _ <- dbtToEff $ execute Update [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) |] (sess.userId, Vector.fromList items.anomalyId)
+          _ <- liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.GenSwagger pid sess.userId
+          pass
+        "archive" -> do
+          _ <- dbtToEff $ execute Update [sql| update apis.anomalies set archived_at=NOW() where id=ANY(?::uuid[]) |] (Only $ Vector.fromList items.anomalyId)
+          pass
         _ -> error $ "unhandled anomaly bulk action state " <> action
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"refreshMain": "", "successToast": [#{action <> "d anomalies Successfully"}]}|]
       pure $ addHeader hxTriggerData ""
@@ -660,6 +670,8 @@ requestShapeOverview fieldChanges = do
               subSubSection "Response Headers" (Map.lookup Fields.FCResponseHeader th)
               subSubSection "Response Body" (Map.lookup Fields.FCResponseBody th)
       Nothing -> pass
+
+
 anomalyFormatOverview :: AnomalyVM -> Vector Text -> Html ()
 anomalyFormatOverview an prevFormats =
   section_ [class_ "space-y-10"] do

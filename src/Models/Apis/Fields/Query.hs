@@ -1,17 +1,17 @@
 {-# OPTIONS_GHC -Wno-name-shadowing #-}
 
-module Models.Apis.Fields.Query
-  ( fieldById,
-    selectFields,
-    insertFieldQueryAndParams,
-    fieldsByEndpointHashes,
-    insertFields,
-    updateFieldByHash,
-    deleteFieldByHash,
-    selectFieldsByHashes,
-    getFieldsByEndpointKeyPathAndCategory,
-    autoCompleteFields,
-  )
+module Models.Apis.Fields.Query (
+  fieldById,
+  selectFields,
+  insertFieldQueryAndParams,
+  fieldsByEndpointHashes,
+  insertFields,
+  updateFieldByHash,
+  deleteFieldByHash,
+  selectFieldsByHashes,
+  getFieldsByEndpointKeyPathAndCategory,
+  autoCompleteFields,
+)
 where
 
 import Data.Time (ZonedTime)
@@ -30,8 +30,10 @@ import Optics.Core ((^.))
 import Relude
 import Utils (DBField (MkDBField))
 
+
 instance FromRow Text where
   fromRow = field
+
 
 insertFieldQueryAndParams :: Field -> (Query, [DBField])
 insertFieldQueryAndParams field = (q, params)
@@ -40,16 +42,17 @@ insertFieldQueryAndParams field = (q, params)
       [sql| insert into apis.fields (project_id, endpoint_hash, key, field_type, format, description, key_path, field_category, hash) 
                     VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING; |]
     params =
-      [ MkDBField $ field ^. #projectId,
-        MkDBField $ field ^. #endpointHash,
-        MkDBField $ field ^. #key,
-        MkDBField $ field ^. #fieldType,
-        MkDBField $ field ^. #format,
-        MkDBField $ field ^. #description,
-        MkDBField $ field ^. #keyPath,
-        MkDBField $ field ^. #fieldCategory,
-        MkDBField $ field ^. #hash
+      [ MkDBField $ field ^. #projectId
+      , MkDBField $ field ^. #endpointHash
+      , MkDBField $ field ^. #key
+      , MkDBField $ field ^. #fieldType
+      , MkDBField $ field ^. #format
+      , MkDBField $ field ^. #description
+      , MkDBField $ field ^. #keyPath
+      , MkDBField $ field ^. #fieldCategory
+      , MkDBField $ field ^. #hash
       ]
+
 
 insertFields :: [Field] -> DBT IO Int64
 insertFields fields = do
@@ -64,25 +67,28 @@ insertFields fields = do
   let params = map getFieldParams fields
   executeMany q params
 
+
 getFieldParams :: FT.Field -> (Projects.ProjectId, Text, Text, FieldTypes, Maybe Text, Text, Maybe Text, Text, Text, FieldCategoryEnum, Text, Bool, Bool)
 getFieldParams field =
-  ( field.projectId,
-    field.endpointHash,
-    field.key,
-    field.fieldType,
-    field.fieldTypeOverride,
-    field.format,
-    field.formatOverride,
-    field.description,
-    field.keyPath,
-    field.fieldCategory,
-    field.hash,
-    field.isEnum,
-    field.isRequired
+  ( field.projectId
+  , field.endpointHash
+  , field.key
+  , field.fieldType
+  , field.fieldTypeOverride
+  , field.format
+  , field.formatOverride
+  , field.description
+  , field.keyPath
+  , field.fieldCategory
+  , field.hash
+  , field.isEnum
+  , field.isRequired
   )
+
 
 fieldById :: FieldId -> DBT IO (Maybe Field)
 fieldById fid = selectById @Field (Only fid)
+
 
 selectFields :: Projects.ProjectId -> Text -> DBT IO (Vector Field)
 selectFields pid endpointHash = query Select q (pid, endpointHash)
@@ -91,6 +97,7 @@ selectFields pid endpointHash = query Select q (pid, endpointHash)
       [sql| select id,created_at,updated_at,project_id,endpoint_hash,key,field_type,
                 field_type_override,format,format_override,description,key_path,field_category, hash, is_enum, is_required
                 from apis.fields where project_id=? AND endpoint_hash=? order by field_category, key |]
+
 
 selectFieldsByHashes :: Projects.ProjectId -> Vector Text -> DBT IO (Vector Field)
 selectFieldsByHashes pid fieldHashes = query Select q (pid, fieldHashes)
@@ -101,10 +108,12 @@ selectFieldsByHashes pid fieldHashes = query Select q (pid, fieldHashes)
               FROM apis.fields WHERE project_id=? AND hash= ANY(?)  ORDER BY field_category, key 
           |]
 
+
 getFieldsByEndpointKeyPathAndCategory :: Projects.ProjectId -> Text -> Text -> FieldCategoryEnum -> DBT IO (Vector Text)
 getFieldsByEndpointKeyPathAndCategory pid endpointId keyPath fieldCategory = query Select q (pid, endpointId, keyPath, fieldCategory)
   where
     q = [sql|SELECT f.format from apis.endpoints enp JOIN apis.fields f on enp.hash = f.endpoint_hash where f.project_id=? AND enp.id=? AND f.key_path=? AND f.field_category=?  limit 4;|]
+
 
 updateFieldByHash :: Text -> Text -> Text -> DBT IO Int64
 updateFieldByHash endpointHash fieldHash description = do
@@ -112,11 +121,13 @@ updateFieldByHash endpointHash fieldHash description = do
         [sql| UPDATE apis.fields SET  description=? WHERE endpoint_hash=? AND hash=? |]
   execute Update q (description, endpointHash, fieldHash)
 
+
 deleteFieldByHash :: Text -> ZonedTime -> DBT IO Int64
 deleteFieldByHash fieldHash dTime = do
   let q =
         [sql| UPDATE apis.fields SET  deleted_at=? WHERE hash=? |]
   execute Update q (dTime, fieldHash)
+
 
 fieldsByEndpointHashes :: Projects.ProjectId -> Vector Text -> PgT.DBT IO (Vector SwField)
 fieldsByEndpointHashes pid hashes = query Select q (pid, hashes)
@@ -124,10 +135,11 @@ fieldsByEndpointHashes pid hashes = query Select q (pid, hashes)
     q =
       [sql|
       SELECT  endpoint_hash f_endpoint_hash, key f_key, field_type f_field_type, format f_format,
-             description f_description, key_path f_key_path, field_category f_field_category, hash f_hash
+             description f_description, key_path f_key_path, field_category f_field_category, hash f_hash, is_enum f_is_enum, is_required f_is_required
       FROM apis.fields
       WHERE project_id = ? AND endpoint_hash = ANY(?)
     |]
+
 
 autoCompleteFields :: Projects.ProjectId -> FieldCategoryEnum -> Text -> DBT IO (Vector Text)
 autoCompleteFields pid fieldCategory pathPrefix = query Select q (pid, fieldCategory, pathPrefix <> "%")
