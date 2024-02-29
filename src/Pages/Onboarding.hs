@@ -259,13 +259,15 @@ tabContentExpress apikey current_tab =
                 <> "const app = express();\n"
                 <> "const port = 3000;\n"
                 <> "\n"
-                <> "const apitoolkitClient = await APIToolkit.NewClient({ apiKey: '"
+                <> "app.use(express.json());\n"
+                <> "app.use(express.urlencoded({ extended: true }));\n\n"
+                <> "const apitoolkitClient = APIToolkit.NewClient({ apiKey: '"
                 <> apikey
                 <> "' });\n"
                 <> "app.use(apitoolkitClient.expressMiddleware);\n"
                 <> "\n"
                 <> "app.get('/', (req, res) => {\n"
-                <> "   res.send('Hello World!');\n"
+                <> "  res.json({message:'Hello World!'})"
                 <> "});\n"
                 <> "\n"
                 <> "app.listen(port, () => {\n"
@@ -296,15 +298,17 @@ tabContentExpressCjs apikey current_tab =
                 <> "const app = express();\n"
                 <> "const port = 3000;\n"
                 <> "\n"
+                <> "app.use(express.json());\n"
+                <> "app.use(express.urlencoded({ extended: true }));\n\n"
                 <> "(async function () {\n"
-                <> "   const apitoolkitClient = await APIToolkit.NewClient({ apiKey: '"
+                <> "   const apitoolkitClient = APIToolkit.NewClient({ apiKey: '"
                 <> "   "
                 <> apikey
                 <> "' });\n"
                 <> "   app.use(apitoolkitClient.expressMiddleware);\n"
                 <> "\n"
                 <> "   app.get('/', (req, res) => {\n"
-                <> "      res.send('Hello World!');\n"
+                <> "      res.json({message:'Hello World!'});\n"
                 <> "   });\n"
                 <> "\n"
                 <> "   app.listen(port, () => {\n"
@@ -840,7 +844,7 @@ contentHeader target =
       div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
       div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
     button_
-      [ class_ "text-black text-sm font-bold mr-6",
+      [ class_ "text-gray-500 text-sm font-bold mr-6",
         term "data-target" target,
         [__|
           on click
@@ -851,4 +855,5 @@ contentHeader target =
             end
        |]
       ]
-      "Copy"
+      do
+        faIcon_ "fa-copy" "fa-solid fa-copy" "h-4 w-4 inline-block"
