@@ -10,6 +10,7 @@ import Control.Monad.Trans.Except (except, throwE)
 import Control.Monad.Trans.Except.Extra (handleExceptT)
 import Data.Aeson (eitherDecode)
 import Data.Aeson.Types
+import Data.ByteString qualified as B
 import Data.Cache qualified as Cache
 import Data.Generics.Product (field)
 import Data.List (unzip4)
@@ -26,6 +27,8 @@ import Gogol.Data.Base64 (_Base64)
 import Gogol.PubSub qualified as PubSub
 import Log qualified
 import Models.Apis.RequestDumps qualified as RequestDumps
+import qualified Data.Text as T
+import Data.ByteString.Lazy.Char8 qualified as BL
 import Models.Projects.Projects qualified as Projects
 import Relude hiding (hoistMaybe)
 import RequestMessages qualified
@@ -34,7 +37,6 @@ import System.Config qualified as Config
 import System.Types (ATBackgroundCtx)
 import Text.Pretty.Simple (pShow)
 import Utils (DBField, eitherStrToText)
-import qualified Data.ByteString as B
 
 
 {--
@@ -101,26 +103,23 @@ processMessages env conn' msgs projectCache = do
   let msgs' =
         msgs <&> \msg -> do
           let rmMsg = msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64
-          let jsonByteStr = removeNullChars $ fromMaybe "{}" rmMsg
-          recMsg <- eitherStrToText $ eitherDecode (fromStrict jsonByteStr)
+          let jsonByteStr = fromMaybe "{}" rmMsg
+          let sanitizedJsonStr = replaceNullChars $ decodeUtf8 $ jsonByteStr
+          recMsg <- eitherStrToText $ eitherDecode $ BL.fromStrict $ encodeUtf8 sanitizedJsonStr
           Right (msg.ackId, recMsg)
 
   unless (null $ lefts msgs') do
     let leftMsgs = [(a, b) | (Left a, b) <- zip msgs' msgs]
-    forM_ leftMsgs \(a, b) -> do
-      -- TODO: switch to using a proper logger setup.
-      -- logger' <& "Error processing Error: " <> pShow a <> "\n Original Msg:" <> pShow  b
-      -- logger' <& "ERROR: Error parsing json msgs Error: " <> show a <> "\n Original Msg:" <> show b
-      -- -- [("Error", a), ("OriginalMsg", b)]
-      Log.logAttention "Error parsing json msgs" (object ["Error" .= a, "OriginalMsg" .= b])
+    forM_ leftMsgs \(a, b) -> Log.logAttention "Error parsing json msgs" (object ["Error" .= a, "OriginalMsg" .= b])
 
   if null msgs'
     then pure []
     else processMessages' env conn' (rights msgs') projectCache
 
--- Function to remove all occurrences of \u0000 from a Text
-removeNullChars :: B.ByteString ->B.ByteString  
-removeNullChars = B.filter (/= 0)
+-- Replace null characters in a Text
+replaceNullChars :: Text -> Text
+replaceNullChars = T.replace "\\u0000" ""
+
 
 wrapTxtException :: Text -> SomeException -> Text
 wrapTxtException wrap e = " " <> wrap <> " : " <> (toText @String $ show e)
@@ -136,24 +135,21 @@ processMessages' _ conn' msgs projectCache' = do
 
   unless (null $ lefts processed) do
     let leftMsgs = [(a, b) | (Left a, b) <- zip processed msgs]
-    forM_ leftMsgs \(a, b) -> do
-      -- TODO: switch to using a proper logger setup.
-      Log.logAttention "Error parsing json msgs" (object ["Error" .= a, "OriginalMsg" .= b])
+    forM_ leftMsgs \(a, b) -> Log.logAttention "processMessages': Error processing msgs" (object ["Error" .= a, "OriginalMsg" .= b])
 
   afterProccessing <- liftIO $ getTime Monotonic
 
-  when (null reqDumps) do
-    Log.logAttention_ "Empty params/query for processMessages for request dumps; "
+  when (null reqDumps) $ Log.logAttention_ "Empty params/query for processMessages for request dumps; "
 
   resp <- withPool conn' $ runExceptT do
-    unless (null params')
-      $ handleExceptT (wrapTxtException $ "execute query " <> show query')
-      $ void
-      $ execute query' params'
-    unless (null reqDumps)
-      $ handleExceptT (wrapTxtException $ "bulkInsertReqDump => \n\t\t" <> show reqDumps)
-      $ void
-      $ RequestDumps.bulkInsertRequestDumps reqDumps
+    unless (null params') $
+      handleExceptT (wrapTxtException $ toStrict $ "execute query " <> show query') $
+        void $
+          execute query' params'
+    unless (null reqDumps) $
+      handleExceptT (wrapTxtException $ toStrict $ "bulkInsertReqDump => " <> show reqDumps <> show msgs) $
+        void $
+          RequestDumps.bulkInsertRequestDumps reqDumps
 
   endTime <- liftIO $ getTime Monotonic
   let msg = fmtLn @String $ "Process Message (" +| length msgs |+ ") pipeline microsecs: queryDuration " +| toNanoSecs (diffTimeSpec startTime afterProccessing) `div` 1000 |+ " -> processingDuration " +| toNanoSecs (diffTimeSpec afterProccessing endTime) `div` 1000 |+ " -> TotalDuration " +| toNanoSecs (diffTimeSpec startTime endTime) `div` 1000 |+ ""
@@ -182,8 +178,8 @@ processMessages' _ conn' msgs projectCache' = do
       -- This should help with our performance, since this project Cache is the only information we need in order to process
       -- an apitoolkit requestmessage payload. So we're able to process payloads without hitting the database except for the actual db inserts.
       projectCacheValE <-
-        liftIO
-          $ try
+        liftIO $
+          try
             ( Cache.fetchWithCache projectCache pid \pid' -> do
                 mpjCache <- withPool conn $ Projects.projectCacheById pid'
                 pure $ fromMaybe projectCacheDefault mpjCache
