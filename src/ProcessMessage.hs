@@ -11,10 +11,12 @@ import Control.Monad.Trans.Except.Extra (handleExceptT)
 import Data.Aeson (eitherDecode)
 import Data.Aeson.Types
 import Data.ByteString qualified as B
+import Data.ByteString.Lazy.Char8 qualified as BL
 import Data.Cache qualified as Cache
 import Data.Generics.Product (field)
 import Data.List (unzip4)
 import Data.Pool (Pool)
+import Data.Text qualified as T
 import Data.Time.Clock (getCurrentTime)
 import Data.Time.LocalTime (getZonedTime)
 import Data.UUID.V4 (nextRandom)
@@ -22,15 +24,15 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (Connection, Query)
 import Database.PostgreSQL.Transact (execute)
 import Debug.Pretty.Simple
+import Effectful.PostgreSQL.Transact.Effect
 import Fmt
 import Gogol.Data.Base64 (_Base64)
 import Gogol.PubSub qualified as PubSub
 import Log qualified
 import Models.Apis.RequestDumps qualified as RequestDumps
-import qualified Data.Text as T
-import Data.ByteString.Lazy.Char8 qualified as BL
 import Models.Projects.Projects qualified as Projects
-import Relude hiding (hoistMaybe)
+import Relude hiding (hoistMaybe, ask, asks)
+import Effectful.Reader.Static (ask, asks)
 import RequestMessages qualified
 import System.Clock
 import System.Config qualified as Config
@@ -98,8 +100,8 @@ import Utils (DBField, eitherStrToText)
 
     We could also maintain hashes of all the formats in the cache, and check each field format within this list.🤔
  --}
-processMessages :: Config.EnvConfig -> Pool Connection -> [PubSub.ReceivedMessage] -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> ATBackgroundCtx [Maybe Text]
-processMessages env conn' msgs projectCache = do
+processMessages :: Config.EnvConfig -> [PubSub.ReceivedMessage] -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> ATBackgroundCtx [Maybe Text]
+processMessages env msgs projectCache = do
   let msgs' =
         msgs <&> \msg -> do
           let rmMsg = msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64
@@ -114,7 +116,8 @@ processMessages env conn' msgs projectCache = do
 
   if null msgs'
     then pure []
-    else processMessages' env conn' (rights msgs') projectCache
+    else processMessages' env (rights msgs') projectCache
+
 
 -- Replace null characters in a Text
 replaceNullChars :: Text -> Text
@@ -125,10 +128,10 @@ wrapTxtException :: Text -> SomeException -> Text
 wrapTxtException wrap e = " " <> wrap <> " : " <> (toText @String $ show e)
 
 
-processMessages' :: Config.EnvConfig -> Pool Connection -> [(Maybe Text, RequestMessages.RequestMessage)] -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> ATBackgroundCtx [Maybe Text]
-processMessages' _ conn' msgs projectCache' = do
+processMessages' :: Config.EnvConfig -> [(Maybe Text, RequestMessages.RequestMessage)] -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> ATBackgroundCtx [Maybe Text]
+processMessages' _ msgs projectCache' = do
   startTime <- liftIO $ getTime Monotonic
-  processed <- mapM (processMessage conn' projectCache') msgs
+  processed <- mapM (processMessage projectCache') msgs
   let (rmAckIds, queries, params, reqDumps) = unzip4 $ rights processed
   let query' = mconcat queries
   let params' = concat params
@@ -141,15 +144,15 @@ processMessages' _ conn' msgs projectCache' = do
 
   when (null reqDumps) $ Log.logAttention_ "Empty params/query for processMessages for request dumps; "
 
-  resp <- withPool conn' $ runExceptT do
+  resp <-  runExceptT do
     unless (null params') $
       handleExceptT (wrapTxtException $ toStrict $ "execute query " <> show query') $
         void $
-          execute query' params'
+          dbtToEff $ execute query' params'
     unless (null reqDumps) $
       handleExceptT (wrapTxtException $ toStrict $ "bulkInsertReqDump => " <> show reqDumps <> show msgs) $
         void $
-          RequestDumps.bulkInsertRequestDumps reqDumps
+          dbtToEff $ RequestDumps.bulkInsertRequestDumps reqDumps
 
   endTime <- liftIO $ getTime Monotonic
   let msg = fmtLn @String $ "Process Message (" +| length msgs |+ ") pipeline microsecs: queryDuration " +| toNanoSecs (diffTimeSpec startTime afterProccessing) `div` 1000 |+ " -> processingDuration " +| toNanoSecs (diffTimeSpec afterProccessing endTime) `div` 1000 |+ " -> TotalDuration " +| toNanoSecs (diffTimeSpec startTime endTime) `div` 1000 |+ ""
@@ -165,30 +168,29 @@ processMessages' _ conn' msgs projectCache' = do
     projectCacheDefault = Projects.ProjectCache{hosts = [], endpointHashes = [], shapeHashes = [], redactFieldslist = []}
 
     processMessage
-      :: Pool Connection
-      -> Cache.Cache Projects.ProjectId Projects.ProjectCache
+      :: Cache.Cache Projects.ProjectId Projects.ProjectCache
       -> (Maybe Text, RequestMessages.RequestMessage)
       -> ATBackgroundCtx (Either Text (Maybe Text, Query, [DBField], RequestDumps.RequestDump))
-    processMessage conn projectCache (rmAckId, recMsg) = runExceptT do
-      timestamp <- liftIO getCurrentTime
-      let pid = Projects.ProjectId recMsg.projectId
+    processMessage projectCache (rmAckId, recMsg) = do
+      appCtx <- ask @Config.AuthContext
+      runExceptT do
+        timestamp <- liftIO getCurrentTime
+        let pid = Projects.ProjectId recMsg.projectId
 
-      -- We retrieve the projectCache object from the inmemory cache and if it doesn't exist,
-      -- we set the value in the db into the cache and return that.
-      -- This should help with our performance, since this project Cache is the only information we need in order to process
-      -- an apitoolkit requestmessage payload. So we're able to process payloads without hitting the database except for the actual db inserts.
-      projectCacheValE <-
-        liftIO $
-          try
-            ( Cache.fetchWithCache projectCache pid \pid' -> do
-                mpjCache <- withPool conn $ Projects.projectCacheById pid'
-                pure $ fromMaybe projectCacheDefault mpjCache
-            )
-          :: ExceptT Text ATBackgroundCtx (Either SomeException Projects.ProjectCache)
+        -- We retrieve the projectCache object from the inmemory cache and if it doesn't exist,
+        -- we set the value in the db into the cache and return that.
+        -- This should help with our performance, since this project Cache is the only information we need in order to process
+        -- an apitoolkit requestmessage payload. So we're able to process payloads without hitting the database except for the actual db inserts.
+        projectCacheValE <- 
+            liftIO $ try
+              ( Cache.fetchWithCache projectCache pid \pid' -> do
+                  mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
+                  pure $ fromMaybe projectCacheDefault mpjCache
+              )  :: ExceptT Text ATBackgroundCtx (Either SomeException Projects.ProjectCache)
 
-      case projectCacheValE of
-        Left e -> throwE $ "An error occurred while fetching project cache: " <> show e
-        Right projectCacheVal -> do
-          recId <- liftIO nextRandom
-          (query, params, reqDump) <- except $ RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId
-          pure (rmAckId, query, params, reqDump)
+        case projectCacheValE of
+          Left e -> throwE $ "An error occurred while fetching project cache: " <> show e
+          Right projectCacheVal -> do
+            recId <- liftIO nextRandom
+            (query, params, reqDump) <- except $ RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId
+            pure (rmAckId, query, params, reqDump)

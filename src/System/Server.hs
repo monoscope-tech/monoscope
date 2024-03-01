@@ -93,7 +93,7 @@ runServer appLogger env = do
         concat
           [ [async $ runSettings warpSettings wrappedServer]
           , -- , [async $ OJCli.defaultWebUI ojStartArgs ojCfg] -- Uncomment or modify as needed
-            [async $ runBackground appLogger env $ pubsubService | env.config.enablePubsubService]
+            [async $ pubsubService appLogger env | env.config.enablePubsubService]
           , [async $ Safe.withException bgJobWorker (logException (env.config.environment) appLogger) | env.config.enableBackgroundJobs]
           ]
   _ <- liftIO $ waitAnyCancel asyncs
@@ -103,11 +103,10 @@ runServer appLogger env = do
 -- pubsubService connects to the pubsub service and listens for  messages,
 -- then it calls the processMessage function to process the messages, and
 -- acknoleges the list message in one request.
-pubsubService :: ATBackgroundCtx ()
-pubsubService = do
-  appCtx <- ask @AuthContext
+pubsubService :: Log.Logger -> AuthContext -> IO ()
+pubsubService appLogger appCtx = do
   let envConfig = appCtx.config
-  env <- liftIO $ case envConfig.googleServiceAccountB64 of
+  env <- case envConfig.googleServiceAccountB64 of
     "" -> Google.newEnv <&> (Google.envScopes L..~ pubSubScope)
     sa -> do
       let credJSON = either error id $ LB64.decodeBase64 (LT.encodeUtf8 sa)
@@ -126,7 +125,7 @@ pubsubService = do
           let subscription = "projects/past-3/subscriptions/" <> topic <> "-sub"
           pullResp <- Google.send env $ PubSub.newPubSubProjectsSubscriptionsPull pullReq subscription
           let messages = (pullResp L.^. field @"receivedMessages") & fromMaybe []
-          msgIds <- lift $ processMessages envConfig appCtx.jobsPool messages appCtx.projectCache
+          msgIds <- liftIO $ runBackground appLogger appCtx $ processMessages envConfig  messages appCtx.projectCache
           let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just (catMaybes msgIds)
           unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env
 
