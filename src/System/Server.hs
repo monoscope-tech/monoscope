@@ -7,6 +7,7 @@ import Colourista.IO (blueMessage)
 import Control.Concurrent.Async
 import Control.Exception (try)
 import Control.Exception.Safe qualified as Safe
+import Control.Lens ((^?), _Just)
 import Control.Lens qualified as L
 import Control.Monad.Except qualified as T
 import Control.Monad.Trans.Resource (runResourceT)
@@ -27,6 +28,7 @@ import Effectful.Reader.Static qualified
 import Effectful.Time (runTime)
 import Gogol qualified as Google
 import Gogol.Auth.ApplicationDefault qualified as Google
+import Gogol.Data.Base64 (_Base64)
 import Gogol.PubSub qualified as PubSub
 import Log qualified
 import Network.Wai.Handler.Warp (
@@ -88,14 +90,14 @@ runServer appLogger env = do
   -- let ojTable = "background_jobs" :: OJTypes.TableName
   -- let ojCfg = OJConfig.mkUIConfig ojLogger ojTable poolConn id
   asyncs <-
-    liftIO $
-      sequence $
-        concat
-          [ [async $ runSettings warpSettings wrappedServer]
-          , -- , [async $ OJCli.defaultWebUI ojStartArgs ojCfg] -- Uncomment or modify as needed
-            [async $ pubsubService appLogger env | env.config.enablePubsubService]
-          , [async $ Safe.withException bgJobWorker (logException (env.config.environment) appLogger) | env.config.enableBackgroundJobs]
-          ]
+    liftIO
+      $ sequence
+      $ concat
+        [ [async $ runSettings warpSettings wrappedServer]
+        , -- , [async $ OJCli.defaultWebUI ojStartArgs ojCfg] -- Uncomment or modify as needed
+          [async $ pubsubService appLogger env | env.config.enablePubsubService]
+        , [async $ Safe.withException bgJobWorker (logException (env.config.environment) appLogger) | env.config.enableBackgroundJobs]
+        ]
   _ <- liftIO $ waitAnyCancel asyncs
   pass
 
@@ -118,15 +120,22 @@ pubsubService appLogger appCtx = do
 
   let pullReq = PubSub.newPullRequest & field @"maxMessages" L.?~ fromIntegral (envConfig.messagesPerPubsubPullBatch)
 
-  forever $
-    runResourceT
+  forever
+    $ runResourceT
       do
         forM envConfig.requestPubsubTopics \topic -> do
           let subscription = "projects/past-3/subscriptions/" <> topic <> "-sub"
           pullResp <- Google.send env $ PubSub.newPubSubProjectsSubscriptionsPull pullReq subscription
-          let messages = (pullResp L.^. field @"receivedMessages") & fromMaybe []
-          msgIds <- liftIO $ runBackground appLogger appCtx $ processMessages envConfig  messages appCtx.projectCache
-          let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just (catMaybes msgIds)
+          let messages = fromMaybe [] (pullResp L.^. field @"receivedMessages")
+          let msgsB64 =
+                messages & map \msg -> do
+                  ackId <- msg.ackId
+                  b64Msg <- msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64
+                  Just (ackId, b64Msg)
+
+          -- unless (null messages) do
+          msgIds <- liftIO $ runBackground appLogger appCtx $ processMessages envConfig (catMaybes msgsB64) appCtx.projectCache
+          let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just (msgIds)
           unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env
 
 

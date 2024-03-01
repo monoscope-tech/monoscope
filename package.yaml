@@ -97,7 +97,7 @@ library:
     - async
     - base
     - bytestring
-    - base64
+    - base64 
     - mtl
     - http-types
     - cache >= 0.1.3.0
