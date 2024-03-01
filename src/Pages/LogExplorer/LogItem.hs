@@ -52,7 +52,7 @@ expandAPIlogItem' pid req modal = do
       let methodColor = getMethodColor req.method
       let statusColor = getStatusColor req.statusCode
       div_ [class_ "flex gap-4 items-center"] do
-        div_ [class_ $ "font-semibold px-2 py-1 rounded min-w-[70px] text-center " <> methodColor] $ toHtml req.method
+        div_ [class_ $ "font-semibold px-2 py-1 rounded min-w-[70px] text-center h-full " <> methodColor] $ toHtml req.method
         div_ [class_ $ "text-lg font-bold px-2 " <> statusColor] $ show req.statusCode
         div_ [class_ "flex border border-gray-200 m-1 rounded-xl p-2"] do
           mIcon_ "calender" "h-4 mr-2 w-4"

@@ -69,7 +69,7 @@ import Witch (from)
 -- | RequestMessage represents a message for a single request pulled from pubsub.
 data RequestMessage = RequestMessage
   { duration :: Int -- in nanoseconds
-  , host :: Text
+  , host :: Maybe Text
   , method :: Text
   , pathParams :: AE.Value --- key value map of the params to their values in the original urlpath.
   , projectId :: UUID.UUID
@@ -84,7 +84,7 @@ data RequestMessage = RequestMessage
   , responseHeaders :: AE.Value -- key value map of a key to a list of text values map[string][]string
   , sdkType :: RequestDumps.SDKTypes -- convension should be <language>-<router library> eg: go-gin, go-builtin, js-express
   , statusCode :: Int
-  , urlPath :: Text
+  , urlPath :: Maybe Text -- became Maybe to support express, which sometimes doesn't send urlPath for root.
   , timestamp :: ZonedTime
   , msgId :: Maybe UUID.UUID -- This becomes the request_dump id.
   , parentId :: Maybe UUID.UUID
@@ -142,8 +142,8 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   -- TODO: This is a temporary fix to add host in creating endoint hash
   -- These are the projects that we have already created endpoints
   let method = T.toUpper rM.method
-  let urlPath = RequestDumps.normalizeUrlPath rM.sdkType rM.statusCode rM.method rM.urlPath
-  let !endpointHash = from @String @Text $ showHex (xxHash $ encodeUtf8 $ UUID.toText rM.projectId <> rM.host <> method <> urlPath) ""
+  let urlPath = RequestDumps.normalizeUrlPath rM.sdkType rM.statusCode rM.method (fromMaybe "/" rM.urlPath)
+  let !endpointHash = from @String @Text $ showHex (xxHash $ encodeUtf8 $ UUID.toText rM.projectId <> (fromMaybe "" rM.host) <> method <> urlPath) ""
 
   let redactFieldsList = Vector.toList pjc.redactFieldslist <> [".set-cookie", ".password"]
   reqBodyB64 <- B64.decodeBase64 $ encodeUtf8 rM.requestBody
@@ -254,7 +254,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
           , createdAt = timestampUTC
           , updatedAt = now
           , projectId = rM.projectId
-          , host = rM.host
+          , host = fromMaybe "" rM.host
           , urlPath = urlPath
           , rawUrl = rM.rawUrl
           , pathParams = rM.pathParams
@@ -323,7 +323,7 @@ buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash outg
     , urlPath = urlPath
     , urlParams = urlParams
     , method = method
-    , host = rM.host
+    , host = fromMaybe "" rM.host
     , hash = endpointHash
     , outgoing = outgoing
     , description = "" :: Text

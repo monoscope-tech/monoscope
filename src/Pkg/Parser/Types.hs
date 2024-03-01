@@ -11,7 +11,7 @@ import Text.Megaparsec.Char.Lexer qualified as L
 
 
 -- Example queries
--- request_body.v1.v2 = "abc" AND (request_body.v3.v4 = 123 OR request_body.v5[].v6=ANY[1,2,3] OR request_body[1].v7 OR NOT request_body[-1].v8 )
+-- request_body.v1.v2 == "abc" AND (request_body.v3.v4 == 123 OR request_body.v5[].v6==ANY[1,2,3] OR request_body[1].v7 OR NOT request_body[-1].v8 )
 -- request_body[1].v7 | {.v7, .v8} |
 
 type Parser = Parsec Void Text
