@@ -17,12 +17,14 @@ import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEK
 import Data.Aeson.QQ (aesonQQ)
 import Data.Aeson.Types qualified as AET
+import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
 import Data.Digest.XXHash
 import Data.HashMap.Strict qualified as HM
 import Data.List (groupBy)
 import Data.Scientific qualified as Scientific
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Data.Time.Clock as Clock
 import Data.Time.LocalTime as Time
 import Data.UUID qualified as UUID
@@ -56,8 +58,6 @@ import Relude.Unsafe as Unsafe hiding (head)
 import Text.Regex.TDFA ((=~))
 import Utils (DBField ())
 import Witch (from)
-import qualified Data.ByteString as BS
-import qualified Data.Text.Encoding as TE
 
 
 -- $setup
@@ -126,8 +126,10 @@ redactJSON paths' = redactJSON' (stripPrefixDot paths')
 
     stripPrefixDot = map (\p -> fromMaybe p (T.stripPrefix "." p))
 
+
 replaceNullChars :: Text -> Text
 replaceNullChars = T.replace "\\u0000" ""
+
 
 -- requestMsgToDumpAndEndpoint is a very improtant function designed to be run as a pure function
 -- which takes in a request and processes it returning an sql query and it's params which can be executed.
@@ -150,7 +152,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
 
   let redactFieldsList = Vector.toList pjc.redactFieldslist <> [".set-cookie", ".password"]
 
-  let sanitizeNullChars = TE.encodeUtf8 . replaceNullChars . TE.decodeUtf8 
+  let sanitizeNullChars = TE.encodeUtf8 . replaceNullChars . TE.decodeUtf8
   reqBodyB64 <- B64.decodeBase64 $ encodeUtf8 rM.requestBody
   let reqBody = redactJSON redactFieldsList $ fromRight [aesonQQ| {} |] $ AE.eitherDecodeStrict $ sanitizeNullChars reqBodyB64
   respBodyB64 <- B64.decodeBase64 $ encodeUtf8 rM.responseBody
