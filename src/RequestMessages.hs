@@ -17,12 +17,14 @@ import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEK
 import Data.Aeson.QQ (aesonQQ)
 import Data.Aeson.Types qualified as AET
+import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
 import Data.Digest.XXHash
 import Data.HashMap.Strict qualified as HM
 import Data.List (groupBy)
 import Data.Scientific qualified as Scientific
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Data.Time.Clock as Clock
 import Data.Time.LocalTime as Time
 import Data.UUID qualified as UUID
@@ -44,7 +46,6 @@ import Models.Apis.Fields.Types qualified as Fields (
  )
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.RequestDumps (SDKTypes (GoOutgoing, JsAxiosOutgoing))
-import Models.Apis.RequestDumps qualified as RequestDump
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
@@ -126,6 +127,10 @@ redactJSON paths' = redactJSON' (stripPrefixDot paths')
     stripPrefixDot = map (\p -> fromMaybe p (T.stripPrefix "." p))
 
 
+replaceNullChars :: Text -> Text
+replaceNullChars = T.replace "\\u0000" ""
+
+
 -- requestMsgToDumpAndEndpoint is a very improtant function designed to be run as a pure function
 -- which takes in a request and processes it returning an sql query and it's params which can be executed.
 -- The advantage of returning these queries and params is that it becomes possible to group together batches of requests
@@ -146,17 +151,12 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   let !endpointHash = from @String @Text $ showHex (xxHash $ encodeUtf8 $ UUID.toText rM.projectId <> (fromMaybe "" rM.host) <> method <> urlPath) ""
 
   let redactFieldsList = Vector.toList pjc.redactFieldslist <> [".set-cookie", ".password"]
+
+  let sanitizeNullChars = TE.encodeUtf8 . replaceNullChars . TE.decodeUtf8
   reqBodyB64 <- B64.decodeBase64 $ encodeUtf8 rM.requestBody
-  -- NB: At the moment we're discarding the error messages from when we're unable to parse the input
-  -- We should log this inputs and maybe input them into the db as is. This is also a potential annomaly for our customers,
-  -- And would help us identity what request formats our customers are actually processing, which would help guide our new features.
-  -- It could look something like this for a start, but with proper logging and not trace debug.
-  -- let reqBodyFields = case reqBodyE of
-  --       Left err -> traceShowM err >> []
-  --       Right reqBody -> valueToFields reqBody
-  let reqBody = redactJSON redactFieldsList $ fromRight [aesonQQ| {} |] $ AE.eitherDecodeStrict reqBodyB64
+  let reqBody = redactJSON redactFieldsList $ fromRight [aesonQQ| {} |] $ AE.eitherDecodeStrict $ sanitizeNullChars reqBodyB64
   respBodyB64 <- B64.decodeBase64 $ encodeUtf8 rM.responseBody
-  let respBody = redactJSON redactFieldsList $ fromRight [aesonQQ| {} |] $ AE.eitherDecodeStrict respBodyB64
+  let respBody = redactJSON redactFieldsList $ fromRight [aesonQQ| {} |] $ AE.eitherDecodeStrict $ sanitizeNullChars respBodyB64
 
   let pathParamFields = valueToFields $ redactJSON redactFieldsList rM.pathParams
       queryParamFields = valueToFields $ redactJSON redactFieldsList rM.queryParams
@@ -281,7 +281,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
           , serviceVersion = rM.serviceVersion
           , errors = errorsJSONB
           , tags = tagsV
-          , requestType = RequestDump.getRequestType rM.sdkType
+          , requestType = RequestDumps.getRequestType rM.sdkType
           }
 
   -- Build all fields and formats, unzip them as separate lists and append them to query and params

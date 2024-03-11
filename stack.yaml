@@ -142,6 +142,10 @@ extra-deps:
 # Override default flag values for local packages and extra-deps
 # flags: {}
 
+flags:
+  pg-entity:
+    prod: true
+
 # Extra package databases containing global packages
 # extra-package-dbs: []
 
