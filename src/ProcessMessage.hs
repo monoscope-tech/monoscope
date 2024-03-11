@@ -11,10 +11,12 @@ import Control.Monad.Trans.Except.Extra (handleExceptT)
 import Data.Aeson (eitherDecode)
 import Data.Aeson.Types
 import Data.ByteString qualified as B
+import Data.ByteString.Lazy.Char8 qualified as BL
 import Data.Cache qualified as Cache
 import Data.Generics.Product (field)
 import Data.List (unzip4)
 import Data.Pool (Pool)
+import Data.Text qualified as T
 import Data.Time.Clock (getCurrentTime)
 import Data.Time.LocalTime (getZonedTime)
 import Data.UUID.V4 (nextRandom)
@@ -27,8 +29,6 @@ import Gogol.Data.Base64 (_Base64)
 import Gogol.PubSub qualified as PubSub
 import Log qualified
 import Models.Apis.RequestDumps qualified as RequestDumps
-import qualified Data.Text as T
-import Data.ByteString.Lazy.Char8 qualified as BL
 import Models.Projects.Projects qualified as Projects
 import Relude hiding (hoistMaybe)
 import RequestMessages qualified
@@ -116,6 +116,7 @@ processMessages env conn' msgs projectCache = do
     then pure []
     else processMessages' env conn' (rights msgs') projectCache
 
+
 -- Replace null characters in a Text
 replaceNullChars :: Text -> Text
 replaceNullChars = T.replace "\\u0000" ""
@@ -142,14 +143,14 @@ processMessages' _ conn' msgs projectCache' = do
   when (null reqDumps) $ Log.logAttention_ "Empty params/query for processMessages for request dumps; "
 
   resp <- withPool conn' $ runExceptT do
-    unless (null params') $
-      handleExceptT (wrapTxtException $ toStrict $ "execute query " <> show query') $
-        void $
-          execute query' params'
-    unless (null reqDumps) $
-      handleExceptT (wrapTxtException $ toStrict $ "bulkInsertReqDump => " <> show reqDumps <> show msgs) $
-        void $
-          RequestDumps.bulkInsertRequestDumps reqDumps
+    unless (null params')
+      $ handleExceptT (wrapTxtException $ toStrict $ "execute query " <> show query')
+      $ void
+      $ execute query' params'
+    unless (null reqDumps)
+      $ handleExceptT (wrapTxtException $ toStrict $ "bulkInsertReqDump => " <> show reqDumps <> show msgs)
+      $ void
+      $ RequestDumps.bulkInsertRequestDumps reqDumps
 
   endTime <- liftIO $ getTime Monotonic
   let msg = fmtLn @String $ "Process Message (" +| length msgs |+ ") pipeline microsecs: queryDuration " +| toNanoSecs (diffTimeSpec startTime afterProccessing) `div` 1000 |+ " -> processingDuration " +| toNanoSecs (diffTimeSpec afterProccessing endTime) `div` 1000 |+ " -> TotalDuration " +| toNanoSecs (diffTimeSpec startTime endTime) `div` 1000 |+ ""
@@ -178,8 +179,8 @@ processMessages' _ conn' msgs projectCache' = do
       -- This should help with our performance, since this project Cache is the only information we need in order to process
       -- an apitoolkit requestmessage payload. So we're able to process payloads without hitting the database except for the actual db inserts.
       projectCacheValE <-
-        liftIO $
-          try
+        liftIO
+          $ try
             ( Cache.fetchWithCache projectCache pid \pid' -> do
                 mpjCache <- withPool conn $ Projects.projectCacheById pid'
                 pure $ fromMaybe projectCacheDefault mpjCache

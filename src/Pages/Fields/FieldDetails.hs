@@ -25,20 +25,23 @@ import System.Types
 import Utils
 import Web.FormUrlEncoded (FromForm)
 
+
 data EditFieldForm = EditFieldForm
-  { isRequired :: Maybe Text,
-    isEnum :: Maybe Text,
-    formats :: [Text],
-    description :: Text,
-    fieldHash :: Text,
-    fieldType :: Text
+  { isRequired :: Maybe Text
+  , isEnum :: Maybe Text
+  , formats :: [Text]
+  , description :: Text
+  , fieldHash :: Text
+  , fieldType :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm, FromJSON)
 
+
 parseCheckbox :: Maybe Text -> Bool
 parseCheckbox (Just _) = True
 parseCheckbox Nothing = False
+
 
 fieldPutH :: Projects.ProjectId -> Fields.FieldId -> EditFieldForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
 fieldPutH pid fid editData = do
@@ -59,15 +62,15 @@ fieldPutH pid fid editData = do
       let formats =
             ( \format ->
                 Formats.Format
-                  { id = Formats.FormatId UUID.nil,
-                    createdAt = now,
-                    updatedAt = now,
-                    projectId = pid,
-                    fieldHash = editData.fieldHash,
-                    fieldType = fromMaybe Fields.FTString $ Fields.parseFieldTypes editData.fieldType,
-                    fieldFormat = format,
-                    examples = [],
-                    hash = editData.fieldHash <> toText (showHex (xxHash $ encodeUtf8 format) "")
+                  { id = Formats.FormatId UUID.nil
+                  , createdAt = now
+                  , updatedAt = now
+                  , projectId = pid
+                  , fieldHash = editData.fieldHash
+                  , fieldType = fromMaybe Fields.FTString $ Fields.parseFieldTypes editData.fieldType
+                  , fieldFormat = format
+                  , examples = []
+                  , hash = editData.fieldHash <> toText (showHex (xxHash $ encodeUtf8 format) "")
                   }
             )
               <$> editData.formats
