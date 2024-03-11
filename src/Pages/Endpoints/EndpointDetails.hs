@@ -53,32 +53,28 @@ import Text.Interpolation.Nyan (int, rmode')
 import Utils
 import Witch (from)
 
-
 timePickerItems :: [(Text, Text)]
 timePickerItems =
-  [ ("1H", "Last Hour")
-  , ("24H", "Last 24 Hours")
-  , ("7D", "Last 7 days")
-  , ("14D", "Last 14 days")
+  [ ("1H", "Last Hour"),
+    ("24H", "Last 24 Hours"),
+    ("7D", "Last 7 days"),
+    ("14D", "Last 14 days")
   ]
 
-
 data ParamInput = ParamInput
-  { currentURL :: Text
-  , sinceStr :: Maybe Text
-  , dateRange :: (Maybe ZonedTime, Maybe ZonedTime)
-  , currentPickerTxt :: Text
-  , subPage :: Text
+  { currentURL :: Text,
+    sinceStr :: Maybe Text,
+    dateRange :: (Maybe ZonedTime, Maybe ZonedTime),
+    currentPickerTxt :: Text,
+    subPage :: Text
   }
-
 
 subPageMenu :: [(Text, Text)]
 subPageMenu =
-  [ ("Overview", "overview")
-  , ("API Docs", "api_docs")
-  , ("Shapes", "shapes")
+  [ ("Overview", "overview"),
+    ("API Docs", "api_docs"),
+    ("Shapes", "shapes")
   ]
-
 
 fieldDetailsPartialH :: Projects.ProjectId -> Fields.FieldId -> ATAuthCtx (Html ())
 fieldDetailsPartialH pid fid = do
@@ -102,10 +98,61 @@ fieldDetailsPartialH pid fid = do
         Nothing -> pure ""
         Just field -> pure $ fieldDetailsView field formats
 
-
 fieldDetailsView :: Fields.Field -> Vector Formats.Format -> Html ()
 fieldDetailsView field formats = do
-  img_ [src_ "/assets/svgs/ellipsis.svg", class_ "my-2 float-right"]
+  div_ [id_ "modalContainer"] do
+    label_ [Lucid.for_ "edit_field", class_ "cursor-pointer"] do
+      img_ [src_ "/assets/svgs/ellipsis.svg", class_ "my-2 float-right"]
+    input_ [type_ "checkbox", id_ "edit_field", class_ "modal-toggle"]
+    div_ [class_ "modal", role_ "dialog", hxSwap_ "outerHTML"] do
+      form_
+        [ class_ "modal-box w-1/2 max-w-3xl",
+          id_ "editFieldForm",
+          hxPost_ $ "/p/" <> field.projectId.toText <> "/fields/" <> show field.id.unFieldId,
+          hxSwap_ "none"
+        ]
+        do
+          input_ [type_ "hidden", name_ "fieldHash", value_ $ field.hash]
+          input_ [type_ "hidden", name_ "fieldType", value_ $ Fields.fieldTypeToText field.fieldType]
+          div_ [class_ "flex items-center py-2 border-b justify-between"] do
+            h3_ [class_ "text-xl font-bold text-gray-900"] "Edit Field"
+            label_ [Lucid.for_ "edit_field", class_ "modal-action rounded-full m-0 cursor-pointer bg-gray-200 pr-2 py-2 flex items-center justify-center"] do
+              faIcon_ "fa-close" "fa-light fa-close" "h-4 w-4 inline-block"
+          div_ [class_ "w-full py-3"] do
+            div_ [class_ "text-xl space-y-6 overflow-y-auto", style_ "min-height:30vh;max-height:70vh; width:100%"] do
+              div_ [class_ "flex items-center gap-4"] do
+                label_ [Lucid.for_ "is_required", class_ "text-gray-700 text-sm font-semibold"] "Required"
+                input_ [class_ "checkbox checkbox-success checkbox-sm", id_ "is_required", name_ "isRequired", type_ "checkbox", if field.isRequired then checked_ else value_ "off"]
+              div_ [class_ "flex items-center gap-4"] do
+                label_ [Lucid.for_ "is_enum", class_ "text-gray-700 text-sm font-semibold"] "Enum"
+                input_ [class_ "checkbox checkbox-success checkbox-sm", id_ "is_enum", name_ "isEnum", type_ "checkbox", if field.isRequired then checked_ else value_ "off"]
+              div_ [class_ "flex flex-col gap-2"] do
+                span_ [class_ "text-gray-700 text-sm font-semibold"] "Formats"
+                div_ [class_ "flex flex-col gap-2"] do
+                  div_ [id_ "formats", class_ "flex flex-col gap-1 px-2 [&>input]:input [&>input]:input-sm [&>input]:input-bordered [&>input]:input-success [&>input]:w-full [&>input]:max-w-xs"] do
+                    formats & mapM_ \f -> do
+                      input_ [type_ "text", name_ "formats", value_ f.fieldFormat]
+                  button_
+                    [ class_ "rounded-full py-1 px-2 w-max bg-blue-100 text-blue-500 text-sm mt-2 flex items-center gap-1",
+                      onclick_ "",
+                      type_ "button",
+                      [__| on click append "<input type=\"text\" name=\"formats\">"  to #formats|]
+                    ]
+                    do
+                      span_ [] "Add"
+                      faIcon_ "fa-plus" "fa-plus fa-solid" "h-3 w-3"
+
+              div_ [class_ "flex flex-col gap-1"] do
+                label_ [Lucid.for_ "description", class_ "text-gray-700 text-sm font-semibold"] "Description"
+                textarea_ [id_ "description", name_ "description", class_ "text-sm border p-2 rounded-lg text-gray-600"] $ toHtml field.description
+          div_ [class_ "flex w-full justify-end items-center p-6 gap-4 space-x-2 border-t border-gray-200 rounded-b"] do
+            button_
+              [ class_ "btn btn-primary",
+                type_ "submit"
+              ]
+              "Save"
+      label_ [class_ "modal-backdrop", Lucid.for_ "edit_field"] "Close"
+
   section_ [class_ "space-y-6"] do
     div_ do
       h6_ [class_ "text-slate-800 text-xs"] "FIELD NAME"
@@ -157,10 +204,8 @@ fieldDetailsView field formats = do
     h6_ [class_ "mt-5 text-sm text-slate-800 mb-2"] "DESCRIPTION"
     p_ [class_ "text-slate-800 text-sm"] $ toHtml field.description
 
-
 aesonValueToText :: AE.Value -> Text
 aesonValueToText = toStrict . encodeToLazyText
-
 
 -- /p/" <> pid.toText <> "/log_explorer/item/" <> endpoint_hash
 endpointDetailsWithHashH :: Projects.ProjectId -> Text -> ATAuthCtx (Headers '[HXRedirect] (Html ()))
@@ -184,7 +229,6 @@ endpointDetailsWithHashH pid endpoint_hash = do
           pure $ addHeader redirect_url $ span_ ""
         Nothing ->
           pure $ addHeader "" $ span_ ""
-
 
 -- | endpointDetailsH is the main handler for the endpoint details page.
 -- It reuses the fieldDetailsView as well, which is used for the side navigation on the page and also exposed un the fieldDetailsPartialH endpoint
@@ -240,10 +284,10 @@ endpointDetailsH pid eid fromDStr toDStr sinceStr' subPageM shapeHashM = do
       let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
       let bwconf =
             (def :: BWConfig)
-              { sessM = Just sess
-              , currProject = project
-              , pageTitle = "Endpoint Details"
-              , menuItem = Just "Endpoints"
+              { sessM = Just sess,
+                currProject = project,
+                pageTitle = "Endpoint Details",
+                menuItem = Just "Endpoints"
               }
       currTime <- liftIO getCurrentTime
       let currentURL = "/p/" <> pid.toText <> "/endpoints/" <> Endpoints.endpointIdText eid <> "?from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
@@ -251,9 +295,8 @@ endpointDetailsH pid eid fromDStr toDStr sinceStr' subPageM shapeHashM = do
       let currentPickerTxt = case sinceStr of
             Just a -> a
             Nothing -> maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD
-      let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt, subPage = subPage}
+      let paramInput = ParamInput {currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt, subPage = subPage}
       pure $ bodyWrapper bwconf $ endpointDetails pid paramInput currTime endpoint enpStats shapesWithFieldsMap fieldsMap shapesList shapeHashM reqLatenciesRolledByStepsJ (fromD, toD)
-
 
 endpointDetails :: Projects.ProjectId -> ParamInput -> UTCTime -> Endpoints.Endpoint -> EndpointRequestStats -> [Shapes.ShapeWithFields] -> Map FieldCategoryEnum [Fields.Field] -> Vector Shapes.Shape -> Maybe Text -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 endpointDetails pid paramInput currTime endpoint endpointStats shapesWithFieldsMap fieldsM shapesList shapeHashM reqLatenciesRolledByStepsJ dateRange = do
@@ -272,8 +315,8 @@ endpointDetails pid paramInput currTime endpoint endpointStats shapesWithFieldsM
           subPageMenu
             & mapM_ \(title, slug) ->
               a_
-                [ href_ $ currentURLSubPage <> "&subpage=" <> slug
-                , class_
+                [ href_ $ currentURLSubPage <> "&subpage=" <> slug,
+                  class_
                     $ "cursor-pointer px-3 py-2 font-medium text-sm rounded-md "
                     <> if slug == paramInput.subPage then " bg-indigo-100 text-indigo-700 " else " text-slate-500 hover:text-gray-700"
                 ]
@@ -294,8 +337,8 @@ endpointDetails pid paramInput currTime endpoint endpointStats shapesWithFieldsM
         _ -> apiOverviewSubPage pid paramInput currTime endpointStats fieldsM reqLatenciesRolledByStepsJ dateRange
 
     aside_
-      [ class_ "w-[25%] inline-block h-full overflow-y-auto overflow-x-hidden bg-white border border-gray-200 p-5 xsticky xtop-0 "
-      , id_ "detailSidebar"
+      [ class_ "w-[25%] inline-block h-full overflow-y-auto overflow-x-hidden bg-white border border-gray-200 p-5 xsticky xtop-0 ",
+        id_ "detailSidebar"
       ]
       do
         div_ [class_ "h-full flex flex-col items-center justify-center"] do
@@ -315,7 +358,6 @@ endpointDetails pid paramInput currTime endpoint endpointStats shapesWithFieldsM
         end
         |]
 
-
 shapesSubPage :: Projects.ProjectId -> Vector Shapes.Shape -> [Shapes.ShapeWithFields] -> Text -> Html ()
 shapesSubPage pid shapesList shapesWithFields currentURL = do
   div_ [class_ "space-y-8", id_ "subpage"] do
@@ -333,11 +375,11 @@ shapesSubPage pid shapesList shapesWithFields currentURL = do
               let response_body_keypaths = (\f -> f.keyPath) <$> fromMaybe [] (Map.lookup Fields.FCResponseBody shape.fieldsMap)
               let shapeJson =
                     AE.object
-                      [ "response_headers" .= buildLeafJson (fromMaybe [] (Map.lookup Fields.FCResponseHeader shape.fieldsMap))
-                      , "query_params" .= buildLeafJson (fromMaybe [] (Map.lookup Fields.FCQueryParam shape.fieldsMap))
-                      , "path_params" .= buildLeafJson (fromMaybe [] (Map.lookup Fields.FCPathParam shape.fieldsMap))
-                      , "request_body" .= convertKeyPathsToJson request_body_keypaths (fromMaybe [] (Map.lookup Fields.FCRequestBody shape.fieldsMap)) ""
-                      , "response_body" .= convertKeyPathsToJson response_body_keypaths (fromMaybe [] (Map.lookup Fields.FCResponseBody shape.fieldsMap)) ""
+                      [ "response_headers" .= buildLeafJson (fromMaybe [] (Map.lookup Fields.FCResponseHeader shape.fieldsMap)),
+                        "query_params" .= buildLeafJson (fromMaybe [] (Map.lookup Fields.FCQueryParam shape.fieldsMap)),
+                        "path_params" .= buildLeafJson (fromMaybe [] (Map.lookup Fields.FCPathParam shape.fieldsMap)),
+                        "request_body" .= convertKeyPathsToJson request_body_keypaths (fromMaybe [] (Map.lookup Fields.FCRequestBody shape.fieldsMap)) "",
+                        "response_body" .= convertKeyPathsToJson response_body_keypaths (fromMaybe [] (Map.lookup Fields.FCResponseBody shape.fieldsMap)) ""
                       ]
               let shapeJsonStr = aesonValueToText shapeJson
               div_ [class_ "text-sm text-gray-500 p-4 bg-gray-100 whitespace-prerap w-2/3 h-[200px] overflow-auto flex flex-col gap-1 shape_json", style_ "font-family: monospace", term "data-json" shapeJsonStr] pass
@@ -359,7 +401,6 @@ shapesSubPage pid shapesList shapesWithFields currentURL = do
      })
   |]
 
-
 apiDocsSubPage :: [Shapes.ShapeWithFields] -> Maybe Text -> Html ()
 apiDocsSubPage shapesWithFieldsMap shapeHashM = do
   let fstH = viaNonEmpty head shapesWithFieldsMap
@@ -378,11 +419,11 @@ apiDocsSubPage shapesWithFieldsMap shapeHashM = do
         span_ [class_ "font-bold text-slate-700"] "Shapes:"
         div_ [class_ "relative flex items-center border rounded focus:ring-2 focus:ring-blue-200 active:ring-2 active:ring-blue-200", style_ "width:220px"] do
           button_
-            [ [__| on click toggle .hidden on #shapes_container |]
-            , id_ "toggle_shapes_btn"
-            , data_ "current" (show targetIndex)
-            , data_ "total" (show $ length shapesWithFieldsMap)
-            , class_ "w-full flex text-slate-600 justify_between items-center cursor-pointer px-2 py-1"
+            [ [__| on click toggle .hidden on #shapes_container |],
+              id_ "toggle_shapes_btn",
+              data_ "current" (show targetIndex),
+              data_ "total" (show $ length shapesWithFieldsMap),
+              class_ "w-full flex text-slate-600 justify_between items-center cursor-pointer px-2 py-1"
             ]
             do
               let prm = "px-2 py-1 rounded text-white text-sm "
@@ -396,12 +437,12 @@ apiDocsSubPage shapesWithFieldsMap shapeHashM = do
               let statusCls = if s.status < 400 then prm <> "bg-green-500" else prm <> "bg-red-500"
               let prm = "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"
               button_
-                [ class_ prm
-                , id_ ("status_" <> show index)
-                , [__|on click selectShape((me),(my @data-pos)) |]
-                , data_ "pos" (show index)
-                , data_ "status" (show s.status)
-                , data_ "hash" s.sHash
+                [ class_ prm,
+                  id_ ("status_" <> show index),
+                  [__|on click selectShape((me),(my @data-pos)) |],
+                  data_ "pos" (show index),
+                  data_ "status" (show s.status),
+                  data_ "hash" s.sHash
                 ]
                 do
                   span_ [class_ statusCls] $ show s.status
@@ -457,14 +498,13 @@ apiDocsSubPage shapesWithFieldsMap shapeHashM = do
         end
         |]
 
-
 apiOverviewSubPage :: Projects.ProjectId -> ParamInput -> UTCTime -> EndpointRequestStats -> Map Fields.FieldCategoryEnum [Fields.Field] -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 apiOverviewSubPage pid paramInput currTime endpoint fieldsM reqLatenciesRolledByStepsJ dateRange = do
   let currentURLSearch = deleteParam "to" $ deleteParam "from" $ deleteParam "since" paramInput.currentURL
   div_ [class_ "space-y-16 pb-20", id_ "subpage"] do
     a_
-      [ class_ "relative px-3 py-2 border border-1 border-black-200 space-x-2  inline-block relative cursor-pointer rounded-md"
-      , [__| on click toggle .hidden on #timepickerBox|]
+      [ class_ "relative px-3 py-2 border border-1 border-black-200 space-x-2  inline-block relative cursor-pointer rounded-md",
+        [__| on click toggle .hidden on #timepickerBox|]
       ]
       do
         mIcon_ "clock" "h-4 w-4"
@@ -474,8 +514,8 @@ apiOverviewSubPage pid paramInput currTime endpoint fieldsM reqLatenciesRolledBy
       div_ [class_ "inline-block w-84 overflow-auto bg-white py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm"] do
         forM_ timePickerItems \(val, title) ->
           a_
-            [ class_ "block text-slate-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 "
-            , href_ $ currentURLSearch <> "&since=" <> val
+            [ class_ "block text-slate-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ",
+              href_ $ currentURLSearch <> "&since=" <> val
             ]
             $ toHtml title
         a_ [class_ "block text-slate-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ", [__| on click toggle .hidden on #timepickerSidebar |]] "Custom date range"
@@ -484,9 +524,8 @@ apiOverviewSubPage pid paramInput currTime endpoint fieldsM reqLatenciesRolledBy
     section_ $ AnomaliesList.anomalyListSlider currTime pid (Just endpoint.endpointId) Nothing
     endpointStats endpoint reqLatenciesRolledByStepsJ dateRange
 
-
 endpointStats :: Endpoints.EndpointRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
-endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p99, max} reqLatenciesRolledByStepsJ dateRange@(fromD, toD) =
+endpointStats enpStats@Endpoints.EndpointRequestStats {min, p50, p75, p90, p95, p99, max} reqLatenciesRolledByStepsJ dateRange@(fromD, toD) =
   section_ [class_ "space-y-3"] do
     div_ [class_ "flex justify-between mt-5"]
       $ div_
@@ -551,7 +590,6 @@ endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p
               percentileRow "min" enpStats.min
         script_ [int|| latencyHistogram('reqsLatencyHistogram',{p50:#{p50}, p75:#{p75}, p90:#{p90}, p95:#{p95}, p99:#{p99}, max:#{max}},  #{reqLatenciesRolledByStepsJ}) |]
 
-
 percentileRow :: Text -> Double -> Html ()
 percentileRow key p = do
   let (d, unit) = fmtDuration p
@@ -561,12 +599,10 @@ percentileRow key p = do
       span_ [class_ "tabular-nums"] $ toHtml d
       span_ $ toHtml unit
 
-
 fmtDuration :: Double -> (Text, Text)
 fmtDuration d
   | d > 1000 = (fmt $ fixedF 2 (d / 1000), "s")
   | otherwise = (fmt $ fixedF 0 d, "ms")
-
 
 -- NOTE: We could enable the fields cycling functionality using the groups of response list functionality on the endpoint.
 -- So we go through the list and in each request or response view, only show the fields that appear in the field list.
@@ -595,7 +631,6 @@ reqResSection title isRequest shapesWithFieldsMap targetIndex =
               subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader s.fieldsMap) Nothing
               subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody s.fieldsMap) (Just s.resDescription)
 
-
 -- | subSubSection ..
 subSubSection :: Text -> Maybe [Fields.Field] -> Maybe Text -> Html ()
 subSubSection title fieldsM descriptionM =
@@ -620,10 +655,10 @@ subSubSection title fieldsM descriptionM =
             case fieldM of
               Nothing -> do
                 a_
-                  [ class_ "flex flex-row items-center"
-                  , style_ depthPadding
-                  , [__| on click toggle .neg-rotate-90 on <.chevron/> in me then collapseUntil((me), (my @data-depth))  |]
-                  , term "data-depth" $ show depth
+                  [ class_ "flex flex-row items-center",
+                    style_ depthPadding,
+                    [__| on click toggle .neg-rotate-90 on <.chevron/> in me then collapseUntil((me), (my @data-depth))  |],
+                    term "data-depth" $ show depth
                   ]
                   do
                     faSprite_ "chevron-down" "light" "h-6 w-6 mr-1 chevron cursor-pointer p-1"
@@ -636,11 +671,11 @@ subSubSection title fieldsM descriptionM =
                           else EndpointComponents.fieldTypeToDisplay Fields.FTObject
               Just field -> do
                 a_
-                  [ hxGet_ $ "/p/" <> field.projectId.toText <> "/fields/" <> UUID.toText (Fields.unFieldId field.id)
-                  , hxTarget_ "#detailSidebar"
-                  , class_ "flex flex-row cursor-pointer"
-                  , style_ depthPadding
-                  , term "data-depth" $ show depth
+                  [ hxGet_ $ "/p/" <> field.projectId.toText <> "/fields/" <> UUID.toText (Fields.unFieldId field.id),
+                    hxTarget_ "#detailSidebar",
+                    class_ "flex flex-row cursor-pointer",
+                    style_ depthPadding,
+                    term "data-depth" $ show depth
                   ]
                   do
                     faSprite_ "chevron-down" "light" "h-4 mr-3 mt-4 w-4 invisible"
@@ -652,7 +687,6 @@ subSubSection title fieldsM descriptionM =
                       span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ EndpointComponents.fieldTypeToDisplay field.fieldType
                       faSprite_ "octagon-exclamation" "regular" " mr-8 ml-4 h-5 text-red-400"
                       faSprite_ "ellipsis-vertical" "light" "mx-5 h-5"
-
 
 -- | fieldsToNormalized, gets a list of fields and returns a list of tuples with the keypath, and the field, sorted by the key path
 -- >>> import Models.Apis.Fields.Types
@@ -679,18 +713,15 @@ subSubSection title fieldsM descriptionM =
 buildLeafJson :: [Fields.Field] -> AE.Value
 buildLeafJson = foldr (\f acc -> mergeObjects acc (object [AEKey.fromText f.key .= fieldTypeToText f.fieldType])) (AE.object [])
 
-
 mergeObjects :: Value -> Value -> Value
 mergeObjects (Object obj1) (Object obj2) = Object (obj1 <> obj2)
 mergeObjects _ _ = object []
 
-
 data KeyPathGroup = KeyPathGroup
-  { subGoups :: [Text]
-  , keyPath :: Text
+  { subGoups :: [Text],
+    keyPath :: Text
   }
   deriving stock (Show, Generic)
-
 
 convertKeyPathsToJson :: [Text] -> [Fields.Field] -> Text -> Value
 convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
@@ -719,7 +750,6 @@ convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
     convertToJson' :: Map.Map T.Text KeyPathGroup -> Value
     convertToJson' grps = foldr processGroup (object []) (Map.toList grps)
 
-
 processItem :: T.Text -> Map.Map T.Text KeyPathGroup -> Map.Map T.Text KeyPathGroup
 processItem item groups =
   let splitItems = T.splitOn "." item
@@ -743,19 +773,17 @@ processItem item groups =
       updatedGroups = case Map.lookup root groups of
         Just items -> case remainingItems of
           "" -> groups
-          val -> Map.insert root (KeyPathGroup{subGoups = items.subGoups ++ [remainingItems], keyPath = items.keyPath <> "." <> root}) groups
+          val -> Map.insert root (KeyPathGroup {subGoups = items.subGoups ++ [remainingItems], keyPath = items.keyPath <> "." <> root}) groups
         Nothing -> case remainingItems of
-          "" -> Map.insert root (KeyPathGroup{subGoups = [], keyPath = "." <> root}) groups
-          val -> Map.insert root (KeyPathGroup{subGoups = [remainingItems], keyPath = "." <> root}) groups
+          "" -> Map.insert root (KeyPathGroup {subGoups = [], keyPath = "." <> root}) groups
+          val -> Map.insert root (KeyPathGroup {subGoups = [remainingItems], keyPath = "." <> root}) groups
    in updatedGroups
-
 
 processItems :: [T.Text] -> Map.Map T.Text KeyPathGroup -> Map.Map T.Text KeyPathGroup
 processItems [] groups = groups
 processItems (x : xs) groups = processItems xs updatedGroups
   where
     updatedGroups = processItem x groups
-
 
 extractInfo :: Maybe Fields.Field -> [Fields.Field] -> Text -> Text -> Text
 extractInfo Nothing categoryFields parentPath grp =

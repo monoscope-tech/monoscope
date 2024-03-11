@@ -44,88 +44,79 @@ import System.Types
 import Utils
 import Web.FormUrlEncoded (FromForm)
 
-
 data SwaggerForm = SwaggerForm
-  { swagger_json :: Text
-  , from :: Text
+  { swagger_json :: Text,
+    from :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
 
-
 data FieldOperation = FieldOperation
-  { action :: Text
-  , keypath :: Text
-  , url :: Text
-  , method :: Text
-  , description :: Text
-  , examples :: V.Vector AE.Value
-  , category :: Text
-  , ftype :: Text
-  , format :: Text
-  , host :: Text
-  , isEnum :: Bool
-  , isRequired :: Bool
+  { action :: Text,
+    keypath :: Text,
+    url :: Text,
+    method :: Text,
+    description :: Text,
+    examples :: V.Vector AE.Value,
+    category :: Text,
+    ftype :: Text,
+    format :: Text,
+    host :: Text,
+    isEnum :: Bool,
+    isRequired :: Bool
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
-
 
 data KeyPathData = KeyPathData
-  { fkKeyPath :: Text
-  , fkCategory :: Text
-  , fkType :: Text
+  { fkKeyPath :: Text,
+    fkCategory :: Text,
+    fkType :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
-
 
 data OpShape = OpShape
-  { opOperations :: V.Vector FieldOperation
-  , opShapeChanged :: Bool
-  , opRequestBodyKeyPaths :: V.Vector KeyPathData
-  , opResponseBodyKeyPaths :: V.Vector KeyPathData
-  , opRequestHeadersKeyPaths :: V.Vector KeyPathData
-  , opResponseHeadersKeyPaths :: V.Vector KeyPathData
-  , opQueryParamsKeyPaths :: V.Vector KeyPathData
-  , opMethod :: Text
-  , opUrl :: Text
-  , opStatus :: Text
-  , opHost :: Text
-  , reqDescription :: Text
-  , resDescription :: Text
+  { opOperations :: V.Vector FieldOperation,
+    opShapeChanged :: Bool,
+    opRequestBodyKeyPaths :: V.Vector KeyPathData,
+    opResponseBodyKeyPaths :: V.Vector KeyPathData,
+    opRequestHeadersKeyPaths :: V.Vector KeyPathData,
+    opResponseHeadersKeyPaths :: V.Vector KeyPathData,
+    opQueryParamsKeyPaths :: V.Vector KeyPathData,
+    opMethod :: Text,
+    opUrl :: Text,
+    opStatus :: Text,
+    opHost :: Text,
+    reqDescription :: Text,
+    resDescription :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
-
 
 data OpEndpoint = OpEndpoint
-  { endpointUrl :: Text
-  , endpointMethod :: Text
-  , endpointHost :: Text
-  , endpointDescription :: Text
+  { endpointUrl :: Text,
+    endpointMethod :: Text,
+    endpointHost :: Text,
+    endpointDescription :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
-
 
 data SaveSwaggerForm = SaveSwaggerForm
-  { updated_swagger :: Text
-  , swagger_id :: Text
-  , endpoints :: V.Vector OpEndpoint
-  , diffsInfo :: V.Vector OpShape
+  { updated_swagger :: Text,
+    swagger_id :: Text,
+    endpoints :: V.Vector OpEndpoint,
+    diffsInfo :: V.Vector OpShape
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
-
 
 getEndpointHash :: Projects.ProjectId -> Text -> Text -> Text -> Text
 getEndpointHash pid host urlPath method = toText $ showHex (xxHash $ encodeUtf8 $ UUID.toText pid.unProjectId <> host <> T.toUpper method <> urlPath) ""
 
-
 getFieldHash :: Text -> Text -> Text -> Text -> Text
 getFieldHash enpHash fcategory keypath ftype = enpHash <> toText (showHex (xxHash $ encodeUtf8 (fcategory <> keypath <> ftype)) "")
-
 
 getShapeHash :: Text -> Text -> V.Vector Text -> V.Vector Text -> V.Vector Text -> V.Vector Text -> Text
 getShapeHash endpointHash statusCode responseBodyKP responseHeadersKP requestBodyKP queryParamsKP = shapeHash
@@ -134,44 +125,42 @@ getShapeHash endpointHash statusCode responseBodyKP responseHeadersKP requestBod
     keyPathsHash = toText $ showHex (xxHash $ encodeUtf8 comb) ""
     shapeHash = endpointHash <> statusCode <> keyPathsHash
 
-
 getEndpointFromOpEndpoint :: Projects.ProjectId -> OpEndpoint -> Endpoints.Endpoint
 getEndpointFromOpEndpoint pid opEndpoint =
   let endpointHash = getEndpointHash pid opEndpoint.endpointHost opEndpoint.endpointUrl opEndpoint.endpointMethod
    in Endpoints.Endpoint
-        { id = Endpoints.EndpointId UUID.nil
-        , createdAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
-        , updatedAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
-        , projectId = pid
-        , urlPath = opEndpoint.endpointUrl
-        , method = T.toUpper opEndpoint.endpointMethod
-        , urlParams = AE.Array []
-        , host = opEndpoint.endpointHost
-        , hash = endpointHash
-        , outgoing = False
-        , description = opEndpoint.endpointDescription
+        { id = Endpoints.EndpointId UUID.nil,
+          createdAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC",
+          updatedAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC",
+          projectId = pid,
+          urlPath = opEndpoint.endpointUrl,
+          method = T.toUpper opEndpoint.endpointMethod,
+          urlParams = AE.Array [],
+          host = opEndpoint.endpointHost,
+          hash = endpointHash,
+          outgoing = False,
+          description = opEndpoint.endpointDescription
         }
-
 
 getShapeFromOpShape :: Projects.ProjectId -> UTCTime -> OpShape -> Shapes.Shape
 getShapeFromOpShape pid curTime opShape =
   Shapes.Shape
-    { id = Shapes.ShapeId UUID.nil
-    , projectId = pid
-    , createdAt = curTime
-    , updatedAt = curTime
-    , approvedOn = Just curTime
-    , endpointHash = endpointHash
-    , queryParamsKeypaths = qpKP
-    , requestBodyKeypaths = rqBKP
-    , responseBodyKeypaths = rsBKP
-    , requestHeadersKeypaths = rqHKP
-    , responseHeadersKeypaths = rsHKP
-    , fieldHashes = fieldHashes
-    , hash = shapeHash
-    , statusCode = fromMaybe 0 (readMaybe (toString opShape.opStatus))
-    , responseDescription = opShape.resDescription
-    , requestDescription = opShape.reqDescription
+    { id = Shapes.ShapeId UUID.nil,
+      projectId = pid,
+      createdAt = curTime,
+      updatedAt = curTime,
+      approvedOn = Just curTime,
+      endpointHash = endpointHash,
+      queryParamsKeypaths = qpKP,
+      requestBodyKeypaths = rqBKP,
+      responseBodyKeypaths = rsBKP,
+      requestHeadersKeypaths = rqHKP,
+      responseHeadersKeypaths = rsHKP,
+      fieldHashes = fieldHashes,
+      hash = shapeHash,
+      statusCode = fromMaybe 0 (readMaybe (toString opShape.opStatus)),
+      responseDescription = opShape.resDescription,
+      requestDescription = opShape.reqDescription
     }
   where
     endpointHash = getEndpointHash pid opShape.opHost opShape.opUrl opShape.opMethod
@@ -188,7 +177,6 @@ getShapeFromOpShape pid curTime opShape =
     rsBKPHashes = V.map (\v -> getFieldHash endpointHash v.fkCategory v.fkKeyPath v.fkType) opShape.opResponseBodyKeyPaths
     fieldHashes = qpKPHashes <> rqHKPHashes <> rqBKPHashes <> rsHKPHashes <> rsBKPHashes
 
-
 getFieldAndFormatFromOpShape :: Projects.ProjectId -> FieldOperation -> (Fields.Field, Formats.Format)
 getFieldAndFormatFromOpShape pid operation =
   let endpointHash = getEndpointHash pid operation.host operation.url operation.method
@@ -201,45 +189,43 @@ getFieldAndFormatFromOpShape pid operation =
 
       field =
         Fields.Field
-          { createdAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
-          , updatedAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
-          , id = Fields.FieldId UUID.nil
-          , endpointHash = endpointHash
-          , projectId = pid
-          , key = snd $ T.breakOnEnd "." keyPath
-          , fieldType = fieldType
-          , fieldTypeOverride = Nothing
-          , format = format
-          , formatOverride = Just ""
-          , description = operation.description
-          , keyPath = keyPath
-          , fieldCategory = fCategory
-          , hash = fieldHash
-          , isEnum = operation.isEnum
-          , isRequired = operation.isRequired
+          { createdAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC",
+            updatedAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC",
+            id = Fields.FieldId UUID.nil,
+            endpointHash = endpointHash,
+            projectId = pid,
+            key = snd $ T.breakOnEnd "." keyPath,
+            fieldType = fieldType,
+            fieldTypeOverride = Nothing,
+            format = format,
+            formatOverride = Just "",
+            description = operation.description,
+            keyPath = keyPath,
+            fieldCategory = fCategory,
+            hash = fieldHash,
+            isEnum = operation.isEnum,
+            isRequired = operation.isRequired
           }
 
       lFormat =
         Formats.Format
-          { id = Formats.FormatId UUID.nil
-          , createdAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
-          , updatedAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
-          , projectId = pid
-          , fieldHash = fieldHash
-          , fieldType = fieldType
-          , fieldFormat = format
-          , examples = operation.examples
-          , hash = formatHash
+          { id = Formats.FormatId UUID.nil,
+            createdAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC",
+            updatedAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC",
+            projectId = pid,
+            fieldHash = fieldHash,
+            fieldType = fieldType,
+            fieldFormat = format,
+            examples = operation.examples,
+            hash = formatHash
           }
    in (field, lFormat)
-
 
 flattenVector :: [V.Vector FieldOperation] -> V.Vector FieldOperation
 flattenVector = V.concat
 
-
 documentationPutH :: Projects.ProjectId -> SaveSwaggerForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
-documentationPutH pid SaveSwaggerForm{updated_swagger, swagger_id, endpoints, diffsInfo} = do
+documentationPutH pid SaveSwaggerForm {updated_swagger, swagger_id, endpoints, diffsInfo} = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
@@ -274,7 +260,7 @@ documentationPutH pid SaveSwaggerForm{updated_swagger, swagger_id, endpoints, di
         case swagger_id of
           "" -> do
             swaggerId <- Swaggers.SwaggerId <$> liftIO UUIDV4.nextRandom
-            let swaggerToAdd = Swaggers.Swagger{id = swaggerId, projectId = pid, createdBy = sess.userId, createdAt = utcToZonedTime utc currentTime, updatedAt = utcToZonedTime utc currentTime, swaggerJson = value}
+            let swaggerToAdd = Swaggers.Swagger {id = swaggerId, projectId = pid, createdBy = sess.userId, createdAt = utcToZonedTime utc currentTime, updatedAt = utcToZonedTime utc currentTime, swaggerJson = value}
             Swaggers.addSwagger swaggerToAdd
             pass
           _ -> do
@@ -284,9 +270,8 @@ documentationPutH pid SaveSwaggerForm{updated_swagger, swagger_id, endpoints, di
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Swagger Saved Successfully"]}|]
       pure $ addHeader hxTriggerData ""
 
-
 documentationPostH :: Projects.ProjectId -> SwaggerForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
-documentationPostH pid SwaggerForm{swagger_json, from} = do
+documentationPostH pid SwaggerForm {swagger_json, from} = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
@@ -308,12 +293,12 @@ documentationPostH pid SwaggerForm{swagger_json, from} = do
             Nothing -> error "Failed to parse JSON"
       let swaggerToAdd =
             Swaggers.Swagger
-              { id = swaggerId
-              , projectId = pid
-              , createdBy = sess.userId
-              , createdAt = currentTime
-              , updatedAt = currentTime
-              , swaggerJson = value
+              { id = swaggerId,
+                projectId = pid,
+                createdBy = sess.userId,
+                createdAt = currentTime,
+                updatedAt = currentTime,
+                swaggerJson = value
               }
 
       _ <- dbtToEff do
@@ -321,7 +306,6 @@ documentationPostH pid SwaggerForm{swagger_json, from} = do
 
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Swagger uploaded Successfully"]}|]
       pure $ addHeader hxTriggerData ""
-
 
 documentationGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (Html ())
 documentationGetH pid swagger_id = do
@@ -351,10 +335,10 @@ documentationGetH pid swagger_id = do
                   Nothing -> ("__APITOOLKIT", "Edit project description")
             let info =
                   object
-                    [ "description" .= AE.String projectDescription
-                    , "title" .= AE.String "No swagger generated for this project,upload your own swagger or acknowledge endpoints and shapes to trigger swagger generation"
-                    , "version" .= AE.String "1.0.0"
-                    , "termsOfService" .= AE.String "https://apitoolkit.io/terms-and-conditions/"
+                    [ "description" .= AE.String projectDescription,
+                      "title" .= AE.String "No swagger generated for this project,upload your own swagger or acknowledge endpoints and shapes to trigger swagger generation",
+                      "version" .= AE.String "1.0.0",
+                      "termsOfService" .= AE.String "https://apitoolkit.io/terms-and-conditions/"
                     ]
             let swagger = object ["openapi" .= AE.String "3.0.0", "info" .= info, "servers" .= Array [], "paths" .= object []]
             pure (swagger, "")
@@ -367,12 +351,11 @@ documentationGetH pid swagger_id = do
 
       let bwconf =
             (def :: BWConfig)
-              { sessM = Just sess
-              , currProject = project
-              , pageTitle = "Documentation"
+              { sessM = Just sess,
+                currProject = project,
+                pageTitle = "Documentation"
               }
       pure $ bodyWrapper bwconf $ documentationsPage pid swaggers swaggerId (decodeUtf8 (encode swagger))
-
 
 documentationsPage :: Projects.ProjectId -> V.Vector Swaggers.Swagger -> String -> String -> Html ()
 documentationsPage pid swaggers swaggerID jsonString = do
@@ -380,16 +363,16 @@ documentationsPage pid swaggers swaggerID jsonString = do
   div_ [class_ "relative h-full"] do
     -- modal
     div_
-      [ style_ "z-index:99999"
-      , class_ "fixed pt-24 hidden justify-center z-50 w-full p-4 bg-gray-500 bg-opacity-75 overflow-y-auto inset-0 h-full max-h-full"
-      , id_ "swaggerModal"
-      , tabindex_ "-1"
-      , onclick_ "closeModal(event)"
+      [ style_ "z-index:99999",
+        class_ "fixed pt-24 hidden justify-center z-50 w-full p-4 bg-gray-500 bg-opacity-75 overflow-y-auto inset-0 h-full max-h-full",
+        id_ "swaggerModal",
+        tabindex_ "-1",
+        onclick_ "closeModal(event)"
       ]
       do
         div_
-          [ class_ "relative max-h-full"
-          , style_ "width: min(90vw, 1000px)"
+          [ class_ "relative max-h-full",
+            style_ "width: min(90vw, 1000px)"
           ]
           do
             -- Modal content
@@ -421,9 +404,9 @@ documentationsPage pid swaggers swaggerID jsonString = do
           h3_ [class_ "text-xl text-slate-700 text-2xl font-medium"] "Swagger"
           div_ [class_ "relative", style_ "width:200px"] do
             button_
-              [ onclick_ "toggleSwaggerHistory(event)"
-              , id_ "toggle_swagger_btn"
-              , class_ "w-full flex gap-2 text-gray-600 justify_between items-center cursor-pointer px-2 py-1 border rounded focus:ring-2 focus:ring-blue-200 active:ring-2 active:ring-blue-200"
+              [ onclick_ "toggleSwaggerHistory(event)",
+                id_ "toggle_swagger_btn",
+                class_ "w-full flex gap-2 text-gray-600 justify_between items-center cursor-pointer px-2 py-1 border rounded focus:ring-2 focus:ring-blue-200 active:ring-2 active:ring-blue-200"
               ]
               do
                 p_ [style_ "width: calc(100% - 25px)", class_ "truncate ..."] $ toHtml swaggerID
@@ -759,7 +742,6 @@ documentationsPage pid swaggers swaggerID jsonString = do
         });   
       };
     |]
-
 
 mainContent :: V.Vector Swaggers.Swagger -> Html ()
 mainContent swaggers = do

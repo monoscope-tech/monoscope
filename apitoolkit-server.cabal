@@ -59,6 +59,7 @@ library
       Pages.Endpoints.EndpointComponents
       Pages.Endpoints.EndpointDetails
       Pages.Endpoints.EndpointList
+      Pages.Fields.FieldDetails
       Pages.GenerateSwagger
       Pages.GenerateSwaggerSpec
       Pages.Log

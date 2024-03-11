@@ -56,7 +56,6 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
       link_ [rel_ "mask-icon", href_ "/public/safari-pinned-tab.svg", term "color" "#5bbad5"]
       meta_ [name_ "msapplication-TileColor", content_ "#da532c"]
       meta_ [name_ "theme-color", content_ "#ffffff"]
-
       link_ [rel_ "stylesheet", type_ "text/css", href_ "/assets/css/tailwind.min.css"]
       link_ [rel_ "stylesheet", type_ "text/css", href_ "/assets/css/thirdparty/notyf3.min.css"]
       link_ [rel_ "preconnect", href_ "https://rsms.me/"]
