@@ -7,6 +7,7 @@ import Colourista.IO (blueMessage)
 import Control.Concurrent.Async
 import Control.Exception (try)
 import Control.Exception.Safe qualified as Safe
+import Control.Lens ((^?), _Just)
 import Control.Lens qualified as L
 import Control.Monad.Except qualified as T
 import Control.Monad.Trans.Resource (runResourceT)
@@ -27,14 +28,15 @@ import Effectful.Reader.Static qualified
 import Effectful.Time (runTime)
 import Gogol qualified as Google
 import Gogol.Auth.ApplicationDefault qualified as Google
+import Gogol.Data.Base64 (_Base64)
 import Gogol.PubSub qualified as PubSub
 import Log qualified
-import Network.Wai.Handler.Warp (
-  defaultSettings,
-  runSettings,
-  setOnException,
-  setPort,
- )
+import Network.Wai.Handler.Warp
+  ( defaultSettings,
+    runSettings,
+    setOnException,
+    setPort,
+  )
 import Network.Wai.Log qualified as WaiLog
 import Network.Wai.Middleware.Heartbeat (heartbeatMiddleware)
 import ProcessMessage
@@ -47,7 +49,6 @@ import System.Logging qualified as Logging
 import System.Types
 import Web.Routes qualified as Routes
 
-
 runAPItoolkit :: IO ()
 runAPItoolkit =
   Safe.bracket
@@ -58,7 +59,6 @@ runAPItoolkit =
       liftIO $ blueMessage $ "Starting APItoolkit server on " <> baseURL
       let withLogger = Logging.makeLogger env.config.loggingDestination
       withLogger (`runServer` env)
-
 
 runServer :: (Concurrent :> es, IOE :> es) => Log.Logger -> AuthContext -> Eff es ()
 runServer appLogger env = do
@@ -91,23 +91,21 @@ runServer appLogger env = do
     liftIO
       $ sequence
       $ concat
-        [ [async $ runSettings warpSettings wrappedServer]
-        , -- , [async $ OJCli.defaultWebUI ojStartArgs ojCfg] -- Uncomment or modify as needed
-          [async $ runBackground appLogger env $ pubsubService | env.config.enablePubsubService]
-        , [async $ Safe.withException bgJobWorker (logException (env.config.environment) appLogger) | env.config.enableBackgroundJobs]
+        [ [async $ runSettings warpSettings wrappedServer],
+          -- , [async $ OJCli.defaultWebUI ojStartArgs ojCfg] -- Uncomment or modify as needed
+          [async $ pubsubService appLogger env | env.config.enablePubsubService],
+          [async $ Safe.withException bgJobWorker (logException (env.config.environment) appLogger) | env.config.enableBackgroundJobs]
         ]
   _ <- liftIO $ waitAnyCancel asyncs
   pass
 
-
 -- pubsubService connects to the pubsub service and listens for  messages,
 -- then it calls the processMessage function to process the messages, and
 -- acknoleges the list message in one request.
-pubsubService :: ATBackgroundCtx ()
-pubsubService = do
-  appCtx <- ask @AuthContext
+pubsubService :: Log.Logger -> AuthContext -> IO ()
+pubsubService appLogger appCtx = do
   let envConfig = appCtx.config
-  env <- liftIO $ case envConfig.googleServiceAccountB64 of
+  env <- case envConfig.googleServiceAccountB64 of
     "" -> Google.newEnv <&> (Google.envScopes L..~ pubSubScope)
     sa -> do
       let credJSON = either error id $ LB64.decodeBase64 (LT.encodeUtf8 sa)
@@ -125,27 +123,31 @@ pubsubService = do
         forM envConfig.requestPubsubTopics \topic -> do
           let subscription = "projects/past-3/subscriptions/" <> topic <> "-sub"
           pullResp <- Google.send env $ PubSub.newPubSubProjectsSubscriptionsPull pullReq subscription
-          let messages = (pullResp L.^. field @"receivedMessages") & fromMaybe []
-          msgIds <- lift $ processMessages envConfig appCtx.jobsPool messages appCtx.projectCache
-          let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just (catMaybes msgIds)
-          unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env
+          let messages = fromMaybe [] (pullResp L.^. field @"receivedMessages")
+          let msgsB64 =
+                messages & map \msg -> do
+                  ackId <- msg.ackId
+                  b64Msg <- msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64
+                  Just (ackId, b64Msg)
 
+          -- unless (null messages) do
+          msgIds <- liftIO $ runBackground appLogger appCtx $ processMessages envConfig (catMaybes msgsB64) appCtx.projectCache
+          let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just (msgIds)
+          unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env
 
 -- pubSubScope :: Proxy PubSub.Pubsub'FullControl
 pubSubScope :: Proxy '["https://www.googleapis.com/auth/pubsub"]
 pubSubScope = Proxy
 
-
-mkServer
-  :: Log.Logger
-  -> AuthContext
-  -> Servant.Application
+mkServer ::
+  Log.Logger ->
+  AuthContext ->
+  Servant.Application
 mkServer logger env = do
   genericServeTWithContext
     (naturalTransform env logger)
     (Routes.server env.pool)
     (Routes.genAuthServerContext logger env)
-
 
 naturalTransform :: AuthContext -> Log.Logger -> ATBaseCtx a -> Handler a
 naturalTransform env logger app =
@@ -156,26 +158,23 @@ naturalTransform env logger app =
     & Logging.runLog (show env.config.environment) logger
     & effToHandler
 
-
-handlerToEff
-  :: forall (es :: [Effect]) (a :: Type)
-   . Error ServerError :> es
-  => Handler a
-  -> Eff es a
+handlerToEff ::
+  forall (es :: [Effect]) (a :: Type).
+  (Error ServerError :> es) =>
+  Handler a ->
+  Eff es a
 handlerToEff handler = do
   v <- unsafeEff_ $ Servant.runHandler handler
   either throwError pure v
 
-
-effToHandler
-  :: forall (a :: Type)
-   . ()
-  => Eff '[Error ServerError, IOE] a
-  -> Handler a
+effToHandler ::
+  forall (a :: Type).
+  () =>
+  Eff '[Error ServerError, IOE] a ->
+  Handler a
 effToHandler computation = do
   v <- liftIO . runEff . runErrorNoCallStack @ServerError $ computation
   either T.throwError pure v
-
 
 shutdownTalstack :: AuthContext -> Eff '[IOE] ()
 shutdownTalstack env =
@@ -183,12 +182,11 @@ shutdownTalstack env =
     Pool.destroyAllResources env.pool
     Pool.destroyAllResources env.jobsPool
 
-
-logException
-  :: Text
-  -> Log.Logger
-  -> Safe.SomeException
-  -> IO ()
+logException ::
+  Text ->
+  Log.Logger ->
+  Safe.SomeException ->
+  IO ()
 logException envTxt logger exception =
   runEff
     . runTime
