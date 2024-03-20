@@ -58,13 +58,14 @@ endpointListGetH pid layoutM ackdM archivedM hostM projectHostM sortM hxRequestM
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, endpointStats, projHosts) <- dbtToEff do
+      (project, endpointStats, projHosts, inbox) <- dbtToEff do
         project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
         endpointStats <- case hostM of
           Just h -> Endpoints.dependencyEndpointsRequestStatsByProject pid h
           Nothing -> Endpoints.endpointRequestStatsByProject pid ackd archived projectHostM
         projHosts <- Endpoints.getProjectHosts pid
-        pure (project, endpointStats, projHosts)
+        inbox <- Endpoints.countEndpointInbox pid
+        pure (project, endpointStats, projHosts, inbox)
       let bwconf =
             (def :: BWConfig)
               { sessM = Just sess
@@ -88,11 +89,11 @@ endpointListGetH pid layoutM ackdM archivedM hostM projectHostM sortM hxRequestM
       case (hxRequestM, hxBoostedM) of
         (Just "true", Just "false") -> pure elementBelowTabs
         (Just "true", Nothing) -> pure elementBelowTabs
-        _ -> pure $ bodyWrapper bwconf $ endpointListPage paramInput pid currTime endpointStats projHosts hostM projectHostM
+        _ -> pure $ bodyWrapper bwconf $ endpointListPage paramInput pid currTime endpointStats projHosts hostM projectHostM inbox
 
 
-endpointListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Endpoints.EndpointRequestStats -> Vector Endpoints.Host -> Maybe Text -> Maybe Text -> Html ()
-endpointListPage paramInput pid currTime endpoints hosts hostM pHostM = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24 overflow-y-scroll h-full"] $ do
+endpointListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Endpoints.EndpointRequestStats -> Vector Endpoints.Host -> Maybe Text -> Maybe Text  -> Int -> Html ()
+endpointListPage paramInput pid currTime endpoints hosts hostM pHostM inbox_count = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24 overflow-y-scroll h-full"] $ do
   h3_ [class_ "text-xl text-slate-700 flex gap-1 place-items-center"] do
     case hostM of
       Just h -> do
@@ -130,10 +131,11 @@ endpointListPage paramInput pid currTime endpoints hosts hostM pHostM = div_ [cl
       ]
       "Active"
     a_
-      [ class_ $ "inline-block  py-2 " <> if not paramInput.ackd && not paramInput.archived then " font-bold text-black " else "" <> if forHost then " cursor-not-allowed" else ""
+      [ class_ $ "relative inline-block  py-2 " <> if not paramInput.ackd && not paramInput.archived then " font-bold text-black " else "" <> if forHost then " cursor-not-allowed" else ""
       , href_ $ if forHost then "#" else uri <> "&ackd=false&archived=false" <> maybe "" ("&project_host=" <>) pHostM
-      ]
-      "Inbox"
+      ] do 
+        span_ [] "Inbox"
+        when (inbox_count > 0) $ span_ [class_ "absolute -top-[5px] -right-[5px] text-white text-sm rounded-full px-2 bg-red-500"] $ toHtml $ show inbox_count
     a_
       [ class_ $ "inline-block  py-2 " <> if paramInput.archived then " font-bold text-black " else "" <> if forHost then " cursor-not-allowed" else ""
       , href_ $ if forHost then "#" else uri <> "&archived=true" <> maybe "" ("&project_host=" <>) pHostM

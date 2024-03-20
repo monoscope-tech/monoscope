@@ -24,6 +24,7 @@ module Models.Apis.Endpoints (
   endpointByHash,
   getProjectHosts,
   insertEndpoints,
+  countEndpointInbox
 )
 where
 
@@ -335,3 +336,24 @@ dependenciesAndEventsCount pid = query Select q (pid, pid)
              AND ep.outgoing = true
            ORDER BY eventsCount DESC;
       |]
+
+countEndpointInbox :: Projects.ProjectId -> DBT IO Int
+countEndpointInbox pid  = do
+  result <- query Select (Query $ encodeUtf8 q) pid
+  case result of
+    [Only count] -> return count
+    v -> return $ length v
+  where
+    q =
+      [text|
+        SELECT COUNT(*)
+        FROM 
+            apis.endpoints enp
+        LEFT JOIN 
+            apis.anomalies ann ON (ann.anomaly_type = 'endpoint' AND ann.target_hash = enp.hash)
+        WHERE 
+            enp.project_id = ? 
+            AND enp.outgoing = false 
+            AND ann.id IS NOT NULL
+            AND ann.acknowleged_at IS NULL
+     |]
