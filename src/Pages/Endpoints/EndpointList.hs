@@ -187,15 +187,14 @@ endpointList' paramInput currTime pid enps = form_ [class_ "col-span-5 bg-white 
         a_ [class_ "cursor-pointer font-bold text-base"] "14d"
     div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "font-base"] "EVENTS"
   div_ [class_ "w-full flex flex-row p-3"] $ do
-    div_ [class_ "flex w-full bg-white py-2 px-3 flex-row border-solid border border-gray-200 h-10"] $ do
-      faIcon_ "fa-magnifying-glass" "fa-light fa-magnifying-glass" "h-5 w-auto"
+    div_ [class_ "relative flex w-full bg-white py-2 px-3 border-solid border border-gray-200 h-10"] $ do
+      faIcon_ "fa-magnifying-glass" "fa-light fa-magnifying-glass" "h-5 w-5"
       input_
         [ type_ "text"
         , [__| on input show .endpoint_item in #endpoints_container when its textContent.toLowerCase() contains my value.toLowerCase() |]
-        , class_ "dataTable-search w-full h-full p-2 text-sm text-gray-400 font-normal focus:outline-none"
+        , class_ "dataTable-search w-full h-full p-2 text-gray-500 font-normal focus:outline-none"
         , placeholder_ "Search endpoints..."
         ]
-      faIcon_ "fa-line-height" "fa-regular fa-line-height" "h-5 w-auto self-end"
   when (null enps) $ div_ [class_ "flex flex-col text-center justify-center items-center h-32"] $ do
     strong_ "No endpoints yet."
     p_ "Check Inbox to acknowlege new endpoints"

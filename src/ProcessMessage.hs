@@ -1,7 +1,7 @@
-module ProcessMessage
-  ( processMessages,
-    processMessages',
-  )
+module ProcessMessage (
+  processMessages,
+  processMessages',
+)
 where
 
 import Colog.Core (LogAction (..), (<&))
@@ -40,6 +40,7 @@ import System.Config qualified as Config
 import System.Types (ATBackgroundCtx)
 import Text.Pretty.Simple (pShow)
 import Utils (DBField, eitherStrToText)
+
 
 {--
   Exploring how the inmemory cache could be shaped for performance, and low footprint ability to skip hitting the postgres database when not needed.
@@ -116,12 +117,15 @@ processMessages env msgs projectCache = do
     then pure []
     else processMessages' env (rights msgs') projectCache
 
+
 -- Replace null characters in a Text
 replaceNullChars :: Text -> Text
 replaceNullChars = T.replace "\\u0000" ""
 
+
 wrapTxtException :: Text -> SomeException -> Text
 wrapTxtException wrap e = " " <> wrap <> " : " <> (toText @String $ show e)
+
 
 processMessages' :: Config.EnvConfig -> [(Text, RequestMessages.RequestMessage)] -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> ATBackgroundCtx [Text]
 processMessages' _ msgs projectCache' = do
@@ -159,13 +163,15 @@ processMessages' _ msgs projectCache' = do
       pure []
     Right _ -> pure rmAckIds
 
-projectCacheDefault :: Projects.ProjectCache
-projectCacheDefault = Projects.ProjectCache {hosts = [], endpointHashes = [], shapeHashes = [], redactFieldslist = []}
 
-processMessage ::
-  Cache.Cache Projects.ProjectId Projects.ProjectCache ->
-  (Text, RequestMessages.RequestMessage) ->
-  ATBackgroundCtx (Either Text (Text, Query, [DBField], RequestDumps.RequestDump))
+projectCacheDefault :: Projects.ProjectCache
+projectCacheDefault = Projects.ProjectCache{hosts = [], endpointHashes = [], shapeHashes = [], redactFieldslist = []}
+
+
+processMessage
+  :: Cache.Cache Projects.ProjectId Projects.ProjectCache
+  -> (Text, RequestMessages.RequestMessage)
+  -> ATBackgroundCtx (Either Text (Text, Query, [DBField], RequestDumps.RequestDump))
 processMessage projectCache (rmAckId, recMsg) = do
   appCtx <- ask @Config.AuthContext
   runExceptT do
@@ -182,8 +188,8 @@ processMessage projectCache (rmAckId, recMsg) = do
           ( Cache.fetchWithCache projectCache pid \pid' -> do
               mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
               pure $ fromMaybe projectCacheDefault mpjCache
-          ) ::
-        ExceptT Text ATBackgroundCtx (Either SomeException Projects.ProjectCache)
+          )
+        :: ExceptT Text ATBackgroundCtx (Either SomeException Projects.ProjectCache)
 
     case projectCacheValE of
       Left e -> throwE $ "An error occurred while fetching project cache: " <> show e
