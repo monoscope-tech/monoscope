@@ -23,12 +23,7 @@ export class MyElement extends LitElement {
       const urlSearchParams = new URLSearchParams(window.location.search);
       const query = urlSearchParams.get("query");
       if (query) {
-        const fls = query
-          .split(/\s+AND\s+|\s+OR\s+/i)
-          .flatMap((element, index, array) => {
-            return index < array.length - 1 ? [element, "AND"] : [element];
-          });
-        this.upadteFilters(fls);
+        this.setBuilderValue(query);
       }
     };
 
