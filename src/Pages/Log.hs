@@ -607,13 +607,13 @@ jsonTreeAuxillaryCode pid = do
      if(!document.getElementById("queryEditor").className.includes("hidden")) {
           setTimeout(() => {
             window.editor.setValue(window.queryBuilderValue)
-          },100)
+          },10)
       }else {
           const filterComp = document.querySelector('#filterElement')
           if(filterComp) {
             setTimeout(()=> {
              filterComp.setBuilderValue(window.editor.getValue())
-            },100)
+            },10)
           }
       }
     }
