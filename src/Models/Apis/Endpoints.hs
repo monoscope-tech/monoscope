@@ -24,7 +24,7 @@ module Models.Apis.Endpoints (
   endpointByHash,
   getProjectHosts,
   insertEndpoints,
-  countEndpointInbox
+  countEndpointInbox,
 )
 where
 
@@ -337,8 +337,9 @@ dependenciesAndEventsCount pid = query Select q (pid, pid)
            ORDER BY eventsCount DESC;
       |]
 
+
 countEndpointInbox :: Projects.ProjectId -> DBT IO Int
-countEndpointInbox pid  = do
+countEndpointInbox pid = do
   result <- query Select (Query $ encodeUtf8 q) pid
   case result of
     [Only count] -> return count

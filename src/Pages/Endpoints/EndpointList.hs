@@ -92,7 +92,7 @@ endpointListGetH pid layoutM ackdM archivedM hostM projectHostM sortM hxRequestM
         _ -> pure $ bodyWrapper bwconf $ endpointListPage paramInput pid currTime endpointStats projHosts hostM projectHostM inbox
 
 
-endpointListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Endpoints.EndpointRequestStats -> Vector Endpoints.Host -> Maybe Text -> Maybe Text  -> Int -> Html ()
+endpointListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Endpoints.EndpointRequestStats -> Vector Endpoints.Host -> Maybe Text -> Maybe Text -> Int -> Html ()
 endpointListPage paramInput pid currTime endpoints hosts hostM pHostM inbox_count = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24 overflow-y-scroll h-full"] $ do
   h3_ [class_ "text-xl text-slate-700 flex gap-1 place-items-center"] do
     case hostM of
@@ -133,7 +133,8 @@ endpointListPage paramInput pid currTime endpoints hosts hostM pHostM inbox_coun
     a_
       [ class_ $ "relative inline-block  py-2 " <> if not paramInput.ackd && not paramInput.archived then " font-bold text-black " else "" <> if forHost then " cursor-not-allowed" else ""
       , href_ $ if forHost then "#" else uri <> "&ackd=false&archived=false" <> maybe "" ("&project_host=" <>) pHostM
-      ] do 
+      ]
+      do
         span_ [] "Inbox"
         when (inbox_count > 0) $ span_ [class_ "absolute -top-[5px] -right-[5px] text-white text-sm rounded-full px-2 bg-red-500"] $ toHtml $ show inbox_count
     a_
