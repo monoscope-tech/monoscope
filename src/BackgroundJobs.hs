@@ -146,7 +146,8 @@ jobsRunner dbPool logger cfg job = do
                      in sendEmail cfg reciever subject body
           Anomalies.ATShape -> do
             hasEndpointAnomaly <- withPool dbPool $ Anomalies.getShapeParentAnomalyVM pid targetHash
-            if hasEndpointAnomaly > 0
+            traceShowM hasEndpointAnomaly
+            if hasEndpointAnomaly == 0
               then do
                 shapes <- withPool dbPool $ getShapes pid $ T.take 8 targetHash
                 let targetFields = maybe [] (toList . snd) (V.find (\a -> fst a == targetHash) shapes)
@@ -200,7 +201,7 @@ jobsRunner dbPool logger cfg job = do
           Anomalies.ATFormat -> do
             -- Send an email about the new shape anomaly but only if there was no endpoint anomaly logged
             hasEndpointAnomaly <- withPool dbPool $ Anomalies.getFormatParentAnomalyVM pid targetHash
-            if hasEndpointAnomaly > 0
+            if hasEndpointAnomaly == 0
               then do
                 anomalyM <- withPool dbPool $ Anomalies.getAnomalyVM pid targetHash
                 case anomalyM of
