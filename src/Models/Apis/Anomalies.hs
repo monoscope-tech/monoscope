@@ -17,6 +17,8 @@ module Models.Apis.Anomalies (
   parseAnomalyRawTypes,
   acknowlegeCascade,
   acknowledgeAnomalies,
+  getShapeParentAnomalyVM,
+  getFormatParentAnomalyVM,
 )
 where
 
@@ -231,6 +233,38 @@ getAnomalyVM pid hash = queryOne Select q (pid, hash)
          avm.target_hash = ?
     GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25
      |]
+
+
+getShapeParentAnomalyVM :: Projects.ProjectId -> Text -> DBT IO Int
+getShapeParentAnomalyVM pid hash = do
+  result <- query Select q (pid, hash)
+  case result of
+    [Only count] -> return count
+    v -> return $ length v
+  where
+    q =
+      [sql|
+              SELECT COUNT(*) 
+              FROM apis.anomalies_vm avm 
+              JOIN apis.anomalies aan ON avm.id = aan.id
+              WHERE avm.project_id = ? AND ? LIKE avm.target_hash ||'%' AND avm.anomaly_type='endpoint' AND aan.acknowleged_at IS NULL
+      |]
+
+
+getFormatParentAnomalyVM :: Projects.ProjectId -> Text -> DBT IO Int
+getFormatParentAnomalyVM pid hash = do
+  result <- query Select q (pid, hash)
+  case result of
+    [Only count] -> return count
+    v -> return $ length v
+  where
+    q =
+      [sql|
+              SELECT COUNT(*) 
+              FROM apis.anomalies_vm avm 
+              JOIN apis.anomalies aan ON avm.id = aan.id
+              WHERE avm.project_id = ? AND ? LIKE avm.target_hash ||'%' AND avm.anomaly_type != 'format' AND aan.acknowleged_at IS NULL
+      |]
 
 
 selectAnomalies :: Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Int -> Int -> DBT IO (Vector AnomalyVM)

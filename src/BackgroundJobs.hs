@@ -145,43 +145,46 @@ jobsRunner dbPool logger cfg job = do
                         reciever = CI.original u.email
                      in sendEmail cfg reciever subject body
           Anomalies.ATShape -> do
-            shapes <- withPool dbPool $ getShapes pid $ T.take 8 targetHash
-            let targetFields = maybe [] (toList . snd) (V.find (\a -> fst a == targetHash) shapes)
-            updatedFieldFormats <- withPool dbPool $ getUpdatedFieldFormats pid (V.fromList targetFields)
-            let otherFields = toList <$> toList (snd $ V.unzip $ V.filter (\a -> fst a /= targetHash) shapes)
-            let newFields = filter (`notElem` foldl' union [] otherFields) targetFields
-            let deletedFields = filter (`notElem` targetFields) $ foldl' intersect (head $ [] :| otherFields) (tail $ [] :| otherFields)
-            -- Update the shape values in the database
-            _ <- withPool dbPool $ updateShapeCounts pid targetHash (V.fromList newFields) (V.fromList deletedFields) updatedFieldFormats
-            -- Send an email about the new shape anomaly but only if there was no endpoint anomaly logged
-            anomalyM <- withPool dbPool $ Anomalies.getAnomalyVM pid $ T.take 8 targetHash
-            case anomalyM of
-              Nothing -> pass
-              Just anomaly -> do
-                users <- withPool dbPool $ Projects.usersByProjectId pid
-                project <- Unsafe.fromJust <<$>> withPool dbPool $ Projects.projectById pid
-                forM_ project.notificationsChannel \c ->
-                  case c of
-                    Projects.NSlack -> do
-                      let projectTitle = project.title
-                      let projectIdTxt = pid.toText
-                      let message =
-                            [trimming| 🤖 *New Shape anomaly found for `$projectTitle`*
+            hasEndpointAnomaly <- withPool dbPool $ Anomalies.getShapeParentAnomalyVM pid targetHash
+            if hasEndpointAnomaly > 0
+              then do
+                shapes <- withPool dbPool $ getShapes pid $ T.take 8 targetHash
+                let targetFields = maybe [] (toList . snd) (V.find (\a -> fst a == targetHash) shapes)
+                updatedFieldFormats <- withPool dbPool $ getUpdatedFieldFormats pid (V.fromList targetFields)
+                let otherFields = toList <$> toList (snd $ V.unzip $ V.filter (\a -> fst a /= targetHash) shapes)
+                let newFields = filter (`notElem` foldl' union [] otherFields) targetFields
+                let deletedFields = filter (`notElem` targetFields) $ foldl' intersect (head $ [] :| otherFields) (tail $ [] :| otherFields)
+                -- Update the shape values in the database
+                _ <- withPool dbPool $ updateShapeCounts pid targetHash (V.fromList newFields) (V.fromList deletedFields) updatedFieldFormats
+                -- Send an email about the new shape anomaly but only if there was no endpoint anomaly logged
+                anomalyM <- withPool dbPool $ Anomalies.getAnomalyVM pid $ T.take 8 targetHash
+                case anomalyM of
+                  Nothing -> pass
+                  Just anomaly -> do
+                    users <- withPool dbPool $ Projects.usersByProjectId pid
+                    project <- Unsafe.fromJust <<$>> withPool dbPool $ Projects.projectById pid
+                    forM_ project.notificationsChannel \c ->
+                      case c of
+                        Projects.NSlack -> do
+                          let projectTitle = project.title
+                          let projectIdTxt = pid.toText
+                          let message =
+                                [trimming| 🤖 *New Shape anomaly found for `$projectTitle`**
     
                                           We detected a different API request shape to your endpoints than what you usually have
     
                                           <https://app.apitoolkit.io/p/$projectIdTxt/anomaly/$targetHash|More details on the apitoolkit>
                                  |]
-                      sendSlackMessage dbPool pid message
-                    _ -> do
-                      forM_ users \u ->
-                        let projectTitle = project.title
-                            projectIdTxt = pid.toText
-                            name = u.firstName
-                            subject = [text| 🤖 APITOOLKIT: New Shape anomaly found for `$projectTitle` |]
-                            body =
-                              toLText
-                                [trimming|
+                          sendSlackMessage dbPool pid message
+                        _ -> do
+                          forM_ users \u ->
+                            let projectTitle = project.title
+                                projectIdTxt = pid.toText
+                                name = u.firstName
+                                subject = [text| 🤖 APITOOLKIT: New Shape anomaly found for `$projectTitle` |]
+                                body =
+                                  toLText
+                                    [trimming|
          Hi $name,<br/>
        
          <p>We detected a different API request shape to your endpoints than what you usually have..</p>
@@ -190,39 +193,44 @@ jobsRunner dbPool logger cfg job = do
          Regards,<br/>
          Apitoolkit team
                                  |]
-                            reciever = CI.original u.email
-                         in sendEmail cfg reciever subject body
+                                reciever = CI.original u.email
+                             in sendEmail cfg reciever subject body
+              else do
+                pass
           Anomalies.ATFormat -> do
             -- Send an email about the new shape anomaly but only if there was no endpoint anomaly logged
-            anomalyM <- withPool dbPool $ Anomalies.getAnomalyVM pid targetHash
-            case anomalyM of
-              Nothing -> pass
-              Just anomaly -> do
-                users <- withPool dbPool $ Projects.usersByProjectId pid
-                project <- Unsafe.fromJust <<$>> withPool dbPool $ Projects.projectById pid
-                forM_ project.notificationsChannel \c ->
-                  case c of
-                    Projects.NSlack -> do
-                      let projectTitle = project.title
-                      let projectIdTxt = pid.toText
-                      let message =
-                            [trimming| 🤖 *New Field Format Anomaly Found for `$projectTitle`*
+            hasEndpointAnomaly <- withPool dbPool $ Anomalies.getFormatParentAnomalyVM pid targetHash
+            if hasEndpointAnomaly > 0
+              then do
+                anomalyM <- withPool dbPool $ Anomalies.getAnomalyVM pid targetHash
+                case anomalyM of
+                  Nothing -> pass
+                  Just anomaly -> do
+                    users <- withPool dbPool $ Projects.usersByProjectId pid
+                    project <- Unsafe.fromJust <<$>> withPool dbPool $ Projects.projectById pid
+                    forM_ project.notificationsChannel \c ->
+                      case c of
+                        Projects.NSlack -> do
+                          let projectTitle = project.title
+                          let projectIdTxt = pid.toText
+                          let message =
+                                [trimming| 🤖 *New Field Format Anomaly Found for `$projectTitle`**
     
                                          We detected that a particular field on your API is returning a different format/type than what it usually gets.
     
                                          <https://app.apitoolkit.io/p/$projectIdTxt/anomaly/$targetHash|More details on the apitoolkit>
     
                                  |]
-                      sendSlackMessage dbPool pid message
-                    _ -> do
-                      forM_ users \u ->
-                        let projectTitle = project.title
-                            projectIdTxt = pid.toText
-                            name = u.firstName
-                            subject = [text| 🤖 APITOOLKIT: New field format anomaly found for `$projectTitle` |]
-                            body =
-                              toLText
-                                [trimming|
+                          sendSlackMessage dbPool pid message
+                        _ -> do
+                          forM_ users \u ->
+                            let projectTitle = project.title
+                                projectIdTxt = pid.toText
+                                name = u.firstName
+                                subject = [text| 🤖 APITOOLKIT: New field format anomaly found for `$projectTitle` |]
+                                body =
+                                  toLText
+                                    [trimming|
        Hi $name,<br/>
      
        <p>We detected that a particular field on your API is returning a different format/type than what it usually gets.</p>
@@ -231,8 +239,10 @@ jobsRunner dbPool logger cfg job = do
        Regards,<br/>
        Apitoolkit team
                              |]
-                            reciever = CI.original u.email
-                         in sendEmail cfg reciever subject body
+                                reciever = CI.original u.email
+                             in sendEmail cfg reciever subject body
+              else do
+                pass
           Anomalies.ATField -> pass
           Anomalies.ATUnknown -> pass
       InviteUserToProject userId projectId reciever projectTitle' ->
