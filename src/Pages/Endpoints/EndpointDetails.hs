@@ -130,7 +130,7 @@ fieldDetailsView field formats = do
                 input_ [class_ "checkbox checkbox-success checkbox-sm", id_ "is_required", name_ "isRequired", type_ "checkbox", if field.isRequired then checked_ else value_ "off"]
               div_ [class_ "flex items-center gap-4"] do
                 label_ [Lucid.for_ "is_enum", class_ "text-gray-700 text-sm font-semibold"] "Enum"
-                input_ [class_ "checkbox checkbox-success checkbox-sm", id_ "is_enum", name_ "isEnum", type_ "checkbox", if field.isRequired then checked_ else value_ "off"]
+                input_ [class_ "checkbox checkbox-success checkbox-sm", id_ "is_enum", name_ "isEnum", type_ "checkbox", if field.isEnum then checked_ else value_ "off"]
               div_ [class_ "flex flex-col gap-2"] do
                 span_ [class_ "text-gray-700 text-sm font-semibold"] "Formats"
                 div_ [class_ "flex flex-col gap-2"] do
