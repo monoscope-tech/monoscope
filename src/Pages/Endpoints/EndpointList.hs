@@ -62,7 +62,7 @@ endpointListGetH pid layoutM ackdM archivedM hostM projectHostM sortM hxRequestM
         project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
         endpointStats <- case hostM of
           Just h -> Endpoints.dependencyEndpointsRequestStatsByProject pid h
-          Nothing -> Endpoints.endpointRequestStatsByProject pid ackd archived projectHostM
+          Nothing -> Endpoints.endpointRequestStatsByProject pid ackd archived projectHostM sortM
         projHosts <- Endpoints.getProjectHosts pid
         inbox <- Endpoints.countEndpointInbox pid
         pure (project, endpointStats, projHosts, inbox)
@@ -72,7 +72,7 @@ endpointListGetH pid layoutM ackdM archivedM hostM projectHostM sortM hxRequestM
               , currProject = project
               , pageTitle = "Endpoints"
               }
-      let currentURL = "/p/" <> pid.toText <> "/endpoints?layout=" <> fromMaybe "false" layoutM <> "&ackd=" <> fromMaybe "true" ackdM <> "&archived=" <> fromMaybe "false" archivedM
+      let currentURL = "/p/" <> pid.toText <> "/endpoints?layout=" <> fromMaybe "false" layoutM <> "&ackd=" <> fromMaybe "true" ackdM <> "&archived=" <> fromMaybe "false" archivedM <> "&sort=" <> fromMaybe "event" sortM
       -- let currentURL =  fromMaybe "" hxCurrentURL
       currTime <- liftIO getCurrentTime
       let paramInput =

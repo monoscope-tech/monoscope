@@ -159,12 +159,14 @@ data EndpointRequestStats = EndpointRequestStats
 
 -- FIXME: Include and return a boolean flag to show if fields that have annomalies.
 -- FIXME: return endpoint_hash as well.
-endpointRequestStatsByProject :: Projects.ProjectId -> Bool -> Bool -> Maybe Text -> PgT.DBT IO (Vector EndpointRequestStats)
-endpointRequestStatsByProject pid ackd archived pHostM = case pHostM of Just h -> query Select (Query $ encodeUtf8 q) (pid, h); Nothing -> query Select (Query $ encodeUtf8 q) (Only pid)
+endpointRequestStatsByProject :: Projects.ProjectId -> Bool -> Bool -> Maybe Text -> Maybe Text -> PgT.DBT IO (Vector EndpointRequestStats)
+endpointRequestStatsByProject pid ackd archived pHostM sortM = case pHostM of Just h -> query Select (Query $ encodeUtf8 q) (pid, h); Nothing -> query Select (Query $ encodeUtf8 q) (Only pid)
   where
     ackdAt = if ackd && not archived then "AND ann.acknowleged_at IS NOT NULL AND ann.archived_at IS NULL " else "AND ann.acknowleged_at IS NULL "
     archivedAt = if archived then "AND ann.archived_at IS NOT NULL " else " AND ann.archived_at IS NULL"
     pHostQery = case pHostM of Just h -> " AND enp.host = ?"; Nothing -> ""
+    sortEnp = fromMaybe "" sortM
+    orderBy = case sortEnp of "first_seen" -> "enp.created_at ASC"; "last_seen" -> "enp.created_at DESC"; _ -> " coalesce(ers.total_requests,0) DESC"
     -- TODO This query to get the anomalies for the anomalies page might be too complex.
     -- Does it make sense yet to remove the call to endpoint_request_stats? since we're using async charts already
     q =
@@ -184,7 +186,7 @@ endpointRequestStatsByProject pid ackd archived pHostM = case pHostM of Just h -
      left join apis.endpoint_request_stats ers on (enp.id=ers.endpoint_id)
      left join apis.anomalies ann on (ann.anomaly_type='endpoint' AND ann.target_hash=enp.hash)
      where enp.project_id=? and enp.outgoing=false and ann.id is not null $ackdAt $archivedAt $pHostQery
-     order by coalesce(ers.total_requests,0) DESC, url_path ASC;
+     order by $orderBy , url_path ASC;
   |]
 
 

@@ -79,7 +79,7 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
   (hasApikeys, hasRequest, newEndpoints) <- dbtToEff do
     apiKeys <- ProjectApiKeys.countProjectApiKeysByProjectId pid
     requestDumps <- RequestDumps.countRequestDumpByProject pid
-    newEndpoints <- Endpoints.endpointRequestStatsByProject pid False False Nothing
+    newEndpoints <- Endpoints.endpointRequestStatsByProject pid False False Nothing Nothing
     pure (apiKeys > 0, requestDumps > 0, newEndpoints)
   -- TODO: Replace with a duration parser.
   let (fromD, toD) = case sinceStr of
