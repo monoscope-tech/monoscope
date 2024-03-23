@@ -80,8 +80,7 @@ endpointListGetH pid layoutM ackdM archivedM hostM projectHostM sortM hxRequestM
               { currentURL = currentURL
               , ackd = ackd
               , archived = archived
-              , -- , sort = fromMaybe "" sortM
-                sort = ""
+              , sort = fromMaybe "events" sortM
               }
       let elementBelowTabs =
             div_ [class_ "grid grid-cols-5", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"]
