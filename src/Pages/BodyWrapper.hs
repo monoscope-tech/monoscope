@@ -334,9 +334,9 @@ sideNav sess project pageTitle menuItem hasIntegrated = do
         let intG = fromMaybe True hasIntegrated
         let intGCls = if intG || (mTitle == "Get started" || mTitle == "API Keys") then " hover:bg-blue-50" else " cursor-not-allowed  "
         a_
-          [ if intG || (mTitle == "Get started" || mTitle == "API Keys") then href_ mUrl else href_ "#"
+          [ href_ mUrl
           , term "data-tippy-placement" "right"
-          , term "data-tippy-content" (if intG || (mTitle == "Get started" || mTitle == "API Keys") then mTitle else "Our menus are shy. Help them come out by integrating the SDK.")
+          , term "data-tippy-content" mTitle
           , class_ $ " block flex gap-3 px-5 py-3 flex no-wrap shrink-0 items-center border-l-4 " <> activeCls <> intGCls
           ]
           do
