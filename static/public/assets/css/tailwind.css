@@ -102,9 +102,11 @@
 }
 
 .htmx-indicator {
-  justify-content: center;
-  padding: 10px 5px;
   display: none;
+}
+
+.htmx-request.htmx-indicator {
+  display: flex;
 }
 
 .htmx-request .query-indicator {

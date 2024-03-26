@@ -174,6 +174,7 @@ endpointList' paramInput currTime pid enps = form_ [class_ "col-span-5 bg-white 
           a_
             [ class_ $ "block flex flex-row px-3 py-2 hover:bg-blue-50 rounded-md cursor-pointer " <> (if isActive then " text-blue-800 " else "")
             , href_ $ currentURL' <> "&sort=" <> identifier
+            , hxIndicator_ "#sortLoading"
             ]
             do
               div_ [class_ "flex flex-col items-center justify-center px-3"] do
@@ -181,6 +182,8 @@ endpointList' paramInput currTime pid enps = form_ [class_ "col-span-5 bg-white 
               div_ [class_ "grow space-y-1"] do
                 span_ [class_ "block text-lg"] $ toHtml title
                 span_ [class_ "block "] $ toHtml desc
+    div_ [id_ "sortLoading", class_ "htmx-indicator fixed top-1/2 left-1/2 -translate-1/2 rounded-lg bg-white shadow p-10 border"] do
+      span_ [class_ "loading loading-dots loading-md"] ""
 
     div_ [class_ "flex justify-center font-base w-60 content-between gap-14"] do
       span_ "GRAPH"
