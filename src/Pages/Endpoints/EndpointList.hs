@@ -135,7 +135,7 @@ endpointListPage paramInput pid currTime endpoints hosts hostM pHostM inbox_coun
       ]
       do
         span_ [] "Inbox"
-        when (inbox_count > 0) $ span_ [class_ "absolute -top-[5px] -right-[5px] text-white text-sm rounded-full px-2 bg-red-500"] $ toHtml $ show inbox_count
+        when (inbox_count > 0) $ span_ [class_ "absolute top-[1px] -right-[5px] text-white text-xs font-medium rounded-full px-1 bg-red-500"] $ show inbox_count
     a_
       [ class_ $ "inline-block  py-2 " <> if paramInput.archived then " font-bold text-black " else "" <> if forHost then " cursor-not-allowed" else ""
       , href_ $ if forHost then "#" else uri <> "&archived=true" <> maybe "" ("&project_host=" <>) pHostM
@@ -165,7 +165,7 @@ endpointList' paramInput currTime pid enps = form_ [class_ "col-span-5 bg-white 
         faSprite_ "fa-inbox" "solid" "h-4 w-4 inline-block"
         span_ "archive"
     div_ [class_ "relative inline-block"] do
-      a_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl space-x-2", [__|on click toggle .hidden on #sortMenuDiv |]] do
+      a_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl space-x-2 cursor-pointer", [__|on click toggle .hidden on #sortMenuDiv |]] do
         mIcon_ "sort" "h-4 w-4"
         span_ $ toHtml currentSortTitle
       div_ [id_ "sortMenuDiv", hxBoost_ "true", class_ "p-1 hidden text-sm border border-black-30 absolute right-0 z-10 mt-2 w-72 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none", tabindex_ "-1"] do
