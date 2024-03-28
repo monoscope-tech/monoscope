@@ -351,15 +351,23 @@ jobsRunner dbPool logger cfg job = do
 
 reportUsage :: Text -> Int -> Text -> IO ()
 reportUsage subItemId quantity apiKey = do
-  let formData =
-        object
-          [ "data"
-              .= object
-                ["type" .= String "usage-records", "attributes" .= object ["quantity" .= quantity, "action" .= String "set"]]
-          , "relationships"
-              .= object
-                ["subscription-item" .= object ["data" .= object ["type" .= String "subscription-items", "id" .= subItemId]]]
-          ]
+  let formData = object
+        [ "data" .= object
+            [ "type" .= ("usage-records" :: String)
+            , "attributes" .= object
+                [ "quantity" .= quantity 
+                , "action" .= ("set" :: String)
+                ]
+            , "relationships" .= object
+                [ "subscription-item" .= object
+                    [ "data" .= object
+                        [ "type" .= ("subscription-items" :: String)
+                        , "id" .= subItemId
+                        ]
+                    ]
+                ]
+            ]
+        ]
   let hds =
         defaults
           & header "Authorization"
