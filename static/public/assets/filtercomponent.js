@@ -194,6 +194,7 @@ class Filter extends LitElement {
     "url_path",
     "duration_ns",
     "request_body",
+    "has_errors",
     "request_header",
     "response_body",
     "response_header",
@@ -242,6 +243,11 @@ class Filter extends LitElement {
       operators: this.number_operators,
       type: "number",
       values: [],
+    },
+    has_errors: {
+      operators: ["=="],
+      type: "boolean",
+      values: ["true", "false"],
     },
   };
 
@@ -495,7 +501,10 @@ class Filter extends LitElement {
             `"${v}`.startsWith(valTyped) ||
             `"${v} "`.startsWith(valTyped)
           ) {
-            if (target_info.type === "number") {
+            if (
+              target_info.type === "number" ||
+              target_info.type === "boolean"
+            ) {
               auto_complete.push(`${this.inputVal.replace(valTyped, "")} ${v}`);
             } else {
               auto_complete.push(
