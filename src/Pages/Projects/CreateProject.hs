@@ -262,7 +262,7 @@ processProjectPostForm cpRaw = do
     else do
       let usersAndPermissions = zip cp.emails cp.permissions & uniq
       subRes <- liftIO $ getSubscriptionId cp.orderId envCfg.lemonSqueezyApiKey
-      let (firstSubItemId, subId) = case subRes of
+      let (subId,firstSubItemId) = case subRes of
             Just sub ->
               if length sub.dataVal < 1
                 then (Nothing, Nothing)
