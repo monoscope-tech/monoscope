@@ -2,18 +2,18 @@
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Pages.Projects.CreateProject
-  ( CreateProjectForm,
-    createProjectGetH,
-    createProjectPostH,
-    createProjectFormV,
-    createProjectFormToModel,
-    CreateProjectFormError,
-    NotifListForm,
-    projectSettingsGetH,
-    deleteProjectGetH,
-    updateNotificationsChannel,
-  )
+module Pages.Projects.CreateProject (
+  CreateProjectForm,
+  createProjectGetH,
+  createProjectPostH,
+  createProjectFormV,
+  createProjectFormToModel,
+  CreateProjectFormError,
+  NotifListForm,
+  projectSettingsGetH,
+  deleteProjectGetH,
+  updateNotificationsChannel,
+)
 where
 
 import BackgroundJobs qualified
@@ -60,55 +60,61 @@ import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pkg.ConvertKit qualified as ConvertKit
 import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
-import Servant
-  ( Headers,
-    addHeader,
-    noHeader,
-  )
+import Servant (
+  Headers,
+  addHeader,
+  noHeader,
+ )
 import Servant.Htmx
 import System.Config
 import System.Types
 import Utils
 import Web.FormUrlEncoded (FromForm)
 
+
 data CreateProjectForm = CreateProjectForm
-  { title :: Text,
-    description :: Text,
-    emails :: [Text],
-    permissions :: [ProjectMembers.Permissions],
-    isUpdate :: Bool,
-    projectId :: Text,
-    paymentPlan :: Text,
-    timeZone :: Text,
-    orderId :: Maybe Text
+  { title :: Text
+  , description :: Text
+  , emails :: [Text]
+  , permissions :: [ProjectMembers.Permissions]
+  , isUpdate :: Bool
+  , projectId :: Text
+  , paymentPlan :: Text
+  , timeZone :: Text
+  , orderId :: Maybe Text
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromForm, Default)
 
+
 data CreateProjectFormError = CreateProjectFormError
-  { titleE :: Maybe [String],
-    descriptionE :: Maybe [String]
+  { titleE :: Maybe [String]
+  , descriptionE :: Maybe [String]
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (Default)
 
+
 createProjectFormToModel :: Projects.ProjectId -> Maybe Text -> Maybe Text -> CreateProjectForm -> Projects.CreateProject
-createProjectFormToModel pid subId firstSubId CreateProjectForm {..} =
+createProjectFormToModel pid subId firstSubId CreateProjectForm{..} =
   Projects.CreateProject
-    { id = pid,
-      subId = subId,
-      firstSubItemId = firstSubId,
-      ..
+    { id = pid
+    , subId = subId
+    , firstSubItemId = firstSubId
+    , ..
     }
 
-createProjectFormV :: (Monad m) => Valor CreateProjectForm m CreateProjectFormError
+
+createProjectFormV :: Monad m => Valor CreateProjectForm m CreateProjectFormError
 createProjectFormV =
   CreateProjectFormError
     <$> check1 title (failIf ["name can't be empty"] T.null)
     <*> check1 description Valor.pass
 
+
 checkEmail :: Text -> Bool
 checkEmail = isJust . T.find (== '@')
+
 
 ----------------------------------------------------------------------------------------------------------
 -- createProjectGetH is the handler for the create projects page
@@ -118,10 +124,11 @@ createProjectGetH = do
   sess <- Sessions.getSession
   let bwconf =
         (def :: BWConfig)
-          { sessM = sess.persistentSession,
-            pageTitle = "Endpoints"
+          { sessM = sess.persistentSession
+          , pageTitle = "Endpoints"
           }
   pure $ bodyWrapper bwconf $ createProjectBody (Unsafe.fromJust sess.persistentSession) appCtx.config False (def @CreateProjectForm) (def @CreateProjectFormError) Nothing Nothing
+
 
 ----------------------------------------------------------------------------------------------------------
 projectSettingsGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
@@ -133,20 +140,21 @@ projectSettingsGetH pid = do
   let proj = Unsafe.fromJust projM
   let createProj =
         CreateProjectForm
-          { title = proj.title,
-            description = proj.description,
-            emails = [],
-            permissions = [],
-            isUpdate = True,
-            projectId = pid.toText,
-            paymentPlan = proj.paymentPlan,
-            timeZone = proj.timeZone,
-            orderId = proj.orderId
+          { title = proj.title
+          , description = proj.description
+          , emails = []
+          , permissions = []
+          , isUpdate = True
+          , projectId = pid.toText
+          , paymentPlan = proj.paymentPlan
+          , timeZone = proj.timeZone
+          , orderId = proj.orderId
           }
   slackInfo <- dbtToEff $ getProjectSlackData pid
 
-  let bwconf = (def :: BWConfig) {sessM = sess.persistentSession, currProject = projM, pageTitle = "Settings"}
+  let bwconf = (def :: BWConfig){sessM = sess.persistentSession, currProject = projM, pageTitle = "Settings"}
   pure $ bodyWrapper bwconf $ createProjectBody pSess appCtx.config True createProj (def @CreateProjectFormError) (Just proj.notificationsChannel) slackInfo
+
 
 ----------------------------------------------------------------------------------------------------------
 deleteProjectGetH :: Projects.ProjectId -> ATAuthCtx (Headers '[HXTrigger, HXRedirect] (Html ()))
@@ -162,14 +170,16 @@ deleteProjectGetH pid = do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Deleted Project Successfully"]}|]
       pure $ addHeader hxTriggerData $ addHeader "/" $ span_ ""
 
+
 data NotifListForm = NotifListForm
   { notificationsChannel :: [Text]
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
 
+
 updateNotificationsChannel :: Projects.ProjectId -> NotifListForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
-updateNotificationsChannel pid NotifListForm {notificationsChannel} = do
+updateNotificationsChannel pid NotifListForm{notificationsChannel} = do
   if "slack" `elem` notificationsChannel
     then do
       slackData <- dbtToEff $ getProjectSlackData pid
@@ -186,6 +196,7 @@ updateNotificationsChannel pid NotifListForm {notificationsChannel} = do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Updated Notifications Channels Successfully"]}|]
       pure $ addHeader hxTriggerData $ span_ ""
 
+
 ----------------------------------------------------------------------------------------------------------
 -- createProjectPostH is the handler for the create projects page form handling.
 -- It processes post requests and is expected to return a redirect header and a hyperscript event trigger header.
@@ -200,12 +211,14 @@ createProjectPostH createP = do
     Right cpe -> pure $ noHeader $ noHeader $ createProjectBody sess appCtx.config createP.isUpdate createP cpe Nothing Nothing
     Left cp -> processProjectPostForm cp
 
+
 data FirstSubItem = FirstSubItem
-  { id :: Int,
-    subscriptionId :: Int
+  { id :: Int
+  , subscriptionId :: Int
   }
   deriving stock (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] FirstSubItem
+
 
 data Attributes = Attributes
   { firstSubscriptionItem :: FirstSubItem
@@ -213,22 +226,26 @@ data Attributes = Attributes
   deriving stock (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] Attributes
 
+
 data DataVals = DataVals
-  { id :: Text,
-    attributes :: Attributes
+  { id :: Text
+  , attributes :: Attributes
   }
   deriving stock (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] DataVals
+
 
 data SubResponse = SubResponse
   { dataVal :: [DataVals]
   }
   deriving stock (Show, Generic)
 
+
 instance FromJSON SubResponse where
   parseJSON = withObject "SubResponse" $ \obj -> do
     dataVal <- obj .: "data"
-    return (SubResponse {dataVal = dataVal})
+    return (SubResponse{dataVal = dataVal})
+
 
 getSubscriptionId :: Maybe Text -> Text -> IO (Maybe SubResponse)
 getSubscriptionId orderId apiKey = do
@@ -243,6 +260,7 @@ getSubscriptionId orderId apiKey = do
           return $ Just res
         Left err -> do
           return Nothing
+
 
 processProjectPostForm :: Valor.Valid CreateProjectForm -> ATAuthCtx (Headers '[HXTrigger, HXRedirect] (Html ()))
 processProjectPostForm cpRaw = do
@@ -262,7 +280,7 @@ processProjectPostForm cpRaw = do
     else do
       let usersAndPermissions = zip cp.emails cp.permissions & uniq
       subRes <- liftIO $ getSubscriptionId cp.orderId envCfg.lemonSqueezyApiKey
-      let (subId,firstSubItemId) = case subRes of
+      let (subId, firstSubItemId) = case subRes of
             Just sub ->
               if length sub.dataVal < 1
                 then (Nothing, Nothing)
@@ -308,6 +326,7 @@ processProjectPostForm cpRaw = do
           let bdy = createProjectBody sess envCfg cp.isUpdate cp (def @CreateProjectFormError) Nothing Nothing
           pure $ addHeader hxTriggerData $ addHeader ("/p/" <> pid.toText <> "/about_project") bdy
 
+
 ----------------------------------------------------------------------------------------------------------
 -- createProjectBody is the core html view
 createProjectBody :: Sessions.PersistentSession -> EnvConfig -> Bool -> CreateProjectForm -> CreateProjectFormError -> Maybe (V.Vector Projects.NotificationChannel) -> Maybe SlackData -> Html ()
@@ -318,12 +337,12 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
       h2_ [class_ "text-slate-700 text-3xl font-medium mb-5"] $ toHtml @String $ if isUpdate then "Project Settings" else "Create Project"
       div_ [class_ "grid gap-5"] do
         form_
-          [ class_ "col-span-1 relative px-3 sm:px-10 border border-gray-200 py-10  bg-white rounded-3xl",
-            hxPost_ "/p/new",
-            hxTarget_ "#main-content",
-            hxSwap_ "outerHTML",
-            id_ "createUpdateBodyForm",
-            hxIndicator_ "#createIndicator"
+          [ class_ "col-span-1 relative px-3 sm:px-10 border border-gray-200 py-10  bg-white rounded-3xl"
+          , hxPost_ "/p/new"
+          , hxTarget_ "#main-content"
+          , hxSwap_ "outerHTML"
+          , id_ "createUpdateBodyForm"
+          , hxIndicator_ "#createIndicator"
           ]
           do
             input_ [name_ "isUpdate", type_ "hidden", value_ $ if isUpdate then "true" else "false"]
@@ -334,11 +353,11 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
                 "Title"
                 span_ [class_ "text-red-400"] " *"
               input_
-                [ class_ "h-10 px-5 my-2 w-full text-sm bg-white text-black border-solid border border-gray-200 rounded-2xl ",
-                  type_ "text",
-                  id_ "title",
-                  name_ "title",
-                  value_ cp.title
+                [ class_ "h-10 px-5 my-2 w-full text-sm bg-white text-black border-solid border border-gray-200 rounded-2xl "
+                , type_ "text"
+                , id_ "title"
+                , name_ "title"
+                , value_ cp.title
                 ]
             input_ [type_ "hidden", id_ "orderId", name_ "orderId", value_ ""]
             div_ [class_ "flex flex-col gap-1 mt-5"] do
@@ -349,11 +368,11 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
             div_ [class_ "mt-5 "] do
               label_ [class_ "text-slate-700 mx-2 text-sm"] "Description"
               textarea_
-                [ class_ " py-2 px-5 my-2 w-full text-sm bg-white text-black border-solid border border-gray-200 rounded-2xl border-1 ",
-                  rows_ "4",
-                  placeholder_ "Description",
-                  id_ "description",
-                  name_ "description"
+                [ class_ " py-2 px-5 my-2 w-full text-sm bg-white text-black border-solid border border-gray-200 rounded-2xl border-1 "
+                , rows_ "4"
+                , placeholder_ "Description"
+                , id_ "description"
+                , name_ "description"
                 ]
                 $ toHtml cp.description
 
@@ -362,16 +381,16 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
                 "Please select a plan"
                 span_ [class_ "text-red-400"] " *"
               div_ [class_ "grid md:grid-cols-3 gap-4 border-1"] do
-                ( [ ("Free", "20k", "$0", "1", cp.paymentPlan == "Free", "Free"),
-                    ("Pay as you use", "250k", "$1", "3", paymentPlan == "UsageBased", "UsageBased")
-                  ] ::
-                    [(Text, Text, Text, Text, Bool, Text)]
+                ( [ ("Free", "20k", "$0", "1", cp.paymentPlan == "Free", "Free")
+                  , ("Pay as you use", "250k", "$1", "3", paymentPlan == "UsageBased", "UsageBased")
+                  ]
+                    :: [(Text, Text, Text, Text, Bool, Text)]
                   )
                   & mapM_ \(title, included, price, team, isSelected, value) -> do
                     let isSelectedTxt = toLower $ show isSelected
                     a_
-                      [ class_ $ "payment-plans cursor-pointer space-y-1 border border-1  block p-2 rounded-md  shadow-blue-100 " <> if isSelected then " border-blue-200 shadow-lg" else "",
-                        term
+                      [ class_ $ "payment-plans cursor-pointer space-y-1 border border-1  block p-2 rounded-md  shadow-blue-100 " <> if isSelected then " border-blue-200 shadow-lg" else ""
+                      , term
                           "_"
                           [text| 
                           init if $isSelectedTxt then set window.paymentPlan to $value end 
@@ -434,8 +453,8 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
                       ]
                       $ img_ [src_ "/assets/svgs/delete.svg", class_ "cursor-pointer"]
               a_
-                [ class_ "bg-transparent inline-flex cursor-pointer mt-2",
-                  [__| on click append #inviteTmpl.innerHTML to #inviteMemberSection then 
+                [ class_ "bg-transparent inline-flex cursor-pointer mt-2"
+                , [__| on click append #inviteTmpl.innerHTML to #inviteMemberSection then 
                          _hyperscript.processNode(#inviteMemberSection) then halt |]
                 ]
                 do
@@ -498,8 +517,8 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
               --       ] "Submit"
               --   else
               a_
-                [ class_ "lemonsqueezy-button py-2 px-5 w-max bg-blue-700 flex items-center text-[white] text-sm rounded-xl cursor-pointer",
-                  [__|on click call window.payLemon() |]
+                [ class_ "lemonsqueezy-button py-2 px-5 w-max bg-blue-700 flex items-center text-[white] text-sm rounded-xl cursor-pointer"
+                , [__|on click call window.payLemon() |]
                 ]
                 do
                   span_ [id_ "createIndicator", class_ "htmx-indicator loading loading-dots loading-md"] ""
@@ -550,8 +569,8 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
         div_ [class_ "col-span-1 h-full justify-center items-center w-full text-center pt-24"] do
           h2_ [class_ "text-red-800 font-medium pb-4"] "Delete project. This is dangerous and unreversable"
           button_
-            [ class_ "btn btn-sm bg-red-800 text-white shadow-md hover:bg-red-700 cursor-pointer rounded-md",
-              hxGet_ [text|/p/$pid/delete|],
-              hxConfirm_ "Are you sure you want to delete this project?"
+            [ class_ "btn btn-sm bg-red-800 text-white shadow-md hover:bg-red-700 cursor-pointer rounded-md"
+            , hxGet_ [text|/p/$pid/delete|]
+            , hxConfirm_ "Are you sure you want to delete this project?"
             ]
             "Delete Project"

@@ -2,28 +2,28 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module Models.Projects.Projects
-  ( Project (..),
-    Project' (..),
-    ProjectId (..),
-    CreateProject (..),
-    ProjectRequestStats (..),
-    NotificationChannel (..),
-    insertProject,
-    projectIdFromText,
-    usersByProjectId,
-    userByProjectId,
-    selectProjectsForUser,
-    projectRequestStatsByProject,
-    selectProjectForUser,
-    updateProject,
-    deleteProject,
-    projectById,
-    projectCacheById,
-    updateProjectReportNotif,
-    ProjectCache (..),
-    updateNotificationsChannel,
-  )
+module Models.Projects.Projects (
+  Project (..),
+  Project' (..),
+  ProjectId (..),
+  CreateProject (..),
+  ProjectRequestStats (..),
+  NotificationChannel (..),
+  insertProject,
+  projectIdFromText,
+  usersByProjectId,
+  userByProjectId,
+  selectProjectsForUser,
+  projectRequestStatsByProject,
+  selectProjectForUser,
+  updateProject,
+  deleteProject,
+  projectById,
+  projectCacheById,
+  updateProjectReportNotif,
+  ProjectCache (..),
+  updateNotificationsChannel,
+)
 where
 
 import Data.Aeson (FromJSON (..), ToJSON (toJSON), Value (String))
@@ -47,19 +47,24 @@ import Optics.TH
 import Relude
 import Web.HttpApiData
 
+
 newtype ProjectId = ProjectId {unProjectId :: UUID.UUID}
   deriving stock (Generic, Show, Read)
   deriving newtype (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default, Hashable, NFData)
   deriving anyclass (FromRow, ToRow)
 
+
 instance HasField "unwrap" ProjectId UUID.UUID where
   getField = coerce
+
 
 instance HasField "toText" ProjectId Text where
   getField = UUID.toText . unProjectId
 
+
 projectIdFromText :: Text -> Maybe ProjectId
 projectIdFromText pid = ProjectId <$> UUID.fromText pid
+
 
 data NotificationChannel
   = NEmail
@@ -67,22 +72,27 @@ data NotificationChannel
   deriving stock (Eq, Generic, Show)
   deriving anyclass (NFData)
 
+
 instance ToJSON NotificationChannel where
   toJSON NEmail = String "email"
   toJSON NSlack = String "slack"
+
 
 instance FromJSON NotificationChannel where
   parseJSON (String "email") = pure NEmail
   parseJSON (String "slack") = pure NSlack
   parseJSON _ = fail "Invalid NotificationChannel value"
 
+
 instance ToField NotificationChannel where
   toField NEmail = Escape "email"
   toField NSlack = Escape "slack"
 
+
 parsePermissions :: (Eq s, IsString s) => s -> NotificationChannel
 parsePermissions "slack" = NSlack
 parsePermissions _ = NEmail
+
 
 instance FromField NotificationChannel where
   fromField f mdata =
@@ -90,25 +100,26 @@ instance FromField NotificationChannel where
       Nothing -> returnError UnexpectedNull f ""
       Just bs -> pure $ parsePermissions bs
 
+
 data Project = Project
-  { id :: ProjectId,
-    createdAt :: ZonedTime,
-    updatedAt :: ZonedTime,
-    deletedAt :: Maybe ZonedTime,
-    active :: Bool,
-    title :: Text,
-    description :: Text,
-    -- NOTE: We used to have hosts under project, but now hosts should be gotten from the endpoints.
+  { id :: ProjectId
+  , createdAt :: ZonedTime
+  , updatedAt :: ZonedTime
+  , deletedAt :: Maybe ZonedTime
+  , active :: Bool
+  , title :: Text
+  , description :: Text
+  , -- NOTE: We used to have hosts under project, but now hosts should be gotten from the endpoints.
     -- NOTE: If there's heavy need and usage, we caould create a view. Otherwise, the project cache is best, if it meets our needs.
-    paymentPlan :: Text,
-    questions :: Maybe Value,
-    dailyNotif :: Bool,
-    weeklyNotif :: Bool,
-    timeZone :: Text,
-    notificationsChannel :: Vector NotificationChannel,
-    subId :: Maybe Text,
-    firstSubItemId :: Maybe Text,
-    orderId :: Maybe Text
+    paymentPlan :: Text
+  , questions :: Maybe Value
+  , dailyNotif :: Bool
+  , weeklyNotif :: Bool
+  , timeZone :: Text
+  , notificationsChannel :: Vector NotificationChannel
+  , subId :: Maybe Text
+  , firstSubItemId :: Maybe Text
+  , orderId :: Maybe Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, NFData)
@@ -119,43 +130,46 @@ data Project = Project
     (Entity)
     via (GenericEntity '[Schema "projects", TableName "projects", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Project)
 
+
 makeFieldLabelsNoPrefix ''Project
+
 
 -- FIXME: Why was this record created? And not the regular projects record?
 data Project' = Project'
-  { id :: ProjectId,
-    createdAt :: ZonedTime,
-    updatedAt :: ZonedTime,
-    deletedAt :: Maybe ZonedTime,
-    active :: Bool,
-    title :: Text,
-    description :: Text,
-    -- NOTE: We used to have hosts under project, but now hosts should be gotten from the endpoints.
+  { id :: ProjectId
+  , createdAt :: ZonedTime
+  , updatedAt :: ZonedTime
+  , deletedAt :: Maybe ZonedTime
+  , active :: Bool
+  , title :: Text
+  , description :: Text
+  , -- NOTE: We used to have hosts under project, but now hosts should be gotten from the endpoints.
     -- NOTE: If there's heavy need and usage, we caould create a view. Otherwise, the project cache is best, if it meets our needs.
-    paymentPlan :: Text,
-    questions :: Maybe Value,
-    dailyNotif :: Bool,
-    weeklyNotif :: Bool,
-    timeZone :: Text,
-    notificationsChannel :: Vector NotificationChannel,
-    subId :: Maybe Text,
-    firstSubItemId :: Maybe Text,
-    orderId :: Maybe Text,
-    usersDisplayImages :: Vector Text
+    paymentPlan :: Text
+  , questions :: Maybe Value
+  , dailyNotif :: Bool
+  , weeklyNotif :: Bool
+  , timeZone :: Text
+  , notificationsChannel :: Vector NotificationChannel
+  , subId :: Maybe Text
+  , firstSubItemId :: Maybe Text
+  , orderId :: Maybe Text
+  , usersDisplayImages :: Vector Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, NFData)
 
+
 data ProjectCache = ProjectCache
   { -- We need this hosts to mirror all the hosts in the endpoints table, and could use this for validation purposes to skip inserting endpoints just because of hosts
     -- if endpoint exists but host is not in this list, then we have a query specifically for inserting hosts.
-    hosts :: V.Vector Text,
-    -- maybe we don't need this? See the next point.
-    endpointHashes :: V.Vector Text,
-    -- Since shapes always have the endpoints hash prepended to them, maybe we don't need to store the hash of endpoints,
+    hosts :: V.Vector Text
+  , -- maybe we don't need this? See the next point.
+    endpointHashes :: V.Vector Text
+  , -- Since shapes always have the endpoints hash prepended to them, maybe we don't need to store the hash of endpoints,
     -- since we can derive that from the shapes.
-    shapeHashes :: V.Vector Text,
-    -- We check if every request is part of the redact list, so it's better if we don't need to  hit the db for them with each request.
+    shapeHashes :: V.Vector Text
+  , -- We check if every request is part of the redact list, so it's better if we don't need to  hit the db for them with each request.
     -- Since we have a need to redact fields by endpoint, we can simply have the fields paths be prepended by the endpoint hash.
     -- [endpointHash]<>[field_category eg requestBody]<>[field_key_path]
     -- Those redact fields that don't have endpoint or field_category attached, would be aplied to every endpoint and field category.
@@ -164,17 +178,19 @@ data ProjectCache = ProjectCache
   deriving stock (Show, Generic)
   deriving anyclass (FromRow)
 
+
 makeFieldLabelsNoPrefix ''ProjectCache
 
+
 data CreateProject = CreateProject
-  { id :: ProjectId,
-    title :: Text,
-    description :: Text,
-    paymentPlan :: Text,
-    timeZone :: Text,
-    subId :: Maybe Text,
-    firstSubItemId :: Maybe Text,
-    orderId :: Maybe Text
+  { id :: ProjectId
+  , title :: Text
+  , description :: Text
+  , paymentPlan :: Text
+  , timeZone :: Text
+  , subId :: Maybe Text
+  , firstSubItemId :: Maybe Text
+  , orderId :: Maybe Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow)
@@ -182,7 +198,9 @@ data CreateProject = CreateProject
     (Entity)
     via (GenericEntity '[Schema "projects", TableName "projects", PrimaryKey "id", FieldModifiers '[CamelToSnake]] CreateProject)
 
+
 makeFieldLabelsNoPrefix ''CreateProject
+
 
 -- FIXME: We currently return an object with empty vectors when nothing was found.
 projectCacheById :: ProjectId -> DBT IO (Maybe ProjectCache)
@@ -201,13 +219,16 @@ projectCacheById = queryOne Select q
                 where e.project_id = ? AND sh.hash IS NOT null
                ) enp; |]
 
+
 insertProject :: CreateProject -> DBT IO ()
 insertProject = insert @CreateProject
+
 
 projectById :: ProjectId -> DBT IO (Maybe Project)
 projectById = queryOne Select q
   where
     q = [sql| select p.* from projects.projects p where id=?|]
+
 
 selectProjectsForUser :: Users.UserId -> DBT IO (V.Vector Project')
 selectProjectsForUser = query Select q
@@ -217,6 +238,7 @@ selectProjectsForUser = query Select q
                 join projects.project_members as ppm on (pp.id=ppm.project_id) 
                 join users.users as us on (us.id=ppm.user_id)
                 where ppm.user_id=? and pp.deleted_at IS NULL order by updated_at desc|]
+
 
 selectProjectForUser :: (Users.UserId, ProjectId) -> DBT IO (Maybe Project)
 selectProjectForUser = queryOne Select q
@@ -230,6 +252,7 @@ selectProjectForUser = queryOne Select q
           limit 1
       |]
 
+
 usersByProjectId :: ProjectId -> DBT IO (Vector Users.User)
 usersByProjectId pid = query Select q (Only pid)
   where
@@ -237,12 +260,14 @@ usersByProjectId pid = query Select q (Only pid)
       [sql| select u.id, u.created_at, u.updated_at, u.deleted_at, u.active, u.first_name, u.last_name, u.display_image_url, u.email, u.phone_number
                 from users.users u join projects.project_members pm on (pm.user_id=u.id) where project_id=? and u.active IS True;|]
 
+
 userByProjectId :: ProjectId -> Users.UserId -> DBT IO (Vector Users.User)
 userByProjectId pid user_id = query Select q (user_id, pid)
   where
     q =
       [sql| select u.id, u.created_at, u.updated_at, u.deleted_at, u.active, u.first_name, u.last_name, u.display_image_url, u.email, u.phone_number
                 from users.users u join projects.project_members pm on (pm.user_id= ?) where project_id=? and u.active IS True;|]
+
 
 editProjectGetH :: ProjectId -> DBT IO (V.Vector Project)
 editProjectGetH pid = query Select q (Only pid)
@@ -254,12 +279,14 @@ editProjectGetH pid = query Select q (Only pid)
             ON pp.id = pid 
         WHERE ppm.project_id = pp.id;|]
 
+
 updateProject :: CreateProject -> DBT IO Int64
 updateProject cp = do
   execute Update q (cp.title, cp.description, cp.paymentPlan, cp.timeZone, cp.id)
   where
     q =
       [sql| UPDATE projects.projects SET title=?,  description=?, payment_plan=?, time_zone=? where id=?;|]
+
 
 updateProjectReportNotif :: ProjectId -> Text -> DBT IO Int64
 updateProjectReportNotif pid report_type = do
@@ -270,6 +297,7 @@ updateProjectReportNotif pid report_type = do
         then [sql| UPDATE projects.projects SET daily_notif=(not daily_notif) WHERE id=?;|]
         else [sql| UPDATE projects.projects SET weekly_notif=(not weekly_notif) WHERE id=?;|]
 
+
 deleteProject :: ProjectId -> DBT IO Int64
 deleteProject pid = do
   execute Update q pid
@@ -277,34 +305,37 @@ deleteProject pid = do
     q =
       [sql| UPDATE projects.projects SET deleted_at=NOW(), active=False where id=?;|]
 
+
 data ProjectRequestStats = ProjectRequestStats
-  { projectId :: ProjectId,
-    min :: Double,
-    p50 :: Double,
-    p75 :: Double,
-    p90 :: Double,
-    p95 :: Double,
-    p99 :: Double,
-    max :: Double,
-    totalTime :: Double,
-    totalRequests :: Int,
-    totalEndpoints :: Int,
-    totalEndpointsLastWeek :: Int,
-    totalShapes :: Int,
-    totalShapesLastWeek :: Int,
-    totalAnomalies :: Int,
-    totalAnomaliesLastWeek :: Int,
-    totalFields :: Int,
-    totalFieldsLastWeek :: Int,
-    requestsPerMin :: Int,
-    requestsPerMinLastWeek :: Int
+  { projectId :: ProjectId
+  , min :: Double
+  , p50 :: Double
+  , p75 :: Double
+  , p90 :: Double
+  , p95 :: Double
+  , p99 :: Double
+  , max :: Double
+  , totalTime :: Double
+  , totalRequests :: Int
+  , totalEndpoints :: Int
+  , totalEndpointsLastWeek :: Int
+  , totalShapes :: Int
+  , totalShapesLastWeek :: Int
+  , totalAnomalies :: Int
+  , totalAnomaliesLastWeek :: Int
+  , totalFields :: Int
+  , totalFieldsLastWeek :: Int
+  , requestsPerMin :: Int
+  , requestsPerMinLastWeek :: Int
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (FromRow, ToRow, Default, NFData)
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "project_request_stats", PrimaryKey "project_id", FieldModifiers '[CamelToSnake]] ProjectRequestStats)
 
+
 projectRequestStatsByProject :: ProjectId -> DBT IO (Maybe ProjectRequestStats)
 projectRequestStatsByProject = selectById @ProjectRequestStats
+
 
 updateNotificationsChannel :: ProjectId -> [Text] -> DBT IO Int64
 updateNotificationsChannel pid channels = execute Update q (list, pid)
