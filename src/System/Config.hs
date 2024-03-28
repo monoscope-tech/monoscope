@@ -4,32 +4,27 @@
 module System.Config (EnvConfig (..), AuthContext (..), DashboardM, ctxToHandler, getAppContext, configToEnv, DeploymentEnv (..)) where
 
 import Colog (LogAction, logStringStdout)
+import Colourista.IO (blueMessage)
+import Configuration.Dotenv qualified as Dotenv
+import Control.Exception (try)
 import Data.Cache
 import Data.Cache (Cache)
-import Data.Default (Default)
+import Data.Default (Default (..))
+import Data.Default.Instances ()
 import Data.Pool as Pool
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as LT
 import Database.PostgreSQL.Simple (Connection)
+import Database.PostgreSQL.Simple qualified as PG
+import Database.PostgreSQL.Simple.Migration qualified as Migrations
+import Effectful
+import Effectful.Fail (Fail)
 import Models.Projects.Projects qualified as Projects
 import Optics.TH
 import Relude
 import Servant.Server (Handler)
 import System.Clock
-import System.Envy (FromEnv, Var, fromVar, toVar)
-
-import Colourista.IO (blueMessage)
-import Configuration.Dotenv qualified as Dotenv
-import Control.Exception (try)
-import Data.Default (Default (..))
-import Data.Default.Instances ()
-import Data.Pool as Pool
-import Database.PostgreSQL.Simple qualified as PG
-import Database.PostgreSQL.Simple.Migration qualified as Migrations
-import Effectful
-import Effectful.Fail (Fail)
-import Relude
-import System.Envy (FromEnv (..), ReadShowVar (..), Var (..), decodeEnv)
+import System.Envy (FromEnv (..), ReadShowVar (..), Var (..), decodeEnv, fromVar, toVar)
 import System.Logging qualified as Logging
 
 
@@ -76,6 +71,8 @@ data EnvConfig = EnvConfig
   , environment :: Text
   , loggingDestination :: Logging.LoggingDestination
   , enablePubsubService :: Bool
+  , lemonSqueezyApiKey :: Text
+  , lemonSqueezyUrl :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromEnv, Default)

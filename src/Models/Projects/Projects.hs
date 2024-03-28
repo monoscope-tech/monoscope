@@ -23,7 +23,8 @@ module Models.Projects.Projects (
   updateProjectReportNotif,
   ProjectCache (..),
   updateNotificationsChannel,
-) where
+)
+where
 
 import Data.Aeson (FromJSON (..), ToJSON (toJSON), Value (String))
 import Data.Default
@@ -116,6 +117,9 @@ data Project = Project
   , weeklyNotif :: Bool
   , timeZone :: Text
   , notificationsChannel :: Vector NotificationChannel
+  , subId :: Maybe Text
+  , firstSubItemId :: Maybe Text
+  , orderId :: Maybe Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, NFData)
@@ -147,6 +151,9 @@ data Project' = Project'
   , weeklyNotif :: Bool
   , timeZone :: Text
   , notificationsChannel :: Vector NotificationChannel
+  , subId :: Maybe Text
+  , firstSubItemId :: Maybe Text
+  , orderId :: Maybe Text
   , usersDisplayImages :: Vector Text
   }
   deriving stock (Show, Generic)
@@ -181,6 +188,9 @@ data CreateProject = CreateProject
   , description :: Text
   , paymentPlan :: Text
   , timeZone :: Text
+  , subId :: Maybe Text
+  , firstSubItemId :: Maybe Text
+  , orderId :: Maybe Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow)
@@ -257,6 +267,8 @@ userByProjectId pid user_id = query Select q (user_id, pid)
     q =
       [sql| select u.id, u.created_at, u.updated_at, u.deleted_at, u.active, u.first_name, u.last_name, u.display_image_url, u.email, u.phone_number
                 from users.users u join projects.project_members pm on (pm.user_id= ?) where project_id=? and u.active IS True;|]
+
+
 editProjectGetH :: ProjectId -> DBT IO (V.Vector Project)
 editProjectGetH pid = query Select q (Only pid)
   where

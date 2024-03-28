@@ -49,7 +49,6 @@ fieldPutH pid fid editData = do
   let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
-  traceShowM editData
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
@@ -74,8 +73,6 @@ fieldPutH pid fid editData = do
                   }
             )
               <$> editData.formats
-      traceShowM formats
       r <- dbtToEff $ Formats.insertFormats formats
-      traceShowM r
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","successToast": ["Field edited successfully"]}|]
       pure $ addHeader hxTriggerData ""

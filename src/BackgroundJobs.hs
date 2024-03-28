@@ -8,6 +8,7 @@ module BackgroundJobs (jobsWorkerInit, BgJobs (..)) where
 -- This example is using these functions to introduce an artificial delay of a
 -- few seconds in one of the jobs. Otherwise it is not really needed.
 import Colog (LogAction, (<&))
+import Control.Lens ((.~), (^.))
 import Data.Aeson as Aeson
 import Data.CaseInsensitive qualified as CI
 import Data.List.Extra (intersect, union)
@@ -38,6 +39,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Projects.Swaggers qualified as Swaggers
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text, trimming)
+import Network.Wreq
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, startJobRunner, throwParsePayload)
 import Pages.GenerateSwagger (generateSwagger)
@@ -57,6 +59,7 @@ data BgJobs
   | WeeklyReports Projects.ProjectId
   | DailyJob
   | GenSwagger Projects.ProjectId Users.UserId
+  | ReportUsage Projects.ProjectId
   deriving stock (Eq, Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
 
@@ -146,7 +149,6 @@ jobsRunner dbPool logger cfg job = do
                      in sendEmail cfg reciever subject body
           Anomalies.ATShape -> do
             hasEndpointAnomaly <- withPool dbPool $ Anomalies.getShapeParentAnomalyVM pid targetHash
-            traceShowM hasEndpointAnomaly
             if hasEndpointAnomaly == 0
               then do
                 shapes <- withPool dbPool $ getShapes pid $ T.take 8 targetHash
@@ -288,6 +290,7 @@ jobsRunner dbPool logger cfg job = do
         forM_ projects \p -> do
           liftIO $ withResource dbPool \conn -> do
             currentDay <- utctDay <$> getCurrentTime
+            _ <- createJob conn "background_jobs" $ BackgroundJobs.ReportUsage p
             if dayOfWeek currentDay == Monday
               then createJob conn "background_jobs" $ BackgroundJobs.WeeklyReports p
               else createJob conn "background_jobs" $ BackgroundJobs.DailyReports p
@@ -324,6 +327,58 @@ jobsRunner dbPool logger cfg job = do
                     }
             _ <- withPool dbPool $ Swaggers.addSwagger swaggerToAdd
             pass
+      ReportUsage pid -> do
+        projectM <- withPool dbPool $ Projects.projectById pid
+        case projectM of
+          Nothing -> pass
+          Just project -> do
+            let subItemId = project.firstSubItemId
+            if project.paymentPlan == "UsageBased"
+              then do
+                case subItemId of
+                  Nothing -> pass
+                  Just fSubId ->
+                    do
+                      totalRequestForThisMonth <- withPool dbPool $ RequestDumps.getTotalRequestForCurrentMonth pid
+                      reportUsage fSubId totalRequestForThisMonth cfg.lemonSqueezyApiKey
+                      pass
+              else pass
+        pass
+
+
+reportUsage :: Text -> Int -> Text -> IO ()
+reportUsage subItemId quantity apiKey = do
+  let formData =
+        object
+          [ "data"
+              .= object
+                [ "type" .= ("usage-records" :: String)
+                , "attributes"
+                    .= object
+                      [ "quantity" .= quantity
+                      , "action" .= ("set" :: String)
+                      ]
+                , "relationships"
+                    .= object
+                      [ "subscription-item"
+                          .= object
+                            [ "data"
+                                .= object
+                                  [ "type" .= ("subscription-items" :: String)
+                                  , "id" .= subItemId
+                                  ]
+                            ]
+                      ]
+                ]
+          ]
+  let hds =
+        defaults
+          & header "Authorization"
+          .~ ["Bearer " <> encodeUtf8 @Text @ByteString apiKey]
+            & header "Content-Type"
+          .~ ["application/vnd.api+json"]
+  _ <- postWith hds "https://api.lemonsqueezy.com/v1/usage-records" formData
+  pass
 
 
 jobsWorkerInit :: Pool Connection -> Log.Logger -> Config.EnvConfig -> IO ()

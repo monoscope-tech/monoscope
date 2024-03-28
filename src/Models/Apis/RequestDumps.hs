@@ -29,7 +29,9 @@ module Models.Apis.RequestDumps (
   countRequestDumpByProject,
   getRequestType,
   autoCompleteFromRequestDumps,
-) where
+  getTotalRequestForCurrentMonth,
+)
+where
 
 import Control.Error (hush)
 import Data.Aeson (Value)
@@ -644,3 +646,15 @@ autoCompleteFromRequestDumps :: Projects.ProjectId -> Text -> Text -> DBT IO (V.
 autoCompleteFromRequestDumps pid key prefix = query Select (Query $ encodeUtf8 q) (pid, prefix <> "%")
   where
     q = [text|SELECT DISTINCT $key from apis.request_dumps WHERE project_id = ? AND created_at > NOW() - interval '14' day AND $key <> ''  AND $key LIKE ?|]
+
+
+getTotalRequestForCurrentMonth :: Projects.ProjectId -> DBT IO Int
+getTotalRequestForCurrentMonth pid = do
+  result <- query Select q pid
+  case result of
+    [Only count] -> return count
+    v -> return $ length v
+  where
+    q =
+      [sql| SELECT count(*) FROM apis.request_dumps WHERE project_id=? AND EXTRACT(MONTH FROM created_at) = EXTRACT(MONTH FROM CURRENT_DATE)
+              AND EXTRACT(YEAR FROM created_at) = EXTRACT(YEAR FROM CURRENT_DATE);|]
