@@ -295,7 +295,7 @@ jobsRunner dbPool logger cfg job = do
               then do
                 _ <- createJob conn "background_jobs" $ BackgroundJobs.WeeklyReports p
                 pass
-              else pass -- createJob conn "background_jobs" $ BackgroundJobs.DailyReports p
+              else pass createJob conn "background_jobs" $ BackgroundJobs.DailyReports p
         pass
       DailyReports pid -> do
         dailyReportForProject dbPool cfg pid
@@ -342,8 +342,7 @@ jobsRunner dbPool logger cfg job = do
                   Just fSubId ->
                     do
                       totalRequestForThisMonth <- withPool dbPool $ RequestDumps.getTotalRequestForCurrentMonth pid
-                      let totalUnits = totalRequestForThisMonth `div` 10000
-                      reportUsage fSubId totalUnits cfg.lemonSqueezyApiKey
+                      reportUsage fSubId totalRequestForThisMonth cfg.lemonSqueezyApiKey
                       pass
               else pass
         pass
@@ -351,23 +350,29 @@ jobsRunner dbPool logger cfg job = do
 
 reportUsage :: Text -> Int -> Text -> IO ()
 reportUsage subItemId quantity apiKey = do
-  let formData = object
-        [ "data" .= object
-            [ "type" .= ("usage-records" :: String)
-            , "attributes" .= object
-                [ "quantity" .= quantity 
-                , "action" .= ("set" :: String)
+  let formData =
+        object
+          [ "data"
+              .= object
+                [ "type" .= ("usage-records" :: String)
+                , "attributes"
+                    .= object
+                      [ "quantity" .= quantity
+                      , "action" .= ("set" :: String)
+                      ]
+                , "relationships"
+                    .= object
+                      [ "subscription-item"
+                          .= object
+                            [ "data"
+                                .= object
+                                  [ "type" .= ("subscription-items" :: String)
+                                  , "id" .= subItemId
+                                  ]
+                            ]
+                      ]
                 ]
-            , "relationships" .= object
-                [ "subscription-item" .= object
-                    [ "data" .= object
-                        [ "type" .= ("subscription-items" :: String)
-                        , "id" .= subItemId
-                        ]
-                    ]
-                ]
-            ]
-        ]
+          ]
   let hds =
         defaults
           & header "Authorization"

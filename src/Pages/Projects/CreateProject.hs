@@ -506,7 +506,7 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
                  }
                }
              })
-             LemonSqueezy.Url.Open($checkoutUrl);
+             LemonSqueezy.Url.Open("$checkoutUrl");
              };
           |]
 
