@@ -17,7 +17,10 @@ module Pages.Projects.CreateProject
 where
 
 import BackgroundJobs qualified
+import Control.Lens ((.~), (^.))
+import Data.Aeson
 import Data.Aeson (encode)
+import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.ByteString.Base64 qualified as B64
 import Data.CaseInsensitive (original)
@@ -36,6 +39,7 @@ import Data.Vector qualified as V
 import Data.Vector.Generic qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple.Notification (Notification (notificationChannel))
+import Deriving.Aeson qualified as DAE
 import Effectful.PostgreSQL.Transact.Effect
 import Effectful.Reader.Static (ask, asks)
 import Lucid
@@ -50,6 +54,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
+import Network.Wreq
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pkg.ConvertKit qualified as ConvertKit
@@ -75,7 +80,7 @@ data CreateProjectForm = CreateProjectForm
     projectId :: Text,
     paymentPlan :: Text,
     timeZone :: Text,
-    orderId :: Text
+    orderId :: Maybe Text
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromForm, Default)
@@ -87,8 +92,14 @@ data CreateProjectFormError = CreateProjectFormError
   deriving stock (Eq, Show, Generic)
   deriving anyclass (Default)
 
-createProjectFormToModel :: Projects.ProjectId -> CreateProjectForm -> Projects.CreateProject
-createProjectFormToModel pid CreateProjectForm {..} = Projects.CreateProject {id = pid, ..}
+createProjectFormToModel :: Projects.ProjectId -> Maybe Text -> Maybe Text -> CreateProjectForm -> Projects.CreateProject
+createProjectFormToModel pid subId firstSubId CreateProjectForm {..} =
+  Projects.CreateProject
+    { id = pid,
+      subId = subId,
+      firstSubItemId = firstSubId,
+      ..
+    }
 
 createProjectFormV :: (Monad m) => Valor CreateProjectForm m CreateProjectFormError
 createProjectFormV =
@@ -130,7 +141,7 @@ projectSettingsGetH pid = do
             projectId = pid.toText,
             paymentPlan = proj.paymentPlan,
             timeZone = proj.timeZone,
-            orderId = ""
+            orderId = proj.orderId
           }
   slackInfo <- dbtToEff $ getProjectSlackData pid
 
@@ -189,6 +200,53 @@ createProjectPostH createP = do
     Right cpe -> pure $ noHeader $ noHeader $ createProjectBody sess appCtx.config createP.isUpdate createP cpe Nothing Nothing
     Left cp -> processProjectPostForm cp
 
+data FirstSubItem = FirstSubItem
+  { id :: Int,
+    subscriptionId :: Int
+  }
+  deriving stock (Show, Generic)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] FirstSubItem
+
+data Attributes = Attributes
+  { firstSubscriptionItem :: FirstSubItem
+  }
+  deriving stock (Show, Generic)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] Attributes
+
+data DataVals = DataVals
+  { id :: Text,
+    attributes :: Attributes
+  }
+  deriving stock (Show, Generic)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] DataVals
+
+data SubResponse = SubResponse
+  { dataVal :: [DataVals]
+  }
+  deriving stock (Show, Generic)
+
+instance FromJSON SubResponse where
+  parseJSON = withObject "SubResponse" $ \obj -> do
+    dataVal <- obj .: "data"
+    return (SubResponse {dataVal = dataVal})
+
+getSubscriptionId :: Maybe Text -> Text -> IO (Maybe SubResponse)
+getSubscriptionId orderId apiKey = do
+  case orderId of
+    Nothing -> pure Nothing
+    Just ordId -> do
+      let hds = header "Authorization" .~ ["Bearer " <> encodeUtf8 @Text @ByteString apiKey]
+      response <- liftIO $ getWith (defaults & hds) ("https://api.lemonsqueezy.com/v1/orders/" <> toString ordId <> "/subscriptions")
+      let responseBdy = response ^. responseBody
+      traceShowM responseBdy
+      case eitherDecode responseBdy of
+        Right res -> do
+          traceShowM res
+          return $ Just res
+        Left err -> do
+          traceShowM err
+          return Nothing
+
 processProjectPostForm :: Valor.Valid CreateProjectForm -> ATAuthCtx (Headers '[HXTrigger, HXRedirect] (Html ()))
 processProjectPostForm cpRaw = do
   appCtx <- ask @AuthContext
@@ -197,52 +255,61 @@ processProjectPostForm cpRaw = do
   let sess = Unsafe.fromJust sess'.persistentSession
 
   let cp = Valor.unValid cpRaw
-  traceShowM cp
   pid <- liftIO $ maybe (Projects.ProjectId <$> UUIDV4.nextRandom) pure (Projects.projectIdFromText cp.projectId)
-  _ <-
-    if cp.isUpdate
-      then do
-        _ <- dbtToEff $ Projects.updateProject (createProjectFormToModel pid cp)
-        pass
-      else do
-        let usersAndPermissions = zip cp.emails cp.permissions & uniq
-        _ <- dbtToEff do
-          Projects.insertProject (createProjectFormToModel pid cp)
-          projectKeyUUID <- liftIO UUIDV4.nextRandom
-          let encryptedKey = ProjectApiKeys.encryptAPIKey (encodeUtf8 envCfg.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
-          let encryptedKeyB64 = B64.encodeBase64 encryptedKey
-          let keyPrefix = encryptedKeyB64
-          pApiKey <- liftIO $ ProjectApiKeys.newProjectApiKeys pid projectKeyUUID "Default API Key" keyPrefix
-          ProjectApiKeys.insertProjectApiKey pApiKey
-
-          liftIO $ ConvertKit.addUserOrganization envCfg.convertkitApiKey (CI.original sess.user.getUser.email) pid.toText cp.title cp.paymentPlan
-          newProjectMembers <- forM usersAndPermissions \(email, permission) -> do
-            userId' <- runMaybeT $ MaybeT (Users.userIdByEmail email) <|> MaybeT (Users.createEmptyUser email)
-            let userId = Unsafe.fromJust userId'
-            liftIO $ ConvertKit.addUserOrganization envCfg.convertkitApiKey email pid.toText cp.title cp.paymentPlan
-            when (userId' /= Just sess.userId) do
-              -- invite the users to the project (Usually as an email)
-              _ <- liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId pid email cp.title
-              pass
-            pure (email, permission, userId)
-
-          let projectMembers =
-                newProjectMembers
-                  & filter (\(_, _, id') -> id' /= sess.userId)
-                  & map (\(email, permission, id') -> ProjectMembers.CreateProjectMembers pid id' permission)
-                  & cons (ProjectMembers.CreateProjectMembers pid sess.userId Projects.PAdmin)
-          ProjectMembers.insertProjectMembers projectMembers
-
-        _ <- liftIO $ withResource appCtx.pool \conn ->
-          createJob conn "background_jobs" $ BackgroundJobs.CreatedProjectSuccessfully sess.userId pid (original sess.user.getUser.email) cp.title
-        pass
-
-  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Created Project Successfully"]}|]
-  let hxTriggerDataUpdate = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Updated Project Successfully"]}|]
-  let bdy = createProjectBody sess envCfg cp.isUpdate cp (def @CreateProjectFormError) Nothing Nothing
   if cp.isUpdate
-    then pure $ addHeader hxTriggerDataUpdate $ noHeader bdy
-    else pure $ addHeader hxTriggerData $ addHeader ("/p/" <> pid.toText <> "/about_project") bdy
+    then do
+      _ <- dbtToEff $ Projects.updateProject (createProjectFormToModel pid Nothing Nothing cp)
+      let hxTriggerDataUpdate = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Updated Project Successfully"]}|]
+      let bdy = createProjectBody sess envCfg cp.isUpdate cp (def @CreateProjectFormError) Nothing Nothing
+      pure $ addHeader hxTriggerDataUpdate $ noHeader bdy
+    else do
+      let usersAndPermissions = zip cp.emails cp.permissions & uniq
+      subRes <- liftIO $ getSubscriptionId cp.orderId envCfg.lemonSqueezyApiKey
+      let (firstSubItemId, subId) = case subRes of
+            Just sub ->
+              if length sub.dataVal < 1
+                then (Nothing, Nothing)
+                else
+                  let target = sub.dataVal Unsafe.!! 0
+                      firstSubItemId = show target.attributes.firstSubscriptionItem.id
+                      subId = show target.attributes.firstSubscriptionItem.subscriptionId
+                   in (Just subId, Just firstSubItemId)
+            Nothing -> (Nothing, Nothing)
+      if (cp.paymentPlan /= "Hobby" && isNothing firstSubItemId)
+        then do
+          let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Created Project Successfully"]}|]
+          let bdy = createProjectBody sess envCfg cp.isUpdate cp (def @CreateProjectFormError) Nothing Nothing
+          pure $ addHeader hxTriggerData $ addHeader ("/p/" <> pid.toText <> "/about_project") bdy
+        else do
+          _ <- dbtToEff do
+            Projects.insertProject (createProjectFormToModel pid subId firstSubItemId cp)
+            projectKeyUUID <- liftIO UUIDV4.nextRandom
+            let encryptedKey = ProjectApiKeys.encryptAPIKey (encodeUtf8 envCfg.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
+            let encryptedKeyB64 = B64.encodeBase64 encryptedKey
+            let keyPrefix = encryptedKeyB64
+            pApiKey <- liftIO $ ProjectApiKeys.newProjectApiKeys pid projectKeyUUID "Default API Key" keyPrefix
+            ProjectApiKeys.insertProjectApiKey pApiKey
+            liftIO $ ConvertKit.addUserOrganization envCfg.convertkitApiKey (CI.original sess.user.getUser.email) pid.toText cp.title cp.paymentPlan
+            newProjectMembers <- forM usersAndPermissions \(email, permission) -> do
+              userId' <- runMaybeT $ MaybeT (Users.userIdByEmail email) <|> MaybeT (Users.createEmptyUser email)
+              let userId = Unsafe.fromJust userId'
+              liftIO $ ConvertKit.addUserOrganization envCfg.convertkitApiKey email pid.toText cp.title cp.paymentPlan
+              when (userId' /= Just sess.userId) do
+                -- invite the users to the project (Usually as an email)
+                _ <- liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId pid email cp.title
+                pass
+              pure (email, permission, userId)
+            let projectMembers =
+                  newProjectMembers
+                    & filter (\(_, _, id') -> id' /= sess.userId)
+                    & map (\(email, permission, id') -> ProjectMembers.CreateProjectMembers pid id' permission)
+                    & cons (ProjectMembers.CreateProjectMembers pid sess.userId Projects.PAdmin)
+            ProjectMembers.insertProjectMembers projectMembers
+          _ <- liftIO $ withResource appCtx.pool \conn ->
+            createJob conn "background_jobs" $ BackgroundJobs.CreatedProjectSuccessfully sess.userId pid (original sess.user.getUser.email) cp.title
+          let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Created Project Successfully"]}|]
+          let bdy = createProjectBody sess envCfg cp.isUpdate cp (def @CreateProjectFormError) Nothing Nothing
+          pure $ addHeader hxTriggerData $ addHeader ("/p/" <> pid.toText <> "/about_project") bdy
 
 ----------------------------------------------------------------------------------------------------------
 -- createProjectBody is the core html view

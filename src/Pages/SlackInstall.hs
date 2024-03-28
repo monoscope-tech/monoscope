@@ -5,22 +5,20 @@ module Pages.SlackInstall (getH, linkProjectsGetH, linkProjectGetH, postH, LinkP
 
 import Control.Lens ((.~), (^.))
 import Data.Aeson
+import Data.Aeson qualified as AE
+import Data.Aeson.QQ
 import Data.Default
 import Data.Text
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT
-import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Fmt (dateDashF, fmt)
-import Lucid
-import System.Config
-
-import Data.Aeson qualified as AE
-import Data.Aeson.QQ
 import Database.PostgreSQL.Simple (Only (Only))
+import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Deriving.Aeson qualified as DAE
 import Effectful.PostgreSQL.Transact.Effect
 import Effectful.Reader.Static (ask, asks)
+import Fmt (dateDashF, fmt)
+import Lucid
 import Lucid.Htmx (hxPost_)
 import Models.Apis.Slack (insertAccessToken)
 import Models.Projects.Projects (updateNotificationsChannel)
@@ -39,41 +37,37 @@ import System.Types
 import Utils (faIcon_)
 import Web.FormUrlEncoded (FromForm)
 
-
 data LinkProjectsForm = LinkProjectsForm
-  { projects :: [Text]
-  , webhookUrl :: Text
+  { projects :: [Text],
+    webhookUrl :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
 
-
 data IncomingWebhook = IncomingWebhook
-  { channel :: Text
-  , channelId :: Text
-  , configurationUrl :: Text
-  , url :: Text
+  { channel :: Text,
+    channelId :: Text,
+    configurationUrl :: Text,
+    url :: Text
   }
   deriving stock (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] IncomingWebhook
 
-
 data TokenResponse = TokenResponse
-  { ok :: Bool
-  , incomingWebhook :: IncomingWebhook
+  { ok :: Bool,
+    incomingWebhook :: IncomingWebhook
   }
   deriving stock (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] TokenResponse
-
 
 exchangeCodeForToken :: Text -> Text -> Text -> Text -> IO (Maybe TokenResponse)
 exchangeCodeForToken clientId clientSecret redirectUri code = do
   let formData :: [FormParam]
       formData =
-        [ "client_id" := clientId
-        , "client_secret" := clientSecret
-        , "code" := code
-        , "redirect_uri" := redirectUri
+        [ "client_id" := clientId,
+          "client_secret" := clientSecret,
+          "code" := code,
+          "redirect_uri" := redirectUri
         ]
 
   let hds = header "Content-Type" .~ ["application/x-www-form-urlencoded; charset=utf-8"]
@@ -84,9 +78,8 @@ exchangeCodeForToken clientId clientSecret redirectUri code = do
       return $ Just token
     Nothing -> return Nothing
 
-
 updateWebHook :: Projects.ProjectId -> LinkProjectsForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
-updateWebHook pid LinkProjectsForm{projects, webhookUrl} = do
+updateWebHook pid LinkProjectsForm {projects, webhookUrl} = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
@@ -97,9 +90,8 @@ updateWebHook pid LinkProjectsForm{projects, webhookUrl} = do
   let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Webhook url updated successfully"]} |]
   pure $ addHeader hxTriggerData $ span_ [] "Projects linked successfully"
 
-
 postH :: LinkProjectsForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
-postH LinkProjectsForm{projects, webhookUrl} = do
+postH LinkProjectsForm {projects, webhookUrl} = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
@@ -110,17 +102,15 @@ postH LinkProjectsForm{projects, webhookUrl} = do
   let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Slack account linked to project(s),successfully"]} |]
   pure $ addHeader hxTriggerData $ span_ [] "Projects linked successfully"
 
-
 getH :: Maybe Text -> ATBaseCtx (Html ())
 getH slack_code = do
   let bwconf =
         (def :: BWConfig)
-          { sessM = Nothing
-          , currProject = Nothing
-          , pageTitle = "Slack Install"
+          { sessM = Nothing,
+            currProject = Nothing,
+            pageTitle = "Slack Install"
           }
   pure $ bodyWrapper bwconf (maybe noTokenFound toLinkPage slack_code)
-
 
 toLinkPage :: Text -> Html ()
 toLinkPage code = do
@@ -132,7 +122,6 @@ toLinkPage code = do
       div_ [class_ "bg-white flex flex-col items-center sm:rounded-md"] do
         h3_ [class_ "mb-6"] "Make sure you are logged in"
         a_ [href_ $ "/slack/link-projects?code=" <> code, class_ "btn btn-primary"] "Link a project(s)"
-
 
 linkProjectsGetH :: Maybe Text -> ATAuthCtx (Html ())
 linkProjectsGetH slack_code = do
@@ -149,13 +138,12 @@ linkProjectsGetH slack_code = do
   token <- liftIO $ exchangeCodeForToken client_id client_secret redirect_uri (fromMaybe "" slack_code)
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = Nothing
-          , pageTitle = "Link a project"
+          { sessM = Just sess,
+            currProject = Nothing,
+            pageTitle = "Link a project"
           }
 
   pure $ bodyWrapper bwconf (maybe noTokenFound (slackPage projects) token)
-
 
 linkProjectGetH :: Projects.ProjectId -> Maybe Text -> ATBaseCtx (Html ())
 linkProjectGetH pid slack_code = do
@@ -167,9 +155,9 @@ linkProjectGetH pid slack_code = do
   token <- liftIO $ exchangeCodeForToken client_id client_secret (redirect_uri <> pid.toText) (fromMaybe "" slack_code)
   let bwconf =
         (def :: BWConfig)
-          { sessM = Nothing
-          , currProject = Nothing
-          , pageTitle = "Slack app installed"
+          { sessM = Nothing,
+            currProject = Nothing,
+            pageTitle = "Slack app installed"
           }
   project <- liftIO $ withPool pool $ Projects.projectById pid
   case (token, project) of
@@ -179,7 +167,6 @@ linkProjectGetH pid slack_code = do
       liftIO $ sendSlackMessage pool pid ("APIToolkit Bot has been linked to your project: " <> project'.title)
       pure $ bodyWrapper bwconf installedSuccess
     (_, _) -> pure $ bodyWrapper bwconf noTokenFound
-
 
 slackPage :: Vector Projects.Project' -> TokenResponse -> Html ()
 slackPage projects token = do
@@ -208,14 +195,12 @@ slackPage projects token = do
                       input_ [type_ "checkbox", id_ project.id.toText, name_ "projects", value_ project.id.toText]
             button_ [class_ "mx-2 mb-2 mt-6 btn btn-primary"] "Link Projects"
 
-
 noTokenFound :: Html ()
 noTokenFound = do
   navBar
   section_ [class_ "h-full mt-[80px] w-[1000px] flex flex-col items-center mx-auto"] do
     h3_ [class_ "text-5xl font-semibold my-8"] "Token Not Found"
     p_ [class_ "text-2xl"] "No slack access token found, reinstall the APIToolkit slack app to try again."
-
 
 installedSuccess :: Html ()
 installedSuccess = do
