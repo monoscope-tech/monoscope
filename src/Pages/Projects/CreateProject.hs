@@ -381,8 +381,8 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
                 "Please select a plan"
                 span_ [class_ "text-red-400"] " *"
               div_ [class_ "grid md:grid-cols-3 gap-4 border-1"] do
-                ( [ ("Free", "20k", "$0", "1", cp.paymentPlan == "Free", "Free")
-                  , ("Pay as you use", "250k", "$1", "3", paymentPlan == "UsageBased", "UsageBased")
+                ( [ ("Free", "20k", "$0", "2", cp.paymentPlan == "Free", "Free")
+                  , ("Pay as you use", "250k", "$1", "Unlimited", paymentPlan == "UsageBased", "UsageBased")
                   ]
                     :: [(Text, Text, Text, Text, Bool, Text)]
                   )
