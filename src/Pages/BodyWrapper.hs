@@ -253,9 +253,12 @@ projectsDropDown currProject projects = do
           a_ [href_ [text| /p/$pidTxt/manage_members |], class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100"] do
             faSprite_ "user-plus" "regular" "h-5 w-5"
             span_ "Manage members"
-          a_ [class_ "p-3 flex gap-3 flex gap-3 items-center rounded hover:bg-gray-100 cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]] do
-            faIcon_ "fa fa-dollar" "fa fa-dollar regular" "h-5 w-5"
-            span_ "Manage billing"
+          if currProject.paymentPlan == "UsageBased"
+            then do
+              a_ [class_ "p-3 flex gap-3 flex gap-3 items-center rounded hover:bg-gray-100 cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]] do
+                faIcon_ "fa fa-dollar" "fa fa-dollar regular" "h-5 w-5"
+                span_ "Manage billing"
+            else do ""
       div_ [class_ "border-t border-gray-100 p-2"] do
         div_ [class_ "flex justify-between content-center items-center py-5 mb-2 "] do
           a_ [href_ "/"] $ h3_ [class_ "text-xl"] "Switch projects"

@@ -282,10 +282,10 @@ editProjectGetH pid = query Select q (Only pid)
 
 updateProject :: CreateProject -> DBT IO Int64
 updateProject cp = do
-  execute Update q (cp.title, cp.description, cp.paymentPlan, cp.timeZone, cp.id)
+  execute Update q (cp.title, cp.description, cp.paymentPlan, cp.subId, cp.firstSubItemId, cp.orderId, cp.timeZone, cp.id)
   where
     q =
-      [sql| UPDATE projects.projects SET title=?,  description=?, payment_plan=?, time_zone=? where id=?;|]
+      [sql| UPDATE projects.projects SET title=?,  description=?, payment_plan=?, sub_id=?, first_sub_item_id=?, order_id=?, time_zone=? where id=?;|]
 
 
 updateProjectReportNotif :: ProjectId -> Text -> DBT IO Int64
