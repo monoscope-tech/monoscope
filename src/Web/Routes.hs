@@ -122,7 +122,7 @@ server pool =
 
 data CookieProtectedRoutes mode = CookieProtectedRoutes
   { projectListGet :: mode :- UVerb 'GET '[HTML] (GetOrRedirect)
-  , dashboardGet :: mode :- "p" :> ProjectId :> QPT "from" :> QPT "to" :> QPT "since" :> UVerb 'GET '[HTML] GetOrRedirect
+  , dashboardGet :: mode :- "p" :> ProjectId :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (Html ())
   , projectCreateGet :: mode :- "p" :> "new" :> Get '[HTML] (Html ()) -- p represents project
   , projectCreatePost :: mode :- "p" :> "new" :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
   , projectSettingsGet :: mode :- "p" :> ProjectId :> "settings" :> Get '[HTML] (Html ())
@@ -130,6 +130,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , notificationsUpdateChannelPost :: mode :- "p" :> ProjectId :> "notifications-channels" :> ReqBody '[FormUrlEncoded] CreateProject.NotifListForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
   , membersManageGet :: mode :- "p" :> ProjectId :> "manage_members" :> Get '[HTML] (Html ())
   , membersManagePost :: mode :- "p" :> ProjectId :> "manage_members" :> ReqBody '[FormUrlEncoded] ManageMembersForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
+  , manageSubscriptionGet :: mode :- "p" :> ProjectId :> "manage_subscription" :> Get '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
   , onboardingGet :: mode :- "p" :> ProjectId :> "onboarding" :> QPB "polling" :> QPB "redirected" :> QPT "current_tab" :> Get '[HTML] (Html ())
   , logExplorerGet :: mode :- "p" :> ProjectId :> "log_explorer" :> QPT "query" :> QPT "cols" :> QPU "cursor" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "layout" :> HXRequest :> HXBoosted :> Get '[HTML] (Html ())
   , logExplorerItemGet :: mode :- "p" :> ProjectId :> "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> Get '[HTML] (Html ())
@@ -189,6 +190,7 @@ cookieProtectedServer =
     , notificationsUpdateChannelPost = CreateProject.updateNotificationsChannel
     , membersManageGet = ManageMembers.manageMembersGetH
     , membersManagePost = ManageMembers.manageMembersPostH
+    , manageSubscriptionGet = ManageMembers.manageSubGetH
     , onboardingGet = Onboarding.onboardingGetH
     , logExplorerGet = Log.apiLogH
     , logExplorerItemGet = LogItem.apiLogItemH

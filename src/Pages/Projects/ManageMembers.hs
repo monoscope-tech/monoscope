@@ -2,10 +2,14 @@ module Pages.Projects.ManageMembers (
   manageMembersGetH,
   manageMembersPostH,
   ManageMembersForm (..),
-) where
+  manageSubGetH,
+)
+where
 
 import BackgroundJobs qualified
-import Data.Aeson (encode)
+import Control.Lens qualified as Lens
+import Data.Aeson (eitherDecode, encode)
+import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.CaseInsensitive (original)
 import Data.Default (def)
@@ -14,6 +18,7 @@ import Data.Pool (withResource)
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
+import Deriving.Aeson qualified as DAE
 import Effectful.PostgreSQL.Transact.Effect
 import Effectful.Reader.Static (ask, asks)
 import Lucid
@@ -23,6 +28,7 @@ import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
+import Network.Wreq
 import OddJobs.Job (createJob)
 import Optics.Core ((^.))
 import Pages.BodyWrapper
@@ -30,6 +36,11 @@ import Pages.NonMember
 import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import Servant
+import Servant (
+  Union,
+  WithStatus (..),
+  respond,
+ )
 import Servant.Htmx
 import System.Config
 import System.Types
@@ -198,3 +209,82 @@ projectMemberRow projMembersM =
   where
     selectedIf :: ProjectMembers.Permissions -> ProjectMembers.Permissions -> [Attribute]
     selectedIf a b = [selected_ "" | a == b]
+
+
+manageSubGetH :: Projects.ProjectId -> ATAuthCtx (Headers '[HXTrigger, HXRedirect] (Html ()))
+manageSubGetH pid = do
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  sess' <- Sessions.getSession
+  let sess = Unsafe.fromJust sess'.persistentSession
+
+  isMember <- dbtToEff $ userIsProjectMember sess pid
+  if not isMember
+    then do
+      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {}|]
+      pure $ addHeader hxTriggerData $ addHeader ("") ""
+    else do
+      project <- dbtToEff $ Projects.projectById pid
+      case project of
+        Just p -> do
+          sub <- liftIO $ getSubscriptionPortalUrl p.subId envCfg.lemonSqueezyApiKey
+          case sub of
+            Nothing -> do
+              let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","errorToast": ["Subscription ID not found"]}|]
+              pure $ addHeader hxTriggerData $ addHeader ("") ""
+            Just s -> do
+              let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {}|]
+              pure $ addHeader hxTriggerData $ addHeader (s.dataVal.attributes.urls.customerPortal) ""
+        Nothing -> do
+          let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","errorToast": ["Project not found"]}|]
+          pure $ addHeader hxTriggerData $ addHeader ("") ""
+
+
+getSubscriptionPortalUrl :: Maybe Text -> Text -> IO (Maybe SubResponse)
+getSubscriptionPortalUrl subId apiKey = do
+  case subId of
+    Nothing -> do
+      return Nothing
+    Just sid -> do
+      let hds = header "Authorization" Lens..~ ["Bearer " <> encodeUtf8 @Text @ByteString apiKey]
+      response <- liftIO $ getWith (defaults & hds) ("https://api.lemonsqueezy.com/v1/subscriptions/" <> toString sid)
+      let responseBdy = response Lens.^. responseBody
+      case eitherDecode responseBdy of
+        Right res -> do
+          return $ Just res
+        Left err -> do
+          return Nothing
+
+
+data SubUrls = SubUrls
+  { updatePaymentMethod :: Text
+  , customerPortal :: Text
+  }
+  deriving stock (Show, Generic)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SubUrls
+
+
+data Attributes = Attributes
+  { urls :: SubUrls
+  }
+  deriving stock (Show, Generic)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] Attributes
+
+
+data DataVals = DataVals
+  { attributes :: Attributes
+  }
+  deriving stock (Show, Generic)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] DataVals
+
+
+data SubResponse = SubResponse
+  { dataVal :: DataVals
+  }
+  deriving stock (Show, Generic)
+
+
+instance AE.FromJSON SubResponse where
+  parseJSON = AE.withObject "SubResponse" $ \obj -> do
+    dataVal <- obj AE..: "data"
+    return (SubResponse{dataVal = dataVal})
