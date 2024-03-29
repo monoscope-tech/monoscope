@@ -51,7 +51,6 @@ import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
-import Optics.TH
 import Relude hiding (id)
 import Servant (FromHttpApiData (..))
 import Utils
@@ -203,9 +202,6 @@ data AnomalyVM = AnomalyVM
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "anomalies_vm", PrimaryKey "id", FieldModifiers '[CamelToSnake]] AnomalyVM)
-
-
-makeFieldLabelsNoPrefix ''AnomalyVM
 
 
 getAnomalyVM :: Projects.ProjectId -> Text -> DBT IO (Maybe AnomalyVM)

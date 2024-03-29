@@ -18,6 +18,7 @@
   .card-round {
     @apply bg-white border border-slate-200 rounded-xl shadow-md  shadow-slate-200;
   }
+
 }
 
 :root,
@@ -297,4 +298,8 @@
 }
 .sdk_tab_active {
   @apply border-blue-500 border ring ring-blue-500 shadow-lg
+}
+
+.tab:is(input[type="radio"]) {
+    width: max-content;
 }

@@ -13,24 +13,44 @@ module Web.Auth (
 import Colog (LogAction)
 import Colog.Core ((<&))
 import Control.Error (note)
+import Control.Lens ((.~), (^?))
 import Control.Lens qualified as L
-import Data.Aeson.Lens (key, _String)
+import Control.Monad.Except qualified as T
+import Data.Aeson
+import Data.Aeson qualified as AE
+import Data.Aeson.Lens (key, _Bool, _String)
+import Data.Aeson.QQ (aesonQQ)
+import Data.CaseInsensitive qualified as CI
+import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Pool (Pool)
+import Data.Text.Encoding qualified as Text
 import Data.UUID qualified as UUID
+import Data.UUID.V4 qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (Connection)
+import Effectful
+import Effectful.Dispatch.Static
+import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
+import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
+import Effectful.PostgreSQL.Transact.Effect qualified as DB
+import Effectful.Reader.Static (ask, asks)
+import Log (Logger)
 import Lucid (Html)
 import Lucid.Html5
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
+import Network.HTTP.Types (hCookie)
+import Network.Wai
 import Network.Wai (Request (requestHeaders))
 import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
-import Optics.Operators ((^.))
+import Network.Wreq qualified as Wreq
+import Network.Wreq.Lens (responseBody)
 import Pkg.ConvertKit qualified as ConvertKit
 import Relude hiding (ask, asks)
+import Relude.Unsafe qualified as Unsafe
 import Servant (
   Context (EmptyContext, (:.)),
   Handler,
@@ -42,50 +62,18 @@ import Servant (
   err302,
   noHeader,
  )
-import Servant.Server.Experimental.Auth (AuthHandler, mkAuthHandler)
-import SessionCookies (craftSessionCookie, emptySessionCookie)
-import System.Config (DashboardM, env, pool)
-import Web.Cookie (SetCookie, parseCookies)
-import Prelude (lookup)
-
-import Control.Lens ((.~), (^?))
-import Control.Monad.Except qualified as T
-import Data.Aeson
-import Data.Aeson qualified as AE
-import Data.Aeson.Lens (key, _Bool, _String)
-import Data.Aeson.QQ (aesonQQ)
-import Data.CaseInsensitive qualified as CI
-import Data.List qualified as List
-import Data.Text.Encoding qualified as Text
-import Data.UUID qualified as UUID
-import Data.UUID.V4 qualified as UUID
-import Effectful
-import Effectful.Dispatch.Static
-import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
-import Effectful.Log (Log)
-import Effectful.PostgreSQL.Transact.Effect (DB)
-import Effectful.PostgreSQL.Transact.Effect qualified as DB
-import Effectful.Reader.Static (ask, asks)
-import Log (Logger)
-import Lucid (Html)
-import Lucid.Html5
-import Models.Users.Sessions qualified as Sessions
-import Models.Users.Users qualified as Users
-import Network.HTTP.Types (hCookie)
-import Network.Wai
-import Network.Wreq (defaults, getWith, post)
-import Network.Wreq qualified as Wreq
-import Network.Wreq.Lens (responseBody)
-import Relude hiding (ask, asks)
-import Relude.Unsafe qualified as Unsafe
 import Servant qualified
 import Servant.API (Header, Headers, NoContent (NoContent), addHeader)
 import Servant.Server
 import Servant.Server.Experimental.Auth (AuthHandler, mkAuthHandler)
+import SessionCookies (craftSessionCookie, emptySessionCookie)
 import System.Config
+import System.Config (DashboardM, env, pool)
 import System.Logging qualified as Logging
 import System.Types
 import Web.Cookie
+import Web.Cookie (SetCookie, parseCookies)
+import Prelude (lookup)
 
 
 type APItoolkitAuthContext = AuthHandler Request (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
@@ -193,7 +181,7 @@ logoutH
       )
 logoutH = do
   envCfg <- asks env
-  let redirectTo = envCfg ^. #auth0Domain <> "/v2/logout?client_id=" <> envCfg ^. #auth0ClientId <> "&returnTo=" <> envCfg ^. #auth0LogoutRedirect
+  let redirectTo = envCfg.auth0Domain <> "/v2/logout?client_id=" <> envCfg.auth0ClientId <> "&returnTo=" <> envCfg.auth0LogoutRedirect
   pure $ addHeader redirectTo $ addHeader Sessions.emptySessionCookie NoContent
 
 
@@ -218,7 +206,7 @@ loginH
 loginH = do
   envCfg <- asks env
   stateVar <- liftIO $ UUID.toText <$> UUIDV4.nextRandom
-  let redirectTo = envCfg ^. #auth0Domain <> "/authorize?response_type=code&client_id=" <> envCfg ^. #auth0ClientId <> "&redirect_uri=" <> envCfg ^. #auth0Callback <> "&state=" <> stateVar <> "&scope=openid profile email"
+  let redirectTo = envCfg.auth0Domain <> "/authorize?response_type=code&client_id=" <> envCfg.auth0ClientId <> "&redirect_uri=" <> envCfg.auth0Callback <> "&state=" <> stateVar <> "&scope=openid profile email"
   pure $ addHeader redirectTo $ addHeader emptySessionCookie NoContent
 
 

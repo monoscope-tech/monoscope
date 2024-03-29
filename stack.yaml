@@ -101,7 +101,7 @@ extra-deps:
     subdirs:
       - .
   - git: https://github.com/andrewthad/chronos
-    branch: chessai/ghc981
+    # branch: chessai/ghc981
     commit: b199bf6df1453af95832c2d2f9f0ef48c3622caa
     subdirs:
       - .

@@ -41,12 +41,11 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple.Notification (Notification (notificationChannel))
 import Deriving.Aeson qualified as DAE
 import Effectful.PostgreSQL.Transact.Effect
-import Effectful.Reader.Static (ask, asks)
+import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript
 import Models.Apis.Slack
-import Models.Apis.Slack (getProjectSlackData)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMembers qualified as Projects

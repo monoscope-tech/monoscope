@@ -12,6 +12,7 @@ import Effectful.Reader.Static (ask, asks)
 import Lucid
 import Lucid.Htmx (hxIndicator_, hxPost_, hxSwap_)
 import Lucid.Hyperscript
+import Lucid.Htmx (hxPost_, hxSwap_)
 import Lucid.Svg (d_, fill_, path_, viewBox_)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions

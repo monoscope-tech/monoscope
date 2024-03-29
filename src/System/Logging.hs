@@ -20,7 +20,6 @@ import Effectful.Log qualified as Log
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Log (Logger)
-import Log.Backend.StandardOutput qualified as Log
 import Log.Backend.StandardOutput.Bulk qualified as LogBulk
 import Log.Internal.Logger (withLogger)
 import Relude

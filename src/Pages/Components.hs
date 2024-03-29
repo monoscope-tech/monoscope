@@ -25,7 +25,7 @@ statBox pid title helpInfo val bckupValM = do
             strong_ [class_ "font-bold text-2xl"] $ toHtml @Text $ fmt (commaizeF val)
             maybe "" (\bVal -> small_ $ toHtml @Text $ fmt ("/" +| commaizeF bVal)) bckupValM
           span_ $ toHtml title
-        span_ [class_ "inline-block", term "data-tippy-content" helpInfo] $ mIcon_ "info" "w-4 h-4"
+        span_ [class_ "inline-block tooltip", term "data-tip" helpInfo] $ mIcon_ "info" "w-4 h-4"
     else do
       div_ [class_ "col-span-1 card-round p-5 flex flex-row content-between justify-between"] do
         div_ do
@@ -33,7 +33,7 @@ statBox pid title helpInfo val bckupValM = do
             strong_ [class_ "font-bold text-2xl"] $ toHtml @Text $ fmt (commaizeF val)
             maybe "" (\bVal -> small_ $ toHtml @Text $ fmt ("/" +| commaizeF bVal)) bckupValM
           span_ $ toHtml title
-        span_ [class_ "inline-block", term "data-tippy-content" helpInfo] $ mIcon_ "info" "w-4 h-4"
+        span_ [class_ "inline-block tooltip", term "data-tip" helpInfo] $ mIcon_ "info" "w-4 h-4"
 
 
 getTargetPage :: Text -> Text

@@ -26,7 +26,6 @@ import Database.PostgreSQL.Transact qualified as PgT
 import Models.Apis.Fields.Types (Field, FieldCategoryEnum, FieldId, FieldTypes, SwField)
 import Models.Apis.Fields.Types qualified as FT
 import Models.Projects.Projects qualified as Projects
-import Optics.Core ((^.))
 import Relude
 import Utils (DBField (MkDBField))
 
@@ -39,18 +38,18 @@ insertFieldQueryAndParams :: Field -> (Query, [DBField])
 insertFieldQueryAndParams field = (q, params)
   where
     q =
-      [sql| insert into apis.fields (project_id, endpoint_hash, key, field_type, format, description, key_path, field_category, hash) 
-                    VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING; |]
+      [sql| INSERT into apis.fields (project_id, endpoint_hash, key, field_type, format, description, key_path, field_category, hash) 
+            VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING; |]
     params =
-      [ MkDBField $ field ^. #projectId
-      , MkDBField $ field ^. #endpointHash
-      , MkDBField $ field ^. #key
-      , MkDBField $ field ^. #fieldType
-      , MkDBField $ field ^. #format
-      , MkDBField $ field ^. #description
-      , MkDBField $ field ^. #keyPath
-      , MkDBField $ field ^. #fieldCategory
-      , MkDBField $ field ^. #hash
+      [ MkDBField $ field.projectId
+      , MkDBField $ field.endpointHash
+      , MkDBField $ field.key
+      , MkDBField $ field.fieldType
+      , MkDBField $ field.format
+      , MkDBField $ field.description
+      , MkDBField $ field.keyPath
+      , MkDBField $ field.fieldCategory
+      , MkDBField $ field.hash
       ]
 
 

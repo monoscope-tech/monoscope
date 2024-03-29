@@ -21,7 +21,6 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import Optics.Operators ()
-import Optics.TH ()
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Projects.CreateProject qualified as CreateProject
 import Relude

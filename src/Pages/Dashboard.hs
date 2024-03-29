@@ -15,8 +15,9 @@ import Data.Time (
 import Data.Time.Format (defaultTimeLocale)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as Vector
-import Effectful.PostgreSQL.Transact.Effect
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
+import Effectful.Time qualified as Time
 import Fmt
 import Lucid
 import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_)
@@ -75,7 +76,7 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
   let sess = Unsafe.fromJust sess'.persistentSession
   let currUserId = sess.userId
 
-  now <- liftIO getCurrentTime
+  now <- Time.currentTime
   let sinceStr = if isNothing fromDStr && isNothing toDStr && isNothing sinceStr' || fromDStr == Just "" then Just "7D" else sinceStr'
   (hasApikeys, hasRequest, newEndpoints) <- dbtToEff do
     -- apiKeys <- ProjectApiKeys.countProjectApiKeysByProjectId pid

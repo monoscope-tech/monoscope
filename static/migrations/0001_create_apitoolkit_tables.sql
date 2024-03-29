@@ -14,6 +14,7 @@ CREATE EXTENSION IF NOT EXISTS tablefunc;
 CREATE SCHEMA IF NOT EXISTS users;
 CREATE SCHEMA IF NOT EXISTS projects;
 CREATE SCHEMA IF NOT EXISTS apis;
+CREATE SCHEMA IF NOT EXISTS monitors;
 
 
 -----------------------------------------------------------------------
@@ -867,6 +868,28 @@ CREATE TABLE IF NOT EXISTS apis.slack
   webhook_url   TEXT        NOT     NULL   DEFAULT        '',
   UNIQUE (project_id)
 );
+
+
+
+CREATE TABLE IF NOT EXISTS monitors.query_monitors 
+(
+  id                           UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  project_id                   UUID NOT NULL REFERENCES projects.projects(id)        ON DELETE CASCADE,
+  created_at                   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+  updated_at                   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+  alert_threshold              INT NOT NULL,
+  warning_threshold            INT,
+  log_query                    TEXT NOT NULL DEFAULT '',
+  log_query_as_sql             TEXT NOT NULL DEFAULT '',
+  last_evaluated               TIMESTAMP WITH TIME ZONE,
+  warning_last_triggered       TIMESTAMP WITH TIME ZONE,
+  alert_last_triggered         TIMESTAMP WITH TIME ZONE,
+  trigger_less_than            BOOL,
+  threshold_sustained_for_mins INT NOT NULL DEFAULT 0,
+  alert_config                   JSONB NOT NULL DEFAULT '{}'
+);
+SELECT manage_updated_at('monitors.query_monitors');
+
 
 COMMIT;
 

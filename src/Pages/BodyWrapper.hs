@@ -208,8 +208,8 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
               else
                 remove <.log-item-context-menu /> then remove .with-context-menu from <.with-context-menu /> then
                 get #log-item-context-menu-tmpl.innerHTML then put it after me then add .with-context-menu to me then 
-                _hyperscript.processNode(document.querySelector('.log-item-context-menu'))
-                htmx.process(document.querySelector('.log-item-context-menu'))
+                _hyperscript.processNode(.log-item-context-menu)
+                htmx.process(.log-item-context-menu)
               end
               halt
             end

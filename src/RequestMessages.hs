@@ -1,7 +1,5 @@
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE PartialTypeSignatures #-}
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE TemplateHaskell #-}
 
 module RequestMessages (
   RequestMessage (..),
@@ -17,7 +15,6 @@ import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEK
 import Data.Aeson.QQ (aesonQQ)
 import Data.Aeson.Types qualified as AET
-import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
 import Data.Digest.XXHash
 import Data.HashMap.Strict qualified as HM
@@ -45,14 +42,11 @@ import Models.Apis.Fields.Types qualified as Fields (
   fieldTypeToText,
  )
 import Models.Apis.Formats qualified as Formats
-import Models.Apis.RequestDumps (SDKTypes (GoOutgoing, JsAxiosOutgoing))
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation
 import Numeric (showHex)
-import Optics.Core
-import Optics.TH
 import Relude
 import Relude.Unsafe as Unsafe hiding (head)
 import Text.Regex.TDFA ((=~))
@@ -97,9 +91,6 @@ data RequestMessage = RequestMessage
   deriving
     (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestMessage
-
-
-makeFieldLabelsNoPrefix ''RequestMessage
 
 
 -- | Walk the JSON once, redact any fields which are in the list of json paths to be redacted.
@@ -192,8 +183,8 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
           <> reqBodyFieldsDTO
           <> respBodyFieldsDTO
   let (fields, formats) = unzip fieldsDTO
-  let fieldHashes = Vector.fromList $ sort $ map (^. #hash) fields
-  let formatHashes = Vector.fromList $ sort $ map (^. #hash) formats
+  let fieldHashes = Vector.fromList $ sort $ map (.hash) fields
+  let formatHashes = Vector.fromList $ sort $ map (.hash) formats
 
   --- FIXME: why are we not using the actual url params?
   -- Since it foes into the endpoint, maybe it should be the keys and their type? I'm unsure.
@@ -307,7 +298,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   pure (Just query, Just params, Just reqDumpP)
 
 
-isRequestOutgoing :: SDKTypes -> Bool
+isRequestOutgoing :: RequestDumps.SDKTypes -> Bool
 isRequestOutgoing sdkType
   | T.isSuffixOf "Outgoing" (show sdkType) = True
   | otherwise = False

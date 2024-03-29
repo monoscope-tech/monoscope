@@ -43,7 +43,6 @@ import Database.PostgreSQL.Transact (DBT)
 import Deriving.Aeson qualified as DAE
 import GHC.Records (HasField (getField))
 import Models.Users.Users qualified as Users
-import Optics.TH
 import Relude
 import Web.HttpApiData
 
@@ -131,9 +130,6 @@ data Project = Project
     via (GenericEntity '[Schema "projects", TableName "projects", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Project)
 
 
-makeFieldLabelsNoPrefix ''Project
-
-
 -- FIXME: Why was this record created? And not the regular projects record?
 data Project' = Project'
   { id :: ProjectId
@@ -181,9 +177,6 @@ data ProjectCache = ProjectCache
   deriving anyclass (FromRow)
 
 
-makeFieldLabelsNoPrefix ''ProjectCache
-
-
 data CreateProject = CreateProject
   { id :: ProjectId
   , title :: Text
@@ -199,9 +192,6 @@ data CreateProject = CreateProject
   deriving
     (Entity)
     via (GenericEntity '[Schema "projects", TableName "projects", PrimaryKey "id", FieldModifiers '[CamelToSnake]] CreateProject)
-
-
-makeFieldLabelsNoPrefix ''CreateProject
 
 
 -- FIXME: We currently return an object with empty vectors when nothing was found.

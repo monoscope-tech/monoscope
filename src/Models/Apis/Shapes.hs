@@ -1,5 +1,4 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE TemplateHaskell #-}
 
 module Models.Apis.Shapes (Shape (..), ShapeWithFields (..), SwShape (..), ShapeId (..), getShapeFields, shapeIdText, insertShapeQueryAndParam, insertShapes, shapesByEndpointHashes, shapesByEndpointHash) where
 
@@ -23,7 +22,6 @@ import Models.Apis.Fields.Types
 import Models.Apis.Fields.Types qualified as Fields
 import Models.Projects.Projects qualified as Projects
 import Models.Projects.Projects qualified as Projescts
-import Optics.TH
 import Relude
 import Utils (DBField (MkDBField))
 import Web.HttpApiData (FromHttpApiData)
@@ -91,9 +89,6 @@ data Shape = Shape
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Shape
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "shapes", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Shape)
   deriving (FromField) via Aeson Shape
-
-
-Optics.TH.makeFieldLabelsNoPrefix ''Shape
 
 
 insertShapeQueryAndParam :: Shape -> (Query, [DBField])

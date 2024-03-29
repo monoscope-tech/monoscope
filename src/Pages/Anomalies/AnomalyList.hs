@@ -49,7 +49,6 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Network.URI (escapeURIString, isUnescapedInURI, isUnreserved)
 import OddJobs.Job (createJob)
-import Optics.Core ((^.))
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Charts.Charts (QueryBy)
 import Pages.Charts.Charts qualified as Charts
@@ -291,12 +290,12 @@ anomalyList paramInput pid currTime anomalies nextFetchUrl = form_ [class_ "col-
         a_ [class_ " w-2 h-full"] ""
         input_ [term "aria-label" "Select Issue", type_ "checkbox"]
       div_ [class_ " grow flex flex-row gap-2"] do
-        button_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/acknowlege", hxSwap_ "none"] "✓ acknowlege"
-        button_ [class_ "btn-sm bg-transparent space-x-1 border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/archive", hxSwap_ "none"] do
+        button_ [class_ "btn btn-sm btn-outline border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/acknowlege", hxSwap_ "none"] "✓ acknowlege"
+        button_ [class_ "btn btn-sm btn-outline space-x-1 border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/archive", hxSwap_ "none"] do
           faSprite_ "inbox-full" "solid" "h-4 w-4 inline-block"
           span_ "archive"
       div_ [class_ "relative inline-block"] do
-        a_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl space-x-2", [__|on click toggle .hidden on #sortMenuDiv |]] do
+        a_ [class_ "btn btn-sm btn-outline border-black hover:shadow-2xl space-x-2", [__|on click toggle .hidden on #sortMenuDiv |]] do
           mIcon_ "sort" "h-4 w-4"
           span_ $ toHtml currentSortTitle
         div_ [id_ "sortMenuDiv", hxBoost_ "true", class_ "p-1 hidden text-sm border border-black-30 absolute right-0 z-10 mt-2 w-72 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none", tabindex_ "-1"] do
@@ -347,7 +346,7 @@ anomalyListSlider _ pid eid Nothing = do
         span_ [class_ "text-lg text-slate-700"] "Ongoing Anomalies and Monitors"
       div_ [class_ "flex flex-row mt-2"] ""
 anomalyListSlider currTime _ _ (Just anomalies) = do
-  let anomalyIds = replace "\"" "'" $ show $ fmap (Anomalies.anomalyIdText . (^. #id)) anomalies
+  let anomalyIds = replace "\"" "'" $ show $ fmap (Anomalies.anomalyIdText . (.id)) anomalies
   let totalAnomaliesTxt = toText $ if length anomalies > 50 then ("50+" :: Text) else show (length anomalies)
   div_ do
     script_ [text| var rem = (x,y)=>((x%y)==0?1:(x%y)); |]

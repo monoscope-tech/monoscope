@@ -150,8 +150,8 @@ endpointList' paramInput currTime pid enps inbox_count = form_ [class_ "col-span
   let bulkActionBase = "/p/" <> pid.toText <> "/anomalies/bulk_actions"
   let currentURL' = deleteParam "sort" paramInput.currentURL
   let sortMenu =
-        [ ("First Seen", "First time the issue occured", "first_seen")
-        , ("Last Seen", "Last time the issue occured", "last_seen")
+        [ ("First Seen", "First time the endpoint was seen", "first_seen")
+        , ("Last Seen", "Last time the endpoint was seen", "last_seen")
         , ("Events", "Number of events", "events")
         ]
           :: [(Text, Text, Text)]
@@ -161,8 +161,8 @@ endpointList' paramInput currTime pid enps inbox_count = form_ [class_ "col-span
       a_ [class_ " w-2 h-full"] ""
       input_ [term "aria-label" "Select Issue", type_ "checkbox"]
     div_ [class_ " grow flex flex-row gap-2"] do
-      button_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/acknowlege", hxSwap_ "none"] "✓ acknowlege"
-      button_ [class_ "btn-sm bg-transparent space-x-1 border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/archive", hxSwap_ "none"] do
+      button_ [class_ "btn btn-sm btn-outline border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/acknowlege", hxSwap_ "none"] "✓ acknowlege"
+      button_ [class_ "btn btn-sm btn-outline space-x-1 border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/archive", hxSwap_ "none"] do
         faSprite_ "fa-inbox" "solid" "h-4 w-4 inline-block"
         span_ "archive"
     div_ [class_ "relative inline-block"] do

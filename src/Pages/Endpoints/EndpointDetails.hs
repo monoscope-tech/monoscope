@@ -17,9 +17,8 @@ import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
-import Database.PostgreSQL.Entity.DBT (withPool)
 import Effectful.PostgreSQL.Transact.Effect
-import Effectful.Reader.Static (ask, asks)
+import Effectful.Reader.Static (ask)
 import Fmt
 import Lucid
 import Lucid.Htmx
@@ -35,7 +34,6 @@ import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation
-import Optics.Core ((^.))
 import Pages.Anomalies.AnomalyList qualified as AnomaliesList
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Charts.Charts qualified as C
@@ -84,10 +82,8 @@ fieldDetailsPartialH :: Projects.ProjectId -> Fields.FieldId -> ATAuthCtx (Html 
 fieldDetailsPartialH pid fid = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let env = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
-  let currUserId = sess.userId
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
@@ -96,7 +92,7 @@ fieldDetailsPartialH pid fid = do
     else do
       (fieldsM, formats) <- dbtToEff do
         field <- Fields.fieldById fid
-        formats <- Formats.formatsByFieldHash (maybe "" (^. #hash) field)
+        formats <- Formats.formatsByFieldHash (maybe "" (.hash) field)
         pure (field, formats)
       case fieldsM of
         Nothing -> pure ""
@@ -219,10 +215,8 @@ endpointDetailsWithHashH :: Projects.ProjectId -> Text -> ATAuthCtx (Headers '[H
 endpointDetailsWithHashH pid endpoint_hash = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let env = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
-  let currUserId = sess.userId
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
@@ -244,10 +238,8 @@ endpointDetailsH :: Projects.ProjectId -> Endpoints.EndpointId -> Maybe Text -> 
 endpointDetailsH pid eid fromDStr toDStr sinceStr' subPageM shapeHashM = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let env = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
-  let currUserId = sess.userId
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember

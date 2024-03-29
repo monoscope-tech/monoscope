@@ -10,7 +10,6 @@ import Data.UUID qualified as UUID
 import Database.PostgreSQL.Entity.DBT (QueryNature (Insert), execute, withPool)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Log.Backend.StandardOutput.Bulk qualified as LogBulk
-import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Pkg.TmpPg qualified as TmpPg
@@ -20,7 +19,6 @@ import Relude.Unsafe qualified as Unsafe
 import RequestMessages qualified
 import System.Clock
 import System.Config qualified as Config
-import System.Logging qualified as Logging
 import System.Types
 import Test.Hspec
 

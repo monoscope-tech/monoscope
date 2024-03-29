@@ -1,4 +1,6 @@
-module Pages.Log where
+module Pages.Log (
+  apiLogH,
+) where
 
 import Control.Error (hush)
 import Data.Aeson (Value)
@@ -20,12 +22,13 @@ import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as V
 import Data.Vector qualified as Vector
 import Effectful.PostgreSQL.Transact.Effect
-import Effectful.Reader.Static (ask, asks)
+import Effectful.Reader.Static (ask)
+import Fmt (commaizeF, fmt)
 import Lucid
+import Lucid.Aria qualified as Aria
 import Lucid.Base
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
-import Lucid.Svg (use_)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
@@ -244,10 +247,21 @@ apiLogsPage page = do
 
     div_ [class_ "card-round w-full grow divide-y flex flex-col text-sm h-full overflow-y-hidden overflow-x-hidden"] do
       div_ [class_ "flex-1 "] do
-        div_ [class_ "pl-3 py-1 flex flex-row justify-between"]
-          $ a_ [class_ "cursor-pointer inline-block pr-3 space-x-2 bg-blue-50 hover:bg-blue-100 blue-800 p-1 rounded-md", [__|on click toggle .hidden on #reqsChartParent|]] do
+        div_ [class_ "pl-3 py-1 flex flex-row justify-between"] do
+          a_ [class_ "cursor-pointer inline-block pr-3 space-x-2 bg-blue-50 hover:bg-blue-100 blue-800 p-1 rounded-md", [__|on click toggle .hidden on #reqsChartParent|]] do
             faIcon_ "fa-chart-bar" "fa-regular fa-chart-bar" "h-3 w-3 inline-block"
             span_ [] "toggle chart"
+          a_
+            [ class_ "cursor-pointer flex gap-2 items-center pr-3"
+            , hxGet_ page.resetLogsURL
+            , hxTarget_ "#log-item-table-body"
+            , hxSwap_ "innerHTML scroll:#log-item-table-body:top"
+            , hxIndicator_ "#refresh-indicator"
+            ]
+            do
+              span_ [id_ "refresh-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-md"] ""
+              faIcon_ "fa-refresh" "fa-regular fa-refresh" "h-3 w-3 inline-block"
+              span_ [] "refresh"
         reqChart_ page.reqChartTxt False
       resultTableAndMeta_ page
       jsonTreeAuxillaryCode page.pid
@@ -255,30 +269,137 @@ apiLogsPage page = do
 
 resultTableAndMeta_ :: ApiLogsPageData -> Html ()
 resultTableAndMeta_ page = do
-  div_ [class_ "flex-1 pl-3 py-2 space-x-5 flex flex-row justify-between"]
-    $ resultTableMetaRow_ page
-  section_ [class_ "grow relative overflow-y-scroll h-full"] do
-    resultTable_ page
+  section_ [class_ " w-full h-full"] $ section_ [class_ " w-full tabs tabs-bordered items-start", role_ "tablist"] do
+    input_ [type_ "radio", name_ "logExplorerMain", role_ "tab", class_ "tab", checked_, Aria.label_ $ "Query results (" <> fmt (commaizeF page.resultCount) <> ")"]
+    div_ [class_ "relative overflow-y-scroll h-full tab-content", role_ "tabpanel"] $ resultTable_ page
+
+    input_ [type_ "radio", name_ "logExplorerMain", role_ "tab", class_ "tab", Aria.label_ $ "Alerts"]
+    div_ [class_ "relative overflow-y-scroll h-full tab-content", role_ "tabpanel"] do
+      div_ [hxGet_ $ "/p/" <> page.pid.toText <> "/alerts", hxTrigger_ "intersect", hxSwap_ "innerHTML"] ""
+
+    input_ [type_ "radio", name_ "logExplorerMain", role_ "tab", class_ "tab", Aria.label_ $ "Save as Alert"]
+    div_ [class_ "relative overflow-y-scroll h-full tab-content p-3", role_ "tabpanel"] $ editAlert_ page.pid
 
 
-resultTableMetaRow_ :: ApiLogsPageData -> Html ()
-resultTableMetaRow_ page = do
-  div_ [class_ "inline-block space-x-3"] do
-    strong_ "Query results"
-    span_ [class_ "space-x-1"] do
-      span_ [id_ "resultCount"] $ show page.resultCount
-      span_ " log entries"
-  a_
-    [ class_ "cursor-pointer flex gap-2 items-center pr-3"
-    , hxGet_ page.resetLogsURL
-    , hxTarget_ "#log-item-table-body"
-    , hxSwap_ "innerHTML scroll:#log-item-table-body:top"
-    , hxIndicator_ "#refresh-indicator"
+editAlert_ :: Projects.ProjectId -> Html ()
+editAlert_ pid = do
+  form_
+    [ class_ "join join-vertical w-full max-w-3xl"
+    , hxPost_ $ "/p/" <> pid.toText <> "/alerts"
+    , hxVals_ "js:{query:getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all'}"
+    , hxSwap_ "none"
+    , termRaw "hx-on::after-request" "this.reset()"
     ]
     do
-      span_ [id_ "refresh-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-md"] ""
-      svg_ [class_ "w-4 h-4 icon text-slate-500 inline-block"] $ use_ [href_ "/assets/svgs/sprite/sprite.svg#refresh"]
-      span_ [] "refresh"
+      input_ [name_ "alertId", value_ "", type_ "hidden"]
+
+      div_ [class_ "flex gap-5 py-5"] do
+        label_ [class_ " flex items-center gap-2 justify-between pl-5 text-lg pr-5"] "Alert Title"
+        input_ [class_ "grow input input-bordered", type_ "text", placeholder_ "Title of alert", name_ "title"]
+
+      div_ [class_ "collapse collapse-arrow join-item border border-base-300"] do
+        input_ [class_ "", name_ "createAlertAccordion", checked_, type_ "radio"]
+        div_ [class_ "collapse-title text-xl font-medium  "] do
+          span_ [class_ "badge badge-error mr-3"] "1"
+          "Alert conditions"
+        div_ [class_ "collapse-content"] do
+          div_ [class_ "py-3"] do
+            span_ "Trigger when the metric is "
+            select_ [class_ "select select-bordered inline-block mx-2 "] do
+              option_ [selected_ ""] "above"
+              option_ "below"
+            span_ "the threshold during the last"
+            select_ [class_ "select select-bordered inline-block mx-2 "] do
+              option_ "1 minute"
+              option_ [selected_ ""] "5 minutes"
+              option_ "10 minutes"
+          div_ [class_ "space-y-2"] do
+            div_ [class_ "flex gap-5"] do
+              label_ [class_ "flex items-center gap-2 w-1/3 justify-between pl-5"] do
+                span_ [class_ ""] "Alert threshold"
+                faSprite_ "chevron-right" "solid" "w-3 h-3"
+              input_
+                [ class_ "grow input input-bordered input-error "
+                , id_ "alertThreshold"
+                , [__|on input updateMarkAreas('reqsChartsEC',#warningThreshold.value, #alertThreshold.value) |]
+                , type_ "number"
+                , placeholder_ "Enter value"
+                , name_ "alertThreshold"
+                , required_ ""
+                ]
+            div_ [class_ "flex gap-5"] do
+              label_ [class_ " flex items-center gap-2 w-1/3 justify-between pl-5"] do
+                span_ "Warning threshold"
+                faSprite_ "chevron-right" "solid" "w-3 h-3"
+              input_
+                [ class_ "grow input input-bordered input-warning"
+                , id_ "warningThreshold"
+                , [__|on input updateMarkAreas('reqsChartsEC',#warningThreshold.value, #alertThreshold.value) |]
+                , type_ "number"
+                , placeholder_ "optional"
+                , name_ "warningThreshold"
+                ]
+
+      div_ [class_ "collapse collapse-arrow join-item border border-base-300"] do
+        input_ [class_ "", name_ "createAlertAccordion", type_ "radio"]
+        div_ [class_ "collapse-title text-xl font-medium "] do
+          span_ [class_ "badge badge-error mr-3"] "2"
+          "Alert Message"
+        div_ [class_ "collapse-content space-y-4"] do
+          div_ [class_ "form-control w-full"] do
+            label_ [class_ "label"] $ span_ [class_ "label-text"] "Severity"
+            select_ [class_ "select select-bordered w-full", name_ "severity"] do
+              option_ "Info"
+              option_ "Warning"
+              option_ "Error"
+              option_ "Critical"
+          div_ [class_ "form-control w-full"] do
+            label_ [class_ "label"] $ span_ [class_ "label-text"] "Subject"
+            input_ [placeholder_ "Error: Error subject", class_ "input input-bordered  w-full", name_ "subject"]
+          div_ [class_ "form-control w-full"] do
+            label_ [class_ "label"] $ span_ [class_ "label-text"] "Message"
+            textarea_ [placeholder_ "Alert Message", class_ "textarea textarea-bordered textarea-md w-full", name_ "message"] ""
+
+      div_ [class_ "collapse collapse-arrow join-item border border-base-300 space-y-4"] do
+        input_ [class_ "", name_ "createAlertAccordion", type_ "radio"]
+        div_ [class_ "collapse-title text-xl font-medium "] do
+          span_ [class_ "badge badge-error mr-3"] "2"
+          "Notification Channels"
+        div_ [class_ "collapse-content"] do
+          h4_ [class_ "text-lg"] "Add individuals, teams or channels that should be notified when this alert triggers"
+          p_ "Alert rules with no recipients will still be triggered and can be viewed form the Changes and Errors page"
+          section_ [class_ "relative space-y-4 space-x-4 py-3", id_ "recipientListParent"] do
+            div_ [class_ "dropdown", id_ "addRecipientDropdown"] do
+              div_
+                [ tabindex_ "0"
+                , role_ "button"
+                , class_ "btn m-1"
+                -- [__|on click toggle .dropdown-open on the closest .dropdown|]
+                ]
+                "Add recipient"
+              ul_ [tabindex_ "0", style_ "bottom:100%;top:auto", class_ "bottom-full top-auto dropdown-content z-[1] menu p-2 shadow bg-base-100 rounded-box w-52 min-w-[15rem]"] do
+                li_ $ a_ [[__|on click put #addRecipientEmailAllTmpl.innerHTML after #addRecipientDropdown then _hyperscript.processNode(#recipientListParent) |]] "Email everyone"
+                li_ $ a_ [[__|on click put #addRecipientEmailTmpl.innerHTML after #addRecipientDropdown then _hyperscript.processNode(#recipientListParent) |]] "Email ..."
+                li_ $ a_ [[__|on click put #addRecipientSlackTmpl.innerHTML after #addRecipientDropdown then _hyperscript.processNode(#recipientListParent) |]] "To default Slack channel"
+
+      div_ [class_ "py-5"] do
+        button_ [type_ "submit", class_ "btn btn-success"] "Create Alert"
+
+  template_ [id_ "addRecipientSlackTmpl"] $
+    label_ [class_ "input input-bordered inline-flex items-center gap-2"] do
+      "Slack"
+      input_ [class_ "grow", class_ "input", placeholder_ "#channelName", type_ "text", required_ "", name_ "recipientSlack"]
+      a_ [class_ "badge badge-base", [__|on click remove the closest parent <label/>|]] $ faIcon_ "fa-xmark" "fa-solid fa-xmark" "w-3 h-3"
+  template_ [id_ "addRecipientEmailTmpl"] $
+    label_ [class_ "input input-bordered inline-flex items-center gap-2"] do
+      "Email"
+      input_ [class_ "grow", class_ "input", placeholder_ "name@site.com", type_ "email", required_ "", name_ "recipientEmail"]
+      a_ [class_ "badge badge-base", [__|on click remove the closest parent <label/>|]] $ faIcon_ "fa-xmark" "fa-solid fa-xmark" "w-3 h-3"
+  template_ [id_ "addRecipientEmailAllTmpl"] $
+    label_ [class_ "input input-bordered inline-flex items-center gap-2"] do
+      "Email Everyone"
+      input_ [class_ "grow", class_ "input", placeholder_ "name@site.com", type_ "hidden", value_ "True", name_ "recipientEmailAll"]
+      a_ [class_ "badge badge-base", [__|on click remove the closest parent <label/>|]] $ faIcon_ "fa-xmark" "fa-solid fa-xmark" "w-3 h-3"
 
 
 resultTable_ :: ApiLogsPageData -> Html ()
@@ -312,25 +433,25 @@ logItemRows_ pid requests curatedCols colIdxMap nextLogsURL = do
   forM_ requests \reqVec -> do
     let logItemPath = requestDumpLogItemUrlPath pid reqVec colIdxMap
     let (_, errCount, errClass) = errorClass True reqVec colIdxMap
-    tr_ [class_ "cursor-pointer ", [__|on click toggle .hidden on next <tr/> then toggle .expanded-log on me|]]
-      $ forM_ curatedCols (td_ . logItemCol_ pid reqVec colIdxMap)
+    tr_ [class_ "cursor-pointer ", [__|on click toggle .hidden on next <tr/> then toggle .expanded-log on me|]] $
+      forM_ curatedCols (td_ . logItemCol_ pid reqVec colIdxMap)
     tr_ [class_ "hidden"] $ do
       -- used for when a row is expanded.
-      td_ $ a_ [class_ $ "inline-block h-full  " <> errClass, term "data-tip" $ show errCount <> " errors attached to this request"] ""
+      td_ $ a_ [class_ $ "inline-block h-full " <> errClass, term "data-tippy-content" $ show errCount <> " errors attached to this request"] ""
       td_ [colspan_ $ show $ length curatedCols - 1] $ div_ [hxGet_ $ fromMaybe "" logItemPath, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
-  when (Vector.length requests > 199)
-    $ tr_
-    $ td_ [colspan_ $ show $ length curatedCols]
-    $ a_
-      [ class_ "cursor-pointer inline-flex justify-center py-1 px-56 ml-36 blue-800 bg-blue-100 hover:bg-blue-200 text-center "
-      , hxTrigger_ "click"
-      , hxSwap_ "outerHTML"
-      , hxGet_ nextLogsURL
-      , hxTarget_ "closest tr"
-      -- , hxIndicator_ "next .htmx-indicator"
-      ]
-      do
-        span_ [class_ "inline-block"] "LOAD MORE " >> span_ [class_ "htmx-indicator loading loading-dots loading-lg inline-block pl-3"] loader
+  when (Vector.length requests > 199) $
+    tr_ $
+      td_ [colspan_ $ show $ length curatedCols] $
+        a_
+          [ class_ "cursor-pointer inline-flex justify-center py-1 px-56 ml-36 blue-800 bg-blue-100 hover:bg-blue-200 text-center "
+          , hxTrigger_ "click"
+          , hxSwap_ "outerHTML"
+          , hxGet_ nextLogsURL
+          , hxTarget_ "closest tr"
+          -- , hxIndicator_ "next .htmx-indicator"
+          ]
+          do
+            span_ [class_ "inline-block"] "LOAD MORE " >> span_ [class_ "htmx-indicator loading loading-dots loading-lg inline-block pl-3"] loader
 
 
 errorClass :: Bool -> V.Vector Value -> HM.HashMap Text Int -> (Int, Int, Text)
@@ -359,10 +480,9 @@ logTableHeading_ pid isLogEventB col = logTableHeadingWrapper_ pid col $ toHtml 
 logTableHeadingWrapper_ :: Projects.ProjectId -> Text -> Html () -> Html ()
 logTableHeadingWrapper_ pid title child = td_
   [ class_ "bg-base-200 cursor-pointer p-0 m-0 "
-  , term "data-tip" title
   ]
   $ div_
-    [class_ "dropdown"]
+    [class_ "dropdown", term "data-tippy-content" title]
     do
       div_ [tabindex_ "0", role_ "button", class_ "py-2 px-3 block"] child
       ul_ [tabindex_ "0", class_ "dropdown-content z-[1] menu p-2 shadow bg-base-100 rounded-box min-w-[15rem]"] do
@@ -386,7 +506,7 @@ logItemCol_ pid reqVec colIdxMap "id" = do
   let (status, errCount, errClass) = errorClass False reqVec colIdxMap
   let logItemPath = requestDumpLogItemUrlPath pid reqVec colIdxMap
   div_ [class_ "grid grid-cols-3 gap-4 items-center max-w-8"] do
-    a_ [class_ $ "col-span-1 shrink-0 inline-block h-full w-1 " <> errClass, term "data-tip" $ show errCount <> " errors attached to this request; status " <> show status] " "
+    a_ [class_ $ "col-span-1 shrink-0 inline-block h-full w-1 " <> errClass, term "data-tippy-content" $ show errCount <> " errors attached to this request; status " <> show status] " "
     button_
       [ class_ "col-span-1"
       , hxGet_ (fromMaybe "" logItemPath <> "/detailed")
@@ -395,22 +515,22 @@ logItemCol_ pid reqVec colIdxMap "id" = do
       ]
       $ faSprite_ "link" "solid" "h-3 w-3 text-blue-500"
     faSprite_ "chevron-right" "solid" "h-3 w-3 col-span-1 ml-1 text-gray-500 chevron log-chevron "
-logItemCol_ _ reqVec colIdxMap "created_at" = span_ [class_ "font-mono whitespace-nowrap", term "data-tip" "timestamp"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "created_at"
-logItemCol_ _ reqVec colIdxMap "status_code" = span_ [class_ $ "badge " <> getStatusColor (lookupVecIntByKey reqVec colIdxMap "status_code"), term "data-tip" "status"] $ toHtml $ show $ lookupVecIntByKey reqVec colIdxMap "status_code"
-logItemCol_ _ reqVec colIdxMap "method" = span_ [class_ $ "min-w-[4rem] badge " <> maybe "badge-ghost" getMethodColor (lookupVecTextByKey reqVec colIdxMap "method")] $ toHtml $ fromMaybe "/" $ lookupVecTextByKey reqVec colIdxMap "method"
+logItemCol_ _ reqVec colIdxMap "created_at" = span_ [class_ "font-mono whitespace-nowrap ", term "data-tippy-content" "timestamp"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "created_at"
+logItemCol_ _ reqVec colIdxMap "status_code" = span_ [class_ $ "badge " <> getStatusColor (lookupVecIntByKey reqVec colIdxMap "status_code"), term "data-tippy-content" "status"] $ toHtml $ show $ lookupVecIntByKey reqVec colIdxMap "status_code"
+logItemCol_ _ reqVec colIdxMap "method" = span_ [class_ $ "min-w-[4rem] badge " <> maybe "badge-ghost" getMethodColor (lookupVecTextByKey reqVec colIdxMap "method"), term "data-tippy-content" "method"] $ toHtml $ fromMaybe "/" $ lookupVecTextByKey reqVec colIdxMap "method"
 logItemCol_ pid reqVec colIdxMap key@"rest" = div_ [class_ "space-x-2 whitespace-nowrap max-w-8xl overflow-x-hidden "] do
   if lookupVecTextByKey reqVec colIdxMap "request_type" == Just "Incoming"
-    then span_ [class_ "text-center w-3 inline-flex", term "data-tip" "Incoming Request"] $ faIcon_ "fa-arrow-down-left" "fa-solid fa-arrow-down-left" "h-3 w-3 text-gray-400"
-    else span_ [class_ "text-center w-3 inline-flex", term "data-tip" "Outgoing Request"] $ faIcon_ "fa-arrow-up-right" "fa-solid fa-arrow-up-right" "h-3 w-3 text-green-500"
+    then span_ [class_ "text-center w-3 inline-flex ", term "data-tippy-content" "Incoming Request"] $ faIcon_ "fa-arrow-down-left" "fa-solid fa-arrow-down-left" "h-3 w-3 text-gray-400"
+    else span_ [class_ "text-center w-3 inline-flex ", term "data-tippy-content" "Outgoing Request"] $ faIcon_ "fa-arrow-up-right" "fa-solid fa-arrow-up-right" "h-3 w-3 text-green-500"
   logItemCol_ pid reqVec colIdxMap "status_code"
   logItemCol_ pid reqVec colIdxMap "method"
-  span_ [class_ "badge badge-ghost", term "data-tip" "URL Path"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "url_path"
-  span_ [class_ "badge badge-ghost", term "data-tip" "Host"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "host"
+  span_ [class_ "badge badge-ghost ", term "data-tippy-content" "URL Path"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "url_path"
+  span_ [class_ "badge badge-ghost ", term "data-tippy-content" "Host"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "host"
   span_ [] $ toHtml $ maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)
 logItemCol_ _ reqVec colIdxMap key =
-  div_ [class_ "xwhitespace-nowrap xoverflow-x-hidden max-w-lg", term "data-tip" key]
-    $ toHtml
-    $ maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)
+  div_ [class_ "xwhitespace-nowrap xoverflow-x-hidden max-w-lg ", term "data-tippy-content" key] $
+    toHtml $
+      maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)
 
 
 reqChart_ :: Text -> Bool -> Html ()
@@ -634,4 +754,47 @@ jsonTreeAuxillaryCode pid = do
       window.setQueryBuilderFromParams()
     })
 
+
+
+function updateMarkAreas(chartId, warningVal, incidentVal) {
+  warningVal = parseInt(warningVal, 10);
+  incidentVal = parseInt(incidentVal, 10)
+  var myChart = echarts.getInstanceByDom(document.getElementById(chartId));
+
+  // Retrieve the current chart options
+  var options = myChart.getOption();
+
+  // Iterate over each series to update markAreas
+  options.series.forEach((seriesItem) => {
+      // Reset markArea data for clean update
+      seriesItem.markArea = {label:{show:false}, data: []};
+
+      // Define markArea for Warning if warningVal is not null
+      if (warningVal !== null && warningVal!=NaN) {
+          seriesItem.markArea.data.push([{
+              name: 'Warning',
+              yAxis: warningVal,
+              itemStyle: {
+                  color: 'rgba(255, 212, 0, 0.4)'
+              }
+          }, {
+              yAxis: incidentVal
+          }]);
+      }
+
+      // Define markArea for Incident
+      seriesItem.markArea.data.push([{
+          name: 'Incident',
+          yAxis: incidentVal,
+          itemStyle: {
+              color: 'rgba(255, 173, 177, 0.5)'
+          }
+      }, {
+          yAxis: 'max'
+      }]);
+  });
+
+  // Apply the updated options back to the chart
+  myChart.setOption({series: options.series}, false);
+}
     |]

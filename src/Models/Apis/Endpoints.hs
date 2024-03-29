@@ -49,7 +49,6 @@ import Deriving.Aeson qualified as DAE
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
-import Optics.TH (makeFieldLabelsNoPrefix)
 import Relude
 import Utils (DBField (MkDBField))
 import Web.HttpApiData (FromHttpApiData)
@@ -92,9 +91,6 @@ data Endpoint = Endpoint
   deriving anyclass (FromRow, ToRow, Default, NFData)
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Endpoint
   deriving (FromField) via Aeson Endpoint
-
-
-makeFieldLabelsNoPrefix ''Endpoint
 
 
 -- | endpointToUrlPath builds an apitoolkit path link to the endpoint details page of that endpoint.

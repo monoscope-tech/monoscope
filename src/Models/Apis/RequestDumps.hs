@@ -2,7 +2,6 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE StrictData #-}
-{-# LANGUAGE TemplateHaskell #-}
 
 module Models.Apis.RequestDumps (
   RequestDump (..),
@@ -56,16 +55,12 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField (toField))
 import Database.PostgreSQL.Simple.Types (Query (Query))
-import Database.PostgreSQL.Transact (DBT, executeMany, getConnection)
+import Database.PostgreSQL.Transact (DBT, executeMany)
 import Database.PostgreSQL.Transact qualified as DBT
-import Debug.Pretty.Simple (pTraceShow, pTraceShowM)
 import Deriving.Aeson qualified as DAE
-import Models.Apis.Anomalies (AnomalyTypes)
-import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Fields.Query ()
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
-import Optics.TH
 import Pkg.Parser
 import Relude hiding (many, some)
 import Utils (DBField (MkDBField), quoteTxt)
@@ -300,9 +295,6 @@ data EndpointPerf = EndpointPerf
     via (GenericEntity '[Schema "apis", TableName "request_dumps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] EndpointPerf)
 
 
-makeFieldLabelsNoPrefix ''RequestForReport
-
-
 -- RequestDumpLogItem is used in the to query log items for the log query explorer on the dashboard. Each item here can be queried
 -- via the query language on said dashboard page.
 data RequestDumpLogItem = RequestDumpLogItem
@@ -336,9 +328,6 @@ data RequestDumpLogItem = RequestDumpLogItem
   deriving stock (Show, Generic, Eq)
   deriving anyclass (ToRow, FromRow, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestDumpLogItem
-
-
-makeFieldLabelsNoPrefix ''RequestDumpLogItem
 
 
 requestDumpLogItemUrlPath :: Projects.ProjectId -> RequestDumpLogItem -> Text
@@ -496,7 +485,6 @@ bulkInsertRequestDumps = executeMany q
 selectRequestDumpByProjectAndId :: Projects.ProjectId -> UTCTime -> UUID.UUID -> DBT IO (Maybe RequestDumpLogItem)
 selectRequestDumpByProjectAndId pid createdAt rdId = queryOne Select q (createdAt, pid, rdId)
   where
-    createdAtZ = utcToZonedTime utc createdAt
     q =
       [sql|SELECT   id,created_at,project_id, host,url_path,method,raw_url,referer,
                     path_params,status_code,query_params,
