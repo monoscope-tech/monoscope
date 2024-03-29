@@ -4,13 +4,14 @@ import Data.CaseInsensitive qualified as CI
 import Data.Default (Default)
 import Data.Vector qualified as Vector
 import Lucid
+import Lucid.Htmx
 import Lucid.Hyperscript
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import NeatInterpolation
 import Relude
-import Utils (faSprite_)
+import Utils (faIcon_, faSprite_)
 
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
@@ -246,15 +247,15 @@ projectsDropDown currProject projects = do
             strong_ [class_ "block"] $ toHtml currProject.title
             small_ [class_ "block text-blue-800"] $ toHtml currProject.paymentPlan
         nav_ [] do
-          a_ [href_ [text| /p/$pidTxt/settings |], class_ "p-3 flex gap-3 rounded-2xl hover:bg-gray-100"] do
+          a_ [href_ [text| /p/$pidTxt/settings |], class_ "p-3 flex gap-3 items-center rounded-2xl hover:bg-gray-100"] do
             faSprite_ "gear" "sharp-regular" "h-5 w-5"
             span_ "Settings"
-          a_ [href_ [text| /p/$pidTxt/manage_members |], class_ "p-3 flex gap-3 rounded hover:bg-gray-100"] do
+          a_ [href_ [text| /p/$pidTxt/manage_members |], class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100"] do
             faSprite_ "user-plus" "regular" "h-5 w-5"
             span_ "Manage members"
-          a_ [class_ "hidden p-3 flex gap-3 rounded hover:bg-gray-100 "] do
-            faSprite_ "dollar" "regular" "h-5 w-5"
-            span_ "Billing and usage"
+          a_ [class_ "p-3 flex gap-3 flex gap-3 items-center rounded hover:bg-gray-100 cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]] do
+            faIcon_ "fa fa-dollar" "fa fa-dollar regular" "h-5 w-5"
+            span_ "Manage billing"
       div_ [class_ "border-t border-gray-100 p-2"] do
         div_ [class_ "flex justify-between content-center items-center py-5 mb-2 "] do
           a_ [href_ "/"] $ h3_ [class_ "text-xl"] "Switch projects"

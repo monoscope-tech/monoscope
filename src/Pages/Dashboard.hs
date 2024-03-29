@@ -65,7 +65,7 @@ data ParamInput = ParamInput
   }
 
 
-dashboardGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Union GetOrRedirect)
+dashboardGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
 dashboardGetH pid fromDStr toDStr sinceStr' = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
@@ -77,10 +77,10 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
   now <- liftIO getCurrentTime
   let sinceStr = if isNothing fromDStr && isNothing toDStr && isNothing sinceStr' || fromDStr == Just "" then Just "7D" else sinceStr'
   (hasApikeys, hasRequest, newEndpoints) <- dbtToEff do
-    apiKeys <- ProjectApiKeys.countProjectApiKeysByProjectId pid
-    requestDumps <- RequestDumps.countRequestDumpByProject pid
+    -- apiKeys <- ProjectApiKeys.countProjectApiKeysByProjectId pid
+    -- requestDumps <- RequestDumps.countRequestDumpByProject pid
     newEndpoints <- Endpoints.endpointRequestStatsByProject pid False False Nothing Nothing
-    pure (apiKeys > 0, requestDumps > 0, newEndpoints)
+    pure (True, True, newEndpoints)
   -- TODO: Replace with a duration parser.
   let (fromD, toD) = case sinceStr of
         Just "1H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just $ utcToZonedTime utc now)
@@ -118,9 +118,7 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
   let currentURL = "/p/" <> pid.toText <> "?&from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
   let currentPickerTxt = fromMaybe (maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD) sinceStr
   let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt}
-  if not hasApikeys || not hasRequest
-    then respond $ WithStatus @302 $ redirect ("/p/" <> pid.toText <> "/onboarding")
-    else respond $ WithStatus @200 $ bodyWrapper bwconf $ dashboardPage pid paramInput currTime projectRequestStats newEndpoints reqLatenciesRolledByStepsJ (fromD, toD)
+  pure $ bodyWrapper bwconf $ dashboardPage pid paramInput currTime projectRequestStats newEndpoints reqLatenciesRolledByStepsJ (fromD, toD)
 
 
 dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Vector.Vector Endpoints.EndpointRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
