@@ -1,25 +1,21 @@
 module Pages.Survey (surveyGetH, surveyPutH, SurveyForm) where
 
+import Data.Aeson
+import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
+import Data.List ((!!))
 import Data.Text qualified as T
+import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute, withPool)
+import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Effectful.PostgreSQL.Transact.Effect
+import Effectful.Reader.Static (ask, asks)
 import Lucid
 import Lucid.Htmx (hxPost_, hxSwap_)
-import Lucid.Hyperscript
 import Lucid.Svg (d_, fill_, path_, viewBox_)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import System.Config
-
-import Data.Aeson
-import Data.Aeson.QQ (aesonQQ)
-import Data.List ((!!))
-import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute, withPool)
-import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Effectful.PostgreSQL.Transact.Effect
-import Effectful.Reader.Static (ask, asks)
-import Models.Users.Sessions qualified as Sessions
 import Pages.NonMember
 import Pkg.Components (loader)
 import Relude hiding (ask, asks)

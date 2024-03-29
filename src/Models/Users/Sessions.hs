@@ -1,7 +1,6 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE TemplateHaskell #-}
 
 module Models.Users.Sessions (
   PersistentSessionId (..),
@@ -26,13 +25,12 @@ import Control.Monad.IO.Class
 import Data.Default
 import Data.Map.Strict qualified as Map
 import Data.Pool
-import Data.Text
+import Data.Text.Display
 import Data.Time
-import Data.UUID
+import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity
-import Database.PostgreSQL.Entity (Entity, delete, insert, selectById)
 import Database.PostgreSQL.Entity.DBT (QueryNature (..))
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Entity.Types
@@ -42,36 +40,16 @@ import Database.PostgreSQL.Simple.Newtypes
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField
 import Database.PostgreSQL.Transact hiding (DB, execute, queryOne)
-import Models.Projects.Projects qualified as Projects
-import Models.Users.Users (UserId)
-import Models.Users.Users qualified as Users
-import Optics.TH
-import Relude
-import Web.HttpApiData
-
-import Data.Default (Default (..))
-import Data.Map.Strict qualified as Map
-import Data.Text (Text)
-import Data.Text.Display
-import Data.Time (UTCTime, utc, utcToZonedTime)
-import Data.UUID (UUID)
-import Data.UUID qualified as UUID
-import Data.UUID.V4 qualified as UUID
-import Database.PostgreSQL.Entity (Entity, delete, insert, selectById)
-import Database.PostgreSQL.Entity.Types (GenericEntity, Schema, TableName)
-import Database.PostgreSQL.Simple
-import Database.PostgreSQL.Simple.FromField (FromField)
-import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
-import Database.PostgreSQL.Simple.ToField (ToField)
 import Effectful
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static (Reader, asks)
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
-import GHC.Generics
+import Models.Projects.Projects qualified as Projects
+import Models.Users.Users (UserId)
 import Models.Users.Users qualified as Users
 import Relude
-import Servant (AuthProtect, FromHttpApiData (..), Header, Headers, ServerError, ToHttpApiData, addHeader, getResponse)
+import Servant (Header, Headers, addHeader, getResponse)
 import Web.Cookie (
   SetCookie (
     setCookieHttpOnly,
@@ -85,14 +63,15 @@ import Web.Cookie (
   defaultSetCookie,
   sameSiteLax,
  )
+import Web.HttpApiData
 
 
-newtype PersistentSessionId = PersistentSessionId {getPersistentSessionId :: UUID}
+newtype PersistentSessionId = PersistentSessionId {getPersistentSessionId :: UUID.UUID}
   deriving
     (Show, Eq, FromField, ToField, FromHttpApiData, ToHttpApiData, Default)
-    via UUID
+    via UUID.UUID
   deriving newtype (NFData)
-  deriving (Display) via ShowInstance UUID
+  deriving (Display) via ShowInstance UUID.UUID
 
 
 newtype SessionData = SessionData {getSessionData :: Map Text Text}
@@ -137,9 +116,6 @@ data PersistentSession = PersistentSession
   deriving
     (Entity)
     via (GenericEntity '[Schema "users", TableName "persistent_sessions", PrimaryKey "id"] PersistentSession)
-
-
-makeFieldLabelsNoPrefix ''PersistentSession
 
 
 newPersistentSessionId :: IO PersistentSessionId

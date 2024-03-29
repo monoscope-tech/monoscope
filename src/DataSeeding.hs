@@ -24,7 +24,6 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
-import Optics.TH (makeFieldLabelsNoPrefix)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.NonMember
 import ProcessMessage qualified
@@ -49,9 +48,6 @@ data FieldConfig = FieldConfig
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] FieldConfig
 
 
-makeFieldLabelsNoPrefix ''FieldConfig
-
-
 data SeedConfig = SeedConfig
   { from :: ZonedTime
   , to :: ZonedTime
@@ -70,9 +66,6 @@ data SeedConfig = SeedConfig
   }
   deriving stock (Show, Generic)
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SeedConfig
-
-
-makeFieldLabelsNoPrefix ''SeedConfig
 
 
 fieldConfigToField :: FieldConfig -> Fake (Text, AE.Value)

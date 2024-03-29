@@ -1,6 +1,5 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE TemplateHaskell #-}
 
 module Models.Users.Users (
   User (..),
@@ -16,34 +15,45 @@ module Models.Users.Users (
 ) where
 
 import Data.Aeson (FromJSON (parseJSON), ToJSON (toJSON))
-import Data.CaseInsensitive (CI)
 import Data.CaseInsensitive qualified as CI
 import Data.Default
 import Data.Default.Instances ()
 import Data.Time (ZonedTime, getZonedTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
-import Database.PostgreSQL.Entity
+import Database.PostgreSQL.Entity (
+  Entity,
+  insert,
+  selectById,
+  selectOneByField,
+ )
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, queryOne)
-import Database.PostgreSQL.Entity.Types
+import Database.PostgreSQL.Entity.Types (
+  CamelToSnake,
+  FieldModifiers,
+  GenericEntity,
+  PrimaryKey,
+  Schema,
+  TableName,
+  field,
+ )
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact qualified as PgT
 import Deriving.Aeson qualified as DAE
-import Effectful
+import Effectful (Eff, type (:>))
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import GHC.Records (HasField (getField))
-import Optics.TH
 import Relude
 
 
-instance FromJSON (CI Text) where
+instance FromJSON (CI.CI Text) where
   parseJSON = fmap CI.mk . parseJSON
 
 
-instance ToJSON (CI Text) where
+instance ToJSON (CI.CI Text) where
   toJSON = toJSON . CI.original
 
 
@@ -73,7 +83,7 @@ data User = User
   , firstName :: Text
   , lastName :: Text
   , displayImageUrl :: Text
-  , email :: CI Text
+  , email :: CI.CI Text
   , phoneNumber :: Maybe Text
   }
   deriving stock (Show, Generic)
@@ -84,9 +94,6 @@ data User = User
   deriving
     (Entity)
     via (GenericEntity '[Schema "users", TableName "users", PrimaryKey "id", FieldModifiers '[CamelToSnake]] User)
-
-
-makeFieldLabelsNoPrefix ''User
 
 
 createUserId :: IO UserId

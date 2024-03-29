@@ -242,7 +242,6 @@ documentationPutH :: Projects.ProjectId -> SaveSwaggerForm -> ATAuthCtx (Headers
 documentationPutH pid SaveSwaggerForm{updated_swagger, swagger_id, endpoints, diffsInfo} = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
   let currUserId = sess.userId
@@ -289,7 +288,6 @@ documentationPostH :: Projects.ProjectId -> SwaggerForm -> ATAuthCtx (Headers '[
 documentationPostH pid SwaggerForm{swagger_json, from} = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
   let currUserId = sess.userId
@@ -327,7 +325,6 @@ documentationGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (Html ())
 documentationGetH pid swagger_id = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
   let currUserId = sess.userId

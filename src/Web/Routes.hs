@@ -36,6 +36,7 @@ import Pages.GenerateSwagger qualified as GenerateSwagger
 import Pages.Log qualified as Log
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.ManualIngestion qualified as ManualIngestion
+import Pages.Monitors.Alerts qualified as Alerts
 import Pages.Onboarding qualified as Onboarding
 import Pages.Outgoing qualified as Outgoing
 import Pages.Projects.CreateProject qualified as CreateProject
@@ -55,9 +56,8 @@ import Servant.API.Generic
 import Servant.API.UVerb
 import Servant.HTML.Lucid (HTML)
 import Servant.Htmx
-import Servant.Htmx (HXRedirect)
 import Servant.Server.Generic (AsServerT)
-import System.Config (AuthContext, EnvConfig)
+import System.Config (AuthContext)
 import System.Types
 import Utils
 import Web.Auth (APItoolkitAuthContext, authHandler)
@@ -174,6 +174,8 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , surveyPut :: mode :- "p" :> ProjectId :> "survey" :> ReqBody '[FormUrlEncoded] Survey.SurveyForm :> Post '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
   , surveyGet :: mode :- "p" :> ProjectId :> "about_project" :> Get '[HTML] (Html ())
   , editField :: mode :- "p" :> ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> ReqBody '[FormUrlEncoded] FieldDetails.EditFieldForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
+  , alertUpsertPost :: mode :- "p" :> ProjectId :> "alerts" :> ReqBody '[FormUrlEncoded] Alerts.AlertUpsertForm :> Post '[HTML] (Html ())
+  , alertListGet :: mode :- "p" :> ProjectId :> "alerts" :> Get '[HTML] (Html ())
   }
   deriving stock (Generic)
 
@@ -234,6 +236,8 @@ cookieProtectedServer =
     , surveyPut = Survey.surveyPutH
     , surveyGet = Survey.surveyGetH
     , editField = FieldDetails.fieldPutH
+    , alertUpsertPost = Alerts.alertUpsertPostH
+    , alertListGet = Alerts.alertListGetH
     }
 
 

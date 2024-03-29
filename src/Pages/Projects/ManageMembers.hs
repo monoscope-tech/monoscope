@@ -19,8 +19,12 @@ import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Deriving.Aeson qualified as DAE
+import Data.Vector (Vector)
+import Data.Vector qualified as Vector
+import Database.PostgreSQL.Entity.DBT (withPool)
+import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect
-import Effectful.Reader.Static (ask, asks)
+import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript
@@ -30,7 +34,6 @@ import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import Network.Wreq
 import OddJobs.Job (createJob)
-import Optics.Core ((^.))
 import Pages.BodyWrapper
 import Pages.NonMember
 import Relude hiding (ask, asks)
@@ -60,7 +63,6 @@ manageMembersPostH :: Projects.ProjectId -> ManageMembersForm -> ATAuthCtx (Head
 manageMembersPostH pid form = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
   let currUserId = sess.userId
@@ -85,19 +87,19 @@ manageMembersPostH pid form = do
       let uAndPOldAndChanged =
             mapMaybe
               ( \(email, permission) -> do
-                  let projMembersM = projMembers & find (\a -> original (a ^. #email) == email && a ^. #permission /= permission)
-                  projMembersM >>= (\projMember -> Just (projMember ^. #id, permission))
+                  let projMembersM = projMembers & find (\a -> original (a.email) == email && a.permission /= permission)
+                  projMembersM >>= (\projMember -> Just (projMember.id, permission))
               )
               usersAndPermissions
 
-      let uAndPNew = filter (\(email, _) -> not $ any (\a -> original (a ^. #email) == email) projMembers) usersAndPermissions
-      let projectTitle = maybe "" (^. #title) project
+      let uAndPNew = filter (\(email, _) -> not $ any (\a -> original (a.email) == email) projMembers) usersAndPermissions
+      let projectTitle = maybe "" (.title) project
 
       let deletedUAndP =
-            Vector.toList projMembers
-              & filter (\pm -> not $ any (\(email, _) -> original (pm ^. #email) == email) usersAndPermissions)
-              & filter (\a -> a ^. #userId /= currUserId)
-              & map (\a -> a ^. #id) -- We should not allow deleting the current user from the project
+            V.toList projMembers
+              & filter (\pm -> not $ any (\(email, _) -> original (pm.email) == email) usersAndPermissions)
+              & filter (\a -> a.userId /= currUserId)
+              & map (.id) -- We should not allow deleting the current user from the project
 
       -- Create new users and send notifications
       newProjectMembers <- forM uAndPNew \(email, permission) -> do
@@ -145,7 +147,6 @@ manageMembersGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
 manageMembersGetH pid = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
 
@@ -162,7 +163,7 @@ manageMembersGetH pid = do
       pure $ bodyWrapper bwconf $ manageMembersBody projMembers
 
 
-manageMembersBody :: Vector ProjectMembers.ProjectMemberVM -> Html ()
+manageMembersBody :: V.Vector ProjectMembers.ProjectMemberVM -> Html ()
 manageMembersBody projMembers =
   section_ [id_ "main-content", class_ "p-6"] do
     h2_ [class_ "text-slate-700 text-2xl font-medium mb-5"] "Manage project members"
@@ -195,9 +196,9 @@ projectMemberRow projMembersM =
       [ name_ "emails"
       , class_ "w-2/3 h-10 px-5 my-2 w-full text-sm bg-white text-slate-700 font-light border-solid border border-gray-200 rounded-2xl border-0 "
       , placeholder_ "name@example.com"
-      , value_ (maybe "" (original . (^. #email)) projMembersM)
+      , value_ (maybe "" (original . (.email)) projMembersM)
       ]
-    let permission = maybe ProjectMembers.PView (^. #permission) projMembersM
+    let permission = maybe ProjectMembers.PView (.permission) projMembersM
     select_ [name_ "permissions", class_ "w-1/3 h-10 px-5  my-2 w-full text-sm bg-white text-zinc-500 border-solid border border-gray-200 rounded-2xl border-0"] do
       option_ ([class_ "text-gray-500", value_ "admin"] <> selectedIf ProjectMembers.PAdmin permission) "Admin"
       option_ ([class_ "text-gray-500", value_ "edit"] <> selectedIf ProjectMembers.PEdit permission) "Can Edit"
