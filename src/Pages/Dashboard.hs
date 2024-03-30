@@ -44,7 +44,7 @@ import System.Clock
 import System.Config
 import System.Types
 import Text.Interpolation.Nyan
-import Utils (GetOrRedirect, deleteParam, faIcon_, mIcon_, redirect)
+import Utils (GetOrRedirect, deleteParam, faIcon_, freeTierLimitExceededBanner, mIcon_, redirect)
 import Witch (from)
 
 
@@ -97,7 +97,7 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
           (f, t)
 
   startTime <- liftIO $ getTime Monotonic
-  (project, projectRequestStats, reqLatenciesRolledByStepsLabeled) <- dbtToEff do
+  (project, projectRequestStats, reqLatenciesRolledByStepsLabeled, freeTierExceeded) <- dbtToEff do
     project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
 
     projectRequestStats <- fromMaybe (def :: Projects.ProjectRequestStats) <$> Projects.projectRequestStatsByProject pid
@@ -105,7 +105,14 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
     let steps' = (maxV `quot` 100) :: Int
     let steps = if steps' == 0 then 100 else steps'
     reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledByStepsForProject maxV steps pid (fromD, toD)
-    pure (project, projectRequestStats, Vector.toList reqLatenciesRolledBySteps)
+    freeTierExceeded <-
+      if (Unsafe.fromJust project).paymentPlan == "Free"
+        then do
+          totalRequest <- RequestDumps.getTotalRequestForCurrentMonth pid
+          return $ totalRequest > 20000
+        else do
+          return False
+    pure (project, projectRequestStats, Vector.toList reqLatenciesRolledBySteps, freeTierExceeded)
 
   let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
   let bwconf =
@@ -118,14 +125,15 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
   let currentURL = "/p/" <> pid.toText <> "?&from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
   let currentPickerTxt = fromMaybe (maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD) sinceStr
   let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt}
-  pure $ bodyWrapper bwconf $ dashboardPage pid paramInput currTime projectRequestStats newEndpoints reqLatenciesRolledByStepsJ (fromD, toD)
+  pure $ bodyWrapper bwconf $ dashboardPage pid paramInput currTime projectRequestStats newEndpoints reqLatenciesRolledByStepsJ (fromD, toD) freeTierExceeded
 
 
-dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Vector.Vector Endpoints.EndpointRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
-dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRolledByStepsJ dateRange = do
+dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Vector.Vector Endpoints.EndpointRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Bool -> Html ()
+dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRolledByStepsJ dateRange exceededFreeTier = do
   let currentURL' = deleteParam "to" $ deleteParam "from" $ deleteParam "since" paramInput.currentURL
   let bulkActionBase = "/p/" <> pid.toText <> "/anomalies/bulk_actions"
   section_ [class_ "p-8  mx-auto px-16 w-full space-y-12 pb-24 overflow-y-scroll  h-full"] do
+    when exceededFreeTier $ freeTierLimitExceededBanner pid.toText
     unless (null newEndpoints)
       $ div_ [id_ "modalContainer"] do
         input_ [type_ "checkbox", id_ "newEndpointsModal", class_ "modal-toggle"]

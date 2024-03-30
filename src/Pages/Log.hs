@@ -87,6 +87,14 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoostedM
       let tableAsVec = Unsafe.fromJust $ hush $ tableAsVecE
 
       reqChartTxt <- dbtToEff $ RequestDumps.throughputBy pid Nothing Nothing Nothing Nothing Nothing (3 * 60) Nothing queryM (utcToZonedTime utc <$> fromD, utcToZonedTime utc <$> toD)
+      freeTierExceeded <-
+        dbtToEff
+          $ if (Unsafe.fromJust project).paymentPlan == "Free"
+            then do
+              totalRequest <- RequestDumps.getTotalRequestForCurrentMonth pid
+              return $ totalRequest > 20000
+            else do
+              return False
       let (requestVecs, colNames, requestsCount) = tableAsVec
           curatedColNames = nubOrd $ curateCols summaryCols colNames
           colIdxMap = listToIndexHashMap colNames
@@ -104,6 +112,7 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoostedM
               , nextLogsURL
               , resetLogsURL
               , currentRange
+              , exceededFreeTier = freeTierExceeded
               }
 
       case (layoutM, hxRequestM, hxBoostedM) of
@@ -203,12 +212,14 @@ data ApiLogsPageData = ApiLogsPageData
   , nextLogsURL :: Text
   , resetLogsURL :: Text
   , currentRange :: Maybe Text
+  , exceededFreeTier :: Bool
   }
 
 
 apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
   section_ [class_ "mx-auto px-10 py-2 gap-2 flex flex-col h-[98%] overflow-hidden ", id_ "apiLogsPage"] do
+    unless page.exceededFreeTier $ freeTierLimitExceededBanner page.pid.toText
     div_
       [ style_ "z-index:26"
       , class_ "fixed hidden right-0 top-0 justify-end left-0 bottom-0 w-full bg-black bg-opacity-5"

@@ -25,7 +25,9 @@ module Utils (
   listToIndexHashMap,
   lookupMapText,
   lookupMapInt,
-) where
+  freeTierLimitExceededBanner,
+)
+where
 
 import Data.Aeson (Value)
 import Data.Aeson qualified as AE
@@ -36,8 +38,8 @@ import Data.Time (ZonedTime)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.ToField (ToField (..))
 import Database.PostgreSQL.Transact
-import Lucid (Html, a_, href_, i_, onclick_, term)
-import Lucid.Svg (class_, svg_, use_)
+import Lucid
+import Lucid.Svg qualified as Svg
 import Models.Projects.ProjectMembers (ProjectMembers (ProjectMembers))
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
@@ -84,17 +86,17 @@ instance ToField DBField where
 
 
 mIcon_ :: Text -> Text -> Html ()
-mIcon_ mIcon classes = svg_ [class_ $ "inline-block icon " <> classes] $ use_ [href_ $ "/assets/svgs/symbol-defs.svg#icon-" <> mIcon]
+mIcon_ mIcon classes = svg_ [class_ $ "inline-block icon " <> classes] $ Svg.use_ [href_ $ "/assets/svgs/symbol-defs.svg#icon-" <> mIcon]
 
 
 faSprite_ :: Text -> Text -> Text -> Html ()
-faSprite_ mIcon faType classes = svg_ [class_ $ "inline-block icon " <> classes] $ use_ [href_ $ "/assets/svgs/fa-sprites/" <> faType <> ".svg#" <> mIcon]
+faSprite_ mIcon faType classes = svg_ [class_ $ "inline-block icon " <> classes] $ Svg.use_ [href_ $ "/assets/svgs/fa-sprites/" <> faType <> ".svg#" <> mIcon]
 
 
 faIcon_ :: Text -> Text -> Text -> Html ()
 faIcon_ faIcon faClasses classes = do
   i_ [class_ faClasses, term "data-fa-symbol" faIcon] ""
-  svg_ [class_ classes] $ use_ [href_ $ "#" <> faIcon]
+  svg_ [class_ classes] $ Svg.use_ [href_ $ "#" <> faIcon]
 
 
 faIconWithAnchor_ :: Text -> Text -> Text -> Text -> Html ()
@@ -213,3 +215,10 @@ lookupVecByKey vec colIdxMap key = (HM.lookup key colIdxMap >>= (\x -> vec V.!? 
 
 listToIndexHashMap :: Hashable a => [a] -> HM.HashMap a Int
 listToIndexHashMap list = HM.fromList [(x, i) | (x, i) <- zip list [0 ..]]
+
+
+freeTierLimitExceededBanner :: Text -> Html ()
+freeTierLimitExceededBanner pid =
+  div_ [class_ "flex w-full text-center items-center px-4 gap-4 py-2 bg-red-600 text-white rounded-lg justify-center"] do
+    p_ [] "You have exceeded the maximum free tier requests limit, new request will not be processed."
+    a_ [class_ "font-semibold", href_ $ "/p/" <> pid <> "/settings"] "upgrade now"
