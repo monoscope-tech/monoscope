@@ -220,5 +220,5 @@ listToIndexHashMap list = HM.fromList [(x, i) | (x, i) <- zip list [0 ..]]
 freeTierLimitExceededBanner :: Text -> Html ()
 freeTierLimitExceededBanner pid =
   div_ [class_ "flex w-full text-center items-center px-4 gap-4 py-2 bg-red-600 text-white rounded-lg justify-center"] do
-    p_ [] "You have exceeded the maximum free tier requests limit, new request will not be processed."
+    p_ [] "You have exceeded the maximum free tier requests limit for this month, new request will not be processed."
     a_ [class_ "font-semibold", href_ $ "/p/" <> pid <> "/settings"] "upgrade now"

@@ -174,6 +174,8 @@ data ProjectCache = ProjectCache
     -- [endpointHash]<>[field_category eg requestBody]<>[field_key_path]
     -- Those redact fields that don't have endpoint or field_category attached, would be aplied to every endpoint and field category.
     redactFieldslist :: V.Vector Text
+  , monthlyRequestCount :: Int
+  , paymentPlan :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow)
@@ -204,13 +206,18 @@ makeFieldLabelsNoPrefix ''CreateProject
 
 -- FIXME: We currently return an object with empty vectors when nothing was found.
 projectCacheById :: ProjectId -> DBT IO (Maybe ProjectCache)
-projectCacheById = queryOne Select q
+projectCacheById pid = queryOne Select q (pid, pid, pid)
   where
     q =
       [sql| select  coalesce(ARRAY_AGG(DISTINCT hosts ORDER BY hosts ASC),'{}') hosts, 
                     coalesce(ARRAY_AGG(DISTINCT endpoint_hashes ORDER BY endpoint_hashes ASC),'{}') endpoint_hashes, 
                     coalesce(ARRAY_AGG(DISTINCT shape_hashes ORDER BY shape_hashes ASC),'{}'::text[]) shape_hashes, 
-                    coalesce(ARRAY_AGG(DISTINCT paths ORDER BY paths ASC),'{}') redacted_fields 
+                    coalesce(ARRAY_AGG(DISTINCT paths ORDER BY paths ASC),'{}') redacted_fields,
+                    ( SELECT count(*) FROM apis.request_dumps 
+                     WHERE project_id=? AND EXTRACT(MONTH FROM created_at) = EXTRACT(MONTH FROM CURRENT_DATE)
+                       AND EXTRACT(YEAR FROM created_at) = EXTRACT(YEAR FROM CURRENT_DATE)
+                    ) monthly_request_count,
+                    (SELECT payment_plan from projects.projects where id =?) payment_plan
             from
               (select e.host hosts, e.hash endpoint_hashes, sh.hash shape_hashes, concat(rf.endpoint_hash,'<>', rf.field_category,'<>', rf.path) paths
                 from apis.endpoints e

@@ -132,8 +132,8 @@ processMessages' _ msgs projectCache' = do
   startTime <- liftIO $ getTime Monotonic
   processed <- mapM (processMessage projectCache') msgs
   let (rmAckIds, queries, params, reqDumps) = unzip4 $ rights processed
-  let query' = mconcat queries
-  let params' = concat params
+  let query' = mconcat $ catMaybes queries
+  let params' = concat $ catMaybes params
 
   unless (null $ lefts processed) do
     let leftMsgs = [(a, b) | (Left a, b) <- zip processed msgs]
@@ -151,7 +151,8 @@ processMessages' _ msgs projectCache' = do
       $ handleExceptT (wrapTxtException $ toStrict $ "bulkInsertReqDump => " <> show reqDumps <> show msgs)
       $ void
       $ dbtToEff
-      $ RequestDumps.bulkInsertRequestDumps reqDumps
+      $ RequestDumps.bulkInsertRequestDumps
+      $ catMaybes reqDumps
 
   endTime <- liftIO $ getTime Monotonic
   let msg = fmtLn @String $ "Process Message (" +| length msgs |+ ") pipeline microsecs: queryDuration " +| toNanoSecs (diffTimeSpec startTime afterProccessing) `div` 1000 |+ " -> processingDuration " +| toNanoSecs (diffTimeSpec afterProccessing endTime) `div` 1000 |+ " -> TotalDuration " +| toNanoSecs (diffTimeSpec startTime endTime) `div` 1000 |+ ""
@@ -165,13 +166,21 @@ processMessages' _ msgs projectCache' = do
 
 
 projectCacheDefault :: Projects.ProjectCache
-projectCacheDefault = Projects.ProjectCache{hosts = [], endpointHashes = [], shapeHashes = [], redactFieldslist = []}
+projectCacheDefault =
+  Projects.ProjectCache
+    { hosts = []
+    , endpointHashes = []
+    , shapeHashes = []
+    , redactFieldslist = []
+    , monthlyRequestCount = 0
+    , paymentPlan = ""
+    }
 
 
 processMessage
   :: Cache.Cache Projects.ProjectId Projects.ProjectCache
   -> (Text, RequestMessages.RequestMessage)
-  -> ATBackgroundCtx (Either Text (Text, Query, [DBField], RequestDumps.RequestDump))
+  -> ATBackgroundCtx (Either Text (Text, Maybe Query, Maybe [DBField], Maybe RequestDumps.RequestDump))
 processMessage projectCache (rmAckId, recMsg) = do
   appCtx <- ask @Config.AuthContext
   runExceptT do
@@ -190,10 +199,13 @@ processMessage projectCache (rmAckId, recMsg) = do
               pure $ fromMaybe projectCacheDefault mpjCache
           )
         :: ExceptT Text ATBackgroundCtx (Either SomeException Projects.ProjectCache)
-
     case projectCacheValE of
-      Left e -> throwE $ "An error occurred while fetching project cache: " <> show e
+      Left e -> throwE $ "Ann error occurred while fetching project cache: " <> show e
       Right projectCacheVal -> do
         recId <- liftIO nextRandom
-        (query, params, reqDump) <- except $ RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId
-        pure (rmAckId, query, params, reqDump)
+        if projectCacheVal.paymentPlan == "Free" && projectCacheVal.monthlyRequestCount > 20000
+          then do
+            pure (rmAckId, Nothing, Nothing, Nothing)
+          else do
+            (query, params, reqDump) <- except $ RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId
+            pure (rmAckId, query, params, reqDump)

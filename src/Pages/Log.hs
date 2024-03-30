@@ -219,7 +219,7 @@ data ApiLogsPageData = ApiLogsPageData
 apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
   section_ [class_ "mx-auto px-10 py-2 gap-2 flex flex-col h-[98%] overflow-hidden ", id_ "apiLogsPage"] do
-    unless page.exceededFreeTier $ freeTierLimitExceededBanner page.pid.toText
+    when page.exceededFreeTier $ freeTierLimitExceededBanner page.pid.toText
     div_
       [ style_ "z-index:26"
       , class_ "fixed hidden right-0 top-0 justify-end left-0 bottom-0 w-full bg-black bg-opacity-5"

@@ -137,7 +137,7 @@ replaceNullChars = T.replace "\\u0000" ""
 -- from the google cloud pub sub, and to concatenate their queries so that only a single database call is needed for a batch.
 -- Also, being a pure function means it's easier to test the request processing logic since we can unit test pure functions easily.
 -- We can pass in a request, it's project cache object and inspect the generated sql and params.
-requestMsgToDumpAndEndpoint :: Projects.ProjectCache -> RequestMessages.RequestMessage -> UTCTime -> UUID.UUID -> Either Text (Query, [DBField], RequestDumps.RequestDump)
+requestMsgToDumpAndEndpoint :: Projects.ProjectCache -> RequestMessages.RequestMessage -> UTCTime -> UUID.UUID -> Either Text (Maybe Query, Maybe [DBField], Maybe RequestDumps.RequestDump)
 requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   -- TODO: User dumpID and msgID to get correct ID
   --
@@ -304,7 +304,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
 
   let query = endpointQ <> shapeQ <> mconcat fieldsQ <> mconcat formatsQ
   let params = endpointP <> shapeP <> concat fieldsP <> concat formatsP
-  pure (query, params, reqDumpP)
+  pure (Just query, Just params, Just reqDumpP)
 
 
 isRequestOutgoing :: SDKTypes -> Bool

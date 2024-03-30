@@ -268,7 +268,15 @@ spec = do
               , errors = Nothing
               , tags = Nothing
               }
-      let projectCache = Projects.ProjectCache{hosts = [], endpointHashes = ["abc"], shapeHashes = [], redactFieldslist = []}
+      let projectCache =
+            Projects.ProjectCache
+              { hosts = []
+              , endpointHashes = ["abc"]
+              , shapeHashes = []
+              , redactFieldslist = []
+              , monthlyRequestCount = 0
+              , paymentPlan = ""
+              }
       let result = RequestMessages.requestMsgToDumpAndEndpoint projectCache requestMsg timestamp recId
       case result of
         Left err -> error err
