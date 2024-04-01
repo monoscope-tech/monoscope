@@ -33,6 +33,7 @@ import Pages.Charts.Charts qualified as C
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (statBox)
 import Pages.Endpoints.EndpointList (renderEndpoint)
+import Pages.Onboarding qualified as Onboarding
 import Relude hiding (ask, asks, max, min)
 import Relude.Unsafe qualified as Unsafe
 import Servant (
@@ -227,13 +228,11 @@ dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRoll
 
 dStats :: Projects.ProjectId -> Projects.ProjectRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledByStepsJ dateRange@(fromD, toD) = do
-  when (projReqStats.totalRequests == 0) do
-    section_ [class_ "card-round p-5 sm:p-10 space-y-4 text-lg"] do
-      h2_ [class_ "text-2xl"] "Welcome onboard APIToolkit."
-      p_ "You're currently not sending any data to apitoolkit from your backends yet. Here's a guide to get you setup for your tech stack."
-      a_ [href_ "https://apitoolkit.io/docs/quickstarts/", class_ "btn-indigo btn-sm my-3 -ml-0 mt-6", target_ "_blank"] "Read the setup guide"
-
   section_ [class_ "space-y-3"] do
+    when (projReqStats.totalRequests == 0) do
+      section_ [class_ "card-round p-5 sm:p-20 space-y-4 text-lg"] do
+        h2_ [class_ "text-2xl font-medium"] "You haven't integrated APIToolkit in your application yet"
+        Onboarding.integrateApiToolkit "<YOUR_API_KEY>" "express"
     div_ [class_ "flex justify-between mt-4"] $ div_ [class_ "flex flex-row"] do
       a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
         $ faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 w-4 mr-3 inline-block"

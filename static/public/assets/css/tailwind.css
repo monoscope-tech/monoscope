@@ -289,3 +289,11 @@
 .collapsed .closing-token {
   padding-left: 0;
 }
+
+
+.sdk_tab {
+ @apply h-36 border rounded w-full p-4
+}
+.sdk_tab_active {
+  @apply border-blue-500 border ring ring-blue-500 shadow-lg
+}

@@ -26,6 +26,7 @@ import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Charts.Charts qualified as Charts
 import Pages.NonMember
+import Pages.Onboarding qualified as Onboarding
 import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import System.Config
@@ -84,7 +85,7 @@ endpointListGetH pid layoutM ackdM archivedM hostM projectHostM sortM hxRequestM
               }
       let elementBelowTabs =
             div_ [class_ "grid grid-cols-5", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"]
-              $ endpointList' paramInput currTime pid endpointStats
+              $ endpointList' paramInput currTime pid endpointStats inbox
       case (hxRequestM, hxBoostedM) of
         (Just "true", Just "false") -> pure elementBelowTabs
         (Just "true", Nothing) -> pure elementBelowTabs
@@ -141,11 +142,11 @@ endpointListPage paramInput pid currTime endpoints hosts hostM pHostM inbox_coun
       , href_ $ if forHost then "#" else uri <> "&archived=true" <> maybe "" ("&project_host=" <>) pHostM
       ]
       "Archived"
-  div_ [class_ "grid grid-cols-5 card-round", id_ "anomalyListBelowTab", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $ endpointList' paramInput currTime pid endpoints
+  div_ [class_ "grid grid-cols-5 card-round", id_ "anomalyListBelowTab", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $ endpointList' paramInput currTime pid endpoints inbox_count
 
 
-endpointList' :: ParamInput -> UTCTime -> Projets.ProjectId -> Vector Endpoints.EndpointRequestStats -> Html ()
-endpointList' paramInput currTime pid enps = form_ [class_ "col-span-5 bg-white divide-y ", id_ "anomalyListForm"] $ do
+endpointList' :: ParamInput -> UTCTime -> Projets.ProjectId -> Vector Endpoints.EndpointRequestStats -> Int -> Html ()
+endpointList' paramInput currTime pid enps inbox_count = form_ [class_ "col-span-5 bg-white divide-y ", id_ "anomalyListForm"] $ do
   let bulkActionBase = "/p/" <> pid.toText <> "/anomalies/bulk_actions"
   let currentURL' = deleteParam "sort" paramInput.currentURL
   let sortMenu =
@@ -200,7 +201,10 @@ endpointList' paramInput currTime pid enps = form_ [class_ "col-span-5 bg-white 
         , class_ "dataTable-search w-full h-full p-2 text-gray-500 font-normal focus:outline-none"
         , placeholder_ "Search endpoints..."
         ]
-  when (null enps) $ div_ [class_ "flex flex-col text-center justify-center items-center h-32"] $ do
+  when (null enps && inbox_count == 0) $ div_ [class_ "w-full p-20 items-center"] $ do
+    h2_ [class_ "text-2xl font-medium mb-4"] "No Endpoints: You haven't integrated APIToolkit in your application yet"
+    Onboarding.integrateApiToolkit "<YOUR_API_KEY>" "express"
+  when (null enps && inbox_count > 0) $ div_ [class_ "flex flex-col text-center justify-center items-center h-32"] $ do
     strong_ "No endpoints yet."
     p_ "Check Inbox to acknowlege new endpoints"
   div_ [id_ "endpoints_container"] do

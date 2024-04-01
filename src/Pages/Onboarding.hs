@@ -1,6 +1,6 @@
 {-# OPTIONS_GHC -Wno-unused-do-bind #-}
 
-module Pages.Onboarding (onboardingGetH) where
+module Pages.Onboarding (onboardingGetH, integrateApiToolkit) where
 
 import Data.Default (def)
 import Data.Text qualified as T
@@ -86,7 +86,11 @@ onboardingPage pid apikey hasRequest ans redi ctb = do
               div_ [class_ " text-lg  max-w-prose"] do
                 p_ "To get the most from APIToolkit, integrate it into your project (Even just on your local or development machine). You can integrate an outgoing HTTP request client, or an entire server with incoming requests. "
               p_ [class_ " text-lg"] "Finish up, then dash to your dashboard! 🚀"
-            if hasRequest then completedBanner pid else integrateApiToolkit apikey ctb
+            if hasRequest
+              then completedBanner pid
+              else do
+                div_ [class_ "w-[1200px]"] do
+                  integrateApiToolkit apikey ctb
         div_ [class_ "w-full flex justify-center"] $ do
           div_ [class_ "flex flex-col w-[800px] rounded-2xl border border-2"] $ do
             div_ [class_ "w-full px-8 py-4 flex justify-between border-b border-b-2"] $ do
@@ -156,19 +160,6 @@ onboardingPage pid apikey hasRequest ans redi ctb = do
                   span_ "Need Help?"
                   span_ "Or a Demo?"
                 span_ [class_ "text-slate-500"] "Schedule a brief call with an Engineer."
-  script_
-    [text|
-
-var getCurrentTab = () => {
-  const tab= document.querySelector(".sdk_tab_active")
-  if(tab) {
-    console.log(tab)
-    return tab.id
-    }
-  return 'express'
-}
-hljs.highlightAll();
-  |]
 
 
 generateApikey :: Projects.ProjectId -> Html ()
@@ -202,31 +193,45 @@ generateApikey pid =
 
 integrateApiToolkit :: Text -> Text -> Html ()
 integrateApiToolkit apikey current_tab =
-  div_ [class_ "w-[800px] bg-slate-200 mx-auto rounded-lg border-8 border-white shadow-lg mb-10"] do
-    div_ [class_ "w-full p-8 bg-slate-100  rounded"] do
+  div_ [class_ "w-full mx-auto rounded-lg border mb-10 overflow-hidden"] do
+    div_ [class_ "w-full p-8 bg-gray-50"] do
       div_ [class_ "flex w-full justify-center gap-4 items-center mb-2"] do
         span_ [class_ "text-blue-500 pr-4 border-r border-r-2 border-r-blue-500 font-bold"] "Next Up"
         h3_ [class_ "font-bold text-2xl"] "Integrate APIToolkit"
-      div_ [class_ "pb-2 mt-5"] do
-        div_ [class_ "font-bold text-center  border-b border-slate-200"] $ do
+      div_ [class_ "pb-2 flex gap-10 w-full mt-8"] do
+        div_ [class_ "font-bold text-center w-[35%]"] $ do
           tabs current_tab
-        tabContentExpress apikey current_tab
-        tabContentExpressCjs apikey current_tab
-        tabContentGin apikey current_tab
-        tabContentLaravel apikey current_tab
-        tabContentFlask apikey current_tab
-        tabContentFastAPI apikey current_tab
-        tabContentDjango apikey current_tab
-        tabContentSymfony apikey current_tab
-        tabContentDotNet apikey current_tab
-        tabContentFastify apikey current_tab
-        tabContentEcho apikey current_tab
-        tabContentGorilla apikey current_tab
+        div_ [class_ "flex flex-col w-[65%] shrink-0 max-w-[65%]"] do
+          tabContentExpress apikey current_tab
+          tabContentExpressCjs apikey current_tab
+          tabContentGin apikey current_tab
+          tabContentLaravel apikey current_tab
+          tabContentFlask apikey current_tab
+          tabContentFastAPI apikey current_tab
+          tabContentDjango apikey current_tab
+          tabContentSymfony apikey current_tab
+          tabContentDotNet apikey current_tab
+          tabContentFastify apikey current_tab
+          tabContentEcho apikey current_tab
+          tabContentGorilla apikey current_tab
+          tabContentPhoeinix apikey current_tab
+          tabContentAdonis apikey current_tab
       div_ [class_ "font-medium text-slate-700 mt-8 space-y-2 text-xl"] do
         p_ [class_ "space-x-3"] do
           span_ [class_ ""] "Having trouble integrating APIToolkit?"
           a_ [href_ "https://calendar.app.google/EvPzCoVsLh5gqkAo8", target_ "_BLANK", class_ "text-blue-500"] "Contact support"
         a_ [class_ "block link underline text-slate-900 underline-offset-4", href_ "https://apitoolkit.io/docs/quickstarts/", target_ "BLANK"] "View Integration Quickstarts &  documentation on our Knowlege base"
+    script_
+      [text|
+var getCurrentTab = () => {
+  const tab= document.querySelector(".sdk_tab_active")
+  if(tab) {
+    return tab.id
+    }
+  return 'express'
+}
+hljs.highlightAll();
+ |]
 
 
 completedBanner :: Projectjs.ProjectId -> Html ()
@@ -243,7 +248,7 @@ completedBanner pid =
 
 tabContentExpress :: Text -> Text -> Html ()
 tabContentExpress apikey current_tab =
-  div_ [class_ $ "tab-content flex flex-col m-8 " <> (if current_tab == "express" then "" else "hidden"), id_ "express_content"] $ do
+  div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "express" then "" else "hidden"), id_ "express_content"] $ do
     div_ [class_ "relative"] $ do
       div_ [class_ "mb-6 space-x-3"] do
         strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
@@ -283,7 +288,7 @@ tabContentExpress apikey current_tab =
 
 tabContentExpressCjs :: Text -> Text -> Html ()
 tabContentExpressCjs apikey current_tab =
-  div_ [class_ $ "tab-content flex flex-col m-8 " <> (if current_tab == "express_cjs" then "" else "hidden"), id_ "express_cjs_content"] $ do
+  div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "express_cjs" then "" else "hidden"), id_ "express_cjs_content"] $ do
     div_ [class_ "relative"] $ do
       div_ [class_ "mb-6 space-x-3"] do
         strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
@@ -326,7 +331,7 @@ tabContentExpressCjs apikey current_tab =
 
 tabContentGin :: Text -> Text -> Html ()
 tabContentGin apikey current_tab =
-  div_ [class_ $ "tab-content flex flex-col m-8 " <> (if current_tab == "gin" then "" else "hidden"), id_ "gin_content"] $ do
+  div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "gin" then "" else "hidden"), id_ "gin_content"] $ do
     div_ [class_ "relative"] $ do
       div_ [class_ "mb-6 space-x-3"] do
         strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
@@ -378,7 +383,7 @@ tabContentGin apikey current_tab =
 
 tabContentLaravel :: Text -> Text -> Html ()
 tabContentLaravel apikey current_tab =
-  div_ [class_ $ "tab-content flex flex-col m-8 " <> (if current_tab == "laravel" then "" else "hidden"), id_ "laravel_content"] $ do
+  div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "laravel" then "" else "hidden"), id_ "laravel_content"] $ do
     div_ [class_ "relative"] $ do
       div_ [class_ "mb-6 space-x-3"] do
         strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
@@ -423,7 +428,7 @@ tabContentLaravel apikey current_tab =
 
 tabContentSymfony :: Text -> Text -> Html ()
 tabContentSymfony apikey current_tab =
-  div_ [class_ $ "tab-content flex flex-col m-8 " <> (if current_tab == "symfony" then "" else "hidden"), id_ "symfony_content"] $ do
+  div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "symfony" then "" else "hidden"), id_ "symfony_content"] $ do
     div_ [class_ "relative"] $ do
       div_ [class_ "mb-6 space-x-3"] do
         strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
@@ -454,7 +459,7 @@ tabContentSymfony apikey current_tab =
 
 tabContentDotNet :: Text -> Text -> Html ()
 tabContentDotNet apikey current_tab =
-  div_ [class_ $ "tab-content flex flex-col m-8 " <> (if current_tab == "net" then "" else "hidden"), id_ "net_content"] $ do
+  div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "net" then "" else "hidden"), id_ "net_content"] $ do
     div_ [class_ "relative"] $ do
       div_ [class_ "mb-6 space-x-3"] do
         strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
@@ -487,7 +492,7 @@ tabContentDotNet apikey current_tab =
 
 tabContentFastify :: Text -> Text -> Html ()
 tabContentFastify apikey current_tab =
-  div_ [class_ $ "tab-content flex flex-col m-8 " <> (if current_tab == "fastify" then "" else "hidden"), id_ "fastify_content"]
+  div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "fastify" then "" else "hidden"), id_ "fastify_content"]
     $ do
       div_ [class_ "relative"] $ do
         div_ [class_ "mb-6 space-x-3"] do
@@ -530,7 +535,7 @@ tabContentFastify apikey current_tab =
 
 tabContentFlask :: Text -> Text -> Html ()
 tabContentFlask apikey current_tab =
-  div_ [class_ $ "tab-content flex flex-col m-8 " <> (if current_tab == "flask" then "" else "hidden"), id_ "flask_content"]
+  div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "flask" then "" else "hidden"), id_ "flask_content"]
     $ do
       div_ [class_ "relative"] $ do
         div_ [class_ "mb-6 space-x-3"] do
@@ -574,7 +579,7 @@ tabContentFlask apikey current_tab =
 
 tabContentFastAPI :: Text -> Text -> Html ()
 tabContentFastAPI apikey current_tab =
-  div_ [class_ $ "tab-content flex flex-col m-8 " <> (if current_tab == "fastapi" then "" else "hidden"), id_ "fastapi_content"]
+  div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "fastapi" then "" else "hidden"), id_ "fastapi_content"]
     $ do
       div_ [class_ "relative"] $ do
         div_ [class_ "mb-6 space-x-3"] do
@@ -620,7 +625,7 @@ tabContentFastAPI apikey current_tab =
 
 tabContentDjango :: Text -> Text -> Html ()
 tabContentDjango apikey current_tab =
-  div_ [class_ $ "tab-content flex flex-col m-8 " <> (if current_tab == "django" then "" else "hidden"), id_ "django_content"]
+  div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "django" then "" else "hidden"), id_ "django_content"]
     $ do
       div_ [class_ "relative"] $ do
         div_ [class_ "mb-6 space-x-3"] do
@@ -655,7 +660,7 @@ tabContentDjango apikey current_tab =
 
 tabContentEcho :: Text -> Text -> Html ()
 tabContentEcho apikey current_tab =
-  div_ [class_ $ "tab-content flex flex-col m-8 " <> (if current_tab == "echo" then "" else "hidden"), id_ "echo_content"]
+  div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "echo" then "" else "hidden"), id_ "echo_content"]
     $ do
       div_ [class_ "relative"] $ do
         div_ [class_ "mb-6 space-x-3"] do
@@ -710,7 +715,7 @@ tabContentEcho apikey current_tab =
 
 tabContentGorilla :: Text -> Text -> Html ()
 tabContentGorilla apikey current_tab =
-  div_ [class_ $ "tab-content flex flex-col m-8 " <> (if current_tab == "gorilla" then "" else "hidden"), id_ "gorilla_content"]
+  div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "gorilla" then "" else "hidden"), id_ "gorilla_content"]
     $ do
       div_ [class_ "relative"] $ do
         div_ [class_ "mb-6 space-x-3"] do
@@ -756,9 +761,74 @@ tabContentGorilla apikey current_tab =
                   <> "}"
 
 
+tabContentPhoeinix :: Text -> Text -> Html ()
+tabContentPhoeinix apikey current_tab =
+  div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "phoenix" then "" else "hidden"), id_ "phoenix_content"]
+    $ do
+      div_ [class_ "relative"] $ do
+        div_ [class_ "mb-6 space-x-3"] do
+          strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
+          a_ [class_ "link underline text-lg", href_ "https://github.com/apitoolkit/apitoolkit-go", target_ "BLANK"] "github.com/apitoolkit/apitoolkit-phoenix"
+
+        div_ [class_ "mb-6"] do
+          h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
+          p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "{:apitoolkit_phoenix, \"~> 0.1.1\"}"
+        div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[0vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
+          div_ [class_ "relative w-full flex flex-col"] do
+            contentHeader "phoenix_code"
+            div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
+              pre_ [class_ "flex min-h-full text-lg leading-snug"] do
+                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs atom-one-dark", id_ "phoenix_code"]
+                  $ toHtml
+                  $ "defmodule HelloWeb.Router do\n"
+                  <> "  use HelloWeb, :router\n"
+                  <> "  use Plug.ErrorHandler\n"
+                  <> "  import ApitoolkitPhoenix\n\n"
+                  <> "  pipeline :api do\n"
+                  <> "    plug :accepts, [\"json\"]\n"
+                  <> "    # Other plugs\n"
+                  <> "    plug ApitoolkitPhoenix,\n"
+                  <> "      config: %{\n"
+                  <> "        api_key: \""
+                  <> apikey
+                  <> "\"\n"
+                  <> "      }\n"
+                  <> "  end\n"
+                  <> "end\n"
+
+
+tabContentAdonis :: Text -> Text -> Html ()
+tabContentAdonis apikey current_tab =
+  div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "adonis" then "" else "hidden"), id_ "adonis_content"]
+    $ do
+      div_ [class_ "relative"] $ do
+        div_ [class_ "mb-6 space-x-3"] do
+          strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
+          a_ [class_ "link underline text-lg", href_ "https://github.com/apitoolkit/apitoolkit-go", target_ "BLANK"] "github.com/apitoolkit/apitoolkit-adonis"
+
+        div_ [class_ "mb-6"] do
+          h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
+          p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "npm install apitoolkit-adonis"
+        div_ [class_ "mb-6"] do
+          h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Configure apitoolkit sdk"
+          p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "node ace configure apitoolkit-adonis"
+
+        p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] $ toHtml $ "set {apikey: \"" <> apikey <> "\"}" <> "in your conf/apitoolkit.ts file"
+        div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[0vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
+          div_ [class_ "relative w-full flex flex-col"] do
+            contentHeader "adonis_code"
+            div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
+              pre_ [class_ "flex min-h-full text-lg leading-snug"] do
+                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs atom-one-dark", id_ "adonis_code"]
+                  $ "Server.middleware.register([\n"
+                  <> "  () => import(\"@ioc:Adonis/Core/BodyParser\"),\n"
+                  <> "  () => import(\"@ioc:APIToolkit\"),\n"
+                  <> "]);\n"
+
+
 tabs :: Text -> Html ()
 tabs current_tab =
-  ul_ [class_ "flex flex-nowrap overflow-x-auto gap-6 font-medium"] $ do
+  ul_ [class_ "grid grid-cols-3 font-medium w-full gap-4"] $ do
     script_
       [type_ "text/hyperscript"]
       [text|
@@ -775,84 +845,99 @@ tabs current_tab =
         , [__| install Navigatable(content: #express_content) |]
         , id_ "express"
         ]
-        "Express (ESM)"
+        do
+          img_ [src_ "/assets/framework-logos/express-logo.png", alt_ "Express Js", class_ "w-full"]
     li_ [class_ "shrink-0"] $ do
       button_
-        [ class_ $ if current_tab == "express_cjs" then "sdk_tab sdk_tab_active" else "sdk_tab"
-        , [__| install Navigatable(content: #express_cjs_content) |]
-        , id_ "express_cjs"
+        [ class_ $ if current_tab == "adonis" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #adonis_content) |]
+        , id_ "adonis"
         ]
-        "Express (CJS)"
+        do
+          img_ [src_ "/assets/framework-logos/adonis-logo.png", alt_ "adonis", class_ "w-full"]
     li_ [class_ "shrink-0"] do
       button_
         [ class_ $ if current_tab == "gin" then "sdk_tab sdk_tab_active" else "sdk_tab"
         , [__| install Navigatable(content: #gin_content) |]
         , id_ "gin"
         ]
-        "Go Gin"
+        do
+          img_ [src_ "/assets/framework-logos/gin-logo.png", alt_ "Gin", class_ "w-full"]
     li_ [class_ "shrink-0"] do
       button_
         [ class_ $ if current_tab == "laravel" then "sdk_tab sdk_tab_active" else "sdk_tab"
         , [__| install Navigatable(content: #laravel_content) |]
         , id_ "laravel"
         ]
-        "Laravel"
+        do
+          img_ [src_ "/assets/framework-logos/laravel-logo.png", alt_ "", class_ "w-full"]
+
     li_ [class_ "shrink-0"] do
       button_
         [ class_ $ if current_tab == "flask" then "sdk_tab sdk_tab_active" else "sdk_tab"
         , [__| install Navigatable(content: #flask_content) |]
         , id_ "flask"
         ]
-        "Flask"
+        do
+          img_ [src_ "/assets/framework-logos/flask-logo.png", alt_ "", class_ "w-full"]
+
     li_ [class_ "shrink-0"] do
       button_
         [ class_ $ if current_tab == "fastapi" then "sdk_tab sdk_tab_active" else "sdk_tab"
         , [__| install Navigatable(content: #fastapi_content) |]
         , id_ "fastapi"
         ]
-        "FastAPI"
+        do
+          img_ [src_ "/assets/framework-logos/fastapi-logo.png", alt_ "", class_ "w-full"]
     li_ [class_ "shrink-0"] do
       button_
         [ class_ $ if current_tab == "django" then "sdk_tab sdk_tab_active" else "sdk_tab"
         , [__| install Navigatable(content: #django_content) |]
         , id_ "django"
         ]
-        "Django"
+        do
+          img_ [src_ "/assets/framework-logos/django-logo.png", alt_ "", class_ "w-full"]
     li_ [class_ "shrink-0"] do
       button_
         [ class_ $ if current_tab == "gorilla" then "sdk_tab sdk_tab_active" else "sdk_tab"
         , [__| install Navigatable(content: #gorilla_content) |]
         , id_ "gorilla"
         ]
-        "Go Gorilla"
+        do
+          img_ [src_ "/assets/framework-logos/mux-logo.png", alt_ "", class_ "w-full"]
+
     li_ [class_ "shrink-0"] do
       button_
         [ class_ $ if current_tab == "symfony" then "sdk_tab sdk_tab_active" else "sdk_tab"
         , [__| install Navigatable(content: #symfony_content) |]
         , id_ "symfony"
         ]
-        "Symfony"
+        do
+          img_ [src_ "/assets/framework-logos/symfony-logo.png", alt_ "", class_ "w-full"]
     li_ [class_ "shrink-0"] do
       button_
         [ class_ $ if current_tab == "net" then "sdk_tab sdk_tab_active" else "sdk_tab"
         , [__| install Navigatable(content: #net_content) |]
         , id_ "net"
         ]
-        "C# .NET"
+        do
+          img_ [src_ "/assets/framework-logos/net-logo.png", alt_ "", class_ "w-full"]
     li_ [class_ "shrink-0"] do
       button_
-        [ class_ $ if current_tab == "gin" then "sdk_tab sdk_tab_active" else "sdk_tab"
-        , [__| install Navigatable(content: #echo_content) |]
-        , id_ "echo"
+        [ class_ $ if current_tab == "echo" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #phoenix_content) |]
+        , id_ "phoenix"
         ]
-        "Go Echo"
+        do
+          img_ [src_ "/assets/framework-logos/phoenix.png", alt_ "", class_ "w-full"]
     li_ [class_ "shrink-0"] do
       button_
         [ class_ $ if current_tab == "fastify" then "sdk_tab sdk_tab_active" else "sdk_tab"
         , [__| install Navigatable(content: #fastify_content) |]
         , id_ "fastify"
         ]
-        "Fastify Js"
+        do
+          img_ [src_ "/assets/framework-logos/fastify-logo.png", alt_ "", class_ "w-full"]
 
 
 contentHeader :: Text -> Html ()
