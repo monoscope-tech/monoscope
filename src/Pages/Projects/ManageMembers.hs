@@ -16,13 +16,10 @@ import Data.Default (def)
 import Data.List.Unique (uniq)
 import Data.Pool (withResource)
 import Data.Vector (Vector)
+import Data.Vector qualified as V
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Deriving.Aeson qualified as DAE
-import Data.Vector (Vector)
-import Data.Vector qualified as Vector
-import Database.PostgreSQL.Entity.DBT (withPool)
-import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect
 import Effectful.Reader.Static (ask)
 import Lucid

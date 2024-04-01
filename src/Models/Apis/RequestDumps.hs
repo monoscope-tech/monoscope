@@ -39,18 +39,17 @@ import Data.Aeson.KeyMap (toHashMapText)
 import Data.Default.Instances ()
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
-import Data.Time (CalendarDiffTime, ZonedTime, diffUTCTime, utc, utcToZonedTime, zonedTimeToUTC)
+import Data.Time (CalendarDiffTime, ZonedTime, diffUTCTime, zonedTimeToUTC)
 import Data.Time.Clock (UTCTime)
 import Data.Time.Format
 import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
 import Data.Tuple.Extra (both)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, queryOne, queryOne_, query_)
+import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, queryOne)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
-import Database.PostgreSQL.Simple.FromField (FromField (fromField), fromJSONField)
-import Database.PostgreSQL.Simple.FromRow (FromRow (fromRow))
+import Database.PostgreSQL.Simple.FromField (FromField (fromField))
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField (toField))

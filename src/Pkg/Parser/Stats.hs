@@ -24,32 +24,32 @@ import Text.Megaparsec.Char.Lexer qualified as L
 
 -- | Handles different aggregation functions and their optional aliases.
 --
--- >>> parseTest aggFunctionParser "count(field)"
--- Count Nothing Nothing
+-- >>> parse aggFunctionParser "" "count(field)"
+-- Right (Count (Subject "field" "field" []) Nothing)
 --
--- >>> parseTest aggFunctionParser "sum(field) as total"
--- Sum (Subject "field" []) (Just "total")
+-- >>> parse aggFunctionParser "" "sum(field) as total"
+-- Right (Sum (Subject "field" "field" []) (Just "total"))
 --
--- >>> parseTest aggFunctionParser "avg(field) as average"
--- Avg (Subject "field" []) (Just "average")
+-- >>> parse aggFunctionParser "" "avg(field) as average"
+-- Right (Avg (Subject "field" "field" []) (Just "average"))
 --
--- >>> parseTest aggFunctionParser "min(field)"
--- Min (FieldName "field") Nothing
+-- >>> parse aggFunctionParser "" "min(field)"
+-- Right (Min (Subject "field" "field" []) Nothing)
 --
--- >>> parseTest aggFunctionParser "max(field) as maxVal"
--- Max (FieldName "field") (Just "maxVal")
+-- >>> parse aggFunctionParser "" "max(field) as maxVal"
+-- Right (Max (Subject "field" "field" []) (Just "maxVal"))
 --
--- >>> parseTest aggFunctionParser "median(field) as medianVal"
--- Median (FieldName "field") (Just "medianVal")
+-- >>> parse aggFunctionParser "" "median(field) as medianVal"
+-- Right (Median (Subject "field" "field" []) (Just "medianVal"))
 --
--- >>> parseTest aggFunctionParser "stdev(field)"
--- Stdev (FieldName "field") Nothing
+-- >>> parse aggFunctionParser "" "stdev(field)"
+-- Right (Stdev (Subject "field" "field" []) Nothing)
 --
--- >>> parseTest aggFunctionParser "range(field) as rangeVal"
--- Range (FieldName "field") (Just "rangeVal")
+-- >>> parse aggFunctionParser "" "range(field) as rangeVal"
+-- Right (Range (Subject "field" "field" []) (Just "rangeVal"))
 --
--- >>> parseTest aggFunctionParser "customFunc(field) as custom"
--- CustomAgg "customFunc" [FieldName "field"] (Just "custom")
+-- >>> parse aggFunctionParser "" "customFunc(field) as custom"
+-- Right (Plain (Subject "customFunc" "customFunc" []) Nothing)
 aggFunctionParser :: Parser AggFunction
 aggFunctionParser =
   choice
@@ -67,15 +67,15 @@ aggFunctionParser =
 
 -- | Utility Parser: Parses an alias
 --
--- >>> parseTest aliasParser "as min_price"
+-- >>> parse "" aliasParser "as min_price"
 -- "min_price"
-aliasParser :: Parser String
-aliasParser = string " as" *> space *> some (alphaNumChar <|> oneOf "_-") <* space
+aliasParser :: Parser Text
+aliasParser = toText <$> (string " as" *> space *> some (alphaNumChar <|> oneOf "_-") <* space)
 
 
 -- | Parses the 'by' clause, which can include multiple fields.
 --
--- >>> parseTest byClauseParser "by field1,field2"
+-- >>> parse "" byClauseParser "by field1,field2"
 -- ByClause [Subject "field1" [],Subject "field2" []]
 byClauseParser :: Parser ByClause
 byClauseParser = ByClause <$> (string "by" *> space *> sepBy pSubject (char ','))
@@ -85,18 +85,45 @@ byClauseParser = ByClause <$> (string "by" *> space *> sepBy pSubject (char ',')
 
 -- | Combines the above parsers to parse the entire 'stats' command.
 --
--- >>> parseTest pStatsSection "stats count by field1"
--- StatsCommand [Count Nothing Nothing] (Just (ByClause [FieldName "field1"]))
+-- >>> parse pStatsSection "" "stats count by field1"
+-- Right (StatsCommand [Plain (Subject "count" "count" []) Nothing] (Just (ByClause [Subject "field1" "field1" []])))
 --
--- >>> parseTest pStatsSection "stats sum(field) as total, avg(field2)"
--- StatsCommand [Sum (FieldName "field") (Just "total"),Avg (FieldName "field2") Nothing] Nothing
+-- >>> parse pStatsSection "" "stats sum(field) as total,avg(field2)"
+-- Right (StatsCommand [Sum (Subject "field" "field" []) (Just "total"),Avg (Subject "field2" "field2" []) Nothing] Nothing)
 --
--- >>> parseTest pStatsSection "stats max(field) by field1,field2"
--- StatsCommand [Max (FieldName "field") Nothing] (Just (ByClause [FieldName "field1", FieldName "field2"]))
+-- >>> parse pStatsSection "" "stats max(field) by field1,field2"
+-- Right (StatsCommand [Max (Subject "field" "field" []) Nothing] (Just (ByClause [Subject "field1" "field1" [],Subject "field2" "field2" []])))
 pStatsSection :: Parser Section
 pStatsSection = do
   _ <- string "stats"
   space
   funcs <- sepBy aggFunctionParser (char ',')
-  byClause <- optional (space *> byClauseParser)
+  byClause <- optional $ try (space *> byClauseParser)
   return $ StatsCommand funcs byClause
+
+
+-- TimeChartSection  (Count Nothing Nothing) (Just (ByClause [FieldName "field1"])) (Rollup "1w")
+--
+
+-- | parses the timechart command which is used to describe timeseries charts based off the request log data.
+--
+-- >>> parse pTimeChartSection "" "timechart count by field1 [1d]"
+-- Right (TimeChartCommand (Plain (Subject "count" "count" []) Nothing) (Just (ByClause [Subject "field1" "field1" []])) (Just (Rollup "1d")))
+--
+-- >>> parse pTimeChartSection "" "timechart sum(field1) by field2,field3 [1d]"
+-- Right (TimeChartCommand (Sum (Subject "field1" "field1" []) Nothing) (Just (ByClause [Subject "field2" "field2" [],Subject "field3" "field3" []])) (Just (Rollup "1d")))
+--
+-- >>> parse pTimeChartSection "" "timechart sum(field1) [1d]"
+-- Right (TimeChartCommand (Sum (Subject "field1" "field1" []) Nothing) Nothing (Just (Rollup "1d")))
+pTimeChartSection :: Parser Section
+pTimeChartSection = do
+  _ <- string "timechart"
+  space
+  agg <- aggFunctionParser
+  byClauseM <- optional $ try (space *> byClauseParser)
+  rollupM <- optional $ try (space *> rollupParser)
+  return $ TimeChartCommand agg byClauseM rollupM
+
+
+rollupParser :: Parser Rollup
+rollupParser = Rollup <$> toText <$> (string "[" *> some alphaNumChar <* string "]")

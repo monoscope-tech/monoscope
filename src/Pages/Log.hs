@@ -18,6 +18,7 @@ import Data.Time (
   utcToZonedTime,
  )
 import Data.Time.Format
+import Data.Time.Format (formatTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as V
 import Data.Vector qualified as Vector
@@ -34,6 +35,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
+import Pages.Charts.Charts qualified as Charts
 import Pages.NonMember
 import Pkg.Components (loader)
 import Relude hiding (ask, asks)
@@ -89,7 +91,6 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoostedM
       -- FIXME: we're silently ignoring parse errors and the likes.
       let tableAsVec = Unsafe.fromJust $ hush $ tableAsVecE
 
-      reqChartTxt <- dbtToEff $ RequestDumps.throughputBy pid Nothing Nothing Nothing Nothing Nothing (3 * 60) Nothing queryM (utcToZonedTime utc <$> fromD, utcToZonedTime utc <$> toD)
       freeTierExceeded <-
         dbtToEff
           $ if (Unsafe.fromJust project).paymentPlan == "Free"
@@ -111,7 +112,6 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoostedM
               , requestVecs
               , cols = curatedColNames
               , colIdxMap
-              , reqChartTxt
               , nextLogsURL
               , resetLogsURL
               , currentRange
@@ -121,9 +121,7 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoostedM
       case (layoutM, hxRequestM, hxBoostedM) of
         (Just "loadmore", Just "true", _) -> pure $ logItemRows_ pid requestVecs curatedColNames colIdxMap nextLogsURL
         (Just "resultTable", Just "true", _) -> pure $ resultTable_ page
-        (Just "all", Just "true", _) -> pure $ do
-          reqChart_ page.reqChartTxt False
-          resultTable_ page
+        (Just "all", Just "true", _) -> pure $ resultTable_ page
         _ -> do
           let bwconf =
                 (def :: BWConfig)
@@ -150,6 +148,7 @@ logQueryBox_ pid currentRange =
     , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
     , hxPushUrl_ "true"
     , hxVals_ "js:{query:getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all'}"
+    , termRaw "hx-on::before-request" ""
     , hxTarget_ "#resultTable"
     , hxSwap_ "outerHTML"
     , id_ "log_explorer_form"
@@ -180,9 +179,10 @@ logQueryBox_ pid currentRange =
                         , term "data-value" val
                         , term "data-title" title
                         , [__| on click set #custom_range_input's value to my @data-value then log my @data-value 
-                                         then toggle .hidden on #timepickerBox 
-                                         then set #currentRange's innerText to my @data-title
-                                         then htmx.trigger("#log_explorer_form", "submit")|]
+                                   then toggle .hidden on #timepickerBox 
+                                   then set #currentRange's innerText to my @data-title
+                                   then htmx.trigger("#log_explorer_form", "submit")
+                         |]
                         ]
                         $ toHtml title
                   a_ [class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ", [__| on click toggle .hidden on #timepickerSidebar |]] "Custom date range"
@@ -211,7 +211,6 @@ data ApiLogsPageData = ApiLogsPageData
   , requestVecs :: V.Vector (V.Vector Value)
   , cols :: [Text]
   , colIdxMap :: HM.HashMap Text Int
-  , reqChartTxt :: Text
   , nextLogsURL :: Text
   , resetLogsURL :: Text
   , currentRange :: Maybe Text
@@ -243,9 +242,36 @@ apiLogsPage page = do
             do
               input_ [type_ "hidden", value_ "1 hour", name_ "expiresIn", id_ "expire_input"]
               input_ [type_ "hidden", value_ "", name_ "reqId", id_ "req_id_input"]
+    script_
+      []
+      [text|
+    function getQueryFromEditor(){
+     const toggler = document.getElementById("toggleQueryEditor")
+     if(toggler.checked) {
+          return window.editor.getValue();
+      }else {
+          return window.queryBuilderValue || "";
+      }
+    }
+
+    function getTimeRange () {
+      const rangeInput = document.getElementById("custom_range_input")
+      const range = rangeInput.value.split("/")
+      if (range.length == 2)  {
+         return {from: range[0], to: range[1], since: ''}
+      }
+      if (range[0]!=''){
+        return {since: range[0], from: '', to: ''}
+       }
+       if (params().since==''){
+        return {since: '14D', from: params().from, to: params().to}
+      }
+       return {since: params().since, from: params().from, to: params().to}
+    }
+      |]
     logQueryBox_ page.pid page.currentRange
 
-    div_ [class_ "card-round w-full grow divide-y flex flex-col text-sm h-full overflow-y-hidden overflow-x-hidden"] do
+    div_ [class_ "card-round w-full grow divide-y flex flex-col text-sm h-full overflow-hidden"] do
       div_ [class_ "flex-1 "] do
         div_ [class_ "pl-3 py-1 flex flex-row justify-between"] do
           a_ [class_ "cursor-pointer inline-block pr-3 space-x-2 bg-blue-50 hover:bg-blue-100 blue-800 p-1 rounded-md", [__|on click toggle .hidden on #reqsChartParent|]] do
@@ -262,14 +288,23 @@ apiLogsPage page = do
               span_ [id_ "refresh-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-md"] ""
               faIcon_ "fa-refresh" "fa-regular fa-refresh" "h-3 w-3 inline-block"
               span_ [] "refresh"
-        reqChart_ page.reqChartTxt False
+        div_
+          [ id_ "reqsChartsEC"
+          , class_ "px-5"
+          , style_ "height:100px"
+          , hxGet_ $ "/charts_html?show_legend=true&pid=" <> page.pid.toText
+          , hxTrigger_ "intersect,  htmx:beforeRequest from:#log_explorer_form"
+          , hxVals_ "js:{query_raw:getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all'}"
+          , hxSwap_ "innerHTML"
+          ]
+          ""
       resultTableAndMeta_ page
       jsonTreeAuxillaryCode page.pid
 
 
 resultTableAndMeta_ :: ApiLogsPageData -> Html ()
 resultTableAndMeta_ page = do
-  section_ [class_ " w-full h-full"] $ section_ [class_ " w-full tabs tabs-bordered items-start", role_ "tablist"] do
+  section_ [class_ " w-full h-full overflow-hidden"] $ section_ [class_ " w-full tabs tabs-bordered items-start overflow-hidden h-full", role_ "tablist"] do
     input_ [type_ "radio", name_ "logExplorerMain", role_ "tab", class_ "tab", checked_, Aria.label_ $ "Query results (" <> fmt (commaizeF page.resultCount) <> ")"]
     div_ [class_ "relative overflow-y-scroll h-full tab-content", role_ "tabpanel"] $ resultTable_ page
 
@@ -304,15 +339,18 @@ editAlert_ pid = do
           "Alert conditions"
         div_ [class_ "collapse-content"] do
           div_ [class_ "py-3"] do
-            span_ "Trigger when the metric is "
-            select_ [class_ "select select-bordered inline-block mx-2 "] do
+            span_ "Check every "
+            input_ [type_ "number", class_ "input input-bordered input-sm w-16 mx-2 text-center", name_ "checkIntervalMins", value_ "5"]
+            span_ "minute, and Trigger when the metric is "
+            select_ [class_ "select select-bordered inline-block mx-2 ", name_ "direction"] do
               option_ [selected_ ""] "above"
               option_ "below"
-            span_ "the threshold during the last"
+            span_ " the threshold for the last"
             select_ [class_ "select select-bordered inline-block mx-2 "] do
-              option_ "1 minute"
-              option_ [selected_ ""] "5 minutes"
-              option_ "10 minutes"
+              option_ [value_ "1"] "1 minute"
+              option_ [value_ "5", selected_ ""] "5 minutes"
+              option_ [value_ "10"] "10 minutes"
+              option_ [value_ "30"] "30 minutes"
           div_ [class_ "space-y-2"] do
             div_ [class_ "flex gap-5"] do
               label_ [class_ "flex items-center gap-2 w-1/3 justify-between pl-5"] do
@@ -358,7 +396,9 @@ editAlert_ pid = do
             input_ [placeholder_ "Error: Error subject", class_ "input input-bordered  w-full", name_ "subject"]
           div_ [class_ "form-control w-full"] do
             label_ [class_ "label"] $ span_ [class_ "label-text"] "Message"
-            textarea_ [placeholder_ "Alert Message", class_ "textarea textarea-bordered textarea-md w-full", name_ "message"] ""
+            textarea_
+              [placeholder_ "Alert Message", class_ "textarea textarea-bordered textarea-md w-full", name_ "message"]
+              $ toHtml [text| The alert's value is too high. Check the APItoolkit Alerts to debug |]
 
       div_ [class_ "collapse collapse-arrow join-item border border-base-300 space-y-4"] do
         input_ [class_ "", name_ "createAlertAccordion", type_ "radio"]
@@ -385,18 +425,18 @@ editAlert_ pid = do
       div_ [class_ "py-5"] do
         button_ [type_ "submit", class_ "btn btn-success"] "Create Alert"
 
-  template_ [id_ "addRecipientSlackTmpl"] $
-    label_ [class_ "input input-bordered inline-flex items-center gap-2"] do
+  template_ [id_ "addRecipientSlackTmpl"]
+    $ label_ [class_ "input input-bordered inline-flex items-center gap-2"] do
       "Slack"
       input_ [class_ "grow", class_ "input", placeholder_ "#channelName", type_ "text", required_ "", name_ "recipientSlack"]
       a_ [class_ "badge badge-base", [__|on click remove the closest parent <label/>|]] $ faIcon_ "fa-xmark" "fa-solid fa-xmark" "w-3 h-3"
-  template_ [id_ "addRecipientEmailTmpl"] $
-    label_ [class_ "input input-bordered inline-flex items-center gap-2"] do
+  template_ [id_ "addRecipientEmailTmpl"]
+    $ label_ [class_ "input input-bordered inline-flex items-center gap-2"] do
       "Email"
       input_ [class_ "grow", class_ "input", placeholder_ "name@site.com", type_ "email", required_ "", name_ "recipientEmail"]
       a_ [class_ "badge badge-base", [__|on click remove the closest parent <label/>|]] $ faIcon_ "fa-xmark" "fa-solid fa-xmark" "w-3 h-3"
-  template_ [id_ "addRecipientEmailAllTmpl"] $
-    label_ [class_ "input input-bordered inline-flex items-center gap-2"] do
+  template_ [id_ "addRecipientEmailAllTmpl"]
+    $ label_ [class_ "input input-bordered inline-flex items-center gap-2"] do
       "Email Everyone"
       input_ [class_ "grow", class_ "input", placeholder_ "name@site.com", type_ "hidden", value_ "True", name_ "recipientEmailAll"]
       a_ [class_ "badge badge-base", [__|on click remove the closest parent <label/>|]] $ faIcon_ "fa-xmark" "fa-solid fa-xmark" "w-3 h-3"
@@ -433,25 +473,25 @@ logItemRows_ pid requests curatedCols colIdxMap nextLogsURL = do
   forM_ requests \reqVec -> do
     let logItemPath = requestDumpLogItemUrlPath pid reqVec colIdxMap
     let (_, errCount, errClass) = errorClass True reqVec colIdxMap
-    tr_ [class_ "cursor-pointer ", [__|on click toggle .hidden on next <tr/> then toggle .expanded-log on me|]] $
-      forM_ curatedCols (td_ . logItemCol_ pid reqVec colIdxMap)
+    tr_ [class_ "cursor-pointer ", [__|on click toggle .hidden on next <tr/> then toggle .expanded-log on me|]]
+      $ forM_ curatedCols (td_ . logItemCol_ pid reqVec colIdxMap)
     tr_ [class_ "hidden"] $ do
       -- used for when a row is expanded.
       td_ $ a_ [class_ $ "inline-block h-full " <> errClass, term "data-tippy-content" $ show errCount <> " errors attached to this request"] ""
       td_ [colspan_ $ show $ length curatedCols - 1] $ div_ [hxGet_ $ fromMaybe "" logItemPath, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
-  when (Vector.length requests > 199) $
-    tr_ $
-      td_ [colspan_ $ show $ length curatedCols] $
-        a_
-          [ class_ "cursor-pointer inline-flex justify-center py-1 px-56 ml-36 blue-800 bg-blue-100 hover:bg-blue-200 text-center "
-          , hxTrigger_ "click"
-          , hxSwap_ "outerHTML"
-          , hxGet_ nextLogsURL
-          , hxTarget_ "closest tr"
-          -- , hxIndicator_ "next .htmx-indicator"
-          ]
-          do
-            span_ [class_ "inline-block"] "LOAD MORE " >> span_ [class_ "htmx-indicator loading loading-dots loading-lg inline-block pl-3"] loader
+  when (Vector.length requests > 199)
+    $ tr_
+    $ td_ [colspan_ $ show $ length curatedCols]
+    $ a_
+      [ class_ "cursor-pointer inline-flex justify-center py-1 px-56 ml-36 blue-800 bg-blue-100 hover:bg-blue-200 text-center "
+      , hxTrigger_ "click"
+      , hxSwap_ "outerHTML"
+      , hxGet_ nextLogsURL
+      , hxTarget_ "closest tr"
+      -- , hxIndicator_ "next .htmx-indicator"
+      ]
+      do
+        span_ [class_ "inline-block"] "LOAD MORE " >> span_ [class_ "htmx-indicator loading loading-dots loading-lg inline-block pl-3"] loader
 
 
 errorClass :: Bool -> V.Vector Value -> HM.HashMap Text Int -> (Int, Int, Text)
@@ -501,6 +541,14 @@ isLogEvent :: [Text] -> Bool
 isLogEvent cols = all (`elem` cols) ["id", "created_at"]
 
 
+displayTimestamp :: Text -> Text
+displayTimestamp inputDateString =
+  maybe
+    T.empty
+    (toText . formatTime defaultTimeLocale "%b %d %H:%M:%S")
+    (parseTimeM True defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" (toString inputDateString) :: Maybe UTCTime)
+
+
 logItemCol_ :: Projects.ProjectId -> V.Vector Value -> HM.HashMap Text Int -> Text -> Html ()
 logItemCol_ pid reqVec colIdxMap "id" = do
   let (status, errCount, errClass) = errorClass False reqVec colIdxMap
@@ -515,7 +563,7 @@ logItemCol_ pid reqVec colIdxMap "id" = do
       ]
       $ faSprite_ "link" "solid" "h-3 w-3 text-blue-500"
     faSprite_ "chevron-right" "solid" "h-3 w-3 col-span-1 ml-1 text-gray-500 chevron log-chevron "
-logItemCol_ _ reqVec colIdxMap "created_at" = span_ [class_ "font-mono whitespace-nowrap ", term "data-tippy-content" "timestamp"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "created_at"
+logItemCol_ _ reqVec colIdxMap "created_at" = span_ [class_ "font-mono whitespace-nowrap ", term "data-tippy-content" "timestamp"] $ toHtml $ displayTimestamp $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "created_at"
 logItemCol_ _ reqVec colIdxMap "status_code" = span_ [class_ $ "badge " <> getStatusColor (lookupVecIntByKey reqVec colIdxMap "status_code"), term "data-tippy-content" "status"] $ toHtml $ show $ lookupVecIntByKey reqVec colIdxMap "status_code"
 logItemCol_ _ reqVec colIdxMap "method" = span_ [class_ $ "min-w-[4rem] badge " <> maybe "badge-ghost" getMethodColor (lookupVecTextByKey reqVec colIdxMap "method"), term "data-tippy-content" "method"] $ toHtml $ fromMaybe "/" $ lookupVecTextByKey reqVec colIdxMap "method"
 logItemCol_ pid reqVec colIdxMap key@"rest" = div_ [class_ "space-x-2 whitespace-nowrap max-w-8xl overflow-x-hidden "] do
@@ -528,17 +576,9 @@ logItemCol_ pid reqVec colIdxMap key@"rest" = div_ [class_ "space-x-2 whitespace
   span_ [class_ "badge badge-ghost ", term "data-tippy-content" "Host"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "host"
   span_ [] $ toHtml $ maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)
 logItemCol_ _ reqVec colIdxMap key =
-  div_ [class_ "xwhitespace-nowrap xoverflow-x-hidden max-w-lg ", term "data-tippy-content" key] $
-    toHtml $
-      maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)
-
-
-reqChart_ :: Text -> Bool -> Html ()
-reqChart_ reqChartTxt hxOob = do
-  div_ [id_ "reqsChartParent", class_ "p-5", hxSwapOob_ $ show hxOob] do
-    div_ [id_ "reqsChartsEC", class_ "", style_ "height:100px"] ""
-    script_
-      [text| throughputEChart("reqsChartsEC", $reqChartTxt, [], true) |]
+  div_ [class_ "xwhitespace-nowrap xoverflow-x-hidden max-w-lg ", term "data-tippy-content" key]
+    $ toHtml
+    $ maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)
 
 
 requestDumpLogItemUrlPath :: Projects.ProjectId -> V.Vector Value -> HM.HashMap Text Int -> Maybe Text
@@ -704,23 +744,7 @@ jsonTreeAuxillaryCode pid = do
 
     var isFieldInSummary = field => params().cols.split(",").includes(field);
     
-    var getQueryFromEditor = () => {
-     const toggler = document.getElementById("toggleQueryEditor")
-     if(toggler.checked) {
-          return window.editor.getValue();
-      }else {
-          return window.queryBuilderValue || "";
-      }
-    }
 
-    function getTimeRange () {
-      const rangeInput = document.getElementById("custom_range_input")
-      const range = rangeInput.value.split("/")
-      if (range.length == 2)  {
-         return {from: range[0], to: range[1], since: ''}
-        }
-      return {since: range[0], from: '', to: ''}
-    }
 
     function toggleQueryBuilder() {
      document.getElementById("queryBuilder").classList.toggle("hidden")

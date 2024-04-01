@@ -1,5 +1,5 @@
 -- Parser implemented with help and code from: https://markkarpov.com/tutorial/megaparsec.html
-module Pkg.Parser (parseQueryStringToWhereClause, parseQueryToComponents, defSqlQueryCfg, SqlQueryCfg (..), QueryComponents (..), listToColNames) where
+module Pkg.Parser (parseQueryStringToWhereClause, parseQueryToComponents, defSqlQueryCfg, defPid, SqlQueryCfg (..), QueryComponents (..), listToColNames) where
 
 import Control.Error (hush)
 import Data.Default (Default (def))
@@ -28,6 +28,7 @@ pSection :: Parser Section
 pSection =
   choice @[]
     [ pStatsSection
+    , pTimeChartSection
     , Search <$> pExpr
     ]
 
@@ -45,6 +46,8 @@ data QueryComponents = QueryComponents
     countQuery :: Text
   , -- final generated sql query
     finalSqlQuery :: Text
+  , rollup :: Maybe Text
+  , finalTimechartQuery :: Maybe Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (Default)
@@ -56,12 +59,19 @@ sectionsToComponents = foldl' applySectionToComponent (def :: QueryComponents)
 
 applySectionToComponent :: QueryComponents -> Section -> QueryComponents
 applySectionToComponent qc (Search expr) = qc{whereClause = Just $ display expr}
-applySectionToComponent qc (StatsCommand agg Nothing) = qc{select = qc.select <> map display agg}
-applySectionToComponent qc (StatsCommand agg (Just (ByClause fields))) =
-  qc
-    { select = qc.select <> map display agg
-    , groupByClause = qc.groupByClause <> map display fields
-    }
+applySectionToComponent qc (StatsCommand aggs Nothing) = qc{select = qc.select <> map display aggs}
+applySectionToComponent qc (StatsCommand aggs byClauseM) = applyByClauseToQC byClauseM $ qc{select = qc.select <> map display aggs}
+applySectionToComponent qc (TimeChartCommand agg byClauseM rollupM) = applyRollupToQC rollupM $ applyByClauseToQC byClauseM $ qc{select = qc.select <> [display agg]}
+
+
+applyByClauseToQC :: Maybe ByClause -> QueryComponents -> QueryComponents
+applyByClauseToQC Nothing qc = qc
+applyByClauseToQC (Just (ByClause fields)) qc = qc{groupByClause = qc.groupByClause <> map display fields}
+
+
+applyRollupToQC :: Maybe Rollup -> QueryComponents -> QueryComponents
+applyRollupToQC Nothing qc = qc
+applyRollupToQC (Just (Rollup ru)) qc = qc{rollup = Just ru}
 
 
 ----------------------------------------------------------------------------------
@@ -95,15 +105,36 @@ sqlFromQueryComponents sqlCfg qc =
 
     finalSqlQuery =
       [fmt|SELECT json_build_array({selectClause}) FROM apis.request_dumps 
-           WHERE project_id='{sqlCfg.pid.toText}'::uuid  and created_at > NOW() - interval '14 days' {cursorT} {dateRangeStr} {whereClause}
-           {groupByClause} ORDER BY created_at desc limit 200 |]
+            WHERE project_id='{sqlCfg.pid.toText}'::uuid  and created_at > NOW() - interval '14 days' 
+            {cursorT} {dateRangeStr} {whereClause}
+            {groupByClause} ORDER BY created_at desc limit 200 |]
 
     countQuery =
       [fmt|SELECT count(*) FROM apis.request_dumps 
-           WHERE project_id='{sqlCfg.pid.toText}'::uuid  and created_at > NOW() - interval '14 days' {cursorT} {dateRangeStr} {whereClause}
-           {groupByClause} limit 1|]
+            WHERE project_id='{sqlCfg.pid.toText}'::uuid  and created_at > NOW() - interval '14 days' 
+            {cursorT} {dateRangeStr} {whereClause}
+            {groupByClause} limit 1|]
+
+    timeRollup = fromMaybe "1h" qc.rollup
+    timebucket = [fmt|extract(epoch from time_bucket('{timeRollup}', created_at))::integer as timeB, |]
+    chartSelect = [fmt| count(*)::integer as count|]
+    timeGroupByClause = " GROUP BY " <> T.intercalate "," ("timeB" : qc.groupByClause)
+    timeChartQuery =
+      [fmt|
+        SELECT {timebucket} {chartSelect}, 'Throughput' FROM apis.request_dumps
+            WHERE project_id='{sqlCfg.pid.toText}'::uuid  and created_at > NOW() - interval '14 days' 
+            {cursorT} {dateRangeStr} {whereClause}
+            {timeGroupByClause}
+      |]
    in
-    (finalSqlQuery, qc{finalColumns = listToColNames selectedCols, countQuery, finalSqlQuery})
+    ( finalSqlQuery
+    , qc
+        { finalColumns = listToColNames selectedCols
+        , countQuery
+        , finalSqlQuery
+        , finalTimechartQuery = Just timeChartQuery
+        }
+    )
 
 
 -----------------------------------------------------------------------------------

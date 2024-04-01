@@ -877,6 +877,7 @@ CREATE TABLE IF NOT EXISTS monitors.query_monitors
   project_id                   UUID NOT NULL REFERENCES projects.projects(id)        ON DELETE CASCADE,
   created_at                   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
   updated_at                   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+  check_interval_mins          INT NOT NULL DEFAULT 1,
   alert_threshold              INT NOT NULL,
   warning_threshold            INT,
   log_query                    TEXT NOT NULL DEFAULT '',

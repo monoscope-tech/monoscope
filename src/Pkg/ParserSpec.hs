@@ -1,0 +1,45 @@
+module Pkg.ParserSpec (spec) where
+
+import Data.Text qualified as T
+import Debug.Pretty.Simple (pTraceShowM)
+import NeatInterpolation
+import Pkg.Parser
+import Relude
+import Test.Hspec
+
+
+-- Normalize text by removing newlines, carriage returns, tabs, and extra spaces
+normT :: Text -> Text
+normT = T.unwords . T.words . T.filter (`notElem` ['\n', '\r', '\t'])
+
+
+spec :: Spec
+spec = do
+  describe "parseQueryToSQL" do
+    it "basic query eq query" do
+      let Right (query, _) = parseQueryToComponents (defSqlQueryCfg defPid) "method==\"GET\""
+      let expected =
+            [text|
+      SELECT json_build_array(id::text,
+      to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
+      request_type,host,status_code,method,url_path,JSONB_ARRAY_LENGTH(errors),
+      LEFT( CONCAT(
+        'url=', COALESCE(raw_url, 'null'),
+        ' response_body=', COALESCE(response_body, 'null'),
+        ' request_body=', COALESCE(request_body, 'null') 
+      ), 255 
+      )) FROM apis.request_dumps 
+      WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid  
+      and created_at > NOW() - interval '14 days' AND method='GET' 
+      ORDER BY created_at desc limit 200|]
+      normT query `shouldBe` normT expected
+    it "timechart query query" do
+      let Right (_, c) = parseQueryToComponents (defSqlQueryCfg defPid) "method==\"GET\""
+      let expected =
+            [text|
+      SELECT time_bucket_gapfill('1m', created_at, now() - INTERVAL '14 days',now()) as timeB, 
+        count(*) FROM apis.request_dumps 
+        WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid and created_at > NOW() - interval '14 days' 
+              AND method='GET' GROUP BY created_at
+      |]
+      (normT $ fromMaybe "" c.finalTimechartQuery) `shouldBe` normT expected
