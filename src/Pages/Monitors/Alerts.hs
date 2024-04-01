@@ -22,6 +22,8 @@ data AlertUpsertForm = AlertUpsertForm
   , recipientEmails :: [Text]
   , recipientSlacks :: [Text]
   , recipientEmailAll :: Maybe Bool
+  , checkIntervalMins :: Int
+  , direction :: Text
   , title :: Text
   , severity :: Text
   , subject :: Text
@@ -53,6 +55,7 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
         , createdAt = now
         , updatedAt = now
         , projectId = projectId
+        , checkIntervalMins = alertForm.checkIntervalMins
         , alertThreshold = alertForm.alertThreshold
         , warningThreshold = warningThresholdInt
         , logQuery = alertForm.query
@@ -60,7 +63,7 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
         , lastEvaluated = now
         , warningLastTriggered = Nothing
         , alertLastTriggered = Nothing
-        , triggerLessThan = True -- Placeholder, set according to your logic
+        , triggerLessThan = alertForm.direction == "below"
         , thresholdSustainedForMins = 0 -- Placeholder, set according to your logic
         , alertConfig
         }

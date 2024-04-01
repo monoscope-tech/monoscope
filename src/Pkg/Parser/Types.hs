@@ -52,16 +52,16 @@ data Expr
 
 -- Modify Aggregation Functions to include optional aliases
 data AggFunction
-  = Count Subject (Maybe String) -- Optional field and alias
-  | Sum Subject (Maybe String)
-  | Avg Subject (Maybe String)
-  | Min Subject (Maybe String)
-  | Max Subject (Maybe String)
-  | Median Subject (Maybe String)
-  | Stdev Subject (Maybe String)
-  | Range Subject (Maybe String)
+  = Count Subject (Maybe Text) -- Optional field and alias
+  | Sum Subject (Maybe Text)
+  | Avg Subject (Maybe Text)
+  | Min Subject (Maybe Text)
+  | Max Subject (Maybe Text)
+  | Median Subject (Maybe Text)
+  | Stdev Subject (Maybe Text)
+  | Range Subject (Maybe Text)
   | -- | CustomAgg String [Field] (Maybe String)
-    Plain Subject (Maybe String)
+    Plain Subject (Maybe Text)
   deriving stock (Show)
 
 
@@ -70,10 +70,15 @@ data ByClause = ByClause [Subject] -- List of fields to group by
   deriving stock (Show)
 
 
+data Rollup = Rollup Text
+  deriving stock (Show)
+
+
 data Section
   = Search Expr
   | -- Define the AST for the 'stats' command
     StatsCommand [AggFunction] (Maybe ByClause)
+  | TimeChartCommand AggFunction (Maybe ByClause) (Maybe Rollup)
   deriving stock (Show)
 
 

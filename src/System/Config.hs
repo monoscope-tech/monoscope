@@ -7,15 +7,6 @@ import Colourista.IO (blueMessage)
 import Configuration.Dotenv qualified as Dotenv
 import Control.Exception (try)
 import Data.Cache
-import Data.Cache (Cache)
-import Data.Default (Default (..))
-import Data.Default.Instances ()
-import Data.Cache
-import Data.Cache (Cache)
-import Data.Default (Default)
-import Colourista.IO (blueMessage)
-import Configuration.Dotenv qualified as Dotenv
-import Control.Exception (try)
 import Data.Cache (Cache, newCache)
 import Data.Default (Default (..))
 import Data.Default.Instances ()
@@ -23,35 +14,6 @@ import Data.Pool as Pool
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as LT
 import Database.PostgreSQL.Simple (Connection)
-import Database.PostgreSQL.Simple qualified as PG
-import Database.PostgreSQL.Simple.Migration qualified as Migrations
-import Effectful
-import Effectful.Fail (Fail)
-import Models.Projects.Projects qualified as Projects
-import Optics.TH
-import Relude
-import Servant.Server (Handler)
-import System.Clock
-import System.Envy (FromEnv (..), ReadShowVar (..), Var (..), decodeEnv, fromVar, toVar)
-import Models.Projects.Projects qualified as Projects
-import Optics.TH
-import Relude
-import Servant.Server (Handler)
-import System.Clock
-import System.Envy (FromEnv, Var, fromVar, toVar)
-
-import Colourista.IO (blueMessage)
-import Configuration.Dotenv qualified as Dotenv
-import Control.Exception (try)
-import Data.Default (Default (..))
-import Data.Default.Instances ()
-import Data.Pool as Pool
-import Database.PostgreSQL.Simple qualified as PG
-import Database.PostgreSQL.Simple.Migration qualified as Migrations
-import Effectful
-import Effectful.Fail (Fail)
-import Relude
-import System.Envy (FromEnv (..), ReadShowVar (..), Var (..), decodeEnv)
 import Database.PostgreSQL.Simple qualified as PG
 import Database.PostgreSQL.Simple.Migration qualified as Migrations
 import Effectful

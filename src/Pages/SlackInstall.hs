@@ -14,25 +14,17 @@ import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Data.Default
-import Data.Text
-import Data.Vector (Vector)
-import Data.Vector qualified as Vector
-import Database.PostgreSQL.Entity.DBT
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Fmt (dateDashF, fmt)
 import Lucid
 import System.Config
 
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ
-import Database.PostgreSQL.Simple (Only (Only))
-import Data.Aeson qualified as AE
-import Data.Aeson.QQ
 import Data.Default
 import Data.Text
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT
+import Database.PostgreSQL.Simple (Only (Only))
 import Deriving.Aeson qualified as DAE
 import Effectful.PostgreSQL.Transact.Effect
 import Effectful.Reader.Static (ask, asks)

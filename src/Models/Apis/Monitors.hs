@@ -66,6 +66,7 @@ data QueryMonitor = QueryMonitor
   , createdAt :: UTCTime
   , updatedAt :: UTCTime
   , projectId :: Projects.ProjectId
+  , checkIntervalMins :: Int
   , alertThreshold :: Int
   , warningThreshold :: Maybe Int
   , logQuery :: Text
@@ -100,13 +101,14 @@ queryMonitorUpsert qm =
     , qm.triggerLessThan
     , qm.thresholdSustainedForMins
     , qm.alertConfig
+    , qm.checkIntervalMins
     )
   where
     q =
       [sql|
     INSERT INTO monitors.query_monitors (id, project_id, alert_threshold, warning_threshold, log_query, 
                   log_query_as_sql, last_evaluated, warning_last_triggered, alert_last_triggered, trigger_less_than, 
-                  threshold_sustained_for_mins, alert_config  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                  threshold_sustained_for_mins, alert_config, check_interval_mins  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
           ON CONFLICT (id) DO UPDATE SET 
                   alert_threshold=EXCLUDED.alert_threshold,
                   warning_threshold=EXCLUDED.warning_threshold,
@@ -117,7 +119,8 @@ queryMonitorUpsert qm =
                   alert_last_triggered=EXCLUDED.alert_last_triggered,
                   trigger_less_than=EXCLUDED.trigger_less_than,
                   threshold_sustained_for_mins=EXCLUDED.threshold_sustained_for_mins,
-                  alert_config=EXCLUDED.alert_config;
+                  alert_config=EXCLUDED.alert_config,
+                  check_interval_mins=EXCLUDED.check_interval_mins;
     |]
 
 
