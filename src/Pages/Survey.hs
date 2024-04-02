@@ -3,7 +3,7 @@ module Pages.Survey (surveyGetH, surveyPutH, SurveyForm) where
 import Data.Default (def)
 import Data.Text qualified as T
 import Lucid
-import Lucid.Htmx (hxPost_, hxSwap_)
+import Lucid.Htmx (hxPost_, hxSwap_,hxIndicator_)
 import Lucid.Hyperscript
 import Lucid.Svg (d_, fill_, path_, viewBox_)
 import Models.Projects.Projects qualified as Projects
@@ -128,6 +128,7 @@ surveyPage pid full_name phoneNumber = do
               [ hxPost_ $ "/p/" <> pid.toText <> "/survey"
               , hxSwap_ "none"
               , class_ "w-full"
+              ,hxIndicator_ "#proceed-indicator"
               ]
               do
                 div_ [class_ "p-6 flex flex-col gap-8 overflow-y-auto", style_ "width:100%"] do
@@ -179,10 +180,10 @@ surveyPage pid full_name phoneNumber = do
                     div_ [class_ "w-full"] do
                       input_ [value_ phoneNumber, class_ "px-2 py-1 bg-slate-50 border border-gray-300 text-gray-900 focus:outline-none rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full", type_ "text", name_ "phoneNumber"]
 
-                div_ [class_ "flex w-full justify-end items-center px-6 space-x-2 mt-8"] do
-                  button_ [type_ "sumbit", class_ "btn-lg btn-indigo text-xl px-4"] "Proceed"
-                  div_ [class_ "htmx-indicator query-indicator"] do
-                    loader
+                  div_ [class_ "flex w-full justify-end items-center px-6 space-x-2 mt-8"] do
+                        button_ [type_ "sumbit", class_ "btn-lg btn-indigo text-xl px-4"] do
+                          span_ [id_ "proceed-indicator", class_ "htmx-indicator loading loading-dots loading-md"] ""
+                          span_ [] "Proceed"
 
 
 stackOptions :: [(T.Text, T.Text, T.Text)]
