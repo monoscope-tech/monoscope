@@ -88,6 +88,9 @@ monitorOutgoingRequestDemos =
           outgoingContentFastAPI "" "express"
           outgoingContentFastify "" "express"
           outgoingContentGin "" "express"
+      div_ [class_ "font-medium text-slate-700 mt-8 space-y-2 text-xl"] do
+        p_ [class_ "space-x-3"] do
+          a_ [class_ "block link underline text-slate-900 underline-offset-4", href_ "https://apitoolkit.io/docs/get-started/quickstarts", target_ "BLANK"] "View Integration Quickstarts &  documentation on our Knowlege base"
     script_
       [text|
       hljs.highlightAll();
