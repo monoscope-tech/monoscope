@@ -95,6 +95,7 @@ data SDKTypes
   | PhpSlim
   | GuzzleOutgoing
   | ElixirPhoenix
+  | PythonPyramid
   deriving stock (Show, Generic, Read, Eq)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SDKTypes
@@ -174,6 +175,7 @@ normalizeUrlPath JsAdonis statusCode _method urlPath = removeQueryParams statusC
 normalizeUrlPath PhpSlim statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath GuzzleOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath ElixirPhoenix statusCode _method urlPath = removeQueryParams statusCode urlPath
+normalizeUrlPath PythonPyramid statusCode _method urlPath = removeQueryParams statusCode urlPath
 
 
 -- getRequestType ...

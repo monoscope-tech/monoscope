@@ -23,6 +23,7 @@ import System.Config
 import System.Types
 import Utils
 
+
 outgoingGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
 outgoingGetH pid = do
   -- TODO: temporary, to work with current logic
@@ -42,11 +43,12 @@ outgoingGetH pid = do
         pure (project, hostsAndEvents)
       let bwconf =
             (def :: BWConfig)
-              { sessM = Just sess,
-                currProject = project,
-                pageTitle = "Dependencies"
+              { sessM = Just sess
+              , currProject = project
+              , pageTitle = "Dependencies"
               }
       pure $ bodyWrapper bwconf $ outgoingPage pid hostsEvents
+
 
 outgoingPage :: Projects.ProjectId -> V.Vector Endpoints.HostEvents -> Html ()
 outgoingPage pid hostsEvents = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24  overflow-y-scroll h-full"] $ do
@@ -72,6 +74,7 @@ outgoingPage pid hostsEvents = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24  o
       p_ [class_ "text-lg mb-2"] "Start monitoring your outbound integrations"
       monitorOutgoingRequestDemos
 
+
 monitorOutgoingRequestDemos :: Html ()
 monitorOutgoingRequestDemos =
   div_ [class_ "w-full mx-auto text-left rounded-lg border mb-10 overflow-hidden"] do
@@ -95,6 +98,7 @@ monitorOutgoingRequestDemos =
       [text|
       hljs.highlightAll();
     |]
+
 
 outgoingContentAxios :: Text -> Text -> Html ()
 outgoingContentAxios apikey current_tab =
@@ -131,6 +135,7 @@ outgoingContentAxios apikey current_tab =
                   <> "  console.log(`Example app listening on port ${port}`);\n"
                   <> "});\n"
 
+
 outgoingGuzzleLaravel :: Text -> Text -> Html ()
 outgoingGuzzleLaravel apikey current_tab =
   div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "laravel" then "" else "hidden"), id_ "laravel_content"]
@@ -162,6 +167,7 @@ outgoingGuzzleLaravel apikey current_tab =
                   <> "    return $response;\n"
                   <> "});\n"
 
+
 outgoingContentAdonis :: Text -> Text -> Html ()
 outgoingContentAdonis apikey current_tab =
   div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "adonis" then "" else "hidden"), id_ "adonis_content"]
@@ -191,6 +197,7 @@ outgoingContentAdonis apikey current_tab =
                   <> "  return response.data;\n"
                   <> "});\n"
 
+
 outgoingContentDjango :: Text -> Text -> Html ()
 outgoingContentDjango apikey current_tab =
   div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "django" then "" else "hidden"), id_ "django_content"]
@@ -212,6 +219,7 @@ outgoingContentDjango apikey current_tab =
                   <> "        \"https://jsonplaceholder.typicode.com/todos/2\")\n"
                   <> "    resp.read()\n"
                   <> "    return JsonResponse({\"data\": resp.read()})\n"
+
 
 outgoingContentFlask :: Text -> Text -> Html ()
 outgoingContentFlask apikey current_tab =
@@ -236,6 +244,7 @@ outgoingContentFlask apikey current_tab =
                   <> "    resp = observe_request(request).get(\"https://jsonplaceholder.typicode.com/todos/2\")\n"
                   <> "    return resp.read()\n"
 
+
 outgoingContentFastAPI :: Text -> Text -> Html ()
 outgoingContentFastAPI apikey current_tab =
   div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "fastapi" then "" else "hidden"), id_ "fastapi_content"]
@@ -258,6 +267,7 @@ outgoingContentFastAPI apikey current_tab =
                   <> "    # Observe the request and send it to the APIToolkit server\n"
                   <> "    resp = observe_request(request).get(\"https://jsonplaceholder.typicode.com/todos/2\")\n"
                   <> "    return resp.read()"
+
 
 outgoingContentFastify :: Text -> Text -> Html ()
 outgoingContentFastify apikey current_tab =
@@ -288,6 +298,7 @@ outgoingContentFastify apikey current_tab =
                   <> "  );\n"
                   <> "  return reply.send(res.data);\n"
                   <> "});"
+
 
 outgoingContentGin :: Text -> Text -> Html ()
 outgoingContentGin apikey current_tab =
@@ -335,6 +346,7 @@ outgoingContentGin apikey current_tab =
                   <> "    })\n"
                   <> "}"
 
+
 tabs :: Text -> Html ()
 tabs current_tab =
   ul_ [class_ "grid grid-cols-3 font-medium w-full gap-4"] $ do
@@ -350,67 +362,67 @@ tabs current_tab =
     |]
     li_ [class_ "shrink-0"] $ do
       button_
-        [ class_ $ if current_tab == "express" then "sdk_tab sdk_tab_active" else "sdk_tab",
-          [__| install Navigatable(content: #express_content) |],
-          id_ "express"
+        [ class_ $ if current_tab == "express" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #express_content) |]
+        , id_ "express"
         ]
         do
           img_ [src_ "/assets/framework-logos/express-logo.png", alt_ "Express Js", class_ "w-full"]
     li_ [class_ "shrink-0"] $ do
       button_
-        [ class_ $ if current_tab == "adonis" then "sdk_tab sdk_tab_active" else "sdk_tab",
-          [__| install Navigatable(content: #adonis_content) |],
-          id_ "adonis"
+        [ class_ $ if current_tab == "adonis" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #adonis_content) |]
+        , id_ "adonis"
         ]
         do
           img_ [src_ "/assets/framework-logos/adonis-logo.png", alt_ "adonis", class_ "w-full"]
     li_ [class_ "shrink-0"] do
       button_
-        [ class_ $ if current_tab == "gin" then "sdk_tab sdk_tab_active" else "sdk_tab",
-          [__| install Navigatable(content: #gin_content) |],
-          id_ "gin"
+        [ class_ $ if current_tab == "gin" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #gin_content) |]
+        , id_ "gin"
         ]
         do
           img_ [src_ "/assets/framework-logos/gin-logo.png", alt_ "Gin", class_ "w-full"]
     li_ [class_ "shrink-0"] do
       button_
-        [ class_ $ if current_tab == "laravel" then "sdk_tab sdk_tab_active" else "sdk_tab",
-          [__| install Navigatable(content: #laravel_content) |],
-          id_ "laravel"
+        [ class_ $ if current_tab == "laravel" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #laravel_content) |]
+        , id_ "laravel"
         ]
         do
           img_ [src_ "/assets/framework-logos/laravel-logo.png", alt_ "", class_ "w-full"]
 
     li_ [class_ "shrink-0"] do
       button_
-        [ class_ $ if current_tab == "flask" then "sdk_tab sdk_tab_active" else "sdk_tab",
-          [__| install Navigatable(content: #flask_content) |],
-          id_ "flask"
+        [ class_ $ if current_tab == "flask" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #flask_content) |]
+        , id_ "flask"
         ]
         do
           img_ [src_ "/assets/framework-logos/flask-logo.png", alt_ "", class_ "w-full"]
 
     li_ [class_ "shrink-0"] do
       button_
-        [ class_ $ if current_tab == "fastapi" then "sdk_tab sdk_tab_active" else "sdk_tab",
-          [__| install Navigatable(content: #fastapi_content) |],
-          id_ "fastapi"
+        [ class_ $ if current_tab == "fastapi" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #fastapi_content) |]
+        , id_ "fastapi"
         ]
         do
           img_ [src_ "/assets/framework-logos/fastapi-logo.png", alt_ "", class_ "w-full"]
     li_ [class_ "shrink-0"] do
       button_
-        [ class_ $ if current_tab == "django" then "sdk_tab sdk_tab_active" else "sdk_tab",
-          [__| install Navigatable(content: #django_content) |],
-          id_ "django"
+        [ class_ $ if current_tab == "django" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #django_content) |]
+        , id_ "django"
         ]
         do
           img_ [src_ "/assets/framework-logos/django-logo.png", alt_ "", class_ "w-full"]
     li_ [class_ "shrink-0"] do
       button_
-        [ class_ $ if current_tab == "fastify" then "sdk_tab sdk_tab_active" else "sdk_tab",
-          [__| install Navigatable(content: #fastify_content) |],
-          id_ "fastify"
+        [ class_ $ if current_tab == "fastify" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #fastify_content) |]
+        , id_ "fastify"
         ]
         do
           img_ [src_ "/assets/framework-logos/fastify-logo.png", alt_ "", class_ "w-full"]
