@@ -8,12 +8,12 @@ import Data.Time.Clock (getCurrentTime)
 import Data.Tuple.Extra (fst3)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
-import Effectful.PostgreSQL.Transact.Effect
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Fmt (commaizeF, fmt)
 import Lucid
-import Lucid.Htmx
-import Lucid.Hyperscript.QuasiQuoter
+import Lucid.Htmx (hxBoost_, hxGet_, hxIndicator_, hxPost_, hxSwap_, hxTrigger_)
+import Lucid.Hyperscript.QuasiQuoter (__)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
@@ -21,13 +21,11 @@ import Models.Projects.Projects qualified as Projets
 import Models.Users.Sessions qualified as Sessions
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Pages.NonMember (userNotMemeberPage)
 import PyF qualified
 import Relude hiding (ask, asks)
-import Relude.Unsafe qualified as Unsafe
-import System.Config
-import System.Types
-import Utils (deleteParam, faIcon_, faSprite_, mIcon_, textToBool, userIsProjectMember)
+import System.Config (AuthContext)
+import System.Types (ATAuthCtx)
+import Utils (deleteParam, faIcon_, faSprite_, mIcon_, textToBool)
 
 
 data ParamInput = ParamInput
@@ -40,48 +38,38 @@ data ParamInput = ParamInput
 
 endpointListGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
 endpointListGetH pid layoutM ackdM archivedM hostM projectHostM sortM hxRequestM hxBoostedM hxCurrentURL = do
+  (sess, project) <- Sessions.sessionAndProject pid
   let ackd = maybe True textToBool ackdM
   let archived = maybe False textToBool archivedM
 
   appCtx <- ask @AuthContext
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-
-  isMember <- dbtToEff $ userIsProjectMember sess pid
-  if not isMember
-    then do
-      pure $ userNotMemeberPage sess
-    else do
-      (project, endpointStats, projHosts, inbox) <- dbtToEff do
-        project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-        endpointStats <- case hostM of
-          Just h -> Endpoints.dependencyEndpointsRequestStatsByProject pid h
-          Nothing -> Endpoints.endpointRequestStatsByProject pid ackd archived projectHostM sortM
-        projHosts <- Endpoints.getProjectHosts pid
-        inbox <- Endpoints.countEndpointInbox pid
-        pure (project, endpointStats, projHosts, inbox)
-      let bwconf =
-            (def :: BWConfig)
-              { sessM = Just sess
-              , currProject = project
-              , pageTitle = "Endpoints"
-              }
-      let currentURL = "/p/" <> pid.toText <> "/endpoints?layout=" <> fromMaybe "false" layoutM <> "&ackd=" <> fromMaybe "true" ackdM <> "&archived=" <> fromMaybe "false" archivedM <> "&sort=" <> fromMaybe "event" sortM
-      currTime <- liftIO getCurrentTime
-      let paramInput =
-            ParamInput
-              { currentURL = currentURL
-              , ackd = ackd
-              , archived = archived
-              , sort = fromMaybe "events" sortM
-              }
-      let elementBelowTabs =
-            div_ [class_ "grid grid-cols-5", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"]
-              $ endpointList' paramInput currTime pid endpointStats inbox
-      case (hxRequestM, hxBoostedM) of
-        (Just "true", Just "false") -> pure elementBelowTabs
-        (Just "true", Nothing) -> pure elementBelowTabs
-        _ -> pure $ bodyWrapper bwconf $ endpointListPage paramInput pid currTime endpointStats projHosts hostM projectHostM inbox
+  endpointStats <- dbtToEff $ case hostM of
+    Just h -> Endpoints.dependencyEndpointsRequestStatsByProject pid h
+    Nothing -> Endpoints.endpointRequestStatsByProject pid ackd archived projectHostM sortM
+  projHosts <- dbtToEff $ Endpoints.getProjectHosts pid
+  inbox <- dbtToEff $ Endpoints.countEndpointInbox pid
+  let bwconf =
+        (def :: BWConfig)
+          { sessM = Just sess.persistentSession
+          , currProject = Just project
+          , pageTitle = "Endpoints"
+          }
+  let currentURL = "/p/" <> pid.toText <> "/endpoints?layout=" <> fromMaybe "false" layoutM <> "&ackd=" <> fromMaybe "true" ackdM <> "&archived=" <> fromMaybe "false" archivedM <> "&sort=" <> fromMaybe "event" sortM
+  currTime <- liftIO getCurrentTime
+  let paramInput =
+        ParamInput
+          { currentURL = currentURL
+          , ackd = ackd
+          , archived = archived
+          , sort = fromMaybe "events" sortM
+          }
+  let elementBelowTabs =
+        div_ [class_ "grid grid-cols-5", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"]
+          $ endpointList' paramInput currTime pid endpointStats inbox
+  case (hxRequestM, hxBoostedM) of
+    (Just "true", Just "false") -> pure elementBelowTabs
+    (Just "true", Nothing) -> pure elementBelowTabs
+    _ -> pure $ bodyWrapper bwconf $ endpointListPage paramInput pid currTime endpointStats projHosts hostM projectHostM inbox
 
 
 endpointListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Endpoints.EndpointRequestStats -> Vector Endpoints.Host -> Maybe Text -> Maybe Text -> Int -> Html ()

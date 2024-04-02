@@ -25,7 +25,6 @@ import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Pkg.Components (navBar)
 import Pkg.Mail (sendSlackMessage)
 import Relude hiding (ask, asks)
-import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
 import System.Config
@@ -126,20 +125,17 @@ toLinkPage code = do
 
 linkProjectsGetH :: Maybe Text -> ATAuthCtx (Html ())
 linkProjectsGetH slack_code = do
-  -- TODO: temporary, to work with current logic
+  sess <- Sessions.getSession
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-
-  projects <- dbtToEff $ Projects.selectProjectsForUser sess.userId
   let client_id = envCfg.slackClientId
   let client_secret = envCfg.slackClientSecret
   let redirect_uri = envCfg.slackRedirectUri
   token <- liftIO $ exchangeCodeForToken client_id client_secret redirect_uri (fromMaybe "" slack_code)
+  projects <- dbtToEff $ Projects.selectProjectsForUser sess.persistentSession.userId
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess
+          { sessM = Just sess.persistentSession
           , currProject = Nothing
           , pageTitle = "Link a project"
           }

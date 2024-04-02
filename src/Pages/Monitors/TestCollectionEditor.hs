@@ -9,7 +9,6 @@ import Data.Text qualified as T
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
-import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
@@ -31,18 +30,17 @@ import Pkg.Components qualified as Components
 import PyF (fmt)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
-import System.Config (AuthContext)
 import System.Types (ATAuthCtx)
 import Utils (faIcon_, faSprite_)
 
 
 data CollectionStepUpdateForm = CollectionStepUpdateForm
   { stepsData :: V.Vector Testing.CollectionStepData
-  , title :: Text
-  , description :: Text
+  , title :: Maybe Text
+  , description :: Maybe Text
   , scheduled :: Maybe Text
-  , scheduleNumber :: Text
-  , scheduleNumberUnit :: Text
+  , scheduleNumber :: Maybe Text
+  , scheduleNumberUnit :: Maybe Text
   }
   deriving stock (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via (DAE.CustomJSON) '[DAE.OmitNothingFields] CollectionStepUpdateForm
@@ -51,7 +49,7 @@ data CollectionStepUpdateForm = CollectionStepUpdateForm
 collectionStepsUpdateH :: Projects.ProjectId -> Testing.CollectionId -> CollectionStepUpdateForm -> ATAuthCtx (Html ())
 collectionStepsUpdateH pid colId colF = do
   let isScheduled = colF.scheduled == Just "on"
-  _ <- dbtToEff $ Testing.updateCollection pid colId colF.title colF.description isScheduled (colF.scheduleNumber <> " " <> colF.scheduleNumberUnit) colF.stepsData
+  _ <- dbtToEff $ Testing.updateCollection pid colId (fromMaybe "" colF.title) (fromMaybe "" colF.description) isScheduled ((fromMaybe "" colF.scheduleNumber) <> " " <> fromMaybe "" colF.scheduleNumberUnit) colF.stepsData
   -- TODO: toast
   pure $ toHtml ""
 
@@ -68,15 +66,12 @@ collectionRunTestsH pid colId runIdxM stepsForm = do
 
 collectionGetH :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (Html ())
 collectionGetH pid colId = do
-  appConf <- ask @AuthContext
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
+  (sess, project) <- Sessions.sessionAndProject pid
   collectionM <- dbtToEff $ Testing.getCollectionById colId
-  project <- dbtToEff $ Projects.selectProjectForUser (Sessions.userId sess, pid)
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = project
+          { sessM = Just sess.persistentSession
+          , currProject = Just project
           , pageTitle = "Testing"
           }
   pure $ bodyWrapper bwconf $ collectionPage pid (Unsafe.fromJust collectionM)
@@ -118,7 +113,7 @@ collectionPage pid col = do
   section_ [class_ "h-full overflow-y-hidden"] do
     form_
       [ id_ "stepsForm"
-      , class_ "grid grid-cols-2 h-full divide-x divide-gray-200 group/colForm overflow-y-hidden"
+      , class_ "grid grid-cols-2 h-full divide-x divide-gray-200 group/colform overflow-y-hidden"
       , hxPost_ ""
       , hxSwap_ "none"
       , hxExt_ "json-enc"
@@ -147,12 +142,10 @@ collectionPage pid col = do
                 , hxTarget_ "#step-results-parent"
                 , hxSwap_ "innerHTML"
                 ]
-                do
-                  span_ "Run all" >> faSprite_ "play" "solid" "w-3 h-3"
-              button_ [class_ "btn btn-sm btn-warning ", type_ "submit"] do
-                span_ "Save" >> faSprite_ "floppy-disk" "solid" "w-3 h-3"
+                (span_ "Run all" >> faSprite_ "play" "solid" "w-3 h-3")
+              button_ [class_ "btn btn-sm btn-warning ", type_ "submit"] (span_ "Save" >> faSprite_ "floppy-disk" "solid" "w-3 h-3")
               label_ [class_ "relative inline-flex items-center cursor-pointer space-x-2"] do
-                input_ [type_ "checkbox", class_ "toggle editorMode"] >> span_ [class_ "text-sm"] "Code"
+                input_ [type_ "checkbox", class_ "toggle editormode"] >> span_ [class_ "text-sm"] "Code"
           div_ [class_ "h-full flex-1 overflow-y-hidden"] $ termRaw "steps-editor" [id_ "stepsEditor"] ""
 
         div_ [class_ "col-span-1 h-full border-r border-gray-200"] do

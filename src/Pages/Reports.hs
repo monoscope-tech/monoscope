@@ -33,38 +33,7 @@ import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTim
 import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
-import Effectful.Reader.Static (ask)
-import Lucid (
-  Html,
-  ToHtml (toHtml),
-  a_,
-  checked_,
-  class_,
-  div_,
-  for_,
-  h3_,
-  h4_,
-  h5_,
-  href_,
-  id_,
-  img_,
-  input_,
-  label_,
-  name_,
-  p_,
-  small_,
-  span_,
-  src_,
-  style_,
-  table_,
-  tbody_,
-  td_,
-  th_,
-  thead_,
-  tr_,
-  type_,
-  value_,
- )
+import Lucid
 import Lucid.Htmx (hxGet_, hxPost_, hxSwap_, hxTrigger_)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Fields.Types (textFieldTypeToText)
@@ -74,43 +43,10 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
-import Pages.NonMember (userNotMemeberPage)
-import Relude (
-  Applicative (pure),
-  Bool (False),
-  ConvertUtf8 (decodeUtf8),
-  Double,
-  Foldable (length, null),
-  Fractional ((/)),
-  Generic,
-  Int,
-  Integer,
-  Maybe (..),
-  Num (fromInteger, (*), (+), (-)),
-  Ord ((<), (>), (>=)),
-  RealFrac (round),
-  Semigroup ((<>)),
-  Show,
-  String,
-  Text,
-  ToString (toString),
-  forM_,
-  fromIntegral,
-  fromMaybe,
-  mapM_,
-  not,
-  pass,
-  readMaybe,
-  show,
-  ($),
-  (||),
- )
-import Relude.Unsafe qualified as Unsafe
+import Relude
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
-import System.Config (AuthContext)
 import System.Types (ATAuthCtx)
-import Utils (userIsProjectMember)
 
 
 data PerformanceReport = PerformanceReport
@@ -163,81 +99,43 @@ data ReportData = ReportData
 
 reportsPostH :: Projects.ProjectId -> Text -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
 reportsPostH pid t = do
-  appCtx <- ask @AuthContext
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-
-  isMember <- dbtToEff $ userIsProjectMember sess pid
-  if not isMember
-    then do
-      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Only project memebers can update reports notification settings"]}|]
-      pure $ addHeader hxTriggerData $ userNotMemeberPage sess
-    else do
-      apiKeys <- dbtToEff do
-        Projects.updateProjectReportNotif pid t
-      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Report nofications updated Successfully"]}|]
-      pure $ addHeader hxTriggerData $ span_ [] ""
+  _ <- Sessions.sessionAndProject pid
+  apiKeys <- dbtToEff $ Projects.updateProjectReportNotif pid t
+  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Report nofications updated Successfully"]}|]
+  pure $ addHeader hxTriggerData $ span_ [] ""
 
 
 singleReportGetH :: Projects.ProjectId -> Reports.ReportId -> ATAuthCtx (Html ())
 singleReportGetH pid rid = do
-  appCtx <- ask @AuthContext
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-
-  isMember <- dbtToEff $ userIsProjectMember sess pid
-  if not isMember
-    then do
-      pure $ userNotMemeberPage sess
-    else do
-      (project, report) <- dbtToEff do
-        project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-        report <- Reports.getReportById rid
-        pure (project, report)
-      let bwconf =
-            (def :: BWConfig)
-              { sessM = Just sess
-              , currProject = project
-              , pageTitle = "Reports"
-              }
-      pure $ bodyWrapper bwconf $ singleReportPage pid report
+  (sess, project) <- Sessions.sessionAndProject pid
+  report <- dbtToEff $ Reports.getReportById rid
+  let bwconf =
+        (def :: BWConfig)
+          { sessM = Just sess.persistentSession
+          , currProject = Just project
+          , pageTitle = "Reports"
+          }
+  pure $ bodyWrapper bwconf $ singleReportPage pid report
 
 
 reportsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
 reportsGetH pid page hxRequest hxBoosted = do
+  (sess, project) <- Sessions.sessionAndProject pid
   let p = toString (fromMaybe "0" page)
   let pg = fromMaybe 0 (readMaybe p :: Maybe Int)
 
-  -- TODO: temporary, to work with current logic
-  appCtx <- ask @AuthContext
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-
-  isMember <- dbtToEff $ userIsProjectMember sess pid
-  if not isMember
-    then do
-      pure $ userNotMemeberPage sess
-    else do
-      (project, reports) <- dbtToEff do
-        project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-        reports <- Reports.reportHistoryByProject pid pg
-        pure (project, reports)
-      let nextUrl = "/p/" <> show pid.unProjectId <> "/reports?page=" <> show (pg + 1)
-      case (hxRequest, hxBoosted) of
-        (Just "true", Nothing) -> pure $ do
-          reportListItems pid reports nextUrl
-        _ -> do
-          let bwconf =
-                (def :: BWConfig)
-                  { sessM = Just sess
-                  , currProject = project
-                  , pageTitle = "Reports"
-                  }
-          let (daily, weekly) = case project of
-                Just proj -> (proj.dailyNotif, proj.weeklyNotif)
-                Nothing -> (False, False)
-
-          pure $ bodyWrapper bwconf $ reportsPage pid reports nextUrl daily weekly
+  reports <- dbtToEff $ Reports.reportHistoryByProject pid pg
+  let nextUrl = "/p/" <> show pid.unProjectId <> "/reports?page=" <> show (pg + 1)
+  case (hxRequest, hxBoosted) of
+    (Just "true", Nothing) -> pure $ reportListItems pid reports nextUrl
+    _ -> do
+      let bwconf =
+            (def :: BWConfig)
+              { sessM = Just sess.persistentSession
+              , currProject = Just project
+              , pageTitle = "Reports"
+              }
+      pure $ bodyWrapper bwconf $ reportsPage pid reports nextUrl project.dailyNotif project.weeklyNotif
 
 
 singleReportPage :: Projects.ProjectId -> Maybe Reports.Report -> Html ()

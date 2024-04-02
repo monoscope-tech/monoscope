@@ -54,7 +54,46 @@ import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Numeric (showHex)
-import Relude
+import Relude (
+  Alternative (empty, (<|>)),
+  Applicative (pure),
+  Bool (..),
+  ConvertUtf8 (decodeUtf8, encodeUtf8),
+  Either,
+  Eq ((==)),
+  Foldable (foldl'),
+  Generic,
+  Int,
+  Maybe (..),
+  Monoid (mconcat),
+  Semigroup ((<>)),
+  Show,
+  String,
+  Text,
+  concat,
+  elem,
+  fromIntegral,
+  fromMaybe,
+  fromRight,
+  fst,
+  head,
+  map,
+  mapMaybe,
+  maybe,
+  or,
+  otherwise,
+  show,
+  snd,
+  sort,
+  sortWith,
+  unzip,
+  viaNonEmpty,
+  ($),
+  (&),
+  (.),
+  (<$>),
+  (<&>),
+ )
 import Relude.Unsafe as Unsafe (read)
 import Text.Regex.TDFA ((=~))
 import Utils (DBField ())
@@ -79,7 +118,7 @@ data RequestMessage = RequestMessage
   , protoMinor :: Int
   , queryParams :: AE.Value -- key value map of a key to a list of text values map[string][]string
   , rawUrl :: Text -- raw request uri: path?query combination
-  , referer :: Maybe (Either Text [Text])
+  , referer :: Text
   , requestBody :: Text
   , requestHeaders :: AE.Value -- key value map of a key to a list of text values map[string][]string
   , responseBody :: Text
@@ -99,19 +138,6 @@ data RequestMessage = RequestMessage
     (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestMessage
 
-
--- Custom ToJSON for Either Text [Text]
-instance {-# OVERLAPPING #-} AE.ToJSON (Either Text [Text]) where
-  toJSON (Left txt) = AE.toJSON txt
-  toJSON (Right texts) = AE.toJSON texts
-
-
--- Custom FromJSON for Either Text [Text]
-instance {-# OVERLAPPING #-} AE.FromJSON (Either Text [Text]) where
-  parseJSON value = case value of
-    AE.String txt -> return $ Left txt
-    AE.Array texts -> Right <$> AE.parseJSON value -- parses an array of Text
-    _ -> fail "Expected either a single string or an array of strings"
 
 
 -- | Walk the JSON once, redact any fields which are in the list of json paths to be redacted.
@@ -271,7 +297,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
           , rawUrl = rM.rawUrl
           , pathParams = rM.pathParams
           , method = method
-          , referer = fromMaybe "" $ rM.referer >>= either Just listToMaybe
+          , referer = rM.referer
           , protoMajor = rM.protoMajor
           , protoMinor = rM.protoMinor
           , duration = calendarTimeTime $ secondsToNominalDiffTime $ fromIntegral duration

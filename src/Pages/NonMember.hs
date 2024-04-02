@@ -10,6 +10,7 @@ import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
 
 
+-- TODO: Delete
 userNotMemeberPage :: Session.PersistentSession -> Html ()
 userNotMemeberPage sess = bodyWrapper bwconf forbiddenPage
   where

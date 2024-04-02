@@ -1,10 +1,8 @@
 module Pages.IntegrationGuides (getH) where
 
-import Data.Default
-import Data.Text
+import Data.Default (Default (def))
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
-import Effectful.Reader.Static (ask)
 import Lucid (
   Html,
   ToHtml (toHtml),
@@ -20,7 +18,7 @@ import Lucid (
   span_,
   target_,
  )
-import Lucid.Hyperscript
+import Lucid.Hyperscript (__)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
@@ -29,47 +27,40 @@ import Pages.BodyWrapper (
   BWConfig (currProject, pageTitle, sessM),
   bodyWrapper,
  )
-import Pages.IntegrationDemos.AdonisJS
-import Pages.IntegrationDemos.Django
-import Pages.IntegrationDemos.DotNet
-import Pages.IntegrationDemos.Echo
-import Pages.IntegrationDemos.ExpressJs
-import Pages.IntegrationDemos.FastApi
-import Pages.IntegrationDemos.FastifyJs
-import Pages.IntegrationDemos.Flask
-import Pages.IntegrationDemos.Gin
-import Pages.IntegrationDemos.GoNative
-import Pages.IntegrationDemos.GorillaMux
-import Pages.IntegrationDemos.Laravel
-import Pages.IntegrationDemos.NestJs
-import Pages.IntegrationDemos.Phoenix
-import Pages.IntegrationDemos.Pyramid
-import Pages.IntegrationDemos.Slim
-import Pages.IntegrationDemos.Symfony
+import Pages.IntegrationDemos.AdonisJS (adonisGuide)
+import Pages.IntegrationDemos.Django (djangoGuide)
+import Pages.IntegrationDemos.DotNet (dotNetGuide)
+import Pages.IntegrationDemos.Echo (echoGuide)
+import Pages.IntegrationDemos.ExpressJs (expressGuide)
+import Pages.IntegrationDemos.FastApi (fastApiGuide)
+import Pages.IntegrationDemos.FastifyJs (fastifyGuide)
+import Pages.IntegrationDemos.Flask (flaskGuide)
+import Pages.IntegrationDemos.Gin (ginGuide)
+import Pages.IntegrationDemos.GoNative (goNativeGuide)
+import Pages.IntegrationDemos.GorillaMux (gorillaGuide)
+import Pages.IntegrationDemos.Laravel (laravelGuide)
+import Pages.IntegrationDemos.NestJs (nestGuide)
+import Pages.IntegrationDemos.Phoenix (phoenixGuide)
+import Pages.IntegrationDemos.Pyramid (pyramidGuide)
+import Pages.IntegrationDemos.Slim (slimGuide)
+import Pages.IntegrationDemos.Symfony (symfonyGuide)
 import Relude hiding (ask)
-import Relude.Unsafe qualified as Unsafe
-import System.Config (AuthContext)
 import System.Types (ATAuthCtx)
-import Utils
+import Utils (faIcon_)
 
 
 getH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
 getH pid sdkM errReportM reqMonM = do
-  appCtx <- ask @AuthContext
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-  (apiKey, project) <- dbtToEff $ do
-    apiKey <- ProjectApiKeys.projectApiKeysByProjectId pid
-    project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-    let key = if V.length apiKey > 0 then let defKey = V.head apiKey in defKey.keyPrefix else "<API_KEY>"
-    pure (key, project)
+  (sess, project) <- Sessions.sessionAndProject pid
+  apiKey <- dbtToEff $ ProjectApiKeys.projectApiKeysByProjectId pid
+  let key = if V.length apiKey > 0 then let defKey = V.head apiKey in defKey.keyPrefix else "<API_KEY>"
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = project
+          { sessM = Just sess.persistentSession
+          , currProject = Just project
           , pageTitle = "Integrations"
           }
-  pure $ bodyWrapper bwconf $ integrationsPage pid (fromMaybe "express" sdkM) apiKey errReportM reqMonM
+  pure $ bodyWrapper bwconf $ integrationsPage pid (fromMaybe "express" sdkM) key errReportM reqMonM
 
 
 integrationsPage :: Projects.ProjectId -> Text -> Text -> Maybe Text -> Maybe Text -> Html ()

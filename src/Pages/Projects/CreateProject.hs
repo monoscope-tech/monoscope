@@ -105,6 +105,10 @@ createProjectFormV =
     <*> check1 description Valor.pass
 
 
+checkEmail :: Text -> Bool
+checkEmail = isJust . T.find (== '@')
+
+
 ----------------------------------------------------------------------------------------------------------
 -- createProjectGetH is the handler for the create projects page
 createProjectGetH :: ATAuthCtx (Html ())
@@ -343,23 +347,22 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                 "Title"
                 span_ [class_ "text-red-400"] " *"
               input_
-                [ class_ "flex h-9 w-full rounded-lg border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                [ class_ "flex h-9 w-full rounded-xl border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors  placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 , type_ "text"
                 , id_ "title"
                 , name_ "title"
                 , value_ cp.title
-                , required_ "required"
                 ]
             input_ [type_ "hidden", id_ "orderId", name_ "orderId", value_ ""]
             div_ [class_ "flex flex-col gap-1 mt-5"] do
               label_ [class_ "text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"] do
                 "Timezone"
-              select_ [name_ "timeZone", id_ "timezone", class_ "px-4 py-2 border bg-gray-100 rounded-lg"] do
+              select_ [name_ "timeZone", id_ "timezone", class_ "px-4 py-2 border bg-gray-100 rounded-xl"] do
                 option_ [value_ cp.timeZone] $ toHtml cp.timeZone
             div_ [class_ "mt-5 "] do
               label_ [class_ "text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"] "Description"
               textarea_
-                [ class_ " flex min-h-[60px] w-full rounded-lg border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 "
+                [ class_ " flex min-h-[60px] w-full rounded-xl border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 "
                 , rows_ "4"
                 , placeholder_ "Description"
                 , id_ "description"
@@ -373,7 +376,7 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                 span_ [class_ "text-red-400"] " *"
               div_ [class_ "grid md:grid-cols-2 gap-4 border-1"] do
                 ( [ ("Free", "20k", "$0", "2", cp.paymentPlan == "Free", "Free")
-                  , ("Pay as you use", "250k", "$1", "Unlimited", paymentPlan == "UsageBased", "UsageBased")
+                  , ("Pay as you go", "250k", "$1", "Unlimited", paymentPlan == "UsageBased", "UsageBased")
                   ]
                     :: [(Text, Text, Text, Text, Bool, Text)]
                   )
@@ -401,12 +404,12 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                         div_ [class_ "text-lg py-3 px-2"] do
                           span_ [class_ "text-2xl text-blue-700"] $ toHtml price
                           if value == "Free"
-                            then do span_ [class_ "text-slate-500"] "/month"
-                            else do span_ [class_ "text-slate-500"] "/additional 10k requests"
+                            then do span_ [class_ "text-slate-500"] "/mo"
+                            else do span_ [class_ "text-slate-500"] " per 10K requests"
                         div_ [class_ "flex flex-col gap-2 p-3"] do
                           div_ [class_ "flex items-center gap-1"] do
                             checkMark
-                            small_ "Max "
+                            small_ "max "
                             span_ $ toHtml team
                             small_ " team members"
                           if value == "Free"
@@ -426,13 +429,13 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                                 small_ "API testing pipelines"
                               div_ [class_ "flex gap-1 items-center"] do
                                 checkMark
-                                small_ "API swagger/OpenAPI hosting"
+                                small_ "API Swagger/OpenAPI Hosting"
                               div_ [class_ "flex gap-1 items-center"] do
                                 checkMark
-                                small_ "API metrics custom monitors"
+                                small_ "API Metrics Custom Monitors"
                               div_ [class_ "flex gap-1 items-center"] do
                                 checkMark
-                                small_ "API live traffic AI-based validations"
+                                small_ "API Live Traffic AI based validations"
 
             div_ [class_ $ "mt-10 " <> if isUpdate then "hidden" else ""] do
               p_ [class_ "text-slate-400 mx-2 font-light text-sm"] "Invite a project member"
@@ -449,7 +452,7 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                       $ img_ [src_ "/assets/svgs/delete.svg", class_ "cursor-pointer"]
               a_
                 [ class_ "bg-transparent inline-flex cursor-pointer mt-2"
-                , [__| on click put #inviteTmpl.innerHTML at end of #inviteMemberSection then 
+                , [__| on click append #inviteTmpl.innerHTML to #inviteMemberSection then 
                          _hyperscript.processNode(#inviteMemberSection) then halt |]
                 ]
                 do
@@ -527,7 +530,7 @@ createProjectBody sess envCfg isUpdate cp cpe = do
       when isUpdate do
         let pid = cp.projectId
         div_ [class_ "col-span-1 h-full justify-center items-center w-full text-center pt-24"] do
-          h2_ [class_ "text-red-800 font-medium pb-4"] "Delete project. This is dangerous and unreversible."
+          h2_ [class_ "text-red-800 font-medium pb-4"] "Delete project. This is dangerous and unreversable"
           button_
             [ class_ "btn btn-sm bg-red-800 text-white shadow-md hover:bg-red-700 cursor-pointer rounded-md"
             , hxGet_ [text|/p/$pid/delete|]

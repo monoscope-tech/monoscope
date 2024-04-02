@@ -11,7 +11,6 @@ import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.UUID qualified as UUID
 import Data.Vector (iforM_)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
-import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxGet_, hxSwap_, hxTrigger_)
@@ -21,7 +20,6 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Network.URI (escapeURIString, isUnescapedInURI)
 import Pages.Components qualified as Components
-import Pages.NonMember (userNotMemeberPage)
 import PyF (fmt)
 import Relude (
   Applicative (pure),
@@ -43,15 +41,12 @@ import Relude (
   forM_,
   fromMaybe,
   mapM_,
-  not,
   show,
   sort,
   when,
   ($),
   (&),
  )
-import Relude.Unsafe qualified as Unsafe
-import System.Config (AuthContext)
 import System.Types (ATAuthCtx)
 import Utils (
   faIcon_,
@@ -59,22 +54,17 @@ import Utils (
   getStatusColor,
   mIcon_,
   unwrapJsonPrimValue,
-  userIsProjectMember,
  )
 
 
 expandAPIlogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATAuthCtx (Html ())
 expandAPIlogItemH pid rdId createdAt = do
-  -- TODO: temporary, to work with current logic
-  appCtx <- ask @AuthContext
-  sess' <- Sessions.getSession
-
+  _ <- Sessions.sessionAndProject pid
   logItemM <- dbtToEff $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
-  let content = case logItemM of
-        Just req -> expandAPIlogItem' pid req True
-        Nothing -> div_ [class_ "h-full flex flex-col justify-center items-center"] do
-          p_ [] "Request not found"
-  pure content
+  pure $ case logItemM of
+    Just req -> expandAPIlogItem' pid req True
+    Nothing -> div_ [class_ "h-full flex flex-col justify-center items-center"] do
+      p_ [] "Request not found"
 
 
 expandAPIlogItem' :: Projects.ProjectId -> RequestDumps.RequestDumpLogItem -> Bool -> Html ()
@@ -215,21 +205,11 @@ expandAPIlogItem' pid req modal = do
 
 apiLogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATAuthCtx (Html ())
 apiLogItemH pid rdId createdAt = do
-  -- TODO: temporary, to work with current logic
-  appCtx <- ask @AuthContext
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-
-  isMember <- dbtToEff $ userIsProjectMember sess pid
-  if not isMember
-    then do
-      pure $ userNotMemeberPage sess
-    else do
-      logItemM <- dbtToEff $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
-      let content = case logItemM of
-            Just req -> apiLogItemView req (RequestDumps.requestDumpLogItemUrlPath pid req)
-            Nothing -> div_ "invalid log request ID"
-      pure content
+  _ <- Sessions.sessionAndProject pid
+  logItemM <- dbtToEff $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
+  pure $ case logItemM of
+    Just req -> apiLogItemView req (RequestDumps.requestDumpLogItemUrlPath pid req)
+    Nothing -> div_ "invalid log request ID"
 
 
 apiLogItemView :: RequestDumps.RequestDumpLogItem -> Text -> Html ()

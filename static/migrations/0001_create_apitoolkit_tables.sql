@@ -914,7 +914,6 @@ CREATE TABLE IF NOT EXISTS monitors.query_monitors
   deleted_at                   TIMESTAMP WITH TIME ZONE 
 );
 SELECT manage_updated_at('monitors.query_monitors');
-``
 -- used for the alerts, to execute queries stored in a table, 
 create or replace function eval(expression text) returns integer
 as 
@@ -1007,6 +1006,8 @@ BEGIN
 END;
 $$;
 SELECT add_job('tests.check_tests_to_trigger', '10min');
+
+INSERT into projects.projects (id, title) VALUES ('00000000-0000-0000-0000-000000000000', 'Demo Project');
 
 COMMIT;
 

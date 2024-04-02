@@ -129,7 +129,6 @@ library
       ProcessMessageSpec
       RequestMessages
       RequestMessagesSpec
-      SessionCookies
       Spec
       Start
       System.Config

@@ -25,7 +25,6 @@ import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as V
 import Data.Vector qualified as Vector
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
-import Effectful.Reader.Static (ask)
 import Fmt (commaizeF, fmt)
 import Lucid
 import Lucid.Aria qualified as Aria
@@ -38,11 +37,9 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Pages.Monitors.Alerts qualified as Alerts
-import Pages.NonMember (userNotMemeberPage)
 import Pkg.Components (loader)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
-import System.Config (AuthContext)
 import System.Types (ATAuthCtx)
 import Utils
 import Witch (from)
@@ -57,10 +54,7 @@ import Witch (from)
 
 apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
 apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoostedM = do
-  -- TODO: temporary, to work with current logic
-  appCtx <- ask @AuthContext
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
+  (sess, project) <- Sessions.sessionAndProject pid
 
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
   let query = fromMaybe "" queryM
@@ -79,59 +73,52 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoostedM
                 (Just s, Just e) -> Just (s <> "-" <> e)
                 _ -> Nothing
           (f, t, range)
-  isMember <- dbtToEff $ userIsProjectMember sess pid
-  if not isMember
-    then do
-      pure $ userNotMemeberPage sess
-    else do
-      -- Temporary option, using Right to unwrap. Should handle Left
-      (project, tableAsVecE) <- dbtToEff do
-        project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-        tableAsVecE <- RequestDumps.selectLogTable pid query cursorM' (fromD, toD) summaryCols
-        pure (project, tableAsVecE)
 
-      -- FIXME: we're silently ignoring parse errors and the likes.
-      let tableAsVec = Unsafe.fromJust $ hush tableAsVecE
+  tableAsVecE <- dbtToEff $ RequestDumps.selectLogTable pid query cursorM' (fromD, toD) summaryCols
 
-      freeTierExceeded <-
-        dbtToEff
-          $ if (Unsafe.fromJust project).paymentPlan == "Free"
-            then do
-              totalRequest <- RequestDumps.getTotalRequestForCurrentMonth pid
-              return $ totalRequest > 20000
-            else do
-              return False
-      let (requestVecs, colNames, requestsCount) = tableAsVec
-          curatedColNames = nubOrd $ curateCols summaryCols colNames
-          colIdxMap = listToIndexHashMap colNames
-          reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "created_at") =<< (requestVecs V.!? (V.length requestVecs - 1))
-          nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore")
-          resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing
-          page =
-            ApiLogsPageData
-              { pid
-              , resultCount = requestsCount
-              , requestVecs
-              , cols = curatedColNames
-              , colIdxMap
-              , nextLogsURL
-              , resetLogsURL
-              , currentRange
-              , exceededFreeTier = freeTierExceeded
+  -- FIXME: we're silently ignoring parse errors and the likes.
+  let tableAsVec = Unsafe.fromJust $ hush tableAsVecE
+
+  freeTierExceeded <-
+    dbtToEff
+      $ if project.paymentPlan == "Free"
+        then do
+          totalRequest <- RequestDumps.getTotalRequestForCurrentMonth pid
+          return $ totalRequest > 20000
+        else do
+          return False
+  let (requestVecs, colNames, requestsCount) = tableAsVec
+      curatedColNames = nubOrd $ curateCols summaryCols colNames
+      colIdxMap = listToIndexHashMap colNames
+      reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "created_at") =<< (requestVecs V.!? (V.length requestVecs - 1))
+      nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore")
+      resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing
+      page =
+        ApiLogsPageData
+          { pid
+          , resultCount = requestsCount
+          , requestVecs
+          , cols = curatedColNames
+          , colIdxMap
+          , nextLogsURL
+          , resetLogsURL
+          , currentRange
+          , exceededFreeTier = freeTierExceeded
+          , query = queryM
+          }
+
+  case (layoutM, hxRequestM, hxBoostedM) of
+    (Just "loadmore", Just "true", _) -> pure $ logItemRows_ pid requestVecs curatedColNames colIdxMap nextLogsURL
+    (Just "resultTable", Just "true", _) -> pure $ resultTable_ page False
+    (Just "all", Just "true", _) -> pure $ resultTable_ page True
+    _ -> do
+      let bwconf =
+            (def :: BWConfig)
+              { sessM = Just sess.persistentSession
+              , currProject = Just project
+              , pageTitle = "API Log Explorer"
               }
-
-      case (layoutM, hxRequestM, hxBoostedM) of
-        (Just "loadmore", Just "true", _) -> pure $ logItemRows_ pid requestVecs curatedColNames colIdxMap nextLogsURL
-        (Just "resultTable", Just "true", _) -> pure $ resultTable_ page False
-        (Just "all", Just "true", _) -> pure $ resultTable_ page True
-        _ -> do
-          let bwconf =
-                (def :: BWConfig)
-                  { sessM = Just sess
-                  , currProject = project
-                  , pageTitle = "API Log Explorer"
-                  }
-          pure $ bodyWrapper bwconf $ apiLogsPage page
+      pure $ bodyWrapper bwconf $ apiLogsPage page
 
 
 timePickerItems :: [(Text, Text)]
@@ -217,6 +204,7 @@ data ApiLogsPageData = ApiLogsPageData
   , resetLogsURL :: Text
   , currentRange :: Maybe Text
   , exceededFreeTier :: Bool
+  , query :: Maybe Text
   }
 
 
@@ -327,7 +315,7 @@ resultTable_ :: ApiLogsPageData -> Bool -> Html ()
 resultTable_ page mainLog = table_ [class_ "w-full table table-sm table-pin-rows table-pin-cols", style_ "height:1px", id_ "resultTable"] do
   -- height:1px fixes the cell minimum heights somehow.
   let isLogEventB = isLogEvent page.cols
-  when (null page.requestVecs) $ do
+  when (null page.requestVecs && isNothing page.query) $ do
     if mainLog
       then do
         section_ [class_ "w-max  mx-auto my-16 p-5 sm:py-14 sm:px-24 items-center flex gap-16"] do
@@ -339,7 +327,7 @@ resultTable_ page mainLog = table_ [class_ "w-full table table-sm table-pin-rows
             a_ [href_ $ "/p/" <> page.pid.toText <> "/integration_guides", class_ "w-max btn btn-indigo -ml-1 text-md"] "Read the setup guide"
       else do
         section_ [class_ "w-max mx-auto"] do
-          p_ "This request has no outgoing requests"
+          p_ "This request has no outgoing requests yet."
   unless (null page.requestVecs) $ do
     thead_ $ tr_ $ forM_ page.cols $ logTableHeading_ page.pid isLogEventB
     tbody_ [id_ "w-full log-item-table-body"] do

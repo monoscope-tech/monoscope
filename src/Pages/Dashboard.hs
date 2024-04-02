@@ -16,7 +16,6 @@ import Data.Time.Format (defaultTimeLocale)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as Vector
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
-import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Fmt (fixedF, fmt)
 import Lucid
@@ -36,44 +35,8 @@ import Pages.Charts.Charts qualified as C
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (statBox)
 import Pages.Endpoints.EndpointList (renderEndpoint)
-import Relude (
-  Applicative (pure),
-  Bool (..),
-  ConvertUtf8 (decodeUtf8),
-  Double,
-  Eq ((==)),
-  Foldable (null),
-  Fractional ((/)),
-  Int,
-  Integral (quot),
-  Maybe (..),
-  Monad (return),
-  MonadIO (liftIO),
-  Num (negate, (*)),
-  Ord ((>)),
-  RealFrac (round),
-  Semigroup ((<>)),
-  Text,
-  ToText (toText),
-  catMaybes,
-  fromMaybe,
-  isNothing,
-  mapM_,
-  maybe,
-  otherwise,
-  unless,
-  when,
-  ($),
-  (&),
-  (&&),
-  (++),
-  (.),
-  (<$>),
-  (||),
- )
-import Relude.Unsafe qualified as Unsafe
+import Relude hiding (max, min)
 import System.Clock (Clock (Monotonic), getTime)
-import System.Config (AuthContext)
 import System.Types (ATAuthCtx)
 import Text.Interpolation.Nyan (int, rmode')
 import Utils (deleteParam, faIcon_, freeTierLimitExceededBanner, mIcon_)
@@ -99,18 +62,11 @@ data ParamInput = ParamInput
 
 dashboardGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
 dashboardGetH pid fromDStr toDStr sinceStr' = do
-  -- TODO: temporary, to work with current logic
-  appCtx <- ask @AuthContext
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-
+  (sess, project) <- Sessions.sessionAndProject pid
   now <- Time.currentTime
   let sinceStr = if isNothing fromDStr && isNothing toDStr && isNothing sinceStr' || fromDStr == Just "" then Just "7D" else sinceStr'
-  (hasApikeys, hasRequest, newEndpoints) <- dbtToEff do
-    -- apiKeys <- ProjectApiKeys.countProjectApiKeysByProjectId pid
-    hasRequests <- RequestDumps.hasRequest pid
-    newEndpoints <- Endpoints.endpointRequestStatsByProject pid False False Nothing Nothing
-    pure (True, hasRequests, newEndpoints)
+  hasRequests <- dbtToEff $ RequestDumps.hasRequest pid
+  newEndpoints <- dbtToEff $ Endpoints.endpointRequestStatsByProject pid False False Nothing Nothing
   -- TODO: Replace with a duration parser.
   let (fromD, toD) = case sinceStr of
         Just "1H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just $ utcToZonedTime utc now)
@@ -127,35 +83,34 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
           (f, t)
 
   startTime <- liftIO $ getTime Monotonic
-  (project, projectRequestStats, reqLatenciesRolledByStepsLabeled, freeTierExceeded) <- dbtToEff do
-    project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-
+  (projectRequestStats, reqLatenciesRolledByStepsLabeled, freeTierExceeded) <- dbtToEff do
     projectRequestStats <- fromMaybe (def :: Projects.ProjectRequestStats) <$> Projects.projectRequestStatsByProject pid
     let maxV = round projectRequestStats.p99 :: Int
     let steps' = (maxV `quot` 100) :: Int
     let steps = if steps' == 0 then 100 else steps'
     reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledByStepsForProject maxV steps pid (fromD, toD)
+
     freeTierExceeded <-
-      if (Unsafe.fromJust project).paymentPlan == "Free"
+      if project.paymentPlan == "Free"
         then do
           totalRequest <- RequestDumps.getTotalRequestForCurrentMonth pid
           return $ totalRequest > 20000
         else do
           return False
-    pure (project, projectRequestStats, Vector.toList reqLatenciesRolledBySteps, freeTierExceeded)
+    pure (projectRequestStats, Vector.toList reqLatenciesRolledBySteps, freeTierExceeded)
 
   let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = project
+          { sessM = Just sess.persistentSession
+          , currProject = Just project
           , pageTitle = "Dashboard"
           }
   currTime <- liftIO getCurrentTime
   let currentURL = "/p/" <> pid.toText <> "?&from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
   let currentPickerTxt = fromMaybe (maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD) sinceStr
   let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt}
-  pure $ bodyWrapper bwconf $ dashboardPage pid paramInput currTime projectRequestStats newEndpoints reqLatenciesRolledByStepsJ (fromD, toD) freeTierExceeded hasRequest
+  pure $ bodyWrapper bwconf $ dashboardPage pid paramInput currTime projectRequestStats newEndpoints reqLatenciesRolledByStepsJ (fromD, toD) freeTierExceeded hasRequests
 
 
 dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Vector.Vector Endpoints.EndpointRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Bool -> Bool -> Html ()

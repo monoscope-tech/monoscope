@@ -25,4 +25,7 @@
 
 :set -fwarn-unused-binds -fwarn-unused-imports
 :set -isrc
+
+:set -optl-Wl,-rpath,/Users/tonyalaribe/Projects/apitoolkit/apitoolkit-server/.stack-work/dist/aarch64-osx/ghc-9.8.1/build/
+
 -- :load Main
