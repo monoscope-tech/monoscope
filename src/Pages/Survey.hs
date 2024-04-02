@@ -10,7 +10,7 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.PostgreSQL.Transact.Effect
 import Effectful.Reader.Static (ask, asks)
 import Lucid
-import Lucid.Htmx (hxIndicator_, hxPost_, hxSwap_)
+import Lucid.Htmx (hxPost_, hxSwap_)
 import Lucid.Hyperscript
 import Lucid.Svg (d_, fill_, path_, viewBox_)
 import Models.Projects.Projects qualified as Projects
@@ -125,7 +125,6 @@ surveyPage pid full_name phoneNumber = do
               [ hxPost_ $ "/p/" <> pid.toText <> "/survey"
               , hxSwap_ "none"
               , class_ "w-full"
-              , hxIndicator_ "#proceedIndicator"
               ]
               do
                 div_ [class_ "p-6 flex flex-col gap-8 overflow-y-auto", style_ "width:100%"] do
@@ -188,9 +187,9 @@ surveyPage pid full_name phoneNumber = do
                       input_ [value_ phoneNumber, class_ "px-2 py-1 bg-slate-50 border border-gray-300 text-gray-900 focus:outline-none rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full", type_ "text", name_ "phoneNumber"]
 
                 div_ [class_ "flex w-full justify-end items-center px-6 space-x-2 mt-8"] do
-                  div_ [id_ "proceedIndicator", class_ "survey-indicator htmx-indicator"] do
-                    span_ [class_ "loading loading-dots loading-lg loading-indigo"] ""
-                  button_ [type_ "sumbit", class_ "btn-md btn-indigo rounded-md text-lg px-4 py-2"] "Proceed"
+                  button_ [type_ "sumbit", class_ "btn-lg btn-indigo text-xl px-4"] "Proceed"
+                  div_ [class_ "htmx-indicator query-indicator"] do
+                    loader
 
 
 stackOptions :: [(T.Text, T.Text, T.Text)]

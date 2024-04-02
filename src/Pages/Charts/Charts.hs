@@ -53,6 +53,7 @@ transform fields tuples =
     timestamp = fst3 $ Unsafe.head tuples
 
 
+
 pivot' :: [(Int, Int, String)] -> ([String], [[Maybe Int]])
 pivot' rows = do
   let extractHeaders = ordNub . map thd3 . sortOn thd3
