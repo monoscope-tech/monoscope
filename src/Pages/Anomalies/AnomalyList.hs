@@ -2,6 +2,7 @@ module Pages.Anomalies.AnomalyList (
   anomalyListGetH,
   anomalyDetailsGetH,
   anomalyBulkActionsPostH,
+  escapedQueryPartial,
   acknowlegeAnomalyGetH,
   unAcknowlegeAnomalyGetH,
   archiveAnomalyGetH,

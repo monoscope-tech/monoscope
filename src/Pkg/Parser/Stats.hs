@@ -115,6 +115,9 @@ pStatsSection = do
 --
 -- >>> parse pTimeChartSection "" "timechart sum(field1) [1d]"
 -- Right (TimeChartCommand (Sum (Subject "field1" "field1" []) Nothing) Nothing (Just (Rollup "1d")))
+--
+-- >>> parse pTimeChartSection "" "timechart count [1d]"
+-- Right (TimeChartCommand (Plain (Subject "count" "count" []) Nothing) Nothing (Just (Rollup "1d")))
 pTimeChartSection :: Parser Section
 pTimeChartSection = do
   _ <- string "timechart"
