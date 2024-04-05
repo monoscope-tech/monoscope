@@ -377,11 +377,11 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
             input_ [name_ "projectId", type_ "hidden", value_ cp.projectId]
             input_ [name_ "paymentPlan", type_ "hidden", value_ paymentPlan, id_ "paymentPlanEl"]
             div_ do
-              label_ [class_ "text-slate-700 mx-2 text-sm"] do
+              label_ [class_ "text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"] do
                 "Title"
                 span_ [class_ "text-red-400"] " *"
               input_
-                [ class_ "h-10 px-5 my-2 w-full text-sm bg-white text-black border-solid border border-gray-200 rounded-2xl "
+                [ class_ "flex h-9 w-full rounded-xl border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors  placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 , type_ "text"
                 , id_ "title"
                 , name_ "title"
@@ -389,14 +389,14 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
                 ]
             input_ [type_ "hidden", id_ "orderId", name_ "orderId", value_ ""]
             div_ [class_ "flex flex-col gap-1 mt-5"] do
-              label_ [class_ "text-slate-700 mx-2 text-sm"] do
+              label_ [class_ "text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"] do
                 "Timezone"
-              select_ [name_ "timeZone", id_ "timezone", class_ "px-4 py-2 border rounded-2xl"] do
+              select_ [name_ "timeZone", id_ "timezone", class_ "px-4 py-2 border bg-gray-100 rounded-xl"] do
                 option_ [value_ cp.timeZone] $ toHtml cp.timeZone
             div_ [class_ "mt-5 "] do
-              label_ [class_ "text-slate-700 mx-2 text-sm"] "Description"
+              label_ [class_ "text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"] "Description"
               textarea_
-                [ class_ " py-2 px-5 my-2 w-full text-sm bg-white text-black border-solid border border-gray-200 rounded-2xl border-1 "
+                [ class_ " flex min-h-[60px] w-full rounded-xl border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 "
                 , rows_ "4"
                 , placeholder_ "Description"
                 , id_ "description"
@@ -405,29 +405,29 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
                 $ toHtml cp.description
 
             div_ [class_ "mt-5"] do
-              p_ [class_ "text-slate-700 mx-2 pb-2 text-sm"] do
+              p_ [class_ "text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 mb-2"] do
                 "Please select a plan"
                 span_ [class_ "text-red-400"] " *"
-              div_ [class_ "grid md:grid-cols-3 gap-4 border-1"] do
+              div_ [class_ "grid md:grid-cols-2 gap-4 border-1"] do
                 ( [ ("Free", "20k", "$0", "2", cp.paymentPlan == "Free", "Free")
-                  , ("Pay as you use", "250k", "$1", "Unlimited", paymentPlan == "UsageBased", "UsageBased")
+                  , ("Pay as you go", "250k", "$1", "Unlimited", paymentPlan == "UsageBased", "UsageBased")
                   ]
                     :: [(Text, Text, Text, Text, Bool, Text)]
                   )
                   & mapM_ \(title, included, price, team, isSelected, value) -> do
                     let isSelectedTxt = toLower $ show isSelected
                     a_
-                      [ class_ $ "payment-plans cursor-pointer space-y-1 border border-1  block p-2 rounded-md  shadow-blue-100 " <> if isSelected then " border-blue-200 shadow-lg" else ""
+                      [ class_ $ "payment-plans cursor-pointer space-y-1 border border-1  block p-2  rounded-md " <> if isSelected then " border-2 border-blue-300 shadow-lg" else ""
                       , term
                           "_"
                           [text| 
                           init if $isSelectedTxt then set window.paymentPlan to $value end 
                           on click  set window.paymentPlan to $value
                                then set #paymentPlanEl.value to "$value"
-                               then remove .border-blue-200 .shadow-lg from .payment-plans
+                               then remove .border-2 .border-blue-300 .shadow-lg from .payment-plans
                                then remove .payment-radio-active from .payment-radio 
                                then add .payment-radio-active to (.payment-radio in me)
-                               then add .border-blue-200 .shadow-lg to me
+                               then add .border-2 .border-blue-300 .shadow-lg to me
                                |]
                       ]
                       do
@@ -435,37 +435,41 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
                           h4_ [class_ "text-xl font-medium text-slate-700"] $ toHtml title
                           div_ [class_ $ "grid place-items-center h-6 w-6 bg-gray-200 border rounded-full payment-radio " <> if isSelected then "payment-radio-active" else ""] do
                             div_ [class_ "bg-white h-3 w-3 hidden rounded-full"] ""
-                        div_ [class_ "text-lg py-3"] do
+                        div_ [class_ "text-lg py-3 px-2"] do
                           span_ [class_ "text-2xl text-blue-700"] $ toHtml price
                           if value == "Free"
                             then do span_ [class_ "text-slate-500"] "/mo"
                             else do span_ [class_ "text-slate-500"] " per 10K requests"
-                        div_ [class_ "flex items-center gap-1"] do
-                          faIcon_ "fa-check" "fa-light fa-check" "text-green-500 h-3 w-3"
-                          small_ "max "
-                          span_ $ toHtml team
-                          small_ " team members"
-                        if value == "Free"
-                          then do
-                            div_ [class_ "flex gap-1 items-center"] do
-                              faIcon_ "fa-check" "fa-light fa-check" "text-green-500 h-3 w-3"
-                              small_ "7 days data retention"
-                          else do
-                            div_ [class_ "flex gap-1 items-center"] do
-                              faIcon_ "fa-check" "fa-light fa-check" "text-green-500 h-3 w-3"
-                              small_ "14 days data retention"
-                            div_ [class_ "flex gap-1 items-center"] do
-                              faIcon_ "fa-check" "fa-light fa-check" "text-green-500 h-3 w-3"
-                              small_ "API testing pipelines"
-                            div_ [class_ "flex gap-1 items-center"] do
-                              faIcon_ "fa-check" "fa-light fa-check" "text-green-500 h-3 w-3"
-                              small_ "API Swagger/OpenAPI Hosting"
-                            div_ [class_ "flex gap-1 items-center"] do
-                              faIcon_ "fa-check" "fa-light fa-check" "text-green-500 h-3 w-3"
-                              small_ "API Metrics Custom Monitors"
-                            div_ [class_ "flex gap-1 items-center"] do
-                              faIcon_ "fa-check" "fa-light fa-check" "text-green-500 h-3 w-3"
-                              small_ "API Live Traffic AI based validations"
+                        div_ [class_ "flex flex-col gap-2 p-3"] do
+                          div_ [class_ "flex items-center gap-1"] do
+                            checkMark
+                            small_ "max "
+                            span_ $ toHtml team
+                            small_ " team members"
+                          if value == "Free"
+                            then do
+                              div_ [class_ "flex gap-1 items-center"] do
+                                checkMark
+                                small_ "20k requests per month"
+                              div_ [class_ "flex gap-1 items-center"] do
+                                checkMark
+                                small_ "7 days data retention"
+                            else do
+                              div_ [class_ "flex gap-1 items-center"] do
+                                checkMark
+                                small_ "14 days data retention"
+                              div_ [class_ "flex gap-1 items-center"] do
+                                checkMark
+                                small_ "API testing pipelines"
+                              div_ [class_ "flex gap-1 items-center"] do
+                                checkMark
+                                small_ "API Swagger/OpenAPI Hosting"
+                              div_ [class_ "flex gap-1 items-center"] do
+                                checkMark
+                                small_ "API Metrics Custom Monitors"
+                              div_ [class_ "flex gap-1 items-center"] do
+                                checkMark
+                                small_ "API Live Traffic AI based validations"
 
             div_ [class_ $ "mt-10 " <> if isUpdate then "hidden" else ""] do
               p_ [class_ "text-slate-400 mx-2 font-light text-sm"] "Invite a project member"
@@ -536,7 +540,15 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
              })
              LemonSqueezy.Url.Open("$checkoutUrl");
              };
-          |]
+           const timezoneSelect = document.getElementById("timezone");
+           const timeZones = Intl.supportedValuesOf('timeZone');
+           timeZones.forEach((tz) => {
+             const option = document.createElement("option");
+             option.value = tz;
+             option.text = tz;
+             timezoneSelect.appendChild(option);
+           });
+            |]
 
             div_ [class_ "p-5 flex w-full justify-end"] do
               -- if isUpdate then
@@ -602,3 +614,8 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
             , hxConfirm_ "Are you sure you want to delete this project?"
             ]
             "Delete Project"
+
+
+checkMark :: Html ()
+checkMark =
+  div_ [class_ "flex items-center justify-center text-center font-bold text-green-500 rounded-md w-5 h-5 bg-gray-200"] "✓"

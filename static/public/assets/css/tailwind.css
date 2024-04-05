@@ -109,9 +109,10 @@
   display: flex;
 }
 
-.htmx-request .query-indicator {
-  display: flex;
+.htmx-request.survey-indicator + button {
+  display: none;
 }
+
 .htmx-request.query-indicator {
   display: flex;
 }

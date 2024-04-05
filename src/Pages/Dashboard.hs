@@ -230,8 +230,8 @@ dStats :: Projects.ProjectId -> Projects.ProjectRequestStats -> Text -> (Maybe Z
 dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledByStepsJ dateRange@(fromD, toD) = do
   section_ [class_ "space-y-3"] do
     when (projReqStats.totalRequests == 0) do
-      section_ [class_ "card-round p-5 sm:p-20 space-y-4 text-lg"] do
-        h2_ [class_ "text-2xl font-medium"] "You haven't integrated APIToolkit in your application yet"
+      section_ [class_ "w-[1200px] mx-auto"] do
+        h2_ [class_ "text-xl font-medium mb-3"] "You haven't integrated APIToolkit in your application yet"
         Onboarding.integrateApiToolkit "<YOUR_API_KEY>" "express"
     div_ [class_ "flex justify-between mt-4"] $ div_ [class_ "flex flex-row"] do
       a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
