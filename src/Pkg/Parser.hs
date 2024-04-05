@@ -1,5 +1,5 @@
 -- Parser implemented with help and code from: https://markkarpov.com/tutorial/megaparsec.html
-module Pkg.Parser (parseQueryStringToWhereClause, parseQueryToComponents, defSqlQueryCfg, defPid, SqlQueryCfg (..), QueryComponents (..), listToColNames) where
+module Pkg.Parser (parseQueryStringToWhereClause, parseQueryToComponents,parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, SqlQueryCfg (..), QueryComponents (..), listToColNames) where
 
 import Control.Error (hush)
 import Data.Default (Default (def))
@@ -34,7 +34,7 @@ pSection =
 
 
 parseQuery :: Parser [Section]
-parseQuery = sepBy pSection (char '|')
+parseQuery = sepBy pSection (space *> char '|' <* space)
 
 
 data QueryComponents = QueryComponents
@@ -206,6 +206,7 @@ parseQueryStringToWhereClause q =
 --
 -- >>> parseQueryToComponents (defSqlQueryCfg defPid) "errors[*].error_type=~/^ab.*c/"
 -- Right "SELECT id,created_at,host,status_code,LEFT(\n        CONCAT(\n            'request_body=', COALESCE(request_body, 'null'), \n            ' response_body=', COALESCE(response_body, 'null')\n        ),\n        255\n    ) AS rest FROM apis.request_dumps \n          WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid  and created_at > NOW() - interval '14 days'    AND jsonb_path_exists(errors, '$[*].\"error_type\" ?? (@ like_regex \"^ab.*c\")')\n           ORDER BY created_at desc limit 200"
+--
 parseQueryToComponents :: SqlQueryCfg -> Text -> Either Text (Text, QueryComponents)
 parseQueryToComponents sqlCfg q =
   bimap

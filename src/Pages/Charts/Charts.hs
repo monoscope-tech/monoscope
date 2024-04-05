@@ -28,6 +28,7 @@ import Database.PostgreSQL.Simple.Types (Query (Query))
 import Effectful.PostgreSQL.Transact.Effect
 import Effectful.Reader.Static (ask, asks)
 import Lucid
+import Database.PostgreSQL.Transact qualified as DBT
 import Lucid.Htmx
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
@@ -218,13 +219,17 @@ chartsGetRaw typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM sho
                 _ -> Nothing
           (f, t, range)
 
+  traceShowM queryRaw
+  traceShowM "==="
   traceShowM "==="
   traceShowM fromD
   traceShowM sinceM
   traceShowM "==="
 
   let Right (_, qc) = parseQueryToComponents (defSqlQueryCfg $ Unsafe.fromJust pidM) queryRaw
-  chartData <- dbtToEff $ query_ Select (Query $ encodeUtf8 $ Unsafe.fromJust qc.finalTimechartQuery)
+  traceShowM qc
+  chartData <- dbtToEff $ DBT.query_ (Query $ encodeUtf8 $ Unsafe.fromJust qc.finalTimechartQuery)
+  traceShowM qc.finalTimechartQuery
 
   let (headers, groupedData) = pivot' $ toList chartData
       headersJSON = decodeUtf8 $ AE.encode headers
