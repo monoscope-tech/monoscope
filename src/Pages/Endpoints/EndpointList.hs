@@ -27,6 +27,7 @@ import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Charts.Charts qualified as Charts
 import Pages.NonMember
 import Pages.Onboarding qualified as Onboarding
+import PyF qualified
 import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import System.Config
@@ -233,7 +234,15 @@ renderEndpoint activePage currTime enp = do
         div_ [class_ "flex items-center gap-2 mt-5"] do
           AnomalyList.anomalyArchiveButton enp.projectId (Anomalies.AnomalyId enp.anomalyId) (isJust enp.archivedAt)
           AnomalyList.anomalyAcknowlegeButton enp.projectId (Anomalies.AnomalyId enp.anomalyId) (isJust enp.acknowlegedAt)
-    div_ [class_ "flex items-center justify-center "] $ div_ [class_ "w-60 h-16 px-3"] $ Charts.throughput enp.projectId enp.endpointId.toText (Just $ Charts.QBEndpointHash enp.endpointHash) Nothing 14 Nothing False (Nothing, Nothing) Nothing
+    div_ [class_ "flex items-center justify-center "]
+      $ div_
+        [ class_ "w-60 h-16 px-3"
+        , hxGet_ $ "/charts_html?pid=" <> enp.projectId.toText <> "&since=14D&query_raw=" <> AnomalyList.escapedQueryPartial [PyF.fmt|endpoint_hash=="{enp.endpointHash}" | timechart [1d]|]
+        , hxTrigger_ "intersect"
+        , hxSwap_ "innerHTML"
+        ]
+        ""
+
     div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $ toHtml @String $ fmt $ commaizeF enp.totalRequests
 
 

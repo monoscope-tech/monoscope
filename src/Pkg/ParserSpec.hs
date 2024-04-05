@@ -37,9 +37,18 @@ spec = do
       let Right (_, c) = parseQueryToComponents (defSqlQueryCfg defPid) "method==\"GET\""
       let expected =
             [text|
-      SELECT time_bucket_gapfill('1m', created_at, now() - INTERVAL '14 days',now()) as timeB, 
-        count(*) FROM apis.request_dumps 
-        WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid and created_at > NOW() - interval '14 days' 
-              AND method='GET' GROUP BY created_at
+SELECT extract(epoch from time_bucket('1h', created_at))::integer as timeB, count(*)::integer as count, 'Throughput' 
+FROM apis.request_dumps WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid 
+and created_at > NOW() - interval '14 days' AND method='GET' GROUP BY timeB
       |]
+      (normT $ fromMaybe "" c.finalTimechartQuery) `shouldBe` normT expected
+    it "timechart query query 1d" do
+      let Right (_, c) = parseQueryToComponents (defSqlQueryCfg defPid) "method==\"GET\" | timechart count [1d]"
+      let expected =
+            [text|
+SELECT extract(epoch from time_bucket('1d', created_at))::integer as timeB, count(*)::integer as count, 'Throughput' 
+FROM apis.request_dumps WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid 
+and created_at > NOW() - interval '14 days' AND method='GET' GROUP BY timeB
+      |]
+      pTraceShowM c
       (normT $ fromMaybe "" c.finalTimechartQuery) `shouldBe` normT expected
