@@ -27,6 +27,9 @@ import Text.Megaparsec.Char.Lexer qualified as L
 -- >>> parse aggFunctionParser "" "count(field)"
 -- Right (Count (Subject "field" "field" []) Nothing)
 --
+-- >>> parse aggFunctionParser "" "count(*)"
+-- Right (Count (Subject "*" "*" []) Nothing)
+--
 -- >>> parse aggFunctionParser "" "sum(field) as total"
 -- Right (Sum (Subject "field" "field" []) (Just "total"))
 --
@@ -107,8 +110,8 @@ pStatsSection = do
 
 -- | parses the timechart command which is used to describe timeseries charts based off the request log data.
 --
--- >>> parse pTimeChartSection "" "timechart count by field1 [1d]"
--- Right (TimeChartCommand (Plain (Subject "count" "count" []) Nothing) (Just (ByClause [Subject "field1" "field1" []])) (Just (Rollup "1d")))
+-- >>> parse pTimeChartSection "" "timechart count(*) by field1 [1d]"
+-- Right (TimeChartCommand (Count (Subject "*" "*" []) Nothing) (Just (ByClause [Subject "field1" "field1" []])) (Just (Rollup "1d")))
 --
 -- >>> parse pTimeChartSection "" "timechart sum(field1) by field2,field3 [1d]"
 -- Right (TimeChartCommand (Sum (Subject "field1" "field1" []) Nothing) (Just (ByClause [Subject "field2" "field2" [],Subject "field3" "field3" []])) (Just (Rollup "1d")))
@@ -116,16 +119,23 @@ pStatsSection = do
 -- >>> parse pTimeChartSection "" "timechart sum(field1) [1d]"
 -- Right (TimeChartCommand (Sum (Subject "field1" "field1" []) Nothing) Nothing (Just (Rollup "1d")))
 --
--- >>> parse pTimeChartSection "" "timechart count [1d]"
--- Right (TimeChartCommand (Plain (Subject "count" "count" []) Nothing) Nothing (Just (Rollup "1d")))
+-- >>> parse pTimeChartSection "" "timechart count(*) [1d]"
+-- Right (TimeChartCommand (Count (Subject "*" "*" []) Nothing) Nothing (Just (Rollup "1d")))
+--
+-- >>> parse pTimeChartSection "" "timechart [1d]"
+-- Right (TimeChartCommand (Count (Subject "*" "*" []) Nothing) Nothing (Just (Rollup "1d")))
+--
+-- >>> parse pTimeChartSection "" "timechart"
+-- Right (TimeChartCommand (Count (Subject "*" "*" []) Nothing) Nothing Nothing)
+--
 pTimeChartSection :: Parser Section
 pTimeChartSection = do
   _ <- string "timechart"
   space
-  agg <- aggFunctionParser
+  agg <- optional (try aggFunctionParser)
   byClauseM <- optional $ try (space *> byClauseParser)
   rollupM <- optional $ try (space *> rollupParser)
-  return $ TimeChartCommand agg byClauseM rollupM
+  return $ TimeChartCommand (fromMaybe (Count (Subject "*" "*" []) Nothing) agg) byClauseM rollupM
 
 
 rollupParser :: Parser Rollup

@@ -21,6 +21,8 @@ import Text.Megaparsec.Char.Lexer qualified as L
 
 -- >>> parse pSubject "" "key"
 -- Right (Subject "key" "key" [])
+-- >>> parse pSubject "" "*"
+-- Right (Subject "*" "*" [])
 -- >>> parse pSubject "" "key.abc[1]"
 -- Right (Subject "key.abc[1]" "key" [ArrayIndex "abc" 1])
 -- >>> parse pSubject "" "key.abc[*]"
@@ -71,7 +73,7 @@ pFieldKey = do
 -- Right ("abc",Nothing)
 pPrimaryKey :: Parser (Text, Maybe FieldKey)
 pPrimaryKey = do
-  key <- toText <$> some (alphaNumChar <|> oneOf ("-_" :: String))
+  key <- toText <$> some (alphaNumChar <|> oneOf ("-_*" :: String))
   fKey <- optional $ pSquareBracketKey ""
   pure (key, fKey)
 

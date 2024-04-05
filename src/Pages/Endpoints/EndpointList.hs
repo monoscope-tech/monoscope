@@ -75,7 +75,6 @@ endpointListGetH pid layoutM ackdM archivedM hostM projectHostM sortM hxRequestM
               , pageTitle = "Endpoints"
               }
       let currentURL = "/p/" <> pid.toText <> "/endpoints?layout=" <> fromMaybe "false" layoutM <> "&ackd=" <> fromMaybe "true" ackdM <> "&archived=" <> fromMaybe "false" archivedM <> "&sort=" <> fromMaybe "event" sortM
-      -- let currentURL =  fromMaybe "" hxCurrentURL
       currTime <- liftIO getCurrentTime
       let paramInput =
             ParamInput
