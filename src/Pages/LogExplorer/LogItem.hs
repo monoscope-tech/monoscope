@@ -139,7 +139,7 @@ expandAPIlogItem' pid req modal = do
       div_ [class_ "flex w-full bg-gray-100 px-4 py-2 flex-col gap-2"] do
         p_ [class_ "font-bold"] "Request Details"
 
-      div_ [class_ "tabs tabs-bordered", role_ "tablist"] do
+      div_ [class_ "tabs tabs-bordered place-content-start", role_ "tablist"] do
         input_ [type_ "radio", name_ "req-details-tab", role_ "tab", Aria.label_ "Body", class_ "tab w-max", checked_]
         div_ [class_ "tab-content", role_ "tabpanel"]
           $ div_ [class_ "bg-gray-50 m-4  p-2 rounded-lg border break-all", id_ "req_body_json"]
@@ -165,7 +165,7 @@ expandAPIlogItem' pid req modal = do
       div_ [class_ "flex w-full bg-gray-100 px-4 py-2 flex-col gap-2"] do
         p_ [class_ "font-bold"] "Response Details"
 
-      div_ [class_ "tabs tabs-bordered", role_ "tablist"] do
+      div_ [class_ "tabs tabs-bordered place-content-start", role_ "tablist"] do
         input_ [type_ "radio", name_ "resp-details-tab", role_ "tab", Aria.label_ "Body", class_ "tab", checked_]
         div_ [class_ "tab-content", role_ "tabpanel"]
           $ div_ [class_ "bg-gray-50 m-4  p-2 rounded-lg border", id_ "res_body_json"]

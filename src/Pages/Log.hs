@@ -302,7 +302,7 @@ apiLogsPage page = do
 
 resultTableAndMeta_ :: ApiLogsPageData -> Html ()
 resultTableAndMeta_ page = do
-  section_ [class_ " w-full h-full overflow-hidden"] $ section_ [class_ " w-full tabs tabs-bordered items-start overflow-hidden h-full", role_ "tablist"] do
+  section_ [class_ " w-full h-full overflow-hidden"] $ section_ [class_ " w-full tabs tabs-bordered items-start overflow-hidden h-full place-content-start", role_ "tablist"] do
     input_ [type_ "radio", name_ "logExplorerMain", role_ "tab", class_ "tab", checked_, Aria.label_ $ "Query results (" <> fmt (commaizeF page.resultCount) <> ")"]
     div_ [class_ "relative overflow-y-scroll h-full tab-content", role_ "tabpanel"] $ resultTable_ page
 
