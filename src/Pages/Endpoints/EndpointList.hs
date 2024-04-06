@@ -211,7 +211,7 @@ endpointAccentColor False False = "bg-red-800"
 
 renderEndpoint :: Bool -> UTCTime -> Endpoints.EndpointRequestStats -> Html ()
 renderEndpoint activePage currTime enp = do
-  div_ [class_ "flex py-4 gap-8 items-center endpoint_item"] do
+  div_ [class_ "flex py-4 gap-8 items-center endpoint_item "] do
     div_ [class_ "h-4 flex space-x-3 w-8 "] do
       a_ [class_ $ endpointAccentColor True {- isJust enp.acknowlegedAt -} True {- isJust enp.archivedAt -} <> " w-2 h-full"] ""
       let anomalyId = UUID.toText enp.anomalyId
