@@ -1,12 +1,14 @@
 module Pkg.ParserSpec (spec) where
 
 import Data.Text qualified as T
+import Data.Time.Calendar (fromGregorian)
+import Data.Time.Clock (UTCTime (..), secondsToDiffTime)
 import Debug.Pretty.Simple (pTraceShowM)
 import NeatInterpolation
 import Pkg.Parser
 import Relude
 import Test.Hspec
-import Text.Megaparsec  (parse)
+import Text.Megaparsec (parse)
 
 
 -- Normalize text by removing newlines, carriage returns, tabs, and extra spaces
@@ -14,11 +16,15 @@ normT :: Text -> Text
 normT = T.unwords . T.words . T.filter (`notElem` ['\n', '\r', '\t'])
 
 
+fixedUTCTime :: UTCTime
+fixedUTCTime = UTCTime (fromGregorian 2020 1 1) (secondsToDiffTime 0)
+
+
 spec :: Spec
 spec = do
   describe "parseQueryToSQL" do
     it "basic query eq query" do
-      let Right (query, _) = parseQueryToComponents (defSqlQueryCfg defPid) "method==\"GET\""
+      let Right (query, _) = parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime) "method==\"GET\""
       let expected =
             [text|
       SELECT json_build_array(id::text,
@@ -35,7 +41,7 @@ spec = do
       ORDER BY created_at desc limit 200|]
       normT query `shouldBe` normT expected
     it "timechart query query" do
-      let Right (_, c) = parseQueryToComponents (defSqlQueryCfg defPid) "method==\"GET\""
+      let Right (_, c) = parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime) "method==\"GET\""
       let expected =
             [text|
 SELECT extract(epoch from time_bucket('1h', created_at))::integer as timeB, count(*)::integer as count, 'Throughput' 
@@ -44,7 +50,7 @@ and created_at > NOW() - interval '14 days' AND method='GET' GROUP BY timeB
       |]
       (normT $ fromMaybe "" c.finalTimechartQuery) `shouldBe` normT expected
     it "timechart query query 1d" do
-      let Right (_, c) = parseQueryToComponents (defSqlQueryCfg defPid) "method==\"GET\" | timechart count(*) [1d]"
+      let Right (_, c) = parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime) "method==\"GET\" | timechart count(*) [1d]"
       let expected =
             [text|
 SELECT extract(epoch from time_bucket('1d', created_at))::integer as timeB, count(*)::integer as count, 'Throughput' 

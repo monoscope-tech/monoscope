@@ -18,7 +18,6 @@ import Data.Time (
   utcToZonedTime,
  )
 import Data.Time.Format
-import Data.Time.Format (formatTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as V
 import Data.Vector qualified as Vector
@@ -35,7 +34,6 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
-import Pages.Charts.Charts qualified as Charts
 import Pages.NonMember
 import Pkg.Components (loader)
 import Relude hiding (ask, asks)
@@ -289,10 +287,10 @@ apiLogsPage page = do
               faIcon_ "fa-refresh" "fa-regular fa-refresh" "h-3 w-3 inline-block"
               span_ [] "refresh"
         div_
-          [ id_ "reqsChartsEC"
+          [ id_ "reqsChartsECP"
           , class_ "px-5"
           , style_ "height:100px"
-          , hxGet_ $ "/charts_html?show_legend=true&pid=" <> page.pid.toText
+          , hxGet_ $ "/charts_html?id=reqsChartsEC&show_legend=true&pid=" <> page.pid.toText
           , hxTrigger_ "intersect,  htmx:beforeRequest from:#log_explorer_form"
           , hxVals_ "js:{query_raw:getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all'}"
           , hxSwap_ "innerHTML"
@@ -324,6 +322,11 @@ editAlert_ pid = do
     , hxVals_ "js:{query:getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, cols:params().cols, layout:'all'}"
     , hxSwap_ "none"
     , termRaw "hx-on::after-request" "this.reset()"
+    , [__|on intersection(intersecting) having threshold 0.5 
+              if intersecting 
+                 set #custom_range_input's value to '24H' 
+                 then set #currentRange's innerText to 'Last 24 Hours' 
+                 then htmx.trigger('#log_explorer_form', 'submit') |]
     ]
     do
       input_ [name_ "alertId", value_ "", type_ "hidden"]
@@ -333,7 +336,7 @@ editAlert_ pid = do
         input_ [class_ "grow input input-bordered", type_ "text", placeholder_ "Title of alert", name_ "title"]
 
       div_ [class_ "collapse collapse-arrow join-item border border-base-300"] do
-        input_ [class_ "", name_ "createAlertAccordion", checked_, type_ "radio"]
+        input_ [class_ "", name_ "createAlertAccordion", checked_, type_ "radio", required_ ""]
         div_ [class_ "collapse-title text-xl font-medium  "] do
           span_ [class_ "badge badge-error mr-3"] "1"
           "Alert conditions"
@@ -346,11 +349,17 @@ editAlert_ pid = do
               option_ [selected_ ""] "above"
               option_ "below"
             span_ " the threshold for the last"
-            select_ [class_ "select select-bordered inline-block mx-2 "] do
-              option_ [value_ "1"] "1 minute"
-              option_ [value_ "5", selected_ ""] "5 minutes"
-              option_ [value_ "10"] "10 minutes"
-              option_ [value_ "30"] "30 minutes"
+            select_ [class_ "select select-bordered inline-block mx-2 "
+                , [__| on change log me.value then
+                      if me.value=='5' set :val to '24H' else if me.value=='60' set :val to '7D' end
+                        then log :val
+                       then set #custom_range_input's value to :val 
+                       then set #currentRange's innerText to ('Last '+:val) 
+                       then htmx.trigger('#log_explorer_form', 'submit') |]
+                    ] do
+              -- option_ [value_ "1"] "1 minute"
+              option_ [value_ "5"] "5 minutes"
+              option_ [value_ "60"] "1 hour"
           div_ [class_ "space-y-2"] do
             div_ [class_ "flex gap-5"] do
               label_ [class_ "flex items-center gap-2 w-1/3 justify-between pl-5"] do

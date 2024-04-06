@@ -37,8 +37,7 @@ import Data.Aeson.KeyMap (toHashMapText)
 import Data.Default.Instances ()
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
-import Data.Time (CalendarDiffTime, ZonedTime, diffUTCTime, zonedTimeToUTC)
-import Data.Time.Clock (UTCTime)
+import Data.Time (CalendarDiffTime, UTCTime, ZonedTime, diffUTCTime, getCurrentTime, zonedTimeToUTC)
 import Data.Time.Format
 import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
 import Data.Tuple.Extra (both)
@@ -388,7 +387,8 @@ getRequestDumpsForPreviousReportPeriod pid report_type = query Select (Query $ e
 
 selectLogTable :: Projects.ProjectId -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> DBT IO (Either Text (V.Vector (V.Vector Value), [Text], Int))
 selectLogTable pid extraQuery cursorM dateRange projectedColsByUser = do
-  let resp = parseQueryToComponents ((defSqlQueryCfg pid){cursorM, dateRange, projectedColsByUser}) extraQuery
+  now <- liftIO getCurrentTime
+  let resp = parseQueryToComponents ((defSqlQueryCfg pid now){cursorM, dateRange, projectedColsByUser}) extraQuery
   case resp of
     Left x -> pure $ Left x
     Right (q, queryComponents) -> do
@@ -523,8 +523,6 @@ select duration_steps, count(id)
 	GROUP BY duration_steps 
 	ORDER BY duration_steps;
       |]
-
-
 
 
 selectRequestDumpByProjectAndParentId :: Projects.ProjectId -> UUID.UUID -> DBT IO (V.Vector RequestDumpLogItem)
