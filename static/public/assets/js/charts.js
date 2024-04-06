@@ -237,7 +237,6 @@ function throughputEChartTable(renderAt, categories, data, gb, showLegend, theme
 
   const myChart = echarts.init(document.getElementById(renderAt), theme);
   myChart.setOption(option);
-  console.log(option)
 }
 
 function latencyHistogram(renderAt, pc, data) {
