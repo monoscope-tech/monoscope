@@ -386,8 +386,9 @@ shapesSubPage pid shapesList shapesWithFields currentURL = do
               let shapeJsonStr = aesonValueToText shapeJson
               div_ [class_ "text-sm text-gray-500 p-4 bg-gray-100 whitespace-prerap w-2/3 h-[200px] overflow-auto flex flex-col gap-1 shape_json", style_ "font-family: monospace", term "data-json" shapeJsonStr] pass
             div_ [class_ "mt-10"] do
-              let chartQuery = Just $ Charts.QBShapeHash shape.sHash
-              div_ [class_ "flex items-center justify-center "] $ div_ [class_ "w-60 h-16 px-3"] $ Charts.throughput pid shape.sHash chartQuery Nothing 14 Nothing False (Nothing, Nothing) Nothing
+              -- let chartQuery = Just $ Charts.QBShapeHash shape.sHash
+              -- div_ [class_ "flex items-center justify-center "] $ div_ [class_ "w-60 h-16 px-3"] $ Charts.throughput pid shape.sHash chartQuery Nothing 14 Nothing False (Nothing, Nothing) Nothing
+              "chart"
   script_ [type_ "text/javascript"] ("" :: Text)
   script_
     [text|
