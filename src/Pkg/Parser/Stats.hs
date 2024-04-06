@@ -127,7 +127,6 @@ pStatsSection = do
 --
 -- >>> parse pTimeChartSection "" "timechart"
 -- Right (TimeChartCommand (Count (Subject "*" "*" []) Nothing) Nothing Nothing)
---
 pTimeChartSection :: Parser Section
 pTimeChartSection = do
   _ <- string "timechart"

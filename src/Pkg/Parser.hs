@@ -1,12 +1,13 @@
 -- Parser implemented with help and code from: https://markkarpov.com/tutorial/megaparsec.html
-module Pkg.Parser (parseQueryStringToWhereClause, parseQueryToComponents,parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, SqlQueryCfg (..), QueryComponents (..), listToColNames) where
+module Pkg.Parser (parseQueryStringToWhereClause, parseQueryToComponents, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, SqlQueryCfg (..), QueryComponents (..), listToColNames) where
 
 import Control.Error (hush)
 import Data.Default (Default (def))
 import Data.Text qualified as T
 import Data.Text.Display (display)
-import Data.Time.Clock (UTCTime)
+import Data.Time.Clock (UTCTime, diffUTCTime, nominalDiffTimeToSeconds)
 import Data.Time.Format.ISO8601 (iso8601Show)
+import Data.Tuple.Extra (both)
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
 import Pkg.Parser.Expr
@@ -81,6 +82,7 @@ data SqlQueryCfg = SqlQueryCfg
   , dateRange :: (Maybe UTCTime, Maybe UTCTime)
   , cursorM :: Maybe UTCTime
   , projectedColsByUser :: [Text] -- cols selected explicitly by user
+  , currentTime :: UTCTime
   , defaultSelect :: [Text]
   }
   deriving stock (Show, Generic)
@@ -103,6 +105,9 @@ sqlFromQueryComponents sqlCfg qc =
       (Just a, Just b) -> "AND created_at BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
       _ -> ""
 
+    (fromT, toT) = bimap (fromMaybe sqlCfg.currentTime) (fromMaybe sqlCfg.currentTime) $ sqlCfg.dateRange
+    timeDiffSecs = traceShowId $ abs $ nominalDiffTimeToSeconds $ diffUTCTime fromT toT
+
     finalSqlQuery =
       [fmt|SELECT json_build_array({selectClause}) FROM apis.request_dumps 
             WHERE project_id='{sqlCfg.pid.toText}'::uuid  and created_at > NOW() - interval '14 days' 
@@ -115,7 +120,16 @@ sqlFromQueryComponents sqlCfg qc =
             {cursorT} {dateRangeStr} {whereClause}
             {groupByClause} limit 1|]
 
-    timeRollup = fromMaybe "1h" qc.rollup
+
+    defRollup
+      | timeDiffSecs <= (60*30) = "1s"
+      | timeDiffSecs <= (60*60) = "20s"
+      | timeDiffSecs <= (60*60*6) = "1m"
+      | timeDiffSecs <= (60*60*24*3) = "5m"
+      | otherwise = "1h"
+
+    timeRollup = fromMaybe defRollup qc.rollup
+
     timebucket = [fmt|extract(epoch from time_bucket('{timeRollup}', created_at))::integer as timeB, |]
     chartSelect = [fmt| count(*)::integer as count|]
     timeGroupByClause = " GROUP BY " <> T.intercalate "," ("timeB" : qc.groupByClause)
@@ -219,13 +233,14 @@ defPid :: Projects.ProjectId
 defPid = def :: Projects.ProjectId
 
 
-defSqlQueryCfg :: Projects.ProjectId -> SqlQueryCfg
-defSqlQueryCfg pid =
+defSqlQueryCfg :: Projects.ProjectId -> UTCTime -> SqlQueryCfg
+defSqlQueryCfg pid currentTime =
   SqlQueryCfg
     { pid = pid
     , cursorM = Nothing
     , dateRange = (Nothing, Nothing)
     , projectedColsByUser = []
+    , currentTime
     , defaultSelect =
         [ "id::text as id"
         , [fmt|to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at|]

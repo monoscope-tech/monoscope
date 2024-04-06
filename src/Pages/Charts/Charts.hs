@@ -25,10 +25,10 @@ import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, query_, withPool)
 import Database.PostgreSQL.Simple.Types (Query (Query))
+import Database.PostgreSQL.Transact qualified as DBT
 import Effectful.PostgreSQL.Transact.Effect
 import Effectful.Reader.Static (ask, asks)
 import Lucid
-import Database.PostgreSQL.Transact qualified as DBT
 import Lucid.Htmx
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
@@ -201,8 +201,6 @@ chartsGetRaw typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM sho
           ]
   randomID <- liftIO UUIDV4.nextRandom
   now <- liftIO getCurrentTime
-  -- Temp workaround to get access to fromM and toM
-  -- let (_, _, fromM, toM) =  buildReqDumpSQL chartExps
 
   let (fromD, toD, currentRange) = case sinceM of
         Just "1H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just now, Just "Last Hour")
@@ -219,17 +217,13 @@ chartsGetRaw typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM sho
                 _ -> Nothing
           (f, t, range)
 
-  traceShowM queryRaw
-  traceShowM "==="
-  traceShowM "==="
-  traceShowM fromD
-  traceShowM sinceM
-  traceShowM "==="
+  let sqlQueryComponents =
+        (defSqlQueryCfg (Unsafe.fromJust pidM) now)
+          { dateRange = (fromD, toD)
+          }
+  let Right (_, qc) = parseQueryToComponents sqlQueryComponents queryRaw
 
-  let Right (_, qc) = parseQueryToComponents (defSqlQueryCfg $ Unsafe.fromJust pidM) queryRaw
-  traceShowM qc
   chartData <- dbtToEff $ DBT.query_ (Query $ encodeUtf8 $ Unsafe.fromJust qc.finalTimechartQuery)
-  traceShowM qc.finalTimechartQuery
 
   let (headers, groupedData) = pivot' $ toList chartData
       headersJSON = decodeUtf8 $ AE.encode headers
@@ -382,4 +376,3 @@ lazy queries =
     runChartExp (IdE ide) = "id=" <> toString ide
     runChartExp (RawE q) = "query_raw=" <> toString q
     runChartExp ShowLegendE = "show_legend=true"
-
