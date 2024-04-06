@@ -468,7 +468,7 @@ anomalyItem hideByDefault currTime anomaly icon title subTitle content = do
       $ div_
         [ class_ "w-60 h-16 px-3"
         , hxGet_ $ "/charts_html?pid=" <> anomaly.projectId.toText <> "&since=14D&query_raw=" <> escapedQueryPartial [fmt|{anomalyQueryPartial} | timechart [1d]|]
-        , hxTrigger_ "intersect"
+        , hxTrigger_ "intersect once"
         , hxSwap_ "innerHTML"
         ]
         ""
