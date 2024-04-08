@@ -146,14 +146,7 @@ editAlert_ pid monitorM = do
           "Alert conditions"
         div_ [class_ "collapse-content"] do
           div_ [class_ "py-3"] do
-            span_ "Check every "
-            input_
-              [ type_ "number"
-              , class_ "input input-bordered input-sm w-16 mx-2 text-center"
-              , name_ "checkIntervalMins"
-              , value_ $ if monitor.checkIntervalMins == 0 then "5" else show monitor.checkIntervalMins
-              ]
-            span_ "minute, and Trigger when the metric is "
+            span_ "Trigger when the metric is "
             select_ [class_ "select select-bordered inline-block mx-2 ", name_ "direction"] do
               option_ [selected_ ""] "above"
               option_ "below"
