@@ -1,13 +1,11 @@
 module Pkg.Parser.Expr where
 
 import Control.Monad.Combinators.Expr
-import Data.Foldable (foldl)
 import Data.Text qualified as T
 import Data.Text.Display (Display, display, displayBuilder, displayParen, displayPrec)
 import Data.Text.Lazy.Builder (Builder)
 import Pkg.Parser.Types
 import Relude hiding (GT, LT, Sum, many, some)
-import Relude.Unsafe qualified as Unsafe
 import Text.Megaparsec hiding (State)
 import Text.Megaparsec.Char
 import Text.Megaparsec.Char.Lexer qualified as L
@@ -21,6 +19,8 @@ import Text.Megaparsec.Char.Lexer qualified as L
 
 -- >>> parse pSubject "" "key"
 -- Right (Subject "key" "key" [])
+-- >>> parse pSubject "" "*"
+-- Right (Subject "*" "*" [])
 -- >>> parse pSubject "" "key.abc[1]"
 -- Right (Subject "key.abc[1]" "key" [ArrayIndex "abc" 1])
 -- >>> parse pSubject "" "key.abc[*]"
@@ -71,7 +71,7 @@ pFieldKey = do
 -- Right ("abc",Nothing)
 pPrimaryKey :: Parser (Text, Maybe FieldKey)
 pPrimaryKey = do
-  key <- toText <$> some (alphaNumChar <|> oneOf ("-_" :: String))
+  key <- toText <$> some (alphaNumChar <|> oneOf ("-_*" :: String))
   fKey <- optional $ pSquareBracketKey ""
   pure (key, fKey)
 

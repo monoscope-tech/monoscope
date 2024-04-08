@@ -5,11 +5,14 @@ module Pages.SlackInstall (getH, linkProjectsGetH, linkProjectGetH, postH, LinkP
 
 import Control.Lens ((.~), (^.))
 import Data.Aeson
+import Data.Aeson qualified as AE
+import Data.Aeson.QQ
 import Data.Default
 import Data.Text
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT
+import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Fmt (dateDashF, fmt)
 import Lucid
@@ -17,13 +20,18 @@ import System.Config
 
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ
+import Data.Default
+import Data.Text
+import Data.Vector qualified as V
+import Database.PostgreSQL.Entity.DBT
 import Database.PostgreSQL.Simple (Only (Only))
 import Deriving.Aeson qualified as DAE
 import Effectful.PostgreSQL.Transact.Effect
 import Effectful.Reader.Static (ask, asks)
+import Fmt (dateDashF, fmt)
+import Lucid
 import Lucid.Htmx (hxPost_)
 import Models.Apis.Slack (insertAccessToken)
-import Models.Projects.Projects (updateNotificationsChannel)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Network.Wreq
@@ -89,7 +97,6 @@ updateWebHook :: Projects.ProjectId -> LinkProjectsForm -> ATAuthCtx (Headers '[
 updateWebHook pid LinkProjectsForm{projects, webhookUrl} = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
 
@@ -102,7 +109,6 @@ postH :: LinkProjectsForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
 postH LinkProjectsForm{projects, webhookUrl} = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
 
@@ -181,7 +187,7 @@ linkProjectGetH pid slack_code = do
     (_, _) -> pure $ bodyWrapper bwconf noTokenFound
 
 
-slackPage :: Vector Projects.Project' -> TokenResponse -> Html ()
+slackPage :: V.Vector Projects.Project' -> TokenResponse -> Html ()
 slackPage projects token = do
   main_ [class_ "w-[1000px] flex flex-col mt-8 items-center mx-auto"] do
     h1_ [class_ "text-2xl font-bold"] "Link Slack Account to a project to complete"

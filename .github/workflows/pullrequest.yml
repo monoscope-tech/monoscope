@@ -4,6 +4,9 @@ on:
   pull_request:
     branches: [ master ]
 
+env:
+  LANG: C.UTF-8
+
 jobs:
   runhaskell:
     name: Build and test
@@ -25,6 +28,7 @@ jobs:
 
       - run: stack --no-terminal build --dependencies-only
       - run: stack install --local-bin-path=.
+
       # https://github.com/marketplace/actions/cache-apt-packages#example-workflow
       - uses: awalsh128/cache-apt-pkgs-action@latest
         with:

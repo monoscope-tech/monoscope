@@ -24,7 +24,6 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
-import Optics.TH (makeFieldLabelsNoPrefix)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.NonMember
 import ProcessMessage qualified
@@ -49,9 +48,6 @@ data FieldConfig = FieldConfig
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] FieldConfig
 
 
-makeFieldLabelsNoPrefix ''FieldConfig
-
-
 data SeedConfig = SeedConfig
   { from :: ZonedTime
   , to :: ZonedTime
@@ -70,9 +66,6 @@ data SeedConfig = SeedConfig
   }
   deriving stock (Show, Generic)
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SeedConfig
-
-
-makeFieldLabelsNoPrefix ''SeedConfig
 
 
 fieldConfigToField :: FieldConfig -> Fake (Text, AE.Value)
@@ -127,12 +120,12 @@ parseConfigToRequestMessages pid input = do
               let duration = duration'
                   statusCode = statusCode'
                   method = cfg.method
-                  urlPath = cfg.path
+                  urlPath = Just cfg.path
                   rawUrl = cfg.path
                   protoMajor = 1
                   protoMinor = 1
                   referer = "https://google.com"
-                  host = "https://apitoolkit.io/"
+                  host = Just "https://apitoolkit.io/"
                   projectId = Projects.unProjectId pid
                   timestamp = timestampV
                   sdkType = RequestDumps.GoGin
@@ -174,30 +167,33 @@ data DataSeedingForm = DataSeedingForm
 
 dataSeedingPostH :: Projects.ProjectId -> DataSeedingForm -> ATAuthCtx (Html ())
 dataSeedingPostH pid form = do
-  -- TODO: temporary, to work with current logic
-  appCtx <- ask @AuthContext
-  let env = appCtx.config
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-  let currUserId = sess.userId
+  pure ""
 
-  isMember <- dbtToEff $ userIsProjectMember sess pid
-  if not isMember
-    then do
-      pure $ userNotMemeberPage sess
-    else do
-      logger <- asks logger
-      projectCache <- asks projectCache
-      project <- dbtToEff $ Projects.selectProjectForUser (Sessions.userId sess, pid)
 
-      respE <- liftIO $ parseConfigToRequestMessages pid (encodeUtf8 $ form.config)
-      case respE of
-        Left err -> liftIO $ logger <& "ERROR processing req message " <> show err >> pure dataSeedingPage
-        Right resp -> do
-          let !seeds = resp & map (\x -> Right (Just "", x))
-          _ <- liftIO $ ProcessMessage.processMessages' logger env appCtx.pool seeds projectCache
-          pure dataSeedingPage
+-- FIXME: commented out as processMessages is in a diff monad as well, and is not used much atm
+--   -- TODO: temporary, to work with current logic
+--   appCtx <- ask @AuthContext
+--   let env = appCtx.config
+--   sess' <- Sessions.getSession
+--   let sess = Unsafe.fromJust sess'.persistentSession
+--   let currUserId = sess.userId
 
+--   isMember <- dbtToEff $ userIsProjectMember sess pid
+--   if not isMember
+--     then do
+--       pure $ userNotMemeberPage sess
+--     else do
+--       logger <- asks logger
+--        <- asks projectCache
+--       project <- dbtToEff $ Projects.selectProjectForUser (Sessions.userId sess, pid)
+
+--       respE <- liftIO $ parseConfigToRequestMessages pid (encodeUtf8 $ form.config)
+--       case respE of
+--         Left err -> liftIO $ logger <& "ERROR processing req message " <> show err >> pure dataSeedingPage
+--         Right resp -> do
+--           let !seeds = resp & map (\x -> (Just "", x))
+--           _ <- liftIO $ ProcessMessage.processMessages' logger env appCtx.pool seeds projectCache
+--           pure dataSeedingPage
 
 dataSeedingGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
 dataSeedingGetH pid = do

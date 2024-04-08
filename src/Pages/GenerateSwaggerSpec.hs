@@ -10,15 +10,16 @@ import Models.Apis.Fields qualified as Fields
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.Shapes qualified as Shapes
 import Pages.GenerateSwagger
-import RequestMessages qualified
-
 import Relude
+import RequestMessages qualified
 import Test.Hspec
 import Test.Hspec.Expectations.Json
 
 
 projectTitle :: Text
 projectTitle = "Sample Project"
+
+
 projectDescription :: Text
 projectDescription = "Sample description"
 
@@ -36,6 +37,7 @@ sampleEndpoints =
         , method = "GET"
         , host = "localhost"
         , hash = "endpoint1_GET"
+        , description = ""
         }
     , Endpoints.SwEndpoint
         { urlPath = "/users"
@@ -43,6 +45,7 @@ sampleEndpoints =
         , method = "POST"
         , host = "localhost"
         , hash = "endpoint1_POST"
+        , description = ""
         }
     ]
 
@@ -60,6 +63,8 @@ sampleShapes =
         , swQueryParamsKeypaths = V.fromList []
         , swHash = "shap1"
         , swStatusCode = 200
+        , swRequestDescription = ""
+        , swResponseDescription = ""
         }
     , Shapes.SwShape
         { swEndpointHash = "endpoint1_POST"
@@ -71,6 +76,8 @@ sampleShapes =
         , swQueryParamsKeypaths = V.fromList []
         , swHash = "shap2"
         , swStatusCode = 401
+        , swRequestDescription = ""
+        , swResponseDescription = ""
         }
     , Shapes.SwShape
         { swEndpointHash = "endpoint1_POST"
@@ -82,6 +89,8 @@ sampleShapes =
         , swQueryParamsKeypaths = V.fromList []
         , swHash = "shap3"
         , swStatusCode = 201
+        , swRequestDescription = ""
+        , swResponseDescription = ""
         }
     ]
 
@@ -98,6 +107,8 @@ sampleFields =
         , fKey = "key"
         , fFieldType = Fields.FTString
         , fFormat = "text"
+        , fIsEnum = False
+        , fIsRequired = False
         }
     , Fields.SwField
         { fHash = "field2"
@@ -108,6 +119,8 @@ sampleFields =
         , fKey = "key"
         , fFieldType = Fields.FTNumber
         , fFormat = "integer"
+        , fIsEnum = False
+        , fIsRequired = False
         }
     , Fields.SwField
         { fHash = "field3"
@@ -118,6 +131,8 @@ sampleFields =
         , fKey = "key"
         , fFieldType = Fields.FTString
         , fFormat = "text"
+        , fIsEnum = False
+        , fIsRequired = False
         }
     , Fields.SwField
         { fHash = "field4"
@@ -128,6 +143,8 @@ sampleFields =
         , fKey = "key"
         , fFieldType = Fields.FTNumber
         , fFormat = "integer"
+        , fIsEnum = False
+        , fIsRequired = False
         }
     , Fields.SwField
         { fHash = "field5"
@@ -138,6 +155,8 @@ sampleFields =
         , fKey = "key"
         , fFieldType = Fields.FTNumber
         , fFormat = "integer"
+        , fIsEnum = False
+        , fIsRequired = False
         }
     , Fields.SwField
         { fHash = "field6"
@@ -148,6 +167,8 @@ sampleFields =
         , fKey = "key"
         , fFieldType = Fields.FTString
         , fFormat = "text"
+        , fIsEnum = False
+        , fIsRequired = False
         }
     , Fields.SwField
         { fHash = "field7"
@@ -158,6 +179,8 @@ sampleFields =
         , fKey = "key"
         , fFieldType = Fields.FTString
         , fFormat = "text"
+        , fIsEnum = False
+        , fIsRequired = False
         }
     , Fields.SwField
         { fHash = "field8"
@@ -168,6 +191,8 @@ sampleFields =
         , fKey = "key"
         , fFieldType = Fields.FTString
         , fFormat = "text"
+        , fIsEnum = False
+        , fIsRequired = False
         }
     ]
 
@@ -251,9 +276,8 @@ expectedSwaggerJSON =
           "get": {
             "responses": {
               "200": {
-                "description": "",
                 "content": {
-                  "*/*": {
+                  "application/json": {
                     "schema": {
                       "type": "object",
                       "properties": {
@@ -296,11 +320,11 @@ expectedSwaggerJSON =
             }
           },
           "post": {
+            "description": "",
             "responses": {
               "401": { 
-                "description": "",
                 "content": {
-                  "*/*":  {
+                  "application/json":  {
                     "schema": {
                       "type": "object",
                       "properties": {
@@ -322,9 +346,8 @@ expectedSwaggerJSON =
                 }
               },
               "201": {
-                "description": "",
                 "content": {
-                  "*/*": {
+                  "application/json": {
                     "schema": {
                       "type": "object",
                       "properties": {
@@ -348,7 +371,7 @@ expectedSwaggerJSON =
             },
              "requestBody": {
                "content": {
-                 "*/*": {
+                 "application/json": {
                    "schema": {
                      "type": "object",
                       "properties": {
@@ -394,6 +417,7 @@ hSampleEndpoints =
         , method = "GET"
         , host = "localhost"
         , hash = "endpoint1_GET"
+        , description = ""
         }
     ]
 
@@ -411,6 +435,8 @@ hSampleShapes =
         , swQueryParamsKeypaths = V.fromList []
         , swHash = "shape1"
         , swStatusCode = 200
+        , swRequestDescription = ""
+        , swResponseDescription = ""
         }
     ]
 
@@ -427,6 +453,8 @@ hSampleFields =
         , fKey = "header1"
         , fFieldType = Fields.FTString
         , fFormat = "text"
+        , fIsEnum = False
+        , fIsRequired = False
         }
     , Fields.SwField
         { fHash = "field2"
@@ -437,6 +465,8 @@ hSampleFields =
         , fKey = "header2"
         , fFieldType = Fields.FTString
         , fFormat = "text"
+        , fIsEnum = False
+        , fIsRequired = False
         }
     , Fields.SwField
         { fHash = "field3"
@@ -447,6 +477,8 @@ hSampleFields =
         , fKey = "header3"
         , fFieldType = Fields.FTNumber
         , fFormat = "integer"
+        , fIsEnum = False
+        , fIsRequired = False
         }
     ]
 
@@ -496,9 +528,8 @@ hExpectedSwaggerJSON =
             "responses": {
               "200": {
                 content: {
-                  "*/*": {}
+                  "application/json": {}
                 },
-                "description": "",
                 "headers": {
                    "content": {
                       "schema": {
@@ -554,6 +585,7 @@ pSampleEndpoints =
         , method = "GET"
         , host = "localhost"
         , hash = "endpoint1_GET"
+        , description = ""
         }
     ]
 
@@ -571,6 +603,8 @@ pSampleShapes =
         , swQueryParamsKeypaths = V.fromList ["from.[]", "page.[]", "ref.[]"]
         , swHash = "shape1"
         , swStatusCode = 200
+        , swRequestDescription = ""
+        , swResponseDescription = ""
         }
     ]
 
@@ -587,6 +621,8 @@ pSampleFields =
         , fKey = "header1"
         , fFieldType = Fields.FTString
         , fFormat = "text"
+        , fIsEnum = False
+        , fIsRequired = False
         }
     , Fields.SwField
         { fHash = "field2"
@@ -597,6 +633,8 @@ pSampleFields =
         , fKey = "header2"
         , fFieldType = Fields.FTString
         , fFormat = "text"
+        , fIsEnum = False
+        , fIsRequired = False
         }
     , Fields.SwField
         { fHash = "field3"
@@ -607,6 +645,8 @@ pSampleFields =
         , fKey = "header3"
         , fFieldType = Fields.FTString
         , fFormat = "text"
+        , fIsEnum = False
+        , fIsRequired = False
         }
     ]
 
@@ -687,7 +727,6 @@ pExpectedSwaggerJSON =
             ],
             "responses": {
               "200": {
-                "description": ""
               }
             }
           }

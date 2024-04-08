@@ -24,7 +24,9 @@ module Models.Apis.Endpoints (
   endpointByHash,
   getProjectHosts,
   insertEndpoints,
-) where
+  countEndpointInbox,
+)
+where
 
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Aeson qualified as AE
@@ -47,7 +49,6 @@ import Deriving.Aeson qualified as DAE
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
-import Optics.TH (makeFieldLabelsNoPrefix)
 import Relude
 import Utils (DBField (MkDBField))
 import Web.HttpApiData (FromHttpApiData)
@@ -84,14 +85,12 @@ data Endpoint = Endpoint
   , host :: Text
   , hash :: Text
   , outgoing :: Bool
+  , description :: Text
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (FromRow, ToRow, Default, NFData)
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Endpoint
   deriving (FromField) via Aeson Endpoint
-
-
-makeFieldLabelsNoPrefix ''Endpoint
 
 
 -- | endpointToUrlPath builds an apitoolkit path link to the endpoint details page of that endpoint.
@@ -156,18 +155,20 @@ data EndpointRequestStats = EndpointRequestStats
 
 -- FIXME: Include and return a boolean flag to show if fields that have annomalies.
 -- FIXME: return endpoint_hash as well.
-endpointRequestStatsByProject :: Projects.ProjectId -> Bool -> Bool -> Maybe Text -> PgT.DBT IO (Vector EndpointRequestStats)
-endpointRequestStatsByProject pid ackd archived pHostM = case pHostM of Just h -> query Select (Query $ encodeUtf8 q) (pid, h); Nothing -> query Select (Query $ encodeUtf8 q) (Only pid)
+endpointRequestStatsByProject :: Projects.ProjectId -> Bool -> Bool -> Maybe Text -> Maybe Text -> PgT.DBT IO (Vector EndpointRequestStats)
+endpointRequestStatsByProject pid ackd archived pHostM sortM = case pHostM of Just h -> query Select (Query $ encodeUtf8 q) (pid, h); Nothing -> query Select (Query $ encodeUtf8 q) (Only pid)
   where
     ackdAt = if ackd && not archived then "AND ann.acknowleged_at IS NOT NULL AND ann.archived_at IS NULL " else "AND ann.acknowleged_at IS NULL "
     archivedAt = if archived then "AND ann.archived_at IS NOT NULL " else " AND ann.archived_at IS NULL"
     pHostQery = case pHostM of Just h -> " AND enp.host = ?"; Nothing -> ""
+    sortEnp = fromMaybe "" sortM
+    orderBy = case sortEnp of "first_seen" -> "enp.created_at ASC"; "last_seen" -> "enp.created_at DESC"; _ -> " coalesce(ers.total_requests,0) DESC"
     -- TODO This query to get the anomalies for the anomalies page might be too complex.
     -- Does it make sense yet to remove the call to endpoint_request_stats? since we're using async charts already
     q =
       [text| 
       SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, coalesce(min,0),  coalesce(p50,0),  coalesce(p75,0),  coalesce(p90,0),  coalesce(p95,0),  coalesce(p99,0),  coalesce(max,0) , 
-         coalesce(total_time,0), coalesce(total_time_proj,0), coalesce(total_requests,0), coalesce(total_requests_proj,0),
+         coalesce(total_time,0), coalesce(total_time_proj,0), coalesce(ers.total_requests,0), coalesce(total_requests_proj,0),
          (SELECT count(*) from apis.anomalies_vm 
                  where project_id=enp.project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
          ) ongoing_anomalies,
@@ -179,9 +180,9 @@ endpointRequestStatsByProject pid ackd archived pHostM = case pHostM of Just h -
         ann.id
      from apis.endpoints enp
      left join apis.endpoint_request_stats ers on (enp.id=ers.endpoint_id)
-     left join apis.anomalies ann on (ann.anomaly_type='endpoint' AND target_hash=endpoint_hash)
+     left join apis.anomalies ann on (ann.anomaly_type='endpoint' AND ann.target_hash=enp.hash)
      where enp.project_id=? and enp.outgoing=false and ann.id is not null $ackdAt $archivedAt $pHostQery
-     order by total_requests DESC, url_path ASC;
+     order by $orderBy , url_path ASC;
   |]
 
 
@@ -205,7 +206,7 @@ dependencyEndpointsRequestStatsByProject pid host = query Select (Query $ encode
      left join apis.endpoint_request_stats ers on (enp.id=ers.endpoint_id)
      left join apis.anomalies ann on (ann.anomaly_type='endpoint' AND target_hash=endpoint_hash)
      where enp.project_id=? and enp.id is not null and ann.id is not null AND enp.outgoing = true AND enp.host = ?
-     order by total_requests DESC, url_path ASC
+     order by total_requests DESC, enp.url_path ASC;
     |]
 
 
@@ -230,13 +231,13 @@ endpointRequestStatsByEndpoint eid = queryOne Select q (eid, eid)
 endpointById :: EndpointId -> PgT.DBT IO (Maybe Endpoint)
 endpointById eid = queryOne Select q (Only eid)
   where
-    q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, host, hash, outgoing from apis.endpoints where id=? |]
+    q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, host, hash, outgoing, description from apis.endpoints where id=? |]
 
 
 endpointByHash :: Projects.ProjectId -> Text -> PgT.DBT IO (Maybe Endpoint)
 endpointByHash pid hash = queryOne Select q (pid, hash)
   where
-    q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, host, hash, outgoing from apis.endpoints where project_id=? AND hash=? |]
+    q = [sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, host, hash, outgoing, description from apis.endpoints where project_id=? AND hash=? |]
 
 
 data SwEndpoint = SwEndpoint
@@ -245,6 +246,7 @@ data SwEndpoint = SwEndpoint
   , method :: Text
   , host :: Text
   , hash :: Text
+  , description :: Text
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (FromRow, ToRow, Default, NFData)
@@ -265,9 +267,11 @@ endpointsByProjectId pid = query Select q (Only pid)
   where
     q =
       [sql|
-         SELECT url_path, url_params, method, host, hash
-         FROM apis.endpoints
-         WHERE project_id = ?
+         SELECT url_path, url_params, method, host, hash, description
+         FROM apis.endpoints enp 
+         INNER JOIN 
+         apis.anomalies ann ON (ann.anomaly_type = 'endpoint' AND ann.target_hash = enp.hash)
+         WHERE enp.project_id = ? AND ann.acknowleged_at IS NOT NULL
        |]
 
 
@@ -276,13 +280,14 @@ insertEndpoints endpoints = do
   let q =
         [sql| 
         INSERT INTO apis.endpoints
-        (project_id, url_path, url_params, method, host, hash)
-        VALUES (?,?,?,?,?,?) ON CONFLICT DO NOTHING;
+        (project_id, url_path, url_params, method, host, hash, description)
+        VALUES (?,?,?,?,?,?,?) ON CONFLICT (hash) DO UPDATE SET
+         description = CASE WHEN EXCLUDED.description <> '' THEN EXCLUDED.description ELSE apis.endpoints.description END;
       |]
   let params = map getEndpointParams endpoints
   executeMany q params
   where
-    getEndpointParams :: Endpoint -> (Projects.ProjectId, Text, AE.Value, Text, Text, Text)
+    getEndpointParams :: Endpoint -> (Projects.ProjectId, Text, AE.Value, Text, Text, Text, Text)
     getEndpointParams endpoint =
       ( endpoint.projectId
       , endpoint.urlPath
@@ -290,6 +295,7 @@ insertEndpoints endpoints = do
       , endpoint.method
       , endpoint.host
       , endpoint.hash
+      , endpoint.description
       )
 
 
@@ -318,3 +324,25 @@ dependenciesAndEventsCount pid = query Select q (pid, pid)
              AND ep.outgoing = true
            ORDER BY eventsCount DESC;
       |]
+
+
+countEndpointInbox :: Projects.ProjectId -> DBT IO Int
+countEndpointInbox pid = do
+  result <- query Select (Query $ encodeUtf8 q) pid
+  case result of
+    [Only count] -> return count
+    v -> return $ length v
+  where
+    q =
+      [text|
+        SELECT COUNT(*)
+        FROM 
+            apis.endpoints enp
+        LEFT JOIN 
+            apis.anomalies ann ON (ann.anomaly_type = 'endpoint' AND ann.target_hash = enp.hash)
+        WHERE 
+            enp.project_id = ? 
+            AND enp.outgoing = false 
+            AND ann.id IS NOT NULL
+            AND ann.acknowleged_at IS NULL
+     |]

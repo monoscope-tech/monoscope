@@ -1,18 +1,31 @@
 {-# LANGUAGE DerivingVia #-}
 
-module Pages.Charts.Charts (chartsGetH, ChartType (..), throughput, throughputEndpointHTML, lazy, ChartExp (..), QueryBy (..), GroupBy (..)) where
+module Pages.Charts.Charts (chartsGetH, ChartType (..), lazy, ChartExp (..), QueryBy (..), GroupBy (..)) where
 
 import Data.Aeson qualified as AE
 import Data.List (groupBy, lookup)
 import Data.Text (toLower)
 import Data.Text qualified as T
-import Data.Time (UTCTime, ZonedTime, defaultTimeLocale, diffUTCTime, formatTime, utc, utcToZonedTime, zonedTimeToUTC)
+import Data.Time (
+  UTCTime,
+  ZonedTime,
+  addUTCTime,
+  defaultTimeLocale,
+  diffUTCTime,
+  formatTime,
+  getCurrentTime,
+  secondsToNominalDiffTime,
+  utc,
+  utcToZonedTime,
+  zonedTimeToUTC,
+ )
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.Tuple.Extra (fst3, thd3)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
-import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, withPool)
+import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, query_, withPool)
 import Database.PostgreSQL.Simple.Types (Query (Query))
+import Database.PostgreSQL.Transact qualified as DBT
 import Effectful.PostgreSQL.Transact.Effect
 import Effectful.Reader.Static (ask, asks)
 import Lucid
@@ -23,6 +36,7 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Network.URI (escapeURIString, isUnescapedInURI)
 import Pages.NonMember
+import Pkg.Parser
 import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import Servant (FromHttpApiData (..))
@@ -154,12 +168,82 @@ type M = Maybe
 
 
 formatZonedTimeAsUTC :: ZonedTime -> Text
-formatZonedTimeAsUTC zonedTime =
-  toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" (zonedTimeToUTC zonedTime)
+formatZonedTimeAsUTC zonedTime = formatUTC (zonedTimeToUTC zonedTime)
 
 
-chartsGetH :: M ChartType -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> ATAuthCtx (Html ())
-chartsGetH typeM groupByM queryByM slotsM limitsM themeM idM showLegendM = do
+formatUTC :: UTCTime -> Text
+formatUTC utcTime =
+  toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" (utcTime)
+
+
+chartsGetH :: M ChartType -> M Text -> M Projects.ProjectId -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
+chartsGetH typeM Nothing pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM fromM toM = chartsGetDef typeM Nothing pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM fromM toM
+chartsGetH typeM (Just queryRaw) pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM fromM toM = chartsGetRaw typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM fromM toM
+
+
+--  chartsGetRaw and chartGetDef should be refactored and merged.
+chartsGetRaw :: M ChartType -> Text -> M Projects.ProjectId -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
+chartsGetRaw typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM fromM toM = do
+  let cType = case fromMaybe BarCT typeM of
+        BarCT -> "bar"
+        LineCT -> "line"
+
+  let chartExps =
+        catMaybes
+          [ TypeE <$> typeM
+          , GByE <$> groupByM
+          , QByE <$> queryByM
+          , SlotsE <$> slotsM
+          , LimitE <$> limitsM
+          , Theme <$> themeM
+          , IdE <$> idM
+          , showLegendM >>= (\x -> if x then Just ShowLegendE else Nothing)
+          ]
+  randomID <- liftIO UUIDV4.nextRandom
+  now <- liftIO getCurrentTime
+
+  let (fromD, toD, currentRange) = case sinceM of
+        Just "1H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just now, Just "Last Hour")
+        Just "24H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just $ now, Just "Last 24 Hours")
+        Just "7D" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 7) now, Just now, Just "Last 7 Days")
+        Just "14D" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 14) now, Just now, Just "Last 14 Days")
+        _ -> do
+          let f = (iso8601ParseM (from @Text $ fromMaybe "" fromM) :: Maybe UTCTime)
+          let t = (iso8601ParseM (from @Text $ fromMaybe "" toM) :: Maybe UTCTime)
+          let start = toText . formatTime defaultTimeLocale "%F %T" <$> f
+          let end = toText . formatTime defaultTimeLocale "%F %T" <$> t
+          let range = case (start, end) of
+                (Just s, Just e) -> Just (s <> "-" <> e)
+                _ -> Nothing
+          (f, t, range)
+
+  let sqlQueryComponents =
+        (defSqlQueryCfg (Unsafe.fromJust pidM) now)
+          { dateRange = (fromD, toD)
+          }
+  let Right (_, qc) = parseQueryToComponents sqlQueryComponents queryRaw
+
+  chartData <- dbtToEff $ DBT.query_ (Query $ encodeUtf8 $ Unsafe.fromJust qc.finalTimechartQuery)
+
+  let (headers, groupedData) = pivot' $ toList chartData
+      headersJSON = decodeUtf8 $ AE.encode headers
+      groupedDataJSON = decodeUtf8 $ AE.encode $ transpose groupedData
+      idAttr = fromMaybe (UUID.toText randomID) idM
+      showLegend = toLower $ show $ fromMaybe False showLegendM
+      chartThemeTxt = fromMaybe "" themeM
+      fromDStr = maybe "" formatUTC fromD
+      toDStr = maybe "" formatUTC toD
+      cType = case fromMaybe BarCT typeM of
+        BarCT -> "bar"
+        LineCT -> "line"
+      scriptContent = [text| throughputEChartTable("$idAttr",$headersJSON, $groupedDataJSON, ["Endpoint"], $showLegend, "$chartThemeTxt", "$fromDStr", "$toDStr", "$cType") |]
+  pure do
+    div_ [id_ $ toText idAttr, class_ "w-full h-full"] ""
+    script_ scriptContent
+
+
+chartsGetDef :: M ChartType -> M Text -> M Projects.ProjectId -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
+chartsGetDef typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM fromM toM = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
@@ -181,6 +265,7 @@ chartsGetH typeM groupByM queryByM slotsM limitsM themeM idM showLegendM = do
   let (q, args, fromM, toM) = case groupByM of
         Just GBDurationPercentile -> buildReqDumpSQL chartExps
         _ -> buildReqDumpSQL chartExps
+
   chartData <- dbtToEff $ query Select (Query $ encodeUtf8 q) args
 
   let (headers, groupedData) = pivot' $ toList chartData
@@ -257,6 +342,7 @@ data ChartExp
   | Theme Text
   | IdE Text
   | ShowLegendE
+  | RawE Text
   deriving stock (Show)
 
 
@@ -288,92 +374,5 @@ lazy queries =
     runChartExp (LimitE limit) = "limit=" <> show limit
     runChartExp (Theme theme) = toString $ "theme=" <> theme
     runChartExp (IdE ide) = "id=" <> toString ide
+    runChartExp (RawE q) = "query_raw=" <> toString q
     runChartExp ShowLegendE = "show_legend=true"
-
-
----------------------------- OLD functions
---
-
-throughputEndpointHTML :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Bool -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
-throughputEndpointHTML pid idM groupBy_ endpointHash shapeHash formatHash statusCodeGT numSlotsM limitM showLegend_ fromDStrM toDStrM chartTheme = do
-  -- TODO: temporary, to work with current logic
-  appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-
-  isMember <- dbtToEff $ userIsProjectMember sess pid
-  if not isMember
-    then do
-      pure $ userNotMemeberPage sess
-    else do
-      let fromDStr = fromMaybe "" fromDStrM
-      let toDStr = fromMaybe "" toDStrM
-      let fromD = utcToZonedTime utc <$> (iso8601ParseM (from @Text fromDStr) :: Maybe UTCTime)
-      let toD = utcToZonedTime utc <$> (iso8601ParseM (from @Text toDStr) :: Maybe UTCTime)
-
-      let entityId = fromMaybe "" idM
-      let groupByField = maybe "" (\x -> "\"" <> x <> "\"") groupBy_
-      let showLegend = T.toLower $ show (Just True == showLegend_)
-      let chartThemeTxt = fromMaybe "" chartTheme
-
-      script <- case groupBy_ of
-        Just _ -> do
-          chartData <- dbtToEff $ RequestDumps.throughputBy' pid groupBy_ endpointHash shapeHash formatHash statusCodeGT (fromMaybe 0 numSlotsM) limitM Nothing (fromD, toD)
-          let (headers, groupedData) = pivot' $ toList chartData
-          let headersJSON = decodeUtf8 $ AE.encode headers
-          let groupedDataJSON = decodeUtf8 $ AE.encode $ transpose groupedData
-          pure [text| throughputEChartTable("id-$entityId",$headersJSON, $groupedDataJSON, [$groupByField], $showLegend, "$chartThemeTxt", "$fromDStr", "$toDStr") |]
-        Nothing -> do
-          chartData <- dbtToEff $ RequestDumps.throughputBy pid groupBy_ endpointHash shapeHash formatHash statusCodeGT (fromMaybe 0 numSlotsM) limitM Nothing (fromD, toD)
-          pure [text| throughputEChart("id-$entityId", $chartData, [$groupByField], $showLegend, "$chartThemeTxt") |]
-      pure do
-        div_ [id_ $ "id-" <> entityId, class_ "w-full h-full"] ""
-        script_ script
-
-
--- TODO: Delete after migrating to new chart strategy
--- >>> runQueryBy (QBEndpointHash "hash")
--- "endpoint_hash=hash"
-runQueryBy :: QueryBy -> Text
-runQueryBy (QBPId t) = "project_id=" <> show t
-runQueryBy (QBEndpointHash t) = "endpoint_hash=" <> t
-runQueryBy (QBShapeHash t) = "shape_hash=" <> t
-runQueryBy (QBFormatHash t) = "format_hash=" <> t
-runQueryBy (QBStatusCodeGT t) = "status_code_gt=" <> show t
-runQueryBy (QBHost t) = "host=" <> t
-runQueryBy (QBFrom t) = ""
-runQueryBy (QBTo t) = ""
-runQueryBy (QBAnd a b) = runQueryBy a <> "&" <> runQueryBy b
-
-
--- TODO: Delete after migrating to new chart strategy
-runGroupBy :: GroupBy -> Text
-runGroupBy GBEndpoint = "group_by=endpoint"
-runGroupBy GBStatusCode = "group_by=status_code"
-runGroupBy GBDurationPercentile = "group_by=duration_percentile"
-runGroupBy GBHost = "group_by=host"
-
-
--- This endpoint will return a throughput chart partial
-throughput :: Projects.ProjectId -> Text -> Maybe QueryBy -> Maybe GroupBy -> Int -> Maybe Int -> Bool -> (Maybe ZonedTime, Maybe ZonedTime) -> Maybe Text -> Html ()
-throughput pid elemID qByM gByM numSlots' limit' showLegend' (fromD, toD) chartTheme = do
-  let pidT = pid.toText
-  let queryBy = runQueryBy <$> qByM
-  let gBy = runGroupBy <$> gByM
-  let queryStr = [queryBy, gBy] & catMaybes & T.intercalate "&"
-  let showLegend = T.toLower $ show showLegend'
-  let numSlots = show numSlots'
-  let limit = maybe "" (\x -> "limit=" <> show x) limit'
-  let fromDStr = from @String @Text $ maybe "" (iso8601Show . zonedTimeToUTC) fromD
-  let toDStr = from @String @Text $ maybe "" (iso8601Show . zonedTimeToUTC) toD
-  let theme = fromMaybe "" chartTheme
-
-  div_
-    [ id_ $ "id-" <> elemID
-    , class_ "w-full h-full"
-    , hxGet_ [text| /p/$pidT/charts_html/throughput?id=$elemID&show_legend=$showLegend&num_slots=$numSlots&$limit&$queryStr&from=$fromDStr&to=$toDStr&theme=$theme |]
-    , hxTrigger_ "intersect"
-    , hxSwap_ "outerHTML"
-    ]
-    ""

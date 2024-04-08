@@ -23,7 +23,8 @@ module Models.Projects.Projects (
   updateProjectReportNotif,
   ProjectCache (..),
   updateNotificationsChannel,
-) where
+)
+where
 
 import Data.Aeson (FromJSON (..), ToJSON (toJSON), Value (String))
 import Data.Default
@@ -42,7 +43,6 @@ import Database.PostgreSQL.Transact (DBT)
 import Deriving.Aeson qualified as DAE
 import GHC.Records (HasField (getField))
 import Models.Users.Users qualified as Users
-import Optics.TH
 import Relude
 import Web.HttpApiData
 
@@ -116,6 +116,9 @@ data Project = Project
   , weeklyNotif :: Bool
   , timeZone :: Text
   , notificationsChannel :: Vector NotificationChannel
+  , subId :: Maybe Text
+  , firstSubItemId :: Maybe Text
+  , orderId :: Maybe Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, NFData)
@@ -125,9 +128,6 @@ data Project = Project
   deriving
     (Entity)
     via (GenericEntity '[Schema "projects", TableName "projects", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Project)
-
-
-makeFieldLabelsNoPrefix ''Project
 
 
 -- FIXME: Why was this record created? And not the regular projects record?
@@ -147,6 +147,9 @@ data Project' = Project'
   , weeklyNotif :: Bool
   , timeZone :: Text
   , notificationsChannel :: Vector NotificationChannel
+  , subId :: Maybe Text
+  , firstSubItemId :: Maybe Text
+  , orderId :: Maybe Text
   , usersDisplayImages :: Vector Text
   }
   deriving stock (Show, Generic)
@@ -167,12 +170,11 @@ data ProjectCache = ProjectCache
     -- [endpointHash]<>[field_category eg requestBody]<>[field_key_path]
     -- Those redact fields that don't have endpoint or field_category attached, would be aplied to every endpoint and field category.
     redactFieldslist :: V.Vector Text
+  , monthlyRequestCount :: Int
+  , paymentPlan :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow)
-
-
-makeFieldLabelsNoPrefix ''ProjectCache
 
 
 data CreateProject = CreateProject
@@ -181,6 +183,9 @@ data CreateProject = CreateProject
   , description :: Text
   , paymentPlan :: Text
   , timeZone :: Text
+  , subId :: Maybe Text
+  , firstSubItemId :: Maybe Text
+  , orderId :: Maybe Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow)
@@ -189,18 +194,20 @@ data CreateProject = CreateProject
     via (GenericEntity '[Schema "projects", TableName "projects", PrimaryKey "id", FieldModifiers '[CamelToSnake]] CreateProject)
 
 
-makeFieldLabelsNoPrefix ''CreateProject
-
-
 -- FIXME: We currently return an object with empty vectors when nothing was found.
 projectCacheById :: ProjectId -> DBT IO (Maybe ProjectCache)
-projectCacheById = queryOne Select q
+projectCacheById pid = queryOne Select q (pid, pid, pid)
   where
     q =
       [sql| select  coalesce(ARRAY_AGG(DISTINCT hosts ORDER BY hosts ASC),'{}') hosts, 
                     coalesce(ARRAY_AGG(DISTINCT endpoint_hashes ORDER BY endpoint_hashes ASC),'{}') endpoint_hashes, 
                     coalesce(ARRAY_AGG(DISTINCT shape_hashes ORDER BY shape_hashes ASC),'{}'::text[]) shape_hashes, 
-                    coalesce(ARRAY_AGG(DISTINCT paths ORDER BY paths ASC),'{}') redacted_fields 
+                    coalesce(ARRAY_AGG(DISTINCT paths ORDER BY paths ASC),'{}') redacted_fields,
+                    ( SELECT count(*) FROM apis.request_dumps 
+                     WHERE project_id=? AND EXTRACT(MONTH FROM created_at) = EXTRACT(MONTH FROM CURRENT_DATE)
+                       AND EXTRACT(YEAR FROM created_at) = EXTRACT(YEAR FROM CURRENT_DATE)
+                    ) monthly_request_count,
+                    (SELECT payment_plan from projects.projects where id =?) payment_plan
             from
               (select e.host hosts, e.hash endpoint_hashes, sh.hash shape_hashes, concat(rf.endpoint_hash,'<>', rf.field_category,'<>', rf.path) paths
                 from apis.endpoints e
@@ -257,6 +264,8 @@ userByProjectId pid user_id = query Select q (user_id, pid)
     q =
       [sql| select u.id, u.created_at, u.updated_at, u.deleted_at, u.active, u.first_name, u.last_name, u.display_image_url, u.email, u.phone_number
                 from users.users u join projects.project_members pm on (pm.user_id= ?) where project_id=? and u.active IS True;|]
+
+
 editProjectGetH :: ProjectId -> DBT IO (V.Vector Project)
 editProjectGetH pid = query Select q (Only pid)
   where
@@ -270,10 +279,10 @@ editProjectGetH pid = query Select q (Only pid)
 
 updateProject :: CreateProject -> DBT IO Int64
 updateProject cp = do
-  execute Update q (cp.title, cp.description, cp.paymentPlan, cp.timeZone, cp.id)
+  execute Update q (cp.title, cp.description, cp.paymentPlan, cp.subId, cp.firstSubItemId, cp.orderId, cp.timeZone, cp.id)
   where
     q =
-      [sql| UPDATE projects.projects SET title=?,  description=?, payment_plan=?, time_zone=? where id=?;|]
+      [sql| UPDATE projects.projects SET title=?,  description=?, payment_plan=?, sub_id=?, first_sub_item_id=?, order_id=?, time_zone=? where id=?;|]
 
 
 updateProjectReportNotif :: ProjectId -> Text -> DBT IO Int64

@@ -15,7 +15,8 @@ module Pages.Reports (
   reportEmail,
   ReportAnomalyType (..),
   PerformanceReport (..),
-) where
+)
+where
 
 import Data.Aeson as Aeson
 import Data.Aeson.QQ (aesonQQ)
@@ -274,9 +275,9 @@ reportsPage pid reports nextUrl daily weekly =
   div_ [class_ "mx-auto w-full flex flex-col px-16 pt-10 pb-24  overflow-y-scroll h-full"] do
     h3_ [class_ "text-xl text-slate-700 flex place-items-center font-bold pb-4 border-b"] "Reports History"
     div_ [class_ "mt-4 grid grid-cols-12 gap-4"] do
-      div_ [class_ "flex flex-col col-span-2 mt-16"] do
-        h5_ [class_ "text-lg font-semibold text-slate-700 pb-1"] "Email notifications:"
-        div_ [class_ "flex items-center justify-between w-[170px] hover:bg-gray-100"] do
+      div_ [class_ "flex flex-col col-span-2 border rounded-lg overflow-hidden mt-16"] do
+        h5_ [class_ "text-lg font-semibold text-slate-700 pb-1 bg-gray-200 p-2"] "Email notifications"
+        div_ [class_ "p-2 flex items-center justify-between w-full hover:bg-gray-100"] do
           label_ [class_ "inline-flex items-center w-full", Lucid.for_ "e-daily"] "Daily reports"
           input_
             [ type_ "checkbox"
@@ -285,9 +286,9 @@ reportsPage pid reports nextUrl daily weekly =
             , if daily then checked_ else value_ "off"
             , hxPost_ $ "/p/" <> show pid.unProjectId <> "/reports_notif/daily"
             , hxTrigger_ "change"
-            , class_ "w-4 h-4 text-blue-600 bg-gray-100 rounded border-gray-300 focus:ring-blue-500"
+            , class_ "checkbox checkbox-success checkbox-sm"
             ]
-        div_ [class_ "flex items-center justify-between w-[170px] hover:bg-gray-100"] do
+        div_ [class_ "p-2 flex items-center justify-between w-full hover:bg-gray-100"] do
           label_ [class_ "inline-flex items-center w-full", Lucid.for_ "e-weekly"] "Weekly reports"
           input_
             [ type_ "checkbox"
@@ -296,7 +297,7 @@ reportsPage pid reports nextUrl daily weekly =
             , if weekly then checked_ else value_ "off"
             , hxPost_ $ "/p/" <> show pid.unProjectId <> "/reports_notif/weekly"
             , hxTrigger_ "change"
-            , class_ "w-4 h-4 text-blue-600 bg-gray-100 rounded border-gray-300 focus:ring-blue-500"
+            , class_ "checkbox checkbox-success checkbox-sm"
             ]
       div_ [class_ "col-span-8"] do
         reportListItems pid reports nextUrl
@@ -437,6 +438,8 @@ mapFunc prMap rd =
         , durationDiffPct = 0
         , durationDiffType = "up"
         }
+
+
 divideIntegers :: Integer -> Integer -> Double
 divideIntegers a b = fromIntegral a / fromIntegral b
 

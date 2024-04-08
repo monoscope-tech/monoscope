@@ -28,6 +28,11 @@ ghc-options:
   - -Wno-missing-kind-signatures
   - -fwrite-ide-info
   - -hiedir=.hie
+  - -j4
+  - +RTS 
+  - -A128m 
+  - -n2m 
+  - -RTS
   # - -fllvm
 
 default-extensions:
@@ -60,6 +65,7 @@ default-extensions:
   - TypeApplications
   - TypeFamilies
   - TypeOperators
+  - GeneralizedNewtypeDeriving
   - UndecidableInstances
   - OverloadedRecordDot
   - TemplateHaskell
@@ -85,7 +91,7 @@ library:
     - effectful
     - effectful-core
     - monad-time-effectful
-    - monad-time
+    # - monad-time
     - wai-log
     - pg-transact-effectful
     - log-base
@@ -97,7 +103,7 @@ library:
     - async
     - base
     - bytestring
-    - base64
+    - base64 
     - mtl
     - http-types
     - cache >= 0.1.3.0
@@ -134,8 +140,6 @@ library:
     - megaparsec
     - neat-interpolation
     - odd-jobs
-    - optics-core
-    - optics-th
     - parser-combinators
     - pg-entity
     - pg-transact

@@ -70,6 +70,8 @@ reqMsgFormToReqMsg pid RequestMessageForm{urlPath, ..} = do
       , serviceVersion = Nothing
       , tags = Nothing
       , errors = Nothing
+      , urlPath = Just urlPath
+      , host = Just host
       , ..
       }
 
@@ -91,27 +93,30 @@ reqMsgFormToReqMsg pid RequestMessageForm{urlPath, ..} = do
 -- - [FUTURE] If we ever have a super admin, it should be possible to access this page directly from there for any given company.
 manualIngestPostH :: Projects.ProjectId -> RequestMessageForm -> ATAuthCtx (Html ())
 manualIngestPostH pid reqMF = do
-  -- TODO: temporary, to work with current logic
-  appCtx <- ask @AuthContext
-  let env = appCtx.config
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-  let currUserId = sess.userId
+  pure ""
 
-  logger <- asks logger
-  isMember <- dbtToEff $ userIsProjectMember sess pid
-  if not isMember
-    then do
-      pure $ userNotMemeberPage sess
-    else do
-      projectCache <- asks projectCache
-      project <- dbtToEff $ Projects.selectProjectForUser (Sessions.userId sess, pid)
-      case reqMsgFormToReqMsg (Projects.unProjectId pid) reqMF of
-        Left err -> liftIO $ logger <& "error parsing manualIngestPost req Message; " <> show err
-        Right reqM -> void $ liftIO $ ProcessMessage.processMessages' logger env appCtx.pool [Right (Just "", reqM)] projectCache
 
-      pure manualIngestPage
+-- FIXME: commented out because processMessage is in a different monad from manualIngest, and this method is not used much either
+-- -- TODO: temporary, to work with current logic
+-- appCtx <- ask @AuthContext
+-- let env = appCtx.config
+-- sess' <- Sessions.getSession
+-- let sess = Unsafe.fromJust sess'.persistentSession
+-- let currUserId = sess.userId
 
+-- logger <- asks logger
+-- isMember <- dbtToEff $ userIsProjectMember sess pid
+-- if not isMember
+--   then do
+--     pure $ userNotMemeberPage sess
+--   else do
+--     projectCache <- asks projectCache
+--     project <- dbtToEff $ Projects.selectProjectForUser (Sessions.userId sess, pid)
+--     case reqMsgFormToReqMsg (Projects.unProjectId pid) reqMF of
+--       Left err -> liftIO $ logger <& "error parsing manualIngestPost req Message; " <> show err
+--       Right reqM -> void $ liftIO $ ProcessMessage.processMessages' logger env appCtx.pool [(Just "", reqM)] projectCache
+
+--     pure manualIngestPage
 
 manualIngestGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
 manualIngestGetH pid = do

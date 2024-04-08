@@ -14,6 +14,7 @@ CREATE EXTENSION IF NOT EXISTS tablefunc;
 CREATE SCHEMA IF NOT EXISTS users;
 CREATE SCHEMA IF NOT EXISTS projects;
 CREATE SCHEMA IF NOT EXISTS apis;
+CREATE SCHEMA IF NOT EXISTS monitors;
 
 
 -----------------------------------------------------------------------
@@ -117,8 +118,13 @@ ALTER TABLE projects.projects
 ALTER TABLE projects.projects ADD COLUMN time_zone TEXT DEFAULT 'UTC';
 
 CREATE TYPE notification_channel_enum AS ENUM ('email', 'slack');
-ALTER TABLE projects.projects
-ADD COLUMN notifications_channel notification_channel_enum DEFAULT 'email';
+ALTER TABLE projects.projects 
+ADD COLUMN notifications_channel notification_channel_enum[] DEFAULT ARRAY['email']::notification_channel_enum[];
+ALTER TABLE projects.projects ADD COLUMN sub_id TEXT DEFAULT NULL;
+ALTER TABLE projects.projects ADD COLUMN first_sub_item_id TEXT DEFAULT NULL;
+ALTER TABLE projects.projects ADD COLUMN order_id TEXT DEFAULT NULL;
+
+
 
 -----------------------------------------------------------------------
 -- PROJECT MEMBERS table 
@@ -222,6 +228,7 @@ UPDATE apis.endpoints SET host = COALESCE(REPLACE((akeys(hosts))[1], '''', ''),'
 -- we can hold on with this to make sure everything works
 -- after than we can drop the column
 ALTER TABLE apis.endpoints DROP COLUMN hosts;
+ALTER TABLE apis.endpoints ADD COLUMN description TEXT NOT NULL DEFAULT ''::TEXT;
 
 -----------------------------------------------------------------------
 -- SHAPES table 
@@ -259,6 +266,8 @@ CREATE TABLE IF NOT EXISTS apis.shapes
 SELECT manage_updated_at('apis.shapes');
 CREATE INDEX IF NOT EXISTS idx_apis_shapes_project_id ON apis.shapes(project_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_shapes_hash ON apis.shapes(hash);
+ALTER TABLE apis.shapes ADD COLUMN response_description TEXT NOT NULL DEFAULT ''::TEXT;
+ALTER TABLE apis.shapes ADD COLUMN request_description TEXT NOT NULL DEFAULT ''::TEXT;
 
 -----------------------------------------------------------------------
 -- FIELDS table 
@@ -290,7 +299,8 @@ CREATE TABLE IF NOT EXISTS apis.fields
 SELECT manage_updated_at('apis.fields');
 CREATE INDEX IF NOT EXISTS idx_apis_fields_project_id ON apis.fields(project_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_fields_hash ON apis.fields(hash);
-
+ALTER TABLE apis.fields ADD COLUMN is_enum BOOL NOT NULL DEFAULT 'f';
+ALTER TABLE apis.fields ADD COLUMN is_required BOOL NOT NULL DEFAULT 'f';
 
 -----------------------------------------------------------------------
 -- FORMATS table 
@@ -901,6 +911,29 @@ CREATE TABLE IF NOT EXISTS apis.test_results
 );
 SELECT manage_updated_at('apis.test_results');
 create index if not exists idx_apis_test_results_id on apis.test_steps(id); 
+
+
+
+CREATE TABLE IF NOT EXISTS monitors.query_monitors 
+(
+  id                           UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  project_id                   UUID NOT NULL REFERENCES projects.projects(id)        ON DELETE CASCADE,
+  created_at                   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+  updated_at                   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+  check_interval_mins          INT NOT NULL DEFAULT 1,
+  alert_threshold              INT NOT NULL,
+  warning_threshold            INT,
+  log_query                    TEXT NOT NULL DEFAULT '',
+  log_query_as_sql             TEXT NOT NULL DEFAULT '',
+  last_evaluated               TIMESTAMP WITH TIME ZONE,
+  warning_last_triggered       TIMESTAMP WITH TIME ZONE,
+  alert_last_triggered         TIMESTAMP WITH TIME ZONE,
+  trigger_less_than            BOOL,
+  threshold_sustained_for_mins INT NOT NULL DEFAULT 0,
+  alert_config                   JSONB NOT NULL DEFAULT '{}'
+);
+SELECT manage_updated_at('monitors.query_monitors');
+
 
 COMMIT;
 

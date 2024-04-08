@@ -50,7 +50,7 @@ function throughputEChart(renderAt, data, gb, showLegend, theme) {
       trigger: 'axis',
     },
     xAxis: { show: showLegend, type: 'time', scale: true },
-    yAxis: { show: showLegend, scale: true},
+    yAxis: { show: showLegend, scale: true },
     series: series,
   };
   if (showLegend) {
@@ -128,6 +128,7 @@ function throughputEChartTable(renderAt, categories, data, gb, showLegend, theme
   let backgroundStyle = {
     color: 'rgba(240,248,255, 0.4)'
   }
+  let maxValue = 0;
   const getSeriesData = (data) => {
     return data.slice(1).map((seriesData, index) => {
       return {
@@ -136,8 +137,16 @@ function throughputEChartTable(renderAt, categories, data, gb, showLegend, theme
         stack: "Endpoints",
         showBackground: true,
         backgroundStyle: backgroundStyle,
-        barWidth: '60%',
-        data: seriesData.map((value, dataIndex) => [data[0][dataIndex] * 1000, value])
+        barMaxWidth: '10',
+        barMinHeight: "1",
+        encode: {
+          x: 'timestamp',
+          y: 'throughput',
+        },
+        data: seriesData.map((value, dataIndex) => {
+          maxValue = value > maxValue ? value : maxValue;
+          return [data[0][dataIndex] * 1000, value]
+        })
       };
     });
   };
@@ -157,6 +166,7 @@ function throughputEChartTable(renderAt, categories, data, gb, showLegend, theme
       formatter: fmter
     },
     legend: {
+      show: showLegend,
       type: 'scroll',
       top: 'bottom',
       data: categories.slice(0, data.length - 1)
@@ -164,20 +174,32 @@ function throughputEChartTable(renderAt, categories, data, gb, showLegend, theme
     grid: {
       width: '100%',
       left: '0%',
-      top: '5%',
-      bottom: '13%',
-      containLabel: true
+      top: '2%',
+      bottom: showLegend?'22%':'1.8%',
+      containLabel: true 
     },
     xAxis: {
+      show: true,
+      scale: true,
       type: 'time',
       min: from,
       max: to,
       boundaryGap: [0, 0.01],
+      axisLabel: {
+        show: showLegend 
+      }
     },
     yAxis: {
+      show: showLegend,
+      maxInterval: 3600 * 1000 *24, // 1day
       type: 'value',
-      show: true,
       min: 0,
+      axisLine: {
+        show: true
+      },
+      axisLabel: {
+        show: true,
+      }
     },
     series: getSeriesData(data)
   };
@@ -193,93 +215,34 @@ function throughputEChartTable(renderAt, categories, data, gb, showLegend, theme
       show: true,
       position: 'inside'
     }
+  }else{
+    option.yAxis.axisLabel.formatter = function(params) {
+        if (params >= 1000) {
+          return `${Math.trunc(params / 1000)}k`
+        }
+        return `${Math.trunc(params)}`
+      }
+  }
+  if (!showLegend) {
+    option.yAxis.axisLabel = {
+      formatter: function(value, index) {
+        // Only show the label for the maximum value
+        return value === maxValue ? maxValue : '';
+      },
+      show: true,
+      // inside: true,
+      showMaxLabel: true,
+    }
   }
 
-
   const myChart = echarts.init(document.getElementById(renderAt), theme);
   myChart.setOption(option);
 }
-
-function latencyEChart(renderAt, data, theme, from, to) {
-  const showLegend = true;
-  const option = {
-    tooltip: {
-      trigger: 'axis',
-      formatter: durationFormatter
-    },
-    legend: { show: showLegend, type: 'scroll', top: 'bottom' },
-    xAxis: {
-      type: 'time',
-      min: from,
-      max: to,
-      boundaryGap: [0, 0.01]
-    },
-    yAxis: {
-      type: 'value',
-      scale: true,
-      boundaryGap: ['5%', '5%'],
-      min: 0,
-      axisLabel: {
-        formatter: function(params) {
-          if (params > 1000) {
-            return `${Math.trunc(params / 1000)}s`
-          }
-          return `${Math.trunc(params)}ms`
-        },
-        show: true,
-        position: 'inside'
-      }
-    },
-    grid: {
-      width: '100%',
-      left: '0%',
-      top: '5%',
-      bottom: '12%',
-      containLabel: true
-    },
-    dataset: {
-      dimensions: ['date', 'p50', 'p75', 'p90'],
-      source: data
-    },
-    series: [
-      {
-        type: 'line',
-        name: 'p50',
-        encode: {
-          x: 'date',
-          y: 'p50'
-        },
-        smooth: true
-      },
-      {
-        type: 'line',
-        name: 'p75',
-        encode: {
-          x: 'date',
-          y: 'p75'
-        },
-        smooth: true
-      },
-      {
-        type: 'line',
-        name: 'p90',
-        encode: {
-          x: 'date',
-          y: 'p90'
-        },
-        smooth: true
-      }
-    ]
-  };
-  const myChart = echarts.init(document.getElementById(renderAt), theme);
-  myChart.setOption(option);
-}
-
 
 function latencyHistogram(renderAt, pc, data) {
   const myChart = echarts.init(document.getElementById(renderAt));
   const option = {
-    grid: { width: '100%', width: '100%', left: '1%', right: '-1%', top: '10%', bottom: '1.5%', containLabel: true },
+    grid: { width: '100%', left: '1%', right: '-1%', top: '10%', bottom: '1.5%', containLabel: true },
     xAxis: {
       show: true, type: 'value', scale: true, splitLine: { show: false },
       axisLabel: {

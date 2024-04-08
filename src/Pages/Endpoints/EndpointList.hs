@@ -26,6 +26,8 @@ import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Charts.Charts qualified as Charts
 import Pages.NonMember
+import Pages.Onboarding qualified as Onboarding
+import PyF qualified
 import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import System.Config
@@ -58,41 +60,40 @@ endpointListGetH pid layoutM ackdM archivedM hostM projectHostM sortM hxRequestM
     then do
       pure $ userNotMemeberPage sess
     else do
-      (project, endpointStats, projHosts) <- dbtToEff do
+      (project, endpointStats, projHosts, inbox) <- dbtToEff do
         project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
         endpointStats <- case hostM of
           Just h -> Endpoints.dependencyEndpointsRequestStatsByProject pid h
-          Nothing -> Endpoints.endpointRequestStatsByProject pid ackd archived projectHostM
+          Nothing -> Endpoints.endpointRequestStatsByProject pid ackd archived projectHostM sortM
         projHosts <- Endpoints.getProjectHosts pid
-        pure (project, endpointStats, projHosts)
+        inbox <- Endpoints.countEndpointInbox pid
+        pure (project, endpointStats, projHosts, inbox)
       let bwconf =
             (def :: BWConfig)
               { sessM = Just sess
               , currProject = project
               , pageTitle = "Endpoints"
               }
-      let currentURL = "/p/" <> pid.toText <> "/endpoints?layout=" <> fromMaybe "false" layoutM <> "&ackd=" <> fromMaybe "true" ackdM <> "&archived=" <> fromMaybe "false" archivedM
-      -- let currentURL =  fromMaybe "" hxCurrentURL
+      let currentURL = "/p/" <> pid.toText <> "/endpoints?layout=" <> fromMaybe "false" layoutM <> "&ackd=" <> fromMaybe "true" ackdM <> "&archived=" <> fromMaybe "false" archivedM <> "&sort=" <> fromMaybe "event" sortM
       currTime <- liftIO getCurrentTime
       let paramInput =
             ParamInput
               { currentURL = currentURL
               , ackd = ackd
               , archived = archived
-              , -- , sort = fromMaybe "" sortM
-                sort = ""
+              , sort = fromMaybe "events" sortM
               }
       let elementBelowTabs =
             div_ [class_ "grid grid-cols-5", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"]
-              $ endpointList' paramInput currTime pid endpointStats
+              $ endpointList' paramInput currTime pid endpointStats inbox
       case (hxRequestM, hxBoostedM) of
         (Just "true", Just "false") -> pure elementBelowTabs
         (Just "true", Nothing) -> pure elementBelowTabs
-        _ -> pure $ bodyWrapper bwconf $ endpointListPage paramInput pid currTime endpointStats projHosts hostM projectHostM
+        _ -> pure $ bodyWrapper bwconf $ endpointListPage paramInput pid currTime endpointStats projHosts hostM projectHostM inbox
 
 
-endpointListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Endpoints.EndpointRequestStats -> Vector Endpoints.Host -> Maybe Text -> Maybe Text -> Html ()
-endpointListPage paramInput pid currTime endpoints hosts hostM pHostM = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24 overflow-y-scroll h-full"] $ do
+endpointListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Endpoints.EndpointRequestStats -> Vector Endpoints.Host -> Maybe Text -> Maybe Text -> Int -> Html ()
+endpointListPage paramInput pid currTime endpoints hosts hostM pHostM inbox_count = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24 overflow-y-scroll h-full"] $ do
   h3_ [class_ "text-xl text-slate-700 flex gap-1 place-items-center"] do
     case hostM of
       Just h -> do
@@ -130,25 +131,27 @@ endpointListPage paramInput pid currTime endpoints hosts hostM pHostM = div_ [cl
       ]
       "Active"
     a_
-      [ class_ $ "inline-block  py-2 " <> if not paramInput.ackd && not paramInput.archived then " font-bold text-black " else "" <> if forHost then " cursor-not-allowed" else ""
+      [ class_ $ "relative inline-block  py-2 " <> if not paramInput.ackd && not paramInput.archived then " font-bold text-black " else "" <> if forHost then " cursor-not-allowed" else ""
       , href_ $ if forHost then "#" else uri <> "&ackd=false&archived=false" <> maybe "" ("&project_host=" <>) pHostM
       ]
-      "Inbox"
+      do
+        span_ [] "Inbox"
+        when (inbox_count > 0) $ span_ [class_ "absolute top-[1px] -right-[5px] text-white text-xs font-medium rounded-full px-1 bg-red-500"] $ show inbox_count
     a_
       [ class_ $ "inline-block  py-2 " <> if paramInput.archived then " font-bold text-black " else "" <> if forHost then " cursor-not-allowed" else ""
       , href_ $ if forHost then "#" else uri <> "&archived=true" <> maybe "" ("&project_host=" <>) pHostM
       ]
       "Archived"
-  div_ [class_ "grid grid-cols-5 card-round", id_ "anomalyListBelowTab", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $ endpointList' paramInput currTime pid endpoints
+  div_ [class_ "grid grid-cols-5 card-round", id_ "anomalyListBelowTab", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $ endpointList' paramInput currTime pid endpoints inbox_count
 
 
-endpointList' :: ParamInput -> UTCTime -> Projets.ProjectId -> Vector Endpoints.EndpointRequestStats -> Html ()
-endpointList' paramInput currTime pid enps = form_ [class_ "col-span-5 bg-white divide-y ", id_ "anomalyListForm"] $ do
+endpointList' :: ParamInput -> UTCTime -> Projets.ProjectId -> Vector Endpoints.EndpointRequestStats -> Int -> Html ()
+endpointList' paramInput currTime pid enps inbox_count = form_ [class_ "col-span-5 bg-white divide-y ", id_ "anomalyListForm"] $ do
   let bulkActionBase = "/p/" <> pid.toText <> "/anomalies/bulk_actions"
   let currentURL' = deleteParam "sort" paramInput.currentURL
   let sortMenu =
-        [ ("First Seen", "First time the issue occured", "first_seen")
-        , ("Last Seen", "Last time the issue occured", "last_seen")
+        [ ("First Seen", "First time the endpoint was seen", "first_seen")
+        , ("Last Seen", "Last time the endpoint was seen", "last_seen")
         , ("Events", "Number of events", "events")
         ]
           :: [(Text, Text, Text)]
@@ -158,12 +161,12 @@ endpointList' paramInput currTime pid enps = form_ [class_ "col-span-5 bg-white 
       a_ [class_ " w-2 h-full"] ""
       input_ [term "aria-label" "Select Issue", type_ "checkbox"]
     div_ [class_ " grow flex flex-row gap-2"] do
-      button_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/acknowlege", hxSwap_ "none"] "✓ acknowlege"
-      button_ [class_ "btn-sm bg-transparent space-x-1 border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/archive", hxSwap_ "none"] do
+      button_ [class_ "btn btn-sm btn-outline border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/acknowlege", hxSwap_ "none"] "✓ acknowlege"
+      button_ [class_ "btn btn-sm btn-outline space-x-1 border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/archive", hxSwap_ "none"] do
         faSprite_ "fa-inbox" "solid" "h-4 w-4 inline-block"
         span_ "archive"
     div_ [class_ "relative inline-block"] do
-      a_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl space-x-2", [__|on click toggle .hidden on #sortMenuDiv |]] do
+      a_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl space-x-2 cursor-pointer", [__|on click toggle .hidden on #sortMenuDiv |]] do
         mIcon_ "sort" "h-4 w-4"
         span_ $ toHtml currentSortTitle
       div_ [id_ "sortMenuDiv", hxBoost_ "true", class_ "p-1 hidden text-sm border border-black-30 absolute right-0 z-10 mt-2 w-72 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none", tabindex_ "-1"] do
@@ -172,6 +175,7 @@ endpointList' paramInput currTime pid enps = form_ [class_ "col-span-5 bg-white 
           a_
             [ class_ $ "block flex flex-row px-3 py-2 hover:bg-blue-50 rounded-md cursor-pointer " <> (if isActive then " text-blue-800 " else "")
             , href_ $ currentURL' <> "&sort=" <> identifier
+            , hxIndicator_ "#sortLoading"
             ]
             do
               div_ [class_ "flex flex-col items-center justify-center px-3"] do
@@ -179,6 +183,8 @@ endpointList' paramInput currTime pid enps = form_ [class_ "col-span-5 bg-white 
               div_ [class_ "grow space-y-1"] do
                 span_ [class_ "block text-lg"] $ toHtml title
                 span_ [class_ "block "] $ toHtml desc
+    div_ [id_ "sortLoading", class_ "htmx-indicator fixed top-1/2 left-1/2 -translate-1/2 rounded-lg bg-white shadow p-10 border"] do
+      span_ [class_ "loading loading-dots loading-md"] ""
 
     div_ [class_ "flex justify-center font-base w-60 content-between gap-14"] do
       span_ "GRAPH"
@@ -187,16 +193,18 @@ endpointList' paramInput currTime pid enps = form_ [class_ "col-span-5 bg-white 
         a_ [class_ "cursor-pointer font-bold text-base"] "14d"
     div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "font-base"] "EVENTS"
   div_ [class_ "w-full flex flex-row p-3"] $ do
-    div_ [class_ "flex w-full bg-white py-2 px-3 flex-row border-solid border border-gray-200 h-10"] $ do
-      faIcon_ "fa-magnifying-glass" "fa-light fa-magnifying-glass" "h-5 w-auto"
+    div_ [class_ "relative flex w-full bg-white py-2 px-3 border-solid border border-gray-200 h-10"] $ do
+      faIcon_ "fa-magnifying-glass" "fa-light fa-magnifying-glass" "h-5 w-5"
       input_
         [ type_ "text"
         , [__| on input show .endpoint_item in #endpoints_container when its textContent.toLowerCase() contains my value.toLowerCase() |]
-        , class_ "dataTable-search w-full h-full p-2 text-sm text-gray-400 font-normal focus:outline-none"
+        , class_ "dataTable-search w-full h-full p-2 text-gray-500 font-normal focus:outline-none"
         , placeholder_ "Search endpoints..."
         ]
-      faIcon_ "fa-line-height" "fa-regular fa-line-height" "h-5 w-auto self-end"
-  when (null enps) $ div_ [class_ "flex flex-col text-center justify-center items-center h-32"] $ do
+  when (null enps && inbox_count == 0) $ div_ [class_ "w-full p-20 items-center"] $ do
+    h2_ [class_ "text-2xl font-medium mb-4"] "No Endpoints: You haven't integrated APIToolkit in your application yet"
+    Onboarding.integrateApiToolkit "<YOUR_API_KEY>" "express"
+  when (null enps && inbox_count > 0) $ div_ [class_ "flex flex-col text-center justify-center items-center h-32"] $ do
     strong_ "No endpoints yet."
     p_ "Check Inbox to acknowlege new endpoints"
   div_ [id_ "endpoints_container"] do
@@ -225,7 +233,15 @@ renderEndpoint activePage currTime enp = do
         div_ [class_ "flex items-center gap-2 mt-5"] do
           AnomalyList.anomalyArchiveButton enp.projectId (Anomalies.AnomalyId enp.anomalyId) (isJust enp.archivedAt)
           AnomalyList.anomalyAcknowlegeButton enp.projectId (Anomalies.AnomalyId enp.anomalyId) (isJust enp.acknowlegedAt)
-    div_ [class_ "flex items-center justify-center "] $ div_ [class_ "w-60 h-16 px-3"] $ Charts.throughput enp.projectId enp.endpointId.toText (Just $ Charts.QBEndpointHash enp.endpointHash) Nothing 14 Nothing False (Nothing, Nothing) Nothing
+    div_ [class_ "flex items-center justify-center "]
+      $ div_
+        [ class_ "w-56 h-12 px-3"
+        , hxGet_ $ "/charts_html?pid=" <> enp.projectId.toText <> "&since=14D&query_raw=" <> AnomalyList.escapedQueryPartial [PyF.fmt|endpoint_hash=="{enp.endpointHash}" | timechart [1d]|]
+        , hxTrigger_ "intersect once"
+        , hxSwap_ "innerHTML"
+        ]
+        ""
+
     div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $ toHtml @String $ fmt $ commaizeF enp.totalRequests
 
 

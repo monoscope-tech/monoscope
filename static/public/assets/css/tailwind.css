@@ -18,10 +18,12 @@
   .card-round {
     @apply bg-white border border-slate-200 rounded-xl shadow-md  shadow-slate-200;
   }
+
 }
 
-:root, [data-theme] {
-   --backgroundPrimary: #fff;
+:root,
+[data-theme] {
+  --backgroundPrimary: #fff;
 }
 
 .payment-radio-active {
@@ -100,18 +102,24 @@
   @apply hover:bg-gray-100 py-3 px-2 w-full items-center justify-between;
 }
 
-
 .htmx-indicator {
-  justify-content: center;
-  padding: 10px 5px;
   display: none;
 }
 
-.htmx-request .query-indicator {
+.htmx-request.htmx-indicator {
   display: flex;
 }
+
+.htmx-request.survey-indicator + button {
+  display: none;
+}
+
 .htmx-request.query-indicator {
   display: flex;
+}
+
+.htmx-request.refresh-indicator ~ svg {
+  display: none;
 }
 
 @layer components {
@@ -205,8 +213,8 @@
   @apply border-l-blue-200 bg-blue-50;
 }
 .expanded-log .status-indicator {
-    @apply bg-blue-200;
-  }
+  @apply bg-blue-200;
+}
 .expanded-log .log-chevron {
   @apply rotate-90;
 }
@@ -250,7 +258,6 @@
   @apply bg-amber-600;
 }
 
-
 .btn {
   @apply justify-center items-center leading-none;
 }
@@ -259,17 +266,40 @@
 .tree-children {
   display: block;
 }
-.tree-children-count { display: none; }
-.collapsed .tree-children {
-  display: none !important; 
+.tree-children-count {
+  display: none;
 }
-.expand-button {display:none;} /* TODO: check if this should be deleted */
+.collapsed .tree-children {
+  display: none !important;
+}
+.expand-button {
+  display: none;
+} /* TODO: check if this should be deleted */
 
 .CodeMirror {
   font-family: Arial, monospace;
   font-size: 16px;
   background-color: rgb(243 244 246);
- }
-.collapsed .tree-children-count {display: inline !important;}
-.collapsed .children {display: inline-block; padding-left:0}
-.collapsed .closing-token {padding-left:0}
+}
+.collapsed .tree-children-count {
+  display: inline !important;
+}
+.collapsed .children {
+  display: inline-block;
+  padding-left: 0;
+}
+.collapsed .closing-token {
+  padding-left: 0;
+}
+
+
+.sdk_tab {
+ @apply h-36 border rounded w-full p-4
+}
+.sdk_tab_active {
+  @apply border-blue-500 border ring ring-blue-500 shadow-lg
+}
+
+.tab:is(input[type="radio"]) {
+    width: max-content;
+}

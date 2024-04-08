@@ -1,5 +1,4 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TupleSections #-}
 
 module Models.Apis.Fields.Types (
@@ -16,7 +15,8 @@ module Models.Apis.Fields.Types (
   fieldCategoryEnumToText,
   fieldsToNormalized,
   textFieldTypeToText,
-) where
+)
+where
 
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Aeson qualified as AE
@@ -33,7 +33,6 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
 import Deriving.Aeson qualified as DAE
 import Models.Projects.Projects qualified as Projects
-import Optics.TH
 import Relude
 import Relude.Unsafe ((!!))
 import Web.HttpApiData (FromHttpApiData)
@@ -209,6 +208,8 @@ data Field = Field
   , keyPath :: Text
   , fieldCategory :: FieldCategoryEnum
   , hash :: Text
+  , isEnum :: Bool
+  , isRequired :: Bool
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, Default, NFData)
@@ -232,6 +233,8 @@ data SwField = SwField
   , fKeyPath :: Text
   , fFieldCategory :: FieldCategoryEnum
   , fHash :: Text
+  , fIsEnum :: Bool
+  , fIsRequired :: Bool
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, Default, NFData)
@@ -252,9 +255,6 @@ instance Eq Field where
     (projectId f1 == projectId f2)
       && (endpointHash f1 == endpointHash f2)
       && (keyPath f1 == keyPath f2)
-
-
-makeFieldLabelsNoPrefix ''Field
 
 
 -- | NB: The GroupBy function has been merged into the vectors package.

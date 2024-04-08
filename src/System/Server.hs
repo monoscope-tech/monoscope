@@ -7,6 +7,7 @@ import Colourista.IO (blueMessage)
 import Control.Concurrent.Async
 import Control.Exception (try)
 import Control.Exception.Safe qualified as Safe
+import Control.Lens ((^?), _Just)
 import Control.Lens qualified as L
 import Control.Monad.Except qualified as T
 import Control.Monad.Trans.Resource (runResourceT)
@@ -27,6 +28,7 @@ import Effectful.Reader.Static qualified
 import Effectful.Time (runTime)
 import Gogol qualified as Google
 import Gogol.Auth.ApplicationDefault qualified as Google
+import Gogol.Data.Base64 (_Base64)
 import Gogol.PubSub qualified as PubSub
 import Log qualified
 import Network.Wai.Handler.Warp (
@@ -90,10 +92,11 @@ runServer appLogger env = do
   asyncs <-
     liftIO
       $ sequence
-        [ async $ runSettings warpSettings wrappedServer
-        , async $ Safe.withException bgJobWorker (logException (env.config.environment) appLogger)
-        , async $ runBackground appLogger env $ pubsubService
-        -- , async $ OJCli.defaultWebUI ojStartArgs ojCfg
+      $ concat
+        [ [async $ runSettings warpSettings wrappedServer]
+        , -- , [async $ OJCli.defaultWebUI ojStartArgs ojCfg] -- Uncomment or modify as needed
+          [async $ pubsubService appLogger env | env.config.enablePubsubService]
+        , [async $ Safe.withException bgJobWorker (logException (env.config.environment) appLogger) | env.config.enableBackgroundJobs]
         ]
   _ <- liftIO $ waitAnyCancel asyncs
   pass
@@ -102,11 +105,10 @@ runServer appLogger env = do
 -- pubsubService connects to the pubsub service and listens for  messages,
 -- then it calls the processMessage function to process the messages, and
 -- acknoleges the list message in one request.
-pubsubService :: ATBackgroundCtx ()
-pubsubService = do
-  appCtx <- ask @AuthContext
+pubsubService :: Log.Logger -> AuthContext -> IO ()
+pubsubService appLogger appCtx = do
   let envConfig = appCtx.config
-  env <- liftIO $ case envConfig.googleServiceAccountB64 of
+  env <- case envConfig.googleServiceAccountB64 of
     "" -> Google.newEnv <&> (Google.envScopes L..~ pubSubScope)
     sa -> do
       let credJSON = either error id $ LB64.decodeBase64 (LT.encodeUtf8 sa)
@@ -124,9 +126,16 @@ pubsubService = do
         forM envConfig.requestPubsubTopics \topic -> do
           let subscription = "projects/past-3/subscriptions/" <> topic <> "-sub"
           pullResp <- Google.send env $ PubSub.newPubSubProjectsSubscriptionsPull pullReq subscription
-          let messages = (pullResp L.^. field @"receivedMessages") & fromMaybe []
-          msgIds <- liftIO $ processMessages appCtx.logger envConfig appCtx.jobsPool messages appCtx.projectCache
-          let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just (catMaybes msgIds)
+          let messages = fromMaybe [] (pullResp L.^. field @"receivedMessages")
+          let msgsB64 =
+                messages & map \msg -> do
+                  ackId <- msg.ackId
+                  b64Msg <- msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64
+                  Just (ackId, b64Msg)
+
+          -- unless (null messages) do
+          msgIds <- liftIO $ runBackground appLogger appCtx $ processMessages envConfig (catMaybes msgsB64) appCtx.projectCache
+          let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just (msgIds)
           unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env
 
 

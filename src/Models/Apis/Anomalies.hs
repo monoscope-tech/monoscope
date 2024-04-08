@@ -15,24 +15,32 @@ module Models.Apis.Anomalies (
   anomalyIdText,
   countAnomalies,
   parseAnomalyRawTypes,
-) where
+  acknowlegeCascade,
+  acknowledgeAnomalies,
+  getShapeParentAnomalyVM,
+  getFormatParentAnomalyVM,
+)
+where
 
 import Data.Aeson qualified as AE
 import Data.Default (Default, def)
+import Data.Time
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
+import Data.Vector qualified as V
 import Database.PostgreSQL.Entity
-import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, queryOne)
+import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query, queryOne, withPool)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, Only (Only))
 import Database.PostgreSQL.Simple.FromField (FromField, ResultError (ConversionFailed, UnexpectedNull), fromField, returnError)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
 import Database.PostgreSQL.Simple.Types (Query (Query))
-import Database.PostgreSQL.Transact (DBT)
+import Database.PostgreSQL.Transact (DBT, executeMany)
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.Fields ()
 import Models.Apis.Fields.Types qualified as Fields (
   FieldCategoryEnum,
   FieldId,
@@ -43,7 +51,6 @@ import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
-import Optics.TH
 import Relude hiding (id)
 import Servant (FromHttpApiData (..))
 import Utils
@@ -197,9 +204,6 @@ data AnomalyVM = AnomalyVM
     via (GenericEntity '[Schema "apis", TableName "anomalies_vm", PrimaryKey "id", FieldModifiers '[CamelToSnake]] AnomalyVM)
 
 
-makeFieldLabelsNoPrefix ''AnomalyVM
-
-
 getAnomalyVM :: Projects.ProjectId -> Text -> DBT IO (Maybe AnomalyVM)
 getAnomalyVM pid hash = queryOne Select q (pid, hash)
   where
@@ -225,6 +229,38 @@ getAnomalyVM pid hash = queryOne Select q (pid, hash)
          avm.target_hash = ?
     GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25
      |]
+
+
+getShapeParentAnomalyVM :: Projects.ProjectId -> Text -> DBT IO Int
+getShapeParentAnomalyVM pid hash = do
+  result <- query Select q (pid, hash)
+  case result of
+    [Only count] -> return count
+    v -> return $ length v
+  where
+    q =
+      [sql|
+              SELECT COUNT(*) 
+              FROM apis.anomalies_vm avm 
+              JOIN apis.anomalies aan ON avm.id = aan.id
+              WHERE avm.project_id = ? AND ? LIKE avm.target_hash ||'%' AND avm.anomaly_type='endpoint' AND aan.acknowleged_at IS NULL
+      |]
+
+
+getFormatParentAnomalyVM :: Projects.ProjectId -> Text -> DBT IO Int
+getFormatParentAnomalyVM pid hash = do
+  result <- query Select q (pid, hash)
+  case result of
+    [Only count] -> return count
+    v -> return $ length v
+  where
+    q =
+      [sql|
+              SELECT COUNT(*) 
+              FROM apis.anomalies_vm avm 
+              JOIN apis.anomalies aan ON avm.id = aan.id
+              WHERE avm.project_id = ? AND ? LIKE avm.target_hash ||'%' AND avm.anomaly_type != 'format' AND aan.acknowleged_at IS NULL
+      |]
 
 
 selectAnomalies :: Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Int -> Int -> DBT IO (Vector AnomalyVM)
@@ -334,3 +370,19 @@ countAnomalies pid report_type = do
       GROUP BY avm.id -- Include the columns that define an anomaly
       HAVING COUNT(rd.id) > 5;
      |]
+
+
+acknowledgeAnomalies :: Users.UserId -> Vector Text -> DBT IO (Vector Text)
+acknowledgeAnomalies uid aids = query Select q (uid, aids)
+  where
+    q = [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) RETURNING target_hash; |]
+
+
+acknowlegeCascade :: Users.UserId -> Vector Text -> DBT IO Int64
+acknowlegeCascade uid targets = do
+  execute Update q (uid, hashes)
+  where
+    hashes = (\s -> s <> "%") <$> targets
+    q =
+      [sql| UPDATE apis.anomalies SET acknowleged_by = ?, acknowleged_at = NOW()
+              WHERE target_hash LIKE ANY (?); |]

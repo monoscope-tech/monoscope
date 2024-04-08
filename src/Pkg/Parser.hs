@@ -1,12 +1,13 @@
 -- Parser implemented with help and code from: https://markkarpov.com/tutorial/megaparsec.html
-module Pkg.Parser (parseQueryStringToWhereClause, parseQueryToComponents, defSqlQueryCfg, SqlQueryCfg (..), QueryComponents (..), listToColNames) where
+module Pkg.Parser (parseQueryStringToWhereClause, parseQueryToComponents, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, SqlQueryCfg (..), QueryComponents (..), listToColNames) where
 
 import Control.Error (hush)
 import Data.Default (Default (def))
 import Data.Text qualified as T
 import Data.Text.Display (display)
-import Data.Time.Clock (UTCTime)
+import Data.Time.Clock (UTCTime, diffUTCTime, nominalDiffTimeToSeconds)
 import Data.Time.Format.ISO8601 (iso8601Show)
+import Data.Tuple.Extra (both)
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
 import Pkg.Parser.Expr
@@ -28,12 +29,13 @@ pSection :: Parser Section
 pSection =
   choice @[]
     [ pStatsSection
+    , pTimeChartSection
     , Search <$> pExpr
     ]
 
 
 parseQuery :: Parser [Section]
-parseQuery = sepBy pSection (char '|')
+parseQuery = sepBy pSection (space *> char '|' <* space)
 
 
 data QueryComponents = QueryComponents
@@ -45,6 +47,8 @@ data QueryComponents = QueryComponents
     countQuery :: Text
   , -- final generated sql query
     finalSqlQuery :: Text
+  , rollup :: Maybe Text
+  , finalTimechartQuery :: Maybe Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (Default)
@@ -56,12 +60,19 @@ sectionsToComponents = foldl' applySectionToComponent (def :: QueryComponents)
 
 applySectionToComponent :: QueryComponents -> Section -> QueryComponents
 applySectionToComponent qc (Search expr) = qc{whereClause = Just $ display expr}
-applySectionToComponent qc (StatsCommand agg Nothing) = qc{select = qc.select <> map display agg}
-applySectionToComponent qc (StatsCommand agg (Just (ByClause fields))) =
-  qc
-    { select = qc.select <> map display agg
-    , groupByClause = qc.groupByClause <> map display fields
-    }
+applySectionToComponent qc (StatsCommand aggs Nothing) = qc{select = qc.select <> map display aggs}
+applySectionToComponent qc (StatsCommand aggs byClauseM) = applyByClauseToQC byClauseM $ qc{select = qc.select <> map display aggs}
+applySectionToComponent qc (TimeChartCommand agg byClauseM rollupM) = applyRollupToQC rollupM $ applyByClauseToQC byClauseM $ qc{select = qc.select <> [display agg]}
+
+
+applyByClauseToQC :: Maybe ByClause -> QueryComponents -> QueryComponents
+applyByClauseToQC Nothing qc = qc
+applyByClauseToQC (Just (ByClause fields)) qc = qc{groupByClause = qc.groupByClause <> map display fields}
+
+
+applyRollupToQC :: Maybe Rollup -> QueryComponents -> QueryComponents
+applyRollupToQC Nothing qc = qc
+applyRollupToQC (Just (Rollup ru)) qc = qc{rollup = Just ru}
 
 
 ----------------------------------------------------------------------------------
@@ -71,6 +82,7 @@ data SqlQueryCfg = SqlQueryCfg
   , dateRange :: (Maybe UTCTime, Maybe UTCTime)
   , cursorM :: Maybe UTCTime
   , projectedColsByUser :: [Text] -- cols selected explicitly by user
+  , currentTime :: UTCTime
   , defaultSelect :: [Text]
   }
   deriving stock (Show, Generic)
@@ -93,17 +105,50 @@ sqlFromQueryComponents sqlCfg qc =
       (Just a, Just b) -> "AND created_at BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
       _ -> ""
 
+    (fromT, toT) = bimap (fromMaybe sqlCfg.currentTime) (fromMaybe sqlCfg.currentTime) $ sqlCfg.dateRange
+    timeDiffSecs = traceShowId $ abs $ nominalDiffTimeToSeconds $ diffUTCTime fromT toT
+
     finalSqlQuery =
       [fmt|SELECT json_build_array({selectClause}) FROM apis.request_dumps 
-           WHERE project_id='{sqlCfg.pid.toText}'::uuid  and created_at > NOW() - interval '14 days' {cursorT} {dateRangeStr} {whereClause}
-           {groupByClause} ORDER BY created_at desc limit 200 |]
+            WHERE project_id='{sqlCfg.pid.toText}'::uuid  and created_at > NOW() - interval '14 days' 
+            {cursorT} {dateRangeStr} {whereClause}
+            {groupByClause} ORDER BY created_at desc limit 200 |]
 
     countQuery =
       [fmt|SELECT count(*) FROM apis.request_dumps 
-           WHERE project_id='{sqlCfg.pid.toText}'::uuid  and created_at > NOW() - interval '14 days' {cursorT} {dateRangeStr} {whereClause}
-           {groupByClause} limit 1|]
+            WHERE project_id='{sqlCfg.pid.toText}'::uuid  and created_at > NOW() - interval '14 days' 
+            {cursorT} {dateRangeStr} {whereClause}
+            {groupByClause} limit 1|]
+
+
+    defRollup
+      | timeDiffSecs <= (60*30) = "1s"
+      | timeDiffSecs <= (60*60) = "20s"
+      | timeDiffSecs <= (60*60*6) = "1m"
+      | timeDiffSecs <= (60*60*24*3) = "5m"
+      | otherwise = "1h"
+
+    timeRollup = fromMaybe defRollup qc.rollup
+
+    timebucket = [fmt|extract(epoch from time_bucket('{timeRollup}', created_at))::integer as timeB, |]
+    chartSelect = [fmt| count(*)::integer as count|]
+    timeGroupByClause = " GROUP BY " <> T.intercalate "," ("timeB" : qc.groupByClause)
+    timeChartQuery =
+      [fmt|
+        SELECT {timebucket} {chartSelect}, 'Throughput' FROM apis.request_dumps
+            WHERE project_id='{sqlCfg.pid.toText}'::uuid  and created_at > NOW() - interval '14 days' 
+            {cursorT} {dateRangeStr} {whereClause}
+            {timeGroupByClause}
+      |]
    in
-    (finalSqlQuery, qc{finalColumns = listToColNames selectedCols, countQuery, finalSqlQuery})
+    ( finalSqlQuery
+    , qc
+        { finalColumns = listToColNames selectedCols
+        , countQuery
+        , finalSqlQuery
+        , finalTimechartQuery = Just timeChartQuery
+        }
+    )
 
 
 -----------------------------------------------------------------------------------
@@ -175,6 +220,7 @@ parseQueryStringToWhereClause q =
 --
 -- >>> parseQueryToComponents (defSqlQueryCfg defPid) "errors[*].error_type=~/^ab.*c/"
 -- Right "SELECT id,created_at,host,status_code,LEFT(\n        CONCAT(\n            'request_body=', COALESCE(request_body, 'null'), \n            ' response_body=', COALESCE(response_body, 'null')\n        ),\n        255\n    ) AS rest FROM apis.request_dumps \n          WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid  and created_at > NOW() - interval '14 days'    AND jsonb_path_exists(errors, '$[*].\"error_type\" ?? (@ like_regex \"^ab.*c\")')\n           ORDER BY created_at desc limit 200"
+--
 parseQueryToComponents :: SqlQueryCfg -> Text -> Either Text (Text, QueryComponents)
 parseQueryToComponents sqlCfg q =
   bimap
@@ -187,13 +233,14 @@ defPid :: Projects.ProjectId
 defPid = def :: Projects.ProjectId
 
 
-defSqlQueryCfg :: Projects.ProjectId -> SqlQueryCfg
-defSqlQueryCfg pid =
+defSqlQueryCfg :: Projects.ProjectId -> UTCTime -> SqlQueryCfg
+defSqlQueryCfg pid currentTime =
   SqlQueryCfg
     { pid = pid
     , cursorM = Nothing
     , dateRange = (Nothing, Nothing)
     , projectedColsByUser = []
+    , currentTime
     , defaultSelect =
         [ "id::text as id"
         , [fmt|to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at|]

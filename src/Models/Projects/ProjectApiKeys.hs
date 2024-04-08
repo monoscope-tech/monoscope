@@ -2,7 +2,6 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TemplateHaskell #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
 module Models.Projects.ProjectApiKeys (
@@ -36,7 +35,6 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact (DBT)
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
-import Optics.TH
 import Relude hiding (id)
 import Servant.API (FromHttpApiData)
 
@@ -64,9 +62,6 @@ data ProjectApiKey = ProjectApiKey
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, NFData)
   deriving (Entity) via (GenericEntity '[Schema "projects", TableName "project_api_keys", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ProjectApiKey)
-
-
-makeFieldLabelsNoPrefix ''ProjectApiKey
 
 
 newProjectApiKeys :: Projects.ProjectId -> UUID.UUID -> Text -> Text -> IO ProjectApiKey

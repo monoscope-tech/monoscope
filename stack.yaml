@@ -87,11 +87,12 @@ extra-deps:
   - contiguous-0.6.4.0@sha256:30d28d17b3ca2a9eecb753f6e38f7bc0d0a4d3afd6d76ca79931b9c167b68c39,1861
   - primitive-unlifted-2.1.0.0@sha256:4a6fb2fc5836b18b217b814931472a0b1a84df03b45955b236c80291f1f46893,2326
   - wai-log-0.4.0.1@sha256:0b4b57ae218cf5ec59523c8cf405802a588d4e299436b5a663a6001ea34bb7e6,1583
+
   # - git: https://github.com/jfischoff/postgres-options
   #   commit: 45bafb2092bc7a7b3c561608295294d562313dd3
-  #   subdirs: 
+  #   subdirs:
   #     - .
-  - git: https://github.com/Kleidukos/pg-transact-effectful 
+  - git: https://github.com/Kleidukos/pg-transact-effectful
     commit: d296ec54cbdfd2e7b3a822cdb759daf761d6f24b
     subdirs:
       - .
@@ -100,7 +101,7 @@ extra-deps:
     subdirs:
       - .
   - git: https://github.com/andrewthad/chronos
-    branch: chessai/ghc981
+    # branch: chessai/ghc981
     commit: b199bf6df1453af95832c2d2f9f0ef48c3622caa
     subdirs:
       - .
@@ -121,7 +122,7 @@ extra-deps:
     subdirs:
       - .
   - git: https://github.com/m4dc4p/gogol.git
-    commit: 2812d672c86ea283e53e6e0f213bcd6a65d7a345 
+    commit: 2812d672c86ea283e53e6e0f213bcd6a65d7a345
     subdirs:
       - lib/gogol-core
       - lib/gogol
@@ -129,7 +130,7 @@ extra-deps:
       - lib/services/gogol-logging
       - lib/services/gogol-cloudtrace
   - git: https://github.com/saurabhnanda/odd-jobs
-    commit: 411d5d0aaeeb96d4b72d0a434b9d2b53c88c2eae 
+    commit: 411d5d0aaeeb96d4b72d0a434b9d2b53c88c2eae
     subdirs:
       - .
   - git: https://github.com/tonyalaribe/tmp-postgres
@@ -140,6 +141,10 @@ extra-deps:
 
 # Override default flag values for local packages and extra-deps
 # flags: {}
+
+flags:
+  pg-entity:
+    prod: true
 
 # Extra package databases containing global packages
 # extra-package-dbs: []

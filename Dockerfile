@@ -1,5 +1,7 @@
 FROM ubuntu:22.04
 RUN mkdir -p /opt/apitoolkit/
+# Set the LANG environment variable
+ENV LANG C.UTF-8
 WORKDIR /opt/apitoolkit
 RUN apt-get update && apt-get install -y \
   ca-certificates \

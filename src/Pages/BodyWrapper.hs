@@ -4,13 +4,14 @@ import Data.CaseInsensitive qualified as CI
 import Data.Default (Default)
 import Data.Vector qualified as Vector
 import Lucid
+import Lucid.Htmx
 import Lucid.Hyperscript
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import NeatInterpolation
 import Relude
-import Utils (faSprite_)
+import Utils (faIcon_, faSprite_)
 
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
@@ -56,7 +57,6 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
       link_ [rel_ "mask-icon", href_ "/public/safari-pinned-tab.svg", term "color" "#5bbad5"]
       meta_ [name_ "msapplication-TileColor", content_ "#da532c"]
       meta_ [name_ "theme-color", content_ "#ffffff"]
-
       link_ [rel_ "stylesheet", type_ "text/css", href_ "/assets/css/tailwind.min.css"]
       link_ [rel_ "stylesheet", type_ "text/css", href_ "/assets/css/thirdparty/notyf3.min.css"]
       link_ [rel_ "preconnect", href_ "https://rsms.me/"]
@@ -208,8 +208,8 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
               else
                 remove <.log-item-context-menu /> then remove .with-context-menu from <.with-context-menu /> then
                 get #log-item-context-menu-tmpl.innerHTML then put it after me then add .with-context-menu to me then 
-                _hyperscript.processNode(document.querySelector('.log-item-context-menu'))
-                htmx.process(document.querySelector('.log-item-context-menu'))
+                _hyperscript.processNode(.log-item-context-menu)
+                htmx.process(.log-item-context-menu)
               end
               halt
             end
@@ -247,15 +247,18 @@ projectsDropDown currProject projects = do
             strong_ [class_ "block"] $ toHtml currProject.title
             small_ [class_ "block text-blue-800"] $ toHtml currProject.paymentPlan
         nav_ [] do
-          a_ [href_ [text| /p/$pidTxt/settings |], class_ "p-3 flex gap-3 rounded-2xl hover:bg-gray-100"] do
+          a_ [href_ [text| /p/$pidTxt/settings |], class_ "p-3 flex gap-3 items-center rounded-2xl hover:bg-gray-100"] do
             faSprite_ "gear" "sharp-regular" "h-5 w-5"
             span_ "Settings"
-          a_ [href_ [text| /p/$pidTxt/manage_members |], class_ "p-3 flex gap-3 rounded hover:bg-gray-100"] do
+          a_ [href_ [text| /p/$pidTxt/manage_members |], class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100"] do
             faSprite_ "user-plus" "regular" "h-5 w-5"
             span_ "Manage members"
-          a_ [class_ "hidden p-3 flex gap-3 rounded hover:bg-gray-100 "] do
-            faSprite_ "dollar" "regular" "h-5 w-5"
-            span_ "Billing and usage"
+          if currProject.paymentPlan == "UsageBased"
+            then do
+              a_ [class_ "p-3 flex gap-3 flex gap-3 items-center rounded hover:bg-gray-100 cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]] do
+                faIcon_ "fa fa-dollar" "fa fa-dollar regular" "h-5 w-5"
+                span_ "Manage billing"
+            else do ""
       div_ [class_ "border-t border-gray-100 p-2"] do
         div_ [class_ "flex justify-between content-center items-center py-5 mb-2 "] do
           a_ [href_ "/"] $ h3_ [class_ "text-xl"] "Switch projects"
@@ -278,7 +281,7 @@ projectsDropDown currProject projects = do
 
 sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Maybe Text -> Maybe Bool -> Html ()
 sideNav sess project pageTitle menuItem hasIntegrated = do
-  aside_ [class_ "shrink-0 top-0 border-r-2 bg-white border-gray-200 h-screen overflow-hidden transition-all duration-1000 ease-in-out", id_ "side-nav-menu"] do
+  aside_ [class_ "shrink-0 top-0 border-r-2 bg-white border-gray-200 w-16 h-screen overflow-hidden transition-all duration-200 ease-in-out", id_ "side-nav-menu"] do
     script_
       [text|
            if (window.initialCloseSideMenu == 'true'){
@@ -332,17 +335,17 @@ sideNav sess project pageTitle menuItem hasIntegrated = do
       menu project.id & mapM_ \(mTitle, mUrl, faIcon) -> do
         let isActive = maybe (pageTitle == mTitle) (== mTitle) menuItem
         let activeCls = if isActive then " bg-blue-50 text-blue-700 border-blue-700" else " border-transparent text-slate-900"
-        let intG = fromMaybe True hasIntegrated
-        let intGCls = if intG || (mTitle == "Get started" || mTitle == "API Keys") then " hover:bg-blue-50" else " cursor-not-allowed  "
+        -- let intG = fromMaybe True hasIntegrated
+        -- let intGCls = if intG || (mTitle == "Get started" || mTitle == "API Keys") then " " else " cursor-not-allowed  "
         a_
-          [ if intG || (mTitle == "Get started" || mTitle == "API Keys") then href_ mUrl else href_ "#"
+          [ href_ mUrl
           , term "data-tippy-placement" "right"
-          , term "data-tippy-content" (if intG || (mTitle == "Get started" || mTitle == "API Keys") then mTitle else "Our menus are shy. Help them come out by integrating the SDK.")
-          , class_ $ " block flex gap-3 px-5 py-3 flex justify-center items-center border-l-4 " <> activeCls <> intGCls
+          , term "data-tippy-content" mTitle
+          , class_ $ " block flex gap-3 px-5 py-3 flex no-wrap shrink-0 items-center border-l-4 hover:bg-blue-50" <> activeCls
           ]
           do
-            faSprite_ faIcon "regular" $ "w-5 h-5 " <> if isActive then "text-blue-900 " else "text-slate-500 "
-            span_ [class_ "grow "] $ toHtml mTitle
+            faSprite_ faIcon "regular" $ "w-5 h-5 shrink-0" <> if isActive then "text-blue-900 " else "text-slate-500 "
+            span_ [class_ "sd-hidden "] $ toHtml mTitle
 
 
 navbar :: Users.User -> Html ()

@@ -34,6 +34,7 @@ library
       Models.Apis.Fields.Query
       Models.Apis.Fields.Types
       Models.Apis.Formats
+      Models.Apis.Monitors
       Models.Apis.Reports
       Models.Apis.RequestDumps
       Models.Apis.Shapes
@@ -59,11 +60,13 @@ library
       Pages.Endpoints.EndpointComponents
       Pages.Endpoints.EndpointDetails
       Pages.Endpoints.EndpointList
+      Pages.Fields.FieldDetails
       Pages.GenerateSwagger
       Pages.GenerateSwaggerSpec
       Pages.Log
       Pages.LogExplorer.LogItem
       Pages.ManualIngestion
+      Pages.Monitors.Alerts
       Pages.NonMember
       Pages.Onboarding
       Pages.Outgoing
@@ -85,6 +88,7 @@ library
       Pkg.Parser.ExprSpec
       Pkg.Parser.Stats
       Pkg.Parser.Types
+      Pkg.ParserSpec
       Pkg.TmpPg
       ProcessMessage
       ProcessMessageSpec
@@ -136,10 +140,11 @@ library
       TypeApplications
       TypeFamilies
       TypeOperators
+      GeneralizedNewtypeDeriving
       UndecidableInstances
       OverloadedRecordDot
       TemplateHaskell
-  ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches -Wno-missing-kind-signatures -fwrite-ide-info -hiedir=.hie
+  ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches -Wno-missing-kind-signatures -fwrite-ide-info -hiedir=.hie -j4 +RTS -A128m -n2m -RTS
   build-depends:
       HaskellNet
     , PyF
@@ -189,15 +194,12 @@ library
     , lucid-hyperscript
     , lucid-svg
     , megaparsec
-    , monad-time
     , monad-time-effectful
     , mtl
     , neat-interpolation
     , network-uri
     , nyan-interpolation
     , odd-jobs
-    , optics-core
-    , optics-th
     , parser-combinators
     , pg-entity
     , pg-transact
@@ -274,10 +276,11 @@ executable apitoolkit-server-exe
       TypeApplications
       TypeFamilies
       TypeOperators
+      GeneralizedNewtypeDeriving
       UndecidableInstances
       OverloadedRecordDot
       TemplateHaskell
-  ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches -Wno-missing-kind-signatures -fwrite-ide-info -hiedir=.hie -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
+  ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches -Wno-missing-kind-signatures -fwrite-ide-info -hiedir=.hie -j4 +RTS -A128m -n2m -RTS -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
   build-depends:
       apitoolkit-server
     , relude >=1.1.0.0
@@ -320,10 +323,11 @@ test-suite doctests
       TypeApplications
       TypeFamilies
       TypeOperators
+      GeneralizedNewtypeDeriving
       UndecidableInstances
       OverloadedRecordDot
       TemplateHaskell
-  ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches -Wno-missing-kind-signatures -fwrite-ide-info -hiedir=.hie -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
+  ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches -Wno-missing-kind-signatures -fwrite-ide-info -hiedir=.hie -j4 +RTS -A128m -n2m -RTS -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
   build-depends:
       apitoolkit-server
     , base
@@ -370,10 +374,11 @@ test-suite tests
       TypeApplications
       TypeFamilies
       TypeOperators
+      GeneralizedNewtypeDeriving
       UndecidableInstances
       OverloadedRecordDot
       TemplateHaskell
-  ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches -Wno-missing-kind-signatures -fwrite-ide-info -hiedir=.hie
+  ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches -Wno-missing-kind-signatures -fwrite-ide-info -hiedir=.hie -j4 +RTS -A128m -n2m -RTS
   build-depends:
       apitoolkit-server
     , base

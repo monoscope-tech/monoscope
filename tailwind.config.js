@@ -6,10 +6,10 @@ module.exports = {
   theme: {
     extend: {
       fontFamily: {
-        Poppins: ['Poppins', 'sans-serif'],
-        Inconsolata: ['Inconsolata', 'monospace'],
+        Poppins: ["Poppins", "sans-serif"],
+        Inconsolata: ["Inconsolata", "monospace"],
       },
     },
   },
   plugins: [require("daisyui"), require("@tailwindcss/typography")],
-}
+};

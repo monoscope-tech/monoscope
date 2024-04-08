@@ -1,12 +1,10 @@
 {-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE TemplateHaskell #-}
 
 module Models.Projects.ProjectMembers (
   ProjectMembers (..),
   insertProjectMembers,
   CreateProjectMembers (..),
-  ProjectMemberVM,
+  ProjectMemberVM (..),
   Permissions (..),
   selectActiveProjectMembers,
   updateProjectMembersPermissons,
@@ -21,13 +19,20 @@ import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Entity.DBT (
   QueryNature (..),
-  execute,
   query,
   queryOne,
  )
 
-import Data.Vector (Vector)
-import Database.PostgreSQL.Entity.Types
+import Data.Vector qualified as V
+import Database.PostgreSQL.Entity.Types (
+  CamelToSnake,
+  Entity,
+  FieldModifiers,
+  GenericEntity,
+  PrimaryKey,
+  Schema,
+  TableName,
+ )
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ResultError (..), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, fromField, returnError)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -36,8 +41,6 @@ import Database.PostgreSQL.Transact (DBT, executeMany)
 import Database.PostgreSQL.Transact qualified as PgT
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
-import Optics.Operators ()
-import Optics.TH (makeFieldLabelsNoPrefix)
 import Relude
 import Servant (FromHttpApiData)
 import Web.HttpApiData (parseUrlPiece)
@@ -95,9 +98,6 @@ data ProjectMembers = ProjectMembers
     via (GenericEntity '[Schema "projects", TableName "project_members", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ProjectMembers)
 
 
-makeFieldLabelsNoPrefix ''ProjectMembers
-
-
 data CreateProjectMembers = CreateProjectMembers
   { projectId :: Projects.ProjectId
   , userId :: Users.UserId
@@ -127,10 +127,7 @@ data ProjectMemberVM = ProjectMemberVM
   deriving anyclass (FromRow, NFData)
 
 
-makeFieldLabelsNoPrefix ''ProjectMemberVM
-
-
-selectActiveProjectMembers :: Projects.ProjectId -> DBT IO (Vector ProjectMemberVM)
+selectActiveProjectMembers :: Projects.ProjectId -> DBT IO (V.Vector ProjectMemberVM)
 selectActiveProjectMembers = query Select q
   where
     q =

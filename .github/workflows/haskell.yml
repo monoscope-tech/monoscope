@@ -4,6 +4,9 @@ on:
   push:
     branches: [ master ]
 
+env:
+  LANG: C.UTF-8
+
 jobs:
   runhaskell:
     name: Build and test 
@@ -32,7 +35,7 @@ jobs:
       
       - run: stack --no-terminal build --dependencies-only
       # - run: stack install --local-bin-path=. --ghc-options '-optl-static -fPIC'
-      - run: stack install --local-bin-path=. 
+      - run: stack install --local-bin-path=. --flag pg-entity:prod
       # - run: stack test
 
       - name: Setup node env
@@ -41,6 +44,7 @@ jobs:
           node-version: 18
       - run: npm install
       - run: npx tailwindcss  -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css
+      - run: npx postcss-cli ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css
 
 
       - name: Login to Container Registry

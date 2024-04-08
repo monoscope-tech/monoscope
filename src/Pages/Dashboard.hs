@@ -15,11 +15,12 @@ import Data.Time (
 import Data.Time.Format (defaultTimeLocale)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as Vector
-import Effectful.PostgreSQL.Transact.Effect
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
+import Effectful.Time qualified as Time
 import Fmt
 import Lucid
-import Lucid.Htmx (hxPost_, hxSwap_)
+import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -33,6 +34,7 @@ import Pages.Charts.Charts qualified as C
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (statBox)
 import Pages.Endpoints.EndpointList (renderEndpoint)
+import Pages.Onboarding qualified as Onboarding
 import Relude hiding (ask, asks, max, min)
 import Relude.Unsafe qualified as Unsafe
 import Servant (
@@ -44,7 +46,7 @@ import System.Clock
 import System.Config
 import System.Types
 import Text.Interpolation.Nyan
-import Utils (GetOrRedirect, deleteParam, faIcon_, mIcon_, redirect)
+import Utils (GetOrRedirect, deleteParam, faIcon_, freeTierLimitExceededBanner, mIcon_, redirect)
 import Witch (from)
 
 
@@ -65,7 +67,7 @@ data ParamInput = ParamInput
   }
 
 
-dashboardGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Union GetOrRedirect)
+dashboardGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
 dashboardGetH pid fromDStr toDStr sinceStr' = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
@@ -74,13 +76,13 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
   let sess = Unsafe.fromJust sess'.persistentSession
   let currUserId = sess.userId
 
-  now <- liftIO getCurrentTime
+  now <- Time.currentTime
   let sinceStr = if isNothing fromDStr && isNothing toDStr && isNothing sinceStr' || fromDStr == Just "" then Just "7D" else sinceStr'
   (hasApikeys, hasRequest, newEndpoints) <- dbtToEff do
-    apiKeys <- ProjectApiKeys.countProjectApiKeysByProjectId pid
-    requestDumps <- RequestDumps.countRequestDumpByProject pid
-    newEndpoints <- Endpoints.endpointRequestStatsByProject pid False False Nothing
-    pure (apiKeys > 0, requestDumps > 0, newEndpoints)
+    -- apiKeys <- ProjectApiKeys.countProjectApiKeysByProjectId pid
+    -- requestDumps <- RequestDumps.countRequestDumpByProject pid
+    newEndpoints <- Endpoints.endpointRequestStatsByProject pid False False Nothing Nothing
+    pure (True, True, newEndpoints)
   -- TODO: Replace with a duration parser.
   let (fromD, toD) = case sinceStr of
         Just "1H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just $ utcToZonedTime utc now)
@@ -97,7 +99,7 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
           (f, t)
 
   startTime <- liftIO $ getTime Monotonic
-  (project, projectRequestStats, reqLatenciesRolledByStepsLabeled) <- dbtToEff do
+  (project, projectRequestStats, reqLatenciesRolledByStepsLabeled, freeTierExceeded) <- dbtToEff do
     project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
 
     projectRequestStats <- fromMaybe (def :: Projects.ProjectRequestStats) <$> Projects.projectRequestStatsByProject pid
@@ -105,7 +107,14 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
     let steps' = (maxV `quot` 100) :: Int
     let steps = if steps' == 0 then 100 else steps'
     reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledByStepsForProject maxV steps pid (fromD, toD)
-    pure (project, projectRequestStats, Vector.toList reqLatenciesRolledBySteps)
+    freeTierExceeded <-
+      if (Unsafe.fromJust project).paymentPlan == "Free"
+        then do
+          totalRequest <- RequestDumps.getTotalRequestForCurrentMonth pid
+          return $ totalRequest > 20000
+        else do
+          return False
+    pure (project, projectRequestStats, Vector.toList reqLatenciesRolledBySteps, freeTierExceeded)
 
   let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
   let bwconf =
@@ -118,49 +127,40 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
   let currentURL = "/p/" <> pid.toText <> "?&from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
   let currentPickerTxt = fromMaybe (maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD) sinceStr
   let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt}
-  if not hasApikeys || not hasRequest
-    then respond $ WithStatus @302 $ redirect ("/p/" <> pid.toText <> "/onboarding")
-    else respond $ WithStatus @200 $ bodyWrapper bwconf $ dashboardPage pid paramInput currTime projectRequestStats newEndpoints reqLatenciesRolledByStepsJ (fromD, toD)
+  pure $ bodyWrapper bwconf $ dashboardPage pid paramInput currTime projectRequestStats newEndpoints reqLatenciesRolledByStepsJ (fromD, toD) freeTierExceeded
 
 
-dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Vector.Vector Endpoints.EndpointRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
-dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRolledByStepsJ dateRange = do
+dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Vector.Vector Endpoints.EndpointRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Bool -> Html ()
+dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRolledByStepsJ dateRange exceededFreeTier = do
   let currentURL' = deleteParam "to" $ deleteParam "from" $ deleteParam "since" paramInput.currentURL
   let bulkActionBase = "/p/" <> pid.toText <> "/anomalies/bulk_actions"
   section_ [class_ "p-8  mx-auto px-16 w-full space-y-12 pb-24 overflow-y-scroll  h-full"] do
-    unless (null newEndpoints) $ form_
-      [ style_ "z-index:99999"
-      , class_ "fixed pt-24 justify-center z-50 hidden w-full p-4 bg-[rgba(0,0,0,0.2)] overflow-y-auto inset-0 h-full max-h-full"
-      , tabindex_ "-1"
-      , id_ "newEndpointsModal"
-      , hxPost_ $ bulkActionBase <> "/acknowlege"
-      , hxSwap_ "outerHTML"
-      ]
-      do
-        div_
-          [ class_ "relative mx-auto max-h-full"
-          , style_ "width: min(90vw, 800px)"
-          ]
-          do
-            -- Modal content
-            div_
-              [ class_ "bg-white rounded-lg drop-shadow-md border-1 w-full"
-              ]
-              do
-                div_ [class_ "flex items-start justify-between p-4 border-b rounded-t"] do
-                  h3_ [class_ "text-xl font-bold text-gray-900"] "New Endpoints Detected"
-                  button_ [type_ "button", class_ "px-3 font-bold py-2 rounded bg-gray-200", onclick_ "closeNewEndpointsModal(event)"] "close"
-                -- Modal body
-                div_ [class_ "w-full"] do
-                  div_ [class_ "p-4 text-xl space-y-6 overflow-y-auto", style_ "min-height:30vh;max-height:70vh; width:100%"] do
-                    mapM_ (renderEndpoint False currTime) newEndpoints
-                -- Modal footer
-                div_ [class_ "flex w-full justify-end items-center p-6 gap-4 space-x-2 border-t border-gray-200 rounded-b"] do
-                  button_
-                    [ class_ "btn btn-primary"
-                    , [__|on click set .endpoint_anomaly_input.checked to true then htmx.trigger("#newEndpointsModal", "submit")|]
-                    ]
-                    "Acknowledge All"
+    when exceededFreeTier $ freeTierLimitExceededBanner pid.toText
+    unless (null newEndpoints)
+      $ div_ [id_ "modalContainer"] do
+        input_ [type_ "checkbox", id_ "newEndpointsModal", class_ "modal-toggle"]
+        div_ [class_ "modal", role_ "dialog", hxSwap_ "outerHTML"] do
+          form_
+            [ class_ "modal-box w-1/2 max-w-5xl"
+            , hxPost_ $ bulkActionBase <> "/acknowlege"
+            , id_ "endpointsForm"
+            ]
+            do
+              div_ [class_ "flex items-start py-2 border-b justify-between"] do
+                h3_ [class_ "text-xl font-bold text-gray-900"] "New Endpoints Detected"
+                button_ [type_ "button", class_ "btn btn btn-sm btn-circle btn-ghost text-xl", onclick_ "closeNewEndpointsModal(event)"] do
+                  faIcon_ "fa-close" "fa-light fa-close" "h-4 w-4 inline-block"
+              div_ [class_ "w-full"] do
+                div_ [class_ "text-xl space-y-6 overflow-y-auto", style_ "min-height:30vh;max-height:70vh; width:100%"] do
+                  mapM_ (renderEndpoint False currTime) newEndpoints
+              div_ [class_ "flex w-full justify-end items-center p-6 gap-4 space-x-2 border-t border-gray-200 rounded-b"] do
+                button_
+                  [ class_ "btn btn-primary"
+                  , [__|on click set .endpoint_anomaly_input.checked to true then htmx.trigger("#endpointsForm", "submit")|]
+                  ]
+                  "Acknowledge All"
+          label_ [class_ "modal-backdrop", Lucid.for_ "newEndpointsModal"] "Close"
+
     div_ [class_ "relative p-1 "] do
       div_ [class_ "relative"] do
         a_
@@ -191,13 +191,13 @@ dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRoll
     [text|
 
     function closeNewEndpointsModal(event) {
-      document.getElementById("newEndpointsModal").classList.add("hidden")
+      document.getElementById("newEndpointsModal").checked = false
       sessionStorage.setItem('closedNewEndpointsModal', 'true')
     }
 
     document.addEventListener('DOMContentLoaded', function() {
        if(!sessionStorage.getItem('closedNewEndpointsModal')) {
-           document.getElementById("newEndpointsModal").classList.remove("hidden")
+           document.getElementById("newEndpointsModal").checked = true
         }
     })
     
@@ -229,13 +229,11 @@ dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRoll
 
 dStats :: Projects.ProjectId -> Projects.ProjectRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledByStepsJ dateRange@(fromD, toD) = do
-  when (projReqStats.totalRequests == 0) do
-    section_ [class_ "card-round p-5 sm:p-10 space-y-4 text-lg"] do
-      h2_ [class_ "text-2xl"] "Welcome onboard APIToolkit."
-      p_ "You're currently not sending any data to apitoolkit from your backends yet. Here's a guide to get you setup for your tech stack."
-      a_ [href_ "https://apitoolkit.io/docs/quickstarts/", class_ "btn-indigo btn-sm my-3 -ml-0 mt-6", target_ "_blank"] "Read the setup guide"
-
   section_ [class_ "space-y-3"] do
+    when (projReqStats.totalRequests == 0) do
+      section_ [class_ "w-[1200px] mx-auto"] do
+        h2_ [class_ "text-xl font-medium mb-3"] "You haven't integrated APIToolkit in your application yet"
+        Onboarding.integrateApiToolkit "<YOUR_API_KEY>" "express"
     div_ [class_ "flex justify-between mt-4"] $ div_ [class_ "flex flex-row"] do
       a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
         $ faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 w-4 mr-3 inline-block"
@@ -246,8 +244,8 @@ dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledBySte
         statBox (Just pid) "Requests" "Total requests in the last 2 weeks" projReqStats.totalRequests Nothing
         statBox (Just pid) "Anomalies" "Total anomalies still active this week vs last week" projReqStats.totalAnomalies (Just projReqStats.totalAnomaliesLastWeek)
         statBox (Just pid) "Endpoints" "Total endpoints now vs last week" projReqStats.totalEndpoints (Just projReqStats.totalEndpointsLastWeek)
-        statBox (Just pid) "Signatures" "Total request signatures which are active now vs last week" projReqStats.totalShapes (Just projReqStats.totalShapesLastWeek)
-        statBox (Just pid) "Requests per minutes" "Total requests per minute this week vs last week" projReqStats.requestsPerMin (Just projReqStats.requestsPerMinLastWeek)
+        statBox (Just pid) "Req Shapes" "Total request signatures which are active now vs last week" projReqStats.totalShapes (Just projReqStats.totalShapesLastWeek)
+        statBox (Just pid) "Reqs per min" "Total requests per minute this week vs last week" projReqStats.requestsPerMin (Just projReqStats.requestsPerMinLastWeek)
 
       div_ [class_ "flex gap-5"] do
         div_ [class_ "flex-1 card-round p-3"] $ div_ [class_ "p-4 space-y-6"] do

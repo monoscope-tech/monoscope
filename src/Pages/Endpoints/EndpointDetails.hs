@@ -8,8 +8,6 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey
 import Data.Aeson.Text (encodeToLazyText)
 import Data.Default (def)
-import System.Config
-
 import Data.List (elemIndex)
 import Data.Map qualified as Map
 import Data.Text (isSuffixOf, splitOn, toLower)
@@ -19,9 +17,8 @@ import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
-import Database.PostgreSQL.Entity.DBT (withPool)
 import Effectful.PostgreSQL.Transact.Effect
-import Effectful.Reader.Static (ask, asks)
+import Effectful.Reader.Static (ask)
 import Fmt
 import Lucid
 import Lucid.Htmx
@@ -37,7 +34,6 @@ import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation
-import Optics.Core ((^.))
 import Pages.Anomalies.AnomalyList qualified as AnomaliesList
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Charts.Charts qualified as C
@@ -49,6 +45,7 @@ import Relude hiding (ask, asks, max, min)
 import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx
+import System.Config
 import System.Types
 import Text.Interpolation.Nyan (int, rmode')
 import Utils
@@ -85,10 +82,8 @@ fieldDetailsPartialH :: Projects.ProjectId -> Fields.FieldId -> ATAuthCtx (Html 
 fieldDetailsPartialH pid fid = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let env = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
-  let currUserId = sess.userId
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
@@ -97,7 +92,7 @@ fieldDetailsPartialH pid fid = do
     else do
       (fieldsM, formats) <- dbtToEff do
         field <- Fields.fieldById fid
-        formats <- Formats.formatsByFieldHash (maybe "" (^. #hash) field)
+        formats <- Formats.formatsByFieldHash (maybe "" (.hash) field)
         pure (field, formats)
       case fieldsM of
         Nothing -> pure ""
@@ -106,7 +101,59 @@ fieldDetailsPartialH pid fid = do
 
 fieldDetailsView :: Fields.Field -> Vector Formats.Format -> Html ()
 fieldDetailsView field formats = do
-  img_ [src_ "/assets/svgs/ellipsis.svg", class_ "my-2 float-right"]
+  div_ [id_ "modalContainer"] do
+    label_ [Lucid.for_ "edit_field", class_ "cursor-pointer"] do
+      img_ [src_ "/assets/svgs/ellipsis.svg", class_ "my-2 float-right"]
+    input_ [type_ "checkbox", id_ "edit_field", class_ "modal-toggle"]
+    div_ [class_ "modal", role_ "dialog", hxSwap_ "outerHTML"] do
+      form_
+        [ class_ "modal-box w-1/2 max-w-3xl"
+        , id_ "editFieldForm"
+        , hxPost_ $ "/p/" <> field.projectId.toText <> "/fields/" <> show field.id.unFieldId
+        , hxSwap_ "none"
+        ]
+        do
+          input_ [type_ "hidden", name_ "fieldHash", value_ $ field.hash]
+          input_ [type_ "hidden", name_ "fieldType", value_ $ Fields.fieldTypeToText field.fieldType]
+          div_ [class_ "flex items-center py-2 border-b justify-between"] do
+            h3_ [class_ "text-xl font-bold text-gray-900"] "Edit Field"
+            label_ [Lucid.for_ "edit_field", class_ "modal-action rounded-full m-0 cursor-pointer bg-gray-200 pr-2 py-2 flex items-center justify-center"] do
+              faIcon_ "fa-close" "fa-light fa-close" "h-4 w-4 inline-block"
+          div_ [class_ "w-full py-3"] do
+            div_ [class_ "text-xl space-y-6 overflow-y-auto", style_ "min-height:30vh;max-height:70vh; width:100%"] do
+              div_ [class_ "flex items-center gap-4"] do
+                label_ [Lucid.for_ "is_required", class_ "text-gray-700 text-sm font-semibold"] "Required"
+                input_ [class_ "checkbox checkbox-success checkbox-sm", id_ "is_required", name_ "isRequired", type_ "checkbox", if field.isRequired then checked_ else value_ "off"]
+              div_ [class_ "flex items-center gap-4"] do
+                label_ [Lucid.for_ "is_enum", class_ "text-gray-700 text-sm font-semibold"] "Enum"
+                input_ [class_ "checkbox checkbox-success checkbox-sm", id_ "is_enum", name_ "isEnum", type_ "checkbox", if field.isEnum then checked_ else value_ "off"]
+              div_ [class_ "flex flex-col gap-2"] do
+                span_ [class_ "text-gray-700 text-sm font-semibold"] "Formats"
+                div_ [class_ "flex flex-col gap-2"] do
+                  div_ [id_ "formats", class_ "flex flex-col gap-1 px-2 [&>input]:input [&>input]:input-sm [&>input]:input-bordered [&>input]:input-success [&>input]:w-full [&>input]:max-w-xs"] do
+                    formats & mapM_ \f -> do
+                      input_ [type_ "text", name_ "formats", value_ f.fieldFormat]
+                  button_
+                    [ class_ "rounded-full py-1 px-2 w-max bg-blue-100 text-blue-500 text-sm mt-2 flex items-center gap-1"
+                    , onclick_ ""
+                    , type_ "button"
+                    , [__| on click append "<input type=\"text\" name=\"formats\">"  to #formats|]
+                    ]
+                    do
+                      span_ [] "Add"
+                      faIcon_ "fa-plus" "fa-plus fa-solid" "h-3 w-3"
+
+              div_ [class_ "flex flex-col gap-1"] do
+                label_ [Lucid.for_ "description", class_ "text-gray-700 text-sm font-semibold"] "Description"
+                textarea_ [id_ "description", name_ "description", class_ "text-sm border p-2 rounded-lg text-gray-600"] $ toHtml field.description
+          div_ [class_ "flex w-full justify-end items-center p-6 gap-4 space-x-2 border-t border-gray-200 rounded-b"] do
+            button_
+              [ class_ "btn btn-primary"
+              , type_ "submit"
+              ]
+              "Save"
+      label_ [class_ "modal-backdrop", Lucid.for_ "edit_field"] "Close"
+
   section_ [class_ "space-y-6"] do
     div_ do
       h6_ [class_ "text-slate-800 text-xs"] "FIELD NAME"
@@ -121,6 +168,12 @@ fieldDetailsView field formats = do
       div_ [class_ ""] do
         h6_ [class_ "text-slate-800 text-xs"] "FORMAT OVERRIDE"
         h4_ [class_ "text-base text-slate-800"] $ toHtml $ fromMaybe "[unset]" field.fieldTypeOverride
+    div_ [class_ "flex flex-row gap-6"] do
+      when field.isRequired do
+        span_ [class_ "px-2 rounded-xl bg-red-100 text-red-800 monospace"] "required"
+      when field.isEnum do
+        span_ [class_ "px-2 rounded-xl bg-green-100 text-green-800 monospace"] "enum"
+
     div_ do
       h5_ [class_ "text-sm text-slate-800"] "DETECTED FIELD FORMATS AND TYPES"
       div_ [class_ "space-y-2"]
@@ -134,7 +187,7 @@ fieldDetailsView field formats = do
               div_ [class_ "mx-5 space-y-2"] do
                 h6_ [class_ "text-slate-800 text-xs"] "FORMAT"
                 h4_ [class_ "text-base text-slate-800"] $ toHtml formatV.fieldFormat
-            h6_ [class_ "text-slate-600 mt-4 text-xs"] "EXAMPLE VALUES"
+            h6_ [class_ "text-slate-600 mt-4 text-xs"] $ if field.isEnum then "ENUM VALUES" else "EXAMPLE VALUES"
             ul_ [class_ "list-disc"] do
               formatV.examples & mapM_ \ex -> do
                 li_ [class_ "ml-10 text-slate-800 text-sm"] $ toHtml $ aesonValueToText ex
@@ -162,10 +215,8 @@ endpointDetailsWithHashH :: Projects.ProjectId -> Text -> ATAuthCtx (Headers '[H
 endpointDetailsWithHashH pid endpoint_hash = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let env = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
-  let currUserId = sess.userId
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
@@ -187,10 +238,8 @@ endpointDetailsH :: Projects.ProjectId -> Endpoints.EndpointId -> Maybe Text -> 
 endpointDetailsH pid eid fromDStr toDStr sinceStr' subPageM shapeHashM = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let env = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
-  let currUserId = sess.userId
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
@@ -256,11 +305,13 @@ endpointDetails pid paramInput currTime endpoint endpointStats shapesWithFieldsM
   div_ [class_ "w-full h-full overflow-hidden"] do
     div_ [class_ "w-[75%] inline-block p-5 h-full overflow-y-scroll"] do
       div_ [class_ "flex flex-row justify-between mb-10"] do
-        div_ [class_ "flex flex-row place-items-center text-lg font-medium"] do
-          h3_ [class_ "text-lg text-slate-800"] do
-            span_ [class_ $ "p-1 endpoint endpoint-" <> toLower endpoint.method] $ toHtml $ endpoint.method <> " "
-            strong_ [class_ "inconsolata text-xl"] $ toHtml endpoint.urlPath
-          faSprite_ "chevron-down" "light" " h-4 w-4 m-2"
+        div_ [class_ "flex flex-col"] do
+          div_ [class_ "flex flex-row place-items-center text-lg font-medium"] do
+            h3_ [class_ "text-lg text-slate-800"] do
+              span_ [class_ $ "p-1 endpoint endpoint-" <> toLower endpoint.method] $ toHtml $ endpoint.method <> " "
+              strong_ [class_ "inconsolata text-xl"] $ toHtml endpoint.urlPath
+            faSprite_ "chevron-down" "light" " h-4 w-4 m-2"
+          p_ [class_ "text-gray-500 text-sm ml-2"] $ toHtml endpoint.description
         nav_ [class_ " space-x-4"] do
           subPageMenu
             & mapM_ \(title, slug) ->
@@ -335,8 +386,9 @@ shapesSubPage pid shapesList shapesWithFields currentURL = do
               let shapeJsonStr = aesonValueToText shapeJson
               div_ [class_ "text-sm text-gray-500 p-4 bg-gray-100 whitespace-prerap w-2/3 h-[200px] overflow-auto flex flex-col gap-1 shape_json", style_ "font-family: monospace", term "data-json" shapeJsonStr] pass
             div_ [class_ "mt-10"] do
-              let chartQuery = Just $ Charts.QBShapeHash shape.sHash
-              div_ [class_ "flex items-center justify-center "] $ div_ [class_ "w-60 h-16 px-3"] $ Charts.throughput pid shape.sHash chartQuery Nothing 14 Nothing False (Nothing, Nothing) Nothing
+              -- let chartQuery = Just $ Charts.QBShapeHash shape.sHash
+              -- div_ [class_ "flex items-center justify-center "] $ div_ [class_ "w-60 h-16 px-3"] $ Charts.throughput pid shape.sHash chartQuery Nothing 14 Nothing False (Nothing, Nothing) Nothing
+              "chart"
   script_ [type_ "text/javascript"] ("" :: Text)
   script_
     [text|
@@ -580,25 +632,27 @@ reqResSection title isRequest shapesWithFieldsMap targetIndex =
         div_ [class_ sh, id_ $ title <> "_" <> show index] do
           if isRequest
             then do
-              subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam s.fieldsMap)
-              subSubSection (title <> " Query Params") (Map.lookup Fields.FCQueryParam s.fieldsMap)
-              subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader s.fieldsMap)
-              subSubSection (title <> " Body") (Map.lookup Fields.FCRequestBody s.fieldsMap)
+              subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam s.fieldsMap) Nothing
+              subSubSection (title <> " Query Params") (Map.lookup Fields.FCQueryParam s.fieldsMap) Nothing
+              subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader s.fieldsMap) Nothing
+              subSubSection (title <> " Body") (Map.lookup Fields.FCRequestBody s.fieldsMap) (Just s.reqDescription)
             else do
-              subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader s.fieldsMap)
-              subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody s.fieldsMap)
+              subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader s.fieldsMap) Nothing
+              subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody s.fieldsMap) (Just s.resDescription)
 
 
 -- | subSubSection ..
-subSubSection :: Text -> Maybe [Fields.Field] -> Html ()
-subSubSection title fieldsM =
+subSubSection :: Text -> Maybe [Fields.Field] -> Maybe Text -> Html ()
+subSubSection title fieldsM descriptionM =
   case fieldsM of
     Nothing -> ""
     Just fields -> do
       div_ [class_ "space-y-1 mb-4"] do
         div_ [class_ "flex flex-row items-center"] do
           faIconWithAnchor_ "fa-chevron-down" "fa-light fa-chevron-down" "h-6 mr-3 w-6 p-1 cursor-pointer" "toggle .neg-rotate-90 on me then toggle .hidden on (next .subSectionContent)"
-          div_ [class_ "bg-gray-100 px-10 rounded-xl w-full p-4 text-sm text-slate-900 "] $ toHtml title
+          div_ [class_ "flex flex-row gap-2 bg-gray-100 px-10 rounded-xl w-full p-4 text-sm text-slate-900 "] do
+            toHtml title
+            p_ [class_ "text-sm text-gray-700"] $ toHtml $ fromMaybe "" descriptionM
         div_ [class_ "space-y-1 subSectionContent"] do
           -- pTraceShowM $ fields
           -- pTraceShowM "========================"
@@ -637,7 +691,9 @@ subSubSection title fieldsM =
                     faSprite_ "chevron-down" "light" "h-4 mr-3 mt-4 w-4 invisible"
                     div_ [class_ "border flex flex-row border-gray-100 px-5 py-2 rounded-xl w-full items-center"] do
                       input_ [type_ "checkbox", class_ " mr-12"]
-                      span_ [class_ "grow text-sm text-slate-800 inline-flex items-center"] $ toHtml displayKey
+                      div_ [class_ "flex gap-2 items-center grow"] do
+                        span_ [class_ "text-sm text-slate-800 inline-flex items-center"] $ toHtml displayKey
+                        when field.isRequired do span_ [class_ "text-red-500", term "data-tippy-content" "required field"] "*"
                       span_ [class_ "text-sm text-slate-600 mx-12 inline-flex items-center"] $ EndpointComponents.fieldTypeToDisplay field.fieldType
                       faSprite_ "octagon-exclamation" "regular" " mr-8 ml-4 h-5 text-red-400"
                       faSprite_ "ellipsis-vertical" "light" "mx-5 h-5"

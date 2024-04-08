@@ -1,7 +1,5 @@
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE PartialTypeSignatures #-}
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE TemplateHaskell #-}
 
 module RequestMessages (
   RequestMessage (..),
@@ -9,7 +7,8 @@ module RequestMessages (
   valueToFormatStr,
   valueToFields,
   redactJSON,
-) where
+)
+where
 
 import Data.Aeson (ToJSON (toJSON), Value)
 import Data.Aeson qualified as AE
@@ -22,6 +21,7 @@ import Data.HashMap.Strict qualified as HM
 import Data.List (groupBy)
 import Data.Scientific qualified as Scientific
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Data.Time.Clock as Clock
 import Data.Time.LocalTime as Time
 import Data.UUID qualified as UUID
@@ -42,15 +42,11 @@ import Models.Apis.Fields.Types qualified as Fields (
   fieldTypeToText,
  )
 import Models.Apis.Formats qualified as Formats
-import Models.Apis.RequestDumps (SDKTypes (GoOutgoing, JsAxiosOutgoing))
-import Models.Apis.RequestDumps qualified as RequestDump
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation
 import Numeric (showHex)
-import Optics.Core
-import Optics.TH
 import Relude
 import Relude.Unsafe as Unsafe hiding (head)
 import Text.Regex.TDFA ((=~))
@@ -68,7 +64,7 @@ import Witch (from)
 -- | RequestMessage represents a message for a single request pulled from pubsub.
 data RequestMessage = RequestMessage
   { duration :: Int -- in nanoseconds
-  , host :: Text
+  , host :: Maybe Text
   , method :: Text
   , pathParams :: AE.Value --- key value map of the params to their values in the original urlpath.
   , projectId :: UUID.UUID
@@ -83,7 +79,7 @@ data RequestMessage = RequestMessage
   , responseHeaders :: AE.Value -- key value map of a key to a list of text values map[string][]string
   , sdkType :: RequestDumps.SDKTypes -- convension should be <language>-<router library> eg: go-gin, go-builtin, js-express
   , statusCode :: Int
-  , urlPath :: Text
+  , urlPath :: Maybe Text -- became Maybe to support express, which sometimes doesn't send urlPath for root.
   , timestamp :: ZonedTime
   , msgId :: Maybe UUID.UUID -- This becomes the request_dump id.
   , parentId :: Maybe UUID.UUID
@@ -95,9 +91,6 @@ data RequestMessage = RequestMessage
   deriving
     (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestMessage
-
-
-makeFieldLabelsNoPrefix ''RequestMessage
 
 
 -- | Walk the JSON once, redact any fields which are in the list of json paths to be redacted.
@@ -125,13 +118,17 @@ redactJSON paths' = redactJSON' (stripPrefixDot paths')
     stripPrefixDot = map (\p -> fromMaybe p (T.stripPrefix "." p))
 
 
+replaceNullChars :: Text -> Text
+replaceNullChars = T.replace "\\u0000" ""
+
+
 -- requestMsgToDumpAndEndpoint is a very improtant function designed to be run as a pure function
 -- which takes in a request and processes it returning an sql query and it's params which can be executed.
 -- The advantage of returning these queries and params is that it becomes possible to group together batches of requests
 -- from the google cloud pub sub, and to concatenate their queries so that only a single database call is needed for a batch.
 -- Also, being a pure function means it's easier to test the request processing logic since we can unit test pure functions easily.
 -- We can pass in a request, it's project cache object and inspect the generated sql and params.
-requestMsgToDumpAndEndpoint :: Projects.ProjectCache -> RequestMessages.RequestMessage -> UTCTime -> UUID.UUID -> Either Text (Query, [DBField], RequestDumps.RequestDump)
+requestMsgToDumpAndEndpoint :: Projects.ProjectCache -> RequestMessages.RequestMessage -> UTCTime -> UUID.UUID -> Either Text (Maybe Query, Maybe [DBField], Maybe RequestDumps.RequestDump)
 requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   -- TODO: User dumpID and msgID to get correct ID
   --
@@ -141,21 +138,16 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   -- TODO: This is a temporary fix to add host in creating endoint hash
   -- These are the projects that we have already created endpoints
   let method = T.toUpper rM.method
-  let urlPath = RequestDumps.normalizeUrlPath rM.sdkType rM.statusCode rM.method rM.urlPath
-  let !endpointHash = from @String @Text $ showHex (xxHash $ encodeUtf8 $ UUID.toText rM.projectId <> rM.host <> method <> urlPath) ""
+  let urlPath = RequestDumps.normalizeUrlPath rM.sdkType rM.statusCode rM.method (fromMaybe "/" rM.urlPath)
+  let !endpointHash = from @String @Text $ showHex (xxHash $ encodeUtf8 $ UUID.toText rM.projectId <> (fromMaybe "" rM.host) <> method <> urlPath) ""
 
   let redactFieldsList = Vector.toList pjc.redactFieldslist <> [".set-cookie", ".password"]
+
+  let sanitizeNullChars = TE.encodeUtf8 . replaceNullChars . TE.decodeUtf8
   reqBodyB64 <- B64.decodeBase64 $ encodeUtf8 rM.requestBody
-  -- NB: At the moment we're discarding the error messages from when we're unable to parse the input
-  -- We should log this inputs and maybe input them into the db as is. This is also a potential annomaly for our customers,
-  -- And would help us identity what request formats our customers are actually processing, which would help guide our new features.
-  -- It could look something like this for a start, but with proper logging and not trace debug.
-  -- let reqBodyFields = case reqBodyE of
-  --       Left err -> traceShowM err >> []
-  --       Right reqBody -> valueToFields reqBody
-  let reqBody = redactJSON redactFieldsList $ fromRight [aesonQQ| {} |] $ AE.eitherDecodeStrict reqBodyB64
+  let reqBody = redactJSON redactFieldsList $ fromRight [aesonQQ| {} |] $ AE.eitherDecodeStrict $ sanitizeNullChars reqBodyB64
   respBodyB64 <- B64.decodeBase64 $ encodeUtf8 rM.responseBody
-  let respBody = redactJSON redactFieldsList $ fromRight [aesonQQ| {} |] $ AE.eitherDecodeStrict respBodyB64
+  let respBody = redactJSON redactFieldsList $ fromRight [aesonQQ| {} |] $ AE.eitherDecodeStrict $ sanitizeNullChars respBodyB64
 
   let pathParamFields = valueToFields $ redactJSON redactFieldsList rM.pathParams
       queryParamFields = valueToFields $ redactJSON redactFieldsList rM.queryParams
@@ -191,31 +183,50 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
           <> reqBodyFieldsDTO
           <> respBodyFieldsDTO
   let (fields, formats) = unzip fieldsDTO
-  let fieldHashes = Vector.fromList $ sort $ map (^. #hash) fields
-  let formatHashes = Vector.fromList $ sort $ map (^. #hash) formats
+  let fieldHashes = Vector.fromList $ sort $ map (.hash) fields
+  let formatHashes = Vector.fromList $ sort $ map (.hash) formats
 
   --- FIXME: why are we not using the actual url params?
   -- Since it foes into the endpoint, maybe it should be the keys and their type? I'm unsure.
   -- At the moment, if an endpoint exists, we don't insert it anymore. But then how do we deal with requests from new hosts?
+  let status = rM.statusCode
   let urlParams = AET.emptyObject
   let isOutgoing = isRequestOutgoing rM.sdkType
   let (endpointQ, endpointP)
         | endpointHash `elem` pjc.endpointHashes = ("", []) -- We have the endpoint cache in our db already. Skill adding
+        | status == 404 = ("", [])
         | otherwise = Endpoints.upsertEndpointQueryAndParam $ buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash isOutgoing
 
   let (shapeQ, shapeP)
         | shapeHash `elem` pjc.shapeHashes = ("", [])
-        | otherwise = do
-            -- A shape is a deterministic representation of a request-response combination for a given endpoint.
-            -- We usually expect multiple shapes per endpoint. Eg a shape for a success request-response and another for an error response.
-            -- Shapes are dependent on the endpoint, statusCode and the unique fields in that shape.
-            let shape = Shapes.Shape (Shapes.ShapeId dumpID) timestampUTC now Nothing projectId endpointHash queryParamsKP requestBodyKP responseBodyKP requestHeadersKP responseHeadersKP fieldHashes shapeHash rM.statusCode
-            Shapes.insertShapeQueryAndParam shape
+        | status == 404 = ("", [])
+        | otherwise =
+            do
+              -- A shape is a deterministic representation of a request-response combination for a given endpoint.
+              -- We usually expect multiple shapes per endpoint. Eg a shape for a success request-response and another for an error response.
+              -- Shapes are dependent on the endpoint, statusCode and the unique fields in that shape.
+              let shape =
+                    Shapes.Shape
+                      { id = Shapes.ShapeId dumpID
+                      , createdAt = timestampUTC
+                      , updatedAt = now
+                      , approvedOn = Nothing
+                      , projectId = projectId
+                      , endpointHash = endpointHash
+                      , queryParamsKeypaths = queryParamsKP
+                      , requestBodyKeypaths = requestBodyKP
+                      , responseBodyKeypaths = responseBodyKP
+                      , requestHeadersKeypaths = requestHeadersKP
+                      , responseHeadersKeypaths = responseHeadersKP
+                      , fieldHashes = fieldHashes
+                      , hash = shapeHash
+                      , statusCode = rM.statusCode
+                      , responseDescription = ""
+                      , requestDescription = ""
+                      }
+              Shapes.insertShapeQueryAndParam shape
 
-  -- FIXME: This 1000 is added on the php sdk in a previous version and has been remove. This workaround code should be removed ASAP
-  let duration = case rM.sdkType of
-        RequestDumps.PhpLaravel -> rM.duration `div` 1000
-        _ -> rM.duration
+  let duration = rM.duration
 
   let errorsL = fromMaybe empty rM.errors
       errorsJSONB = toJSON errorsL
@@ -234,7 +245,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
           , createdAt = timestampUTC
           , updatedAt = now
           , projectId = rM.projectId
-          , host = rM.host
+          , host = fromMaybe "" rM.host
           , urlPath = urlPath
           , rawUrl = rM.rawUrl
           , pathParams = rM.pathParams
@@ -261,13 +272,14 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
           , serviceVersion = rM.serviceVersion
           , errors = errorsJSONB
           , tags = tagsV
-          , requestType = RequestDump.getRequestType rM.sdkType
+          , requestType = RequestDumps.getRequestType rM.sdkType
           }
 
   -- Build all fields and formats, unzip them as separate lists and append them to query and params
   -- We don't border adding them if their shape exists, as we asume that we've already seen such before.
   let (fieldsQ, fieldsP)
         | shapeHash `elem` pjc.shapeHashes = ([], [])
+        | status == 404 = ([], [])
         | otherwise = unzip $ map Fields.insertFieldQueryAndParams fields
 
   -- FIXME:
@@ -278,14 +290,15 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   -- also inserting the fields and the shape, when all we want to insert is just the example.
   let (formatsQ, formatsP)
         | shapeHash `elem` pjc.shapeHashes = ([], [])
+        | status == 404 = ([], [])
         | otherwise = unzip $ map Formats.insertFormatQueryAndParams formats
 
   let query = endpointQ <> shapeQ <> mconcat fieldsQ <> mconcat formatsQ
   let params = endpointP <> shapeP <> concat fieldsP <> concat formatsP
-  pure (query, params, reqDumpP)
+  pure (Just query, Just params, Just reqDumpP)
 
 
-isRequestOutgoing :: SDKTypes -> Bool
+isRequestOutgoing :: RequestDumps.SDKTypes -> Bool
 isRequestOutgoing sdkType
   | T.isSuffixOf "Outgoing" (show sdkType) = True
   | otherwise = False
@@ -301,9 +314,10 @@ buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash outg
     , urlPath = urlPath
     , urlParams = urlParams
     , method = method
-    , host = rM.host
+    , host = fromMaybe "" rM.host
     , hash = endpointHash
     , outgoing = outgoing
+    , description = "" :: Text
     }
 
 
@@ -476,6 +490,8 @@ fieldsToFieldDTO fieldCategory projectID endpointHash (keyPath, val) =
       , keyPath = keyPath
       , fieldCategory = fieldCategory
       , hash = fieldHash
+      , isEnum = False
+      , isRequired = False
       }
   , Formats.Format
       { id = Formats.FormatId UUID.nil

@@ -11,7 +11,8 @@ module Models.Apis.Fields.Query (
   selectFieldsByHashes,
   getFieldsByEndpointKeyPathAndCategory,
   autoCompleteFields,
-) where
+)
+where
 
 import Data.Time (ZonedTime)
 import Data.Vector (Vector)
@@ -25,7 +26,6 @@ import Database.PostgreSQL.Transact qualified as PgT
 import Models.Apis.Fields.Types (Field, FieldCategoryEnum, FieldId, FieldTypes, SwField)
 import Models.Apis.Fields.Types qualified as FT
 import Models.Projects.Projects qualified as Projects
-import Optics.Core ((^.))
 import Relude
 import Utils (DBField (MkDBField))
 
@@ -38,18 +38,18 @@ insertFieldQueryAndParams :: Field -> (Query, [DBField])
 insertFieldQueryAndParams field = (q, params)
   where
     q =
-      [sql| insert into apis.fields (project_id, endpoint_hash, key, field_type, format, description, key_path, field_category, hash) 
-                    VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING; |]
+      [sql| INSERT into apis.fields (project_id, endpoint_hash, key, field_type, format, description, key_path, field_category, hash) 
+            VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING; |]
     params =
-      [ MkDBField $ field ^. #projectId
-      , MkDBField $ field ^. #endpointHash
-      , MkDBField $ field ^. #key
-      , MkDBField $ field ^. #fieldType
-      , MkDBField $ field ^. #format
-      , MkDBField $ field ^. #description
-      , MkDBField $ field ^. #keyPath
-      , MkDBField $ field ^. #fieldCategory
-      , MkDBField $ field ^. #hash
+      [ MkDBField $ field.projectId
+      , MkDBField $ field.endpointHash
+      , MkDBField $ field.key
+      , MkDBField $ field.fieldType
+      , MkDBField $ field.format
+      , MkDBField $ field.description
+      , MkDBField $ field.keyPath
+      , MkDBField $ field.fieldCategory
+      , MkDBField $ field.hash
       ]
 
 
@@ -58,16 +58,16 @@ insertFields fields = do
   let q =
         [sql| 
         INSERT INTO apis.fields
-        (project_id, endpoint_hash, key, field_type, field_type_override, format, format_override, description, key_path, field_category, hash)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?)
+        (project_id, endpoint_hash, key, field_type, field_type_override, format, format_override, description, key_path, field_category, hash, is_enum, is_required)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT (hash)
-        DO UPDATE SET field_type= EXCLUDED.field_type, description = EXCLUDED.description, format = EXCLUDED.format;
+        DO UPDATE SET field_type= EXCLUDED.field_type, description = EXCLUDED.description, format = EXCLUDED.format, is_enum = EXCLUDED.is_enum, is_required = EXCLUDED.is_required;
       |]
   let params = map getFieldParams fields
   executeMany q params
 
 
-getFieldParams :: FT.Field -> (Projects.ProjectId, Text, Text, FieldTypes, Maybe Text, Text, Maybe Text, Text, Text, FieldCategoryEnum, Text)
+getFieldParams :: FT.Field -> (Projects.ProjectId, Text, Text, FieldTypes, Maybe Text, Text, Maybe Text, Text, Text, FieldCategoryEnum, Text, Bool, Bool)
 getFieldParams field =
   ( field.projectId
   , field.endpointHash
@@ -80,6 +80,8 @@ getFieldParams field =
   , field.keyPath
   , field.fieldCategory
   , field.hash
+  , field.isEnum
+  , field.isRequired
   )
 
 
@@ -92,14 +94,16 @@ selectFields pid endpointHash = query Select q (pid, endpointHash)
   where
     q =
       [sql| select id,created_at,updated_at,project_id,endpoint_hash,key,field_type,
-                field_type_override,format,format_override,description,key_path,field_category, hash
+                field_type_override,format,format_override,description,key_path,field_category, hash, is_enum, is_required
                 from apis.fields where project_id=? AND endpoint_hash=? order by field_category, key |]
+
+
 selectFieldsByHashes :: Projects.ProjectId -> Vector Text -> DBT IO (Vector Field)
 selectFieldsByHashes pid fieldHashes = query Select q (pid, fieldHashes)
   where
     q =
       [sql| SELECT id,created_at,updated_at,project_id,endpoint_hash,key,field_type,
-              field_type_override,format,format_override,description,key_path,field_category, hash
+              field_type_override,format,format_override,description,key_path,field_category, hash, is_enum, is_required
               FROM apis.fields WHERE project_id=? AND hash= ANY(?)  ORDER BY field_category, key 
           |]
 
@@ -130,7 +134,7 @@ fieldsByEndpointHashes pid hashes = query Select q (pid, hashes)
     q =
       [sql|
       SELECT  endpoint_hash f_endpoint_hash, key f_key, field_type f_field_type, format f_format,
-             description f_description, key_path f_key_path, field_category f_field_category, hash f_hash
+             description f_description, key_path f_key_path, field_category f_field_category, hash f_hash, is_enum f_is_enum, is_required f_is_required
       FROM apis.fields
       WHERE project_id = ? AND endpoint_hash = ANY(?)
     |]

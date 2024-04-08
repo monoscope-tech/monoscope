@@ -2,7 +2,6 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE StrictData #-}
-{-# LANGUAGE TemplateHaskell #-}
 
 module Models.Apis.RequestDumps (
   RequestDump (..),
@@ -12,8 +11,6 @@ module Models.Apis.RequestDumps (
   RequestForReport (..),
   ATError (..),
   normalizeUrlPath,
-  throughputBy,
-  throughputBy',
   selectLogTable,
   requestDumpLogItemUrlPath,
   requestDumpLogUrlPath,
@@ -29,7 +26,9 @@ module Models.Apis.RequestDumps (
   countRequestDumpByProject,
   getRequestType,
   autoCompleteFromRequestDumps,
-) where
+  getTotalRequestForCurrentMonth,
+)
+where
 
 import Control.Error (hush)
 import Data.Aeson (Value)
@@ -38,32 +37,26 @@ import Data.Aeson.KeyMap (toHashMapText)
 import Data.Default.Instances ()
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
-import Data.Time (CalendarDiffTime, ZonedTime, diffUTCTime, utc, utcToZonedTime, zonedTimeToUTC)
-import Data.Time.Clock (UTCTime)
+import Data.Time (CalendarDiffTime, UTCTime, ZonedTime, diffUTCTime, getCurrentTime, zonedTimeToUTC)
 import Data.Time.Format
 import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
 import Data.Tuple.Extra (both)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, queryOne, queryOne_, query_)
+import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, queryOne)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
-import Database.PostgreSQL.Simple.FromField (FromField (fromField), fromJSONField)
-import Database.PostgreSQL.Simple.FromRow (FromRow (fromRow))
+import Database.PostgreSQL.Simple.FromField (FromField (fromField))
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField (toField))
 import Database.PostgreSQL.Simple.Types (Query (Query))
-import Database.PostgreSQL.Transact (DBT, executeMany, getConnection)
+import Database.PostgreSQL.Transact (DBT, executeMany)
 import Database.PostgreSQL.Transact qualified as DBT
-import Debug.Pretty.Simple (pTraceShow, pTraceShowM)
 import Deriving.Aeson qualified as DAE
-import Models.Apis.Anomalies (AnomalyTypes)
-import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Fields.Query ()
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
-import Optics.TH
 import Pkg.Parser
 import Relude hiding (many, some)
 import Utils (DBField (MkDBField), quoteTxt)
@@ -93,6 +86,7 @@ data SDKTypes
   | PhpSlim
   | GuzzleOutgoing
   | ElixirPhoenix
+  | PythonPyramid
   deriving stock (Show, Generic, Read, Eq)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SDKTypes
@@ -172,6 +166,7 @@ normalizeUrlPath JsAdonis statusCode _method urlPath = removeQueryParams statusC
 normalizeUrlPath PhpSlim statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath GuzzleOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath ElixirPhoenix statusCode _method urlPath = removeQueryParams statusCode urlPath
+normalizeUrlPath PythonPyramid statusCode _method urlPath = removeQueryParams statusCode urlPath
 
 
 -- getRequestType ...
@@ -296,9 +291,6 @@ data EndpointPerf = EndpointPerf
     via (GenericEntity '[Schema "apis", TableName "request_dumps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] EndpointPerf)
 
 
-makeFieldLabelsNoPrefix ''RequestForReport
-
-
 -- RequestDumpLogItem is used in the to query log items for the log query explorer on the dashboard. Each item here can be queried
 -- via the query language on said dashboard page.
 data RequestDumpLogItem = RequestDumpLogItem
@@ -332,9 +324,6 @@ data RequestDumpLogItem = RequestDumpLogItem
   deriving stock (Show, Generic, Eq)
   deriving anyclass (ToRow, FromRow, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestDumpLogItem
-
-
-makeFieldLabelsNoPrefix ''RequestDumpLogItem
 
 
 requestDumpLogItemUrlPath :: Projects.ProjectId -> RequestDumpLogItem -> Text
@@ -398,7 +387,8 @@ getRequestDumpsForPreviousReportPeriod pid report_type = query Select (Query $ e
 
 selectLogTable :: Projects.ProjectId -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> DBT IO (Either Text (V.Vector (V.Vector Value), [Text], Int))
 selectLogTable pid extraQuery cursorM dateRange projectedColsByUser = do
-  let resp = parseQueryToComponents ((defSqlQueryCfg pid){cursorM, dateRange, projectedColsByUser}) extraQuery
+  now <- liftIO getCurrentTime
+  let resp = parseQueryToComponents ((defSqlQueryCfg pid now){cursorM, dateRange, projectedColsByUser}) extraQuery
   case resp of
     Left x -> pure $ Left x
     Right (q, queryComponents) -> do
@@ -492,7 +482,6 @@ bulkInsertRequestDumps = executeMany q
 selectRequestDumpByProjectAndId :: Projects.ProjectId -> UTCTime -> UUID.UUID -> DBT IO (Maybe RequestDumpLogItem)
 selectRequestDumpByProjectAndId pid createdAt rdId = queryOne Select q (createdAt, pid, rdId)
   where
-    createdAtZ = utcToZonedTime utc createdAt
     q =
       [sql|SELECT   id,created_at,project_id, host,url_path,method,raw_url,referer,
                     path_params,status_code,query_params,
@@ -536,96 +525,6 @@ select duration_steps, count(id)
       |]
 
 
--- A throughput chart query for the request_dump table.
--- daterange :: (Maybe Int, Maybe Int)?
--- We have a requirement that the date range could either be an interval like now to 7 days ago, or be specific dates like day x to day y.
--- Now thinking about it, it might be easier to calculate 7days ago into a specific date than dealing with integer day ranges.
-throughputBy :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Maybe Int -> Maybe Text -> (Maybe ZonedTime, Maybe ZonedTime) -> DBT IO Text
-throughputBy pid groupByM endpointHash shapeHash formatHash statusCodeGT numSlots limitM extraQuery dateRange@(fromT, toT) = do
-  -- Replace any jsonpath ? with its escaped version, so its not mistaken as a variable for interpolation
-  let extraQueryParsed = (T.replace "?" "??") <$> (hush . parseQueryStringToWhereClause =<< extraQuery)
-  let condlist =
-        catMaybes
-          [ " endpoint_hash=? " <$ endpointHash
-          , " shape_hash=? " <$ shapeHash
-          , " ?=ANY(format_hashes) " <$ formatHash
-          , " status_code>? " <$ statusCodeGT
-          , extraQueryParsed
-          ]
-  let groupBy' = fromMaybe @Text "" $ mappend " ," <$> groupByM
-  let (groupBy, groupByFields) = case groupByM of
-        Just "endpoint" -> (",method, url_path", ",method||' '||url_path as g")
-        Nothing -> ("", "")
-        _ -> (groupBy', groupBy' <> " as g")
-  let groupByFinal = maybe "" (const ",g") groupByM
-  let paramList = mapMaybe (MkDBField <$>) [endpointHash, shapeHash, formatHash, statusCodeGT]
-
-  let condlist' = filter (/= "") condlist
-  let cond
-        | null condlist' = mempty
-        | otherwise = "AND " <> mconcat (intersperse " AND " condlist')
-
-  let limit = maybe "" (("limit " <>) . show) limitM
-  let interval = case dateRange of
-        (Just a, Just b) -> diffUTCTime (zonedTimeToUTC b) (zonedTimeToUTC a)
-        _ -> 60 * 60 * 24 * 14
-
-  let intervalT = from @String @Text $ show $ floor interval `div` (if numSlots == 0 then 1 else numSlots)
-  let dateRange' = both (quoteTxt . from @String . formatTime defaultTimeLocale "%F %R" <$>) dateRange
-  let dateRangeStr = case dateRange' of
-        (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND " <> b
-        (Just a, Just b) -> "AND created_at BETWEEN " <> a <> " AND " <> b
-        _ -> "AND created_at BETWEEN NOW() - INTERVAL '14 days' AND NOW()"
-  let (fromD, toD) = bimap (maybe "now() - INTERVAL '14 days'" ("TIMESTAMP " <>)) (maybe "now()" ("TIMESTAMP " <>)) dateRange'
-  let q =
-        [text| WITH q as (SELECT time_bucket_gapfill('$intervalT seconds', created_at, $fromD,$toD) as timeB $groupByFields , COALESCE(COUNT(*), 0) total_count 
-                  FROM apis.request_dumps 
-                  WHERE project_id=? $cond $dateRangeStr GROUP BY timeB $groupBy $limit)
-              SELECT COALESCE(json_agg(json_build_array(timeB $groupByFinal, total_count)), '[]')::text from q; |]
-  (Only val) <- fromMaybe (Only "[]") <$> queryOne Select (Query $ encodeUtf8 q) (MkDBField pid : paramList)
-  pure val
-
-
-throughputBy' :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Maybe Int -> Maybe Text -> (Maybe ZonedTime, Maybe ZonedTime) -> DBT IO (V.Vector (Int, Int, String))
-throughputBy' pid groupByM endpointHash shapeHash formatHash statusCodeGT numSlots limitM extraQuery dateRange@(fromT, toT) = do
-  let extraQueryParsed = hush . parseQueryStringToWhereClause =<< extraQuery
-  let condlist =
-        catMaybes
-          [ " endpoint_hash=? " <$ endpointHash
-          , " shape_hash=? " <$ shapeHash
-          , " ?=ANY(format_hashes) " <$ formatHash
-          , " status_code>? " <$ statusCodeGT
-          , extraQueryParsed
-          ]
-  let groupBy' = fromMaybe @Text "" $ mappend " ," <$> groupByM
-  let (groupBy, groupByFields) = case groupByM of
-        Just "endpoint" -> (",method, url_path", ",method||' '||url_path as g")
-        Nothing -> ("", "")
-        _ -> (groupBy', groupBy' <> "::text as g")
-  let paramList = mapMaybe (MkDBField <$>) [endpointHash, shapeHash, formatHash, statusCodeGT]
-  let condlist' = filter (/= "") condlist
-  let cond
-        | null condlist' = mempty
-        | otherwise = "AND " <> mconcat (intersperse " AND " condlist')
-  let limit = maybe "" (("limit " <>) . show) limitM
-  let interval = case dateRange of
-        (Just a, Just b) -> diffUTCTime (zonedTimeToUTC b) (zonedTimeToUTC a)
-        _ -> 60 * 60 * 24 * 14
-
-  let intervalT = from @String @Text $ show $ floor interval `div` (if numSlots == 0 then 1 else numSlots)
-  let dateRange' = both (quoteTxt . from @String . formatTime defaultTimeLocale "%F %R" <$>) dateRange
-  let dateRangeStr = case dateRange' of
-        (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND " <> b
-        (Just a, Just b) -> "AND created_at BETWEEN " <> a <> " AND " <> b
-        _ -> "AND created_at BETWEEN NOW() - INTERVAL '14 days' AND NOW()"
-  -- let (fromD, toD) = bimap (maybe "now() - INTERVAL '14 days'" ("TIMESTAMP " <> ) )  (maybe "now()" ("TIMESTAMP " <>)) dateRange'
-  let q =
-        [text| SELECT extract(epoch from time_bucket('$intervalT seconds', created_at))::integer as timeB, COALESCE(COUNT(*), 0) total_count $groupByFields  
-                  FROM apis.request_dumps 
-                  WHERE project_id=? $cond $dateRangeStr GROUP BY timeB $groupBy $limit; |]
-  query Select (Query $ encodeUtf8 q) (MkDBField pid : paramList)
-
-
 selectRequestDumpByProjectAndParentId :: Projects.ProjectId -> UUID.UUID -> DBT IO (V.Vector RequestDumpLogItem)
 selectRequestDumpByProjectAndParentId pid parentId = query Select q (pid, parentId)
   where
@@ -644,3 +543,15 @@ autoCompleteFromRequestDumps :: Projects.ProjectId -> Text -> Text -> DBT IO (V.
 autoCompleteFromRequestDumps pid key prefix = query Select (Query $ encodeUtf8 q) (pid, prefix <> "%")
   where
     q = [text|SELECT DISTINCT $key from apis.request_dumps WHERE project_id = ? AND created_at > NOW() - interval '14' day AND $key <> ''  AND $key LIKE ?|]
+
+
+getTotalRequestForCurrentMonth :: Projects.ProjectId -> DBT IO Int
+getTotalRequestForCurrentMonth pid = do
+  result <- query Select q pid
+  case result of
+    [Only count] -> return count
+    v -> return $ length v
+  where
+    q =
+      [sql| SELECT count(*) FROM apis.request_dumps WHERE project_id=? AND EXTRACT(MONTH FROM created_at) = EXTRACT(MONTH FROM CURRENT_DATE)
+              AND EXTRACT(YEAR FROM created_at) = EXTRACT(YEAR FROM CURRENT_DATE);|]

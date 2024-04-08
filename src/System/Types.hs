@@ -12,7 +12,6 @@ module System.Types (
 ) where
 
 import Data.Pool as Pool (Pool)
-import Database.PostgreSQL.Simple
 import Effectful
 import Effectful.Error.Static (Error)
 import Effectful.Log (Log)

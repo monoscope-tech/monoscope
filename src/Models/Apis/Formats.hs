@@ -1,5 +1,4 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE TemplateHaskell #-}
 
 module Models.Apis.Formats (
   Format (..),
@@ -25,12 +24,10 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact (DBT, executeMany)
-
 import Database.PostgreSQL.Transact qualified as PgT
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Fields.Types qualified as Fields
 import Models.Projects.Projects qualified as Projects
-import Optics.TH
 import Relude
 import Servant (FromHttpApiData)
 import Utils (DBField (MkDBField))
@@ -57,9 +54,6 @@ data Format = Format
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Format
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "formats", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Format)
   deriving (FromField) via Aeson Format
-
-
-makeFieldLabelsNoPrefix ''Format
 
 
 formatsByFieldHash :: Text -> DBT IO (Vector.Vector Format)

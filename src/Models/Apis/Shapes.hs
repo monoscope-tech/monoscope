@@ -1,5 +1,4 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE TemplateHaskell #-}
 
 module Models.Apis.Shapes (Shape (..), ShapeWithFields (..), SwShape (..), ShapeId (..), getShapeFields, shapeIdText, insertShapeQueryAndParam, insertShapes, shapesByEndpointHashes, shapesByEndpointHash) where
 
@@ -7,27 +6,22 @@ import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.Time (UTCTime, ZonedTime, getZonedTime)
 import Data.UUID qualified as UUID
-
 import Data.Vector (Vector)
+import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), query)
-
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, Query, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
-
 import Database.PostgreSQL.Transact (DBT, executeMany)
 import Database.PostgreSQL.Transact qualified as PgT
-
-import Data.Vector qualified as Vector
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Fields.Types
 import Models.Apis.Fields.Types qualified as Fields
 import Models.Projects.Projects qualified as Projects
 import Models.Projects.Projects qualified as Projescts
-import Optics.TH
 import Relude
 import Utils (DBField (MkDBField))
 import Web.HttpApiData (FromHttpApiData)
@@ -49,13 +43,22 @@ data ShapeWithFields = ShapeWidthFields
   { status :: Int
   , sHash :: Text
   , fieldsMap :: Map FieldCategoryEnum [Fields.Field]
+  , reqDescription :: Text
+  , resDescription :: Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (NFData)
 
 
 getShapeFields :: Shape -> Vector Fields.Field -> ShapeWithFields
-getShapeFields shape fields = ShapeWidthFields{status = shape.statusCode, sHash = shape.hash, fieldsMap = fieldM}
+getShapeFields shape fields =
+  ShapeWidthFields
+    { status = shape.statusCode
+    , sHash = shape.hash
+    , fieldsMap = fieldM
+    , reqDescription = shape.requestDescription
+    , resDescription = shape.responseDescription
+    }
   where
     matchedFields = Vector.filter (\field -> field.hash `Vector.elem` shape.fieldHashes) fields
     fieldM = Fields.groupFieldsByCategory matchedFields
@@ -78,6 +81,8 @@ data Shape = Shape
   , fieldHashes :: Vector Text
   , hash :: Text
   , statusCode :: Int
+  , responseDescription :: Text
+  , requestDescription :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, Default, NFData)
@@ -86,17 +91,14 @@ data Shape = Shape
   deriving (FromField) via Aeson Shape
 
 
-Optics.TH.makeFieldLabelsNoPrefix ''Shape
-
-
 insertShapeQueryAndParam :: Shape -> (Query, [DBField])
 insertShapeQueryAndParam shape = (q, params)
   where
     q =
       [sql| 
             INSERT INTO apis.shapes
-            (project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash, status_code)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING; 
+            (project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash, status_code, request_description, response_description)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING; 
           |]
     params =
       [ MkDBField shape.projectId
@@ -109,6 +111,8 @@ insertShapeQueryAndParam shape = (q, params)
       , MkDBField shape.fieldHashes
       , MkDBField shape.hash
       , MkDBField shape.statusCode
+      , MkDBField ""
+      , MkDBField ""
       ]
 
 
@@ -118,7 +122,7 @@ shapesByEndpointHash pid endpointHash = query Select q (pid, endpointHash)
     q =
       [sql| 
           SELECT id, created_at, updated_at, approved_on, project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, 
-          response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash, status_code
+          response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash, status_code, request_description, response_description
           FROM apis.shapes WHERE project_id= ? AND endpoint_hash = ?
       |]
 
@@ -129,16 +133,16 @@ insertShapes shapes = do
   let insertQuery =
         [sql|
         INSERT INTO apis.shapes
-        (approved_on, project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash, status_code)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) 
+        (approved_on, project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash, status_code, request_description, response_description)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) 
         ON CONFLICT (hash)
-        DO UPDATE SET request_headers_keypaths = EXCLUDED.request_headers_keypaths, approved_on = EXCLUDED.approved_on
+        DO UPDATE SET request_headers_keypaths = EXCLUDED.request_headers_keypaths, approved_on = EXCLUDED.approved_on, request_description = EXCLUDED.request_description, response_description = EXCLUDED.response_description
       |]
   let params = map getShapeParams shapes
   executeMany insertQuery params
 
 
-getShapeParams :: Shape -> (Maybe UTCTime, Projects.ProjectId, Text, Vector Text, Vector Text, Vector Text, Vector Text, Vector Text, Vector Text, Text, Int)
+getShapeParams :: Shape -> (Maybe UTCTime, Projects.ProjectId, Text, Vector Text, Vector Text, Vector Text, Vector Text, Vector Text, Vector Text, Text, Int, Text, Text)
 getShapeParams shape =
   ( shape.approvedOn
   , shape.projectId
@@ -147,23 +151,27 @@ getShapeParams shape =
   , shape.requestBodyKeypaths
   , shape.responseBodyKeypaths
   , shape.requestHeadersKeypaths
-  , shape.responseBodyKeypaths
+  , shape.responseHeadersKeypaths
   , shape.fieldHashes
   , shape.hash
   , shape.statusCode
+  , shape.requestDescription
+  , shape.responseDescription
   )
 
 
 data SwShape = SwShape
   { swEndpointHash :: Text
   , swQueryParamsKeypaths :: Vector Text
-  , swRequestHeadersKeypaths :: Vector Text
-  , swResponseHeadersKeypaths :: Vector Text
   , swRequestBodyKeypaths :: Vector Text
   , swResponseBodyKeypaths :: Vector Text
+  , swRequestHeadersKeypaths :: Vector Text
+  , swResponseHeadersKeypaths :: Vector Text
   , swHash :: Text
   , swStatusCode :: Int
   , swFieldHashes :: Vector Text
+  , swRequestDescription :: Text
+  , swResponseDescription :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, Default, NFData)
@@ -179,7 +187,9 @@ shapesByEndpointHashes pid hashes = query Select q (pid, hashes)
       [sql|
       SELECT endpoint_hash sw_endpoint_hash, query_params_keypaths sw_query_params_keypaths, request_body_keypaths sw_request_body_keypaths,
              response_body_keypaths sw_response_body_keypaths, request_headers_keypaths sw_request_headers_keypaths, 
-             response_headers_keypaths sw_response_headers_keypaths, hash sw_hash,status_code sw_status_code,field_hashes sw_field_hashes 
-      FROM apis.shapes
-      WHERE project_id = ? AND endpoint_hash = ANY(?)
+             response_headers_keypaths sw_response_headers_keypaths, hash sw_hash,status_code sw_status_code,field_hashes sw_field_hashes,
+             request_description sw_request_description, response_description sw_response_description
+      FROM apis.shapes sh
+      INNER JOIN apis.anomalies ann ON (ann.anomaly_type = 'shape' AND  ann.target_hash = sh.hash)
+      WHERE sh.project_id = ? AND endpoint_hash = ANY(?)
     |]

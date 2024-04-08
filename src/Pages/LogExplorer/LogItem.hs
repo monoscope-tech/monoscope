@@ -52,7 +52,7 @@ expandAPIlogItem' pid req modal = do
       let methodColor = getMethodColor req.method
       let statusColor = getStatusColor req.statusCode
       div_ [class_ "flex gap-4 items-center"] do
-        div_ [class_ $ "font-semibold px-2 py-1 rounded min-w-[70px] text-center " <> methodColor] $ toHtml req.method
+        div_ [class_ $ "font-semibold px-2 py-1 rounded min-w-[70px] text-center h-full " <> methodColor] $ toHtml req.method
         div_ [class_ $ "text-lg font-bold px-2 " <> statusColor] $ show req.statusCode
         div_ [class_ "flex border border-gray-200 m-1 rounded-xl p-2"] do
           mIcon_ "calender" "h-4 mr-2 w-4"
@@ -139,23 +139,23 @@ expandAPIlogItem' pid req modal = do
       div_ [class_ "flex w-full bg-gray-100 px-4 py-2 flex-col gap-2"] do
         p_ [class_ "font-bold"] "Request Details"
 
-      div_ [class_ "tabs tabs-bordered", role_ "tablist"] do
-        input_ [type_ "radio", name_ "req-details-tab", role_ "tab", Aria.label_ "Body", class_ "tab", checked_]
+      div_ [class_ "tabs tabs-bordered place-content-start", role_ "tablist"] do
+        input_ [type_ "radio", name_ "req-details-tab", role_ "tab", Aria.label_ "Body", class_ "tab w-max", checked_]
         div_ [class_ "tab-content", role_ "tabpanel"]
-          $ div_ [class_ "bg-gray-50 m-4  p-2 rounded-lg border", id_ "req_body_json"]
+          $ div_ [class_ "bg-gray-50 m-4  p-2 rounded-lg border break-all", id_ "req_body_json"]
           $ jsonValueToHtmlTree req.requestBody
 
         input_ [type_ "radio", name_ "req-details-tab", role_ "tab", Aria.label_ "Headers", class_ "tab"]
         div_ [class_ "tab-content", role_ "tabpanel"]
-          $ div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border", id_ "req_headers_json"]
+          $ div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border break-all", id_ "req_headers_json"]
           $ jsonValueToHtmlTree req.requestHeaders
 
-        input_ [type_ "radio", name_ "req-details-tab", role_ "tab", Aria.label_ "Query Params", class_ "tab"]
+        input_ [type_ "radio", name_ "req-details-tab", role_ "tab", Aria.label_ "Query Params", class_ "tab break-keep"]
         div_ [class_ "tab-content", role_ "tabpanel"]
           $ div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border", id_ "query_params_json"]
           $ jsonValueToHtmlTree req.queryParams
 
-        input_ [type_ "radio", name_ "req-details-tab", role_ "tab", Aria.label_ "Path Params", class_ "tab"]
+        input_ [type_ "radio", name_ "req-details-tab", role_ "tab", Aria.label_ "Path Params", class_ "tab break-keep"]
         div_ [class_ "tab-content", role_ "tabpanel"]
           $ div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border", id_ "path_params_json"]
           $ jsonValueToHtmlTree req.pathParams
@@ -165,7 +165,7 @@ expandAPIlogItem' pid req modal = do
       div_ [class_ "flex w-full bg-gray-100 px-4 py-2 flex-col gap-2"] do
         p_ [class_ "font-bold"] "Response Details"
 
-      div_ [class_ "tabs tabs-bordered", role_ "tablist"] do
+      div_ [class_ "tabs tabs-bordered place-content-start", role_ "tablist"] do
         input_ [type_ "radio", name_ "resp-details-tab", role_ "tab", Aria.label_ "Body", class_ "tab", checked_]
         div_ [class_ "tab-content", role_ "tabpanel"]
           $ div_ [class_ "bg-gray-50 m-4  p-2 rounded-lg border", id_ "res_body_json"]

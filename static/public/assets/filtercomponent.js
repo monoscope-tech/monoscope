@@ -1,4 +1,9 @@
-import { LitElement, html, ref, createRef } from './js/thirdparty/lit.js';
+import {
+  LitElement,
+  html,
+  ref,
+  createRef,
+} from "https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js";
 export class MyElement extends LitElement {
   static properties = {
     filters: {},
@@ -8,35 +13,36 @@ export class MyElement extends LitElement {
   constructor() {
     super();
     this.showFilterSearch = false;
-    this.addEventListener('add-filter', this.handleChildEvent);
-    this.addEventListener('close-search', () => {
+    this.addEventListener("add-filter", this.handleChildEvent);
+    this.addEventListener("close-search", () => {
       this.showFilterSearch = false;
     });
-    const body = document.querySelector('body');
+    const body = document.querySelector("body");
     this.filters = [];
     window.setQueryBuilderFromParams = () => {
       const urlSearchParams = new URLSearchParams(window.location.search);
-      const query = urlSearchParams.get('query');
+      const query = urlSearchParams.get("query");
       if (query) {
-        const fls = query
-          .split(/\s+AND\s+|\s+OR\s+/i)
-          .flatMap((element, index, array) => {
-            return index < array.length - 1 ? [element, 'AND'] : [element];
-          });
-        this.upadteFilters(fls);
+        this.setBuilderValue(query);
       }
     };
 
-    body.addEventListener('click', () => {
+    body.addEventListener("click", () => {
       this.showFilterSearch = false;
     });
   }
 
   setBuilderValue = (value) => {
+    const joiners = value
+      .split(" ")
+      .filter((v) => v.toUpperCase() === "AND" || v.toUpperCase() == "OR");
+    let current = 0;
     const fls = value
       .split(/\s+AND\s+|\s+OR\s+/i)
       .flatMap((element, index, array) => {
-        return index < array.length - 1 ? [element, 'AND'] : [element];
+        return index < array.length - 1
+          ? [element, (joiners[current++] || "AND").toUpperCase()]
+          : [element];
       });
     this.upadteFilters(fls);
   };
@@ -51,14 +57,14 @@ export class MyElement extends LitElement {
   }
 
   handleChildEvent(event) {
-    let joiner = 'AND';
+    let joiner = "AND";
     const [newField, newOperator, value] = this.getFieldAndValue(
       event.detail.filter
     );
     for (let filter of this.filters) {
       const [field, operator, val] = this.getFieldAndValue(filter);
       if (newField == field) {
-        joiner = 'OR';
+        joiner = "OR";
       }
       if (newField === field && newOperator === operator && value === val) {
         this.showFilterSearch = false;
@@ -76,7 +82,7 @@ export class MyElement extends LitElement {
 
   upadteFilters(newVal) {
     this.filters = newVal;
-    const val = newVal.join(' ');
+    const val = newVal.join(" ");
     window.queryBuilderValue = val;
     if (window.editor) {
       window.editor.setValue(val);
@@ -108,10 +114,10 @@ export class MyElement extends LitElement {
   }
 
   toggleJoinOperator(index) {
-    if (this.filters[index] === 'AND') {
-      this.filters[index] = 'OR';
+    if (this.filters[index] === "AND") {
+      this.filters[index] = "OR";
     } else {
-      this.filters[index] = 'AND';
+      this.filters[index] = "AND";
     }
     this.upadteFilters([...this.filters]);
   }
@@ -127,7 +133,7 @@ export class MyElement extends LitElement {
             ${this.filters.map(
               (filter, index) =>
                 html`
-                  ${filter === 'AND' || filter === 'OR'
+                  ${filter === "AND" || filter === "OR"
                     ? html`<button
                         type="button"
                         @click=${() => this.toggleJoinOperator(index)}
@@ -179,48 +185,49 @@ export class MyElement extends LitElement {
   }
 }
 
-customElements.define('filter-element', MyElement);
+customElements.define("filter-element", MyElement);
 
 class Filter extends LitElement {
   fields = [
-    'method',
-    'status_code',
-    'url_path',
-    'duration_ns',
-    'request_body',
-    'request_header',
-    'response_body',
-    'response_header',
-    'host',
-    'raw_url',
-    'referer',
-    'query_param',
-    'path_param',
-    'request_type',
-    'service_version',
+    "method",
+    "status_code",
+    "url_path",
+    "duration_ns",
+    "request_body",
+    "has_errors",
+    "request_header",
+    "response_body",
+    "response_header",
+    "host",
+    "raw_url",
+    "referer",
+    "query_param",
+    "path_param",
+    "request_type",
+    "service_version",
   ];
 
-  string_operators = ['=', '!='];
-  number_operators = ['=', '!=', '>=', '<='];
+  string_operators = ["==", "!="];
+  number_operators = ["==", ">", "<", "!=", ">=", "<="];
 
   filterAutoComplete = {
     method: {
-      type: 'string',
+      type: "string",
       operators: this.string_operators,
       values: [
-        'GET',
-        'POST',
-        'PUT',
-        'PATCH',
-        'DELETE',
-        'OPTIONS',
-        'HEAD',
-        'CONNECT',
-        'TRACE',
+        "GET",
+        "POST",
+        "PUT",
+        "PATCH",
+        "DELETE",
+        "OPTIONS",
+        "HEAD",
+        "CONNECT",
+        "TRACE",
       ],
     },
     status_code: {
-      type: 'number',
+      type: "number",
       operators: this.number_operators,
       values: [
         200, 201, 202, 203, 204, 300, 301, 302, 400, 401, 402, 403, 404, 405,
@@ -228,14 +235,19 @@ class Filter extends LitElement {
       ],
     },
     request_type: {
-      type: 'string',
+      type: "string",
       operators: this.string_operators,
-      values: ['Outgoing', 'Incoming'],
+      values: ["Outgoing", "Incoming"],
     },
     duration_ns: {
       operators: this.number_operators,
-      type: 'number',
+      type: "number",
       values: [],
+    },
+    has_errors: {
+      operators: ["=="],
+      type: "boolean",
+      values: ["true", "false"],
     },
   };
 
@@ -247,11 +259,11 @@ class Filter extends LitElement {
 
   constructor() {
     super();
-    this.inputVal = '';
+    this.inputVal = "";
     this.fetchAutocomplete = false;
     this.matches = this.fields;
-    this.projectId = window.location.pathname.split('/')[2];
-    const builderContainer = document.getElementById('queryBuilder');
+    this.projectId = window.location.pathname.split("/")[2];
+    const builderContainer = document.getElementById("queryBuilder");
     if (builderContainer) {
       // const url_paths = JSON.parse(builderContainer.dataset.url_paths)
       // this.filterAutoComplete.url_path.values = (url_paths || []).sort()
@@ -275,7 +287,7 @@ class Filter extends LitElement {
           }}
           .value=${this.inputVal}
           @keydown=${(e) => {
-            if (e.key === 'Enter') {
+            if (e.key === "Enter") {
               this.triggerCustomEvent(e.target.value);
             }
           }}
@@ -294,13 +306,13 @@ class Filter extends LitElement {
                   this.adjustInputWidthAndFocus();
                 }}
                 @keydown=${(e) => {
-                  if (e.key === 'Enter') {
+                  if (e.key === "Enter") {
                     this.autoCompleteInput(match);
                     this.adjustInputWidthAndFocus();
                   }
-                  if (e.key === 'Tab') {
+                  if (e.key === "Tab") {
                     e.preventDefault();
-                    const buttons = document.querySelectorAll('.match_buttons');
+                    const buttons = document.querySelectorAll(".match_buttons");
                     const activeButton = document.activeElement;
                     const index = Array.from(buttons).indexOf(activeButton);
 
@@ -354,7 +366,7 @@ class Filter extends LitElement {
 
   triggerCustomEvent(value) {
     if (!this.isValidFilter(value)) return;
-    const event = new CustomEvent('add-filter', {
+    const event = new CustomEvent("add-filter", {
       detail: {
         filter: value,
       },
@@ -367,7 +379,7 @@ class Filter extends LitElement {
   getField(filter) {
     const parts = filter.trim().split(/\s*([=<>!]+)\s*/);
     if (parts.length !== 3) {
-      return '';
+      return "";
     }
     return parts[0];
   }
@@ -375,29 +387,29 @@ class Filter extends LitElement {
   getOperator(filter) {
     const parts = filter.trim().split(/\s*([=<>!]+)\s*/);
     if (parts.length !== 3) {
-      return '';
+      return "";
     }
     return parts[1];
   }
 
   getValue(filter) {
     const parts = filter
-      .replace(' ', '')
+      .replace(" ", "")
       .trim()
       .split(/\s*([=<>!]+)\s*/);
     if (parts.length !== 3) {
-      return '';
+      return "";
     }
     return parts[2];
   }
 
   needsAutoComplete(filter) {
     if (this.isValidFilter(filter)) {
-      const value = this.getValue(filter).replace(/^"|"$/g, '');
+      const value = this.getValue(filter).replace(/^"|"$/g, "");
       if (value.length < 2) return null;
       const field = this.getField(filter);
       const operator = this.getOperator(filter);
-      if (['host', 'referer', 'raw_url', 'url_path'].includes(field)) {
+      if (["host", "referer", "raw_url", "url_path"].includes(field)) {
         return { key: field, operator, prefix: value };
       }
     }
@@ -405,7 +417,7 @@ class Filter extends LitElement {
   }
 
   needsAutoCompleteKeyPath(filter) {
-    let rootEnd = filter.indexOf('.');
+    let rootEnd = filter.indexOf(".");
     if (rootEnd == -1) return { result: false, field: null, prefix: null };
 
     const field = filter.substring(0, rootEnd);
@@ -414,12 +426,12 @@ class Filter extends LitElement {
 
     if (
       [
-        'request_body',
-        'response_body',
-        'request_header',
-        'response_header',
-        'query_param',
-        'path_param',
+        "request_body",
+        "response_body",
+        "request_header",
+        "response_header",
+        "query_param",
+        "path_param",
       ].includes(field)
     ) {
       return {
@@ -489,11 +501,14 @@ class Filter extends LitElement {
             `"${v}`.startsWith(valTyped) ||
             `"${v} "`.startsWith(valTyped)
           ) {
-            if (target_info.type === 'number') {
-              auto_complete.push(`${this.inputVal.replace(valTyped, '')} ${v}`);
+            if (
+              target_info.type === "number" ||
+              target_info.type === "boolean"
+            ) {
+              auto_complete.push(`${this.inputVal.replace(valTyped, "")} ${v}`);
             } else {
               auto_complete.push(
-                `${this.inputVal.replace(valTyped, '')} "${v}"`
+                `${this.inputVal.replace(valTyped, "")} "${v}"`
               );
             }
           }
@@ -504,4 +519,4 @@ class Filter extends LitElement {
     this.matches = auto_complete;
   }
 }
-customElements.define('filter-suggestions', Filter);
+customElements.define("filter-suggestions", Filter);
