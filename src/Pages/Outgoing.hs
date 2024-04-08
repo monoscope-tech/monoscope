@@ -32,18 +32,7 @@ import System.Config
 import System.Types
 import Pages.Charts.Charts qualified as Charts
 
--- Define the type for the authentication context
--- type ATAuthCtx :: Type -> Type
--- type ATAuthCtx =
---   Eff
---     '[ Effectful.Reader.Static.Reader (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
---      , Effectful.Reader.Static.Reader AuthContext
---      , DB
---      , Time
---      , Log
---      , Error ServerError
---      , IOE
---      ]
+
 
 data OutgoingParamInput = OutgoingParamInput
   { sortField :: Text
@@ -82,10 +71,10 @@ outgoingGetH pid sortM searchM activeTabM = do
 
 sortOptions :: [(Text, Text, Text)]
 sortOptions =
-  [ ("Host Name", "Sort by Host Name", "host")
-  , ("Event Count", "Sort by Event Count", "event_count")
-  ]
-
+    [ ("First Seen", "First time the issue occured", "first_seen")
+      ,("Last Seen", "Last time the issue occured", "last_seen")
+      ,("Events", "Number of events", "events")
+    ]
 tabs :: [(Text, Text, Text)]
 tabs =
   [ ("Active", "Active Outbound Integrations", "active")
@@ -93,76 +82,47 @@ tabs =
   , ("Archived", "Archived Outbound Integrations", "archived")
   ]
 
--- outgoingPage :: Projects.ProjectId -> OutgoingParamInput -> V.Vector Endpoints.HostEvents -> Html ()
--- outgoingPage pid paramInput hostsEvents = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24 overflow-y-scroll h-full"] $ do
---   h3_ [class_ "text-xl text-slate-700 flex gap-1 place-items-center"] "Outbound Integrations"
-
-
---   div_ [class_ "col-span-4 py-2 space-x-4 border-b border-slate-20 mt-6 mb-8 text-sm font-light"] $ do
---       forM_ tabs $ \(title, desc, identifier) -> do
---         let isActive = activeTab paramInput == identifier
---         a_
---           [ class_ $ "inline-block py-2 " <> if isActive then " font-bold text-black " else ""
---           , href_ $ "/p/" <> pid.toText <> "/outgoing?sort=" <> sortField paramInput <> "&activeTab=" <> identifier
---           ]
---           $ toHtml title
---   div_ [class_ "grid grid-cols-4 card-round", id_ "outgoingListBelowTab"] $ do
---     div_ [class_ "col-span-4 py-2 space-x-4 border-b border-slate-20 mt-6 mb-8 text-sm font-light"] $ do
---       forM_ sortOptions $ \(title, desc, identifier) -> do
---         let isActive = sortField paramInput == identifier
---         a_
---           [ class_ $ "inline-block py-2 " <> if isActive then " font-bold text-black " else ""
---           , href_ $ "/p/" <> pid.toText <> "/outgoing?sort=" <> identifier <> "&activeTab=" <> activeTab paramInput
---           ]
---           $ toHtml title
-      
-
---   div_ [class_ "w-full flex flex-row p-3"] $ do
---     input_
---       [ type_ "text"
---       , placeholder_ "Search"
---       , class_ "dataTable-search w-full h-10 p-2 text-sm text-gray-400 font-normal focus:outline-none"
---       , value_ $ search paramInput
---       , oninput_ $ "showOutgoingItems('#outgoingListBelowTab', 'outgoing_item', '" <> search paramInput <> "')"
---       ]
---   div_ [class_ "col-span-4 bg-white divide-y"] $ do
---     table_ [class_ "w-full table-fixed border-collapse border border-gray-200"] $ do
---       thead_ $ tr_ [class_ "bg-gray-100"] $ do
---         th_ [class_ "px-4 py-2 text-left"] "Host"
---         th_ [class_ "px-4 py-2 text-left"] "Events"
---         th_ [class_ "px-4 py-2 text-center"] "Graph"
---         th_ [class_ "px-4 py-2 text-left"] "View Log"
---       tbody_ $ forM_ hostsEvents $ \host -> do
---         tr_ [class_ "border-b border-gray-200 outgoing_item"] $ do
---           td_ [class_ "px-4 py-2"] $ a_ [href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> host.host, class_ "text-blue-500 hover:text-slate-600"] $ toHtml (T.replace "http://" "" $ T.replace "https://" "" host.host)
---           td_ [class_ "px-4 py-2"] $ toHtml (show host.eventCount)
---           td_ [class_ "px-4 py-2 flex item-center justify-center"] $ do
---             div_ [class_ "mt-4 w-60 h-16 px-3"] $ Charts.throughput pid host.host (Just (QBHost host.host)) Nothing 14 Nothing False (Nothing, Nothing) Nothing
---           td_ [class_ "px-4 py-2 "] $ do
---              a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=host%3D%3D" <> "\"" <> host.host <> "\"", class_ "text-blue-500 hover:text-slate-600"] $ "View logs"  
---   when (null hostsEvents) $ div_ [class_ "flex flex-col text-center justify-center items-center h-32"] $ do
---     strong_ "No dependencies yet."
---     p_ "All dependencies' host names and number of events will be shown here."
 outgoingPage :: Projects.ProjectId -> OutgoingParamInput -> V.Vector Endpoints.HostEvents -> Html ()
 outgoingPage pid paramInput hostsEvents = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24 overflow-y-scroll h-full"] $ do
   h3_ [class_ "text-xl text-slate-700 flex gap-1 place-items-center"] "Outbound Integrations"
 
-  div_ [class_ "col-span-4 py-2 space-x-4 border-b border-slate-20 mt-6 mb-8 text-sm font-light"] $ do
-    forM_ tabs $ \(title, desc, identifier) -> do
-      let isActive = activeTab paramInput == identifier
-      a_
-        [ class_ $ "inline-block py-2 " <> if isActive then " font-bold text-black " else ""
-        , href_ $ "/p/" <> pid.toText <> "/outgoing?sort=" <> sortField paramInput <> "&activeTab=" <> identifier
-        ]
-        $ toHtml title
 
-  div_ [class_ "grid grid-cols-4 card-round bg-gray-50 ", id_ "outgoingListBelowTab"] $ do
+  div_ [class_ "flex justify-between item-center border-b border-slate-20"] $ do
+      div_ [class_ "col-span-4 py-2 space-x-4  mt-6 mb-8 text-sm font-light"] $ do
+        forM_ tabs $ \(title, desc, identifier) -> do
+          let isActive = activeTab paramInput == identifier
+          a_
+            [ class_ $ "inline-block py-2 " <> if isActive then " font-bold text-black " else ""
+            , href_ $ "/p/" <> pid.toText <> "/outgoing?sort=" <> sortField paramInput <> "&activeTab=" <> identifier
+            ]
+            $ toHtml title
+      div_ [class_ "py-2 space-x-4  mb-8 text-sm font-light flex justify-end items-center px-2"] $ do
+        div_ [class_ "relative inline-block"] $ do
+          a_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl space-x-2", [__|on click toggle .hidden on #sortMenuDiv |]] do
+            mIcon_ "sort" "h-4 w-4"
+            span_ "Sort by"
+          div_ [id_ "sortMenuDiv", hxBoost_ "true", class_ "p-1 hidden text-sm border border-black-30 absolute right-0 z-10 mt-2 w-72 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none", tabindex_ "-1"] do
+            sortOptions & mapM_ \(title, desc, identifier) -> do
+              let isActive = sortField paramInput == identifier
+              a_
+                [ class_ $ "block flex flex-row px-3 py-2 hover:bg-blue-50 rounded-md cursor-pointer " <> (if isActive then " text-blue-800 " else "")
+                , href_ $ "/p/" <> pid.toText <> "/outgoing?sort=" <> identifier <> "&activeTab=" <> activeTab paramInput
+                ]
+                do
+                  div_ [class_ "flex flex-col items-center justify-center px-3"] do
+                    if isActive then mIcon_ "checkmark4" "w-4 h-5" else mIcon_ "" "w-4 h-5"
+                  div_ [class_ "grow space-y-1"] do
+                    span_ [class_ "block text-lg"] $ toHtml title
+                    span_ [class_ "block "] $ toHtml desc
+
+  div_ [class_ "grid grid-cols-4 card-round bg-red-500", id_ "outgoingListBelowTab"] $ do
     -- Labels for each column`
-    div_ [class_ "col-span-4 py-2 space-x-4 border-b border-slate-20 mt-6 mb-8 text-sm font-light flex justify-between items-center px-2"] $ do
-      div_ [class_ "w-1/4"] "Host"
-      div_ [class_ "w-1/4"] "Event"
-      div_ [class_ "w-1/4"] "Graph"
-      div_ [class_ "w-1/4"] "View Log"
+    div_ [class_ "col-span-4 bg-white divide-y"]  $ do
+      div_ [class_ "col-span-4 py-2 space-x-4 border-b border-slate-20 mt-6 mb-8 text-sm font-light flex justify-between items-center px-2"] $ do
+        div_ [class_ "w-1/4"] "Host"
+        div_ [class_ "w-1/4"] "Event"
+        div_ [class_ "w-1/4"] "Graph"
+        div_ [class_ "w-1/4"] "View Log"
 
     -- Search bar with adjusted spacing
     div_ [class_ "w-full p-3 bg-white border-b border-slate-20"] $ do  
