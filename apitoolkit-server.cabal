@@ -39,6 +39,7 @@ library
       Models.Apis.RequestDumps
       Models.Apis.Shapes
       Models.Apis.Slack
+      Models.Apis.Testing
       Models.Projects.ProjectApiKeys
       Models.Projects.ProjectMembers
       Models.Projects.Projects
@@ -78,6 +79,7 @@ library
       Pages.Share
       Pages.SlackInstall
       Pages.Survey
+      Pages.Testing
       Pkg.Components
       Pkg.ConvertKit
       Pkg.Google
@@ -244,8 +246,10 @@ executable apitoolkit-server-exe
   main-is: Main.hs
   hs-source-dirs:
       app
-  extra-lib-dirs: testkit/release
-  extra-libraries: testkit
+  extra-lib-dirs:
+      testkit/release
+  extra-libraries:
+      testkit
   default-extensions:
       BangPatterns
       BlockArguments

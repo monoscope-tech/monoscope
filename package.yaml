@@ -1,10 +1,10 @@
 name: apitoolkit-server
 version: 0.1.0.0
-github: 'githubuser/apitoolkit-server'
+github: "githubuser/apitoolkit-server"
 license: BSD3
-author: 'Author name here'
-maintainer: 'example@example.com'
-copyright: '2021 Author name here'
+author: "Author name here"
+maintainer: "example@example.com"
+copyright: "2021 Author name here"
 
 ghc-options:
   # For details on warnings: https://downloads.haskell.org/~ghc/master/users-guide/using-warnings.html
@@ -29,9 +29,9 @@ ghc-options:
   - -fwrite-ide-info
   - -hiedir=.hie
   - -j4
-  - +RTS 
-  - -A128m 
-  - -n2m 
+  - +RTS
+  - -A128m
+  - -n2m
   - -RTS
   # - -fllvm
 
@@ -52,7 +52,7 @@ default-extensions:
   - LambdaCase
   - MultiParamTypeClasses
   - NamedFieldPuns
-  - GeneralizedNewtypeDeriving 
+  - GeneralizedNewtypeDeriving
   - FlexibleContexts
   - NoImplicitPrelude
   - OverloadedLabels
@@ -103,7 +103,7 @@ library:
     - async
     - base
     - bytestring
-    - base64 
+    - base64
     - mtl
     - http-types
     - cache >= 0.1.3.0
@@ -185,6 +185,8 @@ executables:
   apitoolkit-server-exe:
     main: Main.hs
     source-dirs: app
+    extra-lib-dirs: testkit/release
+    extra-libraries: testkit
     ghc-options:
       - -threaded
       - -rtsopts
