@@ -94,8 +94,8 @@ outgoingPage pid paramInput hostsEvents = div_ [class_ "w-full mx-auto px-16 pt-
   h3_ [class_ "text-xl text-slate-700 flex gap-1 place-items-center"] "Outbound Integrations"
 
 
-  div_ [class_ "flex justify-between item-center border-b border-slate-20"] $ do
-      div_ [class_ "col-span-4 py-2 space-x-4  mt-6 mb-8 text-sm font-light"] $ do
+
+  div_ [class_ "col-span-4 py-2 space-x-4  border-b border-slate-20 mt-6 mb-8 text-sm font-light"] $ do
         forM_ tabs $ \(title, desc, identifier) -> do
           let isActive = activeTab paramInput == identifier
           a_
@@ -103,7 +103,13 @@ outgoingPage pid paramInput hostsEvents = div_ [class_ "w-full mx-auto px-16 pt-
             , href_ $ "/p/" <> pid.toText <> "/outgoing?sort=" <> sortField paramInput <> "&activeTab=" <> identifier
             ]
             $ toHtml title
-      div_ [class_ "py-2 space-x-4  mb-8 text-sm font-light flex justify-end items-center px-2"] $ do
+      
+        
+  div_ [class_ "grid grid-cols-4 card-round bg-red-500", id_ "outgoingListBelowTab"] $ do
+    -- Labels for each column`
+    div_ [class_ "col-span-4 bg-white divide-y bg-red-500"]  $ do
+      div_ [class_ "col-span-4 py-2 space-x-4 border-b border-slate-20 pt-8 pb-10 text-sm font-light flex justify-between items-center px-2 bg-gray-50"] $ do
+        div_ [class_ "w-1/4"] "Host"
         div_ [class_ "relative inline-block"] $ do
           a_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl space-x-2", [__|on click toggle .hidden on #sortMenuDiv |]] do
             mIcon_ "sort" "h-4 w-4"
@@ -121,12 +127,6 @@ outgoingPage pid paramInput hostsEvents = div_ [class_ "w-full mx-auto px-16 pt-
                   div_ [class_ "grow space-y-1"] do
                     span_ [class_ "block text-lg"] $ toHtml title
                     span_ [class_ "block "] $ toHtml desc
-
-  div_ [class_ "grid grid-cols-4 card-round bg-red-500", id_ "outgoingListBelowTab"] $ do
-    -- Labels for each column`
-    div_ [class_ "col-span-4 bg-white divide-y"]  $ do
-      div_ [class_ "col-span-4 py-2 space-x-4 border-b border-slate-20 mt-6 mb-8 text-sm font-light flex justify-between items-center px-2"] $ do
-        div_ [class_ "w-1/4"] "Host"
         div_ [class_ "w-1/4"] "Event"
         div_ [class_ "w-1/4"] "Graph"
         div_ [class_ "w-1/4"] "View Log"
