@@ -19,6 +19,7 @@ import Lucid (Html)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Types qualified as Fields (FieldId)
+import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.Reports qualified as ReportsM
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
@@ -175,6 +176,8 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , editField :: mode :- "p" :> ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> ReqBody '[FormUrlEncoded] FieldDetails.EditFieldForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
   , alertUpsertPost :: mode :- "p" :> ProjectId :> "alerts" :> ReqBody '[FormUrlEncoded] Alerts.AlertUpsertForm :> Post '[HTML] (Html ())
   , alertListGet :: mode :- "p" :> ProjectId :> "alerts" :> Get '[HTML] (Html ())
+  , alertSingleGet :: mode :- "p" :> ProjectId :> "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> Get '[HTML] (Html ())
+  , alertSingleToggleActive :: mode :- "p" :> ProjectId :> "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "toggle_active" :> Post '[HTML] (Html ())
   }
   deriving stock (Generic)
 
@@ -236,6 +239,8 @@ cookieProtectedServer =
     , editField = FieldDetails.fieldPutH
     , alertUpsertPost = Alerts.alertUpsertPostH
     , alertListGet = Alerts.alertListGetH
+    , alertSingleGet = Alerts.alertSingleGetH
+    , alertSingleToggleActive = Alerts.alertSingleToggleActiveH
     }
 
 
