@@ -1,4 +1,4 @@
-module Pages.Monitors.Alerts (alertSingleGetH,alertSingleToggleActiveH, alertListGetH, alertUpsertPostH, editAlert_, AlertUpsertForm (..)) where
+module Pages.Monitors.Alerts (alertSingleGetH, alertSingleToggleActiveH, alertListGetH, alertUpsertPostH, editAlert_, AlertUpsertForm (..)) where
 
 import Data.CaseInsensitive qualified as CI
 import Data.Default
@@ -80,9 +80,9 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
 alertUpsertPostH :: Projects.ProjectId -> AlertUpsertForm -> ATAuthCtx (Html ())
 alertUpsertPostH pid form = do
   let alertId = form.alertId >>= UUID.fromText
-  queryMonitorId <-  liftIO $ case alertId of 
-                       Just alertId' ->  Monitors.QueryMonitorId <$> (pure alertId')
-                       Nothing ->  Monitors.QueryMonitorId <$> UUID.nextRandom
+  queryMonitorId <- liftIO $ case alertId of
+    Just alertId' -> Monitors.QueryMonitorId <$> (pure alertId')
+    Nothing -> Monitors.QueryMonitorId <$> UUID.nextRandom
   now <- Time.currentTime
   let queryMonitor = convertToQueryMonitor pid now queryMonitorId form
 
@@ -96,12 +96,14 @@ alertListGetH pid = do
   monitors <- dbtToEff $ Monitors.queryMonitorsAll pid
   pure $ queryMonitors_ monitors
 
+
 alertSingleToggleActiveH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (Html ())
 alertSingleToggleActiveH pid monitorId = do
   _ <- dbtToEff $ Monitors.monitorToggleActiveById monitorId
 
   monitors <- dbtToEff $ Monitors.queryMonitorsAll pid
   pure $ queryMonitors_ monitors
+
 
 alertSingleGetH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (Html ())
 alertSingleGetH pid monitorId = do
@@ -244,8 +246,10 @@ editAlert_ pid monitorM = do
             forM_ monitor.alertConfig.slackChannels addRecipientSlackTmpl_
 
       div_ [class_ "py-5"] do
-        button_ [type_ "submit", class_ "btn btn-success"] $ if isNewMonitor then "Create Alert"
-                                                                             else "Update Alert"
+        button_ [type_ "submit", class_ "btn btn-success"]
+          $ if isNewMonitor
+            then "Create Alert"
+            else "Update Alert"
 
   template_ [id_ "addRecipientSlackTmpl"] $ addRecipientSlackTmpl_ ""
   template_ [id_ "addRecipientEmailTmpl"] $ addRecipientEmailTmpl_ (CI.mk "")
@@ -284,7 +288,8 @@ queryMonitors_ monitors = do
       th_ ""
     tbody_ do
       V.forM_ monitors \monitor -> tr_ do
-        let editAction = [__|
+        let editAction =
+              [__|
 on click
 if ('URLSearchParams' in window) 
     make a URLSearchParams from window.location.search called :searchParams
@@ -294,11 +299,13 @@ if ('URLSearchParams' in window)
 end
             |]
         let editURI = "/p/" <> monitor.projectId.toText <> "/alerts/" <> monitor.id.toText
-        td_ [class_ $ if (isJust monitor.deactivatedAt) then "line-through" else "" 
-              , hxTarget_ "#alertsListContainer"
-              , hxGet_ editURI
-              , editAction
-              ] $ toHtml monitor.alertConfig.title
+        td_
+          [ class_ $ if (isJust monitor.deactivatedAt) then "line-through" else ""
+          , hxTarget_ "#alertsListContainer"
+          , hxGet_ editURI
+          , editAction
+          ]
+          $ toHtml monitor.alertConfig.title
         td_ [] do
           a_
             [ class_ "btn btn-ghost btn-xs"
@@ -310,6 +317,6 @@ end
           a_
             [ class_ "btn btn-ghost btn-xs"
             , hxTarget_ "#alertsListContainer"
-            , hxPost_ $ "/p/" <> monitor.projectId.toText <> "/alerts/" <> monitor.id.toText <>  "/toggle_active"
+            , hxPost_ $ "/p/" <> monitor.projectId.toText <> "/alerts/" <> monitor.id.toText <> "/toggle_active"
             ]
             if (isJust monitor.deactivatedAt) then "reactivate" else "deactivate"

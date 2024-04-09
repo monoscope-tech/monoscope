@@ -136,9 +136,12 @@ queryMonitorUpsert qm =
 queryMonitorById :: QueryMonitorId -> DBT IO (Maybe QueryMonitor)
 queryMonitorById id' = selectById @QueryMonitor (Only id')
 
+
 monitorToggleActiveById :: QueryMonitorId -> DBT IO (Int64)
 monitorToggleActiveById id' = execute Update q (Only id')
-  where q = [sql| 
+  where
+    q =
+      [sql| 
         UPDATE monitors.query_monitors SET deactivated_at=CASE
             WHEN deactivated_at IS NOT NULL THEN NULL
             ELSE NOW()
