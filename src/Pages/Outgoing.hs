@@ -149,8 +149,8 @@ outgoingPage pid paramInput hostsEvents = div_ [class_ "w-full mx-auto px-16 pt-
         div_ [class_ "border-b border-gray-200 outgoing_item flex justify-between px-4 py-2 align-center mt-8"] $ do
           div_ [class_ "w-1/4"] $ a_ [href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> host.host, class_ "text-blue-500 hover:text-slate-600"] $ toHtml (T.replace "http://" "" $ T.replace "https://" "" host.host)
           div_ [class_ "w-1/4"] $ toHtml (show host.eventCount)
-          div_ [class_ "w-1/4 flex item-center justify-center"] $ do
-            div_ [class_ "flex items-center justify-center "] $ div_ [class_ "w-60 h-16 "] $ Charts.throughput pid host.host (Just (QBHost host.host)) Nothing 14 Nothing   False (Nothing, Nothing) Nothing
+          -- div_ [class_ "w-1/4 flex item-center justify-center"] $ do
+          --   div_ [class_ "flex items-center justify-center "] $ div_ [class_ "w-60 h-16 "] $ Charts.throughput pid host.host (Just (QBHost host.host)) Nothing 14 Nothing   False (Nothing, Nothing) Nothing
           div_ [class_ "w-1/4"] $ do
             a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=host%3D%3D" <> "\"" <> host.host <> "\"", class_ "text-blue-500 hover:text-slate-600"] $ "View logs"
   
