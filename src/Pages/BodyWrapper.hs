@@ -64,23 +64,6 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
       link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/atom-one-dark.min.css"]
       link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.63.0/codemirror.min.css"]
       link_ [rel_ "stylesheet", href_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/theme/elegant.min.css"]
-      -- Facebook Pixel Code --
-      script_
-        [text|
-      !function(f,b,e,v,n,t,s)
-{if(f.fbq)return;n=f.fbq=function(){n.callMethod?
-n.callMethod.apply(n,arguments):n.queue.push(arguments)};
-if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
-n.queue=[];t=b.createElement(e);t.async=!0;
-t.src=v;s=b.getElementsByTagName(e)[0];
-s.parentNode.insertBefore(t,s)}(window,document,'script',
-'https://connect.facebook.net/en_US/fbevents.js');
- fbq('init', '1135987380886994'); 
-fbq('track', 'PageView');
-      |]
-    noscript_ [] do
-      img_ [height_ "1", width_ "1", src_ "https://www.facebook.com/tr?id=1135987380886994&ev=PageView&noscript=1"]
-      -- End Facebook Pixel Code
 
       -- SCRIPTS
       script_ [src_ "https://cdn.jsdelivr.net/npm/echarts@5.4.1/dist/echarts.min.js"] ("" :: Text)
@@ -150,6 +133,25 @@ fbq('track', 'PageView');
                 });
               }
             |]
+
+      -- Facebook Pixel Code --
+      script_
+        [text|
+      !function(f,b,e,v,n,t,s)
+{if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+n.callMethod.apply(n,arguments):n.queue.push(arguments)};
+if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
+n.queue=[];t=b.createElement(e);t.async=!0;
+t.src=v;s=b.getElementsByTagName(e)[0];
+s.parentNode.insertBefore(t,s)}(window,document,'script',
+'https://connect.facebook.net/en_US/fbevents.js');
+ fbq('init', '1135987380886994'); 
+fbq('track', 'PageView');
+      |]
+    noscript_ [] do
+      img_ [height_ "1", width_ "1", src_ "https://www.facebook.com/tr?id=1135987380886994&ev=PageView&noscript=1"]
+    -- End Facebook Pixel Code
+
     body_ [class_ "text-gray-900 h-full w-full bg-white fixed", term "data-theme" "winter", term "hx-ext" "multi-swap,preload"] do
       div_
         [ style_ "z-index:99999"
