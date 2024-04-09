@@ -893,6 +893,55 @@ CREATE TABLE IF NOT EXISTS monitors.query_monitors
 );
 SELECT manage_updated_at('monitors.query_monitors');
 
+-- used for the alerts, to execute queries stored in a table, 
+create or replace function eval(expression text) returns integer
+as 
+$body$
+declare result integer;
+begin
+  execute expression into result;
+  return result;
+end;
+$body$
+language plpgsql
+
+
+-- Checks for query monitors being triggered and creates a background job for any found
+CREATE OR REPLACE FUNCTION monitors.check_triggered_query_monitors()
+RETURNS void AS
+$$
+DECLARE
+    -- Array to hold IDs from the query
+    id_array UUID[];
+BEGIN
+    -- Execute the query and store the result in id_array
+    SELECT ARRAY_AGG(id) INTO id_array
+    FROM monitors.query_monitors
+    WHERE alert_last_triggered IS NULL
+      AND deactivated_at IS NULL
+      AND (
+          (NOT trigger_less_than AND (
+               warning_threshold <= eval(log_query_as_sql)
+               OR alert_threshold <= eval(log_query_as_sql)
+           ))
+          OR
+          (trigger_less_than AND (
+               warning_threshold >= eval(log_query_as_sql)
+               OR alert_threshold >= eval(log_query_as_sql)
+           ))
+      );
+
+    -- Check if id_array is not empty
+    IF id_array IS NOT NULL AND array_length(id_array, 1) > 0 THEN
+        -- Perform the insert operation using the array
+        INSERT INTO background_jobs (run_at, status, payload)
+        VALUES (NOW(), 'queued', jsonb_build_object('tag', 'QueryMonitorsTriggered', 'contents', id_array));
+    END IF;
+END;
+$$
+LANGUAGE plpgsql;
+-- Run every minute 
+SELECT add_job('monitors.check_triggered_query_monitors','1min');
 
 COMMIT;
 

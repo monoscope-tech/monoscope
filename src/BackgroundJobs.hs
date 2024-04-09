@@ -31,6 +31,7 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields qualified as Fields
 import Models.Apis.Fields.Query qualified as FieldsQ
 import Models.Apis.Formats qualified as Formats
+import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.Reports qualified as Reports
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
@@ -45,6 +46,7 @@ import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, creat
 import Pages.GenerateSwagger (generateSwagger)
 import Pages.Reports qualified as RP
 import Pkg.Mail
+import PyF
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import System.Config qualified as Config
@@ -60,6 +62,7 @@ data BgJobs
   | DailyJob
   | GenSwagger Projects.ProjectId Users.UserId
   | ReportUsage Projects.ProjectId
+  | QueryMonitorsTriggered (Vector Monitors.QueryMonitorId)
   deriving stock (Eq, Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
 
@@ -102,6 +105,7 @@ jobsRunner :: Pool Connection -> Log.Logger -> Config.EnvConfig -> Job -> IO ()
 jobsRunner dbPool logger cfg job = do
   when cfg.enableBackgroundJobs do
     throwParsePayload job >>= \case
+      QueryMonitorsTriggered queryMonitorIds -> queryMonitorsTriggered dbPool logger cfg queryMonitorIds
       NewAnomaly pid createdAt anomalyTypesT anomalyActionsT targetHash -> do
         let anomalyType = Unsafe.fromJust $ Anomalies.parseAnomalyTypes anomalyTypesT
         -- let anomalyAction = Unsafe.fromJust $ Anomalies.parseAnomalyActions anomalyActionsT
@@ -381,6 +385,38 @@ reportUsage subItemId quantity apiKey = do
   pass
 
 
+queryMonitorsTriggered :: Pool Connection -> Log.Logger -> Config.EnvConfig -> Vector Monitors.QueryMonitorId -> IO ()
+queryMonitorsTriggered dbPool logger cfg queryMonitorIds = do
+  monitorsEvaled <- withPool dbPool $ Monitors.queryMonitorsById queryMonitorIds
+  forM_ monitorsEvaled \monitorE -> do
+    if ( (monitorE.triggerLessThan && monitorE.evalResult >= monitorE.alertThreshold)
+          || (not monitorE.triggerLessThan && monitorE.evalResult <= monitorE.alertThreshold)
+       )
+      then handleQueryMonitorThreshold dbPool logger cfg monitorE True
+      else
+        if Just True
+          == ( monitorE.warningThreshold <&> \warningThreshold ->
+                ( (monitorE.triggerLessThan && monitorE.evalResult >= warningThreshold)
+                    || (not monitorE.triggerLessThan && monitorE.evalResult <= warningThreshold)
+                )
+             )
+          then handleQueryMonitorThreshold dbPool logger cfg monitorE False
+          else pass
+
+
+handleQueryMonitorThreshold :: Pool Connection -> Log.Logger -> Config.EnvConfig -> Monitors.QueryMonitorEvaled -> Bool -> IO ()
+handleQueryMonitorThreshold dbPool logger cfg monitorE isAlert = do
+  _ <- withPool dbPool $ Monitors.updateQMonitorTriggeredState monitorE.id isAlert
+  when (monitorE.alertConfig.emailAll) do
+    users <- withPool dbPool $ Projects.usersByProjectId monitorE.projectId
+    void $ forM users \u -> (emailQueryMonitorAlert cfg monitorE u.email (Just u))
+  forM monitorE.alertConfig.emails \email -> (emailQueryMonitorAlert cfg monitorE email Nothing)
+  unless (null monitorE.alertConfig.slackChannels) $ slackQueryMonitorAlert dbPool monitorE
+
+
+-- way to get emails for company. for email all
+-- TODO: based on monitor send emails or slack
+
 jobsWorkerInit :: Pool Connection -> Log.Logger -> Config.EnvConfig -> IO ()
 jobsWorkerInit dbPool logger envConfig = startJobRunner $ mkConfig jobLogger "background_jobs" dbPool (MaxConcurrentJobs 1) (jobsRunner dbPool logger envConfig) id
   where
@@ -471,3 +507,29 @@ weeklyReportForProject dbPool cfg pid = do
               let projectTitle = pr.title
               let subject = [text| APITOOLKIT: Weekly Report for `$projectTitle` |]
               sendEmail cfg (CI.original user.email) subject body
+
+
+slackQueryMonitorAlert :: Pool Connection -> Monitors.QueryMonitorEvaled -> IO ()
+slackQueryMonitorAlert dbPool monitorE = do
+  let monitorTitle = monitorE.alertConfig.title
+  let message =
+        [trimming| 🤖 *Log Alert triggered for `$monitorTitle`*
+              |]
+  sendSlackMessage dbPool monitorE.projectId message
+
+
+emailQueryMonitorAlert :: Config.EnvConfig -> Monitors.QueryMonitorEvaled -> CI.CI Text -> Maybe Users.User -> IO ()
+emailQueryMonitorAlert cfg monitorE email userM = do
+  let reciever = CI.original email
+      subject = [fmt| 🤖 APITOOLKIT: log monitor triggered `{monitorE.alertConfig.title}` |]
+      body =
+        toLText
+          [trimming|
+  Hi ,<br/>
+
+  
+  <br/><br/>
+  Regards,
+  Apitoolkit team
+            |]
+   in sendEmail cfg reciever subject body

@@ -1,11 +1,16 @@
+{-# LANGUAGE DuplicateRecordFields #-}
+
 module Models.Apis.Monitors (
   queryMonitorsAll,
   queryMonitorById,
+  queryMonitorsById,
   queryMonitorUpsert,
   monitorToggleActiveById,
   QueryMonitor (..),
+  QueryMonitorEvaled (..),
   MonitorAlertConfig (..),
   QueryMonitorId (..),
+  updateQMonitorTriggeredState,
 ) where
 
 import Data.Aeson (FromJSON, ToJSON)
@@ -93,6 +98,31 @@ data QueryMonitor = QueryMonitor
   deriving (Entity) via (GenericEntity '[Schema "monitors", TableName "query_monitors", PrimaryKey "id", FieldModifiers '[CamelToSnake]] QueryMonitor)
 
 
+data QueryMonitorEvaled = QueryMonitorEvaled
+  { id :: QueryMonitorId
+  , createdAt :: UTCTime
+  , updatedAt :: UTCTime
+  , projectId :: Projects.ProjectId
+  , checkIntervalMins :: Int
+  , alertThreshold :: Int
+  , warningThreshold :: Maybe Int
+  , logQuery :: Text
+  , logQueryAsSql :: Text
+  , lastEvaluated :: UTCTime
+  , warningLastTriggered :: Maybe UTCTime
+  , alertLastTriggered :: Maybe UTCTime
+  , triggerLessThan :: Bool
+  , thresholdSustainedForMins :: Int
+  , alertConfig :: MonitorAlertConfig
+  , deactivatedAt :: Maybe UTCTime
+  , deletedAt :: Maybe UTCTime
+  , evalResult :: Int
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (FromRow, ToRow, NFData, Default)
+  deriving (FromJSON, ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] QueryMonitorEvaled
+
+
 queryMonitorUpsert :: QueryMonitor -> DBT IO Int64
 queryMonitorUpsert qm =
   execute
@@ -135,6 +165,27 @@ queryMonitorUpsert qm =
 
 queryMonitorById :: QueryMonitorId -> DBT IO (Maybe QueryMonitor)
 queryMonitorById id' = selectById @QueryMonitor (Only id')
+
+
+queryMonitorsById :: V.Vector QueryMonitorId -> DBT IO (V.Vector QueryMonitorEvaled)
+queryMonitorsById ids = query Select q (Only ids)
+  where
+    q =
+      [sql|
+    SELECT id, created_at, updated_at, project_id, check_interval_mins, alert_threshold, warning_threshold, 
+        log_query, log_query_as_sql, last_evaluated, warning_last_triggered, alert_last_triggered, trigger_less_than, 
+        threshold_sustained_for_mins, alert_config, deactivated_at, deleted_at, eval(log_query_as_sql)
+      FROM monitors.query_monitors where id=ANY(?) 
+    |]
+
+
+updateQMonitorTriggeredState :: QueryMonitorId -> Bool -> DBT IO Int64
+updateQMonitorTriggeredState qmId isAlert = execute Update q (Only qmId)
+  where
+    q =
+      if isAlert
+        then [sql|UPDATE monitors.query_monitors SET alert_last_triggered=NOW() where id=?|]
+        else [sql|UPDATE monitors.query_monitors SET warning_last_triggered=NOW() where id=?|]
 
 
 monitorToggleActiveById :: QueryMonitorId -> DBT IO (Int64)

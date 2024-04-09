@@ -15,6 +15,7 @@ import Lucid.Hyperscript (__)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
+import Pkg.Parser (defPid, defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToComponents, presetRollup)
 import Relude
 import System.Types
 import Utils
@@ -28,8 +29,8 @@ data AlertUpsertForm = AlertUpsertForm
   , recipientEmails :: [Text]
   , recipientSlacks :: [Text]
   , recipientEmailAll :: Maybe Bool
-  , checkIntervalMins :: Int
-  , direction :: Text
+  , -- , checkIntervalMins :: Int
+    direction :: Text
   , title :: Text
   , severity :: Text
   , subject :: Text
@@ -45,7 +46,10 @@ data AlertUpsertForm = AlertUpsertForm
 
 convertToQueryMonitor :: Projects.ProjectId -> UTCTime -> Monitors.QueryMonitorId -> AlertUpsertForm -> Monitors.QueryMonitor
 convertToQueryMonitor projectId now queryMonitorId alertForm =
-  let warningThresholdInt = readMaybe . toString =<< alertForm.warningThreshold
+  -- FIXME: handle errors correctly, not crashing
+  let sqlQueryCfg = (defSqlQueryCfg projectId fixedUTCTime){presetRollup = Just "5m"}
+      Right (_, qc) = parseQueryToComponents sqlQueryCfg alertForm.query
+      warningThresholdInt = readMaybe . toString =<< alertForm.warningThreshold
       alertConfig =
         Monitors.MonitorAlertConfig
           { severity = alertForm.severity
@@ -61,11 +65,11 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
         , createdAt = now
         , updatedAt = now
         , projectId = projectId
-        , checkIntervalMins = alertForm.checkIntervalMins
+        , checkIntervalMins = 0 -- alertForm.checkIntervalMins
         , alertThreshold = alertForm.alertThreshold
         , warningThreshold = warningThresholdInt
         , logQuery = alertForm.query
-        , logQueryAsSql = "" -- Placeholder, replace with actual log query as SQL
+        , logQueryAsSql = fromMaybe "" qc.finalAlertQuery
         , lastEvaluated = now
         , warningLastTriggered = Nothing
         , alertLastTriggered = Nothing
@@ -126,11 +130,12 @@ editAlert_ pid monitorM = do
     , termRaw "hx-on::after-request" "this.reset()"
     , [__|on intersection(intersecting) having threshold 0.5 
               if intersecting 
+                 updateMarkAreas('reqsChartsEC',#warningThreshold.value, #alertThreshold.value)
                  set #custom_range_input's value to '24H' 
                  then set #currentRange's innerText to 'Last 24 Hours' 
                  then htmx.trigger('#log_explorer_form', 'submit')
               end
-          on htmx:afterSettle from #reqsChartsECP log me then
+          on htmx:afterSettle from #reqsChartsECP
             updateMarkAreas('reqsChartsEC',#warningThreshold.value, #alertThreshold.value)
       |]
     ]
@@ -157,7 +162,6 @@ editAlert_ pid monitorM = do
               [ class_ "select select-bordered inline-block mx-2 "
               , [__| on change log me.value then
                       if me.value=='5' set :val to '24H' else if me.value=='60' set :val to '7D' end
-                        then log :val
                        then set #custom_range_input's value to :val 
                        then set #currentRange's innerText to ('Last '+:val) 
                        then htmx.trigger('#log_explorer_form', 'submit') |]
