@@ -81,7 +81,7 @@ export class MyElement extends LitElement {
   }
 
   upadteFilters(newVal) {
-    this.filters = newVal;
+    this.filters = newVal.filter((v) => v !== "");
     const val = newVal.join(" ");
     window.queryBuilderValue = val;
     if (window.editor) {

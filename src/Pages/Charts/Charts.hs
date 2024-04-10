@@ -19,31 +19,28 @@ import Data.Time (
   utcToZonedTime,
   zonedTimeToUTC,
  )
-import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
+import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Tuple.Extra (fst3, thd3)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
-import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, query_, withPool)
+import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query)
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Database.PostgreSQL.Transact qualified as DBT
 import Effectful.PostgreSQL.Transact.Effect
-import Effectful.Reader.Static (ask, asks)
+import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Htmx
-import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Network.URI (escapeURIString, isUnescapedInURI)
-import Pages.NonMember
 import Pkg.Parser
 import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import Servant (FromHttpApiData (..))
-import System.Config
-import System.Config (DashboardM, pool)
+import System.Config (AuthContext (config))
 import System.Types
-import Utils (DBField (MkDBField), userIsProjectMember)
+import Utils (DBField (MkDBField))
 import Witch (from)
 
 

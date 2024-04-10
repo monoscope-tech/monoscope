@@ -16,10 +16,6 @@ normT :: Text -> Text
 normT = T.unwords . T.words . T.filter (`notElem` ['\n', '\r', '\t'])
 
 
-fixedUTCTime :: UTCTime
-fixedUTCTime = UTCTime (fromGregorian 2020 1 1) (secondsToDiffTime 0)
-
-
 spec :: Spec
 spec = do
   describe "parseQueryToSQL" do
