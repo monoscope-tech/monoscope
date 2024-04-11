@@ -40,7 +40,7 @@ import Network.Wai.Handler.Warp (
 import Network.Wai.Log qualified as WaiLog
 import Network.Wai.Middleware.Heartbeat (heartbeatMiddleware)
 import ProcessMessage
-import Relude hiding (ask, asks)
+import Prelude hiding (ask, asks)
 import Servant qualified
 import Servant.Server (Handler, ServerError)
 import Servant.Server.Generic (genericServeTWithContext)

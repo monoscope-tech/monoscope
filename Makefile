@@ -1,3 +1,9 @@
+# GHC_VERSION := $(shell stack ghc -- --version | awk '{print $$NF}')
+GHC_VERSION := $(shell stack ghc -- --version | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -n 1)
+ARCH := $(shell uname -m | sed 's/arm64/aarch64/')
+OS := $(shell uname -s | sed 's/Darwin/osx/')
+OS_ARCH := $(ARCH)-$(OS)
+
 css-start:
 	npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --watch
 post-css:
@@ -46,4 +52,17 @@ timescaledb-docker-tmp:
 update-service-worker:
 	workbox generateSW workbox-config.js
 
-.PHONY: all test fmt lint fix-lint lice-reload 
+show-os-arch:
+	@echo "OS and Architecture: $(OS_ARCH)"
+
+show-ghc-version:
+	@echo "GHC Version: $(GHC_VERSION)"
+
+prepare-rust-interop:
+	cd ./rust-interop/ && \
+	cargo build --release && \
+	cp ./target/release/librust_interop.a ./.stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/libCrust_interop.a && \
+	cp ./target/release/librust_interop.dylib ./.stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/libCrust_interop.dylib && \
+	cp ./target/release/librust_interop.dylib ./.stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/libCrust_interop-ghc$(GHC_VERSION).dylib 
+
+.PHONY: all test fmt lint fix-lint lice-reload prepare-rust-interop

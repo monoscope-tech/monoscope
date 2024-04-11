@@ -1,5 +1,13 @@
 tags
 .stack-work
+*/.stack-work
+*/.hie
+*/dist-newstyle
+*/target
+target
+**/target
+**/*/target
+**/*/.stack-work
 .halive
 node_modules/
 static/assets/.DS_Store

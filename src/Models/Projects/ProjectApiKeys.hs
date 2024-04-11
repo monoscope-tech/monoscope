@@ -35,7 +35,7 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact (DBT)
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
-import Relude hiding (id)
+import Prelude hiding (id)
 import Servant.API (FromHttpApiData)
 
 

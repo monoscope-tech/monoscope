@@ -43,10 +43,10 @@ import Lucid.Svg qualified as Svg
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Session
-import Relude hiding (show)
+import Prelude hiding (show)
 import Servant
 import Text.Regex.TDFA ((=~))
-import Prelude (show)
+import Text.Show 
 
 
 -- Added only for satisfying the tests

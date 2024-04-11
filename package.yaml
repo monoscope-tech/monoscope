@@ -5,6 +5,8 @@ license: BSD3
 author: 'Author name here'
 maintainer: 'example@example.com'
 copyright: '2021 Author name here'
+language: GHC2021
+spec-version: 0.36.0
 
 ghc-options:
   # For details on warnings: https://downloads.haskell.org/~ghc/master/users-guide/using-warnings.html
@@ -36,25 +38,18 @@ ghc-options:
   # - -fllvm
 
 default-extensions:
-  - BangPatterns
   - BlockArguments
   - DataKinds
   - DeriveAnyClass
-  - DeriveGeneric
   - DerivingStrategies
   - DerivingVia
   - DisambiguateRecordFields
   - ExtendedDefaultRules
   - MultiWayIf
   - FlexibleInstances
-  - ImportQualifiedPost
-  - InstanceSigs
   - LambdaCase
-  - MultiParamTypeClasses
-  - NamedFieldPuns
   - GeneralizedNewtypeDeriving 
   - FlexibleContexts
-  - NoImplicitPrelude
   - OverloadedLabels
   - OverloadedLists
   - OverloadedStrings
@@ -64,29 +59,40 @@ default-extensions:
   - StrictData
   - TypeApplications
   - TypeFamilies
-  - TypeOperators
   - GeneralizedNewtypeDeriving
   - UndecidableInstances
   - OverloadedRecordDot
   - TemplateHaskell
-  # - OverloadedRecordUpdate
-  # - RebindableSyntax
 
 extra-source-files:
   - README.md
 
-# Metadata used when publishing your package
-# synopsis:            Short description of your package
-# category:            Web
-
-# To avoid duplicated efforts in documentation and dealing with the
-# complications of embedding Haddock markup inside cabal files, it is
-# common to point users to the README.md file.
 description: Please see the README on GitHub at <https://github.com/githubuser/apitoolkit-server#readme>
 
+# extra-lib-dirs:
+#   - rust-interop/target/debug
+# extra-libraries: 
+#   - rust-interop
+
 library:
-  source-dirs: src
+  # extra-lib-dirs:
+  #   - ${pkgroot}/rust-interop/target/debug
+  extra-libraries: 
+    - Crust_interop
+  source-dirs: 
+    - src
+    # - rust-interop/src
   dependencies:
+    - name: base
+      mixin:
+        - hiding (Prelude)
+    - name: relude 
+      version: ">= 1.2.0.0"
+      mixin:
+        - (Relude as Prelude)
+        - ""
+    # - relude >= 1.2.0.0
+    - rust-interop
     - colourista
     - effectful
     - effectful-core
@@ -101,7 +107,6 @@ library:
     - aeson
     - aeson-qq
     - async
-    - base
     - bytestring
     - base64 
     - mtl
@@ -147,7 +152,6 @@ library:
     - postgresql-simple
     - random
     - regex-tdfa
-    - relude >= 1.2.0.0
     - resource-pool
     - resourcet
     - scientific
@@ -195,10 +199,11 @@ executables:
       # - -fPIC
     dependencies:
       - apitoolkit-server
-      - relude >=1.1.0.0
-    when:
-      - condition: false
-        other-modules: Paths_apitoolkit_server
+      - name: relude 
+        version: ">= 1.2.0.0"
+        mixin:
+          - (Relude as Prelude)
+          - ""
 
 tests:
   doctests:
@@ -227,4 +232,8 @@ tests:
       - hspec
       - hspec-discover
       - doctest-parallel
-      - relude >= 1.1.0.0
+      - name: relude 
+        version: ">= 1.2.0.0"
+        mixin:
+          - (Relude as Prelude)
+      # - relude >= 1.2.0.0

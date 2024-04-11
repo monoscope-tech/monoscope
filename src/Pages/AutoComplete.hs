@@ -10,7 +10,7 @@ import Models.Apis.Fields.Query (autoCompleteFields)
 import Models.Apis.RequestDumps (autoCompleteFromRequestDumps)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Relude hiding (ask, asks)
+import Prelude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import System.Config
 import System.Types

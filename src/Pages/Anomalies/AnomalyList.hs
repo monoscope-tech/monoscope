@@ -58,7 +58,7 @@ import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
 import Pages.NonMember
 import Pkg.Components (loader)
 import PyF
-import Relude hiding (ask, asks)
+import Prelude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
