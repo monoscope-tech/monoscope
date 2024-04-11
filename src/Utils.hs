@@ -136,14 +136,6 @@ getMethodBgColor "PATCH" = "bg-purple-500"
 getMethodBgColor _ = "bg-blue-500"
 
 
--- getMethodColor :: Text -> Text
--- getMethodColor "POST" = " text-green-950 bg-green-50 border border-green-200 "
--- getMethodColor "PUT" = " text-orange-950 bg-orange-50 border border-orange-200 "
--- getMethodColor "DELETE" = " text-red-950 bg-red-50 border border-red-200 "
--- getMethodColor "PATCH" = " text-purple-950 bg-purple-50 border border-purple-200 "
--- getMethodColor "GET" = " text-blue-950 bg-blue-50 border border-blue-200 "
--- getMethodColor _ = " text-blue-950 bg-blue-50 border border-blue-200 "
-
 getMethodColor :: Text -> Text
 getMethodColor "POST" = " badge badge-warning "
 getMethodColor "PUT" = " badge badge-info "

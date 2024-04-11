@@ -19,6 +19,7 @@ import Lucid (Html)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Types qualified as Fields (FieldId)
+import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.Reports qualified as ReportsM
 import Models.Apis.Testing qualified as TestingM
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
@@ -174,18 +175,20 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , chartsGet :: mode :- "charts_html" :> QP "chart_type" Charts.ChartType :> QPT "query_raw" :> QueryParam "pid" Projects.ProjectId :> QP "group_by" Charts.GroupBy :> QP "query_by" [Charts.QueryBy] :> QP "num_slots" Int :> QP "limit" Int :> QP "theme" Text :> QPT "id" :> QP "show_legend" Bool :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (Html ())
   , surveyPut :: mode :- "p" :> ProjectId :> "survey" :> ReqBody '[FormUrlEncoded] Survey.SurveyForm :> Post '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
   , surveyGet :: mode :- "p" :> ProjectId :> "about_project" :> Get '[HTML] (Html ())
-  , collectionsGet :: mode :- "p" :> ProjectId :> "testing" :> Get '[HTML] (Html ())
-  , newCollectionPost :: mode :- "p" :> ProjectId :> "testing" :> ReqBody '[FormUrlEncoded] Testing.TestCollectionForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-  , collectionGet :: mode :- "p" :> ProjectId :> "testing" :> Capture "collection_id" TestingM.CollectionId :> Get '[HTML] (Html ())
-  , collectionPut :: mode :- "p" :> ProjectId :> "testing" :> Capture "collection_id" TestingM.CollectionId :> Capture "action" Text :> ReqBody '[JSON] AE.Value :> Post '[HTML] (Html ())
-  , collectionStepPost :: mode :- "p" :> ProjectId :> "testing" :> "add_step" :> Capture "collection_id" TestingM.CollectionId :> ReqBody '[JSON] AE.Value :> Post '[HTML] (Html ())
-  , collectionStepPut :: mode :- "p" :> ProjectId :> "testing" :> "step" :> Capture "step_id" TestingM.CollectionStepId :> ReqBody '[JSON] AE.Value :> Post '[HTML] (Html ())
-  , saveFromCodePost :: mode :- "p" :> ProjectId :> "testing" :> "save_from_code" :> Capture "collection_id" TestingM.CollectionId :> ReqBody '[JSON] Testing.CodeOperationsForm :> Post '[HTML] (Html ())
-  , deleteCollectionStep :: mode :- "p" :> ProjectId :> "testing" :> "step" :> Capture "step_id" TestingM.CollectionStepId :> Delete '[HTML] (Html ())
   , editField :: mode :- "p" :> ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> ReqBody '[FormUrlEncoded] FieldDetails.EditFieldForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
   , alertUpsertPost :: mode :- "p" :> ProjectId :> "alerts" :> ReqBody '[FormUrlEncoded] Alerts.AlertUpsertForm :> Post '[HTML] (Html ())
   , alertListGet :: mode :- "p" :> ProjectId :> "alerts" :> Get '[HTML] (Html ())
-  }
+  , alertSingleGet :: mode :- "p" :> ProjectId :> "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> Get '[HTML] (Html ())
+  , alertSingleToggleActive :: mode :- "p" :> ProjectId :> "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "toggle_active" :> Post '[HTML] (Html ())
+  , collectionsGet :: mode :- "p" :> ProjectId :> "testing" :> Get '[HTML] (Html ()),
+    newCollectionPost :: mode :- "p" :> ProjectId :> "testing" :> ReqBody '[FormUrlEncoded] Testing.TestCollectionForm :> Post '[HTML] (Headers '[HXTrigger] (Html ())),
+    collectionGet :: mode :- "p" :> ProjectId :> "testing" :> Capture "collection_id" TestingM.CollectionId :> Get '[HTML] (Html ()),
+    collectionPut :: mode :- "p" :> ProjectId :> "testing" :> Capture "collection_id" TestingM.CollectionId :> Capture "action" Text :> ReqBody '[JSON] AE.Value :> Post '[HTML] (Html ()),
+    collectionStepPost :: mode :- "p" :> ProjectId :> "testing" :> "add_step" :> Capture "collection_id" TestingM.CollectionId :> ReqBody '[JSON] AE.Value :> Post '[HTML] (Html ()),
+    collectionStepPut :: mode :- "p" :> ProjectId :> "testing" :> "step" :> Capture "step_id" TestingM.CollectionStepId :> ReqBody '[JSON] AE.Value :> Post '[HTML] (Html ()),
+    saveFromCodePost :: mode :- "p" :> ProjectId :> "testing" :> "save_from_code" :> Capture "collection_id" TestingM.CollectionId :> ReqBody '[JSON] Testing.CodeOperationsForm :> Post '[HTML] (Html ())
+    , deleteCollectionStep = Testing.deleteStepH
+    }
   deriving stock (Generic)
 
 
@@ -243,18 +246,22 @@ cookieProtectedServer =
     , chartsGet = Charts.chartsGetH
     , surveyPut = Survey.surveyPutH
     , surveyGet = Survey.surveyGetH
-    , collectionsGet = Testing.testingGetH
-    , newCollectionPost = Testing.testingPostH
-    , collectionGet = Testing.collectionGetH
-    , collectionPut = Testing.testingPutH
-    , collectionStepPost = Testing.collectionStepPostH
-    , collectionStepPut = Testing.collectionStepPutH
-    , saveFromCodePost = Testing.saveStepsFromCodePostH
-    , deleteCollectionStep = Testing.deleteStepH
     , editField = FieldDetails.fieldPutH
     , alertUpsertPost = Alerts.alertUpsertPostH
     , alertListGet = Alerts.alertListGetH
+    , alertSingleGet = Alerts.alertSingleGetH
+    , alertSingleToggleActive = Alerts.alertSingleToggleActiveH
+    , collectionsGet = Testing.testingGetH,
+      newCollectionPost = Testing.testingPostH,
+      collectionGet = Testing.collectionGetH,
+      collectionPut = Testing.testingPutH,
+      collectionStepPost = Testing.collectionStepPostH,
+      collectionStepPut = Testing.collectionStepPutH,
+      saveFromCodePost = Testing.saveStepsFromCodePostH,
+      deleteCollectionStep = Testing.deleteStepH
+     
     }
+
 
 
 -- | The context that will be made available to request handlers. We supply the

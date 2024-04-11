@@ -1,13 +1,13 @@
 -- Parser implemented with help and code from: https://markkarpov.com/tutorial/megaparsec.html
-module Pkg.Parser (parseQueryStringToWhereClause, parseQueryToComponents, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, SqlQueryCfg (..), QueryComponents (..), listToColNames) where
+module Pkg.Parser (parseQueryStringToWhereClause, parseQueryToComponents, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, SqlQueryCfg (..), QueryComponents (..), listToColNames) where
 
 import Control.Error (hush)
 import Data.Default (Default (def))
 import Data.Text qualified as T
 import Data.Text.Display (display)
-import Data.Time.Clock (UTCTime, diffUTCTime, nominalDiffTimeToSeconds)
+import Data.Time.Calendar (fromGregorian)
+import Data.Time.Clock (UTCTime (..), diffUTCTime, nominalDiffTimeToSeconds, secondsToDiffTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
-import Data.Tuple.Extra (both)
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
 import Pkg.Parser.Expr
@@ -47,6 +47,7 @@ data QueryComponents = QueryComponents
     countQuery :: Text
   , -- final generated sql query
     finalSqlQuery :: Text
+  , finalAlertQuery :: Maybe Text
   , rollup :: Maybe Text
   , finalTimechartQuery :: Maybe Text
   }
@@ -79,6 +80,7 @@ applyRollupToQC (Just (Rollup ru)) qc = qc{rollup = Just ru}
 
 data SqlQueryCfg = SqlQueryCfg
   { pid :: Projects.ProjectId
+  , presetRollup :: Maybe Text
   , dateRange :: (Maybe UTCTime, Maybe UTCTime)
   , cursorM :: Maybe UTCTime
   , projectedColsByUser :: [Text] -- cols selected explicitly by user
@@ -127,9 +129,10 @@ sqlFromQueryComponents sqlCfg qc =
       | timeDiffSecs <= (60 * 60 * 24 * 3) = "5m"
       | otherwise = "1h"
 
-    timeRollup = fromMaybe defRollup qc.rollup
+    timeRollup = fromMaybe defRollup (sqlCfg.presetRollup <|> qc.rollup)
 
     timebucket = [fmt|extract(epoch from time_bucket('{timeRollup}', created_at))::integer as timeB, |]
+    -- FIXME: render this based on the aggregations
     chartSelect = [fmt| count(*)::integer as count|]
     timeGroupByClause = " GROUP BY " <> T.intercalate "," ("timeB" : qc.groupByClause)
     timeChartQuery =
@@ -139,6 +142,17 @@ sqlFromQueryComponents sqlCfg qc =
             {cursorT} {dateRangeStr} {whereClause}
             {timeGroupByClause}
       |]
+
+    -- FIXME: render this based on the aggregations, but without the aliases
+    alertSelect = [fmt| count(*)::integer|]
+    alertGroupByClause = if (null qc.groupByClause) then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause
+    -- Returns the max of all the values returned by the query. Change 5mins to
+    alertQuery =
+      [fmt|
+        SELECT GREATEST({alertSelect}) FROM apis.request_dumps
+            WHERE project_id='{sqlCfg.pid.toText}'::uuid  and created_at > NOW() - interval '{timeRollup}'
+            {whereClause} {alertGroupByClause}
+      |]
    in
     ( finalSqlQuery
     , qc
@@ -146,6 +160,7 @@ sqlFromQueryComponents sqlCfg qc =
         , countQuery
         , finalSqlQuery
         , finalTimechartQuery = Just timeChartQuery
+        , finalAlertQuery = Just alertQuery
         }
     )
 
@@ -199,25 +214,25 @@ parseQueryStringToWhereClause q =
 -- Convert Query as string to a string capable of being
 -- used in the where clause of an sql statement
 ----------------------------------------------------------------------------------
--- >>> parseQueryToComponents (defSqlQueryCfg defPid) "request_body.message!=\"blabla\" AND method==\"GET\""
+-- >>> parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime) "request_body.message!=\"blabla\" AND method==\"GET\""
 -- Right "SELECT id,created_at,host,status_code,LEFT(\n        CONCAT(\n            'request_body=', COALESCE(request_body, 'null'), \n            ' response_body=', COALESCE(response_body, 'null')\n        ),\n        255\n    ) AS rest FROM apis.request_dumps \n          WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid  and created_at > NOW() - interval '14 days'    AND request_body->>'message'!='blabla' AND method=='GET'\n           ORDER BY created_at desc limit 200"
 --
--- >>> parseQueryToComponents (defSqlQueryCfg defPid) "request_body.message!=\"blabla\" AND method==\"GET\""
+-- >>> parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime) "request_body.message!=\"blabla\" AND method==\"GET\""
 -- Right "SELECT id,created_at,host,status_code,LEFT(\n        CONCAT(\n            'request_body=', COALESCE(request_body, 'null'), \n            ' response_body=', COALESCE(response_body, 'null')\n        ),\n        255\n    ) AS rest FROM apis.request_dumps \n          WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid  and created_at > NOW() - interval '14 days'    AND request_body->>'message'!='blabla' AND method=='GET'\n           ORDER BY created_at desc limit 200"
 --
--- >>> parseQueryToComponents (defSqlQueryCfg defPid) "request_body.message.tags[*].name!=\"blabla\" AND method==\"GET\""
+-- >>> parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime) "request_body.message.tags[*].name!=\"blabla\" AND method==\"GET\""
 -- Right "SELECT id,created_at,host,status_code,LEFT(\n        CONCAT(\n            'request_body=', COALESCE(request_body, 'null'), \n            ' response_body=', COALESCE(response_body, 'null')\n        ),\n        255\n    ) AS rest FROM apis.request_dumps \n          WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid  and created_at > NOW() - interval '14 days'    AND jsonb_path_exists(request_body, '$.\"message\"[*].\"name\" ?? (@ != \"blabla\")') AND method=='GET'\n           ORDER BY created_at desc limit 200"
 --
--- >>> parseQueryToComponents (defSqlQueryCfg defPid) "errors[*].error_type==\"Exception\""
+-- >>> parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime) "errors[*].error_type==\"Exception\""
 -- Right "SELECT id,created_at,host,status_code,LEFT(\n        CONCAT(\n            'request_body=', COALESCE(request_body, 'null'), \n            ' response_body=', COALESCE(response_body, 'null')\n        ),\n        255\n    ) AS rest FROM apis.request_dumps \n          WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid  and created_at > NOW() - interval '14 days'    AND jsonb_path_exists(errors, '$[*].\"error_type\" ?? (@ == \"Exception\")')\n           ORDER BY created_at desc limit 200"
 --
--- >>> parseQueryToComponents (defSqlQueryCfg defPid) "errors==[]"
+-- >>> parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime) "errors==[]"
 -- Right "SELECT id,created_at,host,status_code,LEFT(\n        CONCAT(\n            'request_body=', COALESCE(request_body, 'null'), \n            ' response_body=', COALESCE(response_body, 'null')\n        ),\n        255\n    ) AS rest FROM apis.request_dumps \n          WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid  and created_at > NOW() - interval '14 days'    AND errors==ARRAY[]\n           ORDER BY created_at desc limit 200"
 --
--- >>> parseQueryToComponents (defSqlQueryCfg defPid) "errors[*].error_type==[]" -- works with empty array but not otherwise. Right "jsonb_path_exists(errors, '$[*].\"error_type\" ?? (@ == {} )')"
+-- >>> parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime) "errors[*].error_type==[]" -- works with empty array but not otherwise. Right "jsonb_path_exists(errors, '$[*].\"error_type\" ?? (@ == {} )')"
 -- Right "SELECT id,created_at,host,status_code,LEFT(\n        CONCAT(\n            'request_body=', COALESCE(request_body, 'null'), \n            ' response_body=', COALESCE(response_body, 'null')\n        ),\n        255\n    ) AS rest FROM apis.request_dumps \n          WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid  and created_at > NOW() - interval '14 days'    AND jsonb_path_exists(errors, '$[*].\"error_type\" ?? (@ == {} )')\n           ORDER BY created_at desc limit 200"
 --
--- >>> parseQueryToComponents (defSqlQueryCfg defPid) "errors[*].error_type=~/^ab.*c/"
+-- >>> parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime) "errors[*].error_type=~/^ab.*c/"
 -- Right "SELECT id,created_at,host,status_code,LEFT(\n        CONCAT(\n            'request_body=', COALESCE(request_body, 'null'), \n            ' response_body=', COALESCE(response_body, 'null')\n        ),\n        255\n    ) AS rest FROM apis.request_dumps \n          WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid  and created_at > NOW() - interval '14 days'    AND jsonb_path_exists(errors, '$[*].\"error_type\" ?? (@ like_regex \"^ab.*c\")')\n           ORDER BY created_at desc limit 200"
 --
 parseQueryToComponents :: SqlQueryCfg -> Text -> Either Text (Text, QueryComponents)
@@ -232,10 +247,16 @@ defPid :: Projects.ProjectId
 defPid = def :: Projects.ProjectId
 
 
+-- Only for tests. and harrd coding
+fixedUTCTime :: UTCTime
+fixedUTCTime = UTCTime (fromGregorian 2020 1 1) (secondsToDiffTime 0)
+
+
 defSqlQueryCfg :: Projects.ProjectId -> UTCTime -> SqlQueryCfg
 defSqlQueryCfg pid currentTime =
   SqlQueryCfg
     { pid = pid
+    , presetRollup = Nothing
     , cursorM = Nothing
     , dateRange = (Nothing, Nothing)
     , projectedColsByUser = []
