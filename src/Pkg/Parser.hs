@@ -120,12 +120,11 @@ sqlFromQueryComponents sqlCfg qc =
             {cursorT} {dateRangeStr} {whereClause}
             {groupByClause} limit 1|]
 
-
     defRollup
-      | timeDiffSecs <= (60*30) = "1s"
-      | timeDiffSecs <= (60*60) = "20s"
-      | timeDiffSecs <= (60*60*6) = "1m"
-      | timeDiffSecs <= (60*60*24*3) = "5m"
+      | timeDiffSecs <= (60 * 30) = "1s"
+      | timeDiffSecs <= (60 * 60) = "20s"
+      | timeDiffSecs <= (60 * 60 * 6) = "1m"
+      | timeDiffSecs <= (60 * 60 * 24 * 3) = "5m"
       | otherwise = "1h"
 
     timeRollup = fromMaybe defRollup qc.rollup
