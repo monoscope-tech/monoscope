@@ -11,9 +11,11 @@ import Colog (LogAction, (<&))
 import Control.Lens ((.~), (^.))
 import Data.Aeson as Aeson
 import Data.CaseInsensitive qualified as CI
+import Data.List (unfoldr)
 import Data.List.Extra (intersect, union)
 import Data.Pool (Pool, withResource)
 import Data.Text qualified as T
+import Data.Time
 import Data.Time (UTCTime (utctDay), ZonedTime, getCurrentTime, getZonedTime)
 import Data.Time.Calendar
 import Data.UUID.V4 qualified as UUIDV4
@@ -23,6 +25,8 @@ import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, qu
 import Database.PostgreSQL.Simple (Connection, Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ
 import Database.PostgreSQL.Transact (DBT)
+import Foreign.C.String
+import Foreign.C.Types
 import GHC.Generics
 import Log qualified
 import Lucid
@@ -35,6 +39,7 @@ import Models.Apis.Reports qualified as Reports
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Apis.Slack
+import Models.Apis.Testing qualified as Testing
 import Models.Projects.Projects qualified as Projects
 import Models.Projects.Swaggers qualified as Swaggers
 import Models.Users.Users qualified as Users
@@ -60,6 +65,8 @@ data BgJobs
   | DailyJob
   | GenSwagger Projects.ProjectId Users.UserId
   | ReportUsage Projects.ProjectId
+  | ScheduleForCollection Testing.CollectionId
+  | RunCollectionTests Testing.CollectionId
   deriving stock (Eq, Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
 
@@ -294,6 +301,11 @@ jobsRunner dbPool logger cfg job = do
             if dayOfWeek currentDay == Monday
               then createJob conn "background_jobs" $ BackgroundJobs.WeeklyReports p
               else createJob conn "background_jobs" $ BackgroundJobs.DailyReports p
+        collections <- withPool dbPool Testing.getCollectionsId
+        forM_ collections \col -> do
+          liftIO $ withResource dbPool \conn -> do
+            createJob conn "background_jobs" $ BackgroundJobs.ScheduleForCollection col
+
         pass
       DailyReports pid -> do
         dailyReportForProject dbPool cfg pid
@@ -344,6 +356,62 @@ jobsRunner dbPool logger cfg job = do
                       pass
               else pass
         pass
+      ScheduleForCollection col_id -> do
+        collectionM <- withPool dbPool $ Testing.getCollectionById col_id
+        case collectionM of
+          Nothing -> pass
+          Just collection -> do
+            let scheduleM = collection.schedule
+            case scheduleM of
+              Nothing -> pass
+              Just schedule -> do
+                currentTime <- getCurrentTime
+                let intervals = scheduleIntervals currentTime schedule
+                let contents = Aeson.Array [show col_id.collectionId]
+                let tagValue = Aeson.String ("RunCollectionTests")
+                let dbParams = (\x -> (x, "queued" :: Text, Aeson.object ["tag" .= tagValue, "contents" .= contents])) <$> intervals
+                _ <- withPool dbPool $ Testing.scheduleInsertScheduleInBackgroundJobs dbParams
+                pass
+            pass
+        pass
+      RunCollectionTests col_id -> do
+        (collectionM, steps) <- withPool dbPool $ do
+          colM <- Testing.getCollectionById col_id
+          steps <- Testing.getCollectionSteps col_id
+          pure (colM, steps)
+        case collectionM of
+          Nothing -> pass
+          Just collection -> do
+            let steps_data = (\x -> x.stepData) <$> steps
+            let col_json = (decodeUtf8 $ Aeson.encode steps_data :: String)
+            v <- liftIO $ withCString col_json $ \c_str -> do
+              let res = haskellBinding c_str
+              pure res
+            pass
+
+
+foreign import ccall unsafe "haskell_binding" haskellBinding :: CString -> Any
+
+
+scheduleIntervals :: UTCTime -> Text -> [UTCTime]
+scheduleIntervals startTime schedule = unfoldr nextInterval startTime
+  where
+    getScheduleSec :: Text -> NominalDiffTime
+    getScheduleSec sched = case sched of
+      "*/5 * * * *" -> 5 * 60
+      "*/10 * * * *" -> 10 * 60
+      "*/15 * * * *" -> 15 * 60
+      "*/30 * * * *" -> 30 * 60
+      "0 * * * *" -> 60 * 60
+      _ -> 24 * 60 * 60
+
+    nextInterval :: UTCTime -> Maybe (UTCTime, UTCTime)
+    nextInterval currentTime =
+      let nextTime = addUTCTime (getScheduleSec schedule) currentTime
+       in if nextTime > endTime
+            then Nothing
+            else Just (currentTime, nextTime)
+    endTime = addUTCTime (24 * 60 * 60) startTime
 
 
 reportUsage :: Text -> Int -> Text -> IO ()

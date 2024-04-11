@@ -9,46 +9,44 @@ module Pages.Testing (
   saveStepsFromCodePostH,
   deleteStepH,
   CodeOperationsForm (..),
-) where
+)
+where
 
 import Control.Exception
-import Data.Default (def)
-import Foreign.C.String
-import Foreign.C.Types
-import NeatInterpolation (text)
-import System.Config
-import System.IO.Error
-import System.Types
-
-import Lucid
-import Lucid.Hyperscript
-import Models.Projects.Projects qualified as Projects
-import Models.Users.Sessions qualified as Sessions
-import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Relude hiding (ask, asks)
-
 import Data.Aeson
-import Data.Aeson.QQ (aesonQQ)
-import Database.PostgreSQL.Entity.DBT (withPool)
-import Pages.NonMember
-import Servant (Headers, addHeader)
-import Servant.Htmx (HXTrigger)
-import Utils
-
 import Data.Aeson qualified as AE
 import Data.Aeson qualified as Aeson
+import Data.Aeson.QQ (aesonQQ)
+import Data.Default (def)
 import Data.Text qualified as T
 import Data.Time (getZonedTime)
 import Data.Time.LocalTime (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
+import Database.PostgreSQL.Entity.DBT (withPool)
 import Effectful.PostgreSQL.Transact.Effect
 import Effectful.Reader.Static (ask, asks)
+import Foreign.C.String
+import Foreign.C.Types
+import Lucid
 import Lucid.Base
 import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_)
+import Lucid.Hyperscript
 import Models.Apis.Testing qualified as Testing
+import Models.Projects.Projects qualified as Projects
+import Models.Users.Sessions qualified as Sessions
+import NeatInterpolation (text)
+import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pages.NonMember
+import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
+import Servant (Headers, addHeader)
+import Servant.Htmx (HXTrigger)
+import System.Config
+import System.IO.Error
+import System.Types
+import Utils
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -322,7 +320,7 @@ collectionStepPutH pid csid value = do
 
 
 -- Import the foreign function from the Rust library
-foreign import ccall unsafe "haskell_binding" haskellBinding :: Int
+foreign import ccall unsafe "haskell_binding" haskellBinding :: CString -> Any
 
 
 collectionGetH :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (Html ())
@@ -342,10 +340,8 @@ collectionGetH pid col_id = do
       --   Just c -> do
       --     let col_json = decodeUtf8 $ encode c
       --     v <- liftIO $ withCString col_json $ \c_str -> do
-      --       traceShowM c_str
-      --       -- let bs = haskellBinding
-      --       -- traceShowM bs
-      --       pure ""
+      --       let bs = haskellBinding c_str
+      --       pure bs
       --     pure ("" :: String)
       --   Nothing -> do
       --     pure ""

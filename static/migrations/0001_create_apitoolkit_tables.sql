@@ -874,6 +874,7 @@ CREATE TABLE IF NOT EXISTS apis.testing
   id                 UUID        NOT     NULL   DEFAULT        gen_random_uuid() PRIMARY KEY, 
   created_at         TIMESTAMP   WITH    TIME   ZONE       NOT               NULL              DEFAULT current_timestamp,
   updated_at         TIMESTAMP   WITH    TIME   ZONE       NOT               NULL              DEFAULT current_timestamp,
+  deleted_at         TIMESTAMP WITH TIME ZONE DEFAULT NULL,
   project_id         UUID        NOT     NULL   REFERENCES projects.projects (id)              ON      DELETE CASCADE,
   last_run           TIMESTAMP   WITH    TIME   ZONE       DEFAULT NULL,
   title              TEXT        NOT     NULL   DEFAULT        '',
