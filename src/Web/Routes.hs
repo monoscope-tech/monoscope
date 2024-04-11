@@ -188,6 +188,8 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , collectionStepPut :: mode :- "p" :> ProjectId :> "testing" :> "step" :> Capture "step_id" TestingM.CollectionStepId :> ReqBody '[JSON] AE.Value :> Post '[HTML] (Html ())
   , saveFromCodePost :: mode :- "p" :> ProjectId :> "testing" :> "save_from_code" :> Capture "collection_id" TestingM.CollectionId :> ReqBody '[JSON] Testing.CodeOperationsForm :> Post '[HTML] (Html ())
   , deleteCollectionStep :: mode :- "p" :> ProjectId :> "testing" :> "step" :> Capture "step_id" TestingM.CollectionStepId :> Delete '[HTML] (Html ())
+  , runTestCollection :: mode :- "p" :> ProjectId :> "testing" :> "run" :> Capture "collection_id" TestingM.CollectionId :> Post '[HTML] (Html ())
+  , runTestCollectionStep :: mode :- "p" :> ProjectId :> "testing" :> "run" :> Capture "collection_id" TestingM.CollectionId :> Capture "step_id" TestingM.CollectionStepId :> Post '[HTML] (Html ())
   }
   deriving stock (Generic)
 
@@ -259,6 +261,8 @@ cookieProtectedServer =
     , collectionStepPut = Testing.collectionStepPutH
     , saveFromCodePost = Testing.saveStepsFromCodePostH
     , deleteCollectionStep = Testing.deleteStepH
+    , runTestCollection = Testing.runTestCollectionH
+    , runTestCollectionStep = Testing.runTestStepH
     }
 
 

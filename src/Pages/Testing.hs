@@ -9,6 +9,8 @@ module Pages.Testing (
   saveStepsFromCodePostH,
   deleteStepH,
   CodeOperationsForm (..),
+  runTestCollectionH,
+  runTestStepH,
 )
 where
 
@@ -336,15 +338,6 @@ collectionGetH pid col_id = do
       collection <- dbtToEff $ Testing.getCollectionById col_id
       project <- dbtToEff $ Projects.selectProjectForUser (Sessions.userId sess, pid)
       collection_steps <- dbtToEff $ Testing.getCollectionSteps col_id
-      -- _ <- case collection of
-      --   Just c -> do
-      --     let col_json = decodeUtf8 $ encode c
-      --     v <- liftIO $ withCString col_json $ \c_str -> do
-      --       let bs = haskellBinding c_str
-      --       pure bs
-      --     pure ("" :: String)
-      --   Nothing -> do
-      --     pure ""
       let bwconf =
             (def :: BWConfig)
               { sessM = Just sess
@@ -440,19 +433,32 @@ deleteStepH pid step_id = do
       _ <- dbtToEff $ Testing.deleteCollectionStep step_id
       pure ""
 
--- runTestH :: Sessions.PersistentSession -> Projects.ProjectId -> Testing.CollectionId -> DashboardM (Html ())
--- runTestH sess pid col_id = do
---   pool <- asks pool
---   collection <- withPool pool $ Testing.getCollectionById col_id
---   _ <- case collection of
---     Just c -> do
---       let col_json = decodeUtf8 $ encode c
---       v <- liftIO $ withCString col_json $ \c_str -> do
---         traceShowM c_str
---         bs <- haskellBinding c_str
---         traceShowM bs
---         pure bs
---       pure ("" :: String)
---     Nothing -> do
---       pure ""
---   pure $ div_ [] "s"
+
+runTestCollectionH :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (Html ())
+runTestCollectionH pid col_id = do
+  collection <- dbtToEff $ Testing.getCollectionById col_id
+  _ <- case collection of
+    Just c -> do
+      let col_json = decodeUtf8 $ encode c
+      v <- liftIO $ withCString col_json $ \c_str -> do
+        let v = haskellBinding c_str
+        pure v
+      pure ("" :: String)
+    Nothing -> do
+      pure ""
+  pure ""
+
+
+runTestStepH :: Projects.ProjectId -> Testing.CollectionId -> Testing.CollectionStepId -> ATAuthCtx (Html ())
+runTestStepH pid col_id step_id = do
+  collection_step <- dbtToEff $ Testing.getCollectionStepById col_id step_id
+  _ <- case collection_step of
+    Just c -> do
+      let col_json = decodeUtf8 $ encode c
+      v <- liftIO $ withCString col_json $ \c_str -> do
+        let v = haskellBinding c_str
+        pure v
+      pure ("" :: String)
+    Nothing -> do
+      pure ""
+  pure ""

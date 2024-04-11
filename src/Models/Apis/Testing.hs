@@ -20,6 +20,7 @@ module Models.Apis.Testing (
   deleteCollectionStep,
   updateSchedule,
   getCollectionsId,
+  getCollectionStepById,
 )
 where
 
@@ -32,7 +33,7 @@ import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (insert, selectById)
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query)
+import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, queryOne)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple hiding (execute, executeMany, query)
 import Database.PostgreSQL.Simple.FromField
@@ -231,6 +232,12 @@ updateSchedule cid schedule isScheduled = do
   let q =
         [sql| UPDATE apis.testing SET schedule=?, is_scheduled=? WHERE id=? |]
   execute Update q (schedule, isScheduled, cid)
+
+
+getCollectionStepById :: CollectionId -> CollectionStepId -> DBT IO (Maybe CollectionStep)
+getCollectionStepById col_id step_id = queryOne Select q (col_id, step_id)
+  where
+    q = [sql|SELECT * FROM apis.test_step where collection_id = ? AND id = ? |]
 
 
 scheduleInsertScheduleInBackgroundJobs :: [(UTCTime, Text, AE.Value)] -> DBT IO Int64
