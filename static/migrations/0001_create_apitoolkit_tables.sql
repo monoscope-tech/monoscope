@@ -821,7 +821,6 @@ CREATE TABLE IF NOT EXISTS projects.redacted_fields
     updated_at     TIMESTAMP WITH       TIME           ZONE       NOT               NULL              DEFAULT current_timestamp,
     deleted_at     TIMESTAMP WITH       TIME           ZONE,
     deactivated_at TIMESTAMP WITH       TIME           ZONE,
-    deleted_at     TIMESTAMP WITH       TIME           ZONE,
     -- path is a key path for field path to the field that should be redacted. eg .data.message (Note the trailing dot)
     path           TEXT      NOT        NULL           DEFAULT    '',
     -- configured_via represents where the source of the redacted_fields listing. Eg via the dashboard
@@ -951,7 +950,7 @@ begin
   return result;
 end;
 $body$
-language plpgsql
+language plpgsql;
 
 
 -- Checks for query monitors being triggered and creates a background job for any found
