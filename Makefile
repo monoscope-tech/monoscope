@@ -1,5 +1,6 @@
 # GHC_VERSION := $(shell stack ghc -- --version | awk '{print $$NF}')
-GHC_VERSION := $(shell stack ghc -- --version | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -n 1)
+# GHC_VERSION := $(shell stack ghc -- --version | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -n 1)
+GHC_VERSION := '9.8.1'
 ARCH := $(shell uname -m | sed 's/arm64/aarch64/')
 OS := $(shell uname -s | sed 's/Darwin/osx/')
 OS_ARCH := $(ARCH)-$(OS)
@@ -61,6 +62,7 @@ show-ghc-version:
 prepare-rust-interop:
 	cd ./rust-interop/ && \
 	cargo build --release && \
+	mkdir -p ../.stack-work/dist/$(OS_ARCH)/ghc-(GHC_VERSION)/build/ && \
 	cp ./target/release/librust_interop.a ./.stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/libCrust_interop.a && \
 	cp ./target/release/librust_interop.dylib ./.stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/libCrust_interop.dylib && \
 	cp ./target/release/librust_interop.dylib ./.stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/libCrust_interop-ghc$(GHC_VERSION).dylib 
