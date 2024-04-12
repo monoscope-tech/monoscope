@@ -14,10 +14,10 @@ import Pkg.Parser.Expr
 import Pkg.Parser.Stats
 import Pkg.Parser.Types
 import PyF
-import Prelude hiding (GT, LT, many, some)
 import Relude.Unsafe qualified as Unsafe
 import Text.Megaparsec hiding (State)
 import Text.Megaparsec.Char
+import Prelude hiding (GT, LT, many, some)
 
 
 -- Example queries

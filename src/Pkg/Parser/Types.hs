@@ -4,10 +4,10 @@ import Control.Monad.Combinators.Expr
 import Data.Foldable (foldl)
 import Data.Text.Display (Display, display, displayBuilder, displayParen, displayPrec)
 import Data.Text.Lazy.Builder (Builder)
-import Prelude hiding (GT, LT, many, some)
 import Text.Megaparsec hiding (State)
 import Text.Megaparsec.Char
 import Text.Megaparsec.Char.Lexer qualified as L
+import Prelude hiding (GT, LT, many, some)
 
 
 -- Example queries

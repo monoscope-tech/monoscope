@@ -22,8 +22,8 @@ renderError
 renderError env status = do
   -- let templateEnv = env & (#title .~ "Talstack :: *** Exception")
   -- let body = mkErrorPage templateEnv $ showError status
-  throwError
-    $ ServerError
+  throwError $
+    ServerError
       { errHTTPCode = statusCode status
       , errBody = "error page: " <> show @LByteString status
       , errReasonPhrase = ""

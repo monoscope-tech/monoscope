@@ -10,7 +10,7 @@ import Data.Text.Lazy qualified as Lazy (Text)
 import Data.Text.Lazy qualified as Lazy.Text (empty)
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
-import Data.Vector qualified as V 
+import Data.Vector qualified as V
 import Relude.Unsafe qualified as Unsafe
 
 

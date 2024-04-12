@@ -33,13 +33,13 @@ import Gogol.PubSub qualified as PubSub
 import Log qualified
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
-import Prelude hiding (ask, asks, hoistMaybe)
 import RequestMessages qualified
 import System.Clock
 import System.Config qualified as Config
 import System.Types (ATBackgroundCtx)
 import Text.Pretty.Simple (pShow)
 import Utils (DBField, eitherStrToText)
+import Prelude hiding (ask, asks, hoistMaybe)
 
 
 {--
@@ -142,17 +142,17 @@ processMessages' _ msgs projectCache' = do
   afterProccessing <- liftIO $ getTime Monotonic
   when (null reqDumps) $ Log.logAttention_ "Empty params/query for processMessages for request dumps; "
   resp <- runExceptT do
-    unless (null params')
-      $ handleExceptT (wrapTxtException $ toStrict $ "execute query " <> show query')
-      $ void
-      $ dbtToEff
-      $ execute query' params'
-    unless (null reqDumps)
-      $ handleExceptT (wrapTxtException $ toStrict $ "bulkInsertReqDump => " <> show reqDumps <> show msgs)
-      $ void
-      $ dbtToEff
-      $ RequestDumps.bulkInsertRequestDumps
-      $ catMaybes reqDumps
+    unless (null params') $
+      handleExceptT (wrapTxtException $ toStrict $ "execute query " <> show query') $
+        void $
+          dbtToEff $
+            execute query' params'
+    unless (null reqDumps) $
+      handleExceptT (wrapTxtException $ toStrict $ "bulkInsertReqDump => " <> show reqDumps <> show msgs) $
+        void $
+          dbtToEff $
+            RequestDumps.bulkInsertRequestDumps $
+              catMaybes reqDumps
 
   endTime <- liftIO $ getTime Monotonic
   let msg = fmtLn @String $ "Process Message (" +| length msgs |+ ") pipeline microsecs: queryDuration " +| toNanoSecs (diffTimeSpec startTime afterProccessing) `div` 1000 |+ " -> processingDuration " +| toNanoSecs (diffTimeSpec afterProccessing endTime) `div` 1000 |+ " -> TotalDuration " +| toNanoSecs (diffTimeSpec startTime endTime) `div` 1000 |+ ""
@@ -192,8 +192,8 @@ processMessage projectCache (rmAckId, recMsg) = do
     -- This should help with our performance, since this project Cache is the only information we need in order to process
     -- an apitoolkit requestmessage payload. So we're able to process payloads without hitting the database except for the actual db inserts.
     projectCacheValE <-
-      liftIO
-        $ try
+      liftIO $
+        try
           ( Cache.fetchWithCache projectCache pid \pid' -> do
               mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
               pure $ fromMaybe projectCacheDefault mpjCache

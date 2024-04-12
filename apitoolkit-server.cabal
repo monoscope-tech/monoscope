@@ -121,6 +121,8 @@ library
       MultiWayIf
       FlexibleInstances
       LambdaCase
+      MultiParamTypeClasses
+      NamedFieldPuns
       GeneralizedNewtypeDeriving
       FlexibleContexts
       OverloadedLabels
@@ -241,10 +243,6 @@ executable apitoolkit-server-exe
   main-is: Main.hs
   hs-source-dirs:
       app
-  extra-lib-dirs:
-      testkit/release
-  extra-libraries:
-      testkit
   default-extensions:
       BlockArguments
       DataKinds
@@ -256,6 +254,8 @@ executable apitoolkit-server-exe
       MultiWayIf
       FlexibleInstances
       LambdaCase
+      MultiParamTypeClasses
+      NamedFieldPuns
       GeneralizedNewtypeDeriving
       FlexibleContexts
       OverloadedLabels
@@ -296,6 +296,8 @@ test-suite doctests
       MultiWayIf
       FlexibleInstances
       LambdaCase
+      MultiParamTypeClasses
+      NamedFieldPuns
       GeneralizedNewtypeDeriving
       FlexibleContexts
       OverloadedLabels
@@ -337,6 +339,8 @@ test-suite tests
       MultiWayIf
       FlexibleInstances
       LambdaCase
+      MultiParamTypeClasses
+      NamedFieldPuns
       GeneralizedNewtypeDeriving
       FlexibleContexts
       OverloadedLabels

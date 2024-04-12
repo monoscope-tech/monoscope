@@ -58,9 +58,9 @@ import Models.Apis.Fields.Query ()
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pkg.Parser
-import Prelude hiding (many, some)
 import Utils (DBField (MkDBField), quoteTxt)
 import Witch (from)
+import Prelude hiding (many, some)
 
 
 data SDKTypes

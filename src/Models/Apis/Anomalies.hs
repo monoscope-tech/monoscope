@@ -51,9 +51,9 @@ import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
-import Prelude hiding (id)
 import Servant (FromHttpApiData (..))
 import Utils
+import Prelude hiding (id)
 
 
 newtype AnomalyId = AnomalyId {unAnomalyId :: UUID.UUID}

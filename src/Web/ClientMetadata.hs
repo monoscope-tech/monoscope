@@ -13,11 +13,11 @@ import Effectful.PostgreSQL.Transact.Effect
 import Effectful.Reader.Static (ask)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
-import Prelude hiding (ask, asks, max, min)
 import Relude.Unsafe ((!!))
 import Servant (err401)
 import System.Config
 import System.Types
+import Prelude hiding (ask, asks, max, min)
 
 
 data ClientMetadata = ClientMetadata
@@ -54,8 +54,8 @@ clientMetadataH (Just authTextB64) = do
                 project <- Projects.projectById pApiKey.projectId
                 pure (pApiKey, project)
 
-          pure
-            $ ClientMetadata
+          pure $
+            ClientMetadata
               { projectId = pApiKey.projectId
               , pubsubProjectId = "past-3"
               , topicId = (appCtx.config.requestPubsubTopics) !! 0 -- apitoolkit-prod-default

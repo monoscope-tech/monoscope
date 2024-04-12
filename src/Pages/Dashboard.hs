@@ -35,7 +35,6 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Components (statBox)
 import Pages.Endpoints.EndpointList (renderEndpoint)
 import Pages.Onboarding qualified as Onboarding
-import Prelude hiding (ask, asks, max, min)
 import Relude.Unsafe qualified as Unsafe
 import Servant (
   Union,
@@ -48,6 +47,7 @@ import System.Types
 import Text.Interpolation.Nyan
 import Utils (GetOrRedirect, deleteParam, faIcon_, freeTierLimitExceededBanner, mIcon_, redirect)
 import Witch (from)
+import Prelude hiding (ask, asks, max, min)
 
 
 timePickerItems :: [(Text, Text)]
@@ -136,8 +136,8 @@ dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRoll
   let bulkActionBase = "/p/" <> pid.toText <> "/anomalies/bulk_actions"
   section_ [class_ "p-8  mx-auto px-16 w-full space-y-12 pb-24 overflow-y-scroll  h-full"] do
     when exceededFreeTier $ freeTierLimitExceededBanner pid.toText
-    unless (null newEndpoints)
-      $ div_ [id_ "modalContainer"] do
+    unless (null newEndpoints) $
+      div_ [id_ "modalContainer"] do
         input_ [type_ "checkbox", id_ "newEndpointsModal", class_ "modal-toggle"]
         div_ [class_ "modal", role_ "dialog", hxSwap_ "outerHTML"] do
           form_
@@ -235,8 +235,8 @@ dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledBySte
         h2_ [class_ "text-xl font-medium mb-3"] "You haven't integrated APIToolkit in your application yet"
         Onboarding.integrateApiToolkit "<YOUR_API_KEY>" "express"
     div_ [class_ "flex justify-between mt-4"] $ div_ [class_ "flex flex-row"] do
-      a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
-        $ faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 w-4 mr-3 inline-block"
+      a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]] $
+        faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 w-4 mr-3 inline-block"
       span_ [class_ "text-lg text-slate-700"] "Analytics"
 
     div_ [class_ "reqResSubSection space-y-5"] do

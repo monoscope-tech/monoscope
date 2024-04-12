@@ -19,7 +19,6 @@ import Models.Projects.RedactedFields qualified as RedactedFields
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.NonMember
-import Prelude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
@@ -27,6 +26,7 @@ import System.Config
 import System.Types
 import Utils
 import Web.FormUrlEncoded (FromForm)
+import Prelude hiding (ask, asks)
 
 
 data RedactFieldForm = RedactFieldForm

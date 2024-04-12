@@ -44,10 +44,10 @@ import Lucid.Svg qualified as Svg
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Session
-import Prelude hiding (show)
 import Servant
 import Text.Regex.TDFA ((=~))
-import Text.Show 
+import Text.Show
+import Prelude hiding (show)
 
 
 -- Added only for satisfying the tests
@@ -101,8 +101,8 @@ faIcon_ faIcon faClasses classes = do
 
 faIconWithAnchor_ :: Text -> Text -> Text -> Text -> Html ()
 faIconWithAnchor_ faIcon faClasses classes onClickAction = do
-  a_ [href_ "#", onclick_ onClickAction]
-    $ faIcon_ faIcon faClasses classes -- You can replace "#" with the actual link
+  a_ [href_ "#", onclick_ onClickAction] $
+    faIcon_ faIcon faClasses classes -- You can replace "#" with the actual link
 
 
 deleteParam :: Text -> Text -> Text
