@@ -63,9 +63,9 @@ prepare-rust-interop:
 	cd ./rust-interop/ && \
 	cargo build --release && \
 	mkdir -p ./.stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/ && \
-	-cp ./target/release/librust_interop.a ./.stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/libCrust_interop.a && \
-	-cp ./target/release/librust_interop.so ./.stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/libCrust_interop.so && \
-	-cp ./target/release/librust_interop.dylib ./.stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/libCrust_interop.dylib && \
-	-cp ./target/release/librust_interop.dylib ./.stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/libCrust_interop-ghc$(GHC_VERSION).dylib 
+	cp ./target/release/librust_interop.a .stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/libCrust_interop.a || true && \
+	cp ./target/release/librust_interop.so .stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/libCrust_interop.so || true && \
+	cp ./target/release/librust_interop.dylib .stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/libCrust_interop.dylib || true && \
+	cp ./target/release/librust_interop.dylib .stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/libCrust_interop-ghc$(GHC_VERSION).dylib  || true
 
 .PHONY: all test fmt lint fix-lint lice-reload prepare-rust-interop
