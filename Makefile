@@ -62,7 +62,7 @@ show-ghc-version:
 prepare-rust-interop:
 	cd ./rust-interop/ && \
 	cargo build --release && \
-	mkdir -p ../.stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/ && \
+	mkdir -p ./.stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/ && \
 	cp ./target/release/librust_interop.a ./.stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/libCrust_interop.a && \
 	cp ./target/release/librust_interop.dylib ./.stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/libCrust_interop.dylib && \
 	cp ./target/release/librust_interop.dylib ./.stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/libCrust_interop-ghc$(GHC_VERSION).dylib 
