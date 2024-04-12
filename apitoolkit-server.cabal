@@ -39,7 +39,6 @@ library
       Models.Apis.RequestDumps
       Models.Apis.Shapes
       Models.Apis.Slack
-      Models.Apis.Testing
       Models.Projects.ProjectApiKeys
       Models.Projects.ProjectMembers
       Models.Projects.Projects
@@ -47,6 +46,7 @@ library
       Models.Projects.RedactedFields
       Models.Projects.Swaggers
       Models.Projects.SwaggersSpec
+      Models.Tests.Testing
       Models.Users.Sessions
       Models.Users.Users
       Network.Wai.Middleware.Heartbeat
