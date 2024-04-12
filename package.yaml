@@ -48,6 +48,8 @@ default-extensions:
   - MultiWayIf
   - FlexibleInstances
   - LambdaCase
+  - MultiParamTypeClasses
+  - NamedFieldPuns
   - GeneralizedNewtypeDeriving
   - FlexibleContexts
   - OverloadedLabels
