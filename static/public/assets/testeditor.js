@@ -1,4 +1,4 @@
-import { LitElement, html, ref, createRef } from './js/thirdparty/lit.js';
+import { LitElement, html, ref, createRef } from "./js/thirdparty/lit.js";
 import {
   METHODS,
   PostConfig,
@@ -7,7 +7,7 @@ import {
   ASSERTS,
   validateYaml,
   getDeletedUpdatedAndNewSteps,
-} from './testeditor-utils.js';
+} from "./testeditor-utils.js";
 
 export class Collection extends LitElement {
   static properties = {
@@ -20,17 +20,17 @@ export class Collection extends LitElement {
     runningAllTests: {},
   };
   collections = [];
-  pid = '';
-  cold_id = '';
+  pid = "";
+  cold_id = "";
 
   constructor() {
     super();
-    const segs = window.location.pathname.split('/');
+    const segs = window.location.pathname.split("/");
     this.pid = segs[2];
     this.col_id = segs[4];
-    const dataStore = document.getElementById('test-data').dataset.collection;
+    const dataStore = document.getElementById("test-data").dataset.collection;
     const steps = JSON.parse(
-      document.getElementById('test-data').dataset.steps
+      document.getElementById("test-data").dataset.steps
     );
 
     this.collection = JSON.parse(dataStore);
@@ -43,18 +43,18 @@ export class Collection extends LitElement {
     this.runningAllTests = false;
     this.codeHasChanges = false;
 
-    this.addEventListener('add-step', this.handleAddStep);
-    this.addEventListener('close-modal', () => {
+    this.addEventListener("add-step", this.handleAddStep);
+    this.addEventListener("close-modal", () => {
       this.showNewStepModal = false;
     });
 
-    this.addEventListener('edit-step', async (event) => {
+    this.addEventListener("edit-step", async (event) => {
       const { step, ind } = event.detail.data;
       const target = this.collection.steps[ind];
       const targetId = target.id;
       const lastRun = target.lastRun;
-      const errorEvent = getEvent('errorToast', {
-        value: ['Something went wrong'],
+      const errorEvent = getEvent("errorToast", {
+        value: ["Something went wrong"],
       });
       try {
         const response = await fetch(
@@ -62,15 +62,15 @@ export class Collection extends LitElement {
           { ...PostConfig, body: JSON.stringify(step) }
         );
         if (!response.ok) {
-          document.querySelector('body').dispatchEvent(errorEvent);
+          document.querySelector("body").dispatchEvent(errorEvent);
           return;
         }
 
         this.collection.steps[ind] = { id: targetId, lastRun, ...step };
         this.collection = { ...this.collection };
         this.showNewStepModal = false;
-        const event = getEvent('successToast', {
-          value: ['Step edited successfully'],
+        const event = getEvent("successToast", {
+          value: ["Step edited successfully"],
         });
         triggerToastEvent(event);
       } catch (err) {
@@ -78,21 +78,21 @@ export class Collection extends LitElement {
       }
     });
 
-    this.addEventListener('delete-step', async (event) => {
+    this.addEventListener("delete-step", async (event) => {
       const step_index = event.detail.step;
       const target = this.collection.steps[step_index];
       const targetId = target.id;
-      const errorEvent = getEvent('errorToast', {
-        value: ['Something went wrong'],
+      const errorEvent = getEvent("errorToast", {
+        value: ["Something went wrong"],
       });
 
       try {
         const response = await fetch(
           `/p/${this.pid}/testing/step/${targetId}`,
-          { method: 'DELETE' }
+          { method: "DELETE" }
         );
         if (!response.ok) {
-          document.querySelector('body').dispatchEvent(errorEvent);
+          document.querySelector("body").dispatchEvent(errorEvent);
           return;
         }
         this.collection.steps = this.collection.steps.filter(
@@ -100,8 +100,8 @@ export class Collection extends LitElement {
         );
         this.collection = { ...this.collection };
         this.showNewStepModal = false;
-        const event = getEvent('successToast', {
-          value: ['Step edited successfully'],
+        const event = getEvent("successToast", {
+          value: ["Step edited successfully"],
         });
         triggerToastEvent(event);
       } catch (err) {
@@ -109,27 +109,27 @@ export class Collection extends LitElement {
       }
     });
 
-    this.addEventListener('update-config', (event) => {
+    this.addEventListener("update-config", (event) => {
       this.collection.config = event.detail.config;
-      this.updateCollection('config', this.collection.config);
+      this.updateCollection("config", this.collection.config);
     });
-    this.addEventListener('update-schedule', (event) => {
+    this.addEventListener("update-schedule", (event) => {
       this.collection.schedule = event.detail.schedule;
       this.collection.isScheduled = event.detail.isScheduled;
-      this.updateCollection('schedule', {
+      this.updateCollection("schedule", {
         schedule: this.collection.schedule,
         isScheduled: this.collection.isScheduled,
       });
     });
-    this.addEventListener('close-settings', () => {
+    this.addEventListener("close-settings", () => {
       this.showSettings = false;
     });
   }
 
   async handleAddStep(event) {
     const step = event.detail.data;
-    const errorEvent = getEvent('errorToast', {
-      value: ['Something went wrong'],
+    const errorEvent = getEvent("errorToast", {
+      value: ["Something went wrong"],
     });
     try {
       const response = await fetch(
@@ -137,7 +137,7 @@ export class Collection extends LitElement {
         { ...PostConfig, body: JSON.stringify(step) }
       );
       if (!response.ok) {
-        document.querySelector('body').dispatchEvent(errorEvent);
+        document.querySelector("body").dispatchEvent(errorEvent);
         return;
       }
       this.collection = {
@@ -145,8 +145,8 @@ export class Collection extends LitElement {
         steps: [...this.collection.steps, step],
       };
       this.showNewStepModal = false;
-      const event = getEvent('successToast', {
-        value: ['Step added successfully'],
+      const event = getEvent("successToast", {
+        value: ["Step added successfully"],
       });
       triggerToastEvent(event);
     } catch (err) {
@@ -155,8 +155,8 @@ export class Collection extends LitElement {
   }
 
   async updateCollection(action, value) {
-    const errorEvent = getEvent('errorToast', {
-      value: ['Something went wrong'],
+    const errorEvent = getEvent("errorToast", {
+      value: ["Something went wrong"],
     });
     try {
       const response = await fetch(
@@ -164,12 +164,12 @@ export class Collection extends LitElement {
         { ...PostConfig, body: JSON.stringify(value) }
       );
       if (!response.ok) {
-        document.querySelector('body').dispatchEvent(errorEvent);
+        document.querySelector("body").dispatchEvent(errorEvent);
         return;
       }
       this.collection = { ...this.collection };
       this.showNewStepModal = false;
-      const event = getEvent('successToast', {
+      const event = getEvent("successToast", {
         value: [`${action} updated successfully`],
       });
       triggerToastEvent(event);
@@ -185,13 +185,13 @@ export class Collection extends LitElement {
       });
 
       setTimeout(() => {
-        const editor = CodeMirror(document.getElementById('test-editor'), {
+        const editor = CodeMirror(document.getElementById("test-editor"), {
           value: yamlData,
-          mode: 'yaml',
+          mode: "yaml",
           lineNumbers: true,
-          theme: 'dracula',
+          theme: "dracula",
         });
-        editor.on('change', () => {
+        editor.on("change", () => {
           this.codeHasChanges = true;
         });
         window.testEditor = editor;
@@ -200,7 +200,7 @@ export class Collection extends LitElement {
     } else {
       if (
         this.codeHasChanges &&
-        confirm('You have unsaved changes. unsaved changes they will be lost')
+        confirm("You have unsaved changes. unsaved changes they will be lost")
       ) {
         this.codeHasChanges = false;
         this.showCode = false;
@@ -228,14 +228,14 @@ export class Collection extends LitElement {
           if (response.ok) {
             this.collection.steps = data;
             this.codeHasChanges = false;
-            const event = getEvent('successToast', {
-              value: ['Save successfully'],
+            const event = getEvent("successToast", {
+              value: ["Save successfully"],
             });
             triggerToastEvent(event);
           }
         } catch (error) {
-          const errEvent = getEvent('errorToast', {
-            value: ['Something went wrong'],
+          const errEvent = getEvent("errorToast", {
+            value: ["Something went wrong"],
           });
           triggerToastEvent(errEvent);
         }
@@ -244,16 +244,21 @@ export class Collection extends LitElement {
   }
 
   async runAllTests() {
+    if (this.runningAllTests) return;
     this.runningAllTests = true;
     try {
       const response = await fetch(
-        `/p/${this.pid}/testing/${this.col_id}/run_all`,
-        { method: 'POST' }
+        `/p/${this.pid}/testing/run/${this.col_id}`,
+        { method: "POST" }
       );
       if (response.ok) {
         const json = await response.json();
       }
     } catch (error) {
+      const errEvent = getEvent("errorToast", {
+        value: ["Something went wrong"],
+      });
+      triggerToastEvent(errEvent);
     } finally {
       this.runningAllTests = false;
     }
@@ -284,7 +289,7 @@ export class Collection extends LitElement {
           <button
             class="btn"
             @click=${() => {
-              document.getElementById('settings_modal').showModal();
+              document.getElementById("settings_modal").showModal();
             }}
           >
             <i class="fa-solid fa-gear"></i>
@@ -306,11 +311,12 @@ export class Collection extends LitElement {
           <div class="flex gap-4">
             <button
               title="run all"
-              class="btn btn-sm btn-success"
-              @click=${() => runAllTests()}
+              class="btn btn-sm btn-success w-24"
+              @click=${() => this.runAllTests()}
             >
-              Run all
-              <i class="fa fa-play" aria-hidden="true"></i>
+              ${this.runningAllTests
+                ? html`<span class="loading loading-dots loading-sm"></span>`
+                : html`Run all <i class="fa fa-play" aria-hidden="true"></i>`}
             </button>
             <label class="relative inline-flex items-center cursor-pointer">
               <input
@@ -361,7 +367,7 @@ export class Collection extends LitElement {
               <button
                 class="btn btn-circle btn-success self-center"
                 @click=${() =>
-                  document.getElementById('step_modal').showModal()}
+                  document.getElementById("step_modal").showModal()}
               >
                 <i class="fa-solid fa-plus"></i>
               </button>
@@ -383,7 +389,7 @@ export class Collection extends LitElement {
   }
 }
 
-customElements.define('test-editor', Collection);
+customElements.define("test-editor", Collection);
 
 class SettingsModal extends LitElement {
   static properties = {
@@ -395,21 +401,21 @@ class SettingsModal extends LitElement {
   constructor() {
     super();
     this.config = {};
-    this.schedule = '*/30 * * * *';
+    this.schedule = "*/30 * * * *";
     this.isScheduled = true;
     this.changed = false;
   }
 
   closeModal() {
     this.dispatchEvent(
-      new CustomEvent('close-settings', { bubbles: true, composed: true })
+      new CustomEvent("close-settings", { bubbles: true, composed: true })
     );
   }
 
   updateColl() {
     if (!this.changed) return;
     this.dispatchEvent(
-      new CustomEvent('update-schedule', {
+      new CustomEvent("update-schedule", {
         detail: {
           schedule: this.schedule,
           isScheduled: this.isScheduled,
@@ -478,8 +484,8 @@ class SettingsModal extends LitElement {
 
               <button
                 @click=${() => this.updateColl()}
-                class=${'btn btn-sm ' +
-                `${this.changed ? 'btn-success' : 'btn-disabled'}`}
+                class=${"btn btn-sm " +
+                `${this.changed ? "btn-success" : "btn-disabled"}`}
               >
                 Save
               </button>
@@ -502,7 +508,7 @@ class SettingsModal extends LitElement {
   }
 }
 
-customElements.define('settings-modal', SettingsModal);
+customElements.define("settings-modal", SettingsModal);
 
 class Config extends LitElement {
   static properties = {
@@ -512,7 +518,7 @@ class Config extends LitElement {
   constructor() {
     super();
     this.config = {};
-    this.addEventListener('close-modal', (e) => {
+    this.addEventListener("close-modal", (e) => {
       e.stopPropagation();
       this.showConfigModal = false;
     });
@@ -539,7 +545,7 @@ class Config extends LitElement {
                     const conf = { ...this.config };
                     delete conf[kv[0]];
                     this.dispatchEvent(
-                      new CustomEvent('update-config', {
+                      new CustomEvent("update-config", {
                         detail: { config: conf },
                         bubbles: true,
                         composed: true,
@@ -569,7 +575,7 @@ class Config extends LitElement {
   }
 }
 
-customElements.define('config-element', Config);
+customElements.define("config-element", Config);
 
 class ConfigModal extends LitElement {
   static properties = {
@@ -580,13 +586,13 @@ class ConfigModal extends LitElement {
 
   constructor() {
     super();
-    this.name = '';
-    this.value = '';
+    this.name = "";
+    this.value = "";
     this.config = {};
   }
 
   closeModal() {
-    const event = new CustomEvent('close-modal', {
+    const event = new CustomEvent("close-modal", {
       bubbles: true,
       composed: true,
     });
@@ -598,7 +604,7 @@ class ConfigModal extends LitElement {
       ...this.config,
       [this.name]: this.value,
     };
-    const event = new CustomEvent('update-config', {
+    const event = new CustomEvent("update-config", {
       detail: { config: this.config },
       bubbles: true,
       composed: true,
@@ -681,7 +687,7 @@ class ConfigModal extends LitElement {
   }
 }
 
-customElements.define('config-modal', ConfigModal);
+customElements.define("config-modal", ConfigModal);
 
 class Step extends LitElement {
   static properties = {
@@ -689,21 +695,23 @@ class Step extends LitElement {
     ind: {},
     showDetails: {},
     editModal: {},
+    runningTestStep: {},
   };
-  method = '';
+  method = "";
   constructor() {
     super();
     this.showDetails = false;
     this.editModal = false;
+    this.runningTestStep = false;
     this.ind = 0;
-    this.addEventListener('close-modal', () => {
+    this.addEventListener("close-modal", () => {
       this.editModal = false;
     });
     // For editing step
-    this.addEventListener('add-step', (event) => {
+    this.addEventListener("add-step", (event) => {
       event.stopPropagation();
       const step = event.detail.data;
-      const e = new CustomEvent('edit-step', {
+      const e = new CustomEvent("edit-step", {
         detail: {
           data: { step: step, ind: this.ind },
         },
@@ -717,22 +725,22 @@ class Step extends LitElement {
 
   getEntries(val) {
     if (!val) {
-      return [['', '']];
+      return [["", ""]];
     }
     const arr = Object.entries(val);
     if (arr.length === 0) {
-      return [['', '']];
+      return [["", ""]];
     }
     return arr;
   }
 
   getAssertEntries(val) {
     if (!val) {
-      return [['', '']];
+      return [["", ""]];
     }
     const arr = val.map((v) => Object.entries(v)[0]);
     if (arr.length === 0) {
-      return [['', '']];
+      return [["", ""]];
     }
     return arr;
   }
@@ -742,24 +750,49 @@ class Step extends LitElement {
         return [key.toUpperCase(), data[key]];
       }
     }
-    return ['GET', ''];
+    return ["GET", ""];
   }
   getMethodColor(color) {
     switch (this.getMethodUrl(this.data)[0]) {
-      case 'POST':
-        return 'text-blue-500';
-      case 'PATCH':
-        return 'text-purple-500';
-      case 'DELETE':
-        return 'text-red-500';
-      case 'PUT':
-        return 'text-orange-500';
-      case 'GET':
-        return 'text-green-500';
+      case "POST":
+        return "text-blue-500";
+      case "PATCH":
+        return "text-purple-500";
+      case "DELETE":
+        return "text-red-500";
+      case "PUT":
+        return "text-orange-500";
+      case "GET":
+        return "text-green-500";
       default:
-        return 'text-gray-500';
+        return "text-gray-500";
     }
   }
+  async runTestStep() {
+    if (this.runningTestStep) return;
+    this.runningTestStep = true;
+    try {
+      const segs = window.location.pathname.split("/");
+      const proj_id = segs[2];
+      const col_id = segs[4];
+
+      const response = await fetch(
+        `/p/${proj_id}/testing/run/${col_id}/${this.data.id}`,
+        { method: "POST" }
+      );
+      if (response.ok) {
+        const json = await response.json();
+      }
+    } catch (error) {
+      const errEvent = getEvent("errorToast", {
+        value: ["Something went wrong"],
+      });
+      triggerToastEvent(errEvent);
+    } finally {
+      this.runningTestStep = false;
+    }
+  }
+
   render() {
     return html`<article
       class="border rounded-lg group overflow-hidden relative"
@@ -774,15 +807,22 @@ class Step extends LitElement {
         .exports=${this.getEntries(this.data.exports)}
         .params=${this.getEntries(this.data.params)}
         .body=${this.data.json
-          ? { current: 'json', json: this.data.json }
-          : { current: 'form-data', url: this.getEntries(this.data.body) }}
+          ? { current: "json", json: this.data.json }
+          : { current: "form-data", url: this.getEntries(this.data.body) }}
       ></step-modal>
       <div
         class="absolute text-gray-600 bg-gray-50 px-4  hidden  group-hover:flex items-center gap-3 right-2 translate-y-1/2"
       >
         <button>View results</button>
-        <button class="text-blue-500 text-lg">
-          <i class="fa fa-play" aria-hidden="true"></i>
+        <button
+          class="text-blue-500 text-lg"
+          @click=${() => {
+            this.runTestStep();
+          }}
+        >
+          ${this.runningTestStep
+            ? html`<span class="loading loading-spinner loading-xs"></span>`
+            : html` <i class="fa fa-play" aria-hidden="true"></i>`}
         </button>
         <button
           @click=${() =>
@@ -793,8 +833,8 @@ class Step extends LitElement {
         <button
           class="text-red-500"
           @click=${() => {
-            if (confirm('Are you sure you want to delete this step')) {
-              const e = new CustomEvent('delete-step', {
+            if (confirm("Are you sure you want to delete this step")) {
+              const e = new CustomEvent("delete-step", {
                 detail: {
                   step: this.ind,
                 },
@@ -819,7 +859,7 @@ class Step extends LitElement {
         <div class="flex flex-col gap-1">
           <span class="text-gray-600 font-medium">${this.data.title}</span>
           <div class="flex gap-1 text-xs text-gray-500">
-            <span class=${'font-bold ' + this.getMethodColor()}
+            <span class=${"font-bold " + this.getMethodColor()}
               >${this.getMethodUrl(this.data)[0]}</span
             >
             <span>${this.getMethodUrl(this.data)[1]}</span>
@@ -829,7 +869,7 @@ class Step extends LitElement {
       ${this.showDetails
         ? html`<div class="bg-white p-3 w-full flex flex-col gap-4">
             <div class="flex gap-1 items-center mt-2 text-gray-500">
-              <span class=${'font-semibold ' + this.getMethodColor()}
+              <span class=${"font-semibold " + this.getMethodColor()}
                 >${this.getMethodUrl(this.data)[0]}</span
               >
               <span>${this.getMethodUrl(this.data)[1]}</span>
@@ -884,7 +924,7 @@ class Step extends LitElement {
     return this;
   }
 }
-customElements.define('step-element', Step);
+customElements.define("step-element", Step);
 
 class KeyVal extends LitElement {
   static properties = {
@@ -894,7 +934,7 @@ class KeyVal extends LitElement {
   constructor() {
     super();
     this.data = {};
-    this.sTitle = '';
+    this.sTitle = "";
   }
 
   render() {
@@ -923,7 +963,7 @@ class KeyVal extends LitElement {
     return this;
   }
 }
-customElements.define('key-val', KeyVal);
+customElements.define("key-val", KeyVal);
 
 class AssertsVal extends LitElement {
   static properties = {
@@ -933,7 +973,7 @@ class AssertsVal extends LitElement {
   constructor() {
     super();
     this.data = {};
-    this.stitle = '';
+    this.stitle = "";
   }
 
   render() {
@@ -973,7 +1013,7 @@ class AssertsVal extends LitElement {
     return this;
   }
 }
-customElements.define('asserts-val', AssertsVal);
+customElements.define("asserts-val", AssertsVal);
 
 class NewStepModal extends LitElement {
   static properties = {
@@ -995,74 +1035,74 @@ class NewStepModal extends LitElement {
   constructor() {
     super();
     this.methods = this.staticMethods;
-    this.method = '';
-    this.url = '';
+    this.method = "";
+    this.url = "";
     this.errors = [];
-    this.title = '';
-    this.params = [['', '']];
-    this.headers = [['', '']];
-    this.asserts = [['', '']];
-    this.body = { current: 'json', json: '', url: [['', '']] };
-    this.exports = [['', '']];
-    this.modal_id = 'step_modal';
+    this.title = "";
+    this.params = [["", ""]];
+    this.headers = [["", ""]];
+    this.asserts = [["", ""]];
+    this.body = { current: "json", json: "", url: [["", ""]] };
+    this.exports = [["", ""]];
+    this.modal_id = "step_modal";
     this.showMethods = false;
-    this.currentTab = 'Params';
-    document.addEventListener('click', () => {
+    this.currentTab = "Params";
+    document.addEventListener("click", () => {
       this.showMethods = false;
     });
-    this.addEventListener('update-headers', (event) => {
+    this.addEventListener("update-headers", (event) => {
       const data = event.detail.data;
       const last = data[data.length - 1];
       if (last[0] && last[1]) {
-        data.push(['', '']);
+        data.push(["", ""]);
       }
       this.headers = [...data];
     });
-    this.addEventListener('update-params', (event) => {
+    this.addEventListener("update-params", (event) => {
       const data = event.detail.data;
       const last = data[data.length - 1];
       if (last[0] && last[1]) {
-        data.push(['', '']);
+        data.push(["", ""]);
       }
       this.params = [...data];
     });
-    this.addEventListener('update-body', (event) => {
+    this.addEventListener("update-body", (event) => {
       const data = event.detail.data;
-      if (data.current !== 'json') {
+      if (data.current !== "json") {
         const last = data.url[data.url.length - 1];
         if (!last || (last[0] && last[1])) {
-          data.url.push(['', '']);
+          data.url.push(["", ""]);
         }
       }
       this.body = { ...data };
     });
-    this.addEventListener('update-asserts', (event) => {
+    this.addEventListener("update-asserts", (event) => {
       const data = event.detail.data;
       const last = data[data.length - 1];
       if (last[0] && last[1]) {
-        data.push(['', '']);
+        data.push(["", ""]);
       }
       this.asserts = [...data];
     });
-    this.addEventListener('update-exports', (event) => {
+    this.addEventListener("update-exports", (event) => {
       const data = event.detail.data;
       const last = data[data.length - 1];
       if (last[0] && last[1]) {
-        data.push(['', '']);
+        data.push(["", ""]);
       }
       this.exports = [...data];
     });
   }
   validateStep(asserts, method, url, title) {
     let errors = [];
-    if (title.trim() === '') {
+    if (title.trim() === "") {
       errors.push("Title can't not be empty");
     }
     if (!method || !this.staticMethods.includes(method.toUpperCase())) {
-      errors.push('Invalid method');
+      errors.push("Invalid method");
     }
-    if (!url || url.trim() === '') {
-      errors.push('Invalid url');
+    if (!url || url.trim() === "") {
+      errors.push("Invalid url");
     }
 
     if (asserts) {
@@ -1077,8 +1117,8 @@ class NewStepModal extends LitElement {
   }
 
   sanitize(step) {
-    delete step['method'];
-    delete step['url'];
+    delete step["method"];
+    delete step["url"];
   }
 
   buildStep() {
@@ -1100,8 +1140,8 @@ class NewStepModal extends LitElement {
       exports,
       headers,
       params,
-      json: this.body.current === 'json' ? this.body.json : undefined,
-      body: this.body.current != 'json' ? body : undefined,
+      json: this.body.current === "json" ? this.body.json : undefined,
+      body: this.body.current != "json" ? body : undefined,
     };
     let errs = this.validateStep(
       this.asserts,
@@ -1114,7 +1154,7 @@ class NewStepModal extends LitElement {
       return;
     }
     this.sanitize(stepObject);
-    const event = new CustomEvent('add-step', {
+    const event = new CustomEvent("add-step", {
       detail: {
         data: stepObject,
       },
@@ -1241,31 +1281,31 @@ class NewStepModal extends LitElement {
                 >
                   <li>
                     <button
-                      @click=${() => (this.currentTab = 'Params')}
-                      class="py-2 ${this.currentTab === 'Params'
-                        ? 'border-b border-b-blue-500 text-blue-500 font-medium'
-                        : ''}"
+                      @click=${() => (this.currentTab = "Params")}
+                      class="py-2 ${this.currentTab === "Params"
+                        ? "border-b border-b-blue-500 text-blue-500 font-medium"
+                        : ""}"
                     >
                       Params
                     </button>
                   </li>
                   <li>
                     <button
-                      @click=${() => (this.currentTab = 'Headers')}
-                      class="py-2 ${this.currentTab === 'Headers'
-                        ? 'border-b border-b-blue-500 text-blue-500 font-medium'
-                        : ''}"
+                      @click=${() => (this.currentTab = "Headers")}
+                      class="py-2 ${this.currentTab === "Headers"
+                        ? "border-b border-b-blue-500 text-blue-500 font-medium"
+                        : ""}"
                     >
                       Headers
                     </button>
                   </li>
-                  ${this.method !== 'GET'
+                  ${this.method !== "GET"
                     ? html`<li>
                         <button
-                          @click=${() => (this.currentTab = 'Body')}
-                          class="py-2 ${this.currentTab === 'Body'
-                            ? 'border-b border-b-blue-500 text-blue-500 font-medium'
-                            : ''}"
+                          @click=${() => (this.currentTab = "Body")}
+                          class="py-2 ${this.currentTab === "Body"
+                            ? "border-b border-b-blue-500 text-blue-500 font-medium"
+                            : ""}"
                         >
                           Body
                         </button>
@@ -1274,16 +1314,16 @@ class NewStepModal extends LitElement {
                 </ul>
               </nav>
               <div class="py-3">
-                ${this.currentTab === 'Params'
+                ${this.currentTab === "Params"
                   ? html`<params-element
                       .params=${this.params}
                       eventName="update-params"
                     ></params-element>`
-                  : this.currentTab === 'Headers'
-                    ? html`<headers-element
-                        .headers=${this.headers}
-                      ></headers-element>`
-                    : html`<body-element .body=${this.body}></body-element>`}
+                  : this.currentTab === "Headers"
+                  ? html`<headers-element
+                      .headers=${this.headers}
+                    ></headers-element>`
+                  : html`<body-element .body=${this.body}></body-element>`}
               </div>
             </div>
             <div class="w-full">
@@ -1325,7 +1365,7 @@ class NewStepModal extends LitElement {
   }
 }
 
-customElements.define('step-modal', NewStepModal);
+customElements.define("step-modal", NewStepModal);
 
 class ParamsElement extends LitElement {
   static properties = {
@@ -1334,8 +1374,8 @@ class ParamsElement extends LitElement {
   };
   constructor() {
     super();
-    this.params = [['', '']];
-    this.eventName = 'update-params';
+    this.params = [["", ""]];
+    this.eventName = "update-params";
   }
   sendEvent(data) {
     const event = new CustomEvent(this.eventName, {
@@ -1387,7 +1427,7 @@ class ParamsElement extends LitElement {
   }
 }
 
-customElements.define('params-element', ParamsElement);
+customElements.define("params-element", ParamsElement);
 
 class Headers extends LitElement {
   static properties = {
@@ -1396,25 +1436,25 @@ class Headers extends LitElement {
     headerComp: {},
   };
   allHeaders = [
-    'Authorization',
-    'Content-Type',
-    'Allowed-Methods',
-    'Host',
-    'Referer',
-    'Origin',
+    "Authorization",
+    "Content-Type",
+    "Allowed-Methods",
+    "Host",
+    "Referer",
+    "Origin",
   ];
   constructor() {
     super();
-    this.headers = [['', '']];
+    this.headers = [["", ""]];
     this.headersComp = this.allHeaders;
-    this.addEventListener('update-header', (event) => {
+    this.addEventListener("update-header", (event) => {
       const { val, target } = event.detail;
       this.headers[target][0] = val;
       this.sendEvent(this.headers);
     });
   }
   sendEvent(data) {
-    const event = new CustomEvent('update-headers', {
+    const event = new CustomEvent("update-headers", {
       detail: { data: data },
       bubbles: true,
       composed: true,
@@ -1430,8 +1470,8 @@ class Headers extends LitElement {
               .val=${p[0]}
               .target=${ind}
               .options=${this.allHeaders}
-              placeholder=${'header'}
-              eventName=${'update-header'}
+              placeholder=${"header"}
+              eventName=${"update-header"}
             ></custom-select>
             <input
               class="flex h-7 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
@@ -1461,7 +1501,7 @@ class Headers extends LitElement {
   }
 }
 
-customElements.define('headers-element', Headers);
+customElements.define("headers-element", Headers);
 
 class BodyElement extends LitElement {
   static properties = {
@@ -1470,11 +1510,11 @@ class BodyElement extends LitElement {
 
   constructor() {
     super();
-    this.body = { current: 'json', json: '', url: [['', '']] };
+    this.body = { current: "json", json: "", url: [["", ""]] };
   }
 
   sendEvent(data) {
-    const event = new CustomEvent('update-body', {
+    const event = new CustomEvent("update-body", {
       detail: { data: data },
       bubbles: true,
       composed: true,
@@ -1495,7 +1535,7 @@ class BodyElement extends LitElement {
         <option value="url">url-encoded</option>
       </select>
       <div class="mt-2 flex flex-col gap-2">
-        ${this.body.current === 'json'
+        ${this.body.current === "json"
           ? html`<textarea
               .value=${this.body.json}
               @keyup=${(e) => {
@@ -1535,7 +1575,7 @@ class BodyElement extends LitElement {
     return this;
   }
 }
-customElements.define('body-element', BodyElement);
+customElements.define("body-element", BodyElement);
 
 class AssertsElement extends LitElement {
   static properties = {
@@ -1545,17 +1585,17 @@ class AssertsElement extends LitElement {
   };
   constructor() {
     super();
-    this.asserts = [['', '']];
+    this.asserts = [["", ""]];
     this.showAsserts = false;
     this.assertsComp = ASSERTS;
-    this.addEventListener('update-assert', (event) => {
+    this.addEventListener("update-assert", (event) => {
       const { val, target } = event.detail;
       this.asserts[target][0] = val;
       this.sendEvent(this.asserts);
     });
   }
   sendEvent(data) {
-    const event = new CustomEvent('update-asserts', {
+    const event = new CustomEvent("update-asserts", {
       detail: { data: data },
       bubbles: true,
       composed: true,
@@ -1576,8 +1616,8 @@ class AssertsElement extends LitElement {
                 .val=${p[0]}
                 .target=${ind}
                 .options=${ASSERTS}
-                placeholder=${'assert'}
-                eventName=${'update-assert'}
+                placeholder=${"assert"}
+                eventName=${"update-assert"}
               ></custom-select>
               <input
                 class="flex h-7 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
@@ -1608,7 +1648,7 @@ class AssertsElement extends LitElement {
     return this;
   }
 }
-customElements.define('assert-element', AssertsElement);
+customElements.define("assert-element", AssertsElement);
 
 class CustomSelect extends LitElement {
   static properties = {
@@ -1622,11 +1662,11 @@ class CustomSelect extends LitElement {
   };
   constructor() {
     super();
-    this.options = [''];
+    this.options = [""];
     this.fOptions = [];
     this.target = 0;
-    this.val = '';
-    this.placeholder = 'key';
+    this.val = "";
+    this.placeholder = "key";
   }
   sendEvent(data) {
     const event = getEvent(this.eventName, { val: data, target: this.target });
@@ -1683,4 +1723,4 @@ class CustomSelect extends LitElement {
     return this;
   }
 }
-customElements.define('custom-select', CustomSelect);
+customElements.define("custom-select", CustomSelect);
