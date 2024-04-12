@@ -69,19 +69,9 @@ extra-source-files:
 
 description: Please see the README on GitHub at <https://github.com/githubuser/apitoolkit-server#readme>
 
-# extra-lib-dirs:
-#   - rust-interop/target/debug
-# extra-libraries: 
-#   - rust-interop
-
 library:
-  # extra-lib-dirs:
-  #   - ${pkgroot}/rust-interop/target/debug
-  extra-libraries: 
-    - Crust_interop
   source-dirs: 
     - src
-    # - rust-interop/src
   dependencies:
     - name: base
       mixin:
@@ -91,7 +81,6 @@ library:
       mixin:
         - (Relude as Prelude)
         - ""
-    # - relude >= 1.2.0.0
     - rust-interop
     - colourista
     - effectful

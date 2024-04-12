@@ -135,8 +135,6 @@ library
       OverloadedRecordDot
       TemplateHaskell
   ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches -Wno-missing-kind-signatures -fwrite-ide-info -hiedir=.hie -j4 +RTS -A128m -n2m -RTS
-  extra-libraries:
-      Crust_interop
   build-depends:
       HaskellNet
     , PyF
