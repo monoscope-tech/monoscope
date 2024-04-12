@@ -389,13 +389,7 @@ jobsRunner dbPool logger cfg job = do
           Just collection -> do
             let steps_data = (\x -> x.stepData) <$> steps
             let col_json = (decodeUtf8 $ Aeson.encode steps_data :: String)
-            v <- liftIO $ withCString col_json $ \c_str -> do
-              let res = haskellBinding c_str
-              pure res
             pass
-
-
-foreign import ccall unsafe "haskell_binding" haskellBinding :: CString -> Any
 
 
 reportUsage :: Text -> Int -> Text -> IO ()

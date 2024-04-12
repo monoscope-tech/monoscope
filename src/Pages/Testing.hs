@@ -50,6 +50,7 @@ import System.IO.Error
 import System.Types
 import Utils
 import Web.FormUrlEncoded (FromForm)
+import Prelude hiding (ask, asks)
 
 
 data TestCollectionForm = TestCollectionForm
@@ -331,8 +332,6 @@ collectionStepPutH pid csid value = do
 
 
 -- Import the foreign function from the Rust library
-foreign import ccall unsafe "haskell_binding" haskellBinding :: CString -> Any
-
 
 collectionGetH :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (Html ())
 collectionGetH pid col_id = do
@@ -448,10 +447,6 @@ runTestCollectionH pid col_id = do
   collection <- dbtToEff $ Testing.getCollectionById col_id
   _ <- case collection of
     Just c -> do
-      let col_json = decodeUtf8 $ encode c
-      v <- liftIO $ withCString col_json $ \c_str -> do
-        let v = haskellBinding c_str
-        pure v
       pure ("" :: String)
     Nothing -> do
       pure ""
@@ -463,10 +458,6 @@ runTestStepH pid col_id step_id = do
   collection_step <- dbtToEff $ Testing.getCollectionStepById col_id step_id
   _ <- case collection_step of
     Just c -> do
-      let col_json = decodeUtf8 $ encode c
-      v <- liftIO $ withCString col_json $ \c_str -> do
-        let v = haskellBinding c_str
-        pure v
       pure ("" :: String)
     Nothing -> do
       pure ""

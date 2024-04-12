@@ -83,7 +83,7 @@ data CollectionStep = CollectionStep
   deriving anyclass (FromRow, ToRow, ToJSON, FromJSON, NFData)
   deriving
     (Entity)
-    via (GenericEntity '[Schema "apis", TableName "test_steps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] CollectionStep)
+    via (GenericEntity '[Schema "tests", TableName "collection_steps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] CollectionStep)
 
 
 data Collection = Collection
@@ -102,7 +102,7 @@ data Collection = Collection
   deriving anyclass (FromRow, ToRow, ToJSON, FromJSON, NFData)
   deriving
     (Entity)
-    via (GenericEntity '[Schema "apis", TableName "testing", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Collection)
+    via (GenericEntity '[Schema "tests", TableName "collections", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Collection)
 
 
 data CollectionListItem = ReportListItem
@@ -120,7 +120,7 @@ data CollectionListItem = ReportListItem
   deriving anyclass (FromRow, ToRow, NFData)
   deriving
     (Entity)
-    via (GenericEntity '[Schema "apis", TableName "testing", PrimaryKey "id", FieldModifiers '[CamelToSnake]] CollectionListItem)
+    via (GenericEntity '[Schema "tests", TableName "collections", PrimaryKey "id", FieldModifiers '[CamelToSnake]] CollectionListItem)
 
 
 addCollection :: Collection -> DBT IO ()
