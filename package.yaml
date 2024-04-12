@@ -180,8 +180,6 @@ executables:
   apitoolkit-server-exe:
     main: Main.hs
     source-dirs: app
-    extra-lib-dirs: testkit/release
-    extra-libraries: testkit
     ghc-options:
       - -threaded
       - -rtsopts
