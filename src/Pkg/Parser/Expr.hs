@@ -5,10 +5,10 @@ import Data.Text qualified as T
 import Data.Text.Display (Display, display, displayBuilder, displayParen, displayPrec)
 import Data.Text.Lazy.Builder (Builder)
 import Pkg.Parser.Types
-import Prelude hiding (GT, LT, Sum, many, some)
 import Text.Megaparsec hiding (State)
 import Text.Megaparsec.Char
 import Text.Megaparsec.Char.Lexer qualified as L
+import Prelude hiding (GT, LT, Sum, many, some)
 
 
 -- Example queries
@@ -308,8 +308,8 @@ instance Display Expr where
 -- Helper function to handle the common display logic
 displayExprHelper :: Text -> Int -> Subject -> Values -> Builder
 displayExprHelper op prec sub val =
-  displayParen (prec > 0)
-    $ if subjectHasWildcard sub
+  displayParen (prec > 0) $
+    if subjectHasWildcard sub
       then displayPrec prec (jsonPathQuery op sub val)
       else displayPrec prec sub <> displayPrec @Text prec op <> displayBuilder val
 

@@ -15,7 +15,7 @@ CREATE SCHEMA IF NOT EXISTS users;
 CREATE SCHEMA IF NOT EXISTS projects;
 CREATE SCHEMA IF NOT EXISTS apis;
 CREATE SCHEMA IF NOT EXISTS monitors;
-
+CREATE SCHEMA IF NOT EXISTS tests;
 
 -----------------------------------------------------------------------
 -- HELPER FUNCTIONS AND DOMAIN. 
@@ -870,6 +870,50 @@ CREATE TABLE IF NOT EXISTS apis.slack
   webhook_url   TEXT        NOT     NULL   DEFAULT        '',
   UNIQUE (project_id)
 );
+
+CREATE TABLE IF NOT EXISTS tests.collections
+(
+  id                 UUID        NOT     NULL   DEFAULT        gen_random_uuid() PRIMARY KEY, 
+  created_at         TIMESTAMP   WITH    TIME   ZONE       NOT               NULL              DEFAULT current_timestamp,
+  updated_at         TIMESTAMP   WITH    TIME   ZONE       NOT               NULL              DEFAULT current_timestamp,
+  deleted_at         TIMESTAMP WITH TIME ZONE DEFAULT NULL,
+  project_id         UUID        NOT     NULL   REFERENCES projects.projects (id)              ON      DELETE CASCADE,
+  last_run           TIMESTAMP   WITH    TIME   ZONE       DEFAULT NULL,
+  title              TEXT        NOT     NULL   DEFAULT        '',
+  description        TEXT        NOT     NULL   DEFAULT        '',
+  config             jsonb       NOT     NULL   DEFAULT     '{}'::jsonb,
+  schedule     TEXT  DEFAULT NULL,
+  is_scheduled BOOL  NOT  NULL   DEFAULT 'f'
+);
+SELECT manage_updated_at('tests.collections');
+create index if not exists idx_apis_testing_project_Id on tests.collections(project_id); 
+
+CREATE TABLE IF NOT EXISTS tests.collection_steps 
+(
+  id                 UUID        NOT     NULL   DEFAULT        gen_random_uuid() PRIMARY KEY, 
+  created_at         TIMESTAMP   WITH    TIME   ZONE           NOT               NULL              DEFAULT current_timestamp,
+  updated_at         TIMESTAMP   WITH    TIME   ZONE           NOT               NULL              DEFAULT current_timestamp,
+  deleted_at         TIMESTAMP   WITH    TIME   ZONE     DEFAULT  NULL,
+  last_run           TIMESTAMP   WITH    TIME   ZONE           DEFAULT NULL,
+  project_id         UUID        NOT     NULL   REFERENCES     projects.projects (id)              ON      DELETE CASCADE,
+  collection_id      UUID        NOT     NULL   REFERENCES     tests.collections (id)                   ON      DELETE CASCADE,
+  step_data          jsonb       NOT     NULL   DEFAULT        '{}'::jsonb
+);
+SELECT manage_updated_at('tests.collection_steps');
+create index if not exists idx_apis_test_steps_id on tests.collection_steps(id); 
+
+CREATE TABLE IF NOT EXISTS tests.test_results
+(
+  id                 UUID        NOT     NULL   DEFAULT        gen_random_uuid() PRIMARY KEY, 
+  created_at         TIMESTAMP   WITH    TIME   ZONE           NOT               NULL              DEFAULT current_timestamp,
+  updated_at         TIMESTAMP   WITH    TIME   ZONE           NOT               NULL              DEFAULT current_timestamp,
+  project_id         UUID        NOT     NULL   REFERENCES     projects.projects (id)              ON      DELETE CASCADE,
+  collection_id      UUID        NOT     NULL   REFERENCES     tests.collections (id)                   ON  DELETE CASCADE,
+  step_id            UUID        NOT     NULL   REFERENCES     tests.collection_steps (id)                ON      DELETE CASCADE,
+  result_data        jsonb       NOT     NULL   DEFAULT        '{}'::jsonb
+);
+SELECT manage_updated_at('tests.test_results');
+create index if not exists idx_apis_test_results_id on tests.test_results(id); 
 
 
 

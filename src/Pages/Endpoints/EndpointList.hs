@@ -28,11 +28,11 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.NonMember
 import Pages.Onboarding qualified as Onboarding
 import PyF qualified
-import Prelude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import System.Config
 import System.Types
 import Utils (deleteParam, faIcon_, faSprite_, mIcon_, textToBool, userIsProjectMember)
+import Prelude hiding (ask, asks)
 
 
 data ParamInput = ParamInput
@@ -84,8 +84,8 @@ endpointListGetH pid layoutM ackdM archivedM hostM projectHostM sortM hxRequestM
               , sort = fromMaybe "events" sortM
               }
       let elementBelowTabs =
-            div_ [class_ "grid grid-cols-5", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"]
-              $ endpointList' paramInput currTime pid endpointStats inbox
+            div_ [class_ "grid grid-cols-5", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $
+              endpointList' paramInput currTime pid endpointStats inbox
       case (hxRequestM, hxBoostedM) of
         (Just "true", Just "false") -> pure elementBelowTabs
         (Just "true", Nothing) -> pure elementBelowTabs
@@ -233,8 +233,8 @@ renderEndpoint activePage currTime enp = do
         div_ [class_ "flex items-center gap-2 mt-5"] do
           AnomalyList.anomalyArchiveButton enp.projectId (Anomalies.AnomalyId enp.anomalyId) (isJust enp.archivedAt)
           AnomalyList.anomalyAcknowlegeButton enp.projectId (Anomalies.AnomalyId enp.anomalyId) (isJust enp.acknowlegedAt)
-    div_ [class_ "flex items-center justify-center "]
-      $ div_
+    div_ [class_ "flex items-center justify-center "] $
+      div_
         [ class_ "w-56 h-12 px-3"
         , hxGet_ $ "/charts_html?pid=" <> enp.projectId.toText <> "&since=14D&query_raw=" <> AnomalyList.escapedQueryPartial [PyF.fmt|endpoint_hash=="{enp.endpointHash}" | timechart [1d]|]
         , hxTrigger_ "intersect once"

@@ -33,7 +33,6 @@ import Network.Wreq
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper
 import Pages.NonMember
-import Prelude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import Servant
 import Servant (
@@ -46,6 +45,7 @@ import System.Config
 import System.Types
 import Utils
 import Web.FormUrlEncoded (FromForm)
+import Prelude hiding (ask, asks)
 
 
 data ManageMembersForm = ManageMembersForm
@@ -110,10 +110,10 @@ manageMembersPostH pid form = do
                 Just idX -> pure idX
             Just idX -> pure idX
 
-        when (userId' /= currUserId)
-          $ void
-          $ liftIO
-          $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId' pid email projectTitle -- invite the users to the project (Usually as an email)
+        when (userId' /= currUserId) $
+          void $
+            liftIO $
+              withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId' pid email projectTitle -- invite the users to the project (Usually as an email)
         pure (email, permission, userId')
 
       let projectMembers =
@@ -126,13 +126,13 @@ manageMembersPostH pid form = do
       -- TODO: Send a notification via background job, about the users permission having been updated.
       unless (null uAndPOldAndChanged)
         $ void
-        . dbtToEff
+          . dbtToEff
         $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
       -- soft delete project members with id
       unless (null deletedUAndP)
         $ void
-        . dbtToEff
+          . dbtToEff
         $ ProjectMembers.softDeleteProjectMembers deletedUAndP
 
       projMembersLatest <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid

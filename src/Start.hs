@@ -2,10 +2,11 @@ module Start (
   startApp,
 ) where
 
-import Relude
-import System.Server qualified as Server
-import RustInterop
 import Foreign.C.String
+import Relude
+import RustInterop
+import System.Server qualified as Server
+
 
 -- startApp :: IO ()
 -- startApp =  withCString "Rust 🦀" hello

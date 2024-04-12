@@ -46,6 +46,7 @@ library
       Models.Projects.RedactedFields
       Models.Projects.Swaggers
       Models.Projects.SwaggersSpec
+      Models.Tests.Testing
       Models.Users.Sessions
       Models.Users.Users
       Network.Wai.Middleware.Heartbeat
@@ -78,6 +79,7 @@ library
       Pages.Share
       Pages.SlackInstall
       Pages.Survey
+      Pages.Testing
       Pkg.Components
       Pkg.ConvertKit
       Pkg.Google
@@ -119,6 +121,8 @@ library
       MultiWayIf
       FlexibleInstances
       LambdaCase
+      MultiParamTypeClasses
+      NamedFieldPuns
       GeneralizedNewtypeDeriving
       FlexibleContexts
       OverloadedLabels
@@ -250,6 +254,8 @@ executable apitoolkit-server-exe
       MultiWayIf
       FlexibleInstances
       LambdaCase
+      MultiParamTypeClasses
+      NamedFieldPuns
       GeneralizedNewtypeDeriving
       FlexibleContexts
       OverloadedLabels
@@ -290,6 +296,8 @@ test-suite doctests
       MultiWayIf
       FlexibleInstances
       LambdaCase
+      MultiParamTypeClasses
+      NamedFieldPuns
       GeneralizedNewtypeDeriving
       FlexibleContexts
       OverloadedLabels
@@ -331,6 +339,8 @@ test-suite tests
       MultiWayIf
       FlexibleInstances
       LambdaCase
+      MultiParamTypeClasses
+      NamedFieldPuns
       GeneralizedNewtypeDeriving
       FlexibleContexts
       OverloadedLabels

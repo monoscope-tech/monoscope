@@ -1,8 +1,8 @@
 # GHC_VERSION := $(shell stack ghc -- --version | awk '{print $$NF}')
 # GHC_VERSION := $(shell stack ghc -- --version | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -n 1)
 GHC_VERSION := 9.8.1
-ARCH := $(shell uname -m | sed 's/arm64/aarch64/')
-OS := $(shell uname -s | sed 's/Darwin/osx/')
+ARCH := $(shell uname -m | sed 's/arm64/aarch64/' | tr '[:upper:]' '[:lower:]')
+OS := $(shell uname -s | sed 's/Darwin/osx/' | tr '[:upper:]' '[:lower:]')
 OS_ARCH := $(ARCH)-$(OS)
 LINUX_HC_PATH := .stack-work/dist/x86_64-linux-tinfo6/ghc-$(GHC_VERSION)/build
 RUSTLIB := rust_interop
@@ -71,6 +71,7 @@ prepare-rust-interop:
 	cp ./target/release/lib$(RUSTLIB).so $(LINUX_HC_PATH)/libC$(RUSTLIB)-ghc$(GHC_VERSION).so || true && \
 	cp ./target/release/lib$(RUSTLIB).a .stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/libC$(RUSTLIB).a || true && \
 	cp ./target/release/lib$(RUSTLIB).so .stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/libC$(RUSTLIB).so || true && \
+	cp ./target/release/lib$(RUSTLIB).so .stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/libC$(RUSTLIB)-ghc$(GHC_VERSION).so || true && \
 	cp ./target/release/lib$(RUSTLIB).dylib .stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/libC$(RUSTLIB).dylib || true && \
 	cp ./target/release/lib$(RUSTLIB).dylib .stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/libC$(RUSTLIB)-ghc$(GHC_VERSION).dylib  || true
 

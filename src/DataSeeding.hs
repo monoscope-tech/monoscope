@@ -27,7 +27,6 @@ import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.NonMember
 import ProcessMessage qualified
-import Prelude hiding (ask, asks)
 import Relude.Unsafe ((!!))
 import Relude.Unsafe qualified as Unsafe
 import RequestMessages qualified
@@ -36,6 +35,7 @@ import System.Random (RandomGen, getStdGen, randomRs)
 import System.Types
 import Utils
 import Web.FormUrlEncoded (FromForm)
+import Prelude hiding (ask, asks)
 
 
 data FieldConfig = FieldConfig
@@ -91,11 +91,11 @@ fieldConfigToField fc = do
 
 randomTimesBtwToAndFrom :: RandomGen g => UTCTime -> Int -> g -> NominalDiffTime -> [ZonedTime]
 randomTimesBtwToAndFrom startTime countToReturn rg maxDiff =
-  take countToReturn
-    $ utcToZonedTime utc
-    . flip addUTCTime startTime
-    . realToFrac
-    <$> randomRs (0, truncate maxDiff :: Int) rg
+  take countToReturn $
+    utcToZonedTime utc
+      . flip addUTCTime startTime
+      . realToFrac
+      <$> randomRs (0, truncate maxDiff :: Int) rg
 
 
 parseConfigToRequestMessages :: Projects.ProjectId -> ByteString -> IO (Either Yaml.ParseException [RequestMessages.RequestMessage])
@@ -106,43 +106,43 @@ parseConfigToRequestMessages pid input = do
     Right cfgs -> do
       let fakerSettings = setRandomGen randGen defaultFakerSettings
       resp <-
-        generateWithSettings fakerSettings
-          $ cfgs
-          & mapM \cfg -> do
-            let startTimeUTC = zonedTimeToUTC cfg.from
-                maxDiffTime = diffUTCTime (zonedTimeToUTC cfg.to) startTimeUTC
-                timestamps = randomTimesBtwToAndFrom startTimeUTC cfg.count randGen maxDiffTime
-                durations = take cfg.count $ randomRs (cfg.durationFrom, cfg.durationTo) randGen
-                allowedStatusCodes = cfg.statusCodesOneof
-                statusCodes = take cfg.count $ map (allowedStatusCodes !!) $ randomRs (0, length allowedStatusCodes - 1) randGen
+        generateWithSettings fakerSettings $
+          cfgs
+            & mapM \cfg -> do
+              let startTimeUTC = zonedTimeToUTC cfg.from
+                  maxDiffTime = diffUTCTime (zonedTimeToUTC cfg.to) startTimeUTC
+                  timestamps = randomTimesBtwToAndFrom startTimeUTC cfg.count randGen maxDiffTime
+                  durations = take cfg.count $ randomRs (cfg.durationFrom, cfg.durationTo) randGen
+                  allowedStatusCodes = cfg.statusCodesOneof
+                  statusCodes = take cfg.count $ map (allowedStatusCodes !!) $ randomRs (0, length allowedStatusCodes - 1) randGen
 
-            zip3 timestamps durations statusCodes & mapM \(timestampV, duration', statusCode') -> do
-              let duration = duration'
-                  statusCode = statusCode'
-                  method = cfg.method
-                  urlPath = Just cfg.path
-                  rawUrl = cfg.path
-                  protoMajor = 1
-                  protoMinor = 1
-                  referer = "https://google.com"
-                  host = Just "https://apitoolkit.io/"
-                  projectId = Projects.unProjectId pid
-                  timestamp = timestampV
-                  sdkType = RequestDumps.GoGin
-                  msgId = Nothing
-                  parentId = Nothing
-                  serviceVersion = Nothing
-                  errors = Nothing
-                  tags = Nothing
+              zip3 timestamps durations statusCodes & mapM \(timestampV, duration', statusCode') -> do
+                let duration = duration'
+                    statusCode = statusCode'
+                    method = cfg.method
+                    urlPath = Just cfg.path
+                    rawUrl = cfg.path
+                    protoMajor = 1
+                    protoMinor = 1
+                    referer = "https://google.com"
+                    host = Just "https://apitoolkit.io/"
+                    projectId = Projects.unProjectId pid
+                    timestamp = timestampV
+                    sdkType = RequestDumps.GoGin
+                    msgId = Nothing
+                    parentId = Nothing
+                    serviceVersion = Nothing
+                    errors = Nothing
+                    tags = Nothing
 
-              pathLog <- mapM fieldConfigToField cfg.queryParams
-              pathParams <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField cfg.pathParams
-              queryParams <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField cfg.queryParams
-              requestHeaders <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField cfg.requestHeaders
-              responseHeaders <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField cfg.responseHeaders
-              responseBody <- B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField cfg.responseBody
-              requestBody <- B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField cfg.responseBody
-              pure RequestMessages.RequestMessage{..}
+                pathLog <- mapM fieldConfigToField cfg.queryParams
+                pathParams <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField cfg.pathParams
+                queryParams <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField cfg.queryParams
+                requestHeaders <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField cfg.requestHeaders
+                responseHeaders <- AE.toJSON . HM.fromList <$> mapM fieldConfigToField cfg.responseHeaders
+                responseBody <- B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField cfg.responseBody
+                requestBody <- B64.encodeBase64 . toStrict . AE.encode <$> mapM fieldConfigToField cfg.responseBody
+                pure RequestMessages.RequestMessage{..}
       pure $ Right $ concat resp
 
 

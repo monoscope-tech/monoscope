@@ -6,10 +6,10 @@ import Data.Text.Display (Display, display, displayBuilder, displayParen, displa
 import Data.Text.Lazy.Builder (Builder)
 import Pkg.Parser.Expr
 import Pkg.Parser.Types
-import Prelude hiding (GT, LT, Sum, many, some)
 import Text.Megaparsec hiding (State)
 import Text.Megaparsec.Char
 import Text.Megaparsec.Char.Lexer qualified as L
+import Prelude hiding (GT, LT, Sum, many, some)
 
 
 -- Syntax:

@@ -26,6 +26,7 @@ module Utils (
   lookupMapText,
   lookupMapInt,
   freeTierLimitExceededBanner,
+  scheduleIntervals,
 )
 where
 
@@ -34,7 +35,7 @@ import Data.Aeson qualified as AE
 import Data.HashMap.Strict qualified as HM
 import Data.Scientific (toBoundedInteger)
 import Data.Text (replace)
-import Data.Time (ZonedTime)
+import Data.Time (NominalDiffTime, UTCTime, ZonedTime, addUTCTime)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.ToField (ToField (..))
 import Database.PostgreSQL.Transact
@@ -43,10 +44,10 @@ import Lucid.Svg qualified as Svg
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Session
-import Prelude hiding (show)
 import Servant
 import Text.Regex.TDFA ((=~))
-import Text.Show 
+import Text.Show
+import Prelude hiding (show)
 
 
 -- Added only for satisfying the tests
@@ -100,8 +101,8 @@ faIcon_ faIcon faClasses classes = do
 
 faIconWithAnchor_ :: Text -> Text -> Text -> Text -> Html ()
 faIconWithAnchor_ faIcon faClasses classes onClickAction = do
-  a_ [href_ "#", onclick_ onClickAction]
-    $ faIcon_ faIcon faClasses classes -- You can replace "#" with the actual link
+  a_ [href_ "#", onclick_ onClickAction] $
+    faIcon_ faIcon faClasses classes -- You can replace "#" with the actual link
 
 
 deleteParam :: Text -> Text -> Text
@@ -213,3 +214,24 @@ freeTierLimitExceededBanner pid =
   div_ [class_ "flex w-full text-center items-center px-4 gap-4 py-2 bg-red-600 text-white rounded-lg justify-center"] do
     p_ [] "You have exceeded the maximum free tier requests limit for this month, new request will not be processed."
     a_ [class_ "font-semibold", href_ $ "/p/" <> pid <> "/settings"] "upgrade now"
+
+
+scheduleIntervals :: UTCTime -> Text -> [UTCTime]
+scheduleIntervals startTime schedule = unfoldr nextInterval startTime
+  where
+    getScheduleSec :: Text -> NominalDiffTime
+    getScheduleSec sched = case sched of
+      "*/5 * * * *" -> 5 * 60
+      "*/10 * * * *" -> 10 * 60
+      "*/15 * * * *" -> 15 * 60
+      "*/30 * * * *" -> 30 * 60
+      "0 * * * *" -> 60 * 60
+      _ -> 24 * 60 * 60
+
+    nextInterval :: UTCTime -> Maybe (UTCTime, UTCTime)
+    nextInterval currentTime =
+      let nextTime = addUTCTime (getScheduleSec schedule) currentTime
+       in if nextTime > endTime
+            then Nothing
+            else Just (currentTime, nextTime)
+    endTime = addUTCTime (24 * 60 * 60) startTime

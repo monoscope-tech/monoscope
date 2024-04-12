@@ -12,11 +12,11 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Prelude hiding (ask, asks)
 import Servant (Union, WithStatus (..), respond)
 import System.Config
 import System.Types
 import Utils (GetOrRedirect, faIcon_, redirect)
+import Prelude hiding (ask, asks)
 
 
 listProjectsGetH :: ATAuthCtx (Union GetOrRedirect)

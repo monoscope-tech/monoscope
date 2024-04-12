@@ -40,7 +40,6 @@ import Network.Wai.Handler.Warp (
 import Network.Wai.Log qualified as WaiLog
 import Network.Wai.Middleware.Heartbeat (heartbeatMiddleware)
 import ProcessMessage
-import Prelude hiding (ask, asks)
 import Servant qualified
 import Servant.Server (Handler, ServerError)
 import Servant.Server.Generic (genericServeTWithContext)
@@ -48,6 +47,7 @@ import System.Config
 import System.Logging qualified as Logging
 import System.Types
 import Web.Routes qualified as Routes
+import Prelude hiding (ask, asks)
 
 
 runAPItoolkit :: IO ()
@@ -90,14 +90,14 @@ runServer appLogger env = do
   -- let ojTable = "background_jobs" :: OJTypes.TableName
   -- let ojCfg = OJConfig.mkUIConfig ojLogger ojTable poolConn id
   asyncs <-
-    liftIO
-      $ sequence
-      $ concat
-        [ [async $ runSettings warpSettings wrappedServer]
-        , -- , [async $ OJCli.defaultWebUI ojStartArgs ojCfg] -- Uncomment or modify as needed
-          [async $ pubsubService appLogger env | env.config.enablePubsubService]
-        , [async $ Safe.withException bgJobWorker (logException (env.config.environment) appLogger) | env.config.enableBackgroundJobs]
-        ]
+    liftIO $
+      sequence $
+        concat
+          [ [async $ runSettings warpSettings wrappedServer]
+          , -- , [async $ OJCli.defaultWebUI ojStartArgs ojCfg] -- Uncomment or modify as needed
+            [async $ pubsubService appLogger env | env.config.enablePubsubService]
+          , [async $ Safe.withException bgJobWorker (logException (env.config.environment) appLogger) | env.config.enableBackgroundJobs]
+          ]
   _ <- liftIO $ waitAnyCancel asyncs
   pass
 
@@ -120,8 +120,8 @@ pubsubService appLogger appCtx = do
 
   let pullReq = PubSub.newPullRequest & field @"maxMessages" L.?~ fromIntegral (envConfig.messagesPerPubsubPullBatch)
 
-  forever
-    $ runResourceT
+  forever $
+    runResourceT
       do
         forM envConfig.requestPubsubTopics \topic -> do
           let subscription = "projects/past-3/subscriptions/" <> topic <> "-sub"

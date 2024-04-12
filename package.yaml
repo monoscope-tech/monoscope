@@ -1,10 +1,10 @@
 name: apitoolkit-server
 version: 0.1.0.0
-github: 'githubuser/apitoolkit-server'
+github: "githubuser/apitoolkit-server"
 license: BSD3
-author: 'Author name here'
-maintainer: 'example@example.com'
-copyright: '2021 Author name here'
+author: "Author name here"
+maintainer: "example@example.com"
+copyright: "2021 Author name here"
 language: GHC2021
 spec-version: 0.36.0
 
@@ -31,9 +31,9 @@ ghc-options:
   - -fwrite-ide-info
   - -hiedir=.hie
   - -j4
-  - +RTS 
-  - -A128m 
-  - -n2m 
+  - +RTS
+  - -A128m
+  - -n2m
   - -RTS
   # - -fllvm
 
@@ -48,7 +48,9 @@ default-extensions:
   - MultiWayIf
   - FlexibleInstances
   - LambdaCase
-  - GeneralizedNewtypeDeriving 
+  - MultiParamTypeClasses
+  - NamedFieldPuns
+  - GeneralizedNewtypeDeriving
   - FlexibleContexts
   - OverloadedLabels
   - OverloadedLists
@@ -70,13 +72,13 @@ extra-source-files:
 description: Please see the README on GitHub at <https://github.com/githubuser/apitoolkit-server#readme>
 
 library:
-  source-dirs: 
+  source-dirs:
     - src
   dependencies:
     - name: base
       mixin:
         - hiding (Prelude)
-    - name: relude 
+    - name: relude
       version: ">= 1.2.0.0"
       mixin:
         - (Relude as Prelude)
@@ -97,7 +99,7 @@ library:
     - aeson-qq
     - async
     - bytestring
-    - base64 
+    - base64
     - mtl
     - http-types
     - cache >= 0.1.3.0
@@ -188,7 +190,7 @@ executables:
       # - -fPIC
     dependencies:
       - apitoolkit-server
-      - name: relude 
+      - name: relude
         version: ">= 1.2.0.0"
         mixin:
           - (Relude as Prelude)
@@ -221,7 +223,7 @@ tests:
       - hspec
       - hspec-discover
       - doctest-parallel
-      - name: relude 
+      - name: relude
         version: ">= 1.2.0.0"
         mixin:
           - (Relude as Prelude)

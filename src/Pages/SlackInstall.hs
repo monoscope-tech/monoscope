@@ -38,7 +38,6 @@ import Network.Wreq
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Pkg.Components (navBar)
 import Pkg.Mail (sendSlackMessage)
-import Prelude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
@@ -46,6 +45,7 @@ import System.Config
 import System.Types
 import Utils (faIcon_)
 import Web.FormUrlEncoded (FromForm)
+import Prelude hiding (ask, asks)
 
 
 data LinkProjectsForm = LinkProjectsForm
