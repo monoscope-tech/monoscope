@@ -237,7 +237,7 @@ updateSchedule cid schedule isScheduled = do
 getCollectionStepById :: CollectionId -> CollectionStepId -> DBT IO (Maybe CollectionStep)
 getCollectionStepById col_id step_id = queryOne Select q (col_id, step_id)
   where
-    q = [sql|SELECT * FROM apis.test_step where collection_id = ? AND id = ? |]
+    q = [sql|SELECT * FROM apis.test_steps where collection_id = ? AND id = ? |]
 
 
 scheduleInsertScheduleInBackgroundJobs :: [(UTCTime, Text, AE.Value)] -> DBT IO Int64
