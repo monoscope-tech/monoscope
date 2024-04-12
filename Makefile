@@ -1,3 +1,12 @@
+# GHC_VERSION := $(shell stack ghc -- --version | awk '{print $$NF}')
+# GHC_VERSION := $(shell stack ghc -- --version | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -n 1)
+GHC_VERSION := 9.8.1
+ARCH := $(shell uname -m | sed 's/arm64/aarch64/')
+OS := $(shell uname -s | sed 's/Darwin/osx/')
+OS_ARCH := $(ARCH)-$(OS)
+LINUX_HC_PATH := .stack-work/dist/x86_64-linux-tinfo6/ghc-$(GHC_VERSION)/build
+RUSTLIB := rust_interop
+
 css-start:
 	npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --watch
 post-css:
@@ -46,4 +55,23 @@ timescaledb-docker-tmp:
 update-service-worker:
 	workbox generateSW workbox-config.js
 
-.PHONY: all test fmt lint fix-lint lice-reload 
+show-os-arch:
+	@echo "OS and Architecture: $(OS_ARCH)"
+
+show-ghc-version:
+	@echo "GHC Version: $(GHC_VERSION)"
+
+prepare-rust-interop:
+	cd ./rust-interop/ && \
+	cargo build --release && \
+	mkdir -p ./.stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/ && \
+	mkdir -p $(LINUX_HC_PATH) && \
+	cp ./target/release/lib$(RUSTLIB).a $(LINUX_HC_PATH)/libC$(RUSTLIB).a && \
+	cp ./target/release/lib$(RUSTLIB).so $(LINUX_HC_PATH)/libC$(RUSTLIB).so || true && \
+	cp ./target/release/lib$(RUSTLIB).so $(LINUX_HC_PATH)/libC$(RUSTLIB)-ghc$(GHC_VERSION).so || true && \
+	cp ./target/release/lib$(RUSTLIB).a .stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/libC$(RUSTLIB).a || true && \
+	cp ./target/release/lib$(RUSTLIB).so .stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/libC$(RUSTLIB).so || true && \
+	cp ./target/release/lib$(RUSTLIB).dylib .stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/libC$(RUSTLIB).dylib || true && \
+	cp ./target/release/lib$(RUSTLIB).dylib .stack-work/dist/$(OS_ARCH)/ghc-$(GHC_VERSION)/build/libC$(RUSTLIB)-ghc$(GHC_VERSION).dylib  || true
+
+.PHONY: all test fmt lint fix-lint lice-reload prepare-rust-interop

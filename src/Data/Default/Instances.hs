@@ -10,7 +10,7 @@ import Data.Text.Lazy qualified as Lazy (Text)
 import Data.Text.Lazy qualified as Lazy.Text (empty)
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
-import Data.Vector (Vector, empty)
+import Data.Vector qualified as V 
 import Relude.Unsafe qualified as Unsafe
 
 
@@ -71,8 +71,8 @@ instance Default Lazy.Text where
 
 
 ----- Vector
-instance Default (Vector a) where
-  def = empty
+instance Default (V.Vector a) where
+  def = V.empty
   {-# INLINE def #-}
 
 -- Function empty is also inlined and we need to preserve low-level

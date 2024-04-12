@@ -37,6 +37,7 @@ resolver: nightly-2024-01-23
 packages:
   # - https://github.com/jfischoff/postgres-options
   - .
+  # - rust-interop
 # Dependency packages to be pulled from upstream that are not in the resolver.
 # These entries can reference officially published versions as well as
 # forks / in-progress versions pinned to a git hash. For example:
@@ -51,6 +52,7 @@ ghc-options:
   "$locals": -fwrite-ide-info -hiedir=.hie
 
 extra-deps:
+  - ./rust-interop
   - relude-1.2.1.0
   - cache-0.1.3.0
   - postgres-options-0.2.1.0

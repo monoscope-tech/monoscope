@@ -18,7 +18,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.NonMember
-import Relude hiding (ask, asks)
+import Prelude hiding (ask, asks)
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
 import System.Config

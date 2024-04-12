@@ -14,7 +14,7 @@ import Pkg.Parser.Expr
 import Pkg.Parser.Stats
 import Pkg.Parser.Types
 import PyF
-import Relude hiding (GT, LT, many, some)
+import Prelude hiding (GT, LT, many, some)
 import Relude.Unsafe qualified as Unsafe
 import Text.Megaparsec hiding (State)
 import Text.Megaparsec.Char

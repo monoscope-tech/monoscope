@@ -41,7 +41,7 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Components
 import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
 import Pages.NonMember
-import Relude hiding (ask, asks, max, min)
+import Prelude hiding (ask, asks, max, min)
 import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx

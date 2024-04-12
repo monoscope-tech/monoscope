@@ -5,7 +5,7 @@ import Data.Text qualified as T
 import Data.Text.Display (Display, display, displayBuilder, displayParen, displayPrec)
 import Data.Text.Lazy.Builder (Builder)
 import Pkg.Parser.Types
-import Relude hiding (GT, LT, Sum, many, some)
+import Prelude hiding (GT, LT, Sum, many, some)
 import Text.Megaparsec hiding (State)
 import Text.Megaparsec.Char
 import Text.Megaparsec.Char.Lexer qualified as L

@@ -35,7 +35,7 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Components (statBox)
 import Pages.Endpoints.EndpointList (renderEndpoint)
 import Pages.Onboarding qualified as Onboarding
-import Relude hiding (ask, asks, max, min)
+import Prelude hiding (ask, asks, max, min)
 import Relude.Unsafe qualified as Unsafe
 import Servant (
   Union,

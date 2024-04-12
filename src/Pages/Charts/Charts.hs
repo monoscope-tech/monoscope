@@ -35,7 +35,7 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Network.URI (escapeURIString, isUnescapedInURI)
 import Pkg.Parser
-import Relude hiding (ask, asks)
+import Prelude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import Servant (FromHttpApiData (..))
 import System.Config (AuthContext (config))

@@ -24,7 +24,7 @@ import Network.URI (escapeURIString, isUnescapedInURI)
 import Pages.Components qualified as Components
 import Pages.NonMember
 import PyF
-import Relude hiding (ask, asks)
+import Prelude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import System.Config
 import System.Types
