@@ -19,7 +19,7 @@ import Models.Users.Users qualified as Users
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.NonMember
 import Pkg.Components (loader)
-import Relude hiding (ask, asks)
+import Prelude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXRedirect, HXTrigger)

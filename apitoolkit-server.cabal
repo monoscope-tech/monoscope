@@ -1,4 +1,4 @@
-cabal-version: 1.12
+cabal-version: 2.0
 
 -- This file has been generated from package.yaml by hpack version 0.36.0.
 --
@@ -108,30 +108,21 @@ library
       Web.ClientMetadata
       Web.Error
       Web.Routes
-  other-modules:
-      Paths_apitoolkit_server
   hs-source-dirs:
       src
   default-extensions:
-      BangPatterns
       BlockArguments
       DataKinds
       DeriveAnyClass
-      DeriveGeneric
       DerivingStrategies
       DerivingVia
       DisambiguateRecordFields
       ExtendedDefaultRules
       MultiWayIf
       FlexibleInstances
-      ImportQualifiedPost
-      InstanceSigs
       LambdaCase
-      MultiParamTypeClasses
-      NamedFieldPuns
       GeneralizedNewtypeDeriving
       FlexibleContexts
-      NoImplicitPrelude
       OverloadedLabels
       OverloadedLists
       OverloadedStrings
@@ -141,7 +132,6 @@ library
       StrictData
       TypeApplications
       TypeFamilies
-      TypeOperators
       GeneralizedNewtypeDeriving
       UndecidableInstances
       OverloadedRecordDot
@@ -215,6 +205,7 @@ library
     , relude >=1.2.0.0
     , resource-pool
     , resourcet
+    , rust-interop
     , safe-exceptions
     , scientific
     , sendgrid-v3 >=0.3.0.0
@@ -240,7 +231,11 @@ library
     , wreq
     , xxhash
     , yaml
-  default-language: Haskell2010
+  mixins:
+      base hiding (Prelude)
+    , relude (Relude as Prelude)
+    , relude 
+  default-language: GHC2021
 
 executable apitoolkit-server-exe
   main-is: Main.hs
@@ -251,25 +246,18 @@ executable apitoolkit-server-exe
   extra-libraries:
       testkit
   default-extensions:
-      BangPatterns
       BlockArguments
       DataKinds
       DeriveAnyClass
-      DeriveGeneric
       DerivingStrategies
       DerivingVia
       DisambiguateRecordFields
       ExtendedDefaultRules
       MultiWayIf
       FlexibleInstances
-      ImportQualifiedPost
-      InstanceSigs
       LambdaCase
-      MultiParamTypeClasses
-      NamedFieldPuns
       GeneralizedNewtypeDeriving
       FlexibleContexts
-      NoImplicitPrelude
       OverloadedLabels
       OverloadedLists
       OverloadedStrings
@@ -279,7 +267,6 @@ executable apitoolkit-server-exe
       StrictData
       TypeApplications
       TypeFamilies
-      TypeOperators
       GeneralizedNewtypeDeriving
       UndecidableInstances
       OverloadedRecordDot
@@ -287,36 +274,30 @@ executable apitoolkit-server-exe
   ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches -Wno-missing-kind-signatures -fwrite-ide-info -hiedir=.hie -j4 +RTS -A128m -n2m -RTS -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
   build-depends:
       apitoolkit-server
-    , relude >=1.1.0.0
-  default-language: Haskell2010
+    , relude >=1.2.0.0
+  mixins:
+      relude (Relude as Prelude)
+    , relude 
+  default-language: GHC2021
 
 test-suite doctests
   type: exitcode-stdio-1.0
   main-is: Main.hs
-  other-modules:
-      Paths_apitoolkit_server
   hs-source-dirs:
       test/doctests
   default-extensions:
-      BangPatterns
       BlockArguments
       DataKinds
       DeriveAnyClass
-      DeriveGeneric
       DerivingStrategies
       DerivingVia
       DisambiguateRecordFields
       ExtendedDefaultRules
       MultiWayIf
       FlexibleInstances
-      ImportQualifiedPost
-      InstanceSigs
       LambdaCase
-      MultiParamTypeClasses
-      NamedFieldPuns
       GeneralizedNewtypeDeriving
       FlexibleContexts
-      NoImplicitPrelude
       OverloadedLabels
       OverloadedLists
       OverloadedStrings
@@ -326,7 +307,6 @@ test-suite doctests
       StrictData
       TypeApplications
       TypeFamilies
-      TypeOperators
       GeneralizedNewtypeDeriving
       UndecidableInstances
       OverloadedRecordDot
@@ -339,35 +319,26 @@ test-suite doctests
     , hspec
     , hspec-discover
     , relude >=1.2.0.0
-  default-language: Haskell2010
+  default-language: GHC2021
 
 test-suite tests
   type: exitcode-stdio-1.0
   main-is: Main.hs
-  other-modules:
-      Paths_apitoolkit_server
   hs-source-dirs:
       test/hspec
   default-extensions:
-      BangPatterns
       BlockArguments
       DataKinds
       DeriveAnyClass
-      DeriveGeneric
       DerivingStrategies
       DerivingVia
       DisambiguateRecordFields
       ExtendedDefaultRules
       MultiWayIf
       FlexibleInstances
-      ImportQualifiedPost
-      InstanceSigs
       LambdaCase
-      MultiParamTypeClasses
-      NamedFieldPuns
       GeneralizedNewtypeDeriving
       FlexibleContexts
-      NoImplicitPrelude
       OverloadedLabels
       OverloadedLists
       OverloadedStrings
@@ -377,7 +348,6 @@ test-suite tests
       StrictData
       TypeApplications
       TypeFamilies
-      TypeOperators
       GeneralizedNewtypeDeriving
       UndecidableInstances
       OverloadedRecordDot
@@ -389,6 +359,8 @@ test-suite tests
     , doctest-parallel
     , hspec
     , hspec-discover
-    , relude >=1.1.0.0
+    , relude >=1.2.0.0
     , tmp-postgres
-  default-language: Haskell2010
+  mixins:
+      relude (Relude as Prelude)
+  default-language: GHC2021

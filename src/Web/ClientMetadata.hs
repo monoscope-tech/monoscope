@@ -13,7 +13,7 @@ import Effectful.PostgreSQL.Transact.Effect
 import Effectful.Reader.Static (ask)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
-import Relude hiding (ask, asks, max, min)
+import Prelude hiding (ask, asks, max, min)
 import Relude.Unsafe ((!!))
 import Servant (err401)
 import System.Config

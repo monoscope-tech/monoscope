@@ -3,7 +3,7 @@ module Pages.Share (ReqForm, shareLinkPostH, shareLinkGetH) where
 import Data.Aeson as Aeson
 import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
-import Data.Text
+import Data.Text ()
 import Data.Time (ZonedTime, getZonedTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
@@ -28,7 +28,7 @@ import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pkg.Components (navBar)
 import PyF
-import Relude hiding (ask, asks)
+import Prelude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import Servant (Headers)
 import Servant.Htmx (HXTrigger)
@@ -71,7 +71,7 @@ shareLinkPostH pid reqForm = do
   let rid = reqForm.reqId
   let expIn = reqForm.expiresIn
   let lis = ["1 hour", "8 hours", "1 day"] :: [Text]
-  if Relude.elem expIn lis
+  if elem expIn lis
     then do
       inId <- liftIO UUIDV4.nextRandom
       res <- dbtToEff $ execute Insert [sql| INSERT INTO apis.share_requests VALUES (?,?,?,?, current_timestamp + interval ?,?) |] (inId, pid, currentTime, currentTime, expIn, rid)

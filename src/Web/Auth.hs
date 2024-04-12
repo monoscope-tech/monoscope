@@ -49,7 +49,7 @@ import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, response
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Lens (responseBody)
 import Pkg.ConvertKit qualified as ConvertKit
-import Relude hiding (ask, asks)
+import Prelude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import Servant (
   Context (EmptyContext, (:.)),
@@ -73,7 +73,6 @@ import System.Logging qualified as Logging
 import System.Types
 import Web.Cookie
 import Web.Cookie (SetCookie, parseCookies)
-import Prelude (lookup)
 
 
 type APItoolkitAuthContext = AuthHandler Request (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
