@@ -1,4 +1,3 @@
-workspace = { members = ["target/debug/build/reflexive-eb3dcc54ed134ea3/out/hs-bindgen/sandbox"] }
 [package]
 name = "rust-interop"
 version = "0.1.0"
