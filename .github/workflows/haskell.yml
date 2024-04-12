@@ -23,13 +23,13 @@ jobs:
           profile: minimal
           override: true
       - uses: freckle/stack-cache-action@main
-      - run: make prepare-rust-interop
       # - uses: freckle/stack-action@v5
       - uses: haskell-actions/setup@v2
         with:
           ghc-version: 9.8.1 
           enable-stack: true
           stack-version: "latest"
+      - run: make prepare-rust-interop
       - run: stack --no-terminal build --dependencies-only
 
       # - run: stack install --local-bin-path=. --ghc-options '-optl-static -fPIC'
