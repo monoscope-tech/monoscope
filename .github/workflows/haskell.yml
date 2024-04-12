@@ -15,13 +15,8 @@ jobs:
       contents: 'read'
       id-token: 'write'
     steps:
-      - uses: actions/checkout@v3
-      - uses: freckle/stack-cache-action@main
-      - uses: haskell-actions/setup@v2
-        with:
-          ghc-version: 9.8.1 
-          enable-stack: true
-          stack-version: "latest"
+      - uses: actions/checkout@v4
+      - uses: freckle/stack-action@v5
 
       # Setup Rust
       - name: Setup Rust
