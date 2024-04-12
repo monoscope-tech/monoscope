@@ -55,6 +55,7 @@ import PyF
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import System.Config qualified as Config
+import Utils (scheduleIntervals)
 
 
 data BgJobs
@@ -395,27 +396,6 @@ jobsRunner dbPool logger cfg job = do
 
 
 foreign import ccall unsafe "haskell_binding" haskellBinding :: CString -> Any
-
-
-scheduleIntervals :: UTCTime -> Text -> [UTCTime]
-scheduleIntervals startTime schedule = unfoldr nextInterval startTime
-  where
-    getScheduleSec :: Text -> NominalDiffTime
-    getScheduleSec sched = case sched of
-      "*/5 * * * *" -> 5 * 60
-      "*/10 * * * *" -> 10 * 60
-      "*/15 * * * *" -> 15 * 60
-      "*/30 * * * *" -> 30 * 60
-      "0 * * * *" -> 60 * 60
-      _ -> 24 * 60 * 60
-
-    nextInterval :: UTCTime -> Maybe (UTCTime, UTCTime)
-    nextInterval currentTime =
-      let nextTime = addUTCTime (getScheduleSec schedule) currentTime
-       in if nextTime > endTime
-            then Nothing
-            else Just (currentTime, nextTime)
-    endTime = addUTCTime (24 * 60 * 60) startTime
 
 
 reportUsage :: Text -> Int -> Text -> IO ()

@@ -21,7 +21,7 @@ import Data.Aeson qualified as Aeson
 import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
 import Data.Text qualified as T
-import Data.Time (getZonedTime)
+import Data.Time (getCurrentTime, getZonedTime)
 import Data.Time.LocalTime (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
@@ -97,6 +97,15 @@ testingPutH pid cid action steps = do
           case sch of
             Just s -> do
               _ <- dbtToEff $ Testing.updateSchedule cid s.schedule s.isScheduled
+              _ <- dbtToEff $ Testing.deleteSchedulesFromBackgroundJobs cid
+              _ <- dbtToEff do
+                currentTime <- liftIO $ getCurrentTime
+                let intervals = scheduleIntervals currentTime (fromMaybe "" s.schedule)
+                let contents = Aeson.Array [show cid.collectionId]
+                let tagValue = Aeson.String ("RunCollectionTests")
+                let dbParams = (\x -> (x, "queued" :: Text, Aeson.object ["tag" .= tagValue, "contents" .= contents])) <$> intervals
+                _ <- Testing.scheduleInsertScheduleInBackgroundJobs dbParams
+                pass
               pure ""
             Nothing -> do
               pure ""
