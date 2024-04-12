@@ -16,9 +16,6 @@ jobs:
       id-token: 'write'
     steps:
       - uses: actions/checkout@v4
-      - uses: freckle/stack-action@v5
-
-      # Setup Rust
       - name: Setup Rust
         uses: actions-rs/toolchain@v1
         with:
@@ -26,6 +23,7 @@ jobs:
           profile: minimal
           override: true
       - run: make prepare-rust-interop
+      - uses: freckle/stack-action@v5
       - run: stack --no-terminal build --dependencies-only
 
       # - run: stack install --local-bin-path=. --ghc-options '-optl-static -fPIC'
