@@ -112,14 +112,14 @@ sqlFromQueryComponents sqlCfg qc =
 
     finalSqlQuery =
       [fmt|SELECT json_build_array({selectClause}) FROM apis.request_dumps 
-            WHERE project_id='{sqlCfg.pid.toText}'::uuid  and created_at > NOW() - interval '14 days' 
-            {cursorT} {dateRangeStr} {whereClause}
+            WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( created_at > NOW() - interval '14 days' 
+            {cursorT} {dateRangeStr} {whereClause} )
             {groupByClause} ORDER BY created_at desc limit 200 |]
 
     countQuery =
       [fmt|SELECT count(*) FROM apis.request_dumps 
-            WHERE project_id='{sqlCfg.pid.toText}'::uuid  and created_at > NOW() - interval '14 days' 
-            {cursorT} {dateRangeStr} {whereClause}
+            WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( created_at > NOW() - interval '14 days' 
+            {cursorT} {dateRangeStr} {whereClause} )
             {groupByClause} limit 1|]
 
     defRollup
@@ -138,8 +138,8 @@ sqlFromQueryComponents sqlCfg qc =
     timeChartQuery =
       [fmt|
         SELECT {timebucket} {chartSelect}, 'Throughput' FROM apis.request_dumps
-            WHERE project_id='{sqlCfg.pid.toText}'::uuid  and created_at > NOW() - interval '14 days' 
-            {cursorT} {dateRangeStr} {whereClause}
+            WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( created_at > NOW() - interval '14 days' 
+            {cursorT} {dateRangeStr} {whereClause} )
             {timeGroupByClause}
       |]
 
@@ -150,8 +150,8 @@ sqlFromQueryComponents sqlCfg qc =
     alertQuery =
       [fmt|
         SELECT GREATEST({alertSelect}) FROM apis.request_dumps
-            WHERE project_id='{sqlCfg.pid.toText}'::uuid  and created_at > NOW() - interval '{timeRollup}'
-            {whereClause} {alertGroupByClause}
+            WHERE project_id='{sqlCfg.pid.toText}'::uuid  and ( created_at > NOW() - interval '{timeRollup}'
+            {whereClause}) {alertGroupByClause} 
       |]
    in
     ( finalSqlQuery
