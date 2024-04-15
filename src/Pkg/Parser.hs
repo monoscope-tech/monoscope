@@ -100,7 +100,7 @@ sqlFromQueryComponents sqlCfg qc =
     projectedColsProcessed = mapMaybe (\col -> display <$> hush (parse pSubject "" col)) sqlCfg.projectedColsByUser
     selectedCols = if null qc.select then projectedColsProcessed <> sqlCfg.defaultSelect else qc.select
     selectClause = T.intercalate "," $ colsNoAsClause $ selectedCols
-    whereClause = maybe "" (" AND " <>) qc.whereClause
+    whereClause = maybe "" (\whereC -> " AND (" <> whereC <> ")") qc.whereClause
     groupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause
     dateRangeStr = case sqlCfg.dateRange of
       (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND '" <> fmtTime b <> "'"
