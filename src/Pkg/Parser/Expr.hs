@@ -69,7 +69,7 @@ pFieldKey = do
 --
 -- >>> parse ( pPrimaryKey ) "" "abc"
 -- Right ("abc",Nothing)
-pPrimaryKey :: Parser (Text, Maybe FieldKey)
+pPrimaryKey :: Parser (T.Text, Maybe FieldKey)
 pPrimaryKey = do
   key <- toText <$> some (alphaNumChar <|> oneOf ("-_*" :: String))
   fKey <- optional $ pSquareBracketKey ""
@@ -84,7 +84,7 @@ pPrimaryKey = do
 --
 -- >>> parse (pSquareBracketKey "key") "" "[*]"
 -- Right (ArrayWildcard "key")
-pSquareBracketKey :: Text -> Parser FieldKey
+pSquareBracketKey :: T.Text -> Parser FieldKey
 pSquareBracketKey key = sqParens (arrayWildcard <|> arrayIndex)
   where
     arrayWildcard = ArrayWildcard key <$ char '*'
@@ -173,7 +173,7 @@ operatorTable =
   ]
 
 
-binary :: Text -> (Expr -> Expr -> Expr) -> Operator Parser Expr
+binary :: T.Text -> (Expr -> Expr -> Expr) -> Operator Parser Expr
 binary name f = InfixL (f <$ symbol name)
 
 
@@ -231,12 +231,12 @@ instance Display Subject where
     where
       normalizeKeyPath txt = T.toLower $ T.replace "]" "❳" $ T.replace "[" "❲" $ T.replace "." "•" txt
 
-      buildQuerySequence :: Text -> [FieldKey] -> Text
+      buildQuerySequence :: T.Text -> [FieldKey] -> T.Text
       buildQuerySequence acc [] = acc
       buildQuerySequence acc [lastKey] = buildQuery acc lastKey True
       buildQuerySequence acc (key : rest) = buildQuerySequence (buildQuery acc key False) rest
 
-      buildQuery :: Text -> FieldKey -> Bool -> Text
+      buildQuery :: T.Text -> FieldKey -> Bool -> T.Text
       buildQuery acc (FieldKey key) isLast = acc <> separator isLast <> key <> "'"
       buildQuery acc (ArrayWildcard key) isLast = acc <> separator isLast <> key <> "'"
       buildQuery acc (ArrayIndex "" idx) isLast = acc <> separatorInt isLast <> show idx
@@ -306,12 +306,12 @@ instance Display Expr where
 
 
 -- Helper function to handle the common display logic
-displayExprHelper :: Text -> Int -> Subject -> Values -> Builder
+displayExprHelper :: T.Text -> Int -> Subject -> Values -> Builder
 displayExprHelper op prec sub val =
   displayParen (prec > 0) $
     if subjectHasWildcard sub
       then displayPrec prec (jsonPathQuery op sub val)
-      else displayPrec prec sub <> displayPrec @Text prec op <> displayBuilder val
+      else displayPrec prec sub <> displayPrec @T.Text prec op <> displayBuilder val
 
 
 -- | Generate PostgreSQL JSONPath queries from AST with specified operator
@@ -332,13 +332,13 @@ displayExprHelper op prec sub val =
 --
 -- >>> jsonPathQuery ">" (Subject "" "orders" [ArrayIndex "" 0, ArrayWildcard "val", FieldKey "status"]) (Str "pending")
 -- "jsonb_path_exists(orders, $$$[0].val[*].\"status\" ? (@ > \"pending\")$$)"
-jsonPathQuery :: Text -> Subject -> Values -> Text
+jsonPathQuery :: T.Text -> Subject -> Values -> T.Text
 jsonPathQuery op' (Subject entire base keys) val =
   "jsonb_path_exists(" <> base <> ", $$" <> "$" <> buildPath keys <> buildCondition op val <> "$$)"
   where
     op = if op' == "=" then "==" else "="
 
-    buildPath :: [FieldKey] -> Text
+    buildPath :: [FieldKey] -> T.Text
     buildPath [] = ""
     buildPath (FieldKey key : rest) = ".\"" <> key <> "\"" <> buildPath rest
     buildPath (ArrayIndex "" idx : rest) = "[" <> show idx <> "]" <> buildPath rest
@@ -346,7 +346,7 @@ jsonPathQuery op' (Subject entire base keys) val =
     buildPath (ArrayWildcard "" : rest) = "[*]" <> buildPath rest
     buildPath (ArrayWildcard key : rest) = "." <> key <> "[*]" <> buildPath rest
 
-    buildCondition :: Text -> Values -> Text
+    buildCondition :: T.Text -> Values -> T.Text
     buildCondition oper (Num n) = " ? (@ " <> oper <> " " <> n <> ")"
     buildCondition oper (Str s) = " ? (@ " <> oper <> " \"" <> s <> "\")"
     buildCondition oper (Boolean b) = " ? (@ " <> oper <> " " <> show b <> ")"
