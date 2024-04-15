@@ -5,28 +5,73 @@ module Pages.RedactedFields (redactedFieldsGetH, redactedFieldsPostH, RedactFiel
 import Data.Aeson (encode)
 import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
-import Data.Text as T
+import Data.Text as T (Text)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector (Vector)
-import Database.PostgreSQL.Entity.DBT (withPool)
-import Effectful.PostgreSQL.Transact.Effect
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask, asks)
-import Lucid
-import Lucid.Htmx
-import Lucid.Hyperscript
+import Lucid (
+  Html,
+  ToHtml (toHtml),
+  a_,
+  autofocus_,
+  button_,
+  class_,
+  div_,
+  form_,
+  h2_,
+  h3_,
+  href_,
+  id_,
+  img_,
+  input_,
+  label_,
+  name_,
+  p_,
+  placeholder_,
+  role_,
+  section_,
+  span_,
+  src_,
+  table_,
+  tbody_,
+  td_,
+  textarea_,
+  th_,
+  thead_,
+  tr_,
+  type_,
+ )
+import Lucid.Htmx (hxPost_, hxTarget_)
+import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Projects.RedactedFields qualified as RedactedFields
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Pages.NonMember
+import Pages.NonMember (userNotMemeberPage)
+import Relude (
+  Applicative (pure),
+  ConvertUtf8 (decodeUtf8),
+  Generic,
+  Maybe (Just),
+  MonadIO (liftIO),
+  Semigroup ((<>)),
+  Show,
+  String,
+  mapM_,
+  not,
+  show,
+  ($),
+  (&),
+  (<$>),
+ )
 import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
-import System.Config
-import System.Types
-import Utils
+import System.Config (AuthContext (config, env))
+import System.Types (ATAuthCtx)
+import Utils (userIsProjectMember)
 import Web.FormUrlEncoded (FromForm)
-import Relude hiding (ask, asks)
 
 
 data RedactFieldForm = RedactFieldForm

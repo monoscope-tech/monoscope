@@ -1,14 +1,68 @@
 module Pkg.Parser.Expr where
 
-import Control.Monad.Combinators.Expr
+import Control.Monad.Combinators.Expr (
+  Operator (InfixL),
+  makeExprParser,
+ )
 import Data.Text qualified as T
 import Data.Text.Display (Display, display, displayBuilder, displayParen, displayPrec)
 import Data.Text.Lazy.Builder (Builder)
-import Pkg.Parser.Types
-import Text.Megaparsec hiding (State)
-import Text.Megaparsec.Char
+import Pkg.Parser.Types (
+  AggFunction (..),
+  Expr (And, Eq, GT, GTEq, LT, LTEq, NotEq, Or, Paren, Regex),
+  FieldKey (..),
+  Parser,
+  Subject (..),
+  Values (..),
+  symbol,
+ )
+import Relude (
+  Applicative (pure, (*>), (<*), (<*>)),
+  Bool (..),
+  Eq ((==)),
+  Functor ((<$)),
+  Int,
+  Maybe,
+  Monad (return),
+  Monoid (mconcat),
+  Num ((-)),
+  Ord ((>)),
+  Semigroup ((<>)),
+  String,
+  ToText (toText),
+  any,
+  intersperse,
+  map,
+  maybeToList,
+  show,
+  void,
+  ($),
+  (++),
+  (.),
+  (<$>),
+ )
+import Text.Megaparsec (
+  MonadParsec (try),
+  between,
+  choice,
+  getInput,
+  getOffset,
+  many,
+  manyTill,
+  oneOf,
+  optional,
+  sepBy,
+  some,
+  (<|>),
+ )
+import Text.Megaparsec.Char (
+  alphaNumChar,
+  char,
+  digitChar,
+  space,
+  string,
+ )
 import Text.Megaparsec.Char.Lexer qualified as L
-import Relude hiding (GT, LT, Sum, many, some)
 
 
 -- Example queries

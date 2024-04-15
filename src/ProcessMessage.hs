@@ -4,42 +4,69 @@ module ProcessMessage (
 )
 where
 
-import Colog.Core (LogAction (..), (<&))
 import Control.Exception (try)
-import Control.Lens ((^?), _Just)
 import Control.Monad.Trans.Except (except, throwE)
 import Control.Monad.Trans.Except.Extra (handleExceptT)
 import Data.Aeson (eitherDecode)
-import Data.Aeson.Types
-import Data.ByteString qualified as B
+import Data.Aeson.Types ( KeyValue((.=)), object )
 import Data.ByteString.Lazy.Char8 qualified as BL
 import Data.Cache qualified as Cache
-import Data.Generics.Product (field)
 import Data.List (unzip4)
-import Data.Pool (Pool)
 import Data.Text qualified as T
 import Data.Time.Clock (getCurrentTime)
-import Data.Time.LocalTime (getZonedTime)
 import Data.UUID.V4 (nextRandom)
 import Database.PostgreSQL.Entity.DBT (withPool)
-import Database.PostgreSQL.Simple (Connection, Query)
+import Database.PostgreSQL.Simple ( Query)
 import Database.PostgreSQL.Transact (execute)
-import Debug.Pretty.Simple
-import Effectful.PostgreSQL.Transact.Effect
-import Effectful.Reader.Static (ask, asks)
-import Fmt
-import Gogol.Data.Base64 (_Base64)
-import Gogol.PubSub qualified as PubSub
+import Debug.Pretty.Simple ()
+import Effectful.PostgreSQL.Transact.Effect ( dbtToEff )
+import Effectful.Reader.Static (ask)
+import Fmt ( (+|), fmtLn, (|+) )
 import Log qualified
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
+import Relude
+    ( zip,
+      ($),
+      Eq((==)),
+      Integral(div),
+      Ord((>)),
+      Applicative(pure),
+      Foldable(length, null),
+      Traversable(mapM),
+      Semigroup((<>)),
+      Monoid(mconcat),
+      String,
+      Maybe(Nothing),
+      Either(..),
+      Text,
+      MonadIO(liftIO),
+      SomeException,
+      ToText(toText),
+      ByteString,
+      show,
+      concat,
+      (<&>),
+      fromMaybe,
+      catMaybes,
+      unless,
+      void,
+      lefts,
+      rights,
+      when,
+      (&&),
+      forM_,
+      runExceptT,
+      ConvertUtf8(decodeUtf8, encodeUtf8),
+      LazyStrict(toStrict),
+      ExceptT )
 import RequestMessages qualified
 import System.Clock
+    ( diffTimeSpec, getTime, toNanoSecs, Clock(Monotonic) )
 import System.Config qualified as Config
 import System.Types (ATBackgroundCtx)
 import Text.Pretty.Simple (pShow)
 import Utils (DBField, eitherStrToText)
-import Relude hiding (ask, asks, hoistMaybe)
 
 
 {--

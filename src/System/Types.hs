@@ -1,5 +1,4 @@
 {-# LANGUAGE AllowAmbiguousTypes #-}
-
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE StandaloneKindSignatures #-}
@@ -12,7 +11,7 @@ module System.Types (
 ) where
 
 import Data.Pool as Pool (Pool)
-import Effectful
+import Effectful (Eff, IOE, runEff)
 import Effectful.Error.Static (Error)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB, runDB)
@@ -20,47 +19,50 @@ import Effectful.Reader.Static (Reader, runReader)
 import Effectful.Time (Time, runTime)
 import Log qualified
 import Models.Users.Sessions qualified as Sessions
-import Relude
+import Relude (IO, Semigroup ((<>)), Type, show, (&))
 import Servant (AuthProtect, Header, Headers, ServerError)
 import Servant.Server.Experimental.Auth (AuthServerData)
-import System.Config
+import System.Config (
+  AuthContext (config, jobsPool),
+  EnvConfig (environment),
+ )
 import System.Logging qualified as Logging
-import Web.Cookie
+import Web.Cookie (SetCookie)
 
 
 type ATBaseCtx :: Type -> Type
 type ATBaseCtx =
-  Eff
+  Effectful.Eff
     '[ Effectful.Reader.Static.Reader AuthContext
      , DB
      , Time
      , Log
      , Error ServerError
-     , IOE
+     , Effectful.IOE
      ]
 
 
 type ATAuthCtx :: Type -> Type
 type ATAuthCtx =
-  Eff
+  Effectful.Eff
     '[ Effectful.Reader.Static.Reader (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
      , Effectful.Reader.Static.Reader AuthContext
      , DB
      , Time
      , Log
      , Error ServerError
-     , IOE
+     , Effectful.IOE
      ]
 
 
 type ATBackgroundCtx :: Type -> Type
 type ATBackgroundCtx =
-  Eff
+  Effectful.Eff
     '[ Effectful.Reader.Static.Reader AuthContext
      , DB
      , Time
      , Log
-     , IOE
+     , Effectful.IOE
      ]
 
 
@@ -71,7 +73,7 @@ runBackground logger appCtx process =
     & runDB appCtx.jobsPool
     & runTime
     & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger
-    & runEff
+    & Effectful.runEff
 
 
 type instance

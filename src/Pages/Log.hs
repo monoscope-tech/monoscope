@@ -15,20 +15,66 @@ import Data.Time (
   addUTCTime,
   getCurrentTime,
   secondsToNominalDiffTime,
-  utc,
-  utcToZonedTime,
  )
-import Data.Time.Format
+import Data.Time.Format (
+  defaultTimeLocale,
+  formatTime,
+  parseTimeM,
+ )
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as V
 import Data.Vector qualified as Vector
-import Effectful.PostgreSQL.Transact.Effect
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Fmt (commaizeF, fmt)
-import Lucid
+import Lucid (
+  Html,
+  Term (term),
+  ToHtml (toHtml),
+  a_,
+  button_,
+  checked_,
+  class_,
+  colspan_,
+  div_,
+  form_,
+  id_,
+  img_,
+  input_,
+  label_,
+  li_,
+  name_,
+  nav_,
+  onclick_,
+  role_,
+  script_,
+  section_,
+  span_,
+  src_,
+  style_,
+  tabindex_,
+  table_,
+  tbody_,
+  td_,
+  template_,
+  thead_,
+  tr_,
+  type_,
+  ul_,
+  value_,
+ )
 import Lucid.Aria qualified as Aria
-import Lucid.Base
-import Lucid.Htmx
+import Lucid.Base (TermRaw (termRaw))
+import Lucid.Htmx (
+  hxGet_,
+  hxIndicator_,
+  hxPost_,
+  hxPushUrl_,
+  hxSwap_,
+  hxTarget_,
+  hxTrigger_,
+  hxVals_,
+ )
 import Lucid.Hyperscript (__)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
@@ -36,14 +82,65 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Pages.Monitors.Alerts qualified as Alerts
-import Pages.NonMember
+import Pages.NonMember (userNotMemeberPage)
 import Pkg.Components (loader)
+import Relude (
+  Applicative (pure),
+  Bool (..),
+  Eq ((/=), (==)),
+  Foldable (length),
+  Int,
+  Maybe (..),
+  Monad (return, (>>)),
+  MonadIO (liftIO),
+  Num (negate, (*), (-)),
+  Ord ((>), (>=)),
+  Ordering (GT, LT),
+  Semigroup ((<>)),
+  Text,
+  ToString (toString),
+  ToText (toText),
+  all,
+  comparing,
+  elem,
+  filter,
+  forM_,
+  fromMaybe,
+  mapM_,
+  maybe,
+  not,
+  notElem,
+  otherwise,
+  pass,
+  show,
+  sortBy,
+  when,
+  ($),
+  (&),
+  (&&),
+  (.),
+  (<$>),
+  (=<<),
+  (||),
+ )
 import Relude.Unsafe qualified as Unsafe
-import System.Config
-import System.Types
-import Utils
+import System.Config (AuthContext)
+import System.Types (ATAuthCtx)
+import Utils (
+  faIcon_,
+  faSprite_,
+  freeTierLimitExceededBanner,
+  getMethodColor,
+  getStatusColor,
+  listToIndexHashMap,
+  lookupVecByKey,
+  lookupVecIntByKey,
+  lookupVecTextByKey,
+  mIcon_,
+  unwrapJsonPrimValue,
+  userIsProjectMember,
+ )
 import Witch (from)
-import Relude hiding (ask, asks)
 
 
 -- $setup
@@ -402,13 +499,14 @@ logTableHeadingWrapper_ pid title child = td_
       div_ [tabindex_ "0", role_ "button", class_ "py-2 px-3 block"] child
       ul_ [tabindex_ "0", class_ "dropdown-content z-[1] menu p-2 shadow bg-base-100 rounded-box min-w-[15rem]"] do
         li_ [class_ "underline underline-offset-2"] $ toHtml title
-        li_
-          $ a_
+        li_ $
+          a_
             [ hxGet_ $ "/p/" <> pid.toText <> "/log_explorer"
             , hxPushUrl_ "true"
             , hxVals_ $ "js:{query:params().query,cols:removeNamedColumnToSummary('" <> title <> "'),layout:'resultTable'}"
             , hxTarget_ "#resultTable"
-            ] "Hide column"
+            ]
+            "Hide column"
 
 
 isLogEvent :: [Text] -> Bool

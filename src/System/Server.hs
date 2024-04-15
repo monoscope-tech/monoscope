@@ -4,7 +4,7 @@ module System.Server (runAPItoolkit) where
 
 import BackgroundJobs qualified
 import Colourista.IO (blueMessage)
-import Control.Concurrent.Async
+import Control.Concurrent.Async (async, waitAnyCancel)
 import Control.Exception.Safe qualified as Safe
 import Control.Lens ((^?), _Just)
 import Control.Lens qualified as L
@@ -13,11 +13,18 @@ import Control.Monad.Trans.Resource (runResourceT)
 import Data.Aeson qualified as Aeson
 import Data.ByteString.Lazy.Base64 qualified as LB64
 import Data.Generics.Product (field)
-import Data.Pool as Pool
+import Data.Pool as Pool (destroyAllResources)
 import Data.Text.Lazy.Encoding qualified as LT
-import Effectful
-import Effectful.Concurrent
-import Effectful.Dispatch.Static
+import Effectful (
+  Eff,
+  Effect,
+  IOE,
+  MonadIO (liftIO),
+  runEff,
+  type (:>),
+ )
+import Effectful.Concurrent (runConcurrent)
+import Effectful.Dispatch.Static (unsafeEff_)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
 import Effectful.Fail (runFailIO)
 import Effectful.PostgreSQL.Transact.Effect (runDB)
@@ -36,15 +43,59 @@ import Network.Wai.Handler.Warp (
  )
 import Network.Wai.Log qualified as WaiLog
 import Network.Wai.Middleware.Heartbeat (heartbeatMiddleware)
-import ProcessMessage
+import ProcessMessage (processMessages)
+import Relude (
+  Applicative (pure),
+  Foldable (null),
+  IO,
+  Maybe (Just),
+  Proxy (..),
+  Semigroup ((<>)),
+  String,
+  Text,
+  ToText (toText),
+  Traversable (sequence),
+  Type,
+  catMaybes,
+  concat,
+  const,
+  either,
+  error,
+  forM,
+  forever,
+  fromIntegral,
+  fromMaybe,
+  id,
+  map,
+  pass,
+  show,
+  unless,
+  void,
+  ($),
+  (&),
+  (.),
+  (<&>),
+ )
 import Servant qualified
 import Servant.Server (Handler, ServerError)
 import Servant.Server.Generic (genericServeTWithContext)
-import System.Config
+import System.Config (
+  AuthContext (config, jobsPool, pool, projectCache),
+  EnvConfig (
+    enableBackgroundJobs,
+    enablePubsubService,
+    environment,
+    googleServiceAccountB64,
+    loggingDestination,
+    messagesPerPubsubPullBatch,
+    port,
+    requestPubsubTopics
+  ),
+  getAppContext,
+ )
 import System.Logging qualified as Logging
-import System.Types
+import System.Types (ATBaseCtx, runBackground)
 import Web.Routes qualified as Routes
-import Relude hiding (ask, asks)
 
 
 runAPItoolkit :: IO ()
@@ -59,7 +110,7 @@ runAPItoolkit =
       withLogger (`runServer` env)
 
 
-runServer :: (IOE :> es) => Log.Logger -> AuthContext -> Eff es ()
+runServer :: IOE :> es => Log.Logger -> AuthContext -> Eff es ()
 runServer appLogger env = do
   loggingMiddleware <- Logging.runLog (show env.config.environment) appLogger WaiLog.mkLogMiddleware
   let server = mkServer appLogger env

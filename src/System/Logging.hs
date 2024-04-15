@@ -11,10 +11,16 @@ where
 
 import Data.Aeson qualified as Aeson
 import Data.ByteString.Char8 qualified as BS
-import Data.ByteString.Lazy qualified as BSL
 import Data.Default (Default (..))
 import Data.Time.Clock as Time (NominalDiffTime, diffUTCTime)
-import Effectful
+import Effectful (
+  Eff,
+  Effect,
+  IOE,
+  MonadIO (liftIO),
+  MonadUnliftIO (withRunInIO),
+  type (:>),
+ )
 import Effectful.Log (Log)
 import Effectful.Log qualified as Log
 import Effectful.Time (Time)
@@ -22,7 +28,22 @@ import Effectful.Time qualified as Time
 import Log (Logger)
 import Log.Backend.StandardOutput.Bulk qualified as LogBulk
 import Log.Internal.Logger (withLogger)
-import Relude
+import Relude (
+  Applicative (pure),
+  Eq,
+  FilePath,
+  Generic,
+  LazyStrict (toStrict),
+  Ord,
+  Read,
+  Semigroup ((<>)),
+  Show,
+  Text,
+  Type,
+  stdout,
+  ($),
+  (.),
+ )
 import System.Envy (ReadShowVar (..), Var)
 
 

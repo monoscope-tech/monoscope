@@ -1,14 +1,39 @@
 module Pages.Components (statBox, drawerWithURLContent_) where
 
 import Data.Text qualified as T
-import Fmt
-import Lucid
+import Fmt (commaizeF, fmt, (+|))
+import Lucid (
+  Html,
+  Term (term),
+  ToHtml (toHtml),
+  a_,
+  class_,
+  div_,
+  for_,
+  href_,
+  id_,
+  input_,
+  label_,
+  small_,
+  span_,
+  strong_,
+  style_,
+  type_,
+ )
 import Lucid.Aria qualified as Aria
-import Lucid.Htmx
-import Lucid.Hyperscript
+import Lucid.Htmx (hxGet_, hxSwap_, hxTrigger_)
+import Lucid.Hyperscript (__)
 import Models.Projects.Projects (ProjectId)
-import Relude
-import Utils
+import Relude (
+  Int,
+  Maybe (..),
+  Semigroup ((<>)),
+  Text,
+  maybe,
+  not,
+  ($),
+ )
+import Utils (mIcon_)
 
 
 statBox :: Maybe ProjectId -> Text -> Text -> Int -> Maybe Int -> Html ()

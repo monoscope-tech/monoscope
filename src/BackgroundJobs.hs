@@ -8,26 +8,32 @@ module BackgroundJobs (jobsWorkerInit, BgJobs (..)) where
 -- This example is using these functions to introduce an artificial delay of a
 -- few seconds in one of the jobs. Otherwise it is not really needed.
 import Control.Lens ((.~))
-import Data.Aeson as Aeson
+import Data.Aeson as Aeson (
+  FromJSON,
+  KeyValue ((.=)),
+  ToJSON,
+  Value (Array, String),
+  object,
+ )
 import Data.CaseInsensitive qualified as CI
 import Data.List.Extra (intersect, union)
 import Data.Pool (Pool, withResource)
 import Data.Text qualified as T
-import Data.Time (UTCTime (utctDay), ZonedTime, getCurrentTime, getZonedTime, dayOfWeek, DayOfWeek(Monday))
+import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, dayOfWeek, getCurrentTime, getZonedTime)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query, withPool)
 import Database.PostgreSQL.Simple (Connection, Only (Only))
-import Database.PostgreSQL.Simple.SqlQQ
+import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact (DBT)
-import GHC.Generics
+import GHC.Generics (Generic)
 import Log qualified
-import Lucid
+import Lucid (renderText)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Fields qualified as Fields
 import Models.Apis.Fields.Query qualified as FieldsQ
+import Models.Apis.Fields.Types qualified as Fields
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.Reports qualified as Reports
@@ -38,16 +44,61 @@ import Models.Projects.Swaggers qualified as Swaggers
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text, trimming)
-import Network.Wreq
+import Network.Wreq (defaults, header, postWith)
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, startJobRunner, throwParsePayload)
 import Pages.GenerateSwagger (generateSwagger)
 import Pages.Reports qualified as RP
-import Pkg.Mail
-import PyF
-import Relude
+import Pkg.Mail (sendEmail, sendSlackMessage)
+import PyF (fmt)
+import Relude (
+  Applicative (pure),
+  Bool (..),
+  ByteString,
+  ConvertUtf8 (encodeUtf8),
+  Eq (..),
+  Foldable (foldl', null, toList),
+  IO,
+  Int,
+  Int64,
+  Maybe (..),
+  Monad ((>>=)),
+  MonadIO (liftIO),
+  NonEmpty ((:|)),
+  Ord ((<=), (>=)),
+  Semigroup ((<>)),
+  Show,
+  String,
+  Text,
+  ToLText (toLText),
+  ToText (toText),
+  filter,
+  forM_,
+  fst,
+  head,
+  id,
+  mapM_,
+  maybe,
+  not,
+  notElem,
+  pass,
+  show,
+  snd,
+  tail,
+  unless,
+  when,
+  ($),
+  (&),
+  (&&),
+  (.),
+  (<$>),
+  (<&>),
+  (<<$>>),
+  (||),
+ )
 import Relude.Unsafe qualified as Unsafe
 import System.Config qualified as Config
+import System.Types (ATBackgroundCtx)
 import Utils (scheduleIntervals)
 
 
@@ -103,7 +154,7 @@ getAllProjects = query Select q (Only True)
 --
 
 jobsRunner :: Pool Connection -> Log.Logger -> Config.EnvConfig -> Job -> IO ()
-jobsRunner dbPool logger cfg job = do
+jobsRunner dbPool logger cfg job = liftIO $ do
   when cfg.enableBackgroundJobs do
     throwParsePayload job >>= \case
       QueryMonitorsTriggered queryMonitorIds -> queryMonitorsTriggered dbPool logger cfg queryMonitorIds
@@ -131,7 +182,7 @@ jobsRunner dbPool logger cfg job = do
    
                                      <https://app.apitoolkit.io/p/$projectIdTxt/anomaly/$targetHash|More details on the apitoolkit>
                             |]
-                  sendSlackMessage dbPool pid message
+                  liftIO $ sendSlackMessage dbPool pid message
                 _ -> do
                   forM_ users \u ->
                     let projectTitle = project.title
@@ -151,7 +202,7 @@ jobsRunner dbPool logger cfg job = do
                      Apitoolkit team
                                |]
                         reciever = CI.original u.email
-                     in sendEmail cfg reciever subject body
+                     in liftIO $ sendEmail cfg reciever subject body
           Anomalies.ATShape -> do
             hasEndpointAnomaly <- withPool dbPool $ Anomalies.getShapeParentAnomalyVM pid targetHash
             if hasEndpointAnomaly == 0
@@ -183,7 +234,7 @@ jobsRunner dbPool logger cfg job = do
     
                                           <https://app.apitoolkit.io/p/$projectIdTxt/anomaly/$targetHash|More details on the apitoolkit>
                                  |]
-                          sendSlackMessage dbPool pid message
+                          liftIO $ sendSlackMessage dbPool pid message
                         _ -> do
                           forM_ users \u ->
                             let projectTitle = project.title
@@ -202,7 +253,7 @@ jobsRunner dbPool logger cfg job = do
          Apitoolkit team
                                  |]
                                 reciever = CI.original u.email
-                             in sendEmail cfg reciever subject body
+                             in liftIO $ sendEmail cfg reciever subject body
               else do
                 pass
           Anomalies.ATFormat -> do
@@ -229,7 +280,7 @@ jobsRunner dbPool logger cfg job = do
                                          <https://app.apitoolkit.io/p/$projectIdTxt/anomaly/$targetHash|More details on the apitoolkit>
     
                                  |]
-                          sendSlackMessage dbPool pid message
+                          liftIO $ sendSlackMessage dbPool pid message
                         _ -> do
                           forM_ users \u ->
                             let projectTitle = project.title
@@ -248,7 +299,7 @@ jobsRunner dbPool logger cfg job = do
        Apitoolkit team
                              |]
                                 reciever = CI.original u.email
-                             in sendEmail cfg reciever subject body
+                             in liftIO $ sendEmail cfg reciever subject body
               else do
                 pass
           Anomalies.ATField -> pass
@@ -269,7 +320,7 @@ jobsRunner dbPool logger cfg job = do
   Regards,
   Apitoolkit team
             |]
-         in sendEmail cfg reciever subject body
+         in liftIO $ sendEmail cfg reciever subject body
       CreatedProjectSuccessfully userId projectId reciever projectTitle' ->
         let projectTitle = projectTitle'
             projectIdTxt = projectId.toText
@@ -289,7 +340,7 @@ jobsRunner dbPool logger cfg job = do
   Regards,<br/>
   Apitoolkit team
             |]
-         in sendEmail cfg reciever subject body
+         in liftIO $ sendEmail cfg reciever subject body
       DailyJob -> do
         projects <- withPool dbPool getAllProjects
         forM_ projects \p -> do
@@ -306,10 +357,10 @@ jobsRunner dbPool logger cfg job = do
 
         pass
       DailyReports pid -> do
-        dailyReportForProject dbPool cfg pid
+        liftIO $ dailyReportForProject dbPool cfg pid
         pass
       WeeklyReports pid -> do
-        weeklyReportForProject dbPool cfg pid
+        liftIO $ weeklyReportForProject dbPool cfg pid
         pass
       GenSwagger pid uid -> do
         projectM <- withPool dbPool $ Projects.projectById pid
@@ -350,7 +401,7 @@ jobsRunner dbPool logger cfg job = do
                   Just fSubId ->
                     do
                       totalRequestForThisMonth <- withPool dbPool $ RequestDumps.getTotalRequestForCurrentMonth pid
-                      reportUsage fSubId totalRequestForThisMonth cfg.lemonSqueezyApiKey
+                      liftIO $ reportUsage fSubId totalRequestForThisMonth cfg.lemonSqueezyApiKey
                       pass
               else pass
         pass
@@ -363,7 +414,7 @@ jobsRunner dbPool logger cfg job = do
             case scheduleM of
               Nothing -> pass
               Just schedule -> do
-                currentTime <- getCurrentTime
+                currentTime <- liftIO getCurrentTime
                 let intervals = scheduleIntervals currentTime schedule
                 let contents = Aeson.Array [show col_id.collectionId]
                 let tagValue = Aeson.String "RunCollectionTests"
@@ -425,13 +476,13 @@ queryMonitorsTriggered dbPool logger cfg queryMonitorIds = do
   monitorsEvaled <- withPool dbPool $ Monitors.queryMonitorsById queryMonitorIds
   forM_ monitorsEvaled \monitorE -> do
     if (monitorE.triggerLessThan && monitorE.evalResult >= monitorE.alertThreshold)
-          || (not monitorE.triggerLessThan && monitorE.evalResult <= monitorE.alertThreshold)
+      || (not monitorE.triggerLessThan && monitorE.evalResult <= monitorE.alertThreshold)
       then handleQueryMonitorThreshold dbPool logger cfg monitorE True
       else
         if Just True
           == ( monitorE.warningThreshold <&> \warningThreshold ->
                 (monitorE.triggerLessThan && monitorE.evalResult >= warningThreshold)
-                    || (not monitorE.triggerLessThan && monitorE.evalResult <= warningThreshold)
+                  || (not monitorE.triggerLessThan && monitorE.evalResult <= warningThreshold)
              )
           then handleQueryMonitorThreshold dbPool logger cfg monitorE False
           else pass
@@ -451,10 +502,12 @@ handleQueryMonitorThreshold dbPool logger cfg monitorE isAlert = do
 -- TODO: based on monitor send emails or slack
 
 jobsWorkerInit :: Pool Connection -> Log.Logger -> Config.EnvConfig -> IO ()
-jobsWorkerInit dbPool logger envConfig = startJobRunner $ mkConfig jobLogger "background_jobs" dbPool (MaxConcurrentJobs 1) (jobsRunner dbPool logger envConfig) id
+jobsWorkerInit dbPool logger envConfig =
+  startJobRunner $
+    mkConfig jobLogger "background_jobs" dbPool (MaxConcurrentJobs 1) (jobsRunner dbPool logger envConfig) id
   where
     jobLogger :: LogLevel -> LogEvent -> IO ()
-    jobLogger logLevel logEvent = Log.runLogT "OddJobs" logger Log.LogAttention $ Log.logAttention "" (show (logLevel, logEvent)) -- logger show (logLevel, logEvent)
+    jobLogger logLevel logEvent = Log.runLogT "OddJobs" logger Log.LogAttention $ Log.logInfo "Background jobs ping. " (show logLevel, show logEvent) -- logger show (logLevel, logEvent)
     -- jobLogger logLevel logEvent = print show (logLevel, logEvent) -- logger show (logLevel, logEvent)
 
 

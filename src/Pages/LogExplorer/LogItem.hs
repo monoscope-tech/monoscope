@@ -7,28 +7,78 @@ import Data.ByteString.Lazy qualified as BS
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
 import Data.Time (UTCTime)
-import Data.Time.Format
+import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.UUID qualified as UUID
 import Data.Vector (iforM_)
-import Effectful.PostgreSQL.Transact.Effect
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
-import Lucid
+import Lucid (
+  Html,
+  Term (term),
+  ToHtml (toHtml),
+  a_,
+  button_,
+  checked_,
+  class_,
+  div_,
+  id_,
+  input_,
+  name_,
+  onclick_,
+  p_,
+  role_,
+  span_,
+  style_,
+  type_,
+ )
 import Lucid.Aria qualified as Aria
-import Lucid.Htmx
+import Lucid.Htmx (hxGet_, hxSwap_, hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import NeatInterpolation (text)
 import Network.URI (escapeURIString, isUnescapedInURI)
 import Pages.Components qualified as Components
-import Pages.NonMember
-import PyF
+import Pages.NonMember (userNotMemeberPage)
+import PyF (fmt)
+import Relude (
+  Applicative (pure),
+  Bool (True),
+  ConvertUtf8 (decodeUtf8),
+  Eq ((==)),
+  Foldable (length),
+  Int,
+  Integral (div),
+  Maybe (Just, Nothing),
+  Monad ((>>)),
+  Num ((-)),
+  Ord ((>)),
+  Semigroup ((<>)),
+  Text,
+  ToString (toString),
+  ToText (toText),
+  concat,
+  forM_,
+  fromMaybe,
+  mapM_,
+  not,
+  show,
+  sort,
+  when,
+  ($),
+  (&),
+ )
 import Relude.Unsafe qualified as Unsafe
-import System.Config
-import System.Types
-import Utils
-import Relude hiding (ask, asks)
+import System.Config (AuthContext)
+import System.Types (ATAuthCtx)
+import Utils (
+  faIcon_,
+  getMethodColor,
+  getStatusColor,
+  mIcon_,
+  unwrapJsonPrimValue,
+  userIsProjectMember,
+ )
 
 
 expandAPIlogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATAuthCtx (Html ())
@@ -232,7 +282,7 @@ apiLogItemView req expandItemPath = do
 selectiveToJson :: RequestDumps.RequestDumpLogItem -> AE.Value
 selectiveToJson req =
   AE.object $
-    concat
+    concat @[]
       [ ["created_at" .= req.createdAt]
       , ["duration_ns" .= req.durationNs]
       , ["errors" .= req.errors]

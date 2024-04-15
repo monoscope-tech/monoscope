@@ -1,12 +1,35 @@
 module Pkg.Parser.Stats where
 
-import Data.Text.Lazy.Builder (Builder)
-import Pkg.Parser.Expr
-import Pkg.Parser.Types
-import Text.Megaparsec hiding (State)
-import Text.Megaparsec.Char
-import Text.Megaparsec.Char.Lexer qualified as L
-import Relude hiding (GT, LT, Sum, many, some)
+import Pkg.Parser.Expr (pSubject)
+import Pkg.Parser.Types (
+  AggFunction (..),
+  ByClause (..),
+  Parser,
+  Rollup (..),
+  Section (StatsCommand, TimeChartCommand),
+  Subject (Subject),
+ )
+import Relude (
+  Applicative ((*>), (<*), (<*>)),
+  Maybe (Nothing),
+  Monad (return),
+  Text,
+  ToText (toText),
+  fromMaybe,
+  ($),
+  (.),
+  (<$>),
+ )
+import Text.Megaparsec (
+  MonadParsec (try),
+  choice,
+  oneOf,
+  optional,
+  sepBy,
+  some,
+  (<|>),
+ )
+import Text.Megaparsec.Char (alphaNumChar, char, space, string)
 
 
 -- Syntax:

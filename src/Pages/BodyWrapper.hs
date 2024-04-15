@@ -3,14 +3,72 @@ module Pages.BodyWrapper (bodyWrapper, BWConfig (..)) where
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default)
 import Data.Vector qualified as Vector
-import Lucid
-import Lucid.Htmx
-import Lucid.Hyperscript
+import Lucid (
+  Html,
+  Term (term),
+  ToHtml (toHtml),
+  a_,
+  aside_,
+  async_,
+  body_,
+  charset_,
+  class_,
+  content_,
+  crossorigin_,
+  defer_,
+  div_,
+  doctypehtml_,
+  h3_,
+  head_,
+  height_,
+  href_,
+  httpEquiv_,
+  id_,
+  img_,
+  input_,
+  link_,
+  meta_,
+  name_,
+  nav_,
+  noscript_,
+  p_,
+  placeholder_,
+  rel_,
+  script_,
+  section_,
+  sizes_,
+  small_,
+  span_,
+  src_,
+  strong_,
+  style_,
+  tabindex_,
+  title_,
+  type_,
+  width_,
+ )
+import Lucid.Htmx (hxGet_)
+import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
-import NeatInterpolation
-import Relude
+import NeatInterpolation (text)
+import Relude (
+  Bool,
+  Eq ((/=), (==)),
+  Generic,
+  Maybe (..),
+  Semigroup ((<>)),
+  Show,
+  Text,
+  mapM_,
+  maybe,
+  pass,
+  when,
+  ($),
+  (&),
+  (||),
+ )
 import Utils (faIcon_, faSprite_)
 
 

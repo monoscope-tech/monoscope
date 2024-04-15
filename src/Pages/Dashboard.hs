@@ -18,8 +18,34 @@ import Data.Vector qualified as Vector
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
-import Fmt
+import Fmt ( fmt, fixedF )
 import Lucid
+    ( Html,
+      a_,
+      button_,
+      class_,
+      div_,
+      for_,
+      form_,
+      h2_,
+      h3_,
+      href_,
+      id_,
+      input_,
+      label_,
+      li_,
+      onclick_,
+      option_,
+      role_,
+      script_,
+      section_,
+      select_,
+      span_,
+      style_,
+      type_,
+      ul_,
+      Term(term),
+      ToHtml(toHtml) )
 import Lucid.Htmx (hxPost_, hxSwap_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Endpoints qualified as Endpoints
@@ -29,19 +55,53 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.Anomalies.AnomalyList qualified as AnomaliesList
 import Pages.BodyWrapper
+    ( BWConfig(pageTitle, sessM, currProject), bodyWrapper )
 import Pages.Charts.Charts qualified as C
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (statBox)
 import Pages.Endpoints.EndpointList (renderEndpoint)
 import Pages.Onboarding qualified as Onboarding
 import Relude.Unsafe qualified as Unsafe
-import System.Clock
-import System.Config
-import System.Types
-import Text.Interpolation.Nyan
+import System.Clock ( getTime, Clock(Monotonic) )
+import System.Config ( AuthContext )
+import System.Types ( ATAuthCtx )
+import Text.Interpolation.Nyan ( int, rmode' )
 import Utils (deleteParam, faIcon_, freeTierLimitExceededBanner, mIcon_)
 import Witch (from)
-import Relude hiding (ask, asks, max, min)
+import Relude
+    ( (++),
+      otherwise,
+      ($),
+      Eq((==)),
+      Fractional((/)),
+      Integral(quot),
+      Monad(return),
+      Num((*), negate),
+      Ord((>)),
+      RealFrac(round),
+      Applicative(pure),
+      Foldable(null),
+      Semigroup((<>)),
+      Bool(..),
+      Double,
+      Int,
+      Maybe(..),
+      Text,
+      catMaybes,
+      fromMaybe,
+      isNothing,
+      maybe,
+      (.),
+      when,
+      (&&),
+      (||),
+      (&),
+      unless,
+      mapM_,
+      (<$>),
+      MonadIO(liftIO),
+      ConvertUtf8(decodeUtf8),
+      ToText(toText) )
 
 
 timePickerItems :: [(Text, Text)]

@@ -2,11 +2,19 @@
 
 module Pages.Documentation (documentationGetH, documentationPostH, documentationPutH, SwaggerForm, SaveSwaggerForm) where
 
-import Data.Aeson
+import Data.Aeson (
+  FromJSON,
+  KeyValue ((.=)),
+  ToJSON,
+  Value (Array),
+  decodeStrict,
+  encode,
+  object,
+ )
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
-import Data.Digest.XXHash
+import Data.Digest.XXHash (xxHash)
 import Data.List (nubBy)
 import Data.Text qualified as T
 import Data.Time.Clock (UTCTime)
@@ -14,11 +22,40 @@ import Data.Time.LocalTime (getZonedTime, utc, utcToZonedTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
-import Effectful.PostgreSQL.Transact.Effect
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Time qualified as Time
-import Lucid
-import Lucid.Htmx
+import Lucid (
+  Html,
+  ToHtml (toHtml),
+  button_,
+  class_,
+  crossorigin_,
+  defer_,
+  div_,
+  form_,
+  h3_,
+  href_,
+  id_,
+  input_,
+  link_,
+  name_,
+  onclick_,
+  onmousedown_,
+  p_,
+  placeholder_,
+  rel_,
+  script_,
+  section_,
+  span_,
+  src_,
+  style_,
+  tabindex_,
+  title_,
+  type_,
+  value_,
+ )
+import Lucid.Htmx (hxPost_)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields (parseFieldCategoryEnum, parseFieldTypes)
 import Models.Apis.Fields qualified as Fields
@@ -30,15 +67,45 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Numeric (showHex)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Pages.NonMember
+import Pages.NonMember (userNotMemeberPage)
+import Relude (
+  Applicative (pure),
+  Bool (False),
+  ConvertUtf8 (decodeUtf8, encodeUtf8),
+  Eq ((==)),
+  Generic,
+  Maybe (..),
+  MonadIO (liftIO),
+  Semigroup ((<>)),
+  Show,
+  String,
+  Text,
+  ToString (toString),
+  ToText (toText),
+  Traversable (mapM),
+  error,
+  fromMaybe,
+  fst,
+  join,
+  map,
+  mapM_,
+  not,
+  pass,
+  readMaybe,
+  show,
+  snd,
+  sort,
+  ($),
+  (&),
+  (<$>),
+ )
 import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
-import System.Config
-import System.Types
-import Utils
+import System.Config (AuthContext (env))
+import System.Types (ATAuthCtx)
+import Utils (faIcon_, userIsProjectMember)
 import Web.FormUrlEncoded (FromForm)
-import Relude hiding (ask, asks)
 
 
 data SwaggerForm = SwaggerForm
