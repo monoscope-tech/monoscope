@@ -41,15 +41,15 @@ insertFieldQueryAndParams field = (q, params)
       [sql| INSERT into apis.fields (project_id, endpoint_hash, key, field_type, format, description, key_path, field_category, hash) 
             VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING; |]
     params =
-      [ MkDBField $ field.projectId
-      , MkDBField $ field.endpointHash
-      , MkDBField $ field.key
-      , MkDBField $ field.fieldType
-      , MkDBField $ field.format
-      , MkDBField $ field.description
-      , MkDBField $ field.keyPath
-      , MkDBField $ field.fieldCategory
-      , MkDBField $ field.hash
+      [ MkDBField field.projectId
+      , MkDBField field.endpointHash
+      , MkDBField field.key
+      , MkDBField field.fieldType
+      , MkDBField field.format
+      , MkDBField field.description
+      , MkDBField field.keyPath
+      , MkDBField field.fieldCategory
+      , MkDBField field.hash
       ]
 
 

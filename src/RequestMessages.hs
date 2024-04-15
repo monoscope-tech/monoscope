@@ -139,11 +139,11 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   -- These are the projects that we have already created endpoints
   let method = T.toUpper rM.method
   let urlPath = RequestDumps.normalizeUrlPath rM.sdkType rM.statusCode rM.method (fromMaybe "/" rM.urlPath)
-  let !endpointHash = from @String @Text $ showHex (xxHash $ encodeUtf8 $ UUID.toText rM.projectId <> (fromMaybe "" rM.host) <> method <> urlPath) ""
+  let !endpointHash = from @String @Text $ showHex (xxHash $ encodeUtf8 $ UUID.toText rM.projectId <> fromMaybe "" rM.host <> method <> urlPath) ""
 
   let redactFieldsList = Vector.toList pjc.redactFieldslist <> [".set-cookie", ".password"]
 
-  let sanitizeNullChars = TE.encodeUtf8 . replaceNullChars . TE.decodeUtf8
+  let sanitizeNullChars = encodeUtf8 . replaceNullChars . decodeUtf8
   reqBodyB64 <- B64.decodeBase64 $ encodeUtf8 rM.requestBody
   let reqBody = redactJSON redactFieldsList $ fromRight [aesonQQ| {} |] $ AE.eitherDecodeStrict $ sanitizeNullChars reqBodyB64
   respBodyB64 <- B64.decodeBase64 $ encodeUtf8 rM.responseBody

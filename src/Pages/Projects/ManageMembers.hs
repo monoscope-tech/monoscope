@@ -76,17 +76,17 @@ manageMembersPostH pid form = do
       let uAndPOldAndChanged =
             mapMaybe
               ( \(email, permission) -> do
-                  let projMembersM = projMembers & find (\a -> original (a.email) == email && a.permission /= permission)
+                  let projMembersM = projMembers & find (\a -> original a.email == email && a.permission /= permission)
                   projMembersM >>= (\projMember -> Just (projMember.id, permission))
               )
               usersAndPermissions
 
-      let uAndPNew = filter (\(email, _) -> not $ any (\a -> original (a.email) == email) projMembers) usersAndPermissions
+      let uAndPNew = filter (\(email, _) -> not $ any (\a -> original a.email == email) projMembers) usersAndPermissions
       let projectTitle = maybe "" (.title) project
 
       let deletedUAndP =
             V.toList projMembers
-              & filter (\pm -> not $ any (\(email, _) -> original (pm.email) == email) usersAndPermissions)
+              & filter (\pm -> not $ any (\(email, _) -> original pm.email == email) usersAndPermissions)
               & filter (\a -> a.userId /= currUserId)
               & map (.id) -- We should not allow deleting the current user from the project
 
@@ -212,7 +212,7 @@ manageSubGetH pid = do
   if not isMember
     then do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {}|]
-      pure $ addHeader hxTriggerData $ addHeader ("") ""
+      pure $ addHeader hxTriggerData $ addHeader "" ""
     else do
       project <- dbtToEff $ Projects.projectById pid
       case project of
@@ -221,13 +221,13 @@ manageSubGetH pid = do
           case sub of
             Nothing -> do
               let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","errorToast": ["Subscription ID not found"]}|]
-              pure $ addHeader hxTriggerData $ addHeader ("") ""
+              pure $ addHeader hxTriggerData $ addHeader "" ""
             Just s -> do
               let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {}|]
-              pure $ addHeader hxTriggerData $ addHeader (s.dataVal.attributes.urls.customerPortal) ""
+              pure $ addHeader hxTriggerData $ addHeader s.dataVal.attributes.urls.customerPortal ""
         Nothing -> do
           let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","errorToast": ["Project not found"]}|]
-          pure $ addHeader hxTriggerData $ addHeader ("") ""
+          pure $ addHeader hxTriggerData $ addHeader "" ""
 
 
 getSubscriptionPortalUrl :: Maybe Text -> Text -> IO (Maybe SubResponse)

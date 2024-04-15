@@ -242,7 +242,7 @@ spec = do
       let timestamp = Unsafe.read "2019-08-31 05:14:37.537084021 UTC" :: UTCTime
       let requestMsg =
             RequestMessages.RequestMessage
-              { timestamp = (utcToZonedTime utc timestamp)
+              { timestamp = utcToZonedTime utc timestamp
               , projectId = UUID.nil
               , sdkType = GoGin
               , host = Just "http://apitoolkit.io"

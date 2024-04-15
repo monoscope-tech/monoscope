@@ -65,7 +65,7 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoostedM
   now <- liftIO getCurrentTime
   let (fromD, toD, currentRange) = case sinceM of
         Just "1H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just now, Just "Last Hour")
-        Just "24H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just $ now, Just "Last 24 Hours")
+        Just "24H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just now, Just "Last 24 Hours")
         Just "7D" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 7) now, Just now, Just "Last 7 Days")
         Just "14D" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 14) now, Just now, Just "Last 14 Days")
         _ -> do
@@ -89,7 +89,7 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoostedM
         pure (project, tableAsVecE)
 
       -- FIXME: we're silently ignoring parse errors and the likes.
-      let tableAsVec = Unsafe.fromJust $ hush $ tableAsVecE
+      let tableAsVec = Unsafe.fromJust $ hush tableAsVecE
 
       freeTierExceeded <-
         dbtToEff $
@@ -309,11 +309,11 @@ resultTableAndMeta_ page = do
     input_ [type_ "radio", name_ "logExplorerMain", role_ "tab", class_ "tab", checked_, Aria.label_ $ "Query results (" <> fmt (commaizeF page.resultCount) <> ")"]
     div_ [class_ "relative overflow-y-scroll h-full tab-content", role_ "tabpanel"] $ resultTable_ page
 
-    input_ [type_ "radio", name_ "logExplorerMain", role_ "tab", class_ "tab", Aria.label_ $ "Alerts"]
+    input_ [type_ "radio", name_ "logExplorerMain", role_ "tab", class_ "tab", Aria.label_ "Alerts"]
     div_ [class_ "relative overflow-y-scroll h-full tab-content", role_ "tabpanel"] do
       div_ [hxGet_ $ "/p/" <> page.pid.toText <> "/alerts", hxTrigger_ "intersect", hxSwap_ "innerHTML", id_ "alertsListContainer"] ""
 
-    input_ [type_ "radio", name_ "logExplorerMain", role_ "tab", class_ "tab", Aria.label_ $ "Save as Alert"]
+    input_ [type_ "radio", name_ "logExplorerMain", role_ "tab", class_ "tab", Aria.label_ "Save as Alert"]
     div_ [class_ "relative overflow-y-scroll h-full tab-content p-3", role_ "tabpanel"] $ Alerts.editAlert_ page.pid Nothing
 
 
@@ -408,8 +408,7 @@ logTableHeadingWrapper_ pid title child = td_
             , hxPushUrl_ "true"
             , hxVals_ $ "js:{query:params().query,cols:removeNamedColumnToSummary('" <> title <> "'),layout:'resultTable'}"
             , hxTarget_ "#resultTable"
-            ]
-          $ "Hide column"
+            ] "Hide column"
 
 
 isLogEvent :: [Text] -> Bool

@@ -42,7 +42,7 @@ clientMetadataH (Just authTextB64) = do
   case authTextE of
     Left err -> liftIO (appCtx.logger <& toString err) >> throwError err401
     Right authText -> do
-      let decryptedKey = ProjectApiKeys.decryptAPIKey (encodeUtf8 $ appCtx.config.apiKeyEncryptionSecretKey) authText
+      let decryptedKey = ProjectApiKeys.decryptAPIKey (encodeUtf8 appCtx.config.apiKeyEncryptionSecretKey) authText
       case ProjectApiKeys.ProjectApiKeyId <$> UUID.fromASCIIBytes decryptedKey of
         Nothing -> throwError err401
         Just apiKeyUUID -> do
@@ -58,7 +58,7 @@ clientMetadataH (Just authTextB64) = do
             ClientMetadata
               { projectId = pApiKey.projectId
               , pubsubProjectId = "past-3"
-              , topicId = (appCtx.config.requestPubsubTopics) !! 0 -- apitoolkit-prod-default
+              , topicId = appCtx.config.requestPubsubTopics !! 0 -- apitoolkit-prod-default
               , pubsubPushServiceAccount = apitoolkitPusherServiceAccount
               }
 

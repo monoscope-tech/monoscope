@@ -94,7 +94,7 @@ runServer appLogger env = do
           [ [async $ runSettings warpSettings wrappedServer]
           , -- , [async $ OJCli.defaultWebUI ojStartArgs ojCfg] -- Uncomment or modify as needed
             [async $ pubsubService appLogger env | env.config.enablePubsubService]
-          , [async $ Safe.withException bgJobWorker (logException (env.config.environment) appLogger) | env.config.enableBackgroundJobs]
+          , [async $ Safe.withException bgJobWorker (logException env.config.environment appLogger) | env.config.enableBackgroundJobs]
           ]
   _ <- liftIO $ waitAnyCancel asyncs
   pass
@@ -116,7 +116,7 @@ pubsubService appLogger appCtx = do
       managerG <- Google.newManager Google.tlsManagerSettings
       Google.newEnvWith creds (\_ _ -> pass) managerG <&> (Google.envScopes L..~ pubSubScope)
 
-  let pullReq = PubSub.newPullRequest & field @"maxMessages" L.?~ fromIntegral (envConfig.messagesPerPubsubPullBatch)
+  let pullReq = PubSub.newPullRequest & field @"maxMessages" L.?~ fromIntegral envConfig.messagesPerPubsubPullBatch
 
   forever $
     runResourceT
@@ -133,7 +133,7 @@ pubsubService appLogger appCtx = do
 
           -- unless (null messages) do
           msgIds <- liftIO $ runBackground appLogger appCtx $ processMessages envConfig (catMaybes msgsB64) appCtx.projectCache
-          let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just (msgIds)
+          let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just msgIds
           unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env
 
 

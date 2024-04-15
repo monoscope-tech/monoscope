@@ -255,4 +255,4 @@ scheduleInsertScheduleInBackgroundJobs schedules = do
 deleteSchedulesFromBackgroundJobs :: CollectionId -> DBT IO Int64
 deleteSchedulesFromBackgroundJobs cid = do
   let q = [sql| DELETE FROM background_jobs where payload->>'tag' = 'RunCollectionTests' and payload->>'contents' = ? |]
-  execute Delete q (cid)
+  execute Delete q cid

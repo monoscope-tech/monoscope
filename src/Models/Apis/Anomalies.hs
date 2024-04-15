@@ -1,6 +1,6 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE TemplateHaskell #-}
+
 
 module Models.Apis.Anomalies (
   selectAnomalies,
@@ -25,7 +25,6 @@ where
 import Data.Aeson qualified as AE
 import Data.Default (Default, def)
 import Data.Time
-import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Data.Vector qualified as V
@@ -269,8 +268,8 @@ selectAnomalies pid endpointM isAcknowleged isArchived sortM limitM skipM = quer
     boolToNullSubQ a = if a then " not " else ""
     condlist =
       catMaybes
-        [ (\a -> " aan.acknowleged_at is" <> a <> " null ") <$> (boolToNullSubQ <$> isAcknowleged)
-        , (\a -> " aan.archived_at is" <> a <> " null ") <$> (boolToNullSubQ <$> isArchived)
+        [ (\a -> " aan.acknowleged_at is" <> a <> " null ") . boolToNullSubQ <$> isAcknowleged
+        , (\a -> " aan.archived_at is" <> a <> " null ") . boolToNullSubQ <$> isArchived
         , "avm.endpoint_id=?" <$ endpointM
         ]
     cond
@@ -382,7 +381,7 @@ acknowlegeCascade :: Users.UserId -> Vector Text -> DBT IO Int64
 acknowlegeCascade uid targets = do
   execute Update q (uid, hashes)
   where
-    hashes = (\s -> s <> "%") <$> targets
+    hashes = (<> "%") <$> targets
     q =
       [sql| UPDATE apis.anomalies SET acknowleged_by = ?, acknowleged_at = NOW()
               WHERE target_hash LIKE ANY (?); |]

@@ -188,7 +188,7 @@ updateQMonitorTriggeredState qmId isAlert = execute Update q (Only qmId)
         else [sql|UPDATE monitors.query_monitors SET warning_last_triggered=NOW() where id=?|]
 
 
-monitorToggleActiveById :: QueryMonitorId -> DBT IO (Int64)
+monitorToggleActiveById :: QueryMonitorId -> DBT IO Int64
 monitorToggleActiveById id' = execute Update q (Only id')
   where
     q =

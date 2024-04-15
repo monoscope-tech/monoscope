@@ -202,7 +202,7 @@ lookupVecIntByKey vec colIdxMap key = (HM.lookup key colIdxMap >>= Just . lookup
 
 
 lookupVecByKey :: V.Vector Value -> HM.HashMap Text Int -> Text -> Maybe Value
-lookupVecByKey vec colIdxMap key = (HM.lookup key colIdxMap >>= (\x -> vec V.!? x))
+lookupVecByKey vec colIdxMap key = HM.lookup key colIdxMap >>= (vec V.!?)
 
 
 listToIndexHashMap :: Hashable a => [a] -> HM.HashMap a Int

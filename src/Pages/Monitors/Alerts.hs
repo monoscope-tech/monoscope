@@ -56,9 +56,9 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
           , title = alertForm.title
           , subject = alertForm.subject
           , message = alertForm.message
-          , emails = V.fromList $ map CI.mk $ alertForm.recipientEmails
+          , emails = V.fromList $ map CI.mk alertForm.recipientEmails
           , emailAll = fromMaybe False alertForm.recipientEmailAll
-          , slackChannels = V.fromList $ alertForm.recipientSlacks
+          , slackChannels = V.fromList alertForm.recipientSlacks
           }
    in Monitors.QueryMonitor
         { id = queryMonitorId
@@ -85,14 +85,14 @@ alertUpsertPostH :: Projects.ProjectId -> AlertUpsertForm -> ATAuthCtx (Html ())
 alertUpsertPostH pid form = do
   let alertId = form.alertId >>= UUID.fromText
   queryMonitorId <- liftIO $ case alertId of
-    Just alertId' -> Monitors.QueryMonitorId <$> (pure alertId')
+    Just alertId' -> pure (Monitors.QueryMonitorId alertId')
     Nothing -> Monitors.QueryMonitorId <$> UUID.nextRandom
   now <- Time.currentTime
   let queryMonitor = convertToQueryMonitor pid now queryMonitorId form
 
   _ <- dbtToEff $ Monitors.queryMonitorUpsert queryMonitor
   -- TODO: add toast
-  pure $ ""
+  pure ""
 
 
 alertListGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
@@ -245,7 +245,7 @@ editAlert_ pid monitorM = do
                 li_ $ a_ [[__|on click put #addRecipientEmailAllTmpl.innerHTML after #addRecipientDropdown then _hyperscript.processNode(#recipientListParent) |]] "Email everyone"
                 li_ $ a_ [[__|on click put #addRecipientEmailTmpl.innerHTML after #addRecipientDropdown then _hyperscript.processNode(#recipientListParent) |]] "Email ..."
                 li_ $ a_ [[__|on click put #addRecipientSlackTmpl.innerHTML after #addRecipientDropdown then _hyperscript.processNode(#recipientListParent) |]] "To default Slack channel"
-            when (monitor.alertConfig.emailAll) addRecipientEmailAllTmpl_
+            when monitor.alertConfig.emailAll addRecipientEmailAllTmpl_
             forM_ monitor.alertConfig.emails addRecipientEmailTmpl_
             forM_ monitor.alertConfig.slackChannels addRecipientSlackTmpl_
 
@@ -257,7 +257,7 @@ editAlert_ pid monitorM = do
 
   template_ [id_ "addRecipientSlackTmpl"] $ addRecipientSlackTmpl_ ""
   template_ [id_ "addRecipientEmailTmpl"] $ addRecipientEmailTmpl_ (CI.mk "")
-  template_ [id_ "addRecipientEmailAllTmpl"] $ addRecipientEmailAllTmpl_
+  template_ [id_ "addRecipientEmailAllTmpl"] addRecipientEmailAllTmpl_
 
 
 addRecipientSlackTmpl_ :: Text -> Html ()
@@ -304,7 +304,7 @@ end
             |]
         let editURI = "/p/" <> monitor.projectId.toText <> "/alerts/" <> monitor.id.toText
         td_
-          [ class_ $ if (isJust monitor.deactivatedAt) then "line-through" else ""
+          [ class_ $ if isJust monitor.deactivatedAt then "line-through" else ""
           , hxTarget_ "#alertsListContainer"
           , hxGet_ editURI
           , editAction
@@ -323,4 +323,4 @@ end
             , hxTarget_ "#alertsListContainer"
             , hxPost_ $ "/p/" <> monitor.projectId.toText <> "/alerts/" <> monitor.id.toText <> "/toggle_active"
             ]
-            if (isJust monitor.deactivatedAt) then "reactivate" else "deactivate"
+            if isJust monitor.deactivatedAt then "reactivate" else "deactivate"

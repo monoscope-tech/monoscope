@@ -7,7 +7,6 @@ import Colourista.IO (blueMessage)
 import Configuration.Dotenv qualified as Dotenv
 import Control.Exception (try)
 import Data.Cache
-import Data.Cache (Cache, newCache)
 import Data.Default (Default (..))
 import Data.Default.Instances ()
 import Data.Pool as Pool

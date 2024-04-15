@@ -113,7 +113,7 @@ fieldDetailsView field formats = do
         , hxSwap_ "none"
         ]
         do
-          input_ [type_ "hidden", name_ "fieldHash", value_ $ field.hash]
+          input_ [type_ "hidden", name_ "fieldHash", value_ field.hash]
           input_ [type_ "hidden", name_ "fieldType", value_ $ Fields.fieldTypeToText field.fieldType]
           div_ [class_ "flex items-center py-2 border-b justify-between"] do
             h3_ [class_ "text-xl font-bold text-gray-900"] "Edit Field"

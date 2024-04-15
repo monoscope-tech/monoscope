@@ -138,4 +138,4 @@ pTimeChartSection = do
 
 
 rollupParser :: Parser Rollup
-rollupParser = Rollup <$> toText <$> (string "[" *> some alphaNumChar <* string "]")
+rollupParser = Rollup . toText <$> (string "[" *> some alphaNumChar <* string "]")

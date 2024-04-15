@@ -23,7 +23,7 @@ listProjectsGetH :: ATAuthCtx (Union GetOrRedirect)
 listProjectsGetH = do
   pool <- asks pool
   sess <- Sessions.getSession
-  projects <- liftIO $ withPool pool $ Projects.selectProjectsForUser (sess.user.id)
+  projects <- liftIO $ withPool pool $ Projects.selectProjectsForUser sess.user.id
   let bwconf =
         (def :: BWConfig)
           { sessM = sess.persistentSession

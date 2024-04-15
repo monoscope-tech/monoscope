@@ -105,7 +105,7 @@ processMessages :: Config.EnvConfig -> [(Text, ByteString)] -> Cache.Cache Proje
 processMessages env msgs projectCache = do
   let msgs' =
         msgs <&> \(ackId, msg) -> do
-          let sanitizedJsonStr = replaceNullChars $ decodeUtf8 $ msg
+          let sanitizedJsonStr = replaceNullChars $ decodeUtf8 msg
           recMsg <- eitherStrToText $ eitherDecode $ BL.fromStrict $ encodeUtf8 sanitizedJsonStr
           Right (ackId, recMsg)
 

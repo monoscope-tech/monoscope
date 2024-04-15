@@ -87,7 +87,7 @@ acknowlegeAnomalyGetH pid aid = do
     then do
       pure $ userNotMemeberPage sess
     else do
-      let text_id = Vector.fromList [(UUID.toText aid.unAnomalyId)]
+      let text_id = Vector.fromList [UUID.toText aid.unAnomalyId]
       v <- dbtToEff $ Anomalies.acknowledgeAnomalies sess.userId text_id
       _ <- dbtToEff $ Anomalies.acknowlegeCascade sess.userId v
       _ <- liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.GenSwagger pid sess.userId
@@ -628,7 +628,7 @@ anomalyDetailsPage anomaly shapesWithFieldsMap fields prvFormatsM currTime modal
 
         input_ [type_ "radio", name_ "anomaly-events-tabs", role_ "tab", class_ "tab", Aria.label_ "Events"]
         div_ [role_ "tabpanel", class_ "tab-content grow whitespace-nowrap text-sm divide-y overflow-x-hidden ", id_ "events_content"] do
-          let events_url = "/p/" <> (UUID.toText $ Projects.unProjectId $ anomaly.projectId) <> "/log_explorer?layout=resultTable&query=" <> (escapedQueryPartial anomalyQueryPartial)
+          let events_url = "/p/" <> UUID.toText (Projects.unProjectId anomaly.projectId) <> "/log_explorer?layout=resultTable&query=" <> escapedQueryPartial anomalyQueryPartial
           div_ [hxGet_ events_url, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
 
 

@@ -53,11 +53,11 @@ fieldPutH pid fid editData = do
   if not isMember
     then do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Only project memebers can take the survey"]}|]
-      pure $ addHeader hxTriggerData $ ""
+      pure $ addHeader hxTriggerData ""
     else do
       env <- asks env
       fi <- dbtToEff $ execute Update [sql|update apis.fields set is_required = ?, is_enum = ?, description=? where id=?|] (parseCheckbox editData.isRequired, parseCheckbox editData.isEnum, editData.description, fid)
-      now <- liftIO $ getZonedTime
+      now <- liftIO getZonedTime
       let formats =
             ( \format ->
                 Formats.Format

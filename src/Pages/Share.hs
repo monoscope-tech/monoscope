@@ -72,16 +72,16 @@ shareLinkPostH pid reqForm = do
   let rid = reqForm.reqId
   let expIn = reqForm.expiresIn
   let lis = ["1 hour", "8 hours", "1 day"] :: [Text]
-  if elem expIn lis
+  if expIn `elem` lis
     then do
       inId <- liftIO UUIDV4.nextRandom
-      res <- dbtToEff $ 
+      res <- dbtToEff $
         execute Insert [sql| INSERT INTO apis.share_requests (id, project_id, expired_at, request_dump_id, request_created_at) 
                                   VALUES (?,?, current_timestamp + interval ?,?,?) |] (inId, pid, expIn, rid, reqForm.reqCreatedAt)
       pure $ addHeader "" $ copyLink $ show inId
     else do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","errorToast": ["Invalid expiry interval"]}|]
-      pure $ addHeader hxTriggerData $ "" 
+      pure $ addHeader hxTriggerData ""
 
 
 copyLink :: Text -> Html ()
@@ -117,7 +117,7 @@ shareLinkGetH sid = do
           , currProject = Nothing
           , pageTitle = "Share request log"
           }
-  pure $ bodyWrapper bwconf $ sharePage reqM 
+  pure $ bodyWrapper bwconf $ sharePage reqM
 
 
 sharePage :: Maybe RequestDumps.RequestDumpLogItem ->Html ()

@@ -99,7 +99,7 @@ sqlFromQueryComponents sqlCfg qc =
     -- Handle the Either error case correctly not hushing it.
     projectedColsProcessed = mapMaybe (\col -> display <$> hush (parse pSubject "" col)) sqlCfg.projectedColsByUser
     selectedCols = if null qc.select then projectedColsProcessed <> sqlCfg.defaultSelect else qc.select
-    selectClause = T.intercalate "," $ colsNoAsClause $ selectedCols
+    selectClause = T.intercalate "," $ colsNoAsClause selectedCols
     whereClause = maybe "" (\whereC -> " AND (" <> whereC <> ")") qc.whereClause
     groupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause
     dateRangeStr = case sqlCfg.dateRange of
@@ -107,7 +107,7 @@ sqlFromQueryComponents sqlCfg qc =
       (Just a, Just b) -> "AND created_at BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
       _ -> ""
 
-    (fromT, toT) = bimap (fromMaybe sqlCfg.currentTime) (fromMaybe sqlCfg.currentTime) $ sqlCfg.dateRange
+    (fromT, toT) = bimap (fromMaybe sqlCfg.currentTime) (fromMaybe sqlCfg.currentTime) sqlCfg.dateRange
     timeDiffSecs = traceShowId $ abs $ nominalDiffTimeToSeconds $ diffUTCTime fromT toT
 
     finalSqlQuery =
@@ -145,7 +145,7 @@ sqlFromQueryComponents sqlCfg qc =
 
     -- FIXME: render this based on the aggregations, but without the aliases
     alertSelect = [fmt| count(*)::integer|]
-    alertGroupByClause = if (null qc.groupByClause) then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause
+    alertGroupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause
     -- Returns the max of all the values returned by the query. Change 5mins to
     alertQuery =
       [fmt|
@@ -291,7 +291,7 @@ listToColNames = map \x -> T.strip $ last $ "" :| T.splitOn "as" x
 -- >>> colsNoAsClause ["id", "JSONB_ARRAY_LENGTH(errors) as errors_count"]
 -- ["id","JSONB_ARRAY_LENGTH(errors)"]
 colsNoAsClause :: [Text] -> [Text]
-colsNoAsClause = map \x -> T.strip $ Unsafe.head $ T.splitOn "as" x
+colsNoAsClause = map (T.strip . Unsafe.head . T.splitOn "as")
 
 
 instance HasField "toColNames" QueryComponents [Text] where

@@ -76,7 +76,7 @@ expandAPIlogItem' pid req modal = do
                 forM_ (["1 hour", "8 hours", "1 day"] :: [Text]) \sw -> do
                   button_
                     [ [__|on click set #toggle_expires_btn.firstChild.innerText to 'Expires in ' + event.target's @data-expire-value 
-                                        then set #expire_input.value to event.target's @data-expire-value|] 
+                                        then set #expire_input.value to event.target's @data-expire-value|]
                     , term "data-expire-value" sw
                     , class_ "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"
                     ]
@@ -134,7 +134,7 @@ expandAPIlogItem' pid req modal = do
     div_ [class_ "flex w-full bg-gray-100 px-4 py-2 flex-col gap-2"] do
       p_ [class_ "font-bold"] "Outgoing requests"
     div_ [class_ "grow overflow-y-auto py-2 px-1 max-h-[500px] whitespace-nowrap text-sm divide-y overflow-x-hidden"] do
-      let escapedQueryPartial = toText $ escapeURIString isUnescapedInURI $ toString $ [fmt|parent_id=="{UUID.toText req.id}"|]
+      let escapedQueryPartial = toText $ escapeURIString isUnescapedInURI $ toString [fmt|parent_id=="{UUID.toText req.id}"|]
       let events_url = "/p/" <> pid.toText <> "/log_explorer?layout=resultTable&query=" <> escapedQueryPartial
       div_ [hxGet_ events_url, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
 

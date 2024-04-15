@@ -7,7 +7,7 @@ module BackgroundJobs (jobsWorkerInit, BgJobs (..)) where
 
 -- This example is using these functions to introduce an artificial delay of a
 -- few seconds in one of the jobs. Otherwise it is not really needed.
-import Control.Lens ((.~)) 
+import Control.Lens ((.~))
 import Data.Aeson as Aeson
 import Data.CaseInsensitive qualified as CI
 import Data.List.Extra (intersect, union)
@@ -366,7 +366,7 @@ jobsRunner dbPool logger cfg job = do
                 currentTime <- getCurrentTime
                 let intervals = scheduleIntervals currentTime schedule
                 let contents = Aeson.Array [show col_id.collectionId]
-                let tagValue = Aeson.String ("RunCollectionTests")
+                let tagValue = Aeson.String "RunCollectionTests"
                 let dbParams = (\x -> (x, "queued" :: Text, Aeson.object ["tag" .= tagValue, "contents" .= contents])) <$> intervals
                 _ <- withPool dbPool $ Testing.scheduleInsertScheduleInBackgroundJobs dbParams
                 pass
@@ -424,16 +424,14 @@ queryMonitorsTriggered :: Pool Connection -> Log.Logger -> Config.EnvConfig -> V
 queryMonitorsTriggered dbPool logger cfg queryMonitorIds = do
   monitorsEvaled <- withPool dbPool $ Monitors.queryMonitorsById queryMonitorIds
   forM_ monitorsEvaled \monitorE -> do
-    if ( (monitorE.triggerLessThan && monitorE.evalResult >= monitorE.alertThreshold)
+    if (monitorE.triggerLessThan && monitorE.evalResult >= monitorE.alertThreshold)
           || (not monitorE.triggerLessThan && monitorE.evalResult <= monitorE.alertThreshold)
-       )
       then handleQueryMonitorThreshold dbPool logger cfg monitorE True
       else
         if Just True
           == ( monitorE.warningThreshold <&> \warningThreshold ->
-                ( (monitorE.triggerLessThan && monitorE.evalResult >= warningThreshold)
+                (monitorE.triggerLessThan && monitorE.evalResult >= warningThreshold)
                     || (not monitorE.triggerLessThan && monitorE.evalResult <= warningThreshold)
-                )
              )
           then handleQueryMonitorThreshold dbPool logger cfg monitorE False
           else pass
@@ -442,10 +440,10 @@ queryMonitorsTriggered dbPool logger cfg queryMonitorIds = do
 handleQueryMonitorThreshold :: Pool Connection -> Log.Logger -> Config.EnvConfig -> Monitors.QueryMonitorEvaled -> Bool -> IO ()
 handleQueryMonitorThreshold dbPool logger cfg monitorE isAlert = do
   _ <- withPool dbPool $ Monitors.updateQMonitorTriggeredState monitorE.id isAlert
-  when (monitorE.alertConfig.emailAll) do
+  when monitorE.alertConfig.emailAll do
     users <- withPool dbPool $ Projects.usersByProjectId monitorE.projectId
-    void $ forM users \u -> (emailQueryMonitorAlert cfg monitorE u.email (Just u))
-  forM monitorE.alertConfig.emails \email -> (emailQueryMonitorAlert cfg monitorE email Nothing)
+    forM_ users \u -> emailQueryMonitorAlert cfg monitorE u.email (Just u)
+  forM_ monitorE.alertConfig.emails \email -> emailQueryMonitorAlert cfg monitorE email Nothing
   unless (null monitorE.alertConfig.slackChannels) $ slackQueryMonitorAlert dbPool monitorE
 
 

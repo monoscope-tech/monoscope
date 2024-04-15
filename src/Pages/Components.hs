@@ -46,7 +46,7 @@ getTargetPage _ = ""
 drawerWithURLContent_ :: Text -> Text -> Html () -> Html ()
 drawerWithURLContent_ drawerId url trigger = div_ [class_ "drawer drawer-end inline-block w-auto"] do
   input_ [id_ drawerId, type_ "checkbox", class_ "drawer-toggle", [__|on keyup if the event's key is 'Escape' set my.checked to false trigger keyup |]]
-  label_ [Lucid.for_ drawerId, class_ "drawer-button inline-block"] $ trigger
+  label_ [Lucid.for_ drawerId, class_ "drawer-button inline-block"] trigger
   div_ [class_ "drawer-side fixed top-0 left-0 w-full h-full flex z-[10000] ", style_ "position:fixed;width:100%;display:flex"] do
     label_ [Lucid.for_ drawerId, Aria.label_ "close modal", class_ "w-full drawer-overlay grow flex-1"] ""
     div_ [style_ "width: min(90vw, 850px) ", class_ "bg-white min-h-full p-5 clear-both"] do

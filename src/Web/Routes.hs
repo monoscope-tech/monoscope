@@ -5,7 +5,7 @@ import Data.Aeson qualified as AE
 import Data.Pool (Pool)
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
-import DataSeeding qualified as DataSeeding
+import DataSeeding qualified
 import Database.PostgreSQL.Simple qualified as PG
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Deriving.Aeson qualified as DAE
@@ -124,7 +124,7 @@ server pool =
 
 
 data CookieProtectedRoutes mode = CookieProtectedRoutes
-  { projectListGet :: mode :- UVerb 'GET '[HTML] (GetOrRedirect)
+  { projectListGet :: mode :- UVerb 'GET '[HTML] GetOrRedirect
   , dashboardGet :: mode :- "p" :> ProjectId :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (Html ())
   , projectCreateGet :: mode :- "p" :> "new" :> Get '[HTML] (Html ()) -- p represents project
   , projectCreatePost :: mode :- "p" :> "new" :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))

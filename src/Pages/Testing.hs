@@ -100,10 +100,10 @@ testingPutH pid cid action steps = do
               _ <- dbtToEff $ Testing.updateSchedule cid s.schedule s.isScheduled
               _ <- dbtToEff $ Testing.deleteSchedulesFromBackgroundJobs cid
               _ <- dbtToEff do
-                currentTime <- liftIO $ getCurrentTime
+                currentTime <- liftIO getCurrentTime
                 let intervals = scheduleIntervals currentTime (fromMaybe "" s.schedule)
                 let contents = Aeson.Array [show cid.collectionId]
-                let tagValue = Aeson.String ("RunCollectionTests")
+                let tagValue = Aeson.String "RunCollectionTests"
                 let dbParams = (\x -> (x, "queued" :: Text, Aeson.object ["tag" .= tagValue, "contents" .= contents])) <$> intervals
                 _ <- Testing.scheduleInsertScheduleInBackgroundJobs dbParams
                 pass

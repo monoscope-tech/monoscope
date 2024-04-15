@@ -44,7 +44,6 @@ import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import Network.HTTP.Types (hCookie)
 import Network.Wai
-import Network.Wai (Request (requestHeaders))
 import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Lens (responseBody)
@@ -67,11 +66,9 @@ import Servant.Server
 import Servant.Server.Experimental.Auth (AuthHandler, mkAuthHandler)
 import SessionCookies (craftSessionCookie, emptySessionCookie)
 import System.Config
-import System.Config (DashboardM, env, pool)
 import System.Logging qualified as Logging
 import System.Types
 import Web.Cookie
-import Web.Cookie (SetCookie, parseCookies)
 import Prelude hiding (ask, asks)
 
 
@@ -117,7 +114,7 @@ getRequestID req = do
   let headers = requestHeaders req
   case List.lookup "X-Request-ID" headers of
     Nothing -> fmap UUID.toText UUID.nextRandom
-    Just requestID -> pure $ Text.decodeUtf8 requestID
+    Just requestID -> pure $ decodeUtf8 requestID
 
 
 sidebarClosedFromCookie :: Cookies -> Bool
@@ -260,7 +257,7 @@ authCallbackH codeM _ = do
           persistentSessId <- liftIO Sessions.newPersistentSessionId
           Sessions.insertSession persistentSessId userId (Sessions.SessionData Map.empty)
           pure (userId, persistentSessId)
-    _ <- liftIO $ ConvertKit.addUser (envCfg.config.convertkitApiKey) email firstName lastName "" "" ""
+    _ <- liftIO $ ConvertKit.addUser envCfg.config.convertkitApiKey email firstName lastName "" "" ""
     pure persistentSessId
 
   case resp of
