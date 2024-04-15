@@ -8,11 +8,8 @@ import Data.Time.Clock (getCurrentTime)
 import Data.Tuple.Extra (fst3)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
-import Database.PostgreSQL.Entity.DBT (
-  withPool,
- )
 import Effectful.PostgreSQL.Transact.Effect
-import Effectful.Reader.Static (ask, asks)
+import Effectful.Reader.Static (ask)
 import Fmt (commaizeF, fixedF, fmt, (+|), (|+))
 import Lucid
 import Lucid.Htmx
@@ -25,7 +22,6 @@ import Models.Users.Sessions qualified as Sessions
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Charts.Charts qualified as Charts
-import Pages.NonMember
 import Pages.Onboarding qualified as Onboarding
 import PyF qualified
 import Relude.Unsafe qualified as Unsafe
@@ -33,6 +29,7 @@ import System.Config
 import System.Types
 import Utils (deleteParam, faIcon_, faSprite_, mIcon_, textToBool, userIsProjectMember)
 import Prelude hiding (ask, asks)
+import Pages.NonMember (userNotMemeberPage)
 
 
 data ParamInput = ParamInput
@@ -48,12 +45,9 @@ endpointListGetH pid layoutM ackdM archivedM hostM projectHostM sortM hxRequestM
   let ackd = maybe True textToBool ackdM
   let archived = maybe False textToBool archivedM
 
-  -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let env = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
-  let currUserId = sess.userId
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember

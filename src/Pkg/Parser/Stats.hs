@@ -1,8 +1,5 @@
 module Pkg.Parser.Stats where
 
-import Control.Monad.Combinators.Expr
-import Data.Foldable (foldl)
-import Data.Text.Display (Display, display, displayBuilder, displayParen, displayPrec)
 import Data.Text.Lazy.Builder (Builder)
 import Pkg.Parser.Expr
 import Pkg.Parser.Types

@@ -2,17 +2,15 @@
 
 module DataSeeding (parseConfigToJson, dataSeedingGetH, dataSeedingPostH, DataSeedingForm) where
 
-import Colog ((<&))
 import Data.Aeson qualified as AE
 import Data.ByteString.Base64 qualified as B64
 import Data.Default (def)
 import Data.HashMap.Strict qualified as HM
 import Data.Time (NominalDiffTime, UTCTime, ZonedTime, addUTCTime, diffUTCTime, utc, utcToZonedTime, zonedTimeToUTC)
 import Data.Yaml qualified as Yaml
-import Database.PostgreSQL.Entity.DBT (withPool)
 import Deriving.Aeson qualified as DAE
 import Effectful.PostgreSQL.Transact.Effect
-import Effectful.Reader.Static (ask, asks)
+import Effectful.Reader.Static (ask)
 import Faker
 import Faker.Address (fullAddress)
 import Faker.Name qualified
@@ -26,13 +24,12 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.NonMember
-import ProcessMessage qualified
 import Relude.Unsafe ((!!))
 import Relude.Unsafe qualified as Unsafe
 import RequestMessages qualified
-import System.Config (AuthContext (..), DashboardM, env, logger, pool, projectCache)
 import System.Random (RandomGen, getStdGen, randomRs)
 import System.Types
+import System.Config (AuthContext(..))
 import Utils
 import Web.FormUrlEncoded (FromForm)
 import Prelude hiding (ask, asks)

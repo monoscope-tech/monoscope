@@ -10,21 +10,18 @@ import Data.Digest.XXHash
 import Data.List (nubBy)
 import Data.Text qualified as T
 import Data.Time.Clock (UTCTime)
-import Data.Time.LocalTime (ZonedTime, getZonedTime, utc, utcToZonedTime)
+import Data.Time.LocalTime (getZonedTime, utc, utcToZonedTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (withPool)
 import Effectful.PostgreSQL.Transact.Effect
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Htmx
-import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields (parseFieldCategoryEnum, parseFieldTypes)
 import Models.Apis.Fields qualified as Fields
-import Models.Apis.Fields.Query qualified as Fields
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
@@ -33,7 +30,6 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Numeric (showHex)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Pages.GenerateSwagger qualified as GenerateSwagger
 import Pages.NonMember
 import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
@@ -240,11 +236,9 @@ flattenVector = V.concat
 
 documentationPutH :: Projects.ProjectId -> SaveSwaggerForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
 documentationPutH pid SaveSwaggerForm{updated_swagger, swagger_id, endpoints, diffsInfo} = do
-  -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
-  let currUserId = sess.userId
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
@@ -286,11 +280,9 @@ documentationPutH pid SaveSwaggerForm{updated_swagger, swagger_id, endpoints, di
 
 documentationPostH :: Projects.ProjectId -> SwaggerForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
 documentationPostH pid SwaggerForm{swagger_json, from} = do
-  -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
-  let currUserId = sess.userId
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
@@ -327,7 +319,6 @@ documentationGetH pid swagger_id = do
   appCtx <- ask @AuthContext
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
-  let currUserId = sess.userId
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember

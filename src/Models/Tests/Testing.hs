@@ -31,7 +31,6 @@ import Data.Default (Default)
 import Data.Default.Instances ()
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
-import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (insert, selectById)
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, queryOne)
@@ -168,7 +167,7 @@ getCollectionById :: CollectionId -> DBT IO (Maybe Collection)
 getCollectionById id' = selectById (Only id')
 
 
-getCollections :: Projects.ProjectId -> DBT IO (Vector CollectionListItem)
+getCollections :: Projects.ProjectId -> DBT IO (V.Vector CollectionListItem)
 getCollections pid = query Select q (Only pid)
   where
     q =
@@ -182,7 +181,7 @@ getCollections pid = query Select q (Only pid)
   |]
 
 
-getCollectionsId :: DBT IO (Vector CollectionId)
+getCollectionsId :: DBT IO (V.Vector CollectionId)
 getCollectionsId = query Select q ()
   where
     q =
@@ -192,7 +191,7 @@ getCollectionsId = query Select q ()
     |]
 
 
-getCollectionSteps :: CollectionId -> DBT IO (Vector CollectionStep)
+getCollectionSteps :: CollectionId -> DBT IO (V.Vector CollectionStep)
 getCollectionSteps cid = query Select q (Only cid)
   where
     q =
@@ -216,7 +215,7 @@ updateCollectionStep csid val = do
   execute Update q (val, csid)
 
 
-deleteCollectionSteps :: Vector Text -> DBT IO Int64
+deleteCollectionSteps :: V.Vector Text -> DBT IO Int64
 deleteCollectionSteps csid = do
   let q = [sql| UPDATE tests.collection_steps SET deleted_at=now() WHERE id=ANY(array_remove(?, '')::uuid[]) |]
   execute Update q (Only csid)

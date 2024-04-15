@@ -26,9 +26,8 @@ import Data.Text qualified as T
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime))
 import Data.Vector (Vector)
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (withPool)
 import Effectful.PostgreSQL.Transact.Effect
-import Effectful.Reader.Static (ask, asks)
+import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Htmx
 import Lucid.Svg (color_)
@@ -100,9 +99,7 @@ data ReportData = ReportData
 
 reportsPostH :: Projects.ProjectId -> Text -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
 reportsPostH pid t = do
-  -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
 
@@ -120,9 +117,7 @@ reportsPostH pid t = do
 
 singleReportGetH :: Projects.ProjectId -> Reports.ReportId -> ATAuthCtx (Html ())
 singleReportGetH pid rid = do
-  -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
 
@@ -151,7 +146,6 @@ reportsGetH pid page hxRequest hxBoosted = do
 
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
 

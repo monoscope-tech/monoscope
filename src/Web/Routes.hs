@@ -53,7 +53,7 @@ import Pages.SlackInstall qualified as SlackInstall
 import Pages.Survey qualified as Survey
 import Pages.Testing qualified as Testing
 import Prelude
-import Servant (AuthProtect, Capture, Context (..), Delete, FormUrlEncoded, Get, Header, Headers, JSON, NoContent, Patch, PlainText, Post, QueryFlag, QueryParam, ReqBody, StdMethod (GET), Verb, (:>))
+import Servant (AuthProtect, Capture, Context (..), Delete, FormUrlEncoded, Get, Header, Headers, JSON, NoContent, PlainText, Post, QueryParam, ReqBody, StdMethod (GET), Verb, (:>))
 import Servant qualified
 import Servant.API.Generic
 import Servant.API.UVerb
@@ -75,6 +75,7 @@ type QPT a = QueryParam a Text
 
 type GetRedirect = Verb 'GET 302
 
+type role Routes nominal
 
 data Routes mode = Routes
   { assets :: mode :- "assets" :> Servant.Raw
@@ -122,7 +123,7 @@ server pool =
           cookieProtectedServer
     }
 
-
+type role CookieProtectedRoutes nominal
 data CookieProtectedRoutes mode = CookieProtectedRoutes
   { projectListGet :: mode :- UVerb 'GET '[HTML] GetOrRedirect
   , dashboardGet :: mode :- "p" :> ProjectId :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (Html ())

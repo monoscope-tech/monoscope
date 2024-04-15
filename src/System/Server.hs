@@ -5,7 +5,6 @@ module System.Server (runAPItoolkit) where
 import BackgroundJobs qualified
 import Colourista.IO (blueMessage)
 import Control.Concurrent.Async
-import Control.Exception (try)
 import Control.Exception.Safe qualified as Safe
 import Control.Lens ((^?), _Just)
 import Control.Lens qualified as L
@@ -60,13 +59,13 @@ runAPItoolkit =
       withLogger (`runServer` env)
 
 
-runServer :: (Concurrent :> es, IOE :> es) => Log.Logger -> AuthContext -> Eff es ()
+runServer :: (IOE :> es) => Log.Logger -> AuthContext -> Eff es ()
 runServer appLogger env = do
   loggingMiddleware <- Logging.runLog (show env.config.environment) appLogger WaiLog.mkLogMiddleware
   let server = mkServer appLogger env
   let warpSettings =
         defaultSettings
-          & setPort (fromIntegral env.config.port)
+          & setPort env.config.port
           & setOnException \mRequest exception -> Log.runLogT "apitoolkit" appLogger Log.LogAttention $ do
             Log.logAttention "Unhandled exception" $ Aeson.object ["exception" Aeson..= show @String exception]
             Safe.throw exception
@@ -90,7 +89,7 @@ runServer appLogger env = do
   asyncs <-
     liftIO $
       sequence $
-        concat
+        concat @[]
           [ [async $ runSettings warpSettings wrappedServer]
           , -- , [async $ OJCli.defaultWebUI ojStartArgs ojCfg] -- Uncomment or modify as needed
             [async $ pubsubService appLogger env | env.config.enablePubsubService]

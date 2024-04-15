@@ -282,9 +282,9 @@ processProjectPostForm cpRaw = do
                         then (Nothing, Nothing)
                         else
                           let target = sub.dataVal Unsafe.!! 0
-                              firstSubItemId = show target.attributes.firstSubscriptionItem.id
-                              subId = show target.attributes.firstSubscriptionItem.subscriptionId
-                           in (Just subId, Just firstSubItemId)
+                              firstSubItemId' = show target.attributes.firstSubscriptionItem.id
+                              subId' = show target.attributes.firstSubscriptionItem.subscriptionId
+                           in (Just subId', Just firstSubItemId')
                     Nothing -> (Nothing, Nothing)
               if isNothing subId || isNothing firstSubItemId
                 then do
@@ -309,9 +309,9 @@ processProjectPostForm cpRaw = do
                 then (Nothing, Nothing)
                 else
                   let target = sub.dataVal Unsafe.!! 0
-                      firstSubItemId = show target.attributes.firstSubscriptionItem.id
-                      subId = show target.attributes.firstSubscriptionItem.subscriptionId
-                   in (Just subId, Just firstSubItemId)
+                      firstSubItemId' = show target.attributes.firstSubscriptionItem.id
+                      subId' = show target.attributes.firstSubscriptionItem.subscriptionId
+                   in (Just subId', Just firstSubItemId')
             Nothing -> (Nothing, Nothing)
       if (cp.paymentPlan /= "Free" && isNothing firstSubItemId)
         then do
@@ -491,9 +491,6 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
             -- LEMON SQUEEZY PAYMENT
 
             script_ [src_ "https://assets.lemonsqueezy.com/lemon.js"] ("" :: Text)
-            let projectId = cp.projectId
-            let userId = sess.userId.toText
-            let email = CI.original sess.user.getUser.email
             let checkoutUrl = envCfg.lemonSqueezyUrl
             script_
               [type_ "text/javascript"]

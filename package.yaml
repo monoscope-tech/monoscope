@@ -65,6 +65,7 @@ default-extensions:
   - UndecidableInstances
   - OverloadedRecordDot
   - TemplateHaskell
+  - RoleAnnotations
 
 extra-source-files:
   - README.md

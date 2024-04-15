@@ -10,21 +10,13 @@ module Web.Auth (
   APItoolkitAuthContext,
 ) where
 
-import Colog (LogAction)
-import Colog.Core ((<&))
 import Control.Error (note)
-import Control.Lens ((.~), (^?))
 import Control.Lens qualified as L
 import Control.Monad.Except qualified as T
-import Data.Aeson
-import Data.Aeson qualified as AE
-import Data.Aeson.Lens (key, _Bool, _String)
-import Data.Aeson.QQ (aesonQQ)
-import Data.CaseInsensitive qualified as CI
+import Data.Aeson.Lens (key, _String)
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Pool (Pool)
-import Data.Text.Encoding qualified as Text
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
@@ -45,23 +37,15 @@ import Models.Users.Users qualified as Users
 import Network.HTTP.Types (hCookie)
 import Network.Wai
 import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
-import Network.Wreq qualified as Wreq
-import Network.Wreq.Lens (responseBody)
 import Pkg.ConvertKit qualified as ConvertKit
-import Relude.Unsafe qualified as Unsafe
 import Servant (
-  Context (EmptyContext, (:.)),
-  Handler,
   Header,
   Headers,
   NoContent (..),
-  ServerError (errHeaders),
   addHeader,
-  err302,
   noHeader,
  )
 import Servant qualified
-import Servant.API (Header, Headers, NoContent (NoContent), addHeader)
 import Servant.Server
 import Servant.Server.Experimental.Auth (AuthHandler, mkAuthHandler)
 import SessionCookies (craftSessionCookie, emptySessionCookie)

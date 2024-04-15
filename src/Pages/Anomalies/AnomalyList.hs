@@ -27,7 +27,7 @@ import Data.Tuple.Extra (fst3)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
-import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute, withPool)
+import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute)
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.PostgreSQL.Transact.Effect
@@ -42,7 +42,6 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Query qualified as Fields
 import Models.Apis.Fields.Types
 import Models.Apis.Fields.Types qualified as Fields
-import Models.Apis.RequestDumps qualified as RequestDump
 import Models.Apis.Shapes (getShapeFields)
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
@@ -51,7 +50,6 @@ import NeatInterpolation (text)
 import Network.URI (escapeURIString, isUnescapedInURI)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Pages.Charts.Charts qualified as Charts
 import Pages.Components qualified as Components
 import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
 import Pages.NonMember

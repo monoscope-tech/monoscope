@@ -20,11 +20,10 @@ import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Fmt
 import Lucid
-import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_)
+import Lucid.Htmx (hxPost_, hxSwap_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.RequestDumps qualified as RequestDumps
-import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
@@ -36,16 +35,11 @@ import Pages.Components (statBox)
 import Pages.Endpoints.EndpointList (renderEndpoint)
 import Pages.Onboarding qualified as Onboarding
 import Relude.Unsafe qualified as Unsafe
-import Servant (
-  Union,
-  WithStatus (..),
-  respond,
- )
 import System.Clock
 import System.Config
 import System.Types
 import Text.Interpolation.Nyan
-import Utils (GetOrRedirect, deleteParam, faIcon_, freeTierLimitExceededBanner, mIcon_, redirect)
+import Utils (deleteParam, faIcon_, freeTierLimitExceededBanner, mIcon_)
 import Witch (from)
 import Prelude hiding (ask, asks, max, min)
 
@@ -71,10 +65,8 @@ dashboardGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text ->
 dashboardGetH pid fromDStr toDStr sinceStr' = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
-  let currUserId = sess.userId
 
   now <- Time.currentTime
   let sinceStr = if isNothing fromDStr && isNothing toDStr && isNothing sinceStr' || fromDStr == Just "" then Just "7D" else sinceStr'
