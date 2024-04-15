@@ -63,9 +63,9 @@ expandAPIlogItem' pid req modal = do
           , id_ "copy_share_link"
           ]
           do
-            div_ [class_ "relative", style_ "width:150px", onblur_ "document.getElementById('expire_container').classList.add('hidden')"] do
+            div_ [class_ "relative", style_ "width:150px"] do
               button_
-                [ onclick_ "toggleExpireOptions(event)"
+                [ [__|on click toggle .hidden on #expire_container|]
                 , id_ "toggle_expires_btn"
                 , class_ "w-full flex gap-2 text-slate-600 justify_between items-center cursor-pointer px-2 py-1 border rounded focus:ring-2 focus:ring-blue-200 active:ring-2 active:ring-blue-200"
                 ]
@@ -75,7 +75,8 @@ expandAPIlogItem' pid req modal = do
               div_ [id_ "expire_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] do
                 forM_ (["1 hour", "8 hours", "1 day"] :: [Text]) \sw -> do
                   button_
-                    [ onclick_ "expireChanged(event)"
+                    [ [__|on click set #toggle_expires_btn.firstChild.innerText to 'Expires in ' + event.target's @data-expire-value 
+                                        then set #expire_input.value to event.target's @data-expire-value|] 
                     , term "data-expire-value" sw
                     , class_ "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"
                     ]
@@ -83,7 +84,10 @@ expandAPIlogItem' pid req modal = do
             button_
               [ class_ "flex flex-col gap-1 bg-blue-500 px-2 py-1 rounded text-white"
               , term "data-req-id" (show req.id)
-              , [__|on click set #req_id_input.value to my @data-req-id then call #share_log_form.requestSubmit() |]
+              , term "data-req-created-at" (toText $ formatTime defaultTimeLocale "%FT%T%6QZ" req.createdAt)
+              , [__|on click set #req_id_input.value to my @data-req-id 
+                          then set #req_created_at_input.value to my @data-req-created-at
+                          then call #share_log_form.requestSubmit() |]
               ]
               "Get link"
 
@@ -139,7 +143,7 @@ expandAPIlogItem' pid req modal = do
       div_ [class_ "flex w-full bg-gray-100 px-4 py-2 flex-col gap-2"] do
         p_ [class_ "font-bold"] "Request Details"
 
-      div_ [class_ "tabs tabs-bordered place-content-start", role_ "tablist"] do
+      div_ [class_ "tabs tabs-bordered place-content-start grid grid-flow-col", role_ "tablist"] do
         input_ [type_ "radio", name_ "req-details-tab", role_ "tab", Aria.label_ "Body", class_ "tab w-max", checked_]
         div_ [class_ "tab-content", role_ "tabpanel"] $
           div_ [class_ "bg-gray-50 m-4  p-2 rounded-lg border break-all", id_ "req_body_json"] $
@@ -165,7 +169,7 @@ expandAPIlogItem' pid req modal = do
       div_ [class_ "flex w-full bg-gray-100 px-4 py-2 flex-col gap-2"] do
         p_ [class_ "font-bold"] "Response Details"
 
-      div_ [class_ "tabs tabs-bordered place-content-start", role_ "tablist"] do
+      div_ [class_ "tabs tabs-bordered place-content-start grid grid-flow-col", role_ "tablist"] do
         input_ [type_ "radio", name_ "resp-details-tab", role_ "tab", Aria.label_ "Body", class_ "tab", checked_]
         div_ [class_ "tab-content", role_ "tabpanel"] $
           div_ [class_ "bg-gray-50 m-4  p-2 rounded-lg border", id_ "res_body_json"] $
@@ -175,28 +179,6 @@ expandAPIlogItem' pid req modal = do
         div_ [class_ "tab-content", role_ "tabpanel"] $
           div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border", id_ "res_headers_json"] $
             jsonValueToHtmlTree req.responseHeaders
-  script_
-    [text|
-function toggleExpireOptions (event) {
-    event.preventDefault()
-    event.stopPropagation()
-    const container = document.querySelector('#expire_container')
-    if(container) {
-     container.classList.toggle('hidden')
-    }
-}
-
-function expireChanged(event) {
-    event.preventDefault()
-    event.stopPropagation()
-    const current = document.querySelector('#toggle_expires_btn')
-    if(current && current.firstChild) {
-       current.firstChild.innerText = "Expires in: " + event.target.getAttribute("data-expire-value")
-       document.querySelector("#expire_input").value = event.target.getAttribute("data-expire-value")
-    }
-}
-
-  |]
 
 
 apiLogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATAuthCtx (Html ())

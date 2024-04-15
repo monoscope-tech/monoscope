@@ -860,6 +860,10 @@ CREATE TABLE IF NOT EXISTS apis.share_requests
 );
 CREATE INDEX IF NOT EXISTS idx_apis_share_requests_id ON apis.share_requests(id);
 
+alter table apis.share_requests 
+	add column request_created_at TIMESTAMP WITH TIME ZONE NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_share_requests ON apis.share_requests(request_created_at);
+
 
 CREATE TABLE IF NOT EXISTS apis.slack 
 (

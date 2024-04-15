@@ -242,6 +242,7 @@ apiLogsPage page = do
             do
               input_ [type_ "hidden", value_ "1 hour", name_ "expiresIn", id_ "expire_input"]
               input_ [type_ "hidden", value_ "", name_ "reqId", id_ "req_id_input"]
+              input_ [type_ "hidden", value_ "", name_ "reqCreatedAt", id_ "req_created_at_input"]
     script_
       []
       [text|
