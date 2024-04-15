@@ -4,7 +4,7 @@ import Control.Lens
 import Data.Aeson.Lens (key, _String)
 import Data.Aeson.QQ (aesonQQ)
 import Network.Wreq
-import Prelude
+import Relude
 import Data.Text 
 import Relude
 

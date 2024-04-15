@@ -26,7 +26,7 @@ import Relude.Unsafe qualified as Unsafe
 import System.Config
 import System.Types
 import Utils
-import Prelude hiding (ask, asks)
+import Relude hiding (ask, asks)
 
 
 data MergedEndpoint = MergedEndpoint

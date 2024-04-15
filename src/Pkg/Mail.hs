@@ -14,7 +14,7 @@ import Models.Projects.Projects qualified as Projects
 import Network.HaskellNet.SMTP
 import Network.Mail.Mime
 import Network.Wreq
-import Prelude
+import Relude
 import System.Config qualified as Config
 
 

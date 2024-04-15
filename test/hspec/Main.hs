@@ -1,6 +1,6 @@
 module Main (main) where
 
-import Prelude
+import Relude
 import Spec qualified
 import Test.DocTest (mainFromCabal)
 import Test.Hspec.Formatters (progress)

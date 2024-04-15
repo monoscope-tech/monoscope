@@ -43,11 +43,11 @@ import System.Config
 import System.Types
 import Utils
 import Witch (from)
-import Prelude hiding (ask, asks)
+import Relude hiding (ask, asks)
 
 
 -- $setup
--- >>> import Prelude
+-- >>> import Relude
 -- >>> import Data.Vector qualified as Vector
 -- >>> import Data.Aeson.QQ (aesonQQ)
 -- >>> import Data.Aeson

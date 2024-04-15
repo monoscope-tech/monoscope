@@ -6,7 +6,7 @@ import Data.Time.Clock (UTCTime (..), secondsToDiffTime)
 import Debug.Pretty.Simple (pTraceShowM)
 import NeatInterpolation
 import Pkg.Parser
-import Prelude
+import Relude
 import Test.Hspec
 import Text.Megaparsec (parse)
 

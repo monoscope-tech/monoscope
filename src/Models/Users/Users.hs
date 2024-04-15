@@ -46,7 +46,7 @@ import Deriving.Aeson qualified as DAE
 import Effectful (Eff, type (:>))
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import GHC.Records (HasField (getField))
-import Prelude
+import Relude
 
 
 instance FromJSON (CI.CI Text) where

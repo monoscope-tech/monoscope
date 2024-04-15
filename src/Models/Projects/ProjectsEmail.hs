@@ -11,7 +11,7 @@ import Data.Text.Conversions qualified as TC
 import GHC.Exts
 import Network.SendGridV3.Api
 import Network.Wreq qualified as Wreq
-import Prelude
+import Relude
 import Relude.Unsafe qualified as Unsafe
 
 

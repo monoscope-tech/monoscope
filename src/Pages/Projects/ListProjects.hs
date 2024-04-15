@@ -16,7 +16,7 @@ import Servant (Union, WithStatus (..), respond)
 import System.Config
 import System.Types
 import Utils (GetOrRedirect, faIcon_, redirect)
-import Prelude hiding (ask, asks)
+import Relude hiding (ask, asks)
 
 
 listProjectsGetH :: ATAuthCtx (Union GetOrRedirect)

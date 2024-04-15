@@ -10,7 +10,7 @@ import Models.Apis.Fields qualified as Fields
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.Shapes qualified as Shapes
 import Pages.GenerateSwagger
-import Prelude
+import Relude
 import RequestMessages qualified
 import Test.Hspec
 import Test.Hspec.Expectations.Json

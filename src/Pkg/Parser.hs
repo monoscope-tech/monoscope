@@ -17,7 +17,7 @@ import PyF
 import Relude.Unsafe qualified as Unsafe
 import Text.Megaparsec hiding (State)
 import Text.Megaparsec.Char
-import Prelude hiding (GT, LT, many, some)
+import Relude hiding (GT, LT, many, some)
 
 
 -- Example queries

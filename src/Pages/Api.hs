@@ -21,7 +21,7 @@ import Pages.NonMember
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
 import System.Config
-import Prelude hiding (ask, asks)
+import Relude hiding (ask, asks)
 
 import Effectful.PostgreSQL.Transact.Effect
 import Effectful.Reader.Static (ask, asks)

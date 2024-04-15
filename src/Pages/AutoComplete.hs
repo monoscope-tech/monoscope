@@ -13,7 +13,7 @@ import Models.Users.Sessions qualified as Sessions
 import Relude.Unsafe qualified as Unsafe
 import System.Config
 import System.Types
-import Prelude hiding (ask, asks)
+import Relude hiding (ask, asks)
 
 
 getH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> ATAuthCtx AE.Value

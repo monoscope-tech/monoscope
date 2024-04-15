@@ -66,6 +66,7 @@ default-extensions:
   - OverloadedRecordDot
   - TemplateHaskell
   - RoleAnnotations
+  - NoImplicitPrelude
 
 extra-source-files:
   - README.md
@@ -76,14 +77,8 @@ library:
   source-dirs:
     - src
   dependencies:
-    - name: base
-      mixin:
-        - hiding (Prelude)
-    - name: relude
-      version: ">= 1.2.0.0"
-      mixin:
-        - (Relude as Prelude)
-        - ""
+    - base 
+    - relude >= 1.2.0.0
     - rust-interop
     - colourista
     - effectful

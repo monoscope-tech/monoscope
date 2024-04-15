@@ -49,7 +49,7 @@ import System.Types
 import Text.Interpolation.Nyan (int, rmode')
 import Utils
 import Witch (from)
-import Prelude hiding (ask, asks, max, min)
+import Relude hiding (ask, asks, max, min)
 
 
 timePickerItems :: [(Text, Text)]

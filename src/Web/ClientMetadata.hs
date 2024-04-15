@@ -17,7 +17,7 @@ import Relude.Unsafe ((!!))
 import Servant (err401)
 import System.Config
 import System.Types
-import Prelude hiding (ask, asks, max, min)
+import Relude hiding (ask, asks, max, min)
 
 
 data ClientMetadata = ClientMetadata

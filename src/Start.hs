@@ -2,7 +2,7 @@ module Start (
   startApp,
 ) where
 
-import Prelude
+import Relude
 import System.Server qualified as Server
 
 

@@ -59,7 +59,7 @@ import NeatInterpolation (text)
 import Pkg.Parser
 import Utils (DBField (MkDBField), quoteTxt)
 import Witch (from)
-import Prelude hiding (many, some)
+import Relude hiding (many, some)
 
 
 data SDKTypes

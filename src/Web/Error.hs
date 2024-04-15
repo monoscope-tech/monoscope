@@ -8,7 +8,7 @@ where
 import Effectful
 import Effectful.Error.Static (Error, throwError)
 import Network.HTTP.Types.Status
-import Prelude
+import Relude
 import Servant (ServerError (..))
 import System.Config
 

@@ -22,7 +22,7 @@ import Effectful.Time qualified as Time
 import Log (Logger)
 import Log.Backend.StandardOutput.Bulk qualified as LogBulk
 import Log.Internal.Logger (withLogger)
-import Prelude
+import Relude
 import System.Envy (ReadShowVar (..), Var)
 
 

@@ -8,7 +8,7 @@ import Pkg.Parser.Types
 import Text.Megaparsec hiding (State)
 import Text.Megaparsec.Char
 import Text.Megaparsec.Char.Lexer qualified as L
-import Prelude hiding (GT, LT, Sum, many, some)
+import Relude hiding (GT, LT, Sum, many, some)
 
 
 -- Example queries

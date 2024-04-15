@@ -47,7 +47,7 @@ import Models.Users.Sessions qualified as Session
 import Servant
 import Text.Regex.TDFA ((=~))
 import Text.Show
-import Prelude hiding (show)
+import Relude hiding (show)
 
 
 -- Added only for satisfying the tests

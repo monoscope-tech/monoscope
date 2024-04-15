@@ -45,7 +45,7 @@ import Pages.GenerateSwagger (generateSwagger)
 import Pages.Reports qualified as RP
 import Pkg.Mail
 import PyF
-import Prelude
+import Relude
 import Relude.Unsafe qualified as Unsafe
 import System.Config qualified as Config
 import Utils (scheduleIntervals)

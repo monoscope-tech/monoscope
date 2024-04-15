@@ -44,7 +44,7 @@ import System.Config
 import System.Logging qualified as Logging
 import System.Types
 import Web.Routes qualified as Routes
-import Prelude hiding (ask, asks)
+import Relude hiding (ask, asks)
 
 
 runAPItoolkit :: IO ()

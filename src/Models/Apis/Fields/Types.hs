@@ -33,13 +33,13 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
 import Deriving.Aeson qualified as DAE
 import Models.Projects.Projects qualified as Projects
-import Prelude
+import Relude
 import Relude.Unsafe ((!!))
 import Web.HttpApiData (FromHttpApiData)
 
 
 -- $setup
--- >>> import Prelude
+-- >>> import Relude
 -- >>> import Data.Default
 -- >>> import Data.Vector hiding (fromList)
 -- >>> import Data.Vector qualified as Vector

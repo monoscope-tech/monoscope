@@ -51,7 +51,7 @@ import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
 import Servant (FromHttpApiData (..))
 import Utils
-import Prelude hiding (id)
+import Relude hiding (id)
 
 
 newtype AnomalyId = AnomalyId {unAnomalyId :: UUID.UUID}

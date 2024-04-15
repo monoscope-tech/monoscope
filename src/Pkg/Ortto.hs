@@ -7,7 +7,7 @@ import Data.List.Extra (chunksOf)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
 import Network.Wreq (defaults, header, postWith, putWith, responseBody)
-import Prelude
+import Relude
 
 
 pushedTrafficViaSdk :: Text -> [(Projects.ProjectId, Text, Int64, Users.UserId)] -> IO ()

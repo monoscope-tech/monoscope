@@ -17,7 +17,7 @@ import Database.PostgreSQL.Transact (DBT)
 import Deriving.Aeson qualified as DAE
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
-import Prelude
+import Relude
 import Relude.Unsafe (read)
 import Servant (FromHttpApiData)
 

@@ -9,7 +9,7 @@ import Database.PostgreSQL.Transact (DBT, executeMany)
 import Deriving.Aeson qualified as AE
 import Deriving.Aeson qualified as DAE
 import Models.Projects.Projects qualified as Projects
-import Prelude
+import Relude
 
 
 data SlackData = SlackData

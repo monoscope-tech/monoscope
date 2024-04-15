@@ -8,7 +8,7 @@ import Data.Text.Lazy.Builder (Builder)
 import Text.Megaparsec hiding (State)
 import Text.Megaparsec.Char
 import Text.Megaparsec.Char.Lexer qualified as L
-import Prelude hiding (GT, LT, many, some)
+import Relude hiding (GT, LT, many, some)
 
 
 -- Example queries

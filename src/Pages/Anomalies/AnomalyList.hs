@@ -63,7 +63,7 @@ import System.Types
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils
 import Web.FormUrlEncoded (FromForm)
-import Prelude hiding (ask, asks)
+import Relude hiding (ask, asks)
 
 
 newtype AnomalyBulkForm = AnomalyBulk
