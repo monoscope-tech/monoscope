@@ -19,7 +19,7 @@ import Database.PostgreSQL.Simple.Migration qualified as Migrations
 import Effectful
 import Effectful.Fail (Fail)
 import Models.Projects.Projects qualified as Projects
-import Relude
+import Prelude
 import Servant.Server (Handler)
 import System.Clock
 import System.Envy (FromEnv (..), ReadShowVar (..), Var (..), decodeEnv, fromVar, toVar)

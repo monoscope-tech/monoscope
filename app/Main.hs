@@ -1,6 +1,6 @@
 module Main (main) where
 
-import Relude
+import Prelude
 import Start
 
 

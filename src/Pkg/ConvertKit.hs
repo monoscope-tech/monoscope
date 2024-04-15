@@ -4,7 +4,7 @@ import Control.Lens
 import Data.Aeson.Lens (key, _String)
 import Data.Aeson.QQ (aesonQQ)
 import Network.Wreq
-import Relude
+import Prelude
 
 
 -- Function to add user to ConvertKit

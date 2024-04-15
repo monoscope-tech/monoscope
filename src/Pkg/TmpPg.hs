@@ -8,7 +8,7 @@ import Database.PostgreSQL.Simple.Migration qualified as Migration
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.Postgres.Temp (cacheAction, cacheConfig, toConnectionString, withConfig, withDbCache)
 import Database.Postgres.Temp qualified as TmpPostgres
-import Relude
+import Prelude
 import System.Directory (getFileSize, listDirectory)
 
 

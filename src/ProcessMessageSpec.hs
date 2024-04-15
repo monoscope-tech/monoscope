@@ -7,14 +7,13 @@ import Data.Cache
 import Data.Default (Default (..))
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
-import Database.PostgreSQL.Entity.DBT (QueryNature (Insert), execute, withPool)
-import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Entity.DBT (withPool)
 import Log.Backend.StandardOutput.Bulk qualified as LogBulk
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Pkg.TmpPg qualified as TmpPg
 import ProcessMessage (processMessages, processMessages')
-import Relude
+import Prelude
 import Relude.Unsafe qualified as Unsafe
 import RequestMessages qualified
 import System.Clock

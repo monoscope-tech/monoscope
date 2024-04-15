@@ -15,10 +15,7 @@ import Data.CaseInsensitive (original)
 import Data.Default (def)
 import Data.List.Unique (uniq)
 import Data.Pool (withResource)
-import Data.Vector (Vector)
 import Data.Vector qualified as V
-import Data.Vector qualified as Vector
-import Database.PostgreSQL.Entity.DBT (withPool)
 import Deriving.Aeson qualified as DAE
 import Effectful.PostgreSQL.Transact.Effect
 import Effectful.Reader.Static (ask)
@@ -34,12 +31,7 @@ import OddJobs.Job (createJob)
 import Pages.BodyWrapper
 import Pages.NonMember
 import Relude.Unsafe qualified as Unsafe
-import Servant
-import Servant (
-  Union,
-  WithStatus (..),
-  respond,
- )
+import Servant (Headers,addHeader)
 import Servant.Htmx
 import System.Config
 import System.Types

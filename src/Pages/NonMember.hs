@@ -7,7 +7,7 @@ import Data.Default (Default (def))
 import Lucid
 import Models.Users.Sessions qualified as Session
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Relude
+import Prelude
 
 
 userNotMemeberPage :: Session.PersistentSession -> Html ()

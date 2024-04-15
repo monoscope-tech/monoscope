@@ -52,7 +52,7 @@ import Pages.Share qualified as Share
 import Pages.SlackInstall qualified as SlackInstall
 import Pages.Survey qualified as Survey
 import Pages.Testing qualified as Testing
-import Relude
+import Prelude
 import Servant (AuthProtect, Capture, Context (..), Delete, FormUrlEncoded, Get, Header, Headers, JSON, NoContent, Patch, PlainText, Post, QueryFlag, QueryParam, ReqBody, StdMethod (GET), Verb, (:>))
 import Servant qualified
 import Servant.API.Generic

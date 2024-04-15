@@ -47,7 +47,7 @@ import Prelude hiding (ask, asks)
 
 
 -- $setup
--- >>> import Relude
+-- >>> import Prelude
 -- >>> import Data.Vector qualified as Vector
 -- >>> import Data.Aeson.QQ (aesonQQ)
 -- >>> import Data.Aeson

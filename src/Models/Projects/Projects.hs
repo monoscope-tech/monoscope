@@ -43,7 +43,7 @@ import Database.PostgreSQL.Transact (DBT)
 import Deriving.Aeson qualified as DAE
 import GHC.Records (HasField (getField))
 import Models.Users.Users qualified as Users
-import Relude
+import Prelude
 import Web.HttpApiData
 
 

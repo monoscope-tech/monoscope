@@ -43,7 +43,7 @@ import Database.PostgreSQL.Simple.ToField
 import Database.PostgreSQL.Transact (DBT, executeMany)
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
-import Relude
+import Prelude
 import Web.HttpApiData (FromHttpApiData)
 
 

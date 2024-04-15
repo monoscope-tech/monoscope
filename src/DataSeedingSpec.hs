@@ -4,7 +4,7 @@ import Data.UUID qualified as UUID
 import DataSeeding
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
-import Relude
+import Prelude
 import Test.Hspec
 
 

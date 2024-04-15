@@ -6,7 +6,7 @@ import Data.UUID qualified as UUID
 import Debug.Pretty.Simple (pTraceShowM)
 import Models.Projects.Projects qualified as Projects
 import Pkg.Parser
-import Relude
+import Prelude
 import Relude.Unsafe qualified as Unsafe
 import Test.Hspec
 

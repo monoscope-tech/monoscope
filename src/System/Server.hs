@@ -15,7 +15,6 @@ import Data.Aeson qualified as Aeson
 import Data.ByteString.Lazy.Base64 qualified as LB64
 import Data.Generics.Product (field)
 import Data.Pool as Pool
-import Data.Text.Display
 import Data.Text.Lazy.Encoding qualified as LT
 import Effectful
 import Effectful.Concurrent
@@ -23,7 +22,6 @@ import Effectful.Dispatch.Static
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
 import Effectful.Fail (runFailIO)
 import Effectful.PostgreSQL.Transact.Effect (runDB)
-import Effectful.Reader.Static (ask, asks)
 import Effectful.Reader.Static qualified
 import Effectful.Time (runTime)
 import Gogol qualified as Google

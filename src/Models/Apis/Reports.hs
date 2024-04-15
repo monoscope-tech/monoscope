@@ -20,7 +20,7 @@ import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
-import Relude
+import Prelude
 import Web.HttpApiData (FromHttpApiData)
 
 import Data.Aeson as Aeson

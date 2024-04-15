@@ -47,7 +47,7 @@ import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation
 import Numeric (showHex)
-import Relude
+import Prelude
 import Relude.Unsafe as Unsafe hiding (head)
 import Text.Regex.TDFA ((=~))
 import Utils (DBField ())
@@ -55,7 +55,7 @@ import Witch (from)
 
 
 -- $setup
--- >>> import Relude
+-- >>> import Prelude
 -- >>> import Data.Vector qualified as Vector
 -- >>> import Data.Aeson.QQ (aesonQQ)
 -- >>> import Data.Aeson

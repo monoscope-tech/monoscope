@@ -45,7 +45,7 @@ import Database.PostgreSQL.Transact (DBT)
 import Deriving.Aeson qualified as DAE
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
-import Relude
+import Prelude
 import Servant (FromHttpApiData)
 
 

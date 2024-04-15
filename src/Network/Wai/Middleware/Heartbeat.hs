@@ -2,7 +2,7 @@ module Network.Wai.Middleware.Heartbeat (heartbeatMiddleware) where
 
 import Network.HTTP.Types
 import Network.Wai
-import Relude
+import Prelude
 
 
 heartbeatMiddleware :: Middleware

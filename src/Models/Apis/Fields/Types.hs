@@ -33,13 +33,13 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
 import Deriving.Aeson qualified as DAE
 import Models.Projects.Projects qualified as Projects
-import Relude
+import Prelude
 import Relude.Unsafe ((!!))
 import Web.HttpApiData (FromHttpApiData)
 
 
 -- $setup
--- >>> import Relude
+-- >>> import Prelude
 -- >>> import Data.Default
 -- >>> import Data.Vector hiding (fromList)
 -- >>> import Data.Vector qualified as Vector
@@ -266,7 +266,7 @@ instance Eq Field where
 -- >>> groupFieldsByCategory $ Vector.fromList [qparam, respB, respB2]
 -- fromList [(FCQueryParam,[Field {id = FieldId {unFieldId = 00000000-0000-0000-0000-000000000000}, createdAt = 2019-08-31 05:14:37.537084021 UTC, updatedAt = 2019-08-31 05:14:37.537084021 UTC, projectId = ProjectId {unProjectId = 00000000-0000-0000-0000-000000000000}, endpointHash = "", key = "", fieldType = FTUnknown, fieldTypeOverride = Nothing, format = "", formatOverride = Nothing, description = "", keyPath = "", fieldCategory = FCQueryParam, hash = ""}]),(FCResponseBody,[Field {id = FieldId {unFieldId = 00000000-0000-0000-0000-000000000000}, createdAt = 2019-08-31 05:14:37.537084021 UTC, updatedAt = 2019-08-31 05:14:37.537084021 UTC, projectId = ProjectId {unProjectId = 00000000-0000-0000-0000-000000000000}, endpointHash = "", key = "", fieldType = FTUnknown, fieldTypeOverride = Nothing, format = "", formatOverride = Nothing, description = "", keyPath = "", fieldCategory = FCResponseBody, hash = ""},Field {id = FieldId {unFieldId = 00000000-0000-0000-0000-000000000000}, createdAt = 2019-08-31 05:14:37.537084021 UTC, updatedAt = 2019-08-31 05:14:37.537084021 UTC, projectId = ProjectId {unProjectId = 00000000-0000-0000-0000-000000000000}, endpointHash = "", key = "respBody2", fieldType = FTUnknown, fieldTypeOverride = Nothing, format = "", formatOverride = Nothing, description = "", keyPath = "", fieldCategory = FCResponseBody, hash = ""}])]
 groupFieldsByCategory :: Vector Field -> Map FieldCategoryEnum [Field]
-groupFieldsByCategory fields = Relude.fromList fieldGroupTupple
+groupFieldsByCategory fields = fromList fieldGroupTupple
   where
     fields' = Vector.toList fields
     fieldGroup = groupBy (\f1 f2 -> f1.fieldCategory == f2.fieldCategory) fields'

@@ -18,7 +18,6 @@ where
 
 import BackgroundJobs qualified
 import Control.Lens ((.~), (^.))
-import Data.Aeson
 import Data.Aeson (encode)
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
@@ -36,9 +35,6 @@ import Data.UUID.V4 qualified as UUIDV4
 import Data.Valor (Valor, check1, failIf, validateM)
 import Data.Valor qualified as Valor
 import Data.Vector qualified as V
-import Data.Vector.Generic qualified as Vector
-import Database.PostgreSQL.Entity.DBT (withPool)
-import Database.PostgreSQL.Simple.Notification (Notification (notificationChannel))
 import Deriving.Aeson qualified as DAE
 import Effectful.PostgreSQL.Transact.Effect
 import Effectful.Reader.Static (ask)
@@ -240,9 +236,9 @@ data SubResponse = SubResponse
   deriving stock (Show, Generic)
 
 
-instance FromJSON SubResponse where
-  parseJSON = withObject "SubResponse" $ \obj -> do
-    dataVal <- obj .: "data"
+instance AE.FromJSON SubResponse where
+  parseJSON = AE.withObject "SubResponse" $ \obj -> do
+    dataVal <- obj AE..: "data"
     return (SubResponse{dataVal = dataVal})
 
 
@@ -254,7 +250,7 @@ getSubscriptionId orderId apiKey = do
       let hds = header "Authorization" .~ ["Bearer " <> encodeUtf8 @Text @ByteString apiKey]
       response <- liftIO $ getWith (defaults & hds) ("https://api.lemonsqueezy.com/v1/orders/" <> toString ordId <> "/subscriptions")
       let responseBdy = response ^. responseBody
-      case eitherDecode responseBdy of
+      case AE.eitherDecode responseBdy of
         Right res -> do
           return $ Just res
         Left err -> do

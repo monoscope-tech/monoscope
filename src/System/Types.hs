@@ -20,7 +20,7 @@ import Effectful.Reader.Static (Reader, runReader)
 import Effectful.Time (Time, runTime)
 import Log qualified
 import Models.Users.Sessions qualified as Sessions
-import Relude
+import Prelude
 import Servant (AuthProtect, Header, Headers, ServerError)
 import Servant.Server.Experimental.Auth (AuthServerData)
 import System.Config

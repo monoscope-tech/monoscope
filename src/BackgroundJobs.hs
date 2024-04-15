@@ -7,17 +7,13 @@ module BackgroundJobs (jobsWorkerInit, BgJobs (..)) where
 
 -- This example is using these functions to introduce an artificial delay of a
 -- few seconds in one of the jobs. Otherwise it is not really needed.
-import Colog (LogAction, (<&))
-import Control.Lens ((.~), (^.))
+import Control.Lens ((.~)) 
 import Data.Aeson as Aeson
 import Data.CaseInsensitive qualified as CI
-import Data.List (unfoldr)
 import Data.List.Extra (intersect, union)
 import Data.Pool (Pool, withResource)
 import Data.Text qualified as T
-import Data.Time
-import Data.Time (UTCTime (utctDay), ZonedTime, getCurrentTime, getZonedTime)
-import Data.Time.Calendar
+import Data.Time (UTCTime (utctDay), ZonedTime, getCurrentTime, getZonedTime, dayOfWeek, DayOfWeek(Monday))
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector (Vector)
 import Data.Vector qualified as V
@@ -25,8 +21,6 @@ import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, qu
 import Database.PostgreSQL.Simple (Connection, Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ
 import Database.PostgreSQL.Transact (DBT)
-import Foreign.C.String
-import Foreign.C.Types
 import GHC.Generics
 import Log qualified
 import Lucid
@@ -39,7 +33,6 @@ import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.Reports qualified as Reports
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
-import Models.Apis.Slack
 import Models.Projects.Projects qualified as Projects
 import Models.Projects.Swaggers qualified as Swaggers
 import Models.Tests.Testing qualified as Testing
@@ -52,7 +45,7 @@ import Pages.GenerateSwagger (generateSwagger)
 import Pages.Reports qualified as RP
 import Pkg.Mail
 import PyF
-import Relude
+import Prelude
 import Relude.Unsafe qualified as Unsafe
 import System.Config qualified as Config
 import Utils (scheduleIntervals)
@@ -387,8 +380,8 @@ jobsRunner dbPool logger cfg job = do
         case collectionM of
           Nothing -> pass
           Just collection -> do
-            let steps_data = (\x -> x.stepData) <$> steps
-            let col_json = (decodeUtf8 $ Aeson.encode steps_data :: String)
+            -- let steps_data = (\x -> x.stepData) <$> steps
+            -- let col_json = (decodeUtf8 $ Aeson.encode steps_data :: String)
             pass
 
 

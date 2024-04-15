@@ -10,7 +10,7 @@ import Data.UUID.V4 qualified as UUIDV4
 import Models.Apis.RequestDumps (SDKTypes (GoGin))
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation
-import Relude
+import Prelude
 import Relude.Unsafe qualified as Unsafe
 import RequestMessages qualified
 import Test.Hspec

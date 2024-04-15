@@ -31,7 +31,7 @@ import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute, withPool)
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.PostgreSQL.Transact.Effect
-import Effectful.Reader.Static (ask, asks)
+import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx
@@ -48,10 +48,9 @@ import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
-import Network.URI (escapeURIString, isUnescapedInURI, isUnreserved)
+import Network.URI (escapeURIString, isUnescapedInURI)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Pages.Charts.Charts (QueryBy)
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components qualified as Components
 import Pages.Endpoints.EndpointComponents qualified as EndpointComponents

@@ -10,7 +10,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import NeatInterpolation
-import Relude
+import Prelude
 import Utils (faIcon_, faSprite_)
 
 

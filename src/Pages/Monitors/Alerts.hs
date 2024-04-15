@@ -16,7 +16,7 @@ import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pkg.Parser (defPid, defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToComponents, presetRollup)
-import Relude
+import Prelude
 import System.Types
 import Utils
 import Web.FormUrlEncoded (FromForm)

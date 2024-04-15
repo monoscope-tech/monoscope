@@ -7,7 +7,7 @@ import Lucid.Aria qualified as Aria
 import Lucid.Htmx
 import Lucid.Hyperscript
 import Models.Projects.Projects (ProjectId)
-import Relude
+import Prelude
 import Utils
 
 
