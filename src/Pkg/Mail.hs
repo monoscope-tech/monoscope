@@ -1,43 +1,61 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-{-# HLINT ignore "Use safeToEnum" #-}
-module Pkg.Mail (sendEmail, sendSlackMessage) where
+module Pkg.Mail (sendEmail, sendSlackMessage, sendSlackMessageBase) where
 
 import Control.Lens ((.~))
-import Data.Aeson.QQ
-import Data.Pool
-import Data.Text
-import Database.PostgreSQL.Entity.DBT (withPool)
-import Database.PostgreSQL.Simple (Connection)
-import Models.Apis.Slack
+import Data.Aeson.QQ (aesonQQ)
+import Data.Pool ()
+import Data.Text (Text)
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful.Reader.Static (ask)
+import Models.Apis.Slack (SlackData (..), getProjectSlackData)
 import Models.Projects.Projects qualified as Projects
-import Network.HaskellNet.SMTP
-import Network.Mail.Mime
-import Network.Wreq
-import Relude
+import Network.HaskellNet.SMTP (
+  AuthType (PLAIN),
+  authenticate,
+  doSMTPPort,
+  sendMail,
+ )
+import Network.Mail.Mime (Address (Address), simpleMail)
+import Network.Wreq (defaults, header, postWith)
+import Relude hiding (ask)
 import System.Config qualified as Config
+import System.Types (ATBackgroundCtx, ATBaseCtx)
 
 
-sendEmail :: Config.EnvConfig -> Text -> Text -> LText -> IO ()
-sendEmail config reciever subject body = doSMTPPort (toString config.smtpHost) (toEnum config.smtpPort) $ \conn -> do
-  authSucceed <- authenticate PLAIN (toString config.smtpUsername) (toString config.smtpPassword) conn
-  if authSucceed
-    then do
-      mail <-
-        simpleMail
-          (Address Nothing reciever)
-          (Address (Just "Apitoolkit") config.smtpSender)
-          subject
-          body
-          body
-          []
-      sendMail mail conn
-    else error "SMTP Authentication failed."
+sendEmail :: Text -> Text -> LText -> ATBackgroundCtx ()
+sendEmail reciever subject body = do
+  appCtx <- ask @Config.AuthContext
+  liftIO $ doSMTPPort (toString appCtx.config.smtpHost) (toEnum appCtx.config.smtpPort) $ \conn -> do
+    authSucceed <- authenticate PLAIN (toString appCtx.config.smtpUsername) (toString appCtx.config.smtpPassword) conn
+    if authSucceed
+      then do
+        mail <-
+          simpleMail
+            (Address Nothing reciever)
+            (Address (Just "Apitoolkit") appCtx.config.smtpSender)
+            subject
+            body
+            body
+            []
+        sendMail mail conn
+      else error "SMTP Authentication failed."
 
 
-sendSlackMessage :: Pool Connection -> Projects.ProjectId -> Text -> IO ()
-sendSlackMessage pool pid message = do
-  slackData <- liftIO $ withPool pool $ getProjectSlackData pid
+sendSlackMessage :: Projects.ProjectId -> Text -> ATBackgroundCtx ()
+sendSlackMessage pid message = do
+  slackData <- dbtToEff $ getProjectSlackData pid
+  liftIO $ slackPostWebhook (maybe "" (\s -> s.webhookUrl) slackData) message
+
+
+sendSlackMessageBase :: Projects.ProjectId -> Text -> ATBaseCtx ()
+sendSlackMessageBase pid message = do
+  slackData <- dbtToEff $ getProjectSlackData pid
+  liftIO $ slackPostWebhook (maybe "" (\s -> s.webhookUrl) slackData) message
+
+
+slackPostWebhook :: Text -> Text -> IO ()
+slackPostWebhook webhookUrl message = do
   let opts = defaults & header "Content-Type" .~ ["application/json"]
   let payload =
         [aesonQQ| {
@@ -45,5 +63,5 @@ sendSlackMessage pool pid message = do
                 "type":"mrkdwn"
               }
             |]
-  response <- postWith opts (toString (maybe "" (\s -> s.webhookUrl) slackData)) payload
+  response <- liftIO $ postWith opts (toString webhookUrl) payload
   pass

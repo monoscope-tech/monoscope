@@ -166,22 +166,22 @@ convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
                               [ "description" .= String desc
                               , "type" .= String "array"
                               , "items"
-                                  .= object
-                                    ( [ "type" .= t
-                                      , "format" .= ft
-                                      ]
-                                        ++ if is_enum
-                                          then ["enum" .= examples]
-                                          else
-                                            if V.length examples > 0
-                                              then ["example" .= V.head examples]
-                                              else
-                                                if is_required then ["required" .= is_required] else []
-                                    )
+                                  .= object (
+                                        [ "type" .= t
+                                        , "format" .= ft
+                                        ]
+                                          ++ if is_enum
+                                            then ["enum" .= examples]
+                                            else
+                                              if V.length examples > 0
+                                                then ["example" .= V.head examples]
+                                                else
+                                                  if is_required then ["required" .= is_required] else [])
                               ]
                           )
                         else
                           ( grp
+<<<<<<< HEAD
                           , object
                               $ [ "description" .= String desc
                                 , "type" .= t
@@ -194,6 +194,32 @@ convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
                                     then ["example" .= V.head examples]
                                     else
                                       (["required" .= is_required | is_required])
+||||||| parent of ce0e8ab (minor refactoring of Background jobs and removal of co-log dependency)
+                          , object $
+                              [ "description" .= String desc
+                              , "type" .= t
+                              , "format" .= ft
+                              ]
+                                ++ if is_enum
+                                  then ["enum" .= examples]
+                                  else
+                                    if V.length examples > 0
+                                      then ["example" .= V.head examples]
+                                      else
+                                        (["required" .= is_required | is_required])
+=======
+                          , object
+                              $ [ "description" .= String desc
+                                , "type" .= t
+                                , "format" .= ft
+                                ]
+                              ++ if is_enum
+                                then ["enum" .= examples]
+                                else
+                                  if V.length examples > 0
+                                    then ["example" .= V.head examples]
+                                    else (["required" .= is_required | is_required])
+>>>>>>> ce0e8ab (minor refactoring of Background jobs and removal of co-log dependency)
                           )
                     validKey = if key == "" then "schema" else key
                  in object [AEKey.fromText validKey .= ob]

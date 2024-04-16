@@ -34,7 +34,7 @@ import Models.Users.Sessions qualified as Sessions
 import Network.Wreq
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Pkg.Components (navBar)
-import Pkg.Mail (sendSlackMessage)
+import Pkg.Mail (sendSlackMessageBase)
 import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
@@ -161,6 +161,7 @@ linkProjectsGetH slack_code = do
 
 linkProjectGetH :: Projects.ProjectId -> Maybe Text -> ATBaseCtx (Html ())
 linkProjectGetH pid slack_code = do
+  appCtx <- ask @AuthContext
   envCfg <- asks env
   pool <- asks pool
   let client_id = envCfg.slackClientId
@@ -178,7 +179,7 @@ linkProjectGetH pid slack_code = do
     (Just token', Just project') -> do
       n <- liftIO $ withPool pool do
         insertAccessToken [pid.toText] token'.incomingWebhook.url
-      liftIO $ sendSlackMessage pool pid ("APIToolkit Bot has been linked to your project: " <> project'.title)
+      sendSlackMessageBase pid ("APIToolkit Bot has been linked to your project: " <> project'.title)
       pure $ bodyWrapper bwconf installedSuccess
     (_, _) -> pure $ bodyWrapper bwconf noTokenFound
 

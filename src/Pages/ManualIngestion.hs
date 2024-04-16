@@ -1,6 +1,5 @@
 module Pages.ManualIngestion (RequestMessageForm (..), manualIngestGetH, manualIngestPostH) where
 
-import Colog.Core ((<&))
 import Data.Aeson (Value, eitherDecodeStrict)
 import Data.Default (def)
 import Data.Text.Encoding.Base64 qualified as B64
