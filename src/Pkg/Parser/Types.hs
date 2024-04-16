@@ -1,11 +1,20 @@
-module Pkg.Parser.Types  (Parser(..), Values(..), Subject(..), FieldKey (..), Expr(..), AggFunction(..), ByClause(..) , Rollup(..), Section(..), symbol, lexeme, sc, )
-  where
+module Pkg.Parser.Types (Parser (..), Values (..), Subject (..), FieldKey (..), Expr (..), AggFunction (..), ByClause (..), Rollup (..), Section (..), symbol, lexeme, sc)
+where
 
-import Text.Megaparsec ( Parsec )
-import Text.Megaparsec.Char ( space1 )
+import Relude (
+  Bool,
+  Eq,
+  Int,
+  Maybe,
+  Ord,
+  Show,
+  String,
+  Text,
+  Void,
+ )
+import Text.Megaparsec (Parsec)
+import Text.Megaparsec.Char (space1)
 import Text.Megaparsec.Char.Lexer qualified as L
-import Relude
-    ( Eq, Ord, Show, Bool, String, Int, Maybe, Void, Text )
 
 
 -- Example queries

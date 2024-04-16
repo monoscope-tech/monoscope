@@ -41,6 +41,7 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Components
 import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
 import Pages.NonMember
+import Relude hiding (ask, asks, max, min)
 import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx
@@ -49,7 +50,6 @@ import System.Types
 import Text.Interpolation.Nyan (int, rmode')
 import Utils
 import Witch (from)
-import Relude hiding (ask, asks, max, min)
 
 
 timePickerItems :: [(Text, Text)]
@@ -176,21 +176,21 @@ fieldDetailsView field formats = do
 
     div_ do
       h5_ [class_ "text-sm text-slate-800"] "DETECTED FIELD FORMATS AND TYPES"
-      div_ [class_ "space-y-2"] $
-        formats
-          & mapM_ \formatV -> do
-            div_ [class_ "border-l-slate-200 border-l-2 pl-2 py-2"] do
-              div_ [class_ "flex flex-row gap-9"] do
-                div_ [class_ "space-y-2"] do
-                  h6_ [class_ "text-slate-800 text-xs"] "TYPE"
-                  h4_ [class_ "text-base text-slate-800"] $ EndpointComponents.fieldTypeToDisplay formatV.fieldType
-                div_ [class_ "mx-5 space-y-2"] do
-                  h6_ [class_ "text-slate-800 text-xs"] "FORMAT"
-                  h4_ [class_ "text-base text-slate-800"] $ toHtml formatV.fieldFormat
-              h6_ [class_ "text-slate-600 mt-4 text-xs"] $ if field.isEnum then "ENUM VALUES" else "EXAMPLE VALUES"
-              ul_ [class_ "list-disc"] do
-                formatV.examples & mapM_ \ex -> do
-                  li_ [class_ "ml-10 text-slate-800 text-sm"] $ toHtml $ aesonValueToText ex
+      div_ [class_ "space-y-2"]
+        $ formats
+        & mapM_ \formatV -> do
+          div_ [class_ "border-l-slate-200 border-l-2 pl-2 py-2"] do
+            div_ [class_ "flex flex-row gap-9"] do
+              div_ [class_ "space-y-2"] do
+                h6_ [class_ "text-slate-800 text-xs"] "TYPE"
+                h4_ [class_ "text-base text-slate-800"] $ EndpointComponents.fieldTypeToDisplay formatV.fieldType
+              div_ [class_ "mx-5 space-y-2"] do
+                h6_ [class_ "text-slate-800 text-xs"] "FORMAT"
+                h4_ [class_ "text-base text-slate-800"] $ toHtml formatV.fieldFormat
+            h6_ [class_ "text-slate-600 mt-4 text-xs"] $ if field.isEnum then "ENUM VALUES" else "EXAMPLE VALUES"
+            ul_ [class_ "list-disc"] do
+              formatV.examples & mapM_ \ex -> do
+                li_ [class_ "ml-10 text-slate-800 text-sm"] $ toHtml $ aesonValueToText ex
     div_ [class_ "flex flex-row justify-between mt-10 "] do
       div_ [class_ " "] do
         h4_ [class_ "text-sm text-slate-800 mb-2"] "CREATION DATE"
@@ -317,9 +317,9 @@ endpointDetails pid paramInput currTime endpoint endpointStats shapesWithFieldsM
             & mapM_ \(title, slug) ->
               a_
                 [ href_ $ currentURLSubPage <> "&subpage=" <> slug
-                , class_ $
-                    "cursor-pointer px-3 py-2 font-medium text-sm rounded-md "
-                      <> if slug == paramInput.subPage then " bg-indigo-100 text-indigo-700 " else " text-slate-500 hover:text-gray-700"
+                , class_
+                    $ "cursor-pointer px-3 py-2 font-medium text-sm rounded-md "
+                    <> if slug == paramInput.subPage then " bg-indigo-100 text-indigo-700 " else " text-slate-500 hover:text-gray-700"
                 ]
                 $ toHtml title
 
@@ -533,8 +533,8 @@ apiOverviewSubPage pid paramInput currTime endpoint fieldsM reqLatenciesRolledBy
 endpointStats :: Endpoints.EndpointRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p99, max} reqLatenciesRolledByStepsJ dateRange@(fromD, toD) =
   section_ [class_ "space-y-3"] do
-    div_ [class_ "flex justify-between mt-5"] $
-      div_
+    div_ [class_ "flex justify-between mt-5"]
+      $ div_
         [class_ "flex flex-row"]
         do
           faIconWithAnchor_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 mr-3 mt-1 w-4 cursor-pointer" "toggle .neg-rotate-90 on me then toggle .hidden on (next .endpointStatsSubSection)"
@@ -576,8 +576,8 @@ endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p
               Charts.lazy [C.QByE $ [C.QBPId enpStats.projectId, C.QBEndpointHash enpStats.endpointHash] ++ catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBEndpoint, C.SlotsE 120, C.ShowLegendE]
 
       div_ [class_ "col-span-3 bg-white   border border-gray-100  rounded-xl py-3 px-6"] do
-        div_ [class_ "p-4"] $
-          select_
+        div_ [class_ "p-4"]
+          $ select_
             []
             do
               option_ "Request Latency Distribution"
@@ -621,24 +621,24 @@ reqResSection title isRequest shapesWithFieldsMap targetIndex =
   section_ [class_ "space-y-3"] do
     div_ [class_ "flex justify-between mt-5"] do
       div_ [class_ "flex flex-row"] do
-        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]] $
-          faSprite_ "chevron-down" "light" "h-4 mr-3 mt-1 w-4"
+        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
+          $ faSprite_ "chevron-down" "light" "h-4 mr-3 mt-1 w-4"
         span_ [class_ "text-lg text-slate-800"] $ toHtml title
 
-    div_ [class_ "bg-white border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"] $
-      forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap) $
-        \(index, s) -> do
-          let sh = if index == targetIndex then title <> "_fields" else title <> "_fields hidden"
-          div_ [class_ sh, id_ $ title <> "_" <> show index] do
-            if isRequest
-              then do
-                subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam s.fieldsMap) Nothing
-                subSubSection (title <> " Query Params") (Map.lookup Fields.FCQueryParam s.fieldsMap) Nothing
-                subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader s.fieldsMap) Nothing
-                subSubSection (title <> " Body") (Map.lookup Fields.FCRequestBody s.fieldsMap) (Just s.reqDescription)
-              else do
-                subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader s.fieldsMap) Nothing
-                subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody s.fieldsMap) (Just s.resDescription)
+    div_ [class_ "bg-white border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"]
+      $ forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap)
+      $ \(index, s) -> do
+        let sh = if index == targetIndex then title <> "_fields" else title <> "_fields hidden"
+        div_ [class_ sh, id_ $ title <> "_" <> show index] do
+          if isRequest
+            then do
+              subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam s.fieldsMap) Nothing
+              subSubSection (title <> " Query Params") (Map.lookup Fields.FCQueryParam s.fieldsMap) Nothing
+              subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader s.fieldsMap) Nothing
+              subSubSection (title <> " Body") (Map.lookup Fields.FCRequestBody s.fieldsMap) (Just s.reqDescription)
+            else do
+              subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader s.fieldsMap) Nothing
+              subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody s.fieldsMap) (Just s.resDescription)
 
 
 -- | subSubSection ..

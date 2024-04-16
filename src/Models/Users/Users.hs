@@ -104,8 +104,8 @@ createUser :: Text -> Text -> Text -> Text -> IO User
 createUser firstName lastName picture email = do
   uid <- createUserId
   now <- getZonedTime
-  pure $
-    User
+  pure
+    $ User
       { id = uid
       , createdAt = now
       , updatedAt = now

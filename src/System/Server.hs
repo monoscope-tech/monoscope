@@ -138,14 +138,14 @@ runServer appLogger env = do
   -- let ojTable = "background_jobs" :: OJTypes.TableName
   -- let ojCfg = OJConfig.mkUIConfig ojLogger ojTable poolConn id
   asyncs <-
-    liftIO $
-      sequence $
-        concat @[]
-          [ [async $ runSettings warpSettings wrappedServer]
-          , -- , [async $ OJCli.defaultWebUI ojStartArgs ojCfg] -- Uncomment or modify as needed
-            [async $ pubsubService appLogger env | env.config.enablePubsubService]
-          , [async $ Safe.withException bgJobWorker (logException env.config.environment appLogger) | env.config.enableBackgroundJobs]
-          ]
+    liftIO
+      $ sequence
+      $ concat @[]
+        [ [async $ runSettings warpSettings wrappedServer]
+        , -- , [async $ OJCli.defaultWebUI ojStartArgs ojCfg] -- Uncomment or modify as needed
+          [async $ pubsubService appLogger env | env.config.enablePubsubService]
+        , [async $ Safe.withException bgJobWorker (logException env.config.environment appLogger) | env.config.enableBackgroundJobs]
+        ]
   _ <- liftIO $ waitAnyCancel asyncs
   pass
 
@@ -168,8 +168,8 @@ pubsubService appLogger appCtx = do
 
   let pullReq = PubSub.newPullRequest & field @"maxMessages" L.?~ fromIntegral envConfig.messagesPerPubsubPullBatch
 
-  forever $
-    runResourceT
+  forever
+    $ runResourceT
       do
         forM envConfig.requestPubsubTopics \topic -> do
           let subscription = "projects/past-3/subscriptions/" <> topic <> "-sub"

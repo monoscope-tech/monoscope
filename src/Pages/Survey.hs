@@ -19,6 +19,7 @@ import Models.Users.Users qualified as Users
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.NonMember
 import Pkg.Components (loader)
+import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXRedirect, HXTrigger)
@@ -26,7 +27,6 @@ import System.Config
 import System.Types
 import Utils
 import Web.FormUrlEncoded (FromForm)
-import Relude hiding (ask, asks)
 
 
 data SurveyForm = SurveyForm

@@ -1,14 +1,14 @@
 module Pages.AutoComplete (getH) where
 
-import Data.Aeson ( ToJSON(toJSON) )
+import Data.Aeson (ToJSON (toJSON))
 import Data.Aeson qualified as AE
-import Effectful.PostgreSQL.Transact.Effect ( dbtToEff )
-import Models.Apis.Fields.Types (parseFieldCategoryEnum)
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Models.Apis.Fields.Query (autoCompleteFields)
+import Models.Apis.Fields.Types (parseFieldCategoryEnum)
 import Models.Apis.RequestDumps (autoCompleteFromRequestDumps)
 import Models.Projects.Projects qualified as Projects
-import System.Types ( ATAuthCtx )
-import Relude ( Applicative(pure), Maybe(..), Text )
+import Relude (Applicative (pure), Maybe (..), Text)
+import System.Types (ATAuthCtx)
 
 
 getH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> ATAuthCtx AE.Value

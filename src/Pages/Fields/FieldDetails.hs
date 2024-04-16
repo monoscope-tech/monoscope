@@ -1,42 +1,43 @@
 module Pages.Fields.FieldDetails (fieldPutH, EditFieldForm) where
 
-import Data.Aeson ( FromJSON, encode )
+import Data.Aeson (FromJSON, encode)
 import Data.Aeson.QQ (aesonQQ)
-import Data.Digest.XXHash ( xxHash )
-import Data.Time ( getZonedTime )
+import Data.Digest.XXHash (xxHash)
+import Data.Time (getZonedTime)
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Effectful.PostgreSQL.Transact.Effect ( dbtToEff )
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask, asks)
-import Lucid ( Html )
+import Lucid (Html)
 import Models.Apis.Fields.Types qualified as Fields
 import Models.Apis.Formats qualified as Formats
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Numeric (showHex)
+import Relude (
+  Applicative (pure),
+  Bool (..),
+  ConvertUtf8 (decodeUtf8, encodeUtf8),
+  Generic,
+  Maybe (..),
+  MonadIO (liftIO),
+  Semigroup ((<>)),
+  Show,
+  Text,
+  ToText (toText),
+  fromMaybe,
+  not,
+  ($),
+  (<$>),
+ )
 import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
-import System.Config ( AuthContext(config, env) )
-import System.Types ( ATAuthCtx )
-import Utils ( userIsProjectMember )
+import System.Config (AuthContext (config, env))
+import System.Types (ATAuthCtx)
+import Utils (userIsProjectMember)
 import Web.FormUrlEncoded (FromForm)
-import Relude
-    ( ($),
-      Show,
-      Applicative(pure),
-      Generic,
-      Semigroup((<>)),
-      Bool(..),
-      Maybe(..),
-      Text,
-      fromMaybe,
-      not,
-      (<$>),
-      MonadIO(liftIO),
-      ConvertUtf8(decodeUtf8, encodeUtf8),
-      ToText(toText) )
 
 
 data EditFieldForm = EditFieldForm

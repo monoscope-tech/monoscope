@@ -75,7 +75,9 @@ type QPT a = QueryParam a Text
 
 type GetRedirect = Verb 'GET 302
 
+
 type role Routes nominal
+
 
 data Routes mode = Routes
   { assets :: mode :- "assets" :> Servant.Raw
@@ -122,6 +124,7 @@ server pool =
           )
           cookieProtectedServer
     }
+
 
 type role CookieProtectedRoutes nominal
 data CookieProtectedRoutes mode = CookieProtectedRoutes

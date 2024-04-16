@@ -8,7 +8,7 @@ import Control.Exception (try)
 import Control.Monad.Trans.Except (except, throwE)
 import Control.Monad.Trans.Except.Extra (handleExceptT)
 import Data.Aeson (eitherDecode)
-import Data.Aeson.Types ( KeyValue((.=)), object )
+import Data.Aeson.Types (KeyValue ((.=)), object)
 import Data.ByteString.Lazy.Char8 qualified as BL
 import Data.Cache qualified as Cache
 import Data.List (unzip4)
@@ -16,53 +16,58 @@ import Data.Text qualified as T
 import Data.Time.Clock (getCurrentTime)
 import Data.UUID.V4 (nextRandom)
 import Database.PostgreSQL.Entity.DBT (withPool)
-import Database.PostgreSQL.Simple ( Query)
+import Database.PostgreSQL.Simple (Query)
 import Database.PostgreSQL.Transact (execute)
 import Debug.Pretty.Simple ()
-import Effectful.PostgreSQL.Transact.Effect ( dbtToEff )
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
-import Fmt ( (+|), fmtLn, (|+) )
+import Fmt (fmtLn, (+|), (|+))
 import Log qualified
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
-import Relude
-    ( zip,
-      ($),
-      Eq((==)),
-      Integral(div),
-      Ord((>)),
-      Applicative(pure),
-      Foldable(length, null),
-      Traversable(mapM),
-      Semigroup((<>)),
-      Monoid(mconcat),
-      String,
-      Maybe(Nothing),
-      Either(..),
-      Text,
-      MonadIO(liftIO),
-      SomeException,
-      ToText(toText),
-      ByteString,
-      show,
-      concat,
-      (<&>),
-      fromMaybe,
-      catMaybes,
-      unless,
-      void,
-      lefts,
-      rights,
-      when,
-      (&&),
-      forM_,
-      runExceptT,
-      ConvertUtf8(decodeUtf8, encodeUtf8),
-      LazyStrict(toStrict),
-      ExceptT )
+import Relude (
+  Applicative (pure),
+  ByteString,
+  ConvertUtf8 (decodeUtf8, encodeUtf8),
+  Either (..),
+  Eq ((==)),
+  ExceptT,
+  Foldable (length, null),
+  Integral (div),
+  LazyStrict (toStrict),
+  Maybe (Nothing),
+  MonadIO (liftIO),
+  Monoid (mconcat),
+  Ord ((>)),
+  Semigroup ((<>)),
+  SomeException,
+  String,
+  Text,
+  ToText (toText),
+  Traversable (mapM),
+  catMaybes,
+  concat,
+  forM_,
+  fromMaybe,
+  lefts,
+  rights,
+  runExceptT,
+  show,
+  unless,
+  void,
+  when,
+  zip,
+  ($),
+  (&&),
+  (<&>),
+ )
 import RequestMessages qualified
-import System.Clock
-    ( diffTimeSpec, getTime, toNanoSecs, Clock(Monotonic) )
+import System.Clock (
+  Clock (Monotonic),
+  diffTimeSpec,
+  getTime,
+  toNanoSecs,
+ )
 import System.Config qualified as Config
 import System.Types (ATBackgroundCtx)
 import Text.Pretty.Simple (pShow)
@@ -169,17 +174,17 @@ processMessages' _ msgs projectCache' = do
   afterProccessing <- liftIO $ getTime Monotonic
   when (null reqDumps) $ Log.logAttention_ "Empty params/query for processMessages for request dumps; "
   resp <- runExceptT do
-    unless (null params') $
-      handleExceptT (wrapTxtException $ toStrict $ "execute query " <> show query') $
-        void $
-          dbtToEff $
-            execute query' params'
-    unless (null reqDumps) $
-      handleExceptT (wrapTxtException $ toStrict $ "bulkInsertReqDump => " <> show reqDumps <> show msgs) $
-        void $
-          dbtToEff $
-            RequestDumps.bulkInsertRequestDumps $
-              catMaybes reqDumps
+    unless (null params')
+      $ handleExceptT (wrapTxtException $ toStrict $ "execute query " <> show query')
+      $ void
+      $ dbtToEff
+      $ execute query' params'
+    unless (null reqDumps)
+      $ handleExceptT (wrapTxtException $ toStrict $ "bulkInsertReqDump => " <> show reqDumps <> show msgs)
+      $ void
+      $ dbtToEff
+      $ RequestDumps.bulkInsertRequestDumps
+      $ catMaybes reqDumps
 
   endTime <- liftIO $ getTime Monotonic
   let msg = fmtLn @String $ "Process Message (" +| length msgs |+ ") pipeline microsecs: queryDuration " +| toNanoSecs (diffTimeSpec startTime afterProccessing) `div` 1000 |+ " -> processingDuration " +| toNanoSecs (diffTimeSpec afterProccessing endTime) `div` 1000 |+ " -> TotalDuration " +| toNanoSecs (diffTimeSpec startTime endTime) `div` 1000 |+ ""
@@ -219,8 +224,8 @@ processMessage projectCache (rmAckId, recMsg) = do
     -- This should help with our performance, since this project Cache is the only information we need in order to process
     -- an apitoolkit requestmessage payload. So we're able to process payloads without hitting the database except for the actual db inserts.
     projectCacheValE <-
-      liftIO $
-        try
+      liftIO
+        $ try
           ( Cache.fetchWithCache projectCache pid \pid' -> do
               mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
               pure $ fromMaybe projectCacheDefault mpjCache

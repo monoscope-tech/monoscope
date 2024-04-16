@@ -96,8 +96,8 @@ spec = aroundAll TmpPg.withSetup do
       let msgs = [("m1", jsonMsg)]
 
       resp <- LogBulk.withBulkStdOutLogger \logger ->
-        runBackground logger authContext $
-          processMessages config msgs projectCache
+        runBackground logger authContext
+          $ processMessages config msgs projectCache
       resp `shouldBe` ["m1"]
 
     it "should save the request" \pool -> do

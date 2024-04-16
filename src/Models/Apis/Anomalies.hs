@@ -1,7 +1,6 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
-
 module Models.Apis.Anomalies (
   selectAnomalies,
   AnomalyVM (..),
@@ -49,9 +48,9 @@ import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
+import Relude hiding (id)
 import Servant (FromHttpApiData (..))
 import Utils
-import Relude hiding (id)
 
 
 newtype AnomalyId = AnomalyId {unAnomalyId :: UUID.UUID}

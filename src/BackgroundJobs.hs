@@ -503,8 +503,8 @@ handleQueryMonitorThreshold dbPool logger cfg monitorE isAlert = do
 
 jobsWorkerInit :: Pool Connection -> Log.Logger -> Config.EnvConfig -> IO ()
 jobsWorkerInit dbPool logger envConfig =
-  startJobRunner $
-    mkConfig jobLogger "background_jobs" dbPool (MaxConcurrentJobs 1) (jobsRunner dbPool logger envConfig) id
+  startJobRunner
+    $ mkConfig jobLogger "background_jobs" dbPool (MaxConcurrentJobs 1) (jobsRunner dbPool logger envConfig) id
   where
     jobLogger :: LogLevel -> LogEvent -> IO ()
     jobLogger logLevel logEvent = Log.runLogT "OddJobs" logger Log.LogAttention $ Log.logInfo "Background jobs ping. " (show logLevel, show logEvent) -- logger show (logLevel, logEvent)

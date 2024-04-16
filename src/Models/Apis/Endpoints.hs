@@ -3,7 +3,6 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RankNTypes #-}
 
-
 module Models.Apis.Endpoints (
   Endpoint (..),
   SwEndpoint (..),

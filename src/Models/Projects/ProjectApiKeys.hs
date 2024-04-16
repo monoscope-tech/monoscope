@@ -35,8 +35,8 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact (DBT)
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
-import Servant.API (FromHttpApiData)
 import Relude hiding (id)
+import Servant.API (FromHttpApiData)
 
 
 newtype ProjectApiKeyId = ProjectApiKeyId {unProjectApiKeyId :: UUID.UUID}

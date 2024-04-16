@@ -3,9 +3,8 @@ module Pkg.ConvertKit (addUser, addUserOrganization) where
 import Control.Lens
 import Data.Aeson.Lens (key, _String)
 import Data.Aeson.QQ (aesonQQ)
+import Data.Text
 import Network.Wreq
-import Relude
-import Data.Text 
 import Relude
 
 

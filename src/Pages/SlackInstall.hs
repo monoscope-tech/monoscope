@@ -12,9 +12,9 @@ import Data.Text
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT
-import Database.PostgreSQL.Simple ( Only(Only), Only(Only) )
+import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Fmt ( dateDashF, fmt, dateDashF, fmt )
+import Fmt (dateDashF, fmt)
 import Lucid
 import System.Config
 
@@ -35,13 +35,13 @@ import Network.Wreq
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Pkg.Components (navBar)
 import Pkg.Mail (sendSlackMessage)
+import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
 import System.Types
 import Utils (faIcon_)
 import Web.FormUrlEncoded (FromForm)
-import Relude hiding (ask, asks)
 
 
 data LinkProjectsForm = LinkProjectsForm

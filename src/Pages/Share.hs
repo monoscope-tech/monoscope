@@ -4,7 +4,7 @@ import Data.Aeson as Aeson
 import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
 import Data.Text ()
-import Data.Time (ZonedTime, getZonedTime, UTCTime)
+import Data.Time (UTCTime, ZonedTime, getZonedTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
@@ -28,13 +28,13 @@ import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pkg.Components (navBar)
 import PyF
+import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import Servant (Headers)
 import Servant.Htmx (HXTrigger)
 import System.Config
 import System.Types
 import Web.FormUrlEncoded (FromForm)
-import Relude hiding (ask, asks)
 
 
 data ReqForm = ReqForm
@@ -75,9 +75,13 @@ shareLinkPostH pid reqForm = do
   if expIn `elem` lis
     then do
       inId <- liftIO UUIDV4.nextRandom
-      res <- dbtToEff $
-        execute Insert [sql| INSERT INTO apis.share_requests (id, project_id, expired_at, request_dump_id, request_created_at) 
-                                  VALUES (?,?, current_timestamp + interval ?,?,?) |] (inId, pid, expIn, rid, reqForm.reqCreatedAt)
+      res <-
+        dbtToEff
+          $ execute
+            Insert
+            [sql| INSERT INTO apis.share_requests (id, project_id, expired_at, request_dump_id, request_created_at) 
+                                  VALUES (?,?, current_timestamp + interval ?,?,?) |]
+            (inId, pid, expIn, rid, reqForm.reqCreatedAt)
       pure $ addHeader "" $ copyLink $ show inId
     else do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","errorToast": ["Invalid expiry interval"]}|]
@@ -120,7 +124,7 @@ shareLinkGetH sid = do
   pure $ bodyWrapper bwconf $ sharePage reqM
 
 
-sharePage :: Maybe RequestDumps.RequestDumpLogItem ->Html ()
+sharePage :: Maybe RequestDumps.RequestDumpLogItem -> Html ()
 sharePage req = do
   navBar
   section_ [class_ "h-full mt-[80px] w-[1000px] flex flex-col items-center mx-auto"] do
@@ -130,4 +134,3 @@ sharePage req = do
       Nothing -> div_ [class_ "flex flex-col gap-4 mt-[80px] text-center"] do
         h1_ [class_ "font-bold text-3xl"] "Request Log Not Found"
         p_ [class_ "text-gray-500 text-xl"] "This shared request log URL does not exist or has expired"
-

@@ -57,9 +57,9 @@ import Models.Apis.Fields.Query ()
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pkg.Parser
+import Relude hiding (many, some)
 import Utils (DBField (MkDBField), quoteTxt)
 import Witch (from)
-import Relude hiding (many, some)
 
 
 data SDKTypes
@@ -86,6 +86,7 @@ data SDKTypes
   | GuzzleOutgoing
   | ElixirPhoenix
   | PythonPyramid
+  | DotNetOutgoing
   deriving stock (Show, Generic, Read, Eq)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SDKTypes
@@ -166,6 +167,7 @@ normalizeUrlPath PhpSlim statusCode _method urlPath = removeQueryParams statusCo
 normalizeUrlPath GuzzleOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath ElixirPhoenix statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath PythonPyramid statusCode _method urlPath = removeQueryParams statusCode urlPath
+normalizeUrlPath DotNetOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
 
 
 -- getRequestType ...

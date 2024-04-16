@@ -21,12 +21,12 @@ import Models.Apis.Formats qualified as Formats
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
+import Relude hiding (ask, asks)
 import Relude.Unsafe ((!!))
 import Relude.Unsafe qualified as Unsafe
 import System.Config
 import System.Types
 import Utils
-import Relude hiding (ask, asks)
 
 
 data MergedEndpoint = MergedEndpoint
@@ -166,33 +166,34 @@ convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
                               [ "description" .= String desc
                               , "type" .= String "array"
                               , "items"
-                                  .= object (
-                                        [ "type" .= t
-                                        , "format" .= ft
-                                        ]
-                                          ++ if is_enum
-                                            then ["enum" .= examples]
-                                            else
-                                              if V.length examples > 0
-                                                then ["example" .= V.head examples]
-                                                else
-                                                  if is_required then ["required" .= is_required] else [])
+                                  .= object
+                                    ( [ "type" .= t
+                                      , "format" .= ft
+                                      ]
+                                        ++ if is_enum
+                                          then ["enum" .= examples]
+                                          else
+                                            if V.length examples > 0
+                                              then ["example" .= V.head examples]
+                                              else
+                                                if is_required then ["required" .= is_required] else []
+                                    )
                               ]
                           )
                         else
                           ( grp
-                          , object $
-                              [ "description" .= String desc
-                              , "type" .= t
-                              , "format" .= ft
-                              ]
-                                ++ if is_enum
-                                  then ["enum" .= examples]
-                                  else
-                                    if V.length examples > 0
-                                      then ["example" .= V.head examples]
-                                      else
-                                        (["required" .= is_required | is_required])
+                          , object
+                              $ [ "description" .= String desc
+                                , "type" .= t
+                                , "format" .= ft
+                                ]
+                              ++ if is_enum
+                                then ["enum" .= examples]
+                                else
+                                  if V.length examples > 0
+                                    then ["example" .= V.head examples]
+                                    else
+                                      (["required" .= is_required | is_required])
                           )
                     validKey = if key == "" then "schema" else key
                  in object [AEKey.fromText validKey .= ob]
@@ -318,33 +319,37 @@ groupEndpointsByUrlPath endpoints =
               let rqProps = convertKeyPathsToJson (V.toList rqS.shape.swRequestBodyKeypaths) (fromMaybe [] (Map.lookup Field.FCRequestBody rqS.sField)) ""
                   qParams = convertQueryParamsToJSON (V.toList qS.shape.swQueryParamsKeypaths) (fromMaybe [] (Map.lookup Field.FCQueryParam qS.sField))
                in AEKey.fromText (T.toLower $ method mergedEndpoint)
-                    .= object (
-                          [ "parameters" .= qParams
-                          , "responses" .= groupShapesByStatusCode (shapes mergedEndpoint)
-                          , "requestBody" .= object (["content" .= object ["application/json" .= rqProps]] ++ if not (T.null rqS.shape.swRequestDescription) then ["description" .= rqS.shape.swRequestDescription] else [])
-                          ]
-                            ++ (["description" .= description mergedEndpoint | T.length (mergedEndpoint.description) > 0]))
+                    .= object
+                      ( [ "parameters" .= qParams
+                        , "responses" .= groupShapesByStatusCode (shapes mergedEndpoint)
+                        , "requestBody" .= object (["content" .= object ["application/json" .= rqProps]] ++ if not (T.null rqS.shape.swRequestDescription) then ["description" .= rqS.shape.swRequestDescription] else [])
+                        ]
+                          ++ (["description" .= description mergedEndpoint | T.length (mergedEndpoint.description) > 0])
+                      )
             (Just rqS, Nothing) ->
               let rqProps = convertKeyPathsToJson (V.toList rqS.shape.swRequestBodyKeypaths) (fromMaybe [] (Map.lookup Field.FCRequestBody rqS.sField)) ""
                in AEKey.fromText (T.toLower $ method mergedEndpoint)
-                    .= object (
-                          [ "description" .= description mergedEndpoint
-                          , "responses" .= groupShapesByStatusCode (shapes mergedEndpoint)
-                          , "requestBody" .= object (["content" .= object ["application/json" .= rqProps]] ++ if not (T.null rqS.shape.swRequestDescription) then ["description" .= rqS.shape.swRequestDescription] else [])
-                          ]
-                            ++ (["description" .= description mergedEndpoint | T.length (mergedEndpoint.description) > 0]))
+                    .= object
+                      ( [ "description" .= description mergedEndpoint
+                        , "responses" .= groupShapesByStatusCode (shapes mergedEndpoint)
+                        , "requestBody" .= object (["content" .= object ["application/json" .= rqProps]] ++ if not (T.null rqS.shape.swRequestDescription) then ["description" .= rqS.shape.swRequestDescription] else [])
+                        ]
+                          ++ (["description" .= description mergedEndpoint | T.length (mergedEndpoint.description) > 0])
+                      )
             (Nothing, Just qS) ->
               let qParams = convertQueryParamsToJSON (V.toList qS.shape.swQueryParamsKeypaths) (fromMaybe [] (Map.lookup Field.FCQueryParam qS.sField))
                in AEKey.fromText (T.toLower $ method mergedEndpoint)
-                    .= object (
-                          [ "parameters" .= qParams
-                          , "responses" .= groupShapesByStatusCode (shapes mergedEndpoint)
-                          ]
-                            ++ (["description" .= description mergedEndpoint | T.length (mergedEndpoint.description) > 0]))
+                    .= object
+                      ( [ "parameters" .= qParams
+                        , "responses" .= groupShapesByStatusCode (shapes mergedEndpoint)
+                        ]
+                          ++ (["description" .= description mergedEndpoint | T.length (mergedEndpoint.description) > 0])
+                      )
             (_, _) ->
               AEKey.fromText (T.toLower $ method mergedEndpoint)
-                .= object (
-                      ("responses" .= groupShapesByStatusCode (shapes mergedEndpoint)) : if T.length (mergedEndpoint.description) > 0 then ["description" .= description mergedEndpoint] else [])
+                .= object
+                  ( ("responses" .= groupShapesByStatusCode (shapes mergedEndpoint)) : if T.length (mergedEndpoint.description) > 0 then ["description" .= description mergedEndpoint] else []
+                  )
        in endPointJSON
 
 

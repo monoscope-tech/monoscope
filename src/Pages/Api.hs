@@ -18,10 +18,10 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.NonMember
+import Relude hiding (ask, asks)
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
 import System.Config
-import Relude hiding (ask, asks)
 
 import Effectful.PostgreSQL.Transact.Effect
 import Effectful.Reader.Static (ask, asks)
@@ -203,7 +203,7 @@ mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] do
                       [class_ "mr-2 w-full"]
                       $ toHtml
                       $ T.take 8 apiKey.keyPrefix
-                        <> "********************************************"
+                      <> "********************************************"
                     button_
                       [ class_ "text-blue-500"
                       , term "data-key" apiKey.keyPrefix

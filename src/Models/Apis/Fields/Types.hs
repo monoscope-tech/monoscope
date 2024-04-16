@@ -247,7 +247,7 @@ instance Ord Field where
     (projectId f1 <= projectId f2)
       && (endpointHash f1 <= endpointHash f2)
       && keyPath f1
-        <= keyPath f2
+      <= keyPath f2
 
 
 instance Eq Field where
