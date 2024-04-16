@@ -219,7 +219,6 @@ fbq('init', '3674513372787915');
 fbq('track', 'PageView');
       |]
 
-
       -- Facebook Pixel Code --
       script_
         [text|

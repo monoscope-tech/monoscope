@@ -445,10 +445,10 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
                                        <https://app.apitoolkit.io/p/{pid.toText}/anomaly/{targetHash}|More details on the apitoolkit>
                                |]
           _ -> forM_ users \u ->
-              sendEmail
-                (CI.original u.email)
-                [fmt| 🤖 APITOOLKIT: New field format anomaly found for `{project.title}` |]
-                [fmtTrim|
+            sendEmail
+              (CI.original u.email)
+              [fmt| 🤖 APITOOLKIT: New field format anomaly found for `{project.title}` |]
+              [fmtTrim|
      Hi {u.firstName},<br/>
    
      <p>We detected that a particular field on your API is returning a different format/type than what it usually gets.</p>
