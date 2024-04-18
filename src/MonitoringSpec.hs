@@ -14,12 +14,12 @@ import Models.Projects.Projects qualified as Projects
 import OddJobs.Job (Job)
 import Pages.Monitors.Alerts (AlertUpsertForm (..), convertToQueryMonitor)
 import Pkg.TmpPg qualified as TmpPg
-import ProcessMessage (processMessages, processMessages')
+import ProcessMessage (processMessages')
 import ProcessMessageSpec (convert, msg1, msg2, runTestBackground, testAuthContext)
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import System.Config
-import Test.Hspec (Spec, aroundAll, describe, it, shouldBe, shouldContain)
+import System.Config ( AuthContext(projectCache, pool, config) )
+import Test.Hspec (Spec, aroundAll, describe, it)
 
 
 spec :: Spec

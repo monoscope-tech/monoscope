@@ -3,61 +3,27 @@
 module Pages.Onboarding (onboardingGetH, integrateApiToolkit, tabs, contentHeader) where
 
 import Data.Default (def)
-import Data.Text qualified as T
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (withPool)
-import Effectful.PostgreSQL.Transact.Effect ( dbtToEff )
-import Effectful.Reader.Static (ask, asks)
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful.Reader.Static (ask)
 import Lucid
-    ( Html,
-      Term(term),
-      ToHtml(toHtml),
-      div_,
-      class_,
-      h4_,
-      span_,
-      ul_,
-      li_,
-      button_,
-      p_,
-      id_,
-      a_,
-      href_,
-      target_,
-      h3_,
-      form_,
-      input_,
-      type_,
-      placeholder_,
-      name_,
-      autofocus_,
-      hidden_,
-      value_,
-      script_,
-      strong_,
-      pre_,
-      code_,
-      img_,
-      src_,
-      alt_ )
-import Lucid.Htmx (hxGet_, hxPost_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
-import Lucid.Hyperscript ( __ )
+import Lucid.Htmx (hxGet_, hxSwap_, hxTrigger_, hxVals_)
+import Lucid.Hyperscript (__)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projectjs
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import NeatInterpolation ( text )
+import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Pages.NonMember ( userNotMemeberPage )
+import Pages.NonMember (userNotMemeberPage)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
-import System.Config ( AuthContext )
-import System.Types ( ATAuthCtx )
+import System.Config (AuthContext)
+import System.Types (ATAuthCtx)
 import Utils (
   faIcon_,
   faSprite_,
-  redirect,
   userIsProjectMember,
  )
 
@@ -182,35 +148,6 @@ onboardingPage pid apikey hasRequest ans redi ctb = do
                   span_ "Need Help?"
                   span_ "Or a Demo?"
                 span_ [class_ "text-slate-500"] "Schedule a brief call with an Engineer."
-
-
-generateApikey :: Projects.ProjectId -> Html ()
-generateApikey pid =
-  div_ [class_ "w-[800px] bg-slate-200 mx-auto rounded-lg border-8 border-white shadow-lg mb-10"] do
-    div_ [class_ "w-full p-8"] do
-      div_ [class_ "flex w-full justify-center gap-4 items-center mb-10"] do
-        span_ [class_ "text-blue-500 pr-4 border-r border-r-2 border-r-blue-500 text-2xl"] "Next Up"
-        h3_ [class_ "font-bold text-2xl"] "Generate API Key"
-      div_ [id_ "main-content2"] do
-        form_
-          [ hxPost_ $ "/p/" <> pid.toText <> "/apis"
-          , class_ "flex items-end justify-center mx-8  pt-4 px-4 pb-20 text-center sm:block sm:p-0"
-          , hxTarget_ "#main-content2"
-          ]
-          do
-            div_ [class_ "bg-white rounded-lg px-4 pt-5 pb-4 text-left"] do
-              div_ [class_ "sm:flex sm:items-start"] do
-                div_ [class_ "mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left grow"] do
-                  h3_ [class_ "text-lg font-medium text-slate-900", id_ "modal-title"] "Enter API key title"
-                  div_ [class_ "mt-2 space-y-2"] do
-                    p_ [class_ "text-sm text-slate-500"] do
-                      "Please input a title for your API Key. You can find all API keys "
-                      a_ [href_ $ "/p/" <> pid.toText <> "/apis", class_ "text-blue-500"] "here"
-                    div_ do
-                      input_ [class_ "input-txt px-4 py-2  border w-full", type_ "text", placeholder_ "API Key Title", name_ "title", autofocus_]
-                      input_ [hidden_ "true", name_ "from", value_ "onboarding"]
-              div_ [class_ "mt-5 sm:mt-4 sm:flex sm:flex-row-reverse"] do
-                button_ [type_ "submit", class_ "w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 sm:ml-3 sm:w-auto sm:text-sm"] "Submit"
 
 
 integrateApiToolkit :: Text -> Text -> Html ()

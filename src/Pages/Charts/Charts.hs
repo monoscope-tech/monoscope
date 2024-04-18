@@ -3,6 +3,7 @@
 module Pages.Charts.Charts (chartsGetH, ChartType (..), lazy, ChartExp (..), QueryBy (..), GroupBy (..)) where
 
 import Data.Aeson qualified as AE
+import Data.Either.Extra (fromRight')
 import Data.List (groupBy, lookup)
 import Data.Text (toLower)
 import Data.Text qualified as T
@@ -15,12 +16,8 @@ import Data.Time (
   formatTime,
   getCurrentTime,
   secondsToNominalDiffTime,
-  utc,
-  utcToZonedTime,
   zonedTimeToUTC,
  )
-import Data.Either.Extra (fromRight')
-import Safe qualified
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Tuple.Extra (fst3, thd3)
 import Data.UUID qualified as UUID
@@ -28,24 +25,23 @@ import Data.UUID.V4 qualified as UUIDV4
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query)
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Database.PostgreSQL.Transact qualified as DBT
-import Effectful.PostgreSQL.Transact.Effect ( dbtToEff )
-import Effectful.Reader.Static (ask)
-import Lucid ( Html, class_, div_, id_, script_ )
-import Lucid.Htmx ( hxGet_, hxSwap_, hxTrigger_ )
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Lucid (Html, class_, div_, id_, script_)
+import Lucid.Htmx (hxGet_, hxSwap_, hxTrigger_)
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Network.URI (escapeURIString, isUnescapedInURI)
-import Pkg.Parser
-    ( SqlQueryCfg(dateRange),
-      QueryComponents(finalTimechartQuery),
-      parseQueryToComponents,
-      defSqlQueryCfg )
-import Relude hiding (ask)
+import Pkg.Parser (
+  QueryComponents (finalTimechartQuery),
+  SqlQueryCfg (dateRange),
+  defSqlQueryCfg,
+  parseQueryToComponents,
+ )
+import Relude
 import Relude.Unsafe qualified as Unsafe
+import Safe qualified
 import Servant (FromHttpApiData (..))
-import System.Config (AuthContext (config))
-import System.Types ( ATAuthCtx )
+import System.Types (ATAuthCtx)
 import Utils (DBField (MkDBField))
 import Witch (from)
 

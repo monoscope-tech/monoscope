@@ -9,24 +9,13 @@ import Data.Aeson qualified as AE
 import Data.Aeson.QQ
 import Data.Default
 import Data.Text
-import Data.Vector (Vector)
-import Data.Vector qualified as Vector
-import Database.PostgreSQL.Entity.DBT
-import Database.PostgreSQL.Simple (Only (Only))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Fmt (dateDashF, fmt)
-import Lucid
-import System.Config
-
-import Data.Aeson qualified as AE
-import Data.Aeson.QQ
-import Data.Default
-import Data.Text
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT
 import Deriving.Aeson qualified as DAE
 import Effectful.PostgreSQL.Transact.Effect
 import Effectful.Reader.Static (ask, asks)
+import Fmt (dateDashF, fmt)
+import Lucid
 import Lucid.Htmx (hxPost_)
 import Models.Apis.Slack (insertAccessToken)
 import Models.Projects.Projects qualified as Projects
@@ -39,6 +28,7 @@ import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
+import System.Config
 import System.Types
 import Utils (faIcon_)
 import Web.FormUrlEncoded (FromForm)

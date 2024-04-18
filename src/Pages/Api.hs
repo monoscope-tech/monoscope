@@ -9,9 +9,8 @@ import Data.UUID as UUID (toText)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector (Vector)
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (withPool)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
-import Effectful.Reader.Static (ask, asks)
+import Effectful.Reader.Static (ask)
 import Lucid (
   Html,
   Term (term),
@@ -46,7 +45,6 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.NonMember (userNotMemeberPage)
 import Relude (
@@ -87,11 +85,9 @@ data GenerateAPIKeyForm = GenerateAPIKeyForm
 
 apiPostH :: Projects.ProjectId -> GenerateAPIKeyForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
 apiPostH pid apiKeyForm = do
-  -- TODO: temporary, to work with current logic
-  appCtx <- ask @AuthContext
-  let env = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
+  authCtx <- ask @AuthContext
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
@@ -100,7 +96,7 @@ apiPostH pid apiKeyForm = do
       pure $ addHeader hxTriggerData ""
     else do
       projectKeyUUID <- liftIO UUIDV4.nextRandom
-      let encryptedKey = ProjectApiKeys.encryptAPIKey (encodeUtf8 env.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
+      let encryptedKey = ProjectApiKeys.encryptAPIKey (encodeUtf8 authCtx.config.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
       let encryptedKeyB64 = B64.encodeBase64 encryptedKey
       let keyPrefix = encryptedKeyB64
       pApiKey <- liftIO $ ProjectApiKeys.newProjectApiKeys pid projectKeyUUID (title apiKeyForm) keyPrefix
@@ -115,8 +111,6 @@ apiPostH pid apiKeyForm = do
 
 apiDeleteH :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
 apiDeleteH pid keyid = do
-  -- TODO: temporary, to work with current logic
-  appCtx <- ask @AuthContext
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
 
@@ -242,7 +236,7 @@ mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] do
                       [class_ "mr-2 w-full"]
                       $ toHtml
                       $ T.take 8 apiKey.keyPrefix
-                        <> "********************************************"
+                      <> "********************************************"
                     button_
                       [ class_ "text-blue-500"
                       , term "data-key" apiKey.keyPrefix

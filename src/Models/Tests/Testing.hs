@@ -149,13 +149,6 @@ insertSteps pid cid steps = do
       )
 
 
-updateStep :: CollectionId -> CollectionStepId -> AE.Value -> DBT IO Int64
-updateStep cid sid step_data = do
-  let q =
-        [sql| UPDATE tests.collection_steps SET step_data=? WHERE collection_id = ? AND id=?  |]
-  execute Update q (step_data, cid, sid)
-
-
 updateCollection :: Projects.ProjectId -> Text -> Text -> Text -> DBT IO Int64
 updateCollection pid cid title description = do
   let q =

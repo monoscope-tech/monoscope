@@ -46,7 +46,6 @@ import Lucid (
   placeholder_,
   rel_,
   script_,
-  section_,
   span_,
   src_,
   style_,
@@ -814,26 +813,3 @@ documentationsPage pid swaggers swaggerID jsonString = do
         });   
       };
     |]
-
-
-mainContent :: V.Vector Swaggers.Swagger -> Html ()
-mainContent swaggers = do
-  section_ [id_ "main-content", class_ "flex flex-col"] do
-    div_ [class_ "-my-2 overflow-x-auto sm:-mx-6 lg:-mx-8"] do
-      div_ [class_ "flex flex-col py-2 align-middle inline-block w-full sm:px-6 lg:px-8"] do
-        swaggers & mapM_ \rf -> do
-          div_ [style_ "max-height:400px;", class_ "shadow overflow-y-auto border-b border-gray-200 mb-10 sm:rounded-lg"] do
-            div_ do
-              p_ [style_ "white-space: pre-wrap; font-family: monospace;", class_ "raw_swagger px-6 py-4 text-sm font-medium text-gray-900"] $ toHtml $ encode rf.swaggerJson
-  script_
-    [text|
-         for(let swagger of Array.from(document.querySelectorAll('.raw_swagger'))) {
-             try{
-              const parsedSwagger = JSON.parse(swagger.textContent);
-              const prettierSwagger = JSON.stringify(parsedSwagger, null, 2);
-              swagger.textContent = prettierSwagger;
-             }catch(e){
-              console.log(e)
-             }
-         }
-        |]

@@ -16,12 +16,14 @@ import Control.Monad.Except qualified as T
 import Data.Aeson.Lens (key, _String)
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
-import Data.Pool (Pool)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (Connection)
+import Effectful
+    ( MonadIO(liftIO), Effect, type (:>), IOE, Eff, runEff )
+import Effectful.Dispatch.Static ( unsafeEff_ )
 import Effectful (
   Eff,
   Effect,
@@ -316,16 +318,3 @@ authCallbackH codeM _ = do
               meta_ [httpEquiv_ "refresh", content_ "1;url=/"]
             body_ do
               a_ [href_ "/"] "Continue to APIToolkit"
-
-
--- We need to handle errors for the persistent session better and redirect if there's an error
-lookupAccount :: Pool Connection -> ByteString -> Handler Sessions.PersistentSession
-lookupAccount conn keyV = do
-  resp <- runExceptT do
-    pid <- hoistEither $ note @Text "unable to convert cookie value to persistent session UUID" (Sessions.PersistentSessionId <$> UUID.fromASCIIBytes keyV)
-    presistentSess <- liftIO $ withPool conn $ Sessions.getPersistentSession pid
-    hoistEither $ note "lookupAccount: invalid persistentID " presistentSess
-  case resp of
-    Left _ -> do
-      Servant.throwError $ err302{errHeaders = [("Location", "/to_login")]}
-    Right session -> pure session

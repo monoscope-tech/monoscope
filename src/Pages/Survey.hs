@@ -14,7 +14,6 @@ import Data.Text qualified as T
 import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
-import Effectful.Reader.Static (ask, asks)
 import Lucid
 import Lucid.Htmx (hxIndicator_, hxPost_, hxSwap_)
 import Lucid.Svg (d_, fill_, path_, viewBox_)
@@ -27,7 +26,6 @@ import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXRedirect, HXTrigger)
-import System.Config (AuthContext (config, env))
 import System.Types (ATAuthCtx)
 import Utils (userIsProjectMember)
 import Web.FormUrlEncoded (FromForm)
@@ -57,8 +55,6 @@ instance ToJSON SurveyForm where
 
 surveyPutH :: Projects.ProjectId -> SurveyForm -> ATAuthCtx (Headers '[HXTrigger, HXRedirect] (Html ()))
 surveyPutH pid survey = do
-  -- TODO: temporary, to work with current logic
-  appCtx <- ask @AuthContext
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
 
@@ -68,7 +64,6 @@ surveyPutH pid survey = do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Only project memebers can take the survey"]}|]
       pure $ addHeader hxTriggerData $ addHeader "" ""
     else do
-      env <- asks env
       let nameArr = T.splitOn " " (fullName survey)
       if length nameArr < 2
         then do
@@ -87,8 +82,6 @@ surveyPutH pid survey = do
 
 surveyGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
 surveyGetH pid = do
-  -- TODO: temporary, to work with current logic
-  appCtx <- ask @AuthContext
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
 

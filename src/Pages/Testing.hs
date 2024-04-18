@@ -14,7 +14,6 @@ module Pages.Testing (
 )
 where
 
-import Control.Exception
 import Data.Aeson
 import Data.Aeson qualified as AE
 import Data.Aeson qualified as Aeson
@@ -26,11 +25,8 @@ import Data.Time.LocalTime (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (withPool)
 import Effectful.PostgreSQL.Transact.Effect
-import Effectful.Reader.Static (ask, asks)
-import Foreign.C.String
-import Foreign.C.Types
+import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Base
 import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_)
@@ -41,12 +37,11 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.NonMember
-import Relude hiding (ask, asks)
+import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
 import System.Config
-import System.IO.Error
 import System.Types
 import Utils
 import Web.FormUrlEncoded (FromForm)

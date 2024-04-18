@@ -7,10 +7,7 @@ import Data.Aeson.QQ (aesonQQ)
 import Data.Pool ()
 import Effectful (
   Eff,
-  Effect,
   IOE,
-  MonadIO (liftIO),
-  runEff,
   type (:>),
  )
 import Effectful.Log (Log)
@@ -29,7 +26,7 @@ import Network.Mail.Mime (Address (Address), simpleMail)
 import Network.Wreq (defaults, header, postWith)
 import Relude hiding (ask)
 import System.Config qualified as Config
-import System.Types (ATBackgroundCtx, ATBaseCtx)
+import System.Types (ATBackgroundCtx)
 
 
 sendEmail :: Text -> Text -> LText -> ATBackgroundCtx ()

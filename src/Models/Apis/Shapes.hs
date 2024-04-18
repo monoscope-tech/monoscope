@@ -4,7 +4,7 @@ module Models.Apis.Shapes (Shape (..), ShapeWithFields (..), SwShape (..), Shape
 
 import Data.Aeson qualified as AE
 import Data.Default (Default)
-import Data.Time (UTCTime, ZonedTime, getZonedTime)
+import Data.Time (UTCTime, getZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector

@@ -26,10 +26,8 @@ ghc-options:
   - -Wno-missing-safe-haskell-mode
   - -Wno-orphans
   # remove the next options when possible. This is a temporary workaround
-  - -Wno-unused-top-binds
   - -Wno-unused-matches
   - -Wno-missing-kind-signatures
-  - -Wno-unused-imports
   - -Wno-type-defaults
   - -j4
   - "+RTS -A128m -n2m -RTS"
@@ -144,7 +142,6 @@ library:
     - servant-lucid
     - servant-server
     - text
-    - text-conversions
     - text-display
     - time
     - transformers

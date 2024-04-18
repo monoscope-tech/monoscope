@@ -7,46 +7,51 @@ import Data.HashMap.Strict qualified as HM
 import Data.Time (NominalDiffTime, UTCTime, ZonedTime, addUTCTime, diffUTCTime, utc, utcToZonedTime, zonedTimeToUTC)
 import Data.Yaml qualified as Yaml
 import Deriving.Aeson qualified as DAE
-import Effectful.PostgreSQL.Transact.Effect ( dbtToEff )
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
-import Faker
-    ( defaultFakerSettings, generateWithSettings, setRandomGen, Fake )
+import Faker (
+  Fake,
+  defaultFakerSettings,
+  generateWithSettings,
+  setRandomGen,
+ )
 import Faker.Address (fullAddress)
 import Faker.Name qualified
 import Faker.Vehicle qualified
 import Faker.Verbs qualified
-import Lucid
-    ( Html,
-      ToHtml(toHtml),
-      button_,
-      class_,
-      div_,
-      form_,
-      id_,
-      label_,
-      name_,
-      script_,
-      section_,
-      src_,
-      type_,
-      h2_,
-      option_,
-      select_ )
-import Lucid.Htmx ( hxPost_, hxSwap_, hxTarget_, hxVals_ )
+import Lucid (
+  Html,
+  ToHtml (toHtml),
+  button_,
+  class_,
+  div_,
+  form_,
+  h2_,
+  id_,
+  label_,
+  name_,
+  option_,
+  script_,
+  section_,
+  select_,
+  src_,
+  type_,
+ )
+import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_, hxVals_)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Pages.NonMember ( userNotMemeberPage )
+import Pages.NonMember (userNotMemeberPage)
 import Relude hiding (ask, asks)
 import Relude.Unsafe ((!!))
 import Relude.Unsafe qualified as Unsafe
 import RequestMessages qualified
 import System.Config (AuthContext (..))
 import System.Random (RandomGen, getStdGen, randomRs)
-import System.Types ( ATAuthCtx )
-import Utils ( userIsProjectMember )
+import System.Types (ATAuthCtx)
+import Utils (userIsProjectMember)
 import Web.FormUrlEncoded (FromForm)
 
 

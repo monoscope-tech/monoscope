@@ -27,9 +27,6 @@ newtype RedactedFieldId = RedactedFieldId {unRedactedFieldId :: UUID.UUID}
   deriving newtype (ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default, NFData)
 
 
-redactedFieldIdText :: RedactedFieldId -> Text
-redactedFieldIdText = UUID.toText . unRedactedFieldId
-
 
 data ConfiguredVia
   = Dashboard

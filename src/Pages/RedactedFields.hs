@@ -9,7 +9,7 @@ import Data.Text as T (Text)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector (Vector)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
-import Effectful.Reader.Static (ask, asks)
+import Effectful.Reader.Static (ask)
 import Lucid (
   Html,
   ToHtml (toHtml),
@@ -68,8 +68,8 @@ import Relude (
 import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
-import System.Config (AuthContext (config, env))
 import System.Types (ATAuthCtx)
+import System.Config (AuthContext)
 import Utils (userIsProjectMember)
 import Web.FormUrlEncoded (FromForm)
 
@@ -96,7 +96,6 @@ redactedFieldsPostH pid RedactFieldForm{path, description, endpointHash} = do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Only project members can redact fields"]}|]
       pure $ addHeader hxTriggerData $ userNotMemeberPage sess
     else do
-      env <- asks env
       redactedFieldId <- RedactedFields.RedactedFieldId <$> liftIO UUIDV4.nextRandom
       -- adding path, description, endpoints via record punning
       let fieldToRedact = RedactedFields.RedactedField{id = redactedFieldId, projectId = pid, configuredVia = RedactedFields.Dashboard, ..}

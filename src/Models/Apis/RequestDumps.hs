@@ -29,17 +29,13 @@ module Models.Apis.RequestDumps (
 )
 where
 
-import Control.Error (hush)
 import Data.Aeson (Value)
 import Data.Aeson qualified as AE
-import Data.Aeson.KeyMap (toHashMapText)
 import Data.Default.Instances ()
-import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
-import Data.Time (CalendarDiffTime, UTCTime, ZonedTime, diffUTCTime, getCurrentTime, zonedTimeToUTC)
+import Data.Time (CalendarDiffTime, UTCTime, ZonedTime, getCurrentTime)
 import Data.Time.Format
 import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatShow)
-import Data.Tuple.Extra (both)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query, queryOne)
@@ -58,7 +54,6 @@ import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pkg.Parser
 import Relude hiding (many, some)
-import Utils (DBField (MkDBField), quoteTxt)
 import Witch (from)
 
 
@@ -397,12 +392,6 @@ selectLogTable pid extraQuery cursorM dateRange projectedColsByUser = do
       Only count <- fromMaybe (Only 0) <$> queryCount queryComponents.countQuery
       let logItemsV = V.mapMaybe valueToVector logItems
       pure $ Right (logItemsV, queryComponents.toColNames, count)
-
-
-convertValueToMap :: Only Value -> Maybe (HM.HashMap Text Value)
-convertValueToMap (Only val) = case val of
-  AE.Object obj -> Just $ toHashMapText obj
-  _ -> Nothing
 
 
 valueToVector :: Only Value -> Maybe (V.Vector Value)

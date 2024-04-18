@@ -5,7 +5,7 @@ module Pages.Projects.ListProjects (
 import Data.Default (def)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
-import Effectful.Reader.Static (ask, asks)
+import Effectful.Reader.Static (asks)
 import Fmt
 import Lucid
 import Models.Projects.Projects qualified as Projects

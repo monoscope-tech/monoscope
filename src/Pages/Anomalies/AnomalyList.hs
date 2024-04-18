@@ -22,7 +22,7 @@ import Data.Map qualified as Map
 import Data.Pool (withResource)
 import Data.Text (replace)
 import Data.Text qualified as T
-import Data.Time (UTCTime, ZonedTime, defaultTimeLocale, formatTime, getCurrentTime, zonedTimeToUTC)
+import Data.Time (UTCTime, getCurrentTime, zonedTimeToUTC)
 import Data.Tuple.Extra (fst3)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
@@ -30,17 +30,65 @@ import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute)
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Effectful.PostgreSQL.Transact.Effect
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
-import Lucid
+import Lucid (
+  Html,
+  Term (term),
+  ToHtml (toHtml),
+  a_,
+  button_,
+  checked_,
+  class_,
+  div_,
+  form_,
+  h1_,
+  h3_,
+  h4_,
+  h5_,
+  h6_,
+  href_,
+  id_,
+  img_,
+  input_,
+  li_,
+  name_,
+  p_,
+  role_,
+  script_,
+  section_,
+  small_,
+  span_,
+  src_,
+  strong_,
+  style_,
+  tabindex_,
+  type_,
+  ul_,
+  value_,
+ )
 import Lucid.Aria qualified as Aria
-import Lucid.Htmx
-import Lucid.Hyperscript
+import Lucid.Htmx (
+  hxBoost_,
+  hxGet_,
+  hxIndicator_,
+  hxPost_,
+  hxSwap_,
+  hxTrigger_,
+ )
+import Lucid.Hyperscript (__)
 import Models.Apis.Anomalies (AnomalyVM)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Query qualified as Fields
-import Models.Apis.Fields.Types
+import Models.Apis.Fields.Types (
+  Field (fieldType),
+  FieldCategoryEnum (FCRequestBody),
+  FieldTypes (FTString),
+  fieldTypeToText,
+  fieldsToNormalized,
+  groupFieldsByCategory,
+ )
 import Models.Apis.Fields.Types qualified as Fields
 import Models.Apis.Shapes (getShapeFields)
 import Models.Apis.Shapes qualified as Shapes
@@ -52,17 +100,26 @@ import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Components qualified as Components
 import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
-import Pages.NonMember
+import Pages.NonMember (userNotMemeberPage)
 import Pkg.Components (loader)
-import PyF
-import Relude hiding (ask, asks)
+import PyF (fmt)
+import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
-import System.Config
-import System.Types
+import System.Config (AuthContext (pool))
+import System.Types (ATAuthCtx)
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils
+import Utils (
+  deleteParam,
+  faIconWithAnchor_,
+  faIcon_,
+  faSprite_,
+  getMethodColor,
+  mIcon_,
+  textToBool,
+  userIsProjectMember,
+ )
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -75,10 +132,9 @@ newtype AnomalyBulkForm = AnomalyBulk
 
 acknowlegeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (Html ())
 acknowlegeAnomalyGetH pid aid = do
-  -- TODO: temporary, to work with current logic
-  appCtx <- ask @AuthContext
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
+  appCtx <- ask @AuthContext
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
@@ -94,8 +150,6 @@ acknowlegeAnomalyGetH pid aid = do
 
 unAcknowlegeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (Html ())
 unAcknowlegeAnomalyGetH pid aid = do
-  -- TODO: temporary, to work with current logic
-  appCtx <- ask @AuthContext
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
 
@@ -111,8 +165,6 @@ unAcknowlegeAnomalyGetH pid aid = do
 
 archiveAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (Html ())
 archiveAnomalyGetH pid aid = do
-  -- TODO: temporary, to work with current logic
-  appCtx <- ask @AuthContext
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
 
@@ -128,8 +180,6 @@ archiveAnomalyGetH pid aid = do
 
 unArchiveAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (Html ())
 unArchiveAnomalyGetH pid aid = do
-  -- TODO: temporary, to work with current logic
-  appCtx <- ask @AuthContext
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
 
@@ -147,10 +197,9 @@ unArchiveAnomalyGetH pid aid = do
 -- Then a notification should be triggered, as well as an action to reload the anomaly List.
 anomalyBulkActionsPostH :: Projects.ProjectId -> Text -> AnomalyBulkForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
 anomalyBulkActionsPostH pid action items = do
-  -- TODO: temporary, to work with current logic
-  appCtx <- ask @AuthContext
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
+  appCtx <- ask @AuthContext
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
@@ -182,8 +231,6 @@ data ParamInput = ParamInput
 
 anomalyListGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Endpoints.EndpointId -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
 anomalyListGetH pid layoutM ackdM archivedM sortM page loadM endpointM hxRequestM hxBoostedM = do
-  -- TODO: temporary, to work with current logic
-  appCtx <- ask @AuthContext
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
 
@@ -391,20 +438,6 @@ anomalyListSlider currTime _ _ (Just anomalies) = do
       $ mapM_ (renderAnomaly True currTime) anomalies
 
 
-anomalyTimeline :: ZonedTime -> Maybe ZonedTime -> Html ()
-anomalyTimeline createdAt acknowlegedAt = small_ [class_ "inline-block  px-8 py-6 space-x-2"] $ case acknowlegedAt of
-  Nothing -> do
-    span_ [class_ "bg-red-200 text-red-900 inline-block px-3 rounded-lg"] "ONGOING"
-    time_ [class_ "inline-block"] $ toHtml @String $ formatTime defaultTimeLocale "%F %R" createdAt
-    span_ [class_ "inline-block"] "-"
-    span_ "present"
-  Just ackTime -> do
-    span_ [class_ "bg-green-200 text-green-900 inline-block px-3 rounded-lg"] "ACKNOWLEGED"
-    time_ [class_ "inline-block"] $ toHtml @String $ formatTime defaultTimeLocale "%F %R" createdAt
-    span_ [class_ "inline-block"] "-"
-    time_ [class_ "inline-block"] $ toHtml @String $ formatTime defaultTimeLocale "%F %R" ackTime
-
-
 shapeParameterStats_ :: Int -> Int -> Int -> Html ()
 shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "inline-block"] do
   div_ [class_ "grid grid-cols-3 gap-2 text-center text-xs w-96"] do
@@ -474,8 +507,6 @@ anomalyItem hideByDefault currTime anomaly icon title subTitle content = do
 
 anomalyDetailsGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (Html ())
 anomalyDetailsGetH pid targetHash hxBoostedM = do
-  -- TODO: temporary, to work with current logic
-  appCtx <- ask @AuthContext
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
 
@@ -540,7 +571,6 @@ escapedQueryPartial x = toText $ escapeURIString isUnescapedInURI $ toString x
 anomalyDetailsPage :: AnomalyVM -> Maybe (Vector Shapes.ShapeWithFields) -> Maybe (Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field]) -> Maybe (Vector Text) -> UTCTime -> Bool -> Html ()
 anomalyDetailsPage anomaly shapesWithFieldsMap fields prvFormatsM currTime modal = do
   let anomalyQueryPartial = buildQueryForAnomaly anomaly.anomalyType anomaly.targetHash
-
   div_ [class_ "w-full "] do
     div_ [class_ "w-full"] do
       div_ [class_ "flex items-center justify-between gap-2 flex-wrap"] do

@@ -284,10 +284,12 @@ dailyReportForProject pid = do
       Projects.NSlack ->
         sendSlackMessage
           pid
-          ([fmtTrim| 🤖 *Daily Report for `{pr.title}`*
+          ( [fmtTrim| 🤖 *Daily Report for `{pr.title}`*
           
                         <https://app.apitoolkit.io/p/{pid.toText}/reports/{show report.id.reportId}|View today's report>
-                           |]::Text)
+                           |]
+              :: Text
+          )
       _ -> users & mapM_ \user -> sendEmail (CI.original user.email) [fmt| APITOOLKIT: Daily Report for {pr.title} |] (renderText $ RP.reportEmail pid report)
 
 

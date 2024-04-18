@@ -10,7 +10,7 @@ import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Effectful.PostgreSQL.Transact.Effect
 import Effectful.Reader.Static (ask)
-import Fmt (commaizeF, fixedF, fmt, (+|), (|+))
+import Fmt (commaizeF, fmt)
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript.QuasiQuoter
@@ -21,7 +21,6 @@ import Models.Projects.Projects qualified as Projets
 import Models.Users.Sessions qualified as Sessions
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Pages.Charts.Charts qualified as Charts
 import Pages.NonMember (userNotMemeberPage)
 import Pages.Onboarding qualified as Onboarding
 import PyF qualified
@@ -235,46 +234,4 @@ renderEndpoint activePage currTime enp = do
         , hxSwap_ "innerHTML"
         ]
         ""
-
     div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $ toHtml @String $ fmt $ commaizeF enp.totalRequests
-
-
-meter__ :: Double -> Html ()
-meter__ prcntg = div_ [class_ "shadow w-full bg-slate-200 h-2.5 "] $ do
-  div_ [class_ "shadow bg-blue-500 h-full", style_ $ fmt $ "width: " +| fixedF 2 prcntg |+ "%"] ""
-
--------------------------------------------------------------------------------------------
--- TODO: This section holds the navbar for pagination.
--- TODO: We should uncomment it when we have bandwidth to implement endpoint pagination
--------------------------------------------------------------------------------------------
--- table footer
--- README: Hiding the pagination logic because while pagination is important,
--- TODO: SHow this pagination when we're ready to actually implement the pagination logic.
--- we might not quickly have companies who have enough endpoints that they need pagination. So it's better to focus on important topics.
--- div_ [class_ "flex flex-row mt-5 justify-between hidden"] $ do
---   div_ [class_ "flex flex-row"] $ do
---     button_ [class_ "bg-transparent place-content-center py-2 px-3 mx-3 flex flex-row border-solid border border-gray-200 rounded-xl h-10"] $ do
---       span_ [class_ "text-sm text-slate-500 mr-1"] "10"
---       img_ [src_ "/assets/svgs/cheveron-down.svg", class_ "h-3 w-3 mt-1 mx-1"]
---     span_ [src_ "text-gray-200 mt-6 font-light text-base"] "Showing 1 - 10 of 100"
---   div_ [class_ "flex flex-row"] $ do
---     button_ [class_ "bg-gray-100 h-10 w-10 mx-1 px-2 flex flex-row rounded-xl py-3 place-content-center"] $ do
---       img_ [src_ "/assets/svgs/arrowleft1.svg", class_ "-mr-1"]
---       img_ [src_ "/assets/svgs/arrowleft1.svg", class_ "-ml-1"]
---     button_ [class_ "bg-gray-100 h-10 w-10 mx-1 px-2 rounded-xl py-1 place-content-center"] $ do
---       img_ [src_ "/assets/svgs/arrowleft1.svg", class_ "ml-1"]
---     button_ [class_ "bg-blue-700 h-10 w-10 mx-1 px-2 rounded-xl py-1"] $ do
---       span_ [class_ "text-white text-bold"] "1"
---     button_ [class_ "bg-transparent h-10 w-10 mx-1 px-2 rounded-xl py-1 hover:bg-gray-100 "] $ do
---       span_ [class_ "text-slate-700 text-bold"] "2"
---     button_ [class_ "bg-transparent h-10 w-10 mx-1 px-2 rounded-xl py-1 hover:bg-gray-100 "] $ do
---       span_ [class_ "text-slate-700 text-bold"] "3"
---     button_ [class_ "bg-transparent h-10 w-10 mx-1 px-2 rounded-xl py-1 hover:bg-gray-100 "] $ do
---       span_ [class_ "text-slate-700 text-bold"] "..."
---     button_ [class_ "bg-transparent h-10 w-10 mx-1 px-2 rounded-xl py-1 hover:bg-gray-100 "] $ do
---       span_ [class_ "text-slate-700 text-bold"] "5"
---     button_ [class_ "bg-[#304FFD]/20 place-content-center h-10 mx-1 rounded-xl py-1 w-10"] $ do
---       img_ [src_ "/assets/svgs/arrowright1.svg", class_ "ml-3"]
---     button_ [class_ "bg-blue-700/20 place-content-center h-10 mx-1 flex flex-row rounded-xl py-3 w-10"] $ do
---       img_ [src_ "/assets/svgs/arrowright1.svg", class_ "-mr-1"]
---       img_ [src_ "/assets/svgs/arrowright1.svg", class_ "-ml-1"]

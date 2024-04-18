@@ -80,11 +80,6 @@ instance ToField DBField where
   toField (MkDBField a) = toField a
 
 
--- Useful Alternative abstractions
-(<?>) :: Alternative f => f a -> a -> f a
-(<?>) fa def = fa <|> pure def
-
-
 mIcon_ :: Text -> Text -> Html ()
 mIcon_ mIcon classes = svg_ [class_ $ "inline-block icon " <> classes] $ Svg.use_ [href_ $ "/assets/svgs/symbol-defs.svg#icon-" <> mIcon]
 
@@ -127,14 +122,6 @@ userIsProjectMember sess pid = do
     else do
       user <- ProjectMembers.selectProjectActiveMember pid sess.userId
       case user of Nothing -> pure False; Just _ -> pure True
-
-
-getMethodBgColor :: Text -> Text
-getMethodBgColor "POST" = "bg-green-500"
-getMethodBgColor "PUT" = "bg-orange-500"
-getMethodBgColor "DELETE" = "bg-red-500"
-getMethodBgColor "PATCH" = "bg-purple-500"
-getMethodBgColor _ = "bg-blue-500"
 
 
 getMethodColor :: Text -> Text
