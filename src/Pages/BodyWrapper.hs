@@ -80,7 +80,7 @@ menu pid =
   , ("Outbound Integrations", "/p/" <> pid.toText <> "/outgoing", "arrows-turn-right")
   , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies?ackd=false&archived=false", "bug")
   , ("API Log Explorer", "/p/" <> pid.toText <> "/log_explorer", "list-tree")
-  , ("API Keys", "/p/" <> pid.toText <> "/apis", "key")
+ -- , ("API Keys", "/p/" <> pid.toText <> "/apis", "key")
   , -- , ("Redacted Fields", "/p/" <> pid.toText <> "/redacted_fields", "#redacted")
     ("Documentation", "/p/" <> pid.toText <> "/documentation", "brackets-curly")
   , ("Reports", "/p/" <> pid.toText <> "/reports", "chart-simple")
@@ -362,6 +362,9 @@ projectsDropDown currProject projects = do
           a_ [href_ [text| /p/$pidTxt/manage_members |], class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100"] do
             faSprite_ "user-plus" "regular" "h-5 w-5"
             span_ "Manage members"
+          a_ [href_ [text| /p/$pidTxt/apis|], class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100"] do
+            faSprite_ "key" "regular" "h-5 w-5"
+            span_ "API KEY"  
           if currProject.paymentPlan == "UsageBased"
             then do
               a_ [class_ "p-3 flex gap-3 flex gap-3 items-center rounded hover:bg-gray-100 cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]] do
