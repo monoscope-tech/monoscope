@@ -33,7 +33,7 @@ jobs:
       - run: stack --no-terminal build --dependencies-only
 
       # - run: stack install --local-bin-path=. --ghc-options '-optl-static -fPIC'
-      - run: stack install --local-bin-path=. --flag pg-entity:prod
+      - run: stack install --local-bin-path=. --flag pg-entity:prod --ghc-options "-O3"
       # - run: stack test
 
       - name: Setup node env

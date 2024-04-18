@@ -12,7 +12,7 @@ spec-version: 0.36.0
 ghc-options:
   - "-fwrite-ide-info"
   - "-hiedir=.hie"
-  - "-O0" 
+  - "-O" 
   - -Weverything
   - -Werror # Treat warnings as errors
   - -Wno-missing-exported-signatures # missing-exported-signatures turns off the more strict -Wmissing-signatures. See https://ghc.haskell.org/trac/ghc/ticket/14794#ticket
