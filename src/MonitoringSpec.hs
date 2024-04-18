@@ -29,8 +29,8 @@ spec = aroundAll TmpPg.withSetup do
       currentTime <- getCurrentTime
       authCtx <- testAuthContext pool
       let queryMonitor =
-            convertToQueryMonitor (Projects.ProjectId UUID.nil) currentTime (Monitors.QueryMonitorId UUID.nil) $
-              AlertUpsertForm
+            convertToQueryMonitor (Projects.ProjectId UUID.nil) currentTime (Monitors.QueryMonitorId UUID.nil)
+              $ AlertUpsertForm
                 { alertId = Nothing
                 , warningThreshold = Just "3" -- Text due to servant parsing limitations
                 , alertThreshold = 4

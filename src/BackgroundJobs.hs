@@ -3,13 +3,13 @@
 module BackgroundJobs (jobsWorkerInit, jobsRunner, BgJobs (..)) where
 
 import Control.Lens ((.~))
-import Data.Aeson as Aeson
-  ( FromJSON,
-    KeyValue ((.=)),
-    ToJSON,
-    Value (Array, String),
-    object,
-  )
+import Data.Aeson as Aeson (
+  FromJSON,
+  KeyValue ((.=)),
+  ToJSON,
+  Value (Array, String),
+  object,
+ )
 import Data.Aeson.QQ (aesonQQ)
 import Data.CaseInsensitive qualified as CI
 import Data.List.Extra (intersect, union)
@@ -55,6 +55,7 @@ import System.Config qualified as Config
 import System.Types (ATBackgroundCtx, runBackground)
 import Utils (scheduleIntervals)
 
+
 data BgJobs
   = InviteUserToProject Users.UserId Projects.ProjectId Text Text
   | CreatedProjectSuccessfully Users.UserId Projects.ProjectId Text Text
@@ -71,6 +72,7 @@ data BgJobs
   deriving stock (Eq, Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
 
+
 getUpdatedFieldFormats :: Projects.ProjectId -> Vector Text -> DBT IO (Vector Text)
 getUpdatedFieldFormats pid fieldHashes = query Select q (pid, fieldHashes)
   where
@@ -78,10 +80,12 @@ getUpdatedFieldFormats pid fieldHashes = query Select q (pid, fieldHashes)
       [sql| select fm.hash from apis.formats fm JOIN apis.fields fd ON (fm.project_id=fd.project_id AND fd.hash=fm.field_hash) 
                 where fm.project_id=? AND fm.created_at>(fd.created_at+interval '2 minutes') AND fm.field_hash=ANY(?) |]
 
+
 updateShapeCounts :: Projects.ProjectId -> Text -> Vector Text -> Vector Text -> Vector Text -> DBT IO Int64
 updateShapeCounts pid shapeHash newFields deletedFields updatedFields = execute Update q (newFields, deletedFields, updatedFields, pid, shapeHash)
   where
     q = [sql| update apis.shapes SET new_unique_fields=?, deleted_fields=?, updated_field_formats=? where project_id=? and hash=?|]
+
 
 -- TODO:
 -- Analyze shapes for
@@ -162,6 +166,7 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
         -- let col_json = (decodeUtf8 $ Aeson.encode steps_data :: String)
         pass
 
+
 generateSwaggerForProject :: Projects.ProjectId -> Users.UserId -> ATBackgroundCtx ()
 generateSwaggerForProject pid uid = whenJustM (dbtToEff $ Projects.projectById pid) \project -> do
   endpoints <- dbtToEff $ Endpoints.endpointsByProjectId pid
@@ -176,14 +181,15 @@ generateSwaggerForProject pid uid = whenJustM (dbtToEff $ Projects.projectById p
   currentTime <- liftIO getZonedTime
   let swaggerToAdd =
         Swaggers.Swagger
-          { id = swaggerId,
-            projectId = pid,
-            createdBy = uid,
-            createdAt = currentTime,
-            updatedAt = currentTime,
-            swaggerJson = swagger
+          { id = swaggerId
+          , projectId = pid
+          , createdBy = uid
+          , createdAt = currentTime
+          , updatedAt = currentTime
+          , swaggerJson = swagger
           }
   dbtToEff $ Swaggers.addSwagger swaggerToAdd
+
 
 reportUsageToLemonsqueezy :: Text -> Int -> Text -> IO ()
 reportUsageToLemonsqueezy subItemId quantity apiKey = do
@@ -210,6 +216,7 @@ reportUsageToLemonsqueezy subItemId quantity apiKey = do
   _ <- postWith hds "https://api.lemonsqueezy.com/v1/usage-records" formData
   pass
 
+
 queryMonitorsTriggered :: Vector Monitors.QueryMonitorId -> ATBackgroundCtx ()
 queryMonitorsTriggered queryMonitorIds = do
   monitorsEvaled <- dbtToEff $ Monitors.queryMonitorsById queryMonitorIds
@@ -219,13 +226,14 @@ queryMonitorsTriggered queryMonitorIds = do
       then handleQueryMonitorThreshold monitorE True
       else do
         if ( Just True
-               == ( monitorE.warningThreshold <&> \warningThreshold ->
-                      (monitorE.triggerLessThan && monitorE.evalResult >= warningThreshold)
-                        || (not monitorE.triggerLessThan && monitorE.evalResult <= warningThreshold)
-                  )
+              == ( monitorE.warningThreshold <&> \warningThreshold ->
+                    (monitorE.triggerLessThan && monitorE.evalResult >= warningThreshold)
+                      || (not monitorE.triggerLessThan && monitorE.evalResult <= warningThreshold)
+                 )
            )
           then handleQueryMonitorThreshold monitorE False
           else pass
+
 
 handleQueryMonitorThreshold :: Monitors.QueryMonitorEvaled -> Bool -> ATBackgroundCtx ()
 handleQueryMonitorThreshold monitorE isAlert = do
@@ -236,6 +244,7 @@ handleQueryMonitorThreshold monitorE isAlert = do
     forM_ users \u -> emailQueryMonitorAlert monitorE u.email (Just u)
   forM_ monitorE.alertConfig.emails \email -> emailQueryMonitorAlert monitorE email Nothing
   unless (null monitorE.alertConfig.slackChannels) $ sendSlackMessage monitorE.projectId [fmtTrim| 🤖 *Log Alert triggered for `{monitorE.alertConfig.title}`*|]
+
 
 -- way to get emails for company. for email all
 -- TODO: based on monitor send emails or slack
@@ -248,6 +257,7 @@ jobsWorkerInit logger appCtx =
     jobLogger :: LogLevel -> LogEvent -> IO ()
     jobLogger logLevel logEvent = Log.runLogT "OddJobs" logger Log.LogAttention $ Log.logInfo "Background jobs ping. " (show logLevel, show logEvent) -- logger show (logLevel, logEvent)
     -- jobLogger logLevel logEvent = print show (logLevel, logEvent) -- logger show (logLevel, logEvent)
+
 
 dailyReportForProject :: Projects.ProjectId -> ATBackgroundCtx ()
 dailyReportForProject pid = do
@@ -262,12 +272,12 @@ dailyReportForProject pid = do
     reportId <- Reports.ReportId <$> liftIO UUIDV4.nextRandom
     let report =
           Reports.Report
-            { id = reportId,
-              reportJson = rep_json,
-              createdAt = currentTime,
-              updatedAt = currentTime,
-              projectId = pid,
-              reportType = "daily"
+            { id = reportId
+            , reportJson = rep_json
+            , createdAt = currentTime
+            , updatedAt = currentTime
+            , projectId = pid
+            , reportType = "daily"
             }
     _ <- dbtToEff $ Reports.addReport report
     when pr.dailyNotif $ forM_ pr.notificationsChannel \case
@@ -279,6 +289,7 @@ dailyReportForProject pid = do
                         <https://app.apitoolkit.io/p/{pid.toText}/reports/{show report.id.reportId}|View today's report>
                            |]
       _ -> users & mapM_ \user -> sendEmail (CI.original user.email) [fmt| APITOOLKIT: Daily Report for {pr.title} |] (renderText $ RP.reportEmail pid report)
+
 
 weeklyReportForProject :: Projects.ProjectId -> ATBackgroundCtx ()
 weeklyReportForProject pid = do
@@ -294,12 +305,12 @@ weeklyReportForProject pid = do
     reportId <- Reports.ReportId <$> liftIO UUIDV4.nextRandom
     let report =
           Reports.Report
-            { id = reportId,
-              reportJson = rep_json,
-              createdAt = currentTime,
-              updatedAt = currentTime,
-              projectId = pid,
-              reportType = "weekly"
+            { id = reportId
+            , reportJson = rep_json
+            , createdAt = currentTime
+            , updatedAt = currentTime
+            , projectId = pid
+            , reportType = "weekly"
             }
     _ <- dbtToEff $ Reports.addReport report
     when pr.weeklyNotif $ forM_ pr.notificationsChannel \case
@@ -312,8 +323,9 @@ weeklyReportForProject pid = do
                      |]
       _ -> forM_ users \user -> sendEmail (CI.original user.email) [text| APITOOLKIT: Weekly Report for `{pr.title}` |] $ renderText $ RP.reportEmail pid report
 
+
 emailQueryMonitorAlert :: Monitors.QueryMonitorEvaled -> CI.CI Text -> Maybe Users.User -> ATBackgroundCtx ()
-emailQueryMonitorAlert monitorE@Monitors.QueryMonitorEvaled {alertConfig} email userM = whenJust userM \user ->
+emailQueryMonitorAlert monitorE@Monitors.QueryMonitorEvaled{alertConfig} email userM = whenJust userM \user ->
   sendEmail
     (CI.original email)
     [fmt| 🤖 APITOOLKIT: log monitor triggered `{alertConfig.title}` |]
@@ -326,6 +338,7 @@ emailQueryMonitorAlert monitorE@Monitors.QueryMonitorEvaled {alertConfig} email 
       Regards,
       Apitoolkit team
                 |]
+
 
 newAnomalyJob :: Projects.ProjectId -> ZonedTime -> Text -> Text -> Text -> ATBackgroundCtx ()
 newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do

@@ -13,9 +13,9 @@ import Effectful (
   runEff,
   type (:>),
  )
+import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static (ask)
-import Effectful.Log (Log)
 import Log qualified
 import Models.Apis.Slack (SlackData (..), getProjectSlackData)
 import Models.Projects.Projects qualified as Projects

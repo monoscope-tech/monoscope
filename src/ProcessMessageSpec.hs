@@ -88,7 +88,7 @@ pid = Projects.ProjectId UUID.nil
 testAuthContext :: Pool Connection -> IO (Config.AuthContext)
 testAuthContext pool = do
   projectCache <- newCache (Just $ TimeSpec (60 * 60) 0) :: IO (Cache Projects.ProjectId Projects.ProjectCache) -- 60*60secs or 1 hour TTL
-  let config = (def :: Config.EnvConfig){Config.enableBackgroundJobs=True}
+  let config = (def :: Config.EnvConfig){Config.enableBackgroundJobs = True}
   pure $ Config.AuthContext{env = def :: Config.EnvConfig, pool = pool, jobsPool = pool, projectCache = projectCache, config}
 
 
