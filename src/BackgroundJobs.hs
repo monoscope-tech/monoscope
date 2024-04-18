@@ -416,7 +416,7 @@ jobsRunner dbPool logger cfg job = liftIO $ do
               Just schedule -> do
                 currentTime <- liftIO getCurrentTime
                 let intervals = scheduleIntervals currentTime schedule
-                let contents = Aeson.Array [show col_id.collectionId]
+                let contents = show col_id.collectionId
                 let tagValue = Aeson.String "RunCollectionTests"
                 let dbParams = (\x -> (x, "queued" :: Text, Aeson.object ["tag" .= tagValue, "contents" .= contents])) <$> intervals
                 _ <- withPool dbPool $ Testing.scheduleInsertScheduleInBackgroundJobs dbParams
