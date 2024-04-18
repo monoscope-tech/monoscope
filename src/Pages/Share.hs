@@ -62,12 +62,6 @@ data Swagger = Swagger
 
 shareLinkPostH :: Projects.ProjectId -> ReqForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
 shareLinkPostH pid reqForm = do
-  -- TODO: temporary, to work with current logic
-  appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-
   currentTime <- liftIO getZonedTime
   let rid = reqForm.reqId
   let expIn = reqForm.expiresIn

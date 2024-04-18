@@ -10,7 +10,6 @@ module System.Types (
   runBackground,
 ) where
 
-import Data.Pool as Pool (Pool)
 import Effectful (Eff, IOE, runEff)
 import Effectful.Error.Static (Error)
 import Effectful.Log (Log)

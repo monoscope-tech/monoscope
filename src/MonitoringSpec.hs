@@ -47,7 +47,7 @@ spec = aroundAll TmpPg.withSetup do
                 , from = ""
                 , to = ""
                 }
-      withPool pool $ Monitors.queryMonitorUpsert queryMonitor
+      _ <- withPool pool $ Monitors.queryMonitorUpsert queryMonitor
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
       let reqMsg1 = Unsafe.fromJust $ convert $ msg1 nowTxt
       let reqMsg2 = Unsafe.fromJust $ convert $ msg2 nowTxt
@@ -59,7 +59,7 @@ spec = aroundAll TmpPg.withSetup do
             , ("m5", reqMsg2)
             ]
       _ <- runTestBackground authCtx $ processMessages' authCtx.config msgs authCtx.projectCache
-      withPool pool $ execute Select [sql|CALL monitors.check_triggered_query_monitors(0, '{}')|] ()
+      _ <- withPool pool $ execute Select [sql|CALL monitors.check_triggered_query_monitors(0, '{}')|] ()
       _ <- runAllBackgroundJobs authCtx
       -- TODO:
       -- Introduce a .env.test

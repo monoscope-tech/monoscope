@@ -126,7 +126,7 @@ spec = aroundAll TmpPg.withSetup do
       count `shouldBe` length reqs
 
     it "We should expect 2 endpoints, albeit unacknowleged." \pool -> do
-      withPool pool $ execute Select [sql|CALL apis.refresh_request_dump_views_every_5mins(0, '{}')|] ()
+      _ <- withPool pool $ execute Select [sql|CALL apis.refresh_request_dump_views_every_5mins(0, '{}')|] ()
       endpoints <- withPool pool $ Endpoints.endpointRequestStatsByProject pid False False Nothing Nothing
       length endpoints `shouldBe` 2 -- Two new endpoints from the last 2 requests
       forM_ endpoints \enp -> do

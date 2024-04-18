@@ -10,14 +10,20 @@ import Data.Time.Clock (UTCTime (..), diffUTCTime, nominalDiffTimeToSeconds, sec
 import Data.Time.Format.ISO8601 (iso8601Show)
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
-import Pkg.Parser.Expr
-import Pkg.Parser.Stats
-import Pkg.Parser.Types
-import PyF
-import Relude hiding (GT, LT, many, some)
+import Pkg.Parser.Expr (pExpr, pSubject)
+import Pkg.Parser.Stats (pStatsSection, pTimeChartSection)
+import Safe qualified
+import Pkg.Parser.Types (
+  ByClause (..),
+  Parser,
+  Rollup (..),
+  Section (..),
+ )
+import PyF (fmt)
+import Relude 
 import Relude.Unsafe qualified as Unsafe
-import Text.Megaparsec hiding (State)
-import Text.Megaparsec.Char
+import Text.Megaparsec (choice, errorBundlePretty, parse, sepBy)
+import Text.Megaparsec.Char (char, space)
 
 
 -- Example queries
@@ -108,7 +114,7 @@ sqlFromQueryComponents sqlCfg qc =
       _ -> ""
 
     (fromT, toT) = bimap (fromMaybe sqlCfg.currentTime) (fromMaybe sqlCfg.currentTime) sqlCfg.dateRange
-    timeDiffSecs = traceShowId $ abs $ nominalDiffTimeToSeconds $ diffUTCTime fromT toT
+    timeDiffSecs = abs $ nominalDiffTimeToSeconds $ diffUTCTime fromT toT
 
     finalSqlQuery =
       [fmt|SELECT json_build_array({selectClause}) FROM apis.request_dumps 
@@ -292,7 +298,7 @@ listToColNames = map \x -> T.strip $ last $ "" :| T.splitOn "as" x
 -- >>> colsNoAsClause ["id", "JSONB_ARRAY_LENGTH(errors) as errors_count"]
 -- ["id","JSONB_ARRAY_LENGTH(errors)"]
 colsNoAsClause :: [Text] -> [Text]
-colsNoAsClause = map (T.strip . Unsafe.head . T.splitOn "as")
+colsNoAsClause = mapMaybe (\x->Safe.headMay $ T.strip <$> T.splitOn "as" x)
 
 
 instance HasField "toColNames" QueryComponents [Text] where

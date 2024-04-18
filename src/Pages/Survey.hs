@@ -59,7 +59,6 @@ surveyPutH :: Projects.ProjectId -> SurveyForm -> ATAuthCtx (Headers '[HXTrigger
 surveyPutH pid survey = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
 
@@ -90,7 +89,6 @@ surveyGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
 surveyGetH pid = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
 

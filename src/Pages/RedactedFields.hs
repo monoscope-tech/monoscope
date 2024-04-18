@@ -87,7 +87,6 @@ redactedFieldsPostH :: Projects.ProjectId -> RedactFieldForm -> ATAuthCtx (Heade
 redactedFieldsPostH pid RedactFieldForm{path, description, endpointHash} = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
 
@@ -115,7 +114,6 @@ redactedFieldsGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
 redactedFieldsGetH pid = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
 

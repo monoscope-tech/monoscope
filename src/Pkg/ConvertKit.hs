@@ -1,11 +1,10 @@
 module Pkg.ConvertKit (addUser, addUserOrganization) where
 
-import Control.Lens
-import Data.Aeson.Lens (key, _String)
+import Control.Lens ((&), (.~))
 import Data.Aeson.QQ (aesonQQ)
-import Data.Text
-import Network.Wreq
-import Relude
+import Data.Text (Text)
+import Network.Wreq (defaults, header, postWith)
+import Relude (IO, pass)
 
 
 -- Function to add user to ConvertKit
@@ -24,14 +23,12 @@ addUser apiKey email firstName lastName orgId orgName plan = do
             }
           }
         |]
-  let subscriberId = r ^? responseBody . key "subscription" . key "subscriber" . key "id" . _String
+  -- let subscriberId = r ^? responseBody . key "subscription" . key "subscriber" . key "id" . _String
   pass
 
 
 addUserOrganization :: Text -> Text -> Text -> Text -> Text -> IO ()
 addUserOrganization apiKey email orgID orgName orgPlan = do
-  traceShowM "ADD USER TO ORG"
-  -- created_project tag
   r <-
     postWith
       (defaults & header "Content-Type" .~ ["application/json"])
@@ -46,5 +43,5 @@ addUserOrganization apiKey email orgID orgName orgPlan = do
           } 
         }
       |]
-  traceShowM $ r ^. responseBody
+  -- traceShowM $ r ^. responseBody
   pass

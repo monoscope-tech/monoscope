@@ -382,7 +382,6 @@ generateGetH :: Projects.ProjectId -> ATAuthCtx AE.Value
 generateGetH pid = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
 

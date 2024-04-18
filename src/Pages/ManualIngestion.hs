@@ -6,23 +6,49 @@ import Data.Text.Encoding.Base64 qualified as B64
 import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Entity.DBT (withPool)
-import Effectful.PostgreSQL.Transact.Effect
+import Effectful.PostgreSQL.Transact.Effect ( dbtToEff )
 import Effectful.Reader.Static (ask, asks)
 import Lucid
-import Lucid.Htmx
+    ( Html,
+      ToHtml(toHtml),
+      button_,
+      class_,
+      div_,
+      form_,
+      id_,
+      input_,
+      label_,
+      name_,
+      script_,
+      section_,
+      src_,
+      type_,
+      value_,
+      crossorigin_,
+      datalist_,
+      h2_,
+      href_,
+      integrity_,
+      lang_,
+      link_,
+      list_,
+      option_,
+      pattern_,
+      rel_ )
+import Lucid.Htmx ( hxPost_, hxSwap_, hxTarget_, hxVals_ )
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import NeatInterpolation
+import NeatInterpolation ( text )
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Pages.NonMember
+import Pages.NonMember ( userNotMemeberPage )
 import ProcessMessage qualified
 import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import RequestMessages qualified
-import System.Config
-import System.Types
-import Utils
+import System.Config ( AuthContext(config) )
+import System.Types ( ATAuthCtx )
+import Utils ( eitherStrToText, userIsProjectMember )
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -121,10 +147,8 @@ manualIngestGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
 manualIngestGetH pid = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let env = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
-  let currUserId = sess.userId
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember

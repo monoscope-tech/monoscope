@@ -111,8 +111,8 @@ insertShapeQueryAndParam shape = (q, params)
       , MkDBField shape.fieldHashes
       , MkDBField shape.hash
       , MkDBField shape.statusCode
-      , MkDBField ""
-      , MkDBField ""
+      , MkDBField @String ""
+      , MkDBField @String ""
       ]
 
 

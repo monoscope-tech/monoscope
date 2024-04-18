@@ -60,7 +60,6 @@ parseCheckbox Nothing = False
 fieldPutH :: Projects.ProjectId -> Fields.FieldId -> EditFieldForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
 fieldPutH pid fid editData = do
   appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
   isMember <- dbtToEff $ userIsProjectMember sess pid

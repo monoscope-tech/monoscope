@@ -401,7 +401,7 @@ documentationGetH pid swagger_id = do
             let idx = show swg.id.swaggerId
             pure (sw, idx)
           ([], Nothing) -> do
-            let (projectTitle, projectDescription) = case project of
+            let (_projectTitle, projectDescription) = case project of
                   (Just pr) -> (pr.title, pr.description)
                   Nothing -> ("__APITOOLKIT", "Edit project description")
             let info =

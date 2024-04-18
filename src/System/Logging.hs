@@ -68,7 +68,7 @@ runLog
    . IOE :> es
   => Text
   -> Logger
-  -> Eff (Log : es) a
+  -> Eff (Log ': es) a
   -> Eff es a
 runLog envTxt logger = Log.runLog ("[AT]-" <> envTxt) logger Log.defaultLogLevel
 

@@ -197,20 +197,20 @@ collectionCard pid col = do
         div_ [class_ "flex items-center justify-between"] $ do
           div_ [class_ "flex flex-col gap-1"] $ do
             span_ [class_ "text-sm font-medium"] "Created at"
-            span_ [class_ "text-xs text-gray-500"] $ toHtml $ T.take 19 $ toText $ show col.createdAt
+            span_ [class_ "text-xs text-gray-500"] $ toHtml $ T.take 19 $ show @Text col.createdAt
           div_ [class_ "flex flex-col gap-1"] $ do
             span_ [class_ "text-sm font-medium"] "Last modified"
-            span_ [class_ "text-xs text-gray-500"] $ toHtml $ T.take 19 $ toText $ show col.updatedAt
+            span_ [class_ "text-xs text-gray-500"] $ toHtml $ T.take 19 $ show @Text col.updatedAt
         div_ [class_ "flex flex-col w-full gap-2"] $ do
           h3_ [class_ "font-semibold tracking-tight text-xl"] $ toHtml col.title
           p_ [class_ "text-sm text-gray-500 break-words max-w-4xl"] $ toHtml col.description
           div_ [class_ "flex justify-between items-center"] do
             div_ [class_ "flex gap-2 items-center text-xs rounded py-1"] $ do
               span_ [class_ "font-bold"] "Last run"
-              span_ [class_ "text-gray-500"] $ toHtml $ maybe "-" (T.take 19 . toText . show) col.lastRun
+              span_ [class_ "text-gray-500"] $ toHtml $ maybe "-" (T.take 19 . show @Text) col.lastRun
             div_ [class_ "flex gap-2 items-center text-xs rounded py-1"] $ do
               span_ [class_ "font-bold"] "Schedule"
-              span_ [class_ "text-gray-500"] $ toHtml $ maybe "-" (T.take 19 . toText . show) col.lastRun
+              span_ [class_ "text-gray-500"] $ toHtml $ maybe "-" (T.take 19 . show @Text) col.lastRun
     div_ [class_ "text-sm flex items-center justify-between"] $ do
       div_ [class_ "flex gap-5 items-center"] $ do
         div_ [class_ "flex gap-2  rounded bg-gray-100 px-2 py-1"] $ do

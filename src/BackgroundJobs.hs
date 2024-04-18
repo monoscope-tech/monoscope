@@ -255,7 +255,7 @@ jobsWorkerInit logger appCtx =
     $ mkConfig jobLogger "background_jobs" (appCtx.jobsPool) (MaxConcurrentJobs 1) (jobsRunner logger appCtx) id
   where
     jobLogger :: LogLevel -> LogEvent -> IO ()
-    jobLogger logLevel logEvent = Log.runLogT "OddJobs" logger Log.LogAttention $ Log.logInfo "Background jobs ping. " (show logLevel, show logEvent) -- logger show (logLevel, logEvent)
+    jobLogger logLevel logEvent = Log.runLogT "OddJobs" logger Log.LogAttention $ Log.logInfo "Background jobs ping." (show @Text logLevel, show @Text logEvent) -- logger show (logLevel, logEvent)
     -- jobLogger logLevel logEvent = print show (logLevel, logEvent) -- logger show (logLevel, logEvent)
 
 
@@ -284,10 +284,10 @@ dailyReportForProject pid = do
       Projects.NSlack ->
         sendSlackMessage
           pid
-          [fmtTrim| 🤖 *Daily Report for `{pr.title}`***
+          ([fmtTrim| 🤖 *Daily Report for `{pr.title}`*
           
                         <https://app.apitoolkit.io/p/{pid.toText}/reports/{show report.id.reportId}|View today's report>
-                           |]
+                           |]::Text)
       _ -> users & mapM_ \user -> sendEmail (CI.original user.email) [fmt| APITOOLKIT: Daily Report for {pr.title} |] (renderText $ RP.reportEmail pid report)
 
 

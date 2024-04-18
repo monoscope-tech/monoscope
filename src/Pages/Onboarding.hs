@@ -6,23 +6,54 @@ import Data.Default (def)
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
-import Effectful.PostgreSQL.Transact.Effect
+import Effectful.PostgreSQL.Transact.Effect ( dbtToEff )
 import Effectful.Reader.Static (ask, asks)
 import Lucid
+    ( Html,
+      Term(term),
+      ToHtml(toHtml),
+      div_,
+      class_,
+      h4_,
+      span_,
+      ul_,
+      li_,
+      button_,
+      p_,
+      id_,
+      a_,
+      href_,
+      target_,
+      h3_,
+      form_,
+      input_,
+      type_,
+      placeholder_,
+      name_,
+      autofocus_,
+      hidden_,
+      value_,
+      script_,
+      strong_,
+      pre_,
+      code_,
+      img_,
+      src_,
+      alt_ )
 import Lucid.Htmx (hxGet_, hxPost_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
-import Lucid.Hyperscript
+import Lucid.Hyperscript ( __ )
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projectjs
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import NeatInterpolation
+import NeatInterpolation ( text )
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Pages.NonMember
-import Relude hiding (ask, asks)
+import Pages.NonMember ( userNotMemeberPage )
+import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
-import System.Config
-import System.Types
+import System.Config ( AuthContext )
+import System.Types ( ATAuthCtx )
 import Utils (
   faIcon_,
   faSprite_,
@@ -35,7 +66,6 @@ onboardingGetH :: Projects.ProjectId -> Maybe Bool -> Maybe Bool -> Maybe Text -
 onboardingGetH pid polling redirected current_tab = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
 
