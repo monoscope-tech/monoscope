@@ -15,20 +15,18 @@ module Models.Apis.Monitors (
 
 import Data.Aeson (FromJSON, ToJSON)
 import Data.CaseInsensitive qualified as CI
-import Data.Default
+import Data.Default (Default)
 import Data.Time.Clock (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity (Entity, insert, selectById, selectManyByField)
+import Database.PostgreSQL.Entity (Entity, selectById, selectManyByField)
 import Database.PostgreSQL.Entity.DBT (
   QueryNature (..),
   execute,
   query,
-  queryOne,
  )
 import Database.PostgreSQL.Entity.Types (
   CamelToSnake,
-  Entity,
   FieldModifiers,
   GenericEntity,
   PrimaryKey,
@@ -45,7 +43,20 @@ import Database.PostgreSQL.Transact (DBT)
 import Deriving.Aeson qualified as DAE
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
-import Relude
+import Relude (
+  Bool,
+  Eq,
+  Generic,
+  IO,
+  Int,
+  Int64,
+  Maybe,
+  NFData,
+  Ord,
+  Show,
+  Text,
+  (.),
+ )
 import Servant (FromHttpApiData)
 
 
@@ -175,7 +186,7 @@ queryMonitorsById ids = query Select q (Only ids)
     SELECT id, created_at, updated_at, project_id, check_interval_mins, alert_threshold, warning_threshold, 
         log_query, log_query_as_sql, last_evaluated, warning_last_triggered, alert_last_triggered, trigger_less_than, 
         threshold_sustained_for_mins, alert_config, deactivated_at, deleted_at, eval(log_query_as_sql)
-      FROM monitors.query_monitors where id=ANY(?) 
+      FROM monitors.query_monitors where id=ANY(?::UUID[]) 
     |]
 
 

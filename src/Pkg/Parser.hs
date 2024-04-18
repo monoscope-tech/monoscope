@@ -123,6 +123,7 @@ sqlFromQueryComponents sqlCfg qc =
             {groupByClause} limit 1|]
 
     defRollup
+      | timeDiffSecs == 0 = "1h"
       | timeDiffSecs <= (60 * 30) = "1s"
       | timeDiffSecs <= (60 * 60) = "20s"
       | timeDiffSecs <= (60 * 60 * 6) = "1m"
@@ -131,9 +132,9 @@ sqlFromQueryComponents sqlCfg qc =
 
     timeRollup = fromMaybe defRollup (sqlCfg.presetRollup <|> qc.rollup)
 
-    timebucket = [fmt|extract(epoch from time_bucket('{timeRollup}', created_at))::integer as timeB, |]
+    timebucket = [fmt|extract(epoch from time_bucket('{timeRollup}', created_at))::integer as timeB, |] :: Text
     -- FIXME: render this based on the aggregations
-    chartSelect = [fmt| count(*)::integer as count|]
+    chartSelect = [fmt| count(*)::integer as count|] :: Text
     timeGroupByClause = " GROUP BY " <> T.intercalate "," ("timeB" : qc.groupByClause)
     timeChartQuery =
       [fmt|
@@ -144,7 +145,7 @@ sqlFromQueryComponents sqlCfg qc =
       |]
 
     -- FIXME: render this based on the aggregations, but without the aliases
-    alertSelect = [fmt| count(*)::integer|]
+    alertSelect = [fmt| count(*)::integer|] :: Text
     alertGroupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause
     -- Returns the max of all the values returned by the query. Change 5mins to
     alertQuery =

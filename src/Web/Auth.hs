@@ -23,7 +23,8 @@ import Data.UUID.V4 qualified as UUIDV4
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (Connection)
 import Effectful
-import Effectful.Dispatch.Static
+    ( MonadIO(liftIO), Effect, type (:>), IOE, Eff, runEff )
+import Effectful.Dispatch.Static ( unsafeEff_ )
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
@@ -32,13 +33,41 @@ import Effectful.Reader.Static (ask, asks)
 import Log (Logger)
 import Lucid (Html)
 import Lucid.Html5
+    ( a_, body_, content_, head_, href_, html_, httpEquiv_, meta_ )
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import Network.HTTP.Types (hCookie)
-import Network.Wai
+import Network.Wai ( Request(requestHeaders) )
 import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
 import Pkg.ConvertKit qualified as ConvertKit
-import Relude hiding (ask, asks)
+import Relude
+    ( ($),
+      join,
+      Monad((>>)),
+      Functor(fmap),
+      Applicative(pure),
+      Traversable(mapM),
+      Semigroup((<>)),
+      Bool(..),
+      String,
+      Maybe(..),
+      IO,
+      Either(Right, Left),
+      Type,
+      ByteString,
+      either,
+      (<$>),
+      (.),
+      show,
+      Text,
+      (&),
+      fromMaybe,
+      maybe,
+      putStrLn,
+      hoistEither,
+      runExceptT,
+      ConvertUtf8(encodeUtf8, decodeUtf8),
+      ToString(toString) )
 import Servant (
   Header,
   Headers,
@@ -48,12 +77,16 @@ import Servant (
  )
 import Servant qualified
 import Servant.Server
+    ( err302, err403, Handler, ServerError(errHeaders, errBody) )
 import Servant.Server.Experimental.Auth (AuthHandler, mkAuthHandler)
 import SessionCookies (craftSessionCookie, emptySessionCookie)
 import System.Config
+    ( AuthContext(env, pool, config),
+      EnvConfig(environment, auth0Secret, convertkitApiKey,
+                auth0Callback, auth0Domain, auth0ClientId, auth0LogoutRedirect) )
 import System.Logging qualified as Logging
-import System.Types
-import Web.Cookie
+import System.Types ( ATBaseCtx )
+import Web.Cookie ( SetCookie, parseCookies, Cookies )
 
 
 type APItoolkitAuthContext = AuthHandler Request (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)

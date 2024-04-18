@@ -49,6 +49,7 @@ library
       Models.Tests.Testing
       Models.Users.Sessions
       Models.Users.Users
+      MonitoringSpec
       Network.Wai.Middleware.Heartbeat
       Pages.Anomalies.AnomalyList
       Pages.Api
@@ -367,6 +368,4 @@ test-suite tests
     , hspec-discover
     , relude >=1.2.0.0
     , tmp-postgres
-  mixins:
-      relude (Relude as Prelude)
   default-language: GHC2021

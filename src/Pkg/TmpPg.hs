@@ -2,7 +2,12 @@ module Pkg.TmpPg (withSetup) where
 
 import Control.Exception (throwIO)
 import Data.Pool (Pool, defaultPoolConfig, newPool)
-import Database.PostgreSQL.Simple
+import Database.PostgreSQL.Simple (
+  Connection,
+  close,
+  connectPostgreSQL,
+  execute,
+ )
 import Database.PostgreSQL.Simple.Migration (MigrationCommand (MigrationDirectory, MigrationInitialization))
 import Database.PostgreSQL.Simple.Migration qualified as Migration
 import Database.PostgreSQL.Simple.SqlQQ (sql)

@@ -80,17 +80,10 @@ onboardingPage pid apikey hasRequest ans redi ctb = do
       when redi $ div_ [class_ "w-full text-center py-2 bg-yellow-500"] "You have to integrate APIToolkit in your app before you can start using the platform"
       div_ [class_ "flex flex-col h-full w-full gap-16"] $ do
         div_ [class_ "text- center"] do
-          div_ [class_ "flex flex-col w-full mt-10 py-4 items-center gap-4"] $ do
-            h3_ [class_ "text-4xl font-bold"] "Ready, Set, Integrate!"
-            div_ [class_ "flex flex-col text-center gap-1 mb-4"] do
-              div_ [class_ " text-lg  max-w-prose"] do
-                p_ "To get the most from APIToolkit, integrate it into your project (Even just on your local or development machine). You can integrate an outgoing HTTP request client, or an entire server with incoming requests. "
-              p_ [class_ " text-lg"] "Finish up, then dash to your dashboard! 🚀"
-            if hasRequest
+          div_ [class_ "flex flex-col w-full mt-10 py-4 items-center gap-4"]
+            $ if hasRequest
               then completedBanner pid
-              else do
-                div_ [class_ "w-[1200px]"] do
-                  integrateApiToolkit apikey ctb
+              else div_ [class_ "w-full max-w-xl"] $ integrateApiToolkit apikey ctb
         div_ [class_ "w-full flex justify-center"] $ do
           div_ [class_ "flex flex-col w-[800px] rounded-2xl border border-2"] $ do
             div_ [class_ "w-full px-8 py-4 flex justify-between border-b border-b-2"] $ do
@@ -131,18 +124,17 @@ onboardingPage pid apikey hasRequest ans redi ctb = do
                     faSprite_ "chevron-down" "regular-chevron-down" "h-6 w-6"
                 div_ [class_ "w-full bg-slate-100 mt-8", id_ "SDKs"] do
                   if hasRequest
-                    then do
+                    then
                       p_ [class_ "text-green-500 text-center py-16 text-center"]
                         $ span_ "Apitoolkit has been integrated into your app"
-                    else do
-                      div_ [class_ "font-medium text-lg text-center border-b border-slate-200 py-16 space-y-2"] $ do
-                        a_ [class_ "block link underline text-slate-900 underline-offset-4", href_ "https://apitoolkit.io/docs/quickstarts/", target_ "BLANK"] "View Integration Quickstarts &  documentation at our Knowledge base."
-                        span_ [class_ "block text-slate-900  space-x-2"] do
-                          span_ "Need more help?"
-                          a_ [class_ "link underline underline-offset-4", href_ "https://calendar.app.google/EvPzCoVsLh5gqkAo8", target_ "BLANK"] "Schedule a call with an Engineer."
-                        div_ [class_ " inline-block space-x-3 text-red-800 pt-5"] do
-                          faIcon_ "fa-spinner" "fa-sharp fa-light fa-spinner " "fa-spin h-6 w-6 inline-block "
-                          span_ "Waiting to recieve data from your server."
+                    else div_ [class_ "font-medium text-lg text-center border-b border-slate-200 py-16 space-y-2"] $ do
+                      a_ [class_ "block link underline text-slate-900 underline-offset-4", href_ "https://apitoolkit.io/docs/quickstarts/", target_ "BLANK"] "View Integration Quickstarts &  documentation at our Knowledge base."
+                      span_ [class_ "block text-slate-900  space-x-2"] do
+                        span_ "Need more help?"
+                        a_ [class_ "link underline underline-offset-4", href_ "https://calendar.app.google/EvPzCoVsLh5gqkAo8", target_ "BLANK"] "Schedule a call with an Engineer."
+                      div_ [class_ " inline-block space-x-3 text-red-800 pt-5"] do
+                        faIcon_ "fa-spinner" "fa-sharp fa-light fa-spinner " "fa-spin h-6 w-6 inline-block "
+                        span_ "Waiting to recieve data from your server."
 
         div_ [class_ "w-full flex justify-center pb-16 mt-16"] $ do
           div_ [class_ "flex flex-col w-[800px] rounded-2xl border border-2 grid grid-cols-2 border-b "] $ do

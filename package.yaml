@@ -35,7 +35,6 @@ ghc-options:
   - -A128m
   - -n2m
   - -RTS
-  # - -fllvm
 
 default-extensions:
   - BlockArguments
@@ -217,8 +216,4 @@ tests:
       - hspec
       - hspec-discover
       - doctest-parallel
-      - name: relude
-        version: ">= 1.2.0.0"
-        mixin:
-          - (Relude as Prelude)
-      # - relude >= 1.2.0.0
+      - relude >= 1.2.0.0

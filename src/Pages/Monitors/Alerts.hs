@@ -1,7 +1,8 @@
-module Pages.Monitors.Alerts (alertSingleGetH, alertSingleToggleActiveH, alertListGetH, alertUpsertPostH, editAlert_, AlertUpsertForm (..)) where
+module Pages.Monitors.Alerts (alertSingleGetH, convertToQueryMonitor, alertSingleToggleActiveH, alertListGetH, alertUpsertPostH, editAlert_, AlertUpsertForm (..)) where
 
 import Data.CaseInsensitive qualified as CI
 import Data.Default
+import Data.Either.Extra (fromRight')
 import Data.Time.Clock (UTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
@@ -48,7 +49,7 @@ convertToQueryMonitor :: Projects.ProjectId -> UTCTime -> Monitors.QueryMonitorI
 convertToQueryMonitor projectId now queryMonitorId alertForm =
   -- FIXME: handle errors correctly, not crashing
   let sqlQueryCfg = (defSqlQueryCfg projectId fixedUTCTime){presetRollup = Just "5m"}
-      Right (_, qc) = parseQueryToComponents sqlQueryCfg alertForm.query
+      (_, qc) = fromRight' $ parseQueryToComponents sqlQueryCfg alertForm.query
       warningThresholdInt = readMaybe . toString =<< alertForm.warningThreshold
       alertConfig =
         Monitors.MonitorAlertConfig
