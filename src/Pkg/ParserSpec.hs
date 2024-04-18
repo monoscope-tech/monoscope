@@ -1,14 +1,17 @@
 module Pkg.ParserSpec (spec) where
 
+import Data.Either.Extra (fromRight')
 import Data.Text qualified as T
-import Data.Time.Calendar (fromGregorian)
-import Data.Time.Clock (UTCTime (..), secondsToDiffTime)
-import Debug.Pretty.Simple (pTraceShowM)
-import NeatInterpolation
-import Pkg.Parser
+import NeatInterpolation (text)
+import Pkg.Parser (
+  QueryComponents (finalTimechartQuery),
+  defPid,
+  defSqlQueryCfg,
+  fixedUTCTime,
+  parseQueryToComponents,
+ )
 import Relude
-import Test.Hspec
-import Text.Megaparsec (parse)
+import Test.Hspec (Spec, describe, it, shouldBe)
 
 
 -- Normalize text by removing newlines, carriage returns, tabs, and extra spaces
@@ -20,7 +23,7 @@ spec :: Spec
 spec = do
   describe "parseQueryToSQL" do
     it "basic query eq query" do
-      let Right (query, _) = parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime) "method==\"GET\""
+      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime) "method==\"GET\""
       let expected =
             [text|
       SELECT json_build_array(id::text,
@@ -33,24 +36,24 @@ spec = do
       ), 255 
       )) FROM apis.request_dumps 
       WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid  
-      and created_at > NOW() - interval '14 days' AND method='GET' 
+      and ( created_at > NOW() - interval '14 days' AND (method='GET') ) 
       ORDER BY created_at desc limit 200|]
       normT query `shouldBe` normT expected
     it "timechart query query" do
-      let Right (_, c) = parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime) "method==\"GET\""
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime) "method==\"GET\""
       let expected =
             [text|
 SELECT extract(epoch from time_bucket('1h', created_at))::integer as timeB, count(*)::integer as count, 'Throughput' 
 FROM apis.request_dumps WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid 
-and created_at > NOW() - interval '14 days' AND method='GET' GROUP BY timeB
+and ( created_at > NOW() - interval '14 days' AND (method='GET') ) GROUP BY timeB
       |]
       normT (fromMaybe "" c.finalTimechartQuery) `shouldBe` normT expected
     it "timechart query query 1d" do
-      let Right (_, c) = parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime) "method==\"GET\" | timechart count(*) [1d]"
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime) "method==\"GET\" | timechart count(*) [1d]"
       let expected =
             [text|
 SELECT extract(epoch from time_bucket('1d', created_at))::integer as timeB, count(*)::integer as count, 'Throughput' 
 FROM apis.request_dumps WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid 
-and created_at > NOW() - interval '14 days' AND method='GET' GROUP BY timeB
+and ( created_at > NOW() - interval '14 days' AND (method='GET') ) GROUP BY timeB
       |]
       normT (fromMaybe "" c.finalTimechartQuery) `shouldBe` normT expected

@@ -821,7 +821,6 @@ CREATE TABLE IF NOT EXISTS projects.redacted_fields
     updated_at     TIMESTAMP WITH       TIME           ZONE       NOT               NULL              DEFAULT current_timestamp,
     deleted_at     TIMESTAMP WITH       TIME           ZONE,
     deactivated_at TIMESTAMP WITH       TIME           ZONE,
-    deleted_at     TIMESTAMP WITH       TIME           ZONE,
     -- path is a key path for field path to the field that should be redacted. eg .data.message (Note the trailing dot)
     path           TEXT      NOT        NULL           DEFAULT    '',
     -- configured_via represents where the source of the redacted_fields listing. Eg via the dashboard
@@ -937,7 +936,9 @@ CREATE TABLE IF NOT EXISTS monitors.query_monitors
   alert_last_triggered         TIMESTAMP WITH TIME ZONE,
   trigger_less_than            BOOL,
   threshold_sustained_for_mins INT NOT NULL DEFAULT 0,
-  alert_config                   JSONB NOT NULL DEFAULT '{}'
+  alert_config                 JSONB NOT NULL DEFAULT '{}',
+  deactivated_at               TIMESTAMP WITH TIME ZONE,
+  deleted_at                   TIMESTAMP WITH TIME ZONE 
 );
 SELECT manage_updated_at('monitors.query_monitors');
 
@@ -951,12 +952,10 @@ begin
   return result;
 end;
 $body$
-language plpgsql
-
+language plpgsql;
 
 -- Checks for query monitors being triggered and creates a background job for any found
-CREATE OR REPLACE FUNCTION monitors.check_triggered_query_monitors()
-RETURNS void AS
+CREATE OR REPLACE PROCEDURE monitors.check_triggered_query_monitors(job_id int, config jsonb) LANGUAGE PLPGSQL AS 
 $$
 DECLARE
     -- Array to hold IDs from the query
@@ -986,11 +985,8 @@ BEGIN
         VALUES (NOW(), 'queued', jsonb_build_object('tag', 'QueryMonitorsTriggered', 'contents', id_array));
     END IF;
 END;
-$$
-LANGUAGE plpgsql;
+$$;
 -- Run every minute 
 SELECT add_job('monitors.check_triggered_query_monitors','1min');
 
 COMMIT;
-
-

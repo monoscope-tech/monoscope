@@ -1,4 +1,4 @@
-module Pages.LogExplorer.LogItem where
+module Pages.LogExplorer.LogItem (expandAPIlogItemH, expandAPIlogItem', apiLogItemH) where
 
 import Data.Aeson ((.=))
 import Data.Aeson qualified as AE

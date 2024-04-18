@@ -2,25 +2,50 @@
 
 module System.Config (EnvConfig (..), AuthContext (..), DashboardM, ctxToHandler, getAppContext, configToEnv, DeploymentEnv (..)) where
 
-import Colog (LogAction, logStringStdout)
 import Colourista.IO (blueMessage)
 import Configuration.Dotenv qualified as Dotenv
 import Control.Exception (try)
-import Data.Cache
+import Data.Cache (Cache, newCache)
 import Data.Default (Default (..))
 import Data.Default.Instances ()
-import Data.Pool as Pool
+import Data.Pool as Pool (Pool, defaultPoolConfig, newPool)
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as LT
 import Database.PostgreSQL.Simple (Connection)
 import Database.PostgreSQL.Simple qualified as PG
 import Database.PostgreSQL.Simple.Migration qualified as Migrations
-import Effectful
+import Effectful (Eff, IOE, MonadIO (liftIO), type (:>))
 import Effectful.Fail (Fail)
 import Models.Projects.Projects qualified as Projects
-import Relude
+import Relude (
+  Applicative (pure),
+  Bool,
+  ConvertUtf8 (encodeUtf8),
+  Either (..),
+  FilePath,
+  Generic,
+  IO,
+  Int,
+  Maybe (Just),
+  Num ((*)),
+  Read,
+  ReaderT (runReaderT),
+  Semigroup ((<>)),
+  Show,
+  SomeException,
+  String,
+  Text,
+  ToString (toString),
+  ToText (toText),
+  error,
+  pass,
+  show,
+  when,
+  ($),
+  (.),
+ )
 import Servant.Server (Handler)
-import System.Clock
+import System.Clock (TimeSpec (TimeSpec))
 import System.Envy (FromEnv (..), ReadShowVar (..), Var (..), decodeEnv, fromVar, toVar)
 import System.Logging qualified as Logging
 
@@ -86,8 +111,6 @@ data AuthContext = AuthContext
   { env :: EnvConfig
   , pool :: Pool.Pool Connection
   , jobsPool :: Pool.Pool Connection
-  , -- TODO: remove
-    logger :: LogAction IO String
   , projectCache :: Cache Projects.ProjectId Projects.ProjectCache
   , config :: EnvConfig
   }
@@ -113,7 +136,7 @@ instance Default DeploymentEnv where
   def = Staging
 
 
-configToEnv :: (Fail :> es, IOE :> es) => EnvConfig -> Eff es AuthContext
+configToEnv :: IOE :> es => EnvConfig -> Eff es AuthContext
 configToEnv config = do
   let createPgConnIO = PG.connectPostgreSQL $ encodeUtf8 config.databaseUrl
   when config.migrateAndInitializeOnStart $ liftIO do
@@ -131,7 +154,6 @@ configToEnv config = do
       { pool = pool
       , jobsPool = jobsPool
       , env = config
-      , logger = logStringStdout
       , projectCache
       , config
       }

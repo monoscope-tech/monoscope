@@ -1,6 +1,5 @@
 module Web.ClientMetadata (ClientMetadata, clientMetadataH) where
 
-import Colog ((<&))
 import Data.Aeson (Value)
 import Data.Aeson.QQ (aesonQQ)
 import Data.Aeson.Types (ToJSON)
@@ -9,15 +8,19 @@ import Data.Text qualified as T
 import Data.UUID qualified as UUID
 import Deriving.Aeson qualified as DAE
 import Effectful.Error.Static (throwError)
-import Effectful.PostgreSQL.Transact.Effect
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
+import Log qualified
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Relude hiding (ask, asks, max, min)
 import Relude.Unsafe ((!!))
 import Servant (err401)
-import System.Config
-import System.Types
+import System.Config (
+  AuthContext (config),
+  EnvConfig (apiKeyEncryptionSecretKey, requestPubsubTopics),
+ )
+import System.Types (ATBaseCtx)
 
 
 data ClientMetadata = ClientMetadata
@@ -40,7 +43,7 @@ clientMetadataH (Just authTextB64) = do
 
   let authTextE = B64.decodeBase64 (encodeUtf8 $ T.replace "Bearer " "" authTextB64)
   case authTextE of
-    Left err -> liftIO (appCtx.logger <& toString err) >> throwError err401
+    Left err -> Log.logAttention "Auth Error in clientMetadata" (toString err) >> throwError err401
     Right authText -> do
       let decryptedKey = ProjectApiKeys.decryptAPIKey (encodeUtf8 appCtx.config.apiKeyEncryptionSecretKey) authText
       case ProjectApiKeys.ProjectApiKeyId <$> UUID.fromASCIIBytes decryptedKey of

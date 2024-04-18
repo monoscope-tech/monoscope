@@ -94,7 +94,6 @@ updateWebHook pid LinkProjectsForm{projects, webhookUrl} = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
   sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
 
   _ <- dbtToEff $ insertAccessToken [pid.toText] webhookUrl
   let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Webhook url updated successfully"]} |]
@@ -106,7 +105,6 @@ postH LinkProjectsForm{projects, webhookUrl} = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
   sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
 
   _ <- dbtToEff $ insertAccessToken projects webhookUrl
   let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Slack account linked to project(s),successfully"]} |]
@@ -161,6 +159,7 @@ linkProjectsGetH slack_code = do
 
 linkProjectGetH :: Projects.ProjectId -> Maybe Text -> ATBaseCtx (Html ())
 linkProjectGetH pid slack_code = do
+  appCtx <- ask @AuthContext
   envCfg <- asks env
   pool <- asks pool
   let client_id = envCfg.slackClientId
@@ -178,7 +177,7 @@ linkProjectGetH pid slack_code = do
     (Just token', Just project') -> do
       n <- liftIO $ withPool pool do
         insertAccessToken [pid.toText] token'.incomingWebhook.url
-      liftIO $ sendSlackMessage pool pid ("APIToolkit Bot has been linked to your project: " <> project'.title)
+      sendSlackMessage pid ("APIToolkit Bot has been linked to your project: " <> project'.title)
       pure $ bodyWrapper bwconf installedSuccess
     (_, _) -> pure $ bodyWrapper bwconf noTokenFound
 

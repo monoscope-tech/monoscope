@@ -126,7 +126,7 @@ runServer appLogger env = do
           . loggingMiddleware
           . const
           $ server
-  let bgJobWorker = BackgroundJobs.jobsWorkerInit env.jobsPool appLogger env.config
+  let bgJobWorker = BackgroundJobs.jobsWorkerInit appLogger env
 
   -- let ojStartArgs =
   --       OJCli.UIStartArgs

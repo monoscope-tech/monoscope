@@ -175,8 +175,7 @@ convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
                                           else
                                             if V.length examples > 0
                                               then ["example" .= V.head examples]
-                                              else
-                                                if is_required then ["required" .= is_required] else []
+                                              else if is_required then ["required" .= is_required] else []
                                     )
                               ]
                           )
@@ -192,8 +191,7 @@ convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
                                 else
                                   if V.length examples > 0
                                     then ["example" .= V.head examples]
-                                    else
-                                      (["required" .= is_required | is_required])
+                                    else (["required" .= is_required | is_required])
                           )
                     validKey = if key == "" then "schema" else key
                  in object [AEKey.fromText validKey .= ob]
