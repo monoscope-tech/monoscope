@@ -1,4 +1,3 @@
-
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -25,9 +24,9 @@ import Data.Aeson.QQ (aesonQQ)
 import Data.ByteString.Base64 qualified as B64
 import Data.CaseInsensitive (original)
 import Data.CaseInsensitive qualified as CI
-import Data.Default (Default (..))
+import Data.Default
 import Data.List.Extra (cons)
-import Data.List.Unique (uniq)
+import Data.List.Unique
 import Data.Pool (withResource)
 import Data.Text (toLower)
 import Data.Text qualified as T
@@ -37,59 +36,12 @@ import Data.Valor (Valor, check1, failIf, validateM)
 import Data.Valor qualified as Valor
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful.PostgreSQL.Transact.Effect
 import Effectful.Reader.Static (ask)
-import Lucid (
-  Html,
-  Term (term),
-  ToHtml (toHtml),
-  a_,
-  alt_,
-  button_,
-  checked_,
-  class_,
-  disabled_,
-  div_,
-  form_,
-  h2_,
-  h3_,
-  h4_,
-  height_,
-  href_,
-  id_,
-  img_,
-  input_,
-  label_,
-  name_,
-  option_,
-  p_,
-  placeholder_,
-  rows_,
-  script_,
-  section_,
-  select_,
-  small_,
-  span_,
-  src_,
-  style_,
-  target_,
-  template_,
-  textarea_,
-  title_,
-  type_,
-  value_,
-  width_,
- )
-import Lucid.Htmx (
-  hxConfirm_,
-  hxGet_,
-  hxIndicator_,
-  hxPost_,
-  hxSwap_,
-  hxTarget_,
- )
-import Lucid.Hyperscript (__)
-import Models.Apis.Slack (SlackData, getProjectSlackData)
+import Lucid
+import Lucid.Htmx
+import Lucid.Hyperscript
+import Models.Apis.Slack
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMembers qualified as Projects
@@ -97,34 +49,22 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
-import Network.Wreq (defaults, getWith, header, responseBody)
+import Network.Wreq
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pkg.ConvertKit qualified as ConvertKit
-import Relude hiding (ask)
+import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import Servant (
   Headers,
   addHeader,
   noHeader,
  )
-import Servant.Htmx (HXRedirect, HXTrigger)
-import System.Config (
-  AuthContext (config, pool),
-  EnvConfig (
-    apiKeyEncryptionSecretKey,
-    convertkitApiKey,
-    lemonSqueezyApiKey,
-    lemonSqueezyUrl,
-    slackRedirectUri
-  ),
- )
-import System.Types (ATAuthCtx)
-import Utils (faIcon_, userIsProjectMember)
+import Servant.Htmx
+import System.Config
+import System.Types
+import Utils
 import Web.FormUrlEncoded (FromForm)
-import Network.HTTP.Conduit (runReq, defaultHttpConfig, req, POST, fromString, ReqBodyLBS, lbsResponse)
-import qualified Data.ByteString.Char8 as C
-import qualified Data.Aeson as Aeson
 
 
 data CreateProjectForm = CreateProjectForm
@@ -165,6 +105,10 @@ createProjectFormV =
   CreateProjectFormError
     <$> check1 title (failIf ["name can't be empty"] T.null)
     <*> check1 description Valor.pass
+
+
+checkEmail :: Text -> Bool
+checkEmail = isJust . T.find (== '@')
 
 
 ----------------------------------------------------------------------------------------------------------
@@ -405,14 +349,7 @@ processProjectPostForm cpRaw = do
           let bdy = createProjectBody sess envCfg cp.isUpdate cp (def @CreateProjectFormError) Nothing Nothing
           pure $ addHeader hxTriggerData $ addHeader ("/p/" <> pid.toText <> "/about_project") bdy
 
-sendToDiscord :: T.Text -> IO ()
-sendToDiscord userDetails = do
-  let discordWebhookUrl = "YOUR_DISCORD_WEBHOOK_URL"
-  let payload = Aeson.object [ ("content", Aeson..= userDetails) ]
-  let body = Aeson.encode payload
-  let reqBody = ReqBodyLBS body
-  response <- runReq defaultHttpConfig $ req POST (fromString discordWebhookUrl) reqBody lbsResponse mempty
-  putStrLn $ "Discord API response: " ++ show response
+
 ----------------------------------------------------------------------------------------------------------
 -- createProjectBody is the core html view
 createProjectBody :: Sessions.PersistentSession -> EnvConfig -> Bool -> CreateProjectForm -> CreateProjectFormError -> Maybe (V.Vector Projects.NotificationChannel) -> Maybe SlackData -> Html ()
