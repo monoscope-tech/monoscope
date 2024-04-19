@@ -68,8 +68,6 @@ data OutgoingParamInput = OutgoingParamInput
 
 outgoingGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
 outgoingGetH pid sortM searchM activeTabM = do
-outgoingGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
-outgoingGetH pid sortM searchM activeTabM = do
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
   sess' <- Sessions.getSession
@@ -77,7 +75,6 @@ outgoingGetH pid sortM searchM activeTabM = do
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
-    then pure $ userNotMemeberPage sess 
     then pure $ userNotMemeberPage sess 
     else do
       (project, hostsEvents) <- dbtToEff do
