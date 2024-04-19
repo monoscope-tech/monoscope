@@ -1,3 +1,4 @@
+
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -121,6 +122,9 @@ import System.Config (
 import System.Types (ATAuthCtx)
 import Utils (faIcon_, userIsProjectMember)
 import Web.FormUrlEncoded (FromForm)
+import Network.HTTP.Conduit (runReq, defaultHttpConfig, req, POST, fromString, ReqBodyLBS, lbsResponse)
+import qualified Data.ByteString.Char8 as C
+import qualified Data.Aeson as Aeson
 
 
 data CreateProjectForm = CreateProjectForm
@@ -401,7 +405,14 @@ processProjectPostForm cpRaw = do
           let bdy = createProjectBody sess envCfg cp.isUpdate cp (def @CreateProjectFormError) Nothing Nothing
           pure $ addHeader hxTriggerData $ addHeader ("/p/" <> pid.toText <> "/about_project") bdy
 
-
+sendToDiscord :: T.Text -> IO ()
+sendToDiscord userDetails = do
+  let discordWebhookUrl = "YOUR_DISCORD_WEBHOOK_URL"
+  let payload = Aeson.object [ ("content", Aeson..= userDetails) ]
+  let body = Aeson.encode payload
+  let reqBody = ReqBodyLBS body
+  response <- runReq defaultHttpConfig $ req POST (fromString discordWebhookUrl) reqBody lbsResponse mempty
+  putStrLn $ "Discord API response: " ++ show response
 ----------------------------------------------------------------------------------------------------------
 -- createProjectBody is the core html view
 createProjectBody :: Sessions.PersistentSession -> EnvConfig -> Bool -> CreateProjectForm -> CreateProjectFormError -> Maybe (V.Vector Projects.NotificationChannel) -> Maybe SlackData -> Html ()
