@@ -7,7 +7,7 @@ import Data.Aeson as Aeson (
   FromJSON,
   KeyValue ((.=)),
   ToJSON,
-  Value (Array, String),
+  Value (String),
   object,
  )
 import Data.Aeson.QQ (aesonQQ)
