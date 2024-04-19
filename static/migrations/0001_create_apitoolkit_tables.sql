@@ -936,7 +936,9 @@ CREATE TABLE IF NOT EXISTS monitors.query_monitors
   alert_last_triggered         TIMESTAMP WITH TIME ZONE,
   trigger_less_than            BOOL,
   threshold_sustained_for_mins INT NOT NULL DEFAULT 0,
-  alert_config                   JSONB NOT NULL DEFAULT '{}'
+  alert_config                   JSONB NOT NULL DEFAULT '{}',
+  deactivated_at               TIMESTAMP WITH TIME ZONE,
+  deleted_at                   TIMESTAMP WITH TIME ZONE 
 );
 SELECT manage_updated_at('monitors.query_monitors');
 
