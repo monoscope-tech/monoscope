@@ -3,13 +3,7 @@
 module BackgroundJobs (jobsWorkerInit, jobsRunner, BgJobs (..)) where
 
 import Control.Lens ((.~))
-import Data.Aeson as Aeson (
-  FromJSON,
-  KeyValue ((.=)),
-  ToJSON,
-  Value (String),
-  object,
- )
+import Data.Aeson as Aeson
 import Data.Aeson.QQ (aesonQQ)
 import Data.CaseInsensitive qualified as CI
 import Data.List.Extra (intersect, union)
