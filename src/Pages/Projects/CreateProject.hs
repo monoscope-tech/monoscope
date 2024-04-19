@@ -163,7 +163,6 @@ createProjectFormV =
     <*> check1 description Valor.pass
 
 
-
 ----------------------------------------------------------------------------------------------------------
 -- createProjectGetH is the handler for the create projects page
 createProjectGetH :: ATAuthCtx (Html ())

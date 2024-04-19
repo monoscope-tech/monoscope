@@ -27,7 +27,6 @@ newtype RedactedFieldId = RedactedFieldId {unRedactedFieldId :: UUID.UUID}
   deriving newtype (ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default, NFData)
 
 
-
 data ConfiguredVia
   = Dashboard
   | SDK RequestDumps.SDKTypes

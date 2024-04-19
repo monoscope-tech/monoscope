@@ -68,8 +68,8 @@ import Relude (
 import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
-import System.Types (ATAuthCtx)
 import System.Config (AuthContext)
+import System.Types (ATAuthCtx)
 import Utils (userIsProjectMember)
 import Web.FormUrlEncoded (FromForm)
 

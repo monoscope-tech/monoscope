@@ -220,7 +220,6 @@ naturalTransform env logger app =
 --   v <- unsafeEff_ $ Servant.runHandler handler
 --   either throwError pure v
 
-
 effToHandler
   :: forall (a :: Type)
    . ()

@@ -18,7 +18,7 @@ import ProcessMessage (processMessages')
 import ProcessMessageSpec (convert, msg1, msg2, runTestBackground, testAuthContext)
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import System.Config ( AuthContext(projectCache, pool, config) )
+import System.Config (AuthContext (config, pool, projectCache))
 import Test.Hspec (Spec, aroundAll, describe, it)
 
 

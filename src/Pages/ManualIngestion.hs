@@ -35,15 +35,15 @@ import Lucid (
 import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_, hxVals_)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
+import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.NonMember (userNotMemeberPage)
 import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
-import System.Types (ATAuthCtx)
 import System.Config (AuthContext)
-import Utils ( userIsProjectMember)
+import System.Types (ATAuthCtx)
+import Utils (userIsProjectMember)
 import Web.FormUrlEncoded (FromForm)
-import NeatInterpolation (text)
 
 
 data RequestMessageForm = RequestMessageForm
@@ -65,7 +65,6 @@ data RequestMessageForm = RequestMessageForm
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
-
 
 
 -- TODO:

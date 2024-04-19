@@ -154,7 +154,7 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
       whenJustM (dbtToEff $ Testing.getCollectionById col_id) \collection -> whenJust (collection.schedule) \schedule -> do
         currentTime <- liftIO getCurrentTime
         let intervals = scheduleIntervals currentTime schedule
-        let dbParams = (\x -> (x, "queued" :: Text, Aeson.object ["tag" .= Aeson.String "RunCollectionTests", "contents" .= (Aeson.Array [show col_id.collectionId])])) <$> intervals
+        let dbParams = (\x -> (x, "queued" :: Text, Aeson.object ["tag" .= Aeson.String "RunCollectionTests", "contents" .= show col_id.collectionId])) <$> intervals
         void $ dbtToEff $ Testing.scheduleInsertScheduleInBackgroundJobs dbParams
     RunCollectionTests col_id -> do
       (collectionM, steps) <- dbtToEff $ do
