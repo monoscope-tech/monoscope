@@ -2,9 +2,14 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE RankNTypes #-}
 
+{-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE RankNTypes #-}
+
 module Pages.Outgoing (outgoingGetH) where
 
 import Data.Default (def)
+import Data.Text (Text)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Vector qualified as V
@@ -36,6 +41,18 @@ import Fmt (commaizeF, fixedF, fmt, (+|), (|+))
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Charts.Charts (QueryBy (QBHost))
+import System.Types
+import Utils
+import Effectful.Reader.Static (ask, asks)
+import Pages.BodyWrapper
+import Pages.NonMember (userNotMemeberPage)  -- Fix the function name here
+import Lucid.Htmx
+import Lucid.Hyperscript.QuasiQuoter
+import Models.Apis.Anomalies qualified as Anomalies
+import Fmt (commaizeF, fixedF, fmt, (+|), (|+))
+import Pages.Anomalies.AnomalyList qualified as AnomalyList
+import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pages.Charts.Charts (QueryBy (QBHost))
 import System.Config
 import System.Types
 import Pages.Charts.Charts qualified as Charts
@@ -51,6 +68,8 @@ data OutgoingParamInput = OutgoingParamInput
 
 outgoingGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
 outgoingGetH pid sortM searchM activeTabM = do
+outgoingGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
+outgoingGetH pid sortM searchM activeTabM = do
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
   sess' <- Sessions.getSession
@@ -59,12 +78,14 @@ outgoingGetH pid sortM searchM activeTabM = do
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then pure $ userNotMemeberPage sess 
+    then pure $ userNotMemeberPage sess 
     else do
       (project, hostsEvents) <- dbtToEff do
         project <- Projects.projectById pid
         hostsAndEvents <- Endpoints.dependenciesAndEventsCount pid
         pure (project, hostsAndEvents)
       let bwconf =
+            def
             def
               { sessM = Just sess
               , currProject = project
