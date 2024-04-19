@@ -1,39 +1,59 @@
 module Pages.Share (ReqForm, shareLinkPostH, shareLinkGetH) where
 
-import Data.Aeson as Aeson
+import Data.Aeson as Aeson (Value, encode)
 import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
 import Data.Text ()
 import Data.Time (UTCTime, ZonedTime, getZonedTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
-import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT
+import Database.PostgreSQL.Entity.DBT (
+  QueryNature (Insert, Select),
+  execute,
+  queryOne,
+ )
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
-import Database.PostgreSQL.Simple hiding (execute, query)
-import Database.PostgreSQL.Simple.SqlQQ
-import Database.PostgreSQL.Transact (DBT)
-import Effectful.PostgreSQL.Transact.Effect
-import Effectful.Reader.Static (ask, asks)
+import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
+import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Gogol.Prelude (addHeader)
-import Lucid
-import Lucid.Htmx
+import Lucid (
+  Html,
+  ToHtml (toHtml),
+  button_,
+  class_,
+  div_,
+  h1_,
+  h3_,
+  id_,
+  p_,
+  section_,
+  strong_,
+  type_,
+ )
 import Lucid.Hyperscript (__)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Sessions qualified as Sessions
-import NeatInterpolation
-import Network.URI (escapeURIString, isUnescapedInURI, isUnreserved)
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pkg.Components (navBar)
-import PyF
-import Relude hiding (ask, asks)
-import Relude.Unsafe qualified as Unsafe
+import Relude (
+  Applicative (pure),
+  Bool (False),
+  ConvertUtf8 (decodeUtf8),
+  Generic,
+  Maybe (..),
+  MonadIO (liftIO),
+  Semigroup ((<>)),
+  Show,
+  Text,
+  elem,
+  show,
+  ($),
+ )
 import Servant (Headers)
 import Servant.Htmx (HXTrigger)
-import System.Config
-import System.Types
+import System.Types (ATAuthCtx, ATBaseCtx)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -62,12 +82,6 @@ data Swagger = Swagger
 
 shareLinkPostH :: Projects.ProjectId -> ReqForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
 shareLinkPostH pid reqForm = do
-  -- TODO: temporary, to work with current logic
-  appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-
   currentTime <- liftIO getZonedTime
   let rid = reqForm.reqId
   let expIn = reqForm.expiresIn

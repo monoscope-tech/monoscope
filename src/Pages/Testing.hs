@@ -14,7 +14,6 @@ module Pages.Testing (
 )
 where
 
-import Control.Exception
 import Data.Aeson
 import Data.Aeson qualified as AE
 import Data.Aeson qualified as Aeson
@@ -26,11 +25,8 @@ import Data.Time.LocalTime (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (withPool)
 import Effectful.PostgreSQL.Transact.Effect
-import Effectful.Reader.Static (ask, asks)
-import Foreign.C.String
-import Foreign.C.Types
+import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Base
 import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_)
@@ -41,12 +37,11 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.NonMember
-import Relude hiding (ask, asks)
+import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
 import System.Config
-import System.IO.Error
 import System.Types
 import Utils
 import Web.FormUrlEncoded (FromForm)
@@ -101,7 +96,7 @@ testingPutH pid cid action steps = do
               _ <- dbtToEff do
                 currentTime <- liftIO getCurrentTime
                 let intervals = scheduleIntervals currentTime (fromMaybe "" s.schedule)
-                let contents = Aeson.Array [show cid.collectionId]
+                let contents = show cid.collectionId
                 let tagValue = Aeson.String "RunCollectionTests"
                 let dbParams = (\x -> (x, "queued" :: Text, Aeson.object ["tag" .= tagValue, "contents" .= contents])) <$> intervals
                 _ <- Testing.scheduleInsertScheduleInBackgroundJobs dbParams
@@ -197,20 +192,20 @@ collectionCard pid col = do
         div_ [class_ "flex items-center justify-between"] $ do
           div_ [class_ "flex flex-col gap-1"] $ do
             span_ [class_ "text-sm font-medium"] "Created at"
-            span_ [class_ "text-xs text-gray-500"] $ toHtml $ T.take 19 $ toText $ show col.createdAt
+            span_ [class_ "text-xs text-gray-500"] $ toHtml $ T.take 19 $ show @Text col.createdAt
           div_ [class_ "flex flex-col gap-1"] $ do
             span_ [class_ "text-sm font-medium"] "Last modified"
-            span_ [class_ "text-xs text-gray-500"] $ toHtml $ T.take 19 $ toText $ show col.updatedAt
+            span_ [class_ "text-xs text-gray-500"] $ toHtml $ T.take 19 $ show @Text col.updatedAt
         div_ [class_ "flex flex-col w-full gap-2"] $ do
           h3_ [class_ "font-semibold tracking-tight text-xl"] $ toHtml col.title
           p_ [class_ "text-sm text-gray-500 break-words max-w-4xl"] $ toHtml col.description
           div_ [class_ "flex justify-between items-center"] do
             div_ [class_ "flex gap-2 items-center text-xs rounded py-1"] $ do
               span_ [class_ "font-bold"] "Last run"
-              span_ [class_ "text-gray-500"] $ toHtml $ maybe "-" (T.take 19 . toText . show) col.lastRun
+              span_ [class_ "text-gray-500"] $ toHtml $ maybe "-" (T.take 19 . show @Text) col.lastRun
             div_ [class_ "flex gap-2 items-center text-xs rounded py-1"] $ do
               span_ [class_ "font-bold"] "Schedule"
-              span_ [class_ "text-gray-500"] $ toHtml $ maybe "-" (T.take 19 . toText . show) col.lastRun
+              span_ [class_ "text-gray-500"] $ toHtml $ maybe "-" (T.take 19 . show @Text) col.lastRun
     div_ [class_ "text-sm flex items-center justify-between"] $ do
       div_ [class_ "flex gap-5 items-center"] $ do
         div_ [class_ "flex gap-2  rounded bg-gray-100 px-2 py-1"] $ do

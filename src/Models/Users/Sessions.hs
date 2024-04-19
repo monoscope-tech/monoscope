@@ -41,10 +41,7 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField
 import Database.PostgreSQL.Transact hiding (DB, execute, queryOne)
 import Effectful
-import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static (Reader, asks)
-import Effectful.Time (Time)
-import Effectful.Time qualified as Time
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users (UserId)
 import Models.Users.Users qualified as Users
@@ -204,10 +201,6 @@ addCookie
 addCookie = addHeader
 
 
-deleteCookie :: a -> Headers '[Header "Set-Cookie" SetCookie] a
-deleteCookie = addHeader emptySessionCookie
-
-
 data Session = Session
   { sessionId :: PersistentSessionId
   , persistentSession :: Maybe PersistentSession
@@ -216,32 +209,3 @@ data Session = Session
   , isSidebarClosed :: Bool
   }
   deriving stock (Generic, Show)
-
-
-newPersistentSession' :: Time :> es => Users.UserId -> PersistentSessionId -> Eff es PersistentSession
-newPersistentSession' userId persistentSessionId = do
-  createdAt <- utcToZonedTime utc <$> Time.currentTime
-  pure $ (def :: PersistentSession){userId, id = persistentSessionId, createdAt = createdAt, updatedAt = createdAt}
-
-
-persistSession'
-  :: (DB :> es, Time :> es)
-  => PersistentSessionId
-  -> Users.UserId
-  -> Eff es PersistentSessionId
-persistSession' persistentSessionId userId = do
-  persistentSession <- newPersistentSession' userId persistentSessionId
-  insertSession' persistentSession
-  pure persistentSession.id
-
-
-insertSession' :: DB :> es => PersistentSession -> Eff es ()
-insertSession' = dbtToEff . insert @PersistentSession
-
-
-deleteSession' :: DB :> es => PersistentSessionId -> Eff es ()
-deleteSession' sessionId = dbtToEff $ delete @PersistentSession (Only sessionId)
-
-
-getPersistentSession' :: DB :> es => PersistentSessionId -> Eff es (Maybe PersistentSession)
-getPersistentSession' sessionId = dbtToEff $ selectById @PersistentSession (Only sessionId)

@@ -265,17 +265,6 @@ userByProjectId pid user_id = query Select q (user_id, pid)
                 from users.users u join projects.project_members pm on (pm.user_id= ?) where project_id=? and u.active IS True;|]
 
 
-editProjectGetH :: ProjectId -> DBT IO (V.Vector Project)
-editProjectGetH pid = query Select q (Only pid)
-  where
-    q =
-      [sql|
-        SELECT pp*, ppm* FROM projects.projects AS pp 
-            INNER JOIN projects.project_members AS ppm
-            ON pp.id = pid 
-        WHERE ppm.project_id = pp.id;|]
-
-
 updateProject :: CreateProject -> DBT IO Int64
 updateProject cp = do
   execute Update q (cp.title, cp.description, cp.paymentPlan, cp.subId, cp.firstSubItemId, cp.orderId, cp.timeZone, cp.id)

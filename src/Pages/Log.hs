@@ -483,9 +483,9 @@ errorClass expandedSection reqVec colIdxMap =
 
 
 logTableHeading_ :: Projects.ProjectId -> Bool -> Text -> Html ()
-logTableHeading_ pid True "id" = logTableHeadingWrapper_ pid "_" $ toHtml ""
-logTableHeading_ pid True "status_code" = logTableHeadingWrapper_ pid "status_code" $ toHtml "status"
-logTableHeading_ pid True "created_at" = logTableHeadingWrapper_ pid "created_at" $ toHtml "timestamp"
+logTableHeading_ pid True "id" = logTableHeadingWrapper_ pid "_" $ toHtml @Text ""
+logTableHeading_ pid True "status_code" = logTableHeadingWrapper_ pid "status_code" $ toHtml @Text "status"
+logTableHeading_ pid True "created_at" = logTableHeadingWrapper_ pid "created_at" $ toHtml @Text "timestamp"
 logTableHeading_ pid isLogEventB col = logTableHeadingWrapper_ pid col $ toHtml $ Unsafe.last $ T.splitOn "•" col
 
 
@@ -510,7 +510,7 @@ logTableHeadingWrapper_ pid title child = td_
 
 
 isLogEvent :: [Text] -> Bool
-isLogEvent cols = all (`elem` cols) ["id", "created_at"]
+isLogEvent cols = all @[] (`elem` cols) ["id", "created_at"]
 
 
 displayTimestamp :: Text -> Text
@@ -536,7 +536,7 @@ logItemCol_ pid reqVec colIdxMap "id" = do
       $ faSprite_ "link" "solid" "h-3 w-3 text-blue-500"
     faSprite_ "chevron-right" "solid" "h-3 w-3 col-span-1 ml-1 text-gray-500 chevron log-chevron "
 logItemCol_ _ reqVec colIdxMap "created_at" = span_ [class_ "font-mono whitespace-nowrap ", term "data-tippy-content" "timestamp"] $ toHtml $ displayTimestamp $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "created_at"
-logItemCol_ _ reqVec colIdxMap "status_code" = span_ [class_ $ "badge " <> getStatusColor (lookupVecIntByKey reqVec colIdxMap "status_code"), term "data-tippy-content" "status"] $ toHtml $ show $ lookupVecIntByKey reqVec colIdxMap "status_code"
+logItemCol_ _ reqVec colIdxMap "status_code" = span_ [class_ $ "badge " <> getStatusColor (lookupVecIntByKey reqVec colIdxMap "status_code"), term "data-tippy-content" "status"] $ toHtml $ show @Text $ lookupVecIntByKey reqVec colIdxMap "status_code"
 logItemCol_ _ reqVec colIdxMap "method" = span_ [class_ $ "min-w-[4rem] badge " <> maybe "badge-ghost" getMethodColor (lookupVecTextByKey reqVec colIdxMap "method"), term "data-tippy-content" "method"] $ toHtml $ fromMaybe "/" $ lookupVecTextByKey reqVec colIdxMap "method"
 logItemCol_ pid reqVec colIdxMap key@"rest" = div_ [class_ "space-x-2 whitespace-nowrap max-w-8xl overflow-x-hidden "] do
   if lookupVecTextByKey reqVec colIdxMap "request_type" == Just "Incoming"

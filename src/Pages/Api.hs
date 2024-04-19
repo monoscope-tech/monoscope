@@ -4,32 +4,74 @@ import Data.Aeson (encode)
 import Data.Aeson.QQ (aesonQQ)
 import Data.ByteString.Base64 qualified as B64
 import Data.Default (def)
-import Data.Text as T
-import Data.UUID as UUID
+import Data.Text as T (Text, take)
+import Data.UUID as UUID (toText)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector (Vector)
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (withPool)
-import Lucid
-import Lucid.Htmx
-import Lucid.Hyperscript
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful.Reader.Static (ask)
+import Lucid (
+  Html,
+  Term (term),
+  ToHtml (toHtml),
+  autofocus_,
+  button_,
+  class_,
+  div_,
+  form_,
+  h2_,
+  h3_,
+  id_,
+  input_,
+  name_,
+  p_,
+  placeholder_,
+  role_,
+  section_,
+  span_,
+  strong_,
+  table_,
+  tbody_,
+  td_,
+  th_,
+  thead_,
+  tr_,
+  type_,
+ )
+import Lucid.Htmx (hxConfirm_, hxDelete_, hxPost_, hxTarget_)
+import Lucid.Hyperscript (__)
+import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Pages.NonMember
-import Relude hiding (ask, asks)
+import Pages.NonMember (userNotMemeberPage)
+import Relude (
+  Applicative (pure),
+  Bool (..),
+  ConvertUtf8 (decodeUtf8, encodeUtf8),
+  Generic,
+  Maybe (..),
+  MonadIO (liftIO),
+  Ord ((>)),
+  Semigroup ((<>)),
+  Show,
+  mapM_,
+  not,
+  show,
+  ($),
+  (&),
+ )
+import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
-import System.Config
-
-import Effectful.PostgreSQL.Transact.Effect
-import Effectful.Reader.Static (ask, asks)
-import Models.Apis.RequestDumps qualified as RequestDumps
-import NeatInterpolation (text)
-import Relude.Unsafe qualified as Unsafe
-import System.Types
-import Utils
+import System.Config (
+  AuthContext (config),
+  EnvConfig (apiKeyEncryptionSecretKey),
+ )
+import System.Types (ATAuthCtx)
+import Utils (faIcon_, userIsProjectMember)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -43,12 +85,9 @@ data GenerateAPIKeyForm = GenerateAPIKeyForm
 
 apiPostH :: Projects.ProjectId -> GenerateAPIKeyForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
 apiPostH pid apiKeyForm = do
-  -- TODO: temporary, to work with current logic
-  appCtx <- ask @AuthContext
-  let env = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
-  let currUserId = sess.userId
+  authCtx <- ask @AuthContext
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
@@ -57,7 +96,7 @@ apiPostH pid apiKeyForm = do
       pure $ addHeader hxTriggerData ""
     else do
       projectKeyUUID <- liftIO UUIDV4.nextRandom
-      let encryptedKey = ProjectApiKeys.encryptAPIKey (encodeUtf8 env.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
+      let encryptedKey = ProjectApiKeys.encryptAPIKey (encodeUtf8 authCtx.config.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
       let encryptedKeyB64 = B64.encodeBase64 encryptedKey
       let keyPrefix = encryptedKeyB64
       pApiKey <- liftIO $ ProjectApiKeys.newProjectApiKeys pid projectKeyUUID (title apiKeyForm) keyPrefix
@@ -72,12 +111,8 @@ apiPostH pid apiKeyForm = do
 
 apiDeleteH :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
 apiDeleteH pid keyid = do
-  -- TODO: temporary, to work with current logic
-  appCtx <- ask @AuthContext
-  let env = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
-  let currUserId = sess.userId
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
@@ -102,10 +137,8 @@ apiGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
 apiGetH pid = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let env = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
-  let currUserId = sess.userId
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember

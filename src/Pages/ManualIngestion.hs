@@ -1,28 +1,48 @@
 module Pages.ManualIngestion (RequestMessageForm (..), manualIngestGetH, manualIngestPostH) where
 
-import Data.Aeson (Value, eitherDecodeStrict)
 import Data.Default (def)
-import Data.Text.Encoding.Base64 qualified as B64
 import Data.Time (ZonedTime)
-import Data.UUID qualified as UUID
-import Database.PostgreSQL.Entity.DBT (withPool)
-import Effectful.PostgreSQL.Transact.Effect
-import Effectful.Reader.Static (ask, asks)
-import Lucid
-import Lucid.Htmx
-import Models.Apis.RequestDumps qualified as RequestDumps
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful.Reader.Static (ask)
+import Lucid (
+  Html,
+  ToHtml (toHtml),
+  button_,
+  class_,
+  crossorigin_,
+  datalist_,
+  div_,
+  form_,
+  h2_,
+  href_,
+  id_,
+  input_,
+  integrity_,
+  label_,
+  lang_,
+  link_,
+  list_,
+  name_,
+  option_,
+  pattern_,
+  rel_,
+  script_,
+  section_,
+  src_,
+  type_,
+  value_,
+ )
+import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_, hxVals_)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import NeatInterpolation
+import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Pages.NonMember
-import ProcessMessage qualified
+import Pages.NonMember (userNotMemeberPage)
 import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
-import RequestMessages qualified
-import System.Config
-import System.Types
-import Utils
+import System.Config (AuthContext)
+import System.Types (ATAuthCtx)
+import Utils (userIsProjectMember)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -45,34 +65,6 @@ data RequestMessageForm = RequestMessageForm
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
-
-
-reqMsgFormToReqMsg :: UUID.UUID -> RequestMessageForm -> Either Text RequestMessages.RequestMessage
-reqMsgFormToReqMsg pid RequestMessageForm{urlPath, ..} = do
-  reqHeaders <- eitherStrToText $ eitherDecodeStrict (encodeUtf8 @Text @ByteString requestHeaders) :: Either Text Value
-  respHeaders <- eitherStrToText $ eitherDecodeStrict (encodeUtf8 @Text @ByteString responseHeaders) :: Either Text Value
-  queryParams' <- eitherStrToText $ eitherDecodeStrict (encodeUtf8 @Text @ByteString queryParams) :: Either Text Value
-  pathParams' <- eitherStrToText $ eitherDecodeStrict (encodeUtf8 @Text @ByteString pathParams) :: Either Text Value
-  Right
-    RequestMessages.RequestMessage
-      { projectId = pid
-      , requestHeaders = reqHeaders
-      , responseHeaders = respHeaders
-      , queryParams = queryParams'
-      , pathParams = pathParams'
-      , requestBody = B64.encodeBase64 requestBody
-      , responseBody = B64.encodeBase64 responseBody
-      , sdkType = RequestDumps.GoGin
-      , rawUrl = urlPath
-      , msgId = Nothing
-      , parentId = Nothing
-      , serviceVersion = Nothing
-      , tags = Nothing
-      , errors = Nothing
-      , urlPath = Just urlPath
-      , host = Just host
-      , ..
-      }
 
 
 -- TODO:
@@ -121,10 +113,8 @@ manualIngestGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
 manualIngestGetH pid = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let env = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
-  let currUserId = sess.userId
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
@@ -286,62 +276,3 @@ inputInt title name value = do
       , value_ $ show value
       , lang_ "en-150"
       ]
-
-
-httpStatusCodes :: [(Text, Text)]
-httpStatusCodes =
-  [ ("100", "Continue")
-  , ("101", "Switching Protocols")
-  , ("103", "Early Hints")
-  , ("200", "OK")
-  , ("201", "Created")
-  , ("202", "Accepted")
-  , ("203", "Non-Authoritative Information")
-  , ("204", "No Content")
-  , ("205", "Reset Content")
-  , ("206", "Partial Content")
-  , ("300", "Multiple Choices")
-  , ("301", "Moved Permanently")
-  , ("302", "Found")
-  , ("303", "See Other")
-  , ("304", "Not Modified")
-  , ("307", "Temporary Redirect")
-  , ("308", "Permanent Redirect")
-  , ("400", "Bad Request")
-  , ("401", "Unauthorized")
-  , ("402", "Payment Required")
-  , ("403", "Forbidden")
-  , ("404", "Not Found")
-  , ("405", "Method Not Allowed")
-  , ("406", "Not Acceptable")
-  , ("407", "Proxy Authentication Required")
-  , ("408", "Request Timeout")
-  , ("409", "Conflict")
-  , ("410", "Gone")
-  , ("411", "Length Required")
-  , ("412", "Precondition Failed")
-  , ("413", "Payload Too Large")
-  , ("414", "URI Too Long")
-  , ("415", "Unsupported Media Type")
-  , ("416", "Range Not Satisfiable")
-  , ("417", "Expectation Failed")
-  , ("418", "I'm a teapot")
-  , ("422", "Unprocessable Entity")
-  , ("425", "Too Early")
-  , ("426", "Upgrade Required")
-  , ("428", "Precondition Required")
-  , ("429", "Too Many Requests")
-  , ("431", "Request Header Fields Too Large")
-  , ("451", "Unavailable For Legal Reasons")
-  , ("500", "Internal Server Error")
-  , ("501", "Not Implemented")
-  , ("502", "Bad Gateway")
-  , ("503", "Service Unavailable")
-  , ("504", "Gateway Timeout")
-  , ("505", "HTTP Version Not Supported")
-  , ("506", "Variant Also Negotiates")
-  , ("507", "Insufficient Storage")
-  , ("508", "Loop Detected")
-  , ("510", "Not Extended")
-  , ("511", "Network Authentication Required")
-  ]

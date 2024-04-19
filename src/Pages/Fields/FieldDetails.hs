@@ -8,7 +8,6 @@ import Data.UUID qualified as UUID
 import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
-import Effectful.Reader.Static (ask, asks)
 import Lucid (Html)
 import Models.Apis.Fields.Types qualified as Fields
 import Models.Apis.Formats qualified as Formats
@@ -34,7 +33,6 @@ import Relude (
 import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
-import System.Config (AuthContext (config, env))
 import System.Types (ATAuthCtx)
 import Utils (userIsProjectMember)
 import Web.FormUrlEncoded (FromForm)
@@ -59,8 +57,6 @@ parseCheckbox Nothing = False
 
 fieldPutH :: Projects.ProjectId -> Fields.FieldId -> EditFieldForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
 fieldPutH pid fid editData = do
-  appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
   isMember <- dbtToEff $ userIsProjectMember sess pid
@@ -69,7 +65,6 @@ fieldPutH pid fid editData = do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Only project memebers can take the survey"]}|]
       pure $ addHeader hxTriggerData ""
     else do
-      env <- asks env
       fi <- dbtToEff $ execute Update [sql|update apis.fields set is_required = ?, is_enum = ?, description=? where id=?|] (parseCheckbox editData.isRequired, parseCheckbox editData.isEnum, editData.description, fid)
       now <- liftIO getZonedTime
       let formats =

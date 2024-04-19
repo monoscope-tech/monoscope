@@ -1,15 +1,9 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module BackgroundJobs (jobsWorkerInit, BgJobs (..)) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, BgJobs (..)) where
 
 import Control.Lens ((.~))
-import Data.Aeson as Aeson (
-  FromJSON,
-  KeyValue ((.=)),
-  ToJSON,
-  Value (Array, String),
-  object,
- )
+import Data.Aeson as Aeson
 import Data.Aeson.QQ (aesonQQ)
 import Data.CaseInsensitive qualified as CI
 import Data.List.Extra (intersect, union)
@@ -73,12 +67,6 @@ data BgJobs
   deriving anyclass (ToJSON, FromJSON)
 
 
-getShapes :: Projects.ProjectId -> Text -> DBT IO (Vector (Text, Vector Text))
-getShapes pid enpHash = query Select q (pid, enpHash)
-  where
-    q = [sql| select hash, field_hashes from apis.shapes where project_id=? and endpoint_hash=? |]
-
-
 getUpdatedFieldFormats :: Projects.ProjectId -> Vector Text -> DBT IO (Vector Text)
 getUpdatedFieldFormats pid fieldHashes = query Select q (pid, fieldHashes)
   where
@@ -91,12 +79,6 @@ updateShapeCounts :: Projects.ProjectId -> Text -> Vector Text -> Vector Text ->
 updateShapeCounts pid shapeHash newFields deletedFields updatedFields = execute Update q (newFields, deletedFields, updatedFields, pid, shapeHash)
   where
     q = [sql| update apis.shapes SET new_unique_fields=?, deleted_fields=?, updated_field_formats=? where project_id=? and hash=?|]
-
-
-getAllProjects :: DBT IO (Vector Projects.ProjectId)
-getAllProjects = query Select q (Only True)
-  where
-    q = [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL|]
 
 
 -- TODO:
@@ -146,7 +128,7 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
             |]
     DailyJob -> do
       currentDay <- utctDay <$> Time.currentTime
-      projects <- dbtToEff getAllProjects
+      projects <- dbtToEff $ query Select [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL|] (Only True)
       forM_ projects \p -> do
         liftIO $ withResource authCtx.jobsPool \conn -> do
           _ <- createJob conn "background_jobs" $ BackgroundJobs.ReportUsage p
@@ -159,15 +141,14 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
     WeeklyReports pid -> weeklyReportForProject pid
     GenSwagger pid uid -> generateSwaggerForProject pid uid
     ReportUsage pid -> whenJustM (dbtToEff $ Projects.projectById pid) \project -> do
-      let subItemId = project.firstSubItemId
-      when (project.paymentPlan == "UsageBased") $ whenJust subItemId \fSubId -> do
+      when (project.paymentPlan == "UsageBased") $ whenJust project.firstSubItemId \fSubId -> do
         totalRequestForThisMonth <- dbtToEff $ RequestDumps.getTotalRequestForCurrentMonth pid
         liftIO $ reportUsageToLemonsqueezy fSubId totalRequestForThisMonth authCtx.config.lemonSqueezyApiKey
     ScheduleForCollection col_id -> do
       whenJustM (dbtToEff $ Testing.getCollectionById col_id) \collection -> whenJust (collection.schedule) \schedule -> do
         currentTime <- liftIO getCurrentTime
         let intervals = scheduleIntervals currentTime schedule
-        let dbParams = (\x -> (x, "queued" :: Text, Aeson.object ["tag" .= Aeson.String "RunCollectionTests", "contents" .= (Aeson.Array [show col_id.collectionId])])) <$> intervals
+        let dbParams = (\x -> (x, "queued" :: Text, Aeson.object ["tag" .= Aeson.String "RunCollectionTests", "contents" .= show col_id.collectionId])) <$> intervals
         void $ dbtToEff $ Testing.scheduleInsertScheduleInBackgroundJobs dbParams
     RunCollectionTests col_id -> do
       (collectionM, steps) <- dbtToEff $ do
@@ -250,6 +231,7 @@ queryMonitorsTriggered queryMonitorIds = do
 
 handleQueryMonitorThreshold :: Monitors.QueryMonitorEvaled -> Bool -> ATBackgroundCtx ()
 handleQueryMonitorThreshold monitorE isAlert = do
+  Log.logAttention "Query Monitors Triggered " monitorE
   _ <- dbtToEff $ Monitors.updateQMonitorTriggeredState monitorE.id isAlert
   when monitorE.alertConfig.emailAll do
     users <- dbtToEff $ Projects.usersByProjectId monitorE.projectId
@@ -267,7 +249,7 @@ jobsWorkerInit logger appCtx =
     $ mkConfig jobLogger "background_jobs" (appCtx.jobsPool) (MaxConcurrentJobs 1) (jobsRunner logger appCtx) id
   where
     jobLogger :: LogLevel -> LogEvent -> IO ()
-    jobLogger logLevel logEvent = Log.runLogT "OddJobs" logger Log.LogAttention $ Log.logInfo "Background jobs ping. " (show logLevel, show logEvent) -- logger show (logLevel, logEvent)
+    jobLogger logLevel logEvent = Log.runLogT "OddJobs" logger Log.LogAttention $ Log.logInfo "Background jobs ping." (show @Text logLevel, show @Text logEvent) -- logger show (logLevel, logEvent)
     -- jobLogger logLevel logEvent = print show (logLevel, logEvent) -- logger show (logLevel, logEvent)
 
 
@@ -296,10 +278,12 @@ dailyReportForProject pid = do
       Projects.NSlack ->
         sendSlackMessage
           pid
-          [fmtTrim| 🤖 *Daily Report for `{pr.title}`***
+          ( [fmtTrim| 🤖 *Daily Report for `{pr.title}`*
           
                         <https://app.apitoolkit.io/p/{pid.toText}/reports/{show report.id.reportId}|View today's report>
                            |]
+              :: Text
+          )
       _ -> users & mapM_ \user -> sendEmail (CI.original user.email) [fmt| APITOOLKIT: Daily Report for {pr.title} |] (renderText $ RP.reportEmail pid report)
 
 
@@ -337,18 +321,19 @@ weeklyReportForProject pid = do
 
 
 emailQueryMonitorAlert :: Monitors.QueryMonitorEvaled -> CI.CI Text -> Maybe Users.User -> ATBackgroundCtx ()
-emailQueryMonitorAlert monitorE email userM =
+emailQueryMonitorAlert monitorE@Monitors.QueryMonitorEvaled{alertConfig} email userM = whenJust userM \user ->
   sendEmail
     (CI.original email)
-    [fmt| 🤖 APITOOLKIT: log monitor triggered `{monitorE.alertConfig.title}` |]
+    [fmt| 🤖 APITOOLKIT: log monitor triggered `{alertConfig.title}` |]
     [fmtTrim|
-  Hi ,<br/>
-
-  
-  <br/><br/>
-  Regards,
-  Apitoolkit team
-            |]
+      Hi {user.firstName},<br/>
+      
+      The monitor: `{alertConfig.title}` was triggered and got above it's defined threshold.
+      
+      <br/><br/>
+      Regards,
+      Apitoolkit team
+                |]
 
 
 newAnomalyJob :: Projects.ProjectId -> ZonedTime -> Text -> Text -> Text -> ATBackgroundCtx ()
@@ -366,7 +351,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
         Projects.NSlack ->
           sendSlackMessage
             pid
-            [fmtTrim| 🤖 *New Endpoint Detected for `{project.title}`****
+            [fmtTrim| 🤖 *New Endpoint Detected for `{project.title}`*
 
                            We have detected a new endpoint on *{project.title}*
 
@@ -378,7 +363,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
           forM_ users \u ->
             sendEmail
               (CI.original u.email)
-              [text| 🤖 APITOOLKIT: New Endpoint detected for `{project.title}` |]
+              [fmt| 🤖 APITOOLKIT: New Endpoint detected for `{project.title}` |]
               [fmtTrim|
                      Hi {u.firstName},<br/>
          
@@ -392,8 +377,9 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
     Anomalies.ATShape -> do
       hasEndpointAnomaly <- dbtToEff $ Anomalies.getShapeParentAnomalyVM pid targetHash
       when (hasEndpointAnomaly == 0) do
-        shapes <- dbtToEff $ getShapes pid $ T.take 8 targetHash
-        let targetFields = maybe [] (toList . snd) (V.find (\a -> fst a == targetHash) shapes)
+        let getShapesQuery = [sql| select hash, field_hashes from apis.shapes where project_id=? and endpoint_hash=? |]
+        shapes <- (dbtToEff $ query Select getShapesQuery (pid, T.take 8 targetHash))
+        let targetFields = maybe [] (V.toList . snd) (V.find (\a -> fst a == targetHash) shapes)
         updatedFieldFormats <- dbtToEff $ getUpdatedFieldFormats pid (V.fromList targetFields)
         let otherFields = toList <$> toList (snd $ V.unzip $ V.filter (\a -> fst a /= targetHash) shapes)
         let newFields = filter (`notElem` foldl' union [] otherFields) targetFields
@@ -418,7 +404,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
               forM_ users \u ->
                 sendEmail
                   (CI.original u.email)
-                  [text| 🤖 APITOOLKIT: New Shape anomaly found for `{project.title}` |]
+                  [fmt| 🤖 APITOOLKIT: New Shape anomaly found for `{project.title}` |]
                   [fmtTrim|
          Hi {u.firstName},<br/>
        

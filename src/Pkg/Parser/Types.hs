@@ -1,4 +1,4 @@
-module Pkg.Parser.Types (Parser (..), Values (..), Subject (..), FieldKey (..), Expr (..), AggFunction (..), ByClause (..), Rollup (..), Section (..), symbol, lexeme, sc)
+module Pkg.Parser.Types (Parser, Values (..), Subject (..), FieldKey (..), Expr (..), AggFunction (..), ByClause (..), Rollup (..), Section (..), symbol, lexeme, sc)
 where
 
 import Relude (
@@ -8,7 +8,6 @@ import Relude (
   Maybe,
   Ord,
   Show,
-  String,
   Text,
   Void,
  )
@@ -51,9 +50,9 @@ data Expr
   | Paren Expr
   | And Expr Expr
   | Or Expr Expr
-  | Not Expr
-  | JSONPathExpr Expr
-  | FunctionCall String [Expr] -- For functions like ANY
+  --  | Not Expr
+  --  | JSONPathExpr Expr
+  --  | FunctionCall String [Expr] -- For functions like ANY
   deriving stock (Eq, Ord, Show)
 
 

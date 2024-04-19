@@ -3,72 +3,14 @@ module Pages.BodyWrapper (bodyWrapper, BWConfig (..)) where
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default)
 import Data.Vector qualified as Vector
-import Lucid (
-  Html,
-  Term (term),
-  ToHtml (toHtml),
-  a_,
-  aside_,
-  async_,
-  body_,
-  charset_,
-  class_,
-  content_,
-  crossorigin_,
-  defer_,
-  div_,
-  doctypehtml_,
-  h3_,
-  head_,
-  height_,
-  href_,
-  httpEquiv_,
-  id_,
-  img_,
-  input_,
-  link_,
-  meta_,
-  name_,
-  nav_,
-  noscript_,
-  p_,
-  placeholder_,
-  rel_,
-  script_,
-  section_,
-  sizes_,
-  small_,
-  span_,
-  src_,
-  strong_,
-  style_,
-  tabindex_,
-  title_,
-  type_,
-  width_,
- )
+import Lucid
 import Lucid.Htmx (hxGet_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
-import Relude (
-  Bool,
-  Eq ((/=), (==)),
-  Generic,
-  Maybe (..),
-  Semigroup ((<>)),
-  Show,
-  Text,
-  mapM_,
-  maybe,
-  pass,
-  when,
-  ($),
-  (&),
-  (||),
- )
+import Relude
 import Utils (faIcon_, faSprite_)
 
 
@@ -219,9 +161,13 @@ fbq('init', '3674513372787915');
 fbq('track', 'PageView');
       |]
 
-      -- Facebook Pixel Code --
-      script_
-        [text|
+    noscript_ [] do
+      img_ [height_ "1", width_ "1", src_ "https://www.facebook.com/tr?id=3674513372787915&ev=PageView&noscript=1"]
+    -- End Facebook Pixel Code
+
+    -- Google pixel
+    script_
+      [text|
 (function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
 new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
 j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
@@ -230,12 +176,24 @@ j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
       |]
 
     noscript_ [] do
-      img_ [height_ "1", width_ "1", src_ "https://www.facebook.com/tr?id=3674513372787915&ev=PageView&noscript=1"]
-    -- End Facebook Pixel Code
+      iframe_ [height_ "0", width_ "0", style_ "display:none;visibility:hidden", src_ "https://www.googletagmanager.com/ns.html?id=GTM-TF4BQQ3D"] pass
+    -- End GOOGLE NO SCRIPT
 
+    -- Linkedin pixel
+    script_
+      [text|
+   _linkedin_partner_id = "5779626"; window._linkedin_data_partner_ids = window._linkedin_data_partner_ids || [];
+  window._linkedin_data_partner_ids.push(_linkedin_partner_id);      
+      |]
+
+    script_
+      [text|
+(function(l) { if (!l){window.lintrk = function(a,b){window.lintrk.q.push([a,b])}; window.lintrk.q=[]} var s = document.getElementsByTagName("script")[0]; var b = document.createElement("script"); b.type = "text/javascript";b.async = true; b.src = "https://snap.licdn.com/li.lms-analytics/insight.min.js"; s.parentNode.insertBefore(b, s);})(window.lintrk);
+      |]
     noscript_ [] do
-      img_ [height_ "1", width_ "1", src_ "https://www.facebook.com/tr?id=1135987380886994&ev=PageView&noscript=1"]
-    -- End Facebook Pixel Code
+      img_ [height_ "0", width_ "0", style_ "display:none;visibility:hidden", src_ "https://px.ads.linkedin.com/collect/?pid=5779626&fmt=gif"]
+    -- End Linkedin NO SCRIPT
+
     script_
       [text|
     !function(t,e){var o,n,p,r;e.__SV||(window.posthog=e,e._i=[],e.init=function(i,s,a){function g(t,e){var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}(p=t.createElement("script")).type="text/javascript",p.async=!0,p.src=s.api_host+"/static/array.js",(r=t.getElementsByTagName("script")[0]).parentNode.insertBefore(p,r);var u=e;for(void 0!==a?u=e[a]=[]:a="posthog",u.people=u.people||[],u.toString=function(t){var e="posthog";return"posthog"!==a&&(e+="."+a),t||(e+=" (stub)"),e},u.people.toString=function(){return u.toString(1)+".people (stub)"},o="capture identify alias people.set people.set_once set_config register register_once unregister opt_out_capturing has_opted_out_capturing opt_in_capturing reset isFeatureEnabled onFeatureFlags getFeatureFlag getFeatureFlagPayload reloadFeatureFlags group updateEarlyAccessFeatureEnrollment getEarlyAccessFeatures getActiveMatchingSurveys getSurveys onSessionId".split(" "),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])},e.__SV=1)}(document,window.posthog||[]);

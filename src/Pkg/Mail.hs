@@ -1,13 +1,19 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module Pkg.Mail (sendEmail, sendSlackMessage, sendSlackMessageBase) where
+module Pkg.Mail (sendEmail, sendSlackMessage) where
 
 import Control.Lens ((.~))
 import Data.Aeson.QQ (aesonQQ)
 import Data.Pool ()
-import Data.Text (Text)
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful (
+  Eff,
+  IOE,
+  type (:>),
+ )
+import Effectful.Log (Log)
+import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static (ask)
+import Log qualified
 import Models.Apis.Slack (SlackData (..), getProjectSlackData)
 import Models.Projects.Projects qualified as Projects
 import Network.HaskellNet.SMTP (
@@ -20,38 +26,36 @@ import Network.Mail.Mime (Address (Address), simpleMail)
 import Network.Wreq (defaults, header, postWith)
 import Relude hiding (ask)
 import System.Config qualified as Config
-import System.Types (ATBackgroundCtx, ATBaseCtx)
+import System.Types (ATBackgroundCtx)
 
 
 sendEmail :: Text -> Text -> LText -> ATBackgroundCtx ()
 sendEmail reciever subject body = do
   appCtx <- ask @Config.AuthContext
-  liftIO $ doSMTPPort (toString appCtx.config.smtpHost) (toEnum appCtx.config.smtpPort) $ \conn -> do
-    authSucceed <- authenticate PLAIN (toString appCtx.config.smtpUsername) (toString appCtx.config.smtpPassword) conn
-    if authSucceed
-      then do
-        mail <-
-          simpleMail
-            (Address Nothing reciever)
-            (Address (Just "Apitoolkit") appCtx.config.smtpSender)
-            subject
-            body
-            body
-            []
-        sendMail mail conn
-      else error "SMTP Authentication failed."
+  if appCtx.config.smtpHost /= "" && appCtx.config.smtpUsername /= ""
+    then liftIO $ doSMTPPort (toString appCtx.config.smtpHost) (toEnum appCtx.config.smtpPort) $ \conn -> do
+      authSucceed <- authenticate PLAIN (toString appCtx.config.smtpUsername) (toString appCtx.config.smtpPassword) conn
+      if authSucceed
+        then do
+          mail <-
+            simpleMail
+              (Address Nothing reciever)
+              (Address (Just "Apitoolkit") appCtx.config.smtpSender)
+              subject
+              body
+              body
+              []
+          sendMail mail conn
+        else error "SMTP Authentication failed."
+    else Log.logAttention "sendEmail is not configured. But was called" (reciever, subject, body)
 
 
-sendSlackMessage :: Projects.ProjectId -> Text -> ATBackgroundCtx ()
+sendSlackMessage :: (DB :> es, Log :> es, IOE :> es) => Projects.ProjectId -> Text -> Eff es ()
 sendSlackMessage pid message = do
   slackData <- dbtToEff $ getProjectSlackData pid
-  liftIO $ slackPostWebhook (maybe "" (\s -> s.webhookUrl) slackData) message
-
-
-sendSlackMessageBase :: Projects.ProjectId -> Text -> ATBaseCtx ()
-sendSlackMessageBase pid message = do
-  slackData <- dbtToEff $ getProjectSlackData pid
-  liftIO $ slackPostWebhook (maybe "" (\s -> s.webhookUrl) slackData) message
+  case slackData of
+    Just s -> liftIO $ slackPostWebhook s.webhookUrl message
+    Nothing -> Log.logAttention "sendSlackMessage is not configured. But was called" (pid, message)
 
 
 slackPostWebhook :: Text -> Text -> IO ()

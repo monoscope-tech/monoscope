@@ -49,6 +49,7 @@ library
       Models.Tests.Testing
       Models.Users.Sessions
       Models.Users.Users
+      MonitoringSpec
       Network.Wai.Middleware.Heartbeat
       Pages.Anomalies.AnomalyList
       Pages.Api
@@ -84,7 +85,6 @@ library
       Pkg.ConvertKit
       Pkg.Google
       Pkg.Mail
-      Pkg.Ortto
       Pkg.Parser
       Pkg.Parser.Expr
       Pkg.Parser.ExprSpec
@@ -140,7 +140,7 @@ library
       TemplateHaskell
       RoleAnnotations
       NoImplicitPrelude
-  ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches -Wno-missing-kind-signatures -fwrite-ide-info -hiedir=.hie -j4 +RTS -A128m -n2m -RTS
+  ghc-options: -fwrite-ide-info -hiedir=.hie -O -Weverything -Werror -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -j4 +RTS -A128m -n2m -RTS
   build-depends:
       HaskellNet
     , PyF
@@ -207,7 +207,7 @@ library
     , relude >=1.2.0.0
     , resource-pool
     , resourcet
-    , rust-interop
+    , safe
     , safe-exceptions
     , scientific
     , sendgrid-v3 >=0.3.0.0
@@ -216,7 +216,6 @@ library
     , servant-lucid
     , servant-server
     , text
-    , text-conversions
     , text-display
     , time
     , tmp-postgres
@@ -269,7 +268,7 @@ executable apitoolkit-server-exe
       TemplateHaskell
       RoleAnnotations
       NoImplicitPrelude
-  ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches -Wno-missing-kind-signatures -fwrite-ide-info -hiedir=.hie -j4 +RTS -A128m -n2m -RTS -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
+  ghc-options: -fwrite-ide-info -hiedir=.hie -O -Weverything -Werror -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -j4 +RTS -A128m -n2m -RTS -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
   build-depends:
       apitoolkit-server
     , relude >=1.2.0.0
@@ -313,7 +312,7 @@ test-suite doctests
       TemplateHaskell
       RoleAnnotations
       NoImplicitPrelude
-  ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches -Wno-missing-kind-signatures -fwrite-ide-info -hiedir=.hie -j4 +RTS -A128m -n2m -RTS -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
+  ghc-options: -fwrite-ide-info -hiedir=.hie -O -Weverything -Werror -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -j4 +RTS -A128m -n2m -RTS -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
   build-depends:
       apitoolkit-server
     , base
@@ -358,7 +357,7 @@ test-suite tests
       TemplateHaskell
       RoleAnnotations
       NoImplicitPrelude
-  ghc-options: -Weverything -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-top-binds -Wno-unused-matches -Wno-missing-kind-signatures -fwrite-ide-info -hiedir=.hie -j4 +RTS -A128m -n2m -RTS
+  ghc-options: -fwrite-ide-info -hiedir=.hie -O -Weverything -Werror -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -j4 +RTS -A128m -n2m -RTS
   build-depends:
       apitoolkit-server
     , base
@@ -367,6 +366,4 @@ test-suite tests
     , hspec-discover
     , relude >=1.2.0.0
     , tmp-postgres
-  mixins:
-      relude (Relude as Prelude)
   default-language: GHC2021

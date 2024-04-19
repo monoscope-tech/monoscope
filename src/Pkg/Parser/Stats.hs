@@ -1,4 +1,4 @@
-module Pkg.Parser.Stats where
+module Pkg.Parser.Stats (pTimeChartSection, pStatsSection) where
 
 import Pkg.Parser.Expr (pSubject)
 import Pkg.Parser.Types (
@@ -75,7 +75,7 @@ import Text.Megaparsec.Char (alphaNumChar, char, space, string)
 -- Right (Plain (Subject "customFunc" "customFunc" []) Nothing)
 aggFunctionParser :: Parser AggFunction
 aggFunctionParser =
-  choice
+  choice @[]
     [ Sum <$> (string "sum(" *> pSubject <* string ")") <*> optional aliasParser
     , Count <$> (string "count(" *> pSubject <* string ")") <*> optional aliasParser
     , Avg <$> (string "avg(" *> pSubject <* string ")") <*> optional aliasParser
@@ -93,7 +93,7 @@ aggFunctionParser =
 -- >>> parse "" aliasParser "as min_price"
 -- "min_price"
 aliasParser :: Parser Text
-aliasParser = toText <$> (string " as" *> space *> some (alphaNumChar <|> oneOf "_-") <* space)
+aliasParser = toText <$> (string " as" *> space *> some (alphaNumChar <|> oneOf @[] "_-") <* space)
 
 
 -- | Parses the 'by' clause, which can include multiple fields.

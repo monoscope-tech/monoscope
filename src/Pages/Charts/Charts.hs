@@ -3,6 +3,7 @@
 module Pages.Charts.Charts (chartsGetH, ChartType (..), lazy, ChartExp (..), QueryBy (..), GroupBy (..)) where
 
 import Data.Aeson qualified as AE
+import Data.Either.Extra (fromRight')
 import Data.List (groupBy, lookup)
 import Data.Text (toLower)
 import Data.Text qualified as T
@@ -15,8 +16,6 @@ import Data.Time (
   formatTime,
   getCurrentTime,
   secondsToNominalDiffTime,
-  utc,
-  utcToZonedTime,
   zonedTimeToUTC,
  )
 import Data.Time.Format.ISO8601 (iso8601ParseM)
@@ -26,20 +25,23 @@ import Data.UUID.V4 qualified as UUIDV4
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select), query)
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Database.PostgreSQL.Transact qualified as DBT
-import Effectful.PostgreSQL.Transact.Effect
-import Effectful.Reader.Static (ask)
-import Lucid
-import Lucid.Htmx
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Lucid (Html, class_, div_, id_, script_)
+import Lucid.Htmx (hxGet_, hxSwap_, hxTrigger_)
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Network.URI (escapeURIString, isUnescapedInURI)
-import Pkg.Parser
-import Relude hiding (ask, asks)
+import Pkg.Parser (
+  QueryComponents (finalTimechartQuery),
+  SqlQueryCfg (dateRange),
+  defSqlQueryCfg,
+  parseQueryToComponents,
+ )
+import Relude
 import Relude.Unsafe qualified as Unsafe
+import Safe qualified
 import Servant (FromHttpApiData (..))
-import System.Config (AuthContext (config))
-import System.Types
+import System.Types (ATAuthCtx)
 import Utils (DBField (MkDBField))
 import Witch (from)
 
@@ -50,7 +52,7 @@ transform fields tuples =
   where
     getValue field = lookup field (map swap_ tuples)
     swap_ (_, a, b) = (b, a)
-    timestamp = fst3 $ Unsafe.head tuples
+    timestamp = fromMaybe 0 $ fst3 <$> Safe.headMay tuples
 
 
 
@@ -147,9 +149,9 @@ buildReqDumpSQL exps = (q, join qByArgs, mFrom, mTo)
       where
         goDateRange :: (Maybe ZonedTime, Maybe ZonedTime) -> QueryBy -> (Maybe ZonedTime, Maybe ZonedTime)
         goDateRange acc@(Just _from, Just _to) _ = acc -- Both from and to found, no need to continue
-        goDateRange acc@(mFrom, mTo) (QBAnd a b) = acc -- TODO: support checking QBAnd for date range foldl' goDateRange (mFrom, mTo) [a, b]
-        goDateRange (mFrom, mTo) (QBFrom from_) = (Just from_, mTo)
-        goDateRange (mFrom, mTo) (QBTo to_) = (mFrom, Just to_)
+        goDateRange acc (QBAnd a b) = acc -- TODO: support checking QBAnd for date range foldl' goDateRange (mFrom, mTo) [a, b]
+        goDateRange (_mFrom, mTop) (QBFrom from_) = (Just from_, mTop)
+        goDateRange (mFromp, _mTo) (QBTo to_) = (mFromp, Just to_)
         goDateRange acc _ = acc -- Ignore all other constructors
     calcInterval numSlotsE' fromE' toE' = floor (diffUTCTime (zonedTimeToUTC toE') (zonedTimeToUTC fromE')) `div` numSlotsE'
 
@@ -182,25 +184,25 @@ chartsGetH typeM (Just queryRaw) pidM groupByM queryByM slotsM limitsM themeM id
 --  chartsGetRaw and chartGetDef should be refactored and merged.
 chartsGetRaw :: M ChartType -> Text -> M Projects.ProjectId -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
 chartsGetRaw typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM fromM toM = do
-  let cType = case fromMaybe BarCT typeM of
-        BarCT -> "bar"
-        LineCT -> "line"
+  -- let cType = case fromMaybe BarCT typeM of
+  --       BarCT -> "bar"::Text
+  --       LineCT -> "line":: Text
 
-  let chartExps =
-        catMaybes
-          [ TypeE <$> typeM
-          , GByE <$> groupByM
-          , QByE <$> queryByM
-          , SlotsE <$> slotsM
-          , LimitE <$> limitsM
-          , Theme <$> themeM
-          , IdE <$> idM
-          , showLegendM >>= (\x -> if x then Just ShowLegendE else Nothing)
-          ]
+  -- let chartExps =
+  --       catMaybes
+  --         [ TypeE <$> typeM
+  --         , GByE <$> groupByM
+  --         , QByE <$> queryByM
+  --         , SlotsE <$> slotsM
+  --         , LimitE <$> limitsM
+  --         , Theme <$> themeM
+  --         , IdE <$> idM
+  --         , showLegendM >>= (\x -> if x then Just ShowLegendE else Nothing)
+  --         ]
   randomID <- liftIO UUIDV4.nextRandom
   now <- liftIO getCurrentTime
 
-  let (fromD, toD, currentRange) = case sinceM of
+  let (fromD, toD, _currentRange) = case sinceM of
         Just "1H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just now, Just "Last Hour")
         Just "24H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just now, Just "Last 24 Hours")
         Just "7D" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 7) now, Just now, Just "Last 7 Days")
@@ -219,7 +221,7 @@ chartsGetRaw typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM sho
         (defSqlQueryCfg (Unsafe.fromJust pidM) now)
           { dateRange = (fromD, toD)
           }
-  let Right (_, qc) = parseQueryToComponents sqlQueryComponents queryRaw
+  let (_, qc) = fromRight' $ parseQueryToComponents sqlQueryComponents queryRaw
 
   chartData <- dbtToEff $ DBT.query_ (Query $ encodeUtf8 $ Unsafe.fromJust qc.finalTimechartQuery)
 
@@ -241,13 +243,7 @@ chartsGetRaw typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM sho
 
 
 chartsGetDef :: M ChartType -> M Text -> M Projects.ProjectId -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
-chartsGetDef typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM fromM toM = do
-  -- TODO: temporary, to work with current logic
-  appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-
+chartsGetDef typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM _fromM _toM = do
   let chartExps =
         catMaybes
           [ TypeE <$> typeM

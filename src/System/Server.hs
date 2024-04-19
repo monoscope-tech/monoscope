@@ -17,15 +17,13 @@ import Data.Pool as Pool (destroyAllResources)
 import Data.Text.Lazy.Encoding qualified as LT
 import Effectful (
   Eff,
-  Effect,
   IOE,
   MonadIO (liftIO),
   runEff,
   type (:>),
  )
 import Effectful.Concurrent (runConcurrent)
-import Effectful.Dispatch.Static (unsafeEff_)
-import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
+import Effectful.Error.Static (Error, runErrorNoCallStack)
 import Effectful.Fail (runFailIO)
 import Effectful.PostgreSQL.Transact.Effect (runDB)
 import Effectful.Reader.Static qualified
@@ -213,15 +211,14 @@ naturalTransform env logger app =
     & effToHandler
 
 
-handlerToEff
-  :: forall (es :: [Effect]) (a :: Type)
-   . Error ServerError :> es
-  => Handler a
-  -> Eff es a
-handlerToEff handler = do
-  v <- unsafeEff_ $ Servant.runHandler handler
-  either throwError pure v
-
+-- handlerToEff
+--   :: forall (es :: [Effect]) (a :: Type)
+--    . Error ServerError :> es
+--   => Handler a
+--   -> Eff es a
+-- handlerToEff handler = do
+--   v <- unsafeEff_ $ Servant.runHandler handler
+--   either throwError pure v
 
 effToHandler
   :: forall (a :: Type)

@@ -1,7 +1,5 @@
+{-# LANGUAGE DuplicateRecordFields #-}
 {-# OPTIONS_GHC -Wno-partial-fields #-}
-{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
-{-# HLINT ignore "Use newtype instead of data" #-}
-{-# OPTIONS_GHC -Wno-unused-do-bind #-}
 
 module Pages.Reports (
   reportsGetH,
@@ -18,7 +16,15 @@ module Pages.Reports (
 )
 where
 
-import Data.Aeson as Aeson
+import Data.Aeson as Aeson (
+  FromJSON,
+  KeyValue ((.=)),
+  ToJSON,
+  Value (Object, String),
+  decode,
+  encode,
+  object,
+ )
 import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
 import Data.Map.Strict qualified as Map
@@ -26,11 +32,40 @@ import Data.Text qualified as T
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime))
 import Data.Vector (Vector)
 import Data.Vector qualified as V
-import Effectful.PostgreSQL.Transact.Effect
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
-import Lucid
-import Lucid.Htmx
-import Lucid.Svg (color_)
+import Lucid (
+  Html,
+  ToHtml (toHtml),
+  a_,
+  checked_,
+  class_,
+  div_,
+  for_,
+  h3_,
+  h4_,
+  h5_,
+  href_,
+  id_,
+  img_,
+  input_,
+  label_,
+  name_,
+  p_,
+  small_,
+  span_,
+  src_,
+  style_,
+  table_,
+  tbody_,
+  td_,
+  th_,
+  thead_,
+  tr_,
+  type_,
+  value_,
+ )
+import Lucid.Htmx (hxGet_, hxPost_, hxSwap_, hxTrigger_)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Fields.Types (textFieldTypeToText)
 import Models.Apis.Reports qualified as Reports
@@ -39,14 +74,43 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
-import Pages.NonMember
-import Relude hiding (ask, asks)
+import Pages.NonMember (userNotMemeberPage)
+import Relude (
+  Applicative (pure),
+  Bool (False),
+  ConvertUtf8 (decodeUtf8),
+  Double,
+  Foldable (length, null),
+  Fractional ((/)),
+  Generic,
+  Int,
+  Integer,
+  Maybe (..),
+  Num (fromInteger, (*), (+), (-)),
+  Ord ((<), (>), (>=)),
+  RealFrac (round),
+  Semigroup ((<>)),
+  Show,
+  String,
+  Text,
+  ToString (toString),
+  forM_,
+  fromIntegral,
+  fromMaybe,
+  mapM_,
+  not,
+  pass,
+  readMaybe,
+  show,
+  ($),
+  (||),
+ )
 import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
-import System.Config
-import System.Types
-import Utils
+import System.Config (AuthContext)
+import System.Types (ATAuthCtx)
+import Utils (userIsProjectMember)
 
 
 data PerformanceReport = PerformanceReport
@@ -438,17 +502,15 @@ divideIntegers :: Integer -> Integer -> Double
 divideIntegers a b = fromIntegral a / fromIntegral b
 
 
-createEndpointMap :: [Anomalies.AnomalyVM] -> Map Text Bool -> Map Text Bool
-createEndpointMap [] mp = mp
-createEndpointMap (x : xs) mp =
-  case x.anomalyType of
-    Anomalies.ATEndpoint ->
-      let ep_url = fromMaybe "" x.endpointUrlPath
-          method = fromMaybe "" x.endpointMethod
-          endpoint = method <> ep_url
-       in createEndpointMap xs (Map.insert endpoint True mp)
-    _ -> createEndpointMap xs mp
-
+-- createEndpointMap [] mp = mp
+-- createEndpointMap (x : xs) mp =
+--   case x.anomalyType of
+--     Anomalies.ATEndpoint ->
+--       let ep_url = fromMaybe "" x.endpointUrlPath
+--           method = fromMaybe "" x.endpointMethod
+--           endpoint = method <> ep_url
+--        in createEndpointMap xs (Map.insert endpoint True mp)
+--     _ -> createEndpointMap xs mp
 
 reportEmail :: Projects.ProjectId -> Reports.Report -> Html ()
 reportEmail pid report' =
@@ -522,23 +584,6 @@ reportEmail pid report' =
           Nothing -> pass
       a_ [href_ $ "https://app.apitoolkit.io/p/" <> show pid.unProjectId <> "/reports", style_ "width: 100%; text-align: center; color:#3b82f6; margin: 20px; padding-bottom:20px"] "Turn off email alerts"
       div_ [style_ "margin-top: 20px"] pass
-
-
-renderEmailEndpointRow :: PerformanceReport -> Html ()
-renderEmailEndpointRow endpoint = tr_ do
-  let (pcls, prc) =
-        if endpoint.durationDiffPct > 0
-          then ("red", "+" <> show endpoint.durationDiffPct <> "%" :: Text)
-          else ("green", show endpoint.durationDiffPct <> "%" :: Text)
-  let avg_dur_ms = (fromInteger (round $ ((fromInteger endpoint.averageDuration :: Double) / 1000000.0) * 100) :: Double) / 100
-  let dur_diff_ms = (fromInteger (round $ ((fromInteger endpoint.durationDiff :: Double) / 1000000.0) * 100) :: Double) / 100
-  let tdStyle = "padding: 0.75rem 1.5rem; border-bottom: 1px solid #e5e7eb; color: #6b7280; font-size: 14px;"
-  let pStyle = "padding: 0.75rem 1.5rem; border-bottom: 1px solid #e5e7eb;"
-
-  td_ [style_ tdStyle] $ toHtml $ endpoint.method <> " " <> endpoint.urlPath
-  td_ [style_ tdStyle] $ show avg_dur_ms <> "ms"
-  td_ [style_ tdStyle] $ show dur_diff_ms <> "ms"
-  td_ [color_ pcls, style_ pStyle] $ toHtml prc
 
 
 renderEmailEndpointsTable :: [PerformanceReport] -> Html ()

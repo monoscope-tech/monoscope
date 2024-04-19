@@ -3,30 +3,27 @@
 module Pages.Onboarding (onboardingGetH, integrateApiToolkit, tabs, contentHeader) where
 
 import Data.Default (def)
-import Data.Text qualified as T
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (withPool)
-import Effectful.PostgreSQL.Transact.Effect
-import Effectful.Reader.Static (ask, asks)
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful.Reader.Static (ask)
 import Lucid
-import Lucid.Htmx (hxGet_, hxPost_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
-import Lucid.Hyperscript
+import Lucid.Htmx (hxGet_, hxSwap_, hxTrigger_, hxVals_)
+import Lucid.Hyperscript (__)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projectjs
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import NeatInterpolation
+import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Pages.NonMember
-import Relude hiding (ask, asks)
+import Pages.NonMember (userNotMemeberPage)
+import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
-import System.Config
-import System.Types
+import System.Config (AuthContext)
+import System.Types (ATAuthCtx)
 import Utils (
   faIcon_,
   faSprite_,
-  redirect,
   userIsProjectMember,
  )
 
@@ -35,7 +32,6 @@ onboardingGetH :: Projects.ProjectId -> Maybe Bool -> Maybe Bool -> Maybe Text -
 onboardingGetH pid polling redirected current_tab = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
 
@@ -80,17 +76,10 @@ onboardingPage pid apikey hasRequest ans redi ctb = do
       when redi $ div_ [class_ "w-full text-center py-2 bg-yellow-500"] "You have to integrate APIToolkit in your app before you can start using the platform"
       div_ [class_ "flex flex-col h-full w-full gap-16"] $ do
         div_ [class_ "text- center"] do
-          div_ [class_ "flex flex-col w-full mt-10 py-4 items-center gap-4"] $ do
-            h3_ [class_ "text-4xl font-bold"] "Ready, Set, Integrate!"
-            div_ [class_ "flex flex-col text-center gap-1 mb-4"] do
-              div_ [class_ " text-lg  max-w-prose"] do
-                p_ "To get the most from APIToolkit, integrate it into your project (Even just on your local or development machine). You can integrate an outgoing HTTP request client, or an entire server with incoming requests. "
-              p_ [class_ " text-lg"] "Finish up, then dash to your dashboard! 🚀"
-            if hasRequest
+          div_ [class_ "flex flex-col w-full mt-10 py-4 items-center gap-4"]
+            $ if hasRequest
               then completedBanner pid
-              else do
-                div_ [class_ "w-[1200px]"] do
-                  integrateApiToolkit apikey ctb
+              else div_ [class_ "w-full max-w-xl"] $ integrateApiToolkit apikey ctb
         div_ [class_ "w-full flex justify-center"] $ do
           div_ [class_ "flex flex-col w-[800px] rounded-2xl border border-2"] $ do
             div_ [class_ "w-full px-8 py-4 flex justify-between border-b border-b-2"] $ do
@@ -131,18 +120,17 @@ onboardingPage pid apikey hasRequest ans redi ctb = do
                     faSprite_ "chevron-down" "regular-chevron-down" "h-6 w-6"
                 div_ [class_ "w-full bg-slate-100 mt-8", id_ "SDKs"] do
                   if hasRequest
-                    then do
+                    then
                       p_ [class_ "text-green-500 text-center py-16 text-center"]
                         $ span_ "Apitoolkit has been integrated into your app"
-                    else do
-                      div_ [class_ "font-medium text-lg text-center border-b border-slate-200 py-16 space-y-2"] $ do
-                        a_ [class_ "block link underline text-slate-900 underline-offset-4", href_ "https://apitoolkit.io/docs/quickstarts/", target_ "BLANK"] "View Integration Quickstarts &  documentation at our Knowledge base."
-                        span_ [class_ "block text-slate-900  space-x-2"] do
-                          span_ "Need more help?"
-                          a_ [class_ "link underline underline-offset-4", href_ "https://calendar.app.google/EvPzCoVsLh5gqkAo8", target_ "BLANK"] "Schedule a call with an Engineer."
-                        div_ [class_ " inline-block space-x-3 text-red-800 pt-5"] do
-                          faIcon_ "fa-spinner" "fa-sharp fa-light fa-spinner " "fa-spin h-6 w-6 inline-block "
-                          span_ "Waiting to recieve data from your server."
+                    else div_ [class_ "font-medium text-lg text-center border-b border-slate-200 py-16 space-y-2"] $ do
+                      a_ [class_ "block link underline text-slate-900 underline-offset-4", href_ "https://apitoolkit.io/docs/quickstarts/", target_ "BLANK"] "View Integration Quickstarts &  documentation at our Knowledge base."
+                      span_ [class_ "block text-slate-900  space-x-2"] do
+                        span_ "Need more help?"
+                        a_ [class_ "link underline underline-offset-4", href_ "https://calendar.app.google/EvPzCoVsLh5gqkAo8", target_ "BLANK"] "Schedule a call with an Engineer."
+                      div_ [class_ " inline-block space-x-3 text-red-800 pt-5"] do
+                        faIcon_ "fa-spinner" "fa-sharp fa-light fa-spinner " "fa-spin h-6 w-6 inline-block "
+                        span_ "Waiting to recieve data from your server."
 
         div_ [class_ "w-full flex justify-center pb-16 mt-16"] $ do
           div_ [class_ "flex flex-col w-[800px] rounded-2xl border border-2 grid grid-cols-2 border-b "] $ do
@@ -160,35 +148,6 @@ onboardingPage pid apikey hasRequest ans redi ctb = do
                   span_ "Need Help?"
                   span_ "Or a Demo?"
                 span_ [class_ "text-slate-500"] "Schedule a brief call with an Engineer."
-
-
-generateApikey :: Projects.ProjectId -> Html ()
-generateApikey pid =
-  div_ [class_ "w-[800px] bg-slate-200 mx-auto rounded-lg border-8 border-white shadow-lg mb-10"] do
-    div_ [class_ "w-full p-8"] do
-      div_ [class_ "flex w-full justify-center gap-4 items-center mb-10"] do
-        span_ [class_ "text-blue-500 pr-4 border-r border-r-2 border-r-blue-500 text-2xl"] "Next Up"
-        h3_ [class_ "font-bold text-2xl"] "Generate API Key"
-      div_ [id_ "main-content2"] do
-        form_
-          [ hxPost_ $ "/p/" <> pid.toText <> "/apis"
-          , class_ "flex items-end justify-center mx-8  pt-4 px-4 pb-20 text-center sm:block sm:p-0"
-          , hxTarget_ "#main-content2"
-          ]
-          do
-            div_ [class_ "bg-white rounded-lg px-4 pt-5 pb-4 text-left"] do
-              div_ [class_ "sm:flex sm:items-start"] do
-                div_ [class_ "mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left grow"] do
-                  h3_ [class_ "text-lg font-medium text-slate-900", id_ "modal-title"] "Enter API key title"
-                  div_ [class_ "mt-2 space-y-2"] do
-                    p_ [class_ "text-sm text-slate-500"] do
-                      "Please input a title for your API Key. You can find all API keys "
-                      a_ [href_ $ "/p/" <> pid.toText <> "/apis", class_ "text-blue-500"] "here"
-                    div_ do
-                      input_ [class_ "input-txt px-4 py-2  border w-full", type_ "text", placeholder_ "API Key Title", name_ "title", autofocus_]
-                      input_ [hidden_ "true", name_ "from", value_ "onboarding"]
-              div_ [class_ "mt-5 sm:mt-4 sm:flex sm:flex-row-reverse"] do
-                button_ [type_ "submit", class_ "w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 sm:ml-3 sm:w-auto sm:text-sm"] "Submit"
 
 
 integrateApiToolkit :: Text -> Text -> Html ()

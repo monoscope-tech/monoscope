@@ -16,14 +16,19 @@ import Control.Monad.Except qualified as T
 import Data.Aeson.Lens (key, _String)
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
-import Data.Pool (Pool)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Database.PostgreSQL.Entity.DBT (withPool)
-import Database.PostgreSQL.Simple (Connection)
-import Effectful
-import Effectful.Dispatch.Static
+import Effectful (
+  Eff,
+  Effect,
+  IOE,
+  MonadIO (liftIO),
+  runEff,
+  type (:>),
+ )
+import Effectful.Dispatch.Static (unsafeEff_)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
@@ -31,14 +36,51 @@ import Effectful.PostgreSQL.Transact.Effect qualified as DB
 import Effectful.Reader.Static (ask, asks)
 import Log (Logger)
 import Lucid (Html)
-import Lucid.Html5
+import Lucid.Html5 (
+  a_,
+  body_,
+  content_,
+  head_,
+  href_,
+  html_,
+  httpEquiv_,
+  meta_,
+ )
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import Network.HTTP.Types (hCookie)
-import Network.Wai
+import Network.Wai (Request (requestHeaders))
 import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
 import Pkg.ConvertKit qualified as ConvertKit
-import Relude hiding (ask, asks)
+import Relude (
+  Applicative (pure),
+  Bool (..),
+  ByteString,
+  ConvertUtf8 (decodeUtf8, encodeUtf8),
+  Either (Left, Right),
+  Functor (fmap),
+  IO,
+  Maybe (..),
+  Monad ((>>)),
+  Semigroup ((<>)),
+  String,
+  Text,
+  ToString (toString),
+  Traversable (mapM),
+  Type,
+  either,
+  fromMaybe,
+  hoistEither,
+  join,
+  maybe,
+  putStrLn,
+  runExceptT,
+  show,
+  ($),
+  (&),
+  (.),
+  (<$>),
+ )
 import Servant (
   Header,
   Headers,
@@ -47,13 +89,29 @@ import Servant (
   noHeader,
  )
 import Servant qualified
-import Servant.Server
+import Servant.Server (
+  Handler,
+  ServerError (errBody, errHeaders),
+  err302,
+  err403,
+ )
 import Servant.Server.Experimental.Auth (AuthHandler, mkAuthHandler)
 import SessionCookies (craftSessionCookie, emptySessionCookie)
-import System.Config
+import System.Config (
+  AuthContext (config, env, pool),
+  EnvConfig (
+    auth0Callback,
+    auth0ClientId,
+    auth0Domain,
+    auth0LogoutRedirect,
+    auth0Secret,
+    convertkitApiKey,
+    environment
+  ),
+ )
 import System.Logging qualified as Logging
-import System.Types
-import Web.Cookie
+import System.Types (ATBaseCtx)
+import Web.Cookie (Cookies, SetCookie, parseCookies)
 
 
 type APItoolkitAuthContext = AuthHandler Request (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
@@ -256,16 +314,3 @@ authCallbackH codeM _ = do
               meta_ [httpEquiv_ "refresh", content_ "1;url=/"]
             body_ do
               a_ [href_ "/"] "Continue to APIToolkit"
-
-
--- We need to handle errors for the persistent session better and redirect if there's an error
-lookupAccount :: Pool Connection -> ByteString -> Handler Sessions.PersistentSession
-lookupAccount conn keyV = do
-  resp <- runExceptT do
-    pid <- hoistEither $ note @Text "unable to convert cookie value to persistent session UUID" (Sessions.PersistentSessionId <$> UUID.fromASCIIBytes keyV)
-    presistentSess <- liftIO $ withPool conn $ Sessions.getPersistentSession pid
-    hoistEither $ note "lookupAccount: invalid persistentID " presistentSess
-  case resp of
-    Left _ -> do
-      Servant.throwError $ err302{errHeaders = [("Location", "/to_login")]}
-    Right session -> pure session

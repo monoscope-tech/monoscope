@@ -70,7 +70,6 @@ import System.Clock (
  )
 import System.Config qualified as Config
 import System.Types (ATBackgroundCtx)
-import Text.Pretty.Simple (pShow)
 import Utils (DBField, eitherStrToText)
 
 

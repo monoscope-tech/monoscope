@@ -1,4 +1,4 @@
-module Pkg.Parser.Expr where
+module Pkg.Parser.Expr (pSubject, pExpr) where
 
 import Control.Monad.Combinators.Expr (
   Operator (InfixL),

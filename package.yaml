@@ -8,11 +8,13 @@ copyright: "2021 Author name here"
 language: GHC2021
 spec-version: 0.36.0
 
+
 ghc-options:
-  # For details on warnings: https://downloads.haskell.org/~ghc/master/users-guide/using-warnings.html
-  # This list taken from https://medium.com/mercury-bank/enable-all-the-warnings-a0517bc081c3
-  # Enable all warnings with -Weverything, then disable the ones we don’t care about
+  - "-fwrite-ide-info"
+  - "-hiedir=.hie"
+  - "-O" 
   - -Weverything
+  - -Werror # Treat warnings as errors
   - -Wno-missing-exported-signatures # missing-exported-signatures turns off the more strict -Wmissing-signatures. See https://ghc.haskell.org/trac/ghc/ticket/14794#ticket
   - -Wno-missing-import-lists # Requires explicit imports of _every_ function (e.g. ‘$’); too strict
   - -Wno-missed-specialisations # When GHC can’t specialize a polymorphic function. No big deal and requires fixing underlying libraries to solve.
@@ -22,20 +24,13 @@ ghc-options:
   - -Wno-missing-local-signatures # Warning for polymorphic local bindings; nothing wrong with those.
   - -Wno-monomorphism-restriction # Don’t warn if the monomorphism restriction is used
   - -Wno-missing-safe-haskell-mode
-  # - -fforce-recomp # force recompilation. Useful for seeing the result of compiling ghc with these listed options. It impacts compile time and should be disabled when not needed.
   - -Wno-orphans
   # remove the next options when possible. This is a temporary workaround
-  - -Wno-unused-top-binds
   - -Wno-unused-matches
   - -Wno-missing-kind-signatures
-  - -fwrite-ide-info
-  - -hiedir=.hie
+  - -Wno-type-defaults
   - -j4
-  - +RTS
-  - -A128m
-  - -n2m
-  - -RTS
-  # - -fllvm
+  - "+RTS -A128m -n2m -RTS"
 
 default-extensions:
   - BlockArguments
@@ -79,7 +74,7 @@ library:
   dependencies:
     - base 
     - relude >= 1.2.0.0
-    - rust-interop
+    # - rust-interop
     - colourista
     - effectful
     - effectful-core
@@ -104,6 +99,7 @@ library:
     - containers
     - cookie
     - safe-exceptions
+    - safe
     - cryptonite
     - data-default
     - deriving-aeson
@@ -146,7 +142,6 @@ library:
     - servant-lucid
     - servant-server
     - text
-    - text-conversions
     - text-display
     - time
     - transformers
@@ -217,8 +212,4 @@ tests:
       - hspec
       - hspec-discover
       - doctest-parallel
-      - name: relude
-        version: ">= 1.2.0.0"
-        mixin:
-          - (Relude as Prelude)
-      # - relude >= 1.2.0.0
+      - relude >= 1.2.0.0
