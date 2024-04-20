@@ -135,6 +135,7 @@ runServer appLogger env = do
   -- let ojLogger logLevel logEvent = logger <& show (logLevel, logEvent)
   -- let ojTable = "background_jobs" :: OJTypes.TableName
   -- let ojCfg = OJConfig.mkUIConfig ojLogger ojTable poolConn id
+
   asyncs <-
     liftIO
       $ sequence
@@ -144,8 +145,7 @@ runServer appLogger env = do
           [async $ pubsubService appLogger env | env.config.enablePubsubService]
         , [async $ Safe.withException bgJobWorker (logException env.config.environment appLogger) | env.config.enableBackgroundJobs]
         ]
-  _ <- liftIO $ waitAnyCancel asyncs
-  pass
+  void $ liftIO $ waitAnyCancel asyncs
 
 
 -- pubsubService connects to the pubsub service and listens for  messages,

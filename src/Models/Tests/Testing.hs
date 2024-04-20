@@ -79,7 +79,7 @@ data CollectionStep = CollectionStep
   , stepData :: Value
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, ToJSON, FromJSON, NFData)
+  deriving anyclass (FromRow, ToRow, ToJSON, FromJSON, NFData, Default)
   deriving
     (Entity)
     via (GenericEntity '[Schema "tests", TableName "collection_steps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] CollectionStep)
@@ -98,7 +98,7 @@ data Collection = Collection
   , isScheduled :: Bool
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, ToJSON, FromJSON, NFData)
+  deriving anyclass (FromRow, ToRow, ToJSON, FromJSON, NFData, Default)
   deriving
     (Entity)
     via (GenericEntity '[Schema "tests", TableName "collections", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Collection)

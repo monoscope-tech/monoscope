@@ -230,6 +230,7 @@ library
     , safe
     , safe-exceptions
     , scientific
+    , scotty
     , sendgrid-v3 >=0.3.0.0
     , servant
     , servant-htmx
@@ -246,6 +247,7 @@ library
     , valor >=1.0.0.0
     , vector
     , wai
+    , wai-extra
     , wai-log
     , warp
     , witch
@@ -255,6 +257,8 @@ library
 
 executable apitoolkit-server-exe
   main-is: Main.hs
+  other-modules:
+      Devel
   hs-source-dirs:
       app
   default-extensions:

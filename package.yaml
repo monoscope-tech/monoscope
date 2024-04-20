@@ -162,6 +162,8 @@ library:
     - githash
     - network-uri
     - hspec-expectations-json
+    - scotty
+    - wai-extra
 
 executables:
   apitoolkit-server-exe:

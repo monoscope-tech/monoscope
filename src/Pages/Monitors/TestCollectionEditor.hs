@@ -37,21 +37,23 @@ collectionPage :: Projects.ProjectId -> Testing.Collection -> V.Vector Testing.C
 collectionPage pid col steps = do
   -- let col_json = decodeUtf8 $ AE.encode col
   -- let steps_json = decodeUtf8 $ AE.encode steps
-  section_ [id_ "test-data", class_ "grid grid-cols-3 h-full"] do
-    div_ [class_ "col-span-2 h-full divide-x divide-gray-200"] do
-      div_ [class_ "flex justify-between"] do
+  section_ [id_ "test-data", class_ "grid grid-cols-2 h-full divide-x divide-gray-200"] do
+    div_ [class_ "col-span-1 h-full "] do
+      div_ [class_ "flex items-center justify-between"] do
         div_ [class_ " pb-5 p-5"] do
-          h2_ [class_ "text-base font-semibold leading-6 text-gray-900"] do
+          h2_ [class_ "text-base font-semibold leading-6 text-gray-900 flex items-end"] do
             toHtml col.title
-            small_ [class_ "inline-block ml-2 truncate text-sm text-gray-500"] "created 20th June"
+            small_ [class_ "inline-block ml-2 truncate text-sm text-gray-500"] "created  2024/01/23"
           p_ [] $ toHtml col.description
         div_ [] do
           span_ [class_ "badge badge-success"] "Active"
           Utils.faSprite_ "ellipsis-vertical" "solid" "h-3"
     div_ [class_ "col-span-1 h-full border-r border-gray-200"] do
-      div_ do
-        div_ [] $ Utils.faSprite_ "inbox-full" "solid" "w-6 h-6"
-        p_ [] "Run a test to view the results here."
+      div_ [class_ "flex flex-col justify-center items-center h-full "] do
+        div_ [] $ Utils.faSprite_ "inbox-full" "solid" "w-12 h-12"
+        p_ [] "Run a test to view the results here. "
+
+
 
 -- script_ [type_ "module", src_ "/assets/testeditor.js"] ("" :: Text)
 -- script_ [src_ "/assets/js/thirdparty/jsyaml.min.js", crossorigin_ "true"] ("" :: Text)

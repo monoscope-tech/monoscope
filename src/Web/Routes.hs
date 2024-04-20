@@ -1,6 +1,6 @@
 module Web.Routes (server, genAuthServerContext) where
 
-import Data.Aeson ( FromJSON, ToJSON )
+import Data.Aeson
 import Data.Aeson qualified as AE
 import Data.Pool (Pool)
 import Data.Time (UTCTime)
@@ -23,20 +23,24 @@ import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (notFound404)
 import Pages.Anomalies.Routes qualified as AnomaliesRoutes
 import Pages.Anomalies.Server qualified as AnomaliesRoutes
+import Pages.Endpoints.Routes qualified as  EndpointsRoutes
+import Pages.Endpoints.Server qualified as  EndpointsRoutes
+import Pages.Monitors.Routes qualified as MonitorsRoutes
+import Pages.Monitors.Server qualified as MonitorsRoutes
+import Pages.Specification.Routes qualified as SpecificationRoutes
+import Pages.Specification.Server qualified as SpecificationRoutes
 import Pages.Api qualified as Api
 import Pages.AutoComplete qualified as AutoComplete
 import Pages.Charts.Charts qualified as Charts
 import Pages.Dashboard qualified as Dashboard
-import Pages.Endpoints.Routes qualified as EndpointsRoutes
-import Pages.Endpoints.Server qualified as EndpointsRoutes
+import Pages.Specification.Documentation qualified as Documentation
 import Pages.Fields.FieldDetails qualified as FieldDetails
 import Pages.GenerateSwagger qualified as GenerateSwagger
 import Pages.Log qualified as Log
 import Pages.LogExplorer.LogItem qualified as LogItem
+import Pages.Specification.GenerateSwagger qualified as GenerateSwagger
 import Pages.LogExplorer.Routes qualified as LogExplorerRoutes
 import Pages.LogExplorer.Server qualified as LogExplorerRoutes
-import Pages.Monitors.Routes qualified as MonitorsRoutes
-import Pages.Monitors.Server qualified as MonitorsRoutes
 import Pages.Onboarding qualified as Onboarding
 import Pages.Projects.Routes qualified as ProjectsRoutes
 import Pages.Projects.Server qualified as ProjectsRoutes
@@ -45,38 +49,21 @@ import Pages.RedactedFields qualified as RedactedFields
 import Pages.Reports qualified as Reports
 import Pages.Share qualified as Share
 import Pages.SlackInstall qualified as SlackInstall
-import Pages.Specification.GenerateSwagger qualified as GenerateSwagger
-import Pages.Specification.Routes qualified as SpecificationRoutes
-import Pages.Specification.Server qualified as SpecificationRoutes
 import Pages.Survey qualified as Survey
 import Relude
-    ( ($),
-      Applicative(pure),
-      Generic,
-      Bool,
-      Int,
-      Maybe,
-      Either(Right, Left),
-      Text,
-      Proxy(Proxy),
-      ToText(toText),
-      ByteString,
-      (&),
-      (<&>),
-      fromStrict )
 import Servant (AuthProtect, Capture, Context (..), Delete, FormUrlEncoded, Get, Header, Headers, JSON, NoContent, PlainText, Post, QueryParam, ReqBody, StdMethod (GET), Verb, (:>))
 import Servant qualified
-import Servant.API.Generic ( GenericMode(type (:-)) )
+import Servant.API.Generic
 import Servant.HTML.Lucid (HTML)
-import Servant.Htmx ( HXTrigger, HXRedirect, HXRequest, HXBoosted )
+import Servant.Htmx
 import Servant.Server.Generic (AsServerT)
 import System.Config (AuthContext)
-import System.Types ( ATAuthCtx, ATBaseCtx )
+import System.Types
 import Web.Auth (APItoolkitAuthContext, authHandler)
 import Web.Auth qualified as Auth
 import Web.ClientMetadata qualified as ClientMetadata
 import Web.Cookie (SetCookie)
-import Web.Error ( renderError )
+import Web.Error
 
 
 type QPT a = QueryParam a Text
