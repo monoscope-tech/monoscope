@@ -215,6 +215,14 @@ export class Collection extends LitElement {
     if (window.testEditor) {
       const val = window.testEditor.getValue();
       const data = validateYaml(val);
+      if (data.validate_errors) {
+        data.validate_errors.forEach((err) => {
+          const errEvent = getEvent("errorToast", {
+            value: [err],
+          });
+          triggerToastEvent(errEvent);
+        });
+      }
       if (data) {
         const operations = getDeletedUpdatedAndNewSteps(
           this.collection.steps,
@@ -234,6 +242,7 @@ export class Collection extends LitElement {
             triggerToastEvent(event);
           }
         } catch (error) {
+          console.log(error);
           const errEvent = getEvent("errorToast", {
             value: ["Something went wrong"],
           });
