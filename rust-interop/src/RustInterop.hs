@@ -16,7 +16,7 @@
 
 {-# OPTIONS_GHC -Wno-unused-imports #-}
 
-module RustInterop (hello) where
+module RustInterop (run_testkit) where
 
 import Data.Int
 import Data.Word
@@ -24,4 +24,4 @@ import Foreign.C.String
 import Foreign.C.Types
 import Foreign.Ptr
 
-foreign import ccall safe "__c_hello" hello :: CString -> IO (())
+foreign import ccall safe "__c_run_testkit" run_testkit :: CString -> IO (())

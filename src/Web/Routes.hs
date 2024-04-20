@@ -26,6 +26,8 @@ import Models.Projects.Projects qualified as Projects
 import Models.Tests.Testing qualified as TestingM
 import Network.HTTP.Types (notFound404)
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
+import Pages.Anomalies.Routes qualified as AnomaliesRoutes
+import Pages.Anomalies.Server qualified as AnomaliesRoutes
 import Pages.Api qualified as Api
 import Pages.AutoComplete qualified as AutoComplete
 import Pages.Charts.Charts qualified as Charts
@@ -38,21 +40,26 @@ import Pages.GenerateSwagger qualified as GenerateSwagger
 import Pages.IntegrationGuides qualified as IntegrationGuides
 import Pages.Log qualified as Log
 import Pages.LogExplorer.LogItem qualified as LogItem
+import Pages.LogExplorer.Routes qualified as LogExplorerRoutes
+import Pages.LogExplorer.Server qualified as LogExplorerRoutes
 import Pages.ManualIngestion qualified as ManualIngestion
 import Pages.Monitors.Alerts qualified as Alerts
+import Pages.Monitors.TestCollectionEditor qualified as TestCollectionEditor
+import Pages.Monitors.Testing qualified as Testing
 import Pages.Onboarding qualified as Onboarding
 import Pages.Outgoing qualified as Outgoing
 import Pages.Projects.CreateProject qualified as CreateProject
 import Pages.Projects.ListProjects qualified as ListProjects
 import Pages.Projects.ManageMembers (ManageMembersForm)
 import Pages.Projects.ManageMembers qualified as ManageMembers
+import Pages.Projects.Routes qualified as ProjectsRoutes
+import Pages.Projects.Server qualified as ProjectsRoutes
 import Pages.RedactedFields (RedactFieldForm)
 import Pages.RedactedFields qualified as RedactedFields
 import Pages.Reports qualified as Reports
 import Pages.Share qualified as Share
 import Pages.SlackInstall qualified as SlackInstall
 import Pages.Survey qualified as Survey
-import Pages.Testing qualified as Testing
 import Relude
 import Servant (AuthProtect, Capture, Context (..), Delete, FormUrlEncoded, Get, Header, Headers, JSON, NoContent, PlainText, Post, QueryParam, ReqBody, StdMethod (GET), Verb, (:>))
 import Servant qualified
@@ -131,27 +138,14 @@ type role CookieProtectedRoutes nominal
 
 
 data CookieProtectedRoutes mode = CookieProtectedRoutes
-  { projectListGet :: mode :- UVerb 'GET '[HTML] GetOrRedirect
-  , dashboardGet :: mode :- "p" :> ProjectId :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (Html ())
-  , projectCreateGet :: mode :- "p" :> "new" :> Get '[HTML] (Html ()) -- p represents project
-  , projectCreatePost :: mode :- "p" :> "new" :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
-  , projectSettingsGet :: mode :- "p" :> ProjectId :> "settings" :> Get '[HTML] (Html ())
-  , projectDeleteGet :: mode :- "p" :> ProjectId :> "delete" :> Get '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
-  , notificationsUpdateChannelPost :: mode :- "p" :> ProjectId :> "notifications-channels" :> ReqBody '[FormUrlEncoded] CreateProject.NotifListForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
+  { dashboardGet :: mode :- "p" :> ProjectId :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (Html ())
+  , projects :: mode :- ProjectsRoutes.Routes
   , membersManageGet :: mode :- "p" :> ProjectId :> "manage_members" :> Get '[HTML] (Html ())
   , membersManagePost :: mode :- "p" :> ProjectId :> "manage_members" :> ReqBody '[FormUrlEncoded] ManageMembersForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
   , manageSubscriptionGet :: mode :- "p" :> ProjectId :> "manage_subscription" :> Get '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
   , onboardingGet :: mode :- "p" :> ProjectId :> "onboarding" :> QPB "polling" :> QPB "redirected" :> QPT "current_tab" :> Get '[HTML] (Html ())
-  , logExplorerGet :: mode :- "p" :> ProjectId :> "log_explorer" :> QPT "query" :> QPT "cols" :> QPU "cursor" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "layout" :> HXRequest :> HXBoosted :> Get '[HTML] (Html ())
-  , logExplorerItemGet :: mode :- "p" :> ProjectId :> "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> Get '[HTML] (Html ())
-  , logExplorerItemDetailedGet :: mode :- "p" :> ProjectId :> "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> "detailed" :> Get '[HTML] (Html ())
-  , anomalyAcknowlegeGet :: mode :- "p" :> ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "acknowlege" :> Get '[HTML] (Html ())
-  , anomalyUnAcknowlegeGet :: mode :- "p" :> ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "unacknowlege" :> Get '[HTML] (Html ())
-  , anomalyArchiveGet :: mode :- "p" :> ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "archive" :> Get '[HTML] (Html ())
-  , anomalyUnarchiveGet :: mode :- "p" :> ProjectId :> "anomalies" :> Capture "anomalyID" Anomalies.AnomalyId :> "unarchive" :> Get '[HTML] (Html ())
-  , anomalyBulkActionsPost :: mode :- "p" :> ProjectId :> "anomalies" :> "bulk_actions" :> Capture "action" Text :> ReqBody '[FormUrlEncoded] AnomalyList.AnomalyBulkForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-  , anomalyListGet :: mode :- "p" :> ProjectId :> "anomalies" :> QPT "layout" :> QPT "ackd" :> QPT "archived" :> QPT "sort" :> QPT "page" :> QPT "load_more" :> QEID "endpoint" :> HXRequest :> HXBoosted :> Get '[HTML] (Html ())
-  , anomalyDetailsGet :: mode :- "p" :> ProjectId :> "anomaly" :> Capture "targetHash" Text :> QPT "modal" :> Get '[HTML] (Html ())
+  , anomalies :: mode :- "p" :> ProjectId :> "anomalies" :> AnomaliesRoutes.Routes
+  , logExplorer :: mode :- "p" :> ProjectId :> LogExplorerRoutes.Routes
   , documentationPut :: mode :- "p" :> ProjectId :> "documentation" :> "save" :> ReqBody '[JSON] Documentation.SaveSwaggerForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
   , documentationPost :: mode :- "p" :> ProjectId :> "documentation" :> ReqBody '[FormUrlEncoded] Documentation.SwaggerForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
   , documentationGet :: mode :- "p" :> ProjectId :> "documentation" :> QPT "swagger_id" :> Get '[HTML] (Html ())
@@ -162,7 +156,6 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , fieldDetailsPartial :: mode :- "p" :> ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> Get '[HTML] (Html ())
   , endpointDetailsWithHash :: mode :- "p" :> ProjectId :> "log_explorer" :> "endpoint" :> Capture "endpoint_hash" Text :> Get '[HTML] (Headers '[HXRedirect] (Html ()))
   , endpointDetails :: mode :- "p" :> ProjectId :> "endpoints" :> Capture "endpoints_id" Endpoints.EndpointId :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "subpage" :> QPT "shape" :> Get '[HTML] (Html ())
-  , deleteProjectGet :: mode :- "p" :> ProjectId :> "delete" :> Get '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
   , manualIngestGet :: mode :- "p" :> ProjectId :> "manual_ingest" :> Get '[HTML] (Html ())
   , manualIngestPost :: mode :- "p" :> ProjectId :> "manual_ingest" :> ReqBody '[FormUrlEncoded] ManualIngestion.RequestMessageForm :> Post '[HTML] (Html ())
   , dataSeedingGet :: mode :- "p" :> ProjectId :> "bulk_seed_and_ingest" :> Get '[HTML] (Html ())
@@ -205,27 +198,14 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
 cookieProtectedServer :: Servant.ServerT (Servant.NamedRoutes CookieProtectedRoutes) ATAuthCtx
 cookieProtectedServer =
   CookieProtectedRoutes
-    { projectListGet = ListProjects.listProjectsGetH
-    , dashboardGet = Dashboard.dashboardGetH
-    , projectCreateGet = CreateProject.createProjectGetH
-    , projectCreatePost = CreateProject.createProjectPostH
-    , projectSettingsGet = CreateProject.projectSettingsGetH
-    , projectDeleteGet = CreateProject.deleteProjectGetH
-    , notificationsUpdateChannelPost = CreateProject.updateNotificationsChannel
+    { dashboardGet = Dashboard.dashboardGetH
+    , projects = ProjectsRoutes.server
     , membersManageGet = ManageMembers.manageMembersGetH
     , membersManagePost = ManageMembers.manageMembersPostH
     , manageSubscriptionGet = ManageMembers.manageSubGetH
     , onboardingGet = Onboarding.onboardingGetH
-    , logExplorerGet = Log.apiLogH
-    , logExplorerItemGet = LogItem.apiLogItemH
-    , logExplorerItemDetailedGet = LogItem.expandAPIlogItemH
-    , anomalyAcknowlegeGet = AnomalyList.acknowlegeAnomalyGetH
-    , anomalyUnAcknowlegeGet = AnomalyList.unAcknowlegeAnomalyGetH
-    , anomalyArchiveGet = AnomalyList.archiveAnomalyGetH
-    , anomalyUnarchiveGet = AnomalyList.unArchiveAnomalyGetH
-    , anomalyBulkActionsPost = AnomalyList.anomalyBulkActionsPostH
-    , anomalyListGet = AnomalyList.anomalyListGetH
-    , anomalyDetailsGet = AnomalyList.anomalyDetailsGetH
+    , logExplorer = LogExplorerRoutes.server
+    , anomalies = AnomaliesRoutes.server
     , documentationPut = Documentation.documentationPutH
     , documentationPost = Documentation.documentationPostH
     , documentationGet = Documentation.documentationGetH
@@ -236,7 +216,6 @@ cookieProtectedServer =
     , fieldDetailsPartial = EndpointDetails.fieldDetailsPartialH
     , endpointDetailsWithHash = EndpointDetails.endpointDetailsWithHashH
     , endpointDetails = EndpointDetails.endpointDetailsH
-    , deleteProjectGet = CreateProject.deleteProjectGetH
     , manualIngestGet = ManualIngestion.manualIngestGetH
     , manualIngestPost = ManualIngestion.manualIngestPostH
     , dataSeedingGet = DataSeeding.dataSeedingGetH
@@ -263,7 +242,7 @@ cookieProtectedServer =
     , alertSingleToggleActive = Alerts.alertSingleToggleActiveH
     , collectionsGet = Testing.testingGetH
     , newCollectionPost = Testing.testingPostH
-    , collectionGet = Testing.collectionGetH
+    , collectionGet = TestCollectionEditor.collectionGetH
     , collectionPut = Testing.testingPutH
     , collectionStepPost = Testing.collectionStepPostH
     , collectionStepPut = Testing.collectionStepPutH

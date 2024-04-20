@@ -6,6 +6,8 @@ edition = "2021"
 
 [dependencies]
 hs-bindgen = { version = "0.9.0", features = ["full"] }
+testkit = {path = "../../testkit/"}
+tokio = { version = "1.29.1", features = ["full"] }
 
 [lib]
 crate-type = ["staticlib", "cdylib"]

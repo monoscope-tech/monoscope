@@ -440,7 +440,7 @@ anomalyItem hideByDefault currTime anomaly icon title subTitle content = do
       input_ [term "aria-label" "Select Issue", type_ "checkbox", name_ "anomalyId", value_ anomalyId]
     div_ [class_ "space-y-3 grow"] do
       div_ [class_ "space-x-3"] do
-        a_ [href_ $ "/p/" <> anomaly.projectId.toText <> "/anomaly/" <> anomaly.targetHash, class_ "inline-block font-bold text-blue-700 space-x-2"] do
+        a_ [href_ $ "/p/" <> anomaly.projectId.toText <> "/anomalies/by_hash/" <> anomaly.targetHash, class_ "inline-block font-bold text-blue-700 space-x-2"] do
           img_ [src_ icon, class_ "inline w-4 h-4"]
           span_ $ toHtml title
         small_ [class_ "inline-block text-gray-800"] $ fromMaybe (toHtml @String "") subTitle
@@ -462,7 +462,7 @@ anomalyItem hideByDefault currTime anomaly icon title subTitle content = do
           div_ [class_ "flex items-center gap-2 mt-5"] do
             anomalyArchiveButton anomaly.projectId anomaly.id (isJust anomaly.archivedAt)
             anomalyAcknowlegeButton anomaly.projectId anomaly.id (isJust anomaly.acknowlegedAt)
-            let modalEndpoint = "/p/" <> anomaly.projectId.toText <> "/anomaly/" <> anomaly.targetHash <> "?modal=True"
+            let modalEndpoint = "/p/" <> anomaly.projectId.toText <> "/anomalies/by_hash/" <> anomaly.targetHash <> "?modal=True"
             Components.drawerWithURLContent_ ("expand-log-drawer-" <> anomaly.targetHash) modalEndpoint $ span_ [class_ "inline-block cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100"] (mIcon_ "enlarge" "w-3 h-3")
         fromMaybe (toHtml @String "") content
     let anomalyQueryPartial = buildQueryForAnomaly anomaly.anomalyType anomaly.targetHash
@@ -610,7 +610,7 @@ anomalyDetailsPage anomaly shapesWithFieldsMap fields prvFormatsM currTime modal
     div_ [class_ "w-full flex items-center gap-4 mt-4 overflow-y-auto "] do
       if modal
         then do
-          a_ [href_ $ "/p/" <> anomaly.projectId.toText <> "/anomaly/" <> anomaly.targetHash, term "data-tippy-content" "Go to page", class_ "btn btn-sm btn-outline "] do
+          a_ [href_ $ "/p/" <> anomaly.projectId.toText <> "/anomalies/by_hash/" <> anomaly.targetHash, term "data-tippy-content" "Go to page", class_ "btn btn-sm btn-outline "] do
             "Expand Page" >> mIcon_ "enlarge" "w-3 h-3"
         else do
           anomalyArchiveButton anomaly.projectId anomaly.id (isJust anomaly.archivedAt)

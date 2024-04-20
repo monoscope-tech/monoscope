@@ -357,7 +357,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
 
                            Endpoint: `{endpointPath}`
 
-                           <https://app.apitoolkit.io/p/{pid.toText}/anomaly/{targetHash}|More details on the apitoolkit>
+                           <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
                             |]
         _ -> do
           forM_ users \u ->
@@ -369,7 +369,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
          
                      <p>We detected a new endpoint on `{project.title}`:</p>
                      <p><strong>{endpointPath}</strong></p>
-                     <a href="https://app.apitoolkit.io/p/{pid.toText}/anomaly/{targetHash}">More details on the apitoolkit</a>
+                     <a href="https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}">More details on the apitoolkit</a>
                      <br/><br/>
                      Regards,
                      Apitoolkit team
@@ -398,7 +398,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
     
                                           We detected a different API request shape to your endpoints than what you usually have
     
-                                          <https://app.apitoolkit.io/p/{pid.toText}/anomaly/{targetHash}|More details on the apitoolkit>
+                                          <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
                                  |]
             _ -> do
               forM_ users \u ->
@@ -409,7 +409,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
          Hi {u.firstName},<br/>
        
          <p>We detected a different API request shape to your endpoints than what you usually have..</p>
-         <a href="https://app.apitoolkit.io/p/{pid.toText}/anomaly/{targetHash}">More details on the apitoolkit</a>
+         <a href="https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}">More details on the apitoolkit</a>
          <br/><br/>
          Regards,<br/>
          Apitoolkit team
@@ -428,7 +428,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
   
                                        We detected that a particular field on your API is returning a different format/type than what it usually gets.
   
-                                       <https://app.apitoolkit.io/p/{pid.toText}/anomaly/{targetHash}|More details on the apitoolkit>
+                                       <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
                                |]
           _ -> forM_ users \u ->
             sendEmail
@@ -438,7 +438,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
      Hi {u.firstName},<br/>
    
      <p>We detected that a particular field on your API is returning a different format/type than what it usually gets.</p>
-     <a href="https://app.apitoolkit.io/p/{pid.toText}/anomaly/{targetHash}">More details on the apitoolkit</a>
+     <a href="https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}">More details on the apitoolkit</a>
      <br/><br/>
      Regards,<br/>
      Apitoolkit team

@@ -1,7 +1,7 @@
 module Pages.Endpoints.EndpointComponents (fieldTypeToDisplay, fieldCategoryToDisplay) where
 
-import Lucid
-import Models.Apis.Fields qualified as Fields
+import Lucid (Html, class_, span_)
+import Models.Apis.Fields.Types qualified as Fields
 
 
 fieldTypeToDisplay :: Fields.FieldTypes -> Html ()

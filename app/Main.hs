@@ -1,7 +1,7 @@
 module Main (main) where
 
-import Relude
-import Start
+import Relude ( IO )
+import Start ( startApp )
 
 
 main :: IO ()

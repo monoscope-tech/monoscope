@@ -100,7 +100,7 @@ runAPItoolkit :: IO ()
 runAPItoolkit =
   Safe.bracket
     (getAppContext & runFailIO & runEff)
-    (runEff . shutdownTalstack)
+    (runEff . shutdownAPItoolkit)
     \env -> runEff . runTime . runConcurrent $ do
       let baseURL = "http://localhost:" <> show env.config.port
       liftIO $ blueMessage $ "Starting APItoolkit server on " <> baseURL
@@ -230,8 +230,8 @@ effToHandler computation = do
   either T.throwError pure v
 
 
-shutdownTalstack :: AuthContext -> Eff '[IOE] ()
-shutdownTalstack env =
+shutdownAPItoolkit :: AuthContext -> Eff '[IOE] ()
+shutdownAPItoolkit env =
   liftIO $ do
     Pool.destroyAllResources env.pool
     Pool.destroyAllResources env.jobsPool
