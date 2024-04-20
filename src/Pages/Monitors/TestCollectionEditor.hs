@@ -1,24 +1,18 @@
 module Pages.Monitors.TestCollectionEditor (collectionGetH, collectionPage) where
 
-import Data.Aeson qualified as AE
 import Data.Default (def)
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Lucid
-import Lucid.Base (TermRaw (termRaw))
-import Lucid.Htmx
-import Lucid.Hyperscript
 import Models.Projects.Projects qualified as Projects
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Pages.NonMember (userNotMemeberPage)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext)
 import System.Types (ATAuthCtx)
-import Utils (faIcon_, scheduleIntervals, userIsProjectMember)
 import Utils qualified
 
 

@@ -1,8 +1,4 @@
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE QuasiQuotes #-}
-{-# LANGUAGE RankNTypes #-}
-
-module Pages.Outgoing (outgoingGetH) where
+module Pages.Endpoints.Outgoing (outgoingGetH) where
 
 import Data.Default (def)
 import Data.Text qualified as T

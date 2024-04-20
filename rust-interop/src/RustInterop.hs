@@ -24,4 +24,4 @@ import Foreign.C.String
 import Foreign.C.Types
 import Foreign.Ptr
 
-foreign import ccall safe "__c_run_testkit" run_testkit :: CString -> IO (())
+foreign import ccall safe "__c_run_testkit" run_testkit :: CString -> IO (CString)

@@ -1,4 +1,4 @@
-module Pages.GenerateSwagger (generateGetH, generateSwagger) where
+module Pages.Specification.GenerateSwagger (generateGetH, generateSwagger) where
 
 import Data.Aeson
 import Data.Aeson qualified as AE

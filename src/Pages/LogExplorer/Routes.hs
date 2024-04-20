@@ -1,13 +1,19 @@
 module Pages.LogExplorer.Routes (Routes, Routes' (..)) where
 
-import Data.Time
+import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
-import Lucid
-import Lucid.Htmx
-import Relude
-import Servant
+import Lucid (Html)
+import Relude (Generic, Text)
+import Servant (
+  Capture,
+  GenericMode (type (:-)),
+  Get,
+  NamedRoutes,
+  QueryParam,
+  type (:>),
+ )
 import Servant.HTML.Lucid (HTML)
-import Servant.Htmx
+import Servant.Htmx (HXBoosted, HXRequest)
 
 
 type QPU a = QueryParam a UTCTime
@@ -23,4 +29,4 @@ data Routes' mode = Routes'
   , logExplorerItemGet :: mode :- "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> Get '[HTML] (Html ())
   , logExplorerItemDetailedGet :: mode :- "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> "detailed" :> Get '[HTML] (Html ())
   }
-  deriving (Generic)
+  deriving stock (Generic)

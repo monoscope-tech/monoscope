@@ -26,8 +26,6 @@ library
   exposed-modules:
       BackgroundJobs
       Data.Default.Instances
-      DataSeeding
-      DataSeedingSpec
       Models.Apis.Anomalies
       Models.Apis.Endpoints
       Models.Apis.Fields
@@ -60,13 +58,13 @@ library
       Pages.Charts.Charts
       Pages.Components
       Pages.Dashboard
-      Pages.Documentation
       Pages.Endpoints.EndpointComponents
       Pages.Endpoints.EndpointDetails
       Pages.Endpoints.EndpointList
+      Pages.Endpoints.Outgoing
+      Pages.Endpoints.Routes
+      Pages.Endpoints.Server
       Pages.Fields.FieldDetails
-      Pages.GenerateSwagger
-      Pages.GenerateSwaggerSpec
       Pages.IntegrationDemos.AdonisJS
       Pages.IntegrationDemos.Django
       Pages.IntegrationDemos.DotNet
@@ -82,13 +80,13 @@ library
       Pages.LogExplorer.LogItem
       Pages.LogExplorer.Routes
       Pages.LogExplorer.Server
-      Pages.ManualIngestion
       Pages.Monitors.Alerts
+      Pages.Monitors.Routes
+      Pages.Monitors.Server
       Pages.Monitors.TestCollectionEditor
       Pages.Monitors.Testing
       Pages.NonMember
       Pages.Onboarding
-      Pages.Outgoing
       Pages.Projects.CreateProject
       Pages.Projects.ListProjects
       Pages.Projects.ManageMembers
@@ -98,6 +96,11 @@ library
       Pages.Reports
       Pages.Share
       Pages.SlackInstall
+      Pages.Specification.Documentation
+      Pages.Specification.GenerateSwagger
+      Pages.Specification.GenerateSwaggerSpec
+      Pages.Specification.Routes
+      Pages.Specification.Server
       Pages.Survey
       Pkg.Components
       Pkg.ConvertKit
@@ -185,7 +188,6 @@ library
     , envy
     , errors
     , extra
-    , fakedata
     , fmt
     , generic-lens
     , githash
@@ -220,7 +222,6 @@ library
     , postgresql-simple
     , pretty-relative-time
     , pretty-simple
-    , random
     , regex-tdfa
     , relude >=1.2.0.0
     , resource-pool
@@ -250,7 +251,6 @@ library
     , witch
     , wreq
     , xxhash
-    , yaml
   default-language: GHC2021
 
 executable apitoolkit-server-exe

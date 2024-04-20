@@ -109,7 +109,6 @@ library:
     - errors
     - extra
     - lucid-aria
-    - fakedata
     - fmt
     - PyF
     - generic-lens
@@ -132,7 +131,6 @@ library:
     - pg-transact
     - postgresql-migration
     - postgresql-simple
-    - random
     - regex-tdfa
     - resource-pool
     - resourcet
@@ -156,7 +154,6 @@ library:
     - witch
     - wreq
     - xxhash
-    - yaml
     - pretty-relative-time
     - nyan-interpolation
     - pretty-simple

@@ -44,7 +44,6 @@ import Lucid (
   a_,
   button_,
   class_,
-  crossorigin_,
   div_,
   for_,
   form_,
@@ -60,12 +59,9 @@ import Lucid (
   placeholder_,
   script_,
   span_,
-  src_,
-  style_,
   textarea_,
   type_,
  )
-import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
