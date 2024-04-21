@@ -164,6 +164,7 @@ library:
     - hspec-expectations-json
     - scotty
     - wai-extra
+    - wai-middleware-static
 
 executables:
   apitoolkit-server-exe:

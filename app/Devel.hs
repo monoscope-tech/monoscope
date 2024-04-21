@@ -20,20 +20,13 @@ import Lucid
 import qualified Data.Text.Lazy.IO as TIO
 import System.Directory (doesFileExist)
 import Network.HTTP.Types.Status
+import Network.Wai.Middleware.Static (staticPolicy, addBase, (>->), noDots, hasPrefix)
 
 
 dev :: IO ()
 dev = scotty 8000 $ do
-    get "/assets/*splat" $ do
-        fileName <- pathParam "splat"
-        let filePath = "static/public/assets/" <> toString @Text fileName
-        traceShowM filePath
-        file filePath
-    get "/public/*splat" $ do
-        fileName <- pathParam "splat"
-        let filePath = "static/public/" <> toString @Text fileName
-        traceShowM filePath
-        file filePath
+    middleware $ staticPolicy (hasPrefix "assets" >-> addBase "static/public" )
+    middleware $ staticPolicy (hasPrefix "public" >-> addBase "static" )
     get "/" $ do
         let bwconf =
               (def :: BWConfig)
@@ -50,12 +43,3 @@ dev = scotty 8000 $ do
             |]
                                                 } 
         html $ renderText $ bodyWrapper bwconf $ TestCollectionEditor.collectionPage pid collection (V.singleton  step)
-
-serveStatic :: FilePath -> ActionM ()
-serveStatic filePath = do
-    fileExists <- liftIO $ doesFileExist filePath
-    if fileExists
-        then do
-            fileContents <- liftIO $ TIO.readFile filePath
-            html fileContents
-        else status status404 

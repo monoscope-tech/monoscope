@@ -249,6 +249,7 @@ library
     , wai
     , wai-extra
     , wai-log
+    , wai-middleware-static
     , warp
     , witch
     , wreq
