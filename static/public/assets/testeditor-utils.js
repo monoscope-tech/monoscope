@@ -35,10 +35,10 @@ export function triggerToastEvent(event) {
   document.querySelector("body").dispatchEvent(event);
 }
 
-function isValidStep(step, errors) {
-  isValidAssert(step.asserts, step, errors);
-  hasMethod(step, step, errors);
-  if (step.headers) hasValidHeaders(step.headers, step, errors);
+function isValidStep(step, step_ind, errors) {
+  hasMethod(step, step_ind, errors);
+  if (step.asserts) isValidAssert(step.asserts, step_ind, errors);
+  if (step.headers) hasValidHeaders(step.headers, step_ind, errors);
 }
 function hasValidHeaders(headers, step, errors) {
   // Check if headers is an object
@@ -117,7 +117,7 @@ export function validateYaml(yaml) {
     }
     let errors = [];
     for (let [ind, step] of data.entries()) {
-      isValidStep(ind + 1, errors);
+      isValidStep(step, ind + 1, errors);
       if (errors.length !== 0) {
         return {
           validate_errors: errors,

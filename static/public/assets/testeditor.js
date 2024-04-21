@@ -189,7 +189,6 @@ export class Collection extends LitElement {
           value: yamlData,
           mode: "yaml",
           lineNumbers: true,
-          theme: "dracula",
         });
         editor.on("change", () => {
           this.codeHasChanges = true;
