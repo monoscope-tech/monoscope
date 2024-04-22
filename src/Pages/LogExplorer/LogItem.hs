@@ -12,31 +12,14 @@ import Data.UUID qualified as UUID
 import Data.Vector (iforM_)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
-import Lucid (
-  Html,
-  Term (term),
-  ToHtml (toHtml),
-  a_,
-  button_,
-  checked_,
-  class_,
-  div_,
-  id_,
-  input_,
-  name_,
-  onclick_,
-  p_,
-  role_,
-  span_,
-  style_,
-  type_,
- )
+import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxGet_, hxSwap_, hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
+import NeatInterpolation (text)
 import Network.URI (escapeURIString, isUnescapedInURI)
 import Pages.Components qualified as Components
 import Pages.NonMember (userNotMemeberPage)
@@ -261,12 +244,9 @@ apiLogItemView req expandItemPath = do
     button_
       [ class_ "btn btn-sm btn-outline"
       , term "data-reqJson" reqJson
-      , [__|on click if 'clipboard' in window.navigator then
-                  call navigator.clipboard.writeText(my @data-reqJson)
-                  send successToast(value:['Request json has been copied to clipboard']) to <body/>
-                end|]
+      , onclick_ "buildCurlRequest(event)"
       ]
-      $ span_ [] "Copy"
+      $ span_ [] "Copy as curl"
       >> faIcon_ "fa-copy" "fa-regular fa-copy" "h-3 w-3"
     button_
       [ class_ "btn btn-sm btn-outline"

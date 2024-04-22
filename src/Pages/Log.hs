@@ -640,6 +640,45 @@ jsonTreeAuxillaryCode pid = do
             }
         });
 
+      function buildCurlRequest(event) {
+          const data = JSON.parse(event.currentTarget.dataset.reqjson);
+          const request_headers = data.request_headers;
+          const request_body = data.request_body;
+          const url = "https://" + data.host + data.raw_url + " \\\n";
+          const method = data.method;
+          let curlCommand = 'curl -X "' + method + '" ' + url + " ";
+          let curlHeaders = "";
+          if (typeof request_headers === "object") {
+            try {
+              curlHeaders = Object.entries(request_headers)
+                .map(([key, value]) => '-H "' + key + " " + value + '" \\\n')
+                .join("");
+            } catch (error) {}
+          }
+          if (curlHeaders != "") curlCommand += curlHeaders;
+          let reqBody = "";
+          if (method.toLowerCase() != "get") {
+            try {
+              reqBody = " -d '" + JSON.stringify(request_body) + "' \\\n";
+            } catch (error) {
+              reqBody = "-data-raw " + '"' + request_body + '"  \\\n';
+            }
+          }
+          if (reqBody !== " -d ''") {
+            curlCommand += reqBody;
+          }
+          navigator.clipboard.writeText(curlCommand)
+            .then(() => {
+              const event = new CustomEvent("successToast", {
+                  detail: { value: ["Curl command copied"] },
+                  bubbles: true,
+                  composed: true,
+                });
+              document.querySelector("body").dispatchEvent(event);
+            })
+          
+      }
+
     function downloadJson(event) {
          event.stopPropagation()
          const json = event.currentTarget.dataset.reqjson
