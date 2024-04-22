@@ -21,22 +21,18 @@ import Data.Aeson (
   decode,
   encode,
  )
-import Data.Aeson qualified as AE
 import Data.Aeson qualified as Aeson
 import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
 import Data.Text qualified as T
-import Data.Text.Lazy qualified as TL
-import Data.Text.Lazy.Encoding qualified as TLE
 import Data.Time (getCurrentTime, getZonedTime)
 import Data.Time.LocalTime (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
-import Debug.Pretty.Simple (pTraceShowM)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
-import Foreign.C.String (withCString)
+-- import Foreign.C.String (withCString)
 import Lucid (
   Html,
   Term (term),
@@ -72,7 +68,7 @@ import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.NonMember (userNotMemeberPage)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
-import RustInterop (run_testkit)
+-- import RustInterop (run_testkit)
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
 import System.Config (AuthContext)
@@ -87,7 +83,7 @@ data TestCollectionForm = TestCollectionForm
   , description :: Text
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromForm, FromJSON)
+  deriving anyclass (FromForm)
 
 
 data ScheduleForm = ScheduleForm
@@ -156,6 +152,7 @@ testingPostH pid collection = do
               , config = Aeson.object []
               , schedule = Nothing
               , isScheduled = False
+              , collectionSteps = Testing.CollectionSteps V.empty
               }
       _ <- dbtToEff $ Testing.addCollection coll
       cols <- dbtToEff $ Testing.getCollections pid
@@ -317,7 +314,7 @@ modal pid = do
       |]
 
 
-collectionStepPostH :: Projects.ProjectId -> Testing.CollectionId -> Value -> ATAuthCtx (Html ())
+collectionStepPostH :: Projects.ProjectId -> Testing.CollectionId -> Testing.CollectionStepData -> ATAuthCtx (Html ())
 collectionStepPostH pid cid step_val = do
   appConf <- ask @AuthContext
   sess' <- Sessions.getSession
@@ -343,7 +340,7 @@ collectionStepPostH pid cid step_val = do
       pure ""
 
 
-collectionStepPutH :: Projects.ProjectId -> Testing.CollectionStepId -> Value -> ATAuthCtx (Html ())
+collectionStepPutH :: Projects.ProjectId -> Testing.CollectionStepId -> Testing.CollectionStepData -> ATAuthCtx (Html ())
 collectionStepPutH pid csid value = do
   appConf <- ask @AuthContext
   sess' <- Sessions.getSession
@@ -353,14 +350,14 @@ collectionStepPutH pid csid value = do
 
 data UpdatedStep = UpdatedStep
   { stepId :: Testing.CollectionStepId
-  , stepData :: AE.Value
+  , stepData :: Testing.CollectionStepData
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
 
 data CodeOperationsForm = CodeOperationsForm
-  { addedSteps :: V.Vector AE.Value
+  { addedSteps :: V.Vector Testing.CollectionStepData
   , deletedSteps :: V.Vector Text
   , updatedSteps :: [UpdatedStep]
   }
@@ -368,8 +365,8 @@ data CodeOperationsForm = CodeOperationsForm
   deriving anyclass (FromJSON, ToJSON)
 
 
-getStep :: Projects.ProjectId -> Testing.CollectionId -> ZonedTime -> AE.Value -> Testing.CollectionStep
-getStep pid col_id cr step_val =
+getStep :: Projects.ProjectId -> Testing.CollectionId -> ZonedTime -> Testing.CollectionStepData -> Testing.CollectionStep
+getStep pid col_id cr stepD =
   Testing.CollectionStep
     { id = Testing.CollectionStepId UUID.nil
     , createdAt = cr
@@ -377,7 +374,7 @@ getStep pid col_id cr step_val =
     , projectId = pid
     , collectionId = col_id
     , lastRun = Nothing
-    , stepData = step_val
+    , stepData = stepD
     }
 
 
@@ -426,21 +423,17 @@ runTestCollectionH pid col_id = do
   pure ""
 
 
-valueToText :: Value -> Text
-valueToText val = TL.toStrict $ TLE.decodeUtf8 $ encode val
-
-
-callRunTestkit :: String -> IO ()
-callRunTestkit hsString = withCString hsString run_testkit
+-- callRunTestkit :: String -> IO ()
+-- callRunTestkit hsString = withCString hsString run_testkit
 
 
 runTestStepH :: Projects.ProjectId -> Testing.CollectionId -> Testing.CollectionStepId -> ATAuthCtx (Html ())
 runTestStepH pid col_id step_id = do
   whenJustM (dbtToEff $ Testing.getCollectionStepById col_id step_id) \step -> do
     -- pTraceShowM step.stepData
-    pTraceShowM $ toString $ valueToText $ AE.Array [step.stepData]
+    -- pTraceShowM $ toString $ valueToText $ AE.Array [step.stepData]
 
-    _ <- liftIO $ callRunTestkit $ toString $ valueToText $ AE.Array [step.stepData]
+    -- _ <- liftIO $ callRunTestkit $ toString $ valueToText $ V.singleton step.stepData
     pass
 
   pure ""

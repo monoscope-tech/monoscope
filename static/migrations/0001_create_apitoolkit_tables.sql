@@ -881,8 +881,9 @@ CREATE TABLE IF NOT EXISTS tests.collections
   title              TEXT        NOT     NULL   DEFAULT        '',
   description        TEXT        NOT     NULL   DEFAULT        '',
   config             jsonb       NOT     NULL   DEFAULT     '{}'::jsonb,
-  schedule     TEXT  DEFAULT NULL,
-  is_scheduled BOOL  NOT  NULL   DEFAULT 'f'
+  schedule           TEXT        DEFAULT NULL,
+  is_scheduled       BOOL        NOT  NULL   DEFAULT 'f',
+	collection_steps   JSONB       NOT NULL DEFAULT '{}'::jsonb
 );
 SELECT manage_updated_at('tests.collections');
 create index if not exists idx_apis_testing_project_Id on tests.collections(project_id); 
@@ -896,7 +897,7 @@ CREATE TABLE IF NOT EXISTS tests.collection_steps
   last_run           TIMESTAMP   WITH    TIME   ZONE           DEFAULT NULL,
   project_id         UUID        NOT     NULL   REFERENCES     projects.projects (id)              ON      DELETE CASCADE,
   collection_id      UUID        NOT     NULL   REFERENCES     tests.collections (id)                   ON      DELETE CASCADE,
-  step_data          jsonb       NOT     NULL   DEFAULT        '{}'::jsonb
+  step_data          jsonb       NOT     NULL   DEFAULT        '[]'::jsonb
 );
 SELECT manage_updated_at('tests.collection_steps');
 create index if not exists idx_apis_test_steps_id on tests.collection_steps(id); 

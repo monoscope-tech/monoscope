@@ -6,6 +6,9 @@ module Models.Tests.Testing (
   CollectionListItem (..),
   CollectionStepId (..),
   CollectionStep (..),
+  CollectionStepData (..),
+  CollectionSteps (..),
+  stepDataMethod,
   addCollection,
   addCollectionStep,
   getCollections,
@@ -37,12 +40,13 @@ import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, queryOn
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple hiding (execute, executeMany, query)
 import Database.PostgreSQL.Simple.FromField
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField
 import Database.PostgreSQL.Transact (DBT, executeMany)
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
-import Relude
+import Relude hiding (get, put)
 import Web.HttpApiData (FromHttpApiData)
 
 
@@ -69,6 +73,72 @@ instance HasField "toText" CollectionStepId Text where
   getField = UUID.toText . collectionStepId
 
 
+data CollectionStepData = CollectionStepData
+  { title :: Maybe Text
+  , post :: Maybe Text
+  , get :: Maybe Text
+  , update :: Maybe Text
+  , delete :: Maybe Text
+  , patch :: Maybe Text
+  , put :: Maybe Text
+  , params :: Maybe (Map Text Text)
+  , headers :: Maybe (Map Text Text)
+  , json :: Maybe (Value)
+  , asserts :: Maybe (V.Vector (Map Text Value))
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (NFData, Default)
+  deriving (FromField) via Aeson CollectionStepData
+  deriving (ToField) via Aeson CollectionStepData
+
+
+stepDataMethod :: CollectionStepData -> Maybe (Text, Text)
+stepDataMethod stepData =
+  asum
+    . map (\(method, url) -> fmap (\u -> (method, u)) url)
+    $ [ ("GET", stepData.get)
+      , ("POST", stepData.post)
+      , ("UPDATE", stepData.update)
+      , ("DELETE", stepData.delete)
+      , ("PATCH", stepData.patch)
+      , ("PUT", stepData.put)
+      ]
+
+
+instance ToJSON CollectionStepData where
+  toJSON csd =
+    object
+      $ [ "title" .= csd.title
+        , "POST" .= csd.post -- Change the key to "POST" here for the output JSON
+        , "GET" .= csd.get
+        , "UPDATE" .= csd.update
+        , "DELETE" .= csd.delete
+        , "PATCH" .= csd.patch
+        , "PUT" .= csd.put
+        , "params" .= csd.params
+        , "headers" .= csd.headers
+        , "json" .= csd.json
+        , "asserts" .= csd.asserts
+        ]
+
+
+instance FromJSON CollectionStepData where
+  parseJSON = withObject "CollectionStepData" $ \v -> do
+    title <- v .:? "title"
+    get <- v .:? "GET"
+    post <- v .:? "POST" -- Map from "POST" back to the `post` field
+    update <- v .:? "UPDATE"
+    delete <- v .:? "DELETE"
+    patch <- v .:? "PATCH"
+    put <- v .:? "PUT"
+    params <- v .:? "params"
+    headers <- v .:? "headers"
+    json <- v .:? "json"
+    asserts <- v .:? "asserts"
+    return CollectionStepData{..}
+
+
+-- TODO: delete table
 data CollectionStep = CollectionStep
   { id :: CollectionStepId
   , createdAt :: ZonedTime
@@ -76,13 +146,18 @@ data CollectionStep = CollectionStep
   , lastRun :: Maybe ZonedTime
   , projectId :: Projects.ProjectId
   , collectionId :: CollectionId
-  , stepData :: Value
+  , stepData :: CollectionStepData
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, ToJSON, FromJSON, NFData, Default)
   deriving
     (Entity)
     via (GenericEntity '[Schema "tests", TableName "collection_steps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] CollectionStep)
+
+newtype CollectionSteps = CollectionSteps  (V.Vector CollectionStepData)
+  deriving stock (Show, Generic)
+  deriving anyclass (ToJSON, FromJSON, NFData, Default)
+  deriving (FromField, ToField) via Aeson (CollectionSteps)
 
 
 data Collection = Collection
@@ -96,6 +171,7 @@ data Collection = Collection
   , config :: Value
   , schedule :: Maybe Text
   , isScheduled :: Bool
+  , collectionSteps :: CollectionSteps
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, ToJSON, FromJSON, NFData, Default)
@@ -141,7 +217,7 @@ insertSteps pid cid steps = do
   let params = map getStepParams steps
   executeMany q params
   where
-    getStepParams :: CollectionStep -> (Projects.ProjectId, CollectionId, AE.Value)
+    getStepParams :: CollectionStep -> (Projects.ProjectId, CollectionId, CollectionStepData)
     getStepParams step =
       ( pid
       , cid
@@ -201,7 +277,7 @@ updateCollectionConfig cid config = do
   execute Update q (config, cid)
 
 
-updateCollectionStep :: CollectionStepId -> Value -> DBT IO Int64
+updateCollectionStep :: CollectionStepId -> CollectionStepData -> DBT IO Int64
 updateCollectionStep csid val = do
   let q =
         [sql| UPDATE tests.collection_steps SET step_data=? WHERE id=? |]

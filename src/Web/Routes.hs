@@ -23,24 +23,22 @@ import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (notFound404)
 import Pages.Anomalies.Routes qualified as AnomaliesRoutes
 import Pages.Anomalies.Server qualified as AnomaliesRoutes
-import Pages.Endpoints.Routes qualified as  EndpointsRoutes
-import Pages.Endpoints.Server qualified as  EndpointsRoutes
-import Pages.Monitors.Routes qualified as MonitorsRoutes
-import Pages.Monitors.Server qualified as MonitorsRoutes
-import Pages.Specification.Routes qualified as SpecificationRoutes
-import Pages.Specification.Server qualified as SpecificationRoutes
 import Pages.Api qualified as Api
 import Pages.AutoComplete qualified as AutoComplete
 import Pages.Charts.Charts qualified as Charts
 import Pages.Dashboard qualified as Dashboard
-import Pages.Specification.Documentation qualified as Documentation
+import Pages.Endpoints.Routes qualified as EndpointsRoutes
+import Pages.Endpoints.Server qualified as EndpointsRoutes
 import Pages.Fields.FieldDetails qualified as FieldDetails
 import Pages.GenerateSwagger qualified as GenerateSwagger
 import Pages.Log qualified as Log
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Specification.GenerateSwagger qualified as GenerateSwagger
+import Pages.Specification.GenerateSwagger qualified as GenerateSwagger
 import Pages.LogExplorer.Routes qualified as LogExplorerRoutes
 import Pages.LogExplorer.Server qualified as LogExplorerRoutes
+import Pages.Monitors.Routes qualified as MonitorsRoutes
+import Pages.Monitors.Server qualified as MonitorsRoutes
 import Pages.Onboarding qualified as Onboarding
 import Pages.Projects.Routes qualified as ProjectsRoutes
 import Pages.Projects.Server qualified as ProjectsRoutes
@@ -49,6 +47,9 @@ import Pages.RedactedFields qualified as RedactedFields
 import Pages.Reports qualified as Reports
 import Pages.Share qualified as Share
 import Pages.SlackInstall qualified as SlackInstall
+import Pages.Specification.GenerateSwagger qualified as GenerateSwagger
+import Pages.Specification.Routes qualified as SpecificationRoutes
+import Pages.Specification.Server qualified as SpecificationRoutes
 import Pages.Survey qualified as Survey
 import Relude
 import Servant (AuthProtect, Capture, Context (..), Delete, FormUrlEncoded, Get, Header, Headers, JSON, NoContent, PlainText, Post, QueryParam, ReqBody, StdMethod (GET), Verb, (:>))

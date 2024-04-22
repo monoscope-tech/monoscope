@@ -26,6 +26,7 @@ library
   exposed-modules:
       BackgroundJobs
       Data.Default.Instances
+      Devel
       Models.Apis.Anomalies
       Models.Apis.Endpoints
       Models.Apis.Fields
@@ -161,7 +162,7 @@ library
       TemplateHaskell
       RoleAnnotations
       NoImplicitPrelude
-  ghc-options: -fwrite-ide-info -hiedir=.hie -O -Weverything -Werror -Wno-error=deprecations -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -j4 +RTS -A128m -n2m -RTS
+  ghc-options: -fwrite-ide-info -hiedir=.hie -O -Weverything -Werror -Wno-error=deprecations -Wno-error=unused-packages -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -j4 +RTS -A128m -n2m -RTS
   build-depends:
       HaskellNet
     , PyF
@@ -247,7 +248,6 @@ library
     , valor >=1.0.0.0
     , vector
     , wai
-    , wai-extra
     , wai-log
     , wai-middleware-static
     , warp
@@ -258,8 +258,6 @@ library
 
 executable apitoolkit-server-exe
   main-is: Main.hs
-  other-modules:
-      Devel
   hs-source-dirs:
       app
   default-extensions:
@@ -292,7 +290,7 @@ executable apitoolkit-server-exe
       TemplateHaskell
       RoleAnnotations
       NoImplicitPrelude
-  ghc-options: -fwrite-ide-info -hiedir=.hie -O -Weverything -Werror -Wno-error=deprecations -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -j4 +RTS -A128m -n2m -RTS -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
+  ghc-options: -fwrite-ide-info -hiedir=.hie -O -Weverything -Werror -Wno-error=deprecations -Wno-error=unused-packages -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -j4 +RTS -A128m -n2m -RTS -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
   build-depends:
       apitoolkit-server
     , relude >=1.2.0.0
@@ -336,7 +334,7 @@ test-suite doctests
       TemplateHaskell
       RoleAnnotations
       NoImplicitPrelude
-  ghc-options: -fwrite-ide-info -hiedir=.hie -O -Weverything -Werror -Wno-error=deprecations -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -j4 +RTS -A128m -n2m -RTS -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
+  ghc-options: -fwrite-ide-info -hiedir=.hie -O -Weverything -Werror -Wno-error=deprecations -Wno-error=unused-packages -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -j4 +RTS -A128m -n2m -RTS -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
   build-depends:
       apitoolkit-server
     , base
@@ -381,7 +379,7 @@ test-suite tests
       TemplateHaskell
       RoleAnnotations
       NoImplicitPrelude
-  ghc-options: -fwrite-ide-info -hiedir=.hie -O -Weverything -Werror -Wno-error=deprecations -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -j4 +RTS -A128m -n2m -RTS
+  ghc-options: -fwrite-ide-info -hiedir=.hie -O -Weverything -Werror -Wno-error=deprecations -Wno-error=unused-packages -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-orphans -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -j4 +RTS -A128m -n2m -RTS
   build-depends:
       apitoolkit-server
     , base

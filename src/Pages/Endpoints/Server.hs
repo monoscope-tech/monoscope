@@ -3,8 +3,8 @@ module Pages.Endpoints.Server (server) where
 import Models.Projects.Projects qualified as Projects
 import Pages.Endpoints.EndpointDetails qualified as EndpointDetails
 import Pages.Endpoints.EndpointList qualified as EndpointList
-import Pages.Endpoints.Routes (Routes, Routes' (..))
 import Pages.Endpoints.Outgoing qualified as Outgoing
+import Pages.Endpoints.Routes (Routes, Routes' (..))
 import Servant qualified
 import System.Types (ATAuthCtx)
 
