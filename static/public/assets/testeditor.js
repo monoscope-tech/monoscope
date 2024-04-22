@@ -124,6 +124,43 @@ export class Collection extends LitElement {
     this.addEventListener("close-settings", () => {
       this.showSettings = false;
     });
+
+    document.addEventListener("DOMContentLoaded", function () {
+      require.config({ paths: { vs: "/assets/js/monaco/vs" } });
+      require.config({
+        paths: { vs: "https://unpkg.com/monaco-editor/min/vs" },
+      });
+      require(["vs/editor/editor.main"], function () {
+        monaco.editor.defineTheme("nightOwl", {
+          base: "vs-dark",
+          inherit: true,
+          rules: [
+            { token: "comment", foreground: "#6A9955" },
+            { token: "keyword", foreground: "#C586C0" },
+            { token: "number", foreground: "#B5CEA8" },
+            { token: "string", foreground: "#CE9178" },
+            { token: "operator", foreground: "#D4D4D4" },
+            { token: "identifier", foreground: "#D4D4D4" },
+            { token: "type", foreground: "#4EC9B0" },
+            { token: "delimiter", foreground: "#D4D4D4" },
+            { token: "punctuation", foreground: "#D4D4D4" },
+            { token: "namespace", foreground: "#9CDCFE" },
+            { token: "function", foreground: "#DCDCAA" },
+            { token: "class", foreground: "#4EC9B0" },
+            { token: "variable", foreground: "#D4D4D4" },
+          ],
+          colors: {
+            "editor.foreground": "#D4D4D4",
+            "editor.background": "#011627",
+            "editor.selectionBackground": "#2D3643",
+            "editor.lineHighlightBackground": "#202B33",
+            "editorCursor.foreground": "#D4D4D4",
+            "editorWhitespace.foreground": "#404040",
+          },
+        });
+        window.monacoTestEditor = monaco.editor;
+      });
+    });
   }
 
   async handleAddStep(event) {
@@ -185,13 +222,20 @@ export class Collection extends LitElement {
       });
 
       setTimeout(() => {
-        const editor = CodeMirror(document.getElementById("test-editor"), {
-          value: yamlData,
-          mode: "yaml",
-          lineNumbers: true,
-          theme: "dracula",
-        });
-        editor.on("change", () => {
+        const editor = window.monacoTestEditor.create(
+          document.getElementById("test-editor"),
+          {
+            value: yamlData,
+            language: "yaml",
+            minimap: { enabled: false },
+            automaticLayout: true,
+            fontSize: 14,
+            lineHeight: 20,
+            lineNumbersMinChars: 3,
+          }
+        );
+
+        editor.onDidChangeModelContent(() => {
           this.codeHasChanges = true;
         });
         window.testEditor = editor;
@@ -215,6 +259,14 @@ export class Collection extends LitElement {
     if (window.testEditor) {
       const val = window.testEditor.getValue();
       const data = validateYaml(val);
+      if (data.validate_errors) {
+        data.validate_errors.forEach((err) => {
+          const errEvent = getEvent("errorToast", {
+            value: [err],
+          });
+          triggerToastEvent(errEvent);
+        });
+      }
       if (data) {
         const operations = getDeletedUpdatedAndNewSteps(
           this.collection.steps,
@@ -234,6 +286,7 @@ export class Collection extends LitElement {
             triggerToastEvent(event);
           }
         } catch (error) {
+          console.log(error);
           const errEvent = getEvent("errorToast", {
             value: ["Something went wrong"],
           });
@@ -1511,6 +1564,11 @@ class BodyElement extends LitElement {
   constructor() {
     super();
     this.body = { current: "json", json: "", url: [["", ""]] };
+    if (this.body.current === "json") {
+      setTimeout(() => {
+        this.createJsonEditor();
+      });
+    }
   }
 
   sendEvent(data) {
@@ -1522,6 +1580,33 @@ class BodyElement extends LitElement {
     this.dispatchEvent(event);
   }
 
+  createJsonEditor() {
+    if (window.monacoTestEditor) {
+      const editor = window.monacoTestEditor.create(
+        document.getElementById("request_json_body"),
+        {
+          value: this.body.json || "",
+          language: "json",
+          minimap: { enabled: false },
+          automaticLayout: true,
+          lineNumbers: "off",
+          lineDecorationsWidth: 0,
+          glyphMargin: false,
+          lineNumbersMinChars: 0,
+          fontSize: 14,
+          folding: false,
+          tabSize: 2,
+          insertSpaces: true,
+        }
+      );
+      editor.onDidChangeModelContent((change) => {
+        const value = editor.getValue();
+        this.body.json = value;
+        this.sendEvent(this.body);
+      });
+    }
+  }
+
   render() {
     return html`<div>
       <select
@@ -1529,6 +1614,12 @@ class BodyElement extends LitElement {
         @change=${(e) => {
           this.body.current = e.target.value;
           this.sendEvent(this.body);
+
+          if (e.target.value === "json") {
+            setTimeout(() => {
+              this.createJsonEditor();
+            }, 100);
+          }
         }}
       >
         <option value="json">json</option>
@@ -1536,15 +1627,10 @@ class BodyElement extends LitElement {
       </select>
       <div class="mt-2 flex flex-col gap-2">
         ${this.body.current === "json"
-          ? html`<textarea
-              .value=${this.body.json}
-              @keyup=${(e) => {
-                this.body.json = e.target.value;
-                this.sendEvent(this.body);
-              }}
-              class="flex h-36 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              placeholder="json request body"
-            ></textarea>`
+          ? html`<div
+              id="request_json_body"
+              class="border rounded-md h-36 w-full"
+            ></div>`
           : this.body.url.map(
               (p, ind) =>
                 html`<div class="flex gap-2">
