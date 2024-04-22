@@ -79,9 +79,9 @@ onboardingPage pid apikey hasRequest ans redi ctb = do
           div_ [class_ "flex flex-col w-full mt-10 py-4 items-center gap-4"]
             $ if hasRequest
               then completedBanner pid
-              else div_ [class_ "w-full max-w-xl"] $ integrateApiToolkit apikey ctb
+              else div_ [class_ "w-[1000px] min-w-0"] $ integrateApiToolkit apikey ctb
         div_ [class_ "w-full flex justify-center"] $ do
-          div_ [class_ "flex flex-col w-[800px] rounded-2xl border border-2"] $ do
+          div_ [class_ "flex flex-col w-[1000px] rounded-2xl border border-2"] $ do
             div_ [class_ "w-full px-8 py-4 flex justify-between border-b border-b-2"] $ do
               h4_ [class_ "font-bold text-lg"] "Onboarding checklist"
               let p
@@ -133,7 +133,7 @@ onboardingPage pid apikey hasRequest ans redi ctb = do
                         span_ "Waiting to recieve data from your server."
 
         div_ [class_ "w-full flex justify-center pb-16 mt-16"] $ do
-          div_ [class_ "flex flex-col w-[800px] rounded-2xl border border-2 grid grid-cols-2 border-b "] $ do
+          div_ [class_ "flex flex-col w-[1000px] rounded-2xl border border-2 grid grid-cols-2 border-b "] $ do
             a_ [class_ "flex flex-col gap-2 py-8 border-r px-8 hover:bg-blue-100 ", href_ "https://www.apitoolkit.io/docs", target_ "_BLANK"] do
               faSprite_ "file-lines" "thin" "h-8 w-8"
               h3_ [class_ "font-bold text-lg"] "Documentation"
