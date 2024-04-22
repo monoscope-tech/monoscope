@@ -1,4 +1,6 @@
-
+{-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE RankNTypes #-}
 module Pages.Outgoing (outgoingGetH) where
 
 import Data.Default (def)
@@ -16,6 +18,7 @@ import NeatInterpolation
 import Pages.Charts.Charts (QueryBy (QBHost))
 import Pages.Charts.Charts qualified as Charts
 import Pages.NonMember
+import Pages.BodyWrapper
 import Pages.Onboarding qualified as Onboarding
 import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
@@ -34,12 +37,17 @@ import Lucid.Htmx
 import Lucid.Hyperscript.QuasiQuoter
 import Models.Apis.Anomalies qualified as Anomalies
 import Fmt (commaizeF, fixedF, fmt, (+|), (|+))
-import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pages.BodyWrapper
+
+
 data OutgoingParamInput = OutgoingParamInput
   { sortField :: Text
   , search :: Text
   , activeTab :: Text
   }
+
+
+
 
 outgoingGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
 outgoingGetH pid sortM searchM activeTabM = do
@@ -47,7 +55,7 @@ outgoingGetH pid sortM searchM activeTabM = do
   let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
-
+  
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then pure $ userNotMemeberPage sess 
@@ -57,7 +65,6 @@ outgoingGetH pid sortM searchM activeTabM = do
         hostsAndEvents <- Endpoints.dependenciesAndEventsCount pid
         pure (project, hostsAndEvents)
       let bwconf =
-            def
             def
               { sessM = Just sess
               , currProject = project
@@ -136,10 +143,10 @@ outgoingPage pid paramInput hostsEvents =  do
       div_ [class_ "col-span-4 bg-white divide-y"] $ do
         forM_ hostsEvents $ \host -> do
           div_ [class_ "border-b border-gray-200 outgoing_item flex justify-between px-4 py-2 align-center mt-8"] $ do
-            div_ [class_ "flex-1"] $ a_ [href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> host.host, class_ "text-blue-500 hover:text-slate-600"] $ toHtml (T.replace "http://" "" $ T.replace "https://" "" host.host)
-            div_ [class_ "flex-1 item-center"] $ do
+            div_ [class_ "flex-1 w-48  justify-center"] $ a_ [href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> host.host, class_ "text-blue-500 hover:text-slate-600"] $ toHtml (T.replace "http://" "" $ T.replace "https://" "" host.host)
+            div_ [class_ " flex-1 w-32 justify-center  text-center"] $ do
               a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=host%3D%3D" <> "\"" <> host.host <> "\"", class_ "text-blue-500 hover:text-slate-600"] $ "View logs"
-            div_ [class_ "flex-1 mb-4 item-center"] $ do
+            div_ [class_ "w-64 mb-4 justify-center flex-1 items-center"] $ do
               div_
                 [ class_ "w-56 h-12 px-3"
                 , hxGet_ $  "/charts_html?pid=" <> pid.toText <> "&since=14D&query_raw=" <> AnomalyList.escapedQueryPartial [PyF.fmt|host=="{host.host}" | timechart [1d]|]
@@ -147,7 +154,7 @@ outgoingPage pid paramInput hostsEvents =  do
                 , hxSwap_ "innerHTML"
                 ]
                ""
-            div_ [class_ " flex-1 item-center"] $ toHtml (show host.eventCount)
+            div_ [class_ " w-24 text-center"] $ toHtml (show host.eventCount)
     
       when (null hostsEvents) $ div_ [class_ "flex flex-col text-center justify-center items-center h-32"] $ do
         strong_ "No dependencies yet."
