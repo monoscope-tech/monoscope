@@ -66,10 +66,6 @@ import System.Config
 import System.Types
 import Utils
 import Web.FormUrlEncoded (FromForm)
-import qualified Data.Text as T
-import Data.Aeson ((.=), object, toJSON)
-import Control.Lens ((.~))
-import Network.Wreq
 
 data CreateProjectForm = CreateProjectForm
   { title :: Text
@@ -195,16 +191,6 @@ updateNotificationsChannel pid NotifListForm{notificationsChannel} = do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Updated Notifications Channels Successfully"]}|]
       pure $ addHeader hxTriggerData $ span_ ""
 
-sendToDiscord :: T.Text -> IO ()
-sendToDiscord userDetails = do
-  putStrLn "Hello world"
-  let discordWebhookUrl = "https://discord.com/api/webhooks/1230980245423788045/JQOJ7w3gmEduaOvPTnxEz4L8teDpX5PJoFkyQmqZHR8HtRqAkWIjv2Xk1aKadTyXuFy_"
-  let payload = object ["content" .= userDetails]
-  let opts = defaults & header "Content-Type" .~ ["application/json"]
-  response <- postWith opts (T.unpack discordWebhookUrl) (toJSON payload)
-  case response ^. responseStatus . statusCode of
-    200 -> putStrLn "Discord message sent successfully"
-    code -> putStrLn $ "Discord API returned status code: " ++ show code
 
 ----------------------------------------------------------------------------------------------------------
 -- createProjectPostH is the handler for the create projects page form handling.
@@ -557,14 +543,6 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
             |]
 
             div_ [class_ "p-5 flex w-full justify-end"] do
-              -- Button for sending to Discord
-              a_
-                [ class_ "lemonsqueezy-button py-2 px-5 w-max bg-blue-700 flex items-center text-[white] text-sm rounded-xl cursor-pointer"
-                , [__|on click call $ sendToDiscord (T.pack $ "User details: " ++ show cp) |]
-                ]
-                do
-                  span_ [id_ "discordIndicator", class_ "htmx-indicator loading loading-dots loading-md"] ""
-                  "Send to Discord"
 
               -- Button for calling window.payLemon()
               a_
@@ -573,7 +551,7 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
                 ]
                 do
                   span_ [id_ "payLemonIndicator", class_ "htmx-indicator loading loading-dots loading-md"] ""
-                  "Proceed with Lemon"
+                  "Proceed"
       when isUpdate do
         let pid = cp.projectId
         form_ [class_ "mt-10", hxPost_ [text|/p/$pid/notifications-channels|], hxSwap_ "none"] do
