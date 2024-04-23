@@ -720,7 +720,6 @@ documentationsPage pid swaggers swaggerID jsonString = do
           })
          |]
 
-  script_ [src_ "/assets/js/monaco/vs/loader.js", defer_ "true"] ("" :: Text)
   script_
     [text|
       document.addEventListener('DOMContentLoaded', function(){
