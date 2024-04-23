@@ -1,7 +1,6 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE OverloadedStrings #-}
 
 module Pages.Projects.CreateProject (
   CreateProjectForm,
@@ -66,6 +65,7 @@ import System.Config
 import System.Types
 import Utils
 import Web.FormUrlEncoded (FromForm)
+
 
 data CreateProjectForm = CreateProjectForm
   { title :: Text
@@ -349,7 +349,6 @@ processProjectPostForm cpRaw = do
           let bdy = createProjectBody sess envCfg cp.isUpdate cp (def @CreateProjectFormError) Nothing Nothing
           pure $ addHeader hxTriggerData $ addHeader ("/p/" <> pid.toText <> "/about_project") bdy
 
-
 ----------------------------------------------------------------------------------------------------------
 -- createProjectBody is the core html view
 createProjectBody :: Sessions.PersistentSession -> EnvConfig -> Bool -> CreateProjectForm -> CreateProjectFormError -> Maybe (V.Vector Projects.NotificationChannel) -> Maybe SlackData -> Html ()
@@ -543,15 +542,19 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
             |]
 
             div_ [class_ "p-5 flex w-full justify-end"] do
-
-              -- Button for calling window.payLemon()
+              -- if isUpdate then
+              --     button_ [class_ "inline-block py-2 px-5 bg-blue-700  text-[white] text-sm rounded-xl cursor-pointer"
+              --       , type_ "Submit"
+              --       ] "Submit"
+              --   else
               a_
                 [ class_ "lemonsqueezy-button py-2 px-5 w-max bg-blue-700 flex items-center text-[white] text-sm rounded-xl cursor-pointer"
                 , [__|on click call window.payLemon() |]
                 ]
                 do
-                  span_ [id_ "payLemonIndicator", class_ "htmx-indicator loading loading-dots loading-md"] ""
+                  span_ [id_ "createIndicator", class_ "htmx-indicator loading loading-dots loading-md"] ""
                   "Proceed"
+
       when isUpdate do
         let pid = cp.projectId
         form_ [class_ "mt-10", hxPost_ [text|/p/$pid/notifications-channels|], hxSwap_ "none"] do
