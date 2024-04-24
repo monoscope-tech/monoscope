@@ -55,7 +55,6 @@ transform fields tuples =
     timestamp = fromMaybe 0 $ fst3 <$> Safe.headMay tuples
 
 
-
 pivot' :: [(Int, Int, String)] -> ([String], [[Maybe Int]])
 pivot' rows = do
   let extractHeaders = ordNub . map thd3 . sortOn thd3

@@ -349,6 +349,7 @@ processProjectPostForm cpRaw = do
           let bdy = createProjectBody sess envCfg cp.isUpdate cp (def @CreateProjectFormError) Nothing Nothing
           pure $ addHeader hxTriggerData $ addHeader ("/p/" <> pid.toText <> "/about_project") bdy
 
+
 ----------------------------------------------------------------------------------------------------------
 -- createProjectBody is the core html view
 createProjectBody :: Sessions.PersistentSession -> EnvConfig -> Bool -> CreateProjectForm -> CreateProjectFormError -> Maybe (V.Vector Projects.NotificationChannel) -> Maybe SlackData -> Html ()
