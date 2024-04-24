@@ -107,9 +107,6 @@ createProjectFormV =
     <*> check1 description Valor.pass
 
 
-checkEmail :: Text -> Bool
-checkEmail = isJust . T.find (== '@')
-
 
 ----------------------------------------------------------------------------------------------------------
 -- createProjectGetH is the handler for the create projects page
