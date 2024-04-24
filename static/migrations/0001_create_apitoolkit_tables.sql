@@ -616,6 +616,7 @@ CREATE MATERIALIZED VIEW apis.project_request_stats AS
           project_id,
           COUNT(*) AS request_count
       FROM apis.request_dumps
+      WHERE created_at >= NOW() - interval '14 days'
       GROUP BY project_id
   ),
   previous_week_requests AS (
@@ -630,7 +631,7 @@ CREATE MATERIALIZED VIEW apis.project_request_stats AS
       SELECT 
           project_id,
           count(*) as total_endpoints,
-          count(*) FILTER (WHERE created_at >= NOW()::DATE - 14 AND created_at <= NOW()::DATE - 7) as total_endpoints_last_week
+          count(*) FILTER (WHERE created_at <= NOW()::DATE - 7) as total_endpoints_last_week
       FROM apis.endpoints
       GROUP BY project_id
   ),
@@ -638,15 +639,15 @@ CREATE MATERIALIZED VIEW apis.project_request_stats AS
       SELECT
           project_id,
           count(*) as total_shapes,
-          count(*) FILTER (WHERE created_at >= NOW()::DATE - 14 AND created_at <= NOW()::DATE - 7) as total_shapes_last_week
+          count(*) FILTER (WHERE created_at <= NOW()::DATE - 7) as total_shapes_last_week
       FROM apis.shapes
       GROUP BY project_id
   ),
   anomalies_stats AS (
       SELECT
           project_id,
-          count(*) FILTER (WHERE anomaly_type != 'field') as total_anomalies,
-          count(*) FILTER (WHERE created_at >= NOW()::DATE - 14 AND created_at < NOW()::DATE - 7 AND anomaly_type != 'field') as total_anomalies_last_week
+          count(*) FILTER (WHERE anomaly_type != 'field' AND acknowleged_at IS NULL) as total_anomalies,
+          count(*) FILTER (WHERE created_at < NOW()::DATE - 7 AND anomaly_type != 'field' AND acknowleged_at IS NULL) as total_anomalies_last_week
       FROM apis.anomalies
       GROUP BY project_id
   )
