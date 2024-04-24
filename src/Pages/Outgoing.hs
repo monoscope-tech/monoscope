@@ -12,6 +12,7 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT
 import Effectful.PostgreSQL.Transact.Effect
 import Effectful.Reader.Static (ask, asks)
+
 -- Fix the function name here
 
 import Fmt (commaizeF, fixedF, fmt, (+|), (|+))
@@ -38,10 +39,12 @@ import System.Config
 import System.Types
 import Utils
 
+
 data OutgoingParamInput = OutgoingParamInput
-  { sortField :: Text,
-    activeTab :: Text
+  { sortField :: Text
+  , activeTab :: Text
   }
+
 
 outgoingGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (Html ())
 outgoingGetH pid sortM = do
@@ -60,19 +63,21 @@ outgoingGetH pid sortM = do
         pure (project, hostsAndEvents)
       let bwconf =
             def
-              { sessM = Just sess,
-                currProject = project,
-                pageTitle = "Dependencies"
+              { sessM = Just sess
+              , currProject = project
+              , pageTitle = "Dependencies"
               }
 
       pure $ bodyWrapper bwconf $ outgoingPage pid (fromMaybe "events" sortM) hostsEvents
 
+
 sortOptions :: [(Text, Text, Text)]
 sortOptions =
-  [ ("First Seen", "First time the issue occured", "first_seen"),
-    ("Last Seen", "Last time the issue occured", "last_seen"),
-    ("Events", "Number of events", "events")
+  [ ("First Seen", "First time the issue occured", "first_seen")
+  , ("Last Seen", "Last time the issue occured", "last_seen")
+  , ("Events", "Number of events", "events")
   ]
+
 
 outgoingPage :: Projects.ProjectId -> Text -> V.Vector Endpoints.HostEvents -> Html ()
 outgoingPage pid sortV hostsEvents = do
@@ -95,8 +100,8 @@ outgoingPage pid sortV hostsEvents = do
                 sortOptions & mapM_ \(title, desc, identifier) -> do
                   let isActive = sortV == identifier
                   a_
-                    [ class_ $ "block flex flex-row px-3 py-2 hover:bg-blue-50 rounded-md cursor-pointer " <> (if isActive then " text-blue-800 " else ""),
-                      href_ $ "/p/" <> pid.toText <> "/outgoing?sort=" <> identifier
+                    [ class_ $ "block flex flex-row px-3 py-2 hover:bg-blue-50 rounded-md cursor-pointer " <> (if isActive then " text-blue-800 " else "")
+                    , href_ $ "/p/" <> pid.toText <> "/outgoing?sort=" <> identifier
                     ]
                     do
                       div_ [class_ "flex flex-col items-center justify-center px-3"] do
@@ -112,10 +117,10 @@ outgoingPage pid sortV hostsEvents = do
           div_ [class_ "relative flex w-full bg-white py-2 px-3 border-solid border border-gray-200 h-10"] $ do
             faIcon_ "fa-magnifying-glass" "fa-light fa-magnifying-glass" "h-5 w-5"
             input_
-              [ type_ "text",
-                [__| on input show .endpoint_item in #endpoints_container when its textContent.toLowerCase() contains my value.toLowerCase() |],
-                class_ "dataTable-search w-full h-full p-2 text-gray-500 font-normal focus:outline-none",
-                placeholder_ "Search endpoints..."
+              [ type_ "text"
+              , [__| on input show .endpoint_item in #endpoints_container when its textContent.toLowerCase() contains my value.toLowerCase() |]
+              , class_ "dataTable-search w-full h-full p-2 text-gray-500 font-normal focus:outline-none"
+              , placeholder_ "Search endpoints..."
               ]
 
       -- Data rows
@@ -127,10 +132,10 @@ outgoingPage pid sortV hostsEvents = do
               a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=host%3D%3D" <> "\"" <> host.host <> "\"", class_ "text-blue-500 hover:text-slate-600"] $ "View logs"
             div_ [class_ "w-64 mb-4 justify-center flex-1 items-center"] $ do
               div_
-                [ class_ "w-56 h-12 px-3",
-                  hxGet_ $ "/charts_html?pid=" <> pid.toText <> "&since=14D&query_raw=" <> AnomalyList.escapedQueryPartial [PyF.fmt|host=="{host.host}" | timechart [1d]|],
-                  hxTrigger_ "intersect once",
-                  hxSwap_ "innerHTML"
+                [ class_ "w-56 h-12 px-3"
+                , hxGet_ $ "/charts_html?pid=" <> pid.toText <> "&since=14D&query_raw=" <> AnomalyList.escapedQueryPartial [PyF.fmt|host=="{host.host}" | timechart [1d]|]
+                , hxTrigger_ "intersect once"
+                , hxSwap_ "innerHTML"
                 ]
                 ""
             div_ [class_ " w-24 text-center"] $ toHtml (show host.eventCount)
@@ -138,6 +143,7 @@ outgoingPage pid sortV hostsEvents = do
       when (null hostsEvents) $ div_ [class_ "flex flex-col text-center justify-center items-center h-32"] $ do
         strong_ "No dependencies yet."
         p_ "All dependencies' host names and number of events will be shown here."
+
 
 monitorOutgoingRequestDemos :: Html ()
 monitorOutgoingRequestDemos =
@@ -162,6 +168,7 @@ monitorOutgoingRequestDemos =
       [text|
       hljs.highlightAll();
     |]
+
 
 outgoingContentAxios :: Text -> Text -> Html ()
 outgoingContentAxios apikey current_tab =
@@ -198,6 +205,7 @@ outgoingContentAxios apikey current_tab =
                   <> "  console.log(`Example app listening on port ${port}`);\n"
                   <> "});\n"
 
+
 outgoingGuzzleLaravel :: Text -> Text -> Html ()
 outgoingGuzzleLaravel apikey current_tab =
   div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "laravel" then "" else "hidden"), id_ "laravel_content"]
@@ -229,6 +237,7 @@ outgoingGuzzleLaravel apikey current_tab =
                   <> "    return $response;\n"
                   <> "});\n"
 
+
 outgoingContentAdonis :: Text -> Text -> Html ()
 outgoingContentAdonis apikey current_tab =
   div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "adonis" then "" else "hidden"), id_ "adonis_content"]
@@ -258,6 +267,7 @@ outgoingContentAdonis apikey current_tab =
                   <> "  return response.data;\n"
                   <> "});\n"
 
+
 outgoingContentDjango :: Text -> Text -> Html ()
 outgoingContentDjango apikey current_tab =
   div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "django" then "" else "hidden"), id_ "django_content"]
@@ -279,6 +289,7 @@ outgoingContentDjango apikey current_tab =
                   <> "        \"https://jsonplaceholder.typicode.com/todos/2\")\n"
                   <> "    resp.read()\n"
                   <> "    return JsonResponse({\"data\": resp.read()})\n"
+
 
 outgoingContentFlask :: Text -> Text -> Html ()
 outgoingContentFlask apikey current_tab =
@@ -303,6 +314,7 @@ outgoingContentFlask apikey current_tab =
                   <> "    resp = observe_request(request).get(\"https://jsonplaceholder.typicode.com/todos/2\")\n"
                   <> "    return resp.read()\n"
 
+
 outgoingContentFastAPI :: Text -> Text -> Html ()
 outgoingContentFastAPI apikey current_tab =
   div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "fastapi" then "" else "hidden"), id_ "fastapi_content"]
@@ -325,6 +337,7 @@ outgoingContentFastAPI apikey current_tab =
                   <> "    # Observe the request and send it to the APIToolkit server\n"
                   <> "    resp = observe_request(request).get(\"https://jsonplaceholder.typicode.com/todos/2\")\n"
                   <> "    return resp.read()"
+
 
 outgoingContentFastify :: Text -> Text -> Html ()
 outgoingContentFastify apikey current_tab =
@@ -355,6 +368,7 @@ outgoingContentFastify apikey current_tab =
                   <> "  );\n"
                   <> "  return reply.send(res.data);\n"
                   <> "});"
+
 
 outgoingContentGin :: Text -> Text -> Html ()
 outgoingContentGin apikey current_tab =
@@ -402,6 +416,7 @@ outgoingContentGin apikey current_tab =
                   <> "    })\n"
                   <> "}"
 
+
 tabs :: Text -> Html ()
 tabs current_tab =
   ul_ [class_ "grid grid-cols-3 font-medium w-full gap-4"] $ do
@@ -417,67 +432,67 @@ tabs current_tab =
     |]
     li_ [class_ "shrink-0"] $ do
       button_
-        [ class_ $ if current_tab == "express" then "sdk_tab sdk_tab_active" else "sdk_tab",
-          [__| install Navigatable(content: #express_content) |],
-          id_ "express"
+        [ class_ $ if current_tab == "express" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #express_content) |]
+        , id_ "express"
         ]
         do
           img_ [src_ "/assets/framework-logos/express-logo.png", alt_ "Express Js", class_ "w-full"]
     li_ [class_ "shrink-0"] $ do
       button_
-        [ class_ $ if current_tab == "adonis" then "sdk_tab sdk_tab_active" else "sdk_tab",
-          [__| install Navigatable(content: #adonis_content) |],
-          id_ "adonis"
+        [ class_ $ if current_tab == "adonis" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #adonis_content) |]
+        , id_ "adonis"
         ]
         do
           img_ [src_ "/assets/framework-logos/adonis-logo.png", alt_ "adonis", class_ "w-full"]
     li_ [class_ "shrink-0"] do
       button_
-        [ class_ $ if current_tab == "gin" then "sdk_tab sdk_tab_active" else "sdk_tab",
-          [__| install Navigatable(content: #gin_content) |],
-          id_ "gin"
+        [ class_ $ if current_tab == "gin" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #gin_content) |]
+        , id_ "gin"
         ]
         do
           img_ [src_ "/assets/framework-logos/gin-logo.png", alt_ "Gin", class_ "w-full"]
     li_ [class_ "shrink-0"] do
       button_
-        [ class_ $ if current_tab == "laravel" then "sdk_tab sdk_tab_active" else "sdk_tab",
-          [__| install Navigatable(content: #laravel_content) |],
-          id_ "laravel"
+        [ class_ $ if current_tab == "laravel" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #laravel_content) |]
+        , id_ "laravel"
         ]
         do
           img_ [src_ "/assets/framework-logos/laravel-logo.png", alt_ "", class_ "w-full"]
 
     li_ [class_ "shrink-0"] do
       button_
-        [ class_ $ if current_tab == "flask" then "sdk_tab sdk_tab_active" else "sdk_tab",
-          [__| install Navigatable(content: #flask_content) |],
-          id_ "flask"
+        [ class_ $ if current_tab == "flask" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #flask_content) |]
+        , id_ "flask"
         ]
         do
           img_ [src_ "/assets/framework-logos/flask-logo.png", alt_ "", class_ "w-full"]
 
     li_ [class_ "shrink-0"] do
       button_
-        [ class_ $ if current_tab == "fastapi" then "sdk_tab sdk_tab_active" else "sdk_tab",
-          [__| install Navigatable(content: #fastapi_content) |],
-          id_ "fastapi"
+        [ class_ $ if current_tab == "fastapi" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #fastapi_content) |]
+        , id_ "fastapi"
         ]
         do
           img_ [src_ "/assets/framework-logos/fastapi-logo.png", alt_ "", class_ "w-full"]
     li_ [class_ "shrink-0"] do
       button_
-        [ class_ $ if current_tab == "django" then "sdk_tab sdk_tab_active" else "sdk_tab",
-          [__| install Navigatable(content: #django_content) |],
-          id_ "django"
+        [ class_ $ if current_tab == "django" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #django_content) |]
+        , id_ "django"
         ]
         do
           img_ [src_ "/assets/framework-logos/django-logo.png", alt_ "", class_ "w-full"]
     li_ [class_ "shrink-0"] do
       button_
-        [ class_ $ if current_tab == "fastify" then "sdk_tab sdk_tab_active" else "sdk_tab",
-          [__| install Navigatable(content: #fastify_content) |],
-          id_ "fastify"
+        [ class_ $ if current_tab == "fastify" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #fastify_content) |]
+        , id_ "fastify"
         ]
         do
           img_ [src_ "/assets/framework-logos/fastify-logo.png", alt_ "", class_ "w-full"]
