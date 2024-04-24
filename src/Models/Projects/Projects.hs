@@ -308,8 +308,6 @@ data ProjectRequestStats = ProjectRequestStats
   , totalShapesLastWeek :: Int
   , totalAnomalies :: Int
   , totalAnomaliesLastWeek :: Int
-  , totalFields :: Int
-  , totalFieldsLastWeek :: Int
   , requestsPerMin :: Int
   , requestsPerMinLastWeek :: Int
   }
