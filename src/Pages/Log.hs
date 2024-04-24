@@ -678,8 +678,8 @@ jsonTreeAuxillaryCode pid = do
        const target = event.target.parentNode.parentNode.parentNode
        const path = target.getAttribute('data-field-path');
        const value = target.getAttribute('data-field-value');
-       const regex = /\[\*\]\.(\d+)\..*/;
-       const replacedPath = path.replace(regex, '[$$1]');
+       const regex = /\[\*\]\.(\d+)\./;
+       const replacedPath = path.replace(regex, '[$$1].');
        const filter = replacedPath + ' ' + operation + ' ' + value
        let editorVal = '' 
        if(window.queryBuilderValue) {
