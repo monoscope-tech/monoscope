@@ -121,29 +121,34 @@
 .htmx-request.refresh-indicator ~ svg {
   display: none;
 }
-
+.htmx-request.htmx-indicator {
+  display: flex;
+}
+.htmx-request.htmx-indicator ~ span {
+  display: none;
+}
 @layer components {
   :root {
-    font-family: 'Inter', sans-serif;
+    font-family: "Inter", sans-serif;
   }
   @supports (font-variation-settings: normal) {
     :root {
-      font-family: 'Inter var', sans-serif;
+      font-family: "Inter var", sans-serif;
     }
   }
   html {
     font-size: 14px;
-    font-family: 'Inter', sans-serif;
+    font-family: "Inter", sans-serif;
     /* font-family: 'Poppins', sans-serif; */
     /* font-family: 'Roboto', sans-serif; */
     --white: 255 255 255;
   }
   .inconsolata {
-    font-family: 'Inconsolata', monospace;
+    font-family: "Inconsolata", monospace;
     font-size: 14px;
   }
   .monospace {
-    font-family: 'Inconsolata', monospace;
+    font-family: "Inconsolata", monospace;
   }
 
   /* From icomoon app*/

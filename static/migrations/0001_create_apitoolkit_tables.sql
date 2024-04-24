@@ -950,8 +950,10 @@ end;
 $body$
 language plpgsql;
 
+
 -- Checks for query monitors being triggered and creates a background job for any found
-CREATE OR REPLACE PROCEDURE monitors.check_triggered_query_monitors(job_id int, config jsonb) LANGUAGE PLPGSQL AS 
+CREATE OR REPLACE FUNCTION monitors.check_triggered_query_monitors()
+RETURNS void AS
 $$
 DECLARE
     -- Array to hold IDs from the query
@@ -981,8 +983,11 @@ BEGIN
         VALUES (NOW(), 'queued', jsonb_build_object('tag', 'QueryMonitorsTriggered', 'contents', id_array));
     END IF;
 END;
-$$;
+$$
+LANGUAGE plpgsql;
 -- Run every minute 
 SELECT add_job('monitors.check_triggered_query_monitors','1min');
 
 COMMIT;
+
+

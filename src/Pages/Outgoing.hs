@@ -1,113 +1,148 @@
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE RankNTypes #-}
+
 module Pages.Outgoing (outgoingGetH) where
 
 import Data.Default (def)
+import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Tuple.Extra (fst3)
 import Data.Vector qualified as V
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
-import Effectful.Reader.Static (ask)
-import Lucid (
-  Html,
-  ToHtml (toHtml),
-  a_,
-  alt_,
-  button_,
-  class_,
-  code_,
-  div_,
-  h3_,
-  href_,
-  id_,
-  img_,
-  li_,
-  p_,
-  pre_,
-  script_,
-  span_,
-  src_,
-  strong_,
-  target_,
-  type_,
-  ul_,
- )
-import Lucid.Hyperscript (__)
+import Database.PostgreSQL.Entity.DBT
+import Effectful.PostgreSQL.Transact.Effect
+import Effectful.Reader.Static (ask, asks)
+
+-- Fix the function name here
+
+import Fmt (commaizeF, fixedF, fmt, (+|), (|+))
+import Lucid
+import Lucid.Htmx
+import Lucid.Hyperscript
+import Lucid.Hyperscript.QuasiQuoter
+import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import NeatInterpolation (text)
-import Pages.BodyWrapper (
-  BWConfig (currProject, pageTitle, sessM),
-  bodyWrapper,
- )
+import NeatInterpolation
+import Pages.Anomalies.AnomalyList qualified as AnomalyList
+import Pages.BodyWrapper
+import Pages.Charts.Charts (QueryBy (QBHost))
+import Pages.Charts.Charts qualified as Charts
+import Pages.NonMember
 import Pages.NonMember (userNotMemeberPage)
 import Pages.Onboarding qualified as Onboarding
-import Relude (
-  Applicative (pure),
-  Eq ((==)),
-  Foldable (null),
-  Maybe (Just),
-  Monad ((>>)),
-  Semigroup ((<>)),
-  Text,
-  forM_,
-  not,
-  show,
-  when,
-  ($),
- )
+import PyF qualified
+import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
-import System.Config (AuthContext)
-import System.Types (ATAuthCtx)
-import Utils (faIcon_, userIsProjectMember)
+import System.Config
+import System.Types
+import Utils
 
 
-outgoingGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
-outgoingGetH pid = do
-  -- TODO: temporary, to work with current logic
+data OutgoingParamInput = OutgoingParamInput
+  { sortField :: Text
+  , activeTab :: Text
+  }
+
+
+outgoingGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (Html ())
+outgoingGetH pid sortM = do
   appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
 
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
-    then do
-      pure $ userNotMemeberPage sess
+    then pure $ userNotMemeberPage sess
     else do
       (project, hostsEvents) <- dbtToEff do
         project <- Projects.projectById pid
-        hostsAndEvents <- Endpoints.dependenciesAndEventsCount pid
+        hostsAndEvents <- Endpoints.dependenciesAndEventsCount pid (fromMaybe "events" sortM)
         pure (project, hostsAndEvents)
       let bwconf =
-            (def :: BWConfig)
+            def
               { sessM = Just sess
               , currProject = project
               , pageTitle = "Dependencies"
               }
-      pure $ bodyWrapper bwconf $ outgoingPage pid hostsEvents
+
+      pure $ bodyWrapper bwconf $ outgoingPage pid (fromMaybe "events" sortM) hostsEvents
 
 
-outgoingPage :: Projects.ProjectId -> V.Vector Endpoints.HostEvents -> Html ()
-outgoingPage pid hostsEvents = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24  overflow-y-scroll h-full"] $ do
-  h3_ [class_ "text-xl text-slate-700 flex place-items-center"] "Outbound Integrations"
-  div_ [class_ "mt-8 mx-auto space-y-4 max-w-[1000px]"] do
-    div_ [class_ "flex px-8 w-full justify-between"] do
-      h3_ [class_ "font-bold"] "Host"
-      h3_ [class_ "font-bold"] "Events"
-    div_ [class_ "flex flex-col"] do
-      forM_ hostsEvents $ \host -> do
-        div_ [class_ "flex border border-t-transparent items-center"] do
-          a_ [href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> host.host, class_ "flex  w-full justify-between items-center p-8"] $ do
-            span_ [class_ "p-2", href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> host.host] $ toHtml (T.replace "http://" "" $ T.replace "https://" "" host.host)
-          -- div_ [class_ "w-[200px] h-[80px] mt-4 shrink-0"] do
-          -- Charts.throughput pid host.host (Just (QBHost host.host)) Nothing 14 Nothing False (Nothing, Nothing) Nothing
-          div_ [class_ "shrink-0 flex items-center gap-10 p-8"] do
-            a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=host%3D%3D" <> "\"" <> host.host <> "\"", class_ "p-2 shrink-0 pl-8 text-blue-500 hover:text-slate-600"]
-              $ "View logs"
-              >> faIcon_ "fa-arrow-up-right" "fa-solid fa-arrow-up-right" "h-3 w-3"
-            span_ [] $ show host.eventCount
-    when (null hostsEvents) $ div_ [class_ "flex flex-col text-center justify-center items-center"] $ do
-      strong_ [class_ "text-3xl mb-1"] "No dependencies yet."
-      p_ [class_ "text-lg mb-2"] "Start monitoring your outbound integrations"
-      monitorOutgoingRequestDemos
+sortOptions :: [(Text, Text, Text)]
+sortOptions =
+  [ ("First Seen", "First time the issue occured", "first_seen")
+  , ("Last Seen", "Last time the issue occured", "last_seen")
+  , ("Events", "Number of events", "events")
+  ]
+
+
+outgoingPage :: Projects.ProjectId -> Text -> V.Vector Endpoints.HostEvents -> Html ()
+outgoingPage pid sortV hostsEvents = do
+  div_ [class_ "w-full mx-auto px-16 pt-10 pb-24 overflow-y-scroll h-full"] $ do
+    h3_ [class_ "text-xl text-slate-700 flex gap-1 place-items-center mb-10"] "Outbound Integrations"
+
+    div_ [class_ "grid grid-cols-4 card-round", id_ "outgoingListBelowTab"] $ do
+      -- Labels for each column`
+      div_ [class_ "col-span-4 bg-white divide-y"] $ do
+        div_ [class_ "col-span-4 py-2 space-x-4 border-b border-slate-20 pt-4 text-sm font-light flex justify-between items-center px-2 bg-gray-50 font-base "] $ do
+          div_ [class_ ""] $ do
+            div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "font-base font-medium text-black"] "HOST"
+          div_ [class_ "flex item-center"] $ do
+            div_ [class_ "relative inline-block"] $ do
+              let currentSortTitle = maybe "Events" fst3 $ find (\(_, _, identifier) -> identifier == sortV) sortOptions
+              a_ [class_ "btn-sm bg-transparent cursor-pointer border-black hover:shadow-2xl space-x-2", [__|on click toggle .hidden on #sortMenuDiv |]] do
+                mIcon_ "sort" "h-4 w-4"
+                span_ $ toHtml currentSortTitle
+              div_ [id_ "sortMenuDiv", hxBoost_ "true", class_ "p-1 hidden text-sm border border-black-30 absolute right-0 z-10 mt-2 w-72 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none", tabindex_ "-1"] do
+                sortOptions & mapM_ \(title, desc, identifier) -> do
+                  let isActive = sortV == identifier
+                  a_
+                    [ class_ $ "block flex flex-row px-3 py-2 hover:bg-blue-50 rounded-md cursor-pointer " <> (if isActive then " text-blue-800 " else "")
+                    , href_ $ "/p/" <> pid.toText <> "/outgoing?sort=" <> identifier
+                    ]
+                    do
+                      div_ [class_ "flex flex-col items-center justify-center px-3"] do
+                        if isActive then mIcon_ "checkmark4" "w-4 h-5" else mIcon_ "" "w-4 h-5"
+                      div_ [class_ "grow space-y-1"] do
+                        span_ [class_ "block text-lg"] $ toHtml title
+                        span_ [class_ "block "] $ toHtml desc
+            div_ [class_ "flex justify-center font-base w-60 content-between gap-14 font-medium text-black"] do
+              span_ "GRAPH"
+            div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "font-base font-medium text-black"] "EVENTS"
+      div_ [class_ "w-full bg-white border-b border-slate-20"] $ do
+        div_ [class_ "w-full flex flex-row p-3"] $ do
+          div_ [class_ "relative flex w-full bg-white py-2 px-3 border-solid border border-gray-200 h-10"] $ do
+            faIcon_ "fa-magnifying-glass" "fa-light fa-magnifying-glass" "h-5 w-5"
+            input_
+              [ type_ "text"
+              , [__| on input show .endpoint_item in #endpoints_container when its textContent.toLowerCase() contains my value.toLowerCase() |]
+              , class_ "dataTable-search w-full h-full p-2 text-gray-500 font-normal focus:outline-none"
+              , placeholder_ "Search endpoints..."
+              ]
+
+      -- Data rows
+      div_ [class_ "col-span-4 bg-white divide-y"] $ do
+        forM_ hostsEvents $ \host -> do
+          div_ [class_ "border-b border-gray-200 outgoing_item flex justify-between px-4 py-2 align-center mt-8"] $ do
+            div_ [class_ "flex-1 w-48  justify-center"] $ a_ [href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> host.host, class_ "text-blue-500 hover:text-slate-600"] $ toHtml (T.replace "http://" "" $ T.replace "https://" "" host.host)
+            div_ [class_ " flex-1 w-32 justify-center  text-center"] $ do
+              a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=host%3D%3D" <> "\"" <> host.host <> "\"", class_ "text-blue-500 hover:text-slate-600"] $ "View logs"
+            div_ [class_ "w-64 mb-4 justify-center flex-1 items-center"] $ do
+              div_
+                [ class_ "w-56 h-12 px-3"
+                , hxGet_ $ "/charts_html?pid=" <> pid.toText <> "&since=14D&query_raw=" <> AnomalyList.escapedQueryPartial [PyF.fmt|host=="{host.host}" | timechart [1d]|]
+                , hxTrigger_ "intersect once"
+                , hxSwap_ "innerHTML"
+                ]
+                ""
+            div_ [class_ " w-24 text-center"] $ toHtml (show host.eventCount)
+
+      when (null hostsEvents) $ div_ [class_ "flex flex-col text-center justify-center items-center h-32"] $ do
+        strong_ "No dependencies yet."
+        p_ "All dependencies' host names and number of events will be shown here."
 
 
 monitorOutgoingRequestDemos :: Html ()
