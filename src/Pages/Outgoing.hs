@@ -42,15 +42,14 @@ import Pages.BodyWrapper
 
 data OutgoingParamInput = OutgoingParamInput
   { sortField :: Text
-  , search :: Text
   , activeTab :: Text
   }
 
 
 
 
-outgoingGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
-outgoingGetH pid sortM searchM activeTabM = do
+outgoingGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
+outgoingGetH pid sortM activeTabM = do
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
   sess' <- Sessions.getSession
@@ -73,7 +72,6 @@ outgoingGetH pid sortM searchM activeTabM = do
       let paramInput =
             OutgoingParamInput
               { sortField = fromMaybe "" sortM
-              , search = fromMaybe "" searchM
               , activeTab = fromMaybe "Active" activeTabM
               }
       pure $ bodyWrapper bwconf $ outgoingPage pid paramInput hostsEvents

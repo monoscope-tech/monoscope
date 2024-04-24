@@ -22,7 +22,6 @@ menu pid =
   , ("Outbound Integrations", "/p/" <> pid.toText <> "/outgoing", "arrows-turn-right")
   , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies?ackd=false&archived=false", "bug")
   , ("API Log Explorer", "/p/" <> pid.toText <> "/log_explorer", "list-tree")
- -- , ("API Keys", "/p/" <> pid.toText <> "/apis", "key")
   , -- , ("Redacted Fields", "/p/" <> pid.toText <> "/redacted_fields", "#redacted")
     ("Documentation", "/p/" <> pid.toText <> "/documentation", "brackets-curly")
   , ("Reports", "/p/" <> pid.toText <> "/reports", "chart-simple")
