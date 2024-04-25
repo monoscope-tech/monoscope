@@ -7,6 +7,7 @@ import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Htmx
+import Lucid.Hyperscript
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
@@ -20,6 +21,7 @@ import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext)
 import System.Types (ATAuthCtx)
+import Utils
 
 getH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
 getH pid sdkM errReportM reqMonM = do
@@ -41,18 +43,23 @@ getH pid sdkM errReportM reqMonM = do
 
 integrationsPage :: Projects.ProjectId -> Text -> Text -> Maybe Text -> Maybe Text -> Html ()
 integrationsPage pid sdk apiKey errReportM reqMonM = do
+  let baseUrl = "/p/" <> pid.toText <> "/integration_guides?" <> maybe "" ("error_reporting=" <>) errReportM <> maybe "" (\v -> "&outgoing=" <> v) reqMonM
   main_ [class_ "w-full h-full overflow-y-scroll", id_ "main"] do
-    div_ [class_ "flex flex-col gap-6 border-b  m-8 pb-4"] do
+    div_ [class_ "flex flex-col gap-6 border-b  m-8 pb-4 sticky top-[-40px] bg-white z-50"] do
       div_ [class_ "flex justify-between items-center"] do
         h3_ [class_ "text-3xl font-medium capitalize"] $ toHtml $ "Configure " <> sdk <> " SDK"
         div_ [class_ "flex items-center gap-4"] do
           button_ [class_ "rounded-lg border px-4 py-2"] "See Full Documentation"
       div_ [class_ "flex items-center gap-4"] do
-        select_ [name_ "sdk", hxGet_ $ "/p/" <> pid.toText <> "integration_guides", hxTarget_ "#main", class_ "select select-primary select-bordered select-sm w-38 text-md"] do
-          option_ [] $ toHtml $ getTitle sdk
-          option_ [value_ "gin"] "Go Gin"
-          option_ [value_ "express"] "ExpressJs"
-          option_ [value_ "pyramid"] "Python Pyramid"
+        div_ [class_ "relative"] do
+          button_ [class_ "border flex items-center justify-between border-blue-500 w-36 rounded-lg px-2 py-1.5 text-sm font-medium", [__|on click toggle .hidden on #sdk_list|]] do
+            span_ [class_ "b"] $ toHtml $ getTitle sdk
+            span_ [] do
+              faIcon_ "fa fa-solid fa-angle-down" "fa fa-solid fa-angle-down" "h-3 w-3"
+          div_ [class_ "hidden w-full flex flex-col left-0 absolute shadow top-4 bg-white text-sm rounded", id_ "sdk_list"] do
+            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "&sdk=express"] "ExpressJs"
+            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "&sdk=gin"] "Go Gin"
+            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "&sdk=pyramid"] "Python Pyramid"
         label_ [class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium text-sm hover:bg-gray-100"] do
           input_ [class_ "check-box", type_ "checkbox"]
           span_ "Request monitoring"
