@@ -1,17 +1,17 @@
-module Pages.Anomalies.AnomalyList
-  ( anomalyListGetH,
-    anomalyDetailsGetH,
-    anomalyBulkActionsPostH,
-    escapedQueryPartial,
-    acknowlegeAnomalyGetH,
-    unAcknowlegeAnomalyGetH,
-    archiveAnomalyGetH,
-    unArchiveAnomalyGetH,
-    anomalyListSlider,
-    AnomalyBulkForm,
-    anomalyAcknowlegeButton,
-    anomalyArchiveButton,
-  )
+module Pages.Anomalies.AnomalyList (
+  anomalyListGetH,
+  anomalyDetailsGetH,
+  anomalyBulkActionsPostH,
+  escapedQueryPartial,
+  acknowlegeAnomalyGetH,
+  unAcknowlegeAnomalyGetH,
+  archiveAnomalyGetH,
+  unArchiveAnomalyGetH,
+  anomalyListSlider,
+  AnomalyBulkForm,
+  anomalyAcknowlegeButton,
+  anomalyArchiveButton,
+)
 where
 
 import BackgroundJobs qualified
@@ -34,27 +34,27 @@ import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Aria qualified as Aria
-import Lucid.Htmx
-  ( hxBoost_,
-    hxGet_,
-    hxIndicator_,
-    hxPost_,
-    hxSwap_,
-    hxTrigger_,
-  )
+import Lucid.Htmx (
+  hxBoost_,
+  hxGet_,
+  hxIndicator_,
+  hxPost_,
+  hxSwap_,
+  hxTrigger_,
+ )
 import Lucid.Hyperscript (__)
 import Models.Apis.Anomalies (AnomalyVM)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Query qualified as Fields
-import Models.Apis.Fields.Types
-  ( Field (fieldType),
-    FieldCategoryEnum (FCRequestBody),
-    FieldTypes (FTString),
-    fieldTypeToText,
-    fieldsToNormalized,
-    groupFieldsByCategory,
-  )
+import Models.Apis.Fields.Types (
+  Field (fieldType),
+  FieldCategoryEnum (FCRequestBody),
+  FieldTypes (FTString),
+  fieldTypeToText,
+  fieldsToNormalized,
+  groupFieldsByCategory,
+ )
 import Models.Apis.Fields.Types qualified as Fields
 import Models.Apis.Shapes (getShapeFields)
 import Models.Apis.Shapes qualified as Shapes
@@ -76,23 +76,25 @@ import Servant.Htmx (HXTrigger)
 import System.Config (AuthContext (pool))
 import System.Types (ATAuthCtx)
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils
-  ( deleteParam,
-    faIconWithAnchor_,
-    faIcon_,
-    faSprite_,
-    getMethodColor,
-    mIcon_,
-    textToBool,
-    userIsProjectMember,
-  )
+import Utils (
+  deleteParam,
+  faIconWithAnchor_,
+  faIcon_,
+  faSprite_,
+  getMethodColor,
+  mIcon_,
+  textToBool,
+  userIsProjectMember,
+ )
 import Web.FormUrlEncoded (FromForm)
+
 
 newtype AnomalyBulkForm = AnomalyBulk
   { anomalyId :: [Text]
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
+
 
 acknowlegeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (Html ())
 acknowlegeAnomalyGetH pid aid = do
@@ -111,6 +113,7 @@ acknowlegeAnomalyGetH pid aid = do
       _ <- liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.GenSwagger pid sess.userId
       pure $ anomalyAcknowlegeButton pid aid True
 
+
 unAcknowlegeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (Html ())
 unAcknowlegeAnomalyGetH pid aid = do
   sess' <- Sessions.getSession
@@ -124,6 +127,7 @@ unAcknowlegeAnomalyGetH pid aid = do
       let q = [sql| update apis.anomalies set acknowleged_by=null, acknowleged_at=null where id=? |]
       _ <- dbtToEff $ execute Update q (Only aid)
       pure $ anomalyAcknowlegeButton pid aid False
+
 
 archiveAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (Html ())
 archiveAnomalyGetH pid aid = do
@@ -139,6 +143,7 @@ archiveAnomalyGetH pid aid = do
       _ <- dbtToEff $ execute Update q (Only aid)
       pure $ anomalyArchiveButton pid aid True
 
+
 unArchiveAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (Html ())
 unArchiveAnomalyGetH pid aid = do
   sess' <- Sessions.getSession
@@ -152,6 +157,7 @@ unArchiveAnomalyGetH pid aid = do
       let q = [sql| update apis.anomalies set archived_at=null where id=? |]
       _ <- dbtToEff $ execute Update q (Only aid)
       pure $ anomalyArchiveButton pid aid False
+
 
 -- When given a list of anomalyIDs and an action, said action would be applied to the anomalyIDs.
 -- Then a notification should be triggered, as well as an action to reload the anomaly List.
@@ -180,12 +186,14 @@ anomalyBulkActionsPostH pid action items = do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"refreshMain": "", "successToast": [#{action <> "d anomalies Successfully"}]}|]
       pure $ addHeader hxTriggerData ""
 
+
 data ParamInput = ParamInput
-  { currentURL :: Text,
-    ackd :: Bool,
-    archived :: Bool,
-    sort :: Text
+  { currentURL :: Text
+  , ackd :: Bool
+  , archived :: Bool
+  , sort :: Text
   }
+
 
 anomalyListGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Endpoints.EndpointId -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
 anomalyListGetH pid layoutM ackdM archivedM sortM page loadM endpointM hxRequestM hxBoostedM = do
@@ -213,19 +221,19 @@ anomalyListGetH pid layoutM ackdM archivedM sortM page loadM endpointM hxRequest
       currTime <- liftIO getCurrentTime
       let bwconf =
             (def :: BWConfig)
-              { sessM = Just sess,
-                currProject = project,
-                pageTitle = "Changes & Errors"
+              { sessM = Just sess
+              , currProject = project
+              , pageTitle = "Changes & Errors"
               }
       let currentURL = "/p/" <> pid.toText <> "/anomalies?layout=" <> fromMaybe "false" layoutM <> "&ackd=" <> fromMaybe "false" ackdM <> "&archived=" <> fromMaybe "false" archivedM
       let nextFetchUrl = maybe (Just $ currentURL <> "&load_more=true&page=" <> show (pageInt + 1)) (\x -> if x == "slider" then Nothing else Just $ currentURL <> "&load_more=true&page=" <> show (pageInt + 1)) layoutM
 
       let paramInput =
             ParamInput
-              { currentURL = currentURL,
-                ackd = fromMaybe False ackd,
-                archived = fromMaybe False archived,
-                sort = fromMaybe "" sortM
+              { currentURL = currentURL
+              , ackd = fromMaybe False ackd
+              , archived = fromMaybe False archived
+              , sort = fromMaybe "" sortM
               }
 
       let elementBelowTabs =
@@ -249,13 +257,14 @@ anomalyListGetH pid layoutM ackdM archivedM sortM page loadM endpointM hxRequest
         (_, Just "true", Nothing, _) -> pure elementBelowTabs
         _ -> pure $ bodyWrapper bwconf $ anomalyListPage paramInput pid currTime anomalies nextFetchUrl
 
+
 anomalyListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Anomalies.AnomalyVM -> Maybe Text -> Html ()
 anomalyListPage paramInput pid currTime anomalies nextFetchUrl = div_ [class_ "w-full mx-auto  px-16 pt-10 pb-24  overflow-y-scroll h-full"] do
   div_
-    [ style_ "z-index:26",
-      class_ "fixed hidden right-0 top-0 justify-end left-0 bottom-0 w-full bg-black bg-opacity-5",
-      id_ "expand-an-modal",
-      [__|on click add .hidden to #expand-an-modal|]
+    [ style_ "z-index:26"
+    , class_ "fixed hidden right-0 top-0 justify-end left-0 bottom-0 w-full bg-black bg-opacity-5"
+    , id_ "expand-an-modal"
+    , [__|on click add .hidden to #expand-an-modal|]
     ]
     do
       div_ [class_ "h-full bg-white border-l ml-auto shadow pt-8 overflow-y-scroll", style_ "width:min(90vw, 800px);transition: all 1s", [__|on click halt|]] do
@@ -274,16 +283,17 @@ anomalyListPage paramInput pid currTime anomalies nextFetchUrl = div_ [class_ "w
     a_ [class_ $ "inline-block  py-2 " <> if paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&archived=true"] "Archived"
   div_ [class_ "grid grid-cols-5 card-round", id_ "anomalyListBelowTab", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $ anomalyList paramInput pid currTime anomalies nextFetchUrl
 
+
 anomalyList :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Anomalies.AnomalyVM -> Maybe Text -> Html ()
 anomalyList paramInput pid currTime anomalies nextFetchUrl = form_ [class_ "col-span-5 bg-white divide-y ", id_ "anomalyListForm"] do
   let bulkActionBase = "/p/" <> pid.toText <> "/anomalies/bulk_actions"
   let currentURL' = deleteParam "sort" paramInput.currentURL
   let sortMenu =
-        [ ("First Seen", "First time the issue occured", "first_seen"),
-          ("Last Seen", "Last time the issue occured", "last_seen"),
-          ("Events", "Number of events", "events")
-        ] ::
-          [(Text, Text, Text)]
+        [ ("First Seen", "First time the issue occured", "first_seen")
+        , ("Last Seen", "Last time the issue occured", "last_seen")
+        , ("Events", "Number of events", "events")
+        ]
+          :: [(Text, Text, Text)]
   let currentSortTitle = maybe "First Seen" fst3 $ find (\(_, _, identifier) -> identifier == paramInput.sort) sortMenu
   div_
     [class_ "flex py-3 gap-8 items-center  bg-gray-50"]
@@ -304,9 +314,9 @@ anomalyList paramInput pid currTime anomalies nextFetchUrl = form_ [class_ "col-
           sortMenu & mapM_ \(title, desc, identifier) -> do
             let isActive = paramInput.sort == identifier || (paramInput.sort == "" && identifier == "first_seen")
             a_
-              [ class_ $ "block flex flex-row px-3 py-2 hover:bg-blue-50 rounded-md cursor-pointer " <> (if isActive then " text-blue-800 " else ""),
-                href_ $ currentURL' <> "&sort=" <> identifier,
-                hxIndicator_ "#sortLoader"
+              [ class_ $ "block flex flex-row px-3 py-2 hover:bg-blue-50 rounded-md cursor-pointer " <> (if isActive then " text-blue-800 " else "")
+              , href_ $ currentURL' <> "&sort=" <> identifier
+              , hxIndicator_ "#sortLoader"
               ]
               do
                 div_ [class_ "flex flex-col items-center justify-center px-3"] do
@@ -343,6 +353,7 @@ anomalyList paramInput pid currTime anomalies nextFetchUrl = form_ [class_ "col-
         else ""
     Nothing -> ""
 
+
 anomalyListSlider :: UTCTime -> Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe (Vector Anomalies.AnomalyVM) -> Html ()
 anomalyListSlider _ _ _ (Just []) = ""
 anomalyListSlider _ pid eid Nothing = do
@@ -373,8 +384,8 @@ anomalyListSlider currTime _ _ (Just anomalies) = do
         span_ [class_ "text-lg text-slate-700"] "Ongoing Anomalies and Monitors"
       div_ [class_ "flex items-center gap-2 mt-2"] do
         a_
-          [ class_ "cursor-pointer",
-            [__|on click hide #{$anomalyIds[$currentAnomaly]} then
+          [ class_ "cursor-pointer"
+          , [__|on click hide #{$anomalyIds[$currentAnomaly]} then
                           js($currentAnomaly, $anomalyIds) return (Math.max(0, $currentAnomaly-1) % $anomalyIds.length) end then 
                           set $currentAnomaly to it then
                           show #{$anomalyIds[$currentAnomaly]} then 
@@ -383,8 +394,8 @@ anomalyListSlider currTime _ _ (Just anomalies) = do
           $ faSprite_ "arrow-left" "regular" "h-4 w-4"
         span_ [src_ " mx-4", id_ "anomalySliderPagination"] "1/1"
         a_
-          [ class_ "cursor-pointer",
-            [__|on click hide #{$anomalyIds[$currentAnomaly]} then
+          [ class_ "cursor-pointer"
+          , [__|on click hide #{$anomalyIds[$currentAnomaly]} then
                           js($currentAnomaly, $anomalyIds) return (($currentAnomaly+1) % $anomalyIds.length) end then 
                           set $currentAnomaly to it then
                           show #{$anomalyIds[$currentAnomaly]} then
@@ -393,10 +404,11 @@ anomalyListSlider currTime _ _ (Just anomalies) = do
           $ faSprite_ "arrow-right" "regular" "h-4 w-4"
 
     div_
-      [ class_ "parent-slider",
-        [__|init setAnomalySliderPag() then show #{$anomalyIds[$currentAnomaly]} |]
+      [ class_ "parent-slider"
+      , [__|init setAnomalySliderPag() then show #{$anomalyIds[$currentAnomaly]} |]
       ]
       $ mapM_ (renderAnomaly True currTime) anomalies
+
 
 shapeParameterStats_ :: Int -> Int -> Int -> Html ()
 shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "inline-block"] do
@@ -411,11 +423,13 @@ shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "inline-block"] do
       div_ [class_ "text-base"] $ toHtml @String $ show deletedF
       small_ [class_ "block"] "deleted fields"
 
+
 -- anomalyAccentColor isAcknowleged isArchived
 anomalyAccentColor :: Bool -> Bool -> Text
 anomalyAccentColor _ True = "bg-slate-400"
 anomalyAccentColor True False = "bg-green-200"
 anomalyAccentColor False False = "bg-red-800"
+
 
 anomalyItem :: Bool -> UTCTime -> Anomalies.AnomalyVM -> Text -> Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
 anomalyItem hideByDefault currTime anomaly icon title subTitle content = do
@@ -437,8 +451,8 @@ anomalyItem hideByDefault currTime anomaly icon title subTitle content = do
             span_ [class_ "inline-block space-x-1"] do
               mIcon_ "clock" "w-3 h-3"
               span_
-                [ class_ "decoration-black underline ml-1",
-                  term "data-tippy-content" $ "first seen: " <> show anomaly.createdAt
+                [ class_ "decoration-black underline ml-1"
+                , term "data-tippy-content" $ "first seen: " <> show anomaly.createdAt
                 ]
                 $ toHtml
                 $ prettyTimeAuto currTime
@@ -454,13 +468,14 @@ anomalyItem hideByDefault currTime anomaly icon title subTitle content = do
     let anomalyQueryPartial = buildQueryForAnomaly anomaly.anomalyType anomaly.targetHash
     div_ [class_ "flex items-center justify-center "]
       $ div_
-        [ class_ "w-60 h-16 px-3",
-          hxGet_ $ "/charts_html?pid=" <> anomaly.projectId.toText <> "&since=14D&query_raw=" <> escapedQueryPartial [fmt|{anomalyQueryPartial} | timechart [1d]|],
-          hxTrigger_ "intersect once",
-          hxSwap_ "innerHTML"
+        [ class_ "w-60 h-16 px-3"
+        , hxGet_ $ "/charts_html?pid=" <> anomaly.projectId.toText <> "&since=14D&query_raw=" <> escapedQueryPartial [fmt|{anomalyQueryPartial} | timechart [1d]|]
+        , hxTrigger_ "intersect once"
+        , hxSwap_ "innerHTML"
         ]
         ""
     div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $ show anomaly.eventsCount14d
+
 
 anomalyDetailsGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (Html ())
 anomalyDetailsGetH pid targetHash hxBoostedM = do
@@ -478,9 +493,9 @@ anomalyDetailsGetH pid targetHash hxBoostedM = do
         pure (project, anomaly)
       let bwconf =
             (def :: BWConfig)
-              { sessM = Just sess,
-                currProject = project,
-                pageTitle = "Anomaly Details"
+              { sessM = Just sess
+              , currProject = project
+              , pageTitle = "Anomaly Details"
               }
       case anomaly of
         Just an -> do
@@ -520,8 +535,10 @@ anomalyDetailsGetH pid targetHash hxBoostedM = do
                   anomalyDetailsPage an Nothing Nothing (Just anFormats) currTime False
         Nothing -> pure $ bodyWrapper bwconf $ h4_ [] "ANOMALY NOT FOUND"
 
+
 escapedQueryPartial :: Text -> Text
 escapedQueryPartial x = toText $ escapeURIString isUnescapedInURI $ toString x
+
 
 anomalyDetailsPage :: AnomalyVM -> Maybe (Vector Shapes.ShapeWithFields) -> Maybe (Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field]) -> Maybe (Vector Text) -> UTCTime -> Bool -> Html ()
 anomalyDetailsPage anomaly shapesWithFieldsMap fields prvFormatsM currTime modal = do
@@ -572,8 +589,8 @@ anomalyDetailsPage anomaly shapesWithFieldsMap fields prvFormatsM currTime modal
               span_ [class_ "inline-block space-x-1"] do
                 mIcon_ "clock" "w-3 h-3"
                 span_
-                  [ class_ "decoration-black underline ml-1",
-                    term "data-tippy-content" $ "first seen: " <> show anomaly.createdAt
+                  [ class_ "decoration-black underline ml-1"
+                  , term "data-tippy-content" $ "first seen: " <> show anomaly.createdAt
                   ]
                   $ toHtml
                   $ prettyTimeAuto currTime
@@ -582,12 +599,12 @@ anomalyDetailsPage anomaly shapesWithFieldsMap fields prvFormatsM currTime modal
               h4_ [class_ "font-semibold"] "Last seen"
               span_ [class_ "decoration-black underline", term "data-tippy-content" $ "last seen: " <> show anomaly.lastSeen] $ toHtml $ prettyTimeAuto currTime $ zonedTimeToUTC anomaly.lastSeen
           div_
-            [ id_ "reqsChartsEC",
-              class_ "w-[200px] h-[80px] mt-4 shrink-0",
-              style_ "height:100px",
-              hxGet_ $ "/charts_html?pid=" <> anomaly.projectId.toText <> "&since=14D&query_raw=" <> escapedQueryPartial [fmt|{anomalyQueryPartial} | timechart [1d]|],
-              hxTrigger_ "intersect",
-              hxSwap_ "innerHTML"
+            [ id_ "reqsChartsEC"
+            , class_ "w-[200px] h-[80px] mt-4 shrink-0"
+            , style_ "height:100px"
+            , hxGet_ $ "/charts_html?pid=" <> anomaly.projectId.toText <> "&since=14D&query_raw=" <> escapedQueryPartial [fmt|{anomalyQueryPartial} | timechart [1d]|]
+            , hxTrigger_ "intersect"
+            , hxSwap_ "innerHTML"
             ]
             ""
     div_ [class_ "w-full flex items-center gap-4 mt-4 overflow-y-auto "] do
@@ -614,12 +631,14 @@ anomalyDetailsPage anomaly shapesWithFieldsMap fields prvFormatsM currTime modal
           let events_url = "/p/" <> UUID.toText (Projects.unProjectId anomaly.projectId) <> "/log_explorer?layout=resultTable&query=" <> escapedQueryPartial anomalyQueryPartial
           div_ [hxGet_ events_url, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
 
+
 buildQueryForAnomaly :: Anomalies.AnomalyTypes -> Text -> Text
 buildQueryForAnomaly Anomalies.ATEndpoint hash = "endpoint_hash==\"" <> hash <> "\""
 buildQueryForAnomaly Anomalies.ATShape hash = "shape_hash==\"" <> hash <> "\""
 buildQueryForAnomaly Anomalies.ATFormat hash = "format_hashes[*]==\"" <> hash <> "\""
 buildQueryForAnomaly Anomalies.ATField hash = "field[*]==\"" <> hash <> "\""
 buildQueryForAnomaly Anomalies.ATUnknown hash = ""
+
 
 endpointOverview :: Maybe (Vector Shapes.ShapeWithFields) -> Html ()
 endpointOverview shapesWithFieldsMap =
@@ -629,6 +648,7 @@ endpointOverview shapesWithFieldsMap =
         reqResSection "Request" True (Vector.toList s)
         reqResSection "Response" False (Vector.toList s)
       Nothing -> pass
+
 
 requestShapeOverview :: Maybe (Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field]) -> Html ()
 requestShapeOverview fieldChanges = do
@@ -670,6 +690,7 @@ requestShapeOverview fieldChanges = do
               subSubSection "Response Body" (Map.lookup Fields.FCResponseBody th)
       Nothing -> pass
 
+
 anomalyFormatOverview :: AnomalyVM -> Vector Text -> Html ()
 anomalyFormatOverview an prevFormats =
   section_ [class_ "space-y-10"] do
@@ -699,6 +720,7 @@ anomalyFormatOverview an prevFormats =
           forM_ exs \ex -> do
             li_ [class_ "ml-10 text-slate-800 text-sm"] $ toHtml ex
 
+
 anomalyDisplayConfig :: Anomalies.AnomalyVM -> (Text, Text)
 anomalyDisplayConfig anomaly = case anomaly.anomalyType of
   Anomalies.ATField -> ("New Field Found", "/assets/svgs/anomalies/fields.svg")
@@ -706,6 +728,7 @@ anomalyDisplayConfig anomaly = case anomaly.anomalyType of
   Anomalies.ATEndpoint -> ("New Endpoint", "/assets/svgs/endpoint.svg")
   Anomalies.ATFormat -> ("Modified field", "/assets/svgs/anomalies/fields.svg")
   Anomalies.ATUnknown -> ("Unknown anomaly", "/assets/svgs/anomalies/fields.svg")
+
 
 renderAnomaly :: Bool -> UTCTime -> Anomalies.AnomalyVM -> Html ()
 renderAnomaly hideByDefault currTime anomaly = do
@@ -743,18 +766,20 @@ renderAnomaly hideByDefault currTime anomaly = do
     Anomalies.ATField -> error "Anomalies.ATField anomaly should never show up in practice "
     Anomalies.ATUnknown -> error "Anomalies.ATField anomaly should never show up in practice "
 
+
 anomalyAcknowlegeButton :: Projects.ProjectId -> Anomalies.AnomalyId -> Bool -> Html ()
 anomalyAcknowlegeButton pid aid acked = do
   let acknowlegeAnomalyEndpoint = "/p/" <> pid.toText <> "/anomalies/" <> Anomalies.anomalyIdText aid <> if acked then "/unacknowlege" else "/acknowlege"
   a_
     [ class_
         $ "inline-block child-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
-        <> (if acked then "bg-green-100 text-green-900" else ""),
-      term "data-tippy-content" "acknowlege anomaly",
-      hxGet_ acknowlegeAnomalyEndpoint,
-      hxSwap_ "outerHTML"
+        <> (if acked then "bg-green-100 text-green-900" else "")
+    , term "data-tippy-content" "acknowlege anomaly"
+    , hxGet_ acknowlegeAnomalyEndpoint
+    , hxSwap_ "outerHTML"
     ]
     if acked then "✓ Acknowleged" else "✓ Acknowlege"
+
 
 anomalyArchiveButton :: Projects.ProjectId -> Anomalies.AnomalyId -> Bool -> Html ()
 anomalyArchiveButton pid aid archived = do
@@ -762,12 +787,13 @@ anomalyArchiveButton pid aid archived = do
   a_
     [ class_
         $ "inline-block xchild-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
-        <> (if archived then " bg-green-100 text-green-900" else ""),
-      term "data-tippy-content" $ if archived then "unarchive" else "archive",
-      hxGet_ archiveAnomalyEndpoint,
-      hxSwap_ "outerHTML"
+        <> (if archived then " bg-green-100 text-green-900" else "")
+    , term "data-tippy-content" $ if archived then "unarchive" else "archive"
+    , hxGet_ archiveAnomalyEndpoint
+    , hxSwap_ "outerHTML"
     ]
     $ faSprite_ "inbox-full" "solid" "h-4 w-4"
+
 
 reqResSection :: Text -> Bool -> [Shapes.ShapeWithFields] -> Html ()
 reqResSection title isRequest shapesWithFieldsMap =
@@ -793,6 +819,7 @@ reqResSection title isRequest shapesWithFieldsMap =
               subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader s.fieldsMap)
               subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody s.fieldsMap)
 
+
 -- | subSubSection ..
 subSubSection :: Text -> Maybe [Fields.Field] -> Html ()
 subSubSection title fieldsM =
@@ -812,9 +839,9 @@ subSubSection title fieldsM =
             case fieldM of
               Nothing -> do
                 a_
-                  [ class_ "flex flex-row items-center",
-                    style_ depthPadding,
-                    [__| on click toggle .neg-rotate-90 on <.chevron/> in me then collapseUntil((me), (my @data-depth))  |]
+                  [ class_ "flex flex-row items-center"
+                  , style_ depthPadding
+                  , [__| on click toggle .neg-rotate-90 on <.chevron/> in me then collapseUntil((me), (my @data-depth))  |]
                   ]
                   do
                     faSprite_ "chevron-down" "light" "h-6 w-6 mr-1 chevron cursor-pointer p-1"
@@ -826,9 +853,9 @@ subSubSection title fieldsM =
                           else EndpointComponents.fieldTypeToDisplay Fields.FTObject
               Just field -> do
                 a_
-                  [ class_ "flex flex-row cursor-pointer",
-                    style_ depthPadding,
-                    term "data-depth" $ show depth
+                  [ class_ "flex flex-row cursor-pointer"
+                  , style_ depthPadding
+                  , term "data-depth" $ show depth
                   ]
                   do
                     faSprite_ "chevron-down" "light" "h-4 mr-3 mt-4 w-4 invisible"
