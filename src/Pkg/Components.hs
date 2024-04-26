@@ -33,9 +33,9 @@ navBar = do
 bashCommand :: Text -> Html ()
 bashCommand command = do
   div_ [class_ "w-full"] do
-    div_ [class_ "w-full rounded-lg bg-slate-800 px-4 py-2 text-gray-300 flex items-start"] do
+    div_ [class_ "w-full rounded-lg bg-slate-800 px-4 py-2 text-gray-300 flex gap-2 items-start"] do
       span_ [class_ "text-gray-400"] "$"
-      span_ [class_ "ml-2"] $ toHtml command
+      span_ $ toHtml command
       button_
         [ termRaw "data-command" command,
           [__| 
@@ -47,7 +47,7 @@ bashCommand command = do
       |]
         ]
         do
-          faIcon_ "fa fa-solid fa-copy" "fa-solid fa-cop" "h-4 w-4 text-gray-300"
+          faIcon_ "fa-copy" "fa-solid fa-copy" "h-4 w-4 text-gray-500"
 
 codeExample :: Text -> Html ()
 codeExample code = do
