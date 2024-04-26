@@ -10,8 +10,8 @@ import Lucid.Htmx
 import Pkg.Components
 import Relude
 
-expressGuide :: Text -> Maybe Text -> Maybe Text -> Html ()
-expressGuide apikey errorReportingM integrationsM = do
+expressGuide :: Text -> Html ()
+expressGuide apikey = do
   section_ [class_ "flex flex-col gap-10"] do
     div_ [class_ "w-full flex flex-col gap-2"] do
       h3_ [class_ "text-2xl font-bold"] "Install"
