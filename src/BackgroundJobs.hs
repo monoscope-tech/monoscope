@@ -2,7 +2,7 @@
 
 module BackgroundJobs (jobsWorkerInit, jobsRunner, BgJobs (..)) where
 
-import Control.Lens ((.~))
+import Control.Lens ((^.), (.~))
 import Data.Aeson as Aeson
 import Data.Aeson.QQ (aesonQQ)
 import Data.CaseInsensitive qualified as CI
@@ -36,7 +36,7 @@ import Models.Projects.Swaggers qualified as Swaggers
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text, trimming)
-import Network.Wreq (defaults, header, postWith)
+import Network.Wreq 
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, startJobRunner, throwParsePayload)
 import Pages.GenerateSwagger (generateSwagger)
@@ -48,7 +48,7 @@ import Relude.Unsafe qualified as Unsafe
 import System.Config qualified as Config
 import System.Types (ATBackgroundCtx, runBackground)
 import Utils (scheduleIntervals)
-
+import qualified Data.ByteString.Lazy.Char8 as LBS
 
 data BgJobs
   = InviteUserToProject Users.UserId Projects.ProjectId Text Text
@@ -108,8 +108,30 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
   <br/><br/>
   Regards,
   Apitoolkit team
-            |]
-    CreatedProjectSuccessfully userId projectId reciever projectTitle ->
+            |]     
+    CreatedProjectSuccessfully userId projectId reciever projectTitle -> do
+      print ("baby girl 1")   
+      let  discordMessage :: Value
+           discordMessage = [fmtTrim|
+              🎉 New project created on apitoolkit.io! 🎉
+              Project Title: {projectTitle}
+              Project ID: {projectId.toText}
+              User ID :{userId.toText}
+          |]  
+      let discordWebhookUrl = "https://discord.com/api/webhooks/1233362512645455952/O5sta6xTbikWbwUi7arIHphVcxc5cXm5wJPJdR3JJDbWY9KJ2d9tUp0tIl8qew1HjX-d"
+      let headers = defaults & header "Content-Type" .~ ["application/json"]   
+      let payload = encode discordMessage  
+      print ("baby girl 2")
+     -- print (show payload)
+      print ("what up")
+      response <- liftIO $ postWith headers discordWebhookUrl payload
+      print ("yooooo")
+      print ("Hello world")
+      traceShowM response
+      let status = response ^. responseStatus . statusCode
+      let body = response ^. responseBody
+      liftIO $ putStrLn $ "Response status code: " ++ show status
+      liftIO $ putStrLn $ "Response body: " ++ LBS.unpack body
       sendEmail
         reciever
         [fmt| 🤖 APITOOLKIT: Project created successfully '{projectTitle}' on apitoolkit.io |]
@@ -125,7 +147,8 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
   <br/><br/>
   Regards,<br/>
   Apitoolkit team
-            |]
+            |]   
+      
     DailyJob -> do
       currentDay <- utctDay <$> Time.currentTime
       projects <- dbtToEff $ query Select [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL|] (Only True)
