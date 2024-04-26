@@ -51,7 +51,7 @@ integrationsPage pid sdk apiKey errReportM reqMonM = do
       div_ [class_ "flex justify-between items-center"] do
         h3_ [class_ "text-3xl font-medium capitalize"] $ toHtml $ "Configure " <> sdk <> " SDK"
         div_ [class_ "flex items-center gap-4"] do
-          button_ [class_ "rounded-lg border px-4 py-2"] "See Full Documentation"
+          a_ [href_ "https://apitoolkit.io/docs/get-started/quickstarts/", target_ "_BLANK", class_ "rounded-lg border px-4 py-2"] "See Full Documentation"
       div_ [class_ "flex items-center gap-4"] do
         div_ [class_ "relative"] do
           button_ [class_ "border flex items-center justify-between border-blue-500 w-36 rounded-lg px-2 py-1.5 text-sm font-medium", [__|on click toggle .hidden on #sdk_list|]] do
