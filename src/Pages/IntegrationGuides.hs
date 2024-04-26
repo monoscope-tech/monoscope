@@ -45,7 +45,7 @@ getH pid sdkM errReportM reqMonM = do
 integrationsPage :: Projects.ProjectId -> Text -> Text -> Maybe Text -> Maybe Text -> Html ()
 integrationsPage pid sdk apiKey errReportM reqMonM = do
   let baseUrl = "/p/" <> pid.toText <> "/integration_guides?" <> maybe "" ("error_reporting=" <>) errReportM <> maybe "" (\v -> "&outgoing=" <> v) reqMonM
-  main_ [class_ "w-full h-full overflow-y-scroll", id_ "main"] do
+  main_ [class_ "w-full h-full overflow-y-scroll scroll-smooth", id_ "main"] do
     div_ [class_ "flex flex-col gap-6 border-b  m-8 pb-4 sticky top-[-40px] bg-white z-50"] do
       div_ [class_ "flex justify-between items-center"] do
         h3_ [class_ "text-3xl font-medium capitalize"] $ toHtml $ "Configure " <> sdk <> " SDK"
