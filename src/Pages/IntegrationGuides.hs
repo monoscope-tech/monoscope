@@ -17,6 +17,7 @@ import Pages.BodyWrapper
     bodyWrapper,
   )
 import Pages.IntegrationDemos.ExpressJs
+import Pages.IntegrationDemos.Gin
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext)
@@ -70,7 +71,9 @@ integrationsPage pid sdk apiKey errReportM reqMonM = do
           input_ [class_ "check-box", type_ "checkbox"]
           span_ "Outgoing request monitoring"
     div_ [class_ "px-8 mb-10"] do
-      expressGuide apiKey errReportM reqMonM
+      case sdk of
+        "gin" -> ginGuide apiKey errReportM reqMonM
+        _ -> expressGuide apiKey errReportM reqMonM
     script_
       [text|
 hljs.highlightAll();

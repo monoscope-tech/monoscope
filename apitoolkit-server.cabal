@@ -66,6 +66,7 @@ library
       Pages.GenerateSwagger
       Pages.GenerateSwaggerSpec
       Pages.IntegrationDemos.ExpressJs
+      Pages.IntegrationDemos.Gin
       Pages.IntegrationGuides
       Pages.Log
       Pages.LogExplorer.LogItem
