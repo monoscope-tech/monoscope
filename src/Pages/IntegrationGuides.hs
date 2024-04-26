@@ -57,19 +57,25 @@ integrationsPage pid sdk apiKey errReportM reqMonM = do
             span_ [class_ "b"] $ toHtml $ getTitle sdk
             span_ [] do
               faIcon_ "fa fa-solid fa-angle-down" "fa fa-solid fa-angle-down" "h-3 w-3"
-          div_ [class_ "hidden w-full flex flex-col left-0 absolute shadow top-4 bg-white text-sm rounded", id_ "sdk_list"] do
-            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "&sdk=express"] "ExpressJs"
-            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "&sdk=gin"] "Go Gin"
-            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "&sdk=pyramid"] "Python Pyramid"
-        label_ [class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium text-sm hover:bg-gray-100"] do
-          input_ [class_ "check-box", type_ "checkbox"]
-          span_ "Request monitoring"
-        label_ [class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium text-sm hover:bg-gray-100"] do
-          input_ [class_ "check-box", type_ "checkbox"]
-          span_ "Error Reporting"
-        label_ [class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium text-sm hover:bg-gray-100"] do
-          input_ [class_ "check-box", type_ "checkbox"]
-          span_ "Outgoing request monitoring"
+          div_ [class_ "hidden w-full flex flex-col left-0 absolute shadow top-8 bg-white text-sm rounded", id_ "sdk_list"] do
+            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=express"] "ExpressJs"
+            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=gin"] "Go Gin"
+            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=pyramid"] "Python Pyramid"
+        button_
+          [ class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium text-sm hover:bg-gray-100",
+            [__|on click go to the top of #requests-monitoring|]
+          ]
+          "Request monitoring"
+        button_
+          [ class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium text-sm hover:bg-gray-100",
+            [__|on click go to the top of #errors-monitoring|]
+          ]
+          "Error Reporting"
+        button_
+          [ class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium text-sm hover:bg-gray-100",
+            [__|on click go to the top of #outgoing-request-monitoring|]
+          ]
+          "Outgoing request monitoring"
     div_ [class_ "px-8 mb-10"] do
       case sdk of
         "gin" -> ginGuide apiKey errReportM reqMonM
