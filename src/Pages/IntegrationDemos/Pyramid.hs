@@ -2,11 +2,7 @@ module Pages.IntegrationDemos.Pyramid (pyramidGuide) where
 
 import Data.Text
 import Data.Text qualified as T
-import Data.Vector qualified as V
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
-import Effectful.Reader.Static (ask)
 import Lucid
-import Lucid.Htmx
 import Pkg.Components
 import Relude
 
@@ -14,14 +10,14 @@ pyramidGuide :: Text -> Html ()
 pyramidGuide apikey = do
   section_ [class_ "flex flex-col gap-10"] do
     div_ [class_ "w-full flex flex-col gap-2"] do
-      h3_ [class_ "text-2xl font-bold"] "Install"
+      h3_ [class_ "text-2xl font-semibold"] "Install"
       p_ [class_ "text-gray-600 font-medium flex items-center gap-1"] do
         "Install the APIToolkit gin SDK using "
-        span_ [class_ "text-red-500"] "go get:"
+        span_ [class_ "text-red-500"] "pip:"
       bashCommand "pip install apitoolkit-pyramid"
 
     div_ [class_ "w-full flex flex-col gap-2", id_ "requests-monitoring"] do
-      h3_ [class_ "text-2xl font-bold"] "Configure & Initialize SDK"
+      h3_ [class_ "text-2xl font-semibold"] "Configure & Initialize SDK"
       p_ [class_ "text-gray-600 font-medium"] "Configure and initialize the SDK to start monitoring incoming request to your pyramid server. Add your APIToolkit API key APITOOLKIT_KEY to your development.ini or production.ini files or in your settings:"
       codeExample $ initCode apikey
 
@@ -31,12 +27,12 @@ pyramidGuide apikey = do
       codeExample configOptions
 
     div_ [class_ "w-full flex flex-col gap-2", id_ "errors-monitoring"] do
-      h3_ [class_ "text-2xl font-bold"] "Error Reporting"
+      h3_ [class_ "text-2xl font-semibold"] "Error Reporting"
       p_ [class_ "text-gray-600 font-medium max-w-5xl"] "APIToolkit allows you to report errors alongside the request that caused them which allows you to easily reproduce and fix issues in production. Aside reporting errors manually, we also automatically report unrecovered panics that occured during a request."
       codeExample $ errorReportingCode apikey
 
     div_ [class_ "w-full flex flex-col gap-2", id_ "outgoing-request-monitoring"] do
-      h3_ [class_ "text-2xl font-bold"] "Outgoing Request Monitoring"
+      h3_ [class_ "text-2xl font-semibold"] "Outgoing Request Monitoring"
       p_ [class_ "text-gray-600 max-w-5xl"] "APIToolkit also allows you to monitor your outgoing request (i.e the api calls your make from your server). Monitored outgoing are also associated with the incoming request that triggered them, you can also monitor request in a background job or outside request context. To monitor outgoing HTTP requests from your Go application, you can replace the default HTTP client transport with a custom APIToolkit roundtripper."
       codeExample $ outgoingRequest apikey
 
