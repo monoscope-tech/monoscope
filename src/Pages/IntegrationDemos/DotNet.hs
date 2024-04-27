@@ -12,13 +12,13 @@ dotNetGuide apikey = do
     div_ [class_ "w-full flex flex-col gap-2"] do
       h3_ [class_ "text-2xl font-semibold"] "Install"
       p_ [class_ "text-gray-600 font-medium flex items-center gap-1"] do
-        "Install the APIToolkit gin SDK using "
+        "Install the APIToolkit .NET SDK using "
         span_ [class_ "text-red-500"] "dotnet add:"
       bashCommand "dotnet add package ApiToolkit.Net"
 
     div_ [class_ "w-full flex flex-col gap-2", id_ "requests-monitoring"] do
       h3_ [class_ "text-2xl font-semibold"] "Configure & Initialize SDK"
-      p_ [class_ "text-gray-600 font-medium"] "Configure and initialize the SDK to start monitoring incoming request to your gin server"
+      p_ [class_ "text-gray-600 font-medium"] "Configure and initialize the SDK to start monitoring incoming request to your .NET server"
       codeExample $ initCode apikey
 
     div_ [class_ "w-full flex flex-col gap-2"] do
