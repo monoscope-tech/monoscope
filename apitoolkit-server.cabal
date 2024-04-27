@@ -65,6 +65,10 @@ library
       Pages.Fields.FieldDetails
       Pages.GenerateSwagger
       Pages.GenerateSwaggerSpec
+      Pages.IntegrationDemos.ExpressJs
+      Pages.IntegrationDemos.Gin
+      Pages.IntegrationDemos.Pyramid
+      Pages.IntegrationGuides
       Pages.Log
       Pages.LogExplorer.LogItem
       Pages.ManualIngestion

@@ -19,34 +19,7 @@ import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Fmt (fixedF, fmt)
-import Lucid (
-  Html,
-  Term (term),
-  ToHtml (toHtml),
-  a_,
-  button_,
-  class_,
-  div_,
-  for_,
-  form_,
-  h2_,
-  h3_,
-  href_,
-  id_,
-  input_,
-  label_,
-  li_,
-  onclick_,
-  option_,
-  role_,
-  script_,
-  section_,
-  select_,
-  span_,
-  style_,
-  type_,
-  ul_,
- )
+import Lucid
 import Lucid.Htmx (hxPost_, hxSwap_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Endpoints qualified as Endpoints
@@ -287,9 +260,13 @@ dStats :: Projects.ProjectId -> Projects.ProjectRequestStats -> Text -> (Maybe Z
 dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledByStepsJ dateRange@(fromD, toD) = do
   section_ [class_ "space-y-3"] do
     when (projReqStats.totalRequests == 0) do
-      section_ [class_ "w-[1200px] mx-auto"] do
-        h2_ [class_ "text-xl font-medium mb-3"] "You haven't integrated APIToolkit in your application yet"
-        Onboarding.integrateApiToolkit "<YOUR_API_KEY>" "express"
+      section_ [class_ "card-round p-5 sm:py-14 sm:px-24 items-center flex gap-16"] do
+        div_ [] do
+          faIcon_ "fa fa-solid fa-empty-set" "fa-solid fa-empty-set" "h-24 w-24"
+        div_ [class_ "flex flex-col gap-2"] do
+          h2_ [class_ "text-2xl font-bold"] "Waiting for events..."
+          p_ "You're currently not sending any data to apitoolkit from your backends yet."
+          a_ [href_ $ "/p/" <> pid.toText <> "/integration_guides", class_ "w-max btn btn-indigo -ml-1 text-md"] "Read the setup guide"
     div_ [class_ "flex justify-between mt-4"] $ div_ [class_ "flex flex-row"] do
       a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
         $ faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 w-4 mr-3 inline-block"

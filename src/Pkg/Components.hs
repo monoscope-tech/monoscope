@@ -1,7 +1,12 @@
-module Pkg.Components (loader, navBar) where
+module Pkg.Components (loader, navBar, bashCommand, codeExample) where
 
+import Data.Text
 import Lucid
+import Lucid.Base
+import Lucid.Hyperscript
 import Lucid.Svg (d_, fill_, path_, viewBox_)
+import Relude
+import Utils
 
 
 loader :: Html ()
@@ -26,3 +31,50 @@ navBar = do
           [ class_ "h-12 w-10 hidden sd-show"
           , src_ "/assets/svgs/logo_mini.svg"
           ]
+
+
+bashCommand :: Text -> Html ()
+bashCommand command = do
+  div_ [class_ "w-full"] do
+    div_ [class_ "w-full rounded-lg bg-slate-800 px-4 py-2 text-gray-300 flex gap-2 items-start"] do
+      span_ [class_ "text-gray-400"] "$"
+      span_ $ toHtml command
+      button_
+        [ termRaw "data-command" command
+        , [__| 
+            on click
+              if 'clipboard' in window.navigator then
+                call navigator.clipboard.writeText(my @data-command)
+                send successToast(value:['Command copied to clipboard']) to <body/>
+              end
+      |]
+        ]
+        do
+          faIcon_ "fa-copy" "fa-solid fa-copy" "h-4 w-4 text-gray-500"
+
+
+codeExample :: Text -> Html ()
+codeExample code = do
+  div_ [class_ "relative overflow-hidden flex bg-slate-800 sm:rounded-xl"] do
+    div_ [class_ "relative w-full flex flex-col"] do
+      div_ [class_ "flex-none border-b border-slate-500/30 flex justify-between items-center gap-4"] do
+        div_ [class_ "flex items-center h-8 space-x-1.5 px-3"] do
+          div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
+          div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
+          div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
+        button_
+          [ class_ "text-gray-500 text-sm font-bold mr-6"
+          , term "data-code" code
+          , [__|
+              on click
+                if 'clipboard' in window.navigator then
+                  call navigator.clipboard.writeText(my @data-code)
+                  send successToast(value:['Copied']) to <body/>
+                end
+           |]
+          ]
+          do
+            faIcon_ "fa-copy" "fa-solid fa-copy" "h-4 w-4 inline-block"
+      div_ [class_ "relative flex-auto flex flex-col"] do
+        pre_ [class_ "flex leading-snug"] do
+          code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs atom-one-dark"] $ toHtml code

@@ -35,6 +35,7 @@ import Pages.Endpoints.EndpointDetails qualified as EndpointDetails
 import Pages.Endpoints.EndpointList qualified as EndpointList
 import Pages.Fields.FieldDetails qualified as FieldDetails
 import Pages.GenerateSwagger qualified as GenerateSwagger
+import Pages.IntegrationGuides qualified as IntegrationGuides
 import Pages.Log qualified as Log
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.ManualIngestion qualified as ManualIngestion
@@ -196,6 +197,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , deleteCollectionStep :: mode :- "p" :> ProjectId :> "testing" :> "step" :> Capture "step_id" TestingM.CollectionStepId :> Delete '[HTML] (Html ())
   , runTestCollection :: mode :- "p" :> ProjectId :> "testing" :> "run" :> Capture "collection_id" TestingM.CollectionId :> Post '[HTML] (Html ())
   , runTestCollectionStep :: mode :- "p" :> ProjectId :> "testing" :> "run" :> Capture "collection_id" TestingM.CollectionId :> Capture "step_id" TestingM.CollectionStepId :> Post '[HTML] (Html ())
+  , integrationGuides :: mode :- "p" :> ProjectId :> "integration_guides" :> QPT "sdk" :> QPT "error_reporting" :> QPT "dependency_monitoring" :> Get '[HTML] (Html ())
   }
   deriving stock (Generic)
 
@@ -269,6 +271,7 @@ cookieProtectedServer =
     , deleteCollectionStep = Testing.deleteStepH
     , runTestCollection = Testing.runTestCollectionH
     , runTestCollectionStep = Testing.runTestStepH
+    , integrationGuides = IntegrationGuides.getH
     }
 
 
