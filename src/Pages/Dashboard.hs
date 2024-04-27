@@ -2,16 +2,16 @@ module Pages.Dashboard (dashboardGetH) where
 
 import Data.Aeson qualified as AE
 import Data.Default (def)
-import Data.Time (
-  UTCTime,
-  ZonedTime,
-  addUTCTime,
-  formatTime,
-  getCurrentTime,
-  secondsToNominalDiffTime,
-  utc,
-  utcToZonedTime,
- )
+import Data.Time
+  ( UTCTime,
+    ZonedTime,
+    addUTCTime,
+    formatTime,
+    getCurrentTime,
+    secondsToNominalDiffTime,
+    utc,
+    utcToZonedTime,
+  )
 import Data.Time.Format (defaultTimeLocale)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as Vector
@@ -28,50 +28,49 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.Anomalies.AnomalyList qualified as AnomaliesList
-import Pages.BodyWrapper (
-  BWConfig (currProject, pageTitle, sessM),
-  bodyWrapper,
- )
+import Pages.BodyWrapper
+  ( BWConfig (currProject, pageTitle, sessM),
+    bodyWrapper,
+  )
 import Pages.Charts.Charts qualified as C
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (statBox)
 import Pages.Endpoints.EndpointList (renderEndpoint)
-import Pages.Onboarding qualified as Onboarding
-import Relude (
-  Applicative (pure),
-  Bool (..),
-  ConvertUtf8 (decodeUtf8),
-  Double,
-  Eq ((==)),
-  Foldable (null),
-  Fractional ((/)),
-  Int,
-  Integral (quot),
-  Maybe (..),
-  Monad (return),
-  MonadIO (liftIO),
-  Num (negate, (*)),
-  Ord ((>)),
-  RealFrac (round),
-  Semigroup ((<>)),
-  Text,
-  ToText (toText),
-  catMaybes,
-  fromMaybe,
-  isNothing,
-  mapM_,
-  maybe,
-  otherwise,
-  unless,
-  when,
-  ($),
-  (&),
-  (&&),
-  (++),
-  (.),
-  (<$>),
-  (||),
- )
+import Relude
+  ( Applicative (pure),
+    Bool (..),
+    ConvertUtf8 (decodeUtf8),
+    Double,
+    Eq ((==)),
+    Foldable (null),
+    Fractional ((/)),
+    Int,
+    Integral (quot),
+    Maybe (..),
+    Monad (return),
+    MonadIO (liftIO),
+    Num (negate, (*)),
+    Ord ((>)),
+    RealFrac (round),
+    Semigroup ((<>)),
+    Text,
+    ToText (toText),
+    catMaybes,
+    fromMaybe,
+    isNothing,
+    mapM_,
+    maybe,
+    otherwise,
+    unless,
+    when,
+    ($),
+    (&),
+    (&&),
+    (++),
+    (.),
+    (<$>),
+    (||),
+  )
 import Relude.Unsafe qualified as Unsafe
 import System.Clock (Clock (Monotonic), getTime)
 import System.Config (AuthContext)
@@ -80,23 +79,20 @@ import Text.Interpolation.Nyan (int, rmode')
 import Utils (deleteParam, faIcon_, freeTierLimitExceededBanner, mIcon_)
 import Witch (from)
 
-
 timePickerItems :: [(Text, Text)]
 timePickerItems =
-  [ ("1H", "Last Hour")
-  , ("24H", "Last 24 Hours")
-  , ("7D", "Last 7 days")
-  , ("14D", "Last 14 days")
+  [ ("1H", "Last Hour"),
+    ("24H", "Last 24 Hours"),
+    ("7D", "Last 7 days"),
+    ("14D", "Last 14 days")
   ]
 
-
 data ParamInput = ParamInput
-  { currentURL :: Text
-  , sinceStr :: Maybe Text
-  , dateRange :: (Maybe ZonedTime, Maybe ZonedTime)
-  , currentPickerTxt :: Text
+  { currentURL :: Text,
+    sinceStr :: Maybe Text,
+    dateRange :: (Maybe ZonedTime, Maybe ZonedTime),
+    currentPickerTxt :: Text
   }
-
 
 dashboardGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
 dashboardGetH pid fromDStr toDStr sinceStr' = do
@@ -148,16 +144,15 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
   let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = project
-          , pageTitle = "Dashboard"
+          { sessM = Just sess,
+            currProject = project,
+            pageTitle = "Dashboard"
           }
   currTime <- liftIO getCurrentTime
   let currentURL = "/p/" <> pid.toText <> "?&from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
   let currentPickerTxt = fromMaybe (maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD) sinceStr
-  let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt}
+  let paramInput = ParamInput {currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt}
   pure $ bodyWrapper bwconf $ dashboardPage pid paramInput currTime projectRequestStats newEndpoints reqLatenciesRolledByStepsJ (fromD, toD) freeTierExceeded
-
 
 dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Vector.Vector Endpoints.EndpointRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Bool -> Html ()
 dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRolledByStepsJ dateRange exceededFreeTier = do
@@ -170,9 +165,9 @@ dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRoll
         input_ [type_ "checkbox", id_ "newEndpointsModal", class_ "modal-toggle"]
         div_ [class_ "modal", role_ "dialog", hxSwap_ "outerHTML"] do
           form_
-            [ class_ "modal-box w-1/2 max-w-5xl"
-            , hxPost_ $ bulkActionBase <> "/acknowlege"
-            , id_ "endpointsForm"
+            [ class_ "modal-box w-1/2 max-w-5xl",
+              hxPost_ $ bulkActionBase <> "/acknowlege",
+              id_ "endpointsForm"
             ]
             do
               div_ [class_ "flex items-start py-2 border-b justify-between"] do
@@ -184,8 +179,8 @@ dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRoll
                   mapM_ (renderEndpoint False currTime) newEndpoints
               div_ [class_ "flex w-full justify-end items-center p-6 gap-4 space-x-2 border-t border-gray-200 rounded-b"] do
                 button_
-                  [ class_ "btn btn-primary"
-                  , [__|on click set .endpoint_anomaly_input.checked to true then htmx.trigger("#endpointsForm", "submit")|]
+                  [ class_ "btn btn-primary",
+                    [__|on click set .endpoint_anomaly_input.checked to true then htmx.trigger("#endpointsForm", "submit")|]
                   ]
                   "Acknowledge All"
           label_ [class_ "modal-backdrop", Lucid.for_ "newEndpointsModal"] "Close"
@@ -193,8 +188,8 @@ dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRoll
     div_ [class_ "relative p-1 "] do
       div_ [class_ "relative"] do
         a_
-          [ class_ "relative px-3 py-2 border border-1 border-black-200 space-x-2  inline-block relative cursor-pointer rounded-md"
-          , [__| on click toggle .hidden on #timepickerBox|]
+          [ class_ "relative px-3 py-2 border border-1 border-black-200 space-x-2  inline-block relative cursor-pointer rounded-md",
+            [__| on click toggle .hidden on #timepickerBox|]
           ]
           do
             mIcon_ "clock" "h-4 w-4"
@@ -205,8 +200,8 @@ dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRoll
             timePickerItems
               & mapM_ \(val, title) ->
                 a_
-                  [ class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 "
-                  , href_ $ currentURL' <> "&since=" <> val
+                  [ class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ",
+                    href_ $ currentURL' <> "&since=" <> val
                   ]
                   $ toHtml title
             a_ [class_ "block text-gray-900 relative cursor-pointer select-none py-2 pl-3 pr-9 hover:bg-gray-200 ", [__| on click toggle .hidden on #timepickerSidebar |]] "Custom date range"
@@ -255,9 +250,8 @@ dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRoll
     window.picker = picker;
     |]
 
-
 dStats :: Projects.ProjectId -> Projects.ProjectRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
-dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledByStepsJ dateRange@(fromD, toD) = do
+dStats pid projReqStats@Projects.ProjectRequestStats {..} reqLatenciesRolledByStepsJ dateRange@(fromD, toD) = do
   section_ [class_ "space-y-3"] do
     when (projReqStats.totalRequests == 0) do
       section_ [class_ "card-round p-5 sm:py-14 sm:px-24 items-center flex gap-16"] do
@@ -328,7 +322,6 @@ dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledBySte
               percentileRow "min" projReqStats.min
         script_ [int|| latencyHistogram('reqsLatencyHistogram',{p50:#{p50}, p75:#{p75}, p90:#{p90}, p95:#{p95}, p99:#{p99}, max:#{max}},  #{reqLatenciesRolledByStepsJ}) |]
 
-
 percentileRow :: Text -> Double -> Html ()
 percentileRow key p = do
   let (d, unit) = fmtDuration p
@@ -337,7 +330,6 @@ percentileRow key p = do
     span_ [class_ "inline-block font-mono"] do
       span_ [class_ "tabular-nums"] $ toHtml d
       span_ $ toHtml unit
-
 
 fmtDuration :: Double -> (Text, Text)
 fmtDuration d

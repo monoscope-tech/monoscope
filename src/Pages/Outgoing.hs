@@ -16,18 +16,15 @@ import Lucid.Hyperscript
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import NeatInterpolation
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.BodyWrapper
 import Pages.NonMember
-import Pages.Onboarding qualified as Onboarding
 import PyF qualified
 import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import System.Config
 import System.Types
 import Utils
-
 
 outgoingGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (Html ())
 outgoingGetH pid sortM = do
@@ -45,21 +42,19 @@ outgoingGetH pid sortM = do
         pure (project, hostsAndEvents)
       let bwconf =
             def
-              { sessM = Just sess
-              , currProject = project
-              , pageTitle = "Dependencies"
+              { sessM = Just sess,
+                currProject = project,
+                pageTitle = "Dependencies"
               }
 
       pure $ bodyWrapper bwconf $ outgoingPage pid (fromMaybe "events" sortM) hostsEvents
 
-
 sortOptions :: [(Text, Text, Text)]
 sortOptions =
-  [ ("First Seen", "First time the issue occured", "first_seen")
-  , ("Last Seen", "Last time the issue occured", "last_seen")
-  , ("Events", "Number of events", "events")
+  [ ("First Seen", "First time the issue occured", "first_seen"),
+    ("Last Seen", "Last time the issue occured", "last_seen"),
+    ("Events", "Number of events", "events")
   ]
-
 
 outgoingPage :: Projects.ProjectId -> Text -> V.Vector Endpoints.HostEvents -> Html ()
 outgoingPage pid sortV hostsEvents = do
@@ -82,8 +77,8 @@ outgoingPage pid sortV hostsEvents = do
                 sortOptions & mapM_ \(title, desc, identifier) -> do
                   let isActive = sortV == identifier
                   a_
-                    [ class_ $ "block flex flex-row px-3 py-2 hover:bg-blue-50 rounded-md cursor-pointer " <> (if isActive then " text-blue-800 " else "")
-                    , href_ $ "/p/" <> pid.toText <> "/outgoing?sort=" <> identifier
+                    [ class_ $ "block flex flex-row px-3 py-2 hover:bg-blue-50 rounded-md cursor-pointer " <> (if isActive then " text-blue-800 " else ""),
+                      href_ $ "/p/" <> pid.toText <> "/outgoing?sort=" <> identifier
                     ]
                     do
                       div_ [class_ "flex flex-col items-center justify-center px-3"] do
@@ -99,10 +94,10 @@ outgoingPage pid sortV hostsEvents = do
           div_ [class_ "relative flex w-full bg-white py-2 px-3 border-solid border border-gray-200 h-10"] $ do
             faIcon_ "fa-magnifying-glass" "fa-light fa-magnifying-glass" "h-5 w-5"
             input_
-              [ type_ "text"
-              , [__| on input show .endpoint_item in #endpoints_container when its textContent.toLowerCase() contains my value.toLowerCase() |]
-              , class_ "dataTable-search w-full h-full p-2 text-gray-500 font-normal focus:outline-none"
-              , placeholder_ "Search dependencies..."
+              [ type_ "text",
+                [__| on input show .endpoint_item in #endpoints_container when its textContent.toLowerCase() contains my value.toLowerCase() |],
+                class_ "dataTable-search w-full h-full p-2 text-gray-500 font-normal focus:outline-none",
+                placeholder_ "Search dependencies..."
               ]
 
       -- Data rows
@@ -114,10 +109,10 @@ outgoingPage pid sortV hostsEvents = do
               a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=host%3D%3D" <> "\"" <> host.host <> "\"", class_ "text-blue-500 hover:text-slate-600"] $ "View logs"
             div_ [class_ "w-64 mb-4 justify-center flex-1 items-center"] $ do
               div_
-                [ class_ "w-56 h-12 px-3"
-                , hxGet_ $ "/charts_html?pid=" <> pid.toText <> "&since=14D&query_raw=" <> AnomalyList.escapedQueryPartial [PyF.fmt|host=="{host.host}" | timechart [1d]|]
-                , hxTrigger_ "intersect once"
-                , hxSwap_ "innerHTML"
+                [ class_ "w-56 h-12 px-3",
+                  hxGet_ $ "/charts_html?pid=" <> pid.toText <> "&since=14D&query_raw=" <> AnomalyList.escapedQueryPartial [PyF.fmt|host=="{host.host}" | timechart [1d]|],
+                  hxTrigger_ "intersect once",
+                  hxSwap_ "innerHTML"
                 ]
                 ""
             div_ [class_ " w-24 text-center"] $ toHtml (show host.eventCount)
