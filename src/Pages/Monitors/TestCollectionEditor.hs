@@ -28,7 +28,7 @@ import Web.FormUrlEncoded (FromForm)
 
 
 data CollectionStepUpdateForm = CollectionStepUpdateForm
-  { stepsData :: Text
+  { stepsData :: Text 
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
@@ -106,12 +106,12 @@ collectionStep_ :: Maybe Int -> Testing.CollectionStep -> Html ()
 collectionStep_ idxM step = do
   let idx = maybe "[idx]" show idxM
   let (sdMethod, sdUri) = fromMaybe ("", "") $ Testing.stepDataMethod step.stepData
-  div_ [class_ "divide-y divide-slate-200 rounded-lg border border-slate-200 group/item collectionStep"] do
+  div_ [class_ "rounded-lg overflow-hidden border border-slate-200 group/item collectionStep"] do
     input_ [type_ "checkbox", id_ [fmt|stepState-{idx}|], class_ "hidden stepState"]
-    div_ [class_ "flex flex-row items-center bg-gray-50 divide-x divide-slate-200"] do
-      div_ [class_ "h-full shrink bg-gray-50 p-3"] $ faIcon_ "fa-grip-dots-vertical" "fa-solid fa-grip-dots-vertical" " h-4 w-4"
+    div_ [class_ "flex flex-row items-center bg-gray-50 "] do
+      div_ [class_ "h-full shrink bg-gray-50 p-3 hidden border-r border-r-slate-200"] $ faIcon_ "fa-grip-dots-vertical" "fa-solid fa-grip-dots-vertical" " h-4 w-4"
       div_ [class_ "flex-1 flex flex-row items-center gap-1 bg-white pr-5 py-3"] do
-        label_ [Lucid.for_ [fmt|stepState-{idx}|], class_ "p-3 cursor-pointer"] $ toHtml $ maybe "" (\x->show $ x + 1) idxM
+        label_ [Lucid.for_ [fmt|stepState-{idx}|], class_ "p-3 cursor-pointer text-xs text-slate-700"] $ toHtml $ maybe "" (\x->show $ x + 1) idxM
         label_ [Lucid.for_ [fmt|stepState-{idx}|], class_ "p-3 cursor-pointer"] do
           faSprite_ "chevron-right" "solid" "h-4 w-3 group-has-[.stepState:checked]/item:rotate-90"
         div_ [class_ "w-full space-y-1 relative"] do
@@ -120,31 +120,27 @@ collectionStep_ idxM step = do
             button_ [class_ "text-blue-600"] $ faIcon_ "fa-play" "fa-play fa-solid" "w-2 h-3"
             a_ [class_ "text-red-700", [__|on click remove the closest parent <.collectionStep/> |]] $ faIcon_ "fa-xmark" "fa-xmark fa-solid" "w-2 h-3"
           input_ [class_ "text-lg w-full",placeholder_ "Untitled", value_ $ fromMaybe "" step.stepData.title, name_ $ [fmt|[{idx}][title]|], id_ [fmt|title-{idx}|]]
-          div_ [class_ "flex text-sm group-has-[.stepState:checked]/item:hidden"] do
-            span_ [class_ "rounded-l-lg bg-slate-300 px-3 py-1 font-semibold"] $ toHtml sdMethod
-            span_ [class_ "bg-slate-100 px-3 py-1"] $ toHtml sdUri
-            span_ [class_ "rounded-r-lg bg-green-600 px-3 py-1 font-bold text-white"] "200 OK"
-    div_ [class_ "space-y-3 pt-4 p-3 hidden group-has-[.stepState:checked]/item:block"] do
-      div_ [class_ "relative flex flex-row gap-2 items-center px-2"] do
-        label_ [Lucid.for_ $ "actions-list-input-" <>idx , class_ "w-28  shrink text-sm font-medium form-control "] do
-          input_
-            [ list_ "actions-list"
-            , id_ $ "actions-list-input-"<>idx
-            , class_ "input input-sm input-bordered w-full"
-            , placeholder_ "method"
-            , value_ sdMethod
-            , termRaw "_" [fmt|on change throttled at 500ms put `[{idx}][${{me.value}}]` into #actions-data-{idx}'s @name |]
-            ]
-        label_ [Lucid.for_ "actions-data", class_ "flex-1 text-sm font-medium form-control w-full "] do
-          div_ [class_ "flex flex-row items-center gap-1"] do
-            input_
-              [ type_ "text"
-              , id_ [fmt|actions-data-{idx}|]
-              , class_ "input input-sm input-bordered w-full"
-              , placeholder_ "Request URI"
-              , name_ [fmt|[{idx}][{sdMethod}]|]
-              ]
-      div_ [role_ "tablist", class_ "tabs tabs-bordered pt-4"] do
+          div_ [class_ "relative flex flex-row gap-2 items-center"] do
+            label_ [Lucid.for_ $ "actions-list-input-" <>idx , class_ "w-28  shrink text-sm font-medium form-control "] do
+              input_
+                [ list_ "actions-list"
+                , id_ $ "actions-list-input-"<>idx
+                , class_ "input input-sm input-bordered w-full"
+                , placeholder_ "method"
+                , value_ sdMethod
+                , termRaw "_" [fmt|on change throttled at 500ms put `[{idx}][${{me.value}}]` into #actions-data-{idx}'s @name |]
+                ]
+            label_ [Lucid.for_ "actions-data", class_ "flex-1 text-sm font-medium form-control w-full "] do
+              div_ [class_ "flex flex-row items-center gap-1"] do
+                input_
+                  [ type_ "text"
+                  , id_ [fmt|actions-data-{idx}|]
+                  , class_ "input input-sm input-bordered w-full"
+                  , placeholder_ "Request URI"
+                  , name_ [fmt|[{idx}][{sdMethod}]|]
+                  ]
+    div_ [class_ "border-t border-t-slate-200 space-y-3 p-3 hidden group-has-[.stepState:checked]/item:block"] do
+      div_ [role_ "tablist", class_ "tabs tabs-bordered pt-1"] do
         input_ [type_ "radio", name_ [fmt|_httpOptions-{idx}|], role_ "tab", class_ "tab", Aria.label_ "Params", checked_]
         div_ [role_ "tabpanel", class_ "tab-content px-2 py-4 space-y-2", id_ [fmt|[{idx}][params]|]] do
           whenJust step.stepData.params $ \mp -> forM_ (Map.toList mp) \(paramK, paramV) ->
@@ -218,21 +214,14 @@ editorExtraElements = do
   template_ [id_ "paramRowTmplFull"] $ paramRowKV "paramRowTmpl" "[kPrefix]" Nothing "[kKey]" "[kVal]"
   template_ [id_ "paramRowTmplFullAssert"] $ paramRowKV "paramRowTmplAssert" "[kPrefix]" (Just "[aidx]") "[kKey]" "[kVal]"
   template_ [id_ "collectionStepTmpl"] $ collectionStep_ Nothing (def::Testing.CollectionStep)
-  -- script_ [type_ "module", src_ "/assets/testeditor.js"] ("" :: Text)
   script_ [src_ "/assets/js/thirdparty/jsyaml.min.js", crossorigin_ "true"] ("" :: Text)
-  script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.63.0/codemirror.min.js"] ("" :: Text)
-  script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.63.0/mode/yaml/yaml.js"] ("" :: Text)
-  style_
-    [text|
-        .CodeMirror {
-            height: 100%;
-        }
-    |]
   script_
     [raw|
   function buildAndSetEditor(event){
    if (event.target.checked) {
-      stepFormToObject()
+      const collectionSteps = stepFormToObject();
+      const yamlData = jsyaml.dump(collectionSteps, { indent: 2 });
+      window.editor.setValue(yamlData)
     } else{
       const collectionSteps = jsyaml.load(window.editor.getValue());
       populateForm(collectionSteps, 'stepsForm')
@@ -253,9 +242,7 @@ editorExtraElements = do
         _.set(collectionSteps, path, value);  // Use Lodash's set function
       } 
     }
-
-    const yamlData = jsyaml.dump(collectionSteps, { indent: 2 });
-    window.editor.setValue(yamlData)
+    return collectionSteps;
   }
 
   function populateForm(collectionSteps, formId) {
