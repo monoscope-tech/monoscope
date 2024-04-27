@@ -21,6 +21,7 @@ import PyF
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext)
+import qualified Data.ByteString.Lazy.Char8 as BL
 import System.Types (ATAuthCtx)
 import Utils
 import Web.FormUrlEncoded (FromForm)
@@ -85,13 +86,14 @@ collectionPage pid col steps = do
             span_ [class_ "text-sm"] "Code"
       div_ [class_ "h-full flex-1"] do
         div_ [id_ "steps-codeEditor", class_ "h-full max-h-screen hidden group-has-[.editorMode:checked]/colForm:block"] ""
-        div_ [class_ "group-has-[.editorMode:checked]/colForm:hidden"] do
+        div_ [class_ "h-full overflow-y-scroll group-has-[.editorMode:checked]/colForm:hidden"] do
           div_ [class_ " p-4 space-y-4 collectionSteps", id_ "collectionStepsContainer"] do
             V.iforM_ steps \idx step -> collectionStep_ (Just $ idx) step
           div_ [class_ "p-4 pt-2"] $ a_ [class_ "btn btn-outline btn-neutral btn-sm items-center cursor-pointer", 
-                 [__| on click set :stepTmpl to #collectionStepTmpl.innerHTML.replaceAll('[idx]', #collectionStepsContainer.length)
-                          then append :stepTmpl to #collectionStepsContainer 
-                          then _hyperscript.processNode(#stepsForm)|]] do
+                 [__| on click set :stepTmpl to #collectionStepTmpl.innerHTML.replaceAll('[idx]', #collectionStepsContainer.childNodes.length)
+                          then put :stepTmpl at the end of #collectionStepsContainer
+                          then _hyperscript.processNode(#stepsForm)
+                          |]] do
             faSprite_ "plus" "sharp-regular" "w-4 h-4"
             span_ "Add Another Step"
     div_ [class_ "col-span-1 h-full border-r border-gray-200"] do
@@ -104,7 +106,7 @@ collectionStep_ :: Maybe Int -> Testing.CollectionStep -> Html ()
 collectionStep_ idxM step = do
   let idx = maybe "[idx]" show idxM
   let (sdMethod, sdUri) = fromMaybe ("", "") $ Testing.stepDataMethod step.stepData
-  div_ [class_ "divide-y divide-slate-200 rounded-lg border border-slate-200 group/item"] do
+  div_ [class_ "divide-y divide-slate-200 rounded-lg border border-slate-200 group/item collectionStep"] do
     input_ [type_ "checkbox", id_ [fmt|stepState-{idx}|], class_ "hidden stepState"]
     div_ [class_ "flex flex-row items-center bg-gray-50 divide-x divide-slate-200"] do
       div_ [class_ "h-full shrink bg-gray-50 p-3"] $ faIcon_ "fa-grip-dots-vertical" "fa-solid fa-grip-dots-vertical" " h-4 w-4"
@@ -116,8 +118,8 @@ collectionStep_ idxM step = do
           div_ [class_ "absolute right-0 flex items-center gap-3 text-xs text-gray-600 hidden group-hover/item:flex"] do
             button_ [class_ ""] "View results"
             button_ [class_ "text-blue-600"] $ faIcon_ "fa-play" "fa-play fa-solid" "w-2 h-3"
-            button_ [class_ "text-red-700"] $ faIcon_ "fa-xmark" "fa-xmark fa-solid" "w-2 h-3"
-          input_ [class_ "text-lg w-full", value_ $ fromMaybe "" step.stepData.title, name_ $ [fmt|[{idx}][title]|], id_ [fmt|title-{idx}|]]
+            a_ [class_ "text-red-700", [__|on click remove the closest parent <.collectionStep/> |]] $ faIcon_ "fa-xmark" "fa-xmark fa-solid" "w-2 h-3"
+          input_ [class_ "text-lg w-full",placeholder_ "Untitled", value_ $ fromMaybe "" step.stepData.title, name_ $ [fmt|[{idx}][title]|], id_ [fmt|title-{idx}|]]
           div_ [class_ "flex text-sm group-has-[.stepState:checked]/item:hidden"] do
             span_ [class_ "rounded-l-lg bg-slate-300 px-3 py-1 font-semibold"] $ toHtml sdMethod
             span_ [class_ "bg-slate-100 px-3 py-1"] $ toHtml sdUri
@@ -131,7 +133,7 @@ collectionStep_ idxM step = do
             , class_ "input input-sm input-bordered w-full"
             , placeholder_ "method"
             , value_ sdMethod
-            , termRaw "__" [fmt|on change trottle:500ms put me.value into #actions-data-{idx}'s @name |]
+            , termRaw "_" [fmt|on change throttled at 500ms put `[{idx}][${{me.value}}]` into #actions-data-{idx}'s @name |]
             ]
         label_ [Lucid.for_ "actions-data", class_ "flex-1 text-sm font-medium form-control w-full "] do
           div_ [class_ "flex flex-row items-center gap-1"] do
@@ -143,46 +145,57 @@ collectionStep_ idxM step = do
               , name_ [fmt|[{idx}][{sdMethod}]|]
               ]
       div_ [role_ "tablist", class_ "tabs tabs-bordered pt-4"] do
-        input_ [type_ "radio", name_ "_httpOptions", role_ "tab", class_ "tab", Aria.label_ "Params", checked_]
+        input_ [type_ "radio", name_ [fmt|_httpOptions-{idx}|], role_ "tab", class_ "tab", Aria.label_ "Params", checked_]
         div_ [role_ "tabpanel", class_ "tab-content px-2 py-4 space-y-2", id_ [fmt|[{idx}][params]|]] do
           whenJust step.stepData.params $ \mp -> forM_ (Map.toList mp) \(paramK, paramV) ->
-            paramRowKV [fmt|[{idx}][params]|] paramK paramV
-          paramRowKV [fmt|[{idx}][params]|] "" ""
+            paramRowKV "paramRowTmpl" [fmt|[{idx}][params]|] Nothing paramK paramV
+          paramRowKV "paramRowTmpl" [fmt|[{idx}][params]|] Nothing "" ""
 
-        input_ [type_ "radio", name_ "_httpOptions", role_ "tab", class_ "tab", Aria.label_ "Headers"]
+        input_ [type_ "radio", name_ [fmt|_httpOptions-{idx}|], role_ "tab", class_ "tab", Aria.label_ "Headers"]
         div_ [role_ "tabpanel", class_ "tab-content px-2 py-4 space-y-2", id_ [fmt|[{idx}][headers]|]] do
           whenJust step.stepData.headers $ \mp -> forM_ (Map.toList mp) \(headerK, headerV) ->
-            paramRowKV [fmt|[{idx}][headers]|] headerK headerV
-          paramRowKV ([fmt|[{idx}][headers]|]) "" ""
+            paramRowKV "paramRowTmpl" [fmt|[{idx}][headers]|] Nothing headerK headerV
+          paramRowKV "paramRowTmpl" ([fmt|[{idx}][headers]|]) Nothing "" ""
 
-        input_ [type_ "radio", name_ "_httpOptions", role_ "tab", class_ "tab", Aria.label_ "Body"]
+        input_ [type_ "radio", name_ [fmt|_httpOptions-{idx}|], role_ "tab", class_ "tab", Aria.label_ "Body"]
         div_ [role_ "tabpanel", class_ "tab-content px-2 py-4"] do
-          div_ "jkfdsjklfd"
+          select_ [class_ "peer select select-sm select-bordered", termRaw "data-chosen" "json", onchange_ "this.dataset.chosen = this.value;"] do
+            option_ [selected_ "selected"] "json"
+            option_ [] "raw"
+          div_ [class_"hidden peer-data-[chosen=json]:block"] $ textarea_ [class_ "w-full", name_ [fmt|[{idx}][json]|]] (fromString $ BL.unpack $ AE.encode step.stepData.json )
+          div_ [class_"hidden peer-data-[chosen=raw]:block"] $ textarea_ [class_ "w-full",name_ [fmt|[{idx}][raw]|]] $ toHtml (fromMaybe "" step.stepData.raw )
+
       div_ [class_ ""] do
         h5_ [class_ "label-text p-1 mb-2"] "Assertions"
-        div_ [class_ "text-sm space-y-2 px-2 [&_.assertIndicator]:inline-block",  id_ [fmt|[{idx}][asserts]|]] do
+        div_ [class_ "text-sm space-y-2 px-2 [&_.assertIndicator]:inline-block paramRows",  id_ [fmt|[{idx}][asserts]|]] do
           whenJust step.stepData.asserts $ \vmp -> V.iforM_ vmp \vIdx mp -> forM_ (Map.toList mp) \(assertK, assertV) ->
-            paramRowKV ([fmt|[{idx}][asserts][{show vIdx}]|]) "" ""
-          let assertsLen = show $ maybe 0 length step.stepData.asserts
-          paramRowKV ([fmt|[{idx}][asserts][{assertsLen}]|]) "" ""
+            paramRowKV "paramRowTmplAssert" ([fmt|[{idx}][asserts]|]) (Just (show vIdx)) assertK (fromString $ BL.unpack $ AE.encode assertV) 
+          let assertsLen = maybe 0 length step.stepData.asserts
+          paramRowKV "paramRowTmplAssert" ([fmt|[{idx}][asserts]|]) (Just (show assertsLen)) "" ""
+      div_ [class_ ""] do
+        h5_ [class_ "label-text p-1 mb-2"] "Exports"
+        div_ [class_ "text-sm space-y-2 px-2 paramRows",  id_ [fmt|[{idx}][exports]|]] do
+          whenJust step.stepData.exports $ \mp -> forM_ (Map.toList mp) \(exportK, exportV) ->
+            paramRowKV "paramRowTmpl" ([fmt|[{idx}][exports]|]) Nothing exportK exportV
+          paramRowKV "paramRowTmpl" ([fmt|[{idx}][exports]|]) Nothing "" ""
 
 
-valueToText :: AE.Value -> Text
-valueToText val = TL.toStrict $ TLE.decodeUtf8 $ AE.encode val
-
-
-paramRowKV :: Text -> Text -> Text -> Html ()
-paramRowKV keyPrefix keyV valV = div_ [class_ "flex flex-row items-center gap-2 paramRow"] do
+paramRowKV :: Text -> Text -> Maybe Text -> Text -> Text -> Html ()
+paramRowKV tmplForAddBtn keyPrefix itemIdx keyV valV = div_ [class_ "flex flex-row items-center gap-2 paramRow"] do
   span_ [class_ "shrink hidden assertIndicator"] $ "✅"
-  input_ [class_ "shrink input input-xs input-bordered w-1/3", placeholder_ "Key", value_ keyV, termRaw "data-keyPrefix" keyPrefix
+  input_ [class_ "shrink input input-xs input-bordered w-1/3", placeholder_ "Key", value_ keyV
+    , termRaw "data-keyPrefix" (fromMaybe keyPrefix $ (itemIdx <&> \vIdx -> keyPrefix <> "[" <> vIdx <> "]"))
     , [__|on change set :kPrefix to `${my @data-keyPrefix}[${me.value}]` then set (next <input/>)'s @name to :kPrefix  |]
     ]
   input_ [class_ "flex-1 input input-xs input-bordered w-full", placeholder_ "Value"
     , name_ $ keyPrefix <> "[" <> keyV <> "]", value_ valV]
   div_ [class_ "shrink flex flex-row gap-1 items-center"] do
-    a_ [[__|on click set :paramTmpl to #paramRowTmpl.innerHTML.replaceAll(#stepsForm's @data-defaultKeyPrefix, @data-keyPrefix) 
+    a_ [termRaw "_" [fmt|on click set :nextIndex to (the closest parent <div.paramRows/>).childNodes.length 
+                then set :paramTmpl to 
+                        #{tmplForAddBtn}.innerHTML.replaceAll(#stepsForm's @data-defaultKeyPrefix, @data-keyPrefix).replaceAll('[aidx]', `[${{:nextIndex}}]`)
                 then put :paramTmpl after the closest parent <div.paramRow/>  
-                then _hyperscript.processNode(#stepsForm)|]
+                then _hyperscript.processNode(#stepsForm) 
+                |]
       ,  termRaw "data-keyPrefix" keyPrefix] $ faIcon_ "fa-plus" "fa-plus fa-solid" "w-3 h-3"
     a_ [class_ "text-red-700 cursor-pointer", [__|on click remove the closest parent <div.paramRow/> |]] $ faIcon_ "fa-xmark" "fa-xmark fa-solid" "w-3 h-3"
 
@@ -200,8 +213,10 @@ editorExtraElements = do
     option_ [value_ "UPDATE"] ""
     option_ [value_ "PATCH"] ""
     option_ [value_ "DELETE"] ""
-  template_ [id_ "paramRowTmpl"] $ paramRowKV "[kPrefix]" "" ""
-  template_ [id_ "paramRowTmplFull"] $ paramRowKV "[kPrefix]" "[kKey]" "[kVal]"
+  template_ [id_ "paramRowTmpl"] $ paramRowKV "paramRowTmpl" "[kPrefix]" Nothing "" ""
+  template_ [id_ "paramRowTmplAssert"] $ paramRowKV "paramRowTmplAssert" "[kPrefix]" (Just "[aidx]") "" ""
+  template_ [id_ "paramRowTmplFull"] $ paramRowKV "paramRowTmpl" "[kPrefix]" Nothing "[kKey]" "[kVal]"
+  template_ [id_ "paramRowTmplFullAssert"] $ paramRowKV "paramRowTmplAssert" "[kPrefix]" (Just "[aidx]") "[kKey]" "[kVal]"
   template_ [id_ "collectionStepTmpl"] $ collectionStep_ Nothing (def::Testing.CollectionStep)
   -- script_ [type_ "module", src_ "/assets/testeditor.js"] ("" :: Text)
   script_ [src_ "/assets/js/thirdparty/jsyaml.min.js", crossorigin_ "true"] ("" :: Text)
@@ -215,51 +230,44 @@ editorExtraElements = do
     |]
   script_
     [raw|
-    function buildAndSetEditor(event){
-     if (event.target.checked) {
-        console.log("not checked")
-        stepFormToObject()
-      } else{
-        console.log("window editor value", window.editor.getValue())
-        const collectionSteps = jsyaml.load(window.editor.getValue());
-        console.log("checked", collectionSteps)
-        populateForm(collectionSteps, 'stepsForm')
-      }
+  function buildAndSetEditor(event){
+   if (event.target.checked) {
+      stepFormToObject()
+    } else{
+      const collectionSteps = jsyaml.load(window.editor.getValue());
+      populateForm(collectionSteps, 'stepsForm')
+    }
+  }
+
+  function stepFormToObject(){
+    const formData = new FormData(document.getElementById("stepsForm"));
+    const collectionSteps = [];
+
+    for (const [name, value] of formData.entries()) {
+      if (!name.startsWith("[")) continue;
+      const path = name
+        .split(/[\[\]]+/)  // Split the name by brackets
+        .filter(part => part !== '')  // Remove empty strings from resulting array
+        .map(part => isNaN(part) ? part : parseInt(part));  // Convert array indexes to integers
+      if (path.length > 1 && value && value!='' && value!='null' ) {
+        _.set(collectionSteps, path, value);  // Use Lodash's set function
+      } 
     }
 
-    function stepFormToObject(){
-      const form = document.getElementById("stepsForm");
-      const formData = new FormData(form);
-      const collectionSteps = [];
-      for (const [name, value] of formData.entries()) {
-        const parts = name.split(/[\[\]]+/).filter(part => part !== '');
-        let currentStep = collectionSteps;
-        for (let i = 0; i < parts.length; i++) {
-            const part = parts[i];
-            const isNumeric = !isNaN(parseInt(parts[i + 1]));
-            if (isNumeric && parseInt(parts[i + 1]) >= 0) {
-                currentStep[part] = currentStep[part] || [];
-                let index = parseInt(parts[++i]); // Move index one step as we know it's an array index
-                currentStep[part][index] = currentStep[part][index] || {};
-                currentStep = currentStep[part][index];
-            } else if (parts[i + 1]) {
-                currentStep[part] = currentStep[part] || {};
-                currentStep = currentStep[part];
-            } else {
-                currentStep[part] = value;
-            }
-        }
-      }
-      const yamlData = jsyaml.dump(collectionSteps, { indent: 2 });
-      console.log(yamlData);
-      window.editor.setValue(yamlData)
-    }
+    const yamlData = jsyaml.dump(collectionSteps, { indent: 2 });
+    window.editor.setValue(yamlData)
+  }
 
-
-function populateForm(collectionSteps, formId) {
+  function populateForm(collectionSteps, formId) {
     const form = document.getElementById(formId);
     const paramRowTmplFull = document.getElementById('paramRowTmplFull').innerHTML;
     const paramRowTmpl = document.getElementById('paramRowTmpl').innerHTML;
+
+    const collectionStepsList = document.getElementById('collectionStepsContainer');
+    for (var i=collectionStepsList.childNodes.length; i<collectionSteps.length; i++){
+      const newStep = document.getElementById('collectionStepTmpl').innerHTML.replaceAll('[idx]', i);
+      collectionStepsList.insertAdjacentHTML('beforeend', newStep);
+    }
 
     const getTemplate = (kPrefix, key, value) => paramRowTmplFull
         .replace(/\[kPrefix\]\[\[kKey\]\]/g, `${kPrefix}[${key}]`)
@@ -268,50 +276,60 @@ function populateForm(collectionSteps, formId) {
         .replace(/\[kVal\]/g, value);
 
     const updateInnerContent = (values, kPrefix) => {
+        if (!(values && typeof values === 'object' && !(values instanceof File))) {
+           return
+        }
         return Object.entries(values).reduce((content, [key, value]) => 
             content + getTemplate(kPrefix, key, value), '');
     };
 
     const handleParams = (kPrefix, values) => {
         let innerContent = updateInnerContent(values, kPrefix);
-        innerContent += paramRowTmpl.replace('[kPrefix]', kPrefix);
+        innerContent += paramRowTmpl.replaceAll('[kPrefix]', kPrefix);
         document.getElementById(kPrefix).innerHTML = innerContent;
     };
 
     const handleAsserts = (idx, valuesList) => {
-        let innerContent = valuesList.reduce((content, values, idxV) => {
+        let innerContent = (Array.isArray(valuesList) ? valuesList : []).reduce((content, values, idxV) => {
             let kPrefix = `[${idx}][asserts][${idxV}]`;
             return content + updateInnerContent(values, kPrefix);
         }, '');
 
-        innerContent += paramRowTmpl.replace('[kPrefix]', `[${idx}][asserts][${valuesList.length}]`);
+        innerContent += paramRowTmpl.replaceAll('[kPrefix]', `[${idx}][asserts][${valuesList.length}]`);
         document.getElementById(`[${idx}][asserts]`).innerHTML = innerContent;
     };
 
     const setMethod = (idx, method, val) => {
         form.querySelector(`#actions-list-input-${idx}`).value = method;
+        form.querySelector(`#actions-data-${idx}`).name = `[${idx}][${method}]`;
         form.querySelector(`#actions-data-${idx}`).value = val;
     };
 
     function setFields(idx, data) {
         if (data && typeof data === 'object' && !(data instanceof File)) {
             Object.entries(data).forEach(([key, value]) => {
-                switch (key) {
-                    case 'title':
-                        form.querySelector(`#title-${idx}`).value = value;
-                        break;
-                    case 'params':
-                    case 'headers':
-                        handleParams(`[${idx}][${key}]`, value);
-                        break;
-                    case 'asserts':
-                        handleAsserts(idx, value);
-                        break;
-                    default:
-                        if (['GET', 'POST', 'PATCH', 'PUT', 'UPDATE', 'DELETE', 'OPTION'].includes(key.toUpperCase())) {
-                            setMethod(idx, key, value);
-                        }
-                        break;
+              switch (key) {
+                case 'title':
+                    form.querySelector(`#title-${idx}`).value = value;
+                    break;
+                case 'json':
+                case 'raw':
+                  console.log(`[name="[${idx}][${key}]"]`)
+                  if (value) form.querySelector(`[name="[${idx}][${key}]"]`).innerHTML = value;
+                  break
+                case 'params':
+                case 'headers':
+                case 'exports':
+                    handleParams(`[${idx}][${key}]`, value);
+                    break;
+                case 'asserts':
+                    handleAsserts(idx, value);
+                    break;
+                default:
+                    if (['GET', 'POST', 'PATCH', 'PUT', 'UPDATE', 'DELETE', 'OPTION'].includes(key.toUpperCase())) {
+                        setMethod(idx, key, value);
+                    }
+                    break;
                 }
             });
         }
@@ -320,6 +338,7 @@ function populateForm(collectionSteps, formId) {
     collectionSteps.forEach((element, idx) => {
         setFields(idx, element);
     });
+    _hyperscript.processNode(document.getElementById("stepsForm"))
 }
 
 

@@ -83,7 +83,9 @@ data CollectionStepData = CollectionStepData
   , put :: Maybe Text
   , params :: Maybe (Map Text Text)
   , headers :: Maybe (Map Text Text)
+  , exports :: Maybe (Map Text Text)
   , json :: Maybe (Value)
+  , raw :: Maybe (Text)
   , asserts :: Maybe (V.Vector (Map Text Value))
   }
   deriving stock (Show, Generic)
@@ -117,7 +119,9 @@ instance ToJSON CollectionStepData where
         , "PUT" .= csd.put
         , "params" .= csd.params
         , "headers" .= csd.headers
+        , "exports" .= csd.exports
         , "json" .= csd.json
+        , "raw" .= csd.raw
         , "asserts" .= csd.asserts
         ]
 
@@ -133,7 +137,9 @@ instance FromJSON CollectionStepData where
     put <- v .:? "PUT"
     params <- v .:? "params"
     headers <- v .:? "headers"
+    exports <- v .:? "exports"
     json <- v .:? "json"
+    raw <- v .:? "raw"
     asserts <- v .:? "asserts"
     return CollectionStepData{..}
 
