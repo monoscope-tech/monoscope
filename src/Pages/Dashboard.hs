@@ -36,7 +36,6 @@ import Pages.Charts.Charts qualified as C
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (statBox)
 import Pages.Endpoints.EndpointList (renderEndpoint)
-import Pages.Onboarding qualified as Onboarding
 import Relude (
   Applicative (pure),
   Bool (..),

@@ -16,6 +16,7 @@ import Pages.BodyWrapper (
   BWConfig (currProject, pageTitle, sessM),
   bodyWrapper,
  )
+import Pages.IntegrationDemos.DotNet
 import Pages.IntegrationDemos.ExpressJs
 import Pages.IntegrationDemos.Gin
 import Pages.IntegrationDemos.Pyramid
@@ -64,6 +65,7 @@ integrationsPage pid sdk apiKey errReportM reqMonM = do
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=express"] "ExpressJs"
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=gin"] "Go Gin"
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=pyramid"] "Python Pyramid"
+            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=dotnet"] ".NET"
         button_
           [ class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium text-sm hover:bg-gray-100"
           , [__|on click go to the top of #requests-monitoring|]
@@ -83,6 +85,7 @@ integrationsPage pid sdk apiKey errReportM reqMonM = do
       case sdk of
         "gin" -> ginGuide apiKey
         "pyramid" -> pyramidGuide apiKey
+        "dotnet" -> dotNetGuide apiKey
         _ -> expressGuide apiKey
     script_
       [text|
@@ -93,4 +96,5 @@ hljs.highlightAll();
 getTitle :: Text -> Text
 getTitle "gin" = "GO Gin"
 getTitle "pyramid" = "Python Pyramid"
+getTitle "dotnet" = ".NET"
 getTitle _ = "Express Js"

@@ -16,11 +16,9 @@ import Lucid.Hyperscript
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import NeatInterpolation
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.BodyWrapper
 import Pages.NonMember
-import Pages.Onboarding qualified as Onboarding
 import PyF qualified
 import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
