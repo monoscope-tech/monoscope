@@ -9,7 +9,9 @@ import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Lucid
+import Lucid.Htmx
 import Lucid.Aria qualified as Aria
+import Deriving.Aeson qualified as DAE
 import Lucid.Base
 import Lucid.Hyperscript
 import Models.Projects.Projects qualified as Projects
@@ -28,14 +30,16 @@ import Web.FormUrlEncoded (FromForm)
 
 
 data CollectionStepUpdateForm = CollectionStepUpdateForm
-  { stepsData :: Text 
+  { stepsData :: V.Vector Testing.CollectionStepData
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromForm)
+  deriving (AE.FromJSON, AE.ToJSON) via (DAE.CustomJSON) '[DAE.OmitNothingFields] CollectionStepUpdateForm
 
 
 collectionStepsUpdateH :: Projects.ProjectId -> Testing.CollectionId -> CollectionStepUpdateForm -> ATAuthCtx (Html ())
 collectionStepsUpdateH pid colId stepsForm = do
+  traceShowM stepsForm 
+  _ <- dbtToEff $ Testing.updateCollectionSteps colId stepsForm.stepsData
   pure $ toHtml ""
 
 
@@ -45,67 +49,75 @@ collectionGetH pid colId = do
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
   collectionM <- dbtToEff $ Testing.getCollectionById colId
+  traceShowM collectionM
   project <- dbtToEff $ Projects.selectProjectForUser (Sessions.userId sess, pid)
-  collection_steps <- dbtToEff $ Testing.getCollectionSteps colId
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = project
           , pageTitle = "Testing"
           }
-  pure $ bodyWrapper bwconf $ collectionPage pid (Unsafe.fromJust collectionM) collection_steps
+  pure $ bodyWrapper bwconf $ collectionPage pid (Unsafe.fromJust collectionM) 
 
 
-collectionPage :: Projects.ProjectId -> Testing.Collection -> V.Vector Testing.CollectionStep -> Html ()
-collectionPage pid col steps = do
+collectionPage :: Projects.ProjectId -> Testing.Collection -> Html ()
+collectionPage pid col = do
   -- let col_json = decodeUtf8 $ AE.encode col
   -- let steps_json = decodeUtf8 $ AE.encode steps
   editorExtraElements
-  form_ [id_ "stepsForm", class_ "grid grid-cols-2 h-full divide-x divide-gray-200 group/colForm", termRaw "data-defaultKeyPrefix" "[kPrefix]"] do
-    div_ [class_ "col-span-1 h-full divide-y flex flex-col"] do
-      div_ [class_ "shrink flex items-center justify-between"] do
-        div_ [class_ " pb-5 p-5 space-y-2"] do
-          h2_ [class_ "text-base font-semibold leading-6 text-gray-900 flex items-end"] do
-            toHtml col.title
-            small_ [class_ "inline-block ml-2 truncate text-sm text-gray-500"] "created  2024/01/23"
-          p_ [class_ "text-sm"] $ toHtml col.description
-        div_ [] do
-          span_ [class_ "badge badge-success"] "Active"
-          a_ [class_ "p-3"] $ Utils.faSprite_ "ellipsis-vertical" "light" "h-5"
-      div_ [class_ "shrink p-4 flex justify-between items-center"] do
-        h4_ [class_ "font-semibold text-2xl font-medium "] "Steps"
-        div_ [class_ "space-x-4 flex items-center"] do
-          button_ [class_ "btn btn-sm btn-success ", type_ "submit"] do
-            span_ "Run all"
-            faIcon_ "fa-play" "fa-solid fa-play" "w-3 h-3"
-          button_ [class_ "btn btn-sm btn-warning "] do
-            span_ "Save"
-            faIcon_ "fa-save" "fa-solid fa-save" "w-3 h-3"
-          label_ [class_ "relative inline-flex items-center cursor-pointer space-x-2"] do
-            input_ [type_ "checkbox", class_ "toggle editorMode", onchange_ "buildAndSetEditor(event)"]
-            span_ [class_ "text-sm"] "Code"
-      div_ [class_ "h-full flex-1"] do
-        div_ [id_ "steps-codeEditor", class_ "h-full max-h-screen hidden group-has-[.editorMode:checked]/colForm:block"] ""
-        div_ [class_ "h-full overflow-y-scroll group-has-[.editorMode:checked]/colForm:hidden"] do
-          div_ [class_ " p-4 space-y-4 collectionSteps", id_ "collectionStepsContainer"] do
-            V.iforM_ steps \idx step -> collectionStep_ (Just $ idx) step
-          div_ [class_ "p-4 pt-2"] $ a_ [class_ "btn btn-outline btn-neutral btn-sm items-center cursor-pointer", 
-                 [__| on click set :stepTmpl to #collectionStepTmpl.innerHTML.replaceAll('[idx]', #collectionStepsContainer.childNodes.length)
-                          then put :stepTmpl at the end of #collectionStepsContainer
-                          then _hyperscript.processNode(#stepsForm)
-                          |]] do
-            faSprite_ "plus" "sharp-regular" "w-4 h-4"
-            span_ "Add Another Step"
-    div_ [class_ "col-span-1 h-full border-r border-gray-200"] do
-      div_ [class_ "flex flex-col justify-center items-center h-full text-slate-400 text-xl space-y-4"] do
-        div_ [] $ Utils.faIcon_ "fa-objects-column" "fa-objects-column fa-solid" "w-16 h-16"
-        p_ [class_ "text-slate-500"] "Run a test to view the results here. "
+  section_ [class_ "h-full"] do
+    form_ [id_ "stepsForm", class_ "grid grid-cols-2 h-full divide-x divide-gray-200 group/colForm"
+      , termRaw "data-defaultKeyPrefix" "[kPrefix]"
+      , hxPost_ ""
+      , hxSwap_ "none"
+      , hxParams_ "stepsData"
+      , hxExt_ "json-enc"
+      , hxVals_ "js:{stepsData: stepFormToObject()}"] do
+      div_ [class_ "col-span-1 h-full divide-y flex flex-col"] do
+        div_ [class_ "shrink flex items-center justify-between"] do
+          div_ [class_ " pb-5 p-5 space-y-2"] do
+            h2_ [class_ "text-base font-semibold leading-6 text-gray-900 flex items-end"] do
+              toHtml col.title
+              small_ [class_ "inline-block ml-2 truncate text-sm text-gray-500"] "created  2024/01/23"
+            p_ [class_ "text-sm"] $ toHtml col.description
+          div_ [] do
+            span_ [class_ "badge badge-success"] "Active"
+            a_ [class_ "p-3"] $ Utils.faSprite_ "ellipsis-vertical" "light" "h-5"
+        div_ [class_ "shrink p-4 flex justify-between items-center"] do
+          h4_ [class_ "font-semibold text-2xl font-medium "] "Steps"
+          div_ [class_ "space-x-4 flex items-center"] do
+            button_ [class_ "btn btn-sm btn-success "] do
+              span_ "Run all"
+              faIcon_ "fa-play" "fa-solid fa-play" "w-3 h-3"
+            button_ [class_ "btn btn-sm btn-warning ", type_ "submit"] do
+              span_ "Save"
+              faIcon_ "fa-save" "fa-solid fa-save" "w-3 h-3"
+            label_ [class_ "relative inline-flex items-center cursor-pointer space-x-2"] do
+              input_ [type_ "checkbox", class_ "toggle editorMode", onchange_ "buildAndSetEditor(event)"]
+              span_ [class_ "text-sm"] "Code"
+        div_ [class_ "h-full flex-1"] do
+          div_ [id_ "steps-codeEditor", class_ "h-full max-h-screen hidden group-has-[.editorMode:checked]/colForm:block"] ""
+          div_ [class_ "h-full overflow-y-scroll group-has-[.editorMode:checked]/colForm:hidden"] do
+            div_ [class_ " p-4 space-y-4 collectionSteps", id_ "collectionStepsContainer"] do
+              let Testing.CollectionSteps(colSteps) = col.collectionSteps
+              V.iforM_ colSteps \idx step -> collectionStep_ (Just $ idx) step
+            div_ [class_ "p-4 pt-2"] $ a_ [class_ "btn btn-outline btn-neutral btn-sm items-center cursor-pointer", 
+                   [__| on click set :stepTmpl to #collectionStepTmpl.innerHTML.replaceAll('[idx]', #collectionStepsContainer.childNodes.length)
+                            then put :stepTmpl at the end of #collectionStepsContainer
+                            then _hyperscript.processNode(#stepsForm)
+                            |]] do
+              faSprite_ "plus" "sharp-regular" "w-4 h-4"
+              span_ "Add Another Step"
+      div_ [class_ "col-span-1 h-full border-r border-gray-200"] do
+        div_ [class_ "flex flex-col justify-center items-center h-full text-slate-400 text-xl space-y-4"] do
+          div_ [] $ Utils.faIcon_ "fa-objects-column" "fa-objects-column fa-solid" "w-16 h-16"
+          p_ [class_ "text-slate-500"] "Run a test to view the results here. "
 
 
-collectionStep_ :: Maybe Int -> Testing.CollectionStep -> Html ()
-collectionStep_ idxM step = do
+collectionStep_ :: Maybe Int -> Testing.CollectionStepData -> Html ()
+collectionStep_ idxM stepData = do
   let idx = maybe "[idx]" show idxM
-  let (sdMethod, sdUri) = fromMaybe ("", "") $ Testing.stepDataMethod step.stepData
+  let (sdMethod, sdUri) = fromMaybe ("", "") $ Testing.stepDataMethod stepData
   div_ [class_ "rounded-lg overflow-hidden border border-slate-200 group/item collectionStep"] do
     input_ [type_ "checkbox", id_ [fmt|stepState-{idx}|], class_ "hidden stepState"]
     div_ [class_ "flex flex-row items-center bg-gray-50 "] do
@@ -119,7 +131,7 @@ collectionStep_ idxM step = do
             button_ [class_ ""] "View results"
             button_ [class_ "text-blue-600"] $ faIcon_ "fa-play" "fa-play fa-solid" "w-2 h-3"
             a_ [class_ "text-red-700", [__|on click remove the closest parent <.collectionStep/> |]] $ faIcon_ "fa-xmark" "fa-xmark fa-solid" "w-2 h-3"
-          input_ [class_ "text-lg w-full",placeholder_ "Untitled", value_ $ fromMaybe "" step.stepData.title, name_ $ [fmt|[{idx}][title]|], id_ [fmt|title-{idx}|]]
+          input_ [class_ "text-lg w-full",placeholder_ "Untitled", value_ $ fromMaybe "" stepData.title, name_ $ [fmt|[{idx}][title]|], id_ [fmt|title-{idx}|]]
           div_ [class_ "relative flex flex-row gap-2 items-center"] do
             label_ [Lucid.for_ $ "actions-list-input-" <>idx , class_ "w-28  shrink text-sm font-medium form-control "] do
               input_
@@ -143,13 +155,13 @@ collectionStep_ idxM step = do
       div_ [role_ "tablist", class_ "tabs tabs-bordered pt-1"] do
         input_ [type_ "radio", name_ [fmt|_httpOptions-{idx}|], role_ "tab", class_ "tab", Aria.label_ "Params", checked_]
         div_ [role_ "tabpanel", class_ "tab-content px-2 py-4 space-y-2", id_ [fmt|[{idx}][params]|]] do
-          whenJust step.stepData.params $ \mp -> forM_ (Map.toList mp) \(paramK, paramV) ->
+          whenJust stepData.params $ \mp -> forM_ (Map.toList mp) \(paramK, paramV) ->
             paramRowKV "paramRowTmpl" [fmt|[{idx}][params]|] Nothing paramK paramV
           paramRowKV "paramRowTmpl" [fmt|[{idx}][params]|] Nothing "" ""
 
         input_ [type_ "radio", name_ [fmt|_httpOptions-{idx}|], role_ "tab", class_ "tab", Aria.label_ "Headers"]
         div_ [role_ "tabpanel", class_ "tab-content px-2 py-4 space-y-2", id_ [fmt|[{idx}][headers]|]] do
-          whenJust step.stepData.headers $ \mp -> forM_ (Map.toList mp) \(headerK, headerV) ->
+          whenJust stepData.headers $ \mp -> forM_ (Map.toList mp) \(headerK, headerV) ->
             paramRowKV "paramRowTmpl" [fmt|[{idx}][headers]|] Nothing headerK headerV
           paramRowKV "paramRowTmpl" ([fmt|[{idx}][headers]|]) Nothing "" ""
 
@@ -158,20 +170,20 @@ collectionStep_ idxM step = do
           select_ [class_ "peer select select-sm select-bordered", termRaw "data-chosen" "json", onchange_ "this.dataset.chosen = this.value;"] do
             option_ [selected_ "selected"] "json"
             option_ [] "raw"
-          div_ [class_"hidden peer-data-[chosen=json]:block"] $ textarea_ [class_ "w-full", name_ [fmt|[{idx}][json]|]] (fromString $ BL.unpack $ AE.encode step.stepData.json )
-          div_ [class_"hidden peer-data-[chosen=raw]:block"] $ textarea_ [class_ "w-full",name_ [fmt|[{idx}][raw]|]] $ toHtml (fromMaybe "" step.stepData.raw )
+          div_ [class_"hidden peer-data-[chosen=json]:block"] $ textarea_ [class_ "w-full", name_ [fmt|[{idx}][json]|]] (fromString $ BL.unpack $ AE.encode stepData.json )
+          div_ [class_"hidden peer-data-[chosen=raw]:block"] $ textarea_ [class_ "w-full",name_ [fmt|[{idx}][raw]|]] $ toHtml (fromMaybe "" stepData.raw )
 
       div_ [class_ ""] do
         h5_ [class_ "label-text p-1 mb-2"] "Assertions"
         div_ [class_ "text-sm space-y-2 px-2 [&_.assertIndicator]:inline-block paramRows",  id_ [fmt|[{idx}][asserts]|]] do
-          whenJust step.stepData.asserts $ \vmp -> V.iforM_ vmp \vIdx mp -> forM_ (Map.toList mp) \(assertK, assertV) ->
+          whenJust stepData.asserts $ \vmp -> V.iforM_ vmp \vIdx mp -> forM_ (Map.toList mp) \(assertK, assertV) ->
             paramRowKV "paramRowTmplAssert" ([fmt|[{idx}][asserts]|]) (Just (show vIdx)) assertK (fromString $ BL.unpack $ AE.encode assertV) 
-          let assertsLen = maybe 0 length step.stepData.asserts
+          let assertsLen = maybe 0 length stepData.asserts
           paramRowKV "paramRowTmplAssert" ([fmt|[{idx}][asserts]|]) (Just (show assertsLen)) "" ""
       div_ [class_ ""] do
         h5_ [class_ "label-text p-1 mb-2"] "Exports"
         div_ [class_ "text-sm space-y-2 px-2 paramRows",  id_ [fmt|[{idx}][exports]|]] do
-          whenJust step.stepData.exports $ \mp -> forM_ (Map.toList mp) \(exportK, exportV) ->
+          whenJust stepData.exports $ \mp -> forM_ (Map.toList mp) \(exportK, exportV) ->
             paramRowKV "paramRowTmpl" ([fmt|[{idx}][exports]|]) Nothing exportK exportV
           paramRowKV "paramRowTmpl" ([fmt|[{idx}][exports]|]) Nothing "" ""
 
@@ -196,8 +208,6 @@ paramRowKV tmplForAddBtn keyPrefix itemIdx keyV valV = div_ [class_ "flex flex-r
     a_ [class_ "text-red-700 cursor-pointer", [__|on click remove the closest parent <div.paramRow/> |]] $ faIcon_ "fa-xmark" "fa-xmark fa-solid" "w-3 h-3"
 
 
-
-
 editorExtraElements :: Html ()
 editorExtraElements = do
   datalist_ [id_ "assertions-list"] do
@@ -213,7 +223,7 @@ editorExtraElements = do
   template_ [id_ "paramRowTmplAssert"] $ paramRowKV "paramRowTmplAssert" "[kPrefix]" (Just "[aidx]") "" ""
   template_ [id_ "paramRowTmplFull"] $ paramRowKV "paramRowTmpl" "[kPrefix]" Nothing "[kKey]" "[kVal]"
   template_ [id_ "paramRowTmplFullAssert"] $ paramRowKV "paramRowTmplAssert" "[kPrefix]" (Just "[aidx]") "[kKey]" "[kVal]"
-  template_ [id_ "collectionStepTmpl"] $ collectionStep_ Nothing (def::Testing.CollectionStep)
+  template_ [id_ "collectionStepTmpl"] $ collectionStep_ Nothing (def::Testing.CollectionStepData)
   script_ [src_ "/assets/js/thirdparty/jsyaml.min.js", crossorigin_ "true"] ("" :: Text)
   script_
     [raw|

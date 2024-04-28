@@ -3,13 +3,7 @@ module Pages.Monitors.Testing (
   testingPostH,
   testingPutH,
   TestCollectionForm (..),
-  collectionStepPostH,
-  collectionStepPutH,
-  saveStepsFromCodePostH,
-  deleteStepH,
-  CodeOperationsForm (..),
   runTestCollectionH,
-  runTestStepH,
 )
 where
 
@@ -314,104 +308,6 @@ modal pid = do
       |]
 
 
-collectionStepPostH :: Projects.ProjectId -> Testing.CollectionId -> Testing.CollectionStepData -> ATAuthCtx (Html ())
-collectionStepPostH pid cid step_val = do
-  appConf <- ask @AuthContext
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-  isMember <- dbtToEff $ userIsProjectMember sess pid
-  if not isMember
-    then do
-      pure $ userNotMemeberPage sess
-    else do
-      currentTime <- liftIO getZonedTime
-      step_id <- Testing.CollectionStepId <$> liftIO UUIDV4.nextRandom
-      let newStep =
-            Testing.CollectionStep
-              { id = step_id
-              , createdAt = currentTime
-              , updatedAt = currentTime
-              , lastRun = Nothing
-              , projectId = pid
-              , collectionId = cid
-              , stepData = step_val
-              }
-      _ <- dbtToEff $ Testing.addCollectionStep newStep
-      pure ""
-
-
-collectionStepPutH :: Projects.ProjectId -> Testing.CollectionStepId -> Testing.CollectionStepData -> ATAuthCtx (Html ())
-collectionStepPutH pid csid value = do
-  appConf <- ask @AuthContext
-  sess' <- Sessions.getSession
-  _ <- dbtToEff $ Testing.updateCollectionStep csid value
-  pure ""
-
-
-data UpdatedStep = UpdatedStep
-  { stepId :: Testing.CollectionStepId
-  , stepData :: Testing.CollectionStepData
-  }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
-
-
-data CodeOperationsForm = CodeOperationsForm
-  { addedSteps :: V.Vector Testing.CollectionStepData
-  , deletedSteps :: V.Vector Text
-  , updatedSteps :: [UpdatedStep]
-  }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
-
-
-getStep :: Projects.ProjectId -> Testing.CollectionId -> ZonedTime -> Testing.CollectionStepData -> Testing.CollectionStep
-getStep pid col_id cr stepD =
-  Testing.CollectionStep
-    { id = Testing.CollectionStepId UUID.nil
-    , createdAt = cr
-    , updatedAt = cr
-    , projectId = pid
-    , collectionId = col_id
-    , lastRun = Nothing
-    , stepData = stepD
-    }
-
-
-saveStepsFromCodePostH :: Projects.ProjectId -> Testing.CollectionId -> CodeOperationsForm -> ATAuthCtx (Html ())
-saveStepsFromCodePostH pid col_id operations = do
-  appConf <- ask @AuthContext
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-  isMember <- dbtToEff $ userIsProjectMember sess pid
-  if not isMember
-    then do
-      pure $ userNotMemeberPage sess
-    else do
-      currentTime <- liftIO getZonedTime
-      _ <- dbtToEff $ Testing.deleteCollectionSteps operations.deletedSteps
-      let added = map (getStep pid col_id currentTime) (V.toList operations.addedSteps)
-      _ <- dbtToEff $ Testing.insertSteps pid col_id added
-      forM_ operations.updatedSteps \s -> do
-        _ <- dbtToEff $ Testing.updateCollectionStep s.stepId s.stepData
-        pass
-      pure ""
-
-
-deleteStepH :: Projects.ProjectId -> Testing.CollectionStepId -> ATAuthCtx (Html ())
-deleteStepH pid step_id = do
-  appConf <- ask @AuthContext
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-  isMember <- dbtToEff $ userIsProjectMember sess pid
-  if not isMember
-    then do
-      pure $ userNotMemeberPage sess
-    else do
-      _ <- dbtToEff $ Testing.deleteCollectionStep step_id
-      pure ""
-
-
 runTestCollectionH :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (Html ())
 runTestCollectionH pid col_id = do
   collection <- dbtToEff $ Testing.getCollectionById col_id
@@ -427,13 +323,13 @@ runTestCollectionH pid col_id = do
 -- callRunTestkit hsString = withCString hsString run_testkit
 
 
-runTestStepH :: Projects.ProjectId -> Testing.CollectionId -> Testing.CollectionStepId -> ATAuthCtx (Html ())
-runTestStepH pid col_id step_id = do
-  whenJustM (dbtToEff $ Testing.getCollectionStepById col_id step_id) \step -> do
-    -- pTraceShowM step.stepData
-    -- pTraceShowM $ toString $ valueToText $ AE.Array [step.stepData]
+-- runTestStepH :: Projects.ProjectId -> Testing.CollectionId -> Testing.CollectionStepId -> ATAuthCtx (Html ())
+-- runTestStepH pid col_id step_id = do
+--   -- whenJustM (dbtToEff $ Testing.getCollectionStepById col_id step_id) \step -> do
+--     -- pTraceShowM step.stepData
+--     -- pTraceShowM $ toString $ valueToText $ AE.Array [step.stepData]
 
-    -- _ <- liftIO $ callRunTestkit $ toString $ valueToText $ V.singleton step.stepData
-    pass
+--     -- _ <- liftIO $ callRunTestkit $ toString $ valueToText $ V.singleton step.stepData
+--     -- pass
 
-  pure ""
+--   pure ""

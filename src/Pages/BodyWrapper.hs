@@ -71,6 +71,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
       script_ [src_ "/assets/js/thirdparty/htmx1_9_10.min.js", defer_ "true"] ("" :: Text)
       script_ [src_ "/assets/deps/htmx/multi-swap.js", defer_ "true"] ("" :: Text)
       script_ [src_ "/assets/deps/htmx/preload.js", defer_ "true"] ("" :: Text)
+      script_ [src_ "/assets/deps/htmx/json-enc.js", defer_ "true"] ("" :: Text)
       script_ [src_ "https://unpkg.com/htmx.org/dist/ext/debug.js", defer_ "true"] ("" :: Text)
       script_ [src_ "/assets/js/thirdparty/_hyperscript_web0_9_5.min.js", defer_ "true"] ("" :: Text)
       script_ [src_ "/assets/js/thirdparty/luxon.min.js", defer_ "true"] ("" :: Text)

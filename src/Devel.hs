@@ -48,7 +48,6 @@ dev = scotty 8000 $ do
 
     let Just col_id = UUID.fromText "be66540d-88ed-4424-a7c8-93d7dac632bf"
     collectionM <- withPool pool $ Testing.getCollectionById $ Testing.CollectionId col_id
-    collection_steps <- withPool pool $ Testing.getCollectionSteps $ Testing.CollectionId col_id
 
     let bwconf =
           (def :: BWConfig)
@@ -65,4 +64,4 @@ dev = scotty 8000 $ do
           (def :: Testing.CollectionStep)
             { Testing.stepData = stepD
             }
-    html $ renderText $ bodyWrapper bwconf $ TestCollectionEditor.collectionPage pid collection (V.singleton step)
+    html $ renderText $ bodyWrapper bwconf $ TestCollectionEditor.collectionPage pid collection

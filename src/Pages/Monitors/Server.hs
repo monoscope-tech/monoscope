@@ -23,11 +23,5 @@ server pid =
 
     , collectionStepsUpdate = TestCollectionEditor.collectionStepsUpdateH pid
   
-    , collectionStepPost = Testing.collectionStepPostH pid
-    , collectionStepPut = Testing.collectionStepPutH pid
-    , saveFromCodePost = Testing.saveStepsFromCodePostH pid
-
-    , deleteCollectionStep = Testing.deleteStepH pid
-    , runTestCollection = Testing.runTestCollectionH pid
-    , runTestCollectionStep = Testing.runTestStepH pid
+    -- , runTestCollection = Testing.runTestCollectionH pid
     }

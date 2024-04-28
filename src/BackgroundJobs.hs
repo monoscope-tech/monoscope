@@ -151,10 +151,7 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
         let dbParams = (\x -> (x, "queued" :: Text, Aeson.object ["tag" .= Aeson.String "RunCollectionTests", "contents" .= show col_id.collectionId])) <$> intervals
         void $ dbtToEff $ Testing.scheduleInsertScheduleInBackgroundJobs dbParams
     RunCollectionTests col_id -> do
-      (collectionM, steps) <- dbtToEff $ do
-        colM <- Testing.getCollectionById col_id
-        steps <- Testing.getCollectionSteps col_id
-        pure (colM, steps)
+      collectionM <- dbtToEff $ Testing.getCollectionById col_id
       whenJust collectionM \collection -> do
         -- let steps_data = (\x -> x.stepData) <$> steps
         -- let col_json = (decodeUtf8 $ Aeson.encode steps_data :: String)
@@ -245,8 +242,8 @@ handleQueryMonitorThreshold monitorE isAlert = do
 
 jobsWorkerInit :: Log.Logger -> Config.AuthContext -> IO ()
 jobsWorkerInit logger appCtx =
-  startJobRunner
-    $ mkConfig jobLogger "background_jobs" (appCtx.jobsPool) (MaxConcurrentJobs 1) (jobsRunner logger appCtx) id
+  startJobRunner $
+    mkConfig jobLogger "background_jobs" (appCtx.jobsPool) (MaxConcurrentJobs 1) (jobsRunner logger appCtx) id
   where
     jobLogger :: LogLevel -> LogEvent -> IO ()
     jobLogger logLevel logEvent = Log.runLogT "OddJobs" logger Log.LogAttention $ Log.logInfo "Background jobs ping." (show @Text logLevel, show @Text logEvent) -- logger show (logLevel, logEvent)

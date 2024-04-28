@@ -27,16 +27,10 @@ data Routes' mode = Routes'
   , collectionsGet :: mode :- "testing" :> Get '[HTML] (Html ())
   , newCollectionPost :: mode :- "testing" :> ReqBody '[FormUrlEncoded] Testing.TestCollectionForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
   , collectionGet :: mode :- "testing" :> Capture "collection_id" TestingM.CollectionId :> Get '[HTML] (Html ())
+  , collectionStepsUpdate :: mode :- "testing" :> Capture "collection_id" TestingM.CollectionId :> ReqBody '[JSON] Testing.CollectionStepUpdateForm :> Post '[HTML] (Html ())
+
   , collectionPut :: mode :- "testing" :> Capture "collection_id" TestingM.CollectionId :> Capture "action" Text :> ReqBody '[JSON] AE.Value :> Post '[HTML] (Html ())
 
-  , collectionStepsUpdate :: mode :- "testing" :> Capture "collection_id" TestingM.CollectionId :> ReqBody '[FormUrlEncoded] Testing.CollectionStepUpdateForm :> Post '[HTML] (Html ()) 
-
-  , collectionStepPost :: mode :- "testing" :> "add_step" :> Capture "collection_id" TestingM.CollectionId :> ReqBody '[JSON] TestingM.CollectionStepData :> Post '[HTML] (Html ())
-  , collectionStepPut :: mode :- "testing" :> "step" :> Capture "step_id" TestingM.CollectionStepId :> ReqBody '[JSON] TestingM.CollectionStepData :> Post '[HTML] (Html ())
-  , saveFromCodePost :: mode :- "testing" :> "save_from_code" :> Capture "collection_id" TestingM.CollectionId :> ReqBody '[JSON] Testing.CodeOperationsForm :> Post '[HTML] (Html ())
-
-  , deleteCollectionStep :: mode :- "testing" :> "step" :> Capture "step_id" TestingM.CollectionStepId :> Delete '[HTML] (Html ())
-  , runTestCollection :: mode :- "testing" :> "run" :> Capture "collection_id" TestingM.CollectionId :> Post '[HTML] (Html ())
-  , runTestCollectionStep :: mode :- "testing" :> "run" :> Capture "collection_id" TestingM.CollectionId :> Capture "step_id" TestingM.CollectionStepId :> Post '[HTML] (Html ())
+  -- , runTestCollection :: mode :- "testing" :> "run" :> Capture "collection_id" TestingM.CollectionId :> Post '[HTML] (Html ())
   }
   deriving stock (Generic)
