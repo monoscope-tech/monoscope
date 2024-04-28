@@ -1,4 +1,4 @@
-module Pages.IntegrationDemos.ExpressJs (expressGuide) where
+module Pages.IntegrationDemos.AdonisJS (adonisGuide) where
 
 import Data.Text
 import Data.Text qualified as T
@@ -7,8 +7,8 @@ import Pkg.Components
 import Relude
 
 
-expressGuide :: Text -> Html ()
-expressGuide apikey = do
+adonisGuide :: Text -> Html ()
+adonisGuide apikey = do
   section_ [class_ "flex flex-col gap-10"] do
     div_ [class_ "w-full flex flex-col gap-2"] do
       h3_ [class_ "text-2xl font-semibold"] "Install"
