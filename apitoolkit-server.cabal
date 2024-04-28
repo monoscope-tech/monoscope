@@ -65,6 +65,7 @@ library
       Pages.Fields.FieldDetails
       Pages.GenerateSwagger
       Pages.GenerateSwaggerSpec
+      Pages.IntegrationDemos.AdonisJS
       Pages.IntegrationDemos.DotNet
       Pages.IntegrationDemos.ExpressJs
       Pages.IntegrationDemos.Gin
