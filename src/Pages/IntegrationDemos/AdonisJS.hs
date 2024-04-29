@@ -38,7 +38,7 @@ adonisGuide apikey = do
       h3_ [class_ "text-xl font-medium"] "AsycLocalStorage"
       p_ [class_ "text-gray-600 font-medium max-w-5xl"] "The apitoolkit adonis package relies on asyncLocalStorage for observing outgoing requests and error reporting"
       h4_ [] "To enable asyncLocalStorage in your adonis project, add this to your config.ts file"
-      codeExample configOptions
+      codeExample configOptions2
     div_ [class_ "w-full flex flex-col gap-2", id_ "errors-monitoring"] do
       h3_ [class_ "text-2xl font-semibold"] "Error Reporting"
       p_ [class_ "text-gray-600 font-medium max-w-5xl"] "APIToolkit allows you to report errors alongside the request that caused them which allows you to easily reproduce and fix issues in production."

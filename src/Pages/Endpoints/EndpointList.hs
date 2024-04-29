@@ -194,9 +194,14 @@ endpointList' paramInput currTime pid enps inbox_count = form_ [class_ "col-span
         , class_ "dataTable-search w-full h-full p-2 text-gray-500 font-normal focus:outline-none"
         , placeholder_ "Search endpoints..."
         ]
-  when (null enps && inbox_count == 0) $ div_ [class_ "w-full p-20 items-center"] $ do
-    h2_ [class_ "text-2xl font-medium mb-4"] "No Endpoints: You haven't integrated APIToolkit in your application yet"
-    Onboarding.integrateApiToolkit "<YOUR_API_KEY>" "express"
+  when (null enps && inbox_count == 0) $ section_ [class_ "mx-auto w-max p-5 sm:py-10 sm:px-16 items-center flex my-10 gap-16"] do
+    div_ [] do
+      faIcon_ "fa fa-solid fa-empty-set" "fa-solid fa-empty-set" "h-24 w-24"
+    div_ [class_ "flex flex-col gap-2"] do
+      h2_ [class_ "text-2xl font-bold"] "Waiting for events..."
+      p_ "You're currently not sending any data to apitoolkit from your backends yet."
+      a_ [href_ $ "/p/" <> pid.toText <> "/integration_guides", class_ "w-max btn btn-indigo -ml-1 text-md"] "Read the setup guide"
+
   when (null enps && inbox_count > 0) $ div_ [class_ "flex flex-col text-center justify-center items-center h-32"] $ do
     strong_ "No endpoints yet."
     p_ "Check Inbox to acknowlege new endpoints"
