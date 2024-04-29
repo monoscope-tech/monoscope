@@ -66,9 +66,11 @@ library
       Pages.GenerateSwagger
       Pages.GenerateSwaggerSpec
       Pages.IntegrationDemos.AdonisJS
+      Pages.IntegrationDemos.Django
       Pages.IntegrationDemos.DotNet
       Pages.IntegrationDemos.ExpressJs
       Pages.IntegrationDemos.Gin
+      Pages.IntegrationDemos.Laravel
       Pages.IntegrationDemos.Pyramid
       Pages.IntegrationGuides
       Pages.Log
