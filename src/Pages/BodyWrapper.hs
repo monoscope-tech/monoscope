@@ -366,7 +366,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = do
           ]
         img_
           [ class_ "h-12 w-10 hidden sd-show"
-          , src_ "/assets/svgs/logo_mini.svg"
+          , src_ "/assets/favicon-32x32.png"
           ]
     div_ [class_ "py-4 px-4 transition-all  duration-1000 ease-in-out", id_ "side-nav-ctx-btn"] do
       a_
