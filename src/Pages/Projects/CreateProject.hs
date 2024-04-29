@@ -372,7 +372,7 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
                 "Title"
                 span_ [class_ "text-red-400"] " *"
               input_
-                [ class_ "flex h-9 w-full rounded-xl border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors  placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                [ class_ "flex h-9 w-full rounded-lg border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 , type_ "text"
                 , id_ "title"
                 , name_ "title"
@@ -382,12 +382,12 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
             div_ [class_ "flex flex-col gap-1 mt-5"] do
               label_ [class_ "text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"] do
                 "Timezone"
-              select_ [name_ "timeZone", id_ "timezone", class_ "px-4 py-2 border bg-gray-100 rounded-xl"] do
+              select_ [name_ "timeZone", id_ "timezone", class_ "px-4 py-2 border bg-gray-100 rounded-lg"] do
                 option_ [value_ cp.timeZone] $ toHtml cp.timeZone
             div_ [class_ "mt-5 "] do
               label_ [class_ "text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"] "Description"
               textarea_
-                [ class_ " flex min-h-[60px] w-full rounded-xl border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 "
+                [ class_ " flex min-h-[60px] w-full rounded-lg border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 "
                 , rows_ "4"
                 , placeholder_ "Description"
                 , id_ "description"
@@ -429,12 +429,12 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
                         div_ [class_ "text-lg py-3 px-2"] do
                           span_ [class_ "text-2xl text-blue-700"] $ toHtml price
                           if value == "Free"
-                            then do span_ [class_ "text-slate-500"] "/mo"
-                            else do span_ [class_ "text-slate-500"] " per 10K requests"
+                            then do span_ [class_ "text-slate-500"] "/month"
+                            else do span_ [class_ "text-slate-500"] "/additional 10k requests"
                         div_ [class_ "flex flex-col gap-2 p-3"] do
                           div_ [class_ "flex items-center gap-1"] do
                             checkMark
-                            small_ "max "
+                            small_ "Max "
                             span_ $ toHtml team
                             small_ " team members"
                           if value == "Free"
@@ -557,7 +557,7 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
         form_ [class_ "mt-10", hxPost_ [text|/p/$pid/notifications-channels|], hxSwap_ "none"] do
           h2_ [class_ "text-slate-700 text-3xl font-medium mb-5"] "Project Notifications"
           div_ [class_ "flex flex-col gap-4 border p-6 rounded-2xl"] do
-            p_ [] "Select channels to receive updates on this project"
+            p_ [] "Select channels to receive updates on this project."
             let notif = fromMaybe [] notifChannel
             div_ [class_ "bg-gray-100 p-6 rounded-lg"] do
               div_ [class_ "flex gap-6 items-center mb-6"] do
@@ -581,7 +581,7 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
                       div_ [class_ "w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"] pass
                 h3_ [class_ "text-2xl font-bold"] "Slack"
               case slackData of
-                Just s -> span_ [class_ "font-bold text-sm mb-2 text-blue-500 block"] "Already connected, but you can add again to change workspace or channel"
+                Just s -> span_ [class_ "font-bold text-sm mb-2 text-blue-500 block"] "Already connected, but you can add again to change workspace or channel."
                 Nothing -> pass
               a_ [target_ "_blank", class_ "", href_ $ "https://slack.com/oauth/v2/authorize?client_id=6211090672305.6200958370180&scope=chat:write,incoming-webhook&user_scope=&redirect_uri=" <> envCfg.slackRedirectUri <> pid] do
                 img_ [alt_ "Add to slack", height_ "40", width_ "139", src_ "https://platform.slack-edge.com/img/add_to_slack.png", term "srcSet" "https://platform.slack-edge.com/img/add_to_slack.png 1x, https://platform.slack-edge.com/img/add_to_slack@2x.png 2x"]
@@ -595,7 +595,7 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
             button_ [class_ "btn btn-primary"] "Save Selections"
 
         div_ [class_ "col-span-1 h-full justify-center items-center w-full text-center pt-24"] do
-          h2_ [class_ "text-red-800 font-medium pb-4"] "Delete project. This is dangerous and unreversable"
+          h2_ [class_ "text-red-800 font-medium pb-4"] "Delete project. This is dangerous and unreversible."
           button_
             [ class_ "btn btn-sm bg-red-800 text-white shadow-md hover:bg-red-700 cursor-pointer rounded-md"
             , hxGet_ [text|/p/$pid/delete|]
