@@ -377,6 +377,7 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
                 , id_ "title"
                 , name_ "title"
                 , value_ cp.title
+                , required_ "required"
                 ]
             input_ [type_ "hidden", id_ "orderId", name_ "orderId", value_ ""]
             div_ [class_ "flex flex-col gap-1 mt-5"] do
