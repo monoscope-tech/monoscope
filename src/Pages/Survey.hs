@@ -181,7 +181,7 @@ surveyPage pid full_name phoneNumber = do
                 div_ [class_ "flex w-full justify-end items-center px-6 space-x-2 mt-8"] do
                   div_ [id_ "proceedIndicator", class_ "survey-indicator htmx-indicator"] do
                     span_ [class_ "loading loading-dots loading-lg loading-indigo"] ""
-                  button_ [type_ "sumbit", class_ "btn-md btn-indigo rounded-md text-lg px-4 py-2"] "Proceed"
+                  button_ [type_ "sumbit", class_ "btn-md btn-indigo rounded-lg text-lg px-4 py-2"] "Proceed"
 
 
 stackOptions :: [(T.Text, T.Text, T.Text)]
