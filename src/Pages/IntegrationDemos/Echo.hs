@@ -12,7 +12,7 @@ echoGuide apikey = do
     div_ [class_ "w-full flex flex-col gap-2"] do
       h3_ [class_ "text-2xl font-semibold"] "Install"
       p_ [class_ "text-gray-600 font-medium flex items-center gap-1"] do
-        "Install the APIToolkit echo SDK using "
+        "Install the APItoolkit echo SDK using "
         span_ [class_ "text-red-500"] "go get:"
       bashCommand "go get github.com/apitoolkit/apitoolkit-go"
 
@@ -28,12 +28,12 @@ echoGuide apikey = do
 
     div_ [class_ "w-full flex flex-col gap-2", id_ "errors-monitoring"] do
       h3_ [class_ "text-2xl font-semibold"] "Error Reporting"
-      p_ [class_ "text-gray-600 font-medium max-w-5xl"] "APIToolkit allows you to report errors alongside the request that caused them which allows you to easily reproduce and fix issues in production. Aside reporting errors manually, we also automatically report unrecovered panics that occured during a request."
+      p_ [class_ "text-gray-600 font-medium max-w-5xl"] "APItoolkit allows you to report errors alongside the request that caused them which allows you to easily reproduce and fix issues in production. Aside reporting errors manually, we also automatically report unrecovered panics that occured during a request."
       codeExample $ errorReportingCode apikey
 
     div_ [class_ "w-full flex flex-col gap-2", id_ "outgoing-request-monitoring"] do
       h3_ [class_ "text-2xl font-semibold"] "Outgoing Request Monitoring"
-      p_ [class_ "text-gray-600 max-w-5xl"] "APIToolkit also allows you to monitor your outgoing request (i.e the api calls your make from your server). Monitored outgoing are also associated with the incoming request that triggered them, you can also monitor request in a background job or outside request context. To monitor outgoing HTTP requests from your Go application, you can replace the default HTTP client transport with a custom APIToolkit roundtripper."
+      p_ [class_ "text-gray-600 max-w-5xl"] "APItoolkit also allows you to monitor your outgoing request (i.e the api calls your make from your server). Monitored outgoing are also associated with the incoming request that triggered them, you can also monitor request in a background job or outside request context. To monitor outgoing HTTP requests from your Go application, you can replace the default HTTP client transport with a custom APItoolkit roundtripper."
       codeExample $ outgoingRequest apikey
 
 initCode :: Text -> Text

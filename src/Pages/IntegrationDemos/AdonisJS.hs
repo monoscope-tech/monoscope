@@ -6,13 +6,12 @@ import Lucid
 import Pkg.Components
 import Relude
 
-
 adonisGuide :: Text -> Html ()
 adonisGuide apikey = do
   section_ [class_ "flex flex-col gap-10"] do
     div_ [class_ "w-full flex flex-col gap-2"] do
       h3_ [class_ "text-2xl font-semibold"] "Install"
-      p_ [class_ "text-gray-600 font-medium"] "Install the APIToolkit express SDK using npm/bun/pnpm"
+      p_ [class_ "text-gray-600 font-medium"] "Install the APItoolkit express SDK using npm/bun/pnpm"
       bashCommand "npm install apitoolkit-adonis"
 
     div_ [class_ "w-full flex flex-col gap-2"] do
@@ -47,81 +46,75 @@ adonisGuide apikey = do
       codeExample configOptions2
     div_ [class_ "w-full flex flex-col gap-2", id_ "errors-monitoring"] do
       h3_ [class_ "text-2xl font-semibold"] "Error Reporting"
-      p_ [class_ "text-gray-600 font-medium max-w-5xl"] "APIToolkit allows you to report errors alongside the request that caused them which allows you to easily reproduce and fix issues in production."
+      p_ [class_ "text-gray-600 font-medium max-w-5xl"] "APItoolkit allows you to report errors alongside the request that caused them which allows you to easily reproduce and fix issues in production."
       codeExample $ errorReportingCode apikey
 
     div_ [class_ "w-full flex flex-col gap-2", id_ "outgoing-request-monitoring"] do
       h3_ [class_ "text-2xl font-semibold"] "Outgoing Request Monitoring"
-      p_ [class_ "text-gray-600 max-w-5xl"] "APIToolkit also allows you to monitor your outgoing request (i.e the api calls your make from your server). Monitored outgoing are also associated with the incoming request that triggered them, you can also monitor request in a background job or outside request context. To achieve this, wrap your axios instance with APIToolkit's observeAxios function."
+      p_ [class_ "text-gray-600 max-w-5xl"] "APItoolkit also allows you to monitor your outgoing request (i.e the api calls your make from your server). Monitored outgoing are also associated with the incoming request that triggered them, you can also monitor request in a background job or outside request context. To achieve this, wrap your axios instance with APItoolkit's observeAxios function."
       codeExample $ outgoingRequest apikey
-
 
 initCode :: Text -> Text
 initCode apiKey =
   T.unlines
-    [ "Server.middleware.register(["
-    , "    () => import('@ioc:Adonis/Core/BodyParser'),"
-    , "    () => import(\"@ioc:APIToolkit\")"
-    , "])"
+    [ "Server.middleware.register([",
+      "    () => import('@ioc:Adonis/Core/BodyParser'),",
+      "    () => import(\"@ioc:APIToolkit\")",
+      "])"
     ]
-
 
 confCode :: Text -> Text
 confCode apiKey =
   T.unlines
-    [ "export const apitoolkitConfig = {"
-    , "    apiKey: \"" <> apiKey <> "\","
+    [ "export const apitoolkitConfig = {",
+      "    apiKey: \"" <> apiKey <> "\","
     ]
-
 
 configOptions :: Text
 configOptions =
   T.unlines
-    [ "export const apitoolkitConfig = {"
-    , "    apiKey: \"YOUR_API_KEY\","
-    , "    redactHeaders: [\"Content-Type\", \"Authorization\", \"Cookies\"], // Specified headers will be redacted"
-    , "    redactRequestBody: [\"$.credit-card.cvv\", \"$.credit-card.name\"], // Specified request bodies fields will be redacted"
-    , "    redactResponseBody: [\"$.message.error\"] // Specified response body fields will be redacted"
-    , "}"
+    [ "export const apitoolkitConfig = {",
+      "    apiKey: \"YOUR_API_KEY\",",
+      "    redactHeaders: [\"Content-Type\", \"Authorization\", \"Cookies\"], // Specified headers will be redacted",
+      "    redactRequestBody: [\"$.credit-card.cvv\", \"$.credit-card.name\"], // Specified request bodies fields will be redacted",
+      "    redactResponseBody: [\"$.message.error\"] // Specified response body fields will be redacted",
+      "}"
     ]
-
 
 configOptions2 :: Text
 configOptions2 =
   T.unlines
-    [ "export const http: ServerConfig = {"
-    , "  useAsyncLocalStorage: true"
-    , "  // other configs"
-    , "}"
+    [ "export const http: ServerConfig = {",
+      "  useAsyncLocalStorage: true",
+      "  // other configs",
+      "}"
     ]
-
 
 errorReportingCode :: Text -> Text
 errorReportingCode apiKey =
   T.unlines
-    [ "import Route from '@ioc:Adonis/Core/Route'"
-    , "import { reportError } from \"apitoolkit-adonis\";"
-    , ""
-    , "Route.get('/observer', async () => {"
-    , "  try {"
-    , "    throw (\"Error occured\")"
-    , "  } catch (error) {"
-    , "    reportError(error)"
-    , "  }"
-    , "  return { hello: 'world' }"
-    , "})"
+    [ "import Route from '@ioc:Adonis/Core/Route'",
+      "import { reportError } from \"apitoolkit-adonis\";",
+      "",
+      "Route.get('/observer', async () => {",
+      "  try {",
+      "    throw (\"Error occured\")",
+      "  } catch (error) {",
+      "    reportError(error)",
+      "  }",
+      "  return { hello: 'world' }",
+      "})"
     ]
-
 
 outgoingRequest :: Text -> Text
 outgoingRequest apiKey =
   T.unlines
-    [ "import Route from '@ioc:Adonis/Core/Route'"
-    , "import { observeAxios } from \"apitoolkit-adonis\""
-    , "import axios from \"axios\""
-    , ""
-    , "Route.get('/observer', async () => {"
-    , "    const response = await observeAxios(axios).get(`${baseURL}/user_list/active`);"
-    , "    return response.data;"
-    , "})"
+    [ "import Route from '@ioc:Adonis/Core/Route'",
+      "import { observeAxios } from \"apitoolkit-adonis\"",
+      "import axios from \"axios\"",
+      "",
+      "Route.get('/observer', async () => {",
+      "    const response = await observeAxios(axios).get(`${baseURL}/user_list/active`);",
+      "    return response.data;",
+      "})"
     ]

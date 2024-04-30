@@ -6,7 +6,6 @@ import NeatInterpolation
 import Pkg.Components
 import Relude
 
-
 flaskGuide :: Text -> Html ()
 flaskGuide apikey = do
   section_ [class_ "flex flex-col gap-10"] do
@@ -90,7 +89,7 @@ async def sample_route(subject):
 
     div_ [class_ "w-full flex flex-col gap-2", id_ "outgoing-request-monitoring"] do
       h3_ [class_ "text-2xl font-semibold"] "Outgoing Request Monitoring"
-      p_ [class_ "text-gray-600 max-w-5xl"] "APIToolkit also allows you to monitor your outgoing request (i.e the api calls your make from your server). Monitored outgoing are also associated with the incoming request that triggered them."
+      p_ [class_ "text-gray-600 max-w-5xl"] "APItoolkit also allows you to monitor your outgoing request (i.e the api calls your make from your server). Monitored outgoing are also associated with the incoming request that triggered them."
       codeExample
         $ [text|
 from flask import Flask, request
@@ -100,7 +99,7 @@ apitoolkit = APIToolkit(api_key="$apikey")
 
 @app.route('/sample/', methods=['GET', 'POST'])
 async def sample_route(subject):
-    # Observe the request and send it to APIToolkit's servers
+    # Observe the request and send it to APItoolkit's servers
     resp = observe_request(request).get("https://jsonplaceholder.typicode.com/todos/2")
     return resp.read()
       |]
