@@ -109,8 +109,7 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
   Regards,
   Apitoolkit team
             |]     
-    CreatedProjectSuccessfully userId projectId reciever projectTitle -> do
-      print ("baby girl 1")   
+    CreatedProjectSuccessfully userId projectId reciever projectTitle -> do   
       let  discordMessage :: Value
            discordMessage = [fmtTrim|
               🎉 New project created on apitoolkit.io! 🎉
@@ -118,20 +117,28 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
               Project ID: {projectId.toText}
               User ID :{userId.toText}
           |]  
+      print ("Hello 1")    
       let discordWebhookUrl = "https://discord.com/api/webhooks/1233362512645455952/O5sta6xTbikWbwUi7arIHphVcxc5cXm5wJPJdR3JJDbWY9KJ2d9tUp0tIl8qew1HjX-d"
       let headers = defaults & header "Content-Type" .~ ["application/json"]   
-      let payload = encode discordMessage  
-      print ("baby girl 2")
-     -- print (show payload)
-      print ("what up")
-      response <- liftIO $ postWith headers discordWebhookUrl payload
-      print ("yooooo")
-      print ("Hello world")
-      traceShowM response
-      let status = response ^. responseStatus . statusCode
-      let body = response ^. responseBody
-      liftIO $ putStrLn $ "Response status code: " ++ show status
-      liftIO $ putStrLn $ "Response body: " ++ LBS.unpack body
+      let payload = encode discordMessage 
+      print (show payload) 
+      print ("Hello 2")
+      liftIO $ do
+        print ("Hello 3")
+        response <- postWith headers discordWebhookUrl payload
+        print (show response)
+        print ("Hello 4")
+        let status = response ^. responseStatus . statusCode
+        print (show status)
+        print("Hello 5")
+        if status == 200 then do
+          putStrLn "Discord message sent successfully!"
+        else do
+          putStrLn ("Error sending message: " ++ show status)
+          let body = response ^. responseBody
+          putStrLn ("Response body: " ++ LBS.unpack body)
+      print ("Hello 6")    
+               
       sendEmail
         reciever
         [fmt| 🤖 APITOOLKIT: Project created successfully '{projectTitle}' on apitoolkit.io |]
