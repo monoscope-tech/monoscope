@@ -6,6 +6,7 @@ import NeatInterpolation
 import Pkg.Components
 import Relude
 
+
 djangoGuide :: Text -> Html ()
 djangoGuide apikey = do
   section_ [class_ "flex flex-col gap-10"] do
@@ -50,11 +51,13 @@ djangoGuide apikey = do
       p_ [class_ "text-gray-600 max-w-5xl"] "APIToolkit also allows you to monitor your outgoing request (i.e the api calls your make from your server). Monitored outgoing are also associated with the incoming request that triggered them."
       codeExample $ outgoingRequest apikey
 
+
 apiKeyCode :: Text -> Text
 apiKeyCode apiKey =
   [text|
 APITOOLKIT_KEY=$apiKey
 |]
+
 
 initCode :: Text
 initCode =
@@ -65,6 +68,7 @@ MIDDLEWARE = [
     ...,
 ]
 |]
+
 
 configOptions :: Text
 configOptions =
@@ -83,6 +87,7 @@ APITOOLKIT_TAGS = ["PROD", "EU"]
 APITTOLKIT_SERVICE_VERSION = "2.0.0"
 |]
 
+
 errorReportingCode :: Text -> Text
 errorReportingCode apiKey =
   [text|
@@ -97,6 +102,7 @@ def hello_world(request, name):
         report_error(request, e)
         return JsonResponse({"Error": "Something went wrong"})
 |]
+
 
 outgoingRequest :: Text -> Text
 outgoingRequest apiKey =

@@ -6,6 +6,7 @@ import NeatInterpolation
 import Pkg.Components
 import Relude
 
+
 laravelGuide :: Text -> Html ()
 laravelGuide apikey = do
   section_ [class_ "flex flex-col gap-10"] do
@@ -45,11 +46,13 @@ laravelGuide apikey = do
       p_ [class_ "text-gray-600 max-w-5xl"] "APIToolkit also allows you to monitor your outgoing request (i.e the api calls your make from your server). Monitored outgoing are also associated with the incoming request that triggered them, you can also monitor request in a background job or outside request context. To achieve this, use the observeGuzzle method of the APIToolkitLaravel class."
       codeExample $ outgoingRequest
 
+
 apiKeyCode :: Text -> Text
 apiKeyCode apiKey =
   [text|
 APITOOLKIT_KEY=$apiKey
 |]
+
 
 initCode :: Text
 initCode =
@@ -80,6 +83,7 @@ class Kernel extends HttpKernel
 }
 |]
 
+
 configOptions :: Text
 configOptions =
   [text|
@@ -90,6 +94,7 @@ configOptions =
    APITOOLKIT_REDACT_RESPONSE_BODY=["$.user.token"] # array A list of response body fields (jsonpaths) to be redacted. 
    APITOOLKIT_DEBUG=false  #boolean Set to true to enable debug.
 |]
+
 
 errorReportingCode :: Text
 errorReportingCode =
@@ -129,6 +134,7 @@ Route::get('/user', function (Request $$request) {
     }
 });
 |]
+
 
 outgoingRequest :: Text
 outgoingRequest =
