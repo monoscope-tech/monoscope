@@ -1,18 +1,16 @@
-module Pages.Monitors.TestCollectionEditor (collectionGetH, CollectionStepUpdateForm (..), collectionPage, collectionStepsUpdateH) where
+module Pages.Monitors.TestCollectionEditor (collectionGetH, CollectionStepUpdateForm (..), collectionRunTestsH, collectionPage, collectionStepsUpdateH) where
 
 import Data.Aeson qualified as AE
 import Data.Default (def)
-import Data.Map qualified as Map
-import Data.Text.Lazy qualified as TL
-import Data.Text.Lazy.Encoding qualified as TLE
 import Data.Vector qualified as V
+import Deriving.Aeson qualified as DAE
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
+import Foreign.C.String (peekCString, withCString)
 import Lucid
-import Lucid.Htmx
 import Lucid.Aria qualified as Aria
-import Deriving.Aeson qualified as DAE
 import Lucid.Base
+import Lucid.Htmx
 import Lucid.Hyperscript
 import Models.Projects.Projects qualified as Projects
 import Models.Tests.Testing qualified as Testing
@@ -22,11 +20,11 @@ import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import PyF
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
+import RustInterop (run_testkit)
 import System.Config (AuthContext)
-import qualified Data.ByteString.Lazy.Char8 as BL
 import System.Types (ATAuthCtx)
+import Data.Either.Extra
 import Utils
-import Web.FormUrlEncoded (FromForm)
 
 
 data CollectionStepUpdateForm = CollectionStepUpdateForm
@@ -38,9 +36,31 @@ data CollectionStepUpdateForm = CollectionStepUpdateForm
 
 collectionStepsUpdateH :: Projects.ProjectId -> Testing.CollectionId -> CollectionStepUpdateForm -> ATAuthCtx (Html ())
 collectionStepsUpdateH pid colId stepsForm = do
-  traceShowM stepsForm 
+  traceShowM stepsForm
   _ <- dbtToEff $ Testing.updateCollectionSteps colId stepsForm.stepsData
+  -- TODO: toast
   pure $ toHtml ""
+
+
+callRunTestkit :: String -> IO String
+callRunTestkit hsString = withCString hsString $ \cstr -> do
+  resultCString <- run_testkit (cstr)
+  peekCString (resultCString)
+
+
+collectionRunTestsH :: Projects.ProjectId -> Testing.CollectionId -> Maybe Int -> CollectionStepUpdateForm -> ATAuthCtx (Html ())
+collectionRunTestsH pid colId runIdxM stepsForm = do
+  traceShowM stepsForm
+  tkResp <- liftIO $ callRunTestkit $ decodeUtf8 $ AE.encode $ stepsForm.stepsData
+  let stepResult = fromRight' $ AE.eitherDecodeStrictText (toText tkResp) :: V.Vector Testing.StepResult
+  traceShowM "RESP RS"
+  traceShowM tkResp
+  traceShowM stepResult
+  pure $ script_ [] [fmt|
+    window.collectionResults = {tkResp}
+
+    window.renderCollection()
+    |] 
 
 
 collectionGetH :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (Html ())
@@ -57,154 +77,174 @@ collectionGetH pid colId = do
           , currProject = project
           , pageTitle = "Testing"
           }
-  pure $ bodyWrapper bwconf $ collectionPage pid (Unsafe.fromJust collectionM) 
+  pure $ bodyWrapper bwconf $ collectionPage pid (Unsafe.fromJust collectionM)
 
 
 collectionPage :: Projects.ProjectId -> Testing.Collection -> Html ()
 collectionPage pid col = do
-  -- let col_json = decodeUtf8 $ AE.encode col
-  -- let steps_json = decodeUtf8 $ AE.encode steps
+  let collectionStepsJSON = AE.encode col.collectionSteps
+  script_ [] [fmt|window.collectionSteps = {collectionStepsJSON};|]
   editorExtraElements
-  section_ [class_ "h-full"] do
-    form_ [id_ "stepsForm", class_ "grid grid-cols-2 h-full divide-x divide-gray-200 group/colForm"
+  section_ [class_ "h-full overflow-y-hidden"] do
+    form_
+      [ id_ "stepsForm"
+      , class_ "grid grid-cols-2 h-full divide-x divide-gray-200 group/colForm overflow-y-hidden"
       , termRaw "data-defaultKeyPrefix" "[kPrefix]"
       , hxPost_ ""
       , hxSwap_ "none"
       , hxParams_ "stepsData"
       , hxExt_ "json-enc"
-      , hxVals_ "js:{stepsData: stepFormToObject()}"] do
-      div_ [class_ "col-span-1 h-full divide-y flex flex-col"] do
-        div_ [class_ "shrink flex items-center justify-between"] do
-          div_ [class_ " pb-5 p-5 space-y-2"] do
-            h2_ [class_ "text-base font-semibold leading-6 text-gray-900 flex items-end"] do
-              toHtml col.title
-              small_ [class_ "inline-block ml-2 truncate text-sm text-gray-500"] "created  2024/01/23"
-            p_ [class_ "text-sm"] $ toHtml col.description
-          div_ [] do
-            span_ [class_ "badge badge-success"] "Active"
-            a_ [class_ "p-3"] $ Utils.faSprite_ "ellipsis-vertical" "light" "h-5"
-        div_ [class_ "shrink p-4 flex justify-between items-center"] do
-          h4_ [class_ "font-semibold text-2xl font-medium "] "Steps"
-          div_ [class_ "space-x-4 flex items-center"] do
-            button_ [class_ "btn btn-sm btn-success "] do
-              span_ "Run all"
-              faIcon_ "fa-play" "fa-solid fa-play" "w-3 h-3"
-            button_ [class_ "btn btn-sm btn-warning ", type_ "submit"] do
-              span_ "Save"
-              faIcon_ "fa-save" "fa-solid fa-save" "w-3 h-3"
-            label_ [class_ "relative inline-flex items-center cursor-pointer space-x-2"] do
-              input_ [type_ "checkbox", class_ "toggle editorMode", onchange_ "buildAndSetEditor(event)"]
-              span_ [class_ "text-sm"] "Code"
-        div_ [class_ "h-full flex-1"] do
-          div_ [id_ "steps-codeEditor", class_ "h-full max-h-screen hidden group-has-[.editorMode:checked]/colForm:block"] ""
-          div_ [class_ "h-full overflow-y-scroll group-has-[.editorMode:checked]/colForm:hidden"] do
-            div_ [class_ " p-4 space-y-4 collectionSteps", id_ "collectionStepsContainer"] do
-              let Testing.CollectionSteps(colSteps) = col.collectionSteps
-              V.iforM_ colSteps \idx step -> collectionStep_ (Just $ idx) step
-            div_ [class_ "p-4 pt-2"] $ a_ [class_ "btn btn-outline btn-neutral btn-sm items-center cursor-pointer", 
-                   [__| on click set :stepTmpl to #collectionStepTmpl.innerHTML.replaceAll('[idx]', #collectionStepsContainer.childNodes.length)
+      , hxVals_ "js:{stepsData: window.collectionSteps}"
+      ]
+      do
+        div_ [class_ "col-span-1 h-full divide-y flex flex-col overflow-y-hidden"] do
+          div_ [class_ "shrink flex items-center justify-between"] do
+            div_ [class_ " pb-5 p-5 space-y-2"] do
+              h2_ [class_ "text-base font-semibold leading-6 text-gray-900 flex items-end"] do
+                toHtml col.title
+                small_ [class_ "inline-block ml-2 truncate text-sm text-gray-500"] "created  2024/01/23"
+              p_ [class_ "text-sm"] $ toHtml col.description
+            div_ [] do
+              span_ [class_ "badge badge-success"] "Active"
+              a_ [class_ "p-3"] $ Utils.faSprite_ "ellipsis-vertical" "light" "h-5"
+          div_ [class_ "shrink p-4 flex justify-between items-center"] do
+            h4_ [class_ "font-semibold text-2xl font-medium "] "Steps"
+            div_ [class_ "space-x-4 flex items-center"] do
+              button_
+                [ class_ "btn btn-sm btn-success "
+                , hxPatch_ ""
+                , hxParams_ "stepsData"
+                , hxExt_ "json-enc"
+                , hxVals_ "js:{stepsData: window.collectionSteps}"
+                ]
+                do
+                  span_ "Run all" >> faSprite_ "play" "solid" "w-3 h-3"
+              button_ [class_ "btn btn-sm btn-warning ", type_ "submit"] do
+                span_ "Save" >> faSprite_ "floppy-disk" "solid" "w-3 h-3"
+              label_ [class_ "relative inline-flex items-center cursor-pointer space-x-2"] do
+                input_ [type_ "checkbox", class_ "toggle editorMode", onchange_ "buildAndSetEditor(event)"]
+                span_ [class_ "text-sm"] "Code"
+          div_ [class_ "h-full flex-1 overflow-y-hidden"] do
+            div_ [id_ "steps-codeEditor", class_ "h-full max-h-screen hidden group-has-[.editorMode:checked]/colForm:block"] ""
+            div_ [class_ "h-full overflow-y-scroll group-has-[.editorMode:checked]/colForm:hidden"] do
+              div_
+                [ class_ " p-4 space-y-4 collectionSteps"
+                , id_ "collectionStepsContainer"
+                ]
+                ""
+              div_ [class_ "p-4 pt-2"] $ a_
+                [ class_ "btn btn-outline btn-neutral btn-sm items-center cursor-pointer"
+                , [__| on click set :stepTmpl to #collectionStepTmpl.innerHTML.replaceAll('[idx]', #collectionStepsContainer.childNodes.length)
                             then put :stepTmpl at the end of #collectionStepsContainer
                             then _hyperscript.processNode(#stepsForm)
-                            |]] do
-              faSprite_ "plus" "sharp-regular" "w-4 h-4"
-              span_ "Add Another Step"
-      div_ [class_ "col-span-1 h-full border-r border-gray-200"] do
-        div_ [class_ "flex flex-col justify-center items-center h-full text-slate-400 text-xl space-y-4"] do
-          div_ [] $ Utils.faIcon_ "fa-objects-column" "fa-objects-column fa-solid" "w-16 h-16"
-          p_ [class_ "text-slate-500"] "Run a test to view the results here. "
+                            |]
+                ]
+                do
+                  faSprite_ "plus" "sharp-regular" "w-4 h-4"
+                  span_ "Add Another Step"
+        div_ [class_ "col-span-1 h-full border-r border-gray-200"] do
+          div_ [class_ "flex flex-col justify-center items-center h-full text-slate-400 text-xl space-y-4"] do
+            div_ [] $ Utils.faIcon_ "fa-objects-column" "fa-objects-column fa-solid" "w-16 h-16"
+            p_ [class_ "text-slate-500"] "Run a test to view the results here. "
 
 
-collectionStep_ :: Maybe Int -> Testing.CollectionStepData -> Html ()
-collectionStep_ idxM stepData = do
-  let idx = maybe "[idx]" show idxM
-  let (sdMethod, sdUri) = fromMaybe ("", "") $ Testing.stepDataMethod stepData
+collectionStep_ :: Html ()
+collectionStep_ = do
   div_ [class_ "rounded-lg overflow-hidden border border-slate-200 group/item collectionStep"] do
-    input_ [type_ "checkbox", id_ [fmt|stepState-{idx}|], class_ "hidden stepState"]
+    input_ [type_ "checkbox", id_ "stepState-${idx}", class_ "hidden stepState"]
     div_ [class_ "flex flex-row items-center bg-gray-50 "] do
       div_ [class_ "h-full shrink bg-gray-50 p-3 hidden border-r border-r-slate-200"] $ faIcon_ "fa-grip-dots-vertical" "fa-solid fa-grip-dots-vertical" " h-4 w-4"
       div_ [class_ "flex-1 flex flex-row items-center gap-1 bg-white pr-5 py-3"] do
-        label_ [Lucid.for_ [fmt|stepState-{idx}|], class_ "p-3 cursor-pointer text-xs text-slate-700"] $ toHtml $ maybe "" (\x->show $ x + 1) idxM
-        label_ [Lucid.for_ [fmt|stepState-{idx}|], class_ "p-3 cursor-pointer"] do
+        label_ [Lucid.for_ "stepState-${idx}", class_ "p-3 cursor-pointer text-xs text-slate-700"] "${idx+1}"
+        label_ [Lucid.for_ "stepState-${idx}", class_ "p-3 cursor-pointer"] do
           faSprite_ "chevron-right" "solid" "h-4 w-3 group-has-[.stepState:checked]/item:rotate-90"
         div_ [class_ "w-full space-y-1 relative"] do
           div_ [class_ "absolute right-0 flex items-center gap-3 text-xs text-gray-600 hidden group-hover/item:flex"] do
             button_ [class_ ""] "View results"
             button_ [class_ "text-blue-600"] $ faIcon_ "fa-play" "fa-play fa-solid" "w-2 h-3"
             a_ [class_ "text-red-700", [__|on click remove the closest parent <.collectionStep/> |]] $ faIcon_ "fa-xmark" "fa-xmark fa-solid" "w-2 h-3"
-          input_ [class_ "text-lg w-full",placeholder_ "Untitled", value_ $ fromMaybe "" stepData.title, name_ $ [fmt|[{idx}][title]|], id_ [fmt|title-{idx}|]]
+          input_ [class_ "text-lg w-full", placeholder_ "Untitled", value_ "${stepData.title}", name_ "[${idx}][title]", id_ "title-${idx}"]
           div_ [class_ "relative flex flex-row gap-2 items-center"] do
-            label_ [Lucid.for_ $ "actions-list-input-" <>idx , class_ "w-28  shrink text-sm font-medium form-control "] do
+            label_ [Lucid.for_ $ "actions-list-input-${idx}", class_ "w-28  shrink text-sm font-medium form-control "] do
               input_
                 [ list_ "actions-list"
-                , id_ $ "actions-list-input-"<>idx
+                , id_ $ "actions-list-input-${idx}"
                 , class_ "input input-sm input-bordered w-full"
                 , placeholder_ "method"
-                , value_ sdMethod
-                , termRaw "_" [fmt|on change throttled at 500ms put `[{idx}][${{me.value}}]` into #actions-data-{idx}'s @name |]
+                , value_ "${methodAndUrl(stepData).method}"
+                , termRaw "_" "on change throttled at 500ms put \\`[${idx}][\\${me.value}]\\` into #actions-data-${idx}'s @name"
                 ]
             label_ [Lucid.for_ "actions-data", class_ "flex-1 text-sm font-medium form-control w-full "] do
               div_ [class_ "flex flex-row items-center gap-1"] do
                 input_
                   [ type_ "text"
-                  , id_ [fmt|actions-data-{idx}|]
+                  , id_ "actions-data-${idx}"
                   , class_ "input input-sm input-bordered w-full"
                   , placeholder_ "Request URI"
-                  , name_ [fmt|[{idx}][{sdMethod}]|]
+                  , name_ "[${idx}][${methodAndUrl(stepData).method}]"
+                  , value_ "${methodAndUrl(stepData).url}"
                   ]
     div_ [class_ "border-t border-t-slate-200 space-y-3 p-3 hidden group-has-[.stepState:checked]/item:block"] do
       div_ [role_ "tablist", class_ "tabs tabs-bordered pt-1"] do
-        input_ [type_ "radio", name_ [fmt|_httpOptions-{idx}|], role_ "tab", class_ "tab", Aria.label_ "Params", checked_]
-        div_ [role_ "tabpanel", class_ "tab-content px-2 py-4 space-y-2", id_ [fmt|[{idx}][params]|]] do
-          whenJust stepData.params $ \mp -> forM_ (Map.toList mp) \(paramK, paramV) ->
-            paramRowKV "paramRowTmpl" [fmt|[{idx}][params]|] Nothing paramK paramV
-          paramRowKV "paramRowTmpl" [fmt|[{idx}][params]|] Nothing "" ""
+        input_ [type_ "radio", name_ "_httpOptions-${idx}", role_ "tab", class_ "tab", Aria.label_ "Params", checked_]
+        div_ [role_ "tabpanel", class_ "tab-content px-2 py-4 space-y-2", id_ "[{idx}][params]"] do
+          toHtmlRaw "${stepData.params && Object.entries(stepData.params).map(([key, value])=>litParam(key, value, null, `[${idx}][params]`))}"
+          toHtmlRaw "${(!stepData.params || Object.entries(stepData.params).length==0)? litParam('', '', null, `[${idx}][params]`):'' }"
 
-        input_ [type_ "radio", name_ [fmt|_httpOptions-{idx}|], role_ "tab", class_ "tab", Aria.label_ "Headers"]
-        div_ [role_ "tabpanel", class_ "tab-content px-2 py-4 space-y-2", id_ [fmt|[{idx}][headers]|]] do
-          whenJust stepData.headers $ \mp -> forM_ (Map.toList mp) \(headerK, headerV) ->
-            paramRowKV "paramRowTmpl" [fmt|[{idx}][headers]|] Nothing headerK headerV
-          paramRowKV "paramRowTmpl" ([fmt|[{idx}][headers]|]) Nothing "" ""
+        input_ [type_ "radio", name_ "_httpOptions-${idx}", role_ "tab", class_ "tab", Aria.label_ "Headers"]
+        div_ [role_ "tabpanel", class_ "tab-content px-2 py-4 space-y-2", id_ "[{idx}][headers]"] do
+          toHtmlRaw "${stepData.headers && Object.entries(stepData.headers).map(([key, value])=>litParam(key, value, null, `[${idx}][headers]`))}"
+          toHtmlRaw "${(!stepData.headers || Object.entries(stepData.headers).length==0)? litParam('', '', null, `[${idx}][headers]`):'' }"
 
-        input_ [type_ "radio", name_ [fmt|_httpOptions-{idx}|], role_ "tab", class_ "tab", Aria.label_ "Body"]
+        input_ [type_ "radio", name_ "_httpOptions-${idx}", role_ "tab", class_ "tab", Aria.label_ "Body"]
         div_ [role_ "tabpanel", class_ "tab-content px-2 py-4"] do
           select_ [class_ "peer select select-sm select-bordered", termRaw "data-chosen" "json", onchange_ "this.dataset.chosen = this.value;"] do
             option_ [selected_ "selected"] "json"
             option_ [] "raw"
-          div_ [class_"hidden peer-data-[chosen=json]:block"] $ textarea_ [class_ "w-full", name_ [fmt|[{idx}][json]|]] (fromString $ BL.unpack $ AE.encode stepData.json )
-          div_ [class_"hidden peer-data-[chosen=raw]:block"] $ textarea_ [class_ "w-full",name_ [fmt|[{idx}][raw]|]] $ toHtml (fromMaybe "" stepData.raw )
+          div_ [class_ "hidden peer-data-[chosen=json]:block"] $ textarea_ [class_ "w-full", name_ "[${idx}][json]"] "${stepData.json}"
+          div_ [class_ "hidden peer-data-[chosen=raw]:block"] $ textarea_ [class_ "w-full", name_ "[${idx}][raw]"] $ "${stepData.raw}"
 
       div_ [class_ ""] do
         h5_ [class_ "label-text p-1 mb-2"] "Assertions"
-        div_ [class_ "text-sm space-y-2 px-2 [&_.assertIndicator]:inline-block paramRows",  id_ [fmt|[{idx}][asserts]|]] do
-          whenJust stepData.asserts $ \vmp -> V.iforM_ vmp \vIdx mp -> forM_ (Map.toList mp) \(assertK, assertV) ->
-            paramRowKV "paramRowTmplAssert" ([fmt|[{idx}][asserts]|]) (Just (show vIdx)) assertK (fromString $ BL.unpack $ AE.encode assertV) 
-          let assertsLen = maybe 0 length stepData.asserts
-          paramRowKV "paramRowTmplAssert" ([fmt|[{idx}][asserts]|]) (Just (show assertsLen)) "" ""
+        div_ [class_ "text-sm space-y-2 px-2 [&_.assertIndicator]:inline-block paramRows", id_ "[{idx}][asserts]"] do
+          toHtmlRaw "${stepData.asserts && stepData.asserts.map((assert, aidx)=>Object.entries(assert).map(([key, value])=>litParam(key, value, aidx, `[${idx}][asserts][${aidx}]`)))}"
+          toHtmlRaw "${(!stepData.asserts || Object.entries(stepData.asserts[0]).length==0)? litParam('', '', null, `[${idx}][asserts][0]`):'' }"
       div_ [class_ ""] do
         h5_ [class_ "label-text p-1 mb-2"] "Exports"
-        div_ [class_ "text-sm space-y-2 px-2 paramRows",  id_ [fmt|[{idx}][exports]|]] do
-          whenJust stepData.exports $ \mp -> forM_ (Map.toList mp) \(exportK, exportV) ->
-            paramRowKV "paramRowTmpl" ([fmt|[{idx}][exports]|]) Nothing exportK exportV
-          paramRowKV "paramRowTmpl" ([fmt|[{idx}][exports]|]) Nothing "" ""
+        div_ [class_ "text-sm space-y-2 px-2 paramRows", id_ "[{idx}][exports]"] do
+          toHtmlRaw "${stepData.exports && Object.entries(stepData.exports).map(([key, value])=>litParam(key, value, null, `[${idx}][exports]`))}"
+          toHtmlRaw "${(!stepData.exports || Object.entries(stepData.exports).length==0)? litParam('', '', null, `[$idx][exports]`):'' }"
 
 
-paramRowKV :: Text -> Text -> Maybe Text -> Text -> Text -> Html ()
-paramRowKV tmplForAddBtn keyPrefix itemIdx keyV valV = div_ [class_ "flex flex-row items-center gap-2 paramRow"] do
+paramRowKV :: Html ()
+paramRowKV = div_ [class_ "flex flex-row items-center gap-2 paramRow"] do
   span_ [class_ "shrink hidden assertIndicator"] $ "✅"
-  input_ [class_ "shrink input input-xs input-bordered w-1/3", placeholder_ "Key", value_ keyV
-    , termRaw "data-keyPrefix" (fromMaybe keyPrefix $ (itemIdx <&> \vIdx -> keyPrefix <> "[" <> vIdx <> "]"))
-    , [__|on change set :kPrefix to `${my @data-keyPrefix}[${me.value}]` then set (next <input/>)'s @name to :kPrefix  |]
+  input_
+    [ class_ "shrink input input-xs input-bordered w-1/3"
+    , placeholder_ "Key"
+    , value_ "${key}"
+    , termRaw "data-keyPrefix" "$keyPrefix"
+    , [__|on change set :kPrefix to \`\${my @data-keyPrefix}[\${me.value}]\` then set (next <input/>)'s @name to :kPrefix  |]
     ]
-  input_ [class_ "flex-1 input input-xs input-bordered w-full", placeholder_ "Value"
-    , name_ $ keyPrefix <> "[" <> keyV <> "]", value_ valV]
+  input_
+    [ class_ "flex-1 input input-xs input-bordered w-full"
+    , placeholder_ "Value"
+    , name_ "${keyPrefix}[${key}]"
+    , value_ "${value}"
+    ]
   div_ [class_ "shrink flex flex-row gap-1 items-center"] do
-    a_ [termRaw "_" [fmt|on click set :nextIndex to (the closest parent <div.paramRows/>).childNodes.length 
+    a_
+      [ termRaw
+          "_"
+          [raw|on click set :nextIndex to (the closest parent <div.paramRows/>).childNodes.length 
                 then set :paramTmpl to 
-                        #{tmplForAddBtn}.innerHTML.replaceAll(#stepsForm's @data-defaultKeyPrefix, @data-keyPrefix).replaceAll('[aidx]', `[${{:nextIndex}}]`)
+                        #{tmplForAddBtn}.innerHTML.replaceAll(#stepsForm's @data-defaultKeyPrefix, @data-keyPrefix).replaceAll('[aidx]', \`[\${{:nextIndex}}]\`)
                 then put :paramTmpl after the closest parent <div.paramRow/>  
                 then _hyperscript.processNode(#stepsForm) 
                 |]
-      ,  termRaw "data-keyPrefix" keyPrefix] $ faIcon_ "fa-plus" "fa-plus fa-solid" "w-3 h-3"
+      , termRaw "data-keyPrefix" ""
+      ]
+      $ faSprite_ "plus" "solid" "w-3 h-3"
     a_ [class_ "text-red-700 cursor-pointer", [__|on click remove the closest parent <div.paramRow/> |]] $ faIcon_ "fa-xmark" "fa-xmark fa-solid" "w-3 h-3"
 
 
@@ -219,11 +259,34 @@ editorExtraElements = do
     option_ [value_ "UPDATE"] ""
     option_ [value_ "PATCH"] ""
     option_ [value_ "DELETE"] ""
-  template_ [id_ "paramRowTmpl"] $ paramRowKV "paramRowTmpl" "[kPrefix]" Nothing "" ""
-  template_ [id_ "paramRowTmplAssert"] $ paramRowKV "paramRowTmplAssert" "[kPrefix]" (Just "[aidx]") "" ""
-  template_ [id_ "paramRowTmplFull"] $ paramRowKV "paramRowTmpl" "[kPrefix]" Nothing "[kKey]" "[kVal]"
-  template_ [id_ "paramRowTmplFullAssert"] $ paramRowKV "paramRowTmplAssert" "[kPrefix]" (Just "[aidx]") "[kKey]" "[kVal]"
-  template_ [id_ "collectionStepTmpl"] $ collectionStep_ Nothing (def::Testing.CollectionStepData)
+  script_ [type_ "module", src_ "/assets/steps-editor.js"] ("" :: Text)
+  template_ [id_ "paramRowTmpl"] $ paramRowKV
+  template_ [id_ "paramRowTmplAssert"] $ paramRowKV
+  template_ [id_ "paramRowTmplFull"] $ paramRowKV
+  template_ [id_ "paramRowTmplFullAssert"] $ paramRowKV
+  script_ [id_ "collectionStepTmpl", type_ "module"] do
+    toHtmlRaw "import {html, render} from '/assets/deps/lit/lit-html.js';"
+
+    toHtmlRaw
+      [raw|
+function methodAndUrl(obj) {
+    const validMethods = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "TRACE", "CONNECT"];
+    const validEntries = Object.entries(obj).filter(([method, url]) => validMethods.includes(method) && url !== null);
+    const found = validEntries.length > 0 ? validEntries[0] : null;
+    return found ? { method: found[0], url: found[1] } : {method:"", url:""};
+}
+    |]
+
+    toHtmlRaw "const litParam = (key, value, aidx, keyPrefix) => html`"
+    paramRowKV
+    toHtmlRaw "`;"
+
+    toHtmlRaw "const litCollections = ()=>window.collectionSteps.map((stepData, idx) =>html`"
+    collectionStep_
+    toHtmlRaw "`);"
+    toHtmlRaw "window.renderCollection = () => render(litCollections(), document.getElementById('collectionStepsContainer'));"
+    toHtmlRaw "window.renderCollection();"
+
   script_ [src_ "/assets/js/thirdparty/jsyaml.min.js", crossorigin_ "true"] ("" :: Text)
   script_
     [raw|
@@ -233,8 +296,8 @@ editorExtraElements = do
       const yamlData = jsyaml.dump(collectionSteps, { indent: 2 });
       window.editor.setValue(yamlData)
     } else{
-      const collectionSteps = jsyaml.load(window.editor.getValue());
-      populateForm(collectionSteps, 'stepsForm')
+      window.collectionSteps = jsyaml.load(window.editor.getValue());
+      window.renderCollection();
     }
   }
 
@@ -244,9 +307,7 @@ editorExtraElements = do
 
     for (const [name, value] of formData.entries()) {
       if (!name.startsWith("[")) continue;
-      const path = name
-        .split(/[\[\]]+/)  // Split the name by brackets
-        .filter(part => part !== '')  // Remove empty strings from resulting array
+      const path = name.split(/[\[\]]+/).filter(part => part !== '')
         .map(part => isNaN(part) ? part : parseInt(part));  // Convert array indexes to integers
       if (path.length > 1 && value && value!='' && value!='null' ) {
         _.set(collectionSteps, path, value);  // Use Lodash's set function
@@ -254,89 +315,6 @@ editorExtraElements = do
     }
     return collectionSteps;
   }
-
-  function populateForm(collectionSteps, formId) {
-    const form = document.getElementById(formId);
-    const paramRowTmplFull = document.getElementById('paramRowTmplFull').innerHTML;
-    const paramRowTmpl = document.getElementById('paramRowTmpl').innerHTML;
-
-    const collectionStepsList = document.getElementById('collectionStepsContainer');
-    for (var i=collectionStepsList.childNodes.length; i<collectionSteps.length; i++){
-      const newStep = document.getElementById('collectionStepTmpl').innerHTML.replaceAll('[idx]', i);
-      collectionStepsList.insertAdjacentHTML('beforeend', newStep);
-    }
-
-    const getTemplate = (kPrefix, key, value) => paramRowTmplFull
-        .replace(/\[kPrefix\]\[\[kKey\]\]/g, `${kPrefix}[${key}]`)
-        .replace(/\[kPrefix\]/g, kPrefix)
-        .replace(/\[kKey\]/g, key)
-        .replace(/\[kVal\]/g, value);
-
-    const updateInnerContent = (values, kPrefix) => {
-        if (!(values && typeof values === 'object' && !(values instanceof File))) {
-           return
-        }
-        return Object.entries(values).reduce((content, [key, value]) => 
-            content + getTemplate(kPrefix, key, value), '');
-    };
-
-    const handleParams = (kPrefix, values) => {
-        let innerContent = updateInnerContent(values, kPrefix);
-        innerContent += paramRowTmpl.replaceAll('[kPrefix]', kPrefix);
-        document.getElementById(kPrefix).innerHTML = innerContent;
-    };
-
-    const handleAsserts = (idx, valuesList) => {
-        let innerContent = (Array.isArray(valuesList) ? valuesList : []).reduce((content, values, idxV) => {
-            let kPrefix = `[${idx}][asserts][${idxV}]`;
-            return content + updateInnerContent(values, kPrefix);
-        }, '');
-
-        innerContent += paramRowTmpl.replaceAll('[kPrefix]', `[${idx}][asserts][${valuesList.length}]`);
-        document.getElementById(`[${idx}][asserts]`).innerHTML = innerContent;
-    };
-
-    const setMethod = (idx, method, val) => {
-        form.querySelector(`#actions-list-input-${idx}`).value = method;
-        form.querySelector(`#actions-data-${idx}`).name = `[${idx}][${method}]`;
-        form.querySelector(`#actions-data-${idx}`).value = val;
-    };
-
-    function setFields(idx, data) {
-        if (data && typeof data === 'object' && !(data instanceof File)) {
-            Object.entries(data).forEach(([key, value]) => {
-              switch (key) {
-                case 'title':
-                    form.querySelector(`#title-${idx}`).value = value;
-                    break;
-                case 'json':
-                case 'raw':
-                  console.log(`[name="[${idx}][${key}]"]`)
-                  if (value) form.querySelector(`[name="[${idx}][${key}]"]`).innerHTML = value;
-                  break
-                case 'params':
-                case 'headers':
-                case 'exports':
-                    handleParams(`[${idx}][${key}]`, value);
-                    break;
-                case 'asserts':
-                    handleAsserts(idx, value);
-                    break;
-                default:
-                    if (['GET', 'POST', 'PATCH', 'PUT', 'UPDATE', 'DELETE', 'OPTION'].includes(key.toUpperCase())) {
-                        setMethod(idx, key, value);
-                    }
-                    break;
-                }
-            });
-        }
-    }
-
-    collectionSteps.forEach((element, idx) => {
-        setFields(idx, element);
-    });
-    _hyperscript.processNode(document.getElementById("stepsForm"))
-}
 
 
   |]

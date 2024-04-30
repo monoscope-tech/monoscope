@@ -2,6 +2,7 @@
 
 module Models.Tests.Testing (
   Collection (..),
+  StepResult (..),
   CollectionId (..),
   CollectionListItem (..),
   CollectionStepId (..),
@@ -23,6 +24,7 @@ module Models.Tests.Testing (
 where
 
 import Data.Aeson as Aeson
+import Deriving.Aeson qualified as DAE
 import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.Default.Instances ()
@@ -30,7 +32,7 @@ import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (insert, selectById)
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, queryOne)
+import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple hiding (execute, executeMany, query)
 import Database.PostgreSQL.Simple.FromField
@@ -103,21 +105,22 @@ stepDataMethod stepData =
 
 instance ToJSON CollectionStepData where
   toJSON csd =
-    object $
-      [ "title" .= csd.title
-      , "POST" .= csd.post -- Change the key to "POST" here for the output JSON
-      , "GET" .= csd.get
-      , "UPDATE" .= csd.update
-      , "DELETE" .= csd.delete
-      , "PATCH" .= csd.patch
-      , "PUT" .= csd.put
-      , "params" .= csd.params
-      , "headers" .= csd.headers
-      , "exports" .= csd.exports
-      , "json" .= csd.json
-      , "raw" .= csd.raw
-      , "asserts" .= csd.asserts
-      ]
+    object
+      $ catMaybes
+        [ Just $ "title" .= csd.title
+        , fmap ("POST" .=) csd.post -- Change the key to "POST" here for the output JSON
+        , fmap ("GET" .=) csd.get
+        , fmap ("UPDATE" .=) csd.update
+        , fmap ("DELETE" .=) csd.delete
+        , fmap ("PATCH" .=) csd.patch
+        , fmap ("PUT" .=) csd.put
+        , fmap ("params" .=) csd.params
+        , fmap ("headers" .=) csd.headers
+        , fmap ("exports" .=) csd.exports
+        , fmap ("json" .=) csd.json
+        , fmap ("raw" .=) csd.raw
+        , fmap ("asserts" .=) csd.asserts
+        ]
 
 
 instance FromJSON CollectionStepData where
@@ -199,6 +202,41 @@ data CollectionListItem = ReportListItem
     via (GenericEntity '[Schema "tests", TableName "collections", PrimaryKey "id", FieldModifiers '[CamelToSnake]] CollectionListItem)
 
 
+data StepResponse = StepResponse
+  { status :: Int
+  , headers :: Map Text [Text]
+  , raw :: Text
+  , json :: Value
+  }
+  deriving stock (Show, Generic)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] StepResponse
+
+
+data StepRequest = StepRequest
+  { req :: CollectionStepData
+  , resp :: StepResponse
+  }
+  deriving stock (Show, Generic)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] StepRequest
+
+data AssertResult = AssertResult 
+  {}
+  deriving stock (Show, Generic)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] AssertResult 
+
+
+
+data StepResult = StepResult
+  { stepName :: Text
+  , stepIndex :: Int
+  , assertResults :: [AssertResult]
+  , request :: StepRequest
+  , stepLog :: Text
+  }
+  deriving stock (Show, Generic)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] StepResult
+
+
 addCollection :: Collection -> DBT IO ()
 addCollection = insert @Collection
 
@@ -243,11 +281,13 @@ updateCollectionConfig cid config = do
         [sql| UPDATE tests.collections SET config=? WHERE id=? |]
   execute Update q (config, cid)
 
+
 updateCollectionSteps :: CollectionId -> V.Vector CollectionStepData -> DBT IO Int64
 updateCollectionSteps cid steps = do
   let q =
         [sql| UPDATE tests.collections SET collection_steps=? WHERE id=? |]
   execute Update q (CollectionSteps steps, cid)
+
 
 updateSchedule :: CollectionId -> Maybe Text -> Bool -> DBT IO Int64
 updateSchedule cid schedule isScheduled = do

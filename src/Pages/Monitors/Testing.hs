@@ -10,7 +10,6 @@ where
 import Data.Aeson (
   FromJSON,
   KeyValue ((.=)),
-  ToJSON,
   Value,
   decode,
   encode,
@@ -20,13 +19,10 @@ import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
 import Data.Text qualified as T
 import Data.Time (getCurrentTime, getZonedTime)
-import Data.Time.LocalTime (ZonedTime)
-import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
--- import Foreign.C.String (withCString)
 import Lucid (
   Html,
   Term (term),
@@ -62,7 +58,6 @@ import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.NonMember (userNotMemeberPage)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
--- import RustInterop (run_testkit)
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
 import System.Config (AuthContext)
@@ -318,10 +313,8 @@ runTestCollectionH pid col_id = do
       pure ""
   pure ""
 
-
 -- callRunTestkit :: String -> IO ()
 -- callRunTestkit hsString = withCString hsString run_testkit
-
 
 -- runTestStepH :: Projects.ProjectId -> Testing.CollectionId -> Testing.CollectionStepId -> ATAuthCtx (Html ())
 -- runTestStepH pid col_id step_id = do

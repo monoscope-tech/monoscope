@@ -31,7 +31,6 @@ import Lucid (
   button_,
   class_,
   crossorigin_,
-  defer_,
   div_,
   form_,
   h3_,

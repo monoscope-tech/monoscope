@@ -20,8 +20,6 @@ server pid =
     , newCollectionPost = Testing.testingPostH pid
     , collectionGet = TestCollectionEditor.collectionGetH pid
     , collectionPut = Testing.testingPutH pid
-
     , collectionStepsUpdate = TestCollectionEditor.collectionStepsUpdateH pid
-  
-    -- , runTestCollection = Testing.runTestCollectionH pid
+    , collectionRunTests = TestCollectionEditor.collectionRunTestsH pid
     }

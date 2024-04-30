@@ -1264,6 +1264,8 @@ name = "rust-interop"
 version = "0.1.0"
 dependencies = [
  "hs-bindgen",
+ "serde",
+ "serde_json",
  "testkit",
  "tokio",
 ]
@@ -1678,6 +1680,8 @@ dependencies = [
 [[package]]
 name = "testkit"
 version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "80719abaace099cd2eecfdaba5b5a22c6565f165ae5bc69bac105abf837351b6"
 dependencies = [
  "anyhow",
  "chrono",

@@ -56,12 +56,4 @@ dev = scotty 8000 $ do
             }
     let collection = (def :: Testing.Collection){Testing.title = "Demo collection", Testing.description = "Description"}
     let pid = Projects.ProjectId UUID.nil
-    let stepD =
-          (def :: Testing.CollectionStepData)
-            { Testing.get = Just "/bla/bla"
-            }
-    let step =
-          (def :: Testing.CollectionStep)
-            { Testing.stepData = stepD
-            }
     html $ renderText $ bodyWrapper bwconf $ TestCollectionEditor.collectionPage pid collection
