@@ -26,7 +26,6 @@ module Models.Tests.Testing (
 where
 
 import Data.Aeson as Aeson
-import Deriving.Aeson qualified as DAE
 import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.Default.Instances ()
@@ -42,6 +41,7 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField
 import Database.PostgreSQL.Transact (DBT, executeMany)
+import Deriving.Aeson qualified as DAE
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
 import Relude hiding (get, put)
@@ -221,11 +221,11 @@ data StepRequest = StepRequest
   deriving stock (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] StepRequest
 
-data AssertResult = AssertResult 
+
+data AssertResult = AssertResult
   {}
   deriving stock (Show, Generic)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] AssertResult 
-
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] AssertResult
 
 
 data StepResult = StepResult

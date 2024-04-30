@@ -21,7 +21,6 @@ import Models.Apis.Reports qualified as ReportsM
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (notFound404)
-import Pages.IntegrationGuides  qualified as IntegrationGuides
 import Pages.Anomalies.Routes qualified as AnomaliesRoutes
 import Pages.Anomalies.Server qualified as AnomaliesRoutes
 import Pages.Api qualified as Api
@@ -31,7 +30,7 @@ import Pages.Dashboard qualified as Dashboard
 import Pages.Endpoints.Routes qualified as EndpointsRoutes
 import Pages.Endpoints.Server qualified as EndpointsRoutes
 import Pages.Fields.FieldDetails qualified as FieldDetails
-import Pages.Specification.GenerateSwagger qualified as GenerateSwagger
+import Pages.IntegrationGuides qualified as IntegrationGuides
 import Pages.LogExplorer.Routes qualified as LogExplorerRoutes
 import Pages.LogExplorer.Server qualified as LogExplorerRoutes
 import Pages.Monitors.Routes qualified as MonitorsRoutes
@@ -44,6 +43,7 @@ import Pages.RedactedFields qualified as RedactedFields
 import Pages.Reports qualified as Reports
 import Pages.Share qualified as Share
 import Pages.SlackInstall qualified as SlackInstall
+import Pages.Specification.GenerateSwagger qualified as GenerateSwagger
 import Pages.Specification.Routes qualified as SpecificationRoutes
 import Pages.Specification.Server qualified as SpecificationRoutes
 import Pages.Survey qualified as Survey

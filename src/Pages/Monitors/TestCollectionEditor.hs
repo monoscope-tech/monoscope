@@ -1,6 +1,7 @@
 module Pages.Monitors.TestCollectionEditor (collectionGetH, CollectionStepUpdateForm (..), collectionRunTestsH, collectionPage, collectionStepsUpdateH) where
 
 import Data.Aeson qualified as AE
+import Data.Aeson.Encode.Pretty
 import Data.Default (def)
 import Data.Either.Extra
 import Data.Map qualified as M
@@ -27,7 +28,6 @@ import RustInterop (run_testkit)
 import System.Config (AuthContext)
 import System.Types (ATAuthCtx)
 import Utils
-import Data.Aeson.Encode.Pretty
 
 
 data CollectionStepUpdateForm = CollectionStepUpdateForm
@@ -159,13 +159,13 @@ collectionPage pid col = do
 collectionStepResult_ :: Testing.StepResult -> Html ()
 collectionStepResult_ stepResult = div_ [role_ "tablist", class_ "tabs tabs-lifted"] do
   input_ [type_ "radio", name_ "step-result-tabs", role_ "tab", class_ "tab", Aria.label_ "Response Log", checked_]
-  div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"] $
-    toHtmlRaw $
-      textToHTML stepResult.stepLog
+  div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"]
+    $ toHtmlRaw
+    $ textToHTML stepResult.stepLog
 
   input_ [type_ "radio", name_ "step-result-tabs", role_ "tab", class_ "tab", Aria.label_ "Response Headers"]
-  div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6 "] $
-    table_ [class_ "table table-xs"] do
+  div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6 "]
+    $ table_ [class_ "table table-xs"] do
       thead_ [] do
         tr_ [] do
           th_ [] "Name"
@@ -176,9 +176,10 @@ collectionStepResult_ stepResult = div_ [role_ "tablist", class_ "tabs tabs-lift
 
   input_ [type_ "radio", name_ "step-result-tabs", role_ "tab", class_ "tab", Aria.label_ "Response Body"]
   div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"] do
-    pre_ [class_ "flex text-sm leading-snug w-full max-h-[50rem] overflow-y-scroll"] $ 
-      code_ [class_ "h-full hljs language-json atom-one-dark w-full rounded"] $ 
-        toHtmlRaw $ encodePretty stepResult.request.resp.json
+    pre_ [class_ "flex text-sm leading-snug w-full max-h-[50rem] overflow-y-scroll"]
+      $ code_ [class_ "h-full hljs language-json atom-one-dark w-full rounded"]
+      $ toHtmlRaw
+      $ encodePretty stepResult.request.resp.json
 
 
 textToHTML :: Text -> Text
