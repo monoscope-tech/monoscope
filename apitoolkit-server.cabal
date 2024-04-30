@@ -71,6 +71,7 @@ library
       Pages.IntegrationDemos.ExpressJs
       Pages.IntegrationDemos.Gin
       Pages.IntegrationDemos.Laravel
+      Pages.IntegrationDemos.Phoenix
       Pages.IntegrationDemos.Pyramid
       Pages.IntegrationGuides
       Pages.Log

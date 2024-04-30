@@ -35,6 +35,7 @@ import Pages.IntegrationDemos.DotNet
 import Pages.IntegrationDemos.ExpressJs
 import Pages.IntegrationDemos.Gin
 import Pages.IntegrationDemos.Laravel
+import Pages.IntegrationDemos.Phoenix
 import Pages.IntegrationDemos.Pyramid
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
@@ -85,6 +86,7 @@ integrationsPage pid sdk apiKey errReportM reqMonM = do
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=laravel"] "Laravel"
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=django"] "Django"
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=adonis"] "Adonis Js"
+            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=phoenix"] "Elixir Phoenix"
         button_
           [ class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium text-sm hover:bg-gray-100"
           , [__|on click go to the top of #requests-monitoring|]
@@ -108,6 +110,7 @@ integrationsPage pid sdk apiKey errReportM reqMonM = do
         "adonis" -> adonisGuide apiKey
         "laravel" -> laravelGuide apiKey
         "django" -> djangoGuide apiKey
+        "phoenix" -> phoenixGuide apiKey
         _ -> expressGuide apiKey
     script_
       [text|
@@ -122,4 +125,5 @@ getTitle "dotnet" = ".NET"
 getTitle "adonis" = "Adonis Js"
 getTitle "laravel" = "Laravel"
 getTitle "django" = "Django"
+getTitle "phoenix" = "Elixir Phoenix"
 getTitle _ = "Express Js"
