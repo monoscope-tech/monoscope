@@ -33,6 +33,7 @@ import Pages.IntegrationDemos.AdonisJS
 import Pages.IntegrationDemos.Django
 import Pages.IntegrationDemos.DotNet
 import Pages.IntegrationDemos.ExpressJs
+import Pages.IntegrationDemos.Flask
 import Pages.IntegrationDemos.Gin
 import Pages.IntegrationDemos.Laravel
 import Pages.IntegrationDemos.Phoenix
@@ -86,6 +87,7 @@ integrationsPage pid sdk apiKey errReportM reqMonM = do
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=laravel"] "Laravel"
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=django"] "Django"
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=adonis"] "Adonis Js"
+            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=flask"] "Flask"
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=phoenix"] "Elixir Phoenix"
         button_
           [ class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium text-sm hover:bg-gray-100"
@@ -111,6 +113,7 @@ integrationsPage pid sdk apiKey errReportM reqMonM = do
         "laravel" -> laravelGuide apiKey
         "django" -> djangoGuide apiKey
         "phoenix" -> phoenixGuide apiKey
+        "flask" -> flaskGuide apiKey
         _ -> expressGuide apiKey
     script_
       [text|
@@ -126,4 +129,5 @@ getTitle "adonis" = "Adonis Js"
 getTitle "laravel" = "Laravel"
 getTitle "django" = "Django"
 getTitle "phoenix" = "Elixir Phoenix"
+getTitle "flask" = "Flask"
 getTitle _ = "Express Js"

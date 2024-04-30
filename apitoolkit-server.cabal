@@ -69,6 +69,7 @@ library
       Pages.IntegrationDemos.Django
       Pages.IntegrationDemos.DotNet
       Pages.IntegrationDemos.ExpressJs
+      Pages.IntegrationDemos.Flask
       Pages.IntegrationDemos.Gin
       Pages.IntegrationDemos.Laravel
       Pages.IntegrationDemos.Phoenix

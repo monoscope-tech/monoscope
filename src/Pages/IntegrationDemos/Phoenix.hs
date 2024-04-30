@@ -99,4 +99,3 @@ config: %{
   service_version: "1.0.0" # current version of the service
 }
 |]
-
