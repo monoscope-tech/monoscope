@@ -1,11 +1,10 @@
 module Pages.IntegrationDemos.Echo (echoGuide) where
 
 import Data.Text
-import Data.Text qualified as T
 import Lucid
+import NeatInterpolation
 import Pkg.Components
 import Relude
-
 
 echoGuide :: Text -> Html ()
 echoGuide apikey = do
@@ -36,7 +35,6 @@ echoGuide apikey = do
       h3_ [class_ "text-2xl font-semibold"] "Outgoing Request Monitoring"
       p_ [class_ "text-gray-600 max-w-5xl"] "APIToolkit also allows you to monitor your outgoing request (i.e the api calls your make from your server). Monitored outgoing are also associated with the incoming request that triggered them, you can also monitor request in a background job or outside request context. To monitor outgoing HTTP requests from your Go application, you can replace the default HTTP client transport with a custom APIToolkit roundtripper."
       codeExample $ outgoingRequest apikey
-
 
 initCode :: Text -> Text
 initCode apiKey =
@@ -73,7 +71,6 @@ func main() {
 
 |]
 
-
 configOptions :: Text
 configOptions =
   [text|
@@ -85,7 +82,6 @@ apitoolkitCfg := apitoolkit.Config{
     ServiceVersion: "1.0.0" // Your service's version
 }
 |]
-
 
 errorReportingCode :: Text -> Text
 errorReportingCode apiKey =
@@ -122,7 +118,6 @@ func hello(c echo.Context) error {
 }
 
 |]
-
 
 outgoingRequest :: Text -> Text
 outgoingRequest apiKey =
