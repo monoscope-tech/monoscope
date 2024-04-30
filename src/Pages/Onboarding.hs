@@ -195,7 +195,7 @@ hljs.highlightAll();
 
 completedBanner :: Projectjs.ProjectId -> Html ()
 completedBanner pid =
-  div_ [class_ "w-[800px] bg-slate-200 mx-auto rounded-lg border-8 border-white shadow-lg mb-10"] do
+  div_ [class_ "w-[1000px] bg-slate-200 mx-auto rounded-lg border-8 border-white shadow mb-10"] do
     div_ [class_ "w-full px-8 py-12 bg-slate-100  rounded"] do
       div_ [class_ "flex w-full justify-center gap-4 items-center mb-2"] do
         span_ [class_ "text-blue-500 pr-4 border-r border-r-2 border-r-blue-500 text-2xl"] "Done"

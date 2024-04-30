@@ -31,7 +31,7 @@ import Data.Aeson (FromJSON, ToJSON)
 import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.Default.Instances ()
-import Data.Time (UTCTime)
+import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), query, queryOne)
@@ -256,6 +256,8 @@ data SwEndpoint = SwEndpoint
 data HostEvents = HostEvents
   { host :: Text
   , eventCount :: Integer
+  , first_seen :: Maybe ZonedTime
+  , last_seen :: Maybe ZonedTime
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (ToRow, FromRow, NFData)
@@ -304,24 +306,43 @@ getProjectHosts pid = query Select q (Only pid)
     q = [sql| SELECT DISTINCT host FROM apis.endpoints where  project_id = ? AND outgoing=false AND host!= '' |]
 
 
-dependenciesAndEventsCount :: Projects.ProjectId -> DBT IO (Vector HostEvents)
-dependenciesAndEventsCount pid = query Select q (pid, pid)
+dependenciesAndEventsCount :: Projects.ProjectId -> Text -> DBT IO (Vector HostEvents)
+dependenciesAndEventsCount pid sortT = query Select (Query $ encodeUtf8 q) (pid, pid, pid, pid)
   where
+    orderBy = case sortT of
+      "first_seen" -> "first_seen ASC;"
+      "last_seen" -> "last_seen DESC;"
+      _ -> "eventsCount DESC;"
+
     q =
-      [sql|SELECT DISTINCT ep.host, 
-                  (SELECT COUNT(*) 
-                   FROM apis.request_dumps rd 
-                   WHERE 
-                     rd.project_id =?
-                     AND rd.host = ep.host 
-                     AND rd.request_type = 'Outgoing' 
-                     AND rd.created_at > NOW() - interval '14' day
-                  ) AS eventsCount
-           FROM apis.endpoints ep
-           WHERE ep.project_id = ? 
-             AND ep.host != '' 
-             AND ep.outgoing = true
-           ORDER BY eventsCount DESC;
+      [text|
+SELECT DISTINCT ep.host,
+       (SELECT COUNT(*)
+        FROM apis.request_dumps rd
+        WHERE rd.project_id = ?
+          AND rd.created_at > NOW() - interval '14' day
+          AND rd.host = ep.host
+          AND rd.request_type = 'Outgoing'
+       ) AS eventsCount,
+       (SELECT MAX(rd.created_at)
+        FROM apis.request_dumps rd
+        WHERE rd.project_id = ?
+          AND rd.created_at > NOW() - interval '14' day
+          AND rd.host = ep.host
+          AND rd.request_type = 'Outgoing'
+       ) AS last_seen,
+       (SELECT MIN(rd.created_at)
+        FROM apis.request_dumps rd
+        WHERE rd.project_id = ?
+          AND rd.created_at > NOW() - interval '14' day
+          AND rd.host = ep.host
+          AND rd.request_type = 'Outgoing'
+       ) AS first_seen
+FROM apis.endpoints ep
+WHERE ep.project_id = ?
+  AND ep.host != ''
+  AND ep.outgoing = true
+ORDER BY $orderBy
       |]
 
 

@@ -32,41 +32,7 @@ import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
-import Lucid (
-  Html,
-  Term (term),
-  ToHtml (toHtml),
-  a_,
-  button_,
-  checked_,
-  class_,
-  div_,
-  form_,
-  h1_,
-  h3_,
-  h4_,
-  h5_,
-  h6_,
-  href_,
-  id_,
-  img_,
-  input_,
-  li_,
-  name_,
-  p_,
-  role_,
-  script_,
-  section_,
-  small_,
-  span_,
-  src_,
-  strong_,
-  style_,
-  tabindex_,
-  type_,
-  ul_,
-  value_,
- )
+import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx (
   hxBoost_,
@@ -368,8 +334,14 @@ anomalyList paramInput pid currTime anomalies nextFetchUrl = form_ [class_ "col-
       div_ [class_ "p-12 fixed rounded-lg shadow bg-white top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 htmx-indicator query-indicator", id_ "sortLoader"] do
         loader
 
-  when (null anomalies) $ div_ [class_ "flex text-center justify-center items-center h-32"] do
-    strong_ "No anomalies yet"
+  when (null anomalies) $ section_ [class_ "mx-auto w-max p-5 sm:py-10 sm:px-16 items-center flex my-10 gap-16"] do
+    div_ [] do
+      faIcon_ "fa fa-solid fa-empty-set" "fa-solid fa-empty-set" "h-24 w-24"
+    div_ [class_ "flex flex-col gap-2"] do
+      h2_ [class_ "text-2xl font-bold"] "No Anomalies Or Errors."
+      p_ "Start monitoring errors that happened during a request"
+      a_ [href_ $ "/p/" <> pid.toText <> "/integration_guides#errors-monitoring", class_ "w-max btn btn-indigo -ml-1 text-md"] "Error reporting guide"
+
   mapM_ (renderAnomaly False currTime) anomalies
   case nextFetchUrl of
     Just url ->

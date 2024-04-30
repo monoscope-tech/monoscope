@@ -18,7 +18,6 @@
   .card-round {
     @apply bg-white border border-slate-200 rounded-xl shadow-md  shadow-slate-200;
   }
-
 }
 
 :root,
@@ -127,18 +126,29 @@
 .htmx-request.htmx-indicator ~ span {
   display: none;
 }
+@font-face {
+  font-family: "Bakemono";
+  src: url("/assets/deps/bakemono/Bakemono-Variable.woff2")
+      format("woff2-variations"),
+    url("/assets/deps/bakemono/Bakemono-Variable.woff")
+      format("woff-variations"),
+    url("/assets/deps/bakemono/Bakemono-Variable.ttf")
+      format("ttf-variations");
+}
+
 @layer components {
   :root {
-    font-family: "Inter", sans-serif;
+    font-family: "Bakemono", sans-serif;
   }
+
   @supports (font-variation-settings: normal) {
     :root {
-      font-family: "Inter var", sans-serif;
+      font-family: "Bakemono", sans-serif;
     }
   }
   html {
     font-size: 14px;
-    font-family: "Inter", sans-serif;
+    font-family: "Bakemono", sans-serif;
     /* font-family: 'Poppins', sans-serif; */
     /* font-family: 'Roboto', sans-serif; */
     --white: 255 255 255;
@@ -147,8 +157,21 @@
     font-family: "Inconsolata", monospace;
     font-size: 14px;
   }
+
+  h1 {
+    font-variation-settings: "wght" 700, "MONO" 500;
+  }
+  h2 {
+    font-variation-settings: "wght" 600, "MONO" 500;
+  }
+  h3,
+  h4,
+  h5 {
+    font-variation-settings: "wght" 500, "MONO" 500;
+  }
   .monospace {
-    font-family: "Inconsolata", monospace;
+    font-family: "Bakemono", monospace;
+    font-variation-settings: "MONO" 1000;
   }
 
   /* From icomoon app*/
@@ -297,14 +320,13 @@
   padding-left: 0;
 }
 
-
 .sdk_tab {
- @apply h-36 border rounded w-full p-4
+  @apply h-36 border rounded w-full p-4;
 }
 .sdk_tab_active {
-  @apply border-blue-500 border ring ring-blue-500 shadow-lg
+  @apply border-blue-500 border ring ring-blue-500 shadow-lg;
 }
 
 .tab:is(input[type="radio"]) {
-    width: max-content;
+  width: max-content;
 }

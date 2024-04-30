@@ -321,7 +321,7 @@ projectsDropDown currProject projects = do
             span_ "Manage members"
           a_ [href_ [text| /p/$pidTxt/apis|], class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100"] do
             faSprite_ "key" "regular" "h-5 w-5"
-            span_ "API KEY"  
+            span_ "API Keys"
           if currProject.paymentPlan == "UsageBased"
             then do
               a_ [class_ "p-3 flex gap-3 flex gap-3 items-center rounded hover:bg-gray-100 cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]] do
@@ -366,7 +366,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = do
           ]
         img_
           [ class_ "h-12 w-10 hidden sd-show"
-          , src_ "/assets/svgs/logo_mini.svg"
+          , src_ "/assets/logo-mini.png"
           ]
     div_ [class_ "py-4 px-4 transition-all  duration-1000 ease-in-out", id_ "side-nav-ctx-btn"] do
       a_
