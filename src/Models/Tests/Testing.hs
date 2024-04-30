@@ -3,6 +3,8 @@
 module Models.Tests.Testing (
   Collection (..),
   StepResult (..),
+  StepRequest (..),
+  StepResponse (..),
   CollectionId (..),
   CollectionListItem (..),
   CollectionStepId (..),

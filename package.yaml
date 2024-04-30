@@ -102,6 +102,7 @@ library:
     - cookie
     - safe-exceptions
     - safe
+    - aeson-pretty
     - cryptonite
     - data-default
     - deriving-aeson

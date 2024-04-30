@@ -23,6 +23,6 @@ data Routes' mode = Routes'
   , fieldDetailsPartial :: mode :- "fields" :> Capture "field_id" Fields.FieldId :> Get '[HTML] (Html ())
   , endpointDetailsWithHash :: mode :- "log_explorer" :> "endpoint" :> Capture "endpoint_hash" Text :> Get '[HTML] (Headers '[HXRedirect] (Html ()))
   , endpointDetails :: mode :- "endpoints" :> Capture "endpoints_id" Endpoints.EndpointId :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "subpage" :> QPT "shape" :> Get '[HTML] (Html ())
-  , outgoingGet :: mode :- "outgoing" :> Get '[HTML] (Html ())
+  , outgoingGet :: mode :- "outgoing"  :> QPT "sort" :> Get '[HTML] (Html ())
   }
   deriving stock (Generic)

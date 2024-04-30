@@ -267,6 +267,14 @@ j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
               });
               return false;
             }
+
+
+      document.body.addEventListener('htmx:afterSwap', function (event) {
+        window.requestAnimationFrame(() => {
+          hljs.highlightAll();
+        });
+      });
+
           |]
       script_
         [type_ "text/hyperscript"]

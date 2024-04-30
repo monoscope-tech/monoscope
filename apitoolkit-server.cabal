@@ -168,6 +168,7 @@ library
     , PyF
     , Unique
     , aeson
+    , aeson-pretty
     , aeson-qq
     , async
     , base

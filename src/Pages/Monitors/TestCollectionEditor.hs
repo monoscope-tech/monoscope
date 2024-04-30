@@ -2,6 +2,9 @@ module Pages.Monitors.TestCollectionEditor (collectionGetH, CollectionStepUpdate
 
 import Data.Aeson qualified as AE
 import Data.Default (def)
+import Data.Either.Extra
+import Data.Map qualified as M
+import Data.Text qualified as T
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
@@ -23,8 +26,8 @@ import Relude.Unsafe qualified as Unsafe
 import RustInterop (run_testkit)
 import System.Config (AuthContext)
 import System.Types (ATAuthCtx)
-import Data.Either.Extra
 import Utils
+import Data.Aeson.Encode.Pretty
 
 
 data CollectionStepUpdateForm = CollectionStepUpdateForm
@@ -52,15 +55,16 @@ collectionRunTestsH :: Projects.ProjectId -> Testing.CollectionId -> Maybe Int -
 collectionRunTestsH pid colId runIdxM stepsForm = do
   traceShowM stepsForm
   tkResp <- liftIO $ callRunTestkit $ decodeUtf8 $ AE.encode $ stepsForm.stepsData
-  let stepResult = fromRight' $ AE.eitherDecodeStrictText (toText tkResp) :: V.Vector Testing.StepResult
+  let stepResults = fromRight' $ AE.eitherDecodeStrictText (toText tkResp) :: V.Vector Testing.StepResult
   traceShowM "RESP RS"
   traceShowM tkResp
-  traceShowM stepResult
-  pure $ script_ [] [fmt|
-    window.collectionResults = {tkResp}
-
-    window.renderCollection()
-    |] 
+  traceShowM stepResults
+  pure $ do
+    script_
+      []
+      [fmt|window.collectionResults = {tkResp}
+    window.renderCollection()|]
+    V.forM_ stepResults collectionStepResult_
 
 
 collectionGetH :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (Html ())
@@ -116,6 +120,8 @@ collectionPage pid col = do
                 , hxParams_ "stepsData"
                 , hxExt_ "json-enc"
                 , hxVals_ "js:{stepsData: window.collectionSteps}"
+                , hxTarget_ "#step-results-parent"
+                , hxSwap_ "innerHTML"
                 ]
                 do
                   span_ "Run all" >> faSprite_ "play" "solid" "w-3 h-3"
@@ -143,9 +149,40 @@ collectionPage pid col = do
                   faSprite_ "plus" "sharp-regular" "w-4 h-4"
                   span_ "Add Another Step"
         div_ [class_ "col-span-1 h-full border-r border-gray-200"] do
+          div_ [class_ "max-h-full overflow-y-scroll", id_ "step-results-parent"] ""
+
           div_ [class_ "flex flex-col justify-center items-center h-full text-slate-400 text-xl space-y-4"] do
             div_ [] $ Utils.faIcon_ "fa-objects-column" "fa-objects-column fa-solid" "w-16 h-16"
             p_ [class_ "text-slate-500"] "Run a test to view the results here. "
+
+
+collectionStepResult_ :: Testing.StepResult -> Html ()
+collectionStepResult_ stepResult = div_ [role_ "tablist", class_ "tabs tabs-lifted"] do
+  input_ [type_ "radio", name_ "step-result-tabs", role_ "tab", class_ "tab", Aria.label_ "Response Log", checked_]
+  div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"] $
+    toHtmlRaw $
+      textToHTML stepResult.stepLog
+
+  input_ [type_ "radio", name_ "step-result-tabs", role_ "tab", class_ "tab", Aria.label_ "Response Headers"]
+  div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6 "] $
+    table_ [class_ "table table-xs"] do
+      thead_ [] do
+        tr_ [] do
+          th_ [] "Name"
+          th_ [] "Value"
+      tbody_ $ forM_ (M.toList stepResult.request.resp.headers) $ \(k, v) -> tr_ [] do
+        td_ [] $ toHtml k
+        td_ [] $ toHtml $ T.intercalate "," v
+
+  input_ [type_ "radio", name_ "step-result-tabs", role_ "tab", class_ "tab", Aria.label_ "Response Body"]
+  div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"] do
+    pre_ [class_ "flex text-sm leading-snug w-full max-h-[50rem] overflow-y-scroll"] $ 
+      code_ [class_ "h-full hljs language-json atom-one-dark w-full rounded"] $ 
+        toHtmlRaw $ encodePretty stepResult.request.resp.json
+
+
+textToHTML :: Text -> Text
+textToHTML txt = T.intercalate (toText "<br>") (T.split (== '\n') txt)
 
 
 collectionStep_ :: Html ()
@@ -201,8 +238,8 @@ collectionStep_ = do
           select_ [class_ "peer select select-sm select-bordered", termRaw "data-chosen" "json", onchange_ "this.dataset.chosen = this.value;"] do
             option_ [selected_ "selected"] "json"
             option_ [] "raw"
-          div_ [class_ "hidden peer-data-[chosen=json]:block"] $ textarea_ [class_ "w-full", name_ "[${idx}][json]"] "${stepData.json}"
-          div_ [class_ "hidden peer-data-[chosen=raw]:block"] $ textarea_ [class_ "w-full", name_ "[${idx}][raw]"] $ "${stepData.raw}"
+          div_ [class_ "hidden peer-data-[chosen=json]:block"] $ textarea_ [class_ "w-full border border-slate-200", name_ "[${idx}][json]"] "${stepData.json}"
+          div_ [class_ "hidden peer-data-[chosen=raw]:block"] $ textarea_ [class_ "w-full border border-slate-200", name_ "[${idx}][raw]"] $ "${stepData.raw}"
 
       div_ [class_ ""] do
         h5_ [class_ "label-text p-1 mb-2"] "Assertions"

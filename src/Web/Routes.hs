@@ -21,6 +21,7 @@ import Models.Apis.Reports qualified as ReportsM
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (notFound404)
+import Pages.IntegrationGuides  qualified as IntegrationGuides
 import Pages.Anomalies.Routes qualified as AnomaliesRoutes
 import Pages.Anomalies.Server qualified as AnomaliesRoutes
 import Pages.Api qualified as Api
@@ -30,10 +31,6 @@ import Pages.Dashboard qualified as Dashboard
 import Pages.Endpoints.Routes qualified as EndpointsRoutes
 import Pages.Endpoints.Server qualified as EndpointsRoutes
 import Pages.Fields.FieldDetails qualified as FieldDetails
-import Pages.GenerateSwagger qualified as GenerateSwagger
-import Pages.Log qualified as Log
-import Pages.LogExplorer.LogItem qualified as LogItem
-import Pages.Specification.GenerateSwagger qualified as GenerateSwagger
 import Pages.Specification.GenerateSwagger qualified as GenerateSwagger
 import Pages.LogExplorer.Routes qualified as LogExplorerRoutes
 import Pages.LogExplorer.Server qualified as LogExplorerRoutes
@@ -47,7 +44,6 @@ import Pages.RedactedFields qualified as RedactedFields
 import Pages.Reports qualified as Reports
 import Pages.Share qualified as Share
 import Pages.SlackInstall qualified as SlackInstall
-import Pages.Specification.GenerateSwagger qualified as GenerateSwagger
 import Pages.Specification.Routes qualified as SpecificationRoutes
 import Pages.Specification.Server qualified as SpecificationRoutes
 import Pages.Survey qualified as Survey
@@ -147,7 +143,6 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , reportsSingleGet :: mode :- "p" :> ProjectId :> "reports" :> Capture "report_id" ReportsM.ReportId :> Get '[HTML] (Html ())
   , reportsPost :: mode :- "p" :> ProjectId :> "reports_notif" :> Capture "report_type" Text :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
   , shareLinkPost :: mode :- "p" :> ProjectId :> "share" :> ReqBody '[FormUrlEncoded] Share.ReqForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-  , outgoingGet :: mode :- "p" :> ProjectId :> "outgoing" :> QPT "sort" :> Get '[HTML] (Html ())
   , queryBuilderAutocomplete :: mode :- "p" :> ProjectId :> "query_builder" :> "autocomplete" :> QPT "category" :> QPT "prefix" :> Get '[JSON] AE.Value
   , swaggerGenerateGet :: mode :- "p" :> ProjectId :> "generate_swagger" :> Get '[JSON] AE.Value
   , chartsGet :: mode :- "charts_html" :> QP "chart_type" Charts.ChartType :> QPT "query_raw" :> QueryParam "pid" Projects.ProjectId :> QP "group_by" Charts.GroupBy :> QP "query_by" [Charts.QueryBy] :> QP "num_slots" Int :> QP "limit" Int :> QP "theme" Text :> QPT "id" :> QP "show_legend" Bool :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (Html ())
