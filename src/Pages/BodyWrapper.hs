@@ -13,32 +13,35 @@ import NeatInterpolation (text)
 import Relude
 import Utils (faIcon_, faSprite_)
 
+
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu pid =
-  [ ("Get started", "/p/" <> pid.toText <> "/onboarding", "list-check"),
-    ("Dashboard", "/p/" <> pid.toText <> "/", "qrcode"),
-    ("Endpoints", "/p/" <> pid.toText <> "/endpoints", "swap"),
-    ("Outbound Integrations", "/p/" <> pid.toText <> "/outgoing", "arrows-turn-right"),
-    ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies?ackd=false&archived=false", "bug"),
-    ("API Log Explorer", "/p/" <> pid.toText <> "/log_explorer", "list-tree"),
-    -- , ("Redacted Fields", "/p/" <> pid.toText <> "/redacted_fields", "#redacted")
-    ("Documentation", "/p/" <> pid.toText <> "/documentation", "brackets-curly"),
-    ("Reports", "/p/" <> pid.toText <> "/reports", "chart-simple")
+  [ ("Get started", "/p/" <> pid.toText <> "/onboarding", "list-check")
+  , ("Dashboard", "/p/" <> pid.toText <> "/", "qrcode")
+  , ("Endpoints", "/p/" <> pid.toText <> "/endpoints", "swap")
+  , ("Outbound Integrations", "/p/" <> pid.toText <> "/outgoing", "arrows-turn-right")
+  , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies?ackd=false&archived=false", "bug")
+  , ("API Log Explorer", "/p/" <> pid.toText <> "/log_explorer", "list-tree")
+  , -- , ("Redacted Fields", "/p/" <> pid.toText <> "/redacted_fields", "#redacted")
+    ("Documentation", "/p/" <> pid.toText <> "/documentation", "brackets-curly")
+  , ("Reports", "/p/" <> pid.toText <> "/reports", "chart-simple")
   ]
+
 
 -- TODO: Rename to pageCtx
 data BWConfig = BWConfig
-  { sessM :: Maybe Sessions.PersistentSession,
-    currProject :: Maybe Projects.Project,
-    pageTitle :: Text,
-    menuItem :: Maybe Text, -- Use PageTitle if menuItem is not set
-    hasIntegrated :: Maybe Bool
+  { sessM :: Maybe Sessions.PersistentSession
+  , currProject :: Maybe Projects.Project
+  , pageTitle :: Text
+  , menuItem :: Maybe Text -- Use PageTitle if menuItem is not set
+  , hasIntegrated :: Maybe Bool
   }
   deriving stock (Show, Generic)
   deriving anyclass (Default)
 
+
 bodyWrapper :: BWConfig -> Html () -> Html ()
-bodyWrapper BWConfig {sessM, currProject, pageTitle, menuItem, hasIntegrated} child = do
+bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} child = do
   doctypehtml_ do
     head_ do
       title_ $ toHtml pageTitle
@@ -198,14 +201,14 @@ j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
 
     body_ [class_ "text-gray-900 h-full w-full bg-white fixed", term "data-theme" "winter", term "hx-ext" "multi-swap,preload"] do
       div_
-        [ style_ "z-index:99999",
-          class_ "fixed pt-24 sm:hidden justify-center z-50 w-full p-4 bg-gray-50 overflow-y-auto inset-0 h-full max-h-full",
-          tabindex_ "-1"
+        [ style_ "z-index:99999"
+        , class_ "fixed pt-24 sm:hidden justify-center z-50 w-full p-4 bg-gray-50 overflow-y-auto inset-0 h-full max-h-full"
+        , tabindex_ "-1"
         ]
         do
           div_
-            [ class_ "relative mx-auto max-h-full",
-              style_ "width: min(90vw, 500px)"
+            [ class_ "relative mx-auto max-h-full"
+            , style_ "width: min(90vw, 500px)"
             ]
             do
               -- Modal content
@@ -280,13 +283,14 @@ j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
 
         |]
 
+
 projectsDropDown :: Projects.Project -> Vector.Vector Projects.Project -> Html ()
 projectsDropDown currProject projects = do
   let pidTxt = currProject.id.toText
   div_
-    [ term "data-menu" "true",
-      class_ "hidden origin-top-right z-40 transition transform bg-white p-4 absolute w-[20rem] rounded-2xl shadow-2xl shadow-indigo-200",
-      [__|
+    [ term "data-menu" "true"
+    , class_ "hidden origin-top-right z-40 transition transform bg-white p-4 absolute w-[20rem] rounded-2xl shadow-2xl shadow-indigo-200"
+    , [__|
           on open
               remove .hidden
               add .ease-out .duration-100 .opacity-0 .scale-95
@@ -343,6 +347,7 @@ projectsDropDown currProject projects = do
                   span_ [class_ "inline-block"] $ toHtml project.title
                 when (currProject.id == project.id) $ faSprite_ "circle-check" "sharp-regular" "h-6 w-6 text-green-700"
 
+
 sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Maybe Text -> Maybe Bool -> Html ()
 sideNav sess project pageTitle menuItem hasIntegrated = do
   aside_ [class_ "shrink-0 top-0 border-r-2 bg-white border-gray-200 w-16 h-screen overflow-hidden transition-all duration-200 ease-in-out", id_ "side-nav-menu"] do
@@ -356,17 +361,17 @@ sideNav sess project pageTitle menuItem hasIntegrated = do
     div_ [class_ "text-center"] do
       a_ [href_ "/", class_ "inline-block px-2 py-2 flex items-center justify-center h-12"] do
         img_
-          [ class_ "w-40 mt-2 sd-hidden",
-            src_ "/assets/svgs/logo.svg"
+          [ class_ "w-40 mt-2 sd-hidden"
+          , src_ "/assets/svgs/logo.svg"
           ]
         img_
-          [ class_ "w-10 mt-2 hidden sd-show",
-            src_ "/assets/logo-mini.png"
+          [ class_ "w-10 mt-2 hidden sd-show"
+          , src_ "/assets/logo-mini.png"
           ]
     div_ [class_ "py-4 px-4 transition-all  duration-1000 ease-in-out", id_ "side-nav-ctx-btn"] do
       a_
-        [ class_ "flex flex-row bg-blue-50 hover:bg-blue-100 text-blue-900 block p-6 rounded-md cursor-pointer",
-          [__| 
+        [ class_ "flex flex-row bg-blue-50 hover:bg-blue-100 text-blue-900 block p-6 rounded-md cursor-pointer"
+        , [__| 
                 on click queue first
                     if I do not match .active
                         add .active
@@ -402,22 +407,23 @@ sideNav sess project pageTitle menuItem hasIntegrated = do
         -- let intG = fromMaybe True hasIntegrated
         -- let intGCls = if intG || (mTitle == "Get started" || mTitle == "API Keys") then " " else " cursor-not-allowed  "
         a_
-          [ href_ mUrl,
-            term "data-tippy-placement" "right",
-            term "data-tippy-content" mTitle,
-            class_ $ " block flex gap-3 px-5 py-3 flex no-wrap shrink-0 items-center border-l-4 hover:bg-blue-50" <> activeCls
+          [ href_ mUrl
+          , term "data-tippy-placement" "right"
+          , term "data-tippy-content" mTitle
+          , class_ $ " block flex gap-3 px-5 py-3 flex no-wrap shrink-0 items-center border-l-4 hover:bg-blue-50" <> activeCls
           ]
           do
             faSprite_ faIcon "regular" $ "w-5 h-5 shrink-0" <> if isActive then "text-blue-900 " else "text-slate-500 "
             span_ [class_ "sd-hidden "] $ toHtml mTitle
 
+
 navbar :: Users.User -> Html ()
 navbar currUser = do
   nav_ [id_ "main-navbar", class_ "sticky z-20 top-0 w-full px-6 py-2 border-b bg-white flex flex-row justify-between"] do
     a_
-      [ id_ "side_nav_toggler",
-        class_ "cursor-pointer flex items-center",
-        [__|
+      [ id_ "side_nav_toggler"
+      , class_ "cursor-pointer flex items-center"
+      , [__|
       on click 
         if (localStorage.getItem('close-sidemenu') != 'true') then  
           add .hidden-side-nav-menu to #side-nav-menu then 
@@ -435,8 +441,8 @@ navbar currUser = do
       a_ [class_ "inline-block border-r-2 p-2 pr-5"] do
         faSprite_ "bell" "regular" "w-5 h-5 text-gray-500"
       a_
-        [ class_ "cursor-pointer inline-block space-x-4 pl-4 relative ",
-          [__| 
+        [ class_ "cursor-pointer inline-block space-x-4 pl-4 relative "
+        , [__| 
             on click queue first
                 if I do not match .active
                     add .active
@@ -465,9 +471,9 @@ navbar currUser = do
 
       -- logout dropdown
       div_
-        [ term "drop-menu" "true",
-          class_ "hidden origin-top-left border border-gray-100 w-[10rem] rounded-lg shadow-2xl shadow-indigo-200 z-40 transition transform bg-white p-1 absolute top-14 right-5 ",
-          [__|
+        [ term "drop-menu" "true"
+        , class_ "hidden origin-top-left border border-gray-100 w-[10rem] rounded-lg shadow-2xl shadow-indigo-200 z-40 transition transform bg-white p-1 absolute top-14 right-5 "
+        , [__|
             on open
                 remove .hidden
                 add .ease-out .duration-100 .opacity-0 .scale-95

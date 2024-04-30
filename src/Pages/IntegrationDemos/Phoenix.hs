@@ -6,6 +6,7 @@ import NeatInterpolation
 import Pkg.Components
 import Relude
 
+
 phoenixGuide :: Text -> Html ()
 phoenixGuide apikey = do
   section_ [class_ "flex flex-col gap-10"] do
@@ -85,6 +86,7 @@ defmodule HelloWeb.PageController do
   end
 end
       |]
+
 
 configOptions :: Text
 configOptions =
