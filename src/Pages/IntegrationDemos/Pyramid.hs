@@ -6,7 +6,6 @@ import Lucid
 import Pkg.Components
 import Relude
 
-
 pyramidGuide :: Text -> Html ()
 pyramidGuide apikey = do
   section_ [class_ "flex flex-col gap-10"] do
@@ -24,7 +23,7 @@ pyramidGuide apikey = do
 
     div_ [class_ "w-full flex flex-col gap-2"] do
       h3_ [class_ "text-xl font-medium"] "Configuration Options"
-      p_ [class_ "text-gray-600 font-medium max-w-5xl"] "The SDK has accepts other options alongside apikey to allow you to customize the sdk. Redacting sensitive fields, debug mode etc"
+      p_ [class_ "text-gray-600 font-medium max-w-5xl"] "The SDK accepts other options alongside apikey to allow you to customize the sdk. Redacting sensitive fields, debug mode etc"
       codeExample configOptions
 
     div_ [class_ "w-full flex flex-col gap-2", id_ "errors-monitoring"] do
@@ -40,107 +39,103 @@ pyramidGuide apikey = do
         "from the apitoolkit_pyramid package and use it to observe reqeust like so..."
       codeExample $ outgoingRequest apikey
 
-
 initCode :: Text -> Text
 initCode apiKey =
   T.unlines
-    [ "from wsgiref.simple_server import make_server"
-    , "from pyramid.config import Configurator"
-    , "from pyramid.response import Response"
-    , "from pyramid.view import view_config"
-    , ""
-    , "@view_config("
-    , "    route_name='home'"
-    , ")"
-    , "def home(request):"
-    , "    return Response('Welcome!')"
-    , ""
-    , "if __name__ == '__main__':"
-    , "    setting = {\"APITOOLKIT_KEY\": \"" <> apiKey <> "\"}"
-    , "    with Configurator(settings=setting) as config:"
-    , "        # add aptoolkit tween"
-    , "        config.add_tween(\"apitoolkit_pyramid.APIToolkit\")"
-    , "        config.add_route('home', '/')"
-    , "        config.scan()"
-    , "        app = config.make_wsgi_app()"
-    , "    server = make_server('0.0.0.0', 6543, app)"
-    , "    server.serve_forever()"
+    [ "from wsgiref.simple_server import make_server",
+      "from pyramid.config import Configurator",
+      "from pyramid.response import Response",
+      "from pyramid.view import view_config",
+      "",
+      "@view_config(",
+      "    route_name='home'",
+      ")",
+      "def home(request):",
+      "    return Response('Welcome!')",
+      "",
+      "if __name__ == '__main__':",
+      "    setting = {\"APITOOLKIT_KEY\": \"" <> apiKey <> "\"}",
+      "    with Configurator(settings=setting) as config:",
+      "        # add aptoolkit tween",
+      "        config.add_tween(\"apitoolkit_pyramid.APIToolkit\")",
+      "        config.add_route('home', '/')",
+      "        config.scan()",
+      "        app = config.make_wsgi_app()",
+      "    server = make_server('0.0.0.0', 6543, app)",
+      "    server.serve_forever()"
     ]
-
 
 configOptions :: Text
 configOptions =
   T.unlines
-    [ "setting = {"
-    , "   # YOU API KEY"
-    , "   \"APITOOLKIT_KEY\": \"<YOUR_API_KEY>\","
-    , "   # List of request and response headers to redact"
-    , "   \"APITOOLKIT_REDACT_HEADERS\": [\"Authorization\"],"
-    , "   # List of field jsonpaths to redact in request body"
-    , "   \"APITOOLKIT_REDACT_REQ_BODY\":[\"$.user.password\", \"$.user.email\"],"
-    , "   # List of field jsonpaths to redact in response body"
-    , "   \"APITOOLKIT_REDACT_RES_BODY\":[\"$.profile.account_number\", \"$.profile.cvv\"],"
-    , "   # Your applications version"
-    , "   \"APITOOLKIT_SERVICE_VERSION\": \" 1.0.0 \","
-    , "   # Tags to help track different deployments"
-    , "   \"APITOOLKIT_TAGS\": [],"
-    , "   # Set to True to enable debug mode"
-    , "   \"APITOOLKIT_DEBUG\": False,"
-    , "   # When set, only route in whitelist are monitored"
-    , "   \"APITOOLKIT_ROUTES_WHITELIST\": [\"/user/{name}\"],"
-    , "   }"
+    [ "setting = {",
+      "   # YOU API KEY",
+      "   \"APITOOLKIT_KEY\": \"<YOUR_API_KEY>\",",
+      "   # List of request and response headers to redact",
+      "   \"APITOOLKIT_REDACT_HEADERS\": [\"Authorization\"],",
+      "   # List of field jsonpaths to redact in request body",
+      "   \"APITOOLKIT_REDACT_REQ_BODY\":[\"$.user.password\", \"$.user.email\"],",
+      "   # List of field jsonpaths to redact in response body",
+      "   \"APITOOLKIT_REDACT_RES_BODY\":[\"$.profile.account_number\", \"$.profile.cvv\"],",
+      "   # Your applications version",
+      "   \"APITOOLKIT_SERVICE_VERSION\": \" 1.0.0 \",",
+      "   # Tags to help track different deployments",
+      "   \"APITOOLKIT_TAGS\": [],",
+      "   # Set to True to enable debug mode",
+      "   \"APITOOLKIT_DEBUG\": False,",
+      "   # When set, only route in whitelist are monitored",
+      "   \"APITOOLKIT_ROUTES_WHITELIST\": [\"/user/{name}\"],",
+      "   }"
     ]
-
 
 errorReportingCode :: Text -> Text
 errorReportingCode apiKey =
   T.unlines
-    [ "from pyramid.response import Response"
-    , "from pyramid.view import view_config"
-    , "from apitoolkit_pyramid import observe_request, report_error"
-    , ""
-    , "@view_config(route_name='home')"
-    , "def home(request):"
-    , "  try:"
-    , "    val = 1/0"
-    , "    return Response(val)"
-    , "  except Exception as e:"
-    , "    # Report error to apitoolkit"
-    , "    report_error(request, e)"
-    , "    return Response(\"something went wrong\")"
-    , ""
-    , "if __name__ == '__main__':"
-    , "    setting = {\"APITOOLKIT_KEY\": \"" <> apiKey <> "\"}"
-    , "    with Configurator(settings=setting) as config:"
-    , "        config.add_tween(\"apitoolkit_pyramid.APIToolkit\")"
-    , "        config.add_route('home', '/user/{name}')"
-    , "        config.scan()"
-    , "        app = config.make_wsgi_app()"
-    , "    server = make_server('0.0.0.0', 6543, app)"
-    , "    server.serve_forever()"
+    [ "from pyramid.response import Response",
+      "from pyramid.view import view_config",
+      "from apitoolkit_pyramid import observe_request, report_error",
+      "",
+      "@view_config(route_name='home')",
+      "def home(request):",
+      "  try:",
+      "    val = 1/0",
+      "    return Response(val)",
+      "  except Exception as e:",
+      "    # Report error to apitoolkit",
+      "    report_error(request, e)",
+      "    return Response(\"something went wrong\")",
+      "",
+      "if __name__ == '__main__':",
+      "    setting = {\"APITOOLKIT_KEY\": \"" <> apiKey <> "\"}",
+      "    with Configurator(settings=setting) as config:",
+      "        config.add_tween(\"apitoolkit_pyramid.APIToolkit\")",
+      "        config.add_route('home', '/user/{name}')",
+      "        config.scan()",
+      "        app = config.make_wsgi_app()",
+      "    server = make_server('0.0.0.0', 6543, app)",
+      "    server.serve_forever()"
     ]
-
 
 outgoingRequest :: Text -> Text
 outgoingRequest apiKey =
   T.unlines
-    [ "from pyramid.response import Response"
-    , "from pyramid.view import view_config"
-    , "from apitoolkit_pyramid import observe_request"
-    , ""
-    , "@view_config(route_name='home')"
-    , "def home(request):"
-    , "    resp = observe_request(request).get("
-    , "        \"https://jsonplaceholder.typicode.com/todos/2\")"
-    , "    return Response(resp.read())"
-    , ""
-    , "if __name__ == '__main__':"
-    , "    setting = {\"APITOOLKIT_KEY\": \"" <> apiKey <> "\"}"
-    , "    with Configurator(settings=setting) as config:"
-    , "        config.add_tween(\"apitoolkit_pyramid.APIToolkit\")"
-    , "        config.add_route('home', '/user/{name}')"
-    , "        config.scan()"
-    , "        app = config.make_wsgi_app()"
-    , "    server = make_server('0.0.0.0', 6543, app)"
-    , "    server.serve_forever()"
+    [ "from pyramid.response import Response",
+      "from pyramid.view import view_config",
+      "from apitoolkit_pyramid import observe_request",
+      "",
+      "@view_config(route_name='home')",
+      "def home(request):",
+      "    resp = observe_request(request).get(",
+      "        \"https://jsonplaceholder.typicode.com/todos/2\")",
+      "    return Response(resp.read())",
+      "",
+      "if __name__ == '__main__':",
+      "    setting = {\"APITOOLKIT_KEY\": \"" <> apiKey <> "\"}",
+      "    with Configurator(settings=setting) as config:",
+      "        config.add_tween(\"apitoolkit_pyramid.APIToolkit\")",
+      "        config.add_route('home', '/user/{name}')",
+      "        config.scan()",
+      "        app = config.make_wsgi_app()",
+      "    server = make_server('0.0.0.0', 6543, app)",
+      "    server.serve_forever()"
     ]
