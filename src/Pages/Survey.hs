@@ -1,12 +1,12 @@
 module Pages.Survey (surveyGetH, surveyPutH, SurveyForm) where
 
-import Data.Aeson (
-  FromJSON,
-  KeyValue ((.=)),
-  ToJSON (toJSON),
-  encode,
-  object,
- )
+import Data.Aeson
+  ( FromJSON,
+    KeyValue ((.=)),
+    ToJSON (toJSON),
+    encode,
+    object,
+  )
 import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
 import Data.List ((!!))
@@ -30,28 +30,25 @@ import System.Types (ATAuthCtx)
 import Utils (userIsProjectMember)
 import Web.FormUrlEncoded (FromForm)
 
-
 data SurveyForm = SurveyForm
-  { stack :: [Text]
-  , functionality :: [Text]
-  , dataLocation :: Text
-  , foundUsFrom :: Text
-  , phoneNumber :: Maybe Text
-  , fullName :: Text
+  { stack :: [Text],
+    functionality :: [Text],
+    dataLocation :: Text,
+    foundUsFrom :: Text,
+    phoneNumber :: Maybe Text,
+    fullName :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm, FromJSON)
 
-
 instance ToJSON SurveyForm where
   toJSON surveyForm =
     object
-      [ "stack" .= filter (not . T.null) surveyForm.stack
-      , "functionality" .= filter (not . T.null) surveyForm.functionality
-      , "dataLocation" .= dataLocation surveyForm
-      , "foundUsFrom" .= foundUsFrom surveyForm
+      [ "stack" .= filter (not . T.null) surveyForm.stack,
+        "functionality" .= filter (not . T.null) surveyForm.functionality,
+        "dataLocation" .= dataLocation surveyForm,
+        "foundUsFrom" .= foundUsFrom surveyForm
       ]
-
 
 surveyPutH :: Projects.ProjectId -> SurveyForm -> ATAuthCtx (Headers '[HXTrigger, HXRedirect] (Html ()))
 surveyPutH pid survey = do
@@ -79,7 +76,6 @@ surveyPutH pid survey = do
           let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","successToast": ["Thanks for taking the survey!"]}|]
           pure $ addHeader hxTriggerData $ addHeader ("/p/" <> show pid.unProjectId <> "/onboarding") ""
 
-
 surveyGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
 surveyGetH pid = do
   sess' <- Sessions.getSession
@@ -93,22 +89,21 @@ surveyGetH pid = do
       project <- dbtToEff $ Projects.selectProjectForUser (Sessions.userId sess, pid)
       let bwconf =
             (def :: BWConfig)
-              { sessM = Just sess
-              , currProject = project
-              , pageTitle = "About Project"
+              { sessM = Just sess,
+                currProject = project,
+                pageTitle = "About Project"
               }
       let user = sess.user.getUser
       let full_name = user.firstName <> " " <> user.lastName
       let phoneNumber = fromMaybe "" user.phoneNumber
       pure $ bodyWrapper bwconf $ surveyPage pid full_name phoneNumber
 
-
 surveyPage :: Projects.ProjectId -> Text -> Text -> Html ()
 surveyPage pid full_name phoneNumber = do
   div_
-    [ style_ "z-index:26"
-    , class_ "fixed pt-16 justify-center z-50 w-full p-4 bg-white overflow-y-auto inset-0 h-full max-h-full text-lg"
-    , id_ "surveyDialog"
+    [ style_ "z-index:26",
+      class_ "fixed pt-16 justify-center z-50 w-full p-4 bg-white overflow-y-auto inset-0 h-full max-h-full text-lg",
+      id_ "surveyDialog"
     ]
     do
       div_ [class_ "relative mx-auto pb-24", style_ "width: min(90vw, 1000px)"] do
@@ -116,10 +111,10 @@ surveyPage pid full_name phoneNumber = do
         div_ [class_ "bg-white rounded-lg shadow w-full"] do
           div_ [class_ "flex items-start justify-between p-6 space-x-2 w-full  border-b rounded-t"] do
             form_
-              [ hxPost_ $ "/p/" <> pid.toText <> "/survey"
-              , hxSwap_ "none"
-              , class_ "w-full"
-              , hxIndicator_ "#proceedIndicator"
+              [ hxPost_ $ "/p/" <> pid.toText <> "/survey",
+                hxSwap_ "none",
+                class_ "w-full",
+                hxIndicator_ "#proceedIndicator"
               ]
               do
                 div_ [class_ "p-6 flex flex-col gap-8 overflow-y-auto w-full"] do
@@ -134,14 +129,14 @@ surveyPage pid full_name phoneNumber = do
                       "What API/Web frameworks do you plan to integrate?"
                       span_ [class_ "text-red-400"] " *"
                     div_ [id_ "stack", name_ "stack", required_ "required", class_ "px-2 py-2"] do
-                      div_ [class_ "grid grid-cols-5 gap-6 space-y-2"] $ forM_ stackOptions $ \(value, label, img) -> do
+                      div_ [class_ "grid grid-cols-6 gap-6 space-y-2"] $ forM_ stackOptions $ \(value, label, img) -> do
                         let bg = "url('/assets/framework-logos/" <> img <> "')"
                         label_
-                          [ class_ $ "cursor-pointer relative flex justify-center items-center column border rounded-lg text-[14px] bg-center p-2 bg-contain bg-no-repeat " <> bg
-                          , Lucid.for_ value
+                          [ class_ $ "cursor-pointer relative flex justify-center items-center column border rounded-lg text-[14px] bg-center p-2 bg-contain bg-no-repeat " <> bg,
+                            Lucid.for_ value
                           ]
                           do
-                            img_ [src_ $ "/assets/framework-logos/" <> img, class_ "max-h-[80px] my-auto w-full"]
+                            img_ [src_ $ "/assets/framework-logos/" <> img, class_ "max-h-[80px] my-auto"]
                             div_ [class_ "absolute z-10 left-0 top-0 block group p-2 hover:bg-slate-100"] do
                               input_ [class_ "mr-3", type_ "checkbox", id_ value, name_ "stack", value_ value]
                               span_ [class_ "hidden group-hover:inline"] $ toHtml label
@@ -183,68 +178,63 @@ surveyPage pid full_name phoneNumber = do
                     span_ [class_ "loading loading-dots loading-lg loading-indigo"] ""
                   button_ [type_ "sumbit", class_ "btn-md btn-indigo rounded-lg text-lg px-4 py-2"] "Proceed"
 
-
 stackOptions :: [(T.Text, T.Text, T.Text)]
 stackOptions =
-  [ ("expressjs", "JS - Express.js", "express-logo.png")
-  , ("nest", "JS - Nest.js", "nestjs-logo.png")
-  , ("next", "JS - Next.js", "nextjs-logo.webp")
-  , ("koa", "JS - Koa", "koa-logo.png")
-  , ("sailsjs", "JS - Sails.js", "sails-logo.png")
-  , ("adonisjs", "JS - Adonis.js", "adonis-logo.png")
-  , ("fastify", "JS - Fastify", "fastify-logo.png")
-  , ("django", "Python - Django", "django-logo.png")
-  , ("go-native", "Golang - Native", "go-logo.png")
-  , ("gorilla-mux", "Golang - Gorilla Mux", "mux-logo.png")
-  , ("gin", "Golang - Gin", "gin-logo.png")
-  , ("fiber", "Golang - Fiber", "fiber-logo.png")
-  , ("laravel", "PHP - Laravel", "laravel-logo.png")
-  , ("lumen", "PHP - Lumen", "lumen-logo.webp")
-  , ("symfony", "PHP - Symfony", "symfony-logo.png")
-  , ("cakePHP", "PHP - CakePHP", "cake-logo.jpg")
-  , ("codeigniter", "PHP - Codeigniter", "igniter-logo.png")
-  , ("flask", "Python - Flask", "flask-logo.png")
-  , ("fastapi", "Python - FastAPI", "fastapi-logo.png")
-  , ("springboot", "Java - Spring Boot", "spring-logo.png")
-  , ("rails", "Ruby - Ruby on Rails", "rails-logo.png")
-  , ("phoenix", "Elixir - Phoenix", "phoenix-logo.webp")
-  , (".net", "C# - ASP.NET", "net-logo.png")
-  , ("ihp-hs", "Haskell - IHP", "ihp-logo.svg")
-  , ("actix", "Rust - Actix", "actix-logo.png")
-  , ("rocket", "Rust - Rocket", "rocket-logo.webp")
-  , ("scala-play", "Scala - Play", "play-logo.png")
+  [ ("expressjs", "JS - Express.js", "express-logo.png"),
+    ("nest", "JS - Nest.js", "nestjs-logo.png"),
+    ("next", "JS - Next.js", "nextjs-logo.webp"),
+    ("koa", "JS - Koa", "koa-logo.png"),
+    ("sailsjs", "JS - Sails.js", "sails-logo.png"),
+    ("adonisjs", "JS - Adonis.js", "adonis-logo.png"),
+    ("fastify", "JS - Fastify", "fastify-logo.png"),
+    ("django", "Python - Django", "django-logo.png"),
+    ("pyramid", "Python - Pyramid", "pyramid-logo.png"),
+    ("go-native", "Golang - Native", "go-logo.png"),
+    ("gorilla-mux", "Golang - Gorilla Mux", "mux-logo.png"),
+    ("gin", "Golang - Gin", "gin-logo.png"),
+    ("fiber", "Golang - Fiber", "fiber-logo.png"),
+    ("laravel", "PHP - Laravel", "laravel-logo.png"),
+    ("lumen", "PHP - Lumen", "lumen-logo.webp"),
+    ("symfony", "PHP - Symfony", "symfony-logo.png"),
+    ("cakePHP", "PHP - CakePHP", "cake-logo.jpg"),
+    ("flask", "Python - Flask", "flask-logo.png"),
+    ("fastapi", "Python - FastAPI", "fastapi-logo.png"),
+    ("springboot", "Java - Spring Boot", "spring-logo.png"),
+    ("rails", "Ruby - Ruby on Rails", "rails-logo.png"),
+    ("phoenix", "Elixir - Phoenix", "phoenix-logo.png"),
+    (".net", "C# - ASP.NET", "net-logo.png"),
+    ("ihp-hs", "Haskell - IHP", "ihp-logo.svg"),
+    ("actix", "Rust - Actix", "actix-logo.png"),
+    ("rocket", "Rust - Rocket", "rocket-logo.webp"),
+    ("scala-play", "Scala - Play", "play-logo.png")
   ]
-
 
 functionalityOptions :: [(T.Text, T.Text)]
 functionalityOptions =
-  [ ("monitoring", "API Monitoring and Observability")
-  , ("error_tracking", "Error Tracking")
-  , ("log_explorer", "Log Explorer")
-  , ("documentation", "OpenAPI Spec Generation")
-  , ("anomaly_detection", "Anomaly Detection")
-  , ("testing", "API Testing")
+  [ ("monitoring", "API Monitoring and Observability"),
+    ("error_tracking", "Error Tracking"),
+    ("log_explorer", "Log Explorer"),
+    ("documentation", "OpenAPI Spec Generation"),
+    ("anomaly_detection", "Anomaly Detection"),
+    ("testing", "API Testing")
   ]
-
 
 dataLocationOptions :: [(T.Text, T.Text)]
 dataLocationOptions =
-  [ ("asia", "Asia")
-  , ("eu", "Europe (EU)")
-  , ("us", "United States (US)")
+  [ ("asia", "Asia"),
+    ("eu", "Europe (EU)"),
+    ("us", "United States (US)")
   ]
-
 
 foundUsFromOptions :: [(T.Text, T.Text)]
 foundUsFromOptions =
-  [ ("twitter", "X (Twitter)")
-  , ("google", "Google Search")
-  , ("linkedin", "LinkedIn")
-  , ("reddit", "Reddit")
-  , ("github", "GitHub")
-  , ("other", "Other")
+  [ ("twitter", "X (Twitter)"),
+    ("google", "Google Search"),
+    ("linkedin", "LinkedIn"),
+    ("reddit", "Reddit"),
+    ("github", "GitHub"),
+    ("other", "Other")
   ]
-
 
 progressSteps :: Html ()
 progressSteps = do
