@@ -76,6 +76,7 @@ library
       Pages.IntegrationDemos.Laravel
       Pages.IntegrationDemos.Phoenix
       Pages.IntegrationDemos.Pyramid
+      Pages.IntegrationDemos.Symfony
       Pages.IntegrationGuides
       Pages.Log
       Pages.LogExplorer.LogItem

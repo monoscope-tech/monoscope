@@ -39,6 +39,7 @@ import Pages.IntegrationDemos.Gin
 import Pages.IntegrationDemos.Laravel
 import Pages.IntegrationDemos.Phoenix
 import Pages.IntegrationDemos.Pyramid
+import Pages.IntegrationDemos.Symfony
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext)
@@ -91,6 +92,7 @@ integrationsPage pid sdk apiKey errReportM reqMonM = do
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=flask"] "Flask"
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=echo"] "Go Echo"
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=phoenix"] "Elixir Phoenix"
+            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=symfony"] "PHP Symfony"
         button_
           [ class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium text-sm hover:bg-gray-100"
           , [__|on click go to the top of #requests-monitoring|]
@@ -117,6 +119,7 @@ integrationsPage pid sdk apiKey errReportM reqMonM = do
         "phoenix" -> phoenixGuide apiKey
         "flask" -> flaskGuide apiKey
         "echo" -> echoGuide apiKey
+        "symfony" -> symfonyGuide apiKey
         _ -> expressGuide apiKey
     script_
       [text|
@@ -134,4 +137,5 @@ getTitle "django" = "Django"
 getTitle "phoenix" = "Elixir Phoenix"
 getTitle "flask" = "Flask"
 getTitle "echo" = "Go Echo"
+getTitle "symfony" = "PHP Symfony"
 getTitle _ = "Express Js"
