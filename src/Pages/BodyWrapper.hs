@@ -16,7 +16,7 @@ import Utils (faIcon_, faSprite_)
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu pid =
-  [ ("Get started", "/p/" <> pid.toText <> "/onboarding", "list-check")
+  [ ("Get Started", "/p/" <> pid.toText <> "/onboarding", "list-check")
   , ("Dashboard", "/p/" <> pid.toText <> "/", "qrcode")
   , ("Endpoints", "/p/" <> pid.toText <> "/endpoints", "swap")
   , ("Outbound Integrations", "/p/" <> pid.toText <> "/outgoing", "arrows-turn-right")
@@ -225,7 +225,7 @@ j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
                   -- Modal body
                   div_ [class_ "w-full"] do
                     div_ [class_ "p-6 text-xl space-y-6", style_ "height:50vh; width:100%"] do
-                      p_ [class_ ""] "Due to the heavy visualization usecases we're solving, apitoolkit is not supported on mobile, and can only be used from a desktop browser at the moment."
+                      p_ [class_ ""] "Due to the heavy visualization usecases we're solving, APItoolkit is not supported on mobile, and can only be used from a desktop browser at the moment."
                       p_ [class_ ""] "We're diligently working on expanding its availability to other platforms, and we'll keep you updated as we make progress. "
                       p_ [] "Don't hesitate to let us know if this is a very important feature for your team, then we can prioritize it"
                   -- Modal footer

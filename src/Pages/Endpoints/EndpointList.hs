@@ -198,7 +198,7 @@ endpointList' paramInput currTime pid enps inbox_count = form_ [class_ "col-span
       faIcon_ "fa fa-solid fa-empty-set" "fa-solid fa-empty-set" "h-24 w-24"
     div_ [class_ "flex flex-col gap-2"] do
       h2_ [class_ "text-2xl font-bold"] "Waiting for events..."
-      p_ "You're currently not sending any data to apitoolkit from your backends yet."
+      p_ "You're currently not sending any data to APItoolkit from your backends yet."
       a_ [href_ $ "/p/" <> pid.toText <> "/integration_guides", class_ "w-max btn btn-indigo -ml-1 text-md"] "Read the setup guide"
 
   when (null enps && inbox_count > 0) $ div_ [class_ "flex flex-col text-center justify-center items-center h-32"] $ do

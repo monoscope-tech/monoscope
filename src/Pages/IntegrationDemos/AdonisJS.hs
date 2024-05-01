@@ -16,7 +16,7 @@ adonisGuide apikey = do
       bashCommand "npm install apitoolkit-adonis"
 
     div_ [class_ "w-full flex flex-col gap-2"] do
-      p_ [class_ "text-gray-600 font-medium"] "Configure apitoolkit for your adonis project"
+      p_ [class_ "text-gray-600 font-medium"] "Configure APItoolkit for your adonis project"
       bashCommand "node ace configure apitoolkit-adonis"
 
     div_ [class_ "w-full flex flex-col gap-2"] do

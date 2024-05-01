@@ -50,7 +50,7 @@ onboardingGetH pid polling redirected current_tab = do
             (def :: BWConfig)
               { sessM = Just sess
               , currProject = project
-              , pageTitle = "Get started"
+              , pageTitle = "Get Started"
               , hasIntegrated = Just hasRequest
               }
       let ans = case project of
@@ -74,65 +74,48 @@ onboardingPage pid apikey hasRequest ans redi ctb = do
     ]
     $ do
       when redi $ div_ [class_ "w-full text-center py-2 bg-yellow-500"] "You have to integrate APItoolkit in your app before you can start using the platform"
-      div_ [class_ "flex flex-col h-full w-full gap-16"] $ do
-        div_ [class_ "text- center"] do
-          div_ [class_ "flex flex-col w-full mt-10 py-4 items-center gap-4"]
-            $ if hasRequest
-              then completedBanner pid
-              else div_ [class_ "w-[1000px] min-w-0"] $ integrateApiToolkit apikey ctb
+      div_ [class_ "flex flex-col h-full w-full gap-10"] $ do
         div_ [class_ "w-full flex justify-center"] $ do
-          div_ [class_ "flex flex-col w-[1000px] rounded-2xl border border-2"] $ do
+          div_ [class_ "flex flex-col w-[1000px] mt-4 rounded-2xl"] $ do
             div_ [class_ "w-full px-8 py-4 flex justify-between border-b border-b-2"] $ do
               h4_ [class_ "font-bold text-lg"] "Onboarding checklist"
               let p
                     | hasRequest = "100%"
                     | otherwise = "66%"
               span_ [class_ "text-slate-500"] $ p <> " completed"
-            ul_ [class_ "px-3 py-4"] do
-              li_ [class_ "flex items-center mx-4 py-4 border-b gap-6 text-green"] do
-                faSprite_ "circle-check" "sharp-regular" "h-6 w-6 text-green-700"
+            ul_ [class_ "grid grid-cols-3 items-start px-3 py-4"] do
+              li_ [class_ "flex h-full mx-4 py-4 gap-6 text-green"] do
+                faSprite_ "circle-check" "sharp-regular" "h-6 w-6 mt-2 text-green-700"
                 button_ [class_ "flex flex-col"] do
                   p_ [class_ "font-semibold"] "Create an account"
-                  span_ [class_ "text-slate-500"] "This is completed when you sign up"
-              li_ [class_ "flex flex-col items-center mx-4 py-4 border-b gap-6 text-green"] do
-                div_ [class_ "flex w-full items-center gap-6"] do
-                  faSprite_ "circle-check" "sharp-regular" "h-6 w-6 text-green-700"
+                  span_ [class_ "text-slate-500"] "This is completed when you sign up."
+              li_ [class_ "flex flex-col  mx-4 h-full py-4 gap-6 text-green"] do
+                div_ [class_ "flex w-full gap-6"] do
+                  faSprite_ "circle-check" "sharp-regular" "shrink-0 h-6 w-6 mt-2 text-green-700"
                   button_
                     [ class_ "flex justify-between text-left w-full items-center"
-                    , [__|on click toggle .hidden on #addAPIKey|]
                     ]
                     do
                       div_ [class_ "flex flex-col"] do
                         p_ [class_ "font-semibold"] "Generate an API key"
-                        span_ [class_ "text-slate-500"] "The API key is used to authenticate requests, Auto generated."
-                      faSprite_ "chevron-down" "regular-chevron-down" "h-6 w-6"
-                div_ [class_ "bg-slate-100 hidden w-full py-16 px-24", id_ "addAPIKey"] do
-                  p_ [class_ "text-green-500 text-center"] $ toHtml apikey
+                        span_ [class_ "text-slate-500"] "The API key is auto generated for you and will be used to authenticate reqeusts."
 
-              li_ [class_ "mx-4 py-4 border-b"] do
-                div_ [class_ "flex w-full items-center  gap-6"] do
+              li_ [class_ "mx-4 py-4 h-full"] do
+                div_ [class_ "flex w-full gap-6"] do
                   let style = if hasRequest then "text-green-700" else "text-gray-400 "
-                  faSprite_ "circle-check" "sharp-regular" $ "h-6 w-6 " <> style
+                  faSprite_ "circle-check" "sharp-regular" $ "shrink-0 h-6 mt-2 w-6 " <> style
                   button_ [class_ "flex justify-between text-left w-full items-center", [__|on click toggle .hidden on #SDKs|]] do
                     div_ [class_ "flex flex-col"] do
                       p_ [class_ "font-semibold"] "Integrate APItoolkit to your app"
-                      span_ [class_ "text-slate-500"] "Integrate apitoolkit using any of our SDKs to start sending request."
-                    faSprite_ "chevron-down" "regular-chevron-down" "h-6 w-6"
-                div_ [class_ "w-full bg-slate-100 mt-8", id_ "SDKs"] do
-                  if hasRequest
-                    then
-                      p_ [class_ "text-green-500 text-center py-16 text-center"]
-                        $ span_ "Apitoolkit has been integrated into your app"
-                    else div_ [class_ "font-medium text-lg text-center border-b border-slate-200 py-16 space-y-2"] $ do
-                      a_ [class_ "block link underline text-slate-900 underline-offset-4", href_ "https://apitoolkit.io/docs/quickstarts/", target_ "BLANK"] "View Integration Quickstarts &  documentation at our Knowledge base."
-                      span_ [class_ "block text-slate-900  space-x-2"] do
-                        span_ "Need more help?"
-                        a_ [class_ "link underline underline-offset-4", href_ "https://calendar.app.google/EvPzCoVsLh5gqkAo8", target_ "BLANK"] "Schedule a call with an Engineer."
-                      div_ [class_ " inline-block space-x-3 text-red-800 pt-5"] do
-                        faIcon_ "fa-spinner" "fa-sharp fa-light fa-spinner " "fa-spin h-6 w-6 inline-block "
-                        span_ "Waiting to recieve data from your server."
+                      span_ [class_ "text-slate-500"] "Integrate APItoolkit using any of our SDKs to start monitoring requests."
 
-        div_ [class_ "w-full flex justify-center pb-16 mt-16"] $ do
+        div_ [class_ "text- center"] do
+          div_ [class_ "flex flex-col w-full py-4 items-center gap-4"]
+            $ if hasRequest
+              then completedBanner pid
+              else div_ [class_ "w-[1000px] min-w-0"] $ integrateApiToolkit apikey ctb
+
+        div_ [class_ "w-full flex justify-center pb-16 mt-10"] $ do
           div_ [class_ "flex flex-col w-[1000px] rounded-2xl border border-2 grid grid-cols-2 border-b "] $ do
             a_ [class_ "flex flex-col gap-2 py-8 border-r px-8 hover:bg-blue-100 ", href_ "https://www.apitoolkit.io/docs", target_ "_BLANK"] do
               faSprite_ "file-lines" "thin" "h-8 w-8"
@@ -200,9 +183,10 @@ completedBanner pid =
       div_ [class_ "flex w-full justify-center gap-4 items-center mb-2"] do
         span_ [class_ "text-blue-500 pr-4 border-r border-r-2 border-r-blue-500 text-2xl"] "Done"
         h3_ [class_ "font-bold text-2xl"] "Onboarding Completed"
-      div_ [class_ "pb-2 flex items-center mt-8 flex-col gap-4 text-blue-500 font-medium"] do
+      div_ [class_ "pb-2 flex items-center mt-16 flex-col gap-4 text-blue-500 font-medium"] do
         faSprite_ "circle-check" "sharp-regular" "h-24 w-24 text-green-700"
-        a_ [href_ $ "/p/" <> pid.toText <> "/", class_ "btn btn-primary mt-4"] "Go to the dashboard"
+        p_ [class_ "max-w-md text-center"] "You're in! Unleash the power of complete API monitoring with APItoolkit."
+        a_ [href_ $ "/p/" <> pid.toText <> "/", class_ "btn btn-primary"] "Go to the dashboard"
 
 
 tabContentExpress :: Text -> Text -> Html ()

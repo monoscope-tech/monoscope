@@ -264,7 +264,7 @@ dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledBySte
           faIcon_ "fa fa-solid fa-empty-set" "fa-solid fa-empty-set" "h-24 w-24"
         div_ [class_ "flex flex-col gap-2"] do
           h2_ [class_ "text-2xl font-bold"] "Waiting for events..."
-          p_ "You're currently not sending any data to apitoolkit from your backends yet."
+          p_ "You're currently not sending any data to APItoolkit from your backends yet."
           a_ [href_ $ "/p/" <> pid.toText <> "/integration_guides", class_ "w-max btn btn-indigo -ml-1 text-md"] "Read the setup guide"
     div_ [class_ "flex justify-between mt-4"] $ div_ [class_ "flex flex-row"] do
       a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
