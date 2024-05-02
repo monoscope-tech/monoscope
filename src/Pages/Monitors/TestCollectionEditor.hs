@@ -15,11 +15,9 @@ import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base
 import Lucid.Htmx
-import Lucid.Hyperscript
 import Models.Projects.Projects qualified as Projects
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Sessions qualified as Sessions
-import NeatInterpolation
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import PyF
 import Relude hiding (ask)
@@ -39,7 +37,6 @@ data CollectionStepUpdateForm = CollectionStepUpdateForm
 
 collectionStepsUpdateH :: Projects.ProjectId -> Testing.CollectionId -> CollectionStepUpdateForm -> ATAuthCtx (Html ())
 collectionStepsUpdateH pid colId stepsForm = do
-  traceShowM stepsForm
   _ <- dbtToEff $ Testing.updateCollectionSteps colId stepsForm.stepsData
   -- TODO: toast
   pure $ toHtml ""
@@ -127,41 +124,29 @@ collectionPage pid col = do
               button_ [class_ "btn btn-sm btn-warning ", type_ "submit"] do
                 span_ "Save" >> faSprite_ "floppy-disk" "solid" "w-3 h-3"
               label_ [class_ "relative inline-flex items-center cursor-pointer space-x-2"] do
-                input_ [type_ "checkbox", class_ "toggle editorMode", onchange_ "buildAndSetEditor(event)"]
+                input_ [type_ "checkbox", class_ "toggle editorMode"]
                 span_ [class_ "text-sm"] "Code"
-          div_ [class_ "h-full flex-1 overflow-y-hidden"] do
-            div_ [id_ "steps-codeEditor", class_ "h-full max-h-screen hidden group-has-[.editorMode:checked]/colForm:block"] ""
-            div_ [class_ "h-full overflow-y-scroll group-has-[.editorMode:checked]/colForm:hidden"] do
-              div_
-                [ class_ " p-4 space-y-4 collectionSteps"
-                , id_ "collectionStepsContainer"
-                ]
-                ""
-              div_ [class_ "p-4 pt-2"] $ a_
-                [ class_ "btn btn-outline btn-neutral btn-sm items-center cursor-pointer"
-                , [__| on click call window.collectionSteps.push({}) then call window.renderCollection() then _hyperscript.processNode(#stepsForm)|]
-                ]
-                do
-                  faSprite_ "plus" "sharp-regular" "w-4 h-4"
-                  span_ "Add Another Step"
+          div_ [class_ "h-full flex-1 overflow-y-hidden"] $ termRaw "steps-editor" [] ""
+
         div_ [class_ "col-span-1 h-full border-r border-gray-200"] do
           div_ [class_ "max-h-full overflow-y-scroll", id_ "step-results-parent"] ""
 
           div_ [class_ "flex flex-col justify-center items-center h-full text-slate-400 text-xl space-y-4"] do
             div_ [] $ Utils.faIcon_ "fa-objects-column" "fa-objects-column fa-solid" "w-16 h-16"
             p_ [class_ "text-slate-500"] "Run a test to view the results here. "
+    script_ [type_ "module", src_ "/assets/steps-editor.js"] ("" :: Text)
 
 
 collectionStepResult_ :: Testing.StepResult -> Html ()
 collectionStepResult_ stepResult = div_ [role_ "tablist", class_ "tabs tabs-lifted"] do
   input_ [type_ "radio", name_ "step-result-tabs", role_ "tab", class_ "tab", Aria.label_ "Response Log", checked_]
-  div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"]
-    $ toHtmlRaw
-    $ textToHTML stepResult.stepLog
+  div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"] $
+    toHtmlRaw $
+      textToHTML stepResult.stepLog
 
   input_ [type_ "radio", name_ "step-result-tabs", role_ "tab", class_ "tab", Aria.label_ "Response Headers"]
-  div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6 "]
-    $ table_ [class_ "table table-xs"] do
+  div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6 "] $
+    table_ [class_ "table table-xs"] do
       thead_ [] do
         tr_ [] do
           th_ [] "Name"
@@ -172,131 +157,14 @@ collectionStepResult_ stepResult = div_ [role_ "tablist", class_ "tabs tabs-lift
 
   input_ [type_ "radio", name_ "step-result-tabs", role_ "tab", class_ "tab", Aria.label_ "Response Body"]
   div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"] do
-    pre_ [class_ "flex text-sm leading-snug w-full max-h-[50rem] overflow-y-scroll"]
-      $ code_ [class_ "h-full hljs language-json atom-one-dark w-full rounded"]
-      $ toHtmlRaw
-      $ encodePretty stepResult.request.resp.json
+    pre_ [class_ "flex text-sm leading-snug w-full max-h-[50rem] overflow-y-scroll"] $
+      code_ [class_ "h-full hljs language-json atom-one-dark w-full rounded"] $
+        toHtmlRaw $
+          encodePretty stepResult.request.resp.json
 
 
 textToHTML :: Text -> Text
 textToHTML txt = T.intercalate (toText "<br>") (T.split (== '\n') txt)
-
-
-collectionStep_ :: Html ()
-collectionStep_ = do
-  div_ [class_ "rounded-lg overflow-hidden border border-slate-200 group/item collectionStep"] do
-    input_ [type_ "checkbox", id_ "stepState-${idx}", class_ "hidden stepState"]
-    div_ [class_ "flex flex-row items-center bg-gray-50 "] do
-      div_ [class_ "h-full shrink bg-gray-50 p-3 hidden border-r border-r-slate-200"] $ faIcon_ "fa-grip-dots-vertical" "fa-solid fa-grip-dots-vertical" " h-4 w-4"
-      div_ [class_ "flex-1 flex flex-row items-center gap-1 bg-white pr-5 py-3"] do
-        label_ [Lucid.for_ "stepState-${idx}", class_ "p-3 cursor-pointer text-xs text-slate-700"] "${idx+1}"
-        label_ [Lucid.for_ "stepState-${idx}", class_ "p-3 cursor-pointer"] do
-          faSprite_ "chevron-right" "solid" "h-4 w-3 group-has-[.stepState:checked]/item:rotate-90"
-        div_ [class_ "w-full space-y-1 relative"] do
-          div_ [class_ "absolute right-0 flex items-center gap-3 text-xs text-gray-600 hidden group-hover/item:flex"] do
-            button_ [class_ ""] "View results"
-            button_ [class_ "text-blue-600"] $ faIcon_ "fa-play" "fa-play fa-solid" "w-2 h-3"
-            a_ [class_ "text-red-700", [__|on click remove the closest parent <.collectionStep/> |]] $ faIcon_ "fa-xmark" "fa-xmark fa-solid" "w-2 h-3"
-          input_ [class_ "text-lg w-full", placeholder_ "Untitled", value_ "${stepData.title}", name_ "[${idx}][title]", id_ "title-${idx}"]
-          div_ [class_ "relative flex flex-row gap-2 items-center"] do
-            label_ [Lucid.for_ $ "actions-list-input-${idx}", class_ "w-28  shrink text-sm font-medium form-control "] do
-              input_
-                [ list_ "actions-list"
-                , id_ $ "actions-list-input-${idx}"
-                , class_ "input input-sm input-bordered w-full"
-                , placeholder_ "method"
-                , value_ "${methodAndUrl(stepData).method}"
-                , termRaw "_" "on change throttled at 500ms put \\`[${idx}][\\${me.value}]\\` into #actions-data-${idx}'s @name"
-                ]
-            label_ [Lucid.for_ "actions-data", class_ "flex-1 text-sm font-medium form-control w-full "] do
-              div_ [class_ "flex flex-row items-center gap-1"] do
-                input_
-                  [ type_ "text"
-                  , id_ "actions-data-${idx}"
-                  , class_ "input input-sm input-bordered w-full"
-                  , placeholder_ "Request URI"
-                  , name_ "[${idx}][${methodAndUrl(stepData).method}]"
-                  , value_ "${methodAndUrl(stepData).url}"
-                  ]
-    div_ [class_ "border-t border-t-slate-200 space-y-3 p-3 hidden group-has-[.stepState:checked]/item:block"] do
-      div_ [role_ "tablist", class_ "tabs tabs-bordered pt-1"] do
-        input_ [type_ "radio", name_ "_httpOptions-${idx}", role_ "tab", class_ "tab", Aria.label_ "Params", checked_]
-        div_ [role_ "tabpanel", class_ "tab-content px-2 py-4 space-y-2 paramRows", id_ "[${idx}][params]", termRaw "data-keyprefix" "[${idx}][params]"] do
-          toHtmlRaw "${stepData.params && Object.entries(stepData.params).map(([key, value])=>litParam(key, value, null, `[${idx}][params]`))}"
-          toHtmlRaw "${(!stepData.params || !(' ' in stepData.params))? litParam(' ', '', null, `[${idx}][params]`):'' }"
-
-        input_ [type_ "radio", name_ "_httpOptions-${idx}", role_ "tab", class_ "tab", Aria.label_ "Headers"]
-        div_ [role_ "tabpanel", class_ "tab-content px-2 py-4 space-y-2 paramRows", id_ "[${idx}][headers]",  termRaw "data-keyprefix" "[${idx}][headers]"] do
-          toHtmlRaw "${stepData.headers && Object.entries(stepData.headers).map(([key, value])=>litParam(key, value, null, `[${idx}][headers]`))}"
-          toHtmlRaw "${(!stepData.headers || Object.entries(stepData.headers).length==0)? litParam('', '', null, `[${idx}][headers]`):'' }"
-
-        input_ [type_ "radio", name_ "_httpOptions-${idx}", role_ "tab", class_ "tab", Aria.label_ "Body"]
-        div_ [role_ "tabpanel", class_ "tab-content px-2 py-4"] do
-          select_ [class_ "peer select select-sm select-bordered", termRaw "data-chosen" "json", onchange_ "this.dataset.chosen = this.value;"] do
-            option_ [selected_ "selected"] "json"
-            option_ [] "raw"
-          div_ [class_ "hidden peer-data-[chosen=json]:block"] $ textarea_ [class_ "w-full border border-slate-200", name_ "[${idx}][json]"] "${stepData.json}"
-          div_ [class_ "hidden peer-data-[chosen=raw]:block"] $ textarea_ [class_ "w-full border border-slate-200", name_ "[${idx}][raw]"] $ "${stepData.raw}"
-
-      div_ [class_ ""] do
-        h5_ [class_ "label-text p-1 mb-2"] "Assertions"
-        div_ [class_ "text-sm space-y-2 px-2 [&_.assertIndicator]:inline-block paramRows", id_ "[${idx}][asserts]",  termRaw "data-keyprefix" "[${idx}][asserts][aidx]"] do
-          toHtmlRaw "${stepData.asserts && stepData.asserts.map((assert, aidx)=>Object.entries(assert).map(([key, value])=>litParam(key, value, aidx, `[${idx}][asserts][${aidx}]`)))}"
-          toHtmlRaw "${(!stepData.asserts || Object.entries(stepData.asserts[0]).length==0)? litParam('', '', null, `[${idx}][asserts][0]`):'' }"
-      div_ [class_ ""] do
-        h5_ [class_ "label-text p-1 mb-2"] "Exports"
-        div_ [class_ "text-sm space-y-2 px-2 paramRows", id_ "[${idx}][exports]",  termRaw "data-keyprefix" "[${idx}][exports]"] do
-          toHtmlRaw "${stepData.exports && Object.entries(stepData.exports).map(([key, value])=>litParam(key, value, null, `[${idx}][exports]`))}"
-          toHtmlRaw "${(!stepData.exports || Object.entries(stepData.exports).length==0)? litParam('', '', null, `[${idx}][exports]`):'' }"
-
-
-paramRowKV :: Html ()
-paramRowKV = div_ [class_ "flex flex-row items-center gap-2 paramRow"] do
-  span_ [class_ "shrink hidden assertIndicator"] $ "✅"
-  input_
-    [ class_ "shrink input input-xs input-bordered w-1/3"
-    , placeholder_ "Key"
-    , value_ "${key}"
-    , [__|on change set :kPrefix to ((the closest parent <div.paramRows/>)'s @data-keyPrefix)+'['+me.value+']' 
-            then set :thisRow to (the closest parent <div.paramRow/>)
-            then set :paramRows to Array.from((the closest parent <div.paramRows/>).querySelectorAll('.paramRow'))
-            then set :currIndex to :paramRows.indexOf(:thisRow)
-            then set (next <input/>)'s @name to :kPrefix.replaceAll('[aidx]',  '['+:currIndex+']')  
-            then if (:currIndex == (:paramRows.length-1)) 
-                      put #paramRowTmpl.innerHTML.replaceAll('${key}', '').replaceAll('${value}', '') 
-                          after (the closest parent <div.paramRow/>) 
-                  end
-            then _hyperscript.processNode(#stepsForm)
-            |]
-
-    -- , [__|on change set :kPrefix to ((the closest parent <div.paramRows/>)'s @data-keyPrefix)+'['+me.value+']' 
-    --         then set :thisRow to (the closest parent <div.paramRow/>)
-    --         then set :paramRows to Array.from((the closest parent <div.paramRows/>).querySelectorAll('.paramRow'))
-    --         then set :currIndex to :paramRows.indexOf(:thisRow)
-    --         then set (next <input/>)'s @name to :kPrefix.replaceAll('[aidx]',  '['+:currIndex+']')  
-    --         then if (:currIndex == (:paramRows.length-1)) 
-    --                   put #paramRowTmpl.innerHTML.replaceAll('${key}', '').replaceAll('${value}', '') 
-    --                       after (the closest parent <div.paramRow/>) 
-    --               end
-    --         then _hyperscript.processNode(#stepsForm)
-    --         |]
-    ]
-  input_
-    [ class_ "flex-1 input input-xs input-bordered w-full"
-    , placeholder_ "Value"
-    , name_ "${keyPrefix}[${key}]"
-    , value_ "${value}"
-    ]
-  div_ [class_ "shrink flex flex-row gap-1 items-center"] do
-    a_
-      [ termRaw
-          "_"
-          [raw|on click set :currRow to (the closest parent <div.paramRow/>).outerHTML 
-              then put :currRow after the closest parent <div.paramRow/>
-              then _hyperscript.processNode(#stepsForm)|]
-      ]
-      $ faSprite_ "plus" "solid" "w-3 h-3"
-    a_ [class_ "text-red-700 cursor-pointer", [__|on click remove the closest parent <div.paramRow/> |]] $ faIcon_ "fa-xmark" "fa-xmark fa-solid" "w-3 h-3"
 
 
 editorExtraElements :: Html ()
@@ -310,30 +178,6 @@ editorExtraElements = do
     option_ [value_ "UPDATE"] ""
     option_ [value_ "PATCH"] ""
     option_ [value_ "DELETE"] ""
-  script_ [type_ "module", src_ "/assets/steps-editor.js"] ("" :: Text)
-  template_ [id_ "paramRowTmpl"] $ paramRowKV
-  script_ [id_ "collectionStepTmpl", type_ "module"] do
-    toHtmlRaw "import {html, render} from '/assets/deps/lit/lit-html.js';"
-
-    toHtmlRaw
-      [raw|
-function methodAndUrl(obj) {
-    const validMethods = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "TRACE", "CONNECT"];
-    const validEntries = Object.entries(obj).filter(([method, url]) => validMethods.includes(method) && url !== null);
-    const found = validEntries.length > 0 ? validEntries[0] : null;
-    return found ? { method: found[0], url: found[1] } : {method:"", url:""};
-}
-    |]
-
-    toHtmlRaw "const litParam = (key, value, aidx, keyPrefix) => html`"
-    paramRowKV
-    toHtmlRaw "`;"
-
-    toHtmlRaw "const litCollections = ()=>window.collectionSteps.map((stepData, idx) =>html`"
-    collectionStep_
-    toHtmlRaw "`);"
-    toHtmlRaw "window.renderCollection = () => render(litCollections(), document.getElementById('collectionStepsContainer'));"
-    toHtmlRaw "window.renderCollection();"
 
   script_ [src_ "/assets/js/thirdparty/jsyaml.min.js", crossorigin_ "true"] ("" :: Text)
   script_
@@ -367,54 +211,55 @@ function methodAndUrl(obj) {
 
 
   |]
-  script_
-    [text|
-      document.addEventListener('DOMContentLoaded', function(){
-        require.config({ paths: { vs: '/assets/js/monaco/vs' } });
-        require.config({ paths: { 'vs': 'https://unpkg.com/monaco-editor/min/vs' } });
-		  	require(['vs/editor/editor.main'], function () {
-        monaco.editor.defineTheme('nightOwl', {
-           base: 'vs-dark',
-           inherit: true,
-           rules: [
-             { token: 'comment', foreground: '#6A9955' },
-             { token: 'keyword', foreground: '#C586C0' },
-             { token: 'number', foreground: '#B5CEA8' },
-             { token: 'string', foreground: '#CE9178' },
-             { token: 'operator', foreground: '#D4D4D4' },
-             { token: 'identifier', foreground: '#D4D4D4' },
-             { token: 'type', foreground: '#4EC9B0' },
-             { token: 'delimiter', foreground: '#D4D4D4' },
-             { token: 'punctuation', foreground: '#D4D4D4' },
-             { token: 'namespace', foreground: '#9CDCFE' },
-             { token: 'function', foreground: '#DCDCAA' },
-             { token: 'class', foreground: '#4EC9B0' },
-             { token: 'variable', foreground: '#D4D4D4' }
-           ],
-           colors: {
-             'editor.foreground': '#D4D4D4',
-             'editor.background': '#011627',
-             'editor.selectionBackground': '#2D3643',
-             'editor.lineHighlightBackground': '#202B33',
-             'editorCursor.foreground': '#D4D4D4',
-             'editorWhitespace.foreground': '#404040'
-           }
-        });
-       window.monacoEditor = monaco.editor
-       // const val = document.querySelector('#swaggerData').value
-       // let json = JSON.parse(val)
-       // const yamlData = jsyaml.dump(json,{indent:2})
-		   window.editor = monaco.editor.create(document.getElementById('steps-codeEditor'), {
-            // value: yamlData,
-		  			language:'yaml',
-            minimap:{enabled:false},
-            automaticLayout : true,
-            fontSize: 14,
-            lineHeight: 20,
-            lineNumbersMinChars: 3,
-            theme: 'nightOwl'
-		  		});
-		   });
-      })
 
-    |]
+-- script_
+--   [text|
+--     document.addEventListener('DOMContentLoaded', function(){
+--       require.config({ paths: { vs: '/assets/js/monaco/vs' } });
+--       require.config({ paths: { 'vs': 'https://unpkg.com/monaco-editor/min/vs' } });
+--   	require(['vs/editor/editor.main'], function () {
+--       monaco.editor.defineTheme('nightOwl', {
+--          base: 'vs-dark',
+--          inherit: true,
+--          rules: [
+--            { token: 'comment', foreground: '#6A9955' },
+--            { token: 'keyword', foreground: '#C586C0' },
+--            { token: 'number', foreground: '#B5CEA8' },
+--            { token: 'string', foreground: '#CE9178' },
+--            { token: 'operator', foreground: '#D4D4D4' },
+--            { token: 'identifier', foreground: '#D4D4D4' },
+--            { token: 'type', foreground: '#4EC9B0' },
+--            { token: 'delimiter', foreground: '#D4D4D4' },
+--            { token: 'punctuation', foreground: '#D4D4D4' },
+--            { token: 'namespace', foreground: '#9CDCFE' },
+--            { token: 'function', foreground: '#DCDCAA' },
+--            { token: 'class', foreground: '#4EC9B0' },
+--            { token: 'variable', foreground: '#D4D4D4' }
+--          ],
+--          colors: {
+--            'editor.foreground': '#D4D4D4',
+--            'editor.background': '#011627',
+--            'editor.selectionBackground': '#2D3643',
+--            'editor.lineHighlightBackground': '#202B33',
+--            'editorCursor.foreground': '#D4D4D4',
+--            'editorWhitespace.foreground': '#404040'
+--          }
+--       });
+--      window.monacoEditor = monaco.editor
+--      // const val = document.querySelector('#swaggerData').value
+--      // let json = JSON.parse(val)
+--      // const yamlData = jsyaml.dump(json,{indent:2})
+--    window.editor = monaco.editor.create(document.getElementById('steps-codeEditor'), {
+--           // value: yamlData,
+--   			language:'yaml',
+--           minimap:{enabled:false},
+--           automaticLayout : true,
+--           fontSize: 14,
+--           lineHeight: 20,
+--           lineNumbersMinChars: 3,
+--           theme: 'nightOwl'
+--   		});
+--    });
+--     })
+
+--   |]
