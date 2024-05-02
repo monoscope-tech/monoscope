@@ -78,11 +78,11 @@ onboardingPage pid apikey hasRequest ans redi ctb = do
         div_ [class_ "w-full flex justify-center"] $ do
           div_ [class_ "flex flex-col w-[1000px] mt-4 rounded-2xl"] $ do
             div_ [class_ "w-full px-8 py-4 flex justify-between border-b border-b-2"] $ do
-              h4_ [class_ "font-bold text-lg"] "Onboarding checklist"
+              h4_ [class_ "font-bold text-2xl text-blue-500"] "Onboarding checklist"
               let p
                     | hasRequest = "100%"
                     | otherwise = "66%"
-              span_ [class_ "text-slate-500"] $ p <> " completed"
+              span_ [class_ "text-slate-500 text-lg font-bold"] $ p <> " completed"
             ul_ [class_ "grid grid-cols-3 items-start px-3 py-4"] do
               li_ [class_ "flex h-full mx-4 py-4 gap-6 text-green"] do
                 faSprite_ "circle-check" "sharp-regular" "h-6 w-6 mt-2 text-green-700"
