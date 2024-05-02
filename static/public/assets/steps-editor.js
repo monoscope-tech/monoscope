@@ -246,6 +246,38 @@ export class StepsEditor extends LitElement {
     this.requestUpdate() // Trigger a re-render
   }
 
+updateKey(event, idx, type, aidx) {
+  const newKey = event.target.value;
+  const oldKey = event.target.defaultValue;
+
+  const stepData = this.collectionSteps[idx];
+
+  const updateObject = (obj, oldKey, newKey) => {
+    const oldValue = obj[oldKey];
+    delete obj[oldKey];
+    obj[newKey] = oldValue || '';
+  };
+
+  if (type == null) {
+    updateObject(stepData, oldKey, newKey);
+    this.requestUpdate();
+    return;
+  }
+
+  stepData[type] = stepData[type] || (aidx != null ? [] : {});
+
+  if (aidx != null) {
+    const arrayItem = stepData[type][aidx] || {};
+    updateObject(arrayItem, oldKey, newKey);
+    stepData[type][aidx] = arrayItem;
+  } else {
+    updateObject(stepData[type], oldKey, newKey);
+  }
+
+  console.log('updateKey called', this.collectionSteps);
+  this.requestUpdate();
+}
+
 
   updateValue(event, idx, type, aidx, key) {
     const value = event.target.value
