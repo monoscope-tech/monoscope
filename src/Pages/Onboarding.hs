@@ -98,7 +98,7 @@ onboardingPage pid apikey hasRequest ans redi ctb = do
                     do
                       div_ [class_ "flex flex-col"] do
                         p_ [class_ "font-semibold"] "Generate an API key"
-                        span_ [class_ "text-slate-500"] "The API key is auto generated for you and will be used to authenticate reqeusts."
+                        span_ [class_ "text-slate-500"] "The API key is auto generated for you and will be used to authenticate requests."
 
               li_ [class_ "mx-4 py-4 h-full"] do
                 div_ [class_ "flex w-full gap-6"] do

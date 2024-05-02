@@ -455,13 +455,13 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
                                 small_ "API testing pipelines"
                               div_ [class_ "flex gap-1 items-center"] do
                                 checkMark
-                                small_ "API Swagger/OpenAPI Hosting"
+                                small_ "API swagger/OpenAPI hosting"
                               div_ [class_ "flex gap-1 items-center"] do
                                 checkMark
-                                small_ "API Metrics Custom Monitors"
+                                small_ "API metrics custom monitors"
                               div_ [class_ "flex gap-1 items-center"] do
                                 checkMark
-                                small_ "API Live Traffic AI based validations"
+                                small_ "API live traffic AI-based validations"
 
             div_ [class_ $ "mt-10 " <> if isUpdate then "hidden" else ""] do
               p_ [class_ "text-slate-400 mx-2 font-light text-sm"] "Invite a project member"
