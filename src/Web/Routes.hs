@@ -43,6 +43,7 @@ import Pages.Monitors.Alerts qualified as Alerts
 import Pages.Onboarding qualified as Onboarding
 import Pages.Outgoing qualified as Outgoing
 import Pages.Projects.CreateProject qualified as CreateProject
+import Pages.Integrations qualified as Integrations
 import Pages.Projects.ListProjects qualified as ListProjects
 import Pages.Projects.ManageMembers (ManageMembersForm)
 import Pages.Projects.ManageMembers qualified as ManageMembers
@@ -136,8 +137,9 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , projectCreateGet :: mode :- "p" :> "new" :> Get '[HTML] (Html ()) -- p represents project
   , projectCreatePost :: mode :- "p" :> "new" :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
   , projectSettingsGet :: mode :- "p" :> ProjectId :> "settings" :> Get '[HTML] (Html ())
+  , integrationSettingGet :: mode :- "p" :> ProjectId :> "integrations" :> Get '[HTML] (Html ())
   , projectDeleteGet :: mode :- "p" :> ProjectId :> "delete" :> Get '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
-  , notificationsUpdateChannelPost :: mode :- "p" :> ProjectId :> "notifications-channels" :> ReqBody '[FormUrlEncoded] CreateProject.NotifListForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
+  , notificationsUpdateChannelPost :: mode :- "p" :> ProjectId :> "notifications-channels" :> ReqBody '[FormUrlEncoded] Integrations.NotifListForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
   , membersManageGet :: mode :- "p" :> ProjectId :> "manage_members" :> Get '[HTML] (Html ())
   , membersManagePost :: mode :- "p" :> ProjectId :> "manage_members" :> ReqBody '[FormUrlEncoded] ManageMembersForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
   , manageSubscriptionGet :: mode :- "p" :> ProjectId :> "manage_subscription" :> Get '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
@@ -210,8 +212,9 @@ cookieProtectedServer =
     , projectCreateGet = CreateProject.createProjectGetH
     , projectCreatePost = CreateProject.createProjectPostH
     , projectSettingsGet = CreateProject.projectSettingsGetH
+    , integrationSettingGet = Integrations.integrationSettingGetH
     , projectDeleteGet = CreateProject.deleteProjectGetH
-    , notificationsUpdateChannelPost = CreateProject.updateNotificationsChannel
+    , notificationsUpdateChannelPost = Integrations.updateNotificationsChannel
     , membersManageGet = ManageMembers.manageMembersGetH
     , membersManagePost = ManageMembers.manageMembersPostH
     , manageSubscriptionGet = ManageMembers.manageSubGetH

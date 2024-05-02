@@ -49,6 +49,7 @@ import System.Config qualified as Config
 import System.Types (ATBackgroundCtx, runBackground)
 import Utils (scheduleIntervals)
 import qualified Data.ByteString.Lazy.Char8 as LBS
+import qualified Log.Logger as Log
 
 data BgJobs
   = InviteUserToProject Users.UserId Projects.ProjectId Text Text
@@ -89,6 +90,32 @@ updateShapeCounts pid shapeHash newFields deletedFields updatedFields = execute 
 -- Send a notification email about the new anomaly (shape and endpoint etc)
 --
 
+-- | Discord webhook URL
+webhookUrl :: String
+webhookUrl = "https://discord.com/api/webhooks/1233362512645455952/O5sta6xTbikWbwUi7arIHphVcxc5cXm5wJPJdR3JJDbWY9KJ2d9tUp0tIl8qew1HjX-d"
+
+-- | Message data structure
+data DiscordMessage = DiscordMessage
+    { content :: Text
+    }
+
+instance ToJSON DiscordMessage where
+    toJSON (DiscordMessage content) =
+        object [ "content" .= content ]
+
+-- | Function to send message to Discord
+sendMessageToDiscord :: Text -> IO ()
+sendMessageToDiscord msg = do
+    let message = DiscordMessage msg
+    print ("Hello world1")
+    response <- postWith opts webhookUrl (toJSON message)
+    print ("Hello world2")
+    liftIO $ putStrLn $ "Response: " ++ show (response ^. responseStatus)
+    print ("Hello world3")
+  where
+    opts = defaults
+        & header "Content-Type" .~ ["application/json"]
+
 jobsRunner :: Log.Logger -> Config.AuthContext -> Job -> IO ()
 jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
   bgJob <- throwParsePayload job
@@ -110,35 +137,14 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
   Apitoolkit team
             |]     
     CreatedProjectSuccessfully userId projectId reciever projectTitle -> do   
-      let  discordMessage :: Value
-           discordMessage = [fmtTrim|
+      
+      let msg = [fmtTrim|
               🎉 New project created on apitoolkit.io! 🎉
               Project Title: {projectTitle}
               Project ID: {projectId.toText}
               User ID :{userId.toText}
           |]  
-      print ("Hello 1")    
-      let discordWebhookUrl = "https://discord.com/api/webhooks/1233362512645455952/O5sta6xTbikWbwUi7arIHphVcxc5cXm5wJPJdR3JJDbWY9KJ2d9tUp0tIl8qew1HjX-d"
-      let headers = defaults & header "Content-Type" .~ ["application/json"]   
-      let payload = encode discordMessage 
-      print (show payload) 
-      print ("Hello 2")
-      liftIO $ do
-        print ("Hello 3")
-        response <- postWith headers discordWebhookUrl payload
-        print (show response)
-        print ("Hello 4")
-        let status = response ^. responseStatus . statusCode
-        print (show status)
-        print("Hello 5")
-        if status == 200 then do
-          putStrLn "Discord message sent successfully!"
-        else do
-          putStrLn ("Error sending message: " ++ show status)
-          let body = response ^. responseBody
-          putStrLn ("Response body: " ++ LBS.unpack body)
-      print ("Hello 6")    
-               
+      liftIO $ sendMessageToDiscord msg      
       sendEmail
         reciever
         [fmt| 🤖 APITOOLKIT: Project created successfully '{projectTitle}' on apitoolkit.io |]

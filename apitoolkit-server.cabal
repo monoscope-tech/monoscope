@@ -76,6 +76,7 @@ library
       Pages.IntegrationDemos.Phoenix
       Pages.IntegrationDemos.Pyramid
       Pages.IntegrationGuides
+      Pages.Integrations
       Pages.Log
       Pages.LogExplorer.LogItem
       Pages.ManualIngestion
