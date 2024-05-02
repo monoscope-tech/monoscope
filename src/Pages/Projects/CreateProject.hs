@@ -478,7 +478,7 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
                       $ img_ [src_ "/assets/svgs/delete.svg", class_ "cursor-pointer"]
               a_
                 [ class_ "bg-transparent inline-flex cursor-pointer mt-2"
-                , [__| on click append #inviteTmpl.innerHTML to #inviteMemberSection then 
+                , [__| on click put #inviteTmpl.innerHTML at end of #inviteMemberSection then 
                          _hyperscript.processNode(#inviteMemberSection) then halt |]
                 ]
                 do
