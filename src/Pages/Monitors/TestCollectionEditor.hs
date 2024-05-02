@@ -93,7 +93,6 @@ collectionPage pid col = do
     form_
       [ id_ "stepsForm"
       , class_ "grid grid-cols-2 h-full divide-x divide-gray-200 group/colForm overflow-y-hidden"
-      , termRaw "data-defaultKeyPrefix" "[kPrefix]"
       , hxPost_ ""
       , hxSwap_ "none"
       , hxParams_ "stepsData"
@@ -140,10 +139,7 @@ collectionPage pid col = do
                 ""
               div_ [class_ "p-4 pt-2"] $ a_
                 [ class_ "btn btn-outline btn-neutral btn-sm items-center cursor-pointer"
-                , [__| on click set :stepTmpl to #collectionStepTmpl.innerHTML.replaceAll('[idx]', #collectionStepsContainer.childNodes.length)
-                            then put :stepTmpl at the end of #collectionStepsContainer
-                            then _hyperscript.processNode(#stepsForm)
-                            |]
+                , [__| on click call window.collectionSteps.push({}) then call window.renderCollection() then _hyperscript.processNode(#stepsForm)|]
                 ]
                 do
                   faSprite_ "plus" "sharp-regular" "w-4 h-4"
@@ -225,12 +221,12 @@ collectionStep_ = do
     div_ [class_ "border-t border-t-slate-200 space-y-3 p-3 hidden group-has-[.stepState:checked]/item:block"] do
       div_ [role_ "tablist", class_ "tabs tabs-bordered pt-1"] do
         input_ [type_ "radio", name_ "_httpOptions-${idx}", role_ "tab", class_ "tab", Aria.label_ "Params", checked_]
-        div_ [role_ "tabpanel", class_ "tab-content px-2 py-4 space-y-2", id_ "[{idx}][params]"] do
+        div_ [role_ "tabpanel", class_ "tab-content px-2 py-4 space-y-2 paramRows", id_ "[${idx}][params]", termRaw "data-keyprefix" "[${idx}][params]"] do
           toHtmlRaw "${stepData.params && Object.entries(stepData.params).map(([key, value])=>litParam(key, value, null, `[${idx}][params]`))}"
-          toHtmlRaw "${(!stepData.params || Object.entries(stepData.params).length==0)? litParam('', '', null, `[${idx}][params]`):'' }"
+          toHtmlRaw "${(!stepData.params || !(' ' in stepData.params))? litParam(' ', '', null, `[${idx}][params]`):'' }"
 
         input_ [type_ "radio", name_ "_httpOptions-${idx}", role_ "tab", class_ "tab", Aria.label_ "Headers"]
-        div_ [role_ "tabpanel", class_ "tab-content px-2 py-4 space-y-2", id_ "[{idx}][headers]"] do
+        div_ [role_ "tabpanel", class_ "tab-content px-2 py-4 space-y-2 paramRows", id_ "[${idx}][headers]",  termRaw "data-keyprefix" "[${idx}][headers]"] do
           toHtmlRaw "${stepData.headers && Object.entries(stepData.headers).map(([key, value])=>litParam(key, value, null, `[${idx}][headers]`))}"
           toHtmlRaw "${(!stepData.headers || Object.entries(stepData.headers).length==0)? litParam('', '', null, `[${idx}][headers]`):'' }"
 
@@ -244,14 +240,14 @@ collectionStep_ = do
 
       div_ [class_ ""] do
         h5_ [class_ "label-text p-1 mb-2"] "Assertions"
-        div_ [class_ "text-sm space-y-2 px-2 [&_.assertIndicator]:inline-block paramRows", id_ "[{idx}][asserts]"] do
+        div_ [class_ "text-sm space-y-2 px-2 [&_.assertIndicator]:inline-block paramRows", id_ "[${idx}][asserts]",  termRaw "data-keyprefix" "[${idx}][asserts][aidx]"] do
           toHtmlRaw "${stepData.asserts && stepData.asserts.map((assert, aidx)=>Object.entries(assert).map(([key, value])=>litParam(key, value, aidx, `[${idx}][asserts][${aidx}]`)))}"
           toHtmlRaw "${(!stepData.asserts || Object.entries(stepData.asserts[0]).length==0)? litParam('', '', null, `[${idx}][asserts][0]`):'' }"
       div_ [class_ ""] do
         h5_ [class_ "label-text p-1 mb-2"] "Exports"
-        div_ [class_ "text-sm space-y-2 px-2 paramRows", id_ "[{idx}][exports]"] do
+        div_ [class_ "text-sm space-y-2 px-2 paramRows", id_ "[${idx}][exports]",  termRaw "data-keyprefix" "[${idx}][exports]"] do
           toHtmlRaw "${stepData.exports && Object.entries(stepData.exports).map(([key, value])=>litParam(key, value, null, `[${idx}][exports]`))}"
-          toHtmlRaw "${(!stepData.exports || Object.entries(stepData.exports).length==0)? litParam('', '', null, `[$idx][exports]`):'' }"
+          toHtmlRaw "${(!stepData.exports || Object.entries(stepData.exports).length==0)? litParam('', '', null, `[${idx}][exports]`):'' }"
 
 
 paramRowKV :: Html ()
@@ -261,8 +257,29 @@ paramRowKV = div_ [class_ "flex flex-row items-center gap-2 paramRow"] do
     [ class_ "shrink input input-xs input-bordered w-1/3"
     , placeholder_ "Key"
     , value_ "${key}"
-    , termRaw "data-keyPrefix" "$keyPrefix"
-    , [__|on change set :kPrefix to \`\${my @data-keyPrefix}[\${me.value}]\` then set (next <input/>)'s @name to :kPrefix  |]
+    , [__|on change set :kPrefix to ((the closest parent <div.paramRows/>)'s @data-keyPrefix)+'['+me.value+']' 
+            then set :thisRow to (the closest parent <div.paramRow/>)
+            then set :paramRows to Array.from((the closest parent <div.paramRows/>).querySelectorAll('.paramRow'))
+            then set :currIndex to :paramRows.indexOf(:thisRow)
+            then set (next <input/>)'s @name to :kPrefix.replaceAll('[aidx]',  '['+:currIndex+']')  
+            then if (:currIndex == (:paramRows.length-1)) 
+                      put #paramRowTmpl.innerHTML.replaceAll('${key}', '').replaceAll('${value}', '') 
+                          after (the closest parent <div.paramRow/>) 
+                  end
+            then _hyperscript.processNode(#stepsForm)
+            |]
+
+    -- , [__|on change set :kPrefix to ((the closest parent <div.paramRows/>)'s @data-keyPrefix)+'['+me.value+']' 
+    --         then set :thisRow to (the closest parent <div.paramRow/>)
+    --         then set :paramRows to Array.from((the closest parent <div.paramRows/>).querySelectorAll('.paramRow'))
+    --         then set :currIndex to :paramRows.indexOf(:thisRow)
+    --         then set (next <input/>)'s @name to :kPrefix.replaceAll('[aidx]',  '['+:currIndex+']')  
+    --         then if (:currIndex == (:paramRows.length-1)) 
+    --                   put #paramRowTmpl.innerHTML.replaceAll('${key}', '').replaceAll('${value}', '') 
+    --                       after (the closest parent <div.paramRow/>) 
+    --               end
+    --         then _hyperscript.processNode(#stepsForm)
+    --         |]
     ]
   input_
     [ class_ "flex-1 input input-xs input-bordered w-full"
@@ -274,13 +291,9 @@ paramRowKV = div_ [class_ "flex flex-row items-center gap-2 paramRow"] do
     a_
       [ termRaw
           "_"
-          [raw|on click set :nextIndex to (the closest parent <div.paramRows/>).childNodes.length 
-                then set :paramTmpl to 
-                        #{tmplForAddBtn}.innerHTML.replaceAll(#stepsForm's @data-defaultKeyPrefix, @data-keyPrefix).replaceAll('[aidx]', \`[\${{:nextIndex}}]\`)
-                then put :paramTmpl after the closest parent <div.paramRow/>  
-                then _hyperscript.processNode(#stepsForm) 
-                |]
-      , termRaw "data-keyPrefix" ""
+          [raw|on click set :currRow to (the closest parent <div.paramRow/>).outerHTML 
+              then put :currRow after the closest parent <div.paramRow/>
+              then _hyperscript.processNode(#stepsForm)|]
       ]
       $ faSprite_ "plus" "solid" "w-3 h-3"
     a_ [class_ "text-red-700 cursor-pointer", [__|on click remove the closest parent <div.paramRow/> |]] $ faIcon_ "fa-xmark" "fa-xmark fa-solid" "w-3 h-3"
@@ -299,9 +312,6 @@ editorExtraElements = do
     option_ [value_ "DELETE"] ""
   script_ [type_ "module", src_ "/assets/steps-editor.js"] ("" :: Text)
   template_ [id_ "paramRowTmpl"] $ paramRowKV
-  template_ [id_ "paramRowTmplAssert"] $ paramRowKV
-  template_ [id_ "paramRowTmplFull"] $ paramRowKV
-  template_ [id_ "paramRowTmplFullAssert"] $ paramRowKV
   script_ [id_ "collectionStepTmpl", type_ "module"] do
     toHtmlRaw "import {html, render} from '/assets/deps/lit/lit-html.js';"
 
@@ -336,6 +346,7 @@ function methodAndUrl(obj) {
     } else{
       window.collectionSteps = jsyaml.load(window.editor.getValue());
       window.renderCollection();
+      _hyperscript.processNode(document.getElementById('stepsForm'));
     }
   }
 
