@@ -8,6 +8,9 @@
 :seti -XScopedTypeVariables
 :seti -XTypeApplications
 :seti -XOverloadedStrings
+:seti -XImportQualifiedPost
+
+:set -Wno-prepositive-qualified-module
 
 
 :set +m
@@ -19,3 +22,7 @@
 :set -fprint-explicit-foralls
 :set -interactive-print=Text.Pretty.Simple.pPrint
 :set -XTypeApplications -XKindSignatures
+
+:set -fwarn-unused-binds -fwarn-unused-imports
+:set -isrc
+-- :load Main

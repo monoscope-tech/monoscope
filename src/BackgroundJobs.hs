@@ -39,8 +39,8 @@ import NeatInterpolation (text, trimming)
 import Network.Wreq 
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, startJobRunner, throwParsePayload)
-import Pages.GenerateSwagger (generateSwagger)
 import Pages.Reports qualified as RP
+import Pages.Specification.GenerateSwagger (generateSwagger)
 import Pkg.Mail (sendEmail, sendSlackMessage)
 import PyF (fmt, fmtTrim)
 import Relude hiding (ask)
@@ -187,10 +187,7 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
         let dbParams = (\x -> (x, "queued" :: Text, Aeson.object ["tag" .= Aeson.String "RunCollectionTests", "contents" .= show col_id.collectionId])) <$> intervals
         void $ dbtToEff $ Testing.scheduleInsertScheduleInBackgroundJobs dbParams
     RunCollectionTests col_id -> do
-      (collectionM, steps) <- dbtToEff $ do
-        colM <- Testing.getCollectionById col_id
-        steps <- Testing.getCollectionSteps col_id
-        pure (colM, steps)
+      collectionM <- dbtToEff $ Testing.getCollectionById col_id
       whenJust collectionM \collection -> do
         -- let steps_data = (\x -> x.stepData) <$> steps
         -- let col_json = (decodeUtf8 $ Aeson.encode steps_data :: String)
@@ -393,7 +390,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
 
                            Endpoint: `{endpointPath}`
 
-                           <https://app.apitoolkit.io/p/{pid.toText}/anomaly/{targetHash}|More details on the apitoolkit>
+                           <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
                             |]
         _ -> do
           forM_ users \u ->
@@ -405,7 +402,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
          
                      <p>We detected a new endpoint on `{project.title}`:</p>
                      <p><strong>{endpointPath}</strong></p>
-                     <a href="https://app.apitoolkit.io/p/{pid.toText}/anomaly/{targetHash}">More details on the apitoolkit</a>
+                     <a href="https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}">More details on the apitoolkit</a>
                      <br/><br/>
                      Regards,
                      Apitoolkit team
@@ -434,7 +431,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
     
                                           We detected a different API request shape to your endpoints than what you usually have
     
-                                          <https://app.apitoolkit.io/p/{pid.toText}/anomaly/{targetHash}|More details on the apitoolkit>
+                                          <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
                                  |]
             _ -> do
               forM_ users \u ->
@@ -445,7 +442,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
          Hi {u.firstName},<br/>
        
          <p>We detected a different API request shape to your endpoints than what you usually have..</p>
-         <a href="https://app.apitoolkit.io/p/{pid.toText}/anomaly/{targetHash}">More details on the apitoolkit</a>
+         <a href="https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}">More details on the apitoolkit</a>
          <br/><br/>
          Regards,<br/>
          Apitoolkit team
@@ -464,7 +461,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
   
                                        We detected that a particular field on your API is returning a different format/type than what it usually gets.
   
-                                       <https://app.apitoolkit.io/p/{pid.toText}/anomaly/{targetHash}|More details on the apitoolkit>
+                                       <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
                                |]
           _ -> forM_ users \u ->
             sendEmail
@@ -474,7 +471,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
      Hi {u.firstName},<br/>
    
      <p>We detected that a particular field on your API is returning a different format/type than what it usually gets.</p>
-     <a href="https://app.apitoolkit.io/p/{pid.toText}/anomaly/{targetHash}">More details on the apitoolkit</a>
+     <a href="https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}">More details on the apitoolkit</a>
      <br/><br/>
      Regards,<br/>
      Apitoolkit team

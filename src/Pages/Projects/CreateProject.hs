@@ -377,7 +377,7 @@ createProjectBody sess envCfg isUpdate cp cpe  = do
                 span_ [class_ "text-red-400"] " *"
               div_ [class_ "grid md:grid-cols-2 gap-4 border-1"] do
                 ( [ ("Free", "20k", "$0", "2", cp.paymentPlan == "Free", "Free")
-                  , ("Pay as you go", "250k", "$1", "Unlimited", paymentPlan == "UsageBased", "UsageBased")
+                  , ("Pay as you use", "250k", "$1", "Unlimited", paymentPlan == "UsageBased", "UsageBased")
                   ]
                     :: [(Text, Text, Text, Text, Bool, Text)]
                   )

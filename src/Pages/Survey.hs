@@ -134,14 +134,14 @@ surveyPage pid full_name phoneNumber = do
                       "What API/Web frameworks do you plan to integrate?"
                       span_ [class_ "text-red-400"] " *"
                     div_ [id_ "stack", name_ "stack", required_ "required", class_ "px-2 py-2"] do
-                      div_ [class_ "grid grid-cols-5 gap-6 space-y-2"] $ forM_ stackOptions $ \(value, label, img) -> do
+                      div_ [class_ "grid grid-cols-6 gap-6 space-y-2"] $ forM_ stackOptions $ \(value, label, img) -> do
                         let bg = "url('/assets/framework-logos/" <> img <> "')"
                         label_
                           [ class_ $ "cursor-pointer relative flex justify-center items-center column border rounded-lg text-[14px] bg-center p-2 bg-contain bg-no-repeat " <> bg
                           , Lucid.for_ value
                           ]
                           do
-                            img_ [src_ $ "/assets/framework-logos/" <> img, class_ "max-h-[80px] my-auto w-full"]
+                            img_ [src_ $ "/assets/framework-logos/" <> img, class_ "max-h-[80px] my-auto"]
                             div_ [class_ "absolute z-10 left-0 top-0 block group p-2 hover:bg-slate-100"] do
                               input_ [class_ "mr-3", type_ "checkbox", id_ value, name_ "stack", value_ value]
                               span_ [class_ "hidden group-hover:inline"] $ toHtml label
@@ -194,6 +194,7 @@ stackOptions =
   , ("adonisjs", "JS - Adonis.js", "adonis-logo.png")
   , ("fastify", "JS - Fastify", "fastify-logo.png")
   , ("django", "Python - Django", "django-logo.png")
+  , ("pyramid", "Python - Pyramid", "pyramid-logo.png")
   , ("go-native", "Golang - Native", "go-logo.png")
   , ("gorilla-mux", "Golang - Gorilla Mux", "mux-logo.png")
   , ("gin", "Golang - Gin", "gin-logo.png")
@@ -202,12 +203,11 @@ stackOptions =
   , ("lumen", "PHP - Lumen", "lumen-logo.webp")
   , ("symfony", "PHP - Symfony", "symfony-logo.png")
   , ("cakePHP", "PHP - CakePHP", "cake-logo.jpg")
-  , ("codeigniter", "PHP - Codeigniter", "igniter-logo.png")
   , ("flask", "Python - Flask", "flask-logo.png")
   , ("fastapi", "Python - FastAPI", "fastapi-logo.png")
   , ("springboot", "Java - Spring Boot", "spring-logo.png")
   , ("rails", "Ruby - Ruby on Rails", "rails-logo.png")
-  , ("phoenix", "Elixir - Phoenix", "phoenix-logo.webp")
+  , ("phoenix", "Elixir - Phoenix", "phoenix-logo.png")
   , (".net", "C# - ASP.NET", "net-logo.png")
   , ("ihp-hs", "Haskell - IHP", "ihp-logo.svg")
   , ("actix", "Rust - Actix", "actix-logo.png")
@@ -221,7 +221,7 @@ functionalityOptions =
   [ ("monitoring", "API Monitoring and Observability")
   , ("error_tracking", "Error Tracking")
   , ("log_explorer", "Log Explorer")
-  , ("documentation", "Automatic OpenAPI Spec Generation")
+  , ("documentation", "OpenAPI Spec Generation")
   , ("anomaly_detection", "Anomaly Detection")
   , ("testing", "API Testing")
   ]
@@ -259,6 +259,5 @@ progressSteps = do
         svg_ [class_ "w-3.5 h-3.5 sm:w-4 sm:h-4 mr-2.5", style_ "aria-hidden: true", xmlns_ "http://www.w3.org/2000/svg", fill_ "currentColor", viewBox_ "0 0 20 20"] do
           path_ [d_ "M10 .5a9.5 9.5 0 1 0 9.5 9.5A9.51 9.51 0 0 0 10 .5Zm3.707 8.207-4 4a1 1 0 0 1-1.414 0l-2-2a1 1 0 0 1 1.414-1.414L9 10.586l3.293-3.293a1 1 0 0 1 1.414 1.414Z"]
         "About Project"
-    li_ [class_ "flex items-center"] do
-      span_ [class_ "mr-2"] ""
+    li_ [class_ "shrink-0 w-max"] do
       "Integrate SDK"

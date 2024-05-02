@@ -43,12 +43,12 @@ djangoGuide apikey = do
 
     div_ [class_ "w-full flex flex-col gap-2", id_ "errors-monitoring"] do
       h3_ [class_ "text-2xl font-semibold"] "Error Reporting"
-      p_ [class_ "text-gray-600 font-medium max-w-5xl"] "APIToolkit allows you to report errors alongside the request that caused them which allows you to easily reproduce and fix issues in production."
+      p_ [class_ "text-gray-600 font-medium max-w-5xl"] "APItoolkit allows you to report errors alongside the request that caused them which allows you to easily reproduce and fix issues in production."
       codeExample $ errorReportingCode apikey
 
     div_ [class_ "w-full flex flex-col gap-2", id_ "outgoing-request-monitoring"] do
       h3_ [class_ "text-2xl font-semibold"] "Outgoing Request Monitoring"
-      p_ [class_ "text-gray-600 max-w-5xl"] "APIToolkit also allows you to monitor your outgoing request (i.e the api calls your make from your server). Monitored outgoing are also associated with the incoming request that triggered them."
+      p_ [class_ "text-gray-600 max-w-5xl"] "APItoolkit also allows you to monitor your outgoing request (i.e the api calls your make from your server). Monitored outgoing are also associated with the incoming request that triggered them."
       codeExample $ outgoingRequest apikey
 
 

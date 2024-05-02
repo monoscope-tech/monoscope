@@ -5,7 +5,7 @@ While it's an acceptable hack as this project is currently a prototype, this
 should be removed before `cargo-cabal` stable release.
 
 > import Data.Maybe
-> import qualified Distribution.PackageDescription as PD
+> import Distribution.PackageDescription qualified as PD
 > import Distribution.Simple
 >   ( Args,
 >     UserHooks (confHook, preConf),

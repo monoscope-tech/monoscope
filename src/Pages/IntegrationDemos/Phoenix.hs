@@ -57,7 +57,7 @@ end
 
     div_ [class_ "w-full flex flex-col gap-2", id_ "errors-monitoring"] do
       h3_ [class_ "text-2xl font-semibold"] "Error Reporting"
-      p_ [class_ "text-gray-600 font-medium max-w-5xl"] "APIToolkit allows you to report errors alongside the request that caused them which allows you to easily reproduce and fix issues in production."
+      p_ [class_ "text-gray-600 font-medium max-w-5xl"] "APItoolkit allows you to report errors alongside the request that caused them which allows you to easily reproduce and fix issues in production."
       h6_ [class_ "text-lg font-medium"] "Automatic error handling"
       codeExample
         $ [text|
@@ -67,7 +67,7 @@ def handle_errors(conn, err) do
   json(conn, %{message: "Something went wrong"})
 end
       |]
-      h6_ [class_ "text-lg font-medium"] "Report errors manually to APIToolkit"
+      h6_ [class_ "text-lg font-medium"] "Report errors manually to APItoolkit"
       codeExample
         $ [text|
 defmodule HelloWeb.PageController do

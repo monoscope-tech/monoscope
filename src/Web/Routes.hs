@@ -35,7 +35,6 @@ import Pages.Endpoints.EndpointDetails qualified as EndpointDetails
 import Pages.Endpoints.EndpointList qualified as EndpointList
 import Pages.Fields.FieldDetails qualified as FieldDetails
 import Pages.GenerateSwagger qualified as GenerateSwagger
-import Pages.IntegrationGuides qualified as IntegrationGuides
 import Pages.Log qualified as Log
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.ManualIngestion qualified as ManualIngestion
@@ -129,8 +128,6 @@ server pool =
 
 
 type role CookieProtectedRoutes nominal
-
-
 data CookieProtectedRoutes mode = CookieProtectedRoutes
   { projectListGet :: mode :- UVerb 'GET '[HTML] GetOrRedirect
   , dashboardGet :: mode :- "p" :> ProjectId :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (Html ())
@@ -178,7 +175,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , reportsSingleGet :: mode :- "p" :> ProjectId :> "reports" :> Capture "report_id" ReportsM.ReportId :> Get '[HTML] (Html ())
   , reportsPost :: mode :- "p" :> ProjectId :> "reports_notif" :> Capture "report_type" Text :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
   , shareLinkPost :: mode :- "p" :> ProjectId :> "share" :> ReqBody '[FormUrlEncoded] Share.ReqForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-  , outgoingGet :: mode :- "p" :> ProjectId :> "outgoing" :> QPT "sort" :> Get '[HTML] (Html ())
+  , outgoingGet :: mode :- "p" :> ProjectId :> "outgoing" :> Get '[HTML] (Html ())
   , queryBuilderAutocomplete :: mode :- "p" :> ProjectId :> "query_builder" :> "autocomplete" :> QPT "category" :> QPT "prefix" :> Get '[JSON] AE.Value
   , swaggerGenerateGet :: mode :- "p" :> ProjectId :> "generate_swagger" :> Get '[JSON] AE.Value
   , chartsGet :: mode :- "charts_html" :> QP "chart_type" Charts.ChartType :> QPT "query_raw" :> QueryParam "pid" Projects.ProjectId :> QP "group_by" Charts.GroupBy :> QP "query_by" [Charts.QueryBy] :> QP "num_slots" Int :> QP "limit" Int :> QP "theme" Text :> QPT "id" :> QP "show_legend" Bool :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (Html ())
@@ -199,7 +196,6 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , deleteCollectionStep :: mode :- "p" :> ProjectId :> "testing" :> "step" :> Capture "step_id" TestingM.CollectionStepId :> Delete '[HTML] (Html ())
   , runTestCollection :: mode :- "p" :> ProjectId :> "testing" :> "run" :> Capture "collection_id" TestingM.CollectionId :> Post '[HTML] (Html ())
   , runTestCollectionStep :: mode :- "p" :> ProjectId :> "testing" :> "run" :> Capture "collection_id" TestingM.CollectionId :> Capture "step_id" TestingM.CollectionStepId :> Post '[HTML] (Html ())
-  , integrationGuides :: mode :- "p" :> ProjectId :> "integration_guides" :> QPT "sdk" :> QPT "error_reporting" :> QPT "dependency_monitoring" :> Get '[HTML] (Html ())
   }
   deriving stock (Generic)
 
@@ -274,7 +270,6 @@ cookieProtectedServer =
     , deleteCollectionStep = Testing.deleteStepH
     , runTestCollection = Testing.runTestCollectionH
     , runTestCollectionStep = Testing.runTestStepH
-    , integrationGuides = IntegrationGuides.getH
     }
 
 

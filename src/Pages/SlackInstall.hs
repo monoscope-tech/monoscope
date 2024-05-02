@@ -167,7 +167,7 @@ linkProjectGetH pid slack_code = do
     (Just token', Just project') -> do
       n <- liftIO $ withPool pool do
         insertAccessToken [pid.toText] token'.incomingWebhook.url
-      sendSlackMessage pid ("APIToolkit Bot has been linked to your project: " <> project'.title)
+      sendSlackMessage pid ("APItoolkit Bot has been linked to your project: " <> project'.title)
       pure $ bodyWrapper bwconf installedSuccess
     (_, _) -> pure $ bodyWrapper bwconf noTokenFound
 
@@ -205,7 +205,7 @@ noTokenFound = do
   navBar
   section_ [class_ "h-full mt-[80px] w-[1000px] flex flex-col items-center mx-auto"] do
     h3_ [class_ "text-5xl font-semibold my-8"] "Token Not Found"
-    p_ [class_ "text-2xl"] "No slack access token found, reinstall the APIToolkit slack app to try again."
+    p_ [class_ "text-2xl"] "No slack access token found, reinstall the APItoolkit slack app to try again."
 
 
 installedSuccess :: Html ()
@@ -214,5 +214,5 @@ installedSuccess = do
   section_ [class_ "h-full mt-[80px] w-[1000px] flex flex-col items-center mx-auto"] do
     div_ [class_ "flex flex-col border px-6 py-16 mt-16 rounded-2xl items-center"] do
       faIcon_ "fa-check" "fa-regular fa-check" "h-10 w-10 text-green-500"
-      h3_ [class_ "text-3xl font-semibold my-8"] "APIToolkit Slack App Installed"
-      p_ [class_ "text-gray-600 text-center max-w-prose"] "APIToolkit Bot Slack app has been connected to your project successfully. You can now recieve notifications on slack."
+      h3_ [class_ "text-3xl font-semibold my-8"] "APItoolkit Slack App Installed"
+      p_ [class_ "text-gray-600 text-center max-w-prose"] "APItoolkit Bot Slack app has been connected to your project successfully. You can now recieve notifications on slack."

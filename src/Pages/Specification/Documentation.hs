@@ -1,6 +1,6 @@
 {-# OPTIONS_GHC -Wno-unused-do-bind #-}
 
-module Pages.Documentation (documentationGetH, documentationPostH, documentationPutH, SwaggerForm, SaveSwaggerForm) where
+module Pages.Specification.Documentation (documentationGetH, documentationPostH, documentationPutH, SwaggerForm, SaveSwaggerForm) where
 
 import Data.Aeson (
   FromJSON,
@@ -31,7 +31,6 @@ import Lucid (
   button_,
   class_,
   crossorigin_,
-  defer_,
   div_,
   form_,
   h3_,
@@ -720,7 +719,6 @@ documentationsPage pid swaggers swaggerID jsonString = do
           })
          |]
 
-  script_ [src_ "/assets/js/monaco/vs/loader.js", defer_ "true"] ("" :: Text)
   script_
     [text|
       document.addEventListener('DOMContentLoaded', function(){

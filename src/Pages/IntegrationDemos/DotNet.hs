@@ -13,7 +13,7 @@ dotNetGuide apikey = do
     div_ [class_ "w-full flex flex-col gap-2"] do
       h3_ [class_ "text-2xl font-semibold"] "Install"
       p_ [class_ "text-gray-600 font-medium flex items-center gap-1"] do
-        "Install the APIToolkit .NET SDK using "
+        "Install the APItoolkit .NET SDK using "
         span_ [class_ "text-red-500"] "dotnet add:"
       bashCommand "dotnet add package ApiToolkit.Net"
 
@@ -29,14 +29,14 @@ dotNetGuide apikey = do
 
     div_ [class_ "w-full flex flex-col gap-2", id_ "errors-monitoring"] do
       h3_ [class_ "text-2xl font-semibold"] "Error Reporting"
-      p_ [class_ "text-gray-600 font-medium max-w-5xl"] "APIToolkit allows you to report errors alongside the request that caused them which allows you to easily reproduce and fix issues in production. Aside reporting errors manually, we also automatically report unhandled exceptions that occured during a request."
+      p_ [class_ "text-gray-600 font-medium max-w-5xl"] "APItoolkit allows you to report errors alongside the request that caused them which allows you to easily reproduce and fix issues in production. Aside reporting errors manually, we also automatically report unhandled exceptions that occured during a request."
       codeExample $ errorReportingCode apikey
 
     div_ [class_ "w-full flex flex-col gap-2", id_ "outgoing-request-monitoring"] do
       h3_ [class_ "text-2xl font-semibold"] "Outgoing Request Monitoring"
       p_ [class_ "text-gray-600 max-w-5xl"] do
-        "APIToolkit also allows you to monitor your outgoing request (i.e the api calls your make from your server). Monitored outgoing are also associated with the incoming request that triggered them. You can achieve this by calling the "
-        span_ [class_ "text-red-500"] " APIToolkitObservingHandler "
+        "APItoolkit also allows you to monitor your outgoing request (i.e the api calls your make from your server). Monitored outgoing are also associated with the incoming request that triggered them. You can achieve this by calling the "
+        span_ [class_ "text-red-500"] " APIToolkit.ObservingHandler "
         "method of the apitoolkit client class and passing that to an HttpClient instance"
       codeExample $ outgoingRequest apikey
 
@@ -79,7 +79,7 @@ configOptions =
     , "    ApiKey = <YOUR_API_KEY>"
     , "    // Your api key, this is the only required field"
     , "    ApiKey = \"YOUR_API_KEY\","
-    , "    // List of headers to redact (i.e not send to APIToolkit)"
+    , "    // List of headers to redact (i.e not send to APItoolkit)"
     , "    RedactHeaders = new List<string> { \"Authorization\", \"X-User-Token\" },"
     , "    // List of jsonpath of fields to redact in request body"
     , "    RedactRequestBody = new List<string> { \"$.user.email\", \"$.user.password\" },"
@@ -128,7 +128,7 @@ errorReportingCode apiKey =
     , "    }"
     , "    catch (Exception ex)"
     , "    {"
-    , "        // Report error to APIToolkit"
+    , "        // Report error to APItoolkit"
     , "        client.ReportError(context, ex);"
     , "        await context.Response.WriteAsync(\"Error reported!\");"
     , "    }"

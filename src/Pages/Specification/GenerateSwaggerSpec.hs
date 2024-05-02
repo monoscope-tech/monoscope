@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Pages.GenerateSwaggerSpec (spec) where
+module Pages.Specification.GenerateSwaggerSpec (spec) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ
@@ -9,7 +9,7 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields qualified as Fields
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.Shapes qualified as Shapes
-import Pages.GenerateSwagger
+import Pages.Specification.GenerateSwagger
 import Relude
 import RequestMessages qualified
 import Test.Hspec

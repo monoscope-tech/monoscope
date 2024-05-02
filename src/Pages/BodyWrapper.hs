@@ -16,7 +16,7 @@ import Utils (faIcon_, faSprite_)
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu pid =
-  [ ("Get started", "/p/" <> pid.toText <> "/onboarding", "list-check")
+  [ ("Get Started", "/p/" <> pid.toText <> "/onboarding", "list-check")
   , ("Dashboard", "/p/" <> pid.toText <> "/", "qrcode")
   , ("Endpoints", "/p/" <> pid.toText <> "/endpoints", "swap")
   , ("Outbound Integrations", "/p/" <> pid.toText <> "/outgoing", "arrows-turn-right")
@@ -56,7 +56,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
       link_ [rel_ "mask-icon", href_ "/public/safari-pinned-tab.svg", term "color" "#5bbad5"]
       meta_ [name_ "msapplication-TileColor", content_ "#da532c"]
       meta_ [name_ "theme-color", content_ "#ffffff"]
-      link_ [rel_ "stylesheet", type_ "text/css", href_ "/assets/css/tailwind.min.css"]
+      link_ [rel_ "stylesheet", type_ "text/css", href_ "/assets/css/tailwind.min.css?v=2"]
       link_ [rel_ "stylesheet", type_ "text/css", href_ "/assets/css/thirdparty/notyf3.min.css"]
       link_ [rel_ "preconnect", href_ "https://rsms.me/"]
       link_ [rel_ "stylesheet", href_ "https://rsms.me/inter/inter.css"]
@@ -71,8 +71,11 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
       script_ [src_ "/assets/js/thirdparty/htmx1_9_10.min.js", defer_ "true"] ("" :: Text)
       script_ [src_ "/assets/deps/htmx/multi-swap.js", defer_ "true"] ("" :: Text)
       script_ [src_ "/assets/deps/htmx/preload.js", defer_ "true"] ("" :: Text)
+      script_ [src_ "/assets/deps/htmx/json-enc.js", defer_ "true"] ("" :: Text)
+      script_ [src_ "/assets/deps/lit/lit-html.js", type_ "module", defer_ "true"] ("" :: Text)
       script_ [src_ "https://unpkg.com/htmx.org/dist/ext/debug.js", defer_ "true"] ("" :: Text)
       script_ [src_ "/assets/js/thirdparty/_hyperscript_web0_9_5.min.js", defer_ "true"] ("" :: Text)
+      script_ [src_ "/assets/js/thirdparty/_hyperscript_template.js", defer_ "true"] ("" :: Text)
       script_ [src_ "/assets/js/thirdparty/luxon.min.js", defer_ "true"] ("" :: Text)
       script_ [src_ "/assets/js/thirdparty/popper2_11_4.min.js", defer_ "true"] ("" :: Text)
       script_ [src_ "/assets/js/thirdparty/tippy6_3_7.umd.min.js", defer_ "true"] ("" :: Text)
@@ -80,6 +83,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
       script_ [src_ "/assets/js/monaco/vs/loader.js", defer_ "true"] ("" :: Text)
       script_ [src_ "/assets/js/charts.js"] ("" :: Text)
       script_ [src_ "/assets/js/main.js"] ("" :: Text)
+      script_ [src_ "https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"] ("" :: Text)
       script_ [src_ "https://kit.fontawesome.com/e0cb5637ed.js", crossorigin_ "anonymous"] ("" :: Text)
       script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"] ("" :: Text)
       script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/languages/go.min.js"] ("" :: Text)
@@ -126,7 +130,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
 
               if("serviceWorker" in navigator) {
                   window.addEventListener("load", () => {
-                    navigator.serviceWorker.register("/public/sw.js").then(swReg => {}).catch(err => {
+                    navigator.serviceWorker.register("/public/sw.js?v=2").then(swReg => {}).catch(err => {
                         console.error('Service Worker Error', err);
                     });
                 });
@@ -221,7 +225,7 @@ j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
                   -- Modal body
                   div_ [class_ "w-full"] do
                     div_ [class_ "p-6 text-xl space-y-6", style_ "height:50vh; width:100%"] do
-                      p_ [class_ ""] "Due to the heavy visualization usecases we're solving, apitoolkit is not supported on mobile, and can only be used from a desktop browser at the moment."
+                      p_ [class_ ""] "Due to the heavy visualization usecases we're solving, APItoolkit is not supported on mobile, and can only be used from a desktop browser at the moment."
                       p_ [class_ ""] "We're diligently working on expanding its availability to other platforms, and we'll keep you updated as we make progress. "
                       p_ [] "Don't hesitate to let us know if this is a very important feature for your team, then we can prioritize it"
                   -- Modal footer
@@ -263,6 +267,14 @@ j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
               });
               return false;
             }
+
+
+      document.body.addEventListener('htmx:afterSwap', function (event) {
+        window.requestAnimationFrame(() => {
+          hljs.highlightAll();
+        });
+      });
+
           |]
       script_
         [type_ "text/hyperscript"]
@@ -362,13 +374,13 @@ sideNav sess project pageTitle menuItem hasIntegrated = do
           |]
 
     div_ [class_ "text-center"] do
-      a_ [href_ "/", class_ "inline-block px-2 py-2 h-12"] do
+      a_ [href_ "/", class_ "inline-block px-2 py-2 flex items-center justify-center h-12"] do
         img_
-          [ class_ "h-12 sd-hidden"
+          [ class_ "w-40 mt-2 sd-hidden"
           , src_ "/assets/svgs/logo.svg"
           ]
         img_
-          [ class_ "h-12 w-10 hidden sd-show"
+          [ class_ "w-10 mt-2 hidden sd-show"
           , src_ "/assets/logo-mini.png"
           ]
     div_ [class_ "py-4 px-4 transition-all  duration-1000 ease-in-out", id_ "side-nav-ctx-btn"] do

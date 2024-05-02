@@ -15,6 +15,8 @@ ghc-options:
   - "-O" 
   - -Weverything
   - -Werror # Treat warnings as errors
+  - -Wno-error=deprecations
+  - -Wno-error=unused-packages
   - -Wno-missing-exported-signatures # missing-exported-signatures turns off the more strict -Wmissing-signatures. See https://ghc.haskell.org/trac/ghc/ticket/14794#ticket
   - -Wno-missing-import-lists # Requires explicit imports of _every_ function (e.g. ‘$’); too strict
   - -Wno-missed-specialisations # When GHC can’t specialize a polymorphic function. No big deal and requires fixing underlying libraries to solve.
@@ -74,7 +76,7 @@ library:
   dependencies:
     - base 
     - relude >= 1.2.0.0
-    # - rust-interop
+    - rust-interop
     - colourista
     - effectful
     - effectful-core
@@ -100,6 +102,7 @@ library:
     - cookie
     - safe-exceptions
     - safe
+    - aeson-pretty
     - cryptonite
     - data-default
     - deriving-aeson
@@ -108,7 +111,6 @@ library:
     - errors
     - extra
     - lucid-aria
-    - fakedata
     - fmt
     - PyF
     - generic-lens
@@ -131,7 +133,6 @@ library:
     - pg-transact
     - postgresql-migration
     - postgresql-simple
-    - random
     - regex-tdfa
     - resource-pool
     - resourcet
@@ -155,7 +156,6 @@ library:
     - witch
     - wreq
     - xxhash
-    - yaml
     - pretty-relative-time
     - nyan-interpolation
     - pretty-simple
@@ -164,6 +164,8 @@ library:
     - githash
     - network-uri
     - hspec-expectations-json
+    - scotty
+    - wai-middleware-static
 
 executables:
   apitoolkit-server-exe:

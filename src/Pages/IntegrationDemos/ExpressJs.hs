@@ -12,7 +12,7 @@ expressGuide apikey = do
   section_ [class_ "flex flex-col gap-10"] do
     div_ [class_ "w-full flex flex-col gap-2"] do
       h3_ [class_ "text-2xl font-semibold"] "Install"
-      p_ [class_ "text-gray-600 font-medium"] "Install the APIToolkit express SDK using npm/bun/pnpm"
+      p_ [class_ "text-gray-600 font-medium"] "Install the APItoolkit express SDK using npm/bun/pnpm"
       bashCommand "npm install apitoolkit-express"
 
     div_ [class_ "w-full flex flex-col gap-2", id_ "requests-monitoring"] do
@@ -27,12 +27,12 @@ expressGuide apikey = do
 
     div_ [class_ "w-full flex flex-col gap-2", id_ "errors-monitoring"] do
       h3_ [class_ "text-2xl font-semibold"] "Error Reporting"
-      p_ [class_ "text-gray-600 font-medium max-w-5xl"] "APIToolkit allows you to report errors alongside the request that caused them which allows you to easily reproduce and fix issues in production."
+      p_ [class_ "text-gray-600 font-medium max-w-5xl"] "APItoolkit allows you to report errors alongside the request that caused them which allows you to easily reproduce and fix issues in production."
       codeExample $ errorReportingCode apikey
 
     div_ [class_ "w-full flex flex-col gap-2", id_ "outgoing-request-monitoring"] do
       h3_ [class_ "text-2xl font-semibold"] "Outgoing Request Monitoring"
-      p_ [class_ "text-gray-600 max-w-5xl"] "APIToolkit also allows you to monitor your outgoing request (i.e the api calls your make from your server). Monitored outgoing are also associated with the incoming request that triggered them, you can also monitor request in a background job or outside request context. To achieve this, wrap your axios instance with APIToolkit's observeAxios function."
+      p_ [class_ "text-gray-600 max-w-5xl"] "APItoolkit also allows you to monitor your outgoing request (i.e the api calls your make from your server). Monitored outgoing are also associated with the incoming request that triggered them, you can also monitor request in a background job or outside request context. To achieve this, wrap your axios instance with APItoolkit's observeAxios function."
       codeExample $ outgoingRequest apikey
 
 
@@ -95,7 +95,7 @@ errorReportingCode apiKey =
     , "    let inf = 1/0;"
     , "    res.send(\"The impossible number is: \" + inf);"
     , "  } catch (error) {"
-    , "    // Manually report errors to APIToolkit"
+    , "    // Manually report errors to APItoolkit"
     , "    ReportError(error);"
     , "    res.send(\"Something went wrong\");"
     , "  }"

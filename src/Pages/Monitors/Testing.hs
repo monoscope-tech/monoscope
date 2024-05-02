@@ -1,49 +1,68 @@
-module Pages.Testing (
+module Pages.Monitors.Testing (
   testingGetH,
   testingPostH,
   testingPutH,
-  collectionGetH,
   TestCollectionForm (..),
-  collectionStepPostH,
-  collectionStepPutH,
-  saveStepsFromCodePostH,
-  deleteStepH,
-  CodeOperationsForm (..),
   runTestCollectionH,
-  runTestStepH,
 )
 where
 
-import Data.Aeson
-import Data.Aeson qualified as AE
+import Data.Aeson (
+  FromJSON,
+  KeyValue ((.=)),
+  Value,
+  decode,
+  encode,
+ )
 import Data.Aeson qualified as Aeson
 import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
 import Data.Text qualified as T
 import Data.Time (getCurrentTime, getZonedTime)
-import Data.Time.LocalTime (ZonedTime)
-import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
-import Effectful.PostgreSQL.Transact.Effect
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
-import Lucid
-import Lucid.Base
+import Lucid (
+  Html,
+  Term (term),
+  ToHtml (toHtml),
+  a_,
+  button_,
+  class_,
+  div_,
+  for_,
+  form_,
+  h1_,
+  h3_,
+  href_,
+  id_,
+  input_,
+  label_,
+  name_,
+  onclick_,
+  p_,
+  placeholder_,
+  script_,
+  span_,
+  textarea_,
+  type_,
+ )
 import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_)
-import Lucid.Hyperscript
+import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Pages.NonMember
+import Pages.NonMember (userNotMemeberPage)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
-import System.Config
-import System.Types
-import Utils
+import System.Config (AuthContext)
+import System.Types (ATAuthCtx)
+import Utils (faIcon_, scheduleIntervals, userIsProjectMember)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -53,16 +72,8 @@ data TestCollectionForm = TestCollectionForm
   , description :: Text
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromForm, FromJSON)
+  deriving anyclass (FromForm)
 
-
--- data CollectionStep = CollectionStep
---   {
---     title :: Text,
-
---   }
---   deriving stock (Show, Generic)
---   deriving anyclass (FromJSON, ToJSON)
 
 data ScheduleForm = ScheduleForm
   { schedule :: Maybe Text
@@ -130,6 +141,7 @@ testingPostH pid collection = do
               , config = Aeson.object []
               , schedule = Nothing
               , isScheduled = False
+              , collectionSteps = Testing.CollectionSteps V.empty
               }
       _ <- dbtToEff $ Testing.addCollection coll
       cols <- dbtToEff $ Testing.getCollections pid
@@ -259,7 +271,7 @@ modal pid = do
                       , name_ "title"
                       , id_ "title"
                       , class_ "flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                      , placeholder_ "Test Profile edit"
+                      , placeholder_ "Test Collection Title"
                       ]
                   div_ [class_ "flex flex-col gap-1 w-full"] $ do
                     label_ [Lucid.for_ "desc", class_ "text-sm font-semibold leading-none"] "Description"
@@ -268,7 +280,7 @@ modal pid = do
                       , name_ "description"
                       , id_ "desc"
                       , class_ "flex h-16 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                      , placeholder_ "Test Profile edit"
+                      , placeholder_ "Description"
                       ]
                       ""
               div_ [class_ "px-4 py-3 sm:flex sm:flex-row-reverse sm:px-6 border-t mt-4"] $ do
@@ -291,151 +303,6 @@ modal pid = do
       |]
 
 
-collectionStepPostH :: Projects.ProjectId -> Testing.CollectionId -> Value -> ATAuthCtx (Html ())
-collectionStepPostH pid cid step_val = do
-  appConf <- ask @AuthContext
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-  isMember <- dbtToEff $ userIsProjectMember sess pid
-  if not isMember
-    then do
-      pure $ userNotMemeberPage sess
-    else do
-      currentTime <- liftIO getZonedTime
-      step_id <- Testing.CollectionStepId <$> liftIO UUIDV4.nextRandom
-      let newStep =
-            Testing.CollectionStep
-              { id = step_id
-              , createdAt = currentTime
-              , updatedAt = currentTime
-              , lastRun = Nothing
-              , projectId = pid
-              , collectionId = cid
-              , stepData = step_val
-              }
-      _ <- dbtToEff $ Testing.addCollectionStep newStep
-      pure ""
-
-
-collectionStepPutH :: Projects.ProjectId -> Testing.CollectionStepId -> Value -> ATAuthCtx (Html ())
-collectionStepPutH pid csid value = do
-  appConf <- ask @AuthContext
-  sess' <- Sessions.getSession
-  _ <- dbtToEff $ Testing.updateCollectionStep csid value
-  pure ""
-
-
--- Import the foreign function from the Rust library
-
-collectionGetH :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (Html ())
-collectionGetH pid col_id = do
-  appConf <- ask @AuthContext
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-  isMember <- dbtToEff $ userIsProjectMember sess pid
-  if not isMember
-    then do
-      pure $ userNotMemeberPage sess
-    else do
-      collection <- dbtToEff $ Testing.getCollectionById col_id
-      project <- dbtToEff $ Projects.selectProjectForUser (Sessions.userId sess, pid)
-      collection_steps <- dbtToEff $ Testing.getCollectionSteps col_id
-      let bwconf =
-            (def :: BWConfig)
-              { sessM = Just sess
-              , currProject = project
-              , pageTitle = "Testing"
-              }
-      pure $ bodyWrapper bwconf $ collectionPage pid collection collection_steps
-
-
-collectionPage :: Projects.ProjectId -> Maybe Testing.Collection -> V.Vector Testing.CollectionStep -> Html ()
-collectionPage pid col steps = do
-  div_ [] do
-    case col of
-      Just c -> do
-        let col_json = decodeUtf8 $ encode c
-        let steps_json = decodeUtf8 $ encode steps
-        div_ [id_ "test-data", term "data-collection" col_json, term "data-steps" steps_json] do
-          termRaw "test-editor" [id_ "testEditorElement"] ("" :: Text)
-      Nothing -> do
-        h1_ [] "Not found"
-  script_ [type_ "module", src_ "/assets/testeditor.js"] ("" :: Text)
-  script_ [src_ "/assets/js/thirdparty/jsyaml.min.js", crossorigin_ "true"] ("" :: Text)
-  script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.63.0/codemirror.min.js"] ("" :: Text)
-  script_ [src_ "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.63.0/mode/yaml/yaml.js"] ("" :: Text)
-  style_
-    [text|
-        .CodeMirror {
-            height: 100%;
-        }
-    |]
-
-
-data UpdatedStep = UpdatedStep
-  { stepId :: Testing.CollectionStepId
-  , stepData :: AE.Value
-  }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
-
-
-data CodeOperationsForm = CodeOperationsForm
-  { addedSteps :: V.Vector AE.Value
-  , deletedSteps :: V.Vector Text
-  , updatedSteps :: [UpdatedStep]
-  }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
-
-
-getStep :: Projects.ProjectId -> Testing.CollectionId -> ZonedTime -> AE.Value -> Testing.CollectionStep
-getStep pid col_id cr step_val =
-  Testing.CollectionStep
-    { id = Testing.CollectionStepId UUID.nil
-    , createdAt = cr
-    , updatedAt = cr
-    , projectId = pid
-    , collectionId = col_id
-    , lastRun = Nothing
-    , stepData = step_val
-    }
-
-
-saveStepsFromCodePostH :: Projects.ProjectId -> Testing.CollectionId -> CodeOperationsForm -> ATAuthCtx (Html ())
-saveStepsFromCodePostH pid col_id operations = do
-  appConf <- ask @AuthContext
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-  isMember <- dbtToEff $ userIsProjectMember sess pid
-  if not isMember
-    then do
-      pure $ userNotMemeberPage sess
-    else do
-      currentTime <- liftIO getZonedTime
-      _ <- dbtToEff $ Testing.deleteCollectionSteps operations.deletedSteps
-      let added = map (getStep pid col_id currentTime) (V.toList operations.addedSteps)
-      _ <- dbtToEff $ Testing.insertSteps pid col_id added
-      forM_ operations.updatedSteps \s -> do
-        _ <- dbtToEff $ Testing.updateCollectionStep s.stepId s.stepData
-        pass
-      pure ""
-
-
-deleteStepH :: Projects.ProjectId -> Testing.CollectionStepId -> ATAuthCtx (Html ())
-deleteStepH pid step_id = do
-  appConf <- ask @AuthContext
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-  isMember <- dbtToEff $ userIsProjectMember sess pid
-  if not isMember
-    then do
-      pure $ userNotMemeberPage sess
-    else do
-      _ <- dbtToEff $ Testing.deleteCollectionStep step_id
-      pure ""
-
-
 runTestCollectionH :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (Html ())
 runTestCollectionH pid col_id = do
   collection <- dbtToEff $ Testing.getCollectionById col_id
@@ -446,13 +313,16 @@ runTestCollectionH pid col_id = do
       pure ""
   pure ""
 
+-- callRunTestkit :: String -> IO ()
+-- callRunTestkit hsString = withCString hsString run_testkit
 
-runTestStepH :: Projects.ProjectId -> Testing.CollectionId -> Testing.CollectionStepId -> ATAuthCtx (Html ())
-runTestStepH pid col_id step_id = do
-  collection_step <- dbtToEff $ Testing.getCollectionStepById col_id step_id
-  _ <- case collection_step of
-    Just c -> do
-      pure ("" :: String)
-    Nothing -> do
-      pure ""
-  pure ""
+-- runTestStepH :: Projects.ProjectId -> Testing.CollectionId -> Testing.CollectionStepId -> ATAuthCtx (Html ())
+-- runTestStepH pid col_id step_id = do
+--   -- whenJustM (dbtToEff $ Testing.getCollectionStepById col_id step_id) \step -> do
+--     -- pTraceShowM step.stepData
+--     -- pTraceShowM $ toString $ valueToText $ AE.Array [step.stepData]
+
+--     -- _ <- liftIO $ callRunTestkit $ toString $ valueToText $ V.singleton step.stepData
+--     -- pass
+
+--   pure ""
