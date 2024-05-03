@@ -50,7 +50,7 @@ export class StepsEditor extends LitElement {
     const editorContent = JSON.stringify(this.collectionSteps, null, 2);
     this.editor = monaco.editor.create(editorContainer, {
       value: editorContent,
-      language: 'json',
+      language: 'yaml',
       theme: 'nightOwl',
       fontSize: 14,
       lineHeight: 20,
@@ -62,20 +62,19 @@ export class StepsEditor extends LitElement {
     const model = this.editor.getModel();
     model.onDidChangeContent(() => {
       try {
-        const content = model.getValue();
-        const newCollectionSteps = JSON.parse(content);
-        this.collectionSteps = newCollectionSteps;
+        const newCollectionSteps = jsyaml.load(model.getValue());
         if (this.collectionSteps != newCollectionSteps) {
+          this.collectionSteps = newCollectionSteps;
           this.requestUpdate();
         }
       } catch (e) {
-        console.error("Invalid JSON input", e);
+        console.error("Invalid YAML input", e);
       }
     });
   }
 
   updateEditorContent() {
-    const editorContent = JSON.stringify(this.collectionSteps, null, 2);
+    const editorContent = jsyaml.dump(this.collectionSteps,{ident:2});
     if (this.editor && (this.editor.getModel().getValue() != editorContent)) {
       this.editor.getModel().setValue(editorContent);
     }
@@ -120,7 +119,7 @@ export class StepsEditor extends LitElement {
                   <svg class="w-2 h-3"><use href="/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg>
                 </a>
               </div>
-              <input class="text-lg w-full" placeholder="Untitled" .value="${stepData.title||''}" id="title-${idx}" @change=${(e) => this.updateValue(e, idx, null, null, 'title')}/>
+              <input class="text-lg w-full" placeholder="Untitled" .value="${stepData.title || ''}" id="title-${idx}" @change=${(e) => this.updateValue(e, idx, null, null, 'title')}/>
               <div class="relative flex flex-row gap-2 items-center">
                 <label for="actions-list-input-${idx}" class="w-28 shrink text-sm font-medium form-control">
                   <input
@@ -153,7 +152,7 @@ export class StepsEditor extends LitElement {
                 <option selected>json</option>
                 <option>raw</option>
               </select>
-              <div class="hidden peer-data-[chosen=json]:block"><textarea class="w-full border border-slate-200" name="[${idx}][json]" @change=${(e) => this.updateValue(e, idx, null, null, 'json')}>${stepData.json}</textarea></div>
+              <div class="hidden peer-data-[chosen=json]:block"><textarea class="w-full border border-slate-200" name="[${idx}][json]" @change=${(e) => this.updateValue(e, idx, null, null, 'json')}>${JSON.stringify(stepData.json)}</textarea></div>
               <div class="hidden peer-data-[chosen=raw]:block"><textarea class="w-full border border-slate-200" name="[${idx}][raw]" @change=${(e) => this.updateValue(e, idx, null, null, 'raw')}>${stepData.raw}</textarea></div>
             </div>
           </div>
@@ -176,16 +175,9 @@ export class StepsEditor extends LitElement {
         <span class="shrink hidden assertIndicator">✅</span>
         <input class="input input-bordered input-xs w-1/3" placeholder="Key" .value="${key}" @change=${(e) => this.updateKey(e, idx, type, aidx)} />
         <input class="input input-bordered input-xs w-full" placeholder="Value" .value="${value}" @input=${(e) => this.updateValue(e, idx, type, aidx, key)} />
-        <button class="cursor-pointer text-red-700" @click=${() => this.removeParamRow(idx)}>
-          <svg class="inline-block icon w-3 h-3 "><use href="/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg>
-        </button>
+        <a class="cursor-pointer text-red-700" @click=${(e) => this.deleteKey(e, idx, type, aidx, key)}><svg class="inline-block icon w-3 h-3 "><use href="/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg></a>
       </div>
     `
-  }
-
-  hasNoEmptyRows(rows) {
-    // Check if there is at least one row with empty key and value
-    return !rows.some((row) => row.key === '' && row.value === '')
   }
 
   renderParamsRows(stepData, idx, type) {
@@ -206,82 +198,54 @@ export class StepsEditor extends LitElement {
     return html`${rows}`
   }
 
-  updateKey(event, idx, type, aidx) {
-    const newKey = event.target.value
-    const oldKey = event.target.defaultValue
 
-    // Ensure the parent object exists or create it
-    const stepData = this.collectionSteps[idx]
+  updateKey(event, idx, type, aidx) {
+    const newKey = event.target.value;
+    const oldKey = event.target.defaultValue;
+    const stepData = this.collectionSteps[idx];
+
+    const updateObject = (obj, oldKey, newKey) => {
+      const oldValue = obj[oldKey];
+      delete obj[oldKey];
+      obj[newKey] = oldValue || '';
+    };
+
     if (type == null) {
-      const oldValue = stepData[oldKey]
-      delete stepData[oldKey]
-      stepData[newKey] = oldValue || ''
-      this.requestUpdate()
-      return
+      updateObject(stepData, oldKey, newKey);
+      this.requestUpdate();
+      return;
     }
 
-    if (!stepData[type]) stepData[type] = aidx != null ? [] : {}
+    stepData[type] = stepData[type] || (aidx != null ? [] : {});
 
     if (aidx != null) {
-      const arrayItem = stepData[type][aidx] || {}
-
-      // Ensure to retrieve and delete the old key-value pair
-      const oldKey = event.target.defaultValue
-      const oldValue = arrayItem[oldKey]
-      delete arrayItem[oldKey]
-
-      arrayItem[newKey] = oldValue || ''
-      stepData[type][aidx] = arrayItem
+      const arrayItem = stepData[type][aidx] || {};
+      updateObject(arrayItem, oldKey, newKey);
+      stepData[type][aidx] = arrayItem;
     } else {
-      const data = stepData[type]
-
-      // Retrieve and delete the old key-value pair
-
-      const oldValue = data[oldKey]
-      delete data[oldKey]
-      data[newKey] = oldValue || ''
+      updateObject(stepData[type], oldKey, newKey);
     }
 
-    console.log('updateKey called', this.collectionSteps)
-    this.requestUpdate() // Trigger a re-render
-  }
-
-updateKey(event, idx, type, aidx) {
-  const newKey = event.target.value;
-  const oldKey = event.target.defaultValue;
-
-  const stepData = this.collectionSteps[idx];
-
-  const updateObject = (obj, oldKey, newKey) => {
-    const oldValue = obj[oldKey];
-    delete obj[oldKey];
-    obj[newKey] = oldValue || '';
-  };
-
-  if (type == null) {
-    updateObject(stepData, oldKey, newKey);
     this.requestUpdate();
-    return;
   }
 
-  stepData[type] = stepData[type] || (aidx != null ? [] : {});
+  deleteKey(_event, idx, type, aidx, oldKey) {
+    const stepData = this.collectionSteps[idx];
+    stepData[type] = stepData[type] || (aidx != null ? [] : {});
 
-  if (aidx != null) {
-    const arrayItem = stepData[type][aidx] || {};
-    updateObject(arrayItem, oldKey, newKey);
-    stepData[type][aidx] = arrayItem;
-  } else {
-    updateObject(stepData[type], oldKey, newKey);
+    if (aidx != null) {
+      const arrayItem = stepData[type][aidx] || {};
+      delete arrayItem[oldKey];
+      stepData[type][aidx] = arrayItem;
+    } else {
+      delete stepData[type][oldKey];
+    }
+    this.requestUpdate(); // Trigger a re-render
   }
-
-  console.log('updateKey called', this.collectionSteps);
-  this.requestUpdate();
-}
-
 
   updateValue(event, idx, type, aidx, key) {
     const value = event.target.value
-    if (type==null){
+    if (type == null) {
       this.collectionSteps[idx][key] = value
       this.requestUpdate()
       return

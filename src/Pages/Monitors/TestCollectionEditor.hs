@@ -126,7 +126,7 @@ collectionPage pid col = do
               label_ [class_ "relative inline-flex items-center cursor-pointer space-x-2"] do
                 input_ [type_ "checkbox", class_ "toggle editorMode"]
                 span_ [class_ "text-sm"] "Code"
-          div_ [class_ "h-full flex-1 overflow-y-hidden"] $ termRaw "steps-editor" [] ""
+          div_ [class_ "h-full flex-1 overflow-y-hidden"] $ termRaw "steps-editor" [id_ "stepsEditor"] ""
 
         div_ [class_ "col-span-1 h-full border-r border-gray-200"] do
           div_ [class_ "max-h-full overflow-y-scroll", id_ "step-results-parent"] ""
@@ -178,88 +178,4 @@ editorExtraElements = do
     option_ [value_ "UPDATE"] ""
     option_ [value_ "PATCH"] ""
     option_ [value_ "DELETE"] ""
-
   script_ [src_ "/assets/js/thirdparty/jsyaml.min.js", crossorigin_ "true"] ("" :: Text)
-  script_
-    [raw|
-  function buildAndSetEditor(event){
-   if (event.target.checked) {
-      const collectionSteps = stepFormToObject();
-      const yamlData = jsyaml.dump(collectionSteps, { indent: 2 });
-      window.editor.setValue(yamlData)
-    } else{
-      window.collectionSteps = jsyaml.load(window.editor.getValue());
-      window.renderCollection();
-      _hyperscript.processNode(document.getElementById('stepsForm'));
-    }
-  }
-
-  function stepFormToObject(){
-    const formData = new FormData(document.getElementById("stepsForm"));
-    const collectionSteps = [];
-
-    for (const [name, value] of formData.entries()) {
-      if (!name.startsWith("[")) continue;
-      const path = name.split(/[\[\]]+/).filter(part => part !== '')
-        .map(part => isNaN(part) ? part : parseInt(part));  // Convert array indexes to integers
-      if (path.length > 1 && value && value!='' && value!='null' ) {
-        _.set(collectionSteps, path, value);  // Use Lodash's set function
-      } 
-    }
-    return collectionSteps;
-  }
-
-
-  |]
-
--- script_
---   [text|
---     document.addEventListener('DOMContentLoaded', function(){
---       require.config({ paths: { vs: '/assets/js/monaco/vs' } });
---       require.config({ paths: { 'vs': 'https://unpkg.com/monaco-editor/min/vs' } });
---   	require(['vs/editor/editor.main'], function () {
---       monaco.editor.defineTheme('nightOwl', {
---          base: 'vs-dark',
---          inherit: true,
---          rules: [
---            { token: 'comment', foreground: '#6A9955' },
---            { token: 'keyword', foreground: '#C586C0' },
---            { token: 'number', foreground: '#B5CEA8' },
---            { token: 'string', foreground: '#CE9178' },
---            { token: 'operator', foreground: '#D4D4D4' },
---            { token: 'identifier', foreground: '#D4D4D4' },
---            { token: 'type', foreground: '#4EC9B0' },
---            { token: 'delimiter', foreground: '#D4D4D4' },
---            { token: 'punctuation', foreground: '#D4D4D4' },
---            { token: 'namespace', foreground: '#9CDCFE' },
---            { token: 'function', foreground: '#DCDCAA' },
---            { token: 'class', foreground: '#4EC9B0' },
---            { token: 'variable', foreground: '#D4D4D4' }
---          ],
---          colors: {
---            'editor.foreground': '#D4D4D4',
---            'editor.background': '#011627',
---            'editor.selectionBackground': '#2D3643',
---            'editor.lineHighlightBackground': '#202B33',
---            'editorCursor.foreground': '#D4D4D4',
---            'editorWhitespace.foreground': '#404040'
---          }
---       });
---      window.monacoEditor = monaco.editor
---      // const val = document.querySelector('#swaggerData').value
---      // let json = JSON.parse(val)
---      // const yamlData = jsyaml.dump(json,{indent:2})
---    window.editor = monaco.editor.create(document.getElementById('steps-codeEditor'), {
---           // value: yamlData,
---   			language:'yaml',
---           minimap:{enabled:false},
---           automaticLayout : true,
---           fontSize: 14,
---           lineHeight: 20,
---           lineNumbersMinChars: 3,
---           theme: 'nightOwl'
---   		});
---    });
---     })
-
---   |]
