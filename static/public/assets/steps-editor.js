@@ -10,14 +10,14 @@ export class StepsEditor extends LitElement {
     this.collectionSteps = window.collectionSteps || [{}]
 
     require.config({ paths: { vs: '/assets/js/monaco/vs' } })
-    require.config({ paths: { 'vs': 'https://unpkg.com/monaco-editor/min/vs' } });
+    require.config({ paths: { vs: 'https://unpkg.com/monaco-editor/min/vs' } })
     require(['vs/editor/editor.main'], () => {
-      this.initializeEditor(monaco);
+      this.initializeEditor(monaco)
     })
   }
 
   initializeEditor(monaco) {
-    const editorContainer = this.querySelector('#steps-codeEditor');
+    const editorContainer = this.querySelector('#steps-codeEditor')
 
     monaco.editor.defineTheme('nightOwl', {
       base: 'vs-dark',
@@ -48,39 +48,39 @@ export class StepsEditor extends LitElement {
     })
 
     this.editor = monaco.editor.create(editorContainer, {
-      value: jsyaml.dump(this.collectionSteps,{ident:2}),
+      value: jsyaml.dump(this.collectionSteps, { ident: 2 }),
       language: 'yaml',
       theme: 'nightOwl',
       fontSize: 14,
       lineHeight: 20,
       lineNumbersMinChars: 3,
       automaticLayout: true,
-      minimap: { enabled: false }
-    });
+      minimap: { enabled: false },
+    })
 
-    const model = this.editor.getModel();
+    const model = this.editor.getModel()
     model.onDidChangeContent(() => {
       try {
-        const newCollectionSteps = jsyaml.load(model.getValue());
+        const newCollectionSteps = jsyaml.load(model.getValue())
         if (this.collectionSteps != newCollectionSteps) {
-          this.collectionSteps = newCollectionSteps;
-          this.requestUpdate();
+          this.collectionSteps = newCollectionSteps
+          this.requestUpdate()
         }
       } catch (e) {
-        console.error("Invalid YAML input", e);
+        console.error('Invalid YAML input', e)
       }
-    });
+    })
   }
 
   updateEditorContent() {
-    const editorContent = jsyaml.dump(this.collectionSteps,{ident:2});
-    if (this.editor && (this.editor.getModel().getValue() != editorContent)) {
-      this.editor.getModel().setValue(editorContent);
+    const editorContent = jsyaml.dump(this.collectionSteps, { ident: 2 })
+    if (this.editor && this.editor.getModel().getValue() != editorContent) {
+      this.editor.getModel().setValue(editorContent)
     }
   }
 
   updated(_changedProperties) {
-    this.updateEditorContent();
+    this.updateEditorContent()
   }
 
   createRenderRoot() {
@@ -94,14 +94,80 @@ export class StepsEditor extends LitElement {
     return found ? { method: found[0], url: found[1] } : { method: '', url: '' }
   }
 
+
+  _onDragOver(event) {
+    event.preventDefault();
+    const items = document.querySelectorAll('.draggable');
+    let closestItem = null;
+    let smallestDistance = Number.MAX_SAFE_INTEGER;
+
+    items.forEach(item => {
+      const box = item.getBoundingClientRect();
+      const midpoint = box.top + box.height / 2;
+      const distance = Math.abs(event.clientY - midpoint);
+      if (distance < smallestDistance) {
+        closestItem = item;
+        smallestDistance = distance;
+      }
+    });
+
+    items.forEach(item => {
+      if (item === closestItem) {
+        item.classList.add('active-drop-target');
+      } else { item.classList.remove('active-drop-target') }
+    });
+  }
+
+  _onDragEnter(event) {
+    if (event.target.hasAttribute('data-index')) {
+      event.preventDefault();  // Necessary to allow dropping
+      event.target.classList.add('over');  // Highlight the drop target only if it has data-index
+    }
+  }
+
+  _onDragLeave(event) {
+    if (event.target.hasAttribute('data-index')) {
+      event.target.classList.remove('over');
+      event.target.classList.remove('active-drop-target');  // Remove additional highlight
+    }
+  }
+
+  _onDrop(event) {
+    const activeTarget = document.querySelector('.active-drop-target');
+    if (activeTarget) {
+      event.preventDefault();
+      activeTarget.classList.remove('over');
+      activeTarget.classList.remove('active-drop-target');
+      const originIndex = parseInt(event.dataTransfer.getData('text/plain'));
+      const targetIndex = parseInt(activeTarget.dataset.index);
+      if (targetIndex !== originIndex) {
+        const movedItems = [...this.collectionSteps];
+        const item = movedItems.splice(originIndex, 1)[0];
+        movedItems.splice(targetIndex, 0, item);
+        this.collectionSteps = [...movedItems];
+        this.requestUpdate();
+      }
+    }
+  }
+
+
   renderCollectionStep(stepData, idx) {
     const { method, url } = this.methodAndUrl(stepData)
     return html`
-      <div class="rounded-lg overflow-hidden border border-slate-200 group/item collectionStep">
+      <div
+        class="rounded-lg overflow-hidden border border-slate-200 group/item collectionStep bg-white draggable"
+        draggable="true"
+        @dragstart="${(e) => e.dataTransfer.setData('text/plain', e.target.dataset.index)}"
+        @dragover="${this._onDragOver}"
+        @drop="${this._onDrop}"
+        @dragenter="${this._onDragEnter}"
+        @dragleave="${this._onDragLeave}"
+        data-index="${idx}"
+      >
         <input type="checkbox" id="stepState-${idx}" class="hidden stepState" />
         <div class="flex flex-row items-center bg-gray-50">
-          <div class="h-full shrink bg-gray-50 p-3 hidden border-r border-r-slate-200">
-            <i class="fa-solid fa-grip-dots-vertical h-4 w-4"></i>
+          <div class="h-full shrink bg-gray-50 p-3 border-r border-r-slate-200">
+            <svg class="h-4 w-4"><use href="/assets/svgs/fa-sprites/solid.svg#grip-dots-vertical"></use></svg>
           </div>
           <div class="flex-1 flex flex-row items-center gap-1 bg-white pr-5 py-3">
             <label for="stepState-${idx}" class="p-3 cursor-pointer text-xs text-slate-700">${idx + 1}</label>
@@ -118,7 +184,7 @@ export class StepsEditor extends LitElement {
                   <svg class="w-2 h-3"><use href="/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg>
                 </a>
               </div>
-              <input class="text-lg w-full" placeholder="Untitled" .value="${stepData.title || ''}" id="title-${idx}" @change=${(e) => this.updateValue(e, idx, null, null, 'title')}/>
+              <input class="text-lg w-full" placeholder="Untitled" .value="${stepData.title || ''}" id="title-${idx}" @change=${(e) => this.updateValue(e, idx, null, null, 'title')} />
               <div class="relative flex flex-row gap-2 items-center">
                 <label for="actions-list-input-${idx}" class="w-28 shrink text-sm font-medium form-control">
                   <input
@@ -131,7 +197,14 @@ export class StepsEditor extends LitElement {
                   />
                 </label>
                 <label for="actions-data" class="flex-1 text-sm font-medium form-control w-full flex flex-row items-center gap-1">
-                  <input type="text" id="actions-data-${idx}" class="input input-sm input-bordered w-full" placeholder="Request URI" .value="${url}" @change=${(e) => this.updateValue(e, idx, null, null, method)} />
+                  <input
+                    type="text"
+                    id="actions-data-${idx}"
+                    class="input input-sm input-bordered w-full"
+                    placeholder="Request URI"
+                    .value="${url}"
+                    @change=${(e) => this.updateValue(e, idx, null, null, method)}
+                  />
                 </label>
               </div>
             </div>
@@ -151,8 +224,12 @@ export class StepsEditor extends LitElement {
                 <option selected>json</option>
                 <option>raw</option>
               </select>
-              <div class="hidden peer-data-[chosen=json]:block"><textarea class="w-full border border-slate-200" name="[${idx}][json]" @change=${(e) => this.updateValue(e, idx, null, null, 'json')}>${JSON.stringify(stepData.json)}</textarea></div>
-              <div class="hidden peer-data-[chosen=raw]:block"><textarea class="w-full border border-slate-200" name="[${idx}][raw]" @change=${(e) => this.updateValue(e, idx, null, null, 'raw')}>${stepData.raw}</textarea></div>
+              <div class="hidden peer-data-[chosen=json]:block">
+                <textarea class="w-full border border-slate-200" name="[${idx}][json]" @change=${(e) => this.updateValue(e, idx, null, null, 'json')}>${JSON.stringify(stepData.json)}</textarea>
+              </div>
+              <div class="hidden peer-data-[chosen=raw]:block">
+                <textarea class="w-full border border-slate-200" name="[${idx}][raw]" @change=${(e) => this.updateValue(e, idx, null, null, 'raw')}>${stepData.raw}</textarea>
+              </div>
             </div>
           </div>
           <div>
@@ -174,7 +251,9 @@ export class StepsEditor extends LitElement {
         <span class="shrink hidden assertIndicator">✅</span>
         <input class="input input-bordered input-xs w-1/3" placeholder="Key" .value="${key}" @change=${(e) => this.updateKey(e, idx, type, aidx)} />
         <input class="input input-bordered input-xs w-full" placeholder="Value" .value="${value}" @input=${(e) => this.updateValue(e, idx, type, aidx, key)} />
-        <a class="cursor-pointer text-red-700" @click=${(e) => this.deleteKey(e, idx, type, aidx, key)}><svg class="inline-block icon w-3 h-3 "><use href="/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg></a>
+        <a class="cursor-pointer text-red-700" @click=${(e) => this.deleteKey(e, idx, type, aidx, key)}
+          ><svg class="inline-block icon w-3 h-3 "><use href="/assets/svgs/fa-sprites/solid.svg#xmark"></use></svg
+        ></a>
       </div>
     `
   }
@@ -197,49 +276,48 @@ export class StepsEditor extends LitElement {
     return html`${rows}`
   }
 
-
   updateKey(event, idx, type, aidx) {
-    const newKey = event.target.value;
-    const oldKey = event.target.defaultValue;
-    const stepData = this.collectionSteps[idx];
+    const newKey = event.target.value
+    const oldKey = event.target.defaultValue
+    const stepData = this.collectionSteps[idx]
 
     const updateObject = (obj, oldKey, newKey) => {
-      const oldValue = obj[oldKey];
-      delete obj[oldKey];
-      obj[newKey] = oldValue || '';
-    };
+      const oldValue = obj[oldKey]
+      delete obj[oldKey]
+      obj[newKey] = oldValue || ''
+    }
 
     if (type == null) {
-      updateObject(stepData, oldKey, newKey);
-      this.requestUpdate();
-      return;
+      updateObject(stepData, oldKey, newKey)
+      this.requestUpdate()
+      return
     }
 
-    stepData[type] = stepData[type] || (aidx != null ? [] : {});
+    stepData[type] = stepData[type] || (aidx != null ? [] : {})
 
     if (aidx != null) {
-      const arrayItem = stepData[type][aidx] || {};
-      updateObject(arrayItem, oldKey, newKey);
-      stepData[type][aidx] = arrayItem;
+      const arrayItem = stepData[type][aidx] || {}
+      updateObject(arrayItem, oldKey, newKey)
+      stepData[type][aidx] = arrayItem
     } else {
-      updateObject(stepData[type], oldKey, newKey);
+      updateObject(stepData[type], oldKey, newKey)
     }
 
-    this.requestUpdate();
+    this.requestUpdate()
   }
 
   deleteKey(_event, idx, type, aidx, oldKey) {
-    const stepData = this.collectionSteps[idx];
-    stepData[type] = stepData[type] || (aidx != null ? [] : {});
+    const stepData = this.collectionSteps[idx]
+    stepData[type] = stepData[type] || (aidx != null ? [] : {})
 
     if (aidx != null) {
-      const arrayItem = stepData[type][aidx] || {};
-      delete arrayItem[oldKey];
-      stepData[type][aidx] = arrayItem;
+      const arrayItem = stepData[type][aidx] || {}
+      delete arrayItem[oldKey]
+      stepData[type][aidx] = arrayItem
     } else {
-      delete stepData[type][oldKey];
+      delete stepData[type][oldKey]
     }
-    this.requestUpdate(); // Trigger a re-render
+    this.requestUpdate() // Trigger a re-render
   }
 
   updateValue(event, idx, type, aidx, key) {
@@ -259,6 +337,19 @@ export class StepsEditor extends LitElement {
 
   render() {
     return html`
+      <style>
+        .draggable {
+          transition: transform 0.4s ease;
+        }
+        .over {
+          border: 2px solid blue;
+        }
+        .active-drop-target {
+          background-color: lightblue !important;  
+          border: 2px solid blue;
+          transform: translateY(-20px);
+        }
+      </style>
       <div id="collectionStepsContainer" class="h-full">
         <div id="steps-codeEditor" class="h-full max-h-screen hidden group-has-[.editorMode:checked]/colForm:block"></div>
         <div class="h-full overflow-y-scroll group-has-[.editorMode:checked]/colForm:hidden">
