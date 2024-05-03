@@ -51,6 +51,7 @@ callRunTestkit hsString = withCString hsString $ \cstr -> do
 collectionRunTestsH :: Projects.ProjectId -> Testing.CollectionId -> Maybe Int -> CollectionStepUpdateForm -> ATAuthCtx (Html ())
 collectionRunTestsH pid colId runIdxM stepsForm = do
   tkResp <- liftIO $ callRunTestkit $ decodeUtf8 $ AE.encode $ stepsForm.stepsData
+  traceShowM tkResp
   let stepResults = fromRight' $ AE.eitherDecodeStrictText (toText tkResp) :: V.Vector Testing.StepResult
   pure $ do
     script_
@@ -141,7 +142,7 @@ collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
       $ toHtmlRaw
       $ textToHTML stepResult.stepLog
 
-    input_ [type_ "radio", name_ $ "step-result-tabs" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Headers"]
+    input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Headers"]
     div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6 "]
       $ table_ [class_ "table table-xs"] do
         thead_ [] $ tr_ [] $ th_ [] "Name" >> th_ [] "Value"
@@ -149,7 +150,7 @@ collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
           td_ [] $ toHtml k
           td_ [] $ toHtml $ T.intercalate "," v
 
-    input_ [type_ "radio", name_ $ "step-result-tabs" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Body"]
+    input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Body"]
     div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"] do
       pre_ [class_ "flex text-sm leading-snug w-full max-h-[50rem] overflow-y-scroll"]
         $ code_ [class_ "h-full hljs language-json atom-one-dark w-full rounded"]

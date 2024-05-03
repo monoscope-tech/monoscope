@@ -187,12 +187,9 @@ testingPage pid colls = do
           [ class_ "text-white rounded bg-blue-500 px-4 py-2 flex items-center gap-2"
           , [__|on click remove .hidden from #col-modal then set #collection_id's value to ""|]
           ]
-          do
-            faIcon_ "fa-plus" "fa-light fa-plus" "h-6 w-6"
-            "Collection"
-      div_ [class_ "w-full grid grid-cols-2 gap-8 mt-8"] do
-        forM_ colls \c -> do
-          collectionCard pid c
+          $ faIcon_ "fa-plus" "fa-light fa-plus" "h-6 w-6"
+          >> "Collection"
+      div_ [class_ "w-full grid grid-cols-2 gap-8 mt-8"] $ forM_ colls \c -> collectionCard pid c
 
 
 collectionCard :: Projects.ProjectId -> Testing.CollectionListItem -> Html ()
