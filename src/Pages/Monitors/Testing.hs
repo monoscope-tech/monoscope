@@ -3,7 +3,6 @@ module Pages.Monitors.Testing (
   testingPostH,
   testingPutH,
   TestCollectionForm (..),
-  runTestCollectionH,
 )
 where
 
@@ -298,31 +297,7 @@ modal pid = do
       script_
         [text|
           function noPropagation(event) {
-      event.stopPropagation();
-    }
+            event.stopPropagation();
+        }
       |]
 
-
-runTestCollectionH :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (Html ())
-runTestCollectionH pid col_id = do
-  collection <- dbtToEff $ Testing.getCollectionById col_id
-  _ <- case collection of
-    Just c -> do
-      pure ("" :: String)
-    Nothing -> do
-      pure ""
-  pure ""
-
--- callRunTestkit :: String -> IO ()
--- callRunTestkit hsString = withCString hsString run_testkit
-
--- runTestStepH :: Projects.ProjectId -> Testing.CollectionId -> Testing.CollectionStepId -> ATAuthCtx (Html ())
--- runTestStepH pid col_id step_id = do
---   -- whenJustM (dbtToEff $ Testing.getCollectionStepById col_id step_id) \step -> do
---     -- pTraceShowM step.stepData
---     -- pTraceShowM $ toString $ valueToText $ AE.Array [step.stepData]
-
---     -- _ <- liftIO $ callRunTestkit $ toString $ valueToText $ V.singleton step.stepData
---     -- pass
-
---   pure ""

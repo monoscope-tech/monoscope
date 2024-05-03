@@ -47,9 +47,8 @@ export class StepsEditor extends LitElement {
       },
     })
 
-    const editorContent = JSON.stringify(this.collectionSteps, null, 2);
     this.editor = monaco.editor.create(editorContainer, {
-      value: editorContent,
+      value: jsyaml.dump(this.collectionSteps,{ident:2}),
       language: 'yaml',
       theme: 'nightOwl',
       fontSize: 14,

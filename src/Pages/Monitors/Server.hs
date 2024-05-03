@@ -18,8 +18,8 @@ server pid =
     , alertSingleToggleActive = Alerts.alertSingleToggleActiveH pid
     , collectionsGet = Testing.testingGetH pid
     , newCollectionPost = Testing.testingPostH pid
-    , collectionGet = TestCollectionEditor.collectionGetH pid
     , collectionPut = Testing.testingPutH pid
+    , collectionGet = TestCollectionEditor.collectionGetH pid
     , collectionStepsUpdate = TestCollectionEditor.collectionStepsUpdateH pid
     , collectionRunTests = TestCollectionEditor.collectionRunTestsH pid
     }
