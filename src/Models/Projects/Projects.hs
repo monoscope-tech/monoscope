@@ -149,6 +149,7 @@ data Project' = Project'
   , subId :: Maybe Text
   , firstSubItemId :: Maybe Text
   , orderId :: Maybe Text
+  , hasIntegrated :: Bool
   , usersDisplayImages :: Vector Text
   }
   deriving stock (Show, Generic)
@@ -230,10 +231,17 @@ selectProjectsForUser :: Users.UserId -> DBT IO (V.Vector Project')
 selectProjectsForUser = query Select q
   where
     q =
-      [sql| select pp.*,  ARRAY_AGG(us.display_image_url) OVER (PARTITION BY pp.id) from projects.projects as pp 
-                join projects.project_members as ppm on (pp.id=ppm.project_id) 
-                join users.users as us on (us.id=ppm.user_id)
-                where ppm.user_id=? and pp.deleted_at IS NULL order by updated_at desc|]
+      [sql|
+        SELECT pp.*,
+               (SELECT COUNT(*) > 0 FROM apis.request_dumps rd
+                WHERE rd.project_id = pp.id) has_integrated,
+               ARRAY_AGG(us.display_image_url) OVER (PARTITION BY pp.id)
+        FROM projects.projects AS pp
+        JOIN projects.project_members AS ppm ON (pp.id = ppm.project_id)
+        JOIN users.users AS us ON (us.id = ppm.user_id)
+        WHERE ppm.user_id = ? AND pp.deleted_at IS NULL
+        ORDER BY updated_at DESC
+      |]
 
 
 selectProjectForUser :: (Users.UserId, ProjectId) -> DBT IO (Maybe Project)
