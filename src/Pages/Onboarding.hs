@@ -21,11 +21,12 @@ import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext)
 import System.Types (ATAuthCtx)
-import Utils
-  ( faIcon_,
-    faSprite_,
-    userIsProjectMember,
-  )
+import Utils (
+  faIcon_,
+  faSprite_,
+  userIsProjectMember,
+ )
+
 
 onboardingGetH :: Projects.ProjectId -> Maybe Bool -> Maybe Bool -> Maybe Text -> ATAuthCtx (Html ())
 onboardingGetH pid polling redirected current_tab = do
@@ -47,10 +48,10 @@ onboardingGetH pid polling redirected current_tab = do
         pure (project, apikey, requestDumps > 0)
       let bwconf =
             (def :: BWConfig)
-              { sessM = Just sess,
-                currProject = project,
-                pageTitle = "Get Started",
-                hasIntegrated = Just hasRequest
+              { sessM = Just sess
+              , currProject = project
+              , pageTitle = "Get Started"
+              , hasIntegrated = Just hasRequest
               }
       let ans = case project of
             Nothing -> False
@@ -61,14 +62,15 @@ onboardingGetH pid polling redirected current_tab = do
         Just _ -> pure $ onboardingPage pid apikey hasRequest ans (fromMaybe False redirected) (fromMaybe "express" current_tab)
         Nothing -> pure $ bodyWrapper bwconf $ onboardingPage pid apikey hasRequest ans (fromMaybe False redirected) "express"
 
+
 onboardingPage :: Projects.ProjectId -> Text -> Bool -> Bool -> Bool -> Text -> Html ()
 onboardingPage pid apikey hasRequest ans redi ctb = do
   div_
-    [ class_ "relative h-full overflow-y-scroll  w-full",
-      hxGet_ $ "/p/" <> pid.toText <> "/onboarding?polling=True",
-      hxTrigger_ "load delay:30s",
-      hxVals_ "js:{current_tab:getCurrentTab()}",
-      hxSwap_ "outerHTML"
+    [ class_ "relative h-full overflow-y-scroll  w-full"
+    , hxGet_ $ "/p/" <> pid.toText <> "/onboarding?polling=True"
+    , hxTrigger_ "load delay:30s"
+    , hxVals_ "js:{current_tab:getCurrentTab()}"
+    , hxSwap_ "outerHTML"
     ]
     $ do
       when redi $ div_ [class_ "w-full text-center py-2 bg-yellow-500"] "You have to integrate APItoolkit in your app before you can start using the platform"
@@ -134,6 +136,7 @@ onboardingPage pid apikey hasRequest ans redi ctb = do
                   span_ "Or a Demo?"
                 span_ [class_ "text-slate-500"] "Schedule a brief call with an Engineer."
 
+
 integrateApiToolkit :: Text -> Text -> Html ()
 integrateApiToolkit apikey current_tab =
   div_ [class_ "w-full mx-auto rounded-lg border mb-10 overflow-hidden"] do
@@ -176,6 +179,7 @@ var getCurrentTab = () => {
 hljs.highlightAll();
  |]
 
+
 completedBanner :: Projectjs.ProjectId -> Html ()
 completedBanner pid =
   div_ [class_ "w-[1000px] bg-slate-200 mx-auto rounded-lg border shadow mb-10"] do
@@ -184,6 +188,7 @@ completedBanner pid =
         faSprite_ "circle-check" "sharp-regular" "h-24 w-24 text-green-700"
         p_ [class_ "max-w-md text-center"] "Onboarding completed!"
         a_ [href_ $ "/p/" <> pid.toText <> "/", class_ "btn btn-primary"] "Go to the dashboard"
+
 
 tabContentExpress :: Text -> Text -> Html ()
 tabContentExpress apikey current_tab =
@@ -223,6 +228,7 @@ tabContentExpress apikey current_tab =
                 <> "app.listen(port, () => {\n"
                 <> "   console.log(`Example app listening on port ${port}`);\n"
                 <> "});"
+
 
 tabContentExpressCjs :: Text -> Text -> Html ()
 tabContentExpressCjs apikey current_tab =
@@ -265,6 +271,7 @@ tabContentExpressCjs apikey current_tab =
                 <> "      console.log(`Example app listening on port ${port}`);\n"
                 <> "   });\n"
                 <> "})();"
+
 
 tabContentGin :: Text -> Text -> Html ()
 tabContentGin apikey current_tab =
@@ -317,6 +324,7 @@ tabContentGin apikey current_tab =
                 <> "    router.Run(\":8080\")\n"
                 <> "}"
 
+
 tabContentLaravel :: Text -> Text -> Html ()
 tabContentLaravel apikey current_tab =
   div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "laravel" then "" else "hidden"), id_ "laravel_content"] $ do
@@ -361,6 +369,7 @@ tabContentLaravel apikey current_tab =
                 <> "    // ...\n"
                 <> "}"
 
+
 tabContentSymfony :: Text -> Text -> Html ()
 tabContentSymfony apikey current_tab =
   div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "symfony" then "" else "hidden"), id_ "symfony_content"] $ do
@@ -390,6 +399,7 @@ tabContentSymfony apikey current_tab =
                 <> "            - setCachePool: ['@PutYourCachePoolServiceHere']\n"
                 <> "        tags:\n"
                 <> "            - { name: 'kernel.event_subscriber' }"
+
 
 tabContentDotNet :: Text -> Text -> Html ()
 tabContentDotNet apikey current_tab =
@@ -422,6 +432,7 @@ tabContentDotNet apikey current_tab =
                 <> "    var apiToolkit = new APIToolkit(next, client);\n"
                 <> "    await apiToolkit.InvokeAsync(context);\n"
                 <> ");"
+
 
 tabContentFastify :: Text -> Text -> Html ()
 tabContentFastify apikey current_tab =
@@ -465,6 +476,7 @@ tabContentFastify apikey current_tab =
                   <> "   }\n"
                   <> "});"
 
+
 tabContentFlask :: Text -> Text -> Html ()
 tabContentFlask apikey current_tab =
   div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "flask" then "" else "hidden"), id_ "flask_content"]
@@ -507,6 +519,7 @@ tabContentFlask apikey current_tab =
                   <> "    return {\"Hello\": \"World\"}\n"
                   <> "\n"
                   <> "app.run(debug=True)\n"
+
 
 tabContentFastAPI :: Text -> Text -> Html ()
 tabContentFastAPI apikey current_tab =
@@ -553,6 +566,7 @@ tabContentFastAPI apikey current_tab =
                   <> "def read_root():\n"
                   <> "    return {\"Hello\": \"World\"}\n"
 
+
 tabContentDjango :: Text -> Text -> Html ()
 tabContentDjango apikey current_tab =
   div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "django" then "" else "hidden"), id_ "django_content"]
@@ -586,6 +600,7 @@ tabContentDjango apikey current_tab =
                   <> "APITOOLKIT_REDACT_HEADERS = [\"Authorization\", \"Cookie\",\"Content-Length\", \"Content-Type\"] # optional\n"
                   <> "APITOOLKIT_REDACT_REQ_BODY = [\"$.password\", \"$.credit_card\"] # optional\n"
                   <> "APITOOLKIT_REDACT_RES_BODY = [\"$.credentials\", \"$.social_security_number\"] # optional\n"
+
 
 tabContentEcho :: Text -> Text -> Html ()
 tabContentEcho apikey current_tab =
@@ -641,6 +656,7 @@ tabContentEcho apikey current_tab =
                   <> "    e.Start(\":8080\")\n"
                   <> "}"
 
+
 tabContentGorilla :: Text -> Text -> Html ()
 tabContentGorilla apikey current_tab =
   div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "gorilla" then "" else "hidden"), id_ "gorilla_content"]
@@ -688,6 +704,7 @@ tabContentGorilla apikey current_tab =
                   <> "    http.ListenAndServe(\":8080\", r)\n"
                   <> "}"
 
+
 tabContentPhoeinix :: Text -> Text -> Html ()
 tabContentPhoeinix apikey current_tab =
   div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "phoenix" then "" else "hidden"), id_ "phoenix_content"]
@@ -722,6 +739,7 @@ tabContentPhoeinix apikey current_tab =
                   <> "      }\n"
                   <> "  end\n"
                   <> "end\n"
+
 
 tabContentAdonis :: Text -> Text -> Html ()
 tabContentAdonis apikey current_tab =
@@ -760,6 +778,7 @@ tabContentAdonis apikey current_tab =
                   <> "  redactResponseBody: [\"$.message.error\"], // Specified response body fields will be redacted\n"
                   <> "};\n"
 
+
 tabs :: Text -> Html ()
 tabs current_tab =
   ul_ [class_ "grid grid-cols-3 font-medium w-full gap-4"] $ do
@@ -775,103 +794,104 @@ tabs current_tab =
     |]
     li_ [class_ "shrink-0"] $ do
       button_
-        [ class_ $ if current_tab == "express" then "sdk_tab sdk_tab_active" else "sdk_tab",
-          [__| install Navigatable(content: #express_content) |],
-          id_ "express"
+        [ class_ $ if current_tab == "express" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #express_content) |]
+        , id_ "express"
         ]
         do
           img_ [src_ "/assets/framework-logos/express-logo.png", alt_ "Express Js", class_ "w-full"]
     li_ [class_ "shrink-0"] $ do
       button_
-        [ class_ $ if current_tab == "adonis" then "sdk_tab sdk_tab_active" else "sdk_tab",
-          [__| install Navigatable(content: #adonis_content) |],
-          id_ "adonis"
+        [ class_ $ if current_tab == "adonis" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #adonis_content) |]
+        , id_ "adonis"
         ]
         do
           img_ [src_ "/assets/framework-logos/adonis-logo.png", alt_ "adonis", class_ "w-full"]
     li_ [class_ "shrink-0"] do
       button_
-        [ class_ $ if current_tab == "gin" then "sdk_tab sdk_tab_active" else "sdk_tab",
-          [__| install Navigatable(content: #gin_content) |],
-          id_ "gin"
+        [ class_ $ if current_tab == "gin" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #gin_content) |]
+        , id_ "gin"
         ]
         do
           img_ [src_ "/assets/framework-logos/gin-logo.png", alt_ "Gin", class_ "w-full"]
     li_ [class_ "shrink-0"] do
       button_
-        [ class_ $ if current_tab == "laravel" then "sdk_tab sdk_tab_active" else "sdk_tab",
-          [__| install Navigatable(content: #laravel_content) |],
-          id_ "laravel"
+        [ class_ $ if current_tab == "laravel" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #laravel_content) |]
+        , id_ "laravel"
         ]
         do
           img_ [src_ "/assets/framework-logos/laravel-logo.png", alt_ "", class_ "w-full"]
 
     li_ [class_ "shrink-0"] do
       button_
-        [ class_ $ if current_tab == "flask" then "sdk_tab sdk_tab_active" else "sdk_tab",
-          [__| install Navigatable(content: #flask_content) |],
-          id_ "flask"
+        [ class_ $ if current_tab == "flask" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #flask_content) |]
+        , id_ "flask"
         ]
         do
           img_ [src_ "/assets/framework-logos/flask-logo.png", alt_ "", class_ "w-full"]
 
     li_ [class_ "shrink-0"] do
       button_
-        [ class_ $ if current_tab == "fastapi" then "sdk_tab sdk_tab_active" else "sdk_tab",
-          [__| install Navigatable(content: #fastapi_content) |],
-          id_ "fastapi"
+        [ class_ $ if current_tab == "fastapi" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #fastapi_content) |]
+        , id_ "fastapi"
         ]
         do
           img_ [src_ "/assets/framework-logos/fastapi-logo.png", alt_ "", class_ "w-full"]
     li_ [class_ "shrink-0"] do
       button_
-        [ class_ $ if current_tab == "django" then "sdk_tab sdk_tab_active" else "sdk_tab",
-          [__| install Navigatable(content: #django_content) |],
-          id_ "django"
+        [ class_ $ if current_tab == "django" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #django_content) |]
+        , id_ "django"
         ]
         do
           img_ [src_ "/assets/framework-logos/django-logo.png", alt_ "", class_ "w-full"]
     li_ [class_ "shrink-0"] do
       button_
-        [ class_ $ if current_tab == "gorilla" then "sdk_tab sdk_tab_active" else "sdk_tab",
-          [__| install Navigatable(content: #gorilla_content) |],
-          id_ "gorilla"
+        [ class_ $ if current_tab == "gorilla" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #gorilla_content) |]
+        , id_ "gorilla"
         ]
         do
           img_ [src_ "/assets/framework-logos/mux-logo.png", alt_ "", class_ "w-full"]
 
     li_ [class_ "shrink-0"] do
       button_
-        [ class_ $ if current_tab == "symfony" then "sdk_tab sdk_tab_active" else "sdk_tab",
-          [__| install Navigatable(content: #symfony_content) |],
-          id_ "symfony"
+        [ class_ $ if current_tab == "symfony" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #symfony_content) |]
+        , id_ "symfony"
         ]
         do
           img_ [src_ "/assets/framework-logos/symfony-logo.png", alt_ "", class_ "w-full"]
     li_ [class_ "shrink-0"] do
       button_
-        [ class_ $ if current_tab == "net" then "sdk_tab sdk_tab_active" else "sdk_tab",
-          [__| install Navigatable(content: #net_content) |],
-          id_ "net"
+        [ class_ $ if current_tab == "net" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #net_content) |]
+        , id_ "net"
         ]
         do
           img_ [src_ "/assets/framework-logos/net-logo.png", alt_ "", class_ "w-full"]
     li_ [class_ "shrink-0"] do
       button_
-        [ class_ $ if current_tab == "echo" then "sdk_tab sdk_tab_active" else "sdk_tab",
-          [__| install Navigatable(content: #phoenix_content) |],
-          id_ "phoenix"
+        [ class_ $ if current_tab == "echo" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #phoenix_content) |]
+        , id_ "phoenix"
         ]
         do
           img_ [src_ "/assets/framework-logos/phoenix.png", alt_ "", class_ "w-full"]
     li_ [class_ "shrink-0"] do
       button_
-        [ class_ $ if current_tab == "fastify" then "sdk_tab sdk_tab_active" else "sdk_tab",
-          [__| install Navigatable(content: #fastify_content) |],
-          id_ "fastify"
+        [ class_ $ if current_tab == "fastify" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #fastify_content) |]
+        , id_ "fastify"
         ]
         do
           img_ [src_ "/assets/framework-logos/fastify-logo.png", alt_ "", class_ "w-full"]
+
 
 contentHeader :: Text -> Html ()
 contentHeader target =
@@ -881,9 +901,9 @@ contentHeader target =
       div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
       div_ [class_ "w-2.5 h-2.5 bg-slate-600 rounded-full"] ""
     button_
-      [ class_ "text-gray-500 text-sm font-bold mr-6",
-        term "data-target" target,
-        [__|
+      [ class_ "text-gray-500 text-sm font-bold mr-6"
+      , term "data-target" target
+      , [__|
           on click
             if 'clipboard' in window.navigator then
               call document.getElementById(@data-target)

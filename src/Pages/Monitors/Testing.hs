@@ -300,4 +300,3 @@ modal pid = do
             event.stopPropagation();
         }
       |]
-
