@@ -2,7 +2,7 @@
 
 module BackgroundJobs (jobsWorkerInit, jobsRunner, BgJobs (..)) where
 
-import Control.Lens ((.~))
+import Control.Lens ((^.), (.~))
 import Data.Aeson as Aeson
 import Data.Aeson.QQ (aesonQQ)
 import Data.CaseInsensitive qualified as CI
@@ -36,7 +36,7 @@ import Models.Projects.Swaggers qualified as Swaggers
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text, trimming)
-import Network.Wreq (defaults, header, postWith)
+import Network.Wreq 
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, startJobRunner, throwParsePayload)
 import Pages.Reports qualified as RP
@@ -88,6 +88,28 @@ updateShapeCounts pid shapeHash newFields deletedFields updatedFields = execute 
 -- 3. [x] how many were deleted params
 -- Send a notification email about the new anomaly (shape and endpoint etc)
 --
+webhookUrl :: String
+webhookUrl = "https://discord.com/api/webhooks/1230980245423788045/JQOJ7w3gmEduaOvPTnxEz4L8teDpX5PJoFkyQmqZHR8HtRqAkWIjv2Xk1aKadTyXuFy_"
+
+-- | Message data structure
+data DiscordMessage = DiscordMessage
+    { content :: Text
+    }
+
+instance ToJSON DiscordMessage where
+    toJSON (DiscordMessage content) =
+        object [ "content" .= content ]
+
+-- | Function to send message to Discord
+sendMessageToDiscord :: Text -> IO ()
+sendMessageToDiscord msg = do
+    let message = DiscordMessage msg
+    response <- postWith opts webhookUrl (toJSON message)
+    liftIO $ putStrLn $ "Response: " ++ show (response ^. responseStatus)
+  where
+    opts = defaults
+        & header "Content-Type" .~ ["application/json"]
+
 
 jobsRunner :: Log.Logger -> Config.AuthContext -> Job -> IO ()
 jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
@@ -109,7 +131,14 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
   Regards,
   Apitoolkit team
             |]
-    CreatedProjectSuccessfully userId projectId reciever projectTitle ->
+    CreatedProjectSuccessfully userId projectId reciever projectTitle -> do
+      let msg = [fmtTrim|
+              🎉 New project created on apitoolkit.io! 🎉
+              Project Title: {projectTitle}
+              Project ID: {projectId.toText}
+              User ID :{userId.toText}
+          |]  
+      liftIO $ sendMessageToDiscord msg   
       sendEmail
         reciever
         [fmt| 🤖 APITOOLKIT: Project created successfully '{projectTitle}' on apitoolkit.io |]

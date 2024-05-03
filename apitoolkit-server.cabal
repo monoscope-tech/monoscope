@@ -90,6 +90,7 @@ library
       Pages.NonMember
       Pages.Onboarding
       Pages.Projects.CreateProject
+      Pages.Projects.Integrations
       Pages.Projects.ListProjects
       Pages.Projects.ManageMembers
       Pages.Projects.Routes

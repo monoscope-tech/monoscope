@@ -9,10 +9,8 @@ module Pages.Projects.CreateProject (
   createProjectFormV,
   createProjectFormToModel,
   CreateProjectFormError,
-  NotifListForm,
   projectSettingsGetH,
   deleteProjectGetH,
-  updateNotificationsChannel,
 )
 where
 
@@ -118,9 +116,7 @@ createProjectGetH = do
           { sessM = sess.persistentSession
           , pageTitle = "Endpoints"
           }
-  pure $ bodyWrapper bwconf $ createProjectBody (Unsafe.fromJust sess.persistentSession) appCtx.config False (def @CreateProjectForm) (def @CreateProjectFormError) Nothing Nothing
-
-
+  pure $ bodyWrapper bwconf $ createProjectBody (Unsafe.fromJust sess.persistentSession) appCtx.config False (def @CreateProjectForm) (def @CreateProjectFormError)
 ----------------------------------------------------------------------------------------------------------
 projectSettingsGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
 projectSettingsGetH pid = do
@@ -141,10 +137,9 @@ projectSettingsGetH pid = do
           , timeZone = proj.timeZone
           , orderId = proj.orderId
           }
-  slackInfo <- dbtToEff $ getProjectSlackData pid
 
   let bwconf = (def :: BWConfig){sessM = sess.persistentSession, currProject = projM, pageTitle = "Settings"}
-  pure $ bodyWrapper bwconf $ createProjectBody pSess appCtx.config True createProj (def @CreateProjectFormError) (Just proj.notificationsChannel) slackInfo
+  pure $ bodyWrapper bwconf $ createProjectBody pSess appCtx.config True createProj (def @CreateProjectFormError)
 
 
 ----------------------------------------------------------------------------------------------------------
@@ -162,30 +157,8 @@ deleteProjectGetH pid = do
       pure $ addHeader hxTriggerData $ addHeader "/" $ span_ ""
 
 
-data NotifListForm = NotifListForm
-  { notificationsChannel :: [Text]
-  }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromForm)
 
 
-updateNotificationsChannel :: Projects.ProjectId -> NotifListForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
-updateNotificationsChannel pid NotifListForm{notificationsChannel} = do
-  if "slack" `elem` notificationsChannel
-    then do
-      slackData <- dbtToEff $ getProjectSlackData pid
-      case slackData of
-        Nothing -> do
-          let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"errorToast": ["You need to connect slack to this project first."]}|]
-          pure $ addHeader hxTriggerData $ span_ ""
-        Just _ -> do
-          _ <- dbtToEff do Projects.updateNotificationsChannel pid notificationsChannel
-          let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Updated Notifications Channels Successfully"]}|]
-          pure $ addHeader hxTriggerData $ span_ ""
-    else do
-      _ <- dbtToEff do Projects.updateNotificationsChannel pid notificationsChannel
-      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Updated Notifications Channels Successfully"]}|]
-      pure $ addHeader hxTriggerData $ span_ ""
 
 
 ----------------------------------------------------------------------------------------------------------
@@ -199,7 +172,7 @@ createProjectPostH createP = do
 
   validationRes <- validateM createProjectFormV createP
   case validationRes of
-    Right cpe -> pure $ noHeader $ noHeader $ createProjectBody sess appCtx.config createP.isUpdate createP cpe Nothing Nothing
+    Right cpe -> pure $ noHeader $ noHeader $ createProjectBody sess appCtx.config createP.isUpdate createP cpe 
     Left cp -> processProjectPostForm cp
 
 
@@ -265,7 +238,7 @@ processProjectPostForm cpRaw = do
   if cp.isUpdate
     then do
       let hxTriggerDataUpdate = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Updated Project Successfully"]}|]
-      let bdy = createProjectBody sess envCfg cp.isUpdate cp (def @CreateProjectFormError) Nothing Nothing
+      let bdy = createProjectBody sess envCfg cp.isUpdate cp (def @CreateProjectFormError) 
       project <- dbtToEff $ Projects.projectById pid
       case project of
         Just p -> do
@@ -285,7 +258,7 @@ processProjectPostForm cpRaw = do
               if isNothing subId || isNothing firstSubItemId
                 then do
                   let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"errorToast": ["Couldn't get subscription Id please try again"]}|]
-                  let bd = createProjectBody sess envCfg cp.isUpdate cp (def @CreateProjectFormError) Nothing Nothing
+                  let bd = createProjectBody sess envCfg cp.isUpdate cp (def @CreateProjectFormError) 
                   pure $ addHeader hxTriggerData $ addHeader ("/p/" <> pid.toText <> "/about_project") bd
                 else do
                   _ <- dbtToEff $ Projects.updateProject (createProjectFormToModel pid subId firstSubItemId cp)
@@ -312,7 +285,7 @@ processProjectPostForm cpRaw = do
       if (cp.paymentPlan /= "Free" && isNothing firstSubItemId)
         then do
           let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"errorToast": ["Couldn't get subscription Id please try again"]}|]
-          let bdy = createProjectBody sess envCfg cp.isUpdate cp (def @CreateProjectFormError) Nothing Nothing
+          let bdy = createProjectBody sess envCfg cp.isUpdate cp (def @CreateProjectFormError)
           pure $ addHeader hxTriggerData $ addHeader ("/p/" <> pid.toText <> "/about_project") bdy
         else do
           _ <- dbtToEff do
@@ -342,14 +315,14 @@ processProjectPostForm cpRaw = do
           _ <- liftIO $ withResource appCtx.pool \conn ->
             createJob conn "background_jobs" $ BackgroundJobs.CreatedProjectSuccessfully sess.userId pid (original sess.user.getUser.email) cp.title
           let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Created Project Successfully"]}|]
-          let bdy = createProjectBody sess envCfg cp.isUpdate cp (def @CreateProjectFormError) Nothing Nothing
+          let bdy = createProjectBody sess envCfg cp.isUpdate cp (def @CreateProjectFormError) 
           pure $ addHeader hxTriggerData $ addHeader ("/p/" <> pid.toText <> "/about_project") bdy
 
 
 ----------------------------------------------------------------------------------------------------------
 -- createProjectBody is the core html view
-createProjectBody :: Sessions.PersistentSession -> EnvConfig -> Bool -> CreateProjectForm -> CreateProjectFormError -> Maybe (V.Vector Projects.NotificationChannel) -> Maybe SlackData -> Html ()
-createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
+createProjectBody :: Sessions.PersistentSession -> EnvConfig -> Bool -> CreateProjectForm -> CreateProjectFormError -> Html ()
+createProjectBody sess envCfg isUpdate cp cpe = do
   let paymentPlan = if cp.paymentPlan == "" then "UsageBased" else cp.paymentPlan
   section_ [id_ "main-content", class_ "p-3 py-5 sm:p-6 overflow-y-scroll h-full"] do
     div_ [class_ "mx-auto", style_ "max-width:800px"] do
@@ -555,46 +528,6 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
 
       when isUpdate do
         let pid = cp.projectId
-        form_ [class_ "mt-10", hxPost_ [text|/p/$pid/notifications-channels|], hxSwap_ "none"] do
-          h2_ [class_ "text-slate-700 text-3xl font-medium mb-5"] "Project Notifications"
-          div_ [class_ "flex flex-col gap-4 border p-6 rounded-2xl"] do
-            p_ [] "Select channels to receive updates on this project."
-            let notif = fromMaybe [] notifChannel
-            div_ [class_ "bg-gray-100 p-6 rounded-lg"] do
-              div_ [class_ "flex gap-6 items-center mb-6"] do
-                let isChecked = Projects.NEmail `elem` notif
-                div_
-                  [class_ "flex items-center gap-2"]
-                  do
-                    label_ [class_ "relative inline-flex items-center cursor-pointer"] do
-                      input_ [type_ "checkbox", name_ "notificationsChannel", value_ "email", if isChecked then checked_ else title_ "Enable notification via email", class_ "sr-only peer"]
-                      div_ [class_ "w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"] pass
-                h3_ [class_ "text-2xl font-bold"] "Email"
-              input_ [value_ "All users on this project", disabled_ "true", class_ "w-full p-2 my-2 text-sm bg-white text-slate-700 border rounded"]
-            div_ [class_ "bg-gray-100 p-6"] do
-              div_ [class_ "flex gap-6 items-center mb-6"] do
-                let isChecked = Projects.NSlack `elem` notif
-                div_
-                  [class_ "flex items-center gap-2"]
-                  do
-                    label_ [class_ "relative inline-flex items-center cursor-pointer"] do
-                      input_ [type_ "checkbox", name_ "notificationsChannel", if isChecked then checked_ else title_ "Enable notifications via slack", value_ "slack", class_ "sr-only peer"]
-                      div_ [class_ "w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"] pass
-                h3_ [class_ "text-2xl font-bold"] "Slack"
-              case slackData of
-                Just s -> span_ [class_ "font-bold text-sm mb-2 text-blue-500 block"] "Already connected, but you can add again to change workspace or channel."
-                Nothing -> pass
-              a_ [target_ "_blank", class_ "", href_ $ "https://slack.com/oauth/v2/authorize?client_id=6211090672305.6200958370180&scope=chat:write,incoming-webhook&user_scope=&redirect_uri=" <> envCfg.slackRedirectUri <> pid] do
-                img_ [alt_ "Add to slack", height_ "40", width_ "139", src_ "https://platform.slack-edge.com/img/add_to_slack.png", term "srcSet" "https://platform.slack-edge.com/img/add_to_slack.png 1x, https://platform.slack-edge.com/img/add_to_slack@2x.png 2x"]
-            -- span_ [class_ "my-4 text-sm text-gray-500 block"] "OR"
-            -- form_ [class_ "flex flex-col rounded-lg", hxPost_ [text|/p/$pid/slack/webhook|], hxSwap_ "none"] do
-            --   label_ [] "Slack webhook"
-            --   div_ [class_ "flex gap-2 items-center"] do
-            --     input_ [type_ "hidden", name_ "projects", value_ pid]
-            --     input_ [value_ (maybe "" (\s -> s.webhookUrl) slackData), placeholder_ "https://hooks.slack.com/services/xxxxxxxxx/xxxxxxxx/xxxxxxxxxxx", name_ "webhookUrl", class_ "w-full p-2 my-2 text-sm bg-white text-slate-700 border rounded"]
-            --     button_ [class_ "text-white bg-blue-600 rounded-lg px-4 py-1 w-max"] "Save"
-            button_ [class_ "btn btn-primary"] "Save Selections"
-
         div_ [class_ "col-span-1 h-full justify-center items-center w-full text-center pt-24"] do
           h2_ [class_ "text-red-800 font-medium pb-4"] "Delete project. This is dangerous and unreversible."
           button_
