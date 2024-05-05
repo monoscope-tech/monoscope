@@ -145,11 +145,12 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
         totalRequestForThisMonth <- dbtToEff $ RequestDumps.getTotalRequestForCurrentMonth pid
         liftIO $ reportUsageToLemonsqueezy fSubId totalRequestForThisMonth authCtx.config.lemonSqueezyApiKey
     ScheduleForCollection col_id -> do
-      whenJustM (dbtToEff $ Testing.getCollectionById col_id) \collection -> whenJust (collection.schedule) \schedule -> do
-        currentTime <- liftIO getCurrentTime
-        let intervals = scheduleIntervals currentTime schedule
-        let dbParams = (\x -> (x, "queued" :: Text, Aeson.object ["tag" .= Aeson.String "RunCollectionTests", "contents" .= show col_id.collectionId])) <$> intervals
-        void $ dbtToEff $ Testing.scheduleInsertScheduleInBackgroundJobs dbParams
+      -- whenJustM (dbtToEff $ Testing.getCollectionById col_id) \collection -> whenJust (collection.schedule) \schedule -> do
+      --   currentTime <- liftIO getCurrentTime
+      --   let intervals = scheduleIntervals currentTime schedule
+      --   let dbParams = (\x -> (x, "queued" :: Text, Aeson.object ["tag" .= Aeson.String "RunCollectionTests", "contents" .= show col_id.collectionId])) <$> intervals
+      --   void $ dbtToEff $ Testing.scheduleInsertScheduleInBackgroundJobs dbParams
+      pass
     RunCollectionTests col_id -> do
       collectionM <- dbtToEff $ Testing.getCollectionById col_id
       whenJust collectionM \collection -> do

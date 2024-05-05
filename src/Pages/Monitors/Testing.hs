@@ -1,7 +1,6 @@
 module Pages.Monitors.Testing (
   testingGetH,
   testingPostH,
-  testingPutH,
   TestCollectionForm (..),
 )
 where
@@ -82,41 +81,6 @@ data ScheduleForm = ScheduleForm
   deriving anyclass (FromForm, FromJSON)
 
 
-testingPutH :: Projects.ProjectId -> Testing.CollectionId -> Text -> Value -> ATAuthCtx (Html ())
-testingPutH pid cid action steps = do
-  appConf <- ask @AuthContext
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-
-  isMember <- dbtToEff $ userIsProjectMember sess pid
-  if not isMember
-    then do
-      pure $ userNotMemeberPage sess
-    else do
-      case action of
-        "update_config" -> do
-          _ <- dbtToEff $ Testing.updateCollectionConfig cid steps
-          pure ""
-        "update_schedule" -> do
-          let sch = decode (encode steps) :: Maybe ScheduleForm
-          case sch of
-            Just s -> do
-              _ <- dbtToEff $ Testing.updateSchedule cid s.schedule s.isScheduled
-              _ <- dbtToEff $ Testing.deleteSchedulesFromBackgroundJobs cid
-              _ <- dbtToEff do
-                currentTime <- liftIO getCurrentTime
-                let intervals = scheduleIntervals currentTime (fromMaybe "" s.schedule)
-                let contents = show cid.collectionId
-                let tagValue = Aeson.String "RunCollectionTests"
-                let dbParams = (\x -> (x, "queued" :: Text, Aeson.object ["tag" .= tagValue, "contents" .= contents])) <$> intervals
-                _ <- Testing.scheduleInsertScheduleInBackgroundJobs dbParams
-                pass
-              pure ""
-            Nothing -> do
-              pure ""
-        _ -> do
-          pure ""
-
 
 testingPostH :: Projects.ProjectId -> TestCollectionForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
 testingPostH pid collection = do
@@ -138,7 +102,7 @@ testingPostH pid collection = do
               , title = collection.title
               , description = collection.description
               , config = Aeson.object []
-              , schedule = Nothing
+              , schedule = "1 day" 
               , isScheduled = False
               , collectionSteps = Testing.CollectionSteps V.empty
               }
@@ -147,7 +111,7 @@ testingPostH pid collection = do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Collection added Successfully"]}|]
       pure $ addHeader hxTriggerData $ testingPage pid cols
     else do
-      _ <- dbtToEff $ Testing.updateCollection pid collection.collection_id collection.title collection.description
+      -- _ <- dbtToEff $ Testing.updateCollection pid collection.collection_id collection.title collection.description
       cols <- dbtToEff $ Testing.getCollections pid
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Collection updated Successfully"]}|]
       pure $ addHeader hxTriggerData $ testingPage pid cols

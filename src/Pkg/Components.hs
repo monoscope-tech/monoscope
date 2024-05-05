@@ -1,4 +1,4 @@
-module Pkg.Components (loader, navBar, bashCommand, codeExample) where
+module Pkg.Components (loader, navBar, bashCommand, codeExample, modal_, dropDownMenu_) where
 
 import Data.Text
 import Lucid
@@ -7,6 +7,7 @@ import Lucid.Hyperscript
 import Lucid.Svg (d_, fill_, path_, viewBox_)
 import Relude
 import Utils
+import Pkg.Components.Modals (modal_, dropDownMenu_)
 
 
 loader :: Html ()

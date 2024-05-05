@@ -1,11 +1,10 @@
 module ProcessMessage (
   processMessages,
-  processMessages',
+  processRequestMessages,
 )
 where
 
-import Control.Exception (try)
-import Control.Monad.Trans.Except (except, throwE)
+import Effectful.Time qualified as Time
 import Control.Monad.Trans.Except.Extra (handleExceptT)
 import Data.Aeson (eitherDecode)
 import Data.Aeson.Types (KeyValue ((.=)), object)
@@ -13,54 +12,25 @@ import Data.ByteString.Lazy.Char8 qualified as BL
 import Data.Cache qualified as Cache
 import Data.List (unzip4)
 import Data.Text qualified as T
-import Data.Time.Clock (getCurrentTime)
 import Data.UUID.V4 (nextRandom)
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (Query)
 import Database.PostgreSQL.Transact (execute)
+import Effectful.Reader.Static qualified as Reader
 import Debug.Pretty.Simple ()
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful (
+  Eff,
+  IOE,
+  type (:>),
+ )
+import Effectful.Log (Log)
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff, DB)
 import Effectful.Reader.Static (ask)
 import Fmt (fmtLn, (+|), (|+))
 import Log qualified
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
-import Relude (
-  Applicative (pure),
-  ByteString,
-  ConvertUtf8 (decodeUtf8, encodeUtf8),
-  Either (..),
-  Eq ((==)),
-  ExceptT,
-  Foldable (length, null),
-  Integral (div),
-  LazyStrict (toStrict),
-  Maybe (Nothing),
-  MonadIO (liftIO),
-  Monoid (mconcat),
-  Ord ((>)),
-  Semigroup ((<>)),
-  SomeException,
-  String,
-  Text,
-  ToText (toText),
-  Traversable (mapM),
-  catMaybes,
-  concat,
-  forM_,
-  fromMaybe,
-  lefts,
-  rights,
-  runExceptT,
-  show,
-  unless,
-  void,
-  when,
-  zip,
-  ($),
-  (&&),
-  (<&>),
- )
+import Relude hiding (ask)
 import RequestMessages qualified
 import System.Clock (
   Clock (Monotonic),
@@ -69,7 +39,6 @@ import System.Clock (
   toNanoSecs,
  )
 import System.Config qualified as Config
-import System.Types (ATBackgroundCtx)
 import Utils (DBField, eitherStrToText)
 
 
@@ -132,8 +101,9 @@ import Utils (DBField, eitherStrToText)
 
     We could also maintain hashes of all the formats in the cache, and check each field format within this list.🤔
  --}
-processMessages :: Config.EnvConfig -> [(Text, ByteString)] -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> ATBackgroundCtx [Text]
-processMessages env msgs projectCache = do
+processMessages ::(Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Log :> es, IOE :> es)
+  =>[(Text, ByteString)] -> Eff es [Text]
+processMessages msgs  = do
   let msgs' =
         msgs <&> \(ackId, msg) -> do
           let sanitizedJsonStr = replaceNullChars $ decodeUtf8 msg
@@ -146,7 +116,7 @@ processMessages env msgs projectCache = do
 
   if null msgs'
     then pure []
-    else processMessages' env (rights msgs') projectCache
+    else processRequestMessages (rights msgs') 
 
 
 -- Replace null characters in a Text
@@ -158,10 +128,15 @@ wrapTxtException :: Text -> SomeException -> Text
 wrapTxtException wrap e = " " <> wrap <> " : " <> (toText @String $ show e)
 
 
-processMessages' :: Config.EnvConfig -> [(Text, RequestMessages.RequestMessage)] -> Cache.Cache Projects.ProjectId Projects.ProjectCache -> ATBackgroundCtx [Text]
-processMessages' _ msgs projectCache' = do
+processRequestMessages 
+  ::(Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Log :> es, IOE :> es) 
+  => [(Text, RequestMessages.RequestMessage)] -> Eff es [Text]
+processRequestMessages  msgs = do
   startTime <- liftIO $ getTime Monotonic
-  processed <- mapM (processMessage projectCache') msgs
+  processed <- forM msgs \(rmAckId, msg) ->  do
+   resp <-  processRequestMessage msg
+   pure $ resp <&> \(q, p, r)->(rmAckId, q, p, r)
+
   let (rmAckIds, queries, params, reqDumps) = unzip4 $ rights processed
   let query' = mconcat $ catMaybes queries
   let params' = concat $ catMaybes params
@@ -208,35 +183,22 @@ projectCacheDefault =
     }
 
 
-processMessage
-  :: Cache.Cache Projects.ProjectId Projects.ProjectCache
-  -> (Text, RequestMessages.RequestMessage)
-  -> ATBackgroundCtx (Either Text (Text, Maybe Query, Maybe [DBField], Maybe RequestDumps.RequestDump))
-processMessage projectCache (rmAckId, recMsg) = do
+processRequestMessage
+  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, IOE :> es) 
+  => RequestMessages.RequestMessage
+  -> Eff es (Either Text (Maybe Query, Maybe [DBField], Maybe RequestDumps.RequestDump))
+processRequestMessage recMsg = do
   appCtx <- ask @Config.AuthContext
-  runExceptT do
-    timestamp <- liftIO getCurrentTime
-    let pid = Projects.ProjectId recMsg.projectId
-
-    -- We retrieve the projectCache object from the inmemory cache and if it doesn't exist,
-    -- we set the value in the db into the cache and return that.
-    -- This should help with our performance, since this project Cache is the only information we need in order to process
-    -- an apitoolkit requestmessage payload. So we're able to process payloads without hitting the database except for the actual db inserts.
-    projectCacheValE <-
-      liftIO
-        $ try
-          ( Cache.fetchWithCache projectCache pid \pid' -> do
-              mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
-              pure $ fromMaybe projectCacheDefault mpjCache
-          )
-        :: ExceptT Text ATBackgroundCtx (Either SomeException Projects.ProjectCache)
-    case projectCacheValE of
-      Left e -> throwE $ "Ann error occurred while fetching project cache: " <> show e
-      Right projectCacheVal -> do
-        recId <- liftIO nextRandom
-        if projectCacheVal.paymentPlan == "Free" && projectCacheVal.monthlyRequestCount > 20000
-          then do
-            pure (rmAckId, Nothing, Nothing, Nothing)
-          else do
-            (query, params, reqDump) <- except $ RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId
-            pure (rmAckId, query, params, reqDump)
+  timestamp <- Time.currentTime
+  let pid = Projects.ProjectId recMsg.projectId
+  -- We retrieve the projectCache object from the inmemory cache and if it doesn't exist,
+  -- we set the value in the db into the cache and return that.
+  -- This should help with our performance, since this project Cache is the only information we need in order to process
+  -- an apitoolkit requestmessage payload. So we're able to process payloads without hitting the database except for the actual db inserts.
+  projectCacheVal <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid \pid' -> do
+            mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
+            pure $ fromMaybe projectCacheDefault mpjCache
+  recId <- liftIO nextRandom
+  pure $ if projectCacheVal.paymentPlan == "Free" && projectCacheVal.monthlyRequestCount > 20000
+    then  (Right (Nothing, Nothing, Nothing))
+    else  (RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId) 

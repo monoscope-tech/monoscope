@@ -888,19 +888,8 @@ CREATE TABLE IF NOT EXISTS tests.collections
 SELECT manage_updated_at('tests.collections');
 create index if not exists idx_apis_testing_project_Id on tests.collections(project_id); 
 
-CREATE TABLE IF NOT EXISTS tests.collection_steps 
-(
-  id                 UUID        NOT     NULL   DEFAULT        gen_random_uuid() PRIMARY KEY, 
-  created_at         TIMESTAMP   WITH    TIME   ZONE           NOT               NULL              DEFAULT current_timestamp,
-  updated_at         TIMESTAMP   WITH    TIME   ZONE           NOT               NULL              DEFAULT current_timestamp,
-  deleted_at         TIMESTAMP   WITH    TIME   ZONE     DEFAULT  NULL,
-  last_run           TIMESTAMP   WITH    TIME   ZONE           DEFAULT NULL,
-  project_id         UUID        NOT     NULL   REFERENCES     projects.projects (id)              ON      DELETE CASCADE,
-  collection_id      UUID        NOT     NULL   REFERENCES     tests.collections (id)                   ON      DELETE CASCADE,
-  step_data          jsonb       NOT     NULL   DEFAULT        '[]'::jsonb
-);
-SELECT manage_updated_at('tests.collection_steps');
-create index if not exists idx_apis_test_steps_id on tests.collection_steps(id); 
+ALTER table tests.collections DROP COLUMN schedule;
+ALTER TABLE tests.collections ADD COLUMN schedule INTERVAL NOT NULL DEFAULT '1 day';
 
 CREATE TABLE IF NOT EXISTS tests.test_results
 (

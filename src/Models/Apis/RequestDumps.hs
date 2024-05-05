@@ -83,6 +83,7 @@ data SDKTypes
   | ElixirPhoenix
   | PythonPyramid
   | DotNetOutgoing
+  | TestkitOutgoing
   deriving stock (Show, Generic, Read, Eq)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SDKTypes
@@ -104,6 +105,7 @@ data RequestTypes
   = Incoming
   | Outgoing
   | Background
+  | System
   deriving stock (Show, Generic, Read, Eq)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestTypes
@@ -164,6 +166,7 @@ normalizeUrlPath GuzzleOutgoing statusCode _method urlPath = removeQueryParams s
 normalizeUrlPath ElixirPhoenix statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath PythonPyramid statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath DotNetOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
+normalizeUrlPath TestkitOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
 
 
 -- getRequestType ...

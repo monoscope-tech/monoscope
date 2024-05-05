@@ -12,14 +12,12 @@ module Models.Tests.Testing (
   CollectionStepData (..),
   CollectionSteps (..),
   stepDataMethod,
+  updateCollection,
   addCollection,
-  updateCollectionSteps,
   getCollections,
   updateCollection,
-  updateCollectionConfig,
   scheduleInsertScheduleInBackgroundJobs,
   getCollectionById,
-  updateSchedule,
   getCollectionsId,
   deleteSchedulesFromBackgroundJobs,
 )
@@ -33,7 +31,7 @@ import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (insert, selectById)
-import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query)
+import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, queryOne)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple hiding (execute, executeMany, query)
 import Database.PostgreSQL.Simple.FromField
@@ -107,8 +105,8 @@ stepDataMethod stepData =
 
 instance ToJSON CollectionStepData where
   toJSON csd =
-    object
-      $ catMaybes
+    object $
+      catMaybes
         [ Just $ "title" .= csd.title
         , fmap ("POST" .=) csd.post -- Change the key to "POST" here for the output JSON
         , fmap ("GET" .=) csd.get
@@ -175,7 +173,7 @@ data Collection = Collection
   , title :: Text
   , description :: Text
   , config :: Value
-  , schedule :: Maybe Text
+  , schedule :: Text
   , isScheduled :: Bool
   , collectionSteps :: CollectionSteps
   }
@@ -243,17 +241,27 @@ addCollection :: Collection -> DBT IO ()
 addCollection = insert @Collection
 
 
-updateCollection :: Projects.ProjectId -> Text -> Text -> Text -> DBT IO Int64
-updateCollection pid cid title description = do
-  let q =
-        [sql| UPDATE tests.collections SET title=?, description=? WHERE project_id=? AND id=? |]
-  execute Update q (title, description, pid, cid)
+updateCollection :: Projects.ProjectId -> CollectionId -> Text -> Text -> Bool -> Text -> V.Vector CollectionStepData -> DBT IO Int64
+updateCollection pid cid title description scheduled scheduleInterval collectionSteps = execute Update q params
+  where
+    params = (title, description, scheduleInterval, scheduled, CollectionSteps collectionSteps, pid, cid)
+    q = [sql| UPDATE tests.collections SET title=?, description=?, schedule=?, is_scheduled=?,  collection_steps=? WHERE project_id=? AND id=? |]
 
 
 getCollectionById :: CollectionId -> DBT IO (Maybe Collection)
-getCollectionById id' = selectById (Only id')
+getCollectionById id' = queryOne Select q  (Only id')
+  where q = [sql| SELECT id, created_at, updated_at, last_run, project_id, title, description, config, 
+                  CASE
+                      WHEN EXTRACT(DAY FROM schedule) > 0 THEN CONCAT(EXTRACT(DAY FROM schedule)::TEXT, ' days')
+                      WHEN EXTRACT(HOUR FROM schedule) > 0 THEN CONCAT(EXTRACT(HOUR FROM schedule)::TEXT, ' hours')
+                      ELSE CONCAT(EXTRACT(MINUTE FROM schedule)::TEXT, ' minutes')
+                  END as schedule,
+                  is_scheduled, collection_steps 
+                  FROM tests.collections t 
+                  WHERE id=?|]
 
 
+-- TODO: delete or remove the collect_steps join
 getCollections :: Projects.ProjectId -> DBT IO (V.Vector CollectionListItem)
 getCollections pid = query Select q (Only pid)
   where
@@ -272,16 +280,7 @@ getCollectionsId :: DBT IO (V.Vector CollectionId)
 getCollectionsId = query Select q ()
   where
     q =
-      [sql|   
-        SELECT id FROM tests.collections where deleted_at IS NULL AND schedule IS NOT NULL;
-    |]
-
-
-updateCollectionConfig :: CollectionId -> Value -> DBT IO Int64
-updateCollectionConfig cid config = do
-  let q =
-        [sql| UPDATE tests.collections SET config=? WHERE id=? |]
-  execute Update q (config, cid)
+      [sql|SELECT id FROM tests.collections where deleted_at IS NULL AND schedule IS NOT NULL;|]
 
 
 updateCollectionSteps :: CollectionId -> V.Vector CollectionStepData -> DBT IO Int64
@@ -289,13 +288,6 @@ updateCollectionSteps cid steps = do
   let q =
         [sql| UPDATE tests.collections SET collection_steps=? WHERE id=? |]
   execute Update q (CollectionSteps steps, cid)
-
-
-updateSchedule :: CollectionId -> Maybe Text -> Bool -> DBT IO Int64
-updateSchedule cid schedule isScheduled = do
-  let q =
-        [sql| UPDATE tests.collections SET schedule=?, is_scheduled=? WHERE id=? |]
-  execute Update q (schedule, isScheduled, cid)
 
 
 scheduleInsertScheduleInBackgroundJobs :: [(UTCTime, Text, AE.Value)] -> DBT IO Int64
