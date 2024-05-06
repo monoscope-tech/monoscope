@@ -41,6 +41,7 @@ import Pages.IntegrationDemos.Gin
 import Pages.IntegrationDemos.Laravel
 import Pages.IntegrationDemos.Phoenix
 import Pages.IntegrationDemos.Pyramid
+import Pages.IntegrationDemos.Slim
 import Pages.IntegrationDemos.Symfony
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
@@ -97,6 +98,7 @@ integrationsPage pid sdk apiKey errReportM reqMonM = do
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=symfony"] "PHP Symfony"
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=fastapi"] "Python FastAPI"
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=fastify"] "Fastify Js"
+            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=slim"] "PHP Slim"
         button_
           [ class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium text-sm hover:bg-gray-100"
           , [__|on click go to the top of #requests-monitoring|]
@@ -126,6 +128,7 @@ integrationsPage pid sdk apiKey errReportM reqMonM = do
         "symfony" -> symfonyGuide apiKey
         "fastapi" -> fastApiGuide apiKey
         "fastify" -> fastifyGuide apiKey
+        "slim" -> slimGuide apiKey
         _ -> expressGuide apiKey
     script_
       [text|
@@ -146,4 +149,5 @@ getTitle "echo" = "Go Echo"
 getTitle "symfony" = "PHP Symfony"
 getTitle "fastapi" = "Python FastAPI"
 getTitle "fastify" = "Fastify JS"
+getTitle "slim" = "PHP Slim"
 getTitle _ = "Express Js"
