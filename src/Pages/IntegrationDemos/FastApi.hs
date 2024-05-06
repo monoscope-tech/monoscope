@@ -6,6 +6,7 @@ import NeatInterpolation
 import Pkg.Components
 import Relude
 
+
 fastApiGuide :: Text -> Html ()
 fastApiGuide apikey = do
   section_ [class_ "flex flex-col gap-10"] do

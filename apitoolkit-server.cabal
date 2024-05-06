@@ -72,6 +72,7 @@ library
       Pages.IntegrationDemos.Echo
       Pages.IntegrationDemos.ExpressJs
       Pages.IntegrationDemos.FastApi
+      Pages.IntegrationDemos.FastifyJs
       Pages.IntegrationDemos.Flask
       Pages.IntegrationDemos.Gin
       Pages.IntegrationDemos.Laravel

@@ -5,36 +5,37 @@ import Data.Text
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
-import Lucid
-  ( Html,
-    ToHtml (toHtml),
-    a_,
-    button_,
-    class_,
-    div_,
-    h3_,
-    href_,
-    id_,
-    main_,
-    script_,
-    span_,
-    target_,
-  )
+import Lucid (
+  Html,
+  ToHtml (toHtml),
+  a_,
+  button_,
+  class_,
+  div_,
+  h3_,
+  href_,
+  id_,
+  main_,
+  script_,
+  span_,
+  target_,
+ )
 import Lucid.Hyperscript
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
-import Pages.BodyWrapper
-  ( BWConfig (currProject, pageTitle, sessM),
-    bodyWrapper,
-  )
+import Pages.BodyWrapper (
+  BWConfig (currProject, pageTitle, sessM),
+  bodyWrapper,
+ )
 import Pages.IntegrationDemos.AdonisJS
 import Pages.IntegrationDemos.Django
 import Pages.IntegrationDemos.DotNet
 import Pages.IntegrationDemos.Echo
 import Pages.IntegrationDemos.ExpressJs
 import Pages.IntegrationDemos.FastApi
+import Pages.IntegrationDemos.FastifyJs
 import Pages.IntegrationDemos.Flask
 import Pages.IntegrationDemos.Gin
 import Pages.IntegrationDemos.Laravel
@@ -46,6 +47,7 @@ import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext)
 import System.Types (ATAuthCtx)
 import Utils
+
 
 getH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
 getH pid sdkM errReportM reqMonM = do
@@ -59,11 +61,12 @@ getH pid sdkM errReportM reqMonM = do
     pure (key, project)
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess,
-            currProject = project,
-            pageTitle = "Integrations"
+          { sessM = Just sess
+          , currProject = project
+          , pageTitle = "Integrations"
           }
   pure $ bodyWrapper bwconf $ integrationsPage pid (fromMaybe "express" sdkM) apiKey errReportM reqMonM
+
 
 integrationsPage :: Projects.ProjectId -> Text -> Text -> Maybe Text -> Maybe Text -> Html ()
 integrationsPage pid sdk apiKey errReportM reqMonM = do
@@ -93,19 +96,20 @@ integrationsPage pid sdk apiKey errReportM reqMonM = do
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=phoenix"] "Elixir Phoenix"
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=symfony"] "PHP Symfony"
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=fastapi"] "Python FastAPI"
+            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=fastify"] "Fastify Js"
         button_
-          [ class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium text-sm hover:bg-gray-100",
-            [__|on click go to the top of #requests-monitoring|]
+          [ class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium text-sm hover:bg-gray-100"
+          , [__|on click go to the top of #requests-monitoring|]
           ]
           "Request monitoring"
         button_
-          [ class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium text-sm hover:bg-gray-100",
-            [__|on click go to the top of #errors-monitoring|]
+          [ class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium text-sm hover:bg-gray-100"
+          , [__|on click go to the top of #errors-monitoring|]
           ]
           "Error Reporting"
         button_
-          [ class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium text-sm hover:bg-gray-100",
-            [__|on click go to the top of #outgoing-request-monitoring|]
+          [ class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium text-sm hover:bg-gray-100"
+          , [__|on click go to the top of #outgoing-request-monitoring|]
           ]
           "Outgoing request monitoring"
     div_ [class_ "px-8 mb-10"] do
@@ -121,11 +125,13 @@ integrationsPage pid sdk apiKey errReportM reqMonM = do
         "echo" -> echoGuide apiKey
         "symfony" -> symfonyGuide apiKey
         "fastapi" -> fastApiGuide apiKey
+        "fastify" -> fastifyGuide apiKey
         _ -> expressGuide apiKey
     script_
       [text|
 hljs.highlightAll();
  |]
+
 
 getTitle :: Text -> Text
 getTitle "gin" = "GO Gin"
@@ -139,4 +145,5 @@ getTitle "flask" = "Python Flask"
 getTitle "echo" = "Go Echo"
 getTitle "symfony" = "PHP Symfony"
 getTitle "fastapi" = "Python FastAPI"
+getTitle "fastify" = "Fastify JS"
 getTitle _ = "Express Js"
