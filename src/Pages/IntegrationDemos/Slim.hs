@@ -36,13 +36,6 @@ slimGuide apikey = do
       codeExample $ outgoingRequest apikey
 
 
-apiKeyCode :: Text -> Text
-apiKeyCode apiKey =
-  [text|
-APITOOLKIT_KEY=$apiKey
-|]
-
-
 initCode :: Text -> Text
 initCode apikey =
   [text|

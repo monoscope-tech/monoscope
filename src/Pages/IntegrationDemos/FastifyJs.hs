@@ -75,7 +75,7 @@ const fastify = Fastify();
 const apittoolkitClient = APIToolkit.NewClient({apiKey: "$apikey", fastify: fastify});
 apitoolkitClient.init();
 
-app.get('/', async (request, reply) => {
+fastify.get('/', async (request, reply) => {
     try {
       const val  = 1/0
       reply.send({ message: val });
@@ -99,7 +99,7 @@ const fastify = Fastify();
 const apittoolkitClient = APIToolkit.NewClient({ apiKey: "$apikey", fastify: fastify });
 apitoolkitClient.init();
 
-app.get('/', async (request, reply) => {
+fastify.get('/', async (request, reply) => {
     try {
         // The http request is monitored and will appear in the log explorer
         const res = await observeAxios(axios).get("/hello");
