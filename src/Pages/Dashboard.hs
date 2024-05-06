@@ -108,9 +108,9 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
   let sinceStr = if isNothing fromDStr && isNothing toDStr && isNothing sinceStr' || fromDStr == Just "" then Just "7D" else sinceStr'
   (hasApikeys, hasRequest, newEndpoints) <- dbtToEff do
     -- apiKeys <- ProjectApiKeys.countProjectApiKeysByProjectId pid
-    -- requestDumps <- RequestDumps.countRequestDumpByProject pid
+    hasRequests <- RequestDumps.hasRequest pid
     newEndpoints <- Endpoints.endpointRequestStatsByProject pid False False Nothing Nothing
-    pure (True, True, newEndpoints)
+    pure (True, hasRequests, newEndpoints)
   -- TODO: Replace with a duration parser.
   let (fromD, toD) = case sinceStr of
         Just "1H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just $ utcToZonedTime utc now)
@@ -155,11 +155,11 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
   let currentURL = "/p/" <> pid.toText <> "?&from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
   let currentPickerTxt = fromMaybe (maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD) sinceStr
   let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt}
-  pure $ bodyWrapper bwconf $ dashboardPage pid paramInput currTime projectRequestStats newEndpoints reqLatenciesRolledByStepsJ (fromD, toD) freeTierExceeded
+  pure $ bodyWrapper bwconf $ dashboardPage pid paramInput currTime projectRequestStats newEndpoints reqLatenciesRolledByStepsJ (fromD, toD) freeTierExceeded hasRequest
 
 
-dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Vector.Vector Endpoints.EndpointRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Bool -> Html ()
-dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRolledByStepsJ dateRange exceededFreeTier = do
+dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Vector.Vector Endpoints.EndpointRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Bool -> Bool -> Html ()
+dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRolledByStepsJ dateRange exceededFreeTier hasRequest = do
   let currentURL' = deleteParam "to" $ deleteParam "from" $ deleteParam "since" paramInput.currentURL
   let bulkActionBase = "/p/" <> pid.toText <> "/anomalies/bulk_actions"
   section_ [class_ "p-8  mx-auto px-16 w-full space-y-12 pb-24 overflow-y-scroll  h-full"] do
@@ -214,7 +214,7 @@ dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRoll
 
     -- button_ [class_ "", id_ "checkin", onclick_ "window.picker.show()"] "timepicker"
     section_ $ AnomaliesList.anomalyListSlider currTime pid Nothing Nothing
-    dStats pid projectStats reqLatenciesRolledByStepsJ dateRange
+    dStats pid projectStats reqLatenciesRolledByStepsJ dateRange hasRequest
   script_
     [text|
 
@@ -255,10 +255,10 @@ dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRoll
     |]
 
 
-dStats :: Projects.ProjectId -> Projects.ProjectRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
-dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledByStepsJ dateRange@(fromD, toD) = do
+dStats :: Projects.ProjectId -> Projects.ProjectRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Bool -> Html ()
+dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledByStepsJ dateRange@(fromD, toD) hasRequest = do
   section_ [class_ "space-y-3"] do
-    when (projReqStats.totalRequests == 0) do
+    unless (hasRequest) do
       section_ [class_ "card-round p-5 sm:py-14 sm:px-24 items-center flex gap-16"] do
         div_ [] do
           faIcon_ "fa fa-solid fa-empty-set" "fa-solid fa-empty-set" "h-24 w-24"

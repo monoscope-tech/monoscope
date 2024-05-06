@@ -26,6 +26,7 @@ module Models.Apis.RequestDumps (
   getRequestType,
   autoCompleteFromRequestDumps,
   getTotalRequestForCurrentMonth,
+  hasRequest,
 )
 where
 
@@ -445,6 +446,20 @@ countRequestDumpByProject pid = do
     v -> return $ length v
   where
     q = [sql| SELECT count(*) FROM apis.request_dumps WHERE project_id=? |]
+
+
+hasRequest :: Projects.ProjectId -> DBT IO Bool
+hasRequest pid = do
+  result <- query Select q pid
+  case result of
+    [Only count] -> return count
+    v -> return $ length v > 0
+  where
+    q =
+      [sql|SELECT EXISTS(
+  SELECT 1
+  FROM apis.request_dumps where project_id = ?
+) |]
 
 
 -- bulkInsertRequestDumps is a very import function because it's what inserts the request dumps into the database.

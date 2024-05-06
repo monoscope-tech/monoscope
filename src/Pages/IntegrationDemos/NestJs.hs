@@ -6,6 +6,7 @@ import NeatInterpolation
 import Pkg.Components
 import Relude
 
+
 nestGuide :: Text -> Html ()
 nestGuide apikey = do
   section_ [class_ "flex flex-col gap-10"] do
@@ -133,6 +134,7 @@ export class AppController {
 }
 |]
 
+
 configOptions :: Text
 configOptions =
   [text|
@@ -147,6 +149,7 @@ configOptions =
      debug: true,
   }
 |]
+
 
 errorReportingCode :: Text -> Text
 errorReportingCode apiKey =
@@ -171,6 +174,7 @@ export class AppController {
   }
 }
 |]
+
 
 outgoingRequest :: Text -> Text
 outgoingRequest apiKey =
