@@ -891,21 +891,6 @@ create index if not exists idx_apis_testing_project_Id on tests.collections(proj
 ALTER table tests.collections DROP COLUMN schedule;
 ALTER TABLE tests.collections ADD COLUMN schedule INTERVAL NOT NULL DEFAULT '1 day';
 
-CREATE TABLE IF NOT EXISTS tests.test_results
-(
-  id                 UUID        NOT     NULL   DEFAULT        gen_random_uuid() PRIMARY KEY, 
-  created_at         TIMESTAMP   WITH    TIME   ZONE           NOT               NULL              DEFAULT current_timestamp,
-  updated_at         TIMESTAMP   WITH    TIME   ZONE           NOT               NULL              DEFAULT current_timestamp,
-  project_id         UUID        NOT     NULL   REFERENCES     projects.projects (id)              ON      DELETE CASCADE,
-  collection_id      UUID        NOT     NULL   REFERENCES     tests.collections (id)                   ON  DELETE CASCADE,
-  step_id            UUID        NOT     NULL   REFERENCES     tests.collection_steps (id)                ON      DELETE CASCADE,
-  result_data        jsonb       NOT     NULL   DEFAULT        '{}'::jsonb
-);
-SELECT manage_updated_at('tests.test_results');
-create index if not exists idx_apis_test_results_id on tests.test_results(id); 
-
-
-
 CREATE TABLE IF NOT EXISTS monitors.query_monitors 
 (
   id                           UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -1022,3 +1007,5 @@ $$;
 SELECT add_job('tests.check_tests_to_trigger', '10min');
 
 COMMIT;
+
+
