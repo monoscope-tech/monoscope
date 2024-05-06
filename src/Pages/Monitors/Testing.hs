@@ -7,16 +7,13 @@ where
 
 import Data.Aeson (
   FromJSON,
-  KeyValue ((.=)),
-  Value,
-  decode,
   encode,
  )
 import Data.Aeson qualified as Aeson
 import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
 import Data.Text qualified as T
-import Data.Time (getCurrentTime, getZonedTime)
+import Data.Time (getZonedTime)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
@@ -60,7 +57,7 @@ import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
 import System.Config (AuthContext)
 import System.Types (ATAuthCtx)
-import Utils (faIcon_, scheduleIntervals, userIsProjectMember)
+import Utils (faIcon_, userIsProjectMember)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -79,7 +76,6 @@ data ScheduleForm = ScheduleForm
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm, FromJSON)
-
 
 
 testingPostH :: Projects.ProjectId -> TestCollectionForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
@@ -102,7 +98,7 @@ testingPostH pid collection = do
               , title = collection.title
               , description = collection.description
               , config = Aeson.object []
-              , schedule = "1 day" 
+              , schedule = "1 day"
               , isScheduled = False
               , collectionSteps = Testing.CollectionSteps V.empty
               }

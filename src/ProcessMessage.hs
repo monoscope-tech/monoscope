@@ -4,7 +4,6 @@ module ProcessMessage (
 )
 where
 
-import Effectful.Time qualified as Time
 import Control.Monad.Trans.Except.Extra (handleExceptT)
 import Data.Aeson (eitherDecode)
 import Data.Aeson.Types (KeyValue ((.=)), object)
@@ -16,7 +15,6 @@ import Data.UUID.V4 (nextRandom)
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (Query)
 import Database.PostgreSQL.Transact (execute)
-import Effectful.Reader.Static qualified as Reader
 import Debug.Pretty.Simple ()
 import Effectful (
   Eff,
@@ -24,8 +22,10 @@ import Effectful (
   type (:>),
  )
 import Effectful.Log (Log)
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff, DB)
+import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static (ask)
+import Effectful.Reader.Static qualified as Reader
+import Effectful.Time qualified as Time
 import Fmt (fmtLn, (+|), (|+))
 import Log qualified
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -101,9 +101,11 @@ import Utils (DBField, eitherStrToText)
 
     We could also maintain hashes of all the formats in the cache, and check each field format within this list.🤔
  --}
-processMessages ::(Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Log :> es, IOE :> es)
-  =>[(Text, ByteString)] -> Eff es [Text]
-processMessages msgs  = do
+processMessages
+  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Log :> es, IOE :> es)
+  => [(Text, ByteString)]
+  -> Eff es [Text]
+processMessages msgs = do
   let msgs' =
         msgs <&> \(ackId, msg) -> do
           let sanitizedJsonStr = replaceNullChars $ decodeUtf8 msg
@@ -116,7 +118,7 @@ processMessages msgs  = do
 
   if null msgs'
     then pure []
-    else processRequestMessages (rights msgs') 
+    else processRequestMessages (rights msgs')
 
 
 -- Replace null characters in a Text
@@ -128,14 +130,15 @@ wrapTxtException :: Text -> SomeException -> Text
 wrapTxtException wrap e = " " <> wrap <> " : " <> (toText @String $ show e)
 
 
-processRequestMessages 
-  ::(Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Log :> es, IOE :> es) 
-  => [(Text, RequestMessages.RequestMessage)] -> Eff es [Text]
-processRequestMessages  msgs = do
+processRequestMessages
+  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, DB :> es, Log :> es, IOE :> es)
+  => [(Text, RequestMessages.RequestMessage)]
+  -> Eff es [Text]
+processRequestMessages msgs = do
   startTime <- liftIO $ getTime Monotonic
-  processed <- forM msgs \(rmAckId, msg) ->  do
-   resp <-  processRequestMessage msg
-   pure $ resp <&> \(q, p, r)->(rmAckId, q, p, r)
+  processed <- forM msgs \(rmAckId, msg) -> do
+    resp <- processRequestMessage msg
+    pure $ resp <&> \(q, p, r) -> (rmAckId, q, p, r)
 
   let (rmAckIds, queries, params, reqDumps) = unzip4 $ rights processed
   let query' = mconcat $ catMaybes queries
@@ -184,7 +187,7 @@ projectCacheDefault =
 
 
 processRequestMessage
-  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, IOE :> es) 
+  :: (Reader.Reader Config.AuthContext :> es, Time.Time :> es, IOE :> es)
   => RequestMessages.RequestMessage
   -> Eff es (Either Text (Maybe Query, Maybe [DBField], Maybe RequestDumps.RequestDump))
 processRequestMessage recMsg = do
@@ -196,9 +199,10 @@ processRequestMessage recMsg = do
   -- This should help with our performance, since this project Cache is the only information we need in order to process
   -- an apitoolkit requestmessage payload. So we're able to process payloads without hitting the database except for the actual db inserts.
   projectCacheVal <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid \pid' -> do
-            mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
-            pure $ fromMaybe projectCacheDefault mpjCache
+    mpjCache <- withPool appCtx.jobsPool $ Projects.projectCacheById pid'
+    pure $ fromMaybe projectCacheDefault mpjCache
   recId <- liftIO nextRandom
-  pure $ if projectCacheVal.paymentPlan == "Free" && projectCacheVal.monthlyRequestCount > 20000
-    then  (Right (Nothing, Nothing, Nothing))
-    else  (RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId) 
+  pure
+    $ if projectCacheVal.paymentPlan == "Free" && projectCacheVal.monthlyRequestCount > 20000
+      then (Right (Nothing, Nothing, Nothing))
+      else (RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId)

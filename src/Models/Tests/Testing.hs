@@ -15,11 +15,8 @@ module Models.Tests.Testing (
   updateCollection,
   addCollection,
   getCollections,
-  updateCollection,
-  scheduleInsertScheduleInBackgroundJobs,
   getCollectionById,
   getCollectionsId,
-  deleteSchedulesFromBackgroundJobs,
 )
 where
 
@@ -27,10 +24,10 @@ import Data.Aeson as Aeson
 import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.Default.Instances ()
-import Data.Time (UTCTime, ZonedTime)
+import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity (insert, selectById)
+import Database.PostgreSQL.Entity (insert)
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, queryOne)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple hiding (execute, executeMany, query)
@@ -38,7 +35,7 @@ import Database.PostgreSQL.Simple.FromField
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField
-import Database.PostgreSQL.Transact (DBT, executeMany)
+import Database.PostgreSQL.Transact (DBT)
 import Deriving.Aeson qualified as DAE
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
@@ -105,8 +102,8 @@ stepDataMethod stepData =
 
 instance ToJSON CollectionStepData where
   toJSON csd =
-    object $
-      catMaybes
+    object
+      $ catMaybes
         [ Just $ "title" .= csd.title
         , fmap ("POST" .=) csd.post -- Change the key to "POST" here for the output JSON
         , fmap ("GET" .=) csd.get
@@ -193,7 +190,7 @@ data CollectionListItem = ReportListItem
   , title :: Text
   , description :: Text
   , stepsCount :: Int
-  , schedule :: Maybe Text
+  , schedule :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, NFData)
@@ -249,8 +246,10 @@ updateCollection pid cid title description scheduled scheduleInterval collection
 
 
 getCollectionById :: CollectionId -> DBT IO (Maybe Collection)
-getCollectionById id' = queryOne Select q  (Only id')
-  where q = [sql| SELECT id, created_at, updated_at, last_run, project_id, title, description, config, 
+getCollectionById id' = queryOne Select q (Only id')
+  where
+    q =
+      [sql| SELECT id, created_at, updated_at, last_run, project_id, title, description, config, 
                   CASE
                       WHEN EXTRACT(DAY FROM schedule) > 0 THEN CONCAT(EXTRACT(DAY FROM schedule)::TEXT, ' days')
                       WHEN EXTRACT(HOUR FROM schedule) > 0 THEN CONCAT(EXTRACT(HOUR FROM schedule)::TEXT, ' hours')
@@ -267,7 +266,11 @@ getCollections pid = query Select q (Only pid)
   where
     q =
       [sql| SELECT t.id id , t.created_at created_at , t.updated_at updated_at, t.project_id project_id, t.last_run last_run, 
-                  t.title title, t.description description, COUNT(ts.id) as steps_count, t.schedule schedule
+                  t.title title, t.description description, COUNT(ts.id) as steps_count,CASE
+                      WHEN EXTRACT(DAY FROM t.schedule) > 0 THEN CONCAT(EXTRACT(DAY FROM t.schedule)::TEXT, ' days')
+                      WHEN EXTRACT(HOUR FROM t.schedule) > 0 THEN CONCAT(EXTRACT(HOUR FROM t.schedule)::TEXT, ' hours')
+                      ELSE CONCAT(EXTRACT(MINUTE FROM t.schedule)::TEXT, ' minutes')
+                  END as  schedule
                   FROM  tests.collections t
                   LEFT JOIN tests.collection_steps ts ON t.id = ts.collection_id
                   WHERE t.project_id = ?
@@ -281,27 +284,3 @@ getCollectionsId = query Select q ()
   where
     q =
       [sql|SELECT id FROM tests.collections where deleted_at IS NULL AND schedule IS NOT NULL;|]
-
-
-updateCollectionSteps :: CollectionId -> V.Vector CollectionStepData -> DBT IO Int64
-updateCollectionSteps cid steps = do
-  let q =
-        [sql| UPDATE tests.collections SET collection_steps=? WHERE id=? |]
-  execute Update q (CollectionSteps steps, cid)
-
-
-scheduleInsertScheduleInBackgroundJobs :: [(UTCTime, Text, AE.Value)] -> DBT IO Int64
-scheduleInsertScheduleInBackgroundJobs schedules = do
-  let q =
-        [sql| 
-        INSERT INTO background_jobs
-        (run_at, status, payload)
-        VALUES (?,?,?);
-      |]
-  executeMany q schedules
-
-
-deleteSchedulesFromBackgroundJobs :: CollectionId -> DBT IO Int64
-deleteSchedulesFromBackgroundJobs cid = do
-  let q = [sql| DELETE FROM background_jobs where payload->>'tag' = 'RunCollectionTests' and payload->>'contents' = ? |]
-  execute Delete q cid

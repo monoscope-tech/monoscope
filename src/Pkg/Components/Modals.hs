@@ -1,11 +1,12 @@
-module Pkg.Components.Modals (modal_, dropDownMenu_) where 
+module Pkg.Components.Modals (modal_, dropDownMenu_) where
 
-import Lucid 
-import Data.Text qualified as T 
+import Data.Text qualified as T
+import Lucid
 import Lucid.Hyperscript
 
+
 modal_ :: T.Text -> Html () -> Html () -> Html ()
-modal_ modalId btnTrigger contentHtml = do 
+modal_ modalId btnTrigger contentHtml = do
   label_ [Lucid.for_ modalId] btnTrigger
   input_
     [ class_ "modal-toggle"
@@ -27,5 +28,3 @@ dropDownMenu_ dropDownId btnTrigger contentHtml = do
   div_ [class_ "dropdown dropdown-bottom"] do
     label_ [Lucid.for_ dropDownId] btnTrigger
     div_ [class_ "dropdown-content z-[1] menu p-2 shadow bg-base-100 rounded-box w-52"] contentHtml
-
-

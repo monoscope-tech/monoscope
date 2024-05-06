@@ -5,9 +5,9 @@ import Lucid
 import Lucid.Base
 import Lucid.Hyperscript
 import Lucid.Svg (d_, fill_, path_, viewBox_)
+import Pkg.Components.Modals (dropDownMenu_, modal_)
 import Relude
 import Utils
-import Pkg.Components.Modals (modal_, dropDownMenu_)
 
 
 loader :: Html ()

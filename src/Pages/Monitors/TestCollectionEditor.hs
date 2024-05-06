@@ -3,17 +3,16 @@ module Pages.Monitors.TestCollectionEditor (collectionGetH, CollectionStepUpdate
 import Data.Aeson qualified as AE
 import Data.Aeson.Encode.Pretty (encodePretty)
 import Data.Default (def)
+import Data.Either.Extra (fromRight')
 import Data.Map qualified as M
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
-import Data.Either.Extra (fromRight')
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
-import Pkg.Components qualified as Components
 import Lucid.Htmx (
   hxExt_,
   hxParams_,
@@ -28,6 +27,7 @@ import Models.Tests.TestToDump qualified as TestToDump
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pkg.Components qualified as Components
 import PyF (fmt)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
@@ -38,12 +38,11 @@ import Utils (faIcon_, faSprite_)
 
 data CollectionStepUpdateForm = CollectionStepUpdateForm
   { stepsData :: V.Vector Testing.CollectionStepData
-    , title :: Text
-    , description :: Text 
-    , scheduled :: Maybe Text 
-    , scheduleNumber :: Text 
-    , scheduleNumberUnit :: Text
-    
+  , title :: Text
+  , description :: Text
+  , scheduled :: Maybe Text
+  , scheduleNumber :: Text
+  , scheduleNumberUnit :: Text
   }
   deriving stock (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via (DAE.CustomJSON) '[DAE.OmitNothingFields] CollectionStepUpdateForm
@@ -51,11 +50,11 @@ data CollectionStepUpdateForm = CollectionStepUpdateForm
 
 collectionStepsUpdateH :: Projects.ProjectId -> Testing.CollectionId -> CollectionStepUpdateForm -> ATAuthCtx (Html ())
 collectionStepsUpdateH pid colId colF = do
-  traceShowM colF
   let isScheduled = colF.scheduled == Just "on"
   _ <- dbtToEff $ Testing.updateCollection pid colId colF.title colF.description isScheduled (colF.scheduleNumber <> " " <> colF.scheduleNumberUnit) colF.stepsData
   -- TODO: toast
   pure $ toHtml ""
+
 
 collectionRunTestsH :: Projects.ProjectId -> Testing.CollectionId -> Maybe Int -> CollectionStepUpdateForm -> ATAuthCtx (Html ())
 collectionRunTestsH pid colId runIdxM stepsForm = do
@@ -82,36 +81,33 @@ collectionGetH pid colId = do
           }
   pure $ bodyWrapper bwconf $ collectionPage pid (Unsafe.fromJust collectionM)
 
-testSettingsModalContent_ :: Testing.Collection -> Html () 
-testSettingsModalContent_ col = div_ [class_ "space-y-5"] do
+
+testSettingsModalContent_ :: Testing.Collection -> Html ()
+testSettingsModalContent_ col = div_ [class_ "space-y-5 w-96"] do
   div_ $ h3_ "Update Test settings"
-  label_ [class_ "form-control w-full max-w-xs"] do
+  label_ [class_ "form-control w-full"] do
     div_ [class_ "label"] $ span_ [class_ "label-text"] "Test title"
-    input_ [type_ "text", placeholder_ "Type here", class_ "input input-bordered w-full max-w-xs", name_ "title", value_ col.title]
-  label_ [class_ "form-control w-full max-w-xs"] do
+    input_ [type_ "text", placeholder_ "Type here", class_ "input input-bordered w-full ", name_ "title", value_ col.title]
+  label_ [class_ "form-control w-full"] do
     div_ [class_ "label"] $ span_ [class_ "label-text"] "Test Description"
-    textarea_ [type_ "text", placeholder_ "Type here", class_ "textarea textarea-bordered w-full max-w-xs h-24", name_ "description"] $  toHtml col.description
-  div_ [class_ "form-control w-full max-w-xs"] $ label_ [class_ "label cursor-pointer"] do
-    span_ [class_ "label-text"] "Schedule"
-    input_ $ [type_ "checkbox", class_ "toggle", name_ "scheduled"] <> [checked_ | col.isScheduled]
-  label_ [class_ "form-control w-full max-w-xs"] do
-    div_ [class_ "label"] $ span_ [class_ "label-text"] "run test every:"
-    div_ [class_ "join"] do
-      traceShowM "duration deets"
-      traceShowM $ col.schedule
-      let scheduleBits = words col.schedule
-      let [scheduleNumber, scheduleNumberUnit] = if (length scheduleBits >= 2) then scheduleBits else ["1", "day"]
-      input_ [class_ "input input-bordered join-item", type_ "number", name_ "scheduleNumber", value_ $ scheduleNumber]
-      select_ [class_ "select select-bordered join-item", name_ "scheduleNumberUnit"] do
-        option_ [selected_ "" | scheduleNumberUnit == "minutes" ] "Minutes"
-        option_ [selected_ "" | scheduleNumberUnit == "hours" ] "Hours"
-        option_ [selected_ "" | scheduleNumberUnit == "days" ] "Days"
+    textarea_ [type_ "text", placeholder_ "Type here", class_ "textarea textarea-bordered w-full h-24", name_ "description"] $ toHtml col.description
+  div_ [class_ "space-y-2 group/schedule"] do
+    div_ [class_ "form-control w-full"] $ label_ [class_ "label cursor-pointer"] do
+      span_ [class_ "label-text"] "Schedule"
+      input_ $ [type_ "checkbox", class_ "toggle", name_ "scheduled"] <> [checked_ | col.isScheduled]
+    label_ [class_ "form-control w-full hidden group-has-[.toggle:checked]/schedule:block"] do
+      div_ [class_ "label"] $ span_ [class_ "label-text"] "run test every:"
+      div_ [class_ "join"] do
+        let (scheduleNumber, scheduleNumberUnit) = case (words col.schedule) of
+              [num, unit] -> (num, unit)
+              _ -> ("1", "day")
+        input_ [class_ "input input-bordered join-item", type_ "number", name_ "scheduleNumber", value_ $ scheduleNumber]
+        select_ [class_ "select select-bordered join-item", name_ "scheduleNumberUnit"] do
+          option_ [selected_ "" | scheduleNumberUnit == "minutes"] "Minutes"
+          option_ [selected_ "" | scheduleNumberUnit == "hours"] "Hours"
+          option_ [selected_ "" | scheduleNumberUnit == "days"] "Days"
   div_ do
     button_ [class_ "btn btn-bordered btn-primary", type_ "submit"] "Update"
-
-
-
-
 
 
 collectionPage :: Projects.ProjectId -> Testing.Collection -> Html ()

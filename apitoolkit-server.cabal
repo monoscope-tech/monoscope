@@ -250,7 +250,6 @@ library
     , text-display
     , time
     , tmp-postgres
-    , transformers
     , transformers-except
     , unordered-containers
     , uuid

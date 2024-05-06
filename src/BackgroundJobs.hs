@@ -9,7 +9,7 @@ import Data.CaseInsensitive qualified as CI
 import Data.List.Extra (intersect, union)
 import Data.Pool (withResource)
 import Data.Text qualified as T
-import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, dayOfWeek, getCurrentTime, getZonedTime)
+import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, dayOfWeek, getZonedTime)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector (Vector)
 import Data.Vector qualified as V
@@ -33,6 +33,7 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Projects.Swaggers qualified as Swaggers
+import Models.Tests.TestToDump qualified as TestToDump
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text, trimming)
@@ -47,7 +48,6 @@ import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Config qualified as Config
 import System.Types (ATBackgroundCtx, runBackground)
-import Utils (scheduleIntervals)
 
 
 data BgJobs
@@ -61,7 +61,6 @@ data BgJobs
   | GenSwagger Projects.ProjectId Users.UserId
   | ReportUsage Projects.ProjectId
   | QueryMonitorsTriggered (Vector Monitors.QueryMonitorId)
-  | ScheduleForCollection Testing.CollectionId
   | RunCollectionTests Testing.CollectionId
   deriving stock (Eq, Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
@@ -135,8 +134,6 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
           if dayOfWeek currentDay == Monday
             then createJob conn "background_jobs" $ BackgroundJobs.WeeklyReports p
             else createJob conn "background_jobs" $ BackgroundJobs.DailyReports p
-      collections <- dbtToEff Testing.getCollectionsId
-      forM_ collections \col -> liftIO $ withResource authCtx.jobsPool \conn -> createJob conn "background_jobs" $ BackgroundJobs.ScheduleForCollection col
     DailyReports pid -> dailyReportForProject pid
     WeeklyReports pid -> weeklyReportForProject pid
     GenSwagger pid uid -> generateSwaggerForProject pid uid
@@ -144,18 +141,11 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
       when (project.paymentPlan == "UsageBased") $ whenJust project.firstSubItemId \fSubId -> do
         totalRequestForThisMonth <- dbtToEff $ RequestDumps.getTotalRequestForCurrentMonth pid
         liftIO $ reportUsageToLemonsqueezy fSubId totalRequestForThisMonth authCtx.config.lemonSqueezyApiKey
-    ScheduleForCollection col_id -> do
-      -- whenJustM (dbtToEff $ Testing.getCollectionById col_id) \collection -> whenJust (collection.schedule) \schedule -> do
-      --   currentTime <- liftIO getCurrentTime
-      --   let intervals = scheduleIntervals currentTime schedule
-      --   let dbParams = (\x -> (x, "queued" :: Text, Aeson.object ["tag" .= Aeson.String "RunCollectionTests", "contents" .= show col_id.collectionId])) <$> intervals
-      --   void $ dbtToEff $ Testing.scheduleInsertScheduleInBackgroundJobs dbParams
-      pass
     RunCollectionTests col_id -> do
       collectionM <- dbtToEff $ Testing.getCollectionById col_id
-      whenJust collectionM \collection -> do
-        -- let steps_data = (\x -> x.stepData) <$> steps
-        -- let col_json = (decodeUtf8 $ Aeson.encode steps_data :: String)
+      whenJust collectionM \collection -> when collection.isScheduled do
+        let (Testing.CollectionSteps colStepsV) = collection.collectionSteps
+        _ <- TestToDump.runTestAndLog collection.projectId colStepsV
         pass
 
 

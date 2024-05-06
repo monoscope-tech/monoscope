@@ -1,6 +1,5 @@
 module Pages.Monitors.Routes (Routes, Routes' (..)) where
 
-import Data.Aeson qualified as AE
 import Lucid (Html)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Tests.Testing qualified as TestingM
