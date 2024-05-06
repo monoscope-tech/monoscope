@@ -1,12 +1,10 @@
 module Pages.IntegrationDemos.NestJs (nestGuide) where
 
 import Data.Text
-import Data.Text qualified as T
 import Lucid
 import NeatInterpolation
 import Pkg.Components
 import Relude
-
 
 nestGuide :: Text -> Html ()
 nestGuide apikey = do
@@ -72,63 +70,68 @@ bootstrap();
       codeExample configOptions
 
     div_ [class_ "w-full flex flex-col gap-2", id_ "errors-monitoring"] do
-      h3_ [class_ "text-2xl font-semibold"] "Error Reporting (Express Platform)"
+      h3_ [class_ "text-2xl font-semibold"] "Error Reporting"
       p_ [class_ "text-gray-600 font-medium max-w-5xl"] "APItoolkit allows you to report errors alongside the request that caused them which allows you to easily reproduce and fix issues in production."
+      p_ [] do
+        "After setting up the SDK in your "
+        span_ [class_ "text-red-500"] "main.ts"
+        "file you can monitor requests like so"
+      h3_ [class_ "text-2xl font-semibold mt-2"] "Error Reporting (Express Platform)"
       codeExample $ errorReportingCode apikey
 
-      h3_ [class_ "text-2xl font-semibold"] "Error Reporting (Fastify Platform)"
+      h3_ [class_ "text-2xl font-semibold mt-2"] "Error Reporting (Fastify Platform)"
       codeExample
         $ [text|
-import APIToolkit, { ReportError } from "apitoolkit-fastify";
-import Fastify from 'fastify';
-const fastify = Fastify();
+import { Controller, Get } from '@nestjs/common';
+import { AppService } from './app.service';
+import { ReportError } from 'apitoolkit-fastify';
 
-fastify.get('/', async (request, reply) => {
+@Controller()
+export class AppController {
+  constructor(private readonly appService: AppService) {}
+
+  @Get()
+  getHello(): string {
     try {
-      const val  = 1/0
-      reply.send({ message: val });
+      throw new Error('something went wrong');
     } catch (error) {
+      // Report error to APItoolkit
       ReportError(error);
-      reply.send({ message: "Something went wrong" });
     }
-});   
-
-// Your boostrap function ...
+    return this.appService.getHello();
+  }
+}
       |]
 
     div_ [class_ "w-full flex flex-col gap-2", id_ "outgoing-request-monitoring"] do
-      h3_ [class_ "text-2xl font-semibold"] "Outgoing Request Monitoring (Express Platform)"
+      h3_ [class_ "text-2xl font-semibold"] "Outgoing Request Monitoring"
       p_ [class_ "text-gray-600 max-w-5xl"] "APItoolkit also allows you to monitor your outgoing request (i.e the api calls your make from your server). Monitored outgoing are also associated with the incoming request that triggered them, you can also monitor request in a background job or outside request context. To achieve this, wrap your axios instance with APItoolkit's observeAxios function."
+      p_ [] do
+        "After setting up the SDK in your "
+        span_ [class_ "text-red-500"] "main.ts"
+        "file you can monitor requests like so"
+
+      h3_ [class_ "text-2xl font-semibold mt-2"] "Outgoing Request Monitoring (Express Platform)"
       codeExample $ outgoingRequest apikey
 
       h3_ [class_ "text-2xl font-semibold"] "Outgoing Request Monitoring (Fastify Platform)"
       codeExample
         $ [text|
-import { NestFactory } from '@nestjs/core';
-import { AppModule } from './app.module';
-import { FastifyAdapter, NestFastifyApplication} from '@nestjs/platform-fastify';
-import APIToolkit, { observeAxios } from "apitoolkit-fastify";
-import axios from "axios"
-import Fastify from 'fastify';
-const fastify = Fastify();
+import { Controller, Get } from '@nestjs/common';
+import { AppService } from './app.service';
+import { observeAxios } from 'apitoolkit-fastify';
 
-const apittoolkitClient = APIToolkit.NewClient({ apiKey: "$apikey", fastify: fastify });
-apitoolkitClient.init();
+@Controller()
+export class AppController {
+  constructor(private readonly appService: AppService) {}
 
-fastify.get('/', async (request, reply) => {
-    try {
-        // The http request is monitored and will appear in the log explorer
-        const res = await observeAxios(axios).get("/hello");
-        reply.send({ data: res.data });
-    } catch (err) {
-      reply.send({error: "Something went wreong"})
-    }
-});
-
-// Your boostrap function goes here ...
-      
-      |]
-
+  @Get()
+  getHello(): string {
+    const response = await observeAxios(axios).get("https://jsonplaceholder.typicode.com/posts/1")
+    return response.data;
+  }
+}
+|]
 
 configOptions :: Text
 configOptions =
@@ -145,44 +148,45 @@ configOptions =
   }
 |]
 
-
 errorReportingCode :: Text -> Text
 errorReportingCode apiKey =
-  T.unlines
-    [ "import { APIToolkit, ReportError } from \"apitoolkit-express\";"
-    , "import express from \"express\";"
-    , "import axios from \"axios\";"
-    , ""
-    , "const app = express();"
-    , ""
-    , "app.get(\"/\", (req, res) => {"
-    , "  try {"
-    , "    let inf = 1/0;"
-    , "    res.send(\"The impossible number is: \" + inf);"
-    , "  } catch (error) {"
-    , "    // Manually report errors to APItoolkit"
-    , "    ReportError(error);"
-    , "    res.send(\"Something went wrong\");"
-    , "  }"
-    , "});"
-    , "// Automatically report unhandled errors"
-    , "// Error handler must be before any other error middleware and after all controllers"
-    , "app.use(apitoolkitClient.errorHandler);"
-    , "//... your boostrap function"
-    ]
+  [text|
+import { Controller, Get } from '@nestjs/common';
+import { AppService } from './app.service';
+import { ReportError } from 'apitoolkit-express';
 
+@Controller()
+export class AppController {
+  constructor(private readonly appService: AppService) {}
+
+  @Get()
+  getHello(): string {
+    try {
+      throw new Error('something went wrong');
+    } catch (error) {
+      // Report error to APItoolkit
+      ReportError(error);
+    }
+    return this.appService.getHello();
+  }
+}
+|]
 
 outgoingRequest :: Text -> Text
 outgoingRequest apiKey =
   [text|
-import { NestFactory } from '@nestjs/core';
-import { APIToolkit } from 'apitoolkit-express';
-import { AppModule } from './app.module';
-import axios from 'axios';
+import { Controller, Get } from '@nestjs/common';
+import { AppService } from './app.service';
 import { observeAxios } from 'apitoolkit-express';
 
-app.get('/', (req, res) => {
-    const response = await observeAxios(axios).get("https://jsonplaceholder.typicode.com/posts/1");
-    res.send(response.data);
-});
+@Controller()
+export class AppController {
+  constructor(private readonly appService: AppService) {}
+
+  @Get()
+  getHello(): string {
+    const response = await observeAxios(axios).get("https://jsonplaceholder.typicode.com/posts/1")
+    return response.data;
+  }
+}
 |]
