@@ -14,11 +14,11 @@ import Models.Projects.Projects qualified as Projects
 import OddJobs.Job (Job)
 import Pages.Monitors.Alerts (AlertUpsertForm (..), convertToQueryMonitor)
 import Pkg.TmpPg qualified as TmpPg
-import ProcessMessage (processMessages')
+import ProcessMessage (processRequestMessages)
 import ProcessMessageSpec (convert, msg1, msg2, runTestBackground, testAuthContext)
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import System.Config (AuthContext (config, pool, projectCache))
+import System.Config (AuthContext (pool))
 import Test.Hspec (Spec, aroundAll, describe, it)
 
 
@@ -58,7 +58,7 @@ spec = aroundAll TmpPg.withSetup do
             , ("m5", reqMsg1)
             , ("m5", reqMsg2)
             ]
-      _ <- runTestBackground authCtx $ processMessages' authCtx.config msgs authCtx.projectCache
+      _ <- runTestBackground authCtx $ processRequestMessages msgs
       _ <- withPool pool $ execute Select [sql|CALL monitors.check_triggered_query_monitors(0, '{}')|] ()
       _ <- runAllBackgroundJobs authCtx
       -- TODO:

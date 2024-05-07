@@ -145,7 +145,6 @@ library:
     - text
     - text-display
     - time
-    - transformers
     - transformers-except
     - unordered-containers
     - uuid

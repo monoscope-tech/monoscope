@@ -46,6 +46,7 @@ library
       Models.Projects.Swaggers
       Models.Projects.SwaggersSpec
       Models.Tests.Testing
+      Models.Tests.TestToDump
       Models.Users.Sessions
       Models.Users.Users
       MonitoringSpec
@@ -110,6 +111,8 @@ library
       Pages.Specification.Server
       Pages.Survey
       Pkg.Components
+      Pkg.Components.ExternalHeadScripts
+      Pkg.Components.Modals
       Pkg.ConvertKit
       Pkg.Google
       Pkg.Mail
@@ -248,7 +251,6 @@ library
     , text-display
     , time
     , tmp-postgres
-    , transformers
     , transformers-except
     , unordered-containers
     , uuid

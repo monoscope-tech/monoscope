@@ -1,6 +1,5 @@
 module Pages.Monitors.Routes (Routes, Routes' (..)) where
 
-import Data.Aeson qualified as AE
 import Lucid (Html)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Tests.Testing qualified as TestingM
@@ -28,7 +27,6 @@ data Routes' mode = Routes'
   , newCollectionPost :: mode :- "testing" :> ReqBody '[FormUrlEncoded] Testing.TestCollectionForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
   , collectionGet :: mode :- "testing" :> Capture "collection_id" TestingM.CollectionId :> Get '[HTML] (Html ())
   , collectionStepsUpdate :: mode :- "testing" :> Capture "collection_id" TestingM.CollectionId :> ReqBody '[JSON] Testing.CollectionStepUpdateForm :> Post '[HTML] (Html ())
-  , collectionPut :: mode :- "testing" :> Capture "collection_id" TestingM.CollectionId :> Capture "action" Text :> ReqBody '[JSON] AE.Value :> Post '[HTML] (Html ())
   , collectionRunTests :: mode :- "testing" :> Capture "collection_id" TestingM.CollectionId :> QueryParam "step_index" Int :> ReqBody '[JSON] Testing.CollectionStepUpdateForm :> Patch '[HTML] (Html ())
   }
   deriving stock (Generic)

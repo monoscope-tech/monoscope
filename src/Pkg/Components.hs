@@ -1,10 +1,11 @@
-module Pkg.Components (loader, navBar, bashCommand, codeExample) where
+module Pkg.Components (loader, navBar, bashCommand, codeExample, modal_, dropDownMenu_) where
 
 import Data.Text
 import Lucid
 import Lucid.Base
 import Lucid.Hyperscript
 import Lucid.Svg (d_, fill_, path_, viewBox_)
+import Pkg.Components.Modals (dropDownMenu_, modal_)
 import Relude
 import Utils
 
