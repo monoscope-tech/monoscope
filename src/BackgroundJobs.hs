@@ -139,8 +139,11 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
     GenSwagger pid uid -> generateSwaggerForProject pid uid
     ReportUsage pid -> whenJustM (dbtToEff $ Projects.projectById pid) \project -> do
       when (project.paymentPlan == "UsageBased") $ whenJust project.firstSubItemId \fSubId -> do
-        totalRequestForThisMonth <- dbtToEff $ RequestDumps.getTotalRequestForCurrentMonth pid
+        currentTime <- liftIO getZonedTime
+        totalRequestForThisMonth <- dbtToEff $ RequestDumps.getTotalRequestToReport pid project.usageLastReported
         liftIO $ reportUsageToLemonsqueezy fSubId totalRequestForThisMonth authCtx.config.lemonSqueezyApiKey
+        _ <- dbtToEff $ Projects.updateUsageLastReported pid currentTime
+        pass
     RunCollectionTests col_id -> do
       collectionM <- dbtToEff $ Testing.getCollectionById col_id
       whenJust collectionM \collection -> when collection.isScheduled do
@@ -181,7 +184,7 @@ reportUsageToLemonsqueezy subItemId quantity apiKey = do
             "type": "usage-records",
             "attributes": {
                 "quantity": #{quantity},
-                "action": "set"
+                "action": "increment"
             },
             "relationships": {
                "subscription-item": {

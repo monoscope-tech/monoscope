@@ -22,6 +22,7 @@ module Models.Projects.Projects (
   updateProjectReportNotif,
   ProjectCache (..),
   updateNotificationsChannel,
+  updateUsageLastReported,
 )
 where
 
@@ -118,6 +119,7 @@ data Project = Project
   , subId :: Maybe Text
   , firstSubItemId :: Maybe Text
   , orderId :: Maybe Text
+  , usageLastReported :: ZonedTime
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, NFData)
@@ -149,6 +151,7 @@ data Project' = Project'
   , subId :: Maybe Text
   , firstSubItemId :: Maybe Text
   , orderId :: Maybe Text
+  , usageLastReported :: ZonedTime
   , hasIntegrated :: Bool
   , usersDisplayImages :: Vector Text
   }
@@ -333,3 +336,9 @@ updateNotificationsChannel pid channels = execute Update q (list, pid)
   where
     list = V.fromList channels
     q = [sql| UPDATE projects.projects SET notifications_channel=?::notification_channel_enum[] WHERE id=?;|]
+
+
+updateUsageLastReported :: ProjectId -> ZonedTime -> DBT IO Int64
+updateUsageLastReported pid lastReported = execute Update q (lastReported, pid)
+  where
+    q = [sql| UPDATE projects.projects SET usage_last_reported=? WHERE id=?;|]

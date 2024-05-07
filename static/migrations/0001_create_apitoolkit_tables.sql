@@ -123,6 +123,7 @@ ADD COLUMN notifications_channel notification_channel_enum[] DEFAULT ARRAY['emai
 ALTER TABLE projects.projects ADD COLUMN sub_id TEXT DEFAULT NULL;
 ALTER TABLE projects.projects ADD COLUMN first_sub_item_id TEXT DEFAULT NULL;
 ALTER TABLE projects.projects ADD COLUMN order_id TEXT DEFAULT NULL;
+ALTER TABLE projects.projects ADD COLUMN IF NOT EXISTS usage_last_reported TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp;
 
 
 
