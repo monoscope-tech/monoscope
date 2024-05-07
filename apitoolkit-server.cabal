@@ -76,6 +76,7 @@ library
       Pages.IntegrationDemos.FastifyJs
       Pages.IntegrationDemos.Flask
       Pages.IntegrationDemos.Gin
+      Pages.IntegrationDemos.GoNative
       Pages.IntegrationDemos.GorillaMux
       Pages.IntegrationDemos.Laravel
       Pages.IntegrationDemos.NestJs
