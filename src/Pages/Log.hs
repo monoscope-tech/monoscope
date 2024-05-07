@@ -27,54 +27,10 @@ import Data.Vector qualified as Vector
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Fmt (commaizeF, fmt)
-import Lucid (
-  Html,
-  Term (term),
-  ToHtml (toHtml),
-  a_,
-  button_,
-  checked_,
-  class_,
-  colspan_,
-  div_,
-  form_,
-  id_,
-  img_,
-  input_,
-  label_,
-  li_,
-  name_,
-  nav_,
-  onclick_,
-  role_,
-  script_,
-  section_,
-  span_,
-  src_,
-  style_,
-  tabindex_,
-  table_,
-  tbody_,
-  td_,
-  template_,
-  thead_,
-  tr_,
-  type_,
-  ul_,
-  value_,
- )
+import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
-import Lucid.Htmx (
-  hxGet_,
-  hxIndicator_,
-  hxPost_,
-  hxPushUrl_,
-  hxSwap_,
-  hxTarget_,
-  hxTrigger_,
-  hxVals_,
- )
+import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
@@ -84,62 +40,11 @@ import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Pages.Monitors.Alerts qualified as Alerts
 import Pages.NonMember (userNotMemeberPage)
 import Pkg.Components (loader)
-import Relude (
-  Applicative (pure),
-  Bool (..),
-  Eq ((/=), (==)),
-  Foldable (length),
-  Int,
-  Maybe (..),
-  Monad (return, (>>)),
-  MonadIO (liftIO),
-  Num (negate, (*), (-)),
-  Ord ((>), (>=)),
-  Ordering (GT, LT),
-  Semigroup ((<>)),
-  Text,
-  ToString (toString),
-  ToText (toText),
-  all,
-  comparing,
-  elem,
-  filter,
-  forM_,
-  fromMaybe,
-  mapM_,
-  maybe,
-  not,
-  notElem,
-  otherwise,
-  pass,
-  show,
-  sortBy,
-  when,
-  ($),
-  (&),
-  (&&),
-  (.),
-  (<$>),
-  (=<<),
-  (||),
- )
+import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext)
 import System.Types (ATAuthCtx)
-import Utils (
-  faIcon_,
-  faSprite_,
-  freeTierLimitExceededBanner,
-  getMethodColor,
-  getStatusColor,
-  listToIndexHashMap,
-  lookupVecByKey,
-  lookupVecIntByKey,
-  lookupVecTextByKey,
-  mIcon_,
-  unwrapJsonPrimValue,
-  userIsProjectMember,
- )
+import Utils
 import Witch (from)
 
 
@@ -317,7 +222,7 @@ data ApiLogsPageData = ApiLogsPageData
 
 apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
-  section_ [class_ "mx-auto px-10 py-2 gap-2 flex flex-col h-[98%] overflow-hidden ", id_ "apiLogsPage"] do
+  section_ [class_ "mx-auto px-10 py-2 gap-2 w-full flex flex-col h-[98%] overflow-hidden ", id_ "apiLogsPage"] do
     when page.exceededFreeTier $ freeTierLimitExceededBanner page.pid.toText
     div_
       [ style_ "z-index:26"
@@ -369,7 +274,7 @@ apiLogsPage page = do
       |]
     logQueryBox_ page.pid page.currentRange
 
-    div_ [class_ "card-round w-full grow divide-y flex flex-col text-sm h-full overflow-hidden"] do
+    div_ [class_ "card-round w-full  grow divide-y flex flex-col text-sm h-full overflow-hidden"] do
       div_ [class_ "flex-1 "] do
         div_ [class_ "pl-3 py-1 flex flex-row justify-between"] do
           a_ [class_ "cursor-pointer inline-block pr-3 space-x-2 bg-blue-50 hover:bg-blue-100 blue-800 p-1 rounded-md", [__|on click toggle .hidden on #reqsChartParent|]] do
@@ -404,22 +309,37 @@ resultTableAndMeta_ :: ApiLogsPageData -> Html ()
 resultTableAndMeta_ page = do
   section_ [class_ " w-full h-full overflow-hidden"] $ section_ [class_ " w-full tabs tabs-bordered items-start overflow-hidden h-full place-content-start", role_ "tablist"] do
     input_ [type_ "radio", name_ "logExplorerMain", role_ "tab", class_ "tab", checked_, Aria.label_ $ "Query results (" <> fmt (commaizeF page.resultCount) <> ")"]
-    div_ [class_ "relative overflow-y-scroll h-full tab-content", role_ "tabpanel"] $ resultTable_ page
+    div_ [class_ "relative overflow-y-scroll overflow-x-hidden h-full w-full tab-content", role_ "tabpanel"] do
+      resultTable_ page
+      div_ [style_ "width:2000px"] pass
 
     input_ [type_ "radio", name_ "logExplorerMain", role_ "tab", class_ "tab", Aria.label_ "Alerts"]
     div_ [class_ "relative overflow-y-scroll h-full tab-content", role_ "tabpanel"] do
       div_ [hxGet_ $ "/p/" <> page.pid.toText <> "/alerts", hxTrigger_ "intersect", hxSwap_ "innerHTML", id_ "alertsListContainer"] ""
 
     input_ [type_ "radio", name_ "logExplorerMain", role_ "tab", class_ "tab", Aria.label_ "Save as Alert"]
-    div_ [class_ "relative overflow-y-scroll h-full tab-content p-3", role_ "tabpanel"] $ Alerts.editAlert_ page.pid Nothing
+    div_ [class_ "relative overflow-y-scroll overflow-x-hidden h-full tab-content p-3", role_ "tabpanel"] do
+      Alerts.editAlert_ page.pid Nothing
+      div_ [style_ "width:2000px"] pass
 
 
 resultTable_ :: ApiLogsPageData -> Html ()
-resultTable_ page = table_ [class_ " table table-sm table-pin-rows table-pin-cols", style_ "height:1px", id_ "resultTable"] do
+resultTable_ page = table_ [class_ "w-full table table-sm table-pin-rows table-pin-cols", style_ "height:1px", id_ "resultTable"] do
   -- height:1px fixes the cell minimum heights somehow.
   let isLogEventB = isLogEvent page.cols
-  thead_ $ tr_ $ forM_ page.cols $ logTableHeading_ page.pid isLogEventB
-  tbody_ [id_ "log-item-table-body"] $ logItemRows_ page.pid page.requestVecs page.cols page.colIdxMap page.nextLogsURL
+  if (null page.requestVecs)
+    then do
+      section_ [class_ "w-max  mx-auto my-16 p-5 sm:py-14 sm:px-24 items-center flex gap-16"] do
+        div_ [] do
+          faIcon_ "fa fa-solid fa-empty-set" "fa-solid fa-empty-set" "h-24 w-24"
+        div_ [class_ "flex flex-col gap-2"] do
+          h2_ [class_ "text-2xl font-bold"] "Waiting for events..."
+          p_ "You're currently not sending any data to APItoolkit from your backends yet."
+          a_ [href_ $ "/p/" <> page.pid.toText <> "/integration_guides", class_ "w-max btn btn-indigo -ml-1 text-md"] "Read the setup guide"
+    else do
+      thead_ $ tr_ $ forM_ page.cols $ logTableHeading_ page.pid isLogEventB
+      tbody_ [id_ "w-full log-item-table-body"] do
+        logItemRows_ page.pid page.requestVecs page.cols page.colIdxMap page.nextLogsURL
 
 
 curateCols :: [Text] -> [Text] -> [Text]
