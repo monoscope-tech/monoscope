@@ -9,7 +9,7 @@ import Data.CaseInsensitive qualified as CI
 import Data.List.Extra (intersect, union)
 import Data.Pool (withResource)
 import Data.Text qualified as T
-import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, dayOfWeek, getZonedTime)
+import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, dayOfWeek, getZonedTime, addUTCTime, zonedTimeToUTC)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector (Vector)
 import Data.Vector qualified as V
@@ -140,10 +140,14 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
         pass
     RunCollectionTests col_id -> do
       collectionM <- dbtToEff $ Testing.getCollectionById col_id
-      whenJust collectionM \collection -> when collection.isScheduled do
-        let (Testing.CollectionSteps colStepsV) = collection.collectionSteps
-        _ <- TestToDump.runTestAndLog collection.projectId colStepsV
-        pass
+      whenJust collectionM \collection -> when (collection.isScheduled) do
+        if  maybe False (\lastRun -> job.jobRunAt < addUTCTime (-3600) (zonedTimeToUTC lastRun)) collection.lastRun
+          then do
+            Log.logAttention "Run RunCollectionTests Job was run more than 30 mins past it's actual lastJobRun for that collection" (collection.title, collection.id)
+          else do
+            let (Testing.CollectionSteps colStepsV) = collection.collectionSteps
+            _ <- TestToDump.runTestAndLog collection.projectId colStepsV
+            pass
 
 
 generateSwaggerForProject :: Projects.ProjectId -> Users.UserId -> ATBackgroundCtx ()
