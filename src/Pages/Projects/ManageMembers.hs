@@ -154,7 +154,7 @@ manageMembersGetH pid = do
 
 manageMembersBody :: V.Vector ProjectMembers.ProjectMemberVM -> Html ()
 manageMembersBody projMembers =
-  section_ [id_ "main-content", class_ "p-6"] do
+  section_ [id_ "main-content", class_ "p-6 w-max mx-auto"] do
     h2_ [class_ "text-slate-700 text-2xl font-medium mb-5"] "Manage project members"
     form_
       [ class_ "relative px-10 border border-gray-200 py-10  bg-white w-1/2 rounded-3xl"
@@ -169,7 +169,7 @@ manageMembersBody projMembers =
             template_ [id_ "inviteTmpl"] $ projectMemberRow Nothing
           a_
             [ class_ "bg-transparent inline-flex cursor-pointer mt-2"
-            , [__| on click append #inviteTmpl.innerHTML to #inviteMemberSection then 
+            , [__| on click put #inviteTmpl.innerHTML at end of #inviteMemberSection then 
                           _hyperscript.processNode(#inviteMemberSection) then halt |]
             ]
             do
