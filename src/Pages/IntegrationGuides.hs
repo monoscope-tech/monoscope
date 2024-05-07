@@ -38,6 +38,7 @@ import Pages.IntegrationDemos.FastApi
 import Pages.IntegrationDemos.FastifyJs
 import Pages.IntegrationDemos.Flask
 import Pages.IntegrationDemos.Gin
+import Pages.IntegrationDemos.GorillaMux
 import Pages.IntegrationDemos.Laravel
 import Pages.IntegrationDemos.NestJs
 import Pages.IntegrationDemos.Phoenix
@@ -95,6 +96,7 @@ integrationsPage pid sdk apiKey errReportM reqMonM = do
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=adonis"] "Adonis Js"
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=flask"] "Flask"
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=echo"] "Go Echo"
+            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=gorilla"] "Go Gorilla Mux"
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=phoenix"] "Elixir Phoenix"
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=symfony"] "PHP Symfony"
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=fastapi"] "Python FastAPI"
@@ -132,6 +134,7 @@ integrationsPage pid sdk apiKey errReportM reqMonM = do
         "fastify" -> fastifyGuide apiKey
         "slim" -> slimGuide apiKey
         "nest" -> nestGuide apiKey
+        "gorilla" -> gorillaGuide apiKey
         _ -> expressGuide apiKey
     script_
       [text|
@@ -154,4 +157,5 @@ getTitle "fastapi" = "Python FastAPI"
 getTitle "fastify" = "Fastify JS"
 getTitle "slim" = "PHP Slim"
 getTitle "nest" = "Nest Js"
+getTitle "gorilla" = "Go Gorilla Mux"
 getTitle _ = "Express Js"
