@@ -161,36 +161,11 @@ convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
                       if T.isSuffixOf "[*]" grp
                         then
                           ( T.takeWhile (/= '[') grp
-                          , object
-                              [ "description" .= String desc
-                              , "type" .= String "array"
-                              , "items"
-                                  .= object
-                                    ( [ "type" .= t
-                                      , "format" .= ft
-                                      ]
-                                        ++ if is_enum
-                                          then ["enum" .= examples]
-                                          else
-                                            if V.length examples > 0
-                                              then ["example" .= V.head examples]
-                                              else if is_required then ["required" .= is_required] else []
-                                    )
-                              ]
+                          , getLeafObject t ft desc examples is_enum is_required
                           )
                         else
                           ( grp
-                          , object
-                              $ [ "description" .= String desc
-                                , "type" .= t
-                                , "format" .= ft
-                                ]
-                              ++ if is_enum
-                                then ["enum" .= examples]
-                                else
-                                  if V.length examples > 0
-                                    then ["example" .= V.head examples]
-                                    else (["required" .= is_required | is_required])
+                          , getLeafObject t ft desc examples is_enum is_required
                           )
                     validKey = if key == "" then "schema" else key
                  in object [AEKey.fromText validKey .= ob]
@@ -208,6 +183,16 @@ convertKeyPathsToJson items categoryFields parentPath = convertToJson' groups
        in updateMap
     convertToJson' :: Map.Map T.Text KeyPathGroup -> Value
     convertToJson' grps = foldr processGroup (object []) (Map.toList grps)
+
+
+getLeafObject :: Text -> Text -> Text -> Vector Value -> Bool -> Bool -> AE.Value
+getLeafObject t ft desc examples isEnum isRequired = leafObject
+  where
+    base = ["description" .= String desc, "type" .= t, "format" .= ft]
+    enumOb = ["enum" .= examples | isEnum]
+    requiredOb = ["required" .= isRequired | isRequired]
+    exampleOb = ["example" .= V.head examples | V.length examples > 0]
+    leafObject = object $ base ++ enumOb ++ requiredOb ++ exampleOb
 
 
 -- Helper function to determine type and values
