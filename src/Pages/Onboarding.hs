@@ -194,9 +194,6 @@ tabContentExpress :: Text -> Text -> Html ()
 tabContentExpress apikey current_tab =
   div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "express" then "" else "hidden"), id_ "express_content"] $ do
     div_ [class_ "relative"] $ do
-      div_ [class_ "mb-6 space-x-3"] do
-        strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
-        a_ [class_ "link underline text-lg", href_ "https://github.com/apitoolkit/apitoolkit-express", target_ "BLANK"] "github.com/apitoolkit/apitoolkit-express"
       div_ [class_ "mb-6"] do
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
         p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "npm i apitoolkit-express"
@@ -229,9 +226,6 @@ tabContentGin :: Text -> Text -> Html ()
 tabContentGin apikey current_tab =
   div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "gin" then "" else "hidden"), id_ "gin_content"] $ do
     div_ [class_ "relative"] $ do
-      div_ [class_ "mb-6 space-x-3"] do
-        strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
-        a_ [class_ "link underline text-lg", href_ "https://github.com/apitoolkit/apitoolkit-go", target_ "BLANK"] "github.com/apitoolkit/apitoolkit-go"
       div_ [class_ "mb-6"] do
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
         p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "go get github.com/apitoolkit/apitoolkit-go"
@@ -272,9 +266,6 @@ tabContentLaravel :: Text -> Text -> Html ()
 tabContentLaravel apikey current_tab =
   div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "laravel" then "" else "hidden"), id_ "laravel_content"] $ do
     div_ [class_ "relative"] $ do
-      div_ [class_ "mb-6 space-x-3"] do
-        strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
-        a_ [class_ "link underline text-lg", href_ "https://github.com/apitoolkit/apitoolkit-laravel", target_ "BLANK"] "github.com/apitoolkit/apitoolkit-laravel"
       div_ [class_ "mb-6"] do
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
         p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "composer require apitoolkit/apitoolkit-php"
@@ -314,9 +305,6 @@ tabContentSymfony :: Text -> Text -> Html ()
 tabContentSymfony apikey current_tab =
   div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "symfony" then "" else "hidden"), id_ "symfony_content"] $ do
     div_ [class_ "relative"] $ do
-      div_ [class_ "mb-6 space-x-3"] do
-        strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
-        a_ [class_ "link underline text-lg", href_ "https://github.com/apitoolkit/apitoolkit-symfony", target_ "BLANK"] "github.com/apitoolkit/apitoolkit-symfony"
       div_ [class_ "mb-6"] do
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
         p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "composer require apitoolkit/apitoolkit-symfony"
@@ -341,9 +329,6 @@ tabContentDotNet :: Text -> Text -> Html ()
 tabContentDotNet apikey current_tab =
   div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "net" then "" else "hidden"), id_ "net_content"] $ do
     div_ [class_ "relative"] $ do
-      div_ [class_ "mb-6 space-x-3"] do
-        strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
-        a_ [class_ "link underline text-lg", href_ "https://github.com/apitoolkit/apitoolkit-dotnet", target_ "BLANK"] "github.com/apitoolkit/apitoolkit-dotnet"
       div_ [class_ "mb-6"] do
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
         p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "dotnet add package ApiToolkit.Net"
@@ -381,9 +366,6 @@ tabContentFastify apikey current_tab =
   div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "fastify" then "" else "hidden"), id_ "fastify_content"]
     $ do
       div_ [class_ "relative"] $ do
-        div_ [class_ "mb-6 space-x-3"] do
-          strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
-          a_ [class_ "link underline text-lg", href_ "https://github.com/apitoolkit/apitoolkit-fastify", target_ "BLANK"] "github.com/apitoolkit/apitoolkit-fastify"
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
           p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "npm install apitoolkit-fastify"
@@ -420,9 +402,6 @@ tabContentFlask apikey current_tab =
   div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "flask" then "" else "hidden"), id_ "flask_content"]
     $ do
       div_ [class_ "relative"] $ do
-        div_ [class_ "mb-6 space-x-3"] do
-          strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
-          a_ [class_ "link underline text-lg", href_ "https://github.com/apitoolkit/apitoolkit-flask", target_ "BLANK"] "github.com/apitoolkit/apitoolkit-flask"
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
           p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "pip install apitoolkit-flask"
@@ -458,9 +437,6 @@ tabContentFastAPI apikey current_tab =
   div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "fastapi" then "" else "hidden"), id_ "fastapi_content"]
     $ do
       div_ [class_ "relative"] $ do
-        div_ [class_ "mb-6 space-x-3"] do
-          strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
-          a_ [class_ "link underline text-lg", href_ "https://github.com/apitoolkit/apitoolkit-fastapi", target_ "BLANK"] "github.com/apitoolkit/apitoolkit-fastapi"
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
           p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "pip install apitoolkit-fastapi"
@@ -497,10 +473,6 @@ tabContentDjango apikey current_tab =
   div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "django" then "" else "hidden"), id_ "django_content"]
     $ do
       div_ [class_ "relative"] $ do
-        div_ [class_ "mb-6 space-x-3"] do
-          strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
-          a_ [class_ "link underline text-lg", href_ "https://github.com/apitoolkit/apitoolkit-django", target_ "BLANK"] "github.com/apitoolkit/apitoolkit-django"
-
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
           p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "pip install apitoolkit-django"
@@ -526,10 +498,6 @@ tabContentEcho apikey current_tab =
   div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "echo" then "" else "hidden"), id_ "echo_content"]
     $ do
       div_ [class_ "relative"] $ do
-        div_ [class_ "mb-6 space-x-3"] do
-          strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
-          a_ [class_ "link underline text-lg", href_ "https://github.com/apitoolkit/apitoolkit-go", target_ "BLANK"] "github.com/apitoolkit/apitoolkit-django"
-
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
           p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "go get github.com/apitoolkit/apitoolkit-go"
@@ -574,10 +542,6 @@ tabContentGorilla apikey current_tab =
   div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "gorilla" then "" else "hidden"), id_ "gorilla_content"]
     $ do
       div_ [class_ "relative"] $ do
-        div_ [class_ "mb-6 space-x-3"] do
-          strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
-          a_ [class_ "link underline text-lg", href_ "https://github.com/apitoolkit/apitoolkit-go", target_ "BLANK"] "github.com/apitoolkit/apitoolkit-go"
-
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
           p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "go get github.com/apitoolkit/apitoolkit-echo"
@@ -620,10 +584,6 @@ tabContentPhoeinix apikey current_tab =
   div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "phoenix" then "" else "hidden"), id_ "phoenix_content"]
     $ do
       div_ [class_ "relative"] $ do
-        div_ [class_ "mb-6 space-x-3"] do
-          strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
-          a_ [class_ "link underline text-lg", href_ "https://github.com/apitoolkit/apitoolkit-go", target_ "BLANK"] "github.com/apitoolkit/apitoolkit-phoenix"
-
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
           p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "{:apitoolkit_phoenix, \"~> 0.1.1\"}"
@@ -655,10 +615,6 @@ tabContentAdonis apikey current_tab =
   div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "adonis" then "" else "hidden"), id_ "adonis_content"]
     $ do
       div_ [class_ "relative"] $ do
-        div_ [class_ "mb-6 space-x-3"] do
-          strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
-          a_ [class_ "link underline text-lg", href_ "https://github.com/apitoolkit/apitoolkit-go", target_ "BLANK"] "github.com/apitoolkit/apitoolkit-adonis"
-
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
           p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "npm install apitoolkit-adonis"
