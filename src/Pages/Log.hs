@@ -122,8 +122,8 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoostedM
 
       case (layoutM, hxRequestM, hxBoostedM) of
         (Just "loadmore", Just "true", _) -> pure $ logItemRows_ pid requestVecs curatedColNames colIdxMap nextLogsURL
-        (Just "resultTable", Just "true", _) -> pure $ resultTable_ page
-        (Just "all", Just "true", _) -> pure $ resultTable_ page
+        (Just "resultTable", Just "true", _) -> pure $ resultTable_ page False
+        (Just "all", Just "true", _) -> pure $ resultTable_ page True
         _ -> do
           let bwconf =
                 (def :: BWConfig)
@@ -310,7 +310,7 @@ resultTableAndMeta_ page = do
   section_ [class_ " w-full h-full overflow-hidden"] $ section_ [class_ " w-full tabs tabs-bordered items-start overflow-hidden h-full place-content-start", role_ "tablist"] do
     input_ [type_ "radio", name_ "logExplorerMain", role_ "tab", class_ "tab", checked_, Aria.label_ $ "Query results (" <> fmt (commaizeF page.resultCount) <> ")"]
     div_ [class_ "relative overflow-y-scroll overflow-x-hidden h-full w-full tab-content", role_ "tabpanel"] do
-      resultTable_ page
+      resultTable_ page True
       div_ [style_ "width:2000px"] pass
 
     input_ [type_ "radio", name_ "logExplorerMain", role_ "tab", class_ "tab", Aria.label_ "Alerts"]
@@ -323,11 +323,11 @@ resultTableAndMeta_ page = do
       div_ [style_ "width:2000px"] pass
 
 
-resultTable_ :: ApiLogsPageData -> Html ()
-resultTable_ page = table_ [class_ "w-full table table-sm table-pin-rows table-pin-cols", style_ "height:1px", id_ "resultTable"] do
+resultTable_ :: ApiLogsPageData -> Bool -> Html ()
+resultTable_ page mainLog = table_ [class_ "w-full table table-sm table-pin-rows table-pin-cols", style_ "height:1px", id_ "resultTable"] do
   -- height:1px fixes the cell minimum heights somehow.
   let isLogEventB = isLogEvent page.cols
-  if (null page.requestVecs)
+  if (null page.requestVecs && mainLog)
     then do
       section_ [class_ "w-max  mx-auto my-16 p-5 sm:py-14 sm:px-24 items-center flex gap-16"] do
         div_ [] do
