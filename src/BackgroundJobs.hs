@@ -140,8 +140,8 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
     ReportUsage pid -> whenJustM (dbtToEff $ Projects.projectById pid) \project -> do
       when (project.paymentPlan == "UsageBased") $ whenJust project.firstSubItemId \fSubId -> do
         currentTime <- liftIO getZonedTime
-        totalRequestForThisMonth <- dbtToEff $ RequestDumps.getTotalRequestToReport pid project.usageLastReported
-        liftIO $ reportUsageToLemonsqueezy fSubId totalRequestForThisMonth authCtx.config.lemonSqueezyApiKey
+        totalToReport <- dbtToEff $ RequestDumps.getTotalRequestToReport pid project.usageLastReported
+        liftIO $ reportUsageToLemonsqueezy fSubId totalToReport authCtx.config.lemonSqueezyApiKey
         _ <- dbtToEff $ Projects.updateUsageLastReported pid currentTime
         pass
     RunCollectionTests col_id -> do

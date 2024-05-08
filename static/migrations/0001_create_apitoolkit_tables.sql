@@ -124,6 +124,7 @@ ALTER TABLE projects.projects ADD COLUMN sub_id TEXT DEFAULT NULL;
 ALTER TABLE projects.projects ADD COLUMN first_sub_item_id TEXT DEFAULT NULL;
 ALTER TABLE projects.projects ADD COLUMN order_id TEXT DEFAULT NULL;
 ALTER TABLE projects.projects ADD COLUMN IF NOT EXISTS usage_last_reported TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp;
+UPDATE projects.projects SET usage_last_reported = current_timestamp WHERE usage_last_reported IS NULL;
 
 
 
