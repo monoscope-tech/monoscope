@@ -17,6 +17,7 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.NonMember (userNotMemeberPage)
+import Pkg.Components
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext)
@@ -149,7 +150,6 @@ integrateApiToolkit apikey current_tab =
           tabs current_tab
         div_ [class_ "flex flex-col w-[65%] shrink-0 max-w-[65%]"] do
           tabContentExpress apikey current_tab
-          tabContentExpressCjs apikey current_tab
           tabContentGin apikey current_tab
           tabContentLaravel apikey current_tab
           tabContentFlask apikey current_tab
@@ -201,76 +201,28 @@ tabContentExpress apikey current_tab =
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
         p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "npm i apitoolkit-express"
       h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
-      div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
-        div_ [class_ "relative w-full flex flex-col"] do
-          contentHeader "express_code"
-          div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
-            pre_ [class_ "flex min-h-full text-lg leading-snug"] do
-              code_ [class_ "h-full hljs language-javascript atom-one-dark", id_ "express_code"]
-                $ toHtml
-                $ "import express from 'express';\n"
-                <> "import { APIToolkit } from 'apitoolkit-express';\n"
-                <> "\n"
-                <> "const app = express();\n"
-                <> "const port = 3000;\n"
-                <> "\n"
-                <> "app.use(express.json());\n"
-                <> "app.use(express.urlencoded({ extended: true }));\n\n"
-                <> "const apitoolkitClient = APIToolkit.NewClient({ apiKey: '"
-                <> apikey
-                <> "' });\n"
-                <> "app.use(apitoolkitClient.expressMiddleware);\n"
-                <> "\n"
-                <> "app.get('/', (req, res) => {\n"
-                <> "  res.json({message:'Hello World!'})"
-                <> "});\n"
-                <> "\n"
-                <> "app.listen(port, () => {\n"
-                <> "   console.log(`Example app listening on port ${port}`);\n"
-                <> "});"
+      codeExample
+        $ [text|
+import express from 'express';
+import { APIToolkit } from 'apitoolkit-express';
 
+const app = express();
+const port = 3000;
 
-tabContentExpressCjs :: Text -> Text -> Html ()
-tabContentExpressCjs apikey current_tab =
-  div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "express_cjs" then "" else "hidden"), id_ "express_cjs_content"] $ do
-    div_ [class_ "relative"] $ do
-      div_ [class_ "mb-6 space-x-3"] do
-        strong_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Repo:"
-        a_ [class_ "link underline text-lg", href_ "https://github.com/apitoolkit/apitoolkit-express", target_ "BLANK"] "github.com/apitoolkit/apitoolkit-express"
-      div_ [class_ "mb-6"] do
-        h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
-        p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "npm i apitoolkit-express"
-      h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
-      div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
-        div_ [class_ "relative w-full flex flex-col"] do
-          contentHeader "express_cjs_code"
-          div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
-            pre_ [class_ "flex min-h-full text-lg leading-snug"] do
-              code_ [class_ "h-full hljs language-javascript atom-one-dark", id_ "express_cjs_code"]
-                $ toHtml
-                $ "const express = require('express');\n"
-                <> "const APIToolkit = require('apitoolkit-express').default;\n"
-                <> "\n"
-                <> "const app = express();\n"
-                <> "const port = 3000;\n"
-                <> "\n"
-                <> "app.use(express.json());\n"
-                <> "app.use(express.urlencoded({ extended: true }));\n\n"
-                <> "(async function () {\n"
-                <> "   const apitoolkitClient = APIToolkit.NewClient({ apiKey: '"
-                <> "   "
-                <> apikey
-                <> "' });\n"
-                <> "   app.use(apitoolkitClient.expressMiddleware);\n"
-                <> "\n"
-                <> "   app.get('/', (req, res) => {\n"
-                <> "      res.json({message:'Hello World!'});\n"
-                <> "   });\n"
-                <> "\n"
-                <> "   app.listen(port, () => {\n"
-                <> "      console.log(`Example app listening on port ${port}`);\n"
-                <> "   });\n"
-                <> "})();"
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+const apitoolkitClient = APIToolkit.NewClient({ apiKey: "$apikey" });
+app.use(apitoolkitClient.expressMiddleware);
+
+app.get('/', (req, res) => {
+  res.json({message:'Hello World!'})
+});
+
+app.listen(port, () => {
+   console.log(`Example app listening on port $${port}`);
+});
+      |]
 
 
 tabContentGin :: Text -> Text -> Html ()
@@ -284,45 +236,36 @@ tabContentGin apikey current_tab =
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
         p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "go get github.com/apitoolkit/apitoolkit-go"
       h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
-      div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
-        div_ [class_ "relative w-full flex flex-col"] do
-          contentHeader "gin_code"
-          div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
-            pre_ [class_ "flex min-h-full text-lg leading-snug"] do
-              code_
-                [class_ "h-full hljs language-go atom-one-dark", id_ "gin_code"]
-                $ toHtml
-                $ "package main\n"
-                <> "\n"
-                <> "import (\n"
-                <> "    // Import the apitoolkit golang sdk\n"
-                <> "    apitoolkit \"github.com/apitoolkit/apitoolkit-go\"\n"
-                <> "    context\n"
-                <> "    \"github.com/gin-gonic/gin\"\n"
-                <> ")\n"
-                <> "\n"
-                <> "func main() {\n"
-                <> "    ctx := context.Background()\n"
-                <> "\n"
-                <> "    // Initialize the client using your apitoolkit.io generated apikey\n"
-                <> "    apitoolkitClient, err := apitoolkit.NewClient(ctx, apitoolkit.Config{APIKey: \""
-                <> apikey
-                <> "\"})\n"
-                <> "    if err != nil {\n"
-                <> "        // Handle the error\n"
-                <> "        panic(err)\n"
-                <> "    }\n"
-                <> "\n"
-                <> "    router := gin.New()\n"
-                <> "\n"
-                <> "    // Register with the corresponding middleware of your choice. For Gin router, we use the GinMiddleware method.\n"
-                <> "    router.Use(apitoolkitClient.GinMiddleware)\n"
-                <> "\n"
-                <> "    // Register your handlers as usual and run the gin server as usual.\n"
-                <> "    router.POST(\":/slug/test\", func(c *gin.Context) { c.String(200, \"ok\") })\n"
-                <> "\n"
-                <> "    router.Run(\":8080\")\n"
-                <> "}"
+      codeExample
+        $ [text|
+package main
+
+import (
+	context
+
+	apitoolkit "github.com/apitoolkit/apitoolkit-go"
+	github.com/gin-gonic/gin"
+)
+
+func main() {
+	apitoolkitCfg := apitoolkit.Config{
+		APIKey: "$apikey",
+	}
+
+	// Initialize the client using your apitoolkit generated apikey
+	apitoolkitClient, _ := apitoolkit.NewClient(context.Background(), apitoolkitCfg)
+	router := gin.New()
+
+	// Register with the corresponding middleware of your choice. For Gin router, we use the GinMiddleware method.
+	router.Use(apitoolkitClient.GinMiddleware)
+
+	// Register your handlers and run the gin server as usual.
+	router.POST("/:slug/test", func(c *gin.Context) {
+		c.JSON(200, gin.H{"message": "Hello world"})
+	})
+	router.Run(":8080")
+}
+|]
 
 
 tabContentLaravel :: Text -> Text -> Html ()
@@ -338,36 +281,33 @@ tabContentLaravel apikey current_tab =
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1 mt-4"] "Set up APITOOLKIT_KEY env variable"
         p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] $ toHtml $ "APITOOLKIT_KEY=" <> apikey
       h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Update into your app/Http/Kernel.php"
-      div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
-        div_ [class_ "relative w-full flex flex-col"] do
-          contentHeader "laravel_code"
-          div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
-            pre_ [class_ "flex min-h-full text-lg leading-snug"] do
-              code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-php atom-one-dark", id_ "laravel_code"]
-                $ "<?php\n"
-                <> "\n"
-                <> "namespace App\\Http;\\n"
-                <> "\n"
-                <> "use Illuminate\\Foundation\\Http\\Kernel as HttpKernel;\n"
-                <> "\n"
-                <> "class Kernel extends HttpKernel\n"
-                <> "    {\n"
-                <> "    // ...\n"
-                <> "    /**\n"
-                <> "     * The application's route middleware groups.\n"
-                <> "     *\n"
-                <> "     * @var array\n"
-                <> "     */\n"
-                <> "    protected $middlewareGroups = [\n"
-                <> "        // ...\n"
-                <> "        'api' => [\n"
-                <> "            // ...\n"
-                <> "            \\APIToolkit\\Http\\Middleware\\APIToolkit::class,\n"
-                <> "            // ...\n"
-                <> "        ],\n"
-                <> "    ];\n"
-                <> "    // ...\n"
-                <> "}"
+      codeExample
+        $ [text|
+<?php
+
+namespace App\Http;
+
+use Illuminate\Foundation\Http\Kernel as HttpKernel;
+
+class Kernel extends HttpKernel
+{
+    ...
+    /**
+     * The application's route middleware groups.
+     *
+     * @var array
+     */
+    protected $$middlewareGroups = [
+        ...
+        'api' => [
+            ...
+            \APIToolkit\Http\Middleware\APIToolkit::class,
+            ...
+        ],
+    ];
+    ...
+}
+|]
 
 
 tabContentSymfony :: Text -> Text -> Html ()
@@ -383,22 +323,18 @@ tabContentSymfony apikey current_tab =
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1 mt-4"] "Set up APITOOLKIT_KEY env variable"
         p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] $ toHtml $ "APITOOLKIT_KEY=" <> apikey
       h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
-      div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem]"] do
-        div_ [class_ "relative w-full flex flex-col"] do
-          contentHeader "symfony_code"
-          div_ [class_ "relative min-h-0  h-full flex-auto flex flex-col"] do
-            pre_ [class_ "flex min-h-full text-lg leading-snug"] do
-              code_
-                [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-php atom-one-dark", id_ "symfony_code"]
-                $ "services:\n"
-                <> "    APIToolkit\\EventSubscriber\\APIToolkitService:\n"
-                <> "        arguments:\n"
-                <> "            $apiKey: '%env(APITOOLKIT_KEY)%'\n"
-                <> "        # Optional: if you want to cache login result add this cache pool instance via setter injection\n"
-                <> "        calls:\n"
-                <> "            - setCachePool: ['@PutYourCachePoolServiceHere']\n"
-                <> "        tags:\n"
-                <> "            - { name: 'kernel.event_subscriber' }"
+      codeExample
+        $ [text|
+services:
+  APIToolkit\EventSubscriber\APIToolkitService:
+    arguments:
+      $$apiKey: '%env(APITOOLKIT_KEY)%'
+    # Optional:  if you want to cache login result add this cache poll instance via setter injection
+    calls:
+      - setCachePool: ['@PutYourCachePoolServiceHere']
+    tags:
+      - { name: 'kernel.event_subscriber' }
+|]
 
 
 tabContentDotNet :: Text -> Text -> Html ()
@@ -412,26 +348,32 @@ tabContentDotNet apikey current_tab =
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
         p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "dotnet add package ApiToolkit.Net"
       h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
-      div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
-        div_ [class_ "relative w-full flex flex-col"] do
-          contentHeader "net_code"
-          div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
-            pre_ [class_ "flex min-h-full text-lg leading-snug"] do
-              code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-csharp atom-one-dark", id_ "net_code"]
-                $ toHtml
-                $ "var config = new Config\n"
-                <> "{\n"
-                <> "    Debug = true, // Set debug flags to false in production\n"
-                <> "    ApiKey = \""
-                <> apikey
-                <> "\"\n"
-                <> "};\n"
-                <> "var client = await APIToolkit.NewClientAsync(config);\n"
-                <> "// Register the middleware to use the initialized client\n"
-                <> "app.Use(async (context, next) =>\n"
-                <> "    var apiToolkit = new APIToolkit(next, client);\n"
-                <> "    await apiToolkit.InvokeAsync(context);\n"
-                <> ");"
+      codeExample
+        $ [text|
+using ApiToolkit.Net;
+
+var builder = WebApplication.CreateBuilder(args);
+var app = builder.Build();
+
+var config = new Config
+{
+    ApiKey = "$apikey"
+};
+var client = await APIToolkit.NewClientAsync(config);
+
+app.Use(async (context, next) =>
+{
+    var apiToolkit = new APIToolkit(next, client);
+    await apiToolkit.InvokeAsync(context);
+});
+
+app.MapGet("/", async (context) =>
+{
+    await context.Response.WriteAsync("Hello World!");
+});
+
+app.Run();
+|]
 
 
 tabContentFastify :: Text -> Text -> Html ()
@@ -446,35 +388,31 @@ tabContentFastify apikey current_tab =
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
           p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "npm install apitoolkit-fastify"
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
-        div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
-          div_ [class_ "relative w-full flex flex-col"] do
-            contentHeader "fastify_code"
-            div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
-              pre_ [class_ "flex min-h-full text-lg leading-snug"] do
-                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-javascript atom-one-dark", id_ "fastify_code"]
-                  $ toHtml
-                  $ "import APIToolkit from 'apitoolkit-fastify';\n"
-                  <> "import Fastify from 'fastify';\n"
-                  <> "const fastify = Fastify();\n"
-                  <> "// Create and initialize an instance of the APIToolkit\n"
-                  <> "const apittoolkitClient = await APIToolkit.NewClient({\n"
-                  <> "  apiKey: \""
-                  <> apikey
-                  <> "\",\n"
-                  <> "  fastify: fastify\n"
-                  <> "});\n"
-                  <> "apitoolkitClient.init();\n"
-                  <> "// Rest of your app\n"
-                  <> "fastify.get('/hello', (request, reply) => {\n"
-                  <> " reply.send({hello:'world'})\n"
-                  <> "});\n"
-                  <> "\n"
-                  <> "fastify.listen({port: 3000}, function(err, address) {\n"
-                  <> "   if(err) {\n"
-                  <> "     fastify.log.error(err);\n"
-                  <> "     process.exit(1);\n"
-                  <> "   }\n"
-                  <> "});"
+        codeExample
+          $ [text|
+import APIToolkit from 'apitoolkit-fastify';
+import Fastify from 'fastify';
+const fastify = Fastify();
+
+// Create and initialize an instance of the APIToolkit
+const apittoolkitClient = APIToolkit.NewClient({
+  apiKey: "$apikey",
+  fastify,
+});
+apitoolkitClient.init();
+
+//Rest of your app
+fastify.get('/hello', function (request, reply) {
+  reply.send({ hello: 'world' });
+});
+
+fastify.listen({ port: 3000 }, function (err, address) {
+  if (err) {
+    fastify.log.error(err);
+    process.exit(1);
+  }
+});
+|]
 
 
 tabContentFlask :: Text -> Text -> Html ()
@@ -489,36 +427,30 @@ tabContentFlask apikey current_tab =
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
           p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "pip install apitoolkit-flask"
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
-        div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
-          div_ [class_ "relative w-full flex flex-col"] do
-            contentHeader "flask_code"
-            div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
-              pre_ [class_ "flex min-h-full text-lg leading-snug"] do
-                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-python atom-one-dark", id_ "flask_code"]
-                  $ toHtml
-                  $ "from flask import Flask\n"
-                  <> "from apitoolkit_flask import APIToolkit\n"
-                  <> "\n"
-                  <> "app = Flask(__name__)\n"
-                  <> "\n"
-                  <> "apitoolkit = APIToolkit(api_key=\""
-                  <> apikey
-                  <> "\", debug=True)\n"
-                  <> "\n"
-                  <> "@app.before_request\n"
-                  <> "def before_request():\n"
-                  <> "    apitoolkit.beforeRequest()\n"
-                  <> "\n"
-                  <> "@app.after_request\n"
-                  <> "def after_request(response):\n"
-                  <> "    apitoolkit.afterRequest(response)\n"
-                  <> "    return response\n"
-                  <> "\n"
-                  <> "@app.route('/hello', methods=['GET', 'POST'])\n"
-                  <> "def sample_route(subject):\n"
-                  <> "    return {\"Hello\": \"World\"}\n"
-                  <> "\n"
-                  <> "app.run(debug=True)\n"
+        codeExample
+          $ [text|
+from flask import Flask
+from apitoolkit_flask import APIToolkit
+
+app = Flask(__name__)
+
+apitoolkit = APIToolkit(api_key="$apikey")
+
+@app.before_request
+def before_request():
+    apitoolkit.beforeRequest()
+
+@app.after_request
+def after_request(response):
+    apitoolkit.afterRequest(response)
+    return response
+
+@app.route('/hello', methods=['GET', 'POST'])
+def sample_route(subject):
+    return {"Hello": "World"}
+
+app.run(debug=True)               
+|]
 
 
 tabContentFastAPI :: Text -> Text -> Html ()
@@ -533,38 +465,31 @@ tabContentFastAPI apikey current_tab =
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
           p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "pip install apitoolkit-fastapi"
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
-        div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[60vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
-          div_ [class_ "relative w-full flex flex-col"] do
-            contentHeader "fastapi_code"
-            div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] $ do
-              pre_ [class_ "flex min-h-full text-lg leading-snug"] $ do
-                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-python atom-one-dark", id_ "fastapi_code"]
-                  $ toHtml
-                  $ "from fastapi import FastAPI\n"
-                  <> "from apitoolkit_fastapi import APIToolkit\n"
-                  <> "\n"
-                  <> "app = FastAPI()\n"
-                  <> "\n"
-                  <> "# A list of fields to redact from response body\n"
-                  <> "redact_res = [\"$.api_key\", \"$.password\"]\n"
-                  <> "# A list of fields to redact from request body\n"
-                  <> "redact_req = [\"$.credit-card.cvv\", \"$.credit-card.name\"]\n"
-                  <> "# A list of fields to redact from request and response headers\n"
-                  <> "redact_headers = [\"Authorization\", \"Cookie\"]\n"
-                  <> "\n"
-                  <> "# Initialize apitoolkit\n"
-                  <> "apitoolkit = APIToolkit(\n"
-                  <> "    api_key=\""
-                  <> apikey
-                  <> "\", debug=True, redact_response_body=redact_res,\n"
-                  <> "    redact_request_body=redact_req, redact_headers=redact_headers\n"
-                  <> ")\n"
-                  <> "\n"
-                  <> "app.middleware('http')(apitoolkit.middleware)\n"
-                  <> "\n"
-                  <> "@app.get(\"/\")\n"
-                  <> "def read_root():\n"
-                  <> "    return {\"Hello\": \"World\"}\n"
+        codeExample
+          $ [text|
+from fastapi import FastAPI
+from apitoolkit_fastapi import APIToolkit
+
+app = FastAPI()
+
+redact_res = ["$.api_key", "$.password"]
+# A list of fields to redact from request body
+redact_req = ["$.credit-card.cvv", "$.credit-card.name"]
+# A list of fields to redact from request and response headers
+redact_headers = ["Authorization", "Cookie"]
+
+# Initialize apitoolkit
+apitoolkit = APIToolkit(
+    api_key="$apikey", debug=True,redact_response_body=redact_res,
+    redact_request_body=redact_req,redact_headers=redact_headers
+)
+
+app.middleware('http')(apitoolkit.middleware)
+
+@app.get("/")
+def read_root():
+    return {"Hello": "World"}           
+|]
 
 
 tabContentDjango :: Text -> Text -> Html ()
@@ -580,26 +505,20 @@ tabContentDjango apikey current_tab =
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
           p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "pip install apitoolkit-django"
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app by adding APITOOLKIT_KEY and APIToolkit to the settings middleware list"
-        div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[0vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
-          div_ [class_ "relative w-full flex flex-col"] do
-            contentHeader "django_code"
-            div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
-              pre_ [class_ "flex min-h-full text-lg leading-snug"] do
-                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-python atom-one-dark", id_ "django_code"]
-                  $ toHtml
-                  $ "APITOOLKIT_KEY = \""
-                  <> apikey
-                  <> "\"\n"
-                  <> "\n"
-                  <> "MIDDLEWARE = [\n"
-                  <> "    ...,\n"
-                  <> "    'apitoolkit-django.APIToolkit',\n"
-                  <> "    ...,\n"
-                  <> "]\n"
-                  <> "\n"
-                  <> "APITOOLKIT_REDACT_HEADERS = [\"Authorization\", \"Cookie\",\"Content-Length\", \"Content-Type\"] # optional\n"
-                  <> "APITOOLKIT_REDACT_REQ_BODY = [\"$.password\", \"$.credit_card\"] # optional\n"
-                  <> "APITOOLKIT_REDACT_RES_BODY = [\"$.credentials\", \"$.social_security_number\"] # optional\n"
+        codeExample
+          $ [text|
+APITOOLKIT_KEY = "$apikey"
+MIDDLEWARE = [
+    ...,
+    'apitoolkit_django.APIToolkit',
+    ...,
+]
+
+APITOOLKIT_REDACT_HEADERS = ["Authorization", "Cookie","Content-Length", "Content-Type"]
+APITOOLKIT_REDACT_REQ_BODY = ["$.password", "$.credit_card"]
+APITOOLKIT_REDACT_RES_BODY = ["$.credentials", "$.social_security_number"]
+
+|]
 
 
 tabContentEcho :: Text -> Text -> Html ()
@@ -615,46 +534,39 @@ tabContentEcho apikey current_tab =
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
           p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "go get github.com/apitoolkit/apitoolkit-go"
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app by adding APITOOLKIT_KEY and APIToolkit to the settings middleware list"
-        div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[0vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
-          div_ [class_ "relative w-full flex flex-col"] do
-            contentHeader "echo_code"
-            div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
-              pre_ [class_ "flex min-h-full text-lg leading-snug"] do
-                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-go atom-one-dark", id_ "echo_code"]
-                  $ toHtml
-                  $ "package main\n"
-                  <> "\n"
-                  <> "import (\n"
-                  <> "    context\n"
-                  <> "    \"net/http\"\n"
-                  <> "\n"
-                  <> "    apitoolkit \"github.com/apitoolkit/apitoolkit-go\"\n"
-                  <> "    \"github.com/labstack/echo/v4\"\n"
-                  <> ")\n"
-                  <> "\n"
-                  <> "func main() {\n"
-                  <> "    ctx := context.Background()\n"
-                  <> "\n"
-                  <> "    // Initialize the client using your apitoolkit.io generated apikey\n"
-                  <> "    apitoolkitClient, err := apitoolkit.NewClient(ctx, apitoolkit.Config{APIKey: \""
-                  <> apikey
-                  <> "\"})\n"
-                  <> "    if err != nil {\n"
-                  <> "        panic(err)\n"
-                  <> "    }\n"
-                  <> "\n"
-                  <> "    e := echo.New()\n"
-                  <> "\n"
-                  <> "    // Register with the corresponding middleware of your choice.\n"
-                  <> "    // Assuming apitoolkit provides an EchoMiddleware function for the echo framework.\n"
-                  <> "    e.Use(apitoolkitClient.EchoMiddleware)\n"
-                  <> "\n"
-                  <> "    e.POST(\":/slug/test\", func(c echo.Context) error {\n"
-                  <> "        return c.String(http.StatusOK, \"ok\")\n"
-                  <> "    })\n"
-                  <> "\n"
-                  <> "    e.Start(\":8080\")\n"
-                  <> "}"
+        codeExample
+          $ [text|
+package main
+
+import (
+    "context"
+    "github.com/labstack/echo/v4"
+    apitoolkit "github.com/apitoolkit/apitoolkit-go"
+)
+
+func main() {
+    ctx := context.Background()
+
+    // Initialize the client using your apitoolkit.io generated apikey
+    apitoolkitClient, err := apitoolkit.NewClient(ctx, apitoolkit.Config{APIKey: "$apikey"})
+    if err != nil {
+        panic(err)
+    }
+
+    e := echo.New()
+
+    // Register with the corresponding middleware of your choice.
+    // Assuming apitoolkit provides an EchoMiddleware function for the echo framework.
+    e.Use(apitoolkitClient.EchoMiddleware)
+
+    e.POST("/:slug/test", func(c echo.Context) error {
+        return c.String(http.StatusOK, "ok")
+    })
+
+    e.Start(":8080")
+}
+                  
+|]
 
 
 tabContentGorilla :: Text -> Text -> Html ()
@@ -670,39 +582,37 @@ tabContentGorilla apikey current_tab =
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
           p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "go get github.com/apitoolkit/apitoolkit-echo"
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app by adding APITOOLKIT_KEY and APIToolkit to the settings middleware list"
-        div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[0vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
-          div_ [class_ "relative w-full flex flex-col"] do
-            contentHeader "gorilla_code"
-            div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
-              pre_ [class_ "flex min-h-full text-lg leading-snug"] do
-                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs language-go atom-one-dark", id_ "gorilla_code"]
-                  $ toHtml
-                  $ "package main\n"
-                  <> "import (\n"
-                  <> "    \"context\"\n"
-                  <> "    \"net/http\"\n"
-                  <> "    \"github.com/gorilla/mux\"\n"
-                  <> "    apitoolkit \"github.com/apitoolkit/apitoolkit-go\"\n"
-                  <> ")\n"
-                  <> "func main() {\n"
-                  <> "    ctx := context.Background()\n"
-                  <> "    // Initialize the client using your generated API key\n"
-                  <> "    apitoolkitClient, err := apitoolkit.NewClient(ctx, apitoolkit.Config{APIKey: \""
-                  <> apikey
-                  <> "\"})\n"
-                  <> "    if err != nil {\n"
-                  <> "        panic(err)\n"
-                  <> "    }\n"
-                  <> "    r := mux.NewRouter()\n"
-                  <> "    // Register middleware\n"
-                  <> "    r.Use(apitoolkitClient.GorillaMuxMiddleware)\n"
-                  <> "    r.HandleFunc(\"/{slug}/test\", func(w http.ResponseWriter, r *http.Request) {\n"
-                  <> "        w.WriteHeader(http.StatusOK)\n"
-                  <> "        w.Write([]byte(\"ok\"))\n"
-                  <> "    })\n"
-                  <> "    // Start the HTTP server on port 8080\n"
-                  <> "    http.ListenAndServe(\":8080\", r)\n"
-                  <> "}"
+        codeExample
+          $ [text|
+package main
+
+import (
+    "context"
+    "net/http"
+    "github.com/gorilla/mux"
+    apitoolkit "github.com/apitoolkit/apitoolkit-go"
+)
+
+func main() {
+    ctx := context.Background()
+
+    // Initialize the client using your generated apikey
+    apitoolkitClient, err := apitoolkit.NewClient(ctx, apitoolkit.Config{APIKey: "$apikey"})
+    if err != nil {
+        panic(err)
+    }
+
+    r := mux.NewRouter()
+    // Register middleware
+    r.Use(apitoolkitClient.GorillaMuxMiddleware)
+    r.HandleFunc("/{slug}/test",func(w http.ResponseWriter, r *http.Request) {
+        w.WriteHeader(http.StatusOK)
+        w.Write([]byte("ok"))
+    })
+
+    http.ListenAndServe(":8080", r)
+}
+|]
 
 
 tabContentPhoeinix :: Text -> Text -> Html ()
@@ -717,28 +627,27 @@ tabContentPhoeinix apikey current_tab =
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
           p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "{:apitoolkit_phoenix, \"~> 0.1.1\"}"
-        div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[0vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
-          div_ [class_ "relative w-full flex flex-col"] do
-            contentHeader "phoenix_code"
-            div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
-              pre_ [class_ "flex min-h-full text-lg leading-snug"] do
-                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs atom-one-dark", id_ "phoenix_code"]
-                  $ toHtml
-                  $ "defmodule HelloWeb.Router do\n"
-                  <> "  use HelloWeb, :router\n"
-                  <> "  use Plug.ErrorHandler\n"
-                  <> "  import ApitoolkitPhoenix\n\n"
-                  <> "  pipeline :api do\n"
-                  <> "    plug :accepts, [\"json\"]\n"
-                  <> "    # Other plugs\n"
-                  <> "    plug ApitoolkitPhoenix,\n"
-                  <> "      config: %{\n"
-                  <> "        api_key: \""
-                  <> apikey
-                  <> "\"\n"
-                  <> "      }\n"
-                  <> "  end\n"
-                  <> "end\n"
+        codeExample
+          $ [text|
+defmodule HelloWeb.Router do
+  use HelloWeb, :router
+  use Plug.ErrorHandler
+  import ApitoolkitPhoenix
+
+  pipeline :api do
+    plug :accepts, ["json"]
+    # Other plugs
+    plug ApitoolkitPhoenix,
+      config: %{
+        api_key: "$apikey",
+        redact_headers: ["accept-language", "cookie", "x-csrf-token"] # list of headers to be redacted
+        redact_request_body: [".user.password", ".user.credit_card"] # list of json paths to redact from request body
+        redact_response_body: [".users[*].email"] # list of json paths to redact from response body
+
+      }
+  end
+end
+|]
 
 
 tabContentAdonis :: Text -> Text -> Html ()
@@ -757,26 +666,22 @@ tabContentAdonis apikey current_tab =
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Configure apitoolkit sdk"
           p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "node ace configure apitoolkit-adonis"
 
-        div_ [class_ "relative overflow-hidden  flex bg-slate-800 h-[31.625rem] max-h-[0vh]] sm:rounded-xl lg:h-[34.6875rem] "] do
-          div_ [class_ "relative w-full flex flex-col"] do
-            contentHeader "adonis_code"
-            div_ [class_ "relative min-h-0 h-full flex-auto flex flex-col"] do
-              pre_ [class_ "flex min-h-full text-lg leading-snug"] do
-                code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs atom-one-dark", id_ "adonis_code"]
-                  $ toHtml
-                  $ "Server.middleware.register([\n"
-                  <> "  () => import(\"@ioc:Adonis/Core/BodyParser\"),\n"
-                  <> "  () => import(\"@ioc:APIToolkit\"),\n"
-                  <> "]);\n\n"
-                  <> "// /conf/apitoolkit.ts\n"
-                  <> "export const apitoolkitConfig = {\n"
-                  <> "  apiKey: \""
-                  <> apikey
-                  <> "\",\n"
-                  <> "  redactHeaders: [\"Content-Type\", \"Authorization\", \"Cookies\"], // Specified headers will be redacted\n"
-                  <> "  redactRequestBody: [\"$.credit-card.cvv\", \"$.credit-card.name\"], // Specified request bodies fields will be redacted\n"
-                  <> "  redactResponseBody: [\"$.message.error\"], // Specified response body fields will be redacted\n"
-                  <> "};\n"
+        codeExample
+          $ [text|
+Server.middleware.register([
+  () => import(\"@ioc:Adonis/Core/BodyParser\"),
+  () => import(\"@ioc:APIToolkit\"),
+]);
+
+// /conf/apitoolkit.ts
+export const apitoolkitConfig = {
+  apiKey: "#apikey",
+  redactHeaders: ["Content-Type", "Authorization", "Cookies"], // Specified headers will be redacted
+  redactRequestBody: ["$$.credit-card.cvv", "$$.credit-card.name"], // Specified request bodies fields will be redacted
+  redactResponseBody: ["$$.message.error"], // Specified response body fields will be redacted
+};          
+                  
+|]
 
 
 tabs :: Text -> Html ()
