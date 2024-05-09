@@ -3,6 +3,7 @@
 module Pkg.Mail (sendEmail, sendSlackMessage, sendPostmarkEmail) where
 
 import Control.Lens ((.~))
+import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Pool ()
 import Effectful (
@@ -50,22 +51,21 @@ sendEmail reciever subject body = do
     else Log.logAttention "sendEmail is not configured. But was called" (reciever, subject, body)
 
 
-sendPostmarkEmail :: Text -> Text -> LText -> ATBackgroundCtx ()
-sendPostmarkEmail reciever subject body = do
+sendPostmarkEmail :: Text -> Text -> AE.Value -> ATBackgroundCtx ()
+sendPostmarkEmail reciever template templateVars = do
   appCtx <- ask @Config.AuthContext
-  let url = "https://api.postmarkapp.com/email"
-  let apiKey = "f87de7f9-acb2-4779-9f80-e9fed575b1d2"
+  let url = "https://api.postmarkapp.com/email/withTemplate"
+  let apiKey = encodeUtf8 $ appCtx.config.postmarkToken
   let payload =
         [aesonQQ|
         {
-     "From": "anthony@apitoolkit.io",
+    "From": "hello@apitoolkit.io",
     "To": #{reciever},
-    "Subject": #{subject},
-    "HtmlBody": #{body},
-    "MessageStream": "outbound"
+    "TemplateAlias": #{template},
+    "TemplateModel": #{templateVars}
         }
     |]
-  let opts = defaults & header "Content-Type" .~ ["application/json"] & header "X-Postmark-Server-Token" .~ [apiKey]
+  let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Accept" .~ ["application/json"] & header "X-Postmark-Server-Token" .~ [apiKey]
   response <- liftIO $ postWith opts url payload
   pass
 
@@ -88,5 +88,4 @@ slackPostWebhook webhookUrl message = do
               }
             |]
   response <- liftIO $ postWith opts (toString webhookUrl) payload
-  traceShowM response
   pass

@@ -42,7 +42,7 @@ import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, startJobRunner, throwParsePayload)
 import Pages.Reports qualified as RP
 import Pages.Specification.GenerateSwagger (generateSwagger)
-import Pkg.Mail (sendEmail, sendSlackMessage)
+import Pkg.Mail (sendEmail, sendPostmarkEmail, sendSlackMessage)
 import PyF (fmt, fmtTrim)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
@@ -94,37 +94,31 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
   runBackground logger authCtx $ case bgJob of
     QueryMonitorsTriggered queryMonitorIds -> queryMonitorsTriggered queryMonitorIds
     NewAnomaly pid createdAt anomalyTypesT anomalyActionsT targetHash -> newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash
-    InviteUserToProject userId projectId reciever projectTitle' ->
-      sendEmail
-        reciever
-        [fmt| 🤖 APITOOLKIT: You've been invited to a project '{projectTitle'}' on apitoolkit.io |]
-        [fmtTrim|
-  Hi,<br/>
-
-  <p>You have been invited to the $projectTitle project on apitoolkit. 
-  Please use the following link to activate your account and access the $projectTitle project.</p>
-  <a href="https://app.apitoolkit.io/p/{projectId.toText}">Click Here</a>
-  <br/><br/>
-  Regards,
-  Apitoolkit team
-            |]
-    CreatedProjectSuccessfully userId projectId reciever projectTitle ->
-      sendEmail
-        reciever
-        [fmt| 🤖 APITOOLKIT: Project created successfully '{projectTitle}' on apitoolkit.io |]
-        [fmtTrim|
-  Hi,<br/>
-
-  <p>You have been invited to the $projectTitle project on apitoolkit. 
-  Please use the following link to activate your account and access the {projectTitle} project.</p>
-  <a href="app.apitoolkit.io/p/{projectId.toText}">Click Here to access the project</a><br/><br/>.
-
-  By the way, we know it can be difficult or confusing to integrate SDKs sometimes. So we're willing to assist. You can schedule a time here, and we can help with integrating: 
-  <a href="https://calendar.google.com/calendar/u/0/appointments/schedules/AcZssZ21Q1uDPjHN4YPpM2lNBS0_Nwc16IQj-25e5WIoPOKEVsBBIWJgy3usCUS4d7MtQz7kiuzyBJLb">Click Here to Schedule</a>
-  <br/><br/>
-  Regards,<br/>
-  Apitoolkit team
-            |]
+    InviteUserToProject userId projectId reciever projectTitle' -> do
+      userM <- Users.userById userId
+      whenJust userM \user -> do
+        let firstName = user.firstName
+        let project_url = "https://app.apitoolkit.io/p/" <> projectId.toText
+        let templateVars =
+              [aesonQQ|{
+           "user_name": #{firstName},
+           "project_name": #{projectTitle'},
+           "project_url": #{project_url}
+        }|]
+        sendPostmarkEmail reciever "welcome-1" templateVars
+    CreatedProjectSuccessfully userId projectId reciever projectTitle -> do
+      userM <- Users.userById userId
+      whenJust userM \user -> do
+        let firstName = user.firstName
+        let project_url = "https://app.apitoolkit.io/p/" <> projectId.toText
+        let templateVars =
+              [aesonQQ|{
+           "user_name": #{firstName},
+           "project_name": #{projectTitle},
+           "project_url": #{project_url}
+        }|]
+        sendPostmarkEmail reciever "welcome" templateVars
+      pass
     DailyJob -> do
       currentDay <- utctDay <$> Time.currentTime
       projects <- dbtToEff $ query Select [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL|] (Only True)

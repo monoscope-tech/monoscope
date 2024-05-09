@@ -195,9 +195,13 @@ tabContentExpress apikey current_tab =
   div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "express" then "" else "hidden"), id_ "express_content"] $ do
     div_ [class_ "relative"] $ do
       div_ [class_ "mb-6"] do
+        h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Express Js"
+        p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "Here is how to quickly integrate APItoolkit into your Express.js application"
+
+      div_ [class_ "mb-6"] do
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
         p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "npm i apitoolkit-express"
-      h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app"
+      h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate"
       codeExample
         $ [text|
 import express from 'express';
@@ -584,6 +588,10 @@ tabContentPhoeinix apikey current_tab =
   div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "phoenix" then "" else "hidden"), id_ "phoenix_content"]
     $ do
       div_ [class_ "relative"] $ do
+        div_ [class_ "mb-6"] do
+          h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Elixir Phoenix"
+          p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "Here is how to "
+
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
           p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "{:apitoolkit_phoenix, \"~> 0.1.1\"}"
