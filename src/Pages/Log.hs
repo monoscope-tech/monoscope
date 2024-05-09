@@ -327,19 +327,23 @@ resultTable_ :: ApiLogsPageData -> Bool -> Html ()
 resultTable_ page mainLog = table_ [class_ "w-full table table-sm table-pin-rows table-pin-cols", style_ "height:1px", id_ "resultTable"] do
   -- height:1px fixes the cell minimum heights somehow.
   let isLogEventB = isLogEvent page.cols
-  if (null page.requestVecs && mainLog)
-    then do
-      section_ [class_ "w-max  mx-auto my-16 p-5 sm:py-14 sm:px-24 items-center flex gap-16"] do
-        div_ [] do
-          faIcon_ "fa fa-solid fa-empty-set" "fa-solid fa-empty-set" "h-24 w-24"
-        div_ [class_ "flex flex-col gap-2"] do
-          h2_ [class_ "text-2xl font-bold"] "Waiting for events..."
-          p_ "You're currently not sending any data to APItoolkit from your backends yet."
-          a_ [href_ $ "/p/" <> page.pid.toText <> "/integration_guides", class_ "w-max btn btn-indigo -ml-1 text-md"] "Read the setup guide"
-    else do
-      thead_ $ tr_ $ forM_ page.cols $ logTableHeading_ page.pid isLogEventB
-      tbody_ [id_ "w-full log-item-table-body"] do
-        logItemRows_ page.pid page.requestVecs page.cols page.colIdxMap page.nextLogsURL
+  when (null page.requestVecs) $ do
+    if mainLog
+      then do
+        section_ [class_ "w-max  mx-auto my-16 p-5 sm:py-14 sm:px-24 items-center flex gap-16"] do
+          div_ [] do
+            faIcon_ "fa fa-solid fa-empty-set" "fa-solid fa-empty-set" "h-24 w-24"
+          div_ [class_ "flex flex-col gap-2"] do
+            h2_ [class_ "text-2xl font-bold"] "Waiting for events..."
+            p_ "You're currently not sending any data to APItoolkit from your backends yet."
+            a_ [href_ $ "/p/" <> page.pid.toText <> "/integration_guides", class_ "w-max btn btn-indigo -ml-1 text-md"] "Read the setup guide"
+      else do
+        section_ [class_ "w-max mx-auto"] do
+          p_ "This request has no outgoing requests"
+  unless (null page.requestVecs) $ do
+    thead_ $ tr_ $ forM_ page.cols $ logTableHeading_ page.pid isLogEventB
+    tbody_ [id_ "w-full log-item-table-body"] do
+      logItemRows_ page.pid page.requestVecs page.cols page.colIdxMap page.nextLogsURL
 
 
 curateCols :: [Text] -> [Text] -> [Text]
