@@ -105,7 +105,7 @@ manageMembersPostH pid form = do
         when (userId' /= currUserId)
           $ void
           $ liftIO
-          $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId' pid email projectTitle -- invite the users to the project (Usually as an email)
+          $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject currUserId pid email projectTitle -- invite the users to the project (Usually as an email)
         pure (email, permission, userId')
 
       let projectMembers =
