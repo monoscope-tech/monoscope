@@ -99,6 +99,17 @@ data RequestMessage = RequestMessage
     (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestMessage
 
+-- Custom ToJSON for Either Text [Text]
+instance  {-# OVERLAPPING #-}  AE.ToJSON (Either Text [Text]) where
+  toJSON (Left txt) = AE.toJSON txt
+  toJSON (Right texts) = AE.toJSON texts
+
+-- Custom FromJSON for Either Text [Text]
+instance  {-# OVERLAPPING #-}  AE.FromJSON (Either Text [Text]) where
+  parseJSON value = case value of
+    AE.String txt -> return $ Left txt
+    AE.Array texts -> Right <$> AE.parseJSON value  -- parses an array of Text
+    _ -> fail "Expected either a single string or an array of strings"
 
 -- | Walk the JSON once, redact any fields which are in the list of json paths to be redacted.
 -- >>> redactJSON ["menu.id."] [aesonQQ| {"menu":{"id":"file", "name":"John"}} |]
