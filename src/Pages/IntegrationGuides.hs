@@ -34,11 +34,17 @@ import Pages.IntegrationDemos.Django
 import Pages.IntegrationDemos.DotNet
 import Pages.IntegrationDemos.Echo
 import Pages.IntegrationDemos.ExpressJs
+import Pages.IntegrationDemos.FastApi
+import Pages.IntegrationDemos.FastifyJs
 import Pages.IntegrationDemos.Flask
 import Pages.IntegrationDemos.Gin
+import Pages.IntegrationDemos.GoNative
+import Pages.IntegrationDemos.GorillaMux
 import Pages.IntegrationDemos.Laravel
+import Pages.IntegrationDemos.NestJs
 import Pages.IntegrationDemos.Phoenix
 import Pages.IntegrationDemos.Pyramid
+import Pages.IntegrationDemos.Slim
 import Pages.IntegrationDemos.Symfony
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
@@ -91,8 +97,14 @@ integrationsPage pid sdk apiKey errReportM reqMonM = do
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=adonis"] "Adonis Js"
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=flask"] "Flask"
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=echo"] "Go Echo"
+            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=gorilla"] "Go Gorilla Mux"
+            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=gonative"] "Go Native"
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=phoenix"] "Elixir Phoenix"
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=symfony"] "PHP Symfony"
+            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=fastapi"] "Python FastAPI"
+            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=fastify"] "Fastify Js"
+            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=nest"] "Nest Js"
+            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=slim"] "PHP Slim"
         button_
           [ class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium text-sm hover:bg-gray-100"
           , [__|on click go to the top of #requests-monitoring|]
@@ -120,6 +132,12 @@ integrationsPage pid sdk apiKey errReportM reqMonM = do
         "flask" -> flaskGuide apiKey
         "echo" -> echoGuide apiKey
         "symfony" -> symfonyGuide apiKey
+        "fastapi" -> fastApiGuide apiKey
+        "fastify" -> fastifyGuide apiKey
+        "slim" -> slimGuide apiKey
+        "nest" -> nestGuide apiKey
+        "gorilla" -> gorillaGuide apiKey
+        "gonative" -> goNativeGuide apiKey
         _ -> expressGuide apiKey
     script_
       [text|
@@ -130,12 +148,18 @@ hljs.highlightAll();
 getTitle :: Text -> Text
 getTitle "gin" = "GO Gin"
 getTitle "pyramid" = "Python Pyramid"
-getTitle "dotnet" = ".NET"
+getTitle "dotnet" = "CSharp .NET"
 getTitle "adonis" = "Adonis Js"
-getTitle "laravel" = "Laravel"
-getTitle "django" = "Django"
+getTitle "laravel" = "PHP Laravel"
+getTitle "django" = "Python Django"
 getTitle "phoenix" = "Elixir Phoenix"
-getTitle "flask" = "Flask"
+getTitle "flask" = "Python Flask"
 getTitle "echo" = "Go Echo"
 getTitle "symfony" = "PHP Symfony"
+getTitle "fastapi" = "Python FastAPI"
+getTitle "fastify" = "Fastify JS"
+getTitle "slim" = "PHP Slim"
+getTitle "nest" = "Nest Js"
+getTitle "gorilla" = "Go Gorilla Mux"
+getTitle "gonative" = "Go Native"
 getTitle _ = "Express Js"

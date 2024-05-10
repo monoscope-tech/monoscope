@@ -123,6 +123,8 @@ ADD COLUMN notifications_channel notification_channel_enum[] DEFAULT ARRAY['emai
 ALTER TABLE projects.projects ADD COLUMN sub_id TEXT DEFAULT NULL;
 ALTER TABLE projects.projects ADD COLUMN first_sub_item_id TEXT DEFAULT NULL;
 ALTER TABLE projects.projects ADD COLUMN order_id TEXT DEFAULT NULL;
+ALTER TABLE projects.projects ADD COLUMN IF NOT EXISTS usage_last_reported TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp;
+UPDATE projects.projects SET usage_last_reported = current_timestamp WHERE usage_last_reported IS NULL;
 
 
 
@@ -888,34 +890,8 @@ CREATE TABLE IF NOT EXISTS tests.collections
 SELECT manage_updated_at('tests.collections');
 create index if not exists idx_apis_testing_project_Id on tests.collections(project_id); 
 
-CREATE TABLE IF NOT EXISTS tests.collection_steps 
-(
-  id                 UUID        NOT     NULL   DEFAULT        gen_random_uuid() PRIMARY KEY, 
-  created_at         TIMESTAMP   WITH    TIME   ZONE           NOT               NULL              DEFAULT current_timestamp,
-  updated_at         TIMESTAMP   WITH    TIME   ZONE           NOT               NULL              DEFAULT current_timestamp,
-  deleted_at         TIMESTAMP   WITH    TIME   ZONE     DEFAULT  NULL,
-  last_run           TIMESTAMP   WITH    TIME   ZONE           DEFAULT NULL,
-  project_id         UUID        NOT     NULL   REFERENCES     projects.projects (id)              ON      DELETE CASCADE,
-  collection_id      UUID        NOT     NULL   REFERENCES     tests.collections (id)                   ON      DELETE CASCADE,
-  step_data          jsonb       NOT     NULL   DEFAULT        '[]'::jsonb
-);
-SELECT manage_updated_at('tests.collection_steps');
-create index if not exists idx_apis_test_steps_id on tests.collection_steps(id); 
-
-CREATE TABLE IF NOT EXISTS tests.test_results
-(
-  id                 UUID        NOT     NULL   DEFAULT        gen_random_uuid() PRIMARY KEY, 
-  created_at         TIMESTAMP   WITH    TIME   ZONE           NOT               NULL              DEFAULT current_timestamp,
-  updated_at         TIMESTAMP   WITH    TIME   ZONE           NOT               NULL              DEFAULT current_timestamp,
-  project_id         UUID        NOT     NULL   REFERENCES     projects.projects (id)              ON      DELETE CASCADE,
-  collection_id      UUID        NOT     NULL   REFERENCES     tests.collections (id)                   ON  DELETE CASCADE,
-  step_id            UUID        NOT     NULL   REFERENCES     tests.collection_steps (id)                ON      DELETE CASCADE,
-  result_data        jsonb       NOT     NULL   DEFAULT        '{}'::jsonb
-);
-SELECT manage_updated_at('tests.test_results');
-create index if not exists idx_apis_test_results_id on tests.test_results(id); 
-
-
+ALTER table tests.collections DROP COLUMN schedule;
+ALTER TABLE tests.collections ADD COLUMN schedule INTERVAL NOT NULL DEFAULT '1 day';
 
 CREATE TABLE IF NOT EXISTS monitors.query_monitors 
 (
@@ -938,7 +914,7 @@ CREATE TABLE IF NOT EXISTS monitors.query_monitors
   deleted_at                   TIMESTAMP WITH TIME ZONE 
 );
 SELECT manage_updated_at('monitors.query_monitors');
-
+``
 -- used for the alerts, to execute queries stored in a table, 
 create or replace function eval(expression text) returns integer
 as 
@@ -953,8 +929,7 @@ language plpgsql;
 
 
 -- Checks for query monitors being triggered and creates a background job for any found
-CREATE OR REPLACE FUNCTION monitors.check_triggered_query_monitors()
-RETURNS void AS
+CREATE OR REPLACE PROCEDURE monitors.check_triggered_query_monitors(job_id int, config jsonb) LANGUAGE PLPGSQL AS
 $$
 DECLARE
     -- Array to hold IDs from the query
@@ -984,10 +959,54 @@ BEGIN
         VALUES (NOW(), 'queued', jsonb_build_object('tag', 'QueryMonitorsTriggered', 'contents', id_array));
     END IF;
 END;
-$$
-LANGUAGE plpgsql;
+$$;
 -- Run every minute 
 SELECT add_job('monitors.check_triggered_query_monitors','1min');
+
+-- Find all tests where last_run + schedule is < NOW()+10min 
+-- schedule them as 1 job per test.
+CREATE OR REPLACE PROCEDURE tests.check_tests_to_trigger(job_id int, config JSONB) LANGUAGE PLPGSQL AS $$
+DECLARE
+    collection_record RECORD;
+    curr_time TIMESTAMPTZ := NOW();
+    next_run_at TIMESTAMPTZ;
+    num_schedules INT;
+BEGIN
+    FOR collection_record IN
+        SELECT id, schedule, last_run
+        FROM tests.collections
+        WHERE is_scheduled AND
+              (last_run IS NULL
+			   OR (
+				   (last_run + schedule)::timestamptz < (curr_time + INTERVAL '10 minutes')::timestamptz
+			   )
+			  )
+    LOOP
+        num_schedules := 10 / (EXTRACT(EPOCH FROM collection_record.schedule) / 60);
+
+        -- Schedule the collection for each interval
+        FOR i IN 0..num_schedules LOOP
+			next_run_at := curr_time + (i * collection_record.schedule || ' minutes')::INTERVAL;
+			IF next_run_at < collection_record.last_run THEN
+       			 CONTINUE;
+    		END IF;
+
+			RAISE DEBUG 'DEBUG RUN SCHEDULE INDEX: %; NOW: %; RUN_AT: %', i,curr_time,  next_run_at ;
+            INSERT INTO background_jobs (run_at, status, payload)
+            VALUES (curr_time + (i * collection_record.schedule || ' minutes')::INTERVAL, 'queued',
+					jsonb_build_object('tag', 'RunCollectionTests', 'contents', collection_record.id));
+        END LOOP;
+
+        -- Update the last_run timestamp for the collection to the start of the first new schedule
+		IF next_run_at < collection_record.last_run THEN
+        	UPDATE tests.collections
+       		SET last_run = next_run_at
+        	WHERE id = collection_record.id;
+		END IF;
+    END LOOP;
+END;
+$$;
+SELECT add_job('tests.check_tests_to_trigger', '10min');
 
 COMMIT;
 

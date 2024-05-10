@@ -26,6 +26,8 @@ module Models.Apis.RequestDumps (
   getRequestType,
   autoCompleteFromRequestDumps,
   getTotalRequestForCurrentMonth,
+  hasRequest,
+  getTotalRequestToReport,
 )
 where
 
@@ -82,6 +84,7 @@ data SDKTypes
   | ElixirPhoenix
   | PythonPyramid
   | DotNetOutgoing
+  | TestkitOutgoing
   deriving stock (Show, Generic, Read, Eq)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SDKTypes
@@ -103,6 +106,7 @@ data RequestTypes
   = Incoming
   | Outgoing
   | Background
+  | System
   deriving stock (Show, Generic, Read, Eq)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestTypes
@@ -163,6 +167,7 @@ normalizeUrlPath GuzzleOutgoing statusCode _method urlPath = removeQueryParams s
 normalizeUrlPath ElixirPhoenix statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath PythonPyramid statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath DotNetOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
+normalizeUrlPath TestkitOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
 
 
 -- getRequestType ...
@@ -447,6 +452,20 @@ countRequestDumpByProject pid = do
     q = [sql| SELECT count(*) FROM apis.request_dumps WHERE project_id=? |]
 
 
+hasRequest :: Projects.ProjectId -> DBT IO Bool
+hasRequest pid = do
+  result <- query Select q pid
+  case result of
+    [Only count] -> return count
+    v -> return $ length v > 0
+  where
+    q =
+      [sql|SELECT EXISTS(
+  SELECT 1
+  FROM apis.request_dumps where project_id = ?
+) |]
+
+
 -- bulkInsertRequestDumps is a very import function because it's what inserts the request dumps into the database.
 -- But it's tied to the literal database structure for performance purposes, so we need ot update this
 -- if we add or remove new columns to the database table.
@@ -532,3 +551,14 @@ getTotalRequestForCurrentMonth pid = do
     q =
       [sql| SELECT count(*) FROM apis.request_dumps WHERE project_id=? AND EXTRACT(MONTH FROM created_at) = EXTRACT(MONTH FROM CURRENT_DATE)
               AND EXTRACT(YEAR FROM created_at) = EXTRACT(YEAR FROM CURRENT_DATE);|]
+
+
+getTotalRequestToReport :: Projects.ProjectId -> ZonedTime -> DBT IO Int
+getTotalRequestToReport pid lastReported = do
+  result <- query Select q (pid, lastReported)
+  case result of
+    [Only count] -> return count
+    v -> return $ length v
+  where
+    q =
+      [sql| SELECT count(*) FROM apis.request_dumps WHERE project_id=? AND created_at > ?|]

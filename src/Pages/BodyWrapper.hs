@@ -10,6 +10,8 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
+import Pkg.Components.ExternalHeadScripts (externalHeadScripts_)
+import PyF
 import Relude
 import Utils (faIcon_, faSprite_)
 
@@ -104,7 +106,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
       script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.0/dist/index.umd.min.js"] ("" :: Text)
 
       script_
-        [text|
+        [raw|
               window.initialCloseSideMenu = localStorage.getItem('close-sidemenu');
               var currentISOTimeStringVar = ((new Date()).toISOString().split(".")[0])+"+00:00";
               document.addEventListener('DOMContentLoaded', function(){ 
@@ -112,9 +114,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
                    document.getElementById('side-nav-menu').classList.add('hidden-side-nav-menu');
                 }
 
-
                 // htmx.config.useTemplateFragments = true
-                // htmx.logAll()
                 tippy('[data-tippy-content]');
                 var notyf = new Notyf({
                     duration: 5000,
@@ -137,72 +137,6 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
               }
             |]
 
-      -- Facebook Pixel Code --
-      script_
-        [text|
-      !function(f,b,e,v,n,t,s)
-{if(f.fbq)return;n=f.fbq=function(){n.callMethod?
-n.callMethod.apply(n,arguments):n.queue.push(arguments)};
-if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
-n.queue=[];t=b.createElement(e);t.async=!0;
-t.src=v;s=b.getElementsByTagName(e)[0];
-s.parentNode.insertBefore(t,s)}(window,document,'script',
-'https://connect.facebook.net/en_US/fbevents.js');
- fbq('init', '1135987380886994'); 
-fbq('track', 'PageView');
-      |]
-
-      -- Facebook Pixel Code --
-      script_
-        [text|
-!function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?
-n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;
-n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;
-t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}(window,
-document,'script','https://connect.facebook.net/en_US/fbevents.js');
-fbq('init', '3674513372787915');
-fbq('track', 'PageView');
-      |]
-
-    noscript_ [] do
-      img_ [height_ "1", width_ "1", src_ "https://www.facebook.com/tr?id=3674513372787915&ev=PageView&noscript=1"]
-    -- End Facebook Pixel Code
-
-    -- Google pixel
-    script_
-      [text|
-(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
-new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
-j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
-'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
-})(window,document,'script','dataLayer','GTM-TF4BQQ3D');
-      |]
-
-    noscript_ [] do
-      iframe_ [height_ "0", width_ "0", style_ "display:none;visibility:hidden", src_ "https://www.googletagmanager.com/ns.html?id=GTM-TF4BQQ3D"] pass
-    -- End GOOGLE NO SCRIPT
-
-    -- Linkedin pixel
-    script_
-      [text|
-   _linkedin_partner_id = "5779626"; window._linkedin_data_partner_ids = window._linkedin_data_partner_ids || [];
-  window._linkedin_data_partner_ids.push(_linkedin_partner_id);      
-      |]
-
-    script_
-      [text|
-(function(l) { if (!l){window.lintrk = function(a,b){window.lintrk.q.push([a,b])}; window.lintrk.q=[]} var s = document.getElementsByTagName("script")[0]; var b = document.createElement("script"); b.type = "text/javascript";b.async = true; b.src = "https://snap.licdn.com/li.lms-analytics/insight.min.js"; s.parentNode.insertBefore(b, s);})(window.lintrk);
-      |]
-    noscript_ [] do
-      img_ [height_ "0", width_ "0", style_ "display:none;visibility:hidden", src_ "https://px.ads.linkedin.com/collect/?pid=5779626&fmt=gif"]
-    -- End Linkedin NO SCRIPT
-
-    script_
-      [text|
-    !function(t,e){var o,n,p,r;e.__SV||(window.posthog=e,e._i=[],e.init=function(i,s,a){function g(t,e){var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}(p=t.createElement("script")).type="text/javascript",p.async=!0,p.src=s.api_host+"/static/array.js",(r=t.getElementsByTagName("script")[0]).parentNode.insertBefore(p,r);var u=e;for(void 0!==a?u=e[a]=[]:a="posthog",u.people=u.people||[],u.toString=function(t){var e="posthog";return"posthog"!==a&&(e+="."+a),t||(e+=" (stub)"),e},u.people.toString=function(){return u.toString(1)+".people (stub)"},o="capture identify alias people.set people.set_once set_config register register_once unregister opt_out_capturing has_opted_out_capturing opt_in_capturing reset isFeatureEnabled onFeatureFlags getFeatureFlag getFeatureFlagPayload reloadFeatureFlags group updateEarlyAccessFeatureEnrollment getEarlyAccessFeatures getActiveMatchingSurveys getSurveys onSessionId".split(" "),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])},e.__SV=1)}(document,window.posthog||[]);
-    posthog.init('phc_XrCcXiHIfUzWzwXz0dMWSw19iGZsfk5VQ0VyJoiAIuA',{api_host:'https://app.posthog.com'})
-        |]
-
     body_ [class_ "text-gray-900 h-full w-full bg-white fixed", term "data-theme" "winter", term "hx-ext" "multi-swap,preload"] do
       div_
         [ style_ "z-index:99999"
@@ -210,26 +144,17 @@ j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
         , tabindex_ "-1"
         ]
         do
-          div_
-            [ class_ "relative mx-auto max-h-full"
-            , style_ "width: min(90vw, 500px)"
-            ]
-            do
-              -- Modal content
-              div_
-                [ class_ "bg-white rounded-lg drop-shadow-md border-1 w-full"
-                ]
-                do
-                  div_ [class_ "flex items-start justify-between p-6 space-x-2  border-b rounded-t"] do
-                    h3_ [class_ "text-3xl font-bold text-gray-900"] "Only Desktop Browsers are Supported for now!"
-                  -- Modal body
-                  div_ [class_ "w-full"] do
-                    div_ [class_ "p-6 text-xl space-y-6", style_ "height:50vh; width:100%"] do
-                      p_ [class_ ""] "Due to the heavy visualization usecases we're solving, APItoolkit is not supported on mobile, and can only be used from a desktop browser at the moment."
-                      p_ [class_ ""] "We're diligently working on expanding its availability to other platforms, and we'll keep you updated as we make progress. "
-                      p_ [] "Don't hesitate to let us know if this is a very important feature for your team, then we can prioritize it"
-                  -- Modal footer
-                  div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] pass
+          div_ [class_ "relative mx-auto max-h-full", style_ "width: min(90vw, 500px)"]
+            $ div_ [class_ "bg-white rounded-lg drop-shadow-md border-1 w-full"] do
+              div_ [class_ "flex items-start justify-between p-6 space-x-2  border-b rounded-t"] do
+                h3_ [class_ "text-3xl font-bold text-gray-900"] "Only Desktop Browsers are Supported for now!"
+              -- Modal body
+              div_ [class_ "w-full"] $ div_ [class_ "p-6 text-xl space-y-6", style_ "height:50vh; width:100%"] do
+                p_ [class_ ""] "Due to the heavy visualization usecases we're solving, APItoolkit is not supported on mobile, and can only be used from a desktop browser at the moment."
+                p_ [class_ ""] "We're diligently working on expanding its availability to other platforms, and we'll keep you updated as we make progress. "
+                p_ [] "Don't hesitate to let us know if this is a very important feature for your team, then we can prioritize it"
+              -- Modal footer
+              div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-gray-200 rounded-b"] pass
       case sessM of
         Nothing -> do
           section_ [class_ "flex flex-col grow  h-screen overflow-y-hidden"] do
@@ -237,16 +162,14 @@ j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
             section_ [class_ "flex-1 overflow-y-auto "] do
               child
         Just sess ->
-          do
-            let currUser = sess.user.getUser
-                sideNav' = currProject & maybe "" \project -> sideNav sess project pageTitle menuItem hasIntegrated
-            -- let currUserEmail = CI.original currUser.email
-            section_ [class_ "flex flex-row h-screen overflow-hidden"] do
-              sideNav'
-              section_ [class_ "flex flex-col grow h-screen overflow-y-hidden"] do
-                navbar currUser
-                section_ [class_ "flex-1 overflow-y-hidden h-full grow"] do
-                  child
+          let currUser = sess.user.getUser
+              sideNav' = currProject & maybe "" \project -> sideNav sess project pageTitle menuItem hasIntegrated
+           in section_ [class_ "flex flex-row h-screen overflow-hidden"] do
+                sideNav'
+                section_ [class_ "flex flex-col grow h-screen overflow-y-hidden"] do
+                  navbar currUser
+                  section_ [class_ "flex-1 overflow-y-hidden h-full grow"] $ child
+      externalHeadScripts_
       script_ [async_ "true", src_ "https://www.googletagmanager.com/gtag/js?id=AW-11285541899"] ("" :: Text)
       script_
         [text|
@@ -326,64 +249,48 @@ projectsDropDown currProject projects = do
             small_ [class_ "block text-blue-800"] $ toHtml currProject.paymentPlan
         nav_ [] do
           a_ [href_ [text| /p/$pidTxt/settings |], class_ "p-3 flex gap-3 items-center rounded-2xl hover:bg-gray-100"] do
-            faSprite_ "gear" "sharp-regular" "h-5 w-5"
-            span_ "Settings"
+            faSprite_ "gear" "sharp-regular" "h-5 w-5" >> span_ "Settings"
           a_ [href_ [text| /p/$pidTxt/manage_members |], class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100"] do
-            faSprite_ "user-plus" "regular" "h-5 w-5"
-            span_ "Manage members"
+            faSprite_ "user-plus" "regular" "h-5 w-5" >> span_ "Manage members"
           a_ [href_ [text| /p/$pidTxt/apis|], class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100"] do
-            faSprite_ "key" "regular" "h-5 w-5"
-            span_ "API Keys"
+            faSprite_ "key" "regular" "h-5 w-5" >> span_ "API Keys"
           a_ [href_ [text| /p/$pidTxt/integrations|], class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100"] do
             faSprite_ "arrows-turn-right" "regular" "h-5 w-5"
             span_ "Integrations"
 
-          if currProject.paymentPlan == "UsageBased"
-            then do
-              a_ [class_ "p-3 flex gap-3 flex gap-3 items-center rounded hover:bg-gray-100 cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]] do
-                faIcon_ "fa fa-dollar" "fa fa-dollar regular" "h-5 w-5"
-                span_ "Manage billing"
-            else do ""
+          when (currProject.paymentPlan == "UsageBased")
+            $ a_ [class_ "p-3 flex gap-3 flex gap-3 items-center rounded hover:bg-gray-100 cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]] do
+              faIcon_ "fa fa-dollar" "fa fa-dollar regular" "h-5 w-5" >> span_ "Manage billing"
       div_ [class_ "border-t border-gray-100 p-2"] do
         div_ [class_ "flex justify-between content-center items-center py-5 mb-2 "] do
           a_ [href_ "/"] $ h3_ [class_ "text-xl"] "Switch projects"
           a_ [class_ "inline-block bg-blue-700 flex pl-3 pr-4 py-2 rounded-xl text-white space-x-2", href_ "/p/new"] do
-            faSprite_ "plus" "sharp-regular" "h-5 w-5 bg-blue-800 rounded-lg"
-            span_ [class_ "inline-block px-1"] "Add"
+            faSprite_ "plus" "sharp-regular" "h-5 w-5 bg-blue-800 rounded-lg" >> span_ [class_ "inline-block px-1"] "Add"
         div_ do
           div_ [class_ "relative"] do
-            div_ [class_ "absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none"] do
-              faSprite_ "magnifying-glass" "regular" "h-6 w-4"
+            div_ [class_ "absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none"] $ faSprite_ "magnifying-glass" "regular" "h-6 w-4"
             input_ [class_ "pl-12 w-full text-sm bg-gray-100 rounded-2xl border-0 p-3", placeholder_ "Search Projects"]
           div_ [class_ "space-y-2 py-4 text-sm"] do
             projects & mapM_ \project -> do
               a_ [class_ "flex justify-between p-2", href_ $ "/p/" <> project.id.toText] do
-                div_ [class_ "space-x-3"] do
-                  faSprite_ "folders" "sharp-regular" "h-5 w-5 inline-block"
-                  span_ [class_ "inline-block"] $ toHtml project.title
+                div_ [class_ "space-x-3"]
+                  $ faSprite_ "folders" "sharp-regular" "h-5 w-5 inline-block"
+                  >> span_ [class_ "inline-block"] (toHtml project.title)
                 when (currProject.id == project.id) $ faSprite_ "circle-check" "sharp-regular" "h-6 w-6 text-green-700"
 
 
 sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Maybe Text -> Maybe Bool -> Html ()
 sideNav sess project pageTitle menuItem hasIntegrated = do
-  aside_ [class_ "shrink-0 top-0 border-r-2 bg-white border-gray-200 w-16 h-screen overflow-hidden transition-all duration-200 ease-in-out", id_ "side-nav-menu"] do
+  aside_ [class_ "shrink-0 top-0 border-r bg-white border-gray-200 w-16 h-screen overflow-hidden transition-all duration-200 ease-in-out", id_ "side-nav-menu"] do
     script_
-      [text|
-           if (window.initialCloseSideMenu == 'true'){
-                 document.getElementById('side-nav-menu').classList.add('hidden-side-nav-menu');
-              }
-          |]
+      [text|if (window.initialCloseSideMenu == 'true'){
+              document.getElementById('side-nav-menu').classList.add('hidden-side-nav-menu');
+              }|]
 
     div_ [class_ "text-center"] do
       a_ [href_ "/", class_ "inline-block px-2 py-2 flex items-center justify-center h-12"] do
-        img_
-          [ class_ "w-40 mt-2 sd-hidden"
-          , src_ "/assets/svgs/logo.svg"
-          ]
-        img_
-          [ class_ "w-10 mt-2 hidden sd-show"
-          , src_ "/assets/logo-mini.png"
-          ]
+        img_ [class_ "w-40 mt-2 sd-hidden", src_ "/assets/svgs/logo.svg"]
+        img_ [class_ "w-10 mt-2 hidden sd-show", src_ "/assets/logo-mini.png"]
     div_ [class_ "py-4 px-4 transition-all  duration-1000 ease-in-out", id_ "side-nav-ctx-btn"] do
       a_
         [ class_ "flex flex-row bg-blue-50 hover:bg-blue-100 text-blue-900 block p-6 rounded-md cursor-pointer"
@@ -420,8 +327,6 @@ sideNav sess project pageTitle menuItem hasIntegrated = do
       menu project.id & mapM_ \(mTitle, mUrl, faIcon) -> do
         let isActive = maybe (pageTitle == mTitle) (== mTitle) menuItem
         let activeCls = if isActive then " bg-blue-50 text-blue-700 border-blue-700" else " border-transparent text-slate-900"
-        -- let intG = fromMaybe True hasIntegrated
-        -- let intGCls = if intG || (mTitle == "Get started" || mTitle == "API Keys") then " " else " cursor-not-allowed  "
         a_
           [ href_ mUrl
           , term "data-tippy-placement" "right"
@@ -452,10 +357,8 @@ navbar currUser = do
       do
         faSprite_ "bars-sort" "regular" "w-5 h-5 text-gray-500"
     div_ [class_ "inline-block flex items-center"] do
-      a_ [class_ "inline-block p-2 px-3 align-middle"] do
-        faSprite_ "magnifying-glass" "regular" "w-5 h-5 text-gray-500"
-      a_ [class_ "inline-block border-r-2 p-2 pr-5"] do
-        faSprite_ "bell" "regular" "w-5 h-5 text-gray-500"
+      a_ [class_ "inline-block p-2 px-3 align-middle"] $ faSprite_ "magnifying-glass" "regular" "w-5 h-5 text-gray-500"
+      a_ [class_ "inline-block border-r-2 p-2 pr-5"] $ faSprite_ "bell" "regular" "w-5 h-5 text-gray-500"
       a_
         [ class_ "cursor-pointer inline-block space-x-4 pl-4 relative "
         , [__| 
@@ -507,5 +410,4 @@ navbar currUser = do
         do
           -- dropdown mainbody
           a_ [class_ "text-base p-2 flex gap-3 rounded hover:bg-gray-100", href_ "/logout"] do
-            faSprite_ "user-plus" "regular" "h-5 w-5"
-            span_ "Logout"
+            faSprite_ "user-plus" "regular" "h-5 w-5" >> span_ "Logout"

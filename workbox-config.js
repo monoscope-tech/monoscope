@@ -28,6 +28,10 @@ module.exports = {
     {
       urlPattern: /https:\/\/cdn\.jsdelivr\.net\/npm\/.*/,
       handler: 'CacheFirst'
+    },
+    {
+      urlPattern: /https:\/\/unpkg\.com\/.*/,
+      handler: 'CacheFirst'
     }
   ]
 };

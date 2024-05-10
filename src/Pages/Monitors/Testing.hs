@@ -1,23 +1,19 @@
 module Pages.Monitors.Testing (
   testingGetH,
   testingPostH,
-  testingPutH,
   TestCollectionForm (..),
 )
 where
 
 import Data.Aeson (
   FromJSON,
-  KeyValue ((.=)),
-  Value,
-  decode,
   encode,
  )
 import Data.Aeson qualified as Aeson
 import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
 import Data.Text qualified as T
-import Data.Time (getCurrentTime, getZonedTime)
+import Data.Time (getZonedTime)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
@@ -88,7 +84,6 @@ testingPutH pid cid action steps = do
   appConf <- ask @AuthContext
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
-
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
@@ -152,7 +147,7 @@ testingPostH pid collection acknM archM = do
               , title = collection.title
               , description = collection.description
               , config = Aeson.object []
-              , schedule = Nothing
+              , schedule = "1 day"
               , isScheduled = False
               , collectionSteps = Testing.CollectionSteps V.empty
               }
@@ -161,7 +156,7 @@ testingPostH pid collection acknM archM = do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Collection added Successfully"]}|]
       pure $ addHeader hxTriggerData $ testingPage paramInput pid cols
     else do
-      _ <- dbtToEff $ Testing.updateCollection pid collection.collection_id collection.title collection.description
+      -- _ <- dbtToEff $ Testing.updateCollection pid collection.collection_id collection.title collection.description
       cols <- dbtToEff $ Testing.getCollections pid
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Collection updated Successfully"]}|]
 
@@ -210,8 +205,7 @@ testingPage paramInput pid colls = do
           , [__|on click remove .hidden from #col-modal then set #collection_id's value to ""|]
           ]
           do
-            faIcon_ "fa-plus" "fa-light fa-plus" "h-6 w-6"
-            "Collection"
+            faIcon_ "fa-plus" "fa-light fa-plus" "h-6 w-6" >> "Collection"
     div_ [class_ "py-2 px-2 space-x-6 border-b border-slate-20 mt-6 mb-8 text-sm font-light", hxBoost_ "true"] do
       let uri = "/p/" <> pid.toText <> "/testing/"
       a_ [class_ $ "inline-block py-2 " <> if not paramInput.ackd && not paramInput.archived then " font-bold text-black " else "", href_ $ uri] "Inbox"

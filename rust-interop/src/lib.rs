@@ -23,7 +23,6 @@ fn run_testkit(file: &str) -> String {
         step_index: 0,
     };
 
-    println!("RUST run_testkit file: {}", file);
     let result = tokio::runtime::Runtime::new()
         .unwrap()
         .block_on(async { base_request::run_json(ctx, file.to_string(), true).await });

@@ -9,7 +9,7 @@ import Data.CaseInsensitive qualified as CI
 import Data.List.Extra (intersect, union)
 import Data.Pool (withResource)
 import Data.Text qualified as T
-import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, dayOfWeek, getCurrentTime, getZonedTime)
+import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, getZonedTime, zonedTimeToUTC)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector (Vector)
 import Data.Vector qualified as V
@@ -33,6 +33,7 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Projects.Swaggers qualified as Swaggers
+import Models.Tests.TestToDump qualified as TestToDump
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text, trimming)
@@ -41,13 +42,12 @@ import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, startJobRunner, throwParsePayload)
 import Pages.Reports qualified as RP
 import Pages.Specification.GenerateSwagger (generateSwagger)
-import Pkg.Mail (sendEmail, sendSlackMessage)
+import Pkg.Mail (sendEmail, sendPostmarkEmail, sendSlackMessage)
 import PyF (fmt, fmtTrim)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Config qualified as Config
 import System.Types (ATBackgroundCtx, runBackground)
-import Utils (scheduleIntervals)
 
 
 data BgJobs
@@ -62,7 +62,6 @@ data BgJobs
   | GenSwagger Projects.ProjectId Users.UserId
   | ReportUsage Projects.ProjectId
   | QueryMonitorsTriggered (Vector Monitors.QueryMonitorId)
-  | ScheduleForCollection Testing.CollectionId
   | RunCollectionTests Testing.CollectionId
   deriving stock (Eq, Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
@@ -123,20 +122,18 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
   runBackground logger authCtx $ case bgJob of
     QueryMonitorsTriggered queryMonitorIds -> queryMonitorsTriggered queryMonitorIds
     NewAnomaly pid createdAt anomalyTypesT anomalyActionsT targetHash -> newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash
-    InviteUserToProject userId projectId reciever projectTitle' ->
-      sendEmail
-        reciever
-        [fmt| 🤖 APITOOLKIT: You've been invited to a project '{projectTitle'}' on apitoolkit.io |]
-        [fmtTrim|
-  Hi,<br/>
-
-  <p>You have been invited to the $projectTitle project on apitoolkit. 
-  Please use the following link to activate your account and access the $projectTitle project.</p>
-  <a href="https://app.apitoolkit.io/p/{projectId.toText}">Click Here</a>
-  <br/><br/>
-  Regards,
-  Apitoolkit team
-            |]
+    InviteUserToProject userId projectId reciever projectTitle' -> do
+      userM <- Users.userById userId
+      whenJust userM \user -> do
+        let firstName = user.firstName
+        let project_url = "https://app.apitoolkit.io/p/" <> projectId.toText
+        let templateVars =
+              [aesonQQ|{
+           "user_name": #{firstName},
+           "project_name": #{projectTitle'},
+           "project_url": #{project_url}
+        }|]
+        sendPostmarkEmail reciever "welcome-1" templateVars
     SendDiscordData userId projectId fullName stack -> whenJustM (dbtToEff $ Projects.projectById projectId) \project -> do
       users <- dbtToEff $ Projects.usersByProjectId projectId
       let stackString = intercalate ", " $ map T.unpack stack
@@ -152,23 +149,19 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
            stack : {stackString}
         |]
         liftIO $ sendMessageToDiscord msg
-    CreatedProjectSuccessfully userId projectId reciever projectTitle ->
-      sendEmail
-        reciever
-        [fmt| 🤖 APITOOLKIT: Project created successfully '{projectTitle}' on apitoolkit.io |]
-        [fmtTrim|
-  Hi,<br/>
-
-  <p>You have been invited to the $projectTitle project on apitoolkit. 
-  Please use the following link to activate your account and access the {projectTitle} project.</p>
-  <a href="app.apitoolkit.io/p/{projectId.toText}">Click Here to access the project</a><br/><br/>.
-
-  By the way, we know it can be difficult or confusing to integrate SDKs sometimes. So we're willing to assist. You can schedule a time here, and we can help with integrating: 
-  <a href="https://calendar.google.com/calendar/u/0/appointments/schedules/AcZssZ21Q1uDPjHN4YPpM2lNBS0_Nwc16IQj-25e5WIoPOKEVsBBIWJgy3usCUS4d7MtQz7kiuzyBJLb">Click Here to Schedule</a>
-  <br/><br/>
-  Regards,<br/>
-  Apitoolkit team
-            |]
+    CreatedProjectSuccessfully userId projectId reciever projectTitle -> do
+      userM <- Users.userById userId
+      whenJust userM \user -> do
+        let firstName = user.firstName
+        let project_url = "https://app.apitoolkit.io/p/" <> projectId.toText
+        let templateVars =
+              [aesonQQ|{
+           "user_name": #{firstName},
+           "project_name": #{projectTitle},
+           "project_url": #{project_url}
+        }|]
+        sendPostmarkEmail reciever "welcome" templateVars
+      pass
     DailyJob -> do
       currentDay <- utctDay <$> Time.currentTime
       projects <- dbtToEff $ query Select [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL|] (Only True)
@@ -178,27 +171,26 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
           if dayOfWeek currentDay == Monday
             then createJob conn "background_jobs" $ BackgroundJobs.WeeklyReports p
             else createJob conn "background_jobs" $ BackgroundJobs.DailyReports p
-      collections <- dbtToEff Testing.getCollectionsId
-      forM_ collections \col -> liftIO $ withResource authCtx.jobsPool \conn -> createJob conn "background_jobs" $ BackgroundJobs.ScheduleForCollection col
     DailyReports pid -> dailyReportForProject pid
     WeeklyReports pid -> weeklyReportForProject pid
     GenSwagger pid uid -> generateSwaggerForProject pid uid
     ReportUsage pid -> whenJustM (dbtToEff $ Projects.projectById pid) \project -> do
       when (project.paymentPlan == "UsageBased") $ whenJust project.firstSubItemId \fSubId -> do
-        totalRequestForThisMonth <- dbtToEff $ RequestDumps.getTotalRequestForCurrentMonth pid
-        liftIO $ reportUsageToLemonsqueezy fSubId totalRequestForThisMonth authCtx.config.lemonSqueezyApiKey
-    ScheduleForCollection col_id -> do
-      whenJustM (dbtToEff $ Testing.getCollectionById col_id) \collection -> whenJust (collection.schedule) \schedule -> do
-        currentTime <- liftIO getCurrentTime
-        let intervals = scheduleIntervals currentTime schedule
-        let dbParams = (\x -> (x, "queued" :: Text, Aeson.object ["tag" .= Aeson.String "RunCollectionTests", "contents" .= show col_id.collectionId])) <$> intervals
-        void $ dbtToEff $ Testing.scheduleInsertScheduleInBackgroundJobs dbParams
+        currentTime <- liftIO getZonedTime
+        totalToReport <- dbtToEff $ RequestDumps.getTotalRequestToReport pid project.usageLastReported
+        liftIO $ reportUsageToLemonsqueezy fSubId totalToReport authCtx.config.lemonSqueezyApiKey
+        _ <- dbtToEff $ Projects.updateUsageLastReported pid currentTime
+        pass
     RunCollectionTests col_id -> do
       collectionM <- dbtToEff $ Testing.getCollectionById col_id
-      whenJust collectionM \collection -> do
-        -- let steps_data = (\x -> x.stepData) <$> steps
-        -- let col_json = (decodeUtf8 $ Aeson.encode steps_data :: String)
-        pass
+      whenJust collectionM \collection -> when (collection.isScheduled) do
+        if maybe False (\lastRun -> job.jobRunAt < addUTCTime (-3600) (zonedTimeToUTC lastRun)) collection.lastRun
+          then do
+            Log.logAttention "Run RunCollectionTests Job was run more than 30 mins past it's actual lastJobRun for that collection" (collection.title, collection.id)
+          else do
+            let (Testing.CollectionSteps colStepsV) = collection.collectionSteps
+            _ <- TestToDump.runTestAndLog collection.projectId colStepsV
+            pass
 
 
 generateSwaggerForProject :: Projects.ProjectId -> Users.UserId -> ATBackgroundCtx ()
@@ -233,7 +225,7 @@ reportUsageToLemonsqueezy subItemId quantity apiKey = do
             "type": "usage-records",
             "attributes": {
                 "quantity": #{quantity},
-                "action": "set"
+                "action": "increment"
             },
             "relationships": {
                "subscription-item": {

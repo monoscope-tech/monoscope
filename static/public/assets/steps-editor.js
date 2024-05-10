@@ -317,7 +317,7 @@ export class StepsEditor extends LitElement {
     } else {
       delete stepData[type][oldKey]
     }
-    this.requestUpdate() // Trigger a re-render
+    this.requestUpdate() 
   }
 
   updateValue(event, idx, type, aidx, key) {

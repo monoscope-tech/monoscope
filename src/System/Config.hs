@@ -95,6 +95,7 @@ data EnvConfig = EnvConfig
   , enablePubsubService :: Bool
   , lemonSqueezyApiKey :: Text
   , lemonSqueezyUrl :: Text
+  , postmarkToken :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromEnv, Default)

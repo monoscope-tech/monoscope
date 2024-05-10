@@ -78,7 +78,7 @@ import Servant qualified
 import Servant.Server (Handler, ServerError)
 import Servant.Server.Generic (genericServeTWithContext)
 import System.Config (
-  AuthContext (config, jobsPool, pool, projectCache),
+  AuthContext (config, jobsPool, pool),
   EnvConfig (
     enableBackgroundJobs,
     enablePubsubService,
@@ -180,7 +180,7 @@ pubsubService appLogger appCtx = do
                   Just (ackId, b64Msg)
 
           -- unless (null messages) do
-          msgIds <- liftIO $ runBackground appLogger appCtx $ processMessages envConfig (catMaybes msgsB64) appCtx.projectCache
+          msgIds <- liftIO $ runBackground appLogger appCtx $ processMessages (catMaybes msgsB64)
           let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just msgIds
           unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env
 

@@ -48,7 +48,6 @@ listProjectsBody projects = do
       div_ [class_ "bg-white shadow overflow-hidden sm:rounded-md"] do
         ul_ [role_ "list", class_ "divide-y divide-gray-200"] do
           projects & mapM_ \project -> do
-            traceShowM project
             li_ do
               a_ [href_ ("/p/" <> project.id.toText <> if project.hasIntegrated then "" else "/onboarding"), class_ "block hover:bg-gray-50"] do
                 div_ [class_ "px-4 py-4 flex items-center sm:px-6"] do

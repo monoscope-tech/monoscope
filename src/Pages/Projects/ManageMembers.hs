@@ -105,7 +105,7 @@ manageMembersPostH pid form = do
         when (userId' /= currUserId)
           $ void
           $ liftIO
-          $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId' pid email projectTitle -- invite the users to the project (Usually as an email)
+          $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject currUserId pid email projectTitle -- invite the users to the project (Usually as an email)
         pure (email, permission, userId')
 
       let projectMembers =
@@ -154,28 +154,29 @@ manageMembersGetH pid = do
 
 manageMembersBody :: V.Vector ProjectMembers.ProjectMemberVM -> Html ()
 manageMembersBody projMembers =
-  section_ [id_ "main-content", class_ "p-6"] do
-    h2_ [class_ "text-slate-700 text-2xl font-medium mb-5"] "Manage project members"
-    form_
-      [ class_ "relative px-10 border border-gray-200 py-10  bg-white w-1/2 rounded-3xl"
-      , hxPost_ ""
-      , hxTarget_ "#main-content"
-      , hxSwap_ "outerHTML"
-      ]
-      do
-        div_ [class_ "mt-6"] do
-          section_ [id_ "inviteMemberSection"] do
-            mapM_ (projectMemberRow . Just) projMembers
-            template_ [id_ "inviteTmpl"] $ projectMemberRow Nothing
-          a_
-            [ class_ "bg-transparent inline-flex cursor-pointer mt-2"
-            , [__| on click append #inviteTmpl.innerHTML to #inviteMemberSection then 
+  div_ [class_ "w-full py-16"] do
+    section_ [id_ "main-content", class_ "p-6 w-[800px] mx-auto"] do
+      h2_ [class_ "text-slate-700 text-2xl font-medium mb-5"] "Manage project members"
+      form_
+        [ class_ "relative px-10 border border-gray-200 py-10  bg-white w-full rounded-3xl"
+        , hxPost_ ""
+        , hxTarget_ "#main-content"
+        , hxSwap_ "outerHTML"
+        ]
+        do
+          div_ [class_ "mt-6"] do
+            section_ [id_ "inviteMemberSection"] do
+              mapM_ (projectMemberRow . Just) projMembers
+              template_ [id_ "inviteTmpl"] $ projectMemberRow Nothing
+            a_
+              [ class_ "bg-transparent inline-flex cursor-pointer mt-2"
+              , [__| on click put #inviteTmpl.innerHTML at end of #inviteMemberSection then 
                           _hyperscript.processNode(#inviteMemberSection) then halt |]
-            ]
-            do
-              faIcon_ "fa-plus" "fa-sharp fa-regular fa-plus" "mt-1 mx-2 w-3 h-3 text-blue-700"
-              span_ [class_ "text-blue-700 font-medium text-sm "] "Add member"
-        button_ [class_ "py-2 px-5 bg-blue-700 absolute m-5 bottom-0 right-0 text-[white] text-sm rounded-xl cursor-pointer", type_ "submit"] "Submit"
+              ]
+              do
+                faIcon_ "fa-plus" "fa-sharp fa-regular fa-plus" "mt-1 mx-2 w-3 h-3 text-blue-700"
+                span_ [class_ "text-blue-700 font-medium text-sm "] "Add member"
+          button_ [class_ "py-2 px-5 bg-blue-700 absolute m-5 bottom-0 right-0 text-[white] text-sm rounded-xl cursor-pointer", type_ "submit"] "Submit"
 
 
 projectMemberRow :: Maybe ProjectMembers.ProjectMemberVM -> Html ()
