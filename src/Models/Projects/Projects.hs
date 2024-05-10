@@ -14,7 +14,6 @@ module Models.Projects.Projects (
   userByProjectId,
   selectProjectsForUser,
   projectRequestStatsByProject,
-  selectProjectForUser,
   updateProject,
   deleteProject,
   projectById,
@@ -245,20 +244,6 @@ selectProjectsForUser = query Select q
         WHERE ppm.user_id = ? AND pp.deleted_at IS NULL
         ORDER BY updated_at DESC
       |]
-
-
-selectProjectForUser :: (Users.UserId, ProjectId) -> DBT IO (Maybe Project)
-selectProjectForUser = queryOne Select q
-  where
-    q =
-      [sql| 
-        select pp.* from projects.projects as pp 
-          join projects.project_members as ppm on (pp.id=ppm.project_id)
-          join users.users uu on (uu.id=ppm.user_id OR uu.is_sudo is True)
-          where (ppm.user_id=? or uu.is_sudo is True) and ppm.project_id=? and pp.deleted_at IS NULL order by updated_at desc
-          limit 1
-      |]
-
 
 usersByProjectId :: ProjectId -> DBT IO (Vector Users.User)
 usersByProjectId pid = query Select q (Only pid)

@@ -5,40 +5,33 @@ where
 
 import Data.Default (def)
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT (withPool)
-import Effectful.Reader.Static (asks)
 import Fmt
 import Lucid
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Models.Users.Users
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude hiding (ask, asks)
 import Servant (Union, WithStatus (..), respond)
-import System.Config
 import System.Types
 import Utils (GetOrRedirect, faIcon_, redirect)
 
 
 listProjectsGetH :: ATAuthCtx (Union GetOrRedirect)
 listProjectsGetH = do
-  pool <- asks pool
   sess <- Sessions.getSession
-  projects <- liftIO $ withPool pool $ Projects.selectProjectsForUser sess.user.id
   let bwconf =
         (def :: BWConfig)
-          { sessM = sess.persistentSession
+          { sessM = Just sess.persistentSession
           , pageTitle = "Projects List"
           }
-
-  let page = bodyWrapper bwconf $ listProjectsBody projects
+  let page = bodyWrapper bwconf $ listProjectsBody sess.persistentSession.projects.getProjects
   -- Redirect to the create projects page if there's no project under the logged in user
-  if null projects
+  if null sess.persistentSession.projects.getProjects 
     then respond $ WithStatus @302 $ redirect "/p/new"
     else respond $ WithStatus @200 page
 
 
-listProjectsBody :: V.Vector Projects.Project' -> Html ()
+listProjectsBody :: V.Vector Projects.Project -> Html ()
 listProjectsBody projects = do
   section_ [id_ "main-content", class_ "container mx-auto p-6 pb-36 overflow-y-scroll  h-full"] do
     div_ [class_ "flex justify-between mb-6"] do
@@ -49,7 +42,7 @@ listProjectsBody projects = do
         ul_ [role_ "list", class_ "divide-y divide-gray-200"] do
           projects & mapM_ \project -> do
             li_ do
-              a_ [href_ ("/p/" <> project.id.toText <> if project.hasIntegrated then "" else "/onboarding"), class_ "block hover:bg-gray-50"] do
+              a_ [href_ ("/p/" <> project.id.toText), class_ "block hover:bg-gray-50"] do
                 div_ [class_ "px-4 py-4 flex items-center sm:px-6"] do
                   div_ [class_ "min-w-0 flex-1 sm:flex sm:items-center sm:justify-between"] do
                     div_ [class_ "truncate"] do

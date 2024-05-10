@@ -143,9 +143,9 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
       collectionM <- dbtToEff $ Testing.getCollectionById col_id
       if job.jobRunAt > addUTCTime (-900) now -- Run time is less than 15 mins ago
         then whenJust collectionM \collection -> when (collection.isScheduled) do
-            let (Testing.CollectionSteps colStepsV) = collection.collectionSteps
-            _ <- TestToDump.runTestAndLog collection.projectId colStepsV
-            pass
+          let (Testing.CollectionSteps colStepsV) = collection.collectionSteps
+          _ <- TestToDump.runTestAndLog collection.projectId colStepsV
+          pass
         else Log.logAttention "RunCollectionTests failed.  Job was sheduled to run over 30 mins ago" $ collectionM <&> \c -> (c.title, c.id)
 
 
@@ -233,8 +233,8 @@ handleQueryMonitorThreshold monitorE isAlert = do
 
 jobsWorkerInit :: Log.Logger -> Config.AuthContext -> IO ()
 jobsWorkerInit logger appCtx =
-  startJobRunner $
-    mkConfig jobLogger "background_jobs" (appCtx.jobsPool) (MaxConcurrentJobs 1) (jobsRunner logger appCtx) id
+  startJobRunner
+    $ mkConfig jobLogger "background_jobs" (appCtx.jobsPool) (MaxConcurrentJobs 1) (jobsRunner logger appCtx) id
   where
     jobLogger :: LogLevel -> LogEvent -> IO ()
     jobLogger logLevel logEvent = Log.runLogT "OddJobs" logger Log.LogAttention $ Log.logInfo "Background jobs ping." (show @Text logLevel, show @Text logEvent) -- logger show (logLevel, logEvent)

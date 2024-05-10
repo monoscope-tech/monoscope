@@ -6,6 +6,7 @@ module Models.Users.Sessions (
   PersistentSessionId (..),
   PersistentSession (..),
   Session (..),
+  sessionAndProject,
   craftSessionCookie,
   SessionData (..),
   PSUser (..),
@@ -13,7 +14,6 @@ module Models.Users.Sessions (
   addCookie,
   emptySessionCookie,
   getSession,
-  persistSession,
   insertSession,
   deleteSession,
   getPersistentSession,
@@ -21,16 +21,19 @@ module Models.Users.Sessions (
   newPersistentSessionId,
 ) where
 
-import Control.Monad.IO.Class
 import Data.Default
 import Data.Map.Strict qualified as Map
-import Data.Pool
 import Data.Text.Display
 import Data.Time
+import Data.Vector qualified as V
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity
+import Effectful
+import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
+import Effectful.Reader.Static qualified as EffReader
+import Effectful.Error.Static qualified as EffError 
 import Database.PostgreSQL.Entity.DBT (QueryNature (..))
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Entity.Types
@@ -39,14 +42,14 @@ import Database.PostgreSQL.Simple.FromField
 import Database.PostgreSQL.Simple.Newtypes
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField
+import Effectful.Error.Static
 import Database.PostgreSQL.Transact hiding (DB, execute, queryOne)
-import Effectful
 import Effectful.Reader.Static (Reader, asks)
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Users (UserId)
+import Models.Users.Users 
 import Models.Users.Users qualified as Users
 import Relude
-import Servant (Header, Headers, addHeader, getResponse)
+import Servant (Header, Headers, addHeader, getResponse, errHeaders, err302,  ServerError)
 import Web.Cookie (
   SetCookie (
     setCookieHttpOnly,
@@ -119,17 +122,6 @@ newPersistentSessionId :: IO PersistentSessionId
 newPersistentSessionId = PersistentSessionId <$> UUID.nextRandom
 
 
-persistSession
-  :: MonadIO m
-  => Pool Connection
-  -> PersistentSessionId
-  -> UserId
-  -> m PersistentSessionId
-persistSession pool persistentSessionId userId = do
-  liftIO $ DBT.withPool pool $ insertSession persistentSessionId userId (SessionData Map.empty)
-  pure persistentSessionId
-
-
 insertSession :: PersistentSessionId -> UserId -> SessionData -> DBT IO ()
 insertSession pid userId sessionData = DBT.execute Insert q (pid, userId, sessionData) >> pass
   where
@@ -194,18 +186,34 @@ emptySessionCookie =
     }
 
 
-addCookie
-  :: SetCookie
-  -> a
-  -> Headers '[Header "Set-Cookie" SetCookie] a
+addCookie :: SetCookie -> a -> Headers '[Header "Set-Cookie" SetCookie] a
 addCookie = addHeader
 
 
 data Session = Session
   { sessionId :: PersistentSessionId
-  , persistentSession :: Maybe PersistentSession
+  , persistentSession :: PersistentSession
   , user :: Users.User
   , requestID :: Text
   , isSidebarClosed :: Bool
   }
   deriving stock (Generic, Show)
+
+
+
+sessionAndProject
+  :: (DB :> es, (EffReader.Reader (Headers '[Header "Set-Cookie" SetCookie] Session)) :> es, EffError.Error ServerError :> es )
+  => Projects.ProjectId
+  -> Eff es (Session, Projects.Project)
+sessionAndProject pid = do
+  sess <- getSession
+  let projects = sess.persistentSession.projects.getProjects
+  case (V.find (\v -> v.id == pid) projects) of
+    Just p -> pure (sess, p)
+    Nothing ->
+      if pid == Projects.ProjectId UUID.nil || sess.user.isSudo
+        then do
+          (dbtToEff $ Projects.projectById pid) >>= \case
+            Just p -> pure (sess, p)
+            Nothing -> throwError $ err302{errHeaders = [("Location", "/p/?missingProjectPermission")]} 
+        else throwError $ err302{errHeaders = [("Location", "/p/?missingProjectPermission")]} 

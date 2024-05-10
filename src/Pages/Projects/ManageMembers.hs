@@ -50,106 +50,82 @@ data ManageMembersForm = ManageMembersForm
 
 manageMembersPostH :: Projects.ProjectId -> ManageMembersForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
 manageMembersPostH pid form = do
-  -- TODO: temporary, to work with current logic
+  (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
   let currUserId = sess.userId
+  projMembers <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
 
-  isMember <- dbtToEff $ userIsProjectMember sess pid
-  if not isMember
-    then do
-      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"errorToast": ["Only project members can update members list"]}|]
-      pure $ addHeader hxTriggerData $ h3_ [] "Only members of this project can perform this action"
-    else do
-      (project, projMembers) <- dbtToEff do
-        project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-        projMembers <- ProjectMembers.selectActiveProjectMembers pid
-        pure (project, projMembers)
+  -- TODO:
+  -- Separate the new emails from the old emails
+  -- Insert the new emails and permissions.
+  -- Update the permissions only of the existing emails.
 
-      -- TODO:
-      -- Separate the new emails from the old emails
-      -- Insert the new emails and permissions.
-      -- Update the permissions only of the existing emails.
+  let usersAndPermissions = zip form.emails form.permissions & uniq
+  let uAndPOldAndChanged =
+        mapMaybe
+          ( \(email, permission) -> do
+              let projMembersM = projMembers & find (\a -> original a.email == email && a.permission /= permission)
+              projMembersM >>= (\projMember -> Just (projMember.id, permission))
+          )
+          usersAndPermissions
 
-      let usersAndPermissions = zip form.emails form.permissions & uniq
-      let uAndPOldAndChanged =
-            mapMaybe
-              ( \(email, permission) -> do
-                  let projMembersM = projMembers & find (\a -> original a.email == email && a.permission /= permission)
-                  projMembersM >>= (\projMember -> Just (projMember.id, permission))
-              )
-              usersAndPermissions
+  let uAndPNew = filter (\(email, _) -> not $ any (\a -> original a.email == email) projMembers) usersAndPermissions
 
-      let uAndPNew = filter (\(email, _) -> not $ any (\a -> original a.email == email) projMembers) usersAndPermissions
-      let projectTitle = maybe "" (.title) project
+  let deletedUAndP =
+        V.toList projMembers
+          & filter (\pm -> not $ any (\(email, _) -> original pm.email == email) usersAndPermissions)
+          & filter (\a -> a.userId /= currUserId)
+          & map (.id) -- We should not allow deleting the current user from the project
 
-      let deletedUAndP =
-            V.toList projMembers
-              & filter (\pm -> not $ any (\(email, _) -> original pm.email == email) usersAndPermissions)
-              & filter (\a -> a.userId /= currUserId)
-              & map (.id) -- We should not allow deleting the current user from the project
-
-      -- Create new users and send notifications
-      newProjectMembers <- forM uAndPNew \(email, permission) -> do
-        userId' <- dbtToEff do
-          userIdM' <- Users.userIdByEmail email
-          case userIdM' of
-            Nothing -> do
-              idM' <- Users.createEmptyUser email -- NEXT Trigger email sending
-              case idM' of
-                Nothing -> error "duplicate email in createEmptyUser"
-                Just idX -> pure idX
+  -- Create new users and send notifications
+  newProjectMembers <- forM uAndPNew \(email, permission) -> do
+    userId' <- dbtToEff do
+      userIdM' <- Users.userIdByEmail email
+      case userIdM' of
+        Nothing -> do
+          idM' <- Users.createEmptyUser email -- NEXT Trigger email sending
+          case idM' of
+            Nothing -> error "duplicate email in createEmptyUser"
             Just idX -> pure idX
+        Just idX -> pure idX
 
-        when (userId' /= currUserId)
-          $ void
-          $ liftIO
-          $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject currUserId pid email projectTitle -- invite the users to the project (Usually as an email)
-        pure (email, permission, userId')
+    when (userId' /= currUserId)
+      $ void
+      $ liftIO
+      $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject currUserId pid email project.title -- invite the users to the project (Usually as an email)
+    pure (email, permission, userId')
 
-      let projectMembers =
-            newProjectMembers
-              & filter (\(_, _, id') -> id' /= currUserId)
-              & map (\(email, permission, id') -> ProjectMembers.CreateProjectMembers pid id' permission)
-      _ <- dbtToEff $ ProjectMembers.insertProjectMembers projectMembers -- insert new project members
+  let projectMembers =
+        newProjectMembers
+          & filter (\(_, _, id') -> id' /= currUserId)
+          & map (\(email, permission, id') -> ProjectMembers.CreateProjectMembers pid id' permission)
+  _ <- dbtToEff $ ProjectMembers.insertProjectMembers projectMembers -- insert new project members
 
-      -- Update existing contacts with updated permissions
-      -- TODO: Send a notification via background job, about the users permission having been updated.
-      unless (null uAndPOldAndChanged)
-        $ void
-        . dbtToEff
-        $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
+  -- Update existing contacts with updated permissions
+  -- TODO: Send a notification via background job, about the users permission having been updated.
+  unless (null uAndPOldAndChanged)
+    $ void
+    . dbtToEff
+    $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
-      -- soft delete project members with id
-      unless (null deletedUAndP)
-        $ void
-        . dbtToEff
-        $ ProjectMembers.softDeleteProjectMembers deletedUAndP
+  -- soft delete project members with id
+  unless (null deletedUAndP)
+    $ void
+    . dbtToEff
+    $ ProjectMembers.softDeleteProjectMembers deletedUAndP
 
-      projMembersLatest <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
-      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Updated Members List Successfully"]}|]
-      pure $ addHeader hxTriggerData $ manageMembersBody projMembersLatest
+  projMembersLatest <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
+  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Updated Members List Successfully"]}|]
+  pure $ addHeader hxTriggerData $ manageMembersBody projMembersLatest
 
 
 manageMembersGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
 manageMembersGetH pid = do
-  -- TODO: temporary, to work with current logic
+  (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-
-  isMember <- dbtToEff $ userIsProjectMember sess pid
-  if not isMember
-    then do
-      pure $ userNotMemeberPage sess
-    else do
-      (project, projMembers) <- dbtToEff do
-        project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-        projMembers <- ProjectMembers.selectActiveProjectMembers pid
-        pure (project, projMembers)
-      let bwconf = (def :: BWConfig){sessM = Just sess, pageTitle = "Settings", currProject = project}
-      pure $ bodyWrapper bwconf $ manageMembersBody projMembers
+  projMembers <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
+  let bwconf = (def :: BWConfig){sessM = Just sess.persistentSession, pageTitle = "Settings", currProject = Just project}
+  pure $ bodyWrapper bwconf $ manageMembersBody projMembers
 
 
 manageMembersBody :: V.Vector ProjectMembers.ProjectMemberVM -> Html ()
@@ -204,31 +180,17 @@ projectMemberRow projMembersM =
 
 manageSubGetH :: Projects.ProjectId -> ATAuthCtx (Headers '[HXTrigger, HXRedirect] (Html ()))
 manageSubGetH pid = do
+  (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-
-  isMember <- dbtToEff $ userIsProjectMember sess pid
-  if not isMember
-    then do
-      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {}|]
+  sub <- liftIO $ getSubscriptionPortalUrl project.subId envCfg.lemonSqueezyApiKey
+  case sub of
+    Nothing -> do
+      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","errorToast": ["Subscription ID not found"]}|]
       pure $ addHeader hxTriggerData $ addHeader "" ""
-    else do
-      project <- dbtToEff $ Projects.projectById pid
-      case project of
-        Just p -> do
-          sub <- liftIO $ getSubscriptionPortalUrl p.subId envCfg.lemonSqueezyApiKey
-          case sub of
-            Nothing -> do
-              let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","errorToast": ["Subscription ID not found"]}|]
-              pure $ addHeader hxTriggerData $ addHeader "" ""
-            Just s -> do
-              let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {}|]
-              pure $ addHeader hxTriggerData $ addHeader s.dataVal.attributes.urls.customerPortal ""
-        Nothing -> do
-          let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","errorToast": ["Project not found"]}|]
-          pure $ addHeader hxTriggerData $ addHeader "" ""
+    Just s -> do
+      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {}|]
+      pure $ addHeader hxTriggerData $ addHeader s.dataVal.attributes.urls.customerPortal ""
 
 
 getSubscriptionPortalUrl :: Maybe Text -> Text -> IO (Maybe SubResponse)

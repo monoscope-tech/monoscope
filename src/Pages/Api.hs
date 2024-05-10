@@ -46,7 +46,6 @@ import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Pages.NonMember (userNotMemeberPage)
 import Relude (
   Applicative (pure),
   Bool (..),
@@ -63,7 +62,6 @@ import Relude (
   ($),
   (&),
  )
-import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
 import System.Config (
@@ -71,7 +69,7 @@ import System.Config (
   EnvConfig (apiKeyEncryptionSecretKey),
  )
 import System.Types (ATAuthCtx)
-import Utils (faIcon_, userIsProjectMember)
+import Utils (faIcon_)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -85,81 +83,47 @@ data GenerateAPIKeyForm = GenerateAPIKeyForm
 
 apiPostH :: Projects.ProjectId -> GenerateAPIKeyForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
 apiPostH pid apiKeyForm = do
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
+  (sess, project) <- Sessions.sessionAndProject pid
   authCtx <- ask @AuthContext
-
-  isMember <- dbtToEff $ userIsProjectMember sess pid
-  if not isMember
-    then do
-      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Only project members can create API keys."]} |]
-      pure $ addHeader hxTriggerData ""
-    else do
-      projectKeyUUID <- liftIO UUIDV4.nextRandom
-      let encryptedKey = ProjectApiKeys.encryptAPIKey (encodeUtf8 authCtx.config.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
-      let encryptedKeyB64 = B64.encodeBase64 encryptedKey
-      let keyPrefix = encryptedKeyB64
-      pApiKey <- liftIO $ ProjectApiKeys.newProjectApiKeys pid projectKeyUUID (title apiKeyForm) keyPrefix
-      apiKeys <- dbtToEff do
-        ProjectApiKeys.insertProjectApiKey pApiKey
-        ProjectApiKeys.projectApiKeysByProjectId pid
-      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Created API Key Successfully"]}|]
-      case from apiKeyForm of
-        Just v -> pure $ addHeader hxTriggerData $ copyNewApiKey (Just (pApiKey, encryptedKeyB64)) True
-        Nothing -> pure $ addHeader hxTriggerData $ mainContent pid apiKeys (Just (pApiKey, encryptedKeyB64))
+  projectKeyUUID <- liftIO UUIDV4.nextRandom
+  let encryptedKey = ProjectApiKeys.encryptAPIKey (encodeUtf8 authCtx.config.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
+  let encryptedKeyB64 = B64.encodeBase64 encryptedKey
+  pApiKey <- liftIO $ ProjectApiKeys.newProjectApiKeys pid projectKeyUUID (title apiKeyForm) encryptedKeyB64 
+  apiKeys <- dbtToEff do
+    ProjectApiKeys.insertProjectApiKey pApiKey
+    ProjectApiKeys.projectApiKeysByProjectId pid
+  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Created API Key Successfully"]}|]
+  case from apiKeyForm of
+    Just v -> pure $ addHeader hxTriggerData $ copyNewApiKey (Just (pApiKey, encryptedKeyB64)) True
+    Nothing -> pure $ addHeader hxTriggerData $ mainContent pid apiKeys (Just (pApiKey, encryptedKeyB64))
 
 
 apiDeleteH :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
 apiDeleteH pid keyid = do
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-
-  isMember <- dbtToEff $ userIsProjectMember sess pid
-  if not isMember
-    then do
-      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Can not revoke API key."]}|]
-      pure $ addHeader hxTriggerData $ userNotMemeberPage sess
-    else do
-      (res, apikeys) <- dbtToEff do
-        del <- ProjectApiKeys.revokeApiKey keyid
-        apikeys <- ProjectApiKeys.projectApiKeysByProjectId pid
-        pure (del, apikeys)
-
-      let hxTriggerData =
-            if res > 0
-              then decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Revoked API Key Successfully"]}|]
-              else decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Something went wrong"]}|]
-      pure $ addHeader hxTriggerData $ mainContent pid apikeys Nothing
+  (sess, project) <- Sessions.sessionAndProject pid
+  res <- dbtToEff $ ProjectApiKeys.revokeApiKey keyid
+  apikeys <- dbtToEff $ ProjectApiKeys.projectApiKeysByProjectId pid
+  let hxTriggerData =
+        if res > 0
+          then decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Revoked API Key Successfully"]}|]
+          else decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Something went wrong"]}|]
+  pure $ addHeader hxTriggerData $ mainContent pid apikeys Nothing
 
 
 -- | apiGetH renders the api keys list page which includes a modal for creating the apikeys.
 apiGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
 apiGetH pid = do
-  -- TODO: temporary, to work with current logic
-  appCtx <- ask @AuthContext
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-
-  isMember <- dbtToEff $ userIsProjectMember sess pid
-  if not isMember
-    then do
-      pure $ userNotMemeberPage sess
-    else do
-      (project, apiKeys, hasRequest) <- dbtToEff do
-        project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-        apiKeys <- ProjectApiKeys.projectApiKeysByProjectId pid
-        requestDumps <- RequestDumps.countRequestDumpByProject pid
-
-        pure (project, apiKeys, requestDumps > 0)
-
-      let bwconf =
-            (def :: BWConfig)
-              { sessM = Just sess
-              , currProject = project
-              , pageTitle = "API Keys"
-              , hasIntegrated = Just hasRequest
-              }
-      pure $ bodyWrapper bwconf $ apiKeysPage pid apiKeys
+  (sess, project) <- Sessions.sessionAndProject pid
+  apiKeys <- dbtToEff $ ProjectApiKeys.projectApiKeysByProjectId pid
+  requestDumps <- dbtToEff $ RequestDumps.countRequestDumpByProject pid
+  let bwconf =
+        (def :: BWConfig)
+          { sessM = Just sess.persistentSession
+          , currProject = Just project
+          , pageTitle = "API Keys"
+          , hasIntegrated = Just (requestDumps > 0) 
+          }
+  pure $ bodyWrapper bwconf $ apiKeysPage pid apiKeys
 
 
 apiKeysPage :: Projects.ProjectId -> Vector ProjectApiKeys.ProjectApiKey -> Html ()

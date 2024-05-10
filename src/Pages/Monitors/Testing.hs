@@ -17,7 +17,6 @@ import Data.Time (getZonedTime)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
-import Effectful.Reader.Static (ask)
 import Lucid (
   Html,
   Term (term),
@@ -50,15 +49,12 @@ import Models.Tests.Testing qualified as Testing
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Pages.NonMember (userNotMemeberPage)
 import Relude hiding (ask)
-import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
-import System.Config (AuthContext)
 import System.Types (ATAuthCtx)
-import Utils (faIcon_, userIsProjectMember)
 import Web.FormUrlEncoded (FromForm)
+import Utils 
 
 
 data TestCollectionForm = TestCollectionForm
@@ -80,10 +76,7 @@ data ScheduleForm = ScheduleForm
 
 testingPostH :: Projects.ProjectId -> TestCollectionForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
 testingPostH pid collection = do
-  appConf <- ask @AuthContext
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-  project <- dbtToEff $ Projects.selectProjectForUser (Sessions.userId sess, pid)
+  (_, project) <- Sessions.sessionAndProject pid
   if collection.collection_id == ""
     then do
       currentTime <- liftIO getZonedTime
@@ -115,25 +108,15 @@ testingPostH pid collection = do
 
 testingGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
 testingGetH pid = do
-  appConf <- ask @AuthContext
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-  isMember <- dbtToEff $ userIsProjectMember sess pid
-  if not isMember
-    then do
-      pure $ userNotMemeberPage sess
-    else do
-      (project, colls) <- dbtToEff do
-        project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-        colls <- Testing.getCollections pid
-        pure (project, colls)
-      let bwconf =
-            (def :: BWConfig)
-              { sessM = Just sess
-              , currProject = project
-              , pageTitle = "Testing"
-              }
-      pure $ bodyWrapper bwconf $ testingPage pid colls
+  (sess, project) <- Sessions.sessionAndProject pid
+  colls <- dbtToEff $ Testing.getCollections pid
+  let bwconf =
+        (def :: BWConfig)
+          { sessM = Just sess.persistentSession
+          , currProject = Just project
+          , pageTitle = "Testing"
+          }
+  pure $ bodyWrapper bwconf $ testingPage pid colls
 
 
 testingPage :: Projects.ProjectId -> V.Vector Testing.CollectionListItem -> Html ()
@@ -147,8 +130,7 @@ testingPage pid colls = do
           [ class_ "text-white rounded bg-blue-500 px-4 py-2 flex items-center gap-2"
           , [__|on click remove .hidden from #col-modal then set #collection_id's value to ""|]
           ]
-          $ faIcon_ "fa-plus" "fa-light fa-plus" "h-6 w-6"
-          >> "Collection"
+          $ (faIcon_ "fa-plus" "fa-light fa-plus" "h-6 w-6" >> "Collection")
       div_ [class_ "w-full grid grid-cols-2 gap-8 mt-8"] $ forM_ colls \c -> collectionCard pid c
 
 

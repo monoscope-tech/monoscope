@@ -10,7 +10,6 @@ import Data.Text qualified as T
 import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect
-import Effectful.Reader.Static (ask)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields (fieldTypeToText)
 import Models.Apis.Fields qualified as Field
@@ -22,10 +21,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Relude hiding (ask)
 import Relude.Unsafe ((!!))
-import Relude.Unsafe qualified as Unsafe
-import System.Config
 import System.Types
-import Utils
 
 
 data MergedEndpoint = MergedEndpoint
@@ -364,25 +360,12 @@ generateSwagger projectTitle projectDescription endpoints shapes fields formats 
 
 generateGetH :: Projects.ProjectId -> ATAuthCtx AE.Value
 generateGetH pid = do
-  -- TODO: temporary, to work with current logic
-  appCtx <- ask @AuthContext
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-
-  isMember <- dbtToEff $ userIsProjectMember sess pid
-  if not isMember
-    then do
-      pure $ AE.object ["error" .= String "You are not a member of this project"]
-    else dbtToEff do
-      project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-      endpoints <- Endpoints.endpointsByProjectId pid
-      let endpoint_hashes = V.map (.hash) endpoints
-      shapes <- Shapes.shapesByEndpointHashes pid endpoint_hashes
-      fields <- Fields.fieldsByEndpointHashes pid endpoint_hashes
-      let field_hashes = V.map (.fHash) fields
-      formats <- Formats.formatsByFieldsHashes pid field_hashes
-      let (projectTitle, projectDescription) = case project of
-            (Just pr) -> (toText pr.title, toText pr.description)
-            Nothing -> ("__APITOOLKIT", "Edit project description")
-      let swagger = generateSwagger projectTitle projectDescription endpoints shapes fields formats
-      pure swagger
+  (sess, project) <- Sessions.sessionAndProject pid
+  endpoints <- dbtToEff $ Endpoints.endpointsByProjectId pid
+  let endpoint_hashes = V.map (.hash) endpoints
+  shapes <- dbtToEff $ Shapes.shapesByEndpointHashes pid endpoint_hashes
+  fields <- dbtToEff $ Fields.fieldsByEndpointHashes pid endpoint_hashes
+  let field_hashes = V.map (.fHash) fields
+  formats <- dbtToEff $ Formats.formatsByFieldsHashes pid field_hashes
+  let swagger = generateSwagger project.title project.description endpoints shapes fields formats
+  pure swagger

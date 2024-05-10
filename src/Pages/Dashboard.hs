@@ -135,6 +135,7 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
     let steps' = (maxV `quot` 100) :: Int
     let steps = if steps' == 0 then 100 else steps'
     reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledByStepsForProject maxV steps pid (fromD, toD)
+
     freeTierExceeded <-
       if (Unsafe.fromJust project).paymentPlan == "Free"
         then do

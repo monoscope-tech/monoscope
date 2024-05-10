@@ -9,7 +9,6 @@ import Data.Text qualified as T
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
-import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
@@ -31,7 +30,6 @@ import Pkg.Components qualified as Components
 import PyF (fmt)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
-import System.Config (AuthContext)
 import System.Types (ATAuthCtx)
 import Utils (faIcon_, faSprite_)
 
@@ -68,15 +66,12 @@ collectionRunTestsH pid colId runIdxM stepsForm = do
 
 collectionGetH :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (Html ())
 collectionGetH pid colId = do
-  appConf <- ask @AuthContext
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
+  (sess, project) <- Sessions.sessionAndProject pid
   collectionM <- dbtToEff $ Testing.getCollectionById colId
-  project <- dbtToEff $ Projects.selectProjectForUser (Sessions.userId sess, pid)
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = project
+          { sessM = Just sess.persistentSession
+          , currProject = Just project
           , pageTitle = "Testing"
           }
   pure $ bodyWrapper bwconf $ collectionPage pid (Unsafe.fromJust collectionM)
@@ -160,19 +155,20 @@ collectionPage pid col = do
             p_ [class_ "text-slate-500"] "Run a test to view the results here. "
     script_ [type_ "module", src_ "/assets/steps-editor.js"] ("" :: Text)
 
+
 collectionStepResult_ :: Int -> Testing.StepResult -> Html ()
 collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
   div_ [class_ "p-2 bg-base-200 font-bold"] do
     toHtml $ (show $ idx + 1) <> " " <> stepResult.stepName
   div_ [role_ "tablist", class_ "tabs tabs-lifted"] do
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Log", checked_]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"] $
-      toHtmlRaw $
-        textToHTML stepResult.stepLog
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"]
+      $ toHtmlRaw
+      $ textToHTML stepResult.stepLog
 
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Headers"]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6 "] $
-      table_ [class_ "table table-xs"] do
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6 "]
+      $ table_ [class_ "table table-xs"] do
         thead_ [] $ tr_ [] $ th_ [] "Name" >> th_ [] "Value"
         tbody_ $ forM_ (M.toList stepResult.request.resp.headers) $ \(k, v) -> tr_ [] do
           td_ [] $ toHtml k
@@ -180,10 +176,10 @@ collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
 
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Body"]
     div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"] do
-      pre_ [class_ "flex text-sm leading-snug w-full max-h-[50rem] overflow-y-scroll"] $
-        code_ [class_ "h-full hljs language-json atom-one-dark w-full rounded"] $
-          toHtmlRaw $
-            encodePretty stepResult.request.resp.json
+      pre_ [class_ "flex text-sm leading-snug w-full max-h-[50rem] overflow-y-scroll"]
+        $ code_ [class_ "h-full hljs language-json atom-one-dark w-full rounded"]
+        $ toHtmlRaw
+        $ encodePretty stepResult.request.resp.json
 
 
 textToHTML :: Text -> Text

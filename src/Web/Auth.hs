@@ -24,7 +24,6 @@ import Effectful (
   Eff,
   Effect,
   IOE,
-  MonadIO (liftIO),
   runEff,
   type (:>),
  )
@@ -46,57 +45,18 @@ import Lucid.Html5 (
   httpEquiv_,
   meta_,
  )
+import Models.Users.Sessions (craftSessionCookie, emptySessionCookie)
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import Network.HTTP.Types (hCookie)
 import Network.Wai (Request (requestHeaders))
 import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
 import Pkg.ConvertKit qualified as ConvertKit
-import Relude (
-  Applicative (pure),
-  Bool (..),
-  ByteString,
-  ConvertUtf8 (decodeUtf8, encodeUtf8),
-  Either (Left, Right),
-  Functor (fmap),
-  IO,
-  Maybe (..),
-  Monad ((>>)),
-  Semigroup ((<>)),
-  String,
-  Text,
-  ToString (toString),
-  Traversable (mapM),
-  Type,
-  either,
-  fromMaybe,
-  hoistEither,
-  join,
-  maybe,
-  putStrLn,
-  runExceptT,
-  show,
-  ($),
-  (&),
-  (.),
-  (<$>),
- )
-import Servant (
-  Header,
-  Headers,
-  NoContent (..),
-  addHeader,
-  noHeader,
- )
+import Relude hiding (ask, asks)
+import Servant (Header, Headers, NoContent (..), addHeader, noHeader)
 import Servant qualified
-import Servant.Server (
-  Handler,
-  ServerError (errBody, errHeaders),
-  err302,
-  err403,
- )
+import Servant.Server (Handler, ServerError (errHeaders), err302)
 import Servant.Server.Experimental.Auth (AuthHandler, mkAuthHandler)
-import SessionCookies (craftSessionCookie, emptySessionCookie)
 import System.Config (
   AuthContext (config, env, pool),
   EnvConfig (
@@ -119,7 +79,7 @@ type APItoolkitAuthContext = AuthHandler Request (Headers '[Header "Set-Cookie" 
 
 authHandler :: Logger -> AuthContext -> APItoolkitAuthContext
 authHandler logger env =
-  mkAuthHandler \request -> do
+  mkAuthHandler \request ->
     handler request
       & Logging.runLog (show env.config.environment) logger
       & DB.runDB env.pool
@@ -130,25 +90,18 @@ authHandler logger env =
       let cookies = getCookies req
       mbPersistentSessionId <- handlerToEff $ getSessionId cookies
       let isSidebarClosed = sidebarClosedFromCookie cookies
-      mbPersistentSession <- join <$> mapM (dbtToEff . Sessions.getPersistentSession) mbPersistentSessionId
-      -- TODO: replace with the user in persistent session?
-      mUserInfo <- fetchUser mbPersistentSession
+      mbPersistentSession <- maybe (pure Nothing) (dbtToEff . Sessions.getPersistentSession) mbPersistentSessionId
+      let mUser = mbPersistentSession <&> (.user.getUser)
       requestID <- liftIO $ getRequestID req
-      (user, sessionId) <- do
-        case mUserInfo of
-          Nothing -> do
-            throwError $ err302{errHeaders = [("Location", "/to_login")]}
-          Just (user, userSession) -> do
-            pure (user, userSession.id)
+      (user, sessionId, persistentSession) <- case (mUser, mbPersistentSession) of
+        (Just user, Just userSession) -> pure (user, userSession.id, userSession)
+        _ -> throwError $ err302{errHeaders = [("Location", "/to_login")]}
       let sessionCookie = Sessions.craftSessionCookie sessionId False
-      pure $ Sessions.addCookie sessionCookie (Sessions.Session{persistentSession = mbPersistentSession, ..})
+      pure $ Sessions.addCookie sessionCookie (Sessions.Session{persistentSession, ..})
 
 
 getCookies :: Request -> Cookies
-getCookies req =
-  maybe [] parseCookies (List.lookup hCookie headers)
-  where
-    headers = requestHeaders req
+getCookies req = maybe [] parseCookies (List.lookup hCookie $ requestHeaders req)
 
 
 getRequestID :: Request -> IO Text
@@ -167,28 +120,7 @@ sidebarClosedFromCookie cookies = case List.lookup "sidebarClosed" cookies of
 
 
 getSessionId :: Cookies -> Handler (Maybe Sessions.PersistentSessionId)
-getSessionId cookies =
-  case List.lookup "apitoolkit_session" cookies of
-    Nothing -> pure Nothing
-    Just i ->
-      case Sessions.PersistentSessionId <$> UUID.fromASCIIBytes i of
-        Nothing -> pure Nothing
-        Just sessionId -> pure (Just sessionId)
-
-
-fetchUser :: (Error ServerError :> es, DB :> es) => Maybe Sessions.PersistentSession -> Eff es (Maybe (Users.User, Sessions.PersistentSession))
-fetchUser Nothing = pure Nothing
-fetchUser (Just userSession) = do
-  user <- lookupUser userSession.userId
-  pure (Just (user, userSession))
-
-
-lookupUser :: (Error ServerError :> es, DB :> es) => Users.UserId -> Eff es Users.User
-lookupUser uid = do
-  result <- Users.userById uid
-  case result of
-    Nothing -> throwError (err403{errBody = "Invalid Cookie"})
-    (Just user) -> pure user
+getSessionId cookies = pure $ Sessions.PersistentSessionId <$> (UUID.fromASCIIBytes =<< List.lookup "apitoolkit_session" cookies)
 
 
 handlerToEff

@@ -21,13 +21,10 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Pages.NonMember (userNotMemeberPage)
 import Relude hiding (ask, asks)
-import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXRedirect, HXTrigger)
 import System.Types (ATAuthCtx)
-import Utils (userIsProjectMember)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -55,52 +52,35 @@ instance ToJSON SurveyForm where
 
 surveyPutH :: Projects.ProjectId -> SurveyForm -> ATAuthCtx (Headers '[HXTrigger, HXRedirect] (Html ()))
 surveyPutH pid survey = do
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-
-  isMember <- dbtToEff $ userIsProjectMember sess pid
-  if not isMember
+  (sess, project) <- Sessions.sessionAndProject pid
+  let nameArr = T.splitOn " " (fullName survey)
+  if length nameArr < 2
     then do
-      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Only project members can take the survey."]}|]
+      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","errorToast": ["Invalid full name format."]}|]
       pure $ addHeader hxTriggerData $ addHeader "" ""
     else do
-      let nameArr = T.splitOn " " (fullName survey)
-      if length nameArr < 2
-        then do
-          let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","errorToast": ["Invalid full name format."]}|]
-          pure $ addHeader hxTriggerData $ addHeader "" ""
-        else do
-          let jsonBytes = encode survey
-          let firstName = nameArr !! 0
-          let lastName = nameArr !! 1
-          let phoneNumber = survey.phoneNumber
-          res <- dbtToEff $ execute Update [sql| update projects.projects set questions= ? where id=? |] (jsonBytes, pid)
-          u <- dbtToEff $ execute Update [sql| update users.users set first_name= ?, last_name=?, phone_number=? where id=? |] (firstName, lastName, phoneNumber, sess.userId)
-          let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","successToast": ["Thanks for taking the survey!"]}|]
-          pure $ addHeader hxTriggerData $ addHeader ("/p/" <> show pid.unProjectId <> "/onboarding") ""
+      let jsonBytes = encode survey
+      let firstName = nameArr !! 0
+      let lastName = nameArr !! 1
+      let phoneNumber = survey.phoneNumber
+      res <- dbtToEff $ execute Update [sql| update projects.projects set questions= ? where id=? |] (jsonBytes, pid)
+      u <- dbtToEff $ execute Update [sql| update users.users set first_name= ?, last_name=?, phone_number=? where id=? |] (firstName, lastName, phoneNumber, sess.user.id)
+      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","successToast": ["Thanks for taking the survey!"]}|]
+      pure $ addHeader hxTriggerData $ addHeader ("/p/" <> show pid.unProjectId <> "/onboarding") ""
 
 
 surveyGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
 surveyGetH pid = do
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-
-  isMember <- dbtToEff $ userIsProjectMember sess pid
-  if not isMember
-    then do
-      pure $ userNotMemeberPage sess
-    else do
-      project <- dbtToEff $ Projects.selectProjectForUser (Sessions.userId sess, pid)
-      let bwconf =
-            (def :: BWConfig)
-              { sessM = Just sess
-              , currProject = project
-              , pageTitle = "About Project"
-              }
-      let user = sess.user.getUser
-      let full_name = user.firstName <> " " <> user.lastName
-      let phoneNumber = fromMaybe "" user.phoneNumber
-      pure $ bodyWrapper bwconf $ surveyPage pid full_name phoneNumber
+  (sess, project) <- Sessions.sessionAndProject pid
+  let bwconf =
+        (def :: BWConfig)
+          { sessM = Just sess.persistentSession
+          , currProject = Just project
+          , pageTitle = "About Project"
+          }
+  let full_name = sess.user.firstName <> " " <> sess.user.lastName
+  let phoneNumber = fromMaybe "" sess.user.phoneNumber
+  pure $ bodyWrapper bwconf $ surveyPage pid full_name phoneNumber
 
 
 surveyPage :: Projects.ProjectId -> Text -> Text -> Html ()

@@ -115,51 +115,42 @@ createProjectGetH = do
   sess <- Sessions.getSession
   let bwconf =
         (def :: BWConfig)
-          { sessM = sess.persistentSession
+          { sessM = Just sess.persistentSession
           , pageTitle = "Endpoints"
           }
-  pure $ bodyWrapper bwconf $ createProjectBody (Unsafe.fromJust sess.persistentSession) appCtx.config False (def @CreateProjectForm) (def @CreateProjectFormError) Nothing Nothing
+  pure $ bodyWrapper bwconf $ createProjectBody (sess.persistentSession) appCtx.config False (def @CreateProjectForm) (def @CreateProjectFormError) Nothing Nothing
 
 
 ----------------------------------------------------------------------------------------------------------
 projectSettingsGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
 projectSettingsGetH pid = do
+  (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
-  sess <- Sessions.getSession
-  let pSess = Unsafe.fromJust sess.persistentSession
-  projM <- dbtToEff $ Projects.selectProjectForUser (pSess.userId, pid)
-  let proj = Unsafe.fromJust projM
   let createProj =
         CreateProjectForm
-          { title = proj.title
-          , description = proj.description
+          { title = project.title
+          , description = project.description
           , emails = []
           , permissions = []
           , isUpdate = True
           , projectId = pid.toText
-          , paymentPlan = proj.paymentPlan
-          , timeZone = proj.timeZone
-          , orderId = proj.orderId
+          , paymentPlan = project.paymentPlan
+          , timeZone = project.timeZone
+          , orderId = project.orderId
           }
   slackInfo <- dbtToEff $ getProjectSlackData pid
 
-  let bwconf = (def :: BWConfig){sessM = sess.persistentSession, currProject = projM, pageTitle = "Settings"}
-  pure $ bodyWrapper bwconf $ createProjectBody pSess appCtx.config True createProj (def @CreateProjectFormError) (Just proj.notificationsChannel) slackInfo
+  let bwconf = (def :: BWConfig){sessM = Just sess.persistentSession, currProject = Just project, pageTitle = "Settings"}
+  pure $ bodyWrapper bwconf $ createProjectBody (sess.persistentSession) appCtx.config True createProj (def @CreateProjectFormError) (Just project.notificationsChannel) slackInfo
 
 
 ----------------------------------------------------------------------------------------------------------
 deleteProjectGetH :: Projects.ProjectId -> ATAuthCtx (Headers '[HXTrigger, HXRedirect] (Html ()))
 deleteProjectGetH pid = do
   sess <- Sessions.getSession
-  isMember <- dbtToEff $ userIsProjectMember (Unsafe.fromJust sess.persistentSession) pid
-  if not isMember
-    then do
-      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"errorToast": ["Only project members can perform this action."]}|]
-      pure $ addHeader hxTriggerData $ addHeader "/" $ span_ ""
-    else do
-      _ <- dbtToEff $ Projects.deleteProject pid
-      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Deleted Project Successfully"]}|]
-      pure $ addHeader hxTriggerData $ addHeader "/" $ span_ ""
+  _ <- dbtToEff $ Projects.deleteProject pid
+  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Deleted Project Successfully"]}|]
+  pure $ addHeader hxTriggerData $ addHeader "/" $ span_ ""
 
 
 data NotifListForm = NotifListForm
@@ -193,13 +184,11 @@ updateNotificationsChannel pid NotifListForm{notificationsChannel} = do
 -- It processes post requests and is expected to return a redirect header and a hyperscript event trigger header.
 createProjectPostH :: CreateProjectForm -> ATAuthCtx (Headers '[HXTrigger, HXRedirect] (Html ()))
 createProjectPostH createP = do
+  sess <- Sessions.getSession
   appCtx <- ask @AuthContext
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-
   validationRes <- validateM createProjectFormV createP
   case validationRes of
-    Right cpe -> pure $ noHeader $ noHeader $ createProjectBody sess appCtx.config createP.isUpdate createP cpe Nothing Nothing
+    Right cpe -> pure $ noHeader $ noHeader $ createProjectBody (sess.persistentSession) appCtx.config createP.isUpdate createP cpe Nothing Nothing
     Left cp -> processProjectPostForm cp
 
 

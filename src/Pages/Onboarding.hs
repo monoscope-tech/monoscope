@@ -4,64 +4,43 @@ module Pages.Onboarding (onboardingGetH, integrateApiToolkit, tabs, contentHeade
 
 import Data.Default (def)
 import Data.Vector qualified as V
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
-import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Htmx (hxGet_, hxSwap_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Apis.RequestDumps qualified as RequestDumps
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projectjs
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Pages.NonMember (userNotMemeberPage)
 import Pkg.Components
 import Relude hiding (ask)
-import Relude.Unsafe qualified as Unsafe
-import System.Config (AuthContext)
 import System.Types (ATAuthCtx)
 import Utils (
   faIcon_,
   faSprite_,
-  userIsProjectMember,
  )
 
 
 onboardingGetH :: Projects.ProjectId -> Maybe Bool -> Maybe Bool -> Maybe Text -> ATAuthCtx (Html ())
 onboardingGetH pid polling redirected current_tab = do
-  -- TODO: temporary, to work with current logic
-  appCtx <- ask @AuthContext
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-
-  isMember <- dbtToEff $ userIsProjectMember sess pid
-  if not isMember
-    then do
-      pure $ userNotMemeberPage sess
-    else do
-      (project, apikey, hasRequest) <- dbtToEff do
-        project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-        apiKeys <- ProjectApiKeys.projectApiKeysByProjectId pid
-        requestDumps <- RequestDumps.countRequestDumpByProject pid
-        let apikey = if V.null apiKeys then "<APIKEY>" else (V.head apiKeys).keyPrefix
-        pure (project, apikey, requestDumps > 0)
-      let bwconf =
-            (def :: BWConfig)
-              { sessM = Just sess
-              , currProject = project
-              , pageTitle = "Get Started"
-              , hasIntegrated = Just hasRequest
-              }
-      let ans = case project of
-            Nothing -> False
-            Just p -> case p.questions of
-              Just v -> True
-              _ -> False
-      case polling of
-        Just _ -> pure $ onboardingPage pid apikey hasRequest ans (fromMaybe False redirected) (fromMaybe "express" current_tab)
-        Nothing -> pure $ bodyWrapper bwconf $ onboardingPage pid apikey hasRequest ans (fromMaybe False redirected) "express"
+  (sess, project) <- Sessions.sessionAndProject pid
+  apiKeys <- dbtToEff $ ProjectApiKeys.projectApiKeysByProjectId pid
+  requestDumps <- dbtToEff $ RequestDumps.countRequestDumpByProject pid
+  let hasRequest = requestDumps > 0
+  let apikey = if V.null apiKeys then "<APIKEY>" else (V.head apiKeys).keyPrefix
+  let bwconf =
+        (def :: BWConfig)
+          { sessM = Just sess.persistentSession 
+          , currProject = Just project
+          , pageTitle = "Get Started"
+          , hasIntegrated = Just hasRequest
+          }
+  case polling of
+    Just _ -> pure $ onboardingPage pid apikey hasRequest (isJust project.questions) (fromMaybe False redirected) (fromMaybe "express" current_tab)
+    Nothing -> pure $ bodyWrapper bwconf $ onboardingPage pid apikey hasRequest (isJust project.questions) (fromMaybe False redirected) "express"
 
 
 onboardingPage :: Projects.ProjectId -> Text -> Bool -> Bool -> Bool -> Text -> Html ()

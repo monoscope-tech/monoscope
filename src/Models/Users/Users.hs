@@ -85,6 +85,7 @@ data User = User
   , displayImageUrl :: Text
   , email :: CI.CI Text
   , phoneNumber :: Maybe Text
+  , isSudo :: Bool
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, Default, NFData)
@@ -116,6 +117,7 @@ createUser firstName lastName picture email = do
       , displayImageUrl = picture
       , email = CI.mk email
       , phoneNumber = Nothing
+      , isSudo = False
       }
 
 

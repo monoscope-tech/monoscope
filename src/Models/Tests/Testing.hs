@@ -20,7 +20,7 @@ module Models.Tests.Testing (
 )
 where
 
-import Data.Aeson ( KeyValue((.=)),(.:?))
+import Data.Aeson (KeyValue ((.=)), (.:?))
 import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.Default.Instances ()
@@ -29,12 +29,12 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (insert)
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, queryOne)
-import Database.PostgreSQL.Entity.Types ( Entity,CamelToSnake,FieldModifiers,GenericEntity,PrimaryKey,Schema,TableName )
+import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple hiding (execute, executeMany, query)
-import Database.PostgreSQL.Simple.FromField ( FromField )
+import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.ToField ( ToField )
+import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Transact (DBT)
 import Deriving.Aeson qualified as DAE
 import GHC.Records (HasField (getField))
