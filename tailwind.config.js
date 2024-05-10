@@ -1,5 +1,5 @@
 module.exports = {
-  content: ['./src/**/*.{html,js,hs}', './static/public/assets/testeditor.js', './static/public/assets/steps-editor.js', './static/public/assets/filtercomponent.js'],
+  content: ['./src/**/*.{html,js,hs}', './static/public/assets/testeditor.js', './static/public/assets/*.js'],
   daisyui: {
     themes: ['light', 'dark', 'winter', 'dim'],
   },
