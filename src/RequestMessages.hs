@@ -25,6 +25,7 @@ import Data.Time.Clock as Clock (
   UTCTime,
   secondsToNominalDiffTime,
  )
+import Data.Maybe
 import Data.Time.LocalTime as Time (
   ZonedTime,
   calendarTimeTime,
@@ -53,46 +54,7 @@ import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Numeric (showHex)
-import Relude (
-  Alternative (empty, (<|>)),
-  Applicative (pure),
-  Bool (..),
-  ConvertUtf8 (decodeUtf8, encodeUtf8),
-  Either,
-  Eq ((==)),
-  Foldable (foldl'),
-  Generic,
-  Int,
-  Maybe (..),
-  Monoid (mconcat),
-  Semigroup ((<>)),
-  Show,
-  String,
-  Text,
-  concat,
-  elem,
-  fromIntegral,
-  fromMaybe,
-  fromRight,
-  fst,
-  head,
-  map,
-  mapMaybe,
-  maybe,
-  or,
-  otherwise,
-  show,
-  snd,
-  sort,
-  sortWith,
-  unzip,
-  viaNonEmpty,
-  ($),
-  (&),
-  (.),
-  (<$>),
-  (<&>),
- )
+import Relude 
 import Relude.Unsafe as Unsafe (read)
 import Text.Regex.TDFA ((=~))
 import Utils (DBField ())
@@ -117,7 +79,7 @@ data RequestMessage = RequestMessage
   , protoMinor :: Int
   , queryParams :: AE.Value -- key value map of a key to a list of text values map[string][]string
   , rawUrl :: Text -- raw request uri: path?query combination
-  , referer :: Maybe Text
+  , referer :: Maybe (Either Text [Text])
   , requestBody :: Text
   , requestHeaders :: AE.Value -- key value map of a key to a list of text values map[string][]string
   , responseBody :: Text
@@ -295,7 +257,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
           , rawUrl = rM.rawUrl
           , pathParams = rM.pathParams
           , method = method
-          , referer = fromMaybe "" rM.referer
+          , referer = fromMaybe ""  $ rM.referer >>= either Just listToMaybe 
           , protoMajor = rM.protoMajor
           , protoMinor = rM.protoMinor
           , duration = calendarTimeTime $ secondsToNominalDiffTime $ fromIntegral duration
