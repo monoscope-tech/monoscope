@@ -76,8 +76,6 @@ data CreateProjectForm = CreateProjectForm
   deriving anyclass (FromForm, Default)
 
 
-
-
 ----------------------------------------------------------------------------------------------------------
 integrationSettingGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
 integrationSettingGetH pid = do
@@ -101,12 +99,10 @@ integrationSettingGetH pid = do
   slackInfo <- dbtToEff $ getProjectSlackData pid
 
   let bwconf = (def :: BWConfig){sessM = sess.persistentSession, currProject = projM, pageTitle = "Settings"}
-  pure $ bodyWrapper bwconf $ integrationsBody pSess appCtx.config True createProj  (Just proj.notificationsChannel) slackInfo
+  pure $ bodyWrapper bwconf $ integrationsBody pSess appCtx.config True createProj (Just proj.notificationsChannel) slackInfo
 
 
 ----------------------------------------------------------------------------------------------------------
-
-
 
 data NotifListForm = NotifListForm
   { notificationsChannel :: [Text]
@@ -139,8 +135,8 @@ updateNotificationsChannel pid NotifListForm{notificationsChannel} = do
 ----------------------------------------------------------------------------------------------------------
 -- integrationsBody is the core html view
 integrationsBody :: Sessions.PersistentSession -> EnvConfig -> Bool -> CreateProjectForm -> Maybe (V.Vector Projects.NotificationChannel) -> Maybe SlackData -> Html ()
-integrationsBody sess envCfg isUpdate cp  notifChannel slackData = do
-  --let paymentPlan = if cp.paymentPlan == "" then "UsageBased" else cp.paymentPlan
+integrationsBody sess envCfg isUpdate cp notifChannel slackData = do
+  -- let paymentPlan = if cp.paymentPlan == "" then "UsageBased" else cp.paymentPlan
   section_ [id_ "main-content", class_ "p-3 py-5 sm:p-6 overflow-y-scroll h-full"] do
     div_ [class_ "mx-auto", style_ "max-width:800px"] do
       h2_ [class_ "text-slate-700 text-3xl font-medium mb-5"] $ toHtml @String $ if isUpdate then "Integrations" else "Integrations"

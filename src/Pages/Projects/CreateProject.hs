@@ -117,6 +117,8 @@ createProjectGetH = do
           , pageTitle = "Endpoints"
           }
   pure $ bodyWrapper bwconf $ createProjectBody (Unsafe.fromJust sess.persistentSession) appCtx.config False (def @CreateProjectForm) (def @CreateProjectFormError)
+
+
 ----------------------------------------------------------------------------------------------------------
 projectSettingsGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
 projectSettingsGetH pid = do
@@ -157,10 +159,6 @@ deleteProjectGetH pid = do
       pure $ addHeader hxTriggerData $ addHeader "/" $ span_ ""
 
 
-
-
-
-
 ----------------------------------------------------------------------------------------------------------
 -- createProjectPostH is the handler for the create projects page form handling.
 -- It processes post requests and is expected to return a redirect header and a hyperscript event trigger header.
@@ -172,7 +170,7 @@ createProjectPostH createP = do
 
   validationRes <- validateM createProjectFormV createP
   case validationRes of
-    Right cpe -> pure $ noHeader $ noHeader $ createProjectBody sess appCtx.config createP.isUpdate createP cpe 
+    Right cpe -> pure $ noHeader $ noHeader $ createProjectBody sess appCtx.config createP.isUpdate createP cpe
     Left cp -> processProjectPostForm cp
 
 
@@ -238,7 +236,7 @@ processProjectPostForm cpRaw = do
   if cp.isUpdate
     then do
       let hxTriggerDataUpdate = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Updated Project Successfully"]}|]
-      let bdy = createProjectBody sess envCfg cp.isUpdate cp (def @CreateProjectFormError) 
+      let bdy = createProjectBody sess envCfg cp.isUpdate cp (def @CreateProjectFormError)
       project <- dbtToEff $ Projects.projectById pid
       case project of
         Just p -> do
@@ -258,7 +256,7 @@ processProjectPostForm cpRaw = do
               if isNothing subId || isNothing firstSubItemId
                 then do
                   let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"errorToast": ["Couldn't get subscription Id please try again"]}|]
-                  let bd = createProjectBody sess envCfg cp.isUpdate cp (def @CreateProjectFormError) 
+                  let bd = createProjectBody sess envCfg cp.isUpdate cp (def @CreateProjectFormError)
                   pure $ addHeader hxTriggerData $ addHeader ("/p/" <> pid.toText <> "/about_project") bd
                 else do
                   _ <- dbtToEff $ Projects.updateProject (createProjectFormToModel pid subId firstSubItemId cp)
@@ -315,7 +313,7 @@ processProjectPostForm cpRaw = do
           _ <- liftIO $ withResource appCtx.pool \conn ->
             createJob conn "background_jobs" $ BackgroundJobs.CreatedProjectSuccessfully sess.userId pid (original sess.user.getUser.email) cp.title
           let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Created Project Successfully"]}|]
-          let bdy = createProjectBody sess envCfg cp.isUpdate cp (def @CreateProjectFormError) 
+          let bdy = createProjectBody sess envCfg cp.isUpdate cp (def @CreateProjectFormError)
           pure $ addHeader hxTriggerData $ addHeader ("/p/" <> pid.toText <> "/about_project") bdy
 
 

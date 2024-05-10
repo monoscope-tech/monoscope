@@ -336,8 +336,8 @@ projectsDropDown currProject projects = do
             span_ "API Keys"
           a_ [href_ [text| /p/$pidTxt/integrations|], class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100"] do
             faSprite_ "arrows-turn-right" "regular" "h-5 w-5"
-            span_ "Integrations"  
-            
+            span_ "Integrations"
+
           if currProject.paymentPlan == "UsageBased"
             then do
               a_ [class_ "p-3 flex gap-3 flex gap-3 items-center rounded hover:bg-gray-100 cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]] do

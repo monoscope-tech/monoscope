@@ -4,8 +4,8 @@ import GHC.Generics
 import Lucid (Html)
 import Models.Projects.Projects qualified as Projects
 import Pages.Projects.CreateProject qualified as CreateProject
-import Pages.Projects.ManageMembers qualified as ManageMembers
 import Pages.Projects.Integrations qualified as Integrations
+import Pages.Projects.ManageMembers qualified as ManageMembers
 import Servant
 import Servant.HTML.Lucid (HTML)
 import Servant.Htmx

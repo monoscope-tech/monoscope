@@ -43,12 +43,12 @@ import Lucid (
   p_,
   placeholder_,
   script_,
+  small_,
   span_,
   textarea_,
   type_,
-  small_
  )
-import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_,hxBoost_)
+import Lucid.Htmx (hxBoost_, hxPost_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Tests.Testing qualified as Testing
@@ -62,7 +62,7 @@ import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
 import System.Config (AuthContext)
 import System.Types (ATAuthCtx)
-import Utils (faIcon_, scheduleIntervals, userIsProjectMember, textToBool,)
+import Utils (faIcon_, scheduleIntervals, textToBool, userIsProjectMember)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -118,26 +118,26 @@ testingPutH pid cid action steps = do
         _ -> do
           pure ""
 
+
 data ParamInput = ParamInput
-  { 
-   ackd :: Bool
+  { ackd :: Bool
   , archived :: Bool
   }
 
+
 testingPostH :: Projects.ProjectId -> TestCollectionForm -> Maybe Text -> Maybe Text -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
-testingPostH pid collection ackdM archivedM = do
+testingPostH pid collection acknM archM = do
   appConf <- ask @AuthContext
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
   project <- dbtToEff $ Projects.selectProjectForUser (Sessions.userId sess, pid)
-  let ackd = textToBool <$> ackdM
-  let archived = textToBool <$> archivedM
+  let ackd = textToBool <$> acknM
+  let archived = textToBool <$> archM
   let paramInput =
         ParamInput
-        {
-        ackd = fromMaybe False ackd
+          { ackd = fromMaybe False ackd
           , archived = fromMaybe False archived
-        } 
+          }
   if collection.collection_id == ""
     then do
       currentTime <- liftIO getZonedTime
@@ -168,14 +168,13 @@ testingPostH pid collection ackdM archivedM = do
       pure $ addHeader hxTriggerData $ testingPage paramInput pid cols
 
 
-
 testingGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
-testingGetH pid ackdM archivedM = do
+testingGetH pid acknM archM = do
   appConf <- ask @AuthContext
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
-  let ackd = textToBool <$> ackdM
-  let archived = textToBool <$> archivedM
+  let ackd = textToBool <$> acknM
+  let archived = textToBool <$> archM
   isMember <- dbtToEff $ userIsProjectMember sess pid
   if not isMember
     then do
@@ -193,14 +192,13 @@ testingGetH pid ackdM archivedM = do
               }
       let paramInput =
             ParamInput
-              {
-               ackd = fromMaybe False ackd
+              { ackd = fromMaybe False ackd
               , archived = fromMaybe False archived
-              }        
+              }
       pure $ bodyWrapper bwconf $ testingPage paramInput pid colls
 
 
-testingPage ::ParamInput-> Projects.ProjectId -> V.Vector Testing.CollectionListItem -> Html ()
+testingPage :: ParamInput -> Projects.ProjectId -> V.Vector Testing.CollectionListItem -> Html ()
 testingPage paramInput pid colls = do
   div_ [class_ "w-full", id_ "main"] do
     modal pid
@@ -215,15 +213,15 @@ testingPage paramInput pid colls = do
             faIcon_ "fa-plus" "fa-light fa-plus" "h-6 w-6"
             "Collection"
     div_ [class_ "py-2 px-2 space-x-6 border-b border-slate-20 mt-6 mb-8 text-sm font-light", hxBoost_ "true"] do
-      let uri = "/p/" <> pid.toText <> "/testing/" 
-      a_ [class_ $ "inline-block py-2 " <> if not paramInput.ackd && not paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&ackd=false&archived=false"] "Inbox"
-      a_ [class_ $ "inline-block  py-2 " <> if paramInput.ackd && not paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&ackd=true&archived=false"] "Acknowleged"
+      let uri = "/p/" <> pid.toText <> "/testing/"
+      a_ [class_ $ "inline-block py-2 " <> if not paramInput.ackd && not paramInput.archived then " font-bold text-black " else "", href_ $ uri] "Inbox"
+      a_ [class_ $ "inline-block  py-2 " <> if paramInput.ackd && not paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&ackd=true"] "Acknowleged"
       a_ [class_ $ "inline-block  py-2 " <> if paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&archived=true"] "Archived"
     div_ [class_ "px-8 py-4"] do
-      div_ [class_ "w-full card-round"] $ collectionCardList pid colls    
-     
+      div_ [class_ "w-full card-round"] $ collectionCardList pid colls
 
-collectionCardList :: Projects.ProjectId -> V.Vector Testing.CollectionListItem -> Html ()  
+
+collectionCardList :: Projects.ProjectId -> V.Vector Testing.CollectionListItem -> Html ()
 collectionCardList pid colls = form_ [class_ "col-span-5 bg-white divide-y "] $ do
   div_ [class_ "flex py-3 gap-8 items-center  bg-gray-50"] do
     div_ [class_ "h-4 flex space-x-3 w-8"] do
@@ -249,93 +247,93 @@ collectionCardList pid colls = form_ [class_ "col-span-5 bg-white divide-y "] $ 
         , placeholder_ "Search endpoints..."
         ]
   forM_ colls \c -> do
-       collectionCard pid c          
+    collectionCard pid c
 
 
 collectionCard :: Projects.ProjectId -> Testing.CollectionListItem -> Html ()
-collectionCard pid col = do 
-    div_ [class_ "flex py-4 gap-8 items-center endpoint_item"] do
-        div_ [class_ "h-4 flex space-x-3 w-8 "] do
-          a_ [class_ " w-2 h-full"] ""
-          input_ [term "aria-label" "Select Issue", class_ "endpoint_anomaly_input", type_ "checkbox"]
-        div_ [class_ "space-y-3 grow"] do
-          div_ [class_ "space-x-3"] do
-            a_ [class_ "inline-block font-bold text-blue-700 space-x-2"] $ do
-              span_ $ toHtml col.title
-            small_ [class_ "inline-block text-gray-800"] $ toHtml $ T.take 19 $ show @Text col.createdAt 
-            div_ [class_ "flex items-center gap-2 mt-5"] do
-              a_ [href_ ("/p/" <> pid.toText <> "/testing/" <> col.id.toText)] $ do
-                span_ [class_ "text-xs text-gray-500"] $ toHtml $ T.take 19 $ show @Text col.updatedAt
-                span_ [class_ "text-gray-500"] $ toHtml $ maybe "-" (T.take 19 . show @Text) col.lastRun    
-        div_ [class_ "flex items-center justify-center "] do
-          div_ [class_ "grid grid-cols-3 gap-2 text-center text-xs w-96"] do
-            div_ [class_ "p-2 bg-emerald-100 text-emerald-900 border border-emerald-300"] do
-              div_ [class_ "text-base"]$ show col.stepsCount
-              small_ [class_ "block"] "Steps"
-            div_ [class_ " p-2 bg-slate-100 text-slate-900 border border-slate-300"] do
-              div_ [class_ "text-base"] "-"
-              small_ [class_ "block"] "Passed"
-            div_ [class_ "p-2  bg-rose-100 text-rose-900 border border-rose-300"] do
-              div_ [class_ "text-base"] "-"
-              small_ [class_ "block"] "Failed"
-        div_ [class_ "w-36 flex items-center justify-center"] do
-          button_
-            [ term "data-id" col.id.toText
-            , term "data-title" col.title
-            , term "data-desc" col.description
-            , [__|on click remove .hidden from #col-modal 
+collectionCard pid col = do
+  div_ [class_ "flex py-4 gap-8 items-center endpoint_item"] do
+    div_ [class_ "h-4 flex space-x-3 w-8 "] do
+      a_ [class_ " w-2 h-full"] ""
+      input_ [term "aria-label" "Select Issue", class_ "endpoint_anomaly_input", type_ "checkbox"]
+    div_ [class_ "space-y-3 grow"] do
+      div_ [class_ "space-x-3"] do
+        a_ [class_ "inline-block font-bold text-blue-700 space-x-2"] $ do
+          span_ $ toHtml col.title
+        small_ [class_ "inline-block text-gray-800"] $ toHtml $ T.take 19 $ show @Text col.createdAt
+        div_ [class_ "flex items-center gap-2 mt-5"] do
+          a_ [href_ ("/p/" <> pid.toText <> "/testing/" <> col.id.toText)] $ do
+            span_ [class_ "text-xs text-gray-500"] $ toHtml $ T.take 19 $ show @Text col.updatedAt
+            span_ [class_ "text-gray-500"] $ toHtml $ maybe "-" (T.take 19 . show @Text) col.lastRun
+    div_ [class_ "flex items-center justify-center "] do
+      div_ [class_ "grid grid-cols-3 gap-2 text-center text-xs w-96"] do
+        div_ [class_ "p-2 bg-emerald-100 text-emerald-900 border border-emerald-300"] do
+          div_ [class_ "text-base"] $ show col.stepsCount
+          small_ [class_ "block"] "Steps"
+        div_ [class_ " p-2 bg-slate-100 text-slate-900 border border-slate-300"] do
+          div_ [class_ "text-base"] "-"
+          small_ [class_ "block"] "Passed"
+        div_ [class_ "p-2  bg-rose-100 text-rose-900 border border-rose-300"] do
+          div_ [class_ "text-base"] "-"
+          small_ [class_ "block"] "Failed"
+    div_ [class_ "w-36 flex items-center justify-center"] do
+      button_
+        [ term "data-id" col.id.toText
+        , term "data-title" col.title
+        , term "data-desc" col.description
+        , [__|on click remove .hidden from #col-modal 
                   then set #collection_id's value to my @data-id
                   then set #title's value to my @data-title 
                   then set #desc's value to my @data-desc
                   |]
-            ]
-            do
-              faIcon_ "fa-edit" "fa-light fa-edit" "h-6 w-6"
+        ]
+        do
+          faIcon_ "fa-edit" "fa-light fa-edit" "h-6 w-6"
 
-  -- div_ [class_ "rounded-xl border p-4 flex flex-col gap-5 text-gray-700 h-full shadow hover:shadow-lg"] $ do
-  --   a_ [href_ ("/p/" <> pid.toText <> "/testing/" <> col.id.toText)] $ do
-  --     div_ [class_ "flex flex-col gap-5"] $ do
-  --       div_ [class_ "flex items-center justify-between"] $ do
-  --         div_ [class_ "flex flex-col gap-1"] $ do
-  --           span_ [class_ "text-sm font-medium"] "Created at"
-  --           span_ [class_ "text-xs text-gray-500"] $ toHtml $ T.take 19 $ show @Text col.createdAt
-  --         div_ [class_ "flex flex-col gap-1"] $ do
-  --           span_ [class_ "text-sm font-medium"] "Last modified"
-  --           span_ [class_ "text-xs text-gray-500"] $ toHtml $ T.take 19 $ show @Text col.updatedAt
-  --       div_ [class_ "flex flex-col w-full gap-2"] $ do
-  --         h3_ [class_ "font-semibold tracking-tight text-xl"] $ toHtml col.title
-  --         p_ [class_ "text-sm text-gray-500 break-words max-w-4xl"] $ toHtml col.description
-  --         div_ [class_ "flex justify-between items-center"] do
-  --           div_ [class_ "flex gap-2 items-center text-xs rounded py-1"] $ do
-  --             span_ [class_ "font-bold"] "Last run"
-  --             span_ [class_ "text-gray-500"] $ toHtml $ maybe "-" (T.take 19 . show @Text) col.lastRun
-  --           div_ [class_ "flex gap-2 items-center text-xs rounded py-1"] $ do
-  --             span_ [class_ "font-bold"] "Schedule"
-  --             span_ [class_ "text-gray-500"] $ toHtml $ maybe "-" (T.take 19 . show @Text) col.lastRun
-  --   div_ [class_ "text-sm flex items-center justify-between"] $ do
-  --     div_ [class_ "flex gap-5 items-center"] $ do
-  --       div_ [class_ "flex gap-2  rounded bg-gray-100 px-2 py-1"] $ do
-  --         span_ "Steps"
-  --         span_ [class_ "text-blue-500 font-medium"] $ show col.stepsCount
-  --       div_ [class_ "flex gap-2 rounded bg-gray-100 px-2 py-1"] $ do
-  --         span_ "Passed"
-  --         span_ [class_ "text-green-500 font-medium"] "-"
-  --       div_ [class_ "flex gap-2 rounded bg-gray-100 px-2 py-1"] $ do
-  --         span_ "Failed"
-  --         span_ [class_ "text-red-500 font-medium"] "-"
-  --     button_
-  --       [ term "data-id" col.id.toText
-  --       , term "data-title" col.title
-  --       , term "data-desc" col.description
-  --       , [__|on click remove .hidden from #col-modal 
-  --              then set #collection_id's value to my @data-id
-  --              then set #title's value to my @data-title 
-  --              then set #desc's value to my @data-desc
-  --              |]
-  --       ]
-  --       do
-  --         faIcon_ "fa-edit" "fa-light fa-edit" "h-6 w-6"
 
+-- div_ [class_ "rounded-xl border p-4 flex flex-col gap-5 text-gray-700 h-full shadow hover:shadow-lg"] $ do
+--   a_ [href_ ("/p/" <> pid.toText <> "/testing/" <> col.id.toText)] $ do
+--     div_ [class_ "flex flex-col gap-5"] $ do
+--       div_ [class_ "flex items-center justify-between"] $ do
+--         div_ [class_ "flex flex-col gap-1"] $ do
+--           span_ [class_ "text-sm font-medium"] "Created at"
+--           span_ [class_ "text-xs text-gray-500"] $ toHtml $ T.take 19 $ show @Text col.createdAt
+--         div_ [class_ "flex flex-col gap-1"] $ do
+--           span_ [class_ "text-sm font-medium"] "Last modified"
+--           span_ [class_ "text-xs text-gray-500"] $ toHtml $ T.take 19 $ show @Text col.updatedAt
+--       div_ [class_ "flex flex-col w-full gap-2"] $ do
+--         h3_ [class_ "font-semibold tracking-tight text-xl"] $ toHtml col.title
+--         p_ [class_ "text-sm text-gray-500 break-words max-w-4xl"] $ toHtml col.description
+--         div_ [class_ "flex justify-between items-center"] do
+--           div_ [class_ "flex gap-2 items-center text-xs rounded py-1"] $ do
+--             span_ [class_ "font-bold"] "Last run"
+--             span_ [class_ "text-gray-500"] $ toHtml $ maybe "-" (T.take 19 . show @Text) col.lastRun
+--           div_ [class_ "flex gap-2 items-center text-xs rounded py-1"] $ do
+--             span_ [class_ "font-bold"] "Schedule"
+--             span_ [class_ "text-gray-500"] $ toHtml $ maybe "-" (T.take 19 . show @Text) col.lastRun
+--   div_ [class_ "text-sm flex items-center justify-between"] $ do
+--     div_ [class_ "flex gap-5 items-center"] $ do
+--       div_ [class_ "flex gap-2  rounded bg-gray-100 px-2 py-1"] $ do
+--         span_ "Steps"
+--         span_ [class_ "text-blue-500 font-medium"] $ show col.stepsCount
+--       div_ [class_ "flex gap-2 rounded bg-gray-100 px-2 py-1"] $ do
+--         span_ "Passed"
+--         span_ [class_ "text-green-500 font-medium"] "-"
+--       div_ [class_ "flex gap-2 rounded bg-gray-100 px-2 py-1"] $ do
+--         span_ "Failed"
+--         span_ [class_ "text-red-500 font-medium"] "-"
+--     button_
+--       [ term "data-id" col.id.toText
+--       , term "data-title" col.title
+--       , term "data-desc" col.description
+--       , [__|on click remove .hidden from #col-modal
+--              then set #collection_id's value to my @data-id
+--              then set #title's value to my @data-title
+--              then set #desc's value to my @data-desc
+--              |]
+--       ]
+--       do
+--         faIcon_ "fa-edit" "fa-light fa-edit" "h-6 w-6"
 
 modal :: Projects.ProjectId -> Html ()
 modal pid = do
