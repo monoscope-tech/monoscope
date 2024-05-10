@@ -158,7 +158,7 @@ collectionPage pid col = do
           div_ [class_ "flex flex-col justify-center items-center h-full text-slate-400 text-xl space-y-4"] do
             div_ [] $ Utils.faIcon_ "fa-objects-column" "fa-objects-column fa-solid" "w-16 h-16"
             p_ [class_ "text-slate-500"] "Run a test to view the results here. "
-
+    script_ [type_ "module", src_ "/assets/steps-editor.js"] ("" :: Text)
 
 collectionStepResult_ :: Int -> Testing.StepResult -> Html ()
 collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
