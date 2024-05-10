@@ -23,13 +23,17 @@ import Models.Users.Users qualified as Users
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.NonMember (userNotMemeberPage)
 import Relude hiding (ask, asks)
+import Effectful.Reader.Static (ask)
 import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXRedirect, HXTrigger)
 import System.Types (ATAuthCtx)
 import Utils (userIsProjectMember)
 import Web.FormUrlEncoded (FromForm)
-
+import BackgroundJobs qualified
+import Data.Pool (withResource)
+import OddJobs.Job (createJob)
+import System.Config
 
 data SurveyForm = SurveyForm
   { stack :: [Text]
@@ -55,6 +59,7 @@ instance ToJSON SurveyForm where
 
 surveyPutH :: Projects.ProjectId -> SurveyForm -> ATAuthCtx (Headers '[HXTrigger, HXRedirect] (Html ()))
 surveyPutH pid survey = do
+  appCtx <- ask @AuthContext
   sess' <- Sessions.getSession
   let sess = Unsafe.fromJust sess'.persistentSession
 
@@ -74,9 +79,13 @@ surveyPutH pid survey = do
           let firstName = nameArr !! 0
           let lastName = nameArr !! 1
           let phoneNumber = survey.phoneNumber
+          let stack = survey.stack
+          let fullName = survey.fullName
           res <- dbtToEff $ execute Update [sql| update projects.projects set questions= ? where id=? |] (jsonBytes, pid)
           u <- dbtToEff $ execute Update [sql| update users.users set first_name= ?, last_name=?, phone_number=? where id=? |] (firstName, lastName, phoneNumber, sess.userId)
           let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","successToast": ["Thanks for taking the survey!"]}|]
+          _ <- liftIO $ withResource appCtx.pool \conn ->
+            createJob conn "background_jobs" $ BackgroundJobs.SendDiscordData sess.userId pid fullName stack
           pure $ addHeader hxTriggerData $ addHeader ("/p/" <> show pid.unProjectId <> "/onboarding") ""
 
 

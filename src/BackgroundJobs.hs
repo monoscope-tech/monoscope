@@ -53,6 +53,7 @@ import Utils (scheduleIntervals)
 data BgJobs
   = InviteUserToProject Users.UserId Projects.ProjectId Text Text
   | CreatedProjectSuccessfully Users.UserId Projects.ProjectId Text Text
+  | SendDiscordData Users.UserId Projects.ProjectId Text  [Text]
   | -- NewAnomaly Projects.ProjectId Anomalies.AnomalyTypes Anomalies.AnomalyActions TargetHash
     NewAnomaly Projects.ProjectId ZonedTime Text Text Text
   | DailyReports Projects.ProjectId
@@ -131,14 +132,22 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
   Regards,
   Apitoolkit team
             |]
-    CreatedProjectSuccessfully userId projectId reciever projectTitle -> do
-      let msg = [fmtTrim|
-              🎉 New project created on apitoolkit.io! 🎉
-              Project Title: {projectTitle}
-              Project ID: {projectId.toText}
-              User ID :{userId.toText}
-          |]  
-      liftIO $ sendMessageToDiscord msg   
+    SendDiscordData userId projectId fullName stack ->  whenJustM (dbtToEff $ Projects.projectById projectId) \project -> do
+      users <- dbtToEff $ Projects.usersByProjectId projectId
+      let stackString = intercalate ", " $ map T.unpack stack
+      forM_ users \user -> do
+        let userEmail = CI.original (user.email)
+        let msg = [fmtTrim| 🎉 New project created on apitoolkit.io! 🎉
+           User FullName : {fullName} 
+           User Email : {userEmail}
+           Project ID: {projectId.toText}
+           User ID :{userId.toText}
+           Payment Plan : {project.paymentPlan}
+           stack : {stackString}
+        |]
+        liftIO $ sendMessageToDiscord msg   
+
+    CreatedProjectSuccessfully userId projectId reciever projectTitle -> 
       sendEmail
         reciever
         [fmt| 🤖 APITOOLKIT: Project created successfully '{projectTitle}' on apitoolkit.io |]

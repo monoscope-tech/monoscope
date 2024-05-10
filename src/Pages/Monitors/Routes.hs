@@ -14,7 +14,7 @@ import Servant.Htmx
 
 
 type Routes = NamedRoutes Routes'
-
+type QPT a = QueryParam a Text
 
 type role Routes' nominal
 
@@ -25,8 +25,8 @@ data Routes' mode = Routes'
   , alertSingleGet :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> Get '[HTML] (Html ())
   , alertSingleToggleActive :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "toggle_active" :> Post '[HTML] (Html ())
   , collectionsGet :: mode :- "testing" :> Get '[HTML] (Html ())
-  , newCollectionPost :: mode :- "testing" :> ReqBody '[FormUrlEncoded] Testing.TestCollectionForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-  , collectionGet :: mode :- "testing" :> Capture "collection_id" TestingM.CollectionId :> Get '[HTML] (Html ())
+  , newCollectionPost :: mode :- "testing" :> ReqBody '[FormUrlEncoded] Testing.TestCollectionForm :> QPT "ackd" :> QPT "archived" :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
+  , collectionGet :: mode :- "testing" :> Capture "collection_id" TestingM.CollectionId:> QPT "ackd" :> QPT "archived" :> Get '[HTML] (Html ())
   , collectionStepsUpdate :: mode :- "testing" :> Capture "collection_id" TestingM.CollectionId :> ReqBody '[JSON] Testing.CollectionStepUpdateForm :> Post '[HTML] (Html ())
   , collectionPut :: mode :- "testing" :> Capture "collection_id" TestingM.CollectionId :> Capture "action" Text :> ReqBody '[JSON] AE.Value :> Post '[HTML] (Html ())
   , collectionRunTests :: mode :- "testing" :> Capture "collection_id" TestingM.CollectionId :> QueryParam "step_index" Int :> ReqBody '[JSON] Testing.CollectionStepUpdateForm :> Patch '[HTML] (Html ())
