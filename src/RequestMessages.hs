@@ -117,7 +117,7 @@ data RequestMessage = RequestMessage
   , protoMinor :: Int
   , queryParams :: AE.Value -- key value map of a key to a list of text values map[string][]string
   , rawUrl :: Text -- raw request uri: path?query combination
-  , referer :: Text
+  , referer :: Maybe Text
   , requestBody :: Text
   , requestHeaders :: AE.Value -- key value map of a key to a list of text values map[string][]string
   , responseBody :: Text
@@ -295,7 +295,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
           , rawUrl = rM.rawUrl
           , pathParams = rM.pathParams
           , method = method
-          , referer = rM.referer
+          , referer = fromMaybe "" rM.referer
           , protoMajor = rM.protoMajor
           , protoMinor = rM.protoMinor
           , duration = calendarTimeTime $ secondsToNominalDiffTime $ fromIntegral duration

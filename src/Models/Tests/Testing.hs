@@ -20,7 +20,7 @@ module Models.Tests.Testing (
 )
 where
 
-import Data.Aeson as Aeson
+import Data.Aeson ( KeyValue((.=)),(.:?))
 import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.Default.Instances ()
@@ -29,12 +29,12 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (insert)
 import Database.PostgreSQL.Entity.DBT (QueryNature (..), execute, query, queryOne)
-import Database.PostgreSQL.Entity.Types
+import Database.PostgreSQL.Entity.Types ( Entity,CamelToSnake,FieldModifiers,GenericEntity,PrimaryKey,Schema,TableName )
 import Database.PostgreSQL.Simple hiding (execute, executeMany, query)
-import Database.PostgreSQL.Simple.FromField
+import Database.PostgreSQL.Simple.FromField ( FromField )
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.ToField
+import Database.PostgreSQL.Simple.ToField ( ToField )
 import Database.PostgreSQL.Transact (DBT)
 import Deriving.Aeson qualified as DAE
 import GHC.Records (HasField (getField))
@@ -46,7 +46,7 @@ import Web.HttpApiData (FromHttpApiData)
 newtype CollectionId = CollectionId {collectionId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving
-    (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default, NFData)
+    (Eq, Ord, AE.ToJSON, AE.FromJSON, FromField, ToField, FromHttpApiData, Default, NFData)
     via UUID.UUID
   deriving anyclass (FromRow, ToRow)
 
@@ -58,7 +58,7 @@ instance HasField "toText" CollectionId Text where
 newtype CollectionStepId = CollectionStepId {collectionStepId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving
-    (Eq, Ord, ToJSON, FromJSON, FromField, ToField, FromHttpApiData, Default, NFData)
+    (Eq, Ord, AE.ToJSON, AE.FromJSON, FromField, ToField, FromHttpApiData, Default, NFData)
     via UUID.UUID
 
 
@@ -77,9 +77,9 @@ data CollectionStepData = CollectionStepData
   , params :: Maybe (Map Text Text)
   , headers :: Maybe (Map Text Text)
   , exports :: Maybe (Map Text Text)
-  , json :: Maybe (Value)
+  , json :: Maybe (AE.Value)
   , raw :: Maybe (Text)
-  , asserts :: Maybe (V.Vector (Map Text Value))
+  , asserts :: Maybe (V.Vector (Map Text AE.Value))
   }
   deriving stock (Show, Generic)
   deriving anyclass (NFData, Default)
@@ -100,9 +100,9 @@ stepDataMethod stepData =
       ]
 
 
-instance ToJSON CollectionStepData where
+instance AE.ToJSON CollectionStepData where
   toJSON csd =
-    object
+    AE.object
       $ catMaybes
         [ Just $ "title" .= csd.title
         , fmap ("POST" .=) csd.post -- Change the key to "POST" here for the output JSON
@@ -120,8 +120,8 @@ instance ToJSON CollectionStepData where
         ]
 
 
-instance FromJSON CollectionStepData where
-  parseJSON = withObject "CollectionStepData" $ \v -> do
+instance AE.FromJSON CollectionStepData where
+  parseJSON = AE.withObject "CollectionStepData" $ \v -> do
     title <- v .:? "title"
     get <- v .:? "GET"
     post <- v .:? "POST" -- Map from "POST" back to the `post` field
@@ -149,7 +149,7 @@ data CollectionStep = CollectionStep
   , stepData :: CollectionStepData
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, ToJSON, FromJSON, NFData, Default)
+  deriving anyclass (FromRow, ToRow, AE.ToJSON, AE.FromJSON, NFData, Default)
   deriving
     (Entity)
     via (GenericEntity '[Schema "tests", TableName "collection_steps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] CollectionStep)
@@ -157,7 +157,7 @@ data CollectionStep = CollectionStep
 
 newtype CollectionSteps = CollectionSteps (V.Vector CollectionStepData)
   deriving stock (Show, Generic)
-  deriving anyclass (ToJSON, FromJSON, NFData, Default)
+  deriving anyclass (AE.ToJSON, AE.FromJSON, NFData, Default)
   deriving (FromField, ToField) via Aeson (CollectionSteps)
 
 
@@ -169,13 +169,13 @@ data Collection = Collection
   , projectId :: Projects.ProjectId
   , title :: Text
   , description :: Text
-  , config :: Value
+  , config :: AE.Value
   , schedule :: Text
   , isScheduled :: Bool
   , collectionSteps :: CollectionSteps
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, ToJSON, FromJSON, NFData, Default)
+  deriving anyclass (FromRow, ToRow, AE.ToJSON, AE.FromJSON, NFData, Default)
   deriving
     (Entity)
     via (GenericEntity '[Schema "tests", TableName "collections", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Collection)
@@ -203,7 +203,7 @@ data StepResponse = StepResponse
   { status :: Int
   , headers :: Map Text [Text]
   , raw :: Text
-  , json :: Value
+  , json :: AE.Value
   }
   deriving stock (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] StepResponse
@@ -254,10 +254,8 @@ getCollectionById id' = queryOne Select q (Only id')
                       WHEN EXTRACT(DAY FROM schedule) > 0 THEN CONCAT(EXTRACT(DAY FROM schedule)::TEXT, ' days')
                       WHEN EXTRACT(HOUR FROM schedule) > 0 THEN CONCAT(EXTRACT(HOUR FROM schedule)::TEXT, ' hours')
                       ELSE CONCAT(EXTRACT(MINUTE FROM schedule)::TEXT, ' minutes')
-                  END as schedule,
-                  is_scheduled, collection_steps 
-                  FROM tests.collections t 
-                  WHERE id=?|]
+                  END as schedule, is_scheduled, collection_steps 
+                  FROM tests.collections t WHERE id=?|]
 
 
 -- TODO: delete or remove the collect_steps join
