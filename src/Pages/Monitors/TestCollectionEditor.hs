@@ -38,11 +38,11 @@ import Utils (faIcon_, faSprite_)
 
 data CollectionStepUpdateForm = CollectionStepUpdateForm
   { stepsData :: V.Vector Testing.CollectionStepData
-  , title :: Text
-  , description :: Text
+  , title :: Maybe Text
+  , description :: Maybe Text
   , scheduled :: Maybe Text
-  , scheduleNumber :: Text
-  , scheduleNumberUnit :: Text
+  , scheduleNumber :: Maybe Text
+  , scheduleNumberUnit :: Maybe Text
   }
   deriving stock (Show, Generic)
   deriving (AE.FromJSON, AE.ToJSON) via (DAE.CustomJSON) '[DAE.OmitNothingFields] CollectionStepUpdateForm
@@ -51,7 +51,7 @@ data CollectionStepUpdateForm = CollectionStepUpdateForm
 collectionStepsUpdateH :: Projects.ProjectId -> Testing.CollectionId -> CollectionStepUpdateForm -> ATAuthCtx (Html ())
 collectionStepsUpdateH pid colId colF = do
   let isScheduled = colF.scheduled == Just "on"
-  _ <- dbtToEff $ Testing.updateCollection pid colId colF.title colF.description isScheduled (colF.scheduleNumber <> " " <> colF.scheduleNumberUnit) colF.stepsData
+  _ <- dbtToEff $ Testing.updateCollection pid colId (fromMaybe "" colF.title) (fromMaybe "" colF.description) isScheduled ((fromMaybe "" colF.scheduleNumber) <> " " <> fromMaybe "" colF.scheduleNumberUnit) colF.stepsData
   -- TODO: toast
   pure $ toHtml ""
 
@@ -118,7 +118,7 @@ collectionPage pid col = do
   section_ [class_ "h-full overflow-y-hidden"] do
     form_
       [ id_ "stepsForm"
-      , class_ "grid grid-cols-2 h-full divide-x divide-gray-200 group/colForm overflow-y-hidden"
+      , class_ "grid grid-cols-2 h-full divide-x divide-gray-200 group/colform overflow-y-hidden"
       , hxPost_ ""
       , hxSwap_ "none"
       , hxExt_ "json-enc"
@@ -147,12 +147,10 @@ collectionPage pid col = do
                 , hxTarget_ "#step-results-parent"
                 , hxSwap_ "innerHTML"
                 ]
-                do
-                  span_ "Run all" >> faSprite_ "play" "solid" "w-3 h-3"
-              button_ [class_ "btn btn-sm btn-warning ", type_ "submit"] do
-                span_ "Save" >> faSprite_ "floppy-disk" "solid" "w-3 h-3"
+                (span_ "Run all" >> faSprite_ "play" "solid" "w-3 h-3")
+              button_ [class_ "btn btn-sm btn-warning ", type_ "submit"] (span_ "Save" >> faSprite_ "floppy-disk" "solid" "w-3 h-3")
               label_ [class_ "relative inline-flex items-center cursor-pointer space-x-2"] do
-                input_ [type_ "checkbox", class_ "toggle editorMode"] >> span_ [class_ "text-sm"] "Code"
+                input_ [type_ "checkbox", class_ "toggle editormode"] >> span_ [class_ "text-sm"] "Code"
           div_ [class_ "h-full flex-1 overflow-y-hidden"] $ termRaw "steps-editor" [id_ "stepsEditor"] ""
 
         div_ [class_ "col-span-1 h-full border-r border-gray-200"] do
@@ -160,7 +158,6 @@ collectionPage pid col = do
           div_ [class_ "flex flex-col justify-center items-center h-full text-slate-400 text-xl space-y-4"] do
             div_ [] $ Utils.faIcon_ "fa-objects-column" "fa-objects-column fa-solid" "w-16 h-16"
             p_ [class_ "text-slate-500"] "Run a test to view the results here. "
-    script_ [type_ "module", src_ "/assets/steps-editor.js"] ("" :: Text)
 
 
 collectionStepResult_ :: Int -> Testing.StepResult -> Html ()
@@ -169,13 +166,13 @@ collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
     toHtml $ (show $ idx + 1) <> " " <> stepResult.stepName
   div_ [role_ "tablist", class_ "tabs tabs-lifted"] do
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Log", checked_]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"]
-      $ toHtmlRaw
-      $ textToHTML stepResult.stepLog
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"] $
+      toHtmlRaw $
+        textToHTML stepResult.stepLog
 
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Headers"]
-    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6 "]
-      $ table_ [class_ "table table-xs"] do
+    div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6 "] $
+      table_ [class_ "table table-xs"] do
         thead_ [] $ tr_ [] $ th_ [] "Name" >> th_ [] "Value"
         tbody_ $ forM_ (M.toList stepResult.request.resp.headers) $ \(k, v) -> tr_ [] do
           td_ [] $ toHtml k
@@ -183,10 +180,10 @@ collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
 
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Body"]
     div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"] do
-      pre_ [class_ "flex text-sm leading-snug w-full max-h-[50rem] overflow-y-scroll"]
-        $ code_ [class_ "h-full hljs language-json atom-one-dark w-full rounded"]
-        $ toHtmlRaw
-        $ encodePretty stepResult.request.resp.json
+      pre_ [class_ "flex text-sm leading-snug w-full max-h-[50rem] overflow-y-scroll"] $
+        code_ [class_ "h-full hljs language-json atom-one-dark w-full rounded"] $
+          toHtmlRaw $
+            encodePretty stepResult.request.resp.json
 
 
 textToHTML :: Text -> Text

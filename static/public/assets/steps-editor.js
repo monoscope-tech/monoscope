@@ -351,8 +351,8 @@ export class StepsEditor extends LitElement {
         }
       </style>
       <div id="collectionStepsContainer" class="h-full">
-        <div id="steps-codeEditor" class="h-full max-h-screen hidden group-has-[.editorMode:checked]/colForm:block"></div>
-        <div class="h-full overflow-y-scroll group-has-[.editorMode:checked]/colForm:hidden">
+        <div id="steps-codeEditor" class="h-full max-h-screen hidden group-has-[.editormode:checked]/colform:block"></div>
+        <div class="h-full overflow-y-scroll group-has-[.editormode:checked]/colform:hidden">
           <div id="collectionStepsContainer" class=" p-4 space-y-4 collectionSteps">${this.collectionSteps.map((stepData, idx) => this.renderCollectionStep(stepData, idx))}</div>
           <div class="p-4 pt-2">
             <a class="btn btn-outline btn-neutral btn-sm items-center cursor-pointer" @click=${() => (this.collectionSteps = [...this.collectionSteps, {}])}>

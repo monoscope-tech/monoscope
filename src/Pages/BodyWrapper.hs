@@ -83,6 +83,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
       script_ [src_ "/assets/js/thirdparty/tippy6_3_7.umd.min.js", defer_ "true"] ("" :: Text)
       script_ [src_ "/assets/js/thirdparty/instantpage5_1_0.js", type_ "module", defer_ "true"] ("" :: Text)
       script_ [src_ "/assets/js/monaco/vs/loader.js", defer_ "true"] ("" :: Text)
+      script_ [type_ "module", src_ "/assets/steps-editor.js"] ("" :: Text)
       script_ [src_ "/assets/js/charts.js"] ("" :: Text)
       script_ [src_ "/assets/js/main.js"] ("" :: Text)
       script_ [src_ "https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"] ("" :: Text)
@@ -130,7 +131,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
 
               if("serviceWorker" in navigator) {
                   window.addEventListener("load", () => {
-                    navigator.serviceWorker.register("/public/sw.js?v=2").then(swReg => {}).catch(err => {
+                    navigator.serviceWorker.register("/public/sw.js?v=3").then(swReg => {}).catch(err => {
                         console.error('Service Worker Error', err);
                     });
                 });
