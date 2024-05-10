@@ -1,15 +1,15 @@
 module.exports = {
-  content: ["./src/**/*.{html,js,hs}", "./static/public/assets/testeditor.js", "./static/public/assets/steps-editor.js"],
+  content: ['./src/**/*.{html,js,hs}', './static/public/assets/testeditor.js', './static/public/assets/steps-editor.js', './static/public/assets/filtercomponent.js'],
   daisyui: {
-    themes: ["light", "dark", "winter", "dim"],
+    themes: ['light', 'dark', 'winter', 'dim'],
   },
   theme: {
     extend: {
       fontFamily: {
-        Poppins: ["Poppins", "sans-serif"],
-        Inconsolata: ["Inconsolata", "monospace"],
+        Poppins: ['Poppins', 'sans-serif'],
+        Inconsolata: ['Inconsolata', 'monospace'],
       },
     },
   },
-  plugins: [require("daisyui"), require("@tailwindcss/typography")],
-};
+  plugins: [require('daisyui'), require('@tailwindcss/typography')],
+}
