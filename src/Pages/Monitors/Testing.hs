@@ -1,14 +1,14 @@
-module Pages.Monitors.Testing
-  ( testingGetH,
-    testingPostH,
-    TestCollectionForm (..),
-  )
+module Pages.Monitors.Testing (
+  testingGetH,
+  testingPostH,
+  TestCollectionForm (..),
+)
 where
 
-import Data.Aeson
-  ( FromJSON,
-    encode,
-  )
+import Data.Aeson (
+  FromJSON,
+  encode,
+ )
 import Data.Aeson qualified as Aeson
 import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
@@ -18,32 +18,32 @@ import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
-import Lucid
-  ( Html,
-    Term (term),
-    ToHtml (toHtml),
-    a_,
-    button_,
-    class_,
-    div_,
-    for_,
-    form_,
-    h1_,
-    h3_,
-    href_,
-    id_,
-    input_,
-    label_,
-    name_,
-    onclick_,
-    p_,
-    placeholder_,
-    script_,
-    small_,
-    span_,
-    textarea_,
-    type_,
-  )
+import Lucid (
+  Html,
+  Term (term),
+  ToHtml (toHtml),
+  a_,
+  button_,
+  class_,
+  div_,
+  for_,
+  form_,
+  h1_,
+  h3_,
+  href_,
+  id_,
+  input_,
+  label_,
+  name_,
+  onclick_,
+  p_,
+  placeholder_,
+  script_,
+  small_,
+  span_,
+  textarea_,
+  type_,
+ )
 import Lucid.Htmx (hxBoost_, hxPost_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
@@ -61,25 +61,29 @@ import System.Types (ATAuthCtx)
 import Utils (faIcon_, textToBool, userIsProjectMember)
 import Web.FormUrlEncoded (FromForm)
 
+
 data TestCollectionForm = TestCollectionForm
-  { collection_id :: Text,
-    title :: Text,
-    description :: Text
+  { collection_id :: Text
+  , title :: Text
+  , description :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
 
+
 data ScheduleForm = ScheduleForm
-  { schedule :: Maybe Text,
-    isScheduled :: Bool
+  { schedule :: Maybe Text
+  , isScheduled :: Bool
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm, FromJSON)
 
+
 data ParamInput = ParamInput
-  { ackd :: Bool,
-    archived :: Bool
+  { ackd :: Bool
+  , archived :: Bool
   }
+
 
 testingPostH :: Projects.ProjectId -> TestCollectionForm -> Maybe Text -> Maybe Text -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
 testingPostH pid collection acknM archM = do
@@ -91,8 +95,8 @@ testingPostH pid collection acknM archM = do
   let archived = textToBool <$> archM
   let paramInput =
         ParamInput
-          { ackd = fromMaybe False ackd,
-            archived = fromMaybe False archived
+          { ackd = fromMaybe False ackd
+          , archived = fromMaybe False archived
           }
   if collection.collection_id == ""
     then do
@@ -100,17 +104,17 @@ testingPostH pid collection acknM archM = do
       colId <- Testing.CollectionId <$> liftIO UUIDV4.nextRandom
       let coll =
             Testing.Collection
-              { id = colId,
-                createdAt = currentTime,
-                projectId = pid,
-                updatedAt = currentTime,
-                lastRun = Nothing,
-                title = collection.title,
-                description = collection.description,
-                config = Aeson.object [],
-                schedule = "1 day",
-                isScheduled = False,
-                collectionSteps = Testing.CollectionSteps V.empty
+              { id = colId
+              , createdAt = currentTime
+              , projectId = pid
+              , updatedAt = currentTime
+              , lastRun = Nothing
+              , title = collection.title
+              , description = collection.description
+              , config = Aeson.object []
+              , schedule = "1 day"
+              , isScheduled = False
+              , collectionSteps = Testing.CollectionSteps V.empty
               }
       _ <- dbtToEff $ Testing.addCollection coll
       cols <- dbtToEff $ Testing.getCollections pid
@@ -122,6 +126,7 @@ testingPostH pid collection acknM archM = do
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Collection updated Successfully"]}|]
 
       pure $ addHeader hxTriggerData $ testingPage paramInput pid cols
+
 
 testingGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
 testingGetH pid acknM archM = do
@@ -141,16 +146,17 @@ testingGetH pid acknM archM = do
         pure (project, colls)
       let bwconf =
             (def :: BWConfig)
-              { sessM = Just sess,
-                currProject = project,
-                pageTitle = "Testing"
+              { sessM = Just sess
+              , currProject = project
+              , pageTitle = "Testing"
               }
       let paramInput =
             ParamInput
-              { ackd = fromMaybe False ackd,
-                archived = fromMaybe False archived
+              { ackd = fromMaybe False ackd
+              , archived = fromMaybe False archived
               }
       pure $ bodyWrapper bwconf $ testingPage paramInput pid colls
+
 
 testingPage :: ParamInput -> Projects.ProjectId -> V.Vector Testing.CollectionListItem -> Html ()
 testingPage paramInput pid colls = do
@@ -160,8 +166,8 @@ testingPage paramInput pid colls = do
       div_ [class_ "flex justify-between border-b py-2 items-center"] do
         h1_ [class_ "text-3xl font-bold"] "Test Collections"
         button_
-          [ class_ "text-white rounded bg-blue-500 px-4 py-2 flex items-center gap-2",
-            [__|on click remove .hidden from #col-modal then set #collection_id's value to ""|]
+          [ class_ "text-white rounded bg-blue-500 px-4 py-2 flex items-center gap-2"
+          , [__|on click remove .hidden from #col-modal then set #collection_id's value to ""|]
           ]
           do
             faIcon_ "fa-plus" "fa-light fa-plus" "h-6 w-6" >> "Collection"
@@ -172,6 +178,7 @@ testingPage paramInput pid colls = do
       a_ [class_ $ "inline-block  py-2 " <> if paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&archived=true"] "Archived"
     div_ [class_ "px-8 py-4"] do
       div_ [class_ "w-full card-round"] $ collectionCardList pid colls
+
 
 collectionCardList :: Projects.ProjectId -> V.Vector Testing.CollectionListItem -> Html ()
 collectionCardList pid colls = form_ [class_ "col-span-5 bg-white divide-y "] $ do
@@ -193,13 +200,14 @@ collectionCardList pid colls = form_ [class_ "col-span-5 bg-white divide-y "] $ 
     div_ [class_ "relative flex w-full bg-white py-2 px-3 border-solid border border-gray-200 h-10"] $ do
       faIcon_ "fa-magnifying-glass" "fa-light fa-magnifying-glass" "h-5 w-5"
       input_
-        [ type_ "text",
-          [__| on input show .endpoint_item in #endpoints_container when its textContent.toLowerCase() contains my value.toLowerCase() |],
-          class_ "dataTable-search w-full h-full p-2 text-gray-500 font-normal focus:outline-none",
-          placeholder_ "Search endpoints..."
+        [ type_ "text"
+        , [__| on input show .endpoint_item in #endpoints_container when its textContent.toLowerCase() contains my value.toLowerCase() |]
+        , class_ "dataTable-search w-full h-full p-2 text-gray-500 font-normal focus:outline-none"
+        , placeholder_ "Search endpoints..."
         ]
   forM_ colls \c -> do
     collectionCard pid c
+
 
 collectionCard :: Projects.ProjectId -> Testing.CollectionListItem -> Html ()
 collectionCard pid col = do
@@ -229,10 +237,10 @@ collectionCard pid col = do
           small_ [class_ "block"] "Failed"
     div_ [class_ "w-36 flex items-center justify-center"] do
       button_
-        [ term "data-id" col.id.toText,
-          term "data-title" col.title,
-          term "data-desc" col.description,
-          [__|on click remove .hidden from #col-modal 
+        [ term "data-id" col.id.toText
+        , term "data-title" col.title
+        , term "data-desc" col.description
+        , [__|on click remove .hidden from #col-modal 
                   then set #collection_id's value to my @data-id
                   then set #title's value to my @data-title 
                   then set #desc's value to my @data-desc
@@ -240,6 +248,7 @@ collectionCard pid col = do
         ]
         do
           faIcon_ "fa-edit" "fa-light fa-edit" "h-6 w-6"
+
 
 -- div_ [class_ "rounded-xl border p-4 flex flex-col gap-5 text-gray-700 h-full shadow hover:shadow-lg"] $ do
 --   a_ [href_ ("/p/" <> pid.toText <> "/testing/" <> col.id.toText)] $ do
@@ -288,18 +297,18 @@ collectionCard pid col = do
 modal :: Projects.ProjectId -> Html ()
 modal pid = do
   div_
-    [ class_ "fixed inset-0 z-50 w-screen hidden overflow-y-auto bg-gray-300 bg-opacity-50",
-      id_ "col-modal",
-      [__|on click add .hidden to me|]
+    [ class_ "fixed inset-0 z-50 w-screen hidden overflow-y-auto bg-gray-300 bg-opacity-50"
+    , id_ "col-modal"
+    , [__|on click add .hidden to me|]
     ]
     $ do
       div_ [class_ "flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0"] $ do
         div_ [class_ "relative transform overflow-hidden rounded-xl border shadow bg-white text-left transition-all my-8 w-full max-w-2xl", onclick_ "noPropagation(event)"] do
           form_
-            [ hxPost_ $ "/p/" <> pid.toText <> "/testing",
-              class_ "w-full",
-              hxTarget_ "#main",
-              hxSwap_ "outerHTML"
+            [ hxPost_ $ "/p/" <> pid.toText <> "/testing"
+            , class_ "w-full"
+            , hxTarget_ "#main"
+            , hxSwap_ "outerHTML"
             ]
             $ do
               div_ [class_ "bg-white pb-4"] $ do
@@ -309,32 +318,32 @@ modal pid = do
                   div_ [class_ "flex flex-col gap-1 w-full"] $ do
                     label_ [Lucid.for_ "title", class_ "text-sm font-semibold leading-none"] "Title"
                     input_
-                      [ type_ "text",
-                        name_ "title",
-                        id_ "title",
-                        class_ "flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-                        placeholder_ "Test Collection Title"
+                      [ type_ "text"
+                      , name_ "title"
+                      , id_ "title"
+                      , class_ "flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      , placeholder_ "Test Collection Title"
                       ]
                   div_ [class_ "flex flex-col gap-1 w-full"] $ do
                     label_ [Lucid.for_ "desc", class_ "text-sm font-semibold leading-none"] "Description"
                     textarea_
-                      [ type_ "text",
-                        name_ "description",
-                        id_ "desc",
-                        class_ "flex h-16 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-                        placeholder_ "Description"
+                      [ type_ "text"
+                      , name_ "description"
+                      , id_ "desc"
+                      , class_ "flex h-16 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      , placeholder_ "Description"
                       ]
                       ""
               div_ [class_ "px-4 py-3 sm:flex sm:flex-row-reverse sm:px-6 border-t mt-4"] $ do
                 button_
-                  [ type_ "submit",
-                    class_ "inline-flex w-full justify-center rounded-md bg-blue-500 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-600 sm:ml-3 sm:w-[100px]"
+                  [ type_ "submit"
+                  , class_ "inline-flex w-full justify-center rounded-md bg-blue-500 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-600 sm:ml-3 sm:w-[100px]"
                   ]
                   "Save"
                 button_
-                  [ type_ "button",
-                    [__|on click add .hidden to #col-modal|],
-                    class_ "mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 sm:mt-0 sm:w-[100px]"
+                  [ type_ "button"
+                  , [__|on click add .hidden to #col-modal|]
+                  , class_ "mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 sm:mt-0 sm:w-[100px]"
                   ]
                   "Cancel"
       script_

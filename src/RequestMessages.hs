@@ -19,13 +19,13 @@ import Data.ByteString.Base64 qualified as B64
 import Data.Digest.XXHash (xxHash)
 import Data.HashMap.Strict qualified as HM
 import Data.List (groupBy)
+import Data.Maybe
 import Data.Scientific qualified as Scientific
 import Data.Text qualified as T
 import Data.Time.Clock as Clock (
   UTCTime,
   secondsToNominalDiffTime,
  )
-import Data.Maybe
 import Data.Time.LocalTime as Time (
   ZonedTime,
   calendarTimeTime,
@@ -54,7 +54,7 @@ import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Numeric (showHex)
-import Relude 
+import Relude
 import Relude.Unsafe as Unsafe (read)
 import Text.Regex.TDFA ((=~))
 import Utils (DBField ())
@@ -99,17 +99,20 @@ data RequestMessage = RequestMessage
     (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestMessage
 
+
 -- Custom ToJSON for Either Text [Text]
-instance  {-# OVERLAPPING #-}  AE.ToJSON (Either Text [Text]) where
+instance {-# OVERLAPPING #-} AE.ToJSON (Either Text [Text]) where
   toJSON (Left txt) = AE.toJSON txt
   toJSON (Right texts) = AE.toJSON texts
 
+
 -- Custom FromJSON for Either Text [Text]
-instance  {-# OVERLAPPING #-}  AE.FromJSON (Either Text [Text]) where
+instance {-# OVERLAPPING #-} AE.FromJSON (Either Text [Text]) where
   parseJSON value = case value of
     AE.String txt -> return $ Left txt
-    AE.Array texts -> Right <$> AE.parseJSON value  -- parses an array of Text
+    AE.Array texts -> Right <$> AE.parseJSON value -- parses an array of Text
     _ -> fail "Expected either a single string or an array of strings"
+
 
 -- | Walk the JSON once, redact any fields which are in the list of json paths to be redacted.
 -- >>> redactJSON ["menu.id."] [aesonQQ| {"menu":{"id":"file", "name":"John"}} |]
@@ -268,7 +271,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
           , rawUrl = rM.rawUrl
           , pathParams = rM.pathParams
           , method = method
-          , referer = fromMaybe ""  $ rM.referer >>= either Just listToMaybe 
+          , referer = fromMaybe "" $ rM.referer >>= either Just listToMaybe
           , protoMajor = rM.protoMajor
           , protoMinor = rM.protoMinor
           , duration = calendarTimeTime $ secondsToNominalDiffTime $ fromIntegral duration
