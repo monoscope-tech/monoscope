@@ -155,7 +155,7 @@ data Project' = Project'
   , usersDisplayImages :: Vector Text
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromRow, NFData)
+  deriving anyclass (FromRow, Default, NFData)
 
 
 data ProjectCache = ProjectCache

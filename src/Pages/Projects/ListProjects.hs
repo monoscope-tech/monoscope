@@ -1,10 +1,13 @@
+{-# OPTIONS_GHC -Wno-ambiguous-fields #-}
 module Pages.Projects.ListProjects (
   listProjectsGetH,
 )
 where
 
 import Data.Default (def)
+import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Effectful.PostgreSQL.Transact.Effect
 import Fmt
 import Lucid
 import Models.Projects.Projects qualified as Projects
@@ -13,25 +16,29 @@ import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude hiding (ask, asks)
 import Servant (Union, WithStatus (..), respond)
 import System.Types
-import Utils (GetOrRedirect, faIcon_, redirect)
-import Effectful.PostgreSQL.Transact.Effect
+import Utils (GetOrRedirect, faIcon_)
 
 
 listProjectsGetH :: ATAuthCtx (Union GetOrRedirect)
 listProjectsGetH = do
-  sess <- Sessions.getSession
+  (sess, project) <- Sessions.sessionAndProject (Projects.ProjectId UUID.nil)
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess.persistentSession
           , pageTitle = "Projects List"
           }
-          
+
   projects <- dbtToEff $ Projects.selectProjectsForUser sess.persistentSession.userId
-  let page = bodyWrapper bwconf $ listProjectsBody projects 
-  -- Redirect to the create projects page if there's no project under the logged in user
-  if null sess.persistentSession.projects.getProjects 
-    then respond $ WithStatus @302 $ redirect "/p/new"
-    else respond $ WithStatus @200 page
+  let projects' =
+        V.snoc
+          projects
+          (def :: Projects.Project')
+            { Projects.title = project.title
+            , Projects.description = project.description
+            , Projects.createdAt = project.createdAt
+            }
+
+  respond $ WithStatus @200 $ bodyWrapper bwconf $ listProjectsBody projects'
 
 
 listProjectsBody :: V.Vector Projects.Project' -> Html ()
@@ -42,23 +49,25 @@ listProjectsBody projects = do
       a_ [class_ "btn btn-primary", href_ "/p/new"] "Create Project"
     section_ [] do
       div_ [class_ "bg-white shadow overflow-hidden sm:rounded-md"] do
-        ul_ [role_ "list", class_ "divide-y divide-gray-200"] do
-          projects & mapM_ \project -> do
-            li_ do
-              a_ [href_ ("/p/" <> project.id.toText), class_ "block hover:bg-gray-50"] do
-                div_ [class_ "px-4 py-4 flex items-center sm:px-6"] do
-                  div_ [class_ "min-w-0 flex-1 sm:flex sm:items-center sm:justify-between"] do
-                    div_ [class_ "truncate"] do
-                      div_ [class_ "text-sm"] do
-                        p_ [class_ "block font-medium text-indigo-600 truncate py-2"] $ toHtml project.title
-                        p_ [class_ "block flex-shrink-0 font-normal text-gray-500"] $ toHtml project.description
-                      div_ [class_ "mt-2 flex"] do
-                        div_ [class_ "flex items-center text-sm text-gray-500"] do
-                          small_ do
-                            span_ "Created on "
-                            time_ [datetime_ $ fmt $ dateDashF project.createdAt] $ toHtml @Text $ fmt $ dateDashF project.createdAt
-                    div_ [class_ "mt-4 flex-shrink-0 sm:mt-0 sm:ml-5"] do
-                      div_ [class_ "flex overflow-hidden -space-x-1"] do
-                        project.usersDisplayImages & V.toList & mapM_ \imgSrc -> img_ [class_ "inline-block h-6 w-6 rounded-full ring-2 ring-white", src_ imgSrc, alt_ "Dries Vincent"]
-                  div_ [class_ "ml-5 flex-shrink-0 text-gray-400"] do
-                    faIcon_ "fa-chevron-right" "fa-light fa-chevron-right" "h-3 w-3"
+        ul_ [role_ "list", class_ "divide-y divide-gray-200"] $ mapM_ projectItem_ projects
+
+
+projectItem_ :: Projects.Project' -> Html ()
+projectItem_ project = li_ do
+  a_ [href_ ("/p/" <> project.id.toText), class_ "block hover:bg-gray-50"] do
+    div_ [class_ "px-4 py-4 flex items-center sm:px-6"] do
+      div_ [class_ "min-w-0 flex-1 sm:flex sm:items-center sm:justify-between"] do
+        div_ [class_ "truncate"] do
+          div_ [class_ "text-sm"] do
+            p_ [class_ "block font-medium text-indigo-600 truncate py-2"] $ toHtml project.title
+            p_ [class_ "block flex-shrink-0 font-normal text-gray-500"] $ toHtml project.description
+          div_ [class_ "mt-2 flex"] do
+            div_ [class_ "flex items-center text-sm text-gray-500"] do
+              small_ do
+                span_ "Created on "
+                time_ [datetime_ $ fmt $ dateDashF project.createdAt] $ toHtml @Text $ fmt $ dateDashF project.createdAt
+        div_ [class_ "mt-4 flex-shrink-0 sm:mt-0 sm:ml-5"] do
+          div_ [class_ "flex overflow-hidden -space-x-1"] do
+            project.usersDisplayImages & V.toList & mapM_ \imgSrc -> img_ [class_ "inline-block h-6 w-6 rounded-full ring-2 ring-white", src_ imgSrc, alt_ "Dries Vincent"]
+      div_ [class_ "ml-5 flex-shrink-0 text-gray-400"] do
+        faIcon_ "fa-chevron-right" "fa-light fa-chevron-right" "h-3 w-3"
