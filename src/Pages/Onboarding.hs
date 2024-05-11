@@ -4,11 +4,11 @@ module Pages.Onboarding (onboardingGetH, integrateApiToolkit, tabs, contentHeade
 
 import Data.Default (def)
 import Data.Vector qualified as V
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Lucid
 import Lucid.Htmx (hxGet_, hxSwap_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Apis.RequestDumps qualified as RequestDumps
-import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projectjs
 import Models.Projects.Projects qualified as Projects
@@ -33,7 +33,7 @@ onboardingGetH pid polling redirected current_tab = do
   let apikey = if V.null apiKeys then "<APIKEY>" else (V.head apiKeys).keyPrefix
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess.persistentSession 
+          { sessM = Just sess.persistentSession
           , currProject = Just project
           , pageTitle = "Get Started"
           , hasIntegrated = Just hasRequest

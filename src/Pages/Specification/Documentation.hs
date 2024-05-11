@@ -85,12 +85,12 @@ import Relude (
   join,
   map,
   mapM_,
-  void,
   pass,
   readMaybe,
   show,
   snd,
   sort,
+  void,
   ($),
   (&),
   (<$>),
@@ -300,7 +300,7 @@ documentationPutH :: Projects.ProjectId -> SaveSwaggerForm -> ATAuthCtx (Headers
 documentationPutH pid SaveSwaggerForm{updated_swagger, swagger_id, endpoints, diffsInfo} = do
   (sess, project) <- Sessions.sessionAndProject pid
   currentTime <- Time.currentTime
-  let value =fromMaybe (error "Failed to parse JSON: ") $ decodeStrict (encodeUtf8 updated_swagger) 
+  let value = fromMaybe (error "Failed to parse JSON: ") $ decodeStrict (encodeUtf8 updated_swagger)
   let newEndpoints = V.toList $ V.map (getEndpointFromOpEndpoint pid) endpoints
       shapes = V.toList (V.map (getShapeFromOpShape pid currentTime) (V.filter (.opShapeChanged) diffsInfo))
       nestedOps = V.map (.opOperations) diffsInfo

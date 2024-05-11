@@ -1,6 +1,6 @@
 module Pages.IntegrationGuides (getH) where
 
-import Data.Default ( Default(def) )
+import Data.Default (Default (def))
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Lucid (
@@ -18,7 +18,7 @@ import Lucid (
   span_,
   target_,
  )
-import Lucid.Hyperscript ( __ )
+import Lucid.Hyperscript (__)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
@@ -27,26 +27,26 @@ import Pages.BodyWrapper (
   BWConfig (currProject, pageTitle, sessM),
   bodyWrapper,
  )
-import Pages.IntegrationDemos.AdonisJS ( adonisGuide )
-import Pages.IntegrationDemos.Django ( djangoGuide )
-import Pages.IntegrationDemos.DotNet ( dotNetGuide )
-import Pages.IntegrationDemos.Echo ( echoGuide )
-import Pages.IntegrationDemos.ExpressJs ( expressGuide )
-import Pages.IntegrationDemos.FastApi ( fastApiGuide )
-import Pages.IntegrationDemos.FastifyJs ( fastifyGuide )
-import Pages.IntegrationDemos.Flask ( flaskGuide )
-import Pages.IntegrationDemos.Gin ( ginGuide )
-import Pages.IntegrationDemos.GoNative ( goNativeGuide )
-import Pages.IntegrationDemos.GorillaMux ( gorillaGuide )
-import Pages.IntegrationDemos.Laravel ( laravelGuide )
-import Pages.IntegrationDemos.NestJs ( nestGuide )
-import Pages.IntegrationDemos.Phoenix ( phoenixGuide )
-import Pages.IntegrationDemos.Pyramid ( pyramidGuide )
-import Pages.IntegrationDemos.Slim ( slimGuide )
-import Pages.IntegrationDemos.Symfony ( symfonyGuide )
+import Pages.IntegrationDemos.AdonisJS (adonisGuide)
+import Pages.IntegrationDemos.Django (djangoGuide)
+import Pages.IntegrationDemos.DotNet (dotNetGuide)
+import Pages.IntegrationDemos.Echo (echoGuide)
+import Pages.IntegrationDemos.ExpressJs (expressGuide)
+import Pages.IntegrationDemos.FastApi (fastApiGuide)
+import Pages.IntegrationDemos.FastifyJs (fastifyGuide)
+import Pages.IntegrationDemos.Flask (flaskGuide)
+import Pages.IntegrationDemos.Gin (ginGuide)
+import Pages.IntegrationDemos.GoNative (goNativeGuide)
+import Pages.IntegrationDemos.GorillaMux (gorillaGuide)
+import Pages.IntegrationDemos.Laravel (laravelGuide)
+import Pages.IntegrationDemos.NestJs (nestGuide)
+import Pages.IntegrationDemos.Phoenix (phoenixGuide)
+import Pages.IntegrationDemos.Pyramid (pyramidGuide)
+import Pages.IntegrationDemos.Slim (slimGuide)
+import Pages.IntegrationDemos.Symfony (symfonyGuide)
 import Relude hiding (ask)
 import System.Types (ATAuthCtx)
-import Utils ( faIcon_ )
+import Utils (faIcon_)
 
 
 getH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())

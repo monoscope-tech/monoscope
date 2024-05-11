@@ -203,7 +203,7 @@ endpointDetailsWithHashH :: Projects.ProjectId -> Text -> ATAuthCtx (Headers '[H
 endpointDetailsWithHashH pid endpoint_hash = do
   _ <- Sessions.sessionAndProject pid
   endpoint <- dbtToEff $ Endpoints.endpointByHash pid endpoint_hash
-  case endpoint of 
+  case endpoint of
     Just e -> do
       let redirect_url = "/p/" <> pid.toText <> "/endpoints/" <> e.id.toText
       pure $ addHeader redirect_url $ span_ ""

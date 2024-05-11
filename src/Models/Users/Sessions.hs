@@ -25,15 +25,11 @@ import Data.Default
 import Data.Map.Strict qualified as Map
 import Data.Text.Display
 import Data.Time
-import Data.Vector qualified as V
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
+import Data.Vector qualified as V
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Entity
-import Effectful
-import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
-import Effectful.Reader.Static qualified as EffReader
-import Effectful.Error.Static qualified as EffError 
 import Database.PostgreSQL.Entity.DBT (QueryNature (..))
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Entity.Types
@@ -42,14 +38,18 @@ import Database.PostgreSQL.Simple.FromField
 import Database.PostgreSQL.Simple.Newtypes
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField
-import Effectful.Error.Static
 import Database.PostgreSQL.Transact hiding (DB, execute, queryOne)
+import Effectful
+import Effectful.Error.Static
+import Effectful.Error.Static qualified as EffError
+import Effectful.PostgreSQL.Transact.Effect (DB, dbtToEff)
 import Effectful.Reader.Static (Reader, asks)
+import Effectful.Reader.Static qualified as EffReader
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Users 
+import Models.Users.Users
 import Models.Users.Users qualified as Users
 import Relude
-import Servant (Header, Headers, addHeader, getResponse, errHeaders, err302,  ServerError)
+import Servant (Header, Headers, ServerError, addHeader, err302, errHeaders, getResponse)
 import Web.Cookie (
   SetCookie (
     setCookieHttpOnly,
@@ -200,9 +200,8 @@ data Session = Session
   deriving stock (Generic, Show)
 
 
-
 sessionAndProject
-  :: (DB :> es, (EffReader.Reader (Headers '[Header "Set-Cookie" SetCookie] Session)) :> es, EffError.Error ServerError :> es )
+  :: (DB :> es, (EffReader.Reader (Headers '[Header "Set-Cookie" SetCookie] Session)) :> es, EffError.Error ServerError :> es)
   => Projects.ProjectId
   -> Eff es (Session, Projects.Project)
 sessionAndProject pid = do
@@ -215,5 +214,5 @@ sessionAndProject pid = do
         then do
           (dbtToEff $ Projects.projectById pid) >>= \case
             Just p -> pure (sess, p)
-            Nothing -> throwError $ err302{errHeaders = [("Location", "/p/?missingProjectPermission")]} 
-        else throwError $ err302{errHeaders = [("Location", "/p/?missingProjectPermission")]} 
+            Nothing -> throwError $ err302{errHeaders = [("Location", "/p/?missingProjectPermission")]}
+        else throwError $ err302{errHeaders = [("Location", "/p/?missingProjectPermission")]}

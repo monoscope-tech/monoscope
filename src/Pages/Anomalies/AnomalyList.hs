@@ -169,8 +169,8 @@ anomalyListGetH pid layoutM ackdM archivedM sortM page loadM endpointM hxRequest
         Just p -> if limit == Just 51 then 0 else Unsafe.read (toString p)
         Nothing -> 0
   anomalies <- dbtToEff $ case layoutM of
-      Just _ -> Anomalies.selectAnomalies pid endpointM ackd archived sortM limit (pageInt * fetchLimit)
-      Nothing -> Anomalies.selectAnomalies pid Nothing ackd archived sortM limit (pageInt * fetchLimit)
+    Just _ -> Anomalies.selectAnomalies pid endpointM ackd archived sortM limit (pageInt * fetchLimit)
+    Nothing -> Anomalies.selectAnomalies pid Nothing ackd archived sortM limit (pageInt * fetchLimit)
   currTime <- liftIO getCurrentTime
   let bwconf =
         (def :: BWConfig)
@@ -477,7 +477,6 @@ anomalyDetailsGetH pid targetHash hxBoostedM = do
             Nothing -> pure $ bodyWrapper bwconf $ div_ [class_ "w-full px-32 overflow-y-scroll h-full"] do
               h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
               anomalyDetailsPage an Nothing Nothing (Just anFormats) currTime False
-    
 
 
 escapedQueryPartial :: Text -> Text

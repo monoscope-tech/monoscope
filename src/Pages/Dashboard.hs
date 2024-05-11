@@ -35,7 +35,7 @@ import Pages.Charts.Charts qualified as C
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (statBox)
 import Pages.Endpoints.EndpointList (renderEndpoint)
-import Relude  hiding (max, min)
+import Relude hiding (max, min)
 import System.Clock (Clock (Monotonic), getTime)
 import System.Types (ATAuthCtx)
 import Text.Interpolation.Nyan (int, rmode')

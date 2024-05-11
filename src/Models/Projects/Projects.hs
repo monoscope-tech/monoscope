@@ -245,6 +245,7 @@ selectProjectsForUser = query Select q
         ORDER BY updated_at DESC
       |]
 
+
 usersByProjectId :: ProjectId -> DBT IO (Vector Users.User)
 usersByProjectId pid = query Select q (Only pid)
   where

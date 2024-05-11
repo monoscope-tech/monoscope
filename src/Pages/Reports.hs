@@ -33,7 +33,7 @@ import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTim
 import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
-import Lucid 
+import Lucid
 import Lucid.Htmx (hxGet_, hxPost_, hxSwap_, hxTrigger_)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Fields.Types (textFieldTypeToText)
@@ -43,7 +43,7 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
-import Relude 
+import Relude
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
 import System.Types (ATAuthCtx)
@@ -109,11 +109,12 @@ singleReportGetH :: Projects.ProjectId -> Reports.ReportId -> ATAuthCtx (Html ()
 singleReportGetH pid rid = do
   (sess, project) <- Sessions.sessionAndProject pid
   report <- dbtToEff $ Reports.getReportById rid
-  let bwconf = (def :: BWConfig)
-        { sessM = Just sess.persistentSession
-        , currProject = Just project
-        , pageTitle = "Reports"
-        }
+  let bwconf =
+        (def :: BWConfig)
+          { sessM = Just sess.persistentSession
+          , currProject = Just project
+          , pageTitle = "Reports"
+          }
   pure $ bodyWrapper bwconf $ singleReportPage pid report
 
 
@@ -134,7 +135,7 @@ reportsGetH pid page hxRequest hxBoosted = do
               , currProject = Just project
               , pageTitle = "Reports"
               }
-      pure $ bodyWrapper bwconf $ reportsPage pid reports nextUrl project.dailyNotif project.weeklyNotif 
+      pure $ bodyWrapper bwconf $ reportsPage pid reports nextUrl project.dailyNotif project.weeklyNotif
 
 
 singleReportPage :: Projects.ProjectId -> Maybe Reports.Report -> Html ()

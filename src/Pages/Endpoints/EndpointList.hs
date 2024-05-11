@@ -8,12 +8,12 @@ import Data.Time.Clock (getCurrentTime)
 import Data.Tuple.Extra (fst3)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
-import Effectful.PostgreSQL.Transact.Effect ( dbtToEff )
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Fmt (commaizeF, fmt)
 import Lucid
-import Lucid.Htmx ( hxGet_, hxSwap_, hxTrigger_, hxBoost_, hxPost_, hxIndicator_ )
-import Lucid.Hyperscript.QuasiQuoter ( __ )
+import Lucid.Htmx (hxBoost_, hxGet_, hxIndicator_, hxPost_, hxSwap_, hxTrigger_)
+import Lucid.Hyperscript.QuasiQuoter (__)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
@@ -23,8 +23,8 @@ import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import PyF qualified
 import Relude hiding (ask, asks)
-import System.Config ( AuthContext )
-import System.Types ( ATAuthCtx )
+import System.Config (AuthContext)
+import System.Types (ATAuthCtx)
 import Utils (deleteParam, faIcon_, faSprite_, mIcon_, textToBool)
 
 

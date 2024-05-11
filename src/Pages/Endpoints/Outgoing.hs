@@ -4,19 +4,19 @@ import Data.Default (def)
 import Data.Text qualified as T
 import Data.Tuple.Extra (fst3)
 import Data.Vector qualified as V
-import Effectful.PostgreSQL.Transact.Effect ( dbtToEff )
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Lucid
-import Lucid.Htmx ( hxSwap_, hxGet_, hxBoost_, hxTrigger_ )
-import Lucid.Hyperscript ( __ )
+import Lucid.Htmx (hxBoost_, hxGet_, hxSwap_, hxTrigger_)
+import Lucid.Hyperscript (__)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
-import Pages.BodyWrapper ( BWConfig(pageTitle, sessM, currProject), bodyWrapper )
+import Pages.BodyWrapper (BWConfig (currProject, pageTitle, sessM), bodyWrapper)
 import PyF qualified
 import Relude hiding (ask, asks)
-import System.Types ( ATAuthCtx )
-import Utils ( faIcon_, mIcon_ )
+import System.Types (ATAuthCtx)
+import Utils (faIcon_, mIcon_)
 
 
 outgoingGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (Html ())
