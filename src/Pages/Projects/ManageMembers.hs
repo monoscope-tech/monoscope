@@ -29,9 +29,7 @@ import Models.Users.Users qualified as Users
 import Network.Wreq
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper
-import Pages.NonMember
 import Relude hiding (ask, asks)
-import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx
 import System.Config
@@ -52,7 +50,7 @@ manageMembersPostH :: Projects.ProjectId -> ManageMembersForm -> ATAuthCtx (Head
 manageMembersPostH pid form = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
-  let currUserId = sess.userId
+  let currUserId = sess.persistentSession.userId
   projMembers <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
 
   -- TODO:

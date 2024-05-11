@@ -14,6 +14,7 @@ import Relude hiding (ask, asks)
 import Servant (Union, WithStatus (..), respond)
 import System.Types
 import Utils (GetOrRedirect, faIcon_, redirect)
+import Effectful.PostgreSQL.Transact.Effect
 
 
 listProjectsGetH :: ATAuthCtx (Union GetOrRedirect)
@@ -24,14 +25,16 @@ listProjectsGetH = do
           { sessM = Just sess.persistentSession
           , pageTitle = "Projects List"
           }
-  let page = bodyWrapper bwconf $ listProjectsBody sess.persistentSession.projects.getProjects
+          
+  projects <- dbtToEff $ Projects.selectProjectsForUser sess.persistentSession.userId
+  let page = bodyWrapper bwconf $ listProjectsBody projects 
   -- Redirect to the create projects page if there's no project under the logged in user
   if null sess.persistentSession.projects.getProjects 
     then respond $ WithStatus @302 $ redirect "/p/new"
     else respond $ WithStatus @200 page
 
 
-listProjectsBody :: V.Vector Projects.Project -> Html ()
+listProjectsBody :: V.Vector Projects.Project' -> Html ()
 listProjectsBody projects = do
   section_ [id_ "main-content", class_ "container mx-auto p-6 pb-36 overflow-y-scroll  h-full"] do
     div_ [class_ "flex justify-between mb-6"] do

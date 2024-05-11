@@ -246,15 +246,14 @@ processProjectPostForm :: Valor.Valid CreateProjectForm -> ATAuthCtx (Headers '[
 processProjectPostForm cpRaw = do
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
+  sess <- Sessions.getSession
 
   let cp = Valor.unValid cpRaw
   pid <- liftIO $ maybe (Projects.ProjectId <$> UUIDV4.nextRandom) pure (Projects.projectIdFromText cp.projectId)
   if cp.isUpdate
     then do
       let hxTriggerDataUpdate = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Updated Project Successfully"]}|]
-      let bdy = createProjectBody sess envCfg cp.isUpdate cp (def @CreateProjectFormError) Nothing Nothing
+      let bdy = createProjectBody sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError) Nothing Nothing
       project <- dbtToEff $ Projects.projectById pid
       case project of
         Just p -> do
@@ -274,7 +273,7 @@ processProjectPostForm cpRaw = do
               if isNothing subId || isNothing firstSubItemId
                 then do
                   let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"errorToast": ["Couldn't get subscription Id please try again"]}|]
-                  let bd = createProjectBody sess envCfg cp.isUpdate cp (def @CreateProjectFormError) Nothing Nothing
+                  let bd = createProjectBody sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError) Nothing Nothing
                   pure $ addHeader hxTriggerData $ addHeader ("/p/" <> pid.toText <> "/about_project") bd
                 else do
                   _ <- dbtToEff $ Projects.updateProject (createProjectFormToModel pid subId firstSubItemId cp)
@@ -301,7 +300,7 @@ processProjectPostForm cpRaw = do
       if (cp.paymentPlan /= "Free" && isNothing firstSubItemId)
         then do
           let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"errorToast": ["Couldn't get subscription Id please try again"]}|]
-          let bdy = createProjectBody sess envCfg cp.isUpdate cp (def @CreateProjectFormError) Nothing Nothing
+          let bdy = createProjectBody sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError) Nothing Nothing
           pure $ addHeader hxTriggerData $ addHeader ("/p/" <> pid.toText <> "/about_project") bdy
         else do
           _ <- dbtToEff do
@@ -312,26 +311,26 @@ processProjectPostForm cpRaw = do
             let keyPrefix = encryptedKeyB64
             pApiKey <- liftIO $ ProjectApiKeys.newProjectApiKeys pid projectKeyUUID "Default API Key" keyPrefix
             ProjectApiKeys.insertProjectApiKey pApiKey
-            liftIO $ ConvertKit.addUserOrganization envCfg.convertkitApiKey (CI.original sess.user.getUser.email) pid.toText cp.title cp.paymentPlan
+            liftIO $ ConvertKit.addUserOrganization envCfg.convertkitApiKey (CI.original sess.user.email) pid.toText cp.title cp.paymentPlan
             newProjectMembers <- forM usersAndPermissions \(email, permission) -> do
               userId' <- runMaybeT $ MaybeT (Users.userIdByEmail email) <|> MaybeT (Users.createEmptyUser email)
               let userId = Unsafe.fromJust userId'
               liftIO $ ConvertKit.addUserOrganization envCfg.convertkitApiKey email pid.toText cp.title cp.paymentPlan
-              when (userId' /= Just sess.userId) do
+              when (userId' /= Just sess.user.id) do
                 -- invite the users to the project (Usually as an email)
                 _ <- liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId pid email cp.title
                 pass
               pure (email, permission, userId)
             let projectMembers =
                   newProjectMembers
-                    & filter (\(_, _, id') -> id' /= sess.userId)
+                    & filter (\(_, _, id') -> id' /= sess.user.id)
                     & map (\(email, permission, id') -> ProjectMembers.CreateProjectMembers pid id' permission)
-                    & cons (ProjectMembers.CreateProjectMembers pid sess.userId Projects.PAdmin)
+                    & cons (ProjectMembers.CreateProjectMembers pid sess.user.id Projects.PAdmin)
             ProjectMembers.insertProjectMembers projectMembers
           _ <- liftIO $ withResource appCtx.pool \conn ->
-            createJob conn "background_jobs" $ BackgroundJobs.CreatedProjectSuccessfully sess.userId pid (original sess.user.getUser.email) cp.title
+            createJob conn "background_jobs" $ BackgroundJobs.CreatedProjectSuccessfully sess.user.id pid (original sess.user.email) cp.title
           let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Created Project Successfully"]}|]
-          let bdy = createProjectBody sess envCfg cp.isUpdate cp (def @CreateProjectFormError) Nothing Nothing
+          let bdy = createProjectBody sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError) Nothing Nothing
           pure $ addHeader hxTriggerData $ addHeader ("/p/" <> pid.toText <> "/about_project") bdy
 
 

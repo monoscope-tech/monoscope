@@ -18,7 +18,6 @@ import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Effectful.PostgreSQL.Transact.Effect
-import Effectful.Reader.Static (ask)
 import Fmt
 import Lucid
 import Lucid.Htmx
@@ -40,12 +39,10 @@ import Pages.Charts.Charts qualified as C
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components
 import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
-import Pages.NonMember
 import Relude hiding (ask, asks, max, min)
 import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx
-import System.Config
 import System.Types
 import Text.Interpolation.Nyan (int, rmode')
 import Utils
@@ -80,23 +77,14 @@ subPageMenu =
 
 fieldDetailsPartialH :: Projects.ProjectId -> Fields.FieldId -> ATAuthCtx (Html ())
 fieldDetailsPartialH pid fid = do
-  -- TODO: temporary, to work with current logic
-  appCtx <- ask @AuthContext
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-
-  isMember <- dbtToEff $ userIsProjectMember sess pid
-  if not isMember
-    then do
-      pure $ userNotMemeberPage sess
-    else do
-      (fieldsM, formats) <- dbtToEff do
-        field <- Fields.fieldById fid
-        formats <- Formats.formatsByFieldHash (maybe "" (.hash) field)
-        pure (field, formats)
-      case fieldsM of
-        Nothing -> pure ""
-        Just field -> pure $ fieldDetailsView field formats
+  _ <- Sessions.sessionAndProject pid
+  (fieldsM, formats) <- dbtToEff do
+    field <- Fields.fieldById fid
+    formats <- Formats.formatsByFieldHash (maybe "" (.hash) field)
+    pure (field, formats)
+  case fieldsM of
+    Nothing -> pure ""
+    Just field -> pure $ fieldDetailsView field formats
 
 
 fieldDetailsView :: Fields.Field -> Vector Formats.Format -> Html ()
@@ -213,90 +201,70 @@ aesonValueToText = toStrict . encodeToLazyText
 -- /p/" <> pid.toText <> "/log_explorer/item/" <> endpoint_hash
 endpointDetailsWithHashH :: Projects.ProjectId -> Text -> ATAuthCtx (Headers '[HXRedirect] (Html ()))
 endpointDetailsWithHashH pid endpoint_hash = do
-  -- TODO: temporary, to work with current logic
-  appCtx <- ask @AuthContext
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-
-  isMember <- dbtToEff $ userIsProjectMember sess pid
-  if not isMember
-    then do
-      pure $ addHeader "" $ userNotMemeberPage sess
-    else do
-      endpoint <- dbtToEff $ Endpoints.endpointByHash pid endpoint_hash
-      case endpoint of
-        Just e -> do
-          let redirect_url = "/p/" <> pid.toText <> "/endpoints/" <> e.id.toText
-          pure $ addHeader redirect_url $ span_ ""
-        Nothing ->
-          pure $ addHeader "" $ span_ ""
+  _ <- Sessions.sessionAndProject pid
+  endpoint <- dbtToEff $ Endpoints.endpointByHash pid endpoint_hash
+  case endpoint of 
+    Just e -> do
+      let redirect_url = "/p/" <> pid.toText <> "/endpoints/" <> e.id.toText
+      pure $ addHeader redirect_url $ span_ ""
+    Nothing -> pure $ addHeader "" ""
 
 
 -- | endpointDetailsH is the main handler for the endpoint details page.
 -- It reuses the fieldDetailsView as well, which is used for the side navigation on the page and also exposed un the fieldDetailsPartialH endpoint
 endpointDetailsH :: Projects.ProjectId -> Endpoints.EndpointId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
 endpointDetailsH pid eid fromDStr toDStr sinceStr' subPageM shapeHashM = do
-  -- TODO: temporary, to work with current logic
-  appCtx <- ask @AuthContext
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
+  (sess, project) <- Sessions.sessionAndProject pid
+  now <- liftIO getCurrentTime
+  let sinceStr = if (isNothing fromDStr && isNothing toDStr && isNothing sinceStr') || (fromDStr == Just "") then Just "7D" else sinceStr'
+  -- TODO: Replace with a duration parser.
+  let (fromD, toD) = case sinceStr of
+        Just "1H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just $ utcToZonedTime utc now)
+        Just "24H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just $ utcToZonedTime utc now)
+        Just "7D" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 7) now, Just $ utcToZonedTime utc now)
+        Just "14D" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 14) now, Just $ utcToZonedTime utc now)
+        Nothing -> do
+          let f = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromDStr) :: Maybe UTCTime)
+          let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
+          (f, t)
+        _ -> do
+          let f = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromDStr) :: Maybe UTCTime)
+          let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
+          (f, t)
 
-  isMember <- dbtToEff $ userIsProjectMember sess pid
-  if not isMember
-    then do
-      pure $ userNotMemeberPage sess
-    else do
-      now <- liftIO getCurrentTime
-      let sinceStr = if (isNothing fromDStr && isNothing toDStr && isNothing sinceStr') || (fromDStr == Just "") then Just "7D" else sinceStr'
-      -- TODO: Replace with a duration parser.
-      let (fromD, toD) = case sinceStr of
-            Just "1H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just $ utcToZonedTime utc now)
-            Just "24H" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just $ utcToZonedTime utc now)
-            Just "7D" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 7) now, Just $ utcToZonedTime utc now)
-            Just "14D" -> (Just $ utcToZonedTime utc $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 14) now, Just $ utcToZonedTime utc now)
-            Nothing -> do
-              let f = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromDStr) :: Maybe UTCTime)
-              let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
-              (f, t)
-            _ -> do
-              let f = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromDStr) :: Maybe UTCTime)
-              let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
-              (f, t)
+  (endpoint, enpStats, shapesWithFieldsMap, fieldsMap, reqLatenciesRolledByStepsLabeled) <- dbtToEff do
+    -- Should swap names betw enp and endpoint endpoint could be endpointStats
+    endpoint <- Unsafe.fromJust <$> Endpoints.endpointById eid
+    enpStats <- fromMaybe (def :: EndpointRequestStats) <$> Endpoints.endpointRequestStatsByEndpoint eid
+    shapes <- Shapes.shapesByEndpointHash pid endpoint.hash
+    fields <- Fields.selectFields pid endpoint.hash
+    let fieldsMap = Fields.groupFieldsByCategory fields
+    let shapesWithFieldsMap = Vector.map (`getShapeFields` fields) shapes
+    let maxV = round enpStats.max :: Int
+    let steps = (maxV `quot` 100) :: Int
+    let steps' = if steps == 0 then 100 else steps
+    reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledBySteps maxV steps' pid endpoint.urlPath endpoint.method
+    pure (endpoint, enpStats, Vector.toList shapesWithFieldsMap, fieldsMap, Vector.toList reqLatenciesRolledBySteps)
+  let subPage = fromMaybe "overview" subPageM
+  shapesList <- dbtToEff do
+    if subPage == "shapes" then Shapes.shapesByEndpointHash pid endpoint.hash else pure []
 
-      (endpoint, enpStats, project, shapesWithFieldsMap, fieldsMap, reqLatenciesRolledByStepsLabeled) <- dbtToEff do
-        -- Should swap names betw enp and endpoint endpoint could be endpointStats
-        endpoint <- Unsafe.fromJust <$> Endpoints.endpointById eid
-        enpStats <- fromMaybe (def :: EndpointRequestStats) <$> Endpoints.endpointRequestStatsByEndpoint eid
-        project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-        shapes <- Shapes.shapesByEndpointHash pid endpoint.hash
-        fields <- Fields.selectFields pid endpoint.hash
-        let fieldsMap = Fields.groupFieldsByCategory fields
-        let shapesWithFieldsMap = Vector.map (`getShapeFields` fields) shapes
-        let maxV = round enpStats.max :: Int
-        let steps = (maxV `quot` 100) :: Int
-        let steps' = if steps == 0 then 100 else steps
-        reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledBySteps maxV steps' pid endpoint.urlPath endpoint.method
-        pure (endpoint, enpStats, project, Vector.toList shapesWithFieldsMap, fieldsMap, Vector.toList reqLatenciesRolledBySteps)
-      let subPage = fromMaybe "overview" subPageM
-      shapesList <- dbtToEff do
-        if subPage == "shapes" then Shapes.shapesByEndpointHash pid endpoint.hash else pure []
-
-      let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
-      let bwconf =
-            (def :: BWConfig)
-              { sessM = Just sess
-              , currProject = project
-              , pageTitle = "Endpoint Details"
-              , menuItem = Just "Endpoints"
-              }
-      currTime <- liftIO getCurrentTime
-      let currentURL = "/p/" <> pid.toText <> "/endpoints/" <> Endpoints.endpointIdText eid <> "?from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
-      let subPage = fromMaybe "overview" subPageM
-      let currentPickerTxt = case sinceStr of
-            Just a -> a
-            Nothing -> maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD
-      let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt, subPage = subPage}
-      pure $ bodyWrapper bwconf $ endpointDetails pid paramInput currTime endpoint enpStats shapesWithFieldsMap fieldsMap shapesList shapeHashM reqLatenciesRolledByStepsJ (fromD, toD)
+  let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
+  let bwconf =
+        (def :: BWConfig)
+          { sessM = Just sess.persistentSession
+          , currProject = Just project
+          , pageTitle = "Endpoint Details"
+          , menuItem = Just "Endpoints"
+          }
+  currTime <- liftIO getCurrentTime
+  let currentURL = "/p/" <> pid.toText <> "/endpoints/" <> Endpoints.endpointIdText eid <> "?from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
+  let subPage = fromMaybe "overview" subPageM
+  let currentPickerTxt = case sinceStr of
+        Just a -> a
+        Nothing -> maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD
+  let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt, subPage = subPage}
+  pure $ bodyWrapper bwconf $ endpointDetails pid paramInput currTime endpoint enpStats shapesWithFieldsMap fieldsMap shapesList shapeHashM reqLatenciesRolledByStepsJ (fromD, toD)
 
 
 endpointDetails :: Projects.ProjectId -> ParamInput -> UTCTime -> Endpoints.Endpoint -> EndpointRequestStats -> [Shapes.ShapeWithFields] -> Map FieldCategoryEnum [Fields.Field] -> Vector Shapes.Shape -> Maybe Text -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()

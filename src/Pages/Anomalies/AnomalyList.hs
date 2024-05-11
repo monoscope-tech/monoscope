@@ -60,7 +60,7 @@ import Models.Apis.Shapes (getShapeFields)
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Models.Users.Users ()
+import Models.Users.Users
 import NeatInterpolation (text)
 import Network.URI (escapeURIString, isUnescapedInURI)
 import OddJobs.Job (createJob)
@@ -102,7 +102,7 @@ acknowlegeAnomalyGetH pid aid = do
   let text_id = Vector.fromList [UUID.toText aid.unAnomalyId]
   v <- dbtToEff $ Anomalies.acknowledgeAnomalies sess.user.id text_id
   _ <- dbtToEff $ Anomalies.acknowlegeCascade sess.user.id v
-  _ <- liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.GenSwagger pid sess.userId
+  _ <- liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.GenSwagger pid sess.user.id
   pure $ anomalyAcknowlegeButton pid aid True
 
 

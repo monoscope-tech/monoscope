@@ -4,47 +4,32 @@ import Data.Default (def)
 import Data.Text qualified as T
 import Data.Tuple.Extra (fst3)
 import Data.Vector qualified as V
-import Effectful.PostgreSQL.Transact.Effect
-import Effectful.Reader.Static (ask)
+import Effectful.PostgreSQL.Transact.Effect ( dbtToEff )
 import Lucid
-import Lucid.Htmx
-import Lucid.Hyperscript
+import Lucid.Htmx ( hxSwap_, hxGet_, hxBoost_, hxTrigger_ )
+import Lucid.Hyperscript ( __ )
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
-import Pages.BodyWrapper
-import Pages.NonMember
+import Pages.BodyWrapper ( BWConfig(pageTitle, sessM, currProject), bodyWrapper )
 import PyF qualified
 import Relude hiding (ask, asks)
-import Relude.Unsafe qualified as Unsafe
-import System.Config
-import System.Types
-import Utils
+import System.Types ( ATAuthCtx )
+import Utils ( faIcon_, mIcon_ )
 
 
 outgoingGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (Html ())
 outgoingGetH pid sortM = do
-  appCtx <- ask @AuthContext
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-
-  isMember <- dbtToEff $ userIsProjectMember sess pid
-  if not isMember
-    then pure $ userNotMemeberPage sess
-    else do
-      (project, hostsEvents) <- dbtToEff do
-        project <- Projects.projectById pid
-        hostsAndEvents <- Endpoints.dependenciesAndEventsCount pid (fromMaybe "events" sortM)
-        pure (project, hostsAndEvents)
-      let bwconf =
-            def
-              { sessM = Just sess
-              , currProject = project
-              , pageTitle = "Dependencies"
-              }
-
-      pure $ bodyWrapper bwconf $ outgoingPage pid (fromMaybe "events" sortM) hostsEvents
+  (sess, project) <- Sessions.sessionAndProject pid
+  hostsAndEvents <- dbtToEff $ Endpoints.dependenciesAndEventsCount pid (fromMaybe "events" sortM)
+  let bwconf =
+        def
+          { sessM = Just sess.persistentSession
+          , currProject = Just project
+          , pageTitle = "Dependencies"
+          }
+  pure $ bodyWrapper bwconf $ outgoingPage pid (fromMaybe "events" sortM) hostsAndEvents
 
 
 sortOptions :: [(Text, Text, Text)]

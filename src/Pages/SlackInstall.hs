@@ -132,7 +132,7 @@ linkProjectsGetH slack_code = do
   let client_secret = envCfg.slackClientSecret
   let redirect_uri = envCfg.slackRedirectUri
   token <- liftIO $ exchangeCodeForToken client_id client_secret redirect_uri (fromMaybe "" slack_code)
-  projects <- dbtToEff $ Projects.selectProjectsForUser sess.user.id
+  projects <- dbtToEff $ Projects.selectProjectsForUser sess.persistentSession.userId
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess.persistentSession
