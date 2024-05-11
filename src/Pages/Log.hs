@@ -104,6 +104,7 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoostedM
           , resetLogsURL
           , currentRange
           , exceededFreeTier = freeTierExceeded
+          , query = queryM
           }
 
   case (layoutM, hxRequestM, hxBoostedM) of
@@ -203,6 +204,7 @@ data ApiLogsPageData = ApiLogsPageData
   , resetLogsURL :: Text
   , currentRange :: Maybe Text
   , exceededFreeTier :: Bool
+  , query :: Maybe Text
   }
 
 
@@ -313,7 +315,7 @@ resultTable_ :: ApiLogsPageData -> Bool -> Html ()
 resultTable_ page mainLog = table_ [class_ "w-full table table-sm table-pin-rows table-pin-cols", style_ "height:1px", id_ "resultTable"] do
   -- height:1px fixes the cell minimum heights somehow.
   let isLogEventB = isLogEvent page.cols
-  when (null page.requestVecs) $ do
+  when (null page.requestVecs && isNothing page.query) $ do
     if mainLog
       then do
         section_ [class_ "w-max  mx-auto my-16 p-5 sm:py-14 sm:px-24 items-center flex gap-16"] do
@@ -325,7 +327,7 @@ resultTable_ page mainLog = table_ [class_ "w-full table table-sm table-pin-rows
             a_ [href_ $ "/p/" <> page.pid.toText <> "/integration_guides", class_ "w-max btn btn-indigo -ml-1 text-md"] "Read the setup guide"
       else do
         section_ [class_ "w-max mx-auto"] do
-          p_ "This request has no outgoing requests"
+          p_ "This request has no outgoing requests yet."
   unless (null page.requestVecs) $ do
     thead_ $ tr_ $ forM_ page.cols $ logTableHeading_ page.pid isLogEventB
     tbody_ [id_ "w-full log-item-table-body"] do
