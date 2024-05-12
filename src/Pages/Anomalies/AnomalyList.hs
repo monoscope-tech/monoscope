@@ -15,8 +15,6 @@ module Pages.Anomalies.AnomalyList (
 where
 
 import BackgroundJobs qualified
-import Data.Aeson (encode)
-import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
 import Data.Map qualified as Map
 import Data.Pool (withResource)
@@ -71,10 +69,8 @@ import Pkg.Components (loader)
 import PyF (fmt)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
-import Servant (Headers, addHeader)
-import Servant.Htmx (HXTrigger)
 import System.Config (AuthContext (pool))
-import System.Types (ATAuthCtx)
+import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils (
   deleteParam,
@@ -95,7 +91,7 @@ newtype AnomalyBulkForm = AnomalyBulk
   deriving anyclass (FromForm)
 
 
-acknowlegeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (Html ())
+acknowlegeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders (Html ()))
 acknowlegeAnomalyGetH pid aid = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
@@ -103,36 +99,36 @@ acknowlegeAnomalyGetH pid aid = do
   v <- dbtToEff $ Anomalies.acknowledgeAnomalies sess.user.id text_id
   _ <- dbtToEff $ Anomalies.acknowlegeCascade sess.user.id v
   _ <- liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.GenSwagger pid sess.user.id
-  pure $ anomalyAcknowlegeButton pid aid True
+  addRespHeaders $ anomalyAcknowlegeButton pid aid True
 
 
-unAcknowlegeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (Html ())
+unAcknowlegeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders (Html ()))
 unAcknowlegeAnomalyGetH pid aid = do
   (sess, project) <- Sessions.sessionAndProject pid
   let q = [sql| update apis.anomalies set acknowleged_by=null, acknowleged_at=null where id=? |]
   _ <- dbtToEff $ execute Update q (Only aid)
-  pure $ anomalyAcknowlegeButton pid aid False
+  addRespHeaders $ anomalyAcknowlegeButton pid aid False
 
 
-archiveAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (Html ())
+archiveAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders (Html ()))
 archiveAnomalyGetH pid aid = do
   (sess, project) <- Sessions.sessionAndProject pid
   let q = [sql| update apis.anomalies set archived_at=NOW() where id=? |]
   _ <- dbtToEff $ execute Update q (Only aid)
-  pure $ anomalyArchiveButton pid aid True
+  addRespHeaders $ anomalyArchiveButton pid aid True
 
 
-unArchiveAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (Html ())
+unArchiveAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders (Html ()))
 unArchiveAnomalyGetH pid aid = do
   (sess, project) <- Sessions.sessionAndProject pid
   let q = [sql| update apis.anomalies set archived_at=null where id=? |]
   _ <- dbtToEff $ execute Update q (Only aid)
-  pure $ anomalyArchiveButton pid aid False
+  addRespHeaders $ anomalyArchiveButton pid aid False
 
 
 -- When given a list of anomalyIDs and an action, said action would be applied to the anomalyIDs.
 -- Then a notification should be triggered, as well as an action to reload the anomaly List.
-anomalyBulkActionsPostH :: Projects.ProjectId -> Text -> AnomalyBulkForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
+anomalyBulkActionsPostH :: Projects.ProjectId -> Text -> AnomalyBulkForm -> ATAuthCtx (RespHeaders (Html ()))
 anomalyBulkActionsPostH pid action items = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
@@ -146,8 +142,8 @@ anomalyBulkActionsPostH pid action items = do
       _ <- dbtToEff $ execute Update [sql| update apis.anomalies set archived_at=NOW() where id=ANY(?::uuid[]) |] (Only $ Vector.fromList items.anomalyId)
       pass
     _ -> error $ "unhandled anomaly bulk action state " <> action
-  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"refreshMain": "", "successToast": [#{action <> "d anomalies Successfully"}]}|]
-  pure $ addHeader hxTriggerData ""
+  addSuccessToast (action <> "d anomalies Successfully") Nothing
+  addRespHeaders ""
 
 
 data ParamInput = ParamInput
@@ -158,7 +154,7 @@ data ParamInput = ParamInput
   }
 
 
-anomalyListGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Endpoints.EndpointId -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
+anomalyListGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Endpoints.EndpointId -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 anomalyListGetH pid layoutM ackdM archivedM sortM page loadM endpointM hxRequestM hxBoostedM = do
   (sess, project) <- Sessions.sessionAndProject pid
   let ackd = textToBool <$> ackdM
@@ -178,21 +174,19 @@ anomalyListGetH pid layoutM ackdM archivedM sortM page loadM endpointM hxRequest
           , currProject = Just project
           , pageTitle = "Changes & Errors"
           }
-  let currentURL = "/p/" <> pid.toText <> "/anomalies?layout=" <> fromMaybe "false" layoutM <> "&ackd=" <> fromMaybe "false" ackdM <> "&archived=" <> fromMaybe "false" archivedM
-  let nextFetchUrl = maybe (Just $ currentURL <> "&load_more=true&page=" <> show (pageInt + 1)) (\x -> if x == "slider" then Nothing else Just $ currentURL <> "&load_more=true&page=" <> show (pageInt + 1)) layoutM
-
-  let paramInput =
+      currentURL = "/p/" <> pid.toText <> "/anomalies?layout=" <> fromMaybe "false" layoutM <> "&ackd=" <> fromMaybe "false" ackdM <> "&archived=" <> fromMaybe "false" archivedM
+      nextFetchUrl = maybe (Just $ currentURL <> "&load_more=true&page=" <> show (pageInt + 1)) (\x -> if x == "slider" then Nothing else Just $ currentURL <> "&load_more=true&page=" <> show (pageInt + 1)) layoutM
+      paramInput =
         ParamInput
           { currentURL = currentURL
           , ackd = fromMaybe False ackd
           , archived = fromMaybe False archived
           , sort = fromMaybe "" sortM
           }
-
-  let elementBelowTabs =
+      elementBelowTabs =
         div_ [class_ "grid grid-cols-5", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"]
           $ anomalyList paramInput pid currTime anomalies nextFetchUrl
-  let anom = case nextFetchUrl of
+      anom = case nextFetchUrl of
         Just url -> do
           mapM_ (renderAnomaly False currTime) anomalies
           if length anomalies > fetchLimit - 1
@@ -202,13 +196,12 @@ anomalyListGetH pid layoutM ackdM archivedM sortM page loadM endpointM hxRequest
               "LOAD MORE"
             else ""
         Nothing -> mapM_ (renderAnomaly False currTime) anomalies
-
   case (layoutM, hxRequestM, hxBoostedM, loadM) of
-    (Just "slider", Just "true", _, _) -> pure $ anomalyListSlider currTime pid endpointM (Just anomalies)
-    (_, _, _, Just "true") -> pure anom
-    (_, Just "true", Just "false", _) -> pure elementBelowTabs
-    (_, Just "true", Nothing, _) -> pure elementBelowTabs
-    _ -> pure $ bodyWrapper bwconf $ anomalyListPage paramInput pid currTime anomalies nextFetchUrl
+    (Just "slider", Just "true", _, _) -> addRespHeaders $ anomalyListSlider currTime pid endpointM (Just anomalies)
+    (_, _, _, Just "true") -> addRespHeaders anom
+    (_, Just "true", Just "false", _) -> addRespHeaders elementBelowTabs
+    (_, Just "true", Nothing, _) -> addRespHeaders elementBelowTabs
+    _ -> addRespHeaders $ bodyWrapper bwconf $ anomalyListPage paramInput pid currTime anomalies nextFetchUrl
 
 
 anomalyListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Anomalies.AnomalyVM -> Maybe Text -> Html ()
@@ -430,7 +423,7 @@ anomalyItem hideByDefault currTime anomaly icon title subTitle content = do
     div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $ show anomaly.eventsCount14d
 
 
-anomalyDetailsGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (Html ())
+anomalyDetailsGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 anomalyDetailsGetH pid targetHash hxBoostedM = do
   (sess, project) <- Sessions.sessionAndProject pid
   anomaly <- dbtToEff $ Anomalies.getAnomalyVM pid targetHash
@@ -441,7 +434,7 @@ anomalyDetailsGetH pid targetHash hxBoostedM = do
           , pageTitle = "Anomaly Details"
           }
   case anomaly of
-    Nothing -> pure $ bodyWrapper bwconf $ h4_ [] "ANOMALY NOT FOUND"
+    Nothing -> addRespHeaders $ bodyWrapper bwconf $ h4_ [] "ANOMALY NOT FOUND"
     Just an -> do
       currTime <- liftIO getCurrentTime
       case an.anomalyType of
@@ -451,9 +444,9 @@ anomalyDetailsGetH pid targetHash hxBoostedM = do
           fields <- dbtToEff $ Fields.selectFields pid targetHash
           let shapesWithFieldsMap = Vector.map (`getShapeFields` fields) shapes
           case hxBoostedM of
-            Just _ -> pure $ anomalyDetailsPage an (Just shapesWithFieldsMap) Nothing Nothing currTime True
+            Just _ -> addRespHeaders $ anomalyDetailsPage an (Just shapesWithFieldsMap) Nothing Nothing currTime True
             Nothing -> do
-              pure $ bodyWrapper bwconf $ div_ [class_ "w-full px-32 overflow-y-scroll h-full"] do
+              addRespHeaders $ bodyWrapper bwconf $ div_ [class_ "w-full px-32 overflow-y-scroll h-full"] do
                 h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
                 anomalyDetailsPage an (Just shapesWithFieldsMap) Nothing Nothing currTime False
         Anomalies.ATShape -> do
@@ -465,16 +458,15 @@ anomalyDetailsGetH pid targetHash hxBoostedM = do
           let delFM = groupFieldsByCategory delF
           let anFields = (newFM, updfM, delFM)
           case hxBoostedM of
-            Just _ -> pure $ anomalyDetailsPage an Nothing (Just anFields) Nothing currTime True
-            Nothing -> pure $ bodyWrapper bwconf $ div_ [class_ "w-full px-32 overflow-y-scroll h-full"] do
+            Just _ -> addRespHeaders $ anomalyDetailsPage an Nothing (Just anFields) Nothing currTime True
+            Nothing -> addRespHeaders $ bodyWrapper bwconf $ div_ [class_ "w-full px-32 overflow-y-scroll h-full"] do
               h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
               anomalyDetailsPage an Nothing (Just anFields) Nothing currTime False
         _ -> do
           anFormats <- dbtToEff $ Fields.getFieldsByEndpointKeyPathAndCategory pid (maybe "" (\x -> UUID.toText x.unEndpointId) an.endpointId) (fromMaybe "" an.fieldKeyPath) (fromMaybe FCRequestBody an.fieldCategory)
           case hxBoostedM of
-            Just _ -> do
-              pure $ anomalyDetailsPage an Nothing Nothing (Just anFormats) currTime True
-            Nothing -> pure $ bodyWrapper bwconf $ div_ [class_ "w-full px-32 overflow-y-scroll h-full"] do
+            Just _ -> addRespHeaders $ anomalyDetailsPage an Nothing Nothing (Just anFormats) currTime True
+            Nothing -> addRespHeaders $ bodyWrapper bwconf $ div_ [class_ "w-full px-32 overflow-y-scroll h-full"] do
               h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
               anomalyDetailsPage an Nothing Nothing (Just anFormats) currTime False
 

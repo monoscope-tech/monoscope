@@ -2,69 +2,19 @@
 
 module Pages.RedactedFields (redactedFieldsGetH, redactedFieldsPostH, RedactFieldForm (..)) where
 
-import Data.Aeson (encode)
-import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
-import Data.Text as T (Text)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector (Vector)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
-import Lucid (
-  Html,
-  ToHtml (toHtml),
-  a_,
-  autofocus_,
-  button_,
-  class_,
-  div_,
-  form_,
-  h2_,
-  h3_,
-  href_,
-  id_,
-  img_,
-  input_,
-  label_,
-  name_,
-  p_,
-  placeholder_,
-  role_,
-  section_,
-  span_,
-  src_,
-  table_,
-  tbody_,
-  td_,
-  textarea_,
-  th_,
-  thead_,
-  tr_,
-  type_,
- )
+import Lucid
 import Lucid.Htmx (hxPost_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Projects.RedactedFields qualified as RedactedFields
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Relude (
-  Applicative (pure),
-  ConvertUtf8 (decodeUtf8),
-  Generic,
-  Maybe (Just),
-  MonadIO (liftIO),
-  Semigroup ((<>)),
-  Show,
-  String,
-  mapM_,
-  show,
-  ($),
-  (&),
-  (<$>),
- )
-import Servant (Headers, addHeader)
-import Servant.Htmx (HXTrigger)
-import System.Types (ATAuthCtx)
+import Relude
+import System.Types
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -77,7 +27,7 @@ data RedactFieldForm = RedactFieldForm
   deriving anyclass (FromForm)
 
 
-redactedFieldsPostH :: Projects.ProjectId -> RedactFieldForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
+redactedFieldsPostH :: Projects.ProjectId -> RedactFieldForm -> ATAuthCtx (RespHeaders (Html ()))
 redactedFieldsPostH pid RedactFieldForm{path, description, endpointHash} = do
   (sess, project) <- Sessions.sessionAndProject pid
   redactedFieldId <- RedactedFields.RedactedFieldId <$> liftIO UUIDV4.nextRandom
@@ -86,12 +36,12 @@ redactedFieldsPostH pid RedactFieldForm{path, description, endpointHash} = do
   redactedFields <- dbtToEff do
     RedactedFields.redactField fieldToRedact
     RedactedFields.redactedFieldsByProject pid
-  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Submitted field to be redacted, Successfully"]}|]
-  pure $ addHeader hxTriggerData $ mainContent pid redactedFields
+  addSuccessToast "Submitted field to be redacted, Successfully" Nothing
+  addRespHeaders $ mainContent pid redactedFields
 
 
 -- | redactedFieldsGetH renders the api keys list page which includes a modal for creating the apikeys.
-redactedFieldsGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
+redactedFieldsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 redactedFieldsGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   redactedFields <- dbtToEff $ RedactedFields.redactedFieldsByProject pid
@@ -101,7 +51,7 @@ redactedFieldsGetH pid = do
           , currProject = Just project
           , pageTitle = "Redacted Fields"
           }
-  pure $ bodyWrapper bwconf $ redactedFieldsPage pid redactedFields
+  addRespHeaders $ bodyWrapper bwconf $ redactedFieldsPage pid redactedFields
 
 
 redactedFieldsPage :: Projects.ProjectId -> Vector RedactedFields.RedactedField -> Html ()

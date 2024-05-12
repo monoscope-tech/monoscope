@@ -45,11 +45,11 @@ import Pages.IntegrationDemos.Pyramid (pyramidGuide)
 import Pages.IntegrationDemos.Slim (slimGuide)
 import Pages.IntegrationDemos.Symfony (symfonyGuide)
 import Relude hiding (ask)
-import System.Types (ATAuthCtx)
+import System.Types
 import Utils (faIcon_)
 
 
-getH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
+getH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 getH pid sdkM errReportM reqMonM = do
   (sess, project) <- Sessions.sessionAndProject pid
   apiKey <- dbtToEff $ ProjectApiKeys.projectApiKeysByProjectId pid
@@ -60,7 +60,7 @@ getH pid sdkM errReportM reqMonM = do
           , currProject = Just project
           , pageTitle = "Integrations"
           }
-  pure $ bodyWrapper bwconf $ integrationsPage pid (fromMaybe "express" sdkM) key errReportM reqMonM
+  addRespHeaders $ bodyWrapper bwconf $ integrationsPage pid (fromMaybe "express" sdkM) key errReportM reqMonM
 
 
 integrationsPage :: Projects.ProjectId -> Text -> Text -> Maybe Text -> Maybe Text -> Html ()

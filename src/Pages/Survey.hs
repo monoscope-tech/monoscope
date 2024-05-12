@@ -7,7 +7,6 @@ import Data.Aeson (
   encode,
   object,
  )
-import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
 import Data.List ((!!))
 import Data.Text qualified as T
@@ -22,9 +21,7 @@ import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude hiding (ask, asks)
-import Servant (Headers, addHeader)
-import Servant.Htmx (HXRedirect, HXTrigger)
-import System.Types (ATAuthCtx)
+import System.Types
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -50,14 +47,14 @@ instance ToJSON SurveyForm where
       ]
 
 
-surveyPutH :: Projects.ProjectId -> SurveyForm -> ATAuthCtx (Headers '[HXTrigger, HXRedirect] (Html ()))
+surveyPutH :: Projects.ProjectId -> SurveyForm -> ATAuthCtx (RespHeaders (Html ()))
 surveyPutH pid survey = do
   (sess, project) <- Sessions.sessionAndProject pid
   let nameArr = T.splitOn " " (fullName survey)
   if length nameArr < 2
     then do
-      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","errorToast": ["Invalid full name format."]}|]
-      pure $ addHeader hxTriggerData $ addHeader "" ""
+      addErrorToast "Invalid full name format." Nothing
+      addRespHeaders ""
     else do
       let jsonBytes = encode survey
       let firstName = nameArr !! 0
@@ -65,11 +62,12 @@ surveyPutH pid survey = do
       let phoneNumber = survey.phoneNumber
       res <- dbtToEff $ execute Update [sql| update projects.projects set questions= ? where id=? |] (jsonBytes, pid)
       u <- dbtToEff $ execute Update [sql| update users.users set first_name= ?, last_name=?, phone_number=? where id=? |] (firstName, lastName, phoneNumber, sess.user.id)
-      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","successToast": ["Thanks for taking the survey!"]}|]
-      pure $ addHeader hxTriggerData $ addHeader ("/p/" <> show pid.unProjectId <> "/onboarding") ""
+      addSuccessToast "Thanks for taking the survey!" Nothing
+      redirectCS ("/p/" <> show pid.unProjectId <> "/onboarding")
+      addRespHeaders ""
 
 
-surveyGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
+surveyGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 surveyGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   let bwconf =
@@ -80,7 +78,7 @@ surveyGetH pid = do
           }
   let full_name = sess.user.firstName <> " " <> sess.user.lastName
   let phoneNumber = fromMaybe "" sess.user.phoneNumber
-  pure $ bodyWrapper bwconf $ surveyPage pid full_name phoneNumber
+  addRespHeaders $ bodyWrapper bwconf $ surveyPage pid full_name phoneNumber
 
 
 surveyPage :: Projects.ProjectId -> Text -> Text -> Html ()

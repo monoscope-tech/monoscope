@@ -5,12 +5,7 @@ module Pages.Monitors.Testing (
 )
 where
 
-import Data.Aeson (
-  FromJSON,
-  encode,
- )
-import Data.Aeson qualified as Aeson
-import Data.Aeson.QQ (aesonQQ)
+import Data.Aeson qualified as AE
 import Data.Default (def)
 import Data.Text qualified as T
 import Data.Time (getZonedTime)
@@ -50,11 +45,9 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude hiding (ask)
-import Servant (Headers, addHeader)
-import Servant.Htmx (HXTrigger)
-import System.Types (ATAuthCtx)
-import Utils
+import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Web.FormUrlEncoded (FromForm)
+import Utils
 
 
 data TestCollectionForm = TestCollectionForm
@@ -71,10 +64,10 @@ data ScheduleForm = ScheduleForm
   , isScheduled :: Bool
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromForm, FromJSON)
+  deriving anyclass (FromForm, AE.FromJSON)
 
 
-testingPostH :: Projects.ProjectId -> TestCollectionForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
+testingPostH :: Projects.ProjectId -> TestCollectionForm -> ATAuthCtx (RespHeaders (Html ()))
 testingPostH pid collection = do
   (_, project) <- Sessions.sessionAndProject pid
   if collection.collection_id == ""
@@ -90,23 +83,23 @@ testingPostH pid collection = do
               , lastRun = Nothing
               , title = collection.title
               , description = collection.description
-              , config = Aeson.object []
+              , config = AE.object []
               , schedule = "1 day"
               , isScheduled = False
               , collectionSteps = Testing.CollectionSteps V.empty
               }
       _ <- dbtToEff $ Testing.addCollection coll
       cols <- dbtToEff $ Testing.getCollections pid
-      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Collection added Successfully"]}|]
-      pure $ addHeader hxTriggerData $ testingPage pid cols
+      addSuccessToast "Collection added Successfully" Nothing
+      addRespHeaders $ testingPage pid cols
     else do
       -- _ <- dbtToEff $ Testing.updateCollection pid collection.collection_id collection.title collection.description
       cols <- dbtToEff $ Testing.getCollections pid
-      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Collection updated Successfully"]}|]
-      pure $ addHeader hxTriggerData $ testingPage pid cols
+      addSuccessToast "Collection updated Successfully" Nothing
+      addRespHeaders $ testingPage pid cols
 
 
-testingGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
+testingGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 testingGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   colls <- dbtToEff $ Testing.getCollections pid
@@ -116,7 +109,7 @@ testingGetH pid = do
           , currProject = Just project
           , pageTitle = "Testing"
           }
-  pure $ bodyWrapper bwconf $ testingPage pid colls
+  addRespHeaders $ bodyWrapper bwconf $ testingPage pid colls
 
 
 testingPage :: Projects.ProjectId -> V.Vector Testing.CollectionListItem -> Html ()

@@ -82,7 +82,7 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
         }
 
 
-alertUpsertPostH :: Projects.ProjectId -> AlertUpsertForm -> ATAuthCtx (Html ())
+alertUpsertPostH :: Projects.ProjectId -> AlertUpsertForm -> ATAuthCtx (RespHeaders (Html ()))
 alertUpsertPostH pid form = do
   let alertId = form.alertId >>= UUID.fromText
   queryMonitorId <- liftIO $ case alertId of
@@ -92,28 +92,28 @@ alertUpsertPostH pid form = do
   let queryMonitor = convertToQueryMonitor pid now queryMonitorId form
 
   _ <- dbtToEff $ Monitors.queryMonitorUpsert queryMonitor
-  -- TODO: add toast
-  pure ""
+  addSuccessToast "Monitor was updated successfully" Nothing
+  addRespHeaders ""
 
 
-alertListGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
+alertListGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 alertListGetH pid = do
   monitors <- dbtToEff $ Monitors.queryMonitorsAll pid
-  pure $ queryMonitors_ monitors
+  addRespHeaders $ queryMonitors_ monitors
 
 
-alertSingleToggleActiveH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (Html ())
+alertSingleToggleActiveH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders (Html ()))
 alertSingleToggleActiveH pid monitorId = do
   _ <- dbtToEff $ Monitors.monitorToggleActiveById monitorId
 
   monitors <- dbtToEff $ Monitors.queryMonitorsAll pid
-  pure $ queryMonitors_ monitors
+  addRespHeaders $ queryMonitors_ monitors
 
 
-alertSingleGetH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (Html ())
+alertSingleGetH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders (Html ()))
 alertSingleGetH pid monitorId = do
   monitor <- dbtToEff $ Monitors.queryMonitorById monitorId
-  pure $ do
+  addRespHeaders $ do
     div_ [] do
       a_ [class_ "border-y p-3 block cursor-pointer", hxGet_ $ "/p/" <> pid.toText <> "/alerts", hxTarget_ "#alertsListContainer"] "‹ Back to alerts list"
       div_ [class_ "p-3"] $ editAlert_ pid monitor

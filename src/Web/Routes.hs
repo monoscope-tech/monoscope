@@ -2,6 +2,7 @@ module Web.Routes (server, genAuthServerContext) where
 
 import Data.Aeson
 import Data.Aeson qualified as AE
+import Data.Map qualified as Map
 import Data.Pool (Pool)
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
@@ -12,6 +13,7 @@ import Effectful (runPureEff)
 import Effectful.Error.Static (runErrorNoCallStack)
 import Effectful.PostgreSQL.Transact (queryOne_)
 import Effectful.Reader.Static (runReader)
+import Effectful.State.Static.Local qualified as State
 import GitHash (giCommitDate, giHash, tGitInfoCwd)
 import Log (Logger)
 import Lucid (Html)
@@ -113,6 +115,8 @@ server pool =
           (Proxy @'[APItoolkitAuthContext])
           ( \page ->
               page
+                & State.evalState Map.empty
+                & State.evalState Nothing
                 & Effectful.Reader.Static.runReader sessionWithCookies
           )
           cookieProtectedServer
@@ -123,33 +127,33 @@ type role CookieProtectedRoutes nominal
 
 
 data CookieProtectedRoutes mode = CookieProtectedRoutes
-  { dashboardGet :: mode :- "p" :> ProjectId :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (Html ())
+  { dashboardGet :: mode :- "p" :> ProjectId :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders (Html ()))
   , projects :: mode :- ProjectsRoutes.Routes
-  , onboardingGet :: mode :- "p" :> ProjectId :> "onboarding" :> QPB "polling" :> QPB "redirected" :> QPT "current_tab" :> Get '[HTML] (Html ())
+  , onboardingGet :: mode :- "p" :> ProjectId :> "onboarding" :> QPB "polling" :> QPB "redirected" :> QPT "current_tab" :> Get '[HTML] (RespHeaders (Html ()))
   , anomalies :: mode :- "p" :> ProjectId :> "anomalies" :> AnomaliesRoutes.Routes
   , logExplorer :: mode :- "p" :> ProjectId :> LogExplorerRoutes.Routes
   , endpoints :: mode :- "p" :> ProjectId :> EndpointsRoutes.Routes
   , monitors :: mode :- "p" :> ProjectId :> MonitorsRoutes.Routes
   , specification :: mode :- "p" :> ProjectId :> SpecificationRoutes.Routes
-  , apiGet :: mode :- "p" :> ProjectId :> "apis" :> Get '[HTML] (Html ())
-  , apiDelete :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Delete '[HTML] (Headers '[HXTrigger] (Html ()))
-  , apiPost :: mode :- "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Api.GenerateAPIKeyForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-  , slackInstallPost :: mode :- "slack" :> "link-projects" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-  , slackLinkProjectsGet :: mode :- "slack" :> "link-projects" :> QPT "code" :> Get '[HTML] (Html ())
-  , slackUpdateWebhook :: mode :- "p" :> ProjectId :> "slack" :> "webhook" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-  , redactedFieldsGet :: mode :- "p" :> ProjectId :> "redacted_fields" :> Get '[HTML] (Html ())
-  , redactedFieldsPost :: mode :- "p" :> ProjectId :> "redacted_fields" :> ReqBody '[FormUrlEncoded] RedactFieldForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-  , reportsGet :: mode :- "p" :> ProjectId :> "reports" :> QPT "page" :> HXRequest :> HXBoosted :> Get '[HTML] (Html ())
-  , reportsSingleGet :: mode :- "p" :> ProjectId :> "reports" :> Capture "report_id" ReportsM.ReportId :> Get '[HTML] (Html ())
-  , reportsPost :: mode :- "p" :> ProjectId :> "reports_notif" :> Capture "report_type" Text :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-  , shareLinkPost :: mode :- "p" :> ProjectId :> "share" :> ReqBody '[FormUrlEncoded] Share.ReqForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-  , queryBuilderAutocomplete :: mode :- "p" :> ProjectId :> "query_builder" :> "autocomplete" :> QPT "category" :> QPT "prefix" :> Get '[JSON] AE.Value
-  , swaggerGenerateGet :: mode :- "p" :> ProjectId :> "generate_swagger" :> Get '[JSON] AE.Value
-  , chartsGet :: mode :- "charts_html" :> QP "chart_type" Charts.ChartType :> QPT "query_raw" :> QueryParam "pid" Projects.ProjectId :> QP "group_by" Charts.GroupBy :> QP "query_by" [Charts.QueryBy] :> QP "num_slots" Int :> QP "limit" Int :> QP "theme" Text :> QPT "id" :> QP "show_legend" Bool :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (Html ())
-  , surveyPut :: mode :- "p" :> ProjectId :> "survey" :> ReqBody '[FormUrlEncoded] Survey.SurveyForm :> Post '[HTML] (Headers '[HXTrigger, HXRedirect] (Html ()))
-  , surveyGet :: mode :- "p" :> ProjectId :> "about_project" :> Get '[HTML] (Html ())
-  , editField :: mode :- "p" :> ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> ReqBody '[FormUrlEncoded] FieldDetails.EditFieldForm :> Post '[HTML] (Headers '[HXTrigger] (Html ()))
-  , integrationGuides :: mode :- "p" :> ProjectId :> "integration_guides" :> QPT "sdk" :> QPT "error_reporting" :> QPT "dependency_monitoring" :> Get '[HTML] (Html ())
+  , apiGet :: mode :- "p" :> ProjectId :> "apis" :> Get '[HTML] (RespHeaders (Html ()))
+  , apiDelete :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Delete '[HTML] (RespHeaders (Html ()))
+  , apiPost :: mode :- "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Api.GenerateAPIKeyForm :> Post '[HTML] (RespHeaders (Html ()))
+  , slackInstallPost :: mode :- "slack" :> "link-projects" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (RespHeaders (Html ()))
+  , slackLinkProjectsGet :: mode :- "slack" :> "link-projects" :> QPT "code" :> Get '[HTML] (RespHeaders (Html ()))
+  , slackUpdateWebhook :: mode :- "p" :> ProjectId :> "slack" :> "webhook" :> ReqBody '[FormUrlEncoded] SlackInstall.LinkProjectsForm :> Post '[HTML] (RespHeaders (Html ()))
+  , redactedFieldsGet :: mode :- "p" :> ProjectId :> "redacted_fields" :> Get '[HTML] (RespHeaders (Html ()))
+  , redactedFieldsPost :: mode :- "p" :> ProjectId :> "redacted_fields" :> ReqBody '[FormUrlEncoded] RedactFieldForm :> Post '[HTML] (RespHeaders (Html ()))
+  , reportsGet :: mode :- "p" :> ProjectId :> "reports" :> QPT "page" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders (Html ()))
+  , reportsSingleGet :: mode :- "p" :> ProjectId :> "reports" :> Capture "report_id" ReportsM.ReportId :> Get '[HTML] (RespHeaders (Html ()))
+  , reportsPost :: mode :- "p" :> ProjectId :> "reports_notif" :> Capture "report_type" Text :> Post '[HTML] (RespHeaders (Html ()))
+  , shareLinkPost :: mode :- "p" :> ProjectId :> "share" :> ReqBody '[FormUrlEncoded] Share.ReqForm :> Post '[HTML] (RespHeaders (Html ()))
+  , queryBuilderAutocomplete :: mode :- "p" :> ProjectId :> "query_builder" :> "autocomplete" :> QPT "category" :> QPT "prefix" :> Get '[JSON] (RespHeaders AE.Value)
+  , swaggerGenerateGet :: mode :- "p" :> ProjectId :> "generate_swagger" :> Get '[JSON] (RespHeaders AE.Value)
+  , chartsGet :: mode :- "charts_html" :> QP "chart_type" Charts.ChartType :> QPT "query_raw" :> QueryParam "pid" Projects.ProjectId :> QP "group_by" Charts.GroupBy :> QP "query_by" [Charts.QueryBy] :> QP "num_slots" Int :> QP "limit" Int :> QP "theme" Text :> QPT "id" :> QP "show_legend" Bool :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders (Html ()))
+  , surveyPut :: mode :- "p" :> ProjectId :> "survey" :> ReqBody '[FormUrlEncoded] Survey.SurveyForm :> Post '[HTML] (RespHeaders (Html ()))
+  , surveyGet :: mode :- "p" :> ProjectId :> "about_project" :> Get '[HTML] (RespHeaders (Html ()))
+  , editField :: mode :- "p" :> ProjectId :> "fields" :> Capture "field_id" Fields.FieldId :> ReqBody '[FormUrlEncoded] FieldDetails.EditFieldForm :> Post '[HTML] (RespHeaders (Html ()))
+  , integrationGuides :: mode :- "p" :> ProjectId :> "integration_guides" :> QPT "sdk" :> QPT "error_reporting" :> QPT "dependency_monitoring" :> Get '[HTML] (RespHeaders (Html ()))
   }
   deriving stock (Generic)
 

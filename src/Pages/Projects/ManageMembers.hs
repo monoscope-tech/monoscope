@@ -8,9 +8,7 @@ where
 
 import BackgroundJobs qualified
 import Control.Lens qualified as Lens
-import Data.Aeson (eitherDecode, encode)
 import Data.Aeson qualified as AE
-import Data.Aeson.QQ (aesonQQ)
 import Data.CaseInsensitive (original)
 import Data.Default (def)
 import Data.List.Unique (uniq)
@@ -30,8 +28,6 @@ import Network.Wreq
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper
 import Relude hiding (ask, asks)
-import Servant (Headers, addHeader)
-import Servant.Htmx
 import System.Config
 import System.Types
 import Utils
@@ -46,7 +42,7 @@ data ManageMembersForm = ManageMembersForm
   deriving anyclass (FromForm)
 
 
-manageMembersPostH :: Projects.ProjectId -> ManageMembersForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
+manageMembersPostH :: Projects.ProjectId -> ManageMembersForm -> ATAuthCtx (RespHeaders (Html ()))
 manageMembersPostH pid form = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
@@ -113,17 +109,17 @@ manageMembersPostH pid form = do
     $ ProjectMembers.softDeleteProjectMembers deletedUAndP
 
   projMembersLatest <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
-  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Updated Members List Successfully"]}|]
-  pure $ addHeader hxTriggerData $ manageMembersBody projMembersLatest
+  addSuccessToast "Updated Members List Successfully" Nothing
+  addRespHeaders $ manageMembersBody projMembersLatest
 
 
-manageMembersGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
+manageMembersGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 manageMembersGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
   projMembers <- dbtToEff $ ProjectMembers.selectActiveProjectMembers pid
   let bwconf = (def :: BWConfig){sessM = Just sess.persistentSession, pageTitle = "Settings", currProject = Just project}
-  pure $ bodyWrapper bwconf $ manageMembersBody projMembers
+  addRespHeaders $ bodyWrapper bwconf $ manageMembersBody projMembers
 
 
 manageMembersBody :: V.Vector ProjectMembers.ProjectMemberVM -> Html ()
@@ -176,7 +172,7 @@ projectMemberRow projMembersM =
     selectedIf a b = [selected_ "" | a == b]
 
 
-manageSubGetH :: Projects.ProjectId -> ATAuthCtx (Headers '[HXTrigger, HXRedirect] (Html ()))
+manageSubGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 manageSubGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
@@ -184,11 +180,11 @@ manageSubGetH pid = do
   sub <- liftIO $ getSubscriptionPortalUrl project.subId envCfg.lemonSqueezyApiKey
   case sub of
     Nothing -> do
-      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","errorToast": ["Subscription ID not found"]}|]
-      pure $ addHeader hxTriggerData $ addHeader "" ""
+      addErrorToast "Subscription ID not found" Nothing
+      addRespHeaders ""
     Just s -> do
-      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {}|]
-      pure $ addHeader hxTriggerData $ addHeader s.dataVal.attributes.urls.customerPortal ""
+      redirectCS s.dataVal.attributes.urls.customerPortal
+      addRespHeaders ""
 
 
 getSubscriptionPortalUrl :: Maybe Text -> Text -> IO (Maybe SubResponse)
@@ -200,7 +196,7 @@ getSubscriptionPortalUrl subId apiKey = do
       let hds = header "Authorization" Lens..~ ["Bearer " <> encodeUtf8 @Text @ByteString apiKey]
       response <- liftIO $ getWith (defaults & hds) ("https://api.lemonsqueezy.com/v1/subscriptions/" <> toString sid)
       let responseBdy = response Lens.^. responseBody
-      case eitherDecode responseBdy of
+      case AE.eitherDecode responseBdy of
         Right res -> do
           return $ Just res
         Left err -> do

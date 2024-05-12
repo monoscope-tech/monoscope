@@ -24,9 +24,9 @@ import Data.Aeson.QQ (aesonQQ)
 import Data.ByteString.Base64 qualified as B64
 import Data.CaseInsensitive (original)
 import Data.CaseInsensitive qualified as CI
-import Data.Default
+import Data.Default (Default (..))
 import Data.List.Extra (cons)
-import Data.List.Unique
+import Data.List.Unique (uniq)
 import Data.Pool (withResource)
 import Data.Text (toLower)
 import Data.Text qualified as T
@@ -36,12 +36,12 @@ import Data.Valor (Valor, check1, failIf, validateM)
 import Data.Valor qualified as Valor
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
-import Effectful.PostgreSQL.Transact.Effect
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Lucid
-import Lucid.Htmx
-import Lucid.Hyperscript
-import Models.Apis.Slack
+import Lucid.Htmx (hxConfirm_, hxGet_, hxIndicator_, hxPost_, hxSwap_, hxTarget_)
+import Lucid.Hyperscript (__)
+import Models.Apis.Slack (SlackData, getProjectSlackData)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMembers qualified as Projects
@@ -49,21 +49,16 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
-import Network.Wreq
+import Network.Wreq (defaults, getWith, header, responseBody)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pkg.ConvertKit qualified as ConvertKit
 import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
-import Servant (
-  Headers,
-  addHeader,
-  noHeader,
- )
-import Servant.Htmx
-import System.Config
-import System.Types
-import Utils
+import Servant (addHeader, noHeader)
+import System.Config (AuthContext (config, pool), EnvConfig (apiKeyEncryptionSecretKey, convertkitApiKey, lemonSqueezyApiKey, lemonSqueezyUrl, slackRedirectUri))
+import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
+import Utils (faIcon_)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -109,7 +104,7 @@ createProjectFormV =
 
 ----------------------------------------------------------------------------------------------------------
 -- createProjectGetH is the handler for the create projects page
-createProjectGetH :: ATAuthCtx (Html ())
+createProjectGetH :: ATAuthCtx (RespHeaders (Html ()))
 createProjectGetH = do
   appCtx <- ask @AuthContext
   sess <- Sessions.getSession
@@ -118,11 +113,11 @@ createProjectGetH = do
           { sessM = Just sess.persistentSession
           , pageTitle = "Endpoints"
           }
-  pure $ bodyWrapper bwconf $ createProjectBody (sess.persistentSession) appCtx.config False (def @CreateProjectForm) (def @CreateProjectFormError) Nothing Nothing
+  addRespHeaders $ bodyWrapper bwconf $ createProjectBody (sess.persistentSession) appCtx.config False (def @CreateProjectForm) (def @CreateProjectFormError) Nothing Nothing
 
 
 ----------------------------------------------------------------------------------------------------------
-projectSettingsGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
+projectSettingsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 projectSettingsGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
@@ -141,16 +136,16 @@ projectSettingsGetH pid = do
   slackInfo <- dbtToEff $ getProjectSlackData pid
 
   let bwconf = (def :: BWConfig){sessM = Just sess.persistentSession, currProject = Just project, pageTitle = "Settings"}
-  pure $ bodyWrapper bwconf $ createProjectBody (sess.persistentSession) appCtx.config True createProj (def @CreateProjectFormError) (Just project.notificationsChannel) slackInfo
+  addRespHeaders $ bodyWrapper bwconf $ createProjectBody (sess.persistentSession) appCtx.config True createProj (def @CreateProjectFormError) (Just project.notificationsChannel) slackInfo
 
 
 ----------------------------------------------------------------------------------------------------------
-deleteProjectGetH :: Projects.ProjectId -> ATAuthCtx (Headers '[HXTrigger, HXRedirect] (Html ()))
+deleteProjectGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 deleteProjectGetH pid = do
   sess <- Sessions.getSession
   _ <- dbtToEff $ Projects.deleteProject pid
-  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Deleted Project Successfully"]}|]
-  pure $ addHeader hxTriggerData $ addHeader "/" $ span_ ""
+  addSuccessToast "Deleted Project Successfully" Nothing
+  redirectCS "/" >> addRespHeaders ""
 
 
 data NotifListForm = NotifListForm
@@ -160,35 +155,35 @@ data NotifListForm = NotifListForm
   deriving anyclass (FromForm)
 
 
-updateNotificationsChannel :: Projects.ProjectId -> NotifListForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
+updateNotificationsChannel :: Projects.ProjectId -> NotifListForm -> ATAuthCtx (RespHeaders (Html ()))
 updateNotificationsChannel pid NotifListForm{notificationsChannel} = do
   if "slack" `elem` notificationsChannel
     then do
       slackData <- dbtToEff $ getProjectSlackData pid
       case slackData of
         Nothing -> do
-          let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"errorToast": ["You need to connect slack to this project first."]}|]
-          pure $ addHeader hxTriggerData $ span_ ""
+          addErrorToast "You need to connect slack to this project first." Nothing
+          addRespHeaders ""
         Just _ -> do
           _ <- dbtToEff do Projects.updateNotificationsChannel pid notificationsChannel
-          let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Updated Notifications Channels Successfully"]}|]
-          pure $ addHeader hxTriggerData $ span_ ""
+          addSuccessToast "Updated Notification Channels Successfully" Nothing
+          addRespHeaders ""
     else do
       _ <- dbtToEff do Projects.updateNotificationsChannel pid notificationsChannel
-      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Updated Notifications Channels Successfully"]}|]
-      pure $ addHeader hxTriggerData $ span_ ""
+      addSuccessToast "Updated Notification Channels Successfully" Nothing
+      addRespHeaders ""
 
 
 ----------------------------------------------------------------------------------------------------------
 -- createProjectPostH is the handler for the create projects page form handling.
 -- It processes post requests and is expected to return a redirect header and a hyperscript event trigger header.
-createProjectPostH :: CreateProjectForm -> ATAuthCtx (Headers '[HXTrigger, HXRedirect] (Html ()))
+createProjectPostH :: CreateProjectForm -> ATAuthCtx (RespHeaders (Html ()))
 createProjectPostH createP = do
   sess <- Sessions.getSession
   appCtx <- ask @AuthContext
   validationRes <- validateM createProjectFormV createP
   case validationRes of
-    Right cpe -> pure $ noHeader $ noHeader $ createProjectBody (sess.persistentSession) appCtx.config createP.isUpdate createP cpe Nothing Nothing
+    Right cpe -> addRespHeaders $ createProjectBody (sess.persistentSession) appCtx.config createP.isUpdate createP cpe Nothing Nothing
     Left cp -> processProjectPostForm cp
 
 
@@ -242,7 +237,7 @@ getSubscriptionId orderId apiKey = do
           return Nothing
 
 
-processProjectPostForm :: Valor.Valid CreateProjectForm -> ATAuthCtx (Headers '[HXTrigger, HXRedirect] (Html ()))
+processProjectPostForm :: Valor.Valid CreateProjectForm -> ATAuthCtx (RespHeaders (Html ()))
 processProjectPostForm cpRaw = do
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
@@ -299,9 +294,9 @@ processProjectPostForm cpRaw = do
             Nothing -> (Nothing, Nothing)
       if (cp.paymentPlan /= "Free" && isNothing firstSubItemId)
         then do
-          let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"errorToast": ["Couldn't get subscription Id please try again"]}|]
-          let bdy = createProjectBody sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError) Nothing Nothing
-          pure $ addHeader hxTriggerData $ addHeader ("/p/" <> pid.toText <> "/about_project") bdy
+          addErrorToast "Couldn't get subscription ID. Please try again" Nothing
+          redirectCS ("/p/" <> pid.toText <> "/about_project")
+          addRespHeaders $ createProjectBody sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError) Nothing Nothing
         else do
           _ <- dbtToEff do
             Projects.insertProject (createProjectFormToModel pid subId firstSubItemId cp)
@@ -329,9 +324,9 @@ processProjectPostForm cpRaw = do
             ProjectMembers.insertProjectMembers projectMembers
           _ <- liftIO $ withResource appCtx.pool \conn ->
             createJob conn "background_jobs" $ BackgroundJobs.CreatedProjectSuccessfully sess.user.id pid (original sess.user.email) cp.title
-          let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Created Project Successfully"]}|]
-          let bdy = createProjectBody sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError) Nothing Nothing
-          pure $ addHeader hxTriggerData $ addHeader ("/p/" <> pid.toText <> "/about_project") bdy
+          addSuccessToast "Created Project Successfully" Nothing
+          redirectCS ("/p/" <> pid.toText <> "/about_project")
+          addRespHeaders $ createProjectBody sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError) Nothing Nothing
 
 
 ----------------------------------------------------------------------------------------------------------

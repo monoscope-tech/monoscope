@@ -40,7 +40,7 @@ import Pages.Monitors.Alerts qualified as Alerts
 import Pkg.Components (loader)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
-import System.Types (ATAuthCtx)
+import System.Types
 import Utils
 import Witch (from)
 
@@ -52,7 +52,7 @@ import Witch (from)
 -- >>> import Data.Aeson
 
 
-apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
+apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoostedM = do
   (sess, project) <- Sessions.sessionAndProject pid
 
@@ -108,9 +108,9 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoostedM
           }
 
   case (layoutM, hxRequestM, hxBoostedM) of
-    (Just "loadmore", Just "true", _) -> pure $ logItemRows_ pid requestVecs curatedColNames colIdxMap nextLogsURL
-    (Just "resultTable", Just "true", _) -> pure $ resultTable_ page False
-    (Just "all", Just "true", _) -> pure $ resultTable_ page True
+    (Just "loadmore", Just "true", _) -> addRespHeaders $ logItemRows_ pid requestVecs curatedColNames colIdxMap nextLogsURL
+    (Just "resultTable", Just "true", _) -> addRespHeaders $ resultTable_ page False
+    (Just "all", Just "true", _) -> addRespHeaders $ resultTable_ page True
     _ -> do
       let bwconf =
             (def :: BWConfig)
@@ -118,7 +118,7 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoostedM
               , currProject = Just project
               , pageTitle = "API Log Explorer"
               }
-      pure $ bodyWrapper bwconf $ apiLogsPage page
+      addRespHeaders $ bodyWrapper bwconf $ apiLogsPage page
 
 
 timePickerItems :: [(Text, Text)]

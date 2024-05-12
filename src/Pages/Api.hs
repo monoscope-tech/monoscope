@@ -1,44 +1,15 @@
 module Pages.Api (apiGetH, apiPostH, apiDeleteH, GenerateAPIKeyForm (..)) where
 
-import Data.Aeson (encode)
-import Data.Aeson.QQ (aesonQQ)
 import Data.ByteString.Base64 qualified as B64
 import Data.Default (def)
-import Data.Text as T (Text, take)
+import Data.Text qualified as T
 import Data.UUID as UUID (toText)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
-import Lucid (
-  Html,
-  Term (term),
-  ToHtml (toHtml),
-  autofocus_,
-  button_,
-  class_,
-  div_,
-  form_,
-  h2_,
-  h3_,
-  id_,
-  input_,
-  name_,
-  p_,
-  placeholder_,
-  role_,
-  section_,
-  span_,
-  strong_,
-  table_,
-  tbody_,
-  td_,
-  th_,
-  thead_,
-  tr_,
-  type_,
- )
+import Lucid
 import Lucid.Htmx (hxConfirm_, hxDelete_, hxPost_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -46,29 +17,9 @@ import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Relude (
-  Applicative (pure),
-  Bool (..),
-  ConvertUtf8 (decodeUtf8, encodeUtf8),
-  Generic,
-  Maybe (..),
-  MonadIO (liftIO),
-  Ord ((>)),
-  Semigroup ((<>)),
-  Show,
-  mapM_,
-  not,
-  show,
-  ($),
-  (&),
- )
-import Servant (Headers, addHeader)
-import Servant.Htmx (HXTrigger)
-import System.Config (
-  AuthContext (config),
-  EnvConfig (apiKeyEncryptionSecretKey),
- )
-import System.Types (ATAuthCtx)
+import Relude hiding (ask)
+import System.Config (AuthContext (config), EnvConfig (apiKeyEncryptionSecretKey))
+import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Utils (faIcon_)
 import Web.FormUrlEncoded (FromForm)
 
@@ -81,7 +32,7 @@ data GenerateAPIKeyForm = GenerateAPIKeyForm
   deriving anyclass (FromForm)
 
 
-apiPostH :: Projects.ProjectId -> GenerateAPIKeyForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
+apiPostH :: Projects.ProjectId -> GenerateAPIKeyForm -> ATAuthCtx (RespHeaders (Html ()))
 apiPostH pid apiKeyForm = do
   (sess, project) <- Sessions.sessionAndProject pid
   authCtx <- ask @AuthContext
@@ -92,26 +43,25 @@ apiPostH pid apiKeyForm = do
   apiKeys <- dbtToEff do
     ProjectApiKeys.insertProjectApiKey pApiKey
     ProjectApiKeys.projectApiKeysByProjectId pid
-  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Created API Key Successfully"]}|]
+  addSuccessToast "Created API Key Successfully" Nothing
   case from apiKeyForm of
-    Just v -> pure $ addHeader hxTriggerData $ copyNewApiKey (Just (pApiKey, encryptedKeyB64)) True
-    Nothing -> pure $ addHeader hxTriggerData $ mainContent pid apiKeys (Just (pApiKey, encryptedKeyB64))
+    Just v -> addRespHeaders $ copyNewApiKey (Just (pApiKey, encryptedKeyB64)) True
+    Nothing -> addRespHeaders $ mainContent pid apiKeys (Just (pApiKey, encryptedKeyB64))
 
 
-apiDeleteH :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
+apiDeleteH :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (RespHeaders (Html ()))
 apiDeleteH pid keyid = do
   (sess, project) <- Sessions.sessionAndProject pid
   res <- dbtToEff $ ProjectApiKeys.revokeApiKey keyid
   apikeys <- dbtToEff $ ProjectApiKeys.projectApiKeysByProjectId pid
-  let hxTriggerData =
-        if res > 0
-          then decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Revoked API Key Successfully"]}|]
-          else decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Something went wrong"]}|]
-  pure $ addHeader hxTriggerData $ mainContent pid apikeys Nothing
+  if res > 0
+    then addSuccessToast "Revoked API Key Successfully" Nothing
+    else addErrorToast "Something went wrong" Nothing
+  addRespHeaders $ mainContent pid apikeys Nothing
 
 
 -- | apiGetH renders the api keys list page which includes a modal for creating the apikeys.
-apiGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
+apiGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 apiGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   apiKeys <- dbtToEff $ ProjectApiKeys.projectApiKeysByProjectId pid
@@ -123,7 +73,7 @@ apiGetH pid = do
           , pageTitle = "API Keys"
           , hasIntegrated = Just (requestDumps > 0)
           }
-  pure $ bodyWrapper bwconf $ apiKeysPage pid apiKeys
+  addRespHeaders $ bodyWrapper bwconf $ apiKeysPage pid apiKeys
 
 
 apiKeysPage :: Projects.ProjectId -> Vector ProjectApiKeys.ProjectApiKey -> Html ()
