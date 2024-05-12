@@ -4,11 +4,11 @@ module Pages.SlackInstall (getH, linkProjectsGetH, linkProjectGetH, postH, LinkP
 
 import Control.Lens ((.~), (^.))
 import Data.Aeson qualified as AE
-import Data.Default ( Default(def) )
+import Data.Default (Default (def))
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT ( withPool )
+import Database.PostgreSQL.Entity.DBT (withPool)
 import Deriving.Aeson qualified as DAE
-import Effectful.PostgreSQL.Transact.Effect ( dbtToEff )
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask, asks)
 import Fmt (dateDashF, fmt)
 import Lucid
@@ -16,13 +16,13 @@ import Lucid.Htmx (hxPost_)
 import Models.Apis.Slack (insertAccessToken)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Network.Wreq ( FormParam(..), header, postWith, defaults, responseBody )
+import Network.Wreq (FormParam (..), defaults, header, postWith, responseBody)
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Pkg.Components (navBar)
 import Pkg.Mail (sendSlackMessage)
 import Relude hiding (ask, asks)
-import System.Config ( AuthContext(config, env, pool), EnvConfig(slackRedirectUri, slackClientId, slackClientSecret) )
-import System.Types ( RespHeaders,ATAuthCtx,addRespHeaders,addSuccessToast,ATBaseCtx )
+import System.Config (AuthContext (config, env, pool), EnvConfig (slackClientId, slackClientSecret, slackRedirectUri))
+import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Utils (faIcon_)
 import Web.FormUrlEncoded (FromForm)
 

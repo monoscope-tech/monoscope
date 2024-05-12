@@ -40,7 +40,7 @@ import Pages.Monitors.Alerts qualified as Alerts
 import Pkg.Components (loader)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
-import System.Types 
+import System.Types
 import Utils
 import Witch (from)
 

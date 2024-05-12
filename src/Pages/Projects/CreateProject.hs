@@ -24,9 +24,9 @@ import Data.Aeson.QQ (aesonQQ)
 import Data.ByteString.Base64 qualified as B64
 import Data.CaseInsensitive (original)
 import Data.CaseInsensitive qualified as CI
-import Data.Default ( Default(..) )
+import Data.Default (Default (..))
 import Data.List.Extra (cons)
-import Data.List.Unique ( uniq )
+import Data.List.Unique (uniq)
 import Data.Pool (withResource)
 import Data.Text (toLower)
 import Data.Text qualified as T
@@ -36,12 +36,12 @@ import Data.Valor (Valor, check1, failIf, validateM)
 import Data.Valor qualified as Valor
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
-import Effectful.PostgreSQL.Transact.Effect ( dbtToEff )
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Lucid
-import Lucid.Htmx ( hxPost_, hxConfirm_, hxGet_, hxIndicator_, hxSwap_, hxTarget_ )
-import Lucid.Hyperscript ( __ )
-import Models.Apis.Slack ( getProjectSlackData, SlackData )
+import Lucid.Htmx (hxConfirm_, hxGet_, hxIndicator_, hxPost_, hxSwap_, hxTarget_)
+import Lucid.Hyperscript (__)
+import Models.Apis.Slack (SlackData, getProjectSlackData)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMembers qualified as Projects
@@ -49,16 +49,16 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
-import Network.Wreq ( header, defaults, responseBody, getWith )
+import Network.Wreq (defaults, getWith, header, responseBody)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pkg.ConvertKit qualified as ConvertKit
 import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
-import Servant (addHeader,noHeader)
-import System.Config ( AuthContext(config, pool),EnvConfig(convertkitApiKey, lemonSqueezyUrl, slackRedirectUri,lemonSqueezyApiKey, apiKeyEncryptionSecretKey) )
-import System.Types ( RespHeaders,ATAuthCtx,addSuccessToast,addRespHeaders,addErrorToast,redirectCS )
-import Utils ( faIcon_ )
+import Servant (addHeader, noHeader)
+import System.Config (AuthContext (config, pool), EnvConfig (apiKeyEncryptionSecretKey, convertkitApiKey, lemonSqueezyApiKey, lemonSqueezyUrl, slackRedirectUri))
+import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
+import Utils (faIcon_)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -183,7 +183,7 @@ createProjectPostH createP = do
   appCtx <- ask @AuthContext
   validationRes <- validateM createProjectFormV createP
   case validationRes of
-    Right cpe -> addRespHeaders $  createProjectBody (sess.persistentSession) appCtx.config createP.isUpdate createP cpe Nothing Nothing
+    Right cpe -> addRespHeaders $ createProjectBody (sess.persistentSession) appCtx.config createP.isUpdate createP cpe Nothing Nothing
     Left cp -> processProjectPostForm cp
 
 
@@ -325,8 +325,8 @@ processProjectPostForm cpRaw = do
           _ <- liftIO $ withResource appCtx.pool \conn ->
             createJob conn "background_jobs" $ BackgroundJobs.CreatedProjectSuccessfully sess.user.id pid (original sess.user.email) cp.title
           addSuccessToast "Created Project Successfully" Nothing
-          redirectCS ("/p/" <> pid.toText <> "/about_project") 
-          addRespHeaders $ createProjectBody sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError) Nothing Nothing 
+          redirectCS ("/p/" <> pid.toText <> "/about_project")
+          addRespHeaders $ createProjectBody sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError) Nothing Nothing
 
 
 ----------------------------------------------------------------------------------------------------------

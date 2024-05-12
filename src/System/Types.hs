@@ -19,28 +19,27 @@ module System.Types (
   redirectCS,
 ) where
 
+import Data.Aeson qualified as AE
+import Data.Map qualified as Map
 import Effectful (Eff, IOE, runEff)
 import Effectful.Error.Static (Error)
-import Data.Aeson qualified as AE
 import Effectful.Log (Log)
-import Data.Map qualified as Map
 import Effectful.PostgreSQL.Transact.Effect (DB, runDB)
 import Effectful.Reader.Static (Reader, runReader)
+import Effectful.State.Static.Local qualified as State
 import Effectful.Time (Time, runTime)
 import Log qualified
 import Models.Users.Sessions qualified as Sessions
-import Relude (IO, Semigroup ((<>)), Type, show, (&), Text, Maybe(..), Map, ($), decodeUtf8, pure, maybe, (++), catMaybes) 
+import Relude (IO, Map, Maybe (..), Semigroup ((<>)), Text, Type, catMaybes, decodeUtf8, maybe, pure, show, ($), (&), (++))
 import Servant (AuthProtect, Header, Headers, ServerError, addHeader, noHeader)
+import Servant.Htmx (HXRedirect, HXTriggerAfterSettle)
 import Servant.Server.Experimental.Auth (AuthServerData)
-import Effectful.State.Static.Local qualified as State
 import System.Config (
   AuthContext (config, jobsPool),
   EnvConfig (environment),
  )
 import System.Logging qualified as Logging
 import Web.Cookie (SetCookie)
-import Servant.Htmx (HXRedirect, HXTriggerAfterSettle)
-
 
 
 -- a map of events to be triggered on the clientside.
@@ -49,8 +48,6 @@ type TriggerEvents = Map Text [AE.Value]
 
 
 type HXRedirectDest = Maybe Text
-
-
 
 
 type ATBaseCtx :: Type -> Type
@@ -106,13 +103,11 @@ type instance
     (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
 
 
-
 type RespHeaders =
   Headers
     '[ HXTriggerAfterSettle
      , HXRedirect
      ]
-
 
 
 addRespHeaders :: a -> ATAuthCtx (RespHeaders (a))
@@ -145,4 +140,3 @@ addSuccessToast = addToast "success"
 
 addErrorToast :: Text -> Maybe Text -> ATAuthCtx ()
 addErrorToast = addToast "error"
-

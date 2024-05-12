@@ -3,8 +3,8 @@
 
 module Pages.Endpoints.EndpointDetails (endpointDetailsH, fieldDetailsPartialH, fieldsToNormalized, endpointDetailsWithHashH) where
 
+import Data.Aeson (KeyValue ((.=)))
 import Data.Aeson qualified as AE
-import Data.Aeson ( KeyValue((.=)) ) 
 import Data.Aeson.Key qualified as AEKey
 import Data.Aeson.Text (encodeToLazyText)
 import Data.Default (def)
@@ -17,14 +17,14 @@ import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
-import Effectful.PostgreSQL.Transact.Effect ( dbtToEff )
-import Fmt ( fmt, fixedF )
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Fmt (fixedF, fmt)
 import Lucid
-import Lucid.Htmx ( hxPost_, hxGet_, hxSwap_, hxTarget_ )
+import Lucid.Htmx (hxGet_, hxPost_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript.QuasiQuoter
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields qualified as Fields
-import Models.Apis.Fields.Types ( fieldTypeToText,fieldsToNormalized,Field(hash, projectId, id, fieldType, isRequired, isEnum, key,keyPath, fieldCategory, fieldTypeOverride, createdAt, updatedAt,description),FieldCategoryEnum,FieldId(unFieldId) )
+import Models.Apis.Fields.Types (Field (createdAt, description, fieldCategory, fieldType, fieldTypeOverride, hash, id, isEnum, isRequired, key, keyPath, projectId, updatedAt), FieldCategoryEnum, FieldId (unFieldId), fieldTypeToText, fieldsToNormalized)
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes (getShapeFields)
@@ -36,13 +36,13 @@ import Pages.Anomalies.AnomalyList qualified as AnomaliesList
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Charts.Charts qualified as C
 import Pages.Charts.Charts qualified as Charts
-import Pages.Components ( statBox )
+import Pages.Components (statBox)
 import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
 import Relude hiding (ask, asks, max, min)
 import Relude.Unsafe qualified as Unsafe
-import System.Types ( RespHeaders, ATAuthCtx, addRespHeaders, redirectCS )
+import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, redirectCS)
 import Text.Interpolation.Nyan (int, rmode')
-import Utils ( faIcon_,deleteParam,faIconWithAnchor_,faSprite_,getStatusColor,mIcon_ )
+import Utils (deleteParam, faIconWithAnchor_, faIcon_, faSprite_, getStatusColor, mIcon_)
 import Witch (from)
 
 
@@ -203,7 +203,7 @@ endpointDetailsWithHashH pid endpoint_hash = do
   case endpoint of
     Just e -> do
       let redirect_url = "/p/" <> pid.toText <> "/endpoints/" <> e.id.toText
-      redirectCS redirect_url 
+      redirectCS redirect_url
       addRespHeaders $ span_ ""
     Nothing -> addRespHeaders ""
 

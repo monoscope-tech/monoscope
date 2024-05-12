@@ -2,14 +2,14 @@ module Pages.Api (apiGetH, apiPostH, apiDeleteH, GenerateAPIKeyForm (..)) where
 
 import Data.ByteString.Base64 qualified as B64
 import Data.Default (def)
-import Data.Text qualified as T 
+import Data.Text qualified as T
 import Data.UUID as UUID (toText)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
-import Lucid 
+import Lucid
 import Lucid.Htmx (hxConfirm_, hxDelete_, hxPost_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -19,7 +19,7 @@ import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude hiding (ask)
 import System.Config (AuthContext (config), EnvConfig (apiKeyEncryptionSecretKey))
-import System.Types ( RespHeaders,ATAuthCtx,addSuccessToast,addRespHeaders, addErrorToast ) 
+import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Utils (faIcon_)
 import Web.FormUrlEncoded (FromForm)
 

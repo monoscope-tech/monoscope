@@ -21,7 +21,7 @@ import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude hiding (ask, asks)
-import System.Types 
+import System.Types
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -63,7 +63,7 @@ surveyPutH pid survey = do
       res <- dbtToEff $ execute Update [sql| update projects.projects set questions= ? where id=? |] (jsonBytes, pid)
       u <- dbtToEff $ execute Update [sql| update users.users set first_name= ?, last_name=?, phone_number=? where id=? |] (firstName, lastName, phoneNumber, sess.user.id)
       addSuccessToast "Thanks for taking the survey!" Nothing
-      redirectCS ("/p/" <> show pid.unProjectId <> "/onboarding") 
+      redirectCS ("/p/" <> show pid.unProjectId <> "/onboarding")
       addRespHeaders ""
 
 

@@ -6,15 +6,15 @@ import Data.Default (def)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector (Vector)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
-import Lucid 
+import Lucid
 import Lucid.Htmx (hxPost_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Projects.RedactedFields qualified as RedactedFields
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Relude 
-import System.Types 
+import Relude
+import System.Types
 import Web.FormUrlEncoded (FromForm)
 
 

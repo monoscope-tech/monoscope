@@ -21,9 +21,9 @@ import Models.Users.Sessions qualified as Sessions
 import Network.URI (escapeURIString, isUnescapedInURI)
 import Pages.Components qualified as Components
 import PyF (fmt)
-import Relude 
+import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (faIcon_,getMethodColor,getStatusColor,mIcon_,unwrapJsonPrimValue)
+import Utils (faIcon_, getMethodColor, getStatusColor, mIcon_, unwrapJsonPrimValue)
 
 
 expandAPIlogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATAuthCtx (RespHeaders (Html ()))
@@ -177,8 +177,8 @@ apiLogItemH pid rdId createdAt = do
   _ <- Sessions.sessionAndProject pid
   logItemM <- dbtToEff $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
   addRespHeaders $ case logItemM of
-        Just req -> apiLogItemView req (RequestDumps.requestDumpLogItemUrlPath pid req)
-        Nothing -> div_ "invalid log request ID"
+    Just req -> apiLogItemView req (RequestDumps.requestDumpLogItemUrlPath pid req)
+    Nothing -> div_ "invalid log request ID"
 
 
 apiLogItemView :: RequestDumps.RequestDumpLogItem -> Text -> Html ()

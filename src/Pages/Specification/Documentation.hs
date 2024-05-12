@@ -38,7 +38,7 @@ import Numeric (showHex)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
-import System.Types ( RespHeaders, ATAuthCtx, addSuccessToast, addRespHeaders ) 
+import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Utils (faIcon_)
 import Web.FormUrlEncoded (FromForm)
 

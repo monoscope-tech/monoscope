@@ -56,8 +56,8 @@ shareLinkPostH pid reqForm = do
     then do
       inId <- liftIO UUIDV4.nextRandom
       res <-
-        dbtToEff $
-          execute
+        dbtToEff
+          $ execute
             Insert
             [sql| INSERT INTO apis.share_requests (id, project_id, expired_at, request_dump_id, request_created_at) 
                                   VALUES (?,?, current_timestamp + interval ?,?,?) |]

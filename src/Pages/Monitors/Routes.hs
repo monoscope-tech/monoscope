@@ -7,9 +7,9 @@ import Pages.Monitors.Alerts qualified as Alerts
 import Pages.Monitors.TestCollectionEditor qualified as Testing
 import Pages.Monitors.Testing qualified as Testing
 import Relude
-import Servant ( Get,type (:>),FormUrlEncoded,ReqBody,Post,Capture,NamedRoutes,JSON,GenericMode(type (:-)),QueryParam,Patch )
+import Servant (Capture, FormUrlEncoded, GenericMode (type (:-)), Get, JSON, NamedRoutes, Patch, Post, QueryParam, ReqBody, type (:>))
 import Servant.HTML.Lucid (HTML)
-import System.Types ( RespHeaders )
+import System.Types (RespHeaders)
 
 
 type Routes = NamedRoutes Routes'

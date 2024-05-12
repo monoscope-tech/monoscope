@@ -5,7 +5,7 @@ import Pages.Specification.Documentation qualified as Documentation
 import Relude
 import Servant
 import Servant.HTML.Lucid (HTML)
-import System.Types ( RespHeaders )
+import System.Types (RespHeaders)
 
 
 type role Routes' nominal

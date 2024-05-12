@@ -1,7 +1,7 @@
 module Pages.Fields.FieldDetails (fieldPutH, EditFieldForm) where
 
-import Data.Digest.XXHash (xxHash)
 import Data.Aeson qualified as AE
+import Data.Digest.XXHash (xxHash)
 import Data.Time (getZonedTime)
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Entity.DBT (QueryNature (Update), execute)
@@ -27,7 +27,7 @@ import Relude (
   ($),
   (<$>),
  )
-import System.Types (ATAuthCtx, RespHeaders, addSuccessToast, addRespHeaders)
+import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Web.FormUrlEncoded (FromForm)
 
 

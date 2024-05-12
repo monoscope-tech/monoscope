@@ -64,8 +64,8 @@ endpointListGetH pid layoutM ackdM archivedM hostM projectHostM sortM hxRequestM
           , sort = fromMaybe "events" sortM
           }
   let elementBelowTabs =
-        div_ [class_ "grid grid-cols-5", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $
-          endpointList' paramInput currTime pid endpointStats inbox
+        div_ [class_ "grid grid-cols-5", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"]
+          $ endpointList' paramInput currTime pid endpointStats inbox
   case (hxRequestM, hxBoostedM) of
     (Just "true", Just "false") -> addRespHeaders elementBelowTabs
     (Just "true", Nothing) -> addRespHeaders elementBelowTabs
@@ -144,8 +144,9 @@ endpointList' paramInput currTime pid enps inbox_count = form_ [class_ "col-span
       button_ [class_ "btn btn-sm btn-outline space-x-1 border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/archive", hxSwap_ "none"] do
         faSprite_ "fa-inbox" "solid" "h-4 w-4 inline-block" >> span_ "archive"
     div_ [class_ "relative inline-block"] do
-      a_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl space-x-2 cursor-pointer", [__|on click toggle .hidden on #sortMenuDiv |]] $ 
-        mIcon_ "sort" "h-4 w-4" >> (span_ $ toHtml currentSortTitle)
+      a_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl space-x-2 cursor-pointer", [__|on click toggle .hidden on #sortMenuDiv |]]
+        $ mIcon_ "sort" "h-4 w-4"
+        >> (span_ $ toHtml currentSortTitle)
       div_ [id_ "sortMenuDiv", hxBoost_ "true", class_ "p-1 hidden text-sm border border-black-30 absolute right-0 z-10 mt-2 w-72 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none", tabindex_ "-1"] do
         sortMenu & mapM_ \(title, desc, identifier) -> do
           let isActive = paramInput.sort == identifier || (paramInput.sort == "" && identifier == "first_seen")
@@ -155,13 +156,13 @@ endpointList' paramInput currTime pid enps inbox_count = form_ [class_ "col-span
             , hxIndicator_ "#sortLoading"
             ]
             do
-              div_ [class_ "flex flex-col items-center justify-center px-3"] $
-                if isActive then mIcon_ "checkmark4" "w-4 h-5" else mIcon_ "" "w-4 h-5"
+              div_ [class_ "flex flex-col items-center justify-center px-3"]
+                $ if isActive then mIcon_ "checkmark4" "w-4 h-5" else mIcon_ "" "w-4 h-5"
               div_ [class_ "grow space-y-1"] do
                 span_ [class_ "block text-lg"] $ toHtml title
                 span_ [class_ "block "] $ toHtml desc
-    div_ [id_ "sortLoading", class_ "htmx-indicator fixed top-1/2 left-1/2 -translate-1/2 rounded-lg bg-white shadow p-10 border"] $
-      span_ [class_ "loading loading-dots loading-md"] ""
+    div_ [id_ "sortLoading", class_ "htmx-indicator fixed top-1/2 left-1/2 -translate-1/2 rounded-lg bg-white shadow p-10 border"]
+      $ span_ [class_ "loading loading-dots loading-md"] ""
 
     div_ [class_ "flex justify-center font-base w-60 content-between gap-14"] do
       span_ "GRAPH"
@@ -212,8 +213,8 @@ renderEndpoint activePage currTime enp = do
         div_ [class_ "flex items-center gap-2 mt-5"] do
           AnomalyList.anomalyArchiveButton enp.projectId (Anomalies.AnomalyId enp.anomalyId) (isJust enp.archivedAt)
           AnomalyList.anomalyAcknowlegeButton enp.projectId (Anomalies.AnomalyId enp.anomalyId) (isJust enp.acknowlegedAt)
-    div_ [class_ "flex items-center justify-center "] $
-      div_
+    div_ [class_ "flex items-center justify-center "]
+      $ div_
         [ class_ "w-56 h-12 px-3"
         , hxGet_ $ "/charts_html?pid=" <> enp.projectId.toText <> "&since=14D&query_raw=" <> AnomalyList.escapedQueryPartial [PyF.fmt|endpoint_hash=="{enp.endpointHash}" | timechart [1d]|]
         , hxTrigger_ "intersect once"

@@ -16,7 +16,7 @@ import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude hiding (ask, asks)
 import System.Types
-import Utils ( faIcon_)
+import Utils (faIcon_)
 
 
 listProjectsGetH :: ATAuthCtx (RespHeaders (Html ()))

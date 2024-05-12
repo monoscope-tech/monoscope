@@ -45,8 +45,8 @@ import Pages.IntegrationDemos.Pyramid (pyramidGuide)
 import Pages.IntegrationDemos.Slim (slimGuide)
 import Pages.IntegrationDemos.Symfony (symfonyGuide)
 import Relude hiding (ask)
-import System.Types 
-import Utils ( faIcon_ )
+import System.Types
+import Utils (faIcon_)
 
 
 getH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))

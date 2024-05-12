@@ -37,7 +37,7 @@ import Pages.Components (statBox)
 import Pages.Endpoints.EndpointList (renderEndpoint)
 import Relude hiding (max, min)
 import System.Clock (Clock (Monotonic), getTime)
-import System.Types 
+import System.Types
 import Text.Interpolation.Nyan (int, rmode')
 import Utils (deleteParam, faIcon_, freeTierLimitExceededBanner, mIcon_)
 import Witch (from)

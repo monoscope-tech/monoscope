@@ -93,7 +93,7 @@ alertUpsertPostH pid form = do
 
   _ <- dbtToEff $ Monitors.queryMonitorUpsert queryMonitor
   addSuccessToast "Monitor was updated successfully" Nothing
-  addRespHeaders  ""
+  addRespHeaders ""
 
 
 alertListGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
