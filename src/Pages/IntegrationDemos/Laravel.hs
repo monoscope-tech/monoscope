@@ -19,7 +19,7 @@ laravelGuide apikey = do
       h3_ [class_ "text-2xl font-semibold"] "SET API KEY"
       p_ [class_ "text-gray-600 font-medium"] do
         "Set the APITOOLKIT_KEY environment variable to your API key in you"
-        span_ [class_ "text-red-500"] " .env "
+        codeEmphasis " .env "
         "file, should look like this:"
       codeExample $ apiKeyCode apikey
 
@@ -27,7 +27,7 @@ laravelGuide apikey = do
       h3_ [class_ "text-2xl font-semibold"] "Configure & Initialize SDK"
       p_ [class_ "text-gray-600 font-medium"] do
         "Register the middleware in the"
-        span_ [class_ "text-red-500"] " app/Http/Kernel.php "
+        codeEmphasis " app/Http/Kernel.php "
         "file under the correct middleware group eg api, or at the root"
       codeExample $ initCode
 

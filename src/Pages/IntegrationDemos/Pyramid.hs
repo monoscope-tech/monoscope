@@ -14,7 +14,7 @@ pyramidGuide apikey = do
       h3_ [class_ "text-2xl font-semibold"] "Install"
       p_ [class_ "text-gray-600 font-medium flex items-center gap-1"] do
         "Install the APItoolkit pyramid SDK using "
-        span_ [class_ "text-red-500"] "pip:"
+        codeEmphasis " pip: "
       bashCommand "pip install apitoolkit-pyramid"
 
     div_ [class_ "w-full flex flex-col gap-2", id_ "requests-monitoring"] do
@@ -36,7 +36,7 @@ pyramidGuide apikey = do
       h3_ [class_ "text-2xl font-semibold"] "Outgoing Request Monitoring"
       p_ [class_ "text-gray-600 max-w-5xl"] do
         "APItoolkit also allows you to monitor your outgoing request (i.e the api calls your make from your server). Monitored outgoing are also associated with the incoming request that triggered them. To monitor outgoing http requests from your pyramid application import"
-        span_ [class_ "text-red-500"] " observe_request "
+        codeEmphasis " observe_request "
         "from the apitoolkit_pyramid package and use it to observe reqeust like so..."
       codeExample $ outgoingRequest apikey
 

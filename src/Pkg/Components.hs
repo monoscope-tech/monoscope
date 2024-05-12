@@ -1,4 +1,13 @@
-module Pkg.Components (loader, navBar, bashCommand, codeExample, modal_, dropDownMenu_) where
+module Pkg.Components (
+  loader,
+  navBar,
+  bashCommand,
+  codeExample,
+  modal_,
+  dropDownMenu_,
+  codeEmphasis,
+  withEmphasisedText,
+) where
 
 import Data.Text
 import Lucid
@@ -79,3 +88,17 @@ codeExample code = do
       div_ [class_ "relative flex-auto flex flex-col"] do
         pre_ [class_ "flex leading-snug"] do
           code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs atom-one-dark"] $ toHtml code
+
+
+codeEmphasis :: Text -> Html ()
+codeEmphasis code = span_ [class_ "text-red-500"] $ toHtml $ code
+
+
+withEmphasisedText :: [(Text, Bool)] -> Html ()
+withEmphasisedText [] = mempty
+withEmphasisedText ((text, True) : xs) = do
+  codeEmphasis $ " " <> text <> " "
+  withEmphasisedText xs
+withEmphasisedText ((text, False) : xs) = do
+  toHtml text
+  withEmphasisedText xs

@@ -257,12 +257,12 @@ tabContentLaravel apikey current_tab =
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1 mt-4"] "Integrate"
         p_ [class_ "w-full py-1"] do
           "First, set the APITOOLKIT_KEY environment variable to your"
-          span_ [class_ "text-red-500"] " .env "
+          codeEmphasis " .env "
           "file."
         codeExample $ "APITOOLKIT_KEY=" <> apikey
       h4_ [class_ "text-slate-900 font-medium text-lg my-2"] do
         "Next, register the middleware in your"
-        span_ [class_ "text-red-500"] " app/Http/Kernel.php "
+        codeEmphasis " app/Http/Kernel.php "
         "file."
       codeExample
         $ [text|
@@ -307,12 +307,12 @@ tabContentSymfony apikey current_tab =
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1 mt-4"] "Integrate"
         p_ [class_ "w-full py-1"] do
           "First, set the APITOOLKIT_KEY environment variable to your"
-          span_ [class_ "text-red-500"] " .env "
+          codeEmphasis " .env "
           "file."
         codeExample $ "APITOOLKIT_KEY=" <> apikey
       h4_ [class_ "text-slate-900 font-medium text-lg my-2"] do
         "Next, register the middleware in your"
-        span_ [class_ "text-red-500"] " service.yaml "
+        codeEmphasis " service.yaml "
         "file"
       codeExample
         $ [text|
@@ -657,10 +657,7 @@ tabContentAdonis apikey current_tab =
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Integrate"
           p_ [class_ ""] "First configure the package"
           bashCommand $ "node ace configure apitoolkit-adonis"
-          p_ [class_ "mt-4"] do
-            "Next, set API key in a"
-            span_ [class_ "text-red-500"] " /conf/apitoolkit.ts "
-            "file."
+          p_ [class_ "mt-4"] $ withEmphasisedText [("Next, set API key in a", False), ("/conf/apitoolkit.ts", True), ("file.", False)]
           codeExample
             [text|
 export const apitoolkitConfig = {
@@ -668,12 +665,7 @@ apiKey: "$apikey",
 };
           |]
 
-          p_ [class_ "mt-4"] do
-            "Then, add"
-            span_ [class_ "text-red-500"] " @ioc:APIToolkit "
-            "to your global middlewares in the"
-            span_ [class_ "text-red-500"] " start/kernel.ts "
-            "file."
+          p_ [class_ "mt-4"] $ withEmphasisedText [("Then, add", False), ("@ioc:APIToolkit", True), ("to your global middlewares in the", False), ("start/kernel.ts", True), ("file", False)]
         codeExample
           $ [text|
 Server.middleware.register([

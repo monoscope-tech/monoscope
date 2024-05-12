@@ -19,7 +19,7 @@ symfonyGuide apikey = do
       h3_ [class_ "text-2xl font-semibold"] "SET API KEY"
       p_ [class_ "text-gray-600 font-medium"] do
         "Set the APITOOLKIT_KEY environment variable to your API key in you"
-        span_ [class_ "text-red-500"] " .env "
+        codeEmphasis " .env "
         "file, should look like this:"
       codeExample $ apiKeyCode apikey
 
@@ -27,7 +27,7 @@ symfonyGuide apikey = do
       h3_ [class_ "text-2xl font-semibold"] "Configure & Initialize SDK"
       p_ [class_ "text-gray-600 font-medium"] do
         "Register the APItoolkit listener in your"
-        span_ [class_ "text-red-500"] " service.yaml "
+        codeEmphasis " service.yaml "
         "file"
       codeExample $ initCode
 
@@ -35,7 +35,7 @@ symfonyGuide apikey = do
       h3_ [class_ "text-xl font-medium"] "Configuration Options"
       p_ [class_ "text-gray-600 font-medium max-w-5xl"] do
         "The SDK accepts other options alongside apikey to allow you to customize the sdk. Here's an example of what your"
-        span_ [class_ "text-red-500"] " service.yaml "
+        codeEmphasis " service.yaml "
         "file could look like, with the other options configured"
       codeExample configOptions
 

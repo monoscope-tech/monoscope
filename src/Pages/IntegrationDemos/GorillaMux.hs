@@ -14,7 +14,7 @@ gorillaGuide apikey = do
       h3_ [class_ "text-2xl font-semibold"] "Install"
       p_ [class_ "text-gray-600 font-medium flex items-center gap-1"] do
         "Install the APItoolkit gorilla mux SDK using "
-        span_ [class_ "text-red-500"] "go get:"
+        codeEmphasis "go get:"
       bashCommand "go get github.com/apitoolkit/apitoolkit-go"
 
     div_ [class_ "w-full flex flex-col gap-2", id_ "requests-monitoring"] do

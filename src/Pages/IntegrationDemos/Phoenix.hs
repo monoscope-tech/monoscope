@@ -14,9 +14,9 @@ phoenixGuide apikey = do
       h3_ [class_ "text-2xl font-semibold"] "Install"
       p_ [class_ "text-gray-600 font-medium"] do
         "Install the SDK by adding"
-        span_ [class_ "text-red-500"] " apitoolkit_phoenix "
+        codeEmphasis " apitoolkit_phoenix "
         "to the dependencies in"
-        span_ [class_ "text-red-500"] " mix.exs: "
+        codeEmphasis " mix.exs: "
       codeExample
         $ [text|def deps do
   [
@@ -28,9 +28,9 @@ end|]
       h3_ [class_ "text-2xl font-semibold"] "Configure & Initialize SDK"
       p_ [class_ "text-gray-600 font-medium"] do
         "Import and initialize the"
-        span_ [class_ "text-red-500"] " ApitoolkitPhoenix "
+        codeEmphasis " ApitoolkitPhoenix "
         "Plug in your"
-        span_ [class_ "text-red-500"] " router.ex "
+        codeEmphasis " router.ex "
         "file to start monitoring incoming requests."
       codeExample
         $ [text|
