@@ -30,7 +30,7 @@ import Pkg.Components qualified as Components
 import PyF (fmt)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
-import System.Types (ATAuthCtx)
+import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Utils (faIcon_, faSprite_)
 
 
@@ -46,25 +46,26 @@ data CollectionStepUpdateForm = CollectionStepUpdateForm
   deriving (AE.FromJSON, AE.ToJSON) via (DAE.CustomJSON) '[DAE.OmitNothingFields] CollectionStepUpdateForm
 
 
-collectionStepsUpdateH :: Projects.ProjectId -> Testing.CollectionId -> CollectionStepUpdateForm -> ATAuthCtx (Html ())
+collectionStepsUpdateH :: Projects.ProjectId -> Testing.CollectionId -> CollectionStepUpdateForm -> ATAuthCtx (RespHeaders (Html ()))
 collectionStepsUpdateH pid colId colF = do
   let isScheduled = colF.scheduled == Just "on"
   _ <- dbtToEff $ Testing.updateCollection pid colId (fromMaybe "" colF.title) (fromMaybe "" colF.description) isScheduled ((fromMaybe "" colF.scheduleNumber) <> " " <> fromMaybe "" colF.scheduleNumberUnit) colF.stepsData
-  -- TODO: toast
-  pure $ toHtml ""
+  addSuccessToast "Collection's steps updated successfully" Nothing
+  addRespHeaders $ toHtml ""
 
 
-collectionRunTestsH :: Projects.ProjectId -> Testing.CollectionId -> Maybe Int -> CollectionStepUpdateForm -> ATAuthCtx (Html ())
+collectionRunTestsH :: Projects.ProjectId -> Testing.CollectionId -> Maybe Int -> CollectionStepUpdateForm -> ATAuthCtx (RespHeaders (Html ()))
 collectionRunTestsH pid colId runIdxM stepsForm = do
   stepResultsE <- TestToDump.runTestAndLog pid stepsForm.stepsData
   let stepResults = fromRight' stepResultsE
   let tkRespJson = decodeUtf8 @Text $ AE.encode stepResults
-  pure $ do
+  addSuccessToast "Collection completed execution" Nothing
+  addRespHeaders $ do
     script_ [fmt|window.collectionResults = {tkRespJson}|]
     V.iforM_ stepResults collectionStepResult_
 
 
-collectionGetH :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (Html ())
+collectionGetH :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (RespHeaders (Html ()))
 collectionGetH pid colId = do
   (sess, project) <- Sessions.sessionAndProject pid
   collectionM <- dbtToEff $ Testing.getCollectionById colId
@@ -74,7 +75,7 @@ collectionGetH pid colId = do
           , currProject = Just project
           , pageTitle = "Testing"
           }
-  pure $ bodyWrapper bwconf $ collectionPage pid (Unsafe.fromJust collectionM)
+  addRespHeaders $ bodyWrapper bwconf $ collectionPage pid (Unsafe.fromJust collectionM)
 
 
 testSettingsModalContent_ :: Testing.Collection -> Html ()
@@ -101,8 +102,7 @@ testSettingsModalContent_ col = div_ [class_ "space-y-5 w-96"] do
           option_ [selected_ "" | scheduleNumberUnit == "minutes"] "Minutes"
           option_ [selected_ "" | scheduleNumberUnit == "hours"] "Hours"
           option_ [selected_ "" | scheduleNumberUnit == "days"] "Days"
-  div_ do
-    button_ [class_ "btn btn-bordered btn-primary", type_ "submit"] "Update"
+  div_ $ button_ [class_ "btn btn-bordered btn-primary", type_ "submit"] "Update"
 
 
 collectionPage :: Projects.ProjectId -> Testing.Collection -> Html ()

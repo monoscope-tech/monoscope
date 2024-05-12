@@ -21,47 +21,16 @@ import Models.Users.Sessions qualified as Sessions
 import Network.URI (escapeURIString, isUnescapedInURI)
 import Pages.Components qualified as Components
 import PyF (fmt)
-import Relude (
-  Applicative (pure),
-  Bool (True),
-  ConvertUtf8 (decodeUtf8),
-  Eq ((==)),
-  Foldable (length),
-  Int,
-  Integral (div),
-  Maybe (Just, Nothing),
-  Monad ((>>)),
-  Num ((-)),
-  Ord ((>)),
-  Semigroup ((<>)),
-  Text,
-  ToString (toString),
-  ToText (toText),
-  concat,
-  forM_,
-  fromMaybe,
-  mapM_,
-  show,
-  sort,
-  when,
-  ($),
-  (&),
- )
-import System.Types (ATAuthCtx)
-import Utils (
-  faIcon_,
-  getMethodColor,
-  getStatusColor,
-  mIcon_,
-  unwrapJsonPrimValue,
- )
+import Relude 
+import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
+import Utils (faIcon_,getMethodColor,getStatusColor,mIcon_,unwrapJsonPrimValue)
 
 
-expandAPIlogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATAuthCtx (Html ())
+expandAPIlogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATAuthCtx (RespHeaders (Html ()))
 expandAPIlogItemH pid rdId createdAt = do
   _ <- Sessions.sessionAndProject pid
   logItemM <- dbtToEff $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
-  pure $ case logItemM of
+  addRespHeaders $ case logItemM of
     Just req -> expandAPIlogItem' pid req True
     Nothing -> div_ [class_ "h-full flex flex-col justify-center items-center"] do
       p_ [] "Request not found"
@@ -203,13 +172,13 @@ expandAPIlogItem' pid req modal = do
           $ jsonValueToHtmlTree req.responseHeaders
 
 
-apiLogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATAuthCtx (Html ())
+apiLogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATAuthCtx (RespHeaders (Html ()))
 apiLogItemH pid rdId createdAt = do
   _ <- Sessions.sessionAndProject pid
   logItemM <- dbtToEff $ RequestDumps.selectRequestDumpByProjectAndId pid createdAt rdId
-  pure $ case logItemM of
-    Just req -> apiLogItemView req (RequestDumps.requestDumpLogItemUrlPath pid req)
-    Nothing -> div_ "invalid log request ID"
+  addRespHeaders $ case logItemM of
+        Just req -> apiLogItemView req (RequestDumps.requestDumpLogItemUrlPath pid req)
+        Nothing -> div_ "invalid log request ID"
 
 
 apiLogItemView :: RequestDumps.RequestDumpLogItem -> Text -> Html ()

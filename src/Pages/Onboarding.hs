@@ -17,14 +17,14 @@ import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pkg.Components
 import Relude hiding (ask)
-import System.Types (ATAuthCtx)
+import System.Types
 import Utils (
   faIcon_,
   faSprite_,
  )
 
 
-onboardingGetH :: Projects.ProjectId -> Maybe Bool -> Maybe Bool -> Maybe Text -> ATAuthCtx (Html ())
+onboardingGetH :: Projects.ProjectId -> Maybe Bool -> Maybe Bool -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 onboardingGetH pid polling redirected current_tab = do
   (sess, project) <- Sessions.sessionAndProject pid
   apiKeys <- dbtToEff $ ProjectApiKeys.projectApiKeysByProjectId pid
@@ -39,8 +39,8 @@ onboardingGetH pid polling redirected current_tab = do
           , hasIntegrated = Just hasRequest
           }
   case polling of
-    Just _ -> pure $ onboardingPage pid apikey hasRequest (isJust project.questions) (fromMaybe False redirected) (fromMaybe "express" current_tab)
-    Nothing -> pure $ bodyWrapper bwconf $ onboardingPage pid apikey hasRequest (isJust project.questions) (fromMaybe False redirected) "express"
+    Just _ -> addRespHeaders $ onboardingPage pid apikey hasRequest (isJust project.questions) (fromMaybe False redirected) (fromMaybe "express" current_tab)
+    Nothing -> addRespHeaders $ bodyWrapper bwconf $ onboardingPage pid apikey hasRequest (isJust project.questions) (fromMaybe False redirected) "express"
 
 
 onboardingPage :: Projects.ProjectId -> Text -> Bool -> Bool -> Bool -> Text -> Html ()

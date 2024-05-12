@@ -294,12 +294,12 @@ SELECT avm.id, avm.created_at, avm.updated_at, avm.project_id, aan.acknowleged_a
        avm.endpoint_id, avm.endpoint_method, avm.endpoint_url_path, aan.archived_at,
        (CASE 
           WHEN avm.anomaly_type='format' THEN (select count(*) from apis.request_dumps rd where avm.target_hash=ANY(rd.format_hashes))
-          ELSE t_agg.sum
+          ELSE 0 
        END)::integer events,
        NOW()
     FROM apis.anomalies_vm avm
     JOIN apis.anomalies aan ON avm.id = aan.id
-    JOIN apis.target_hash_agg_14days t_agg ON (t_agg.target_hash=avm.target_hash )
+    --JOIN apis.target_hash_agg_14days t_agg ON (t_agg.target_hash=avm.target_hash )
     WHERE
         avm.project_id = ? 
         AND avm.anomaly_type != 'field'

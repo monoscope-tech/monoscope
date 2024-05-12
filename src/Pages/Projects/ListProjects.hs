@@ -15,12 +15,11 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude hiding (ask, asks)
-import Servant (Union, WithStatus (..), respond)
 import System.Types
-import Utils (GetOrRedirect, faIcon_)
+import Utils ( faIcon_)
 
 
-listProjectsGetH :: ATAuthCtx (Union GetOrRedirect)
+listProjectsGetH :: ATAuthCtx (RespHeaders (Html ()))
 listProjectsGetH = do
   (sess, project) <- Sessions.sessionAndProject (Projects.ProjectId UUID.nil)
   let bwconf =
@@ -39,7 +38,7 @@ listProjectsGetH = do
             , Projects.createdAt = project.createdAt
             }
 
-  respond $ WithStatus @200 $ bodyWrapper bwconf $ listProjectsBody projects'
+  addRespHeaders $ bodyWrapper bwconf $ listProjectsBody projects'
 
 
 listProjectsBody :: V.Vector Projects.Project' -> Html ()

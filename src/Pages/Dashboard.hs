@@ -37,7 +37,7 @@ import Pages.Components (statBox)
 import Pages.Endpoints.EndpointList (renderEndpoint)
 import Relude hiding (max, min)
 import System.Clock (Clock (Monotonic), getTime)
-import System.Types (ATAuthCtx)
+import System.Types 
 import Text.Interpolation.Nyan (int, rmode')
 import Utils (deleteParam, faIcon_, freeTierLimitExceededBanner, mIcon_)
 import Witch (from)
@@ -60,7 +60,7 @@ data ParamInput = ParamInput
   }
 
 
-dashboardGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
+dashboardGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 dashboardGetH pid fromDStr toDStr sinceStr' = do
   (sess, project) <- Sessions.sessionAndProject pid
   now <- Time.currentTime
@@ -110,7 +110,7 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
   let currentURL = "/p/" <> pid.toText <> "?&from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
   let currentPickerTxt = fromMaybe (maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD) sinceStr
   let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt}
-  pure $ bodyWrapper bwconf $ dashboardPage pid paramInput currTime projectRequestStats newEndpoints reqLatenciesRolledByStepsJ (fromD, toD) freeTierExceeded hasRequests
+  addRespHeaders $ bodyWrapper bwconf $ dashboardPage pid paramInput currTime projectRequestStats newEndpoints reqLatenciesRolledByStepsJ (fromD, toD) freeTierExceeded hasRequests
 
 
 dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Vector.Vector Endpoints.EndpointRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Bool -> Bool -> Html ()

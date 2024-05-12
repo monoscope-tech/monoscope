@@ -15,11 +15,11 @@ import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.BodyWrapper (BWConfig (currProject, pageTitle, sessM), bodyWrapper)
 import PyF qualified
 import Relude hiding (ask, asks)
-import System.Types (ATAuthCtx)
-import Utils (faIcon_, mIcon_)
+import System.Types 
+import Utils ( faIcon_, mIcon_ )
 
 
-outgoingGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (Html ())
+outgoingGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 outgoingGetH pid sortM = do
   (sess, project) <- Sessions.sessionAndProject pid
   hostsAndEvents <- dbtToEff $ Endpoints.dependenciesAndEventsCount pid (fromMaybe "events" sortM)
@@ -29,7 +29,7 @@ outgoingGetH pid sortM = do
           , currProject = Just project
           , pageTitle = "Dependencies"
           }
-  pure $ bodyWrapper bwconf $ outgoingPage pid (fromMaybe "events" sortM) hostsAndEvents
+  addRespHeaders $ bodyWrapper bwconf $ outgoingPage pid (fromMaybe "events" sortM) hostsAndEvents
 
 
 sortOptions :: [(Text, Text, Text)]
