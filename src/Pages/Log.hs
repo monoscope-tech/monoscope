@@ -367,15 +367,16 @@ logItemRows_ pid requests curatedCols colIdxMap nextLogsURL = do
     $ tr_
     $ td_ [colspan_ $ show $ length curatedCols]
     $ a_
-      [ class_ "cursor-pointer inline-flex justify-center py-1 px-56 ml-36 blue-800 bg-blue-100 hover:bg-blue-200 text-center "
+      [ class_ "cursor-pointer inline-flex justify-center w-full py-1 px-56 blue-800 bg-blue-100 hover:bg-blue-200 text-center "
       , hxTrigger_ "click"
       , hxSwap_ "outerHTML"
       , hxGet_ nextLogsURL
       , hxTarget_ "closest tr"
-      -- , hxIndicator_ "next .htmx-indicator"
+      , hxIndicator_ "main-loadmore"
       ]
       do
-        span_ [class_ "inline-block"] "LOAD MORE " >> span_ [class_ "htmx-indicator loading loading-dots loading-lg inline-block pl-3"] loader
+        span_ [class_ "inline-block"] "LOAD MORE " 
+        span_ [id_ "main-loadmore", class_ "htmx-indicator loading loading-dots loading-lg inline-block mx-auto"] pass
 
 
 errorClass :: Bool -> V.Vector Value -> HM.HashMap Text Int -> (Int, Int, Text)
