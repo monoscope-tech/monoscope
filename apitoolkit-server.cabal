@@ -96,6 +96,7 @@ library
       Pages.Monitors.Testing
       Pages.NonMember
       Pages.Onboarding
+      Pages.Outgoing
       Pages.Projects.CreateProject
       Pages.Projects.Integrations
       Pages.Projects.ListProjects

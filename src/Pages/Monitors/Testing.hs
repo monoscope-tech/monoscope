@@ -17,23 +17,44 @@ import Data.Time (getZonedTime)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
-import Effectful.Reader.Static (ask)
-import Lucid
-import Lucid.Htmx (hxBoost_, hxPost_, hxSwap_, hxTarget_)
+import Lucid (
+  Html,
+  Term (term),
+  ToHtml (toHtml),
+  a_,
+  button_,
+  class_,
+  div_,
+  for_,
+  form_,
+  h1_,
+  h3_,
+  href_,
+  id_,
+  input_,
+  label_,
+  name_,
+  onclick_,
+  p_,
+  placeholder_,
+  script_,
+  span_,
+  textarea_,
+  type_,
+  small_
+ )
+import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_,hxBoost_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Pages.NonMember (userNotMemeberPage)
 import Relude hiding (ask)
-import Relude.Unsafe qualified as Unsafe
 import Servant (Headers, addHeader)
 import Servant.Htmx (HXTrigger)
-import System.Config (AuthContext)
 import System.Types (ATAuthCtx)
-import Utils (faIcon_, textToBool, userIsProjectMember)
+import Utils
 import Web.FormUrlEncoded (FromForm)
 
 data TestCollectionForm = TestCollectionForm
@@ -56,12 +77,10 @@ data ParamInput = ParamInput
     archived :: Bool
   }
 
-testingPostH :: Projects.ProjectId -> TestCollectionForm -> Maybe Text -> Maybe Text -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
+testingPostH :: Projects.ProjectId -> TestCollectionForm  -> Maybe Text -> Maybe Text -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
 testingPostH pid collection acknM archM = do
-  appConf <- ask @AuthContext
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
-  project <- dbtToEff $ Projects.selectProjectForUser (Sessions.userId sess, pid)
+  (_, project) <- Sessions.sessionAndProject pid
+  
   let ackd = textToBool <$> acknM
   let archived = textToBool <$> archM
   let paramInput =
@@ -98,34 +117,26 @@ testingPostH pid collection acknM archM = do
 
       pure $ addHeader hxTriggerData $ testingPage paramInput pid cols
 
-testingGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
+testingGetH :: Projects.ProjectId ->Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
 testingGetH pid acknM archM = do
-  appConf <- ask @AuthContext
-  sess' <- Sessions.getSession
-  let sess = Unsafe.fromJust sess'.persistentSession
+  (sess, project) <- Sessions.sessionAndProject pid
+  colls <- dbtToEff $ Testing.getCollections pid
   let ackd = textToBool <$> acknM
   let archived = textToBool <$> archM
-  isMember <- dbtToEff $ userIsProjectMember sess pid
-  if not isMember
-    then do
-      pure $ userNotMemeberPage sess
-    else do
-      (project, colls) <- dbtToEff do
-        project <- Projects.selectProjectForUser (Sessions.userId sess, pid)
-        colls <- Testing.getCollections pid
-        pure (project, colls)
-      let bwconf =
-            (def :: BWConfig)
-              { sessM = Just sess,
-                currProject = project,
-                pageTitle = "Testing"
-              }
-      let paramInput =
-            ParamInput
-              { ackd = fromMaybe False ackd,
-                archived = fromMaybe False archived
-              }
-      pure $ bodyWrapper bwconf $ testingPage paramInput pid colls
+ 
+  let bwconf =
+        (def :: BWConfig)
+          { sessM = Just sess.persistentSession
+          , currProject = Just project
+          , pageTitle = "Testing"
+          }
+  
+  let paramInput =
+        ParamInput
+          { ackd = fromMaybe False ackd,
+             archived = fromMaybe False archived
+           }        
+  pure $ bodyWrapper bwconf $ testingPage paramInput pid colls
 
 testingPage :: ParamInput -> Projects.ProjectId -> V.Vector Testing.CollectionListItem -> Html ()
 testingPage paramInput pid colls = do
