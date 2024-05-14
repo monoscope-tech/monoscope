@@ -250,7 +250,7 @@ usersByProjectId :: ProjectId -> DBT IO (Vector Users.User)
 usersByProjectId pid = query Select q (Only pid)
   where
     q =
-      [sql| select u.id, u.created_at, u.updated_at, u.deleted_at, u.active, u.first_name, u.last_name, u.display_image_url, u.email, u.phone_number
+      [sql| select u.id, u.created_at, u.updated_at, u.deleted_at, u.active, u.first_name, u.last_name, u.display_image_url, u.email, u.phone_number, u.is_sudo
                 from users.users u join projects.project_members pm on (pm.user_id=u.id) where project_id=? and u.active IS True;|]
 
 
@@ -258,7 +258,7 @@ userByProjectId :: ProjectId -> Users.UserId -> DBT IO (Vector Users.User)
 userByProjectId pid user_id = query Select q (user_id, pid)
   where
     q =
-      [sql| select u.id, u.created_at, u.updated_at, u.deleted_at, u.active, u.first_name, u.last_name, u.display_image_url, u.email, u.phone_number
+      [sql| select u.id, u.created_at, u.updated_at, u.deleted_at, u.active, u.first_name, u.last_name, u.display_image_url, u.email, u.phone_number,  u.is_sudo
                 from users.users u join projects.project_members pm on (pm.user_id= ?) where project_id=? and u.active IS True;|]
 
 
