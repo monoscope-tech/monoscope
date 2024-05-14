@@ -37,7 +37,6 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Pages.Monitors.Alerts qualified as Alerts
-import Pkg.Components (loader)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Types
