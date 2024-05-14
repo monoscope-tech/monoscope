@@ -265,10 +265,14 @@ projectsDropDown currProject projects = do
         div_ do
           div_ [class_ "relative"] do
             div_ [class_ "absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none"] $ faSprite_ "magnifying-glass" "regular" "h-6 w-4"
-            input_ [class_ "pl-12 w-full text-sm bg-gray-100 rounded-2xl border-0 p-3", placeholder_ "Search Projects"]
-          div_ [class_ "space-y-2 py-4 text-sm"] do
+            input_
+              [ class_ "pl-12 w-full text-sm bg-gray-100 rounded-2xl border-0 p-3"
+              , placeholder_ "Search Projects"
+              , [__|on input show .project_item in #projectsContainer when its textContent.toLowerCase() contains my value.toLowerCase()|]
+              ]
+          div_ [class_ "space-y-2 py-4 text-sm", id_ "projectsContainer"] do
             projects & mapM_ \project -> do
-              a_ [class_ "flex justify-between p-2", href_ $ "/p/" <> project.id.toText] do
+              a_ [class_ "flex justify-between p-2 project_item", href_ $ "/p/" <> project.id.toText] do
                 div_ [class_ "space-x-3"]
                   $ faSprite_ "folders" "sharp-regular" "h-5 w-5 inline-block"
                   >> span_ [class_ "inline-block"] (toHtml project.title)

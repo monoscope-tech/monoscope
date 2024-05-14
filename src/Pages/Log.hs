@@ -374,7 +374,7 @@ logItemRows_ pid requests curatedCols colIdxMap nextLogsURL = do
       , hxIndicator_ "main-loadmore"
       ]
       do
-        span_ [class_ "inline-block"] "LOAD MORE " 
+        span_ [class_ "inline-block"] "LOAD MORE "
         span_ [id_ "main-loadmore", class_ "htmx-indicator loading loading-dots loading-lg inline-block mx-auto"] pass
 
 
