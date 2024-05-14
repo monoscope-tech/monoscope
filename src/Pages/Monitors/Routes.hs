@@ -14,6 +14,8 @@ import System.Types (RespHeaders)
 
 type Routes = NamedRoutes Routes'
 
+type QPT a = QueryParam a Text
+
 
 type role Routes' nominal
 
@@ -23,8 +25,8 @@ data Routes' mode = Routes'
   , alertListGet :: mode :- "alerts" :> Get '[HTML] (RespHeaders (Html ()))
   , alertSingleGet :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> Get '[HTML] (RespHeaders (Html ()))
   , alertSingleToggleActive :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "toggle_active" :> Post '[HTML] (RespHeaders (Html ()))
-  , collectionsGet :: mode :- "testing" :> Get '[HTML] (RespHeaders (Html ()))
-  , newCollectionPost :: mode :- "testing" :> ReqBody '[FormUrlEncoded] Testing.TestCollectionForm :> Post '[HTML] (RespHeaders (Html ()))
+  , collectionsGet :: mode :- "testing" :> QPT "acknM" :> QPT "archM" :> Get '[HTML] (RespHeaders (Html ()))
+  , newCollectionPost :: mode :- "testing" :> ReqBody '[FormUrlEncoded] Testing.TestCollectionForm :> QPT "acknM" :> QPT "archM" :> Post '[HTML] (RespHeaders (Html ()))
   , collectionGet :: mode :- "testing" :> Capture "collection_id" TestingM.CollectionId :> Get '[HTML] (RespHeaders (Html ()))
   , collectionStepsUpdate :: mode :- "testing" :> Capture "collection_id" TestingM.CollectionId :> ReqBody '[JSON] Testing.CollectionStepUpdateForm :> Post '[HTML] (RespHeaders (Html ()))
   , collectionRunTests :: mode :- "testing" :> Capture "collection_id" TestingM.CollectionId :> QueryParam "step_index" Int :> ReqBody '[JSON] Testing.CollectionStepUpdateForm :> Patch '[HTML] (RespHeaders (Html ()))
