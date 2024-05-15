@@ -353,7 +353,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
           forM_ users \u -> do
             let firstName = u.firstName
             let title = project.title
-            let anomaly_url = "https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/" <> targetHash
+            let anomaly_url = "https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/by_hash/" <> targetHash
             let templateVars = [aesonQQ|{
                  "user_name": #{firstName},
                  "project_name": #{title},
@@ -391,7 +391,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
               forM_ users \u -> do
                  let firstName = u.firstName
                  let title = project.title
-                 let anomaly_url = "https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/" <> targetHash
+                 let anomaly_url = "https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/by_hash/" <> targetHash
                  let templateVars = [aesonQQ|{
                       "user_name": #{firstName},
                       "project_name": #{title},
@@ -417,7 +417,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
           _ -> forM_ users \u -> do 
                  let firstName = u.firstName
                  let title = project.title
-                 let anomaly_url = "https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/" <> targetHash
+                 let anomaly_url = "https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/by_hash/" <> targetHash
                  let templateVars = [aesonQQ|{
                       "user_name": #{firstName},
                       "project_name": #{title},
