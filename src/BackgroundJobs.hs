@@ -81,39 +81,16 @@ updateShapeCounts pid shapeHash newFields deletedFields updatedFields = execute 
     q = [sql| update apis.shapes SET new_unique_fields=?, deleted_fields=?, updated_field_formats=? where project_id=? and hash=?|]
 
 
--- TODO:
--- Analyze shapes for
--- 1: [x] how many fields in the current shape are completely new?
--- 2: [ ] how many were updated fields?
--- 3. [x] how many were deleted params
--- Send a notification email about the new anomaly (shape and endpoint etc)
---
 webhookUrl :: String
 webhookUrl = "https://discord.com/api/webhooks/1230980245423788045/JQOJ7w3gmEduaOvPTnxEz4L8teDpX5PJoFkyQmqZHR8HtRqAkWIjv2Xk1aKadTyXuFy_"
 
 
--- | Message data structure
-data DiscordMessage = DiscordMessage
-  { content :: Text
-  }
-
-
-instance ToJSON DiscordMessage where
-  toJSON (DiscordMessage content) =
-    object ["content" .= content]
-
-
--- | Function to send message to Discord
 sendMessageToDiscord :: Text -> IO ()
 sendMessageToDiscord msg = do
-  let message = DiscordMessage msg
-  response <- postWith opts webhookUrl (toJSON message)
-  liftIO $ putStrLn $ "Response: " ++ show (response ^. responseStatus)
-  where
-    opts =
-      defaults
-        & header "Content-Type"
-        .~ ["application/json"]
+  let message = object ["content" .= msg]
+  let opts = defaults & header "Content-Type" .~ ["application/json"]
+  response <- postWith opts webhookUrl message
+  pass
 
 
 jobsRunner :: Log.Logger -> Config.AuthContext -> Job -> IO ()
