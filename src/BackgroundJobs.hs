@@ -37,7 +37,7 @@ import Models.Tests.TestToDump qualified as TestToDump
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text, trimming)
-import Network.Wreq (defaults, header, postWith,responseStatus)
+import Network.Wreq (defaults, header, postWith, responseStatus)
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, startJobRunner, throwParsePayload)
 import Pages.Reports qualified as RP
@@ -115,6 +115,7 @@ sendMessageToDiscord msg = do
         & header "Content-Type"
         .~ ["application/json"]
 
+
 jobsRunner :: Log.Logger -> Config.AuthContext -> Job -> IO ()
 jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
   bgJob <- throwParsePayload job
@@ -147,7 +148,7 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
            Payment Plan : {project.paymentPlan}
            stack : {stackString}
         |]
-        liftIO $ sendMessageToDiscord msg  
+        liftIO $ sendMessageToDiscord msg
     CreatedProjectSuccessfully userId projectId reciever projectTitle -> do
       userM <- Users.userById userId
       whenJust userM \user -> do
