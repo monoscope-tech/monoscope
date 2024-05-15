@@ -2,7 +2,7 @@
 
 module BackgroundJobs (jobsWorkerInit, jobsRunner, BgJobs (..)) where
 
-import Control.Lens ((.~), (^.))
+import Control.Lens ((.~))
 import Data.Aeson as Aeson
 import Data.Aeson.QQ (aesonQQ)
 import Data.CaseInsensitive qualified as CI
@@ -37,7 +37,7 @@ import Models.Tests.TestToDump qualified as TestToDump
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text, trimming)
-import Network.Wreq (defaults, header, postWith, responseStatus)
+import Network.Wreq (defaults, header, postWith)
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, startJobRunner, throwParsePayload)
 import Pages.Reports qualified as RP
