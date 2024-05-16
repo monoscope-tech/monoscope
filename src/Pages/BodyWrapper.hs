@@ -243,13 +243,13 @@ projectsDropDown currProject projects = do
     do
       div_ [class_ "p-2 pb-4 "] do
         div_ [class_ "flex mt-2 mb-4"] do
-          faSprite_ "folders" "sharp-light" "h-5 w-5 mr-2"
+          faSprite_ "folders" "regular" "h-5 w-5 mr-2"
           div_ do
             strong_ [class_ "block"] $ toHtml currProject.title
             small_ [class_ "block text-blue-800"] $ toHtml currProject.paymentPlan
         nav_ [] do
           a_ [href_ [text| /p/$pidTxt/settings |], class_ "p-3 flex gap-3 items-center rounded-2xl hover:bg-gray-100"] do
-            faSprite_ "gear" "sharp-regular" "h-5 w-5" >> span_ "Settings"
+            faSprite_ "gear" "regular" "h-5 w-5" >> span_ "Settings"
           a_ [href_ [text| /p/$pidTxt/manage_members |], class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100"] do
             faSprite_ "user-plus" "regular" "h-5 w-5" >> span_ "Manage members"
           a_ [href_ [text| /p/$pidTxt/apis|], class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100"] do
@@ -261,7 +261,7 @@ projectsDropDown currProject projects = do
         div_ [class_ "flex justify-between content-center items-center py-5 mb-2 "] do
           a_ [href_ "/"] $ h3_ [class_ "text-xl"] "Switch projects"
           a_ [class_ "inline-block bg-blue-700 flex pl-3 pr-4 py-2 rounded-xl text-white space-x-2", href_ "/p/new"] do
-            faSprite_ "plus" "sharp-regular" "h-5 w-5 bg-blue-800 rounded-lg" >> span_ [class_ "inline-block px-1"] "Add"
+            faSprite_ "plus" "regular" "h-5 w-5 bg-blue-800 rounded-lg" >> span_ [class_ "inline-block px-1"] "Add"
         div_ do
           div_ [class_ "relative"] do
             div_ [class_ "absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none"] $ faSprite_ "magnifying-glass" "regular" "h-6 w-4"
@@ -274,9 +274,9 @@ projectsDropDown currProject projects = do
             projects & mapM_ \project -> do
               a_ [class_ "flex justify-between p-2 project_item", href_ $ "/p/" <> project.id.toText] do
                 div_ [class_ "space-x-3"]
-                  $ faSprite_ "folders" "sharp-regular" "h-5 w-5 inline-block"
+                  $ faSprite_ "folders" "regular" "h-5 w-5 inline-block"
                   >> span_ [class_ "inline-block"] (toHtml project.title)
-                when (currProject.id == project.id) $ faSprite_ "circle-check" "sharp-regular" "h-6 w-6 text-green-700"
+                when (currProject.id == project.id) $ faSprite_ "circle-check" "regular" "h-6 w-6 text-green-700"
 
 
 sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Maybe Text -> Maybe Bool -> Html ()

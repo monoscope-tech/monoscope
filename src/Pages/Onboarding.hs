@@ -64,13 +64,13 @@ onboardingPage pid apikey hasRequest ans redi ctb = do
               span_ [class_ "text-slate-500 text-lg font-bold"] $ p <> " completed"
             ul_ [class_ "grid grid-cols-3 items-start px-3 py-4 border rounded-xl mt-8"] do
               li_ [class_ "flex h-full mx-4 py-2 gap-6 text-green border-r"] do
-                faSprite_ "circle-check" "sharp-regular" "h-6 w-6 mt-2 text-green-700"
+                faSprite_ "circle-check" "regular" "h-6 w-6 mt-2 text-green-700"
                 button_ [class_ "flex flex-col cursor-default"] do
                   p_ [class_ "font-semibold text-blue-500"] "Create an account"
                   span_ [class_ "text-slate-500"] "This is completed when you sign up."
               li_ [class_ "flex flex-col  mx-4 h-full py-2 gap-6 text-green border-r"] do
                 div_ [class_ "flex w-full gap-6"] do
-                  faSprite_ "circle-check" "sharp-regular" "shrink-0 h-6 w-6 mt-2 text-green-700"
+                  faSprite_ "circle-check" "regular" "shrink-0 h-6 w-6 mt-2 text-green-700"
                   button_
                     [ class_ "flex justify-between text-left w-full items-center"
                     ]
@@ -83,7 +83,7 @@ onboardingPage pid apikey hasRequest ans redi ctb = do
                 div_ [class_ "flex w-full gap-6"] do
                   let style = if hasRequest then "text-green-700" else "text-gray-400 "
                   let style2 = if hasRequest then "text-blue-500" else "text-gray-400 "
-                  faSprite_ "circle-check" "sharp-regular" $ "shrink-0 h-6 mt-2 w-6 " <> style
+                  faSprite_ "circle-check" "regular" $ "shrink-0 h-6 mt-2 w-6 " <> style
                   button_ [class_ "flex justify-between text-left w-full items-center cursor-default", [__|on click toggle .hidden on #SDKs|]] do
                     div_ [class_ "flex flex-col"] do
                       p_ [class_ $ "font-semibold " <> style2] "Integrate APItoolkit to your app"
@@ -105,7 +105,7 @@ onboardingPage pid apikey hasRequest ans redi ctb = do
               h3_ [class_ "font-bold text-lg"] "Documentation"
               p_ [class_ "text-slate-700"] "Check out our documentation to learn more about using APItoolkit."
               span_ [href_ "https://www.apitoolkit.io/docs", class_ "text-blue-500 flex items-center gap-2"] do
-                faSprite_ "link-simple" "sharp-regular" "h-8 w-8 text-blue-500"
+                faSprite_ "link-simple" "regular" "h-8 w-8 text-blue-500"
                 "Read the docs"
             a_ [class_ "block px-8 py-16 flex items-center gap-6 border-l hover:bg-blue-100 ", href_ "https://calendar.app.google/EvPzCoVsLh5gqkAo8", target_ "_BLANK"] do
               faSprite_ "circle-play" "regular" "text-blue-500 h-14 w-14"
@@ -158,7 +158,7 @@ completedBanner pid =
   div_ [class_ "w-[1000px] bg-slate-200 mx-auto rounded-lg border shadow mb-10"] do
     div_ [class_ "w-full px-8 py-16 bg-slate-100  rounded"] do
       div_ [class_ "pb-2 flex items-center flex-col gap-4 text-blue-500 font-medium"] do
-        faSprite_ "circle-check" "sharp-regular" "h-24 w-24 text-green-700"
+        faSprite_ "circle-check" "regular" "h-24 w-24 text-green-700"
         p_ [class_ "max-w-md text-center"] "Onboarding completed!"
         a_ [href_ $ "/p/" <> pid.toText <> "/", class_ "btn btn-primary"] "Go to the dashboard"
 
