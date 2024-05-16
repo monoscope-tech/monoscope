@@ -413,32 +413,25 @@ CREATE TABLE IF NOT EXISTS apis.request_dumps
     shape_hash                text      NOT  NULL DEFAULT    ''::text,
     format_hashes             text[]    NOT  NULL DEFAULT    '{}'::text[],
     field_hashes              text[]    NOT  NULL DEFAULT    '{}'::text[],
+    duration_ns               BIGINT    NOT  NULL default 0,
+    sdk_type                  TEXT NOT NULL default '',
+    parent_id                 uuid,
+    service_version           text,
+    errors                    jsonb NOT NULL DEFAULT '{}'::jsonb,
+    tags                      text[] NOT NULL DEFAULT '{}'::text[],
+    request_type              TEXT NOT NULL DEFAULT 'Incoming',
 
     PRIMARY KEY(project_id,created_at,id)
 );
--- Introduce new duration_ns column and deprecate the old duration column
-alter table apis.request_dumps add column duration_ns BIGINT NOT NULL default 0;
--- NOTE: I get an error: ERROR: attempted to lock invisible tuple when i try to run this
--- So we would start with duration:0 for existing fields
-update apis.request_dumps set duration_ns=EXTRACT(epoch FROM duration)::BIGINT;
-alter table apis.request_dumps add column sdk_type TEXT NOT NULL default '';
 
 SELECT manage_updated_at('apis.request_dumps');
-SELECT create_hypertable('apis.request_dumps', 'created_at');
-SELECT add_retention_policy('apis.request_dumps',INTERVAL '3 months',true);
+SELECT create_hypertable('apis.request_dumps', by_range('created_at', INTERVAL '1 day'), migrate_data => true);
+SELECT add_retention_policy('apis.request_dumps',INTERVAL '1 months',true);
 CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_project_id ON apis.request_dumps(project_id, created_at);
-
-ALTER TABLE apis.request_dumps 
-  ADD COLUMN parent_id uuid,
-  ADD COLUMN service_version text,
-  ADD COLUMN errors jsonb NOT NULL DEFAULT '{}'::jsonb,
-  ADD COLUMN tags text[] NOT NULL DEFAULT '{}'::text[];
-
 ALTER TABLE apis.request_dumps SET (timescaledb.compress, timescaledb.compress_orderby = 'created_at DESC', timescaledb.compress_segmentby = 'project_id');
-SELECT add_compression_policy('apis.request_dumps', INTERVAL '14d');
-
-ALTER TABLE apis.request_dumps ADD COLUMN request_type TEXT NOT NULL DEFAULT 'Incoming';
+SELECT add_compression_policy('apis.request_dumps', INTERVAL '7d');
 CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_parent_id ON apis.request_dumps(parent_id);
+
 -- Shapes aggregated by the min. 
 DROP MATERIALIZED VIEW IF EXISTS APIS.SHAPES_AGG_1MIN;
 CREATE MATERIALIZED VIEW APIS.SHAPES_AGG_1MIN WITH (TIMESCALEDB.CONTINUOUS) AS
@@ -1010,5 +1003,3 @@ SELECT add_job('tests.check_tests_to_trigger', '10min');
 INSERT into projects.projects (id, title) VALUES ('00000000-0000-0000-0000-000000000000', 'Demo Project');
 
 COMMIT;
-
-
