@@ -116,15 +116,17 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
       let stackString = intercalate ", " $ map T.unpack stack
       forM_ users \user -> do
         let userEmail = CI.original (user.email)
+        let project_url = "https://app.apitoolkit.io/p/" <> projectId.toText
+        let project_title = project.title
         let msg =
               [fmtTrim| 🎉 New project created on apitoolkit.io! 🎉
-           User FullName : {fullName} 
-           User Email : {userEmail}
-           Project ID: {projectId.toText}
-           User ID :{userId.toText}
-           Payment Plan : {project.paymentPlan}
-           stack : {stackString}
-        |]
+- **User Full Name**: {fullName} 
+- **User Email**: {userEmail}
+- **Project Title**: [{project_title}]({project_url})
+- **User ID**: {userId.toText}
+- **Payment Plan**: {project.paymentPlan}
+- **Stack**: {stackString}
+|]
         liftIO $ sendMessageToDiscord msg
     CreatedProjectSuccessfully userId projectId reciever projectTitle -> do
       userM <- Users.userById userId
