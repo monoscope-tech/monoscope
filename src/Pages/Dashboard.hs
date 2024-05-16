@@ -39,7 +39,7 @@ import Relude hiding (max, min)
 import System.Clock (Clock (Monotonic), getTime)
 import System.Types
 import Text.Interpolation.Nyan (int, rmode')
-import Utils (deleteParam, freeTierLimitExceededBanner, mIcon_, faSprite_)
+import Utils (deleteParam, faSprite_, freeTierLimitExceededBanner, mIcon_)
 import Witch (from)
 
 

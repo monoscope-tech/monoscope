@@ -15,8 +15,8 @@ import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
 import System.Types
-import Web.FormUrlEncoded (FromForm)
 import Utils (faSprite_)
+import Web.FormUrlEncoded (FromForm)
 
 
 data RedactFieldForm = RedactFieldForm
@@ -86,8 +86,8 @@ redactedFieldsPage pid redactedFields = do
                   ]
                   $ (span_ [class_ "sr-only"] "Close" >> faSprite_ "xmark" "regular" "h-6 w-6")
               div_ [class_ "sm:flex sm:items-start"] do
-                div_ [class_ "mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10"] $
-                  (span_ [class_ "sr-only"] "Close" >> faSprite_ "xmark" "regular" "h-6 w-6 text-red-600")
+                div_ [class_ "mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10"]
+                  $ (span_ [class_ "sr-only"] "Close" >> faSprite_ "xmark" "regular" "h-6 w-6 text-red-600")
                 div_ [class_ "mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left grow"] do
                   h3_ [class_ "text-lg leading-6 font-medium text-slate-900", id_ "modal-title"] "Redact a field path"
                   p_ [] "Redacting a field path means apitookit will strip out and discard all values of this field and will never be able to see those values."

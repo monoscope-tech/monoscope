@@ -16,7 +16,7 @@ import Pages.BodyWrapper (BWConfig (currProject, pageTitle, sessM), bodyWrapper)
 import PyF qualified
 import Relude hiding (ask, asks)
 import System.Types
-import Utils (faSprite_,mIcon_)
+import Utils (faSprite_, mIcon_)
 
 
 outgoingGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))

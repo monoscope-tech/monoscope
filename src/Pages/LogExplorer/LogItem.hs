@@ -23,8 +23,7 @@ import Pages.Components qualified as Components
 import PyF (fmt)
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (getMethodColor, getStatusColor, mIcon_, unwrapJsonPrimValue, faSprite_)
-
+import Utils (faSprite_, getMethodColor, getStatusColor, mIcon_, unwrapJsonPrimValue)
 
 
 expandAPIlogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATAuthCtx (RespHeaders (Html ()))
@@ -202,7 +201,7 @@ apiLogItemView req expandItemPath = do
       , onclick_ "downloadJson(event)"
       , term "data-reqJson" reqJson
       ]
-      ( span_ [] "Download" >> faSprite_ "arrow-down-to-line" "regular" "h-3 w-3")
+      (span_ [] "Download" >> faSprite_ "arrow-down-to-line" "regular" "h-3 w-3")
   jsonValueToHtmlTree $ selectiveToJson req
 
 

@@ -39,8 +39,8 @@ import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
-import Web.FormUrlEncoded (FromForm)
 import Utils (faSprite_)
+import Web.FormUrlEncoded (FromForm)
 
 
 data SwaggerForm = SwaggerForm

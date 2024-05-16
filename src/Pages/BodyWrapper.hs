@@ -255,7 +255,8 @@ projectsDropDown currProject projects = do
           a_ [href_ [text| /p/$pidTxt/apis|], class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100"] do
             faSprite_ "key" "regular" "h-5 w-5" >> span_ "API Keys"
           when (currProject.paymentPlan == "UsageBased")
-            $ a_ [class_ "p-3 flex gap-3 flex gap-3 items-center rounded hover:bg-gray-100 cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]] 
+            $ a_
+              [class_ "p-3 flex gap-3 flex gap-3 items-center rounded hover:bg-gray-100 cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]]
               (faSprite_ "dollar-sign" "regular" "h-5 w-5" >> span_ "Manage billing")
       div_ [class_ "border-t border-gray-100 p-2"] do
         div_ [class_ "flex justify-between content-center items-center py-5 mb-2 "] do

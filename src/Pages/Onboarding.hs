@@ -93,8 +93,8 @@ onboardingPage pid apikey hasRequest ans redi ctb = do
                   span_ "Waiting to recieve data from your server."
 
         div_ [class_ "text- center"] do
-          div_ [class_ "flex flex-col w-full py-4 items-center gap-4"] $
-            if hasRequest
+          div_ [class_ "flex flex-col w-full py-4 items-center gap-4"]
+            $ if hasRequest
               then completedBanner pid
               else div_ [class_ "w-[1000px] min-w-0"] $ integrateApiToolkit apikey ctb
 
@@ -174,8 +174,8 @@ tabContentExpress apikey current_tab =
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
         bashCommand $ "npm i apitoolkit-express"
       h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate"
-      codeExample $
-        [text|
+      codeExample
+        $ [text|
 import express from 'express';
 import { APIToolkit } from 'apitoolkit-express';
 
@@ -210,8 +210,8 @@ tabContentGin apikey current_tab =
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
         bashCommand $ "go get github.com/apitoolkit/apitoolkit-go"
       h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate"
-      codeExample $
-        [text|
+      codeExample
+        $ [text|
 package main
 
 import (
@@ -263,8 +263,8 @@ tabContentLaravel apikey current_tab =
         "Next, register the middleware in your"
         codeEmphasis " app/Http/Kernel.php "
         "file."
-      codeExample $
-        [text|
+      codeExample
+        $ [text|
 <?php
 
 namespace App\Http;
@@ -313,8 +313,8 @@ tabContentSymfony apikey current_tab =
         "Next, register the middleware in your"
         codeEmphasis " service.yaml "
         "file"
-      codeExample $
-        [text|
+      codeExample
+        $ [text|
 services:
   APIToolkit\EventSubscriber\APIToolkitService:
     arguments:
@@ -339,8 +339,8 @@ tabContentDotNet apikey current_tab =
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
         bashCommand $ "dotnet add package ApiToolkit.Net"
       h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate"
-      codeExample $
-        [text|
+      codeExample
+        $ [text|
 using ApiToolkit.Net;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -370,8 +370,8 @@ app.Run();
 
 tabContentFastify :: Text -> Text -> Html ()
 tabContentFastify apikey current_tab =
-  div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "fastify" then "" else "hidden"), id_ "fastify_content"] $
-    do
+  div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "fastify" then "" else "hidden"), id_ "fastify_content"]
+    $ do
       div_ [class_ "relative"] $ do
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Fastify JS"
@@ -380,8 +380,8 @@ tabContentFastify apikey current_tab =
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
           bashCommand $ "npm install apitoolkit-fastify"
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate"
-        codeExample $
-          [text|
+        codeExample
+          $ [text|
 import APIToolkit from 'apitoolkit-fastify';
 import Fastify from 'fastify';
 const fastify = Fastify();
@@ -410,8 +410,8 @@ fastify.listen({ port: 3000 }, function (err, address) {
 
 tabContentFlask :: Text -> Text -> Html ()
 tabContentFlask apikey current_tab =
-  div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "flask" then "" else "hidden"), id_ "flask_content"] $
-    do
+  div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "flask" then "" else "hidden"), id_ "flask_content"]
+    $ do
       div_ [class_ "relative"] $ do
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Flask"
@@ -420,8 +420,8 @@ tabContentFlask apikey current_tab =
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
           bashCommand $ "pip install apitoolkit-flask"
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate"
-        codeExample $
-          [text|
+        codeExample
+          $ [text|
 from flask import Flask
 from apitoolkit_flask import APIToolkit
 
@@ -449,8 +449,8 @@ app.run(debug=True)
 
 tabContentFastAPI :: Text -> Text -> Html ()
 tabContentFastAPI apikey current_tab =
-  div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "fastapi" then "" else "hidden"), id_ "fastapi_content"] $
-    do
+  div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "fastapi" then "" else "hidden"), id_ "fastapi_content"]
+    $ do
       div_ [class_ "relative"] $ do
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "FastAPI"
@@ -459,8 +459,8 @@ tabContentFastAPI apikey current_tab =
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
           bashCommand $ "pip install apitoolkit-fastapi"
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate"
-        codeExample $
-          [text|
+        codeExample
+          $ [text|
 from fastapi import FastAPI
 from apitoolkit_fastapi import APIToolkit
 
@@ -489,8 +489,8 @@ def read_root():
 
 tabContentDjango :: Text -> Text -> Html ()
 tabContentDjango apikey current_tab =
-  div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "django" then "" else "hidden"), id_ "django_content"] $
-    do
+  div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "django" then "" else "hidden"), id_ "django_content"]
+    $ do
       div_ [class_ "relative"] $ do
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Django"
@@ -499,8 +499,8 @@ tabContentDjango apikey current_tab =
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
           bashCommand $ "pip install apitoolkit-django"
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate"
-        codeExample $
-          [text|
+        codeExample
+          $ [text|
 APITOOLKIT_KEY = "$apikey"
 MIDDLEWARE = [
     ...,
@@ -518,15 +518,15 @@ APITOOLKIT_REDACT_RES_BODY = ["$.credentials", "$.social_security_number"]
 
 tabContentEcho :: Text -> Text -> Html ()
 tabContentEcho apikey current_tab =
-  div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "echo" then "" else "hidden"), id_ "echo_content"] $
-    do
+  div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "echo" then "" else "hidden"), id_ "echo_content"]
+    $ do
       div_ [class_ "relative"] $ do
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
           p_ [class_ "w-full bg-slate-200 px-4 py-2 rounded-xl text-lg"] "go get github.com/apitoolkit/apitoolkit-go"
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate into your app by adding APITOOLKIT_KEY and APIToolkit to the settings middleware list"
-        codeExample $
-          [text|
+        codeExample
+          $ [text|
 package main
 
 import (
@@ -561,8 +561,8 @@ func main() {
 
 tabContentGorilla :: Text -> Text -> Html ()
 tabContentGorilla apikey current_tab =
-  div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "gorilla" then "" else "hidden"), id_ "gorilla_content"] $
-    do
+  div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "gorilla" then "" else "hidden"), id_ "gorilla_content"]
+    $ do
       div_ [class_ "relative"] $ do
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Golang Gorilla Mux"
@@ -571,8 +571,8 @@ tabContentGorilla apikey current_tab =
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
           bashCommand $ "go get github.com/apitoolkit/apitoolkit-go"
         h4_ [class_ "text-slate-900 font-medium text-lg my-2"] "Integrate"
-        codeExample $
-          [text|
+        codeExample
+          $ [text|
 package main
 
 import (
@@ -607,8 +607,8 @@ func main() {
 
 tabContentPhoenix :: Text -> Text -> Html ()
 tabContentPhoenix apikey current_tab =
-  div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "phoenix" then "" else "hidden"), id_ "phoenix_content"] $
-    do
+  div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "phoenix" then "" else "hidden"), id_ "phoenix_content"]
+    $ do
       div_ [class_ "relative"] $ do
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Elixir Phoenix"
@@ -618,8 +618,8 @@ tabContentPhoenix apikey current_tab =
           codeExample $ "{:apitoolkit_phoenix, \"~> 0.1.1\"}"
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Integrate"
-        codeExample $
-          [text|
+        codeExample
+          $ [text|
 defmodule HelloWeb.Router do
   use HelloWeb, :router
   use Plug.ErrorHandler
@@ -643,8 +643,8 @@ end |]
 
 tabContentAdonis :: Text -> Text -> Html ()
 tabContentAdonis apikey current_tab =
-  div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "adonis" then "" else "hidden"), id_ "adonis_content"] $
-    do
+  div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "adonis" then "" else "hidden"), id_ "adonis_content"]
+    $ do
       div_ [class_ "relative"] $ do
         div_ [class_ "mb-6"] do
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Adonis JS"
@@ -670,8 +670,8 @@ apiKey: "$apikey",
             "to your global middlewares in the"
             span_ [class_ "text-red-500"] " start/kernel.ts "
             "file."
-        codeExample $
-          [text|
+        codeExample
+          $ [text|
 Server.middleware.register([
   () => import(\"@ioc:Adonis/Core/BodyParser\"),
   () => import(\"@ioc:APIToolkit\"),
