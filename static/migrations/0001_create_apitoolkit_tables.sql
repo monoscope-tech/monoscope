@@ -7,7 +7,6 @@ CREATE EXTENSION IF NOT EXISTS timescaledb_toolkit;
 CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
 CREATE EXTENSION IF NOT EXISTS hstore;
 CREATE EXTENSION IF NOT EXISTS tablefunc;
--- CREATE EXTENSION IF NOT EXISTS pg_cron;
 
 
 -- create schemas
@@ -825,19 +824,14 @@ SELECT manage_updated_at('projects.redacted_fields');
 CREATE INDEX IF NOT EXISTS idx_projects_redacted_fields_project_id ON projects.redacted_fields(project_id);
 
 
--- cron doesn't work in the timescaledb database because its not the default database. 
--- so instead, we installed it into the default database and use a different function:
--- SELECT cron.schedule_in_database('DailyOrttoSync', '0 8 * * *', $$INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued',  jsonb_build_object('tag', 'DailyOrttoSync'))$$, 'apitoolkit-prod-eu');
-
-
--- SELECT cron.schedule_in_database('DailyJob', '0 0 * * *', $$INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued',  jsonb_build_object('tag', 'DailyJob'))$$, 'apitoolkit-prod-eu');
-
--- SELECT cron.schedule_in_database('DailyReports', '* * * * *', 'DailyReports', 'apitoolkit-prod-eu');
-
--- This is for regular databases locally or if we migrate to a new database setup.
--- SELECT cron.schedule('DailyOrttoSync', '0 8 * * *', $$INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued',  jsonb_build_object('tag', 'DailyOrttoSync'))$$);
--- useful query to view job details
--- select * from cron.job_run_details order by start_time desc limit 5;
+-- apitoolkit_daily_job should be executed every day at midnight
+CREATE OR REPLACE PROCEDURE apitoolkit_daily_job(job_id int, config jsonb) LANGUAGE PLPGSQL AS
+$$
+BEGIN
+  INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued',  jsonb_build_object('tag', 'DailyJob'));
+END;
+$$;
+SELECT add_job('apitoolkit_daily_job', schedule_interval => interval '1 DAY', initial_start => '2024-05-16 00:00'::timestamptz);
 
 CREATE TABLE IF NOT EXISTS apis.share_requests
  (               
@@ -952,7 +946,6 @@ BEGIN
     END IF;
 END;
 $$;
--- Run every minute 
 SELECT add_job('monitors.check_triggered_query_monitors','1min');
 
 -- Find all tests where last_run + schedule is < NOW()+10min 
