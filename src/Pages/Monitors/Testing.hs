@@ -123,7 +123,7 @@ testingPage pid colls = do
           [ class_ "text-white rounded bg-blue-500 px-4 py-2 flex items-center gap-2"
           , [__|on click remove .hidden from #col-modal then set #collection_id's value to ""|]
           ]
-          $ (faIcon_ "fa-plus" "fa-light fa-plus" "h-6 w-6" >> "Collection")
+          $ (faSprite_ "plus" "regular" "h-6 w-6" >> "Collection")
       div_ [class_ "w-full grid grid-cols-2 gap-8 mt-8"] $ forM_ colls \c -> collectionCard pid c
 
 
@@ -170,8 +170,7 @@ collectionCard pid col = do
                then set #desc's value to my @data-desc
                |]
         ]
-        do
-          faIcon_ "fa-edit" "fa-light fa-edit" "h-6 w-6"
+        $ faSprite_ "pen-to-square" "regular" "h-6 w-6"
 
 
 modal :: Projects.ProjectId -> Html ()

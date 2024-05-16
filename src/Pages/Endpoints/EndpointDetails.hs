@@ -42,7 +42,7 @@ import Relude hiding (ask, asks, max, min)
 import Relude.Unsafe qualified as Unsafe
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, redirectCS)
 import Text.Interpolation.Nyan (int, rmode')
-import Utils (deleteParam, faIconWithAnchor_, faIcon_, faSprite_, getStatusColor, mIcon_)
+import Utils (deleteParam, faSprite_, getStatusColor, mIcon_)
 import Witch (from)
 
 
@@ -87,8 +87,7 @@ fieldDetailsPartialH pid fid = do
 fieldDetailsView :: Fields.Field -> Vector Formats.Format -> Html ()
 fieldDetailsView field formats = do
   div_ [id_ "modalContainer"] do
-    label_ [Lucid.for_ "edit_field", class_ "cursor-pointer"] do
-      img_ [src_ "/assets/svgs/ellipsis.svg", class_ "my-2 float-right"]
+    label_ [Lucid.for_ "edit_field", class_ "cursor-pointer"] $ faSprite_ "ellipsis" "regular" "my-2 float-right"
     input_ [type_ "checkbox", id_ "edit_field", class_ "modal-toggle"]
     div_ [class_ "modal", role_ "dialog", hxSwap_ "outerHTML"] do
       form_
@@ -103,7 +102,7 @@ fieldDetailsView field formats = do
           div_ [class_ "flex items-center py-2 border-b justify-between"] do
             h3_ [class_ "text-xl font-bold text-gray-900"] "Edit Field"
             label_ [Lucid.for_ "edit_field", class_ "modal-action rounded-full m-0 cursor-pointer bg-gray-200 pr-2 py-2 flex items-center justify-center"] do
-              faIcon_ "fa-close" "fa-light fa-close" "h-4 w-4 inline-block"
+              faSprite_ "close" "light" "h-4 w-4 inline-block"
           div_ [class_ "w-full py-3"] do
             div_ [class_ "text-xl space-y-6 overflow-y-auto", style_ "min-height:30vh;max-height:70vh; width:100%"] do
               div_ [class_ "flex items-center gap-4"] do
@@ -126,7 +125,7 @@ fieldDetailsView field formats = do
                     ]
                     do
                       span_ [] "Add"
-                      faIcon_ "fa-plus" "fa-plus fa-solid" "h-3 w-3"
+                      faSprite_ "plus" "solid" "h-3 w-3"
 
               div_ [class_ "flex flex-col gap-1"] do
                 label_ [Lucid.for_ "description", class_ "text-gray-700 text-sm font-semibold"] "Description"
@@ -161,21 +160,21 @@ fieldDetailsView field formats = do
 
     div_ do
       h5_ [class_ "text-sm text-slate-800"] "DETECTED FIELD FORMATS AND TYPES"
-      div_ [class_ "space-y-2"]
-        $ formats
-        & mapM_ \formatV -> do
-          div_ [class_ "border-l-slate-200 border-l-2 pl-2 py-2"] do
-            div_ [class_ "flex flex-row gap-9"] do
-              div_ [class_ "space-y-2"] do
-                h6_ [class_ "text-slate-800 text-xs"] "TYPE"
-                h4_ [class_ "text-base text-slate-800"] $ EndpointComponents.fieldTypeToDisplay formatV.fieldType
-              div_ [class_ "mx-5 space-y-2"] do
-                h6_ [class_ "text-slate-800 text-xs"] "FORMAT"
-                h4_ [class_ "text-base text-slate-800"] $ toHtml formatV.fieldFormat
-            h6_ [class_ "text-slate-600 mt-4 text-xs"] $ if field.isEnum then "ENUM VALUES" else "EXAMPLE VALUES"
-            ul_ [class_ "list-disc"] do
-              formatV.examples & mapM_ \ex -> do
-                li_ [class_ "ml-10 text-slate-800 text-sm"] $ toHtml $ aesonValueToText ex
+      div_ [class_ "space-y-2"] $
+        formats
+          & mapM_ \formatV -> do
+            div_ [class_ "border-l-slate-200 border-l-2 pl-2 py-2"] do
+              div_ [class_ "flex flex-row gap-9"] do
+                div_ [class_ "space-y-2"] do
+                  h6_ [class_ "text-slate-800 text-xs"] "TYPE"
+                  h4_ [class_ "text-base text-slate-800"] $ EndpointComponents.fieldTypeToDisplay formatV.fieldType
+                div_ [class_ "mx-5 space-y-2"] do
+                  h6_ [class_ "text-slate-800 text-xs"] "FORMAT"
+                  h4_ [class_ "text-base text-slate-800"] $ toHtml formatV.fieldFormat
+              h6_ [class_ "text-slate-600 mt-4 text-xs"] $ if field.isEnum then "ENUM VALUES" else "EXAMPLE VALUES"
+              ul_ [class_ "list-disc"] do
+                formatV.examples & mapM_ \ex -> do
+                  li_ [class_ "ml-10 text-slate-800 text-sm"] $ toHtml $ aesonValueToText ex
     div_ [class_ "flex flex-row justify-between mt-10 "] do
       div_ [class_ " "] do
         h4_ [class_ "text-sm text-slate-800 mb-2"] "CREATION DATE"
@@ -283,9 +282,9 @@ endpointDetails pid paramInput currTime endpoint endpointStats shapesWithFieldsM
             & mapM_ \(title, slug) ->
               a_
                 [ href_ $ currentURLSubPage <> "&subpage=" <> slug
-                , class_
-                    $ "cursor-pointer px-3 py-2 font-medium text-sm rounded-md "
-                    <> if slug == paramInput.subPage then " bg-indigo-100 text-indigo-700 " else " text-slate-500 hover:text-gray-700"
+                , class_ $
+                    "cursor-pointer px-3 py-2 font-medium text-sm rounded-md "
+                      <> if slug == paramInput.subPage then " bg-indigo-100 text-indigo-700 " else " text-slate-500 hover:text-gray-700"
                 ]
                 $ toHtml title
 
@@ -419,11 +418,11 @@ apiDocsSubPage shapesWithFieldsMap shapeHashM = do
                   span_ [class_ "ml-2 text-sm text-slate-600"] $ toHtml s.sHash
 
       div_ [class_ "flex items-center"] do
-        faIconWithAnchor_ "fa-arrow-left" "fa-light fa-arrow-left" "h-6 w-6 m-2 cursor-pointer" "slideReqRes('prev')"
+        a_ [href_ "#", onclick_ "slideReqRes('prev')"] $ faSprite_ "arrow-left" "regular" "h-6 w-6 m-2 cursor-pointer"
         let l = show targetIndex <> "/" <> show (length shapesWithFieldsMap)
         let id = "current_indicator"
         span_ [src_ " mx-4", id_ id] l
-        faIconWithAnchor_ "fa-arrow-right" "fa-light fa-arrow-right" "h-6 w-6 m-2 cursor-pointer" "slideReqRes('next')"
+        a_ [href_ "#", onclick_ "slideReqRes('next')"] $ faSprite_ "arrow-right" "regular" "h-6 w-6 m-2 cursor-pointer"
     reqResSection "Request" True shapesWithFieldsMap targetIndex
     reqResSection "Response" False shapesWithFieldsMap targetIndex
   script_
@@ -499,11 +498,11 @@ apiOverviewSubPage pid paramInput currTime endpoint fieldsM reqLatenciesRolledBy
 endpointStats :: Endpoints.EndpointRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
 endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p99, max} reqLatenciesRolledByStepsJ dateRange@(fromD, toD) =
   section_ [class_ "space-y-3"] do
-    div_ [class_ "flex justify-between mt-5"]
-      $ div_
+    div_ [class_ "flex justify-between mt-5"] $
+      div_
         [class_ "flex flex-row"]
         do
-          faIconWithAnchor_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 mr-3 mt-1 w-4 cursor-pointer" "toggle .neg-rotate-90 on me then toggle .hidden on (next .endpointStatsSubSection)"
+          a_ [href_ "#", [__|toggle .neg-rotate-90 on me then toggle .hidden on (next .endpointStatsSubSection)|]] $ faSprite_ "chevron-down" "regular" "h-4 mr-3 mt-1 w-4 cursor-pointer"
           span_ [class_ "text-lg text-slate-800"] "Endpoint Stats"
     div_ [class_ "space-y-5 endpointStatsSubSection"] do
       div_ [class_ "grid grid-cols-3  gap-5"] do
@@ -542,8 +541,8 @@ endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p
               Charts.lazy [C.QByE $ [C.QBPId enpStats.projectId, C.QBEndpointHash enpStats.endpointHash] ++ catMaybes [C.QBFrom <$> fromD, C.QBTo <$> toD], C.GByE C.GBEndpoint, C.SlotsE 120, C.ShowLegendE]
 
       div_ [class_ "col-span-3 bg-white   border border-gray-100  rounded-xl py-3 px-6"] do
-        div_ [class_ "p-4"]
-          $ select_
+        div_ [class_ "p-4"] $
+          select_
             []
             do
               option_ "Request Latency Distribution"
@@ -587,24 +586,24 @@ reqResSection title isRequest shapesWithFieldsMap targetIndex =
   section_ [class_ "space-y-3"] do
     div_ [class_ "flex justify-between mt-5"] do
       div_ [class_ "flex flex-row"] do
-        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
-          $ faSprite_ "chevron-down" "light" "h-4 mr-3 mt-1 w-4"
+        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]] $
+          faSprite_ "chevron-down" "light" "h-4 mr-3 mt-1 w-4"
         span_ [class_ "text-lg text-slate-800"] $ toHtml title
 
-    div_ [class_ "bg-white border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"]
-      $ forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap)
-      $ \(index, s) -> do
-        let sh = if index == targetIndex then title <> "_fields" else title <> "_fields hidden"
-        div_ [class_ sh, id_ $ title <> "_" <> show index] do
-          if isRequest
-            then do
-              subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam s.fieldsMap) Nothing
-              subSubSection (title <> " Query Params") (Map.lookup Fields.FCQueryParam s.fieldsMap) Nothing
-              subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader s.fieldsMap) Nothing
-              subSubSection (title <> " Body") (Map.lookup Fields.FCRequestBody s.fieldsMap) (Just s.reqDescription)
-            else do
-              subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader s.fieldsMap) Nothing
-              subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody s.fieldsMap) (Just s.resDescription)
+    div_ [class_ "bg-white border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"] $
+      forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap) $
+        \(index, s) -> do
+          let sh = if index == targetIndex then title <> "_fields" else title <> "_fields hidden"
+          div_ [class_ sh, id_ $ title <> "_" <> show index] do
+            if isRequest
+              then do
+                subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam s.fieldsMap) Nothing
+                subSubSection (title <> " Query Params") (Map.lookup Fields.FCQueryParam s.fieldsMap) Nothing
+                subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader s.fieldsMap) Nothing
+                subSubSection (title <> " Body") (Map.lookup Fields.FCRequestBody s.fieldsMap) (Just s.reqDescription)
+              else do
+                subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader s.fieldsMap) Nothing
+                subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody s.fieldsMap) (Just s.resDescription)
 
 
 -- | subSubSection ..
@@ -615,7 +614,7 @@ subSubSection title fieldsM descriptionM =
     Just fields -> do
       div_ [class_ "space-y-1 mb-4"] do
         div_ [class_ "flex flex-row items-center"] do
-          faIconWithAnchor_ "fa-chevron-down" "fa-light fa-chevron-down" "h-6 mr-3 w-6 p-1 cursor-pointer" "toggle .neg-rotate-90 on me then toggle .hidden on (next .subSectionContent)"
+          a_ [href_ "#", [__|toggle .neg-rotate-90 on me then toggle .hidden on (next .subSectionContent)|]] $ faSprite_ "chevron-down" "regular" "h-6 mr-3 w-6 p-1 cursor-pointer"
           div_ [class_ "flex flex-row gap-2 bg-gray-100 px-10 rounded-xl w-full p-4 text-sm text-slate-900 "] do
             toHtml title
             p_ [class_ "text-sm text-gray-700"] $ toHtml $ fromMaybe "" descriptionM

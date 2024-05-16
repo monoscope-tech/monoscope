@@ -163,7 +163,7 @@ singleReportPage pid report =
                             div_ [class_ "space-x-3 border-b pb-1 flex gap-4 items-center justify-between"] do
                               div_ [class_ "flex items-center space-x-3 "] do
                                 div_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
-                                  img_ [class_ "inline w-4 h-4", src_ "/assets/svgs/endpoint.svg"]
+                                  img_ [class_ "inline w-4 h-4", src_ "/assets/svgs/anomalies/endpoint.svg"]
                                   span_ [] "New Endpoint"
                                 small_ [] $ toHtml $ endpointMethod <> " " <> endpointUrlPath <> " "
                               small_ [] $ show eventsCount <> " requests"

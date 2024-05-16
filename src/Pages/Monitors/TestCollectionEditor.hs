@@ -31,7 +31,7 @@ import PyF (fmt)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
-import Utils (faIcon_, faSprite_)
+import Utils (faSprite_)
 
 
 data CollectionStepUpdateForm = CollectionStepUpdateForm
@@ -151,7 +151,7 @@ collectionPage pid col = do
         div_ [class_ "col-span-1 h-full border-r border-gray-200"] do
           div_ [class_ "max-h-full overflow-y-scroll space-y-4", id_ "step-results-parent"] ""
           div_ [class_ "flex flex-col justify-center items-center h-full text-slate-400 text-xl space-y-4"] do
-            div_ [] $ Utils.faIcon_ "fa-objects-column" "fa-objects-column fa-solid" "w-16 h-16"
+            div_ [] $ Utils.faSprite_ "objects-column" "solid" "w-16 h-16"
             p_ [class_ "text-slate-500"] "Run a test to view the results here. "
     script_ [type_ "module", src_ "/assets/steps-editor.js"] ("" :: Text)
 

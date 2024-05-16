@@ -58,7 +58,7 @@ import Relude.Unsafe qualified as Unsafe
 import Servant (addHeader, noHeader)
 import System.Config (AuthContext (config, pool), EnvConfig (apiKeyEncryptionSecretKey, convertkitApiKey, lemonSqueezyApiKey, lemonSqueezyUrl, slackRedirectUri))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
-import Utils (faIcon_)
+import Utils (faSprite_)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -457,15 +457,16 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
                       option_ [class_ "text-slate-500", value_ "view"] "Can View"
                     button_
                       [ [__| on click remove the closest parent <div/> then halt |]
+                      , class_ "cursor-pointer"
                       ]
-                      $ img_ [src_ "/assets/svgs/delete.svg", class_ "cursor-pointer"]
+                      $ faSprite_ "trash" "regular" "w-4 h-4"
               a_
                 [ class_ "bg-transparent inline-flex cursor-pointer mt-2"
                 , [__| on click put #inviteTmpl.innerHTML at end of #inviteMemberSection then 
                          _hyperscript.processNode(#inviteMemberSection) then halt |]
                 ]
                 do
-                  faIcon_ "fa-plus" "fa-sharp fa-regular fa-plus" "mx-2 w-4 h-4 text-blue-700"
+                  faSprite_ "plus" "regular" "mx-2 w-4 h-4 text-blue-700"
                   span_ [class_ "text-blue-700 font-medium text-sm "] "Add member"
 
             -- LEMON SQUEEZY PAYMENT

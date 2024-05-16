@@ -24,10 +24,8 @@ CREATE SCHEMA IF NOT EXISTS tests;
 -----------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION manage_updated_at(_tbl regclass) RETURNS VOID AS $$
 BEGIN
-  EXECUTE format('CREATE TRIGGER set_updated_at BEFORE UPDATE ON %s
-FOR EACH ROW EXECUTE PROCEDURE set_updated_at()', _tbl);
-  EXCEPTION
-    WHEN others THEN null;
+  EXECUTE format('CREATE TRIGGER set_updated_at BEFORE UPDATE ON %s FOR EACH ROW EXECUTE PROCEDURE set_updated_at()', _tbl);
+  EXCEPTION WHEN others THEN null;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -50,8 +48,7 @@ $$ LANGUAGE plpgsql;
 DO $$ BEGIN
   CREATE DOMAIN email AS citext
     CHECK ( value ~ '^[a-zA-Z0-9.!#$%&''*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$' );
-EXCEPTION
-    WHEN duplicate_object THEN null;
+  EXCEPTION WHEN duplicate_object THEN null;
 END $$;
 
 -----------------------------------------------------------------------
@@ -426,10 +423,12 @@ CREATE TABLE IF NOT EXISTS apis.request_dumps
 SELECT manage_updated_at('apis.request_dumps');
 SELECT create_hypertable('apis.request_dumps', by_range('created_at', INTERVAL '1 day'), migrate_data => true);
 SELECT add_retention_policy('apis.request_dumps',INTERVAL '1 months',true);
-CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_project_id ON apis.request_dumps(project_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_project_id ON apis.request_dumps(project_id, created_at DESC);
 ALTER TABLE apis.request_dumps SET (timescaledb.compress, timescaledb.compress_orderby = 'created_at DESC', timescaledb.compress_segmentby = 'project_id');
 SELECT add_compression_policy('apis.request_dumps', INTERVAL '7d');
-CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_parent_id ON apis.request_dumps(parent_id);
+CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_project_id_parent_id ON apis.request_dumps(project_id, parent_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_project_id_endpoint_hash ON apis.request_dumps(project_id, endpoint_hash, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_project_id_shape_hash ON apis.request_dumps(project_id, shape_hash, created_at DESC);
 
 -- Shapes aggregated by the min. 
 DROP MATERIALIZED VIEW IF EXISTS APIS.SHAPES_AGG_1MIN;
@@ -844,8 +843,7 @@ CREATE TABLE IF NOT EXISTS apis.share_requests
 );
 CREATE INDEX IF NOT EXISTS idx_apis_share_requests_id ON apis.share_requests(id);
 
-alter table apis.share_requests 
-	add column request_created_at TIMESTAMP WITH TIME ZONE NOT NULL;
+alter table apis.share_requests add column request_created_at TIMESTAMP WITH TIME ZONE NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_share_requests ON apis.share_requests(request_created_at);
 
 

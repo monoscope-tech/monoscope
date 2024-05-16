@@ -15,7 +15,6 @@ module Utils (
   lookupVecTextByKey,
   mIcon_,
   faIcon_,
-  faIconWithAnchor_,
   deleteParam,
   quoteTxt,
   textToBool,
@@ -87,16 +86,11 @@ faSprite_ :: Text -> Text -> Text -> Html ()
 faSprite_ mIcon faType classes = svg_ [class_ $ "inline-block icon " <> classes] $ Svg.use_ [href_ $ "/assets/svgs/fa-sprites/" <> faType <> ".svg#" <> mIcon]
 
 
+-- DO NOT USE. Copy the svg into static/public/assets/svgs/fa-sprites/regular.svg or solid.svg
 faIcon_ :: Text -> Text -> Text -> Html ()
 faIcon_ faIcon faClasses classes = do
   i_ [class_ faClasses, term "data-fa-symbol" faIcon] ""
   svg_ [class_ classes] $ Svg.use_ [href_ $ "#" <> faIcon]
-
-
-faIconWithAnchor_ :: Text -> Text -> Text -> Text -> Html ()
-faIconWithAnchor_ faIcon faClasses classes onClickAction = do
-  a_ [href_ "#", onclick_ onClickAction]
-    $ faIcon_ faIcon faClasses classes -- You can replace "#" with the actual link
 
 
 deleteParam :: Text -> Text -> Text

@@ -60,7 +60,7 @@ bashCommand command = do
       |]
         ]
         do
-          faIcon_ "fa-copy" "fa-solid fa-copy" "h-4 w-4 text-gray-500"
+          faSprite_ "copy" "solid" "h-4 w-4 text-gray-500"
 
 
 codeExample :: Text -> Html ()
@@ -83,8 +83,7 @@ codeExample code = do
                 end
            |]
           ]
-          do
-            faIcon_ "fa-copy" "fa-solid fa-copy" "h-4 w-4 inline-block"
+          $ faSprite_ "copy" "solid" "h-4 w-4 inline-block"
       div_ [class_ "relative flex-auto flex flex-col"] do
         pre_ [class_ "flex leading-snug"] do
           code_ [class_ "flex-auto relative block text-slate-50 py-4 px-4 overflow-auto hljs atom-one-dark"] $ toHtml code

@@ -266,7 +266,7 @@ addRecipientSlackTmpl_ channel =
   label_ [class_ "input input-bordered inline-flex items-center gap-2"] do
     "Slack"
     input_ [class_ "grow", class_ "input", placeholder_ "#channelName", type_ "text", required_ "", name_ "recipientSlack"]
-    a_ [class_ "badge badge-base", [__|on click remove the closest parent <label/>|]] $ faIcon_ "fa-xmark" "fa-solid fa-xmark" "w-3 h-3"
+    a_ [class_ "badge badge-base", [__|on click remove the closest parent <label/>|]] $ faSprite_ "xmark" "solid" "w-3 h-3"
 
 
 addRecipientEmailTmpl_ :: CI.CI Text -> Html ()
@@ -274,7 +274,7 @@ addRecipientEmailTmpl_ email =
   label_ [class_ "input input-bordered inline-flex items-center gap-2"] do
     "Email"
     input_ [class_ "grow", class_ "input", placeholder_ "name@site.com", type_ "email", required_ "", name_ "recipientEmail"]
-    a_ [class_ "badge badge-base", [__|on click remove the closest parent <label/>|]] $ faIcon_ "fa-xmark" "fa-solid fa-xmark" "w-3 h-3"
+    a_ [class_ "badge badge-base", [__|on click remove the closest parent <label/>|]] $ faSprite_ "xmark" "solid" "w-3 h-3"
 
 
 addRecipientEmailAllTmpl_ :: Html ()
@@ -282,7 +282,7 @@ addRecipientEmailAllTmpl_ =
   label_ [class_ "input input-bordered inline-flex items-center gap-2"] do
     "Email Everyone"
     input_ [class_ "grow", class_ "input", placeholder_ "name@site.com", type_ "hidden", value_ "True", name_ "recipientEmailAll"]
-    a_ [class_ "badge badge-base", [__|on click remove the closest parent <label/>|]] $ faIcon_ "fa-xmark" "fa-solid fa-xmark" "w-3 h-3"
+    a_ [class_ "badge badge-base", [__|on click remove the closest parent <label/>|]] $ faSprite_ "xmark" "solid" "w-3 h-3"
 
 
 queryMonitors_ :: V.Vector Monitors.QueryMonitor -> Html ()
