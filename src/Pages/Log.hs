@@ -370,10 +370,9 @@ logItemRows_ pid requests curatedCols colIdxMap nextLogsURL = do
       , hxSwap_ "outerHTML"
       , hxGet_ nextLogsURL
       , hxTarget_ "closest tr"
-      -- , hxIndicator_ "next .htmx-indicator"
+      , hxIndicator_ "next .htmx-indicator"
       ]
-      do
-        span_ [class_ "inline-block"] "LOAD MORE " >> span_ [class_ "htmx-indicator loading loading-dots loading-lg inline-block pl-3"] loader
+      (span_ [class_ "inline-block"] "LOAD MORE " >> span_ [class_ "htmx-indicator loading loading-dots loading-lg inline-block pl-3"] "")
 
 
 errorClass :: Bool -> V.Vector Value -> HM.HashMap Text Int -> (Int, Int, Text)
