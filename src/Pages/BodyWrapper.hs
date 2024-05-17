@@ -293,23 +293,18 @@ sideNav sess project pageTitle menuItem hasIntegrated = do
     div_ [class_ "py-4 px-4 transition-all  duration-1000 ease-in-out", id_ "side-nav-ctx-btn"] do
       a_
         [ class_ "flex flex-row bg-blue-50 hover:bg-blue-100 text-blue-900 block p-6 rounded-md cursor-pointer"
-        , [__| 
-                on click queue first
+        , [__|  on click queue first
                     if I do not match .active
-                        add .active
-                        send open to <[data-menu]/> 
+                        add .active then send open to <[data-menu]/> 
                     else 
-                        remove .active
-                        send close to <[data-menu]/> 
+                        remove .active then send close to <[data-menu]/> 
                     end
                 end
                 on keyup[key is 'Escape'] from <body/>  
                     if I match .active
-                        remove .active
-                        send close to <[data-menu]/> in me
+                        remove .active then send close to <[data-menu]/> in me
                     end
-                end
-            |]
+                end|]
         ]
         do
           div_ [class_ "space-2 grow sd-hidden"] do

@@ -311,7 +311,7 @@ resultTableAndMeta_ page = do
 
 
 resultTable_ :: ApiLogsPageData -> Bool -> Html ()
-resultTable_ page mainLog = table_ [class_ "w-full table table-sm table-pin-rows table-pin-cols", style_ "height:1px", id_ "resultTable"] do
+resultTable_ page mainLog = table_ [class_ "w-full table table-sm table-pin-rows table-pin-cols overflow-x-hidden", style_ "height:1px", id_ "resultTable"] do
   -- height:1px fixes the cell minimum heights somehow.
   let isLogEventB = isLogEvent page.cols
   when (null page.requestVecs && isNothing page.query) $ do
@@ -414,6 +414,7 @@ logTableHeadingWrapper_ pid title child = td_
             , hxPushUrl_ "true"
             , hxVals_ $ "js:{query:params().query,cols:removeNamedColumnToSummary('" <> title <> "'),layout:'resultTable'}"
             , hxTarget_ "#resultTable"
+            , hxSwap_ "outerHTML"
             ]
             "Hide column"
 
@@ -484,9 +485,9 @@ jsonTreeAuxillaryCode pid = do
           , hxPushUrl_ "true"
           , hxVals_ "js:{query:params().query,cols:toggleColumnToSummary(event),layout:'resultTable', since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to}"
           , hxTarget_ "#resultTable"
+          , hxSwap_ "outerHTML"
           , -- , hxIndicator_ "#query-indicator"
-            [__|init
-                  set fp to (closest @data-field-path)
+            [__|init set fp to (closest @data-field-path) then 
                   if isFieldInSummary(fp) then set my innerHTML to 'Remove field from summary' end|]
           ]
           "Add field to Summary"
