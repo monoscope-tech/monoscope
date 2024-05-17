@@ -228,25 +228,7 @@ endpointDetailsH pid eid fromDStr toDStr sinceStr' subPageM shapeHashM = do
           let f = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" fromDStr) :: Maybe UTCTime)
           let t = utcToZonedTime utc <$> (iso8601ParseM (from @Text $ fromMaybe "" toDStr) :: Maybe UTCTime)
           (f, t)
-
-  (endpoint, enpStats, shapesWithFieldsMap, fieldsMap, reqLatenciesRolledByStepsLabeled) <- dbtToEff do
-    -- Should swap names betw enp and endpoint endpoint could be endpointStats
-    endpoint <- Unsafe.fromJust <$> Endpoints.endpointById eid
-    enpStats <- fromMaybe (def :: Endpoints.EndpointRequestStats) <$> Endpoints.endpointRequestStatsByEndpoint eid
-    shapes <- Shapes.shapesByEndpointHash pid endpoint.hash
-    fields <- Fields.selectFields pid endpoint.hash
-    let fieldsMap = Fields.groupFieldsByCategory fields
-    let shapesWithFieldsMap = Vector.map (`getShapeFields` fields) shapes
-    let maxV = round enpStats.max :: Int
-    let steps = (maxV `quot` 100) :: Int
-    let steps' = if steps == 0 then 100 else steps
-    reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledBySteps maxV steps' pid endpoint.urlPath endpoint.method
-    pure (endpoint, enpStats, Vector.toList shapesWithFieldsMap, fieldsMap, Vector.toList reqLatenciesRolledBySteps)
-  let subPage = fromMaybe "overview" subPageM
-  shapesList <- dbtToEff do
-    if subPage == "shapes" then Shapes.shapesByEndpointHash pid endpoint.hash else pure []
-
-  let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
+  endpointM <- dbtToEff $ Endpoints.endpointById eid
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess.persistentSession
@@ -254,14 +236,36 @@ endpointDetailsH pid eid fromDStr toDStr sinceStr' subPageM shapeHashM = do
           , pageTitle = "Endpoint Details"
           , menuItem = Just "Endpoints"
           }
-  currTime <- liftIO getCurrentTime
-  let currentURL = "/p/" <> pid.toText <> "/endpoints/" <> Endpoints.endpointIdText eid <> "?from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
-  let subPage = fromMaybe "overview" subPageM
-  let currentPickerTxt = case sinceStr of
-        Just a -> a
-        Nothing -> maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD
-  let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt, subPage = subPage}
-  addRespHeaders $ bodyWrapper bwconf $ endpointDetails pid paramInput currTime endpoint enpStats shapesWithFieldsMap fieldsMap shapesList shapeHashM reqLatenciesRolledByStepsJ (fromD, toD)
+  case endpointM of
+    Nothing -> do
+      -- TODO: Add a 404 page
+      addRespHeaders $ bodyWrapper bwconf $ div_ [class_ "flex flex-col items-center justify-center h-full"] do
+        h1_ "Endpoint not found"
+    Just endpoint -> do
+      (endpoint, enpStats, shapesWithFieldsMap, fieldsMap, reqLatenciesRolledByStepsLabeled) <- dbtToEff do
+        -- Should swap names betw enp and endpoint endpoint could be endpointStats
+        enpStats <- fromMaybe (def :: Endpoints.EndpointRequestStats) <$> Endpoints.endpointRequestStatsByEndpoint eid
+        shapes <- Shapes.shapesByEndpointHash pid endpoint.hash
+        fields <- Fields.selectFields pid endpoint.hash
+        let fieldsMap = Fields.groupFieldsByCategory fields
+        let shapesWithFieldsMap = Vector.map (`getShapeFields` fields) shapes
+        let maxV = round enpStats.max :: Int
+        let steps = (maxV `quot` 100) :: Int
+        let steps' = if steps == 0 then 100 else steps
+        reqLatenciesRolledBySteps <- RequestDumps.selectReqLatenciesRolledBySteps maxV steps' pid endpoint.urlPath endpoint.method
+        pure (endpoint, enpStats, Vector.toList shapesWithFieldsMap, fieldsMap, Vector.toList reqLatenciesRolledBySteps)
+      let subPage = fromMaybe "overview" subPageM
+      shapesList <- dbtToEff do
+        if subPage == "shapes" then Shapes.shapesByEndpointHash pid endpoint.hash else pure []
+      let reqLatenciesRolledByStepsJ = decodeUtf8 $ AE.encode reqLatenciesRolledByStepsLabeled
+      currTime <- liftIO getCurrentTime
+      let currentURL = "/p/" <> pid.toText <> "/endpoints/" <> Endpoints.endpointIdText eid <> "?from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
+      let subPage = fromMaybe "overview" subPageM
+      let currentPickerTxt = case sinceStr of
+            Just a -> a
+            Nothing -> maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD
+      let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt, subPage = subPage}
+      addRespHeaders $ bodyWrapper bwconf $ endpointDetails pid paramInput currTime endpoint enpStats shapesWithFieldsMap fieldsMap shapesList shapeHashM reqLatenciesRolledByStepsJ (fromD, toD)
 
 
 endpointDetails :: Projects.ProjectId -> ParamInput -> UTCTime -> Endpoints.Endpoint -> Endpoints.EndpointRequestStats -> [Shapes.ShapeWithFields] -> Map FieldCategoryEnum [Fields.Field] -> Vector Shapes.Shape -> Maybe Text -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Html ()
