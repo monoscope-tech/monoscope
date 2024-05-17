@@ -2,7 +2,7 @@
 
 module BackgroundJobs (jobsWorkerInit, jobsRunner, BgJobs (..)) where
 
-import Control.Lens ((.~), (^.))
+import Control.Lens ((.~))
 import Data.Aeson as Aeson
 import Data.Aeson.QQ (aesonQQ)
 import Data.CaseInsensitive qualified as CI
@@ -37,7 +37,7 @@ import Models.Tests.TestToDump qualified as TestToDump
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text, trimming)
-import Network.Wreq (defaults, header, postWith, responseStatus)
+import Network.Wreq (defaults, header, postWith)
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, startJobRunner, throwParsePayload)
 import Pages.Reports qualified as RP
@@ -81,39 +81,17 @@ updateShapeCounts pid shapeHash newFields deletedFields updatedFields = execute 
     q = [sql| update apis.shapes SET new_unique_fields=?, deleted_fields=?, updated_field_formats=? where project_id=? and hash=?|]
 
 
--- TODO:
--- Analyze shapes for
--- 1: [x] how many fields in the current shape are completely new?
--- 2: [ ] how many were updated fields?
--- 3. [x] how many were deleted params
--- Send a notification email about the new anomaly (shape and endpoint etc)
---
 webhookUrl :: String
 webhookUrl = "https://discord.com/api/webhooks/1230980245423788045/JQOJ7w3gmEduaOvPTnxEz4L8teDpX5PJoFkyQmqZHR8HtRqAkWIjv2Xk1aKadTyXuFy_"
 
 
--- | Message data structure
-data DiscordMessage = DiscordMessage
-  { content :: Text
-  }
-
-
-instance ToJSON DiscordMessage where
-  toJSON (DiscordMessage content) =
-    object ["content" .= content]
-
-
--- | Function to send message to Discord
 sendMessageToDiscord :: Text -> IO ()
 sendMessageToDiscord msg = do
-  let message = DiscordMessage msg
-  response <- postWith opts webhookUrl (toJSON message)
-  liftIO $ putStrLn $ "Response: " ++ show (response ^. responseStatus)
-  where
-    opts =
-      defaults
-        & header "Content-Type"
-        .~ ["application/json"]
+  let message = object ["content" .= msg]
+  let opts = defaults & header "Content-Type" .~ ["application/json"]
+  response <- postWith opts webhookUrl message
+  pass
+
 
 
 jobsRunner :: Log.Logger -> Config.AuthContext -> Job -> IO ()
@@ -133,21 +111,23 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
            "project_name": #{projectTitle'},
            "project_url": #{project_url}
         }|]
-        sendPostmarkEmail reciever "welcome-1" templateVars
+        sendPostmarkEmail reciever "project-invite" templateVars
     SendDiscordData userId projectId fullName stack -> whenJustM (dbtToEff $ Projects.projectById projectId) \project -> do
       users <- dbtToEff $ Projects.usersByProjectId projectId
       let stackString = intercalate ", " $ map T.unpack stack
       forM_ users \user -> do
         let userEmail = CI.original (user.email)
+        let project_url = "https://app.apitoolkit.io/p/" <> projectId.toText
+        let project_title = project.title
         let msg =
               [fmtTrim| 🎉 New project created on apitoolkit.io! 🎉
-           User FullName : {fullName} 
-           User Email : {userEmail}
-           Project ID: {projectId.toText}
-           User ID :{userId.toText}
-           Payment Plan : {project.paymentPlan}
-           stack : {stackString}
-        |]
+- **User Full Name**: {fullName} 
+- **User Email**: {userEmail}
+- **Project Title**: [{project_title}]({project_url})
+- **User ID**: {userId.toText}
+- **Payment Plan**: {project.paymentPlan}
+- **Stack**: {stackString}
+|]
         liftIO $ sendMessageToDiscord msg
     CreatedProjectSuccessfully userId projectId reciever projectTitle -> do
       userM <- Users.userById userId
@@ -160,17 +140,19 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
            "project_name": #{projectTitle},
            "project_url": #{project_url}
         }|]
-        sendPostmarkEmail reciever "welcome" templateVars
+        sendPostmarkEmail reciever "project-created" templateVars
       pass
     DailyJob -> do
       currentDay <- utctDay <$> Time.currentTime
       projects <- dbtToEff $ query Select [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL|] (Only True)
       forM_ projects \p -> do
         liftIO $ withResource authCtx.jobsPool \conn -> do
+          _ <-
+            if dayOfWeek currentDay == Monday
+              then createJob conn "background_jobs" $ BackgroundJobs.WeeklyReports p
+              else createJob conn "background_jobs" $ BackgroundJobs.DailyReports p
           _ <- createJob conn "background_jobs" $ BackgroundJobs.ReportUsage p
-          if dayOfWeek currentDay == Monday
-            then createJob conn "background_jobs" $ BackgroundJobs.WeeklyReports p
-            else createJob conn "background_jobs" $ BackgroundJobs.DailyReports p
+          pass
     DailyReports pid -> dailyReportForProject pid
     WeeklyReports pid -> weeklyReportForProject pid
     GenSwagger pid uid -> generateSwaggerForProject pid uid
@@ -373,38 +355,40 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
   -- let anomalyAction = Unsafe.fromJust $ Anomalies.parseAnomalyActions anomalyActionsT
   case anomalyType of
     Anomalies.ATEndpoint -> do
-      endp <- dbtToEff $ Endpoints.endpointByHash pid targetHash
-      users <- dbtToEff $ Projects.usersByProjectId pid
-      project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
-      let enp = Unsafe.fromJust endp
-      let endpointPath = enp.method <> " " <> enp.urlPath
-      forM_ project.notificationsChannel \case
-        Projects.NSlack ->
-          sendSlackMessage
-            pid
-            [fmtTrim| 🤖 *New Endpoint Detected for `{project.title}`*
-
-                           We have detected a new endpoint on *{project.title}*
-
-                           Endpoint: `{endpointPath}`
-
-                           <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
-                            |]
-        _ -> do
-          forM_ users \u ->
-            sendEmail
-              (CI.original u.email)
-              [fmt| 🤖 APITOOLKIT: New Endpoint detected for `{project.title}` |]
-              [fmtTrim|
-                     Hi {u.firstName},<br/>
-         
-                     <p>We detected a new endpoint on `{project.title}`:</p>
-                     <p><strong>{endpointPath}</strong></p>
-                     <a href="https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}">More details on the apitoolkit</a>
-                     <br/><br/>
-                     Regards,
-                     Apitoolkit team
-                               |]
+      totalRequestsCount <- dbtToEff $ RequestDumps.countRequestDumpByProject pid
+      if totalRequestsCount > 5000
+        then do
+          endp <- dbtToEff $ Endpoints.endpointByHash pid targetHash
+          users <- dbtToEff $ Projects.usersByProjectId pid
+          project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
+          let enp = Unsafe.fromJust endp
+          let endpointPath = enp.method <> " " <> enp.urlPath
+          forM_ project.notificationsChannel \case
+            Projects.NSlack ->
+              sendSlackMessage
+                pid
+                [fmtTrim| 🤖 *New Endpoint Detected for `{project.title}`*
+  
+                             We have detected a new endpoint on *{project.title}*
+  
+                             Endpoint: `{endpointPath}`
+  
+                             <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
+                              |]
+            _ -> do
+              forM_ users \u -> do
+                let firstName = u.firstName
+                let title = project.title
+                let anomaly_url = "https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/by_hash/" <> targetHash
+                let templateVars =
+                      [aesonQQ|{
+                   "user_name": #{firstName},
+                   "project_name": #{title},
+                   "anomaly_url": #{anomaly_url},
+                   "endpoint_name": #{endpointPath}
+              }|]
+                sendPostmarkEmail (CI.original u.email) "anomaly-endpoint" templateVars
+        else pass
     Anomalies.ATShape -> do
       hasEndpointAnomaly <- dbtToEff $ Anomalies.getShapeParentAnomalyVM pid targetHash
       when (hasEndpointAnomaly == 0) do
@@ -432,19 +416,17 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
                                           <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
                                  |]
             _ -> do
-              forM_ users \u ->
-                sendEmail
-                  (CI.original u.email)
-                  [fmt| 🤖 APITOOLKIT: New Shape anomaly found for `{project.title}` |]
-                  [fmtTrim|
-         Hi {u.firstName},<br/>
-       
-         <p>We detected a different API request shape to your endpoints than what you usually have..</p>
-         <a href="https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}">More details on the apitoolkit</a>
-         <br/><br/>
-         Regards,<br/>
-         Apitoolkit team
-                                 |]
+              forM_ users \u -> do
+                let firstName = u.firstName
+                let title = project.title
+                let anomaly_url = "https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/by_hash/" <> targetHash
+                let templateVars =
+                      [aesonQQ|{
+                      "user_name": #{firstName},
+                      "project_name": #{title},
+                      "anomaly_url": #{anomaly_url}
+                 }|]
+                sendPostmarkEmail (CI.original u.email) "anomaly-shape" templateVars
     Anomalies.ATFormat -> do
       -- Send an email about the new shape anomaly but only if there was no endpoint anomaly logged
       hasEndpointAnomaly <- dbtToEff $ Anomalies.getFormatParentAnomalyVM pid targetHash
@@ -461,18 +443,16 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
   
                                        <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
                                |]
-          _ -> forM_ users \u ->
-            sendEmail
-              (CI.original u.email)
-              [fmt| 🤖 APITOOLKIT: New field format anomaly found for `{project.title}` |]
-              [fmtTrim|
-     Hi {u.firstName},<br/>
-   
-     <p>We detected that a particular field on your API is returning a different format/type than what it usually gets.</p>
-     <a href="https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}">More details on the apitoolkit</a>
-     <br/><br/>
-     Regards,<br/>
-     Apitoolkit team
-                           |]
+          _ -> forM_ users \u -> do
+            let firstName = u.firstName
+            let title = project.title
+            let anomaly_url = "https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/by_hash/" <> targetHash
+            let templateVars =
+                  [aesonQQ|{
+                      "user_name": #{firstName},
+                      "project_name": #{title},
+                      "anomaly_url": #{anomaly_url}
+                 }|]
+            sendPostmarkEmail (CI.original u.email) "anomaly-field" templateVars
     Anomalies.ATField -> pass
     Anomalies.ATUnknown -> pass

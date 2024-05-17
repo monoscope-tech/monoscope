@@ -144,7 +144,7 @@ manageMembersBody projMembers =
                           _hyperscript.processNode(#inviteMemberSection) then halt |]
               ]
               do
-                faIcon_ "fa-plus" "fa-sharp fa-regular fa-plus" "mt-1 mx-2 w-3 h-3 text-blue-700"
+                faSprite_ "plus" "regular" "mt-1 mx-2 w-3 h-3 text-blue-700"
                 span_ [class_ "text-blue-700 font-medium text-sm "] "Add member"
           button_ [class_ "py-2 px-5 bg-blue-700 absolute m-5 bottom-0 right-0 text-[white] text-sm rounded-xl cursor-pointer", type_ "submit"] "Submit"
 
@@ -166,7 +166,7 @@ projectMemberRow projMembersM =
     button_
       [ [__| on click remove the closest parent <div/> then halt |]
       ]
-      $ faIcon_ "fa-trash-can-plus" "fa-regular fa-trash-can-plus" "w-3 h-3 text-red-700"
+      $ faSprite_ "trash-can" "regular" "w-3 h-3 text-red-700"
   where
     selectedIf :: ProjectMembers.Permissions -> ProjectMembers.Permissions -> [Attribute]
     selectedIf a b = [selected_ "" | a == b]

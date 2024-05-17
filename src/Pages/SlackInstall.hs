@@ -23,7 +23,7 @@ import Pkg.Mail (sendSlackMessage)
 import Relude hiding (ask, asks)
 import System.Config (AuthContext (config, env, pool), EnvConfig (slackClientId, slackClientSecret, slackRedirectUri))
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders, addSuccessToast)
-import Utils (faIcon_)
+import Utils (faSprite_)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -202,6 +202,6 @@ installedSuccess = do
   navBar
   section_ [class_ "h-full mt-[80px] w-[1000px] flex flex-col items-center mx-auto"] do
     div_ [class_ "flex flex-col border px-6 py-16 mt-16 rounded-2xl items-center"] do
-      faIcon_ "fa-check" "fa-regular fa-check" "h-10 w-10 text-green-500"
+      faSprite_ "check" "regular" "h-10 w-10 text-green-500"
       h3_ [class_ "text-3xl font-semibold my-8"] "APItoolkit Slack App Installed"
       p_ [class_ "text-gray-600 text-center max-w-prose"] "APItoolkit Bot Slack app has been connected to your project successfully. You can now recieve notifications on slack."

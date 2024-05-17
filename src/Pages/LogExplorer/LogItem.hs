@@ -23,7 +23,7 @@ import Pages.Components qualified as Components
 import PyF (fmt)
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (faIcon_, getMethodColor, getStatusColor, mIcon_, unwrapJsonPrimValue)
+import Utils (faSprite_, getMethodColor, getStatusColor, mIcon_, unwrapJsonPrimValue)
 
 
 expandAPIlogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATAuthCtx (RespHeaders (Html ()))
@@ -62,7 +62,7 @@ expandAPIlogItem' pid req modal = do
                 ]
                 do
                   p_ [style_ "width: calc(100% - 25px)", class_ "text-sm truncate ..."] "Expires in: 1 hour"
-                  faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-3 w-3"
+                  faSprite_ "chevron-down" "regular" "h-3 w-3"
               div_ [id_ "expire_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] do
                 forM_ (["1 hour", "8 hours", "1 day"] :: [Text]) \sw -> do
                   button_
@@ -125,7 +125,8 @@ expandAPIlogItem' pid req modal = do
     div_ [class_ "flex w-full bg-gray-100 px-4 py-2 flex-col gap-2"] do
       p_ [class_ "font-bold"] "Outgoing requests"
     div_ [class_ "grow overflow-y-auto py-2 px-1 max-h-[500px] whitespace-nowrap text-sm divide-y overflow-x-hidden"] do
-      let escapedQueryPartial = toText $ escapeURIString isUnescapedInURI $ toString [fmt|parent_id=="{UUID.toText req.id}"|]
+      let createdAt = (toText $ formatTime defaultTimeLocale "%FT%T%6QZ" req.createdAt)
+      let escapedQueryPartial = toText $ escapeURIString isUnescapedInURI $ toString [fmt|parent_id=="{UUID.toText req.id}" AND created_at<="{createdAt}"|]
       let events_url = "/p/" <> pid.toText <> "/log_explorer?layout=resultTable&query=" <> escapedQueryPartial
       div_ [hxGet_ events_url, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
 
@@ -187,22 +188,20 @@ apiLogItemView req expandItemPath = do
     Components.drawerWithURLContent_
       ("expand-log-drawer-" <> UUID.toText req.id)
       (expandItemPath <> "/detailed")
-      $ span_ [class_ "btn btn-sm btn-outline"] ("Expand" >> faIcon_ "fa-expand" "fa-regular fa-expand" "h-3 w-3")
+      $ span_ [class_ "btn btn-sm btn-outline"] ("Expand" >> faSprite_ "expand" "regular" "h-3 w-3")
     let reqJson = decodeUtf8 $ AE.encode $ AE.toJSON req
     button_
       [ class_ "btn btn-sm btn-outline"
       , term "data-reqJson" reqJson
       , onclick_ "buildCurlRequest(event)"
       ]
-      $ span_ [] "Copy as curl"
-      >> faIcon_ "fa-copy" "fa-regular fa-copy" "h-3 w-3"
+      (span_ [] "Copy as curl" >> faSprite_ "copy" "regular" "h-3 w-3")
     button_
       [ class_ "btn btn-sm btn-outline"
       , onclick_ "downloadJson(event)"
       , term "data-reqJson" reqJson
       ]
-      $ span_ [] "Download"
-      >> faIcon_ "fa-arrow-down-to-line" "fa-regular fa-arrow-down-to-line" "h-3 w-3"
+      (span_ [] "Download" >> faSprite_ "arrow-down-to-line" "regular" "h-3 w-3")
   jsonValueToHtmlTree $ selectiveToJson req
 
 

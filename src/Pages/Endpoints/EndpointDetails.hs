@@ -42,7 +42,7 @@ import Relude hiding (ask, asks, max, min)
 import Relude.Unsafe qualified as Unsafe
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, redirectCS)
 import Text.Interpolation.Nyan (int, rmode')
-import Utils (deleteParam, faIconWithAnchor_, faIcon_, faSprite_, getStatusColor, mIcon_)
+import Utils (deleteParam, faSprite_, getStatusColor, mIcon_)
 import Witch (from)
 
 
@@ -87,8 +87,7 @@ fieldDetailsPartialH pid fid = do
 fieldDetailsView :: Fields.Field -> Vector Formats.Format -> Html ()
 fieldDetailsView field formats = do
   div_ [id_ "modalContainer"] do
-    label_ [Lucid.for_ "edit_field", class_ "cursor-pointer"] do
-      img_ [src_ "/assets/svgs/ellipsis.svg", class_ "my-2 float-right"]
+    label_ [Lucid.for_ "edit_field", class_ "cursor-pointer"] $ faSprite_ "ellipsis" "regular" "my-2 float-right"
     input_ [type_ "checkbox", id_ "edit_field", class_ "modal-toggle"]
     div_ [class_ "modal", role_ "dialog", hxSwap_ "outerHTML"] do
       form_
@@ -103,7 +102,7 @@ fieldDetailsView field formats = do
           div_ [class_ "flex items-center py-2 border-b justify-between"] do
             h3_ [class_ "text-xl font-bold text-gray-900"] "Edit Field"
             label_ [Lucid.for_ "edit_field", class_ "modal-action rounded-full m-0 cursor-pointer bg-gray-200 pr-2 py-2 flex items-center justify-center"] do
-              faIcon_ "fa-close" "fa-light fa-close" "h-4 w-4 inline-block"
+              faSprite_ "close" "light" "h-4 w-4 inline-block"
           div_ [class_ "w-full py-3"] do
             div_ [class_ "text-xl space-y-6 overflow-y-auto", style_ "min-height:30vh;max-height:70vh; width:100%"] do
               div_ [class_ "flex items-center gap-4"] do
@@ -126,7 +125,7 @@ fieldDetailsView field formats = do
                     ]
                     do
                       span_ [] "Add"
-                      faIcon_ "fa-plus" "fa-plus fa-solid" "h-3 w-3"
+                      faSprite_ "plus" "solid" "h-3 w-3"
 
               div_ [class_ "flex flex-col gap-1"] do
                 label_ [Lucid.for_ "description", class_ "text-gray-700 text-sm font-semibold"] "Description"
@@ -419,11 +418,11 @@ apiDocsSubPage shapesWithFieldsMap shapeHashM = do
                   span_ [class_ "ml-2 text-sm text-slate-600"] $ toHtml s.sHash
 
       div_ [class_ "flex items-center"] do
-        faIconWithAnchor_ "fa-arrow-left" "fa-light fa-arrow-left" "h-6 w-6 m-2 cursor-pointer" "slideReqRes('prev')"
+        a_ [href_ "#", onclick_ "slideReqRes('prev')"] $ faSprite_ "arrow-left" "regular" "h-6 w-6 m-2 cursor-pointer"
         let l = show targetIndex <> "/" <> show (length shapesWithFieldsMap)
         let id = "current_indicator"
         span_ [src_ " mx-4", id_ id] l
-        faIconWithAnchor_ "fa-arrow-right" "fa-light fa-arrow-right" "h-6 w-6 m-2 cursor-pointer" "slideReqRes('next')"
+        a_ [href_ "#", onclick_ "slideReqRes('next')"] $ faSprite_ "arrow-right" "regular" "h-6 w-6 m-2 cursor-pointer"
     reqResSection "Request" True shapesWithFieldsMap targetIndex
     reqResSection "Response" False shapesWithFieldsMap targetIndex
   script_
@@ -503,7 +502,7 @@ endpointStats enpStats@Endpoints.EndpointRequestStats{min, p50, p75, p90, p95, p
       $ div_
         [class_ "flex flex-row"]
         do
-          faIconWithAnchor_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 mr-3 mt-1 w-4 cursor-pointer" "toggle .neg-rotate-90 on me then toggle .hidden on (next .endpointStatsSubSection)"
+          a_ [href_ "#", [__|toggle .neg-rotate-90 on me then toggle .hidden on (next .endpointStatsSubSection)|]] $ faSprite_ "chevron-down" "regular" "h-4 mr-3 mt-1 w-4 cursor-pointer"
           span_ [class_ "text-lg text-slate-800"] "Endpoint Stats"
     div_ [class_ "space-y-5 endpointStatsSubSection"] do
       div_ [class_ "grid grid-cols-3  gap-5"] do
@@ -615,7 +614,7 @@ subSubSection title fieldsM descriptionM =
     Just fields -> do
       div_ [class_ "space-y-1 mb-4"] do
         div_ [class_ "flex flex-row items-center"] do
-          faIconWithAnchor_ "fa-chevron-down" "fa-light fa-chevron-down" "h-6 mr-3 w-6 p-1 cursor-pointer" "toggle .neg-rotate-90 on me then toggle .hidden on (next .subSectionContent)"
+          a_ [href_ "#", [__|toggle .neg-rotate-90 on me then toggle .hidden on (next .subSectionContent)|]] $ faSprite_ "chevron-down" "regular" "h-6 mr-3 w-6 p-1 cursor-pointer"
           div_ [class_ "flex flex-row gap-2 bg-gray-100 px-10 rounded-xl w-full p-4 text-sm text-slate-900 "] do
             toHtml title
             p_ [class_ "text-sm text-gray-700"] $ toHtml $ fromMaybe "" descriptionM

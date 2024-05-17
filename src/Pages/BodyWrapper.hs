@@ -13,7 +13,7 @@ import NeatInterpolation (text)
 import Pkg.Components.ExternalHeadScripts (externalHeadScripts_)
 import PyF
 import Relude
-import Utils (faIcon_, faSprite_)
+import Utils (faSprite_)
 
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
@@ -130,7 +130,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
 
               if("serviceWorker" in navigator) {
                   window.addEventListener("load", () => {
-                    navigator.serviceWorker.register("/public/sw.js?v=3").then(swReg => {}).catch(err => {
+                    navigator.serviceWorker.register("/public/sw.js?v=4").then(swReg => {}).catch(err => {
                         console.error('Service Worker Error', err);
                     });
                 });
@@ -209,10 +209,8 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
               else
                 remove <.log-item-context-menu /> then remove .with-context-menu from <.with-context-menu /> then
                 get #log-item-context-menu-tmpl.innerHTML then put it after me then add .with-context-menu to me then 
-                _hyperscript.processNode(.log-item-context-menu)
-                htmx.process(.log-item-context-menu)
+                _hyperscript.processNode(.log-item-context-menu) then htmx.process(next <.log-item-context-menu/>)
               end
-              halt
             end
           end
 
@@ -243,36 +241,41 @@ projectsDropDown currProject projects = do
     do
       div_ [class_ "p-2 pb-4 "] do
         div_ [class_ "flex mt-2 mb-4"] do
-          faSprite_ "folders" "sharp-light" "h-5 w-5 mr-2"
+          faSprite_ "folders" "regular" "h-5 w-5 mr-2"
           div_ do
             strong_ [class_ "block"] $ toHtml currProject.title
             small_ [class_ "block text-blue-800"] $ toHtml currProject.paymentPlan
         nav_ [] do
           a_ [href_ [text| /p/$pidTxt/settings |], class_ "p-3 flex gap-3 items-center rounded-2xl hover:bg-gray-100"] do
-            faSprite_ "gear" "sharp-regular" "h-5 w-5" >> span_ "Settings"
+            faSprite_ "gear" "regular" "h-5 w-5" >> span_ "Settings"
           a_ [href_ [text| /p/$pidTxt/manage_members |], class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100"] do
             faSprite_ "user-plus" "regular" "h-5 w-5" >> span_ "Manage members"
           a_ [href_ [text| /p/$pidTxt/apis|], class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100"] do
             faSprite_ "key" "regular" "h-5 w-5" >> span_ "API Keys"
           when (currProject.paymentPlan == "UsageBased")
-            $ a_ [class_ "p-3 flex gap-3 flex gap-3 items-center rounded hover:bg-gray-100 cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]] do
-              faIcon_ "fa fa-dollar" "fa fa-dollar regular" "h-5 w-5" >> span_ "Manage billing"
+            $ a_
+              [class_ "p-3 flex gap-3 flex gap-3 items-center rounded hover:bg-gray-100 cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]]
+              (faSprite_ "dollar-sign" "regular" "h-5 w-5" >> span_ "Manage billing")
       div_ [class_ "border-t border-gray-100 p-2"] do
         div_ [class_ "flex justify-between content-center items-center py-5 mb-2 "] do
           a_ [href_ "/"] $ h3_ [class_ "text-xl"] "Switch projects"
           a_ [class_ "inline-block bg-blue-700 flex pl-3 pr-4 py-2 rounded-xl text-white space-x-2", href_ "/p/new"] do
-            faSprite_ "plus" "sharp-regular" "h-5 w-5 bg-blue-800 rounded-lg" >> span_ [class_ "inline-block px-1"] "Add"
+            faSprite_ "plus" "regular" "h-5 w-5 bg-blue-800 rounded-lg" >> span_ [class_ "inline-block px-1"] "Add"
         div_ do
           div_ [class_ "relative"] do
             div_ [class_ "absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none"] $ faSprite_ "magnifying-glass" "regular" "h-6 w-4"
-            input_ [class_ "pl-12 w-full text-sm bg-gray-100 rounded-2xl border-0 p-3", placeholder_ "Search Projects"]
-          div_ [class_ "space-y-2 py-4 text-sm"] do
+            input_
+              [ class_ "pl-12 w-full text-sm bg-gray-100 rounded-2xl border-0 p-3"
+              , placeholder_ "Search Projects"
+              , [__|on input show .project_item in #projectsContainer when its textContent.toLowerCase() contains my value.toLowerCase()|]
+              ]
+          div_ [class_ "space-y-2 py-4 text-sm", id_ "projectsContainer"] do
             projects & mapM_ \project -> do
-              a_ [class_ "flex justify-between p-2", href_ $ "/p/" <> project.id.toText] do
+              a_ [class_ "flex justify-between p-2 project_item", href_ $ "/p/" <> project.id.toText] do
                 div_ [class_ "space-x-3"]
-                  $ faSprite_ "folders" "sharp-regular" "h-5 w-5 inline-block"
+                  $ faSprite_ "folders" "regular" "h-5 w-5 inline-block"
                   >> span_ [class_ "inline-block"] (toHtml project.title)
-                when (currProject.id == project.id) $ faSprite_ "circle-check" "sharp-regular" "h-6 w-6 text-green-700"
+                when (currProject.id == project.id) $ faSprite_ "circle-check" "regular" "h-6 w-6 text-green-700"
 
 
 sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Maybe Text -> Maybe Bool -> Html ()
@@ -314,13 +317,13 @@ sideNav sess project pageTitle menuItem hasIntegrated = do
             small_ [class_ "block text-slate-900"] $ toHtml project.paymentPlan
           -- Development?
           div_ [class_ "flex flex-col"] do
-            faSprite_ "chevron-up" "light" " h-4 w-4 m-1"
-            faSprite_ "chevron-down" "light" " h-4 w-4 m-1"
+            faSprite_ "chevron-up" "regular" " h-4 w-4 m-1"
+            faSprite_ "chevron-down" "regular" " h-4 w-4 m-1"
 
       projectsDropDown project (Sessions.getProjects $ Sessions.projects sess)
     nav_ [class_ "mt-4"] do
       -- FIXME: reeanable hx-boost hxBoost_ "true"
-      menu project.id & mapM_ \(mTitle, mUrl, faIcon) -> do
+      menu project.id & mapM_ \(mTitle, mUrl, fIcon) -> do
         let isActive = maybe (pageTitle == mTitle) (== mTitle) menuItem
         let activeCls = if isActive then " bg-blue-50 text-blue-700 border-blue-700" else " border-transparent text-slate-900"
         a_
@@ -330,7 +333,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = do
           , class_ $ " block flex gap-3 px-5 py-3 flex no-wrap shrink-0 items-center border-l-4 hover:bg-blue-50" <> activeCls
           ]
           do
-            faSprite_ faIcon "regular" $ "w-5 h-5 shrink-0" <> if isActive then "text-blue-900 " else "text-slate-500 "
+            faSprite_ fIcon "regular" $ "w-5 h-5 shrink-0" <> if isActive then "text-blue-900 " else "text-slate-500 "
             span_ [class_ "sd-hidden "] $ toHtml mTitle
 
 
@@ -382,7 +385,7 @@ navbar currUser = do
             $ if currUser.firstName /= "" || currUser.lastName /= ""
               then currUser.firstName <> " " <> currUser.lastName
               else CI.original currUser.email
-          faSprite_ "caret-down" "sharp-solid" "w-4 h-4 inline-block"
+          faSprite_ "caret-down" "solid" "w-4 h-4 inline-block"
 
       -- logout dropdown
       div_

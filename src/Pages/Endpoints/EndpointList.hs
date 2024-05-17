@@ -25,7 +25,7 @@ import PyF qualified
 import Relude hiding (ask, asks)
 import System.Config (AuthContext)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (deleteParam, faIcon_, faSprite_, mIcon_, textToBool)
+import Utils (deleteParam, faSprite_, mIcon_, textToBool)
 
 
 data ParamInput = ParamInput
@@ -90,7 +90,7 @@ endpointListPage paramInput pid currTime endpoints hosts hostM pHostM inbox_coun
         ]
         do
           span_ [class_ "ml-1 text-sm text-slate-600"] $ toHtml $ fromMaybe "Select host" pHostM
-      faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 w-4"
+      faSprite_ "chevron-down" "light" "h-4 w-4"
       div_ [id_ "hosts_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] do
         div_ [class_ "flex flex-col"] do
           forM_ hosts $ \host -> do
@@ -172,7 +172,7 @@ endpointList' paramInput currTime pid enps inbox_count = form_ [class_ "col-span
     div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "font-base"] "EVENTS"
   div_ [class_ "w-full flex flex-row p-3"] $ do
     div_ [class_ "relative flex w-full bg-white py-2 px-3 border-solid border border-gray-200 h-10"] $ do
-      faIcon_ "fa-magnifying-glass" "fa-light fa-magnifying-glass" "h-5 w-5"
+      faSprite_ "magnifying-glass" "regular" "h-5 w-5"
       input_
         [ type_ "text"
         , [__| on input show .endpoint_item in #endpoints_container when its textContent.toLowerCase() contains my value.toLowerCase() |]
@@ -180,7 +180,7 @@ endpointList' paramInput currTime pid enps inbox_count = form_ [class_ "col-span
         , placeholder_ "Search endpoints..."
         ]
   when (null enps && inbox_count == 0) $ section_ [class_ "mx-auto w-max p-5 sm:py-10 sm:px-16 items-center flex my-10 gap-16"] do
-    div_ [] $ faIcon_ "fa fa-solid fa-empty-set" "fa-solid fa-empty-set" "h-24 w-24"
+    div_ [] $ faSprite_ "empty-set" "solid" "h-24 w-24"
     div_ [class_ "flex flex-col gap-2"] do
       h2_ [class_ "text-2xl font-bold"] "Waiting for events..."
       p_ "You're currently not sending any data to APItoolkit from your backends yet."

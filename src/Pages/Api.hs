@@ -20,7 +20,7 @@ import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude hiding (ask)
 import System.Config (AuthContext (config), EnvConfig (apiKeyEncryptionSecretKey))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
-import Utils (faIcon_)
+import Utils (faSprite_)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -107,16 +107,15 @@ apiKeysPage pid apiKeys = do
                   ]
                   do
                     span_ [class_ "sr-only"] "Close"
-                    faIcon_ "fa-xmark" "fa-light fa-xmark" "h-6 w-6"
+                    faSprite_ "xmark" "regular" "h-6 w-6"
               div_ [class_ "sm:flex sm:items-start"] do
                 div_ [class_ "mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10"] do
-                  faIcon_ "fa-xmark" "fa-light fa-xmark" "h-6 w-6"
+                  faSprite_ "xmark" "regular" "h-6 w-6"
                 div_ [class_ "mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left grow"] do
                   h3_ [class_ "text-lg leading-6 font-medium text-gray-900", id_ "modal-title"] "Generate an API Key"
                   div_ [class_ "mt-6 space-y-2"] do
                     p_ [class_ "text-sm text-gray-500"] "Please input a title for your API Key."
-                    div_ do
-                      input_ [class_ "input-txt px-4 py-2  border w-full", type_ "text", placeholder_ "API Key Title", name_ "title", autofocus_]
+                    div_ $ input_ [class_ "input-txt px-4 py-2  border w-full", type_ "text", placeholder_ "API Key Title", name_ "title", autofocus_]
               div_ [class_ "mt-5 sm:mt-4 sm:flex sm:flex-row-reverse"] do
                 button_ [type_ "submit", class_ "w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-red-600 text-base font-medium text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 sm:ml-3 sm:w-auto sm:text-sm"] "Submit"
                 button_
@@ -188,7 +187,7 @@ mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] do
                           , id_ $ "key" <> show i
                           ]
                           do
-                            faIcon_ "fa-xmark" "fa-light fa-xmark" "h-3 w-3 mr-2 inline-block text-red-600"
+                            faSprite_ "xmark" "regular" "h-3 w-3 mr-2 inline-block text-red-600"
                             span_ [class_ "text-slate-500"] "Revoke"
                       else do
                         button_
@@ -206,7 +205,7 @@ copyNewApiKey newKeyM hasNext =
         div_ [class_ "rounded-md bg-green-50 p-4"] do
           div_ [class_ "flex"] do
             div_ [class_ "flex-shrink-0"] do
-              faIcon_ "fa-circle-check" "fa-sharp fa-regular fa-circle-check" "h-5 w-5 text-green-400"
+              faSprite_ "circle-check" "regular" "h-5 w-5 text-green-400"
             div_ [class_ "ml-3"] do
               h3_ [class_ "text-sm font-medium text-green-800"] "API Key was generated successfully"
               div_ [class_ "mt-2 text-sm text-green-700 py-2"] do

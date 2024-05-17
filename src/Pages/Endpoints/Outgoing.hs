@@ -16,7 +16,7 @@ import Pages.BodyWrapper (BWConfig (currProject, pageTitle, sessM), bodyWrapper)
 import PyF qualified
 import Relude hiding (ask, asks)
 import System.Types
-import Utils (faIcon_, mIcon_)
+import Utils (faSprite_, mIcon_)
 
 
 outgoingGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
@@ -76,7 +76,7 @@ outgoingPage pid sortV hostsEvents = do
       div_ [class_ "w-full bg-white border-b border-slate-20"] $ do
         div_ [class_ "w-full flex flex-row p-3"] $ do
           div_ [class_ "relative flex w-full bg-white py-2 px-3 border-solid border border-gray-200 h-10"] $ do
-            faIcon_ "fa-magnifying-glass" "fa-light fa-magnifying-glass" "h-5 w-5"
+            faSprite_ "magnifying-glass" "regular" "h-5 w-5"
             input_
               [ type_ "text"
               , [__| on input show .endpoint_item in #endpoints_container when its textContent.toLowerCase() contains my value.toLowerCase() |]
@@ -103,7 +103,7 @@ outgoingPage pid sortV hostsEvents = do
 
       when (null hostsEvents) $ section_ [class_ "mx-auto w-max p-5 sm:py-10 sm:px-16 items-center flex my-10 gap-16"] do
         div_ [] do
-          faIcon_ "fa fa-solid fa-empty-set" "fa-solid fa-empty-set" "h-24 w-24"
+          faSprite_ "empty-set" "solid" "h-24 w-24"
         div_ [class_ "flex flex-col gap-2"] do
           h2_ [class_ "text-2xl font-bold"] "No Outgoing Request Monitored."
           p_ "You're currently not monitoring your outbound integrations."

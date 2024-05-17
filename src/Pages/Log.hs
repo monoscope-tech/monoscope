@@ -37,7 +37,6 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Pages.Monitors.Alerts qualified as Alerts
-import Pkg.Components (loader)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Types
@@ -158,7 +157,7 @@ logQueryBox_ pid currentRange =
                 do
                   mIcon_ "clock" "h-4 w-4"
                   span_ [class_ "inline-block", id_ "currentRange"] $ toHtml (fromMaybe "Last 14 Days" currentRange)
-                  faIcon_ "fa-chevron-down" "fa-solid fa-chevron-down" "h-3 w-3 inline-block"
+                  faSprite_ "chevron-down" "regular" "h-3 w-3 inline-block"
               div_ [id_ "timepickerBox", class_ "hidden absolute z-10 mt-1  rounded-md flex"] do
                 div_ [class_ "inline-block w-84 overflow-auto bg-white py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm"] do
                   timePickerItems
@@ -185,7 +184,7 @@ logQueryBox_ pid currentRange =
             [type_ "submit", class_ "btn btn-sm btn-success"]
             do
               span_ [id_ "run-query-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-md"] ""
-              faIcon_ "fa-sparkles" "fa-sharp fa-regular fa-sparkles" "h-3 w-3 inline-block"
+              faSprite_ "sparkles" "regular" "h-3 w-3 inline-block"
               span_ "Run query"
       div_ do
         div_ [class_ "bg-gray-200"] do
@@ -220,9 +219,9 @@ apiLogsPage page = do
       ]
       do
         div_ [class_ "relative ml-auto w-full", style_ ""] do
-          div_ [class_ "flex justify-end  w-full p-4 "] do
-            button_ [[__|on click add .hidden to #expand-log-modal|]] do
-              img_ [class_ "h-8", src_ "/assets/svgs/close.svg"]
+          div_ [class_ "flex justify-end  w-full p-4 "]
+            $ button_ [[__|on click add .hidden to #expand-log-modal|]]
+            $ faSprite_ "xmark" "regular" "h-8"
           form_
             [ hxPost_ $ "/p/" <> page.pid.toText <> "/share/"
             , hxSwap_ "innerHTML"
@@ -266,7 +265,7 @@ apiLogsPage page = do
       div_ [class_ "flex-1 "] do
         div_ [class_ "pl-3 py-1 flex flex-row justify-between"] do
           a_ [class_ "cursor-pointer inline-block pr-3 space-x-2 bg-blue-50 hover:bg-blue-100 blue-800 p-1 rounded-md", [__|on click toggle .hidden on #reqsChartParent|]] do
-            faIcon_ "fa-chart-bar" "fa-regular fa-chart-bar" "h-3 w-3 inline-block"
+            faSprite_ "chart-bar" "regular" "h-3 w-3 inline-block"
             span_ [] "toggle chart"
           a_
             [ class_ "cursor-pointer flex gap-2 items-center pr-3"
@@ -277,7 +276,7 @@ apiLogsPage page = do
             ]
             do
               span_ [id_ "refresh-indicator", class_ "refresh-indicator htmx-indicator query-indicator loading loading-dots loading-md"] ""
-              faIcon_ "fa-refresh" "fa-regular fa-refresh" "h-3 w-3 inline-block"
+              faSprite_ "arrows-rotate" "regular" "h-3 w-3 inline-block"
               span_ [] "refresh"
         div_
           [ id_ "reqsChartsECP"
@@ -319,8 +318,7 @@ resultTable_ page mainLog = table_ [class_ "w-full table table-sm table-pin-rows
     if mainLog
       then do
         section_ [class_ "w-max  mx-auto my-16 p-5 sm:py-14 sm:px-24 items-center flex gap-16"] do
-          div_ [] do
-            faIcon_ "fa fa-solid fa-empty-set" "fa-solid fa-empty-set" "h-24 w-24"
+          div_ [] $ faSprite_ "empty-set" "solid" "h-24 w-24"
           div_ [class_ "flex flex-col gap-2"] do
             h2_ [class_ "text-2xl font-bold"] "Waiting for events..."
             p_ "You're currently not sending any data to APItoolkit from your backends yet."
@@ -372,10 +370,9 @@ logItemRows_ pid requests curatedCols colIdxMap nextLogsURL = do
       , hxSwap_ "outerHTML"
       , hxGet_ nextLogsURL
       , hxTarget_ "closest tr"
-      -- , hxIndicator_ "next .htmx-indicator"
+      , hxIndicator_ "next .htmx-indicator"
       ]
-      do
-        span_ [class_ "inline-block"] "LOAD MORE " >> span_ [class_ "htmx-indicator loading loading-dots loading-lg inline-block pl-3"] loader
+      (span_ [class_ "inline-block"] "LOAD MORE " >> span_ [class_ "htmx-indicator loading loading-dots loading-lg inline-block pl-3"] "")
 
 
 errorClass :: Bool -> V.Vector Value -> HM.HashMap Text Int -> (Int, Int, Text)
@@ -452,8 +449,8 @@ logItemCol_ _ reqVec colIdxMap "status_code" = span_ [class_ $ "badge " <> getSt
 logItemCol_ _ reqVec colIdxMap "method" = span_ [class_ $ "min-w-[4rem] badge " <> maybe "badge-ghost" getMethodColor (lookupVecTextByKey reqVec colIdxMap "method"), term "data-tippy-content" "method"] $ toHtml $ fromMaybe "/" $ lookupVecTextByKey reqVec colIdxMap "method"
 logItemCol_ pid reqVec colIdxMap key@"rest" = div_ [class_ "space-x-2 whitespace-nowrap max-w-8xl overflow-x-hidden "] do
   if lookupVecTextByKey reqVec colIdxMap "request_type" == Just "Incoming"
-    then span_ [class_ "text-center w-3 inline-flex ", term "data-tippy-content" "Incoming Request"] $ faIcon_ "fa-arrow-down-left" "fa-solid fa-arrow-down-left" "h-3 w-3 text-gray-400"
-    else span_ [class_ "text-center w-3 inline-flex ", term "data-tippy-content" "Outgoing Request"] $ faIcon_ "fa-arrow-up-right" "fa-solid fa-arrow-up-right" "h-3 w-3 text-green-500"
+    then span_ [class_ "text-center w-3 inline-flex ", term "data-tippy-content" "Incoming Request"] $ faSprite_ "arrow-down-left" "solid" "h-3 w-3 text-gray-400"
+    else span_ [class_ "text-center w-3 inline-flex ", term "data-tippy-content" "Outgoing Request"] $ faSprite_ "arrow-up-right" "solid" "h-3 w-3 text-red-800"
   logItemCol_ pid reqVec colIdxMap "status_code"
   logItemCol_ pid reqVec colIdxMap "method"
   span_ [class_ "badge badge-ghost ", term "data-tippy-content" "URL Path"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "url_path"

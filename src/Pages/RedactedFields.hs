@@ -15,6 +15,7 @@ import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude
 import System.Types
+import Utils (faSprite_)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -83,12 +84,10 @@ redactedFieldsPage pid redactedFields = do
                   , class_ "bg-white rounded-md text-slate-400 hover:text-slate-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
                   , [__|on click add .hidden to #redactFieldDialog|]
                   ]
-                  do
-                    span_ [class_ "sr-only"] "Close"
-                    img_ [class_ "h-6 w-6", src_ "/assets/svgs/close.svg"]
+                  $ (span_ [class_ "sr-only"] "Close" >> faSprite_ "xmark" "regular" "h-6 w-6")
               div_ [class_ "sm:flex sm:items-start"] do
-                div_ [class_ "mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10"] do
-                  img_ [class_ "h-6 w-6 text-red-600", src_ "/assets/svgs/close.svg"]
+                div_ [class_ "mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10"]
+                  $ (span_ [class_ "sr-only"] "Close" >> faSprite_ "xmark" "regular" "h-6 w-6 text-red-600")
                 div_ [class_ "mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left grow"] do
                   h3_ [class_ "text-lg leading-6 font-medium text-slate-900", id_ "modal-title"] "Redact a field path"
                   p_ [] "Redacting a field path means apitookit will strip out and discard all values of this field and will never be able to see those values."
@@ -133,5 +132,4 @@ mainContent pid redactedFields = do
                   td_ [class_ "px-6 py-4 whitespace-nowrap text-sm text-slate-500"] $ toHtml @String $ show rf.configuredVia
                   td_ [class_ "px-6 py-4 whitespace-nowrap text-right text-sm font-medium"] do
                     a_ [class_ "text-indigo-600 hover:text-indigo-900", href_ $ "/p/" <> pid.toText <> "/redacted_fields/delete"] do
-                      img_ [src_ "/assets/svgs/revoke.svg", class_ "h-3 w-3 mr-2 inline-block"]
                       span_ [class_ "text-slate-500"] "Delete"

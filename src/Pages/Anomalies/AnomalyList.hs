@@ -74,8 +74,6 @@ import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils (
   deleteParam,
-  faIconWithAnchor_,
-  faIcon_,
   faSprite_,
   getMethodColor,
   mIcon_,
@@ -217,7 +215,7 @@ anomalyListPage paramInput pid currTime anomalies nextFetchUrl = div_ [class_ "w
         div_ [class_ "relative w-full", style_ ""] do
           div_ [class_ "flex justify-end  w-full p-4 "] do
             button_ [class_ "bg-gray-200 rounded-full p-2 text-gray-500 hover:bg-gray-300 hover:text-gray-700", [__|on click add .hidden to #expand-an-modal|]] do
-              faIcon_ "fa-close" "fa-regular fa-close" "h-4 w-4"
+              faSprite_ "xmark" "regular" "h-4 w-4"
           div_ [id_ "an-modal-content-loader", class_ "bg-white rounded z-50 border p-4 absolute top-[40vh] left-1/2 -translate-x-1/2 -translate-y-1/2"] do
             loader
           div_ [class_ "px-2", id_ "an-modal-content"] pass
@@ -282,7 +280,7 @@ anomalyList paramInput pid currTime anomalies nextFetchUrl = form_ [class_ "col-
 
   when (null anomalies) $ section_ [class_ "mx-auto w-max p-5 sm:py-10 sm:px-16 items-center flex my-10 gap-16"] do
     div_ [] do
-      faIcon_ "fa fa-solid fa-empty-set" "fa-solid fa-empty-set" "h-24 w-24"
+      faSprite_ "empty-set" "solid" "h-24 w-24"
     div_ [class_ "flex flex-col gap-2"] do
       h2_ [class_ "text-2xl font-bold"] "No Anomalies Or Errors."
       p_ "Start monitoring errors that happened during a request"
@@ -306,7 +304,7 @@ anomalyListSlider _ pid eid Nothing = do
   div_ [hxGet_ $ "/p/" <> pid.toText <> "/anomalies?layout=slider" <> maybe "" (\x -> "&endpoint=" <> x.toText) eid, hxSwap_ "outerHTML", hxTrigger_ "load"] do
     div_ [class_ "flex justify-between mt-5 pb-2"] do
       div_ [class_ "flex flex-row"] do
-        faIconWithAnchor_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 mr-3 mt-1 w-4" "toggle .neg-rotate-90 on me then toggle .hidden on (next .parent-slider)"
+        a_ [href_ "#", [__|toggle .neg-rotate-90 on me then toggle .hidden on (next .parent-slider)|]] $ faSprite_ "chevron-down" "regular" "h-4 mr-3 mt-1 w-4"
         span_ [class_ "text-lg text-slate-700"] "Ongoing Anomalies and Monitors"
       div_ [class_ "flex flex-row mt-2"] ""
 anomalyListSlider currTime _ _ (Just anomalies) = do
@@ -326,7 +324,7 @@ anomalyListSlider currTime _ _ (Just anomalies) = do
          |]
     div_ [class_ "flex justify-between mt-5 pb-2"] do
       div_ [class_ "flex flex-row"] do
-        faIconWithAnchor_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 mr-3 mt-1 w-4" "toggle .neg-rotate-90 on me then toggle .hidden on (next .parent-slider)"
+        a_ [href_ "#", [__|toggle .neg-rotate-90 on me then toggle .hidden on (next .parent-slider)|]] $ faSprite_ "chevron-down" "regular" "h-4 mr-3 mt-1 w-4"
         span_ [class_ "text-lg text-slate-700"] "Ongoing Anomalies and Monitors"
       div_ [class_ "flex items-center gap-2 mt-2"] do
         a_
@@ -660,7 +658,7 @@ anomalyDisplayConfig :: Anomalies.AnomalyVM -> (Text, Text)
 anomalyDisplayConfig anomaly = case anomaly.anomalyType of
   Anomalies.ATField -> ("New Field Found", "/assets/svgs/anomalies/fields.svg")
   Anomalies.ATShape -> ("New Request Shape", "/assets/svgs/anomalies/fields.svg")
-  Anomalies.ATEndpoint -> ("New Endpoint", "/assets/svgs/endpoint.svg")
+  Anomalies.ATEndpoint -> ("New Endpoint", "/assets/svgs/anomalies/endpoint.svg")
   Anomalies.ATFormat -> ("Modified field", "/assets/svgs/anomalies/fields.svg")
   Anomalies.ATUnknown -> ("Unknown anomaly", "/assets/svgs/anomalies/fields.svg")
 
@@ -763,7 +761,7 @@ subSubSection title fieldsM =
     Just fields -> do
       div_ [class_ "space-y-1 mb-4"] do
         div_ [class_ "flex flex-row items-center"] do
-          faIconWithAnchor_ "fa-chevron-down" "fa-light fa-chevron-down" "h-6 mr-3 w-6 p-1 cursor-pointer" "toggle .neg-rotate-90 on me then toggle .hidden on (next .subSectionContent)"
+          a_ [class_ "cursor-pointer", [__|toggle .neg-rotate-90 on me then toggle .hidden on (next .subSectionContent)|]] $ faSprite_ "chevron-down" "regular" "h-6 mr-3 w-6 p-1 cursor-pointer"
           div_ [class_ "px-4 rounded-xl w-full font-bold text-sm text-slate-900"] $ toHtml title
         div_ [class_ "space-y-1 subSectionContent"] do
           fieldsToNormalized fields & mapM_ \(key, fieldM) -> do

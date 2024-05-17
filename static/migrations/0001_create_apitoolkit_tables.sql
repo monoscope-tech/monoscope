@@ -7,7 +7,6 @@ CREATE EXTENSION IF NOT EXISTS timescaledb_toolkit;
 CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
 CREATE EXTENSION IF NOT EXISTS hstore;
 CREATE EXTENSION IF NOT EXISTS tablefunc;
--- CREATE EXTENSION IF NOT EXISTS pg_cron;
 
 
 -- create schemas
@@ -25,10 +24,8 @@ CREATE SCHEMA IF NOT EXISTS tests;
 -----------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION manage_updated_at(_tbl regclass) RETURNS VOID AS $$
 BEGIN
-  EXECUTE format('CREATE TRIGGER set_updated_at BEFORE UPDATE ON %s
-FOR EACH ROW EXECUTE PROCEDURE set_updated_at()', _tbl);
-  EXCEPTION
-    WHEN others THEN null;
+  EXECUTE format('CREATE TRIGGER set_updated_at BEFORE UPDATE ON %s FOR EACH ROW EXECUTE PROCEDURE set_updated_at()', _tbl);
+  EXCEPTION WHEN others THEN null;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -51,8 +48,7 @@ $$ LANGUAGE plpgsql;
 DO $$ BEGIN
   CREATE DOMAIN email AS citext
     CHECK ( value ~ '^[a-zA-Z0-9.!#$%&''*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$' );
-EXCEPTION
-    WHEN duplicate_object THEN null;
+  EXCEPTION WHEN duplicate_object THEN null;
 END $$;
 
 -----------------------------------------------------------------------
@@ -413,32 +409,27 @@ CREATE TABLE IF NOT EXISTS apis.request_dumps
     shape_hash                text      NOT  NULL DEFAULT    ''::text,
     format_hashes             text[]    NOT  NULL DEFAULT    '{}'::text[],
     field_hashes              text[]    NOT  NULL DEFAULT    '{}'::text[],
+    duration_ns               BIGINT    NOT  NULL default 0,
+    sdk_type                  TEXT NOT NULL default '',
+    parent_id                 uuid,
+    service_version           text,
+    errors                    jsonb NOT NULL DEFAULT '{}'::jsonb,
+    tags                      text[] NOT NULL DEFAULT '{}'::text[],
+    request_type              TEXT NOT NULL DEFAULT 'Incoming',
 
     PRIMARY KEY(project_id,created_at,id)
 );
--- Introduce new duration_ns column and deprecate the old duration column
-alter table apis.request_dumps add column duration_ns BIGINT NOT NULL default 0;
--- NOTE: I get an error: ERROR: attempted to lock invisible tuple when i try to run this
--- So we would start with duration:0 for existing fields
-update apis.request_dumps set duration_ns=EXTRACT(epoch FROM duration)::BIGINT;
-alter table apis.request_dumps add column sdk_type TEXT NOT NULL default '';
 
 SELECT manage_updated_at('apis.request_dumps');
-SELECT create_hypertable('apis.request_dumps', 'created_at');
-SELECT add_retention_policy('apis.request_dumps',INTERVAL '3 months',true);
-CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_project_id ON apis.request_dumps(project_id, created_at);
-
-ALTER TABLE apis.request_dumps 
-  ADD COLUMN parent_id uuid,
-  ADD COLUMN service_version text,
-  ADD COLUMN errors jsonb NOT NULL DEFAULT '{}'::jsonb,
-  ADD COLUMN tags text[] NOT NULL DEFAULT '{}'::text[];
-
+SELECT create_hypertable('apis.request_dumps', by_range('created_at', INTERVAL '1 day'), migrate_data => true);
+SELECT add_retention_policy('apis.request_dumps',INTERVAL '1 months',true);
+CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_project_id ON apis.request_dumps(project_id, created_at DESC);
 ALTER TABLE apis.request_dumps SET (timescaledb.compress, timescaledb.compress_orderby = 'created_at DESC', timescaledb.compress_segmentby = 'project_id');
-SELECT add_compression_policy('apis.request_dumps', INTERVAL '14d');
+SELECT add_compression_policy('apis.request_dumps', INTERVAL '7d');
+CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_project_id_parent_id ON apis.request_dumps(project_id, parent_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_project_id_endpoint_hash ON apis.request_dumps(project_id, endpoint_hash, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_project_id_shape_hash ON apis.request_dumps(project_id, shape_hash, created_at DESC);
 
-ALTER TABLE apis.request_dumps ADD COLUMN request_type TEXT NOT NULL DEFAULT 'Incoming';
-CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_parent_id ON apis.request_dumps(parent_id);
 -- Shapes aggregated by the min. 
 DROP MATERIALIZED VIEW IF EXISTS APIS.SHAPES_AGG_1MIN;
 CREATE MATERIALIZED VIEW APIS.SHAPES_AGG_1MIN WITH (TIMESCALEDB.CONTINUOUS) AS
@@ -832,19 +823,14 @@ SELECT manage_updated_at('projects.redacted_fields');
 CREATE INDEX IF NOT EXISTS idx_projects_redacted_fields_project_id ON projects.redacted_fields(project_id);
 
 
--- cron doesn't work in the timescaledb database because its not the default database. 
--- so instead, we installed it into the default database and use a different function:
--- SELECT cron.schedule_in_database('DailyOrttoSync', '0 8 * * *', $$INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued',  jsonb_build_object('tag', 'DailyOrttoSync'))$$, 'apitoolkit-prod-eu');
-
-
--- SELECT cron.schedule_in_database('DailyJob', '0 0 * * *', $$INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued',  jsonb_build_object('tag', 'DailyJob'))$$, 'apitoolkit-prod-eu');
-
--- SELECT cron.schedule_in_database('DailyReports', '* * * * *', 'DailyReports', 'apitoolkit-prod-eu');
-
--- This is for regular databases locally or if we migrate to a new database setup.
--- SELECT cron.schedule('DailyOrttoSync', '0 8 * * *', $$INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued',  jsonb_build_object('tag', 'DailyOrttoSync'))$$);
--- useful query to view job details
--- select * from cron.job_run_details order by start_time desc limit 5;
+-- apitoolkit_daily_job should be executed every day at midnight
+CREATE OR REPLACE PROCEDURE apitoolkit_daily_job(job_id int, config jsonb) LANGUAGE PLPGSQL AS
+$$
+BEGIN
+  INSERT INTO background_jobs (run_at, status, payload) VALUES (now(), 'queued',  jsonb_build_object('tag', 'DailyJob'));
+END;
+$$;
+SELECT add_job('apitoolkit_daily_job', schedule_interval => interval '1 DAY', initial_start => '2024-05-16 00:00'::timestamptz);
 
 CREATE TABLE IF NOT EXISTS apis.share_requests
  (               
@@ -857,8 +843,7 @@ CREATE TABLE IF NOT EXISTS apis.share_requests
 );
 CREATE INDEX IF NOT EXISTS idx_apis_share_requests_id ON apis.share_requests(id);
 
-alter table apis.share_requests 
-	add column request_created_at TIMESTAMP WITH TIME ZONE NOT NULL;
+alter table apis.share_requests add column request_created_at TIMESTAMP WITH TIME ZONE NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_share_requests ON apis.share_requests(request_created_at);
 
 
@@ -961,7 +946,6 @@ BEGIN
     END IF;
 END;
 $$;
--- Run every minute 
 SELECT add_job('monitors.check_triggered_query_monitors','1min');
 
 -- Find all tests where last_run + schedule is < NOW()+10min 
@@ -1012,5 +996,3 @@ SELECT add_job('tests.check_tests_to_trigger', '10min');
 INSERT into projects.projects (id, title) VALUES ('00000000-0000-0000-0000-000000000000', 'Demo Project');
 
 COMMIT;
-
-

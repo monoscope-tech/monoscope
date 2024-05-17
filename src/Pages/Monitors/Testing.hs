@@ -217,8 +217,7 @@ collectionCard pid col = do
                   then set #desc's value to my @data-desc
                   |]
         ]
-        do
-          faIcon_ "fa-edit" "fa-light fa-edit" "h-6 w-6"
+        $ faSprite_ "pen-to-square" "regular" "h-6 w-6"
 
 
 modal :: Projects.ProjectId -> Html ()
