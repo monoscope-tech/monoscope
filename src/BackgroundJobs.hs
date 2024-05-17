@@ -37,7 +37,7 @@ import Models.Tests.TestToDump qualified as TestToDump
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text, trimming)
-import Network.Wreq (defaults, header, postWith,responseStatus)
+import Network.Wreq (defaults, header, postWith, responseStatus)
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, startJobRunner, throwParsePayload)
 import Pages.Reports qualified as RP
@@ -115,6 +115,7 @@ sendMessageToDiscord msg = do
         & header "Content-Type"
         .~ ["application/json"]
 
+
 jobsRunner :: Log.Logger -> Config.AuthContext -> Job -> IO ()
 jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
   bgJob <- throwParsePayload job
@@ -147,7 +148,7 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
            Payment Plan : {project.paymentPlan}
            stack : {stackString}
         |]
-        liftIO $ sendMessageToDiscord msg  
+        liftIO $ sendMessageToDiscord msg
     CreatedProjectSuccessfully userId projectId reciever projectTitle -> do
       userM <- Users.userById userId
       whenJust userM \user -> do
@@ -185,7 +186,7 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
       collectionM <- dbtToEff $ Testing.getCollectionById col_id
       if job.jobRunAt > addUTCTime (-900) now -- Run time is less than 15 mins ago
         then whenJust collectionM \collection -> when (collection.isScheduled) do
-          let (Testing.CollectionSteps colStepsV) = collection.collectionSteps
+          let colStepsV = collection.collectionSteps
           _ <- TestToDump.runTestAndLog collection.projectId colStepsV
           pass
         else Log.logAttention "RunCollectionTests failed.  Job was sheduled to run over 30 mins ago" $ collectionM <&> \c -> (c.title, c.id)

@@ -32,12 +32,12 @@ import Lucid (
   onclick_,
   placeholder_,
   script_,
+  small_,
   span_,
   textarea_,
   type_,
-  small_
  )
-import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_,hxBoost_)
+import Lucid.Htmx (hxBoost_, hxPost_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Tests.Testing qualified as Testing
@@ -46,8 +46,8 @@ import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude hiding (ask)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
-import Web.FormUrlEncoded (FromForm)
 import Utils
+import Web.FormUrlEncoded (FromForm)
 
 
 data TestCollectionForm = TestCollectionForm
@@ -66,19 +66,20 @@ data ScheduleForm = ScheduleForm
   deriving stock (Show, Generic)
   deriving anyclass (FromForm, AE.FromJSON)
 
+
 data ParamInput = ParamInput
-  { ackd :: Bool,
-    archived :: Bool
+  { ackd :: Bool
+  , archived :: Bool
   }
-testingPostH :: Projects.ProjectId -> TestCollectionForm  -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
-testingPostH pid collection acknM archM= do
+testingPostH :: Projects.ProjectId -> TestCollectionForm -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+testingPostH pid collection acknM archM = do
   (_, project) <- Sessions.sessionAndProject pid
   let ackd = textToBool <$> acknM
   let archived = textToBool <$> archM
   let paramInput =
         ParamInput
-          { ackd = fromMaybe False ackd,
-            archived = fromMaybe False archived
+          { ackd = fromMaybe False ackd
+          , archived = fromMaybe False archived
           }
   if collection.collection_id == ""
     then do
@@ -96,7 +97,7 @@ testingPostH pid collection acknM archM= do
               , config = AE.object []
               , schedule = "1 day"
               , isScheduled = False
-              , collectionSteps = Testing.CollectionSteps V.empty
+              , collectionSteps = AE.Array []
               }
       _ <- dbtToEff $ Testing.addCollection coll
       cols <- dbtToEff $ Testing.getCollections pid
@@ -123,13 +124,13 @@ testingGetH pid acknM archM = do
           }
   let paramInput =
         ParamInput
-          { ackd = fromMaybe False ackd,
-             archived = fromMaybe False archived
-           }         
+          { ackd = fromMaybe False ackd
+          , archived = fromMaybe False archived
+          }
   addRespHeaders $ bodyWrapper bwconf $ testingPage paramInput pid colls
 
 
-testingPage ::ParamInput -> Projects.ProjectId -> V.Vector Testing.CollectionListItem -> Html ()
+testingPage :: ParamInput -> Projects.ProjectId -> V.Vector Testing.CollectionListItem -> Html ()
 testingPage paramInput pid colls = do
   div_ [class_ "w-full", id_ "main"] do
     modal pid
@@ -147,7 +148,8 @@ testingPage paramInput pid colls = do
         a_ [class_ $ "inline-block  py-2 " <> if paramInput.ackd && not paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&ackd=true"] "InActive"
         a_ [class_ $ "inline-block  py-2 " <> if paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&archived=true"] "Deactive"
       div_ [class_ "px-8 py-4"] do
-       div_ [class_ "w-full card-round"] $ collectionCardList pid colls
+        div_ [class_ "w-full card-round"] $ collectionCardList pid colls
+
 
 collectionCardList :: Projects.ProjectId -> V.Vector Testing.CollectionListItem -> Html ()
 collectionCardList pid colls = form_ [class_ "col-span-5 bg-white divide-y "] $ do
@@ -169,13 +171,14 @@ collectionCardList pid colls = form_ [class_ "col-span-5 bg-white divide-y "] $ 
     div_ [class_ "relative flex w-full bg-white py-2 px-3 border-solid border border-gray-200 h-10"] $ do
       faIcon_ "fa-magnifying-glass" "fa-light fa-magnifying-glass" "h-5 w-5"
       input_
-        [ type_ "text",
-          [__| on input show .endpoint_item in #endpoints_container when its textContent.toLowerCase() contains my value.toLowerCase() |],
-          class_ "dataTable-search w-full h-full p-2 text-gray-500 font-normal focus:outline-none",
-          placeholder_ "Search endpoints..."
+        [ type_ "text"
+        , [__| on input show .endpoint_item in #endpoints_container when its textContent.toLowerCase() contains my value.toLowerCase() |]
+        , class_ "dataTable-search w-full h-full p-2 text-gray-500 font-normal focus:outline-none"
+        , placeholder_ "Search endpoints..."
         ]
   forM_ colls \c -> do
     collectionCard pid c
+
 
 collectionCard :: Projects.ProjectId -> Testing.CollectionListItem -> Html ()
 collectionCard pid col = do
@@ -205,10 +208,10 @@ collectionCard pid col = do
           small_ [class_ "block"] "Failed"
     div_ [class_ "w-36 flex items-center justify-center"] do
       button_
-        [ term "data-id" col.id.toText,
-          term "data-title" col.title,
-          term "data-desc" col.description,
-          [__|on click remove .hidden from #col-modal 
+        [ term "data-id" col.id.toText
+        , term "data-title" col.title
+        , term "data-desc" col.description
+        , [__|on click remove .hidden from #col-modal 
                   then set #collection_id's value to my @data-id
                   then set #title's value to my @data-title 
                   then set #desc's value to my @data-desc
@@ -216,6 +219,7 @@ collectionCard pid col = do
         ]
         do
           faIcon_ "fa-edit" "fa-light fa-edit" "h-6 w-6"
+
 
 modal :: Projects.ProjectId -> Html ()
 modal pid = do

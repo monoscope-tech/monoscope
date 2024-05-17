@@ -75,7 +75,7 @@ callRunTestkit hsString = withCString hsString $ \cstr -> do
   peekCString (resultCString)
 
 
-runCollectionTest :: IOE :> es => V.Vector Testing.CollectionStepData -> Eff es (Either Text (V.Vector Testing.StepResult))
+runCollectionTest :: IOE :> es => AE.Value -> Eff es (Either Text (V.Vector Testing.StepResult))
 runCollectionTest collectionSteps = do
   tkResp <- liftIO $ callRunTestkit $ decodeUtf8 $ AE.encode $ collectionSteps
   let stepResults = fromRight' $ AE.eitherDecodeStrictText (toText tkResp) :: V.Vector Testing.StepResult
@@ -85,7 +85,7 @@ runCollectionTest collectionSteps = do
 runTestAndLog
   :: (IOE :> es, Time.Time :> es, Reader.Reader Config.AuthContext :> es, DB :> es, Log :> es)
   => Projects.ProjectId
-  -> V.Vector Testing.CollectionStepData
+  -> AE.Value
   -> Eff es (Either Text (V.Vector Testing.StepResult))
 runTestAndLog pid collectionSteps = do
   stepResultsE <- runCollectionTest collectionSteps

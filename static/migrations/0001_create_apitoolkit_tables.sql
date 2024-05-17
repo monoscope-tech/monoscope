@@ -892,6 +892,8 @@ create index if not exists idx_apis_testing_project_Id on tests.collections(proj
 
 ALTER table tests.collections DROP COLUMN schedule;
 ALTER TABLE tests.collections ADD COLUMN schedule INTERVAL NOT NULL DEFAULT '1 day';
+ALTER TABLE tests.collections DROP COLUMN collection_steps;
+ALTER TABLE tests.collections ADD COLUMN collection_steps JSONB NOT NULL DEFAULT '[]'::jsonb;
 
 CREATE TABLE IF NOT EXISTS monitors.query_monitors 
 (

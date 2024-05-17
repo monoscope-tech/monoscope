@@ -8,7 +8,6 @@ module Models.Tests.Testing (
   CollectionId (..),
   CollectionListItem (..),
   CollectionStepId (..),
-  CollectionStep (..),
   CollectionStepData (..),
   CollectionSteps (..),
   stepDataMethod,
@@ -138,23 +137,6 @@ instance AE.FromJSON CollectionStepData where
     return CollectionStepData{..}
 
 
--- TODO: delete table
-data CollectionStep = CollectionStep
-  { id :: CollectionStepId
-  , createdAt :: ZonedTime
-  , updatedAt :: ZonedTime
-  , lastRun :: Maybe ZonedTime
-  , projectId :: Projects.ProjectId
-  , collectionId :: CollectionId
-  , stepData :: CollectionStepData
-  }
-  deriving stock (Show, Generic)
-  deriving anyclass (FromRow, ToRow, AE.ToJSON, AE.FromJSON, NFData, Default)
-  deriving
-    (Entity)
-    via (GenericEntity '[Schema "tests", TableName "collection_steps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] CollectionStep)
-
-
 newtype CollectionSteps = CollectionSteps (V.Vector CollectionStepData)
   deriving stock (Show, Generic)
   deriving anyclass (AE.ToJSON, AE.FromJSON, NFData, Default)
@@ -172,7 +154,7 @@ data Collection = Collection
   , config :: AE.Value
   , schedule :: Text
   , isScheduled :: Bool
-  , collectionSteps :: CollectionSteps
+  , collectionSteps :: AE.Value
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, AE.ToJSON, AE.FromJSON, NFData, Default)
@@ -238,10 +220,10 @@ addCollection :: Collection -> DBT IO ()
 addCollection = insert @Collection
 
 
-updateCollection :: Projects.ProjectId -> CollectionId -> Text -> Text -> Bool -> Text -> V.Vector CollectionStepData -> DBT IO Int64
+updateCollection :: Projects.ProjectId -> CollectionId -> Text -> Text -> Bool -> Text -> AE.Value -> DBT IO Int64
 updateCollection pid cid title description scheduled scheduleInterval collectionSteps = execute Update q params
   where
-    params = (title, description, scheduleInterval, scheduled, CollectionSteps collectionSteps, pid, cid)
+    params = (title, description, scheduleInterval, scheduled, collectionSteps, pid, cid)
     q = [sql| UPDATE tests.collections SET title=?, description=?, schedule=?, is_scheduled=?,  collection_steps=? WHERE project_id=? AND id=? |]
 
 
@@ -258,19 +240,20 @@ getCollectionById id' = queryOne Select q (Only id')
                   FROM tests.collections t WHERE id=?|]
 
 
--- TODO: delete or remove the collect_steps join
 getCollections :: Projects.ProjectId -> DBT IO (V.Vector CollectionListItem)
 getCollections pid = query Select q (Only pid)
   where
     q =
       [sql| SELECT t.id id , t.created_at created_at , t.updated_at updated_at, t.project_id project_id, t.last_run last_run, 
-                  t.title title, t.description description, COUNT(ts.id) as steps_count,CASE
-                      WHEN EXTRACT(DAY FROM t.schedule) > 0 THEN CONCAT(EXTRACT(DAY FROM t.schedule)::TEXT, ' days')
-                      WHEN EXTRACT(HOUR FROM t.schedule) > 0 THEN CONCAT(EXTRACT(HOUR FROM t.schedule)::TEXT, ' hours')
-                      ELSE CONCAT(EXTRACT(MINUTE FROM t.schedule)::TEXT, ' minutes')
+                  t.title title, t.description description, CASE
+                  WHEN t.collection_steps IS NULL THEN 0
+                  ELSE jsonb_array_length(t.collection_steps)
+                  END AS steps_count, CASE
+                  WHEN EXTRACT(DAY FROM t.schedule) > 0 THEN CONCAT(EXTRACT(DAY FROM t.schedule)::TEXT, ' days')
+                  WHEN EXTRACT(HOUR FROM t.schedule) > 0 THEN CONCAT(EXTRACT(HOUR FROM t.schedule)::TEXT, ' hours')
+                  ELSE CONCAT(EXTRACT(MINUTE FROM t.schedule)::TEXT, ' minutes')
                   END as  schedule
                   FROM  tests.collections t
-                  LEFT JOIN tests.collection_steps ts ON t.id = ts.collection_id
                   WHERE t.project_id = ?
                   GROUP BY t.id
                   ORDER BY t.updated_at DESC;

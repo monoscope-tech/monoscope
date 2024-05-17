@@ -35,7 +35,7 @@ import Utils (faIcon_, faSprite_)
 
 
 data CollectionStepUpdateForm = CollectionStepUpdateForm
-  { stepsData :: V.Vector Testing.CollectionStepData
+  { stepsData :: AE.Value
   , title :: Maybe Text
   , description :: Maybe Text
   , scheduled :: Maybe Text
