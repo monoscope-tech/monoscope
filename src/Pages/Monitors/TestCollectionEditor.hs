@@ -75,7 +75,10 @@ collectionGetH pid colId = do
           , currProject = Just project
           , pageTitle = "Testing"
           }
-  addRespHeaders $ bodyWrapper bwconf $ collectionPage pid (Unsafe.fromJust collectionM)
+  case collectionM of
+    Nothing -> addRespHeaders $ bodyWrapper bwconf $ div_ [class_ "w-full h-full flex items-center justify-center"] $ do
+      h4_ [] "Collection not found"
+    Just col -> addRespHeaders $ bodyWrapper bwconf $ collectionPage pid col
 
 
 testSettingsModalContent_ :: Testing.Collection -> Html ()

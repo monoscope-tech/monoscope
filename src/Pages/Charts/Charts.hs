@@ -222,7 +222,7 @@ chartsGetRaw typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM sho
           }
   let (_, qc) = fromRight' $ parseQueryToComponents sqlQueryComponents queryRaw
 
-  chartData <- dbtToEff $ DBT.query_ (Query $ encodeUtf8 $ Unsafe.fromJust qc.finalTimechartQuery)
+  chartData <- dbtToEff $ DBT.query_ (Query $ encodeUtf8 $ fromMaybe "" qc.finalTimechartQuery)
 
   let (headers, groupedData) = pivot' $ toList chartData
       headersJSON = decodeUtf8 $ AE.encode headers
