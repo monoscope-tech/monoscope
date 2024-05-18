@@ -5,9 +5,11 @@ module Models.Apis.Anomalies (
   selectAnomalies,
   AnomalyVM (..),
   AnomalyActions (..),
+  Issue (..),
   AnomalyTypes (..),
   AnomalyId (..),
   parseAnomalyTypes,
+  convertAnomalyToIssue,
   getReportAnomalies,
   parseAnomalyActions,
   getAnomalyVM,
@@ -22,6 +24,7 @@ module Models.Apis.Anomalies (
 where
 
 import Data.Aeson qualified as AE
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Data.Default (Default, def)
 import Data.Time
 import Data.UUID qualified as UUID
@@ -29,7 +32,7 @@ import Data.Vector (Vector)
 import Database.PostgreSQL.Entity
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query, queryOne)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
-import Database.PostgreSQL.Simple (FromRow, Only (Only))
+import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, ResultError (ConversionFailed, UnexpectedNull), fromField, returnError)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
@@ -55,7 +58,7 @@ import Utils
 
 newtype AnomalyId = AnomalyId {unAnomalyId :: UUID.UUID}
   deriving stock (Generic, Show)
-  deriving newtype (NFData)
+  deriving newtype (NFData, AE.FromJSON, AE.ToJSON)
   deriving
     (Eq, Ord, FromField, ToField, FromHttpApiData, Default)
     via UUID.UUID
@@ -201,8 +204,9 @@ data AnomalyVM = AnomalyVM
     via (GenericEntity '[Schema "apis", TableName "anomalies_vm", PrimaryKey "id", FieldModifiers '[CamelToSnake]] AnomalyVM)
 
 
-getAnomalyVM :: Projects.ProjectId -> Text -> DBT IO (Maybe AnomalyVM)
-getAnomalyVM pid hash = queryOne Select q (pid, hash)
+-- TODO: Delete as no longer useful.
+getAnomalyVM' :: Projects.ProjectId -> Text -> DBT IO (Maybe AnomalyVM)
+getAnomalyVM' pid hash = queryOne Select q (pid, hash)
   where
     q =
       [sql| 
@@ -226,6 +230,57 @@ getAnomalyVM pid hash = queryOne Select q (pid, hash)
          avm.target_hash = ?
     GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25
      |]
+
+
+getAnomalyVM :: Projects.ProjectId -> Text -> DBT IO (Maybe AnomalyVM)
+getAnomalyVM pid hash = queryOne Select q (pid, hash)
+  where 
+    q = [sql|
+SELECT
+    an.id,
+    an.created_at,
+    an.updated_at,
+    an.project_id,
+    an.acknowleged_at,
+    an.acknowleged_by,
+    an.anomaly_type,
+    an.action,
+    an.target_hash,
+    shapes.id shape_id,
+    coalesce(shapes.new_unique_fields, '{}'::TEXT[]) new_unique_fields, 
+    coalesce(shapes.deleted_fields, '{}'::TEXT[]) deleted_fields,
+    coalesce(shapes.updated_field_formats, '{}'::TEXT[]) updated_field_formats,
+    fields.id field_id,
+    fields.key field_key,
+    fields.key_path field_key_path,
+    fields.field_category field_category,
+    fields.format field_format,
+    formats.id format_id,
+    formats.field_type format_type,
+    formats.examples format_examples,
+    endpoints.id endpoint_id,
+    endpoints.method endpoint_method,
+    endpoints.url_path endpoint_url_path,
+    an.archived_at,
+    0,0
+from
+    apis.anomalies an
+    LEFT JOIN apis.formats on (target_hash = formats.hash AND an.project_id = formats.project_id)
+    LEFT JOIN apis.fields on (
+        ((fields.hash = formats.field_hash ) AND an.project_id = fields.project_id)
+        OR fields.hash = formats.field_hash
+    )
+    LEFT JOIN apis.shapes on (target_hash = shapes.hash AND an.project_id = shapes.project_id)
+    LEFT JOIN apis.endpoints ON (starts_with(an.target_hash, endpoints.hash) AND an.project_id = endpoints.project_id)
+where
+  ((anomaly_type = 'endpoint')
+    OR (anomaly_type = 'shape' AND endpoints.project_id = an.project_id AND endpoints.created_at != an.created_at)
+    OR (anomaly_type = 'format' AND fields.project_id = an.project_id AND fields.created_at != an.created_at)
+    OR NOT ( anomaly_type = ANY('{"endpoint","shape","field","format"}'::apis.anomaly_type[]))
+  ) AND an.project_id=? AND an.target_hash=?
+      |]
+
+
 
 
 getShapeParentAnomalyVM :: Projects.ProjectId -> Text -> DBT IO Int
@@ -383,3 +438,130 @@ acknowlegeCascade uid targets = do
     q =
       [sql| UPDATE apis.anomalies SET acknowleged_by = ?, acknowleged_at = NOW()
               WHERE target_hash LIKE ANY (?); |]
+
+
+-------------------------------------------------------------------------------------------
+-- New Issues model implementations
+--
+
+data NewShapeIssue = NewShapeIssue
+  { id :: Shapes.ShapeId
+  , newUniqueFields :: Vector Text
+  , deletedFields :: Vector Text
+  , updatedFieldFormats :: Vector Text
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (NFData)
+  deriving
+    (AE.ToJSON, AE.FromJSON)
+    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] NewShapeIssue
+
+
+data NewFieldIssue = NewFieldIssue
+  { id :: Fields.FieldId
+  , key :: Text
+  , keyPath :: Text
+  , fieldCategory :: Fields.FieldCategoryEnum
+  , format :: Text
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (NFData)
+  deriving
+    (AE.ToJSON, AE.FromJSON)
+    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] NewFieldIssue
+
+
+data NewFormatIssue = NewFormatIssue
+  { id :: Formats.FormatId
+  , formatType :: Fields.FieldTypes
+  , examples :: Maybe (Vector Text)
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (NFData)
+  deriving
+    (AE.ToJSON, AE.FromJSON)
+    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] NewFormatIssue
+
+
+data NewEndpointIssue = NewEndpointIssue
+  { id :: Endpoints.EndpointId
+  , method :: Text
+  , urlPath :: Text
+  , host :: Text
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (NFData)
+  deriving
+    (AE.ToJSON, AE.FromJSON)
+    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] NewEndpointIssue
+
+
+data IssuesData
+  = IDNewShapeIssue NewShapeIssue
+  | IDNewFieldIssue NewFieldIssue
+  | IDNewFormatIssue NewFormatIssue
+  | IDNewEndpointIssue NewEndpointIssue
+  deriving stock (Show, Generic)
+  deriving anyclass (NFData)
+  deriving (FromField, ToField) via Aeson IssuesData
+  deriving
+    (AE.ToJSON, AE.FromJSON)
+    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] IssuesData
+
+
+data Issue = Issue
+  { id :: AnomalyId
+  , createdAt :: ZonedTime
+  , updatedAt :: ZonedTime
+  , projectId :: Projects.ProjectId
+  , acknowlegedAt :: Maybe ZonedTime
+  , anomalyType :: AnomalyTypes
+  , targetHash :: Text
+  , issueData :: IssuesData
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (FromRow, ToRow, NFData)
+  deriving
+    (Entity)
+    via (GenericEntity '[Schema "apis", TableName "issues", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Issue)
+
+
+-- Helper function to create IssuesData based on AnomalyType
+createIssueData :: Maybe Text -> AnomalyVM -> Maybe IssuesData
+createIssueData hostM anomaly = case anomaly.anomalyType of
+    ATShape    -> IDNewShapeIssue <$> (NewShapeIssue
+        <$> anomaly.shapeId
+        <*> pure (anomaly.shapeNewUniqueFields)
+        <*> pure (anomaly.shapeDeletedFields)
+        <*> pure (anomaly.shapeUpdatedFieldFormats))
+    ATField    -> IDNewFieldIssue <$> (NewFieldIssue
+        <$> anomaly.fieldId
+        <*> anomaly.fieldKey
+        <*> anomaly.fieldKeyPath
+        <*> anomaly.fieldCategory
+        <*> anomaly.fieldFormat)
+    ATFormat   -> IDNewFormatIssue <$> (NewFormatIssue
+        <$> anomaly.formatId
+        <*> anomaly.formatType
+        <*> pure (anomaly.formatExamples))
+    ATEndpoint -> IDNewEndpointIssue <$> (NewEndpointIssue
+        <$> anomaly.endpointId
+        <*> anomaly.endpointMethod
+        <*> anomaly.endpointUrlPath
+        <*> pure (fromMaybe "" hostM)) -- Assuming the host is empty, adjust if necessary
+    _          -> Nothing
+
+-- Main conversion function
+convertAnomalyToIssue :: Maybe Text -> AnomalyVM -> Maybe Issue
+convertAnomalyToIssue hostM anomaly = do
+    issueData <- createIssueData hostM anomaly
+    return Issue
+        { id = anomaly.id
+        , createdAt = anomaly.createdAt
+        , updatedAt = anomaly.updatedAt
+        , projectId = anomaly.projectId
+        , acknowlegedAt = anomaly.acknowlegedAt
+        , anomalyType = anomaly.anomalyType
+        , targetHash = anomaly.targetHash
+        , issueData = issueData
+        }

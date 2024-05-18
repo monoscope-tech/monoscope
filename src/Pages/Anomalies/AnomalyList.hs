@@ -170,7 +170,7 @@ anomalyListGetH pid layoutM ackdM archivedM sortM page loadM endpointM hxRequest
         (def :: BWConfig)
           { sessM = Just sess.persistentSession
           , currProject = Just project
-          , pageTitle = "Changes & Errors"
+          , pageTitle = "Changes, Alerts & Errors"
           }
       currentURL = "/p/" <> pid.toText <> "/anomalies?layout=" <> fromMaybe "false" layoutM <> "&ackd=" <> fromMaybe "false" ackdM <> "&archived=" <> fromMaybe "false" archivedM
       nextFetchUrl = maybe (Just $ currentURL <> "&load_more=true&page=" <> show (pageInt + 1)) (\x -> if x == "slider" then Nothing else Just $ currentURL <> "&load_more=true&page=" <> show (pageInt + 1)) layoutM
@@ -219,7 +219,7 @@ anomalyListPage paramInput pid currTime anomalies nextFetchUrl = div_ [class_ "w
           div_ [id_ "an-modal-content-loader", class_ "bg-white rounded z-50 border p-4 absolute top-[40vh] left-1/2 -translate-x-1/2 -translate-y-1/2"] do
             loader
           div_ [class_ "px-2", id_ "an-modal-content"] pass
-  h3_ [class_ "text-xl text-slate-700 flex place-items-center"] "Changes & Errors"
+  h3_ [class_ "text-xl text-slate-700 flex place-items-center"] "Changes, Alerts & Errors"
   div_ [class_ "py-2 px-2 space-x-6 border-b border-slate-20 mt-6 mb-8 text-sm font-light", hxBoost_ "true"] do
     let uri = deleteParam "archived" $ deleteParam "ackd" paramInput.currentURL
     a_ [class_ $ "inline-block py-2 " <> if not paramInput.ackd && not paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&ackd=false&archived=false"] "Inbox"
