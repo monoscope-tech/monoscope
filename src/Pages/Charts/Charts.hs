@@ -7,17 +7,17 @@ import Data.Either.Extra (fromRight')
 import Data.List (groupBy, lookup)
 import Data.Text (toLower)
 import Data.Text qualified as T
-import Data.Time
-  ( UTCTime,
-    ZonedTime,
-    addUTCTime,
-    defaultTimeLocale,
-    diffUTCTime,
-    formatTime,
-    getCurrentTime,
-    secondsToNominalDiffTime,
-    zonedTimeToUTC,
-  )
+import Data.Time (
+  UTCTime,
+  ZonedTime,
+  addUTCTime,
+  defaultTimeLocale,
+  diffUTCTime,
+  formatTime,
+  getCurrentTime,
+  secondsToNominalDiffTime,
+  zonedTimeToUTC,
+ )
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Tuple.Extra (fst3, thd3)
 import Data.UUID qualified as UUID
@@ -31,12 +31,12 @@ import Lucid.Htmx (hxGet_, hxSwap_, hxTrigger_)
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Network.URI (escapeURIString, isUnescapedInURI)
-import Pkg.Parser
-  ( QueryComponents (finalTimechartQuery),
-    SqlQueryCfg (dateRange),
-    defSqlQueryCfg,
-    parseQueryToComponents,
-  )
+import Pkg.Parser (
+  QueryComponents (finalTimechartQuery),
+  SqlQueryCfg (dateRange),
+  defSqlQueryCfg,
+  parseQueryToComponents,
+ )
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Safe qualified
@@ -44,6 +44,7 @@ import Servant (FromHttpApiData (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils (DBField (MkDBField))
 import Witch (from)
+
 
 transform :: [String] -> [(Int, Int, String)] -> [Maybe Int]
 transform fields tuples =
@@ -53,6 +54,7 @@ transform fields tuples =
     swap_ (_, a, b) = (b, a)
     timestamp = fromMaybe 0 $ fst3 <$> Safe.headMay tuples
 
+
 pivot' :: [(Int, Int, String)] -> ([String], [[Maybe Int]])
 pivot' rows = do
   let extractHeaders = ordNub . map thd3 . sortOn thd3
@@ -60,6 +62,7 @@ pivot' rows = do
   let grouped = groupBy (\a b -> fst3 a == fst3 b) $ sortOn fst3 rows
   let ngrouped = map (transform headers) grouped
   (headers, ngrouped)
+
 
 -- test the query generation
 -- >>> buildReqDumpSQL [TypeE BarCT, GByE GBEndpoint, QByE [QBStatusCodeGT 201, QBShapeHash "hash", QBFormatHash "hash"]]
@@ -95,33 +98,33 @@ buildReqDumpSQL exps = (q, join qByArgs, mFrom, mTo)
 
     qDefault =
       T.concat
-        [ "SELECT extract(epoch from time_bucket('",
-          show $ fromMaybe 3600 $ calculateIntervalFromQuery slots (mFrom, mTo) queryBy,
-          " seconds', created_at))::integer as timeB, ",
-          "COALESCE(COUNT(*), 0) total_count ",
-          toText gBy,
-          " FROM apis.request_dumps",
-          if null qByTxtList then "" else " WHERE " <> T.intercalate " AND " qByTxtList,
-          " GROUP BY timeB ",
-          toText groupByFields,
-          " LIMIT " <> show limit
+        [ "SELECT extract(epoch from time_bucket('"
+        , show $ fromMaybe 3600 $ calculateIntervalFromQuery slots (mFrom, mTo) queryBy
+        , " seconds', created_at))::integer as timeB, "
+        , "COALESCE(COUNT(*), 0) total_count "
+        , toText gBy
+        , " FROM apis.request_dumps"
+        , if null qByTxtList then "" else " WHERE " <> T.intercalate " AND " qByTxtList
+        , " GROUP BY timeB "
+        , toText groupByFields
+        , " LIMIT " <> show limit
         ]
 
     qForDurationPercentile =
       T.concat
-        [ "WITH Percentiles AS ( ",
-          "SELECT extract(epoch from time_bucket('",
-          show $ fromMaybe 10080 $ calculateIntervalFromQuery slots (mFrom, mTo) queryBy,
-          " seconds', created_at))::integer as timeB, ",
-          "PERCENTILE_CONT(ARRAY[0.5, 0.75, 0.9]) WITHIN GROUP (ORDER BY duration_ns) as percentiles ",
-          "FROM apis.request_dumps ",
-          if null qByTxtList then "" else " WHERE " <> T.intercalate " AND " qByTxtList,
-          " GROUP BY timeB ",
-          ") SELECT timeB, ",
-          "(unnest(percentiles)/1000000)::integer as percentile_value, ",
-          "unnest(ARRAY['p50', 'p75', 'p90']) as percentile_type ",
-          "FROM Percentiles ",
-          "LIMIT " <> show limit
+        [ "WITH Percentiles AS ( "
+        , "SELECT extract(epoch from time_bucket('"
+        , show $ fromMaybe 10080 $ calculateIntervalFromQuery slots (mFrom, mTo) queryBy
+        , " seconds', created_at))::integer as timeB, "
+        , "PERCENTILE_CONT(ARRAY[0.5, 0.75, 0.9]) WITHIN GROUP (ORDER BY duration_ns) as percentiles "
+        , "FROM apis.request_dumps "
+        , if null qByTxtList then "" else " WHERE " <> T.intercalate " AND " qByTxtList
+        , " GROUP BY timeB "
+        , ") SELECT timeB, "
+        , "(unnest(percentiles)/1000000)::integer as percentile_value, "
+        , "unnest(ARRAY['p50', 'p75', 'p90']) as percentile_type "
+        , "FROM Percentiles "
+        , "LIMIT " <> show limit
         ]
 
     -- >>> runQueryBy (QBEndpointHash "hash")
@@ -159,18 +162,23 @@ buildReqDumpSQL exps = (q, join qByArgs, mFrom, mTo)
       from_ <- mFrom'
       return $ calcInterval numSlots from_ to_
 
+
 type M = Maybe
+
 
 formatZonedTimeAsUTC :: ZonedTime -> Text
 formatZonedTimeAsUTC zonedTime = formatUTC (zonedTimeToUTC zonedTime)
+
 
 formatUTC :: UTCTime -> Text
 formatUTC utcTime =
   toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" utcTime
 
+
 chartsGetH :: M ChartType -> M Text -> M Projects.ProjectId -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 chartsGetH typeM Nothing pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM fromM toM = chartsGetDef typeM Nothing pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM fromM toM
 chartsGetH typeM (Just queryRaw) pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM fromM toM = chartsGetRaw typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM fromM toM
+
 
 --  chartsGetRaw and chartGetDef should be refactored and merged.
 chartsGetRaw :: M ChartType -> Text -> M Projects.ProjectId -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
@@ -232,18 +240,19 @@ chartsGetRaw typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM sho
     div_ [id_ $ toText idAttr, class_ "w-full h-full"] ""
     script_ scriptContent
 
+
 chartsGetDef :: M ChartType -> M Text -> M Projects.ProjectId -> M GroupBy -> M [QueryBy] -> M Int -> M Int -> M Text -> M Text -> M Bool -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 chartsGetDef typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM showLegendM sinceM _fromM _toM = do
   let chartExps =
         catMaybes
-          [ TypeE <$> typeM,
-            GByE <$> groupByM,
-            QByE <$> queryByM,
-            SlotsE <$> slotsM,
-            LimitE <$> limitsM,
-            Theme <$> themeM,
-            IdE <$> idM,
-            showLegendM >>= (\x -> if x then Just ShowLegendE else Nothing)
+          [ TypeE <$> typeM
+          , GByE <$> groupByM
+          , QByE <$> queryByM
+          , SlotsE <$> slotsM
+          , LimitE <$> limitsM
+          , Theme <$> themeM
+          , IdE <$> idM
+          , showLegendM >>= (\x -> if x then Just ShowLegendE else Nothing)
           ]
   randomID <- liftIO UUIDV4.nextRandom
   let (q, args, fromM, toM) = case groupByM of
@@ -269,6 +278,7 @@ chartsGetDef typeM queryRaw pidM groupByM queryByM slotsM limitsM themeM idM sho
     div_ [id_ $ toText idAttr, class_ "w-full h-full"] ""
     script_ scriptContent
 
+
 data QueryBy
   = QBPId Projects.ProjectId
   | QBEndpointHash Text
@@ -281,13 +291,16 @@ data QueryBy
   | QBAnd QueryBy QueryBy
   deriving stock (Show, Read)
 
+
 instance FromHttpApiData QueryBy where
   parseQueryParam :: Text -> Either Text QueryBy
   parseQueryParam = readEither . toString
 
+
 instance FromHttpApiData [QueryBy] where
   parseQueryParam :: Text -> Either Text [QueryBy]
   parseQueryParam = readEither . toString
+
 
 data GroupBy
   = GBEndpoint
@@ -296,18 +309,22 @@ data GroupBy
   | GBDurationPercentile
   deriving stock (Show, Read)
 
+
 instance FromHttpApiData GroupBy where
   parseQueryParam :: Text -> Either Text GroupBy
   parseQueryParam = readEither . toString
+
 
 data ChartType
   = BarCT
   | LineCT
   deriving stock (Show, Read)
 
+
 instance FromHttpApiData ChartType where
   parseQueryParam :: Text -> Either Text ChartType
   parseQueryParam = readEither . toString
+
 
 data ChartExp
   = TypeE ChartType
@@ -321,6 +338,7 @@ data ChartExp
   | RawE Text
   deriving stock (Show)
 
+
 -- lazy Chart rendered based on a list of chart expressions
 -- >>> lazy [TypeE BarCT, GByE GBEndpoint]
 -- <div data-hx-get="/charts_html?chart_type=BarCT&amp;group_by=GBEndpoint" data-hx-trigger="intersect" data-hx-swap="outerHTML" class="w-full h-full"></div>
@@ -331,10 +349,10 @@ data ChartExp
 lazy :: [ChartExp] -> Html ()
 lazy queries =
   div_
-    [ hxGet_ $ "/charts_html?" <> qParams,
-      hxTrigger_ "intersect",
-      hxSwap_ "outerHTML",
-      class_ "w-full h-full"
+    [ hxGet_ $ "/charts_html?" <> qParams
+    , hxTrigger_ "intersect"
+    , hxSwap_ "outerHTML"
+    , class_ "w-full h-full"
     ]
     ""
   where
