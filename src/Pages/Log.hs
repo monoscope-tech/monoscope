@@ -76,7 +76,7 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoostedM
   tableAsVecE <- dbtToEff $ RequestDumps.selectLogTable pid query cursorM' (fromD, toD) summaryCols
 
   -- FIXME: we're silently ignoring parse errors and the likes.
-  let tableAsVec = Unsafe.fromJust $ hush tableAsVecE
+  let tableAsVecM = hush tableAsVecE
 
   freeTierExceeded <-
     dbtToEff
@@ -86,38 +86,52 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoostedM
           return $ totalRequest > 20000
         else do
           return False
-  let (requestVecs, colNames, requestsCount) = tableAsVec
-      curatedColNames = nubOrd $ curateCols summaryCols colNames
-      colIdxMap = listToIndexHashMap colNames
-      reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "created_at") =<< (requestVecs V.!? (V.length requestVecs - 1))
-      nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore")
-      resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing
-      page =
-        ApiLogsPageData
-          { pid
-          , resultCount = requestsCount
-          , requestVecs
-          , cols = curatedColNames
-          , colIdxMap
-          , nextLogsURL
-          , resetLogsURL
-          , currentRange
-          , exceededFreeTier = freeTierExceeded
-          , query = queryM
+  let bwconf =
+        (def :: BWConfig)
+          { sessM = Just sess.persistentSession
+          , currProject = Just project
+          , pageTitle = "API Log Explorer"
           }
 
-  case (layoutM, hxRequestM, hxBoostedM) of
-    (Just "loadmore", Just "true", _) -> addRespHeaders $ logItemRows_ pid requestVecs curatedColNames colIdxMap nextLogsURL
-    (Just "resultTable", Just "true", _) -> addRespHeaders $ resultTable_ page False
-    (Just "all", Just "true", _) -> addRespHeaders $ resultTable_ page True
-    _ -> do
-      let bwconf =
-            (def :: BWConfig)
-              { sessM = Just sess.persistentSession
-              , currProject = Just project
-              , pageTitle = "API Log Explorer"
+  case tableAsVecM of
+    Just tableAsVec -> do
+      let (requestVecs, colNames, requestsCount) = tableAsVec
+          curatedColNames = nubOrd $ curateCols summaryCols colNames
+          colIdxMap = listToIndexHashMap colNames
+          reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "created_at") =<< (requestVecs V.!? (V.length requestVecs - 1))
+          nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' reqLastCreatedAtM sinceM fromM toM (Just "loadmore")
+          resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM cols' Nothing Nothing Nothing Nothing Nothing
+          page =
+            ApiLogsPageData
+              { pid
+              , resultCount = requestsCount
+              , requestVecs
+              , cols = curatedColNames
+              , colIdxMap
+              , nextLogsURL
+              , resetLogsURL
+              , currentRange
+              , exceededFreeTier = freeTierExceeded
+              , query = queryM
               }
-      addRespHeaders $ bodyWrapper bwconf $ apiLogsPage page
+      case (layoutM, hxRequestM, hxBoostedM) of
+        (Just "loadmore", Just "true", _) -> addRespHeaders $ logItemRows_ pid requestVecs curatedColNames colIdxMap nextLogsURL
+        (Just "resultTable", Just "true", _) -> addRespHeaders $ resultTable_ page False
+        (Just "all", Just "true", _) -> addRespHeaders $ resultTable_ page True
+        _ -> do
+          addRespHeaders $ bodyWrapper bwconf $ apiLogsPage page
+    Nothing -> do
+      case (layoutM, hxRequestM, hxBoostedM) of
+        (Just "loadmore", Just "true", _) -> do
+          addErrorToast "Something went wrong" Nothing
+          addRespHeaders $ ""
+        (Just "resultTable", Just "true", _) -> do
+          addRespHeaders $ span_ [class_ "text-red-500"] "Something went wrong"
+        (Just "all", Just "true", _) -> do
+          addErrorToast "Something went wrong" Nothing
+          addRespHeaders $ ""
+        _ -> do
+          addRespHeaders $ bodyWrapper bwconf $ h4_ [] "Something went wrong"
 
 
 timePickerItems :: [(Text, Text)]
@@ -314,7 +328,7 @@ resultTable_ :: ApiLogsPageData -> Bool -> Html ()
 resultTable_ page mainLog = table_ [class_ "w-full table table-sm table-pin-rows table-pin-cols overflow-x-hidden", style_ "height:1px", id_ "resultTable"] do
   -- height:1px fixes the cell minimum heights somehow.
   let isLogEventB = isLogEvent page.cols
-  when (null page.requestVecs && isNothing page.query) $ do
+  when (null page.requestVecs && (isNothing page.query || not mainLog)) $ do
     if mainLog
       then do
         section_ [class_ "w-max  mx-auto my-16 p-5 sm:py-14 sm:px-24 items-center flex gap-16"] do

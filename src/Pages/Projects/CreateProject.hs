@@ -307,15 +307,18 @@ processProjectPostForm cpRaw = do
             pApiKey <- liftIO $ ProjectApiKeys.newProjectApiKeys pid projectKeyUUID "Default API Key" keyPrefix
             ProjectApiKeys.insertProjectApiKey pApiKey
             liftIO $ ConvertKit.addUserOrganization envCfg.convertkitApiKey (CI.original sess.user.email) pid.toText cp.title cp.paymentPlan
-            newProjectMembers <- forM usersAndPermissions \(email, permission) -> do
-              userId' <- runMaybeT $ MaybeT (Users.userIdByEmail email) <|> MaybeT (Users.createEmptyUser email)
-              let userId = Unsafe.fromJust userId'
-              liftIO $ ConvertKit.addUserOrganization envCfg.convertkitApiKey email pid.toText cp.title cp.paymentPlan
-              when (userId' /= Just sess.user.id) do
-                -- invite the users to the project (Usually as an email)
-                _ <- liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId pid email cp.title
-                pass
-              pure (email, permission, userId)
+            newProjectMembers <-
+              catMaybes <$> forM usersAndPermissions \(email, permission) -> do
+                userId' <- runMaybeT $ MaybeT (Users.userIdByEmail email) <|> MaybeT (Users.createEmptyUser email)
+                liftIO $ ConvertKit.addUserOrganization envCfg.convertkitApiKey email pid.toText cp.title cp.paymentPlan
+                when (userId' /= Just sess.user.id) do
+                  case userId' of
+                    Just userId -> do
+                      -- invite the users to the project (Usually as an email)
+                      _ <- liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId pid email cp.title
+                      pass
+                    Nothing -> pass
+                pure $ maybe Nothing (\userId -> Just (email, permission, userId)) userId'
             let projectMembers =
                   newProjectMembers
                     & filter (\(_, _, id') -> id' /= sess.user.id)
