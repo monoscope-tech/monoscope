@@ -29,7 +29,6 @@ import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pkg.Components qualified as Components
 import PyF (fmt)
 import Relude hiding (ask)
-import Relude.Unsafe qualified as Unsafe
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Utils (faSprite_)
 

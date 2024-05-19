@@ -15,32 +15,35 @@ import PyF
 import Relude
 import Utils (faSprite_)
 
+
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu pid =
-  [ ("Get Started", "/p/" <> pid.toText <> "/onboarding", "list-check"),
-    ("Dashboard", "/p/" <> pid.toText <> "/", "qrcode"),
-    ("Endpoints", "/p/" <> pid.toText <> "/endpoints", "swap"),
-    ("Outbound Integrations", "/p/" <> pid.toText <> "/outgoing", "arrows-turn-right"),
-    ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies?ackd=false&archived=false", "bug"),
-    ("API Log Explorer", "/p/" <> pid.toText <> "/log_explorer", "list-tree"),
-    -- , ("Redacted Fields", "/p/" <> pid.toText <> "/redacted_fields", "#redacted")
-    ("Documentation", "/p/" <> pid.toText <> "/documentation", "brackets-curly"),
-    ("Reports", "/p/" <> pid.toText <> "/reports", "chart-simple")
+  [ ("Get Started", "/p/" <> pid.toText <> "/onboarding", "list-check")
+  , ("Dashboard", "/p/" <> pid.toText <> "/", "qrcode")
+  , ("Endpoints", "/p/" <> pid.toText <> "/endpoints", "swap")
+  , ("Outbound Integrations", "/p/" <> pid.toText <> "/outgoing", "arrows-turn-right")
+  , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies?ackd=false&archived=false", "bug")
+  , ("API Log Explorer", "/p/" <> pid.toText <> "/log_explorer", "list-tree")
+  , -- , ("Redacted Fields", "/p/" <> pid.toText <> "/redacted_fields", "#redacted")
+    ("Documentation", "/p/" <> pid.toText <> "/documentation", "brackets-curly")
+  , ("Reports", "/p/" <> pid.toText <> "/reports", "chart-simple")
   ]
+
 
 -- TODO: Rename to pageCtx
 data BWConfig = BWConfig
-  { sessM :: Maybe Sessions.PersistentSession,
-    currProject :: Maybe Projects.Project,
-    pageTitle :: Text,
-    menuItem :: Maybe Text, -- Use PageTitle if menuItem is not set
-    hasIntegrated :: Maybe Bool
+  { sessM :: Maybe Sessions.PersistentSession
+  , currProject :: Maybe Projects.Project
+  , pageTitle :: Text
+  , menuItem :: Maybe Text -- Use PageTitle if menuItem is not set
+  , hasIntegrated :: Maybe Bool
   }
   deriving stock (Show, Generic)
   deriving anyclass (Default)
 
+
 bodyWrapper :: BWConfig -> Html () -> Html ()
-bodyWrapper BWConfig {sessM, currProject, pageTitle, menuItem, hasIntegrated} child = do
+bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} child = do
   doctypehtml_ do
     head_ do
       title_ $ toHtml pageTitle
@@ -143,9 +146,9 @@ bodyWrapper BWConfig {sessM, currProject, pageTitle, menuItem, hasIntegrated} ch
 
     body_ [class_ "text-gray-900 h-full w-full bg-white fixed", term "data-theme" "winter", term "hx-ext" "multi-swap,preload"] do
       div_
-        [ style_ "z-index:99999",
-          class_ "fixed pt-24 sm:hidden justify-center z-50 w-full p-4 bg-gray-50 overflow-y-auto inset-0 h-full max-h-full",
-          tabindex_ "-1"
+        [ style_ "z-index:99999"
+        , class_ "fixed pt-24 sm:hidden justify-center z-50 w-full p-4 bg-gray-50 overflow-y-auto inset-0 h-full max-h-full"
+        , tabindex_ "-1"
         ]
         do
           div_ [class_ "relative mx-auto max-h-full", style_ "width: min(90vw, 500px)"]
@@ -220,13 +223,14 @@ bodyWrapper BWConfig {sessM, currProject, pageTitle, menuItem, hasIntegrated} ch
 
         |]
 
+
 projectsDropDown :: Projects.Project -> Vector.Vector Projects.Project -> Html ()
 projectsDropDown currProject projects = do
   let pidTxt = currProject.id.toText
   div_
-    [ term "data-menu" "true",
-      class_ "hidden origin-top-right z-40 transition transform bg-white p-4 absolute w-[20rem] rounded-2xl shadow-2xl shadow-indigo-200",
-      [__|
+    [ term "data-menu" "true"
+    , class_ "hidden origin-top-right z-40 transition transform bg-white p-4 absolute w-[20rem] rounded-2xl shadow-2xl shadow-indigo-200"
+    , [__|
           on open
               remove .hidden
               add .ease-out .duration-100 .opacity-0 .scale-95
@@ -268,9 +272,9 @@ projectsDropDown currProject projects = do
           div_ [class_ "relative"] do
             div_ [class_ "absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none"] $ faSprite_ "magnifying-glass" "regular" "h-6 w-4"
             input_
-              [ class_ "pl-12 w-full text-sm bg-gray-100 rounded-2xl border-0 p-3",
-                placeholder_ "Search Projects",
-                [__|on input show .project_item in #projectsContainer when its textContent.toLowerCase() contains my value.toLowerCase()|]
+              [ class_ "pl-12 w-full text-sm bg-gray-100 rounded-2xl border-0 p-3"
+              , placeholder_ "Search Projects"
+              , [__|on input show .project_item in #projectsContainer when its textContent.toLowerCase() contains my value.toLowerCase()|]
               ]
           div_ [class_ "space-y-2 py-4 text-sm", id_ "projectsContainer"] do
             projects & mapM_ \project -> do
@@ -279,6 +283,7 @@ projectsDropDown currProject projects = do
                   $ faSprite_ "folders" "regular" "h-5 w-5 inline-block"
                   >> span_ [class_ "inline-block"] (toHtml project.title)
                 when (currProject.id == project.id) $ faSprite_ "circle-check" "regular" "h-6 w-6 text-green-700"
+
 
 sideNav :: Sessions.PersistentSession -> Projects.Project -> Text -> Maybe Text -> Maybe Bool -> Html ()
 sideNav sess project pageTitle menuItem hasIntegrated = do
@@ -294,8 +299,8 @@ sideNav sess project pageTitle menuItem hasIntegrated = do
         img_ [class_ "w-10 mt-2 hidden sd-show", src_ "/assets/logo-mini.png"]
     div_ [class_ "py-4 px-4 transition-all  duration-1000 ease-in-out", id_ "side-nav-ctx-btn"] do
       a_
-        [ class_ "flex flex-row bg-blue-50 hover:bg-blue-100 text-blue-900 block p-6 rounded-md cursor-pointer",
-          [__|  on click queue first
+        [ class_ "flex flex-row bg-blue-50 hover:bg-blue-100 text-blue-900 block p-6 rounded-md cursor-pointer"
+        , [__|  on click queue first
                     if I do not match .active
                         add .active then send open to <[data-menu]/> 
                     else 
@@ -324,22 +329,23 @@ sideNav sess project pageTitle menuItem hasIntegrated = do
         let isActive = maybe (pageTitle == mTitle) (== mTitle) menuItem
         let activeCls = if isActive then " bg-blue-50 text-blue-700 border-blue-700" else " border-transparent text-slate-900"
         a_
-          [ href_ mUrl,
-            term "data-tippy-placement" "right",
-            term "data-tippy-content" mTitle,
-            class_ $ " block flex gap-3 px-5 py-3 flex no-wrap shrink-0 items-center border-l-4 hover:bg-blue-50" <> activeCls
+          [ href_ mUrl
+          , term "data-tippy-placement" "right"
+          , term "data-tippy-content" mTitle
+          , class_ $ " block flex gap-3 px-5 py-3 flex no-wrap shrink-0 items-center border-l-4 hover:bg-blue-50" <> activeCls
           ]
           do
             faSprite_ fIcon "regular" $ "w-5 h-5 shrink-0" <> if isActive then "text-blue-900 " else "text-slate-500 "
             span_ [class_ "sd-hidden "] $ toHtml mTitle
 
+
 navbar :: Users.User -> Html ()
 navbar currUser = do
   nav_ [id_ "main-navbar", class_ "sticky z-20 top-0 w-full px-6 py-2 border-b bg-white flex flex-row justify-between"] do
     a_
-      [ id_ "side_nav_toggler",
-        class_ "cursor-pointer flex items-center",
-        [__|
+      [ id_ "side_nav_toggler"
+      , class_ "cursor-pointer flex items-center"
+      , [__|
       on click 
         if (localStorage.getItem('close-sidemenu') != 'true') then  
           add .hidden-side-nav-menu to #side-nav-menu then 
@@ -355,8 +361,8 @@ navbar currUser = do
       a_ [class_ "inline-block p-2 px-3 align-middle"] $ faSprite_ "magnifying-glass" "regular" "w-5 h-5 text-gray-500"
       a_ [class_ "inline-block border-r-2 p-2 pr-5"] $ faSprite_ "bell" "regular" "w-5 h-5 text-gray-500"
       a_
-        [ class_ "cursor-pointer inline-block space-x-4 pl-4 relative ",
-          [__| 
+        [ class_ "cursor-pointer inline-block space-x-4 pl-4 relative "
+        , [__| 
             on click queue first
                 if I do not match .active
                     add .active
@@ -385,9 +391,9 @@ navbar currUser = do
 
       -- logout dropdown
       div_
-        [ term "drop-menu" "true",
-          class_ "hidden origin-top-left border border-gray-100 w-[10rem] rounded-lg shadow-2xl shadow-indigo-200 z-40 transition transform bg-white p-1 absolute top-14 right-5 ",
-          [__|
+        [ term "drop-menu" "true"
+        , class_ "hidden origin-top-left border border-gray-100 w-[10rem] rounded-lg shadow-2xl shadow-indigo-200 z-40 transition transform bg-white p-1 absolute top-14 right-5 "
+        , [__|
             on open
                 remove .hidden
                 add .ease-out .duration-100 .opacity-0 .scale-95
