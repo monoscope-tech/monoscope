@@ -155,7 +155,7 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
     WeeklyReports pid -> weeklyReportForProject pid
     GenSwagger pid uid -> generateSwaggerForProject pid uid
     ReportUsage pid -> whenJustM (dbtToEff $ Projects.projectById pid) \project -> do
-      when (project.paymentPlan == "UsageBased") $ whenJust project.firstSubItemId \fSubId -> do
+      when (project.paymentPlan == "UsageBased" || project.paymentPlan == "GraduatedPricing") $ whenJust project.firstSubItemId \fSubId -> do
         currentTime <- liftIO getZonedTime
         totalToReport <- dbtToEff $ RequestDumps.getTotalRequestToReport pid project.usageLastReported
         liftIO $ reportUsageToLemonsqueezy fSubId totalToReport authCtx.config.lemonSqueezyApiKey

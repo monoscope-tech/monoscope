@@ -96,6 +96,7 @@ data EnvConfig = EnvConfig
   , lemonSqueezyApiKey :: Text
   , lemonSqueezyUrl :: Text
   , postmarkToken :: Text
+  , lemonSqueezyGraduatedUrl :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromEnv, Default)

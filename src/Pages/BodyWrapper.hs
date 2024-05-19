@@ -259,7 +259,7 @@ projectsDropDown currProject projects = do
             faSprite_ "user-plus" "regular" "h-5 w-5" >> span_ "Manage members"
           a_ [href_ [text| /p/$pidTxt/apis|], class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100"] do
             faSprite_ "key" "regular" "h-5 w-5" >> span_ "API Keys"
-          when (currProject.paymentPlan == "UsageBased")
+          when (currProject.paymentPlan == "UsageBased" || currProject.paymentPlan == "GraduatedPricing")
             $ a_
               [class_ "p-3 flex gap-3 flex gap-3 items-center rounded hover:bg-gray-100 cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]]
               (faSprite_ "dollar-sign" "regular" "h-5 w-5" >> span_ "Manage billing")

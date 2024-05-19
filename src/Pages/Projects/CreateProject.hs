@@ -56,7 +56,7 @@ import Pkg.ConvertKit qualified as ConvertKit
 import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import Servant (addHeader, noHeader)
-import System.Config (AuthContext (config, pool), EnvConfig (apiKeyEncryptionSecretKey, convertkitApiKey, lemonSqueezyApiKey, lemonSqueezyUrl, slackRedirectUri))
+import System.Config (AuthContext (config, pool), EnvConfig (apiKeyEncryptionSecretKey, convertkitApiKey, lemonSqueezyApiKey, lemonSqueezyGraduatedUrl, lemonSqueezyUrl, slackRedirectUri))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
 import Utils (faSprite_)
 import Web.FormUrlEncoded (FromForm)
@@ -252,7 +252,8 @@ processProjectPostForm cpRaw = do
       project <- dbtToEff $ Projects.projectById pid
       case project of
         Just p -> do
-          if cp.paymentPlan == "UsageBased" && p.paymentPlan /= "UsageBased"
+          if (cp.paymentPlan == "UsageBased" && p.paymentPlan /= "UsageBased")
+            || (cp.paymentPlan == "GraduatedPricing" && p.paymentPlan /= "GraduatedPricing")
             then do
               subRes <- liftIO $ getSubscriptionId cp.orderId envCfg.lemonSqueezyApiKey
               let (subId, firstSubItemId) = case subRes of
@@ -277,7 +278,7 @@ processProjectPostForm cpRaw = do
               _ <- dbtToEff $ Projects.updateProject (createProjectFormToModel pid p.subId p.firstSubItemId cp)
               pure $ addHeader hxTriggerDataUpdate $ noHeader bdy
         Nothing -> do
-          let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"errorToast": ["Something went wrong, project not found"]}|]
+          let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"errorToast": ["Something went wrong, try again."]}|]
           pure $ addHeader hxTriggerData $ noHeader $ span_ [] ""
     else do
       let usersAndPermissions = zip cp.emails cp.permissions & uniq
@@ -338,7 +339,7 @@ createProjectBody :: Sessions.PersistentSession -> EnvConfig -> Bool -> CreatePr
 createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
   let paymentPlan = if cp.paymentPlan == "" then "UsageBased" else cp.paymentPlan
   section_ [id_ "main-content", class_ "p-3 py-5 sm:p-6 overflow-y-scroll h-full"] do
-    div_ [class_ "mx-auto", style_ "max-width:800px"] do
+    div_ [class_ "mx-auto", style_ "max-width:1000px"] do
       h2_ [class_ "text-slate-700 text-3xl font-medium mb-5"] $ toHtml @String $ if isUpdate then "Project Settings" else "Create Project"
       div_ [class_ "grid gap-5"] do
         form_
@@ -386,9 +387,10 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
               p_ [class_ "text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 mb-2"] do
                 "Please select a plan"
                 span_ [class_ "text-red-400"] " *"
-              div_ [class_ "grid md:grid-cols-2 gap-4 border-1"] do
+              div_ [class_ "grid sm:grid-cols-2 md:grid-cols-3 gap-4 border-1"] do
                 ( [ ("Free", "20k", "$0", "2", cp.paymentPlan == "Free", "Free")
                   , ("Pay as you use", "250k", "$1", "Unlimited", paymentPlan == "UsageBased", "UsageBased")
+                  , ("Graduated Pricing", "250k", "$49", "Unlimited", paymentPlan == "GraduatedPricing", "GraduatedPricing")
                   ]
                     :: [(Text, Text, Text, Text, Bool, Text)]
                   )
@@ -415,9 +417,13 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
                             div_ [class_ "bg-white h-3 w-3 hidden rounded-full"] ""
                         div_ [class_ "text-lg py-3 px-2"] do
                           span_ [class_ "text-2xl text-blue-700"] $ toHtml price
-                          if value == "Free"
-                            then do span_ [class_ "text-slate-500"] "/month"
-                            else do span_ [class_ "text-slate-500"] "/additional 10k requests"
+                          case value of
+                            "Free" -> do
+                              span_ [class_ "text-slate-500"] "/month"
+                            "GraduatedPricing" -> do
+                              span_ [class_ "text-slate-500"] "/550k reqs"
+                              span_ [class_ "text-blue-500 block mt-2"] "then $1 per 10k reqs"
+                            _ -> span_ [class_ "text-slate-500"] "/additional 10k requests"
                         div_ [class_ "flex flex-col gap-2 p-3"] do
                           div_ [class_ "flex items-center gap-1"] do
                             checkMark
@@ -476,6 +482,7 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
 
             script_ [src_ "https://assets.lemonsqueezy.com/lemon.js"] ("" :: Text)
             let checkoutUrl = envCfg.lemonSqueezyUrl
+            let graduatedCheckoutUrl = envCfg.lemonSqueezyGraduatedUrl
             script_
               [type_ "text/javascript"]
               [text| 
@@ -514,7 +521,11 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
                  }
                }
              })
-             LemonSqueezy.Url.Open("$checkoutUrl");
+             if(document.getElementById("paymentPlanEl").value == "GraduatedPricing") {
+                  LemonSqueezy.Url.Open("$graduatedCheckoutUrl");
+              }else {
+                 LemonSqueezy.Url.Open("$checkoutUrl");
+              }
              };
            const timezoneSelect = document.getElementById("timezone");
            const timeZones = Intl.supportedValuesOf('timeZone');
