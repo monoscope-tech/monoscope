@@ -9,7 +9,7 @@ module Models.Apis.Anomalies (
   AnomalyTypes (..),
   AnomalyId (..),
   IssuesData (..),
-  ATError(..),
+  ATError (..),
   NewEndpointIssue (..),
   NewFieldIssue (..),
   NewShapeIssue (..),
@@ -36,7 +36,6 @@ import Data.Default (Default, def)
 import Data.Time
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
-import Relude.Unsafe qualified as Unsafe
 import Database.PostgreSQL.Entity
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query, queryOne)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName, field)
@@ -62,6 +61,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
 import Relude hiding (id)
+import Relude.Unsafe qualified as Unsafe
 import Servant (FromHttpApiData (..))
 import Utils
 
@@ -398,7 +398,7 @@ acknowledgeAnomalies uid aids = do
 
 acknowlegeCascade :: Users.UserId -> Vector Text -> DBT IO Int64
 acknowlegeCascade uid targets = do
-  execute Update qIssues (uid, hashes)
+  _ <- execute Update qIssues (uid, hashes)
   execute Update q (uid, hashes)
   where
     hashes = (<> "%") <$> targets
@@ -480,7 +480,7 @@ data IssuesData
   | IDNewFieldIssue NewFieldIssue
   | IDNewFormatIssue NewFormatIssue
   | IDNewEndpointIssue NewEndpointIssue
-  | IDNewRuntimeExceptionIssue RequestDumps.ATError 
+  | IDNewRuntimeExceptionIssue RequestDumps.ATError
   | IDEmpty
   deriving stock (Show, Generic)
   deriving anyclass (NFData)
@@ -488,6 +488,7 @@ data IssuesData
   deriving
     (AE.ToJSON, AE.FromJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] IssuesData
+
 
 instance Default IssuesData where
   def = IDEmpty
@@ -605,8 +606,10 @@ data ATError = ATError
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "errors", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ATError)
   deriving (FromField) via Aeson ATError
 
+
 errorByHash :: Text -> DBT IO (Maybe ATError)
 errorByHash hash = selectOneByField [field| hash |] (Only hash)
+
 
 insertErrorQueryAndParams :: Projects.ProjectId -> RequestDumps.ATError -> (Query, [DBField])
 insertErrorQueryAndParams pid err = (q, params)
@@ -617,7 +620,7 @@ insertErrorQueryAndParams pid err = (q, params)
     params =
       [ MkDBField pid
       , MkDBField err.when
-      , MkDBField $ Unsafe.fromJust err.hash -- Illegal should not happen 
+      , MkDBField $ Unsafe.fromJust err.hash -- Illegal should not happen
       , MkDBField err.errorType
       , MkDBField err.message
       , MkDBField err

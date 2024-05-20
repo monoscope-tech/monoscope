@@ -3,21 +3,19 @@
 module BackgroundJobs (jobsWorkerInit, jobsRunner, BgJobs (..)) where
 
 import Control.Lens ((.~))
-import Data.Default 
 import Data.Aeson as Aeson
 import Data.Aeson.QQ (aesonQQ)
 import Data.CaseInsensitive qualified as CI
+import Data.Default
 import Data.List.Extra (intersect, union)
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, getZonedTime)
 import Data.UUID.V4 qualified as UUIDV4
-import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity qualified as Ent
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query)
-import Database.PostgreSQL.Entity.Types qualified as EntT
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact (DBT)
@@ -261,8 +259,8 @@ handleQueryMonitorThreshold monitorE isAlert = do
 
 jobsWorkerInit :: Log.Logger -> Config.AuthContext -> IO ()
 jobsWorkerInit logger appCtx =
-  startJobRunner $
-    mkConfig jobLogger "background_jobs" (appCtx.jobsPool) (MaxConcurrentJobs 1) (jobsRunner logger appCtx) id
+  startJobRunner
+    $ mkConfig jobLogger "background_jobs" (appCtx.jobsPool) (MaxConcurrentJobs 1) (jobsRunner logger appCtx) id
   where
     jobLogger :: LogLevel -> LogEvent -> IO ()
     jobLogger logLevel logEvent = Log.runLogT "OddJobs" logger Log.LogAttention $ Log.logInfo "Background jobs ping." (show @Text logLevel, show @Text logEvent) -- logger show (logLevel, logEvent)
@@ -457,17 +455,17 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
       project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
       err <- Unsafe.fromJust <<$>> dbtToEff $ Anomalies.errorByHash targetHash
       issueId <- liftIO $ Anomalies.AnomalyId <$> UUIDV4.nextRandom
-      dbtToEff $
-        Ent.insert @Anomalies.Issue $
-          (def :: Anomalies.Issue)
-            { Anomalies.id = issueId
-            , Anomalies.createdAt = err.createdAt
-            , Anomalies.updatedAt = err.updatedAt
-            , Anomalies.projectId = pid
-            , Anomalies.anomalyType = Anomalies.ATRuntimeException
-            , Anomalies.targetHash = targetHash
-            , Anomalies.issueData = Anomalies.IDNewRuntimeExceptionIssue err.errorData
-            }
+      dbtToEff
+        $ Ent.insert @Anomalies.Issue
+        $ (def :: Anomalies.Issue)
+          { Anomalies.id = issueId
+          , Anomalies.createdAt = err.createdAt
+          , Anomalies.updatedAt = err.updatedAt
+          , Anomalies.projectId = pid
+          , Anomalies.anomalyType = Anomalies.ATRuntimeException
+          , Anomalies.targetHash = targetHash
+          , Anomalies.issueData = Anomalies.IDNewRuntimeExceptionIssue err.errorData
+          }
       forM_ project.notificationsChannel \case
         Projects.NSlack ->
           sendSlackMessage

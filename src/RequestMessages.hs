@@ -230,8 +230,8 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
             -- A shape is a deterministic representation of a request-response combination for a given endpoint.
             -- We usually expect multiple shapes per endpoint. Eg a shape for a success request-response and another for an error response.
             -- Shapes are dependent on the endpoint, statusCode and the unique fields in that shape.
-            Shapes.insertShapeQueryAndParam $
-              Shapes.Shape
+            Shapes.insertShapeQueryAndParam
+              $ Shapes.Shape
                 { id = Shapes.ShapeId dumpID
                 , createdAt = timestampUTC
                 , updatedAt = now

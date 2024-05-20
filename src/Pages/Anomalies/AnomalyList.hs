@@ -20,7 +20,6 @@ import Data.Map qualified as Map
 import Data.Pool (withResource)
 import Data.Text (replace)
 import Data.Text qualified as T
-import Models.Apis.RequestDumps qualified as RequestDumps 
 import Data.Time (UTCTime, getCurrentTime, zonedTimeToUTC)
 import Data.Tuple.Extra (fst3)
 import Data.UUID qualified as UUID
@@ -55,6 +54,7 @@ import Models.Apis.Fields.Types (
   groupFieldsByCategory,
  )
 import Models.Apis.Fields.Types qualified as Fields
+import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes (getShapeFields)
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
@@ -651,7 +651,7 @@ issueDisplayConfig :: Anomalies.Issue -> (Text, Text)
 issueDisplayConfig issue = case issue.issueData of
   Anomalies.IDNewFieldIssue _ -> ("New Field Found", "/assets/svgs/anomalies/fields.svg")
   Anomalies.IDNewShapeIssue _ -> ("New Request Shape", "/assets/svgs/anomalies/fields.svg")
-  Anomalies.IDNewEndpointIssue _-> ("New Endpoint", "/assets/svgs/anomalies/endpoint.svg")
+  Anomalies.IDNewEndpointIssue _ -> ("New Endpoint", "/assets/svgs/anomalies/endpoint.svg")
   Anomalies.IDNewFormatIssue _ -> ("Modified field", "/assets/svgs/anomalies/fields.svg")
   Anomalies.IDNewRuntimeExceptionIssue err -> (err.errorType, "/assets/svgs/anomalies/fields.svg")
   Anomalies.IDEmpty -> ("Unknown anomaly", "/assets/svgs/anomalies/fields.svg")

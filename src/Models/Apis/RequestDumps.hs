@@ -31,9 +31,9 @@ module Models.Apis.RequestDumps (
 )
 where
 
-import Data.Default
 import Data.Aeson (Value)
 import Data.Aeson qualified as AE
+import Data.Default
 import Data.Default.Instances ()
 import Data.Text qualified as T
 import Data.Time (CalendarDiffTime, UTCTime, ZonedTime, getCurrentTime)
@@ -206,7 +206,7 @@ data ATError = ATError
   , rootErrorMessage :: Text
   , stackTrace :: Text
   , hash :: Maybe Text
-  , technology :: Maybe SDKTypes 
+  , technology :: Maybe SDKTypes
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (NFData, Default)
