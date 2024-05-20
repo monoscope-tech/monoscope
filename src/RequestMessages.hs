@@ -135,6 +135,9 @@ replaceNullChars :: Text -> Text
 replaceNullChars = T.replace "\\u0000" ""
 
 
+leftPad :: Int -> Text -> Text
+leftPad len txt = T.justifyRight len '0' (T.take len txt)
+
 -- requestMsgToDumpAndEndpoint is a very improtant function designed to be run as a pure function
 -- which takes in a request and processes it returning an sql query and it's params which can be executed.
 -- The advantage of returning these queries and params is that it becomes possible to group together batches of requests
@@ -152,10 +155,8 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   -- These are the projects that we have already created endpoints
   let method = T.toUpper rM.method
   let urlPath = RequestDumps.normalizeUrlPath rM.sdkType rM.statusCode rM.method (fromMaybe "/" rM.urlPath)
-  let !endpointHash = from @String @Text $ showHex (xxHash $ encodeUtf8 $ UUID.toText rM.projectId <> fromMaybe "" rM.host <> method <> urlPath) ""
-
+  let !endpointHash = leftPad 8 $ from @String @Text $ showHex (xxHash $ encodeUtf8 $ UUID.toText rM.projectId <> fromMaybe "" rM.host <> method <> urlPath) ""
   let redactFieldsList = Vector.toList pjc.redactFieldslist <> [".set-cookie", ".password"]
-
   let sanitizeNullChars = encodeUtf8 . replaceNullChars . decodeUtf8
   reqBodyB64 <- B64.decodeBase64 $ encodeUtf8 rM.requestBody
   let reqBody = redactJSON redactFieldsList $ fromRight [aesonQQ| {} |] $ AE.eitherDecodeStrict $ sanitizeNullChars reqBodyB64
@@ -178,7 +179,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   -- We skip the request headers from this hash, since the source of the request like browsers might add or skip headers at will,
   -- which would make this process not deterministic anymore, and that's necessary for a hash.
   let combinedKeyPathStr = T.concat $ sort $ Vector.toList $ queryParamsKP <> responseHeadersKP <> requestBodyKP <> responseBodyKP
-  let !shapeHash' = from @String @Text $ showHex (xxHash $ encodeUtf8 combinedKeyPathStr) ""
+  let !shapeHash' = leftPad 8 $ from @String @Text $ showHex (xxHash $ encodeUtf8 combinedKeyPathStr) ""
   let shapeHash = endpointHash <> show rM.statusCode <> shapeHash' -- Include the endpoint hash and status code to make the shape hash unique by endpoint and status code.
   let projectId = Projects.ProjectId rM.projectId
 
@@ -539,7 +540,7 @@ fieldsToFieldDTO fieldCategory projectID endpointHash (keyPath, val) =
 
     -- field hash is <hash of the endpoint> + <the hash of <field_category><key_path_str><field_type>> (No space or comma between data)
     preFieldHash = Fields.fieldCategoryEnumToText fieldCategory <> keyPath <> Fields.fieldTypeToText fieldType
-    fieldHash' = from @String @Text $ showHex (xxHash $ encodeUtf8 preFieldHash) ""
+    fieldHash' = leftPad 8 $ from @String @Text $ showHex (xxHash $ encodeUtf8 preFieldHash) ""
     fieldHash = endpointHash <> fieldHash'
-    formatHash' = from @String @Text $ showHex (xxHash $ encodeUtf8 format) ""
+    formatHash' = leftPad 8 $ from @String @Text $ showHex (xxHash $ encodeUtf8 format) ""
     formatHash = fieldHash <> formatHash'

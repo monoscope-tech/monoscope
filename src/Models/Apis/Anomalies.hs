@@ -2,12 +2,17 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module Models.Apis.Anomalies (
-  selectAnomalies,
   AnomalyVM (..),
   AnomalyActions (..),
   Issue (..),
   AnomalyTypes (..),
   AnomalyId (..),
+  IssuesData (..),
+  NewEndpointIssue(..),
+  NewFieldIssue(..),
+  NewShapeIssue(..),
+  NewFormatIssue(..),
+  selectIssues,
   parseAnomalyTypes,
   convertAnomalyToIssue,
   getReportAnomalies,
@@ -204,34 +209,6 @@ data AnomalyVM = AnomalyVM
     via (GenericEntity '[Schema "apis", TableName "anomalies_vm", PrimaryKey "id", FieldModifiers '[CamelToSnake]] AnomalyVM)
 
 
--- TODO: Delete as no longer useful.
-getAnomalyVM' :: Projects.ProjectId -> Text -> DBT IO (Maybe AnomalyVM)
-getAnomalyVM' pid hash = queryOne Select q (pid, hash)
-  where
-    q =
-      [sql| 
-    SELECT avm.id, avm.created_at, avm.updated_at, avm.project_id, aan.acknowleged_at, aan.acknowleged_by, avm.anomaly_type, avm.action, avm.target_hash,
-       avm.shape_id, avm.new_unique_fields, avm.deleted_fields, avm.updated_field_formats, 
-       avm.field_id, avm.field_key, avm.field_key_path, avm.field_category, avm.field_format, 
-       avm.format_id, avm.format_type, avm.format_examples, 
-       avm.endpoint_id, avm.endpoint_method, avm.endpoint_url_path, aan.archived_at,
-       -- count(rd.id) events, max(rd.created_at) last_seen
-       COUNT(CASE WHEN rd.created_at > NOW() - interval '14 days' THEN 1 ELSE NULL END) AS events,
-       MAX(rd.created_at) AS last_seen
-    FROM
-        apis.anomalies_vm avm
-    JOIN apis.anomalies aan ON avm.id = aan.id
-    RIGHT JOIN apis.request_dumps rd ON avm.project_id=rd.project_id 
-        AND (avm.target_hash=ANY(rd.format_hashes) AND avm.anomaly_type='format')
-        OR  (avm.target_hash=rd.shape_hash AND avm.anomaly_type='shape')
-        OR  (avm.target_hash=rd.endpoint_hash AND avm.anomaly_type='endpoint')
-    WHERE
-         avm.project_id = ? AND
-         avm.target_hash = ?
-    GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25
-     |]
-
-
 getAnomalyVM :: Projects.ProjectId -> Text -> DBT IO (Maybe AnomalyVM)
 getAnomalyVM pid hash = queryOne Select q (pid, hash)
   where 
@@ -262,7 +239,7 @@ SELECT
     endpoints.method endpoint_method,
     endpoints.url_path endpoint_url_path,
     an.archived_at,
-    0,0
+    0,now()
 from
     apis.anomalies an
     LEFT JOIN apis.formats on (target_hash = formats.hash AND an.project_id = formats.project_id)
@@ -291,11 +268,9 @@ getShapeParentAnomalyVM pid hash = do
     v -> return $ length v
   where
     q =
-      [sql|
-              SELECT COUNT(*) 
-              FROM apis.anomalies_vm avm 
-              JOIN apis.anomalies aan ON avm.id = aan.id
-              WHERE avm.project_id = ? AND ? LIKE avm.target_hash ||'%' AND avm.anomaly_type='endpoint' AND aan.acknowleged_at IS NULL
+      [sql|SELECT COUNT(*) 
+           FROM apis.anomalies_vm avm JOIN apis.anomalies aan ON avm.id = aan.id
+           WHERE avm.project_id = ? AND ? LIKE avm.target_hash ||'%' AND avm.anomaly_type='endpoint' AND aan.acknowleged_at IS NULL
       |]
 
 
@@ -315,56 +290,35 @@ getFormatParentAnomalyVM pid hash = do
       |]
 
 
-selectAnomalies :: Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Int -> Int -> DBT IO (Vector AnomalyVM)
-selectAnomalies pid endpointM isAcknowleged isArchived sortM limitM skipM = query Select (Query $ encodeUtf8 q) (MkDBField pid : paramList)
+selectIssues :: Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Int -> Int -> DBT IO (Vector Issue)
+selectIssues pid endpointM isAcknowleged isArchived sortM limitM skipM = query Select (Query $ encodeUtf8 q) (MkDBField pid : paramList)
   where
     boolToNullSubQ a = if a then " not " else ""
     condlist =
       catMaybes
-        [ (\a -> " aan.acknowleged_at is" <> a <> " null ") . boolToNullSubQ <$> isAcknowleged
-        , (\a -> " aan.archived_at is" <> a <> " null ") . boolToNullSubQ <$> isArchived
-        , "avm.endpoint_id=?" <$ endpointM
+        [ (\a -> " acknowleged_at is" <> a <> " null ") . boolToNullSubQ <$> isAcknowleged
+        , (\a -> " archived_at is" <> a <> " null ") . boolToNullSubQ <$> isArchived
+        , "endpoint_id=?" <$ endpointM
         ]
     cond
       | null condlist = mempty
       | otherwise = "AND " <> mconcat (intersperse " AND " condlist)
     paramList = mapMaybe (MkDBField <$>) [endpointM]
     orderBy = case sortM of
-      Nothing -> "avm.created_at desc"
-      Just "first_seen" -> "avm.created_at desc"
+      Nothing -> "created_at desc"
+      Just "first_seen" -> "created_at desc"
       Just "events" -> "events desc"
       Just "last_seen" -> "last_seen desc"
-      _ -> "avm.created_at desc"
+      _ -> "created_at desc"
 
     limit = maybe "" (\x -> "limit " <> show x) limitM
     skip = "offset " <> show skipM <> " "
 
-    -- FIXME: optimize anomalies equation
     q =
       [text|
-SELECT avm.id, avm.created_at, avm.updated_at, avm.project_id, aan.acknowleged_at, aan.acknowleged_by, avm.anomaly_type, avm.action, avm.target_hash,
-       avm.shape_id, avm.new_unique_fields, avm.deleted_fields, avm.updated_field_formats, 
-       avm.field_id, avm.field_key, avm.field_key_path, avm.field_category, avm.field_format, 
-       avm.format_id, avm.format_type, avm.format_examples, 
-       avm.endpoint_id, avm.endpoint_method, avm.endpoint_url_path, aan.archived_at,
-       (CASE 
-          WHEN avm.anomaly_type='format' THEN (select count(*) from apis.request_dumps rd where avm.target_hash=ANY(rd.format_hashes))
-          ELSE 0 
-       END)::integer events,
-       NOW()
-    FROM apis.anomalies_vm avm
-    JOIN apis.anomalies aan ON avm.id = aan.id
-    --JOIN apis.target_hash_agg_14days t_agg ON (t_agg.target_hash=avm.target_hash )
-    WHERE
-        avm.project_id = ? 
-        AND avm.anomaly_type != 'field'
-        $cond
-        
-    ORDER BY $orderBy
-    $skip
-    $limit;
-      |]
-
+SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash, issue_data, endpoint_id, acknowleged_by, archived_at
+    FROM apis.issues WHERE project_id = ? $cond
+    ORDER BY $orderBy $skip $limit |]
 
 getReportAnomalies :: Projects.ProjectId -> Text -> DBT IO (Vector AnomalyVM)
 getReportAnomalies pid report_type = query Select (Query $ encodeUtf8 q) pid
@@ -425,19 +379,22 @@ countAnomalies pid report_type = do
 
 
 acknowledgeAnomalies :: Users.UserId -> Vector Text -> DBT IO (Vector Text)
-acknowledgeAnomalies uid aids = query Select q (uid, aids)
+acknowledgeAnomalies uid aids = do
+  _ <- query Update qIssues (uid, aids) :: DBT IO (Vector Text)
+  query Update q (uid, aids)
   where
+    qIssues = [sql| update apis.issues set acknowleged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) RETURNING target_hash; |]
     q = [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) RETURNING target_hash; |]
 
 
 acknowlegeCascade :: Users.UserId -> Vector Text -> DBT IO Int64
 acknowlegeCascade uid targets = do
+  execute Update qIssues (uid, hashes)
   execute Update q (uid, hashes)
   where
     hashes = (<> "%") <$> targets
-    q =
-      [sql| UPDATE apis.anomalies SET acknowleged_by = ?, acknowleged_at = NOW()
-              WHERE target_hash LIKE ANY (?); |]
+    qIssues = [sql| UPDATE apis.issues SET acknowleged_by = ?, acknowleged_at = NOW() WHERE target_hash=ANY (?); |]
+    q = [sql| UPDATE apis.anomalies SET acknowleged_by = ?, acknowleged_at = NOW() WHERE target_hash LIKE ANY (?); |]
 
 
 -------------------------------------------------------------------------------------------
@@ -446,6 +403,10 @@ acknowlegeCascade uid targets = do
 
 data NewShapeIssue = NewShapeIssue
   { id :: Shapes.ShapeId
+  , endpointId :: Endpoints.EndpointId
+  , endpointMethod :: Text
+  , endpointUrlPath :: Text
+  , host :: Text
   , newUniqueFields :: Vector Text
   , deletedFields :: Vector Text
   , updatedFieldFormats :: Vector Text
@@ -459,6 +420,10 @@ data NewShapeIssue = NewShapeIssue
 
 data NewFieldIssue = NewFieldIssue
   { id :: Fields.FieldId
+  , endpointId :: Endpoints.EndpointId
+  , endpointMethod :: Text
+  , endpointUrlPath :: Text
+  , host :: Text
   , key :: Text
   , keyPath :: Text
   , fieldCategory :: Fields.FieldCategoryEnum
@@ -473,6 +438,11 @@ data NewFieldIssue = NewFieldIssue
 
 data NewFormatIssue = NewFormatIssue
   { id :: Formats.FormatId
+  , endpointId :: Endpoints.EndpointId
+  , endpointMethod :: Text
+  , endpointUrlPath :: Text
+  , host :: Text
+  , fieldKeyPath :: Text
   , formatType :: Fields.FieldTypes
   , examples :: Maybe (Vector Text)
   }
@@ -485,8 +455,8 @@ data NewFormatIssue = NewFormatIssue
 
 data NewEndpointIssue = NewEndpointIssue
   { id :: Endpoints.EndpointId
-  , method :: Text
-  , urlPath :: Text
+  , endpointMethod :: Text
+  , endpointUrlPath :: Text
   , host :: Text
   }
   deriving stock (Show, Generic)
@@ -518,6 +488,9 @@ data Issue = Issue
   , anomalyType :: AnomalyTypes
   , targetHash :: Text
   , issueData :: IssuesData
+  , endpointId :: Maybe Endpoints.EndpointId
+  , acknowlegedBy :: Maybe Users.UserId
+  , archivedAt :: Maybe ZonedTime
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, NFData)
@@ -531,24 +504,37 @@ createIssueData :: Maybe Text -> AnomalyVM -> Maybe IssuesData
 createIssueData hostM anomaly = case anomaly.anomalyType of
     ATShape    -> IDNewShapeIssue <$> (NewShapeIssue
         <$> anomaly.shapeId
+        <*> anomaly.endpointId
+        <*> anomaly.endpointMethod
+        <*> anomaly.endpointUrlPath
+        <*> pure (fromMaybe "" hostM)
         <*> pure (anomaly.shapeNewUniqueFields)
         <*> pure (anomaly.shapeDeletedFields)
         <*> pure (anomaly.shapeUpdatedFieldFormats))
     ATField    -> IDNewFieldIssue <$> (NewFieldIssue
         <$> anomaly.fieldId
+        <*> anomaly.endpointId
+        <*> anomaly.endpointMethod
+        <*> anomaly.endpointUrlPath
+        <*> pure (fromMaybe "" hostM)
         <*> anomaly.fieldKey
         <*> anomaly.fieldKeyPath
         <*> anomaly.fieldCategory
         <*> anomaly.fieldFormat)
     ATFormat   -> IDNewFormatIssue <$> (NewFormatIssue
         <$> anomaly.formatId
+        <*> anomaly.endpointId
+        <*> anomaly.endpointMethod
+        <*> anomaly.endpointUrlPath
+        <*> pure (fromMaybe "" hostM) 
+        <*> anomaly.fieldKeyPath
         <*> anomaly.formatType
         <*> pure (anomaly.formatExamples))
     ATEndpoint -> IDNewEndpointIssue <$> (NewEndpointIssue
         <$> anomaly.endpointId
         <*> anomaly.endpointMethod
         <*> anomaly.endpointUrlPath
-        <*> pure (fromMaybe "" hostM)) -- Assuming the host is empty, adjust if necessary
+        <*> pure (fromMaybe "" hostM)) 
     _          -> Nothing
 
 -- Main conversion function
@@ -564,4 +550,7 @@ convertAnomalyToIssue hostM anomaly = do
         , anomalyType = anomaly.anomalyType
         , targetHash = anomaly.targetHash
         , issueData = issueData
+        , endpointId = anomaly.endpointId 
+        , acknowlegedBy = anomaly.acknowlegedBy 
+        , archivedAt = anomaly.archivedAt 
         }

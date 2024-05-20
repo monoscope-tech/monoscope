@@ -849,10 +849,27 @@ CREATE TABLE IF NOT EXISTS apis.issues
   acknowleged_at  TIMESTAMP WITH TIME ZONE,
   anomaly_type    apis.anomaly_type NOT NULL, 
   target_hash     TEXT,
-  issue_data      JSONB NOT NULL DEFAULT '{}'
+  issue_data      JSONB NOT NULL DEFAULT '{}',
+  endpoint_id     UUID,
+  acknowleged_by  UUID,
+  archived_at    TIMESTAMP           WITH       TIME        ZONE
 );
 SELECT manage_updated_at('apis.issues');
 SELECT create_hypertable('apis.issues', by_range('created_at'), migrate_data => true);
+
+CREATE TABLE IF NOT EXISTS apis.errors 
+(
+  id              UUID NOT NULL DEFAULT gen_random_uuid(),
+  created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+  updated_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
+  project_id      UUID NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
+  hash            TEXT NOT NULL,
+  title           TEXT NOT NULL,
+  data            JSONB NOT NULL DEFAULT '{}'
+)
+SELECT manage_updated_at('apis.errors');
+SELECT create_hypertable('apis.errors', by_range('created_at'), migrate_data => true);
+
 
 
 COMMIT;

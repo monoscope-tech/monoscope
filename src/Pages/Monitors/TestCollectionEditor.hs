@@ -161,7 +161,7 @@ collectionPage pid col = do
 collectionStepResult_ :: Int -> Testing.StepResult -> Html ()
 collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
   div_ [class_ "p-2 bg-base-200 font-bold"] do
-    toHtml $ (show $ idx + 1) <> " " <> stepResult.stepName
+    toHtml $ (show $ idx + 1) <> " " <> fromMaybe "" stepResult.stepName
   div_ [role_ "tablist", class_ "tabs tabs-lifted"] do
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Log", checked_]
     div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"]

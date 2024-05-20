@@ -36,6 +36,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Projects.Swaggers qualified as Swaggers
 import Models.Tests.TestToDump qualified as TestToDump
 import Models.Tests.Testing qualified as Testing
+import Relude.Unsafe qualified as Unsafe
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text, trimming)
 import Network.Wreq (defaults, header, postWith)
@@ -351,17 +352,16 @@ emailQueryMonitorAlert monitorE@Monitors.QueryMonitorEvaled{alertConfig} email u
 newAnomalyJob :: Projects.ProjectId -> ZonedTime -> Text -> Text -> Text -> ATBackgroundCtx ()
 newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
   let anomalyType = Unsafe.fromJust $ Anomalies.parseAnomalyTypes anomalyTypesT
-  anomalyVM <- dbtToEff $ Anomalies.getAnomalyVM pid targetHash
   case anomalyType of
     Anomalies.ATEndpoint -> do
       totalRequestsCount <- dbtToEff $ RequestDumps.countRequestDumpByProject pid
-      when (totalRequestsCount > 5000) do
+      when (totalRequestsCount > 50) $ whenJustM (dbtToEff $ Anomalies.getAnomalyVM pid targetHash) \anomaly -> do
         endp <- dbtToEff $ Endpoints.endpointByHash pid targetHash
         users <- dbtToEff $ Projects.usersByProjectId pid
         project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
         let enp = Unsafe.fromJust endp
         let endpointPath = enp.method <> " " <> enp.urlPath
-        dbtToEff $ Ent.insert @Anomalies.Issue $ Unsafe.fromJust $ Anomalies.convertAnomalyToIssue Nothing (Unsafe.fromJust anomalyVM)
+        dbtToEff $ Ent.insert @Anomalies.Issue $ Unsafe.fromJust $ Anomalies.convertAnomalyToIssue (Just enp.host) anomaly
         forM_ project.notificationsChannel \case
           Projects.NSlack ->
             sendSlackMessage
@@ -386,7 +386,8 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
               sendPostmarkEmail (CI.original u.email) "anomaly-endpoint" templateVars
     Anomalies.ATShape -> do
       hasEndpointAnomaly <- dbtToEff $ Anomalies.getShapeParentAnomalyVM pid targetHash
-      when (hasEndpointAnomaly == 0) do
+      when (hasEndpointAnomaly == 0) $ whenJustM (dbtToEff $ Anomalies.getAnomalyVM pid targetHash) \anomaly -> do
+        endp <- dbtToEff $ Endpoints.endpointByHash pid $ T.take 8 targetHash
         let getShapesQuery = [sql| select hash, field_hashes from apis.shapes where project_id=? and endpoint_hash=? |]
         shapes <- (dbtToEff $ query Select getShapesQuery (pid, T.take 8 targetHash))
         let targetFields = maybe [] (V.toList . snd) (V.find (\a -> fst a == targetHash) shapes)
@@ -394,39 +395,39 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
         let otherFields = toList <$> toList (snd $ V.unzip $ V.filter (\a -> fst a /= targetHash) shapes)
         let newFields = filter (`notElem` foldl' union [] otherFields) targetFields
         let deletedFields = filter (`notElem` targetFields) $ foldl' intersect (head $ [] :| otherFields) (tail $ [] :| otherFields)
-        -- Update the shape values in the database
         _ <- dbtToEff $ updateShapeCounts pid targetHash (V.fromList newFields) (V.fromList deletedFields) updatedFieldFormats
         -- Send an email about the new shape anomaly but only if there was no endpoint anomaly logged
-        whenJustM (dbtToEff $ Anomalies.getAnomalyVM pid $ T.take 8 targetHash) \anomaly -> do
-          users <- dbtToEff $ Projects.usersByProjectId pid
-          project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
-          dbtToEff $ Ent.insert @Anomalies.Issue $ Unsafe.fromJust $ Anomalies.convertAnomalyToIssue Nothing anomaly
-          forM_ project.notificationsChannel \case
-            Projects.NSlack ->
-              sendSlackMessage
-                pid
-                [fmtTrim| 🤖 *New Shape anomaly found for `{project.title}`******
-    
-                            We detected a different API request shape to your endpoints than what you usually have
-    
-                            <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
-                                 |]
-            _ -> do
-              forM_ users \u -> do
-                let templateVars =
-                      object
-                        [ "user_name" .= u.firstName
-                        , "project_name" .= project.title
-                        , "anomaly_url" .= ("https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/by_hash/" <> targetHash)
-                        ]
-                sendPostmarkEmail (CI.original u.email) "anomaly-shape" templateVars
+        users <- dbtToEff $ Projects.usersByProjectId pid
+        project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
+        let anomaly' = anomaly {Anomalies.anomalyType=anomalyType, Anomalies.shapeDeletedFields = V.fromList deletedFields, Anomalies.shapeUpdatedFieldFormats = updatedFieldFormats, Anomalies.shapeNewUniqueFields= V.fromList newFields}
+        r <- dbtToEff $ Ent.insert @Anomalies.Issue $ Unsafe.fromJust $ Anomalies.convertAnomalyToIssue (endp <&> (.host) ) anomaly'
+        forM_ project.notificationsChannel \case
+          Projects.NSlack ->
+            sendSlackMessage
+              pid
+              [fmtTrim| 🤖 *New Shape anomaly found for `{project.title}`******
+  
+                          We detected a different API request shape to your endpoints than what you usually have
+  
+                          <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
+                               |]
+          _ -> do
+            forM_ users \u -> do
+              let templateVars =
+                    object
+                      [ "user_name" .= u.firstName
+                      , "project_name" .= project.title
+                      , "anomaly_url" .= ("https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/by_hash/" <> targetHash)
+                      ]
+              sendPostmarkEmail (CI.original u.email) "anomaly-shape" templateVars
     Anomalies.ATFormat -> do
       -- Send an email about the new shape anomaly but only if there was no endpoint anomaly logged
       hasEndpointAnomaly <- dbtToEff $ Anomalies.getFormatParentAnomalyVM pid targetHash
       when (hasEndpointAnomaly == 0) $ whenJustM (dbtToEff $ Anomalies.getAnomalyVM pid targetHash) \anomaly -> do
+        endp <- dbtToEff $ Endpoints.endpointByHash pid $ T.take 8 targetHash
         users <- dbtToEff $ Projects.usersByProjectId pid
         project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
-        dbtToEff $ Ent.insert @Anomalies.Issue $ Unsafe.fromJust $ Anomalies.convertAnomalyToIssue Nothing anomaly
+        dbtToEff $ Ent.insert @Anomalies.Issue $ Unsafe.fromJust $ Anomalies.convertAnomalyToIssue (endp <&> (.host) ) anomaly
         forM_ project.notificationsChannel \case
           Projects.NSlack ->
             sendSlackMessage

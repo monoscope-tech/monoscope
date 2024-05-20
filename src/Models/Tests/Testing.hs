@@ -224,7 +224,7 @@ data AssertResult = AssertResult
 
 
 data StepResult = StepResult
-  { stepName :: Text
+  { stepName :: Maybe Text
   , stepIndex :: Int
   , assertResults :: [AssertResult]
   , request :: StepRequest
@@ -264,13 +264,12 @@ getCollections pid = query Select q (Only pid)
   where
     q =
       [sql| SELECT t.id id , t.created_at created_at , t.updated_at updated_at, t.project_id project_id, t.last_run last_run, 
-                  t.title title, t.description description, COUNT(ts.id) as steps_count,CASE
+                  t.title title, t.description description, 0,CASE
                       WHEN EXTRACT(DAY FROM t.schedule) > 0 THEN CONCAT(EXTRACT(DAY FROM t.schedule)::TEXT, ' days')
                       WHEN EXTRACT(HOUR FROM t.schedule) > 0 THEN CONCAT(EXTRACT(HOUR FROM t.schedule)::TEXT, ' hours')
                       ELSE CONCAT(EXTRACT(MINUTE FROM t.schedule)::TEXT, ' minutes')
                   END as  schedule
                   FROM  tests.collections t
-                  LEFT JOIN tests.collection_steps ts ON t.id = ts.collection_id
                   WHERE t.project_id = ?
                   GROUP BY t.id
                   ORDER BY t.updated_at DESC;
