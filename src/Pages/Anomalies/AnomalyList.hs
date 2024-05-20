@@ -20,6 +20,7 @@ import Data.Map qualified as Map
 import Data.Pool (withResource)
 import Data.Text (replace)
 import Data.Text qualified as T
+import Models.Apis.RequestDumps qualified as RequestDumps 
 import Data.Time (UTCTime, getCurrentTime, zonedTimeToUTC)
 import Data.Tuple.Extra (fst3)
 import Data.UUID qualified as UUID
@@ -184,14 +185,14 @@ anomalyListGetH pid layoutM ackdM archivedM sortM page loadM endpointM hxRequest
           $ issuesList paramInput pid currTime issues nextFetchUrl
       anom = case nextFetchUrl of
         Just url -> do
-          mapM_ (renderIssue False currTime) issues 
+          mapM_ (renderIssue False currTime) issues
           if length issues > fetchLimit - 1
             then a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] do
               div_ [class_ "htmx-indicator query-indicator"] do
                 loader
               "LOAD MORE"
             else ""
-        Nothing -> mapM_ (renderIssue False currTime) issues 
+        Nothing -> mapM_ (renderIssue False currTime) issues
   case (layoutM, hxRequestM, hxBoostedM, loadM) of
     (Just "slider", Just "true", _, _) -> addRespHeaders $ anomalyListSlider currTime pid endpointM (Just issues)
     (_, _, _, Just "true") -> addRespHeaders anom
@@ -284,13 +285,13 @@ issuesList paramInput pid currTime issues nextFetchUrl = form_ [class_ "col-span
       p_ "Start monitoring errors that happened during a request"
       a_ [href_ $ "/p/" <> pid.toText <> "/integration_guides#errors-monitoring", class_ "w-max btn btn-indigo -ml-1 text-md"] "Error reporting guide"
 
-  mapM_ (renderIssue False currTime) issues 
+  mapM_ (renderIssue False currTime) issues
   whenJust nextFetchUrl \url ->
-      when (length issues > 60) 
-        $ a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] do
-          div_ [class_ "htmx-indicator query-indicator"] do
-            loader
-          "LOAD MORE"
+    when (length issues > 60)
+      $ a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] do
+        div_ [class_ "htmx-indicator query-indicator"] do
+          loader
+        "LOAD MORE"
 
 
 anomalyListSlider :: UTCTime -> Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe (Vector Anomalies.Issue) -> Html ()
@@ -303,7 +304,7 @@ anomalyListSlider _ pid eid Nothing = do
         span_ [class_ "text-lg text-slate-700"] "Ongoing Issues and Monitors"
       div_ [class_ "flex flex-row mt-2"] ""
 anomalyListSlider currTime _ _ (Just issues) = do
-  let anomalyIds = replace "\"" "'" $ show $ fmap (Anomalies.anomalyIdText . (.id)) issues 
+  let anomalyIds = replace "\"" "'" $ show $ fmap (Anomalies.anomalyIdText . (.id)) issues
   let totalAnomaliesTxt = toText $ if length issues > 50 then ("50+" :: Text) else show (length issues)
   div_ do
     script_ [text| var rem = (x,y)=>((x%y)==0?1:(x%y)); |]
@@ -346,7 +347,7 @@ anomalyListSlider currTime _ _ (Just issues) = do
       [ class_ "parent-slider"
       , [__|init setAnomalySliderPag() then show #{$anomalyIds[$currentAnomaly]} |]
       ]
-      $ mapM_ (renderIssue True currTime) issues 
+      $ mapM_ (renderIssue True currTime) issues
 
 
 shapeParameterStats_ :: Int -> Int -> Int -> Html ()
@@ -413,8 +414,8 @@ issueItem hideByDefault currTime issue icon title subTitle content = do
         , hxSwap_ "innerHTML"
         ]
         ""
-    div_ [class_ "w-36 flex items-center justify-center"] 
-      $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] 
+    div_ [class_ "w-36 flex items-center justify-center"]
+      $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"]
       $ "0" -- show issue.eventsCount14d
 
 
@@ -567,52 +568,53 @@ buildQueryForAnomaly Anomalies.ATEndpoint hash = "endpoint_hash==\"" <> hash <> 
 buildQueryForAnomaly Anomalies.ATShape hash = "shape_hash==\"" <> hash <> "\""
 buildQueryForAnomaly Anomalies.ATFormat hash = "format_hashes[*]==\"" <> hash <> "\""
 buildQueryForAnomaly Anomalies.ATField hash = "field[*]==\"" <> hash <> "\""
+buildQueryForAnomaly Anomalies.ATRuntimeException hash = "errors[*].hash==\"" <> hash <> "\""
 buildQueryForAnomaly Anomalies.ATUnknown hash = ""
 
 
 endpointOverview :: Maybe (Vector Shapes.ShapeWithFields) -> Html ()
 endpointOverview shapesWithFieldsMap =
   div_ [] do
-    whenJust shapesWithFieldsMap \s ->do
-        reqResSection "Request" True (Vector.toList s)
-        reqResSection "Response" False (Vector.toList s)
+    whenJust shapesWithFieldsMap \s -> do
+      reqResSection "Request" True (Vector.toList s)
+      reqResSection "Response" False (Vector.toList s)
 
 
 requestShapeOverview :: Maybe (Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field]) -> Html ()
 requestShapeOverview fieldChanges = do
   div_ [class_ "flex flex-col gap-6"] do
     whenJust fieldChanges \(fs, sn, th) ->
-        div_ [class_ "flex flex-col gap-6"] do
-          div_ [class_ "flex flex-col"] do
-            h3_ [class_ "text-green-500 py-1  w-fit font-semibold border-b border-b-green-500 mb-2"] "New Unique Fields"
-            div_ [class_ "px-2"] do
-              p_ [class_ "hidden last:block"] "No new unique fields"
-              subSubSection "Request Path Params" (Map.lookup Fields.FCPathParam fs)
-              subSubSection "Request Query Params" (Map.lookup Fields.FCQueryParam fs)
-              subSubSection "Request Headers" (Map.lookup Fields.FCRequestHeader fs)
-              subSubSection "Request Body" (Map.lookup Fields.FCRequestBody fs)
-              subSubSection "Response Headers" (Map.lookup Fields.FCResponseHeader fs)
-              subSubSection "Response Body" (Map.lookup Fields.FCResponseBody fs)
-          div_ [class_ "flex flex-col"] do
-            h3_ [class_ "text-gray-500 py-1 w-fit font-semibold border-b border-b-gray-500 mb-2"] "Updated Fields"
-            div_ [class_ "px-2"] do
-              p_ [class_ "hidden last:block"] "No updated fields"
-              subSubSection "Request Path Params" (Map.lookup Fields.FCPathParam sn)
-              subSubSection "Request Query Params" (Map.lookup Fields.FCQueryParam sn)
-              subSubSection "Request Headers" (Map.lookup Fields.FCRequestHeader sn)
-              subSubSection "Request Body" (Map.lookup Fields.FCRequestBody sn)
-              subSubSection "Response Headers" (Map.lookup Fields.FCResponseHeader sn)
-              subSubSection "Response Body" (Map.lookup Fields.FCResponseBody sn)
-          div_ [class_ "flex flex-col"] do
-            h3_ [class_ "text-red-500 w-fit py-1 font-semibold border-b border-b-red-500 mb-2"] "Deleted Fields"
-            div_ [class_ "px-2"] do
-              p_ [class_ "hidden last:block"] "No deleted fields"
-              subSubSection "Request Path Params" (Map.lookup Fields.FCPathParam th)
-              subSubSection "Request Query Params" (Map.lookup Fields.FCQueryParam th)
-              subSubSection "Request Headers" (Map.lookup Fields.FCRequestHeader th)
-              subSubSection "Request Body" (Map.lookup Fields.FCRequestBody th)
-              subSubSection "Response Headers" (Map.lookup Fields.FCResponseHeader th)
-              subSubSection "Response Body" (Map.lookup Fields.FCResponseBody th)
+      div_ [class_ "flex flex-col gap-6"] do
+        div_ [class_ "flex flex-col"] do
+          h3_ [class_ "text-green-500 py-1  w-fit font-semibold border-b border-b-green-500 mb-2"] "New Unique Fields"
+          div_ [class_ "px-2"] do
+            p_ [class_ "hidden last:block"] "No new unique fields"
+            subSubSection "Request Path Params" (Map.lookup Fields.FCPathParam fs)
+            subSubSection "Request Query Params" (Map.lookup Fields.FCQueryParam fs)
+            subSubSection "Request Headers" (Map.lookup Fields.FCRequestHeader fs)
+            subSubSection "Request Body" (Map.lookup Fields.FCRequestBody fs)
+            subSubSection "Response Headers" (Map.lookup Fields.FCResponseHeader fs)
+            subSubSection "Response Body" (Map.lookup Fields.FCResponseBody fs)
+        div_ [class_ "flex flex-col"] do
+          h3_ [class_ "text-gray-500 py-1 w-fit font-semibold border-b border-b-gray-500 mb-2"] "Updated Fields"
+          div_ [class_ "px-2"] do
+            p_ [class_ "hidden last:block"] "No updated fields"
+            subSubSection "Request Path Params" (Map.lookup Fields.FCPathParam sn)
+            subSubSection "Request Query Params" (Map.lookup Fields.FCQueryParam sn)
+            subSubSection "Request Headers" (Map.lookup Fields.FCRequestHeader sn)
+            subSubSection "Request Body" (Map.lookup Fields.FCRequestBody sn)
+            subSubSection "Response Headers" (Map.lookup Fields.FCResponseHeader sn)
+            subSubSection "Response Body" (Map.lookup Fields.FCResponseBody sn)
+        div_ [class_ "flex flex-col"] do
+          h3_ [class_ "text-red-500 w-fit py-1 font-semibold border-b border-b-red-500 mb-2"] "Deleted Fields"
+          div_ [class_ "px-2"] do
+            p_ [class_ "hidden last:block"] "No deleted fields"
+            subSubSection "Request Path Params" (Map.lookup Fields.FCPathParam th)
+            subSubSection "Request Query Params" (Map.lookup Fields.FCQueryParam th)
+            subSubSection "Request Headers" (Map.lookup Fields.FCRequestHeader th)
+            subSubSection "Request Body" (Map.lookup Fields.FCRequestBody th)
+            subSubSection "Response Headers" (Map.lookup Fields.FCResponseHeader th)
+            subSubSection "Response Body" (Map.lookup Fields.FCResponseBody th)
 
 
 anomalyFormatOverview :: AnomalyVM -> Vector Text -> Html ()
@@ -646,17 +648,18 @@ anomalyFormatOverview an prevFormats =
 
 
 issueDisplayConfig :: Anomalies.Issue -> (Text, Text)
-issueDisplayConfig issue = case issue.anomalyType of
-  Anomalies.ATField -> ("New Field Found", "/assets/svgs/anomalies/fields.svg")
-  Anomalies.ATShape -> ("New Request Shape", "/assets/svgs/anomalies/fields.svg")
-  Anomalies.ATEndpoint -> ("New Endpoint", "/assets/svgs/anomalies/endpoint.svg")
-  Anomalies.ATFormat -> ("Modified field", "/assets/svgs/anomalies/fields.svg")
-  Anomalies.ATUnknown -> ("Unknown anomaly", "/assets/svgs/anomalies/fields.svg")
+issueDisplayConfig issue = case issue.issueData of
+  Anomalies.IDNewFieldIssue _ -> ("New Field Found", "/assets/svgs/anomalies/fields.svg")
+  Anomalies.IDNewShapeIssue _ -> ("New Request Shape", "/assets/svgs/anomalies/fields.svg")
+  Anomalies.IDNewEndpointIssue _-> ("New Endpoint", "/assets/svgs/anomalies/endpoint.svg")
+  Anomalies.IDNewFormatIssue _ -> ("Modified field", "/assets/svgs/anomalies/fields.svg")
+  Anomalies.IDNewRuntimeExceptionIssue err -> (err.errorType, "/assets/svgs/anomalies/fields.svg")
+  Anomalies.IDEmpty -> ("Unknown anomaly", "/assets/svgs/anomalies/fields.svg")
 
 
 renderIssue :: Bool -> UTCTime -> Anomalies.Issue -> Html ()
 renderIssue hideByDefault currTime issue = do
-  let (issueTitle, icon) = issueDisplayConfig issue 
+  let (issueTitle, icon) = issueDisplayConfig issue
   case issue.issueData of
     Anomalies.IDNewEndpointIssue issueD -> do
       let endpointTitle = issueD.endpointMethod <> "  " <> issueD.endpointUrlPath
@@ -678,8 +681,8 @@ renderIssue hideByDefault currTime issue = do
       let formatContent = div_ [class_ "block"] do
             div_ [class_ "text-sm"] do
               div_ do
-                small_ "current format: " 
-                span_ $ show issueD.formatType 
+                small_ "current format: "
+                span_ $ show issueD.formatType
               div_ do
                 small_ "previous formats: "
                 span_ "" -- TODO: Should be comma separated list of formats for that field.
@@ -687,6 +690,11 @@ renderIssue hideByDefault currTime issue = do
                 small_ "examples: "
                 small_ $ toHtml $ maybe "" (T.intercalate ", " . Vector.toList) issueD.examples
       issueItem hideByDefault currTime issue icon issueTitle (Just subTitle) (Just formatContent)
+    Anomalies.IDNewRuntimeExceptionIssue issueD -> do
+      let subTitle = span_ [class_ "space-x-2"] do
+            a_ [class_ "cursor-pointer"] $ toHtml @Text $ issueD.rootErrorType
+      let body = div_ [class_ "block"] $ p_ [] $ toHtml issueD.message
+      issueItem hideByDefault currTime issue icon issueTitle (Just subTitle) (Just body)
     _ -> error "Anomalies.ATField issue should never show up in practice "
 
 

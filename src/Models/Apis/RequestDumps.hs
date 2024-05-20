@@ -31,6 +31,7 @@ module Models.Apis.RequestDumps (
 )
 where
 
+import Data.Default
 import Data.Aeson (Value)
 import Data.Aeson qualified as AE
 import Data.Default.Instances ()
@@ -204,9 +205,11 @@ data ATError = ATError
   , message :: Text
   , rootErrorMessage :: Text
   , stackTrace :: Text
+  , hash :: Maybe Text
+  , technology :: Maybe SDKTypes 
   }
   deriving stock (Show, Generic, Eq)
-  deriving anyclass (NFData)
+  deriving anyclass (NFData, Default)
   deriving
     (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATError
@@ -543,10 +546,9 @@ autoCompleteFromRequestDumps pid key prefix = query Select (Query $ encodeUtf8 q
 
 getTotalRequestForCurrentMonth :: Projects.ProjectId -> DBT IO Int
 getTotalRequestForCurrentMonth pid = do
-  result <- query Select q pid
-  case result of
-    [Only count] -> return count
-    v -> return $ length v
+  result <- queryOne Select q pid
+  case fromMaybe (Only 0) result of
+    (Only count) -> return count
   where
     q =
       [sql| SELECT count(*) FROM apis.request_dumps WHERE project_id=? AND EXTRACT(MONTH FROM created_at) = EXTRACT(MONTH FROM CURRENT_DATE)

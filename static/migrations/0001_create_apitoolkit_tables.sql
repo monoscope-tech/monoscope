@@ -300,7 +300,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_formats_hash ON apis.formats(hash);
 -- ANOMALIES table 
 -----------------------------------------------------------------------
 
-CREATE TYPE apis.anomaly_type AS ENUM ('unknown', 'field', 'endpoint','shape', 'format');
+CREATE TYPE apis.anomaly_type AS ENUM ('unknown', 'field', 'endpoint','shape', 'format', 'runtime_exception');
 CREATE TYPE apis.anomaly_action AS ENUM ('unknown', 'created');
 CREATE TABLE IF NOT EXISTS apis.anomalies
 (
@@ -864,12 +864,29 @@ CREATE TABLE IF NOT EXISTS apis.errors
   updated_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT current_timestamp,
   project_id      UUID NOT NULL REFERENCES projects.projects (id) ON DELETE CASCADE,
   hash            TEXT NOT NULL,
-  title           TEXT NOT NULL,
-  data            JSONB NOT NULL DEFAULT '{}'
-)
+  error_type      TEXT NOT NULL,
+  message         TEXT NOT NULL,
+  error_data      JSONB NOT NULL DEFAULT '{}'
+);
 SELECT manage_updated_at('apis.errors');
 SELECT create_hypertable('apis.errors', by_range('created_at'), migrate_data => true);
-
+CREATE INDEX IF NOT EXISTS idx_apis_errors_project_id ON apis.errors(project_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_errors_hash ON apis.errors(hash, created_at);
+CREATE OR REPLACE FUNCTION apis.new_anomaly_proc_job_only() RETURNS trigger AS $$
+DECLARE 
+	anomaly_type apis.anomaly_type;
+	anomaly_action apis.anomaly_action;
+BEGIN
+  IF TG_WHEN <> 'AFTER' THEN
+      RAISE EXCEPTION 'apis.new_anomaly_proc() may only run as an AFTER trigger';
+  END IF;
+  anomaly_type := TG_ARGV[0];
+  anomaly_action := TG_ARGV[1];
+  INSERT INTO background_jobs (run_at, status, payload) VALUES (now() + INTERVAL '5 minutes', 'queued',  jsonb_build_object('tag', 'NewAnomaly', 'contents', json_build_array(NEW.project_id, NEW.created_at, anomaly_type::text, anomaly_action::text, NEW.hash)));
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+CREATE OR REPLACE TRIGGER error_created_anomaly AFTER INSERT ON apis.errors FOR EACH ROW EXECUTE PROCEDURE apis.new_anomaly_proc_job_only('runtime_exception', 'created');
 
 
 COMMIT;

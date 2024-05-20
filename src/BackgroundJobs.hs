@@ -3,18 +3,21 @@
 module BackgroundJobs (jobsWorkerInit, jobsRunner, BgJobs (..)) where
 
 import Control.Lens ((.~))
+import Data.Default 
 import Data.Aeson as Aeson
 import Data.Aeson.QQ (aesonQQ)
 import Data.CaseInsensitive qualified as CI
 import Data.List.Extra (intersect, union)
 import Data.Pool (withResource)
 import Data.Text qualified as T
-import Database.PostgreSQL.Entity qualified as Ent
 import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, getZonedTime)
 import Data.UUID.V4 qualified as UUIDV4
+import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Data.Vector qualified as V
+import Database.PostgreSQL.Entity qualified as Ent
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query)
+import Database.PostgreSQL.Entity.Types qualified as EntT
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact (DBT)
@@ -36,7 +39,6 @@ import Models.Projects.Projects qualified as Projects
 import Models.Projects.Swaggers qualified as Swaggers
 import Models.Tests.TestToDump qualified as TestToDump
 import Models.Tests.Testing qualified as Testing
-import Relude.Unsafe qualified as Unsafe
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text, trimming)
 import Network.Wreq (defaults, header, postWith)
@@ -47,6 +49,7 @@ import Pages.Specification.GenerateSwagger (generateSwagger)
 import Pkg.Mail (sendEmail, sendPostmarkEmail, sendSlackMessage)
 import PyF (fmt, fmtTrim)
 import Relude hiding (ask)
+import Relude.Unsafe qualified as Unsafe
 import System.Config qualified as Config
 import System.Types (ATBackgroundCtx, runBackground)
 
@@ -399,8 +402,8 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
         -- Send an email about the new shape anomaly but only if there was no endpoint anomaly logged
         users <- dbtToEff $ Projects.usersByProjectId pid
         project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
-        let anomaly' = anomaly {Anomalies.anomalyType=anomalyType, Anomalies.shapeDeletedFields = V.fromList deletedFields, Anomalies.shapeUpdatedFieldFormats = updatedFieldFormats, Anomalies.shapeNewUniqueFields= V.fromList newFields}
-        r <- dbtToEff $ Ent.insert @Anomalies.Issue $ Unsafe.fromJust $ Anomalies.convertAnomalyToIssue (endp <&> (.host) ) anomaly'
+        let anomaly' = anomaly{Anomalies.anomalyType = anomalyType, Anomalies.shapeDeletedFields = V.fromList deletedFields, Anomalies.shapeUpdatedFieldFormats = updatedFieldFormats, Anomalies.shapeNewUniqueFields = V.fromList newFields}
+        r <- dbtToEff $ Ent.insert @Anomalies.Issue $ Unsafe.fromJust $ Anomalies.convertAnomalyToIssue (endp <&> (.host)) anomaly'
         forM_ project.notificationsChannel \case
           Projects.NSlack ->
             sendSlackMessage
@@ -427,7 +430,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
         endp <- dbtToEff $ Endpoints.endpointByHash pid $ T.take 8 targetHash
         users <- dbtToEff $ Projects.usersByProjectId pid
         project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
-        dbtToEff $ Ent.insert @Anomalies.Issue $ Unsafe.fromJust $ Anomalies.convertAnomalyToIssue (endp <&> (.host) ) anomaly
+        dbtToEff $ Ent.insert @Anomalies.Issue $ Unsafe.fromJust $ Anomalies.convertAnomalyToIssue (endp <&> (.host)) anomaly
         forM_ project.notificationsChannel \case
           Projects.NSlack ->
             sendSlackMessage
@@ -449,5 +452,42 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
                       "anomaly_url": #{anomaly_url}
                  }|]
             sendPostmarkEmail (CI.original u.email) "anomaly-field" templateVars
+    Anomalies.ATRuntimeException -> do
+      users <- dbtToEff $ Projects.usersByProjectId pid
+      project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
+      err <- Unsafe.fromJust <<$>> dbtToEff $ Anomalies.errorByHash targetHash
+      issueId <- liftIO $ Anomalies.AnomalyId <$> UUIDV4.nextRandom
+      dbtToEff $
+        Ent.insert @Anomalies.Issue $
+          (def :: Anomalies.Issue)
+            { Anomalies.id = issueId
+            , Anomalies.createdAt = err.createdAt
+            , Anomalies.updatedAt = err.updatedAt
+            , Anomalies.projectId = pid
+            , Anomalies.anomalyType = Anomalies.ATRuntimeException
+            , Anomalies.targetHash = targetHash
+            , Anomalies.issueData = Anomalies.IDNewRuntimeExceptionIssue err.errorData
+            }
+      forM_ project.notificationsChannel \case
+        Projects.NSlack ->
+          sendSlackMessage
+            pid
+            [fmtTrim| 🤖 *New Runtime Exception Found for `{project.title}`*****
+  
+                           We detected that a particular field on your API is returning a different format/type than what it usually gets.
+
+                           <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
+                               |]
+        _ -> forM_ users \u -> do
+          let firstName = u.firstName
+          let title = project.title
+          let anomaly_url = "https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/by_hash/" <> targetHash
+          let templateVars =
+                [aesonQQ|{
+                      "user_name": #{firstName},
+                      "project_name": #{title},
+                      "anomaly_url": #{anomaly_url}
+                 }|]
+          sendPostmarkEmail (CI.original u.email) "anomaly-field" templateVars
     Anomalies.ATField -> pass
     Anomalies.ATUnknown -> pass
