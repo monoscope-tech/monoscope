@@ -277,7 +277,7 @@ getShapeParentAnomalyVM pid hash = do
   where
     q =
       [sql|SELECT COUNT(*) 
-           FROM apis.anomalies_vm avm JOIN apis.anomalies aan ON avm.id = aan.id
+           FROM apis.issues JOIN apis.anomalies aan ON avm.id = aan.id
            WHERE avm.project_id = ? AND ? LIKE avm.target_hash ||'%' AND avm.anomaly_type='endpoint' AND aan.acknowleged_at IS NULL
       |]
 
@@ -292,7 +292,7 @@ getFormatParentAnomalyVM pid hash = do
     q =
       [sql|
               SELECT COUNT(*) 
-              FROM apis.anomalies_vm avm 
+              FROM apis.issues avm 
               JOIN apis.anomalies aan ON avm.id = aan.id
               WHERE avm.project_id = ? AND ? LIKE avm.target_hash ||'%' AND avm.anomaly_type != 'format' AND aan.acknowleged_at IS NULL
       |]

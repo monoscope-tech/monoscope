@@ -168,10 +168,10 @@ endpointRequestStatsByProject pid ackd archived pHostM sortM = case pHostM of Ju
       [text| 
       SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, coalesce(min,0),  coalesce(p50,0),  coalesce(p75,0),  coalesce(p90,0),  coalesce(p95,0),  coalesce(p99,0),  coalesce(max,0) , 
          coalesce(total_time,0), coalesce(total_time_proj,0), coalesce(ers.total_requests,0), coalesce(total_requests_proj,0),
-         (SELECT count(*) from apis.anomalies_vm 
+         (SELECT count(*) from apis.issues 
                  where project_id=enp.project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
          ) ongoing_anomalies,
-        (SELECT count(*) from apis.anomalies_vm
+        (SELECT count(*) from apis.issues
                  where project_id=enp.project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
         ) ongoing_anomalies_proj,
         ann.acknowleged_at, 
@@ -192,10 +192,10 @@ dependencyEndpointsRequestStatsByProject pid host = query Select (Query $ encode
       [text|
       SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, coalesce(min,0),  coalesce(p50,0),  coalesce(p75,0),  coalesce(p90,0),  coalesce(p95,0),  coalesce(p99,0),  coalesce(max,0) , 
          coalesce(total_time,0), coalesce(total_time_proj,0), coalesce(total_requests,0), coalesce(total_requests_proj,0),
-         (SELECT count(*) from apis.anomalies_vm 
+         (SELECT count(*) from apis.issues 
                  where project_id=enp.project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
          ) ongoing_anomalies,
-        (SELECT count(*) from apis.anomalies_vm
+        (SELECT count(*) from apis.issues
                  where project_id=enp.project_id AND acknowleged_at is null AND archived_at is null AND anomaly_type != 'field'
         ) ongoing_anomalies_proj,
         ann.acknowleged_at, 

@@ -531,75 +531,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_project_request_stats_project_id ON a
 -- TODO: Create triggers to create new anomalies when new fields, 
 -- TODO: endpoints and shapes are created.
 
--- FIXME: reevaluate how anomaly_vm will work and be rendered
-CREATE MATERIALIZED VIEW IF NOT EXISTS apis.anomalies_vm AS
-SELECT
-    an.id,
-    an.created_at,
-    an.updated_at,
-    an.project_id,
-    an.acknowleged_at,
-    an.acknowleged_by,
-    an.anomaly_type,
-    an.action,
-    an.target_hash,
-    shapes.id shape_id,
-    coalesce(shapes.new_unique_fields, '{}'::TEXT[]) new_unique_fields, 
-    coalesce(shapes.deleted_fields, '{}'::TEXT[]) deleted_fields,
-    coalesce(shapes.updated_field_formats, '{}'::TEXT[]) updated_field_formats,
-    fields.id field_id,
-    fields.key field_key,
-    fields.key_path field_key_path,
-    fields.field_category field_category,
-    fields.format field_format,
-    formats.id format_id,
-    formats.field_type format_type,
-    formats.examples format_examples,
-    endpoints.id endpoint_id,
-    endpoints.method endpoint_method,
-    endpoints.url_path endpoint_url_path,
-    an.archived_at
-from
-    apis.anomalies an
-    LEFT JOIN apis.formats on (
-        target_hash = formats.hash
-        AND an.project_id = formats.project_id
-    )
-    LEFT JOIN apis.fields on (
-        (
-            (fields.hash = formats.field_hash )
-            AND an.project_id = fields.project_id
-        )
-        OR fields.hash = formats.field_hash
-    )
-    LEFT JOIN apis.shapes on (
-        target_hash = shapes.hash
-        AND an.project_id = shapes.project_id
-    )
-    LEFT JOIN apis.endpoints ON (
-        starts_with(an.target_hash, endpoints.hash)
-        AND an.project_id = endpoints.project_id
-    )
-where
-    (anomaly_type = 'endpoint')
-    OR (
-        anomaly_type = 'shape'
-        AND endpoints.project_id = an.project_id
-        AND endpoints.created_at != an.created_at
-    )
-    OR (
-        anomaly_type = 'format'
-        AND fields.project_id = an.project_id
-        AND fields.created_at != an.created_at
-    )
-    OR NOT ( anomaly_type = ANY('{"endpoint","shape","field","format"}'::apis.anomaly_type[]));
-
-CREATE UNIQUE INDEX idx_apis_anomaly_vm_id ON apis.anomalies_vm (id);
-CREATE INDEX idx_apis_anomaly_vm_project_id ON apis.anomalies_vm (project_id);
-CREATE INDEX idx_apis_anomaly_vm_anomaly_type ON apis.anomalies_vm (anomaly_type);
-CREATE INDEX idx_apis_anomaly_vm_project_id_target_hash ON apis.anomalies_vm (project_id, target_hash);
-CREATE INDEX idx_apis_anomaly_vm_project_id_endpoint_id ON apis.anomalies_vm (project_id, endpoint_id);
-
 CREATE OR REPLACE PROCEDURE apis.refresh_request_dump_views_every_5mins(job_id int, config jsonb) LANGUAGE PLPGSQL AS
 $$
 BEGIN
@@ -611,16 +542,6 @@ $$;
 -- Refresh view every 5mins
 SELECT add_job('apis.refresh_request_dump_views_every_5mins','5min');
 
-------------------------
- CREATE OR REPLACE PROCEDURE apis.refresh_request_dump_views_every_2mins(job_id int, config jsonb) LANGUAGE PLPGSQL AS
- $$
- BEGIN
-   RAISE NOTICE 'Executing action % with config %', job_id, config;
-   REFRESH MATERIALIZED VIEW CONCURRENTLY apis.anomalies_vm;
- END
- $$;
- -- Refresh view every 5mins
- SELECT add_job('apis.refresh_request_dump_views_every_2mins','2min');
 --------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS background_jobs 
