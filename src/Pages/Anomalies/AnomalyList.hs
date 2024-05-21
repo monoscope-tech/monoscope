@@ -66,7 +66,6 @@ import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Components qualified as Components
 import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
-import Pkg.Components (loader)
 import PyF (fmt)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
@@ -188,12 +187,9 @@ anomalyListGetH pid layoutM ackdM archivedM sortM pageM loadM endpointM hxReques
       anom = case nextFetchUrl of
         Just url -> do
           mapM_ (renderIssue False currTime) issues
-          if length issues > fLimit - 1
-            then a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] do
-              div_ [class_ "htmx-indicator query-indicator"] do
-                loader
-              "LOAD MORE"
-            else ""
+          when (length issues == fLimit) $  
+            a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] do
+              span_[class_ "htmx-indicator query-indicator loading loading-dots loading-md"] ""  >> "LOAD MORE"
         Nothing -> mapM_ (renderIssue False currTime) issues
   case (layoutM, hxRequestM, hxBoostedM, loadM) of
     (Just "slider", Just "true", _, _) -> addRespHeaders $ anomalyListSlider currTime pid endpointM (Just issues)
@@ -217,8 +213,7 @@ issuesListPage paramInput pid currTime issues nextFetchUrl = div_ [class_ "w-ful
           div_ [class_ "flex justify-end  w-full p-4 "] do
             button_ [class_ "bg-gray-200 rounded-full p-2 text-gray-500 hover:bg-gray-300 hover:text-gray-700", [__|on click add .hidden to #expand-an-modal|]] do
               faSprite_ "xmark" "regular" "h-4 w-4"
-          div_ [id_ "an-modal-content-loader", class_ "bg-white rounded z-50 border p-4 absolute top-[40vh] left-1/2 -translate-x-1/2 -translate-y-1/2"] do
-            loader
+          div_ [id_ "an-modal-content-loader", class_ "bg-white rounded z-50 border p-4 absolute top-[40vh] left-1/2 -translate-x-1/2 -translate-y-1/2 loading loading-dots loading-md"] ""
           div_ [class_ "px-2", id_ "an-modal-content"] pass
   h3_ [class_ "text-xl text-slate-700 flex place-items-center"] "Issues: Changes, Alerts & Errors"
   div_ [class_ "py-2 px-2 space-x-6 border-b border-slate-20 mt-6 mb-8 text-sm font-light", hxBoost_ "true"] do
@@ -276,8 +271,7 @@ issuesList paramInput pid currTime issues nextFetchUrl = form_ [class_ "col-span
           a_ [class_ "cursor-pointer"] "24h"
           a_ [class_ "cursor-pointer font-bold text-base"] "14d"
       div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "font-base"] "EVENTS"
-      div_ [class_ "p-12 fixed rounded-lg shadow bg-white top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 htmx-indicator query-indicator", id_ "sortLoader"] do
-        loader
+      div_ [class_ "p-12 fixed rounded-lg shadow bg-white top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 htmx-indicator loading loading-dots loading-md", id_ "sortLoader"] ""
 
   when (null issues) $ section_ [class_ "mx-auto w-max p-5 sm:py-10 sm:px-16 items-center flex my-10 gap-16"] do
     div_ [] do
@@ -291,9 +285,7 @@ issuesList paramInput pid currTime issues nextFetchUrl = form_ [class_ "col-span
   whenJust nextFetchUrl \url ->
     when (length issues > 60)
       $ a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] do
-        div_ [class_ "htmx-indicator query-indicator"] do
-          loader
-        "LOAD MORE"
+        span_ [class_ "htmx-indicator loading loading-dots loading-md"] "" >> "LOAD MORE"
 
 
 anomalyListSlider :: UTCTime -> Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe (Vector Anomalies.IssueL) -> Html ()
@@ -418,7 +410,7 @@ issueItem hideByDefault currTime issue icon title subTitle content = do
         ""
     div_ [class_ "w-36 flex items-center justify-center"]
       $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"]
-      $ "0" -- show issue.eventsCount14d
+      $ show issue.eventsAgg.count
 
 
 anomalyDetailsGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
