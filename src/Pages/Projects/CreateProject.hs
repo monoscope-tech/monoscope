@@ -528,6 +528,7 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
             script_
               [text|
                const price_indicator = document.querySelector("#price_range");
+               window.graduatedRangeUrl = "$graduatedCheckoutOne"
                let plan = "month";
                const prices = [49, 88, 215, 420, 615, 800]
                const saves = [6, 12, 35, 80, 135, 200]
