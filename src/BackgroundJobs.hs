@@ -466,7 +466,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
           , issueData = Anomalies.IDNewRuntimeExceptionIssue err.errorData
           , acknowlegedAt = Nothing
           , acknowlegedBy = Nothing
-          , endpointId = Nothing 
+          , endpointId = Nothing
           , archivedAt = Nothing
           }
       forM_ project.notificationsChannel \case
