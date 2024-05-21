@@ -321,7 +321,7 @@ createProjectBody :: Sessions.PersistentSession -> EnvConfig -> Bool -> CreatePr
 createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
   let paymentPlan = if cp.paymentPlan == "" then "UsageBased" else cp.paymentPlan
   section_ [id_ "main-content", class_ "p-3 py-5 sm:p-6 overflow-y-scroll h-full"] do
-    div_ [class_ "mx-auto", style_ "max-width:950px"] do
+    div_ [class_ "mx-auto", style_ "max-width:1000px"] do
       h2_ [class_ "text-slate-700 text-3xl font-medium mb-5"] $ toHtml @String $ if isUpdate then "Project Settings" else "Create Project"
       div_ [class_ "grid gap-5"] do
         form_
@@ -371,8 +371,7 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
                 span_ [class_ "text-red-400"] " *"
               div_ [class_ "grid sm:grid-cols-2 md:grid-cols-3 gap-4 border-1"] do
                 ( [ ("Free", "20k", "$0", "2", cp.paymentPlan == "Free", "Free"),
-                    ("Pay as you use", "250k", "$1", "Unlimited", paymentPlan == "UsageBased", "UsageBased"),
-                    ("Graduated Pricing", "250k", "$49", "Unlimited", paymentPlan == "GraduatedPricing", "GraduatedPricing")
+                    ("Pay as you use", "250k", "$1", "Unlimited", paymentPlan == "UsageBased", "UsageBased")
                   ] ::
                     [(Text, Text, Text, Text, Bool, Text)]
                   )
@@ -402,40 +401,39 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
                           case value of
                             "Free" -> do
                               span_ [class_ "text-slate-500"] "/month"
-                            "GraduatedPricing" -> do
-                              span_ [class_ "text-slate-500"] "/550k reqs"
-                              span_ [class_ "text-blue-500 block mt-2"] "then $1 per 10k reqs"
                             _ -> span_ [class_ "text-slate-500"] "/additional 10k requests"
-                        div_ [class_ "flex flex-col gap-2 p-3"] do
-                          div_ [class_ "flex items-center gap-1"] do
-                            checkMark
-                            small_ "Max "
-                            span_ $ toHtml team
-                            small_ " team members"
-                          if value == "Free"
-                            then do
-                              div_ [class_ "flex gap-1 items-center"] do
-                                checkMark
-                                small_ "20k requests per month"
-                              div_ [class_ "flex gap-1 items-center"] do
-                                checkMark
-                                small_ "7 days data retention"
-                            else do
-                              div_ [class_ "flex gap-1 items-center"] do
-                                checkMark
-                                small_ "14 days data retention"
-                              div_ [class_ "flex gap-1 items-center"] do
-                                checkMark
-                                small_ "API testing pipelines"
-                              div_ [class_ "flex gap-1 items-center"] do
-                                checkMark
-                                small_ "API swagger/OpenAPI hosting"
-                              div_ [class_ "flex gap-1 items-center"] do
-                                checkMark
-                                small_ "API metrics custom monitors"
-                              div_ [class_ "flex gap-1 items-center"] do
-                                checkMark
-                                small_ "API live traffic AI-based validations"
+                        checkList value team
+                let isSelected = paymentPlan == "GraduatedPricing"
+                let isSelectedTxt = toLower $ show $ isSelected
+                let value = "GraduatedPricing"
+                a_
+                  [ class_ $ "payment-plans cursor-pointer space-y-1 border border-1  block p-2  rounded-md " <> if isSelected then " border-2 border-blue-300 shadow-lg" else "",
+                    term
+                      "_"
+                      [text| 
+                          init if $isSelectedTxt then set window.paymentPlan to $value end 
+                          on click  set window.paymentPlan to $value
+                               then set #paymentPlanEl.value to "$value"
+                               then remove .border-2 .border-blue-300 .shadow-lg from .payment-plans
+                               then remove .payment-radio-active from .payment-radio 
+                               then add .payment-radio-active to (.payment-radio in me)
+                               then add .border-2 .border-blue-300 .shadow-lg to me
+                               |]
+                  ]
+                  do
+                    div_ [class_ "flex items-center justify-between border-b border-b-1 p-2"] do
+                      h4_ [class_ "text-xl font-medium text-slate-700"] $ toHtml "Graduated Pricing"
+                      div_ [class_ $ "grid place-items-center h-6 w-6 bg-gray-200 border rounded-full payment-radio " <> if isSelected then "payment-radio-active" else ""] do
+                        div_ [class_ "bg-white h-3 w-3 hidden rounded-full"] ""
+                    div_ [class_ "text-lg py-3 px-2"] do
+                      span_ [class_ "text-2xl text-blue-700", id_ "price"] $ toHtml "499"
+                      span_ [class_ "text-slate-500", id_ "num_requests"] "/550k reqs"
+                      span_ [class_ "text-blue-500 block mt-2"] "then $1 per 10k reqs"
+                    div_ [class_ "relative flex items-center w-full bg-gray-200 h-2 rounded-full", id_ "price_container"] do
+                      div_ [class_ "h-full relative bg-blue-500 w-0 rounded-l-full", id_ "price_indicator"] pass
+                      div_ [class_ "h-6 w-6 rounded-full bg-blue-500", id_ "price_bulb"] pass
+
+                    checkList "GR" "Unlimited"
 
             div_ [class_ $ "mt-10 " <> if isUpdate then "hidden" else ""] do
               p_ [class_ "text-slate-400 mx-2 font-light text-sm"] "Invite a project member"
@@ -519,6 +517,47 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
            });
             |]
 
+            script_
+              [text|
+
+          const price_indicator = document.querySelector("#price_indicator");
+          const price_container = document.querySelector("#price_container")
+          let mouseState = {x: 0}
+          let resizeStart = false
+          let target = ""
+          const prices = [49, 80, 200, 250, 300, 400, 500, 650]
+          const requests = ["550k", "1M", "2.5M", "5M", "7.5M", "10M"]
+          const containerWidth = Number(window.getComputedStyle(price_container).width.replace('px',''))
+          const componentWidth = containerWidth / prices.length
+          function mouseDown(event) {
+              resizeStart = true
+              mouseState = {x: event.pageX}
+              target = event.target.id
+              console.log(target)
+          }
+
+          function handleMouseMove(event) {
+            if(!resizeStart) return
+            const diff = event.pageX - mouseState.x
+            mouseState = {x: event.pageX}
+            const bar_width = Number(price_indicator.style.width.replace('px',''))
+            const ind = Math.floor(bar_width)/componentWidth
+            price_indicator.style.width = (bar_width + diff) + 'px'
+            document.querySelector("#price").innerText = prices[ind]
+            document.querySelector("#num_requests").innerText = requests[ind]
+          }
+
+          function handleMouseup(event) {
+            resizeStart = false 
+            target = ""
+          }
+         const bulb = document.getElementById("price_bulb")
+         bulb.addEventListener('click', (e) => {e.stopPropagation()})
+         window.addEventListener('mousemove', handleMouseMove)
+         window.addEventListener('mouseup', handleMouseup)
+         bulb.addEventListener('mousedown', mouseDown)
+            |]
+
             div_ [class_ "p-5 flex w-full justify-end"] do
               -- if isUpdate then
               --     button_ [class_ "inline-block py-2 px-5 bg-blue-700  text-[white] text-sm rounded-xl cursor-pointer"
@@ -587,3 +626,36 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
 checkMark :: Html ()
 checkMark =
   div_ [class_ "flex items-center justify-center text-center font-bold text-green-500 rounded-md w-5 h-5 bg-gray-200"] "✓"
+
+checkList :: Text -> Text -> Html ()
+checkList value team =
+  div_ [class_ "flex flex-col gap-2 p-3"] do
+    div_ [class_ "flex items-center gap-1"] do
+      checkMark
+      small_ "Max "
+      span_ $ toHtml team
+      small_ " team members"
+    if value == "Free"
+      then do
+        div_ [class_ "flex gap-1 items-center"] do
+          checkMark
+          small_ "20k requests per month"
+        div_ [class_ "flex gap-1 items-center"] do
+          checkMark
+          small_ "7 days data retention"
+      else do
+        div_ [class_ "flex gap-1 items-center"] do
+          checkMark
+          small_ "14 days data retention"
+        div_ [class_ "flex gap-1 items-center"] do
+          checkMark
+          small_ "API testing pipelines"
+        div_ [class_ "flex gap-1 items-center"] do
+          checkMark
+          small_ "API swagger/OpenAPI hosting"
+        div_ [class_ "flex gap-1 items-center"] do
+          checkMark
+          small_ "API metrics custom monitors"
+        div_ [class_ "flex gap-1 items-center"] do
+          checkMark
+          small_ "API live traffic AI-based validations"
