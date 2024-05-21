@@ -105,6 +105,8 @@ unAcknowlegeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCt
 unAcknowlegeAnomalyGetH pid aid = do
   (sess, project) <- Sessions.sessionAndProject pid
   let q = [sql| update apis.anomalies set acknowleged_by=null, acknowleged_at=null where id=? |]
+  let qI = [sql| update apis.issues set acknowleged_by=null, acknowleged_at=null where id=? |]
+  _ <- dbtToEff $ execute Update qI (Only aid)
   _ <- dbtToEff $ execute Update q (Only aid)
   addRespHeaders $ anomalyAcknowlegeButton pid aid False
 
@@ -113,6 +115,8 @@ archiveAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (Re
 archiveAnomalyGetH pid aid = do
   (sess, project) <- Sessions.sessionAndProject pid
   let q = [sql| update apis.anomalies set archived_at=NOW() where id=? |]
+  let qI = [sql| update apis.issues set archived_at=NOW() where id=? |]
+  _ <- dbtToEff $ execute Update qI (Only aid)
   _ <- dbtToEff $ execute Update q (Only aid)
   addRespHeaders $ anomalyArchiveButton pid aid True
 
@@ -121,6 +125,8 @@ unArchiveAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (
 unArchiveAnomalyGetH pid aid = do
   (sess, project) <- Sessions.sessionAndProject pid
   let q = [sql| update apis.anomalies set archived_at=null where id=? |]
+  let qI = [sql| update apis.issues set archived_at=null where id=? |]
+  _ <- dbtToEff $ execute Update qI (Only aid)
   _ <- dbtToEff $ execute Update q (Only aid)
   addRespHeaders $ anomalyArchiveButton pid aid False
 
@@ -201,7 +207,7 @@ anomalyListGetH pid layoutM ackdM archivedM sortM page loadM endpointM hxRequest
     _ -> addRespHeaders $ bodyWrapper bwconf $ issuesListPage paramInput pid currTime issues nextFetchUrl
 
 
-issuesListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Anomalies.Issue -> Maybe Text -> Html ()
+issuesListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Anomalies.IssueL -> Maybe Text -> Html ()
 issuesListPage paramInput pid currTime issues nextFetchUrl = div_ [class_ "w-full mx-auto  px-16 pt-10 pb-24  overflow-y-scroll h-full"] do
   div_
     [ style_ "z-index:26"
@@ -227,7 +233,7 @@ issuesListPage paramInput pid currTime issues nextFetchUrl = div_ [class_ "w-ful
   div_ [class_ "grid grid-cols-5 card-round", id_ "anomalyListBelowTab", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $ issuesList paramInput pid currTime issues nextFetchUrl
 
 
-issuesList :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Anomalies.Issue -> Maybe Text -> Html ()
+issuesList :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Anomalies.IssueL -> Maybe Text -> Html ()
 issuesList paramInput pid currTime issues nextFetchUrl = form_ [class_ "col-span-5 bg-white divide-y ", id_ "anomalyListForm"] do
   let bulkActionBase = "/p/" <> pid.toText <> "/anomalies/bulk_actions"
   let currentURL' = deleteParam "sort" paramInput.currentURL
@@ -294,7 +300,7 @@ issuesList paramInput pid currTime issues nextFetchUrl = form_ [class_ "col-span
         "LOAD MORE"
 
 
-anomalyListSlider :: UTCTime -> Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe (Vector Anomalies.Issue) -> Html ()
+anomalyListSlider :: UTCTime -> Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe (Vector Anomalies.IssueL) -> Html ()
 anomalyListSlider _ _ _ (Just []) = ""
 anomalyListSlider _ pid eid Nothing = do
   div_ [hxGet_ $ "/p/" <> pid.toText <> "/anomalies?layout=slider" <> maybe "" (\x -> "&endpoint=" <> x.toText) eid, hxSwap_ "outerHTML", hxTrigger_ "load"] do
@@ -371,7 +377,7 @@ anomalyAccentColor True False = "bg-green-200"
 anomalyAccentColor False False = "bg-red-800"
 
 
-issueItem :: Bool -> UTCTime -> Anomalies.Issue -> Text -> Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
+issueItem :: Bool -> UTCTime -> Anomalies.IssueL -> Text -> Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
 issueItem hideByDefault currTime issue icon title subTitle content = do
   let issueId = Anomalies.anomalyIdText issue.id
   div_ [class_ $ "flex py-4 gap-8 " <> if hideByDefault then "card-round bg-white px-5" else "", style_ (if hideByDefault then "display:none" else ""), id_ issueId] do
@@ -647,7 +653,7 @@ anomalyFormatOverview an prevFormats =
             li_ [class_ "ml-10 text-slate-800 text-sm"] $ toHtml ex
 
 
-issueDisplayConfig :: Anomalies.Issue -> (Text, Text)
+issueDisplayConfig :: Anomalies.IssueL -> (Text, Text)
 issueDisplayConfig issue = case issue.issueData of
   Anomalies.IDNewFieldIssue _ -> ("New Field Found", "/assets/svgs/anomalies/fields.svg")
   Anomalies.IDNewShapeIssue _ -> ("New Request Shape", "/assets/svgs/anomalies/fields.svg")
@@ -657,7 +663,7 @@ issueDisplayConfig issue = case issue.issueData of
   Anomalies.IDEmpty -> ("Unknown anomaly", "/assets/svgs/anomalies/fields.svg")
 
 
-renderIssue :: Bool -> UTCTime -> Anomalies.Issue -> Html ()
+renderIssue :: Bool -> UTCTime -> Anomalies.IssueL -> Html ()
 renderIssue hideByDefault currTime issue = do
   let (issueTitle, icon) = issueDisplayConfig issue
   case issue.issueData of

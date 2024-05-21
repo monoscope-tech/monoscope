@@ -6,7 +6,6 @@ import Control.Lens ((.~))
 import Data.Aeson as Aeson
 import Data.Aeson.QQ (aesonQQ)
 import Data.CaseInsensitive qualified as CI
-import Data.Default
 import Data.List.Extra (intersect, union)
 import Data.Pool (withResource)
 import Data.Text qualified as T
@@ -457,14 +456,18 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
       issueId <- liftIO $ Anomalies.AnomalyId <$> UUIDV4.nextRandom
       dbtToEff
         $ Ent.insert @Anomalies.Issue
-        $ (def :: Anomalies.Issue)
-          { Anomalies.id = issueId
-          , Anomalies.createdAt = err.createdAt
-          , Anomalies.updatedAt = err.updatedAt
-          , Anomalies.projectId = pid
-          , Anomalies.anomalyType = Anomalies.ATRuntimeException
-          , Anomalies.targetHash = targetHash
-          , Anomalies.issueData = Anomalies.IDNewRuntimeExceptionIssue err.errorData
+        $ Anomalies.Issue
+          { id = issueId
+          , createdAt = err.createdAt
+          , updatedAt = err.updatedAt
+          , projectId = pid
+          , anomalyType = Anomalies.ATRuntimeException
+          , targetHash = targetHash
+          , issueData = Anomalies.IDNewRuntimeExceptionIssue err.errorData
+          , acknowlegedAt = Nothing
+          , acknowlegedBy = Nothing
+          , endpointId = Nothing 
+          , archivedAt = Nothing
           }
       forM_ project.notificationsChannel \case
         Projects.NSlack ->

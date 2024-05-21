@@ -21,7 +21,6 @@ import Data.Time.Format (
   formatTime,
   parseTimeM,
  )
-import Pages.Components qualified as Components
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as V
 import Data.Vector qualified as Vector
@@ -37,6 +36,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
+import Pages.Components qualified as Components
 import Pages.Monitors.Alerts qualified as Alerts
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
@@ -452,10 +452,11 @@ logItemCol_ pid reqVec colIdxMap "id" = do
   let (logItemPath, reqId) = fromMaybe ("", "") $ requestDumpLogItemUrlPath pid reqVec colIdxMap
   div_ [class_ "grid grid-cols-3 gap-4 items-center max-w-8"] do
     a_ [class_ $ "col-span-1 shrink-0 inline-block h-full w-1 " <> errClass, term "data-tippy-content" $ show errCount <> " errors attached to this request; status " <> show status] " "
-    div_ [class_ "col-span-1"] $ Components.drawerWithURLContent_
+    div_ [class_ "col-span-1"]
+      $ Components.drawerWithURLContent_
         ("expand-log-drawer-" <> reqId)
         (logItemPath <> "/detailed")
-        $ faSprite_ "link" "solid" "h-3 w-3 text-blue-500"
+      $ faSprite_ "link" "solid" "h-3 w-3 text-blue-500"
     faSprite_ "chevron-right" "solid" "h-3 w-3 col-span-1 ml-1 text-gray-500 chevron log-chevron "
 logItemCol_ _ reqVec colIdxMap "created_at" = span_ [class_ "font-mono whitespace-nowrap ", term "data-tippy-content" "timestamp"] $ toHtml $ displayTimestamp $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "created_at"
 logItemCol_ _ reqVec colIdxMap "status_code" = span_ [class_ $ "badge " <> getStatusColor (lookupVecIntByKey reqVec colIdxMap "status_code"), term "data-tippy-content" "status"] $ toHtml $ show @Text $ lookupVecIntByKey reqVec colIdxMap "status_code"

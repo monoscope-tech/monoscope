@@ -6,6 +6,7 @@ module Models.Apis.Anomalies (
   errorByHash,
   AnomalyActions (..),
   Issue (..),
+  IssueL (..),
   AnomalyTypes (..),
   AnomalyId (..),
   IssuesData (..),
@@ -32,6 +33,7 @@ module Models.Apis.Anomalies (
 where
 
 import Data.Aeson qualified as AE
+import Data.ByteString.Char8 qualified as BSC
 import Data.Default (Default, def)
 import Data.Time
 import Data.UUID qualified as UUID
@@ -43,6 +45,7 @@ import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, ResultError (ConversionFailed, UnexpectedNull), fromField, returnError)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Simple.Time (parseUTCTime)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Database.PostgreSQL.Transact (DBT)
@@ -60,9 +63,12 @@ import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
-import Relude hiding (id)
+import Relude hiding (id, many, some)
 import Relude.Unsafe qualified as Unsafe
 import Servant (FromHttpApiData (..))
+import Text.Megaparsec
+import Text.Megaparsec.Char
+import Text.Megaparsec.Char.Lexer qualified as L
 import Utils
 
 
@@ -272,13 +278,13 @@ getShapeParentAnomalyVM :: Projects.ProjectId -> Text -> DBT IO Int
 getShapeParentAnomalyVM pid hash = do
   result <- query Select q (pid, hash)
   case result of
-    [Only count] -> return count
+    [Only countt] -> return countt
     v -> return $ length v
   where
     q =
       [sql|SELECT COUNT(*) 
-           FROM apis.issues JOIN apis.anomalies aan ON avm.id = aan.id
-           WHERE avm.project_id = ? AND ? LIKE avm.target_hash ||'%' AND avm.anomaly_type='endpoint' AND aan.acknowleged_at IS NULL
+           FROM apis.issues iss JOIN apis.anomalies aan ON iss.id = aan.id
+           WHERE iss.project_id = ? AND ? LIKE iss.target_hash ||'%' AND iss.anomaly_type='endpoint' AND aan.acknowleged_at IS NULL
       |]
 
 
@@ -286,19 +292,19 @@ getFormatParentAnomalyVM :: Projects.ProjectId -> Text -> DBT IO Int
 getFormatParentAnomalyVM pid hash = do
   result <- query Select q (pid, hash)
   case result of
-    [Only count] -> return count
+    [Only countt] -> return countt
     v -> return $ length v
   where
     q =
       [sql|
               SELECT COUNT(*) 
-              FROM apis.issues avm 
-              JOIN apis.anomalies aan ON avm.id = aan.id
-              WHERE avm.project_id = ? AND ? LIKE avm.target_hash ||'%' AND avm.anomaly_type != 'format' AND aan.acknowleged_at IS NULL
+              FROM apis.issues iss 
+              JOIN apis.anomalies aan ON iss.id = aan.id
+              WHERE iss.project_id = ? AND ? LIKE iss.target_hash ||'%' AND iss.anomaly_type != 'format' AND aan.acknowleged_at IS NULL
       |]
 
 
-selectIssues :: Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Int -> Int -> DBT IO (Vector Issue)
+selectIssues :: Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Int -> Int -> DBT IO (Vector IssueL)
 selectIssues pid endpointM isAcknowleged isArchived sortM limitM skipM = query Select (Query $ encodeUtf8 q) (MkDBField pid : paramList)
   where
     boolToNullSubQ a = if a then " not " else ""
@@ -324,8 +330,15 @@ selectIssues pid endpointM isAcknowleged isArchived sortM limitM skipM = query S
 
     q =
       [text|
-SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash, issue_data, endpoint_id, acknowleged_by, archived_at
-    FROM apis.issues WHERE project_id = ? $cond
+SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash, issue_data, 
+    endpoint_id, acknowleged_by, archived_at,
+    CASE 
+      WHEN anomaly_type='endpoint' THEN (select (count(*), max(created_at)) from apis.request_dumps where project_id=iss.project_id AND endpoint_hash=iss.target_hash AND created_at > current_timestamp - interval '14d' )
+      WHEN anomaly_type='shape' THEN (select (count(*), max(created_at)) from apis.request_dumps where project_id=iss.project_id AND shape_hash=iss.target_hash AND created_at > current_timestamp - interval '14d' )
+      WHEN anomaly_type='runtime_exception' THEN (select (count(*), max(created_at)) from apis.request_dumps where project_id=iss.project_id AND errors @> ('[{"hash": "' || iss.target_hash || '"}]')::jsonb AND created_at > current_timestamp - interval '14d')
+      ELSE (0, NOW()::TEXT)
+    END as req_count
+    FROM apis.issues iss WHERE project_id = ? $cond
     ORDER BY $orderBy $skip $limit |]
 
 
@@ -335,14 +348,14 @@ getReportAnomalies pid report_type = query Select (Query $ encodeUtf8 q) pid
     report_interval = if report_type == "daily" then ("'24 hours'" :: Text) else "'7 days'"
     q =
       [text|
-  SELECT avm.id, avm.created_at, avm.updated_at, avm.project_id, aan.acknowleged_at, aan.acknowleged_by, avm.anomaly_type, avm.action, avm.target_hash,
+  SELECT avm.id, avm.created_at, avm.updated_at, avm.project_id, aan.acknowleged_at, 
+         aan.acknowleged_by, avm.anomaly_type, avm.action, avm.target_hash,
          avm.shape_id, avm.new_unique_fields, avm.deleted_fields, avm.updated_field_formats, 
          avm.field_id, avm.field_key, avm.field_key_path, avm.field_category, avm.field_format, 
          avm.format_id, avm.format_type, avm.format_examples, 
          avm.endpoint_id, avm.endpoint_method, avm.endpoint_url_path, aan.archived_at,
          count(rd.id) events, max(rd.created_at) last_seen
-      FROM
-          apis.anomalies_vm avm
+      FROM apis.anomalies_vm avm
       JOIN apis.anomalies aan ON avm.id = aan.id
       JOIN apis.request_dumps rd ON avm.project_id=rd.project_id 
           AND (avm.target_hash=ANY(rd.format_hashes) AND avm.anomaly_type='format')
@@ -355,8 +368,7 @@ getReportAnomalies pid report_type = query Select (Query $ encodeUtf8 q) pid
           AND aan.acknowleged_at IS NULL
           AND aan.archived_at IS NULL
       GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25
-      HAVING count(rd.id) > 5
-      limit 11;
+      HAVING count(rd.id) > 5 limit 11;
         |]
 
 
@@ -364,7 +376,7 @@ countAnomalies :: Projects.ProjectId -> Text -> DBT IO Int
 countAnomalies pid report_type = do
   result <- query Select (Query $ encodeUtf8 q) pid
   case result of
-    [Only count] -> return count
+    [Only countt] -> return countt
     v -> return $ length v
   where
     report_interval = if report_type == "daily" then ("'24 hours'" :: Text) else "'7 days'"
@@ -512,6 +524,57 @@ data Issue = Issue
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "issues", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Issue)
+
+
+data IssueEventAgg = IssueEventAgg
+  { count :: Int
+  , lastSeen :: UTCTime
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (NFData)
+
+
+instance FromField IssueEventAgg where
+  fromField f mdata = case mdata of
+    Nothing -> returnError UnexpectedNull f ""
+    Just bs -> case parseMaybe parseIssueEventAgg (BSC.unpack bs) of
+      Nothing -> returnError ConversionFailed f "Failed to parse IssueEventAgg"
+      Just result -> return result
+
+
+type Parser = Parsec Void String
+
+
+parseIssueEventAgg :: Parser IssueEventAgg
+parseIssueEventAgg = do
+  _ <- char '('
+  cnt <- L.decimal
+  _ <- char ','
+  _ <- space
+  str <- char '"' *> manyTill L.charLiteral (char '"')
+  utcTime <- case parseUTCTime (encodeUtf8 str) of
+    Left err -> fail err
+    Right time -> return time
+  _ <- char ')'
+  pure $ IssueEventAgg cnt utcTime
+
+
+data IssueL = IssueL
+  { id :: AnomalyId
+  , createdAt :: ZonedTime
+  , updatedAt :: ZonedTime
+  , projectId :: Projects.ProjectId
+  , acknowlegedAt :: Maybe ZonedTime
+  , anomalyType :: AnomalyTypes
+  , targetHash :: Text
+  , issueData :: IssuesData
+  , endpointId :: Maybe Endpoints.EndpointId
+  , acknowlegedBy :: Maybe Users.UserId
+  , archivedAt :: Maybe ZonedTime
+  , eventsAgg :: IssueEventAgg
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (FromRow, NFData)
 
 
 -- Helper function to create IssuesData based on AnomalyType

@@ -392,6 +392,7 @@ SELECT add_compression_policy('apis.request_dumps', INTERVAL '7d');
 CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_project_id_parent_id ON apis.request_dumps(project_id, parent_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_project_id_endpoint_hash ON apis.request_dumps(project_id, endpoint_hash, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_apis_request_dumps_project_id_shape_hash ON apis.request_dumps(project_id, shape_hash, created_at DESC);
+CREATE INDEX IF NOT EXISTS idxgin_apis_request_dumps_errors ON apis.request_dumps USING GIN (errors);
 
 -- ==========================================================================================================================
 --                    END OF REQUEST DUMP AND ITS CONTINUOUS AGGREGATES
