@@ -30,7 +30,7 @@ import { APIToolkit } from 'apitoolkit-express';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-  const apiToolkitClient = APIToolkit.NewClient({ apikey: "$apikey" });
+  const apiToolkitClient = APIToolkit.NewClient({ apiKey: "$apikey" });
   const app = await NestFactory.create(AppModule);
   app.use(apiToolkitClient.expressMiddleware);
   await app.listen(3000);

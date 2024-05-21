@@ -1,6 +1,17 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
-module Models.Apis.Shapes (Shape (..), ShapeWithFields (..), SwShape (..), ShapeId (..), getShapeFields, shapeIdText, insertShapeQueryAndParam, insertShapes, shapesByEndpointHashes, shapesByEndpointHash) where
+module Models.Apis.Shapes (
+  Shape (..),
+  ShapeWithFields (..),
+  SwShape (..),
+  ShapeId (..),
+  getShapeFields,
+  shapeIdText,
+  insertShapeQueryAndParam,
+  insertShapes,
+  shapesByEndpointHashes,
+  shapesByEndpointHash,
+) where
 
 import Data.Aeson qualified as AE
 import Data.Default (Default)

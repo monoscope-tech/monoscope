@@ -29,6 +29,9 @@ fn run_testkit(file: &str) -> String {
 
     match result {
         Ok(res) => to_json_string(&res),
-        Err(e) => json!({"error": e.to_string()}).to_string(),
+        Err(e) => json!({
+            "error": e.to_string(),
+            "stacktrace": std::backtrace::Backtrace::force_capture().to_string(),
+        }).to_string(),
     }
 }

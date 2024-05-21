@@ -36,6 +36,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
+import Pages.Components qualified as Components
 import Pages.Monitors.Alerts qualified as Alerts
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
@@ -367,14 +368,14 @@ curateCols summaryCols cols = sortBy sortAccordingly filteredCols
 logItemRows_ :: Projects.ProjectId -> V.Vector (V.Vector Value) -> [Text] -> HM.HashMap Text Int -> Text -> Html ()
 logItemRows_ pid requests curatedCols colIdxMap nextLogsURL = do
   forM_ requests \reqVec -> do
-    let logItemPath = requestDumpLogItemUrlPath pid reqVec colIdxMap
+    let (logItemPath, _reqId) = fromMaybe ("", "") $ requestDumpLogItemUrlPath pid reqVec colIdxMap
     let (_, errCount, errClass) = errorClass True reqVec colIdxMap
     tr_ [class_ "cursor-pointer ", [__|on click toggle .hidden on next <tr/> then toggle .expanded-log on me|]]
       $ forM_ curatedCols (td_ . logItemCol_ pid reqVec colIdxMap)
     tr_ [class_ "hidden"] $ do
       -- used for when a row is expanded.
       td_ $ a_ [class_ $ "inline-block h-full " <> errClass, term "data-tippy-content" $ show errCount <> " errors attached to this request"] ""
-      td_ [colspan_ $ show $ length curatedCols - 1] $ div_ [hxGet_ $ fromMaybe "" logItemPath, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
+      td_ [colspan_ $ show $ length curatedCols - 1] $ div_ [hxGet_ $ logItemPath, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
   when (Vector.length requests > 199)
     $ tr_
     $ td_ [colspan_ $ show $ length curatedCols]
@@ -448,15 +449,13 @@ displayTimestamp inputDateString =
 logItemCol_ :: Projects.ProjectId -> V.Vector Value -> HM.HashMap Text Int -> Text -> Html ()
 logItemCol_ pid reqVec colIdxMap "id" = do
   let (status, errCount, errClass) = errorClass False reqVec colIdxMap
-  let logItemPath = requestDumpLogItemUrlPath pid reqVec colIdxMap
+  let (logItemPath, reqId) = fromMaybe ("", "") $ requestDumpLogItemUrlPath pid reqVec colIdxMap
   div_ [class_ "grid grid-cols-3 gap-4 items-center max-w-8"] do
     a_ [class_ $ "col-span-1 shrink-0 inline-block h-full w-1 " <> errClass, term "data-tippy-content" $ show errCount <> " errors attached to this request; status " <> show status] " "
-    button_
-      [ class_ "col-span-1"
-      , hxGet_ (fromMaybe "" logItemPath <> "/detailed")
-      , hxTarget_ "#expand-log-modal"
-      , [__|on click remove .hidden from #expand-log-modal|]
-      ]
+    div_ [class_ "col-span-1"]
+      $ Components.drawerWithURLContent_
+        ("expand-log-drawer-" <> reqId)
+        (logItemPath <> "/detailed")
       $ faSprite_ "link" "solid" "h-3 w-3 text-blue-500"
     faSprite_ "chevron-right" "solid" "h-3 w-3 col-span-1 ml-1 text-gray-500 chevron log-chevron "
 logItemCol_ _ reqVec colIdxMap "created_at" = span_ [class_ "font-mono whitespace-nowrap ", term "data-tippy-content" "timestamp"] $ toHtml $ displayTimestamp $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "created_at"
@@ -477,11 +476,11 @@ logItemCol_ _ reqVec colIdxMap key =
     $ maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)
 
 
-requestDumpLogItemUrlPath :: Projects.ProjectId -> V.Vector Value -> HM.HashMap Text Int -> Maybe Text
+requestDumpLogItemUrlPath :: Projects.ProjectId -> V.Vector Value -> HM.HashMap Text Int -> Maybe (Text, Text)
 requestDumpLogItemUrlPath pid rd colIdxMap = do
   rdId <- lookupVecTextByKey rd colIdxMap "id"
   rdCreatedAt <- lookupVecTextByKey rd colIdxMap "created_at"
-  pure $ "/p/" <> pid.toText <> "/log_explorer/" <> rdId <> "/" <> rdCreatedAt
+  pure $ ("/p/" <> pid.toText <> "/log_explorer/" <> rdId <> "/" <> rdCreatedAt, rdId)
 
 
 -- TODO:

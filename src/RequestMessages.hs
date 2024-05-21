@@ -13,7 +13,6 @@ where
 import Data.Aeson (ToJSON (toJSON), Value)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEK
-import Data.Aeson.QQ (aesonQQ)
 import Data.Aeson.Types qualified as AET
 import Data.ByteString.Base64 qualified as B64
 import Data.Digest.XXHash (xxHash)
@@ -28,6 +27,7 @@ import Data.Vector qualified as V
 import Data.Vector qualified as Vector
 import Database.PostgreSQL.Simple (Query)
 import Deriving.Aeson qualified as DAE
+import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Query qualified as Fields (
   insertFieldQueryAndParams,
@@ -50,7 +50,6 @@ import Relude
 import Relude.Unsafe as Unsafe (read)
 import Text.Regex.TDFA ((=~))
 import Utils (DBField ())
-import Witch (from)
 
 
 -- $setup
@@ -135,6 +134,25 @@ replaceNullChars :: Text -> Text
 replaceNullChars = T.replace "\\u0000" ""
 
 
+leftPad :: Int -> Text -> Text
+leftPad len txt = T.justifyRight len '0' (T.take len txt)
+
+
+toXXHash :: Text -> Text
+toXXHash input = leftPad 8 $ fromString $ showHex (xxHash $ encodeUtf8 $ input) ""
+
+
+processErrors :: Projects.ProjectId -> RequestDumps.SDKTypes -> RequestDumps.ATError -> (RequestDumps.ATError, Query, [DBField])
+processErrors pid sdkType err = (normalizedError, q, params)
+  where
+    (q, params) = Anomalies.insertErrorQueryAndParams pid normalizedError
+    normalizedError =
+      err
+        { RequestDumps.hash = Just $ fromMaybe (toXXHash (pid.toText <> err.errorType <> err.message <> show sdkType)) err.hash
+        , RequestDumps.technology = Just sdkType
+        }
+
+
 -- requestMsgToDumpAndEndpoint is a very improtant function designed to be run as a pure function
 -- which takes in a request and processes it returning an sql query and it's params which can be executed.
 -- The advantage of returning these queries and params is that it becomes possible to group together batches of requests
@@ -152,17 +170,14 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   -- These are the projects that we have already created endpoints
   let method = T.toUpper rM.method
   let urlPath = RequestDumps.normalizeUrlPath rM.sdkType rM.statusCode rM.method (fromMaybe "/" rM.urlPath)
-  let !endpointHash = from @String @Text $ showHex (xxHash $ encodeUtf8 $ UUID.toText rM.projectId <> fromMaybe "" rM.host <> method <> urlPath) ""
-
+  let !endpointHash = toXXHash $ UUID.toText rM.projectId <> fromMaybe "" rM.host <> method <> urlPath
   let redactFieldsList = Vector.toList pjc.redactFieldslist <> [".set-cookie", ".password"]
-
   let sanitizeNullChars = encodeUtf8 . replaceNullChars . decodeUtf8
   reqBodyB64 <- B64.decodeBase64 $ encodeUtf8 rM.requestBody
-  let reqBody = redactJSON redactFieldsList $ fromRight [aesonQQ| {} |] $ AE.eitherDecodeStrict $ sanitizeNullChars reqBodyB64
+  let reqBody = redactJSON redactFieldsList $ fromRight (AE.object []) $ AE.eitherDecodeStrict $ sanitizeNullChars reqBodyB64
   respBodyB64 <- B64.decodeBase64 $ encodeUtf8 rM.responseBody
-  let respBody = redactJSON redactFieldsList $ fromRight [aesonQQ| {} |] $ AE.eitherDecodeStrict $ sanitizeNullChars respBodyB64
-
-  let pathParamFields = valueToFields $ redactJSON redactFieldsList rM.pathParams
+  let respBody = redactJSON redactFieldsList $ fromRight (AE.object []) $ AE.eitherDecodeStrict $ sanitizeNullChars respBodyB64
+      pathParamFields = valueToFields $ redactJSON redactFieldsList rM.pathParams
       queryParamFields = valueToFields $ redactJSON redactFieldsList rM.queryParams
       reqHeaderFields = valueToFields $ redactJSON redactFieldsList rM.requestHeaders
       respHeaderFields = valueToFields $ redactJSON redactFieldsList rM.responseHeaders
@@ -178,8 +193,8 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   -- We skip the request headers from this hash, since the source of the request like browsers might add or skip headers at will,
   -- which would make this process not deterministic anymore, and that's necessary for a hash.
   let combinedKeyPathStr = T.concat $ sort $ Vector.toList $ queryParamsKP <> responseHeadersKP <> requestBodyKP <> responseBodyKP
-  let !shapeHash' = from @String @Text $ showHex (xxHash $ encodeUtf8 combinedKeyPathStr) ""
-  let shapeHash = endpointHash <> show rM.statusCode <> shapeHash' -- Include the endpoint hash and status code to make the shape hash unique by endpoint and status code.
+  -- Include the endpoint hash and status code to make the shape hash unique by endpoint and status code.
+  let !shapeHash = endpointHash <> show rM.statusCode <> toXXHash combinedKeyPathStr
   let projectId = Projects.ProjectId rM.projectId
 
   let pathParamsFieldsDTO = pathParamFields <&> fieldsToFieldDTO Fields.FCPathParam projectId endpointHash
@@ -202,48 +217,40 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   --- FIXME: why are we not using the actual url params?
   -- Since it foes into the endpoint, maybe it should be the keys and their type? I'm unsure.
   -- At the moment, if an endpoint exists, we don't insert it anymore. But then how do we deal with requests from new hosts?
-  let status = rM.statusCode
   let urlParams = AET.emptyObject
-  let isOutgoing = isRequestOutgoing rM.sdkType
   let (endpointQ, endpointP)
         | endpointHash `elem` pjc.endpointHashes = ("", []) -- We have the endpoint cache in our db already. Skill adding
-        | status == 404 = ("", [])
-        | otherwise = Endpoints.upsertEndpointQueryAndParam $ buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash isOutgoing
+        | rM.statusCode == 404 = ("", [])
+        | otherwise = Endpoints.upsertEndpointQueryAndParam $ buildEndpoint rM now dumpID projectId method urlPath urlParams endpointHash (isRequestOutgoing rM.sdkType)
 
   let (shapeQ, shapeP)
         | shapeHash `elem` pjc.shapeHashes = ("", [])
-        | status == 404 = ("", [])
+        | rM.statusCode == 404 = ("", [])
         | otherwise =
-            do
-              -- A shape is a deterministic representation of a request-response combination for a given endpoint.
-              -- We usually expect multiple shapes per endpoint. Eg a shape for a success request-response and another for an error response.
-              -- Shapes are dependent on the endpoint, statusCode and the unique fields in that shape.
-              let shape =
-                    Shapes.Shape
-                      { id = Shapes.ShapeId dumpID
-                      , createdAt = timestampUTC
-                      , updatedAt = now
-                      , approvedOn = Nothing
-                      , projectId = projectId
-                      , endpointHash = endpointHash
-                      , queryParamsKeypaths = queryParamsKP
-                      , requestBodyKeypaths = requestBodyKP
-                      , responseBodyKeypaths = responseBodyKP
-                      , requestHeadersKeypaths = requestHeadersKP
-                      , responseHeadersKeypaths = responseHeadersKP
-                      , fieldHashes = fieldHashes
-                      , hash = shapeHash
-                      , statusCode = rM.statusCode
-                      , responseDescription = ""
-                      , requestDescription = ""
-                      }
-              Shapes.insertShapeQueryAndParam shape
+            -- A shape is a deterministic representation of a request-response combination for a given endpoint.
+            -- We usually expect multiple shapes per endpoint. Eg a shape for a success request-response and another for an error response.
+            -- Shapes are dependent on the endpoint, statusCode and the unique fields in that shape.
+            Shapes.insertShapeQueryAndParam
+              $ Shapes.Shape
+                { id = Shapes.ShapeId dumpID
+                , createdAt = timestampUTC
+                , updatedAt = now
+                , approvedOn = Nothing
+                , projectId = projectId
+                , endpointHash = endpointHash
+                , queryParamsKeypaths = queryParamsKP
+                , requestBodyKeypaths = requestBodyKP
+                , responseBodyKeypaths = responseBodyKP
+                , requestHeadersKeypaths = requestHeadersKP
+                , responseHeadersKeypaths = responseHeadersKP
+                , fieldHashes = fieldHashes
+                , hash = shapeHash
+                , statusCode = rM.statusCode
+                , responseDescription = ""
+                , requestDescription = ""
+                }
 
-  let duration = rM.duration
-
-  let errorsL = fromMaybe empty rM.errors
-      errorsJSONB = toJSON errorsL
-      tagsV = maybe V.empty V.fromList rM.tags
+  let (errorsList, errQ, errP) = unzip3 $ map (processErrors projectId rM.sdkType) $ fromMaybe [] rM.errors
 
   -- request dumps are time series dumps representing each requests which we consume from our users.
   -- We use this field via the log explorer for exploring and searching traffic. And at the moment also use it for most time series analytics.
@@ -266,7 +273,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
           , referer = fromMaybe "" $ rM.referer >>= either Just listToMaybe
           , protoMajor = rM.protoMajor
           , protoMinor = rM.protoMinor
-          , duration = calendarTimeTime $ secondsToNominalDiffTime $ fromIntegral duration
+          , duration = calendarTimeTime $ secondsToNominalDiffTime $ fromIntegral rM.duration
           , statusCode = rM.statusCode
           , --
             queryParams = rM.queryParams
@@ -279,12 +286,12 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
           , shapeHash = shapeHash
           , formatHashes = formatHashes
           , fieldHashes = fieldHashes
-          , durationNs = fromIntegral duration
+          , durationNs = fromIntegral rM.duration
           , sdkType = rM.sdkType
           , parentId = rM.parentId
           , serviceVersion = rM.serviceVersion
-          , errors = errorsJSONB
-          , tags = tagsV
+          , errors = toJSON $ errorsList
+          , tags = maybe V.empty V.fromList rM.tags
           , requestType = RequestDumps.getRequestType rM.sdkType
           }
 
@@ -292,7 +299,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   -- We don't border adding them if their shape exists, as we asume that we've already seen such before.
   let (fieldsQ, fieldsP)
         | shapeHash `elem` pjc.shapeHashes = ([], [])
-        | status == 404 = ([], [])
+        | rM.statusCode == 404 = ([], [])
         | otherwise = unzip $ map Fields.insertFieldQueryAndParams fields
 
   -- FIXME:
@@ -303,11 +310,11 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   -- also inserting the fields and the shape, when all we want to insert is just the example.
   let (formatsQ, formatsP)
         | shapeHash `elem` pjc.shapeHashes = ([], [])
-        | status == 404 = ([], [])
+        | rM.statusCode == 404 = ([], [])
         | otherwise = unzip $ map Formats.insertFormatQueryAndParams formats
 
-  let query = endpointQ <> shapeQ <> mconcat fieldsQ <> mconcat formatsQ
-  let params = endpointP <> shapeP <> concat fieldsP <> concat formatsP
+  let query = endpointQ <> shapeQ <> mconcat fieldsQ <> mconcat formatsQ <> mconcat errQ
+  let params = endpointP <> shapeP <> concat fieldsP <> concat formatsP <> concat errP
   pure (Just query, Just params, Just reqDumpP)
 
 
@@ -532,14 +539,10 @@ fieldsToFieldDTO fieldCategory projectID endpointHash (keyPath, val) =
     fieldType :: Fields.FieldTypes
     fieldType = fromMaybe Fields.FTUnknown $ viaNonEmpty head $ aeValueToFieldType <$> val
 
+    -- field hash is <hash of the endpoint> + <the hash of <field_category><key_path_str><field_type>> (No space or comma between data)
+    !fieldHash = endpointHash <> toXXHash (Fields.fieldCategoryEnumToText fieldCategory <> keyPath <> Fields.fieldTypeToText fieldType)
     -- FIXME: We should rethink this value to format logic.
     -- FIXME: Maybe it actually needs machine learning,
     -- FIXME: or maybe it should operate on the entire list, and not just one value.
-    format = fromMaybe "" $ viaNonEmpty head $ valueToFormat <$> val
-
-    -- field hash is <hash of the endpoint> + <the hash of <field_category><key_path_str><field_type>> (No space or comma between data)
-    preFieldHash = Fields.fieldCategoryEnumToText fieldCategory <> keyPath <> Fields.fieldTypeToText fieldType
-    fieldHash' = from @String @Text $ showHex (xxHash $ encodeUtf8 preFieldHash) ""
-    fieldHash = endpointHash <> fieldHash'
-    formatHash' = from @String @Text $ showHex (xxHash $ encodeUtf8 format) ""
-    formatHash = fieldHash <> formatHash'
+    format = (fromMaybe "" $ viaNonEmpty head $ valueToFormat <$> val)
+    !formatHash = fieldHash <> toXXHash format

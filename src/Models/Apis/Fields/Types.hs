@@ -67,14 +67,15 @@ data FieldTypes
   | FTNull
   deriving stock (Eq, Generic, Show)
   deriving anyclass (NFData)
-  deriving
-    (AE.ToJSON)
-    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "FT", DAE.CamelToSnake]] FieldTypes
 
 
 instance FromJSON FieldTypes where
   parseJSON (AE.String v) = maybe empty pure (parseFieldTypes v)
   parseJSON _ = empty
+
+
+instance ToJSON FieldTypes where
+  toJSON = AE.String . fieldTypeToText
 
 
 instance Default FieldTypes where
@@ -247,7 +248,7 @@ instance Ord Field where
     (projectId f1 <= projectId f2)
       && (endpointHash f1 <= endpointHash f2)
       && keyPath f1
-      <= keyPath f2
+        <= keyPath f2
 
 
 instance Eq Field where
