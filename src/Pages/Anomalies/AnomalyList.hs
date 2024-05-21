@@ -160,16 +160,12 @@ data ParamInput = ParamInput
 
 
 anomalyListGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Endpoints.EndpointId -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
-anomalyListGetH pid layoutM ackdM archivedM sortM page loadM endpointM hxRequestM hxBoostedM = do
+anomalyListGetH pid layoutM ackdM archivedM sortM pageM loadM endpointM hxRequestM hxBoostedM = do
   (sess, project) <- Sessions.sessionAndProject pid
-  let ackd = textToBool <$> ackdM
-  let archived = textToBool <$> archivedM
-  let fetchLimit = 61
-  let limit = maybe (Just fetchLimit) (\x -> if x == "slider" then Just 51 else Just fetchLimit) layoutM
-  let pageInt = case page of
-        Just p -> if limit == Just 51 then 0 else Unsafe.read (toString p)
-        Nothing -> 0
-  issues <- dbtToEff $ Anomalies.selectIssues pid endpointM ackd archived sortM limit (pageInt * fetchLimit)
+  let (ackd, archived) = (textToBool <$> ackdM, textToBool <$> archivedM)
+  let fLimit = 21
+  let pageInt = maybe 0 (Unsafe.read . toString) pageM 
+  issues <- dbtToEff $ Anomalies.selectIssues pid endpointM ackd archived sortM (Just fLimit) (pageInt * fLimit)
   currTime <- liftIO getCurrentTime
   let bwconf =
         (def :: BWConfig)
@@ -192,7 +188,7 @@ anomalyListGetH pid layoutM ackdM archivedM sortM page loadM endpointM hxRequest
       anom = case nextFetchUrl of
         Just url -> do
           mapM_ (renderIssue False currTime) issues
-          if length issues > fetchLimit - 1
+          if length issues > fLimit - 1
             then a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] do
               div_ [class_ "htmx-indicator query-indicator"] do
                 loader
