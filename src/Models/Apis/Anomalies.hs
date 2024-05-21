@@ -7,6 +7,7 @@ module Models.Apis.Anomalies (
   AnomalyActions (..),
   Issue (..),
   IssueL (..),
+  IssueEventAgg (..),
   AnomalyTypes (..),
   AnomalyId (..),
   IssuesData (..),
