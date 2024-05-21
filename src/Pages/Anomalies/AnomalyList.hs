@@ -163,7 +163,7 @@ anomalyListGetH pid layoutM ackdM archivedM sortM pageM loadM endpointM hxReques
   (sess, project) <- Sessions.sessionAndProject pid
   let (ackd, archived) = (textToBool <$> ackdM, textToBool <$> archivedM)
   let fLimit = 21
-  let pageInt = maybe 0 (Unsafe.read . toString) pageM 
+  let pageInt = maybe 0 (Unsafe.read . toString) pageM
   issues <- dbtToEff $ Anomalies.selectIssues pid endpointM ackd archived sortM (Just fLimit) (pageInt * fLimit)
   currTime <- liftIO getCurrentTime
   let bwconf =
@@ -173,7 +173,9 @@ anomalyListGetH pid layoutM ackdM archivedM sortM pageM loadM endpointM hxReques
           , pageTitle = "Issues: Changes, Alerts & Errors"
           }
       currentURL = "/p/" <> pid.toText <> "/anomalies?layout=" <> fromMaybe "false" layoutM <> "&ackd=" <> fromMaybe "false" ackdM <> "&archived=" <> fromMaybe "false" archivedM
-      nextFetchUrl = maybe (Just $ currentURL <> "&load_more=true&page=" <> show (pageInt + 1)) (\x -> if x == "slider" then Nothing else Just $ currentURL <> "&load_more=true&page=" <> show (pageInt + 1)) layoutM
+      nextFetchUrl = case layoutM of
+        Just "slider" -> Nothing
+        _ -> Just $ currentURL <> "&load_more=true&page=" <> show (pageInt + 1)
       paramInput =
         ParamInput
           { currentURL = currentURL
@@ -182,20 +184,19 @@ anomalyListGetH pid layoutM ackdM archivedM sortM pageM loadM endpointM hxReques
           , sort = fromMaybe "" sortM
           }
       elementBelowTabs =
-        div_ [class_ "grid grid-cols-5", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"]
-          $ issuesList paramInput pid currTime issues nextFetchUrl
+        div_ [class_ "grid grid-cols-5", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $
+          issuesList paramInput pid currTime issues nextFetchUrl
       anom = case nextFetchUrl of
         Just url -> do
           mapM_ (renderIssue False currTime) issues
-          when (length issues == fLimit) $  
+          when (length issues == fLimit) $
             a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] do
-              span_[class_ "htmx-indicator query-indicator loading loading-dots loading-md"] ""  >> "LOAD MORE"
+              span_ [class_ "htmx-indicator query-indicator loading loading-dots loading-md"] "" >> "LOAD MORE"
         Nothing -> mapM_ (renderIssue False currTime) issues
   case (layoutM, hxRequestM, hxBoostedM, loadM) of
     (Just "slider", Just "true", _, _) -> addRespHeaders $ anomalyListSlider currTime pid endpointM (Just issues)
     (_, _, _, Just "true") -> addRespHeaders anom
-    (_, Just "true", Just "false", _) -> addRespHeaders elementBelowTabs
-    (_, Just "true", Nothing, _) -> addRespHeaders elementBelowTabs
+    (_, Just "true", _, _) -> addRespHeaders elementBelowTabs
     _ -> addRespHeaders $ bodyWrapper bwconf $ issuesListPage paramInput pid currTime issues nextFetchUrl
 
 
@@ -283,8 +284,8 @@ issuesList paramInput pid currTime issues nextFetchUrl = form_ [class_ "col-span
 
   mapM_ (renderIssue False currTime) issues
   whenJust nextFetchUrl \url ->
-    when (length issues > 60)
-      $ a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] do
+    when (length issues > 20) $
+      a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] do
         span_ [class_ "htmx-indicator loading loading-dots loading-md"] "" >> "LOAD MORE"
 
 
@@ -400,17 +401,17 @@ issueItem hideByDefault currTime issue icon title subTitle content = do
             Components.drawerWithURLContent_ ("expand-log-drawer-" <> issue.targetHash) modalEndpoint $ span_ [class_ "inline-block cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100"] (mIcon_ "enlarge" "w-3 h-3")
         fromMaybe (toHtml @String "") content
     let issueQueryPartial = buildQueryForAnomaly issue.anomalyType issue.targetHash
-    div_ [class_ "flex items-center justify-center "]
-      $ div_
+    div_ [class_ "flex items-center justify-center "] $
+      div_
         [ class_ "w-60 h-16 px-3"
         , hxGet_ $ "/charts_html?pid=" <> issue.projectId.toText <> "&since=14D&query_raw=" <> escapedQueryPartial [fmt|{issueQueryPartial} | timechart [1d]|]
         , hxTrigger_ "intersect once"
         , hxSwap_ "innerHTML"
         ]
         ""
-    div_ [class_ "w-36 flex items-center justify-center"]
-      $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"]
-      $ show issue.eventsAgg.count
+    div_ [class_ "w-36 flex items-center justify-center"] $
+      span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $
+        show issue.eventsAgg.count
 
 
 anomalyDetailsGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
@@ -575,40 +576,23 @@ endpointOverview shapesWithFieldsMap =
 
 
 requestShapeOverview :: Maybe (Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field]) -> Html ()
-requestShapeOverview fieldChanges = do
-  div_ [class_ "flex flex-col gap-6"] do
-    whenJust fieldChanges \(fs, sn, th) ->
-      div_ [class_ "flex flex-col gap-6"] do
-        div_ [class_ "flex flex-col"] do
-          h3_ [class_ "text-green-500 py-1  w-fit font-semibold border-b border-b-green-500 mb-2"] "New Unique Fields"
-          div_ [class_ "px-2"] do
-            p_ [class_ "hidden last:block"] "No new unique fields"
-            subSubSection "Request Path Params" (Map.lookup Fields.FCPathParam fs)
-            subSubSection "Request Query Params" (Map.lookup Fields.FCQueryParam fs)
-            subSubSection "Request Headers" (Map.lookup Fields.FCRequestHeader fs)
-            subSubSection "Request Body" (Map.lookup Fields.FCRequestBody fs)
-            subSubSection "Response Headers" (Map.lookup Fields.FCResponseHeader fs)
-            subSubSection "Response Body" (Map.lookup Fields.FCResponseBody fs)
-        div_ [class_ "flex flex-col"] do
-          h3_ [class_ "text-gray-500 py-1 w-fit font-semibold border-b border-b-gray-500 mb-2"] "Updated Fields"
-          div_ [class_ "px-2"] do
-            p_ [class_ "hidden last:block"] "No updated fields"
-            subSubSection "Request Path Params" (Map.lookup Fields.FCPathParam sn)
-            subSubSection "Request Query Params" (Map.lookup Fields.FCQueryParam sn)
-            subSubSection "Request Headers" (Map.lookup Fields.FCRequestHeader sn)
-            subSubSection "Request Body" (Map.lookup Fields.FCRequestBody sn)
-            subSubSection "Response Headers" (Map.lookup Fields.FCResponseHeader sn)
-            subSubSection "Response Body" (Map.lookup Fields.FCResponseBody sn)
-        div_ [class_ "flex flex-col"] do
-          h3_ [class_ "text-red-500 w-fit py-1 font-semibold border-b border-b-red-500 mb-2"] "Deleted Fields"
-          div_ [class_ "px-2"] do
-            p_ [class_ "hidden last:block"] "No deleted fields"
-            subSubSection "Request Path Params" (Map.lookup Fields.FCPathParam th)
-            subSubSection "Request Query Params" (Map.lookup Fields.FCQueryParam th)
-            subSubSection "Request Headers" (Map.lookup Fields.FCRequestHeader th)
-            subSubSection "Request Body" (Map.lookup Fields.FCRequestBody th)
-            subSubSection "Response Headers" (Map.lookup Fields.FCResponseHeader th)
-            subSubSection "Response Body" (Map.lookup Fields.FCResponseBody th)
+requestShapeOverview fieldChanges = div_ [class_ "flex flex-col gap-6"] do
+  whenJust fieldChanges \(fs, sn, th) -> do
+    shapeOSection_ "New Unique Fields" "green" fs
+    shapeOSection_ "Updated Fields" "gray" sn
+    shapeOSection_ "Deleted Fields" "red" th
+  where 
+      shapeOSection_:: Text -> Text-> Map FieldCategoryEnum [Field] -> Html ()
+      shapeOSection_ title color fields = div_ [class_ "flex flex-col"] do
+        h3_ [class_ $ "text-" <> color <> "-500 py-1 w-fit font-semibold border-b border-b-" <> color <> "-500 mb-2"] (toHtml title)
+        div_ [class_ "px-2"] do
+          p_ [class_ "hidden last:block"] ("No " <> toHtml title)
+          subSubSection "Request Path Params" (Map.lookup Fields.FCPathParam fields)
+          subSubSection "Request Query Params" (Map.lookup Fields.FCQueryParam fields)
+          subSubSection "Request Headers" (Map.lookup Fields.FCRequestHeader fields)
+          subSubSection "Request Body" (Map.lookup Fields.FCRequestBody fields)
+          subSubSection "Response Headers" (Map.lookup Fields.FCResponseHeader fields)
+          subSubSection "Response Body" (Map.lookup Fields.FCResponseBody fields)
 
 
 anomalyFormatOverview :: AnomalyVM -> Vector Text -> Html ()
@@ -696,9 +680,9 @@ anomalyAcknowlegeButton :: Projects.ProjectId -> Anomalies.AnomalyId -> Bool -> 
 anomalyAcknowlegeButton pid aid acked = do
   let acknowlegeAnomalyEndpoint = "/p/" <> pid.toText <> "/anomalies/" <> Anomalies.anomalyIdText aid <> if acked then "/unacknowlege" else "/acknowlege"
   a_
-    [ class_
-        $ "inline-block child-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
-        <> (if acked then "bg-green-100 text-green-900" else "")
+    [ class_ $
+        "inline-block child-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
+          <> (if acked then "bg-green-100 text-green-900" else "")
     , term "data-tippy-content" "acknowlege anomaly"
     , hxGet_ acknowlegeAnomalyEndpoint
     , hxSwap_ "outerHTML"
@@ -710,9 +694,9 @@ anomalyArchiveButton :: Projects.ProjectId -> Anomalies.AnomalyId -> Bool -> Htm
 anomalyArchiveButton pid aid archived = do
   let archiveAnomalyEndpoint = "/p/" <> pid.toText <> "/anomalies/" <> Anomalies.anomalyIdText aid <> if archived then "/unarchive" else "/archive"
   a_
-    [ class_
-        $ "inline-block xchild-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
-        <> (if archived then " bg-green-100 text-green-900" else "")
+    [ class_ $
+        "inline-block xchild-hover cursor-pointer py-2 px-3 rounded border border-gray-200 text-xs hover:shadow shadow-blue-100 "
+          <> (if archived then " bg-green-100 text-green-900" else "")
     , term "data-tippy-content" $ if archived then "unarchive" else "archive"
     , hxGet_ archiveAnomalyEndpoint
     , hxSwap_ "outerHTML"
@@ -725,24 +709,24 @@ reqResSection title isRequest shapesWithFieldsMap =
   section_ [class_ "space-y-3"] do
     div_ [class_ "flex justify-between mt-5"] do
       div_ [class_ "flex flex-row"] do
-        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
-          $ faSprite_ "chevron-down" "light" "h-4 mr-3 mt-1 w-4"
+        a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]] $
+          faSprite_ "chevron-down" "light" "h-4 mr-3 mt-1 w-4"
         span_ [class_ "text-lg text-slate-800"] $ toHtml title
 
-    div_ [class_ "bg-white border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"]
-      $ forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap)
-      $ \(index, s) -> do
-        let sh = if index == 1 then title <> "_fields" else title <> "_fields hidden"
-        div_ [class_ sh, id_ $ title <> "_" <> show index] do
-          if isRequest
-            then do
-              subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam s.fieldsMap)
-              subSubSection (title <> " Query Params") (Map.lookup Fields.FCQueryParam s.fieldsMap)
-              subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader s.fieldsMap)
-              subSubSection (title <> " Body") (Map.lookup Fields.FCRequestBody s.fieldsMap)
-            else do
-              subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader s.fieldsMap)
-              subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody s.fieldsMap)
+    div_ [class_ "bg-white border border-gray-100 rounded-xl py-5 px-5 space-y-6 reqResSubSection"] $
+      forM_ (zip [(1 :: Int) ..] shapesWithFieldsMap) $
+        \(index, s) -> do
+          let sh = if index == 1 then title <> "_fields" else title <> "_fields hidden"
+          div_ [class_ sh, id_ $ title <> "_" <> show index] do
+            if isRequest
+              then do
+                subSubSection (title <> " Path Params") (Map.lookup Fields.FCPathParam s.fieldsMap)
+                subSubSection (title <> " Query Params") (Map.lookup Fields.FCQueryParam s.fieldsMap)
+                subSubSection (title <> " Headers") (Map.lookup Fields.FCRequestHeader s.fieldsMap)
+                subSubSection (title <> " Body") (Map.lookup Fields.FCRequestBody s.fieldsMap)
+              else do
+                subSubSection (title <> " Headers") (Map.lookup Fields.FCResponseHeader s.fieldsMap)
+                subSubSection (title <> " Body") (Map.lookup Fields.FCResponseBody s.fieldsMap)
 
 
 -- | subSubSection ..
