@@ -581,18 +581,18 @@ requestShapeOverview fieldChanges = div_ [class_ "flex flex-col gap-6"] do
     shapeOSection_ "New Unique Fields" "green" fs
     shapeOSection_ "Updated Fields" "gray" sn
     shapeOSection_ "Deleted Fields" "red" th
-  where 
-      shapeOSection_:: Text -> Text-> Map FieldCategoryEnum [Field] -> Html ()
-      shapeOSection_ title color fields = div_ [class_ "flex flex-col"] do
-        h3_ [class_ $ "text-" <> color <> "-500 py-1 w-fit font-semibold border-b border-b-" <> color <> "-500 mb-2"] (toHtml title)
-        div_ [class_ "px-2"] do
-          p_ [class_ "hidden last:block"] ("No " <> toHtml title)
-          subSubSection "Request Path Params" (Map.lookup Fields.FCPathParam fields)
-          subSubSection "Request Query Params" (Map.lookup Fields.FCQueryParam fields)
-          subSubSection "Request Headers" (Map.lookup Fields.FCRequestHeader fields)
-          subSubSection "Request Body" (Map.lookup Fields.FCRequestBody fields)
-          subSubSection "Response Headers" (Map.lookup Fields.FCResponseHeader fields)
-          subSubSection "Response Body" (Map.lookup Fields.FCResponseBody fields)
+  where
+    shapeOSection_ :: Text -> Text -> Map FieldCategoryEnum [Field] -> Html ()
+    shapeOSection_ title color fields = div_ [class_ "flex flex-col"] do
+      h3_ [class_ $ "text-" <> color <> "-500 py-1 w-fit font-semibold border-b border-b-" <> color <> "-500 mb-2"] (toHtml title)
+      div_ [class_ "px-2"] do
+        p_ [class_ "hidden last:block"] ("No " <> toHtml title)
+        subSubSection "Request Path Params" (Map.lookup Fields.FCPathParam fields)
+        subSubSection "Request Query Params" (Map.lookup Fields.FCQueryParam fields)
+        subSubSection "Request Headers" (Map.lookup Fields.FCRequestHeader fields)
+        subSubSection "Request Body" (Map.lookup Fields.FCRequestBody fields)
+        subSubSection "Response Headers" (Map.lookup Fields.FCResponseHeader fields)
+        subSubSection "Response Body" (Map.lookup Fields.FCResponseBody fields)
 
 
 anomalyFormatOverview :: AnomalyVM -> Vector Text -> Html ()
