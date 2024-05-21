@@ -56,7 +56,7 @@ import Pkg.ConvertKit qualified as ConvertKit
 import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import Servant (addHeader, noHeader)
-import System.Config (AuthContext (config, pool), EnvConfig (apiKeyEncryptionSecretKey, convertkitApiKey, lemonSqueezyApiKey, lemonSqueezyGraduatedUrl, lemonSqueezyUrl, slackRedirectUri))
+import System.Config
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
 import Utils (faSprite_)
 import Web.FormUrlEncoded (FromForm)
@@ -426,12 +426,12 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
                       div_ [class_ $ "grid place-items-center h-6 w-6 bg-gray-200 border rounded-full payment-radio " <> if isSelected then "payment-radio-active" else ""] do
                         div_ [class_ "bg-white h-3 w-3 hidden rounded-full"] ""
                     div_ [class_ "text-lg py-3 px-2"] do
-                      span_ [class_ "text-2xl text-blue-700", id_ "price"] $ toHtml "499"
-                      span_ [class_ "text-slate-500", id_ "num_requests"] "/550k reqs"
+                      span_ [class_ "text-2xl text-blue-700", id_ "price"] $ toHtml "$49"
+                      span_ [class_ "text-slate-500", id_ "num_requests"] "/550k"
+                      span_ [class_ "text-slate-500"] " reqs per month"
                       span_ [class_ "text-blue-500 block mt-2"] "then $1 per 10k reqs"
-                    div_ [class_ "relative flex items-center w-full bg-gray-200 h-2 rounded-full", id_ "price_container"] do
-                      div_ [class_ "h-full relative bg-blue-500 w-0 rounded-l-full", id_ "price_indicator"] pass
-                      div_ [class_ "h-6 w-6 rounded-full bg-blue-500", id_ "price_bulb"] pass
+                    div_ [] do
+                      input_ [type_ "range", min_ "0", max_ "5", step_ "1", value_ "0", class_ "range range-primary range-sm", id_ "price_range"]
 
                     checkList "GR" "Unlimited"
 
@@ -462,7 +462,13 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
 
             script_ [src_ "https://assets.lemonsqueezy.com/lemon.js"] ("" :: Text)
             let checkoutUrl = envCfg.lemonSqueezyUrl
-            let graduatedCheckoutUrl = envCfg.lemonSqueezyGraduatedUrl
+            let graduatedCheckoutOne = envCfg.lemonSqueezyOne
+            let graduatedCheckoutTwo = envCfg.lemonSqueezyTwo
+            let graduatedCheckoutThree = envCfg.lemonSqueezyThree
+            let graduatedCheckoutFour = envCfg.lemonSqueezyFour
+            let graduatedCheckoutFive = envCfg.lemonSqueezyFive
+            let graduatedCheckoutSix = envCfg.lemonSqueezySix
+
             script_
               [type_ "text/javascript"]
               [text| 
@@ -502,7 +508,7 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
                }
              })
              if(document.getElementById("paymentPlanEl").value == "GraduatedPricing") {
-                  LemonSqueezy.Url.Open("$graduatedCheckoutUrl");
+                  LemonSqueezy.Url.Open(window.graduatedRangeUrl);
               }else {
                  LemonSqueezy.Url.Open("$checkoutUrl");
               }
@@ -519,43 +525,20 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
 
             script_
               [text|
-
-          const price_indicator = document.querySelector("#price_indicator");
-          const price_container = document.querySelector("#price_container")
-          let mouseState = {x: 0}
-          let resizeStart = false
-          let target = ""
-          const prices = [49, 80, 200, 250, 300, 400, 500, 650]
-          const requests = ["550k", "1M", "2.5M", "5M", "7.5M", "10M"]
-          const containerWidth = Number(window.getComputedStyle(price_container).width.replace('px',''))
-          const componentWidth = containerWidth / prices.length
-          function mouseDown(event) {
-              resizeStart = true
-              mouseState = {x: event.pageX}
-              target = event.target.id
-              console.log(target)
-          }
-
-          function handleMouseMove(event) {
-            if(!resizeStart) return
-            const diff = event.pageX - mouseState.x
-            mouseState = {x: event.pageX}
-            const bar_width = Number(price_indicator.style.width.replace('px',''))
-            const ind = Math.floor(bar_width)/componentWidth
-            price_indicator.style.width = (bar_width + diff) + 'px'
-            document.querySelector("#price").innerText = prices[ind]
-            document.querySelector("#num_requests").innerText = requests[ind]
-          }
-
-          function handleMouseup(event) {
-            resizeStart = false 
-            target = ""
-          }
-         const bulb = document.getElementById("price_bulb")
-         bulb.addEventListener('click', (e) => {e.stopPropagation()})
-         window.addEventListener('mousemove', handleMouseMove)
-         window.addEventListener('mouseup', handleMouseup)
-         bulb.addEventListener('mousedown', mouseDown)
+               const price_indicator = document.querySelector("#price_range");
+               const prices = [49, 80, 200, 250, 500, 650]
+               const reqs = ["550k", "1M", "2.5M", "5M", "7.5M", "10M"]
+               const urls = ["$graduatedCheckoutOne", "$graduatedCheckoutTwo", "$graduatedCheckoutThree", "$graduatedCheckoutFour", "$graduatedCheckoutFive", "$graduatedCheckoutSix"]
+               const priceContainer = document.querySelector("#price")
+               const reqsContainer = document.querySelector("#num_requests")
+               function priceChange(e) {
+                 const price = prices[e.target.value]
+                 const num_reqs = reqs[e.target.value]
+                 priceContainer.innerText = "$" + price
+                 reqsContainer.innerText = "/" + num_reqs
+                 window.graduatedRangeUrl = urls[e.target.value]
+               }
+               price_indicator.addEventListener('input', priceChange)
             |]
 
             div_ [class_ "p-5 flex w-full justify-end"] do
