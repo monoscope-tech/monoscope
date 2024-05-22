@@ -334,9 +334,9 @@ anomalyListSlider currTime _ _ (Just issues) = do
 
 shapeParameterStats_ :: Int -> Int -> Int -> Html ()
 shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "stats stats-vertical lg:stats-horizontal shadow"] do
-  div_ [class_ "stat p-3 px-4"] $ (div_ [class_ "text-2xl font-medium text-primary"] $ toHtml @String $ show newF) >> small_ [class_ "stat-title"] "new fields"
-  div_ [class_ "stat p-3 px-4"] $ (div_ [class_ "text-2xl font-medium text-accent"] $ toHtml @String $ show updatedFF) >> small_ [class_ "stat-title"] "updated"
-  div_ [class_ "stat p-3 px-4"] $ (div_ [class_ "text-2xl font-medium text-error"] $ toHtml @String $ show deletedF) >> small_ [class_ "stat-title"] "deleted"
+  div_ [class_ "stat p-3 px-4"] $ (div_ [class_ "text-2xl font-medium text-green-800"] $ toHtml @String $ show newF) >> small_ [class_ "stat-title"] "new fields"
+  div_ [class_ "stat p-3 px-4"] $ (div_ [class_ "text-2xl font-medium text-slate-800"] $ toHtml @String $ show updatedFF) >> small_ [class_ "stat-title"] "updated"
+  div_ [class_ "stat p-3 px-4"] $ (div_ [class_ "text-2xl font-medium text-red-800"] $ toHtml @String $ show deletedF) >> small_ [class_ "stat-title"] "deleted"
 
 
 -- anomalyAccentColor isAcknowleged isArchived
