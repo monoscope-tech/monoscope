@@ -163,7 +163,7 @@ anomalyListGetH pid layoutM ackdM archivedM sortM pageM loadM endpointM hxReques
   (sess, project) <- Sessions.sessionAndProject pid
   let (ackd, archived) = (textToBool <$> ackdM, textToBool <$> archivedM)
   let fLimit = 21
-  let pageInt = maybe 0 (Unsafe.read . toString) pageM 
+  let pageInt = maybe 0 (Unsafe.read . toString) pageM
   issues <- dbtToEff $ Anomalies.selectIssues pid endpointM ackd archived sortM (Just fLimit) (pageInt * fLimit)
   currTime <- liftIO getCurrentTime
   let bwconf =
@@ -187,9 +187,9 @@ anomalyListGetH pid layoutM ackdM archivedM sortM pageM loadM endpointM hxReques
       anom = case nextFetchUrl of
         Just url -> do
           mapM_ (renderIssue False currTime) issues
-          when (length issues == fLimit) $  
-            a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] do
-              span_[class_ "htmx-indicator query-indicator loading loading-dots loading-md"] ""  >> "LOAD MORE"
+          when (length issues == fLimit)
+            $ a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] do
+              span_ [class_ "htmx-indicator query-indicator loading loading-dots loading-md"] "" >> "LOAD MORE"
         Nothing -> mapM_ (renderIssue False currTime) issues
   case (layoutM, hxRequestM, hxBoostedM, loadM) of
     (Just "slider", Just "true", _, _) -> addRespHeaders $ anomalyListSlider currTime pid endpointM (Just issues)
