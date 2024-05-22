@@ -189,8 +189,7 @@ anomalyListGetH pid layoutM ackdM archivedM sortM pageM loadM endpointM hxReques
           mapM_ (renderIssue False currTime) issues
           when (length issues == fLimit)
             $ a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url]
-            $ span_ [class_ "htmx-indicator query-indicator loading loading-dots loading-md"] ""
-            >> "LOAD MORE"
+            $ span_ [class_ "htmx-indicator query-indicator loading loading-dots loading-md"] "" >> "LOAD MORE"
         Nothing -> mapM_ (renderIssue False currTime) issues
   addRespHeaders $ case (layoutM, hxRequestM, hxBoostedM, loadM) of
     (Just "slider", Just "true", _, _) -> anomalyListSlider currTime pid endpointM (Just issues)
@@ -335,9 +334,9 @@ anomalyListSlider currTime _ _ (Just issues) = do
 
 shapeParameterStats_ :: Int -> Int -> Int -> Html ()
 shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "stats stats-vertical lg:stats-horizontal shadow"] do
-  div_ [class_ "stat p-3 px-4"] $ (div_ [class_ "text-2xl font-medium"] $ toHtml @String $ show newF) >> small_ [class_ "stat-title"] "new fields"
-  div_ [class_ "stat p-3 px-4"] $ (div_ [class_ "text-2xl"] $ toHtml @String $ show updatedFF) >> small_ [class_ "stat-title"] "updated"
-  div_ [class_ "stat p-3 px-4"] $ (div_ [class_ "text-2xl"] $ toHtml @String $ show deletedF) >> small_ [class_ "stat-title"] "deleted"
+  div_ [class_ "stat p-3 px-4"] $ (div_ [class_ "text-2xl font-medium text-primary"] $ toHtml @String $ show newF) >> small_ [class_ "stat-title"] "new fields"
+  div_ [class_ "stat p-3 px-4"] $ (div_ [class_ "text-2xl font-medium text-accent"] $ toHtml @String $ show updatedFF) >> small_ [class_ "stat-title"] "updated"
+  div_ [class_ "stat p-3 px-4"] $ (div_ [class_ "text-2xl font-medium text-error"] $ toHtml @String $ show deletedF) >> small_ [class_ "stat-title"] "deleted"
 
 
 -- anomalyAccentColor isAcknowleged isArchived
