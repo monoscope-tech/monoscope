@@ -422,7 +422,7 @@ anomalyDetailsGetH pid targetHash hxBoostedM = do
                 anomalyDetailsPage issue (Just shapesWithFieldsMap) Nothing Nothing currTime False
         Anomalies.IDNewShapeIssue issueD -> do
           newF <- dbtToEff $ Fields.selectFieldsByHashes pid issueD.newUniqueFields
-          updF <- dbtToEff $ Fields.selectFieldsByHashes pid issueD.updatedFieldFormats
+          updF <- dbtToEff $ Fields.selectFieldsByHashes pid (T.take 16 <$> issueD.updatedFieldFormats)
           delF <- dbtToEff $ Fields.selectFieldsByHashes pid issueD.deletedFields
           let anFields = (groupFieldsByCategory newF, groupFieldsByCategory updF, groupFieldsByCategory delF)
           case hxBoostedM of
