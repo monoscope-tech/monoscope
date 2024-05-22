@@ -445,11 +445,11 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
                     div_ [class_ "text-lg py-3 px-2"] do
                       span_ [class_ "text-2xl text-blue-700", id_ "price"] $ toHtml "$49"
                       span_ [class_ "text-slate-500", id_ "num_requests"] "/550k"
-                      span_ [class_ "text-slate-500"] " requests"
-                      p_ [class_ "text-blue-500 ml-4 inline mt-0 text-sm text-green-500 font-semibold"] do
+                      span_ [class_ "text-slate-500 mr-3"] " requests"
+                      p_ [class_ "text-blue-500 inline-block mt-0 text-sm text-green-500 font-semibold"] do
                         span_ [] "save "
-                        span_ [id_ "save_container"] "$6"
-                      span_ [class_ "text-blue-500 text-sm block mt-2"] "then $1 per 10k reqs"
+                        span_ [id_ "save_container"] "$6/month"
+                      span_ [class_ "text-blue-500 text-sm block mt-2"] "then $1 per 10k requests"
                     div_ [] do
                       input_ [type_ "range", min_ "0", max_ "5", step_ "1", value_ "0", class_ "range range-primary range-sm", id_ "price_range"]
 
@@ -558,17 +558,17 @@ createProjectBody sess envCfg isUpdate cp cpe notifChannel slackData = do
                  const value = price_indicator.value
                  let price = prices[value]
                  let num_reqs = reqs[value]
-                 let sav = saves[value]
+                 let sav = saves[value] + "/month"
                  window.graduatedRangeUrl = urls[value]
                  if(plan === "annual") {
                     price = pricesYr[value]
                     num_reqs = reqsYr[value]
-                    sav = savesYr[value]
+                    sav = savesYr[value] + "/year"
                     window.graduatedRangeUrl = urlsAnnual[value]
                   }
                  priceContainer.innerText = "$" + price
                  reqsContainer.innerText = "/" + num_reqs
-                 saveContainer.innerText = "$" + sav
+                 saveContainer.innerText = "$" + sav 
                  
                }
                price_indicator.addEventListener('input', priceChange)

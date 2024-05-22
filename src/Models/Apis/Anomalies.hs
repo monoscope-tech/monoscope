@@ -345,9 +345,12 @@ SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, tar
     FROM apis.issues iss WHERE project_id = ? $cond
     ORDER BY $orderBy $skip $limit |]
 
+
 selectIssueByHash :: Projects.ProjectId -> Text -> DBT IO (Maybe IssueL)
 selectIssueByHash pid targetHash = queryOne Select q (pid, targetHash)
-  where q = [sql|
+  where
+    q =
+      [sql|
 SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash, issue_data, 
     endpoint_id, acknowleged_by, archived_at,
     CASE 
@@ -359,6 +362,7 @@ SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, tar
     END as req_count
     FROM apis.issues iss WHERE project_id = ? and target_hash=? LIMIT 1
     |]
+
 
 getReportAnomalies :: Projects.ProjectId -> Text -> DBT IO (Vector AnomalyVM)
 getReportAnomalies pid report_type = query Select (Query $ encodeUtf8 q) pid
