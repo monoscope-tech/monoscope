@@ -32,6 +32,7 @@ import Database.PostgreSQL.Simple.FromField (FromField, fromField, returnError)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
 import Deriving.Aeson qualified as DAE
+import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
 import Relude
 import Relude.Unsafe ((!!))
@@ -84,6 +85,10 @@ instance Default FieldTypes where
 
 instance ToField FieldTypes where
   toField = Escape . encodeUtf8 <$> fieldTypeToText
+
+
+instance HasField "toText" FieldTypes Text where
+  getField = fieldTypeToText
 
 
 fieldTypeToText :: FieldTypes -> Text
