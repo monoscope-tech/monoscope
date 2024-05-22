@@ -17,14 +17,13 @@ import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pkg.Components
 import Relude hiding (ask)
-import System.Types (ATAuthCtx)
+import System.Types
 import Utils (
-  faIcon_,
   faSprite_,
  )
 
 
-onboardingGetH :: Projects.ProjectId -> Maybe Bool -> Maybe Bool -> Maybe Text -> ATAuthCtx (Html ())
+onboardingGetH :: Projects.ProjectId -> Maybe Bool -> Maybe Bool -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 onboardingGetH pid polling redirected current_tab = do
   (sess, project) <- Sessions.sessionAndProject pid
   apiKeys <- dbtToEff $ ProjectApiKeys.projectApiKeysByProjectId pid
@@ -39,8 +38,8 @@ onboardingGetH pid polling redirected current_tab = do
           , hasIntegrated = Just hasRequest
           }
   case polling of
-    Just _ -> pure $ onboardingPage pid apikey hasRequest (isJust project.questions) (fromMaybe False redirected) (fromMaybe "express" current_tab)
-    Nothing -> pure $ bodyWrapper bwconf $ onboardingPage pid apikey hasRequest (isJust project.questions) (fromMaybe False redirected) "express"
+    Just _ -> addRespHeaders $ onboardingPage pid apikey hasRequest (isJust project.questions) (fromMaybe False redirected) (fromMaybe "express" current_tab)
+    Nothing -> addRespHeaders $ bodyWrapper bwconf $ onboardingPage pid apikey hasRequest (isJust project.questions) (fromMaybe False redirected) "express"
 
 
 onboardingPage :: Projects.ProjectId -> Text -> Bool -> Bool -> Bool -> Text -> Html ()
@@ -65,13 +64,13 @@ onboardingPage pid apikey hasRequest ans redi ctb = do
               span_ [class_ "text-slate-500 text-lg font-bold"] $ p <> " completed"
             ul_ [class_ "grid grid-cols-3 items-start px-3 py-4 border rounded-xl mt-8"] do
               li_ [class_ "flex h-full mx-4 py-2 gap-6 text-green border-r"] do
-                faSprite_ "circle-check" "sharp-regular" "h-6 w-6 mt-2 text-green-700"
+                faSprite_ "circle-check" "regular" "h-6 w-6 mt-2 text-green-700"
                 button_ [class_ "flex flex-col cursor-default"] do
                   p_ [class_ "font-semibold text-blue-500"] "Create an account"
                   span_ [class_ "text-slate-500"] "This is completed when you sign up."
               li_ [class_ "flex flex-col  mx-4 h-full py-2 gap-6 text-green border-r"] do
                 div_ [class_ "flex w-full gap-6"] do
-                  faSprite_ "circle-check" "sharp-regular" "shrink-0 h-6 w-6 mt-2 text-green-700"
+                  faSprite_ "circle-check" "regular" "shrink-0 h-6 w-6 mt-2 text-green-700"
                   button_
                     [ class_ "flex justify-between text-left w-full items-center"
                     ]
@@ -84,13 +83,13 @@ onboardingPage pid apikey hasRequest ans redi ctb = do
                 div_ [class_ "flex w-full gap-6"] do
                   let style = if hasRequest then "text-green-700" else "text-gray-400 "
                   let style2 = if hasRequest then "text-blue-500" else "text-gray-400 "
-                  faSprite_ "circle-check" "sharp-regular" $ "shrink-0 h-6 mt-2 w-6 " <> style
+                  faSprite_ "circle-check" "regular" $ "shrink-0 h-6 mt-2 w-6 " <> style
                   button_ [class_ "flex justify-between text-left w-full items-center cursor-default", [__|on click toggle .hidden on #SDKs|]] do
                     div_ [class_ "flex flex-col"] do
                       p_ [class_ $ "font-semibold " <> style2] "Integrate APItoolkit to your app"
                       span_ [class_ $ "text-slate-500"] "Integrate APItoolkit using any of our SDKs to start monitoring requests."
                 when (not hasRequest) $ div_ [class_ " inline-block space-x-2 text-red-800 pt-2"] do
-                  faIcon_ "fa-spinner" "fa-sharp fa-light fa-spinner " "fa-spin h-6 w-6 inline-block "
+                  span_ [class_ "loading loading-spinner loading-sm"] ""
                   span_ "Waiting to recieve data from your server."
 
         div_ [class_ "text- center"] do
@@ -106,10 +105,10 @@ onboardingPage pid apikey hasRequest ans redi ctb = do
               h3_ [class_ "font-bold text-lg"] "Documentation"
               p_ [class_ "text-slate-700"] "Check out our documentation to learn more about using APItoolkit."
               span_ [href_ "https://www.apitoolkit.io/docs", class_ "text-blue-500 flex items-center gap-2"] do
-                faSprite_ "link-simple" "sharp-regular" "h-8 w-8 text-blue-500"
+                faSprite_ "link-simple" "regular" "h-8 w-8 text-blue-500"
                 "Read the docs"
             a_ [class_ "block px-8 py-16 flex items-center gap-6 border-l hover:bg-blue-100 ", href_ "https://calendar.app.google/EvPzCoVsLh5gqkAo8", target_ "_BLANK"] do
-              faSprite_ "circle-play" "light" "text-blue-500 h-14 w-14"
+              faSprite_ "circle-play" "regular" "text-blue-500 h-14 w-14"
               div_ [class_ "flex flex-col"] do
                 span_ [class_ "font-bold text-lg text-blue-700 space-x-3"] do
                   span_ "Need Help?"
@@ -159,7 +158,7 @@ completedBanner pid =
   div_ [class_ "w-[1000px] bg-slate-200 mx-auto rounded-lg border shadow mb-10"] do
     div_ [class_ "w-full px-8 py-16 bg-slate-100  rounded"] do
       div_ [class_ "pb-2 flex items-center flex-col gap-4 text-blue-500 font-medium"] do
-        faSprite_ "circle-check" "sharp-regular" "h-24 w-24 text-green-700"
+        faSprite_ "circle-check" "regular" "h-24 w-24 text-green-700"
         p_ [class_ "max-w-md text-center"] "Onboarding completed!"
         a_ [href_ $ "/p/" <> pid.toText <> "/", class_ "btn btn-primary"] "Go to the dashboard"
 
@@ -257,12 +256,12 @@ tabContentLaravel apikey current_tab =
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1 mt-4"] "Integrate"
         p_ [class_ "w-full py-1"] do
           "First, set the APITOOLKIT_KEY environment variable to your"
-          span_ [class_ "text-red-500"] " .env "
+          codeEmphasis " .env "
           "file."
         codeExample $ "APITOOLKIT_KEY=" <> apikey
       h4_ [class_ "text-slate-900 font-medium text-lg my-2"] do
         "Next, register the middleware in your"
-        span_ [class_ "text-red-500"] " app/Http/Kernel.php "
+        codeEmphasis " app/Http/Kernel.php "
         "file."
       codeExample
         $ [text|
@@ -307,12 +306,12 @@ tabContentSymfony apikey current_tab =
         h3_ [class_ "text-slate-900 font-medium text-lg mb-1 mt-4"] "Integrate"
         p_ [class_ "w-full py-1"] do
           "First, set the APITOOLKIT_KEY environment variable to your"
-          span_ [class_ "text-red-500"] " .env "
+          codeEmphasis " .env "
           "file."
         codeExample $ "APITOOLKIT_KEY=" <> apikey
       h4_ [class_ "text-slate-900 font-medium text-lg my-2"] do
         "Next, register the middleware in your"
-        span_ [class_ "text-red-500"] " service.yaml "
+        codeEmphasis " service.yaml "
         "file"
       codeExample
         $ [text|
@@ -657,10 +656,7 @@ tabContentAdonis apikey current_tab =
           h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Integrate"
           p_ [class_ ""] "First configure the package"
           bashCommand $ "node ace configure apitoolkit-adonis"
-          p_ [class_ "mt-4"] do
-            "Next, set API key in a"
-            span_ [class_ "text-red-500"] " /conf/apitoolkit.ts "
-            "file."
+          p_ [class_ "mt-4"] $ withEmphasisedText [("Next, set API key in a", False), ("/conf/apitoolkit.ts", True), ("file.", False)]
           codeExample
             [text|
 export const apitoolkitConfig = {
@@ -817,8 +813,7 @@ contentHeader target =
             end
        |]
       ]
-      do
-        faIcon_ "fa-copy" "fa-solid fa-copy" "h-4 w-4 inline-block"
+      $ faSprite_ "copy" "solid" "h-4 w-4 inline-block"
 
 
 guideFooterLink :: Text -> Text -> Html ()

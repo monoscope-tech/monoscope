@@ -24,8 +24,8 @@ import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import PyF qualified
 import Relude hiding (ask, asks)
 import System.Config (AuthContext)
-import System.Types (ATAuthCtx)
-import Utils (deleteParam, faIcon_, faSprite_, mIcon_, textToBool)
+import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
+import Utils (deleteParam, faSprite_, mIcon_, textToBool)
 
 
 data ParamInput = ParamInput
@@ -36,7 +36,7 @@ data ParamInput = ParamInput
   }
 
 
-endpointListGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
+endpointListGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 endpointListGetH pid layoutM ackdM archivedM hostM projectHostM sortM hxRequestM hxBoostedM hxCurrentURL = do
   (sess, project) <- Sessions.sessionAndProject pid
   let ackd = maybe True textToBool ackdM
@@ -67,9 +67,9 @@ endpointListGetH pid layoutM ackdM archivedM hostM projectHostM sortM hxRequestM
         div_ [class_ "grid grid-cols-5", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"]
           $ endpointList' paramInput currTime pid endpointStats inbox
   case (hxRequestM, hxBoostedM) of
-    (Just "true", Just "false") -> pure elementBelowTabs
-    (Just "true", Nothing) -> pure elementBelowTabs
-    _ -> pure $ bodyWrapper bwconf $ endpointListPage paramInput pid currTime endpointStats projHosts hostM projectHostM inbox
+    (Just "true", Just "false") -> addRespHeaders elementBelowTabs
+    (Just "true", Nothing) -> addRespHeaders elementBelowTabs
+    _ -> addRespHeaders $ bodyWrapper bwconf $ endpointListPage paramInput pid currTime endpointStats projHosts hostM projectHostM inbox
 
 
 endpointListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Endpoints.EndpointRequestStats -> Vector Endpoints.Host -> Maybe Text -> Maybe Text -> Int -> Html ()
@@ -90,7 +90,7 @@ endpointListPage paramInput pid currTime endpoints hosts hostM pHostM inbox_coun
         ]
         do
           span_ [class_ "ml-1 text-sm text-slate-600"] $ toHtml $ fromMaybe "Select host" pHostM
-      faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 w-4"
+      faSprite_ "chevron-down" "light" "h-4 w-4"
       div_ [id_ "hosts_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] do
         div_ [class_ "flex flex-col"] do
           forM_ hosts $ \host -> do
@@ -138,17 +138,15 @@ endpointList' paramInput currTime pid enps inbox_count = form_ [class_ "col-span
   let currentSortTitle = maybe "First Seen" fst3 $ find (\(_, _, identifier) -> identifier == paramInput.sort) sortMenu
   div_ [class_ "flex py-3 gap-8 items-center  bg-gray-50"] do
     div_ [class_ "h-4 flex space-x-3 w-8"] do
-      a_ [class_ " w-2 h-full"] ""
-      input_ [term "aria-label" "Select Issue", type_ "checkbox"]
+      a_ [class_ " w-2 h-full"] "" >> input_ [term "aria-label" "Select Issue", type_ "checkbox"]
     div_ [class_ " grow flex flex-row gap-2"] do
       button_ [class_ "btn btn-sm btn-outline border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/acknowlege", hxSwap_ "none"] "✓ acknowlege"
       button_ [class_ "btn btn-sm btn-outline space-x-1 border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/archive", hxSwap_ "none"] do
-        faSprite_ "fa-inbox" "solid" "h-4 w-4 inline-block"
-        span_ "archive"
+        faSprite_ "inbox" "solid" "h-4 w-4 inline-block" >> span_ "archive"
     div_ [class_ "relative inline-block"] do
-      a_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl space-x-2 cursor-pointer", [__|on click toggle .hidden on #sortMenuDiv |]] do
-        mIcon_ "sort" "h-4 w-4"
-        span_ $ toHtml currentSortTitle
+      a_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl space-x-2 cursor-pointer", [__|on click toggle .hidden on #sortMenuDiv |]]
+        $ mIcon_ "sort" "h-4 w-4"
+        >> (span_ $ toHtml currentSortTitle)
       div_ [id_ "sortMenuDiv", hxBoost_ "true", class_ "p-1 hidden text-sm border border-black-30 absolute right-0 z-10 mt-2 w-72 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none", tabindex_ "-1"] do
         sortMenu & mapM_ \(title, desc, identifier) -> do
           let isActive = paramInput.sort == identifier || (paramInput.sort == "" && identifier == "first_seen")
@@ -158,13 +156,13 @@ endpointList' paramInput currTime pid enps inbox_count = form_ [class_ "col-span
             , hxIndicator_ "#sortLoading"
             ]
             do
-              div_ [class_ "flex flex-col items-center justify-center px-3"] do
-                if isActive then mIcon_ "checkmark4" "w-4 h-5" else mIcon_ "" "w-4 h-5"
+              div_ [class_ "flex flex-col items-center justify-center px-3"]
+                $ if isActive then mIcon_ "checkmark4" "w-4 h-5" else mIcon_ "" "w-4 h-5"
               div_ [class_ "grow space-y-1"] do
                 span_ [class_ "block text-lg"] $ toHtml title
                 span_ [class_ "block "] $ toHtml desc
-    div_ [id_ "sortLoading", class_ "htmx-indicator fixed top-1/2 left-1/2 -translate-1/2 rounded-lg bg-white shadow p-10 border"] do
-      span_ [class_ "loading loading-dots loading-md"] ""
+    div_ [id_ "sortLoading", class_ "htmx-indicator fixed top-1/2 left-1/2 -translate-1/2 rounded-lg bg-white shadow p-10 border"]
+      $ span_ [class_ "loading loading-dots loading-md"] ""
 
     div_ [class_ "flex justify-center font-base w-60 content-between gap-14"] do
       span_ "GRAPH"
@@ -174,7 +172,7 @@ endpointList' paramInput currTime pid enps inbox_count = form_ [class_ "col-span
     div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "font-base"] "EVENTS"
   div_ [class_ "w-full flex flex-row p-3"] $ do
     div_ [class_ "relative flex w-full bg-white py-2 px-3 border-solid border border-gray-200 h-10"] $ do
-      faIcon_ "fa-magnifying-glass" "fa-light fa-magnifying-glass" "h-5 w-5"
+      faSprite_ "magnifying-glass" "regular" "h-5 w-5"
       input_
         [ type_ "text"
         , [__| on input show .endpoint_item in #endpoints_container when its textContent.toLowerCase() contains my value.toLowerCase() |]
@@ -182,18 +180,15 @@ endpointList' paramInput currTime pid enps inbox_count = form_ [class_ "col-span
         , placeholder_ "Search endpoints..."
         ]
   when (null enps && inbox_count == 0) $ section_ [class_ "mx-auto w-max p-5 sm:py-10 sm:px-16 items-center flex my-10 gap-16"] do
-    div_ [] do
-      faIcon_ "fa fa-solid fa-empty-set" "fa-solid fa-empty-set" "h-24 w-24"
+    div_ [] $ faSprite_ "empty-set" "solid" "h-24 w-24"
     div_ [class_ "flex flex-col gap-2"] do
       h2_ [class_ "text-2xl font-bold"] "Waiting for events..."
       p_ "You're currently not sending any data to APItoolkit from your backends yet."
       a_ [href_ $ "/p/" <> pid.toText <> "/integration_guides", class_ "w-max btn btn-indigo -ml-1 text-md"] "Read the setup guide"
 
   when (null enps && inbox_count > 0) $ div_ [class_ "flex flex-col text-center justify-center items-center h-32"] $ do
-    strong_ "No endpoints yet."
-    p_ "Check Inbox to acknowlege new endpoints"
-  div_ [id_ "endpoints_container"] do
-    mapM_ (renderEndpoint (paramInput.ackd && not paramInput.archived) currTime) enps
+    strong_ "No endpoints yet." >> p_ "Check Inbox to acknowlege new endpoints"
+  div_ [id_ "endpoints_container"] $ mapM_ (renderEndpoint (paramInput.ackd && not paramInput.archived) currTime) enps
 
 
 endpointAccentColor :: Bool -> Bool -> Text

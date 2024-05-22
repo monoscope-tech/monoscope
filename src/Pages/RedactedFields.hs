@@ -2,69 +2,20 @@
 
 module Pages.RedactedFields (redactedFieldsGetH, redactedFieldsPostH, RedactFieldForm (..)) where
 
-import Data.Aeson (encode)
-import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
-import Data.Text as T (Text)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector (Vector)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
-import Lucid (
-  Html,
-  ToHtml (toHtml),
-  a_,
-  autofocus_,
-  button_,
-  class_,
-  div_,
-  form_,
-  h2_,
-  h3_,
-  href_,
-  id_,
-  img_,
-  input_,
-  label_,
-  name_,
-  p_,
-  placeholder_,
-  role_,
-  section_,
-  span_,
-  src_,
-  table_,
-  tbody_,
-  td_,
-  textarea_,
-  th_,
-  thead_,
-  tr_,
-  type_,
- )
+import Lucid
 import Lucid.Htmx (hxPost_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Projects.RedactedFields qualified as RedactedFields
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Relude (
-  Applicative (pure),
-  ConvertUtf8 (decodeUtf8),
-  Generic,
-  Maybe (Just),
-  MonadIO (liftIO),
-  Semigroup ((<>)),
-  Show,
-  String,
-  mapM_,
-  show,
-  ($),
-  (&),
-  (<$>),
- )
-import Servant (Headers, addHeader)
-import Servant.Htmx (HXTrigger)
-import System.Types (ATAuthCtx)
+import Relude
+import System.Types
+import Utils (faSprite_)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -77,7 +28,7 @@ data RedactFieldForm = RedactFieldForm
   deriving anyclass (FromForm)
 
 
-redactedFieldsPostH :: Projects.ProjectId -> RedactFieldForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
+redactedFieldsPostH :: Projects.ProjectId -> RedactFieldForm -> ATAuthCtx (RespHeaders (Html ()))
 redactedFieldsPostH pid RedactFieldForm{path, description, endpointHash} = do
   (sess, project) <- Sessions.sessionAndProject pid
   redactedFieldId <- RedactedFields.RedactedFieldId <$> liftIO UUIDV4.nextRandom
@@ -86,12 +37,12 @@ redactedFieldsPostH pid RedactFieldForm{path, description, endpointHash} = do
   redactedFields <- dbtToEff do
     RedactedFields.redactField fieldToRedact
     RedactedFields.redactedFieldsByProject pid
-  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Submitted field to be redacted, Successfully"]}|]
-  pure $ addHeader hxTriggerData $ mainContent pid redactedFields
+  addSuccessToast "Submitted field to be redacted, Successfully" Nothing
+  addRespHeaders $ mainContent pid redactedFields
 
 
 -- | redactedFieldsGetH renders the api keys list page which includes a modal for creating the apikeys.
-redactedFieldsGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
+redactedFieldsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 redactedFieldsGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   redactedFields <- dbtToEff $ RedactedFields.redactedFieldsByProject pid
@@ -101,7 +52,7 @@ redactedFieldsGetH pid = do
           , currProject = Just project
           , pageTitle = "Redacted Fields"
           }
-  pure $ bodyWrapper bwconf $ redactedFieldsPage pid redactedFields
+  addRespHeaders $ bodyWrapper bwconf $ redactedFieldsPage pid redactedFields
 
 
 redactedFieldsPage :: Projects.ProjectId -> Vector RedactedFields.RedactedField -> Html ()
@@ -133,12 +84,10 @@ redactedFieldsPage pid redactedFields = do
                   , class_ "bg-white rounded-md text-slate-400 hover:text-slate-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
                   , [__|on click add .hidden to #redactFieldDialog|]
                   ]
-                  do
-                    span_ [class_ "sr-only"] "Close"
-                    img_ [class_ "h-6 w-6", src_ "/assets/svgs/close.svg"]
+                  $ (span_ [class_ "sr-only"] "Close" >> faSprite_ "xmark" "regular" "h-6 w-6")
               div_ [class_ "sm:flex sm:items-start"] do
-                div_ [class_ "mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10"] do
-                  img_ [class_ "h-6 w-6 text-red-600", src_ "/assets/svgs/close.svg"]
+                div_ [class_ "mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10"]
+                  $ (span_ [class_ "sr-only"] "Close" >> faSprite_ "xmark" "regular" "h-6 w-6 text-red-600")
                 div_ [class_ "mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left grow"] do
                   h3_ [class_ "text-lg leading-6 font-medium text-slate-900", id_ "modal-title"] "Redact a field path"
                   p_ [] "Redacting a field path means apitookit will strip out and discard all values of this field and will never be able to see those values."
@@ -183,5 +132,4 @@ mainContent pid redactedFields = do
                   td_ [class_ "px-6 py-4 whitespace-nowrap text-sm text-slate-500"] $ toHtml @String $ show rf.configuredVia
                   td_ [class_ "px-6 py-4 whitespace-nowrap text-right text-sm font-medium"] do
                     a_ [class_ "text-indigo-600 hover:text-indigo-900", href_ $ "/p/" <> pid.toText <> "/redacted_fields/delete"] do
-                      img_ [src_ "/assets/svgs/revoke.svg", class_ "h-3 w-3 mr-2 inline-block"]
                       span_ [class_ "text-slate-500"] "Delete"

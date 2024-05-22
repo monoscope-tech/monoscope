@@ -15,12 +15,11 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude hiding (ask, asks)
-import Servant (Union, WithStatus (..), respond)
 import System.Types
-import Utils (GetOrRedirect, faIcon_)
+import Utils (faSprite_)
 
 
-listProjectsGetH :: ATAuthCtx (Union GetOrRedirect)
+listProjectsGetH :: ATAuthCtx (RespHeaders (Html ()))
 listProjectsGetH = do
   (sess, project) <- Sessions.sessionAndProject (Projects.ProjectId UUID.nil)
   let bwconf =
@@ -39,7 +38,7 @@ listProjectsGetH = do
             , Projects.createdAt = project.createdAt
             }
 
-  respond $ WithStatus @200 $ bodyWrapper bwconf $ listProjectsBody projects'
+  addRespHeaders $ bodyWrapper bwconf $ listProjectsBody projects'
 
 
 listProjectsBody :: V.Vector Projects.Project' -> Html ()
@@ -71,4 +70,4 @@ projectItem_ project = li_ do
           div_ [class_ "flex overflow-hidden -space-x-1"] do
             project.usersDisplayImages & V.toList & mapM_ \imgSrc -> img_ [class_ "inline-block h-6 w-6 rounded-full ring-2 ring-white", src_ imgSrc, alt_ "Dries Vincent"]
       div_ [class_ "ml-5 flex-shrink-0 text-gray-400"] do
-        faIcon_ "fa-chevron-right" "fa-light fa-chevron-right" "h-3 w-3"
+        faSprite_ "chevron-right" "regular" "h-3 w-3"

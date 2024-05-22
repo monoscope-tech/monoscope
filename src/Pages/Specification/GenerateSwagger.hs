@@ -358,7 +358,7 @@ generateSwagger projectTitle projectDescription endpoints shapes fields formats 
     swagger = object ["openapi" .= String "3.0.0", "info" .= info, "servers" .= Array hosts, "paths" .= paths]
 
 
-generateGetH :: Projects.ProjectId -> ATAuthCtx AE.Value
+generateGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders AE.Value)
 generateGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   endpoints <- dbtToEff $ Endpoints.endpointsByProjectId pid
@@ -368,4 +368,4 @@ generateGetH pid = do
   let field_hashes = V.map (.fHash) fields
   formats <- dbtToEff $ Formats.formatsByFieldsHashes pid field_hashes
   let swagger = generateSwagger project.title project.description endpoints shapes fields formats
-  pure swagger
+  addRespHeaders $ swagger

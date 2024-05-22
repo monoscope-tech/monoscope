@@ -35,7 +35,7 @@ import Utils (DBField (MkDBField))
 
 newtype FormatId = FormatId {unFormatId :: UUID.UUID}
   deriving stock (Generic, Show)
-  deriving newtype (Eq, Ord, FromField, ToField, FromHttpApiData, Default, AE.FromJSON, NFData)
+  deriving newtype (Eq, Ord, FromField, ToField, FromHttpApiData, Default, AE.FromJSON, NFData, AE.ToJSON)
 
 
 data Format = Format

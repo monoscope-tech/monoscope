@@ -8,10 +8,10 @@ import Models.Apis.Fields.Types (parseFieldCategoryEnum)
 import Models.Apis.RequestDumps (autoCompleteFromRequestDumps)
 import Models.Projects.Projects qualified as Projects
 import Relude (Applicative (pure), Maybe (..), Text)
-import System.Types (ATAuthCtx)
+import System.Types
 
 
-getH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> ATAuthCtx AE.Value
+getH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders AE.Value)
 getH pid fcategory prefix = do
   fields <- dbtToEff do
     case (fcategory, prefix) of
@@ -22,4 +22,4 @@ getH pid fcategory prefix = do
           category = parseFieldCategoryEnum c
       (_, _) -> pure []
   let jsn = toJSON fields
-  pure jsn
+  addRespHeaders jsn

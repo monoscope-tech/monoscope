@@ -1,15 +1,21 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, BgJobs (..)) where
+module BackgroundJobs (jobsWorkerInit, BgJobs (..)) where
 
-import Control.Lens ((.~), (^.))
-import Data.Aeson as Aeson
+import Control.Lens ((.~))
+import Data.Aeson as Aeson (
+  FromJSON,
+  KeyValue ((.=)),
+  ToJSON,
+  Value (Array, String),
+  object,
+ )
 import Data.Aeson.QQ (aesonQQ)
 import Data.CaseInsensitive qualified as CI
 import Data.List.Extra (intersect, union)
 import Data.Pool (withResource)
 import Data.Text qualified as T
-import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, getZonedTime)
+import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, dayOfWeek, getCurrentTime, getZonedTime)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector (Vector)
 import Data.Vector qualified as V
@@ -33,21 +39,21 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Projects.Swaggers qualified as Swaggers
-import Models.Tests.TestToDump qualified as TestToDump
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text, trimming)
 import Network.Wreq
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, startJobRunner, throwParsePayload)
+import Pages.GenerateSwagger (generateSwagger)
 import Pages.Reports qualified as RP
-import Pages.Specification.GenerateSwagger (generateSwagger)
-import Pkg.Mail (sendEmail, sendPostmarkEmail, sendSlackMessage)
+import Pkg.Mail (sendEmail, sendSlackMessage)
 import PyF (fmt, fmtTrim)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Config qualified as Config
 import System.Types (ATBackgroundCtx, runBackground)
+import Utils (scheduleIntervals)
 
 
 data BgJobs
@@ -62,9 +68,16 @@ data BgJobs
   | GenSwagger Projects.ProjectId Users.UserId
   | ReportUsage Projects.ProjectId
   | QueryMonitorsTriggered (Vector Monitors.QueryMonitorId)
+  | ScheduleForCollection Testing.CollectionId
   | RunCollectionTests Testing.CollectionId
   deriving stock (Eq, Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
+
+
+getShapes :: Projects.ProjectId -> Text -> DBT IO (Vector (Text, Vector Text))
+getShapes pid enpHash = query Select q (pid, enpHash)
+  where
+    q = [sql| select hash, field_hashes from apis.shapes where project_id=? and endpoint_hash=? |]
 
 
 getUpdatedFieldFormats :: Projects.ProjectId -> Vector Text -> DBT IO (Vector Text)
@@ -79,6 +92,12 @@ updateShapeCounts :: Projects.ProjectId -> Text -> Vector Text -> Vector Text ->
 updateShapeCounts pid shapeHash newFields deletedFields updatedFields = execute Update q (newFields, deletedFields, updatedFields, pid, shapeHash)
   where
     q = [sql| update apis.shapes SET new_unique_fields=?, deleted_fields=?, updated_field_formats=? where project_id=? and hash=?|]
+
+
+getAllProjects :: DBT IO (Vector Projects.ProjectId)
+getAllProjects = query Select q (Only True)
+  where
+    q = [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL|]
 
 
 -- TODO:
@@ -122,74 +141,71 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
   runBackground logger authCtx $ case bgJob of
     QueryMonitorsTriggered queryMonitorIds -> queryMonitorsTriggered queryMonitorIds
     NewAnomaly pid createdAt anomalyTypesT anomalyActionsT targetHash -> newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash
-    InviteUserToProject userId projectId reciever projectTitle' -> do
-      userM <- Users.userById userId
-      whenJust userM \user -> do
-        let firstName = user.firstName
-        let project_url = "https://app.apitoolkit.io/p/" <> projectId.toText
-        let templateVars =
-              [aesonQQ|{
-           "user_name": #{firstName},
-           "project_name": #{projectTitle'},
-           "project_url": #{project_url}
-        }|]
-        sendPostmarkEmail reciever "welcome-1" templateVars
-    SendDiscordData userId projectId fullName stack -> whenJustM (dbtToEff $ Projects.projectById projectId) \project -> do
-      users <- dbtToEff $ Projects.usersByProjectId projectId
-      let stackString = intercalate ", " $ map T.unpack stack
-      forM_ users \user -> do
-        let userEmail = CI.original (user.email)
-        let msg =
-              [fmtTrim| 🎉 New project created on apitoolkit.io! 🎉
-           User FullName : {fullName} 
-           User Email : {userEmail}
-           Project ID: {projectId.toText}
-           User ID :{userId.toText}
-           Payment Plan : {project.paymentPlan}
-           stack : {stackString}
-        |]
-        liftIO $ sendMessageToDiscord msg
-    CreatedProjectSuccessfully userId projectId reciever projectTitle -> do
-      userM <- Users.userById userId
-      whenJust userM \user -> do
-        let firstName = user.firstName
-        let project_url = "https://app.apitoolkit.io/p/" <> projectId.toText
-        let templateVars =
-              [aesonQQ|{
-           "user_name": #{firstName},
-           "project_name": #{projectTitle},
-           "project_url": #{project_url}
-        }|]
-        sendPostmarkEmail reciever "welcome" templateVars
-      pass
+    InviteUserToProject userId projectId reciever projectTitle' ->
+      sendEmail
+        reciever
+        [fmt| 🤖 APITOOLKIT: You've been invited to a project '{projectTitle'}' on apitoolkit.io |]
+        [fmtTrim|
+  Hi,<br/>
+
+  <p>You have been invited to the $projectTitle project on apitoolkit. 
+  Please use the following link to activate your account and access the $projectTitle project.</p>
+  <a href="https://app.apitoolkit.io/p/{projectId.toText}">Click Here</a>
+  <br/><br/>
+  Regards,
+  Apitoolkit team
+            |]
+    CreatedProjectSuccessfully userId projectId reciever projectTitle ->
+      sendEmail
+        reciever
+        [fmt| 🤖 APITOOLKIT: Project created successfully '{projectTitle}' on apitoolkit.io |]
+        [fmtTrim|
+  Hi,<br/>
+
+  <p>You have been invited to the $projectTitle project on apitoolkit. 
+  Please use the following link to activate your account and access the {projectTitle} project.</p>
+  <a href="app.apitoolkit.io/p/{projectId.toText}">Click Here to access the project</a><br/><br/>.
+
+  By the way, we know it can be difficult or confusing to integrate SDKs sometimes. So we're willing to assist. You can schedule a time here, and we can help with integrating: 
+  <a href="https://calendar.google.com/calendar/u/0/appointments/schedules/AcZssZ21Q1uDPjHN4YPpM2lNBS0_Nwc16IQj-25e5WIoPOKEVsBBIWJgy3usCUS4d7MtQz7kiuzyBJLb">Click Here to Schedule</a>
+  <br/><br/>
+  Regards,<br/>
+  Apitoolkit team
+            |]
     DailyJob -> do
       currentDay <- utctDay <$> Time.currentTime
-      projects <- dbtToEff $ query Select [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL|] (Only True)
+      projects <- dbtToEff getAllProjects
       forM_ projects \p -> do
         liftIO $ withResource authCtx.jobsPool \conn -> do
           _ <- createJob conn "background_jobs" $ BackgroundJobs.ReportUsage p
           if dayOfWeek currentDay == Monday
             then createJob conn "background_jobs" $ BackgroundJobs.WeeklyReports p
             else createJob conn "background_jobs" $ BackgroundJobs.DailyReports p
+      collections <- dbtToEff Testing.getCollectionsId
+      forM_ collections \col -> liftIO $ withResource authCtx.jobsPool \conn -> createJob conn "background_jobs" $ BackgroundJobs.ScheduleForCollection col
     DailyReports pid -> dailyReportForProject pid
     WeeklyReports pid -> weeklyReportForProject pid
     GenSwagger pid uid -> generateSwaggerForProject pid uid
     ReportUsage pid -> whenJustM (dbtToEff $ Projects.projectById pid) \project -> do
-      when (project.paymentPlan == "UsageBased") $ whenJust project.firstSubItemId \fSubId -> do
-        currentTime <- liftIO getZonedTime
-        totalToReport <- dbtToEff $ RequestDumps.getTotalRequestToReport pid project.usageLastReported
-        liftIO $ reportUsageToLemonsqueezy fSubId totalToReport authCtx.config.lemonSqueezyApiKey
-        _ <- dbtToEff $ Projects.updateUsageLastReported pid currentTime
-        pass
+      let subItemId = project.firstSubItemId
+      when (project.paymentPlan == "UsageBased") $ whenJust subItemId \fSubId -> do
+        totalRequestForThisMonth <- dbtToEff $ RequestDumps.getTotalRequestForCurrentMonth pid
+        liftIO $ reportUsageToLemonsqueezy fSubId totalRequestForThisMonth authCtx.config.lemonSqueezyApiKey
+    ScheduleForCollection col_id -> do
+      whenJustM (dbtToEff $ Testing.getCollectionById col_id) \collection -> whenJust (collection.schedule) \schedule -> do
+        currentTime <- liftIO getCurrentTime
+        let intervals = scheduleIntervals currentTime schedule
+        let dbParams = (\x -> (x, "queued" :: Text, Aeson.object ["tag" .= Aeson.String "RunCollectionTests", "contents" .= (Aeson.Array [show col_id.collectionId])])) <$> intervals
+        void $ dbtToEff $ Testing.scheduleInsertScheduleInBackgroundJobs dbParams
     RunCollectionTests col_id -> do
-      now <- Time.currentTime
-      collectionM <- dbtToEff $ Testing.getCollectionById col_id
-      if job.jobRunAt > addUTCTime (-900) now -- Run time is less than 15 mins ago
-        then whenJust collectionM \collection -> when (collection.isScheduled) do
-          let (Testing.CollectionSteps colStepsV) = collection.collectionSteps
-          _ <- TestToDump.runTestAndLog collection.projectId colStepsV
-          pass
-        else Log.logAttention "RunCollectionTests failed.  Job was sheduled to run over 30 mins ago" $ collectionM <&> \c -> (c.title, c.id)
+      (collectionM, steps) <- dbtToEff $ do
+        colM <- Testing.getCollectionById col_id
+        steps <- Testing.getCollectionSteps col_id
+        pure (colM, steps)
+      whenJust collectionM \collection -> do
+        -- let steps_data = (\x -> x.stepData) <$> steps
+        -- let col_json = (decodeUtf8 $ Aeson.encode steps_data :: String)
+        pass
 
 
 generateSwaggerForProject :: Projects.ProjectId -> Users.UserId -> ATBackgroundCtx ()
@@ -224,7 +240,7 @@ reportUsageToLemonsqueezy subItemId quantity apiKey = do
             "type": "usage-records",
             "attributes": {
                 "quantity": #{quantity},
-                "action": "increment"
+                "action": "set"
             },
             "relationships": {
                "subscription-item": {
@@ -262,7 +278,6 @@ queryMonitorsTriggered queryMonitorIds = do
 
 handleQueryMonitorThreshold :: Monitors.QueryMonitorEvaled -> Bool -> ATBackgroundCtx ()
 handleQueryMonitorThreshold monitorE isAlert = do
-  Log.logAttention "Query Monitors Triggered " monitorE
   _ <- dbtToEff $ Monitors.updateQMonitorTriggeredState monitorE.id isAlert
   when monitorE.alertConfig.emailAll do
     users <- dbtToEff $ Projects.usersByProjectId monitorE.projectId
@@ -280,7 +295,7 @@ jobsWorkerInit logger appCtx =
     $ mkConfig jobLogger "background_jobs" (appCtx.jobsPool) (MaxConcurrentJobs 1) (jobsRunner logger appCtx) id
   where
     jobLogger :: LogLevel -> LogEvent -> IO ()
-    jobLogger logLevel logEvent = Log.runLogT "OddJobs" logger Log.LogAttention $ Log.logInfo "Background jobs ping." (show @Text logLevel, show @Text logEvent) -- logger show (logLevel, logEvent)
+    jobLogger logLevel logEvent = Log.runLogT "OddJobs" logger Log.LogAttention $ Log.logInfo "Background jobs ping. " (show logLevel, show logEvent) -- logger show (logLevel, logEvent)
     -- jobLogger logLevel logEvent = print show (logLevel, logEvent) -- logger show (logLevel, logEvent)
 
 
@@ -309,12 +324,10 @@ dailyReportForProject pid = do
       Projects.NSlack ->
         sendSlackMessage
           pid
-          ( [fmtTrim| 🤖 *Daily Report for `{pr.title}`*
+          [fmtTrim| 🤖 *Daily Report for `{pr.title}`***
           
                         <https://app.apitoolkit.io/p/{pid.toText}/reports/{show report.id.reportId}|View today's report>
                            |]
-              :: Text
-          )
       _ -> users & mapM_ \user -> sendEmail (CI.original user.email) [fmt| APITOOLKIT: Daily Report for {pr.title} |] (renderText $ RP.reportEmail pid report)
 
 
@@ -352,19 +365,18 @@ weeklyReportForProject pid = do
 
 
 emailQueryMonitorAlert :: Monitors.QueryMonitorEvaled -> CI.CI Text -> Maybe Users.User -> ATBackgroundCtx ()
-emailQueryMonitorAlert monitorE@Monitors.QueryMonitorEvaled{alertConfig} email userM = whenJust userM \user ->
+emailQueryMonitorAlert monitorE email userM =
   sendEmail
     (CI.original email)
-    [fmt| 🤖 APITOOLKIT: log monitor triggered `{alertConfig.title}` |]
+    [fmt| 🤖 APITOOLKIT: log monitor triggered `{monitorE.alertConfig.title}` |]
     [fmtTrim|
-      Hi {user.firstName},<br/>
-      
-      The monitor: `{alertConfig.title}` was triggered and got above it's defined threshold.
-      
-      <br/><br/>
-      Regards,
-      Apitoolkit team
-                |]
+  Hi ,<br/>
+
+  
+  <br/><br/>
+  Regards,
+  Apitoolkit team
+            |]
 
 
 newAnomalyJob :: Projects.ProjectId -> ZonedTime -> Text -> Text -> Text -> ATBackgroundCtx ()
@@ -382,25 +394,25 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
         Projects.NSlack ->
           sendSlackMessage
             pid
-            [fmtTrim| 🤖 *New Endpoint Detected for `{project.title}`*
+            [fmtTrim| 🤖 *New Endpoint Detected for `{project.title}`****
 
                            We have detected a new endpoint on *{project.title}*
 
                            Endpoint: `{endpointPath}`
 
-                           <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
+                           <https://app.apitoolkit.io/p/{pid.toText}/anomaly/{targetHash}|More details on the apitoolkit>
                             |]
         _ -> do
           forM_ users \u ->
             sendEmail
               (CI.original u.email)
-              [fmt| 🤖 APITOOLKIT: New Endpoint detected for `{project.title}` |]
+              [text| 🤖 APITOOLKIT: New Endpoint detected for `{project.title}` |]
               [fmtTrim|
                      Hi {u.firstName},<br/>
          
                      <p>We detected a new endpoint on `{project.title}`:</p>
                      <p><strong>{endpointPath}</strong></p>
-                     <a href="https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}">More details on the apitoolkit</a>
+                     <a href="https://app.apitoolkit.io/p/{pid.toText}/anomaly/{targetHash}">More details on the apitoolkit</a>
                      <br/><br/>
                      Regards,
                      Apitoolkit team
@@ -408,9 +420,8 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
     Anomalies.ATShape -> do
       hasEndpointAnomaly <- dbtToEff $ Anomalies.getShapeParentAnomalyVM pid targetHash
       when (hasEndpointAnomaly == 0) do
-        let getShapesQuery = [sql| select hash, field_hashes from apis.shapes where project_id=? and endpoint_hash=? |]
-        shapes <- (dbtToEff $ query Select getShapesQuery (pid, T.take 8 targetHash))
-        let targetFields = maybe [] (V.toList . snd) (V.find (\a -> fst a == targetHash) shapes)
+        shapes <- dbtToEff $ getShapes pid $ T.take 8 targetHash
+        let targetFields = maybe [] (toList . snd) (V.find (\a -> fst a == targetHash) shapes)
         updatedFieldFormats <- dbtToEff $ getUpdatedFieldFormats pid (V.fromList targetFields)
         let otherFields = toList <$> toList (snd $ V.unzip $ V.filter (\a -> fst a /= targetHash) shapes)
         let newFields = filter (`notElem` foldl' union [] otherFields) targetFields
@@ -429,18 +440,18 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
     
                                           We detected a different API request shape to your endpoints than what you usually have
     
-                                          <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
+                                          <https://app.apitoolkit.io/p/{pid.toText}/anomaly/{targetHash}|More details on the apitoolkit>
                                  |]
             _ -> do
               forM_ users \u ->
                 sendEmail
                   (CI.original u.email)
-                  [fmt| 🤖 APITOOLKIT: New Shape anomaly found for `{project.title}` |]
+                  [text| 🤖 APITOOLKIT: New Shape anomaly found for `{project.title}` |]
                   [fmtTrim|
          Hi {u.firstName},<br/>
        
          <p>We detected a different API request shape to your endpoints than what you usually have..</p>
-         <a href="https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}">More details on the apitoolkit</a>
+         <a href="https://app.apitoolkit.io/p/{pid.toText}/anomaly/{targetHash}">More details on the apitoolkit</a>
          <br/><br/>
          Regards,<br/>
          Apitoolkit team
@@ -459,7 +470,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
   
                                        We detected that a particular field on your API is returning a different format/type than what it usually gets.
   
-                                       <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
+                                       <https://app.apitoolkit.io/p/{pid.toText}/anomaly/{targetHash}|More details on the apitoolkit>
                                |]
           _ -> forM_ users \u ->
             sendEmail
@@ -469,7 +480,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
      Hi {u.firstName},<br/>
    
      <p>We detected that a particular field on your API is returning a different format/type than what it usually gets.</p>
-     <a href="https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}">More details on the apitoolkit</a>
+     <a href="https://app.apitoolkit.io/p/{pid.toText}/anomaly/{targetHash}">More details on the apitoolkit</a>
      <br/><br/>
      Regards,<br/>
      Apitoolkit team

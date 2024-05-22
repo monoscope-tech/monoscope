@@ -37,9 +37,9 @@ import Pages.Components (statBox)
 import Pages.Endpoints.EndpointList (renderEndpoint)
 import Relude hiding (max, min)
 import System.Clock (Clock (Monotonic), getTime)
-import System.Types (ATAuthCtx)
+import System.Types
 import Text.Interpolation.Nyan (int, rmode')
-import Utils (deleteParam, faIcon_, freeTierLimitExceededBanner, mIcon_)
+import Utils (deleteParam, faSprite_, freeTierLimitExceededBanner, mIcon_)
 import Witch (from)
 
 
@@ -60,7 +60,7 @@ data ParamInput = ParamInput
   }
 
 
-dashboardGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
+dashboardGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 dashboardGetH pid fromDStr toDStr sinceStr' = do
   (sess, project) <- Sessions.sessionAndProject pid
   now <- Time.currentTime
@@ -93,8 +93,8 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
     freeTierExceeded <-
       if project.paymentPlan == "Free"
         then do
-          totalRequest <- RequestDumps.getTotalRequestForCurrentMonth pid
-          return $ totalRequest > 20000
+          totalRequest <- RequestDumps.getLastSevenDaysTotalRequest pid
+          return $ totalRequest > 10000
         else do
           return False
     pure (projectRequestStats, Vector.toList reqLatenciesRolledBySteps, freeTierExceeded)
@@ -110,7 +110,7 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
   let currentURL = "/p/" <> pid.toText <> "?&from=" <> fromMaybe "" fromDStr <> "&to=" <> fromMaybe "" toDStr
   let currentPickerTxt = fromMaybe (maybe "" (toText . formatTime defaultTimeLocale "%F %T") fromD <> " - " <> maybe "" (toText . formatTime defaultTimeLocale "%F %T") toD) sinceStr
   let paramInput = ParamInput{currentURL = currentURL, sinceStr = sinceStr, dateRange = (fromD, toD), currentPickerTxt = currentPickerTxt}
-  pure $ bodyWrapper bwconf $ dashboardPage pid paramInput currTime projectRequestStats newEndpoints reqLatenciesRolledByStepsJ (fromD, toD) freeTierExceeded hasRequests
+  addRespHeaders $ bodyWrapper bwconf $ dashboardPage pid paramInput currTime projectRequestStats newEndpoints reqLatenciesRolledByStepsJ (fromD, toD) freeTierExceeded hasRequests
 
 
 dashboardPage :: Projects.ProjectId -> ParamInput -> UTCTime -> Projects.ProjectRequestStats -> Vector.Vector Endpoints.EndpointRequestStats -> Text -> (Maybe ZonedTime, Maybe ZonedTime) -> Bool -> Bool -> Html ()
@@ -132,7 +132,7 @@ dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRoll
               div_ [class_ "flex items-start py-2 border-b justify-between"] do
                 h3_ [class_ "text-xl font-bold text-gray-900"] "New Endpoints Detected"
                 button_ [type_ "button", class_ "btn btn btn-sm btn-circle btn-ghost text-xl", onclick_ "closeNewEndpointsModal(event)"] do
-                  faIcon_ "fa-close" "fa-light fa-close" "h-4 w-4 inline-block"
+                  faSprite_ "xmark" "regular" "h-4 w-4 inline-block"
               div_ [class_ "w-full"] do
                 div_ [class_ "text-xl space-y-6 overflow-y-auto", style_ "min-height:30vh;max-height:70vh; width:100%"] do
                   mapM_ (renderEndpoint False currTime) newEndpoints
@@ -153,7 +153,7 @@ dashboardPage pid paramInput currTime projectStats newEndpoints reqLatenciesRoll
           do
             mIcon_ "clock" "h-4 w-4"
             span_ [class_ "inline-block"] $ toHtml paramInput.currentPickerTxt
-            faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 w-4 inline-block"
+            faSprite_ "chevron-down" "regular" "h-4 w-4 inline-block"
         div_ [id_ "timepickerBox", class_ "hidden absolute z-10 mt-1  rounded-md flex"] do
           div_ [class_ "inline-block w-84 overflow-auto bg-white py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm"] do
             timePickerItems
@@ -216,14 +216,14 @@ dStats pid projReqStats@Projects.ProjectRequestStats{..} reqLatenciesRolledBySte
     unless (hasRequest) do
       section_ [class_ "card-round p-5 sm:py-14 sm:px-24 items-center flex gap-16"] do
         div_ [] do
-          faIcon_ "fa fa-solid fa-empty-set" "fa-solid fa-empty-set" "h-24 w-24"
+          faSprite_ "empty-set" "solid" "h-24 w-24"
         div_ [class_ "flex flex-col gap-2"] do
           h2_ [class_ "text-2xl font-bold"] "Waiting for events..."
           p_ "You're currently not sending any data to APItoolkit from your backends yet."
           a_ [href_ $ "/p/" <> pid.toText <> "/integration_guides", class_ "w-max btn btn-indigo -ml-1 text-md"] "Read the setup guide"
     div_ [class_ "flex justify-between mt-4"] $ div_ [class_ "flex flex-row"] do
       a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .reqResSubSection)|]]
-        $ faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-4 w-4 mr-3 inline-block"
+        $ faSprite_ "chevron-down" "regular" "h-4 w-4 mr-3 inline-block"
       span_ [class_ "text-lg text-slate-700"] "Analytics"
 
     div_ [class_ "reqResSubSection space-y-5"] do

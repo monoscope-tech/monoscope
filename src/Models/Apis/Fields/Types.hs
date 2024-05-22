@@ -32,6 +32,7 @@ import Database.PostgreSQL.Simple.FromField (FromField, fromField, returnError)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
 import Deriving.Aeson qualified as DAE
+import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
 import Relude
 import Relude.Unsafe ((!!))
@@ -67,14 +68,15 @@ data FieldTypes
   | FTNull
   deriving stock (Eq, Generic, Show)
   deriving anyclass (NFData)
-  deriving
-    (AE.ToJSON)
-    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "FT", DAE.CamelToSnake]] FieldTypes
 
 
 instance FromJSON FieldTypes where
   parseJSON (AE.String v) = maybe empty pure (parseFieldTypes v)
   parseJSON _ = empty
+
+
+instance ToJSON FieldTypes where
+  toJSON = AE.String . fieldTypeToText
 
 
 instance Default FieldTypes where
@@ -83,6 +85,10 @@ instance Default FieldTypes where
 
 instance ToField FieldTypes where
   toField = Escape . encodeUtf8 <$> fieldTypeToText
+
+
+instance HasField "toText" FieldTypes Text where
+  getField = fieldTypeToText
 
 
 fieldTypeToText :: FieldTypes -> Text

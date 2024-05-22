@@ -12,7 +12,6 @@ import Data.Aeson (
   object,
  )
 import Data.Aeson qualified as AE
-import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
 import Data.Digest.XXHash (xxHash)
 import Data.List (nubBy)
@@ -24,34 +23,7 @@ import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Time qualified as Time
-import Lucid (
-  Html,
-  ToHtml (toHtml),
-  button_,
-  class_,
-  crossorigin_,
-  div_,
-  form_,
-  h3_,
-  href_,
-  id_,
-  input_,
-  link_,
-  name_,
-  onclick_,
-  onmousedown_,
-  p_,
-  placeholder_,
-  rel_,
-  script_,
-  span_,
-  src_,
-  style_,
-  tabindex_,
-  title_,
-  type_,
-  value_,
- )
+import Lucid
 import Lucid.Htmx (hxPost_)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields (parseFieldCategoryEnum, parseFieldTypes)
@@ -64,42 +36,10 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Numeric (showHex)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Relude (
-  Applicative (pure),
-  Bool (False),
-  ConvertUtf8 (decodeUtf8, encodeUtf8),
-  Eq ((==)),
-  Generic,
-  Maybe (..),
-  MonadIO (liftIO),
-  Semigroup ((<>)),
-  Show,
-  String,
-  Text,
-  ToString (toString),
-  ToText (toText),
-  Traversable (mapM),
-  error,
-  fromMaybe,
-  fst,
-  join,
-  map,
-  mapM_,
-  pass,
-  readMaybe,
-  show,
-  snd,
-  sort,
-  void,
-  ($),
-  (&),
-  (<$>),
- )
+import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
-import Servant (Headers, addHeader)
-import Servant.Htmx (HXTrigger)
-import System.Types (ATAuthCtx)
-import Utils (faIcon_)
+import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
+import Utils (faSprite_)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -296,7 +236,7 @@ flattenVector :: [V.Vector FieldOperation] -> V.Vector FieldOperation
 flattenVector = V.concat
 
 
-documentationPutH :: Projects.ProjectId -> SaveSwaggerForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
+documentationPutH :: Projects.ProjectId -> SaveSwaggerForm -> ATAuthCtx (RespHeaders (Html ()))
 documentationPutH pid SaveSwaggerForm{updated_swagger, swagger_id, endpoints, diffsInfo} = do
   (sess, project) <- Sessions.sessionAndProject pid
   currentTime <- Time.currentTime
@@ -321,11 +261,11 @@ documentationPutH pid SaveSwaggerForm{updated_swagger, swagger_id, endpoints, di
         Swaggers.addSwagger swaggerToAdd
       _ -> void $ Swaggers.updateSwagger swagger_id value
 
-  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Swagger Saved Successfully"]}|]
-  pure $ addHeader hxTriggerData ""
+  addSuccessToast "Swagger Saved Successfully" Nothing
+  addRespHeaders ""
 
 
-documentationPostH :: Projects.ProjectId -> SwaggerForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
+documentationPostH :: Projects.ProjectId -> SwaggerForm -> ATAuthCtx (RespHeaders (Html ()))
 documentationPostH pid SwaggerForm{swagger_json, from} = do
   (sess, project) <- Sessions.sessionAndProject pid
   swaggerId <- Swaggers.SwaggerId <$> liftIO UUIDV4.nextRandom
@@ -341,11 +281,11 @@ documentationPostH pid SwaggerForm{swagger_json, from} = do
           , swaggerJson = value
           }
   _ <- dbtToEff $ Swaggers.addSwagger swaggerToAdd
-  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Swagger uploaded Successfully"]}|]
-  pure $ addHeader hxTriggerData ""
+  addSuccessToast "Swagger uploaded Successfully" Nothing
+  addRespHeaders ""
 
 
-documentationGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (Html ())
+documentationGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 documentationGetH pid swagger_id = do
   (sess, project) <- Sessions.sessionAndProject pid
   (swaggers, swagger, swaggerId) <- dbtToEff do
@@ -379,7 +319,7 @@ documentationGetH pid swagger_id = do
           , currProject = Just project
           , pageTitle = "Documentation"
           }
-  pure $ bodyWrapper bwconf $ documentationsPage pid swaggers swaggerId (decodeUtf8 (encode swagger))
+  addRespHeaders $ bodyWrapper bwconf $ documentationsPage pid swaggers swaggerId (decodeUtf8 (encode swagger))
 
 
 documentationsPage :: Projects.ProjectId -> V.Vector Swaggers.Swagger -> String -> String -> Html ()
@@ -435,7 +375,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
               ]
               do
                 p_ [style_ "width: calc(100% - 25px)", class_ "truncate ..."] $ toHtml swaggerID
-                faIcon_ "fa-chevron-down" "fa-light fa-chevron-down" "h-3 w-3"
+                faSprite_ "chevron-down" "regular" "h-3 w-3"
             div_ [id_ "swagger_history_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] do
               swaggers & mapM_ \sw -> do
                 button_ [onclick_ "swaggerChanged(event)", class_ "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"] $ toHtml swaggerID
@@ -473,7 +413,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
           div_ [id_ "details_container", class_ "flex-auto overflow-y-auto", style_ "width:30%; height:100%"] do
             div_ [id_ "swagger-ui", class_ "relative h-full w-full bg-white overflow-auto"] pass
           button_ [class_ "absolute z-10 p-2", style_ "right: 15px", onclick_ "fullscreen()", title_ "full screen"] do
-            faIcon_ "fa-square-dashed" "fa-sharp fa-light fa-square-dashed" "h-5 w-5"
+            faSprite_ "square-dashed" "regular" "h-5 w-5"
   -- mainContent swaggers
 
   script_

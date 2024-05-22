@@ -181,7 +181,7 @@ projectCacheDefault =
     , endpointHashes = []
     , shapeHashes = []
     , redactFieldslist = []
-    , monthlyRequestCount = 0
+    , weeklyRequestCount = 0
     , paymentPlan = ""
     }
 
@@ -203,6 +203,6 @@ processRequestMessage recMsg = do
     pure $ fromMaybe projectCacheDefault mpjCache
   recId <- liftIO nextRandom
   pure
-    $ if projectCacheVal.paymentPlan == "Free" && projectCacheVal.monthlyRequestCount > 20000
+    $ if projectCacheVal.paymentPlan == "Free" && projectCacheVal.weeklyRequestCount > 10000
       then (Right (Nothing, Nothing, Nothing))
       else (RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId)

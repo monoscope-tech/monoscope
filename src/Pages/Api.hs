@@ -1,44 +1,15 @@
 module Pages.Api (apiGetH, apiPostH, apiDeleteH, GenerateAPIKeyForm (..)) where
 
-import Data.Aeson (encode)
-import Data.Aeson.QQ (aesonQQ)
 import Data.ByteString.Base64 qualified as B64
 import Data.Default (def)
-import Data.Text as T (Text, take)
+import Data.Text qualified as T
 import Data.UUID as UUID (toText)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
-import Lucid (
-  Html,
-  Term (term),
-  ToHtml (toHtml),
-  autofocus_,
-  button_,
-  class_,
-  div_,
-  form_,
-  h2_,
-  h3_,
-  id_,
-  input_,
-  name_,
-  p_,
-  placeholder_,
-  role_,
-  section_,
-  span_,
-  strong_,
-  table_,
-  tbody_,
-  td_,
-  th_,
-  thead_,
-  tr_,
-  type_,
- )
+import Lucid
 import Lucid.Htmx (hxConfirm_, hxDelete_, hxPost_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -46,30 +17,10 @@ import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Relude (
-  Applicative (pure),
-  Bool (..),
-  ConvertUtf8 (decodeUtf8, encodeUtf8),
-  Generic,
-  Maybe (..),
-  MonadIO (liftIO),
-  Ord ((>)),
-  Semigroup ((<>)),
-  Show,
-  mapM_,
-  not,
-  show,
-  ($),
-  (&),
- )
-import Servant (Headers, addHeader)
-import Servant.Htmx (HXTrigger)
-import System.Config (
-  AuthContext (config),
-  EnvConfig (apiKeyEncryptionSecretKey),
- )
-import System.Types (ATAuthCtx)
-import Utils (faIcon_)
+import Relude hiding (ask)
+import System.Config (AuthContext (config), EnvConfig (apiKeyEncryptionSecretKey))
+import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
+import Utils (faSprite_)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -81,7 +32,7 @@ data GenerateAPIKeyForm = GenerateAPIKeyForm
   deriving anyclass (FromForm)
 
 
-apiPostH :: Projects.ProjectId -> GenerateAPIKeyForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
+apiPostH :: Projects.ProjectId -> GenerateAPIKeyForm -> ATAuthCtx (RespHeaders (Html ()))
 apiPostH pid apiKeyForm = do
   (sess, project) <- Sessions.sessionAndProject pid
   authCtx <- ask @AuthContext
@@ -92,26 +43,25 @@ apiPostH pid apiKeyForm = do
   apiKeys <- dbtToEff do
     ProjectApiKeys.insertProjectApiKey pApiKey
     ProjectApiKeys.projectApiKeysByProjectId pid
-  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Created API Key Successfully"]}|]
+  addSuccessToast "Created API Key Successfully" Nothing
   case from apiKeyForm of
-    Just v -> pure $ addHeader hxTriggerData $ copyNewApiKey (Just (pApiKey, encryptedKeyB64)) True
-    Nothing -> pure $ addHeader hxTriggerData $ mainContent pid apiKeys (Just (pApiKey, encryptedKeyB64))
+    Just v -> addRespHeaders $ copyNewApiKey (Just (pApiKey, encryptedKeyB64)) True
+    Nothing -> addRespHeaders $ mainContent pid apiKeys (Just (pApiKey, encryptedKeyB64))
 
 
-apiDeleteH :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
+apiDeleteH :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (RespHeaders (Html ()))
 apiDeleteH pid keyid = do
   (sess, project) <- Sessions.sessionAndProject pid
   res <- dbtToEff $ ProjectApiKeys.revokeApiKey keyid
   apikeys <- dbtToEff $ ProjectApiKeys.projectApiKeysByProjectId pid
-  let hxTriggerData =
-        if res > 0
-          then decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Revoked API Key Successfully"]}|]
-          else decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "errorToast": ["Something went wrong"]}|]
-  pure $ addHeader hxTriggerData $ mainContent pid apikeys Nothing
+  if res > 0
+    then addSuccessToast "Revoked API Key Successfully" Nothing
+    else addErrorToast "Something went wrong" Nothing
+  addRespHeaders $ mainContent pid apikeys Nothing
 
 
 -- | apiGetH renders the api keys list page which includes a modal for creating the apikeys.
-apiGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
+apiGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 apiGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   apiKeys <- dbtToEff $ ProjectApiKeys.projectApiKeysByProjectId pid
@@ -123,7 +73,7 @@ apiGetH pid = do
           , pageTitle = "API Keys"
           , hasIntegrated = Just (requestDumps > 0)
           }
-  pure $ bodyWrapper bwconf $ apiKeysPage pid apiKeys
+  addRespHeaders $ bodyWrapper bwconf $ apiKeysPage pid apiKeys
 
 
 apiKeysPage :: Projects.ProjectId -> Vector ProjectApiKeys.ProjectApiKey -> Html ()
@@ -157,16 +107,15 @@ apiKeysPage pid apiKeys = do
                   ]
                   do
                     span_ [class_ "sr-only"] "Close"
-                    faIcon_ "fa-xmark" "fa-light fa-xmark" "h-6 w-6"
+                    faSprite_ "xmark" "regular" "h-6 w-6"
               div_ [class_ "sm:flex sm:items-start"] do
                 div_ [class_ "mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10"] do
-                  faIcon_ "fa-xmark" "fa-light fa-xmark" "h-6 w-6"
+                  faSprite_ "xmark" "regular" "h-6 w-6"
                 div_ [class_ "mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left grow"] do
                   h3_ [class_ "text-lg leading-6 font-medium text-gray-900", id_ "modal-title"] "Generate an API Key"
                   div_ [class_ "mt-6 space-y-2"] do
                     p_ [class_ "text-sm text-gray-500"] "Please input a title for your API Key."
-                    div_ do
-                      input_ [class_ "input-txt px-4 py-2  border w-full", type_ "text", placeholder_ "API Key Title", name_ "title", autofocus_]
+                    div_ $ input_ [class_ "input-txt px-4 py-2  border w-full", type_ "text", placeholder_ "API Key Title", name_ "title", autofocus_]
               div_ [class_ "mt-5 sm:mt-4 sm:flex sm:flex-row-reverse"] do
                 button_ [type_ "submit", class_ "w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-red-600 text-base font-medium text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 sm:ml-3 sm:w-auto sm:text-sm"] "Submit"
                 button_
@@ -238,7 +187,7 @@ mainContent pid apiKeys newKeyM = section_ [id_ "main-content"] do
                           , id_ $ "key" <> show i
                           ]
                           do
-                            faIcon_ "fa-xmark" "fa-light fa-xmark" "h-3 w-3 mr-2 inline-block text-red-600"
+                            faSprite_ "xmark" "regular" "h-3 w-3 mr-2 inline-block text-red-600"
                             span_ [class_ "text-slate-500"] "Revoke"
                       else do
                         button_
@@ -256,7 +205,7 @@ copyNewApiKey newKeyM hasNext =
         div_ [class_ "rounded-md bg-green-50 p-4"] do
           div_ [class_ "flex"] do
             div_ [class_ "flex-shrink-0"] do
-              faIcon_ "fa-circle-check" "fa-sharp fa-regular fa-circle-check" "h-5 w-5 text-green-400"
+              faSprite_ "circle-check" "regular" "h-5 w-5 text-green-400"
             div_ [class_ "ml-3"] do
               h3_ [class_ "text-sm font-medium text-green-800"] "API Key was generated successfully"
               div_ [class_ "mt-2 text-sm text-green-700 py-2"] do

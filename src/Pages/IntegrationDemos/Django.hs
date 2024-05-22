@@ -19,9 +19,9 @@ djangoGuide apikey = do
       h3_ [class_ "text-2xl font-semibold"] "SET API KEY"
       p_ [class_ "text-gray-600 font-medium"] do
         "Add"
-        span_ [class_ "text-red-500"] " APITOOLKIT_KEY "
+        codeEmphasis " APITOOLKIT_KEY "
         "and set it to your API KEY in your django"
-        span_ [class_ "text-red-500"] " settings.py "
+        codeEmphasis " settings.py "
         "file:"
       codeExample $ apiKeyCode apikey
 
@@ -29,7 +29,7 @@ djangoGuide apikey = do
       h3_ [class_ "text-2xl font-semibold"] "Initialize SDK"
       p_ [class_ "text-gray-600 font-medium"] do
         "To initialize the django package simple Tadd apitoolkit_django middleware into the"
-        span_ [class_ "text-red-500"] " settings.py "
+        codeEmphasis " settings.py "
         "middleware list:"
       codeExample $ initCode
 
@@ -37,7 +37,7 @@ djangoGuide apikey = do
       h3_ [class_ "text-xl font-medium"] "Configuration Options"
       p_ [class_ "text-gray-600 font-medium max-w-5xl"] do
         "The SDK accepts other options alongside apikey to allow you to customize the sdk. Redacting sensitive fields, debug mode etc. All in your django"
-        span_ [class_ "text-red-500"] " settings.py "
+        codeEmphasis " settings.py "
         "file"
       codeExample configOptions
 

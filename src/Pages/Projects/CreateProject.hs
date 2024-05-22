@@ -22,9 +22,9 @@ import Data.Aeson.QQ (aesonQQ)
 import Data.ByteString.Base64 qualified as B64
 import Data.CaseInsensitive (original)
 import Data.CaseInsensitive qualified as CI
-import Data.Default
+import Data.Default (Default (..))
 import Data.List.Extra (cons)
-import Data.List.Unique
+import Data.List.Unique (uniq)
 import Data.Pool (withResource)
 import Data.Text (toLower)
 import Data.Text qualified as T
@@ -34,12 +34,12 @@ import Data.Valor (Valor, check1, failIf, validateM)
 import Data.Valor qualified as Valor
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
-import Effectful.PostgreSQL.Transact.Effect
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Lucid
-import Lucid.Htmx
-import Lucid.Hyperscript
-import Models.Apis.Slack
+import Lucid.Htmx (hxConfirm_, hxGet_, hxIndicator_, hxPost_, hxSwap_, hxTarget_)
+import Lucid.Hyperscript (__)
+import Models.Apis.Slack (SlackData, getProjectSlackData)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMembers qualified as Projects
@@ -47,21 +47,16 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
-import Network.Wreq
+import Network.Wreq (defaults, getWith, header, responseBody)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pkg.ConvertKit qualified as ConvertKit
 import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
-import Servant (
-  Headers,
-  addHeader,
-  noHeader,
- )
-import Servant.Htmx
+import Servant (addHeader, noHeader)
 import System.Config
-import System.Types
-import Utils
+import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
+import Utils (faSprite_, lemonSqueezyUrls, lemonSqueezyUrlsAnnual)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -111,7 +106,7 @@ checkEmail = isJust . T.find (== '@')
 
 ----------------------------------------------------------------------------------------------------------
 -- createProjectGetH is the handler for the create projects page
-createProjectGetH :: ATAuthCtx (Html ())
+createProjectGetH :: ATAuthCtx (RespHeaders (Html ()))
 createProjectGetH = do
   appCtx <- ask @AuthContext
   sess <- Sessions.getSession
@@ -120,11 +115,15 @@ createProjectGetH = do
           { sessM = sess.persistentSession
           , pageTitle = "Endpoints"
           }
+<<<<<<< HEAD
   pure $ bodyWrapper bwconf $ createProjectBody (Unsafe.fromJust sess.persistentSession) appCtx.config False (def @CreateProjectForm) (def @CreateProjectFormError)
+=======
+  addRespHeaders $ bodyWrapper bwconf $ createProjectBody (sess.persistentSession) appCtx.config False (def @CreateProjectForm) (def @CreateProjectFormError) Nothing Nothing
+>>>>>>> 79a0175357bf23f3e10923b005a24c12a0fbb7f7
 
 
 ----------------------------------------------------------------------------------------------------------
-projectSettingsGetH :: Projects.ProjectId -> ATAuthCtx (Html ())
+projectSettingsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 projectSettingsGetH pid = do
   appCtx <- ask @AuthContext
   sess <- Sessions.getSession
@@ -144,14 +143,20 @@ projectSettingsGetH pid = do
           , orderId = proj.orderId
           }
 
+<<<<<<< HEAD
   let bwconf = (def :: BWConfig){sessM = sess.persistentSession, currProject = projM, pageTitle = "Settings"}
   pure $ bodyWrapper bwconf $ createProjectBody pSess appCtx.config True createProj (def @CreateProjectFormError)
+=======
+  let bwconf = (def :: BWConfig){sessM = Just sess.persistentSession, currProject = Just project, pageTitle = "Settings"}
+  addRespHeaders $ bodyWrapper bwconf $ createProjectBody (sess.persistentSession) appCtx.config True createProj (def @CreateProjectFormError) (Just project.notificationsChannel) slackInfo
+>>>>>>> 79a0175357bf23f3e10923b005a24c12a0fbb7f7
 
 
 ----------------------------------------------------------------------------------------------------------
-deleteProjectGetH :: Projects.ProjectId -> ATAuthCtx (Headers '[HXTrigger, HXRedirect] (Html ()))
+deleteProjectGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 deleteProjectGetH pid = do
   sess <- Sessions.getSession
+<<<<<<< HEAD
   isMember <- dbtToEff $ userIsProjectMember (Unsafe.fromJust sess.persistentSession) pid
   if not isMember
     then do
@@ -161,12 +166,43 @@ deleteProjectGetH pid = do
       _ <- dbtToEff $ Projects.deleteProject pid
       let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Deleted Project Successfully"]}|]
       pure $ addHeader hxTriggerData $ addHeader "/" $ span_ ""
+=======
+  _ <- dbtToEff $ Projects.deleteProject pid
+  addSuccessToast "Deleted Project Successfully" Nothing
+  redirectCS "/" >> addRespHeaders ""
+
+
+data NotifListForm = NotifListForm
+  { notificationsChannel :: [Text]
+  }
+  deriving stock (Show, Generic)
+  deriving anyclass (FromForm)
+
+
+updateNotificationsChannel :: Projects.ProjectId -> NotifListForm -> ATAuthCtx (RespHeaders (Html ()))
+updateNotificationsChannel pid NotifListForm{notificationsChannel} = do
+  if "slack" `elem` notificationsChannel
+    then do
+      slackData <- dbtToEff $ getProjectSlackData pid
+      case slackData of
+        Nothing -> do
+          addErrorToast "You need to connect slack to this project first." Nothing
+          addRespHeaders ""
+        Just _ -> do
+          _ <- dbtToEff do Projects.updateNotificationsChannel pid notificationsChannel
+          addSuccessToast "Updated Notification Channels Successfully" Nothing
+          addRespHeaders ""
+    else do
+      _ <- dbtToEff do Projects.updateNotificationsChannel pid notificationsChannel
+      addSuccessToast "Updated Notification Channels Successfully" Nothing
+      addRespHeaders ""
+>>>>>>> 79a0175357bf23f3e10923b005a24c12a0fbb7f7
 
 
 ----------------------------------------------------------------------------------------------------------
 -- createProjectPostH is the handler for the create projects page form handling.
 -- It processes post requests and is expected to return a redirect header and a hyperscript event trigger header.
-createProjectPostH :: CreateProjectForm -> ATAuthCtx (Headers '[HXTrigger, HXRedirect] (Html ()))
+createProjectPostH :: CreateProjectForm -> ATAuthCtx (RespHeaders (Html ()))
 createProjectPostH createP = do
   appCtx <- ask @AuthContext
   sess' <- Sessions.getSession
@@ -174,7 +210,11 @@ createProjectPostH createP = do
 
   validationRes <- validateM createProjectFormV createP
   case validationRes of
+<<<<<<< HEAD
     Right cpe -> pure $ noHeader $ noHeader $ createProjectBody sess appCtx.config createP.isUpdate createP cpe
+=======
+    Right cpe -> addRespHeaders $ createProjectBody (sess.persistentSession) appCtx.config createP.isUpdate createP cpe Nothing Nothing
+>>>>>>> 79a0175357bf23f3e10923b005a24c12a0fbb7f7
     Left cp -> processProjectPostForm cp
 
 
@@ -228,7 +268,7 @@ getSubscriptionId orderId apiKey = do
           return Nothing
 
 
-processProjectPostForm :: Valor.Valid CreateProjectForm -> ATAuthCtx (Headers '[HXTrigger, HXRedirect] (Html ()))
+processProjectPostForm :: Valor.Valid CreateProjectForm -> ATAuthCtx (RespHeaders (Html ()))
 processProjectPostForm cpRaw = do
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
@@ -244,7 +284,8 @@ processProjectPostForm cpRaw = do
       project <- dbtToEff $ Projects.projectById pid
       case project of
         Just p -> do
-          if cp.paymentPlan == "UsageBased" && p.paymentPlan /= "UsageBased"
+          if (cp.paymentPlan == "UsageBased" && p.paymentPlan /= "UsageBased")
+            || (cp.paymentPlan == "GraduatedPricing" && p.paymentPlan /= "GraduatedPricing")
             then do
               subRes <- liftIO $ getSubscriptionId cp.orderId envCfg.lemonSqueezyApiKey
               let (subId, firstSubItemId) = case subRes of
@@ -269,7 +310,7 @@ processProjectPostForm cpRaw = do
               _ <- dbtToEff $ Projects.updateProject (createProjectFormToModel pid p.subId p.firstSubItemId cp)
               pure $ addHeader hxTriggerDataUpdate $ noHeader bdy
         Nothing -> do
-          let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"errorToast": ["Something went wrong, project not found"]}|]
+          let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"errorToast": ["Something went wrong, try again."]}|]
           pure $ addHeader hxTriggerData $ noHeader $ span_ [] ""
     else do
       let usersAndPermissions = zip cp.emails cp.permissions & uniq
@@ -286,9 +327,15 @@ processProjectPostForm cpRaw = do
             Nothing -> (Nothing, Nothing)
       if (cp.paymentPlan /= "Free" && isNothing firstSubItemId)
         then do
+<<<<<<< HEAD
           let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"errorToast": ["Couldn't get subscription Id please try again"]}|]
           let bdy = createProjectBody sess envCfg cp.isUpdate cp (def @CreateProjectFormError)
           pure $ addHeader hxTriggerData $ addHeader ("/p/" <> pid.toText <> "/about_project") bdy
+=======
+          addErrorToast "Couldn't get subscription ID. Please try again" Nothing
+          redirectCS ("/p/" <> pid.toText <> "/about_project")
+          addRespHeaders $ createProjectBody sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError) Nothing Nothing
+>>>>>>> 79a0175357bf23f3e10923b005a24c12a0fbb7f7
         else do
           _ <- dbtToEff do
             Projects.insertProject (createProjectFormToModel pid subId firstSubItemId cp)
@@ -298,6 +345,7 @@ processProjectPostForm cpRaw = do
             let keyPrefix = encryptedKeyB64
             pApiKey <- liftIO $ ProjectApiKeys.newProjectApiKeys pid projectKeyUUID "Default API Key" keyPrefix
             ProjectApiKeys.insertProjectApiKey pApiKey
+<<<<<<< HEAD
             liftIO $ ConvertKit.addUserOrganization envCfg.convertkitApiKey (CI.original sess.user.getUser.email) pid.toText cp.title cp.paymentPlan
             newProjectMembers <- forM usersAndPermissions \(email, permission) -> do
               userId' <- runMaybeT $ MaybeT (Users.userIdByEmail email) <|> MaybeT (Users.createEmptyUser email)
@@ -308,6 +356,21 @@ processProjectPostForm cpRaw = do
                 _ <- liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId pid email cp.title
                 pass
               pure (email, permission, userId)
+=======
+            liftIO $ ConvertKit.addUserOrganization envCfg.convertkitApiKey (CI.original sess.user.email) pid.toText cp.title cp.paymentPlan
+            newProjectMembers <-
+              catMaybes <$> forM usersAndPermissions \(email, permission) -> do
+                userId' <- runMaybeT $ MaybeT (Users.userIdByEmail email) <|> MaybeT (Users.createEmptyUser email)
+                liftIO $ ConvertKit.addUserOrganization envCfg.convertkitApiKey email pid.toText cp.title cp.paymentPlan
+                when (userId' /= Just sess.user.id) do
+                  case userId' of
+                    Just userId -> do
+                      -- invite the users to the project (Usually as an email)
+                      _ <- liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject userId pid email cp.title
+                      pass
+                    Nothing -> pass
+                pure $ maybe Nothing (\userId -> Just (email, permission, userId)) userId'
+>>>>>>> 79a0175357bf23f3e10923b005a24c12a0fbb7f7
             let projectMembers =
                   newProjectMembers
                     & filter (\(_, _, id') -> id' /= sess.userId)
@@ -315,10 +378,17 @@ processProjectPostForm cpRaw = do
                     & cons (ProjectMembers.CreateProjectMembers pid sess.userId Projects.PAdmin)
             ProjectMembers.insertProjectMembers projectMembers
           _ <- liftIO $ withResource appCtx.pool \conn ->
+<<<<<<< HEAD
             createJob conn "background_jobs" $ BackgroundJobs.CreatedProjectSuccessfully sess.userId pid (original sess.user.getUser.email) cp.title
           let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Created Project Successfully"]}|]
           let bdy = createProjectBody sess envCfg cp.isUpdate cp (def @CreateProjectFormError)
           pure $ addHeader hxTriggerData $ addHeader ("/p/" <> pid.toText <> "/about_project") bdy
+=======
+            createJob conn "background_jobs" $ BackgroundJobs.CreatedProjectSuccessfully sess.user.id pid (original sess.user.email) cp.title
+          addSuccessToast "Created Project Successfully" Nothing
+          redirectCS ("/p/" <> pid.toText <> "/about_project")
+          addRespHeaders $ createProjectBody sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError) Nothing Nothing
+>>>>>>> 79a0175357bf23f3e10923b005a24c12a0fbb7f7
 
 
 ----------------------------------------------------------------------------------------------------------
@@ -327,7 +397,7 @@ createProjectBody :: Sessions.PersistentSession -> EnvConfig -> Bool -> CreatePr
 createProjectBody sess envCfg isUpdate cp cpe = do
   let paymentPlan = if cp.paymentPlan == "" then "UsageBased" else cp.paymentPlan
   section_ [id_ "main-content", class_ "p-3 py-5 sm:p-6 overflow-y-scroll h-full"] do
-    div_ [class_ "mx-auto", style_ "max-width:800px"] do
+    div_ [class_ "mx-auto", style_ "max-width:1000px"] do
       h2_ [class_ "text-slate-700 text-3xl font-medium mb-5"] $ toHtml @String $ if isUpdate then "Project Settings" else "Create Project"
       div_ [class_ "grid gap-5"] do
         form_
@@ -374,7 +444,7 @@ createProjectBody sess envCfg isUpdate cp cpe = do
               p_ [class_ "text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 mb-2"] do
                 "Please select a plan"
                 span_ [class_ "text-red-400"] " *"
-              div_ [class_ "grid md:grid-cols-2 gap-4 border-1"] do
+              div_ [class_ "grid sm:grid-cols-2 md:grid-cols-3 gap-2 border-1"] do
                 ( [ ("Free", "20k", "$0", "2", cp.paymentPlan == "Free", "Free")
                   , ("Pay as you go", "250k", "$1", "Unlimited", paymentPlan == "UsageBased", "UsageBased")
                   ]
@@ -399,10 +469,9 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                       do
                         div_ [class_ "flex items-center justify-between border-b border-b-1 p-2"] do
                           h4_ [class_ "text-xl font-medium text-slate-700"] $ toHtml title
-                          div_ [class_ $ "grid place-items-center h-6 w-6 bg-gray-200 border rounded-full payment-radio " <> if isSelected then "payment-radio-active" else ""] do
-                            div_ [class_ "bg-white h-3 w-3 hidden rounded-full"] ""
                         div_ [class_ "text-lg py-3 px-2"] do
                           span_ [class_ "text-2xl text-blue-700"] $ toHtml price
+<<<<<<< HEAD
                           if value == "Free"
                             then do span_ [class_ "text-slate-500"] "/mo"
                             else do span_ [class_ "text-slate-500"] " per 10K requests"
@@ -436,6 +505,48 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                               div_ [class_ "flex gap-1 items-center"] do
                                 checkMark
                                 small_ "API Live Traffic AI based validations"
+=======
+                          case value of
+                            "Free" -> do
+                              span_ [class_ "text-slate-500"] "/month"
+                            _ -> span_ [class_ "text-slate-500"] "/10k requests"
+                        checkList value team
+                let isSelected = paymentPlan == "GraduatedPricing"
+                let isSelectedTxt = toLower $ show $ isSelected
+                let value = "GraduatedPricing"
+                a_
+                  [ class_ $ "payment-plans cursor-pointer space-y-1 border border-1 block p-2 rounded-md " <> if isSelected then " border-2 border-blue-300 shadow-lg" else ""
+                  , term
+                      "_"
+                      [text| 
+                          init if $isSelectedTxt then set window.paymentPlan to $value end 
+                          on click  set window.paymentPlan to $value
+                               then set #paymentPlanEl.value to "$value"
+                               then remove .border-2 .border-blue-300 .shadow-lg from .payment-plans
+                               then remove .payment-radio-active from .payment-radio 
+                               then add .payment-radio-active to (.payment-radio in me)
+                               then add .border-2 .border-blue-300 .shadow-lg to me
+                               |]
+                  ]
+                  do
+                    div_ [class_ "flex items-center justify-between border-b border-b-1 p-1"] do
+                      h4_ [class_ "text-xl font-medium text-slate-700"] $ toHtml "Graduated"
+                      div_ [role_ "tablist", class_ "tabs tabs-boxed"] $ do
+                        input_ [onchange_ "handlePlanToggle(e)", value_ "month", type_ "radio", name_ "plans", role_ "tab", class_ "tab", term "aria-label" "Monthly", checked_]
+                        input_ [onchange_ "handlePlanToggle(e)", value_ "annual", type_ "radio", name_ "plans", role_ "tab", class_ "tab", term "aria-label" "Annual"]
+                    div_ [class_ "text-lg py-3 px-2"] do
+                      span_ [class_ "text-2xl text-blue-700", id_ "price"] $ toHtml "$49"
+                      span_ [class_ "text-slate-500", id_ "num_requests"] "/550k"
+                      span_ [class_ "text-slate-500 mr-3"] " requests"
+                      p_ [class_ "text-blue-500 inline-block mt-0 text-sm text-green-500 font-semibold"] do
+                        span_ [] "save "
+                        span_ [id_ "save_container"] "$6/month"
+                      span_ [class_ "text-blue-500 text-sm block mt-2"] "then $1 per 10k requests"
+                    div_ [] do
+                      input_ [type_ "range", min_ "0", max_ "5", step_ "1", value_ "0", class_ "range range-primary range-sm", id_ "price_range"]
+
+                    checkList "GR" "Unlimited"
+>>>>>>> 79a0175357bf23f3e10923b005a24c12a0fbb7f7
 
             div_ [class_ $ "mt-10 " <> if isUpdate then "hidden" else ""] do
               p_ [class_ "text-slate-400 mx-2 font-light text-sm"] "Invite a project member"
@@ -448,21 +559,23 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                       option_ [class_ "text-slate-500", value_ "view"] "Can View"
                     button_
                       [ [__| on click remove the closest parent <div/> then halt |]
+                      , class_ "cursor-pointer"
                       ]
-                      $ img_ [src_ "/assets/svgs/delete.svg", class_ "cursor-pointer"]
+                      $ faSprite_ "trash" "regular" "w-4 h-4"
               a_
                 [ class_ "bg-transparent inline-flex cursor-pointer mt-2"
                 , [__| on click append #inviteTmpl.innerHTML to #inviteMemberSection then 
                          _hyperscript.processNode(#inviteMemberSection) then halt |]
                 ]
                 do
-                  faIcon_ "fa-plus" "fa-sharp fa-regular fa-plus" "mx-2 w-4 h-4 text-blue-700"
+                  faSprite_ "plus" "regular" "mx-2 w-4 h-4 text-blue-700"
                   span_ [class_ "text-blue-700 font-medium text-sm "] "Add member"
 
             -- LEMON SQUEEZY PAYMENT
 
             script_ [src_ "https://assets.lemonsqueezy.com/lemon.js"] ("" :: Text)
             let checkoutUrl = envCfg.lemonSqueezyUrl
+            let graduatedCheckoutOne = V.head lemonSqueezyUrls
             script_
               [type_ "text/javascript"]
               [text| 
@@ -501,7 +614,11 @@ createProjectBody sess envCfg isUpdate cp cpe = do
                  }
                }
              })
-             LemonSqueezy.Url.Open("$checkoutUrl");
+             if(document.getElementById("paymentPlanEl").value == "GraduatedPricing") {
+                  LemonSqueezy.Url.Open(window.graduatedRangeUrl);
+              }else {
+                 LemonSqueezy.Url.Open("$checkoutUrl");
+              }
              };
            const timezoneSelect = document.getElementById("timezone");
            const timeZones = Intl.supportedValuesOf('timeZone');
@@ -511,6 +628,54 @@ createProjectBody sess envCfg isUpdate cp cpe = do
              option.text = tz;
              timezoneSelect.appendChild(option);
            });
+            |]
+            let lmnUrls = decodeUtf8 $ encode $ lemonSqueezyUrls
+            let lmnUrlAnnual = decodeUtf8 $ encode $ lemonSqueezyUrlsAnnual
+            script_
+              [text|
+               const price_indicator = document.querySelector("#price_range");
+               window.graduatedRangeUrl = "$graduatedCheckoutOne"
+               let plan = "month";
+               const prices = [49, 88, 215, 420, 615, 800]
+               const saves = [6, 12, 35, 80, 135, 200]
+               const reqs = ["550k", "1M", "2.5M", "5M", "7.5M", "10M"]
+               const pricesYr = [588, 1056, 2580, 5000, 5000, 5000]
+               const savesYr = [72,144,420,960,960,960]
+               const reqsYr = ["6.6M", "12M", "30M", "60M", "60M", "60M"]
+               const urls = $lmnUrls
+               const urlsAnnual = $lmnUrlAnnual
+               const priceContainer = document.querySelector("#price")
+               const reqsContainer = document.querySelector("#num_requests")
+               const saveContainer = document.querySelector("#save_container")
+               function priceChange() {
+                 const value = price_indicator.value
+                 let price = prices[value]
+                 let num_reqs = reqs[value]
+                 let sav = saves[value] + "/month"
+                 window.graduatedRangeUrl = urls[value]
+                 if(plan === "annual") {
+                    price = pricesYr[value]
+                    num_reqs = reqsYr[value]
+                    sav = savesYr[value] + "/year"
+                    window.graduatedRangeUrl = urlsAnnual[value]
+                  }
+                 priceContainer.innerText = "$" + price
+                 reqsContainer.innerText = "/" + num_reqs
+                 saveContainer.innerText = "$" + sav 
+                 
+               }
+               price_indicator.addEventListener('input', priceChange)
+
+               function handlePlanToggle(e) {
+                  const radios = document.getElementsByName("plans")
+                  for(let radio of radios) {
+                    if(radio.checked) {
+                        plan = radio.value
+                        break
+                    }
+                  }
+                  priceChange()
+               }
             |]
 
             div_ [class_ "p-5 flex w-full justify-end"] do
@@ -542,3 +707,37 @@ createProjectBody sess envCfg isUpdate cp cpe = do
 checkMark :: Html ()
 checkMark =
   div_ [class_ "flex items-center justify-center text-center font-bold text-green-500 rounded-md w-5 h-5 bg-gray-200"] "✓"
+
+
+checkList :: Text -> Text -> Html ()
+checkList value team =
+  div_ [class_ "flex flex-col gap-2 p-3"] do
+    div_ [class_ "flex items-center gap-1"] do
+      checkMark
+      small_ "Max "
+      span_ $ toHtml team
+      small_ " team members"
+    if value == "Free"
+      then do
+        div_ [class_ "flex gap-1 items-center"] do
+          checkMark
+          small_ "20k requests per month"
+        div_ [class_ "flex gap-1 items-center"] do
+          checkMark
+          small_ "7 days data retention"
+      else do
+        div_ [class_ "flex gap-1 items-center"] do
+          checkMark
+          small_ "14 days data retention"
+        div_ [class_ "flex gap-1 items-center"] do
+          checkMark
+          small_ "API testing pipelines"
+        div_ [class_ "flex gap-1 items-center"] do
+          checkMark
+          small_ "API swagger/OpenAPI hosting"
+        div_ [class_ "flex gap-1 items-center"] do
+          checkMark
+          small_ "API metrics custom monitors"
+        div_ [class_ "flex gap-1 items-center"] do
+          checkMark
+          small_ "API live traffic AI-based validations"

@@ -29,9 +29,8 @@ import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pkg.Components qualified as Components
 import PyF (fmt)
 import Relude hiding (ask)
-import Relude.Unsafe qualified as Unsafe
-import System.Types (ATAuthCtx)
-import Utils (faIcon_, faSprite_)
+import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
+import Utils (faSprite_)
 
 
 data CollectionStepUpdateForm = CollectionStepUpdateForm
@@ -46,25 +45,26 @@ data CollectionStepUpdateForm = CollectionStepUpdateForm
   deriving (AE.FromJSON, AE.ToJSON) via (DAE.CustomJSON) '[DAE.OmitNothingFields] CollectionStepUpdateForm
 
 
-collectionStepsUpdateH :: Projects.ProjectId -> Testing.CollectionId -> CollectionStepUpdateForm -> ATAuthCtx (Html ())
+collectionStepsUpdateH :: Projects.ProjectId -> Testing.CollectionId -> CollectionStepUpdateForm -> ATAuthCtx (RespHeaders (Html ()))
 collectionStepsUpdateH pid colId colF = do
   let isScheduled = colF.scheduled == Just "on"
   _ <- dbtToEff $ Testing.updateCollection pid colId (fromMaybe "" colF.title) (fromMaybe "" colF.description) isScheduled ((fromMaybe "" colF.scheduleNumber) <> " " <> fromMaybe "" colF.scheduleNumberUnit) colF.stepsData
-  -- TODO: toast
-  pure $ toHtml ""
+  addSuccessToast "Collection's steps updated successfully" Nothing
+  addRespHeaders $ toHtml ""
 
 
-collectionRunTestsH :: Projects.ProjectId -> Testing.CollectionId -> Maybe Int -> CollectionStepUpdateForm -> ATAuthCtx (Html ())
+collectionRunTestsH :: Projects.ProjectId -> Testing.CollectionId -> Maybe Int -> CollectionStepUpdateForm -> ATAuthCtx (RespHeaders (Html ()))
 collectionRunTestsH pid colId runIdxM stepsForm = do
   stepResultsE <- TestToDump.runTestAndLog pid stepsForm.stepsData
   let stepResults = fromRight' stepResultsE
   let tkRespJson = decodeUtf8 @Text $ AE.encode stepResults
-  pure $ do
+  addSuccessToast "Collection completed execution" Nothing
+  addRespHeaders $ do
     script_ [fmt|window.collectionResults = {tkRespJson}|]
     V.iforM_ stepResults collectionStepResult_
 
 
-collectionGetH :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (Html ())
+collectionGetH :: Projects.ProjectId -> Testing.CollectionId -> ATAuthCtx (RespHeaders (Html ()))
 collectionGetH pid colId = do
   (sess, project) <- Sessions.sessionAndProject pid
   collectionM <- dbtToEff $ Testing.getCollectionById colId
@@ -74,7 +74,10 @@ collectionGetH pid colId = do
           , currProject = Just project
           , pageTitle = "Testing"
           }
-  pure $ bodyWrapper bwconf $ collectionPage pid (Unsafe.fromJust collectionM)
+  case collectionM of
+    Nothing -> addRespHeaders $ bodyWrapper bwconf $ div_ [class_ "w-full h-full flex items-center justify-center"] $ do
+      h4_ [] "Collection not found"
+    Just col -> addRespHeaders $ bodyWrapper bwconf $ collectionPage pid col
 
 
 testSettingsModalContent_ :: Testing.Collection -> Html ()
@@ -101,8 +104,7 @@ testSettingsModalContent_ col = div_ [class_ "space-y-5 w-96"] do
           option_ [selected_ "" | scheduleNumberUnit == "minutes"] "Minutes"
           option_ [selected_ "" | scheduleNumberUnit == "hours"] "Hours"
           option_ [selected_ "" | scheduleNumberUnit == "days"] "Days"
-  div_ do
-    button_ [class_ "btn btn-bordered btn-primary", type_ "submit"] "Update"
+  div_ $ button_ [class_ "btn btn-bordered btn-primary", type_ "submit"] "Update"
 
 
 collectionPage :: Projects.ProjectId -> Testing.Collection -> Html ()
@@ -151,7 +153,7 @@ collectionPage pid col = do
         div_ [class_ "col-span-1 h-full border-r border-gray-200"] do
           div_ [class_ "max-h-full overflow-y-scroll space-y-4", id_ "step-results-parent"] ""
           div_ [class_ "flex flex-col justify-center items-center h-full text-slate-400 text-xl space-y-4"] do
-            div_ [] $ Utils.faIcon_ "fa-objects-column" "fa-objects-column fa-solid" "w-16 h-16"
+            div_ [] $ Utils.faSprite_ "objects-column" "solid" "w-16 h-16"
             p_ [class_ "text-slate-500"] "Run a test to view the results here. "
     script_ [type_ "module", src_ "/assets/steps-editor.js"] ("" :: Text)
 
@@ -159,7 +161,7 @@ collectionPage pid col = do
 collectionStepResult_ :: Int -> Testing.StepResult -> Html ()
 collectionStepResult_ idx stepResult = section_ [class_ "p-1"] do
   div_ [class_ "p-2 bg-base-200 font-bold"] do
-    toHtml $ (show $ idx + 1) <> " " <> stepResult.stepName
+    toHtml $ (show $ idx + 1) <> " " <> fromMaybe "" stepResult.stepName
   div_ [role_ "tablist", class_ "tabs tabs-lifted"] do
     input_ [type_ "radio", name_ $ "step-result-tabs-" <> show idx, role_ "tab", class_ "tab", Aria.label_ "Response Log", checked_]
     div_ [role_ "tabpanel", class_ "tab-content bg-base-100 bg-base-100 border-base-300 rounded-box p-6"]

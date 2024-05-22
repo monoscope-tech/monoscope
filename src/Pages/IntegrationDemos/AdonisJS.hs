@@ -28,7 +28,7 @@ adonisGuide apikey = do
       h3_ [class_ "text-2xl font-semibold"] "Configure & Initialize SDK"
       p_ [class_ "text-gray-600 font-medium"] do
         "Initialize the apitoolkit adonis middleware by adding it to your"
-        span_ [class_ "text-red-500"] " kernel.ts/js "
+        codeEmphasis " kernel.ts/js "
         "file"
       codeExample $ initCode apikey
 
@@ -42,7 +42,7 @@ adonisGuide apikey = do
       p_ [class_ "text-gray-600 font-medium max-w-5xl"] "The apitoolkit adonis package relies on asyncLocalStorage for observing outgoing requests and error reporting"
       h4_ [] do
         "To enable asyncLocalStorage in your adonis project, add this to your"
-        span_ [class_ "text-red-500"] " config.ts "
+        codeEmphasis " config.ts "
         "file"
       codeExample configOptions2
     div_ [class_ "w-full flex flex-col gap-2", id_ "errors-monitoring"] do

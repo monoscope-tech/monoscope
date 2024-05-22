@@ -45,11 +45,11 @@ import Pages.IntegrationDemos.Pyramid (pyramidGuide)
 import Pages.IntegrationDemos.Slim (slimGuide)
 import Pages.IntegrationDemos.Symfony (symfonyGuide)
 import Relude hiding (ask)
-import System.Types (ATAuthCtx)
-import Utils (faIcon_)
+import System.Types
+import Utils (faSprite_)
 
 
-getH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
+getH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 getH pid sdkM errReportM reqMonM = do
   (sess, project) <- Sessions.sessionAndProject pid
   apiKey <- dbtToEff $ ProjectApiKeys.projectApiKeysByProjectId pid
@@ -60,7 +60,7 @@ getH pid sdkM errReportM reqMonM = do
           , currProject = Just project
           , pageTitle = "Integrations"
           }
-  pure $ bodyWrapper bwconf $ integrationsPage pid (fromMaybe "express" sdkM) key errReportM reqMonM
+  addRespHeaders $ bodyWrapper bwconf $ integrationsPage pid (fromMaybe "express" sdkM) key errReportM reqMonM
 
 
 integrationsPage :: Projects.ProjectId -> Text -> Text -> Maybe Text -> Maybe Text -> Html ()
@@ -77,7 +77,7 @@ integrationsPage pid sdk apiKey errReportM reqMonM = do
           button_ [class_ "border flex items-center justify-between border-blue-500 w-36 rounded-lg px-2 py-1.5 text-sm font-medium", [__|on click toggle .hidden on #sdk_list|]] do
             span_ [class_ "b"] $ toHtml $ getTitle sdk
             span_ [] do
-              faIcon_ "fa fa-solid fa-angle-down" "fa fa-solid fa-angle-down" "h-3 w-3"
+              faSprite_ "chevron-down" "regular" "h-3 w-3"
           div_ [class_ "hidden w-full flex flex-col left-0 absolute shadow top-8 bg-white text-sm rounded", id_ "sdk_list"] do
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=express"] "ExpressJs"
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=gin"] "Go Gin"

@@ -14,7 +14,7 @@ dotNetGuide apikey = do
       h3_ [class_ "text-2xl font-semibold"] "Install"
       p_ [class_ "text-gray-600 font-medium flex items-center gap-1"] do
         "Install the APItoolkit .NET SDK using "
-        span_ [class_ "text-red-500"] "dotnet add:"
+        codeEmphasis "dotnet add:"
       bashCommand "dotnet add package ApiToolkit.Net"
 
     div_ [class_ "w-full flex flex-col gap-2", id_ "requests-monitoring"] do
@@ -36,7 +36,7 @@ dotNetGuide apikey = do
       h3_ [class_ "text-2xl font-semibold"] "Outgoing Request Monitoring"
       p_ [class_ "text-gray-600 max-w-5xl"] do
         "APItoolkit also allows you to monitor your outgoing request (i.e the api calls your make from your server). Monitored outgoing are also associated with the incoming request that triggered them. You can achieve this by calling the "
-        span_ [class_ "text-red-500"] " APIToolkit.ObservingHandler "
+        codeEmphasis " APIToolkit.ObservingHandler "
         "method of the apitoolkit client class and passing that to an HttpClient instance"
       codeExample $ outgoingRequest apikey
 

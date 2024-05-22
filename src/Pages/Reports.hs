@@ -25,7 +25,6 @@ import Data.Aeson as Aeson (
   encode,
   object,
  )
-import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -44,9 +43,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Relude
-import Servant (Headers, addHeader)
-import Servant.Htmx (HXTrigger)
-import System.Types (ATAuthCtx)
+import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
 
 
 data PerformanceReport = PerformanceReport
@@ -97,15 +94,15 @@ data ReportData = ReportData
   deriving anyclass (FromJSON)
 
 
-reportsPostH :: Projects.ProjectId -> Text -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
+reportsPostH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders (Html ()))
 reportsPostH pid t = do
   _ <- Sessions.sessionAndProject pid
   apiKeys <- dbtToEff $ Projects.updateProjectReportNotif pid t
-  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "", "successToast": ["Report nofications updated Successfully"]}|]
-  pure $ addHeader hxTriggerData $ span_ [] ""
+  addSuccessToast "Report notifications updated Successfully" Nothing
+  addRespHeaders $ span_ [] ""
 
 
-singleReportGetH :: Projects.ProjectId -> Reports.ReportId -> ATAuthCtx (Html ())
+singleReportGetH :: Projects.ProjectId -> Reports.ReportId -> ATAuthCtx (RespHeaders (Html ()))
 singleReportGetH pid rid = do
   (sess, project) <- Sessions.sessionAndProject pid
   report <- dbtToEff $ Reports.getReportById rid
@@ -115,10 +112,10 @@ singleReportGetH pid rid = do
           , currProject = Just project
           , pageTitle = "Reports"
           }
-  pure $ bodyWrapper bwconf $ singleReportPage pid report
+  addRespHeaders $ bodyWrapper bwconf $ singleReportPage pid report
 
 
-reportsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (Html ())
+reportsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 reportsGetH pid page hxRequest hxBoosted = do
   (sess, project) <- Sessions.sessionAndProject pid
   let p = toString (fromMaybe "0" page)
@@ -127,7 +124,7 @@ reportsGetH pid page hxRequest hxBoosted = do
   reports <- dbtToEff $ Reports.reportHistoryByProject pid pg
   let nextUrl = "/p/" <> show pid.unProjectId <> "/reports?page=" <> show (pg + 1)
   case (hxRequest, hxBoosted) of
-    (Just "true", Nothing) -> pure $ reportListItems pid reports nextUrl
+    (Just "true", Nothing) -> addRespHeaders $ reportListItems pid reports nextUrl
     _ -> do
       let bwconf =
             (def :: BWConfig)
@@ -135,7 +132,7 @@ reportsGetH pid page hxRequest hxBoosted = do
               , currProject = Just project
               , pageTitle = "Reports"
               }
-      pure $ bodyWrapper bwconf $ reportsPage pid reports nextUrl project.dailyNotif project.weeklyNotif
+      addRespHeaders $ bodyWrapper bwconf $ reportsPage pid reports nextUrl project.dailyNotif project.weeklyNotif
 
 
 singleReportPage :: Projects.ProjectId -> Maybe Reports.Report -> Html ()
@@ -166,7 +163,7 @@ singleReportPage pid report =
                             div_ [class_ "space-x-3 border-b pb-1 flex gap-4 items-center justify-between"] do
                               div_ [class_ "flex items-center space-x-3 "] do
                                 div_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
-                                  img_ [class_ "inline w-4 h-4", src_ "/assets/svgs/endpoint.svg"]
+                                  img_ [class_ "inline w-4 h-4", src_ "/assets/svgs/anomalies/endpoint.svg"]
                                   span_ [] "New Endpoint"
                                 small_ [] $ toHtml $ endpointMethod <> " " <> endpointUrlPath <> " "
                               small_ [] $ show eventsCount <> " requests"

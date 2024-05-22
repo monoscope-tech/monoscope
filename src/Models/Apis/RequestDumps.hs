@@ -26,6 +26,7 @@ module Models.Apis.RequestDumps (
   getRequestType,
   autoCompleteFromRequestDumps,
   getTotalRequestForCurrentMonth,
+  getLastSevenDaysTotalRequest,
   hasRequest,
   getTotalRequestToReport,
 )
@@ -33,6 +34,7 @@ where
 
 import Data.Aeson (Value)
 import Data.Aeson qualified as AE
+import Data.Default
 import Data.Default.Instances ()
 import Data.Text qualified as T
 import Data.Time (CalendarDiffTime, UTCTime, ZonedTime, getCurrentTime)
@@ -204,9 +206,11 @@ data ATError = ATError
   , message :: Text
   , rootErrorMessage :: Text
   , stackTrace :: Text
+  , hash :: Maybe Text
+  , technology :: Maybe SDKTypes
   }
   deriving stock (Show, Generic, Eq)
-  deriving anyclass (NFData)
+  deriving anyclass (NFData, Default)
   deriving
     (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATError
@@ -543,14 +547,23 @@ autoCompleteFromRequestDumps pid key prefix = query Select (Query $ encodeUtf8 q
 
 getTotalRequestForCurrentMonth :: Projects.ProjectId -> DBT IO Int
 getTotalRequestForCurrentMonth pid = do
-  result <- query Select q pid
-  case result of
-    [Only count] -> return count
-    v -> return $ length v
+  result <- queryOne Select q pid
+  case fromMaybe (Only 0) result of
+    (Only count) -> return count
   where
     q =
       [sql| SELECT count(*) FROM apis.request_dumps WHERE project_id=? AND EXTRACT(MONTH FROM created_at) = EXTRACT(MONTH FROM CURRENT_DATE)
               AND EXTRACT(YEAR FROM created_at) = EXTRACT(YEAR FROM CURRENT_DATE);|]
+
+
+getLastSevenDaysTotalRequest :: Projects.ProjectId -> DBT IO Int
+getLastSevenDaysTotalRequest pid = do
+  result <- queryOne Select q pid
+  case fromMaybe (Only 0) result of
+    (Only count) -> return count
+  where
+    q =
+      [sql| SELECT count(*) FROM apis.request_dumps WHERE project_id=? AND created_at > NOW() - interval '7' day;|]
 
 
 getTotalRequestToReport :: Projects.ProjectId -> ZonedTime -> DBT IO Int

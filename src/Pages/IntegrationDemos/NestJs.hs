@@ -30,7 +30,7 @@ import { APIToolkit } from 'apitoolkit-express';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-  const apiToolkitClient = APIToolkit.NewClient({ apikey: "$apikey" });
+  const apiToolkitClient = APIToolkit.NewClient({ apiKey: "$apikey" });
   const app = await NestFactory.create(AppModule);
   app.use(apiToolkitClient.expressMiddleware);
   await app.listen(3000);
@@ -75,7 +75,7 @@ bootstrap();
       p_ [class_ "text-gray-600 font-medium max-w-5xl"] "APItoolkit allows you to report errors alongside the request that caused them which allows you to easily reproduce and fix issues in production."
       p_ [] do
         "After setting up the SDK in your "
-        span_ [class_ "text-red-500"] "main.ts"
+        codeEmphasis "main.ts"
         "file you can monitor requests like so"
       h3_ [class_ "text-2xl font-semibold mt-2"] "Error Reporting (Express Platform)"
       codeExample $ errorReportingCode apikey
@@ -109,7 +109,7 @@ export class AppController {
       p_ [class_ "text-gray-600 max-w-5xl"] "APItoolkit also allows you to monitor your outgoing request (i.e the api calls your make from your server). Monitored outgoing are also associated with the incoming request that triggered them, you can also monitor request in a background job or outside request context. To achieve this, wrap your axios instance with APItoolkit's observeAxios function."
       p_ [] do
         "After setting up the SDK in your "
-        span_ [class_ "text-red-500"] "main.ts"
+        codeEmphasis "main.ts"
         "file you can monitor requests like so"
 
       h3_ [class_ "text-2xl font-semibold mt-2"] "Outgoing Request Monitoring (Express Platform)"

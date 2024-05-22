@@ -15,11 +15,11 @@ import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.BodyWrapper (BWConfig (currProject, pageTitle, sessM), bodyWrapper)
 import PyF qualified
 import Relude hiding (ask, asks)
-import System.Types (ATAuthCtx)
-import Utils (faIcon_, mIcon_)
+import System.Types
+import Utils (faSprite_, mIcon_)
 
 
-outgoingGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (Html ())
+outgoingGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 outgoingGetH pid sortM = do
   (sess, project) <- Sessions.sessionAndProject pid
   hostsAndEvents <- dbtToEff $ Endpoints.dependenciesAndEventsCount pid (fromMaybe "events" sortM)
@@ -29,7 +29,7 @@ outgoingGetH pid sortM = do
           , currProject = Just project
           , pageTitle = "Dependencies"
           }
-  pure $ bodyWrapper bwconf $ outgoingPage pid (fromMaybe "events" sortM) hostsAndEvents
+  addRespHeaders $ bodyWrapper bwconf $ outgoingPage pid (fromMaybe "events" sortM) hostsAndEvents
 
 
 sortOptions :: [(Text, Text, Text)]
@@ -46,6 +46,7 @@ outgoingPage pid sortV hostsEvents = do
     h3_ [class_ "text-xl text-slate-700 flex gap-1 place-items-center mb-10"] "Outbound Integrations"
     div_ [class_ " w-full card-round", id_ "anomalyListBelowTab"] $ outgoingList' pid sortV hostsEvents
 
+<<<<<<< HEAD
 
 -- div_ [class_ "w-full card-round"] $ do
 --   -- Labels for each column`
@@ -132,6 +133,45 @@ outgoingList' pid sortV hostsEvents = do
               [ class_ $ "block flex flex-row px-3 py-2 hover:bg-blue-50 rounded-md cursor-pointer " <> (if isActive then " text-blue-800 " else "")
               , href_ $ "/p/" <> pid.toText <> "/outgoing?sort=" <> identifier
               , hxIndicator_ "#sortLoading"
+=======
+    div_ [class_ "w-full card-round"] $ do
+      -- Labels for each column`
+      div_ [class_ "col-span-4 bg-white divide-y"] $ do
+        div_ [class_ "col-span-4 py-2 space-x-4 border-b border-slate-20 pt-4 text-sm font-light flex justify-between items-center px-2 bg-gray-50 font-base "] $ do
+          div_ [class_ ""] $ do
+            div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "font-base font-medium text-black"] "HOST"
+          div_ [class_ "flex item-center"] $ do
+            div_ [class_ "relative inline-block"] $ do
+              let currentSortTitle = maybe "Events" fst3 $ find (\(_, _, identifier) -> identifier == sortV) sortOptions
+              a_ [class_ "btn-sm bg-transparent cursor-pointer border-black hover:shadow-2xl space-x-2", [__|on click toggle .hidden on #sortMenuDiv |]] do
+                mIcon_ "sort" "h-4 w-4"
+                span_ $ toHtml currentSortTitle
+              div_ [id_ "sortMenuDiv", hxBoost_ "true", class_ "p-1 hidden text-sm border border-black-30 absolute right-0 z-10 mt-2 w-72 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none", tabindex_ "-1"] do
+                sortOptions & mapM_ \(title, desc, identifier) -> do
+                  let isActive = sortV == identifier
+                  a_
+                    [ class_ $ "block flex flex-row px-3 py-2 hover:bg-blue-50 rounded-md cursor-pointer " <> (if isActive then " text-blue-800 " else "")
+                    , href_ $ "/p/" <> pid.toText <> "/outgoing?sort=" <> identifier
+                    ]
+                    do
+                      div_ [class_ "flex flex-col items-center justify-center px-3"] do
+                        if isActive then mIcon_ "checkmark4" "w-4 h-5" else mIcon_ "" "w-4 h-5"
+                      div_ [class_ "grow space-y-1"] do
+                        span_ [class_ "block text-lg"] $ toHtml title
+                        span_ [class_ "block "] $ toHtml desc
+            div_ [class_ "flex justify-center font-base w-60 content-between gap-14 font-medium text-black"] do
+              span_ "GRAPH"
+            div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "font-base font-medium text-black"] "EVENTS"
+      div_ [class_ "w-full bg-white border-b border-slate-20"] $ do
+        div_ [class_ "w-full flex flex-row p-3"] $ do
+          div_ [class_ "relative flex w-full bg-white py-2 px-3 border-solid border border-gray-200 h-10"] $ do
+            faSprite_ "magnifying-glass" "regular" "h-5 w-5"
+            input_
+              [ type_ "text"
+              , [__| on input show .endpoint_item in #endpoints_container when its textContent.toLowerCase() contains my value.toLowerCase() |]
+              , class_ "dataTable-search w-full h-full p-2 text-gray-500 font-normal focus:outline-none"
+              , placeholder_ "Search dependencies..."
+>>>>>>> 79a0175357bf23f3e10923b005a24c12a0fbb7f7
               ]
               do
                 div_ [class_ "flex flex-col items-center justify-center px-3"] do
@@ -166,6 +206,7 @@ outgoingList' pid sortV hostsEvents = do
     renderOutgoing pid sortV hostsEvents
 
 
+<<<<<<< HEAD
 renderOutgoing :: Projects.ProjectId -> Text -> V.Vector Endpoints.HostEvents -> Html ()
 renderOutgoing pid sortV hostsEvents = do
   div_ [class_ ""] $ do
@@ -189,3 +230,12 @@ renderOutgoing pid sortV hostsEvents = do
             ]
             ""
         div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "tabular-nums text-xl"] $ toHtml (show host.eventCount)
+=======
+      when (null hostsEvents) $ section_ [class_ "mx-auto w-max p-5 sm:py-10 sm:px-16 items-center flex my-10 gap-16"] do
+        div_ [] do
+          faSprite_ "empty-set" "solid" "h-24 w-24"
+        div_ [class_ "flex flex-col gap-2"] do
+          h2_ [class_ "text-2xl font-bold"] "No Outgoing Request Monitored."
+          p_ "You're currently not monitoring your outbound integrations."
+          a_ [href_ $ "/p/" <> pid.toText <> "/integration_guides#outgoing-request-monitoring", class_ "w-max btn btn-indigo -ml-1 text-md"] "See monitoring guide"
+>>>>>>> 79a0175357bf23f3e10923b005a24c12a0fbb7f7

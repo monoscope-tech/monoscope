@@ -1,7 +1,6 @@
 module Pages.Fields.FieldDetails (fieldPutH, EditFieldForm) where
 
-import Data.Aeson (FromJSON, encode)
-import Data.Aeson.QQ (aesonQQ)
+import Data.Aeson qualified as AE
 import Data.Digest.XXHash (xxHash)
 import Data.Time (getZonedTime)
 import Data.UUID qualified as UUID
@@ -15,9 +14,8 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Numeric (showHex)
 import Relude (
-  Applicative (pure),
   Bool (..),
-  ConvertUtf8 (decodeUtf8, encodeUtf8),
+  ConvertUtf8 (encodeUtf8),
   Generic,
   Maybe (..),
   MonadIO (liftIO),
@@ -29,9 +27,7 @@ import Relude (
   ($),
   (<$>),
  )
-import Servant (Headers, addHeader)
-import Servant.Htmx (HXTrigger)
-import System.Types (ATAuthCtx)
+import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -44,7 +40,7 @@ data EditFieldForm = EditFieldForm
   , fieldType :: Text
   }
   deriving stock (Show, Generic)
-  deriving anyclass (FromForm, FromJSON)
+  deriving anyclass (FromForm, AE.FromJSON)
 
 
 parseCheckbox :: Maybe Text -> Bool
@@ -52,7 +48,7 @@ parseCheckbox (Just _) = True
 parseCheckbox Nothing = False
 
 
-fieldPutH :: Projects.ProjectId -> Fields.FieldId -> EditFieldForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
+fieldPutH :: Projects.ProjectId -> Fields.FieldId -> EditFieldForm -> ATAuthCtx (RespHeaders (Html ()))
 fieldPutH pid fid editData = do
   _ <- Sessions.sessionAndProject pid
   fi <- dbtToEff $ execute Update [sql|update apis.fields set is_required = ?, is_enum = ?, description=? where id=?|] (parseCheckbox editData.isRequired, parseCheckbox editData.isEnum, editData.description, fid)
@@ -73,5 +69,5 @@ fieldPutH pid fid editData = do
         )
           <$> editData.formats
   r <- dbtToEff $ Formats.insertFormats formats
-  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"closeModal": "","successToast": ["Field edited successfully"]}|]
-  pure $ addHeader hxTriggerData ""
+  addSuccessToast "Field edited successfully" Nothing
+  addRespHeaders ""

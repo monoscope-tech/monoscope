@@ -78,6 +78,7 @@ callRunTestkit hsString = withCString hsString $ \cstr -> do
 runCollectionTest :: IOE :> es => V.Vector Testing.CollectionStepData -> Eff es (Either Text (V.Vector Testing.StepResult))
 runCollectionTest collectionSteps = do
   tkResp <- liftIO $ callRunTestkit $ decodeUtf8 $ AE.encode $ collectionSteps
+  -- FIXME: handle fromLeft correctly.
   let stepResults = fromRight' $ AE.eitherDecodeStrictText (toText tkResp) :: V.Vector Testing.StepResult
   pure $ Right stepResults
 

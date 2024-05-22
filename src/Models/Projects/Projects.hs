@@ -172,7 +172,7 @@ data ProjectCache = ProjectCache
     -- [endpointHash]<>[field_category eg requestBody]<>[field_key_path]
     -- Those redact fields that don't have endpoint or field_category attached, would be aplied to every endpoint and field category.
     redactFieldslist :: V.Vector Text
-  , monthlyRequestCount :: Int
+  , weeklyRequestCount :: Int
   , paymentPlan :: Text
   }
   deriving stock (Show, Generic)
@@ -206,10 +206,9 @@ projectCacheById pid = queryOne Select q (pid, pid, pid)
                     coalesce(ARRAY_AGG(DISTINCT shape_hashes ORDER BY shape_hashes ASC),'{}'::text[]) shape_hashes, 
                     coalesce(ARRAY_AGG(DISTINCT paths ORDER BY paths ASC),'{}') redacted_fields,
                     ( SELECT count(*) FROM apis.request_dumps 
-                     WHERE project_id=? AND EXTRACT(MONTH FROM created_at) = EXTRACT(MONTH FROM CURRENT_DATE)
-                       AND EXTRACT(YEAR FROM created_at) = EXTRACT(YEAR FROM CURRENT_DATE)
-                    ) monthly_request_count,
-                    (SELECT payment_plan from projects.projects where id =?) payment_plan
+                     WHERE project_id=? AND created_at > NOW() - INTERVAL '7' DAY
+                    ) weekly_request_count,
+                    (SELECT COALESCE((SELECT payment_plan FROM projects.projects WHERE id = ?),'Free')) payment_plan
             from
               (select e.host hosts, e.hash endpoint_hashes, sh.hash shape_hashes, concat(rf.endpoint_hash,'<>', rf.field_category,'<>', rf.path) paths
                 from apis.endpoints e
@@ -250,7 +249,7 @@ usersByProjectId :: ProjectId -> DBT IO (Vector Users.User)
 usersByProjectId pid = query Select q (Only pid)
   where
     q =
-      [sql| select u.id, u.created_at, u.updated_at, u.deleted_at, u.active, u.first_name, u.last_name, u.display_image_url, u.email, u.phone_number
+      [sql| select u.id, u.created_at, u.updated_at, u.deleted_at, u.active, u.first_name, u.last_name, u.display_image_url, u.email, u.phone_number, u.is_sudo
                 from users.users u join projects.project_members pm on (pm.user_id=u.id) where project_id=? and u.active IS True;|]
 
 
@@ -258,7 +257,7 @@ userByProjectId :: ProjectId -> Users.UserId -> DBT IO (Vector Users.User)
 userByProjectId pid user_id = query Select q (user_id, pid)
   where
     q =
-      [sql| select u.id, u.created_at, u.updated_at, u.deleted_at, u.active, u.first_name, u.last_name, u.display_image_url, u.email, u.phone_number
+      [sql| select u.id, u.created_at, u.updated_at, u.deleted_at, u.active, u.first_name, u.last_name, u.display_image_url, u.email, u.phone_number,  u.is_sudo
                 from users.users u join projects.project_members pm on (pm.user_id= ?) where project_id=? and u.active IS True;|]
 
 

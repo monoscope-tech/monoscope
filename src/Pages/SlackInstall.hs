@@ -1,18 +1,14 @@
-{-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
 module Pages.SlackInstall (getH, linkProjectsGetH, linkProjectGetH, postH, LinkProjectsForm, updateWebHook) where
 
 import Control.Lens ((.~), (^.))
-import Data.Aeson
 import Data.Aeson qualified as AE
-import Data.Aeson.QQ
-import Data.Default
-import Data.Text
+import Data.Default (Default (def))
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.DBT
+import Database.PostgreSQL.Entity.DBT (withPool)
 import Deriving.Aeson qualified as DAE
-import Effectful.PostgreSQL.Transact.Effect
+import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask, asks)
 import Fmt (dateDashF, fmt)
 import Lucid
@@ -20,16 +16,14 @@ import Lucid.Htmx (hxPost_)
 import Models.Apis.Slack (insertAccessToken)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Network.Wreq
+import Network.Wreq (FormParam (..), defaults, header, postWith, responseBody)
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Pkg.Components (navBar)
 import Pkg.Mail (sendSlackMessage)
 import Relude hiding (ask, asks)
-import Servant (Headers, addHeader)
-import Servant.Htmx (HXTrigger)
-import System.Config
-import System.Types
-import Utils (faIcon_)
+import System.Config (AuthContext (config, env, pool), EnvConfig (slackClientId, slackClientSecret, slackRedirectUri))
+import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders, addSuccessToast)
+import Utils (faSprite_)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -72,35 +66,35 @@ exchangeCodeForToken clientId clientSecret redirectUri code = do
   let hds = header "Content-Type" .~ ["application/x-www-form-urlencoded; charset=utf-8"]
   response <- postWith (defaults & hds) "https://slack.com/api/oauth.v2.access" formData
   let responseBdy = response ^. responseBody
-  case decode responseBdy of
+  case AE.decode responseBdy of
     Just token -> do
       return $ Just token
     Nothing -> return Nothing
 
 
-updateWebHook :: Projects.ProjectId -> LinkProjectsForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
+updateWebHook :: Projects.ProjectId -> LinkProjectsForm -> ATAuthCtx (RespHeaders (Html ()))
 updateWebHook pid LinkProjectsForm{projects, webhookUrl} = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
   sess' <- Sessions.getSession
 
   _ <- dbtToEff $ insertAccessToken [pid.toText] webhookUrl
-  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Webhook url updated successfully"]} |]
-  pure $ addHeader hxTriggerData $ span_ [] "Projects linked successfully"
+  addSuccessToast "Webhook url updated successfully" Nothing
+  addRespHeaders $ span_ [] "Projects linked successfully"
 
 
-postH :: LinkProjectsForm -> ATAuthCtx (Headers '[HXTrigger] (Html ()))
+postH :: LinkProjectsForm -> ATAuthCtx (RespHeaders (Html ()))
 postH LinkProjectsForm{projects, webhookUrl} = do
   -- TODO: temporary, to work with current logic
   appCtx <- ask @AuthContext
   sess' <- Sessions.getSession
 
   _ <- dbtToEff $ insertAccessToken projects webhookUrl
-  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Slack account linked to project(s),successfully"]} |]
-  pure $ addHeader hxTriggerData $ span_ [] "Projects linked successfully"
+  addSuccessToast "Slack account linked to project(s),successfully" Nothing
+  addRespHeaders $ span_ [] "Projects linked successfully"
 
 
-getH :: Maybe Text -> ATBaseCtx (Html ())
+getH :: Maybe Text -> ATBaseCtx ((Html ()))
 getH slack_code = do
   let bwconf =
         (def :: BWConfig)
@@ -123,7 +117,7 @@ toLinkPage code = do
         a_ [href_ $ "/slack/link-projects?code=" <> code, class_ "btn btn-primary"] "Link a project(s)"
 
 
-linkProjectsGetH :: Maybe Text -> ATAuthCtx (Html ())
+linkProjectsGetH :: Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 linkProjectsGetH slack_code = do
   sess <- Sessions.getSession
   appCtx <- ask @AuthContext
@@ -139,8 +133,7 @@ linkProjectsGetH slack_code = do
           , currProject = Nothing
           , pageTitle = "Link a project"
           }
-
-  pure $ bodyWrapper bwconf (maybe noTokenFound (slackPage projects) token)
+  addRespHeaders $ bodyWrapper bwconf (maybe noTokenFound (slackPage projects) token)
 
 
 linkProjectGetH :: Projects.ProjectId -> Maybe Text -> ATBaseCtx (Html ())
@@ -209,6 +202,6 @@ installedSuccess = do
   navBar
   section_ [class_ "h-full mt-[80px] w-[1000px] flex flex-col items-center mx-auto"] do
     div_ [class_ "flex flex-col border px-6 py-16 mt-16 rounded-2xl items-center"] do
-      faIcon_ "fa-check" "fa-regular fa-check" "h-10 w-10 text-green-500"
+      faSprite_ "check" "regular" "h-10 w-10 text-green-500"
       h3_ [class_ "text-3xl font-semibold my-8"] "APItoolkit Slack App Installed"
       p_ [class_ "text-gray-600 text-center max-w-prose"] "APItoolkit Bot Slack app has been connected to your project successfully. You can now recieve notifications on slack."
