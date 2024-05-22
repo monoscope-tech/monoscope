@@ -26,6 +26,7 @@ module Models.Apis.RequestDumps (
   getRequestType,
   autoCompleteFromRequestDumps,
   getTotalRequestForCurrentMonth,
+  getLastSevenDaysTotalRequest,
   hasRequest,
   getTotalRequestToReport,
 )
@@ -553,6 +554,16 @@ getTotalRequestForCurrentMonth pid = do
     q =
       [sql| SELECT count(*) FROM apis.request_dumps WHERE project_id=? AND EXTRACT(MONTH FROM created_at) = EXTRACT(MONTH FROM CURRENT_DATE)
               AND EXTRACT(YEAR FROM created_at) = EXTRACT(YEAR FROM CURRENT_DATE);|]
+
+
+getLastSevenDaysTotalRequest :: Projects.ProjectId -> DBT IO Int
+getLastSevenDaysTotalRequest pid = do
+  result <- queryOne Select q pid
+  case fromMaybe (Only 0) result of
+    (Only count) -> return count
+  where
+    q =
+      [sql| SELECT count(*) FROM apis.request_dumps WHERE project_id=? AND created_at > NOW() - interval '7' day;|]
 
 
 getTotalRequestToReport :: Projects.ProjectId -> ZonedTime -> DBT IO Int

@@ -274,7 +274,7 @@ spec = do
               , endpointHashes = ["abc"]
               , shapeHashes = []
               , redactFieldslist = []
-              , monthlyRequestCount = 0
+              , weeklyRequestCount = 0
               , paymentPlan = ""
               }
       let result = RequestMessages.requestMsgToDumpAndEndpoint projectCache requestMsg timestamp recId

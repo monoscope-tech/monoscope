@@ -93,8 +93,8 @@ dashboardGetH pid fromDStr toDStr sinceStr' = do
     freeTierExceeded <-
       if project.paymentPlan == "Free"
         then do
-          totalRequest <- RequestDumps.getTotalRequestForCurrentMonth pid
-          return $ totalRequest > 20000
+          totalRequest <- RequestDumps.getLastSevenDaysTotalRequest pid
+          return $ totalRequest > 10000
         else do
           return False
     pure (projectRequestStats, Vector.toList reqLatenciesRolledBySteps, freeTierExceeded)

@@ -83,8 +83,8 @@ apiLogH pid queryM cols' cursorM' sinceM fromM toM layoutM hxRequestM hxBoostedM
     dbtToEff
       $ if project.paymentPlan == "Free"
         then do
-          totalRequest <- RequestDumps.getTotalRequestForCurrentMonth pid
-          return $ totalRequest > 20000
+          totalRequest <- RequestDumps.getLastSevenDaysTotalRequest pid
+          return $ totalRequest > 10000
         else do
           return False
   let bwconf =
