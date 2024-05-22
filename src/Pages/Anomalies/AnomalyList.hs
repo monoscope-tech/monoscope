@@ -41,14 +41,11 @@ import Lucid.Htmx (
   hxTrigger_,
  )
 import Lucid.Hyperscript (__)
-import Models.Apis.Anomalies (AnomalyVM)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Query qualified as Fields
 import Models.Apis.Fields.Types (
   Field (fieldType),
-  FieldCategoryEnum (FCRequestBody),
-  FieldTypes (FTString),
   fieldTypeToText,
   fieldsToNormalized,
   groupFieldsByCategory,
@@ -242,8 +239,7 @@ issuesList paramInput pid currTime issues nextFetchUrl = form_ [class_ "col-span
     [class_ "flex py-3 gap-8 items-center  bg-gray-50"]
     do
       div_ [class_ "h-4 flex space-x-3 w-8"] do
-        a_ [class_ " w-2 h-full"] ""
-        input_ [term "aria-label" "Select Issue", type_ "checkbox"]
+        a_ [class_ " w-2 h-full"] "" >> input_ [term "aria-label" "Select Issue", type_ "checkbox"]
       div_ [class_ " grow flex flex-row gap-2"] do
         button_ [class_ "btn btn-sm btn-outline border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/acknowlege", hxSwap_ "none"] "✓ acknowlege"
         button_ [class_ "btn btn-sm btn-outline space-x-1 border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/archive", hxSwap_ "none"] do
@@ -449,7 +445,7 @@ escapedQueryPartial :: Text -> Text
 escapedQueryPartial x = toText $ escapeURIString isUnescapedInURI $ toString x
 
 
-anomalyDetailsPage :: Anomalies.IssueL -> Maybe (Vector Shapes.ShapeWithFields) -> Maybe (Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field]) -> Maybe (Vector Text) -> UTCTime -> Bool -> Html ()
+anomalyDetailsPage :: Anomalies.IssueL -> Maybe (Vector Shapes.ShapeWithFields) -> Maybe (Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field]) -> Maybe (Vector Text) -> UTCTime -> Bool -> Html ()
 anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime modal = do
   let anomalyQueryPartial = buildQueryForAnomaly issue.anomalyType issue.targetHash
   div_ [class_ "w-full "] do
@@ -558,14 +554,14 @@ endpointOverview shapesWithFieldsMap =
       reqResSection "Response" False (Vector.toList s)
 
 
-requestShapeOverview :: Maybe (Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field], Map FieldCategoryEnum [Field]) -> Html ()
+requestShapeOverview :: Maybe (Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field]) -> Html ()
 requestShapeOverview fieldChanges = div_ [class_ "flex flex-col gap-6"] do
   whenJust fieldChanges \(fs, sn, th) -> do
     shapeOSection_ "New Unique Fields" "green" fs
     shapeOSection_ "Updated Fields" "gray" sn
     shapeOSection_ "Deleted Fields" "red" th
   where
-    shapeOSection_ :: Text -> Text -> Map FieldCategoryEnum [Field] -> Html ()
+    shapeOSection_ :: Text -> Text -> Map Fields.FieldCategoryEnum [Field] -> Html ()
     shapeOSection_ title color fields = div_ [class_ "flex flex-col"] do
       h3_ [class_ $ "text-" <> color <> "-500 py-1 w-fit font-semibold border-b border-b-" <> color <> "-500 mb-2"] (toHtml title)
       div_ [class_ "px-2"] do
