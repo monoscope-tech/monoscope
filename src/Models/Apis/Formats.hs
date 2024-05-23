@@ -69,8 +69,6 @@ formatsByHash fhash = query Select q (Only fhash)
     q = [sql| SELECT id,created_at,updated_at,project_id, field_hash,field_type,field_format,examples::json[], hash from apis.formats where hash=? |]
 
 
-
-
 -- TODO: explore using postgres values to handle bulking loading multiple fields and formats into the same insert query.
 insertFormatQueryAndParams :: Format -> (Query, [DBField])
 insertFormatQueryAndParams format = (q, params)

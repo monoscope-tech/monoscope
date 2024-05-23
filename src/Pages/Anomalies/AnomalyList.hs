@@ -189,7 +189,8 @@ anomalyListGetH pid layoutM ackdM archivedM sortM pageM loadM endpointM hxReques
           mapM_ (renderIssue False currTime) issues
           when (length issues == fLimit)
             $ a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url]
-            $ span_ [class_ "htmx-indicator query-indicator loading loading-dots loading-md"] "" >> "LOAD MORE"
+            $ span_ [class_ "htmx-indicator query-indicator loading loading-dots loading-md"] ""
+            >> "LOAD MORE"
         Nothing -> mapM_ (renderIssue False currTime) issues
   addRespHeaders $ case (layoutM, hxRequestM, hxBoostedM, loadM) of
     (Just "slider", Just "true", _, _) -> anomalyListSlider currTime pid endpointM (Just issues)
@@ -431,8 +432,9 @@ anomalyDetailsGetH pid targetHash hxBoostedM = do
               h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
               anomalyDetailsPage issue Nothing (Just anFields) Nothing currTime False
         Anomalies.IDNewFormatIssue issueD -> do
-          anFormats <- dbtToEff $ 
-            Fields.getFieldsByEndpointKeyPathAndCategory pid (issueD.endpointId.toText) (issueD.fieldKeyPath) (fromMaybe Fields.FCRequestBody issueD.fieldCategory)
+          anFormats <-
+            dbtToEff
+              $ Fields.getFieldsByEndpointKeyPathAndCategory pid (issueD.endpointId.toText) (issueD.fieldKeyPath) (fromMaybe Fields.FCRequestBody issueD.fieldCategory)
           case hxBoostedM of
             Just _ -> addRespHeaders $ anomalyDetailsPage issue Nothing Nothing (Just anFormats) currTime True
             Nothing -> addRespHeaders $ bodyWrapper bwconf $ div_ [class_ "w-full px-32 overflow-y-scroll h-full"] do
@@ -445,7 +447,6 @@ anomalyDetailsGetH pid targetHash hxBoostedM = do
               h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
               anomalyDetailsPage issue Nothing Nothing Nothing currTime False
         _ -> addRespHeaders $ "TODO"
-
 
 
 escapedQueryPartial :: Text -> Text
@@ -495,7 +496,7 @@ anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime modal =
               a_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
                 img_ [src_ "/assets/svgs/anomalies/fields.svg", class_ "inline w-6 h-6 -mt-1"]
                 span_ [class_ "text-2xl"] $ toHtml issueD.errorType
-              p_ $ toHtml $  issueD.message
+              p_ $ toHtml $ issueD.message
           _ -> pass
         div_ [class_ "flex items-center gap-8 shrink-0 text-gray-600"] do
           div_ [class_ "flex items-center gap-6 -mt-4"] do
