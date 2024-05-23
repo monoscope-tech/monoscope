@@ -4,6 +4,7 @@
 module Models.Apis.Anomalies (
   AnomalyVM (..),
   errorByHash,
+  insertIssue,
   AnomalyActions (..),
   Issue (..),
   IssueL (..),
@@ -41,7 +42,7 @@ import Data.Time
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Database.PostgreSQL.Entity
-import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query, queryOne)
+import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update, Insert), execute, query, queryOne)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName, field)
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, ResultError (ConversionFailed, UnexpectedNull), fromField, returnError)
@@ -487,6 +488,7 @@ data NewFormatIssue = NewFormatIssue
   , host :: Text
   , fieldKeyPath :: Text
   , formatType :: Fields.FieldTypes
+  , fieldCategory :: Maybe Fields.FieldCategoryEnum
   , examples :: Maybe (Vector Text)
   }
   deriving stock (Show, Generic)
@@ -637,7 +639,8 @@ createIssueData hostM anomaly = case anomaly.anomalyType of
               <*> pure (fromMaybe "" hostM)
               <*> anomaly.fieldKeyPath
               <*> anomaly.formatType
-              <*> pure (anomaly.formatExamples)
+              <*> pure anomaly.fieldCategory
+              <*> pure anomaly.formatExamples
           )
   ATEndpoint ->
     IDNewEndpointIssue
@@ -701,7 +704,7 @@ insertErrorQueryAndParams pid err = (q, params)
   where
     q =
       [sql| insert into apis.errors (project_id,created_at, hash, error_type, message, error_data) VALUES (?,?,?,?,?,?)
-            ON CONFLICT DO NOTHING |]
+            ON CONFLICT (project_id, hash) DO NOTHING |]
     params =
       [ MkDBField pid
       , MkDBField err.when
@@ -710,3 +713,10 @@ insertErrorQueryAndParams pid err = (q, params)
       , MkDBField err.message
       , MkDBField err
       ]
+
+insertIssue :: Issue -> DBT IO Int64 
+insertIssue issue = execute Insert q issue
+  where q = [sql|insert into apis.issues (id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash,
+                      issue_data, endpoint_id, acknowleged_by, archived_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                      ON CONFLICT (project_id, target_hash) DO NOTHING 
+                      |]

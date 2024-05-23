@@ -13,7 +13,6 @@ import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, 
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector (Vector)
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity qualified as Ent
 import Database.PostgreSQL.Entity.DBT (QueryNature (Select, Update), execute, query)
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -86,11 +85,11 @@ webhookUrl :: String
 webhookUrl = "https://discord.com/api/webhooks/1230980245423788045/JQOJ7w3gmEduaOvPTnxEz4L8teDpX5PJoFkyQmqZHR8HtRqAkWIjv2Xk1aKadTyXuFy_"
 
 
-sendMessageToDiscord :: Text -> IO ()
+sendMessageToDiscord :: Text -> ATBackgroundCtx ()
 sendMessageToDiscord msg = do
   let message = object ["content" .= msg]
   let opts = defaults & header "Content-Type" .~ ["application/json"]
-  response <- postWith opts webhookUrl message
+  response <- liftIO $ postWith opts webhookUrl message
   pass
 
 
@@ -128,7 +127,7 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
 - **Payment Plan**: {project.paymentPlan}
 - **Stack**: {stackString}
 |]
-        liftIO $ sendMessageToDiscord msg
+        sendMessageToDiscord msg
     CreatedProjectSuccessfully userId projectId reciever projectTitle -> do
       userM <- Users.userById userId
       whenJust userM \user -> do
@@ -141,7 +140,6 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
            "project_url": #{project_url}
         }|]
         sendPostmarkEmail reciever "project-created" templateVars
-      pass
     DailyJob -> do
       currentDay <- utctDay <$> Time.currentTime
       projects <- dbtToEff $ query Select [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL|] (Only True)
@@ -258,8 +256,8 @@ handleQueryMonitorThreshold monitorE isAlert = do
 
 jobsWorkerInit :: Log.Logger -> Config.AuthContext -> IO ()
 jobsWorkerInit logger appCtx =
-  startJobRunner
-    $ mkConfig jobLogger "background_jobs" (appCtx.jobsPool) (MaxConcurrentJobs 1) (jobsRunner logger appCtx) id
+  startJobRunner $
+    mkConfig jobLogger "background_jobs" (appCtx.jobsPool) (MaxConcurrentJobs 1) (jobsRunner logger appCtx) id
   where
     jobLogger :: LogLevel -> LogEvent -> IO ()
     jobLogger logLevel logEvent = Log.runLogT "OddJobs" logger Log.LogAttention $ Log.logInfo "Background jobs ping." (show @Text logLevel, show @Text logEvent) -- logger show (logLevel, logEvent)
@@ -355,13 +353,13 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
   case anomalyType of
     Anomalies.ATEndpoint -> do
       totalRequestsCount <- dbtToEff $ RequestDumps.countRequestDumpByProject pid
-      when (totalRequestsCount > 50) $ whenJustM (dbtToEff $ Anomalies.getAnomalyVM pid targetHash) \anomaly -> do
+      whenJustM (dbtToEff $ Anomalies.getAnomalyVM pid targetHash) \anomaly -> do
         endp <- dbtToEff $ Endpoints.endpointByHash pid targetHash
         users <- dbtToEff $ Projects.usersByProjectId pid
         project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
         let enp = Unsafe.fromJust endp
         let endpointPath = enp.method <> " " <> enp.urlPath
-        dbtToEff $ Ent.insert @Anomalies.Issue $ Unsafe.fromJust $ Anomalies.convertAnomalyToIssue (Just enp.host) anomaly
+        _ <- dbtToEff $ Anomalies.insertIssue  $ Unsafe.fromJust $ Anomalies.convertAnomalyToIssue (Just enp.host) anomaly
         forM_ project.notificationsChannel \case
           Projects.NSlack ->
             sendSlackMessage
@@ -375,24 +373,26 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
                              <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
                               |]
           _ -> do
-            forM_ users \u -> do
-              let templateVars =
-                    object
-                      [ "user_name" .= u.firstName
-                      , "project_name" .= project.title
-                      , "anomaly_url" .= ("https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/by_hash/" <> targetHash)
-                      , "endpoint_name" .= endpointPath
-                      ]
-              sendPostmarkEmail (CI.original u.email) "anomaly-endpoint" templateVars
+            when (totalRequestsCount > 50) $
+              forM_ users \u -> do
+                let templateVars =
+                      object
+                        [ "user_name" .= u.firstName
+                        , "project_name" .= project.title
+                        , "anomaly_url" .= ("https://app.apitoolkit.io/p/" <> pid.toText <> "/anomalies/by_hash/" <> targetHash)
+                        , "endpoint_name" .= endpointPath
+                        ]
+                sendPostmarkEmail (CI.original u.email) "anomaly-endpoint" templateVars
     Anomalies.ATShape -> do
       hasEndpointAnomaly <- dbtToEff $ Anomalies.getShapeParentAnomalyVM pid targetHash
       when (hasEndpointAnomaly == 0) $ whenJustM (dbtToEff $ Anomalies.getAnomalyVM pid targetHash) \anomaly -> do
         endp <- dbtToEff $ Endpoints.endpointByHash pid $ T.take 8 targetHash
         let getShapesQuery = [sql| select hash, field_hashes from apis.shapes where project_id=? and endpoint_hash=? |]
         shapes <- (dbtToEff $ query Select getShapesQuery (pid, T.take 8 targetHash))
-        let targetFields = maybe [] (V.toList . snd) (V.find (\a -> fst a == targetHash) shapes)
-        updatedFieldFormats <- dbtToEff $ getUpdatedFieldFormats pid (V.fromList targetFields)
+        let targetFields = maybe [] (V.toList . snd) $ V.find (\a -> fst a == targetHash) shapes
         let otherFields = toList <$> toList (snd $ V.unzip $ V.filter (\a -> fst a /= targetHash) shapes)
+        updatedFieldFormats <- dbtToEff $ getUpdatedFieldFormats pid (V.fromList targetFields)
+
         let newFields = filter (`notElem` foldl' union [] otherFields) targetFields
         let deletedFields = filter (`notElem` targetFields) $ foldl' intersect (head $ [] :| otherFields) (tail $ [] :| otherFields)
         _ <- dbtToEff $ updateShapeCounts pid targetHash (V.fromList newFields) (V.fromList deletedFields) updatedFieldFormats
@@ -400,7 +400,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
         users <- dbtToEff $ Projects.usersByProjectId pid
         project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
         let anomaly' = anomaly{Anomalies.anomalyType = anomalyType, Anomalies.shapeDeletedFields = V.fromList deletedFields, Anomalies.shapeUpdatedFieldFormats = updatedFieldFormats, Anomalies.shapeNewUniqueFields = V.fromList newFields}
-        r <- dbtToEff $ Ent.insert @Anomalies.Issue $ Unsafe.fromJust $ Anomalies.convertAnomalyToIssue (endp <&> (.host)) anomaly'
+        _ <- dbtToEff $ Anomalies.insertIssue $ Unsafe.fromJust $ Anomalies.convertAnomalyToIssue (endp <&> (.host)) anomaly'
         forM_ project.notificationsChannel \case
           Projects.NSlack ->
             sendSlackMessage
@@ -427,7 +427,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
         endp <- dbtToEff $ Endpoints.endpointByHash pid $ T.take 8 targetHash
         users <- dbtToEff $ Projects.usersByProjectId pid
         project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
-        dbtToEff $ Ent.insert @Anomalies.Issue $ Unsafe.fromJust $ Anomalies.convertAnomalyToIssue (endp <&> (.host)) anomaly
+        _ <- dbtToEff $ Anomalies.insertIssue  $ Unsafe.fromJust $ Anomalies.convertAnomalyToIssue (endp <&> (.host)) anomaly
         forM_ project.notificationsChannel \case
           Projects.NSlack ->
             sendSlackMessage
@@ -454,21 +454,21 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
       project <- Unsafe.fromJust <<$>> dbtToEff $ Projects.projectById pid
       err <- Unsafe.fromJust <<$>> dbtToEff $ Anomalies.errorByHash targetHash
       issueId <- liftIO $ Anomalies.AnomalyId <$> UUIDV4.nextRandom
-      dbtToEff
-        $ Ent.insert @Anomalies.Issue
-        $ Anomalies.Issue
-          { id = issueId
-          , createdAt = err.createdAt
-          , updatedAt = err.updatedAt
-          , projectId = pid
-          , anomalyType = Anomalies.ATRuntimeException
-          , targetHash = targetHash
-          , issueData = Anomalies.IDNewRuntimeExceptionIssue err.errorData
-          , acknowlegedAt = Nothing
-          , acknowlegedBy = Nothing
-          , endpointId = Nothing
-          , archivedAt = Nothing
-          }
+      _ <- dbtToEff $
+        Anomalies.insertIssue  $
+          Anomalies.Issue
+            { id = issueId
+            , createdAt = err.createdAt
+            , updatedAt = err.updatedAt
+            , projectId = pid
+            , anomalyType = Anomalies.ATRuntimeException
+            , targetHash = targetHash
+            , issueData = Anomalies.IDNewRuntimeExceptionIssue err.errorData
+            , acknowlegedAt = Nothing
+            , acknowlegedBy = Nothing
+            , endpointId = Nothing
+            , archivedAt = Nothing
+            }
       forM_ project.notificationsChannel \case
         Projects.NSlack ->
           sendSlackMessage

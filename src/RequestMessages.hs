@@ -24,7 +24,6 @@ import Data.Time.Clock as Clock (UTCTime, secondsToNominalDiffTime)
 import Data.Time.LocalTime as Time (ZonedTime, calendarTimeTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Data.Vector qualified as Vector
 import Database.PostgreSQL.Simple (Query)
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Anomalies qualified as Anomalies
@@ -125,7 +124,7 @@ redactJSON paths' = redactJSON' (stripPrefixDot paths')
     redactJSON' paths AET.Null = AET.Null
     redactJSON' paths (AET.Bool value) = AET.Bool value
     redactJSON' paths (AET.Object objMap) = AET.Object $ AEK.fromHashMapText $ HM.mapWithKey (\k v -> redactJSON' (mapMaybe (\path -> T.stripPrefix (k <> ".") path <|> T.stripPrefix k path) paths) v) (AEK.toHashMapText objMap)
-    redactJSON' paths (AET.Array jsonList) = AET.Array $ Vector.map (redactJSON' (mapMaybe (\path -> T.stripPrefix "[]." path <|> T.stripPrefix "[]" path) paths)) jsonList
+    redactJSON' paths (AET.Array jsonList) = AET.Array $ V.map (redactJSON' (mapMaybe (\path -> T.stripPrefix "[]." path <|> T.stripPrefix "[]" path) paths)) jsonList
 
     stripPrefixDot = map (\p -> fromMaybe p (T.stripPrefix "." p))
 
@@ -171,7 +170,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   let method = T.toUpper rM.method
   let urlPath = RequestDumps.normalizeUrlPath rM.sdkType rM.statusCode rM.method (fromMaybe "/" rM.urlPath)
   let !endpointHash = toXXHash $ UUID.toText rM.projectId <> fromMaybe "" rM.host <> method <> urlPath
-  let redactFieldsList = Vector.toList pjc.redactFieldslist <> [".set-cookie", ".password"]
+  let redactFieldsList = V.toList pjc.redactFieldslist <> [".set-cookie", ".password"]
   let sanitizeNullChars = encodeUtf8 . replaceNullChars . decodeUtf8
   reqBodyB64 <- B64.decodeBase64 $ encodeUtf8 rM.requestBody
   let reqBody = redactJSON redactFieldsList $ fromRight (AE.object []) $ AE.eitherDecodeStrict $ sanitizeNullChars reqBodyB64
@@ -183,16 +182,16 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
       respHeaderFields = valueToFields $ redactJSON redactFieldsList rM.responseHeaders
       reqBodyFields = valueToFields reqBody
       respBodyFields = valueToFields respBody
-      queryParamsKP = Vector.fromList $ map fst queryParamFields
-      requestHeadersKP = Vector.fromList $ map fst reqHeaderFields
-      responseHeadersKP = Vector.fromList $ map fst respHeaderFields
-      requestBodyKP = Vector.fromList $ map fst reqBodyFields
-      responseBodyKP = Vector.fromList $ map fst respBodyFields
+      queryParamsKP = V.fromList $ map fst queryParamFields
+      requestHeadersKP = V.fromList $ map fst reqHeaderFields
+      responseHeadersKP = V.fromList $ map fst respHeaderFields
+      requestBodyKP = V.fromList $ map fst reqBodyFields
+      responseBodyKP = V.fromList $ map fst respBodyFields
 
   -- We calculate a hash that represents the request.
   -- We skip the request headers from this hash, since the source of the request like browsers might add or skip headers at will,
   -- which would make this process not deterministic anymore, and that's necessary for a hash.
-  let combinedKeyPathStr = T.concat $ sort $ Vector.toList $ queryParamsKP <> responseHeadersKP <> requestBodyKP <> responseBodyKP
+  let combinedKeyPathStr = T.concat $ sort $ V.toList $ queryParamsKP <> responseHeadersKP <> requestBodyKP <> responseBodyKP
   -- Include the endpoint hash and status code to make the shape hash unique by endpoint and status code.
   let !shapeHash = endpointHash <> show rM.statusCode <> toXXHash combinedKeyPathStr
   let projectId = Projects.ProjectId rM.projectId
@@ -211,8 +210,8 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
           <> reqBodyFieldsDTO
           <> respBodyFieldsDTO
   let (fields, formats) = unzip fieldsDTO
-  let fieldHashes = Vector.fromList $ sort $ map (.hash) fields
-  let formatHashes = Vector.fromList $ sort $ map (.hash) formats
+  let fieldHashes = V.fromList $ sort $ map (.hash) fields
+  let formatHashes = V.fromList $ sort $ map (.hash) formats
 
   --- FIXME: why are we not using the actual url params?
   -- Since it foes into the endpoint, maybe it should be the keys and their type? I'm unsure.
@@ -257,8 +256,6 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   -- It's likely a good idea to stop relying on it for some of the time series analysis, to allow us easily support request sampling, but still support
   -- relatively accurate analytic counts.
   -- Build the query and params for inserting a request dump into the database.
-  -- let (reqDumpQ, reqDumpP) = buildRequestDumpQuery rM dumpID now method urlPath reqBody respBody queryParamsKP requestHeadersKP responseHeadersKP requestBodyKP responseBodyKP endpointHash shapeHash formatHashes fieldHashes
-  -- let reqDumpP = RequestDumps.RequestDump rM dumpID now method urlPath reqBody respBody queryParamsKP requestHeadersKP responseHeadersKP requestBodyKP responseBodyKP endpointHash shapeHash formatHashes fieldHashes
   let reqDumpP =
         RequestDumps.RequestDump
           { id = dumpID
@@ -523,7 +520,7 @@ fieldsToFieldDTO fieldCategory projectID endpointHash (keyPath, val) =
       , fieldFormat = format
       , -- NOTE: A trailing question, is whether to store examples into a separate table.
         -- It requires some more of a cost benefit analysis.
-        examples = Vector.fromList val
+        examples = V.fromList val
       , hash = formatHash
       }
   )
