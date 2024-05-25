@@ -11,49 +11,21 @@ module Pages.Projects.Integrations (
 )
 where
 
-import BackgroundJobs qualified
-import Control.Lens ((.~), (^.))
-import Data.Aeson (encode)
-import Data.Aeson qualified as AE
-import Data.Aeson.QQ (aesonQQ)
-import Data.ByteString.Base64 qualified as B64
-import Data.CaseInsensitive (original)
-import Data.CaseInsensitive qualified as CI
 import Data.Default (Default (..))
-import Data.List.Extra (cons)
-import Data.List.Unique (uniq)
-import Data.Pool (withResource)
-import Data.Text (toLower)
-import Data.Text qualified as T
-import Data.UUID qualified as UUID
-import Data.UUID.V4 qualified as UUIDV4
-import Data.Valor (Valor, check1, failIf, validateM)
-import Data.Valor qualified as Valor
 import Data.Vector qualified as V
-import Deriving.Aeson qualified as DAE
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Lucid
-import Lucid.Htmx (hxConfirm_, hxGet_, hxIndicator_, hxPost_, hxSwap_, hxTarget_)
-import Lucid.Hyperscript (__)
+import Lucid.Htmx
 import Models.Apis.Slack (SlackData, getProjectSlackData)
-import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
-import Models.Projects.ProjectMembers qualified as ProjectMembers
-import Models.Projects.ProjectMembers qualified as Projects
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
-import Network.Wreq (defaults, getWith, header, responseBody)
-import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Pkg.ConvertKit qualified as ConvertKit
 import Relude hiding (ask, asks)
-import Relude.Unsafe qualified as Unsafe
-import Servant (addHeader, noHeader)
 import System.Config
-import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
-import Utils (faSprite_, lemonSqueezyUrls, lemonSqueezyUrlsAnnual)
+import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -142,7 +114,6 @@ updateNotificationsChannel pid NotifListForm{notificationsChannel} = do
 -- integrationsBody is the core html view
 integrationsBody :: Sessions.PersistentSession -> EnvConfig -> Bool -> CreateProjectForm -> Maybe (V.Vector Projects.NotificationChannel) -> Maybe SlackData -> Html ()
 integrationsBody sess envCfg isUpdate cp notifChannel slackData = do
-  let paymentPlan = if cp.paymentPlan == "" then "UsageBased" else cp.paymentPlan
   section_ [id_ "main-content", class_ "p-3 py-5 sm:p-6 overflow-y-scroll h-full"] do
     div_ [class_ "mx-auto", style_ "max-width:1000px"] do
       h2_ [class_ "text-slate-700 text-3xl font-medium mb-5"] $ toHtml @String $ if isUpdate then "Integrations" else "Integrations"
@@ -179,13 +150,4 @@ integrationsBody sess envCfg isUpdate cp notifChannel slackData = do
                 Nothing -> pass
               a_ [target_ "_blank", class_ "", href_ $ "https://slack.com/oauth/v2/authorize?client_id=6211090672305.6200958370180&scope=chat:write,incoming-webhook&user_scope=&redirect_uri=" <> envCfg.slackRedirectUri <> pid] do
                 img_ [alt_ "Add to slack", height_ "40", width_ "139", src_ "https://platform.slack-edge.com/img/add_to_slack.png", term "srcSet" "https://platform.slack-edge.com/img/add_to_slack.png 1x, https://platform.slack-edge.com/img/add_to_slack@2x.png 2x"]
-            -- span_ [class_ "my-4 text-sm text-gray-500 block"] "OR"
-            -- form_ [class_ "flex flex-col rounded-lg", hxPost_ [text|/p/$pid/slack/webhook|], hxSwap_ "none"] do
-            --   label_ [] "Slack webhook"
-            --   div_ [class_ "flex gap-2 items-center"] do
-            --     input_ [type_ "hidden", name_ "projects", value_ pid]
-            --     input_ [value_ (maybe "" (\s -> s.webhookUrl) slackData), placeholder_ "https://hooks.slack.com/services/xxxxxxxxx/xxxxxxxx/xxxxxxxxxxx", name_ "webhookUrl", class_ "w-full p-2 my-2 text-sm bg-white text-slate-700 border rounded"]
-            --     button_ [class_ "text-white bg-blue-600 rounded-lg px-4 py-1 w-max"] "Save"
             button_ [class_ "btn btn-primary"] "Save Selections"
-
-

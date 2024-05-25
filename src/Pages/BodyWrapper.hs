@@ -20,14 +20,14 @@ menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu pid =
   [ ("Get Started", "/p/" <> pid.toText <> "/onboarding", "list-check")
   , ("Dashboard", "/p/" <> pid.toText <> "/", "qrcode")
-  , ("API Log Explorer", "/p/" <> pid.toText <> "/log_explorer", "list-tree")
   , ("Endpoints", "/p/" <> pid.toText <> "/endpoints", "swap")
+  , ("API Log Explorer", "/p/" <> pid.toText <> "/log_explorer", "list-tree")
   , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies?ackd=false&archived=false", "bug")
   , ("API Integrations", "/p/" <> pid.toText <> "/outgoing", "arrows-turn-right")
   , ("API Tests (Beta)", "/p/" <> pid.toText <> "/testing", "list-check")
-  , -- , ("Redacted Fields", "/p/" <> pid.toText <> "/redacted_fields", "#redacted")
-    ("Documentation", "/p/" <> pid.toText <> "/documentation", "brackets-curly")
+  , ("OpenAPI/Swagger", "/p/" <> pid.toText <> "/documentation", "brackets-curly")
   , ("Reports", "/p/" <> pid.toText <> "/reports", "chart-simple")
+   -- , ("Redacted Fields", "/p/" <> pid.toText <> "/redacted_fields", "#redacted")
   ]
 
 

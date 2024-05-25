@@ -39,7 +39,6 @@ import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Htmx (hxConfirm_, hxGet_, hxIndicator_, hxPost_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
-import Models.Apis.Slack (SlackData, getProjectSlackData)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMembers qualified as Projects
