@@ -20,10 +20,11 @@ menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu pid =
   [ ("Get Started", "/p/" <> pid.toText <> "/onboarding", "list-check")
   , ("Dashboard", "/p/" <> pid.toText <> "/", "qrcode")
-  , ("Endpoints", "/p/" <> pid.toText <> "/endpoints", "swap")
-  , ("Outbound Integrations", "/p/" <> pid.toText <> "/outgoing", "arrows-turn-right")
-  , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies?ackd=false&archived=false", "bug")
   , ("API Log Explorer", "/p/" <> pid.toText <> "/log_explorer", "list-tree")
+  , ("Endpoints", "/p/" <> pid.toText <> "/endpoints", "swap")
+  , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies?ackd=false&archived=false", "bug")
+  , ("API Integrations", "/p/" <> pid.toText <> "/outgoing", "arrows-turn-right")
+  , ("API Tests (Beta)", "/p/" <> pid.toText <> "/testing", "list-check")
   , -- , ("Redacted Fields", "/p/" <> pid.toText <> "/redacted_fields", "#redacted")
     ("Documentation", "/p/" <> pid.toText <> "/documentation", "brackets-curly")
   , ("Reports", "/p/" <> pid.toText <> "/reports", "chart-simple")
@@ -177,6 +178,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
                   navbar currUser
                   section_ [class_ "flex-1 overflow-y-hidden h-full grow"] $ child
       externalHeadScripts_
+      alerts_
       script_ [async_ "true", src_ "https://www.googletagmanager.com/gtag/js?id=AW-11285541899"] ("" :: Text)
       script_
         [text|
@@ -414,3 +416,32 @@ navbar currUser = do
           -- dropdown mainbody
           a_ [class_ "text-base p-2 flex gap-3 rounded hover:bg-gray-100", href_ "/logout"] do
             faSprite_ "user-plus" "regular" "h-5 w-5" >> span_ "Logout"
+
+
+alerts_ :: Html ()
+alerts_ = do
+  template_ [id_ "successToastTmpl"] do
+    div_ [role_ "alert", class_ "alert alert-success w-96 cursor-pointer", [__|init wait for click or 30s then transition my opacity to 0 then remove me|]] do
+      faSprite_ "circle-info" "solid" "stroke-current shrink-0 w-6 h-6"
+      span_ [class_ "title"] "Something succeeded"
+  template_ [id_ "errorToastTmpl"] do
+    div_ [role_ "alert", class_ "alert alert-error w-96 cursor-pointer", [__|init wait for click or 30s then transition my opacity to 0 then remove me|]] do
+      faSprite_ "circle-info" "solid" "stroke-current shrink-0 w-6 h-6"
+      span_ [class_ "title"] "Something failed"
+  section_ [class_ "fixed top-0 right-0 z-50 pt-14 pr-5 space-y-3", id_ "toastsParent"] ""
+  script_
+    [type_ "text/javascript"]
+    [text|
+    document.addEventListener('DOMContentLoaded', function(){
+      document.body.addEventListener('triggerToast', function(e){
+          e.detail.value.forEach(function(toastEvent){
+            console.log(toastEvent, "toastEvent")
+            const template = document.getElementById(toastEvent[0].toLowerCase()+'ToastTmpl');
+            const clone = document.importNode(template.content, true);
+            clone.querySelector('.title').textContent = toastEvent[1];
+            document.getElementById("toastsParent").appendChild(clone);
+            _hyperscript.processNode(document.querySelector("#toastsParent"));
+         })
+      })
+    })
+  |]
