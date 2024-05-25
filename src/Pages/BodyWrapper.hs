@@ -23,11 +23,11 @@ menu pid =
   , ("Endpoints", "/p/" <> pid.toText <> "/endpoints", "swap")
   , ("API Log Explorer", "/p/" <> pid.toText <> "/log_explorer", "list-tree")
   , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies?ackd=false&archived=false", "bug")
-  , ("API Integrations", "/p/" <> pid.toText <> "/outgoing", "arrows-turn-right")
+  , ("Outgoing Integrations", "/p/" <> pid.toText <> "/outgoing", "arrows-turn-right")
   , ("API Tests (Beta)", "/p/" <> pid.toText <> "/testing", "list-check")
   , ("OpenAPI/Swagger", "/p/" <> pid.toText <> "/documentation", "brackets-curly")
   , ("Reports", "/p/" <> pid.toText <> "/reports", "chart-simple")
-   -- , ("Redacted Fields", "/p/" <> pid.toText <> "/redacted_fields", "#redacted")
+  -- , ("Redacted Fields", "/p/" <> pid.toText <> "/redacted_fields", "#redacted")
   ]
 
 
@@ -105,6 +105,7 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
       twq('config','om5gt');
       |]
 
+
       -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/core@1.2.0/dist/index.umd.min.js"] ("" :: Text)
       -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/datetime@1.2.0/dist/index.umd.min.js"] ("" :: Text)
       -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/base-plugin@1.2.0/dist/index.umd.min.js"] ("" :: Text)
@@ -152,8 +153,8 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
         , tabindex_ "-1"
         ]
         do
-          div_ [class_ "relative mx-auto max-h-full", style_ "width: min(90vw, 500px)"]
-            $ div_ [class_ "bg-white rounded-lg drop-shadow-md border-1 w-full"] do
+          div_ [class_ "relative mx-auto max-h-full", style_ "width: min(90vw, 500px)"] $
+            div_ [class_ "bg-white rounded-lg drop-shadow-md border-1 w-full"] do
               div_ [class_ "flex items-start justify-between p-6 space-x-2  border-b rounded-t"] do
                 h3_ [class_ "text-3xl font-bold text-gray-900"] "Only Desktop Browsers are Supported for now!"
               -- Modal body
@@ -208,6 +209,12 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
       });
 
           |]
+      let email = show $ fromMaybe "" $ sessM <&> (.user.getUser.email)
+      let name = fromMaybe "" $ sessM <&> (\sess -> sess.user.getUser.firstName <> " " <> sess.user.getUser.lastName)
+      script_
+        [text| window.addEventListener("load", (event) => { 
+        posthog.people.set_once({email: ${email}, name: "${name}"});
+      });|]
       script_
         [type_ "text/hyperscript"]
         [text|
@@ -262,9 +269,9 @@ projectsDropDown currProject projects = do
           a_ [href_ [text| /p/$pidTxt/apis|], class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100"] do
             faSprite_ "key" "regular" "h-5 w-5" >> span_ "API Keys"
           a_ [href_ [text| /p/$pidTxt/integrations|], class_ "p-3 flex gap-3 items-center rounded hover:bg-gray-100"] do
-            faSprite_ "arrows-turn-right" "regular" "h-5 w-5" >> span_ "Integrations"  
-          when (currProject.paymentPlan == "UsageBased" || currProject.paymentPlan == "GraduatedPricing")
-            $ a_
+            faSprite_ "arrows-turn-right" "regular" "h-5 w-5" >> span_ "Integrations"
+          when (currProject.paymentPlan == "UsageBased" || currProject.paymentPlan == "GraduatedPricing") $
+            a_
               [class_ "p-3 flex gap-3 flex gap-3 items-center rounded hover:bg-gray-100 cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]]
               (faSprite_ "dollar-sign" "regular" "h-5 w-5" >> span_ "Manage billing")
       div_ [class_ "border-t border-gray-100 p-2"] do
@@ -283,9 +290,9 @@ projectsDropDown currProject projects = do
           div_ [class_ "space-y-2 py-4 text-sm", id_ "projectsContainer"] do
             projects & mapM_ \project -> do
               a_ [class_ "flex justify-between p-2 project_item", href_ $ "/p/" <> project.id.toText] do
-                div_ [class_ "space-x-3"]
-                  $ faSprite_ "folders" "regular" "h-5 w-5 inline-block"
-                  >> span_ [class_ "inline-block"] (toHtml project.title)
+                div_ [class_ "space-x-3"] $
+                  faSprite_ "folders" "regular" "h-5 w-5 inline-block"
+                    >> span_ [class_ "inline-block"] (toHtml project.title)
                 when (currProject.id == project.id) $ faSprite_ "circle-check" "regular" "h-6 w-6 text-green-700"
 
 
@@ -327,19 +334,19 @@ sideNav sess project pageTitle menuItem hasIntegrated = do
             faSprite_ "chevron-down" "regular" " h-4 w-4 m-1"
 
       projectsDropDown project (Sessions.getProjects $ Sessions.projects sess)
-    nav_ [class_ "mt-4"] do
+    nav_ [class_ "mt-4 text-slate-900 "] do
       -- FIXME: reeanable hx-boost hxBoost_ "true"
       menu project.id & mapM_ \(mTitle, mUrl, fIcon) -> do
         let isActive = maybe (pageTitle == mTitle) (== mTitle) menuItem
-        let activeCls = if isActive then " bg-blue-50 text-blue-700 border-blue-700" else " border-transparent text-slate-900"
+        let activeCls = if isActive then " bg-blue-50 text-blue-700 border-blue-700" else " border-transparent "
         a_
           [ href_ mUrl
           , term "data-tippy-placement" "right"
           , term "data-tippy-content" mTitle
-          , class_ $ " block flex gap-3 px-5 py-3 flex no-wrap shrink-0 items-center border-l-4 hover:bg-blue-50" <> activeCls
+          , class_ $ " block flex gap-3 px-4 py-2 flex no-wrap shrink-0 items-center border-l-4 hover:bg-blue-50" <> activeCls
           ]
           do
-            faSprite_ fIcon "regular" $ "w-5 h-5 shrink-0" <> if isActive then "text-blue-900 " else "text-slate-500 "
+            faSprite_ fIcon "regular" $ "w-5 h-5 shrink-0 " <> if isActive then "text-blue-900 " else " text-slate-500 "
             span_ [class_ "sd-hidden "] $ toHtml mTitle
 
 
@@ -369,28 +376,25 @@ navbar currUser = do
         , [__| 
             on click queue first
                 if I do not match .active
-                    add .active
-                    send open to <[drop-menu]/> 
+                    add .active then send open to <[drop-menu]/> 
                 else 
-                    remove .active
-                    send close to <[drop-menu]/> 
+                    remove .active then send close to <[drop-menu]/> 
                 end
             end
             on keyup[key is 'Escape'] from <body/>  
                 if I match .active
-                    remove .active
-                    send close to <[drop-menu]/> in me
+                    remove .active then send close to <[drop-menu]/> in me
                 end
             end
         |]
         ]
         do
           img_ [class_ "inline-block w-9 h-9 rounded-lg bg-gray-300", src_ currUser.displayImageUrl]
-          span_ [class_ "inline-block"]
-            $ toHtml
-            $ if currUser.firstName /= "" || currUser.lastName /= ""
-              then currUser.firstName <> " " <> currUser.lastName
-              else CI.original currUser.email
+          span_ [class_ "inline-block"] $
+            toHtml $
+              if currUser.firstName /= "" || currUser.lastName /= ""
+                then currUser.firstName <> " " <> currUser.lastName
+                else CI.original currUser.email
           faSprite_ "caret-down" "solid" "w-4 h-4 inline-block"
 
       -- logout dropdown
@@ -414,7 +418,7 @@ navbar currUser = do
         ]
         do
           -- dropdown mainbody
-          a_ [class_ "text-base p-2 flex gap-3 rounded hover:bg-gray-100", href_ "/logout"] do
+          a_ [class_ "text-base p-2 flex gap-3 rounded hover:bg-gray-100", href_ "/logout", [__| on click js posthog.reset(); end |]] do
             faSprite_ "user-plus" "regular" "h-5 w-5" >> span_ "Logout"
 
 
