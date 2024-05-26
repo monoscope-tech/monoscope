@@ -160,7 +160,7 @@ anomalyListGetH pid layoutM ackdM archivedM sortM pageM loadM endpointM hxReques
   (sess, project) <- Sessions.sessionAndProject pid
   let ackd = fromMaybe False (textToBool <$> ackdM)
       archived = fromMaybe False (textToBool <$> archivedM)
-      fLimit = 21
+      fLimit = 11
       pageInt = maybe 0 (Unsafe.read . toString) pageM
   issues <- dbtToEff $ Anomalies.selectIssues pid endpointM (Just ackd) (Just archived) sortM (Just fLimit) (pageInt * fLimit)
   currTime <- liftIO getCurrentTime
@@ -189,8 +189,7 @@ anomalyListGetH pid layoutM ackdM archivedM sortM pageM loadM endpointM hxReques
           mapM_ (renderIssue False currTime) issues
           when (length issues == fLimit)
             $ a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url]
-            $ span_ [class_ "htmx-indicator query-indicator loading loading-dots loading-md"] ""
-            >> "LOAD MORE"
+            $ (span_ [class_ "htmx-indicator query-indicator loading loading-dots loading-md"] "" >> "LOAD MORE")
         Nothing -> mapM_ (renderIssue False currTime) issues
   addRespHeaders $ case (layoutM, hxRequestM, hxBoostedM, loadM) of
     (Just "slider", Just "true", _, _) -> anomalyListSlider currTime pid endpointM (Just issues)
@@ -280,7 +279,7 @@ issuesList paramInput pid currTime issues nextFetchUrl = form_ [class_ "col-span
 
   mapM_ (renderIssue False currTime) issues
   whenJust nextFetchUrl \url ->
-    when (length issues > 20)
+    when (length issues > 10)
       $ a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] do
         span_ [class_ "htmx-indicator loading loading-dots loading-md"] "" >> "LOAD MORE"
 
@@ -296,7 +295,7 @@ anomalyListSlider _ pid eid Nothing = do
       div_ [class_ "flex flex-row mt-2"] ""
 anomalyListSlider currTime _ _ (Just issues) = do
   let anomalyIds = replace "\"" "'" $ show $ fmap (Anomalies.anomalyIdText . (.id)) issues
-  let totalAnomaliesTxt = toText $ if length issues > 20 then ("20+" :: Text) else show (length issues)
+  let totalAnomaliesTxt = toText $ if length issues > 10 then ("10+" :: Text) else show (length issues)
   div_ do
     script_ [text| var rem = (x,y)=>((x%y)==0?1:(x%y)); |]
     script_
@@ -335,9 +334,9 @@ anomalyListSlider currTime _ _ (Just issues) = do
 
 shapeParameterStats_ :: Int -> Int -> Int -> Html ()
 shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "stats stats-vertical lg:stats-horizontal shadow"] do
-  div_ [class_ "stat p-3 px-4"] $ (div_ [class_ "text-2xl font-medium"] $ toHtml @String $ show newF) >> small_ [class_ "stat-title"] "new fields"
-  div_ [class_ "stat p-3 px-4"] $ (div_ [class_ "text-2xl"] $ toHtml @String $ show updatedFF) >> small_ [class_ "stat-title"] "updated"
-  div_ [class_ "stat p-3 px-4"] $ (div_ [class_ "text-2xl"] $ toHtml @String $ show deletedF) >> small_ [class_ "stat-title"] "deleted"
+  div_ [class_ "stat p-3 px-4"] $ (div_ [class_ "text-2xl font-medium text-green-800"] $ toHtml @String $ show newF) >> small_ [class_ "stat-title"] "new fields"
+  div_ [class_ "stat p-3 px-4"] $ (div_ [class_ "text-2xl font-medium text-slate-800"] $ toHtml @String $ show updatedFF) >> small_ [class_ "stat-title"] "updated"
+  div_ [class_ "stat p-3 px-4"] $ (div_ [class_ "text-2xl font-medium text-red-800"] $ toHtml @String $ show deletedF) >> small_ [class_ "stat-title"] "deleted"
 
 
 -- anomalyAccentColor isAcknowleged isArchived
@@ -423,7 +422,7 @@ anomalyDetailsGetH pid targetHash hxBoostedM = do
                 anomalyDetailsPage issue (Just shapesWithFieldsMap) Nothing Nothing currTime False
         Anomalies.IDNewShapeIssue issueD -> do
           newF <- dbtToEff $ Fields.selectFieldsByHashes pid issueD.newUniqueFields
-          updF <- dbtToEff $ Fields.selectFieldsByHashes pid issueD.updatedFieldFormats
+          updF <- dbtToEff $ Fields.selectFieldsByHashes pid (T.take 16 <$> issueD.updatedFieldFormats)
           delF <- dbtToEff $ Fields.selectFieldsByHashes pid issueD.deletedFields
           let anFields = (groupFieldsByCategory newF, groupFieldsByCategory updF, groupFieldsByCategory delF)
           case hxBoostedM of
@@ -431,16 +430,23 @@ anomalyDetailsGetH pid targetHash hxBoostedM = do
             Nothing -> addRespHeaders $ bodyWrapper bwconf $ div_ [class_ "w-full px-32 overflow-y-scroll h-full"] do
               h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
               anomalyDetailsPage issue Nothing (Just anFields) Nothing currTime False
+        Anomalies.IDNewFormatIssue issueD -> do
+          anFormats <-
+            dbtToEff
+              $ Fields.getFieldsByEndpointKeyPathAndCategory pid (issueD.endpointId.toText) (issueD.fieldKeyPath) (fromMaybe Fields.FCRequestBody issueD.fieldCategory)
+          case hxBoostedM of
+            Just _ -> addRespHeaders $ anomalyDetailsPage issue Nothing Nothing (Just anFormats) currTime True
+            Nothing -> addRespHeaders $ bodyWrapper bwconf $ div_ [class_ "w-full px-32 overflow-y-scroll h-full"] do
+              h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
+              anomalyDetailsPage issue Nothing Nothing (Just anFormats) currTime False
+        Anomalies.IDNewRuntimeExceptionIssue issueD -> do
+          case hxBoostedM of
+            Just _ -> addRespHeaders $ anomalyDetailsPage issue Nothing Nothing Nothing currTime True
+            Nothing -> addRespHeaders $ bodyWrapper bwconf $ div_ [class_ "w-full px-32 overflow-y-scroll h-full"] do
+              h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
+              anomalyDetailsPage issue Nothing Nothing Nothing currTime False
         _ -> addRespHeaders $ "TODO"
 
-
--- FUXME complete implementation
--- anFormats <- dbtToEff $ Fields.getFieldsByEndpointKeyPathAndCategory pid  (fromMaybe "" an.fieldKeyPath) (fromMaybe FCRequestBody an.fieldCategory)
--- case hxBoostedM of
---   Just _ -> addRespHeaders $ anomalyDetailsPage issue Nothing Nothing (Just anFormats) currTime True
---   Nothing -> addRespHeaders $ bodyWrapper bwconf $ div_ [class_ "w-full px-32 overflow-y-scroll h-full"] do
---     h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
---     anomalyDetailsPage issue Nothing Nothing (Just anFormats) currTime False
 
 escapedQueryPartial :: Text -> Text
 escapedQueryPartial x = toText $ escapeURIString isUnescapedInURI $ toString x
@@ -484,6 +490,12 @@ anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime modal =
                 p_ [class_ "italic"] "in"
                 div_ [class_ $ "px-4 py-1 text-sm rounded-lg font-semibold " <> methodColor] $ toHtml $ issueD.endpointMethod
                 span_ [] $ toHtml $ issueD.endpointUrlPath
+          Anomalies.IDNewRuntimeExceptionIssue issueD -> do
+            div_ [class_ "flex flex-col gap-4 shrink-0"] do
+              a_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
+                img_ [src_ "/assets/svgs/anomalies/fields.svg", class_ "inline w-6 h-6 -mt-1"]
+                span_ [class_ "text-2xl"] $ toHtml issueD.errorType
+              p_ $ toHtml $ issueD.message
           _ -> pass
         div_ [class_ "flex items-center gap-8 shrink-0 text-gray-600"] do
           div_ [class_ "flex items-center gap-6 -mt-4"] do
@@ -524,7 +536,7 @@ anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime modal =
 
     div_ [class_ "mt-6 space-y-4"] do
       div_ [class_ "tabs tabs-bordered", role_ "tablist"] do
-        input_ [type_ "radio", name_ "anomaly-events-tabs", role_ "tab", class_ "tab", Aria.label_ "Overview", checked_]
+        input_ [type_ "radio", name_ $ "anomaly-events-tabs-" <> issue.targetHash, role_ "tab", class_ "tab", Aria.label_ "Overview", checked_]
         div_ [role_ "tabpanel", class_ "tab-content w-full bg-white rounded-lg overflow-x-hidden", id_ "overview_content"] do
           case issue.issueData of
             Anomalies.IDNewEndpointIssue _ -> endpointOverview shapesWithFieldsMap
@@ -532,7 +544,7 @@ anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime modal =
             Anomalies.IDNewFormatIssue issueD -> anomalyFormatOverview issueD (fromMaybe [] prvFormatsM)
             _ -> ""
 
-        input_ [type_ "radio", name_ "anomaly-events-tabs", role_ "tab", class_ "tab", Aria.label_ "Events"]
+        input_ [type_ "radio", name_ $ "anomaly-events-tabs-" <> issue.targetHash, role_ "tab", class_ "tab", Aria.label_ "Events"]
         div_ [role_ "tabpanel", class_ "tab-content grow whitespace-nowrap text-sm divide-y overflow-x-hidden ", id_ "events_content"] do
           let events_url = "/p/" <> UUID.toText (Projects.unProjectId issue.projectId) <> "/log_explorer?layout=resultTable&query=" <> escapedQueryPartial anomalyQueryPartial
           div_ [hxGet_ events_url, hxTrigger_ "intersect once", hxSwap_ "outerHTML"] $ span_ [class_ "loading loading-dots loading-md"] ""
@@ -558,13 +570,13 @@ endpointOverview shapesWithFieldsMap =
 requestShapeOverview :: Maybe (Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field]) -> Html ()
 requestShapeOverview fieldChanges = div_ [class_ "flex flex-col gap-6"] do
   whenJust fieldChanges \(fs, sn, th) -> do
-    shapeOSection_ "New Unique Fields" "green" fs
-    shapeOSection_ "Updated Fields" "gray" sn
-    shapeOSection_ "Deleted Fields" "red" th
+    shapeOSection_ "New Unique Fields" "text-green-800" fs
+    shapeOSection_ "Updated Fields" "text-slate-800" sn
+    shapeOSection_ "Deleted Fields" "text-red-800" th
   where
     shapeOSection_ :: Text -> Text -> Map Fields.FieldCategoryEnum [Field] -> Html ()
     shapeOSection_ title color fields = div_ [class_ "flex flex-col"] do
-      h3_ [class_ $ "text-" <> color <> "-500 py-1 w-fit font-semibold border-b border-b-" <> color <> "-500 mb-2"] (toHtml title)
+      h3_ [class_ $ color <> " py-1 w-fit font-semibold border-b border-b-" <> color <> "-500 mb-2"] (toHtml title)
       div_ [class_ "px-2"] do
         p_ [class_ "hidden last:block"] ("No " <> toHtml title)
         subSubSection "Request Path Params" (Map.lookup Fields.FCPathParam fields)

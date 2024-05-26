@@ -8,6 +8,7 @@ module Models.Apis.Formats (
   formatsByFieldsHashes,
   insertFormatQueryAndParams,
   insertFormats,
+  formatsByHash,
 ) where
 
 import Data.Aeson qualified as AE
@@ -60,6 +61,12 @@ formatsByFieldHash :: Text -> DBT IO (Vector.Vector Format)
 formatsByFieldHash fhash = query Select q (Only fhash)
   where
     q = [sql| SELECT id,created_at,updated_at,project_id, field_hash,field_type,field_format,examples::json[], hash from apis.formats where field_hash=? |]
+
+
+formatsByHash :: Text -> DBT IO (Vector.Vector Format)
+formatsByHash fhash = query Select q (Only fhash)
+  where
+    q = [sql| SELECT id,created_at,updated_at,project_id, field_hash,field_type,field_format,examples::json[], hash from apis.formats where hash=? |]
 
 
 -- TODO: explore using postgres values to handle bulking loading multiple fields and formats into the same insert query.

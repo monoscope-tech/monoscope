@@ -317,7 +317,7 @@ CREATE TABLE IF NOT EXISTS apis.anomalies
 );
 SELECT manage_updated_at('apis.anomalies');
 CREATE INDEX IF NOT EXISTS idx_apis_anomalies_project_id ON apis.anomalies(project_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_anomalies_target_hash ON apis.anomalies(target_hash);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_anomalies_project_id_target_hash ON apis.anomalies(project_id, target_hash);
 
 
 CREATE OR REPLACE FUNCTION apis.new_anomaly_proc() RETURNS trigger AS $$
@@ -779,7 +779,10 @@ CREATE TABLE IF NOT EXISTS apis.issues
   archived_at    TIMESTAMP           WITH       TIME        ZONE
 );
 SELECT manage_updated_at('apis.issues');
-SELECT create_hypertable('apis.issues', by_range('created_at'), migrate_data => true);
+CREATE INDEX IF NOT EXISTS idx_apis_issues_project_id ON apis.issues(project_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_issues_project_id_target_hash ON apis.issues(project_id, target_hash);
+
+
 
 CREATE TABLE IF NOT EXISTS apis.errors 
 (
@@ -790,12 +793,14 @@ CREATE TABLE IF NOT EXISTS apis.errors
   hash            TEXT NOT NULL,
   error_type      TEXT NOT NULL,
   message         TEXT NOT NULL,
-  error_data      JSONB NOT NULL DEFAULT '{}'
+  error_data      JSONB NOT NULL DEFAULT '{}',
+
+  PRIMARY KEY(id)
 );
 SELECT manage_updated_at('apis.errors');
-SELECT create_hypertable('apis.errors', by_range('created_at'), migrate_data => true);
-CREATE INDEX IF NOT EXISTS idx_apis_errors_project_id ON apis.errors(project_id, created_at DESC);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_errors_hash ON apis.errors(hash, created_at);
+CREATE INDEX IF NOT EXISTS idx_apis_errors_project_id ON apis.errors(project_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_errors_project_id_hash ON apis.errors(project_id, hash);
+
 CREATE OR REPLACE FUNCTION apis.new_anomaly_proc_job_only() RETURNS trigger AS $$
 DECLARE 
 	anomaly_type apis.anomaly_type;
