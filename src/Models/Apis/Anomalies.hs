@@ -365,33 +365,24 @@ SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, tar
     |]
 
 
-getReportAnomalies :: Projects.ProjectId -> Text -> DBT IO (Vector AnomalyVM)
+getReportAnomalies :: Projects.ProjectId -> Text -> DBT IO (Vector IssueL)
 getReportAnomalies pid report_type = query Select (Query $ encodeUtf8 q) pid
   where
     report_interval = if report_type == "daily" then ("'24 hours'" :: Text) else "'7 days'"
     q =
       [text|
-  SELECT avm.id, avm.created_at, avm.updated_at, avm.project_id, aan.acknowleged_at, 
-         aan.acknowleged_by, avm.anomaly_type, avm.action, avm.target_hash,
-         avm.shape_id, avm.new_unique_fields, avm.deleted_fields, avm.updated_field_formats, 
-         avm.field_id, avm.field_key, avm.field_key_path, avm.field_category, avm.field_format, 
-         avm.format_id, avm.format_type, avm.format_examples, 
-         avm.endpoint_id, avm.endpoint_method, avm.endpoint_url_path, aan.archived_at,
-         count(rd.id) events, max(rd.created_at) last_seen
-      FROM apis.anomalies_vm avm
-      JOIN apis.anomalies aan ON avm.id = aan.id
-      JOIN apis.request_dumps rd ON avm.project_id=rd.project_id 
-          AND (avm.target_hash=ANY(rd.format_hashes) AND avm.anomaly_type='format')
-          OR  (avm.target_hash=rd.shape_hash AND avm.anomaly_type='shape')
-          OR  (avm.target_hash=rd.endpoint_hash AND avm.anomaly_type='endpoint')
-      WHERE
-          avm.project_id = ? 
-          AND avm.anomaly_type != 'field'
-          AND aan.created_at > NOW() - interval $report_interval
-          AND aan.acknowleged_at IS NULL
-          AND aan.archived_at IS NULL
-      GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25
-      HAVING count(rd.id) > 5 limit 11;
+  SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, target_hash, issue_data, 
+    endpoint_id, acknowleged_by, archived_at,
+    CASE 
+      WHEN anomaly_type='endpoint' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND endpoint_hash=iss.target_hash AND created_at > current_timestamp - interval '14d' )
+      WHEN anomaly_type='shape' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND shape_hash=iss.target_hash AND created_at > current_timestamp - interval '14d' )
+      -- Format requires a CONTAINS query which is not covered by the regular indexes. GIN index can't have created_at compound indexes, so its a slow query 
+      -- WHEN anomaly_type='format' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND iss.target_hash=ANY(format_hashes) AND created_at > current_timestamp - interval '14d' )
+      WHEN anomaly_type='runtime_exception' THEN (select (count(*), COALESCE(max(created_at), iss.created_at)) from apis.request_dumps where project_id=iss.project_id AND errors @> ('[{"hash": "' || iss.target_hash || '"}]')::jsonb AND created_at > current_timestamp - interval '14d')
+      ELSE (0, NOW()::TEXT)
+    END as req_count
+    FROM apis.issues iss WHERE project_id = ?  and created_at > current_timestamp - interval $report_interval
+    ORDER BY req_count desc limit 20
         |]
 
 
@@ -406,19 +397,7 @@ countAnomalies pid report_type = do
     q =
       [text|
       SELECT COUNT(*) as anomaly_count
-      FROM apis.anomalies_vm avm
-      JOIN apis.anomalies aan ON avm.id = aan.id
-      JOIN apis.request_dumps rd ON avm.project_id = rd.project_id 
-          AND (avm.target_hash = ANY(rd.format_hashes) AND avm.anomaly_type = 'format')
-          OR (avm.target_hash = rd.shape_hash AND avm.anomaly_type = 'shape')
-          OR (avm.target_hash = rd.endpoint_hash AND avm.anomaly_type = 'endpoint')
-      WHERE avm.project_id = ? 
-          AND avm.anomaly_type != 'field'
-          AND rd.created_at > NOW() - interval $report_interval
-          AND aan.acknowleged_at IS NULL
-          AND aan.archived_at IS NULL
-      GROUP BY avm.id -- Include the columns that define an anomaly
-      HAVING COUNT(rd.id) > 5;
+      FROM apis.issues iss WHERE project_id = ?  and created_at > current_timestamp - interval $report_interval
      |]
 
 

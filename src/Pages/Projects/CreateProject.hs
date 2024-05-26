@@ -132,7 +132,7 @@ projectSettingsGetH pid = do
           }
 
   let bwconf = (def :: BWConfig){sessM = Just sess.persistentSession, currProject = Just project, pageTitle = "Settings"}
-  addRespHeaders $ bodyWrapper bwconf $ createProjectBody (sess.persistentSession) appCtx.config True createProj (def @CreateProjectFormError) 
+  addRespHeaders $ bodyWrapper bwconf $ createProjectBody (sess.persistentSession) appCtx.config True createProj (def @CreateProjectFormError)
 
 
 ----------------------------------------------------------------------------------------------------------
@@ -144,10 +144,6 @@ deleteProjectGetH pid = do
   redirectCS "/" >> addRespHeaders ""
 
 
-
-
-
-
 ----------------------------------------------------------------------------------------------------------
 -- createProjectPostH is the handler for the create projects page form handling.
 -- It processes post requests and is expected to return a redirect header and a hyperscript event trigger header.
@@ -157,7 +153,7 @@ createProjectPostH createP = do
   appCtx <- ask @AuthContext
   validationRes <- validateM createProjectFormV createP
   case validationRes of
-    Right cpe -> addRespHeaders $ createProjectBody (sess.persistentSession) appCtx.config createP.isUpdate createP cpe 
+    Right cpe -> addRespHeaders $ createProjectBody (sess.persistentSession) appCtx.config createP.isUpdate createP cpe
     Left cp -> processProjectPostForm cp
 
 
@@ -222,7 +218,7 @@ processProjectPostForm cpRaw = do
   if cp.isUpdate
     then do
       let hxTriggerDataUpdate = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Updated Project Successfully"]}|]
-      let bdy = createProjectBody sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError) 
+      let bdy = createProjectBody sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError)
       project <- dbtToEff $ Projects.projectById pid
       case project of
         Just p -> do
@@ -271,7 +267,7 @@ processProjectPostForm cpRaw = do
         then do
           addErrorToast "Couldn't get subscription ID. Please try again" Nothing
           redirectCS ("/p/" <> pid.toText <> "/about_project")
-          addRespHeaders $ createProjectBody sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError) 
+          addRespHeaders $ createProjectBody sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError)
         else do
           _ <- dbtToEff do
             Projects.insertProject (createProjectFormToModel pid subId firstSubItemId cp)
@@ -304,7 +300,7 @@ processProjectPostForm cpRaw = do
             createJob conn "background_jobs" $ BackgroundJobs.CreatedProjectSuccessfully sess.user.id pid (original sess.user.email) cp.title
           addSuccessToast "Created Project Successfully" Nothing
           redirectCS ("/p/" <> pid.toText <> "/about_project")
-          addRespHeaders $ createProjectBody sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError) 
+          addRespHeaders $ createProjectBody sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError)
 
 
 ----------------------------------------------------------------------------------------------------------

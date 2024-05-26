@@ -9,6 +9,8 @@ module Pages.Reports (
   buildAnomalyJSON,
   getPerformanceInsight,
   renderEndpointsTable,
+  getPerformanceEmailTemplate,
+  getAnomaliesEmailTemplate,
   reportsPostH,
   reportEmail,
   ReportAnomalyType (..),
@@ -44,6 +46,7 @@ import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
+import Text.Printf (printf)
 
 
 data PerformanceReport = PerformanceReport
@@ -80,6 +83,9 @@ data ReportAnomalyType
       , formatType :: Text
       , formatExamples :: [Text]
       , eventsCount :: Int
+      }
+  | ATRuntimeException
+      { endpointUrlPath :: Text
       }
   deriving stock (Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
@@ -196,6 +202,8 @@ singleReportPage pid report =
                                     small_ "examples: "
                                     small_ $ toHtml $ T.intercalate ", " formatExamples
                               small_ [] $ show eventsCount <> " requests"
+                          ATRuntimeException _ -> do
+                            pass
 
                   div_ [] do
                     div_ [class_ "pb-3 border-b flex justify-between"] do
@@ -294,7 +302,7 @@ renderEndpointsTable endpoints = table_ [class_ "table-auto w-full"] do
   tbody_ $ mapM_ renderEndpointRow endpoints
 
 
-buildReportJSON :: Vector Anomalies.AnomalyVM -> Vector RequestForReport -> Vector EndpointPerf -> Aeson.Value
+buildReportJSON :: Vector Anomalies.IssueL -> Vector RequestForReport -> Vector EndpointPerf -> Aeson.Value
 buildReportJSON anomalies endpoints_perf previous_perf =
   let anomalies_json = buildAnomalyJSON anomalies (length anomalies)
       perf_insight = getPerformanceInsight endpoints_perf previous_perf
@@ -311,52 +319,91 @@ buildPerformanceJSON :: V.Vector PerformanceReport -> Aeson.Value
 buildPerformanceJSON pr = Aeson.object ["endpoints" .= pr]
 
 
-buildAnomalyJSON :: Vector Anomalies.AnomalyVM -> Int -> Aeson.Value
+buildAnomalyJSON :: Vector Anomalies.IssueL -> Int -> Aeson.Value
 buildAnomalyJSON anomalies total = Aeson.object ["anomalies" .= V.map buildjson anomalies, "anomaliesCount" .= total]
   where
-    -- endMap = createEndpointMap (V.toList anomalies) Map.empty
-    -- filteredAnom = V.filter (filterFunc endMap) anomalies
-
-    -- filterFunc :: Map Text Bool -> Anomalies.AnomalyVM -> Bool
-    -- filterFunc mp a = case a.anomalyType of
-    --   Anomalies.ATEndpoint -> True
-    --   _ ->
-    --     let ep_url = fromMaybe "" a.endpointUrlPath
-    --         method = fromMaybe "" a.endpointMethod
-    --         endpoint = method <> ep_url
-    --      in fromMaybe False (Map.lookup endpoint mp)
-
-    buildjson :: Anomalies.AnomalyVM -> Aeson.Value
-    buildjson an = case an.anomalyType of
-      Anomalies.ATEndpoint ->
+    buildjson :: Anomalies.IssueL -> Aeson.Value
+    buildjson an = case an.issueData of
+      Anomalies.IDNewEndpointIssue e ->
         Aeson.object
-          [ "endpointUrlPath" .= an.endpointUrlPath
-          , "endpointMethod" .= an.endpointMethod
+          [ "endpointUrlPath" .= e.endpointUrlPath
+          , "endpointMethod" .= e.endpointMethod
           , "tag" .= Anomalies.ATEndpoint
-          , "eventsCount" .= an.eventsCount14d
+          , "eventsCount" .= an.eventsAgg.count
           ]
-      Anomalies.ATShape ->
+      Anomalies.IDNewShapeIssue s ->
         Aeson.object
-          [ "endpointUrlPath" .= an.endpointUrlPath
-          , "endpointMethod" .= an.endpointMethod
+          [ "endpointUrlPath" .= s.endpointUrlPath
+          , "endpointMethod" .= s.endpointMethod
           , "targetHash" .= an.targetHash
           , "tag" .= Anomalies.ATShape
-          , "newUniqueFields" .= an.shapeNewUniqueFields
-          , "updatedFieldFormats" .= an.shapeUpdatedFieldFormats
-          , "deletedFields" .= an.shapeDeletedFields
-          , "eventsCount" .= an.eventsCount14d
+          , "newUniqueFields" .= s.newUniqueFields
+          , "updatedFieldFormats" .= s.updatedFieldFormats
+          , "deletedFields" .= s.deletedFields
+          , "eventsCount" .= an.eventsAgg.count
           ]
-      Anomalies.ATFormat ->
+      Anomalies.IDNewFormatIssue f ->
         Aeson.object
-          [ "endpointUrlPath" .= an.endpointUrlPath
-          , "endpointMethod" .= an.endpointMethod
-          , "keyPath" .= an.fieldKeyPath
+          [ "endpointUrlPath" .= f.endpointUrlPath
+          , "endpointMethod" .= f.endpointMethod
+          , "keyPath" .= f.fieldKeyPath
           , "tag" .= Anomalies.ATFormat
-          , "formatType" .= an.formatType
-          , "formatExamples" .= an.formatExamples
-          , "eventsCount" .= an.eventsCount14d
+          , "formatType" .= f.formatType
+          , "formatExamples" .= f.examples
+          , "eventsCount" .= an.eventsAgg.count
           ]
       _ -> Aeson.object ["anomaly_type" .= String "unknown"]
+
+
+getAnomaliesEmailTemplate :: Vector Anomalies.IssueL -> Vector Value
+getAnomaliesEmailTemplate anomalies = buildEmailjson <$> anomalies
+  where
+    buildEmailjson :: Anomalies.IssueL -> Value
+    buildEmailjson an = case an.issueData of
+      Anomalies.IDNewEndpointIssue e ->
+        Aeson.object
+          [ "tag" .= "ATEndpoint"
+          , "title" .= "New Endpoint"
+          , "eventsCount" .= an.eventsAgg.count
+          , "endpointMethod" .= e.endpointMethod
+          , "endpointUrlPath" .= e.endpointUrlPath
+          , "firstSeen" .= an.eventsAgg.lastSeen
+          ]
+      Anomalies.IDNewShapeIssue s ->
+        Aeson.object
+          [ "tag" .= "ATShape"
+          , "title" .= "New Request Shape"
+          , "eventsCount" .= an.eventsAgg.count
+          , "deletedFields" .= length s.deletedFields
+          , "endpointMethod" .= s.endpointMethod
+          , "endpointUrlPath" .= s.endpointUrlPath
+          , "newUniqueFields" .= length s.newUniqueFields
+          , "updatedFields" .= length s.updatedFieldFormats
+          , "firstSeen" .= an.eventsAgg.lastSeen
+          ]
+      Anomalies.IDNewFormatIssue f ->
+        Aeson.object
+          [ "tag" .= "ATFormat"
+          , "title" .= "Modified Field"
+          , "eventsCount" .= an.eventsAgg.count
+          , "keyPath" .= f.fieldKeyPath
+          , "formatType" .= f.formatType
+          , "endpointMethod" .= f.endpointMethod
+          , "endpointUrlPath" .= f.endpointUrlPath
+          , "formatExamples" .= f.examples
+          , "firstSeen" .= an.eventsAgg.lastSeen
+          ]
+      Anomalies.IDNewRuntimeExceptionIssue e ->
+        Aeson.object
+          [ "tag" .= "ATError"
+          , "title" .= "NotFoundException"
+          , "eventsCount" .= an.eventsAgg.count
+          , "errorMessage" .= e.message
+          , "endpointMethod" .= ""
+          , "endpointUrlPath" .= ""
+          , "firstSeen" .= an.eventsAgg.lastSeen
+          ]
+      _ -> Aeson.object ["message" .= String "unknown"]
 
 
 getPerformanceInsight :: V.Vector RequestDumps.RequestForReport -> V.Vector RequestDumps.EndpointPerf -> V.Vector PerformanceReport
@@ -367,12 +414,33 @@ getPerformanceInsight req_dumps previous_p =
    in perfInfo
 
 
+getPerformanceEmailTemplate :: V.Vector RequestDumps.RequestForReport -> V.Vector RequestDumps.EndpointPerf -> V.Vector Value
+getPerformanceEmailTemplate pr previous_p =
+  ( \p ->
+      Aeson.object
+        [ "endpointUrlPath" .= p.urlPath
+        , "endpointMethod" .= p.method
+        , "averageLatency" .= (getMs p.averageDuration)
+        , "latencyChange" .= ((if p.durationDiff > 0 then "+" else "-") <> getMs p.durationDiff <> " (" <> getDesc p.durationDiffPct <> ")")
+        ]
+  )
+    <$> (getPerformanceInsight pr previous_p)
+  where
+    getMs :: Integer -> String
+    getMs val = msText
+      where
+        dbo = divideIntegers val 1000000
+        msText = printf "%.2fms" dbo
+    getDesc :: Integer -> String
+    getDesc x = if x > 0 then show x <> "% slower" else show (x * (-1)) <> "% faster"
+
+
 mapFunc :: Map.Map Text Integer -> RequestDumps.RequestForReport -> PerformanceReport
 mapFunc prMap rd =
   case Map.lookup rd.endpointHash prMap of
     Just prevDuration ->
       let diff = rd.averageDuration - prevDuration
-          diffPct = round $ divideIntegers diff prevDuration * 100
+          diffPct = round $ (divideIntegers diff prevDuration) * 100
           diffType = if diff >= 0 then "up" else "down"
        in PerformanceReport
             { urlPath = rd.urlPath
@@ -471,6 +539,7 @@ reportEmail pid report' =
                           small_ [style_ ""] "examples: "
                           small_ [style_ ""] $ toHtml $ T.intercalate ", " formatExamples
                         p_ [style_ ""] $ show eventsCount <> " requests"
+                    ATRuntimeException _ -> pass
 
             div_ [style_ "width: 100%"] do
               div_ [style_ "width:100%; border-bottom: 1px solid #e5e7eb; padding-bottom: 0.5rem; display:inline"] do

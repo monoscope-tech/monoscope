@@ -10,6 +10,7 @@ import Data.List.Extra (intersect, union)
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, getZonedTime)
+import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getCurrentTimeZone, utcToZonedTime, zonedTimeToUTC)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector (Vector)
 import Data.Vector qualified as V
@@ -21,7 +22,6 @@ import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Log qualified
-import Lucid (renderText)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Query qualified as FieldsQ
@@ -270,6 +270,7 @@ dailyReportForProject pid = do
   projectM <- dbtToEff $ Projects.projectById pid
   forM_ projectM \pr -> do
     anomalies <- dbtToEff $ Anomalies.getReportAnomalies pid "daily"
+    total_anomalies <- dbtToEff $ Anomalies.countAnomalies pid "daily"
     endpoint_rp <- dbtToEff $ RequestDumps.getRequestDumpForReports pid "daily"
     previous_day <- dbtToEff $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid "daily"
     let rep_json = RP.buildReportJSON anomalies endpoint_rp previous_day
@@ -295,7 +296,31 @@ dailyReportForProject pid = do
                            |]
               :: Text
           )
-      _ -> users & mapM_ \user -> sendEmail (CI.original user.email) [fmt| APITOOLKIT: Daily Report for {pr.title} |] (renderText $ RP.reportEmail pid report)
+      _ -> do
+        users & mapM_ \user -> do
+          let firstName = user.firstName
+          let projectTitle = pr.title
+          let userEmail = CI.original (user.email)
+          let anmls = if total_anomalies == 0 then [Aeson.object ["message" .= "No anomalies detected yet."]] else RP.getAnomaliesEmailTemplate anomalies
+          let perf = RP.getPerformanceEmailTemplate endpoint_rp previous_day
+          let perf_count = V.length perf
+          let perf_shrt = if perf_count == 0 then [Aeson.object ["message" .= "No performance data yet."]] else V.take 10 perf
+
+          let rp_url = "https://app.apitoolkit.io/p/" <> pid.toText <> "/reports/" <> show report.id.reportId
+          let day = show $ localDay (zonedTimeToLocalTime currentTime)
+          let templateVars =
+                [aesonQQ|{
+                 "user_name": #{firstName},
+                 "project_name": #{projectTitle},
+                 "anomalies_count": #{total_anomalies}, 
+                 "anomalies":  #{anmls},
+                 "report_url": #{rp_url},
+                 "performance_count": #{perf_count},
+                 "performance": #{perf_shrt},
+                 "start_date": #{day},
+                 "end_date": #{day}
+          }|]
+          sendPostmarkEmail userEmail "daily-report" templateVars
 
 
 weeklyReportForProject :: Projects.ProjectId -> ATBackgroundCtx ()
@@ -306,9 +331,12 @@ weeklyReportForProject pid = do
   forM_ projectM \pr -> do
     anomalies <- dbtToEff $ Anomalies.getReportAnomalies pid "weekly"
     endpoint_rp <- dbtToEff $ RequestDumps.getRequestDumpForReports pid "weekly"
+    total_anomalies <- dbtToEff $ Anomalies.countAnomalies pid "weekly"
     previous_week <- dbtToEff $ RequestDumps.getRequestDumpsForPreviousReportPeriod pid "weekly"
     let rep_json = RP.buildReportJSON anomalies endpoint_rp previous_week
     currentTime <- liftIO getZonedTime
+    timeZone <- liftIO getCurrentTimeZone
+
     reportId <- Reports.ReportId <$> liftIO UUIDV4.nextRandom
     let report =
           Reports.Report
@@ -328,7 +356,35 @@ weeklyReportForProject pid = do
     
                               <https://app.apitoolkit.io/p/{pid.toText}/reports/{show report.id.reportId}|View this week's report>
                      |]
-      _ -> forM_ users \user -> sendEmail (CI.original user.email) [text| APITOOLKIT: Weekly Report for `{pr.title}` |] $ renderText $ RP.reportEmail pid report
+      _ -> do
+        forM_ users \user -> do
+          let firstName = user.firstName
+          let projectTitle = pr.title
+          let userEmail = CI.original (user.email)
+          let anmls = if total_anomalies == 0 then [Aeson.object ["message" .= "No anomalies detected yet."]] else RP.getAnomaliesEmailTemplate anomalies
+          let perf = RP.getPerformanceEmailTemplate endpoint_rp previous_week
+          let perf_count = V.length perf
+          let perf_shrt = if perf_count == 0 then [Aeson.object ["message" .= "No performance data yet."]] else V.take 10 perf
+          let rp_url = "https://app.apitoolkit.io/p/" <> pid.toText <> "/reports/" <> show report.id.reportId
+          let dayEnd = show $ localDay (zonedTimeToLocalTime currentTime)
+          let currentUTCTime = zonedTimeToUTC currentTime
+          let sevenDaysAgoUTCTime = addUTCTime (negate $ 6 * 86400) currentUTCTime
+          let sevenDaysAgoZonedTime = utcToZonedTime timeZone sevenDaysAgoUTCTime
+          let dayStart = show $ localDay (zonedTimeToLocalTime sevenDaysAgoZonedTime)
+
+          let templateVars =
+                [aesonQQ|{
+                 "user_name": #{firstName},
+                 "project_name": #{projectTitle},
+                 "anomalies_count": #{total_anomalies}, 
+                 "anomalies":  #{anmls},
+                 "report_url": #{rp_url},
+                 "performance_count": #{perf_count},
+                 "performance": #{perf_shrt},
+                 "start_date": #{dayStart},
+                 "end_date": #{dayEnd}
+          }|]
+          sendPostmarkEmail userEmail "weekly-report" templateVars
 
 
 emailQueryMonitorAlert :: Monitors.QueryMonitorEvaled -> CI.CI Text -> Maybe Users.User -> ATBackgroundCtx ()
