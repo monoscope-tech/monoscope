@@ -13,12 +13,12 @@ where
 
 import Data.Default (Default (..))
 import Data.Vector qualified as V
-import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Htmx
 import Models.Apis.Slack (SlackData, getProjectSlackData)
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
@@ -44,8 +44,6 @@ data CreateProjectForm = CreateProjectForm
   deriving anyclass (FromForm, Default)
 
 
-
-
 ----------------------------------------------------------------------------------------------------------
 -- createProjectGetH is the handler for the create projects page
 createProjectGetH :: ATAuthCtx (RespHeaders (Html ()))
@@ -57,7 +55,7 @@ createProjectGetH = do
           { sessM = Just sess.persistentSession
           , pageTitle = "Endpoints"
           }
-  addRespHeaders $ bodyWrapper bwconf $ integrationsBody (sess.persistentSession) appCtx.config False (def @CreateProjectForm)  Nothing Nothing
+  addRespHeaders $ bodyWrapper bwconf $ integrationsBody (sess.persistentSession) appCtx.config False (def @CreateProjectForm) Nothing Nothing
 
 
 ----------------------------------------------------------------------------------------------------------
@@ -80,8 +78,7 @@ integrationsSettingsGetH pid = do
   slackInfo <- dbtToEff $ getProjectSlackData pid
 
   let bwconf = (def :: BWConfig){sessM = Just sess.persistentSession, currProject = Just project, pageTitle = "Integrations"}
-  addRespHeaders $ bodyWrapper bwconf $ integrationsBody (sess.persistentSession) appCtx.config True createProj  (Just project.notificationsChannel) slackInfo
-
+  addRespHeaders $ bodyWrapper bwconf $ integrationsBody (sess.persistentSession) appCtx.config True createProj (Just project.notificationsChannel) slackInfo
 
 
 data NotifListForm = NotifListForm

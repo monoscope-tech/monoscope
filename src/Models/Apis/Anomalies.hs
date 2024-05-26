@@ -1,38 +1,38 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
-module Models.Apis.Anomalies
-  ( AnomalyVM (..),
-    errorByHash,
-    insertIssue,
-    AnomalyActions (..),
-    Issue (..),
-    IssueL (..),
-    IssueEventAgg (..),
-    AnomalyTypes (..),
-    AnomalyId (..),
-    IssuesData (..),
-    ATError (..),
-    NewEndpointIssue (..),
-    NewFieldIssue (..),
-    NewShapeIssue (..),
-    NewFormatIssue (..),
-    selectIssueByHash,
-    insertErrorQueryAndParams,
-    selectIssues,
-    parseAnomalyTypes,
-    convertAnomalyToIssue,
-    getReportAnomalies,
-    parseAnomalyActions,
-    getAnomalyVM,
-    anomalyIdText,
-    countAnomalies,
-    parseAnomalyRawTypes,
-    acknowlegeCascade,
-    acknowledgeAnomalies,
-    getShapeParentAnomalyVM,
-    getFormatParentAnomalyVM,
-  )
+module Models.Apis.Anomalies (
+  AnomalyVM (..),
+  errorByHash,
+  insertIssue,
+  AnomalyActions (..),
+  Issue (..),
+  IssueL (..),
+  IssueEventAgg (..),
+  AnomalyTypes (..),
+  AnomalyId (..),
+  IssuesData (..),
+  ATError (..),
+  NewEndpointIssue (..),
+  NewFieldIssue (..),
+  NewShapeIssue (..),
+  NewFormatIssue (..),
+  selectIssueByHash,
+  insertErrorQueryAndParams,
+  selectIssues,
+  parseAnomalyTypes,
+  convertAnomalyToIssue,
+  getReportAnomalies,
+  parseAnomalyActions,
+  getAnomalyVM,
+  anomalyIdText,
+  countAnomalies,
+  parseAnomalyRawTypes,
+  acknowlegeCascade,
+  acknowledgeAnomalies,
+  getShapeParentAnomalyVM,
+  getFormatParentAnomalyVM,
+)
 where
 
 import Data.Aeson qualified as AE
@@ -55,11 +55,11 @@ import Database.PostgreSQL.Transact (DBT)
 import Deriving.Aeson qualified as DAE
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields ()
-import Models.Apis.Fields.Types qualified as Fields
-  ( FieldCategoryEnum,
-    FieldId,
-    FieldTypes,
-  )
+import Models.Apis.Fields.Types qualified as Fields (
+  FieldCategoryEnum,
+  FieldId,
+  FieldTypes,
+ )
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
@@ -74,6 +74,7 @@ import Text.Megaparsec.Char
 import Text.Megaparsec.Char.Lexer qualified as L
 import Utils
 
+
 newtype AnomalyId = AnomalyId {unAnomalyId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving newtype (NFData, AE.FromJSON, AE.ToJSON)
@@ -81,8 +82,10 @@ newtype AnomalyId = AnomalyId {unAnomalyId :: UUID.UUID}
     (Eq, Ord, FromField, ToField, FromHttpApiData, Default)
     via UUID.UUID
 
+
 anomalyIdText :: AnomalyId -> Text
 anomalyIdText = UUID.toText . unAnomalyId
+
 
 data AnomalyTypes
   = ATUnknown
@@ -97,8 +100,10 @@ data AnomalyTypes
     (AE.ToJSON, AE.FromJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "FT", DAE.CamelToSnake]] AnomalyTypes
 
+
 instance Default AnomalyTypes where
   def = ATUnknown
+
 
 anomalyTypesToText :: AnomalyTypes -> Text
 anomalyTypesToText ATUnknown = "unknown"
@@ -108,8 +113,10 @@ anomalyTypesToText ATShape = "shape"
 anomalyTypesToText ATFormat = "format"
 anomalyTypesToText ATRuntimeException = "runtime_exception"
 
+
 instance ToField AnomalyTypes where
   toField = Escape . encodeUtf8 <$> anomalyTypesToText
+
 
 parseAnomalyTypes :: (Eq s, IsString s) => s -> Maybe AnomalyTypes
 parseAnomalyTypes "unknown" = Just ATUnknown
@@ -120,6 +127,7 @@ parseAnomalyTypes "format" = Just ATFormat
 parseAnomalyTypes "runtime_exception" = Just ATRuntimeException
 parseAnomalyTypes _ = Nothing
 
+
 parseAnomalyRawTypes :: Text -> AnomalyTypes
 parseAnomalyRawTypes "ATField" = ATField
 parseAnomalyRawTypes "ATEndpoint" = ATEndpoint
@@ -127,6 +135,7 @@ parseAnomalyRawTypes "ATShape" = ATShape
 parseAnomalyRawTypes "ATFormat" = ATFormat
 parseAnomalyRawTypes "ATRuntimeException" = ATRuntimeException
 parseAnomalyRawTypes _ = ATUnknown
+
 
 instance FromField AnomalyTypes where
   fromField f mdata =
@@ -137,6 +146,7 @@ instance FromField AnomalyTypes where
           Just a -> pure a
           Nothing -> returnError ConversionFailed f $ "Conversion error: Expected 'anomaly_type' enum, got " <> decodeUtf8 bs <> " instead."
 
+
 data AnomalyActions
   = AAUnknown
   | AACreated
@@ -146,20 +156,25 @@ data AnomalyActions
     (AE.ToJSON, AE.FromJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "FT", DAE.CamelToSnake]] AnomalyActions
 
+
 instance Default AnomalyActions where
   def = AAUnknown
+
 
 anomalyActionsToText :: AnomalyActions -> Text
 anomalyActionsToText AAUnknown = "unknown"
 anomalyActionsToText AACreated = "created"
 
+
 instance ToField AnomalyActions where
   toField = Escape . encodeUtf8 <$> anomalyActionsToText
+
 
 parseAnomalyActions :: (Eq s, IsString s) => s -> Maybe AnomalyActions
 parseAnomalyActions "unknown" = Just AAUnknown
 parseAnomalyActions "created" = Just AACreated
 parseAnomalyActions _ = Nothing
+
 
 instance FromField AnomalyActions where
   fromField f mdata =
@@ -170,45 +185,47 @@ instance FromField AnomalyActions where
           Just a -> pure a
           Nothing -> returnError ConversionFailed f $ "Conversion error: Expected 'anomaly_actions' enum, got " <> decodeUtf8 bs <> " instead."
 
+
 data AnomalyVM = AnomalyVM
-  { id :: AnomalyId,
-    createdAt :: ZonedTime,
-    updatedAt :: ZonedTime,
-    projectId :: Projects.ProjectId,
-    acknowlegedAt :: Maybe ZonedTime,
-    acknowlegedBy :: Maybe Users.UserId,
-    anomalyType :: AnomalyTypes,
-    action :: AnomalyActions,
-    targetHash :: Text,
-    --
-    shapeId :: Maybe Shapes.ShapeId,
-    shapeNewUniqueFields :: Vector Text,
-    shapeDeletedFields :: Vector Text,
-    shapeUpdatedFieldFormats :: Vector Text,
-    --
-    fieldId :: Maybe Fields.FieldId,
-    fieldKey :: Maybe Text,
-    fieldKeyPath :: Maybe Text,
-    fieldCategory :: Maybe Fields.FieldCategoryEnum,
-    fieldFormat :: Maybe Text,
-    --
-    formatId :: Maybe Formats.FormatId,
-    formatType :: Maybe Fields.FieldTypes, -- fieldFormat in the formats table
-    formatExamples :: Maybe (Vector Text),
-    --
-    endpointId :: Maybe Endpoints.EndpointId,
-    endpointMethod :: Maybe Text,
-    endpointUrlPath :: Maybe Text,
-    --
-    archivedAt :: Maybe ZonedTime,
-    eventsCount14d :: Int,
-    lastSeen :: ZonedTime
+  { id :: AnomalyId
+  , createdAt :: ZonedTime
+  , updatedAt :: ZonedTime
+  , projectId :: Projects.ProjectId
+  , acknowlegedAt :: Maybe ZonedTime
+  , acknowlegedBy :: Maybe Users.UserId
+  , anomalyType :: AnomalyTypes
+  , action :: AnomalyActions
+  , targetHash :: Text
+  , --
+    shapeId :: Maybe Shapes.ShapeId
+  , shapeNewUniqueFields :: Vector Text
+  , shapeDeletedFields :: Vector Text
+  , shapeUpdatedFieldFormats :: Vector Text
+  , --
+    fieldId :: Maybe Fields.FieldId
+  , fieldKey :: Maybe Text
+  , fieldKeyPath :: Maybe Text
+  , fieldCategory :: Maybe Fields.FieldCategoryEnum
+  , fieldFormat :: Maybe Text
+  , --
+    formatId :: Maybe Formats.FormatId
+  , formatType :: Maybe Fields.FieldTypes -- fieldFormat in the formats table
+  , formatExamples :: Maybe (Vector Text)
+  , --
+    endpointId :: Maybe Endpoints.EndpointId
+  , endpointMethod :: Maybe Text
+  , endpointUrlPath :: Maybe Text
+  , --
+    archivedAt :: Maybe ZonedTime
+  , eventsCount14d :: Int
+  , lastSeen :: ZonedTime
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, Default, NFData)
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "anomalies_vm", PrimaryKey "id", FieldModifiers '[CamelToSnake]] AnomalyVM)
+
 
 getAnomalyVM :: Projects.ProjectId -> Text -> DBT IO (Maybe AnomalyVM)
 getAnomalyVM pid hash = queryOne Select q (pid, hash)
@@ -259,6 +276,7 @@ where
   ) AND an.project_id=? AND an.target_hash=?
       |]
 
+
 getShapeParentAnomalyVM :: Projects.ProjectId -> Text -> DBT IO Int
 getShapeParentAnomalyVM pid hash = do
   result <- query Select q (pid, hash)
@@ -271,6 +289,7 @@ getShapeParentAnomalyVM pid hash = do
            FROM apis.issues iss JOIN apis.anomalies aan ON iss.id = aan.id
            WHERE iss.project_id = ? AND ? LIKE iss.target_hash ||'%' AND iss.anomaly_type='endpoint' AND aan.acknowleged_at IS NULL
       |]
+
 
 getFormatParentAnomalyVM :: Projects.ProjectId -> Text -> DBT IO Int
 getFormatParentAnomalyVM pid hash = do
@@ -287,15 +306,16 @@ getFormatParentAnomalyVM pid hash = do
               WHERE iss.project_id = ? AND ? LIKE iss.target_hash ||'%' AND iss.anomaly_type != 'format' AND aan.acknowleged_at IS NULL
       |]
 
+
 selectIssues :: Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Int -> Int -> DBT IO (Vector IssueL)
 selectIssues pid endpointM isAcknowleged isArchived sortM limitM skipM = query Select (Query $ encodeUtf8 q) (MkDBField pid : paramList)
   where
     boolToNullSubQ a = if a then " not " else ""
     condlist =
       catMaybes
-        [ (\a -> " acknowleged_at is" <> a <> " null ") . boolToNullSubQ <$> isAcknowleged,
-          (\a -> " archived_at is" <> a <> " null ") . boolToNullSubQ <$> isArchived,
-          "endpoint_id=?" <$ endpointM
+        [ (\a -> " acknowleged_at is" <> a <> " null ") . boolToNullSubQ <$> isAcknowleged
+        , (\a -> " archived_at is" <> a <> " null ") . boolToNullSubQ <$> isArchived
+        , "endpoint_id=?" <$ endpointM
         ]
     cond
       | null condlist = mempty
@@ -326,6 +346,7 @@ SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, tar
     FROM apis.issues iss WHERE project_id = ? $cond
     ORDER BY $orderBy $skip $limit |]
 
+
 selectIssueByHash :: Projects.ProjectId -> Text -> DBT IO (Maybe IssueL)
 selectIssueByHash pid targetHash = queryOne Select q (pid, targetHash)
   where
@@ -342,6 +363,7 @@ SELECT id, created_at, updated_at, project_id, acknowleged_at, anomaly_type, tar
     END as req_count
     FROM apis.issues iss WHERE project_id = ? and target_hash=? LIMIT 1
     |]
+
 
 getReportAnomalies :: Projects.ProjectId -> Text -> DBT IO (Vector IssueL)
 getReportAnomalies pid report_type = query Select (Query $ encodeUtf8 q) pid
@@ -363,6 +385,7 @@ getReportAnomalies pid report_type = query Select (Query $ encodeUtf8 q) pid
     ORDER BY req_count desc limit 20
         |]
 
+
 countAnomalies :: Projects.ProjectId -> Text -> DBT IO Int
 countAnomalies pid report_type = do
   result <- query Select (Query $ encodeUtf8 q) pid
@@ -377,6 +400,7 @@ countAnomalies pid report_type = do
       FROM apis.issues iss WHERE project_id = ?  and created_at > current_timestamp - interval $report_interval
      |]
 
+
 acknowledgeAnomalies :: Users.UserId -> Vector Text -> DBT IO (Vector Text)
 acknowledgeAnomalies uid aids = do
   _ <- query Update qIssues (uid, aids) :: DBT IO (Vector Text)
@@ -384,6 +408,7 @@ acknowledgeAnomalies uid aids = do
   where
     qIssues = [sql| update apis.issues set acknowleged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) RETURNING target_hash; |]
     q = [sql| update apis.anomalies set acknowleged_by=?, acknowleged_at=NOW() where id=ANY(?::uuid[]) RETURNING target_hash; |]
+
 
 acknowlegeCascade :: Users.UserId -> Vector Text -> DBT IO Int64
 acknowlegeCascade uid targets = do
@@ -394,19 +419,20 @@ acknowlegeCascade uid targets = do
     qIssues = [sql| UPDATE apis.issues SET acknowleged_by = ?, acknowleged_at = NOW() WHERE target_hash=ANY (?); |]
     q = [sql| UPDATE apis.anomalies SET acknowleged_by = ?, acknowleged_at = NOW() WHERE target_hash LIKE ANY (?); |]
 
+
 -------------------------------------------------------------------------------------------
 -- New Issues model implementations
 --
 
 data NewShapeIssue = NewShapeIssue
-  { id :: Shapes.ShapeId,
-    endpointId :: Endpoints.EndpointId,
-    endpointMethod :: Text,
-    endpointUrlPath :: Text,
-    host :: Text,
-    newUniqueFields :: Vector Text,
-    deletedFields :: Vector Text,
-    updatedFieldFormats :: Vector Text
+  { id :: Shapes.ShapeId
+  , endpointId :: Endpoints.EndpointId
+  , endpointMethod :: Text
+  , endpointUrlPath :: Text
+  , host :: Text
+  , newUniqueFields :: Vector Text
+  , deletedFields :: Vector Text
+  , updatedFieldFormats :: Vector Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (NFData)
@@ -414,16 +440,17 @@ data NewShapeIssue = NewShapeIssue
     (AE.ToJSON, AE.FromJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] NewShapeIssue
 
+
 data NewFieldIssue = NewFieldIssue
-  { id :: Fields.FieldId,
-    endpointId :: Endpoints.EndpointId,
-    endpointMethod :: Text,
-    endpointUrlPath :: Text,
-    host :: Text,
-    key :: Text,
-    keyPath :: Text,
-    fieldCategory :: Fields.FieldCategoryEnum,
-    format :: Text
+  { id :: Fields.FieldId
+  , endpointId :: Endpoints.EndpointId
+  , endpointMethod :: Text
+  , endpointUrlPath :: Text
+  , host :: Text
+  , key :: Text
+  , keyPath :: Text
+  , fieldCategory :: Fields.FieldCategoryEnum
+  , format :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (NFData)
@@ -431,16 +458,17 @@ data NewFieldIssue = NewFieldIssue
     (AE.ToJSON, AE.FromJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] NewFieldIssue
 
+
 data NewFormatIssue = NewFormatIssue
-  { id :: Formats.FormatId,
-    endpointId :: Endpoints.EndpointId,
-    endpointMethod :: Text,
-    endpointUrlPath :: Text,
-    host :: Text,
-    fieldKeyPath :: Text,
-    formatType :: Fields.FieldTypes,
-    fieldCategory :: Maybe Fields.FieldCategoryEnum,
-    examples :: Maybe (Vector Text)
+  { id :: Formats.FormatId
+  , endpointId :: Endpoints.EndpointId
+  , endpointMethod :: Text
+  , endpointUrlPath :: Text
+  , host :: Text
+  , fieldKeyPath :: Text
+  , formatType :: Fields.FieldTypes
+  , fieldCategory :: Maybe Fields.FieldCategoryEnum
+  , examples :: Maybe (Vector Text)
   }
   deriving stock (Show, Generic)
   deriving anyclass (NFData)
@@ -448,17 +476,19 @@ data NewFormatIssue = NewFormatIssue
     (AE.ToJSON, AE.FromJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] NewFormatIssue
 
+
 data NewEndpointIssue = NewEndpointIssue
-  { id :: Endpoints.EndpointId,
-    endpointMethod :: Text,
-    endpointUrlPath :: Text,
-    host :: Text
+  { id :: Endpoints.EndpointId
+  , endpointMethod :: Text
+  , endpointUrlPath :: Text
+  , host :: Text
   }
   deriving stock (Show, Generic)
   deriving anyclass (NFData)
   deriving
     (AE.ToJSON, AE.FromJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] NewEndpointIssue
+
 
 data IssuesData
   = IDNewShapeIssue NewShapeIssue
@@ -474,21 +504,23 @@ data IssuesData
     (AE.ToJSON, AE.FromJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] IssuesData
 
+
 instance Default IssuesData where
   def = IDEmpty
 
+
 data Issue = Issue
-  { id :: AnomalyId,
-    createdAt :: ZonedTime,
-    updatedAt :: ZonedTime,
-    projectId :: Projects.ProjectId,
-    acknowlegedAt :: Maybe ZonedTime,
-    anomalyType :: AnomalyTypes,
-    targetHash :: Text,
-    issueData :: IssuesData,
-    endpointId :: Maybe Endpoints.EndpointId,
-    acknowlegedBy :: Maybe Users.UserId,
-    archivedAt :: Maybe ZonedTime
+  { id :: AnomalyId
+  , createdAt :: ZonedTime
+  , updatedAt :: ZonedTime
+  , projectId :: Projects.ProjectId
+  , acknowlegedAt :: Maybe ZonedTime
+  , anomalyType :: AnomalyTypes
+  , targetHash :: Text
+  , issueData :: IssuesData
+  , endpointId :: Maybe Endpoints.EndpointId
+  , acknowlegedBy :: Maybe Users.UserId
+  , archivedAt :: Maybe ZonedTime
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, NFData, Default)
@@ -496,12 +528,14 @@ data Issue = Issue
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "issues", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Issue)
 
+
 data IssueEventAgg = IssueEventAgg
-  { count :: Int,
-    lastSeen :: UTCTime
+  { count :: Int
+  , lastSeen :: UTCTime
   }
   deriving stock (Show, Generic)
   deriving anyclass (NFData)
+
 
 instance FromField IssueEventAgg where
   fromField f mdata = case mdata of
@@ -510,7 +544,9 @@ instance FromField IssueEventAgg where
       Nothing -> returnError ConversionFailed f "Failed to parse IssueEventAgg"
       Just result -> return result
 
+
 type Parser = Parsec Void String
+
 
 parseIssueEventAgg :: Parser IssueEventAgg
 parseIssueEventAgg = do
@@ -525,22 +561,24 @@ parseIssueEventAgg = do
   _ <- char ')'
   pure $ IssueEventAgg cnt utcTime
 
+
 data IssueL = IssueL
-  { id :: AnomalyId,
-    createdAt :: ZonedTime,
-    updatedAt :: ZonedTime,
-    projectId :: Projects.ProjectId,
-    acknowlegedAt :: Maybe ZonedTime,
-    anomalyType :: AnomalyTypes,
-    targetHash :: Text,
-    issueData :: IssuesData,
-    endpointId :: Maybe Endpoints.EndpointId,
-    acknowlegedBy :: Maybe Users.UserId,
-    archivedAt :: Maybe ZonedTime,
-    eventsAgg :: IssueEventAgg
+  { id :: AnomalyId
+  , createdAt :: ZonedTime
+  , updatedAt :: ZonedTime
+  , projectId :: Projects.ProjectId
+  , acknowlegedAt :: Maybe ZonedTime
+  , anomalyType :: AnomalyTypes
+  , targetHash :: Text
+  , issueData :: IssuesData
+  , endpointId :: Maybe Endpoints.EndpointId
+  , acknowlegedBy :: Maybe Users.UserId
+  , archivedAt :: Maybe ZonedTime
+  , eventsAgg :: IssueEventAgg
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, NFData)
+
 
 -- Helper function to create IssuesData based on AnomalyType
 createIssueData :: Maybe Text -> AnomalyVM -> Maybe IssuesData
@@ -593,38 +631,41 @@ createIssueData hostM anomaly = case anomaly.anomalyType of
           )
   _ -> Nothing
 
+
 -- Main conversion function
 convertAnomalyToIssue :: Maybe Text -> AnomalyVM -> Maybe Issue
 convertAnomalyToIssue hostM anomaly = do
   issueData <- createIssueData hostM anomaly
   return
     Issue
-      { id = anomaly.id,
-        createdAt = anomaly.createdAt,
-        updatedAt = anomaly.updatedAt,
-        projectId = anomaly.projectId,
-        acknowlegedAt = anomaly.acknowlegedAt,
-        anomalyType = anomaly.anomalyType,
-        targetHash = anomaly.targetHash,
-        issueData = issueData,
-        endpointId = anomaly.endpointId,
-        acknowlegedBy = anomaly.acknowlegedBy,
-        archivedAt = anomaly.archivedAt
+      { id = anomaly.id
+      , createdAt = anomaly.createdAt
+      , updatedAt = anomaly.updatedAt
+      , projectId = anomaly.projectId
+      , acknowlegedAt = anomaly.acknowlegedAt
+      , anomalyType = anomaly.anomalyType
+      , targetHash = anomaly.targetHash
+      , issueData = issueData
+      , endpointId = anomaly.endpointId
+      , acknowlegedBy = anomaly.acknowlegedBy
+      , archivedAt = anomaly.archivedAt
       }
+
 
 newtype ErrorId = ErrorId {unErrorId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving newtype (Eq, Ord, FromField, ToField, FromHttpApiData, Default, AE.FromJSON, NFData, AE.ToJSON)
 
+
 data ATError = ATError
-  { id :: ErrorId,
-    createdAt :: ZonedTime,
-    updatedAt :: ZonedTime,
-    projectId :: Projects.ProjectId,
-    hash :: Text,
-    errorType :: Text,
-    message :: Text,
-    errorData :: RequestDumps.ATError
+  { id :: ErrorId
+  , createdAt :: ZonedTime
+  , updatedAt :: ZonedTime
+  , projectId :: Projects.ProjectId
+  , hash :: Text
+  , errorType :: Text
+  , message :: Text
+  , errorData :: RequestDumps.ATError
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, NFData, Default)
@@ -632,8 +673,10 @@ data ATError = ATError
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "errors", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ATError)
   deriving (FromField) via Aeson ATError
 
+
 errorByHash :: Text -> DBT IO (Maybe ATError)
 errorByHash hash = selectOneByField [field| hash |] (Only hash)
+
 
 insertErrorQueryAndParams :: Projects.ProjectId -> RequestDumps.ATError -> (Query, [DBField])
 insertErrorQueryAndParams pid err = (q, params)
@@ -642,13 +685,14 @@ insertErrorQueryAndParams pid err = (q, params)
       [sql| insert into apis.errors (project_id,created_at, hash, error_type, message, error_data) VALUES (?,?,?,?,?,?)
             ON CONFLICT (project_id, hash) DO NOTHING |]
     params =
-      [ MkDBField pid,
-        MkDBField err.when,
-        MkDBField $ Unsafe.fromJust err.hash, -- Illegal should not happen
-        MkDBField err.errorType,
-        MkDBField err.message,
-        MkDBField err
+      [ MkDBField pid
+      , MkDBField err.when
+      , MkDBField $ Unsafe.fromJust err.hash -- Illegal should not happen
+      , MkDBField err.errorType
+      , MkDBField err.message
+      , MkDBField err
       ]
+
 
 insertIssue :: Issue -> DBT IO Int64
 insertIssue issue = execute Insert q issue

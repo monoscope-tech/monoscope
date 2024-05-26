@@ -1,32 +1,32 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# OPTIONS_GHC -Wno-partial-fields #-}
 
-module Pages.Reports
-  ( reportsGetH,
-    singleReportGetH,
-    buildReportJSON,
-    buildPerformanceJSON,
-    buildAnomalyJSON,
-    getPerformanceInsight,
-    renderEndpointsTable,
-    getPerformanceEmailTemplate,
-    getAnomaliesEmailTemplate,
-    reportsPostH,
-    reportEmail,
-    ReportAnomalyType (..),
-    PerformanceReport (..),
-  )
+module Pages.Reports (
+  reportsGetH,
+  singleReportGetH,
+  buildReportJSON,
+  buildPerformanceJSON,
+  buildAnomalyJSON,
+  getPerformanceInsight,
+  renderEndpointsTable,
+  getPerformanceEmailTemplate,
+  getAnomaliesEmailTemplate,
+  reportsPostH,
+  reportEmail,
+  ReportAnomalyType (..),
+  PerformanceReport (..),
+)
 where
 
-import Data.Aeson as Aeson
-  ( FromJSON,
-    KeyValue ((.=)),
-    ToJSON,
-    Value (Object, String),
-    decode,
-    encode,
-    object,
-  )
+import Data.Aeson as Aeson (
+  FromJSON,
+  KeyValue ((.=)),
+  ToJSON,
+  Value (Object, String),
+  decode,
+  encode,
+  object,
+ )
 import Data.Default (def)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -46,40 +46,43 @@ import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig, bodyWrapper, currProject, pageTitle, sessM)
 import Relude
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
+import Text.Printf (printf)
+
 
 data PerformanceReport = PerformanceReport
-  { urlPath :: Text,
-    method :: Text,
-    averageDuration :: Integer,
-    durationDiff :: Integer,
-    durationDiffType :: Text,
-    durationDiffPct :: Integer
+  { urlPath :: Text
+  , method :: Text
+  , averageDuration :: Integer
+  , durationDiff :: Integer
+  , durationDiffType :: Text
+  , durationDiffPct :: Integer
   }
   deriving stock (Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
 
+
 data ReportAnomalyType
   = ATEndpoint
-      { endpointUrlPath :: Text,
-        endpointMethod :: Text,
-        eventsCount :: Int
+      { endpointUrlPath :: Text
+      , endpointMethod :: Text
+      , eventsCount :: Int
       }
   | ATShape
-      { endpointUrlPath :: Text,
-        endpointMethod :: Text,
-        targetHash :: Text,
-        newUniqueFields :: [Text],
-        updatedFieldFormats :: [Text],
-        deletedFields :: [Text],
-        eventsCount :: Int
+      { endpointUrlPath :: Text
+      , endpointMethod :: Text
+      , targetHash :: Text
+      , newUniqueFields :: [Text]
+      , updatedFieldFormats :: [Text]
+      , deletedFields :: [Text]
+      , eventsCount :: Int
       }
   | ATFormat
-      { endpointUrlPath :: Text,
-        keyPath :: Text,
-        endpointMethod :: Text,
-        formatType :: Text,
-        formatExamples :: [Text],
-        eventsCount :: Int
+      { endpointUrlPath :: Text
+      , keyPath :: Text
+      , endpointMethod :: Text
+      , formatType :: Text
+      , formatExamples :: [Text]
+      , eventsCount :: Int
       }
   | ATRuntimeException
       { endpointUrlPath :: Text
@@ -87,13 +90,15 @@ data ReportAnomalyType
   deriving stock (Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
 
+
 data ReportData = ReportData
-  { endpoints :: [PerformanceReport],
-    anomalies :: [ReportAnomalyType],
-    anomaliesCount :: Int
+  { endpoints :: [PerformanceReport]
+  , anomalies :: [ReportAnomalyType]
+  , anomaliesCount :: Int
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromJSON)
+
 
 reportsPostH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders (Html ()))
 reportsPostH pid t = do
@@ -102,17 +107,19 @@ reportsPostH pid t = do
   addSuccessToast "Report notifications updated Successfully" Nothing
   addRespHeaders $ span_ [] ""
 
+
 singleReportGetH :: Projects.ProjectId -> Reports.ReportId -> ATAuthCtx (RespHeaders (Html ()))
 singleReportGetH pid rid = do
   (sess, project) <- Sessions.sessionAndProject pid
   report <- dbtToEff $ Reports.getReportById rid
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess.persistentSession,
-            currProject = Just project,
-            pageTitle = "Reports"
+          { sessM = Just sess.persistentSession
+          , currProject = Just project
+          , pageTitle = "Reports"
           }
   addRespHeaders $ bodyWrapper bwconf $ singleReportPage pid report
+
 
 reportsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 reportsGetH pid page hxRequest hxBoosted = do
@@ -127,11 +134,12 @@ reportsGetH pid page hxRequest hxBoosted = do
     _ -> do
       let bwconf =
             (def :: BWConfig)
-              { sessM = Just sess.persistentSession,
-                currProject = Just project,
-                pageTitle = "Reports"
+              { sessM = Just sess.persistentSession
+              , currProject = Just project
+              , pageTitle = "Reports"
               }
       addRespHeaders $ bodyWrapper bwconf $ reportsPage pid reports nextUrl project.dailyNotif project.weeklyNotif
+
 
 singleReportPage :: Projects.ProjectId -> Maybe Reports.Report -> Html ()
 singleReportPage pid report =
@@ -157,7 +165,7 @@ singleReportPage pid report =
                     div_ [class_ "mt-2 space-y-2"] do
                       forM_ v.anomalies $ \anomaly -> do
                         case anomaly of
-                          ATEndpoint {endpointUrlPath, endpointMethod, eventsCount} -> do
+                          ATEndpoint{endpointUrlPath, endpointMethod, eventsCount} -> do
                             div_ [class_ "space-x-3 border-b pb-1 flex gap-4 items-center justify-between"] do
                               div_ [class_ "flex items-center space-x-3 "] do
                                 div_ [class_ "inline-block font-bold text-blue-700 space-x-2"] do
@@ -165,7 +173,7 @@ singleReportPage pid report =
                                   span_ [] "New Endpoint"
                                 small_ [] $ toHtml $ endpointMethod <> " " <> endpointUrlPath <> " "
                               small_ [] $ show eventsCount <> " requests"
-                          ATShape {endpointUrlPath, endpointMethod, newUniqueFields, updatedFieldFormats, deletedFields, targetHash, eventsCount} -> do
+                          ATShape{endpointUrlPath, endpointMethod, newUniqueFields, updatedFieldFormats, deletedFields, targetHash, eventsCount} -> do
                             div_ [class_ "border-b pb-1 flex items-center justify-between"] do
                               div_ [class_ "flex items-center space-x-3 "] do
                                 div_ [class_ "inline-block font-bold text-blue-700 space-x-2 flex items-center"] do
@@ -176,7 +184,7 @@ singleReportPage pid report =
                                   small_ [] $ toHtml $ "Signature: " <> targetHash
                                 shapeParameterStats_ (length newUniqueFields) (length updatedFieldFormats) (length deletedFields)
                               small_ [] $ show eventsCount <> " requests"
-                          ATFormat {endpointUrlPath, endpointMethod, keyPath, formatType, formatExamples, eventsCount} -> do
+                          ATFormat{endpointUrlPath, endpointMethod, keyPath, formatType, formatExamples, eventsCount} -> do
                             div_ [class_ "space-x-3 border-b pb-1 flex items-center justify-between"] do
                               div_ [class_ "flex items-center gap-2"] do
                                 div_ [class_ "inline-block font-bold text-blue-700 space-x-2 shrink-0"] do
@@ -208,6 +216,7 @@ singleReportPage pid report =
       Nothing -> do
         h3_ [] "Report Not Found"
 
+
 shapeParameterStats_ :: Int -> Int -> Int -> Html ()
 shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "inline-block"] do
   div_ [class_ "grid grid-cols-3 gap-2 text-center text-xs"] do
@@ -221,6 +230,7 @@ shapeParameterStats_ newF deletedF updatedFF = div_ [class_ "inline-block"] do
       div_ [class_ "text-base"] $ toHtml @String $ show deletedF
       small_ [class_ "block"] "deleted fields"
 
+
 reportsPage :: Projects.ProjectId -> Vector Reports.ReportListItem -> Text -> Bool -> Bool -> Html ()
 reportsPage pid reports nextUrl daily weekly =
   div_ [class_ "mx-auto w-full flex flex-col px-16 pt-10 pb-24  overflow-y-scroll h-full"] do
@@ -231,27 +241,28 @@ reportsPage pid reports nextUrl daily weekly =
         div_ [class_ "p-2 flex items-center justify-between w-full hover:bg-gray-100"] do
           label_ [class_ "inline-flex items-center w-full", Lucid.for_ "e-daily"] "Daily reports"
           input_
-            [ type_ "checkbox",
-              id_ "e-daily",
-              name_ "daily-reports",
-              if daily then checked_ else value_ "off",
-              hxPost_ $ "/p/" <> show pid.unProjectId <> "/reports_notif/daily",
-              hxTrigger_ "change",
-              class_ "checkbox checkbox-success checkbox-sm"
+            [ type_ "checkbox"
+            , id_ "e-daily"
+            , name_ "daily-reports"
+            , if daily then checked_ else value_ "off"
+            , hxPost_ $ "/p/" <> show pid.unProjectId <> "/reports_notif/daily"
+            , hxTrigger_ "change"
+            , class_ "checkbox checkbox-success checkbox-sm"
             ]
         div_ [class_ "p-2 flex items-center justify-between w-full hover:bg-gray-100"] do
           label_ [class_ "inline-flex items-center w-full", Lucid.for_ "e-weekly"] "Weekly reports"
           input_
-            [ type_ "checkbox",
-              id_ "e-weekly",
-              name_ "weekly-reports",
-              if weekly then checked_ else value_ "off",
-              hxPost_ $ "/p/" <> show pid.unProjectId <> "/reports_notif/weekly",
-              hxTrigger_ "change",
-              class_ "checkbox checkbox-success checkbox-sm"
+            [ type_ "checkbox"
+            , id_ "e-weekly"
+            , name_ "weekly-reports"
+            , if weekly then checked_ else value_ "off"
+            , hxPost_ $ "/p/" <> show pid.unProjectId <> "/reports_notif/weekly"
+            , hxTrigger_ "change"
+            , class_ "checkbox checkbox-success checkbox-sm"
             ]
       div_ [class_ "col-span-8"] do
         reportListItems pid reports nextUrl
+
 
 reportListItems :: Projects.ProjectId -> Vector Reports.ReportListItem -> Text -> Html ()
 reportListItems pid reports nextUrl =
@@ -266,6 +277,7 @@ reportListItems pid reports nextUrl =
       then pass
       else a_ [class_ "max-w-[800px] mx-auto cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ nextUrl] "LOAD MORE"
 
+
 renderEndpointRow :: PerformanceReport -> Html ()
 renderEndpointRow endpoint = tr_ do
   let (pcls, prc) =
@@ -279,6 +291,7 @@ renderEndpointRow endpoint = tr_ do
   td_ [class_ "px-6 py-2 border-b text-gray-500 text-sm"] $ show dur_diff_ms <> "ms"
   td_ [class_ $ "px-6 py-2 border-b " <> pcls] $ toHtml prc
 
+
 renderEndpointsTable :: [PerformanceReport] -> Html ()
 renderEndpointsTable endpoints = table_ [class_ "table-auto w-full"] do
   thead_ [class_ "text-xs text-left text-gray-700 uppercase bg-gray-100"] $ tr_ do
@@ -287,6 +300,7 @@ renderEndpointsTable endpoints = table_ [class_ "table-auto w-full"] do
     th_ [class_ "px-6 py-3"] "Change compared to prev."
     th_ [class_ "px-6 py-3"] "latency change %"
   tbody_ $ mapM_ renderEndpointRow endpoints
+
 
 buildReportJSON :: Vector Anomalies.IssueL -> Vector RequestForReport -> Vector EndpointPerf -> Aeson.Value
 buildReportJSON anomalies endpoints_perf previous_perf =
@@ -300,8 +314,10 @@ buildReportJSON anomalies endpoints_perf previous_perf =
         _ -> Aeson.object []
    in report_json
 
+
 buildPerformanceJSON :: V.Vector PerformanceReport -> Aeson.Value
 buildPerformanceJSON pr = Aeson.object ["endpoints" .= pr]
+
 
 buildAnomalyJSON :: Vector Anomalies.IssueL -> Int -> Aeson.Value
 buildAnomalyJSON anomalies total = Aeson.object ["anomalies" .= V.map buildjson anomalies, "anomaliesCount" .= total]
@@ -310,33 +326,34 @@ buildAnomalyJSON anomalies total = Aeson.object ["anomalies" .= V.map buildjson 
     buildjson an = case an.issueData of
       Anomalies.IDNewEndpointIssue e ->
         Aeson.object
-          [ "endpointUrlPath" .= e.endpointUrlPath,
-            "endpointMethod" .= e.endpointMethod,
-            "tag" .= Anomalies.ATEndpoint,
-            "eventsCount" .= an.eventsAgg.count
+          [ "endpointUrlPath" .= e.endpointUrlPath
+          , "endpointMethod" .= e.endpointMethod
+          , "tag" .= Anomalies.ATEndpoint
+          , "eventsCount" .= an.eventsAgg.count
           ]
       Anomalies.IDNewShapeIssue s ->
         Aeson.object
-          [ "endpointUrlPath" .= s.endpointUrlPath,
-            "endpointMethod" .= s.endpointMethod,
-            "targetHash" .= an.targetHash,
-            "tag" .= Anomalies.ATShape,
-            "newUniqueFields" .= s.newUniqueFields,
-            "updatedFieldFormats" .= s.updatedFieldFormats,
-            "deletedFields" .= s.deletedFields,
-            "eventsCount" .= an.eventsAgg.count
+          [ "endpointUrlPath" .= s.endpointUrlPath
+          , "endpointMethod" .= s.endpointMethod
+          , "targetHash" .= an.targetHash
+          , "tag" .= Anomalies.ATShape
+          , "newUniqueFields" .= s.newUniqueFields
+          , "updatedFieldFormats" .= s.updatedFieldFormats
+          , "deletedFields" .= s.deletedFields
+          , "eventsCount" .= an.eventsAgg.count
           ]
       Anomalies.IDNewFormatIssue f ->
         Aeson.object
-          [ "endpointUrlPath" .= f.endpointUrlPath,
-            "endpointMethod" .= f.endpointMethod,
-            "keyPath" .= f.fieldKeyPath,
-            "tag" .= Anomalies.ATFormat,
-            "formatType" .= f.formatType,
-            "formatExamples" .= f.examples,
-            "eventsCount" .= an.eventsAgg.count
+          [ "endpointUrlPath" .= f.endpointUrlPath
+          , "endpointMethod" .= f.endpointMethod
+          , "keyPath" .= f.fieldKeyPath
+          , "tag" .= Anomalies.ATFormat
+          , "formatType" .= f.formatType
+          , "formatExamples" .= f.examples
+          , "eventsCount" .= an.eventsAgg.count
           ]
       _ -> Aeson.object ["anomaly_type" .= String "unknown"]
+
 
 getAnomaliesEmailTemplate :: Vector Anomalies.IssueL -> Vector Value
 getAnomaliesEmailTemplate anomalies = buildEmailjson <$> anomalies
@@ -345,48 +362,49 @@ getAnomaliesEmailTemplate anomalies = buildEmailjson <$> anomalies
     buildEmailjson an = case an.issueData of
       Anomalies.IDNewEndpointIssue e ->
         Aeson.object
-          [ "tag" .= "ATEndpoint",
-            "title" .= "New Endpoint",
-            "eventsCount" .= an.eventsAgg.count,
-            "endpointMethod" .= e.endpointMethod,
-            "endpointUrlPath" .= e.endpointUrlPath,
-            "firstSeen" .= an.eventsAgg.lastSeen
+          [ "tag" .= "ATEndpoint"
+          , "title" .= "New Endpoint"
+          , "eventsCount" .= an.eventsAgg.count
+          , "endpointMethod" .= e.endpointMethod
+          , "endpointUrlPath" .= e.endpointUrlPath
+          , "firstSeen" .= an.eventsAgg.lastSeen
           ]
       Anomalies.IDNewShapeIssue s ->
         Aeson.object
-          [ "tag" .= "ATShape",
-            "title" .= "New Request Shape",
-            "eventsCount" .= an.eventsAgg.count,
-            "deletedFields" .= length s.deletedFields,
-            "endpointMethod" .= s.endpointMethod,
-            "endpointUrlPath" .= s.endpointUrlPath,
-            "newUniqueFields" .= length s.newUniqueFields,
-            "updatedFields" .= length s.updatedFieldFormats,
-            "firstSeen" .= an.eventsAgg.lastSeen
+          [ "tag" .= "ATShape"
+          , "title" .= "New Request Shape"
+          , "eventsCount" .= an.eventsAgg.count
+          , "deletedFields" .= length s.deletedFields
+          , "endpointMethod" .= s.endpointMethod
+          , "endpointUrlPath" .= s.endpointUrlPath
+          , "newUniqueFields" .= length s.newUniqueFields
+          , "updatedFields" .= length s.updatedFieldFormats
+          , "firstSeen" .= an.eventsAgg.lastSeen
           ]
       Anomalies.IDNewFormatIssue f ->
         Aeson.object
-          [ "tag" .= "ATFormat",
-            "title" .= "Modified Field",
-            "eventsCount" .= an.eventsAgg.count,
-            "keyPath" .= f.fieldKeyPath,
-            "formatType" .= f.formatType,
-            "endpointMethod" .= f.endpointMethod,
-            "endpointUrlPath" .= f.endpointUrlPath,
-            "formatExamples" .= f.examples,
-            "firstSeen" .= an.eventsAgg.lastSeen
+          [ "tag" .= "ATFormat"
+          , "title" .= "Modified Field"
+          , "eventsCount" .= an.eventsAgg.count
+          , "keyPath" .= f.fieldKeyPath
+          , "formatType" .= f.formatType
+          , "endpointMethod" .= f.endpointMethod
+          , "endpointUrlPath" .= f.endpointUrlPath
+          , "formatExamples" .= f.examples
+          , "firstSeen" .= an.eventsAgg.lastSeen
           ]
       Anomalies.IDNewRuntimeExceptionIssue e ->
         Aeson.object
-          [ "tag" .= "ATError",
-            "title" .= "NotFoundException",
-            "eventsCount" .= an.eventsAgg.count,
-            "errorMessage" .= e.message,
-            "endpointMethod" .= "",
-            "endpointUrlPath" .= "",
-            "firstSeen" .= an.eventsAgg.lastSeen
+          [ "tag" .= "ATError"
+          , "title" .= "NotFoundException"
+          , "eventsCount" .= an.eventsAgg.count
+          , "errorMessage" .= e.message
+          , "endpointMethod" .= ""
+          , "endpointUrlPath" .= ""
+          , "firstSeen" .= an.eventsAgg.lastSeen
           ]
       _ -> Aeson.object ["message" .= String "unknown"]
+
 
 getPerformanceInsight :: V.Vector RequestDumps.RequestForReport -> V.Vector RequestDumps.EndpointPerf -> V.Vector PerformanceReport
 getPerformanceInsight req_dumps previous_p =
@@ -395,48 +413,57 @@ getPerformanceInsight req_dumps previous_p =
       perfInfo = V.filter (\x -> x.durationDiffPct > 15 || x.durationDiffPct < -15) pin
    in perfInfo
 
+
 getPerformanceEmailTemplate :: V.Vector RequestDumps.RequestForReport -> V.Vector RequestDumps.EndpointPerf -> V.Vector Value
 getPerformanceEmailTemplate pr previous_p =
   ( \p ->
       Aeson.object
-        [ "endpointUrlPath" .= p.urlPath,
-          "endpointMethod" .= p.method,
-          "averageLatency" .= p.averageDuration,
-          "latencyChange" .= (show p.durationDiff <> "(" <> getDesc p.durationDiffPct <> ")")
+        [ "endpointUrlPath" .= p.urlPath
+        , "endpointMethod" .= p.method
+        , "averageLatency" .= (getMs p.averageDuration)
+        , "latencyChange" .= ((if p.durationDiff > 0 then "+" else "-") <> getMs p.durationDiff <> " (" <> getDesc p.durationDiffPct <> ")")
         ]
   )
     <$> (getPerformanceInsight pr previous_p)
   where
-    getDesc :: Integer -> Text
+    getMs :: Integer -> String
+    getMs val = msText
+      where
+        dbo = divideIntegers val 1000000
+        msText = printf "%.2fms" dbo
+    getDesc :: Integer -> String
     getDesc x = if x > 0 then show x <> "% slower" else show (x * (-1)) <> "% faster"
+
 
 mapFunc :: Map.Map Text Integer -> RequestDumps.RequestForReport -> PerformanceReport
 mapFunc prMap rd =
   case Map.lookup rd.endpointHash prMap of
     Just prevDuration ->
       let diff = rd.averageDuration - prevDuration
-          diffPct = round $ divideIntegers diff prevDuration * 100
+          diffPct = round $ (divideIntegers diff prevDuration) * 100
           diffType = if diff >= 0 then "up" else "down"
        in PerformanceReport
-            { urlPath = rd.urlPath,
-              method = rd.method,
-              averageDuration = rd.averageDuration,
-              durationDiff = diff,
-              durationDiffPct = diffPct,
-              durationDiffType = diffType
+            { urlPath = rd.urlPath
+            , method = rd.method
+            , averageDuration = rd.averageDuration
+            , durationDiff = diff
+            , durationDiffPct = diffPct
+            , durationDiffType = diffType
             }
     Nothing ->
       PerformanceReport
-        { urlPath = rd.urlPath,
-          method = rd.method,
-          averageDuration = rd.averageDuration,
-          durationDiff = 0,
-          durationDiffPct = 0,
-          durationDiffType = "up"
+        { urlPath = rd.urlPath
+        , method = rd.method
+        , averageDuration = rd.averageDuration
+        , durationDiff = 0
+        , durationDiffPct = 0
+        , durationDiffType = "up"
         }
+
 
 divideIntegers :: Integer -> Integer -> Double
 divideIntegers a b = fromIntegral a / fromIntegral b
+
 
 -- createEndpointMap [] mp = mp
 -- createEndpointMap (x : xs) mp =
@@ -456,8 +483,8 @@ reportEmail pid report' =
         h4_ [style_ "font-size: 1.5rem; font-weight: bold; text-transform: capitalize; margin-bottom: 5px"] $ toHtml report'.reportType <> " report"
         p_ [style_ ""] $ show $ localDay (zonedTimeToLocalTime report'.createdAt)
         a_
-          [ href_ $ "https://app.apitoolkit.io/p/" <> show pid.unProjectId <> "/reports/" <> show report'.id.reportId,
-            style_ "background-color:#3b82f6; margin-top:20px; text-decoration: none; padding: .5em 1em; color: #FCFDFF; display:inline-block; border-radius:.4em; mso-padding-alt:0;text-underline-color:#005959"
+          [ href_ $ "https://app.apitoolkit.io/p/" <> show pid.unProjectId <> "/reports/" <> show report'.id.reportId
+          , style_ "background-color:#3b82f6; margin-top:20px; text-decoration: none; padding: .5em 1em; color: #FCFDFF; display:inline-block; border-radius:.4em; mso-padding-alt:0;text-underline-color:#005959"
           ]
           "View in browser"
       div_ [style_ "padding: 1rem 1rem 2rem; gap: 2rem;"] do
@@ -474,13 +501,13 @@ reportEmail pid report' =
               div_ [style_ "margin-top: 1rem;"] do
                 forM_ v.anomalies $ \anomaly -> do
                   case anomaly of
-                    ATEndpoint {endpointUrlPath, endpointMethod, eventsCount} -> do
+                    ATEndpoint{endpointUrlPath, endpointMethod, eventsCount} -> do
                       div_ [style_ "border-bottom: 1px solid #e5e7eb; margin-bottom: 1rem; padding-bottom: 0.25rem;"] do
                         div_ [style_ "display: inline;"] do
                           span_ [style_ "display: inline; font-weight: bold; color: #3b82f6; margin-right:10px"] "New Endpoint"
                           p_ [style_ ""] $ toHtml $ endpointMethod <> " " <> endpointUrlPath <> " "
                         p_ [style_ ""] $ show eventsCount <> " requests"
-                    ATShape {endpointUrlPath, endpointMethod, newUniqueFields, updatedFieldFormats, deletedFields, targetHash, eventsCount} -> do
+                    ATShape{endpointUrlPath, endpointMethod, newUniqueFields, updatedFieldFormats, deletedFields, targetHash, eventsCount} -> do
                       div_ [style_ "border-bottom: 1px solid #e5e7eb; margin-bottom: 1rem; padding-bottom: 0.25rem;"] do
                         div_ [] do
                           span_ [style_ "display: inline; font-weight: bold; color: #3b82f6; margin-right:5px"] "New Request Shape"
@@ -497,7 +524,7 @@ reportEmail pid report' =
                               p_ [style_ "display:block"] $ show (length deletedFields) <> " deleted fields"
                             else pass
                           p_ [style_ ""] $ show eventsCount <> " requests"
-                    ATFormat {endpointUrlPath, endpointMethod, keyPath, formatType, formatExamples, eventsCount} -> do
+                    ATFormat{endpointUrlPath, endpointMethod, keyPath, formatType, formatExamples, eventsCount} -> do
                       div_ [style_ "border-bottom: 1px solid #e5e7eb;  margin-bottom: 1rem; padding-bottom: 0.25rem; display: flex; gap: 0.75rem; align-items: center; justify-content: space-between;"] do
                         div_ [style_ "display: flex; align-items: center;"] do
                           span_ [style_ "display: inline; font-weight: bold; color: #3b82f6;"] "Modified field"
@@ -521,6 +548,7 @@ reportEmail pid report' =
           Nothing -> pass
       a_ [href_ $ "https://app.apitoolkit.io/p/" <> show pid.unProjectId <> "/reports", style_ "width: 100%; text-align: center; color:#3b82f6; margin: 20px; padding-bottom:20px"] "Turn off email alerts"
       div_ [style_ "margin-top: 20px"] pass
+
 
 renderEmailEndpointsTable :: [PerformanceReport] -> Html ()
 renderEmailEndpointsTable endpoints = table_ [style_ "width: 100%; border-collapse: collapse;"] do
