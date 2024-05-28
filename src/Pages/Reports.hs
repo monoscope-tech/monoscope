@@ -30,6 +30,7 @@ import Data.Aeson as Aeson (
 import Data.Default (def)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime))
 import Data.Vector (Vector)
 import Data.Vector qualified as V
@@ -367,7 +368,7 @@ getAnomaliesEmailTemplate anomalies = buildEmailjson <$> anomalies
           , "eventsCount" .= an.eventsAgg.count
           , "endpointMethod" .= e.endpointMethod
           , "endpointUrlPath" .= e.endpointUrlPath
-          , "firstSeen" .= an.eventsAgg.lastSeen
+          , "firstSeen" .= (formatUTC an.eventsAgg.lastSeen)
           ]
       Anomalies.IDNewShapeIssue s ->
         Aeson.object
@@ -379,7 +380,7 @@ getAnomaliesEmailTemplate anomalies = buildEmailjson <$> anomalies
           , "endpointUrlPath" .= s.endpointUrlPath
           , "newUniqueFields" .= length s.newUniqueFields
           , "updatedFields" .= length s.updatedFieldFormats
-          , "firstSeen" .= an.eventsAgg.lastSeen
+          , "firstSeen" .= (formatUTC an.eventsAgg.lastSeen)
           ]
       Anomalies.IDNewFormatIssue f ->
         Aeson.object
@@ -391,19 +392,23 @@ getAnomaliesEmailTemplate anomalies = buildEmailjson <$> anomalies
           , "endpointMethod" .= f.endpointMethod
           , "endpointUrlPath" .= f.endpointUrlPath
           , "formatExamples" .= f.examples
-          , "firstSeen" .= an.eventsAgg.lastSeen
+          , "firstSeen" .= (formatUTC an.eventsAgg.lastSeen)
           ]
       Anomalies.IDNewRuntimeExceptionIssue e ->
         Aeson.object
           [ "tag" .= "ATError"
-          , "title" .= "NotFoundException"
+          , "title" .= e.errorType
           , "eventsCount" .= an.eventsAgg.count
           , "errorMessage" .= e.message
-          , "endpointMethod" .= ""
-          , "endpointUrlPath" .= ""
-          , "firstSeen" .= an.eventsAgg.lastSeen
+          , "endpointMethod" .= e.requestMethod
+          , "endpointUrlPath" .= e.requestPath
+          , "firstSeen" .= (formatUTC an.eventsAgg.lastSeen)
           ]
       _ -> Aeson.object ["message" .= String "unknown"]
+
+
+formatUTC :: UTCTime -> String
+formatUTC utcTime = formatTime defaultTimeLocale "%Y-%m-%d %H:%M" utcTime
 
 
 getPerformanceInsight :: V.Vector RequestDumps.RequestForReport -> V.Vector RequestDumps.EndpointPerf -> V.Vector PerformanceReport
@@ -421,7 +426,7 @@ getPerformanceEmailTemplate pr previous_p =
         [ "endpointUrlPath" .= p.urlPath
         , "endpointMethod" .= p.method
         , "averageLatency" .= (getMs p.averageDuration)
-        , "latencyChange" .= ((if p.durationDiff > 0 then "+" else "-") <> getMs p.durationDiff <> " (" <> getDesc p.durationDiffPct <> ")")
+        , "latencyChange" .= ((if p.durationDiff > 0 then "+" else "") <> getMs p.durationDiff <> " (" <> getDesc p.durationDiffPct <> ")")
         ]
   )
     <$> (getPerformanceInsight pr previous_p)
