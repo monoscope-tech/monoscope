@@ -1,11 +1,12 @@
 module Pages.Endpoints.Outgoing (outgoingGetH) where
+
 import Data.Default (def)
 import Data.Text qualified as T
 import Data.Tuple.Extra (fst3)
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Lucid
-import Lucid.Htmx (hxBoost_, hxGet_, hxSwap_, hxTrigger_,hxIndicator_)
+import Lucid.Htmx (hxBoost_, hxGet_, hxIndicator_, hxSwap_, hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
@@ -43,7 +44,8 @@ outgoingPage :: Projects.ProjectId -> Text -> V.Vector Endpoints.HostEvents -> H
 outgoingPage pid sortV hostsEvents = do
   div_ [class_ "w-full mx-auto px-16 pt-10 pb-24 overflow-y-scroll h-full"] $ do
     h3_ [class_ "text-xl text-slate-700 flex gap-1 place-items-center mb-10"] "Outbound Integrations"
-    div_ [class_ "grid grid-cols-5 card-round", id_ "anomalyListBelowTab",hxTrigger_ "refreshMain"] $ outgoingList' pid sortV hostsEvents
+    div_ [class_ "grid grid-cols-5 card-round", id_ "anomalyListBelowTab", hxTrigger_ "refreshMain"] $ outgoingList' pid sortV hostsEvents
+
 
 outgoingList' :: Projects.ProjectId -> Text -> V.Vector Endpoints.HostEvents -> Html ()
 outgoingList' pid sortV hostsEvents = form_ [class_ "col-span-5 bg-white divide-y ", id_ "anomalyListForm"] $ do
@@ -51,7 +53,7 @@ outgoingList' pid sortV hostsEvents = form_ [class_ "col-span-5 bg-white divide-
     div_ [class_ "h-4 flex space-x-3 w-8"] do
       a_ [class_ " w-2 h-full"] "" >> input_ [term "aria-label" "Select Issue", type_ "checkbox"]
     div_ [class_ " grow flex flex-row gap-2"] do
-      button_ [class_ "btn btn-sm btn-outline border-black hover:shadow-2xl",hxSwap_ "none"] "HOST"
+      button_ [class_ "btn btn-sm btn-outline border-black hover:shadow-2xl", hxSwap_ "none"] "HOST"
     div_ [class_ "relative inline-block"] do
       let currentSortTitle = maybe "Events" fst3 $ find (\(_, _, identifier) -> identifier == sortV) sortOptions
       a_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl space-x-2 cursor-pointer", [__|on click toggle .hidden on #sortMenuDiv |]]
@@ -90,33 +92,34 @@ outgoingList' pid sortV hostsEvents = form_ [class_ "col-span-5 bg-white divide-
         , placeholder_ "Search endpoints..."
         ]
   when (null hostsEvents) $ section_ [class_ "mx-auto w-max p-5 sm:py-10 sm:px-16 items-center flex my-10 gap-16"] do
-      div_ [] do
-        faSprite_ "empty-set" "solid" "h-24 w-24"
-      div_ [class_ "flex flex-col gap-2"] do
-        h2_ [class_ "text-2xl font-bold"] "No Outgoing Request Monitored."
-        p_ "You're currently not monitoring your outbound integrations."
-        a_ [href_ $ "/p/" <> pid.toText <> "/integration_guides#outgoing-request-monitoring", class_ "w-max btn btn-indigo -ml-1 text-md"] "See monitoring guide"
-  renderOutgoing pid hostsEvents 
-    
-    
-renderOutgoing :: Projects.ProjectId  -> V.Vector Endpoints.HostEvents -> Html ()
+    div_ [] do
+      faSprite_ "empty-set" "solid" "h-24 w-24"
+    div_ [class_ "flex flex-col gap-2"] do
+      h2_ [class_ "text-2xl font-bold"] "No Outgoing Request Monitored."
+      p_ "You're currently not monitoring your outbound integrations."
+      a_ [href_ $ "/p/" <> pid.toText <> "/integration_guides#outgoing-request-monitoring", class_ "w-max btn btn-indigo -ml-1 text-md"] "See monitoring guide"
+  renderOutgoing pid hostsEvents
+
+
+renderOutgoing :: Projects.ProjectId -> V.Vector Endpoints.HostEvents -> Html ()
 renderOutgoing pid hostsEvents = do
-  div_ [class_ "flex py-4 gap-8 items-center endpoint_item "] do
+  div_ [class_ "flex flex-col"] do
     forM_ hostsEvents $ \host -> do
-      div_ [class_ "h-4 flex space-x-3 w-8 "] do
-        a_ [class_ " w-2 h-full"] ""
-        input_ [term "aria-label" "Select Issue", class_ "endpoint_anomaly_input", type_ "checkbox"]
-      div_ [class_ "space-y-3 grow"] do
-        div_ [class_ "space-x-3"] do
-          a_ [class_ "inline-block font-bold space-x-2"] $ do
-            a_ [href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> host.host, class_ "text-blue-500 hover:text-slate-600"] $ toHtml (T.replace "http://" "" $ T.replace "https://" "" host.host)
-            a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=host%3D%3D" <> "\"" <> host.host <> "\"", class_ "text-blue-500 hover:text-slate-600"] $ "View logs"
-      div_ [class_ "flex items-center justify-center "]
-        $ div_
-          [ class_ "w-56 h-12 px-3"
-          , hxGet_ $ "/charts_html?pid=" <> pid.toText <> "&since=14D&query_raw=" <> AnomalyList.escapedQueryPartial [PyF.fmt|host=="{host.host}" | timechart [1d]|]
-          , hxTrigger_ "intersect once"
-          , hxSwap_ "innerHTML"
-          ]
-          ""
-      div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $ toHtml (show host.eventCount)
+      div_ [class_ "flex py-4 gap-8 items-center endpoint_item "] do
+        div_ [class_ "h-4 flex space-x-3 w-8 "] do
+          a_ [class_ " w-2 h-full"] ""
+          input_ [term "aria-label" "Select Issue", class_ "endpoint_anomaly_input", type_ "checkbox"]
+        div_ [class_ "space-y-3 grow"] do
+          div_ [class_ "space-x-3"] do
+            a_ [class_ "inline-block font-bold space-x-2"] $ do
+              a_ [href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> host.host, class_ "text-blue-500 hover:text-slate-600"] $ toHtml (T.replace "http://" "" $ T.replace "https://" "" host.host)
+              a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=host%3D%3D" <> "\"" <> host.host <> "\"", class_ "text-blue-500 hover:text-slate-600"] $ "View logs"
+        div_ [class_ "flex items-center justify-center "]
+          $ div_
+            [ class_ "w-56 h-12 px-3"
+            , hxGet_ $ "/charts_html?pid=" <> pid.toText <> "&since=14D&query_raw=" <> AnomalyList.escapedQueryPartial [PyF.fmt|host=="{host.host}" | timechart [1d]|]
+            , hxTrigger_ "intersect once"
+            , hxSwap_ "innerHTML"
+            ]
+            ""
+        div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"] $ toHtml (show host.eventCount)
