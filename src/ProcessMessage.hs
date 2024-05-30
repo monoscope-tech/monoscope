@@ -203,6 +203,6 @@ processRequestMessage recMsg = do
     pure $ fromMaybe projectCacheDefault mpjCache
   recId <- liftIO nextRandom
   pure
-    $ if projectCacheVal.paymentPlan == "Free" && projectCacheVal.weeklyRequestCount > 10000
+    $ if projectCacheVal.paymentPlan == "Free" && projectCacheVal.weeklyRequestCount > 5000
       then (Right (Nothing, Nothing, Nothing))
       else (RequestMessages.requestMsgToDumpAndEndpoint projectCacheVal recMsg timestamp recId)
