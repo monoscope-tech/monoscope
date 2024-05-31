@@ -141,14 +141,16 @@ toXXHash :: Text -> Text
 toXXHash input = leftPad 8 $ fromString $ showHex (xxHash $ encodeUtf8 $ input) ""
 
 
-processErrors :: Projects.ProjectId -> RequestDumps.SDKTypes -> RequestDumps.ATError -> (RequestDumps.ATError, Query, [DBField])
-processErrors pid sdkType err = (normalizedError, q, params)
+processErrors :: Projects.ProjectId -> RequestDumps.SDKTypes -> Text -> Text -> RequestDumps.ATError -> (RequestDumps.ATError, Query, [DBField])
+processErrors pid sdkType method urlPath err = (normalizedError, q, params)
   where
     (q, params) = Anomalies.insertErrorQueryAndParams pid normalizedError
     normalizedError =
       err
         { RequestDumps.hash = Just $ fromMaybe (toXXHash (pid.toText <> err.errorType <> err.message <> show sdkType)) err.hash
         , RequestDumps.technology = Just sdkType
+        , RequestDumps.requestMethod = Just method
+        , RequestDumps.requestPath = Just urlPath
         }
 
 
@@ -249,7 +251,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
                 , requestDescription = ""
                 }
 
-  let (errorsList, errQ, errP) = unzip3 $ map (processErrors projectId rM.sdkType) $ fromMaybe [] rM.errors
+  let (errorsList, errQ, errP) = unzip3 $ map (processErrors projectId rM.sdkType rM.method (fromMaybe "" rM.urlPath)) $ fromMaybe [] rM.errors
 
   -- request dumps are time series dumps representing each requests which we consume from our users.
   -- We use this field via the log explorer for exploring and searching traffic. And at the moment also use it for most time series analytics.

@@ -210,6 +210,8 @@ data ATError = ATError
   , stackTrace :: Text
   , hash :: Maybe Text
   , technology :: Maybe SDKTypes
+  , requestMethod :: Maybe Text
+  , requestPath :: Maybe Text
   }
   deriving stock (Show, Generic, Eq)
   deriving anyclass (NFData, Default)
