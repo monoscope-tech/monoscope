@@ -17,6 +17,8 @@ module Models.Tests.Testing (
   getCollections,
   getCollectionById,
   getCollectionsId,
+  TabStatus(..)
+  
 )
 where
 
@@ -191,6 +193,7 @@ data CollectionListItem = ReportListItem
   , description :: Text
   , stepsCount :: Int
   , schedule :: Text
+  , isScheduled :: Bool
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromRow, ToRow, NFData)
@@ -234,6 +237,8 @@ data StepResult = StepResult
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] StepResult
 
 
+data TabStatus = Active | Inactive | Deactive
+
 addCollection :: Collection -> DBT IO ()
 addCollection = insert @Collection
 
@@ -259,23 +264,28 @@ getCollectionById id' = queryOne Select q (Only id')
 
 
 -- TODO: delete or remove the collect_steps join
-getCollections :: Projects.ProjectId -> DBT IO (V.Vector CollectionListItem)
-getCollections pid = query Select q (Only pid)
+getCollections :: Projects.ProjectId -> TabStatus -> DBT IO (V.Vector CollectionListItem)
+getCollections pid tabStatus = query Select q (Only pid)
   where
-    q =
-      [sql| SELECT t.id id , t.created_at created_at , t.updated_at updated_at, t.project_id project_id, t.last_run last_run, 
-                  t.title title, t.description description, 0,CASE
-                      WHEN EXTRACT(DAY FROM t.schedule) > 0 THEN CONCAT(EXTRACT(DAY FROM t.schedule)::TEXT, ' days')
-                      WHEN EXTRACT(HOUR FROM t.schedule) > 0 THEN CONCAT(EXTRACT(HOUR FROM t.schedule)::TEXT, ' hours')
-                      ELSE CONCAT(EXTRACT(MINUTE FROM t.schedule)::TEXT, ' minutes')
-                  END as  schedule
-                  FROM  tests.collections t
-                  WHERE t.project_id = ?
-                  GROUP BY t.id
-                  ORDER BY t.updated_at DESC;
-  |]
+    statusCondition = case tabStatus of
+      Active   -> "is_scheduled = TRUE"
+      Inactive -> "is_scheduled = FALSE"
+      Deactive -> "is_scheduled = FALSE"
 
-
+    q = [sql|
+      SELECT t.id, t.created_at, t.updated_at, t.project_id, t.last_run, 
+             t.title, t.description, 0, 
+             CASE
+               WHEN EXTRACT(DAY FROM t.schedule) > 0 THEN CONCAT(EXTRACT(DAY FROM t.schedule)::TEXT, ' days')
+               WHEN EXTRACT(HOUR FROM t.schedule) > 0 THEN CONCAT(EXTRACT(HOUR FROM t.schedule)::TEXT, ' hours')
+               ELSE CONCAT(EXTRACT(MINUTE FROM t.schedule)::TEXT, ' minutes')
+             END as schedule,
+             t.is_scheduled
+      FROM tests.collections t
+      WHERE t.project_id = ? AND |] <> statusCondition <> [sql|
+      GROUP BY t.id
+      ORDER BY t.updated_at DESC;
+    |]
 getCollectionsId :: DBT IO (V.Vector CollectionId)
 getCollectionsId = query Select q ()
   where
