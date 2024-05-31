@@ -92,12 +92,12 @@ testingPostH pid collection = do
       _ <- dbtToEff $ Testing.addCollection coll
       cols <- dbtToEff $ Testing.getCollections pid Testing.Active
       addSuccessToast "Collection added Successfully" Nothing
-      addRespHeaders $ testingPage pid cols
+      addRespHeaders $ testingPage pid Nothing cols
     else do
       -- _ <- dbtToEff $ Testing.updateCollection pid collection.collection_id collection.title collection.description
       cols <- dbtToEff $ Testing.getCollections pid Testing.Active
       addSuccessToast "Collection updated Successfully" Nothing
-      addRespHeaders $ testingPage pid cols
+      addRespHeaders $ testingPage pid Nothing cols
 
 
 testingGetH :: Projects.ProjectId -> Maybe Text ->  ATAuthCtx (RespHeaders (Html ()))
@@ -115,11 +115,14 @@ testingGetH pid maybeTab= do
           , currProject = Just project
           , pageTitle = "Testing"
           }
-  addRespHeaders $ bodyWrapper bwconf $ testingPage pid colls
+  addRespHeaders $ bodyWrapper bwconf $ testingPage pid maybeTab colls
 
 
-testingPage :: Projects.ProjectId -> V.Vector Testing.CollectionListItem -> Html ()
-testingPage pid colls = do
+
+
+
+testingPage :: Projects.ProjectId -> Maybe Text -> V.Vector Testing.CollectionListItem -> Html ()
+testingPage pid maybeTab colls = do
   div_ [class_ "w-full", id_ "main"] do
     modal pid
     div_ [class_ "w-full mt-4 max-w-7xl mx-auto"] do
@@ -132,9 +135,9 @@ testingPage pid colls = do
           $ (faSprite_ "plus" "regular" "h-6 w-6" >> "Collection")
     div_ [class_ "w-full mx-auto px-16 pt-5 pb-24 overflow-y-scroll h-full"] $ do     
       div_ [class_ "py-2 px-2 space-x-6 border-b border-slate-20 mt-6 mb-8 text-sm font-light", hxBoost_ "true"] do
-        a_ [class_"inline-block py-2 ",href_ ("/p/" <> pid.toText <> "/testing/?tab=Active")] "Active"
-        a_ [class_"inline-block  py-2 ",href_ ("/p/" <> pid.toText <> "/testing/?tab=Inactive")] "InActive"
-        a_ [class_"inline-block  py-2 ",href_ ("/p/" <> pid.toText <> "/testing/?tab=Deactive")] "Deactive"
+        a_ [class_ $ "inline-block py-2 " <> if maybeTab == Just "Active" then "font-bold text-black" else "",href_ ("/p/" <> pid.toText <> "/testing/?tab=Active")] "Active"
+        a_ [class_ $ "inline-block py-2 " <> if maybeTab == Just "Inactive" then "font-bold text-black" else "",href_ ("/p/" <> pid.toText <> "/testing/?tab=Inactive")] "InActive"
+        a_ [class_ $ "inline-block py-2 " <> if maybeTab == Just "Deactive" then "font-bold text-black" else "",href_ ("/p/" <> pid.toText <> "/testing/?tab=Deactive")] "Deactive"
       div_ [class_"w-full card-round"] $ collectionCardList pid colls
       
 collectionCardList :: Projects.ProjectId -> V.Vector Testing.CollectionListItem -> Html ()

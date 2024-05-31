@@ -265,12 +265,12 @@ getCollectionById id' = queryOne Select q (Only id')
 
 -- TODO: delete or remove the collect_steps join
 getCollections :: Projects.ProjectId -> TabStatus -> DBT IO (V.Vector CollectionListItem)
-getCollections pid tabStatus = query Select q (Only pid)
+getCollections pid tabStatus = query Select q (pid, statusValue)
   where
-    statusCondition = case tabStatus of
-      Active   -> "is_scheduled = TRUE"
-      Inactive -> "is_scheduled = FALSE"
-      Deactive -> "is_scheduled = FALSE"
+    statusValue = case tabStatus of
+      Active   -> True
+      Inactive -> False
+      Deactive -> False  -- Adjust if necessary to differentiate between Inactive and Deactive
 
     q = [sql|
       SELECT t.id, t.created_at, t.updated_at, t.project_id, t.last_run, 
@@ -282,10 +282,11 @@ getCollections pid tabStatus = query Select q (Only pid)
              END as schedule,
              t.is_scheduled
       FROM tests.collections t
-      WHERE t.project_id = ? AND |] <> statusCondition <> [sql|
+      WHERE t.project_id = ? AND t.is_scheduled = ?
       GROUP BY t.id
       ORDER BY t.updated_at DESC;
     |]
+
 getCollectionsId :: DBT IO (V.Vector CollectionId)
 getCollectionsId = query Select q ()
   where
