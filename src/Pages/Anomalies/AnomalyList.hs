@@ -31,6 +31,7 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Lucid
+import Lucid.Base (termRaw)
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx (
   hxBoost_,
@@ -160,7 +161,7 @@ anomalyListGetH pid layoutM ackdM archivedM sortM pageM loadM endpointM hxReques
   (sess, project) <- Sessions.sessionAndProject pid
   let ackd = fromMaybe False (textToBool <$> ackdM)
       archived = fromMaybe False (textToBool <$> archivedM)
-      fLimit = 11
+      fLimit = 10
       pageInt = maybe 0 (Unsafe.read . toString) pageM
   issues <- dbtToEff $ Anomalies.selectIssues pid endpointM (Just ackd) (Just archived) sortM (Just fLimit) (pageInt * fLimit)
   currTime <- liftIO getCurrentTime
@@ -181,9 +182,6 @@ anomalyListGetH pid layoutM ackdM archivedM sortM pageM loadM endpointM hxReques
           , archived = archived
           , sort = fromMaybe "" sortM
           }
-      elementBelowTabs =
-        div_ [class_ "grid grid-cols-5", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"]
-          $ issuesList paramInput pid currTime issues nextFetchUrl
       anom = case nextFetchUrl of
         Just url -> do
           mapM_ (renderIssue False currTime) issues
@@ -194,7 +192,6 @@ anomalyListGetH pid layoutM ackdM archivedM sortM pageM loadM endpointM hxReques
   addRespHeaders $ case (layoutM, hxRequestM, hxBoostedM, loadM) of
     (Just "slider", Just "true", _, _) -> anomalyListSlider currTime pid endpointM (Just issues)
     (_, _, _, Just "true") -> anom
-    (_, Just "true", _, _) -> elementBelowTabs
     _ -> bodyWrapper bwconf $ issuesListPage paramInput pid currTime issues nextFetchUrl
 
 
@@ -215,7 +212,7 @@ issuesListPage paramInput pid currTime issues nextFetchUrl = div_ [class_ "w-ful
           div_ [id_ "an-modal-content-loader", class_ "bg-white rounded z-50 border p-4 absolute top-[40vh] left-1/2 -translate-x-1/2 -translate-y-1/2 loading loading-dots loading-md"] ""
           div_ [class_ "px-2", id_ "an-modal-content"] pass
   h3_ [class_ "text-xl text-slate-700 flex place-items-center"] "Issues: Changes, Alerts & Errors"
-  div_ [class_ "py-2 px-2 space-x-6 border-b border-slate-20 mt-6 mb-8 text-sm font-light", hxBoost_ "true"] do
+  div_ [class_ "py-2 px-2 space-x-6 border-b border-slate-20 mt-6 mb-8 text-sm font-light", hxBoost_ "true", termRaw "preload" "preload:init"] do
     let uri = deleteParam "archived" $ deleteParam "ackd" paramInput.currentURL
     a_ [class_ $ "inline-block py-2 " <> if not paramInput.ackd && not paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&ackd=false&archived=false"] "Inbox"
     a_ [class_ $ "inline-block  py-2 " <> if paramInput.ackd && not paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&ackd=true&archived=false"] "Acknowleged"
@@ -355,7 +352,7 @@ issueItem hideByDefault currTime issue icon title subTitle content = do
       input_ [term "aria-label" "Select Issue", type_ "checkbox", name_ "issueId", value_ issueId]
     div_ [class_ "space-y-3 grow"] do
       div_ [class_ "space-x-3"] do
-        a_ [href_ $ "/p/" <> issue.projectId.toText <> "/anomalies/by_hash/" <> issue.targetHash, class_ "inline-block font-bold text-blue-700 space-x-2"] do
+        a_ [href_ $ "/p/" <> issue.projectId.toText <> "/anomalies/by_hash/" <> issue.targetHash, class_ "inline-block font-bold text-blue-700 space-x-2", termRaw "preload" "mouseover"] do
           (img_ [src_ icon, class_ "inline w-4 h-4"] >> (span_ $ toHtml title))
         small_ [class_ "inline-block text-gray-800"] $ fromMaybe (toHtml @String "") subTitle
       div_ [class_ "flex flex-row gap-8"] do
@@ -363,7 +360,7 @@ issueItem hideByDefault currTime issue icon title subTitle content = do
           div_ [class_ "text-xs decoration-dotted underline-offset-2 space-x-4 "] do
             span_ [class_ "bg-red-50 p-1"] "ongoing"
             span_ [class_ "inline-block space-x-1"] do
-              mIcon_ "clock" "w-3 h-3"
+              faSprite_ "clock" "solid" "w-3 h-3"
               span_
                 [ class_ "decoration-black underline ml-1"
                 , term "data-tippy-content" $ "first seen: " <> show issue.createdAt
@@ -371,8 +368,8 @@ issueItem hideByDefault currTime issue icon title subTitle content = do
                 $ toHtml
                 $ prettyTimeAuto currTime
                 $ zonedTimeToUTC issue.createdAt
-          -- span_ "|"
-          -- span_ [class_ "decoration-black underline", term "data-tippy-content" $ "last seen: " <> show issue.lastSeen] $ toHtml $ prettyTimeAuto currTime $ zonedTimeToUTC issue.lastSeen
+              span_ "|"
+              span_ [class_ "decoration-black underline", term "data-tippy-content" $ "last seen: " <> show issue.eventsAgg.lastSeen] $ toHtml $ prettyTimeAuto currTime $ issue.eventsAgg.lastSeen
           div_ [class_ "flex items-center gap-2 mt-5"] do
             anomalyArchiveButton issue.projectId issue.id (isJust issue.archivedAt)
             anomalyAcknowlegeButton issue.projectId issue.id (isJust issue.acknowlegedAt)

@@ -27,7 +27,7 @@ outgoingGetH pid sortM = do
         def
           { sessM = Just sess.persistentSession
           , currProject = Just project
-          , pageTitle = "Dependencies"
+          , pageTitle = "Outgoing Integrations"
           }
   addRespHeaders $ bodyWrapper bwconf $ outgoingPage pid (fromMaybe "events" sortM) hostsAndEvents
 

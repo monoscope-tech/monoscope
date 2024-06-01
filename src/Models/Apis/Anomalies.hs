@@ -449,7 +449,7 @@ data NewFieldIssue = NewFieldIssue
   , host :: Text
   , key :: Text
   , keyPath :: Text
-  , fieldCategory :: Fields.FieldCategoryEnum
+  , fieldCategory :: Maybe Fields.FieldCategoryEnum
   , format :: Text
   }
   deriving stock (Show, Generic)
@@ -605,7 +605,7 @@ createIssueData hostM anomaly = case anomaly.anomalyType of
               <*> pure (fromMaybe "" hostM)
               <*> anomaly.fieldKey
               <*> anomaly.fieldKeyPath
-              <*> anomaly.fieldCategory
+              <*> Just anomaly.fieldCategory
               <*> anomaly.fieldFormat
           )
   ATFormat ->
