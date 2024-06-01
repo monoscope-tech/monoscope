@@ -88,7 +88,6 @@ data SDKTypes
   | DotNetOutgoing
   | TestkitOutgoing
   | JavaSpring
-  | JavaApacheOutgoing
   deriving stock (Show, Generic, Read, Eq)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SDKTypes
@@ -173,7 +172,6 @@ normalizeUrlPath PythonPyramid statusCode _method urlPath = removeQueryParams st
 normalizeUrlPath DotNetOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath TestkitOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath JavaSpring statusCode _method urlPath = removeQueryParams statusCode urlPath
-normalizeUrlPath JavaApacheOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
 
 
 -- getRequestType ...
