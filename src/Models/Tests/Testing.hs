@@ -237,7 +237,7 @@ data StepResult = StepResult
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] StepResult
 
 
-data TabStatus = Active | Inactive | Deactive
+data TabStatus = Active | Inactive 
 
 addCollection :: Collection -> DBT IO ()
 addCollection = insert @Collection
@@ -270,8 +270,7 @@ getCollections pid tabStatus = query Select q (pid, statusValue)
     statusValue = case tabStatus of
       Active   -> True
       Inactive -> False
-      Deactive -> False  -- Adjust if necessary to differentiate between Inactive and Deactive
-
+      
     q = [sql|
       SELECT t.id, t.created_at, t.updated_at, t.project_id, t.last_run, 
              t.title, t.description, 0, 
