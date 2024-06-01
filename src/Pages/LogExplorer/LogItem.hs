@@ -156,7 +156,6 @@ expandAPIlogItem' pid req modal = do
           $ div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border", id_ "path_params_json"]
           $ jsonValueToHtmlTree req.pathParams
 
-
     -- response details
     div_ [class_ "border rounded-lg mt-8", id_ "reponse_detail_container"] do
       div_ [class_ "flex w-full bg-gray-100 px-4 py-2 flex-col gap-2"] do

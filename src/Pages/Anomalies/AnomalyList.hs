@@ -31,8 +31,8 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
 import Lucid
-import Lucid.Base (termRaw)
 import Lucid.Aria qualified as Aria
+import Lucid.Base (termRaw)
 import Lucid.Htmx (
   hxBoost_,
   hxGet_,
@@ -287,7 +287,7 @@ anomalyListSlider _ pid eid Nothing = do
   div_ [hxGet_ $ "/p/" <> pid.toText <> "/anomalies?layout=slider" <> maybe "" (\x -> "&endpoint=" <> x.toText) eid, hxSwap_ "outerHTML", hxTrigger_ "load"] do
     div_ [class_ "flex justify-between mt-5 pb-2"] do
       div_ [class_ "flex flex-row"] do
-        a_ [href_ "#", [__|toggle .neg-rotate-90 on me then toggle .hidden on (next .parent-slider)|]] $ faSprite_ "chevron-down" "regular" "h-4 mr-3 mt-1 w-4"
+        a_ [href_ "#", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .parent-slider)|]] $ faSprite_ "chevron-down" "regular" "h-4 mr-3 mt-1 w-4"
         span_ [class_ "text-lg text-slate-700"] "Ongoing Issues and Monitors"
       div_ [class_ "flex flex-row mt-2"] ""
 anomalyListSlider currTime _ _ (Just issues) = do
@@ -303,7 +303,7 @@ anomalyListSlider currTime _ _ (Just issues) = do
           end |]
     div_ [class_ "flex justify-between mt-5 pb-2"] do
       div_ [class_ "flex flex-row"] do
-        a_ [href_ "#", [__|toggle .neg-rotate-90 on me then toggle .hidden on (next .parent-slider)|]] $ faSprite_ "chevron-down" "regular" "h-4 mr-3 mt-1 w-4"
+        a_ [href_ "#", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .parent-slider)|]] $ faSprite_ "chevron-down" "regular" "h-4 mr-3 mt-1 w-4"
         span_ [class_ "text-lg text-slate-700"] "Ongoing Issues and Monitors"
       div_ [class_ "flex items-center gap-2 mt-2"] do
         a_
@@ -723,7 +723,7 @@ subSubSection :: Text -> Maybe [Fields.Field] -> Html ()
 subSubSection title fieldsM = whenJust fieldsM \fields -> do
   div_ [class_ "space-y-1 mb-4"] do
     div_ [class_ "flex flex-row items-center"] do
-      a_ [class_ "cursor-pointer", [__|toggle .neg-rotate-90 on me then toggle .hidden on (next .subSectionContent)|]] $ faSprite_ "chevron-down" "regular" "h-6 mr-3 w-6 p-1 cursor-pointer"
+      a_ [class_ "cursor-pointer", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .subSectionContent)|]] $ faSprite_ "chevron-down" "regular" "h-6 mr-3 w-6 p-1 cursor-pointer"
       div_ [class_ "px-4 rounded-xl w-full font-bold text-sm text-slate-900"] $ toHtml title
     div_ [class_ "space-y-1 subSectionContent"] do
       fieldsToNormalized fields & mapM_ \(key, fieldM) -> do
