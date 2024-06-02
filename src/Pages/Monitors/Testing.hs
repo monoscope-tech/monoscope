@@ -185,17 +185,18 @@ collectionCard pid col = do
             div_ [class_ "text-base"] "-"
             small_ [class_ "block"] "Failed"
       div_ [class_ "w-36 flex items-center justify-center"] do
-        button_
-          [ term "data-id" col.id.toText
-          , term "data-title" col.title
-          , term "data-desc" col.description
-          , [__|on click remove .hidden from #col-modal 
-                then set #collection_id's value to my @data-id
-                then set #title's value to my @data-title 
-                then set #desc's value to my @data-desc
-                |]
-          ]
-          $ faSprite_ "pen-to-square" "regular" "h-6 w-6"
+         button_
+            [ term "data-id" col.id.toText
+            , term "data-title" col.title
+            , term "data-desc" col.description
+            , [__|on click remove .hidden from #col-modal 
+                  then set #collection_id's value to my @data-id
+                  then set #title's value to my @data-title 
+                  then set #desc's value to my @data-desc
+                  |]
+            ]
+            $ faSprite_ "pen-to-square" "regular" "h-6 w-6"
+
 
 
 modal :: Projects.ProjectId -> Html ()
@@ -256,7 +257,3 @@ modal pid = do
             event.stopPropagation();
         }
       |]
-
-
-
-      
