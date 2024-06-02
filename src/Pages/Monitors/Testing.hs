@@ -1,4 +1,3 @@
-
 module Pages.Monitors.Testing (
   testingGetH,
   testingPostH,
@@ -38,7 +37,7 @@ import Lucid (
   type_,
   small_
  )
-import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_,hxBoost_,hxTrigger_)
+import Lucid.Htmx (hxPost_, hxSwap_, hxTarget_,hxBoost_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Tests.Testing qualified as Testing
@@ -68,7 +67,7 @@ data ScheduleForm = ScheduleForm
   deriving anyclass (FromForm, AE.FromJSON)
 
 
-testingPostH :: Projects.ProjectId -> TestCollectionForm -> ATAuthCtx (RespHeaders (Html ()))
+testingPostH :: Projects.ProjectId ->  TestCollectionForm -> ATAuthCtx (RespHeaders (Html ()))
 testingPostH pid collection = do
   (_, project) <- Sessions.sessionAndProject pid
   if collection.collection_id == ""
@@ -92,12 +91,12 @@ testingPostH pid collection = do
       _ <- dbtToEff $ Testing.addCollection coll
       cols <- dbtToEff $ Testing.getCollections pid Testing.Active
       addSuccessToast "Collection added Successfully" Nothing
-      addRespHeaders $ bodyWrapper bwconf $ testingPage pid Nothing cols
+      addRespHeaders $ testingPage pid Nothing cols
     else do
       -- _ <- dbtToEff $ Testing.updateCollection pid collection.collection_id collection.title collection.description
       cols <- dbtToEff $ Testing.getCollections pid Testing.Active
       addSuccessToast "Collection updated Successfully" Nothing
-      addRespHeaders $ bodyWrapper bwconf $ testingPage pid Nothing cols
+      addRespHeaders $ testingPage pid Nothing cols
 
 
 testingGetH :: Projects.ProjectId -> Maybe Text ->  ATAuthCtx (RespHeaders (Html ()))
@@ -198,6 +197,7 @@ collectionCard pid col = do
             $ faSprite_ "pen-to-square" "regular" "h-6 w-6"
 
 
+
 modal :: Projects.ProjectId -> Html ()
 modal pid = do
   div_
@@ -210,10 +210,9 @@ modal pid = do
         div_ [class_ "relative transform overflow-hidden rounded-xl border shadow bg-white text-left transition-all my-8 w-full max-w-2xl", onclick_ "noPropagation(event)"] do
           form_
             [ hxPost_ $ "/p/" <> pid.toText <> "/testing"
-            , hxTarget_ "#main"  -- Ensure this targets the correct ID
-            , hxSwap_ "outerHTML"
-            , hxTrigger_ "submit"
             , class_ "w-full"
+            , hxTarget_ "#main"
+            , hxSwap_ "outerHTML"
             ]
             $ do
               div_ [class_ "bg-white pb-4"] $ do
