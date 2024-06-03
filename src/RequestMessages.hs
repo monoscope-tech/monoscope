@@ -492,9 +492,18 @@ parseUrlSegments [] parsed = parsed
 parseUrlSegments (x : xs) (segs, vals) = case valueToFormatStr x of
   Nothing -> parseUrlSegments xs (segs ++ [x], vals)
   Just v
-    | v == "uuid" -> parseUrlSegments xs (segs ++ [":uuid"], vals ++ [x])
-    | v == "mm/dd/yy" || v == "mm-dd-yy" || v == "mm.dd.yyy" -> parseUrlSegments xs (segs ++ [":date"], vals ++ [x])
-    | otherwise -> parseUrlSegments xs (segs ++ [":number"], vals ++ [x])
+    | v == "uuid" -> parseUrlSegments xs (addNewSegment segs ":uuid", vals ++ [x])
+    | v == "mm/dd/yy" || v == "mm-dd-yy" || v == "mm.dd.yyy" -> parseUrlSegments xs (addNewSegment segs ":date", vals ++ [x])
+    | otherwise -> parseUrlSegments xs (addNewSegment segs ":number", vals ++ [x])
+
+
+addNewSegment :: [Text] -> Text -> [Text]
+addNewSegment segs seg = newSegs
+  where
+    catFilter = filter (\x -> T.isPrefixOf seg x) segs
+    pos = length catFilter
+    newSeg = if pos > 0 then seg <> "_" <> show pos else seg
+    newSegs = segs ++ [newSeg]
 
 
 buildPathParams :: [Text] -> [Text] -> Value -> Value
