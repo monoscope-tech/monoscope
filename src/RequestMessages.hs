@@ -10,8 +10,9 @@ module RequestMessages (
 )
 where
 
-import Data.Aeson (ToJSON (toJSON), Value)
+import Data.Aeson (ToJSON (toJSON), Value (Object))
 import Data.Aeson qualified as AE
+import Data.Aeson.Key qualified as AEKey
 import Data.Aeson.KeyMap qualified as AEK
 import Data.Aeson.Types qualified as AET
 import Data.ByteString.Base64 qualified as B64
@@ -167,10 +168,10 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   let dumpID = fromMaybe dumpIDOriginal rM.msgId
   let timestampUTC = zonedTimeToUTC rM.timestamp
 
-  -- TODO: This is a temporary fix to add host in creating endoint hash
-  -- These are the projects that we have already created endpoints
   let method = T.toUpper rM.method
-  let urlPath = RequestDumps.normalizeUrlPath rM.sdkType rM.statusCode rM.method (fromMaybe "/" rM.urlPath)
+  let urlPath' = RequestDumps.normalizeUrlPath rM.sdkType rM.statusCode rM.method (fromMaybe "/" rM.urlPath)
+  let requestType = RequestDumps.getRequestType rM.sdkType
+  let (urlPath, pathParams) = if requestType == RequestDumps.Outgoing then ensureUrlParams urlPath' else (urlPath', rM.pathParams)
   let !endpointHash = toXXHash $ UUID.toText rM.projectId <> fromMaybe "" rM.host <> method <> urlPath
   let redactFieldsList = V.toList pjc.redactFieldslist <> [".set-cookie", ".password"]
   let sanitizeNullChars = encodeUtf8 . replaceNullChars . decodeUtf8
@@ -267,7 +268,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
           , host = fromMaybe "" rM.host
           , urlPath = urlPath
           , rawUrl = rM.rawUrl
-          , pathParams = rM.pathParams
+          , pathParams = pathParams
           , method = method
           , referer = fromMaybe "" $ rM.referer >>= either Just listToMaybe
           , protoMajor = rM.protoMajor
@@ -468,12 +469,43 @@ valueToFormatStr :: Text -> Maybe Text
 valueToFormatStr val
   | val =~ ([text|^[0-9]+$|] :: Text) = Just "integer"
   | val =~ ([text|^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)$|] :: Text) = Just "float"
-  | val =~ ([text|^[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}$|] :: Text) = Just "uuid"
+  | val =~ ([text|^[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}|] :: Text) = Just "uuid"
   | val =~ ([text|^(0[1-9]|1[012])[- /.](0[1-9]|[12][0-9]|3[01])[- /.](19|20)\d\d$|] :: Text) = Just "mm/dd/yyyy"
   | val =~ ([text|^(0[1-9]|1[012])[- -.](0[1-9]|[12][0-9]|3[01])[- -.](19|20)\d\d$|] :: Text) = Just "mm-dd-yyyy"
   | val =~ ([text|^(0[1-9]|1[012])[- ..](0[1-9]|[12][0-9]|3[01])[- ..](19|20)\d\d$|] :: Text) = Just "mm.dd.yyyy"
   | val =~ ([text|^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(([+-]\d\d:\d\d)|Z)?$|] :: Text) = Just "YYYY-MM-DDThh:mm:ss.sTZD"
   | otherwise = Nothing
+
+
+ensureUrlParams :: Text -> (Text, Value)
+ensureUrlParams "" = ("", AE.object [])
+ensureUrlParams url = (parsedUrl, pathParams)
+  where
+    (segs, vals) = parseUrlSegments (T.splitOn "/" url) ([], [])
+    parsedUrl = T.intercalate "/" segs
+    dynSegs = filter (\x -> T.isPrefixOf ":" x) segs
+    pathParams = buildPathParams dynSegs vals (AE.object [])
+
+
+parseUrlSegments :: [Text] -> ([Text], [Text]) -> ([Text], [Text])
+parseUrlSegments [] parsed = parsed
+parseUrlSegments (x : xs) (segs, vals) = case valueToFormatStr x of
+  Nothing -> parseUrlSegments xs (segs ++ [x], vals)
+  Just v
+    | v == "uuid" -> parseUrlSegments xs (segs ++ [":uuid"], vals ++ [x])
+    | v == "mm/dd/yy" || v == "mm-dd-yy" || v == "mm.dd.yyy" -> parseUrlSegments xs (segs ++ [":date"], vals ++ [x])
+    | otherwise -> parseUrlSegments xs (segs ++ [":number"], vals ++ [x])
+
+
+buildPathParams :: [Text] -> [Text] -> Value -> Value
+buildPathParams [] _ acc = acc
+buildPathParams _ [] acc = acc
+buildPathParams (x : xs) (v : vs) acc = buildPathParams xs vs param
+  where
+    current = AE.object [AEKey.fromText (T.tail x) AE..= v]
+    param = case (acc, current) of
+      ((Object a), (Object b)) -> Object $ a <> b
+      _ -> acc
 
 
 -- >>> valueToFormatNum 22.3
