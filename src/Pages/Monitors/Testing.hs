@@ -12,31 +12,7 @@ import Data.Time (getZonedTime)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
-import Lucid (
-  Html,
-  Term (term),
-  ToHtml (toHtml),
-  a_,
-  button_,
-  class_,
-  div_,
-  for_,
-  form_,
-  h1_,
-  h3_,
-  href_,
-  id_,
-  input_,
-  label_,
-  name_,
-  onclick_,
-  placeholder_,
-  script_,
-  small_,
-  span_,
-  textarea_,
-  type_,
- )
+import Lucid
 import Lucid.Htmx (hxBoost_, hxPost_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
