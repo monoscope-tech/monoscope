@@ -87,7 +87,7 @@ testingGetH pid maybeTab = do
         (def :: BWConfig)
           { sessM = Just sess.persistentSession
           , currProject = Just project
-          , pageTitle = "Testing"
+          , pageTitle = "API Tests (Beta)"
           }
   addRespHeaders $ bodyWrapper bwconf $ testingPage pid maybeTab colls
 

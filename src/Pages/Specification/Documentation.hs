@@ -317,7 +317,7 @@ documentationGetH pid swagger_id = do
         (def :: BWConfig)
           { sessM = Just sess.persistentSession
           , currProject = Just project
-          , pageTitle = "Documentation"
+          , pageTitle = "OpenAPI/Swagger"
           }
   addRespHeaders $ bodyWrapper bwconf $ documentationsPage pid swaggers swaggerId (decodeUtf8 (encode swagger))
 

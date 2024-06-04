@@ -169,7 +169,7 @@ anomalyListGetH pid layoutM ackdM archivedM sortM pageM loadM endpointM hxReques
         (def :: BWConfig)
           { sessM = Just sess.persistentSession
           , currProject = Just project
-          , pageTitle = "Issues: Changes, Alerts & Errors"
+          , pageTitle = "Changes & Errors"
           }
       currentURL = mconcat ["/p/", pid.toText, "/anomalies?layout=", fromMaybe "false" layoutM, "&ackd=", show ackd, "&archived=", show archived]
       nextFetchUrl = case layoutM of
