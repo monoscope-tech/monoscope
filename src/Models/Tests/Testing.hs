@@ -17,8 +17,7 @@ module Models.Tests.Testing (
   getCollections,
   getCollectionById,
   getCollectionsId,
-  TabStatus(..)
-  
+  TabStatus (..),
 )
 where
 
@@ -237,7 +236,8 @@ data StepResult = StepResult
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] StepResult
 
 
-data TabStatus = Active | Inactive 
+data TabStatus = Active | Inactive
+
 
 addCollection :: Collection -> DBT IO ()
 addCollection = insert @Collection
@@ -268,10 +268,11 @@ getCollections :: Projects.ProjectId -> TabStatus -> DBT IO (V.Vector Collection
 getCollections pid tabStatus = query Select q (pid, statusValue)
   where
     statusValue = case tabStatus of
-      Active   -> True
+      Active -> True
       Inactive -> False
-      
-    q = [sql|
+
+    q =
+      [sql|
       SELECT t.id, t.created_at, t.updated_at, t.project_id, t.last_run, 
              t.title, t.description, 0, 
              CASE
@@ -285,6 +286,7 @@ getCollections pid tabStatus = query Select q (pid, statusValue)
       GROUP BY t.id
       ORDER BY t.updated_at DESC;
     |]
+
 
 getCollectionsId :: DBT IO (V.Vector CollectionId)
 getCollectionsId = query Select q ()
