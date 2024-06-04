@@ -170,8 +170,8 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
 
   let method = T.toUpper rM.method
   let urlPath' = RequestDumps.normalizeUrlPath rM.sdkType rM.statusCode rM.method (fromMaybe "/" rM.urlPath)
-  let requestType = RequestDumps.getRequestType rM.sdkType
-  let (urlPath, pathParams) = if requestType == RequestDumps.Outgoing then ensureUrlParams urlPath' else (urlPath', rM.pathParams)
+  let (urlPathDyn, pathParamsDyn, hasDyn) = ensureUrlParams urlPath'
+  let (urlPath, pathParams) = if hasDyn then (urlPathDyn, pathParamsDyn) else (urlPath', rM.pathParams)
   let !endpointHash = toXXHash $ UUID.toText rM.projectId <> fromMaybe "" rM.host <> method <> urlPath
   let redactFieldsList = V.toList pjc.redactFieldslist <> [".set-cookie", ".password"]
   let sanitizeNullChars = encodeUtf8 . replaceNullChars . decodeUtf8
@@ -477,13 +477,14 @@ valueToFormatStr val
   | otherwise = Nothing
 
 
-ensureUrlParams :: Text -> (Text, Value)
-ensureUrlParams "" = ("", AE.object [])
-ensureUrlParams url = (parsedUrl, pathParams)
+ensureUrlParams :: Text -> (Text, Value, Bool)
+ensureUrlParams "" = ("", AE.object [], False)
+ensureUrlParams url = (parsedUrl, pathParams, hasDyn)
   where
     (segs, vals) = parseUrlSegments (T.splitOn "/" url) ([], [])
     parsedUrl = T.intercalate "/" segs
-    dynSegs = filter (\x -> T.isPrefixOf ":" x) segs
+    dynSegs = filter (\x -> T.isPrefixOf "{" x) segs
+    hasDyn = not $ null dynSegs
     pathParams = buildPathParams dynSegs vals (AE.object [])
 
 
@@ -492,17 +493,17 @@ parseUrlSegments [] parsed = parsed
 parseUrlSegments (x : xs) (segs, vals) = case valueToFormatStr x of
   Nothing -> parseUrlSegments xs (segs ++ [x], vals)
   Just v
-    | v == "uuid" -> parseUrlSegments xs (addNewSegment segs ":uuid", vals ++ [x])
-    | v == "mm/dd/yy" || v == "mm-dd-yy" || v == "mm.dd.yyy" -> parseUrlSegments xs (addNewSegment segs ":date", vals ++ [x])
-    | otherwise -> parseUrlSegments xs (addNewSegment segs ":number", vals ++ [x])
+    | v == "uuid" -> parseUrlSegments xs (addNewSegment segs "uuid", vals ++ [x])
+    | v == "mm/dd/yy" || v == "mm-dd-yy" || v == "mm.dd.yyy" -> parseUrlSegments xs (addNewSegment segs "date", vals ++ [x])
+    | otherwise -> parseUrlSegments xs (addNewSegment segs "number", vals ++ [x])
 
 
 addNewSegment :: [Text] -> Text -> [Text]
 addNewSegment segs seg = newSegs
   where
-    catFilter = filter (\x -> T.isPrefixOf seg x) segs
+    catFilter = filter (\x -> T.isPrefixOf ("{" <> seg) x) segs
     pos = length catFilter
-    newSeg = if pos > 0 then seg <> "_" <> show pos else seg
+    newSeg = if pos > 0 then "{" <> seg <> "_" <> show pos <> "}" else "{" <> seg <> "}"
     newSegs = segs ++ [newSeg]
 
 
