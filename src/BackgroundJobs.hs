@@ -290,12 +290,10 @@ dailyReportForProject pid = do
       Projects.NSlack ->
         sendSlackMessage
           pid
-          ( [fmtTrim| 🤖 *Daily Report for `{pr.title}`*
-          
-                        <https://app.apitoolkit.io/p/{pid.toText}/reports/{show report.id.reportId}|View today's report>
-                           |]
-              :: Text
-          )
+          [fmtTrim| 🤖 *Daily Report for `{pr.title}`**
+  
+<https://app.apitoolkit.io/p/{pid.toText}/reports/{show report.id.reportId}|View today's report>
+|]
       _ -> do
         users & mapM_ \user -> do
           let firstName = user.firstName
@@ -420,13 +418,13 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
           Projects.NSlack ->
             sendSlackMessage
               pid
-              [fmtTrim| 🤖 *New Endpoint Detected for `{project.title}`**
+              [fmtTrim| 🤖 *New Endpoint Detected for `{project.title}`*
   
-                             We have detected a new endpoint on *{project.title}*
+We have detected a new endpoint on *{project.title}*
   
-                             Endpoint: `{endpointPath}`
+Endpoint: `{endpointPath}`
   
-                             <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
+<https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
                               |]
           _ -> do
             when (totalRequestsCount > 50)
@@ -461,11 +459,11 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
           Projects.NSlack ->
             sendSlackMessage
               pid
-              [fmtTrim| 🤖 *New Shape anomaly found for `{project.title}`******
+              [fmtTrim| 🤖 *New Shape anomaly found for `{project.title}`*
   
-                          We detected a different API request shape to your endpoints than what you usually have
+We detected a different API request shape to your endpoints than what you usually have
   
-                          <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
+<https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
                                |]
           _ -> do
             forM_ users \u -> do
@@ -488,11 +486,11 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
           Projects.NSlack ->
             sendSlackMessage
               pid
-              [fmtTrim| 🤖 *New Field Format Anomaly Found for `{project.title}`****
+              [fmtTrim| 🤖 *New Field Format Anomaly Found for `{project.title}`*
   
-                             We detected that a particular field on your API is returning a different format/type than what it usually gets.
+We detected that a particular field on your API is returning a different format/type than what it usually gets.
 
-                             <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
+<https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
                                |]
           _ -> forM_ users \u -> do
             let firstName = u.firstName
@@ -530,11 +528,11 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHash = do
         Projects.NSlack ->
           sendSlackMessage
             pid
-            [fmtTrim| 🤖 *New Runtime Exception Found for `{project.title}`*****
+            [fmtTrim| 🤖 *New Runtime Exception Found for `{project.title}`*
   
-                           We detected that a particular field on your API is returning a different format/type than what it usually gets.
+We detected that a particular field on your API is returning a different format/type than what it usually gets.
 
-                           <https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
+<https://app.apitoolkit.io/p/{pid.toText}/anomalies/by_hash/{targetHash}|More details on the apitoolkit>
                                |]
         _ -> forM_ users \u -> do
           let firstName = u.firstName

@@ -8,6 +8,7 @@ module Models.Apis.RequestDumps (
   SDKTypes (..),
   RequestDumpLogItem (..),
   EndpointPerf (..),
+  RequestTypes (..),
   RequestForReport (..),
   ATError (..),
   normalizeUrlPath,
@@ -88,6 +89,7 @@ data SDKTypes
   | DotNetOutgoing
   | TestkitOutgoing
   | JavaSpring
+  | JavaApacheOutgoing
   deriving stock (Show, Generic, Read, Eq)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SDKTypes
@@ -131,9 +133,9 @@ instance FromField RequestTypes where
 
 -- normalize URLPatg based off the SDKTypes. Should allow us have custom logic to parse and transform url paths into a form we are happy with, per library
 -- >>> normalizeUrlPath GoGin 200 "GET" "https://apitoolkit.io/abc/:bla?q=abc"
--- "/abc/:bla"
+-- "https://apitoolkit.io/abc/:bla"
 -- >>> normalizeUrlPath GoGin 200 "GET" "/abc/:bla?q=abc"
--- ""
+-- "/abc/:bla"
 --
 -- >>> normalizeUrlPath GoGin 404 "GET" "https://apitoolkit.io/abc/:bla?q=abc"
 -- ""
@@ -141,7 +143,7 @@ instance FromField RequestTypes where
 -- >>> normalizeUrlPath JsExpress 200 "OPTIONS" "https://apitoolkit.io/abc/:bla?q=abc"
 -- ""
 -- >>> normalizeUrlPath JsExpress 200 "PATCH" "https://apitoolkit.io/abc/:bla?q=abc"
--- "/abc/:bla"
+-- "https://apitoolkit.io/abc/:bla"
 --
 normalizeUrlPath :: SDKTypes -> Int -> Text -> Text -> Text
 normalizeUrlPath GoOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
@@ -172,6 +174,7 @@ normalizeUrlPath PythonPyramid statusCode _method urlPath = removeQueryParams st
 normalizeUrlPath DotNetOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath TestkitOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
 normalizeUrlPath JavaSpring statusCode _method urlPath = removeQueryParams statusCode urlPath
+normalizeUrlPath JavaApacheOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
 
 
 -- getRequestType ...

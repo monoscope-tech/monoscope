@@ -135,24 +135,24 @@ expandAPIlogItem' pid req modal = do
       div_ [class_ "flex w-full bg-gray-100 px-4 py-2 flex-col gap-2"] do
         p_ [class_ "font-bold"] "Request Details"
 
-      div_ [class_ "tabs tabs-bordered place-content-start grid grid-flow-col", role_ "tablist"] do
-        input_ [type_ "radio", name_ $ "req-details-tab-" <> show req.id, role_ "tab", Aria.label_ "Body", class_ "tab w-max", checked_]
-        div_ [class_ "tab-content", role_ "tabpanel"]
+      div_ [class_ "tabs tabs-bordered place-content-start ", role_ "tablist"] do
+        input_ [type_ "radio", name_ $ "req-details-tabx-" <> show req.id, role_ "tab", Aria.label_ "Body", class_ "tab w-max", checked_]
+        div_ [class_ "tab-content grow w-full", role_ "tabpanel"]
           $ div_ [class_ "bg-gray-50 m-4  p-2 rounded-lg border break-all", id_ "req_body_json"]
           $ jsonValueToHtmlTree req.requestBody
 
-        input_ [type_ "radio", name_ $ "req-details-tab-" <> show req.id, role_ "tab", Aria.label_ "Headers", class_ "tab"]
-        div_ [class_ "tab-content", role_ "tabpanel"]
+        input_ [type_ "radio", name_ $ "req-details-tabx-" <> show req.id, role_ "tab", Aria.label_ "Headers", class_ "tab"]
+        div_ [class_ "tab-content grow w-full", role_ "tabpanel"]
           $ div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border break-all", id_ "req_headers_json"]
           $ jsonValueToHtmlTree req.requestHeaders
 
-        input_ [type_ "radio", name_ $ "req-details-tab-" <> show req.id, role_ "tab", Aria.label_ "Query Params", class_ "tab break-keep"]
-        div_ [class_ "tab-content", role_ "tabpanel"]
+        input_ [type_ "radio", name_ $ "req-details-tabx-" <> show req.id, role_ "tab", Aria.label_ "Query Params", class_ "tab break-keep"]
+        div_ [class_ "tab-content grow w-full", role_ "tabpanel"]
           $ div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border", id_ "query_params_json"]
           $ jsonValueToHtmlTree req.queryParams
 
-        input_ [type_ "radio", name_ $ "req-details-tab-" <> show req.id, role_ "tab", Aria.label_ "Path Params", class_ "tab break-keep"]
-        div_ [class_ "tab-content", role_ "tabpanel"]
+        input_ [type_ "radio", name_ $ "req-details-tabx-" <> show req.id, role_ "tab", Aria.label_ "Path Params", class_ "tab break-keep"]
+        div_ [class_ "tab-content grow w-full", role_ "tabpanel"]
           $ div_ [class_ "bg-gray-50 m-4 p-2 rounded-lg border", id_ "path_params_json"]
           $ jsonValueToHtmlTree req.pathParams
 

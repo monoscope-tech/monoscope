@@ -10,8 +10,9 @@ module RequestMessages (
 )
 where
 
-import Data.Aeson (ToJSON (toJSON), Value)
+import Data.Aeson (ToJSON (toJSON), Value (Object))
 import Data.Aeson qualified as AE
+import Data.Aeson.Key qualified as AEKey
 import Data.Aeson.KeyMap qualified as AEK
 import Data.Aeson.Types qualified as AET
 import Data.ByteString.Base64 qualified as B64
@@ -167,10 +168,10 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   let dumpID = fromMaybe dumpIDOriginal rM.msgId
   let timestampUTC = zonedTimeToUTC rM.timestamp
 
-  -- TODO: This is a temporary fix to add host in creating endoint hash
-  -- These are the projects that we have already created endpoints
   let method = T.toUpper rM.method
-  let urlPath = RequestDumps.normalizeUrlPath rM.sdkType rM.statusCode rM.method (fromMaybe "/" rM.urlPath)
+  let urlPath' = RequestDumps.normalizeUrlPath rM.sdkType rM.statusCode rM.method (fromMaybe "/" rM.urlPath)
+  let (urlPathDyn, pathParamsDyn, hasDyn) = ensureUrlParams urlPath'
+  let (urlPath, pathParams) = if hasDyn then (urlPathDyn, pathParamsDyn) else (urlPath', rM.pathParams)
   let !endpointHash = toXXHash $ UUID.toText rM.projectId <> fromMaybe "" rM.host <> method <> urlPath
   let redactFieldsList = V.toList pjc.redactFieldslist <> [".set-cookie", ".password"]
   let sanitizeNullChars = encodeUtf8 . replaceNullChars . decodeUtf8
@@ -267,7 +268,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
           , host = fromMaybe "" rM.host
           , urlPath = urlPath
           , rawUrl = rM.rawUrl
-          , pathParams = rM.pathParams
+          , pathParams = pathParams
           , method = method
           , referer = fromMaybe "" $ rM.referer >>= either Just listToMaybe
           , protoMajor = rM.protoMajor
@@ -468,12 +469,53 @@ valueToFormatStr :: Text -> Maybe Text
 valueToFormatStr val
   | val =~ ([text|^[0-9]+$|] :: Text) = Just "integer"
   | val =~ ([text|^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)$|] :: Text) = Just "float"
-  | val =~ ([text|^[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}$|] :: Text) = Just "uuid"
+  | val =~ ([text|^[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}|] :: Text) = Just "uuid"
   | val =~ ([text|^(0[1-9]|1[012])[- /.](0[1-9]|[12][0-9]|3[01])[- /.](19|20)\d\d$|] :: Text) = Just "mm/dd/yyyy"
   | val =~ ([text|^(0[1-9]|1[012])[- -.](0[1-9]|[12][0-9]|3[01])[- -.](19|20)\d\d$|] :: Text) = Just "mm-dd-yyyy"
   | val =~ ([text|^(0[1-9]|1[012])[- ..](0[1-9]|[12][0-9]|3[01])[- ..](19|20)\d\d$|] :: Text) = Just "mm.dd.yyyy"
   | val =~ ([text|^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(([+-]\d\d:\d\d)|Z)?$|] :: Text) = Just "YYYY-MM-DDThh:mm:ss.sTZD"
   | otherwise = Nothing
+
+
+ensureUrlParams :: Text -> (Text, Value, Bool)
+ensureUrlParams "" = ("", AE.object [], False)
+ensureUrlParams url = (parsedUrl, pathParams, hasDyn)
+  where
+    (segs, vals) = parseUrlSegments (T.splitOn "/" url) ([], [])
+    parsedUrl = T.intercalate "/" segs
+    dynSegs = filter (\x -> T.isPrefixOf "{" x) segs
+    hasDyn = not $ null dynSegs
+    pathParams = buildPathParams dynSegs vals (AE.object [])
+
+
+parseUrlSegments :: [Text] -> ([Text], [Text]) -> ([Text], [Text])
+parseUrlSegments [] parsed = parsed
+parseUrlSegments (x : xs) (segs, vals) = case valueToFormatStr x of
+  Nothing -> parseUrlSegments xs (segs ++ [x], vals)
+  Just v
+    | v == "uuid" -> parseUrlSegments xs (addNewSegment segs "uuid", vals ++ [x])
+    | v == "mm/dd/yy" || v == "mm-dd-yy" || v == "mm.dd.yyy" -> parseUrlSegments xs (addNewSegment segs "date", vals ++ [x])
+    | otherwise -> parseUrlSegments xs (addNewSegment segs "number", vals ++ [x])
+
+
+addNewSegment :: [Text] -> Text -> [Text]
+addNewSegment segs seg = newSegs
+  where
+    catFilter = filter (\x -> T.isPrefixOf ("{" <> seg) x) segs
+    pos = length catFilter
+    newSeg = if pos > 0 then "{" <> seg <> "_" <> show pos <> "}" else "{" <> seg <> "}"
+    newSegs = segs ++ [newSeg]
+
+
+buildPathParams :: [Text] -> [Text] -> Value -> Value
+buildPathParams [] _ acc = acc
+buildPathParams _ [] acc = acc
+buildPathParams (x : xs) (v : vs) acc = buildPathParams xs vs param
+  where
+    current = AE.object [AEKey.fromText (T.tail x) AE..= v]
+    param = case (acc, current) of
+      ((Object a), (Object b)) -> Object $ a <> b
+      _ -> acc
 
 
 -- >>> valueToFormatNum 22.3
