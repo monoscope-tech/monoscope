@@ -27,6 +27,7 @@ module Utils (
   lookupMapText,
   lookupMapInt,
   freeTierLimitExceededBanner,
+  isDemoAndNotSudo,
 )
 where
 
@@ -220,3 +221,7 @@ lemonSqueezyUrlsAnnual =
     , "https://apitoolkit.lemonsqueezy.com/buy/1821b082-28c2-4d2d-9a29-2cae822943b6?embed=1&media=0&logo=0&desc=0" -- 60M
     , "https://apitoolkit.lemonsqueezy.com/buy/1821b082-28c2-4d2d-9a29-2cae822943b6?embed=1&media=0&logo=0&desc=0" -- 60M
     ]
+
+
+isDemoAndNotSudo :: Projects.ProjectId -> Bool -> Bool
+isDemoAndNotSudo pid isSudo = (pid.toText == "00000000-0000-0000-0000-000000000000" && isSudo == False)

@@ -55,7 +55,7 @@ import Relude.Unsafe qualified as Unsafe
 import Servant (addHeader, noHeader)
 import System.Config
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
-import Utils (faSprite_, lemonSqueezyUrls, lemonSqueezyUrlsAnnual)
+import Utils (faSprite_, isDemoAndNotSudo, lemonSqueezyUrls, lemonSqueezyUrlsAnnual)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -139,9 +139,14 @@ projectSettingsGetH pid = do
 deleteProjectGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 deleteProjectGetH pid = do
   sess <- Sessions.getSession
-  _ <- dbtToEff $ Projects.deleteProject pid
-  addSuccessToast "Deleted Project Successfully" Nothing
-  redirectCS "/" >> addRespHeaders ""
+  if isDemoAndNotSudo pid sess.user.isSudo
+    then do
+      _ <- dbtToEff $ Projects.deleteProject pid
+      addSuccessToast "Deleted Project Successfully" Nothing
+      redirectCS "/" >> addRespHeaders ""
+    else do
+      addSuccessToast "Can't perform this action on the demon project" Nothing
+      addRespHeaders ""
 
 
 ----------------------------------------------------------------------------------------------------------
@@ -217,39 +222,44 @@ processProjectPostForm cpRaw = do
   pid <- liftIO $ maybe (Projects.ProjectId <$> UUIDV4.nextRandom) pure (Projects.projectIdFromText cp.projectId)
   if cp.isUpdate
     then do
-      let hxTriggerDataUpdate = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Updated Project Successfully"]}|]
-      let bdy = createProjectBody sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError)
-      project <- dbtToEff $ Projects.projectById pid
-      case project of
-        Just p -> do
-          if (cp.paymentPlan == "UsageBased" && p.paymentPlan /= "UsageBased")
-            || (cp.paymentPlan == "GraduatedPricing" && p.paymentPlan /= "GraduatedPricing")
-            then do
-              subRes <- liftIO $ getSubscriptionId cp.orderId envCfg.lemonSqueezyApiKey
-              let (subId, firstSubItemId) = case subRes of
-                    Just sub ->
-                      if length sub.dataVal < 1
-                        then (Nothing, Nothing)
-                        else
-                          let target = sub.dataVal Unsafe.!! 0
-                              firstSubItemId' = show target.attributes.firstSubscriptionItem.id
-                              subId' = show target.attributes.firstSubscriptionItem.subscriptionId
-                           in (Just subId', Just firstSubItemId')
-                    Nothing -> (Nothing, Nothing)
-              if isNothing subId || isNothing firstSubItemId
+      if isDemoAndNotSudo pid sess.user.isSudo
+        then do
+          addErrorToast "Can't perform this action on the demo project" Nothing
+          addRespHeaders $ span_ [] ""
+        else do
+          let hxTriggerDataUpdate = decodeUtf8 $ encode [aesonQQ| {"successToast": ["Updated Project Successfully"]}|]
+          let bdy = createProjectBody sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError)
+          project <- dbtToEff $ Projects.projectById pid
+          case project of
+            Just p -> do
+              if (cp.paymentPlan == "UsageBased" && p.paymentPlan /= "UsageBased")
+                || (cp.paymentPlan == "GraduatedPricing" && p.paymentPlan /= "GraduatedPricing")
                 then do
-                  let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"errorToast": ["Couldn't get subscription Id please try again"]}|]
-                  let bd = createProjectBody sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError)
-                  pure $ addHeader hxTriggerData $ addHeader ("/p/" <> pid.toText <> "/about_project") bd
+                  subRes <- liftIO $ getSubscriptionId cp.orderId envCfg.lemonSqueezyApiKey
+                  let (subId, firstSubItemId) = case subRes of
+                        Just sub ->
+                          if length sub.dataVal < 1
+                            then (Nothing, Nothing)
+                            else
+                              let target = sub.dataVal Unsafe.!! 0
+                                  firstSubItemId' = show target.attributes.firstSubscriptionItem.id
+                                  subId' = show target.attributes.firstSubscriptionItem.subscriptionId
+                               in (Just subId', Just firstSubItemId')
+                        Nothing -> (Nothing, Nothing)
+                  if isNothing subId || isNothing firstSubItemId
+                    then do
+                      let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"errorToast": ["Couldn't get subscription Id please try again"]}|]
+                      let bd = createProjectBody sess.persistentSession envCfg cp.isUpdate cp (def @CreateProjectFormError)
+                      pure $ addHeader hxTriggerData $ addHeader ("/p/" <> pid.toText <> "/about_project") bd
+                    else do
+                      _ <- dbtToEff $ Projects.updateProject (createProjectFormToModel pid subId firstSubItemId cp)
+                      pure $ addHeader hxTriggerDataUpdate $ noHeader bdy
                 else do
-                  _ <- dbtToEff $ Projects.updateProject (createProjectFormToModel pid subId firstSubItemId cp)
+                  _ <- dbtToEff $ Projects.updateProject (createProjectFormToModel pid p.subId p.firstSubItemId cp)
                   pure $ addHeader hxTriggerDataUpdate $ noHeader bdy
-            else do
-              _ <- dbtToEff $ Projects.updateProject (createProjectFormToModel pid p.subId p.firstSubItemId cp)
-              pure $ addHeader hxTriggerDataUpdate $ noHeader bdy
-        Nothing -> do
-          let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"errorToast": ["Something went wrong, try again."]}|]
-          pure $ addHeader hxTriggerData $ noHeader $ span_ [] ""
+            Nothing -> do
+              let hxTriggerData = decodeUtf8 $ encode [aesonQQ| {"errorToast": ["Something went wrong, try again."]}|]
+              pure $ addHeader hxTriggerData $ noHeader $ span_ [] ""
     else do
       let usersAndPermissions = zip cp.emails cp.permissions & uniq
       subRes <- liftIO $ getSubscriptionId cp.orderId envCfg.lemonSqueezyApiKey
