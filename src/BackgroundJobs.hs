@@ -63,6 +63,7 @@ data BgJobs
   | ReportUsage Projects.ProjectId
   | QueryMonitorsTriggered (Vector Monitors.QueryMonitorId)
   | RunCollectionTests Testing.CollectionId
+  | DeletedProject Projects.ProjectId
   deriving stock (Eq, Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
 
@@ -140,6 +141,20 @@ jobsRunner logger authCtx job = when authCtx.config.enableBackgroundJobs $ do
            "project_url": #{project_url}
         }|]
         sendPostmarkEmail reciever "project-created" templateVars
+    DeletedProject pid -> do
+      users <- dbtToEff $ Projects.usersByProjectId pid
+      projectM <- dbtToEff $ Projects.projectById pid
+      forM_ projectM \pr -> do
+        forM_ users \user -> do
+          let firstName = user.firstName
+          let projectTitle = pr.title
+          let userEmail = CI.original (user.email)
+          let templateVars =
+                [aesonQQ|{
+            "user_name": #{firstName},
+            "project_name": #{projectTitle}
+          }|]
+          sendPostmarkEmail userEmail "project-deleted" templateVars
     DailyJob -> do
       currentDay <- utctDay <$> Time.currentTime
       projects <- dbtToEff $ query Select [sql|SELECT id FROM projects.projects WHERE active=? AND deleted_at IS NULL|] (Only True)
@@ -350,9 +365,9 @@ weeklyReportForProject pid = do
       Projects.NSlack ->
         sendSlackMessage
           pid
-          [trimming| 🤖 *Weekly Report for `{pr.title}`***
+          [trimming| 🤖 *Weekly Report for `{pr.title}`*
     
-                              <https://app.apitoolkit.io/p/{pid.toText}/reports/{show report.id.reportId}|View this week's report>
+<https://app.apitoolkit.io/p/{pid.toText}/reports/{show report.id.reportId}|View this week's report>
                      |]
       _ -> do
         forM_ users \user -> do
