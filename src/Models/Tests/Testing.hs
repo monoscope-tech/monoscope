@@ -274,7 +274,7 @@ getCollections pid tabStatus = query Select q (pid, statusValue)
     q =
       [sql|
       SELECT t.id, t.created_at, t.updated_at, t.project_id, t.last_run, 
-             t.title, t.description, 0, 
+             t.title, t.description, jsonb_array_length(t.collection_steps), 
              CASE
                WHEN EXTRACT(DAY FROM t.schedule) > 0 THEN CONCAT(EXTRACT(DAY FROM t.schedule)::TEXT, ' days')
                WHEN EXTRACT(HOUR FROM t.schedule) > 0 THEN CONCAT(EXTRACT(HOUR FROM t.schedule)::TEXT, ' hours')

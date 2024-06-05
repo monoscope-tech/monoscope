@@ -152,6 +152,7 @@ deleteProjectGetH pid = do
       redirectCS "/" >> addRespHeaders ""
 
 
+
 ----------------------------------------------------------------------------------------------------------
 -- createProjectPostH is the handler for the create projects page form handling.
 -- It processes post requests and is expected to return a redirect header and a hyperscript event trigger header.
