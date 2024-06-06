@@ -25,7 +25,6 @@ import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Utils
 import Web.FormUrlEncoded (FromForm)
 
-
 data TestCollectionForm = TestCollectionForm
   { collection_id :: Text
   , title :: Text
@@ -34,14 +33,12 @@ data TestCollectionForm = TestCollectionForm
   deriving stock (Show, Generic)
   deriving anyclass (FromForm)
 
-
 data ScheduleForm = ScheduleForm
   { schedule :: Maybe Text
   , isScheduled :: Bool
   }
   deriving stock (Show, Generic)
   deriving anyclass (FromForm, AE.FromJSON)
-
 
 testingPostH :: Projects.ProjectId -> TestCollectionForm -> ATAuthCtx (RespHeaders (Html ()))
 testingPostH pid collection = do
@@ -74,7 +71,6 @@ testingPostH pid collection = do
       addSuccessToast "Collection updated Successfully" Nothing
       addRespHeaders $ testingPage pid Nothing cols
 
-
 testingGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 testingGetH pid maybeTab = do
   let tabStatus = case maybeTab of
@@ -91,7 +87,6 @@ testingGetH pid maybeTab = do
           }
   addRespHeaders $ bodyWrapper bwconf $ testingPage pid maybeTab colls
 
-
 testingPage :: Projects.ProjectId -> Maybe Text -> V.Vector Testing.CollectionListItem -> Html ()
 testingPage pid maybeTab colls = do
   div_ [class_ "w-full", id_ "main"] do
@@ -102,7 +97,6 @@ testingPage pid maybeTab colls = do
         a_ [class_ $ "inline-block py-2 " <> if maybeTab == Just "Active" then "font-bold text-black" else "", href_ ("/p/" <> pid.toText <> "/testing/?tab=Active")] "Active"
         a_ [class_ $ "inline-block py-2 " <> if maybeTab == Just "Inactive" then "font-bold text-black" else "", href_ ("/p/" <> pid.toText <> "/testing/?tab=Inactive")] "InActive"
       div_ [class_ "w-full card-round overflow-hidden"] $ collectionCardList pid colls
-
 
 collectionCardList :: Projects.ProjectId -> V.Vector Testing.CollectionListItem -> Html ()
 collectionCardList pid colls = do
@@ -125,21 +119,19 @@ collectionCardList pid colls = do
           , class_ "dataTable-search w-full h-full p-2 text-gray-500 font-normal focus:outline-none"
           , placeholder_ "Search test..."
           ]
-    if null colls
+    if V.null colls
       then div_ [class_ "mx-auto w-max p-5 sm:py-10 sm:px-16 items-center flex my-10 gap-16"] do
         div_ [] do
           faSprite_ "empty-set" "solid" "h-24 w-24"
         div_ [class_ "flex flex-col gap-2"] do
           h2_ [class_ "text-2xl font-bold"] "No Test Collections Found."
           p_ "You don't have any test collections yet."
-      else div_ [class_ "w-full flex flex-col"] do
+      else div_ [class_ "w-full flex flex-col", id_ "endpoints_container"] do
         forM_ colls \c -> do
           collectionCard pid c
 
-
 collectionCard :: Projects.ProjectId -> Testing.CollectionListItem -> Html ()
 collectionCard pid col = do
-  -- a_ [href_ ] $ do
   a_ [href_ $ "/p/" <> pid.toText <> "/testing/" <> col.id.toText, class_ "flex py-4 gap-8 items-center px-6 w-full endpoint_item border-b hover:bg-gray-100"] do
     div_ [class_ "space-y-3 grow"] do
       div_ [class_ ""] do
@@ -162,20 +154,6 @@ collectionCard pid col = do
         div_ [class_ "p-2  bg-rose-100 text-rose-900 border border-rose-300"] do
           div_ [class_ "text-base"] "-"
           small_ [class_ "block"] "Failed"
-
-
--- div_ [class_ "w-36 flex items-center justify-end"] do
---   button_
---     [ term "data-id" col.id.toText,
---       term "data-title" col.title,
---       term "data-desc" col.description,
---       [__|on click remove .hidden from #col-modal
---               then set #collection_id's value to my @data-id
---               then set #title's value to my @data-title
---               then set #desc's value to my @data-desc
---               |]
---     ]
---     $ faSprite_ "pen-to-square" "regular" "h-6 w-6"
 
 modal :: Projects.ProjectId -> Html ()
 modal pid = do
