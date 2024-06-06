@@ -4,6 +4,8 @@ import Data.Aeson qualified as AE
 import Data.ByteString.Base64 qualified as B64
 import Data.Either.Extra (fromRight')
 import Data.Time
+import Data.UUID qualified as UUID
+import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Effectful (
   Eff,
@@ -39,8 +41,8 @@ methodPath stepData =
 
 
 -- Conversion function
-testRunToRequestMsg :: Projects.ProjectId -> UTCTime -> Testing.StepResult -> RequestMessage
-testRunToRequestMsg (Projects.ProjectId pid) currentTime sr = do
+testRunToRequestMsg :: Projects.ProjectId -> UTCTime -> UUID.UUID -> Testing.StepResult -> RequestMessage
+testRunToRequestMsg (Projects.ProjectId pid) currentTime parent_id sr = do
   let (method, _rawUri) = fromMaybe ("GET", "") $ methodPath sr.request.req
   RequestMessage
     { duration = 1000000 -- Placeholder for duration in nanoseconds
@@ -62,7 +64,7 @@ testRunToRequestMsg (Projects.ProjectId pid) currentTime sr = do
     , urlPath = Just ""
     , timestamp = utcToZonedTime utc currentTime
     , msgId = Nothing
-    , parentId = Nothing -- No parentId provided, assuming None
+    , parentId = Just parent_id -- No parentId provided, assuming None
     , serviceVersion = Nothing -- Placeholder for serviceVersion
     , errors = Nothing -- Placeholder for errors
     , tags = Nothing -- Placeholder for tags
@@ -92,5 +94,34 @@ runTestAndLog pid collectionSteps = do
   stepResultsE <- runCollectionTest collectionSteps
   let stepResults = fromRight' stepResultsE
   currentTime <- Time.currentTime
-  _ <- ProcessMessage.processRequestMessages $ V.toList (stepResults <&> \sR -> ("", testRunToRequestMsg pid currentTime sR))
+  -- Create a parent request for to act as parent for current test run
+  msg_id <- liftIO $ UUIDV4.nextRandom
+  let parent_msg =
+        RequestMessage
+          { duration = 1000000 -- Placeholder for duration in nanoseconds
+          , host = Just ""
+          , method = "GET"
+          , pathParams = AE.object []
+          , projectId = pid.unProjectId
+          , protoMajor = 1
+          , protoMinor = 1
+          , queryParams = AE.object [] -- Assuming all params are query params
+          , rawUrl = ""
+          , referer = Nothing -- Placeholder for the referer
+          , requestBody = B64.encodeBase64 $ encodeUtf8 $ "{\"MESSAGE\": \"CUSTOM PARENT REQUEST CREATED BY APITOOLIT\"}"
+          , requestHeaders = AE.object []
+          , responseBody = B64.encodeBase64 $ encodeUtf8 $ "" -- TODO: base64 encode
+          , responseHeaders = AE.object []
+          , sdkType = RequestDumps.TestkitOutgoing
+          , statusCode = 200
+          , urlPath = Just ""
+          , timestamp = utcToZonedTime utc currentTime
+          , msgId = Just msg_id
+          , parentId = Nothing -- No parentId provided, assuming None
+          , serviceVersion = Nothing -- Placeholder for serviceVersion
+          , errors = Nothing -- Placeholder for errors
+          , tags = Nothing -- Placeholder for tags
+          }
+  let requestMessages = V.toList (stepResults <&> \sR -> ("", testRunToRequestMsg pid currentTime msg_id sR))
+  _ <- ProcessMessage.processRequestMessages $ requestMessages <> [("", parent_msg)]
   pure $ Right stepResults
