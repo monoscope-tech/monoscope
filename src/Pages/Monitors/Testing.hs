@@ -125,9 +125,16 @@ collectionCardList pid colls = do
           , class_ "dataTable-search w-full h-full p-2 text-gray-500 font-normal focus:outline-none"
           , placeholder_ "Search test..."
           ]
-    div_ [class_ "w-full flex flex-col"] do
-      forM_ colls \c -> do
-        collectionCard pid c
+    if null colls
+      then div_ [class_ "mx-auto w-max p-5 sm:py-10 sm:px-16 items-center flex my-10 gap-16"] do
+        div_ [] do
+          faSprite_ "empty-set" "solid" "h-24 w-24"
+        div_ [class_ "flex flex-col gap-2"] do
+          h2_ [class_ "text-2xl font-bold"] "No Test Collections Found."
+          p_ "You don't have any test collections yet."
+      else div_ [class_ "w-full flex flex-col"] do
+        forM_ colls \c -> do
+          collectionCard pid c
 
 
 collectionCard :: Projects.ProjectId -> Testing.CollectionListItem -> Html ()
