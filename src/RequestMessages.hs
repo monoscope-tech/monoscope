@@ -474,7 +474,6 @@ valueToFormatStr val
   | val =~ ([text|^(0[1-9]|1[012])[- -.](0[1-9]|[12][0-9]|3[01])[- -.](19|20)\d\d$|] :: Text) = Just "mm-dd-yyyy"
   | val =~ ([text|^(0[1-9]|1[012])[- ..](0[1-9]|[12][0-9]|3[01])[- ..](19|20)\d\d$|] :: Text) = Just "mm.dd.yyyy"
   | val =~ ([text|^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(([+-]\d\d:\d\d)|Z)?$|] :: Text) = Just "YYYY-MM-DDThh:mm:ss.sTZD"
-  | val =~ ([text|^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$|] :: Text) = Just "ip"
   | otherwise = Nothing
 
 
@@ -496,7 +495,6 @@ parseUrlSegments (x : xs) (segs, vals) = case valueToFormatStr x of
   Just v
     | v == "uuid" -> parseUrlSegments xs (addNewSegment segs "uuid", vals ++ [x])
     | v == "mm/dd/yy" || v == "mm-dd-yy" || v == "mm.dd.yyy" -> parseUrlSegments xs (addNewSegment segs "date", vals ++ [x])
-    | v == "ip" -> parseUrlSegments xs (addNewSegment segs "ip_address", vals ++ [x])
     | otherwise -> parseUrlSegments xs (addNewSegment segs "number", vals ++ [x])
 
 
