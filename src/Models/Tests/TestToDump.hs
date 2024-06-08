@@ -43,9 +43,9 @@ methodPath stepData =
 -- Conversion function
 testRunToRequestMsg :: Projects.ProjectId -> UTCTime -> UUID.UUID -> Testing.StepResult -> RequestMessage
 testRunToRequestMsg (Projects.ProjectId pid) currentTime parent_id sr = do
-  let (method, _rawUri) = fromMaybe ("GET", "") $ methodPath sr.request.req
+  let (method, rawUri) = fromMaybe ("GET", "") $ methodPath sr.request.req
   RequestMessage
-    { duration = 1000000 -- Placeholder for duration in nanoseconds
+    { duration = 1000000
     , host = Just ""
     , method = method
     , pathParams = AE.toJSON (fromMaybe mempty (sr.request.req.params))
@@ -53,21 +53,21 @@ testRunToRequestMsg (Projects.ProjectId pid) currentTime parent_id sr = do
     , protoMajor = 1
     , protoMinor = 1
     , queryParams = AE.toJSON (fromMaybe mempty (sr.request.req.params)) -- Assuming all params are query params
-    , rawUrl = ""
-    , referer = Nothing -- Placeholder for the referer
+    , rawUrl = rawUri
+    , referer = Nothing
     , requestBody = B64.encodeBase64 $ encodeUtf8 $ fromMaybe "" (sr.request.req.raw)
     , requestHeaders = AE.toJSON (fromMaybe mempty (sr.request.req.headers))
     , responseBody = B64.encodeBase64 $ encodeUtf8 $ sr.request.resp.raw -- TODO: base64 encode
     , responseHeaders = AE.toJSON (sr.request.resp.headers)
     , sdkType = RequestDumps.TestkitOutgoing
     , statusCode = sr.request.resp.status
-    , urlPath = Just ""
+    , urlPath = Just rawUri
     , timestamp = utcToZonedTime utc currentTime
     , msgId = Nothing
-    , parentId = Just parent_id -- No parentId provided, assuming None
-    , serviceVersion = Nothing -- Placeholder for serviceVersion
-    , errors = Nothing -- Placeholder for errors
-    , tags = Nothing -- Placeholder for tags
+    , parentId = Just parent_id
+    , serviceVersion = Nothing
+    , errors = Nothing
+    , tags = Nothing
     }
 
 
@@ -99,14 +99,14 @@ runTestAndLog pid collectionSteps = do
   let parent_msg =
         RequestMessage
           { duration = 1000000 -- Placeholder for duration in nanoseconds
-          , host = Just ""
+          , host = Just "app.apitoolkit.io"
           , method = "GET"
           , pathParams = AE.object []
           , projectId = pid.unProjectId
           , protoMajor = 1
           , protoMinor = 1
           , queryParams = AE.object [] -- Assuming all params are query params
-          , rawUrl = ""
+          , rawUrl = "/TEST_RUN"
           , referer = Nothing -- Placeholder for the referer
           , requestBody = B64.encodeBase64 $ encodeUtf8 $ "{\"MESSAGE\": \"CUSTOM PARENT REQUEST CREATED BY APITOOLIT\"}"
           , requestHeaders = AE.object []
@@ -114,7 +114,7 @@ runTestAndLog pid collectionSteps = do
           , responseHeaders = AE.object []
           , sdkType = RequestDumps.TestkitOutgoing
           , statusCode = 200
-          , urlPath = Just ""
+          , urlPath = Just "/TEST_RUN"
           , timestamp = utcToZonedTime utc currentTime
           , msgId = Just msg_id
           , parentId = Nothing -- No parentId provided, assuming None
@@ -123,5 +123,5 @@ runTestAndLog pid collectionSteps = do
           , tags = Nothing -- Placeholder for tags
           }
   let requestMessages = V.toList (stepResults <&> \sR -> ("", testRunToRequestMsg pid currentTime msg_id sR))
-  _ <- ProcessMessage.processRequestMessages $ requestMessages <> [("", parent_msg)]
+  _ <- ProcessMessage.processRequestMessages $ [("", parent_msg)] <> requestMessages
   pure $ Right stepResults
