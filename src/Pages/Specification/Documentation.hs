@@ -366,7 +366,7 @@ documentationsPage pid swaggers swaggerID jsonString = do
     div_ [class_ "flex flex-col h-full w-full justify-between"] do
       div_ [class_ "flex w-full bg-white border-b items-center justify-between px-2", style_ "top: 0; height:60px; position: sticky"] do
         div_ [class_ "flex items-center gap-4"] do
-          h3_ [class_ "text-xl text-slate-700 text-2xl font-medium"] "Swagger"
+          h3_ [class_ "text-xl text-slate-700 text-2xl font-medium"] "OpenAPI/Swagger"
           div_ [class_ "relative", style_ "width:200px"] do
             button_
               [ onclick_ "toggleSwaggerHistory(event)"
