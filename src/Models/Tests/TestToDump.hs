@@ -13,6 +13,7 @@ import Effectful (
   type (:>),
  )
 import Effectful.Log (Log)
+import Log qualified
 import Effectful.PostgreSQL.Transact.Effect (DB)
 import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time

@@ -467,7 +467,7 @@ logItemCol_ pid reqVec colIdxMap key@"rest" = div_ [class_ "space-x-2 whitespace
   logItemCol_ pid reqVec colIdxMap "status_code"
   logItemCol_ pid reqVec colIdxMap "method"
   span_ [class_ "badge badge-ghost ", term "data-tippy-content" "URL Path"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "url_path"
-  span_ [class_ "badge badge-ghost ", term "data-tippy-content" "Host"] $ toHtml $ fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "host"
+  span_ [class_ "badge badge-ghost ", term "data-tippy-content" "Host"] $ toHtml $ "test.apitoolkit.io"  -- fromMaybe "" $ lookupVecTextByKey reqVec colIdxMap "host"
   span_ [] $ toHtml $ maybe "" unwrapJsonPrimValue (lookupVecByKey reqVec colIdxMap key)
 logItemCol_ _ reqVec colIdxMap key =
   div_ [class_ "xwhitespace-nowrap xoverflow-x-hidden max-w-lg ", term "data-tippy-content" key]

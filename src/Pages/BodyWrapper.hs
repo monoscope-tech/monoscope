@@ -258,7 +258,7 @@ projectsDropDown currProject projects = do
         div_ [class_ "flex mt-2 mb-4"] do
           faSprite_ "folders" "regular" "h-5 w-5 mr-2"
           div_ do
-            strong_ [class_ "block"] $ toHtml currProject.title
+            strong_ [class_ "block"] $ toHtml "Test Project" -- currProject.title
             small_ [class_ "block text-blue-800"] $ toHtml currProject.paymentPlan
         nav_ [] do
           a_ [href_ [text| /p/$pidTxt/settings |], class_ "p-3 flex gap-3 items-center rounded-2xl hover:bg-gray-100"] do
@@ -291,7 +291,7 @@ projectsDropDown currProject projects = do
               a_ [class_ "flex justify-between p-2 project_item", href_ $ "/p/" <> project.id.toText] do
                 div_ [class_ "space-x-3"]
                   $ faSprite_ "folders" "regular" "h-5 w-5 inline-block"
-                  >> span_ [class_ "inline-block"] (toHtml project.title)
+                  >> span_ [class_ "inline-block"] (toHtml "Test Project") -- (toHtml project.title)
                 when (currProject.id == project.id) $ faSprite_ "circle-check" "regular" "h-6 w-6 text-green-700"
 
 
@@ -325,7 +325,7 @@ sideNav sess project pageTitle menuItem hasIntegrated = do
         ]
         do
           div_ [class_ "space-2 grow sd-hidden"] do
-            strong_ [class_ "block text-slate-900"] $ toHtml project.title
+            strong_ [class_ "block text-slate-900"] $ toHtml "Test Project" -- project.title
             small_ [class_ "block text-slate-900"] $ toHtml project.paymentPlan
           -- Development?
           div_ [class_ "flex flex-col"] do
