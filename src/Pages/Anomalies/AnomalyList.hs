@@ -18,6 +18,7 @@ import BackgroundJobs qualified
 import Data.Default (def)
 import Data.Map qualified as Map
 import Data.Pool (withResource)
+import Effectful.Time qualified as Time
 import Data.Text (replace)
 import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime, zonedTimeToUTC)
@@ -33,24 +34,12 @@ import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (termRaw)
-import Lucid.Htmx (
-  hxBoost_,
-  hxGet_,
-  hxIndicator_,
-  hxPost_,
-  hxSwap_,
-  hxTrigger_,
- )
+import Lucid.Htmx (hxBoost_,hxGet_,hxIndicator_,hxPost_,hxSwap_,hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Query qualified as Fields
-import Models.Apis.Fields.Types (
-  Field (fieldType),
-  fieldTypeToText,
-  fieldsToNormalized,
-  groupFieldsByCategory,
- )
+import Models.Apis.Fields.Types (Field (fieldType),fieldTypeToText,fieldsToNormalized,groupFieldsByCategory)
 import Models.Apis.Fields.Types qualified as Fields
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes (getShapeFields)
@@ -70,13 +59,7 @@ import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (pool))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (
-  deleteParam,
-  faSprite_,
-  getMethodColor,
-  mIcon_,
-  textToBool,
- )
+import Utils (deleteParam,faSprite_,getMethodColor,mIcon_,textToBool)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -164,7 +147,7 @@ anomalyListGetH pid layoutM ackdM archivedM sortM pageM loadM endpointM hxReques
       fLimit = 10
       pageInt = maybe 0 (Unsafe.read . toString) pageM
   issues <- dbtToEff $ Anomalies.selectIssues pid endpointM (Just ackd) (Just archived) sortM (Just fLimit) (pageInt * fLimit)
-  currTime <- liftIO getCurrentTime
+  currTime <- Time.currentTime
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess.persistentSession
@@ -449,7 +432,11 @@ escapedQueryPartial :: Text -> Text
 escapedQueryPartial x = toText $ escapeURIString isUnescapedInURI $ toString x
 
 
-anomalyDetailsPage :: Anomalies.IssueL -> Maybe (Vector Shapes.ShapeWithFields) -> Maybe (Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field]) -> Maybe (Vector Text) -> UTCTime -> Bool -> Html ()
+anomalyDetailsPage 
+  :: Anomalies.IssueL 
+  -> Maybe (Vector Shapes.ShapeWithFields) 
+  -> Maybe (Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field]) 
+  -> Maybe (Vector Text) -> UTCTime -> Bool -> Html ()
 anomalyDetailsPage issue shapesWithFieldsMap fields prvFormatsM currTime modal = do
   let anomalyQueryPartial = buildQueryForAnomaly issue.anomalyType issue.targetHash
   div_ [class_ "w-full "] do
@@ -732,8 +719,7 @@ subSubSection title fieldsM = whenJust fieldsM \fields -> do
         let depthPadding= "margin-left:" <> show (20 + (depth * 20)) <> "px"
         let displayKey = last ("" :| segments)
         case fieldM of
-          Nothing -> do
-            a_
+          Nothing -> a_
               [ class_ "flex flex-row items-center"
               , style_ depthPadding
               , [__| on click toggle .neg-rotate-90 on <.chevron/> in me then collapseUntil((me), (my @data-depth))  |]
