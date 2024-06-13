@@ -7,7 +7,6 @@ import Data.Time
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
-import Log qualified
 import Effectful (
   Eff,
   IOE,
@@ -18,6 +17,7 @@ import Effectful.PostgreSQL.Transact.Effect (DB)
 import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
 import Foreign.C.String (peekCString, withCString)
+import Log qualified
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Tests.Testing qualified as Testing
@@ -30,8 +30,8 @@ import System.Config qualified as Config
 
 methodPath :: Testing.CollectionStepData -> Maybe (Text, Text)
 methodPath stepData =
-  listToMaybe
-    $ catMaybes
+  listToMaybe $
+    catMaybes
       [ ("POST",) <$> stepData.post
       , ("GET",) <$> stepData.get
       , ("PUT",) <$> stepData.put
@@ -81,7 +81,7 @@ callRunTestkit hsString = withCString hsString $ \cstr -> do
 runCollectionTest :: IOE :> es => V.Vector Testing.CollectionStepData -> Eff es (Either Text (V.Vector Testing.StepResult))
 runCollectionTest collectionSteps = do
   tkResp <- liftIO $ callRunTestkit $ decodeUtf8 $ AE.encode $ collectionSteps
-  pure $ mapLeft fromString $ AE.eitherDecodeStrictText (toText tkResp) 
+  pure $ mapLeft fromString $ AE.eitherDecodeStrictText (toText tkResp)
 
 
 runTestAndLog
@@ -91,10 +91,11 @@ runTestAndLog
   -> Eff es (Either Text (V.Vector Testing.StepResult))
 runTestAndLog pid collectionSteps = do
   stepResultsE <- runCollectionTest collectionSteps
-  stepResultsE' <- case stepResultsE of 
-        Left e -> Log.logAttention "unable to run test collection" (AE.object ["error" AE..= e, "steps" AE..= collectionSteps])
-        Right stepResults -> do
-
+  case stepResultsE of
+    Left e -> do
+      Log.logAttention "unable to run test collection" (AE.object ["error" AE..= e, "steps" AE..= collectionSteps])
+      pure $ Left e
+    Right stepResults -> do
       currentTime <- Time.currentTime
       -- Create a parent request for to act as parent for current test run
       msg_id <- liftIO $ UUIDV4.nextRandom

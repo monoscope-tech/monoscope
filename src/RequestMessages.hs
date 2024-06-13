@@ -38,7 +38,6 @@ import Models.Apis.Fields.Types qualified as Fields (
   FieldId (FieldId),
   FieldTypes (..),
   fieldCategoryEnumToText,
-  fieldTypeToText,
  )
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.RequestDumps qualified as RequestDumps
