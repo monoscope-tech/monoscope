@@ -11,7 +11,7 @@ module.exports = {
   runtimeCaching: [
     {
       urlPattern: /https:\/\/kit\.fontawesome\.com\/e0cb5637ed\.js.*/,
-      handler: 'StaleWhileRevalidate'
+      handler: 'CacheFirst'
     },
     {
       urlPattern: /https:\/\/ka-p\.fontawesome\.com\/.*/,

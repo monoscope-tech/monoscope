@@ -140,14 +140,15 @@ data FieldCategoryEnum
   | FCResponseBody
   deriving stock (Eq, Generic, Show, Ord)
   deriving anyclass (NFData)
-  deriving
-    (AE.ToJSON)
-    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "FC", DAE.CamelToSnake]] FieldCategoryEnum
 
 
 instance FromJSON FieldCategoryEnum where
   parseJSON (AE.String v) = maybe empty pure (parseFieldCategoryEnum v)
   parseJSON _ = empty
+
+
+instance ToJSON FieldCategoryEnum where
+  toJSON = AE.String . fieldCategoryEnumToText
 
 
 instance Default FieldCategoryEnum where
@@ -253,7 +254,7 @@ instance Ord Field where
     (projectId f1 <= projectId f2)
       && (endpointHash f1 <= endpointHash f2)
       && keyPath f1
-      <= keyPath f2
+        <= keyPath f2
 
 
 instance Eq Field where

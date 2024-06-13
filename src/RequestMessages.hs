@@ -38,7 +38,6 @@ import Models.Apis.Fields.Types qualified as Fields (
   FieldId (FieldId),
   FieldTypes (..),
   fieldCategoryEnumToText,
-  fieldTypeToText,
  )
 import Models.Apis.Formats qualified as Formats
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -164,7 +163,6 @@ processErrors pid sdkType method urlPath err = (normalizedError, q, params)
 requestMsgToDumpAndEndpoint :: Projects.ProjectCache -> RequestMessages.RequestMessage -> UTCTime -> UUID.UUID -> Either Text (Maybe Query, Maybe [DBField], Maybe RequestDumps.RequestDump)
 requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   -- TODO: User dumpID and msgID to get correct ID
-  --
   let dumpID = fromMaybe dumpIDOriginal rM.msgId
   let timestampUTC = zonedTimeToUTC rM.timestamp
 
@@ -176,9 +174,9 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   let redactFieldsList = V.toList pjc.redactFieldslist <> [".set-cookie", ".password"]
   let sanitizeNullChars = encodeUtf8 . replaceNullChars . decodeUtf8
   reqBodyB64 <- B64.decodeBase64 $ encodeUtf8 rM.requestBody
-  let reqBody = redactJSON redactFieldsList $ fromRight (AE.object []) $ AE.eitherDecodeStrict $ sanitizeNullChars reqBodyB64
   respBodyB64 <- B64.decodeBase64 $ encodeUtf8 rM.responseBody
-  let respBody = redactJSON redactFieldsList $ fromRight (AE.object []) $ AE.eitherDecodeStrict $ sanitizeNullChars respBodyB64
+  let reqBody = redactJSON redactFieldsList $ fromRight (AE.object []) $ AE.eitherDecodeStrict $ sanitizeNullChars reqBodyB64
+      respBody = redactJSON redactFieldsList $ fromRight (AE.object []) $ AE.eitherDecodeStrict $ sanitizeNullChars respBodyB64
       pathParamFields = valueToFields $ redactJSON redactFieldsList rM.pathParams
       queryParamFields = valueToFields $ redactJSON redactFieldsList rM.queryParams
       reqHeaderFields = valueToFields $ redactJSON redactFieldsList rM.requestHeaders
@@ -298,7 +296,8 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   -- Build all fields and formats, unzip them as separate lists and append them to query and params
   -- We don't border adding them if their shape exists, as we asume that we've already seen such before.
   let (fieldsQ, fieldsP)
-        | shapeHash `elem` pjc.shapeHashes = ([], [])
+        -- TODO: Replace this faulty logic with bloom  filter. See comment on formats for more.
+        -- | shapeHash `elem` pjc.shapeHashes = ([], [])
         | rM.statusCode == 404 = ([], [])
         | otherwise = unzip $ map Fields.insertFieldQueryAndParams fields
 
@@ -309,7 +308,10 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   -- The original plan was that we could skip the shape from the input into this function, but then that would mean
   -- also inserting the fields and the shape, when all we want to insert is just the example.
   let (formatsQ, formatsP)
-        | shapeHash `elem` pjc.shapeHashes = ([], [])
+        -- TODO: Replace this redundancy check with a sort of bit vector or bloom filter that holds all the 
+        -- existing formats or even just fields in the given project. So we don't insert existing fields 
+        -- and formats over and over
+        -- | shapeHash `elem` pjc.shapeHashes = ([], [])
         | rM.statusCode == 404 = ([], [])
         | otherwise = unzip $ map Formats.insertFormatQueryAndParams formats
 
@@ -584,7 +586,7 @@ fieldsToFieldDTO fieldCategory projectID endpointHash (keyPath, val) =
     fieldType = fromMaybe Fields.FTUnknown $ viaNonEmpty head $ aeValueToFieldType <$> val
 
     -- field hash is <hash of the endpoint> + <the hash of <field_category><key_path_str><field_type>> (No space or comma between data)
-    !fieldHash = endpointHash <> toXXHash (Fields.fieldCategoryEnumToText fieldCategory <> keyPath <> Fields.fieldTypeToText fieldType)
+    !fieldHash = endpointHash <> toXXHash (Fields.fieldCategoryEnumToText fieldCategory <> keyPath)
     -- FIXME: We should rethink this value to format logic.
     -- FIXME: Maybe it actually needs machine learning,
     -- FIXME: or maybe it should operate on the entire list, and not just one value.
