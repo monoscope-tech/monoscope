@@ -729,7 +729,7 @@ subSubSection title fieldsM = whenJust fieldsM \fields -> do
       fieldsToNormalized fields & mapM_ \(key, fieldM) -> do
         let segments = T.splitOn "." key
         let depth = length segments
-        let depthPadding= "margin-left:" <> show (20 + (depth * 20)) <> "px"
+        let depthPadding = "margin-left:" <> show (20 + (depth * 20)) <> "px"
         let displayKey = last ("" :| segments)
         case fieldM of
           Nothing -> do

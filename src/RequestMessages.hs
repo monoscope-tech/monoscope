@@ -297,7 +297,7 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   -- We don't border adding them if their shape exists, as we asume that we've already seen such before.
   let (fieldsQ, fieldsP)
         -- TODO: Replace this faulty logic with bloom  filter. See comment on formats for more.
-        -- | shapeHash `elem` pjc.shapeHashes = ([], [])
+        -- \| shapeHash `elem` pjc.shapeHashes = ([], [])
         | rM.statusCode == 404 = ([], [])
         | otherwise = unzip $ map Fields.insertFieldQueryAndParams fields
 
@@ -308,10 +308,10 @@ requestMsgToDumpAndEndpoint pjc rM now dumpIDOriginal = do
   -- The original plan was that we could skip the shape from the input into this function, but then that would mean
   -- also inserting the fields and the shape, when all we want to insert is just the example.
   let (formatsQ, formatsP)
-        -- TODO: Replace this redundancy check with a sort of bit vector or bloom filter that holds all the 
-        -- existing formats or even just fields in the given project. So we don't insert existing fields 
+        -- TODO: Replace this redundancy check with a sort of bit vector or bloom filter that holds all the
+        -- existing formats or even just fields in the given project. So we don't insert existing fields
         -- and formats over and over
-        -- | shapeHash `elem` pjc.shapeHashes = ([], [])
+        -- \| shapeHash `elem` pjc.shapeHashes = ([], [])
         | rM.statusCode == 404 = ([], [])
         | otherwise = unzip $ map Formats.insertFormatQueryAndParams formats
 

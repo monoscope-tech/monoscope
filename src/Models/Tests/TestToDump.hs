@@ -30,8 +30,8 @@ import System.Config qualified as Config
 
 methodPath :: Testing.CollectionStepData -> Maybe (Text, Text)
 methodPath stepData =
-  listToMaybe $
-    catMaybes
+  listToMaybe
+    $ catMaybes
       [ ("POST",) <$> stepData.post
       , ("GET",) <$> stepData.get
       , ("PUT",) <$> stepData.put

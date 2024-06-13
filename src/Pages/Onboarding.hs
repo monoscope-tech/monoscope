@@ -126,7 +126,7 @@ integrateApiToolkit apikey current_tab =
       div_ [class_ "pb-2 flex gap-10 w-full mt-8"] do
         div_ [class_ "font-bold text-center w-[35%]"] $ do
           tabs current_tab
-          a_ [class_ "btn btn-indigo mt-2 w-full rounded-lg -ml-1", href_ "https://apitoolkit.io/docs/sdks/", target_ "_BLANK"] "View all SDKs"
+          a_ [class_ "btn btn-indigo mt-4 w-full rounded-lg -ml-1", href_ "https://apitoolkit.io/docs/sdks/", target_ "_BLANK"] "View all SDKs"
         div_ [class_ "flex flex-col w-[65%] shrink-0 max-w-[65%]"] do
           tabContentExpress apikey current_tab
           tabContentGin apikey current_tab
@@ -141,6 +141,7 @@ integrateApiToolkit apikey current_tab =
           tabContentGorilla apikey current_tab
           tabContentPhoenix apikey current_tab
           tabContentAdonis apikey current_tab
+          tabContentSpring apikey current_tab
     script_
       [text|
 var getCurrentTab = () => {
@@ -201,6 +202,71 @@ app.listen(port, () => {
 });
       |]
       guideFooterLink "https://apitoolkit.io/docs/sdks/nodejs/expressjs/" "Express JS"
+
+
+tabContentSpring :: Text -> Text -> Html ()
+tabContentSpring apikey current_tab =
+  div_ [class_ $ "tab-content flex flex-col " <> (if current_tab == "springboot" then "" else "hidden"), id_ "springboot_content"] $ do
+    div_ [class_ "relative flex flex-col gap-2"] $ do
+      div_ [class_ "mb-6"] do
+        h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Java Springboot"
+        p_ [class_ "w-full py-1"] "Here's how to quickly integrate APItoolkit into your springboot application."
+      div_ [class_ "mb-6"] do
+        h3_ [class_ "text-slate-900 font-medium text-lg mb-1"] "Installation"
+        p_ [class_ "text-gray-600 font-medium"] do
+          "Add the dependency to your"
+          codeEmphasis " pom.xml "
+          "file"
+        codeExample
+          [text|
+<dependency>
+    <groupId>io.apitoolkit.springboot</groupId>
+    <artifactId>apitoolkit-springboot</artifactId>
+    <version>1.0.5</version>
+</dependency>
+      |]
+        h3_ [class_ "text-slate-900 font-medium text-lg mb-1 mt-4"] "Integrate"
+        p_ [class_ "w-full py-1"] do
+          "First, set the API Key property in your"
+          codeEmphasis " application.properties "
+          "file."
+        codeExample
+          [text|
+# Your apikey (required)
+apitoolkit.apikey=$apikey
+        |]
+      h4_ [class_ "text-slate-900 font-medium text-lg my-2"] do
+        "Next, add the "
+        codeEmphasis " @EnableAPIToolkit "
+        "annotation to your application's main class"
+      codeExample
+        $ [text|
+package com.example.demo;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.web.bind.annotation.*;
+
+// Import APItoolkit annotation
+import io.apitoolkit.springboot.annotations.EnableAPIToolkit;
+
+@SpringBootApplication
+@EnableAPIToolkit
+@RestController
+public class DemoApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(DemoApplication.class, args);
+    }
+
+    @GetMapping("/user/{name}")
+    public User getUser(@PathVariable String name) {
+        return new User("Jon Doe", "[email protected]");
+    }
+}
+
+|]
+      guideFooterLink "https://apitoolkit.io/docs/sdks/java/springboot/" "Springboot"
 
 
 tabContentGin :: Text -> Text -> Html ()
@@ -796,6 +862,14 @@ tabs current_tab =
         ]
         do
           img_ [src_ "/assets/framework-logos/fastify-logo.png", alt_ "", class_ "w-full"]
+    li_ [class_ "shrink-0"] do
+      button_
+        [ class_ $ if current_tab == "springboot" then "sdk_tab sdk_tab_active" else "sdk_tab"
+        , [__| install Navigatable(content: #springboot_content) |]
+        , id_ "springboot"
+        ]
+        do
+          img_ [src_ "/assets/framework-logos/spring-logo.svg", alt_ "", class_ "w-full"]
 
 
 contentHeader :: Text -> Html ()
