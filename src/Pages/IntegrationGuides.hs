@@ -3,30 +3,30 @@ module Pages.IntegrationGuides (getH) where
 import Data.Default (Default (def))
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
-import Lucid (
-  Html,
-  ToHtml (toHtml),
-  a_,
-  button_,
-  class_,
-  div_,
-  h3_,
-  href_,
-  id_,
-  main_,
-  script_,
-  span_,
-  target_,
- )
+import Lucid
+  ( Html,
+    ToHtml (toHtml),
+    a_,
+    button_,
+    class_,
+    div_,
+    h3_,
+    href_,
+    id_,
+    main_,
+    script_,
+    span_,
+    target_,
+  )
 import Lucid.Hyperscript (__)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
-import Pages.BodyWrapper (
-  BWConfig (currProject, pageTitle, sessM),
-  bodyWrapper,
- )
+import Pages.BodyWrapper
+  ( BWConfig (currProject, pageTitle, sessM),
+    bodyWrapper,
+  )
 import Pages.IntegrationDemos.AdonisJS (adonisGuide)
 import Pages.IntegrationDemos.Django (djangoGuide)
 import Pages.IntegrationDemos.DotNet (dotNetGuide)
@@ -43,11 +43,11 @@ import Pages.IntegrationDemos.NestJs (nestGuide)
 import Pages.IntegrationDemos.Phoenix (phoenixGuide)
 import Pages.IntegrationDemos.Pyramid (pyramidGuide)
 import Pages.IntegrationDemos.Slim (slimGuide)
+import Pages.IntegrationDemos.Springboot (springGuide)
 import Pages.IntegrationDemos.Symfony (symfonyGuide)
 import Relude hiding (ask)
 import System.Types
 import Utils (faSprite_)
-
 
 getH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 getH pid sdkM errReportM reqMonM = do
@@ -56,12 +56,11 @@ getH pid sdkM errReportM reqMonM = do
   let key = if V.length apiKey > 0 then let defKey = V.head apiKey in defKey.keyPrefix else "<API_KEY>"
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess.persistentSession
-          , currProject = Just project
-          , pageTitle = "Integrations"
+          { sessM = Just sess.persistentSession,
+            currProject = Just project,
+            pageTitle = "Integrations"
           }
   addRespHeaders $ bodyWrapper bwconf $ integrationsPage pid (fromMaybe "express" sdkM) key errReportM reqMonM
-
 
 integrationsPage :: Projects.ProjectId -> Text -> Text -> Maybe Text -> Maybe Text -> Html ()
 integrationsPage pid sdk apiKey errReportM reqMonM = do
@@ -79,36 +78,45 @@ integrationsPage pid sdk apiKey errReportM reqMonM = do
             span_ [] do
               faSprite_ "chevron-down" "regular" "h-3 w-3"
           div_ [class_ "hidden w-full flex flex-col left-0 absolute shadow top-8 bg-white text-sm rounded", id_ "sdk_list"] do
-            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=express"] "ExpressJs"
-            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=gin"] "Go Gin"
-            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=pyramid"] "Python Pyramid"
+            -- .NET
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=dotnet"] ".NET"
-            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=laravel"] "Laravel"
-            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=django"] "Django"
-            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=adonis"] "Adonis Js"
-            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=flask"] "Flask"
+            -- Elixir
+            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=phoenix"] "Elixir Phoenix"
+            -- Go
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=echo"] "Go Echo"
+            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=gin"] "Go Gin"
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=gorilla"] "Go Gorilla Mux"
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=gonative"] "Go Native"
-            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=phoenix"] "Elixir Phoenix"
-            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=symfony"] "PHP Symfony"
-            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=fastapi"] "Python FastAPI"
+            -- Java
+            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=springboot"] "Java Springboot"
+            -- JavaScript
+            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=adonis"] "Adonis Js"
+            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=express"] "ExpressJs"
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=fastify"] "Fastify Js"
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=nest"] "Nest Js"
+            -- PHP
+            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=laravel"] "Laravel"
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=slim"] "PHP Slim"
+            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=symfony"] "PHP Symfony"
+            -- Python
+            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=django"] "Django"
+            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=flask"] "Flask"
+            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=fastapi"] "Python FastAPI"
+            a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=pyramid"] "Python Pyramid"
+
         button_
-          [ class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium text-sm hover:bg-gray-100"
-          , [__|on click go to the top of #requests-monitoring|]
+          [ class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium text-sm hover:bg-gray-100",
+            [__|on click go to the top of #requests-monitoring|]
           ]
           "Request monitoring"
         button_
-          [ class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium text-sm hover:bg-gray-100"
-          , [__|on click go to the top of #errors-monitoring|]
+          [ class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium text-sm hover:bg-gray-100",
+            [__|on click go to the top of #errors-monitoring|]
           ]
           "Error Reporting"
         button_
-          [ class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium text-sm hover:bg-gray-100"
-          , [__|on click go to the top of #outgoing-request-monitoring|]
+          [ class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium text-sm hover:bg-gray-100",
+            [__|on click go to the top of #outgoing-request-monitoring|]
           ]
           "Outgoing request monitoring"
     div_ [class_ "px-8 mb-10"] do
@@ -129,12 +137,12 @@ integrationsPage pid sdk apiKey errReportM reqMonM = do
         "nest" -> nestGuide apiKey
         "gorilla" -> gorillaGuide apiKey
         "gonative" -> goNativeGuide apiKey
+        "springboot" -> springGuide apiKey
         _ -> expressGuide apiKey
     script_
       [text|
 hljs.highlightAll();
  |]
-
 
 getTitle :: Text -> Text
 getTitle "gin" = "GO Gin"
@@ -153,4 +161,5 @@ getTitle "slim" = "PHP Slim"
 getTitle "nest" = "Nest Js"
 getTitle "gorilla" = "Go Gorilla Mux"
 getTitle "gonative" = "Go Native"
+getTitle "springboot" = "Java Springboot"
 getTitle _ = "Express Js"

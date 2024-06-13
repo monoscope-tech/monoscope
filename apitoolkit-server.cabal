@@ -83,6 +83,7 @@ library
       Pages.IntegrationDemos.Phoenix
       Pages.IntegrationDemos.Pyramid
       Pages.IntegrationDemos.Slim
+      Pages.IntegrationDemos.Springboot
       Pages.IntegrationDemos.Symfony
       Pages.IntegrationGuides
       Pages.Log
