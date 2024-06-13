@@ -2,11 +2,12 @@ module Models.Tests.TestToDump (testRunToRequestMsg, runTestAndLog) where
 
 import Data.Aeson qualified as AE
 import Data.ByteString.Base64 qualified as B64
-import Data.Either.Extra (fromRight')
+import Data.Either.Extra (mapLeft)
 import Data.Time
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
+import Log qualified
 import Effectful (
   Eff,
   IOE,
@@ -80,9 +81,7 @@ callRunTestkit hsString = withCString hsString $ \cstr -> do
 runCollectionTest :: IOE :> es => V.Vector Testing.CollectionStepData -> Eff es (Either Text (V.Vector Testing.StepResult))
 runCollectionTest collectionSteps = do
   tkResp <- liftIO $ callRunTestkit $ decodeUtf8 $ AE.encode $ collectionSteps
-  -- FIXME: handle fromLeft correctly.
-  let stepResults = fromRight' $ AE.eitherDecodeStrictText (toText tkResp) :: V.Vector Testing.StepResult
-  pure $ Right stepResults
+  pure $ mapLeft fromString $ AE.eitherDecodeStrictText (toText tkResp) 
 
 
 runTestAndLog
@@ -92,36 +91,39 @@ runTestAndLog
   -> Eff es (Either Text (V.Vector Testing.StepResult))
 runTestAndLog pid collectionSteps = do
   stepResultsE <- runCollectionTest collectionSteps
-  let stepResults = fromRight' stepResultsE
-  currentTime <- Time.currentTime
-  -- Create a parent request for to act as parent for current test run
-  msg_id <- liftIO $ UUIDV4.nextRandom
-  let parent_msg =
-        RequestMessage
-          { duration = 1000000 -- Placeholder for duration in nanoseconds
-          , host = Just "app.apitoolkit.io"
-          , method = "GET"
-          , pathParams = AE.object []
-          , projectId = pid.unProjectId
-          , protoMajor = 1
-          , protoMinor = 1
-          , queryParams = AE.object [] -- Assuming all params are query params
-          , rawUrl = "/TEST_RUN"
-          , referer = Nothing -- Placeholder for the referer
-          , requestBody = B64.encodeBase64 $ encodeUtf8 $ "{\"MESSAGE\": \"CUSTOM PARENT REQUEST CREATED BY APITOOLIT\"}"
-          , requestHeaders = AE.object []
-          , responseBody = B64.encodeBase64 $ encodeUtf8 $ "" -- TODO: base64 encode
-          , responseHeaders = AE.object []
-          , sdkType = RequestDumps.TestkitOutgoing
-          , statusCode = 200
-          , urlPath = Just "/TEST_RUN"
-          , timestamp = utcToZonedTime utc currentTime
-          , msgId = Just msg_id
-          , parentId = Nothing -- No parentId provided, assuming None
-          , serviceVersion = Nothing -- Placeholder for serviceVersion
-          , errors = Nothing -- Placeholder for errors
-          , tags = Nothing -- Placeholder for tags
-          }
-  let requestMessages = V.toList (stepResults <&> \sR -> ("", testRunToRequestMsg pid currentTime msg_id sR))
-  _ <- ProcessMessage.processRequestMessages $ [("", parent_msg)] <> requestMessages
-  pure $ Right stepResults
+  stepResultsE' <- case stepResultsE of 
+        Left e -> Log.logAttention "unable to run test collection" (AE.object ["error" AE..= e, "steps" AE..= collectionSteps])
+        Right stepResults -> do
+
+      currentTime <- Time.currentTime
+      -- Create a parent request for to act as parent for current test run
+      msg_id <- liftIO $ UUIDV4.nextRandom
+      let parent_msg =
+            RequestMessage
+              { duration = 1000000 -- Placeholder for duration in nanoseconds
+              , host = Just "app.apitoolkit.io"
+              , method = "GET"
+              , pathParams = AE.object []
+              , projectId = pid.unProjectId
+              , protoMajor = 1
+              , protoMinor = 1
+              , queryParams = AE.object [] -- Assuming all params are query params
+              , rawUrl = "/TEST_RUN"
+              , referer = Nothing -- Placeholder for the referer
+              , requestBody = B64.encodeBase64 $ encodeUtf8 $ "{\"MESSAGE\": \"CUSTOM PARENT REQUEST CREATED BY APITOOLIT\"}"
+              , requestHeaders = AE.object []
+              , responseBody = B64.encodeBase64 $ encodeUtf8 $ "" -- TODO: base64 encode
+              , responseHeaders = AE.object []
+              , sdkType = RequestDumps.TestkitOutgoing
+              , statusCode = 200
+              , urlPath = Just "/TEST_RUN"
+              , timestamp = utcToZonedTime utc currentTime
+              , msgId = Just msg_id
+              , parentId = Nothing -- No parentId provided, assuming None
+              , serviceVersion = Nothing -- Placeholder for serviceVersion
+              , errors = Nothing -- Placeholder for errors
+              , tags = Nothing -- Placeholder for tags
+              }
+      let requestMessages = V.toList (stepResults <&> \sR -> ("", testRunToRequestMsg pid currentTime msg_id sR))
+      _ <- ProcessMessage.processRequestMessages $ [("", parent_msg)] <> requestMessages
+      pure $ Right stepResults

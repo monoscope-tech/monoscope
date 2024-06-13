@@ -449,7 +449,7 @@ data NewFieldIssue = NewFieldIssue
   , host :: Text
   , key :: Text
   , keyPath :: Text
-  , fieldCategory :: Maybe Fields.FieldCategoryEnum
+  , fieldCategory :: Fields.FieldCategoryEnum
   , format :: Text
   }
   deriving stock (Show, Generic)
@@ -467,7 +467,7 @@ data NewFormatIssue = NewFormatIssue
   , host :: Text
   , fieldKeyPath :: Text
   , formatType :: Fields.FieldTypes
-  , fieldCategory :: Maybe Fields.FieldCategoryEnum
+  , fieldCategory :: Fields.FieldCategoryEnum
   , examples :: Maybe (Vector Text)
   }
   deriving stock (Show, Generic)
@@ -605,7 +605,7 @@ createIssueData hostM anomaly = case anomaly.anomalyType of
               <*> pure (fromMaybe "" hostM)
               <*> anomaly.fieldKey
               <*> anomaly.fieldKeyPath
-              <*> Just anomaly.fieldCategory
+              <*> anomaly.fieldCategory
               <*> anomaly.fieldFormat
           )
   ATFormat ->
@@ -618,7 +618,7 @@ createIssueData hostM anomaly = case anomaly.anomalyType of
               <*> pure (fromMaybe "" hostM)
               <*> anomaly.fieldKeyPath
               <*> anomaly.formatType
-              <*> pure anomaly.fieldCategory
+              <*> anomaly.fieldCategory
               <*> pure anomaly.formatExamples
           )
   ATEndpoint ->
