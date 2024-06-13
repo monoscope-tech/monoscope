@@ -6,12 +6,16 @@ import NeatInterpolation
 import Pkg.Components
 import Relude
 
+
 springGuide :: Text -> Html ()
 springGuide apikey = do
   section_ [class_ "flex flex-col gap-10"] do
     div_ [class_ "w-full flex flex-col gap-2"] do
       h3_ [class_ "text-2xl font-semibold"] "Install"
-      p_ [class_ "text-gray-600 font-medium"] "Add the dependency to your " <> codeEmphasis "pom.xml" <> "file"
+      p_ [class_ "text-gray-600 font-medium"] do
+        "Add the dependency to your"
+        codeEmphasis " pom.xml "
+        "file"
       codeExample
         [text|
 <dependency>
@@ -24,7 +28,10 @@ springGuide apikey = do
     div_ [class_ "w-full flex flex-col gap-2"] do
       h3_ [class_ "text-xl font-medium"] "Configuration Options"
       p_ [class_ "text-gray-600 font-medium max-w-5xl"] "The SDK accepts other options alongside apikey to allow you to customize the sdk. Redacting sensitive fields, debug mode etc"
-      p_ [class_ "text-gray-600 font-medium max-w-5xl"] "Add this to your" <> codeEmphasis " application.properties " <> "file"
+      p_ [class_ "text-gray-600 font-medium max-w-5xl"] do
+        "Add this to your"
+        codeEmphasis " application.properties "
+        "file"
       codeExample $ configOptions apikey
 
     div_ [class_ "w-full flex flex-col gap-2", id_ "requests-monitoring"] do
@@ -42,6 +49,7 @@ springGuide apikey = do
       h3_ [class_ "text-2xl font-semibold"] "Outgoing Request Monitoring"
       p_ [class_ "text-gray-600 max-w-5xl"] "APItoolkit also allows you to monitor your outgoing request (i.e the api calls your make from your server). Monitored outgoing are also associated with the incoming request that triggered them."
       codeExample $ outgoingRequest apikey
+
 
 initCode :: Text
 initCode =
@@ -71,6 +79,7 @@ public class DemoApplication {
 }
 |]
 
+
 configOptions :: Text -> Text
 configOptions apikey =
   [text|
@@ -85,6 +94,7 @@ apitoolkit.redactResponseBody=$.users[*].email,$.users[*].credit_card
 # Set to true to enable debug mode
 apitoolkit.apikey={ENTER_YOUR_API_KEY_HERE}
 |]
+
 
 errorReportingCode :: Text -> Text
 errorReportingCode apiKey =
@@ -119,6 +129,7 @@ public class DemoApplication {
     }
 }
 |]
+
 
 outgoingRequest :: Text -> Text
 outgoingRequest apiKey =

@@ -3,30 +3,30 @@ module Pages.IntegrationGuides (getH) where
 import Data.Default (Default (def))
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
-import Lucid
-  ( Html,
-    ToHtml (toHtml),
-    a_,
-    button_,
-    class_,
-    div_,
-    h3_,
-    href_,
-    id_,
-    main_,
-    script_,
-    span_,
-    target_,
-  )
+import Lucid (
+  Html,
+  ToHtml (toHtml),
+  a_,
+  button_,
+  class_,
+  div_,
+  h3_,
+  href_,
+  id_,
+  main_,
+  script_,
+  span_,
+  target_,
+ )
 import Lucid.Hyperscript (__)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
-import Pages.BodyWrapper
-  ( BWConfig (currProject, pageTitle, sessM),
-    bodyWrapper,
-  )
+import Pages.BodyWrapper (
+  BWConfig (currProject, pageTitle, sessM),
+  bodyWrapper,
+ )
 import Pages.IntegrationDemos.AdonisJS (adonisGuide)
 import Pages.IntegrationDemos.Django (djangoGuide)
 import Pages.IntegrationDemos.DotNet (dotNetGuide)
@@ -49,6 +49,7 @@ import Relude hiding (ask)
 import System.Types
 import Utils (faSprite_)
 
+
 getH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 getH pid sdkM errReportM reqMonM = do
   (sess, project) <- Sessions.sessionAndProject pid
@@ -56,11 +57,12 @@ getH pid sdkM errReportM reqMonM = do
   let key = if V.length apiKey > 0 then let defKey = V.head apiKey in defKey.keyPrefix else "<API_KEY>"
   let bwconf =
         (def :: BWConfig)
-          { sessM = Just sess.persistentSession,
-            currProject = Just project,
-            pageTitle = "Integrations"
+          { sessM = Just sess.persistentSession
+          , currProject = Just project
+          , pageTitle = "Integrations"
           }
   addRespHeaders $ bodyWrapper bwconf $ integrationsPage pid (fromMaybe "express" sdkM) key errReportM reqMonM
+
 
 integrationsPage :: Projects.ProjectId -> Text -> Text -> Maybe Text -> Maybe Text -> Html ()
 integrationsPage pid sdk apiKey errReportM reqMonM = do
@@ -105,18 +107,18 @@ integrationsPage pid sdk apiKey errReportM reqMonM = do
             a_ [class_ "px-2 py-1 hover:bg-gray-200", href_ $ baseUrl <> "sdk=pyramid"] "Python Pyramid"
 
         button_
-          [ class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium text-sm hover:bg-gray-100",
-            [__|on click go to the top of #requests-monitoring|]
+          [ class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium text-sm hover:bg-gray-100"
+          , [__|on click go to the top of #requests-monitoring|]
           ]
           "Request monitoring"
         button_
-          [ class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium text-sm hover:bg-gray-100",
-            [__|on click go to the top of #errors-monitoring|]
+          [ class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium text-sm hover:bg-gray-100"
+          , [__|on click go to the top of #errors-monitoring|]
           ]
           "Error Reporting"
         button_
-          [ class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium text-sm hover:bg-gray-100",
-            [__|on click go to the top of #outgoing-request-monitoring|]
+          [ class_ "rounded-lg flex items-center gap-2 border px-4 py-1.5 font-medium text-sm hover:bg-gray-100"
+          , [__|on click go to the top of #outgoing-request-monitoring|]
           ]
           "Outgoing request monitoring"
     div_ [class_ "px-8 mb-10"] do
@@ -143,6 +145,7 @@ integrationsPage pid sdk apiKey errReportM reqMonM = do
       [text|
 hljs.highlightAll();
  |]
+
 
 getTitle :: Text -> Text
 getTitle "gin" = "GO Gin"
