@@ -18,7 +18,6 @@ import Effectful.PostgreSQL.Transact.Effect (DB)
 import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
 import Foreign.C.String (peekCString, withCString)
-import Log qualified
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Tests.Testing qualified as Testing
