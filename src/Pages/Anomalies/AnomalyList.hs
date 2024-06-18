@@ -21,7 +21,6 @@ import Data.Pool (withResource)
 import Data.Text (replace)
 import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime, zonedTimeToUTC)
-import Data.Tuple.Extra (fst3)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
@@ -33,14 +32,7 @@ import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (termRaw)
-import Lucid.Htmx (
-  hxBoost_,
-  hxGet_,
-  hxIndicator_,
-  hxPost_,
-  hxSwap_,
-  hxTrigger_,
- )
+import Lucid.Htmx (hxBoost_,hxGet_,hxSwap_,hxTrigger_,)
 import Lucid.Hyperscript (__)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
@@ -57,26 +49,21 @@ import Models.Apis.Shapes (getShapeFields)
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Models.Users.Users
+import Models.Users.Users (User (id))
 import NeatInterpolation (text)
 import Network.URI (escapeURIString, isUnescapedInURI)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Components qualified as Components
 import Pages.Endpoints.EndpointComponents qualified as EndpointComponents
+import Pkg.Components.ItemsList qualified as ItemsList
 import PyF (fmt)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (pool))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (
-  deleteParam,
-  faSprite_,
-  getMethodColor,
-  mIcon_,
-  textToBool,
- )
+import Utils (deleteParam, faSprite_, getMethodColor, mIcon_, textToBool)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -182,21 +169,14 @@ anomalyListGetH pid layoutM ackdM archivedM sortM pageM loadM endpointM hxReques
           , archived = archived
           , sort = fromMaybe "" sortM
           }
-      anom = case nextFetchUrl of
-        Just url -> do
-          mapM_ (renderIssue False currTime) issues
-          when (length issues == fLimit)
-            $ a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url]
-            $ (span_ [class_ "htmx-indicator query-indicator loading loading-dots loading-md"] "" >> "LOAD MORE")
-        Nothing -> mapM_ (renderIssue False currTime) issues
   addRespHeaders $ case (layoutM, hxRequestM, hxBoostedM, loadM) of
     (Just "slider", Just "true", _, _) -> anomalyListSlider currTime pid endpointM (Just issues)
-    (_, _, _, Just "true") -> anom
+    (_, _, _, Just "true") -> ItemsList.itemRows_ nextFetchUrl (renderIssue False currTime) issues
     _ -> bodyWrapper bwconf $ issuesListPage paramInput pid currTime issues nextFetchUrl
 
 
 issuesListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Anomalies.IssueL -> Maybe Text -> Html ()
-issuesListPage paramInput pid currTime issues nextFetchUrl = div_ [class_ "w-full mx-auto  px-16 pt-10 pb-24  overflow-y-scroll h-full"] do
+issuesListPage paramInput@ParamInput{..} pid currTime issues nextFetchUrl = div_ [class_ "w-full mx-auto  px-16 pt-10 pb-24  overflow-y-scroll h-full"] do
   div_
     [ style_ "z-index:26"
     , class_ "fixed hidden right-0 top-0 justify-end left-0 bottom-0 w-full bg-black bg-opacity-5"
@@ -217,68 +197,22 @@ issuesListPage paramInput pid currTime issues nextFetchUrl = div_ [class_ "w-ful
     a_ [class_ $ "inline-block py-2 " <> if not paramInput.ackd && not paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&ackd=false&archived=false"] "Inbox"
     a_ [class_ $ "inline-block  py-2 " <> if paramInput.ackd && not paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&ackd=true&archived=false"] "Acknowleged"
     a_ [class_ $ "inline-block  py-2 " <> if paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&archived=true"] "Archived"
-  div_ [class_ "grid grid-cols-5 card-round", id_ "anomalyListBelowTab", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $ issuesList paramInput pid currTime issues nextFetchUrl
-
-
-issuesList :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Anomalies.IssueL -> Maybe Text -> Html ()
-issuesList paramInput pid currTime issues nextFetchUrl = form_ [class_ "col-span-5 bg-white divide-y ", id_ "anomalyListForm"] do
-  let bulkActionBase = "/p/" <> pid.toText <> "/anomalies/bulk_actions"
-  let currentURL' = deleteParam "sort" paramInput.currentURL
-  let sortMenu =
-        [ ("First Seen", "First time the issue occured", "first_seen")
-        , ("Last Seen", "Last time the issue occured", "last_seen")
-        , ("Events", "Number of events", "events")
-        ]
-          :: [(Text, Text, Text)]
-  let currentSortTitle = maybe "First Seen" fst3 $ find (\(_, _, identifier) -> identifier == paramInput.sort) sortMenu
-  div_
-    [class_ "flex py-3 gap-8 items-center  bg-gray-50"]
-    do
-      div_ [class_ "h-4 flex space-x-3 w-8"] do
-        a_ [class_ " w-2 h-full"] "" >> input_ [term "aria-label" "Select Issue", type_ "checkbox"]
-      div_ [class_ " grow flex flex-row gap-2"] do
-        button_ [class_ "btn btn-sm btn-outline border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/acknowlege", hxSwap_ "none"] "✓ acknowlege"
-        button_ [class_ "btn btn-sm btn-outline space-x-1 border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/archive", hxSwap_ "none"] do
-          faSprite_ "inbox-full" "solid" "h-4 w-4 inline-block"
-          span_ "archive"
-      div_ [class_ "relative inline-block"] do
-        a_ [class_ "btn btn-sm btn-outline border-black hover:shadow-2xl space-x-2", [__|on click toggle .hidden on #sortMenuDiv |]] do
-          mIcon_ "sort" "h-4 w-4"
-          span_ $ toHtml currentSortTitle
-        div_ [id_ "sortMenuDiv", hxBoost_ "true", class_ "p-1 hidden text-sm border border-black-30 absolute right-0 z-10 mt-2 w-72 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none", tabindex_ "-1"] do
-          sortMenu & mapM_ \(title, desc, identifier) -> do
-            let isActive = paramInput.sort == identifier || (paramInput.sort == "" && identifier == "first_seen")
-            a_
-              [ class_ $ "block flex flex-row px-3 py-2 hover:bg-blue-50 rounded-md cursor-pointer " <> (if isActive then " text-blue-800 " else "")
-              , href_ $ currentURL' <> "&sort=" <> identifier
-              , hxIndicator_ "#sortLoader"
-              ]
-              do
-                div_ [class_ "flex flex-col items-center justify-center px-3"] do
-                  if isActive then mIcon_ "checkmark4" "w-4 h-5" else mIcon_ "" "w-4 h-5"
-                div_ [class_ "grow space-y-1"] do
-                  span_ [class_ "block text-lg"] $ toHtml title
-                  span_ [class_ "block "] $ toHtml desc
-
-      div_ [class_ "flex justify-center font-base w-60 content-between gap-14"] do
-        span_ "GRAPH"
-        div_ [class_ " space-x-2 font-base text-sm"] $ (a_ [class_ "cursor-pointer"] "24h" >> a_ [class_ "cursor-pointer font-bold text-base"] "14d")
-      div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "font-base"] "EVENTS"
-      div_ [class_ "p-12 fixed rounded-lg shadow bg-white top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 htmx-indicator loading loading-dots loading-md", id_ "sortLoader"] ""
-
-  when (null issues) $ section_ [class_ "mx-auto w-max p-5 sm:py-10 sm:px-16 items-center flex my-10 gap-16"] do
-    div_ [] do
-      faSprite_ "empty-set" "solid" "h-24 w-24"
-    div_ [class_ "flex flex-col gap-2"] do
-      h2_ [class_ "text-2xl font-bold"] "No Issues Or Errors."
-      p_ "Start monitoring errors that happened during a request"
-      a_ [href_ $ "/p/" <> pid.toText <> "/integration_guides#errors-monitoring", class_ "w-max btn btn-indigo -ml-1 text-md"] "Error reporting guide"
-
-  mapM_ (renderIssue False currTime) issues
-  whenJust nextFetchUrl \url ->
-    when (length issues > 10)
-      $ a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] do
-        span_ [class_ "htmx-indicator loading loading-dots loading-md"] "" >> "LOAD MORE"
+  let listCfg =
+        ItemsList.ItemsListCfg
+          { projectId = pid
+          , zeroState =
+              Just
+                $ ItemsList.ZeroState
+                  { icon = "empty-set"
+                  , title = "No Issues Or Errors."
+                  , description = "Start monitoring errors that happened during a request."
+                  , actionText = "Error reporting guide"
+                  , destination = "/p/" <> listCfg.projectId.toText <> "/integration_guides#errors-monitoring"
+                  }
+          , elemID = "anomalyListForm"
+          , ..
+          }
+  ItemsList.itemsList_ listCfg issues \_ -> (renderIssue False listCfg.currTime)
 
 
 anomalyListSlider :: UTCTime -> Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe (Vector Anomalies.IssueL) -> Html ()

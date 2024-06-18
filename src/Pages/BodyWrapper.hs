@@ -105,12 +105,6 @@ bodyWrapper BWConfig{sessM, currProject, pageTitle, menuItem, hasIntegrated} chi
       twq('config','om5gt');
       |]
 
-      -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/core@1.2.0/dist/index.umd.min.js"] ("" :: Text)
-      -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/datetime@1.2.0/dist/index.umd.min.js"] ("" :: Text)
-      -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/base-plugin@1.2.0/dist/index.umd.min.js"] ("" :: Text)
-      -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/range-plugin@1.2.0/dist/index.umd.min.js"] ("" :: Text)
-      -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/preset-plugin@1.2.0/dist/index.umd.min.js"] ("" :: Text)
-      -- script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/time-plugin@1.2.0/dist/index.umd.min.js"] ("" :: Text)
       script_ [src_ "https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.0/dist/index.umd.min.js"] ("" :: Text)
 
       script_

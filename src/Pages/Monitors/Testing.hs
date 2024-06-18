@@ -18,12 +18,13 @@ import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Sessions qualified as Sessions
-import NeatInterpolation (text)
+import Effectful.Time qualified as Time
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Relude hiding (ask)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Utils
 import Web.FormUrlEncoded (FromForm)
+import Pkg.Components.ItemsList qualified as ItemsList
 
 
 data TestCollectionForm = TestCollectionForm
@@ -67,12 +68,12 @@ testingPostH pid collection = do
       _ <- dbtToEff $ Testing.addCollection coll
       cols <- dbtToEff $ Testing.getCollections pid Testing.Active
       addSuccessToast "Collection added Successfully" Nothing
-      addRespHeaders $ testingPage pid Nothing cols
+      testingGetH pid Nothing
     else do
       -- _ <- dbtToEff $ Testing.updateCollection pid collection.collection_id collection.title collection.description
       cols <- dbtToEff $ Testing.getCollections pid Testing.Active
       addSuccessToast "Collection updated Successfully" Nothing
-      addRespHeaders $ testingPage pid Nothing cols
+      testingGetH pid Nothing
 
 
 testingGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
@@ -81,101 +82,84 @@ testingGetH pid maybeTab = do
         Just "Active" -> Testing.Active
         Just "Inactive" -> Testing.Inactive
         _ -> Testing.Active -- Default to Active if tab is unrecognized
+  currTime <- Time.currentTime
   (sess, project) <- Sessions.sessionAndProject pid
   colls <- dbtToEff $ Testing.getCollections pid tabStatus
+  let listCfg =
+        ItemsList.ItemsListCfg
+          { projectId = pid
+          , sort = "" 
+          , ackd = False
+          , archived = False
+          , currentURL = "/p/" <> pid.toText <> "/testing" 
+          , currTime
+          , nextFetchUrl = Nothing
+          , zeroState =
+              Just
+                $ ItemsList.ZeroState
+                  { icon = "empty-set"
+                  , title = "No Multistep Test/Monitor yet."
+                  , description = "You're can create one to start monitoring your services."
+                  , actionText = "Create Monitor"
+                  , destination = "/p/" <> listCfg.projectId.toText <> "/integration_guides#outgoing-request-monitoring"
+                  }
+          , elemID = "anomalyListForm"
+          }
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess.persistentSession
           , currProject = Just project
           , pageTitle = "API Tests (Beta)"
           }
-  addRespHeaders $ bodyWrapper bwconf $ testingPage pid maybeTab colls
+  addRespHeaders $ bodyWrapper bwconf $ testingPage listCfg pid maybeTab colls
 
 
-testingPage :: Projects.ProjectId -> Maybe Text -> V.Vector Testing.CollectionListItem -> Html ()
-testingPage pid maybeTab colls = do
+testingPage :: ItemsList.ItemsListCfg -> Projects.ProjectId -> Maybe Text -> V.Vector Testing.CollectionListItem -> Html ()
+testingPage listCfg pid maybeTab testItems= do
   div_ [class_ "w-full", id_ "main"] do
     modal pid
     div_ [class_ "w-full mx-auto px-16 pt-5 pb-24 overflow-y-scroll h-full"] $ do
-      h3_ [class_ "text-xl text-slate-700 flex gap-1 place-items-center"] $ span_ [] "End-to-End Testing"
-      div_ [class_ "py-2 px-2 space-x-6 border-b border-slate-20 mt-6 mb-8 text-sm font-light", hxBoost_ "true"] do
-        a_ [class_ $ "inline-block py-2 " <> if maybeTab == Just "Active" then "font-bold text-black" else "", href_ ("/p/" <> pid.toText <> "/testing/?tab=Active")] "Active"
-        a_ [class_ $ "inline-block py-2 " <> if maybeTab == Just "Inactive" then "font-bold text-black" else "", href_ ("/p/" <> pid.toText <> "/testing/?tab=Inactive")] "InActive"
-      div_ [class_ "w-full card-round overflow-hidden"] $ collectionCardList pid colls
-
-
-collectionCardList :: Projects.ProjectId -> V.Vector Testing.CollectionListItem -> Html ()
-collectionCardList pid colls = do
-  div_ [class_ "col-span-5 bg-white divide-y"] $ do
-    div_ [class_ "flex p-3 gap-8 items-center  bg-gray-50"] do
-      div_ [class_ " grow flex flex-row gap-2"] do
-        h1_ [class_ "text-xl text-slate-700 flex place-items-center"] "Test Collections"
-      div_ [class_ "w-36 flex items-center justify-center"] $ do
+      h3_ [class_ "text-xl text-slate-700 flex gap-1 place-items-center"] do
+        span_ [] "Multistep API monitors/tests (Beta)"
         button_
           [ class_ "w-max btn btn-indigo text-md"
           , [__|on click remove .hidden from #col-modal then set #collection_id's value to ""|]
           ]
           $ (faSprite_ "plus" "regular" "h-6 w-6" >> "Collection")
-    div_ [class_ "w-full flex flex-row p-3"] $ do
-      div_ [class_ "relative flex w-full bg-white py-2 px-3 border-solid border border-gray-200 h-10"] $ do
-        faIcon_ "fa-magnifying-glass" "fa-light fa-magnifying-glass" "h-5 w-5"
-        input_
-          [ type_ "text"
-          , [__| on input show .endpoint_item in #endpoints_container when its textContent.toLowerCase() contains my value.toLowerCase() |]
-          , class_ "dataTable-search w-full h-full p-2 text-gray-500 font-normal focus:outline-none"
-          , placeholder_ "Search test..."
-          ]
-    if null colls
-      then div_ [class_ "mx-auto w-max p-5 sm:py-10 sm:px-16 items-center flex my-10 gap-16"] do
-        div_ [] do
-          faSprite_ "empty-set" "solid" "h-24 w-24"
-        div_ [class_ "flex flex-col gap-2"] do
-          h2_ [class_ "text-2xl font-bold"] "No Test Collections Found."
-          p_ "You don't have any test collections yet."
-      else div_ [class_ "w-full flex flex-col"] do
-        forM_ colls \c -> do
-          collectionCard pid c
+      div_ [class_ "py-2 px-2 space-x-6 border-b border-slate-20 mt-6 mb-8 text-sm font-light", hxBoost_ "true"] do
+        a_ [class_ $ "inline-block py-2 " <> if maybeTab == Just "Active" then "font-bold text-black" else "", href_ ("/p/" <> pid.toText <> "/testing/?tab=Active")] "Active"
+        a_ [class_ $ "inline-block py-2 " <> if maybeTab == Just "Inactive" then "font-bold text-black" else "", href_ ("/p/" <> pid.toText <> "/testing/?tab=Inactive")] "InActive"
+      ItemsList.itemsList_ listCfg testItems \_ -> collectionCard pid 
 
 
 collectionCard :: Projects.ProjectId -> Testing.CollectionListItem -> Html ()
-collectionCard pid col = do
-  -- a_ [href_ ] $ do
-  a_ [href_ $ "/p/" <> pid.toText <> "/testing/" <> col.id.toText, class_ "flex py-4 gap-8 items-center px-6 w-full endpoint_item border-b hover:bg-gray-100"] do
-    div_ [class_ "space-y-3 grow"] do
-      div_ [class_ ""] do
-        span_ [class_ "inline-block font-bold text-blue-700 space-x-2"] $ toHtml col.title
-        div_ [class_ "mt-5"] do
-          div_ [class_ "flex items-center gap-2"] do
-            span_ [class_ "text-xs text-gray-500 font-bold"] "Created"
-            span_ [class_ "inline-block text-gray-800 text-xs"] $ toHtml $ T.take 19 $ show @Text col.createdAt
-          div_ [class_ "flex items-center gap-2"] do
-            span_ [class_ "text-xs text-gray-500 font-bold"] "Last run"
-            span_ [class_ "text-gray-500"] $ toHtml $ maybe "-" (T.take 19 . show @Text) col.lastRun
-    div_ [class_ "flex items-center justify-center "] do
-      div_ [class_ "grid grid-cols-3 gap-2 text-center text-xs w-96"] do
-        div_ [class_ "p-2 bg-slate-100 text-slate-900 border border-slate-300"] do
-          div_ [class_ "text-base"] $ show col.stepsCount
-          small_ [class_ "block"] "Steps"
-        div_ [class_ " p-2 bg-emerald-100 text-emerald-900 border border-emerald-300"] do
-          div_ [class_ "text-base"] "-"
-          small_ [class_ "block"] "Passed"
-        div_ [class_ "p-2  bg-rose-100 text-rose-900 border border-rose-300"] do
-          div_ [class_ "text-base"] "-"
-          small_ [class_ "block"] "Failed"
+collectionCard pid col = div_ [class_ "flex py-4 gap-8 items-center"] do
+  div_ [class_ "h-4 flex space-x-3 w-8 "] do
+    a_ [class_ "w-2 h-full"] ""
+    input_ [term "aria-label" "Select Issue", class_ "endpoint_anomaly_input", type_ "checkbox", name_ "listItemId", value_ col.id.toText]
 
+  div_ [class_ "space-y-3 grow"] do
+    div_ [class_ ""] do
+      a_ [href_ $ "/p/" <> pid.toText <> "/testing/" <> col.id.toText, class_ "inline-block font-bold text-blue-700 space-x-2"] $ toHtml col.title
+      div_ [class_ "mt-5"] do
+        div_ [class_ "flex items-center gap-2"] do
+          span_ [class_ "text-xs text-gray-500 font-bold"] "Created"
+          span_ [class_ "inline-block text-gray-800 text-xs"] $ toHtml $ T.take 19 $ show @Text col.createdAt
+        div_ [class_ "flex items-center gap-2"] do
+          span_ [class_ "text-xs text-gray-500 font-bold"] "Last run"
+          span_ [class_ "text-gray-500"] $ toHtml $ maybe "-" (T.take 19 . show @Text) col.lastRun
+  div_ [class_ "flex items-center justify-center "] do
+    div_ [class_ "grid grid-cols-3 gap-2 text-center text-xs w-96"] do
+      div_ [class_ "p-2 bg-slate-100 text-slate-900 border border-slate-300"] do
+        div_ [class_ "text-base"] $ show col.stepsCount
+        small_ [class_ "block"] "Steps"
+      div_ [class_ " p-2 bg-emerald-100 text-emerald-900 border border-emerald-300"] do
+        div_ [class_ "text-base"] "-"
+        small_ [class_ "block"] "Passed"
+      div_ [class_ "p-2  bg-rose-100 text-rose-900 border border-rose-300"] do
+        div_ [class_ "text-base"] "-"
+        small_ [class_ "block"] "Failed"
 
--- div_ [class_ "w-36 flex items-center justify-end"] do
---   button_
---     [ term "data-id" col.id.toText,
---       term "data-title" col.title,
---       term "data-desc" col.description,
---       [__|on click remove .hidden from #col-modal
---               then set #collection_id's value to my @data-id
---               then set #title's value to my @data-title
---               then set #desc's value to my @data-desc
---               |]
---     ]
---     $ faSprite_ "pen-to-square" "regular" "h-6 w-6"
 
 modal :: Projects.ProjectId -> Html ()
 modal pid = do
@@ -186,7 +170,7 @@ modal pid = do
     ]
     $ do
       div_ [class_ "flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0"] $ do
-        div_ [class_ "relative transform overflow-hidden rounded-xl border shadow bg-white text-left transition-all my-8 w-full max-w-2xl", onclick_ "noPropagation(event)"] do
+        div_ [class_ "relative transform overflow-hidden rounded-xl border shadow bg-white text-left transition-all my-8 w-full max-w-2xl", onclick_ "event.stopPropagation()"] do
           form_
             [ hxPost_ $ "/p/" <> pid.toText <> "/testing"
             , class_ "w-full"
@@ -229,9 +213,3 @@ modal pid = do
                   , class_ "mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 sm:mt-0 sm:w-[100px]"
                   ]
                   "Cancel"
-      script_
-        [text|
-          function noPropagation(event) {
-            event.stopPropagation();
-        }
-      |]

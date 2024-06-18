@@ -406,6 +406,7 @@ selectLogTable pid extraQuery cursorM dateRange projectedColsByUser = do
   case resp of
     Left x -> pure $ Left x
     Right (q, queryComponents) -> do
+      traceShowM q
       logItems <- queryToValues q
       Only count <- fromMaybe (Only 0) <$> queryCount queryComponents.countQuery
       let logItemsV = V.mapMaybe valueToVector logItems

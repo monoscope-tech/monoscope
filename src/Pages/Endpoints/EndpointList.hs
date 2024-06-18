@@ -4,28 +4,27 @@ import Data.Default (def)
 import Data.Text (toLower)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
-import Data.Time.Clock (getCurrentTime)
-import Data.Tuple.Extra (fst3)
 import Data.UUID qualified as UUID
 import Data.Vector (Vector)
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Reader.Static (ask)
+import Effectful.Time qualified as Time
 import Fmt (commaizeF, fmt)
 import Lucid
-import Lucid.Htmx (hxBoost_, hxGet_, hxIndicator_, hxPost_, hxSwap_, hxTrigger_)
+import Lucid.Htmx (hxBoost_, hxGet_, hxSwap_, hxTrigger_)
 import Lucid.Hyperscript.QuasiQuoter (__)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
-import Models.Projects.Projects qualified as Projets
 import Models.Users.Sessions qualified as Sessions
 import Pages.Anomalies.AnomalyList qualified as AnomalyList
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pkg.Components.ItemsList qualified as ItemsList
 import PyF qualified
 import Relude hiding (ask, asks)
 import System.Config (AuthContext)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (deleteParam, faSprite_, mIcon_, textToBool)
+import Utils (deleteParam, faSprite_, textToBool)
 
 
 data ParamInput = ParamInput
@@ -55,7 +54,7 @@ endpointListGetH pid layoutM ackdM archivedM hostM projectHostM sortM hxRequestM
           , pageTitle = "Endpoints"
           }
   let currentURL = "/p/" <> pid.toText <> "/endpoints?layout=" <> fromMaybe "false" layoutM <> "&ackd=" <> fromMaybe "true" ackdM <> "&archived=" <> fromMaybe "false" archivedM <> "&sort=" <> fromMaybe "event" sortM
-  currTime <- liftIO getCurrentTime
+  currTime <- Time.currentTime
   let paramInput =
         ParamInput
           { currentURL = currentURL
@@ -63,17 +62,12 @@ endpointListGetH pid layoutM ackdM archivedM hostM projectHostM sortM hxRequestM
           , archived = archived
           , sort = fromMaybe "events" sortM
           }
-  let elementBelowTabs =
-        div_ [class_ "grid grid-cols-5", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"]
-          $ endpointList' paramInput currTime pid endpointStats inbox
   case (hxRequestM, hxBoostedM) of
-    (Just "true", Just "false") -> addRespHeaders elementBelowTabs
-    (Just "true", Nothing) -> addRespHeaders elementBelowTabs
     _ -> addRespHeaders $ bodyWrapper bwconf $ endpointListPage paramInput pid currTime endpointStats projHosts hostM projectHostM inbox
 
 
 endpointListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Endpoints.EndpointRequestStats -> Vector Endpoints.Host -> Maybe Text -> Maybe Text -> Int -> Html ()
-endpointListPage paramInput pid currTime endpoints hosts hostM pHostM inbox_count = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24 overflow-y-scroll h-full"] $ do
+endpointListPage paramInput@ParamInput{..} pid currTime endpoints hosts hostM pHostM inbox_count = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24 overflow-y-scroll h-full"] $ do
   h3_ [class_ "text-xl text-slate-700 flex gap-1 place-items-center"] do
     case hostM of
       Just h -> do
@@ -122,73 +116,23 @@ endpointListPage paramInput pid currTime endpoints hosts hostM pHostM inbox_coun
       , href_ $ if forHost then "#" else uri <> "&archived=true" <> maybe "" ("&project_host=" <>) pHostM
       ]
       "Archived"
-  div_ [class_ "grid grid-cols-5 card-round", id_ "anomalyListBelowTab", hxGet_ paramInput.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] $ endpointList' paramInput currTime pid endpoints inbox_count
-
-
-endpointList' :: ParamInput -> UTCTime -> Projets.ProjectId -> Vector Endpoints.EndpointRequestStats -> Int -> Html ()
-endpointList' paramInput currTime pid enps inbox_count = form_ [class_ "col-span-5 bg-white divide-y ", id_ "anomalyListForm"] $ do
-  let bulkActionBase = "/p/" <> pid.toText <> "/anomalies/bulk_actions"
-  let currentURL' = deleteParam "sort" paramInput.currentURL
-  let sortMenu =
-        [ ("First Seen", "First time the endpoint was seen", "first_seen")
-        , ("Last Seen", "Last time the endpoint was seen", "last_seen")
-        , ("Events", "Number of events", "events")
-        ]
-          :: [(Text, Text, Text)]
-  let currentSortTitle = maybe "First Seen" fst3 $ find (\(_, _, identifier) -> identifier == paramInput.sort) sortMenu
-  div_ [class_ "flex py-3 gap-8 items-center  bg-gray-50"] do
-    div_ [class_ "h-4 flex space-x-3 w-8"] do
-      a_ [class_ " w-2 h-full"] "" >> input_ [term "aria-label" "Select Issue", type_ "checkbox"]
-    div_ [class_ " grow flex flex-row gap-2"] do
-      button_ [class_ "btn btn-sm btn-outline border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/acknowlege", hxSwap_ "none"] "✓ acknowlege"
-      button_ [class_ "btn btn-sm btn-outline space-x-1 border-black hover:shadow-2xl", hxPost_ $ bulkActionBase <> "/archive", hxSwap_ "none"] do
-        faSprite_ "inbox" "solid" "h-4 w-4 inline-block" >> span_ "archive"
-    div_ [class_ "relative inline-block"] do
-      a_ [class_ "btn-sm bg-transparent border-black hover:shadow-2xl space-x-2 cursor-pointer", [__|on click toggle .hidden on #sortMenuDiv |]]
-        $ mIcon_ "sort" "h-4 w-4"
-        >> (span_ $ toHtml currentSortTitle)
-      div_ [id_ "sortMenuDiv", hxBoost_ "true", class_ "p-1 hidden text-sm border border-black-30 absolute right-0 z-10 mt-2 w-72 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none", tabindex_ "-1"] do
-        sortMenu & mapM_ \(title, desc, identifier) -> do
-          let isActive = paramInput.sort == identifier || (paramInput.sort == "" && identifier == "first_seen")
-          a_
-            [ class_ $ "block flex flex-row px-3 py-2 hover:bg-blue-50 rounded-md cursor-pointer " <> (if isActive then " text-blue-800 " else "")
-            , href_ $ currentURL' <> "&sort=" <> identifier
-            , hxIndicator_ "#sortLoading"
-            ]
-            do
-              div_ [class_ "flex flex-col items-center justify-center px-3"]
-                $ if isActive then mIcon_ "checkmark4" "w-4 h-5" else mIcon_ "" "w-4 h-5"
-              div_ [class_ "grow space-y-1"] do
-                span_ [class_ "block text-lg"] $ toHtml title
-                span_ [class_ "block "] $ toHtml desc
-    div_ [id_ "sortLoading", class_ "htmx-indicator fixed top-1/2 left-1/2 -translate-1/2 rounded-lg bg-white shadow p-10 border"]
-      $ span_ [class_ "loading loading-dots loading-md"] ""
-
-    div_ [class_ "flex justify-center font-base w-60 content-between gap-14"] do
-      span_ "GRAPH"
-      div_ [class_ " space-x-2 font-base text-sm"] $ do
-        a_ [class_ "cursor-pointer"] "24h"
-        a_ [class_ "cursor-pointer font-bold text-base"] "14d"
-    div_ [class_ "w-36 flex items-center justify-center"] $ span_ [class_ "font-base"] "EVENTS"
-  div_ [class_ "w-full flex flex-row p-3"] $ do
-    div_ [class_ "relative flex w-full bg-white py-2 px-3 border-solid border border-gray-200 h-10"] $ do
-      faSprite_ "magnifying-glass" "regular" "h-5 w-5"
-      input_
-        [ type_ "text"
-        , [__| on input show .endpoint_item in #endpoints_container when its textContent.toLowerCase() contains my value.toLowerCase() |]
-        , class_ "dataTable-search w-full h-full p-2 text-gray-500 font-normal focus:outline-none"
-        , placeholder_ "Search endpoints..."
-        ]
-  when (null enps && inbox_count == 0) $ section_ [class_ "mx-auto w-max p-5 sm:py-10 sm:px-16 items-center flex my-10 gap-16"] do
-    div_ [] $ faSprite_ "empty-set" "solid" "h-24 w-24"
-    div_ [class_ "flex flex-col gap-2"] do
-      h2_ [class_ "text-2xl font-bold"] "Waiting for events..."
-      p_ "You're currently not sending any data to APItoolkit from your backends yet."
-      a_ [href_ $ "/p/" <> pid.toText <> "/integration_guides", class_ "w-max btn btn-indigo -ml-1 text-md"] "Read the setup guide"
-
-  when (null enps && inbox_count > 0) $ div_ [class_ "flex flex-col text-center justify-center items-center h-32"] $ do
-    strong_ "No endpoints yet." >> p_ "Check Inbox to acknowlege new endpoints"
-  div_ [id_ "endpoints_container"] $ mapM_ (renderEndpoint (paramInput.ackd && not paramInput.archived) currTime) enps
+  let listCfg =
+        ItemsList.ItemsListCfg
+          { projectId = pid
+          , nextFetchUrl = Nothing
+          , zeroState =
+              Just $
+                ItemsList.ZeroState
+                  { icon = "empty-set"
+                  , title = "Waiting for events"
+                  , description = "You're currently not sending any data to APItoolkit from your backends yet."
+                  , actionText = "Read the setup guide"
+                  , destination = "/p/" <> listCfg.projectId.toText <> "/integration_guides"
+                  }
+          , elemID = "anomalyListForm"
+          , ..
+          }
+  ItemsList.itemsList_ listCfg endpoints \_ -> (renderEndpoint (paramInput.ackd && not paramInput.archived) listCfg.currTime)
 
 
 endpointAccentColor :: Bool -> Bool -> Text
@@ -213,8 +157,8 @@ renderEndpoint activePage currTime enp = do
         div_ [class_ "flex items-center gap-2 mt-5"] do
           AnomalyList.anomalyArchiveButton enp.projectId (Anomalies.AnomalyId enp.anomalyId) (isJust enp.archivedAt)
           AnomalyList.anomalyAcknowlegeButton enp.projectId (Anomalies.AnomalyId enp.anomalyId) (isJust enp.acknowlegedAt)
-    div_ [class_ "flex items-center justify-center "]
-      $ div_
+    div_ [class_ "flex items-center justify-center "] $
+      div_
         [ class_ "w-56 h-12 px-3"
         , hxGet_ $ "/charts_html?pid=" <> enp.projectId.toText <> "&since=14D&query_raw=" <> AnomalyList.escapedQueryPartial [PyF.fmt|endpoint_hash=="{enp.endpointHash}" | timechart [1d]|]
         , hxTrigger_ "intersect once"

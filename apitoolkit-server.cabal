@@ -115,6 +115,7 @@ library
       Pages.Survey
       Pkg.Components
       Pkg.Components.ExternalHeadScripts
+      Pkg.Components.ItemsList
       Pkg.Components.Modals
       Pkg.ConvertKit
       Pkg.Google
