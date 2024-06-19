@@ -12,19 +12,19 @@ import Data.Time (getZonedTime)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
+import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Htmx (hxBoost_, hxPost_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Tests.Testing qualified as Testing
 import Models.Users.Sessions qualified as Sessions
-import Effectful.Time qualified as Time
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pkg.Components.ItemsList qualified as ItemsList
 import Relude hiding (ask)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Utils
 import Web.FormUrlEncoded (FromForm)
-import Pkg.Components.ItemsList qualified as ItemsList
 
 
 data TestCollectionForm = TestCollectionForm
@@ -88,12 +88,12 @@ testingGetH pid maybeTab = do
   let listCfg =
         ItemsList.ItemsListCfg
           { projectId = pid
-          , sort = "" 
-          , ackd = False
-          , archived = False
-          , currentURL = "/p/" <> pid.toText <> "/testing" 
+          , sort = ""
+          , currentURL = "/p/" <> pid.toText <> "/testing"
           , currTime
           , nextFetchUrl = Nothing
+          , tabsFilter = Nothing
+          , heading = Nothing
           , zeroState =
               Just
                 $ ItemsList.ZeroState
@@ -115,7 +115,7 @@ testingGetH pid maybeTab = do
 
 
 testingPage :: ItemsList.ItemsListCfg -> Projects.ProjectId -> Maybe Text -> V.Vector Testing.CollectionListItem -> Html ()
-testingPage listCfg pid maybeTab testItems= do
+testingPage listCfg pid maybeTab testItems = do
   div_ [class_ "w-full", id_ "main"] do
     modal pid
     div_ [class_ "w-full mx-auto px-16 pt-5 pb-24 overflow-y-scroll h-full"] $ do
@@ -129,7 +129,7 @@ testingPage listCfg pid maybeTab testItems= do
       div_ [class_ "py-2 px-2 space-x-6 border-b border-slate-20 mt-6 mb-8 text-sm font-light", hxBoost_ "true"] do
         a_ [class_ $ "inline-block py-2 " <> if maybeTab == Just "Active" then "font-bold text-black" else "", href_ ("/p/" <> pid.toText <> "/testing/?tab=Active")] "Active"
         a_ [class_ $ "inline-block py-2 " <> if maybeTab == Just "Inactive" then "font-bold text-black" else "", href_ ("/p/" <> pid.toText <> "/testing/?tab=Inactive")] "InActive"
-      ItemsList.itemsList_ listCfg testItems \_ -> collectionCard pid 
+      ItemsList.itemsList_ listCfg testItems \_ -> collectionCard pid
 
 
 collectionCard :: Projects.ProjectId -> Testing.CollectionListItem -> Html ()

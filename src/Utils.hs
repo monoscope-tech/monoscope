@@ -28,6 +28,7 @@ module Utils (
   lookupMapInt,
   freeTierLimitExceededBanner,
   isDemoAndNotSudo,
+  escapedQueryPartial,
 )
 where
 
@@ -45,6 +46,7 @@ import Lucid.Svg qualified as Svg
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Session
+import Network.URI (escapeURIString, isUnescapedInURI)
 import Relude hiding (show)
 import Servant
 import Text.Regex.TDFA ((=~))
@@ -64,6 +66,10 @@ eitherStrToText (Right a) = Right a
 
 
 type GetOrRedirect = '[WithStatus 200 (Html ()), WithStatus 302 (Headers '[Header "Location" Text] NoContent)]
+
+
+escapedQueryPartial :: Text -> Text
+escapedQueryPartial x = toText $ escapeURIString isUnescapedInURI $ toString x
 
 
 redirect :: Text -> Headers '[Header "Location" Text] NoContent

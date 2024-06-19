@@ -32,7 +32,7 @@ import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (termRaw)
-import Lucid.Htmx (hxBoost_,hxGet_,hxSwap_,hxTrigger_,)
+import Lucid.Htmx (hxBoost_, hxGet_, hxSwap_, hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
@@ -63,7 +63,7 @@ import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (pool))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (deleteParam, faSprite_, getMethodColor, mIcon_, textToBool)
+import Utils (deleteParam, escapedQueryPartial, faSprite_, getMethodColor, mIcon_, textToBool)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -177,20 +177,6 @@ anomalyListGetH pid layoutM ackdM archivedM sortM pageM loadM endpointM hxReques
 
 issuesListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Anomalies.IssueL -> Maybe Text -> Html ()
 issuesListPage paramInput@ParamInput{..} pid currTime issues nextFetchUrl = div_ [class_ "w-full mx-auto  px-16 pt-10 pb-24  overflow-y-scroll h-full"] do
-  div_
-    [ style_ "z-index:26"
-    , class_ "fixed hidden right-0 top-0 justify-end left-0 bottom-0 w-full bg-black bg-opacity-5"
-    , id_ "expand-an-modal"
-    , [__|on click add .hidden to #expand-an-modal|]
-    ]
-    do
-      div_ [class_ "h-full bg-white border-l ml-auto shadow pt-8 overflow-y-scroll", style_ "width:min(90vw, 800px);transition: all 1s", [__|on click halt|]] do
-        div_ [class_ "relative w-full", style_ ""] do
-          div_ [class_ "flex justify-end  w-full p-4 "] do
-            button_ [class_ "bg-gray-200 rounded-full p-2 text-gray-500 hover:bg-gray-300 hover:text-gray-700", [__|on click add .hidden to #expand-an-modal|]] do
-              faSprite_ "xmark" "regular" "h-4 w-4"
-          div_ [id_ "an-modal-content-loader", class_ "bg-white rounded z-50 border p-4 absolute top-[40vh] left-1/2 -translate-x-1/2 -translate-y-1/2 loading loading-dots loading-md"] ""
-          div_ [class_ "px-2", id_ "an-modal-content"] pass
   h3_ [class_ "text-xl text-slate-700 flex place-items-center"] "Issues: Changes, Alerts & Errors"
   div_ [class_ "py-2 px-2 space-x-6 border-b border-slate-20 mt-6 mb-8 text-sm font-light", hxBoost_ "true", termRaw "preload" "preload:init"] do
     let uri = deleteParam "archived" $ deleteParam "ackd" paramInput.currentURL
@@ -200,6 +186,8 @@ issuesListPage paramInput@ParamInput{..} pid currTime issues nextFetchUrl = div_
   let listCfg =
         ItemsList.ItemsListCfg
           { projectId = pid
+          , tabsFilter = Nothing
+          , heading = Nothing
           , zeroState =
               Just
                 $ ItemsList.ZeroState
@@ -377,10 +365,6 @@ anomalyDetailsGetH pid targetHash hxBoostedM = do
               h1_ [class_ "my-10 py-2 border-b w-full text-lg font-semibold"] "Anomaly Details"
               anomalyDetailsPage issue Nothing Nothing Nothing currTime False
         _ -> addRespHeaders $ "TODO"
-
-
-escapedQueryPartial :: Text -> Text
-escapedQueryPartial x = toText $ escapeURIString isUnescapedInURI $ toString x
 
 
 anomalyDetailsPage :: Anomalies.IssueL -> Maybe (Vector Shapes.ShapeWithFields) -> Maybe (Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field], Map Fields.FieldCategoryEnum [Fields.Field]) -> Maybe (Vector Text) -> UTCTime -> Bool -> Html ()

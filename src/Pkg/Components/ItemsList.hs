@@ -1,8 +1,12 @@
 module Pkg.Components.ItemsList (
   itemsList_,
+  itemsPage_,
   itemRows_,
   ZeroState (..),
+  Heading (..),
   ItemsListCfg (..),
+  TabFilter (..),
+  TabFilterOpt (..),
 )
 where
 
@@ -14,19 +18,38 @@ import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Relude
-import Utils (deleteParam, faSprite_,  mIcon_)
+import Utils (deleteParam, escapedQueryPartial, faSprite_, mIcon_, textToBool)
 
 
 data ItemsListCfg = ItemsListCfg
   { currentURL :: Text
-  , ackd :: Bool
-  , archived :: Bool
   , sort :: Text
   , projectId :: Projects.ProjectId
   , currTime :: UTCTime
   , elemID :: Text
   , nextFetchUrl :: Maybe Text
   , zeroState :: Maybe ZeroState
+  , tabsFilter :: Maybe TabFilter
+  , heading :: Maybe Heading
+  }
+
+
+data Heading = Heading
+  { pageTitle :: Html ()
+  , rightComponent :: Maybe (Html ())
+  , subSection :: Maybe (Html ())
+  }
+
+
+data TabFilter = TabFilter
+  { current :: Text
+  , options :: [TabFilterOpt]
+  }
+
+
+data TabFilterOpt = TabFilterOpt
+  { name :: Text
+  , count :: Maybe Int
   }
 
 
@@ -39,9 +62,30 @@ data ZeroState = ZeroState
   }
 
 
+itemsPage_ :: ItemsListCfg -> V.Vector a -> (ItemsListCfg -> a -> Html ()) -> Html ()
+itemsPage_ listCfg items renderItem = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24 overflow-y-scroll h-full"] $ do
+  whenJust listCfg.heading \heading -> do
+    div_ [class_ "flex justify-between"] do
+      h3_ [class_ "text-xl text-slate-700 flex gap-1 place-items-center"] $ heading.pageTitle
+      fromMaybe "" heading.rightComponent
+    fromMaybe "" heading.subSection
+  whenJust listCfg.tabsFilter \tabsFilter -> do
+    let uri = deleteParam "filter" listCfg.currentURL
+    div_ [class_ "py-2 px-2 space-x-6 border-b border-slate-20 mt-6 mb-8 text-sm font-light", hxBoost_ "true", role_ "tablist"] $ forM_ tabsFilter.options \opt ->
+      a_
+        [ class_ $ "inline-block py-2  " <> if opt.name == tabsFilter.current then " font-bold text-black " else ""
+        , role_ "tab"
+        , href_ $ uri <> "&filter=" <> escapedQueryPartial opt.name
+        ]
+        $ do
+          span_ $ toHtml opt.name
+          whenJust opt.count \countV -> span_ [class_ "absolute top-[1px] -right-[5px] text-white text-xs font-medium rounded-full px-1 bg-red-500"] $ show countV
+  itemsList_ listCfg items renderItem
+
+
 itemsList_ :: ItemsListCfg -> V.Vector a -> (ItemsListCfg -> a -> Html ()) -> Html ()
-itemsList_ listCfg items renderItem = div_ [class_ "grid grid-cols-5 card-round", id_ "anomalyListBelowTab", hxGet_ listCfg.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"]
-  $ form_ [class_ "col-span-5 bg-white divide-y ", id_ listCfg.elemID] do
+itemsList_ listCfg items renderItem = div_ [class_ "grid grid-cols-5 card-round", id_ "anomalyListBelowTab", hxGet_ listCfg.currentURL, hxSwap_ "outerHTML", hxTrigger_ "refreshMain"] do
+  form_ [class_ "col-span-5 bg-white divide-y ", id_ listCfg.elemID] do
     let bulkActionBase = "/p/" <> listCfg.projectId.toText <> "/anomalies/bulk_actions"
     let currentURL' = deleteParam "sort" listCfg.currentURL
     let sortMenu =
@@ -99,6 +143,6 @@ itemRows_ :: Maybe Text -> (a -> Html ()) -> V.Vector a -> Html ()
 itemRows_ nextFetchUrl renderItem items = do
   mapM_ (renderItem) items
   whenJust nextFetchUrl \url ->
-    when (length items > 10)
-      $ a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] do
+    when (length items > 10) $
+      a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] do
         span_ [class_ "htmx-indicator loading loading-dots loading-md"] "" >> "LOAD MORE"

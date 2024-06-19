@@ -32,28 +32,33 @@ data ParamInput = ParamInput
   , archived :: Bool
   , sort :: Text
   , ackd :: Bool
+  , filter :: Maybe Text
   }
 
 
-endpointListGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
-endpointListGetH pid layoutM ackdM archivedM hostM projectHostM sortM hxRequestM hxBoostedM hxCurrentURL = do
+endpointListGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+endpointListGetH pid layoutM filterTM hostM projectHostM' sortM hxRequestM hxBoostedM hxCurrentURL = do
   (sess, project) <- Sessions.sessionAndProject pid
-  let ackd = maybe True textToBool ackdM
-  let archived = maybe False textToBool archivedM
+  let (ackd, archived, currentFilterTab) = case filterTM of
+        Just "Active" -> (True, False, "Active")
+        Just "Inbox" -> (False, False, "Inbox")
+        Just "Archived" -> (False, False, "Archived")
+        _ -> (True, False, "Active")
 
+  let projectHostM = projectHostM' >>= (\t -> if t == "" then Nothing else Just t) 
   appCtx <- ask @AuthContext
   endpointStats <- dbtToEff $ case hostM of
     Just h -> Endpoints.dependencyEndpointsRequestStatsByProject pid h
     Nothing -> Endpoints.endpointRequestStatsByProject pid ackd archived projectHostM sortM
   projHosts <- dbtToEff $ Endpoints.getProjectHosts pid
-  inbox <- dbtToEff $ Endpoints.countEndpointInbox pid
+  inboxCount <- dbtToEff $ Endpoints.countEndpointInbox pid
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess.persistentSession
           , currProject = Just project
           , pageTitle = "Endpoints"
           }
-  let currentURL = "/p/" <> pid.toText <> "/endpoints?layout=" <> fromMaybe "false" layoutM <> "&ackd=" <> fromMaybe "true" ackdM <> "&archived=" <> fromMaybe "false" archivedM <> "&sort=" <> fromMaybe "event" sortM
+  let currentURL = "/p/" <> pid.toText <> "/endpoints?layout=" <> fromMaybe "false" layoutM <> "&filter=" <> fromMaybe "" filterTM <> "&sort=" <> fromMaybe "event" sortM <> "&project_host=" <> fromMaybe "" hostM
   currTime <- Time.currentTime
   let paramInput =
         ParamInput
@@ -61,65 +66,34 @@ endpointListGetH pid layoutM ackdM archivedM hostM projectHostM sortM hxRequestM
           , ackd = ackd
           , archived = archived
           , sort = fromMaybe "events" sortM
+          , filter = filterTM
           }
-  case (hxRequestM, hxBoostedM) of
-    _ -> addRespHeaders $ bodyWrapper bwconf $ endpointListPage paramInput pid currTime endpointStats projHosts hostM projectHostM inbox
-
-
-endpointListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Endpoints.EndpointRequestStats -> Vector Endpoints.Host -> Maybe Text -> Maybe Text -> Int -> Html ()
-endpointListPage paramInput@ParamInput{..} pid currTime endpoints hosts hostM pHostM inbox_count = div_ [class_ "w-full mx-auto px-16 pt-10 pb-24 overflow-y-scroll h-full"] $ do
-  h3_ [class_ "text-xl text-slate-700 flex gap-1 place-items-center"] do
-    case hostM of
-      Just h -> do
-        span_ [] "Endpoints for dependency: "
-        span_ [class_ "text-blue-500 font-bold"] $ toHtml h
-      Nothing -> "Endpoints"
-  when (isNothing hostM) $ div_ [class_ "mt-8 flex  items-center gap-2"] do
-    span_ [class_ "font-bold"] "Host "
-    div_ [class_ "relative flex items-center border rounded focus:ring-2 focus:ring-blue-200 active:ring-2 active:ring-blue-200", style_ "width:220px"] do
-      button_
-        [ [__| on click toggle .hidden on #hosts_container |]
-        , data_ "current" "1"
-        , class_ "w-full flex text-slate-600 justify_between items-center cursor-pointer px-2 py-1"
-        ]
-        do
-          span_ [class_ "ml-1 text-sm text-slate-600"] $ toHtml $ fromMaybe "Select host" pHostM
-      faSprite_ "chevron-down" "light" "h-4 w-4"
-      div_ [id_ "hosts_container", class_ "absolute hidden bg-white border shadow w-full overflow-y-auto", style_ "top:100%; max-height: 300px; z-index:9"] do
-        div_ [class_ "flex flex-col"] do
-          forM_ hosts $ \host -> do
-            let prm = "p-2 w-full text-left truncate ... hover:bg-blue-100 hover:text-black"
-            a_
-              [ class_ prm
-              , href_ $ paramInput.currentURL <> "&project_host=" <> host.host
-              ]
-              do
-                span_ [class_ "ml-2 text-sm text-slate-600"] $ toHtml host.host
-
-  div_ [class_ "py-2 px-2 space-x-6 border-b border-slate-20 mt-6 mb-8 text-sm font-light", hxBoost_ "true"] do
-    let uri = deleteParam "archived" $ deleteParam "ackd" paramInput.currentURL
-    let forHost = not (T.null $ fromMaybe "" hostM)
-    a_
-      [ class_ $ "inline-block py-2 " <> if paramInput.ackd && not paramInput.archived then " font-bold text-black " else ""
-      , href_ $ uri <> "&ackd=true&archived=false" <> maybe "" ("&project_host=" <>) pHostM
-      ]
-      "Active"
-    a_
-      [ class_ $ "relative inline-block  py-2 " <> if not paramInput.ackd && not paramInput.archived then " font-bold text-black " else "" <> if forHost then " cursor-not-allowed" else ""
-      , href_ $ if forHost then "#" else uri <> "&ackd=false&archived=false" <> maybe "" ("&project_host=" <>) pHostM
-      ]
-      do
-        span_ [] "Inbox"
-        when (inbox_count > 0) $ span_ [class_ "absolute top-[1px] -right-[5px] text-white text-xs font-medium rounded-full px-1 bg-red-500"] $ show inbox_count
-    a_
-      [ class_ $ "inline-block  py-2 " <> if paramInput.archived then " font-bold text-black " else "" <> if forHost then " cursor-not-allowed" else ""
-      , href_ $ if forHost then "#" else uri <> "&archived=true" <> maybe "" ("&project_host=" <>) pHostM
-      ]
-      "Archived"
   let listCfg =
         ItemsList.ItemsListCfg
           { projectId = pid
           , nextFetchUrl = Nothing
+          , sort = fromMaybe "events" sortM
+          , tabsFilter =
+              Just $
+                ItemsList.TabFilter
+                  { current = currentFilterTab
+                  , options =
+                      [ ItemsList.TabFilterOpt{name = "Active", count = Nothing}
+                      , ItemsList.TabFilterOpt{name = "Inbox", count = if inboxCount > 0 then Just inboxCount else Nothing}
+                      , ItemsList.TabFilterOpt{name = "Archived", count = Nothing}
+                      ]
+                  }
+          , heading =
+              Just $
+                ItemsList.Heading
+                  { pageTitle = case hostM of
+                      Just h -> do
+                        span_ [] "Endpoints for dependency: "
+                        span_ [class_ "text-blue-500 font-bold"] $ toHtml h
+                      Nothing -> "Endpoints"
+                  , rightComponent = Nothing
+                  , subSection = Just $ hostFilter_ currentURL projHosts hostM projectHostM
+                  }
           , zeroState =
               Just $
                 ItemsList.ZeroState
@@ -132,8 +106,18 @@ endpointListPage paramInput@ParamInput{..} pid currTime endpoints hosts hostM pH
           , elemID = "anomalyListForm"
           , ..
           }
-  ItemsList.itemsList_ listCfg endpoints \_ -> (renderEndpoint (paramInput.ackd && not paramInput.archived) listCfg.currTime)
+  case (hxRequestM, hxBoostedM) of
+    _ -> addRespHeaders $ bodyWrapper bwconf $ ItemsList.itemsPage_ listCfg endpointStats \_ -> (renderEndpoint (paramInput.ackd && not paramInput.archived) listCfg.currTime)
 
+
+hostFilter_ :: Text -> Vector Endpoints.Host -> Maybe Text -> Maybe Text -> Html ()
+hostFilter_ currentURL hosts hostM pHostM = when (isNothing hostM) $ div_ [class_ "mt-8 flex  items-center gap-2"] do
+  span_ [class_ "font-bold"] "Host "
+  div_ [class_ "dropdown"] do
+    div_ [tabindex_ "0", role_ "btn", class_ "input input-sm"] $ toHtml $  fromMaybe "Select host" pHostM
+    ul_ [tabindex_ "0", class_ "dropdown-content z-[1] menu p-2 shadow bg-base-100 rounded-box w-52 h-96 overflow-y-scroll"] do
+      let uri = deleteParam "project_host" currentURL
+      forM_ hosts \host -> li_ [] $ a_ [class_ "prm", href_ $ uri <> "&project_host=" <> host.host] $ toHtml host.host 
 
 endpointAccentColor :: Bool -> Bool -> Text
 endpointAccentColor _ True = "bg-slate-400"

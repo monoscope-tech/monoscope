@@ -28,11 +28,11 @@ outgoingGetH pid sortM = do
         ItemsList.ItemsListCfg
           { projectId = pid
           , sort = sortV
-          , ackd = False
-          , archived = False
           , currentURL = "/p/" <> pid.toText <> "/outgoing?sort=" <> sortV
           , currTime
+          , heading = Nothing
           , nextFetchUrl = Nothing
+          , tabsFilter = Nothing
           , zeroState =
               Just
                 $ ItemsList.ZeroState
