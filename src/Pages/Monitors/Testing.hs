@@ -77,13 +77,14 @@ testingPostH pid collection = do
 
 
 testingGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
-testingGetH pid maybeTab = do
-  let tabStatus = case maybeTab of
-        Just "Active" -> Testing.Active
-        Just "Inactive" -> Testing.Inactive
-        _ -> Testing.Active -- Default to Active if tab is unrecognized
-  currTime <- Time.currentTime
+testingGetH pid filterTM = do
   (sess, project) <- Sessions.sessionAndProject pid
+  let (ackd, archived, currentFilterTab, tabStatus) = case filterTM of
+        Just "Active" -> (True, False, "Active", Testing.Active)
+        Just "Archived" -> (False, False, "Archived", Testing.Inactive)
+        _ -> (True, False, "Active", Testing.Active)
+  currTime <- Time.currentTime
+
   colls <- dbtToEff $ Testing.getCollections pid tabStatus
   let listCfg =
         ItemsList.ItemsListCfg
@@ -92,11 +93,31 @@ testingGetH pid maybeTab = do
           , currentURL = "/p/" <> pid.toText <> "/testing"
           , currTime
           , nextFetchUrl = Nothing
-          , tabsFilter = Nothing
-          , heading = Nothing
+          , tabsFilter =
+              Just $
+                ItemsList.TabFilter
+                  { current = currentFilterTab
+                  , options =
+                      [ ItemsList.TabFilterOpt{name = "Active", count = Nothing}
+                      , ItemsList.TabFilterOpt{name = "Archived", count = Nothing}
+                      ]
+                  }
+          , heading =
+              Just $
+                ItemsList.Heading
+                  { pageTitle = "Multistep API monitors/tests (Beta)"
+                  , rightComponent =
+                      Just
+                        $ button_
+                          [ class_ "w-max btn btn-indigo text-md"
+                          , [__|on click remove .hidden from #col-modal then set #collection_id's value to ""|]
+                          ]
+                        $ (faSprite_ "plus" "regular" "h-6 w-6" >> "Collection")
+                  , subSection = Nothing
+                  }
           , zeroState =
-              Just
-                $ ItemsList.ZeroState
+              Just $
+                ItemsList.ZeroState
                   { icon = "empty-set"
                   , title = "No Multistep Test/Monitor yet."
                   , description = "You're can create one to start monitoring your services."
@@ -111,25 +132,9 @@ testingGetH pid maybeTab = do
           , currProject = Just project
           , pageTitle = "API Tests (Beta)"
           }
-  addRespHeaders $ bodyWrapper bwconf $ testingPage listCfg pid maybeTab colls
-
-
-testingPage :: ItemsList.ItemsListCfg -> Projects.ProjectId -> Maybe Text -> V.Vector Testing.CollectionListItem -> Html ()
-testingPage listCfg pid maybeTab testItems = do
-  div_ [class_ "w-full", id_ "main"] do
+  addRespHeaders $ bodyWrapper bwconf do
     modal pid
-    div_ [class_ "w-full mx-auto px-16 pt-5 pb-24 overflow-y-scroll h-full"] $ do
-      h3_ [class_ "text-xl text-slate-700 flex gap-1 place-items-center"] do
-        span_ [] "Multistep API monitors/tests (Beta)"
-        button_
-          [ class_ "w-max btn btn-indigo text-md"
-          , [__|on click remove .hidden from #col-modal then set #collection_id's value to ""|]
-          ]
-          $ (faSprite_ "plus" "regular" "h-6 w-6" >> "Collection")
-      div_ [class_ "py-2 px-2 space-x-6 border-b border-slate-20 mt-6 mb-8 text-sm font-light", hxBoost_ "true"] do
-        a_ [class_ $ "inline-block py-2 " <> if maybeTab == Just "Active" then "font-bold text-black" else "", href_ ("/p/" <> pid.toText <> "/testing/?tab=Active")] "Active"
-        a_ [class_ $ "inline-block py-2 " <> if maybeTab == Just "Inactive" then "font-bold text-black" else "", href_ ("/p/" <> pid.toText <> "/testing/?tab=Inactive")] "InActive"
-      ItemsList.itemsList_ listCfg testItems \_ -> collectionCard pid
+    ItemsList.itemsPage_ listCfg colls \_ -> collectionCard pid
 
 
 collectionCard :: Projects.ProjectId -> Testing.CollectionListItem -> Html ()

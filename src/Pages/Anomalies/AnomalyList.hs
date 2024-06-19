@@ -143,12 +143,17 @@ data ParamInput = ParamInput
   }
 
 
-anomalyListGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Endpoints.EndpointId -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
-anomalyListGetH pid layoutM ackdM archivedM sortM pageM loadM endpointM hxRequestM hxBoostedM = do
+anomalyListGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Endpoints.EndpointId -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+anomalyListGetH pid layoutM filterTM sortM pageM loadM endpointM hxRequestM hxBoostedM = do
   (sess, project) <- Sessions.sessionAndProject pid
-  let ackd = fromMaybe False (textToBool <$> ackdM)
-      archived = fromMaybe False (textToBool <$> archivedM)
-      fLimit = 10
+  let (ackd, archived, currentFilterTab) = case filterTM of
+        Just "Inbox" -> (False, False, "Inbox")
+        Just "Acknowleged" -> (True, False, "Acknowleged")
+        Just "Archived" -> (False, False, "Archived")
+        _ -> (False, False, "Inbox")
+
+
+  let fLimit = 10
       pageInt = maybe 0 (Unsafe.read . toString) pageM
   issues <- dbtToEff $ Anomalies.selectIssues pid endpointM (Just ackd) (Just archived) sortM (Just fLimit) (pageInt * fLimit)
   currTime <- liftIO getCurrentTime
@@ -169,25 +174,28 @@ anomalyListGetH pid layoutM ackdM archivedM sortM pageM loadM endpointM hxReques
           , archived = archived
           , sort = fromMaybe "" sortM
           }
-  addRespHeaders $ case (layoutM, hxRequestM, hxBoostedM, loadM) of
-    (Just "slider", Just "true", _, _) -> anomalyListSlider currTime pid endpointM (Just issues)
-    (_, _, _, Just "true") -> ItemsList.itemRows_ nextFetchUrl (renderIssue False currTime) issues
-    _ -> bodyWrapper bwconf $ issuesListPage paramInput pid currTime issues nextFetchUrl
-
-
-issuesListPage :: ParamInput -> Projects.ProjectId -> UTCTime -> Vector Anomalies.IssueL -> Maybe Text -> Html ()
-issuesListPage paramInput@ParamInput{..} pid currTime issues nextFetchUrl = div_ [class_ "w-full mx-auto  px-16 pt-10 pb-24  overflow-y-scroll h-full"] do
-  h3_ [class_ "text-xl text-slate-700 flex place-items-center"] "Issues: Changes, Alerts & Errors"
-  div_ [class_ "py-2 px-2 space-x-6 border-b border-slate-20 mt-6 mb-8 text-sm font-light", hxBoost_ "true", termRaw "preload" "preload:init"] do
-    let uri = deleteParam "archived" $ deleteParam "ackd" paramInput.currentURL
-    a_ [class_ $ "inline-block py-2 " <> if not paramInput.ackd && not paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&ackd=false&archived=false"] "Inbox"
-    a_ [class_ $ "inline-block  py-2 " <> if paramInput.ackd && not paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&ackd=true&archived=false"] "Acknowleged"
-    a_ [class_ $ "inline-block  py-2 " <> if paramInput.archived then " font-bold text-black " else "", href_ $ uri <> "&archived=true"] "Archived"
   let listCfg =
         ItemsList.ItemsListCfg
           { projectId = pid
-          , tabsFilter = Nothing
-          , heading = Nothing
+          , nextFetchUrl
+          , sort = fromMaybe "events" sortM
+          , tabsFilter =
+              Just
+                $ ItemsList.TabFilter
+                  { current = currentFilterTab
+                  , options =
+                      [ ItemsList.TabFilterOpt{name = "Inbox", count = Nothing}
+                      , ItemsList.TabFilterOpt{name = "Acknowleged", count = Nothing}
+                      , ItemsList.TabFilterOpt{name = "Archived", count = Nothing}
+                      ]
+                  }
+          , heading =
+              Just
+                $ ItemsList.Heading
+                  { pageTitle = "Issues: Changes, Alerts & Errors" 
+                  , rightComponent = Nothing
+                  , subSection = Nothing 
+                  }
           , zeroState =
               Just
                 $ ItemsList.ZeroState
@@ -200,7 +208,13 @@ issuesListPage paramInput@ParamInput{..} pid currTime issues nextFetchUrl = div_
           , elemID = "anomalyListForm"
           , ..
           }
-  ItemsList.itemsList_ listCfg issues \_ -> (renderIssue False listCfg.currTime)
+
+
+  addRespHeaders $ case (layoutM, hxRequestM, hxBoostedM, loadM) of
+    (Just "slider", Just "true", _, _) -> anomalyListSlider currTime pid endpointM (Just issues)
+    (_, _, _, Just "true") -> ItemsList.itemRows_ nextFetchUrl (renderIssue False currTime) issues
+    _ -> bodyWrapper bwconf $ ItemsList.itemsPage_ listCfg issues \_ -> (renderIssue False listCfg.currTime)
+
 
 
 anomalyListSlider :: UTCTime -> Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe (Vector Anomalies.IssueL) -> Html ()

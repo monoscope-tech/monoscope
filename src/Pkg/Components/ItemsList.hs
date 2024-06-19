@@ -143,6 +143,6 @@ itemRows_ :: Maybe Text -> (a -> Html ()) -> V.Vector a -> Html ()
 itemRows_ nextFetchUrl renderItem items = do
   mapM_ (renderItem) items
   whenJust nextFetchUrl \url ->
-    when (length items > 10) $
-      a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] do
+    when (length items > 10)
+      $ a_ [class_ "cursor-pointer block p-1 blue-800 bg-blue-100 hover:bg-blue-200 text-center", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] do
         span_ [class_ "htmx-indicator loading loading-dots loading-md"] "" >> "LOAD MORE"

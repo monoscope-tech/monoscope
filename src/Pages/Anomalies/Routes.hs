@@ -27,7 +27,7 @@ data Routes' mode = Routes'
   , archiveGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "archive" :> Get '[HTML] (RespHeaders (Html ()))
   , unarchiveGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "unarchive" :> Get '[HTML] (RespHeaders (Html ()))
   , bulkActionsPost :: mode :- "bulk_actions" :> Capture "action" Text :> ReqBody '[FormUrlEncoded] AnomalyList.AnomalyBulkForm :> Post '[HTML] (RespHeaders (Html ()))
-  , listGet :: mode :- QPT "layout" :> QPT "ackd" :> QPT "archived" :> QPT "sort" :> QPT "page" :> QPT "load_more" :> QEID "endpoint" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders (Html ()))
+  , listGet :: mode :- QPT "layout" :> QPT "filter" :> QPT "sort" :> QPT "page" :> QPT "load_more" :> QEID "endpoint" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders (Html ()))
   , detailsGet :: mode :- "by_hash" :> Capture "targetHash" Text :> QPT "modal" :> Get '[HTML] (RespHeaders (Html ()))
   }
   deriving stock (Generic)

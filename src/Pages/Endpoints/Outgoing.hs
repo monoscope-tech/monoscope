@@ -2,7 +2,6 @@ module Pages.Endpoints.Outgoing (outgoingGetH) where
 
 import Data.Default (def)
 import Data.Text qualified as T
-import Data.Vector qualified as V
 import Effectful.PostgreSQL.Transact.Effect (dbtToEff)
 import Effectful.Time qualified as Time
 import Lucid
@@ -30,7 +29,13 @@ outgoingGetH pid sortM = do
           , sort = sortV
           , currentURL = "/p/" <> pid.toText <> "/outgoing?sort=" <> sortV
           , currTime
-          , heading = Nothing
+          , heading =
+              Just
+                $ ItemsList.Heading
+                  { pageTitle = "Outgoing Integrations" 
+                  , rightComponent = Nothing
+                  , subSection = Nothing 
+                  }
           , nextFetchUrl = Nothing
           , tabsFilter = Nothing
           , zeroState =
@@ -50,14 +55,7 @@ outgoingGetH pid sortM = do
           , currProject = Just project
           , pageTitle = "Outgoing Integrations"
           }
-  addRespHeaders $ bodyWrapper bwconf $ outgoingPage listCfg pid sortV hostsAndEvents
-
-
-outgoingPage :: ItemsList.ItemsListCfg -> Projects.ProjectId -> Text -> V.Vector Endpoints.HostEvents -> Html ()
-outgoingPage listCfg pid sortV hostsEvents = do
-  div_ [class_ "w-full mx-auto px-16 pt-10 pb-24 overflow-y-scroll h-full"] $ do
-    h3_ [class_ "text-xl text-slate-700 flex gap-1 place-items-center mb-10"] "Outgoing Integrations"
-    ItemsList.itemsList_ listCfg hostsEvents \_ -> renderOutgoing pid
+  addRespHeaders $ bodyWrapper bwconf $ ItemsList.itemsPage_ listCfg hostsAndEvents \_ -> renderOutgoing pid 
 
 
 renderOutgoing :: Projects.ProjectId -> Endpoints.HostEvents -> Html ()

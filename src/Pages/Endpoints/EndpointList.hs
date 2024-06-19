@@ -11,8 +11,7 @@ import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Fmt (commaizeF, fmt)
 import Lucid
-import Lucid.Htmx (hxBoost_, hxGet_, hxSwap_, hxTrigger_)
-import Lucid.Hyperscript.QuasiQuoter (__)
+import Lucid.Htmx (hxGet_, hxSwap_, hxTrigger_)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
@@ -22,18 +21,8 @@ import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pkg.Components.ItemsList qualified as ItemsList
 import PyF qualified
 import Relude hiding (ask, asks)
-import System.Config (AuthContext)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (deleteParam, faSprite_, textToBool)
-
-
-data ParamInput = ParamInput
-  { currentURL :: Text
-  , archived :: Bool
-  , sort :: Text
-  , ackd :: Bool
-  , filter :: Maybe Text
-  }
+import Utils (deleteParam)
 
 
 endpointListGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
@@ -45,8 +34,7 @@ endpointListGetH pid layoutM filterTM hostM projectHostM' sortM hxRequestM hxBoo
         Just "Archived" -> (False, False, "Archived")
         _ -> (True, False, "Active")
 
-  let projectHostM = projectHostM' >>= (\t -> if t == "" then Nothing else Just t) 
-  appCtx <- ask @AuthContext
+  let projectHostM = projectHostM' >>= (\t -> if t == "" then Nothing else Just t)
   endpointStats <- dbtToEff $ case hostM of
     Just h -> Endpoints.dependencyEndpointsRequestStatsByProject pid h
     Nothing -> Endpoints.endpointRequestStatsByProject pid ackd archived projectHostM sortM
@@ -60,22 +48,14 @@ endpointListGetH pid layoutM filterTM hostM projectHostM' sortM hxRequestM hxBoo
           }
   let currentURL = "/p/" <> pid.toText <> "/endpoints?layout=" <> fromMaybe "false" layoutM <> "&filter=" <> fromMaybe "" filterTM <> "&sort=" <> fromMaybe "event" sortM <> "&project_host=" <> fromMaybe "" hostM
   currTime <- Time.currentTime
-  let paramInput =
-        ParamInput
-          { currentURL = currentURL
-          , ackd = ackd
-          , archived = archived
-          , sort = fromMaybe "events" sortM
-          , filter = filterTM
-          }
   let listCfg =
         ItemsList.ItemsListCfg
           { projectId = pid
           , nextFetchUrl = Nothing
           , sort = fromMaybe "events" sortM
           , tabsFilter =
-              Just $
-                ItemsList.TabFilter
+              Just
+                $ ItemsList.TabFilter
                   { current = currentFilterTab
                   , options =
                       [ ItemsList.TabFilterOpt{name = "Active", count = Nothing}
@@ -84,19 +64,17 @@ endpointListGetH pid layoutM filterTM hostM projectHostM' sortM hxRequestM hxBoo
                       ]
                   }
           , heading =
-              Just $
-                ItemsList.Heading
+              Just
+                $ ItemsList.Heading
                   { pageTitle = case hostM of
-                      Just h -> do
-                        span_ [] "Endpoints for dependency: "
-                        span_ [class_ "text-blue-500 font-bold"] $ toHtml h
+                      Just h -> span_ [] "Endpoints for dependency: " >> (span_ [class_ "text-blue-500 font-bold"] $ toHtml h)
                       Nothing -> "Endpoints"
                   , rightComponent = Nothing
                   , subSection = Just $ hostFilter_ currentURL projHosts hostM projectHostM
                   }
           , zeroState =
-              Just $
-                ItemsList.ZeroState
+              Just
+                $ ItemsList.ZeroState
                   { icon = "empty-set"
                   , title = "Waiting for events"
                   , description = "You're currently not sending any data to APItoolkit from your backends yet."
@@ -106,18 +84,18 @@ endpointListGetH pid layoutM filterTM hostM projectHostM' sortM hxRequestM hxBoo
           , elemID = "anomalyListForm"
           , ..
           }
-  case (hxRequestM, hxBoostedM) of
-    _ -> addRespHeaders $ bodyWrapper bwconf $ ItemsList.itemsPage_ listCfg endpointStats \_ -> (renderEndpoint (paramInput.ackd && not paramInput.archived) listCfg.currTime)
+  addRespHeaders $ bodyWrapper bwconf $ ItemsList.itemsPage_ listCfg endpointStats \_ -> (renderEndpoint (ackd && not archived) listCfg.currTime)
 
 
 hostFilter_ :: Text -> Vector Endpoints.Host -> Maybe Text -> Maybe Text -> Html ()
 hostFilter_ currentURL hosts hostM pHostM = when (isNothing hostM) $ div_ [class_ "mt-8 flex  items-center gap-2"] do
   span_ [class_ "font-bold"] "Host "
   div_ [class_ "dropdown"] do
-    div_ [tabindex_ "0", role_ "btn", class_ "input input-sm"] $ toHtml $  fromMaybe "Select host" pHostM
+    div_ [tabindex_ "0", role_ "btn", class_ "input input-sm"] $ toHtml $ fromMaybe "Select host" pHostM
     ul_ [tabindex_ "0", class_ "dropdown-content z-[1] menu p-2 shadow bg-base-100 rounded-box w-52 h-96 overflow-y-scroll"] do
       let uri = deleteParam "project_host" currentURL
-      forM_ hosts \host -> li_ [] $ a_ [class_ "prm", href_ $ uri <> "&project_host=" <> host.host] $ toHtml host.host 
+      forM_ hosts \host -> li_ [] $ a_ [class_ "prm", href_ $ uri <> "&project_host=" <> host.host] $ toHtml host.host
+
 
 endpointAccentColor :: Bool -> Bool -> Text
 endpointAccentColor _ True = "bg-slate-400"
@@ -141,8 +119,8 @@ renderEndpoint activePage currTime enp = do
         div_ [class_ "flex items-center gap-2 mt-5"] do
           AnomalyList.anomalyArchiveButton enp.projectId (Anomalies.AnomalyId enp.anomalyId) (isJust enp.archivedAt)
           AnomalyList.anomalyAcknowlegeButton enp.projectId (Anomalies.AnomalyId enp.anomalyId) (isJust enp.acknowlegedAt)
-    div_ [class_ "flex items-center justify-center "] $
-      div_
+    div_ [class_ "flex items-center justify-center "]
+      $ div_
         [ class_ "w-56 h-12 px-3"
         , hxGet_ $ "/charts_html?pid=" <> enp.projectId.toText <> "&since=14D&query_raw=" <> AnomalyList.escapedQueryPartial [PyF.fmt|endpoint_hash=="{enp.endpointHash}" | timechart [1d]|]
         , hxTrigger_ "intersect once"
