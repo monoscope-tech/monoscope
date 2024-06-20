@@ -285,7 +285,7 @@ issueItem hideByDefault currTime issue icon title subTitle content = do
   div_ [class_ $ "flex py-4 gap-8 " <> if hideByDefault then "card-round bg-white px-5" else "", style_ (if hideByDefault then "display:none" else ""), id_ issueId] do
     div_ [class_ $ "h-4 flex self-start space-x-3 w-8 " <> if hideByDefault then "hidden" else ""] do
       a_ [class_ $ anomalyAccentColor (isJust issue.acknowlegedAt) (isJust issue.archivedAt) <> " w-2 h-full"] ""
-      input_ [term "aria-label" "Select Issue", type_ "checkbox", name_ "issueId", value_ issueId]
+      input_ [term "aria-label" "Select Issue",class_ "bulkactionItemCheckbox", type_ "checkbox", name_ "issueId", value_ issueId]
     div_ [class_ "space-y-3 grow"] do
       div_ [class_ "space-x-3"] do
         a_ [href_ $ "/p/" <> issue.projectId.toText <> "/anomalies/by_hash/" <> issue.targetHash, class_ "inline-block font-bold text-blue-700 space-x-2", termRaw "preload" "mouseover"] do

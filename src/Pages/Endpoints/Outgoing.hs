@@ -62,7 +62,7 @@ renderOutgoing :: Projects.ProjectId -> Endpoints.HostEvents -> Html ()
 renderOutgoing pid host = div_ [class_ "flex py-4 gap-8 items-center "] do
   div_ [class_ "h-4 flex space-x-3 w-8 "] do
     a_ [class_ "w-2 h-full"] ""
-    input_ [term "aria-label" "Select Issue", class_ "endpoint_anomaly_input", type_ "checkbox", name_ "hostId", value_ host.host]
+    input_ [term "aria-label" "Select Issue", class_ "endpoint_anomaly_input bulkactionItemCheckbox", type_ "checkbox", name_ "hostId", value_ host.host]
 
   div_ [class_ "space-y-3 grow"] do
     div_ [class_ "space-x-3"] do

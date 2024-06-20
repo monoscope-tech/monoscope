@@ -141,7 +141,7 @@ collectionCard :: Projects.ProjectId -> Testing.CollectionListItem -> Html ()
 collectionCard pid col = div_ [class_ "flex py-4 gap-8 items-center"] do
   div_ [class_ "h-4 flex space-x-3 w-8 "] do
     a_ [class_ "w-2 h-full"] ""
-    input_ [term "aria-label" "Select Issue", class_ "endpoint_anomaly_input", type_ "checkbox", name_ "listItemId", value_ col.id.toText]
+    input_ [term "aria-label" "Select Issue", class_ "endpoint_anomaly_input bulkactionItemCheckbox", type_ "checkbox", name_ "listItemId", value_ col.id.toText]
 
   div_ [class_ "space-y-3 grow"] do
     div_ [class_ ""] do
